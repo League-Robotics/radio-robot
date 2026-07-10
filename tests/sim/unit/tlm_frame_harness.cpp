@@ -48,6 +48,25 @@
 //       pose values -- proven both in isolation (buildTlmFrame()) and
 //       through Telemetry::tick()'s bb.otosConnected wiring.
 //
+// Added by ticket 096-003 (SUC-003, architecture-update.md (096) M3/
+// Decision 6): TlmFrameInput gains bench-diagnostic fields (acc/active/
+// conn/glitch/ts, transcribed from handleTlm()) and a second formatter,
+// Telemetry::buildTelemetryMessage() (TlmFrameInput -> msg::Telemetry):
+//   (h) buildTlmFrame()'s text output stays byte-identical even when the
+//       new bench-diagnostic fields are populated with distinctive
+//       non-default values -- the hard regression gate this ticket's own
+//       acceptance criteria require.
+//   (i) buildTelemetryMessage() populates every msg::Telemetry field
+//       (including the `has_*` presence flags and the five
+//       bench-diagnostic field groups) correctly from a fully-populated
+//       TlmFrameInput.
+//   (j) buildTelemetryMessage() copies each `has_*` flag independently
+//       (mirrors buildTlmFrame()'s own per-field omission proof) and
+//       always resets `out` first (pure, stateless).
+//   (k) Telemetry::tick() sources the bench-diagnostic fields from
+//       bb.drivetrain.acc()/.busy and bb.motors[0]/bb.motors[1] directly,
+//       against a bare, non-live Rt::Blackboard.
+//
 // Plain C++ program, hand-rolled assertions (mirrors the existing
 // harnesses' shape) -- prints a PASS/FAIL line per scenario and exits
 // nonzero if any assertion failed.
@@ -109,6 +128,7 @@ Telemetry::TlmFrameInput baselineInput() {
   Telemetry::TlmFrameInput in;
   in.now = 12345;
   in.mode = 'S';
+  in.driveMode = msg::DriveMode::STREAMING;   // same source value 'S' is mapped from
   in.seq = 7;
 
   in.hasEnc = true;
@@ -150,18 +170,38 @@ Telemetry::TlmFrameInput baselineInput() {
   in.twist.v_x = 200.0f;
   in.twist.omega = 0.5f;   // -> 500 mrad/s
 
+  // Bench-diagnostic fields (096-003) -- distinctive non-default,
+  // non-symmetric values (left != right, several nonzero digits) so a
+  // field swap or an accidental buildTlmFrame() leak would be caught.
+  in.accLeft = 15.5f;
+  in.accRight = -8.25f;
+  in.active = true;
+  in.connLeft = true;
+  in.connRight = false;
+  in.glitchLeft = 3;
+  in.glitchRight = 9;
+  in.tsLeft = 111222;
+  in.tsRight = 333444;
+
   return in;
 }
 
 // --- Scenarios ----------------------------------------------------------
 
-// (a) All fields present -- exact wire-line match. Proves field order
+// (a)+(h) All fields present -- exact wire-line match. Proves field order
 // (t= mode= seq= enc= vel= pose= encpose= otos= twist=, per the ticket's
 // own field-list ordering), integer truncation (not rounding -- matches
 // source_old/robot/RobotTelemetry.cpp's (int) casts), and the
 // radians-to-centidegrees / rad-per-s-to-mrad-per-s scale factors.
+// Since 096-003, baselineInput() ALSO populates the bench-diagnostic
+// fields (acc/active/conn/glitch/ts) with distinctive non-default values
+// -- this scenario's expected string is UNCHANGED from before that
+// extension, and the explicit absence checks below confirm none of the
+// bench-diagnostic tokens leak into the text line: this IS this ticket's
+// "buildTlmFrame()'s text output is byte-identical before and after"
+// regression proof (SUC-003's own acceptance criterion).
 void scenarioAllFieldsPresentExactMatch() {
-  beginScenario("all fields present -- exact wire-line match");
+  beginScenario("all fields present -- exact wire-line match (096-003: byte-identical despite bench-diagnostic fields)");
 
   Telemetry::TlmFrameInput in = baselineInput();
   char buf[300];
@@ -171,9 +211,17 @@ void scenarioAllFieldsPresentExactMatch() {
       "TLM t=12345 mode=S seq=7 enc=1024,1019 vel=198,201 cmd=205,195"
       " pose=350,-12,1718 encpose=349,-11,1776 otos=351,-13,1833 otosconn=1"
       " twist=200,500";
-  checkEq(std::string(buf), expected, "exact formatted line");
+  checkEq(std::string(buf), expected, "exact formatted line, unchanged since before 096-003");
   checkTrue(n == static_cast<int>(expected.size()), "return value equals formatted length");
   checkTrue(std::strlen(buf) == expected.size(), "NUL terminator lands exactly at the formatted length");
+  checkTrue(!contains(buf, "acc="), "acc= never appears in the text line (bench-diagnostic, binary-only)");
+  checkTrue(!contains(buf, "active="), "active= never appears in the text line (bench-diagnostic, binary-only)");
+  // " conn=" (leading space) -- NOT a bare "conn=" substring check, which
+  // would false-positive on "otosconn=1" (the pre-existing, unrelated
+  // 092-002 token whose own tail spells "...conn=").
+  checkTrue(!contains(buf, " conn="), "conn= never appears in the text line (bench-diagnostic, binary-only)");
+  checkTrue(!contains(buf, "glitch="), "glitch= never appears in the text line (bench-diagnostic, binary-only)");
+  checkTrue(!contains(buf, " ts="), "ts= never appears in the text line (bench-diagnostic, binary-only)");
 }
 
 // (d) No optional fields present -- just the mandatory prefix.
@@ -430,11 +478,46 @@ void scenarioTickAssemblesFromBareBlackboard() {
   bb.planner.mode = msg::DriveMode::DISTANCE;   // -> mode=D
   bb.telemetrySeq = 42;
 
+  // Bench-diagnostic fields (096-003, (k)) -- bb.drivetrain.acc()/.busy for
+  // acc=/active=; bb.motors[0]/bb.motors[1] DIRECTLY (the SAME hardcoded
+  // bound-pair handleTlm() itself reads) for conn=/glitch=/ts=. Distinct
+  // from the enc=/vel= values above so a source mix-up would be caught.
+  bb.drivetrain.acc_[0] = 33.0f;
+  bb.drivetrain.acc_[1] = -17.0f;
+  bb.drivetrain.acc_count = 2;
+  bb.drivetrain.busy = true;
+
+  bb.motors[0].connected = true;
+  bb.motors[0].enc_glitch_count.has = true;
+  bb.motors[0].enc_glitch_count.val = 4;
+  bb.motors[0].sampled_at.has = true;
+  bb.motors[0].sampled_at.val = 88888;
+
+  bb.motors[1].connected = false;
+  bb.motors[1].enc_glitch_count.has = true;
+  bb.motors[1].enc_glitch_count.val = 12;
+  bb.motors[1].sampled_at.has = true;
+  bb.motors[1].sampled_at.val = 77777;
+
   Telemetry::TlmFrameInput in = Telemetry::tick(99999, bb);
 
   // bb is untouched by tick() -- confirms the "read only" half of the
   // contract before checking the assembled frame itself.
   checkTrue(bb.telemetrySeq == 42, "tick() does not mutate bb.telemetrySeq");
+
+  // (k) Bench-diagnostic fields sourced exactly as handleTlm() computes
+  // them -- checked directly on TlmFrameInput (buildTlmFrame() never emits
+  // these, per scenario (h) above).
+  checkTrue(in.accLeft == 33.0f, "accLeft == bb.drivetrain.acc()[0]");
+  checkTrue(in.accRight == -17.0f, "accRight == bb.drivetrain.acc()[1]");
+  checkTrue(in.active == true, "active == bb.drivetrain.busy");
+  checkTrue(in.connLeft == true, "connLeft == bb.motors[0].connected");
+  checkTrue(in.connRight == false, "connRight == bb.motors[1].connected");
+  checkTrue(in.glitchLeft == 4, "glitchLeft == bb.motors[0].enc_glitch_count");
+  checkTrue(in.glitchRight == 12, "glitchRight == bb.motors[1].enc_glitch_count");
+  checkTrue(in.tsLeft == 88888, "tsLeft == bb.motors[0].sampled_at");
+  checkTrue(in.tsRight == 77777, "tsRight == bb.motors[1].sampled_at");
+  checkTrue(in.driveMode == msg::DriveMode::DISTANCE, "driveMode == bb.planner.mode, unmapped (raw enum)");
 
   char buf[300];
   Telemetry::buildTlmFrame(buf, sizeof(buf), in);
@@ -450,6 +533,126 @@ void scenarioTickAssemblesFromBareBlackboard() {
       " pose=400,-20,1718 encpose=398,-19,1776 otos=402,-21,1833 otosconn=1"
       " twist=200,400";
   checkEq(std::string(buf), expected, "frame assembled entirely from bare Rt::Blackboard cells");
+}
+
+// (i) 096-003: Telemetry::buildTelemetryMessage() populates every
+// msg::Telemetry field -- including the `has_*` presence flags and the
+// five bench-diagnostic field groups -- from a fully-populated
+// TlmFrameInput, field-for-field against hand-computed expected values.
+void scenarioBuildTelemetryMessageAllFieldsPresent() {
+  beginScenario("buildTelemetryMessage() populates every msg::Telemetry field correctly");
+
+  Telemetry::TlmFrameInput in = baselineInput();
+  msg::Telemetry out;
+  Telemetry::buildTelemetryMessage(out, in);
+
+  checkTrue(out.now == 12345, "now");
+  checkTrue(out.mode == msg::DriveMode::STREAMING, "mode carries the RAW enum (driveMode), not the text char");
+  checkTrue(out.seq == 7, "seq");
+
+  checkTrue(out.has_enc == true, "has_enc");
+  checkTrue(out.enc_left == 1024.0f, "enc_left");
+  checkTrue(out.enc_right == 1019.0f, "enc_right");
+
+  checkTrue(out.has_vel == true, "has_vel");
+  checkTrue(out.vel_left == 198.0f, "vel_left");
+  checkTrue(out.vel_right == 201.0f, "vel_right");
+
+  checkTrue(out.has_cmd_vel == true, "has_cmd_vel");
+  checkTrue(out.cmd_vel_left == 205.0f, "cmd_vel_left");
+  checkTrue(out.cmd_vel_right == 195.0f, "cmd_vel_right");
+
+  checkTrue(out.has_pose == true, "has_pose");
+  checkTrue(out.pose.x == 350.0f && out.pose.y == -12.0f && out.pose.h == 0.3f, "pose");
+
+  checkTrue(out.has_otos == true, "has_otos");
+  checkTrue(out.otos.x == 351.0f && out.otos.y == -13.0f && out.otos.h == 0.32f, "otos");
+  checkTrue(out.otos_connected == true, "otos_connected");
+
+  checkTrue(out.has_twist == true, "has_twist");
+  checkTrue(out.twist.v_x == 200.0f && out.twist.omega == 0.5f, "twist (radians, NOT mrad -- binary carries real units)");
+
+  // Bench-diagnostic fields -- unconditionally present, no has_* flag.
+  checkTrue(out.acc_left == 15.5f, "acc_left");
+  checkTrue(out.acc_right == -8.25f, "acc_right");
+  checkTrue(out.active == true, "active");
+  checkTrue(out.conn_left == true, "conn_left");
+  checkTrue(out.conn_right == false, "conn_right");
+  checkTrue(out.glitch_left == 3, "glitch_left");
+  checkTrue(out.glitch_right == 9, "glitch_right");
+  checkTrue(out.ts_left == 111222, "ts_left");
+  checkTrue(out.ts_right == 333444, "ts_right");
+}
+
+// (j) 096-003: each `has_*` presence flag is copied independently -- an
+// omitted TlmFrameInput field produces a `false` msg::Telemetry has_*
+// flag while every other field is unaffected. Mirrors buildTlmFrame()'s
+// own per-field omission scenarios above, proving the two formatters
+// treat presence identically even though one omits a token and the other
+// clears a bool.
+void scenarioBuildTelemetryMessagePresenceFlagsIndependent() {
+  beginScenario("buildTelemetryMessage() copies has_* flags independently");
+
+  Telemetry::TlmFrameInput in = baselineInput();
+  in.hasEnc = false;
+  in.hasOtos = false;
+
+  msg::Telemetry out;
+  Telemetry::buildTelemetryMessage(out, in);
+
+  checkTrue(out.has_enc == false, "has_enc reflects hasEnc == false");
+  checkTrue(out.has_otos == false, "has_otos reflects hasOtos == false");
+  checkTrue(out.has_vel == true, "has_vel unaffected by the other two flags being false");
+  checkTrue(out.has_cmd_vel == true, "has_cmd_vel unaffected");
+  checkTrue(out.has_pose == true, "has_pose unaffected");
+  checkTrue(out.has_twist == true, "has_twist unaffected");
+  checkTrue(out.active == true, "bench-diagnostic fields unaffected by has_* flags (they have none of their own)");
+}
+
+// (j) buildTelemetryMessage() always resets `out` first -- pure, stateless,
+// like buildTlmFrame(): a caller-supplied struct carrying stale/garbage
+// values from a PRIOR call must not leak into this call's output.
+void scenarioBuildTelemetryMessageResetsStaleState() {
+  beginScenario("buildTelemetryMessage() resets stale caller state (pure, stateless)");
+
+  Telemetry::TlmFrameInput in;   // minimal input -- no optional fields present
+  in.now = 500;
+  in.driveMode = msg::DriveMode::IDLE;
+  in.seq = 0;
+
+  msg::Telemetry out;
+  // Poison `out` with values a minimal `in` would never itself produce.
+  out.has_enc = true;
+  out.enc_left = 9999.0f;
+  out.has_pose = true;
+  out.pose.x = -9999.0f;
+  out.acc_left = 9999.0f;
+
+  Telemetry::buildTelemetryMessage(out, in);
+
+  checkTrue(out.has_enc == false, "stale has_enc cleared");
+  checkTrue(out.enc_left == 0.0f, "stale enc_left cleared");
+  checkTrue(out.has_pose == false, "stale has_pose cleared");
+  checkTrue(out.pose.x == 0.0f, "stale pose.x cleared");
+  checkTrue(out.acc_left == 0.0f, "stale acc_left cleared (in.accLeft defaults to 0)");
+}
+
+// Determinism: the SAME input, called twice, must produce the SAME
+// msg::Telemetry -- buildTelemetryMessage() is pure (no I/O, no hidden
+// state), mirroring buildTlmFrame()'s own determinism scenario.
+void scenarioBuildTelemetryMessageDeterministic() {
+  beginScenario("buildTelemetryMessage(): same input produces the same output (pure, stateless)");
+
+  Telemetry::TlmFrameInput in = baselineInput();
+  msg::Telemetry outA;
+  msg::Telemetry outB;
+  Telemetry::buildTelemetryMessage(outA, in);
+  Telemetry::buildTelemetryMessage(outB, in);
+
+  checkTrue(outA.now == outB.now && outA.mode == outB.mode && outA.seq == outB.seq &&
+                outA.enc_left == outB.enc_left && outA.acc_left == outB.acc_left &&
+                outA.ts_right == outB.ts_right,
+            "two calls with an identical input match exactly");
 }
 
 }  // namespace
@@ -468,6 +671,10 @@ int main() {
   scenarioSmallBufferTruncatesSafely();
   scenarioDeterministic();
   scenarioTickAssemblesFromBareBlackboard();
+  scenarioBuildTelemetryMessageAllFieldsPresent();
+  scenarioBuildTelemetryMessagePresenceFlagsIndependent();
+  scenarioBuildTelemetryMessageResetsStaleState();
+  scenarioBuildTelemetryMessageDeterministic();
 
   if (g_failureCount == 0) {
     std::printf("OK: all tlm_frame scenarios passed\n");

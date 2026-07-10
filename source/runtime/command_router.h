@@ -63,6 +63,22 @@ class CommandRouter {
   // telemetryChannel). Only meaningful during a route() call.
   Subsystems::Channel currentChannel() const { return currentChannel_; }
 
+  // replySink -- resolves `channel` to the matching (ReplyFn, void*) reply
+  // sink, reusing the SAME serialReply_/serialCtx_/radioReply_/radioCtx_
+  // private state route() already branches on internally (mirrors route()'s
+  // own `radio ? radioReply_ : serialReply_` branch exactly, including
+  // treating Channel::NONE the same as Channel::SERIAL). Unlike
+  // currentChannel(), this is a second entry point usable OUTSIDE an active
+  // route() call -- 096-002's loop-owned tickTelemetry() (telemetry_
+  // commands.cpp) is the first caller, resolving bb.telemetryChannel to a
+  // live reply sink on a pass where no command is being dispatched at all.
+  // No new ReplyFn/void* storage is introduced by this accessor.
+  void replySink(Subsystems::Channel channel, ReplyFn& outReplyFn, void*& outReplyCtx) const {
+    bool radio = channel == Subsystems::Channel::RADIO;
+    outReplyFn = radio ? radioReply_ : serialReply_;
+    outReplyCtx = radio ? radioCtx_ : serialCtx_;
+  }
+
   // Forwards to CommandProcessor::listVerbs() -- the live registered verb
   // table HELP's handler reads (088-003, Decision 2: reuses this class's
   // existing "reach shared runtime state from handlerCtx" pattern instead

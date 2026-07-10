@@ -1,0 +1,130 @@
+syntax = "proto3";
+
+package robot;
+
+import "common.proto";
+import "planner.proto";
+
+// ---------------------------------------------------------------------------
+// Telemetry (096-001, M1). The wire contract for the binary telemetry plane
+// (ReplyEnvelope.body.tlm, envelope.proto) -- a curated UNION of two
+// currently-disjoint text surfaces (architecture-update.md (096) Decision 6):
+//   - the STREAM/SNAP periodic frame (Telemetry::TlmFrameInput,
+//     source/telemetry/tlm_frame.h -- now/mode/seq/enc/vel/cmd/pose/
+//     encpose/otos+otosconn/twist), and
+//   - the separate, one-shot `TLM` verb's bench-diagnostic fields
+//     (handleTlm(), source/commands/motion_commands.cpp -- acc/active/
+//     conn/glitch/ts).
+// Every field below traces 1:1 to one of those two sources -- no field
+// invents new firmware capability (this ticket's own acceptance
+// criterion). Field names are new wire identifiers this ticket controls
+// (not a rename of any existing text wire-key token, which the
+// no-units-in-identifiers convention's "wire keys are excluded" carve-out
+// does not need to reach here), so they follow the project's normal
+// naming rules -- snake_case (proto convention), quantity named precisely,
+// units in a leading `// [unit]` comment tag, not in the name.
+//
+// Presence: `has_*` fields mirror `TlmFrameInput`'s OWN `has*` convention
+// (explicit bool flags alongside plain value fields), NOT proto3
+// `optional` -- transcribed, not re-derived, the same "transcribe, never
+// re-derive" discipline this architecture applies elsewhere (095 Decision
+// 5; 096 Decision 5 for `MotorConfigPatch`'s side selector). Only
+// `has_cmd_vel` and `has_otos` (+ its paired `otos_connected`) are ever
+// actually false in the CURRENT `tick()` implementation
+// (`bb.drivetrain.vel_count() < 2` / `!bb.otosPresent`, respectively) --
+// every other `has_*` flag is unconditionally true today, but is still
+// declared explicitly here, mirroring `TlmFrameInput`'s own
+// per-field-group flags rather than collapsing the ones that happen to
+// always be true right now.
+//
+// The bench-diagnostic fields (acc/active/conn/glitch/ts, below) carry NO
+// `has_*` flag: `handleTlm()`'s own text reply never omits them.
+//
+// TRIM APPLIED (096-001 completion notes; architecture-update.md (096)
+// Decision 6's documented order): the full field set (this file's first
+// draft, including `has_enc_pose`/`enc_pose`) put `ReplyEnvelope`'s
+// generated worst case at 192B -- 6B over the 186-byte budget
+// (`tlm` arm alone = 186B; `+6B` non-oneof `corr_id` = 192B; see
+// gen_messages.py's own `kMaxEncodedSize` report). Per Decision 6's FIRST
+// trim step, `has_enc_pose`/`enc_pose` (encpose=<x>,<y>,<h>, reconstructable
+// from `enc_left`/`enc_right` + `twist`) were dropped, bringing the `tlm`
+// arm to 166B and the `ReplyEnvelope` total to 172B -- comfortably under
+// 186B, so Decision 6's SECOND trim step (`has_otos`/`otos`/
+// `otos_connected`) was NOT needed and those fields are still present
+// below. Final field list is exactly what this message declares now --
+// every STREAM/SNAP field EXCEPT `encpose`, plus all five bench-diagnostic
+// field groups.
+// ---------------------------------------------------------------------------
+message Telemetry {
+  uint32    now  = 1;   // [ms] t= -- always present
+  DriveMode mode = 2;   // mode= -- always present. Source: bb.planner.mode
+                         // (msg::DriveMode, planner.proto); the text
+                         // formatter maps this to a single wire character
+                         // (tlm_frame.cpp's modeChar()) -- the binary
+                         // formatter (ticket 003) carries the enum itself.
+  uint32    seq  = 3;    // seq= -- always present (bb.telemetrySeq)
+
+  // enc=<l>,<r> -- per-wheel accumulated encoder distance
+  // (TlmFrameInput.hasEnc/encLeft/encRight).
+  bool  has_enc   = 4;
+  float enc_left  = 5;   // [mm]
+  float enc_right = 6;   // [mm]
+
+  // vel=<l>,<r> -- per-wheel MEASURED velocity
+  // (TlmFrameInput.hasVel/velLeft/velRight).
+  bool  has_vel   = 7;
+  float vel_left  = 8;   // [mm/s] signed
+  float vel_right = 9;   // [mm/s] signed
+
+  // cmd=<l>,<r> -- per-wheel COMMANDED velocity, the velocity PID's own
+  // setpoint (TlmFrameInput.hasCmdVel/cmdVelLeft/cmdVelRight). The one
+  // STREAM/SNAP field group that is conditionally absent today
+  // (bb.drivetrain.vel_count() < 2).
+  bool  has_cmd_vel   = 10;
+  float cmd_vel_left  = 11;  // [mm/s] signed
+  float cmd_vel_right = 12;  // [mm/s] signed
+
+  // pose=<x>,<y>,<h> -- fused world pose, the EKF belief
+  // (TlmFrameInput.hasPose/pose).
+  bool   has_pose = 13;
+  Pose2D pose     = 14;
+
+  // encpose=<x>,<y>,<h> -- TRIMMED (see file header): field numbers 15/16
+  // are deliberately left unassigned here, not reserved via `reserved`
+  // (this message has never shipped -- nothing depends on a specific
+  // number for a field that never existed on the wire). If a future
+  // ticket needs to re-add encpose, add it back as a normal new field
+  // (any free number), same as any other schema growth.
+
+  // otos=<x>,<y>,<h> -- raw sampled odometer pose
+  // (TlmFrameInput.hasOtos/otos), conditionally present
+  // (bb.otosPresent -- the other STREAM/SNAP field group that is
+  // conditionally absent today). otos_connected (092-002) is a SEPARATE
+  // token sharing the SAME gate as otos, mirroring the text plane's own
+  // otosconn= precedent (tlm_frame.h). Decision 6's SECOND trim
+  // candidate -- NOT needed this ticket (see file header); still present.
+  bool   has_otos       = 15;
+  Pose2D otos           = 16;
+  bool   otos_connected = 17;
+
+  // twist=<v>,<omega> -- directly-measured/derived body twist
+  // (TlmFrameInput.hasTwist/twist).
+  bool       has_twist = 18;
+  BodyTwist3 twist     = 19;
+
+  // --- Bench-diagnostic fields (one-shot TLM verb, handleTlm() in
+  // motion_commands.cpp) -- unconditionally present, no has_* flag:
+  // handleTlm()'s own text reply never omits them. NEVER trim these (see
+  // file header) -- they are exactly what
+  // .claude/rules/hardware-bench-testing.md's "sensors are alive"/
+  // "encoders increment" verification reads.
+  float  acc_left     = 20;  // [mm/s^2] bb.drivetrain.acc()[0], EMA-filtered
+  float  acc_right    = 21;  // [mm/s^2] bb.drivetrain.acc()[1], EMA-filtered
+  bool   active        = 22;  // bb.drivetrain.busy -- motion in progress
+  bool   conn_left    = 23;  // bb.motors[0].connected
+  bool   conn_right   = 24;  // bb.motors[1].connected
+  uint32 glitch_left  = 25;  // bb.motors[0].enc_glitch_count
+  uint32 glitch_right = 26;  // bb.motors[1].enc_glitch_count
+  uint32 ts_left       = 27;  // [ms] bb.motors[0].sampled_at
+  uint32 ts_right      = 28;  // [ms] bb.motors[1].sampled_at
+}

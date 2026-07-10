@@ -34,10 +34,43 @@ from typing import Any, Generator
 
 from robot_radio.io.serial_conn import SerialConnection
 
+# Binary-plane pb2 bindings (096-007, M6 Host Config/Telemetry Client). Safe
+# to import at module level here (unlike robot_radio.io.serial_conn.py --
+# see that module's own _get_envelope_pb2() docstring for the circular-
+# import hazard it avoids): robot_radio.robot.pb2 has no dependency back onto
+# robot_radio.robot or robot_radio.io, so importing it while
+# robot_radio.robot's own __init__.py is still mid-execution (which is
+# always the case when this module is first loaded -- __init__.py imports
+# this module itself) never re-enters a partially-initialized module.
+from robot_radio.robot.pb2 import envelope_pb2, planner_pb2, telemetry_pb2
+
 
 # ---------------------------------------------------------------------------
 # Public data types
 # ---------------------------------------------------------------------------
+
+# kAngleScale mirror (source/telemetry/tlm_frame.cpp): 18000/pi, converting
+# radians (telemetry.proto's Pose2D.h, common.proto) to centidegrees (the
+# int this dataclass's pose/otos fields carry, matching parse_tlm()'s own
+# text-plane units). Same scale factor, same truncate-toward-zero int()
+# cast the firmware's static_cast<int> applies -- see TLMFrame.from_pb2().
+_ANGLE_SCALE = 5729.5779513  # [cdeg/rad]
+
+# modeChar() mirror (source/telemetry/tlm_frame.cpp): maps msg::DriveMode
+# (telemetry.mode, planner.proto) to the SAME single-character mode= wire
+# value parse_tlm() reads off a text STREAM/SNAP frame's "mode=" token.
+# VELOCITY has no dedicated character (modeChar()'s own `default: return
+# 'I';` case) -- mirrored here via .get()'s fallback in from_pb2(), not a
+# dict entry, so a future DriveMode value added to planner.proto without a
+# matching modeChar() case falls back the same way on both sides.
+_DRIVE_MODE_CHAR = {
+    planner_pb2.IDLE: "I",
+    planner_pb2.STREAMING: "S",
+    planner_pb2.TIMED: "T",
+    planner_pb2.DISTANCE: "D",
+    planner_pb2.GO_TO: "G",
+}
+
 
 @dataclass
 class TLMFrame:
@@ -89,6 +122,93 @@ class TLMFrame:
     wedge: tuple[int, int] | None = None         # (left, right) wedge-latch state, 0/1 each (064-004)
     encpose: tuple[int, int, int] | None = None  # (x, y, heading) [mm, mm, cdeg] — encoder-only pose (068-001)
     otos_health: tuple[int, bool] | None = None  # (raw STATUS byte, fusion_blocked) — OTOS health (074-004)
+
+    @classmethod
+    def from_pb2(cls, telemetry: "telemetry_pb2.Telemetry") -> "TLMFrame":
+        """Build a TLMFrame from a binary-plane ``pb2.Telemetry`` message
+        (``ReplyEnvelope.body.tlm``, envelope.proto/telemetry.proto).
+
+        Adapts telemetry.proto's wire shape onto this SAME dataclass shape
+        ``parse_tlm()`` already produces from a text STREAM/SNAP line — for
+        every field the two formats share, ``from_pb2(telemetry)`` is
+        field-for-field equal to ``parse_tlm(<the matching text line>)``.
+        This is an ADAPTER, not a redesign: TLMFrame's existing fields/shape
+        are unchanged; pb2's shape bends to fit them, never the reverse.
+
+        Truncation matches the firmware's own text formatter exactly
+        (``buildTlmFrame()``'s ``static_cast<int>``, i.e. truncate-toward-
+        zero) — Python's ``int()`` on a float does the same, so a frame
+        built from the same underlying sensor values agrees across either
+        wire format.
+
+        Fields left at this dataclass's own default (``None``) because
+        telemetry.proto and TLMFrame/``parse_tlm()`` do not share them:
+          - ``wedge``, ``encpose``, ``otos_health`` — parsed by
+            ``parse_tlm()`` from the text plane's ``wedge=``/``encpose=``/
+            ``otos_health=`` tokens, but telemetry.proto declares no
+            matching field (``encpose`` was trimmed at 096-001 — see
+            telemetry.proto's own file header; ``wedge``/``otos_health``
+            were never part of the STREAM/SNAP field union telemetry.proto
+            curates).
+          - OTOS connectivity — telemetry.proto DOES carry
+            ``has_otos``/``otos``/``otos_connected``, but ``parse_tlm()``
+            has never parsed the text plane's own ``otosconn=`` token into
+            any TLMFrame field either, so ``otos_connected`` is dropped
+            here too, for parity with the text path this dataclass already
+            models.
+          - ``acc_left``/``acc_right``/``active``/``conn_left``/
+            ``conn_right``/``glitch_left``/``glitch_right``/``ts_left``/
+            ``ts_right`` — telemetry.proto ALSO curates these from the
+            separate one-shot ``TLM`` verb's ``OK tlm ...`` reply
+            (``handleTlm()``, motion_commands.cpp) — a DIFFERENT text wire
+            shape than the STREAM/SNAP ``TLM t=... mode=...`` line
+            TLMFrame/``parse_tlm()`` model. TLMFrame has no slot for these;
+            they are silently dropped here, like any other field this
+            dataclass does not declare.
+
+        ``vel``/``cmd_vel``/``twist`` are always built as the DIFFERENTIAL
+        tuple shape (matching this build's differential-only drivetrain and
+        ``buildTlmFrame()``'s own ``"%d,%d"`` formatting): telemetry.proto's
+        ``twist`` is a ``BodyTwist3`` (``v_x``, ``v_y``, ``omega``), but the
+        firmware always zero-fills ``v_y`` for a differential build
+        (tlm_frame.cpp), so ``v_y`` is dropped here exactly as the text
+        plane's own 2-value ``twist=%d,%d`` already drops it.
+        """
+        frame = cls()
+        frame.t = telemetry.now
+        frame.mode = _DRIVE_MODE_CHAR.get(telemetry.mode, "I")
+        frame.seq = telemetry.seq
+
+        if telemetry.has_enc:
+            frame.enc = (int(telemetry.enc_left), int(telemetry.enc_right))
+
+        if telemetry.has_vel:
+            frame.vel = (int(telemetry.vel_left), int(telemetry.vel_right))
+
+        if telemetry.has_cmd_vel:
+            frame.cmd_vel = (int(telemetry.cmd_vel_left), int(telemetry.cmd_vel_right))
+
+        if telemetry.has_pose:
+            frame.pose = (
+                int(telemetry.pose.x),
+                int(telemetry.pose.y),
+                int(telemetry.pose.h * _ANGLE_SCALE),
+            )
+
+        if telemetry.has_otos:
+            frame.otos = (
+                int(telemetry.otos.x),
+                int(telemetry.otos.y),
+                int(telemetry.otos.h * _ANGLE_SCALE),
+            )
+
+        if telemetry.has_twist:
+            frame.twist = (
+                int(telemetry.twist.v_x),
+                int(telemetry.twist.omega * 1000.0),
+            )
+
+        return frame
 
 
 @dataclass
@@ -579,6 +699,61 @@ class NezhaProtocol:
             if r and r.tag == "OK" and r.tokens and r.tokens[0] == "set":
                 result.update(r.kv)
         return result if result else None
+
+    # ------------------------------------------------------------------
+    # Config: binary GET / SET (096-007, M6 Host Config/Telemetry Client)
+    #
+    # Alongside the text SET/GET wrappers above, NOT a replacement for
+    # them — same public-API-stability posture 095 established for
+    # drive/segment/replace (this class's existing methods/signatures are
+    # untouched; these are new, additive envelope builders). Both build a
+    # CommandEnvelope and hand it to SerialConnection.send_envelope() (095's
+    # corr-id-correlated binary round trip), then unwrap the ONE reply arm
+    # each request can produce — mirroring BinaryChannel's own CONFIG/GET
+    # arms (source/commands/binary_channel.cpp) exactly: CONFIG replies
+    # Ack on success, GET replies exactly one ConfigSnapshot. Neither
+    # method distinguishes a rejected (``Error``) reply from a plain
+    # timeout/not-connected — both return None, matching get_config()/
+    # set_config()'s own above "no failure detail" posture on the text
+    # plane.
+    # ------------------------------------------------------------------
+
+    def set_config_binary(self, delta: "envelope_pb2.ConfigDelta",
+                          read_timeout: int = 500) -> "envelope_pb2.Ack | None":  # [ms]
+        """Send CommandEnvelope{config: delta}; return the Ack reply, or
+        None (timeout, not connected, or an Error reply).
+
+        ``delta`` is a fully-built ``pb2.ConfigDelta`` — its own oneof
+        (``drivetrain``/``motor``/``planner``/``watchdog``) selects which
+        config slice is being patched, mirroring BinaryChannel's CONFIG arm
+        1:1. Building ``delta`` is the caller's job (e.g.
+        ``envelope_pb2.ConfigDelta(drivetrain=config_pb2.
+        DrivetrainConfigPatch(trackwidth=128.0))``) — this method's only
+        job is the envelope round trip.
+        """
+        envelope = envelope_pb2.CommandEnvelope(config=delta)
+        result = self._conn.send_envelope(envelope, read_timeout=read_timeout)
+        reply = result.get("reply")
+        if reply is not None and reply.WhichOneof("body") == "ok":
+            return reply.ok
+        return None
+
+    def get_config_binary(self, target: int,
+                          read_timeout: int = 500) -> "envelope_pb2.ConfigSnapshot | None":  # [ms]
+        """Send CommandEnvelope{get: ConfigGet{target}}; return the
+        ConfigSnapshot reply (exactly one slice, per BinaryChannel's GET
+        arm), or None (timeout, not connected, or an Error reply).
+
+        ``target`` is one of ``config_pb2.CONFIG_DRIVETRAIN`` /
+        ``CONFIG_MOTOR_LEFT`` / ``CONFIG_MOTOR_RIGHT`` / ``CONFIG_PLANNER``
+        / ``CONFIG_WATCHDOG``.
+        """
+        envelope = envelope_pb2.CommandEnvelope(get=envelope_pb2.ConfigGet(target=target))
+        result = self._conn.send_envelope(envelope, read_timeout=read_timeout)
+        reply = result.get("reply")
+        if reply is not None and reply.WhichOneof("body") == "cfg":
+            return reply.cfg
+        return None
 
     # ------------------------------------------------------------------
     # Drive commands

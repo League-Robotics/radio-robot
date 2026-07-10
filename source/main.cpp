@@ -7,8 +7,10 @@
 // Hardware& -- ticket 094-004), one Rt::Blackboard (the queues commands
 // post onto), and one Rt::CommandRouter (parse + dispatch), then runs a
 // bare, explicit loop: tick the Communicator, route any arrived command,
-// tick Hardware (pumps the I2C flip-flop -- timing unchanged from before
-// this sprint), tick Drivetrain (drains bb.segmentIn/bb.driveIn, runs the
+// tick telemetry (tickTelemetry() -- 096-002's loop-owned periodic STREAM
+// emission, a no-op unless STREAM has armed bb.telemetryPeriod), tick
+// Hardware (pumps the I2C flip-flop -- timing unchanged from before this
+// sprint), tick Drivetrain (drains bb.segmentIn/bb.driveIn, runs the
 // executor/escape-hatch dispatch, stages this pass's wheel setpoints
 // directly through Hardware's motor refs -- flushed the FOLLOWING pass by
 // the next Hardware::tick()), then commit Drivetrain's measured state back
@@ -40,6 +42,7 @@
 
 #include "MicroBit.h"
 #include "com/i2c_bus.h"
+#include "commands/telemetry_commands.h"
 #include "config/boot_config.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
@@ -119,6 +122,21 @@ int hardware_main() {
     // The two-plane transport commands post onto, and the pointerless command
     // router that parses + dispatches inbound wire lines against it.
     static Rt::Blackboard bb;
+    // 096-002: no runtime Configurator is wired this sprint (093/094: "no
+    // runtime config-application authority left" -- boot config is applied
+    // once, directly, at construction), so bb.drivetrainConfig would
+    // otherwise stay at its zero-valued default (left_port=0/right_port=0/
+    // trackwidth=0) forever -- Configurator::applyOne() is normally the ONLY
+    // thing that ever publishes it (configurator.cpp). Telemetry::tick()
+    // (source/telemetry/tlm_frame.cpp) reads bb.drivetrainConfig.left_port/
+    // right_port directly as a 0-based bb.motors[] index (leftIdx = left_port
+    // - 1): left uninitialized, that underflows to UINT32_MAX and reads
+    // wildly out of bounds -- STREAM/SNAP's first live emission crashed the
+    // sim with a bus error before this line was added. A one-time direct
+    // seed with the SAME dtConfig already handed to drivetrain.configure()
+    // above, mirroring Configurator::applyOne()'s own "bb.drivetrainConfig =
+    // drivetrainConfig_;" publish.
+    bb.drivetrainConfig = dtConfig;
     static Rt::CommandRouter router;
     router.setReplyChannels(serialReply, &comm, radioReply, &comm);
 
@@ -136,6 +154,7 @@ int hardware_main() {
         if (comm.hasCommand()) {
             router.route(comm.takeCommand(), bb); // Add the command to the router, which will parse and dispatch it, posting any command args onto the blackboard and replying through the appropriate channel.
         }
+        tickTelemetry(bb, router, now); // Loop-owned periodic STREAM emission (096-002) -- a no-op unless STREAM has armed bb.telemetryPeriod.
 
         hardware.tick(now);                                // pump the I2C flip-flop (timing unchanged)
         drivetrain.tick(now,

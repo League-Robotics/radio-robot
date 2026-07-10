@@ -172,6 +172,13 @@ struct Blackboard {
   bool telemetryHasLastEmit = false;
   uint32_t telemetryLastEmitMs = 0;   // [ms]
 
+  // telemetryBinary (096-002, architecture-update.md M2) -- the branch point
+  // tickTelemetry() (telemetry_commands.cpp) reads to choose text vs. binary
+  // emission. Defaults false and stays inert this ticket: nothing sets it
+  // true yet -- the binary formatter itself lands in ticket 003, and ticket
+  // 005's binary `stream` arm is the first thing to ever set it true.
+  bool telemetryBinary = false;
+
   // === Command plane: queues. Each drained by exactly ONE consumer. ===
   WorkQueue<Subsystems::CommunicatorToCommandProcessorCommand, 16>
       commandsIn;                            // Communicator -> router

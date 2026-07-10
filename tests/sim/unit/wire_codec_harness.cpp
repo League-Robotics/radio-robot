@@ -343,7 +343,10 @@ void scenarioMissingReqRejected() {
   msg::wire::Result rOk = msg::wire::decode(outOk, envOk.data, static_cast<uint16_t>(envOk.len));
   checkTrue(rOk.ok, "decode succeeds once (req) target is present");
   checkTrue(outOk.cmd.get.target.has, "target.has == true");
-  checkU64Eq(outOk.cmd.get.target.val, 42, "target.val round-trips");
+  // 096-001: ConfigGet.target retyped uint32 -> ConfigTarget; .val is now
+  // msg::ConfigTarget, cast the same way scenarioEncodeErr() already casts
+  // msg::ErrCode below.
+  checkU64Eq(static_cast<uint64_t>(outOk.cmd.get.target.val), 42, "target.val round-trips");
 }
 
 void scenarioMinMaxRejected() {
@@ -390,7 +393,9 @@ void scenarioUnknownFieldSkipped() {
   checkTrue(r.ok, "decode succeeds despite the unknown field 99");
   checkU64Eq(out.corr_id, 3, "corr_id (before the unknown field) is unaffected");
   checkTrue(out.cmd_kind == msg::CommandEnvelope::CmdKind::GET, "cmd_kind == GET (after the unknown field) is unaffected");
-  checkU64Eq(out.cmd.get.target.val, 7, "get.target (after the unknown field) round-trips correctly");
+  // 096-001: ConfigGet.target retyped uint32 -> ConfigTarget; see the cast
+  // note in scenarioMissingReqRejected() above.
+  checkU64Eq(static_cast<uint64_t>(out.cmd.get.target.val), 7, "get.target (after the unknown field) round-trips correctly");
 }
 
 // ===========================================================================

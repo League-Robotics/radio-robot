@@ -86,6 +86,11 @@ TlmFrameInput tick(uint32_t now, const Rt::Blackboard& bb) {
   // mode= -- 084-005: bb.planner.mode is the SOLE source (architecture-
   // update.md (084) Decision 6).
   in.mode = modeChar(bb.planner.mode);
+  // driveMode (096-003) -- the SAME bb.planner.mode value, unmapped, for
+  // buildTelemetryMessage()'s exclusive use -- see tlm_frame.h's own doc
+  // comment on TlmFrameInput.driveMode for why the text mapping above
+  // cannot be reversed to recover it.
+  in.driveMode = bb.planner.mode;
   // seq= -- READ ONLY. The shared STREAM/SNAP counter (bb.telemetrySeq) is
   // advanced by the caller, not here -- see this function's own doc
   // comment in tlm_frame.h.
@@ -136,6 +141,26 @@ TlmFrameInput tick(uint32_t now, const Rt::Blackboard& bb) {
   BodyKinematics::forward(velLeft, velRight, bb.drivetrainConfig.trackwidth,
                            in.twist.v_x, in.twist.omega);
   in.twist.v_y = 0.0f;   // differential-only this sprint -- see drivetrain.h
+
+  // Bench-diagnostic fields (096-003) -- TRANSCRIBED EXACTLY from
+  // handleTlm()'s own computation (motion_commands.cpp), never re-derived.
+  // acc= is the firmware-EMA measured acceleration; active= is motion in
+  // progress (dt.busy, NOT the authority flag -- see handleTlm()'s own
+  // comment on why); conn=/glitch=/ts= read bb.motors[0]/bb.motors[1]
+  // DIRECTLY -- the SAME hardcoded bound-pair indices handleTlm() itself
+  // uses, deliberately NOT the leftIdx/rightIdx bb.drivetrainConfig-derived
+  // indices enc=/vel= use above (handleTlm() never made that
+  // generalization, and this transcribes its computation exactly).
+  const msg::DrivetrainState& dt = bb.drivetrain;
+  in.accLeft = dt.acc_count_val() >= 1 ? dt.acc()[0] : 0.0f;
+  in.accRight = dt.acc_count_val() >= 2 ? dt.acc()[1] : 0.0f;
+  in.active = dt.busy;
+  in.connLeft = bb.motors[0].connected;
+  in.connRight = bb.motors[1].connected;
+  in.glitchLeft = bb.motors[0].enc_glitch_count.has ? bb.motors[0].enc_glitch_count.val : 0;
+  in.glitchRight = bb.motors[1].enc_glitch_count.has ? bb.motors[1].enc_glitch_count.val : 0;
+  in.tsLeft = bb.motors[0].sampled_at.has ? bb.motors[0].sampled_at.val : 0;
+  in.tsRight = bb.motors[1].sampled_at.has ? bb.motors[1].sampled_at.val : 0;
 
   return in;
 }
@@ -204,6 +229,56 @@ int buildTlmFrame(char* buf, int len, const TlmFrameInput& in) {
   // (truncated) appendField() call still leaves a valid, shorter
   // NUL-terminated string in buf that `pos` alone would under-report.
   return static_cast<int>(std::strlen(buf));
+}
+
+void buildTelemetryMessage(msg::Telemetry& out, const TlmFrameInput& in) {
+  // Pure, stateless: always start from a fresh POD -- never assume the
+  // caller pre-cleared `out` (mirrors buildTlmFrame()'s own "same inputs
+  // always produce the same outputs" contract).
+  out = msg::Telemetry();
+
+  out.now = in.now;
+  out.mode = in.driveMode;   // the RAW enum -- see TlmFrameInput.driveMode's own doc comment
+  out.seq = in.seq;
+
+  out.has_enc = in.hasEnc;
+  out.enc_left = in.encLeft;
+  out.enc_right = in.encRight;
+
+  out.has_vel = in.hasVel;
+  out.vel_left = in.velLeft;
+  out.vel_right = in.velRight;
+
+  out.has_cmd_vel = in.hasCmdVel;
+  out.cmd_vel_left = in.cmdVelLeft;
+  out.cmd_vel_right = in.cmdVelRight;
+
+  out.has_pose = in.hasPose;
+  out.pose = in.pose;
+
+  // encpose/hasEncPose intentionally NOT copied -- msg::Telemetry has no
+  // corresponding field (096-001's trim, Decision 6) -- see this
+  // function's own doc comment in tlm_frame.h.
+
+  out.has_otos = in.hasOtos;
+  out.otos = in.otos;
+  out.otos_connected = in.otosConnected;
+
+  out.has_twist = in.hasTwist;
+  out.twist = in.twist;
+
+  // Bench-diagnostic fields -- unconditionally copied, no `has_*` flag on
+  // either side (mirrors handleTlm()'s own text reply, which never omits
+  // them).
+  out.acc_left = in.accLeft;
+  out.acc_right = in.accRight;
+  out.active = in.active;
+  out.conn_left = in.connLeft;
+  out.conn_right = in.connRight;
+  out.glitch_left = in.glitchLeft;
+  out.glitch_right = in.glitchRight;
+  out.ts_left = in.tsLeft;
+  out.ts_right = in.tsRight;
 }
 
 }  // namespace Telemetry

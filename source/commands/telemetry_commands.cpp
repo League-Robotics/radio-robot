@@ -5,12 +5,65 @@
 
 
 #include "commands/command_processor.h"
+#include "messages/wire.h"
+#include "messages/wire_runtime.h"
 #include "telemetry/tlm_frame.h"
 #include "types/clock.h"
 
 namespace {
 
 Rt::Blackboard& bb(void* handlerCtx) { return static_cast<Rt::CommandRouter*>(handlerCtx)->blackboard(); }
+
+// kArmoredBufSize (096-003) -- "*B" (2) + base64(kReplyEnvelopeMaxEncodedSize)
+// + NUL, rounded up with headroom; the SAME sizing argument and 256-byte
+// budget commands/binary_channel.cpp's own kArmoredBufSize uses (matches
+// Subsystems::CommunicatorToCommandProcessorCommand::line's 256-byte
+// transport budget, wire_command.h).
+constexpr size_t kArmoredBufSize = 256;
+
+// telemetryEmitBinary -- the binary-plane sibling of telemetryEmit() below
+// (096-003): the SAME tick()-then-advance-seq flow, but formats via
+// Telemetry::buildTelemetryMessage() into a msg::ReplyEnvelope{tlm}, then
+// encode+armor+send exactly like commands/binary_channel.cpp's own
+// sendReply() (msg::wire::encode -> "*B" + WireRuntime::base64Encode).
+// corr_id = 0 -- this is unsolicited PUSH telemetry, not a reply to any
+// particular CommandEnvelope (envelope.proto's own forward-looking doc
+// comment; matches ticket 005's own acceptance criterion for the binary
+// `stream` arm this function's caller is gated on). Only ever called from
+// tickTelemetry() below -- SNAP (handleSnap()) always uses the text
+// telemetryEmit(), regardless of bb.telemetryBinary (this file's own
+// header note: only bb.telemetrySeq is shared between STREAM and SNAP).
+void telemetryEmitBinary(Rt::Blackboard& b, uint32_t now, ReplyFn replyFn, void* replyCtx) {
+  if (replyFn == nullptr) return;
+
+  Telemetry::TlmFrameInput in = Telemetry::tick(now, b);
+  b.telemetrySeq++;   // shared with the text path -- see telemetryEmit()'s own comment
+
+  msg::ReplyEnvelope reply;
+  reply.corr_id = 0;
+  reply.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
+  Telemetry::buildTelemetryMessage(reply.body.tlm, in);
+
+  uint8_t rawBuf[msg::wire::kReplyEnvelopeMaxEncodedSize];
+  const uint16_t n = msg::wire::encode(reply, rawBuf, static_cast<uint16_t>(sizeof(rawBuf)));
+  if (n == 0) {
+    // Unreachable in practice -- rawBuf is sized from the SAME generated
+    // kReplyEnvelopeMaxEncodedSize constant encode() itself is budgeted
+    // against (wire.h's own static_assert), so every ReplyEnvelope this
+    // function builds fits. No frame is sent rather than a malformed one.
+    return;
+  }
+
+  char armored[kArmoredBufSize];
+  armored[0] = '*';
+  armored[1] = 'B';
+  size_t b64Len = 0;
+  if (!WireRuntime::base64Encode(rawBuf, n, armored + 2, sizeof(armored) - 3, &b64Len)) {
+    return;   // same unreachable-in-practice sizing argument as above
+  }
+  armored[2 + b64Len] = '\0';
+  replyFn(armored, replyCtx);
+}
 
 // ---------------------------------------------------------------------------
 // STREAM <ms> -- pure fixed-shape `<verb> <int>` command, so it uses
@@ -48,26 +101,19 @@ void handleStream(const ArgList& args, const char* corrId,
   CommandProcessor::replyOKf(rbuf, sizeof(rbuf), "stream", corrId, replyFn, replyCtx,
                              "period=%u", static_cast<unsigned>(period));
 
-  // Immediate first frame (docs/protocol-v2.md §8 / dev_loop.h's own doc
-  // comment: "the very first pass after a channel issues STREAM emits
-  // immediately", generalized to "or enough time has elapsed since the
-  // last emission") -- concatenated into THIS SAME dispatch's own reply
-  // (replyFn/replyCtx), exactly mirroring the pre-087 loop's periodic-
-  // emission step, which captured this handler's OWN replyFn/replyCtx and
-  // so happened to land in the SAME reply whenever it fired same-pass.
-  // 087-006: bb.telemetryChannel/the loop's own resolveTelemetryReply()
-  // cannot reproduce that same-reply concatenation (a Channel enum, not a
-  // captured ReplyFn/void* pair -- see telemetry_commands.h's file header),
-  // so this handler performs the SAME-PASS immediate emission itself,
-  // directly on its own dispatch reply sink, and updates
-  // bb.telemetryLastEmitMs/bb.telemetryHasLastEmit so the loop's own later
-  // per-pass check (dev_loop.cpp) does not double-emit this same pass.
-  uint32_t now = Types::systemClockNow();
-  if (period > 0 && (!b.telemetryHasLastEmit || (now - b.telemetryLastEmitMs) >= period)) {
-    telemetryEmit(b, now, replyFn, replyCtx);
-    b.telemetryLastEmitMs = now;
-    b.telemetryHasLastEmit = true;
-  }
+  // 096-002 (architecture-update.md Open Question 5): pre-087 (and every
+  // version through the 093 loop rewrite) this handler ALSO emitted an
+  // immediate first frame here, concatenated into THIS SAME dispatch's own
+  // reply -- a same-pass, same-reply optimization made possible only
+  // because a captured ReplyFn/void* pair was still available at this call
+  // site. That optimization is DELIBERATELY NOT reproduced now that a real
+  // loop-owned periodic tick exists again (tickTelemetry(), this file):
+  // emission -- first frame AND every later one -- is entirely
+  // tickTelemetry()'s job, firing one pass after this handler sets
+  // bb.telemetryPeriod/bb.telemetryChannel, via its own normal
+  // !bb.telemetryHasLastEmit trigger. This handler no longer touches
+  // bb.telemetryLastEmitMs/bb.telemetryHasLastEmit at all -- see
+  // telemetry_commands.h's file header for the full rationale.
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +150,36 @@ void telemetryEmit(Rt::Blackboard& b, uint32_t now, ReplyFn replyFn, void* reply
   char buf[300];
   Telemetry::buildTlmFrame(buf, sizeof(buf), in);
   replyFn(buf, replyCtx);
+}
+
+void tickTelemetry(Rt::Blackboard& bb, Rt::CommandRouter& router, uint32_t now) {
+  if (bb.telemetryPeriod == 0) return;
+  if (bb.telemetryHasLastEmit && (now - bb.telemetryLastEmitMs) < bb.telemetryPeriod) return;
+
+  ReplyFn replyFn = nullptr;
+  void* replyCtx = nullptr;
+  router.replySink(bb.telemetryChannel, replyFn, replyCtx);
+
+  // bb.telemetryBinary (096-002's branch point, wired by 096-003): a binary
+  // ReplyEnvelope{tlm} frame via telemetryEmitBinary() when a binary stream
+  // client asked for it (ticket 005's `stream` arm sets this true), the
+  // pre-existing text TLM line via telemetryEmit() otherwise. Both share
+  // the SAME Telemetry::tick()-then-advance-bb.telemetrySeq flow -- only
+  // the wire framing differs. Nothing sets bb.telemetryBinary true until
+  // ticket 005 lands, so this ticket's own observable behavior is still
+  // unconditionally text.
+  if (bb.telemetryBinary) {
+    telemetryEmitBinary(bb, now, replyFn, replyCtx);
+  } else {
+    telemetryEmit(bb, now, replyFn, replyCtx);
+  }
+
+  // Mirrors handleStream()'s own immediate-first-frame bookkeeping: update
+  // unconditionally (even if telemetryEmit() was a silent no-op because
+  // replyFn resolved null) so a channel with no wired reply sink does not
+  // retry every single pass.
+  bb.telemetryLastEmitMs = now;
+  bb.telemetryHasLastEmit = true;
 }
 
 std::vector<CommandDescriptor> telemetryCommands(Rt::CommandRouter& router) {

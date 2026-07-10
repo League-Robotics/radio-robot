@@ -260,25 +260,269 @@ void handle(const char* line, ReplyFn replyFn, void* replyCtx, void* routerCtx) 
       break;
     }
 
-    // Declared-only arms (this sprint): the schema accepts and validates
-    // them, but no Blackboard queue/consumer exists yet (096/098 land
-    // these). Never silently drop, never crash -- a typed error naming the
-    // arm's own CommandEnvelope.cmd oneof field number.
-    case msg::CommandEnvelope::CmdKind::CONFIG:
-      sendError(msg::ErrCode::ERR_UNIMPLEMENTED, 6, env.corr_id, replyFn, replyCtx);
+    case msg::CommandEnvelope::CmdKind::CONFIG: {
+      // 096-004 (Decision 3): hand-translate the ONE populated Patch's
+      // present (Opt<T>.has) fields into a freshly-built Rt::ConfigDelta{
+      // target, mask, value} -- one "if (has) { field = val; mask |=
+      // bitOf(...); }" per field, mirroring applyConfigKey()'s
+      // (config_commands.cpp) own per-key assignment shape exactly. No
+      // strcmp dispatch (the oneof's own patch_kind discriminant replaces
+      // it) and no hand parsing/range checks (the generated decoder's
+      // min/max/abs_max/req validation already ran during decode() above).
+      const msg::ConfigDelta& patch = env.cmd.config;
+      switch (patch.patch_kind) {
+        case msg::ConfigDelta::PatchKind::DRIVETRAIN: {
+          const msg::DrivetrainConfigPatch& p = patch.patch.drivetrain;
+          Rt::ConfigDelta delta;
+          delta.target = Rt::ConfigDelta::kDrivetrain;
+          if (p.trackwidth.has) {
+            delta.drivetrain.trackwidth = p.trackwidth.val;
+            delta.mask |= Rt::bitOf(Rt::DrivetrainConfigField::kTrackwidth);
+          }
+          if (p.rotational_slip.has) {
+            delta.drivetrain.rotational_slip = p.rotational_slip.val;
+            delta.mask |= Rt::bitOf(Rt::DrivetrainConfigField::kRotationalSlip);
+          }
+          if (p.ekf_q_xy.has) {
+            delta.drivetrain.ekf_q_xy = p.ekf_q_xy.val;
+            delta.mask |= Rt::bitOf(Rt::DrivetrainConfigField::kEkfQXy);
+          }
+          if (p.ekf_q_theta.has) {
+            delta.drivetrain.ekf_q_theta = p.ekf_q_theta.val;
+            delta.mask |= Rt::bitOf(Rt::DrivetrainConfigField::kEkfQTheta);
+          }
+          if (p.ekf_r_otos_xy.has) {
+            delta.drivetrain.ekf_r_otos_xy = p.ekf_r_otos_xy.val;
+            delta.mask |= Rt::bitOf(Rt::DrivetrainConfigField::kEkfROtosXy);
+          }
+          if (p.ekf_r_otos_theta.has) {
+            delta.drivetrain.ekf_r_otos_theta = p.ekf_r_otos_theta.val;
+            delta.mask |= Rt::bitOf(Rt::DrivetrainConfigField::kEkfROtosTheta);
+          }
+          if (delta.mask != 0 && !b.configIn.post(delta)) {
+            sendError(msg::ErrCode::ERR_FULL, 0, env.corr_id, replyFn, replyCtx);
+            return;
+          }
+          sendAck(b, env.corr_id, replyFn, replyCtx);
+          break;
+        }
+
+        case msg::ConfigDelta::PatchKind::MOTOR: {
+          // Decision 5: `side` disambiguates travel_calib ONLY; any present
+          // Gains field (kp/ki/kff/i_max/kaw) applies to BOTH bound motors
+          // unconditionally -- two separate ConfigDelta posts, one per bound
+          // index -- mirroring applyConfigKey()'s exact both-sides pid.*
+          // behavior. Never a per-side Gains split.
+          const msg::MotorConfigPatch& p = patch.patch.motor;
+          // Same conversion boundary as config_commands.cpp's handleSet()/
+          // handleGet(): bb.drivetrainConfig.left_port/right_port are
+          // wire/serialized 1-based labels, converted to 0-based Hardware
+          // motor indices here, once.
+          uint32_t leftIdx = b.drivetrainConfig.left_port - 1;
+          uint32_t rightIdx = b.drivetrainConfig.right_port - 1;
+
+          if (p.travel_calib.has) {
+            Rt::ConfigDelta delta;
+            delta.target = Rt::ConfigDelta::kMotor;
+            delta.port = (p.side == msg::BoundMotorSide::RIGHT) ? rightIdx : leftIdx;
+            delta.motor.travel_calib = p.travel_calib.val;
+            delta.mask = Rt::bitOf(Rt::MotorConfigField::kTravelCalib);
+            if (!b.configIn.post(delta)) {
+              sendError(msg::ErrCode::ERR_FULL, 0, env.corr_id, replyFn, replyCtx);
+              return;
+            }
+          }
+
+          uint64_t gainsMask = 0;
+          msg::MotorConfig gains;
+          if (p.kp.has) {
+            gains.vel_gains.kp = p.kp.val;
+            gainsMask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsKp);
+          }
+          if (p.ki.has) {
+            gains.vel_gains.ki = p.ki.val;
+            gainsMask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsKi);
+          }
+          if (p.kff.has) {
+            gains.vel_gains.kff = p.kff.val;
+            gainsMask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsKff);
+          }
+          if (p.i_max.has) {
+            gains.vel_gains.i_max = p.i_max.val;
+            gainsMask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsIMax);
+          }
+          if (p.kaw.has) {
+            gains.vel_gains.kaw = p.kaw.val;
+            gainsMask |= Rt::bitOf(Rt::MotorConfigField::kVelGainsKaw);
+          }
+          if (gainsMask != 0) {
+            Rt::ConfigDelta deltaLeft;
+            deltaLeft.target = Rt::ConfigDelta::kMotor;
+            deltaLeft.port = leftIdx;
+            deltaLeft.motor = gains;
+            deltaLeft.mask = gainsMask;
+            Rt::ConfigDelta deltaRight;
+            deltaRight.target = Rt::ConfigDelta::kMotor;
+            deltaRight.port = rightIdx;
+            deltaRight.motor = gains;
+            deltaRight.mask = gainsMask;
+            if (!b.configIn.post(deltaLeft) || !b.configIn.post(deltaRight)) {
+              sendError(msg::ErrCode::ERR_FULL, 0, env.corr_id, replyFn, replyCtx);
+              return;
+            }
+          }
+          sendAck(b, env.corr_id, replyFn, replyCtx);
+          break;
+        }
+
+        case msg::ConfigDelta::PatchKind::PLANNER: {
+          const msg::PlannerConfigPatch& p = patch.patch.planner;
+          Rt::ConfigDelta delta;
+          delta.target = Rt::ConfigDelta::kPlanner;
+          if (p.min_speed.has) {
+            delta.planner.min_speed = p.min_speed.val;
+            delta.mask |= Rt::bitOf(Rt::PlannerConfigField::kMinSpeed);
+          }
+          if (delta.mask != 0 && !b.configIn.post(delta)) {
+            sendError(msg::ErrCode::ERR_FULL, 0, env.corr_id, replyFn, replyCtx);
+            return;
+          }
+          sendAck(b, env.corr_id, replyFn, replyCtx);
+          break;
+        }
+
+        case msg::ConfigDelta::PatchKind::WATCHDOG: {
+          // Open Question 4 (096): sTimeout is NOT one of the Configurator's
+          // four fold targets -- posts straight to bb.streamWatchdogWindowIn
+          // (the loop-owned StreamingDriveWatchdog's window), never
+          // bb.configIn, mirroring handleSet()'s own sTimeout special-case
+          // (config_commands.cpp) and config_commands.h's own file-header
+          // note that sTimeout is "the one key that is NOT one of the
+          // Configurator's four targets."
+          b.streamWatchdogWindowIn.post(patch.patch.watchdog);
+          sendAck(b, env.corr_id, replyFn, replyCtx);
+          break;
+        }
+
+        case msg::ConfigDelta::PatchKind::NONE:
+        default:
+          // No Patch populated at all -- not field-specific beyond "which
+          // arm" (field 6, CommandEnvelope.cmd.config's own field number,
+          // mirroring this file's declared-only-arm error convention).
+          sendError(msg::ErrCode::ERR_UNKNOWN, 6, env.corr_id, replyFn, replyCtx);
+          break;
+      }
       break;
+    }
+
     case msg::CommandEnvelope::CmdKind::POSE:
       sendError(msg::ErrCode::ERR_UNIMPLEMENTED, 7, env.corr_id, replyFn, replyCtx);
       break;
     case msg::CommandEnvelope::CmdKind::OTOS:
       sendError(msg::ErrCode::ERR_UNIMPLEMENTED, 8, env.corr_id, replyFn, replyCtx);
       break;
-    case msg::CommandEnvelope::CmdKind::GET:
-      sendError(msg::ErrCode::ERR_UNIMPLEMENTED, 11, env.corr_id, replyFn, replyCtx);
+
+    case msg::CommandEnvelope::CmdKind::GET: {
+      // ConfigGet.target is `optional` + `(req)=true` (ticket 001) -- the
+      // generated decoder already rejected an envelope missing it
+      // (ERR_BADARG field=1) before dispatch ever reached here, so
+      // env.cmd.get.target.has is guaranteed true.
+      const msg::ConfigTarget target = env.cmd.get.target.val;
+      // Same conversion boundary as config_commands.cpp's handleGet():
+      // bb.drivetrainConfig.left_port/right_port are wire/serialized 1-based
+      // labels, converted to 0-based Hardware motor indices here, once.
+      uint32_t leftIdx = b.drivetrainConfig.left_port - 1;
+      uint32_t rightIdx = b.drivetrainConfig.right_port - 1;
+
+      msg::ConfigSnapshot cfg;
+      cfg.target = target;
+
+      switch (target) {
+        case msg::ConfigTarget::CONFIG_DRIVETRAIN: {
+          cfg.patch_kind = msg::ConfigSnapshot::PatchKind::DRIVETRAIN;
+          msg::DrivetrainConfigPatch& p = cfg.patch.drivetrain;
+          p.trackwidth = {true, b.drivetrainConfig.trackwidth};
+          p.rotational_slip = {true, b.drivetrainConfig.rotational_slip};
+          p.ekf_q_xy = {true, b.drivetrainConfig.ekf_q_xy};
+          p.ekf_q_theta = {true, b.drivetrainConfig.ekf_q_theta};
+          p.ekf_r_otos_xy = {true, b.drivetrainConfig.ekf_r_otos_xy};
+          p.ekf_r_otos_theta = {true, b.drivetrainConfig.ekf_r_otos_theta};
+          break;
+        }
+        case msg::ConfigTarget::CONFIG_MOTOR_LEFT:
+        case msg::ConfigTarget::CONFIG_MOTOR_RIGHT: {
+          bool isLeft = (target == msg::ConfigTarget::CONFIG_MOTOR_LEFT);
+          const msg::MotorConfig& m = b.motorConfig[isLeft ? leftIdx : rightIdx];
+          cfg.patch_kind = msg::ConfigSnapshot::PatchKind::MOTOR;
+          msg::MotorConfigPatch& p = cfg.patch.motor;
+          p.side = isLeft ? msg::BoundMotorSide::LEFT : msg::BoundMotorSide::RIGHT;
+          p.travel_calib = {true, m.travel_calib};
+          p.kp = {true, m.vel_gains.kp};
+          p.ki = {true, m.vel_gains.ki};
+          p.kff = {true, m.vel_gains.kff};
+          p.i_max = {true, m.vel_gains.i_max};
+          p.kaw = {true, m.vel_gains.kaw};
+          break;
+        }
+        case msg::ConfigTarget::CONFIG_PLANNER: {
+          cfg.patch_kind = msg::ConfigSnapshot::PatchKind::PLANNER;
+          cfg.patch.planner.min_speed = {true, b.plannerConfig.min_speed};
+          break;
+        }
+        case msg::ConfigTarget::CONFIG_WATCHDOG: {
+          cfg.patch_kind = msg::ConfigSnapshot::PatchKind::WATCHDOG;
+          cfg.patch.watchdog = b.streamWatchdogWindow;
+          break;
+        }
+        default:
+          // Not one of the 5 known ConfigTarget enumerators -- the generated
+          // decoder has no enum-range validation to catch this (no
+          // (min)/(max)/(abs_max) on an enum field), so it is caught here.
+          // field 1 = ConfigGet.target's own field number.
+          sendError(msg::ErrCode::ERR_UNKNOWN, 1, env.corr_id, replyFn, replyCtx);
+          return;
+      }
+
+      msg::ReplyEnvelope reply;
+      reply.corr_id = env.corr_id;
+      reply.body_kind = msg::ReplyEnvelope::BodyKind::CFG;
+      reply.body.cfg = cfg;
+      sendReply(reply, replyFn, replyCtx);
       break;
-    case msg::CommandEnvelope::CmdKind::STREAM:
-      sendError(msg::ErrCode::ERR_UNIMPLEMENTED, 12, env.corr_id, replyFn, replyCtx);
+    }
+
+    case msg::CommandEnvelope::CmdKind::STREAM: {
+      // 096-005: mirrors handleStream()'s own state-setting exactly
+      // (telemetry_commands.cpp) -- minus the text ArgSchema/ArgList
+      // parsing layer, which the generated decoder's own (min)/(max)
+      // validation already replaced (StreamControl.period is wire-bounded
+      // [0, 60000], same range as kStreamArgs). kStreamFloorMs is
+      // duplicated here rather than shared: telemetry_commands.cpp keeps
+      // it TU-local (unnamed namespace), and this file already hand-mirrors
+      // handleStream()'s state-setting rather than reaching across TUs for
+      // it (same pattern as toSegment()'s own field-by-field copy).
+      constexpr uint32_t kStreamFloorMs = 20;  // [ms] docs/protocol-v2.md §8
+      const msg::StreamControl& sc = env.cmd.stream;
+      b.telemetryPeriod = (sc.period == 0) ? 0
+                           : (sc.period < kStreamFloorMs ? kStreamFloorMs : sc.period);
+      // Channel binding (docs/protocol-v2.md §8): the SAME routerCtx idiom
+      // every other arm in this file uses to reach the Blackboard
+      // (Decision 1) -- resolved from the CommandRouter currently
+      // dispatching this envelope (currentChannel()), never a captured
+      // ReplyFn/void* pair, mirroring handleStream()'s own comment on why.
+      // Rebound unconditionally, even for period 0 (disabling still records
+      // "this channel asked last").
+      b.telemetryChannel = static_cast<Rt::CommandRouter*>(routerCtx)->currentChannel();
+      b.telemetryBinary = sc.binary;
+      // Deliberately NOT reproducing handleStream()'s old same-reply
+      // "immediate first frame" concatenation (Open Question 5, ticket
+      // 002's own note) -- the first frame arrives one pass later via
+      // tickTelemetry()'s normal !telemetryHasLastEmit trigger, uniformly
+      // for text and binary. sendAck mirrors drive/segment/replace/stop's
+      // own ack shape; stream does not get a bespoke reply shape.
+      sendAck(b, env.corr_id, replyFn, replyCtx);
       break;
+    }
 
     case msg::CommandEnvelope::CmdKind::NONE:
     default:

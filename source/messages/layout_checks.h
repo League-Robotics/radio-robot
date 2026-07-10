@@ -70,6 +70,12 @@ static_assert(std::is_standard_layout<BodyTwist3>::value,
               "msg::BodyTwist3 must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<WheelTargets>::value,
               "msg::WheelTargets must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<DrivetrainConfigPatch>::value,
+              "msg::DrivetrainConfigPatch must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<MotorConfigPatch>::value,
+              "msg::MotorConfigPatch must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<PlannerConfigPatch>::value,
+              "msg::PlannerConfigPatch must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Pose2D>::value,
               "msg::Pose2D must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<WheelTarget>::value,

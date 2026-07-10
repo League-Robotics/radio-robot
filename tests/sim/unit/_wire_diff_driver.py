@@ -44,9 +44,12 @@ if str(_HOST_PB2_DIR) not in sys.path:
     sys.path.insert(0, str(_HOST_PB2_DIR))
 
 from robot_radio.robot.pb2 import common_pb2 as pb_common  # noqa: E402
+from robot_radio.robot.pb2 import config_pb2 as pb_config  # noqa: E402
 from robot_radio.robot.pb2 import drivetrain_pb2 as pb_drivetrain  # noqa: E402
 from robot_radio.robot.pb2 import envelope_pb2 as pb_envelope  # noqa: E402
 from robot_radio.robot.pb2 import motion_pb2 as pb_motion  # noqa: E402
+from robot_radio.robot.pb2 import planner_pb2 as pb_planner  # noqa: E402
+from robot_radio.robot.pb2 import telemetry_pb2 as pb_telemetry  # noqa: E402
 
 
 def find_cxx_compiler() -> str:
@@ -177,6 +180,96 @@ def encode_id(binary: pathlib.Path, corr_id: int, model: str, name: str, serial:
     if line == "ZERO":
         return None
     assert line.startswith("B64 "), f"unexpected encode_id output: {line!r}"
+    return base64.b64decode(line[len("B64 "):])
+
+
+def encode_telemetry(binary: pathlib.Path, corr_id: int, **fields) -> bytes | None:
+    """096-006: builds ReplyEnvelope{tlm=Telemetry{...}} via the
+    `encode_telemetry` argv verb (see wire_differential_harness.cpp's file
+    header for the full positional list). `fields` keys are telemetry.proto's
+    OWN field names; every field not passed defaults to its proto zero
+    value (0 / 0.0 / False) -- mirrors every pb2 message constructor's own
+    "omitted kwarg -> zero default" convention, so a caller only spells out
+    the fields a given test case cares about."""
+    order = (
+        "now", "mode", "seq", "has_enc", "enc_left", "enc_right", "has_vel", "vel_left", "vel_right",
+        "has_cmd_vel", "cmd_vel_left", "cmd_vel_right", "has_pose", "pose_x", "pose_y", "pose_h",
+        "has_otos", "otos_x", "otos_y", "otos_h", "otos_connected", "has_twist", "twist_vx", "twist_vy",
+        "twist_omega", "acc_left", "acc_right", "active", "conn_left", "conn_right", "glitch_left",
+        "glitch_right", "ts_left", "ts_right",
+    )
+    unknown = set(fields) - set(order)
+    assert not unknown, f"unknown Telemetry field(s): {unknown}"
+    args = [str(corr_id)]
+    for key in order:
+        value = fields.get(key, 0)
+        # bool -> "0"/"1", NOT Python's own str(True) == "True" -- the
+        # harness parses every non-float positional arg with strtoul(), which
+        # silently reads "True"/"False" as 0 (no leading digit), corrupting
+        # every has_*/active/conn_*/otos_connected flag. Caught by this
+        # ticket's own test_direction_b_telemetry_full_shape failing before
+        # this fix -- see completion notes.
+        args.append(str(int(value)) if isinstance(value, bool) else str(value))
+    r = run_harness(binary, "encode_telemetry", *args)
+    assert not r.crashed, f"encode_telemetry crashed: {r.stdout}\n{r.stderr}"
+    line = r.stdout.strip()
+    if line == "ZERO":
+        return None
+    assert line.startswith("B64 "), f"unexpected encode_telemetry output: {line!r}"
+    return base64.b64decode(line[len("B64 "):])
+
+
+def encode_cfg_drivetrain(binary: pathlib.Path, corr_id: int, target: int, trackwidth: float,
+                           rotational_slip: float, ekf_q_xy: float, ekf_q_theta: float, ekf_r_otos_xy: float,
+                           ekf_r_otos_theta: float) -> bytes | None:
+    """096-006: builds ReplyEnvelope{cfg=ConfigSnapshot{target,
+    drivetrain=DrivetrainConfigPatch{...}}}."""
+    r = run_harness(binary, "encode_cfg_drivetrain", str(corr_id), str(target), repr(trackwidth),
+                     repr(rotational_slip), repr(ekf_q_xy), repr(ekf_q_theta), repr(ekf_r_otos_xy),
+                     repr(ekf_r_otos_theta))
+    assert not r.crashed, f"encode_cfg_drivetrain crashed: {r.stdout}\n{r.stderr}"
+    line = r.stdout.strip()
+    if line == "ZERO":
+        return None
+    assert line.startswith("B64 "), f"unexpected encode_cfg_drivetrain output: {line!r}"
+    return base64.b64decode(line[len("B64 "):])
+
+
+def encode_cfg_motor(binary: pathlib.Path, corr_id: int, target: int, side: int, travel_calib: float, kp: float,
+                      ki: float, kff: float, i_max: float, kaw: float) -> bytes | None:
+    """096-006: builds ReplyEnvelope{cfg=ConfigSnapshot{target,
+    motor=MotorConfigPatch{...}}}."""
+    r = run_harness(binary, "encode_cfg_motor", str(corr_id), str(target), str(side), repr(travel_calib),
+                     repr(kp), repr(ki), repr(kff), repr(i_max), repr(kaw))
+    assert not r.crashed, f"encode_cfg_motor crashed: {r.stdout}\n{r.stderr}"
+    line = r.stdout.strip()
+    if line == "ZERO":
+        return None
+    assert line.startswith("B64 "), f"unexpected encode_cfg_motor output: {line!r}"
+    return base64.b64decode(line[len("B64 "):])
+
+
+def encode_cfg_planner(binary: pathlib.Path, corr_id: int, target: int, min_speed: float) -> bytes | None:
+    """096-006: builds ReplyEnvelope{cfg=ConfigSnapshot{target,
+    planner=PlannerConfigPatch{min_speed}}}."""
+    r = run_harness(binary, "encode_cfg_planner", str(corr_id), str(target), repr(min_speed))
+    assert not r.crashed, f"encode_cfg_planner crashed: {r.stdout}\n{r.stderr}"
+    line = r.stdout.strip()
+    if line == "ZERO":
+        return None
+    assert line.startswith("B64 "), f"unexpected encode_cfg_planner output: {line!r}"
+    return base64.b64decode(line[len("B64 "):])
+
+
+def encode_cfg_watchdog(binary: pathlib.Path, corr_id: int, target: int, watchdog: int) -> bytes | None:
+    """096-006: builds ReplyEnvelope{cfg=ConfigSnapshot{target,
+    watchdog=<uint32>}}."""
+    r = run_harness(binary, "encode_cfg_watchdog", str(corr_id), str(target), str(watchdog))
+    assert not r.crashed, f"encode_cfg_watchdog crashed: {r.stdout}\n{r.stderr}"
+    line = r.stdout.strip()
+    if line == "ZERO":
+        return None
+    assert line.startswith("B64 "), f"unexpected encode_cfg_watchdog output: {line!r}"
     return base64.b64decode(line[len("B64 "):])
 
 
@@ -334,12 +427,58 @@ def env_id_request(corr_id: int) -> bytes:
     return pb_envelope.CommandEnvelope(corr_id=corr_id, id=pb_envelope.DeviceId()).SerializeToString()
 
 
+# ---------------------------------------------------------------------------
+# ConfigDelta builders (096-006) -- ConfigDelta is COMMAND-only (never
+# appears in ReplyEnvelope.body, see envelope.proto's own oneof list), so
+# unlike drive/segment/etc. above it needs only a host-encode ->
+# firmware-decode direction (Direction A); there is no env_config-side
+# "Direction B" counterpart to write.
+# ---------------------------------------------------------------------------
+
+
+def env_config_drivetrain(corr_id: int, **fields) -> bytes:
+    """`fields` keys are DrivetrainConfigPatch's own proto field names
+    (trackwidth/rotational_slip/ekf_q_xy/ekf_q_theta/ekf_r_otos_xy/
+    ekf_r_otos_theta) -- only the ones passed are marked `has=true` on the
+    wire (proto3 `optional` explicit presence), mirroring a real client
+    that only sets the keys it wants to change."""
+    patch = pb_config.DrivetrainConfigPatch(**fields)
+    return pb_envelope.CommandEnvelope(
+        corr_id=corr_id, config=pb_envelope.ConfigDelta(drivetrain=patch)).SerializeToString()
+
+
+def env_config_motor(corr_id: int, side: int = pb_config.LEFT, **fields) -> bytes:
+    """`fields` keys are MotorConfigPatch's own proto field names
+    (travel_calib/kp/ki/kff/i_max/kaw); `side` is always present (not
+    `optional` on the wire -- config.proto's own MotorConfigPatch.side is a
+    plain enum field, proto3 implicit presence)."""
+    patch = pb_config.MotorConfigPatch(side=side, **fields)
+    return pb_envelope.CommandEnvelope(
+        corr_id=corr_id, config=pb_envelope.ConfigDelta(motor=patch)).SerializeToString()
+
+
+def env_config_planner(corr_id: int, **fields) -> bytes:
+    """`fields` keys are PlannerConfigPatch's own proto field names
+    (min_speed, its only field)."""
+    patch = pb_config.PlannerConfigPatch(**fields)
+    return pb_envelope.CommandEnvelope(
+        corr_id=corr_id, config=pb_envelope.ConfigDelta(planner=patch)).SerializeToString()
+
+
+def env_config_watchdog(corr_id: int, watchdog: int) -> bytes:
+    return pb_envelope.CommandEnvelope(
+        corr_id=corr_id, config=pb_envelope.ConfigDelta(watchdog=watchdog)).SerializeToString()
+
+
 __all__ = [
-    "pb_common", "pb_drivetrain", "pb_envelope", "pb_motion",
+    "pb_common", "pb_config", "pb_drivetrain", "pb_envelope", "pb_motion", "pb_planner", "pb_telemetry",
     "compile_harness", "run_harness", "decode", "parse_decode_line",
     "encode_ok", "encode_err", "encode_id", "encode_echo_reply", "f32", "float_eq",
+    "encode_telemetry", "encode_cfg_drivetrain", "encode_cfg_motor", "encode_cfg_planner",
+    "encode_cfg_watchdog",
     "unknown_varint_field",
     "env_drive_twist", "env_drive_wheels", "env_drive_neutral",
     "build_motion_segment", "env_segment", "env_replace",
     "env_stop", "env_ping", "env_echo", "env_id_request",
+    "env_config_drivetrain", "env_config_motor", "env_config_planner", "env_config_watchdog",
 ]
