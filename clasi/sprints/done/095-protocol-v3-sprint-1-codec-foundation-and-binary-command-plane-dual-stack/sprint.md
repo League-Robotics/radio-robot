@@ -1,7 +1,7 @@
 ---
 id: 095
 title: 'Protocol v3 Sprint 1: Codec foundation and binary command plane (dual stack)'
-status: planning-docs
+status: done
 branch: sprint/095-protocol-v3-sprint-1-codec-foundation-and-binary-command-plane-dual-stack
 use-cases:
 - SUC-001
