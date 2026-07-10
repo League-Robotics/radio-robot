@@ -319,6 +319,9 @@ class Drivetrain {
   // chases). Written by tick(); read by the const state().
   float cmdVel_[2] = {0.0f, 0.0f};   // [mm/s]
 
+  // Executor's remaining translation, cached each tick for state()/rem=.
+  float remainingLinear_ = 0.0f;   // [mm]
+
   // Measured per-wheel acceleration, EMA-filtered in firmware (see
   // updateAccelEma()'s doc comment in drivetrain.cpp) -- surfaced via
   // state()/TLM `acc=`. Indexed [0]=bound left wheel, [1]=bound right.

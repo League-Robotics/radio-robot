@@ -134,6 +134,12 @@ class SegmentExecutor {
   bool hasPending() const { return hasPending_; }
   bool streaming() const { return phase_ != Phase::IDLE && currentStream_; }
 
+  // remainingLinear -- plan-frame remaining translation [mm] (0 when idle).
+  // The streaming teleop's flow-control signal: the host holds this near a
+  // target (~0.4s of motion) so the plan's to-rest tail never bites
+  // mid-stream (buffer too shallow = the 5Hz accelerate/brake pulsing).
+  float remainingLinear(uint32_t now) const;   // [ms]
+
   // converged -- true once the WHOLE segment -- every phase it needed, plus
   // each phase's own trailing graceful stop -- has settled to a literal-zero
   // twist. Equivalent to !active(), spelled out separately per this ticket's

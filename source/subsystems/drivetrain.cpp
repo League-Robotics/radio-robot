@@ -296,6 +296,11 @@ void Drivetrain::tick(uint32_t now,
 
     // Staged, not held -- flushed at hardware_'s own tick() cadence (see
     // drivetrain.h's class comment and architecture-update.md Section 5).
+    // Streaming flow-control signal: the executor's remaining translation,
+    // cached here (tick has `now`; the const state() does not) -- surfaced
+    // as rem= in the MOVE ack.
+    remainingLinear_ = segmentMode_ ? executor_.remainingLinear(now) : 0.0f;
+
     // Nothing left to route. Remember this pass's post-governor commanded
     // wheel velocities so state()/TLM can surface cmd= (measured vel= vs the
     // setpoint the velocity PID is chasing).
@@ -396,6 +401,10 @@ msg::DrivetrainState Drivetrain::state() const {
     // currently executing. Surfaced in the MOVE ack (`q=`) so a streaming
     // teleop client can flow-control its send rate against the real backlog.
     s.queue = ring_.size() + ((segmentMode_ && executor_.active()) ? 1u : 0u);
+
+    // Remaining translation in the live plan [mm] -- the streaming teleop's
+    // buffer-depth feedback (rem= in the MOVE ack).
+    s.rem = remainingLinear_;
 
     return s;
 }

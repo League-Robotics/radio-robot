@@ -680,4 +680,13 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
 
 bool SegmentExecutor::active() const { return phase_ != Phase::IDLE; }
 
+float SegmentExecutor::remainingLinear(uint32_t now) const {
+  if (phase_ == Phase::IDLE) return 0.0f;
+  // Plan-frame remaining translation. Const-cast: JerkTrajectory::sample()
+  // is logically const (pure evaluation at an elapsed time) but not marked
+  // so; this accessor must stay const for Drivetrain::state().
+  Motion::JerkTrajectory& lin = const_cast<Motion::JerkTrajectory&>(linear_);
+  return fabsf(linearTarget_ - lin.sample(linearElapsed(now)).position);
+}
+
 }  // namespace Motion

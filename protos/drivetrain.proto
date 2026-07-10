@@ -77,6 +77,11 @@ message DrivetrainState {
   // the MOVE ack (`q=`) so a streaming teleop client can flow-control its
   // send rate against the actual backlog.
   uint32     queue              = 16;
+  // rem: remaining translation in the executor's live plan, mm. The
+  // streaming teleop's buffer-depth feedback (MOVE ack rem=): the host holds
+  // it near ~0.4s of motion so the plan's to-rest tail never starts
+  // mid-stream (a too-shallow buffer = 5Hz accelerate/brake pulsing).
+  float      rem                = 17;
 }
 
 // Full drive configuration slice: geometry, PID gains, OTOS fusion, EKF noise.

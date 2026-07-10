@@ -753,10 +753,14 @@ void handleMove(const ArgList& args, const char* corrId, ReplyFn replyFn, void* 
   }
 
   unsigned q = b.segmentIn.size() + b.drivetrain.queue;
-  char body[80];
-  snprintf(body, sizeof(body), "dist=%d dir=%d fh=%d q=%u",
-           distance, direction, finalHeading, q);
-  char rbuf[112];
+  // rem= -- remaining translation in the live plan [mm] (one pass stale):
+  // the streaming client's buffer-depth feedback. Held near ~0.4s of motion
+  // so the plan's to-rest tail never starts mid-stream.
+  char body[96];
+  snprintf(body, sizeof(body), "dist=%d dir=%d fh=%d q=%u rem=%d",
+           distance, direction, finalHeading, q,
+           static_cast<int>(b.drivetrain.rem));
+  char rbuf[128];
   CommandProcessor::replyOK(rbuf, sizeof(rbuf), "move", body, corrId, replyFn, replyCtx);
 }
 
