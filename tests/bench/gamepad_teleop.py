@@ -239,6 +239,7 @@ def run_probe():
 
 
 def main():
+    global MAX_SPEED
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--port", default="/dev/cu.usbmodem2121102")
     ap.add_argument("--relay", action="store_true",
@@ -272,7 +273,6 @@ def main():
     if args.invert_turn:
         tele.turn_sign = -tele.turn_sign
     tele.period = max(0.05, args.period_ms / 1000.0)
-    global MAX_SPEED
     MAX_SPEED = max(50.0, min(1000.0, args.max_speed))
     conn = SerialConnection(args.port, mode=("relay" if args.relay else "direct"),
                             on_recv=tele.on_recv)
