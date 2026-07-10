@@ -1,7 +1,8 @@
-"""tests/unit/test_legacy_translate.py -- 097-002 (M4 Legacy Verb Translator).
+"""tests/unit/test_legacy_translate.py -- 097-002/097-004 (M4 Legacy Verb
+Translator).
 
-Covers ``host/robot_radio/robot/legacy_translate.py``'s three functions,
-each a pure/stateless transcription of one CURRENT firmware handler
+Covers ``host/robot_radio/robot/legacy_translate.py``'s functions, each a
+pure/stateless transcription of one CURRENT firmware handler
 (``source/commands/motion_commands.cpp``) plus the shared
 ``BodyKinematics::forward()`` (``source/kinematics/body_kinematics.cpp``):
 
@@ -14,6 +15,14 @@ each a pure/stateless transcription of one CURRENT firmware handler
   computation (``distance = v * (ms / 1000)``).
 - ``segment_for_distance()`` -- ``handleD()``'s sign-then-distance
   computation (``distance = sign(v) * mm``).
+- ``segment_for_rt()`` (097-004) -- ``handleRT()``'s pure in-place-turn
+  segment (``finalHeading = relAngle``, centidegrees -> radians).
+- ``segment_for_move()`` (097-004) -- ``handleMove()``'s 1:1 field copy
+  off ``parseMove``'s packed args, including the centidegree -> radian
+  conversion for direction/finalHeading/yaw_*.
+- ``segment_for_mover()`` (097-004) -- ``handleMover()``'s REPLACE-
+  semantics segment: signed v/omega, ``speed_max``/``yaw_rate_max`` as
+  their absolute value, ``stream`` unconditionally ``True``.
 
 Every expected value below is hand-computed from the cited source
 constants/equations, not re-derived from this module's own implementation
@@ -156,6 +165,119 @@ def test_segment_for_distance_matches_handle_d_sign_computation(
     assert seg.direction == pytest.approx(0.0)
     assert seg.final_heading == pytest.approx(0.0)
     assert seg.speed_max == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# kCdegToRad (motion_commands.cpp): constexpr float kCdegToRad =
+#   3.14159265f / 18000.0f;
+# Computed independently here (not imported from legacy_translate's own
+# module-level _CDEG_TO_RAD) so a transcription error in that constant
+# would still be caught -- this file's own "verify, don't trust by
+# inspection" discipline (see its own header docstring).
+# ---------------------------------------------------------------------------
+_CDEG_TO_RAD = 3.14159265 / 18000.0
+
+
+# ---------------------------------------------------------------------------
+# segment_for_rt() -- handleRT() (motion_commands.cpp): RT <relAngle> -> one
+# pure in-place-turn Motion::Segment: distance=0, finalHeading=relAngle
+# (relative, CCW+), converted centidegrees -> radians via kCdegToRad.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("rel_angle",),
+    [(9000,), (-4500,), (0,), (18000,), (-18000,)],
+)
+def test_segment_for_rt_matches_handle_rt_final_heading_computation(rel_angle):
+    seg = legacy_translate.segment_for_rt(rel_angle)
+    assert seg.final_heading == pytest.approx(rel_angle * _CDEG_TO_RAD)
+    # Every other field stays at its proto3 zero default -- handleRT() never
+    # touches distance/direction/speedMax/etc.
+    assert seg.distance == pytest.approx(0.0)
+    assert seg.direction == pytest.approx(0.0)
+    assert seg.speed_max == pytest.approx(0.0)
+    assert seg.stream is False
+
+
+# ---------------------------------------------------------------------------
+# segment_for_move() -- handleMove() (motion_commands.cpp): MOVE
+# <distance_mm> <direction_cdeg> <finalHeading_cdeg> [v=][a=][j=][w=][wa=]
+# [wj=][s=] -> Motion::Segment, a 1:1 field copy off parseMove's packed
+# args; direction/finalHeading/w/wa/wj convert cdeg -> rad via kCdegToRad,
+# v/a/j pass through unconverted, s=1 -> stream=True.
+# ---------------------------------------------------------------------------
+
+
+def test_segment_for_move_is_a_1to1_field_copy_with_cdeg_to_rad_conversion():
+    seg = legacy_translate.segment_for_move(
+        500, 9000, -9000,
+        speed_max=300, accel_max=800, jerk_max=5000,
+        yaw_rate_max=4500, yaw_accel_max=100000, yaw_jerk_max=200000,
+        stream=True,
+    )
+    assert seg.distance == pytest.approx(500.0)
+    assert seg.direction == pytest.approx(9000 * _CDEG_TO_RAD)
+    assert seg.final_heading == pytest.approx(-9000 * _CDEG_TO_RAD)
+    assert seg.speed_max == pytest.approx(300.0)
+    assert seg.accel_max == pytest.approx(800.0)
+    assert seg.jerk_max == pytest.approx(5000.0)
+    assert seg.yaw_rate_max == pytest.approx(4500 * _CDEG_TO_RAD)
+    assert seg.yaw_accel_max == pytest.approx(100000 * _CDEG_TO_RAD)
+    assert seg.yaw_jerk_max == pytest.approx(200000 * _CDEG_TO_RAD)
+    assert seg.stream is True
+
+
+def test_segment_for_move_defaults_match_kvfloat_zero_sentinel():
+    """An absent kv key defaults to 0.0 (kvFloat()'s own default), matching
+    Motion::Segment's "0 => executor's configured default" convention
+    (parseMove's own doc comment)."""
+    seg = legacy_translate.segment_for_move(0, 0, 0)
+    assert seg.speed_max == pytest.approx(0.0)
+    assert seg.accel_max == pytest.approx(0.0)
+    assert seg.jerk_max == pytest.approx(0.0)
+    assert seg.yaw_rate_max == pytest.approx(0.0)
+    assert seg.yaw_accel_max == pytest.approx(0.0)
+    assert seg.yaw_jerk_max == pytest.approx(0.0)
+    assert seg.stream is False
+
+
+# ---------------------------------------------------------------------------
+# segment_for_mover() -- handleMover() (motion_commands.cpp): MOVER
+# <distance_mm> <direction_cdeg> <finalHeading_cdeg> [t=][v=][w=][a=][j=]
+# [wa=][wj=] -> Motion::Segment, REPLACE semantics: stream ALWAYS True;
+# v/omega SIGNED; speed_max=|v|, yaw_rate_max=|omega| (converted).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("v", "omega"),
+    [(300.0, 4500.0), (-300.0, -4500.0), (0.0, 0.0), (-150.0, 2000.0)],
+)
+def test_segment_for_mover_speed_max_and_yaw_rate_max_are_absolute_value(v, omega):
+    seg = legacy_translate.segment_for_mover(0, 0, 0, time=400, v=v, omega=omega)
+    assert seg.v == pytest.approx(v)
+    assert seg.omega == pytest.approx(omega * _CDEG_TO_RAD)
+    # handleMover(): seg.speedMax = fabsf(v); seg.yawRateMax = fabsf(w) * kCdegToRad;
+    assert seg.speed_max == pytest.approx(abs(v))
+    assert seg.yaw_rate_max == pytest.approx(abs(omega) * _CDEG_TO_RAD)
+    assert seg.time == pytest.approx(400.0)
+
+
+def test_segment_for_mover_stream_is_always_true():
+    """handleMover()'s own unconditional ``seg.stream = true;`` -- unlike
+    MOVE's caller-controlled s=1 kv, MOVER is always a streaming segment
+    (the deadman-velocity teleop shape), even with every kwarg left at its
+    default."""
+    seg = legacy_translate.segment_for_mover(0, 0, 0)
+    assert seg.stream is True
+
+
+def test_segment_for_mover_distance_direction_final_heading_pass_through():
+    seg = legacy_translate.segment_for_mover(500, 9000, -4500, v=0.0, omega=0.0)
+    assert seg.distance == pytest.approx(500.0)
+    assert seg.direction == pytest.approx(9000 * _CDEG_TO_RAD)
+    assert seg.final_heading == pytest.approx(-4500 * _CDEG_TO_RAD)
 
 
 if __name__ == "__main__":

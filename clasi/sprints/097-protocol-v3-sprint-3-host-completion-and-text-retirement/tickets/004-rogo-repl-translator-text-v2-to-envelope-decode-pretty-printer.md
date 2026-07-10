@@ -1,9 +1,12 @@
 ---
 id: '004'
 title: 'rogo REPL translator: text-v2-to-envelope + --decode pretty-printer'
-status: open
-use-cases: [SUC-004]
-depends-on: ['002', '003']
+status: in-progress
+use-cases:
+- SUC-004
+depends-on:
+- '002'
+- '003'
 github-issue: ''
 issue: protocol-v3-schema-driven-binary-command-plane-protobuf.md
 completes_issue: false

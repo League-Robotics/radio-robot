@@ -2,7 +2,7 @@
 id: '003'
 title: NezhaProtocol telemetry conversion (stream/snap) + 9-file consumer sweep +
   delete parse_tlm/parse_cfg
-status: in-progress
+status: done
 use-cases:
 - SUC-003
 depends-on:
@@ -59,6 +59,15 @@ method, tracked by the separate
 `realign-host-tooling-to-gutted-four-verb-wire-surface.md` issue, not
 re-scoped here).
 
+**Post-implementation note**: this ticket's own implementation found that
+three of the nine named files plus one half-file are not
+`SerialConnection`-reachable and cannot be soundly swept this sprint (two
+independent structural reasons — transport, and a wire field the binary
+schema never carries). This is now recorded as this sprint's own accepted
+scope boundary, not a partial-completion gap — see
+`architecture-update-r1.md` Decision 8 and the Resolution section below
+for the full finding and its consequences for tickets 006/007/008.
+
 ## Acceptance Criteria
 
 - [x] `stream()` sends `*B<base64>` on the wire; return type (`None`) is
@@ -67,22 +76,35 @@ re-scoped here).
       arm-wait-disarm sequence described above; its return type/shape
       (`TLMFrame | None`) and public contract are unchanged. Its docstring
       is updated to describe the new implementation strategy.
-- [ ] **PARTIALLY MET — see "Resolution: conservative-fallback consumers"
-      below.** Every one of the nine listed internal consumer files is
-      updated to source its `TLMFrame` from the binary plane
-      (`_binary_tlm_queue` / `TLMFrame.from_pb2()`), not from
-      `parse_tlm(line)` on a text line. SIX of nine are fully swept
-      (`nezha.py`, `nezha_state.py`, `sensors/odom_tracker.py`, `io/cli.py`,
-      `tests/playfield/world_goto_chart.py`, and `testgui/transport.py`'s
-      `_HardwareTransport` half). THREE files
+- [x] **Achieved scope (revised by `architecture-update-r1.md` Decision 8
+      — see that document for the full finding): every `SerialConnection`-
+      reachable internal consumer file is updated to source its
+      `TLMFrame` from the binary plane** (`_binary_tlm_queue` /
+      `TLMFrame.from_pb2()`), not from `parse_tlm(line)` on a text line.
+      SIX of the original nine are fully swept (`nezha.py`, `nezha_state.py`,
+      `sensors/odom_tracker.py`, `io/cli.py`, `tests/playfield/
+      world_goto_chart.py`, and `testgui/transport.py`'s `_HardwareTransport`
+      half); one additional, not-originally-named file
+      (`tests/bench/bench_ruckig_motion_verify.py`) was found and fully
+      swept too, since it IS `SerialConnection`-reachable with no
+      structural blocker. The remaining three files
       (`calibration/linear.py`/`angular.py`/`fit_sim_error_model.py`) and
-      ONE half-file (`testgui/transport.py`'s `SimTransport`) could not be
-      soundly swept — implementation-time discovery, not an architecture
-      research gap this ticket's own architecture-update.md missed by
-      oversight (it explicitly named these nine files as "found by direct
-      grep," not as "verified `SerialConnection`-reachable"). Zero
-      behavior was silently dropped; see the Resolution section for the
-      per-file reasoning and the flagged, documented alternative each got.
+      one half-file (`testgui/transport.py`'s `SimTransport`) are
+      confirmed **structurally unreachable this sprint** — two independent
+      reasons, not an oversight: (1) neither `calibration/_conn_helpers.py`'s
+      `RelaySerial`/`DirectSerial` nor `SimTransport`'s `SimConnection`
+      (ctypes ABI) owns or can cheaply be given a `_binary_tlm_queue`; (2)
+      `fit_sim_error_model.py` structurally depends on `TLMFrame.encpose`,
+      which `telemetry.proto`'s `Telemetry` message can never carry (096-001
+      Decision 6 trimmed it for the 186-byte budget) — no transport fix
+      restores it. This is now the sprint's OWN documented, accepted
+      boundary for this ticket (architecture-update-r1.md Decision 8), not
+      a partial-completion gap: migrating these four is out of 097's scope
+      entirely, owned by `realign-host-tooling-to-gutted-four-verb-wire-
+      surface.md`. Zero behavior was silently dropped for any of the
+      thirteen files touched — see the Resolution section below for the
+      per-file reasoning and the flagged, documented fallback
+      (`_legacy_tlm_text.py`) each of the four unreachable consumers uses.
 - [x] `grep -rn "parse_tlm" host/` (excluding the deleted function's own
       former definition and test files exercising `TLMFrame.from_pb2`'s
       historical text/binary parity claim, e.g.

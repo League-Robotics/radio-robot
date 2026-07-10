@@ -15,92 +15,118 @@ completes_issue: false
 
 ## Description
 
-Delete `handleStream`/`handleSnap`'s `telemetryCommands()` registrations,
-`kStreamSchema`, and `telemetryEmit()`/`Telemetry::buildTlmFrame()` (the
-text-only formatter) — now that ticket 005's gate confirmed
-`NezhaProtocol.stream()`/`.snap()` (ticket 003) and every internal
-`TLMFrame` consumer (ticket 003's nine-file sweep) work correctly over the
-binary `stream` arm, including `snap()`'s host-side arm-wait-disarm
-synthesis.
+**REVISED SCOPE — see `architecture-update-r1.md` Decision 8.** The
+original plan (delete `handleStream`/`handleSnap`/`kStreamSchema`/
+`Telemetry::buildTlmFrame()` now that ticket 003 converted
+`NezhaProtocol.stream()`/`.snap()` to binary) assumed `NezhaProtocol` was
+the only host path that arms text telemetry. Ticket 003's own
+implementation found two live, production consumers that are NOT
+`SerialConnection`-reachable and therefore could not be swept onto the
+binary plane this sprint (documented in ticket 003's Resolution section
+and `architecture-update-r1.md` Decision 8):
 
-`tickTelemetry()`'s `bb.telemetryBinary` branch stays structurally, but
-since only the binary `stream` arm can set `bb.telemetryPeriod`/
-`.telemetryBinary` once `handleStream` is gone, the text-emission branch
-becomes unreachable — remove it (or leave a documented dead-branch note,
-per this ticket's own judgment call, cited explicitly either way in the
-implementation).
+- **`calibration/linear.py`**: raw pyserial (`RelaySerial`/`DirectSerial`),
+  sends `"SNAP"` directly and reads the text `TLM ...` reply.
+- **`calibration/angular.py`**: same raw-pyserial transport, sends
+  `"STREAM 20"`/`"STREAM 0"` and `"SNAP"` directly.
 
-**Binary parity: 096, sim-exhaustive** (differential-vs-google.protobuf
-byte-parity + fuzz + behavioral tests for `Telemetry`/`StreamControl`,
-plus 096's own periodic-tick acceptance criteria: monotonic `seq=`,
-correct on/off behavior). Hardware bench (stream text vs. binary TLM at
-matched rates, compare `tlm_drop_rate()`) is part of the team-lead's
-post-sprint consolidated session, per `sprint.md`'s own sequencing — this
-ticket's own gate is sim + ARM-build-clean, not a substitute.
+The team-lead's own follow-up sweep additionally found:
+
+- **TestGUI** (`testgui/__main__.py`) sends a hardcoded `"STREAM 50"` on
+  EVERY connect, for any transport including real hardware
+  (`SerialTransport`/`RelayTransport`) — a connect-critical, first-run
+  dependency on the text `STREAM` verb.
+
+Per the issue's own rule and the sprint's own "TestGUI... change zero call
+sites" success criterion, **the text `STREAM`/`SNAP` handlers and
+`Telemetry::buildTlmFrame()` are NOT deleted this sprint.** They stay
+registered and byte-for-byte unchanged. Migrating `calibration/linear.py`/
+`angular.py` (which needs new transport-level binary capability neither
+`RelaySerial` nor `DirectSerial` currently has) and TestGUI's connect-time
+probe is `realign-host-tooling-to-gutted-four-verb-wire-surface.md`'s own
+scope (now updated to explicitly own it).
+
+`tickTelemetry()`'s `bb.telemetryBinary` branch stays exactly as-is —
+BOTH the text and binary emission paths remain reachable (text `STREAM`
+still arms `bb.telemetryBinary=false`; the binary `stream` arm still arms
+`bb.telemetryBinary=true`), since text `STREAM` stays registered. No
+"unreachable branch" removal applies this sprint — that was contingent on
+the text handler being deleted, which it is not.
+
+The original binary-parity evidence remains true and is preserved for
+whenever `realign-host-tooling` clears the way: **Binary parity: 096,
+sim-exhaustive** (differential-vs-google.protobuf byte-parity + fuzz +
+behavioral tests for `Telemetry`/`StreamControl`, plus 096's own
+periodic-tick acceptance criteria).
 
 `Telemetry::tick()`/`buildTelemetryMessage()` (the binary formatter,
-shared machinery both planes used to rely on) are UNTOUCHED — only the
-TEXT-only `buildTlmFrame()` is deleted. `handleTlm` (one-shot `TLM`
-verb, a disjoint text surface per 096's own Step 1 finding) and
-`handleQlen` are explicitly OUT of scope (ticket 006's preservation list)
-— do not touch `motion_commands.cpp`.
+shared machinery both planes rely on) remain untouched, as originally
+planned. `handleTlm` (one-shot `TLM` verb) and `handleQlen` remain
+explicitly OUT of scope (ticket 006's preservation list) — do not touch
+`motion_commands.cpp`.
 
 ## Acceptance Criteria
 
-- [ ] `STREAM`/`SNAP` are no longer registered as text verbs (grep
-      `telemetryCommands()`'s body for `"STREAM"`/`"SNAP"` registration
-      calls — none remain).
-- [ ] `Telemetry::buildTlmFrame()` (text formatter,
-      `source/telemetry/tlm_frame.{h,cpp}`) is deleted.
-      `Telemetry::tick()`/`buildTelemetryMessage()` (binary, shared) are
-      byte-for-byte unchanged.
-- [ ] `tickTelemetry()`'s text-emission branch is removed (or explicitly
-      documented as an intentionally-retained dead branch, with rationale
-      — pick one and state it in the completion notes).
+- [ ] Before any deletion, re-verify (fresh grep, not a stale citation of
+      this ticket's own Description) whether `calibration/linear.py`,
+      `calibration/angular.py`, and TestGUI's connect-time `STREAM 50`
+      still send raw text `STREAM`/`SNAP`. If — and only if — this fresh
+      check finds ALL of them have migrated to the binary `stream` arm,
+      `handleStream`/`handleSnap`/`kStreamSchema`/`buildTlmFrame()` may be
+      deleted following the original plan below. Otherwise, make no
+      deletion.
+- [ ] `STREAM`/`SNAP` remain registered as text verbs, byte-for-byte
+      unchanged — the expected outcome this sprint.
+- [ ] `Telemetry::buildTlmFrame()` (text formatter) remains present,
+      byte-for-byte unchanged. `Telemetry::tick()`/`buildTelemetryMessage()`
+      (binary, shared) are also byte-for-byte unchanged (already true,
+      unaffected by this revision).
+- [ ] `tickTelemetry()`'s text-emission branch remains reachable and
+      unchanged — no dead-branch removal this sprint (contingent on
+      `handleStream`'s deletion, which did not happen).
 - [ ] `handleTlm`/`handleQlen` remain registered in `motionCommands()`,
       byte-for-byte unchanged; `motion_commands.cpp` is untouched by this
       ticket's diff.
-- [ ] Any `tests/sim/unit/*` test currently exercising text STREAM/SNAP is
-      re-pointed at the binary `stream` arm (including a case exercising
-      the host's `snap()`-equivalent arm-wait-disarm sequence, or the
-      firmware-side portion of it) — coverage maintained, not dropped.
-- [ ] `tests/sim` is green.
+- [ ] `tests/sim` is green (expected: unaffected, no telemetry text
+      deleted).
 - [ ] `just build` (ARM) succeeds; the flash delta (`.map` before/after)
-      is measured and recorded in this ticket's completion notes.
-- [ ] Completion notes explicitly state: this ticket's own gate is sim +
-      ARM-build-clean; the consolidated HITL bench (team-lead, post-
-      sprint) is the final real-hardware gate, including the "text vs.
-      binary TLM at matched rates, `tlm_drop_rate()`" bench criterion from
-      the issue's own Sprint 2 bench gate.
+      is measured and recorded — expected to be **zero** this sprint (no
+      source deleted).
+- [ ] Completion notes explicitly state: text `STREAM`/`SNAP` are
+      preserved this sprint per `architecture-update-r1.md` Decision 8,
+      deferred to `realign-host-tooling-to-gutted-four-verb-wire-surface.md`;
+      the "text vs. binary TLM at matched rates, `tlm_drop_rate()`" bench
+      criterion from the issue's own Sprint 2 bench gate still applies to
+      the EXISTING binary `stream` arm (096) and is unaffected by this
+      ticket's own no-op outcome.
 
 ## Implementation Plan
 
 ### Approach
 
-1. Delete `handleStream`/`handleSnap` and their `telemetryCommands()`
-   registrations, and `kStreamSchema`, from `telemetry_commands.{h,cpp}`.
-2. Delete `telemetryEmit()` (the text-path caller) and
-   `Telemetry::buildTlmFrame()` (`tlm_frame.{h,cpp}`).
-3. In `tickTelemetry()`, remove the now-unreachable text-emission branch
-   (or document why it's deliberately kept as dead code — state the
-   choice explicitly).
-4. Confirm `handleTlm`/`handleQlen`/`motion_commands.cpp` are untouched.
-5. Update any `tests/sim/unit/*` test exercising text STREAM/SNAP to drive
-   the binary `stream` arm.
-6. Build (`just build`), capture the `.map` flash delta.
+1. Re-verify the live-consumer list above with a fresh grep.
+2. If (and only if) every listed consumer has migrated, delete
+   `handleStream`/`handleSnap`/`kStreamSchema`/`telemetryEmit()`/
+   `Telemetry::buildTlmFrame()` following the original plan, and remove
+   `tickTelemetry()`'s now-unreachable text branch. Otherwise, make no
+   source changes.
+3. Build (`just build`), capture the `.map` flash delta (expected zero).
 
 ### Files to modify
 
-- `source/commands/telemetry_commands.{h,cpp}`
-- `source/telemetry/tlm_frame.{h,cpp}`
-- Affected `tests/sim/unit/*` test files
+- None expected this sprint (both known consumers still live). If the
+  re-verification in step 1 finds otherwise:
+  `source/commands/telemetry_commands.{h,cpp}`,
+  `source/telemetry/tlm_frame.{h,cpp}`.
 
 ### Testing plan
 
-- `tests/sim` full run — must be green.
+- `tests/sim` full run — must be green (expected unaffected).
 - `just build` — ARM build must succeed; record `.map` flash delta.
-- Grep-clean checks listed in Acceptance Criteria.
+- Grep-clean live-consumer re-verification per Acceptance Criteria.
 
 ### Documentation updates
 
-- None in this ticket (ticket 009 owns `docs/protocol-v3.md`).
+- None in this ticket (ticket 009 owns `docs/protocol-v3.md`; it must now
+  describe `STREAM`/`SNAP` as still live text verbs, not retired, per this
+  revision).

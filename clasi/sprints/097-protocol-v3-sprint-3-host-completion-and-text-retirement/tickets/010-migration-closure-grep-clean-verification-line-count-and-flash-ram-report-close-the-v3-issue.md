@@ -7,7 +7,7 @@ use-cases: [SUC-011]
 depends-on: ['009']
 github-issue: ''
 issue: protocol-v3-schema-driven-binary-command-plane-protobuf.md
-completes_issue: true
+completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -15,53 +15,92 @@ completes_issue: true
 
 ## Description
 
+**REVISED EXPECTATION — see `architecture-update-r1.md` Decision 8.**
+Tickets 006/007/008 discovered that essentially every motion/config/
+telemetry text family still has at least one live, unmigrated production
+consumer (TestGUI's manual command panel and connect-time `STREAM`, the
+MCP server's calibration push, `rogo turn`/`sync-cal`, two calibration
+scripts, and several bench/demo scripts). Per the issue's own
+consumer-migration rule, those tickets deleted NOTHING beyond
+`ParsedCommand` (a zero-reference struct). **This ticket's flash-reduction
+expectation drops accordingly: the issue's original "15-30 KB reclaimed"
+estimate is NOT met this sprint** — the actual number will be whatever a
+single dead struct is worth, effectively negligible. This is not a
+shortfall to explain away; it is the correct, conservative outcome of
+following the issue's own deletion rule once its real precondition
+(consumers migrated) turned out not to hold yet. The remaining flash win
+is real and still achievable, gated on
+`realign-host-tooling-to-gutted-four-verb-wire-surface.md` landing first,
+in a future sprint.
+
 This is the closing ticket of the 3-sprint protocol-v3 program
 (`protocol-v3-schema-driven-binary-command-plane-protobuf.md`, sprints
-095/096/097). It does not modify production code — it verifies the
-migration is actually finished and records the numbers the issue itself
-asks for.
+095/096/097) **as it stands after this revision**: host completion
+(NezhaProtocol's SerialConnection-reachable surface) is done; firmware
+text retirement of the motion/config/telemetry families is DEFERRED, not
+completed. It does not modify production code — it verifies what was
+actually finished and records the numbers the issue itself asks for,
+honestly reflecting the partial outcome.
 
-1. **Grep-clean verification** — confirm every deletion target listed in
-   the issue's "What gets deleted" section and `sprint.md`'s Success
-   Criteria is gone, with NO dangling references (no stray `#include`, no
-   forward declaration, no comment claiming a deleted symbol is still
-   live): the six motion parse/handle pairs (S/D/T/RT/MOVE/MOVER), `ECHO`/
-   `VER`, `ParsedCommand`, `config_commands.{h,cpp}` in full, text
-   STREAM/SNAP + `buildTlmFrame()`, host `parse_tlm`/`parse_cfg`. Confirm
-   the explicitly-preserved families are STILL present and functioning:
-   the five-verb rump (PING/ID/HELLO/HELP/STOP), R/TURN/G + stop-clause
-   grammar, `otos_commands.cpp`/`pose_commands.cpp`, `dev_commands.cpp`,
-   `handleTlm`/`QLEN`.
-2. **`source/commands/` line count** — measure the final total and compare
-   against the issue's own ~1,000-1,300-line estimate (down from the
-   pre-095 ~4,900-line baseline); report the actual figure and explain any
-   material deviation from the estimate (e.g. the preserved R/TURN/G/
-   otos/pose/dev families account for lines the issue's estimate may not
-   have anticipated being retained).
+1. **Grep-clean verification** — confirm `ParsedCommand` (the ONE
+   deletion target actually achieved) is gone, with NO dangling
+   references. Confirm every OTHER originally-listed deletion target
+   (S/D/T/RT/MOVE/MOVER, ECHO/VER, `config_commands.{h,cpp}`, text
+   STREAM/SNAP + `buildTlmFrame()`) is STILL PRESENT, unregistered status
+   unchanged from pre-097, per tickets 006/007/008's revised, conservative
+   outcome — this is now an expected-preserved list, not a
+   deletion-target list. Confirm host `parse_tlm`/`parse_cfg` are gone
+   (ticket 003's achieved `SerialConnection`-reachable scope) and that
+   `host/robot_radio/robot/_legacy_tlm_text.py` exists as the documented
+   bridge for the four unswept consumers. Confirm the ORIGINALLY-preserved
+   families remain: the five-verb rump (PING/ID/HELLO/HELP/STOP), R/TURN/G
+   + stop-clause grammar, `otos_commands.cpp`/`pose_commands.cpp`,
+   `dev_commands.cpp`, `handleTlm`/`QLEN`.
+2. **`source/commands/` line count** — measure the final total. It will be
+   close to the pre-095 ~4,900-line baseline, NOT the issue's
+   ~1,000-1,300-line estimate (that estimate assumed full text-family
+   deletion, which did not happen this sprint) — report the actual figure
+   and state plainly that the gap versus the estimate is because firmware
+   text retirement is deferred, not a measurement error.
 3. **Final flash/RAM report** — `.map` diff comparing the current build
    against the pre-095 baseline (095's own recorded starting point:
-   image at 0x684B8 of 0x80000). Report whether the net change is
-   negative (reclaimed), per the issue's own expectation (095's dual-stack
-   peak was +12-15 KB; this sprint's own estimate was 15-30 KB reclaimed —
-   report the ACTUAL number, do not assert the estimate). RAM: report the
-   `.bss` delta; do not flag high RAM % on its own as a regression signal
-   (this target runs at ~98% RAM by design).
-4. Mark the issue resolved — this ticket carries `completes_issue: true`.
+   image at 0x684B8 of 0x80000). Report the actual net change — expect it
+   to be roughly flat (095/096's dual-stack additions still present, only
+   `ParsedCommand` removed), NOT the issue's original 15-30 KB reclaimed
+   estimate. State this gap explicitly rather than implying the estimate
+   was met. RAM: report the `.bss` delta; do not flag high RAM % on its
+   own as a regression signal (this target runs at ~98% RAM by design).
+4. Mark the issue resolved for the scope actually completed — this ticket
+   carries `completes_issue: true` for the protocol-v3 issue's HOST
+   COMPLETION goal; the closing notes must explicitly record that
+   firmware text retirement of the motion/config/telemetry families
+   remains open, owned by `realign-host-tooling-to-gutted-four-verb-wire-
+   surface.md`'s now-updated scope, and that the protocol-v3 issue itself
+   carries a forward note to that effect (see the issue's own updated
+   Context section).
 
 ## Acceptance Criteria
 
 - [ ] Grep-clean report produced and attached to this ticket's completion
-      notes, covering every deletion target listed above with zero
-      dangling references found (or each found reference fixed before
-      closing).
-- [ ] Every explicitly-preserved family confirmed present: five-verb rump,
-      R/TURN/G + stop-clause grammar, `otos_commands.cpp`/
-      `pose_commands.cpp`, `dev_commands.cpp`, `handleTlm`/`QLEN`.
-- [ ] Final `source/commands/` line count recorded, compared against the
-      issue's ~1,000-1,300-line estimate, with deviation explained.
+      notes: `ParsedCommand` gone (the one achieved deletion); host
+      `parse_tlm`/`parse_cfg` gone; zero dangling references for either.
+- [ ] Every preserved family confirmed present and unregistered-status
+      unchanged: the five-verb rump (PING/ID/HELLO/HELP/STOP), R/TURN/G +
+      stop-clause grammar, `otos_commands.cpp`/`pose_commands.cpp`,
+      `dev_commands.cpp`, `handleTlm`/`QLEN` (original preservation list,
+      Decision 5/6/7) AND S/D/T/RT/MOVE/MOVER/ECHO/VER,
+      `config_commands.{h,cpp}`, text STREAM/SNAP + `buildTlmFrame()`
+      (newly-preserved this revision, Decision 8) — all present,
+      byte-for-byte unchanged from pre-097.
+- [ ] Final `source/commands/` line count recorded, compared against BOTH
+      the issue's original ~1,000-1,300-line estimate (not met — explain
+      why, citing Decision 8) and the pre-095 ~4,900-line baseline (should
+      be close to unchanged, minus `ParsedCommand`).
 - [ ] Final flash report recorded (`.map` diff vs. the pre-095 baseline),
-      stating the actual net KB change (expect negative/reclaimed) — not
-      an assertion of the issue's own estimate.
+      stating the actual net KB change — expected roughly flat (only
+      `ParsedCommand` removed this sprint; the family-scale reduction is
+      deferred), NOT the issue's original "15-30 KB reclaimed" estimate.
+      State the gap explicitly; do not assert the estimate was met.
 - [ ] Final RAM `.bss` delta recorded (informational; not treated as a
       pass/fail signal on its own).
 - [ ] `tests/sim` is green at closing.

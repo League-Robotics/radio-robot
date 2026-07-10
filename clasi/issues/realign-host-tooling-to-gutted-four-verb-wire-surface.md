@@ -41,6 +41,89 @@ GOTO, tours, OTOS — and `tests/testgui/` dropped from 364/364 green
 `test_tour1_geometry.py`, `test_traces.py`, `test_transport.py`).
 `tests/sim` and `tests/unit` are green; the sim close-gate is honest.
 
+## Update 2026-07-10 (sprint 097 discovery — this issue now OWNS the
+binary-plane migration of every consumer named below)
+
+Sprint 097 ("Protocol v3 Sprint 3: host completion and text retirement")
+set out to delete the text motion/config/telemetry command families now
+that their binary replacements are proven (095/096). Ticket 097-003's own
+implementation, plus a team-lead follow-up grep, found that essentially
+every one of those text families still has at least one LIVE, production
+consumer that reaches the wire directly, bypassing `NezhaProtocol`
+entirely, and has never migrated to the binary plane. Per the protocol-v3
+issue's own rule ("a text family is deleted only after its binary
+replacement is bench-proven AND its consumers migrated"), 097 deferred
+essentially all firmware text deletion — see
+`clasi/sprints/097-protocol-v3-sprint-3-host-completion-and-text-retirement/
+architecture-update-r1.md` Decision 8 for the full finding. **This issue
+now explicitly owns migrating the following to the binary plane**, which
+is the precondition a future sprint needs before it can actually delete
+the text families protocol-v3 built binary replacements for:
+
+- **TestGUI's manual command panel** (`host/robot_radio/testgui/
+  commands.py`'s `COMMANDS` table + `build_wire_string()`, wired into
+  `testgui/__main__.py`) — sends raw text `S`/`T`/`D`/`R`/`TURN`/`RT`/`G`
+  via `transport.command()` for any connected transport, bypassing
+  `NezhaProtocol` entirely. Also sends a hardcoded `"STREAM 50"` on every
+  connect.
+- **`host/robot_radio/io/robot_mcp.py`**: `push_calibration(_robot._proto,
+  _config)` — `NezhaProtocol` has no `push_calibration` method, so
+  `calibration/push.py`'s documented fallback always sends raw text `SET`.
+  Give `NezhaProtocol` a binary `push_calibration` method (building
+  `pb2.ConfigDelta`s, per 096-007's `set_config_binary()`) so this falls
+  through to binary instead.
+- **`host/robot_radio/io/cli.py`**: `cmd_turn`'s default (non-
+  `--open-loop`) path sends raw text `RT` via `proto.send()` directly, not
+  through 097-002's Legacy Verb Translator — wire it through the
+  translator (or a dedicated binary `rotate()` method) instead.
+  `_push_calibration()` (`rogo sync-cal`) sends raw text `SET`/`OI`/`OL`/
+  `OA` — migrate the `SET` portion alongside `robot_mcp.py`'s.
+- **`host/robot_radio/calibration/push.py`**, **`host/
+  calibrate_verify.py`**: raw text `SET`/`GET` — migrate onto
+  `NezhaProtocol.set_config()`/`.get_config()` (binary since 097-002).
+- **`host/robot_radio/calibration/linear.py`/`angular.py`**: talk over
+  `calibration/_conn_helpers.py`'s `RelaySerial`/`DirectSerial` (raw
+  pyserial, chosen deliberately for relay-handshake/DTR timing control
+  `SerialConnection` doesn't expose) — send raw text `D`/`T`/`STREAM`/
+  `SNAP`. These need EITHER a binary-capable variant of
+  `RelaySerial`/`DirectSerial`, or a rework onto `SerialConnection` itself
+  if its timing-control gap can be closed. `sim.command()`/
+  `SimConnection.send()` already forward `*B<base64>` lines to the SAME
+  dispatcher `SerialConnection` does (per `tests/sim/unit/
+  test_binary_channel.py`'s own precedent) — worth checking whether the
+  relay path has an equivalent transparent pass-through before assuming a
+  new transport layer is needed.
+- **`host/robot_radio/testgui/transport.py`'s `SimTransport`**: uses
+  `robot_radio.io.sim_conn.SimConnection` (ctypes ABI) — same open
+  question as above re: binary pass-through.
+- **`tests/bench/gamepad_teleop.py`**: raw text `MOVER` — migrate onto the
+  binary `replace` arm (`rogo binary replace`'s own pattern).
+- **`tests/bench/dtr_drive_demo.py`/`random_segment_demo.py`**: raw text
+  `MOVE` — migrate onto the binary `segment` arm.
+
+**Open schema question this issue should also resolve**:
+`calibration/fit_sim_error_model.py`'s `_residual_vector()` structurally
+depends on `TLMFrame.encpose`, which `telemetry.proto`'s `Telemetry`
+message never carries (096-001 Decision 6 trimmed it for the 186-byte
+envelope budget) — no transport fix restores it. Decide with the
+stakeholder whether `encpose` should be restored to `telemetry.proto`
+(budget permitting) now that a real, non-cosmetic consumer is known to
+need it live (previously only `testgui/traces.py`'s "encoder" trace used
+it, a bounded cosmetic loss already accepted).
+
+A frozen bridge module, `host/robot_radio/robot/_legacy_tlm_text.py`
+(`parse_historical_tlm_line()`), currently keeps the four unmigrated
+telemetry consumers above working against text `STREAM`/`SNAP` — it is
+NOT a general-purpose replacement for the deleted `parse_tlm()` and should
+be retired once this issue's migration lands.
+
+**Full firmware text retirement of the motion/config/telemetry families**
+(deleting `S`/`D`/`T`/`RT`/`MOVE`/`MOVER`/`ECHO`/`VER`,
+`config_commands.{h,cpp}`, and text `STREAM`/`SNAP` +
+`Telemetry::buildTlmFrame()`) is **gated on this issue's migration landing
+first** — it is a follow-up sprint's job after this one closes, not
+something to attempt piecemeal here.
+
 ## Scope (to be decided in planning)
 
 - **TestGUI / robot_radio**: target the surface above — stop sending

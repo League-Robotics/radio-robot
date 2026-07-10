@@ -15,44 +15,91 @@ completes_issue: false
 
 ## Description
 
-Delete the motion and liveness text handlers whose binary replacement is
-proven, now that ticket 005's gate confirmed the host is fully on the
-binary path for them:
+**REVISED SCOPE — see `architecture-update-r1.md` Decision 8.** The
+original plan below (deleting S/D/T/RT/MOVE/MOVER/ECHO/VER) assumed
+`NezhaProtocol` was the only host path to these verbs. Ticket 003's own
+implementation, plus the team-lead's own follow-up grep, found that is
+false: every one of these verbs has at least one LIVE, non-test,
+production consumer that reaches the wire directly, bypassing
+`NezhaProtocol` entirely, and has NOT migrated to the binary plane:
 
-- `parseS`/`handleS` (`S`) — superseded by the binary `drive` arm.
-  **Binary parity: 095, hardware-bench-smoke-tested** (drive verified on
-  the stand over serial and relay).
-- `parseD`/`handleD` (`D`), `parseT`/`handleT` (`T`), `parseRT`/`handleRT`
-  (`RT`) — superseded by the binary `segment` arm. **Binary parity: 096,
-  sim-exhaustive** (differential-vs-google.protobuf byte-parity + fuzz +
-  behavioral tests); hardware bench for `segment`/`MOVE`/`MOVER`
-  specifically is deferred to the team-lead's post-sprint consolidated
-  session (per `sprint.md`'s own sequencing).
-- `parseMove`/`handleMove` (`MOVE`), `parseMover`/`handleMover` (`MOVER`)
-  — superseded by the binary `segment`/`replace` arms directly (095's own
-  `MotionSegment` message was designed 1:1 for this shape). **Binary
-  parity: 095/096, sim-exhaustive**; hardware bench deferred as above.
-- `ECHO`'s registration in `systemCommands()` — superseded by the binary
-  `echo` arm. **Binary parity: 095, hardware-bench-smoke-tested.**
-- `handleVer`/`VER` — its content (`fw`/`proto`) is a strict subset of the
-  binary `id` arm's `DeviceId.fw_version`/`.proto_version` fields.
-  **Binary parity: 095, hardware-bench-smoke-tested** (`id`).
-- `source/types/command_types.h`'s `ParsedCommand` struct — zero
-  references anywhere in the tree (grep-confirmed during architecture
-  research); mechanical deletion, no binary-parity argument needed.
+- **`S`/`T`/`D`/`RT`**: TestGUI's manual command panel
+  (`testgui/commands.py`'s `COMMANDS` table + `build_wire_string()`,
+  wired into `testgui/__main__.py`) sends these as raw text via
+  `transport.command()` for ANY connected transport (Serial/Relay/Sim
+  alike) — completely independent of `NezhaProtocol`.
+- **`D`**: also live via `calibration/linear.py` (raw pyserial,
+  `RelaySerial`/`DirectSerial`).
+- **`T`**: also live via `calibration/angular.py` (same raw-pyserial
+  transport).
+- **`RT`**: also live via `rogo turn`'s DEFAULT (non-`--open-loop`) path
+  (`cli.py`'s `cmd_turn`, `proto.send(f"RT {rel_cdeg} #{corr}", ...)` —
+  sent directly, not through the Legacy Verb Translator).
+- **`MOVE`**: live via `tests/bench/dtr_drive_demo.py`/
+  `random_segment_demo.py` (raw text, bypassing the proven binary
+  `segment` arm's own `rogo binary segment` path).
+- **`MOVER`**: live via `tests/bench/gamepad_teleop.py` (raw text,
+  bypassing the binary `replace` arm's own `rogo binary replace` path).
+- **`VER`**: live via TestGUI's own connect-time firmware-version check
+  (`testgui/__main__.py`, sends raw text `VER`, parses `fw=` out of the
+  reply — a connect-critical check, not incidental).
+- **`ECHO`**: the only consumer FOUND is a bench protocol-verification
+  script (`tests/bench/comms_plane_verify.py`); no production tool was
+  confirmed to depend on it, but it is preserved with the rest below
+  rather than singled out, given how dense the findings are elsewhere.
+
+None of these are the calibration-tool-only gap ticket 003 surfaced —
+TestGUI's command panel and the `rogo turn` default path are NEW findings
+from the team-lead's own follow-up sweep, layered on top of ticket 003's.
+This is exactly the scenario the issue's own rule exists for: **"a text
+family is deleted only after its binary replacement is bench-proven AND
+its consumers migrated."** The binary replacements ARE proven (095/096).
+Their consumers are NOT migrated. Migrating them is the separate,
+already-filed `realign-host-tooling-to-gutted-four-verb-wire-surface.md`
+issue's own scope (now updated to explicitly own this work), not
+something this ticket can absorb.
+
+**Revised scope: delete ONLY `source/types/command_types.h`'s
+`ParsedCommand` struct** — zero references anywhere in the tree
+(grep-confirmed both during original architecture research and again for
+this revision); a genuinely dead, unregistered, unreachable-by-any-consumer
+type, unlike every verb above. **Preserve S/D/T/RT/MOVE/MOVER/ECHO/VER in
+full, byte-for-byte unchanged, unregistered status unchanged (still
+registered/live exactly as they are today).** This is not a partial
+completion of the original plan — it is this sprint's own correct,
+evidence-based scope, recorded in `architecture-update-r1.md`.
+
+The original binary-parity evidence below remains true and is preserved
+for whenever `realign-host-tooling` clears the way for actual deletion in
+a future sprint:
+
+- `S` — superseded by the binary `drive` arm. **Binary parity: 095,
+  hardware-bench-smoke-tested** (drive verified on the stand over serial
+  and relay).
+- `D`/`T`/`RT` — superseded by the binary `segment` arm. **Binary parity:
+  096, sim-exhaustive** (differential-vs-google.protobuf byte-parity +
+  fuzz + behavioral tests).
+- `MOVE`/`MOVER` — superseded by the binary `segment`/`replace` arms
+  directly (095's own `MotionSegment` message was designed 1:1 for this
+  shape). **Binary parity: 095/096, sim-exhaustive.**
+- `ECHO` — superseded by the binary `echo` arm. **Binary parity: 095,
+  hardware-bench-smoke-tested.**
+- `VER` — its content (`fw`/`proto`) is a strict subset of the binary `id`
+  arm's `DeviceId.fw_version`/`.proto_version` fields. **Binary parity:
+  095, hardware-bench-smoke-tested** (`id`).
 
 **The consolidated hardware-in-the-loop bench (team-lead-run, post-sprint)
-is the final gate for every binary arm's real-hardware behavior** — this
-ticket's own acceptance is `tests/sim` green plus a successful ARM build
-with the flash delta recorded, per `.claude/rules/hardware-bench-testing.md`
-and the sprint's own bench-gate framing. It does not substitute for that
-consolidated session.
+remains the final gate for every binary arm's real-hardware behavior**,
+per `.claude/rules/hardware-bench-testing.md` — unaffected by this
+revision; it was never contingent on this ticket's own deletion scope.
 
 **Explicitly PRESERVED, unregistered, byte-for-byte unchanged** (see
 `architecture-update.md` Decision 5 — `sprint.md`'s literal "delete...
-the stop-clause text grammar" phrasing is NOT honored literally here,
-because none of the following have any binary replacement, proven or
-otherwise):
+the stop-clause text grammar" phrasing was already NOT honored literally
+here, because none of the following have any binary replacement, proven or
+otherwise — this revision adds S/D/T/RT/MOVE/MOVER/ECHO/VER to the
+preserved set above for a DIFFERENT reason, live unmigrated consumers,
+not "no replacement exists"):
 
 - `parseR`/`handleR` (`R`), `parseTURN`/`handleTURN` (`TURN`),
   `parseG`/`handleG` (`G`) — Planner-bound, zero live consumer since
@@ -81,12 +128,25 @@ concern): `config_commands.{h,cpp}` (ticket 007), `telemetry_commands.
 
 ## Acceptance Criteria
 
-- [ ] `grep -n '"S"\|"D"\|"T"\|"RT"\|"MOVE"\|"MOVER"'
-      source/commands/motion_commands.cpp` (registration call sites in
-      `motionCommands()` only) returns no hits for these six verbs.
-- [ ] `grep -n '"ECHO"' source/commands/system_commands.cpp` (registration)
-      returns no hits; `handleVer` is deleted.
 - [ ] `grep -rn "ParsedCommand" source/` returns no hits.
+- [ ] Before any deletion, re-verify (fresh grep, not a stale citation of
+      this ticket's own Description) that each of `S`/`D`/`T`/`RT`/
+      `MOVE`/`MOVER`/`ECHO`/`VER` still has at least one live consumer
+      among: `testgui/commands.py`'s `COMMANDS` table +
+      `testgui/__main__.py`'s connect-time `VER` check,
+      `calibration/linear.py`, `calibration/angular.py`, `cli.py`'s
+      `cmd_turn` default path, `tests/bench/dtr_drive_demo.py`,
+      `random_segment_demo.py`, `gamepad_teleop.py`,
+      `comms_plane_verify.py`. If — and only if — this fresh check finds a
+      SPECIFIC verb's live consumer(s) have since migrated (e.g.
+      `realign-host-tooling` landed first), that SPECIFIC verb may be
+      deleted following the original binary-parity citations preserved in
+      this ticket's Description; do not delete any verb whose consumer
+      list still shows a live text sender.
+- [ ] `S`/`D`/`T`/`RT`/`MOVE`/`MOVER`/`ECHO`/`VER` registrations and
+      handler bodies are byte-for-byte unchanged UNLESS the re-verification
+      above found a specific one safe (expected outcome this sprint: all
+      eight unchanged).
 - [ ] `parseR`/`handleR`/`parseTURN`/`handleTURN`/`parseG`/`handleG`, the
       shared stop-clause grammar helpers, `handleTlm`, `handleQlen`, and
       `StreamingDriveWatchdog` are all still present and compile
@@ -97,50 +157,53 @@ concern): `config_commands.{h,cpp}` (ticket 007), `telemetry_commands.
       `tlm_frame.{h,cpp}`, `dev_commands.{h,cpp}`, `otos_commands.
       {h,cpp}`, `pose_commands.{h,cpp}` are untouched by this ticket's
       diff.
-- [ ] Any `tests/sim/unit/*` test currently exercising a deleted text verb
-      (`S`/`D`/`T`/`RT`/`MOVE`/`MOVER`/`ECHO`/`VER` as TEXT) is re-pointed
-      at the equivalent binary arm — coverage is maintained, not dropped.
-- [ ] `tests/sim` is green.
+- [ ] `tests/sim` is green (expected: unaffected, since no motion/liveness
+      verb is expected to be deleted this sprint).
 - [ ] `just build` (ARM) succeeds; the flash delta (`.map` before/after)
-      is measured and recorded in this ticket's completion notes.
-- [ ] Completion notes explicitly state: this ticket's own gate is sim +
-      ARM-build-clean; the consolidated HITL bench (team-lead, post-
-      sprint) is the final real-hardware gate for these binary arms.
+      is measured and recorded — expected to be negligible this sprint
+      (a single zero-reference struct), not the family-scale reduction the
+      issue originally estimated. Do not imply a larger reduction was
+      achieved.
+- [ ] Completion notes explicitly state: (a) this ticket's own gate is sim
+      + ARM-build-clean; the consolidated HITL bench (team-lead,
+      post-sprint) is the final real-hardware gate for the binary arms
+      that already exist; (b) the motion/liveness text families are
+      preserved this sprint per `architecture-update-r1.md` Decision 8,
+      deferred to `realign-host-tooling-to-gutted-four-verb-wire-surface.md`.
 
 ## Implementation Plan
 
 ### Approach
 
-1. Delete `parseS`/`handleS`, `parseD`/`handleD`, `parseT`/`handleT`,
-   `parseRT`/`handleRT`, `parseMove`/`handleMove`, `parseMover`/
-   `handleMover` from `motion_commands.cpp`, and their six
-   `motionCommands()` registration lines. Leave every other function in
-   the file untouched.
-2. Delete `ECHO`'s registration line from `systemCommands()` and
-   `handleVer` from `system_commands.cpp`.
-3. Delete `ParsedCommand` from `command_types.h`.
-4. Update any `tests/sim/unit/*` test exercising a deleted verb as text to
-   drive the equivalent binary arm instead (per ticket 001-005's own
-   established binary send/receive pattern in the sim harness).
-5. Build (`just build`), capture the `.map` flash delta.
+1. Re-verify the live-consumer list above with a fresh grep (do not rely
+   solely on this ticket's own Description — the codebase may have moved
+   since this revision was written).
+2. Delete `ParsedCommand` from `command_types.h`.
+3. If (and only if) the re-verification found a specific verb safe,
+   delete that verb's `parseFn`/`handlerFn` pair and its
+   `motionCommands()`/`systemCommands()` registration, following the
+   binary-parity citation already recorded in this ticket's Description
+   for that verb. Otherwise, make no further source changes.
+4. Build (`just build`), capture the `.map` flash delta (expected
+   negligible).
 
 ### Files to modify
 
-- `source/commands/motion_commands.{h,cpp}`
-- `source/commands/system_commands.cpp`
-- `source/types/command_types.h`
-- Affected `tests/sim/unit/*` test files (re-pointed, not deleted, unless
-  a test's entire purpose was proving text-verb behavior with no binary
-  analog worth keeping — document any such removal explicitly).
+- `source/types/command_types.h` (`ParsedCommand` deleted)
+- `source/commands/motion_commands.{h,cpp}` — untouched, UNLESS the
+  re-verification in step 1 found a specific verb safe to delete.
+- `source/commands/system_commands.cpp` — untouched, UNLESS the
+  re-verification in step 1 found `ECHO`/`VER` specifically safe.
 
 ### Testing plan
 
-- `tests/sim` full run — must be green.
+- `tests/sim` full run — must be green (expected unaffected).
 - `just build` — ARM build must succeed; record `.map` flash delta.
-- Grep-clean checks listed in Acceptance Criteria.
+- Grep-clean checks listed in Acceptance Criteria, including the
+  live-consumer re-verification.
 
 ### Documentation updates
 
 - None in this ticket (ticket 009 owns the `docs/protocol-v3.md`
-  rewrite, done after 006/007/008 land so it documents the final,
-  stable surface).
+  rewrite; it must now describe S/D/T/RT/MOVE/MOVER/ECHO/VER as still
+  LIVE on the text plane, not retired, per this revision).
