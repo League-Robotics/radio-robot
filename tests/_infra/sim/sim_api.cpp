@@ -67,6 +67,7 @@
 // sim_command(h, line) — thin SERIAL-only wrapper over sim_command_on()
 // (088-006): every pre-088-006 call site (~183 test functions across
 // tests/sim/unit/) is source-compatible and behaves identically.
+#include "commands/telemetry_commands.h"
 #include "hal/sim/sim_setters.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
@@ -222,6 +223,13 @@ SimHandle::SimHandle()
 
     msg::DrivetrainConfig dtConfig = defaultSimDrivetrainConfig();
     drivetrain.configure(dtConfig);
+    // 096-002: mirrors main.cpp's own one-time bb.drivetrainConfig seed
+    // (see that file's own comment on this line for the full rationale) --
+    // no runtime Configurator is wired here either, so without this,
+    // Telemetry::tick()'s bb.drivetrainConfig.left_port/right_port-derived
+    // bb.motors[] index underflows to UINT32_MAX and reads wildly out of
+    // bounds the moment STREAM/SNAP first actually emits a frame.
+    bb.drivetrainConfig = dtConfig;
     // 094-005: boot-only jerk-limit defaults for the Drivetrain-owned
     // Motion::SegmentExecutor -- mirrors main.cpp's own
     // drivetrain.configureMotion(defaultMotionConfig()) call exactly (the
@@ -267,13 +275,18 @@ void sim_destroy(void* h) {
 // Advance the sim by one ordinary pass: one Rt::MainLoop::tick() (hardware
 // tick, drivetrain tick, commit -- 094-005 deletes the former routeOutputs()
 // step; Drivetrain now stages its own wheel writes directly through
-// hardware's motor refs). No config-drain loop remains (093: there is no
-// runtime config-application authority left to drain).
+// hardware's motor refs), plus tickTelemetry() (096-002's loop-owned
+// periodic STREAM emission -- a no-op unless STREAM has armed
+// bb.telemetryPeriod), mirroring main.cpp's own peer call exactly (the
+// "hardware and sim call the identical function" invariant). No
+// config-drain loop remains (093: there is no runtime config-application
+// authority left to drain).
 void sim_tick(void* h, uint32_t now) {
     SimHandle* s = static_cast<SimHandle*>(h);
     Types::setHostClockNow(now);
     s->lastTickNow = now;
     s->loop.tick(s->bb, now);
+    tickTelemetry(s->bb, s->router, now);
 }
 
 // Dispatch one NUL-terminated command line synchronously on a caller-chosen
@@ -477,6 +490,37 @@ int sim_get_reply_store_len(void* h, int channel) {
     return (static_cast<Subsystems::Channel>(channel) == Subsystems::Channel::RADIO)
                ? s->syncStoreRadio.written
                : s->syncStoreSerial.written;
+}
+
+// ---------------------------------------------------------------------------
+// sim_peek_reply_store (096-002, test-only) -- non-destructive read of one
+// channel's CURRENT ReplyStore content, companion to
+// sim_get_reply_store_len() above. Added so a test can drain the periodic
+// TLM frames tickTelemetry() (commands/telemetry_commands.cpp) appends into
+// a channel's sync store across a run of sim_tick() calls -- neither
+// sim_command() nor sim_command_on() can be used for this: both reset
+// (clear) BOTH stores before routing anything, which would silently wipe
+// out whatever tickTelemetry() had already accumulated during the preceding
+// sim_tick() calls before a test ever got to read it. Returns the number of
+// bytes written into `store_out` (not counting the final NUL) -- the same
+// convention sim_command()/sim_command_on() use. Does NOT reset/drain the
+// store; a caller wanting a clean slate issues any sim_command()/
+// sim_command_on() call afterward (which resets both stores as a side
+// effect of routing).
+// ---------------------------------------------------------------------------
+int sim_peek_reply_store(void* h, int channel, char* store_out, int size) {
+    SimHandle* s = static_cast<SimHandle*>(h);
+    ReplyStore& store = (static_cast<Subsystems::Channel>(channel) == Subsystems::Channel::RADIO)
+                             ? s->syncStoreRadio
+                             : s->syncStoreSerial;
+    int n = store.written;
+    if (store_out && size > 0) {
+        int copy = (n < size - 1) ? n : size - 1;
+        memcpy(store_out, store.buf, static_cast<size_t>(copy));
+        store_out[copy] = '\0';
+        n = copy;
+    }
+    return n;
 }
 
 // ---------------------------------------------------------------------------

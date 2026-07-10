@@ -4,23 +4,30 @@
 #include "commands/system_commands.h"
 
 #include "commands/motion_commands.h"
+#include "commands/telemetry_commands.h"
 
 namespace Rt {
 
 namespace {
 
-// buildTable -- sprint 093's minimal command table: liveness
-// (systemCommands(): PING/HELLO) + the motion family (motionCommands():
-// S/STOP, plus 094-006's MOVE/TLM -- see motion_commands.cpp's own trimmed
-// registration for the full, current list). The `dev`/`telemetry`/
-// `config`/`pose`/`otos` families are left un-wired here -- their files,
-// handlers, and includes are untouched on disk (clasi/sprints/093-.../
-// architecture-update.md Step 5/Migration Concerns); buildTable() simply
-// stops calling them.
+// buildTable -- sprint 093's minimal command table, extended by 096-002
+// (architecture-update.md Decision 1): liveness (systemCommands():
+// PING/HELLO) + the motion family (motionCommands(): S/STOP, plus 094-006's
+// MOVE/TLM -- see motion_commands.cpp's own trimmed registration for the
+// full, current list) + the telemetry family (telemetryCommands():
+// STREAM/SNAP, restored now that the loop-owned periodic-emission tick
+// exists -- see telemetry_commands.h's tickTelemetry()). `configCommands()`
+// (SET/GET) is deliberately NOT re-added here -- Decision 1 is explicit
+// that config's binary arm (ticket 004) is the only live path this sprint;
+// its file, handlers, and includes stay untouched on disk (clasi/sprints/
+// 093-.../architecture-update.md Step 5/Migration Concerns), same as the
+// still-unregistered `dev`/`pose`/`otos` families.
 std::vector<CommandDescriptor> buildTable(CommandRouter& router) {
   std::vector<CommandDescriptor> all = systemCommands(router);
   std::vector<CommandDescriptor> motion = motionCommands(router);
   all.insert(all.end(), motion.begin(), motion.end());
+  std::vector<CommandDescriptor> telemetry = telemetryCommands(router);
+  all.insert(all.end(), telemetry.begin(), telemetry.end());
   return all;
 }
 

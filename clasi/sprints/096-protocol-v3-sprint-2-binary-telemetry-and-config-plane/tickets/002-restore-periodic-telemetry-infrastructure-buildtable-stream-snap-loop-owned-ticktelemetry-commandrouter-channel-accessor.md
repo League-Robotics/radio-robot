@@ -2,8 +2,9 @@
 id: '002'
 title: Restore periodic telemetry infrastructure (buildTable STREAM/SNAP + loop-owned
   tickTelemetry + CommandRouter channel accessor)
-status: open
-use-cases: [SUC-002]
+status: done
+use-cases:
+- SUC-002
 depends-on: []
 github-issue: ''
 issue: protocol-v3-schema-driven-binary-command-plane-protobuf.md
@@ -71,24 +72,24 @@ old same-reply-concatenation timing.
 
 ## Acceptance Criteria
 
-- [ ] `STREAM 50` followed by waiting >= 200ms yields >= 3 periodic
+- [x] `STREAM 50` followed by waiting >= 200ms yields >= 3 periodic
       `TLM ...` text frames with strictly increasing `seq=`, on the sim
       harness.
-- [ ] `STREAM 0` stops periodic emission; `SNAP` still works standalone
+- [x] `STREAM 0` stops periodic emission; `SNAP` still works standalone
       (one-shot, on its own dispatch channel, unaffected by the periodic
       tick).
-- [ ] `tickTelemetry()` is called once per pass from both `source/main.cpp`
+- [x] `tickTelemetry()` is called once per pass from both `source/main.cpp`
       and `tests/_infra/sim/sim_api.cpp`, with identical behavior.
-- [ ] `Rt::CommandRouter`'s new channel-resolution accessor reuses the
+- [x] `Rt::CommandRouter`'s new channel-resolution accessor reuses the
       existing private reply-channel state — no new `ReplyFn`/`void*`
       storage duplicated.
-- [ ] `bb.telemetryBinary` defaults to `false`; this ticket's own text
+- [x] `bb.telemetryBinary` defaults to `false`; this ticket's own text
       emission behavior is unconditional (the binary branch is inert
       until tickets 003/005 land).
-- [ ] The existing (pre-096) sim suite stays green — no existing text
+- [x] The existing (pre-096) sim suite stays green — no existing text
       verb's behavior changes; `configCommands()` (SET/GET) remains
       unregistered.
-- [ ] 095's differential codec gate is unaffected (this ticket touches no
+- [x] 095's differential codec gate is unaffected (this ticket touches no
       wire codec code).
 
 ## Testing

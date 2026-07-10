@@ -48,26 +48,19 @@ void handleStream(const ArgList& args, const char* corrId,
   CommandProcessor::replyOKf(rbuf, sizeof(rbuf), "stream", corrId, replyFn, replyCtx,
                              "period=%u", static_cast<unsigned>(period));
 
-  // Immediate first frame (docs/protocol-v2.md §8 / dev_loop.h's own doc
-  // comment: "the very first pass after a channel issues STREAM emits
-  // immediately", generalized to "or enough time has elapsed since the
-  // last emission") -- concatenated into THIS SAME dispatch's own reply
-  // (replyFn/replyCtx), exactly mirroring the pre-087 loop's periodic-
-  // emission step, which captured this handler's OWN replyFn/replyCtx and
-  // so happened to land in the SAME reply whenever it fired same-pass.
-  // 087-006: bb.telemetryChannel/the loop's own resolveTelemetryReply()
-  // cannot reproduce that same-reply concatenation (a Channel enum, not a
-  // captured ReplyFn/void* pair -- see telemetry_commands.h's file header),
-  // so this handler performs the SAME-PASS immediate emission itself,
-  // directly on its own dispatch reply sink, and updates
-  // bb.telemetryLastEmitMs/bb.telemetryHasLastEmit so the loop's own later
-  // per-pass check (dev_loop.cpp) does not double-emit this same pass.
-  uint32_t now = Types::systemClockNow();
-  if (period > 0 && (!b.telemetryHasLastEmit || (now - b.telemetryLastEmitMs) >= period)) {
-    telemetryEmit(b, now, replyFn, replyCtx);
-    b.telemetryLastEmitMs = now;
-    b.telemetryHasLastEmit = true;
-  }
+  // 096-002 (architecture-update.md Open Question 5): pre-087 (and every
+  // version through the 093 loop rewrite) this handler ALSO emitted an
+  // immediate first frame here, concatenated into THIS SAME dispatch's own
+  // reply -- a same-pass, same-reply optimization made possible only
+  // because a captured ReplyFn/void* pair was still available at this call
+  // site. That optimization is DELIBERATELY NOT reproduced now that a real
+  // loop-owned periodic tick exists again (tickTelemetry(), this file):
+  // emission -- first frame AND every later one -- is entirely
+  // tickTelemetry()'s job, firing one pass after this handler sets
+  // bb.telemetryPeriod/bb.telemetryChannel, via its own normal
+  // !bb.telemetryHasLastEmit trigger. This handler no longer touches
+  // bb.telemetryLastEmitMs/bb.telemetryHasLastEmit at all -- see
+  // telemetry_commands.h's file header for the full rationale.
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +97,28 @@ void telemetryEmit(Rt::Blackboard& b, uint32_t now, ReplyFn replyFn, void* reply
   char buf[300];
   Telemetry::buildTlmFrame(buf, sizeof(buf), in);
   replyFn(buf, replyCtx);
+}
+
+void tickTelemetry(Rt::Blackboard& bb, Rt::CommandRouter& router, uint32_t now) {
+  if (bb.telemetryPeriod == 0) return;
+  if (bb.telemetryHasLastEmit && (now - bb.telemetryLastEmitMs) < bb.telemetryPeriod) return;
+
+  ReplyFn replyFn = nullptr;
+  void* replyCtx = nullptr;
+  router.replySink(bb.telemetryChannel, replyFn, replyCtx);
+
+  // bb.telemetryBinary is the branch point for the binary formatter a later
+  // ticket wires in (see this function's own doc comment in
+  // telemetry_commands.h); unconditionally text this ticket, since nothing
+  // sets it true yet.
+  telemetryEmit(bb, now, replyFn, replyCtx);
+
+  // Mirrors handleStream()'s own immediate-first-frame bookkeeping: update
+  // unconditionally (even if telemetryEmit() was a silent no-op because
+  // replyFn resolved null) so a channel with no wired reply sink does not
+  // retry every single pass.
+  bb.telemetryLastEmitMs = now;
+  bb.telemetryHasLastEmit = true;
 }
 
 std::vector<CommandDescriptor> telemetryCommands(Rt::CommandRouter& router) {

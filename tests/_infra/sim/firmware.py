@@ -223,6 +223,22 @@ class Sim:
         """
         return int(self._lib.sim_get_reply_store_len(self._h, ctypes.c_int(channel)))
 
+    def peek_reply_store(self, channel: int) -> str:
+        """Non-destructive read of a channel's CURRENT ReplyStore content
+        (096-002, test-only -- sim_peek_reply_store()). Companion to
+        reply_store_len(): lets a test drain the periodic TLM frames
+        tickTelemetry() accumulates into a channel's sync store across a run
+        of tick_for() calls -- command()/command_on() cannot be used for
+        this since both reset (clear) every store before routing anything,
+        which would wipe out whatever tickTelemetry() had already
+        accumulated before a test got to read it.
+        """
+        buf = ctypes.create_string_buffer(_REPLY_BUF_SIZE)
+        n = self._lib.sim_peek_reply_store(self._h, ctypes.c_int(channel), buf, _REPLY_BUF_SIZE)
+        if n <= 0:
+            return ""
+        return buf.raw[:n].decode(errors="replace")
+
     def post_segment(self, distance: float, direction: float, final_heading: float,
                       speed_max: float = 0.0, accel_max: float = 0.0, jerk_max: float = 0.0,
                       yaw_rate_max: float = 0.0, yaw_accel_max: float = 0.0,
@@ -398,6 +414,13 @@ class Sim:
         # at one channel's ReplyStore length.
         lib.sim_get_reply_store_len.argtypes = [ctypes.c_void_p, ctypes.c_int]
         lib.sim_get_reply_store_len.restype = ctypes.c_int
+
+        # sim_peek_reply_store (096-002, test-only) -- non-draining read of
+        # one channel's ReplyStore CONTENT (companion to
+        # sim_get_reply_store_len() above).
+        lib.sim_peek_reply_store.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+        lib.sim_peek_reply_store.restype = ctypes.c_int
 
         # sim_route_no_tick (095-007, test-only) -- sim_command_on()'s
         # argtypes exactly (same signature, different behavior).
