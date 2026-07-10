@@ -38,7 +38,8 @@ import time
 from robot_radio.io.serial_conn import SerialConnection
 
 # --- Tunables ---------------------------------------------------------------
-MAX_SPEED = 400.0        # [mm/s] stick fully forward
+MAX_SPEED = 400.0        # [mm/s] stick fully forward (--max-speed to change;
+                         #        motors saturate ~600-650)
 MAX_YAW_RATE = 120.0     # [deg/s] stick fully sideways
 DEADZONE = 0.12          # stick fraction ignored around center
 PERIOD = 0.150           # [s] send cadence default; --period-ms to experiment
@@ -256,6 +257,8 @@ def main():
                     help="flip the left/right sense")
     ap.add_argument("--period-ms", type=int, default=int(PERIOD * 1000),
                     help="MOVER send cadence [ms] (deadman = 3x this)")
+    ap.add_argument("--max-speed", type=float, default=MAX_SPEED,
+                    help="full-stick speed [mm/s] (motors saturate ~600-650)")
     args = ap.parse_args()
 
     if args.probe:
@@ -269,6 +272,8 @@ def main():
     if args.invert_turn:
         tele.turn_sign = -tele.turn_sign
     tele.period = max(0.05, args.period_ms / 1000.0)
+    global MAX_SPEED
+    MAX_SPEED = max(50.0, min(1000.0, args.max_speed))
     conn = SerialConnection(args.port, mode=("relay" if args.relay else "direct"),
                             on_recv=tele.on_recv)
     info = conn.connect(skip_ping=False)
