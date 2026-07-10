@@ -48,19 +48,26 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #   subsystems/pose_estimator.cpp           -- 082-002/082-003's PoseEstimator
 #   estimation/ekf_tiny.cpp                 -- 082-001's EkfTiny (PoseEstimator's EKF core)
 #   telemetry/tlm_frame.cpp                 -- 082-004's pure TLM frame formatter
-#   commands/{arg_parse,binary_channel,command_processor,config_commands,
+#   commands/{arg_parse,binary_channel,command_processor,
 #             dev_commands,motion_commands,otos_commands,pose_commands,
 #             system_commands,telemetry_commands}.cpp -- the command
 #                                               dispatch + DEV +
 #                                               motion (S/T/D/STOP, 084-002)
 #                                               + telemetry (STREAM/SNAP) +
-#                                               config (SET/GET, 084-006) +
 #                                               pose-set (SI/ZERO, 084-007) +
 #                                               OTOS (OI/OZ/OR/OP/OV/OL/OA,
 #                                               084-008) families + the
 #                                               binary command plane's
 #                                               oneof-arm dispatcher
-#                                               (095-007, M5 BinaryChannel)
+#                                               (095-007, M5 BinaryChannel).
+#                                               config_commands.cpp (text
+#                                               SET/GET, 084-006) DELETED
+#                                               097-007 (architecture-
+#                                               update-r2.md Decision 9) --
+#                                               binary `config`/`get`
+#                                               (BinaryChannel, above) is
+#                                               the only config-plane path
+#                                               left.
 #   runtime/main_loop.cpp                   -- 087-007's real cyclic
 #                                               executive (Rt::MainLoop --
 #                                               mandatory tick -> commit,
@@ -140,7 +147,6 @@ set(FIRMWARE_SOURCES
     "${SOURCE_DIR}/commands/arg_parse.cpp"
     "${SOURCE_DIR}/commands/binary_channel.cpp"
     "${SOURCE_DIR}/commands/command_processor.cpp"
-    "${SOURCE_DIR}/commands/config_commands.cpp"
     "${SOURCE_DIR}/commands/dev_commands.cpp"
     "${SOURCE_DIR}/commands/motion_commands.cpp"
     "${SOURCE_DIR}/commands/otos_commands.cpp"

@@ -152,10 +152,11 @@ void handleOV(const ArgList& args, const char* corrId, ReplyFn replyFn, void* re
 // [#id] | ERR nodev ol [#id]. Config-plane (read-modify-write persistent
 // register), unlike the four one-shot verbs above: reads bb.odometerConfig
 // (the Configurator's published cell) and, on a set, posts a field-masked
-// Rt::ConfigDelta (kOdometer) to bb.configIn -- mirrors
-// config_commands.h's SET pattern. The reply echoes the CANDIDATE value
-// directly (the just-parsed value on a set, else the CURRENT published
-// value) -- never a bb read-back, so no post-then-read-back race.
+// Rt::ConfigDelta (kOdometer) to bb.configIn -- mirrors the now-deleted
+// text SET handler's own candidate-then-commit pattern (config_commands'
+// header, removed 097-007). The reply echoes the CANDIDATE value directly
+// (the just-parsed value on a set, else the CURRENT published value) --
+// never a bb read-back, so no post-then-read-back race.
 // ---------------------------------------------------------------------------
 const ArgDef kOlDefs[1] = {
     {"scalar", ArgKind::INT, false, 0, 0},

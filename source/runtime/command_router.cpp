@@ -16,12 +16,14 @@ namespace {
 // MOVE/TLM -- see motion_commands.cpp's own trimmed registration for the
 // full, current list) + the telemetry family (telemetryCommands():
 // STREAM/SNAP, restored now that the loop-owned periodic-emission tick
-// exists -- see telemetry_commands.h's tickTelemetry()). `configCommands()`
-// (SET/GET) is deliberately NOT re-added here -- Decision 1 is explicit
-// that config's binary arm (ticket 004) is the only live path this sprint;
-// its file, handlers, and includes stay untouched on disk (clasi/sprints/
-// 093-.../architecture-update.md Step 5/Migration Concerns), same as the
-// still-unregistered `dev`/`pose`/`otos` families.
+// exists -- see telemetry_commands.h's tickTelemetry()). The text SET/GET
+// config family (formerly `configCommands()`, source/commands/
+// config_commands.{h,cpp}) is not registered here -- and, as of 097-007
+// (architecture-update-r2.md Decision 9, pure-binary firmware), no longer
+// exists as source at all: its file was deleted outright, not merely left
+// unregistered as 093/096 left it. Binary `config`/`get` (BinaryChannel's
+// CONFIG/GET oneof arms, ticket 004) is the only live config-plane path,
+// same as the still-unregistered `dev`/`pose`/`otos` text families.
 std::vector<CommandDescriptor> buildTable(CommandRouter& router) {
   std::vector<CommandDescriptor> all = systemCommands(router);
   std::vector<CommandDescriptor> motion = motionCommands(router);

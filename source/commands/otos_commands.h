@@ -30,9 +30,10 @@
 // bb.odometerConfig (the Configurator's own published config cell,
 // replacing the pre-087 OtosCommandState::configShadow) and post a
 // field-masked Rt::ConfigDelta (kOdometer) to bb.configIn on a set --
-// mirrors config_commands.h's SET/DEV *CFG pattern exactly, since OL/OA are
-// genuinely config-plane (read-modify-write persistent register), unlike
-// the other five one-shot verbs.
+// mirrors the now-deleted text SET handler's own (config_commands, removed
+// 097-007) and DEV *CFG's candidate-then-commit pattern exactly, since
+// OL/OA are genuinely config-plane (read-modify-write persistent
+// register), unlike the other five one-shot verbs.
 // ---------------------------------------------------------------------------
 
 

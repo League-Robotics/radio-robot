@@ -12,8 +12,9 @@
 // switch. Each oneof arm's behavior lives in its own handle<Arm>() helper
 // below (the CONFIG arm's four patch kinds likewise in
 // handleConfig<Kind>()), mirroring the text plane's handler-per-verb
-// layout (motion_commands.cpp / config_commands.cpp). Every helper replies
-// exactly once, through the sendReply funnel.
+// layout (motion_commands.cpp, and the now-deleted text SET/GET's
+// config_commands.cpp before 097-007). Every helper replies exactly once,
+// through the sendReply funnel.
 #include "commands/binary_channel.h"
 
 #include <cstring>
@@ -224,11 +225,12 @@ void handleId(uint32_t corrId, ReplyFn replyFn, void* replyCtx) {
 // --- CONFIG patch handlers (096-004, Decision 3) --------------------------
 // Hand-translate the ONE populated Patch's present (Opt<T>.has) fields into
 // a freshly-built Rt::ConfigDelta{target, mask, value} -- one "if (has) {
-// field = val; mask |= bitOf(...); }" per field, mirroring
-// applyConfigKey()'s (config_commands.cpp) own per-key assignment shape
-// exactly. No strcmp dispatch (the oneof's own patch_kind discriminant
-// replaces it) and no hand parsing/range checks (the generated decoder's
-// min/max/abs_max/req validation already ran during decode()).
+// field = val; mask |= bitOf(...); }" per field, mirroring the now-deleted
+// text SET handler's own applyConfigKey() (config_commands.cpp, removed
+// 097-007) per-key assignment shape exactly. No strcmp dispatch (the
+// oneof's own patch_kind discriminant replaces it) and no hand parsing/
+// range checks (the generated decoder's min/max/abs_max/req validation
+// already ran during decode()).
 
 void handleConfigDrivetrain(const msg::DrivetrainConfigPatch& p, Rt::Blackboard& b,
                             uint32_t corrId, ReplyFn replyFn, void* replyCtx) {
@@ -272,10 +274,10 @@ void handleConfigDrivetrain(const msg::DrivetrainConfigPatch& p, Rt::Blackboard&
 // Never a per-side Gains split.
 void handleConfigMotor(const msg::MotorConfigPatch& p, Rt::Blackboard& b, uint32_t corrId,
                        ReplyFn replyFn, void* replyCtx) {
-  // Same conversion boundary as config_commands.cpp's handleSet()/
-  // handleGet(): bb.drivetrainConfig.left_port/right_port are
-  // wire/serialized 1-based labels, converted to 0-based Hardware motor
-  // indices here, once.
+  // Same conversion boundary the now-deleted text handlers used
+  // (config_commands.cpp's handleSet()/handleGet(), removed 097-007):
+  // bb.drivetrainConfig.left_port/right_port are wire/serialized 1-based
+  // labels, converted to 0-based Hardware motor indices here, once.
   uint32_t leftIdx = b.drivetrainConfig.left_port - 1;
   uint32_t rightIdx = b.drivetrainConfig.right_port - 1;
 
@@ -350,10 +352,10 @@ void handleConfigPlanner(const msg::PlannerConfigPatch& p, Rt::Blackboard& b, ui
 // handleConfigWatchdog -- Open Question 4 (096): sTimeout is NOT one of the
 // Configurator's four fold targets -- posts straight to
 // bb.streamWatchdogWindowIn (the loop-owned StreamingDriveWatchdog's
-// window), never bb.configIn, mirroring handleSet()'s own sTimeout
-// special-case (config_commands.cpp) and config_commands.h's own
-// file-header note that sTimeout is "the one key that is NOT one of the
-// Configurator's four targets."
+// window), never bb.configIn, mirroring the now-deleted text handler's own
+// sTimeout special-case and file-header note that sTimeout is "the one key
+// that is NOT one of the Configurator's four targets" (config_commands.cpp/
+// .h, removed 097-007).
 void handleConfigWatchdog(uint32_t window,  // [ms]
                           Rt::Blackboard& b, uint32_t corrId, ReplyFn replyFn,
                           void* replyCtx) {
@@ -395,9 +397,10 @@ void handleConfig(const msg::ConfigDelta& patch, Rt::Blackboard& b, uint32_t cor
 void handleGet(const msg::ConfigGet& get, Rt::Blackboard& b, uint32_t corrId,
                ReplyFn replyFn, void* replyCtx) {
   const msg::ConfigTarget target = get.target.val;
-  // Same conversion boundary as config_commands.cpp's handleGet():
-  // bb.drivetrainConfig.left_port/right_port are wire/serialized 1-based
-  // labels, converted to 0-based Hardware motor indices here, once.
+  // Same conversion boundary the now-deleted text handler's handleGet()
+  // used (config_commands.cpp, removed 097-007): bb.drivetrainConfig.
+  // left_port/right_port are wire/serialized 1-based labels, converted to
+  // 0-based Hardware motor indices here, once.
   uint32_t leftIdx = b.drivetrainConfig.left_port - 1;
   uint32_t rightIdx = b.drivetrainConfig.right_port - 1;
 

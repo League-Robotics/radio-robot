@@ -46,13 +46,12 @@
 // StreamingDriveWatchdog -- DELETED (097-006): already-dead code, fed by
 // nothing (confirmed in the 097 architecture research before this ticket
 // ran; it fed the S-only streaming-drive-silence timeout, and S no longer
-// exists). config_commands.h's own `#include "commands/motion_commands.h"`
-// predates this deletion and referenced this type in a doc comment only --
-// never an actual type use (config_commands.{h,cpp} touch only
-// `bb.streamWatchdogWindow`/`bb.streamWatchdogWindowIn`, both plain
-// `uint32_t`/`Mailbox<uint32_t>`, not this class) -- so config_commands.h,
-// untouched by this ticket (ticket 007's scope), still compiles unmodified
-// with this class gone.
+// exists). The text SET/GET config family (source/commands/
+// config_commands.{h,cpp}) used to `#include "commands/motion_commands.h"`
+// for a doc-comment-only reference to this type -- never an actual type use
+// (it touched only `bb.streamWatchdogWindow`/`bb.streamWatchdogWindowIn`,
+// both plain `uint32_t`/`Mailbox<uint32_t>`, not this class). That file was
+// itself deleted outright by ticket 007, so the point is now moot.
 // ---------------------------------------------------------------------------
 
 

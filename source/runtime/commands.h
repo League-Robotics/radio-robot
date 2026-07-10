@@ -128,7 +128,7 @@ struct ConfigDelta {
                        // [0, kMotorCount) convention) when target ==
                        // kMotor; ignored otherwise. NOT the wire-visible
                        // 1-based brick label -- a caller building this
-                       // delta (dev_commands.cpp/config_commands.cpp)
+                       // delta (dev_commands.cpp/commands/binary_channel.cpp)
                        // converts a wire `<n>` (or a wire-shaped published
                        // config field) to this index at its own handler
                        // boundary.
