@@ -27,9 +27,41 @@ tickets:
 - 097-008
 - 097-009
 - 097-010
+- 097-011
 ---
 
 # Protocol v3: Schema-Driven Binary Command Plane (protobuf)
+
+## Update 2026-07-10 — Sprint 3's text retirement is PARTIAL
+
+Sprint 097 ("Sprint 3 — host completion + text retirement") completed the
+host side in full within its reachable scope (`NezhaProtocol`'s
+`SerialConnection`-reachable methods are binary; `parse_tlm`/`parse_cfg`
+deleted for that scope). **Firmware text retirement of the motion
+(S/D/T/RT/MOVE/MOVER), liveness (ECHO/VER), and config (SET/GET) families,
+plus text STREAM/SNAP, is DEFERRED, not completed** — ticket 097-003's
+implementation and a team-lead follow-up sweep found essentially every one
+of these text families still has a live, unmigrated production consumer
+(TestGUI's manual command panel and connect-time telemetry probe, the MCP
+server's calibration push, `rogo`'s remaining text subcommands, two
+calibration scripts using a raw-pyserial transport, and several bench/demo
+scripts). Deleting them now would have broken those consumers, directly
+violating this issue's own stated rule ("a text family is deleted only
+after its binary replacement is bench-proven AND its consumers migrated")
+and the sprint's own "TestGUI/MCP server change zero call sites" success
+criterion. The only deletion actually landed in 097 is
+`source/types/command_types.h`'s vestigial `ParsedCommand` struct.
+
+Full detail: `clasi/sprints/097-protocol-v3-sprint-3-host-completion-and-
+text-retirement/architecture-update-r1.md` Decision 8. The deferred
+migration work (and the precondition it establishes for actually deleting
+the text plane) is now explicitly owned by
+`clasi/issues/realign-host-tooling-to-gutted-four-verb-wire-surface.md`
+(updated the same day). Completing THAT issue is what unblocks a future
+sprint to finish protocol-v3's original text-retirement goal — this issue
+should not be considered fully resolved on host/text-plane grounds until
+that follow-on work lands and a subsequent sprint completes the deletion
+`sprint.md`'s Sprint 3 originally scoped.
 
 ## Context
 

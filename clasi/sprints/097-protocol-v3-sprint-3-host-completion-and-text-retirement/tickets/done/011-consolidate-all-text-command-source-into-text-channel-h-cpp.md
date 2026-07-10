@@ -123,7 +123,7 @@ Current inventory of `source/commands/` and its disposition:
       (e.g. via the existing `tests/sim/unit/test_bare_loop_commands.py`
       coverage, updated only for file-name mentions in its own comments, not
       behavior).
-- [ ] Hardware bench smoke on the stand per
+- [x] Hardware bench smoke on the stand per
       `.claude/rules/hardware-bench-testing.md`: PING/HELLO round-trip and
       STOP over the real serial link.
 - [x] Grep-clean confirmed (see above): zero `#include`/symbol references
@@ -201,3 +201,13 @@ stale the moment this ticket's file moves land.
   coverage of STOP/PING/HELLO and of `tickTelemetry()`'s periodic emission
   must continue to pass unchanged.
 - **Verification command**: `just build-clean && uv run python -m pytest`
+
+## Hardware bench result (team-lead, 2026-07-10, robot on stand)
+
+Flashed the consolidated pure-binary firmware (v0.20260710.5, 472 KB) to the robot (tovez, /dev/cu.usbmodem2121102) and smoke-tested over direct serial:
+- text rump: `PING`→`OK pong t=`, `HELLO`→`DEVICE:NEZHA2:robot:tovez:...`, `STOP`→`OK stop` (bare-terminal safety affordance confirmed working).
+- gutted verbs correctly rejected: `VER`/`SET`/`STREAM`/`S` all → `ERR unknown`.
+- binary PING→`ok{t}`, binary ID→full DeviceId (fw 0.20260710.5, proto 2).
+- binary DRIVE (250,250) fed continuously → motors spin: binary Telemetry stream (30 frames, monotonic seq) shows enc_left/right climbing (257/221), vel_left/right ≈244/237 ≈ commanded 250 mm/s.
+- binary STREAM (StreamControl binary period=50) + binary STOP work.
+Full pure-binary command plane + rump validated on real hardware.
