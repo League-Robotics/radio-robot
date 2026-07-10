@@ -4,6 +4,15 @@ status: pending
 
 # OTOS REG_OFFSET bench re-test deferred — confirm whether the chip honors chip-native mounting-offset compensation
 
+> **Parked to `later/` 2026-07-09 (stakeholder triage).** The OTOS command
+> family (`OI`/`OZ`/`OR`/`OP`/`OV`/`OL`/`OA`) is unregistered on the gutted
+> post-093/094 wire surface and nothing fuses the odometer while
+> `Subsystems::PoseEstimator` is unticked — the re-test has no wire path to
+> run through. `Hal::OtosOdometer` (with the ported `setOffset()`/
+> `getOffset()`) is still constructed at boot by `NezhaHardware`, so the
+> test becomes runnable again the moment the OTOS/pose path is restored
+> ([[restore-goto-pursuit-with-pose-estimator]]) — do it then.
+
 ## Context
 
 Sprint 092 ticket 003 ported the SparkFun OTOS library faithfully into

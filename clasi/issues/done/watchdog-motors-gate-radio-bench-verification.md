@@ -1,5 +1,7 @@
 ---
-status: pending
+status: done
+tickets:
+- NONE
 ---
 
 # Bench-verify the motors-running watchdog fire-gate over the radio-relay path
@@ -64,3 +66,17 @@ protocol):
 - If the radio path reveals a discrepancy from the sim-proven behavior
   (e.g. a feed/check timing gap specific to the relay), file a follow-up
   issue describing it rather than silently patching the gate.
+
+## Closed 2026-07-09 — obsoleted by the sprint 093 loop gut (stakeholder triage)
+
+The mechanism this issue verifies no longer exists. Sprint 093's rewritten
+`Rt::MainLoop` **removed the serial-silence safety watchdog itself** (see
+`source/runtime/main_loop.h`: "no watchdog-feed hook (093 removes the
+watchdog itself)"), and the `DEV WD` / `DEV M` verbs the test procedure
+depends on are unregistered (`buildTable()` in
+`source/runtime/command_router.cpp` no longer wires the `dev` family).
+There is nothing left to bench-verify: the 091 motors-running fire-gate is
+dead code in an unwired family. Comms-loss safety was redesigned into the
+`MOVER` segment's deadman-velocity semantics (teleop path). If a
+serial-silence watchdog is ever reintroduced, it will be a new design
+requiring its own verification issue — do not resurrect this one.

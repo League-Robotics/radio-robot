@@ -1,5 +1,7 @@
 ---
-status: pending
+status: done
+tickets:
+- NONE
 ---
 
 # D/T/TURN terminal reverse-creep: stakeholder decision needed — bounded-correction approach proven infeasible
@@ -71,3 +73,28 @@ Bring this to Eric. Given his sprint-089 stance on the seeding contract and
 that this is a control-safety change, do not pick (a)/(b)/(c) autonomously.
 The `rotationalArcScale_` placeholder (item 2) is a real latent defect worth
 fixing regardless of which option is chosen for the linear channel.
+
+## Closed 2026-07-09 — obsoleted by the sprint 094 motion-stack replacement (stakeholder triage)
+
+The a/b/c decision is framed entirely against the old `Subsystems::Planner`
+stop-decel machinery, which no longer exists on the live build: sprint 094
+parked the Planner (`source_parked/094/subsystems/planner.{h,cpp}`), deleted
+`Motion::VelocityRamp`, and replaced the motion path with the Drivetrain's
+`Motion::SegmentExecutor`. Both technical blockers documented above are moot
+in the new executor:
+
+1. The bounded-seed-correction code path (option (a)'s target) was never
+   merged and its host machinery is gone.
+2. The `rotationalArcScale_` placeholder defect is fixed by construction —
+   `SegmentExecutor::arcScale_` is exactly `trackwidth_/2` (a pivot phase's
+   arc is *defined* as `|targetAngle| * trackwidth/2` at phase start; see
+   `source/motion/segment_executor.h`).
+
+Whether terminal reverse-creep persists on the NEW segment path is an
+empirical question covered by sprint 094's standing bench gate ("no terminal
+reverse-creep — regression check vs 093"). If it shows up there, file a
+fresh issue against `SegmentExecutor` — the sequencing remains per the
+stakeholder's 093 direction: fix the actuation-latency gap first
+([[motor-actuation-latency-flipflop-coupling]]), then residual reversals.
+The spike branch `spike/092-001-infeasible-bounded-seed-correction`
+(commit `3559d28e`) stays preserved for reference.

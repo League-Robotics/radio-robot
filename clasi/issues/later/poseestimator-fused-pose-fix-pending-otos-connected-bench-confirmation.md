@@ -4,6 +4,15 @@ status: pending
 
 # PoseEstimator frozen fused-pose: root-cause hypothesis formed, fix pending one bench confirmation
 
+> **Parked to `later/` 2026-07-09 (stakeholder triage).** Sprint 093 unticked
+> `Subsystems::PoseEstimator` (only Hardware + Drivetrain tick in the gutted
+> `Rt::MainLoop`), and the fused `pose=` / `otosconn=` TLM fields are off the
+> wire, so the confirming bench test below cannot currently run. The
+> hypothesis and next-step procedure remain the valuable part — re-run them
+> as part of restoring the pose stack
+> ([[restore-goto-pursuit-with-pose-estimator]]), before any EKF gating fix
+> is designed.
+
 ## Status: needs a bench session with a free serial port before the EKF-side fix is designed
 
 Sprint 092 ticket 002 investigated `clasi/issues/poseestimator-fused-pose-

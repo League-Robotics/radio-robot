@@ -114,6 +114,15 @@ current TLM semantic that `enc=`/`vel=` are *measured*, not the commanded
 "publishes its state" goal. Populate via the loop-output drain seam from the
 gut-the-loop issue, not synchronous emit.
 
+> **Status note 2026-07-09 (triage):** implemented by sprint 094 (in
+> stakeholder review) — close this issue when 094 closes. One loose end:
+> the §7 jerk **wire keys** (`SET jmax`/`yawjmax`) cannot be live because the
+> whole `SET`/`GET` config family is unregistered on the gutted surface
+> (`buildTable()`, `source/runtime/command_router.cpp`). Whether the config
+> family returns to the wire is tracked in
+> [`realign-host-tooling-to-gutted-four-verb-wire-surface.md`](realign-host-tooling-to-gutted-four-verb-wire-surface.md)
+> — the jerk defaults themselves are in the executor's config either way.
+
 ### 7. Jerk config knob
 Fields already exist end-to-end (`PlannerConfig::j_max` / `yaw_jerk_max`, the
 `PlannerConfigField` enum, and the `Configurator` fold) — they migrate to whatever

@@ -37,6 +37,22 @@ PoseEstimator` already being parked by sprint 093.
    unblock this — that would reintroduce the two-motion-generation-mechanism
    duplication the locked decision closed off project-wide.
 
+## Parked bench work to fold into the restoration (2026-07-09 triage)
+
+Two deferred bench investigations were moved to `clasi/issues/later/`
+because they cannot run while the pose/OTOS path is unticked; both become
+actionable — and should be scheduled — as part of this restoration:
+
+- `later/poseestimator-fused-pose-fix-pending-otos-connected-bench-confirmation.md`
+  — the frozen-fused-pose root-cause hypothesis (stand-mounted OTOS reporting
+  static-but-valid readings fused ungated). Confirm via `otosconn=` at the
+  bench BEFORE designing any EKF gating; a restored PoseEstimator without
+  this check likely reproduces the frozen `pose=` on hardware.
+- `later/otos-reg-offset-bench-retest-deferred.md` — whether the chip honors
+  `REG_OFFSET` (decides the final lever-arm disposition in
+  `Hal::OtosOdometer`: delete host-side compensation vs keep the 092-004
+  FOLD).
+
 ## What else is parked alongside Planner (094-002)
 
 - `tests/sim/parked-094/unit/test_planner.py` +
