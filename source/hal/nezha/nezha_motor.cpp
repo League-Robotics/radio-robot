@@ -52,6 +52,19 @@ namespace {
 // source_old/control/MotorController.cpp's kMaxPlausibleSpeed).
 constexpr float kMaxPlausibleSpeed = 1000.0f;   // [mm/s]
 
+// Position-step plausibility gate (source-side outlier rejection -- see
+// tick() step 2). Deliberately MORE generous than kMaxPlausibleSpeed (which
+// equals the max commandable wheel speed, so real full-speed motion sits
+// right at that bound): a step implying twice any commandable speed is
+// always a corrupted read. A sample rejected here never reaches
+// lastPosition_/filteredVelocity_ at all.
+constexpr float kMaxPlausibleStepSpeed = 2000.0f;   // [mm/s]
+
+// After this many CONSECUTIVE step-gate rejections, accept the new position
+// as the new truth (re-anchor) instead of rejecting forever -- a persistent
+// "glitch" is a real discontinuity (e.g. device-side re-anchor), not noise.
+constexpr uint8_t kGlitchStreakAccept = 3;
+
 // Nominal loop period used before the first real dt measurement exists
 // (ported from VelocityController.cpp's kNominalDt).
 constexpr float kNominalDt = 0.024f;   // [s]
@@ -201,20 +214,48 @@ void NezhaMotor::tick(uint32_t nowMs)
     bool haveElapsed = false;
     if (hasLastTick_) {
         elapsedTime = static_cast<float>(nowMs - lastTick_) / 1000.0f;
-        if (elapsedTime > 0.0f) {
-            haveElapsed = true;
+        if (elapsedTime > 0.0f) haveElapsed = true;
+    } else {
+        hasLastTick_ = true;
+    }
+
+    // Source-side outlier rejection (restores source_old's 064-hardening
+    // scope): a single-sample position step implying a speed beyond
+    // kMaxPlausibleStepSpeed is a corrupted I2C read, not motion. The old
+    // gate protected only filteredVelocity_ -- the garbage sample still
+    // reached lastPosition_ and, through it, TLM enc=, the wedge detector,
+    // stop conditions, and the executor's divergence replan. Reject the
+    // WHOLE sample: hold last-good position AND velocity, count it. If
+    // kGlitchStreakAccept consecutive samples all "glitch", the encoder
+    // genuinely moved (e.g. an external re-anchor) -- accept and re-anchor
+    // rather than rejecting forever.
+    bool sampleOk = true;
+    if (haveElapsed) {
+        float step = fabsf(pos - lastPosition_);   // [mm]
+        if (step > kMaxPlausibleStepSpeed * elapsedTime) {
+            ++encGlitchCount_;
+            if (++encGlitchStreak_ < kGlitchStreakAccept) {
+                sampleOk = false;
+            } else {
+                encGlitchStreak_ = 0;   // re-anchor to the new reality
+            }
+        } else {
+            encGlitchStreak_ = 0;
+        }
+    }
+
+    if (sampleOk) {
+        if (haveElapsed) {
             float rawVel = (pos - lastPosition_) / elapsedTime;
             if (fabsf(rawVel) <= kMaxPlausibleSpeed) {
                 float a = config_.vel_filt_alpha;   // EMA smoothing
                 filteredVelocity_ = a * rawVel + (1.0f - a) * filteredVelocity_;
             }
-            // else: garbage read — reject, hold filteredVelocity_ (matches
-            // source_old's plausibility gate).
+            // else: implausible-but-sub-step velocity — hold filteredVelocity_
+            // (matches source_old's plausibility gate).
         }
-    } else {
-        hasLastTick_ = true;
+        lastPosition_ = pos;
     }
-    lastPosition_ = pos;
     lastTick_ = nowMs;
 
     // 3. Wedge detector — reads position() (== pos, just cached above) and

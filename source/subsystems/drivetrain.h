@@ -314,6 +314,20 @@ class Drivetrain {
   float wheelTargetLeft_ = 0.0f;    // [mm/s]
   float wheelTargetRight_ = 0.0f;   // [mm/s]
 
+  // Last pass's post-governor commanded wheel velocities, surfaced via
+  // state()/TLM `cmd=` (measured vel= vs the setpoint the velocity PID
+  // chases). Written by tick(); read by the const state().
+  float cmdVel_[2] = {0.0f, 0.0f};   // [mm/s]
+
+  // Measured per-wheel acceleration, EMA-filtered in firmware (see
+  // updateAccelEma()'s doc comment in drivetrain.cpp) -- surfaced via
+  // state()/TLM `acc=`. Indexed [0]=bound left wheel, [1]=bound right.
+  void updateAccelEma(uint32_t now, int wheel, const msg::MotorState& obs);
+  float accelEma_[2] = {0.0f, 0.0f};        // [mm/s^2]
+  float lastVelSample_[2] = {0.0f, 0.0f};   // [mm/s] last DISTINCT velocity sample
+  uint32_t lastVelSampleMs_[2] = {0, 0};    // [ms]
+  bool haveVelSample_[2] = {false, false};
+
   msg::Neutral neutralMode_ = msg::Neutral::BRAKE;
 
   msg::MotorCapabilities leftMotorCaps_ = {};

@@ -897,19 +897,33 @@ void handleTlm(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, voi
   float encR = dt.enc_count_val() >= 2 ? dt.enc()[1] : 0.0f;
   float velL = dt.vel_count_val() >= 1 ? dt.vel()[0] : 0.0f;
   float velR = dt.vel_count_val() >= 2 ? dt.vel()[1] : 0.0f;
+  float cmdL = dt.cmd_count_val() >= 1 ? dt.cmd()[0] : 0.0f;
+  float cmdR = dt.cmd_count_val() >= 2 ? dt.cmd()[1] : 0.0f;
+  float accL = dt.acc_count_val() >= 1 ? dt.acc()[0] : 0.0f;
+  float accR = dt.acc_count_val() >= 2 ? dt.acc()[1] : 0.0f;
 
-  // conn= surfaces per-drive-motor I2C health (NezhaMotor::connected(), via
-  // bb.motors[] which main.cpp now commits each pass). conn=0,0 with
-  // everything else ACKing = the Nezha brick is off the bus (unplugged /
-  // unpowered) -- the diagnostic that was missing when a disconnected bus
-  // looked identical to "no motion". Drive pair = ports 1/2 -> motors[0]/[1].
-  char body[96];
-  snprintf(body, sizeof(body), "enc=%d,%d vel=%d,%d active=%d conn=%d,%d",
+  // cmd= is the post-governor commanded wheel velocity (the setpoint the
+  // velocity PID chases) vs measured vel=; acc= is the firmware-EMA measured
+  // acceleration (raw host-side d(vel)/dt is quantization noise). conn=
+  // surfaces per-drive-motor I2C health (NezhaMotor::connected(), via
+  // bb.motors[] which main.cpp commits each pass) -- conn=0,0 with
+  // everything else ACKing = the Nezha brick is off the bus. glitch= is the
+  // cumulative count of encoder samples rejected by the leaf's source-side
+  // plausibility gate (corrupted reads; a rising count = bus noise). Drive
+  // pair = bound indices 0/1 -> motors[0]/[1].
+  unsigned glitchL = b.motors[0].enc_glitch_count.has ? b.motors[0].enc_glitch_count.val : 0;
+  unsigned glitchR = b.motors[1].enc_glitch_count.has ? b.motors[1].enc_glitch_count.val : 0;
+  char body[176];
+  snprintf(body, sizeof(body),
+           "enc=%d,%d vel=%d,%d cmd=%d,%d acc=%d,%d active=%d conn=%d,%d glitch=%u,%u",
            static_cast<int>(encL), static_cast<int>(encR),
            static_cast<int>(velL), static_cast<int>(velR),
+           static_cast<int>(cmdL), static_cast<int>(cmdR),
+           static_cast<int>(accL), static_cast<int>(accR),
            dt.active ? 1 : 0,
-           b.motors[0].connected ? 1 : 0, b.motors[1].connected ? 1 : 0);
-  char rbuf[128];
+           b.motors[0].connected ? 1 : 0, b.motors[1].connected ? 1 : 0,
+           glitchL, glitchR);
+  char rbuf[224];
   CommandProcessor::replyOK(rbuf, sizeof(rbuf), "tlm", body, corrId, replyFn, replyCtx);
 }
 

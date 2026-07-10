@@ -47,6 +47,12 @@ message MotorState {
       // bound-port authority-steal (isBoundPort() in dev_commands.cpp)
       // drives DrivetrainState.active false while the port itself keeps
       // spinning under a standalone DEV M command.
+  optional uint32 enc_glitch_count = 10;  // cumulative count of encoder
+      // samples rejected at the source by the leaf's plausibility gate (a
+      // single-sample position step implying a physically-impossible speed
+      // is a corrupted I2C read, not motion -- rejected before it can reach
+      // the PID, wedge detector, stop conditions, or telemetry). Diagnostic:
+      // a rising count = bus noise worth investigating.
 }
 
 // Configuration parameters for a motor.

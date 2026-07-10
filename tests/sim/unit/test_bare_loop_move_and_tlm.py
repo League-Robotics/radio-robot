@@ -43,17 +43,34 @@ import re
 
 import pytest
 
+# Full post-094 TLM shape (OOP additions): cmd= (post-governor commanded
+# wheel velocity), acc= (firmware-EMA measured acceleration), conn= (per-motor
+# I2C health), glitch= (source-side rejected encoder samples).
 _TLM_RE = re.compile(
-    r"^OK tlm enc=(-?\d+),(-?\d+) vel=(-?\d+),(-?\d+) active=([01])"
-    r"(?: conn=[01],[01])?$"   # conn= appended post-094 (OOP I2C-health field)
+    r"^OK tlm enc=(?P<enc_l>-?\d+),(?P<enc_r>-?\d+)"
+    r" vel=(?P<vel_l>-?\d+),(?P<vel_r>-?\d+)"
+    r" cmd=(?P<cmd_l>-?\d+),(?P<cmd_r>-?\d+)"
+    r" acc=(?P<acc_l>-?\d+),(?P<acc_r>-?\d+)"
+    r" active=(?P<active>[01])"
+    r" conn=(?P<conn_l>[01]),(?P<conn_r>[01])"
+    r" glitch=(?P<glitch_l>\d+),(?P<glitch_r>\d+)$"
 )
 
 
 def _parse_tlm(reply: str) -> tuple[int, int, int, int, int]:
+    """Returns the historical 5-tuple (enc_l, enc_r, vel_l, vel_r, active) --
+    the extra fields are validated by the regex match itself; tests that need
+    them use _parse_tlm_full()."""
     m = _TLM_RE.match(reply.strip())
     assert m is not None, f"TLM reply did not match the expected shape: {reply!r}"
-    enc_l, enc_r, vel_l, vel_r, active = m.groups()
-    return int(enc_l), int(enc_r), int(vel_l), int(vel_r), int(active)
+    return (int(m["enc_l"]), int(m["enc_r"]),
+            int(m["vel_l"]), int(m["vel_r"]), int(m["active"]))
+
+
+def _parse_tlm_full(reply: str) -> dict:
+    m = _TLM_RE.match(reply.strip())
+    assert m is not None, f"TLM reply did not match the expected shape: {reply!r}"
+    return {k: int(v) for k, v in m.groupdict().items()}
 
 
 def _run_and_check_no_reverse_creep(sim, seconds: float = 6.0, step: int = 24):

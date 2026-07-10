@@ -83,6 +83,7 @@ class NezhaMotor : public Motor {
   float velocity() const override;       // [mm/s] signed, filtered
   float appliedDuty() const override;    // [-1, 1]
   bool connected() const override;
+  uint32_t encGlitchCount() const override { return encGlitchCount_; }
 
   // --- Faceplate verbs (Hal::Motor) ---
   void tick(uint32_t now) override;      // [ms]
@@ -118,6 +119,12 @@ class NezhaMotor : public Motor {
   uint32_t lastTick_ = 0;            // [ms]
   bool hasLastTick_ = false;
   bool connected_ = false;
+
+  // ---- Source-side encoder outlier rejection (tick() step 2's
+  // position-step plausibility gate -- see nezha_motor.cpp's
+  // kMaxPlausibleStepSpeed/kGlitchStreakAccept doc comments) ----
+  uint32_t encGlitchCount_ = 0;   // cumulative rejected samples (never resets)
+  uint8_t encGlitchStreak_ = 0;   // consecutive rejections; re-anchor at kGlitchStreakAccept
 
   // ---- Write path (ported from Motor::setSpeed()) ----
   int8_t lastWrittenPct_ = -128;        // [%] sentinel (outside ±100) forces the first write

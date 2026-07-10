@@ -97,6 +97,10 @@ struct DrivetrainState {
     uint32_t otos_status = 0;
     bool otos_fusion_blocked = false;
     bool active = false;
+    float cmd_[4] = {};
+    uint8_t cmd_count = 0;
+    float acc_[4] = {};
+    uint8_t acc_count = 0;
 
     // --- array / optional-string accessors ---
     const float* enc() const { return enc_; }
@@ -105,6 +109,10 @@ struct DrivetrainState {
     uint8_t vel_count_val() const { return vel_count; }
     const uint8_t* wheel_wedged() const { return wheel_wedged_; }
     uint8_t wheel_wedged_count_val() const { return wheel_wedged_count; }
+    const float* cmd() const { return cmd_; }
+    uint8_t cmd_count_val() const { return cmd_count; }
+    const float* acc() const { return acc_; }
+    uint8_t acc_count_val() const { return acc_count; }
 };
 
 // DrivetrainConfig

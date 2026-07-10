@@ -243,6 +243,14 @@ void Drivetrain::tick(uint32_t now,
     const msg::MotorState leftObs = hardware_.motorState(bound.left);
     const msg::MotorState rightObs = hardware_.motorState(bound.right);
 
+    // Measured per-wheel acceleration, EMA-filtered -- surfaced via
+    // state()/TLM `acc=`. Raw d(vel)/dt of the (quantized, flip-flop-cadence)
+    // velocity samples is dominated by noise; the EMA lives HERE in the
+    // firmware so every consumer gets the same smooth signal instead of each
+    // deriving its own (stakeholder direction, 2026-07-09).
+    updateAccelEma(now, 0, leftObs);
+    updateAccelEma(now, 1, rightObs);
+
     msg::MotorCommand leftCmd;
     msg::MotorCommand rightCmd;
 
@@ -279,9 +287,44 @@ void Drivetrain::tick(uint32_t now,
 
     // Staged, not held -- flushed at hardware_'s own tick() cadence (see
     // drivetrain.h's class comment and architecture-update.md Section 5).
-    // Nothing left to route.
+    // Nothing left to route. Remember this pass's post-governor commanded
+    // wheel velocities so state()/TLM can surface cmd= (measured vel= vs the
+    // setpoint the velocity PID is chasing).
+    using CK = msg::MotorCommand::ControlKind;
+    cmdVel_[0] = (leftCmd.control_kind == CK::VELOCITY) ? leftCmd.control.velocity : 0.0f;
+    cmdVel_[1] = (rightCmd.control_kind == CK::VELOCITY) ? rightCmd.control.velocity : 0.0f;
     hardware_.motor(bound.left).apply(leftCmd);
     hardware_.motor(bound.right).apply(rightCmd);
+}
+
+// updateAccelEma -- one wheel's measured-acceleration EMA. Velocity samples
+// refresh at the I2C flip-flop's cadence (~80ms per motor on hardware), while
+// tick() runs every loop pass -- so a new EMA term is folded in only when the
+// velocity VALUE actually changes (a fresh sample), with dt measured between
+// those changes. Between samples the EMA holds. kAccelEmaAlpha trades lag for
+// smoothness; raw d(vel)/dt is quantization hash (the whole reason this lives
+// in firmware).
+namespace {
+constexpr float kAccelEmaAlpha = 0.25f;
+}
+
+void Drivetrain::updateAccelEma(uint32_t now, int wheel, const msg::MotorState& obs) {
+    if (!obs.velocity.has) return;
+    const float v = obs.velocity.val;   // [mm/s]
+    if (!haveVelSample_[wheel]) {
+        haveVelSample_[wheel] = true;
+        lastVelSample_[wheel] = v;
+        lastVelSampleMs_[wheel] = now;
+        return;
+    }
+    if (v == lastVelSample_[wheel]) return;   // no fresh sample this pass
+    const float dt = static_cast<float>(static_cast<int32_t>(now - lastVelSampleMs_[wheel]))
+                     * 0.001f;   // [s]
+    if (dt <= 0.0f) return;
+    const float rawAccel = (v - lastVelSample_[wheel]) / dt;   // [mm/s^2]
+    accelEma_[wheel] = kAccelEmaAlpha * rawAccel + (1.0f - kAccelEmaAlpha) * accelEma_[wheel];
+    lastVelSample_[wheel] = v;
+    lastVelSampleMs_[wheel] = now;
 }
 
 msg::DrivetrainState Drivetrain::state() const {
@@ -305,6 +348,14 @@ msg::DrivetrainState Drivetrain::state() const {
         s.vel_[0] = leftObs.velocity.has ? leftObs.velocity.val : 0.0f;
         s.vel_[1] = rightObs.velocity.has ? rightObs.velocity.val : 0.0f;
         s.vel_count = 2;
+
+        s.cmd_[0] = cmdVel_[0];   // [mm/s] post-governor commanded (vs measured vel_)
+        s.cmd_[1] = cmdVel_[1];
+        s.cmd_count = 2;
+
+        s.acc_[0] = accelEma_[0];   // [mm/s^2] EMA-filtered measured acceleration
+        s.acc_[1] = accelEma_[1];
+        s.acc_count = 2;
     }
 
     // Authority mode, readable from this state cell without a Drivetrain*,

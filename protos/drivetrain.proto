@@ -64,6 +64,8 @@ message DrivetrainState {
   // Decision 1). true == active() (this Drivetrain currently governs its
   // bound wheel pair); false == standby()/never-yet-activated.
   bool       active             = 12;
+  repeated float cmd            = 13  [(max_count) = 4];  // per-wheel post-governor commanded velocity mm/s (diagnostic: measured vel= vs commanded cmd=)
+  repeated float acc            = 14  [(max_count) = 4];  // per-wheel measured acceleration mm/s^2, EMA-filtered in Drivetrain (raw d(vel)/dt is quantization noise -- see Drivetrain::updateAccelEma)
 }
 
 // Full drive configuration slice: geometry, PID gains, OTOS fusion, EKF noise.

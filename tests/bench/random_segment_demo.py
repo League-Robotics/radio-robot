@@ -24,16 +24,23 @@ import time
 from robot_radio.io.serial_conn import SerialConnection
 
 _TLM = re.compile(
-    r"enc=(-?\d+),(-?\d+)\s+vel=(-?\d+),(-?\d+)\s+active=([01])\s+conn=([01]),([01])"
+    r"enc=(?P<enc_l>-?\d+),(?P<enc_r>-?\d+)"
+    r"\s+vel=(?P<vel_l>-?\d+),(?P<vel_r>-?\d+)"
+    r"\s+cmd=(?P<cmd_l>-?\d+),(?P<cmd_r>-?\d+)"
+    r"\s+acc=(?P<acc_l>-?\d+),(?P<acc_r>-?\d+)"
+    r"\s+active=(?P<active>[01])"
+    r"\s+conn=(?P<conn_l>[01]),(?P<conn_r>[01])"
+    r"\s+glitch=(?P<glitch_l>\d+),(?P<glitch_r>\d+)"
 )
 
 
 def read_tlm(conn):
+    """Returns a dict of TLM fields or None."""
     for _ in range(3):
         r = conn.send("TLM", read_timeout=400)
         m = _TLM.search(" ".join(r.get("responses", [])))
         if m:
-            return tuple(int(x) for x in m.groups())
+            return {k: int(v) for k, v in m.groupdict().items()}
     return None
 
 
@@ -70,8 +77,9 @@ def main() -> int:
     print("connect:", conn.connect(skip_ping=False).get("status"))
 
     t = read_tlm(conn)
-    if not t or (t[5], t[6]) != (1, 1):
-        print(f"!! Nezha brick off the I2C bus (conn={t[5:] if t else '??'}) -- reseat + power on. Aborting.")
+    if not t or (t["conn_l"], t["conn_r"]) != (1, 1):
+        conn_txt = f"{t['conn_l']},{t['conn_r']}" if t else "??"
+        print(f"!! Nezha brick off the I2C bus (conn={conn_txt}) -- reseat + power on. Aborting.")
         return 3
     print("bus OK (conn=1,1) -- streaming random segments\n")
 
@@ -99,9 +107,11 @@ def main() -> int:
                     last_tlm = time.monotonic()
                     st = read_tlm(conn)
                     if st:
-                        print(f"       tlm enc={st[0]},{st[1]} vel={st[2]},{st[3]} "
-                              f"active={st[4]} conn={st[5]},{st[6]}")
-                        if (st[5], st[6]) != (1, 1):
+                        print(f"       tlm enc={st['enc_l']},{st['enc_r']} "
+                              f"vel={st['vel_l']},{st['vel_r']} "
+                              f"cmd={st['cmd_l']},{st['cmd_r']} "
+                              f"active={st['active']} conn={st['conn_l']},{st['conn_r']}")
+                        if (st["conn_l"], st["conn_r"]) != (1, 1):
                             print("       !! bus dropped mid-run"); return 3
     finally:
         conn.send("STOP", read_timeout=500)

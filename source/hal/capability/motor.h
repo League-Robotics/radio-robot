@@ -70,6 +70,13 @@ class Motor {
   virtual float appliedDuty() const = 0;   // [-1, 1]
   virtual bool connected() const = 0;
 
+  // encGlitchCount() -- cumulative encoder samples rejected at the source by
+  // the leaf's plausibility gate (a single-sample position step implying a
+  // physically-impossible speed is a corrupted bus read, not motion).
+  // Virtual with a 0 default: only leaves with a real, corruptible bus
+  // (NezhaMotor) override; SimMotor's samples cannot glitch.
+  virtual uint32_t encGlitchCount() const { return 0; }
+
   // wedged()/wedgeSuspect()/hardResetCount()/softResetCount() are concrete
   // (sprint 078 armor policy): they read base-tracked state maintained by
   // updateWedgeDetector()/processResetIfPending().
@@ -291,6 +298,8 @@ inline msg::MotorState Motor::state() const {
     s.hard_reset_count.val = hardResetCount();
     s.soft_reset_count.has = true;
     s.soft_reset_count.val = softResetCount();
+    s.enc_glitch_count.has = true;
+    s.enc_glitch_count.val = encGlitchCount();
   }
 
   return s;

@@ -125,17 +125,22 @@ int main() {
     // The whole loop: Communicator -> CommandRouter -> Blackboard + reply,
     // then Hardware -> Drivetrain -> commit (the Drivetrain connection --
     // see this file's own header comment).
+
     for (;;) {
         uint32_t now = uBit.systemTime();
+
         comm.tick(now);
         if (comm.hasCommand()) {
             router.route(comm.takeCommand(), bb);
         }
-        hardware.tick(now);                                    // pump the I2C flip-flop (timing unchanged)
-        drivetrain.tick(now, bb.segmentIn, bb.driveIn);         // the Drivetrain connection
 
-        bb.motors = hardware.motorStates();                          // commit measured motor state (incl. I2C connected)
-        bb.drivetrain = drivetrain.state();                     // commit measured state for TLM (094-006)
+        hardware.tick(now);                                // pump the I2C flip-flop (timing unchanged)
+        drivetrain.tick(now, 
+            bb.segmentIn, 
+            bb.driveIn);         
+
+        bb.motors = hardware.motorStates();                // commit measured motor state (incl. I2C connected)
+        bb.drivetrain = drivetrain.state();                // commit measured state for TLM (094-006)
         
         uBit.sleep(1);   // yield: radio RX delivery + other fibers
     }
