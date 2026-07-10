@@ -1781,7 +1781,7 @@ wheels = [
 
 [[package]]
 name = "microbit-v2-samples-tools"
-version = "0.20260710.3"
+version = "0.20260710.4"
 source = { editable = "." }
 dependencies = [
     { name = "aprilcam" },
