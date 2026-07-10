@@ -67,7 +67,7 @@
 // sim_command(h, line) — thin SERIAL-only wrapper over sim_command_on()
 // (088-006): every pre-088-006 call site (~183 test functions across
 // tests/sim/unit/) is source-compatible and behaves identically.
-#include "commands/telemetry_commands.h"
+#include "commands/binary_channel.h"
 #include "hal/sim/sim_setters.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
@@ -145,7 +145,7 @@ MotorConfigSet defaultMotorConfigSet() {
         // defaultSimDrivetrainConfig()'s left_port=1/right_port=2), false
         // otherwise. Subsystems::SimHardware itself ignores this (it ticks
         // all four motors every pass unconditionally -- sim_hardware.h's
-        // own file header), but dev_commands.cpp's DUTY/VEL/POS `ERR nodev`
+        // own file header), but text_channel.cpp's DEV DUTY/VEL/POS `ERR nodev`
         // gate reads bb.motorConfig[idx].polled regardless of which
         // Hardware owner is behind it -- this is the config every
         // pytest-collected sim test actually runs against, so getting it
@@ -308,8 +308,10 @@ SimHandle::SimHandle()
 // (sTimeout is NOT one of the Configurator's four targets, Open Question 4 --
 // there is no live StreamingDriveWatchdog instance here to feed, so this
 // mirrors only the "publish the window" half of what that class's owner
-// would do, matching commands/motion_commands.h's own StreamingDriveWatchdog::
-// setWindow()/window() shape without instantiating the class itself).
+// would do, matching the now-deleted StreamingDriveWatchdog's own (git
+// history, formerly commands/motion_commands.h -- 097-006 deleted the
+// class outright) setWindow()/window() shape without instantiating the
+// class itself).
 void drainConfig(SimHandle& s) {
     while (s.configurator.pending(s.bb)) {
         s.configurator.applyOne(s.bb);
@@ -571,7 +573,7 @@ int sim_get_reply_store_len(void* h, int channel) {
 // sim_peek_reply_store (096-002, test-only) -- non-destructive read of one
 // channel's CURRENT ReplyStore content, companion to
 // sim_get_reply_store_len() above. Added so a test can drain the periodic
-// TLM frames tickTelemetry() (commands/telemetry_commands.cpp) appends into
+// TLM frames tickTelemetry() (commands/binary_channel.cpp) appends into
 // a channel's sync store across a run of sim_tick() calls -- neither
 // sim_command() nor sim_command_on() can be used for this: both reset
 // (clear) BOTH stores before routing anything, which would silently wipe

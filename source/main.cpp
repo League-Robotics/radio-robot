@@ -42,7 +42,7 @@
 
 #include "MicroBit.h"
 #include "com/i2c_bus.h"
-#include "commands/telemetry_commands.h"
+#include "commands/binary_channel.h"
 #include "config/boot_config.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"

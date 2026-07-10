@@ -65,7 +65,8 @@ def test_hello_replies_device_shaped(sim):
     # the way DEV/GET always were) -- proving acceptance criterion 1
     # ("STREAM/SNAP are no longer registered as text verbs") at the wire
     # level, alongside the C++-level proof that their handler functions no
-    # longer exist at all (telemetry_commands.cpp/motion_commands.cpp).
+    # longer exist at all (git history: former telemetry_commands.cpp/
+    # motion_commands.cpp, consolidated into text_channel.cpp by 097-011).
     "STREAM 50", "SNAP", "TLM",
 ])
 def test_verb_outside_the_live_surface_replies_err_unknown(sim, line):
@@ -129,8 +130,8 @@ def test_binary_drive_with_differing_sign_wheels_spins_them_opposite_directions(
 
 def test_stop_neutralizes_both_wheels_regardless_of_prior_drive_state(sim):
     """`STOP` neutralizes both wheels even after an active binary `drive`
-    -- the exact regression 093-001 fixed (motion_commands.cpp's
-    `handleStop` header comment): a NEUTRAL command posted with
+    -- the exact regression 093-001 fixed (text_channel.cpp's, formerly
+    motion_commands.cpp's, `handleStop` header comment): a NEUTRAL command posted with
     `standby=true` was silently dropped by `routeOutputs()`'s
     `drivetrain_.active()` gate, leaving the wheels spinning at their last
     commanded speed. Asserted hard: velocity AND pwm must land near zero
@@ -175,8 +176,10 @@ def test_stop_neutralizes_both_wheels_regardless_of_prior_drive_state(sim):
 
 def test_deleted_text_verbs_reply_err_unknown(sim):
     """097-006 (Decision 9) DELETED S/D/T/RT/MOVE/MOVER/QLEN/R/TURN/G
-    (motion_commands.cpp) and ECHO/VER/HELP/ID (system_commands.cpp)
-    outright -- not merely unregistered them. Sending any of them over the
+    (git history: former motion_commands.cpp) and ECHO/VER/HELP/ID
+    (git history: former system_commands.cpp) outright -- not merely
+    unregistered them; both files' surviving live verbs (STOP; PING/HELLO)
+    were consolidated into text_channel.cpp by 097-011. Sending any of them over the
     text plane now hits the exact same `ERR unknown` path an always-
     unregistered family (`DEV`/`GET`, above) already does, proving the
     deletion took effect at the wire, not just at the source level (the

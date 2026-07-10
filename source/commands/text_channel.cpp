@@ -1,3 +1,561 @@
+// text_channel.cpp -- ALL remaining text-command source, consolidated from
+// six file pairs into one (097-011, pure file consolidation, ZERO behavior
+// change): motion_commands.cpp (STOP), system_commands.cpp (PING/HELLO +
+// the identity helpers), pose_commands.cpp (SI/ZERO), otos_commands.cpp
+// (OI/OZ/OR/OP/OV/OL/OA), and dev_commands.cpp (DEV *) all move here
+// verbatim -- see text_channel.h for the three-section layout this file
+// mirrors (LIVE RUMP / DEAD SOURCE -- 098 reference / DEV BENCH-
+// DIAGNOSTIC) and for each donor file's own original header comment,
+// reproduced there unabridged.
+//
+// One reconciliation was structurally unavoidable when four previously-
+// separate translation units become one: `bb(void* handlerCtx)` was
+// defined byte-identically in motion_commands.cpp, pose_commands.cpp,
+// otos_commands.cpp, and dev_commands.cpp (each file's own local
+// anonymous-namespace helper); `kCdegToRad` (and otos_commands.cpp's
+// `kRadToCdeg`) were likewise defined byte-identically in both
+// pose_commands.cpp and otos_commands.cpp. Four (respectively two)
+// per-TU-local anonymous-namespace definitions of the SAME symbol in the
+// SAME translation unit is an ODR violation the moment they share a file
+// -- not a behavior change, a compile error. This file keeps exactly ONE
+// definition of each, in the shared "helpers used by more than one
+// section" block immediately below, and every handler that used to carry
+// its own private copy now reads that single shared one instead --
+// observably identical (the values and semantics are unchanged; only the
+// number of copies of dead-simple, file-local helper code changed).
+// Nothing else about any handler's logic, descriptor table, or wire
+// behavior changed.
+#include "commands/text_channel.h"
+
+
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <math.h>
+
+#include "commands/arg_parse.h"
+#include "commands/command_processor.h"
+#include "hal/capability/motor.h"
+#include "messages/drivetrain.h"
+#include "messages/motor.h"
+#include "messages/odometer.h"
+#include "types/clock.h"
+
+#ifndef HOST_BUILD
+#include "MicroBit.h"   // microbit_friendly_name() / microbit_serial_number() (on-target identity)
+#endif
+
+// ---------------------------------------------------------------------------
+// deviceIdentity -- the CODAL device-identity pair every identity-bearing
+// reply (the DEVICE: banner, HELLO) reports. #ifdef HOST_BUILD substitutes
+// the same fixed placeholder identity this file has always used (name/
+// serial below), so the sim build can format an identity reply with no
+// hardware or sim board present. The single place this branch lives --
+// formatDeviceAnnouncement() below and BinaryChannel's binary `id` handler
+// both call it, so neither ever drifts from the other.
+//
+// External linkage (095-007, declared in system_commands.h): moved out of
+// the anonymous namespace below so BinaryChannel's binary `id` handler
+// (source/commands/binary_channel.cpp) can reuse it too -- see the header
+// declaration's own doc comment. Defined here, ahead of the anonymous
+// namespace, the same way formatDeviceAnnouncement() is defined below it --
+// both are this translation unit's two external-linkage identity entry
+// points.
+// ---------------------------------------------------------------------------
+void deviceIdentity(const char** name, uint32_t* serial) {
+#ifdef HOST_BUILD
+  *name   = "HOST-SIM";
+  *serial = 0;
+#else
+  *name   = microbit_friendly_name();
+  *serial = microbit_serial_number();
+#endif
+}
+
+namespace {
+
+// ---------------------------------------------------------------------------
+// Shared helpers -- see this file's own top header comment for why these
+// are now single, shared definitions rather than one private copy per
+// section. Each was byte-identical across every donor file that used it.
+// ---------------------------------------------------------------------------
+
+// bb -- every handler's one and only route into subsystem-observed state and
+// command posting. handlerCtx is always a Rt::CommandRouter* (bound once,
+// at table-construction time, to every descriptor this file registers --
+// see command_router.h's class comment for why it is not &bb directly).
+// Formerly duplicated identically in motion_commands.cpp/pose_commands.cpp/
+// otos_commands.cpp/dev_commands.cpp's own anonymous namespaces.
+Rt::Blackboard& bb(void* handlerCtx) { return static_cast<Rt::CommandRouter*>(handlerCtx)->blackboard(); }
+
+// kCdegToRad/kRadToCdeg -- centidegrees<->radians, duplicated here per this
+// codebase's existing per-file convention (there is no shared conversion-
+// constant header). kRadToCdeg matches telemetry/tlm_frame.cpp's own
+// kAngleScale (18000/pi) bit-for-bit. Formerly duplicated identically in
+// pose_commands.cpp (kCdegToRad only) and otos_commands.cpp (both).
+constexpr float kCdegToRad = 3.14159265f / 18000.0f;
+constexpr float kRadToCdeg = 5729.5779513f;
+
+// =============================================================================
+// SECTION 1: LIVE RUMP -- STOP (motion_commands.cpp) + PING/HELLO
+// (system_commands.cpp).
+// =============================================================================
+
+// --- motion_commands.cpp's original file header comment, verbatim ---------
+//
+// motion_commands.cpp -- STOP handler. 097-006 (architecture-update-r2.md
+// Decision 9) deleted the S/T/D/R/TURN/RT/G/MOVE/MOVER parser/handler pairs,
+// QLEN, the shared stop-clause text grammar (parseStopClauseValue/
+// collectStopClauses/packStopKVs/kMaxStopConds/replyStopBadarg), copyCorrId
+// (orphaned once R/TURN/G were gone), and StreamingDriveWatchdog (already
+// dead) -- see motion_commands.h for the file-level rationale and each
+// deleted verb's binary-plane parity pointer. 097-008 additionally deleted
+// handleTlm/TLM (the one-shot text telemetry verb) -- see motion_commands.h
+// for why its deletion lives in this file but was ticket 008's own scope,
+// not 006's. STOP's own handler and registration are byte-for-byte
+// unchanged by either ticket.
+// --- end motion_commands.cpp original header --------------------------------
+
+// ---------------------------------------------------------------------------
+// handleStop -- 093-001 (fixed), physical behavior updated by 094-004/006:
+// STOP posts a NEUTRAL msg::DrivetrainCommand straight to bb.driveIn, built
+// inline WITHOUT the standby side-channel -- deliberately NOT
+// dev_commands.h's buildDrivetrainStop() helper, which sets {NEUTRAL,
+// standby=true}. That shape was found to be a correctness bug (093-001):
+// the pre-094 routeOutputs() step posted the computed NEUTRAL wheel command
+// to bb.motorIn[] only when drivetrain_.active() was true, and
+// Subsystems::Drivetrain::apply() processed standby=true AFTER the NEUTRAL
+// arm, immediately flipping active_ back to false in the same apply() call
+// -- so the neutral command was silently dropped and the wheels kept
+// spinning at their last commanded speed. Leaving standby unset keeps the
+// drivetrain active, so the neutral reaches the motors. That
+// routeOutputs()/bb.motorIn[] plumbing is itself gone now (094-005 --
+// Drivetrain stages its own wheel writes directly through hardware_'s
+// motor refs), but the underlying reason to leave standby unset (a
+// subsequent `S` re-activates via setWheelTargets() regardless, and there
+// is still no authority-steal producer in this trimmed table for the
+// standby gate to protect against) is unchanged, so this handler's own
+// NEUTRAL construction is unchanged.
+//
+// PHYSICAL EFFECT changed with 094-004's Drivetrain rewrite, though: this
+// same NEUTRAL command no longer means "instant brake" in every case.
+// Subsystems::Drivetrain::dispatchEscapeHatch() (drivetrain.cpp) inspects
+// whether a Motion::Segment is actively executing (SEGMENT mode AND
+// executor_.active()) when a NEUTRAL arrives -- if so, it arms the owned
+// Motion::SegmentExecutor's OWN presolved graceful decel-to-zero
+// (executor_.stop(now)) instead of zeroing the wheels instantly, and this
+// Drivetrain keeps riding that decel down to a literal 0.0f twist over
+// subsequent ticks (architecture-update.md Section 6, "STOP triggers the
+// graceful decel-to-zero" -- the communicator issue's own fix request).
+// Only when there is nothing in-flight to decelerate (a plain `S` then
+// `STOP`, no segment ever queued, or the executor was already idle) does
+// STOP fall straight through to the pre-094 instant-neutral behavior --
+// see test_bare_loop_commands.py's own DIRECT-mode STOP test, still green
+// unchanged, and test_bare_loop_move_and_tlm.py's SEGMENT-mode STOP test
+// (094-006) for the graceful path, both exercised over this SAME handler.
+// This handler itself needed no code change for that behavior switch --
+// entirely a Drivetrain-level (094-004) decision on the SAME NEUTRAL
+// command shape this handler already built. No EVT. Reply stays `OK stop`
+// unchanged, even though the physical effect it describes changed.
+// ---------------------------------------------------------------------------
+void handleStop(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, void* replyCtx,
+                void* handlerCtx) {
+  Rt::Blackboard& b = bb(handlerCtx);
+
+  msg::DrivetrainCommand cmd;
+  cmd.setNeutral(msg::Neutral::BRAKE);
+  b.driveIn.post(cmd);
+
+  char rbuf[32];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "stop", nullptr, corrId, replyFn, replyCtx);
+}
+
+// --- system_commands.cpp's original file header comment, verbatim --------
+//
+// system_commands.cpp -- liveness command handlers: PING, HELLO.
+//
+// New file (077-001). 097-006 (architecture-update-r2.md Decision 9) deleted
+// VER/HELP/ECHO/ID unconditionally -- see system_commands.h's own header
+// comment for the rationale and each deleted verb's binary-plane parity
+// pointer. PING/HELLO's own handler bodies are byte-for-byte unchanged by
+// this ticket.
+//
+// Handler bodies ported from source_old/commands/SystemCommands.cpp, with
+// the old Robot*/RobotSysCtx coupling removed -- this firmware has no Robot
+// class. Device identity (microbit_friendly_name() / microbit_serial_number())
+// is a free CODAL vendor function, so neither handler below needs a
+// handlerCtx.
+//
+// 081-002: the clock read moved behind Types::systemClockNow()
+// (types/clock.h) -- this was the one remaining direct
+// system_timer_current_time() call in the host-clean command set. deviceIdentity()'s
+// identity calls are gated #ifdef HOST_BUILD (fixed host identity strings)
+// so this file can compile host-side ahead of a future sim build; the
+// on-target branch is unchanged.
+//
+// 088-005: re-adds HELLO and the `DEVICE:NEZHA2:robot:<name>:<serial>`
+// identity banner (removed under v1->v2, host still parses/caches it --
+// see clasi/issues/robot-device-announcement-on-connect-and-hello.md).
+// formatDeviceAnnouncement() is the single identity-fetch helper both
+// handleHello and BinaryChannel's binary `id` reply share (deviceIdentity(),
+// below), instead of duplicating the #ifdef HOST_BUILD branch a second time.
+// --- end system_commands.cpp original header --------------------------------
+
+// ---------------------------------------------------------------------------
+// PING -- clock-sync probe.
+//   prefix "PING"; parseFn nullptr.
+//   Reply: OK pong t=<ms>
+// ---------------------------------------------------------------------------
+void handlePing(const ArgList& /*args*/, const char* corrId,
+                ReplyFn replyFn, void* replyCtx, void* /*handlerCtx*/) {
+  uint32_t now = Types::systemClockNow();  // [ms]
+  char rbuf[64];
+  char body[32];
+  snprintf(body, sizeof(body), "t=%lu", (unsigned long)now);
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "pong", body, corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
+// HELLO -- re-request the firmware's own identity banner.
+//   prefix "HELLO"; parseFn nullptr.
+//   Reply: DEVICE:NEZHA2:robot:<name>:<serial> -- a bare reply, like the
+//   binary `id` reply's own taxonomy: no OK/ERR wrapper, DEVICE: is its own
+//   reply taxonomy.
+//
+// Re-emits on whichever channel HELLO arrived on: replyFn/replyCtx are
+// already resolved to that channel by the time a handler runs (the same
+// mechanism PING's own reply already uses), so no channel selection logic
+// belongs here. The banner is byte-identical to main.cpp's boot-time
+// announcement -- both call formatDeviceAnnouncement() (088-005,
+// architecture-update.md Decision 3) -- so no corrId is echoed back into
+// it.
+// ---------------------------------------------------------------------------
+void handleHello(const ArgList& /*args*/, const char* /*corrId*/,
+                  ReplyFn replyFn, void* replyCtx, void* /*handlerCtx*/) {
+  char banner[64];
+  formatDeviceAnnouncement(banner, sizeof(banner));
+  replyFn(banner, replyCtx);
+}
+
+// =============================================================================
+// SECTION 2: DEAD SOURCE -- SPRINT 098 TRANSCRIPTION REFERENCE. SI/ZERO
+// (pose_commands.cpp) + OI/OZ/OR/OP/OV/OL/OA (otos_commands.cpp).
+// =============================================================================
+
+// --- pose_commands.cpp's original file header comment, verbatim ----------
+//
+// pose_commands.cpp -- SI/ZERO handlers. See pose_commands.h for the
+// file-level design notes (Decision 7's router-half fan-out, 087-006's
+// pointerless reshape).
+// --- end pose_commands.cpp original header -----------------------------------
+
+// ---------------------------------------------------------------------------
+// SI -- SI <x> <y> <h> (mm, mm, cdeg). 3 mandatory INTs, ranged=false (plain
+// atoi, no range check) -- unaffected by this rewrite (pure parsing).
+// ---------------------------------------------------------------------------
+const ArgDef kSiDefs[3] = {
+    {"x", ArgKind::INT, false, 0, 0},
+    {"y", ArgKind::INT, false, 0, 0},
+    {"h", ArgKind::INT, false, 0, 0},
+};
+const ArgSchema kSiSchema = {kSiDefs, 3, 3, false, nullptr};
+
+// ---------------------------------------------------------------------------
+// handleSI -- posts Rt::PoseResetCommand{kSetPose} to bb.poseResetIn
+// (Decision 1 unchanged: never routes through Drivetrain -- Drivetrain holds
+// no PoseEstimator reference by design and must not gain one just for this)
+// AND the same pose to bb.otosSetPoseIn, in the SAME wire dispatch, so the
+// very next fusion pass reads an odometer sample that already agrees with
+// the freshly-set anchor (mirrors the pre-087 two-call handleSI() -- see
+// pose_commands.h's file header). Both posts are no-ops on their respective
+// drain sides when nothing is actually present to consume them (PoseEstimator
+// always exists; the odometer post is simply never applied when
+// hardware.odometer() is null on the loop's drain side).
+// ---------------------------------------------------------------------------
+void handleSI(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
+              void* handlerCtx) {
+  Rt::Blackboard& b = bb(handlerCtx);
+  int32_t x = args.args[0].ival;  // [mm]
+  int32_t y = args.args[1].ival;  // [mm]
+  int32_t h = args.args[2].ival;  // [cdeg]
+
+  msg::SetPose pose;
+  pose.x = static_cast<float>(x);
+  pose.y = static_cast<float>(y);
+  pose.h = static_cast<float>(h) * kCdegToRad;  // [rad] -- PoseEstimator's internal convention
+
+  Rt::PoseResetCommand reset;
+  reset.kind = Rt::PoseResetCommand::kSetPose;
+  reset.pose = pose;
+  b.poseResetIn.post(reset);
+
+  b.otosSetPoseIn.post(pose);
+
+  char body[48];
+  snprintf(body, sizeof(body), "x=%d y=%d h=%d", static_cast<int>(x), static_cast<int>(y),
+           static_cast<int>(h));
+  char rbuf[80];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "setpose", body, corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
+// ZERO -- ZERO enc [#id] -> OK zero enc [#id] (docs/protocol-v2.md section
+// 10's "### ZERO"). This ticket implements the `enc` sub-verb only. Unaffected
+// parsing -- see the original file header note (kept for historical
+// context, no longer duplicated verbatim here since the design is
+// unchanged).
+// ---------------------------------------------------------------------------
+ParseResult parseZero(const char* const* tokens, int ntokens, const KVPair* /*kvs*/,
+                       int /*nkv*/) {
+  ParseResult r;
+  bool hasEnc = false;
+  for (int i = 0; i < ntokens; ++i) {
+    if (strcmp(tokens[i], "enc") == 0) hasEnc = true;
+  }
+  if (!hasEnc) {
+    r.ok = false;
+    r.err.code = "badarg";
+    r.err.detail = nullptr;
+    return r;
+  }
+  r.ok = true;
+  r.args.count = 1;
+  argStr(r.args.args[0], "enc");
+  r.args.suppliedCount = r.args.count;
+  return r;
+}
+
+// ---------------------------------------------------------------------------
+// handleZero -- posts Rt::PoseResetCommand{kResetBaseline} to bb.poseResetIn.
+// (093/094 teardown) No longer also sets bb.motorResetIn[left-1]/[right-1] --
+// that per-port reset flag is gone along with the rest of Rt::Blackboard's
+// motor/hardware inbound queues (blackboard.h's file header); Hardware no
+// longer receives commands of any kind through the Blackboard.
+// ---------------------------------------------------------------------------
+void handleZero(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, void* replyCtx,
+                 void* handlerCtx) {
+  Rt::Blackboard& b = bb(handlerCtx);
+
+  Rt::PoseResetCommand reset;
+  reset.kind = Rt::PoseResetCommand::kResetBaseline;
+  b.poseResetIn.post(reset);
+
+  char rbuf[48];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "zero", "enc", corrId, replyFn, replyCtx);
+}
+
+// --- otos_commands.cpp's original file header comment, verbatim ----------
+//
+// otos_commands.cpp -- OI/OZ/OR/OP/OV/OL/OA handlers. See otos_commands.h
+// for the file-level design notes (bb.otosPresent's boot-snapshot rationale,
+// OP's CMD_NONE read/write distinction, OL/OA's Configurator-routed
+// read-modify-write).
+// --- end otos_commands.cpp original header -----------------------------------
+
+// ---------------------------------------------------------------------------
+// otosReady -- shared nodev guard: bb.otosPresent is a boot-time snapshot of
+// "does any Hal::Odometer exist at all" (see otos_commands.h's file header)
+// -- emits "ERR nodev <verb>" when false.
+// ---------------------------------------------------------------------------
+bool otosReady(const Rt::Blackboard& b, const char* verb, const char* corrId, ReplyFn replyFn,
+               void* replyCtx) {
+  if (!b.otosPresent) {
+    char rbuf[48];
+    CommandProcessor::replyErr(rbuf, sizeof(rbuf), "nodev", verb, corrId, replyFn, replyCtx);
+    return false;
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// OI -- OI [#id] -> OK oi [#id] | ERR nodev oi [#id]. Posts an INIT action to
+// bb.otosCommandIn -- the loop drains it against hardware.odometer()
+// directly (Hal::Odometer::apply()'s INIT arm).
+// ---------------------------------------------------------------------------
+void handleOI(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, void* replyCtx,
+              void* handlerCtx) {
+  Rt::Blackboard& b = bb(handlerCtx);
+  if (!otosReady(b, "oi", corrId, replyFn, replyCtx)) return;
+
+  msg::OdometerCommand cmd;
+  cmd.setInit(true);
+  b.otosCommandIn.post(cmd);
+
+  char rbuf[32];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "oi", nullptr, corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
+// OZ -- OZ [#id] -> OK oz [#id] | ERR nodev oz [#id]. Posts a ZERO action.
+// ---------------------------------------------------------------------------
+void handleOZ(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, void* replyCtx,
+              void* handlerCtx) {
+  Rt::Blackboard& b = bb(handlerCtx);
+  if (!otosReady(b, "oz", corrId, replyFn, replyCtx)) return;
+
+  msg::OdometerCommand cmd;
+  cmd.setZero(true);
+  b.otosCommandIn.post(cmd);
+
+  char rbuf[32];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "oz", nullptr, corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
+// OR -- OR [#id] -> OK or [#id] | ERR nodev or [#id]. Posts a RESET_TRACKING
+// action.
+// ---------------------------------------------------------------------------
+void handleOR(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, void* replyCtx,
+              void* handlerCtx) {
+  Rt::Blackboard& b = bb(handlerCtx);
+  if (!otosReady(b, "or", corrId, replyFn, replyCtx)) return;
+
+  msg::OdometerCommand cmd;
+  cmd.setResetTracking(true);
+  b.otosCommandIn.post(cmd);
+
+  char rbuf[32];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "or", nullptr, corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
+// OP -- OP [#id] -> OK pos x=<x> y=<y> h=<h> [#id] | ERR nodev op [#id].
+// Reads bb.otos directly -- a committed state-cell read, not a queue post --
+// see otos_commands.h's file header for why this is CMD_NONE.
+// ---------------------------------------------------------------------------
+void handleOP(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, void* replyCtx,
+              void* handlerCtx) {
+  Rt::Blackboard& b = bb(handlerCtx);
+  char rbuf[64];
+  if (!b.otosPresent) {
+    CommandProcessor::replyErr(rbuf, sizeof(rbuf), "nodev", "op", corrId, replyFn, replyCtx);
+    return;
+  }
+
+  int x = static_cast<int>(b.otos.pose.x);   // [mm]
+  int y = static_cast<int>(b.otos.pose.y);   // [mm]
+  int h = static_cast<int>(b.otos.pose.h * kRadToCdeg);   // [cdeg]
+
+  char body[48];
+  snprintf(body, sizeof(body), "x=%d y=%d h=%d", x, y, h);
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "pos", body, corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
+// OV -- OV <x> <y> <h> [#id] -> OK setpos x=<x> y=<y> h=<h> [#id] | ERR
+// nodev ov [#id]. Posts a SET_POSE action to bb.otosCommandIn. x, y: mm; h:
+// cdeg (docs/protocol-v2.md §11).
+// ---------------------------------------------------------------------------
+const ArgDef kOvDefs[3] = {
+    {"x", ArgKind::INT, false, 0, 0},
+    {"y", ArgKind::INT, false, 0, 0},
+    {"h", ArgKind::INT, false, 0, 0},
+};
+const ArgSchema kOvSchema = {kOvDefs, 3, 3, false, nullptr};
+
+void handleOV(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
+              void* handlerCtx) {
+  Rt::Blackboard& b = bb(handlerCtx);
+  if (!otosReady(b, "ov", corrId, replyFn, replyCtx)) return;
+
+  int32_t x = args.args[0].ival;   // [mm]
+  int32_t y = args.args[1].ival;   // [mm]
+  int32_t h = args.args[2].ival;   // [cdeg]
+
+  msg::Pose2D pose;
+  pose.x = static_cast<float>(x);
+  pose.y = static_cast<float>(y);
+  pose.h = static_cast<float>(h) * kCdegToRad;   // [rad]
+
+  msg::OdometerCommand cmd;
+  cmd.setSetPose(pose);
+  b.otosCommandIn.post(cmd);
+
+  char body[48];
+  snprintf(body, sizeof(body), "x=%d y=%d h=%d", static_cast<int>(x), static_cast<int>(y),
+           static_cast<int>(h));
+  char rbuf[80];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "setpos", body, corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
+// OL -- OL <val> [#id] (set) | OL [#id] (read) -> OK linear scalar=<val>
+// [#id] | ERR nodev ol [#id]. Config-plane (read-modify-write persistent
+// register), unlike the four one-shot verbs above: reads bb.odometerConfig
+// (the Configurator's published cell) and, on a set, posts a field-masked
+// Rt::ConfigDelta (kOdometer) to bb.configIn -- mirrors the now-deleted
+// text SET handler's own candidate-then-commit pattern (config_commands'
+// header, removed 097-007). The reply echoes the CANDIDATE value directly
+// (the just-parsed value on a set, else the CURRENT published value) --
+// never a bb read-back, so no post-then-read-back race.
+// ---------------------------------------------------------------------------
+const ArgDef kOlDefs[1] = {
+    {"scalar", ArgKind::INT, false, 0, 0},
+};
+const ArgSchema kOlSchema = {kOlDefs, 1, 0, false, nullptr};
+
+void handleOL(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
+              void* handlerCtx) {
+  Rt::Blackboard& b = bb(handlerCtx);
+  if (!otosReady(b, "ol", corrId, replyFn, replyCtx)) return;
+
+  float value = b.odometerConfig.linear_scalar;
+  if (args.suppliedCount >= 1) {
+    // int8_t cast preserves the wire-documented register width (silent
+    // truncation), matching the pre-087 handleOL/setLinearScalar exactly.
+    value = static_cast<float>(static_cast<int8_t>(args.args[0].ival));
+
+    Rt::ConfigDelta delta;
+    delta.target = Rt::ConfigDelta::kOdometer;
+    delta.mask = Rt::bitOf(Rt::OdometerConfigField::kLinearScalar);
+    delta.odometer.linear_scalar = value;
+    b.configIn.post(delta);
+  }
+
+  char body[24];
+  snprintf(body, sizeof(body), "scalar=%d", static_cast<int>(value));
+  char rbuf[48];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "linear", body, corrId, replyFn, replyCtx);
+}
+
+// ---------------------------------------------------------------------------
+// OA -- OA <val> [#id] (set) | OA [#id] (read) -> OK angular scalar=<val>
+// [#id] | ERR nodev oa [#id]. Same config-plane shape as OL, above.
+// ---------------------------------------------------------------------------
+const ArgDef kOaDefs[1] = {
+    {"scalar", ArgKind::INT, false, 0, 0},
+};
+const ArgSchema kOaSchema = {kOaDefs, 1, 0, false, nullptr};
+
+void handleOA(const ArgList& args, const char* corrId, ReplyFn replyFn, void* replyCtx,
+              void* handlerCtx) {
+  Rt::Blackboard& b = bb(handlerCtx);
+  if (!otosReady(b, "oa", corrId, replyFn, replyCtx)) return;
+
+  float value = b.odometerConfig.angular_scalar;
+  if (args.suppliedCount >= 1) {
+    value = static_cast<float>(static_cast<int8_t>(args.args[0].ival));
+
+    Rt::ConfigDelta delta;
+    delta.target = Rt::ConfigDelta::kOdometer;
+    delta.mask = Rt::bitOf(Rt::OdometerConfigField::kAngularScalar);
+    delta.odometer.angular_scalar = value;
+    b.configIn.post(delta);
+  }
+
+  char body[24];
+  snprintf(body, sizeof(body), "scalar=%d", static_cast<int>(value));
+  char rbuf[48];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "angular", body, corrId, replyFn, replyCtx);
+}
+
+// =============================================================================
+// SECTION 3: DEV BENCH-DIAGNOSTIC (dev_commands.cpp).
+// =============================================================================
+
+// --- dev_commands.cpp's original file header comment, verbatim -----------
+//
 // dev_commands.cpp -- DEV command family implementation. See dev_commands.h
 // for the full vocabulary, the argument-parsing design decision (Open
 // Question 3), the authority-arbitration rule, the serial-silence watchdog
@@ -5,27 +563,7 @@
 // pointerless-translator reshape: every handler below reads/posts against
 // Rt::Blackboard only, reached via Rt::CommandRouter::blackboard() --
 // nothing here holds or dereferences a Subsystems::* pointer.
-#include "commands/dev_commands.h"
-
-
-#include "commands/command_processor.h"
-#include "commands/arg_parse.h"
-#include "hal/capability/motor.h"
-#include "messages/drivetrain.h"
-#include "messages/motor.h"
-
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <math.h>
-
-namespace {
-
-// bb -- every handler's one and only route into subsystem-observed state and
-// command posting. handlerCtx is always a Rt::CommandRouter* (bound once,
-// at table-construction time, to every descriptor this file registers --
-// see command_router.h's class comment for why it is not &bb directly).
-Rt::Blackboard& bb(void* handlerCtx) { return static_cast<Rt::CommandRouter*>(handlerCtx)->blackboard(); }
+// --- end dev_commands.cpp original header ------------------------------------
 
 // ---------------------------------------------------------------------------
 // formatFixed -- render `value` as a fixed-point decimal string with exactly
@@ -949,7 +1487,22 @@ void handleDevWd(const ArgList& args, const char* corrId,
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// buildBroadcastNeutral / buildDrivetrainStop -- see dev_commands.h. Used by
+// formatDeviceAnnouncement -- see text_channel.h's doc comment. Defined
+// here (external linkage, per the header declaration) rather than inside
+// the anonymous namespace above, and reuses deviceIdentity() -- itself
+// external linkage too (095-007, declared in text_channel.h), defined
+// just above this file's own anonymous namespace.
+// ---------------------------------------------------------------------------
+int formatDeviceAnnouncement(char* buf, int size) {
+  const char* name;
+  uint32_t    serial;
+  deviceIdentity(&name, &serial);
+  return snprintf(buf, size, "DEVICE:NEZHA2:robot:%s:%lu",
+                   name, (unsigned long)serial);
+}
+
+// ---------------------------------------------------------------------------
+// buildBroadcastNeutral / buildDrivetrainStop -- see text_channel.h. Used by
 // the loop's watchdog-fire path (applies the result IMMEDIATELY, bypassing
 // every bb queue) and, for buildDrivetrainStop() alone, by DEV STOP/DEV DT
 // STOP's own bb.driveIn post above.
@@ -972,6 +1525,51 @@ msg::DrivetrainCommand buildDrivetrainStop(msg::Neutral mode) {
 }
 
 // ---------------------------------------------------------------------------
+// textCommands -- 097-011: folds motion_commands.cpp's own former
+// motionCommands() (STOP) and system_commands.cpp's own former
+// systemCommands() (PING, HELLO) into the one live-rump table builder
+// command_router.cpp's buildTable() now calls. Order preserved from the
+// pre-fold concatenation (buildTable() used to call systemCommands() then
+// motionCommands()) so the registered table is byte-for-byte the same
+// sequence: PING, HELLO, STOP.
+// ---------------------------------------------------------------------------
+std::vector<CommandDescriptor> textCommands(Rt::CommandRouter& router) {
+  std::vector<CommandDescriptor> cmds;
+  cmds.push_back(makeCmd("PING",  nullptr, handlePing,  nullptr, "badarg"));
+  cmds.push_back(makeCmd("HELLO", nullptr, handleHello, nullptr, "badarg"));
+  cmds.push_back(makeCmd("STOP", nullptr, handleStop, &router, "badarg", ForceReply::NONE,
+                         CMD_ACCESS_HARDWARE));
+  return cmds;
+}
+
+std::vector<CommandDescriptor> poseCommands(Rt::CommandRouter& router) {
+  std::vector<CommandDescriptor> cmds;
+  cmds.push_back(
+      makeSchemaCmd("SI", &kSiSchema, handleSI, &router, "badarg", ForceReply::NONE, CMD_NONE));
+  cmds.push_back(makeCmd("ZERO", parseZero, handleZero, &router, "badarg", ForceReply::NONE,
+                          CMD_ACCESS_HARDWARE));
+  return cmds;
+}
+
+std::vector<CommandDescriptor> otosCommands(Rt::CommandRouter& router) {
+  std::vector<CommandDescriptor> cmds;
+  cmds.push_back(
+      makeCmd("OI", nullptr, handleOI, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
+  cmds.push_back(
+      makeCmd("OZ", nullptr, handleOZ, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
+  cmds.push_back(
+      makeCmd("OR", nullptr, handleOR, &router, "badarg", ForceReply::NONE, CMD_ACCESS_HARDWARE));
+  cmds.push_back(makeCmd("OP", nullptr, handleOP, &router, "badarg", ForceReply::NONE, CMD_NONE));
+  cmds.push_back(makeSchemaCmd("OV", &kOvSchema, handleOV, &router, "badarg", ForceReply::NONE,
+                                CMD_ACCESS_HARDWARE));
+  cmds.push_back(makeSchemaCmd("OL", &kOlSchema, handleOL, &router, "badarg", ForceReply::NONE,
+                                CMD_ACCESS_HARDWARE));
+  cmds.push_back(makeSchemaCmd("OA", &kOaSchema, handleOA, &router, "badarg", ForceReply::NONE,
+                                CMD_ACCESS_HARDWARE));
+  return cmds;
+}
+
+// ---------------------------------------------------------------------------
 // devCommands -- the DEV command table, bound to `router`.
 // ---------------------------------------------------------------------------
 std::vector<CommandDescriptor> devCommands(Rt::CommandRouter& router) {
@@ -988,4 +1586,3 @@ std::vector<CommandDescriptor> devCommands(Rt::CommandRouter& router) {
                                  "badarg", ForceReply::NONE, CMD_NONE));
     return cmds;
 }
-

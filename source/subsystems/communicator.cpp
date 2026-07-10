@@ -5,7 +5,7 @@
 #include <cstring>
 
 #include "com/radio_channel.h"
-#include "commands/system_commands.h"   // formatDeviceAnnouncement()
+#include "commands/text_channel.h"   // formatDeviceAnnouncement()
 
 namespace Subsystems {
 

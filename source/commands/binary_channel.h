@@ -16,8 +16,17 @@
 // source/messages/wire.{h,cpp} (M4, decode/encode) -- both already proven
 // correct against google.protobuf by ticket 006's differential/fuzz suite
 // before this module was written.
+//
+// 097-011: also hosts tickTelemetry() + file-local telemetryEmitBinary(),
+// relocated verbatim from the now-deleted telemetry_commands.{h,cpp} -- see
+// tickTelemetry()'s own doc comment below. Both live at GLOBAL namespace
+// scope (not nested under `namespace BinaryChannel`), matching their
+// pre-move declaration shape exactly, so main.cpp's/sim_api.cpp's existing
+// unqualified `tickTelemetry(bb, router, now)` call sites needed no change
+// beyond the #include swap.
 #pragma once
 
+#include "runtime/command_router.h"
 #include "types/protocol.h"
 
 namespace BinaryChannel {
@@ -35,3 +44,20 @@ namespace BinaryChannel {
 void handle(const char* line, ReplyFn replyFn, void* replyCtx, void* routerCtx);
 
 }  // namespace BinaryChannel
+
+// ---------------------------------------------------------------------------
+// tickTelemetry -- the loop-owned periodic-emission step (096-002,
+// relocated verbatim from telemetry_commands.h by 097-011): checks
+// bb.telemetryPeriod > 0 and elapsed time (bb.telemetryLastEmitMs/
+// bb.telemetryHasLastEmit, the SAME fields the deleted text handleStream()
+// used to maintain for its own immediate-first-frame emission); if a frame
+// is due, resolves bb.telemetryChannel to a live ReplyFn/void* pair via
+// router.replySink() (command_router.h) and emits one binary frame via
+// telemetryEmitBinary() (.cpp-local). Unconditional since 097-008 -- there
+// is no more text sibling to branch against, so bb.telemetryBinary
+// (blackboard.h, still written by binary_channel.cpp's `stream` arm) is no
+// longer read here. A no-op when no frame is due (bb.telemetryPeriod == 0,
+// or not enough time has elapsed since the last emission). Global namespace
+// scope (not nested under `namespace BinaryChannel`) -- see this file's own
+// header comment.
+void tickTelemetry(Rt::Blackboard& bb, Rt::CommandRouter& router, uint32_t now);

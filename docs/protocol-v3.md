@@ -27,7 +27,7 @@ command channel, discriminated by the first character(s):
 | Line shape | Meaning | Handled by |
 |---|---|---|
 | `*B<base64>` | Binary `CommandEnvelope` | `source/commands/binary_channel.cpp` |
-| `STOP` / `PING` / `HELLO` (+ optional `#<id>`) | Text safety rump | `source/commands/system_commands.cpp` / `motion_commands.cpp` |
+| `STOP` / `PING` / `HELLO` (+ optional `#<id>`) | Text safety rump | `source/commands/text_channel.cpp` |
 | anything else | Unrecognized | `CommandProcessor::dispatchTable()`'s no-match fallback → `ERR unknown` |
 
 `CommandProcessor::process()` branches on `line[0] == '*'` **before**
@@ -116,7 +116,7 @@ not obvious from the field list alone.
 | Arm (field #) | Payload message | Blackboard / Configurator path | Notes |
 |---|---|---|---|
 | `drive` (2) | `DrivetrainCommand` (`drivetrain.proto`) | `b.driveIn.post(cmd)` — posted verbatim, no translation | `oneof control`: `twist`/`wheels`/`neutral`/`pose`, plus `seed`/`standby` side-channel bools |
-| `segment` (3) | `MotionSegment` (`motion.proto`) | `b.segmentIn.post(toSegment(src))` → `ERR_FULL` if the queue is full | Field-by-field copy into `Motion::Segment`'s own native units (mm, rad, mm/s, …) — the MOVE-equivalent; every bound cites its `motion_commands.cpp` source constant in the `.proto` file's own comments |
+| `segment` (3) | `MotionSegment` (`motion.proto`) | `b.segmentIn.post(toSegment(src))` → `ERR_FULL` if the queue is full | Field-by-field copy into `Motion::Segment`'s own native units (mm, rad, mm/s, …) — the MOVE-equivalent; every bound cites its `motion_commands.cpp` (deleted 097-006; see git history) source constant in the `.proto` file's own comments |
 | `replace` (4) | `MotionSegment` | `b.replaceIn.post(...)` — a `Mailbox`, latest-wins, cannot fail | The MOVER-equivalent (streaming/deadman teleop primitive) |
 | *(reserved 5)* | — | — | `PlannerCommand` (`motion`, the R/TURN/G-equivalent) is **reserved, not declared** — its 327B worst case alone exceeds the 186B cap; a future sprint declares it with a new, deliberately-bounded payload type once `Subsystems::Planner` un-parks |
 | `config` (6) | `ConfigDelta` (`envelope.proto`/`config.proto`), `oneof patch`: `drivetrain`/`motor`/`planner`/`watchdog` | `drivetrain`/`motor`/`planner` patches → one field-masked `Rt::ConfigDelta` posted to `b.configIn` (the Configurator folds + applies it); `watchdog` (`sTimeout`) posts its `uint32` window **directly to `b.streamWatchdogWindowIn`**, bypassing the Configurator entirely — it is not one of the Configurator's four fold targets | `MotorConfigPatch.side` disambiguates `travel_calib` only; any present `kp`/`ki`/`kff`/`i_max`/`kaw` applies to **both** bound motors unconditionally (two separate `ConfigDelta` posts) |
@@ -137,7 +137,7 @@ not obvious from the field list alone.
 |---|---|---|
 | `ok` | `Ack{q, rem, t}` | Success for `drive`/`segment`/`replace`/`stop`/`config`/`stream`. `q` = `b.segmentIn.size() + b.drivetrain.queue`; `rem` = the live plan's remaining translation (mm); `t` stays 0 except on `ping` |
 | `err` | `Error{code, field}` | Any rejection — see §5 |
-| `tlm` | `Telemetry` (`telemetry.proto`) | `tickTelemetry()`'s periodic push once `StreamControl.period > 0`, on whichever channel bound it last — **unsolicited** (`corr_id = 0`), same "0 for an unsolicited reply" convention `envelope.proto`'s own doc comment states |
+| `tlm` | `Telemetry` (`telemetry.proto`) | `tickTelemetry()`'s (`source/commands/binary_channel.cpp`, formerly `telemetry_commands.cpp` — relocated verbatim by ticket 097-011) periodic push once `StreamControl.period > 0`, on whichever channel bound it last — **unsolicited** (`corr_id = 0`), same "0 for an unsolicited reply" convention `envelope.proto`'s own doc comment states |
 | `cfg` | `ConfigSnapshot` | Reply to `get` |
 | `id` | `DeviceId` | Reply to `id` |
 | `echo` | `Echo` | Reply to `echo` |
@@ -190,37 +190,38 @@ host maps it back to a field name via the same schema
 ## 6. Text safety rump — `STOP` / `PING` / `HELLO`
 
 The firmware's entire text command table (`Rt::CommandRouter::buildTable()`,
-`source/runtime/command_router.cpp:27-34`) is now:
+`source/runtime/command_router.cpp:25-27`) is now:
 
 ```cpp
-std::vector<CommandDescriptor> all = systemCommands(router);   // PING, HELLO
-std::vector<CommandDescriptor> motion = motionCommands(router); // STOP only
-std::vector<CommandDescriptor> telemetry = telemetryCommands(router); // registers ZERO commands
+std::vector<CommandDescriptor> buildTable(CommandRouter& router) {
+  return textCommands(router);
+}
 ```
 
-- **`systemCommands()`** (`source/commands/system_commands.cpp:123-129`)
-  registers exactly `PING` and `HELLO`.
-- **`motionCommands()`** (`source/commands/motion_commands.cpp:82-87`)
-  registers exactly `STOP` — every other verb that file ever held
-  (`S`/`D`/`T`/`R`/`TURN`/`RT`/`G`/`MOVE`/`MOVER`, `QLEN`, the shared
-  stop-clause grammar, `StreamingDriveWatchdog`) was **deleted outright**
-  by ticket 097-006, and the one-shot `TLM` verb (`handleTlm()`) was
-  deleted by ticket 097-008 — not merely unregistered, the parser/handler
-  functions no longer exist anywhere in the file.
-- **`telemetryCommands()`** (`source/commands/telemetry_commands.h:61-64`)
-  registers **zero** commands post-097-008 — `STREAM`/`SNAP`'s text
-  handlers and `telemetryEmit()` were deleted outright; the function is
-  kept only as a stable no-op entry point so `command_router.cpp` didn't
-  need touching.
+- **`textCommands()`** (`source/commands/text_channel.cpp:1536-1543`)
+  registers exactly `PING`, `HELLO`, `STOP` — 097-011 folded the former
+  `systemCommands()` (PING/HELLO) and `motionCommands()` (STOP) builders
+  into this one call site, and dropped the former `telemetryCommands()`
+  call entirely (it registered zero commands post-097-008; the empty
+  registrar itself was deleted along with the rest of
+  `telemetry_commands.{h,cpp}`). Every other verb `text_channel.cpp`'s
+  donor files ever held (`S`/`D`/`T`/`R`/`TURN`/`RT`/`G`/`MOVE`/`MOVER`,
+  `QLEN`, the shared stop-clause grammar, `StreamingDriveWatchdog`,
+  `STREAM`/`SNAP`'s text handlers, `telemetryEmit()`) was **deleted
+  outright** by ticket 097-006/097-008 — not merely unregistered, the
+  parser/handler functions no longer exist anywhere in the source tree
+  (see git history). The one-shot `TLM` verb (`handleTlm()`) was likewise
+  deleted by ticket 097-008.
 - The now-deleted `config_commands.{h,cpp}` (text `SET`/`GET`) is gone as
   a *file*, not merely unregistered (ticket 097-007).
 
 That leaves **three** hand-typeable verbs, byte-identical in behavior to
 their pre-097 text-plane selves:
 
-- **`STOP`** — `handleStop()` (`motion_commands.cpp:64-74`) posts
-  `msg::DrivetrainCommand{NEUTRAL=BRAKE}` to `b.driveIn` and replies
-  `OK stop`. This is the deliberate **safety affordance**: a human with a
+- **`STOP`** — `handleStop()` (`text_channel.cpp:162-172`, formerly
+  `motion_commands.cpp`) posts `msg::DrivetrainCommand{NEUTRAL=BRAKE}` to
+  `b.driveIn` and replies `OK stop`. This is the deliberate **safety
+  affordance**: a human with a
   bare serial terminal (`screen`, `minicom`) and no host program, no
   protobuf tooling, and no base64 encoder can *always* halt the robot by
   typing five characters and Enter. It is byte-identical to the binary
@@ -411,20 +412,21 @@ touched by sprint 097 at all**, and their `CommandDescriptor` tables were
 is the only live config-plane path, same as the still-unregistered
 `dev`/`pose`/`otos` text families."*
 
-- **`source/commands/otos_commands.{h,cpp}`** (OI/OZ/OR/OP/OV/OL/OA) and
-  **`source/commands/pose_commands.{h,cpp}`** (SI/ZERO) — both files
-  exist, `otosCommands()`/`poseCommands()` both build valid
-  `CommandDescriptor` tables, but **neither function is called anywhere**
-  except its own definition (confirmed by grep — no call site outside
-  the two `.cpp` files themselves). They are kept as the **transcription
+- **`source/commands/text_channel.{h,cpp}`** Section 2 (OI/OZ/OR/OP/OV/OL/OA
+  and SI/ZERO — formerly `otos_commands.{h,cpp}`/`pose_commands.{h,cpp}`,
+  consolidated by ticket 097-011) — `otosCommands()`/`poseCommands()` both
+  build valid `CommandDescriptor` tables, but **neither function is called
+  anywhere** except its own definition (confirmed by grep — no call site
+  outside `text_channel.cpp` itself). They are kept as the **transcription
   reference** for sprint 098's binary `pose`/`otos` `CommandEnvelope`
   arms (envelope.proto fields 7/8, §3) — 098 owns porting their field
   shapes and Blackboard-queue targets (`bb.poseResetIn`/
-  `bb.otosSetPoseIn`/`bb.otosCommandIn`/`bb.motorResetIn[]`, per each
-  header's own doc comment) into `BinaryChannel`.
-- **`source/commands/dev_commands.{h,cpp}`** (`DEV M`/`DEV DT`/`DEV
-  STATE`/`DEV STOP`/`DEV WD`) — same "exists, never registered" status,
-  for a **different reason**: `DEV` is a `ROBOT_DEV_BUILD`-gated
+  `bb.otosSetPoseIn`/`bb.otosCommandIn`/`bb.motorResetIn[]`, per
+  `text_channel.h`'s own Section 2 doc comment) into `BinaryChannel`.
+- **`source/commands/text_channel.{h,cpp}`** Section 3 (`DEV M`/`DEV DT`/
+  `DEV STATE`/`DEV STOP`/`DEV WD` — formerly `dev_commands.{h,cpp}`,
+  consolidated by ticket 097-011) — same "exists, never registered"
+  status, for a **different reason**: `DEV` is a `ROBOT_DEV_BUILD`-gated
   bench-diagnostic family for raw per-port motor control, bypassing
   `Drivetrain` entirely. It never had, and does not need, a binary
   counterpart — no sprint has ever proposed a `dev` `CommandEnvelope` arm.
