@@ -182,9 +182,13 @@ void SegmentExecutor::replaceStream(const Segment& segment, uint32_t now,
     needPrePivot_ = false;
     needTranslate_ = fabsf(translateTarget_) > kDistEps;
     needTerminalPivot_ = fabsf(terminalPivotTarget_) > kAngleEps;
+    // UNCONDITIONAL else branches (2026-07-10 UB fix, mirrors
+    // beginStreamFresh()/mergePending()): this leaves phase_ == BLEND below,
+    // which samples both channels every pass, so neither may be left
+    // un-calculate()'d regardless of its need flag.
     if (linear_.duration() > 0.0f) {
       linear_.retarget(translateTarget_);
-    } else if (needTranslate_) {
+    } else {
       linear_.reset();
       linear_.solveToRest(translateTarget_, linearCeiling_);
     }
@@ -192,7 +196,7 @@ void SegmentExecutor::replaceStream(const Segment& segment, uint32_t now,
     linearSolveMs_ = now;
     if (rotational_.duration() > 0.0f) {
       rotational_.retarget(terminalPivotTarget_);
-    } else if (needTerminalPivot_) {
+    } else {
       rotational_.reset();
       rotational_.solveToRest(terminalPivotTarget_, rotationalCeiling_);
     }
@@ -229,8 +233,19 @@ void SegmentExecutor::buildBlendStops() {
 void SegmentExecutor::beginStreamFresh(uint32_t now) {
   linear_.reset();
   rotational_.reset();
-  if (needTranslate_) linear_.solveToRest(translateTarget_, linearCeiling_);
-  if (needTerminalPivot_) rotational_.solveToRest(terminalPivotTarget_, rotationalCeiling_);
+  // UNCONDITIONAL for both channels (2026-07-10 UB fix): tick()'s BLEND
+  // branch samples BOTH linear_ AND rotational_ every pass -- translate and
+  // pivot run simultaneously in BLEND -- so a channel whose need flag is
+  // false here must still hold a real calculate()'d Ruckig trajectory
+  // before phase_ becomes BLEND below, or sampling it is undefined behavior
+  // (jerk_trajectory.h's calculated_ doc). translateTarget_/
+  // terminalPivotTarget_ are already ~0 in the not-needed case (that IS
+  // what "not needed" means -- see kDistEps/kAngleEps in start()), so this
+  // just solves a trivial "stay at rest" trajectory for that channel; not a
+  // behavior change for the needed-channel case, which solved exactly this
+  // way before.
+  linear_.solveToRest(translateTarget_, linearCeiling_);
+  rotational_.solveToRest(terminalPivotTarget_, rotationalCeiling_);
   linearTarget_ = translateTarget_;
   rotationalTarget_ = terminalPivotTarget_;
   linearSolveMs_ = now;
@@ -271,10 +286,14 @@ void SegmentExecutor::mergePending(uint32_t now, const msg::MotorState& encLeft,
   // retarget() continues from the channel's CURRENT velocity/accel
   // (jerk_trajectory.h's chaining contract) -- including retarget(0) to
   // smoothly shed a channel the merged stream no longer drives. A channel
-  // with no plan yet this life (duration 0) solves fresh from rest.
+  // with no plan yet this life (duration 0) solves fresh from rest --
+  // UNCONDITIONALLY (2026-07-10 UB fix, mirrors beginStreamFresh()): BLEND
+  // samples both channels every pass, so a channel must never be left
+  // un-calculate()'d here regardless of its need flag; translateTarget_/
+  // terminalPivotTarget_ are already ~0 in the not-needed case.
   if (linear_.duration() > 0.0f) {
     linear_.retarget(translateTarget_);
-  } else if (needTranslate_) {
+  } else {
     linear_.reset();
     linear_.solveToRest(translateTarget_, linearCeiling_);
   }
@@ -283,7 +302,7 @@ void SegmentExecutor::mergePending(uint32_t now, const msg::MotorState& encLeft,
 
   if (rotational_.duration() > 0.0f) {
     rotational_.retarget(terminalPivotTarget_);
-  } else if (needTerminalPivot_) {
+  } else {
     rotational_.reset();
     rotational_.solveToRest(terminalPivotTarget_, rotationalCeiling_);
   }

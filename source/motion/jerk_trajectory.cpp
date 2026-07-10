@@ -106,6 +106,7 @@ bool JerkTrajectory::solvePositionControl(float targetPosition, float currentPos
     lastPosition_ = currentPosition;
     lastVelocity_ = currentVelocity;
     lastAcceleration_ = currentAcceleration;
+    calculated_ = true;
   }
   return ok;
 }
@@ -163,11 +164,16 @@ bool JerkTrajectory::solveToVelocity(float targetVelocity, float maxVelocity) {
     // The position channel is not meaningful in velocity-control mode;
     // velocity/acceleration already hold the seed used above.
     lastPosition_ = 0.0f;
+    calculated_ = true;
   }
   return ok;
 }
 
 JerkTrajectory::State JerkTrajectory::sample(float elapsed) {
+  // Defensive guard (see class comment's calculated_ doc) -- never touch an
+  // un-calculate()'d traj_; its default-constructed Profile holds
+  // uninitialized std::array members, so reading it is UB.
+  if (!calculated_) return State{};
   double position = 0.0;
   double velocity = 0.0;
   double acceleration = 0.0;
@@ -178,6 +184,8 @@ JerkTrajectory::State JerkTrajectory::sample(float elapsed) {
   return State{lastPosition_, lastVelocity_, lastAcceleration_};
 }
 
-float JerkTrajectory::duration() const { return static_cast<float>(traj_.get_duration()); }
+float JerkTrajectory::duration() const {
+  return calculated_ ? static_cast<float>(traj_.get_duration()) : 0.0f;
+}
 
 }  // namespace Motion
