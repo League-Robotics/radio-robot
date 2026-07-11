@@ -39,15 +39,67 @@ mid-decel) seeded with the residual NEGATIVE acceleration from the in-flight pla
 A jerk-limited re-solve from a negative-acceleration initial state can overshoot the
 zero-velocity target into reverse before settling. It scales with peak speed.
 
+## Sharper root cause — the pivot manifestation (found during sim-tour closure work, 2026-07-11)
+
+The same mechanism has a **much larger, tour-breaking manifestation on PIVOT**
+(rotation), independent of the drain/BLEND drain above. It is the reason the
+recorded TOUR_1 does NOT close in sim even with a physically-consistent plant.
+
+Symptom (measured against `sim_get_true_pose_*` ground truth, plant trackwidth
+128 == firmware kinematics 128, all sim calibrations at unity):
+
+- An isolated `RT 9000` (commanded 90° in-place pivot) settles at **~110°** —
+  a **~22% over-rotation** — not near 90°. Six of these compound around TOUR_1
+  into a final pose error of **~199 mm / +119°** from the origin. Translation
+  legs close well; rotation is the whole error budget.
+
+Why it is NOT a trackwidth/kinematics bug (that was the first hypothesis, and
+was separately fixed — plant `kDefaultTrackwidth` 150→128 to match firmware,
+commit c4c883ae): with kinematics and plant now identical, a correct controller
+would still stop at 90°. It stops at 110° because of the **`maybeReplanPivot`
+divergence-replan cascade** feeding the terminal stop:
+
+1. During the pivot, `maybeReplanPivot()` re-solves the Ruckig profile whenever
+   measured heading diverges from the plan. Near completion these re-solves
+   leave the rotational channel carrying **too much angular velocity too close
+   to the target** — the profile keeps planning to "arrive at speed then stop"
+   but the arrival keeps slipping.
+2. `armPivotStopDecel()` then fires an **unconstrained `solveToVelocity(0)`**
+   ramp from that high near-target velocity. With no distance bound it coasts
+   well past the target heading before reaching zero → the 110° overshoot.
+
+The naive fix — making the terminal stop **distance-bounded** (solve to hit the
+target heading exactly) — was implemented and **reverted**: Ruckig, handed a
+target it has already blown past / cannot reach forward within jerk limits,
+**reverses** to hit it, which regresses the no-reverse-creep acceptance tests
+(`test_move_straight/pure_in_place_turn_executes_and_settles_no_reverse_creep`,
+−28…−39 mm/s reverse) and `test_pivot_completes_promptly_single_peaked`. The
+reverse creep is the SAME defect as the drain manifestation above — a
+target-bounded re-solve from a bad initial state overshoots into reverse.
+
+The real fix is upstream of the terminal stop: **`maybeReplanPivot` must taper
+angular velocity toward zero as the pivot approaches completion** (decel-
+feasibility-aware replan — never plan to be carrying velocity that the terminal
+stop cannot bleed off within the remaining angle at jerk limits), so the
+terminal `solveToVelocity(0)` starts from a low, stoppable velocity and neither
+overshoots forward nor needs to reverse. This is a delicate closed-loop control
+retune touching the shared replan+stop cascade.
+
 ## Scope / risk
 
-Fixing this touches stop-arming logic shared by every motion phase
-(TRANSLATE / BLEND / PRE_PIVOT / TERMINAL_PIVOT) — a real regression surface. Needs
-its own investigation (how a mid-decel re-arm is seeded / clamped), sim coverage,
-and a HARDWARE bench gate (`.claude/rules/hardware-bench-testing.md`) — on the floor
-it manifests as a small brief backward creep at the end of a decelerating move; on
-the stand it is harmless. It is PRE-EXISTING (present before sprint 097; 097 only
-unmasked it) and orthogonal to the protocol-v3 program.
+Fixing this touches stop-arming AND replan logic shared by every motion phase
+(TRANSLATE / BLEND / PRE_PIVOT / TERMINAL_PIVOT) — a real regression surface (it
+already burned one target-bounded-stop attempt into no-reverse-creep failures).
+Needs its own investigation (taper the `maybeReplanPivot` cascade so terminal
+velocity is always stoppable within remaining distance/angle), full
+`tests/sim` reverification, and a **HARDWARE bench gate**
+(`.claude/rules/hardware-bench-testing.md`) — the pivot overshoot is a real
+22%-over-rotation on the floor, not a stand-harmless creep, so it must be seen
+on the stand before it is called fixed. PRE-EXISTING (present before sprint 097;
+097 and the sim-tour closure work only surfaced/quantified it) and orthogonal to
+the protocol-v3 program. Blocks the two `xfail(strict)` markers in
+`tests/sim/unit/test_tour_closure.py`
+(`test_isolated_rotation_leg…`, `test_tour1_closes_the_loop`).
 
 ## Files
 
