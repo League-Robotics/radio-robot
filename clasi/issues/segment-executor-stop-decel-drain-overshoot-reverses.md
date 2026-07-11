@@ -1,8 +1,54 @@
 ---
-status: pending
+status: resolved
 ---
 
 # SegmentExecutor STOP-decel drain overshoots into reverse
+
+## RESOLUTION (2026-07-11) — root cause was NOT the executor
+
+Both manifestations (the drain reverse-dip below AND the pivot over-rotation
+in the addendum) are **fixed**, and the fix exonerates
+`Motion::SegmentExecutor`: per-pass instrumentation proved the executor's
+emitted omega integral was EXACTLY the commanded angle (90.00°/180.00°) in
+every failing scenario — the plan was never wrong. The real defects:
+
+1. **TLM `cmd=` mislabel** (`source/telemetry/tlm_frame.cpp`): cmd= read
+   `bb.drivetrain.vel()` (the MEASURED array per `Drivetrain::state()`'s own
+   contract) instead of `cmd()`. Telemetry therefore showed command ==
+   measured, hiding the tracking error and mis-directing this issue's whole
+   original analysis toward the executor. Fixed to read `cmd()`.
+2. **Sim plant velocity-gain miscalibration** (`tests/_infra/sim/sim_api.cpp`
+   `defaultMotorConfigSet()`, duplicated in
+   `tests/sim/unit/drivetrain_harness.cpp`): hand-typed `kff = 0.0038`
+   against a plant whose exact feed-forward is `1/kNominalMaxSpeed = 0.0025`
+   (`vel = duty * 400`) → every sim wheel ran ~1.25× its setpoint. That is
+   the entire ~+20°/pivot over-rotation; translate legs were immune because
+   STOP_DISTANCE truncates on measured encoders. Fixed:
+   `kff = 1/kNominalMaxSpeed`.
+3. **Phantom sim dead-time model** (`source/motion/segment_executor.cpp`
+   HOST_BUILD `kOutputHops`): with tracking now exact, the modeled 40 ms lag
+   described lag the sim plant doesn't have — the replan expectation read the
+   plant as ahead (phantom-divergence retargets, −8.5°/90° pivot) and the
+   dead-time-projected stop fired mid-decel, replacing the plan's S-tail with
+   a steeper `solveToVelocity(0)` ramp (the DRAIN REVERSE-DIP this issue was
+   filed for). Retuned 2.0 → 0.0 (sim only; the real brick's 4.0 untouched).
+
+Post-fix: pivots land 90→88.6°, 180→179.9°, 360→359.9°; TOUR_1 closes to
+≤15 mm/≤5°; the drain no-reverse and both tour-closure tests pass un-xfailed;
+full `tests/sim` green (615 passed). The former xfail(strict) markers are
+removed (`test_move_streaming_drain_no_reverse`,
+`test_isolated_rotation_leg_reveals_independent_residual`,
+`test_tour1_closes_the_loop`).
+
+**Still open on hardware (tracked separately, needs a bench session):** the
+REAL robot's turn accuracy with its own gains — the same command-vs-measured
+signature is now finally observable over the wire because cmd= is honest;
+the bench gate for the cmd= firmware change itself is part of this fix's
+verification.
+
+---
+
+Original filing below (analysis superseded by the resolution above).
 
 ## Context
 

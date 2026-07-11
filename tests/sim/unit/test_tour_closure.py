@@ -42,30 +42,30 @@ project's real trackwidth (128 mm, ``data/robots/tovez_nocal.json``). Fixed
 to 128.0 mm so the sim is self-consistent OUT OF THE BOX, belt-and-suspenders
 with the GUI's own calibration push.
 
-Independent finding (documented, NOT fixed by this ticket -- see the
-stakeholder report): even with trackwidth fully self-consistent, a single
-isolated ``RT 9000`` (90 deg open-loop pivot) currently overshoots to
-~110 deg in this tree's ``Motion::SegmentExecutor`` -- a much larger
-residual than the previously-filed ``clasi/issues/later/
-rt-turn-tick-quantization-overshoot.md`` (+1.08 deg/turn). Root-caused (via
-temporary instrumentation, reverted) to ``maybeReplanPivot()``'s divergence
-replan repeatedly re-targeting the rotational Ruckig channel while carrying
-forward non-negligible velocity, so the dead-time-projected stop fires
-while still at ~56% of the yaw-rate ceiling; ``armPivotStopDecel()`` then
-runs an UNCONSTRAINED velocity-to-zero ramp (it has no notion of the
-remaining distance to the actual target) that coasts far past the intended
-stop, and this is never corrected because replanning is disabled once
-``stopping_`` is set. This is a pre-existing, independent defect in the
-rotation phase only -- ``D`` (TRANSLATE) legs land within a fraction of a
-percent of their commanded distance. Fixing it safely would mean retuning
-control code the file's own header explicitly marks "DO NOT retune
-independently" and would need full ``tests/sim`` motion-suite reverification
--- out of scope for a wheelbase-consistency fix. The per-step trajectory
-assertions below are written to SEPARATE the trackwidth fix's effect (the
-``D`` legs, which pass tightly) from this residual (the ``RT`` legs and the
-whole-tour closure, marked ``xfail(strict=True)`` -- not loosened, not
-skipped -- so a future genuine fix flips this test green automatically and
-an accidental regression that makes it fail differently is still caught).
+Second finding -- the RT over-rotation -- RESOLVED 2026-07-11 (this module's
+two former ``xfail(strict=True)`` tests now pass and their markers are
+removed). With trackwidth fully self-consistent, a single isolated ``RT
+9000`` still over-rotated to ~110 deg. The blame initially fell on
+``Motion::SegmentExecutor``'s replan/stop-decel cascade, but per-pass
+instrumentation proved the executor's EMITTED omega integral was EXACTLY the
+commanded angle (90.00/180.00 deg) at every stage -- the plan was never
+wrong. Two real defects underneath:
+
+1. **TLM cmd= mislabel** (``source/telemetry/tlm_frame.cpp``): the wire's
+   cmd= field read ``bb.drivetrain.vel()`` -- the MEASURED array -- so
+   telemetry showed command==measured and hid the tracking error entirely.
+2. **Sim plant velocity-gain miscalibration** (``tests/_infra/sim/
+   sim_api.cpp defaultMotorConfigSet()``): hand-typed kff=0.0038 vs the
+   plant's exact 1/kNominalMaxSpeed=0.0025 (vel = duty * 400) overdrove
+   every wheel ~1.25x its setpoint -- the entire ~+20 deg/pivot residual.
+   Translate legs were immune because STOP_DISTANCE truncates on measured
+   encoders; the pivot endgame ran in plan space and let the overdrive
+   through. ``segment_executor.cpp``'s sim ``kOutputHops`` (modeled dead
+   time) was retuned 2.0 -> 0.0 in the same change: with exact tracking the
+   sim plant has no such lag, and any nonzero value produced
+   phantom-divergence replans / premature stop fires (speed-proportional
+   undershoot). Post-fix accuracy: 90->88.6, 180->179.9, 360->359.9 deg;
+   TOUR_1 closes.
 """
 from __future__ import annotations
 
@@ -321,25 +321,17 @@ def test_isolated_translate_leg_travels_commanded_distance(tour_conn):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Independent finding (see module docstring): even an ISOLATED, "
-        "un-chained RT 9000 from a cold start, with trackwidth fully "
-        "self-consistent (fw-kinematics == plant == 128mm), currently "
-        "over-rotates to ~110 deg instead of 90 deg -- root-caused to "
-        "Motion::SegmentExecutor's maybeReplanPivot()/armPivotStopDecel() "
-        "interaction, NOT to the wheelbase mismatch this ticket fixes. "
-        "Documents the residual precisely (proving it is trackwidth-"
-        "independent) without gating the wheelbase fix's own verification "
-        "on a rotation-control fix that is out of this ticket's scope."
-    ),
-)
 def test_isolated_rotation_leg_reveals_independent_residual(tour_conn):
     """A single, un-chained ``RT 9000`` command (TOUR_1's own RT step) from
-    a cold start, with trackwidth fully self-consistent, should rotate to
-    exactly 90 deg. It currently does not -- see this test's own xfail
-    reason and the module docstring for the full root cause.
+    a cold start, with trackwidth fully self-consistent, rotates to ~90 deg.
+
+    (Was xfail(strict) while this over-rotated to ~110 deg. Fixed
+    2026-07-11: the residual was never the executor's plan -- its emitted
+    omega integral was EXACTLY 90 deg -- but the sim plant overdriving
+    every wheel ~1.25x its setpoint (stale hand-typed kff=0.0038 vs the
+    plant's exact 1/kNominalMaxSpeed=0.0025; sim_api.cpp
+    defaultMotorConfigSet()), compounded by segment_executor.cpp's sim
+    kOutputHops modeling actuation lag the calibrated plant doesn't have.)
     """
     conn, proto = tour_conn
     reply = binary_bridge.translate_command(proto, "RT 9000")
@@ -379,29 +371,18 @@ def test_tour1_dead_reckoning_matches_plant_ground_truth(tour_conn):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Trackwidth is now self-consistent (fw-kinematics == plant == 128mm, "
-        "see PhysicsWorld::kDefaultTrackwidth); TOUR_1 still fails to close "
-        "tightly because of an INDEPENDENT, larger, pre-existing "
-        "Motion::SegmentExecutor rotation-phase defect (~+20 deg per RT 9000, "
-        "root-caused to maybeReplanPivot()'s divergence-replan cascade "
-        "handing off to armPivotStopDecel() at non-negligible velocity -- see "
-        "this module's own docstring). Fixing it safely is out of scope for "
-        "a wheelbase-consistency fix (touches control code the file's own "
-        "header marks 'DO NOT retune independently', needs full tests/sim "
-        "motion-suite reverification). xfail(strict=True) so this test goes "
-        "green automatically the moment that residual is genuinely fixed, "
-        "and flags loudly if the failure mode ever changes."
-    ),
-)
 def test_tour1_closes_the_loop(tour_conn):
     """TOUR_1 (as the TestGUI runs it) returns to within a tight tolerance
     of world origin at the ideal final heading (180 deg), and every step's
     plant pose (not just the endpoint) tracks the ideal trajectory --
     localizing where any drift accumulates, not just whether errors happen
     to cancel by the end.
+
+    (Was xfail(strict) while each RT 9000 over-rotated ~+20 deg and the
+    tour missed closure by ~199mm/+119deg. Fixed 2026-07-11 -- see
+    test_isolated_rotation_leg_reveals_independent_residual's docstring
+    for the root cause: sim plant velocity-gain miscalibration + phantom
+    dead-time modeling, never the executor's plan.)
     """
     conn, proto = tour_conn
     ideal = _ideal_tour_poses(TOUR_1)

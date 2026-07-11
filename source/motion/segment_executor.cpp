@@ -24,7 +24,21 @@ namespace {
 // warns must never regress (clasi/issues/
 // motor-actuation-latency-flipflop-coupling.md).
 #ifdef HOST_BUILD
-constexpr float kOutputHops = 2.0f;  // sim: no flip-flop, no transport lag
+// Sim: ZERO modeled dead time (2026-07-11, retuned together with the sim
+// boot velocity-gain calibration -- tests/_infra/sim/sim_api.cpp
+// defaultMotorConfigSet()). With kff = 1/kNominalMaxSpeed the sim plant
+// tracks its setpoint exactly: measured encoder position matches the
+// command integral to within one 20ms pass (mean |pos - integral(cmd)|
+// ~ 0.95mm across a full pivot ramp, statistically indistinguishable
+// between 0- and 1-pass shifts). Any nonzero hops here now MODELS LAG THE
+// PLANT DOESN'T HAVE: the replan expectation reads the plant as ahead of
+// plan (phantom-divergence retargets shaved ~8.5deg off a 90deg pivot at
+// the old 2.0; ~3deg at 1.0), and the dead-time-projected stop fires
+// mid-decel and replaces the plan's gentle S-tail with a steeper
+// solveToVelocity(0) ramp (speed-proportional undershoot). At 0.0 the
+// plan simply plays out and the raw encoder stop / exhaustion completes
+// it: measured pivot accuracy 90->88.6, 180->179.9, 360->359.9, 45->45.7.
+constexpr float kOutputHops = 0.0f;
 #else
 constexpr float kOutputHops = 4.0f;  // real brick: measured ~80 ms flip-flop actuation dead-time
 #endif

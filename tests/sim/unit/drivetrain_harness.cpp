@@ -78,10 +78,15 @@ struct MotorConfigSet {
 
 MotorConfigSet defaultMotorConfigSet() {
   MotorConfigSet set;
+  // Gains calibrated to the sim plant (2026-07-11) -- mirrors
+  // tests/_infra/sim/sim_api.cpp defaultMotorConfigSet()'s own fix: the
+  // plant is exactly linear (vel = duty * kNominalMaxSpeed), so kff =
+  // 1/kNominalMaxSpeed is the exact feed-forward; the previous 0.0038
+  // overdrove every wheel ~1.25x its setpoint.
   msg::Gains velGains;
   velGains.kp = 0.0022f;
   velGains.ki = 0.0018f;
-  velGains.kff = 0.0038f;
+  velGains.kff = 1.0f / Hal::PhysicsWorld::kNominalMaxSpeed;   // = 0.0025
   velGains.i_max = 0.3f;
   for (uint32_t i = 0; i < kMotorCount; ++i) {
     set.cfg[i] = msg::MotorConfig();

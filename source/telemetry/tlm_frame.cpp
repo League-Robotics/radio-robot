@@ -45,16 +45,21 @@ TlmFrameInput tick(uint32_t now, const Rt::Blackboard& bb) {
   in.velLeft = velLeft;
   in.velRight = velRight;
 
-  // cmd= -- the drivetrain's commanded per-wheel velocity (vel_[0]=left,
-  // vel_[1]=right; drivetrain.cpp state()), i.e. the velocity PID's setpoint.
-  // Present whenever the drivetrain reports its two wheel targets (vel_count
+  // cmd= -- the drivetrain's commanded per-wheel velocity (cmd_[0]=left,
+  // cmd_[1]=right; drivetrain.cpp state()), i.e. the velocity PID's setpoint.
+  // Present whenever the drivetrain reports its two wheel targets (cmd_count
   // >= 2); omitted (like every optional field) when it does not. Read from
   // bb.drivetrain here deliberately -- unlike vel=/enc= (measured, from
   // bb.motors[]), cmd= IS the commanded-target semantic bb.drivetrain owns.
-  if (bb.drivetrain.vel_count_val() >= 2) {
+  // (2026-07-11 fix: this read bb.drivetrain.vel() -- DrivetrainState's
+  // MEASURED array, per drivetrain.cpp state()'s own "vel_[] are MEASURED,
+  // not commanded" contract -- so the wire's cmd= silently duplicated vel=
+  // and hid every command-vs-plant tracking error. cmd_[] is the
+  // post-governor setpoint state() actually publishes for this purpose.)
+  if (bb.drivetrain.cmd_count_val() >= 2) {
     in.hasCmdVel = true;
-    in.cmdVelLeft = bb.drivetrain.vel()[0];
-    in.cmdVelRight = bb.drivetrain.vel()[1];
+    in.cmdVelLeft = bb.drivetrain.cmd()[0];
+    in.cmdVelRight = bb.drivetrain.cmd()[1];
   }
 
   // pose=/encpose= read bb's two independent pose readings -- never

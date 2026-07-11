@@ -128,10 +128,22 @@ struct MotorConfigSet {
 MotorConfigSet defaultMotorConfigSet() {
     MotorConfigSet set;
 
+    // Velocity-PID gains CALIBRATED TO THE SIM PLANT (2026-07-11 fix). The
+    // sim plant is exactly linear: wheel velocity = duty * kNominalMaxSpeed
+    // (physics_world.cpp update() sub-step A), so the exact feed-forward is
+    // kff = 1/kNominalMaxSpeed -- duty = kff*|target| reproduces the target
+    // 1:1 and kp/ki only clean up residuals. The previous hand-typed
+    // kff = 0.0038 (a stale bench-tuned value for the REAL motor's duty
+    // scale) overdrove this plant's feed-forward by 52% (0.0038 * 400 =
+    // 1.52), and kp/ki were too weak to pull the error back within a
+    // segment: every wheel ran ~1.22-1.28x its commanded setpoint, so every
+    // pivot over-rotated ~22% (RT 90 -> ~110 deg) while the executor's own
+    // emitted plan integrated to the target EXACTLY. Encoder-bounded
+    // STOP_DISTANCE masked the same overdrive on translate legs.
     msg::Gains velGains;
     velGains.kp = 0.0022f;
     velGains.ki = 0.0018f;
-    velGains.kff = 0.0038f;
+    velGains.kff = 1.0f / Hal::PhysicsWorld::kNominalMaxSpeed;   // = 0.0025
     velGains.i_max = 0.3f;
 
     for (uint32_t i = 0; i < Subsystems::Hardware::kMotorCount; ++i) {

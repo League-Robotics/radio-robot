@@ -184,13 +184,22 @@ void scenarioTickAssemblesFromBareBlackboard() {
   bb.motors[1].velocity.has = true;
   bb.motors[1].velocity.val = 220.0f;
 
-  // Commanded per-wheel velocity (the PID setpoints) live on bb.drivetrain,
-  // vel_[0]=left, vel_[1]=right -- distinct from the measured bb.motors[]
-  // velocities above so a source mix-up (cmd= reading bb.motors, or vel=
-  // reading bb.drivetrain) would be caught below.
-  bb.drivetrain.vel_[0] = 190.0f;
-  bb.drivetrain.vel_[1] = 210.0f;
+  // Commanded per-wheel velocity (the PID setpoints) live on bb.drivetrain's
+  // cmd_[] array (cmd_[0]=left, cmd_[1]=right -- drivetrain.cpp state()'s
+  // post-governor commanded targets). bb.drivetrain ALSO carries a vel_[]
+  // array, but that one is MEASURED (state()'s "vel_[] are sourced from
+  // hardware_.motorState(i) -- MEASURED, not commanded" contract) -- the
+  // 2026-07-11 tlm_frame.cpp fix moved cmd='s source from vel_[] (which
+  // silently duplicated vel=) to cmd_[]. All three arrays get distinct
+  // values here so any source mix-up (cmd= reading bb.motors, cmd= reading
+  // bb.drivetrain's measured vel_[], or vel= reading bb.drivetrain) is
+  // caught below.
+  bb.drivetrain.vel_[0] = 185.0f;   // measured mirror -- must NOT surface as cmd=
+  bb.drivetrain.vel_[1] = 215.0f;
   bb.drivetrain.vel_count = 2;
+  bb.drivetrain.cmd_[0] = 190.0f;
+  bb.drivetrain.cmd_[1] = 210.0f;
+  bb.drivetrain.cmd_count = 2;
 
   // Three independent, distinct headings, with distinct x/y so a field
   // swap between pose=/encpose=/otos= would still be caught.
@@ -251,9 +260,9 @@ void scenarioTickAssemblesFromBareBlackboard() {
   checkTrue(in.velLeft == 180.0f, "velLeft == bb.motors[0].velocity (measured, not commanded)");
   checkTrue(in.velRight == 220.0f, "velRight == bb.motors[1].velocity (measured, not commanded)");
 
-  checkTrue(in.hasCmdVel, "hasCmdVel set (bb.drivetrain.vel_count >= 2)");
-  checkTrue(in.cmdVelLeft == 190.0f, "cmdVelLeft == bb.drivetrain.vel()[0] (commanded, not measured)");
-  checkTrue(in.cmdVelRight == 210.0f, "cmdVelRight == bb.drivetrain.vel()[1] (commanded, not measured)");
+  checkTrue(in.hasCmdVel, "hasCmdVel set (bb.drivetrain.cmd_count >= 2)");
+  checkTrue(in.cmdVelLeft == 190.0f, "cmdVelLeft == bb.drivetrain.cmd()[0] (commanded, not measured)");
+  checkTrue(in.cmdVelRight == 210.0f, "cmdVelRight == bb.drivetrain.cmd()[1] (commanded, not measured)");
 
   checkTrue(in.hasPose, "hasPose set");
   checkTrue(in.pose.x == 400.0f && in.pose.y == -20.0f && in.pose.h == 0.3f,

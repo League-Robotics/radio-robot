@@ -370,20 +370,20 @@ def test_move_streaming_chains_at_speed(sim):
     assert peak > 150.0, f"streamed micro-segments did not chain (peak {peak:.0f} mm/s)"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="pre-existing STOP-decel dead-time-projected re-arm overshoots to "
-    "~-16.85 mm/s commanded at drain end (unmasked by the sprint-097 "
-    "SegmentExecutor UB fix); tracked by "
-    "clasi/issues/segment-executor-stop-decel-drain-overshoot-reverses.md. "
-    "strict=True so this XPASSes (and fails) once the overshoot is fixed, "
-    "prompting removal of this marker.",
-)
 def test_move_streaming_drain_no_reverse(sim):
     """REGRESSION (streaming chain drain, OOP 2026-07-09): draining a
     streamed micro-MOVE chain must end in a graceful decel -- settled, no
-    reverse. The chaining half is test_move_streaming_chains_at_speed
-    above; this half is XFAIL pending the stop-decel overshoot fix."""
+    reverse.
+
+    The chaining half is test_move_streaming_chains_at_speed above. (Was
+    xfail(strict) while the drain dipped to ~-16.85 mm/s commanded --
+    tracked by clasi/issues/segment-executor-stop-decel-drain-overshoot-
+    reverses.md. Fixed 2026-07-11 by the same sim-plant repair that fixed
+    the pivot over-rotation: calibrated sim velocity gains (kff =
+    1/kNominalMaxSpeed, sim_api.cpp defaultMotorConfigSet()) + zero
+    modeled sim dead time (segment_executor.cpp kOutputHops) -- the
+    reverse dip was the dead-time-projected stop re-arming against a
+    plant that both overdrove its setpoint and had no such lag.)"""
     for _ in range(20):
         seg = legacy_translate.segment_for_move(15, 0, 0, stream=True)
         r = send_segment(sim, seg)
