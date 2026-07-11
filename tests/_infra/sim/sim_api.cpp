@@ -601,6 +601,39 @@ int sim_peek_reply_store(void* h, int channel, char* store_out, int size) {
 }
 
 // ---------------------------------------------------------------------------
+// sim_drain_reply_store (097, SimConnection binary transport -- test-only) --
+// DESTRUCTIVE read of one channel's CURRENT ReplyStore content: returns
+// exactly what sim_peek_reply_store() above would, then resets (clears)
+// THAT ONE channel's store. Added for host/robot_radio/io/sim_conn.py's
+// SimConnection.drain_binary_tlm(): neither existing accessor is enough on
+// its own -- sim_peek_reply_store() is non-destructive, so a caller that
+// only ever peeks lets tickTelemetry()'s periodic frames accumulate in the
+// store until it silently overflows (ReplyStore::append()'s own
+// once-full-every-further-append-is-a-no-op behavior, this file's own
+// ReplyStore struct above); sim_command()/sim_command_on() DO reset a
+// store, but only as an incidental side effect of routing an unrelated
+// command, and they reset BOTH channels' stores unconditionally (this
+// file's "Two reply-store instances" note), which would also wipe out
+// whatever the OTHER channel had pending. This entry point resets only the
+// ONE channel it drains, with no command routed at all.
+// ---------------------------------------------------------------------------
+int sim_drain_reply_store(void* h, int channel, char* store_out, int size) {
+    SimHandle* s = static_cast<SimHandle*>(h);
+    ReplyStore& store = (static_cast<Subsystems::Channel>(channel) == Subsystems::Channel::RADIO)
+                             ? s->syncStoreRadio
+                             : s->syncStoreSerial;
+    int n = store.written;
+    if (store_out && size > 0) {
+        int copy = (n < size - 1) ? n : size - 1;
+        memcpy(store_out, store.buf, static_cast<size_t>(copy));
+        store_out[copy] = '\0';
+        n = copy;
+    }
+    store.reset();
+    return n;
+}
+
+// ---------------------------------------------------------------------------
 // Async EVT access — DELIBERATE NO-OP STUB (093, architecture-update.md
 // Decision 4): Rt::MainLoop no longer produces any loop-originated output
 // (no watchdog/motion/telemetry EVTs left to drain -- see file header).
