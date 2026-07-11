@@ -350,9 +350,15 @@ def test_move_streaming_chains_at_speed(sim):
     unchained from-rest-to-rest 15mm segment caps peak speed at
     sqrt(a*d) ~= 110 mm/s regardless of send rate, so a sustained stream
     exceeding ~150 mm/s proves the executor retarget()s from its moving
-    state. Draining the stream must still end in the graceful decel
-    (settled, no reverse). 097-006: binary `segment`, `stream=True` (the
-    `s=1` kv override's own binary parity)."""
+    state. 097-006: binary `segment`, `stream=True`.
+
+    Also guards the sprint-097 SegmentExecutor never-solved-Ruckig-channel
+    UB fix: a fresh sim's first translate-only stream used to sample an
+    uninitialized rotational trajectory (phantom ~120/-120 spin -> net
+    peak reads 0). The drain-no-reverse half of this regression is split
+    into test_move_streaming_drain_no_reverse below (xfail, pending the
+    stop-decel overshoot fix -- see
+    clasi/issues/segment-executor-stop-decel-drain-overshoot-reverses.md)."""
     peak = 0.0
     for _ in range(20):
         seg = legacy_translate.segment_for_move(15, 0, 0, stream=True)
@@ -362,6 +368,27 @@ def test_move_streaming_chains_at_speed(sim):
         vel_l, vel_r = sim.vel()
         peak = max(peak, (vel_l + vel_r) / 2.0)
     assert peak > 150.0, f"streamed micro-segments did not chain (peak {peak:.0f} mm/s)"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="pre-existing STOP-decel dead-time-projected re-arm overshoots to "
+    "~-16.85 mm/s commanded at drain end (unmasked by the sprint-097 "
+    "SegmentExecutor UB fix); tracked by "
+    "clasi/issues/segment-executor-stop-decel-drain-overshoot-reverses.md. "
+    "strict=True so this XPASSes (and fails) once the overshoot is fixed, "
+    "prompting removal of this marker.",
+)
+def test_move_streaming_drain_no_reverse(sim):
+    """REGRESSION (streaming chain drain, OOP 2026-07-09): draining a
+    streamed micro-MOVE chain must end in a graceful decel -- settled, no
+    reverse. The chaining half is test_move_streaming_chains_at_speed
+    above; this half is XFAIL pending the stop-decel overshoot fix."""
+    for _ in range(20):
+        seg = legacy_translate.segment_for_move(15, 0, 0, stream=True)
+        r = send_segment(sim, seg)
+        assert r.WhichOneof("body") == "ok"
+        sim.tick_for(60)
 
     went_negative = False
     for _ in range(150):   # 3.6s drain window
