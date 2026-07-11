@@ -19,7 +19,7 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
     msg::Gains velGains;
     velGains.kp = 0.0022f;
     velGains.ki = 0.0018f;
-    velGains.kff = 0.001f;
+    velGains.kff = 0.00154f;
     velGains.i_max = 0.3f;
 
     // reversal_dwell / output_deadband are left unset (.has == false) on

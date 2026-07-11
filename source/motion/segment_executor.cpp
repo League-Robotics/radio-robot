@@ -43,7 +43,18 @@ namespace {
 // gains first, then this.
 constexpr float kOutputHops = 1.5f;
 #else
-constexpr float kOutputHops = 4.0f;  // real brick: measured ~80 ms flip-flop actuation dead-time
+// Real brick: RE-MEASURED 2026-07-11 at the bench (motion-onset delay,
+// command-commit `now` vs first encoder movement `ts`, across 90/180/360
+// pivots: 112-136ms; velocity onset 100-112ms) AFTER the velocity
+// feed-forward was calibrated to the measured motor plateau (tovez.json
+// vel_kff = 1/650 -- the old 0.001 made the plant so sluggish the shorter
+// 80ms model happened to fit its EFFECTIVE lag). With the modeled dead
+// time 40ms short of reality, maybeReplanPivot()'s expectation read every
+// pivot as diverged and shrink-retargeted plans ~15-25 deg short
+// (emitted integral 64 deg for a 90 deg ask). Same lesson as the sim
+// constant above: this is a GAIN-DEPENDENT calibration -- re-measure it
+// whenever the velocity gains change.
+constexpr float kOutputHops = 6.0f;  // 120 ms
 #endif
 constexpr float kAssumedPassPeriod = 0.020f;  // [s] matches main.cpp's kPeriod
 constexpr float kDeadTime = kOutputHops * kAssumedPassPeriod;  // [s]

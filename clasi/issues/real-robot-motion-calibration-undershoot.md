@@ -66,3 +66,48 @@ for those gains (`kOutputHops`). The real robot has never had that pass:
    tour on the playfield.
 
 HITL: wheels on the stand for everything except the final tour.
+
+## Regression log (2026-07-11 bench session, wheels on stand)
+
+Method as suggested above, executed as measure -> set -> flash -> score with
+`wheel_motion_trace.ipynb` as the acceptance instrument. Scores are final
+heading error per turn (deg):
+
+| config | 90 | 180 | 360 |
+|---|---|---|---|
+| baseline (kff=0.001, hops=4) | -11.2 | -20.4 | -27.5 |
+| iter 1: kff=1/650 | -16.0 | -13.4 | -24.6 |
+| iter 2: + hw kOutputHops 4->6 (120ms, re-measured onset) | -10.0 | -3.1 | -5.5 |
+| iter 3: + ki 0.0018->0.006 | -18.0 | -2.8 | -32.1 | REJECTED
+| **landed = iter 2** (final clean capture) | **-10.6** | **-2.2** | **-9.0** |
+
+Measurements behind the knobs:
+- Duty-saturated plateau: 620-740 mm/s per wheel, BATTERY/THERMAL-STATE
+  DEPENDENT (fwd L 676-737 / R 616-702; sagged to ~408 under sustained
+  load in one window). kff = 1/650 chosen mid-conservative; the integrator
+  absorbs the sag band.
+- Motion-onset dead time (command commit `now` vs first encoder movement
+  `ts`): 112-136ms -> hw kOutputHops = 6 (120ms). GAIN-DEPENDENT: the old
+  80ms fit the old sluggish (kff=0.001) plant's effective lag; after the
+  FF fix the 80ms model made maybeReplanPivot() shrink-retarget every
+  pivot ~15-25 deg short.
+- Sub-plateau duty->speed nonlinearity: tracking sits ~7-8% below the
+  plateau-fitted kff line at ~150-300 mm/s -- this is the remaining 90 deg
+  residual (~-10 deg, pivots cruise ~250 mm/s); 180/360 cruise near the
+  plateau where kff is exact. Raising ki to close it in-move (iter 3)
+  destabilized the score instead.
+
+## Open items
+
+1. The ~-10 deg residual on SHORT pivots: needs either a second FF point /
+   speed-dependent FF, a faster-but-stable integrator, or acceptance.
+2. RUN-TO-RUN VARIANCE is now the limiting factor: battery-state sag moves
+   the plateau (and scores) between consecutive runs. Calibrate/score on a
+   controlled battery state (fresh charge or bench supply).
+3. Heavy telemetry frame loss during fast motion (known IRQ/serial-RX
+   coupling) blinds host-side instruments: the cmd= integral undercounts on
+   hardware, and completion flags can vanish -- any bench harness MUST
+   treat encoder movement as the ground truth for "did it run" (a lossy
+   run's busy flag never arriving led a retry to double-queue a segment:
+   robot turned ~684 deg on a 360 ask). The notebook's capture guards
+   encode these rules now.
