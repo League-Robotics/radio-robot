@@ -67,7 +67,6 @@
 // sim_command(h, line) — thin SERIAL-only wrapper over sim_command_on()
 // (088-006): every pre-088-006 call site (~183 test functions across
 // tests/sim/unit/) is source-compatible and behaves identically.
-#include "commands/binary_channel.h"
 #include "hal/sim/sim_setters.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
@@ -80,6 +79,7 @@
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
 #include "subsystems/sim_hardware.h"
+#include "telemetry/telemetry_tick.h"
 #include "types/clock.h"
 
 #include <cstdint>
@@ -573,7 +573,7 @@ int sim_get_reply_store_len(void* h, int channel) {
 // sim_peek_reply_store (096-002, test-only) -- non-destructive read of one
 // channel's CURRENT ReplyStore content, companion to
 // sim_get_reply_store_len() above. Added so a test can drain the periodic
-// TLM frames tickTelemetry() (commands/binary_channel.cpp) appends into
+// TLM frames tickTelemetry() (telemetry/telemetry_tick.cpp) appends into
 // a channel's sync store across a run of sim_tick() calls -- neither
 // sim_command() nor sim_command_on() can be used for this: both reset
 // (clear) BOTH stores before routing anything, which would silently wipe

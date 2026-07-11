@@ -50,6 +50,16 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #   subsystems/pose_estimator.cpp           -- 082-002/082-003's PoseEstimator
 #   estimation/ekf_tiny.cpp                 -- 082-001's EkfTiny (PoseEstimator's EKF core)
 #   telemetry/tlm_frame.cpp                 -- 082-004's pure TLM frame formatter
+#   telemetry/telemetry_tick.cpp            -- 096-002's loop-owned periodic
+#                                               STREAM emission (tickTelemetry()
+#                                               + file-local telemetryEmitBinary()).
+#                                               Relocated verbatim from
+#                                               commands/telemetry_commands.cpp by
+#                                               097-011 (briefly folded into
+#                                               commands/binary_channel.{h,cpp}),
+#                                               then out to this dedicated pair by
+#                                               a later cleanup -- see that file's
+#                                               own header comment.
 #   commands/{arg_parse,binary_channel,command_processor,
 #             text_channel}.cpp -- the command dispatch + the text safety
 #                                               rump (STOP/PING/HELLO,
@@ -61,9 +71,7 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #                                               084-008, Section 2) families
 #                                               + the binary command plane's
 #                                               oneof-arm dispatcher
-#                                               (095-007, M5 BinaryChannel;
-#                                               096-002: also hosts
-#                                               tickTelemetry(), 097-011).
+#                                               (095-007, M5 BinaryChannel).
 #                                               097-011 consolidated the
 #                                               former six file pairs
 #                                               (motion_commands,
@@ -71,9 +79,7 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #                                               telemetry_commands,
 #                                               pose_commands, otos_commands,
 #                                               dev_commands) into
-#                                               text_channel.{h,cpp}
-#                                               (+ tickTelemetry() into
-#                                               binary_channel.{h,cpp}) --
+#                                               text_channel.{h,cpp} --
 #                                               source/commands/ now holds
 #                                               exactly 4 file pairs.
 #                                               config_commands.cpp (text
@@ -160,6 +166,7 @@ set(FIRMWARE_SOURCES
     "${SOURCE_DIR}/subsystems/pose_estimator.cpp"
     "${SOURCE_DIR}/estimation/ekf_tiny.cpp"
     "${SOURCE_DIR}/telemetry/tlm_frame.cpp"
+    "${SOURCE_DIR}/telemetry/telemetry_tick.cpp"
     "${SOURCE_DIR}/commands/arg_parse.cpp"
     "${SOURCE_DIR}/commands/binary_channel.cpp"
     "${SOURCE_DIR}/commands/command_processor.cpp"
