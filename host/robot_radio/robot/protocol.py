@@ -562,6 +562,37 @@ class NezhaProtocol:
     def mode(self) -> str | None:
         return self._conn.mode
 
+    def _send_envelope(self, envelope: "envelope_pb2.CommandEnvelope",
+                       read_timeout: int = 500,  # [ms]
+                       ) -> "envelope_pb2.ReplyEnvelope | None":
+        """Send ``envelope``; return the decoded ``ReplyEnvelope`` (or
+        ``None`` on timeout/not-connected), normalizing the two different
+        ``send_envelope()`` return shapes this tree's two connection
+        backends use.
+
+        ``SerialConnection.send_envelope()`` (``robot_radio/io/
+        serial_conn.py``) returns a dict --
+        ``{"sent": ..., "mode": ..., "reply": ReplyEnvelope | None}`` --
+        because a real serial link's request/reply is genuinely
+        asynchronous (a background reader thread fills a corr-id-keyed
+        queue that could just as easily be filled by an unrelated frame
+        first). ``SimConnection.send_envelope()`` (``robot_radio/io/
+        sim_conn.py``, 097) returns the decoded ``ReplyEnvelope`` (or
+        ``None``) DIRECTLY -- its own docstring explains why: the sim call
+        is already synchronous (one in-process C call, no interleaving is
+        possible), so there is no dict wrapper to build. Every
+        ``NezhaProtocol`` method below sends over EITHER connection type
+        (``testgui.binary_bridge`` — 097's TestGUI transport migration —
+        constructs one ``NezhaProtocol`` per connection, hardware or sim,
+        and routes every command through it), so this is the ONE place
+        that reconciles the two shapes rather than each call site
+        special-casing ``isinstance(result, dict)`` itself.
+        """
+        result = self._conn.send_envelope(envelope, read_timeout=read_timeout)
+        if isinstance(result, dict):
+            return result.get("reply")
+        return result
+
     def send(self, cmd: str, read_timeout: int = 500) -> dict:  # [ms]
         """Send a v2 command, return raw response dict (for ad-hoc / pass-through)."""
         return self._conn.send(cmd, read_timeout)
@@ -610,11 +641,10 @@ class NezhaProtocol:
         """
         envelope = envelope_pb2.CommandEnvelope(ping=envelope_pb2.Ping())
         t0 = time.monotonic()
-        result = self._conn.send_envelope(envelope, read_timeout=500)
+        reply = self._send_envelope(envelope, read_timeout=500)
         t1 = time.monotonic()
         rtt = (t1 - t0) * 1000.0  # [ms]
 
-        reply = result.get("reply")
         if reply is not None and reply.WhichOneof("body") == "ok":
             return (int(reply.ok.t), rtt)
         return None
@@ -629,8 +659,7 @@ class NezhaProtocol:
         """
         envelope = envelope_pb2.CommandEnvelope(
             echo=envelope_pb2.Echo(payload=payload.encode("utf-8")))
-        result = self._conn.send_envelope(envelope, read_timeout=500)
-        reply = result.get("reply")
+        reply = self._send_envelope(envelope, read_timeout=500)
         if reply is not None and reply.WhichOneof("body") == "echo":
             return reply.echo.payload.decode("utf-8")
         return None
@@ -647,8 +676,7 @@ class NezhaProtocol:
         comment). Contract (return type/shape) unchanged.
         """
         envelope = envelope_pb2.CommandEnvelope(id=envelope_pb2.DeviceId())
-        result = self._conn.send_envelope(envelope, read_timeout=500)
-        reply = result.get("reply")
+        reply = self._send_envelope(envelope, read_timeout=500)
         if reply is not None and reply.WhichOneof("body") == "id":
             d = reply.id
             return {
@@ -670,8 +698,7 @@ class NezhaProtocol:
         the reply. Contract (return type/shape) unchanged.
         """
         envelope = envelope_pb2.CommandEnvelope(id=envelope_pb2.DeviceId())
-        result = self._conn.send_envelope(envelope, read_timeout=500)
-        reply = result.get("reply")
+        reply = self._send_envelope(envelope, read_timeout=500)
         if reply is not None and reply.WhichOneof("body") == "id":
             return {"fw": reply.id.fw_version, "proto": str(reply.id.proto_version)}
         return None
@@ -846,8 +873,7 @@ class NezhaProtocol:
         job is the envelope round trip.
         """
         envelope = envelope_pb2.CommandEnvelope(config=delta)
-        result = self._conn.send_envelope(envelope, read_timeout=read_timeout)
-        reply = result.get("reply")
+        reply = self._send_envelope(envelope, read_timeout=read_timeout)
         if reply is not None and reply.WhichOneof("body") == "ok":
             return reply.ok
         return None
@@ -863,8 +889,7 @@ class NezhaProtocol:
         / ``CONFIG_WATCHDOG``.
         """
         envelope = envelope_pb2.CommandEnvelope(get=envelope_pb2.ConfigGet(target=target))
-        result = self._conn.send_envelope(envelope, read_timeout=read_timeout)
-        reply = result.get("reply")
+        reply = self._send_envelope(envelope, read_timeout=read_timeout)
         if reply is not None and reply.WhichOneof("body") == "cfg":
             return reply.cfg
         return None
@@ -1020,8 +1045,7 @@ class NezhaProtocol:
         """
         seg = legacy_translate.segment_for_timed(left, right, duration)
         envelope = envelope_pb2.CommandEnvelope(segment=seg)
-        result = self._conn.send_envelope(envelope, read_timeout=300)
-        reply = result.get("reply")
+        reply = self._send_envelope(envelope, read_timeout=300)
         if reply is not None and reply.WhichOneof("body") == "ok":
             return [f"OK drive l={left} r={right} ms={duration} "
                     f"q={reply.ok.q} rem={reply.ok.rem:.1f}"]
@@ -1053,8 +1077,7 @@ class NezhaProtocol:
         """
         seg = legacy_translate.segment_for_distance(left, right, travel)
         envelope = envelope_pb2.CommandEnvelope(segment=seg)
-        result = self._conn.send_envelope(envelope, read_timeout=300)
-        reply = result.get("reply")
+        reply = self._send_envelope(envelope, read_timeout=300)
         if reply is not None and reply.WhichOneof("body") == "ok":
             return [f"OK drive l={left} r={right} mm={travel} "
                     f"q={reply.ok.q} rem={reply.ok.rem:.1f}"]

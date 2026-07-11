@@ -322,6 +322,13 @@ def test_goto_explicit_stop_halts_promptly_without_waiting_for_arrival_or_timeou
 
 
 @_requires_sim_lib
+@pytest.mark.xfail(
+    reason="097: G has no binary arm until sprint 098 (envelope.proto's "
+           "`motion` oneof field is RESERVED, not declared, until "
+           "Subsystems::Planner un-parks) -- `G 6000 0 200` is a gated "
+           "no-op, so mode= never reports 'G'. See binary_bridge.py.",
+    strict=False,
+)
 def test_stop_cancels_inflight_g_goal_against_real_sim() -> None:
     """``_safe_stop()``'s bare top-level ``STOP`` genuinely cancels
     ``Subsystems::Planner``'s active ``G`` goal -- confirmed against the
@@ -543,6 +550,13 @@ def _disconnect_sim(qapp, window) -> None:
 
 
 @_requires_sim_lib
+@pytest.mark.xfail(
+    reason="097: GOTO's pursuit loop needs SI/G, neither of which has a "
+           "binary arm until sprint 098 -- goto_btn is now permanently "
+           "disabled (gated in the UI, __main__.py), so it never starts. "
+           "See binary_bridge.py / the goto_btn tooltip set in __main__.py.",
+    strict=False,
+)
 def test_goto_button_converges_against_real_sim_and_reenables_button(
     qapp, monkeypatch, tmp_path
 ) -> None:
@@ -602,6 +616,13 @@ def test_goto_button_converges_against_real_sim_and_reenables_button(
 
 
 @_requires_sim_lib
+@pytest.mark.xfail(
+    reason="097: goto_btn is now permanently disabled (gated pending "
+           "sprint 098 -- GOTO needs SI/G, neither has a binary arm yet), "
+           "so it can never be enabled after connect. See __main__.py's "
+           "goto_btn tooltip / _send_buttons wiring.",
+    strict=False,
+)
 def test_goto_stop_reenables_button_synchronously_against_real_sim(
     qapp, monkeypatch, tmp_path
 ) -> None:

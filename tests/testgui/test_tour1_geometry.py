@@ -413,6 +413,13 @@ def _assert_tour_ran_and_closed_the_loop(trace, fused_pose, tour_name: str) -> N
     )
 
 
+@pytest.mark.xfail(
+    reason="097: every tour opens with _set_origin() (STOP, ZERO enc, OZ, "
+           "SI) -- OZ/SI have no binary arm until sprint 098, and the tour "
+           "buttons are now permanently disabled (gated in the UI, "
+           "__main__.py), so the tour never starts. See binary_bridge.py.",
+    strict=False,
+)
 def test_tour1_completes_and_fused_pose_returns_near_origin(qapp, monkeypatch, tmp_path):
     """Tour 1 runs to completion (no step timeout) and closes the loop.
 
@@ -426,6 +433,13 @@ def test_tour1_completes_and_fused_pose_returns_near_origin(qapp, monkeypatch, t
     _assert_tour_ran_and_closed_the_loop(trace, fused_pose, "Tour 1")
 
 
+@pytest.mark.xfail(
+    reason="097: every tour opens with _set_origin() (STOP, ZERO enc, OZ, "
+           "SI) -- OZ/SI have no binary arm until sprint 098, and the tour "
+           "buttons are now permanently disabled (gated in the UI, "
+           "__main__.py), so the tour never starts. See binary_bridge.py.",
+    strict=False,
+)
 def test_tour2_completes_and_fused_pose_returns_near_origin(qapp, monkeypatch, tmp_path):
     """Tour 2 runs to completion (no step timeout) and closes the loop.
 
@@ -443,6 +457,14 @@ def test_tour2_completes_and_fused_pose_returns_near_origin(qapp, monkeypatch, t
     _assert_tour_ran_and_closed_the_loop(trace, fused_pose, "Tour 2")
 
 
+@pytest.mark.xfail(
+    reason="097: tour buttons are now permanently disabled (gated pending "
+           "sprint 098 -- every tour opens with _set_origin()'s OZ/SI, "
+           "which have no binary arm yet), so tour_btn.isEnabled() is "
+           "False immediately after connect. See __main__.py's tour "
+           "button tooltip / _send_buttons wiring.",
+    strict=False,
+)
 def test_stopping_a_running_tour_reenables_buttons_synchronously(
     qapp, monkeypatch, tmp_path
 ):

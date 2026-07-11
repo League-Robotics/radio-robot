@@ -20,6 +20,18 @@ sprint's own predicted "verification finds nothing to fix" outcome, per
 architecture-update.md's Migration Concerns) -- every assertion below
 passed against the current tree unmodified.
 
+097 update (test-only, not a wire/production concern): three assertions
+(``test_spin_boxes_populated_from_defaults``,
+``test_apply_saves_field_values``,
+``test_apply_calls_live_apply_on_connected_sim_transport``) assumed
+``body_rot_scrub``'s window-build default matched
+``sim_prefs.DEFAULT_PROFILE["body_rot_scrub"]`` (1.0) verbatim -- stale
+since ticket 073-003 made ``load_sim_error_profile()``'s own
+fallback-when-missing path reconcile that ONE key from the active robot's
+calibration via ``resolve_calibration_defaults()`` instead. Fixed by
+computing the expected value the same way the production code does,
+rather than assuming the flat ``DEFAULT_PROFILE`` literal.
+
 Run with::
 
     QT_QPA_PLATFORM=offscreen uv run pytest tests/testgui/test_sim_errors_panel.py -v
@@ -117,11 +129,27 @@ class TestSimErrorsPanelExistence:
             # 069-007: every new knob must reproduce DEFAULT_PROFILE's
             # value, including the multiplicative knobs at 1.0 (not 0.0)
             # and trackwidth at the plant's real 128.0 (not 0.0).
+            #
+            # body_rot_scrub is the one exception (073-003, NOT a wire/097
+            # concern -- pre-existing test/production drift this ticket's
+            # own item 5 asked to align): load_sim_error_profile()'s own
+            # fallback-when-missing path does NOT reproduce
+            # DEFAULT_PROFILE["body_rot_scrub"] (1.0) verbatim -- it
+            # reconciles that ONE key from the active robot's calibration
+            # via resolve_calibration_defaults() (see that function's own
+            # docstring: "a fresh TestGUI install ... now turns the
+            # commanded angle out of the box"), so the expected value here
+            # must be computed the same way, not read off DEFAULT_PROFILE.
+            expected_body_rot_scrub, _tw = sim_prefs.resolve_calibration_defaults()
             for object_name, profile_key in _NEW_SIM_ERR_SPIN_TO_PROFILE_KEY.items():
                 spin = window.findChild(QDoubleSpinBox, object_name)
-                assert spin.value() == pytest.approx(sim_prefs.DEFAULT_PROFILE[profile_key]), (
-                    f"{object_name} did not default to "
-                    f"DEFAULT_PROFILE['{profile_key}']"
+                expected = (
+                    expected_body_rot_scrub if profile_key == "body_rot_scrub"
+                    else sim_prefs.DEFAULT_PROFILE[profile_key]
+                )
+                assert spin.value() == pytest.approx(expected), (
+                    f"{object_name} did not default to the expected "
+                    f"'{profile_key}' value ({expected})"
                 )
         finally:
             window.hide()
@@ -300,10 +328,15 @@ class TestSimErrorsApplyButton:
             assert len(saved) == 1
             # Only the historical four spin boxes were changed above; every
             # 069-007 knob must be present in the saved profile at its
-            # DEFAULT_PROFILE value (untouched spin boxes keep their
-            # window-build default).
+            # window-build default (untouched spin boxes keep that value).
+            # body_rot_scrub's window-build default is the 073-003
+            # calibration-reconciled value, not DEFAULT_PROFILE's flat 1.0
+            # literal -- see test_spin_boxes_populated_from_defaults's own
+            # comment for the full explanation (not a wire/097 concern).
+            expected_body_rot_scrub, _tw = sim_prefs.resolve_calibration_defaults()
             assert saved[0] == {
                 **sim_prefs.DEFAULT_PROFILE,
+                "body_rot_scrub": expected_body_rot_scrub,
                 "encoder_noise": 6.0,
                 "slip_turn_extra": 0.6,
                 "otos_linear_noise": 0.4,
@@ -460,8 +493,14 @@ class TestSimErrorsApplyButton:
                 f"Expected apply_error_profile to be called once on the "
                 f"connected fake SimTransport; got {applied}"
             )
+            # body_rot_scrub's window-build default is the 073-003
+            # calibration-reconciled value, not DEFAULT_PROFILE's flat 1.0
+            # literal -- see test_spin_boxes_populated_from_defaults's own
+            # comment for the full explanation (not a wire/097 concern).
+            expected_body_rot_scrub, _tw = sim_prefs.resolve_calibration_defaults()
             assert applied[0] == {
                 **sim_prefs.DEFAULT_PROFILE,
+                "body_rot_scrub": expected_body_rot_scrub,
                 "encoder_noise": 9.0,
                 "slip_turn_extra": 0.9,
                 "otos_linear_noise": 0.9,

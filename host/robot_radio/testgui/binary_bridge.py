@@ -1,0 +1,253 @@
+"""robot_radio.testgui.binary_bridge — in-process text-v2 -> binary
+translation for the TestGUI transports (097, min-viable migration).
+
+Firmware is binary-only plus a 6-verb text rump (HELP/HELLO/PING/ID/VER/
+STOP, docs/protocol-v3.md section 6) — every motion/config/telemetry text
+verb the TestGUI's ``commands.COMMANDS`` schema or its Operations panel
+still builds (``S``/``T``/``D``/``RT``/``SET``/``GET``/``STREAM``/``SNAP``/
+...) gets ``ERR unknown`` if sent as literal text. This module is the ONE
+place both transports (``transport.py``'s ``_HardwareTransport`` and
+``SimTransport``) route every outbound command line through so a text line
+never reaches the wire un-translated.
+
+It is the SAME routing table ``io/proxy.py``'s ``ProtocolBridge.
+_handle_client_line`` already implements for the ``rogo proxy`` PTY bridge
+— reused here (not re-derived): ``legacy_verbs.tokenize_send_line()``/
+``BINARY_DISPATCH`` for the tokenizer + one-arm verb builders,
+``legacy_render`` for reply-line formatting, ``protocol.py``'s
+``NezhaProtocol``/config key-target maps for SET/GET/STREAM. Trimmed to
+what the TestGUI needs and stripped of the PTY/EVT-watcher machinery that
+module owns (the GUI has its own tour idle-detection via live telemetry,
+not a synthesized ``EVT``).
+
+``translate_command(proto, raw_line)`` is the single entry point. For a
+verb with no binary arm at all — R/TURN/G (098's Planner motion, still
+declared-only), the legacy pose/otos family (SI/ZERO/OZ/OI/OR/OP/OV/OL/OA
+— envelope.proto's ``pose``/``otos`` oneof arms are declared-only until
+098), GRIP/QLEN (never had a binary arm), and the legacy ``DEV`` debug
+family (retired with the rest of the text plane, no binary arm was ever
+planned for it) — it returns a typed ``ERR ...`` reply line WITHOUT
+sending anything on the wire. The OTOS-chip hardware verbs (OI/OL/OA/OV/
+OP/OR) render with the ``nodev`` code specifically (not ``unsupported``):
+this preserves ``calibration_commands()``'s existing NODEV-tolerant push
+loop (``__main__.py``'s ``_push_robot_calibration`` / ``push.py``'s own
+docstring) — those three verbs already meant "no physical OTOS chip
+attached" in Sim mode on the old text plane, and reads the same way today
+for the same physical reason (096/098 have not wired a real detection
+path either way).
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from robot_radio.robot import legacy_render as render
+from robot_radio.robot import legacy_verbs
+from robot_radio.robot import protocol
+from robot_radio.robot.protocol import NezhaProtocol
+
+# kStreamFloorMs mirror (source/commands/telemetry_commands.cpp /
+# binary_channel.cpp) — same floor protocol.py's own NezhaProtocol.stream()/
+# snap() and io/proxy.py's ProtocolBridge use.
+_STREAM_FLOOR_MS = 20  # [ms]
+
+# Verbs with NO binary arm at all -- proxy.py's own
+# _ALWAYS_UNSUPPORTED_VERBS, reused verbatim (io/proxy.py). G/R/TURN are
+# Subsystems::Planner motion (envelope.proto's `motion` oneof field is
+# RESERVED, not even declared, until Planner un-parks); GRIP/QLEN never had
+# any binary arm planned.
+_ALWAYS_UNSUPPORTED_VERBS = frozenset({"QLEN", "G", "R", "TURN", "GRIP"})
+
+# Pose-reset verbs: envelope.proto's `pose`/`otos` oneof arms exist
+# (SetPose/OdometerCommand) but are declared-only -- BinaryChannel replies
+# ERR_UNIMPLEMENTED for them until sprint 098. SI/ZERO/OZ specifically
+# reset SOFTWARE pose state (fused EKF pose / encoder counters / the OTOS
+# chip's own zero reference) -- not "is a physical device attached"
+# questions, so these render generic "unsupported", unlike the OTOS-chip
+# verbs below.
+_POSE_RESET_VERBS = frozenset({"SI", "ZERO", "OZ"})
+
+# OTOS-chip hardware verbs: OI (init)/OL (linear scalar)/OA (angular
+# scalar)/OV (raw position write)/OP (position query)/OR (Kalman reset).
+# Same "declared-only until 098" status as the pose-reset verbs above, but
+# rendered as "nodev" -- see this module's own docstring for why
+# (calibration_commands() NODEV-tolerance).
+_OTOS_DEVICE_VERBS = frozenset({"OI", "OL", "OA", "OV", "OP", "OR"})
+
+_UNSUPPORTED_REASON = "requires sprint 098 (no binary arm yet)"
+
+
+def translate_command(proto: NezhaProtocol, raw_line: str) -> str:
+    """Translate one text-v2 line to binary, send it, and return the
+    rendered text-v2 reply line.
+
+    Empty/whitespace-only input returns ``""`` (no verb to dispatch, no
+    wire traffic) -- mirrors ``ProtocolBridge._handle_client_line``'s own
+    "not stripped, no verb -> None" short-circuit, translated to this
+    module's "always return a string" contract.
+    """
+    stripped, corr_id_str = legacy_verbs.split_corr_id(raw_line)
+    corr_id = int(corr_id_str) if corr_id_str else None
+    verb, pos, kv = legacy_verbs.tokenize_send_line(stripped)
+    if not verb:
+        return ""
+
+    if verb in _OTOS_DEVICE_VERBS:
+        return render.render_err("nodev", f"{verb} {_UNSUPPORTED_REASON}", corr_id)
+    if verb in _POSE_RESET_VERBS or verb in _ALWAYS_UNSUPPORTED_VERBS or verb.startswith("DEV"):
+        return render.render_err("unsupported", f"{verb} {_UNSUPPORTED_REASON}", corr_id)
+
+    if verb == "SET":
+        return _handle_set(proto, kv, corr_id)
+    if verb == "GET":
+        return _handle_get(proto, pos, corr_id)
+    if verb == "STREAM":
+        return _handle_stream(proto, pos, corr_id)
+    if verb == "SNAP":
+        return _handle_snap(proto, corr_id)
+
+    if verb in legacy_verbs.BINARY_DISPATCH:
+        return _handle_binary_verb(proto, verb, pos, kv, corr_id)
+
+    # Unknown verb (P/PA/DBG/anything else the text plane used to answer) --
+    # never forwarded as raw text (the firmware would just ERR unknown on
+    # it anyway); a typed reply here at least tells the caller why.
+    return render.render_err("unsupported", verb, corr_id)
+
+
+# ---------------------------------------------------------------------------
+# One-arm binary verbs (S/D/T/RT/MOVE/MOVER/ECHO/PING/STOP/ID/HELLO/VER/HELP)
+# ---------------------------------------------------------------------------
+
+
+def _handle_binary_verb(proto: NezhaProtocol, verb: str, pos: list[str],
+                        kv: dict[str, str], corr_id: int | None) -> str:
+    try:
+        env = legacy_verbs.BINARY_DISPATCH[verb](pos, kv)
+    except ValueError as exc:
+        return render.render_err("badarg", str(exc), corr_id)
+
+    # NezhaProtocol._send_envelope() normalizes SerialConnection's
+    # (dict-wrapped) vs. SimConnection's (bare ReplyEnvelope) different
+    # send_envelope() return shapes -- see that method's own docstring.
+    reply = proto._send_envelope(env, read_timeout=500)
+    if reply is None:
+        return render.render_err("unknown", "timeout", corr_id)
+
+    which = reply.WhichOneof("body")
+    if which == "err":
+        return render.render_error(reply.err, corr_id)
+    if which == "echo":
+        return render.render_ok("echo", reply.echo.payload.decode("utf-8", "replace"), corr_id)
+    if which == "id":
+        if verb == "VER":
+            return render.render_ok("ver", render.render_ver_body(reply.id), corr_id)
+        return render.render_id_line(reply.id, corr_id)
+    if which == "helptext":
+        return render.render_ok("help", reply.helptext.text, corr_id)
+    if which == "ok":
+        return render.render_ok_for_verb(verb, pos, kv, reply.ok, corr_id)
+    return render.render_err("unknown", None, corr_id)
+
+
+# ---------------------------------------------------------------------------
+# Config (SET/GET) -- reuses NezhaProtocol/protocol.py's own key-target maps
+# rather than reimplementing the fan-out (mirrors io/proxy.py's
+# ProtocolBridge._handle_set/_handle_get exactly).
+# ---------------------------------------------------------------------------
+
+
+def _handle_set(proto: NezhaProtocol, kv: dict[str, str], corr_id: int | None) -> str:
+    if not kv:
+        return render.render_err("badarg", "no key=value pairs", corr_id)
+    bad = [k for k in kv if k not in protocol._ALL_SET_KEYS]
+    if bad:
+        return render.render_err("badkey", bad[0], corr_id)
+    try:
+        kwargs = {k: float(v) for k, v in kv.items()}
+    except ValueError:
+        return render.render_err("badarg", "bad value", corr_id)
+    applied = proto.set_config(**kwargs)
+    if applied is None:
+        return render.render_err("badarg", "set failed", corr_id)
+    body = " ".join(f"{k}={v}" for k, v in applied.items())
+    return render.render_ok("set", body, corr_id)
+
+
+def _handle_get(proto: NezhaProtocol, pos: list[str], corr_id: int | None) -> str:
+    requested = tuple(pos) if pos else render.ALL_GET_KEYS
+    bad = [k for k in requested if k not in protocol._TARGET_FOR_KEY]
+    if bad:
+        return render.render_err("badkey", bad[0], corr_id)
+
+    from robot_radio.io.proxy import _raw_config_snapshot_value
+
+    targets = sorted({protocol._TARGET_FOR_KEY[k] for k in requested})
+    snapshots: dict[int, Any] = {}
+    for target in targets:
+        snapshot = proto.get_config_binary(target)
+        if snapshot is not None:
+            snapshots[target] = snapshot
+
+    values: dict[str, float] = {}
+    for key in requested:
+        snapshot = snapshots.get(protocol._TARGET_FOR_KEY[key])
+        if snapshot is None:
+            continue
+        raw = _raw_config_snapshot_value(key, snapshot)
+        if raw is not None:
+            values[key] = raw
+    return render.render_cfg_line(values, corr_id, keys=requested)
+
+
+# ---------------------------------------------------------------------------
+# Telemetry (STREAM/SNAP)
+# ---------------------------------------------------------------------------
+
+
+def _handle_stream(proto: NezhaProtocol, pos: list[str], corr_id: int | None) -> str:
+    """``STREAM <period>`` -> ``StreamControl{binary: true, period}``.
+
+    This is the ONE place ``STREAM 50``/``STREAM 0`` (connect-time arm in
+    ``__main__.py``, the Operations panel's STREAM toggle, and
+    ``SimTransport``'s own tick-thread startup) turns into a binary
+    envelope -- no call site needs to build the envelope itself.
+    """
+    if not pos:
+        return render.render_err("badarg", "period", corr_id)
+    try:
+        requested = int(float(pos[0]))
+    except ValueError:
+        return render.render_err("badarg", "period", corr_id)
+    period = 0 if requested <= 0 else max(_STREAM_FLOOR_MS, requested)
+    proto.stream(period)
+    return render.render_ok("stream", f"period={period}", corr_id)
+
+
+def _handle_snap(proto: NezhaProtocol, corr_id: int | None) -> str:
+    """One-shot ``SNAP`` -- arm-wait-disarm synthesis (NezhaProtocol.snap()'s
+    own strategy, architecture-update.md (097) Decision 4), reimplemented
+    here instead of called directly because it needs the RAW
+    ``telemetry_pb2.Telemetry`` (for ``legacy_render.render_tlm_line()``),
+    not ``snap()``'s own parsed ``TLMFrame``.
+
+    Not reachable from the current UI (the only caller,
+    ``_TourRunner._wait_for_idle``, is unreachable once tours are gated
+    pending 098's OZ/SI arms) -- implemented anyway so a stray/future
+    ``SNAP`` never silently falls through to the catch-all "unsupported"
+    reply. Falls back to a non-blocking drain when the underlying
+    connection has no ``read_binary_tlm`` (``SimConnection`` doesn't --
+    its tick-thread already keeps a continuous binary stream armed and
+    drained, so a frame is normally already queued).
+    """
+    conn = proto._conn
+    conn.drain_binary_tlm()
+    proto.stream(_STREAM_FLOOR_MS)
+    read_binary_tlm = getattr(conn, "read_binary_tlm", None)
+    if read_binary_tlm is not None:
+        frames = read_binary_tlm(duration=400)
+    else:
+        frames = conn.drain_binary_tlm()
+    if not frames:
+        return render.render_err("unknown", "snap-timeout", corr_id)
+    return render.render_tlm_line(frames[0].tlm)

@@ -9,15 +9,22 @@ Button                                                         Action
 ============================================================  =============================
 Sync Pose from Camera                                          Read tag-100 from aprilcam;
                                                                send ``SI x y h`` (mm, mm, cdeg)
-Zero Encoders                                                  Send ``ZERO enc``
-STOP                                                           Send ``DEV DT STOP``
+                                                               -- GATED (097): SI has no
+                                                               binary arm until sprint 098
+Zero Encoders                                                  Send ``ZERO enc`` -- GATED
+                                                               (097): ZERO has no binary arm
+                                                               until sprint 098
+STOP                                                           Send ``STOP``
 Clear Traces                                                   Call ``clear_traces_cb`` hook
 Refresh Playfield                                              Read cam-3 frame + calib from
                                                                daemon; deskew via daemon H;
                                                                call ``refresh_playfield_cb``
 STREAM on/off toggle                                          Send ``STREAM 50`` / ``STREAM 0``
 Set Robot @ 0,0                                                Call ``set_origin_cb`` hook
-                                                               (display-only, no wire cmd)
+                                                               (display-only, no wire cmd);
+                                                               GATED (097) while connected --
+                                                               the callback's own OZ/SI reset
+                                                               has no binary arm until 098
 ============================================================  =============================
 
 Design rules
@@ -30,7 +37,11 @@ Design rules
   after ``transport.connect()`` to enable them.
 - STREAM button starts disabled like the others; toggling it on sends
   ``STREAM 50``, toggling it off sends ``STREAM 0``.
-- "Set Robot @ 0,0" is always enabled (display-only, no transport needed).
+- "Set Robot @ 0,0" is always enabled while disconnected (display-only, no
+  transport needed); disabled while connected (097 gate -- see above).
+- "Sync Pose" and "Zero Encoders" are permanently disabled (097 gate --
+  SI/ZERO have no binary arm until sprint 098): never added to
+  ``_transport_buttons``, so ``set_connected()`` never re-enables them.
 
 Hooks for ticket 008 (canvas/TraceModel)
 -----------------------------------------
@@ -215,14 +226,17 @@ def build_panel(
     sync_btn = QPushButton("Sync Pose")
     sync_btn.setObjectName("ops_btn_sync_pose")
     sync_btn.setToolTip(
-        "Read tag-100 from aprilcam daemon; send SI x y h (mm, mm, cdeg) to firmware.\n"
-        "Disabled in Sim mode (no camera)."
+        "Sync Pose requires sprint 098 -- SI (set internal pose) has no "
+        "binary arm yet (envelope.proto's `pose` oneof is declared-only "
+        "until 098)."
     )
     sync_btn.setEnabled(False)
 
     zero_btn = QPushButton("Zero Encoders")
     zero_btn.setObjectName("ops_btn_zero_encoders")
-    zero_btn.setToolTip("Send ZERO enc to reset wheel encoder counters to zero.")
+    zero_btn.setToolTip(
+        "Zero Encoders requires sprint 098 -- ZERO has no binary arm yet."
+    )
     zero_btn.setEnabled(False)
 
     stop_btn = QPushButton("STOP")
@@ -293,7 +307,10 @@ def build_panel(
     # Buttons that need a transport connection.
     # NOTE: refresh_btn is intentionally NOT in this list — the playfield camera
     # is independent of the robot transport and should always be accessible.
-    _transport_buttons = [sync_btn, zero_btn, stop_btn, stream_btn]
+    # NOTE (097): sync_btn/zero_btn are ALSO intentionally excluded — SI/ZERO
+    # have no binary arm until sprint 098 (see the tooltips set on them
+    # above); they stay permanently disabled instead of enabling on connect.
+    _transport_buttons = [stop_btn, stream_btn]
 
     # ------------------------------------------------------------------ controller
     controller = OpsController(
@@ -395,11 +412,19 @@ class OpsController:
         """Enable or disable transport-dependent buttons.
 
         In Sim mode, the "Sync Pose" button is disabled (no camera) with a
-        tooltip explaining why.  In PLAYFIELD MODE (Relay) the "Set Robot @
-        0,0" button is hidden — the robot's world pose comes from the camera,
-        so the operator physically moves the robot to world (0, 0) instead of
-        re-seeding the firmware pose.  All other transport-dependent buttons
-        are enabled.
+        tooltip explaining why (097: it is now permanently disabled
+        regardless of transport -- see below). In PLAYFIELD MODE (Relay) the
+        "Set Robot @ 0,0" button is hidden — the robot's world pose comes
+        from the camera, so the operator physically moves the robot to world
+        (0, 0) instead of re-seeding the firmware pose. All other
+        transport-dependent buttons are enabled.
+
+        097: "Set Robot @ 0,0" is ALSO disabled (not just hidden) whenever
+        connected, regardless of transport/mode -- the callback's wire
+        sequence (``_set_origin()`` in ``__main__.py``: STOP, ZERO enc, OZ,
+        SI) needs OZ/SI, which have no binary arm until sprint 098. It stays
+        enabled while disconnected: the display-only reset (re-anchor/clear/
+        centre the avatar) still works with no transport.
 
         Parameters
         ----------
@@ -421,6 +446,20 @@ class OpsController:
                 and is_relay_transport(transport)
             )
             self._origin_btn.setVisible(not hide_origin)  # type: ignore[attr-defined]
+            # 097 gate: disable while connected (OZ/SI have no binary arm
+            # yet); re-enable the display-only reset while disconnected.
+            self._origin_btn.setEnabled(not connected)  # type: ignore[attr-defined]
+            if connected:
+                self._origin_btn.setToolTip(  # type: ignore[attr-defined]
+                    "Set Robot @ 0,0 requires sprint 098 -- the pose reset "
+                    "(OZ/SI) has no binary arm yet."
+                )
+            else:
+                self._origin_btn.setToolTip(  # type: ignore[attr-defined]
+                    "Re-anchor the avatar to the playfield centre (world 0,0).\n"
+                    "Physically place the robot at the playfield centre first.\n"
+                    "Display-only — sends NO motion command to the robot."
+                )
 
         if connected and transport is not None and is_sim_transport(transport):
             self._sync_btn.setEnabled(False)  # type: ignore[attr-defined]
@@ -494,7 +533,7 @@ class OpsController:
     def on_stop(self) -> None:
         """Full-system halt: cancel workers, stop motors, and stop telemetry.
 
-        A single wire ``DEV DT STOP`` is not enough:
+        A single wire ``STOP`` is not enough on its own:
 
         1. A running GOTO/tour worker re-issues ``SI``/``G``/tour steps every
            poll cycle, so a lone STOP is overwritten within milliseconds — and
@@ -502,12 +541,20 @@ class OpsController:
            ``stop_motion_cb`` cancels AND joins the worker thread first, so
            nothing re-drives the robot and the transport is no longer touched
            from the worker thread.
-        2. ``DEV DT STOP`` halts the motors / aborts the active motion goal.
+        2. ``STOP`` halts the motors / aborts the active motion goal.
         3. ``STREAM 0`` stops telemetry — otherwise the firmware keeps emitting
            TLM after everything else has stopped (the robot "won't stop").
 
         Steps 2–3 use ``command`` (synchronous, ordered) now that the worker
         thread is joined, so there is no concurrent transport access.
+
+        097: sends the bare ``STOP`` verb, not the legacy ``DEV DT STOP`` --
+        the text plane's ``DEV`` debug command family has no binary arm and
+        never will (it is not part of sprint 098's scope either; the
+        transport translates it to a no-op, see ``binary_bridge.py``), while
+        ``STOP`` is one of the 6-verb text rump AND has its own binary
+        ``Stop{}`` oneof arm (``envelope.proto``) -- it is the one verb that
+        was ALWAYS guaranteed to keep working across this migration.
         """
         # 1. Cancel GOTO / tour workers BEFORE any wire command so nothing
         #    re-drives the robot afterwards.  Joins the worker thread; safe if
@@ -525,8 +572,8 @@ class OpsController:
 
         # 2. Halt motors / abort the active motion goal.
         try:
-            transport.command("DEV DT STOP", read_timeout=300)
-            self._log("[INFO] DEV DT STOP sent")
+            transport.command("STOP", read_timeout=300)
+            self._log("[INFO] STOP sent")
         except Exception as exc:
             self._log(f"[ERROR] STOP: {exc}")
 

@@ -128,8 +128,8 @@ from typing import Callable
 
 from robot_radio.io.serial_conn import SerialConnection, list_serial_ports
 from robot_radio.io.sim_conn import SimConnection
-from robot_radio.robot.protocol import TLMFrame
-from robot_radio.robot._legacy_tlm_text import parse_historical_tlm_line
+from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
+from robot_radio.testgui import binary_bridge
 from robot_radio.testgui import sim_prefs
 
 _log = logging.getLogger(__name__)
@@ -419,6 +419,13 @@ class _HardwareTransport(Transport):
         self._port = port
         self._mode = mode
         self._conn: SerialConnection | None = None
+        # NezhaProtocol wrapping self._conn -- constructed on connect(),
+        # torn down on disconnect(). command()/send() route every outbound
+        # line through binary_bridge.translate_command(self._proto, line),
+        # which is what actually builds/sends the binary CommandEnvelope
+        # (the firmware's text plane is a 6-verb rump now; S/D/T/RT/SET/
+        # GET/STREAM/... have no text form left to send).
+        self._proto: NezhaProtocol | None = None
 
         # Background thread handles
         self._reader_thread: threading.Thread | None = None
@@ -453,6 +460,8 @@ class _HardwareTransport(Transport):
         if "error" in result:
             self._conn = None
             raise ConnectionError(f"SerialConnection.connect failed: {result['error']}")
+
+        self._proto = NezhaProtocol(self._conn)
 
         # Start TLM reader thread.
         self._reader_thread = threading.Thread(
@@ -492,24 +501,38 @@ class _HardwareTransport(Transport):
             except Exception:
                 _log.exception("Error during SerialConnection.disconnect")
             self._conn = None
+        self._proto = None
 
     # ------------------------------------------------------------------
     # Commands
     # ------------------------------------------------------------------
 
     def send(self, line: str) -> None:
-        """Fire-and-forget write to the robot."""
-        if self._conn is None or not self._conn.is_open:
+        """Fire-and-forget: translate ``line`` to binary and dispatch it.
+
+        097: the firmware's text plane is a 6-verb rump now -- every
+        motion/config line is translated to a binary ``CommandEnvelope``
+        via ``binary_bridge.translate_command()`` (which performs its own
+        request/reply round trip for a supported verb, or sends nothing at
+        all for a verb with no binary arm yet). The reply string is
+        discarded here (fire-and-forget contract), matching the
+        ``send_fast()`` pre-migration behavior's "no reply read" shape --
+        it is still logged, via ``translate_command``'s own
+        ``send_envelope()``/``NezhaProtocol`` calls invoking
+        ``SerialConnection``'s ``on_send``/``on_recv`` hooks the same way
+        ``command()`` does.
+        """
+        if self._conn is None or not self._conn.is_open or self._proto is None:
             raise ConnectionError("Transport is not connected")
-        self._conn.send_fast(line)
+        binary_bridge.translate_command(self._proto, line)
 
     def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
-        """Send a command and return collected reply lines as a string."""
-        if self._conn is None or not self._conn.is_open:
+        """Translate ``line`` to binary, send it, and return the rendered
+        text-v2 reply line (097: see ``binary_bridge.translate_command()``).
+        """
+        if self._conn is None or not self._conn.is_open or self._proto is None:
             return ""
-        result = self._conn.send(line, read_timeout=read_timeout)
-        responses = result.get("responses", [])
-        return "\n".join(responses)
+        return binary_bridge.translate_command(self._proto, line)
 
     # ------------------------------------------------------------------
     # Keepalive arm/disarm
@@ -856,7 +879,12 @@ class SimTransport(Transport):
     # ------------------------------------------------------------------
 
     def send(self, line: str) -> None:
-        """Fire-and-forget: enqueue a command for the tick-thread to execute."""
+        """Fire-and-forget: enqueue a command for the tick-thread to execute.
+
+        The tick-thread's ``_drain_cmd_queue`` translates ``line`` to binary
+        via ``binary_bridge.translate_command()`` (097) and discards the
+        reply -- see that method's own docstring.
+        """
         if not self._connected:
             raise ConnectionError("SimTransport is not connected")
         self._cmd_queue.put((line, None, None))
@@ -919,10 +947,14 @@ class SimTransport(Transport):
 
         Enqueues the command with a ``threading.Event`` and waits for the
         tick-thread to process it.  Timeout is derived from ``read_timeout``.
-        Returns an empty string on timeout or when not connected.  The
-        reply is logged (and, if it parses as TLM, delivered to
-        on_telemetry) by ``_drain_cmd_queue`` on the tick-thread — the one
-        place both this method and ``send()`` funnel through — not here.
+        Returns an empty string on timeout or when not connected. ``line``
+        is translated to binary and dispatched via
+        ``binary_bridge.translate_command()`` by ``_drain_cmd_queue`` on the
+        tick-thread — the one place both this method and ``send()`` funnel
+        through — not here (097). Telemetry no longer arrives via a
+        command's own reply text; it is delivered to ``on_telemetry``
+        separately, from the continuously-armed binary stream drained each
+        tick-thread iteration (``_tick_loop``).
         """
         if not self._connected:
             return ""
@@ -964,56 +996,48 @@ class SimTransport(Transport):
             return
 
         self._conn = conn
+        # NezhaProtocol wrapping conn -- the same binary-translation entry
+        # point (binary_bridge.translate_command()) the hardware backends
+        # use, so a text motion/config line never reaches SimConnection
+        # un-translated either (097).
+        proto = NezhaProtocol(conn)
         # SimConnection.connect() succeeded — unblock connect()'s wait.
         self._sim_ready_event.set()
 
         try:
             self._apply_field_profile(conn)
-            # Send STREAM 50 so the firmware emits TLM every 50 ms.  Zero-time
-            # -advance synchronous send (083-001) so starting the stream
-            # never itself consumes sim time.
-            #
-            # NOTE (083-001, verified against the built libfirmware_host):
-            # STREAM's periodic re-emission does NOT flow through the async
-            # EVT sink in this ABI -- conn.tick() never returns a "TLM ..."
-            # line on its own, no matter how long the sim is ticked (checked
-            # directly against sim_get_async_evts()).  The only way to read a
-            # fresh TLM sample in this ABI is a synchronous SNAP query -- see
-            # the per-iteration SNAP poll below, which is what actually feeds
-            # on_telemetry (STREAM 50 is still sent so the firmware's STREAM
-            # period state matches the hardware backends' setup call).
-            reply = conn.send("STREAM 50", read_timeout=0, stop_token=None)
-            responses = "\n".join(reply.get("responses", []))
-            self._log(f"[INFO] STREAM 50 → {responses or 'OK'}")
+            # Arm binary telemetry streaming (097): translate_command()
+            # turns "STREAM 50" into CommandEnvelope{stream: StreamControl
+            # {binary: true, period: 50}} -- the same envelope the hardware
+            # backends' connect-time STREAM arm sends. Periodic frames land
+            # in conn's ReplyStore and are drained via conn.drain_binary_tlm()
+            # below, exactly mirroring _HardwareTransport._reader_loop().
+            reply_line = binary_bridge.translate_command(proto, "STREAM 50")
+            self._log(f"[INFO] STREAM 50 → {reply_line or 'OK'}")
 
             tick_count = 0
             while not self._stop_event.is_set():
                 t0 = time.monotonic()
 
                 # Drain commands from the queue.
-                self._drain_cmd_queue(conn)
+                self._drain_cmd_queue(proto)
 
                 # Advance simulation: one conn.tick() call per wall-clock
                 # iteration, speed_factor x the base step duration — the
                 # SimConnection's own internal advance loop (sim_conn.py's
                 # _advance()) steps at its configured granularity and drains
-                # async EVT/TLM lines after every internal step, returning
-                # them all here in one list (replacing the old manual
-                # sim.tick_for() + sim.get_async_evts() pair).
+                # any async EVT lines after every internal step, returning
+                # them all here in one list.
                 speed = self._speed_factor
                 evt_lines = conn.tick(speed * _SIM_TICK_STEP_DURATION)
                 self._handle_evt_lines(evt_lines)
 
-                # Poll one fresh TLM sample per iteration (see the NOTE
-                # above) — a zero-time-advance synchronous SNAP, exactly the
-                # same primitive the Tour idle-detector already uses
-                # (__main__.py's _wait_for_idle()), just run continuously so
-                # on_telemetry gets a steady stream in Sim mode too.
-                try:
-                    snap = conn.send("SNAP", read_timeout=0, stop_token=None)
-                    self._handle_evt_lines(snap.get("responses", []))
-                except Exception as exc:
-                    _log.debug("SimTransport: SNAP telemetry poll failed: %s", exc)
+                # Drain binary telemetry pushed by the armed stream above --
+                # the sim-side counterpart of _HardwareTransport._reader_loop()
+                # (097: replaces the old per-iteration text SNAP poll; text
+                # STREAM/SNAP no longer exist on the wire at all).
+                for reply in conn.drain_binary_tlm():
+                    self._deliver_tlm(TLMFrame.from_pb2(reply.tlm))
 
                 # Bound the state log (built for bounded pytest runs, not an
                 # open-ended GUI session) — SimTransport never reads it.
@@ -1039,21 +1063,26 @@ class SimTransport(Transport):
                 _log.exception("SimTransport: SimConnection.disconnect() failed")
             self._conn = None
 
-    def _drain_cmd_queue(self, conn: SimConnection) -> None:
-        """Drain all pending commands from the queue and execute them on ``conn``.
+    def _drain_cmd_queue(self, proto: NezhaProtocol) -> None:
+        """Drain all pending commands from the queue and execute them.
 
-        Three kinds of queue item:
+        Two kinds of queue item:
 
         - A callable (e.g. ``set_true_pose``'s plant action) — run directly
-          on the tick-thread, which exclusively owns ``conn``.
-        - A ``send()``-originated line (``reply_list is None and done_evt is
-          None``): a one-way drive/stop command — dispatched via
-          ``conn.send_fast(line)``, fire-and-forget, no forced time advance,
-          no reply captured (083-001).
-        - A ``command()``-originated line (``reply_list``/``done_evt`` set):
-          a synchronous command needing a reply — dispatched via
-          ``conn.send(line, read_timeout=0, stop_token=None)``, a
-          zero-time-advance synchronous reply.
+          on the tick-thread against ``proto._conn`` (the ``SimConnection``
+          the tick-thread exclusively owns).
+        - A text-v2 line (``send()`` or ``command()`` originated, no longer
+          distinguished — see below) — translated to binary and dispatched
+          via ``binary_bridge.translate_command(proto, line)`` (097): every
+          supported verb costs one ``SimConnection.send_envelope()`` round
+          trip (a zero-simulated-time synchronous ctypes call, not a real
+          I/O wait), and an unsupported verb (DEV/R/TURN/G/pose/otos/...)
+          sends nothing at all. ``send()``'s prior true fire-and-forget
+          shape (``conn.send_fast()``, no reply computed) is no longer
+          reachable for a translated verb -- translation itself requires a
+          request/reply round trip -- so both kinds are now handled
+          identically; the reply is simply discarded for a ``send()``-
+          originated item (``reply_list``/``done_evt`` both ``None``).
         """
         try:
             while True:
@@ -1061,14 +1090,10 @@ class SimTransport(Transport):
                 line, reply_list, done_evt = item
                 try:
                     if callable(line):
-                        line(conn)
-                        reply = ""
-                    elif reply_list is None and done_evt is None:
-                        conn.send_fast(line)
+                        line(proto._conn)
                         reply = ""
                     else:
-                        result = conn.send(line, read_timeout=0, stop_token=None)
-                        reply = "\n".join(result.get("responses", []))
+                        reply = binary_bridge.translate_command(proto, line)
                 except Exception as exc:
                     reply = f"ERR sim: {exc}"
                 if reply_list is not None:
@@ -1080,38 +1105,27 @@ class SimTransport(Transport):
                     if not raw_line:
                         continue
                     self._log(f"< {raw_line}")
-                    # 097-003: SimTransport talks to SimConnection (a ctypes
-                    # ABI, not SerialConnection) via plain text commands --
-                    # no _binary_tlm_queue exists on this path. Stays on the
-                    # text plane deliberately; see
-                    # robot_radio.robot._legacy_tlm_text's own module
-                    # docstring for why this is a flagged, conservative
-                    # exception rather than an oversight.
-                    frame = parse_historical_tlm_line(raw_line)
-                    if frame is not None:
-                        self._deliver_tlm(frame)
         except queue.Empty:
             pass
 
     def _handle_evt_lines(self, lines: list[str]) -> None:
-        """Log every EVT/TLM line returned by ``conn.tick()`` and deliver TLM frames.
+        """Log every EVT line returned by ``conn.tick()``.
 
         Mirrors ``_HardwareTransport``'s ``on_recv`` hook, which logs every
-        raw wire line unconditionally.  The background ``STREAM 50`` started
-        in ``_tick_loop`` is what actually feeds the canvas pose trace, and it
-        must be visible in the console like any other traffic.
+        raw wire line unconditionally. Current firmware emits no EVT at all
+        (see ``io/proxy.py``'s ``_EvtWatcher`` docstring), so this list is
+        normally empty; kept for parity/forward-compatibility.
 
-        097-003: stays on the text plane (see ``_drain_cmd_queue``'s own
-        comment above -- same reasoning, same ``SimConnection`` transport).
+        097: no longer text-parses TLM out of this list -- telemetry now
+        arrives exclusively via the binary stream armed in ``_tick_loop``
+        and drained through ``conn.drain_binary_tlm()`` there, the same
+        split ``_HardwareTransport._reader_loop()`` uses.
         """
         for line in lines:
             line = line.strip()
             if not line:
                 continue
             self._log(f"< {line}")
-            frame = parse_historical_tlm_line(line)
-            if frame is not None:
-                self._deliver_tlm(frame)
 
     def _deliver_sim_truth(self, conn: SimConnection) -> None:
         """Read ground-truth pose from the sim and deliver to on_truth callback.

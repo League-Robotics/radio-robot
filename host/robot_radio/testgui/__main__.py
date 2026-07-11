@@ -632,6 +632,13 @@ def _build_main_window():  # type: ignore[return]
 
         btn.clicked.connect(_on_send)
 
+    # Verbs with no binary arm yet (097: envelope.proto's `motion` oneof
+    # field -- R/TURN/G's Subsystems::Planner motion -- is RESERVED, not
+    # even declared, until Planner un-parks; sprint 098's scope). Their Send
+    # buttons stay permanently disabled instead of enabling on connect --
+    # see the ``_send_buttons`` skip below.
+    _GATED_098_LABELS = frozenset({"R", "TURN", "G"})
+
     # Build one row per command in the COMMANDS schema.
     _row_send_getters: list[tuple[QPushButton, "object", list]] = []
     for cmd_spec in COMMANDS:
@@ -639,6 +646,16 @@ def _build_main_window():  # type: ignore[return]
         cmd_rows_layout.addWidget(row_widget)
         # Find the Send button just appended.
         btn = _send_buttons[-1]
+        if cmd_spec["label"] in _GATED_098_LABELS:
+            # Never let connect() re-enable it; grey out with an explanatory
+            # tooltip instead of leaving the row silently dead-looking.
+            _send_buttons.remove(btn)
+            btn.setEnabled(False)
+            btn.setToolTip(
+                f"{cmd_spec['label']} requires sprint 098 -- no binary arm "
+                "yet (Subsystems::Planner motion is not wired into "
+                "envelope.proto until Planner un-parks)."
+            )
         _row_send_getters.append((btn, cmd_spec, getters))
 
     left_layout.addWidget(cmd_rows_widget)
@@ -656,13 +673,15 @@ def _build_main_window():  # type: ignore[return]
         _tb.setObjectName(f"tour_btn_{_tour_name.lower().replace(' ', '_')}")
         _tb.setEnabled(False)
         _tb.setToolTip(
-            f"Run {_tour_name}: reset to origin, then drive a fixed "
-            "sequence, waiting for each move to complete."
+            f"{_tour_name} requires sprint 098 -- every tour starts by "
+            "resetting the robot to the origin (OZ/SI), which has no "
+            "binary arm yet."
         )
         tour_layout.addWidget(_tb)
         _tour_buttons.append((_tb, _tour_name))
-        # Enable/disable together with the Send buttons on connect/disconnect.
-        _send_buttons.append(_tb)
+        # 097: NOT added to _send_buttons -- every tour opens with
+        # _set_origin() (OZ/SI), gated pending sprint 098, so tour buttons
+        # stay permanently disabled instead of enabling on connect.
     # Stop Tour — dedicated control to abort a running tour. Deliberately NOT
     # added to _send_buttons: unlike the tour buttons themselves (which enable
     # on connect), this button must stay disabled while idle even when
@@ -688,8 +707,9 @@ def _build_main_window():  # type: ignore[return]
     goto_btn.setEnabled(False)
     goto_btn.setFixedWidth(52)
     goto_btn.setToolTip(
-        "Camera-based go-to: repeatedly reads the camera pose, snaps the robot "
-        "to it (SI), and drives toward (x, y) with G until within eps."
+        "GOTO requires sprint 098 -- the pursuit loop repeatedly snaps the "
+        "robot's pose (SI) and re-issues G, neither of which has a binary "
+        "arm yet."
     )
     goto_layout.addWidget(goto_btn)
 
@@ -723,8 +743,9 @@ def _build_main_window():  # type: ignore[return]
     goto_speed_spin = _make_goto_spin("speed", 200, 1, 1000, "mm/s")
     goto_layout.addStretch()
     left_layout.addWidget(goto_row)
-    # GOTO enables/disables with the Send buttons on connect/disconnect.
-    _send_buttons.append(goto_btn)
+    # 097: goto_btn is NOT added to _send_buttons -- GOTO's pursuit loop
+    # needs SI/G, gated pending sprint 098, so it stays permanently
+    # disabled instead of enabling on connect (see the tooltip above).
 
     # Sim Errors panel (issue testgui-sim-error-profile-config, extended to
     # the full SIMSET knob set by ticket 069-007) — makes every Sim-mode
@@ -1870,9 +1891,11 @@ def _build_main_window():  # type: ignore[return]
         _state["tour_worker"] = None
         _state["tour_thread"] = None
         _state["tour_bridge"] = None
-        if _state.get("transport") is not None:
-            for _tb, _ in _tour_buttons:
-                _tb.setEnabled(True)
+        # 097: tour buttons are NOT re-enabled here -- they are permanently
+        # disabled pending sprint 098 (every tour opens with _set_origin(),
+        # which needs OZ/SI). Pre-097 this re-enabled them unconditionally
+        # whenever connected, which would have wrongly un-gated them on
+        # every disconnect (this function also runs from _on_disconnect()).
         stop_tour_btn.setEnabled(False)
 
     def _on_tour_finished() -> None:
@@ -1892,9 +1915,11 @@ def _build_main_window():  # type: ignore[return]
         _state["tour_worker"] = None
         _state["tour_thread"] = None
         _state["tour_bridge"] = None
-        if _state.get("transport") is not None:
-            for _tb, _ in _tour_buttons:
-                _tb.setEnabled(True)
+        # 097: tour buttons are NOT re-enabled here -- they are permanently
+        # disabled pending sprint 098 (every tour opens with _set_origin(),
+        # which needs OZ/SI). Pre-097 this re-enabled them unconditionally
+        # whenever connected, which would have wrongly un-gated them on
+        # every disconnect (this function also runs from _on_disconnect()).
         stop_tour_btn.setEnabled(False)
 
     def _make_tour_handler(name: str, steps: list[str]):
@@ -1979,8 +2004,11 @@ def _build_main_window():  # type: ignore[return]
         _state["goto_worker"] = None
         _state["goto_thread"] = None
         _state["goto_bridge"] = None
-        if _state.get("transport") is not None:
-            goto_btn.setEnabled(True)
+        # 097: goto_btn is NOT re-enabled here -- it is permanently disabled
+        # pending sprint 098 (the pursuit loop needs SI/G). Pre-097 this
+        # re-enabled it unconditionally whenever connected, which would have
+        # wrongly un-gated it on every disconnect (this function also runs
+        # from _on_disconnect()).
 
     def _stop_all_motion() -> None:
         """Cancel any running tour AND GOTO worker (used by the STOP button).
@@ -2009,8 +2037,11 @@ def _build_main_window():  # type: ignore[return]
         _state["goto_worker"] = None
         _state["goto_thread"] = None
         _state["goto_bridge"] = None
-        if _state.get("transport") is not None:
-            goto_btn.setEnabled(True)
+        # 097: goto_btn is NOT re-enabled here -- it is permanently disabled
+        # pending sprint 098 (the pursuit loop needs SI/G). Pre-097 this
+        # re-enabled it unconditionally whenever connected, which would have
+        # wrongly un-gated it on every disconnect (this function also runs
+        # from _on_disconnect()).
 
     def _on_goto_clicked() -> None:
         transport = _state.get("transport")
