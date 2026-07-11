@@ -112,6 +112,8 @@ void SegmentExecutor::start(const Segment& segment, uint32_t now, float trackwid
   needTerminalPivot_ = fabsf(terminalPivotTarget_) > kAngleEps;
 
   stopping_ = false;
+  stopDecelVSign_ = 0.0f;
+  stopDecelOmegaSign_ = 0.0f;
   baselineCaptured_ = false;
   forceStopArmed_ = false;
   hasPending_ = false;   // a fresh start abandons any stale merge slot
@@ -160,6 +162,8 @@ void SegmentExecutor::replaceStream(const Segment& segment, uint32_t now,
   hasPending_ = false;     // replace semantics: anything pending is superseded
   forceStopArmed_ = false;
   stopping_ = false;
+  stopDecelVSign_ = 0.0f;
+  stopDecelOmegaSign_ = 0.0f;
   currentStream_ = true;
 
   msg::PlannerConfig linCfg = effectiveLinearConfig(segment);
@@ -609,12 +613,22 @@ void SegmentExecutor::maybeReplanPivot(uint32_t now, const msg::MotorState& encL
 
 void SegmentExecutor::armTranslateStopDecel(uint32_t now) {
   if (linearElapsed(now) >= linear_.duration()) return;  // already converged -- no-op
+  // Sample at the arm instant: refreshes solveToVelocity()'s seed to THIS
+  // moment's state, and records which direction the decel is stopping FROM
+  // so tick() can clamp the profile's past-zero dip (stopDecelVSign_'s doc,
+  // segment_executor.h).
+  float v = linear_.sample(linearElapsed(now)).velocity;
+  stopDecelVSign_ = (v > 0.0f) ? 1.0f : (v < 0.0f ? -1.0f : 0.0f);
   linear_.solveToVelocity(0.0f, linearCeiling_);
   linearSolveMs_ = now;
 }
 
 void SegmentExecutor::armPivotStopDecel(uint32_t now) {
   if (rotationalElapsed(now) >= rotational_.duration()) return;  // already converged -- no-op
+  // Same arm-instant sample + stopping-direction capture as
+  // armTranslateStopDecel() above.
+  float omega = rotational_.sample(rotationalElapsed(now)).velocity;
+  stopDecelOmegaSign_ = (omega > 0.0f) ? 1.0f : (omega < 0.0f ? -1.0f : 0.0f);
   rotational_.solveToVelocity(0.0f, rotationalCeiling_);
   rotationalSolveMs_ = now;
 }
@@ -645,6 +659,12 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
   if (phase_ == Phase::TRANSLATE) {
     if (!stopping_) maybeReplanTranslate(now, encLeft, encRight);
     v = linear_.sample(linearElapsed(now)).velocity;
+    // Stop-decel counter-motion clamp -- a decel-to-rest must never command
+    // reverse. solveToVelocity(0) seeded mid-decel (small velocity, strongly
+    // negative acceleration) legitimately dips PAST zero before settling;
+    // emit 0 from the crossing onward instead of the dip (stopDecelVSign_'s
+    // doc, segment_executor.h).
+    if (stopping_ && stopDecelVSign_ != 0.0f && v * stopDecelVSign_ < 0.0f) v = 0.0f;
   } else if (phase_ == Phase::BLEND) {
     // BLEND (chained streaming segment): both channels run simultaneously --
     // on a differential that is an arc. No divergence replans here
@@ -659,6 +679,10 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
       // out -- same PID zero-deadband rationale as the pivot branch below.
       if (rotElapsedPastDuration) omega = 0.0f;
       if (linearElapsed(now) >= linear_.duration()) v = 0.0f;
+      // Stop-decel counter-motion clamp, per channel -- see the TRANSLATE
+      // branch above (this is where the streamed-drain reverse-dip lived).
+      if (stopDecelVSign_ != 0.0f && v * stopDecelVSign_ < 0.0f) v = 0.0f;
+      if (stopDecelOmegaSign_ != 0.0f && omega * stopDecelOmegaSign_ < 0.0f) omega = 0.0f;
     }
   } else {
     if (!stopping_) maybeReplanPivot(now, encLeft, encRight);
@@ -678,6 +702,12 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
     // replan is supposed to keep re-extending the plan against a lagging
     // real plant -- forcing a hard 0 there would fight it.
     if (stopping_ && rotElapsedPastDuration) omega = 0.0f;
+    // Stop-decel counter-motion clamp -- see the TRANSLATE branch above.
+    // This is the pivot-end back-rotation (~1-2 deg per turn, and the
+    // hardware encoder-wedge reversal write-train trigger).
+    if (stopping_ && stopDecelOmegaSign_ != 0.0f && omega * stopDecelOmegaSign_ < 0.0f) {
+      omega = 0.0f;
+    }
   }
 
   if (stopping_) {

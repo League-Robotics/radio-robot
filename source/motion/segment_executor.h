@@ -290,6 +290,22 @@ class SegmentExecutor {
   uint32_t softDeadline_ = 0;     // [ms] absolute deadline for the graceful decel-to-zero
   static constexpr uint32_t kSoftDeadlineMs = 3000;  // [ms] matches Planner::kSoftDeadlineMs
 
+  // Direction each channel's stop-decel is stopping FROM (sign of the
+  // channel's velocity at arm*StopDecel() time; 0 = unarmed/at rest). A
+  // decel-to-rest must never command counter-motion: solveToVelocity(0)
+  // seeded mid-decel (velocity small, acceleration strongly negative)
+  // yields a jerk-limited profile whose velocity legitimately dips PAST
+  // zero before settling -- emitted verbatim, that dip physically
+  // back-rotates the robot ~1-2 deg at every pivot end (and was the
+  // streamed-drain reverse-dip of clasi/issues/segment-executor-stop-
+  // decel-drain-overshoot-reverses.md; on hardware, terminal reversal
+  // write-trains are the known encoder-wedge trigger). tick() clamps the
+  // emitted stop-decel velocity to 0 once it crosses against this sign --
+  // the emission follows the ramp down to zero and holds, and the dip is
+  // never commanded.
+  float stopDecelVSign_ = 0.0f;
+  float stopDecelOmegaSign_ = 0.0f;
+
   msg::StopCondition stops_[4] = {};
   uint8_t stopsCount_ = 0;
 
