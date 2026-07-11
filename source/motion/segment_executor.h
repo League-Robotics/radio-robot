@@ -278,10 +278,34 @@ class SegmentExecutor {
   // a per-plan window re-opens with every retarget/reanchor, so the tail of
   // each re-solve could keep spawning the next (the decaying-hump defect).
   uint32_t phaseReplanDeadline_ = 0;  // [ms] absolute
-  static constexpr float kDivergenceThreshold = 3.0f;        // [mm]
+  // Divergence thresholds -- recalibrated 2026-07-11, per channel: each must
+  // sit ABOVE its lag model's own noise floor (or the replan fires on model
+  // error and shaves the plan) and BELOW the real divergence it exists to
+  // catch. The model (measured == plan kDeadTime ago, exact via
+  // JerkTrajectory::peek()) still carries a feedback-dependent residual --
+  // kp acting on the tracking error makes the plant's true delay
+  // ramp-dependent, worth ~0.03 rad (~2mm of wheel arc) of phantom
+  // divergence during hard accel/decel at speed.
+  //
+  // ROTATION (0.10 rad): pivots CANNOT saturate the plant (the 6 rad/s yaw
+  // ceiling commands ~384 mm/s wheels, under the sim plant's 400 and the
+  // real motors' ~600 plateau), so the only sub-gross divergence source is
+  // a stalled/bogged wheel -- which grows by ~omega*kDeadTime every
+  // dead-time (0.25 rad per 40ms at the yaw ceiling) and clears 0.10 rad
+  // within ~2 loop passes. The OLD 0.03 sat exactly on the phantom floor
+  // and shrink-retargeted every high-speed pivot ~2 deg short per hit.
+  // LINEAR (5mm): straight moves DO routinely saturate the plant --
+  // v_body_max (1000) deliberately exceeds both plants' ceilings, and the
+  // replan's extend-on-deficit IS the designed correction for the real
+  // travel deficit saturation accrues (observed: a D 345 cruising at a
+  // planned 465 mm/s on the 400 mm/s sim plant accrues ~12mm; at 10mm the
+  // threshold outran the deficit inside the replan window and D landed
+  // 12mm short). 5mm clears the ~2-3mm phantom floor with margin while
+  // catching the deficit within ~75ms of saturation onset.
+  static constexpr float kDivergenceThreshold = 5.0f;        // [mm]
   static constexpr float kGrossDivergenceThreshold = 40.0f;  // [mm]
   static constexpr uint32_t kMinReplanInterval = 60;         // [ms] shared, linear+rotational
-  static constexpr float kRotDivergenceThreshold = 0.03f;      // [rad]
+  static constexpr float kRotDivergenceThreshold = 0.10f;      // [rad]
   static constexpr float kRotGrossDivergenceThreshold = 0.3f;  // [rad]
 
   bool stopping_ = false;         // true during the trailing graceful decel-to-zero
@@ -290,21 +314,6 @@ class SegmentExecutor {
   uint32_t softDeadline_ = 0;     // [ms] absolute deadline for the graceful decel-to-zero
   static constexpr uint32_t kSoftDeadlineMs = 3000;  // [ms] matches Planner::kSoftDeadlineMs
 
-  // Direction each channel's stop-decel is stopping FROM (sign of the
-  // channel's velocity at arm*StopDecel() time; 0 = unarmed/at rest). A
-  // decel-to-rest must never command counter-motion: solveToVelocity(0)
-  // seeded mid-decel (velocity small, acceleration strongly negative)
-  // yields a jerk-limited profile whose velocity legitimately dips PAST
-  // zero before settling -- emitted verbatim, that dip physically
-  // back-rotates the robot ~1-2 deg at every pivot end (and was the
-  // streamed-drain reverse-dip of clasi/issues/segment-executor-stop-
-  // decel-drain-overshoot-reverses.md; on hardware, terminal reversal
-  // write-trains are the known encoder-wedge trigger). tick() clamps the
-  // emitted stop-decel velocity to 0 once it crosses against this sign --
-  // the emission follows the ramp down to zero and holds, and the dip is
-  // never commanded.
-  float stopDecelVSign_ = 0.0f;
-  float stopDecelOmegaSign_ = 0.0f;
 
   msg::StopCondition stops_[4] = {};
   uint8_t stopsCount_ = 0;

@@ -538,13 +538,17 @@ def test_two_moves_queued_back_to_back_both_execute_in_order(sim):
         sim.tick_for(24)
 
     true_enc_l, true_enc_r = sim.true_wheel_travel()
-    # A single `MOVE 200 0 0` run alone true-travels ~231mm (STOP_DISTANCE's
-    # own trigger/coast headroom over the commanded 200mm -- not a bug, a
-    # fixed characteristic of this executor/plant pairing). Two back-to-back
-    # segments should true-travel ~462mm (2x) -- NOT ~231mm (1x), which a
-    # Mailbox's silently-dropped-first-MOVE would produce.
-    assert true_enc_l == pytest.approx(462.0, abs=60.0)
-    assert true_enc_r == pytest.approx(462.0, abs=60.0)
-    assert true_enc_l > 350.0, "second MOVE never ran -- looks like only one segment executed"
+    # Two back-to-back 200mm segments should true-travel ~400mm (2x) -- NOT
+    # ~200mm (1x), which a Mailbox's silently-dropped-first-MOVE would
+    # produce. (The pre-2026-07-11 expectation here was 462 +/- 60 -- a
+    # single MOVE 200 used to true-travel ~231mm, documented at the time as
+    # "coast headroom, a fixed characteristic of this executor/plant
+    # pairing". It was neither: it was the sim plant overdriving every
+    # setpoint ~1.15-1.25x on miscalibrated feed-forward -- see
+    # tests/_infra/sim/sim_api.cpp defaultMotorConfigSet()'s gain-
+    # calibration comment. A MOVE 200 now travels ~200mm.)
+    assert true_enc_l == pytest.approx(400.0, abs=40.0)
+    assert true_enc_r == pytest.approx(400.0, abs=40.0)
+    assert true_enc_l > 300.0, "second MOVE never ran -- looks like only one segment executed"
 
     assert int(read_tlm_now(sim).active) == 0

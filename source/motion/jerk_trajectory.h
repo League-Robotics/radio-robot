@@ -173,6 +173,15 @@ class JerkTrajectory {
   // next solveToRest()/solveToVelocity() call.
   State sample(float elapsed);  // [s]
 
+  // peek -- evaluate the trajectory at an arbitrary elapsed time WITHOUT
+  // updating the remembered last-sample seed state (a const, pure read;
+  // sample() above is the stateful twin). For consumers that need the plan
+  // at a time OTHER than "now" -- e.g. the divergence replan's exact
+  // dead-time-shifted expectation (the plant's measured position is the
+  // plan's position kDeadTime AGO; peeking there must not corrupt the seed
+  // the next solve reads).
+  State peek(float elapsed) const;  // [s]
+
   // duration -- this channel's currently held trajectory's total duration
   // (Ruckig's own Trajectory::get_duration()). 0 before the first
   // successful solve.

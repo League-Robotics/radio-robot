@@ -84,8 +84,8 @@ MotorConfigSet defaultMotorConfigSet() {
   // 1/kNominalMaxSpeed is the exact feed-forward; the previous 0.0038
   // overdrove every wheel ~1.25x its setpoint.
   msg::Gains velGains;
-  velGains.kp = 0.0022f;
-  velGains.ki = 0.0018f;
+  velGains.kp = 0.0005f;
+  velGains.ki = 0.0005f;
   velGains.kff = 1.0f / Hal::PhysicsWorld::kNominalMaxSpeed;   // = 0.0025
   velGains.i_max = 0.3f;
   for (uint32_t i = 0; i < kMotorCount; ++i) {
@@ -93,7 +93,7 @@ MotorConfigSet defaultMotorConfigSet() {
     set.cfg[i].setPort(i + 1);
     set.cfg[i].setFwdSign(1);
     set.cfg[i].setVelGains(velGains);
-    set.cfg[i].setVelFiltAlpha(0.3f);
+    set.cfg[i].setVelFiltAlpha(1.0f);
     set.cfg[i].setPolled(i + 1 == 1 || i + 1 == 2);
   }
   return set;

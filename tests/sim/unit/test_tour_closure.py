@@ -60,12 +60,25 @@ wrong. Two real defects underneath:
    every wheel ~1.25x its setpoint -- the entire ~+20 deg/pivot residual.
    Translate legs were immune because STOP_DISTANCE truncates on measured
    encoders; the pivot endgame ran in plan space and let the overdrive
-   through. ``segment_executor.cpp``'s sim ``kOutputHops`` (modeled dead
-   time) was retuned 2.0 -> 0.0 in the same change: with exact tracking the
-   sim plant has no such lag, and any nonzero value produced
-   phantom-divergence replans / premature stop fires (speed-proportional
-   undershoot). Post-fix accuracy: 90->88.6, 180->179.9, 360->359.9 deg;
-   TOUR_1 closes.
+   through. Full calibration set (all plant-specific quantities): kff exact,
+   gentle kp/ki, velFiltAlpha=1.0 (honest measurement), v_body_max capped to
+   the plant's own 400 mm/s ceiling less headroom, and the executor's sim
+   ``kOutputHops`` re-measured at 1.5 passes for this gain set.
+3. **Executor stop path made library-native** (2026-07-11, stakeholder-
+   directed): the terminal ``solveToVelocity(0)`` re-arm at position-stop
+   fire was replaced by RIDING each position solve's own to-rest tail (a
+   Ruckig position profile ends with velocity and acceleration reaching 0
+   simultaneously AT the target -- its tail IS the optimal graceful
+   no-reverse stop; re-solving a velocity ramp mid-decel is what produced
+   the terminal reversal dip). Position solves now carry Ruckig's own
+   directional velocity band (min_velocity=0 for forward solves), so no
+   replan can even ASK for reversal, and replan solve failures leave the
+   in-flight plan untouched (a latent return-value-ignored bug restarted
+   the plan's clock mid-flight when a solve failed).
+
+   Final accuracy: pivots within ~0.5 deg (90->89.97), D legs within ~1mm,
+   zero commanded or measured reversal anywhere; TOUR_1 closes to ~4mm /
+   ~1.6 deg.
 """
 from __future__ import annotations
 
@@ -396,7 +409,7 @@ def test_tour1_closes_the_loop(tour_conn):
         heading_err = math.degrees(
             math.atan2(math.sin(ah - ih), math.cos(ah - ih))
         )
-        ok = dist <= 25.0 and abs(heading_err) <= 5.0
+        ok = dist <= 15.0 and abs(heading_err) <= 5.0
         marker = "" if ok else "  <-- FAIL"
         failures.append(
             f"  step {i + 1:2d} {step!r:>18}: ideal=({ix:7.1f},{iy:7.1f},"
@@ -413,20 +426,17 @@ def test_tour1_closes_the_loop(tour_conn):
         math.atan2(math.sin(ah - ih), math.cos(ah - ih))
     )
 
-    # Tolerance rationale (2026-07-11): the achieved per-pivot residual is
-    # +0.42 deg at 90 deg -- the sim plant's closed-loop LEAD at the stop
-    # (kp acting through the one-pass velocity filter), not a plan or
-    # kinematics error (the executor's emitted integral is exact, and the
-    # no-reversal clamp keeps the residual one-sided). Six chained RT 9000s
-    # compound that to ~+2.6 deg of heading, which walking the 240-700mm
-    # legs turns into up to ~25mm of position error before partial
-    # cancellation around the loop (final ~18mm). 25mm/5deg is therefore
-    # the honest bound for the CURRENT control (3.5% of the longest leg);
-    # the pre-fix defect this guards against was 199mm/+119deg.
-    assert final_dist <= 25.0 and abs(final_heading_err) <= 5.0, (
+    # Tolerance rationale (2026-07-11, final calibration): with the sim
+    # plant calibrated (exact feed-forward, honest velocity filter,
+    # measured 1.5-pass dead time) and the executor's stops riding each
+    # position solve's own to-rest tail, pivots land within ~0.5 deg and
+    # D legs within ~1mm -- the measured whole-tour closure is ~4mm /
+    # ~1.6 deg. 15mm/5deg leaves honest headroom; the pre-fix defect this
+    # guards against was 199mm/+119deg.
+    assert final_dist <= 15.0 and abs(final_heading_err) <= 5.0, (
         f"TOUR_1 did not close: final plant pose ({ax:.1f}, {ay:.1f}, "
         f"{math.degrees(ah):.1f}deg) vs ideal ({ix:.1f}, {iy:.1f}, "
         f"{math.degrees(ih):.1f}deg) -- dist_err={final_dist:.2f}mm "
-        f"heading_err={final_heading_err:+.2f}deg (tolerance: 25mm / 5deg)\n"
+        f"heading_err={final_heading_err:+.2f}deg (tolerance: 15mm / 5deg)\n"
         f"Per-step trajectory:\n{per_step_report}"
     )

@@ -141,8 +141,8 @@ MotorConfigSet defaultMotorConfigSet() {
     // emitted plan integrated to the target EXACTLY. Encoder-bounded
     // STOP_DISTANCE masked the same overdrive on translate legs.
     msg::Gains velGains;
-    velGains.kp = 0.0022f;
-    velGains.ki = 0.0018f;
+    velGains.kp = 0.0005f;
+    velGains.ki = 0.0005f;
     velGains.kff = 1.0f / Hal::PhysicsWorld::kNominalMaxSpeed;   // = 0.0025
     velGains.i_max = 0.3f;
 
@@ -151,7 +151,7 @@ MotorConfigSet defaultMotorConfigSet() {
         set.cfg[i].setPort(i + 1);
         set.cfg[i].setFwdSign(1);
         set.cfg[i].setVelGains(velGains);
-        set.cfg[i].setVelFiltAlpha(0.3f);
+        set.cfg[i].setVelFiltAlpha(1.0f);
         // 091-002: I2C flip-flop poll-schedule membership -- true for the
         // drive pair (indices 0/1, physical ports 1/2, matching
         // defaultSimDrivetrainConfig()'s left_port=1/right_port=2), false
@@ -186,7 +186,15 @@ msg::PlannerConfig defaultSimMotionConfig() {
     msg::PlannerConfig cfg;
     cfg.a_max = 800.0f;         // [mm/s^2]
     cfg.a_decel = 800.0f;       // [mm/s^2]
-    cfg.v_body_max = 1000.0f;   // [mm/s]
+    // v_body_max: capped to the SIM PLANT's own capability (2026-07-11) --
+    // kNominalMaxSpeed = 400 mm/s less 5% saturation headroom -- rather than
+    // main.cpp's 1000. A plan that cruises above what the plant can execute
+    // saturates the duty at 1.0 and silently accrues a travel deficit the
+    // divergence replan then has to chase (a D 345 planned at 465 mm/s
+    // landed 8-13mm short depending on replan thresholds). Like the
+    // velocity-PID gains above, the motion ceiling is a PLANT-SPECIFIC
+    // quantity: plans must never ask the actuator for more than it has.
+    cfg.v_body_max = 380.0f;    // [mm/s] = kNominalMaxSpeed * 0.95
     cfg.yaw_rate_max = 6.0f;    // [rad/s]
     cfg.yaw_acc_max = 20.0f;    // [rad/s^2]
     cfg.j_max = 5000.0f;        // [mm/s^3]
