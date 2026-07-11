@@ -33,10 +33,27 @@ every failing scenario — the plan was never wrong. The real defects:
    a steeper `solveToVelocity(0)` ramp (the DRAIN REVERSE-DIP this issue was
    filed for). Retuned 2.0 → 0.0 (sim only; the real brick's 4.0 untouched).
 
-Post-fix: pivots land 90→88.6°, 180→179.9°, 360→359.9°; TOUR_1 closes to
-≤15 mm/≤5°; the drain no-reverse and both tour-closure tests pass un-xfailed;
-full `tests/sim` green (615 passed). The former xfail(strict) markers are
-removed (`test_move_streaming_drain_no_reverse`,
+**Final design (v0.20260711.3, stakeholder-directed away from an interim
+output clamp toward library-native mechanisms):** the terminal reversal dip
+was `armPivotStopDecel()`'s `solveToVelocity(0)` re-arm seeded mid-decel —
+a jerk-limited velocity profile from (v small, a strongly negative) must
+pass through zero. A Ruckig position solve's own tail ends with velocity
+AND acceleration reaching 0 simultaneously AT the target, so fired position
+stops now simply RIDE the plan's tail (velocity-ramp stops remain only for
+genuine preemption: sensor/time stops, STOP, deadman). Position solves carry
+Ruckig's directional velocity band (`min_velocity=0` forward / mirrored
+reverse) so no replan can even ask for reversal; solve failures leave the
+in-flight plan untouched (fixing a latent return-value-ignored bug that
+replayed the plan from t=0 on a failed replan); the replan lag expectation
+is taken exactly from the plan profile (`JerkTrajectory::peek()`); sim
+plant fully calibrated (exact kff, honest filter, v_body_max ≤ plant
+ceiling, kOutputHops re-measured 1.5).
+
+Post-fix: pivots land within 0.3° (90→89.7°, 180→179.9°, 360→360.2°); D
+legs within 1mm; zero commanded or measured reversal; TOUR_1 closes to
+~4 mm/~1.6° (test tolerance 15 mm/5°); full `tests/sim` green (615 passed).
+The former xfail(strict) markers are removed
+(`test_move_streaming_drain_no_reverse`,
 `test_isolated_rotation_leg_reveals_independent_residual`,
 `test_tour1_closes_the_loop`).
 
