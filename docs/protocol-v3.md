@@ -2,12 +2,16 @@
 
 Version 3 of the Nezha firmware command/telemetry protocol: a
 schema-driven **binary envelope command plane** (`*B<base64(protobuf)>`),
-a deliberately tiny **hand-typeable text safety rump** (`STOP`/`PING`/
-`HELLO`), and a host-side **`rogo` translator proxy** that speaks the old
-protocol-v2 text grammar to legacy clients while talking binary-only to
-the robot. This document describes the wire surface as it exists after
-sprint 097 ("Protocol v3 Sprint 3: host completion and text retirement")
-tickets 004/006/007/008 landed.
+a deliberately tiny **hand-typeable text safety rump** (`PING`/`HELLO`/
+`STOP`/`ID`/`VER`), and a host-side **`rogo` translator proxy** that speaks
+the old protocol-v2 text grammar to legacy clients while talking
+binary-only to the robot. This document describes the wire surface as it
+exists after sprint 097 ("Protocol v3 Sprint 3: host completion and text
+retirement") tickets 004/006/007/008 landed, and a later stakeholder-
+directed cleanup pass that gutted `text_channel.{h,cpp}` down to that
+minimal five-verb rump (deleting the pose/otos/DEV dead source ticket
+097-011 had consolidated into the same file, and restoring `ID`/`VER` from
+their pre-097-006 implementations).
 
 `docs/protocol-v2.md` is **superseded** by this document for every family
 097 gutted (motion, config, telemetry) — see the banner at the top of
@@ -15,7 +19,8 @@ that file. `docs/protocol-v2.md` §11 (OTOS/port I/O) and §16
 (Development commands) still accurately describe those two families'
 *text grammar*, but that grammar has been off the wire (unregistered,
 never called from `Rt::CommandRouter::buildTable()`) since before sprint
-097 even started — see §8 below.
+097 even started, and their source has since been **deleted outright**
+(not merely unregistered) — see §8 below.
 
 ---
 
@@ -27,7 +32,7 @@ command channel, discriminated by the first character(s):
 | Line shape | Meaning | Handled by |
 |---|---|---|
 | `*B<base64>` | Binary `CommandEnvelope` | `source/commands/binary_channel.cpp` |
-| `STOP` / `PING` / `HELLO` (+ optional `#<id>`) | Text safety rump | `source/commands/text_channel.cpp` |
+| `PING` / `HELLO` / `STOP` / `ID` / `VER` (+ optional `#<id>`) | Text safety rump | `source/commands/text_channel.cpp` |
 | anything else | Unrecognized | `CommandProcessor::dispatchTable()`'s no-match fallback → `ERR unknown` |
 
 `CommandProcessor::process()` branches on `line[0] == '*'` **before**
@@ -35,8 +40,8 @@ tokenizing (`source/commands/command_processor.cpp:428`) — base64 must
 never be uppercased or whitespace-tokenized the way a text verb line is.
 Every other line goes through the same `parseTokens()`/`dispatchTable()`
 path protocol v2 always used; with the motion/config/telemetry families
-deleted outright (not merely unregistered), only `STOP`/`PING`/`HELLO`
-still match anything in the table (§6).
+deleted outright (not merely unregistered), only `PING`/`HELLO`/`STOP`/
+`ID`/`VER` still match anything in the table (§6).
 
 For everything the rump doesn't cover, the **primary compatibility path**
 is the `rogo proxy` PTY bridge (§7), not the binary wire directly — a
@@ -127,7 +132,7 @@ not obvious from the field list alone.
 | `get` (11) | `ConfigGet{target}` | Reads `bb.drivetrainConfig` / `bb.motorConfig[]` / `bb.plannerConfig` / `bb.streamWatchdogWindow` directly — a snapshot read, no queue | `target` is `optional` + `(req)=true`; a missing `target` is rejected by the generated decoder before dispatch ever reaches the handler (`ERR_BADARG`, field=1) |
 | `stream` (12) | `StreamControl{binary, period}` | Sets `bb.telemetryPeriod` (floored to 20ms if nonzero, per `kStreamFloorMs`), `bb.telemetryChannel` (`router.currentChannel()`), `bb.telemetryBinary` | No "immediate first frame" concatenated into the ack (unlike the old text `STREAM`) — the first periodic frame arrives one `tickTelemetry()` pass later, uniformly |
 | `stop` (13) | `Stop{}` (zero fields) | Builds `msg::DrivetrainCommand{NEUTRAL=BRAKE}` inline, posts to `b.driveIn` | Byte-identical construction to the text rump's own `STOP` handler (§6) — "cannot be malformed" by design, never derived from a caller-supplied field |
-| `id` (14) | `DeviceId{}` (empty request) | none | Reply `body.id` = `model`/`name`/`serial`/`fw_version`/`proto_version`, sourced from the same `deviceIdentity()` helper the text rump's `HELLO`/boot banner use |
+| `id` (14) | `DeviceId{}` (empty request) | none | Reply `body.id` = `model`/`name`/`serial`/`fw_version`/`proto_version`, sourced from the same `deviceIdentity()` helper the text rump's `HELLO`/boot banner/`ID` handler use |
 
 ---
 
@@ -187,7 +192,7 @@ host maps it back to a field name via the same schema
 
 ---
 
-## 6. Text safety rump — `STOP` / `PING` / `HELLO`
+## 6. Text safety rump — `PING` / `HELLO` / `STOP` / `ID` / `VER`
 
 The firmware's entire text command table (`Rt::CommandRouter::buildTable()`,
 `source/runtime/command_router.cpp:25-27`) is now:
@@ -198,27 +203,31 @@ std::vector<CommandDescriptor> buildTable(CommandRouter& router) {
 }
 ```
 
-- **`textCommands()`** (`source/commands/text_channel.cpp:1536-1543`)
-  registers exactly `PING`, `HELLO`, `STOP` — 097-011 folded the former
-  `systemCommands()` (PING/HELLO) and `motionCommands()` (STOP) builders
-  into this one call site, and dropped the former `telemetryCommands()`
-  call entirely (it registered zero commands post-097-008; the empty
-  registrar itself was deleted along with the rest of
-  `telemetry_commands.{h,cpp}`). Every other verb `text_channel.cpp`'s
-  donor files ever held (`S`/`D`/`T`/`R`/`TURN`/`RT`/`G`/`MOVE`/`MOVER`,
-  `QLEN`, the shared stop-clause grammar, `StreamingDriveWatchdog`,
-  `STREAM`/`SNAP`'s text handlers, `telemetryEmit()`) was **deleted
-  outright** by ticket 097-006/097-008 — not merely unregistered, the
-  parser/handler functions no longer exist anywhere in the source tree
-  (see git history). The one-shot `TLM` verb (`handleTlm()`) was likewise
-  deleted by ticket 097-008.
+- **`textCommands()`** (`source/commands/text_channel.cpp`) registers
+  exactly `PING`, `HELLO`, `STOP`, `ID`, `VER`. 097-011 first folded the
+  then-live `systemCommands()` (PING/HELLO) and `motionCommands()` (STOP)
+  builders into this one call site (dropping the former
+  `telemetryCommands()` call entirely — it registered zero commands
+  post-097-008), while also carrying forward `otos_commands.{h,cpp}`/
+  `pose_commands.{h,cpp}`/`dev_commands.{h,cpp}` as never-registered,
+  external-linkage "sprint 098 transcription reference" source in the same
+  file. A later stakeholder-directed cleanup pass deleted that
+  never-registered pose/otos/DEV source outright (it was never on the
+  wire, so nothing here changed for a client), and **restored** `ID`/`VER`
+  from their pre-097-006 implementations (git history:
+  `system_commands.cpp` before commit `18ba84d8`) — `ECHO`/`HELP` stay
+  deleted. Every other verb `text_channel.cpp`'s original donor files ever
+  held (`S`/`D`/`T`/`R`/`TURN`/`RT`/`G`/`MOVE`/`MOVER`, `QLEN`, the shared
+  stop-clause grammar, `StreamingDriveWatchdog`, `STREAM`/`SNAP`'s text
+  handlers, `telemetryEmit()`, one-shot `TLM`) remains **deleted
+  outright** — the parser/handler functions no longer exist anywhere in
+  the source tree (see git history).
 - The now-deleted `config_commands.{h,cpp}` (text `SET`/`GET`) is gone as
   a *file*, not merely unregistered (ticket 097-007).
 
-That leaves **three** hand-typeable verbs, byte-identical in behavior to
-their pre-097 text-plane selves:
+That leaves **five** hand-typeable verbs:
 
-- **`STOP`** — `handleStop()` (`text_channel.cpp:162-172`, formerly
+- **`STOP`** — `handleStop()` (`text_channel.cpp`, formerly
   `motion_commands.cpp`) posts `msg::DrivetrainCommand{NEUTRAL=BRAKE}` to
   `b.driveIn` and replies `OK stop`. This is the deliberate **safety
   affordance**: a human with a
@@ -237,13 +246,25 @@ their pre-097 text-plane selves:
   needing the binary plane at all — the same role it has always played,
   now doubling as the one text-plane path a client can probe before it
   knows whether the firmware even understands base64 lines.
+- **`ID`** — device identification, bare reply (no `OK`/`ERR` wrapper,
+  like `HELLO`'s own `DEVICE:` taxonomy): `ID model=<m> name=<n>
+  serial=<s> fw=<ver> proto=<n> [#id]`. Sources the same `deviceIdentity()`
+  pair `HELLO`/the boot banner/binary `id` all use — no `caps=` field (the
+  original's caps list was read off a `Robot` type that doesn't exist in
+  this tree).
+- **`VER`** — firmware/protocol version query, `OK ver fw=<ver>
+  proto=<n>` — a strict subset of `ID`'s own fields, kept as its own verb
+  for pre-097 client compatibility.
 
-Anything else sent as plain text — `ECHO`, `VER`, `HELP`, `ID`,
+Anything else sent as plain text — `ECHO`, `HELP`,
 `S`/`D`/`T`/`R`/`TURN`/`RT`/`G`, `MOVE`/`MOVER`, `QLEN`,
-`SET`/`GET`/`STREAM`/`SNAP`/`TLM` — no longer matches anything in
-`buildTable()` and falls through to `CommandProcessor::dispatchTable()`'s
-own no-match branch (`command_processor.cpp:103-107`): `ERR unknown`,
-the identical code path a genuinely unrecognized verb has always hit.
+`SET`/`GET`/`STREAM`/`SNAP`/`TLM`, `SI`/`ZERO`/`OI`/`OZ`/`OR`/`OP`/`OV`/
+`OL`/`OA`, any `DEV *` — no longer matches anything in `buildTable()` and
+falls through to `CommandProcessor::dispatchTable()`'s own no-match branch
+(`command_processor.cpp:103-107`): `ERR unknown`, the identical code path
+a genuinely unrecognized verb has always hit. `SI`/`ZERO`/OTOS/`DEV`'s
+verbs never matched anything even before this cleanup (§8) — their source
+is now simply gone, not just unregistered.
 
 ---
 
@@ -398,44 +419,50 @@ thread's `Telemetry.active` samples:
 
 Two families are a **different category** from everything §6/§7 cover.
 The gutted-but-proxied families (`S`/`D`/`T`/`RT`/`MOVE`/`MOVER`/`ECHO`/
-`VER`/`SET`/`GET`/`STREAM`/`SNAP`/one-shot `TLM`) each had a **live text
+`SET`/`GET`/`STREAM`/`SNAP`/one-shot `TLM`) each had a **live text
 handler that 097 deleted outright**, replaced on the wire by a binary
 arm, **and** covered by the proxy's translation table. `QLEN`/`R`/`TURN`/
 `G` had dormant (unregistered) handler code that 097-006 deleted
 alongside the live ones, and the proxy answers all four with a typed
-error (§7.6) since no binary arm exists for any of them.
+error (§7.6) since no binary arm exists for any of them. (`VER`/`ID` were
+also gutted by 097-006, but — unlike the rest of this list — were later
+**restored** into the live text rump, §6; they are no longer in this
+category.)
 
 **OTOS/pose/DEV are different again**: their firmware source was **never
 touched by sprint 097 at all**, and their `CommandDescriptor` tables were
-**already unregistered before 097 started** — `command_router.cpp`'s own
-`buildTable()` comment says so explicitly: *"Binary `config`/`get` ...
-is the only live config-plane path, same as the still-unregistered
-`dev`/`pose`/`otos` text families."*
+**already unregistered before 097 started**. A later stakeholder-directed
+cleanup pass **deleted their source outright** from
+`source/commands/text_channel.{h,cpp}` — they had briefly been carried
+forward there (097-011's six-file consolidation) as a never-registered
+"sprint 098 transcription reference," but that reference copy is now gone
+from the source tree too. This is a **firmware-side** statement, distinct
+from the proxy-side "no binary arm exists" statement §7.6 makes about the
+same verbs.
 
-- **`source/commands/text_channel.{h,cpp}`** Section 2 (OI/OZ/OR/OP/OV/OL/OA
-  and SI/ZERO — formerly `otos_commands.{h,cpp}`/`pose_commands.{h,cpp}`,
-  consolidated by ticket 097-011) — `otosCommands()`/`poseCommands()` both
-  build valid `CommandDescriptor` tables, but **neither function is called
-  anywhere** except its own definition (confirmed by grep — no call site
-  outside `text_channel.cpp` itself). They are kept as the **transcription
-  reference** for sprint 098's binary `pose`/`otos` `CommandEnvelope`
-  arms (envelope.proto fields 7/8, §3) — 098 owns porting their field
-  shapes and Blackboard-queue targets (`bb.poseResetIn`/
-  `bb.otosSetPoseIn`/`bb.otosCommandIn`/`bb.motorResetIn[]`, per
-  `text_channel.h`'s own Section 2 doc comment) into `BinaryChannel`.
-- **`source/commands/text_channel.{h,cpp}`** Section 3 (`DEV M`/`DEV DT`/
-  `DEV STATE`/`DEV STOP`/`DEV WD` — formerly `dev_commands.{h,cpp}`,
-  consolidated by ticket 097-011) — same "exists, never registered"
-  status, for a **different reason**: `DEV` is a `ROBOT_DEV_BUILD`-gated
-  bench-diagnostic family for raw per-port motor control, bypassing
-  `Drivetrain` entirely. It never had, and does not need, a binary
-  counterpart — no sprint has ever proposed a `dev` `CommandEnvelope` arm.
+- **Pose/OTOS** (`SI`/`ZERO`/`OI`/`OZ`/`OR`/`OP`/`OV`/`OL`/`OA`) — a real
+  binary counterpart is planned: the `pose` (field 7) / `otos` (field 8)
+  `CommandEnvelope` arms already exist in the schema, declared-only today
+  (`Error{ERR_UNIMPLEMENTED}`, §3) — **sprint 098 lands their live
+  implementation**, porting the same field shapes and Blackboard-queue
+  targets (`bb.poseResetIn`/`bb.otosSetPoseIn`/`bb.otosCommandIn`) the old
+  text handlers used directly into `BinaryChannel`. If a transcription
+  reference is ever needed, the deleted handler bodies are in git history
+  (`source/commands/text_channel.{h,cpp}`'s own history, or further back,
+  `pose_commands.{h,cpp}`/`otos_commands.{h,cpp}` pre-097-011).
+- **DEV** (`DEV M`/`DEV DT`/`DEV STATE`/`DEV STOP`/`DEV WD`) — a
+  `ROBOT_DEV_BUILD`-gated bench-diagnostic family for raw per-port motor
+  control, bypassing `Drivetrain` entirely. It never had, and does not
+  need, a binary counterpart — no sprint has ever proposed a `dev`
+  `CommandEnvelope` arm — and is now simply **gone from the text plane**,
+  with no planned replacement. Its source is likewise recoverable from git
+  history if ever needed.
 
 Both families are proxied the same way `QLEN`/`R`/`TURN`/`G` are (a local
 typed `ERR unsupported <verb>`, §7.6) — but that is a **proxy-side**
 statement about client compatibility, not a firmware-side statement about
-what 097 did. Firmware-side, OTOS/pose/DEV are simply dead source on disk
-today, unrelated to this sprint's gut.
+current source. Firmware-side, OTOS/pose/DEV source no longer exists on
+disk at all.
 
 ---
 
@@ -480,17 +507,17 @@ robot.
 | v2 section | Status under v3 |
 |---|---|
 | §2 Grammar, §3 Response Taxonomy, §4 Error Codes, §5 `#id` Correlation | Still describes the **text rump**'s own grammar (§6 above) exactly — `STOP`/`PING`/`HELLO` use the identical tokenizer, corr-id extraction, and `OK`/`ERR` reply shapes |
-| §6 Liveness/Identity (`PING`/`ECHO`/`ID`/`DEVICE:`/`HELLO`/`VER`/`HELP`) | `PING`/`HELLO` live (rump); `ECHO`/`ID`/`VER`/`HELP` deleted from the firmware text plane — binary `ping`/`echo`/`id` arms exist (§3); proxied (§7.4) |
+| §6 Liveness/Identity (`PING`/`ECHO`/`ID`/`DEVICE:`/`HELLO`/`VER`/`HELP`) | `PING`/`HELLO`/`ID`/`VER` live (rump, §6 — `ID`/`VER` restored after an initial 097-006 deletion); `ECHO`/`HELP` deleted from the firmware text plane — binary `ping`/`echo`/`id` arms exist (§3); `ECHO`/`HELP` proxied (§7.4) |
 | §7 Config (`SET`/`GET`) | Firmware text family deleted (`config_commands.{h,cpp}` file removed); binary `config`/`get` arms exist (§3); proxied (§7.4) |
 | §8 Telemetry (`STREAM`/`SNAP`/`TLM` frame) | Firmware text handlers deleted; binary `stream` arm + `tlm` reply exist (§3/§4); proxied (§7.4) |
 | §9 Time Synchronisation | Unchanged in spirit — binary `ping`'s `Ack.t` carries the same clock-sync role text `PING`'s `t=` did |
 | §10 Motion Commands (`S`/`T`/`D`/`R`/`TURN`/`RT`/`G`/`VW`/`RF`/`STOP`/`GRIP`/`SI`) | `STOP` lives (rump); `S`/`T`/`D`/`RT`/`MOVE`/`MOVER` deleted, binary `drive`/`segment`/`replace`/`stop` arms exist (§3), proxied (§7.4); `R`/`TURN`/`G`/`GRIP` had no binary arm before or after — proxy returns typed `ERR unsupported` (§7.6); `VW`/`RF` were already off the wire pre-097 (not covered by this document — see the realign issue); `SI` is off-the-wire (§8) |
-| §11 OTOS/Port I/O (`OI`/`OZ`/`OR`/`OP`/`OV`/`OL`/`OA`/`P`/`PA`) | Off the wire entirely, untouched by 097 — §8 |
+| §11 OTOS/Port I/O (`OI`/`OZ`/`OR`/`OP`/`OV`/`OL`/`OA`/`P`/`PA`) | Off the wire entirely; source since deleted (was briefly kept as an unregistered 098 reference copy) — binary `pose`/`otos` arms declared, land in sprint 098 — §8 |
 | §12 Buffer/Framing Note | Superseded by §2 above for the binary plane; still accurate for the text rump's own line length |
 | §13 Verification Examples | Stale for every deleted verb; see `.claude/rules/hardware-bench-testing.md` and `tests/bench/` for current bench sequences |
 | §14 Debug Commands (`DBG ...`) | Not covered by this document — unaffected by 097; verify separately against current source before relying on it |
 | §15 Sim parameters | Unaffected by 097 (ctypes-only, not a wire concern) |
-| §16 Development Commands (`DEV ...`) | Off the wire entirely, untouched by 097 — §8 |
+| §16 Development Commands (`DEV ...`) | Off the wire entirely; source since deleted, no binary counterpart planned — §8 |
 
 ---
 

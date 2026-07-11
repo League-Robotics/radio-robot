@@ -1,5 +1,5 @@
-"""093-003/094-005/097-006/097-008: focused STOP-plus-binary-drive suite for
-the bare wheel-driving executive.
+"""093-003/094-005/097-006/097-008/097(text-channel-minimal-rump): focused
+STOP-plus-binary-drive suite for the bare wheel-driving executive.
 
 Sprint 093 gutted `Rt::MainLoop`/`Rt::CommandRouter::buildTable()` down to a
 liveness family plus a small motion family. 097-006 (architecture-update-r2.md
@@ -7,19 +7,24 @@ Decision 9, pure-binary firmware) went further: the text `S` verb itself is
 now DELETED (not merely unregistered the way 093-001 left T/D/R/TURN/RT/G) --
 its binary parity is the `drive` arm (`source/commands/binary_channel.cpp`,
 095, hardware-bench-smoke-tested), exercised below via
-`_binary_envelope.send_drive()`. `systemCommands()` now registers only
-`PING`/`HELLO` (VER/HELP/ECHO/ID deleted); `motionCommands()` now registers
-only `STOP` (S/D/T/RT/MOVE/MOVER/QLEN deleted by 097-006, TLM deleted by
-097-008); `telemetryCommands()` now registers nothing at all (STREAM/SNAP
-deleted by 097-008). Every other command family (`dev`/`config`/`pose`/
-`otos`) stays unregistered as before -- see `tests/sim/parked-093/README.md`
-for the full inventory of tests this obsoleted originally.
+`_binary_envelope.send_drive()`. A later stakeholder-directed cleanup pass
+gutted `text_channel.{h,cpp}` down to a minimal 5-verb rump -- `textCommands()`
+now registers exactly `PING`/`HELLO`/`STOP`/`ID`/`VER` (`ID`/`VER` restored
+from their pre-097-006 implementations; `HELP`/`ECHO` stay deleted); the
+pose/otos (`SI`/`ZERO`/`OI`/`OZ`/`OR`/`OP`/`OV`/`OL`/`OA`) and DEV command
+families -- already-dead, never-registered source kept only as a sprint 098
+transcription reference -- were deleted outright from the source tree in
+that same pass. Every one of those families was already unregistered before
+this pass, so the wire-level `ERR unknown` behavior for them is unchanged --
+see `tests/sim/parked-093/README.md` for the full inventory of tests this
+obsoleted originally.
 
 This file is the small, currently-green replacement for that lost coverage:
-`PING`/`HELLO` still work as text, `STOP` still works as text, `S`'s own
-plant-motion assertions now go through the binary `drive` arm instead, and
-a wire verb outside the live text surface is rejected with `ERR unknown`,
-proving the table reduction rather than merely that the survivors work.
+`PING`/`HELLO`/`ID`/`VER` still work as text, `STOP` still works as text,
+`S`'s own plant-motion assertions now go through the binary `drive` arm
+instead, and a wire verb outside the live text surface is rejected with
+`ERR unknown`, proving the table's exact shape rather than merely that the
+survivors work.
 
 094-005 UN-PARKS `S`'s/`STOP`'s own PLANT-MOTION assertions (previously
 split out to `tests/sim/parked-094/unit/test_bare_loop_drive_severed.py`
@@ -43,7 +48,7 @@ _DRIVE_TARGET = 150.0  # [mm/s] -- comfortably inside the plant's ~400 mm/s
 
 
 def test_ping_replies_ok(sim):
-    """`PING` (systemCommands(), untouched by the gut) still replies `OK
+    """`PING` (`textCommands()`, untouched by the gut) still replies `OK
     pong ...` -- part of the surviving liveness family, not the removed
     surface."""
     reply = sim.command("PING")
@@ -52,11 +57,35 @@ def test_ping_replies_ok(sim):
 
 def test_hello_replies_device_shaped(sim):
     """`HELLO` still replies the `DEVICE:...` identity banner (its own bare
-    reply taxonomy, docs/protocol-v2.md section 3) -- the second of the two
-    verbs architecture-update.md's Decision 3 names as the always-kept
-    surface alongside `S`/`STOP`."""
+    reply taxonomy, docs/protocol-v2.md section 3) -- one of the five verbs
+    the text rump keeps alongside `S`/`STOP`."""
     reply = sim.command("HELLO")
     assert reply.strip().startswith("DEVICE:")
+
+
+def test_id_replies_id_shaped(sim):
+    """`ID` -- restored into the rump (re-added from its pre-097-006
+    implementation, git history: former `system_commands.cpp`) -- replies
+    the bare `ID model=... name=... serial=... fw=... proto=...` taxonomy,
+    no `OK`/`ERR` wrapper, mirroring the binary `id` arm's `DeviceId` reply
+    fields (docs/protocol-v3.md section 3)."""
+    reply = sim.command("ID")
+    stripped = reply.strip()
+    assert stripped.startswith("ID model=NEZHA2")
+    assert "name=" in stripped
+    assert "serial=" in stripped
+    assert "fw=" in stripped
+    assert "proto=" in stripped
+
+
+def test_ver_replies_ok(sim):
+    """`VER` -- restored into the rump alongside `ID` -- replies `OK ver
+    fw=... proto=...`."""
+    reply = sim.command("VER")
+    stripped = reply.strip()
+    assert stripped.startswith("OK ver")
+    assert "fw=" in stripped
+    assert "proto=" in stripped
 
 
 @pytest.mark.parametrize("line", [
@@ -176,17 +205,23 @@ def test_stop_neutralizes_both_wheels_regardless_of_prior_drive_state(sim):
 
 def test_deleted_text_verbs_reply_err_unknown(sim):
     """097-006 (Decision 9) DELETED S/D/T/RT/MOVE/MOVER/QLEN/R/TURN/G
-    (git history: former motion_commands.cpp) and ECHO/VER/HELP/ID
-    (git history: former system_commands.cpp) outright -- not merely
-    unregistered them; both files' surviving live verbs (STOP; PING/HELLO)
-    were consolidated into text_channel.cpp by 097-011. Sending any of them over the
-    text plane now hits the exact same `ERR unknown` path an always-
-    unregistered family (`DEV`/`GET`, above) already does, proving the
-    deletion took effect at the wire, not just at the source level (the
-    grep-clean acceptance criteria already prove the source level)."""
+    (git history: former motion_commands.cpp) and ECHO/HELP (git history:
+    former system_commands.cpp) outright -- not merely unregistered them.
+    `VER`/`ID` were deleted by that same ticket but later RESTORED into the
+    rump (a stakeholder-directed cleanup that gutted `text_channel.{h,cpp}`
+    down to a minimal PING/HELLO/STOP/ID/VER table) -- see
+    `test_id_replies_id_shaped`/`test_ver_replies_ok` above for their own
+    coverage; they are deliberately absent from this list now. Sending any
+    of the verbs below over the text plane hits the exact same `ERR
+    unknown` path an always-unregistered family (`DEV`/`GET`, above)
+    already does, proving the reduced table's exact shape at the wire, not
+    just at the source level (the grep-clean acceptance criteria already
+    prove the source level)."""
     for line in ("S 100 100", "D 100 100 300", "T 100 100 1000", "RT 9000",
                  "MOVE 300 0 0", "MOVER 0 0 0 t=800 v=250", "QLEN",
                  "R 100 500", "TURN 9000", "G 100 100 200",
-                 "ECHO hi", "VER", "HELP", "ID"):
+                 "ECHO hi", "HELP",
+                 "SI 0 0 0", "ZERO enc", "OI", "OZ", "OR", "OP", "OV 0 0 0",
+                 "OL", "OA", "DEV STATE", "DEV STOP"):
         reply = sim.command(line)
         assert reply.strip() == "ERR unknown", f"{line!r} did not reply ERR unknown: {reply!r}"
