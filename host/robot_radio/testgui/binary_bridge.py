@@ -245,11 +245,10 @@ def _handle_snap(proto: NezhaProtocol, corr_id: int | None) -> str:
     The only caller today is ``_TourRunner._wait_for_idle``'s fire-and-forget
     ``send("SNAP")`` nudge (``__main__.py``) -- implemented anyway so a
     stray/future ``SNAP`` never silently falls through to the catch-all
-    "unsupported" reply. Falls back to a non-blocking drain when the
-    underlying connection has no ``read_binary_tlm`` (``SimConnection``
-    doesn't -- its tick-thread already keeps a continuous binary stream
-    armed and drained, so a frame is normally already queued).
+    "unsupported" reply.
     """
+    import time as _time
+
     conn = proto._conn
     conn.drain_binary_tlm()
     proto.stream(_STREAM_FLOOR_MS)
@@ -257,7 +256,18 @@ def _handle_snap(proto: NezhaProtocol, corr_id: int | None) -> str:
     if read_binary_tlm is not None:
         frames = read_binary_tlm(duration=400)
     else:
+        # SimConnection path (no read_binary_tlm): frames only exist after
+        # whoever ticks the sim has ticked (SimTransport's tick-thread when
+        # the GUI is connected), so a single non-blocking drain immediately
+        # after arming RACES that thread -- which drains each frame into the
+        # trace pipeline first -- and lost every time: the recurring
+        # "ERR unknown snap-timeout" console noise. Poll briefly instead,
+        # matching read_binary_tlm()'s own 400ms window.
         frames = conn.drain_binary_tlm()
+        deadline = _time.monotonic() + 0.4
+        while not frames and _time.monotonic() < deadline:
+            _time.sleep(0.02)
+            frames = conn.drain_binary_tlm()
     if not frames:
         return render.render_err("unknown", "snap-timeout", corr_id)
     return render.render_tlm_line(frames[0].tlm)

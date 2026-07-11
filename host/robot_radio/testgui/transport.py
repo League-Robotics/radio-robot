@@ -151,6 +151,62 @@ def list_ports() -> list[str]:
     return list_serial_ports()
 
 
+def find_robot_serial_port(candidates: "list[str] | None" = None) -> "str | None":
+    """Return the direct-USB ROBOT port for the Serial transport, or None.
+
+    Resolution order (pure and Qt-free, like ``find_relay_port()`` below):
+
+    1. ``config/devices.json`` -- mbdeploy's device registry (``mbdeploy
+       probe`` refreshes it) -- entries whose ``role`` is ``NEZHA2``/
+       ``ROBOT``, filtered to ports that are actually present right now
+       (registry entries go stale as USB re-enumerates), preferring ones in
+       ``candidates`` when given.
+    2. Fallback for a registry that is missing/stale: the first candidate
+       port that is NOT claimed by a ``RADIOBRIDGE`` registry entry -- so a
+       bench with a relay dongle plugged in never auto-picks the relay as
+       the robot.
+
+    Parameters
+    ----------
+    candidates:
+        Ordered port paths to choose among (``list_ports()`` when ``None``).
+    """
+    if candidates is None:
+        candidates = list_ports()
+
+    robot_ports: list[str] = []
+    relay_ports: set[str] = set()
+    registry = pathlib.Path(__file__).resolve().parents[3] / "config" / "devices.json"
+    if registry.exists():
+        try:
+            import json as _json
+            for entry in _json.loads(registry.read_text()).values():
+                role = (entry.get("role") or "").upper()
+                port = entry.get("port")
+                if not port:
+                    continue
+                if role in ("NEZHA2", "ROBOT"):
+                    robot_ports.append(port)
+                elif role == "RADIOBRIDGE":
+                    relay_ports.add(port)
+        except Exception:  # noqa: BLE001 -- unreadable registry == no registry
+            pass
+
+    # 1. Registry robot ports, existence-checked, candidates-preferred.
+    live_robot = [p for p in robot_ports if pathlib.Path(p).exists()]
+    for port in candidates:
+        if port in live_robot:
+            return port
+    if live_robot:
+        return live_robot[0]
+
+    # 2. First candidate not known to be a relay.
+    for port in candidates:
+        if port not in relay_ports:
+            return port
+    return None
+
+
 def find_relay_port(
     port_list: list[str],
     probe_fn: "Callable[[str], str | None]",

@@ -260,6 +260,11 @@ class TraceModel:
         # --- host-side encoder dead reckoning (097) -- see feed()'s docstring ---
         self._dead_reckoner = EncoderDeadReckoner(trackwidth)
         self.encoder_yaw: float | None = None  # [rad] display-frame heading
+        # Last dead-reckoned (or firmware, when present) encpose in the raw
+        # firmware shape (mm, mm, cdeg) -- consumers that used to read the
+        # wire's encpose= (the telemetry breakout panel) read this instead,
+        # since binary TLM carries no encpose field (096-001's trim).
+        self.last_encpose: tuple[int, int, int] | None = None
 
         # --- anchor pose: the world pose at the start of the trace ---
         self._anchor_x: float = 0.0   # cm
@@ -345,6 +350,7 @@ class TraceModel:
         if encpose is None and frame.enc is not None:
             encpose = self._dead_reckoner.update(*frame.enc)
         if encpose is not None:
+            self.last_encpose = encpose
             self._feed_encpose(encpose)
 
         # --- OTOS odometry ---
@@ -378,6 +384,7 @@ class TraceModel:
         self.encoder.clear()
         self.otos.clear()
         self.fused.clear()
+        self.last_encpose = None
         self._reset_baselines()
 
     # ------------------------------------------------------------------

@@ -304,6 +304,7 @@ def _build_main_window():  # type: ignore[return]
         SerialTransport,
         RelayTransport,
         SimTransport,
+        find_robot_serial_port,
         list_ports,
     )
     from robot_radio.testgui.commands import (
@@ -486,9 +487,14 @@ def _build_main_window():  # type: ignore[return]
     port_edit.setObjectName("port_edit")
     port_edit.setPlaceholderText("/dev/cu.usbmodem…")
     port_edit.setEnabled(False)
-    # Pre-populate with the first detected USB modem port if any.
+    # Pre-populate with the ROBOT's port (device-registry role lookup, so a
+    # plugged-in relay dongle is never pre-picked); fall back to the first
+    # detected USB modem port.
     detected = list_ports()
-    if detected:
+    _robot_port = find_robot_serial_port(detected)
+    if _robot_port is not None:
+        port_edit.setText(_robot_port)
+    elif detected:
         port_edit.setText(detected[0])
     left_layout.addWidget(port_edit)
 
@@ -1315,6 +1321,16 @@ def _build_main_window():  # type: ignore[return]
                     canvas_ctrl.refresh(avatar_yaw_rad)
             # Refresh the parsed-telemetry breakout with the freshest frame.
             if last_frame is not None:
+                if last_frame.encpose is None:
+                    # Binary TLM carries no encpose field (096-001's trim) --
+                    # surface the SAME host-side dead-reckoned pose the
+                    # canvas avatar draws (trace_model.feed() above just
+                    # ingested this frame, so last_encpose is current), in
+                    # the (mm, mm, cdeg) shape the wire field would have had.
+                    # Until sprint 098 wires PoseEstimator, this row is the
+                    # only live pose in the breakout: the fused pose= stays
+                    # pinned at (0, 0, 0) by design.
+                    last_frame.encpose = trace_model.last_encpose
                 telemetry_ctrl.update_frame(last_frame)
 
         @Slot(float, float, float)
@@ -1415,6 +1431,10 @@ def _build_main_window():  # type: ignore[return]
         SNAP_REPLY_TIMEOUT_S = 0.8
         #: Per-move timeout (s) before giving up and aborting the tour.
         MOVE_TIMEOUT_S = 30.0
+        #: Cached-frame age (s) below which the continuous STREAM is
+        #: considered live and no SNAP nudge is sent (both transports arm
+        #: STREAM at connect; frames arrive every 20-50ms when healthy).
+        STREAM_FRESH_S = 0.5
 
         def __init__(
             self, transport: "object", state: dict, name: str, steps: list[str]
@@ -1463,14 +1483,23 @@ def _build_main_window():  # type: ignore[return]
         def _wait_for_idle(self, time_mod: "object") -> bool:
             """Wait until telemetry reports ``active=False`` (idle) or timeout.
 
-            Requests a fresh frame with a fire-and-forget ``SNAP`` and reads
-            ``active`` from ``state["last_tlm"]`` (populated by the
+            Reads ``active`` from ``state["last_tlm"]`` (populated by the
             transport's ``on_telemetry`` callback — see the class docstring
             for why ``command("SNAP")`` cannot be used, and why ``active``
             rather than ``mode`` is the correct completion signal for a
             segment/replace-arm move). Only frames stamped after this wait
             began are accepted, so a stale pre-move idle frame does not end
             the wait early.
+
+            ``SNAP`` is a fallback NUDGE only: both transports arm a
+            continuous ``STREAM`` at connect (SimTransport's tick-thread;
+            ``_on_connect``'s post-connect ``STREAM 50`` for hardware), so
+            frames normally arrive on their own and a per-poll SNAP
+            round-trip is pure console noise — on SimTransport it even ERRs
+            ``snap-timeout`` every time, because the one-shot's
+            arm-then-drain races the tick thread, which drains each frame
+            first. SNAP is therefore sent only when the cached frame has
+            actually gone stale (the stream is NOT flowing).
 
             Returns ``True`` when idle is observed (or on stop request),
             ``False`` on timeout.
@@ -1481,12 +1510,19 @@ def _build_main_window():  # type: ignore[return]
             while time_mod.monotonic() < deadline:
                 if self._stop:
                     return True
-                # Request one fresh telemetry frame; its TLM reply is delivered
-                # to state["last_tlm"] by the transport reader thread.
-                try:
-                    self._transport.send("SNAP")
-                except Exception:  # noqa: BLE001
-                    return False
+                cached = self._state.get("last_tlm")
+                stream_live = (
+                    cached is not None
+                    and (time_mod.monotonic() - cached[1]) < self.STREAM_FRESH_S
+                )
+                if not stream_live:
+                    # Stream stalled/never armed: request one fresh frame; its
+                    # TLM reply is delivered to state["last_tlm"] by the
+                    # transport reader thread.
+                    try:
+                        self._transport.send("SNAP")
+                    except Exception:  # noqa: BLE001
+                        return False
                 reply_deadline = time_mod.monotonic() + self.SNAP_REPLY_TIMEOUT_S
                 while time_mod.monotonic() < reply_deadline:
                     if self._stop:
@@ -2234,8 +2270,22 @@ def _build_main_window():  # type: ignore[return]
 
         if name == "Serial":
             if not port:
-                _append_log("[ERROR] No port specified for Serial transport")
-                return
+                # Auto-detect the robot's direct-USB port (mirrors the Relay
+                # branch's own auto-discovery below): mbdeploy's device
+                # registry (config/devices.json) knows which usbmodem is the
+                # NEZHA2 robot vs the RADIOBRIDGE relay dongle -- never
+                # auto-pick the relay as the robot.
+                _append_log("[INFO] Serial: no port specified -- auto-detecting robot...")
+                port = find_robot_serial_port(list_ports())
+                if port is None:
+                    _append_log(
+                        "[ERROR] No robot serial port found (no /dev/cu.usbmodem* "
+                        "present -- is the robot plugged in? `mbdeploy probe` "
+                        "refreshes the device registry)"
+                    )
+                    return
+                _append_log(f"[INFO] Robot found on {port}")
+                port_edit.setText(port)
             transport = SerialTransport(port)
         elif name == "Relay":
             from robot_radio.testgui.transport import find_relay_port, _relay_probe_banner
