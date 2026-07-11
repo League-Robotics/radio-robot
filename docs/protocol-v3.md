@@ -2,16 +2,21 @@
 
 Version 3 of the Nezha firmware command/telemetry protocol: a
 schema-driven **binary envelope command plane** (`*B<base64(protobuf)>`),
-a deliberately tiny **hand-typeable text safety rump** (`PING`/`HELLO`/
-`STOP`/`ID`/`VER`), and a host-side **`rogo` translator proxy** that speaks
-the old protocol-v2 text grammar to legacy clients while talking
+a deliberately tiny **hand-typeable text safety rump** (`HELP`/`HELLO`/
+`PING`/`ID`/`VER`/`STOP`), and a host-side **`rogo` translator proxy** that
+speaks the old protocol-v2 text grammar to legacy clients while talking
 binary-only to the robot. This document describes the wire surface as it
 exists after sprint 097 ("Protocol v3 Sprint 3: host completion and text
-retirement") tickets 004/006/007/008 landed, and a later stakeholder-
-directed cleanup pass that gutted `text_channel.{h,cpp}` down to that
-minimal five-verb rump (deleting the pose/otos/DEV dead source ticket
-097-011 had consolidated into the same file, and restoring `ID`/`VER` from
-their pre-097-006 implementations).
+retirement") tickets 004/006/007/008 landed, a stakeholder-directed cleanup
+pass that gutted `text_channel.{h,cpp}` down to a minimal five-verb rump
+(deleting the pose/otos/DEV dead source ticket 097-011 had consolidated
+into the same file, and restoring `ID`/`VER` from their pre-097-006
+implementations), and a further stakeholder-directed pass (2026-07-10) that
+re-added `HELP` (restored from its own pre-097-006 implementation) and gave
+**every one of the six rump verbs a binary `CommandEnvelope` arm**
+(`hello`/`ver`/`help` newly so; `ping`/`stop`/`id` already did) — "the only
+commands in the text channel should be `HELP`/`HELLO`/`PING`/`ID`/`VER`/
+`STOP`, and all of them should also have binary versions."
 
 `docs/protocol-v2.md` is **superseded** by this document for every family
 097 gutted (motion, config, telemetry) — see the banner at the top of
@@ -32,7 +37,7 @@ command channel, discriminated by the first character(s):
 | Line shape | Meaning | Handled by |
 |---|---|---|
 | `*B<base64>` | Binary `CommandEnvelope` | `source/commands/binary_channel.cpp` |
-| `PING` / `HELLO` / `STOP` / `ID` / `VER` (+ optional `#<id>`) | Text safety rump | `source/commands/text_channel.cpp` |
+| `HELP` / `HELLO` / `PING` / `ID` / `VER` / `STOP` (+ optional `#<id>`) | Text safety rump | `source/commands/text_channel.cpp` |
 | anything else | Unrecognized | `CommandProcessor::dispatchTable()`'s no-match fallback → `ERR unknown` |
 
 `CommandProcessor::process()` branches on `line[0] == '*'` **before**
@@ -40,8 +45,8 @@ tokenizing (`source/commands/command_processor.cpp:428`) — base64 must
 never be uppercased or whitespace-tokenized the way a text verb line is.
 Every other line goes through the same `parseTokens()`/`dispatchTable()`
 path protocol v2 always used; with the motion/config/telemetry families
-deleted outright (not merely unregistered), only `PING`/`HELLO`/`STOP`/
-`ID`/`VER` still match anything in the table (§6).
+deleted outright (not merely unregistered), only `HELP`/`HELLO`/`PING`/
+`ID`/`VER`/`STOP` still match anything in the table (§6).
 
 For everything the rump doesn't cover, the **primary compatibility path**
 is the `rogo proxy` PTY bridge (§7), not the binary wire directly — a
@@ -133,6 +138,9 @@ not obvious from the field list alone.
 | `stream` (12) | `StreamControl{binary, period}` | Sets `bb.telemetryPeriod` (floored to 20ms if nonzero, per `kStreamFloorMs`), `bb.telemetryChannel` (`router.currentChannel()`), `bb.telemetryBinary` | No "immediate first frame" concatenated into the ack (unlike the old text `STREAM`) — the first periodic frame arrives one `tickTelemetry()` pass later, uniformly |
 | `stop` (13) | `Stop{}` (zero fields) | Builds `msg::DrivetrainCommand{NEUTRAL=BRAKE}` inline, posts to `b.driveIn` | Byte-identical construction to the text rump's own `STOP` handler (§6) — "cannot be malformed" by design, never derived from a caller-supplied field |
 | `id` (14) | `DeviceId{}` (empty request) | none | Reply `body.id` = `model`/`name`/`serial`/`fw_version`/`proto_version`, sourced from the same `deviceIdentity()` helper the text rump's `HELLO`/boot banner/`ID` handler use |
+| `hello` (15) | `Hello{}` (zero fields) | none | Binary parity for text `HELLO` (2026-07-10). Reply `body.id` — `BinaryChannel::handleId()` is reused verbatim (same case-label fallthrough as `id`/`ver`); DeviceId already carries everything `HELLO`'s announcement content needs |
+| `ver` (16) | `Ver{}` (zero fields) | none | Binary parity for text `VER` (2026-07-10). Reply `body.id` (same `handleId()` reuse as `hello`) — a real client reads only `fw_version`/`proto_version` off it, VER's content being a strict subset of ID's own fields |
+| `help` (17) | `Help{}` (zero fields) | none | Binary parity for text `HELP` (2026-07-10). Reply `body.helptext` = `HelpText{text}`, the live registered verb list (`Rt::CommandRouter::listVerbs()`) — the SAME source text `HELP`'s own reply reads, so the two planes never drift apart |
 
 ---
 
@@ -144,8 +152,9 @@ not obvious from the field list alone.
 | `err` | `Error{code, field}` | Any rejection — see §5 |
 | `tlm` | `Telemetry` (`telemetry.proto`) | `tickTelemetry()`'s (`source/commands/binary_channel.cpp`, formerly `telemetry_commands.cpp` — relocated verbatim by ticket 097-011) periodic push once `StreamControl.period > 0`, on whichever channel bound it last — **unsolicited** (`corr_id = 0`), same "0 for an unsolicited reply" convention `envelope.proto`'s own doc comment states |
 | `cfg` | `ConfigSnapshot` | Reply to `get` |
-| `id` | `DeviceId` | Reply to `id` |
+| `id` | `DeviceId` | Reply to `id`, `hello`, and `ver` (all three share the identical reply body — `BinaryChannel::handleId()` reused, §3) |
 | `echo` | `Echo` | Reply to `echo` |
+| `helptext` | `HelpText{text}` | Reply to `help` — the live registered verb list (2026-07-10) |
 | `evt` | `EventNotify{}` (zero fields) | **Declared only — zero producers today.** `CommandProcessor::emitEvent()` (`command_processor.cpp:336-364`) is still the one place in the tree that assembles `"EVT ..."` wire text, but nothing calls it on the binary path (or anywhere else, currently). See §7's EVT-synthesis discussion for how the `rogo` proxy fills this gap **host-side** without firmware changes. |
 
 `Telemetry`'s own field set (`telemetry.proto`) is a curated union of the
@@ -192,10 +201,10 @@ host maps it back to a field name via the same schema
 
 ---
 
-## 6. Text safety rump — `PING` / `HELLO` / `STOP` / `ID` / `VER`
+## 6. Text safety rump — `HELP` / `HELLO` / `PING` / `ID` / `VER` / `STOP`
 
 The firmware's entire text command table (`Rt::CommandRouter::buildTable()`,
-`source/runtime/command_router.cpp:25-27`) is now:
+`source/runtime/command_router.cpp`) is now:
 
 ```cpp
 std::vector<CommandDescriptor> buildTable(CommandRouter& router) {
@@ -204,20 +213,24 @@ std::vector<CommandDescriptor> buildTable(CommandRouter& router) {
 ```
 
 - **`textCommands()`** (`source/commands/text_channel.cpp`) registers
-  exactly `PING`, `HELLO`, `STOP`, `ID`, `VER`. 097-011 first folded the
-  then-live `systemCommands()` (PING/HELLO) and `motionCommands()` (STOP)
-  builders into this one call site (dropping the former
-  `telemetryCommands()` call entirely — it registered zero commands
+  exactly `HELP`, `HELLO`, `PING`, `ID`, `VER`, `STOP`. 097-011 first
+  folded the then-live `systemCommands()` (PING/HELLO) and
+  `motionCommands()` (STOP) builders into this one call site (dropping the
+  former `telemetryCommands()` call entirely — it registered zero commands
   post-097-008), while also carrying forward `otos_commands.{h,cpp}`/
   `pose_commands.{h,cpp}`/`dev_commands.{h,cpp}` as never-registered,
   external-linkage "sprint 098 transcription reference" source in the same
-  file. A later stakeholder-directed cleanup pass deleted that
+  file. A stakeholder-directed cleanup pass then deleted that
   never-registered pose/otos/DEV source outright (it was never on the
   wire, so nothing here changed for a client), and **restored** `ID`/`VER`
   from their pre-097-006 implementations (git history:
-  `system_commands.cpp` before commit `18ba84d8`) — `ECHO`/`HELP` stay
-  deleted. Every other verb `text_channel.cpp`'s original donor files ever
-  held (`S`/`D`/`T`/`R`/`TURN`/`RT`/`G`/`MOVE`/`MOVER`, `QLEN`, the shared
+  `system_commands.cpp` before commit `18ba84d8`) — leaving a five-verb
+  rump with `ECHO`/`HELP` deleted. A further stakeholder-directed pass
+  (2026-07-10, "the only commands in the text channel should be
+  HELP/HELLO/PING/ID/VER/STOP") **restored `HELP`** from that same
+  pre-`18ba84d8` implementation — `ECHO` alone stays deleted. Every other
+  verb `text_channel.cpp`'s original donor files ever held
+  (`S`/`D`/`T`/`R`/`TURN`/`RT`/`G`/`MOVE`/`MOVER`, `QLEN`, the shared
   stop-clause grammar, `StreamingDriveWatchdog`, `STREAM`/`SNAP`'s text
   handlers, `telemetryEmit()`, one-shot `TLM`) remains **deleted
   outright** — the parser/handler functions no longer exist anywhere in
@@ -225,27 +238,30 @@ std::vector<CommandDescriptor> buildTable(CommandRouter& router) {
 - The now-deleted `config_commands.{h,cpp}` (text `SET`/`GET`) is gone as
   a *file*, not merely unregistered (ticket 097-007).
 
-That leaves **five** hand-typeable verbs:
+That leaves **six** hand-typeable verbs, and — as of the 2026-07-10 pass —
+**every one of them also has a binary `CommandEnvelope` arm** (§3): a
+client that already speaks the binary plane never needs to fall back to
+text at all, even for liveness/identity/help.
 
-- **`STOP`** — `handleStop()` (`text_channel.cpp`, formerly
-  `motion_commands.cpp`) posts `msg::DrivetrainCommand{NEUTRAL=BRAKE}` to
-  `b.driveIn` and replies `OK stop`. This is the deliberate **safety
-  affordance**: a human with a
-  bare serial terminal (`screen`, `minicom`) and no host program, no
-  protobuf tooling, and no base64 encoder can *always* halt the robot by
-  typing five characters and Enter. It is byte-identical to the binary
-  `stop` arm's own construction (§3) — the same "cannot be malformed"
-  design, just reachable without the binary plane at all.
-- **`PING`** — clock-sync probe, `OK pong t=<ms>` (same
-  `Types::systemClockNow()` source the binary `ping` arm's `Ack.t` uses).
+- **`HELP`** — `handleHelp()` (`text_channel.cpp`, restored from its
+  pre-`18ba84d8` `system_commands.cpp` implementation) reads the LIVE
+  registered verb table via `Rt::CommandRouter::listVerbs()` — never a
+  hardcoded string, so the reply always matches whatever `textCommands()`
+  actually registers — and replies `OK help <space-separated verbs>
+  [#id]` (currently `OK help HELP HELLO PING ID VER STOP`). Binary parity:
+  the `help` arm (§3) reads the SAME `listVerbs()` text into its
+  `HelpText.text` reply field.
 - **`HELLO`** — re-emits the `DEVICE:NEZHA2:robot:<name>:<serial>`
   identity banner (`formatDeviceAnnouncement()`, shared with the boot-time
-  announcement and the binary `id` reply's fields). This is the
-  **connect-handshake verb**: a host or a human can confirm they're
+  announcement and the binary `id`/`hello`/`ver` replies' fields). This is
+  the **connect-handshake verb**: a host or a human can confirm they're
   talking to a live Nezha2 firmware and learn its identity without
   needing the binary plane at all — the same role it has always played,
   now doubling as the one text-plane path a client can probe before it
-  knows whether the firmware even understands base64 lines.
+  knows whether the firmware even understands base64 lines. Binary
+  parity: the `hello` arm (§3) replies the identical `DeviceId`.
+- **`PING`** — clock-sync probe, `OK pong t=<ms>` (same
+  `Types::systemClockNow()` source the binary `ping` arm's `Ack.t` uses).
 - **`ID`** — device identification, bare reply (no `OK`/`ERR` wrapper,
   like `HELLO`'s own `DEVICE:` taxonomy): `ID model=<m> name=<n>
   serial=<s> fw=<ver> proto=<n> [#id]`. Sources the same `deviceIdentity()`
@@ -254,9 +270,20 @@ That leaves **five** hand-typeable verbs:
   this tree).
 - **`VER`** — firmware/protocol version query, `OK ver fw=<ver>
   proto=<n>` — a strict subset of `ID`'s own fields, kept as its own verb
-  for pre-097 client compatibility.
+  for pre-097 client compatibility. Binary parity: the `ver` arm (§3) —
+  its own dedicated request oneof arm, distinct from `id` on the wire,
+  even though it replies the identical `DeviceId` shape.
+- **`STOP`** — `handleStop()` (`text_channel.cpp`, formerly
+  `motion_commands.cpp`) posts `msg::DrivetrainCommand{NEUTRAL=BRAKE}` to
+  `b.driveIn` and replies `OK stop`. This is the deliberate **safety
+  affordance**: a human with a
+  bare serial terminal (`screen`, `minicom`) and no host program, no
+  protobuf tooling, and no base64 encoder can *always* halt the robot by
+  typing four characters and Enter. It is byte-identical to the binary
+  `stop` arm's own construction (§3) — the same "cannot be malformed"
+  design, just reachable without the binary plane at all.
 
-Anything else sent as plain text — `ECHO`, `HELP`,
+Anything else sent as plain text — `ECHO`,
 `S`/`D`/`T`/`R`/`TURN`/`RT`/`G`, `MOVE`/`MOVER`, `QLEN`,
 `SET`/`GET`/`STREAM`/`SNAP`/`TLM`, `SI`/`ZERO`/`OI`/`OZ`/`OR`/`OP`/`OV`/
 `OL`/`OA`, any `DEV *` — no longer matches anything in `buildTable()` and
@@ -343,9 +370,9 @@ kv)` (`legacy_verbs.tokenize_send_line()`, mirroring the firmware's own
 
 | Client sends | Route | Rendered reply |
 |---|---|---|
-| `S`, `D`, `T`, `RT`, `MOVE`, `MOVER`, `ECHO`, `PING`, `STOP`, `ID`, `VER` | `legacy_verbs.BINARY_DISPATCH[verb]` builds a `CommandEnvelope`; one blocking `send_envelope()` round trip | `legacy_render`'s per-verb `OK`/`ID`/`ERR` line, transcribed byte-for-byte from the deleted text handlers' own `snprintf` formats |
-| `HELLO` | **local** — answered from a `DeviceId` cached at proxy startup (retried once live if still empty) | `DEVICE:NEZHA2:robot:<name>:<serial>` |
-| `HELP` | **local** | short proxy help text (firmware `HELP` is gutted) |
+| `S`, `D`, `T`, `RT`, `MOVE`, `MOVER`, `ECHO`, `PING`, `STOP`, `ID`, `VER` | `legacy_verbs.BINARY_DISPATCH[verb]` builds a `CommandEnvelope`; one blocking `send_envelope()` round trip. `VER` now builds its own `{ver: Ver{}}` request (2026-07-10) — previously aliased `envelope_for_id` outright | `legacy_render`'s per-verb `OK`/`ID`/`ERR` line, transcribed byte-for-byte from the deleted text handlers' own `snprintf` formats |
+| `HELLO` | **local** — answered from a `DeviceId` cached at proxy startup (retried once live if still empty), intercepted before `BINARY_DISPATCH` is ever consulted | `DEVICE:NEZHA2:robot:<name>:<serial>` |
+| `HELP` | **local** — a short, hardcoded proxy help text (`_HELP_TEXT`), intercepted before `BINARY_DISPATCH` is ever consulted | `OK help <_HELP_TEXT> [#id]` |
 | `SET k=v ...` | binary fan-out — one `ConfigDelta` per distinct target, via `NezhaProtocol.set_config()`; unknown key → local `ERR badkey <k>` before any wire traffic | `OK set <k=v ...> [#id]` |
 | `GET [keys]` | binary fan-out/fan-in — one `ConfigGet` per distinct target, merged; unknown key → local `ERR badkey <k>` | one `CFG k=v ... [#id]` line, `kAllKeys` order, firmware-exact per-key int/fixed-3-decimal formatting |
 | `STREAM <n>` | binary `{stream: StreamControl{binary=true, period=n}}`; sets the client-stream flag the tlm-pump thread reads | `OK stream period=<0 or max(20,n)>` |
@@ -361,6 +388,18 @@ kv)` (`legacy_verbs.tokenize_send_line()`, mirroring the firmware's own
 (`legacy_render.py`): `UNKNOWN→unknown`, `BADARG→badarg`, `RANGE→range`,
 `FULL→full`, `DECODE→badarg`, `UNIMPLEMENTED→unsupported`,
 `OVERSIZE→unsupported`.
+
+**Note (2026-07-10)**: `legacy_verbs.BINARY_DISPATCH` also carries
+`envelope_for_hello`/`envelope_for_help` builders now (alongside the
+existing `envelope_for_ping`/`envelope_for_id`/`envelope_for_stop`/the new
+`envelope_for_ver`) — a complete, tested mirror of every rump verb's binary
+arm. The proxy's own `_handle_client_line` still intercepts `HELLO`/`HELP`
+and answers them **locally** before `BINARY_DISPATCH` is ever consulted for
+those two verbs (unchanged from before this pass), so this does not change
+proxy *behavior* — it means `legacy_verbs.py` itself, and `rogo binary
+hello/ver/help` (Appendix), can build every one of the six rump verbs'
+binary requests, not just the ones the proxy happens to route through this
+table.
 
 ### 7.5 EVT synthesis
 
@@ -424,10 +463,12 @@ handler that 097 deleted outright**, replaced on the wire by a binary
 arm, **and** covered by the proxy's translation table. `QLEN`/`R`/`TURN`/
 `G` had dormant (unregistered) handler code that 097-006 deleted
 alongside the live ones, and the proxy answers all four with a typed
-error (§7.6) since no binary arm exists for any of them. (`VER`/`ID` were
-also gutted by 097-006, but — unlike the rest of this list — were later
-**restored** into the live text rump, §6; they are no longer in this
-category.)
+error (§7.6) since no binary arm exists for any of them. (`VER`/`ID`/`HELP`
+were also gutted by 097-006, but — unlike the rest of this list — were
+later **restored** into the live text rump, §6 (`VER`/`ID` by the first
+stakeholder-directed cleanup pass, `HELP` by the second, 2026-07-10); they
+are no longer in this category. `ECHO` alone among the original
+`system_commands.cpp` pair (`ECHO`/`HELP`) stays deleted.)
 
 **OTOS/pose/DEV are different again**: their firmware source was **never
 touched by sprint 097 at all**, and their `CommandDescriptor` tables were
@@ -506,8 +547,8 @@ robot.
 
 | v2 section | Status under v3 |
 |---|---|
-| §2 Grammar, §3 Response Taxonomy, §4 Error Codes, §5 `#id` Correlation | Still describes the **text rump**'s own grammar (§6 above) exactly — `STOP`/`PING`/`HELLO` use the identical tokenizer, corr-id extraction, and `OK`/`ERR` reply shapes |
-| §6 Liveness/Identity (`PING`/`ECHO`/`ID`/`DEVICE:`/`HELLO`/`VER`/`HELP`) | `PING`/`HELLO`/`ID`/`VER` live (rump, §6 — `ID`/`VER` restored after an initial 097-006 deletion); `ECHO`/`HELP` deleted from the firmware text plane — binary `ping`/`echo`/`id` arms exist (§3); `ECHO`/`HELP` proxied (§7.4) |
+| §2 Grammar, §3 Response Taxonomy, §4 Error Codes, §5 `#id` Correlation | Still describes the **text rump**'s own grammar (§6 above) exactly — `HELP`/`HELLO`/`PING`/`ID`/`VER`/`STOP` use the identical tokenizer, corr-id extraction, and `OK`/`ERR` reply shapes |
+| §6 Liveness/Identity (`PING`/`ECHO`/`ID`/`DEVICE:`/`HELLO`/`VER`/`HELP`) | `HELP`/`HELLO`/`PING`/`ID`/`VER` all live (rump, §6 — `ID`/`VER` restored after an initial 097-006 deletion, `HELP` restored again 2026-07-10); `ECHO` alone stays deleted from the firmware text plane. Binary `ping`/`echo`/`id`/`hello`/`ver`/`help` arms all exist (§3 — `hello`/`ver`/`help` added 2026-07-10); `ECHO` still proxied (§7.4) |
 | §7 Config (`SET`/`GET`) | Firmware text family deleted (`config_commands.{h,cpp}` file removed); binary `config`/`get` arms exist (§3); proxied (§7.4) |
 | §8 Telemetry (`STREAM`/`SNAP`/`TLM` frame) | Firmware text handlers deleted; binary `stream` arm + `tlm` reply exist (§3/§4); proxied (§7.4) |
 | §9 Time Synchronisation | Unchanged in spirit — binary `ping`'s `Ack.t` carries the same clock-sync role text `PING`'s `t=` did |
@@ -525,7 +566,10 @@ robot.
 
 - **Binary CLI**: `rogo binary <arm> ...` (see `rogo --help`) sends a
   single hand-built `CommandEnvelope` directly, bypassing the proxy —
-  useful for probing the firmware's own binary behavior.
+  useful for probing the firmware's own binary behavior. Every rump verb
+  has a direct subcommand: `rogo binary ping|id|hello|ver|help|stop`
+  (`hello`/`ver`/`help` added 2026-07-10, `cmd_binary_hello`/
+  `cmd_binary_ver`/`cmd_binary_help`, `host/robot_radio/io/cli.py`).
 - **Proxy CLI**: `rogo proxy` (§7.2) — the PTY bridge for legacy text
   clients.
 - **Hardware bench verification**: follow

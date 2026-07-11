@@ -2,10 +2,19 @@
 
 // ---------------------------------------------------------------------------
 // text_channel.h -- the minimal hand-typeable text command channel:
-// PING, HELLO, STOP, ID, VER. This is protocol v3's deliberately tiny "text
-// safety rump" (docs/protocol-v3.md section 6) -- a human with a bare
+// HELP, HELLO, PING, ID, VER, STOP. This is protocol v3's deliberately tiny
+// "text safety rump" (docs/protocol-v3.md section 6) -- a human with a bare
 // serial terminal (screen, minicom), no host program, no protobuf tooling,
 // and no base64 encoder can always identify and halt the robot.
+//
+// HELP (stakeholder-directed, 2026-07-10): re-added -- it was deleted along
+// with the rest of `system_commands.cpp` at commit 18ba84d8 and is restored
+// here from that commit's own `handleHelp()` (`git show 18ba84d8^:source/
+// commands/system_commands.cpp`), ported to this file's handlerCtx idiom
+// exactly the way `handleStop()` already reaches `Rt::CommandRouter&` below.
+// Every one of these six verbs also has a binary `CommandEnvelope` arm now
+// (source/commands/binary_channel.cpp) -- HELP/HELLO/VER newly so; PING/
+// STOP/ID already did.
 //
 // Everything else that used to live in this file -- the pose/otos one-shot
 // verbs (SI/ZERO/OI/OZ/OR/OP/OV/OL/OA) and the ROBOT_DEV_BUILD-gated DEV
@@ -52,7 +61,7 @@ int formatDeviceAnnouncement(char* buf, int size);
 // replies from the SAME source, never a second #ifdef HOST_BUILD branch.
 void deviceIdentity(const char** name, uint32_t* serial);
 
-// Returns the text safety rump's command table: PING, HELLO, STOP, ID,
-// VER -- the only five verbs `Rt::CommandRouter::buildTable()`
+// Returns the text safety rump's command table: HELP, HELLO, PING, ID,
+// VER, STOP -- the only six verbs `Rt::CommandRouter::buildTable()`
 // (command_router.cpp) registers.
 std::vector<CommandDescriptor> textCommands(Rt::CommandRouter& router);

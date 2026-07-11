@@ -273,6 +273,19 @@ def encode_cfg_watchdog(binary: pathlib.Path, corr_id: int, target: int, watchdo
     return base64.b64decode(line[len("B64 "):])
 
 
+def encode_helptext(binary: pathlib.Path, corr_id: int, text: str) -> bytes | None:
+    """Stakeholder-directed 6-verb minimal command surface (2026-07-10):
+    builds ReplyEnvelope{helptext=HelpText{text}} via the `encode_helptext`
+    argv verb."""
+    r = run_harness(binary, "encode_helptext", str(corr_id), text)
+    assert not r.crashed, f"encode_helptext crashed: {r.stdout}\n{r.stderr}"
+    line = r.stdout.strip()
+    if line == "ZERO":
+        return None
+    assert line.startswith("B64 "), f"unexpected encode_helptext output: {line!r}"
+    return base64.b64decode(line[len("B64 "):])
+
+
 def encode_echo_reply(binary: pathlib.Path, corr_id: int, payload: bytes) -> bytes | None:
     """Builds ReplyEnvelope{echo=Echo{payload}} (095-007, ReplyEnvelope
     schema-gap closure -- see envelope.proto's own ReplyEnvelope.echo doc
@@ -427,6 +440,23 @@ def env_id_request(corr_id: int) -> bytes:
     return pb_envelope.CommandEnvelope(corr_id=corr_id, id=pb_envelope.DeviceId()).SerializeToString()
 
 
+# hello/ver/help (stakeholder-directed 6-verb minimal command surface,
+# 2026-07-10) -- zero-field request arms, same shape env_id_request()/
+# env_stop()/env_ping() already have.
+
+
+def env_hello_request(corr_id: int) -> bytes:
+    return pb_envelope.CommandEnvelope(corr_id=corr_id, hello=pb_envelope.Hello()).SerializeToString()
+
+
+def env_ver_request(corr_id: int) -> bytes:
+    return pb_envelope.CommandEnvelope(corr_id=corr_id, ver=pb_envelope.Ver()).SerializeToString()
+
+
+def env_help_request(corr_id: int) -> bytes:
+    return pb_envelope.CommandEnvelope(corr_id=corr_id, help=pb_envelope.Help()).SerializeToString()
+
+
 # ---------------------------------------------------------------------------
 # ConfigDelta builders (096-006) -- ConfigDelta is COMMAND-only (never
 # appears in ReplyEnvelope.body, see envelope.proto's own oneof list), so
@@ -473,12 +503,13 @@ def env_config_watchdog(corr_id: int, watchdog: int) -> bytes:
 __all__ = [
     "pb_common", "pb_config", "pb_drivetrain", "pb_envelope", "pb_motion", "pb_planner", "pb_telemetry",
     "compile_harness", "run_harness", "decode", "parse_decode_line",
-    "encode_ok", "encode_err", "encode_id", "encode_echo_reply", "f32", "float_eq",
+    "encode_ok", "encode_err", "encode_id", "encode_echo_reply", "encode_helptext", "f32", "float_eq",
     "encode_telemetry", "encode_cfg_drivetrain", "encode_cfg_motor", "encode_cfg_planner",
     "encode_cfg_watchdog",
     "unknown_varint_field",
     "env_drive_twist", "env_drive_wheels", "env_drive_neutral",
     "build_motion_segment", "env_segment", "env_replace",
     "env_stop", "env_ping", "env_echo", "env_id_request",
+    "env_hello_request", "env_ver_request", "env_help_request",
     "env_config_drivetrain", "env_config_motor", "env_config_planner", "env_config_watchdog",
 ]

@@ -12,8 +12,10 @@ namespace {
 // motionCommands(): STOP; telemetryCommands(): registered ZERO commands
 // post-097-008) into a single call to text_channel.{h,cpp}'s own
 // textCommands() -- see that file's own doc comment for the fold. Resulting
-// registered table is identical: STOP, PING, HELLO (plus the binary
-// channel, untouched). The text SET/GET config family (formerly
+// registered table (2026-07-10, stakeholder-directed 6-verb minimal command
+// surface -- HELP re-added on top of the 097-011 fold): HELP, HELLO, PING,
+// ID, VER, STOP (plus the binary channel, untouched). The text SET/GET config
+// family (formerly
 // `configCommands()`, source/commands/config_commands.{h,cpp}) is not
 // registered here -- and, as of 097-007 (architecture-update-r2.md
 // Decision 9, pure-binary firmware), no longer exists as source at all:

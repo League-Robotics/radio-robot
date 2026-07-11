@@ -1,5 +1,6 @@
-"""093-003/094-005/097-006/097-008/097(text-channel-minimal-rump): focused
-STOP-plus-binary-drive suite for the bare wheel-driving executive.
+"""093-003/094-005/097-006/097-008/097(text-channel-minimal-rump)/
+2026-07-10(6-verb-minimal-command-surface): focused STOP-plus-binary-drive
+suite for the bare wheel-driving executive.
 
 Sprint 093 gutted `Rt::MainLoop`/`Rt::CommandRouter::buildTable()` down to a
 liveness family plus a small motion family. 097-006 (architecture-update-r2.md
@@ -8,21 +9,24 @@ now DELETED (not merely unregistered the way 093-001 left T/D/R/TURN/RT/G) --
 its binary parity is the `drive` arm (`source/commands/binary_channel.cpp`,
 095, hardware-bench-smoke-tested), exercised below via
 `_binary_envelope.send_drive()`. A later stakeholder-directed cleanup pass
-gutted `text_channel.{h,cpp}` down to a minimal 5-verb rump -- `textCommands()`
-now registers exactly `PING`/`HELLO`/`STOP`/`ID`/`VER` (`ID`/`VER` restored
-from their pre-097-006 implementations; `HELP`/`ECHO` stay deleted); the
-pose/otos (`SI`/`ZERO`/`OI`/`OZ`/`OR`/`OP`/`OV`/`OL`/`OA`) and DEV command
-families -- already-dead, never-registered source kept only as a sprint 098
+gutted `text_channel.{h,cpp}` down to a minimal 5-verb rump, then a further
+stakeholder-directed pass (2026-07-10) restored `HELP` -- `textCommands()`
+now registers exactly `HELP`/`HELLO`/`PING`/`ID`/`VER`/`STOP` (six verbs;
+`ECHO` stays deleted), and every one of those six also has a binary
+`CommandEnvelope` arm (`hello`/`ver`/`help` newly so; `ping`/`stop`/`id`
+already did -- see `test_binary_channel.py`). The pose/otos
+(`SI`/`ZERO`/`OI`/`OZ`/`OR`/`OP`/`OV`/`OL`/`OA`) and DEV command families --
+already-dead, never-registered source kept only as a sprint 098
 transcription reference -- were deleted outright from the source tree in
-that same pass. Every one of those families was already unregistered before
-this pass, so the wire-level `ERR unknown` behavior for them is unchanged --
-see `tests/sim/parked-093/README.md` for the full inventory of tests this
-obsoleted originally.
+the 097-011 pass. Every one of those families was already unregistered
+before that pass, so the wire-level `ERR unknown` behavior for them is
+unchanged -- see `tests/sim/parked-093/README.md` for the full inventory of
+tests this obsoleted originally.
 
 This file is the small, currently-green replacement for that lost coverage:
-`PING`/`HELLO`/`ID`/`VER` still work as text, `STOP` still works as text,
-`S`'s own plant-motion assertions now go through the binary `drive` arm
-instead, and a wire verb outside the live text surface is rejected with
+`HELP`/`PING`/`HELLO`/`ID`/`VER` still work as text, `STOP` still works as
+text, `S`'s own plant-motion assertions now go through the binary `drive`
+arm instead, and a wire verb outside the live text surface is rejected with
 `ERR unknown`, proving the table's exact shape rather than merely that the
 survivors work.
 
@@ -86,6 +90,19 @@ def test_ver_replies_ok(sim):
     assert stripped.startswith("OK ver")
     assert "fw=" in stripped
     assert "proto=" in stripped
+
+
+def test_help_replies_ok_with_the_live_registered_verb_list(sim):
+    """`HELP` -- re-added to the rump (stakeholder-directed 6-verb minimal
+    command surface, 2026-07-10; restored from its pre-18ba84d8
+    implementation, git history) -- replies `OK help <verbs>`, reading the
+    LIVE registered table (`Rt::CommandRouter::listVerbs()`), so the reply
+    is exactly this file's own six-verb rump, in registration order."""
+    reply = sim.command("HELP")
+    stripped = reply.strip()
+    assert stripped.startswith("OK help ")
+    verbs = stripped[len("OK help "):].split()
+    assert verbs == ["HELP", "HELLO", "PING", "ID", "VER", "STOP"]
 
 
 @pytest.mark.parametrize("line", [
@@ -209,18 +226,21 @@ def test_deleted_text_verbs_reply_err_unknown(sim):
     former system_commands.cpp) outright -- not merely unregistered them.
     `VER`/`ID` were deleted by that same ticket but later RESTORED into the
     rump (a stakeholder-directed cleanup that gutted `text_channel.{h,cpp}`
-    down to a minimal PING/HELLO/STOP/ID/VER table) -- see
-    `test_id_replies_id_shaped`/`test_ver_replies_ok` above for their own
-    coverage; they are deliberately absent from this list now. Sending any
-    of the verbs below over the text plane hits the exact same `ERR
-    unknown` path an always-unregistered family (`DEV`/`GET`, above)
-    already does, proving the reduced table's exact shape at the wire, not
-    just at the source level (the grep-clean acceptance criteria already
-    prove the source level)."""
+    down to a minimal PING/HELLO/STOP/ID/VER table), and `HELP` was RESTORED
+    again by a further stakeholder-directed pass (2026-07-10, the 6-verb
+    minimal command surface) -- see `test_id_replies_id_shaped`/
+    `test_ver_replies_ok`/`test_help_replies_ok_with_the_live_registered_verb_list`
+    above for their own coverage; they are deliberately absent from this
+    list now (only `ECHO` among the former system_commands.cpp pair stays
+    deleted). Sending any of the verbs below over the text plane hits the
+    exact same `ERR unknown` path an always-unregistered family (`DEV`/
+    `GET`, above) already does, proving the reduced table's exact shape at
+    the wire, not just at the source level (the grep-clean acceptance
+    criteria already prove the source level)."""
     for line in ("S 100 100", "D 100 100 300", "T 100 100 1000", "RT 9000",
                  "MOVE 300 0 0", "MOVER 0 0 0 t=800 v=250", "QLEN",
                  "R 100 500", "TURN 9000", "G 100 100 200",
-                 "ECHO hi", "HELP",
+                 "ECHO hi",
                  "SI 0 0 0", "ZERO enc", "OI", "OZ", "OR", "OP", "OV 0 0 0",
                  "OL", "OA", "DEV STATE", "DEV STOP"):
         reply = sim.command(line)

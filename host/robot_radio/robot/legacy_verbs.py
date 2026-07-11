@@ -213,11 +213,40 @@ def envelope_for_stop(pos: list[str], kv: dict[str, str]) -> envelope_pb2.Comman
 
 
 def envelope_for_id(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
-    """``ID`` or ``VER`` -> ``{id: DeviceId{}}`` (empty request, Decision 4
-    -- VER's content is a strict subset of ID's reply, no independent
-    binary ``ver`` arm exists)."""
+    """``ID`` -> ``{id: DeviceId{}}`` (empty request, Decision 4)."""
     env = envelope_pb2.CommandEnvelope()
     env.id.SetInParent()
+    return env
+
+
+def envelope_for_hello(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+    """``HELLO`` -> ``{hello: Hello{}}`` (empty request, stakeholder-
+    directed 6-verb minimal command surface, 2026-07-10 -- replies the SAME
+    DeviceId shape ``ID`` does; BinaryChannel::handleId() is reused
+    firmware-side)."""
+    env = envelope_pb2.CommandEnvelope()
+    env.hello.SetInParent()
+    return env
+
+
+def envelope_for_ver(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+    """``VER`` -> ``{ver: Ver{}}`` (empty request, stakeholder-directed
+    6-verb minimal command surface, 2026-07-10) -- VER's content is a
+    strict subset of ID's reply fields (fw_version/proto_version), so it
+    replies the SAME DeviceId shape ``ID``/``HELLO`` do; VER now has its
+    own dedicated request arm (distinct from ``id`` on the wire), unlike
+    before this addition when it aliased ``envelope_for_id``."""
+    env = envelope_pb2.CommandEnvelope()
+    env.ver.SetInParent()
+    return env
+
+
+def envelope_for_help(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+    """``HELP`` -> ``{help: Help{}}`` (empty request, stakeholder-directed
+    6-verb minimal command surface, 2026-07-10) -- replies
+    ``{helptext: HelpText{text}}``, the live registered verb list."""
+    env = envelope_pb2.CommandEnvelope()
+    env.help.SetInParent()
     return env
 
 
@@ -231,6 +260,21 @@ _EnvelopeBuilder = Callable[[list[str], dict[str, str]], envelope_pb2.CommandEnv
 # than PROTOCOL_VERBS below -- the proxy (io/proxy.py) also routes
 # PING/STOP/ID/VER through here (it has no text rump to fall back to);
 # cmd_send only consults this table for verbs in PROTOCOL_VERBS.
+#
+# HELLO/VER/HELP (stakeholder-directed 6-verb minimal command surface,
+# 2026-07-10): each now has its own dedicated CommandEnvelope oneof arm
+# (envelope.proto fields 15/16/17) -- VER used to alias envelope_for_id
+# (reusing the `id` request arm outright, since its reply content is a
+# strict subset of ID's); it now builds its own `{ver: Ver{}}` request,
+# still replying the identical DeviceId shape firmware-side
+# (BinaryChannel::handleId() is reused for id/hello/ver). HELLO/HELP are
+# ADDED here for completeness/direct-use (`rogo binary hello/help`,
+# io/cli.py) -- io/proxy.py's own `_handle_client_line` still answers
+# HELLO/HELP locally BEFORE this table is ever consulted for those two verbs
+# (see that module's docstring), so adding them here does not change proxy
+# behavior; it just means the table is now a complete, tested mirror of
+# every rump verb's binary arm, not merely the ones the proxy happens to
+# route through it.
 BINARY_DISPATCH: dict[str, _EnvelopeBuilder] = {
     "S": envelope_for_drive,
     "D": envelope_for_distance,
@@ -242,7 +286,9 @@ BINARY_DISPATCH: dict[str, _EnvelopeBuilder] = {
     "PING": envelope_for_ping,
     "STOP": envelope_for_stop,
     "ID": envelope_for_id,
-    "VER": envelope_for_id,
+    "HELLO": envelope_for_hello,
+    "VER": envelope_for_ver,
+    "HELP": envelope_for_help,
 }
 
 # PROTOCOL_VERBS: the seven verbs `rogo send` translates to binary --

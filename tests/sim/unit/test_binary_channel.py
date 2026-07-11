@@ -263,6 +263,50 @@ def test_binary_id_replies_with_device_identity(sim):
 
 
 # ===========================================================================
+# hello / ver / help -- stakeholder-directed 6-verb minimal command surface
+# (2026-07-10): the text rump's remaining three verbs (HELLO/VER/HELP) each
+# get their own binary arm, completing the set PING/STOP/ID already had.
+# hello/ver reuse the id arm's DeviceId reply body (BinaryChannel::handleId()
+# is reused firmware-side); help gets a new HelpText reply.
+# ===========================================================================
+
+
+def test_binary_hello_replies_with_device_identity(sim):
+    """hello -> the SAME DeviceId reply shape/content id does (handleId()
+    reused firmware-side) -- proves the request arm is wired, not just
+    that ID itself still works."""
+    reply = send(sim, pb_envelope.CommandEnvelope(corr_id=12, hello=pb_envelope.Hello()))
+    assert reply.WhichOneof("body") == "id"
+    assert reply.corr_id == 12
+    assert reply.id.model == "NEZHA2"
+    assert reply.id.name == "HOST-SIM"
+    assert reply.id.serial == 0
+    assert reply.id.proto_version == 2
+
+
+def test_binary_ver_replies_with_device_identity(sim):
+    """ver -> the SAME DeviceId reply shape/content id/hello do -- a real
+    client reads only fw_version/proto_version off it (VER's own content is
+    a strict subset of ID's reply fields)."""
+    reply = send(sim, pb_envelope.CommandEnvelope(corr_id=13, ver=pb_envelope.Ver()))
+    assert reply.WhichOneof("body") == "id"
+    assert reply.corr_id == 13
+    assert reply.id.model == "NEZHA2"
+    assert reply.id.proto_version == 2
+
+
+def test_binary_help_replies_with_registered_verb_list(sim):
+    """help -> HelpText{text}, sourced from the SAME
+    Rt::CommandRouter::listVerbs() the text HELP handler reads -- the live
+    registered 6-verb rump, not a hardcoded string."""
+    reply = send(sim, pb_envelope.CommandEnvelope(corr_id=14, help=pb_envelope.Help()))
+    assert reply.WhichOneof("body") == "helptext"
+    assert reply.corr_id == 14
+    verbs = reply.helptext.text.split()
+    assert verbs == ["HELP", "HELLO", "PING", "ID", "VER", "STOP"]
+
+
+# ===========================================================================
 # Declared-only arms -- ERR_UNIMPLEMENTED, never a crash, never silent.
 # `config`/`get` are no longer declared-only as of 096-004, and `stream` is
 # no longer declared-only as of 096-005 (see the dedicated sections below)

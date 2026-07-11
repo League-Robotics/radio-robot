@@ -214,6 +214,16 @@ void handleEcho(const msg::Echo& echo, uint32_t corrId, ReplyFn replyFn, void* r
 // deviceIdentity() helper handleId()/formatDeviceAnnouncement() already use
 // (commands/text_channel.{h,cpp}) -- never a second #ifdef HOST_BUILD
 // branch. No Blackboard post.
+//
+// Reused verbatim for the `hello`/`ver` request arms too (stakeholder-
+// directed 6-verb minimal command surface, 2026-07-10; see this file's
+// handle() dispatch switch below): DeviceId already carries every field
+// both HELLO's announcement and VER's fw/proto content need (Decision 4's
+// reasoning extended), so hello/ver/id all reply the identical
+// ReplyEnvelope{id: DeviceId{...}} -- the CLIENT (rogo/the proxy) decides
+// how to RENDER that shared payload back into HELLO's `DEVICE:...` banner,
+// ID's own `ID model=...` line, or VER's `OK ver fw=... proto=...` line;
+// none of that rendering is a firmware concern.
 void handleId(uint32_t corrId, ReplyFn replyFn, void* replyCtx) {
   const char* name;
   uint32_t serial;
@@ -227,6 +237,23 @@ void handleId(uint32_t corrId, ReplyFn replyFn, void* replyCtx) {
   reply.body.id.serial = serial;
   std::strncpy(reply.body.id.fw_version, FIRMWARE_VERSION, sizeof(reply.body.id.fw_version) - 1);
   reply.body.id.proto_version = static_cast<uint32_t>(PROTO_VERSION);
+  sendReply(reply, replyFn, replyCtx);
+}
+
+// handleHelp -- HELP's binary reply: HelpText{text}, sourced from the SAME
+// Rt::CommandRouter::listVerbs() the text HELP handler reads
+// (text_channel.cpp's own handleHelp()) -- never a second, separately-
+// maintained verb list, and never out of sync with what textCommands()
+// actually registers. `routerCtx` is the SAME opaque
+// handlerCtx-cast-to-Rt::CommandRouter* this whole file's dispatch already
+// threads through (Decision 1) -- reached here via `handle()`'s own
+// `routerCtx` parameter, not a second pointer this file stores.
+void handleHelp(uint32_t corrId, void* routerCtx, ReplyFn replyFn, void* replyCtx) {
+  msg::ReplyEnvelope reply;
+  reply.corr_id = corrId;
+  reply.body_kind = msg::ReplyEnvelope::BodyKind::HELPTEXT;
+  static_cast<Rt::CommandRouter*>(routerCtx)
+      ->listVerbs(reply.body.helptext.text, sizeof(reply.body.helptext.text));
   sendReply(reply, replyFn, replyCtx);
 }
 
@@ -568,7 +595,15 @@ void handle(const char* line, ReplyFn replyFn, void* replyCtx, void* routerCtx) 
       handleEcho(env.cmd.echo, env.corr_id, replyFn, replyCtx);
       break;
     case msg::CommandEnvelope::CmdKind::ID:
+    case msg::CommandEnvelope::CmdKind::HELLO:
+    case msg::CommandEnvelope::CmdKind::VER:
+      // hello/ver (stakeholder-directed 6-verb minimal command surface,
+      // 2026-07-10) reuse handleId()'s identical DeviceId reply -- see that
+      // function's own doc comment above.
       handleId(env.corr_id, replyFn, replyCtx);
+      break;
+    case msg::CommandEnvelope::CmdKind::HELP:
+      handleHelp(env.corr_id, routerCtx, replyFn, replyCtx);
       break;
     case msg::CommandEnvelope::CmdKind::CONFIG:
       handleConfig(env.cmd.config, b, env.corr_id, replyFn, replyCtx);

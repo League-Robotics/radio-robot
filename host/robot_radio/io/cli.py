@@ -1264,10 +1264,12 @@ def cmd_send(args):
 
 # ── Binary command plane (095-002, M7 Host Codec Mirror) ────────────────────
 #
-# `rogo binary <arm>` builds a pb2.CommandEnvelope for one of this sprint's
-# seven implemented oneof arms (drive/segment/replace/stop/ping/echo/id) and
-# sends it via SerialConnection.send_envelope() -- the *B<base64> binary
-# plane, parallel to (never replacing) every text-plane command above.
+# `rogo binary <arm>` builds a pb2.CommandEnvelope for one of the ten
+# implemented oneof arms (drive/segment/replace/stop/ping/echo/id, plus
+# hello/ver/help -- stakeholder-directed 6-verb minimal command surface,
+# 2026-07-10) and sends it via SerialConnection.send_envelope() -- the
+# *B<base64> binary plane, parallel to (never replacing) every text-plane
+# command above.
 
 
 def _print_binary_reply(result: dict, decode: bool = False) -> None:
@@ -1278,7 +1280,8 @@ def _print_binary_reply(result: dict, decode: bool = False) -> None:
     populated oneof body as ``"<arm>:\\n  field = value\\n..."`` via
     ``legacy_verbs.decode_reply_body()`` instead of the raw protobuf
     text-format dump. Defaults to ``False`` so every pre-existing call site
-    (``cmd_binary_ping/echo/id/stop/drive/segment/replace``) is byte-for-byte
+    (``cmd_binary_ping/echo/id/stop/drive/segment/replace``, and
+    ``cmd_binary_hello/ver/help`` added alongside them) is byte-for-byte
     unaffected by this ticket's diff.
     """
     if "error" in result:
@@ -1325,6 +1328,45 @@ def cmd_binary_id(args):
     robot, conn, _ = _make_robot(args)
     env = envelope_pb2.CommandEnvelope()
     env.id.SetInParent()
+    result = conn.send_envelope(env, read_timeout=args.read_timeout)
+    _print_binary_reply(result)
+    conn.disconnect()
+
+
+def cmd_binary_hello(args):
+    """Binary-plane HELLO: CommandEnvelope{hello: Hello{}} (empty request)
+    -> ReplyEnvelope{id: DeviceId{...}} -- the SAME DeviceId reply shape
+    `binary id` gets (BinaryChannel::handleId() is reused for hello/ver/id
+    firmware-side; the wire arm chosen on the request side still records
+    which verb the caller actually meant)."""
+    robot, conn, _ = _make_robot(args)
+    env = envelope_pb2.CommandEnvelope()
+    env.hello.SetInParent()
+    result = conn.send_envelope(env, read_timeout=args.read_timeout)
+    _print_binary_reply(result)
+    conn.disconnect()
+
+
+def cmd_binary_ver(args):
+    """Binary-plane VER: CommandEnvelope{ver: Ver{}} (empty request) ->
+    ReplyEnvelope{id: DeviceId{...}} -- see cmd_binary_hello's own
+    docstring for why this reuses the `id` reply shape."""
+    robot, conn, _ = _make_robot(args)
+    env = envelope_pb2.CommandEnvelope()
+    env.ver.SetInParent()
+    result = conn.send_envelope(env, read_timeout=args.read_timeout)
+    _print_binary_reply(result)
+    conn.disconnect()
+
+
+def cmd_binary_help(args):
+    """Binary-plane HELP: CommandEnvelope{help: Help{}} (empty request) ->
+    ReplyEnvelope{helptext: HelpText{text}} -- the live registered verb
+    list (Rt::CommandRouter::listVerbs()), the same source text HELP's own
+    reply reads."""
+    robot, conn, _ = _make_robot(args)
+    env = envelope_pb2.CommandEnvelope()
+    env.help.SetInParent()
     result = conn.send_envelope(env, read_timeout=args.read_timeout)
     _print_binary_reply(result)
     conn.disconnect()
@@ -1874,7 +1916,7 @@ def main():
     p_binary = sub.add_parser(
         "binary",
         help="Binary command plane (095): *B<base64> pb2.CommandEnvelope send "
-             "path for drive/segment/replace/stop/ping/echo/id.",
+             "path for drive/segment/replace/stop/ping/echo/id/hello/ver/help.",
     )
     p_binary.add_argument("--read-timeout", type=int, default=500,
                           help="Reply read timeout (ms, default 500)")
@@ -1886,6 +1928,9 @@ def main():
     b_echo.add_argument("text", help="Text payload to echo (UTF-8, max 64 bytes)")
 
     binary_sub.add_parser("id", help="Binary ID (empty request)")
+    binary_sub.add_parser("hello", help="Binary HELLO (empty request, replies DeviceId like ID)")
+    binary_sub.add_parser("ver", help="Binary VER (empty request, replies DeviceId like ID)")
+    binary_sub.add_parser("help", help="Binary HELP (empty request, replies HelpText)")
     binary_sub.add_parser("stop", help="Binary STOP")
 
     b_drive = binary_sub.add_parser(
@@ -2095,6 +2140,9 @@ def main():
             "ping": cmd_binary_ping,
             "echo": cmd_binary_echo,
             "id": cmd_binary_id,
+            "hello": cmd_binary_hello,
+            "ver": cmd_binary_ver,
+            "help": cmd_binary_help,
             "stop": cmd_binary_stop,
             "drive": cmd_binary_drive,
             "segment": cmd_binary_segment,

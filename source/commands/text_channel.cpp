@@ -1,4 +1,4 @@
-// text_channel.cpp -- PING/HELLO/STOP/ID/VER: the minimal hand-typeable
+// text_channel.cpp -- HELP/HELLO/PING/ID/VER/STOP: the minimal hand-typeable
 // text command channel (protocol v3's "text safety rump",
 // docs/protocol-v3.md section 6). See text_channel.h for what this file is
 // and is not: the pose/otos one-shot verbs and the DEV bench-diagnostic
@@ -6,7 +6,8 @@
 // directed cleanup) -- neither was ever registered by
 // `Rt::CommandRouter::buildTable()`, so nothing on the wire changes. Their
 // old handler bodies are in git history if a transcription reference is
-// ever needed.
+// ever needed. HELP (stakeholder-directed, 2026-07-10) was re-added -- see
+// text_channel.h's own header comment and handleHelp()'s doc comment below.
 #include "commands/text_channel.h"
 
 #include <cstdint>
@@ -152,6 +153,32 @@ void handleVer(const ArgList& /*args*/, const char* corrId,
   CommandProcessor::replyOK(rbuf, sizeof(rbuf), "ver", body, corrId, replyFn, replyCtx);
 }
 
+// ---------------------------------------------------------------------------
+// HELP -- list every registered verb.
+//   prefix "HELP"; parseFn nullptr.
+//   Reply: OK help <space-separated verbs> [#id]
+//
+// Re-added (stakeholder-directed, 2026-07-10) from its pre-18ba84d8
+// implementation (`git show 18ba84d8^:source/commands/system_commands.cpp`),
+// unchanged: reads the LIVE registered command table via
+// `CommandRouter::listVerbs()` (handlerCtx cast to Rt::CommandRouter*, the
+// same pattern handleStop() above already uses to reach shared runtime
+// state) -- never a hardcoded string, so the reply always matches whatever
+// textCommands() below actually registers. The binary `help` arm
+// (source/commands/binary_channel.cpp) reads the SAME listVerbs() text into
+// its `HelpText.text` reply field, so the two planes never drift apart.
+// ---------------------------------------------------------------------------
+void handleHelp(const ArgList& /*args*/, const char* corrId,
+                ReplyFn replyFn, void* replyCtx, void* handlerCtx) {
+  auto* router = static_cast<Rt::CommandRouter*>(handlerCtx);
+  char verbs[64];
+  router->listVerbs(verbs, sizeof(verbs));
+
+  char rbuf[96];
+  CommandProcessor::replyOK(rbuf, sizeof(rbuf), "help", verbs,
+                            corrId, replyFn, replyCtx);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -170,17 +197,18 @@ int formatDeviceAnnouncement(char* buf, int size) {
 }
 
 // ---------------------------------------------------------------------------
-// textCommands -- the text safety rump's registered command table: PING,
-// HELLO, STOP, ID, VER. The only table Rt::CommandRouter::buildTable()
+// textCommands -- the text safety rump's registered command table: HELP,
+// HELLO, PING, ID, VER, STOP. The only table Rt::CommandRouter::buildTable()
 // (command_router.cpp) assembles.
 // ---------------------------------------------------------------------------
 std::vector<CommandDescriptor> textCommands(Rt::CommandRouter& router) {
   std::vector<CommandDescriptor> cmds;
-  cmds.push_back(makeCmd("PING",  nullptr, handlePing,  nullptr, "badarg"));
+  cmds.push_back(makeCmd("HELP",  nullptr, handleHelp,  &router, "badarg"));
   cmds.push_back(makeCmd("HELLO", nullptr, handleHello, nullptr, "badarg"));
-  cmds.push_back(makeCmd("STOP", nullptr, handleStop, &router, "badarg", ForceReply::NONE,
-                         CMD_ACCESS_HARDWARE));
+  cmds.push_back(makeCmd("PING",  nullptr, handlePing,  nullptr, "badarg"));
   cmds.push_back(makeCmd("ID",   nullptr, handleId,    nullptr, "badarg"));
   cmds.push_back(makeCmd("VER",  nullptr, handleVer,   nullptr, "badarg"));
+  cmds.push_back(makeCmd("STOP", nullptr, handleStop, &router, "badarg", ForceReply::NONE,
+                         CMD_ACCESS_HARDWARE));
   return cmds;
 }
