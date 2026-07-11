@@ -103,14 +103,20 @@ Multiplicative terms — ``1.0`` is the genuine no-op, NOT ``0.0`` (see
 ``trackwidth``
     The plant's trackwidth, in millimetres. Has NO safe zero default —
     ``PhysicsWorld::update()``'s sub-step B divides by it. Defaults to
-    ``128.0``: although ``PhysicsWorld::kDefaultTrackwidthMm`` is 150.0,
-    the sim re-seeds the plant from the firmware config at construction
-    (``sim_api.cpp``: ``hal.setTrackwidth(cfg.trackwidthMm)``,
-    ``DefaultConfig.cpp``: 128.0), so 128.0 — not 150.0 — is the value that
-    makes Apply-at-defaults a genuine no-op AND keeps the plant's geometry
-    matched to the firmware's kinematic calibration (a mismatch makes every
-    encoder-arc turn land off-angle by the ratio). This is NOT a sentinel
-    meaning "don't touch" — every Apply unconditionally calls
+    ``128.0``, matching ``PhysicsWorld::kDefaultTrackwidth`` (``source/hal/
+    sim/physics_world.h`` — fixed from a stale 150.0 to the project's real
+    128.0 during the 097-OOP wheelbase-consistency investigation: that
+    constant is ALSO what ``tests/_infra/sim/sim_api.cpp``'s
+    ``defaultSimDrivetrainConfig()`` seeds the firmware's OWN kinematics
+    trackwidth from, so it is the sim's single point of truth for both
+    sides). This keeps the plant's geometry matched to the firmware's
+    kinematic calibration (a mismatch makes every encoder-arc turn land
+    off-angle by the ratio) even for a caller that applies THIS knob
+    without also pushing an equivalent ``SET tw=`` to the firmware (the
+    TestGUI's own Connect flow already does that separately, via
+    ``__main__.py``'s ``_push_robot_calibration()`` — this default is
+    belt-and-suspenders for callers below that layer). This is NOT a
+    sentinel meaning "don't touch" — every Apply unconditionally calls
     ``SimConnection.set_trackwidth(value)`` and overwrites the plant's
     trackwidth. ``PROFILE_TO_SIM_SETTER`` key: ``set_trackwidth``.
 """

@@ -62,7 +62,36 @@ class PhysicsWorld {
  public:
   // Default dynamics parameters — match source_old's MockMotor/MockHAL defaults.
   static constexpr float kNominalMaxSpeed = 400.0f;  // [mm/s]
-  static constexpr float kDefaultTrackwidth = 150.0f;  // [mm]
+  // kDefaultTrackwidth (097-OOP, stakeholder-directed): was 150.0f, an
+  // arbitrary value ported from source_old's MockHAL default with no tie to
+  // any real robot. tests/_infra/sim/sim_api.cpp's defaultSimDrivetrainConfig()
+  // ALSO seeds Subsystems::Drivetrain's own kinematics trackwidth from this
+  // SAME constant — so it is not just the plant's bare default, it is the
+  // sim's single point of truth for "what trackwidth does the whole sim
+  // agree on before any caller overrides it." Left at two different values
+  // (150 here vs. the project's real 128mm, data/robots/tovez_nocal.json)
+  // it never actually causes drift on its own (both the plant and the
+  // firmware kinematics read the SAME 150 by default, self-consistent) —
+  // the bug only manifests when a caller overrides ONLY the plant's
+  // trackwidth via SimConnection.set_trackwidth() (a ctypes-only ground-
+  // truth injection with no wire-visible effect on Drivetrain::config_) —
+  // e.g. TestGUI's SimTransport._apply_field_profile() / sim_prefs.py's
+  // "trackwidth" knob (DEFAULT_PROFILE=128.0) — without an equally-applied
+  // firmware config push. TestGUI's own Connect flow already pushes
+  // `SET tw=<geometry.trackwidth>` via __main__.py's
+  // _push_robot_calibration() (confirmed live: Rt::Configurator::applyOne()
+  // IS drained after every sim_tick()/sim_command_on() call — see
+  // sim_api.cpp's drainConfig()) so the full GUI path was never exposed to
+  // this; any OTHER caller that talks to the sim below that layer (a bare
+  // SimConnection/firmware.Sim script, a pytest fixture, tests/sim/unit/
+  // test_tour_closure.py) was not so lucky. Setting the shared default to
+  // 128.0f — the project's actual trackwidth — makes the sim
+  // self-consistent OUT OF THE BOX, belt-and-suspenders with the GUI's own
+  // calibration push, with zero effect on the real ARM firmware (this
+  // constant/defaultSimDrivetrainConfig() are both HOST_BUILD/sim-only;
+  // main.cpp seeds real hardware from Config::defaultDrivetrainConfig(),
+  // generated from the active robot JSON, unaffected by this file).
+  static constexpr float kDefaultTrackwidth = 128.0f;  // [mm]
 
   PhysicsWorld() = default;
 
