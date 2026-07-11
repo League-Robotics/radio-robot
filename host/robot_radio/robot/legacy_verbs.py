@@ -188,6 +188,41 @@ def envelope_for_mover(pos: list[str], kv: dict[str, str]) -> envelope_pb2.Comma
     return envelope_pb2.CommandEnvelope(replace=seg)
 
 
+def envelope_for_r(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+    """``R <speed> <radius>`` -> ``{replace: MotionSegment}`` (``handleR()``,
+    via ``legacy_translate.segment_for_arc()`` -- 097's open-loop,
+    time-bounded approximation of the original continuous arc; see that
+    function's own docstring for the deviation)."""
+    if len(pos) < 2:
+        raise ValueError("R requires <speed> <radius>")
+    seg = legacy_translate.segment_for_arc(float(pos[0]), float(pos[1]))
+    return envelope_pb2.CommandEnvelope(replace=seg)
+
+
+def envelope_for_turn(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+    """``TURN <heading> [eps=]`` -> ``{segment: MotionSegment}``
+    (``handleTURN()``, via ``legacy_translate.segment_for_turn()`` -- 097's
+    open-loop, from-zero-heading approximation of the original
+    fused-heading closed loop; ``eps`` is accepted but has no open-loop
+    effect, see that function's own docstring)."""
+    if len(pos) < 1:
+        raise ValueError("TURN requires <heading>")
+    seg = legacy_translate.segment_for_turn(float(pos[0]))
+    return envelope_pb2.CommandEnvelope(segment=seg)
+
+
+def envelope_for_g(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+    """``G <x> <y> <speed>`` -> ``{segment: MotionSegment}`` (``handleG()``,
+    via ``legacy_translate.segment_for_goto_relative()`` -- 097's open-loop
+    single-leg approximation of the original Planner pursuit loop; see
+    that function's own docstring)."""
+    if len(pos) < 3:
+        raise ValueError("G requires <x> <y> <speed>")
+    seg = legacy_translate.segment_for_goto_relative(
+        float(pos[0]), float(pos[1]), speed=float(pos[2]))
+    return envelope_pb2.CommandEnvelope(segment=seg)
+
+
 def envelope_for_echo(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
     """``ECHO <text...>`` -> ``{echo: Echo{payload}}``. Every positional
     token is re-joined space-separated (mirrors ``handleEcho()``'s own
@@ -280,6 +315,9 @@ BINARY_DISPATCH: dict[str, _EnvelopeBuilder] = {
     "D": envelope_for_distance,
     "T": envelope_for_timed,
     "RT": envelope_for_rt,
+    "R": envelope_for_r,
+    "TURN": envelope_for_turn,
+    "G": envelope_for_g,
     "MOVE": envelope_for_move,
     "MOVER": envelope_for_mover,
     "ECHO": envelope_for_echo,

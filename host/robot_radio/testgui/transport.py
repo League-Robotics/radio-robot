@@ -443,12 +443,25 @@ class _HardwareTransport(Transport):
 
         self._stop_event.clear()
 
-        # Wire log callbacks through SerialConnection's on_send/on_recv hooks.
+        # Wire log callbacks through SerialConnection's on_send/on_recv
+        # hooks. Both hooks receive the RAW wire line -- for a binary
+        # command/reply that is the armored `*B<base64>` line (see
+        # io/serial_conn.py's send_envelope()/`_reader_loop()` docstrings);
+        # on_recv in particular fires for EVERY decoded line, including the
+        # high-rate telemetry push stream, BEFORE any classification.
+        # binary_bridge.render_log_line() (097, Goal 4) translates each
+        # armored line to readable text, or returns None for a
+        # ReplyEnvelope{tlm} push frame -- dropped from the log entirely
+        # rather than flooding it with an opaque base64 blob every ~20-50ms.
         def _on_send(line: str) -> None:
-            self._log(f"> {line}")
+            rendered = binary_bridge.render_log_line(line, outbound=True)
+            if rendered is not None:
+                self._log(f"> {rendered}")
 
         def _on_recv(line: str) -> None:
-            self._log(f"< {line}")
+            rendered = binary_bridge.render_log_line(line, outbound=False)
+            if rendered is not None:
+                self._log(f"< {rendered}")
 
         self._conn = SerialConnection(
             port=self._port,

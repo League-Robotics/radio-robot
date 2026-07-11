@@ -118,17 +118,6 @@ def transport():
         t.disconnect()
 
 
-@pytest.mark.xfail(
-    reason="not a wire/transport gap (097's own scope) -- `encpose` "
-           "(model.encoder's data source) has NO wire representation in "
-           "telemetry.proto AT ALL, permanently (096-001's trim, cited in "
-           "TLMFrame.from_pb2()'s own docstring) -- model.encoder can "
-           "never grow from ANY telemetry frame, text or binary, "
-           "independent of DEV vs. S. See test_traces.py's "
-           "test_encoder_otos_fused_traces_grow_with_forward_drive for the "
-           "same root cause, verified directly against the compiled sim.",
-    strict=False,
-)
 def test_enc_scale_err_separates_encoder_trace_from_camera_truth(
     transport: SimTransport,
 ) -> None:
@@ -139,6 +128,15 @@ def test_enc_scale_err_separates_encoder_trace_from_camera_truth(
     ("injecting a slip/encoder-error profile visibly separates the encoder
     trace from truth"), automated end-to-end against the real reconciled
     stack (081/082 sim + 083-001/002/003's SimTransport/drive/traces).
+
+    097: un-xfailed. ``encpose`` (the firmware-computed dead-reckoned pose
+    this test's ``model.encoder`` trace used to read) still has no wire
+    representation on the binary plane (096-001's permanent trim) -- but
+    ``TraceModel.feed()`` now synthesizes an equivalent pose host-side via
+    ``EncoderDeadReckoner``, integrated from ``frame.enc`` (cumulative
+    per-wheel distance, which DOES carry the injected ``enc_scale_err_l``
+    over-report -- see ``traces.py``). ``model.encoder`` grows and diverges
+    from ``model.camera`` exactly as this test expects.
     """
     model = TraceModel()
     transport.on_telemetry = model.feed

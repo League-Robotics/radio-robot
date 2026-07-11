@@ -161,6 +161,33 @@ def test_render_ok_for_verb_rt():
     assert line == "OK rt rot=9000 #4"
 
 
+def test_render_ok_for_verb_r_arc():
+    """097: R -> {replace: MotionSegment} (segment_for_arc()) -- reply
+    mirrors handleR()'s original "OK arc speed=%d radius=%d" text."""
+    ack = envelope_pb2.Ack()
+    line = render.render_ok_for_verb("R", ["200", "500"], {}, ack, "7")
+    assert line == "OK arc speed=200 radius=500 #7"
+
+
+def test_render_ok_for_verb_turn():
+    """097: TURN -> {segment: MotionSegment} (segment_for_turn()) -- reply
+    mirrors handleTURN()'s original "OK turn heading=%d eps=%d" text; eps
+    comes from the kv dict (default 0 when absent, matching kvFloat())."""
+    ack = envelope_pb2.Ack()
+    line = render.render_ok_for_verb("TURN", ["9000"], {"eps": "300"}, ack, None)
+    assert line == "OK turn heading=9000 eps=300"
+    line_no_eps = render.render_ok_for_verb("TURN", ["9000"], {}, ack, None)
+    assert line_no_eps == "OK turn heading=9000 eps=0"
+
+
+def test_render_ok_for_verb_g_goto():
+    """097: G -> {segment: MotionSegment} (segment_for_goto_relative()) --
+    reply mirrors handleG()'s original "OK goto x=%d y=%d speed=%d" text."""
+    ack = envelope_pb2.Ack()
+    line = render.render_ok_for_verb("G", ["300", "400", "150"], {}, ack, "1")
+    assert line == "OK goto x=300 y=400 speed=150 #1"
+
+
 def test_render_ok_for_verb_move_uses_ack_q_and_rem():
     ack = envelope_pb2.Ack(q=3, rem=12.7)
     line = render.render_ok_for_verb("MOVE", ["500", "9000", "9000"], {}, ack, None)

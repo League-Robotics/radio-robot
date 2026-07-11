@@ -119,6 +119,30 @@ Real 1x pacing is what an operator (or the radio relay / bench, whose SNAP
 round-trip is real-time by nature) actually experiences, so it is what this
 file measures against. Each tour therefore takes ~30-45 s wall-clock to run.
 
+097 un-gating (this ticket)
+----------------------------
+Tour buttons were gated OFF (permanently disabled) for the middle of sprint
+097, because every tour opens with ``_set_origin()``'s ``OZ``/``SI`` calls,
+which had no binary arm. This ticket un-gates the tour buttons: D/RT (the
+tour steps themselves) already had binary arms before this ticket, and
+``_set_origin()``'s ``OZ``/``SI``/``ZERO`` calls, while STILL gated no-ops
+(genuinely deferred to sprint 098's fused pose), no longer block a tour from
+running — see ``__main__.py``'s ``_set_origin()`` docstring. The three tests
+below un-xfail accordingly.
+
+**Caveat on the "fused pose ends near origin" assertion**: ``Telemetry.pose``
+is pinned at (0, 0, 0) for the ENTIRE run until sprint 098 wires
+``Subsystems::PoseEstimator::tick()`` (nothing in ``source/`` calls it yet).
+``_assert_tour_ran_and_closed_the_loop()``'s ``dist <= _ORIGIN_TOL_MM`` check
+against ``fused_pose`` is therefore VACUOUSLY true today (distance is always
+exactly 0) — it is no longer evidence the tour geometrically closed the
+loop. The MEANINGFUL assertion in the same helper is the ground-truth span
+check (``span_x > 300 and span_y > 200``), which proves the tour actually
+drove the plant around instead of idling at the origin; that check is
+unaffected by the fused-pose gap and is what makes these tests non-trivial.
+Once 098 lands a live fused pose, the origin-closure assertion regains its
+original meaning without any change to this file.
+
 Run:
     QT_QPA_PLATFORM=offscreen uv run pytest tests/testgui/test_tour1_geometry.py -v
 """
@@ -413,19 +437,14 @@ def _assert_tour_ran_and_closed_the_loop(trace, fused_pose, tour_name: str) -> N
     )
 
 
-@pytest.mark.xfail(
-    reason="097: every tour opens with _set_origin() (STOP, ZERO enc, OZ, "
-           "SI) -- OZ/SI have no binary arm until sprint 098, and the tour "
-           "buttons are now permanently disabled (gated in the UI, "
-           "__main__.py), so the tour never starts. See binary_bridge.py.",
-    strict=False,
-)
 def test_tour1_completes_and_fused_pose_returns_near_origin(qapp, monkeypatch, tmp_path):
-    """Tour 1 runs to completion (no step timeout) and closes the loop.
+    """Tour 1 runs to completion (no step timeout) and drives around.
 
-    Measured fused-pose distance from origin across repeated runs (086-004
-    retune, post 086-002/003): ~51-52 mm (see module docstring's "086-004
-    retune" section) — well inside the retuned ``_ORIGIN_TOL_MM`` (100 mm).
+    097: un-xfailed -- tour buttons no longer permanently disabled (see
+    module docstring's "097 un-gating" section). The fused-pose distance
+    assertion is vacuously true today (``Telemetry.pose`` pinned at
+    (0,0,0) until sprint 098) -- the meaningful check here is the
+    ground-truth span, proving Tour 1 actually drove around.
     """
     trace, fused_pose = _run_tour_headless(
         qapp, monkeypatch, tmp_path, "tour_btn_tour_1"
@@ -433,23 +452,13 @@ def test_tour1_completes_and_fused_pose_returns_near_origin(qapp, monkeypatch, t
     _assert_tour_ran_and_closed_the_loop(trace, fused_pose, "Tour 1")
 
 
-@pytest.mark.xfail(
-    reason="097: every tour opens with _set_origin() (STOP, ZERO enc, OZ, "
-           "SI) -- OZ/SI have no binary arm until sprint 098, and the tour "
-           "buttons are now permanently disabled (gated in the UI, "
-           "__main__.py), so the tour never starts. See binary_bridge.py.",
-    strict=False,
-)
 def test_tour2_completes_and_fused_pose_returns_near_origin(qapp, monkeypatch, tmp_path):
-    """Tour 2 runs to completion (no step timeout) and closes the loop.
+    """Tour 2 runs to completion (no step timeout) and drives around.
 
-    Tour 2 has more (and larger, mixed-sign) RT legs than Tour 1; pre-086 this
-    made its closure looser (~95-175 mm) than Tour 1's, but 086-003's
-    ``STOP_ROTATION`` terminal-decel anticipation benefits a longer chain of
-    turns proportionally more — measured fused-pose distance from origin
-    across repeated runs (086-004 retune): ~53 mm (see module docstring),
-    now comparable to Tour 1's own residual and well inside the retuned
-    ``_ORIGIN_TOL_MM`` (100 mm).
+    097: un-xfailed -- see test_tour1_completes_...'s identical docstring
+    note above (module docstring's "097 un-gating" section) for why the
+    fused-pose assertion is vacuous today and the ground-truth span check
+    is what actually matters.
     """
     trace, fused_pose = _run_tour_headless(
         qapp, monkeypatch, tmp_path, "tour_btn_tour_2"
@@ -457,14 +466,6 @@ def test_tour2_completes_and_fused_pose_returns_near_origin(qapp, monkeypatch, t
     _assert_tour_ran_and_closed_the_loop(trace, fused_pose, "Tour 2")
 
 
-@pytest.mark.xfail(
-    reason="097: tour buttons are now permanently disabled (gated pending "
-           "sprint 098 -- every tour opens with _set_origin()'s OZ/SI, "
-           "which have no binary arm yet), so tour_btn.isEnabled() is "
-           "False immediately after connect. See __main__.py's tour "
-           "button tooltip / _send_buttons wiring.",
-    strict=False,
-)
 def test_stopping_a_running_tour_reenables_buttons_synchronously(
     qapp, monkeypatch, tmp_path
 ):

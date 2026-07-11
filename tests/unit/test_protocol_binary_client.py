@@ -152,9 +152,13 @@ def test_from_pb2_mode_mapping_matches_modechar(mode_value, expected_char):
 
 
 def test_from_pb2_drops_bench_diagnostic_fields_with_no_tlmframe_slot():
-    """acc_/active/conn_/glitch_/ts_ -- telemetry.proto's OTHER curated text
+    """acc_/conn_/glitch_/ts_ -- telemetry.proto's OTHER curated text
     surface (the one-shot TLM verb's "OK tlm ..." reply, handleTlm()) --
-    have no TLMFrame field at all; from_pb2() must not invent one."""
+    have no TLMFrame field at all; from_pb2() must not invent one.
+
+    ``active`` is the ONE exception (097, this ticket) -- see
+    ``test_from_pb2_populates_active_for_segment_completion_detection``
+    below and ``TLMFrame.from_pb2()``'s own docstring for why."""
     telemetry = telemetry_pb2.Telemetry(
         now=1, mode=planner_pb2.IDLE, seq=0,
         acc_left=1.0, acc_right=2.0, active=True,
@@ -164,9 +168,24 @@ def test_from_pb2_drops_bench_diagnostic_fields_with_no_tlmframe_slot():
 
     frame = TLMFrame.from_pb2(telemetry)
 
-    for attr in ("acc_left", "acc_right", "active", "conn_left", "conn_right",
+    for attr in ("acc_left", "acc_right", "conn_left", "conn_right",
                  "glitch_left", "glitch_right", "ts_left", "ts_right"):
         assert not hasattr(frame, attr), attr
+
+
+@pytest.mark.parametrize(("raw_active",), [(True,), (False,)])
+def test_from_pb2_populates_active_for_segment_completion_detection(raw_active):
+    """097: unlike every other bench-diagnostic field, ``active``
+    (``bb.drivetrain.busy``) IS populated -- it is the reliable
+    segment/replace-arm motion-complete signal (``mode``/``bb.planner.mode``
+    never leaves IDLE for S/D/T/RT/R/TURN/G/MOVE/MOVER, all of which bypass
+    the parked Planner -- see ``TLMFrame.from_pb2()``'s own docstring).
+    ``__main__.py``'s ``_TourRunner._wait_for_idle`` polls this field."""
+    telemetry = telemetry_pb2.Telemetry(
+        now=1, mode=planner_pb2.IDLE, seq=0, active=raw_active,
+    )
+    frame = TLMFrame.from_pb2(telemetry)
+    assert frame.active is raw_active
 
 
 # ---------------------------------------------------------------------------

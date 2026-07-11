@@ -803,19 +803,30 @@ class CanvasController:
             item.setVisible(self._trace_model.enabled[name])  # type: ignore[attr-defined]
 
     def _update_marker(self, fused_yaw_rad: float | None) -> None:
-        """Position and rotate the robot marker at the latest fused pose.
+        """Position and rotate the robot marker at the latest known pose.
 
-        Falls back to world (0, 0) when no fused points are available (avatar
-        is always visible).
+        097: position prefers the ``encoder`` trace (host-side dead
+        reckoning from ``enc``, or firmware ``encpose`` if a future build
+        ever adds it back — see ``traces.py``'s ``TraceModel.feed()``
+        docstring) over ``fused`` (pinned at the anchor until sprint 098
+        wires ``PoseEstimator::tick()`` — a fused-only avatar would never
+        move today). Falls back to ``fused``, then world (0, 0), exactly
+        as before whenever the encoder trace has no points yet (avatar is
+        always visible).
 
         Parameters
         ----------
         fused_yaw_rad:
-            Heading in radians.  ``None`` = no update.
+            Heading in radians — despite the name, as of 097 the caller
+            (``__main__.py``'s ``on_frame_ready``) passes the SAME
+            encoder-dead-reckoning heading (``TraceModel.encoder_yaw``)
+            that now drives the position above, falling back to the fused
+            heading only once the encoder trace has one too. ``None`` = no
+            update.
         """
-        fused_pts = self._trace_model.fused
-        if fused_pts:
-            x_cm, y_cm = fused_pts[-1]
+        pts = self._trace_model.encoder or self._trace_model.fused
+        if pts:
+            x_cm, y_cm = pts[-1]
             px, py = self._world_to_px(x_cm, y_cm)
             self._marker_group.setPos(px, py)  # type: ignore[attr-defined]
             self._marker_group.setVisible(True)  # type: ignore[attr-defined]

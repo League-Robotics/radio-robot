@@ -21,20 +21,29 @@ module owns (the GUI has its own tour idle-detection via live telemetry,
 not a synthesized ``EVT``).
 
 ``translate_command(proto, raw_line)`` is the single entry point. For a
-verb with no binary arm at all — R/TURN/G (098's Planner motion, still
-declared-only), the legacy pose/otos family (SI/ZERO/OZ/OI/OR/OP/OV/OL/OA
-— envelope.proto's ``pose``/``otos`` oneof arms are declared-only until
-098), GRIP/QLEN (never had a binary arm), and the legacy ``DEV`` debug
-family (retired with the rest of the text plane, no binary arm was ever
-planned for it) — it returns a typed ``ERR ...`` reply line WITHOUT
-sending anything on the wire. The OTOS-chip hardware verbs (OI/OL/OA/OV/
-OP/OR) render with the ``nodev`` code specifically (not ``unsupported``):
-this preserves ``calibration_commands()``'s existing NODEV-tolerant push
-loop (``__main__.py``'s ``_push_robot_calibration`` / ``push.py``'s own
-docstring) — those three verbs already meant "no physical OTOS chip
-attached" in Sim mode on the old text plane, and reads the same way today
-for the same physical reason (096/098 have not wired a real detection
-path either way).
+verb with no binary arm at all — the legacy pose/otos family (SI/ZERO/OZ/
+OI/OR/OP/OV/OL/OA — envelope.proto's ``pose``/``otos`` oneof arms are
+declared-only until 098), GRIP/QLEN (never had a binary arm), and the
+legacy ``DEV`` debug family (retired with the rest of the text plane, no
+binary arm was ever planned for it) — it returns a typed ``ERR ...`` reply
+line WITHOUT sending anything on the wire. The OTOS-chip hardware verbs
+(OI/OL/OA/OV/OP/OR) render with the ``nodev`` code specifically (not
+``unsupported``): this preserves ``calibration_commands()``'s existing
+NODEV-tolerant push loop (``__main__.py``'s ``_push_robot_calibration`` /
+``push.py``'s own docstring) — those three verbs already meant "no
+physical OTOS chip attached" in Sim mode on the old text plane, and reads
+the same way today for the same physical reason (096/098 have not wired a
+real detection path either way).
+
+R/TURN/G (097, this ticket): UN-GATED — each now translates to an
+open-loop ``segment``/``replace`` envelope via ``legacy_translate.
+segment_for_arc()``/``segment_for_turn()``/``segment_for_goto_relative()``
+(``legacy_verbs.envelope_for_r/turn/g``). None of the three need the
+Planner motion oneof arm (still reserved, not declared, per envelope.proto
+field 5's own comment) — they are approximations of their original
+closed-loop/continuous firmware behavior, each documented at its
+translator function. The genuinely fused-pose/OTOS-chip/camera-dependent
+verbs above stay gated.
 """
 
 from __future__ import annotations
@@ -51,12 +60,14 @@ from robot_radio.robot.protocol import NezhaProtocol
 # snap() and io/proxy.py's ProtocolBridge use.
 _STREAM_FLOOR_MS = 20  # [ms]
 
-# Verbs with NO binary arm at all -- proxy.py's own
-# _ALWAYS_UNSUPPORTED_VERBS, reused verbatim (io/proxy.py). G/R/TURN are
-# Subsystems::Planner motion (envelope.proto's `motion` oneof field is
-# RESERVED, not even declared, until Planner un-parks); GRIP/QLEN never had
-# any binary arm planned.
-_ALWAYS_UNSUPPORTED_VERBS = frozenset({"QLEN", "G", "R", "TURN", "GRIP"})
+# Verbs with NO binary arm at all, ever. GRIP/QLEN never had any binary arm
+# planned. (097, this ticket: G/R/TURN REMOVED from this set -- they now
+# translate to open-loop segment/replace envelopes; see this module's own
+# docstring and legacy_translate.py's segment_for_arc()/segment_for_turn()/
+# segment_for_goto_relative(). io/proxy.py's OWN, separate
+# _ALWAYS_UNSUPPORTED_VERBS copy for the rogo proxy PTY bridge is untouched
+# -- out of this ticket's scope.)
+_ALWAYS_UNSUPPORTED_VERBS = frozenset({"QLEN", "GRIP"})
 
 # Pose-reset verbs: envelope.proto's `pose`/`otos` oneof arms exist
 # (SetPose/OdometerCommand) but are declared-only -- BinaryChannel replies
@@ -231,14 +242,13 @@ def _handle_snap(proto: NezhaProtocol, corr_id: int | None) -> str:
     ``telemetry_pb2.Telemetry`` (for ``legacy_render.render_tlm_line()``),
     not ``snap()``'s own parsed ``TLMFrame``.
 
-    Not reachable from the current UI (the only caller,
-    ``_TourRunner._wait_for_idle``, is unreachable once tours are gated
-    pending 098's OZ/SI arms) -- implemented anyway so a stray/future
-    ``SNAP`` never silently falls through to the catch-all "unsupported"
-    reply. Falls back to a non-blocking drain when the underlying
-    connection has no ``read_binary_tlm`` (``SimConnection`` doesn't --
-    its tick-thread already keeps a continuous binary stream armed and
-    drained, so a frame is normally already queued).
+    The only caller today is ``_TourRunner._wait_for_idle``'s fire-and-forget
+    ``send("SNAP")`` nudge (``__main__.py``) -- implemented anyway so a
+    stray/future ``SNAP`` never silently falls through to the catch-all
+    "unsupported" reply. Falls back to a non-blocking drain when the
+    underlying connection has no ``read_binary_tlm`` (``SimConnection``
+    doesn't -- its tick-thread already keeps a continuous binary stream
+    armed and drained, so a frame is normally already queued).
     """
     conn = proto._conn
     conn.drain_binary_tlm()
@@ -251,3 +261,98 @@ def _handle_snap(proto: NezhaProtocol, corr_id: int | None) -> str:
     if not frames:
         return render.render_err("unknown", "snap-timeout", corr_id)
     return render.render_tlm_line(frames[0].tlm)
+
+
+# ---------------------------------------------------------------------------
+# Serial/message monitor filtering (097, Goal 4) -- translates every raw
+# `*B<base64>` wire log line SerialConnection's on_send/on_recv hooks
+# deliver (see io/serial_conn.py's `_reader_loop`/`send_envelope`
+# docstrings: on_recv fires for EVERY decoded line before any
+# classification, including the high-rate binary telemetry push stream)
+# into readable text for the TestGUI's log pane, instead of an opaque
+# base64 blob a human cannot read. `_HardwareTransport`'s `_on_send`/
+# `_on_recv` closures (transport.py) are the only callers -- SimTransport
+# never needs this: its own send()/command()/_drain_cmd_queue() already log
+# translate_command()'s human-readable return value (or the original text
+# line), and its tick-thread never logs the raw armored telemetry stream at
+# all (see transport.py's `_tick_loop`).
+# ---------------------------------------------------------------------------
+
+_BINARY_ARMOR_PREFIX = "*B"
+
+
+def render_log_line(raw_line: str, *, outbound: bool) -> str | None:
+    """Translate one raw wire log line for display in the message monitor.
+
+    ``outbound=True``: ``raw_line`` is a sent line -- a plain text-v2
+    command line, OR (095-002 armor) a ``*B<base64>``-encoded
+    ``CommandEnvelope``. ``outbound=False``: ``raw_line`` is a received
+    line -- a ``*B<base64>``-encoded ``ReplyEnvelope`` (the firmware is
+    binary-only plus the 6-verb text rump; a received rump reply, e.g.
+    ``DEVICE:...``, is plain text and passes through unchanged the same as
+    any other non-armored line).
+
+    Returns:
+      - ``None`` to mean "drop this line entirely" -- a ``ReplyEnvelope{tlm}``
+        push frame, the high-rate telemetry stream that floods the console
+        with no per-line operator value (broken out into the telemetry
+        panel instead, same rationale as ``telemetry_panel.
+        is_telemetry_log_line()``'s text-plane precedent).
+      - ``raw_line`` unchanged, for any non-armored line, or an armored
+        line that fails to base64-decode/protobuf-parse (defensive; never
+        raises out of a log hook).
+      - Otherwise, a single-line human-readable rendering of the decoded
+        envelope: a received reply uses ``legacy_render``'s own
+        context-free renderers where one exists for that oneof arm
+        (``err``/``id``/``echo``/``helptext``); ``ok`` (Ack) and ``cfg``
+        (ConfigSnapshot) have no verb-agnostic ``legacy_render`` renderer
+        (``render_ok_for_verb()``/``render_cfg_line()`` both need the
+        ORIGINAL request's verb/keys, which a bare reply line does not
+        carry) -- rendered instead via ``google.protobuf.text_format``, the
+        same "readable text instead of raw armor" outcome without
+        inventing a verb-guessing scheme. A sent command (outbound) has no
+        ``legacy_render`` equivalent at all (that module renders replies,
+        not requests) -- always rendered via ``text_format``.
+    """
+    if not raw_line.startswith(_BINARY_ARMOR_PREFIX):
+        return raw_line
+
+    import base64
+
+    from google.protobuf import text_format  # type: ignore[import-untyped]
+
+    from robot_radio.robot.pb2 import envelope_pb2
+
+    try:
+        raw_bytes = base64.b64decode(raw_line[len(_BINARY_ARMOR_PREFIX):])
+    except Exception:
+        return raw_line
+
+    if outbound:
+        try:
+            cmd = envelope_pb2.CommandEnvelope.FromString(raw_bytes)
+        except Exception:
+            return raw_line
+        return text_format.MessageToString(cmd, as_one_line=True).strip() or raw_line
+
+    try:
+        reply = envelope_pb2.ReplyEnvelope.FromString(raw_bytes)
+    except Exception:
+        return raw_line
+
+    which = reply.WhichOneof("body")
+    corr_id = reply.corr_id or None
+    if which == "tlm":
+        return None
+    if which == "err":
+        return render.render_error(reply.err, corr_id)
+    if which == "id":
+        return render.render_id_line(reply.id, corr_id)
+    if which == "echo":
+        return render.render_ok("echo", reply.echo.payload.decode("utf-8", "replace"), corr_id)
+    if which == "helptext":
+        return render.render_ok("help", reply.helptext.text, corr_id)
+    # "ok" (Ack)/"cfg" (ConfigSnapshot)/"evt" (EventNotify) -- no verb-
+    # agnostic legacy_render renderer exists (see this function's own
+    # docstring); text_format gives readable text without guessing.
+    return text_format.MessageToString(reply, as_one_line=True).strip() or raw_line

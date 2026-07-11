@@ -82,29 +82,22 @@ def transport():
 # (a) encoder / otos / fused traces all grow from on_telemetry -> TraceModel.feed()
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    reason="not a wire/transport gap (097's own scope) -- two independent, "
-           "pre-existing, firmware-level facts about THIS tree, verified "
-           "directly against the compiled sim, unrelated to text vs. "
-           "binary or DEV vs. S: (1) `encpose` has NO wire representation "
-           "in telemetry.proto AT ALL, permanently (096-001's trim, cited "
-           "in TLMFrame.from_pb2()'s own docstring) -- model.encoder can "
-           "never grow from ANY telemetry frame, text or binary; (2) "
-           "Subsystems::PoseEstimator::tick() (source/subsystems/"
-           "pose_estimator.cpp), the only producer of bb.fusedPose/otos "
-           "state, is never called anywhere in source/ -- confirmed by "
-           "grep (no call site exists) and by direct binary-telemetry "
-           "probing (has_pose=True but pose stays (0,0); has_otos=False "
-           "always) -- matching sim_conn.py's own module docstring: "
-           "'there is no EKF/fusion loop anywhere in source/ this "
-           "sprint'. model.otos/model.fused therefore never move either.",
-    strict=False,
-)
-def test_encoder_otos_fused_traces_grow_with_forward_drive(transport: SimTransport) -> None:
+def test_encoder_trace_grows_with_forward_drive_via_dead_reckoning(
+    transport: SimTransport,
+) -> None:
     """Driving the sim forward via binary-translated ``S`` and feeding the
-    resulting ``TLMFrame``s into a ``TraceModel`` grows the ``encoder``,
-    ``otos``, and ``fused`` trace lists with plausible forward-motion (+x,
-    ~0 y) points.
+    resulting ``TLMFrame``s into a ``TraceModel`` grows the ``encoder``
+    trace with plausible forward-motion (+x, ~0 y) points.
+
+    097: un-xfailed for ``encoder`` specifically. ``encpose`` still has NO
+    wire representation in telemetry.proto (096-001's permanent trim,
+    cited in ``TLMFrame.from_pb2()``'s own docstring) -- but
+    ``TraceModel.feed()`` now dead-reckons an equivalent pose host-side via
+    ``EncoderDeadReckoner``, integrated from ``frame.enc`` (cumulative
+    per-wheel distance, always present), so the ``encoder`` trace grows
+    regardless. See ``test_otos_fused_traces_still_flat_pending_098``
+    below for why ``otos``/``fused`` do NOT (a genuinely separate,
+    firmware-level gap this dead-reckoning fallback cannot paper over).
     """
     model = TraceModel()
     transport.on_telemetry = model.feed
@@ -115,6 +108,54 @@ def test_encoder_otos_fused_traces_grow_with_forward_drive(transport: SimTranspo
         f"encoder trace only reached {len(model.encoder)} points within "
         f"{_WAIT_TIMEOUT_S}s"
     )
+
+    first_x, first_y = model.encoder[0]
+    last_x, last_y = model.encoder[-1]
+    # Anchor is (0, 0, 0) (feed() auto-anchors on first call, and the
+    # sim starts at the origin) -- the first point is the zeroed
+    # baseline, so it should sit at (approximately) the origin.
+    assert abs(first_x) < 5.0 and abs(first_y) < 5.0, (
+        f"encoder trace's first point {model.encoder[0]} is not near the origin"
+    )
+    # Driving straight forward (v_x=200 mm/s, v_y=0, omega=0) must grow
+    # +x substantially and leave y close to zero.
+    assert last_x > first_x + 1.0, (
+        f"encoder trace did not move forward in x: {model.encoder}"
+    )
+    assert abs(last_y) < 5.0, (
+        f"encoder trace drifted laterally during a straight drive: {model.encoder}"
+    )
+
+
+@pytest.mark.xfail(
+    reason="not a wire/transport gap (097's own scope) -- "
+           "Subsystems::PoseEstimator::tick() (source/subsystems/"
+           "pose_estimator.cpp), the only producer of bb.fusedPose/otos "
+           "state, is never called anywhere in source/ -- confirmed by "
+           "grep (no call site exists) and by direct binary-telemetry "
+           "probing (has_pose=True but pose stays (0,0); has_otos=False "
+           "always) -- matching sim_conn.py's own module docstring: "
+           "'there is no EKF/fusion loop anywhere in source/ this "
+           "sprint'. Unlike encoder (097: now host-side dead-reckoned "
+           "from frame.enc, see test_encoder_trace_grows_..._dead_"
+           "reckoning above), otos/fused have no equivalent host-side "
+           "fallback -- there is no raw sensor field to dead-reckon them "
+           "from; they genuinely need sprint 098's fused-pose wiring.",
+    strict=False,
+)
+def test_otos_fused_traces_still_flat_pending_098(transport: SimTransport) -> None:
+    """``otos``/``fused`` traces do NOT grow yet -- still pending sprint 098.
+
+    Companion to ``test_encoder_trace_grows_with_forward_drive_via_dead_
+    reckoning`` above: same drive, but asserting the OPPOSITE for the two
+    traces that genuinely need firmware fusion (no host-side fallback is
+    possible for either, unlike encoder).
+    """
+    model = TraceModel()
+    transport.on_telemetry = model.feed
+
+    transport.send("S 200 200")
+
     assert _wait_until(lambda: len(model.otos) >= _MIN_TRACE_POINTS), (
         f"otos trace only reached {len(model.otos)} points within "
         f"{_WAIT_TIMEOUT_S}s"
@@ -125,20 +166,14 @@ def test_encoder_otos_fused_traces_grow_with_forward_drive(transport: SimTranspo
     )
 
     for name, points in (
-        ("encoder", model.encoder),
         ("otos", model.otos),
         ("fused", model.fused),
     ):
         first_x, first_y = points[0]
         last_x, last_y = points[-1]
-        # Anchor is (0, 0, 0) (feed() auto-anchors on first call, and the
-        # sim starts at the origin) -- the first point is the zeroed
-        # baseline, so it should sit at (approximately) the origin.
         assert abs(first_x) < 5.0 and abs(first_y) < 5.0, (
             f"{name} trace's first point {points[0]} is not near the origin"
         )
-        # Driving straight forward (v_x=200 mm/s, v_y=0, omega=0) must grow
-        # +x substantially and leave y close to zero.
         assert last_x > first_x + 1.0, (
             f"{name} trace did not move forward in x: {points}"
         )

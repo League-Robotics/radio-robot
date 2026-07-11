@@ -124,6 +124,11 @@ class TLMFrame:
     side (not gated by freshness, matching ``wedge``'s precedent) — always
     present on any firmware new enough to emit it; absent (None) on older
     firmware.
+    ``active`` (097-this-ticket) is ``bb.drivetrain.busy`` — TRUE while a
+    segment/replace-arm motion is in progress, FALSE once it self-
+    terminates. Populated from every binary STREAM/SNAP frame (see
+    ``from_pb2()``'s own docstring for why this is the reliable motion-
+    complete signal, unlike ``mode``).
     """
     t: int | None = None
     mode: str | None = None
@@ -140,6 +145,7 @@ class TLMFrame:
     wedge: tuple[int, int] | None = None         # (left, right) wedge-latch state, 0/1 each (064-004)
     encpose: tuple[int, int, int] | None = None  # (x, y, heading) [mm, mm, cdeg] — encoder-only pose (068-001)
     otos_health: tuple[int, bool] | None = None  # (raw STATUS byte, fusion_blocked) — OTOS health (074-004)
+    active: bool | None = None                   # bb.drivetrain.busy — motion in progress (097, this ticket)
 
     @classmethod
     def from_pb2(cls, telemetry: "telemetry_pb2.Telemetry") -> "TLMFrame":
@@ -183,15 +189,34 @@ class TLMFrame:
             ``otosconn=`` token into any TLMFrame field either, so
             ``otos_connected`` is dropped here too, for parity with the
             text path this dataclass already models.
-          - ``acc_left``/``acc_right``/``active``/``conn_left``/
-            ``conn_right``/``glitch_left``/``glitch_right``/``ts_left``/
-            ``ts_right`` — telemetry.proto ALSO curates these from the
-            separate one-shot ``TLM`` verb's ``OK tlm ...`` reply
-            (``handleTlm()``, motion_commands.cpp) — a DIFFERENT text wire
-            shape than the STREAM/SNAP ``TLM t=... mode=...`` line this
-            dataclass models. TLMFrame has no slot for these; they are
-            silently dropped here, like any other field this dataclass does
-            not declare.
+          - ``acc_left``/``acc_right``/``conn_left``/``conn_right``/
+            ``glitch_left``/``glitch_right``/``ts_left``/``ts_right`` —
+            telemetry.proto ALSO curates these from the separate one-shot
+            ``TLM`` verb's ``OK tlm ...`` reply (``handleTlm()``,
+            motion_commands.cpp) — a DIFFERENT text wire shape than the
+            STREAM/SNAP ``TLM t=... mode=...`` line this dataclass models.
+            TLMFrame has no slot for these; they are silently dropped here,
+            like any other field this dataclass does not declare.
+          - ``active`` is the ONE exception to the paragraph above (097,
+            this ticket): unlike the other bench-diagnostic fields,
+            ``telemetry.active`` (``bb.drivetrain.busy`` — motion in
+            progress, telemetry.proto field 22) is ALSO present, unconditionally,
+            on every STREAM/SNAP binary frame (telemetry.proto declares one
+            ``Telemetry`` message for both the periodic and one-shot
+            shapes; only the historical TEXT parser split them into two
+            wire lines). It is populated below because it is the ONE
+            reliable segment/replace-arm completion signal: ``mode``
+            (``bb.planner.mode``) never leaves ``IDLE`` for segment-arm
+            motion (S/D/T/RT/R/TURN/G/MOVE/MOVER all post to
+            ``bb.segmentIn``/``bb.replaceIn``/``bb.driveIn``, never to
+            ``bb.motionIn``/``Subsystems::Planner`` — Planner is parked),
+            so a caller polling ``mode == "I"`` for "did the last segment
+            finish" would see a false-positive IMMEDIATELY. ``active``
+            (``Subsystems::Drivetrain::tick()``'s own
+            ``segmentMode_ ? executor_.active() : ...`` assignment,
+            drivetrain.cpp) tracks the SegmentExecutor directly and is
+            correct for every arm. ``__main__.py``'s ``_TourRunner.
+            _wait_for_idle`` uses it for exactly this reason.
 
         ``vel``/``cmd_vel``/``twist`` are always built as the DIFFERENTIAL
         tuple shape (matching this build's differential-only drivetrain and
@@ -205,6 +230,7 @@ class TLMFrame:
         frame.t = telemetry.now
         frame.mode = _DRIVE_MODE_CHAR.get(telemetry.mode, "I")
         frame.seq = telemetry.seq
+        frame.active = bool(telemetry.active)
 
         if telemetry.has_enc:
             frame.enc = (int(telemetry.enc_left), int(telemetry.enc_right))

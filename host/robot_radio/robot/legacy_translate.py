@@ -105,6 +105,8 @@ the firmware function/file it ports):
 
 from __future__ import annotations
 
+import math
+
 from robot_radio.robot.pb2 import common_pb2, drivetrain_pb2, motion_pb2
 
 # kCdegToRad mirror (source/commands/motion_commands.cpp):
@@ -274,4 +276,114 @@ def segment_for_mover(distance: float,  # [mm]
     seg.jerk_max = float(jerk_max)
     seg.yaw_accel_max = float(yaw_accel_max) * _CDEG_TO_RAD
     seg.yaw_jerk_max = float(yaw_jerk_max) * _CDEG_TO_RAD
+    return seg
+
+
+# ---------------------------------------------------------------------------
+# Open-loop segment approximations for R/TURN/G (097, this ticket) -- the
+# `segment`/`replace` binary arms have no Planner/fused-pose-closed-loop
+# equivalent (Subsystems::Planner is parked; Telemetry.pose is pinned at
+# (0,0,0) until sprint 098 wires PoseEstimator::tick()). Each function below
+# is transcribed from its verb's pre-097-006 firmware handler (motion_
+# commands.cpp, ``git show 18ba84d8^:source/commands/motion_commands.cpp``),
+# then documents EXACTLY how the open-loop segment/replace translation below
+# deviates from that closed-loop original -- never silently reconciled, per
+# 095 Decision 5's "transcribe, don't re-derive" discipline.
+# ---------------------------------------------------------------------------
+
+
+def segment_for_arc(speed: float,  # [mm/s]
+                    radius: float,  # [mm]
+                    duration: float = 1000.0,  # [ms]
+                    ) -> motion_pb2.MotionSegment:
+    """``handleR()`` (motion_commands.cpp, pre-097-006 gut): ``R <speed>
+    <radius>`` -> an open-loop constant-curvature arc -- ``omega =
+    speed/radius`` (0 when ``radius == 0``, transcribed verbatim; positive
+    radius -> positive omega -> CCW/left arc) -- posted as a CONTINUOUS
+    ``msg::VelocityGoal`` that ran until an explicit ``STOP``/``stop=``
+    clause fired.
+
+    DEVIATION (097, this ticket): ``Motion::Segment`` (the ``segment``/
+    ``replace`` arms) has no "run forever" shape -- ``segment.h``'s own
+    "distance-bounded (time == 0) or time-bounded (time > 0), never both"
+    invariant means every segment self-terminates. The Planner-only
+    continuous ``VelocityGoal`` handleR() posted has no reachable
+    equivalent while Planner stays parked. This builds the CLOSEST
+    available replace-arm shape instead: a TIME-BOUNDED velocity pulse
+    (the SAME time/velocity fields ``segment_for_mover()``'s teleop
+    deadman uses) -- ``v=speed``, ``omega=speed/radius`` for ``duration``
+    ms, then the SegmentExecutor decelerates gracefully to rest. A
+    repeated Send re-arms the pulse. Documented approximation, not a
+    silent behavior change; a re-armed Planner (098+) could restore the
+    true continuous arc.
+    """
+    omega = (speed / radius) if radius != 0.0 else 0.0
+    seg = motion_pb2.MotionSegment()
+    seg.stream = True
+    seg.time = float(duration)
+    seg.v = float(speed)
+    seg.omega = float(omega)
+    seg.speed_max = abs(float(speed))
+    seg.yaw_rate_max = abs(float(omega))
+    return seg
+
+
+def segment_for_turn(heading: float,  # [cdeg] absolute target heading
+                     ) -> motion_pb2.MotionSegment:
+    """``handleTURN()`` (motion_commands.cpp, pre-097-006 gut): ``TURN
+    <heading> [eps]`` is CLOSED-LOOP against ``bb.fusedPose.pose.h`` -- it
+    reads the robot's CURRENT fused heading, computes the shortest-path
+    signed delta to the absolute target, and closes a ``HEADING`` stop
+    condition around that delta.
+
+    DEVIATION (097, this ticket): fused pose is pinned at (0,0,0) until
+    sprint 098 (``Telemetry.pose`` never moves -- ``Subsystems::
+    PoseEstimator::tick()`` is not called anywhere in ``source/`` yet), so
+    "current heading" cannot be read host-side. This approximates the
+    closed-loop turn AS IF the robot always starts at heading 0: it builds
+    the SAME pure in-place-turn ``Motion::Segment`` shape
+    ``segment_for_rt()`` does (``distance=0``, ``final_heading=heading``),
+    i.e. it treats the absolute target as a from-zero relative turn.
+    Correct immediately after a fresh pose reset; drifts from the true
+    absolute-heading meaning across repeated turns until 098 lands a live
+    fused heading this function can subtract. ``eps`` (the closed-loop
+    tolerance gate) has no open-loop analogue -- the SegmentExecutor's own
+    Ruckig terminal pivot self-terminates on its own encoder arc
+    regardless -- so callers accept it for the OK reply body only; it is
+    not a parameter here.
+    """
+    seg = motion_pb2.MotionSegment()
+    seg.final_heading = float(heading) * _CDEG_TO_RAD
+    return seg
+
+
+def segment_for_goto_relative(x: float,  # [mm]
+                              y: float,  # [mm]
+                              speed: float = 0.0,  # [mm/s]
+                              ) -> motion_pb2.MotionSegment:
+    """``handleG()`` (motion_commands.cpp, pre-097-006 gut): ``G <x> <y>
+    <speed>`` posts a ``msg::GotoGoal`` -- ``Subsystems::Planner`` owns an
+    internal PRE_ROTATE/PURSUE state machine that closes the loop on fused
+    pose the entire way to the target.
+
+    DEVIATION (097, this ticket): Planner is parked and fused pose is not
+    live until 098, so this builds the open-loop segment approximation
+    ``MOVE`` itself would use for a single pre-pivot-then-straight leg:
+    pivot to face the relative target (``direction = atan2(y, x)``), drive
+    the straight-line distance to it (``distance = hypot(x, y)``), and
+    finish facing the direction of travel (``final_heading = direction``,
+    a deliberate choice -- NOT 0 -- so the robot does not waste motion
+    pivoting back to its start heading once it arrives). No mid-course
+    correction: one open-loop segment, not a pursuit loop. ``speed`` (mm/s)
+    becomes the segment's ``speed_max`` ceiling; 0 (the default) falls back
+    to the SegmentExecutor's configured profile, the same "0 => executor
+    default" convention every other translator in this module documents.
+    """
+    distance = math.hypot(x, y)
+    direction = math.atan2(y, x)
+    seg = motion_pb2.MotionSegment()
+    seg.distance = distance
+    seg.direction = direction
+    seg.final_heading = direction
+    seg.speed_max = float(speed)
     return seg

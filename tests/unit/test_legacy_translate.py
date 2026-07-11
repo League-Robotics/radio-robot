@@ -280,6 +280,110 @@ def test_segment_for_mover_distance_direction_final_heading_pass_through():
     assert seg.final_heading == pytest.approx(-4500 * _CDEG_TO_RAD)
 
 
+# ---------------------------------------------------------------------------
+# segment_for_arc() (097) -- handleR()'s omega=speed/radius formula
+# (transcribed; radius==0 -> omega=0), mapped onto a TIME-BOUNDED
+# replace-arm velocity pulse (no continuous-arc shape exists on the
+# segment/replace arms -- see the function's own docstring for the
+# deviation from handleR()'s original unbounded VelocityGoal).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("speed", "radius", "expected_omega"),
+    [
+        (200.0, 500.0, 200.0 / 500.0),
+        (-200.0, 500.0, -200.0 / 500.0),
+        (200.0, -500.0, -200.0 / 500.0),
+        (200.0, 0.0, 0.0),  # handleR(): omega = 0 when radius == 0
+    ],
+)
+def test_segment_for_arc_omega_matches_handle_r_formula(speed, radius, expected_omega):
+    seg = legacy_translate.segment_for_arc(speed, radius)
+    assert seg.v == pytest.approx(speed)
+    assert seg.omega == pytest.approx(expected_omega)
+    assert seg.speed_max == pytest.approx(abs(speed))
+    assert seg.yaw_rate_max == pytest.approx(abs(expected_omega))
+
+
+def test_segment_for_arc_is_time_bounded_and_streaming():
+    """Unlike handleR()'s original unbounded VelocityGoal, this is a
+    TIME-BOUNDED replace-arm pulse (segment.h's own "time > 0 -> time-
+    bounded" invariant) -- distance/direction/final_heading stay at 0
+    (unused in time mode)."""
+    seg = legacy_translate.segment_for_arc(200.0, 500.0, duration=750.0)
+    assert seg.time == pytest.approx(750.0)
+    assert seg.stream is True
+    assert seg.distance == pytest.approx(0.0)
+    assert seg.direction == pytest.approx(0.0)
+    assert seg.final_heading == pytest.approx(0.0)
+
+
+def test_segment_for_arc_default_duration_is_1000ms():
+    seg = legacy_translate.segment_for_arc(200.0, 500.0)
+    assert seg.time == pytest.approx(1000.0)
+
+
+# ---------------------------------------------------------------------------
+# segment_for_turn() (097) -- handleTURN()'s original closed-loop turn is
+# approximated open-loop AS IF the robot always starts at heading 0 (the
+# SAME pure in-place-turn shape segment_for_rt() builds): distance=0,
+# final_heading=heading (converted cdeg -> rad).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("heading",),
+    [(9000,), (-4500,), (0,), (18000,), (-18000,)],
+)
+def test_segment_for_turn_matches_segment_for_rt_shape(heading):
+    """The open-loop approximation is BYTE-IDENTICAL in shape to
+    segment_for_rt() -- both build a pure in-place-turn segment; only the
+    semantic interpretation (relative vs. from-zero-absolute) differs at
+    the call site, not the wire payload."""
+    turn_seg = legacy_translate.segment_for_turn(heading)
+    rt_seg = legacy_translate.segment_for_rt(heading)
+    assert turn_seg.final_heading == pytest.approx(heading * _CDEG_TO_RAD)
+    assert turn_seg.final_heading == pytest.approx(rt_seg.final_heading)
+    assert turn_seg.distance == pytest.approx(0.0)
+    assert turn_seg.speed_max == pytest.approx(0.0)
+    assert turn_seg.stream is False
+
+
+# ---------------------------------------------------------------------------
+# segment_for_goto_relative() (097) -- handleG()'s original Planner pursuit
+# loop is approximated open-loop as a single pre-pivot-then-straight
+# segment: distance=hypot(x,y), direction=atan2(y,x), final_heading=
+# direction (finish facing the direction of travel, not the start heading).
+# ---------------------------------------------------------------------------
+
+
+def test_segment_for_goto_relative_distance_and_direction():
+    import math
+
+    seg = legacy_translate.segment_for_goto_relative(300.0, 400.0, speed=150.0)
+    assert seg.distance == pytest.approx(500.0)  # 3-4-5 triangle
+    assert seg.direction == pytest.approx(math.atan2(400.0, 300.0))
+    # Finishes facing the direction of travel, not pivoting back to 0.
+    assert seg.final_heading == pytest.approx(seg.direction)
+    assert seg.speed_max == pytest.approx(150.0)
+
+
+def test_segment_for_goto_relative_at_origin_is_a_zero_distance_no_op():
+    seg = legacy_translate.segment_for_goto_relative(0.0, 0.0)
+    assert seg.distance == pytest.approx(0.0)
+    assert seg.direction == pytest.approx(0.0)
+    assert seg.final_heading == pytest.approx(0.0)
+
+
+def test_segment_for_goto_relative_default_speed_is_zero_sentinel():
+    """speed=0 (the default) falls back to the SegmentExecutor's configured
+    profile, matching every other translator's "0 => executor default"
+    convention."""
+    seg = legacy_translate.segment_for_goto_relative(300.0, 400.0)
+    assert seg.speed_max == pytest.approx(0.0)
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

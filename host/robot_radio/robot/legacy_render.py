@@ -144,9 +144,12 @@ def render_device_banner(device_id: "envelope_pb2.DeviceId") -> str:
 def render_ok_for_verb(verb: str, pos: list[str], kv: dict[str, str],
                        ack: "envelope_pb2.Ack", corr_id: int | str | None) -> str:
     """Render the ``OK`` reply line for a verb whose binary reply is a
-    plain ``Ack{q, rem, t}`` -- ``S``/``T``/``D``/``RT``/``MOVE``/``MOVER``/
-    ``PING``/``STOP``. Raises ``ValueError`` for any other verb (no
-    Ack-shaped reply defined for it)."""
+    plain ``Ack{q, rem, t}`` -- ``S``/``T``/``D``/``RT``/``R``/``TURN``/
+    ``G``/``MOVE``/``MOVER``/``PING``/``STOP`` (``R``/``TURN``/``G`` added
+    097, this ticket -- see ``legacy_translate.py``'s ``segment_for_arc()``/
+    ``segment_for_turn()``/``segment_for_goto_relative()`` for the
+    open-loop translations these render the reply for). Raises
+    ``ValueError`` for any other verb (no Ack-shaped reply defined for it)."""
     if verb == "S":
         # handleS(): "OK drive l=%d r=%d"
         return render_ok("drive", f"l={int(float(pos[0]))} r={int(float(pos[1]))}", corr_id)
@@ -161,6 +164,19 @@ def render_ok_for_verb(verb: str, pos: list[str], kv: dict[str, str],
     if verb == "RT":
         # handleRT(): "OK rt rot=%d"
         return render_ok("rt", f"rot={int(float(pos[0]))}", corr_id)
+    if verb == "R":
+        # handleR(): "OK arc speed=%d radius=%d"
+        body = f"speed={int(float(pos[0]))} radius={int(float(pos[1]))}"
+        return render_ok("arc", body, corr_id)
+    if verb == "TURN":
+        # handleTURN(): "OK turn heading=%d eps=%d"
+        from robot_radio.robot.legacy_verbs import kvfloat
+        eps = int(kvfloat(kv, "eps"))
+        return render_ok("turn", f"heading={int(float(pos[0]))} eps={eps}", corr_id)
+    if verb == "G":
+        # handleG(): "OK goto x=%d y=%d speed=%d"
+        body = f"x={int(float(pos[0]))} y={int(float(pos[1]))} speed={int(float(pos[2]))}"
+        return render_ok("goto", body, corr_id)
     if verb == "MOVE":
         # handleMove(): "OK move dist=%d dir=%d fh=%d q=%u rem=%d"
         # -- q/rem come from the Ack (runtime queue depth / remaining

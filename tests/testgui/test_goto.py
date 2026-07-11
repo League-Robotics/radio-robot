@@ -323,10 +323,21 @@ def test_goto_explicit_stop_halts_promptly_without_waiting_for_arrival_or_timeou
 
 @_requires_sim_lib
 @pytest.mark.xfail(
-    reason="097: G has no binary arm until sprint 098 (envelope.proto's "
-           "`motion` oneof field is RESERVED, not declared, until "
-           "Subsystems::Planner un-parks) -- `G 6000 0 200` is a gated "
-           "no-op, so mode= never reports 'G'. See binary_bridge.py.",
+    reason="097: G now has a binary arm (un-gated, this ticket), but NOT "
+           "the Planner-goal one this test's premise depends on -- G "
+           "translates to an open-loop `segment` envelope (legacy_"
+           "translate.segment_for_goto_relative(), posted to "
+           "bb.segmentIn/the SegmentExecutor) rather than "
+           "Subsystems::Planner's GotoGoal (bb.motionIn, still parked -- "
+           "envelope.proto's `motion` oneof field remains RESERVED). "
+           "bb.planner.mode (this test's `mode=` signal) therefore never "
+           "reports 'G' under either the old (never-shipped this sprint) "
+           "Planner path or the new segment path -- this test's own setup "
+           "assertion (`assert 'G' in modes`) fails immediately, before "
+           "the STOP-cancellation behavior it actually wants to check is "
+           "ever exercised. Superseded, not fixable by un-gating alone; "
+           "segment-arm completion is `active` (bb.drivetrain.busy), not "
+           "`mode` -- see protocol.py's TLMFrame.from_pb2() docstring.",
     strict=False,
 )
 def test_stop_cancels_inflight_g_goal_against_real_sim() -> None:
@@ -551,10 +562,17 @@ def _disconnect_sim(qapp, window) -> None:
 
 @_requires_sim_lib
 @pytest.mark.xfail(
-    reason="097: GOTO's pursuit loop needs SI/G, neither of which has a "
-           "binary arm until sprint 098 -- goto_btn is now permanently "
-           "disabled (gated in the UI, __main__.py), so it never starts. "
-           "See binary_bridge.py / the goto_btn tooltip set in __main__.py.",
+    reason="097: goto_btn (the WORLD-ABSOLUTE camera-closed-loop GOTO, "
+           "distinct from the COMMANDS schema's own 'G' row -- see "
+           "__main__.py's goto_btn docstring comment) stays permanently "
+           "disabled -- its pursuit loop needs SI to re-anchor the "
+           "robot's pose to camera truth every iteration, and SI still "
+           "has no binary arm (binary_bridge.py's _POSE_RESET_VERBS, "
+           "genuinely deferred to sprint 098's fused pose). G itself now "
+           "has a binary arm (un-gated, this ticket) as an open-loop "
+           "single-leg segment -- see legacy_translate.segment_for_"
+           "goto_relative() -- but that does not help this closed-loop "
+           "pursuit loop's own SI dependency.",
     strict=False,
 )
 def test_goto_button_converges_against_real_sim_and_reenables_button(
@@ -617,10 +635,12 @@ def test_goto_button_converges_against_real_sim_and_reenables_button(
 
 @_requires_sim_lib
 @pytest.mark.xfail(
-    reason="097: goto_btn is now permanently disabled (gated pending "
-           "sprint 098 -- GOTO needs SI/G, neither has a binary arm yet), "
-           "so it can never be enabled after connect. See __main__.py's "
-           "goto_btn tooltip / _send_buttons wiring.",
+    reason="097: goto_btn (the WORLD-ABSOLUTE camera-closed-loop GOTO) "
+           "stays permanently disabled -- its pursuit loop's SI re-anchor "
+           "has no binary arm until sprint 098, so it can never be "
+           "enabled after connect. See test_goto_button_converges_..."
+           "'s identical reasoning above and __main__.py's goto_btn "
+           "docstring comment / tooltip.",
     strict=False,
 )
 def test_goto_stop_reenables_button_synchronously_against_real_sim(
