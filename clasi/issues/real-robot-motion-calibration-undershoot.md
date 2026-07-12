@@ -111,3 +111,35 @@ Measurements behind the knobs:
    run's busy flag never arriving led a retry to double-queue a segment:
    robot turned ~684 deg on a 360 ask). The notebook's capture guards
    encode these rules now.
+
+## Iteration 4 (2026-07-11, later): reanchor velocity seed -- trajectory quality
+
+The stakeholder's bench runs exposed that iter-2's decent ENDPOINTS hid
+garbage TRAJECTORIES: mid-pivot the commanded velocity cliffed to zero,
+the robot stalled ~0.25s, then re-accelerated a second full bell (heading
+plateau clearly visible). Mechanism: gross-divergence `reanchor()` seeded
+velocity = 0.0f ("no reliable measured angular rate") while the wheels ran
+~300 mm/s -- Ruckig, told the robot was at rest, planned from rest. Fixed:
+seed with the measured rate (vR - vL)/trackwidth (plan-sampled fallback).
+The translate reanchor always did this; the pivot one was left lazy.
+
+Scores after (same instrument, humps = trajectory-quality metric, sim = 1):
+
+| turn | endpoint err | humps |
+|---|---|---|
+| 90  | **+3.9** (was -10.6) | 3 |
+| 180 | **+4.3** (was -2.2)  | 4 |
+| 360 | -19.8 (was -9.0)     | 4 |
+
+90/180 now within ~4 deg of target with the bench heading riding ON the sim
+curves. Remaining: 360 (ceiling-speed cruise) still ragged/short -- replans
+still fire there (peak measured wheel 431 mm/s, above the sim plant model's
+400); next measured knob is the hardware replan noise floor at ceiling
+speeds. The endpoint-only scoring mistake is corrected: `humps` (count of
+distinct acceleration bells; healthy = 1) is now part of the notebook
+summary.
+
+Bench-harness rule refined after burst losses sank two runs: a resend is
+safe if-and-only-if nothing provably started (no busy flag AND no encoder
+movement over a 3s probe); the notebook now retries up to 4 verified-idle
+sends instead of skipping the source.

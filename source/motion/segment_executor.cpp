@@ -650,7 +650,21 @@ void SegmentExecutor::maybeReplanPivot(uint32_t now, const msg::MotorState& encL
   // is shorter than the current speed can stop in.
   if (divergence >= kRotGrossDivergenceThreshold) {
     float measuredPositionSigned = rotationalTarget_ - omegaSign * measuredRemainingRad;
-    if (!rotational_.reanchor(measuredPositionSigned, 0.0f)) {  // no reliable measured angular rate
+    // Seed the re-solve with the MEASURED angular rate -- (vR - vL)/track --
+    // falling back to the plan's own sampled rate when either wheel velocity
+    // is absent this tick. The original 0.0f seed ("no reliable measured
+    // angular rate") told Ruckig the robot was AT REST while its wheels were
+    // doing ~300 mm/s: the re-solve then planned from rest -- commanded
+    // velocity CLIFFS to zero mid-pivot, the robot visibly stalls ~0.25s,
+    // then a second full acceleration bell follows (the mid-move stall
+    // observed on the bench 2026-07-11: endpoint acceptable, trajectory
+    // garbage). A quantized/lagged measured rate is enormously closer to
+    // the truth than a fabricated zero.
+    float measuredOmega = state.velocity;   // plan-sampled fallback
+    if (encLeft.velocity.has && encRight.velocity.has && trackwidth_ > 1e-3f) {
+      measuredOmega = (encRight.velocity.val - encLeft.velocity.val) / trackwidth_;
+    }
+    if (!rotational_.reanchor(measuredPositionSigned, measuredOmega)) {
       return;
     }
   } else {
