@@ -87,7 +87,7 @@
 //     <ekf_q_xy> <ekf_q_theta> <ekf_r_otos_xy> <ekf_r_otos_theta>
 //   encode_cfg_motor <corr_id> <target> <side> <travel_calib> <kp> <ki>
 //     <kff> <i_max> <kaw>
-//   encode_cfg_planner <corr_id> <target> <min_speed>
+//   encode_cfg_planner <corr_id> <target> <min_speed> <heading_kp> <heading_kd>
 //   encode_cfg_watchdog <corr_id> <target> <watchdog>
 //     Builds ReplyEnvelope{cfg=ConfigSnapshot{target, patch=<arm>}} -- one
 //     verb per `patch` oneof arm, each populating EVERY field of its own
@@ -355,6 +355,8 @@ int cmdDecode(const std::string& b64) {
         }
         case msg::ConfigDelta::PatchKind::PLANNER:
           printOpt("min_speed", cfg.patch.planner.min_speed);
+          printOpt("heading_kp", cfg.patch.planner.heading_kp);
+          printOpt("heading_kd", cfg.patch.planner.heading_kd);
           break;
         case msg::ConfigDelta::PatchKind::WATCHDOG:
           std::printf(" watchdog=%u", static_cast<unsigned>(cfg.patch.watchdog));
@@ -598,7 +600,7 @@ int cmdEncodeCfgMotor(int argc, char** argv) {
 }
 
 int cmdEncodeCfgPlanner(int argc, char** argv) {
-  if (argc < 5) {
+  if (argc < 7) {
     std::printf("USAGE_ERROR\n");
     return 1;
   }
@@ -609,6 +611,8 @@ int cmdEncodeCfgPlanner(int argc, char** argv) {
   cfg.target = static_cast<msg::ConfigTarget>(std::strtoul(argv[3], nullptr, 10));
   cfg.patch_kind = msg::ConfigSnapshot::PatchKind::PLANNER;
   cfg.patch.planner.min_speed = {true, std::strtof(argv[4], nullptr)};
+  cfg.patch.planner.heading_kp = {true, std::strtof(argv[5], nullptr)};
+  cfg.patch.planner.heading_kd = {true, std::strtof(argv[6], nullptr)};
   printEncodedOrZero(reply);
   return 0;
 }

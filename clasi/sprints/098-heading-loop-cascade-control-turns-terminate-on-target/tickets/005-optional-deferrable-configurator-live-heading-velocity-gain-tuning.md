@@ -75,14 +75,14 @@ moving target.
       `heading_kp` (or `heading_kd`) over serial/relay and confirms (via
       `TLM`/a subsequent `turn_sweep.py` cell) the change took effect
       WITHOUT a reflash. **NOT YET DONE — reserved for the team-lead's
-      hardware pass.** See "Implementation Notes" below for a real gap
-      this bullet must ALSO confirm/route around: the binary wire `config`
-      command cannot carry `heading_kp`/`heading_kd` today (only
-      `min_speed` is wire-settable for `kPlanner` — `msg::PlannerConfigPatch`,
-      `protos/config.proto`, only declares that one field). A hardware `SET
-      heading_kp=...` will need that wire-schema extension FIRST (out of
-      this ticket's stated file scope — see note) before it can reach
-      `bb.configIn` at all.
+      hardware pass.** The wire-schema gap noted below (2026-07-11 pass) is
+      now CLOSED (2026-07-12 pass, see "Implementation Notes — wire path"
+      below): `PlannerConfigPatch.heading_kp`/`heading_kd` are now real wire
+      fields, `binary_channel.cpp` decodes them, and
+      `host/robot_radio/robot/protocol.py`'s `set_config(headingKp=...)`/
+      `get_config("headingKp")` reach them — a real bench `SET headingKp=...`
+      should now work. This bullet is the team-lead's hardware confirmation
+      of that, not a remaining software gap.
 
 ## Testing
 
@@ -149,6 +149,10 @@ needed judgment calls or turned out to differ from what the ticket assumed:
    exactly as sprints 093-097 already operate today" fallback) — no issue
    file created by this implementation pass; that decision belongs to the
    team-lead, not the ticket's implementer.
+   **UPDATE (2026-07-12 follow-up pass, requested by the team-lead after
+   hardware confirmed the Configurator wiring itself doesn't regress
+   turns): this gap is now CLOSED — see "Implementation Notes — wire path
+   (2026-07-12)" below.**
 3. **`main.cpp` had zero `Subsystems::PoseEstimator` instance** — `Rt::
    Configurator`'s constructor requires one (a `kDrivetrain`-scoped delta
    re-propagates to it). Added `static Subsystems::PoseEstimator
@@ -178,3 +182,126 @@ exercised by the existing single `test_configurator.py` pytest wrapper, so
 the collected-test COUNT is unchanged by design — the scenario itself was
 directly compiled/run standalone and confirmed passing, then reconfirmed via
 the pytest wrapper).
+
+## Implementation Notes — wire path (2026-07-12 follow-up)
+
+Requested by the team-lead after confirming on hardware that the
+Configurator wiring itself does not regress turns (12-turn sweep, all
+within ±0.9°): close the wire-schema gap from note 2 above so a real
+`SET headingKp=...`/`SET headingKd=...` over serial/relay can reach
+`bb.configIn` at all.
+
+**Files touched** (beyond `main.cpp`/`configurator.cpp`, already done):
+`protos/config.proto` (+2 fields), `source/messages/config.h` (regenerated,
+never hand-edited), `host/robot_radio/robot/pb2/config_pb2.py`
+(regenerated), `source/commands/binary_channel.cpp` (`handleConfigPlanner()`
++ `handleGet()`'s `CONFIG_PLANNER` arm), `host/robot_radio/robot/protocol.py`
+(`_PLANNER_KEYS` + a latent bug fix, see below), `host/robot_radio/io/proxy.py`
+(the SAME latent bug fix), `scripts/check_config_sync.py` +
+`scripts/config_sync_allowlist.json` (new fields registered, see below), plus
+test-suite updates: `tests/sim/unit/wire_differential_harness.cpp`,
+`tests/sim/unit/_wire_diff_driver.py`, `tests/sim/unit/test_wire_differential.py`,
+`tests/sim/unit/test_wire_fuzz.py`, `tests/sim/unit/test_binary_channel.py`,
+`tests/unit/test_protocol_binary_client.py`.
+
+**The exact wire-decode site**: `source/commands/binary_channel.cpp`'s
+`handleConfigPlanner(const msg::PlannerConfigPatch& p, ...)` (originally
+lines 371-384) — mirrored `min_speed`'s own `if (p.FIELD.has) { delta.planner.
+FIELD = p.FIELD.val; delta.mask |= Rt::bitOf(Rt::PlannerConfigField::kFIELD); }`
+shape exactly, two more times, for `heading_kp`/`heading_kd`. This is the
+SAME `Rt::ConfigDelta` this ticket's earlier pass already taught
+`foldPlanner()`/`Configurator::applyOne()` to fold and live-apply — no
+change needed there this pass.
+
+**Deviations/extra findings beyond the coordinator's 5 numbered steps**:
+
+1. **`msg::PlannerConfigPatch`'s field-count growing past 1 exposed a
+   pre-existing latent bug** in two places that read a `ConfigSnapshot`
+   back: `host/robot_radio/robot/protocol.py`'s `_read_config_snapshot_value()`
+   and `host/robot_radio/io/proxy.py`'s `_raw_config_snapshot_value()` both
+   hardcoded `snapshot.planner.min_speed` in their `if key in _PLANNER_KEYS`
+   branch (never `getattr(..., _PLANNER_KEYS[key])`, unlike the
+   `_DRIVETRAIN_KEYS`/`_MOTOR_PID_KEYS` branches right above, which were
+   already generic) — harmless while `_PLANNER_KEYS` had exactly one entry,
+   but adding `headingKp`/`headingKd` to that dict (needed for
+   `set_config()`'s kwarg mapping, step 4) would have made EVERY planner GET
+   key silently read back `min_speed`'s value. Fixed both to the generic
+   `getattr()` form scenarios elsewhere in each file already use.
+2. **`handleGet()`'s `CONFIG_PLANNER` snapshot arm did NOT populate
+   heading_kp/heading_kd** — not explicitly asked for in the coordinator's 5
+   steps, but required to avoid (1) becoming a live footgun: since
+   `_PLANNER_KEYS` is shared between `set_config()`/`get_config()`
+   (`protocol.py`'s own established one-table-both-directions pattern, which
+   the coordinator's step 4 said to "follow... exactly"), leaving `handleGet()`
+   un-extended would make `get_config("headingKp")` silently return `0`
+   forever regardless of the live value. Added two lines mirroring
+   `min_speed`'s own always-`has=true` read-back.
+3. **`scripts/check_config_sync.py`'s `PATCH_TO_PYDANTIC` map** (a forced-fail
+   gate, not allowlistable by itself) required registering the two new
+   `PlannerConfigPatch` fields with an empty target list (`[]`, "no
+   host-side pydantic field", mirroring `min_speed`'s own existing entry)
+   PLUS a matching `scripts/config_sync_allowlist.json` justification entry
+   — this script's own `test_check_config_sync.py` caught the omission
+   immediately (a `FAIL unmapped-patch-field`, correctly not allowlistable
+   per the script's own design: "edit PATCH_TO_PYDANTIC instead").
+4. **A cluster of PINNING tests broke on the schema change, by design** —
+   `test_wire_differential.py`'s `test_field_numbers_match_pb2_descriptors_
+   096_006_new_messages` hardcodes the exact expected field-number layout
+   per message (updated: `{"min_speed": 1, "heading_kp": 2, "heading_kd": 3}`);
+   `wire_differential_harness.cpp`'s `encode_cfg_planner`/decode-print CLI
+   verbs hand-transcribe one field at a time (extended both, plus every
+   Python call site: `_wire_diff_driver.py`, `test_wire_differential.py`
+   Direction A/B planner tests — added a NEW partial-presence test,
+   `test_direction_a_config_planner_only_heading_kp`, mirroring the existing
+   motor-only-`travel_calib` precedent — and `test_wire_fuzz.py`'s two
+   `encode_cfg_planner(...)` extreme/ordinary-value call sites);
+   `test_protocol_binary_client.py`'s `test_get_config_no_keys_dumps_all_
+   five_targets` hardcodes the full expected `get_config()` dump dict
+   (updated the fixture + expected dict together). None of this was a
+   surprise once found — `test_wire_differential.py`'s own module docstring
+   says outright: "A future change to `wire_runtime.{h,cpp}` or the
+   generated `wire.{h,cpp}` that breaks a test in this file is a BLOCKING
+   regression — fix the codec, do not xfail/skip a real disagreement with
+   `google.protobuf`" — exactly what happened, and exactly what was done.
+
+**New end-to-end coverage** (step 5): `tests/sim/unit/test_binary_channel.py`'s
+new `test_binary_config_heading_kp_kd_round_trip_reaches_live_drivetrain`
+sends a REAL `*B`-armored `CommandEnvelope` through `sim.command_on()` —
+`Rt::CommandRouter` → `BinaryChannel::handleConfig()` →
+`handleConfigPlanner()` → `bb.configIn` → the sim's own `Rt::Configurator`
+(TEST-ONLY, 096-004, drains to exhaustion after every `sim_command_on()`
+call) → `Configurator::applyOne()`'s `kPlanner` case (this ticket's fix) →
+`bb.plannerConfig` — then a real `get` envelope reads it back via the
+now-extended `handleGet()`. Also proves the field-mask clobber-safety
+guarantee (a disjoint `heading_kd`-only delta does not touch the
+already-set `heading_kp`) over the SAME real wire path.
+
+**What this does NOT (yet) prove directly**: a segment's commanded twist
+changing as a DIRECT observable RESULT of a wire-originated `SET`, in one
+single test. That specific link — "reaching `Configurator::applyOne()`'s
+`kPlanner` case with a real `Rt::ConfigDelta` causes the live `Drivetrain`'s
+NEXT segment's commanded twist to change" — is already proven by this
+ticket's EARLIER `configurator_harness.cpp` scenario 10 (2026-07-11 pass),
+using the exact same `Rt::ConfigDelta` shape `handleConfigPlanner()` now
+builds from wire input. Chaining that proof with this pass's new wire
+round-trip test covers the full path in two overlapping pieces rather than
+one single test. A single test that both sends a real wire `SET` AND
+observes the resulting segment's commanded twist would need a new
+`Drivetrain::state().cmd()`-equivalent read accessor added to
+`tests/_infra/sim/sim_api.cpp`'s ctypes ABI (none exists today — only
+measured `vel()`/`true_velocity()`, which lag the commanded value by
+Hal::SimMotor's own documented one-tick sample latency plus PID transient
+response, making them a much noisier, harder-to-get-right signal for this
+specific proof). Judged out of scope for a wire-schema-closing ticket
+(new shared ABI surface, not a wire-schema change) per the coordinator's own
+stated fallback ("If the existing harness can't easily build a wire
+envelope, at minimum assert the wire-decode function maps... so the path is
+covered end to end") — the two-piece proof already meets that bar. Flagged
+here rather than silently declared sufficient.
+
+Verification (this pass): `just build-sim` and `just build-clean` both
+succeed. `uv run python -m pytest tests/sim tests/unit -q` — 898 passed (896
+baseline + 2 new tests this pass: `test_direction_a_config_planner_only_
+heading_kp` and `test_binary_config_heading_kp_kd_round_trip_reaches_live_
+drivetrain`); 0 regressions after fixing the 11 tests that broke on the
+schema change (see finding 4 above) and `check_config_sync.py` (finding 3).

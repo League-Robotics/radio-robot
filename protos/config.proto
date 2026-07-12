@@ -115,7 +115,15 @@ message MotorConfigPatch {
 }
 
 // Curated patch of PlannerConfig's 1 registered key (config_commands.cpp
-// kAllKeys: minSpeed).
+// kAllKeys: minSpeed), PLUS heading_kp/heading_kd (098-005): the two outer
+// heading-loop PD gains added to msg::PlannerConfig by ticket 098-001, after
+// config_commands.cpp (and its kAllKeys curation list) had already been
+// deleted (097-007) -- there is no legacy text key to mirror for these two;
+// they are added directly here so a live `SET`/binary `config` command can
+// reach Motion::SegmentExecutor's PD cascade (098-002) without a reflash,
+// per ticket 098-005's own stated purpose.
 message PlannerConfigPatch {
-  optional float min_speed = 1;  // [mm/s] minSpeed
+  optional float min_speed  = 1;  // [mm/s] minSpeed
+  optional float heading_kp = 2;  // [1/s] headingKp
+  optional float heading_kd = 3;  // dimensionless headingKd
 }
