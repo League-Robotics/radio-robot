@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: '[OPTIONAL/DEFERRABLE] OTOS heading source with encoder fallback (Stage 2)'
-status: open
+status: done
 use-cases: [SUC-004]
 depends-on: ['003']
 github-issue: ''
@@ -123,3 +123,48 @@ no new classes, matching `architecture-update.md` M6's boundary.
 
 **Documentation updates**: none required structurally; record the
 timing/accuracy measurements in this ticket's completion notes.
+
+## Completion Notes (2026-07-12) — ATTEMPTED, REGRESSED, REVERTED per the ticket's own revert gate; OTOS-heading FEATURE DEFERRED to sprint 099
+
+The software was implemented and sim-verified (commit `70d46177`): OTOS ticked
+per pass in `main.cpp`, pose threaded through `Drivetrain::tick()` into the
+executor, `measuredHeading()` preferring OTOS heading when valid with
+tick-by-tick encoder fallback, and — critically — a **bit-identical** parity
+sim scenario when the pose is invalid. All software ACs passed in sim (898
+passed).
+
+**On hardware it regressed catastrophically and was REVERTED** (commit
+`00525ff1`), exactly as this ticket's final AC mandates ("if EITHER the
+accuracy-regression check or the timing check fails, this ticket is REVERTED
+… rather than landed partially — Stage 1 must never regress for Stage 2's
+sake"). Two findings, both important input for sprint 099:
+
+1. **The OTOS chip reads `connected=False` on this robot** — `otos.h` in TLM is
+   a constant 0.0, `otos_connected=False` across 99 rest samples. The current
+   firmware does not detect/initialize the OTOS. So OTOS heading was never even
+   available; the fallback (encoder) path is what ran — yet it still regressed,
+   which points to (2).
+
+2. **Ticking the OTOS per pass on the SHARED I2C bus wrecks the loop timing.**
+   The OTOS (0x17) shares the I2C bus with the motor bricks' flip-flop
+   sequencer (0x10). A per-pass `odometer()->tick(now)` — worse, on a
+   DISCONNECTED chip doing failing/retrying I2C reads every pass — disrupted the
+   motor flip-flop cadence and encoder sensing enough that the heading loop got
+   bad feedback and wildly over-rotated: `turn_sweep` subset showed −90°→−192.7°
+   (over +102°), +90°→+128°, peak wheel 637 mm/s (far above the 384 ceiling).
+   Reverting and reflashing the clean build restored turns to ±0.65°
+   immediately (`turn_sweep_reverted.csv`). This is the exact shared-I2C/
+   flip-flop coupling the project already documents
+   (`motor-actuation-latency-flipflop-coupling.md`, `i2c-irqguard-vs-serial-rx`).
+
+**Disposition:** the revert-gated exploration ran to its designed conclusion —
+Stage 1 (encoder heading) is proven sufficient and untouched, and the OTOS
+work correctly did NOT land because it regressed. The OTOS-heading FEATURE is
+**deferred to sprint 099** (`restore-pose-estimation-otos-encoders-…`), which
+must FIRST get OTOS detection/init working AND fold the OTOS read into the
+flip-flop I2C schedule (or otherwise make it non-blocking) before any
+per-pass OTOS consumption is safe. Captured as
+`clasi/issues/otos-heading-source-for-executor-deferred-from-098.md`.
+
+Regression evidence: `tests/notebooks/out/turn_sweep_004check.csv` (the
+broken OTOS build), `turn_sweep_reverted.csv` (recovery after revert).
