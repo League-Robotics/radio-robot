@@ -1,6 +1,16 @@
 ---
-status: pending
-sprint: 098
+status: in-progress
+sprint: 099
+tickets:
+- 099-001
+- 099-002
+- 099-003
+- 099-004
+- 099-005
+- 099-006
+- 099-007
+- 099-008
+- 099-009
 ---
 
 # Restore Pose Estimation (OTOS + encoders + delayed camera fixes)

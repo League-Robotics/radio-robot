@@ -1,9 +1,16 @@
 ---
 id: 099
 title: 'Restore pose estimation: OTOS, encoders, and delayed camera fixes'
-status: roadmap
+status: ticketing
 branch: sprint/099-restore-pose-estimation-otos-encoders-and-delayed-camera-fixes
-use-cases: []
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+- SUC-006
+- SUC-007
 issues:
 - restore-pose-estimation-otos-encoders-delayed-camera-fixes.md
 ---
@@ -214,5 +221,17 @@ Before tickets can be created, all of the following must be true:
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 001 | Consolidate main.cpp onto Rt::MainLoop (structural only) | — |
+| 002 | OTOS ticks live: readDue() scheduled slot + Blackboard commit | 001 |
+| 003 | Per-motor acceleration: Hal::Motor base policy + MotorState.acceleration | — |
+| 004 | PoseEstimator wired encoder-only + BodyState/PoseStepped + binary PoseFix arm (SI/ZERO) | 001 |
+| 005 | Encoder-delta timestamp fix for PoseEstimator's joint predict | 004 |
+| 006 | EkfTiny innovation gate + rejection-streak P-inflation recovery | 002, 004 |
+| 007 | Enable OTOS fusion in PoseEstimator (bench-gated hazard close) | 002, 004, 005, 006 |
+| 008 | Camera-fix mechanism: history ring, transport-compose, ungated EKF update | 004, 006 |
+| 009 | aprilcam end-to-end bench/playfield script: PING sync, FIX send, convergence | 007, 008 |
 
-Tickets execute serially in the order listed.
+Tickets execute serially in the order listed. 003 has no real dependency
+on 001/002 (per-motor acceleration is independent of the main-loop/OTOS
+work) and could run in any position before 006, but is sequenced here for
+narrative continuity with the ticket table above.
