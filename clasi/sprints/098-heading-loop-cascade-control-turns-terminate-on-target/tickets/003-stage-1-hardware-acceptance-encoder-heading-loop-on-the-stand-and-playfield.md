@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: 'Stage 1 hardware acceptance: encoder heading loop on the stand and playfield'
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 - SUC-005
@@ -33,64 +33,64 @@ Depends on 002.
 
 **Pre-flash**
 
-- [ ] `just build-clean` succeeds (non-incremental, avoiding the documented
+- [x] `just build-clean` succeeds (non-incremental, avoiding the documented
       stale-incremental-build risk — `[[stale-incremental-build-on-volumes]]`).
-- [ ] Full `uv run python -m pytest` is green immediately before flashing
+- [x] Full `uv run python -m pytest` is green immediately before flashing
       (confirms tickets 001/002's own gates still hold on this exact
       commit).
-- [ ] `mbdeploy probe` confirms the connected device's role before flashing
+- [x] `mbdeploy probe` confirms the connected device's role before flashing
       (`[[verify-microbit-before-flashing]]` — never blind-flash; the robot
       and the RELAY dongle can share the same mount point).
-- [ ] `mbdeploy deploy --build` (or `mbdeploy deploy <UID> --hex ...` per
+- [x] `mbdeploy deploy --build` (or `mbdeploy deploy <UID> --hex ...` per
       `[[hitl-bench-mbdeploy-build-and-watchdog]]`) flashes successfully.
 
 **Stand check (wheels off the ground)**
 
-- [ ] Sensors alive: encoders, and any other configured sensors, respond
+- [x] Sensors alive: encoders, and any other configured sensors, respond
       with plausible values.
-- [ ] Wheels drive both directions; encoders increment in the expected
+- [x] Wheels drive both directions; encoders increment in the expected
       direction, roughly proportional to commanded speed.
-- [ ] A single in-place turn (e.g. `TURN`/`RT`/`MOVE 0 0 <heading>`)
+- [x] A single in-place turn (e.g. `TURN`/`RT`/`MOVE 0 0 <heading>`)
       completes and visibly lands close to target.
-- [ ] **No wedge.** No commanded terminal reversal beyond the `Hal::Motor`
+- [x] **No wedge.** No commanded terminal reversal beyond the `Hal::Motor`
       reversal-dwell/deadband armor's own absorbed window — this is the
       sprint's top flagged risk (`architecture-update.md`'s Risks section)
       and must be explicitly confirmed, not assumed, BEFORE moving to the
       playfield leg.
-- [ ] The RX watchdog is fed throughout the session (per
+- [x] The RX watchdog is fed throughout the session (per
       `[[dev-serial-passive-pump-sampling]]`) so the session does not
       stall on transport starvation unrelated to this ticket.
 
 **Playfield leg (robot moved from USB to the radio relay path — an
 explicit location change, not a continuation of the same physical setup)**
 
-- [ ] `tests/bench/turn_sweep.py --relay --both` run across the full
+- [x] `tests/bench/turn_sweep.py --relay --both` run across the full
       existing angle × ceiling grid (`ANGLES = [30, 90, 180, 360]`,
       `CEILINGS = [70, 140, 210, 280, 384]` mm/s, both directions per
       cell).
-- [ ] Every cell's `overshoot_deg` lands within goal tolerance,
+- [x] Every cell's `overshoot_deg` lands within goal tolerance,
       **`|overshoot_deg| <= ~1°`** (the issue's own "goal ≈ ±1°" acceptance
       bar).
-- [ ] The 90° ridge (a same-entry-rate turn overshooting roughly double a
+- [x] The 90° ridge (a same-entry-rate turn overshooting roughly double a
       longer turn's overshoot — the dataset's own named defect) is gone:
       no cell shows the disproportionate-vs-neighboring-cells pattern the
       pre-sprint dataset documented.
-- [ ] Run-to-run scatter has collapsed: repeat a representative subset of
+- [x] Run-to-run scatter has collapsed: repeat a representative subset of
       cells (at minimum one low-ceiling and one high-ceiling 90° cell, 3
       repeats each) and confirm σ is well under the pre-sprint ~2° baseline.
-- [ ] `[safety] wheels confirmed stopped` prints at the end of the sweep
+- [x] `[safety] wheels confirmed stopped` prints at the end of the sweep
       (the script's own built-in safety-shutdown confirmation).
 
 **Gain iteration (in scope for this ticket)**
 
-- [ ] If `heading_kp`/`heading_kd` (ticket 001's conservative starting
+- [x] If `heading_kp`/`heading_kd` (ticket 001's conservative starting
       values, `3.0`/`0.0`) do not meet the tolerance bar above, this
       ticket ITERATES them (editing `data/robots/tovez.json`, reflashing,
       re-running the relevant cells) — explicitly in scope per
       `architecture-update.md` Decision 2, not a separate ticket. Record
       the final values and the iteration history in this ticket's
       completion notes.
-- [ ] Any failure at any step is reported explicitly (which step, what was
+- [x] Any failure at any step is reported explicitly (which step, what was
       observed, with numbers) — this ticket is not satisfied by a single
       summary verdict.
 
@@ -128,3 +128,58 @@ confirmed).
 gain values and the `turn_sweep.py` results in this ticket's own
 completion notes for the sprint-close review (mirrors ticket 094-007's
 precedent).
+
+## Completion Notes (2026-07-12, HITL over the radio relay, team-lead-driven)
+
+**Result: PASS — full-speed turns of every angle terminate on target.**
+
+Firmware `v0.20260711.14` flashed to the robot (NEZHA2 `tovez`, UID
+`...a8fdb5e4...`) by full UID after `mbdeploy list` role-verification (never
+the RADIOBRIDGE dongle `...e9d16c38...`); the first flash hit a locked-device
+`0x67` erase failure and auto-recovered via CTRL-AP mass-erase on the retry
+(normal). VER handshake over the relay confirmed `fw_version 0.20260711.14`.
+
+**Turn-accuracy, full grid (30/90/180/360 deg × 70/140/210/280/384 mm/s, both
+directions), `turn_sweep.py --relay --both`:**
+
+| gain | mean \|err\| | max \|err\| | within ±1° | 90° full-ceiling ridge |
+|---|---|---|---|---|
+| open-loop (pre-sprint) | 3.41° | 11.65° | 19% | +6.8..+9.7° |
+| heading loop, kp=3.0/kd=0 | 0.53° | 2.39° | 88% | **gone** (−0.4..−1.1°) |
+| **heading loop, kp=6.0/kd=0 (SHIPPED)** | **0.27°** | **0.84°** | **100%** | **gone** |
+
+**Gain iteration:** started at 098-001's conservative `kp=3.0/kd=0`. That
+already eliminated the ridge but left a residual ~1–2° full-ceiling UNDERSHOOT
+(worst −2.4° at 180°@384). Traced it on hardware (`turn_trace_+180_384.csv`):
+it is a proportional-control STEADY-STATE ERROR against terminal motor
+stiction — near the target the P command (∝ residual error) falls below the
+wheel deadband (~7 deg/s ≈ 8 mm/s), so the robot stalls ~1° short and STOP_TIME
+ends the phase. Raising `kp` to 6.0 makes the command overcome stiction closer
+in; the full grid then landed 100% within ±1°, max 0.84°. `kp=6.0` is
+monotonic-safe for a pure-P to-rest loop (no overshoot mechanism) and showed no
+ringing. Final shipped values: `heading_kp=6.0`, `heading_kd=0.0` in
+`data/robots/tovez.json` (+ note updated). The firmware default stays the
+conservative `3.0/0.0` for uncharacterized robots.
+
+**No wedge / terminal-reversal safety:** explicit trace check
+(`turn_trace_*90_384.csv`) — the commanded wheel velocity floors at 0 and
+NEVER reverses (0 commanded-reversal frames both directions); the encoder-wedge
+trigger (a commanded reversal write-train) is structurally absent. 40+ turns
+each ended `[safety] wheels confirmed stopped`, no wedge, no runaway.
+
+**Run-to-run scatter collapsed:** repeated 90° cells (n=3–4 each), per-cell
+σ = 0.26–0.38°, pooled 90° σ = 0.37° — down from the pre-sprint ~2.0° baseline,
+exactly as predicted (a servoed endpoint has no open-transient difference to
+scatter).
+
+**Encoder heading was sufficient** (Stage 1): no OTOS needed to hit target —
+the residual was tracking/stiction, not slip. OTOS heading (ticket 004) remains
+the optional slip-immunity upgrade.
+
+**Remaining (sub-degree, optional):** the last <1° at full ceiling is the
+irreducible P-vs-stiction floor; an integral term would null it entirely
+(future enhancement, noted in the issue and the tovez `_heading_gains_note`).
+
+Datasets: `tests/notebooks/out/turn_sweep_hl_full.csv` (kp=3),
+`turn_sweep_hl_kp6.csv` (kp=6, shipped), `turn_sweep_sigma_*.csv` (σ repeats),
+`turn_trace_*_384.csv` (terminal traces).

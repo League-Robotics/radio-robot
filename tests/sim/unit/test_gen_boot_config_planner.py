@@ -80,12 +80,14 @@ def _motion_limit_setter_lines() -> list[str]:
 
 def test_heading_gains_for_config_reads_tovez_json():
     """heading_gains_for_config() reads tovez.json's real control.heading_kp/
-    heading_kd -- the active robot's starting values (3.0/0.0, Decision 2)."""
+    heading_kd -- the active robot's BENCH-TUNED values (6.0/0.0, sprint
+    098-003: kp raised from the 3.0 starting value to overcome terminal motor
+    stiction; full turn grid then landed 100% within +/-1 deg)."""
     cfg = json.loads(_TOVEZ_JSON.read_text())
 
     kp, kd = gbc.heading_gains_for_config(cfg)
 
-    assert kp == 3.0
+    assert kp == 6.0
     assert kd == 0.0
 
 
@@ -136,10 +138,9 @@ def test_generate_emits_default_planner_config_with_unchanged_motion_limits():
     for line in _motion_limit_setter_lines():
         assert line in content, f"missing/changed motion-limit setter: {line}"
 
-    # heading_kp/heading_kd resolve to tovez.json's real starting values
-    # (3.0/0.0) for the active robot config -- this ticket's own acceptance
-    # criterion, stated literally.
-    assert "cfg.setHeadingKp(3.0f);" in content
+    # heading_kp/heading_kd resolve to tovez.json's real bench-tuned values
+    # (6.0/0.0, sprint 098-003) for the active robot config.
+    assert "cfg.setHeadingKp(6.0f);" in content
     assert "cfg.setHeadingKd(0.0f);" in content
 
 
@@ -149,8 +150,9 @@ def test_generate_motion_limits_unchanged_with_no_robot_config():
     whether or not a robot config is found, exactly reproducing the
     pre-ticket main.cpp::defaultMotionConfig() behavior (which never read
     any robot JSON at all). heading_kp/heading_kd fall back to the firmware
-    defaults (3.0/0.0), which happen to numerically match tovez.json's own
-    committed starting values."""
+    defaults (3.0/0.0) -- the conservative starting values for an
+    uncharacterized robot; tovez.json overrides kp to its bench-tuned 6.0
+    (098-003), so the firmware default deliberately no longer matches it."""
     content = gbc.generate({}, "(firmware defaults)")
 
     assert "msg::PlannerConfig defaultPlannerConfig()" in content

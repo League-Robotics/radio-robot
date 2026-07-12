@@ -112,7 +112,7 @@ msg::PlannerConfig defaultPlannerConfig() {
     cfg.setYawAccMax(20.0f);          // [rad/s^2]
     cfg.setJMax(5000.0f);                // [mm/s^3] ~6x a_max -- ~0.16s jerk-limited edges
     cfg.setYawJerkMax(100.0f);         // [rad/s^3] ~5x yaw_acc_max -- ~0.2s
-    cfg.setHeadingKp(3.0f);              // [1/s] outer heading-loop proportional gain
+    cfg.setHeadingKp(6.0f);              // [1/s] outer heading-loop proportional gain
     cfg.setHeadingKd(0.0f);              // dimensionless outer heading-loop derivative gain
     return cfg;
 }
