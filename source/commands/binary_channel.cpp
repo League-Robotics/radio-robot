@@ -376,6 +376,19 @@ void handleConfigPlanner(const msg::PlannerConfigPatch& p, Rt::Blackboard& b, ui
     delta.planner.min_speed = p.min_speed.val;
     delta.mask |= Rt::bitOf(Rt::PlannerConfigField::kMinSpeed);
   }
+  // 098-005: heading_kp/heading_kd -- the outer heading-loop PD gains
+  // (098-001/098-002) -- mirror min_speed's own has/val -> planner field +
+  // mask-bit shape exactly. No legacy text key to mirror (config_commands.cpp
+  // was already deleted, 097-007, before these two fields existed) -- see
+  // protos/config.proto's PlannerConfigPatch comment.
+  if (p.heading_kp.has) {
+    delta.planner.heading_kp = p.heading_kp.val;
+    delta.mask |= Rt::bitOf(Rt::PlannerConfigField::kHeadingKp);
+  }
+  if (p.heading_kd.has) {
+    delta.planner.heading_kd = p.heading_kd.val;
+    delta.mask |= Rt::bitOf(Rt::PlannerConfigField::kHeadingKd);
+  }
   if (delta.mask != 0 && !b.configIn.post(delta)) {
     sendError(msg::ErrCode::ERR_FULL, 0, corrId, replyFn, replyCtx);
     return;
@@ -475,6 +488,14 @@ void handleGet(const msg::ConfigGet& get, Rt::Blackboard& b, uint32_t corrId,
     case msg::ConfigTarget::CONFIG_PLANNER: {
       cfg.patch_kind = msg::ConfigSnapshot::PatchKind::PLANNER;
       cfg.patch.planner.min_speed = {true, b.plannerConfig.min_speed};
+      // 098-005: heading_kp/heading_kd -- mirrors min_speed's own
+      // always-has=true read-back exactly (a GET snapshot is a full read of
+      // the target's current state, not a partial patch -- see this
+      // function's own doc comment above). Without this, host protocol.py's
+      // _PLANNER_KEYS-driven get_config("headingKp"/"headingKd") would
+      // silently read back a permanent 0.0 regardless of the live value.
+      cfg.patch.planner.heading_kp = {true, b.plannerConfig.heading_kp};
+      cfg.patch.planner.heading_kd = {true, b.plannerConfig.heading_kd};
       break;
     }
     case msg::ConfigTarget::CONFIG_WATCHDOG: {

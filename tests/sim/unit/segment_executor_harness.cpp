@@ -107,6 +107,63 @@ struct PlantState {
   }
 };
 
+// fixedEnc -- a MotorState fixture holding position artificially fixed at
+// `positionVal` with velocity.has == true but velocity.val left at its
+// default 0.0f (mirrors PlantState::leftObs()/rightObs()'s own existing
+// convention of never populating velocity.val -- these two sprint-098
+// scenarios that use it deliberately want omega_measured == 0 always, so
+// only the position half of the tolerance+dwell gate / stall geometry is
+// exercised).
+msg::MotorState fixedEnc(float positionVal) {
+  msg::MotorState s;
+  s.position.has = true;
+  s.position.val = positionVal;
+  s.velocity.has = true;
+  return s;
+}
+
+// VelocityAwarePlant -- like PlantState (same zero-lag/zero-slip vL/vR
+// integration), but ALSO reports the last commanded per-wheel velocity via
+// MotorState.velocity.val (PlantState never populates it -- see fixedEnc()'s
+// comment) and applies `trackingFactor` to the ROTATIONAL component only
+// (translation, unused by the PRE_PIVOT-only scenarios below, is
+// unaffected) -- a persistent, deliberately-introduced tracking gap
+// (trackingFactor < 1.0 systematically under-rotates) sprint 098's M3/M5
+// scenarios need a real, consistently-signed lag to correct against /
+// prove uncorrected.
+struct VelocityAwarePlant {
+  float encL = 0.0f;  // [mm]
+  float encR = 0.0f;  // [mm]
+  float velL = 0.0f;  // [mm/s] last commanded left wheel velocity
+  float velR = 0.0f;  // [mm/s] last commanded right wheel velocity
+  float trackingFactor = 1.0f;  // dimensionless; < 1 = systematically under-rotates
+
+  void advance(const msg::BodyTwist3& twist, float dt) {
+    float omega = twist.omega * trackingFactor;
+    velL = twist.v_x - omega * kTrackwidth * 0.5f;
+    velR = twist.v_x + omega * kTrackwidth * 0.5f;
+    encL += velL * dt;
+    encR += velR * dt;
+  }
+
+  msg::MotorState leftObs() const {
+    msg::MotorState s;
+    s.position.has = true;
+    s.position.val = encL;
+    s.velocity.has = true;
+    s.velocity.val = velL;
+    return s;
+  }
+  msg::MotorState rightObs() const {
+    msg::MotorState s;
+    s.position.has = true;
+    s.position.val = encR;
+    s.velocity.has = true;
+    s.velocity.val = velR;
+    return s;
+  }
+};
+
 // runToConvergence -- ticks `exec` against `plant` at a fixed 20ms cadence
 // until Motion::SegmentExecutor::converged() (or `maxTicks` is exhausted),
 // tracking the never-reverses invariant against `expectV`/`expectOmega`
@@ -413,6 +470,320 @@ void scenarioNoReverseCreepInTerminalDecelTrace() {
   checkTrue(exec.converged(), "the forced mid-PRE_PIVOT stop converges");
 }
 
+// 7. [Sprint 098 M3] PD correction term is nonzero and in the correcting
+// direction. Shadow a PD-enabled executor (B) against an open-loop executor
+// (A, Kp=Kd=0) fed the IDENTICAL encoder trajectory: rotational_'s own
+// Ruckig solve/replan state depends only on the encoder observations and
+// target -- never on heading_kp/heading_kd, which only scale the OUTPUT
+// twist after sampling -- so A and B's rotational_ channels evolve
+// byte-identically tick for tick as long as they see identical (encL, encR,
+// now). B.omega - A.omega therefore isolates EXACTLY the PD correction
+// term. A's own plant deliberately under-rotates (trackingFactor 0.5) so
+// there is a real, persistent, obviously-signed tracking gap to correct
+// against -- proving the loop actually closes, not a no-op.
+void scenarioHeadingPdCorrectionNonzeroInCorrectingDirection() {
+  beginScenario(
+      "sprint-098 M3: PD correction term is nonzero and in the correcting direction against a "
+      "lagging plant");
+
+  msg::PlannerConfig openLoopCfg = generousConfig();  // heading_kp/kd default to 0.0f
+
+  msg::PlannerConfig pdCfg = generousConfig();
+  pdCfg.heading_kp = 2.0f;  // [1/s] -- "a few /s", per the issue's own loop-separation guidance
+  pdCfg.heading_kd = 0.0f;  // isolate the P-term for this scenario
+
+  Motion::SegmentExecutor execA;  // open-loop shadow -- drives the shared plant
+  execA.configure(openLoopCfg);
+  Motion::SegmentExecutor execB;  // PD-corrected shadow -- fed the SAME encoder trajectory
+  execB.configure(pdCfg);
+
+  Motion::Segment seg;
+  seg.distance = 0.0f;
+  seg.direction = 1.0f;     // [rad] -- PRE_PIVOT only
+  seg.finalHeading = 1.0f;  // == direction -- TERMINAL_PIVOT skipped
+
+  uint32_t clock = 0;
+  execA.start(seg, clock, kTrackwidth);
+  execB.start(seg, clock, kTrackwidth);
+
+  VelocityAwarePlant plant;
+  plant.trackingFactor = 0.5f;  // deliberately under-rotates -- a real, persistent lag
+
+  const uint32_t kDt = 20;
+  bool sawNonzeroCorrectingTerm = false;
+  bool everWrongSign = false;
+  for (int i = 0; i < 25; ++i) {
+    clock += kDt;
+    msg::BodyTwist3 twistA = execA.tick(clock, plant.leftObs(), plant.rightObs());
+    msg::BodyTwist3 twistB = execB.tick(clock, plant.leftObs(), plant.rightObs());
+    plant.advance(twistA, static_cast<float>(kDt) * 0.001f);  // A's OWN twist drives the shared plant
+
+    float term = twistB.omega - twistA.omega;
+    if (term > 0.02f) sawNonzeroCorrectingTerm = true;
+    if (term < -1e-3f) everWrongSign = true;
+  }
+
+  checkTrue(sawNonzeroCorrectingTerm,
+           "PD term is meaningfully nonzero (>0.02 rad/s) at least once while the plant lags");
+  checkFalse(everWrongSign,
+            "PD term never goes negative (wrong direction) while the plant systematically lags "
+            "behind a positive-direction turn");
+}
+
+// 8. [Sprint 098 M4] Tolerance+dwell completion: does NOT fire prematurely
+// while still outside tolerance or short of the dwell window, DOES fire
+// once both |target error| and |rate| hold within tolerance for the full
+// dwell -- and a single tick that steps back outside tolerance resets the
+// dwell clock (must re-accumulate the FULL window from the re-entry, not
+// just top up the gap).
+void scenarioToleranceDwellCompletion() {
+  beginScenario(
+      "sprint-098 M4: tolerance+dwell does not fire early, resets on a tolerance dropout, fires "
+      "once held for the full dwell");
+  Motion::SegmentExecutor exec;
+  exec.configure(generousConfig());
+
+  Motion::Segment seg;
+  seg.distance = 0.0f;
+  seg.direction = 0.5f;     // [rad] -- PRE_PIVOT only
+  seg.finalHeading = 0.5f;  // == direction -- TERMINAL_PIVOT skipped
+
+  uint32_t clock = 0;
+  exec.start(seg, clock, kTrackwidth);
+
+  const uint32_t kDt = 20;
+  const float kAtTargetDiff = 0.5f * kTrackwidth;     // 75mm -- exactly theta_measured == 0.5rad
+  const float kOffTargetDiff = kAtTargetDiff - 5.0f;  // 70mm -- 5mm off, well outside kHeadingTol
+
+  // Ticks 1-5 (100ms): far off target -- must not converge.
+  for (int i = 0; i < 5; ++i) {
+    clock += kDt;
+    exec.tick(clock, fixedEnc(0.0f), fixedEnc(0.0f));
+    checkFalse(exec.converged(), "far off target: must not have converged yet");
+  }
+
+  // Ticks 6-10 (100ms): AT target -- within tolerance, but short of the
+  // 150ms dwell -- must not converge yet.
+  for (int i = 0; i < 5; ++i) {
+    clock += kDt;
+    exec.tick(clock, fixedEnc(0.0f), fixedEnc(kAtTargetDiff));
+    checkFalse(exec.converged(), "within tolerance but dwell not yet satisfied: must not converge");
+  }
+
+  // Tick 11 (20ms): one tick OUTSIDE tolerance -- resets the dwell clock.
+  clock += kDt;
+  exec.tick(clock, fixedEnc(0.0f), fixedEnc(kOffTargetDiff));
+  checkFalse(exec.converged(), "a single tolerance dropout must not itself complete the phase");
+
+  // Ticks 12-18 (140ms < kHeadingDwellMs): back AT target, held continuously
+  // -- must NOT complete before the dwell re-accumulates from THIS re-entry
+  // (proves the dwell clock actually reset at tick 11, not just paused).
+  bool convergedDuringReaccumulation = false;
+  for (int i = 0; i < 7; ++i) {
+    clock += kDt;
+    exec.tick(clock, fixedEnc(0.0f), fixedEnc(kAtTargetDiff));
+    if (exec.converged()) convergedDuringReaccumulation = true;
+  }
+  checkFalse(convergedDuringReaccumulation,
+            "the dwell clock reset at the tolerance dropout -- 140ms back at target is not yet "
+            "the full 150ms dwell");
+
+  // Further ticks at target push past the 150ms dwell -- now it must fire
+  // and, riding the (already-converged) plan's own tail, complete shortly
+  // after.
+  bool converged = false;
+  for (int i = 0; i < 50 && !converged; ++i) {
+    clock += kDt;
+    exec.tick(clock, fixedEnc(0.0f), fixedEnc(kAtTargetDiff));
+    converged = exec.converged();
+  }
+  checkTrue(converged, "tolerance+dwell eventually fires once held continuously for >= kHeadingDwellMs");
+}
+
+// 9. [Sprint 098 M4, SUC-002 Open Question 2] Dwell-vs-STOP_TIME budget: for
+// a representative SLOW (low-ceiling) turn, the tolerance+dwell gate's
+// added dwell (<= kHeadingDwellMs, well under the issue's 200ms upper
+// bound) does not exhaust the STOP_TIME safety net's own nominal*2+2000ms
+// budget -- convergence completes comfortably inside it.
+void scenarioDwellDoesNotExhaustStopTimeBudget() {
+  beginScenario(
+      "sprint-098 M4 (SUC-002 Open Question 2): dwell does not exhaust the STOP_TIME budget for "
+      "a slow, low-ceiling turn");
+  Motion::SegmentExecutor exec;
+  msg::PlannerConfig cfg = generousConfig();
+  cfg.yaw_rate_max = 0.3f;  // [rad/s] -- deliberately SLOW, low-ceiling
+  cfg.yaw_acc_max = 1.0f;   // [rad/s^2]
+  cfg.heading_kp = 2.0f;
+  cfg.heading_kd = 0.3f;
+  exec.configure(cfg);
+
+  Motion::Segment seg;
+  seg.distance = 0.0f;
+  seg.direction = 1.2f;  // [rad] -- a substantial slow turn
+  seg.finalHeading = 1.2f;
+
+  uint32_t clock = 0;
+  exec.start(seg, clock, kTrackwidth);
+
+  // Mirrors beginPrePivot()'s own nominal/STOP_TIME formula exactly, so this
+  // assertion tracks the real budget rather than a hand-guessed number.
+  float nominal = (fabsf(seg.direction) / cfg.yaw_rate_max) * 1000.0f;  // [ms]
+  float stopTimeBudget = nominal * 2.0f + 2000.0f;                     // [ms]
+
+  // VelocityAwarePlant, NOT the bare PlantState: PlantState never populates
+  // MotorState.velocity.val (see fixedEnc()'s doc comment), so with a
+  // nonzero heading_kd, omega_measured would read a bogus, permanent 0 --
+  // turning the D-term into a constant `kd * omega_desired` feedforward
+  // boost instead of a real derivative correction, which overdrives the
+  // plant past the plan's own velocity ceiling (a test-fixture artifact,
+  // confirmed by tracing it: not a real control-law defect -- see this
+  // ticket's own completion notes). trackingFactor stays at its 1.0
+  // default -- a real, zero-lag/zero-slip plant with HONEST velocity
+  // feedback.
+  VelocityAwarePlant plant;
+  bool everReversedV = false;
+  bool everReversedOmega = false;
+  msg::BodyTwist3 last;
+  int maxTicks = static_cast<int>(stopTimeBudget / 20.0f) + 50;
+  const uint32_t kDt = 20;
+  int ticks = 0;
+  for (; ticks < maxTicks; ++ticks) {
+    clock += kDt;
+    msg::BodyTwist3 twist = exec.tick(clock, plant.leftObs(), plant.rightObs());
+    if (twist.omega < -0.02f) everReversedOmega = true;
+    if (twist.v_x < -0.5f) everReversedV = true;
+    plant.advance(twist, static_cast<float>(kDt) * 0.001f);
+    last = twist;
+    if (exec.converged()) { ++ticks; break; }
+  }
+  (void)everReversedV;
+  (void)last;
+
+  checkTrue(exec.converged(), "the slow turn converges at all within the generous loop bound");
+  checkFalse(everReversedOmega, "no reversal while converging");
+  float elapsedMs = static_cast<float>(ticks) * 20.0f;
+  checkTrue(elapsedMs < stopTimeBudget,
+           "convergence (including the <=200ms dwell) completes before the STOP_TIME safety "
+           "net's own nominal*2+2000ms budget would fire");
+}
+
+// 10. [Sprint 098 M5, SUC-002 stall protection] Gross-divergence reanchor
+// still fires within its usual divergence-accrual budget when one wheel's
+// encoder is artificially held fixed (a simulated stall) against a nonzero
+// PRE_PIVOT command -- UNCHANGED by this ticket (only the sub-gross branch
+// was retired). Kp=Kd=0 isolates the RAW plan-sampled omega (M3's PD term
+// off) so a reanchor's own re-seed-from-near-zero-velocity discontinuity is
+// directly visible: an uninterrupted trapezoidal profile toward a target
+// large relative to the ceiling only ever rises then plateaus at the
+// ceiling for a long cruise -- it never drops this early. An observed drop
+// is unambiguous proof the gross-divergence branch fired against the stuck
+// wheel.
+void scenarioStallProtectionGrossDivergenceStillFires() {
+  beginScenario(
+      "sprint-098 M5 (SUC-002 stall protection): gross-divergence reanchor still fires against "
+      "an artificially stuck wheel");
+  Motion::SegmentExecutor exec;
+  msg::PlannerConfig cfg = generousConfig();
+  cfg.yaw_rate_max = 3.0f;
+  cfg.yaw_acc_max = 15.0f;
+  cfg.heading_kp = 0.0f;  // isolate the replan's own effect from M3's PD term
+  cfg.heading_kd = 0.0f;
+  exec.configure(cfg);
+
+  Motion::Segment seg;
+  seg.distance = 0.0f;
+  seg.direction = 3.0f;  // [rad] -- large relative to the ceiling: a long cruise, so an
+                          // uninterrupted profile provably never drops this early
+  seg.finalHeading = 3.0f;
+
+  uint32_t clock = 0;
+  exec.start(seg, clock, kTrackwidth);
+
+  // Both wheels artificially stuck at 0 -- exactly what a genuinely
+  // bogged/stalled drivetrain reports to Hal::Motor's encoders regardless of
+  // what the wheel-velocity PID commands it to do.
+  msg::MotorState stuck = fixedEnc(0.0f);
+
+  const uint32_t kDt = 20;
+  float prevOmega = 0.0f;
+  bool sawDrop = false;
+  int dropTickIndex = -1;
+  const int kEarlyWindowTicks = 25;  // 500ms -- well inside the long cruise, nowhere near decel
+  for (int i = 0; i < kEarlyWindowTicks; ++i) {
+    clock += kDt;
+    msg::BodyTwist3 twist = exec.tick(clock, stuck, stuck);
+    if (i > 0 && twist.omega < prevOmega - 0.05f) {
+      sawDrop = true;
+      if (dropTickIndex < 0) dropTickIndex = i;
+    }
+    prevOmega = twist.omega;
+  }
+
+  checkTrue(sawDrop,
+           "a reanchor-induced discontinuity (omega drop) is observed well inside the long "
+           "cruise window -- proof the gross-divergence branch fired against the stuck wheel");
+  checkTrue(dropTickIndex >= 0 && dropTickIndex <= 20,
+           "the reanchor fires within its usual divergence-accrual budget, not late");
+}
+
+// 11. [Sprint 098 M5, replan retirement] Under NOMINAL tracking lag -- the
+// kind that, pre-sprint, sat in the sub-gross (kRotDivergenceThreshold,
+// EXTEND-only) band and would have been chased by retarget()ing the plan to
+// compensate -- that branch no longer fires post-sprint: with Kp=Kd=0 (so
+// M3's PD term cannot ALSO compensate, isolating the replan's own effect)
+// and a plant that persistently under-rotates by a moderate, sub-gross
+// factor, the final landed encoder differential lands SHORT of the
+// commanded target instead of being chased back onto it.
+void scenarioReplanRetirementSubGrossNoLongerFires() {
+  beginScenario(
+      "sprint-098 M5: under nominal tracking lag, the sub-gross EXTEND branch no longer fires "
+      "for PRE_PIVOT/TERMINAL_PIVOT");
+  Motion::SegmentExecutor exec;
+  msg::PlannerConfig cfg = generousConfig();
+  cfg.heading_kp = 0.0f;  // isolate the replan's own (non-)effect from M3's PD term
+  cfg.heading_kd = 0.0f;
+  exec.configure(cfg);
+
+  Motion::Segment seg;
+  seg.distance = 0.0f;
+  seg.direction = 1.0f;  // [rad] -- PRE_PIVOT only
+  seg.finalHeading = 1.0f;
+
+  uint32_t clock = 0;
+  exec.start(seg, clock, kTrackwidth);
+
+  VelocityAwarePlant plant;
+  plant.trackingFactor = 0.85f;  // moderate, persistent 15% under-rotation -- a NOMINAL lag,
+                                 // not a stall (never crosses kRotGrossDivergenceThreshold)
+
+  bool everReversedOmega = false;
+  msg::BodyTwist3 last;
+  const uint32_t kDt = 20;
+  int i = 0;
+  for (; i < 500; ++i) {  // generous bound -- completion now waits on STOP_TIME (Kp=0, so the
+                          // phase can never reach the tolerance+dwell gate against an
+                          // uncorrected, persistently short plant)
+    clock += kDt;
+    msg::BodyTwist3 twist = exec.tick(clock, plant.leftObs(), plant.rightObs());
+    if (twist.omega < -0.02f) everReversedOmega = true;
+    plant.advance(twist, static_cast<float>(kDt) * 0.001f);
+    last = twist;
+    if (exec.converged()) break;
+  }
+
+  checkTrue(exec.converged(), "the phase eventually completes (via the STOP_TIME backstop, with "
+                              "nothing else left to correct it)");
+  checkFalse(everReversedOmega, "no reversal while converging");
+
+  float finalDiff = plant.encR - plant.encL;               // [mm]
+  float commandedTargetDiff = seg.direction * kTrackwidth;  // [mm] -- the UNEXTENDED target
+  checkTrue(finalDiff < commandedTargetDiff - 10.0f,
+           "with the sub-gross EXTEND branch retired, nothing chases the plant's persistent "
+           "under-rotation -- the robot lands measurably SHORT of the original target instead "
+           "of being retargeted back onto it");
+  (void)last;
+}
+
 }  // namespace
 
 int main() {
@@ -422,6 +793,11 @@ int main() {
   scenarioAutoDecelToZeroOnceConvergedStaysIdle();
   scenarioStopMidTranslateAbandonsRemainingPhases();
   scenarioNoReverseCreepInTerminalDecelTrace();
+  scenarioHeadingPdCorrectionNonzeroInCorrectingDirection();
+  scenarioToleranceDwellCompletion();
+  scenarioDwellDoesNotExhaustStopTimeBudget();
+  scenarioStallProtectionGrossDivergenceStillFires();
+  scenarioReplanRetirementSubGrossNoLongerFires();
 
   if (g_failureCount > 0) {
     std::printf("\n%d FAILURE(S)\n", g_failureCount);

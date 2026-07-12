@@ -243,7 +243,7 @@ def test_fuzz_encode_cfg_snapshot_extremes(asan_harness, target):
                                   float("-inf"), 0.0) is not None
     assert encode_cfg_motor(asan_harness, 1, target, 255, 3.4e38, -3.4e38, float("nan"), float("inf"),
                              float("-inf"), 0.0) is not None
-    assert encode_cfg_planner(asan_harness, 1, target, float("nan")) is not None
+    assert encode_cfg_planner(asan_harness, 1, target, float("nan"), float("inf"), float("-inf")) is not None
     assert encode_cfg_watchdog(asan_harness, 1, target, _UINT32_MAX) is not None
 
 
@@ -256,7 +256,7 @@ def test_fuzz_encode_cfg_snapshot_every_target_and_side(asan_harness):
         assert encode_cfg_drivetrain(asan_harness, 1, target, 321.0, 0.75, 1.5, 2.5, 3.5, 4.5) is not None
         for side in (pb_config.LEFT, pb_config.RIGHT):
             assert encode_cfg_motor(asan_harness, 1, target, side, 1.111, 9.5, 8.5, 7.5, 6.5, 5.5) is not None
-        assert encode_cfg_planner(asan_harness, 1, target, 42.0) is not None
+        assert encode_cfg_planner(asan_harness, 1, target, 42.0, 6.0, 0.25) is not None
         assert encode_cfg_watchdog(asan_harness, 1, target, 4242) is not None
 
 

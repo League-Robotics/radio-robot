@@ -216,7 +216,7 @@ def test_field_numbers_match_pb2_descriptors_096_006_new_messages():
     actual_motor_patch = {f.name: f.number for f in pb_config.MotorConfigPatch.DESCRIPTOR.fields}
     assert actual_motor_patch == expected_motor_patch
 
-    expected_planner_patch = {"min_speed": 1}
+    expected_planner_patch = {"min_speed": 1, "heading_kp": 2, "heading_kd": 3}
     actual_planner_patch = {f.name: f.number for f in pb_config.PlannerConfigPatch.DESCRIPTOR.fields}
     assert actual_planner_patch == expected_planner_patch
 
@@ -445,12 +445,27 @@ def test_direction_a_config_motor_only_travel_calib(harness):
 
 
 def test_direction_a_config_planner(harness):
-    raw = env_config_planner(24, min_speed=42.0)
+    raw = env_config_planner(24, min_speed=42.0, heading_kp=6.0, heading_kd=0.25)
     fields = _assert_ok(harness, raw)
     assert fields["cmd_kind"] == "CONFIG"
     assert fields["patch_kind"] == "PLANNER"
-    assert fields["min_speed_has"] == "1"
-    assert float_eq(fields["min_speed"], 42.0)
+    for key, expected in [("min_speed", 42.0), ("heading_kp", 6.0), ("heading_kd", 0.25)]:
+        assert fields[f"{key}_has"] == "1"
+        assert float_eq(fields[key], expected)
+
+
+def test_direction_a_config_planner_only_heading_kp(harness):
+    """098-005: heading_kp alone (a live `SET headingKp=...`) -- min_speed/
+    heading_kd absent, mirroring test_direction_a_config_motor_only_travel_
+    calib's own partial-presence proof for the now-multi-field
+    PlannerConfigPatch."""
+    raw = env_config_planner(24, heading_kp=6.0)
+    fields = _assert_ok(harness, raw)
+    assert fields["patch_kind"] == "PLANNER"
+    assert fields["heading_kp_has"] == "1"
+    assert float_eq(fields["heading_kp"], 6.0)
+    for key in ("min_speed", "heading_kd"):
+        assert fields[f"{key}_has"] == "0"
 
 
 @pytest.mark.parametrize("watchdog", [0, 1, 4242, 4294967295])
@@ -726,11 +741,12 @@ def test_direction_b_config_snapshot_motor(harness, target, side, side_name):
 
 
 def test_direction_b_config_snapshot_planner(harness):
-    raw = encode_cfg_planner(harness, 42, pb_config.CONFIG_PLANNER, 42.0)
+    raw = encode_cfg_planner(harness, 42, pb_config.CONFIG_PLANNER, 42.0, 6.0, 0.25)
     reply = pb_envelope.ReplyEnvelope.FromString(raw)
     assert reply.cfg.target == pb_config.CONFIG_PLANNER
     assert reply.cfg.WhichOneof("patch") == "planner"
-    assert reply.cfg.planner.min_speed == f32(42.0)
+    assert (reply.cfg.planner.min_speed, reply.cfg.planner.heading_kp, reply.cfg.planner.heading_kd) == (
+        f32(42.0), f32(6.0), f32(0.25))
 
 
 @pytest.mark.parametrize("watchdog", [0, 1, 4242, 4294967295])

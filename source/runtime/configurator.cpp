@@ -111,6 +111,10 @@ bool foldPlanner(msg::PlannerConfig& cfg, const ConfigDelta& delta) {
   if (m & bitOf(PlannerConfigField::kArriveTol)) cfg.arrive_tol = v.arrive_tol;
   if (m & bitOf(PlannerConfigField::kTurnInPlaceGate)) cfg.turn_in_place_gate = v.turn_in_place_gate;
   if (m & bitOf(PlannerConfigField::kMinSpeed)) cfg.min_speed = v.min_speed;
+  // 098-005/M7: heading_kp/heading_kd (098-001) -- see PlannerConfigField's
+  // own doc comment (commands.h) for why these two lines were missing.
+  if (m & bitOf(PlannerConfigField::kHeadingKp)) cfg.heading_kp = v.heading_kp;
+  if (m & bitOf(PlannerConfigField::kHeadingKd)) cfg.heading_kd = v.heading_kd;
 
   return std::memcmp(&before, &cfg, sizeof(before)) != 0;
 }
@@ -197,7 +201,15 @@ void Configurator::applyOne(Blackboard& bb) {
       // is no live subsystem left to call configure() on. Still fold +
       // publish so bb.plannerConfig stays a truthful record of what was
       // asked for (mirrors kOdometer's own "always fold+publish" shape).
+      //
+      // 098-005/M7: Subsystems::Drivetrain now owns the live target instead
+      // (it holds the Motion::SegmentExecutor where heading_kp/heading_kd,
+      // 098-001, actually take effect) -- re-apply the folded config
+      // unconditionally (mirrors configureMotion()'s own boot-time call;
+      // cheap, and correct even on a no-op fold, same as every other
+      // target's unconditional bb.*Config publish below).
       foldPlanner(plannerConfig_, delta);
+      drivetrain_.configureMotion(plannerConfig_);
       bb.plannerConfig = plannerConfig_;
       break;
     }

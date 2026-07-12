@@ -19,6 +19,7 @@
 
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
+#include "messages/planner.h"
 
 namespace Config {
 
@@ -68,5 +69,15 @@ struct OtosBootConfig {
 // baked from the robot JSON where present; identity defaults (zero offset,
 // 1.0 scale = no correction) otherwise.
 OtosBootConfig defaultOtosBootConfig();
+
+// The boot PlannerConfig default (098-001) — the seven motion-limit fields
+// (a_max/a_decel/v_body_max/yaw_rate_max/yaw_acc_max/j_max/yaw_jerk_max),
+// moved verbatim from main.cpp's old hand-written defaultMotionConfig(),
+// plus the outer heading-loop PD gains (heading_kp/heading_kd) baked from
+// the robot JSON's control.heading_kp/heading_kd where present (see
+// gen_boot_config.py's heading_gains_for_config()). arrive_tol/
+// turn_in_place_gate/min_speed stay unset (0.0f default) — main.cpp's old
+// function never set them either.
+msg::PlannerConfig defaultPlannerConfig();
 
 }  // namespace Config

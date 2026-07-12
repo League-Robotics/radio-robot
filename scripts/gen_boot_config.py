@@ -31,6 +31,15 @@ Baked from JSON when present (matching semantics, so no behaviour surprise):
     (086-005 — additive to the mappings above; see otos_boot_config_values()
     and OtosBootConfig's own doc comment in source/config/boot_config.h for why
     this is boot-time-baked only, never a live SET/wire surface)
+  * control.heading_kp/control.heading_kd  -> PlannerConfig.heading_kp/heading_kd
+    (098-001 — the outer heading-loop PD gains, per-robot tunable; see
+    heading_gains_for_config() and architecture-update.md M1/M2. Also new
+    this ticket: PlannerConfig's seven motion-limit fields (a_max/a_decel/
+    v_body_max/yaw_rate_max/yaw_acc_max/j_max/yaw_jerk_max) are now baked
+    HERE via defaultPlannerConfig(), moved verbatim off main.cpp's old
+    hand-written defaultMotionConfig() — same bench-tuned firmware-default
+    values as before, just no longer outside this generator's governance;
+    they are not yet a robot-JSON-configurable mapping)
 
 Held as bench-tuned firmware DEFAULTS below and NOT read from the old-tree JSON
 `control.*` keys — those describe the old RobotConfig velocity loop and are in a
@@ -113,6 +122,29 @@ OTOS_OFFSET_YAW_DEFAULT = 0.0   # [rad]
 # to register scalar 0, i.e. an unmodified chip reading).
 OTOS_LINEAR_SCALE_DEFAULT  = 1.0
 OTOS_ANGULAR_SCALE_DEFAULT = 1.0
+
+# Motion-limit defaults for msg::PlannerConfig (098-001 — moved verbatim from
+# main.cpp's hand-written defaultMotionConfig(), the one PlannerConfig boot
+# path that lived OUTSIDE this generator until now; see architecture-
+# update.md M2). Same numeric values, same units — not renumbered or
+# retuned by this move.
+A_MAX_DEFAULT        = 800.0    # [mm/s^2]
+A_DECEL_DEFAULT      = 800.0    # [mm/s^2]
+V_BODY_MAX_DEFAULT   = 1000.0   # [mm/s]
+YAW_RATE_MAX_DEFAULT = 6.0      # [rad/s]
+YAW_ACC_MAX_DEFAULT  = 20.0     # [rad/s^2]
+J_MAX_DEFAULT        = 5000.0   # [mm/s^3] ~6x a_max -- ~0.16s jerk-limited edges
+YAW_JERK_MAX_DEFAULT = 100.0    # [rad/s^3] ~5x yaw_acc_max -- ~0.2s
+
+# Outer heading-loop PD gain defaults (098-001 — sprint 098's new cascade,
+# architecture-update.md M1/M2, Decision 2). Conservative STARTING values,
+# not yet bench-tuned — heading_kp on the order of a few /s sits roughly a
+# decade below the inner wheel-velocity loop's ~1-4 Hz corner
+# (motion_control.ipynb); heading_kd starts at 0 (pure P, derivative off).
+# Ticket 003 iterates both against tests/bench/turn_sweep.py --relay --both
+# on the real plant.
+HEADING_KP_DEFAULT = 3.0    # [1/s]
+HEADING_KD_DEFAULT = 0.0    # dimensionless
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +323,21 @@ def vel_gains_for_config(cfg: dict):
     return float(kp), float(ki), float(kff), float(imax), float(kaw), float(filt)
 
 
+def heading_gains_for_config(cfg: dict):
+    """Return (heading_kp, heading_kd) for the outer heading-loop PD.
+
+    Mirrors vel_gains_for_config()'s exact shape: read from the robot JSON's
+    ``control`` block when present, falling back to the conservative firmware
+    defaults above when either key is absent — an unmigrated robot JSON
+    simply inherits Kp=3.0/Kd=0.0 (today's fallback discipline, same as every
+    other mapping in this file).
+    """
+    ctrl = cfg.get("control", {}) or {}
+    kp = _get(ctrl, "heading_kp", default=HEADING_KP_DEFAULT)
+    kd = _get(ctrl, "heading_kd", default=HEADING_KD_DEFAULT)
+    return float(kp), float(kd)
+
+
 def generate(cfg: dict, source_path: str) -> str:
     trackwidth   = _get(cfg, "geometry", "trackwidth", default=TRACKWIDTH_DEFAULT)
     vel_kp, vel_ki, vel_kff, vel_imax, vel_kaw, vel_filt = vel_gains_for_config(cfg)
@@ -299,6 +346,7 @@ def generate(cfg: dict, source_path: str) -> str:
     polled       = polled_for_ports()
     (otos_offset_x, otos_offset_y, otos_offset_yaw,
      otos_linear_scale, otos_angular_scale) = otos_boot_config_values(cfg)
+    heading_kp, heading_kd = heading_gains_for_config(cfg)
 
     calib_lines = "\n".join(
         f"    out[{i}].setTravelCalib({_f(v)});   // [mm/deg] port {i + 1}"
@@ -399,6 +447,30 @@ OtosBootConfig defaultOtosBootConfig() {{
     cfg.offsetYaw = {_f(otos_offset_yaw)};    // [rad]
     cfg.linearScale = {_f(otos_linear_scale)};
     cfg.angularScale = {_f(otos_angular_scale)};
+    return cfg;
+}}
+
+msg::PlannerConfig defaultPlannerConfig() {{
+    // 098-001 — the motion-limit fields below are moved verbatim from
+    // main.cpp's hand-written defaultMotionConfig() (same numeric values,
+    // same units — not renumbered or retuned by this move), the one
+    // PlannerConfig boot path that lived OUTSIDE this generator until now.
+    // heading_kp/heading_kd are the new outer heading-loop PD gains
+    // (architecture-update.md M1/M2), baked from the robot JSON's
+    // control.heading_kp/heading_kd, falling back to conservative firmware
+    // starting defaults when absent. arrive_tol/turn_in_place_gate/min_speed
+    // are left unset (0.0f default) -- unchanged behavior, main.cpp's old
+    // function never set them either.
+    msg::PlannerConfig cfg;
+    cfg.setAMax({_f(A_MAX_DEFAULT)});               // [mm/s^2]
+    cfg.setADecel({_f(A_DECEL_DEFAULT)});             // [mm/s^2]
+    cfg.setVBodyMax({_f(V_BODY_MAX_DEFAULT)});           // [mm/s]
+    cfg.setYawRateMax({_f(YAW_RATE_MAX_DEFAULT)});         // [rad/s]
+    cfg.setYawAccMax({_f(YAW_ACC_MAX_DEFAULT)});          // [rad/s^2]
+    cfg.setJMax({_f(J_MAX_DEFAULT)});                // [mm/s^3] ~6x a_max -- ~0.16s jerk-limited edges
+    cfg.setYawJerkMax({_f(YAW_JERK_MAX_DEFAULT)});         // [rad/s^3] ~5x yaw_acc_max -- ~0.2s
+    cfg.setHeadingKp({_f(heading_kp)});              // [1/s] outer heading-loop proportional gain
+    cfg.setHeadingKd({_f(heading_kd)});              // dimensionless outer heading-loop derivative gain
     return cfg;
 }}
 

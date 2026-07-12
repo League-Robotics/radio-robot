@@ -49,6 +49,8 @@ struct MotorConfigPatch {
 // PlannerConfigPatch
 struct PlannerConfigPatch {
     Opt<float> min_speed = {};
+    Opt<float> heading_kp = {};
+    Opt<float> heading_kd = {};
 
     // --- array / optional-string accessors ---
 };

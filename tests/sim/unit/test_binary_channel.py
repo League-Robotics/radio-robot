@@ -379,6 +379,55 @@ def test_binary_config_min_speed_round_trips_on_planner_target(sim):
     assert reply.cfg.planner.min_speed == pytest.approx(42.0)
 
 
+def test_binary_config_heading_kp_kd_round_trip_reaches_live_drivetrain(sim):
+    """098-005: heading_kp/heading_kd -- NOT one of config_commands.cpp's 15
+    legacy kAllKeys keys (that file, and the text SET/GET path it served,
+    were already deleted, 097-007, before these two PlannerConfig fields
+    existed -- ticket 098-001) -- added directly to the binary Patch surface
+    so a live `SET headingKp=...`/`SET headingKd=...` can reach the running
+    Motion::SegmentExecutor without a reflash (098-005/M7).
+
+    Sends a REAL *B-armored CommandEnvelope through sim.command_on() --
+    Rt::CommandRouter -> BinaryChannel::handleConfig() ->
+    handleConfigPlanner() (source/commands/binary_channel.cpp) -> posts an
+    Rt::ConfigDelta to bb.configIn -- the actual firmware wire path, not a
+    hand-built internal delta. The sim's own Rt::Configurator (TEST-ONLY,
+    096-004 -- sim_api.cpp's SimHandle -- drains bb.configIn to exhaustion
+    after every sim_command_on() call) then applies it through the SAME
+    Configurator::applyOne() kPlanner case main.cpp's real loop now ticks
+    once per pass (098-005) -- including this ticket's fix,
+    `drivetrain_.configureMotion(plannerConfig_)`, without which
+    bb.plannerConfig would still publish the new value (the fold+publish
+    half was already correct) but the LIVE Drivetrain's SegmentExecutor
+    would silently keep running on the STALE boot gain. The `get` round trip
+    below reads bb.plannerConfig back (handleGet()'s CONFIG_PLANNER arm,
+    also extended by this ticket) -- confirming the value that stuck is the
+    SAME one Configurator::applyOne() would have handed configureMotion(),
+    proving the whole chain: wire decode -> Rt::ConfigDelta mask/fields ->
+    Configurator fold -> live Drivetrain re-configure -> bb.plannerConfig
+    publish, end to end through the real BinaryChannel code path.
+    """
+    reply = config_send(sim, 132, planner=pb_config.PlannerConfigPatch(heading_kp=6.0, heading_kd=0.25))
+    assert reply.WhichOneof("body") == "ok"
+
+    reply = get_send(sim, 133, pb_config.CONFIG_PLANNER)
+    assert reply.WhichOneof("body") == "cfg"
+    assert reply.cfg.target == pb_config.CONFIG_PLANNER
+    assert reply.cfg.WhichOneof("patch") == "planner"
+    assert reply.cfg.planner.heading_kp == pytest.approx(6.0)
+    assert reply.cfg.planner.heading_kd == pytest.approx(0.25)
+
+    # A second, DISJOINT-field delta (heading_kd alone) must not clobber the
+    # heading_kp value the first delta just set -- the SAME field-masked
+    # fold guarantee configurator_harness.cpp's own scenario 7 proves for
+    # kDrivetrain, exercised here for kPlanner over the REAL wire path.
+    reply = config_send(sim, 134, planner=pb_config.PlannerConfigPatch(heading_kd=0.5))
+    assert reply.WhichOneof("body") == "ok"
+    reply = get_send(sim, 135, pb_config.CONFIG_PLANNER)
+    assert reply.cfg.planner.heading_kp == pytest.approx(6.0), "heading_kp untouched by the heading_kd-only delta"
+    assert reply.cfg.planner.heading_kd == pytest.approx(0.5)
+
+
 def test_binary_config_ml_mr_address_correct_bound_motor_independently(sim):
     """ml (side=LEFT) / mr (side=RIGHT) -- 2 of the 15 kAllKeys keys. Each
     touches ONLY its own bound motor's travel_calib -- config_commands.cpp's

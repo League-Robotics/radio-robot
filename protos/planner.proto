@@ -171,4 +171,6 @@ message PlannerConfig {
   float  arrive_tol         = 8;
   float  turn_in_place_gate = 9;
   float  min_speed          = 12;
+  float  heading_kp         = 13;  // [1/s] outer heading-loop proportional gain, per-robot tunable
+  float  heading_kd         = 14;  // dimensionless outer heading-loop derivative gain, per-robot tunable
 }

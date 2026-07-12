@@ -518,8 +518,10 @@ constexpr MessageTable kTable_MotorConfigPatch = { kFields_MotorConfigPatch, 7 }
 
 constexpr FieldDesc kFields_PlannerConfigPatch[] = {
     { .number = 1, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kOpt, .scalarType = ScalarType::kFloat, .offset = offsetof(PlannerConfigPatch, min_speed.has), .offset2 = offsetof(PlannerConfigPatch, min_speed.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // min_speed
+    { .number = 2, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kOpt, .scalarType = ScalarType::kFloat, .offset = offsetof(PlannerConfigPatch, heading_kp.has), .offset2 = offsetof(PlannerConfigPatch, heading_kp.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // heading_kp
+    { .number = 3, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kOpt, .scalarType = ScalarType::kFloat, .offset = offsetof(PlannerConfigPatch, heading_kd.has), .offset2 = offsetof(PlannerConfigPatch, heading_kd.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // heading_kd
 };
-constexpr MessageTable kTable_PlannerConfigPatch = { kFields_PlannerConfigPatch, 1 };
+constexpr MessageTable kTable_PlannerConfigPatch = { kFields_PlannerConfigPatch, 3 };
 
 constexpr FieldDesc kFields_Pose2D[] = {
     { .number = 1, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Pose2D, x), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // x

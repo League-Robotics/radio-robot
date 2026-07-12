@@ -27,10 +27,21 @@
 //
 // Boot config is applied once, directly, at construction
 // (`drivetrain.configure(dtConfig)`, plus `drivetrain.configureMotion(
-// defaultMotionConfig())` for the Drivetrain-owned Motion::SegmentExecutor's
-// jerk-limit defaults) -- there is no runtime config-application authority
-// left to wire in (093: the `SET`/`GET` runtime-config path it served is
-// unregistered).
+// plannerConfig)` for the Drivetrain-owned Motion::SegmentExecutor's
+// jerk-limit AND heading-loop-gain defaults, ticket 098-001) -- unchanged by
+// the addition below.
+//
+// 098-005/M7: one Rt::Configurator is now ALSO constructed, seeded from the
+// SAME dtConfig/plannerConfig, and ticked (`configurator.applyOne(bb)`) once
+// per pass -- the loop's ONLY new runtime authority, and purely additive: it
+// drains at most one already-queued `bb.configIn` delta per pass (a no-op
+// whenever nothing has posted one -- e.g. every pass on a robot that never
+// receives a `SET`), so boot behavior is unchanged. This does NOT reinstate
+// 093/094-era full runtime config authority (no `SET`/`GET` text handler is
+// revived); it only lets a delta ALREADY reaching `bb.configIn` via some
+// other registered path (096-004's binary `config` command -- see
+// commands/binary_channel.cpp) actually apply to the live Drivetrain/
+// Hardware/PoseEstimator instead of sitting undrained forever.
 //
 // The DEVICE: identity banner is emitted by Communicator::begin() itself now
 // (moved out of main()) -- the announcement is the Communicator's own job.
@@ -45,12 +56,13 @@
 #include "config/boot_config.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
-#include "messages/planner.h"
 #include "runtime/blackboard.h"
 #include "runtime/command_router.h"
+#include "runtime/configurator.h"
 #include "subsystems/communicator.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/nezha_hardware.h"
+#include "subsystems/pose_estimator.h"
 #include "telemetry/telemetry_tick.h"
 
 static MicroBit uBit;
@@ -67,28 +79,6 @@ static void serialReply(const char* msg, void* ctx) {
 
 static void radioReply(const char* msg, void* ctx) {
     static_cast<Subsystems::Communicator*>(ctx)->sendRadio(msg);
-}
-
-// defaultMotionConfig -- 094-005: a small, boot-only re-introduction of the
-// jerk-limit defaults 093 deleted along with the whole `defaultPlannerConfig()`
-// function (that function's other fields -- a_max/v_body_max/yaw_rate_max/
-// yaw_acc_max/arrive_tol/turn_in_place_gate -- are NOT resurrected here: this
-// sprint's Drivetrain-owned Motion::SegmentExecutor only needs the same
-// four ramp-shape limits, applied once via drivetrain.configureMotion(),
-// with jMax/yawJerkMax now nonzero instead of 093's `0.0` trapezoid
-// sentinel -- see architecture-update.md Section 8). No runtime SET/GET
-// path is revived; per-segment `MOVE j=`/`wj=` overrides (094-006) are the
-// only live tuning surface this sprint ships.
-static msg::PlannerConfig defaultMotionConfig() {
-    msg::PlannerConfig cfg;
-    cfg.a_max = 800.0f;         // [mm/s^2]
-    cfg.a_decel = 800.0f;       // [mm/s^2]
-    cfg.v_body_max = 1000.0f;   // [mm/s]
-    cfg.yaw_rate_max = 6.0f;    // [rad/s]
-    cfg.yaw_acc_max = 20.0f;    // [rad/s^2]
-    cfg.j_max = 5000.0f;        // [mm/s^3] ~6x a_max -- ~0.16s jerk-limited edges
-    cfg.yaw_jerk_max = 100.0f;  // [rad/s^3] ~5x yaw_acc_max -- ~0.2s
-    return cfg;
 }
 
 int hardware_main() {
@@ -111,13 +101,37 @@ int hardware_main() {
     // --- Drivetrain: differential (Tovez), motion planner (094-004). Holds
     // a Hardware& -- `hardware` above must be constructed first (it is).
     // configureMotion() seeds the owned Motion::SegmentExecutor's boot
-    // jerk-limit defaults exactly once; no runtime SET/GET path revived. ---
+    // jerk-limit/heading-gain defaults exactly once; a LIVE re-application
+    // after boot is the Configurator's job now (098-005/M7, below), not a
+    // revived text SET/GET handler. ---
     static Subsystems::Drivetrain drivetrain(hardware);
     msg::DrivetrainConfig dtConfig = Config::defaultDrivetrainConfig();
     drivetrain.configure(dtConfig);
-    drivetrain.configureMotion(defaultMotionConfig());
+    msg::PlannerConfig plannerConfig = Config::defaultPlannerConfig();
+    drivetrain.configureMotion(plannerConfig);
     drivetrain.setMotorCapabilities(hardware.motor(drivetrain.ports().left).capabilities(),
                                      hardware.motor(drivetrain.ports().right).capabilities());
+
+    // --- PoseEstimator: a Subsystems-tier peer of Drivetrain (never folded
+    // into it -- pose_estimator.h's own file header). Constructed here ONLY
+    // to satisfy Rt::Configurator's constructor (below) -- a kDrivetrain-
+    // scoped delta re-propagates to it too (configurator.cpp). Holds no
+    // hardware reference (pose_estimator.h: "holds NO Hal::Motor/
+    // Hal::Odometer reference or pointer"), so an instance that is
+    // constructed but never ticked (Stage 2/M6's OTOS wiring -- ticket
+    // 098-004, independent of this ticket, not landed on this branch) is
+    // inert -- it changes nothing about this loop's existing behavior. ---
+    static Subsystems::PoseEstimator poseEstimator;
+
+    // --- Configurator (098-005/M7): the one live config-application
+    // authority (source/runtime/configurator.h's class comment) -- seeded
+    // from the SAME dtConfig/plannerConfig values already passed directly
+    // to drivetrain.configure()/configureMotion() above, so a freshly
+    // booted robot that never receives a SET behaves identically to today
+    // (boot config still applies once, directly, at construction; this is
+    // additive only -- see this file's own header comment). ---
+    static Rt::Configurator configurator(drivetrain, poseEstimator, hardware, dtConfig,
+                                          plannerConfig);
 
     // The two-plane transport commands post onto, and the pointerless command
     // router that parses + dispatches inbound wire lines against it.
@@ -137,6 +151,18 @@ int hardware_main() {
     // above, mirroring Configurator::applyOne()'s own "bb.drivetrainConfig =
     // drivetrainConfig_;" publish.
     bb.drivetrainConfig = dtConfig;
+    // 098-005/M7: the Configurator's own boot-time publish (configurator.h:
+    // "seeds all four bb.*Config cells... boot-time use, before the loop
+    // starts") -- fills in bb.motorConfig[]/bb.plannerConfig/bb.odometerConfig
+    // (previously always zero-valued here; nothing else in this loop ever
+    // set them) with the SAME values the live subsystems were actually
+    // configured with above. Harmless re-write of bb.drivetrainConfig with
+    // the identical value the line above already set (mirrors
+    // tests/_infra/sim/sim_api.cpp's SimHandle constructor, which keeps both
+    // lines for the same reason). Purely a telemetry/GET-visibility fix --
+    // no live subsystem is touched by this call (publish() never calls
+    // configure() on anything), so it cannot change control-loop behavior.
+    configurator.publish(bb);
     static Rt::CommandRouter router;
     router.setReplyChannels(serialReply, &comm, radioReply, &comm);
 
@@ -154,6 +180,17 @@ int hardware_main() {
         if (comm.hasCommand()) {
             router.route(comm.takeCommand(), bb); // Add the command to the router, which will parse and dispatch it, posting any command args onto the blackboard and replying through the appropriate channel.
         }
+        // 098-005/M7: drains AT MOST one bb.configIn delta per pass
+        // (Configurator::applyOne()'s own documented one-delta-per-call
+        // contract) -- placed here, right after a same-pass SET could have
+        // just posted one via router.route() above, and BEFORE
+        // hardware.tick()/drivetrain.tick() below, so a delta arriving THIS
+        // pass is already live (e.g. reaches Drivetrain::configureMotion()
+        // for a kPlanner delta) by the time this SAME pass's drivetrain.tick()
+        // runs -- one tick sooner than draining it after the commit step
+        // would. A no-op whenever bb.configIn is empty (every pass no SET
+        // has ever arrived), so boot behavior is unchanged either way.
+        configurator.applyOne(bb);
         tickTelemetry(bb, router, now); // Loop-owned periodic STREAM emission (096-002) -- a no-op unless STREAM has armed bb.telemetryPeriod.
 
         hardware.tick(now);                                // pump the I2C flip-flop (timing unchanged)

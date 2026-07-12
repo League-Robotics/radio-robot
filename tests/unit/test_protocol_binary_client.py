@@ -838,7 +838,7 @@ def test_get_config_no_keys_dumps_all_five_targets():
         motor=config_pb2.MotorConfigPatch(side=config_pb2.RIGHT, travel_calib=0.481))
     planner_snap = envelope_pb2.ConfigSnapshot(
         target=config_pb2.CONFIG_PLANNER,
-        planner=config_pb2.PlannerConfigPatch(min_speed=50.0))
+        planner=config_pb2.PlannerConfigPatch(min_speed=50.0, heading_kp=6.0, heading_kd=0.25))
     wd_snap = envelope_pb2.ConfigSnapshot(target=config_pb2.CONFIG_WATCHDOG, watchdog=500)
     fake = _ConfigLoopbackSerial(snapshot_by_target={
         config_pb2.CONFIG_DRIVETRAIN: dt_snap,
@@ -870,6 +870,8 @@ def test_get_config_no_keys_dumps_all_five_targets():
         "ekfROtosXy": "3",
         "ekfROtosTheta": "4",
         "minSpeed": "50",
+        "headingKp": "6",
+        "headingKd": "0.25",
         "sTimeout": "500",
     }
 

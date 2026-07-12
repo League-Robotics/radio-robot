@@ -648,7 +648,12 @@ def _raw_config_snapshot_value(key: str, snapshot: "envelope_pb2.ConfigSnapshot"
     if key in protocol._MOTOR_PID_KEYS:
         return getattr(snapshot.motor, protocol._MOTOR_PID_KEYS[key])
     if key in protocol._PLANNER_KEYS:
-        return snapshot.planner.min_speed
+        # Generic getattr, not a hardcoded `.min_speed` -- this docstring's
+        # own "a NEW key is automatically covered" claim only held for the
+        # drivetrain/motor branches above (already generic); _PLANNER_KEYS
+        # grew headingKp/headingKd (098-005), so this branch needed the same
+        # fix protocol.py's own _read_config_snapshot_value() got.
+        return getattr(snapshot.planner, protocol._PLANNER_KEYS[key])
     if key == "sTimeout":
         return float(snapshot.watchdog)
     return None

@@ -249,10 +249,13 @@ def encode_cfg_motor(binary: pathlib.Path, corr_id: int, target: int, side: int,
     return base64.b64decode(line[len("B64 "):])
 
 
-def encode_cfg_planner(binary: pathlib.Path, corr_id: int, target: int, min_speed: float) -> bytes | None:
-    """096-006: builds ReplyEnvelope{cfg=ConfigSnapshot{target,
-    planner=PlannerConfigPatch{min_speed}}}."""
-    r = run_harness(binary, "encode_cfg_planner", str(corr_id), str(target), repr(min_speed))
+def encode_cfg_planner(binary: pathlib.Path, corr_id: int, target: int, min_speed: float, heading_kp: float,
+                        heading_kd: float) -> bytes | None:
+    """096-006 (+ 098-005: heading_kp/heading_kd): builds ReplyEnvelope{
+    cfg=ConfigSnapshot{target, planner=PlannerConfigPatch{min_speed,
+    heading_kp, heading_kd}}}."""
+    r = run_harness(binary, "encode_cfg_planner", str(corr_id), str(target), repr(min_speed), repr(heading_kp),
+                     repr(heading_kd))
     assert not r.crashed, f"encode_cfg_planner crashed: {r.stdout}\n{r.stderr}"
     line = r.stdout.strip()
     if line == "ZERO":
@@ -489,7 +492,9 @@ def env_config_motor(corr_id: int, side: int = pb_config.LEFT, **fields) -> byte
 
 def env_config_planner(corr_id: int, **fields) -> bytes:
     """`fields` keys are PlannerConfigPatch's own proto field names
-    (min_speed, its only field)."""
+    (min_speed, plus heading_kp/heading_kd -- 098-005) -- only the ones
+    passed are marked `has=true` on the wire, same partial-presence contract
+    as env_config_drivetrain()/env_config_motor() above."""
     patch = pb_config.PlannerConfigPatch(**fields)
     return pb_envelope.CommandEnvelope(
         corr_id=corr_id, config=pb_envelope.ConfigDelta(planner=patch)).SerializeToString()

@@ -1,7 +1,7 @@
 ---
 id: 098
 title: 'Heading-loop cascade control: turns terminate on target'
-status: roadmap
+status: done
 branch: sprint/098-heading-loop-cascade-control-turns-terminate-on-target
 use-cases:
 - SUC-001

@@ -457,10 +457,13 @@ def tlm_drop_rate(frames: "list[TLMFrame]") -> float:
 # config_commands.cpp's kAllKeys registers on the text plane (that file's own
 # list, transcribed here -- config.proto's own header comment already
 # establishes the 1:1 correspondence between kAllKeys and the three curated
-# Patch messages, so this map does not invent anything new). A key not in
-# this table has no binary wire target at all (mirrors the text plane's own
-# ERR badkey -- see get_config()/set_config()'s own docstrings for the
-# resulting behavior).
+# Patch messages, so this map does not invent anything new), PLUS
+# headingKp/headingKd (098-005) -- two keys with no kAllKeys precedent at all
+# (added to PlannerConfig, and wired all the way to the wire Patch, after
+# config_commands.cpp was already deleted, 097-007). A key not in this table
+# has no binary wire target at all (mirrors the text plane's own ERR badkey
+# -- see get_config()/set_config()'s own docstrings for the resulting
+# behavior).
 # ---------------------------------------------------------------------------
 
 # tw/rotSlip/ekfQxy/ekfQtheta/ekfROtosXy/ekfROtosTheta -> DrivetrainConfigPatch
@@ -491,7 +494,18 @@ _MOTOR_PID_KEYS = {
 }
 
 # minSpeed -> PlannerConfigPatch.min_speed, config_pb2.CONFIG_PLANNER.
-_PLANNER_KEYS = {"minSpeed": "min_speed"}
+# headingKp/headingKd (098-005): the two outer heading-loop PD gains added to
+# PlannerConfigPatch by ticket 098-005, after config_commands.cpp's own
+# kAllKeys curation list (which minSpeed mirrors) had already been deleted
+# (097-007) -- there is no legacy text key for these two; added directly here
+# so set_config(headingKp=...)/get_config("headingKp") reach the SAME
+# PlannerConfigPatch.heading_kp field binary_channel.cpp's handleConfigPlanner()
+# now decodes (source/commands/binary_channel.cpp).
+_PLANNER_KEYS = {
+    "minSpeed": "min_speed",
+    "headingKp": "heading_kp",
+    "headingKd": "heading_kd",
+}
 
 # ml/mr and sTimeout are handled specially, not via a plain field-name map:
 #   - ml/mr both patch MotorConfigPatch.travel_calib, disambiguated by
@@ -522,7 +536,7 @@ _ALL_GET_KEYS = (
     "pid.kp", "pid.ki", "pid.kff", "pid.iMax", "pid.kaw",
     "rotSlip",
     "ekfQxy", "ekfQtheta", "ekfROtosXy", "ekfROtosTheta",
-    "minSpeed", "sTimeout",
+    "minSpeed", "headingKp", "headingKd", "sTimeout",
 )
 
 
@@ -549,7 +563,13 @@ def _read_config_snapshot_value(key: str, snapshot: "envelope_pb2.ConfigSnapshot
     if key in _MOTOR_PID_KEYS:
         return _format_config_value(getattr(snapshot.motor, _MOTOR_PID_KEYS[key]))
     if key in _PLANNER_KEYS:
-        return _format_config_value(snapshot.planner.min_speed)
+        # Generic getattr, not a hardcoded `.min_speed` -- _PLANNER_KEYS grew
+        # a second/third entry (headingKp/headingKd, 098-005) after this line
+        # was originally written for minSpeed alone; mirrors _DRIVETRAIN_KEYS/
+        # _MOTOR_PID_KEYS' own getattr(..., _XXX_KEYS[key]) shape immediately
+        # above, which was already generic since those tables always had more
+        # than one entry.
+        return _format_config_value(getattr(snapshot.planner, _PLANNER_KEYS[key]))
     if key == "sTimeout":
         return str(snapshot.watchdog)
     return None

@@ -206,6 +206,14 @@ PATCH_TO_PYDANTIC: dict[PatchKey, list[str]] = {
     # quantity (rogo's host-only crawl-mode fallback floor), not the
     # firmware planner's trapezoidal-profile min_speed — do not conflate them.
     ("PlannerConfigPatch", "min_speed"): [],
+    # heading_kp/heading_kd (098-005): the two outer heading-loop PD gains.
+    # No host-side pydantic field either — bench tuning lives in
+    # data/robots/tovez.json's control.heading_kp/heading_kd (baked into the
+    # firmware boot config by scripts/gen_boot_config.py, ticket 098-001),
+    # not in RobotConfig; live tuning goes through set_config(headingKp=...)
+    # directly, no pydantic round trip.
+    ("PlannerConfigPatch", "heading_kp"): [],
+    ("PlannerConfigPatch", "heading_kd"): [],
 }
 
 # proto3 scalar cpp_type -> the Python type a pydantic leaf representing it
