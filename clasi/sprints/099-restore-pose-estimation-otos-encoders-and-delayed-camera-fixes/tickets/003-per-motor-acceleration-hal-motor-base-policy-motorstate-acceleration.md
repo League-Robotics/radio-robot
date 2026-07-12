@@ -1,8 +1,9 @@
 ---
 id: '003'
 title: 'Per-motor acceleration: Hal::Motor base policy + MotorState.acceleration'
-status: open
-use-cases: [SUC-004]
+status: done
+use-cases:
+- SUC-004
 depends-on: []
 github-issue: ''
 issue: restore-pose-estimation-otos-encoders-delayed-camera-fixes.md
@@ -41,37 +42,42 @@ diagnostic addition, independent of every other ticket in this sprint
 
 ## Acceptance Criteria
 
-- [ ] `Hal::Motor` gains a protected `float acceleration_ = 0.0f;` field,
+- [x] `Hal::Motor` gains a protected `float acceleration_ = 0.0f;` field,
       a concrete `void trackAcceleration(float velocity, uint32_t dtUs)`
       (EMA, alpha=0.25), and a public `float acceleration() const`.
-- [ ] `Hal::NezhaMotor::tick()` calls `trackAcceleration(velocity(),
+- [x] `Hal::NezhaMotor::tick()` calls `trackAcceleration(velocity(),
       dtUs)` immediately after its own filtered-velocity update (the line
       that updates `filteredVelocity_`, inside the `sampleOk &&
       haveElapsed` branch), using the SAME raw microsecond delta
       (`nowUs - lastTickUs_`) it already computes there for its own
       elapsed-time math — before `updateWedgeDetector()`.
-- [ ] `Hal::SimMotor::tick()` calls `trackAcceleration(velocity(), dtUs)`
+- [x] `Hal::SimMotor::tick()` calls `trackAcceleration(velocity(), dtUs)`
       immediately after its own filtered-velocity update (the `elapsedTime
       > 0.0f` branch), converting its existing millisecond `elapsedMs` to
       microseconds (`elapsedMs * 1000`) — before the mode-dispatch switch.
-- [ ] `Hal::Motor::state()` gains `s.acceleration.has = true;
+- [x] `Hal::Motor::state()` gains `s.acceleration.has = true;
       s.acceleration.val = acceleration();` inside the existing
       `caps.has_encoder` block, alongside `position`/`velocity`/`wedged`.
-- [ ] `protos/motor.proto`'s `MotorState` gains `optional float
+- [x] `protos/motor.proto`'s `MotorState` gains `optional float
       acceleration = 12; // [mm/s^2] EMA-filtered (Hal::Motor::
       trackAcceleration(), base policy, alpha=0.25)`; regenerate
       `source/messages/motor.h` (`scripts/gen_messages.py`) — never
       hand-edited.
-- [ ] `bb.drivetrain.acc_left`/`acc_right` (TLM) are byte-identical to a
+- [x] `bb.drivetrain.acc_left`/`acc_right` (TLM) are byte-identical to a
       pre-ticket build — no regression (verify via existing TLM-reading
       sim tests, if any exercise these fields, or a bench spot-check).
-- [ ] Extended `motor_policy_harness.cpp`: acceleration EMA responds
+- [x] Extended `motor_policy_harness.cpp`: acceleration EMA responds
       plausibly (correct sign, settles toward zero) to a velocity ramp
       up/down/hold sequence, for both `NezhaMotor` and `SimMotor` leaves.
 - [ ] Bench light: on a duty-step ramp (0 -> nonzero), `bb.motors[i].
       acceleration` (via `GET`/binary `config`-adjacent read, or a
       dedicated bench probe) rises then settles — plausible values, not a
-      full regression sweep.
+      full regression sweep. **DEFERRED** — not exercised on hardware this
+      pass (no bench session run as part of this ticket's implementation);
+      left unchecked per the dispatching instructions. The wire surface
+      (`MotorState.acceleration`, field 12) is live and sim-proven; a
+      follow-up bench session should confirm the rise-then-settle shape on
+      a real duty-step ramp before this criterion is considered closed.
 
 ## Implementation Plan
 

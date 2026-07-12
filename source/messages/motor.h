@@ -81,6 +81,7 @@ struct MotorState {
     bool active = false;
     Opt<uint32_t> sampled_at = {};
     Opt<uint32_t> enc_glitch_count = {};
+    Opt<float> acceleration = {};
 
     // --- array / optional-string accessors ---
 };

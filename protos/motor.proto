@@ -60,6 +60,11 @@ message MotorState {
       // is a corrupted I2C read, not motion -- rejected before it can reach
       // the PID, wedge detector, stop conditions, or telemetry). Diagnostic:
       // a rising count = bus noise worth investigating.
+  optional float  acceleration = 12; // [mm/s^2] EMA-filtered
+      // (Hal::Motor::trackAcceleration(), base policy, alpha=0.25). Separate,
+      // generic, all-4-port surface -- NOT DrivetrainState.acc_[]/TLM's
+      // acc_left/acc_right, which stay exactly as they are (099-003,
+      // architecture-update.md Decision 3).
 }
 
 // Configuration parameters for a motor.

@@ -260,6 +260,12 @@ void NezhaMotor::tick(uint32_t nowMs)
             }
             // else: implausible-but-sub-step velocity — hold filteredVelocity_
             // (matches source_old's plausibility gate).
+
+            // 099-003: generic per-motor acceleration EMA (base policy,
+            // deliberately separate from Drivetrain's own accelEma_ — see
+            // architecture-update.md Decision 3). Same raw microsecond delta
+            // already used for elapsedTime above.
+            trackAcceleration(velocity(), static_cast<uint32_t>(nowUs - lastTickUs_));
         }
         lastPosition_ = pos;
     }

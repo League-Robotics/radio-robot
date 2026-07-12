@@ -161,6 +161,12 @@ void SimMotor::tick(uint32_t nowMs)
             float rawVel = (pos - lastPosition_) / elapsedTime;
             float a = config_.vel_filt_alpha;   // EMA smoothing
             filteredVelocity_ = a * rawVel + (1.0f - a) * filteredVelocity_;
+
+            // 099-003: generic per-motor acceleration EMA (base policy,
+            // deliberately separate from Drivetrain's own accelEma_ — see
+            // architecture-update.md Decision 3). Converts the existing
+            // millisecond elapsedMs to microseconds.
+            trackAcceleration(velocity(), elapsedMs * 1000);
         }
     } else {
         hasLastTick_ = true;

@@ -1,14 +1,27 @@
-"""Off-hardware acceptance proof for ticket 078-004 (SUC-005).
+"""Off-hardware acceptance proof for ticket 078-004 (SUC-005), extended by
+ticket 099-003 (SUC-004).
 
 Compiles ``motor_policy_harness.cpp`` (a dependency-free MockMotor leaf
 exercising ``Hal::Motor``'s sprint-078 armor policy — zero-dwell reversal,
 output deadband, standstill-guarded resets, motion-qualified wedge
 reporting) with the system C++ compiler, runs the resulting binary, and
-asserts it exits 0. Per architecture-update.md Decision 9, this
-deliberately skips the deferred new-tree simulator and any CMake/ARM
-toolchain component: no hardware, no CODAL, just ``capability/motor.h`` and
-``messages/*.h`` compiled standalone. Runs in well under a second and needs
-nothing beyond a working ``c++``/``clang++`` on PATH.
+asserts it exits 0. Per architecture-update.md Decision 9, the ORIGINAL
+078 scenarios deliberately skip the deferred new-tree simulator and any
+CMake/ARM toolchain component: no hardware, no CODAL, just
+``capability/motor.h`` and ``messages/*.h`` compiled standalone.
+
+099-003 addition: ``Hal::Motor::trackAcceleration()`` (the generic
+per-motor acceleration EMA) only ever runs from inside a REAL leaf's own
+``tick()`` — a MockMotor never reaches it — so this ticket's two new
+scenarios construct the REAL ``Hal::NezhaMotor``/``Hal::SimMotor`` leaves
+directly (mirroring ``test_nezha_flipflop.py``'s own compile shape), which
+means this file now also builds with ``-DHOST_BUILD`` and links
+``com/i2c_bus_host.cpp`` (the scripted I2CBus fake), ``hal/nezha/
+nezha_motor.cpp``, and ``hal/sim/sim_motor.cpp`` alongside the harness.
+Still no CODAL, no wall clock, no real hardware — the scripted fake and
+``Hal::SimMotor``'s standalone (plant-free) mode keep this a pure host
+build. Runs in well under a second and needs nothing beyond a working
+``c++``/``clang++`` on PATH.
 
 Collected under ``tests/sim/unit/`` alongside the existing
 ``test_placeholder.py`` — already within ``pyproject.toml``'s
@@ -30,8 +43,16 @@ _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "motor_policy_harness.c
 # Hal::MotorVelocityPid (not just capability/motor.h's header-only armor
 # policy), so compute()'s own translation unit must be compiled in
 # alongside the harness — mirrors test_velocity_pid.py's identical
-# _PID_SRC precedent.
+# _PID_SRC precedent. Also needed by 099-003's real-leaf scenarios (both
+# NezhaMotor and SimMotor embed a Hal::MotorVelocityPid member).
 _PID_SRC = _SOURCE_DIR / "hal" / "velocity_pid.cpp"
+
+# 099-003: the scripted I2CBus fake (HOST_BUILD-only) plus the REAL
+# NezhaMotor/SimMotor leaf translation units — mirrors
+# test_nezha_flipflop.py's identical source list for the Nezha half.
+_I2C_HOST_FAKE_SRC = _SOURCE_DIR / "com" / "i2c_bus_host.cpp"
+_NEZHA_MOTOR_SRC = _SOURCE_DIR / "hal" / "nezha" / "nezha_motor.cpp"
+_SIM_MOTOR_SRC = _SOURCE_DIR / "hal" / "sim" / "sim_motor.cpp"
 
 # messages/common.h documents its own target as "CODAL C++11" — build the
 # host harness to the same standard so it exercises exactly the language
@@ -52,9 +73,12 @@ def _find_cxx_compiler() -> str:
 
 
 def test_motor_policy_harness_compiles_and_passes(tmp_path):
-    """Compile the MockMotor harness and assert every scenario passes."""
+    """Compile the MockMotor + real-leaf harness and assert every scenario passes."""
     assert _HARNESS_SRC.is_file(), f"harness source missing: {_HARNESS_SRC}"
     assert _PID_SRC.is_file(), f"velocity_pid.cpp missing: {_PID_SRC}"
+    assert _I2C_HOST_FAKE_SRC.is_file(), f"HOST_BUILD I2CBus fake missing: {_I2C_HOST_FAKE_SRC}"
+    assert _NEZHA_MOTOR_SRC.is_file(), f"nezha_motor.cpp missing: {_NEZHA_MOTOR_SRC}"
+    assert _SIM_MOTOR_SRC.is_file(), f"sim_motor.cpp missing: {_SIM_MOTOR_SRC}"
     assert _SOURCE_DIR.is_dir(), f"source/ tree missing: {_SOURCE_DIR}"
 
     cxx = _find_cxx_compiler()
@@ -66,12 +90,16 @@ def test_motor_policy_harness_compiles_and_passes(tmp_path):
             f"-std={_CXX_STANDARD}",
             "-Wall",
             "-Wextra",
+            "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
             "-o",
             str(binary),
             str(_HARNESS_SRC),
             str(_PID_SRC),
+            str(_I2C_HOST_FAKE_SRC),
+            str(_NEZHA_MOTOR_SRC),
+            str(_SIM_MOTOR_SRC),
         ],
         capture_output=True,
         text=True,
