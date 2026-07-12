@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: 098
 ---
 
 # Real-robot motion calibration — systematic ~6-12% undershoot on turns and straights

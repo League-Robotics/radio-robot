@@ -1,15 +1,15 @@
 ---
-id: "098"
-title: "Restore pose estimation: OTOS, encoders, and delayed camera fixes"
+id: 099
+title: 'Restore pose estimation: OTOS, encoders, and delayed camera fixes'
 status: roadmap
-branch: sprint/098-restore-pose-estimation-otos-encoders-and-delayed-camera-fixes
+branch: sprint/099-restore-pose-estimation-otos-encoders-and-delayed-camera-fixes
 use-cases: []
 issues:
 - restore-pose-estimation-otos-encoders-delayed-camera-fixes.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
-# Sprint 098: Restore pose estimation: OTOS, encoders, and delayed camera fixes
+# Sprint 099: Restore pose estimation: OTOS, encoders, and delayed camera fixes
 
 ## Goals
 
