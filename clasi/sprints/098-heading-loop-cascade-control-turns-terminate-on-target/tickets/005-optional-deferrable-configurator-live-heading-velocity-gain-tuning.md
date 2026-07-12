@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: '[OPTIONAL/DEFERRABLE] Configurator live heading/velocity gain tuning'
-status: in-progress
+status: done
 use-cases:
 - SUC-003
 depends-on:
@@ -71,11 +71,17 @@ moving target.
       confirms the VERY NEXT segment's commanded twist reflects the new
       gain — no restart, no reflash-equivalent.
 - [x] Full `uv run python -m pytest` stays green, no regression.
-- [ ] HARDWARE ACCEPTANCE: a bench session sends a live `SET` for
+- [x] HARDWARE ACCEPTANCE: a bench session sends a live `SET` for
       `heading_kp` (or `heading_kd`) over serial/relay and confirms (via
       `TLM`/a subsequent `turn_sweep.py` cell) the change took effect
-      WITHOUT a reflash. **NOT YET DONE — reserved for the team-lead's
-      hardware pass.** The wire-schema gap noted below (2026-07-11 pass) is
+      WITHOUT a reflash. **DONE 2026-07-12 (team-lead HW pass over the radio
+      relay):** GET heading_kp read 6.0 at boot → a 180°@384 turn landed
+      −0.31°; live `SET heading_kp=1.5` over the relay ACKed, GET read back
+      1.5 (no reflash), and a 180°@384 turn then undershot −3.19° (the weaker
+      gain reached the live `SegmentExecutor` and observably changed the
+      wheel-level behavior); `SET heading_kp=6.0` restored it (GET=6.0, turn
+      back to +0.34°). Live heading-gain tuning is real on hardware.** The
+      wire-schema gap noted below (2026-07-11 pass) is
       now CLOSED (2026-07-12 pass, see "Implementation Notes — wire path"
       below): `PlannerConfigPatch.heading_kp`/`heading_kd` are now real wire
       fields, `binary_channel.cpp` decodes them, and
