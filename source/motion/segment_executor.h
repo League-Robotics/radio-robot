@@ -25,11 +25,11 @@
 // differential drive satisfies an independent finalHeading by pivoting at
 // the END, not a coupled arc -- see architecture-update.md's phase table:
 //
-//   | Phase          | Fires when              | Channel / solve                    | Stop (encoder-only)          |
+//   | Phase          | Fires when              | Channel / solve                    | Completion (encoder-only)    |
 //   |----------------|--------------------------|-------------------------------------|-------------------------------|
-//   | PRE_PIVOT      | skip if |direction| ~= 0 | rotational solveToRest(direction)   | STOP_ROTATION, arc = |direction|*trackwidth/2 |
+//   | PRE_PIVOT      | skip if |direction| ~= 0 | rotational solveToRest(direction), heading PD-corrected (sprint 098 M3) | heading tolerance+dwell (M4) + STOP_TIME backstop |
 //   | TRANSLATE      | skip if |distance| ~= 0  | linear solveToRest(distance)         | STOP_DISTANCE at |distance|   |
-//   | TERMINAL_PIVOT | skip if finalHeading~=direction | rotational solveToRest(finalHeading-direction) | STOP_ROTATION, arc = |delta|*trackwidth/2 |
+//   | TERMINAL_PIVOT | skip if finalHeading~=direction | rotational solveToRest(finalHeading-direction), heading PD-corrected (sprint 098 M3) | heading tolerance+dwell (M4) + STOP_TIME backstop |
 //
 // Each phase is a FRESH Motion::MotionBaseline + a fresh single-channel
 // Ruckig solve (Decision 2's "Pattern A" -- solve-to-rest-at-a-known-target,
@@ -47,6 +47,16 @@
 // their angle target into a per-wheel-arc STOP_ROTATION threshold via
 // trackwidth, mirroring handleRT's own `arc = |angle| * trackwidth/2`
 // (source/commands/motion_commands.cpp).
+//
+// Sprint 098 (architecture-update.md M3/M4/M5) adds the outer heading PD
+// cascade for PRE_PIVOT/TERMINAL_PIVOT ONLY (never TRANSLATE, never BLEND):
+// their commanded omega is Kp/Kd-corrected against MEASURED (encoder-
+// derived) heading/rate rather than the raw Ruckig-plan sample while the
+// phase is actively converging, and their completion is a tolerance+dwell
+// gate on that same measured heading/rate -- STOP_ROTATION is no longer
+// appended to their stops_[] (STOP_TIME stays, as the independent
+// stall/non-convergence backstop). TRANSLATE's STOP_DISTANCE and BLEND's
+// STOP_ROTATION/STOP_DISTANCE pair are both unchanged by this.
 //
 // NO motor/blackboard/CODAL dependency -- exactly like Motion::JerkTrajectory
 // "knows nothing about goal kinds" (jerk_trajectory.h's own class comment):
@@ -221,6 +231,16 @@ class SegmentExecutor {
   // channel -- guarded by the SAME three guards Planner's own methods
   // enforce (stop-not-fired via the caller, no-reverse-target, and a shared
   // kMinReplanInterval rate limit).
+  //
+  // Sprint 098 (M5): maybeReplanPivot()'s sub-gross (kRotDivergenceThreshold,
+  // retarget-only) branch is retired to a no-op -- the outer heading PD
+  // cascade (M3, tick()'s PRE_PIVOT/TERMINAL_PIVOT branch) is now the
+  // continuous corrector for nominal tracking lag; the gross-divergence
+  // (kRotGrossDivergenceThreshold, reanchor) branch is UNCHANGED, staying
+  // live as stall protection. Since STOP_ROTATION is no longer appended to
+  // stops_[] for these two phases (M4), maybeReplanPivot() reconstructs the
+  // same target-arc StopCondition locally instead of looking it up from
+  // stops_[].
   void maybeReplanTranslate(uint32_t now, const msg::MotorState& encLeft,
                             const msg::MotorState& encRight);
   void maybeReplanPivot(uint32_t now, const msg::MotorState& encLeft,
@@ -243,6 +263,25 @@ class SegmentExecutor {
   // named helpers.
   float linearElapsed(uint32_t now) const;
   float rotationalElapsed(uint32_t now) const;
+
+  // measuredHeading -- M3/M4's shared measured-heading/measured-rate
+  // derivation for PRE_PIVOT/TERMINAL_PIVOT (architecture-update.md M3),
+  // used by both the outer heading PD cascade and the tolerance/dwell
+  // completion gate -- both need the identical quantities, every tick.
+  // thetaMeasured is the encoder-differential heading relative to the
+  // phase's OWN baseline (baseline_.encDiff0), in the SAME signed frame as
+  // rotationalTarget_/rotational_'s own sample() -- see the .cpp for the
+  // derivation note (algebraically identical to rotationProgress()'s
+  // STOP_ROTATION geometry, motion/stop_condition.cpp, just expressed in
+  // radians instead of per-wheel-arc mm). Falls back to thetaDesired
+  // (headingError == 0 that tick -- never fabricate a phantom delta from a
+  // momentarily missing observation) when either wheel's position.has is
+  // false, and to omegaDesired when either wheel's velocity.has is false --
+  // the latter mirrors maybeReplanPivot()'s existing reanchor-seed fallback
+  // exactly.
+  void measuredHeading(const msg::MotorState& encLeft, const msg::MotorState& encRight,
+                       float thetaDesired, float omegaDesired, float* thetaMeasured,
+                       float* omegaMeasured) const;
 
   msg::PlannerConfig config_ = {};
 
@@ -321,6 +360,16 @@ class SegmentExecutor {
   uint32_t softDeadline_ = 0;     // [ms] absolute deadline for the graceful decel-to-zero
   static constexpr uint32_t kSoftDeadlineMs = 3000;  // [ms] matches Planner::kSoftDeadlineMs
 
+  // Heading tolerance/dwell completion gate (M4, sprint 098) --
+  // PRE_PIVOT/TERMINAL_PIVOT only. headingDwellActive_ tracks whether
+  // |rotationalTarget_ - thetaMeasured| < kHeadingTol && |omegaMeasured| <
+  // kHeadingRateTol has held CONTINUOUSLY since headingDwellStartMs_; reset
+  // to false the instant that AND goes false, and (re)initialized at phase
+  // start (beginPrePivot()/beginTerminalPivot()) -- see segment_executor.cpp's
+  // anonymous namespace for kHeadingTol/kHeadingRateTol/kHeadingDwellMs
+  // themselves (file-local constexpr, architecture-update.md Decision 3).
+  bool headingDwellActive_ = false;
+  uint32_t headingDwellStartMs_ = 0;  // [ms] absolute; valid only while headingDwellActive_
 
   msg::StopCondition stops_[4] = {};
   uint8_t stopsCount_ = 0;

@@ -73,6 +73,22 @@ constexpr float kDistEps = 0.5f;    // [mm]
 // owns the endgame instead.
 constexpr float kReplanWindowFraction = 0.75f;
 
+// kHeadingTol/kHeadingRateTol/kHeadingDwellMs -- M4's tolerance/dwell
+// completion gate for PRE_PIVOT/TERMINAL_PIVOT (architecture-update.md
+// Decision 3): a first-cut, code-edit-iterable set of constants, NOT
+// PlannerConfig fields -- unlike heading_kp/heading_kd (plant-scale-
+// dependent per-robot tunables), "how precise is done" is a control-design
+// choice with nothing in this sprint's scope needing it to differ per robot
+// (Decision 3's full rationale). kHeadingTol/kHeadingRateTol are the
+// ~0.5deg/~1deg-per-s figures the issue itself suggests as a starting point;
+// kHeadingDwellMs sits at the low end of the issue's 100-200ms suggested
+// range. Like the kDivergenceThreshold family above, expect these to be
+// recalibrated against real hardware (ticket 003) -- a compile-time
+// constant, not a wire field, exactly like that family.
+constexpr float kHeadingTol = 0.00873f;     // [rad] ~0.5 deg
+constexpr float kHeadingRateTol = 0.0175f;  // [rad/s] ~1 deg/s
+constexpr uint32_t kHeadingDwellMs = 150;   // [ms]
+
 }  // namespace
 
 void SegmentExecutor::configure(const msg::PlannerConfig& config) { config_ = config; }
@@ -357,12 +373,15 @@ void SegmentExecutor::beginPrePivot(uint32_t now) {
       kReplanWindowFraction * rotational_.duration() * 1000.0f);
 
   stopsCount_ = 0;
-  float arc = fabsf(preRotateTarget_) * arcScale_;  // [mm]
-  appendStop(msg::StopKind::STOP_ROTATION, arc);
+  // STOP_ROTATION is no longer appended here (M4, architecture-update.md):
+  // the tolerance+dwell completion gate in tick() now owns PRE_PIVOT's
+  // completion. STOP_TIME stays, unchanged, as the independent stall/
+  // non-convergence backstop.
   float omegaMag = fabsf(rotationalCeiling_);
   float nominal = (omegaMag > 1e-3f) ? (fabsf(preRotateTarget_) / omegaMag) * 1000.0f : 0.0f;  // [ms]
   appendStop(msg::StopKind::STOP_TIME, nominal * 2.0f + 2000.0f);
 
+  headingDwellActive_ = false;  // M4: (re)initialize the dwell timer at phase start
   phase_ = Phase::PRE_PIVOT;
 }
 
@@ -396,13 +415,16 @@ void SegmentExecutor::beginTerminalPivot(uint32_t now) {
       kReplanWindowFraction * rotational_.duration() * 1000.0f);
 
   stopsCount_ = 0;
-  float arc = fabsf(terminalPivotTarget_) * arcScale_;  // [mm]
-  appendStop(msg::StopKind::STOP_ROTATION, arc);
+  // STOP_ROTATION is no longer appended here (M4, architecture-update.md):
+  // the tolerance+dwell completion gate in tick() now owns TERMINAL_PIVOT's
+  // completion. STOP_TIME stays, unchanged, as the independent stall/
+  // non-convergence backstop.
   float omegaMag = fabsf(rotationalCeiling_);
   float nominal =
       (omegaMag > 1e-3f) ? (fabsf(terminalPivotTarget_) / omegaMag) * 1000.0f : 0.0f;  // [ms]
   appendStop(msg::StopKind::STOP_TIME, nominal * 2.0f + 2000.0f);
 
+  headingDwellActive_ = false;  // M4: (re)initialize the dwell timer at phase start
   phase_ = Phase::TERMINAL_PIVOT;
 }
 
@@ -492,6 +514,36 @@ float SegmentExecutor::linearElapsed(uint32_t now) const {
 
 float SegmentExecutor::rotationalElapsed(uint32_t now) const {
   return static_cast<float>(static_cast<int32_t>(now - rotationalSolveMs_)) * 0.001f;
+}
+
+// measuredHeading -- see segment_executor.h's doc comment for the contract.
+// Derivation of thetaMeasured's sign convention: rotationProgress()'s own
+// STOP_ROTATION geometry (motion/stop_condition.cpp) computes signedArc =
+// ((encRight - encLeft) - baseline_.encDiff0) * omegaSign * 0.5, and that
+// condition FIRES (signedArc >= cond.a, cond.a == |rotationalTarget_| *
+// arcScale_ == |rotationalTarget_| * trackwidth_/2) exactly when
+// ((encRight - encLeft) - baseline_.encDiff0) / trackwidth_ == rotationalTarget_
+// -- for BOTH signs of omegaSign (the omegaSign/fabsf factors cancel
+// algebraically at that boundary). So thetaMeasured below, computed WITHOUT
+// any omegaSign multiplication, lands in exactly the same signed frame as
+// rotationalTarget_ and rotational_'s own sample().position (0 at phase
+// start, growing toward rotationalTarget_) -- the two are directly
+// comparable, and a positive headingError (thetaDesired - thetaMeasured)
+// always means "measured is behind the plan in the commanded direction",
+// never the reverse. Do not reintroduce an omegaSign factor here.
+void SegmentExecutor::measuredHeading(const msg::MotorState& encLeft,
+                                      const msg::MotorState& encRight, float thetaDesired,
+                                      float omegaDesired, float* thetaMeasured,
+                                      float* omegaMeasured) const {
+  *thetaMeasured = thetaDesired;  // fallback: no correction this tick if position is momentarily absent
+  if (encLeft.position.has && encRight.position.has && trackwidth_ > 1e-3f) {
+    *thetaMeasured =
+        ((encRight.position.val - encLeft.position.val) - baseline_.encDiff0) / trackwidth_;
+  }
+  *omegaMeasured = omegaDesired;  // fallback -- mirrors maybeReplanPivot()'s reanchor seed exactly
+  if (encLeft.velocity.has && encRight.velocity.has && trackwidth_ > 1e-3f) {
+    *omegaMeasured = (encRight.velocity.val - encLeft.velocity.val) / trackwidth_;
+  }
 }
 
 void SegmentExecutor::maybeReplanTranslate(uint32_t now, const msg::MotorState& encLeft,
@@ -597,22 +649,23 @@ void SegmentExecutor::maybeReplanPivot(uint32_t now, const msg::MotorState& encL
     return;
   }
 
-  const msg::StopCondition* rotCond = nullptr;
-  for (uint8_t i = 0; i < stopsCount_; ++i) {
-    if (stops_[i].kind == msg::StopKind::STOP_ROTATION) {
-      rotCond = &stops_[i];
-      break;
-    }
-  }
-  if (rotCond == nullptr) return;  // defensive -- beginPrePivot()/beginTerminalPivot() always
-                                    // append one
+  // M5 (architecture-update.md): STOP_ROTATION is no longer appended to
+  // stops_[] for PRE_PIVOT/TERMINAL_PIVOT (M4's tolerance+dwell gate
+  // replaced its completion role) -- this function's own remaining/
+  // expected geometry still needs the SAME target arc that used to be
+  // looked up from stops_[], reconstructed locally instead, exactly
+  // matching what beginPrePivot()/beginTerminalPivot() used to append
+  // (fabsf(rotationalTarget_) * arcScale_).
+  msg::StopCondition rotCond;
+  rotCond.kind = msg::StopKind::STOP_ROTATION;
+  rotCond.a = fabsf(rotationalTarget_) * arcScale_;
 
   float omegaSign = baseline_.omegaSign;
   if (omegaSign == 0.0f) return;  // no meaningful direction to replan in
 
   float measuredRemainingNative = 0.0f;
   Motion::StopEvalResult r = Motion::remainingToStop(
-      *rotCond, baseline_, encLeft, encRight, msg::PoseEstimate{}, &measuredRemainingNative);
+      rotCond, baseline_, encLeft, encRight, msg::PoseEstimate{}, &measuredRemainingNative);
   if (r != Motion::StopEvalResult::NOT_FIRED) return;  // FIRED: caller's own stop-eval loop owns
                                                        // completion, not a replan
 
@@ -676,26 +729,17 @@ void SegmentExecutor::maybeReplanPivot(uint32_t now, const msg::MotorState& encL
       return;
     }
   } else {
-    // EXTEND-ONLY (2026-07-11): a retarget may lengthen the plan (deficit-
-    // chasing -- the designed correction for a plant running behind) but
-    // never SHORTEN it. Arrival is owned by the encoder stop, which fires
-    // exactly when the measured arc reaches the target -- so a mid-flight
-    // shrink can only ever encode measurement bias, and a real one exists:
-    // the two wheels are sampled up to ~30ms apart (flip-flop staggering),
-    // which at the 6 rad/s ceiling reads as ~0.09 rad of phantom "ahead".
-    // Cruise-spliced shrink retargets are seamless (no jerk kink, invisible
-    // on every trace) and silently landed 360 deg pivots 25-35 deg short on
-    // runs where jitter bursts crossed the divergence threshold.
-    Motion::JerkTrajectory::State cur = rotational_.peek(rotElapsed);
-    float planRemainingNow = fabsf(rotationalTarget_ - cur.position);
-    if (projectedRemainingRad <= planRemainingNow) {
-      return;
-    }
-    float newRemainingSigned = omegaSign * projectedRemainingRad;
-    if (!rotational_.retarget(newRemainingSigned)) {
-      return;
-    }
-    rotationalTarget_ = newRemainingSigned;
+    // M5 (architecture-update.md): sub-gross EXTEND-only retirement,
+    // PRE_PIVOT/TERMINAL_PIVOT specifically -- retired to a no-op. The
+    // outer heading PD cascade (M3, tick()'s pivot branch) is now the
+    // continuous corrector for nominal tracking lag; leaving this branch
+    // live would re-solve the Ruckig plan out from under the PD loop's own
+    // correction (a double-correction hazard). The gross-divergence branch
+    // above is UNCHANGED and stays live -- a genuinely stalled/bogged wheel
+    // is not something omega's gain alone can fix if the wheel-level
+    // PID/motor cannot achieve it, so re-anchoring the plan to reality
+    // stays as a safety measure.
+    return;
   }
   rotationalSolveMs_ = now;
 }
@@ -734,6 +778,12 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
   float v = 0.0f;
   float omega = 0.0f;
   bool rotElapsedPastDuration = false;
+  // M3/M4: PRE_PIVOT/TERMINAL_PIVOT's measured heading/rate this tick --
+  // populated by the pivot branch below, read again further down by the
+  // tolerance/dwell completion gate (both need the identical quantities).
+  // Unused (left at 0) for TRANSLATE/BLEND.
+  float thetaMeasured = 0.0f;
+  float omegaMeasured = 0.0f;
 
   if (phase_ == Phase::TRANSLATE) {
     if (!stopping_) maybeReplanTranslate(now, encLeft, encRight);
@@ -754,10 +804,33 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
       if (linearElapsed(now) >= linear_.duration()) v = 0.0f;
     }
   } else {
+    // PRE_PIVOT / TERMINAL_PIVOT.
     if (!stopping_) maybeReplanPivot(now, encLeft, encRight);
     float rotElapsed = rotationalElapsed(now);
-    omega = rotational_.sample(rotElapsed).velocity;
+    Motion::JerkTrajectory::State desired = rotational_.sample(rotElapsed);
     rotElapsedPastDuration = rotElapsed >= rotational_.duration();
+    if (stopping_) {
+      // Riding the terminal graceful decel's own tail, UNCORRECTED -- the
+      // outer heading PD cascade (M3, below) is gated to !stopping_, the
+      // same terminal-reversal safety boundary maybeReplanPivot()'s own
+      // `if (!stopping_)` guard above already respects: once the graceful
+      // decel-to-zero is armed there is no longer a moving target to track
+      // against, and a PD term nulling residual error here is exactly the
+      // "small terminal correction that could ask for a brief reversal"
+      // architecture-update.md's Risks section warns against.
+      omega = desired.velocity;
+    } else {
+      // M3: outer heading PD cascade (architecture-update.md) -- corrects
+      // the Ruckig plan's own desired rate against MEASURED heading/rate
+      // before it reaches the (unchanged) inner wheel-velocity loop,
+      // replacing the raw plan-velocity passthrough this branch used to
+      // emit unconditionally. Kp=Kd=0 (an unmigrated robot's PlannerConfig)
+      // degenerates this to exactly that old open-loop passthrough.
+      measuredHeading(encLeft, encRight, desired.position, desired.velocity, &thetaMeasured,
+                      &omegaMeasured);
+      omega = desired.velocity + config_.heading_kp * (desired.position - thetaMeasured) +
+              config_.heading_kd * (desired.velocity - omegaMeasured);
+    }
     // Snap to a LITERAL 0.0f once the STOP-TRIGGERED decel-to-zero has fully
     // converged (only while stopping_) -- ported VERBATIM rationale from
     // Subsystems::Planner::tick() (planner.cpp:964-966): Ruckig's own
@@ -767,9 +840,10 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
     // (spAbs <= minDuty) -- the integrator-freeze fix never engages for a
     // target that never reaches a literal 0.0f, producing a sustained,
     // slowly-decaying reverse-spin residual. NOT applied to the ongoing
-    // (not-yet-stopping_) position-control solve, where the divergence
-    // replan is supposed to keep re-extending the plan against a lagging
-    // real plant -- forcing a hard 0 there would fight it.
+    // (not-yet-stopping_) position-control solve, where the PD cascade (and,
+    // for stall protection, the divergence replan) is supposed to keep
+    // correcting against a lagging real plant -- forcing a hard 0 there
+    // would fight it.
     if (stopping_ && rotElapsedPastDuration) omega = 0.0f;
   }
 
@@ -870,12 +944,34 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
         bool rotDone = rotational_.duration() <= 0.0f ||
                        rotationalElapsed(now) >= rotational_.duration() + kDeadTime;
         fired = linDone && rotDone;
-      } else {
-        float elapsed = (phase_ == Phase::TRANSLATE) ? linearElapsed(now)
-                                                      : rotationalElapsed(now);
-        float duration = (phase_ == Phase::TRANSLATE) ? linear_.duration()
-                                                       : rotational_.duration();
+      } else if (phase_ == Phase::TRANSLATE) {
+        float elapsed = linearElapsed(now);
+        float duration = linear_.duration();
         if (duration > 0.0f && elapsed >= duration + kDeadTime) fired = true;
+      } else {
+        // PRE_PIVOT / TERMINAL_PIVOT (M4): tolerance+dwell completion gate
+        // -- replaces the dead-time-projected STOP_ROTATION firing + plan-
+        // exhaustion fallback this branch used for these two phases before
+        // this ticket (architecture-update.md M4). STOP_TIME (evaluated
+        // above, in the stops_[] loop) remains the ONLY other completion
+        // path for these two phases -- the independent stall/non-
+        // convergence backstop this gate does not replace. thetaMeasured/
+        // omegaMeasured were computed by the pivot v/omega branch above,
+        // earlier this SAME tick() call.
+        bool withinTol = fabsf(rotationalTarget_ - thetaMeasured) < kHeadingTol &&
+                         fabsf(omegaMeasured) < kHeadingRateTol;
+        if (withinTol) {
+          if (!headingDwellActive_) {
+            headingDwellActive_ = true;
+            headingDwellStartMs_ = now;
+          }
+          if (static_cast<int32_t>(now - headingDwellStartMs_) >=
+              static_cast<int32_t>(kHeadingDwellMs)) {
+            fired = true;
+          }
+        } else {
+          headingDwellActive_ = false;
+        }
       }
     }
     if (fired) {
