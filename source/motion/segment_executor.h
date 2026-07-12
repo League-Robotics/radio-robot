@@ -305,7 +305,14 @@ class SegmentExecutor {
   static constexpr float kDivergenceThreshold = 5.0f;        // [mm]
   static constexpr float kGrossDivergenceThreshold = 40.0f;  // [mm]
   static constexpr uint32_t kMinReplanInterval = 60;         // [ms] shared, linear+rotational
-  static constexpr float kRotDivergenceThreshold = 0.10f;      // [rad]
+  // ROTATION threshold raised 0.10 -> 0.22 (2026-07-11, second pass): at
+  // the 6 rad/s yaw ceiling ONE loop pass of per-wheel sampling jitter is
+  // ~0.15 rad of apparent divergence -- 0.10 sat below that floor, so long
+  // ceiling-speed cruises (360 deg pivots; 90/180 barely dwell there)
+  // accumulated shrink-retargets ~25-30 deg short while short pivots were
+  // fine. A genuinely stalled wheel accrues ~0.15 rad EVERY pass, so 0.22
+  // still trips within ~2 passes.
+  static constexpr float kRotDivergenceThreshold = 0.22f;      // [rad]
   static constexpr float kRotGrossDivergenceThreshold = 0.3f;  // [rad]
 
   bool stopping_ = false;         // true during the trailing graceful decel-to-zero

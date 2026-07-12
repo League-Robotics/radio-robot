@@ -168,3 +168,54 @@ stakeholder-verified; do not revisit), the control answer is the same:
 retune feedback-dominant (kp/ki up until the loop regulates to setpoint,
 FF deliberately conservative), acceptance = motion_control.ipynb (flat
 tops at the setpoint, overshoot < ~10%), then re-score the turn notebook.
+
+## Iterations 6-8 (2026-07-11 evening): the velocity loop, designed from the measured plant
+
+Following the motion_control.ipynb verdict, the loop was redesigned from a
+proper open-loop plant identification (pure-FF build: kp=ki=kaw=0,
+kff=0.002, so commanded velocity IS scaled duty; steady holds, fresh-
+sample tail means):
+
+**The plant is linear and steady** -- L ~756 mm/s per unit duty (+8
+offset), R ~721 (-12), sd 2-4 mm/s across every hold, symmetric in
+reverse. (Earlier "varying plateau" readings were measurement-window
+artifacts, nothing else.)
+
+Designed gains (tovez.json, kaw newly plumbed through gen_boot_config):
+kff = 1/740, kp = 0.0018 (loop gain ~1.3 vs ~120ms loop lag), ki = 0.008
+(tau_I 0.22s), kaw = 15 (back-calculation anti-windup -- the +50% step
+overshoots were the integrator winding up during the ~100ms reversal
+dwell with kaw=0; a first try at kp=0.004 rang at ~4Hz and was backed
+off). motion_control.ipynb acceptance: holds within +/-3% (sd 6), step
+overshoot 1.3%/-0.6%, monotonic rise.
+
+Final knob: kRotDivergenceThreshold 0.10 -> 0.22 rad -- at the 6 rad/s
+yaw ceiling ONE loop pass of sampling jitter is ~0.15 rad of apparent
+divergence, so long ceiling-speed cruises (360 pivots) shrink-retargeted
+~25-30 deg short while 90/180 (which barely dwell at ceiling) were fine.
+A stalled wheel accrues ~0.15 rad EVERY pass, so stall protection still
+trips within ~2 passes.
+
+**Final turn scores (bench vs target):**
+
+| turn | session start | final |
+|---|---|---|
+| 90  | -11.2 | +6.2 |
+| 180 | -20.4 | +6.7 |
+| 360 | -27.5 | **-2.7** |
+
+Remaining (small): a consistent +5..+7 deg on short/mid pivots (low-duty
+map offset region; candidate trims: kff 0.00135 -> ~0.0013, or accept),
+and hump counts of 2-3 on bench (vs sim 1) whose metric may partly count
+sampling texture -- verify against the speed-panel shape before acting.
+
+## Also discovered (needs its own issue/decision)
+
+Runtime config application is UNWIRED on real firmware: binary SET
+(config arm) acks and posts to bb.configIn, but main.cpp deliberately has
+no Configurator draining it (093/094 removed runtime config authority;
+096 built the binary arm expecting a future consumer). Consequence: the
+TestGUI's connect-time calibration pushes ACK BUT DO NOTHING on hardware,
+and live gain tuning is impossible (every iteration above required a
+reflash). Wiring the Configurator into the real loop would make SET real
+and cut bench-tuning cycles from ~5 min to seconds.
