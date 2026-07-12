@@ -17,9 +17,14 @@ flag set) still replies `Error{ERR_UNIMPLEMENTED, field=7}` -- ticket
 
 Covers ticket 099-004's own sim acceptance criterion:
   - `reset=true` re-anchors `pose=` to the commanded x/y/h.
-  - `zero_encoders=true` alone does not move `pose=` (or `otos=`, which
-    stays absent from TLM either way -- `bb.otosPresent` is a later
-    ticket's job to seed).
+  - `zero_encoders=true` alone does not move `pose=` or `otos=` -- the two
+    are independent pipelines (`PoseEstimator`'s own encoder-delta baseline
+    vs. the odometer's own ground-truth sample). `otos=`/`otosconn=` are
+    live and present in sim as of ticket 099-002 (`bb.otosPresent` is now
+    seeded `true` at boot -- `Hal::SimOdometer` has no physical chip to
+    ever fail to detect, so `Hal::Odometer::present()`'s convenience
+    default applies unmodified); before 099-002, `bb.otosPresent` was never
+    seeded at all and `otos=` stayed permanently absent from TLM.
   - Both flags set in one message: both branches run (`pose=` re-anchors to
     the commanded x/y/h; the encoder-delta baseline also resyncs, verified
     indirectly by confirming the request is accepted with a single `OK`).
@@ -79,8 +84,14 @@ def test_pose_fix_reset_reanchors_pose(sim):
 def test_pose_fix_zero_encoders_does_not_move_pose_or_otos(sim):
     """zero_encoders=true (ZERO-equivalent) resyncs the encoder-delta
     baseline only -- pose= (the believed/fused pose) must NOT jump, and
-    otos= must stay exactly as absent/present as it was before (this ticket
-    never seeds bb.otosPresent, so it stays absent either way)."""
+    otos= (the odometer's own independently-sampled ground-truth pose,
+    committed every pass by Rt::MainLoop::commit() since ticket 099-002)
+    must be completely unaffected by this command either way -- it is a
+    different pipeline, not merely "absent" (099-002 seeds bb.otosPresent
+    true at boot in sim -- Hal::SimOdometer has no physical chip to ever
+    fail to detect -- so otos=/otosconn= are live in TLM from this ticket
+    onward, unlike before it, when bb.otosPresent was never seeded at all
+    and these fields stayed permanently absent)."""
     # Re-anchor to a known, nonzero pose first so "does not move" is a real
     # proof, not a trivial zero-stays-zero check.
     reply = _pose_fix(sim, 10, reset=True, x=150.0, y=60.0, h=0.2)
@@ -90,6 +101,8 @@ def test_pose_fix_zero_encoders_does_not_move_pose_or_otos(sim):
     assert before.pose.x == pytest.approx(150.0, abs=0.5)
     assert before.pose.y == pytest.approx(60.0, abs=0.5)
     assert before.pose.h == pytest.approx(0.2, abs=1e-3)
+    assert before.has_otos == True  # noqa: E712 -- explicit tri-state check
+    assert before.otos_connected == True  # noqa: E712
 
     reply = _pose_fix(sim, 11, zero_encoders=True)
     assert reply.WhichOneof("body") == "ok"
@@ -99,7 +112,14 @@ def test_pose_fix_zero_encoders_does_not_move_pose_or_otos(sim):
     assert after.pose.x == pytest.approx(before.pose.x, abs=1e-3)
     assert after.pose.y == pytest.approx(before.pose.y, abs=1e-3)
     assert after.pose.h == pytest.approx(before.pose.h, abs=1e-3)
-    assert after.has_otos == before.has_otos == False  # noqa: E712 -- explicit tri-state check
+    # otos= tracks the SimOdometer's own ground-truth ODOMETER sample -- a
+    # pipeline entirely independent of PoseEstimator's encoder-delta
+    # baseline reset, so it must be unaffected by zero_encoders too.
+    assert after.has_otos == before.has_otos == True  # noqa: E712 -- explicit tri-state check
+    assert after.otos_connected == before.otos_connected == True  # noqa: E712
+    assert after.otos.x == pytest.approx(before.otos.x, abs=1e-3)
+    assert after.otos.y == pytest.approx(before.otos.y, abs=1e-3)
+    assert after.otos.h == pytest.approx(before.otos.h, abs=1e-3)
 
 
 def test_pose_fix_both_flags_set_both_branches_run(sim):

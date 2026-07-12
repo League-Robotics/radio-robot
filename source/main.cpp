@@ -166,6 +166,18 @@ int hardware_main() {
     // above, mirroring Configurator::applyOne()'s own "bb.drivetrainConfig =
     // drivetrainConfig_;" publish.
     bb.drivetrainConfig = dtConfig;
+    // 099-002 (architecture-update-r1.md Decision 2): bb.otosPresent is a
+    // boot-time, never-changing hardware-identity fact (blackboard.h's own
+    // comment on this field) -- seeded ONCE here, right after `hardware`
+    // above was begin()'d (the earliest point in this function `bb` exists
+    // to seed; nothing else touches otosPresent between hardware.begin()
+    // and this line). Uses present() (permanent, initialized_-backed), NOT
+    // connected() (live, re-evaluated every tick()) -- see
+    // OtosOdometer::present()'s own doc comment and architecture-update-r1.md
+    // Decision 2 for why the two are not interchangeable here even though
+    // they read the same value at this exact boot moment (no tick() has run
+    // yet).
+    bb.otosPresent = hardware.odometer()->present();
     // 098-005/M7: the Configurator's own boot-time publish (configurator.h:
     // "seeds all four bb.*Config cells... boot-time use, before the loop
     // starts") -- fills in bb.motorConfig[]/bb.plannerConfig/bb.odometerConfig

@@ -37,6 +37,25 @@ class Odometer {
   virtual msg::PoseEstimate pose() const = 0;
   virtual bool connected() const = 0;
 
+  // present() (099-002, architecture-update-r1.md Decision 2): true once a
+  // chip/device was ever detected as physically present at boot --
+  // permanent for the life of the object, unlike connected()'s live,
+  // re-evaluated-every-tick() bus health. A CALLER deciding whether to
+  // schedule this leaf a bus slot at all (Subsystems::NezhaHardware::
+  // tick()'s scheduled-slot branch) or seeding a boot-time diagnostic
+  // (bb.otosPresent, source/main.cpp / tests/_infra/sim/sim_api.cpp) wants
+  // THIS query, never connected() -- see Hal::OtosOdometer::present()'s own
+  // doc comment (otos_odometer.h) for the full contract and the regression
+  // this distinction fixes. Virtual with a convenience default of `true`
+  // (mirrors begin()'s own "no caller needs polymorphic X semantics for
+  // every hypothetical owner this sprint" default, above): Hal::OtosOdometer
+  // is the only leaf with a real boot-time detection step to report here
+  // and overrides this with its own initialized_-backed logic;
+  // Hal::SimOdometer has no physical chip to ever fail to detect (the same
+  // rationale as its own hardcoded connected()==true) and is content with
+  // this base default, needing no sim-side file change of its own.
+  virtual bool present() const { return true; }
+
   virtual void tick(uint32_t now) = 0;   // [ms]
 
   // --- Primitive setters (084-008) — one per OdometerCommand action /

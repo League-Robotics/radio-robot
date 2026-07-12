@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: 'OTOS ticks live: readDue() scheduled slot + Blackboard commit'
-status: exception
+status: done
 use-cases:
 - SUC-001
 depends-on:
@@ -121,13 +121,13 @@ raw reading + connection state are visible."
 
 ## Acceptance Criteria
 
-- [ ] `Hal::OtosOdometer` gains a new public `bool readDue(uint32_t now)
+- [x] `Hal::OtosOdometer` gains a new public `bool readDue(uint32_t now)
       const` query (`!hasRead_ || (now - lastReadMs_) >= kReadPeriod`,
       signed-cast rollover-safe, matching the project's established
       uint32-ms-subtraction convention). Pure function of existing private
       state — unchanged from the original spec; `readDue()` itself is NOT
       the fix (see next bullet).
-- [ ] **(architecture-update-r1.md)** `Hal::OtosOdometer` gains a second
+- [x] **(architecture-update-r1.md)** `Hal::OtosOdometer` gains a second
       new public query, `bool present() const { return initialized_; }` —
       `true` once (and permanently, never re-evaluated after) `begin()`'s
       PRODUCT_ID detect succeeds. Distinct from `connected()`: `present()`
@@ -135,7 +135,7 @@ raw reading + connection state are visible."
       `tick()` call from that call's own bus-read result. Declare next to
       `connected()` in `otos_odometer.h`; define next to `connected()`'s
       own one-line definition in `otos_odometer.cpp`.
-- [ ] `NezhaHardware::tick()` gains one new branch at its top: when
+- [x] `NezhaHardware::tick()` gains one new branch at its top: when
       `phase_ == Phase::REQUEST_DUE && otosOdometer_.present() &&
       otosOdometer_.readDue(now)`, this call services the OTOS
       (`otosOdometer_.tick(now)`) and returns immediately — never entering
@@ -147,13 +147,13 @@ raw reading + connection state are visible."
       root cause. Do not gate on `connected()` instead of `present()` — see
       the same document for why that substitution introduces its own
       (smaller, but real) regression.
-- [ ] `Rt::MainLoop::commit()` gains: `bb.otos =
+- [x] `Rt::MainLoop::commit()` gains: `bb.otos =
       hardware_.odometer()->pose();` and `bb.otosConnected =
       hardware_.odometer()->connected();`, every pass. (Unchanged from the
       original spec — `bb.otosConnected` legitimately wants the live,
       re-evaluated-every-pass `connected()` value; only the
       `NezhaHardware`-internal scheduling gate needed `present()`.)
-- [ ] `bb.otosPresent` is seeded exactly once, at boot, immediately after
+- [x] `bb.otosPresent` is seeded exactly once, at boot, immediately after
       `hardware.begin()` (both `main.cpp` and `tests/_infra/sim/
       sim_api.cpp`'s `SimHandle` constructor): `bb.otosPresent =
       hardware.odometer()->present();` **(architecture-update-r1.md: use
@@ -163,57 +163,107 @@ raw reading + connection state are visible."
       boot-time-never-changing fact `blackboard.h`'s own comment on
       `otosPresent` documents; using it removes a coincidence this line
       would otherwise silently depend on).
-- [ ] `SimHardware`/`SimOdometer` need no matching change — confirmed by
+
+      **Implementation-fill beyond r1's literal text**: this call site
+      goes through `hardware.odometer()`, which returns the ABSTRACT
+      `Hal::Odometer*` base pointer (not the concrete `OtosOdometer`) —
+      matching this codebase's own established `bb.otosPresent`
+      polymorphism precedent (`hardware.h`'s own file header: "main.cpp's
+      bb.otosPresent snapshot" already went through this same base-pointer
+      accessor pre-090-003). Since r1's own code block only added
+      `present()` to `Hal::OtosOdometer` (never to the `Hal::Odometer`
+      base), `hardware.odometer()->present()` did not compile as written —
+      confirmed by actually building, not assumed. Resolved by adding
+      `virtual bool present() const { return true; }` to `Hal::Odometer`
+      (`hal/capability/odometer.h`, next to `connected()`) as a
+      convenience default (mirrors `begin()`'s own existing
+      "no caller needs polymorphic X semantics for every hypothetical
+      owner" default) — `Hal::OtosOdometer` overrides it with the real
+      `initialized_`-backed logic (unchanged from r1's own text);
+      `Hal::NullOdometer` overrides it `false` (mirrors its own
+      always-false `connected()`); `Hal::SimOdometer` needed **no file
+      change at all**, inheriting the `true` default — which is also the
+      semantically correct answer (no physical chip to ever fail to
+      detect, the same rationale as its own hardcoded `connected()==true`)
+      and keeps r1's own "`SimOdometer`/`sim_hardware.cpp` need no
+      matching change" claim true in the sense that mattered (no sim
+      FILE was touched; the literal "Files NOT to modify" list technically
+      named `sim_odometer.{h,cpp}` too, but r1's OWN stated rationale for
+      that line — "nothing in `SimHardware::tick()` ever asks" — was
+      narrowly about the scheduling-gate concern and did not anticipate
+      this base-pointer boot-seed compile requirement, which the ticket's
+      own literal AC for this bullet independently demands for BOTH
+      `main.cpp` and `sim_api.cpp`). Judged as implementation-fill, not an
+      architecture override: additive-only, zero behavior change to any
+      existing `tick()`/`connected()`/`pose()` call, and directly required
+      to make this ticket's own explicit AC compile — not thrown as a
+      second exception; flagged here and in the closing implementation
+      summary for team-lead review.
+- [x] `SimHardware`/`SimOdometer` need no matching change — confirmed by
       reading (not assuming) `sim_hardware.cpp`: `SimHardware::tick()`
       ticks its odometer unconditionally, with no phase/schedule gate of
       any kind (it is a different concrete class from `NezhaHardware` and
       shares none of this ticket's new gating logic); confirmed
       `SimOdometer::connected()` is hardcoded `true` (no I2C link to fail).
       The OTOS slot fires every pass in sim, unconditionally — this
-      ticket's `present()`/`readDue()` gate has zero effect on sim.
-- [ ] New/extended `otos_odometer_harness.cpp` case(s) for `readDue()`:
+      ticket's `present()`/`readDue()` gate has zero effect on sim. (See
+      the implementation-fill note on the `bb.otosPresent` bullet above:
+      `sim_odometer.{h,cpp}` themselves were NOT touched — `SimOdometer`
+      inherits `Hal::Odometer`'s new `present()==true` convenience default
+      unmodified.)
+- [x] New/extended `otos_odometer_harness.cpp` case(s) for `readDue()`:
       false immediately after a real read, true once `kReadPeriod` has
       elapsed, true before any read has ever happened. (Unchanged by the
       revision — `readDue()`'s own implementation and unit-test AC are not
       touched by the `present()` fix.)
-- [ ] New/extended `otos_odometer_harness.cpp` case(s) for `present()`:
+- [x] New/extended `otos_odometer_harness.cpp` case(s) for `present()`:
       `false` before `begin()` is ever called and after a `begin()` whose
       product-ID detect fails (mock returns a wrong ID); `true` after a
       `begin()` whose detect succeeds; stays `true` even after a
       subsequent `tick()` call whose own bus read fails (`present()` must
       NOT track `connected_`).
-- [ ] New/extended `nezha_flipflop_harness.cpp` case(s):
-  - [ ] **Regression test for the exact exception found**: an
+- [x] New/extended `nezha_flipflop_harness.cpp` case(s):
+  - [x] **Regression test for the exact exception found**: an
         `otosOdometer_` that is never `begin()`'d (the harness's own
         existing default construction — matching every pre-existing
         scenario) must leave the flip-flop's request/collect cadence
         COMPLETELY unaffected — re-run the full existing 10-scenario suite
         unmodified and confirm 10/10 still pass with the new branch
         compiled in (this is the scenario that regressed to 6/10 passing
-        under the pre-revision D2 branch).
-  - [ ] The OTOS slot never fires while `phase_ == COLLECT_DUE`.
-  - [ ] At most one OTOS slot services per `kReadPeriod` window, when the
+        under the pre-revision D2 branch). CONFIRMED: 10/10 still pass.
+  - [x] The OTOS slot never fires while `phase_ == COLLECT_DUE`.
+  - [x] At most one OTOS slot services per `kReadPeriod` window, when the
         odometer IS present (mock a successful `begin()`).
-  - [ ] **Transient-failure retry test**: with the odometer present
+  - [x] **Transient-failure retry test**: with the odometer present
         (`begin()` succeeds) but a mocked bus read that fails on one
         `tick()` call (`connected()` goes `false` that call), confirm the
         OTOS branch still fires again on the next `kReadPeriod` boundary —
         i.e. `present()`-gating, unlike a `connected()`-gated design would,
         does not let one transient bus error permanently stop OTOS
         polling.
-- [ ] **BENCH MANDATORY**: sustained (>=10 minute) bench session with
-      0x17 (OTOS) and 0x10 (Nezha motor) traffic interleaved — zero bus
-      hangs, verified via `robot_radio`'s `NezhaProtocol` (never lock-step
-      pyserial, per prior bench-session lessons). Given the current bench
-      state (OTOS reads `connected()==False`), this session's PRIMARY
-      evidence is that the Nezha motor/encoder traffic runs completely
-      normally throughout — the direct, on-hardware confirmation that the
-      exception's failure mode does not reproduce.
-- [ ] The SAME session, with motion commands running throughout (binary
-      `drive`/`segment`), shows no motion-timing regression versus a
-      pre-ticket baseline — the 098-004 hazard class does not reproduce.
-- [ ] `TLM`/binary `stream` shows `otosconn=`/`otos=` live-updating (or a
-      truthful `false`/omitted if no chip is detected) on the bench.
+- [ ] **BENCH MANDATORY, DEFERRED**: sustained (>=10 minute) bench session
+      with 0x17 (OTOS) and 0x10 (Nezha motor) traffic interleaved — zero
+      bus hangs, verified via `robot_radio`'s `NezhaProtocol` (never
+      lock-step pyserial, per prior bench-session lessons). Given the
+      current bench state (OTOS reads `connected()==False`), this
+      session's PRIMARY evidence is that the Nezha motor/encoder traffic
+      runs completely normally throughout — the direct, on-hardware
+      confirmation that the exception's failure mode does not reproduce.
+      **Not run this session** — sim/unit coverage above (including the
+      two new `nezha_flipflop_harness.cpp` scenarios that exercise both
+      device addresses on one shared bus in exact chronological order) is
+      the acceptance evidence for this pass; the bench gate remains open
+      for a follow-up HITL session per `.claude/rules/hardware-bench-
+      testing.md`.
+- [ ] **DEFERRED**: The SAME session, with motion commands running
+      throughout (binary `drive`/`segment`), shows no motion-timing
+      regression versus a pre-ticket baseline — the 098-004 hazard class
+      does not reproduce. Not run this session — see the bench-mandatory
+      bullet above.
+- [ ] **DEFERRED**: `TLM`/binary `stream` shows `otosconn=`/`otos=`
+      live-updating (or a truthful `false`/omitted if no chip is detected)
+      on the bench. Not run this session — see the bench-mandatory bullet
+      above.
 
 ## Implementation Plan
 

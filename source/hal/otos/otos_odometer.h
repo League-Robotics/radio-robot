@@ -168,6 +168,41 @@ class OtosOdometer : public Odometer {
   // burst without error.
   bool connected() const override;
 
+  // True once (and permanently, never re-evaluated after) begin()'s
+  // PRODUCT_ID detect succeeded -- unlike connected() above, which is
+  // re-evaluated every tick() call from that call's own bus-read result and
+  // can go false from a single transient bus glitch. present() answers "was
+  // a chip ever detected at this address at all" -- the fact a CALLER
+  // deciding whether to schedule this leaf a bus slot at all needs
+  // (Subsystems::NezhaHardware::tick()'s scheduled-slot branch), never
+  // "is the chip healthy right now" (connected()'s own job). See
+  // clasi/sprints/099-restore-pose-estimation-otos-encoders-and-delayed-
+  // camera-fixes/architecture-update-r1.md Decision 2 for the regression
+  // this distinction fixes: gating a caller's scheduling decision on
+  // connected() instead would let one transient I2C read failure on an
+  // otherwise-healthy chip permanently stop it from ever being scheduled
+  // again (only tick() ever re-evaluates connected_, and gating the CALL to
+  // tick() on connected() would mean tick() is never called again to
+  // recover it).
+  bool present() const override;
+
+  // True if a real bus read is due: either no real read has ever happened
+  // (hasRead_ false, e.g. before begin(), or before begin()'s successful
+  // detect on a chip that was never begin()'d/never detected -- present()
+  // stays false forever in that case too, so a CALLER should always check
+  // present() before readDue(), never readDue() alone -- see
+  // Subsystems::NezhaHardware::tick()'s own call site), or at least
+  // kReadPeriod has elapsed since the last real read (signed-cast
+  // rollover-safe, matching this project's established uint32-ms-
+  // subtraction convention -- e.g. motion/segment_executor.cpp's own
+  // `static_cast<int32_t>(now - deadline)` idiom). A pure function of this
+  // leaf's own existing hasRead_/lastReadMs_ fields (tick()'s own rate-limit
+  // bookkeeping, otos_odometer.h's private section below) -- no new state,
+  // and deliberately NOT itself gated on present()/initialized_ (that is
+  // the caller's own, separate conjunct -- see present()'s own comment
+  // above for why the two concerns stay independent). now: [ms].
+  bool readDue(uint32_t now) const;
+
   // Burst-reads POSITION_XL and VELOCITY_XL TOGETHER in a single 12-byte I2C
   // read (086-007 — see readPositionVelocity()'s own comment: the two
   // registers are contiguous, so one read replaces the former two), applies

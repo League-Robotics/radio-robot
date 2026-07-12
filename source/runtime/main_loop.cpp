@@ -25,6 +25,20 @@ void MainLoop::commit(Blackboard& bb, uint32_t now) {
   bb.fusedPose = poseEstimator_.fusedPose();
   bb.poseStepped = poseEstimator_.lastPoseStep();
 
+  // bb.otos/bb.otosConnected (099-002): the raw OTOS reading + live bus
+  // health, committed every pass regardless of whether PoseEstimator is
+  // fusing it yet (that gate is bb.otosValid/fusableThisPass(), ticket
+  // 007's job) -- hardware_.odometer() never returns null (Subsystems::
+  // Hardware's own file header). connected() is deliberately the LIVE,
+  // re-evaluated-every-tick() flag here (unlike NezhaHardware::tick()'s own
+  // scheduling gate, which needed the permanent present() instead -- see
+  // architecture-update-r1.md Decision 2): bb.otosConnected is a per-pass
+  // telemetry/diagnostic read, not a scheduling decision, so it should
+  // track the chip's actual live bus health, not just "was one ever
+  // detected."
+  bb.otos = hardware_.odometer()->pose();
+  bb.otosConnected = hardware_.odometer()->connected();
+
   // bodyState (099-004, architecture-update.md Addition 2): pose from the
   // SAME bb.fusedPose just committed above; twist via BodyKinematics::
   // forward() on the bound pair's DIRECTLY-read wheel velocities (bb.motors[]

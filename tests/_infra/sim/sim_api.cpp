@@ -277,6 +277,14 @@ SimHandle::SimHandle()
     // Primes all four ports' encoders — parity with main.cpp's
     // hardware.begin() call, before the Drivetrain is configured.
     hardware.begin();
+    // 099-002 (architecture-update-r1.md Decision 2): bb.otosPresent is a
+    // boot-time, never-changing hardware-identity fact (blackboard.h's own
+    // comment on this field) -- seeded ONCE here, immediately after
+    // hardware.begin() above, mirroring main.cpp's own identical seed line.
+    // Hal::Odometer::present() defaults `true` for any leaf with no real
+    // boot-time detection step of its own (Hal::SimHardware's
+    // Hal::SimOdometer, here) -- see odometer.h's own doc comment.
+    bb.otosPresent = hardware.odometer()->present();
 
     msg::DrivetrainConfig dtConfig = defaultSimDrivetrainConfig();
     drivetrain.configure(dtConfig);

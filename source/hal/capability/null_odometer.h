@@ -49,6 +49,13 @@ class NullOdometer : public Odometer {
  public:
   msg::PoseEstimate pose() const override { return msg::PoseEstimate(); }
   bool connected() const override { return false; }
+  // 099-002: mirrors connected()'s own always-false -- there is no device
+  // at all, so nothing was ever detected present either. Not reachable by
+  // any currently-constructed owner (this class's own file header) --
+  // overridden here anyway, rather than left to Hal::Odometer's `true`
+  // convenience default, for the same "every primitive is an inert no-op"
+  // completeness this class's header already promises.
+  bool present() const override { return false; }
 
   void tick(uint32_t now) override { (void)now; }   // [ms] no device to sample
 
