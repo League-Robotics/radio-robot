@@ -49,6 +49,16 @@
 //     wire_codec_harness.cpp (095-005) scenario's job, not this ticket's.
 //     -> "B64 <base64 bytes>" or "ZERO".
 //
+//   encode_helptext <corr_id> <text>
+//     Stakeholder-directed 6-verb minimal command surface (2026-07-10):
+//     builds ReplyEnvelope{helptext=HelpText{text}} -- HELP's reply. `text`
+//     must be a whitespace-free token (argv splitting), same constraint
+//     encode_id's model/name/fw_version args already have.
+//     -> "B64 <base64 bytes>" or "ZERO". `decode`'s CmdKind switch also
+//     covers the new hello/ver/help REQUEST arms (zero-field, same
+//     "nothing arm-specific to print" bucket as stop/ping/id) -- no new
+//     decode verb needed, only new CmdKind enumerators in the existing one.
+//
 //   -- 096-006 additions below: Telemetry/ConfigSnapshot are reply-only
 //      messages (never decoded by firmware -- neither appears in
 //      CommandEnvelope.cmd), so their differential coverage is encode-only
@@ -192,6 +202,11 @@ const char* cmdKindName(msg::CommandEnvelope::CmdKind k) {
     case msg::CommandEnvelope::CmdKind::STREAM: return "STREAM";
     case msg::CommandEnvelope::CmdKind::STOP: return "STOP";
     case msg::CommandEnvelope::CmdKind::ID: return "ID";
+    // hello/ver/help (stakeholder-directed 6-verb minimal command surface,
+    // 2026-07-10).
+    case msg::CommandEnvelope::CmdKind::HELLO: return "HELLO";
+    case msg::CommandEnvelope::CmdKind::VER: return "VER";
+    case msg::CommandEnvelope::CmdKind::HELP: return "HELP";
   }
   return "UNKNOWN";
 }
@@ -357,14 +372,19 @@ int cmdDecode(const std::string& b64) {
     case msg::CommandEnvelope::CmdKind::OTOS:
     case msg::CommandEnvelope::CmdKind::GET:
     case msg::CommandEnvelope::CmdKind::STREAM:
+    case msg::CommandEnvelope::CmdKind::HELLO:
+    case msg::CommandEnvelope::CmdKind::VER:
+    case msg::CommandEnvelope::CmdKind::HELP:
     case msg::CommandEnvelope::CmdKind::NONE:
       // No arm-specific fields to print: zero-field arms (stop/ping/id
-      // request) and declared-only arms outside this sprint's implemented
-      // scope (pose/otos land 098; get/stream have their OWN sim-level
-      // behavioral coverage in test_binary_channel.py, ticket 006's own
-      // instruction -- they carry no (min)/(max)/(abs_max)-validated
-      // fields of their own beyond ConfigGet.target's (req), already
-      // exercised by 095's wire_codec_harness.cpp).
+      // request, and hello/ver/help -- stakeholder-directed 6-verb minimal
+      // command surface, 2026-07-10, same "cannot be malformed" shape) and
+      // declared-only arms outside this sprint's implemented scope (pose/
+      // otos land 098; get/stream have their OWN sim-level behavioral
+      // coverage in test_binary_channel.py, ticket 006's own instruction --
+      // they carry no (min)/(max)/(abs_max)-validated fields of their own
+      // beyond ConfigGet.target's (req), already exercised by 095's
+      // wire_codec_harness.cpp).
       break;
   }
   std::printf("\n");
@@ -454,6 +474,23 @@ int cmdEncodeEchoReply(int argc, char** argv) {
   reply.body_kind = msg::ReplyEnvelope::BodyKind::ECHO;
   reply.body.echo.payload_count = static_cast<uint8_t>(
       fromHex(argv[3], reply.body.echo.payload_, sizeof(reply.body.echo.payload_)));
+  printEncodedOrZero(reply);
+  return 0;
+}
+
+// encode_helptext -- stakeholder-directed 6-verb minimal command surface
+// (2026-07-10): ReplyEnvelope{helptext=HelpText{text}} -- HELP's reply,
+// same "one leaf string field" shape encode_id's model/name/fw_version
+// args already exercise, just a single positional token this time.
+int cmdEncodeHelpText(int argc, char** argv) {
+  if (argc < 4) {
+    std::printf("USAGE_ERROR\n");
+    return 1;
+  }
+  msg::ReplyEnvelope reply;
+  reply.corr_id = static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10));
+  reply.body_kind = msg::ReplyEnvelope::BodyKind::HELPTEXT;
+  std::strncpy(reply.body.helptext.text, argv[3], sizeof(reply.body.helptext.text) - 1);
   printEncodedOrZero(reply);
   return 0;
 }
@@ -611,6 +648,7 @@ int main(int argc, char** argv) {
   if (op == "encode_err") return cmdEncodeErr(argc, argv);
   if (op == "encode_id") return cmdEncodeId(argc, argv);
   if (op == "encode_echo_reply") return cmdEncodeEchoReply(argc, argv);
+  if (op == "encode_helptext") return cmdEncodeHelpText(argc, argv);
   if (op == "encode_telemetry") return cmdEncodeTelemetry(argc, argv);
   if (op == "encode_cfg_drivetrain") return cmdEncodeCfgDrivetrain(argc, argv);
   if (op == "encode_cfg_motor") return cmdEncodeCfgMotor(argc, argv);

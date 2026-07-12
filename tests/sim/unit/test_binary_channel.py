@@ -24,6 +24,11 @@ Covers every one of ticket 007's acceptance criteria:
   - `config`/`get` (096-004) apply/read `Rt::ConfigDelta`/`bb.*Config`.
   - `stream` (096-005) sets `bb.telemetryPeriod`/`telemetryChannel`/
     `telemetryBinary`, wiring into `tickTelemetry()`'s periodic emission.
+    097-008 (Decision 9, pure-binary firmware) deletes text STREAM/SNAP and
+    `tickTelemetry()`'s text-emission branch outright -- periodic emission
+    is unconditionally binary now, so `bb.telemetryBinary` is still WRITTEN
+    by the `stream` arm below but no longer changes observable behavior
+    (see `test_binary_stream_binary_false_still_emits_binary_with_shared_seq`).
   - Malformed/out-of-range input yields a typed `Error{code, field}`.
   - A mixed text+binary session in ONE test proves dual-stack coexistence.
 """
@@ -258,6 +263,50 @@ def test_binary_id_replies_with_device_identity(sim):
 
 
 # ===========================================================================
+# hello / ver / help -- stakeholder-directed 6-verb minimal command surface
+# (2026-07-10): the text rump's remaining three verbs (HELLO/VER/HELP) each
+# get their own binary arm, completing the set PING/STOP/ID already had.
+# hello/ver reuse the id arm's DeviceId reply body (BinaryChannel::handleId()
+# is reused firmware-side); help gets a new HelpText reply.
+# ===========================================================================
+
+
+def test_binary_hello_replies_with_device_identity(sim):
+    """hello -> the SAME DeviceId reply shape/content id does (handleId()
+    reused firmware-side) -- proves the request arm is wired, not just
+    that ID itself still works."""
+    reply = send(sim, pb_envelope.CommandEnvelope(corr_id=12, hello=pb_envelope.Hello()))
+    assert reply.WhichOneof("body") == "id"
+    assert reply.corr_id == 12
+    assert reply.id.model == "NEZHA2"
+    assert reply.id.name == "HOST-SIM"
+    assert reply.id.serial == 0
+    assert reply.id.proto_version == 2
+
+
+def test_binary_ver_replies_with_device_identity(sim):
+    """ver -> the SAME DeviceId reply shape/content id/hello do -- a real
+    client reads only fw_version/proto_version off it (VER's own content is
+    a strict subset of ID's reply fields)."""
+    reply = send(sim, pb_envelope.CommandEnvelope(corr_id=13, ver=pb_envelope.Ver()))
+    assert reply.WhichOneof("body") == "id"
+    assert reply.corr_id == 13
+    assert reply.id.model == "NEZHA2"
+    assert reply.id.proto_version == 2
+
+
+def test_binary_help_replies_with_registered_verb_list(sim):
+    """help -> HelpText{text}, sourced from the SAME
+    Rt::CommandRouter::listVerbs() the text HELP handler reads -- the live
+    registered 6-verb rump, not a hardcoded string."""
+    reply = send(sim, pb_envelope.CommandEnvelope(corr_id=14, help=pb_envelope.Help()))
+    assert reply.WhichOneof("body") == "helptext"
+    assert reply.corr_id == 14
+    verbs = reply.helptext.text.split()
+    assert verbs == ["HELP", "HELLO", "PING", "ID", "VER", "STOP"]
+
+
+# ===========================================================================
 # Declared-only arms -- ERR_UNIMPLEMENTED, never a crash, never silent.
 # `config`/`get` are no longer declared-only as of 096-004, and `stream` is
 # no longer declared-only as of 096-005 (see the dedicated sections below)
@@ -433,31 +482,19 @@ def test_binary_get_replies_exactly_one_config_snapshot(sim, target):
 # ===========================================================================
 # stream -- 096-005: BinaryChannel's `stream` arm, wiring
 # msg::StreamControl{binary, period} into tickTelemetry()'s periodic
-# emission path. Mirrors test_telemetry_periodic_tick.py's own text-STREAM
-# sim harness pattern exactly (sim.peek_reply_store(), never
+# emission path. Uses sim.peek_reply_store() (non-destructive), never
 # sim.command()/send()/sim.command_on() to OBSERVE periodic output -- both
 # reset the target channel's ReplyStore before routing, which would wipe
 # out whatever tickTelemetry() had already accumulated across the
-# preceding tick_for() calls).
+# preceding tick_for() calls. 097-008 (Decision 9, pure-binary firmware)
+# deletes the text STREAM/SNAP family this section used to have a text-plane
+# sibling suite for (test_telemetry_periodic_tick.py, now removed -- its
+# three ack/monotonic-seq/period-zero scenarios are fully subsumed by the
+# binary-plane tests below, which already covered the identical behavior)
+# and deletes tickTelemetry()'s own text-emission branch, so periodic
+# emission is unconditionally binary now regardless of `StreamControl.binary`
+# -- see test_binary_stream_binary_false_still_emits_binary_with_shared_seq().
 # ===========================================================================
-
-
-def _parse_tlm_text_lines(text: str) -> list[dict[str, str]]:
-    """Parse zero or more plain-text "TLM t=... mode=... ..." wire lines
-    (newline separated -- ReplyStore::append()'s own convention) into a
-    list of key->value dicts -- the SAME shape
-    test_telemetry_periodic_tick.py's own _parse_tlm_lines() produces,
-    duplicated here (this file already duplicates armor()/dearmor() rather
-    than importing across test files)."""
-    frames = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split()
-        assert parts[0] == "TLM", f"not a text TLM line: {line!r}"
-        frames.append(dict(p.split("=", 1) for p in parts[1:]))
-    return frames
 
 
 def _parse_binary_tlm_frames(text: str) -> list["pb_envelope.ReplyEnvelope"]:
@@ -515,44 +552,46 @@ def test_binary_stream_periodic_emission_monotonic_seq_over_200ms(sim):
     )
 
 
-def test_binary_stream_toggle_binary_false_reverts_to_text_with_shared_seq(sim):
-    """`stream{binary:false, ...}` behaves exactly like text STREAM's own
-    on/off semantics (acceptance criterion 2): with period left non-zero,
-    periodic emission keeps running, but the wire framing reverts to the
-    pre-existing plain-text TLM line -- SAME `seq=` counter, continuing
-    (not resetting) across the binary->text transition, and the text
-    frame's own wire shape stays byte-identical to ticket 003's guarantee
-    (same "TLM " prefix, same key set) even once `stream` can actually
-    toggle bb.telemetryBinary at runtime (acceptance criterion 4)."""
+def test_binary_stream_binary_false_still_emits_binary_with_shared_seq(sim):
+    """097-008 (Decision 9, pure-binary firmware): `stream{binary:false,
+    ...}` used to revert periodic emission to the pre-existing plain-text
+    TLM line (tickTelemetry()'s own bb.telemetryBinary branch) -- that text
+    branch is DELETED now, so `binary:false` has NO observable wire-framing
+    effect any more: emission stays binary regardless, with the SAME shared
+    `seq=` counter continuing (not resetting) across the toggle. This is the
+    direct replacement for the pre-097-008
+    test_binary_stream_toggle_binary_false_reverts_to_text_with_shared_seq
+    (deleted -- its own premise, a live text fallback, no longer holds) --
+    `StreamControl.binary` is still a real wire field (a legacy-proxy client
+    could still set it false) but is now write-only bookkeeping on
+    bb.telemetryBinary (blackboard.h), read by nothing."""
     send(sim, pb_envelope.CommandEnvelope(
         corr_id=62, stream=pb_envelope.StreamControl(binary=True, period=50)))
     sim.tick_for(120)   # a couple of binary frames land on the SERIAL store
-    binary_frames = _parse_binary_tlm_frames(sim.peek_reply_store(CHANNEL_SERIAL))
-    assert len(binary_frames) >= 2, "sanity: binary periodic emission must be active first"
-    last_binary_seq = binary_frames[-1].tlm.seq
+    first_frames = _parse_binary_tlm_frames(sim.peek_reply_store(CHANNEL_SERIAL))
+    assert len(first_frames) >= 2, "sanity: binary periodic emission must be active first"
+    last_seq_before_toggle = first_frames[-1].tlm.seq
 
     # Switching binary off (same period) must NOT disable periodic emission
     # -- only bb.telemetryPeriod == 0 does that (tickTelemetry()'s own
-    # guard); this exercises the OTHER half of criterion 2.
+    # guard) -- and, since 097-008, must not change the wire framing either.
     reply = send(sim, pb_envelope.CommandEnvelope(
         corr_id=63, stream=pb_envelope.StreamControl(binary=False, period=50)))
     assert reply.WhichOneof("body") == "ok"
     assert sim.peek_reply_store(CHANNEL_SERIAL) == ""
 
     sim.tick_for(120)
-    text_frames = _parse_tlm_text_lines(sim.peek_reply_store(CHANNEL_SERIAL))
-    assert len(text_frames) >= 2, f"expected periodic text frames after binary=false, got {text_frames}"
+    after_frames = _parse_binary_tlm_frames(sim.peek_reply_store(CHANNEL_SERIAL))
+    assert len(after_frames) >= 2, f"expected periodic BINARY frames after binary=false, got {len(after_frames)}"
+    for frame in after_frames:
+        assert frame.WhichOneof("body") == "tlm", "binary=false must not revert framing to text"
 
-    text_seqs = [int(f["seq"]) for f in text_frames]
-    assert text_seqs == sorted(text_seqs) and len(set(text_seqs)) == len(text_seqs)
-    assert text_seqs[0] > last_binary_seq, (
+    after_seqs = [frame.tlm.seq for frame in after_frames]
+    assert after_seqs == sorted(after_seqs) and len(set(after_seqs)) == len(after_seqs)
+    assert after_seqs[0] > last_seq_before_toggle, (
         "bb.telemetrySeq must be the SAME shared/monotonic counter across "
-        "the binary -> text transition, not reset"
+        "the binary=true -> binary=false toggle, not reset"
     )
-    # Wire shape unchanged by this ticket -- same mandatory prefix keys
-    # every text TLM frame has always carried (082-004/087-008).
-    for frame in text_frames:
-        assert {"t", "mode", "seq"}.issubset(frame.keys())
 
 
 def test_binary_stream_period_zero_stops_periodic_emission(sim):
@@ -610,21 +649,19 @@ def test_binary_stream_binds_periodic_emission_to_the_requesting_channel(sim):
     )
 
 
-def test_binary_snap_still_works_standalone_while_binary_stream_is_active(sim):
-    """SNAP (text-only, unaffected by bb.telemetryBinary -- telemetry_commands.h's
-    own file header: SNAP always uses telemetryEmit(), never
-    telemetryEmitBinary(), regardless of bb.telemetryBinary) still works
-    standalone with a binary stream armed and periodic frames already
-    emitted -- proves the two paths do not interfere with each other."""
-    send(sim, pb_envelope.CommandEnvelope(
-        corr_id=66, stream=pb_envelope.StreamControl(binary=True, period=50)))
-    sim.tick_for(120)   # a couple of binary periodic frames land on the SERIAL store
-
-    reply = sim.command("SNAP").strip()   # resets the store first, then SNAP's own one-shot reply
-    lines = reply.splitlines()
-    assert len(lines) == 1, f"expected exactly one TLM line from SNAP, got: {reply!r}"
-    frame = _parse_tlm_text_lines(reply)[0]
-    assert {"seq", "t", "mode"}.issubset(frame.keys())
+# test_binary_snap_still_works_standalone_while_binary_stream_is_active --
+# DELETED (097-008): its own premise was that a SEPARATE one-shot text SNAP
+# verb existed alongside the periodic binary stream and proved the two paths
+# didn't interfere. Text SNAP is deleted outright by this ticket (Decision
+# 9) and there is no binary one-shot TLM/SNAP arm to replace it with (096
+# Open Question 2 / 097 Decision 4's own finding) -- the only way to get a
+# one-shot binary reading is the SAME `stream` arm this section already
+# exercises (arm/read/disarm, `NezhaProtocol.snap()`'s own host-side
+# synthesis, host/robot_radio/robot/protocol.py), which collapses into
+# single-consumer stream-state semantics already covered by
+# test_binary_stream_binds_periodic_emission_to_the_requesting_channel and
+# the ack/monotonic-seq/period-zero tests above -- there is no longer a
+# distinct "SNAP vs. STREAM non-interference" behavior left to prove.
 
 
 # ===========================================================================
@@ -673,10 +710,17 @@ def test_mixed_text_and_binary_session(sim):
     """Proves the text plane and the binary plane share the SAME
     CommandRouter/CommandProcessor/Blackboard instance correctly within one
     session -- not just that each plane works alone (every other test in
-    this file only ever sends binary; test_bare_loop_move_and_tlm.py/
-    test_bare_loop_commands.py only ever send text)."""
-    # Text S starts direct-mode driving.
-    assert sim.command("S 150 150").strip() == "OK drive l=150 r=150"
+    this file only ever sends binary). 097-006: text `S` is deleted, so the
+    opening drive below is now ALSO binary -- this test's remaining
+    "mixed" proof is the binary-drive/binary-stop/binary-drive sequence
+    coexisting correctly with the text `STOP`/`PING` calls further down,
+    the SAME CommandRouter instance serving both."""
+    # Binary drive starts direct-mode driving.
+    wheels = pb_drivetrain.WheelTargets(w=[
+        pb_common.WheelTarget(speed=150.0), pb_common.WheelTarget(speed=150.0),
+    ])
+    reply = send(sim, pb_envelope.CommandEnvelope(corr_id=19, drive=pb_drivetrain.DrivetrainCommand(wheels=wheels)))
+    assert reply.WhichOneof("body") == "ok"
     sim.tick_for(500)
     vel_l, vel_r = sim.vel()
     assert vel_l > 50.0 and vel_r > 50.0

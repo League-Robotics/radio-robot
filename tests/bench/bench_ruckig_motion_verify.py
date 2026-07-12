@@ -50,7 +50,7 @@ import time
 from pathlib import Path
 
 from robot_radio.io.serial_conn import SerialConnection
-from robot_radio.robot.protocol import NezhaProtocol, parse_response, parse_tlm
+from robot_radio.robot.protocol import NezhaProtocol, TLMFrame, parse_response
 
 DEFAULT_PORT = "/dev/cu.usbmodem2121102"
 RUN_WATCHDOG_WINDOW = 20000    # [ms] widened for the whole bench session (DEV WD max is 60000)
@@ -102,17 +102,33 @@ class Capture:
 
 
 def drain(conn: SerialConnection, cap: Capture, duration_ms: int, verb: str) -> None:
-    """Drain TLM/EVT queues for duration_ms, recording into cap."""
+    """Drain TLM/EVT for duration_ms, recording into cap.
+
+    097-003: telemetry is binary-only now (``NezhaProtocol.stream()`` --
+    see its own docstring), so TLM frames are drained non-blocking from
+    ``conn.drain_binary_tlm()`` (already-parsed via ``TLMFrame.from_pb2()``)
+    rather than parsed out of ``conn.read_lines()``'s text lines. EVT lines
+    are unaffected by that conversion -- still text, read via the existing
+    ``read_lines(duration_ms)`` call, which also keeps this function's
+    per-call blocking-duration pacing. NOTE: ``TLMFrame.from_pb2()`` never
+    populates ``encpose`` (telemetry.proto structurally does not carry it,
+    096-001 Decision 6) -- ``Capture.to_dict()``'s ``encpose`` column reads
+    ``None`` for every frame captured this way; a pre-097-003 capture's
+    ``encpose`` column was populated, so this is a real, accepted diagnostic
+    capability loss for this HITL tool specifically (bounded/non-crashing,
+    same posture as ``testgui/traces.py``'s encoder trace -- see
+    ``TLMFrame.from_pb2()``'s own docstring).
+    """
+    now = time.monotonic()
+    for reply in conn.drain_binary_tlm():
+        cap.frames.append((now, TLMFrame.from_pb2(reply.tlm)))
+
     for line in conn.read_lines(duration=duration_ms):
         r = parse_response(line)
         if r is None:
             continue
         now = time.monotonic()
-        if r.tag == "TLM":
-            f = parse_tlm(line)
-            if f is not None:
-                cap.frames.append((now, f))
-        elif r.tag == "EVT":
+        if r.tag == "EVT":
             cap.evt_lines.append((now, line))
             if r.tokens and r.tokens[0] == "done" and (len(r.tokens) < 2 or r.tokens[1] == verb):
                 if cap.done_reason is None:

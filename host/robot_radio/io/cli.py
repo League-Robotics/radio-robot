@@ -12,8 +12,9 @@ import time
 
 from robot_radio.io.serial_conn import SerialConnection, list_serial_ports, DEFAULT_PORT
 from robot_radio.robot import QBotPro, Nezha, NezhaProtocol, Cutebot
+from robot_radio.robot import legacy_verbs
 from robot_radio.robot.pb2 import envelope_pb2
-from robot_radio.robot.protocol import parse_tlm
+from robot_radio.robot.protocol import TLMFrame
 from robot_radio.robot.connection import (
     make_robot as _connection_make_robot,
     get_port as _connection_get_port,
@@ -723,7 +724,9 @@ def cmd_drive(args):
             for resp in robot.stream_drive(speeds, period=40, watchdog=watchdog):
                 if deadline is not None and time.monotonic() >= deadline:
                     break
-                tlm = parse_tlm(resp.raw) if resp.tag == "TLM" else None
+                # 097-003: binary telemetry frames arrive already parsed, on
+                # resp.tlm -- see ParsedResponse.tlm's own docstring.
+                tlm = resp.tlm if resp.tag == "TLM" else None
                 if tlm and tlm.enc:
                     left_enc, right_enc = tlm.enc
                     vl = tlm.vel[0] if tlm.vel else 0
@@ -1207,36 +1210,89 @@ def cmd_ez(args):
     conn.disconnect()
 
 
+# 097-004 (M5 rogo Translator Proxy) -- thin aliases over legacy_verbs.py's
+# pure tokenizer/dispatch tables, so this module's own name stays the
+# stable public surface (`cli._tokenize_send_line` etc., per the committed
+# tests/unit/test_cli_send_translator.py) while the actual logic lives in
+# the reusable, pure module both `cmd_send` below AND `io/proxy.py`'s
+# `ProtocolBridge` build on.
+_tokenize_send_line = legacy_verbs.tokenize_send_line
+_SEND_RUMP_VERBS = legacy_verbs.RUMP_VERBS
+_decode_reply_body = legacy_verbs.decode_reply_body
+
+
 def cmd_send(args):
-    """Send arbitrary command."""
+    """Send a v2 command line: ``rogo send <verb> [args...] [--decode]``.
+
+    A verb with a proven binary replacement (``legacy_verbs.
+    PROTOCOL_VERBS`` -- S/D/T/RT/MOVE/MOVER/ECHO) is translated to a
+    ``*B<base64>`` ``CommandEnvelope`` via ``legacy_verbs.BINARY_DISPATCH``
+    and sent with ``SerialConnection.send_envelope()``; every other verb
+    (the five-verb safety rump PING/ID/HELLO/HELP/STOP, or anything with no
+    binary replacement at all -- R/TURN/G/DEV/unrecognized) goes out as
+    plain text, unchanged, via ``SerialConnection.send()`` -- this command
+    never invents a translation the firmware never had.
+
+    ``args.message`` is the list of raw argv tokens making up the command
+    (argparse ``nargs="+"``) -- re-joined space-separated before
+    tokenizing/dispatch, so ``rogo send S 200 200`` and ``rogo send "S 200
+    200"`` behave identically.
+    """
     robot, conn, _ = _make_robot(args)
-    result = robot.send(args.message, read_timeout=args.read_timeout)
-    if "error" in result:
-        print(f"Error: {result['error']}", file=sys.stderr)
+    raw = " ".join(args.message)
+    verb, pos, kv = _tokenize_send_line(raw)
+
+    if verb in legacy_verbs.PROTOCOL_VERBS:
+        try:
+            env = legacy_verbs.BINARY_DISPATCH[verb](pos, kv)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            conn.disconnect()
+            sys.exit(1)
+        result = conn.send_envelope(env, read_timeout=args.read_timeout)
+        _print_binary_reply(result, decode=args.decode)
     else:
-        print(f"Sent: {result.get('sent', '')}")
-        for line in result.get("responses", []):
-            print(f"  {line}")
+        result = conn.send(raw, read_timeout=args.read_timeout)
+        if "error" in result:
+            print(f"Error: {result['error']}", file=sys.stderr)
+        else:
+            print(f"Sent: {result.get('sent', '')}")
+            for line in result.get("responses", []):
+                print(f"  {line}")
     conn.disconnect()
 
 
 # ── Binary command plane (095-002, M7 Host Codec Mirror) ────────────────────
 #
-# `rogo binary <arm>` builds a pb2.CommandEnvelope for one of this sprint's
-# seven implemented oneof arms (drive/segment/replace/stop/ping/echo/id) and
-# sends it via SerialConnection.send_envelope() -- the *B<base64> binary
-# plane, parallel to (never replacing) every text-plane command above.
+# `rogo binary <arm>` builds a pb2.CommandEnvelope for one of the ten
+# implemented oneof arms (drive/segment/replace/stop/ping/echo/id, plus
+# hello/ver/help -- stakeholder-directed 6-verb minimal command surface,
+# 2026-07-10) and sends it via SerialConnection.send_envelope() -- the
+# *B<base64> binary plane, parallel to (never replacing) every text-plane
+# command above.
 
 
-def _print_binary_reply(result: dict) -> None:
+def _print_binary_reply(result: dict, decode: bool = False) -> None:
     """Print a send_envelope() result dict: the reply envelope's text-format
-    dump, a timeout notice, or a send-time error (with nonzero exit)."""
+    dump, a timeout notice, or a send-time error (with nonzero exit).
+
+    ``decode`` (097-004, `rogo send --decode`): pretty-print the reply's
+    populated oneof body as ``"<arm>:\\n  field = value\\n..."`` via
+    ``legacy_verbs.decode_reply_body()`` instead of the raw protobuf
+    text-format dump. Defaults to ``False`` so every pre-existing call site
+    (``cmd_binary_ping/echo/id/stop/drive/segment/replace``, and
+    ``cmd_binary_hello/ver/help`` added alongside them) is byte-for-byte
+    unaffected by this ticket's diff.
+    """
     if "error" in result:
         print(f"Error: {result['error']}", file=sys.stderr)
         sys.exit(1)
     reply = result.get("reply")
     if reply is None:
         print("(no reply received -- timeout)")
+        return
+    if decode:
+        print(_decode_reply_body(reply))
         return
     print(str(reply).strip() or f"corr_id: {reply.corr_id}")
 
@@ -1272,6 +1328,45 @@ def cmd_binary_id(args):
     robot, conn, _ = _make_robot(args)
     env = envelope_pb2.CommandEnvelope()
     env.id.SetInParent()
+    result = conn.send_envelope(env, read_timeout=args.read_timeout)
+    _print_binary_reply(result)
+    conn.disconnect()
+
+
+def cmd_binary_hello(args):
+    """Binary-plane HELLO: CommandEnvelope{hello: Hello{}} (empty request)
+    -> ReplyEnvelope{id: DeviceId{...}} -- the SAME DeviceId reply shape
+    `binary id` gets (BinaryChannel::handleId() is reused for hello/ver/id
+    firmware-side; the wire arm chosen on the request side still records
+    which verb the caller actually meant)."""
+    robot, conn, _ = _make_robot(args)
+    env = envelope_pb2.CommandEnvelope()
+    env.hello.SetInParent()
+    result = conn.send_envelope(env, read_timeout=args.read_timeout)
+    _print_binary_reply(result)
+    conn.disconnect()
+
+
+def cmd_binary_ver(args):
+    """Binary-plane VER: CommandEnvelope{ver: Ver{}} (empty request) ->
+    ReplyEnvelope{id: DeviceId{...}} -- see cmd_binary_hello's own
+    docstring for why this reuses the `id` reply shape."""
+    robot, conn, _ = _make_robot(args)
+    env = envelope_pb2.CommandEnvelope()
+    env.ver.SetInParent()
+    result = conn.send_envelope(env, read_timeout=args.read_timeout)
+    _print_binary_reply(result)
+    conn.disconnect()
+
+
+def cmd_binary_help(args):
+    """Binary-plane HELP: CommandEnvelope{help: Help{}} (empty request) ->
+    ReplyEnvelope{helptext: HelpText{text}} -- the live registered verb
+    list (Rt::CommandRouter::listVerbs()), the same source text HELP's own
+    reply reads."""
+    robot, conn, _ = _make_robot(args)
+    env = envelope_pb2.CommandEnvelope()
+    env.help.SetInParent()
     result = conn.send_envelope(env, read_timeout=args.read_timeout)
     _print_binary_reply(result)
     conn.disconnect()
@@ -1363,27 +1458,23 @@ def _find_response(responses: list[str], prefix: str) -> str | None:
     return None
 
 
-def _snap_tlm(conn: SerialConnection):
-    """Send SNAP and return the parsed TLMFrame, or None if not received.
+def _snap_tlm(conn: SerialConnection) -> "TLMFrame | None":
+    """Request one telemetry frame and return the parsed TLMFrame, or None.
 
-    v2 firmware responds to SNAP with an immediate TLM frame.  This helper
-    sends SNAP and reads the TLM frame from the response window.
+    Binary implementation (097-003): delegates to
+    ``NezhaProtocol(conn).snap()`` (arm-wait-disarm synthesis over the
+    binary ``stream`` arm -- see that method's own docstring). Over the
+    lossy radio relay a frame can be dropped entirely, so this helper
+    RETRIES a few times, same intent as the pre-097-003 text-plane
+    implementation's own retry loop (that one retried because a binary
+    ``*B`` line can fail to decode / never arrive, same failure mode as a
+    dropped text ``TLM`` line).
     """
-    from robot_radio.robot.protocol import parse_tlm as _parse_tlm
-    # SNAP makes the firmware emit one TLM frame on its NEXT tick; over the lossy
-    # radio relay that frame can take >0.5 s to arrive (the "OK snap" ack comes
-    # first, the TLM after) and is sometimes dropped entirely. Read a generous
-    # window and RETRY a few times until a frame with data arrives.
+    proto = NezhaProtocol(conn)
     for _attempt in range(4):
-        result = conn.send("SNAP", read_timeout=700)
-        for raw in result.get("responses", []):
-            frame = _parse_tlm(raw)
-            if frame is None and "TLM" in raw:
-                # The RAW250 relay can concatenate replies WITHOUT newline
-                # separators ("OK snapTLM t=..."); re-parse from "TLM".
-                frame = _parse_tlm(raw[raw.index("TLM"):])
-            if frame is not None:
-                return frame
+        frame = proto.snap()
+        if frame is not None:
+            return frame
     return None
 
 
@@ -1545,6 +1636,54 @@ def cmd_pose(args):
             field.stop()
         finally:
             cam.close()
+
+
+# ── rogo proxy (097-004, M5 rogo Translator Proxy) ──────────────────────────
+#
+# A standing text-v2 <-> binary bridge on a PTY -- see io/proxy.py's own
+# module docstring for the full design. `rogo binary <arm>` and every other
+# existing rogo subcommand are UNAFFECTED: `proxy` is a new, additive mode.
+
+
+def cmd_proxy(args):
+    """Run the standing text-v2 <-> binary translator bridge until
+    SIGINT/SIGTERM.
+
+    Opens a PTY, publishes a symlink (default ``~/.rogo/robot-pty``,
+    override with ``--link``), and owns ONE real robot ``SerialConnection``
+    underneath -- a legacy text client opens the published symlink exactly
+    like a real serial port (``serial.Serial(link)`` / ``SerialConnection
+    (link)``), no code change required. Single client at a time
+    (documented, not policed -- see ``io/proxy.py``'s module docstring).
+    """
+    import signal
+
+    from robot_radio.io.proxy import DEFAULT_LINK, ProtocolBridge
+
+    robot, conn, _ = _make_robot(args)
+    bridge = ProtocolBridge(
+        conn,
+        link=args.link or DEFAULT_LINK,
+        watch_period=args.watch_period,
+        evt_enabled=not args.no_evt,
+        on_log=(lambda msg: _log(msg)) if _verbose else None,
+    )
+    slave_path = bridge.start()
+    print(f"rogo proxy: PTY slave={slave_path}")
+    print(f"rogo proxy: symlink={bridge.link}  (open this as your serial port)")
+    print("rogo proxy: Ctrl-C to stop")
+
+    def _handle_signal(_signum, _frame):
+        bridge.stop()
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    try:
+        bridge.run_forever()
+    finally:
+        bridge.stop()
+        conn.disconnect()
 
 
 def main():
@@ -1753,16 +1892,31 @@ def main():
                          help="Sample over white first to install a fresh "
                               "white reference for this call.")
 
-    p_send = sub.add_parser("send", help="Send arbitrary command")
-    p_send.add_argument("message", help="Command string to send")
+    p_send = sub.add_parser(
+        "send",
+        help="Send a v2 command; verbs with a proven binary replacement "
+             "(S/D/T/RT/MOVE/MOVER/ECHO) translate to *B binary automatically, "
+             "everything else (PING/ID/HELLO/HELP/STOP rump, R/TURN/G/DEV, "
+             "unknown) goes out as plain text unchanged.",
+    )
+    p_send.add_argument(
+        "message", nargs="+",
+        help="Command verb and arguments, e.g. S 200 200 or SET tw=128 "
+             "(space-separated argv tokens, or one quoted string -- both work)",
+    )
     p_send.add_argument("--read-timeout", type=int, default=500, help="Response read timeout (ms)")
+    p_send.add_argument(
+        "--decode", action="store_true",
+        help="Pretty-print decoded binary reply fields instead of the raw "
+             "protobuf text-format dump (binary-translated verbs only)",
+    )
 
     # binary: 095-002 binary command-plane (*B<base64> pb2.CommandEnvelope)
     # send path -- one subcommand per this sprint's seven implemented arms.
     p_binary = sub.add_parser(
         "binary",
         help="Binary command plane (095): *B<base64> pb2.CommandEnvelope send "
-             "path for drive/segment/replace/stop/ping/echo/id.",
+             "path for drive/segment/replace/stop/ping/echo/id/hello/ver/help.",
     )
     p_binary.add_argument("--read-timeout", type=int, default=500,
                           help="Reply read timeout (ms, default 500)")
@@ -1774,6 +1928,9 @@ def main():
     b_echo.add_argument("text", help="Text payload to echo (UTF-8, max 64 bytes)")
 
     binary_sub.add_parser("id", help="Binary ID (empty request)")
+    binary_sub.add_parser("hello", help="Binary HELLO (empty request, replies DeviceId like ID)")
+    binary_sub.add_parser("ver", help="Binary VER (empty request, replies DeviceId like ID)")
+    binary_sub.add_parser("help", help="Binary HELP (empty request, replies HelpText)")
     binary_sub.add_parser("stop", help="Binary STOP")
 
     b_drive = binary_sub.add_parser(
@@ -1813,6 +1970,32 @@ def main():
     _add_binary_segment_args(b_segment)
     b_replace = binary_sub.add_parser("replace", help="Binary REPLACE (MOVER)")
     _add_binary_segment_args(b_replace)
+
+    # proxy: 097-004 (M5 rogo Translator Proxy) -- standing text-v2 <->
+    # binary bridge on a PTY. Additive: does not affect `binary`/`send`/any
+    # other existing subcommand.
+    p_proxy = sub.add_parser(
+        "proxy",
+        help="Standing text-v2 <-> binary translator bridge on a PTY. Legacy "
+             "text clients (pyserial/SerialConnection) open the published "
+             "symlink (default ~/.rogo/robot-pty) exactly like a real "
+             "serial port; the proxy owns the ONE real (binary-only) robot "
+             "connection underneath. Single client at a time.",
+    )
+    p_proxy.add_argument(
+        "--link", default=None,
+        help="PTY symlink path (default ~/.rogo/robot-pty)",
+    )
+    p_proxy.add_argument(
+        "--watch-period", type=int, default=50,
+        help="[ms] internal telemetry poll period used ONLY to drive EVT "
+             "done synthesis while the client hasn't armed its own STREAM "
+             "(default 50; never forwarded to the client as TLM lines)",
+    )
+    p_proxy.add_argument(
+        "--no-evt", action="store_true",
+        help="Disable EVT done synthesis (_EvtWatcher)",
+    )
 
     p_pose = sub.add_parser(
         "pose",
@@ -1930,6 +2113,7 @@ def main():
         "opos": cmd_opos,
         "ez": cmd_ez,
         "send": cmd_send,
+        "proxy": cmd_proxy,
         "line": cmd_line,
         "color": cmd_color,
         "pose": cmd_pose,
@@ -1956,6 +2140,9 @@ def main():
             "ping": cmd_binary_ping,
             "echo": cmd_binary_echo,
             "id": cmd_binary_id,
+            "hello": cmd_binary_hello,
+            "ver": cmd_binary_ver,
+            "help": cmd_binary_help,
             "stop": cmd_binary_stop,
             "drive": cmd_binary_drive,
             "segment": cmd_binary_segment,

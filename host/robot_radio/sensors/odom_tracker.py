@@ -1,7 +1,8 @@
 """Odometry tracker: converts firmware TLM frames to world-frame positions.
 
 Primary interface (v2):
-- ``parse_tlm()`` — delegates to the v2 protocol module; returns a dict.
+- ``tlm_to_dict(frame)`` — adapt an already-parsed ``TLMFrame`` (from
+  ``NezhaProtocol``'s binary telemetry delivery, 097-003) into a dict.
 - ``OdomTracker.update_from_tlm(frame)`` — feed a ``TLMFrame`` directly.
 
 Legacy (kept for backward compatibility only, NOT on the v2 hot path):
@@ -10,11 +11,11 @@ Legacy (kept for backward compatibility only, NOT on the v2 hot path):
 
 Usage (v2)::
 
-    from robot_radio.robot.protocol import parse_tlm as proto_parse_tlm, TLMFrame
+    from robot_radio.robot.protocol import TLMFrame
     from robot_radio.sensors.odom_tracker import OdomTracker
 
     tracker = OdomTracker(ref_world_pos=(0.0, 0.0), ref_world_yaw=0.0)
-    # Feed a TLMFrame (obtained from NezhaProtocol or parse_tlm):
+    # Feed a TLMFrame (obtained from NezhaProtocol's binary telemetry delivery):
     tracker.update_from_tlm(tlm_frame)
     print(tracker.x, tracker.y, tracker.heading)
 """
@@ -26,28 +27,31 @@ import warnings
 
 
 # ---------------------------------------------------------------------------
-# v2 TLM parse helper (delegates to protocol module)
+# v2 TLM frame helper
 # ---------------------------------------------------------------------------
 
-def parse_tlm(line: str) -> dict | None:
-    """Parse a v2 TLM line and return a dict with sensor fields, or None.
+def tlm_to_dict(frame) -> dict | None:
+    """Adapt an already-parsed ``TLMFrame`` into a dict with sensor fields,
+    or ``None`` if ``frame`` is ``None``.
 
-    Delegates to ``robot_radio.robot.protocol.parse_tlm`` for the actual
-    parsing.  Returns a dict with the available fields from the TLM frame,
-    for example::
+    097-003: previously delegated to the (now-retired) text-plane TLM line
+    parser; ``NezhaProtocol``'s telemetry delivery is binary-native now
+    (``TLMFrame`` objects, not text lines), so this function's job shrinks
+    to the same dict adaptation it always did, just starting one step later
+    -- from an already-built ``TLMFrame`` instead of parsing one out of a
+    text line itself.
+
+    Returns a dict with the available fields from the TLM frame, for
+    example::
 
         {'pose': (x, y, heading), 'enc': (left, right), 't': 12345}
 
-    Returns ``None`` if the line is not a recognisable TLM frame.
-
     Example::
 
-        result = parse_tlm("TLM t=500 pose=350,-12,1780 enc=1024,1019")
+        frame = proto.snap()
+        result = tlm_to_dict(frame)
         # {'t': 500, 'pose': (350, -12, 1780), 'enc': (1024, 1019)}
     """
-    from robot_radio.robot.protocol import parse_tlm as _proto_parse_tlm
-
-    frame = _proto_parse_tlm(line)
     if frame is None:
         return None
 
@@ -62,7 +66,7 @@ def parse_tlm(line: str) -> dict | None:
         out["vel"] = frame.vel
     if frame.mode is not None:
         out["mode"] = frame.mode
-    return out if out else {}   # empty dict (not None) for bare "TLM" line
+    return out if out else {}   # empty dict (not None) for a frame with no populated fields
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +78,7 @@ def parse_so(line) -> tuple | None:
 
     This is the v1 SO stream format.  In v2 the SO stream does not exist.
     Kept for backward compatibility only — do not use in new code.
-    Use ``parse_tlm()`` or ``OdomTracker.update_from_tlm()`` instead.
+    Use ``tlm_to_dict()`` or ``OdomTracker.update_from_tlm()`` instead.
     """
     s = str(line).lstrip("<# ").strip()
     if not s.startswith("SO"):

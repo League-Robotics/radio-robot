@@ -1,11 +1,18 @@
 """tests/testgui/test_operations.py — headless tests for OpsController.on_stop()
 (ticket 083-002).
 
-``operations.py``'s STOP button had the same dead-verb defect as
-``KeyboardDriver``: it sent a bare ``STOP`` that the firmware does not
-register (``docs/protocol-v2.md`` only defines ``DEV DT STOP``). This module
-tests ``OpsController.on_stop()`` directly (no ``QApplication``/PySide6
-widgets needed — only fake stand-ins for the one button it touches).
+097 update: the situation this module originally documented has fully
+reversed. Pre-097, ``operations.py``'s STOP button sent a bare ``STOP`` that
+the firmware did not register (``docs/protocol-v2.md`` only defined
+``DEV DT STOP``) -- fixed by ticket 083-002 to send ``DEV DT STOP``. Sprint
+097 gutted the firmware's text plane down to a 6-verb rump (HELP/HELLO/
+PING/ID/VER/STOP) and retired the ``DEV`` debug command family entirely (no
+binary arm was ever planned for it either) -- ``STOP`` is now the one verb
+that is ALWAYS guaranteed to work (text rump AND a binary ``Stop{}`` oneof
+arm), while ``DEV DT STOP`` is unsupported (translated to a no-op by
+``binary_bridge.py``). ``on_stop()`` now sends bare ``STOP`` again. This
+module tests ``OpsController.on_stop()`` directly (no ``QApplication``/
+PySide6 widgets needed — only fake stand-ins for the one button it touches).
 
 Run with::
 
@@ -85,14 +92,14 @@ def _make_controller(transport: "Transport | None") -> tuple[OpsController, list
 # ---------------------------------------------------------------------------
 
 
-def test_on_stop_sends_dev_dt_stop_then_stream_0() -> None:
+def test_on_stop_sends_stop_then_stream_0() -> None:
     transport = _FakeTransport()
     controller, logs, stream_btn = _make_controller(transport)
 
     controller.on_stop()
 
-    assert transport.commands == ["DEV DT STOP", "STREAM 0"]
-    assert any("DEV DT STOP sent" in line for line in logs)
+    assert transport.commands == ["STOP", "STREAM 0"]
+    assert any("STOP sent" in line for line in logs)
     assert stream_btn.checked is False
     assert stream_btn.text == "STREAM: off"
 
@@ -105,10 +112,10 @@ def test_on_stop_cancels_motion_worker_before_sending_stop() -> None:
 
     controller.on_stop()
 
-    # stop_motion_cb must run BEFORE the wire DEV DT STOP is sent, so the
+    # stop_motion_cb must run BEFORE the wire STOP is sent, so the
     # worker thread is joined and no longer touches the transport.
     assert call_order == ["stop_motion_cb"]
-    assert transport.commands[0] == "DEV DT STOP"
+    assert transport.commands[0] == "STOP"
 
 
 def test_on_stop_not_connected_logs_warning_and_sends_nothing() -> None:
@@ -120,11 +127,11 @@ def test_on_stop_not_connected_logs_warning_and_sends_nothing() -> None:
 
 
 def test_on_stop_stop_motion_cb_exception_does_not_block_wire_stop() -> None:
-    """A raising stop_motion_cb must not prevent DEV DT STOP from being sent."""
+    """A raising stop_motion_cb must not prevent STOP from being sent."""
     transport = _FakeTransport()
     controller, logs, stream_btn = _make_controller(transport)
     controller.stop_motion_cb = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
 
     controller.on_stop()
 
-    assert transport.commands == ["DEV DT STOP", "STREAM 0"]
+    assert transport.commands == ["STOP", "STREAM 0"]

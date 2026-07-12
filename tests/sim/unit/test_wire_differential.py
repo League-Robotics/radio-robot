@@ -65,6 +65,7 @@ from _wire_diff_driver import (  # noqa: E402
     encode_cfg_watchdog,
     encode_echo_reply,
     encode_err,
+    encode_helptext,
     encode_id,
     encode_ok,
     encode_telemetry,
@@ -76,11 +77,14 @@ from _wire_diff_driver import (  # noqa: E402
     env_drive_twist,
     env_drive_wheels,
     env_echo,
+    env_help_request,
+    env_hello_request,
     env_id_request,
     env_ping,
     env_replace,
     env_segment,
     env_stop,
+    env_ver_request,
     f32,
     float_eq,
     parse_decode_line,
@@ -131,13 +135,21 @@ def test_field_numbers_match_pb2_descriptors():
     expected_cmd_numbers = {
         "drive": 2, "segment": 3, "replace": 4, "config": 6, "pose": 7, "otos": 8,
         "ping": 9, "echo": 10, "get": 11, "stream": 12, "stop": 13, "id": 14,
+        # hello/ver/help (stakeholder-directed 6-verb minimal command
+        # surface, 2026-07-10).
+        "hello": 15, "ver": 16, "help": 17,
     }
     actual_cmd_numbers = {
         f.name: f.number for f in pb_envelope.CommandEnvelope.DESCRIPTOR.oneofs_by_name["cmd"].fields
     }
     assert actual_cmd_numbers == expected_cmd_numbers
 
-    expected_body_numbers = {"ok": 2, "err": 3, "tlm": 4, "cfg": 5, "evt": 6, "id": 7, "echo": 8}
+    expected_body_numbers = {
+        "ok": 2, "err": 3, "tlm": 4, "cfg": 5, "evt": 6, "id": 7, "echo": 8,
+        # helptext (stakeholder-directed 6-verb minimal command surface,
+        # 2026-07-10) -- HELP's reply; hello/ver reuse the existing `id` arm.
+        "helptext": 9,
+    }
     actual_body_numbers = {
         f.name: f.number for f in pb_envelope.ReplyEnvelope.DESCRIPTOR.oneofs_by_name["body"].fields
     }
@@ -346,6 +358,34 @@ def test_direction_a_id_request(harness):
 
 
 # ---------------------------------------------------------------------------
+# hello/ver/help (stakeholder-directed 6-verb minimal command surface,
+# 2026-07-10) -- zero-field request arms, same Direction A shape id/stop/
+# ping already have above (no arm-specific fields beyond cmd_kind/corr_id).
+# ---------------------------------------------------------------------------
+
+
+def test_direction_a_hello_request(harness):
+    raw = env_hello_request(12)
+    fields = _assert_ok(harness, raw)
+    assert fields["cmd_kind"] == "HELLO"
+    assert fields["corr_id"] == "12"
+
+
+def test_direction_a_ver_request(harness):
+    raw = env_ver_request(13)
+    fields = _assert_ok(harness, raw)
+    assert fields["cmd_kind"] == "VER"
+    assert fields["corr_id"] == "13"
+
+
+def test_direction_a_help_request(harness):
+    raw = env_help_request(14)
+    fields = _assert_ok(harness, raw)
+    assert fields["cmd_kind"] == "HELP"
+    assert fields["corr_id"] == "14"
+
+
+# ---------------------------------------------------------------------------
 # ConfigDelta (096-006) -- COMMAND-only (never appears in ReplyEnvelope.body,
 # see envelope.proto's own oneof list): its differential coverage is
 # Direction A ONLY (host-encode -> firmware-decode). There is no Direction B
@@ -504,6 +544,24 @@ def test_direction_b_echo_reply(harness, payload):
     assert reply.corr_id == 4
     assert reply.WhichOneof("body") == "echo"
     assert reply.echo.payload == payload
+
+
+@pytest.mark.parametrize("text", ["", "HELP HELLO PING ID VER STOP", "X" * 63],
+                         ids=["empty", "rump_list", "max63"])
+def test_direction_b_helptext_reply(harness, text):
+    """ReplyEnvelope.helptext (stakeholder-directed 6-verb minimal command
+    surface, 2026-07-10): HELP's binary reply carries the live registered
+    verb list verbatim -- Direction B (firmware-encode -> host-decode)
+    proof for the NEW oneof arm, same shape as
+    test_direction_b_device_id/test_direction_b_echo_reply above. "max63"
+    exercises the field's full char[64] capacity (63 content bytes + the
+    decoder's reserved null terminator, wire.cpp's own kString convention)."""
+    raw = encode_helptext(harness, 5, text)
+    assert raw is not None, "encode_helptext returned ZERO for a well-under-budget HelpText reply"
+    reply = pb_envelope.ReplyEnvelope.FromString(raw)
+    assert reply.corr_id == 5
+    assert reply.WhichOneof("body") == "helptext"
+    assert reply.helptext.text == text
 
 
 # ---------------------------------------------------------------------------

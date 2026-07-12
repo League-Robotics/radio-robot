@@ -6,10 +6,19 @@ without PySide6 installed.
 
 Public surface
 --------------
+EncoderDeadReckoner
+    Host-side differential-drive dead reckoning from cumulative per-wheel
+    encoder distance (``TLMFrame.enc``) -- (097) the fallback ``TraceModel.
+    feed()`` uses to keep the ``encoder`` trace (and the canvas avatar, which
+    prefers it) moving on the binary plane, which carries no ``encpose``
+    field at all (096-001's trim). See its own class docstring.
+
 TraceModel
     Holds four lists of (x_cm, y_cm) world points:
       - ``camera``  — ground-truth from aprilcam / SimTransport (green)
-      - ``encoder`` — firmware encoder-only dead-reckoned pose (orange)
+      - ``encoder`` — encoder-only dead-reckoned pose (orange): firmware
+        ``encpose`` when present, else the ``EncoderDeadReckoner`` fallback
+        (097)
       - ``otos``    — raw OTOS sensor pose (cyan)
       - ``fused``   — firmware EKF/fused pose (magenta)
 
@@ -90,6 +99,107 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from robot_radio.robot.protocol import TLMFrame
 
+#: Fallback trackwidth (mm) used until a real robot config is wired in via
+#: TraceModel(trackwidth=...)/set_trackwidth() -- matches the firmware's own
+#: configured trackwidthMm for the project's main dev bot (tovez), the same
+#: default sim_prefs.py/test_tour1_geometry.py already use.
+_DEFAULT_TRACKWIDTH = 128.0  # [mm]
+
+
+class EncoderDeadReckoner:
+    """Host-side differential-drive dead reckoning from cumulative per-wheel
+    encoder distance (``TLMFrame.enc``), standing in for the firmware's own
+    ``encpose`` field until sprint 098 wires ``Subsystems::PoseEstimator::
+    tick()`` (see ``TraceModel.feed()``'s own docstring: binary telemetry
+    has no wire representation for ``encpose`` at all -- 096-001's trim --
+    so there is no firmware value to fall back to in the meantime).
+
+    Standard differential-drive integration -- ``update()`` is called once
+    per ``TLMFrame`` with that frame's cumulative ``enc_left``/``enc_right``
+    (mm) and incrementally integrates a running body pose using each step's
+    small-arc delta:
+
+        d          = (dL + dR) / 2          -- forward travel this step
+        dtheta     = (dR - dL) / trackwidth -- heading change this step
+        theta_mid  = theta + dtheta / 2     -- midpoint heading (more
+                                                accurate than a pure Euler
+                                                step across a curved path)
+        x += d * cos(theta_mid); y += d * sin(theta_mid); theta += dtheta
+
+    A one-shot "diff the latest reading against a single baseline" scheme
+    (the way ``TraceModel._feed_otos``/``_feed_fused`` treat an ALREADY-
+    ABSOLUTE firmware pose) would be wrong here: ``enc_left``/``enc_right``
+    only tell you total wheel travel, not the PATH shape in between (e.g. a
+    tour's D-then-RT-then-D sequence changes heading multiple times) -- the
+    integration must happen per-frame, incrementally, exactly like the
+    firmware's own ``Odometry::predict()``.
+
+    ``update()`` returns an ``(x, y, heading)`` triple in the SAME
+    ``(mm, mm, cdeg)`` shape ``TLMFrame.encpose`` would have carried, so a
+    caller can feed it straight into ``TraceModel._feed_encpose()`` --
+    reusing that existing baseline/anchor-rotation machinery rather than
+    inventing a second one.
+    """
+
+    def __init__(self, trackwidth: float = _DEFAULT_TRACKWIDTH) -> None:  # [mm]
+        self._trackwidth = trackwidth
+        self._prev_enc: tuple[float, float] | None = None
+        self._x: float = 0.0      # [mm]
+        self._y: float = 0.0      # [mm]
+        self._theta: float = 0.0  # [rad]
+
+    def set_trackwidth(self, trackwidth: float) -> None:  # [mm]
+        """Update the trackwidth used by future ``update()`` calls.
+
+        Does not retroactively rescale the already-accumulated pose --
+        matches the firmware's own "trackwidth is a config value read at
+        motion time" posture; a robot-selection change mid-session is rare
+        and the accumulated drift from it is negligible relative to
+        dead-reckoning's own error budget.
+        """
+        self._trackwidth = trackwidth
+
+    def reset(self) -> None:
+        """Zero the accumulated pose and drop the cached previous reading.
+
+        Called by ``TraceModel._reset_baselines()`` (``anchor()``/
+        ``clear()``) so a "Set Robot @ 0,0" reset also re-zeros the
+        dead-reckoned pose, not just the display anchor.
+        """
+        self._prev_enc = None
+        self._x = 0.0
+        self._y = 0.0
+        self._theta = 0.0
+
+    def update(self, enc_left: float, enc_right: float) -> tuple[int, int, int]:
+        """Integrate one frame's cumulative encoder reading (mm each).
+
+        The FIRST call after construction/``reset()`` only caches the
+        reading as the integration's zero point (no prior reading to diff
+        against) and returns ``(0, 0, 0)`` -- mirrors ``TraceModel``'s own
+        "first reading establishes the baseline" convention for otos/fused.
+        """
+        if self._prev_enc is None:
+            self._prev_enc = (enc_left, enc_right)
+            return (0, 0, 0)
+
+        d_left = enc_left - self._prev_enc[0]
+        d_right = enc_right - self._prev_enc[1]
+        self._prev_enc = (enc_left, enc_right)
+
+        d = (d_left + d_right) / 2.0
+        dtheta = (d_right - d_left) / self._trackwidth if self._trackwidth else 0.0
+        theta_mid = self._theta + dtheta / 2.0
+        self._x += d * math.cos(theta_mid)
+        self._y += d * math.sin(theta_mid)
+        self._theta += dtheta
+
+        return (
+            int(round(self._x)),
+            int(round(self._y)),
+            int(round(math.degrees(self._theta) * 100.0)),
+        )
+
 
 class TraceModel:
     """Four-polyline world-cm pose accumulator.
@@ -99,27 +209,40 @@ class TraceModel:
 
     Parameters
     ----------
-    None.  Call ``anchor()`` before the first ``feed()`` call to set the
-    initial world pose.  If not called, the anchor defaults to (0, 0, 0) on
-    the first frame.
+    trackwidth : float, optional
+        Trackwidth (mm) for the host-side encoder dead-reckoning fallback
+        (``EncoderDeadReckoner``, used when a frame carries ``enc`` but no
+        ``encpose`` -- see ``feed()``'s own docstring). Defaults to the
+        project's usual trackwidth (128 mm); update live via
+        ``set_trackwidth()`` (e.g. on a robot-config change).
+    None otherwise.  Call ``anchor()`` before the first ``feed()`` call to
+    set the initial world pose.  If not called, the anchor defaults to
+    (0, 0, 0) on the first frame.
 
     Attributes
     ----------
     camera : list[tuple[float, float]]
         World-cm points from ground-truth (aprilcam / sim truth).
     encoder : list[tuple[float, float]]
-        World-cm points from the firmware's encoder-only dead-reckoned pose.
+        World-cm points from the encoder-only dead-reckoned pose --
+        firmware ``encpose`` when present, else the host-side
+        ``EncoderDeadReckoner`` fallback computed from ``enc`` (097).
     otos : list[tuple[float, float]]
         World-cm points from raw OTOS sensor.
     fused : list[tuple[float, float]]
         World-cm points from firmware EKF fused pose.
     enabled : dict[str, bool]
         Per-trace visibility flag.  Does not gate accumulation.
+    encoder_yaw : float | None
+        Current encoder-trace heading (radians, display/anchor frame) --
+        the ``CanvasController`` avatar's heading source while the fused
+        pose (098) is unavailable.  ``None`` until the first ``feed()`` of
+        a frame carrying ``enc``/``encpose``.
     """
 
     TRACE_NAMES = ("camera", "encoder", "otos", "fused")
 
-    def __init__(self) -> None:
+    def __init__(self, trackwidth: float = _DEFAULT_TRACKWIDTH) -> None:  # [mm]
         # --- world polylines ---
         self.camera: list[tuple[float, float]] = []
         self.encoder: list[tuple[float, float]] = []
@@ -133,6 +256,15 @@ class TraceModel:
             "otos": True,
             "fused": True,
         }
+
+        # --- host-side encoder dead reckoning (097) -- see feed()'s docstring ---
+        self._dead_reckoner = EncoderDeadReckoner(trackwidth)
+        self.encoder_yaw: float | None = None  # [rad] display-frame heading
+        # Last dead-reckoned (or firmware, when present) encpose in the raw
+        # firmware shape (mm, mm, cdeg) -- consumers that used to read the
+        # wire's encpose= (the telemetry breakout panel) read this instead,
+        # since binary TLM carries no encpose field (096-001's trim).
+        self.last_encpose: tuple[int, int, int] | None = None
 
         # --- anchor pose: the world pose at the start of the trace ---
         self._anchor_x: float = 0.0   # cm
@@ -175,6 +307,13 @@ class TraceModel:
         # Reset baselines so next feed() re-establishes them.
         self._reset_baselines()
 
+    def set_trackwidth(self, trackwidth: float) -> None:  # [mm]
+        """Update the trackwidth used by the host-side encoder dead
+        reckoning fallback (see ``feed()``'s own docstring).  Call this
+        when the active robot config changes (e.g. ``__main__.py``'s
+        robot-selection handler)."""
+        self._dead_reckoner.set_trackwidth(trackwidth)
+
     def feed(self, frame: "TLMFrame") -> None:
         """Ingest one TLMFrame and append to the appropriate trace lists.
 
@@ -184,15 +323,35 @@ class TraceModel:
         Parameters
         ----------
         frame:
-            Parsed telemetry frame from ``parse_tlm()``.  Missing sensors
-            (``None`` fields) are silently skipped.
+            Parsed telemetry frame (``TLMFrame``, from ``NezhaProtocol``'s
+            telemetry delivery).  Missing sensors (``None`` fields) are
+            silently skipped.
+
+        Encoder trace fallback (097)
+        -----------------------------
+        Binary telemetry has NO wire representation for ``encpose`` at all
+        (096-001's trim; ``TLMFrame.from_pb2()`` never sets it) -- so on the
+        binary plane ``frame.encpose`` is always ``None``. Rather than let
+        the ``encoder`` trace (and the canvas avatar, which now prefers it
+        -- see ``canvas.py``'s ``_update_marker()``) sit permanently empty
+        until sprint 098 wires a real fused pose, this dead-reckons an
+        equivalent pose HOST-SIDE from ``frame.enc`` (cumulative per-wheel
+        distance, always present) via ``EncoderDeadReckoner``, in the SAME
+        ``(mm, mm, cdeg)`` absolute-pose shape ``encpose`` would have used
+        -- so it flows through the EXISTING ``_feed_encpose()`` baseline/
+        anchor-rotation machinery unchanged. A real firmware ``encpose``
+        (if a future build ever adds it back) always takes priority.
         """
         if not self._anchor_set:
             self.anchor(0.0, 0.0, 0.0)
 
-        # --- encoder-only dead-reckoned pose (firmware-computed) ---
-        if frame.encpose is not None:
-            self._feed_encpose(frame.encpose)
+        # --- encoder-only dead-reckoned pose ---
+        encpose = frame.encpose
+        if encpose is None and frame.enc is not None:
+            encpose = self._dead_reckoner.update(*frame.enc)
+        if encpose is not None:
+            self.last_encpose = encpose
+            self._feed_encpose(encpose)
 
         # --- OTOS odometry ---
         if frame.otos is not None:
@@ -225,6 +384,7 @@ class TraceModel:
         self.encoder.clear()
         self.otos.clear()
         self.fused.clear()
+        self.last_encpose = None
         self._reset_baselines()
 
     # ------------------------------------------------------------------
@@ -236,6 +396,11 @@ class TraceModel:
         self._encpose_baseline = None
         self._otos_baseline = None
         self._pose_baseline = None
+        # 097: also re-zero the host-side dead-reckoning integrator so a
+        # "Set Robot @ 0,0" reset (anchor() + clear()) restarts the encoder
+        # trace from a clean pose, not just a clean display baseline.
+        self._dead_reckoner.reset()
+        self.encoder_yaw = None
 
     def _tw(self, bx_cm: float, by_cm: float) -> tuple[float, float]:
         """Body-to-world transform.
@@ -297,28 +462,39 @@ class TraceModel:
         """Compute encoder-only pose displacement and append to the encoder trace.
 
         Structurally identical to ``_feed_otos``/``_feed_fused`` (068-003):
-        ``frame.encpose`` is the firmware's own encoder-only dead-reckoned
-        pose (``Odometry::predict()``), already an absolute world-frame pose
-        — the host no longer re-integrates raw wheel counts host-side.
-        Rotates the firmware world-frame delta by
-        ``(anchor_yaw - firmware_heading_at_baseline)`` (CR-10) — see
+        ``encpose`` is an ALREADY-ABSOLUTE world-frame pose — the firmware's
+        own ``Odometry::predict()`` output when present, or (097, binary
+        plane) the host-side ``EncoderDeadReckoner`` fallback ``feed()``
+        synthesizes in the identical shape (see ``feed()``'s own
+        docstring). Either way this method does not re-integrate raw wheel
+        counts itself. Rotates the world-frame delta by
+        ``(anchor_yaw - heading_at_baseline)`` (CR-10) — see
         ``_feed_otos``/``_rw``.
+
+        Also updates ``self.encoder_yaw`` (097) — the current encoder-trace
+        heading in the display/anchor frame, radians — the same quantity
+        ``_update_marker``'s avatar-heading argument used to read
+        exclusively from ``frame.pose`` (fused). Computed as ``rot +
+        heading`` so it is display-frame-aligned the same way the returned
+        world-cm position is.
 
         Parameters
         ----------
         encpose:
-            (x, y, heading) in (mm, mm, cdeg) absolute encoder-only pose from
-            TLMFrame.encpose.
+            (x, y, heading) in (mm, mm, cdeg) absolute encoder-only pose,
+            firmware ``encpose`` or the host dead-reckoning fallback.
         """
         if self._encpose_baseline is None:
             self._encpose_baseline = encpose
             self.encoder.append(self._tw(0.0, 0.0))
+            self.encoder_yaw = self._anchor_h
             return
 
         dx_cm = (encpose[0] - self._encpose_baseline[0]) / 10.0
         dy_cm = (encpose[1] - self._encpose_baseline[1]) / 10.0
         rot = self._anchor_h - math.radians(self._encpose_baseline[2] / 100.0)
         self.encoder.append(self._rw(dx_cm, dy_cm, rot))
+        self.encoder_yaw = rot + math.radians(encpose[2] / 100.0)
 
     def _feed_otos(self, otos: tuple[int, int, int]) -> None:
         """Compute OTOS displacement and append to the otos trace.

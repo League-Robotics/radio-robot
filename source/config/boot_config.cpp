@@ -17,10 +17,11 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
     // control._vel_gains_domain marker), falling back to bench-tuned firmware
     // defaults when absent. Live-correctable per motor via `DEV M <n> CFG`.
     msg::Gains velGains;
-    velGains.kp = 0.0022f;
-    velGains.ki = 0.0018f;
-    velGains.kff = 0.001f;
+    velGains.kp = 0.0018f;
+    velGains.ki = 0.008f;
+    velGains.kff = 0.00135f;
     velGains.i_max = 0.3f;
+    velGains.kaw = 15.0f;   // anti-windup back-calculation (velocity_pid.cpp; 0 = off)
 
     // reversal_dwell / output_deadband are left unset (.has == false) on
     // purpose — Hal::Motor::configure() applies the real ship defaults (100 ms

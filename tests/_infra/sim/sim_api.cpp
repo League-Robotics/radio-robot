@@ -67,7 +67,6 @@
 // sim_command(h, line) — thin SERIAL-only wrapper over sim_command_on()
 // (088-006): every pre-088-006 call site (~183 test functions across
 // tests/sim/unit/) is source-compatible and behaves identically.
-#include "commands/telemetry_commands.h"
 #include "hal/sim/sim_setters.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
@@ -80,6 +79,7 @@
 #include "subsystems/drivetrain.h"
 #include "subsystems/hardware.h"
 #include "subsystems/sim_hardware.h"
+#include "telemetry/telemetry_tick.h"
 #include "types/clock.h"
 
 #include <cstdint>
@@ -128,10 +128,22 @@ struct MotorConfigSet {
 MotorConfigSet defaultMotorConfigSet() {
     MotorConfigSet set;
 
+    // Velocity-PID gains CALIBRATED TO THE SIM PLANT (2026-07-11 fix). The
+    // sim plant is exactly linear: wheel velocity = duty * kNominalMaxSpeed
+    // (physics_world.cpp update() sub-step A), so the exact feed-forward is
+    // kff = 1/kNominalMaxSpeed -- duty = kff*|target| reproduces the target
+    // 1:1 and kp/ki only clean up residuals. The previous hand-typed
+    // kff = 0.0038 (a stale bench-tuned value for the REAL motor's duty
+    // scale) overdrove this plant's feed-forward by 52% (0.0038 * 400 =
+    // 1.52), and kp/ki were too weak to pull the error back within a
+    // segment: every wheel ran ~1.22-1.28x its commanded setpoint, so every
+    // pivot over-rotated ~22% (RT 90 -> ~110 deg) while the executor's own
+    // emitted plan integrated to the target EXACTLY. Encoder-bounded
+    // STOP_DISTANCE masked the same overdrive on translate legs.
     msg::Gains velGains;
-    velGains.kp = 0.0022f;
-    velGains.ki = 0.0018f;
-    velGains.kff = 0.0038f;
+    velGains.kp = 0.0005f;
+    velGains.ki = 0.0005f;
+    velGains.kff = 1.0f / Hal::PhysicsWorld::kNominalMaxSpeed;   // = 0.0025
     velGains.i_max = 0.3f;
 
     for (uint32_t i = 0; i < Subsystems::Hardware::kMotorCount; ++i) {
@@ -139,13 +151,13 @@ MotorConfigSet defaultMotorConfigSet() {
         set.cfg[i].setPort(i + 1);
         set.cfg[i].setFwdSign(1);
         set.cfg[i].setVelGains(velGains);
-        set.cfg[i].setVelFiltAlpha(0.3f);
+        set.cfg[i].setVelFiltAlpha(1.0f);
         // 091-002: I2C flip-flop poll-schedule membership -- true for the
         // drive pair (indices 0/1, physical ports 1/2, matching
         // defaultSimDrivetrainConfig()'s left_port=1/right_port=2), false
         // otherwise. Subsystems::SimHardware itself ignores this (it ticks
         // all four motors every pass unconditionally -- sim_hardware.h's
-        // own file header), but dev_commands.cpp's DUTY/VEL/POS `ERR nodev`
+        // own file header), but text_channel.cpp's DEV DUTY/VEL/POS `ERR nodev`
         // gate reads bb.motorConfig[idx].polled regardless of which
         // Hardware owner is behind it -- this is the config every
         // pytest-collected sim test actually runs against, so getting it
@@ -174,7 +186,15 @@ msg::PlannerConfig defaultSimMotionConfig() {
     msg::PlannerConfig cfg;
     cfg.a_max = 800.0f;         // [mm/s^2]
     cfg.a_decel = 800.0f;       // [mm/s^2]
-    cfg.v_body_max = 1000.0f;   // [mm/s]
+    // v_body_max: capped to the SIM PLANT's own capability (2026-07-11) --
+    // kNominalMaxSpeed = 400 mm/s less 5% saturation headroom -- rather than
+    // main.cpp's 1000. A plan that cruises above what the plant can execute
+    // saturates the duty at 1.0 and silently accrues a travel deficit the
+    // divergence replan then has to chase (a D 345 planned at 465 mm/s
+    // landed 8-13mm short depending on replan thresholds). Like the
+    // velocity-PID gains above, the motion ceiling is a PLANT-SPECIFIC
+    // quantity: plans must never ask the actuator for more than it has.
+    cfg.v_body_max = 380.0f;    // [mm/s] = kNominalMaxSpeed * 0.95
     cfg.yaw_rate_max = 6.0f;    // [rad/s]
     cfg.yaw_acc_max = 20.0f;    // [rad/s^2]
     cfg.j_max = 5000.0f;        // [mm/s^3]
@@ -308,8 +328,10 @@ SimHandle::SimHandle()
 // (sTimeout is NOT one of the Configurator's four targets, Open Question 4 --
 // there is no live StreamingDriveWatchdog instance here to feed, so this
 // mirrors only the "publish the window" half of what that class's owner
-// would do, matching commands/motion_commands.h's own StreamingDriveWatchdog::
-// setWindow()/window() shape without instantiating the class itself).
+// would do, matching the now-deleted StreamingDriveWatchdog's own (git
+// history, formerly commands/motion_commands.h -- 097-006 deleted the
+// class outright) setWindow()/window() shape without instantiating the
+// class itself).
 void drainConfig(SimHandle& s) {
     while (s.configurator.pending(s.bb)) {
         s.configurator.applyOne(s.bb);
@@ -571,7 +593,7 @@ int sim_get_reply_store_len(void* h, int channel) {
 // sim_peek_reply_store (096-002, test-only) -- non-destructive read of one
 // channel's CURRENT ReplyStore content, companion to
 // sim_get_reply_store_len() above. Added so a test can drain the periodic
-// TLM frames tickTelemetry() (commands/telemetry_commands.cpp) appends into
+// TLM frames tickTelemetry() (telemetry/telemetry_tick.cpp) appends into
 // a channel's sync store across a run of sim_tick() calls -- neither
 // sim_command() nor sim_command_on() can be used for this: both reset
 // (clear) BOTH stores before routing anything, which would silently wipe
@@ -595,6 +617,39 @@ int sim_peek_reply_store(void* h, int channel, char* store_out, int size) {
         store_out[copy] = '\0';
         n = copy;
     }
+    return n;
+}
+
+// ---------------------------------------------------------------------------
+// sim_drain_reply_store (097, SimConnection binary transport -- test-only) --
+// DESTRUCTIVE read of one channel's CURRENT ReplyStore content: returns
+// exactly what sim_peek_reply_store() above would, then resets (clears)
+// THAT ONE channel's store. Added for host/robot_radio/io/sim_conn.py's
+// SimConnection.drain_binary_tlm(): neither existing accessor is enough on
+// its own -- sim_peek_reply_store() is non-destructive, so a caller that
+// only ever peeks lets tickTelemetry()'s periodic frames accumulate in the
+// store until it silently overflows (ReplyStore::append()'s own
+// once-full-every-further-append-is-a-no-op behavior, this file's own
+// ReplyStore struct above); sim_command()/sim_command_on() DO reset a
+// store, but only as an incidental side effect of routing an unrelated
+// command, and they reset BOTH channels' stores unconditionally (this
+// file's "Two reply-store instances" note), which would also wipe out
+// whatever the OTHER channel had pending. This entry point resets only the
+// ONE channel it drains, with no command routed at all.
+// ---------------------------------------------------------------------------
+int sim_drain_reply_store(void* h, int channel, char* store_out, int size) {
+    SimHandle* s = static_cast<SimHandle*>(h);
+    ReplyStore& store = (static_cast<Subsystems::Channel>(channel) == Subsystems::Channel::RADIO)
+                             ? s->syncStoreRadio
+                             : s->syncStoreSerial;
+    int n = store.written;
+    if (store_out && size > 0) {
+        int copy = (n < size - 1) ? n : size - 1;
+        memcpy(store_out, store.buf, static_cast<size_t>(copy));
+        store_out[copy] = '\0';
+        n = copy;
+    }
+    store.reset();
     return n;
 }
 
@@ -662,6 +717,29 @@ float sim_get_enc_r(void* h) { return static_cast<SimHandle*>(h)->hardware.plant
 // physical ports 1/2 -- 0-based motor indices, OOP refactor).
 float sim_get_vel_l(void* h) { return static_cast<SimHandle*>(h)->hardware.simMotor(0).velocity(); }
 float sim_get_vel_r(void* h) { return static_cast<SimHandle*>(h)->hardware.simMotor(1).velocity(); }
+
+// sim_get_active (097-008, TEST-ONLY) -- bb.drivetrain.busy directly,
+// bypassing the telemetry wire entirely. Added when the deleted one-shot
+// text TLM verb's own tests (tests/sim/unit/test_bare_loop_move_and_tlm.py)
+// were re-pointed at the binary `stream` arm: most of those tests tolerate
+// the one extra tick_for() pass a wire read now costs (there is no more
+// dt=0 one-shot TLM -- tickTelemetry() only ever runs from a real
+// sim_tick() pass), but test_pivot_completes_promptly_single_peaked polls
+// "is it idle yet" on nearly every iteration of a tight per-tick loop -- an
+// extra tick per read would silently double the plant's effective
+// simulated time per iteration there, corrupting the single-peak/
+// prompt-idle timing that test exists to verify (and the ReplyStore the
+// wire path writes into is a small fixed-size buffer with no wraparound,
+// so polling it every iteration over a multi-second test would also
+// silently overflow and freeze it -- see _binary_envelope.py's
+// read_tlm_now() for the full rationale). bb.drivetrain.busy is exactly
+// the value Telemetry::tick() copies into TlmFrameInput.active
+// (source/telemetry/tlm_frame.cpp) -- this is the SAME value, read
+// directly, with the same zero-cost-peek posture sim_get_vel_l()/
+// sim_get_enc_l() above already established for exactly this reason.
+int sim_get_active(void* h) {
+    return static_cast<SimHandle*>(h)->bb.drivetrain.busy ? 1 : 0;
+}
 
 float sim_get_pwm_l(void* h) {
     return static_cast<float>(static_cast<SimHandle*>(h)->hardware.plant().pwmL());

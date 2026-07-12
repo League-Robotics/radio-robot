@@ -70,6 +70,7 @@ VEL_KP    = 0.0022
 VEL_KI    = 0.0018
 VEL_KFF   = 0.0038
 VEL_IMAX  = 0.3
+VEL_KAW   = 0.0   # anti-windup back-calculation gain (0 = off)
 
 # EMA coefficient in NezhaMotor::tick()'s
 # `filteredVelocity_ = a*rawVel + (1-a)*filteredVelocity_`. a=0 pins reported
@@ -285,13 +286,14 @@ def vel_gains_for_config(cfg: dict):
     ki   = _get(ctrl, "vel_ki",   default=VEL_KI)
     kff  = _get(ctrl, "vel_kff",  default=VEL_KFF)
     imax = _get(ctrl, "vel_imax", default=VEL_IMAX)
+    kaw  = _get(ctrl, "vel_kaw",  default=VEL_KAW)
     filt = _get(ctrl, "vel_filt", default=VEL_FILT_ALPHA)
-    return float(kp), float(ki), float(kff), float(imax), float(filt)
+    return float(kp), float(ki), float(kff), float(imax), float(kaw), float(filt)
 
 
 def generate(cfg: dict, source_path: str) -> str:
     trackwidth   = _get(cfg, "geometry", "trackwidth", default=TRACKWIDTH_DEFAULT)
-    vel_kp, vel_ki, vel_kff, vel_imax, vel_filt = vel_gains_for_config(cfg)
+    vel_kp, vel_ki, vel_kff, vel_imax, vel_kaw, vel_filt = vel_gains_for_config(cfg)
     travel_calib = travel_calib_for_ports(cfg)
     fwd_sign     = fwd_sign_for_ports(cfg)
     polled       = polled_for_ports()
@@ -337,6 +339,7 @@ void defaultMotorConfigs(msg::MotorConfig* out) {{
     velGains.ki = {_f(vel_ki)};
     velGains.kff = {_f(vel_kff)};
     velGains.i_max = {_f(vel_imax)};
+    velGains.kaw = {_f(vel_kaw)};   // anti-windup back-calculation (velocity_pid.cpp; 0 = off)
 
     // reversal_dwell / output_deadband are left unset (.has == false) on
     // purpose — Hal::Motor::configure() applies the real ship defaults (100 ms

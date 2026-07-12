@@ -13,8 +13,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # PhysicsWorld/SimOdometer std::mt19937 members) — the same define every
 # tests/sim/unit/*_harness.cpp compiles with. ROBOT_DEV_BUILD=1 mirrors
 # codal.json's "config" object (the value the ARM firmware build itself
-# uses) so the DEV command family (source/commands/dev_commands.*,
-# source/dev_loop.*) compiles in here exactly as it does on-target.
+# uses) so the DEV command family (097-011: folded into
+# source/commands/text_channel.{h,cpp}'s own Section 3, formerly
+# source/commands/dev_commands.*; source/dev_loop.*) compiles in here
+# exactly as it does on-target.
 add_definitions(-DHOST_BUILD=1 -DROBOT_DEV_BUILD=1)
 
 # ---------------------------------------------------------------------------
@@ -48,19 +50,46 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #   subsystems/pose_estimator.cpp           -- 082-002/082-003's PoseEstimator
 #   estimation/ekf_tiny.cpp                 -- 082-001's EkfTiny (PoseEstimator's EKF core)
 #   telemetry/tlm_frame.cpp                 -- 082-004's pure TLM frame formatter
-#   commands/{arg_parse,binary_channel,command_processor,config_commands,
-#             dev_commands,motion_commands,otos_commands,pose_commands,
-#             system_commands,telemetry_commands}.cpp -- the command
-#                                               dispatch + DEV +
-#                                               motion (S/T/D/STOP, 084-002)
-#                                               + telemetry (STREAM/SNAP) +
-#                                               config (SET/GET, 084-006) +
-#                                               pose-set (SI/ZERO, 084-007) +
-#                                               OTOS (OI/OZ/OR/OP/OV/OL/OA,
-#                                               084-008) families + the
-#                                               binary command plane's
+#   telemetry/telemetry_tick.cpp            -- 096-002's loop-owned periodic
+#                                               STREAM emission (tickTelemetry()
+#                                               + file-local telemetryEmitBinary()).
+#                                               Relocated verbatim from
+#                                               commands/telemetry_commands.cpp by
+#                                               097-011 (briefly folded into
+#                                               commands/binary_channel.{h,cpp}),
+#                                               then out to this dedicated pair by
+#                                               a later cleanup -- see that file's
+#                                               own header comment.
+#   commands/{arg_parse,binary_channel,command_processor,
+#             text_channel}.cpp -- the command dispatch + the text safety
+#                                               rump (STOP/PING/HELLO,
+#                                               text_channel.cpp Section 1)
+#                                               + DEV (Section 3) +
+#                                               pose-set (SI/ZERO, 084-007,
+#                                               Section 2) + OTOS
+#                                               (OI/OZ/OR/OP/OV/OL/OA,
+#                                               084-008, Section 2) families
+#                                               + the binary command plane's
 #                                               oneof-arm dispatcher
-#                                               (095-007, M5 BinaryChannel)
+#                                               (095-007, M5 BinaryChannel).
+#                                               097-011 consolidated the
+#                                               former six file pairs
+#                                               (motion_commands,
+#                                               system_commands,
+#                                               telemetry_commands,
+#                                               pose_commands, otos_commands,
+#                                               dev_commands) into
+#                                               text_channel.{h,cpp} --
+#                                               source/commands/ now holds
+#                                               exactly 4 file pairs.
+#                                               config_commands.cpp (text
+#                                               SET/GET, 084-006) DELETED
+#                                               097-007 (architecture-
+#                                               update-r2.md Decision 9) --
+#                                               binary `config`/`get`
+#                                               (BinaryChannel, above) is
+#                                               the only config-plane path
+#                                               left.
 #   runtime/main_loop.cpp                   -- 087-007's real cyclic
 #                                               executive (Rt::MainLoop --
 #                                               mandatory tick -> commit,
@@ -137,16 +166,11 @@ set(FIRMWARE_SOURCES
     "${SOURCE_DIR}/subsystems/pose_estimator.cpp"
     "${SOURCE_DIR}/estimation/ekf_tiny.cpp"
     "${SOURCE_DIR}/telemetry/tlm_frame.cpp"
+    "${SOURCE_DIR}/telemetry/telemetry_tick.cpp"
     "${SOURCE_DIR}/commands/arg_parse.cpp"
     "${SOURCE_DIR}/commands/binary_channel.cpp"
     "${SOURCE_DIR}/commands/command_processor.cpp"
-    "${SOURCE_DIR}/commands/config_commands.cpp"
-    "${SOURCE_DIR}/commands/dev_commands.cpp"
-    "${SOURCE_DIR}/commands/motion_commands.cpp"
-    "${SOURCE_DIR}/commands/otos_commands.cpp"
-    "${SOURCE_DIR}/commands/pose_commands.cpp"
-    "${SOURCE_DIR}/commands/system_commands.cpp"
-    "${SOURCE_DIR}/commands/telemetry_commands.cpp"
+    "${SOURCE_DIR}/commands/text_channel.cpp"
     "${SOURCE_DIR}/runtime/main_loop.cpp"
     "${SOURCE_DIR}/runtime/configurator.cpp"
     "${SOURCE_DIR}/runtime/command_router.cpp"
@@ -173,7 +197,7 @@ add_library(firmware_host SHARED
 # comment near "finally, find sources and includes"). SOURCE_DIR alone
 # resolves every OTHER directory-qualified include in this source list
 # ("hal/capability/motor.h", "subsystems/hardware.h", "messages/motor.h",
-# "commands/dev_commands.h", ...) — TYPES_DIR is needed only for the bare
+# "commands/text_channel.h", ...) — TYPES_DIR is needed only for the bare
 # forms above. Mirrors tests/sim/unit/test_dev_command_outbox.py's two -I
 # flags exactly.
 #

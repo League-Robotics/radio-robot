@@ -530,6 +530,14 @@ def _read_fresh_pose(transport, fused: dict, settle_s: float) -> "tuple[int, int
 
 
 @_requires_sim_lib
+@pytest.mark.xfail(
+    reason="097: OZ/SI (SetPose) have no binary arm until sprint 098 -- "
+           "the origin_btn's OZ/SI wire commands are gated no-ops (and the "
+           "button itself is now disabled while connected), so the fused "
+           "pose is never actually reset. See binary_bridge.py / "
+           "operations.py's OpsController.set_connected().",
+    strict=False,
+)
 def test_set_origin_button_resets_fused_pose_to_world_origin_against_real_sim(
     qapp, monkeypatch, tmp_path
 ) -> None:

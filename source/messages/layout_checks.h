@@ -56,6 +56,12 @@ static_assert(std::is_standard_layout<Stop>::value,
               "msg::Stop must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<DeviceId>::value,
               "msg::DeviceId must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<Hello>::value,
+              "msg::Hello must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<Ver>::value,
+              "msg::Ver must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<Help>::value,
+              "msg::Help must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Ack>::value,
               "msg::Ack must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Error>::value,
@@ -66,6 +72,8 @@ static_assert(std::is_standard_layout<ConfigSnapshot>::value,
               "msg::ConfigSnapshot must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<EventNotify>::value,
               "msg::EventNotify must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<HelpText>::value,
+              "msg::HelpText must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<BodyTwist3>::value,
               "msg::BodyTwist3 must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<WheelTargets>::value,

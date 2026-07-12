@@ -24,9 +24,37 @@ namespace {
 // warns must never regress (clasi/issues/
 // motor-actuation-latency-flipflop-coupling.md).
 #ifdef HOST_BUILD
-constexpr float kOutputHops = 2.0f;  // sim: no flip-flop, no transport lag
+// Sim: 1.5 output passes (30ms) -- RE-MEASURED 2026-07-11 after the sim
+// boot velocity gains were calibrated to the plant (tests/_infra/sim/
+// sim_api.cpp defaultMotorConfigSet(): kff = 1/kNominalMaxSpeed exact
+// feed-forward, gentle kp/ki, velFiltAlpha = 1.0 honest measurement). The
+// STRUCTURAL pipeline is 2 passes (one pass command->plant application +
+// one pass plant->encoder reporting; encoder-vs-command-integral
+// cross-correlation is ambiguous between 1 and 2 passes at 20ms sampling),
+// but the EFFECTIVE lag the stop projection must model is smaller: the
+// proportional term acts on the tracking error and claws back ~half a
+// pass. Landed empirically between the structural bounds: at 2.0 the
+// projected fire overestimates in-flight coverage and lands D 345 ~6mm
+// short; at 1.0 pivots run ~3 deg long (phantom-extension replans); at
+// 1.5, D 240/345/700 land within 1mm and pivots within 0.5 deg. The
+// PREVIOUS gain set (stale kff = 0.0038 overdriving the feed-forward 52%,
+// strong kp through a laggy 0.3 filter) made the plant LEAD its own
+// command integral, which invalidated any calibration of this constant --
+// gains first, then this.
+constexpr float kOutputHops = 1.5f;
 #else
-constexpr float kOutputHops = 4.0f;  // real brick: measured ~80 ms flip-flop actuation dead-time
+// Real brick: RE-MEASURED 2026-07-11 at the bench (motion-onset delay,
+// command-commit `now` vs first encoder movement `ts`, across 90/180/360
+// pivots: 112-136ms; velocity onset 100-112ms) AFTER the velocity
+// feed-forward was calibrated to the measured motor plateau (tovez.json
+// vel_kff = 1/650 -- the old 0.001 made the plant so sluggish the shorter
+// 80ms model happened to fit its EFFECTIVE lag). With the modeled dead
+// time 40ms short of reality, maybeReplanPivot()'s expectation read every
+// pivot as diverged and shrink-retargeted plans ~15-25 deg short
+// (emitted integral 64 deg for a 90 deg ask). Same lesson as the sim
+// constant above: this is a GAIN-DEPENDENT calibration -- re-measure it
+// whenever the velocity gains change.
+constexpr float kOutputHops = 6.0f;  // 120 ms
 #endif
 constexpr float kAssumedPassPeriod = 0.020f;  // [s] matches main.cpp's kPeriod
 constexpr float kDeadTime = kOutputHops * kAssumedPassPeriod;  // [s]
@@ -182,9 +210,13 @@ void SegmentExecutor::replaceStream(const Segment& segment, uint32_t now,
     needPrePivot_ = false;
     needTranslate_ = fabsf(translateTarget_) > kDistEps;
     needTerminalPivot_ = fabsf(terminalPivotTarget_) > kAngleEps;
+    // UNCONDITIONAL else branches (2026-07-10 UB fix, mirrors
+    // beginStreamFresh()/mergePending()): this leaves phase_ == BLEND below,
+    // which samples both channels every pass, so neither may be left
+    // un-calculate()'d regardless of its need flag.
     if (linear_.duration() > 0.0f) {
       linear_.retarget(translateTarget_);
-    } else if (needTranslate_) {
+    } else {
       linear_.reset();
       linear_.solveToRest(translateTarget_, linearCeiling_);
     }
@@ -192,7 +224,7 @@ void SegmentExecutor::replaceStream(const Segment& segment, uint32_t now,
     linearSolveMs_ = now;
     if (rotational_.duration() > 0.0f) {
       rotational_.retarget(terminalPivotTarget_);
-    } else if (needTerminalPivot_) {
+    } else {
       rotational_.reset();
       rotational_.solveToRest(terminalPivotTarget_, rotationalCeiling_);
     }
@@ -229,8 +261,19 @@ void SegmentExecutor::buildBlendStops() {
 void SegmentExecutor::beginStreamFresh(uint32_t now) {
   linear_.reset();
   rotational_.reset();
-  if (needTranslate_) linear_.solveToRest(translateTarget_, linearCeiling_);
-  if (needTerminalPivot_) rotational_.solveToRest(terminalPivotTarget_, rotationalCeiling_);
+  // UNCONDITIONAL for both channels (2026-07-10 UB fix): tick()'s BLEND
+  // branch samples BOTH linear_ AND rotational_ every pass -- translate and
+  // pivot run simultaneously in BLEND -- so a channel whose need flag is
+  // false here must still hold a real calculate()'d Ruckig trajectory
+  // before phase_ becomes BLEND below, or sampling it is undefined behavior
+  // (jerk_trajectory.h's calculated_ doc). translateTarget_/
+  // terminalPivotTarget_ are already ~0 in the not-needed case (that IS
+  // what "not needed" means -- see kDistEps/kAngleEps in start()), so this
+  // just solves a trivial "stay at rest" trajectory for that channel; not a
+  // behavior change for the needed-channel case, which solved exactly this
+  // way before.
+  linear_.solveToRest(translateTarget_, linearCeiling_);
+  rotational_.solveToRest(terminalPivotTarget_, rotationalCeiling_);
   linearTarget_ = translateTarget_;
   rotationalTarget_ = terminalPivotTarget_;
   linearSolveMs_ = now;
@@ -271,10 +314,14 @@ void SegmentExecutor::mergePending(uint32_t now, const msg::MotorState& encLeft,
   // retarget() continues from the channel's CURRENT velocity/accel
   // (jerk_trajectory.h's chaining contract) -- including retarget(0) to
   // smoothly shed a channel the merged stream no longer drives. A channel
-  // with no plan yet this life (duration 0) solves fresh from rest.
+  // with no plan yet this life (duration 0) solves fresh from rest --
+  // UNCONDITIONALLY (2026-07-10 UB fix, mirrors beginStreamFresh()): BLEND
+  // samples both channels every pass, so a channel must never be left
+  // un-calculate()'d here regardless of its need flag; translateTarget_/
+  // terminalPivotTarget_ are already ~0 in the not-needed case.
   if (linear_.duration() > 0.0f) {
     linear_.retarget(translateTarget_);
-  } else if (needTranslate_) {
+  } else {
     linear_.reset();
     linear_.solveToRest(translateTarget_, linearCeiling_);
   }
@@ -283,7 +330,7 @@ void SegmentExecutor::mergePending(uint32_t now, const msg::MotorState& encLeft,
 
   if (rotational_.duration() > 0.0f) {
     rotational_.retarget(terminalPivotTarget_);
-  } else if (needTerminalPivot_) {
+  } else {
     rotational_.reset();
     rotational_.solveToRest(terminalPivotTarget_, rotationalCeiling_);
   }
@@ -481,39 +528,62 @@ void SegmentExecutor::maybeReplanTranslate(uint32_t now, const msg::MotorState& 
   if (r != Motion::StopEvalResult::NOT_FIRED) return;  // FIRED: the caller's own stop-eval
                                                        // loop owns completion, not a replan
 
-  Motion::JerkTrajectory::State state = linear_.sample(linearElapsed(now));
-  float planRemainingMag = fabsf(linearTarget_ - state.position);
+  float linElapsed = linearElapsed(now);
+  Motion::JerkTrajectory::State state = linear_.sample(linElapsed);
 
   // Model the actuation dead-time INTO the comparison: the plant
   // legitimately lags the plan by kDeadTime, so the measured remaining is
-  // EXPECTED to read planRemaining + planSpeed*kDeadTime. Only divergence
-  // BEYOND that modeled lag is real (093's "delay in the plan", applied to
-  // the replan trigger) -- without this, the tail of every solve reads as
-  // divergent and re-solves a fresh decaying trapezoid: the multi-hump
-  // terminal defect.
-  float expectedRemainingMag =
-      planRemainingMag + fabsf(state.velocity) * kDeadTime;
+  // EXPECTED to read what the plan's remaining WAS kDeadTime ago. Only
+  // divergence BEYOND that modeled lag is real (093's "delay in the plan",
+  // applied to the replan trigger) -- without this, the tail of every solve
+  // reads as divergent and re-solves a fresh decaying trapezoid: the
+  // multi-hump terminal defect. The expectation is taken EXACTLY from the
+  // plan's own profile (peek() at elapsed - kDeadTime) rather than the old
+  // linear planRemaining + v*kDeadTime approximation, whose missing
+  // second-order term read as phantom divergence during hard decels.
+  float lagElapsed = linElapsed - kDeadTime;
+  if (lagElapsed < 0.0f) lagElapsed = 0.0f;
+  Motion::JerkTrajectory::State lagged = linear_.peek(lagElapsed);
+  float expectedRemainingMag = fabsf(linearTarget_ - lagged.position);
   float divergence = fabsf(expectedRemainingMag - measuredRemainingMag);
   if (divergence < kDivergenceThreshold) return;  // within tolerance -- no replan
 
-  float planSpeedMag = fabsf(state.velocity);
-  float projectedRemainingMag = measuredRemainingMag - planSpeedMag * kDeadTime;
+  // Pipeline-in-flight travel, exact from the plan: command distance
+  // already emitted that the plant hasn't shown yet.
+  float pipelineMag = fabsf(state.position - lagged.position);
+  float projectedRemainingMag = measuredRemainingMag - pipelineMag;
   if (projectedRemainingMag <= 0.0f) return;  // never solve backward
 
+  // Same failed-solve discipline as maybeReplanPivot() below: rate-limit
+  // regardless, but never touch the plan's target or timeline unless the
+  // re-solve actually succeeded (a failure would otherwise restart the old
+  // plan's elapsed clock and replay it mid-flight).
+  lastReplanMs_ = now;
   if (divergence >= kGrossDivergenceThreshold) {
     float measuredPositionSigned = linearTarget_ - vSign * measuredRemainingMag;
     float measuredVelocitySigned = 0.0f;
     if (encLeft.velocity.has && encRight.velocity.has) {
       measuredVelocitySigned = (encLeft.velocity.val + encRight.velocity.val) * 0.5f;
     }
-    linear_.reanchor(measuredPositionSigned, measuredVelocitySigned);
+    if (!linear_.reanchor(measuredPositionSigned, measuredVelocitySigned)) {
+      return;
+    }
   } else {
+    // EXTEND-ONLY -- see maybeReplanPivot()'s matching guard: arrival is
+    // owned by the encoder stop; a mid-flight shrink only encodes
+    // measurement bias (per-wheel sampling stagger).
+    Motion::JerkTrajectory::State curLin = linear_.peek(linElapsed);
+    float planRemainingNowMag = fabsf(linearTarget_ - curLin.position);
+    if (projectedRemainingMag <= planRemainingNowMag) {
+      return;
+    }
     float newRemainingSigned = vSign * projectedRemainingMag;
-    linear_.retarget(newRemainingSigned);
+    if (!linear_.retarget(newRemainingSigned)) {
+      return;
+    }
     linearTarget_ = newRemainingSigned;
   }
   linearSolveMs_ = now;
-  lastReplanMs_ = now;
 }
 
 void SegmentExecutor::maybeReplanPivot(uint32_t now, const msg::MotorState& encLeft,
@@ -548,30 +618,86 @@ void SegmentExecutor::maybeReplanPivot(uint32_t now, const msg::MotorState& encL
 
   float measuredRemainingRad = measuredRemainingNative / arcScale_;
 
-  Motion::JerkTrajectory::State state = rotational_.sample(rotationalElapsed(now));
-  float planRemainingRad = fabsf(rotationalTarget_ - state.position);
+  float rotElapsed = rotationalElapsed(now);
+  Motion::JerkTrajectory::State state = rotational_.sample(rotElapsed);
 
-  // Dead-time lag modeled into the comparison -- see maybeReplanTranslate()'s
-  // matching block for the full rationale.
-  float expectedRemainingRad =
-      planRemainingRad + fabsf(state.velocity) * kDeadTime;
+  // Dead-time lag modeled EXACTLY from the plan itself (see
+  // maybeReplanTranslate()'s matching block for the full rationale): the
+  // measured encoders show where the plant was kDeadTime ago, and the plan
+  // knows precisely where IT was kDeadTime ago -- peek() there instead of
+  // the old linear planRemaining + v*kDeadTime approximation, whose missing
+  // second-order term (a*kDeadTime^2/2) read as phantom divergence during
+  // every hard decel and shrink-retargeted high-speed pivots ~2 deg short.
+  float lagElapsed = rotElapsed - kDeadTime;
+  if (lagElapsed < 0.0f) lagElapsed = 0.0f;
+  Motion::JerkTrajectory::State lagged = rotational_.peek(lagElapsed);
+  float expectedRemainingRad = fabsf(rotationalTarget_ - lagged.position);
   float divergence = fabsf(expectedRemainingRad - measuredRemainingRad);
   if (divergence < kRotDivergenceThreshold) return;  // within tolerance -- no replan
 
-  float planSpeedMagRad = fabsf(state.velocity);
-  float projectedRemainingRad = measuredRemainingRad - planSpeedMagRad * kDeadTime;
+  // Pipeline-in-flight travel, also exact from the plan: the command
+  // distance already emitted that the plant hasn't shown yet.
+  float pipelineRad = fabsf(state.position - lagged.position);
+  float projectedRemainingRad = measuredRemainingRad - pipelineRad;
   if (projectedRemainingRad <= 0.0f) return;  // never solve backward
 
+  // Rate-limit further attempts whether or not the solve below succeeds --
+  // a persistently infeasible ask (see the failure note below) would
+  // otherwise re-attempt every pass.
+  lastReplanMs_ = now;
+
+  // A FAILED solve must leave the in-flight plan completely untouched --
+  // trajectory, target, AND timeline. JerkTrajectory's temp-solve keeps the
+  // trajectory intact on failure, but resetting rotationalSolveMs_ here
+  // without a new solve would RESTART the old plan's elapsed clock and
+  // replay it from t=0 mid-flight (observed: a 90 deg pivot re-emitting the
+  // full 90 deg profile on top of its first 77 deg). Failures are now an
+  // expected outcome, not an anomaly: the directional velocity band
+  // (jerk_trajectory.cpp min_velocity) correctly refuses any replan ask
+  // that could only be met by reversing -- e.g. a retarget whose remaining
+  // is shorter than the current speed can stop in.
   if (divergence >= kRotGrossDivergenceThreshold) {
     float measuredPositionSigned = rotationalTarget_ - omegaSign * measuredRemainingRad;
-    rotational_.reanchor(measuredPositionSigned, 0.0f);  // no reliable measured angular rate
+    // Seed the re-solve with the MEASURED angular rate -- (vR - vL)/track --
+    // falling back to the plan's own sampled rate when either wheel velocity
+    // is absent this tick. The original 0.0f seed ("no reliable measured
+    // angular rate") told Ruckig the robot was AT REST while its wheels were
+    // doing ~300 mm/s: the re-solve then planned from rest -- commanded
+    // velocity CLIFFS to zero mid-pivot, the robot visibly stalls ~0.25s,
+    // then a second full acceleration bell follows (the mid-move stall
+    // observed on the bench 2026-07-11: endpoint acceptable, trajectory
+    // garbage). A quantized/lagged measured rate is enormously closer to
+    // the truth than a fabricated zero.
+    float measuredOmega = state.velocity;   // plan-sampled fallback
+    if (encLeft.velocity.has && encRight.velocity.has && trackwidth_ > 1e-3f) {
+      measuredOmega = (encRight.velocity.val - encLeft.velocity.val) / trackwidth_;
+    }
+    if (!rotational_.reanchor(measuredPositionSigned, measuredOmega)) {
+      return;
+    }
   } else {
+    // EXTEND-ONLY (2026-07-11): a retarget may lengthen the plan (deficit-
+    // chasing -- the designed correction for a plant running behind) but
+    // never SHORTEN it. Arrival is owned by the encoder stop, which fires
+    // exactly when the measured arc reaches the target -- so a mid-flight
+    // shrink can only ever encode measurement bias, and a real one exists:
+    // the two wheels are sampled up to ~30ms apart (flip-flop staggering),
+    // which at the 6 rad/s ceiling reads as ~0.09 rad of phantom "ahead".
+    // Cruise-spliced shrink retargets are seamless (no jerk kink, invisible
+    // on every trace) and silently landed 360 deg pivots 25-35 deg short on
+    // runs where jitter bursts crossed the divergence threshold.
+    Motion::JerkTrajectory::State cur = rotational_.peek(rotElapsed);
+    float planRemainingNow = fabsf(rotationalTarget_ - cur.position);
+    if (projectedRemainingRad <= planRemainingNow) {
+      return;
+    }
     float newRemainingSigned = omegaSign * projectedRemainingRad;
-    rotational_.retarget(newRemainingSigned);
+    if (!rotational_.retarget(newRemainingSigned)) {
+      return;
+    }
     rotationalTarget_ = newRemainingSigned;
   }
   rotationalSolveMs_ = now;
-  lastReplanMs_ = now;
 }
 
 void SegmentExecutor::armTranslateStopDecel(uint32_t now) {
@@ -679,6 +805,22 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
     }
   } else {
     bool fired = false;
+    // promptHalt: only a NON-position stop (STOP_TIME safety net, a sensor
+    // stop) demands a freshly-armed decel ramp -- it can fire mid-cruise
+    // with the plan still carrying arbitrary travel. A fired POSITION stop
+    // (STOP_DISTANCE/STOP_ROTATION, raw or dead-time-projected) or plan
+    // exhaustion instead RIDES THE PLAN'S OWN TAIL: every position-mode
+    // plan is a Ruckig to-rest solve whose velocity and acceleration reach
+    // 0 SIMULTANEOUSLY at the target -- that tail is already the optimal
+    // graceful no-reverse stop. Re-arming solveToVelocity(0) from
+    // mid-decel (velocity small, acceleration strongly negative) asks the
+    // velocity interface for "v=0 as fast as possible", which it reaches
+    // EARLY with acceleration still negative -- so the profile passes
+    // through zero and comes back: a commanded ~1-2 deg terminal REVERSAL
+    // at every pivot end (and the streamed-drain reverse-dip; on hardware,
+    // reversal write-trains are the known encoder-wedge trigger). Riding
+    // the existing profile is the library-intended stop for this case.
+    bool promptHalt = false;
     // Dead-time-projected firing for the encoder stops (the 093 spike's
     // "delay in the plan", applied to the terminal edge): the plant lags the
     // plan by kDeadTime, so a raw-threshold stop is systematically reached
@@ -710,6 +852,7 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
                                                msg::PoseEstimate{}) ==
                  Motion::StopEvalResult::FIRED) {
         fired = true;
+        promptHalt = true;
       }
     }
     // Plan exhaustion also completes the phase: if the profile has fully
@@ -738,17 +881,25 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
     if (fired) {
       // (Streaming note: a pending stream segment never reaches this point --
       // it merges at the TOP of tick(), mid-plan. By fire time the queue was
-      // dry, so the decel below IS the stream's graceful stop.)
+      // dry, so the graceful stop below IS the stream's graceful stop.)
       stopping_ = true;
       softDeadline_ = now + kSoftDeadlineMs;
-      if (phase_ == Phase::TRANSLATE) {
-        armTranslateStopDecel(now);
-      } else if (phase_ == Phase::BLEND) {
-        armTranslateStopDecel(now);
-        armPivotStopDecel(now);
-      } else {
-        armPivotStopDecel(now);
+      if (promptHalt) {
+        // Sensor/time stop: can fire mid-cruise with arbitrary plan travel
+        // left -- a freshly-armed velocity-mode decel ramp is the right
+        // (and Ruckig-documented) stop for this genuinely preemptive case.
+        if (phase_ == Phase::TRANSLATE) {
+          armTranslateStopDecel(now);
+        } else if (phase_ == Phase::BLEND) {
+          armTranslateStopDecel(now);
+          armPivotStopDecel(now);
+        } else {
+          armPivotStopDecel(now);
+        }
       }
+      // else: position stop / exhaustion -- ride the plan's own to-rest
+      // tail (see promptHalt's declaration comment). The stopping_
+      // convergence below keys on the SAME (unchanged) plan durations.
     }
   }
 

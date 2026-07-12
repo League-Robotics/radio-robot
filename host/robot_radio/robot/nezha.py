@@ -49,7 +49,7 @@ from typing import Any, Generator
 
 from robot_radio.nav.pose import Pose
 from robot_radio.robot.robot import Robot
-from robot_radio.robot.protocol import NezhaProtocol, TLMFrame, ParsedResponse, parse_tlm, parse_response
+from robot_radio.robot.protocol import NezhaProtocol, TLMFrame, ParsedResponse, parse_response
 from robot_radio.robot.robot_state import RobotState
 
 
@@ -78,7 +78,9 @@ class Nezha(Robot):
 
         speeds = [200, 200]
         for resp in robot.stream_drive(speeds, period=40):
-            tlm = parse_tlm(resp.raw) if resp.tag == "TLM" else None
+            # 097-003: binary telemetry frames arrive already parsed, on
+            # resp.tlm -- see ParsedResponse.tlm's own docstring.
+            tlm = resp.tlm if resp.tag == "TLM" else None
             if tlm and tlm.enc:
                 print(tlm.enc)
             # mutate speeds to steer
@@ -194,7 +196,9 @@ class Nezha(Robot):
         speeds = [l, r]
         try:
             for resp in self._proto.stream_drive(speeds, period=40, watchdog=200):
-                tlm = parse_tlm(resp.raw) if resp.tag == "TLM" else None
+                # 097-003: binary telemetry frames arrive already parsed, on
+                # resp.tlm -- see ParsedResponse.tlm's own docstring.
+                tlm = resp.tlm if resp.tag == "TLM" else None
                 if tlm and tlm.enc:
                     self._apply_tlm(tlm)
                     yield tlm.enc
@@ -247,9 +251,13 @@ class Nezha(Robot):
     ) -> str:
         """Private tick loop for callback-driven go_to / turn.
 
-        Reads lines from ``self._proto._conn.read_lines(duration=50)``,
-        updates robot state from each TLM frame, and calls ``on_tick(self)``
-        after each update.
+        Drains binary telemetry frames (``self._proto.
+        read_pending_binary_tlm_frames()``, 097-003 -- ``stream()`` is
+        binary-only now, see that method's own docstring), updates robot
+        state from each, and calls ``on_tick(self)`` after each update. EVT
+        lines (``done <verb>``/``safety_stop``) still arrive as text, read
+        via ``self._proto._conn.read_lines(duration=50)`` as before -- EVT
+        emission is unaffected by ``stream()``'s binary conversion.
 
         Returns one of: ``"done"``, ``"safety_stop"``, ``"aborted"``,
         ``"timeout"``.
@@ -285,26 +293,25 @@ class Nezha(Robot):
         stopped_since: float | None = None
 
         while time.monotonic() < deadline:
-            lines = self._proto._conn.read_lines(duration=50)
             had_tlm = False
+
+            for tlm in self._proto.read_pending_binary_tlm_frames():
+                self._apply_tlm(tlm)
+                had_tlm = True
+                result = on_tick(self)
+                if result is False:
+                    self._proto._conn.send_fast("X")
+                    self._proto.stream(0)
+                    return "aborted"
+
+            lines = self._proto._conn.read_lines(duration=50)
 
             for raw_line in lines:
                 r = parse_response(raw_line)
                 if r is None:
                     continue
 
-                if r.tag == "TLM":
-                    tlm = parse_tlm(raw_line)
-                    if tlm is not None:
-                        self._apply_tlm(tlm)
-                        had_tlm = True
-                        result = on_tick(self)
-                        if result is False:
-                            self._proto._conn.send_fast("X")
-                            self._proto.stream(0)
-                            return "aborted"
-
-                elif r.tag == "EVT":
+                if r.tag == "EVT":
                     tokens = r.tokens
                     if tokens and tokens[0] == "done":
                         if len(tokens) < 2 or tokens[1] == verb:
@@ -466,10 +473,14 @@ class Nezha(Robot):
 
         Protocol sequence
         -----------------
-        1. ``STREAM <period>`` — enable TLM at the requested period.
+        1. ``STREAM <period>`` — enable TLM at the requested period (binary,
+           097-003 -- see ``NezhaProtocol.stream()``'s own docstring).
         2. ``VW <v> <omega>`` — start body-velocity drive.
-        3. Loop: read lines for 50 ms; for each TLM line call ``_apply_tlm``
-           then ``yield``; on ``EVT safety_stop`` exit naturally.
+        3. Loop: drain binary telemetry frames non-blocking (097-003), call
+           ``_apply_tlm`` then ``yield`` for each; then read text lines for
+           50 ms for ``EVT safety_stop`` (EVT emission is unaffected by
+           ``stream()``'s binary conversion, still text); exit naturally on
+           ``EVT safety_stop``.
         4. Re-send ``VW`` as a keepalive whenever
            ``period * 0.30 / 1000`` seconds have elapsed since the last
            send (≤30% of the firmware watchdog window).
@@ -495,17 +506,19 @@ class Nezha(Robot):
             self._proto._conn.send_fast(vw_cmd)
             last_send = time.monotonic()
             while True:
+                for tlm in self._proto.read_pending_binary_tlm_frames():
+                    self._apply_tlm(tlm)
+                    yield None
+                    now = time.monotonic()
+                    if now - last_send >= keepalive_s:
+                        self._proto._conn.send_fast(vw_cmd)
+                        last_send = now
                 for raw_line in self._proto._conn.read_lines(duration=50):
                     r = parse_response(raw_line)
                     if r is None:
                         continue
                     if r.tag == "EVT" and r.tokens and r.tokens[0] == "safety_stop":
                         return
-                    if r.tag == "TLM":
-                        tlm = parse_tlm(raw_line)
-                        if tlm is not None:
-                            self._apply_tlm(tlm)
-                            yield None
                     now = time.monotonic()
                     if now - last_send >= keepalive_s:
                         self._proto._conn.send_fast(vw_cmd)
@@ -542,9 +555,10 @@ class Nezha(Robot):
             speeds, period=period, watchdog=watchdog
         ):
             if resp.tag == "TLM":
-                tlm = parse_tlm(resp.raw)
-                if tlm:
-                    self._apply_tlm(tlm)
+                # 097-003: binary telemetry frames arrive already parsed, on
+                # resp.tlm -- see ParsedResponse.tlm's own docstring.
+                if resp.tlm:
+                    self._apply_tlm(resp.tlm)
             yield resp
 
     def _apply_tlm(self, tlm: TLMFrame) -> None:

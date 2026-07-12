@@ -71,27 +71,31 @@ def transport():
 def test_drive_produces_moving_telemetry(transport: SimTransport) -> None:
     """``send()``-issued drive commands, once ticked, deliver a moving TLMFrame.
 
-    Exercises the one-way ``conn.send_fast()`` drive path plus the
-    tick-thread's per-iteration ``SNAP`` telemetry poll (``_tick_loop``) —
-    the only way a fresh TLM sample is available in this ABI: ``STREAM``'s
-    periodic re-emission does not flow through the async EVT sink (verified
-    directly against the built ``libfirmware_host`` — ``conn.tick()`` never
-    returns a ``TLM ...`` line on its own, however long it runs).
+    097: drives via the binary-translated ``S`` verb (``DEV DT VW`` has no
+    binary arm and never will -- the legacy ``DEV`` debug command family was
+    retired along with the rest of the text plane; see
+    ``binary_bridge.py``'s module docstring). ``send()`` enqueues the line
+    for the tick-thread, which translates it to a binary
+    ``CommandEnvelope{drive: DrivetrainCommand{wheels}}`` via
+    ``binary_bridge.translate_command()`` and dispatches it through
+    ``SimConnection.send_envelope()`` -- exercising the SAME translation
+    path ``_HardwareTransport.send()`` uses. Telemetry itself is delivered
+    by the tick-thread's continuously-armed binary stream
+    (``conn.drain_binary_tlm()``), not by this command's own reply.
 
     ``mode=`` is NOT checked here (084-005 update): as of ticket 084-005,
     ``mode=`` is derived exclusively from ``Subsystems::Planner::
     state().mode`` (docs/protocol-v2.md §8, architecture-update.md (084)
-    Decision 6) — ``DEV DT VW`` commands ``Drivetrain`` directly and never
-    stages a ``msg::PlannerCommand``, so it correctly reads ``mode=I``
-    throughout this drive even though the wheels are genuinely moving. This
-    test only needs to confirm THAT telemetry moves, which ``vel=`` alone
-    already proves.
+    Decision 6) — ``S`` commands ``Drivetrain`` directly and never stages a
+    ``msg::PlannerCommand``, so it correctly reads ``mode=I`` throughout
+    this drive even though the wheels are genuinely moving. This test only
+    needs to confirm THAT telemetry moves, which ``vel=`` alone already
+    proves.
     """
     frames = []
     transport.on_telemetry = frames.append
 
-    transport.send("DEV DT PORTS 1 2")
-    transport.send("DEV DT VW 200 0 0")
+    transport.send("S 200 200")
 
     def _has_moving_frame() -> bool:
         return any(f.vel[0] or f.vel[1] for f in frames)

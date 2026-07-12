@@ -173,12 +173,39 @@ class JerkTrajectory {
   // next solveToRest()/solveToVelocity() call.
   State sample(float elapsed);  // [s]
 
+  // peek -- evaluate the trajectory at an arbitrary elapsed time WITHOUT
+  // updating the remembered last-sample seed state (a const, pure read;
+  // sample() above is the stateful twin). For consumers that need the plan
+  // at a time OTHER than "now" -- e.g. the divergence replan's exact
+  // dead-time-shifted expectation (the plant's measured position is the
+  // plan's position kDeadTime AGO; peeking there must not corrupt the seed
+  // the next solve reads).
+  State peek(float elapsed) const;  // [s]
+
   // duration -- this channel's currently held trajectory's total duration
   // (Ruckig's own Trajectory::get_duration()). 0 before the first
   // successful solve.
   float duration() const;  // [s]
 
  private:
+  // calculated_ -- true once otg_.calculate() has succeeded at least once
+  // for this instance (set in solvePositionControl()/solveToVelocity()).
+  // Defensive guard (2026-07-10 UB fix): a default-constructed
+  // ruckig::Trajectory<1>'s `duration` field is a real 0.0 (safe), but its
+  // `profiles` array holds a default-constructed ruckig::Profile whose
+  // std::array<double,...> members (p/v/a/t_sum/brake.duration) are NOT
+  // zero-initialized -- reading them via sample()/at_time() before any
+  // calculate() call is undefined behavior (observed on hardware/sim as a
+  // phantom, heap-residue-dependent velocity spike). sample()/duration()
+  // both check this flag and return a safe zero State{}/0.0f instead of
+  // touching traj_ when it is still false. This is belt-and-suspenders: the
+  // primary fix is that every SegmentExecutor call path that can enter a
+  // phase now unconditionally solves EVERY channel it might later sample
+  // (segment_executor.cpp's beginStreamFresh()/mergePending()/
+  // replaceStream()), so traj_ should always be calculate()'d before this
+  // guard would ever trigger in practice.
+  bool calculated_ = false;
+
   // accelBoundsForDirection -- Open Question 2's direction-mirrored
   // max_acceleration/min_acceleration mapping (class comment). Positive
   // direction: (a_max, -a_decel); negative direction: (a_decel, -a_max).

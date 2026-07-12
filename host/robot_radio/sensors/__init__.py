@@ -16,7 +16,7 @@ triggering this module at all::
     from robot_radio.sensors.cam_tracker import CamTracker  # direct, still lazy
 
 Eagerly-available names (no heavy deps):
-    OdomTracker, parse_so, parse_tlm,
+    OdomTracker, parse_so, tlm_to_dict,
     ColorClassifier, nezha_classifier, calibrate_white,
     ThrashMonitor,
     CalibrationError, load, to_wire_values, apply, load_and_apply,
@@ -30,7 +30,7 @@ Lazily-available names (loaded on first access):
 from __future__ import annotations
 
 from robot_radio.sensors.odometry import Odometry
-from robot_radio.sensors.odom_tracker import OdomTracker, parse_so, parse_tlm
+from robot_radio.sensors.odom_tracker import OdomTracker, parse_so, tlm_to_dict
 from robot_radio.sensors.color import ColorClassifier, nezha_classifier, calibrate_white
 from robot_radio.sensors.motion_monitor import ThrashMonitor
 from robot_radio.sensors.calibration import (
@@ -46,7 +46,7 @@ __all__ = [
     "Odometry",
     "OdomTracker",
     "parse_so",
-    "parse_tlm",
+    "tlm_to_dict",
     "ColorClassifier",
     "nezha_classifier",
     "calibrate_white",

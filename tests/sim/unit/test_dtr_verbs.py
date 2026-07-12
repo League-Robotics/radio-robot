@@ -1,6 +1,15 @@
-"""Post-094 (out-of-process): D / T / RT re-parsed into a single
-`Motion::Segment` each and posted to `bb.segmentIn`, exactly like `MOVE`
-(`source/commands/motion_commands.cpp` `handleD`/`handleT`/`handleRT`).
+"""097-006 (re-pointed from text to binary, architecture-update-r2.md
+Decision 9): D / T / RT are DELETED from the text plane outright (not
+merely unregistered the way 093-001 originally left them) -- their binary
+parity is the `segment` arm (`source/commands/binary_channel.cpp`, 096,
+sim-exhaustive), fed the SAME `Motion::Segment` shape each text handler
+used to build, via `host/robot_radio/robot/legacy_translate.py`'s
+`segment_for_distance()`/`segment_for_timed()`/`segment_for_rt()` -- the
+identical translation `rogo`'s proxy (ticket 004) and `NezhaProtocol`
+(ticket 002) use for a legacy D/T/RT line, so these tests exercise the same
+wire shape a real legacy-text client now gets via the proxy.
+
+Original (pre-097-006) coverage, unchanged in substance:
 
   - D <l> <r> <mm>  -> straight segment of `mm`, signed by the drive dir.
   - T <l> <r> <ms>  -> straight segment of distance = v * (ms/1000).
@@ -13,6 +22,9 @@ reverse-creep. Distance/turn *accuracy* is explicitly NOT asserted here.
 from __future__ import annotations
 
 import pytest
+
+from _binary_envelope import send_segment
+from robot_radio.robot import legacy_translate
 
 
 def _drive_to_settle(sim, seconds=6.0, step=24):
@@ -41,7 +53,9 @@ def _drive_to_settle(sim, seconds=6.0, step=24):
 
 
 def test_d_straight_forward_drives_and_settles(sim):
-    assert sim.command("D 200 200 300").strip() == "OK drive l=200 r=200 mm=300"
+    seg = legacy_translate.segment_for_distance(200, 200, 300)
+    reply = send_segment(sim, seg)
+    assert reply.WhichOneof("body") == "ok"
     max_l, max_r = _drive_to_settle(sim)
     assert max_l > 50.0 and max_r > 50.0, "D segment never genuinely drove"
     vl, vr = sim.vel()
@@ -49,7 +63,9 @@ def test_d_straight_forward_drives_and_settles(sim):
 
 
 def test_d_reverse_drives_backward(sim):
-    assert sim.command("D -200 -200 300").strip() == "OK drive l=-200 r=-200 mm=300"
+    seg = legacy_translate.segment_for_distance(-200, -200, 300)
+    reply = send_segment(sim, seg)
+    assert reply.WhichOneof("body") == "ok"
     # Both wheels should move NEGATIVE (backward) at their peak.
     min_l = min_r = 0.0
     for _ in range(150):
@@ -60,7 +76,9 @@ def test_d_reverse_drives_backward(sim):
 
 
 def test_t_timed_drives_straight_and_settles(sim):
-    assert sim.command("T 200 200 1000").strip() == "OK drive l=200 r=200 ms=1000"
+    seg = legacy_translate.segment_for_timed(200, 200, 1000)
+    reply = send_segment(sim, seg)
+    assert reply.WhichOneof("body") == "ok"
     max_l, max_r = _drive_to_settle(sim)
     assert max_l > 50.0 and max_r > 50.0, "T segment never genuinely drove"
     vl, vr = sim.vel()
@@ -68,7 +86,9 @@ def test_t_timed_drives_straight_and_settles(sim):
 
 
 def test_rt_turns_in_place_wheels_counter_rotate_and_settle(sim):
-    assert sim.command("RT 9000").strip() == "OK rt rot=9000"
+    seg = legacy_translate.segment_for_rt(9000)
+    reply = send_segment(sim, seg)
+    assert reply.WhichOneof("body") == "ok"
     # An in-place turn drives both wheels in OPPOSITE directions at peak.
     peak_l = peak_r = 0.0
     for _ in range(200):
@@ -87,8 +107,12 @@ def test_rt_turns_in_place_wheels_counter_rotate_and_settle(sim):
 def test_d_then_rt_string_together(sim):
     """A D straight immediately followed by an RT turn: both execute in order
     off bb.segmentIn's queue (the stringing the stakeholder wants to see)."""
-    assert sim.command("D 200 200 250").strip() == "OK drive l=200 r=200 mm=250"
-    assert sim.command("RT 9000").strip() == "OK rt rot=9000"
+    d_seg = legacy_translate.segment_for_distance(200, 200, 250)
+    reply = send_segment(sim, d_seg)
+    assert reply.WhichOneof("body") == "ok"
+    rt_seg = legacy_translate.segment_for_rt(9000)
+    reply = send_segment(sim, rt_seg)
+    assert reply.WhichOneof("body") == "ok"
     saw_straight = saw_turn = False
     for _ in range(400):   # up to ~9.6s for both segments
         sim.tick_for(24)

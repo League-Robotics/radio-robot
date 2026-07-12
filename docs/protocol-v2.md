@@ -1,5 +1,18 @@
 # Protocol v2 Wire Specification
 
+> **SUPERSEDED by [`docs/protocol-v3.md`](protocol-v3.md).** Sprint 097
+> ("Protocol v3 Sprint 3: host completion and text retirement") replaced
+> the firmware's text command plane described below with a schema-driven
+> binary envelope plane (`*B<base64(protobuf)>`), a 3-verb text safety
+> rump (`STOP`/`PING`/`HELLO`), and a host-side `rogo proxy` PTY bridge
+> for legacy text clients. Most of §6–§10 and §13 below now describe
+> verbs that are **no longer live on the firmware text plane** — this
+> file is kept for history, not deleted, but `docs/protocol-v3.md` is the
+> current wire reference. §11 (OTOS/Port I/O) and §16 (Development
+> Commands) still describe those two families' text grammar accurately,
+> but that grammar has been off the wire (unregistered) since before
+> sprint 097 started — see protocol-v3.md §8.
+
 Version 2 of the Nezha firmware command/telemetry protocol.
 Hard break from v1 — no backward compatibility.
 
@@ -546,7 +559,8 @@ Value conventions:
 > Do not assume the new tree already has the old tree's full richness
 > documented below just because this section is unchanged — check
 > `source/telemetry/tlm_frame.{h,cpp}` and `source/commands/
-> telemetry_commands.{h,cpp}` for what actually ships.
+> binary_channel.{h,cpp}`'s `tickTelemetry()` (097-011: relocated from
+> `telemetry_commands.{h,cpp}`) for what actually ships.
 
 ### STREAM
 
@@ -1357,7 +1371,8 @@ few arguments → `ERR badarg`.
 EKF's fused belief (`pose=`) — see `TLM`'s field list (§8) — **and** (as of
 sprint 084 ticket 008) the active `Hal::Odometer`'s own world-frame reading
 (`OV`, §11), issuing all three in the SAME wire dispatch. `source/`'s
-`handleSI` (`source/commands/pose_commands.cpp`) calls
+`handleSI` (`source/commands/text_channel.cpp`, formerly
+`pose_commands.cpp`) calls
 `PoseEstimator::setPose()` and then, if `hardware->odometer()` is non-null,
 also stages an `OdometerCommand::SET_POSE` matching the same `(x, y, h)` —
 mirroring `source_old`'s own two-call `handleSI` (`PoseEstimator` reset +
@@ -1398,8 +1413,8 @@ ZERO enc pose     [#id]  → OK zero enc pose [#id]
 
 > **Sprint 084 note — `enc` only in `source/`.** This section documents the
 > full `source_old/` grammar (all three forms). As of sprint 084 (ticket
-> 007), `source/`'s `ZERO` (`source/commands/pose_commands.cpp`'s
-> `parseZero`) implements only the `enc` sub-verb — a deliberate scope
+> 007), `source/`'s `ZERO` (`source/commands/text_channel.cpp`'s, formerly
+> `pose_commands.cpp`'s, `parseZero`) implements only the `enc` sub-verb — a deliberate scope
 > decision (see that file's own doc comment), not an oversight. `ZERO`
 > (bare), `ZERO pose`, and `ZERO enc pose` all return `ERR badarg` in
 > `source/` today; only the exact literal `ZERO enc` succeeds. A future
@@ -1769,7 +1784,8 @@ decision above.
 **These verbs exist ONLY when the firmware is built with `ROBOT_DEV_BUILD`
 set** (`codal.json`'s `"config"` object — force-included into every
 translation unit as a preprocessor `#define`, the same mechanism
-`MICROBIT_BLE_ENABLED` already uses; see `source/commands/dev_commands.h`).
+`MICROBIT_BLE_ENABLED` already uses; see `source/commands/text_channel.h`
+Section 3, formerly `dev_commands.h`).
 Sprint 077's `source/` tree sets `ROBOT_DEV_BUILD=1` — there is no
 production motion firmware yet, so this dev-bench build IS the only build.
 A future production firmware flips the define to `0` and `DEV` disappears
@@ -1824,7 +1840,8 @@ of port: this silently killed the governor mid-test whenever a bench script
 drove an independent load motor (e.g. `DEV M 4 DUTY ...`) while the
 Drivetrain was bound to a different pair (`DEV DT PORTS 2 3`) — exactly the
 coupled-rig test pattern where one bound wheel is friction-loaded by a
-separate, unbound motor. `isBoundPort()` in `dev_commands.cpp` is the fix.
+separate, unbound motor. `isBoundPort()` in `text_channel.cpp` (formerly
+`dev_commands.cpp`) is the fix.
 
 ### Port binding: `DEV DT PORTS`
 

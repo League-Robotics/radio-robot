@@ -12,17 +12,24 @@
 // switch. Each oneof arm's behavior lives in its own handle<Arm>() helper
 // below (the CONFIG arm's four patch kinds likewise in
 // handleConfig<Kind>()), mirroring the text plane's handler-per-verb
-// layout (motion_commands.cpp / config_commands.cpp). Every helper replies
-// exactly once, through the sendReply funnel.
+// layout (text_channel.cpp, and the now-deleted text SET/GET's
+// config_commands.cpp before 097-007). Every helper replies exactly once,
+// through the sendReply funnel.
+//
+// 097-011 briefly also hosted tickTelemetry() + file-local
+// telemetryEmitBinary(), relocated verbatim from telemetry_commands.cpp; a
+// later cleanup moved both again, this time to
+// source/telemetry/telemetry_tick.{h,cpp} -- see binary_channel.h's own
+// header comment.
 #include "commands/binary_channel.h"
 
 #include <cstring>
 
+#include "commands/text_channel.h"
 #include "messages/wire.h"
 #include "messages/wire_runtime.h"
 #include "motion/segment.h"
 #include "runtime/command_router.h"
-#include "commands/system_commands.h"
 #include "types/clock.h"
 
 namespace BinaryChannel {
@@ -120,7 +127,8 @@ void sendError(msg::ErrCode code, uint16_t field, uint32_t corrId, ReplyFn reply
 
 // sendAck -- the shared success reply for drive/segment/replace/stop/
 // config/stream: q/rem computed exactly the way handleMove()'s/
-// handleMover()'s own text acks compute them (motion_commands.cpp) --
+// handleMover()'s own text acks compute them (git history,
+// motion_commands.cpp -- both deleted 097-006) --
 // bb.segmentIn's undrained depth plus the Drivetrain's own committed
 // ring+executing depth, and the live plan's remaining translation. t stays
 // 0 (Ack.t is PING's own field -- see envelope.proto's doc comment).
@@ -138,7 +146,7 @@ void sendAck(Rt::Blackboard& b, uint32_t corrId, ReplyFn replyFn, void* replyCtx
 
 // handleDrive -- no translation needed: the decoded arm is already a
 // msg::DrivetrainCommand, posted straight through, mirroring handleS()'s
-// own post (motion_commands.cpp).
+// own post (git history, motion_commands.cpp -- deleted 097-006).
 void handleDrive(const msg::DrivetrainCommand& cmd, Rt::Blackboard& b, uint32_t corrId,
                  ReplyFn replyFn, void* replyCtx) {
   b.driveIn.post(cmd);
@@ -166,8 +174,8 @@ void handleReplace(const msg::MotionSegment& src, Rt::Blackboard& b, uint32_t co
 }
 
 // handleStop -- byte-identical to the text handleStop()'s own construction
-// (motion_commands.cpp) -- Decision 3: NOT derived from any caller-supplied
-// field (Stop{} has none).
+// (commands/text_channel.cpp) -- Decision 3: NOT derived from any
+// caller-supplied field (Stop{} has none).
 void handleStop(Rt::Blackboard& b, uint32_t corrId, ReplyFn replyFn, void* replyCtx) {
   msg::DrivetrainCommand cmd;
   cmd.setNeutral(msg::Neutral::BRAKE);
@@ -177,8 +185,8 @@ void handleStop(Rt::Blackboard& b, uint32_t corrId, ReplyFn replyFn, void* reply
 
 // handlePing -- robot-clock timestamp for clock-sync parity with text
 // PING's own `OK pong t=<ms>` reply (Types::systemClockNow(), matching
-// the text handlePing() exactly -- system_commands.cpp). No Blackboard
-// post.
+// the text handlePing() exactly -- commands/text_channel.cpp). No
+// Blackboard post.
 void handlePing(uint32_t corrId, ReplyFn replyFn, void* replyCtx) {
   msg::ReplyEnvelope reply;
   reply.corr_id = corrId;
@@ -203,8 +211,18 @@ void handleEcho(const msg::Echo& echo, uint32_t corrId, ReplyFn replyFn, void* r
 
 // handleId -- sources model/name/serial/fw/proto from the SAME
 // deviceIdentity() helper handleId()/formatDeviceAnnouncement() already use
-// (system_commands.{h,cpp}) -- never a second #ifdef HOST_BUILD branch. No
-// Blackboard post.
+// (commands/text_channel.{h,cpp}) -- never a second #ifdef HOST_BUILD
+// branch. No Blackboard post.
+//
+// Reused verbatim for the `hello`/`ver` request arms too (stakeholder-
+// directed 6-verb minimal command surface, 2026-07-10; see this file's
+// handle() dispatch switch below): DeviceId already carries every field
+// both HELLO's announcement and VER's fw/proto content need (Decision 4's
+// reasoning extended), so hello/ver/id all reply the identical
+// ReplyEnvelope{id: DeviceId{...}} -- the CLIENT (rogo/the proxy) decides
+// how to RENDER that shared payload back into HELLO's `DEVICE:...` banner,
+// ID's own `ID model=...` line, or VER's `OK ver fw=... proto=...` line;
+// none of that rendering is a firmware concern.
 void handleId(uint32_t corrId, ReplyFn replyFn, void* replyCtx) {
   const char* name;
   uint32_t serial;
@@ -221,14 +239,32 @@ void handleId(uint32_t corrId, ReplyFn replyFn, void* replyCtx) {
   sendReply(reply, replyFn, replyCtx);
 }
 
+// handleHelp -- HELP's binary reply: HelpText{text}, sourced from the SAME
+// Rt::CommandRouter::listVerbs() the text HELP handler reads
+// (text_channel.cpp's own handleHelp()) -- never a second, separately-
+// maintained verb list, and never out of sync with what textCommands()
+// actually registers. `routerCtx` is the SAME opaque
+// handlerCtx-cast-to-Rt::CommandRouter* this whole file's dispatch already
+// threads through (Decision 1) -- reached here via `handle()`'s own
+// `routerCtx` parameter, not a second pointer this file stores.
+void handleHelp(uint32_t corrId, void* routerCtx, ReplyFn replyFn, void* replyCtx) {
+  msg::ReplyEnvelope reply;
+  reply.corr_id = corrId;
+  reply.body_kind = msg::ReplyEnvelope::BodyKind::HELPTEXT;
+  static_cast<Rt::CommandRouter*>(routerCtx)
+      ->listVerbs(reply.body.helptext.text, sizeof(reply.body.helptext.text));
+  sendReply(reply, replyFn, replyCtx);
+}
+
 // --- CONFIG patch handlers (096-004, Decision 3) --------------------------
 // Hand-translate the ONE populated Patch's present (Opt<T>.has) fields into
 // a freshly-built Rt::ConfigDelta{target, mask, value} -- one "if (has) {
-// field = val; mask |= bitOf(...); }" per field, mirroring
-// applyConfigKey()'s (config_commands.cpp) own per-key assignment shape
-// exactly. No strcmp dispatch (the oneof's own patch_kind discriminant
-// replaces it) and no hand parsing/range checks (the generated decoder's
-// min/max/abs_max/req validation already ran during decode()).
+// field = val; mask |= bitOf(...); }" per field, mirroring the now-deleted
+// text SET handler's own applyConfigKey() (config_commands.cpp, removed
+// 097-007) per-key assignment shape exactly. No strcmp dispatch (the
+// oneof's own patch_kind discriminant replaces it) and no hand parsing/
+// range checks (the generated decoder's min/max/abs_max/req validation
+// already ran during decode()).
 
 void handleConfigDrivetrain(const msg::DrivetrainConfigPatch& p, Rt::Blackboard& b,
                             uint32_t corrId, ReplyFn replyFn, void* replyCtx) {
@@ -272,10 +308,10 @@ void handleConfigDrivetrain(const msg::DrivetrainConfigPatch& p, Rt::Blackboard&
 // Never a per-side Gains split.
 void handleConfigMotor(const msg::MotorConfigPatch& p, Rt::Blackboard& b, uint32_t corrId,
                        ReplyFn replyFn, void* replyCtx) {
-  // Same conversion boundary as config_commands.cpp's handleSet()/
-  // handleGet(): bb.drivetrainConfig.left_port/right_port are
-  // wire/serialized 1-based labels, converted to 0-based Hardware motor
-  // indices here, once.
+  // Same conversion boundary the now-deleted text handlers used
+  // (config_commands.cpp's handleSet()/handleGet(), removed 097-007):
+  // bb.drivetrainConfig.left_port/right_port are wire/serialized 1-based
+  // labels, converted to 0-based Hardware motor indices here, once.
   uint32_t leftIdx = b.drivetrainConfig.left_port - 1;
   uint32_t rightIdx = b.drivetrainConfig.right_port - 1;
 
@@ -349,11 +385,15 @@ void handleConfigPlanner(const msg::PlannerConfigPatch& p, Rt::Blackboard& b, ui
 
 // handleConfigWatchdog -- Open Question 4 (096): sTimeout is NOT one of the
 // Configurator's four fold targets -- posts straight to
-// bb.streamWatchdogWindowIn (the loop-owned StreamingDriveWatchdog's
-// window), never bb.configIn, mirroring handleSet()'s own sTimeout
-// special-case (config_commands.cpp) and config_commands.h's own
-// file-header note that sTimeout is "the one key that is NOT one of the
-// Configurator's four targets."
+// bb.streamWatchdogWindowIn (bb.streamWatchdogWindow's producer mailbox --
+// the StreamingDriveWatchdog class this comment used to name as its
+// consumer was itself already-dead code and was deleted outright, 097-006;
+// see text_channel.h's own Section 1 file header (formerly
+// motion_commands.h's). Nothing currently drains this
+// mailbox into a live watchdog), never bb.configIn, mirroring the
+// now-deleted text handler's own sTimeout special-case and file-header note
+// that sTimeout is "the one key that is NOT one of the Configurator's four
+// targets" (config_commands.cpp/.h, removed 097-007).
 void handleConfigWatchdog(uint32_t window,  // [ms]
                           Rt::Blackboard& b, uint32_t corrId, ReplyFn replyFn,
                           void* replyCtx) {
@@ -395,9 +435,10 @@ void handleConfig(const msg::ConfigDelta& patch, Rt::Blackboard& b, uint32_t cor
 void handleGet(const msg::ConfigGet& get, Rt::Blackboard& b, uint32_t corrId,
                ReplyFn replyFn, void* replyCtx) {
   const msg::ConfigTarget target = get.target.val;
-  // Same conversion boundary as config_commands.cpp's handleGet():
-  // bb.drivetrainConfig.left_port/right_port are wire/serialized 1-based
-  // labels, converted to 0-based Hardware motor indices here, once.
+  // Same conversion boundary the now-deleted text handler's handleGet()
+  // used (config_commands.cpp, removed 097-007): bb.drivetrainConfig.
+  // left_port/right_port are wire/serialized 1-based labels, converted to
+  // 0-based Hardware motor indices here, once.
   uint32_t leftIdx = b.drivetrainConfig.left_port - 1;
   uint32_t rightIdx = b.drivetrainConfig.right_port - 1;
 
@@ -458,11 +499,12 @@ void handleGet(const msg::ConfigGet& get, Rt::Blackboard& b, uint32_t corrId,
 }
 
 // handleStream -- 096-005: mirrors the text handleStream()'s own
-// state-setting exactly (telemetry_commands.cpp) -- minus the text
+// state-setting exactly (git history, telemetry_commands.cpp -- the text
+// STREAM/SNAP handlers were deleted outright by 097-008) -- minus the text
 // ArgSchema/ArgList parsing layer, which the generated decoder's own
 // (min)/(max) validation already replaced (StreamControl.period is
-// wire-bounded [0, 60000], same range as kStreamArgs). kStreamFloorMs is
-// duplicated here rather than shared: telemetry_commands.cpp keeps it
+// wire-bounded [0, 60000], same range as kStreamArgs). kStreamFloorMs was
+// duplicated here rather than shared: the now-deleted text handler kept it
 // TU-local (unnamed namespace), and this file already hand-mirrors
 // handleStream()'s state-setting rather than reaching across TUs for it
 // (same pattern as toSegment()'s own field-by-field copy).
@@ -552,7 +594,15 @@ void handle(const char* line, ReplyFn replyFn, void* replyCtx, void* routerCtx) 
       handleEcho(env.cmd.echo, env.corr_id, replyFn, replyCtx);
       break;
     case msg::CommandEnvelope::CmdKind::ID:
+    case msg::CommandEnvelope::CmdKind::HELLO:
+    case msg::CommandEnvelope::CmdKind::VER:
+      // hello/ver (stakeholder-directed 6-verb minimal command surface,
+      // 2026-07-10) reuse handleId()'s identical DeviceId reply -- see that
+      // function's own doc comment above.
       handleId(env.corr_id, replyFn, replyCtx);
+      break;
+    case msg::CommandEnvelope::CmdKind::HELP:
+      handleHelp(env.corr_id, routerCtx, replyFn, replyCtx);
       break;
     case msg::CommandEnvelope::CmdKind::CONFIG:
       handleConfig(env.cmd.config, b, env.corr_id, replyFn, replyCtx);

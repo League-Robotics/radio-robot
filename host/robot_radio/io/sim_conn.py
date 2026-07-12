@@ -85,12 +85,21 @@ against the ACTUAL 40-symbol ABI ticket 004 exports
 
 from __future__ import annotations
 
+import base64
 import ctypes
 import pathlib
 import sys
 import time
 import warnings
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Type-checking only -- see _get_envelope_pb2() below for why the
+    # runtime import is deferred past module-load time (this module's own
+    # reason differs from serial_conn.py's -- no circular-import hazard
+    # here -- but the lazy-import SHAPE is kept the same for consistency
+    # with that module's binary-plane reference implementation).
+    from robot_radio.robot.pb2 import envelope_pb2
 
 _LIB_NAME = "libfirmware_host.dylib" if sys.platform == "darwin" else "libfirmware_host.so"
 _HERE = pathlib.Path(__file__).parent
@@ -107,6 +116,54 @@ _DEFAULT_TICK_DURATION = 24
 # reaching into the C++ enum directly (088-006).
 CHANNEL_SERIAL = 1
 CHANNEL_RADIO = 2
+
+# Module-level cache for the lazily-imported envelope_pb2 module (see
+# _get_envelope_pb2()'s docstring for why this cannot be a top-level import).
+_envelope_pb2_module = None
+
+
+def _get_envelope_pb2():
+    """Lazily import and cache robot_radio.robot.pb2.envelope_pb2.
+
+    Mirrors serial_conn.py's own ``_get_envelope_pb2()`` helper (095-002),
+    deferred past module-load time for a DIFFERENT reason than that
+    module's: serial_conn.py has a genuine circular-import hazard
+    (robot_radio.robot's own __init__.py imports robot_radio.robot.protocol,
+    which imports SerialConnection from THAT module). This module
+    (robot_radio.io.sim_conn) has no such hazard -- nothing in
+    robot_radio.robot's own import chain ever imports
+    robot_radio.io.sim_conn -- but importing robot_radio.robot.pb2 still
+    transitively imports the WHOLE robot_radio.robot package (Robot,
+    NezhaProtocol, pyserial via robot_radio.io.serial_conn, ...), which the
+    ctypes-only sim harness (tests/_infra/sim/, tests/sim/) has no other
+    reason to pull in. Deferring the import to first use (rather than
+    module load) keeps a bare ``import robot_radio.io.sim_conn`` a
+    lightweight, ctypes-only operation for callers that never touch the
+    binary plane -- the same practical benefit serial_conn.py's helper
+    gets, via the same lazy-import shape, for a different root cause.
+    """
+    global _envelope_pb2_module
+    if _envelope_pb2_module is None:
+        from robot_radio.robot.pb2 import envelope_pb2 as _mod
+        _envelope_pb2_module = _mod
+    return _envelope_pb2_module
+
+
+def _dearmor_reply(line: str, pb2_mod) -> "envelope_pb2.ReplyEnvelope | None":
+    """Strip a ``*B`` armor prefix, base64-decode, and parse the result as a
+    ``pb2.ReplyEnvelope``. Returns ``None`` on any malformed input (missing
+    prefix, bad base64, bad protobuf bytes) instead of raising -- mirrors
+    ``SerialConnection._handle_binary_reply()``'s own tolerance for a single
+    corrupted binary reply (a decode failure there is swallowed and the line
+    dropped, never crashes the caller)."""
+    line = line.strip()
+    if not line.startswith("*B"):
+        return None
+    try:
+        raw = base64.b64decode(line[2:])
+        return pb2_mod.ReplyEnvelope.FromString(raw)
+    except Exception:
+        return None
 
 
 class SimConnection:
@@ -252,6 +309,144 @@ class SimConnection:
         lines.extend(evts)
 
         return {"sent": message, "mode": "sim", "channel": channel, "responses": lines}
+
+    def send_envelope(self, envelope: "envelope_pb2.CommandEnvelope",
+                      read_timeout: int = 500,  # [ms] accepted for call-site
+                                                 # parity with SerialConnection
+                                                 # .send_envelope(); unused --
+                                                 # see docstring.
+                      channel: int = CHANNEL_SERIAL,
+                      ) -> "envelope_pb2.ReplyEnvelope | None":
+        """Send a binary ``pb2.CommandEnvelope`` through the sim's dt=0
+        synchronous command channel; return its decoded ``pb2.ReplyEnvelope``.
+
+        The sim-side counterpart of ``SerialConnection.send_envelope()``
+        (the hardware binary-plane sender, ``robot_radio/io/serial_conn.py``
+        -- read as the reference pattern this mirrors): serializes
+        ``envelope``, base64-armors it as ``*B<base64>``, and dispatches it
+        through ``_raw_command_on()`` -- the SAME ``sim_command_on()`` C
+        entry point ``send()``/``send_on()`` already use for the text plane
+        -- then dearmors and decodes the single synchronous reply line it
+        returns.
+
+        Simplification vs. the hardware version (documented per this
+        ticket's own instruction to flag any simplification):
+        ``SerialConnection.send_envelope()`` manages its own corr-id pool
+        and blocks on a corr-id-keyed queue that a BACKGROUND READER THREAD
+        fills, because over a real serial link commands and replies are
+        genuinely asynchronous and can interleave with unrelated traffic
+        (another in-flight request, a push frame, ...). The sim has neither
+        a reader thread nor any interleaving: ``_raw_command_on()`` is a
+        single, synchronous, in-process C call that returns only once
+        ``sim_command_on()`` has already written THIS call's own (and only
+        this call's own) reply into the target channel's ReplyStore --
+        there is no other in-flight request whose reply could arrive first,
+        so no corr-id-keyed queue is needed at all. Accordingly this method
+        does **not** overwrite ``envelope.corr_id`` the way
+        ``SerialConnection.send_envelope()`` does -- whatever ``corr_id``
+        the caller set (0 if unset) is sent as-is and echoed back unchanged
+        on the reply, matching every ``send()``/``dearmor()`` helper in
+        ``tests/sim/unit/test_binary_channel.py``/``_binary_envelope.py``,
+        which set ``corr_id`` explicitly on each envelope they build.
+        ``read_timeout`` is accepted only for call-site portability with
+        code written against ``SerialConnection``'s signature -- the sim
+        call is already synchronous (it returns only once the one reply is
+        available), so there is nothing to wait on and the argument is
+        ignored.
+
+        Args:
+            envelope: A populated ``pb2.CommandEnvelope``. Its ``corr_id``
+                is sent as-is (see above) -- NOT overwritten.
+            read_timeout: Ignored -- accepted only for signature parity
+                with ``SerialConnection.send_envelope()``.
+            channel: ``CHANNEL_SERIAL`` (default) or ``CHANNEL_RADIO`` --
+                selects which of the sim's two independent ReplyStores the
+                reply is read back from (mirrors ``send_on()``'s own
+                ``channel`` parameter, 088-006).
+
+        Returns:
+            The decoded ``pb2.ReplyEnvelope``, or ``None`` if the sim is
+            not connected, produced no reply line at all, or produced a
+            line that could not be dearmored/parsed.
+        """
+        del read_timeout  # unused -- see docstring
+        if not self.is_open:
+            return None
+
+        pb2 = _get_envelope_pb2()
+        armored = "*B" + base64.b64encode(envelope.SerializeToString()).decode("ascii")
+        reply_line = self._raw_command_on(armored, channel)
+        return _dearmor_reply(reply_line, pb2)
+
+    def drain_binary_tlm(self, channel: int = CHANNEL_SERIAL,
+                         ) -> list["envelope_pb2.ReplyEnvelope"]:
+        """Destructively drain ``channel``'s ReplyStore of every unsolicited
+        binary telemetry push frame (``ReplyEnvelope{tlm}``, always
+        ``corr_id=0``) accumulated there since the last drain -- or since
+        the last ``send()``/``send_on()``/``send_envelope()`` call on ANY
+        channel, since ``sim_command_on()`` resets BOTH channels'
+        ReplyStores as a side effect of routing (``sim_api.cpp``'s "Two
+        reply-store instances" file-header note).
+
+        The sim-side counterpart of ``SerialConnection.drain_binary_tlm()``:
+        that method drains a bounded, drop-oldest queue a background reader
+        thread fills continuously as frames arrive; this one drains the
+        sim's own fixed-size ReplyStore via ``sim_drain_reply_store()`` --
+        a NEW ``tests/_infra/sim/sim_api.cpp`` ABI entry point this ticket
+        adds. Neither existing sim ABI accessor was enough on its own: the
+        pre-existing ``sim_peek_reply_store()`` is non-destructive, so a
+        caller that only ever peeks lets ``tickTelemetry()``'s periodic
+        frames accumulate in the store until it silently overflows
+        (``ReplyStore::append()``'s own "once full, every further append is
+        a no-op" behavior -- see ``sim_api.cpp``); ``sim_command()``/
+        ``sim_command_on()`` DO reset a store, but only as an incidental
+        side effect of routing an unrelated command, and reset BOTH
+        channels' stores unconditionally, which would also silently wipe
+        out whatever the OTHER channel had pending. ``sim_drain_reply_store``
+        resets only the ONE channel it drains, with no command routed at
+        all -- see that entry point's own doc comment.
+
+        Both this method and its hardware counterpart return the raw,
+        decoded ``pb2.ReplyEnvelope`` -- callers build a ``TLMFrame``
+        themselves via ``TLMFrame.from_pb2(reply.tlm)``
+        (``robot_radio/robot/protocol.py``), matching
+        ``SerialConnection.drain_binary_tlm()``'s own "raw envelope, caller
+        parses" split.
+
+        Call this FREQUENTLY once binary streaming is armed (a binary
+        ``stream`` command / ``StreamControl{binary:true, period:...}``):
+        each channel's ReplyStore is a small (2048-byte) FIXED buffer with
+        no wraparound, so an undrained store freezes after roughly 10-14
+        periodic frames and stops reflecting current state (see above).
+
+        Only ``tlm``-body frames are ever returned -- any other body left
+        behind in the store by a caller that mixed ``send()``/
+        ``send_envelope()`` polling with tick()-only draining is silently
+        excluded, matching ``SerialConnection.drain_binary_tlm()``'s own
+        "only tlm bodies ever land here" contract.
+
+        Args:
+            channel: ``CHANNEL_SERIAL`` (default) or ``CHANNEL_RADIO``.
+
+        Returns:
+            A list of decoded ``pb2.ReplyEnvelope`` objects (body ``tlm``),
+            in the order ``tickTelemetry()`` appended them; empty if the
+            sim is not connected or none were pending.
+        """
+        if not self.is_open:
+            return []
+
+        pb2 = _get_envelope_pb2()
+        raw = self._raw_drain_reply_store(channel)
+        frames: list = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            reply = _dearmor_reply(line, pb2)
+            if reply is not None and reply.WhichOneof("body") == "tlm":
+                frames.append(reply)
+        return frames
 
     def read_lines(self, duration: int = 500,  # [ms]
                    stop_token: str | None = None) -> list[str]:
@@ -575,6 +770,16 @@ class SimConnection:
         n = self._lib.sim_command_on(self._h, line.encode(), ctypes.c_int(channel), buf, 2048)
         return buf.raw[:n].decode(errors="replace") if n > 0 else ""
 
+    def _raw_drain_reply_store(self, channel: int) -> str:
+        """Destructively read and clear one channel's ReplyStore
+        (sim_drain_reply_store() -- tests/_infra/sim/sim_api.cpp, added for
+        drain_binary_tlm() above). Same 2048-byte buffer convention as
+        _raw_command()/_raw_command_on().
+        """
+        buf = ctypes.create_string_buffer(2048)
+        n = self._lib.sim_drain_reply_store(self._h, ctypes.c_int(channel), buf, 2048)
+        return buf.raw[:n].decode(errors="replace") if n > 0 else ""
+
     def _get_evts(self) -> str:
         """Drain async EVT buffer from the C sim."""
         buf = ctypes.create_string_buffer(2048)
@@ -728,3 +933,16 @@ class SimConnection:
             fn = getattr(lib, name)
             fn.argtypes = [ctypes.c_void_p, ctypes.c_float]
             fn.restype = None
+
+        # --- Binary reply-store drain (1, 097 addition -- SimConnection
+        # binary transport) ---
+        # sim_drain_reply_store: same argtypes as sim_peek_reply_store()
+        # (this module does not bind that non-destructive sibling -- only
+        # the destructive drain drain_binary_tlm() needs), but resets the
+        # target channel's ReplyStore as it reads it. See
+        # tests/_infra/sim/sim_api.cpp's own doc comment on this entry
+        # point and drain_binary_tlm()'s docstring above for why the
+        # destructive variant is needed here.
+        lib.sim_drain_reply_store.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+        lib.sim_drain_reply_store.restype = ctypes.c_int

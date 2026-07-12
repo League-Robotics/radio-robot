@@ -60,8 +60,13 @@ live view:
   not repositioned.
 
 Outside live view (Sim/Serial, or Relay before live-view starts),
-``on_frame_ready`` calls ``canvas_ctrl.refresh(fused_yaw_rad)`` as before,
-positioning the marker from the latest fused pose.
+``on_frame_ready`` calls ``canvas_ctrl.refresh(avatar_yaw_rad)``, positioning
+the marker from the latest pose -- 097: ``avatar_yaw_rad`` (and, via
+``CanvasController._update_marker``'s own trace-source preference, the
+marker's POSITION too) now prefer the host-side encoder dead-reckoning trace
+(``TraceModel.encoder``/``encoder_yaw``) over the fused pose, which stays
+pinned at the origin until sprint 098 wires a live ``PoseEstimator``. Falls
+back to the fused pose once/if the encoder trace has none yet.
 
 On relay disconnect (or window close) the worker is stopped, the thread joined,
 and ``canvas_ctrl.restore_static_background()`` reverts the canvas to the grey
@@ -299,6 +304,7 @@ def _build_main_window():  # type: ignore[return]
         SerialTransport,
         RelayTransport,
         SimTransport,
+        find_robot_serial_port,
         list_ports,
     )
     from robot_radio.testgui.commands import (
@@ -313,6 +319,7 @@ def _build_main_window():  # type: ignore[return]
         build_setpose_command,
         is_sim_transport,
     )
+    from robot_radio.testgui import traces as traces_mod
     from robot_radio.testgui.traces import TraceModel
     from robot_radio.testgui.canvas import build_canvas
     from robot_radio.testgui.telemetry_panel import (
@@ -480,9 +487,14 @@ def _build_main_window():  # type: ignore[return]
     port_edit.setObjectName("port_edit")
     port_edit.setPlaceholderText("/dev/cu.usbmodem…")
     port_edit.setEnabled(False)
-    # Pre-populate with the first detected USB modem port if any.
+    # Pre-populate with the ROBOT's port (device-registry role lookup, so a
+    # plugged-in relay dongle is never pre-picked); fall back to the first
+    # detected USB modem port.
     detected = list_ports()
-    if detected:
+    _robot_port = find_robot_serial_port(detected)
+    if _robot_port is not None:
+        port_edit.setText(_robot_port)
+    elif detected:
         port_edit.setText(detected[0])
     left_layout.addWidget(port_edit)
 
@@ -632,6 +644,19 @@ def _build_main_window():  # type: ignore[return]
 
         btn.clicked.connect(_on_send)
 
+    # 097 (this ticket): every COMMANDS-schema motion verb (S/T/D/R/TURN/RT/
+    # G) now translates to a binary segment/replace/drive envelope --
+    # binary_bridge.translate_command()'s _ALWAYS_UNSUPPORTED_VERBS no
+    # longer includes R/TURN/G (see that module's docstring for the
+    # open-loop segment approximations legacy_translate.py builds for
+    # them). No COMMANDS row is gated any more; every Send button enables
+    # on connect like S/T/D/RT already did. The only motion controls that
+    # STAY gated are the ones that genuinely need fused pose/OTOS/camera --
+    # the Operations panel's OTOS ops (OI/OL/OA/OV/OP/OR), the origin
+    # reset's OZ/SI (see _set_origin()), and the camera-based GOTO button
+    # below (world-absolute closed-loop pursuit, distinct from this
+    # schema's own relative-open-loop "G" row).
+
     # Build one row per command in the COMMANDS schema.
     _row_send_getters: list[tuple[QPushButton, "object", list]] = []
     for cmd_spec in COMMANDS:
@@ -646,6 +671,18 @@ def _build_main_window():  # type: ignore[return]
     # Tour buttons — run a pre-programmed motion sequence (one per named tour).
     # Each button resets the robot to the origin, then sends the tour's moves
     # one at a time on a background thread, waiting for each to complete.
+    #
+    # 097 (this ticket): un-gated. Every tour step (D/RT) already translates
+    # to an open-loop segment envelope (D/RT had binary arms before this
+    # ticket; see binary_bridge.py). _set_origin()'s own OZ/SI/ZERO calls
+    # stay gated (still reply typed ERR "unsupported" -- see
+    # binary_bridge.py's _POSE_RESET_VERBS) and are therefore no-ops on the
+    # binary plane today, but that no longer blocks the tour from running:
+    # _set_origin() also sends STOP and resets the DISPLAY (TraceModel
+    # anchor/clear, canvas avatar) unconditionally, and the sim plant is
+    # teleported to (0,0,0) separately (is_sim_transport() branch) -- the
+    # tour then drives for real via D/RT, and the avatar tracks it via
+    # host-side encoder dead reckoning (traces.py's EncoderDeadReckoner).
     tour_row = QWidget()
     tour_layout = QHBoxLayout(tour_row)
     tour_layout.setContentsMargins(0, 0, 0, 0)
@@ -656,12 +693,16 @@ def _build_main_window():  # type: ignore[return]
         _tb.setObjectName(f"tour_btn_{_tour_name.lower().replace(' ', '_')}")
         _tb.setEnabled(False)
         _tb.setToolTip(
-            f"Run {_tour_name}: reset to origin, then drive a fixed "
-            "sequence, waiting for each move to complete."
+            f"Run {_tour_name}: resets to the origin (display-only pending "
+            "sprint 098's OZ/SI binary arms), then drives the tour's D/RT "
+            "steps as open-loop segments."
         )
         tour_layout.addWidget(_tb)
         _tour_buttons.append((_tb, _tour_name))
-        # Enable/disable together with the Send buttons on connect/disconnect.
+        # 097: added to _send_buttons (below) so tour buttons enable on
+        # connect like every other motion control -- the tour-RUNNING
+        # disable (while a tour is in flight) is a SEPARATE, orthogonal
+        # concern handled by _on_tour_clicked/_stop_tour/_on_tour_finished.
         _send_buttons.append(_tb)
     # Stop Tour — dedicated control to abort a running tour. Deliberately NOT
     # added to _send_buttons: unlike the tour buttons themselves (which enable
@@ -678,6 +719,15 @@ def _build_main_window():  # type: ignore[return]
 
     # GOTO — synthetic camera-based go-to: drive to a world (x, y) point by
     # repeatedly correcting the robot's pose from the camera and re-issuing G.
+    #
+    # 097 (this ticket): this is the WORLD-ABSOLUTE, camera-closed-loop GOTO
+    # -- distinct from the COMMANDS schema's own "G" row (relative, open-
+    # loop, now un-gated -- see above). This button stays gated: its pursuit
+    # loop repeatedly snaps the robot's pose to camera truth (SI) between
+    # re-issued G's, and SI has no binary arm until sprint 098 (SI/OZ are
+    # still in binary_bridge.py's _POSE_RESET_VERBS). A world-absolute
+    # closed-loop GOTO genuinely needs 098's fused pose; the relative
+    # open-loop "G" row does not and already works.
     goto_row = QWidget()
     goto_layout = QHBoxLayout(goto_row)
     goto_layout.setContentsMargins(0, 0, 0, 0)
@@ -688,8 +738,10 @@ def _build_main_window():  # type: ignore[return]
     goto_btn.setEnabled(False)
     goto_btn.setFixedWidth(52)
     goto_btn.setToolTip(
-        "Camera-based go-to: repeatedly reads the camera pose, snaps the robot "
-        "to it (SI), and drives toward (x, y) with G until within eps."
+        "World-absolute camera GOTO requires sprint 098 -- the pursuit loop "
+        "repeatedly re-anchors the robot's pose to camera truth (SI), which "
+        "has no binary arm yet. For an open-loop relative go-to that works "
+        "today, use the COMMANDS schema's G row above."
     )
     goto_layout.addWidget(goto_btn)
 
@@ -723,8 +775,9 @@ def _build_main_window():  # type: ignore[return]
     goto_speed_spin = _make_goto_spin("speed", 200, 1, 1000, "mm/s")
     goto_layout.addStretch()
     left_layout.addWidget(goto_row)
-    # GOTO enables/disables with the Send buttons on connect/disconnect.
-    _send_buttons.append(goto_btn)
+    # 097: goto_btn is NOT added to _send_buttons -- GOTO's pursuit loop
+    # needs SI/G, gated pending sprint 098, so it stays permanently
+    # disabled instead of enabling on connect (see the tooltip above).
 
     # Sim Errors panel (issue testgui-sim-error-profile-config, extended to
     # the full SIMSET knob set by ticket 069-007) — makes every Sim-mode
@@ -1013,7 +1066,18 @@ def _build_main_window():  # type: ignore[return]
     splitter.addWidget(left_widget)
 
     # --------------------------------------------------------- TraceModel (Qt-free)
-    trace_model = TraceModel()
+    # 097: seed the host-side encoder dead-reckoning trackwidth from the
+    # active robot config (``_active_cfg``, resolved above for the robot
+    # combo's initial selection) -- falls back to TraceModel's own default
+    # (128 mm, the project's usual trackwidth) when no config is resolvable
+    # or it carries no trackwidth. Kept live via ``trace_model.
+    # set_trackwidth()`` in ``_on_robot_changed`` below.
+    _initial_trackwidth = (
+        _active_cfg.trackwidth
+        if _active_cfg is not None and _active_cfg.trackwidth
+        else traces_mod._DEFAULT_TRACKWIDTH
+    )
+    trace_model = TraceModel(trackwidth=_initial_trackwidth)
 
     # --------------------------------------------------------------- right panel
     right_widget = QWidget()
@@ -1221,12 +1285,24 @@ def _build_main_window():  # type: ignore[return]
         def on_frame_ready(self) -> None:
             """Process all pending TLMFrames queued from background threads.
 
-            Always accumulates the fused trace in the TraceModel.  In
-            PLAYFIELD MODE (``live_view_active``) the avatar is driven by the
-            camera live-view worker (:meth:`CanvasController.set_avatar_pose`),
-            so the marker is left untouched here (``refresh(update_marker=False)``)
+            Always accumulates the fused AND encoder traces in the
+            TraceModel (``trace_model.feed()`` -- 097: the latter now
+            dead-reckons host-side from ``frame.enc`` when the frame has no
+            ``encpose``, see that method's own docstring). In PLAYFIELD MODE
+            (``live_view_active``) the avatar is driven by the camera
+            live-view worker (:meth:`CanvasController.set_avatar_pose`), so
+            the marker is left untouched here (``refresh(update_marker=False)``)
             to avoid fighting the worker for the marker's position — only the
             trace paths redraw at the (faster) TLM rate.
+
+            097: the avatar heading passed to ``refresh()`` prefers
+            ``trace_model.encoder_yaw`` (the SAME encoder dead-reckoning
+            that now drives the avatar's POSITION, via ``CanvasController.
+            _update_marker()``'s own trace-source change) over
+            ``frame.pose``'s fused heading -- fused stays pinned at 0 until
+            sprint 098, so a fused-only heading would never move either.
+            Falls back to fused once the encoder trace has no data yet
+            (matches the position fallback in canvas.py).
             """
             last_frame = None
             while True:
@@ -1236,15 +1312,25 @@ def _build_main_window():  # type: ignore[return]
                     break
                 last_frame = frame
                 trace_model.feed(frame)
-                fused_yaw_rad = None
-                if frame.pose is not None:
-                    fused_yaw_rad = math.radians(frame.pose[2] / 100.0)
+                avatar_yaw_rad = trace_model.encoder_yaw
+                if avatar_yaw_rad is None and frame.pose is not None:
+                    avatar_yaw_rad = math.radians(frame.pose[2] / 100.0)
                 if _state.get("live_view_active"):
                     canvas_ctrl.refresh(update_marker=False)
                 else:
-                    canvas_ctrl.refresh(fused_yaw_rad)
+                    canvas_ctrl.refresh(avatar_yaw_rad)
             # Refresh the parsed-telemetry breakout with the freshest frame.
             if last_frame is not None:
+                if last_frame.encpose is None:
+                    # Binary TLM carries no encpose field (096-001's trim) --
+                    # surface the SAME host-side dead-reckoned pose the
+                    # canvas avatar draws (trace_model.feed() above just
+                    # ingested this frame, so last_encpose is current), in
+                    # the (mm, mm, cdeg) shape the wire field would have had.
+                    # Until sprint 098 wires PoseEstimator, this row is the
+                    # only live pose in the breakout: the fused pose= stays
+                    # pinned at (0, 0, 0) by design.
+                    last_frame.encpose = trace_model.last_encpose
                 telemetry_ctrl.update_frame(last_frame)
 
         @Slot(float, float, float)
@@ -1302,17 +1388,27 @@ def _build_main_window():  # type: ignore[return]
         """Runs a pre-programmed tour on a background thread.
 
         Sends each wire string in ``steps`` via ``transport.command``, then
-        waits for the robot to return to idle (``mode=I``) before sending the
-        next.  Idle detection requests fresh telemetry with a fire-and-forget
-        ``SNAP`` and reads the resulting frame from ``state["last_tlm"]`` (the
+        waits for the robot to return to idle before sending the next.  Idle
+        detection requests fresh telemetry with a fire-and-forget ``SNAP``
+        and reads the resulting frame from ``state["last_tlm"]`` (the
         transport reader delivers the SNAP's TLM reply there via
         ``on_telemetry``).  This is done instead of ``transport.command("SNAP")``
         because a SNAP reply is a corr-id-less TLM frame that ``command()``'s
         reply queue never receives — the call would always time out with an
-        empty string, so ``mode=I`` was never seen and the tour could never
+        empty string, so idle was never observed and the tour could never
         advance past its first step.  On-demand SNAP (rather than a stream) is
         used because the radio relay drops asynchronous stream frames but
         answers SNAP reliably.
+
+        Idle signal (097, this ticket): ``frame.active`` (``bb.drivetrain.
+        busy`` — see ``protocol.py``'s ``TLMFrame.from_pb2()`` docstring),
+        NOT ``frame.mode`` (``bb.planner.mode``). Every tour step (D/RT)
+        posts to ``bb.segmentIn``/``bb.replaceIn`` (the segment/replace
+        arms), never to ``bb.motionIn``/``Subsystems::Planner`` — Planner
+        is parked — so ``mode`` never leaves ``IDLE`` and a
+        ``mode == "I"`` check would report "done" immediately, before the
+        segment even started. ``active`` tracks the SegmentExecutor
+        directly and is correct for every arm.
 
         Signals are marshalled to the Qt main thread via QueuedConnection:
         ``log_line(text, direction)`` carries ``[TOUR]`` status narration
@@ -1335,6 +1431,10 @@ def _build_main_window():  # type: ignore[return]
         SNAP_REPLY_TIMEOUT_S = 0.8
         #: Per-move timeout (s) before giving up and aborting the tour.
         MOVE_TIMEOUT_S = 30.0
+        #: Cached-frame age (s) below which the continuous STREAM is
+        #: considered live and no SNAP nudge is sent (both transports arm
+        #: STREAM at connect; frames arrive every 20-50ms when healthy).
+        STREAM_FRESH_S = 0.5
 
         def __init__(
             self, transport: "object", state: dict, name: str, steps: list[str]
@@ -1381,14 +1481,25 @@ def _build_main_window():  # type: ignore[return]
                 self.finished.emit()
 
         def _wait_for_idle(self, time_mod: "object") -> bool:
-            """Wait until telemetry reports ``mode=I`` (idle) or timeout.
+            """Wait until telemetry reports ``active=False`` (idle) or timeout.
 
-            Requests a fresh frame with a fire-and-forget ``SNAP`` and reads
-            the mode from ``state["last_tlm"]`` (populated by the transport's
-            ``on_telemetry`` callback — see the class docstring for why
-            ``command("SNAP")`` cannot be used).  Only frames stamped after
-            this wait began are accepted, so a stale pre-move idle frame does
-            not end the wait early.
+            Reads ``active`` from ``state["last_tlm"]`` (populated by the
+            transport's ``on_telemetry`` callback — see the class docstring
+            for why ``command("SNAP")`` cannot be used, and why ``active``
+            rather than ``mode`` is the correct completion signal for a
+            segment/replace-arm move). Only frames stamped after this wait
+            began are accepted, so a stale pre-move idle frame does not end
+            the wait early.
+
+            ``SNAP`` is a fallback NUDGE only: both transports arm a
+            continuous ``STREAM`` at connect (SimTransport's tick-thread;
+            ``_on_connect``'s post-connect ``STREAM 50`` for hardware), so
+            frames normally arrive on their own and a per-poll SNAP
+            round-trip is pure console noise — on SimTransport it even ERRs
+            ``snap-timeout`` every time, because the one-shot's
+            arm-then-drain races the tick thread, which drains each frame
+            first. SNAP is therefore sent only when the cached frame has
+            actually gone stale (the stream is NOT flowing).
 
             Returns ``True`` when idle is observed (or on stop request),
             ``False`` on timeout.
@@ -1399,12 +1510,19 @@ def _build_main_window():  # type: ignore[return]
             while time_mod.monotonic() < deadline:
                 if self._stop:
                     return True
-                # Request one fresh telemetry frame; its TLM reply is delivered
-                # to state["last_tlm"] by the transport reader thread.
-                try:
-                    self._transport.send("SNAP")
-                except Exception:  # noqa: BLE001
-                    return False
+                cached = self._state.get("last_tlm")
+                stream_live = (
+                    cached is not None
+                    and (time_mod.monotonic() - cached[1]) < self.STREAM_FRESH_S
+                )
+                if not stream_live:
+                    # Stream stalled/never armed: request one fresh frame; its
+                    # TLM reply is delivered to state["last_tlm"] by the
+                    # transport reader thread.
+                    try:
+                        self._transport.send("SNAP")
+                    except Exception:  # noqa: BLE001
+                        return False
                 reply_deadline = time_mod.monotonic() + self.SNAP_REPLY_TIMEOUT_S
                 while time_mod.monotonic() < reply_deadline:
                     if self._stop:
@@ -1412,8 +1530,8 @@ def _build_main_window():  # type: ignore[return]
                     cached = self._state.get("last_tlm")
                     if cached is not None:
                         frame, ts = cached
-                        mode = (getattr(frame, "mode", None) or "").upper()
-                        if ts >= t_start and mode == "I":
+                        active = getattr(frame, "active", None)
+                        if ts >= t_start and active is False:
                             return True
                     time_mod.sleep(self.POLL_S)
             return False
@@ -1740,6 +1858,11 @@ def _build_main_window():  # type: ignore[return]
             f"[INFO] Loaded robot: {cfg.robot_name} "
             f"({cfg.hardware_model}, trackwidth={cfg.trackwidth}mm)"
         )
+        # 097: keep the host-side encoder dead-reckoning trackwidth (the
+        # avatar's own pose-integration geometry) in sync with the
+        # selected robot's config.
+        if cfg.trackwidth:
+            trace_model.set_trackwidth(cfg.trackwidth)
         if _state.get("transport") is not None:
             _push_robot_calibration()
 
@@ -1797,6 +1920,16 @@ def _build_main_window():  # type: ignore[return]
         ``[WARN]`` message is logged.  The display reset (step 4) still runs
         so the GUI stays consistent.  In Sim mode a transport IS present, so
         all three wire commands are sent.
+
+        097 (this ticket): ``ZERO``/``OZ``/``SI`` still have no binary arm
+        (``binary_bridge.py``'s ``_POSE_RESET_VERBS`` -- genuinely gated
+        pending sprint 098's fused pose) and are therefore no-ops on the
+        wire today -- steps 1-3 are sent but change nothing firmware-side.
+        This no longer blocks a tour from running, though: step 0's
+        ``STOP``/Sim-plant-teleport and step 4's display reset (which also
+        re-zeros the host-side ``EncoderDeadReckoner`` via ``TraceModel.
+        anchor()``/``clear()``) are unconditional and sufficient for the
+        open-loop D/RT tour steps that follow to start from a known state.
         """
         transport = _state.get("transport")
         if transport is not None:
@@ -1870,9 +2003,15 @@ def _build_main_window():  # type: ignore[return]
         _state["tour_worker"] = None
         _state["tour_thread"] = None
         _state["tour_bridge"] = None
-        if _state.get("transport") is not None:
-            for _tb, _ in _tour_buttons:
-                _tb.setEnabled(True)
+        # 097: tour buttons ARE re-enabled here, unconditionally -- tours
+        # are un-gated now (see the tour-button-creation comment above).
+        # Safe to do even when this runs from _on_disconnect() (which calls
+        # _stop_tour() BEFORE its own unconditional "disable every
+        # _send_buttons entry" pass runs later in that same function) -- the
+        # disconnect flow's own disable always wins the race, it just
+        # happens after this one.
+        for _tb, _ in _tour_buttons:
+            _tb.setEnabled(True)
         stop_tour_btn.setEnabled(False)
 
     def _on_tour_finished() -> None:
@@ -1892,9 +2031,10 @@ def _build_main_window():  # type: ignore[return]
         _state["tour_worker"] = None
         _state["tour_thread"] = None
         _state["tour_bridge"] = None
-        if _state.get("transport") is not None:
-            for _tb, _ in _tour_buttons:
-                _tb.setEnabled(True)
+        # 097: see _stop_tour()'s identical comment -- tour buttons are
+        # un-gated now and re-enable unconditionally.
+        for _tb, _ in _tour_buttons:
+            _tb.setEnabled(True)
         stop_tour_btn.setEnabled(False)
 
     def _make_tour_handler(name: str, steps: list[str]):
@@ -1979,8 +2119,11 @@ def _build_main_window():  # type: ignore[return]
         _state["goto_worker"] = None
         _state["goto_thread"] = None
         _state["goto_bridge"] = None
-        if _state.get("transport") is not None:
-            goto_btn.setEnabled(True)
+        # 097: goto_btn is NOT re-enabled here -- it is permanently disabled
+        # pending sprint 098 (the pursuit loop needs SI/G). Pre-097 this
+        # re-enabled it unconditionally whenever connected, which would have
+        # wrongly un-gated it on every disconnect (this function also runs
+        # from _on_disconnect()).
 
     def _stop_all_motion() -> None:
         """Cancel any running tour AND GOTO worker (used by the STOP button).
@@ -2009,8 +2152,11 @@ def _build_main_window():  # type: ignore[return]
         _state["goto_worker"] = None
         _state["goto_thread"] = None
         _state["goto_bridge"] = None
-        if _state.get("transport") is not None:
-            goto_btn.setEnabled(True)
+        # 097: goto_btn is NOT re-enabled here -- it is permanently disabled
+        # pending sprint 098 (the pursuit loop needs SI/G). Pre-097 this
+        # re-enabled it unconditionally whenever connected, which would have
+        # wrongly un-gated it on every disconnect (this function also runs
+        # from _on_disconnect()).
 
     def _on_goto_clicked() -> None:
         transport = _state.get("transport")
@@ -2124,8 +2270,22 @@ def _build_main_window():  # type: ignore[return]
 
         if name == "Serial":
             if not port:
-                _append_log("[ERROR] No port specified for Serial transport")
-                return
+                # Auto-detect the robot's direct-USB port (mirrors the Relay
+                # branch's own auto-discovery below): mbdeploy's device
+                # registry (config/devices.json) knows which usbmodem is the
+                # NEZHA2 robot vs the RADIOBRIDGE relay dongle -- never
+                # auto-pick the relay as the robot.
+                _append_log("[INFO] Serial: no port specified -- auto-detecting robot...")
+                port = find_robot_serial_port(list_ports())
+                if port is None:
+                    _append_log(
+                        "[ERROR] No robot serial port found (no /dev/cu.usbmodem* "
+                        "present -- is the robot plugged in? `mbdeploy probe` "
+                        "refreshes the device registry)"
+                    )
+                    return
+                _append_log(f"[INFO] Robot found on {port}")
+                port_edit.setText(port)
             transport = SerialTransport(port)
         elif name == "Relay":
             from robot_radio.testgui.transport import find_relay_port, _relay_probe_banner

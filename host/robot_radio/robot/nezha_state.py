@@ -24,7 +24,7 @@ import threading
 import time
 
 from robot_radio.nav.pose import Pose
-from robot_radio.robot.protocol import NezhaProtocol, parse_tlm
+from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
 from robot_radio.robot.robot_state import RobotState
 
 
@@ -91,10 +91,15 @@ class NezhaState:
     # ------------------------------------------------------------------
 
     def update(self, left: int | None = None, right: int | None = None) -> None:  # [mm/s]
-        """Send current wheel speeds and read available TLM lines for 40 ms.
+        """Send current wheel speeds and read available TLM frames for 40 ms.
 
         If ``left`` or ``right`` are provided they are stored as the
         new commanded wheel speeds before sending.
+
+        097-003: telemetry arrives over the binary plane now (``stream()``
+        is binary-only -- see its own docstring), so this reads
+        ``NezhaProtocol.read_binary_tlm_frames()`` (already-parsed
+        ``TLMFrame`` objects) rather than raw text lines.
         """
         if left is not None or right is not None:
             with self._lock:
@@ -109,56 +114,54 @@ class NezhaState:
         self._proto.drive(l, r)
 
         now = time.monotonic()
-        for line in self._proto.read_lines(duration=40):
-            self._process_line(line)
+        for tlm in self._proto.read_binary_tlm_frames(duration=40):
+            self._apply_tlm(tlm)
 
         with self._lock:
             self.dt_s = now - self.last_update_s if self.last_update_s > 0 else 0.0
             self.last_update_s = now
 
-    def _process_line(self, line: str) -> None:
-        """Parse a single serial line and update matching state attributes."""
-        tlm = parse_tlm(line)
-        if tlm is not None:
-            with self._lock:
-                if tlm.enc is not None:
-                    self.encoders = tlm.enc
-                if tlm.pose is not None:
-                    x, y, heading = tlm.pose  # [mm], [mm], [cdeg]
-                    self.otos_pose = (float(x), float(y), float(heading))
-                    # Convert centidegrees to radians: cdeg / 18000.0 * math.pi
-                    self.heading_rad = heading / 18000.0 * math.pi
+    def _apply_tlm(self, tlm: TLMFrame) -> None:
+        """Update matching state attributes from one already-parsed TLMFrame."""
+        with self._lock:
+            if tlm.enc is not None:
+                self.encoders = tlm.enc
+            if tlm.pose is not None:
+                x, y, heading = tlm.pose  # [mm], [mm], [cdeg]
+                self.otos_pose = (float(x), float(y), float(heading))
+                # Convert centidegrees to radians: cdeg / 18000.0 * math.pi
+                self.heading_rad = heading / 18000.0 * math.pi
 
-                    # Build RobotState from pose (mandatory) + twist (optional).
-                    # Pose.x/y are in centimetres (nav convention); firmware x in mm.
-                    pose_obj = Pose(
-                        x=float(x) / 10.0,
-                        y=float(y) / 10.0,
-                        heading=heading / 18000.0 * math.pi,
-                    )
-                    if tlm.twist is not None:
-                        v_mmps, omega_mradps = tlm.twist
-                        v_f     = float(v_mmps)
-                        omega_f = float(omega_mradps) / 1000.0  # mrad/s → rad/s
-                    else:
-                        v_f = 0.0
-                        omega_f = 0.0
-                    self.robot_state = RobotState(
-                        pose=pose_obj,
-                        v=v_f,
-                        omega=omega_f,
-                        accel=None,
-                        stamp=time.monotonic(),
-                    )
+                # Build RobotState from pose (mandatory) + twist (optional).
+                # Pose.x/y are in centimetres (nav convention); firmware x in mm.
+                pose_obj = Pose(
+                    x=float(x) / 10.0,
+                    y=float(y) / 10.0,
+                    heading=heading / 18000.0 * math.pi,
+                )
+                if tlm.twist is not None:
+                    v_mmps, omega_mradps = tlm.twist
+                    v_f     = float(v_mmps)
+                    omega_f = float(omega_mradps) / 1000.0  # mrad/s → rad/s
+                else:
+                    v_f = 0.0
+                    omega_f = 0.0
+                self.robot_state = RobotState(
+                    pose=pose_obj,
+                    v=v_f,
+                    omega=omega_f,
+                    accel=None,
+                    stamp=time.monotonic(),
+                )
 
-                if tlm.line is not None:
-                    self.line_sensor = tlm.line
-                if tlm.color is not None:
-                    self.color = tlm.color
-                if tlm.t is not None:
-                    self.last_tlm_t = tlm.t
-                if tlm.ekf_rej is not None:
-                    self.ekf_rej = tlm.ekf_rej
+            if tlm.line is not None:
+                self.line_sensor = tlm.line
+            if tlm.color is not None:
+                self.color = tlm.color
+            if tlm.t is not None:
+                self.last_tlm_t = tlm.t
+            if tlm.ekf_rej is not None:
+                self.ekf_rej = tlm.ekf_rej
 
     # ------------------------------------------------------------------
     # One-shot commands

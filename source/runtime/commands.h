@@ -58,13 +58,20 @@ struct PoseResetCommand {
 struct MotionCommand {
   msg::PlannerCommand command;
   char verb[8] = "";
-  // Set ONLY by handleS() (motion_commands.cpp) -- the loop feeds its own
-  // loop-owned StreamingDriveWatchdog when it drains a MotionCommand with
-  // this flag set (mirrors the pre-087 contract: "sTimeout: fed ONLY by S's
-  // own handler -- never by any other command", motion_commands.h). Kept
-  // separate from `verb` (which persists across passes as the "currently
-  // active goal's verb" bookkeeping) since this is a one-shot, this-dispatch-
-  // only signal, true only for the ONE MotionCommand S itself posts.
+  // Historical: was set ONLY by the now-deleted text handleS()
+  // (motion_commands.cpp) to feed the loop's own StreamingDriveWatchdog when
+  // it drained a MotionCommand with this flag set (mirrored the pre-087
+  // contract: "sTimeout: fed ONLY by S's own handler -- never by any other
+  // command", motion_commands.h). Both handleS() and StreamingDriveWatchdog
+  // were deleted outright (097-006, see motion_commands.h's file header),
+  // and Rt::MotionCommand/bb.motionIn (this struct's only producer/consumer
+  // path) are now fully unreferenced plumbing as a result -- left in place
+  // as a documented future-cleanup vestige rather than removed here
+  // (architecture-update-r2.md Open Question 1; out of this ticket's
+  // scope). Kept separate from `verb` (which persists across passes as the
+  // "currently active goal's verb" bookkeeping) since this was a one-shot,
+  // this-dispatch-only signal, true only for the ONE MotionCommand S itself
+  // posted.
   bool feedStreamWatchdog = false;
 };
 
@@ -128,7 +135,7 @@ struct ConfigDelta {
                        // [0, kMotorCount) convention) when target ==
                        // kMotor; ignored otherwise. NOT the wire-visible
                        // 1-based brick label -- a caller building this
-                       // delta (dev_commands.cpp/config_commands.cpp)
+                       // delta (dev_commands.cpp/commands/binary_channel.cpp)
                        // converts a wire `<n>` (or a wire-shaped published
                        // config field) to this index at its own handler
                        // boundary.

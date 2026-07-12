@@ -1,70 +1,14 @@
-// tlm_frame.cpp -- Telemetry::tick()/buildTlmFrame(). See tlm_frame.h for
-// the full design rationale and the wire-key exclusion note.
+// tlm_frame.cpp -- Telemetry::tick()/buildTelemetryMessage(). See
+// tlm_frame.h for the full design rationale and the wire-key exclusion
+// note. The text formatter this file used to also carry (buildTlmFrame(),
+// plus its modeChar()/appendField()/kAngleScale helpers) was deleted by
+// 097-008 (architecture-update-r2.md Decision 9, pure-binary firmware) --
+// see git history for that prior code.
 #include "telemetry/tlm_frame.h"
-
-#include <cstdarg>
-#include <cstddef>
-#include <cstdio>
-#include <cstring>
 
 #include "kinematics/body_kinematics.h"
 
 namespace Telemetry {
-
-namespace {
-
-// kAngleScale -- 18000/pi ~= 5729.5779513, converting radians to
-// centidegrees. Same constant source_old/robot/RobotTelemetry.cpp's
-// buildTlmFrame() used for pose=/encpose=/otos=.
-constexpr float kAngleScale = 5729.5779513f;   // [cdeg/rad]
-
-// modeChar -- 084-005: maps msg::DriveMode to TLM's single-character `mode=`
-// wire value, per docs/protocol-v2.md §8's I/S/T/D/G vocabulary and
-// architecture-update.md (084) Decision 6. Moved here from
-// commands/telemetry_commands.cpp by 087-008, alongside the rest of
-// Telemetry::tick()'s field-sourcing logic.
-char modeChar(msg::DriveMode mode) {
-  switch (mode) {
-    case msg::DriveMode::IDLE: return 'I';
-    case msg::DriveMode::STREAMING: return 'S';
-    case msg::DriveMode::TIMED: return 'T';
-    case msg::DriveMode::DISTANCE: return 'D';
-    case msg::DriveMode::GO_TO: return 'G';
-    case msg::DriveMode::VELOCITY:
-    default:
-      return 'I';
-  }
-}
-
-// appendField -- format one field into buf+pos (size rem), advancing
-// pos/rem only on a fully-committed (non-truncated) write. Once `truncated`
-// is set (this write, or an earlier one, didn't fit), every subsequent call
-// is a no-op: this is what the incremental-snprintf idiom in
-// source_old/robot/RobotTelemetry.cpp's buildTlmFrame() got subtly wrong for
-// a buffer too small even for the MANDATORY t=/mode=/seq= prefix -- without
-// this guard, a later field's write would land at the SAME buf+pos the
-// (also-truncated) earlier field just wrote, silently replacing it. vsnprintf
-// itself always NUL-terminates within the given size (as long as rem > 0,
-// which holds here: rem only ever shrinks via the successful branch, which
-// leaves it >= 1), so buf is always a valid, safely-terminated C string on
-// return, truncated or not.
-void appendField(char* buf, int& pos, int& rem, bool& truncated, const char* fmt, ...) {
-  if (truncated) return;
-
-  va_list ap;
-  va_start(ap, fmt);
-  int n = std::vsnprintf(buf + pos, static_cast<size_t>(rem), fmt, ap);
-  va_end(ap);
-
-  if (n > 0 && n < rem) {
-    pos += n;
-    rem -= n;
-  } else {
-    truncated = true;
-  }
-}
-
-}  // namespace
 
 TlmFrameInput tick(uint32_t now, const Rt::Blackboard& bb) {
   // enc=/vel= read bb.motors[]'s primitive fields DIRECTLY for the
@@ -83,16 +27,13 @@ TlmFrameInput tick(uint32_t now, const Rt::Blackboard& bb) {
 
   TlmFrameInput in;
   in.now = now;
-  // mode= -- 084-005: bb.planner.mode is the SOLE source (architecture-
-  // update.md (084) Decision 6).
-  in.mode = modeChar(bb.planner.mode);
-  // driveMode (096-003) -- the SAME bb.planner.mode value, unmapped, for
-  // buildTelemetryMessage()'s exclusive use -- see tlm_frame.h's own doc
-  // comment on TlmFrameInput.driveMode for why the text mapping above
-  // cannot be reversed to recover it.
+  // driveMode -- 084-005/096-003: bb.planner.mode is the SOLE source
+  // (architecture-update.md (084) Decision 6), copied verbatim -- see
+  // tlm_frame.h's own doc comment on TlmFrameInput.driveMode (097-008: now
+  // the only mode-carrying field on this struct).
   in.driveMode = bb.planner.mode;
-  // seq= -- READ ONLY. The shared STREAM/SNAP counter (bb.telemetrySeq) is
-  // advanced by the caller, not here -- see this function's own doc
+  // seq= -- READ ONLY. The shared periodic-emission counter (bb.telemetrySeq)
+  // is advanced by the caller, not here -- see this function's own doc
   // comment in tlm_frame.h.
   in.seq = bb.telemetrySeq;
 
@@ -104,16 +45,21 @@ TlmFrameInput tick(uint32_t now, const Rt::Blackboard& bb) {
   in.velLeft = velLeft;
   in.velRight = velRight;
 
-  // cmd= -- the drivetrain's commanded per-wheel velocity (vel_[0]=left,
-  // vel_[1]=right; drivetrain.cpp state()), i.e. the velocity PID's setpoint.
-  // Present whenever the drivetrain reports its two wheel targets (vel_count
+  // cmd= -- the drivetrain's commanded per-wheel velocity (cmd_[0]=left,
+  // cmd_[1]=right; drivetrain.cpp state()), i.e. the velocity PID's setpoint.
+  // Present whenever the drivetrain reports its two wheel targets (cmd_count
   // >= 2); omitted (like every optional field) when it does not. Read from
   // bb.drivetrain here deliberately -- unlike vel=/enc= (measured, from
   // bb.motors[]), cmd= IS the commanded-target semantic bb.drivetrain owns.
-  if (bb.drivetrain.vel_count_val() >= 2) {
+  // (2026-07-11 fix: this read bb.drivetrain.vel() -- DrivetrainState's
+  // MEASURED array, per drivetrain.cpp state()'s own "vel_[] are MEASURED,
+  // not commanded" contract -- so the wire's cmd= silently duplicated vel=
+  // and hid every command-vs-plant tracking error. cmd_[] is the
+  // post-governor setpoint state() actually publishes for this purpose.)
+  if (bb.drivetrain.cmd_count_val() >= 2) {
     in.hasCmdVel = true;
-    in.cmdVelLeft = bb.drivetrain.vel()[0];
-    in.cmdVelRight = bb.drivetrain.vel()[1];
+    in.cmdVelLeft = bb.drivetrain.cmd()[0];
+    in.cmdVelRight = bb.drivetrain.cmd()[1];
   }
 
   // pose=/encpose= read bb's two independent pose readings -- never
@@ -165,76 +111,11 @@ TlmFrameInput tick(uint32_t now, const Rt::Blackboard& bb) {
   return in;
 }
 
-int buildTlmFrame(char* buf, int len, const TlmFrameInput& in) {
-  if (buf == nullptr || len <= 0) return 0;
-
-  int pos = 0;
-  int rem = len;
-  bool truncated = false;
-
-  appendField(buf, pos, rem, truncated, "TLM t=%lu mode=%c seq=%u",
-              static_cast<unsigned long>(in.now), in.mode,
-              static_cast<unsigned>(in.seq));
-
-  if (in.hasEnc) {
-    appendField(buf, pos, rem, truncated, " enc=%d,%d",
-                static_cast<int>(in.encLeft), static_cast<int>(in.encRight));
-  }
-
-  if (in.hasVel) {
-    appendField(buf, pos, rem, truncated, " vel=%d,%d",
-                static_cast<int>(in.velLeft), static_cast<int>(in.velRight));
-  }
-
-  if (in.hasCmdVel) {
-    appendField(buf, pos, rem, truncated, " cmd=%d,%d",
-                static_cast<int>(in.cmdVelLeft), static_cast<int>(in.cmdVelRight));
-  }
-
-  if (in.hasPose) {
-    appendField(buf, pos, rem, truncated, " pose=%d,%d,%d",
-                static_cast<int>(in.pose.x), static_cast<int>(in.pose.y),
-                static_cast<int>(in.pose.h * kAngleScale));
-  }
-
-  if (in.hasEncPose) {
-    appendField(buf, pos, rem, truncated, " encpose=%d,%d,%d",
-                static_cast<int>(in.encPose.x), static_cast<int>(in.encPose.y),
-                static_cast<int>(in.encPose.h * kAngleScale));
-  }
-
-  if (in.hasOtos) {
-    appendField(buf, pos, rem, truncated, " otos=%d,%d,%d",
-                static_cast<int>(in.otos.x), static_cast<int>(in.otos.y),
-                static_cast<int>(in.otos.h * kAngleScale));
-    // otosconn= (092-002) -- a SEPARATE token, not a 4th otos= value: the
-    // existing otos= wire shape is a fixed 3-tuple already consumed by
-    // host parsers (host/robot_radio/robot/protocol.py's parse_tlm() only
-    // accepts len(parts) == 3) -- growing its arity would silently break
-    // that strict check rather than extend it. A standalone token shares
-    // otos='s own omission gate (in.hasOtos) but leaves otos= itself
-    // byte-for-byte unchanged.
-    appendField(buf, pos, rem, truncated, " otosconn=%d", in.otosConnected ? 1 : 0);
-  }
-
-  if (in.hasTwist) {
-    appendField(buf, pos, rem, truncated, " twist=%d,%d",
-                static_cast<int>(in.twist.v_x),
-                static_cast<int>(in.twist.omega * 1000.0f));
-  }
-
-  // The return value reflects the buffer's ACTUAL string length (via
-  // strlen(), not the internal `pos` bookkeeping above): when nothing was
-  // truncated the two agree exactly, but a too-small buffer's final
-  // (truncated) appendField() call still leaves a valid, shorter
-  // NUL-terminated string in buf that `pos` alone would under-report.
-  return static_cast<int>(std::strlen(buf));
-}
-
 void buildTelemetryMessage(msg::Telemetry& out, const TlmFrameInput& in) {
   // Pure, stateless: always start from a fresh POD -- never assume the
-  // caller pre-cleared `out` (mirrors buildTlmFrame()'s own "same inputs
-  // always produce the same outputs" contract).
+  // caller pre-cleared `out` (the SAME "same inputs always produce the same
+  // outputs" contract the deleted text formatter, buildTlmFrame(), also
+  // held -- 097-008).
   out = msg::Telemetry();
 
   out.now = in.now;
@@ -268,8 +149,9 @@ void buildTelemetryMessage(msg::Telemetry& out, const TlmFrameInput& in) {
   out.twist = in.twist;
 
   // Bench-diagnostic fields -- unconditionally copied, no `has_*` flag on
-  // either side (mirrors handleTlm()'s own text reply, which never omits
-  // them).
+  // either side (mirrors the now-deleted text handleTlm()'s own reply,
+  // which never omitted them -- see motion_commands.cpp git history,
+  // 097-008).
   out.acc_left = in.accLeft;
   out.acc_right = in.accRight;
   out.active = in.active;

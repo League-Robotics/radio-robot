@@ -4,6 +4,11 @@ status: pending
 
 # Restore the line sensor and color sensor as ticked devices that report through the blackboard
 
+> **Approved plan**: the stakeholder-approved sprint plan for this issue lives
+> in `sprint-095-restore-line-color-sensors-as-ticked-blackboard-devices.md`
+> (plan-to-issue hook, 2026-07-09). The two files are one work item — the
+> sprint that plans this must claim BOTH via `link_sprint_issues`.
+
 ## Description
 
 Add the line sensor and the color sensor back into the new tree as real,

@@ -1,10 +1,15 @@
 """Off-hardware acceptance proof for ticket 082-004 (SUC-004), extended by
-087-008 (SUC-001/SUC-002/SUC-006): Telemetry::buildTlmFrame()
-(source/telemetry/tlm_frame.{h,cpp}) -- the pure, stateless TLM
-frame-formatting function the STREAM/SNAP command family
-(commands/telemetry_commands.{h,cpp}) builds on -- plus, since 087-008,
-Telemetry::tick() (bb -> TlmFrameInput), which reads a bare Rt::Blackboard
-directly with no live subsystem behind any cell.
+087-008 (SUC-001/SUC-002/SUC-006) and re-scoped by 097-008
+(architecture-update-r2.md Decision 9, pure-binary firmware):
+Telemetry::tick() (source/telemetry/tlm_frame.{h,cpp}, bb -> TlmFrameInput,
+reads a bare Rt::Blackboard directly with no live subsystem behind any
+cell) and Telemetry::buildTelemetryMessage() (096-003, TlmFrameInput ->
+msg::Telemetry). Telemetry::buildTlmFrame() -- the pure, stateless TEXT
+frame-formatting function the now-deleted text STREAM/SNAP command family
+used to build on -- was deleted by 097-008 along with its own scenarios in
+``tlm_frame_harness.cpp`` (see that file's own header comment); tick()'s
+own field-assembly is now proven directly against TlmFrameInput's fields
+rather than via a formatted text line.
 
 Compiles ``tlm_frame_harness.cpp`` together with ``source/telemetry/
 tlm_frame.cpp`` and ``source/kinematics/body_kinematics.cpp`` (087-008:
@@ -13,12 +18,12 @@ C++ compiler, runs the resulting binary, and asserts it exits 0. Mirrors
 ``test_velocity_pid.py``'s compile-and-run pattern (081-001): no hardware,
 no CODAL, no CMake -- tlm_frame.{h,cpp}, body_kinematics.{h,cpp}, and the
 header-only runtime/blackboard.h + messages/*.h it pulls in, compiled
-standalone, since neither Telemetry::buildTlmFrame() nor Telemetry::tick()
+standalone, since neither Telemetry::tick() nor Telemetry::buildTelemetryMessage()
 has any DevLoop/Hardware/Drivetrain/PoseEstimator/CommandRouter dependency
 at all (the remaining impure wiring -- reply-channel resolution, the seq=
-counter's mutation -- lives in commands/telemetry_commands.cpp instead,
-exercised end-to-end via the ctypes sim harness in ticket 005 /
-test_tlm_stream_snap.py).
+counter's mutation, the binary armor/encode -- lives in commands/
+telemetry_commands.cpp instead, exercised end-to-end via the ctypes sim
+harness in test_binary_channel.py's `stream` section).
 
 Collected under ``tests/sim/unit/`` alongside the existing
 ``test_velocity_pid.py``/``test_dev_loop_pose_estimator.py`` -- already

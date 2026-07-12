@@ -22,7 +22,7 @@ from robot_radio.calibration.helpers import (
     save_config,
     scale_to_int8,
 )
-from robot_radio.robot.protocol import parse_tlm
+from robot_radio.robot._legacy_tlm_text import parse_historical_tlm_line
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -119,9 +119,18 @@ def _send_and_wait(ser, cmd: str, want_prefix: str, timeout: float = 5.0) -> lis
 
 
 def _snap_pose(ser, timeout: float = 3.0) -> Optional[tuple[int, int, int]]:
+    # 097-003: this script talks to the robot via _conn_helpers.RelaySerial/
+    # DirectSerial (a raw pyserial wrapper, deliberately not SerialConnection
+    # -- see _conn_helpers.py's own header), so there is no _binary_tlm_queue
+    # to source a TLMFrame from here. Stays on the text plane (still live --
+    # only a later ticket, 097-008, retires the firmware's text SNAP/STREAM
+    # handlers) via the frozen historical parser; see
+    # robot_radio.robot._legacy_tlm_text's own module docstring. Same
+    # reasoning applies to _stream_tlm_until_evt()/_interactive_adjust()
+    # below, and to this file's own "STREAM 20"/"STREAM 0" text commands.
     lines = _send_and_wait(ser, "SNAP", "TLM", timeout=timeout)
     for line in lines:
-        frame = parse_tlm(line)
+        frame = parse_historical_tlm_line(line)
         if frame is not None and frame.pose is not None:
             return frame.pose
     return None
@@ -151,7 +160,7 @@ def _stream_tlm_until_evt(
     while time.monotonic() < deadline:
         lines = ser.read_available(timeout=0.1)
         for line in lines:
-            frame = parse_tlm(line)
+            frame = parse_historical_tlm_line(line)
             if frame is not None and frame.pose is not None:
                 poses.append(frame.pose)
             clean = line.strip().lstrip("<# ").strip()
@@ -226,7 +235,7 @@ def _interactive_adjust(ser, current_heading: int, target: float,
                 time.sleep(nudge_duration / 1000.0 + 0.1)
             lines = ser.read_available(timeout=0.05)
             for line in lines:
-                frame = parse_tlm(line)
+                frame = parse_historical_tlm_line(line)
                 if frame is not None and frame.pose is not None:
                     heading = frame.pose[2]
                     _show()

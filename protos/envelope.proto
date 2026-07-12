@@ -25,6 +25,12 @@ import "config.proto";
 // `Error{ERR_UNIMPLEMENTED}` for these until their owning sprint lands):
 // config/get/stream (096), pose/otos (098).
 //
+// **hello/ver/help (stakeholder-directed, 2026-07-10)**: added so every
+// verb in the text safety rump (HELP/HELLO/PING/ID/VER/STOP,
+// docs/protocol-v3.md section 6) also has a binary arm -- `BinaryChannel`
+// (source/commands/binary_channel.cpp) handles all three live, same as
+// ping/stop/id.
+//
 // 096-001 gives config/get/stream a REAL schema (`Telemetry`/`ConfigDelta`/
 // `ConfigSnapshot` are no longer empty placeholders -- see below and
 // telemetry.proto/config.proto), but `BinaryChannel` runtime behavior for
@@ -113,6 +119,35 @@ message Error {
 // --- Leaf messages (six new types this ticket adds) -------------------
 
 message Ping {}
+
+// Hello/Ver/Help -- zero-field oneof arms (stakeholder-directed 6-verb
+// minimal command surface, 2026-07-10): give the text safety rump's
+// remaining three verbs -- HELLO, VER, HELP -- their own binary parity,
+// completing the set PING/STOP/ID already had. Same "cannot be malformed"
+// shape Ping/Stop/DeviceId's own request side already use.
+//
+// hello/ver both reply the EXISTING DeviceId message (Decision 4's
+// reasoning extended: DeviceId already carries model/name/serial/
+// fw_version/proto_version, which IS both HELLO's announcement content and
+// VER's fw/proto content) -- no new reply message for either. help replies
+// the new HelpText message below (a HELP-specific text payload has no
+// existing reply shape to reuse).
+message Hello {}
+message Ver {}
+message Help {}
+
+// HelpText -- HELP's reply body: the live registered verb list
+// (Rt::CommandRouter::listVerbs(), the SAME source text HELP's text-plane
+// handler reads), space-separated. `text` stays at the generator's default
+// `char[64]` width (no `(str_len)` override) -- the rump is 6 short verbs
+// ("HELP HELLO PING ID VER STOP", 28 bytes), nowhere near the 63-byte
+// content budget a 64-byte array gives on the wire (kString's cap includes
+// the decoder's own reserved null-terminator byte, wire.cpp), and this
+// message is never nested inside anything larger than the top-level
+// ReplyEnvelope.body arm it occupies.
+message HelpText {
+  string text = 1;
+}
 
 // payload: up to 64 raw bytes, echoed back verbatim.
 //
@@ -298,6 +333,14 @@ message CommandEnvelope {
                                       // wiring lands tickets 002/003/005
     Stop              stop    = 13;
     DeviceId          id      = 14;  // Decision 4 -- empty request
+    Hello             hello   = 15;  // stakeholder-directed 6-verb minimal
+                                      // command surface (2026-07-10) --
+                                      // empty request, replies DeviceId
+                                      // (reply.body.id, field 7)
+    Ver               ver     = 16;  // empty request, replies DeviceId
+                                      // (reply.body.id, field 7)
+    Help              help    = 17;  // empty request, replies HelpText
+                                      // (reply.body.helptext, field 9)
   }
 }
 
@@ -325,5 +368,11 @@ message ReplyEnvelope {
     // oneof arm, the same "reuse the request-side message on the reply
     // side" move Decision 4 already made for DeviceId/id.
     Echo            echo = 8;
+    // helptext (stakeholder-directed 6-verb minimal command surface,
+    // 2026-07-10): the binary `help` request arm's reply (field 17 on
+    // CommandEnvelope.cmd) -- see HelpText's own doc comment above. hello/
+    // ver (fields 15/16) reuse the EXISTING `id` arm above instead of
+    // adding their own -- only help needed a new reply shape.
+    HelpText        helptext = 9;
   }
 }

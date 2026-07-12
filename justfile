@@ -46,6 +46,13 @@ build-sim:
     # firmware tables gen_messages.py just wrote.
     uv run python3 scripts/gen_pb2.py
     uv run python3 scripts/gen_boot_config.py
+    # 2026-07-11: bake the CURRENT pyproject version into the sim dylib too
+    # (source/types/version_generated.h). Without this, `VER` from a sim
+    # session reports whatever version the header held at some prior full
+    # build -- which defeats the stale-sim provenance handshake the
+    # wheel_motion_trace notebook (and any other sim client) relies on to
+    # detect a long-lived kernel still holding an old in-process dylib.
+    uv run python3 scripts/gen_version.py
     cmake -S tests/_infra/sim -B tests/_infra/sim/build -DROBOT_RUN_MODE=SIM
     cmake --build tests/_infra/sim/build --parallel
 

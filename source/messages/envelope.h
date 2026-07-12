@@ -47,6 +47,31 @@ struct Ping {
     // --- array / optional-string accessors ---
 };
 
+// Hello
+struct Hello {
+
+    // --- array / optional-string accessors ---
+};
+
+// Ver
+struct Ver {
+
+    // --- array / optional-string accessors ---
+};
+
+// Help
+struct Help {
+
+    // --- array / optional-string accessors ---
+};
+
+// HelpText
+struct HelpText {
+    char text[64] = {};
+
+    // --- array / optional-string accessors ---
+};
+
 // Echo
 struct Echo {
     uint8_t payload_[64] = {};
@@ -154,6 +179,9 @@ struct CommandEnvelope {
         STREAM = 10,
         STOP = 11,
         ID = 12,
+        HELLO = 13,
+        VER = 14,
+        HELP = 15,
     };
     CmdKind cmd_kind = CmdKind::NONE;
     union {
@@ -169,6 +197,9 @@ struct CommandEnvelope {
         StreamControl stream;
         Stop stop;
         DeviceId id;
+        Hello hello;
+        Ver ver;
+        Help help;
     } cmd = {};
 
     uint32_t corr_id = 0;
@@ -187,6 +218,7 @@ struct ReplyEnvelope {
         EVT = 5,
         ID = 6,
         ECHO = 7,
+        HELPTEXT = 8,
     };
     BodyKind body_kind = BodyKind::NONE;
     union {
@@ -197,6 +229,7 @@ struct ReplyEnvelope {
         EventNotify evt;
         DeviceId id;
         Echo echo;
+        HelpText helptext;
     } body = {};
 
     uint32_t corr_id = 0;

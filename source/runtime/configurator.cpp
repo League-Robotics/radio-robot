@@ -151,11 +151,11 @@ void Configurator::applyOne(Blackboard& bb) {
     case ConfigDelta::kDrivetrain: {
       // Drivetrain-scoped config re-propagates to PoseEstimator too --
       // both share msg::DrivetrainConfig (ticket 087-004) and both must
-      // stay configured from the SAME value, mirroring today's established
-      // behavior (source/commands/config_commands.h's own file header:
-      // "any drivetrain-scoped key... re-propagates the FULL candidate
-      // msg::DrivetrainConfig to BOTH Drivetrain::configure() and
-      // PoseEstimator::configure()").
+      // stay configured from the SAME value: any drivetrain-scoped delta
+      // re-propagates the FULL candidate msg::DrivetrainConfig to BOTH
+      // Drivetrain::configure() and PoseEstimator::configure() (established
+      // by the now-deleted text SET handler, source/commands/
+      // config_commands.{h,cpp}, removed 097-007).
       if (foldDrivetrain(drivetrainConfig_, delta)) {
         drivetrain_.configure(drivetrainConfig_);
         poseEstimator_.configure(drivetrainConfig_);

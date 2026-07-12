@@ -8,9 +8,12 @@ stack (SimTransport + TraceModel, tickets 083-001/002/003 together, not in
 isolation) exactly the way an operator would from the GUI:
 
 1. Connect a real ``SimTransport`` (ctypes sim, ticket 083-001).
-2. Bind ``DEV DT PORTS 1 2`` and drive forward with ``DEV DT VW 200 0 0`` —
-   the exact wire strings ``KeyboardDriver`` (``drive.py``) sends for
-   ``DEFAULT_PORTS``/arrow-key-up (ticket 083-002).
+2. Drive forward with ``S 200 200`` (097: ``DEV DT VW``/``DEV DT PORTS`` --
+   the wire strings ``KeyboardDriver`` used pre-097 -- have no binary arm
+   and never will; the legacy ``DEV`` debug command family was retired
+   along with the rest of the text plane. ``S`` is translated to a binary
+   ``CommandEnvelope{drive: DrivetrainCommand{wheels}}`` and commands
+   ``Drivetrain`` directly, the same as ``DEV DT VW`` did).
 3. Apply a nonzero ``enc_scale_err_l`` error profile via
    ``SimTransport.apply_error_profile()`` (ticket 083-001).
 4. Tick the sim forward in real time and feed telemetry into a
@@ -125,6 +128,15 @@ def test_enc_scale_err_separates_encoder_trace_from_camera_truth(
     ("injecting a slip/encoder-error profile visibly separates the encoder
     trace from truth"), automated end-to-end against the real reconciled
     stack (081/082 sim + 083-001/002/003's SimTransport/drive/traces).
+
+    097: un-xfailed. ``encpose`` (the firmware-computed dead-reckoned pose
+    this test's ``model.encoder`` trace used to read) still has no wire
+    representation on the binary plane (096-001's permanent trim) -- but
+    ``TraceModel.feed()`` now synthesizes an equivalent pose host-side via
+    ``EncoderDeadReckoner``, integrated from ``frame.enc`` (cumulative
+    per-wheel distance, which DOES carry the injected ``enc_scale_err_l``
+    over-report -- see ``traces.py``). ``model.encoder`` grows and diverges
+    from ``model.camera`` exactly as this test expects.
     """
     model = TraceModel()
     transport.on_telemetry = model.feed
@@ -142,11 +154,9 @@ def test_enc_scale_err_separates_encoder_trace_from_camera_truth(
     # defaults[key])` per field).
     transport.apply_error_profile({"enc_scale_err_l": _ENC_SCALE_ERR_L})
 
-    # Mirrors KeyboardDriver's own wire strings exactly: attach()'s one-time
-    # `DEV DT PORTS {left} {right}` for DEFAULT_PORTS=(1, 2), then the
-    # Key_Up mapping `DEV DT VW {FWD_SPEED} 0 0` (drive.py).
-    transport.send("DEV DT PORTS 1 2")
-    transport.send("DEV DT VW 200 0 0")
+    # 097: DEV DT VW/PORTS have no binary arm (see module docstring) --
+    # drive forward via the binary-translated S verb instead.
+    transport.send("S 200 200")
 
     assert _wait_until(lambda: len(model.encoder) >= _MIN_TRACE_POINTS), (
         f"encoder trace only reached {len(model.encoder)} points within "

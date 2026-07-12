@@ -42,7 +42,6 @@
 
 #include "MicroBit.h"
 #include "com/i2c_bus.h"
-#include "commands/telemetry_commands.h"
 #include "config/boot_config.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
@@ -52,6 +51,7 @@
 #include "subsystems/communicator.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/nezha_hardware.h"
+#include "telemetry/telemetry_tick.h"
 
 static MicroBit uBit;
 

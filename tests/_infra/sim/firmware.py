@@ -319,6 +319,16 @@ class Sim:
         lib, h = self._lib, self._h
         return (float(lib.sim_get_vel_l(h)), float(lib.sim_get_vel_r(h)))
 
+    def active(self) -> bool:
+        """Return bb.drivetrain.busy directly (097-008, TEST-ONLY) --
+        motion in progress, the SAME value Telemetry::tick() copies into
+        TlmFrameInput.active/msg::Telemetry.active. A zero-cost peek,
+        bypassing the telemetry wire entirely -- see sim_api.cpp's own
+        sim_get_active() doc comment for why a per-iteration precision
+        loop (test_pivot_completes_promptly_single_peaked) needs this
+        instead of a binary `stream` read."""
+        return bool(self._lib.sim_get_active(self._h))
+
     def pwm(self) -> tuple[float, float]:
         """Return (pwm_l, pwm_r) -- the plant's raw commanded actuator value,
         [-100, 100]."""
@@ -476,6 +486,10 @@ class Sim:
             fn = getattr(lib, name)
             fn.argtypes = [ctypes.c_void_p]
             fn.restype = ctypes.c_float
+
+        # sim_get_active (097-008, TEST-ONLY) -- bb.drivetrain.busy direct peek.
+        lib.sim_get_active.argtypes = [ctypes.c_void_p]
+        lib.sim_get_active.restype = ctypes.c_int
 
         # Error-knob setters (14).
         for name in (
