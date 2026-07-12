@@ -77,11 +77,11 @@
  },
  "control": {
   "_vel_gains_domain": "duty [-1,1] (NezhaMotor MotorVelocityPid); NOT the old PWM-percent scale",
-  "vel_kp": 0.0018,
-  "vel_ki": 0.008,
+  "vel_kp": 0.0014,
+  "vel_ki": 0.005,
   "vel_kff": 0.00135,
   "vel_imax": 0.3,
-  "vel_kaw": 15.0,
+  "vel_kaw": 20.0,
   "vel_filt": 0.3,
   "heading_kp": 6.0,
   "heading_kd": 0.0,
@@ -92,7 +92,7 @@
   "arrive_tol_mm": 25,
   "_vel_kff_note": "1/650 -- from duty-saturated plateau measurements 2026-07-11 (620-740 mm/s across windows; window-to-window variance cause not established -- NOT power, per stakeholder). Do not lean on FF accuracy: the loop should be feedback-dominant (see motion_control.ipynb verdict).",
   "_vel_ki_note": "kept 0.0018 in the 2026-07-11 session; motion_control.ipynb then showed the loop is FF-dominated with 40-50% step overshoot and weak steady-state correction -- a feedback-dominant retune (kp/ki up, acceptance via motion_control.ipynb) is the open next step.",
-  "_vel_gains_note": "2026-07-11 designed from the MEASURED plant map (pure-FF open-loop duty sweep, motion_control session): plant is linear and steady -- L ~756 mm/s per unit duty (+8 offset), R ~721 (-12), sd 2-4 mm/s across holds. kff = 1/740 (mean); kp = 0.0018 (loop gain ~1.3 vs ~120ms loop lag); ki = 0.008 (tau_I 0.22s, integrator corner below crossover; closes the +/-2.5% per-wheel FF asymmetry); kaw = 15 (back-calculation anti-windup -- without it the integrator winds up during the ~100ms reversal dwell and steps overshot ~50%). Acceptance: motion_control.ipynb.",
+  "_vel_gains_note": "2026-07-12 RING-TUNED on the stand (live SET, step-response method): vel_kp 0.0018->0.0014, vel_ki 0.008->0.005, vel_kaw 15->20. The 0.0018 loop had a ~140 mm/s overshoot RESONANCE (+24..+33% on a velocity step) that the heading loop drove the wheels straight into (over-drive to 1.5x ceiling), producing the trajectory ringing. kp=0.0014 halves the step overshoot to ~+11%; endpoint stays good (full grid mean 0.40deg, 95% within +/-1deg, worst cells -30@384 -1.75 and 180@70 -1.05 -- a small, stakeholder-accepted trade vs the pristine 0.0018 loop's 100%/0.59deg for the smoother trajectory). kp=0.0010 was too soft (endpoint max 1.4deg). The clean 'both' fix -- keep 0.0018 AND clamp the heading-loop output to the yaw ceiling so it stops over-driving the wheels into this ~140mm/s resonance -- is deferred (see clasi/issues/heading-loop-output-clamp-and-velocity-resonance.md). kff=1/740 and vel_filt=0.3 unchanged. Method: tests/bench velocity-step response at 70/140/250 mm/s on the stand.",
   "_vel_filt_note": "kept 0.3: raising to 0.6 (2026-07-11) cut measurement lag but pushed step overshoot to ~11% and turns to +6/+9/+7 -- the decel-lag surplus just became an overshoot surplus. 0.3 is the verified optimum of that trade with the current gains.",
   "_heading_gains_note": "2026-07-12 BENCH-TUNED (sprint 098-003, playfield over radio): heading_kp = 6.0, heading_kd = 0.0 (pure P). Full angle x speed grid (30/90/180/360 deg x 70..384 mm/s, both directions) lands 100% within +/-1 deg, max |error| 0.84 deg, 90-deg full-ceiling ridge eliminated (was +8..+10 deg open-loop). heading_kp started at 3.0 (98-001) which left a residual ~1-2 deg full-ceiling UNDERSHOOT: a proportional-control steady-state error against terminal motor stiction (near target the P command falls below the wheel deadband and stalls short); kp=6.0 overcomes stiction closer in. Zero commanded terminal reversal (no encoder-wedge trigger). Per-robot tunable: a future integral term would null the last <1 deg entirely -- see clasi/issues/heading-loop-cascade-control-turns-terminate-on-target.md. Re-verify with tests/bench/turn_sweep.py --relay --both."
  }
