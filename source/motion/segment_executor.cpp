@@ -569,6 +569,14 @@ void SegmentExecutor::maybeReplanTranslate(uint32_t now, const msg::MotorState& 
       return;
     }
   } else {
+    // EXTEND-ONLY -- see maybeReplanPivot()'s matching guard: arrival is
+    // owned by the encoder stop; a mid-flight shrink only encodes
+    // measurement bias (per-wheel sampling stagger).
+    Motion::JerkTrajectory::State curLin = linear_.peek(linElapsed);
+    float planRemainingNowMag = fabsf(linearTarget_ - curLin.position);
+    if (projectedRemainingMag <= planRemainingNowMag) {
+      return;
+    }
     float newRemainingSigned = vSign * projectedRemainingMag;
     if (!linear_.retarget(newRemainingSigned)) {
       return;
@@ -668,6 +676,21 @@ void SegmentExecutor::maybeReplanPivot(uint32_t now, const msg::MotorState& encL
       return;
     }
   } else {
+    // EXTEND-ONLY (2026-07-11): a retarget may lengthen the plan (deficit-
+    // chasing -- the designed correction for a plant running behind) but
+    // never SHORTEN it. Arrival is owned by the encoder stop, which fires
+    // exactly when the measured arc reaches the target -- so a mid-flight
+    // shrink can only ever encode measurement bias, and a real one exists:
+    // the two wheels are sampled up to ~30ms apart (flip-flop staggering),
+    // which at the 6 rad/s ceiling reads as ~0.09 rad of phantom "ahead".
+    // Cruise-spliced shrink retargets are seamless (no jerk kink, invisible
+    // on every trace) and silently landed 360 deg pivots 25-35 deg short on
+    // runs where jitter bursts crossed the divergence threshold.
+    Motion::JerkTrajectory::State cur = rotational_.peek(rotElapsed);
+    float planRemainingNow = fabsf(rotationalTarget_ - cur.position);
+    if (projectedRemainingRad <= planRemainingNow) {
+      return;
+    }
     float newRemainingSigned = omegaSign * projectedRemainingRad;
     if (!rotational_.retarget(newRemainingSigned)) {
       return;
