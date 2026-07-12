@@ -1,9 +1,12 @@
 ---
-id: '009'
+id: 009
 title: 'aprilcam end-to-end bench/playfield script: PING sync, FIX send, convergence'
-status: open
-use-cases: [SUC-005]
-depends-on: ['007', '008']
+status: done
+use-cases:
+- SUC-005
+depends-on:
+- '007'
+- 008
 github-issue: ''
 issue: restore-pose-estimation-otos-encoders-delayed-camera-fixes.md
 completes_issue: true
@@ -29,7 +32,7 @@ knowledge/playfield-not-floor.md`: the surface is "playfield," never
 
 ## Acceptance Criteria
 
-- [ ] A new script (`tests/bench/` if it only needs a static/known robot
+- [x] A new script (`tests/bench/` if it only needs a static/known robot
       pose, or `tests/playfield/` if it needs the camera's world-frame
       calibration — decide based on what "observe the robot's true pose"
       requires; `tests/playfield/playfield_camera_run.py`'s existing
@@ -47,11 +50,11 @@ knowledge/playfield-not-floor.md`: the surface is "playfield," never
   3. A convergence check: poll `TLM`/binary `stream` for `pose=`,
      confirm it converges toward the camera-observed pose within a
      documented tolerance and time bound.
-- [ ] Geofence/hop-test precondition honored: confirm the robot is inside
+- [x] Geofence/hop-test precondition honored: confirm the robot is inside
       the calibrated playfield bounds and do a small, safe motion test
       before any extended run (per the vision-geofence-before-driving
       convention).
-- [ ] Script follows `tests/CLAUDE.md`'s HITL conventions: widen the
+- [x] Script follows `tests/CLAUDE.md`'s HITL conventions: widen the
       serial-silence watchdog if applicable, restore it and send `STOP`/
       binary `stop` in a `finally` block — motors never left running on an
       exception or Ctrl-C.
@@ -59,8 +62,10 @@ knowledge/playfield-not-floor.md`: the surface is "playfield," never
       robot; it demonstrates the full path (PING clock-sync -> tag-pose-
       to-FIX send -> convergence check) successfully at least once,
       recorded (console output or a saved trace) as this ticket's
-      completion evidence.
-- [ ] Script is resilient to a single dropped/late camera frame (does not
+      completion evidence. **DEFERRED — robot not USB-attached this
+      session (only the relay dongle was connected); not run. See
+      Completion Notes below.**
+- [x] Script is resilient to a single dropped/late camera frame (does not
       crash; retries or reports clearly).
 
 ## Implementation Plan
@@ -89,3 +94,125 @@ DaemonControl Python API) rather than re-deriving camera access.
 module docstring (bench/playfield scripts in this tree are documented
 in-file, not in `docs/`, per existing precedent — verify against a couple
 of existing scripts before deciding).
+
+## Completion Notes
+
+**No robot USB-attached this session** (only the relay dongle was
+connected; the robot itself was not attached and could not be flashed) —
+the **BENCH/PLAYFIELD MANDATORY** acceptance criterion is DEFERRED, not
+satisfied. Everything else below was implemented and validated to the
+extent possible without hardware, per the team-lead's explicit dispatch
+scope for this session.
+
+**Script**: `tests/playfield/pose_fix_convergence.py`. `tests/playfield/`
+over `tests/bench/`: step "observe the robot's true pose" needs the
+camera's CALIBRATED WORLD-FRAME reading (`tag.world_xy`, A1-centred cm) —
+a bench script has no world-frame truth source to fix the robot's pose
+against, and this capability's entire point is closing the camera loop.
+`tests/playfield/playfield_camera_run.py` does not exist in the rebuilt
+tree (only `tests/playfield/plot_square.py`/`world_goto_chart.py`, both
+PARKED); the closest actual precedent is `tests_old/bench/
+playfield_camera_run.py` (pre-Protocol-v3 — its `RT`/`G`/`X` text verbs are
+dead against the current binary-only firmware, so only its connect/
+camera/geofence/safe-stop SHAPE was reused, not its drive calls).
+
+**Three pieces**:
+1. `clock_sync_burst()` — a burst of binary `ping()` round trips
+   (`NezhaProtocol.ping()`, already binary since 097-002), each bracketed
+   by the caller's own host-monotonic `t0`/`t1` and recorded into a
+   `ClockSync` (`host/robot_radio/robot/clock_sync.py`) — an existing,
+   already-implemented NTP-style min-RTT/skew estimator that turned out to
+   have ZERO live pytest coverage (its own test file was never carried
+   forward from `tests_old/` into the new three-domain tree during the
+   077 rebuild). Added `ClockSync.to_robot_time()` (the host->robot
+   inverse of the existing `to_host_time()`) — needed to map a
+   host-captured camera-observation timestamp onto the robot's own clock
+   before sending it as `PoseFix.t` (D6).
+2. `send_camera_pose_fix()` — reads the robot's tag pose via aprilcam
+   (`read_cam_pose()`, resilient to a dropped frame), maps its host capture
+   time to robot-clock time via `ClockSync.to_robot_time()`, and sends it
+   through a NEW `NezhaProtocol.pose_fix()` method (`host/robot_radio/
+   robot/protocol.py`) built on a new pure `build_pose_fix_envelope()`
+   helper — no host helper built the `pose_fix` (arm 7) `CommandEnvelope`
+   before this ticket (tickets 004/008 landed the FIRMWARE side only).
+   `ensure_mobile_tag_registered()` reads the active robot config's
+   `vision.tag_offset_mm` and calls `register_mobile_tag()` idempotently
+   (verified via `list_mobile_tags` during implementation that tag 100 is
+   already registered for `tovez`, so this is a no-op by default on that
+   robot).
+3. `wait_for_pose_convergence()` — arms binary `stream()` at the firmware's
+   20ms floor, polls `read_pending_binary_tlm_frames()` for `pose=`,
+   tracks the MINIMUM position/heading error observed against the sent
+   target over `--converge-timeout` (default 5s), success if either
+   sample lands within `--tol-mm`/`--tol-deg` (defaults 30mm/3deg — a
+   deliberately generous, documented bound: D5's camera-fix EKF update is
+   a weighted Kalman update against `ekf_r_fix_xy`/`ekf_r_fix_theta`, not
+   a hard snap).
+
+**Geofence/hop-test precondition**: `geofence_from_playfield()`/
+`in_fence()` (ported, unchanged logic, from `tests_old/bench/
+world_goto_chart.py`) check the robot tag is inside the playfield's
+ArUco-corner extent (inset by `--margin`) before ANY motion; `hop_test()`
+then runs one small, camera-geofenced `distance()` segment (binary, via
+the `segment` arm) before the PoseFix send — refuses to send a fix without
+a passing hop-test first (`main()`'s early-return on `hop_ok=False`).
+
+**HITL safety**: `main()` widens the config watchdog
+(`NezhaProtocol.set_config(sTimeout=5000)`) before any motion and restores
+it (`sTimeout=1000`) plus disarms streaming and sends binary `stop()` in a
+`finally` block, matching `tests/CLAUDE.md`'s HITL convention translated
+onto the binary plane (the old `DEV WD`/`DEV STOP` text commands this
+convention names are gone from the wire post-097 — `docs/protocol-v3.md`
+S8 — `sTimeout`'s binary `config` arm is the current equivalent).
+
+**Frame-drop resilience**: `read_cam_pose()` catches an exception from
+`dc.get_tags()` and retries within its own timeout window rather than
+propagating; every call site checks for its `None` return and reports
+clearly instead of crashing (verified in the pure-logic tests' framing —
+the retry/catch behavior itself needs a live daemon to exercise, so it is
+code-reviewed, not unit-tested).
+
+**Import/syntax validation** (no hardware):
+```
+uv run python -c "import ast; ast.parse(open('tests/playfield/pose_fix_convergence.py').read())"
+uv run python -c "import sys; sys.path.insert(0,'tests/playfield'); import pose_fix_convergence"
+```
+Both succeed — every camera/robot call lives inside a function, never at
+module scope, so importing the script touches no hardware.
+
+**Pure-math unit tests** (all new, all pass, no hardware):
+- `tests/unit/test_clock_sync.py` (60 tests) — ported from `tests_old/
+  simulation/unit/test_clock_sync.py` (verified field-for-field current
+  against `clock_sync.py`, no API drift since the 077 rebuild) plus a new
+  `TestToRobotTime` section for this ticket's `to_robot_time()` addition,
+  including round-trip checks against `to_host_time()` in both the
+  offset-only and skew-model paths.
+- `tests/unit/test_protocol_pose_fix.py` (11 tests) — pure
+  `build_pose_fix_envelope()` construction, a `CommandEnvelope`
+  serialize/parse wire round trip, and `NezhaProtocol.pose_fix()`'s
+  envelope-construction path (captured via a stub `_send_envelope`, no
+  real connection).
+- `tests/unit/test_pose_fix_convergence_pure.py` (33 tests) — the
+  script's own pure helpers: `wrap_deg`, `camera_pose_to_pose_fix_kwargs`,
+  `pose_fix_target_mm_cdeg`, `pose_error`, `pose_converged`,
+  `geofence_from_playfield`, `in_fence`.
+
+**Full suite**: `uv run python -m pytest` — 1393 passed, 4 xfailed, 1
+xpassed, 0 failed (baseline 1289/4/1/0; +104 = exactly the three new test
+files' combined count — 60+11+33 — confirming no other collection changed
+and nothing regressed).
+
+**Acceptance criteria remaining hardware-gated** (exactly one, the
+ticket's own MANDATORY criterion):
+- Running the script against the real robot end to end (PING clock-sync ->
+  tag-pose-to-FIX send -> convergence check) at least once, with console
+  output or a saved trace as evidence. **Not run this session — no robot
+  USB-attached.** The team-lead should schedule this bench/playfield pass
+  before the sprint closes (per the sprint's own Success Criteria: "An
+  aprilcam end-to-end bench/playfield script demonstrates the full path").
+
+**For the team-lead**: `docs/protocol-v3.md`'s arm-7 table row/§8 note
+remain stale (flagged again by tickets 004/008, still unaddressed) — this
+ticket's own `pose_fix()`/`build_pose_fix_envelope()` additions to
+`protocol.py` are new evidence the doc pass is now overdue at the sprint
+level.

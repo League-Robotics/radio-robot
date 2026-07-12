@@ -575,6 +575,32 @@ def _read_config_snapshot_value(key: str, snapshot: "envelope_pb2.ConfigSnapshot
     return None
 
 
+def build_pose_fix_envelope(x: float, y: float, h: float, t: int,  # [mm] [mm] [rad] [ms]
+                            *, reset: bool = False,
+                            zero_encoders: bool = False) -> "envelope_pb2.CommandEnvelope":
+    """Build a ``CommandEnvelope{pose_fix: PoseFix{...}}`` (arm 7, 099-004/
+    099-008 -- ``protos/drivetrain.proto``/``protos/envelope.proto``).
+
+    Pure/stateless -- no I/O, no ``SerialConnection`` reference, mirroring
+    ``legacy_verbs.py``'s own ``envelope_for_*()`` builders (095 Decision
+    5's "transcribe, don't re-derive" discipline). ``PoseFix`` has no
+    legacy text-v2 verb of its own -- it is new sprint-099 wire capability
+    (the formerly ``ERR_UNIMPLEMENTED``-only ``pose`` arm), so this builder
+    lives here (next to the ``NezhaProtocol`` method that sends it) rather
+    than in ``legacy_verbs.py``, whose own docstring scopes it to the FULL
+    text-v2 verb surface a legacy client might still send.
+
+    ``x``/``y``/``h``/``t`` are meaningless when only ``reset``/
+    ``zero_encoders`` are set (``protos/drivetrain.proto``'s own ``PoseFix``
+    field comments; architecture-update.md (099) D5-D8) -- callers sending a
+    genuine delayed camera fix (the only branch ticket 099-008 makes live)
+    leave both flags ``False``.
+    """
+    return envelope_pb2.CommandEnvelope(
+        pose_fix=drivetrain_pb2.PoseFix(
+            x=x, y=y, h=h, t=t, reset=reset, zero_encoders=zero_encoders))
+
+
 # ---------------------------------------------------------------------------
 # NezhaProtocol
 # ---------------------------------------------------------------------------
@@ -1420,6 +1446,34 @@ class NezhaProtocol:
                 except (KeyError, ValueError):
                     pass
         return None
+
+    # ------------------------------------------------------------------
+    # Pose fix (099-008/099-009): delayed camera fix, binary arm 7
+    # ------------------------------------------------------------------
+
+    def pose_fix(self, x: float, y: float, h: float, t: int,  # [mm] [mm] [rad] [ms]
+                *, reset: bool = False, zero_encoders: bool = False,
+                read_timeout: int = 500,  # [ms]
+                ) -> "envelope_pb2.ReplyEnvelope | None":
+        """Send a ``PoseFix`` (``CommandEnvelope.cmd.pose_fix``, arm 7,
+        099-004/099-008) -- the delayed camera-fix capability this sprint
+        adds. ``x``/``y`` are world-frame millimetres, ``h`` is world-frame
+        radians, ``t`` is the robot-clock ms (D6) timestamp the observation
+        was true at (map a host-side capture time via
+        ``ClockSync.to_robot_time()`` before calling this for a genuine
+        delayed fix; ``t`` is ignored firmware-side when ``reset`` or
+        ``zero_encoders`` is set).
+
+        Returns the raw ``ReplyEnvelope`` (``ok``/``err`` oneof arm) so a
+        caller can distinguish an ``Ack`` from an ``Error`` -- unlike most
+        of this class's other methods, no other host-side plane parses a
+        ``PoseFix`` reply yet, so there is no existing return-shape
+        convention to preserve here (mirrors ``set_config_binary()``'s own
+        "hand back the raw reply" posture for a new-capability method).
+        """
+        envelope = build_pose_fix_envelope(
+            x, y, h, t, reset=reset, zero_encoders=zero_encoders)
+        return self._send_envelope(envelope, read_timeout=read_timeout)
 
     # ------------------------------------------------------------------
     # J-port I/O
