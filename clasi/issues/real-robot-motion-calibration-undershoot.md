@@ -82,10 +82,14 @@ heading error per turn (deg):
 | **landed = iter 2** (final clean capture) | **-10.6** | **-2.2** | **-9.0** |
 
 Measurements behind the knobs:
-- Duty-saturated plateau: 620-740 mm/s per wheel, BATTERY/THERMAL-STATE
-  DEPENDENT (fwd L 676-737 / R 616-702; sagged to ~408 under sustained
-  load in one window). kff = 1/650 chosen mid-conservative; the integrator
-  absorbs the sag band.
+- Duty-saturated plateau: readings varied ACROSS MEASUREMENT WINDOWS
+  (620-740 mm/s per wheel typical; one window read ~408). Cause NOT
+  established -- and per the stakeholder it is NOT a power issue (he
+  monitors power directly). Leading candidates: measurement-window design
+  (window opening before the hold is steady), velocity-estimation
+  artifacts under frame loss, or genuine duty->speed nonlinearity. kff =
+  1/650 was a mid-range pick; see iteration 5's conclusion below -- the
+  loop must not depend on open-loop FF accuracy at all.
 - Motion-onset dead time (command commit `now` vs first encoder movement
   `ts`): 112-136ms -> hw kOutputHops = 6 (120ms). GAIN-DEPENDENT: the old
   80ms fit the old sluggish (kff=0.001) plant's effective lag; after the
@@ -101,9 +105,11 @@ Measurements behind the knobs:
 
 1. The ~-10 deg residual on SHORT pivots: needs either a second FF point /
    speed-dependent FF, a faster-but-stable integrator, or acceptance.
-2. RUN-TO-RUN VARIANCE is now the limiting factor: battery-state sag moves
-   the plateau (and scores) between consecutive runs. Calibrate/score on a
-   controlled battery state (fresh charge or bench supply).
+2. RUN-TO-RUN VARIANCE is a limiting factor for scoring: repeated trials
+   per config are mandatory (single-run scores mislead). The variance's
+   cause is unestablished; it is NOT power (stakeholder-verified). The
+   robust fix is control-side: a feedback-dominant velocity loop makes the
+   scores insensitive to whatever moves the open-loop duty->speed map.
 3. Heavy telemetry frame loss during fast motion (known IRQ/serial-RX
    coupling) blinds host-side instruments: the cmd= integral undercounts on
    hardware, and completion flags can vanish -- any bench harness MUST
@@ -143,3 +149,22 @@ Bench-harness rule refined after burst losses sank two runs: a resend is
 safe if-and-only-if nothing provably started (no busy flag AND no encoder
 movement over a 3s probe); the notebook now retries up to 4 verified-idle
 sends instead of skipping the source.
+
+## Iteration 5 verdict (motion_control.ipynb, PID isolation)
+
+The stakeholder-directed waveform experiment (sine/square direct velocity
+setpoints through the escape-hatch drive arm -- planner fully out of the
+loop) settles the planner-vs-PID question: **the velocity loop itself is
+the defect.** Measured, sample-level, at 250 mm/s amplitude:
+
+- Holding a constant setpoint the wheel runs 12-30% off it, barely
+  corrected (the loop is feed-forward-dominated; kp=0.0022/ki=0.0018 are
+  too weak to regulate the FF error out).
+- Velocity steps overshoot ~40-50% (max +/-378 on a +/-250 ask), with
+  ~50-70 ms reversal dead time; loop corner sits between 1 and 4 Hz.
+
+Whatever makes the open-loop duty->speed map drift (NOT power --
+stakeholder-verified; do not revisit), the control answer is the same:
+retune feedback-dominant (kp/ki up until the loop regulates to setpoint,
+FF deliberately conservative), acceptance = motion_control.ipynb (flat
+tops at the setpoint, overshoot < ~10%), then re-score the turn notebook.

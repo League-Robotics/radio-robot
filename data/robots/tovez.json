@@ -88,7 +88,7 @@
   "yaw_rate_max": 70,
   "max_rot_accel_dps2": 600,
   "arrive_tol_mm": 25,
-  "_vel_kff_note": "1/650 -- measured duty-saturated plateau 2026-07-11 bench session: 620-740 mm/s per wheel depending on battery/thermal state (fwd L~676-737, R~616-702; sags under sustained load). Mid-conservative so the integrator absorbs the sag band. Was 0.001 (35% FF underdrive -> ~10% turn undershoot).",
-  "_vel_ki_note": "kept at 0.0018: raising to 0.006 (2026-07-11 regression iter 3) scored WORSE (90: -18, 360: -32 vs iter-2's -10/-5.5) -- and iter-3 exposed large run-to-run variance from battery-state sag (plateau 620-740mm/s), so single-run scoring is unreliable; see the repeated-trials protocol in the turn notebook."
+  "_vel_kff_note": "1/650 -- from duty-saturated plateau measurements 2026-07-11 (620-740 mm/s across windows; window-to-window variance cause not established -- NOT power, per stakeholder). Do not lean on FF accuracy: the loop should be feedback-dominant (see motion_control.ipynb verdict).",
+  "_vel_ki_note": "kept 0.0018 in the 2026-07-11 session; motion_control.ipynb then showed the loop is FF-dominated with 40-50% step overshoot and weak steady-state correction -- a feedback-dominant retune (kp/ki up, acceptance via motion_control.ipynb) is the open next step."
  }
 }
