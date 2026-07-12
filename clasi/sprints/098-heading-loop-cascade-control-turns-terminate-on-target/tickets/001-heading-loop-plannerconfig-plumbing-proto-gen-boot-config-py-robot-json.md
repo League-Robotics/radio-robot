@@ -1,8 +1,10 @@
 ---
 id: '001'
 title: Heading-loop PlannerConfig plumbing (proto, gen_boot_config.py, robot JSON)
-status: open
-use-cases: [SUC-001, SUC-003]
+status: done
+use-cases:
+- SUC-001
+- SUC-003
 depends-on: []
 github-issue: ''
 issue: heading-loop-cascade-control-turns-terminate-on-target.md
@@ -29,26 +31,26 @@ constants, added in ticket 002).
 
 ## Acceptance Criteria
 
-- [ ] `protos/planner.proto`: `PlannerConfig` gains `heading_kp = 13` and
+- [x] `protos/planner.proto`: `PlannerConfig` gains `heading_kp = 13` and
       `heading_kd = 14` (the first free field numbers after the existing
       1-9/12 and `reserved 10, 11`). Field comments state the unit tag
       (`// [1/s] outer heading-loop proportional gain, per-robot tunable`
       for `heading_kp`; `// dimensionless outer heading-loop derivative
       gain, per-robot tunable` for `heading_kd`), per this project's
       unit-in-comment-not-identifier convention.
-- [ ] `source/messages/planner.h` regenerated (`scripts/gen_messages.py`,
+- [x] `source/messages/planner.h` regenerated (`scripts/gen_messages.py`,
       part of the normal build) — new `setHeadingKp()`/`setHeadingKd()`
       chainable setters appear on `msg::PlannerConfig`. The header is NOT
       hand-edited (generated files are never hand-edited — fixes go in the
       generator).
-- [ ] `scripts/gen_boot_config.py`: new `heading_gains_for_config(cfg)`
+- [x] `scripts/gen_boot_config.py`: new `heading_gains_for_config(cfg)`
       function, mirroring `vel_gains_for_config()`'s exact shape — reads
       `control.heading_kp`/`control.heading_kd` from the robot JSON,
       falling back to firmware defaults `HEADING_KP_DEFAULT = 3.0` and
       `HEADING_KD_DEFAULT = 0.0` when either key is absent (an unmigrated
       robot JSON simply inherits the conservative firmware default, same
       fallback discipline as every other mapping in this file).
-- [ ] `scripts/gen_boot_config.py`'s `generate()` emits a new
+- [x] `scripts/gen_boot_config.py`'s `generate()` emits a new
       `Config::defaultPlannerConfig()` C++ function in `boot_config.cpp`
       that sets ALL nine currently-meaningful `PlannerConfig` fields: the
       seven motion-limit fields `main.cpp`'s `defaultMotionConfig()`
@@ -60,13 +62,13 @@ constants, added in ticket 002).
       `arrive_tol`/`turn_in_place_gate`/`min_speed` stay unset (`0.0f`
       default) — unchanged behavior, `main.cpp`'s old function never set
       them either.
-- [ ] `source/config/boot_config.h`'s `Config` namespace declares
+- [x] `source/config/boot_config.h`'s `Config` namespace declares
       `defaultPlannerConfig()` (mirroring `defaultDrivetrainConfig()`'s
       existing declaration).
-- [ ] `source/main.cpp`: the local hand-written `defaultMotionConfig()`
+- [x] `source/main.cpp`: the local hand-written `defaultMotionConfig()`
       function is DELETED; `hardware_main()` calls
       `drivetrain.configureMotion(Config::defaultPlannerConfig())` instead.
-- [ ] `data/robots/tovez.json`'s `control` block gains `"heading_kp": 3.0`
+- [x] `data/robots/tovez.json`'s `control` block gains `"heading_kp": 3.0`
       and `"heading_kd": 0.0`, each a **per-robot tunable**, plus a
       `"_heading_gains_note"` string (mirroring the file's existing
       `_vel_gains_note` pattern) stating: these are conservative STARTING
@@ -75,12 +77,12 @@ constants, added in ticket 002).
       (`motion_control.ipynb`); `heading_kd` starts at `0.0` (pure P,
       derivative term off) — iterate both against
       `tests/bench/turn_sweep.py --relay --both` in ticket 003.
-- [ ] `just build-sim` succeeds; `just build-clean` succeeds (hex + sim).
-- [ ] Full `uv run python -m pytest` stays green with **IDENTICAL**
+- [x] `just build-sim` succeeds; `just build-clean` succeeds (hex + sim).
+- [x] Full `uv run python -m pytest` stays green with **IDENTICAL**
       pass/fail counts to the pre-ticket baseline — this ticket changes
       zero runtime behavior, it only relocates where `PlannerConfig`'s
       values come from.
-- [ ] A new/extended sim assertion confirms `Config::defaultPlannerConfig()`
+- [x] A new/extended sim assertion confirms `Config::defaultPlannerConfig()`
       produces the SAME seven motion-limit values the old
       `main.cpp::defaultMotionConfig()` produced (a regression pin against
       a silent value change during the move) and that `heading_kp`/

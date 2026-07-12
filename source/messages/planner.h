@@ -229,6 +229,8 @@ struct PlannerConfig {
     float arrive_tol = 0.0f;
     float turn_in_place_gate = 0.0f;
     float min_speed = 0.0f;
+    float heading_kp = 0.0f;
+    float heading_kd = 0.0f;
 
     // --- array / optional-string accessors ---
 
@@ -243,6 +245,8 @@ struct PlannerConfig {
     PlannerConfig& setArriveTol(float v) { arrive_tol = v; return *this; }
     PlannerConfig& setTurnInPlaceGate(float v) { turn_in_place_gate = v; return *this; }
     PlannerConfig& setMinSpeed(float v) { min_speed = v; return *this; }
+    PlannerConfig& setHeadingKp(float v) { heading_kp = v; return *this; }
+    PlannerConfig& setHeadingKd(float v) { heading_kd = v; return *this; }
 };
 
 }  // namespace msg

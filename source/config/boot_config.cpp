@@ -93,4 +93,28 @@ OtosBootConfig defaultOtosBootConfig() {
     return cfg;
 }
 
+msg::PlannerConfig defaultPlannerConfig() {
+    // 098-001 — the motion-limit fields below are moved verbatim from
+    // main.cpp's hand-written defaultMotionConfig() (same numeric values,
+    // same units — not renumbered or retuned by this move), the one
+    // PlannerConfig boot path that lived OUTSIDE this generator until now.
+    // heading_kp/heading_kd are the new outer heading-loop PD gains
+    // (architecture-update.md M1/M2), baked from the robot JSON's
+    // control.heading_kp/heading_kd, falling back to conservative firmware
+    // starting defaults when absent. arrive_tol/turn_in_place_gate/min_speed
+    // are left unset (0.0f default) -- unchanged behavior, main.cpp's old
+    // function never set them either.
+    msg::PlannerConfig cfg;
+    cfg.setAMax(800.0f);               // [mm/s^2]
+    cfg.setADecel(800.0f);             // [mm/s^2]
+    cfg.setVBodyMax(1000.0f);           // [mm/s]
+    cfg.setYawRateMax(6.0f);         // [rad/s]
+    cfg.setYawAccMax(20.0f);          // [rad/s^2]
+    cfg.setJMax(5000.0f);                // [mm/s^3] ~6x a_max -- ~0.16s jerk-limited edges
+    cfg.setYawJerkMax(100.0f);         // [rad/s^3] ~5x yaw_acc_max -- ~0.2s
+    cfg.setHeadingKp(3.0f);              // [1/s] outer heading-loop proportional gain
+    cfg.setHeadingKd(0.0f);              // dimensionless outer heading-loop derivative gain
+    return cfg;
+}
+
 }  // namespace Config

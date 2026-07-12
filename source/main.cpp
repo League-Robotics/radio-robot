@@ -45,7 +45,6 @@
 #include "config/boot_config.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
-#include "messages/planner.h"
 #include "runtime/blackboard.h"
 #include "runtime/command_router.h"
 #include "subsystems/communicator.h"
@@ -67,28 +66,6 @@ static void serialReply(const char* msg, void* ctx) {
 
 static void radioReply(const char* msg, void* ctx) {
     static_cast<Subsystems::Communicator*>(ctx)->sendRadio(msg);
-}
-
-// defaultMotionConfig -- 094-005: a small, boot-only re-introduction of the
-// jerk-limit defaults 093 deleted along with the whole `defaultPlannerConfig()`
-// function (that function's other fields -- a_max/v_body_max/yaw_rate_max/
-// yaw_acc_max/arrive_tol/turn_in_place_gate -- are NOT resurrected here: this
-// sprint's Drivetrain-owned Motion::SegmentExecutor only needs the same
-// four ramp-shape limits, applied once via drivetrain.configureMotion(),
-// with jMax/yawJerkMax now nonzero instead of 093's `0.0` trapezoid
-// sentinel -- see architecture-update.md Section 8). No runtime SET/GET
-// path is revived; per-segment `MOVE j=`/`wj=` overrides (094-006) are the
-// only live tuning surface this sprint ships.
-static msg::PlannerConfig defaultMotionConfig() {
-    msg::PlannerConfig cfg;
-    cfg.a_max = 800.0f;         // [mm/s^2]
-    cfg.a_decel = 800.0f;       // [mm/s^2]
-    cfg.v_body_max = 1000.0f;   // [mm/s]
-    cfg.yaw_rate_max = 6.0f;    // [rad/s]
-    cfg.yaw_acc_max = 20.0f;    // [rad/s^2]
-    cfg.j_max = 5000.0f;        // [mm/s^3] ~6x a_max -- ~0.16s jerk-limited edges
-    cfg.yaw_jerk_max = 100.0f;  // [rad/s^3] ~5x yaw_acc_max -- ~0.2s
-    return cfg;
 }
 
 int hardware_main() {
@@ -115,7 +92,7 @@ int hardware_main() {
     static Subsystems::Drivetrain drivetrain(hardware);
     msg::DrivetrainConfig dtConfig = Config::defaultDrivetrainConfig();
     drivetrain.configure(dtConfig);
-    drivetrain.configureMotion(defaultMotionConfig());
+    drivetrain.configureMotion(Config::defaultPlannerConfig());
     drivetrain.setMotorCapabilities(hardware.motor(drivetrain.ports().left).capabilities(),
                                      hardware.motor(drivetrain.ports().right).capabilities());
 
