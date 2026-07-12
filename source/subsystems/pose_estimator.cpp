@@ -120,39 +120,84 @@ void PoseEstimator::tick(uint32_t now, const msg::MotorState& leftObs,
     encBaselineResetPending_ = false;
   }
 
-  // Encoder delta against the previous-encoder baseline. Zero on the very
-  // first valid tick (no prior baseline yet) -- see haveEncBaseline_'s doc
-  // comment in the header for why this is a "no motion yet" default rather
-  // than a diff against an arbitrary 0.0f.
-  float dL = haveEncBaseline_ ? (left - prevEncLeft_) : 0.0f;
-  float dR = haveEncBaseline_ ? (right - prevEncRight_) : 0.0f;
-  prevEncLeft_ = left;
-  prevEncRight_ = right;
-  haveEncBaseline_ = true;
+  // 099-005: paired-freshness gate -- see pose_estimator.h's tick() doc
+  // comment (step 4) and architecture-update.md Decision 6. The joint
+  // arc-integration step fires only when BOTH wheels have produced a
+  // genuinely fresh sample (their own sampled_at advanced) since the LAST
+  // APPLIED joint step -- decoupling this one computation from the 20ms
+  // tick cadence and re-coupling it to bb.motors[]'s real refresh cadence.
+  // The very first application (haveEncBaseline_ still false -- either
+  // construction or a just-consumed resetEncoderBaseline()) always
+  // qualifies: there is no prior joint step to compare freshness against
+  // yet, and the delta below is zero regardless (guarded by
+  // haveEncBaseline_), so bypassing the freshness check here only ever
+  // affects WHEN the first zero-delta baseline capture happens, never its
+  // magnitude -- matching the pre-fix code's own warm-up precedent.
+  bool firstApplication = !haveEncBaseline_;
+  bool leftFresh = firstApplication ||
+      (leftObs.sampled_at.has &&
+       static_cast<int32_t>(leftObs.sampled_at.val - prevSampledAtLeft_) > 0);
+  bool rightFresh = firstApplication ||
+      (rightObs.sampled_at.has &&
+       static_cast<int32_t>(rightObs.sampled_at.val - prevSampledAtRight_) > 0);
+  bool pairedFresh = leftFresh && rightFresh;
 
-  // Midpoint (exact-arc) integration -- matches the ported Odometry
-  // source's predict() math (source_old/control/Odometry.cpp):
-  //   dCenter = (dL + dR) / 2
-  //   dTheta  = ((dR - dL) / trackwidth) * effectiveSlip(rotationalSlip)
-  float dCenter = (dL + dR) * 0.5f;
-  float slip = effectiveSlip(rotationalSlip_);
-  float dTheta = ((dR - dL) / trackwidth_) * slip;
+  float dCenter = 0.0f;
+  float dTheta = 0.0f;
 
-  // Encoder-only dead-reckoning accumulate -- this is encoderPose()'s
-  // entire backing state; the EKF never writes here.
-  float encThetaMid = encTheta_ + dTheta * 0.5f;
-  encX_ += dCenter * cosf(encThetaMid);
-  encY_ += dCenter * sinf(encThetaMid);
-  encTheta_ = wrapPi(encTheta_ + dTheta);
+  if (pairedFresh) {
+    // Delta against the position recorded at the LAST APPLIED joint step
+    // (prevEncLeft_/prevEncRight_ -- NOT necessarily the immediately-prior
+    // tick()'s reading -- a genuine decoupling, not merely a relabeling).
+    // Zero on the very first application -- see haveEncBaseline_'s doc
+    // comment in the header.
+    float dL = haveEncBaseline_ ? (left - prevEncLeft_) : 0.0f;
+    float dR = haveEncBaseline_ ? (right - prevEncRight_) : 0.0f;
+
+    // Midpoint (exact-arc) integration -- matches the ported Odometry
+    // source's predict() math (source_old/control/Odometry.cpp):
+    //   dCenter = (dL + dR) / 2
+    //   dTheta  = ((dR - dL) / trackwidth) * effectiveSlip(rotationalSlip)
+    float slip = effectiveSlip(rotationalSlip_);
+    dCenter = (dL + dR) * 0.5f;
+    dTheta = ((dR - dL) / trackwidth_) * slip;
+
+    // Encoder-only dead-reckoning accumulate -- this is encoderPose()'s
+    // entire backing state; the EKF never writes here. Only advances on a
+    // paired-fresh joint step (099-005) -- a non-paired tick leaves it
+    // untouched (no local misattribution while one side is stale).
+    float encThetaMid = encTheta_ + dTheta * 0.5f;
+    encX_ += dCenter * cosf(encThetaMid);
+    encY_ += dCenter * sinf(encThetaMid);
+    encTheta_ = wrapPi(encTheta_ + dTheta);
+
+    // Record this joint step's consumed position/sampled_at pair as the
+    // new "last applied" baseline for the NEXT joint step's delta and
+    // freshness comparison.
+    prevEncLeft_ = left;
+    prevEncRight_ = right;
+    if (leftObs.sampled_at.has) prevSampledAtLeft_ = leftObs.sampled_at.val;
+    if (rightObs.sampled_at.has) prevSampledAtRight_ = rightObs.sampled_at.val;
+    haveEncBaseline_ = true;
+  }
+  // else: not paired-fresh -- dCenter/dTheta stay 0.0f, encoderPose()'s
+  // accumulator is untouched, and the "last applied" baseline
+  // (prevEncLeft_/prevEncRight_/prevSampledAtLeft_/prevSampledAtRight_) is
+  // left exactly as it was, so a future paired tick measures the delta
+  // since THAT step, not since this stale one.
 
   // EKF predict -- runs every tick unconditionally (dead-reckoning always
-  // advances, whether or not an odometer is present). thetaBefore is the
-  // EKF's OWN previous heading, read before predict() mutates it -- per
-  // ekf_tiny.h's documented caller contract. Note this is deliberately NOT
-  // encTheta_: the encoder-only accumulator and the EKF's belief start
-  // identical and take identical (dCenter, dTheta) inputs every tick, but
-  // are two independent pieces of state so that an EKF correction (below)
-  // can make them diverge without touching the pure dead-reckoning value.
+  // advances, whether or not an odometer is present, and whether or not
+  // THIS tick's own geometric delta was gated to zero above -- 099-005:
+  // only the delta's SOURCE is gated, never whether predict() itself runs
+  // or its dt/process-noise scaling -- architecture-update.md Decision 6).
+  // thetaBefore is the EKF's OWN previous heading, read before predict()
+  // mutates it -- per ekf_tiny.h's documented caller contract. Note this
+  // is deliberately NOT encTheta_: the encoder-only accumulator and the
+  // EKF's belief start identical and take identical (dCenter, dTheta)
+  // inputs every joint step, but are two independent pieces of state so
+  // that an EKF correction (below) can make them diverge without touching
+  // the pure dead-reckoning value.
   float thetaBeforeEkf = ekf_.theta();
   ekf_.predict(dCenter, dTheta, thetaBeforeEkf, dt);
 

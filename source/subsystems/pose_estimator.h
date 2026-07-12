@@ -114,11 +114,47 @@ class PoseEstimator {
   //      predict, no stale-data corruption. The previous-encoder baseline
   //      and last-tick timestamp are left untouched so the next valid tick's
   //      delta/dt span exactly the gap.
-  //   3. Otherwise: compute the encoder delta, midpoint-arc-integrate it into
-  //      the encoder-only accumulator (encoderPose()'s backing state).
-  //   4. EkfTiny::predict() runs unconditionally (dead-reckoning always
-  //      advances, whether or not an odometer is present).
-  //   5. EkfTiny::updatePosition()/updateHeading() run ONLY when otosObs is
+  //   3. Compute dt (wall-clock now - lastTick_, UNCHANGED by 099-005 — see
+  //      step 6) and apply any pending resetEncoderBaseline() on the first
+  //      genuinely time-advancing tick (encBaselineResetPending_) — both
+  //      exactly as before this ticket.
+  //   4. 099-005 paired-freshness gate: the joint arc-integration step
+  //      (both the encoderPose()-backing accumulator AND the dCenter/dTheta
+  //      fed to EkfTiny::predict() in step 6) fires ONLY when BOTH
+  //      leftObs.sampled_at.val and rightObs.sampled_at.val have advanced
+  //      past prevSampledAtLeft_/prevSampledAtRight_ — the sampled_at values
+  //      recorded at the LAST APPLIED joint step, not necessarily the
+  //      immediately-prior tick() call — decoupling this one computation
+  //      from the 20ms main-loop tick cadence and re-coupling it to
+  //      bb.motors[]'s real refresh cadence (the Nezha flip-flop's own
+  //      ~40-80ms-per-motor sampling). The very first application (no prior
+  //      joint step yet — haveEncBaseline_ still false, whether from
+  //      construction or a just-consumed resetEncoderBaseline()) always
+  //      qualifies, matching the pre-fix code's own "first tick captures
+  //      the baseline, zero delta" warm-up precedent: there is no prior
+  //      joint step to compare freshness against yet, and the resulting
+  //      delta is zero regardless (guarded by haveEncBaseline_, step 5), so
+  //      bypassing the freshness check here only ever affects WHEN the
+  //      first (zero-delta) baseline capture happens, never its magnitude.
+  //   5. When the gate DOES fire: dCenter/dTheta are computed from the
+  //      position deltas since the LAST APPLIED joint step (prevEncLeft_/
+  //      prevEncRight_ — zero on the very first application), midpoint-
+  //      arc-integrated into the encoder-only accumulator, and
+  //      prevEncLeft_/prevEncRight_/prevSampledAtLeft_/prevSampledAtRight_
+  //      are updated to this tick's values for the NEXT joint step's delta
+  //      and freshness comparison. When the gate does NOT fire, dCenter/
+  //      dTheta are 0.0f for this tick and the encoderPose() accumulator
+  //      and the prev*_ baseline fields are all left untouched.
+  //   6. EkfTiny::predict() runs unconditionally EVERY tick reaching this
+  //      point — dead-reckoning always advances, whether or not an odometer
+  //      is present, and whether or not step 4's gate fired this tick. Its
+  //      dt argument is the SAME wall-clock `now - lastTick_` computed in
+  //      step 3 regardless of the gate outcome — only the geometric
+  //      delta's SOURCE is gated by step 4, never whether predict() itself
+  //      runs or its dt/process-noise scaling (architecture-update.md
+  //      Decision 6: process noise correctly grows with true elapsed time
+  //      regardless of encoder staleness).
+  //   7. EkfTiny::updatePosition()/updateHeading() run ONLY when otosObs is
   //      non-null and fresh (stamp.valid).
   void tick(uint32_t now, const msg::MotorState& leftObs,
             const msg::MotorState& rightObs,
@@ -188,6 +224,16 @@ class PoseEstimator {
   // dispatched before the next real tick) leaves the pending flag armed and
   // falls through to ordinary processing unaffected (a zero encoder delta
   // regardless, since the reading has not changed yet).
+  //
+  // 099-005 interaction: clearing haveEncBaseline_ (above) is what makes
+  // tick()'s paired-freshness gate treat the NEXT joint-step candidate as
+  // the (gate-bypassing) first application again — see tick()'s doc
+  // comment, step 4. A tick that is dt > 0 but NOT yet paired-fresh still
+  // defers correctly: the pending flag is consumed (haveEncBaseline_ goes
+  // false) exactly as before, but no accumulator/predict delta is produced
+  // by that alone — the actual zero-delta baseline capture (prevEncLeft_/
+  // prevEncRight_/prevSampledAtLeft_/prevSampledAtRight_ all updated
+  // together) only happens on the joint step that fires, whenever that is.
   void resetEncoderBaseline();
 
   // trackwidth -- the SAME configured trackwidth used internally by tick()'s
@@ -261,6 +307,20 @@ class PoseEstimator {
   bool haveEncBaseline_ = false;
   float prevEncLeft_ = 0.0f;    // [mm]
   float prevEncRight_ = 0.0f;   // [mm]
+
+  // prevSampledAtLeft_/prevSampledAtRight_ -- 099-005: each wheel's
+  // MotorState.sampled_at value at the LAST APPLIED joint step (not
+  // necessarily the immediately-prior tick() call — see tick()'s own doc
+  // comment, step 4, for the paired-freshness gate that reads these).
+  // Updated only when the joint step actually fires, in lockstep with
+  // prevEncLeft_/prevEncRight_ above (same "last applied" scope, same
+  // update site). A resetEncoderBaseline() deferral does NOT reset these
+  // early — haveEncBaseline_ going false is what marks the next
+  // application as the (gate-bypassing) first one; these two fields are
+  // simply overwritten the next time the gate fires, exactly like
+  // prevEncLeft_/prevEncRight_.
+  uint32_t prevSampledAtLeft_ = 0;    // [ms]
+  uint32_t prevSampledAtRight_ = 0;   // [ms]
 
   // encBaselineResetPending_ -- 084-007 (SUC-006): armed by
   // resetEncoderBaseline(), consumed by tick() on the first subsequent call

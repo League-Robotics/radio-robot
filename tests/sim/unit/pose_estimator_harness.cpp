@@ -86,13 +86,24 @@ void checkNear(float actual, float expected, float tol, const std::string& what)
 
 // --- Synthetic observation builders -------------------------------------
 
-// motorStateAt — a connected MotorState reporting only a cumulative wheel
-// position (the only field PoseEstimator::tick() reads).
-msg::MotorState motorStateAt(float position) {
+// motorStateAt — a connected MotorState reporting a cumulative wheel
+// position plus (099-005) the sampled_at timestamp PoseEstimator::tick()'s
+// paired-freshness gate reads. Every scenario in this file predating 099-005
+// passes sampledAt == the SAME `now` as the enclosing tick() call at every
+// one of its call sites — i.e. both wheels are always synchronously fresh,
+// exactly the "tick cadence == flip-flop cadence" world the pre-fix code
+// implicitly assumed — so the paired-freshness gate fires every tick for
+// them and their expected results are unaffected by this ticket. See
+// scenarioStaggeredSampleTimingMatchesSynchronousTotalNoLocalMisattribution()
+// below for the new staggered-timing (sampledAt != now) coverage this
+// ticket adds.
+msg::MotorState motorStateAt(float position, uint32_t sampledAt) {
   msg::MotorState state;
   state.connected = true;
   state.position.has = true;
   state.position.val = position;
+  state.sampled_at.has = true;
+  state.sampled_at.val = sampledAt;
   return state;
 }
 
@@ -167,7 +178,7 @@ void scenarioNoOtosFusedMatchesEncoderExactly() {
     now += 20;
     cumLeft += s.dLeft;
     cumRight += s.dRight;
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
 
     msg::PoseEstimate enc = pe.encoderPose();
     msg::PoseEstimate fused = pe.fusedPose();
@@ -219,7 +230,7 @@ void scenarioOtosDivergesFusedFromEncoder() {
     now += 20;
     cumLeft += 40.0f;
     cumRight += 40.0f;
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
   }
 
   msg::PoseEstimate encBefore = pe.encoderPose();
@@ -256,7 +267,7 @@ void scenarioOtosDivergesFusedFromEncoder() {
     msg::PoseEstimate otos =
         otosAt(refEnc.pose.x + kOffsetX, refEnc.pose.y, refEnc.pose.h, now);
 
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), &otos, poseResetIn, otosSetPoseOut);
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), &otos, poseResetIn, otosSetPoseOut);
   }
 
   msg::PoseEstimate encAfter = pe.encoderPose();
@@ -299,7 +310,7 @@ void scenarioZeroConfigSentinelKeepsFusionFiniteAndCorrected() {
     now += 20;
     cumLeft += 40.0f;
     cumRight += 40.0f;
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
   }
 
   // 099-006: see scenario (b)'s matching comment -- this offset was 150mm
@@ -318,7 +329,7 @@ void scenarioZeroConfigSentinelKeepsFusionFiniteAndCorrected() {
     msg::PoseEstimate otos =
         otosAt(refEnc.pose.x + kOffsetX, refEnc.pose.y, refEnc.pose.h, now);
 
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), &otos, poseResetIn, otosSetPoseOut);
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), &otos, poseResetIn, otosSetPoseOut);
   }
 
   msg::PoseEstimate enc = pe.encoderPose();
@@ -390,7 +401,7 @@ void scenarioPoseResetInDrainsKSetPoseMatchesDirectSetPose() {
     now += 20;
     cumLeft += 40.0f;
     cumRight += 40.0f;
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
   }
 
   // SI arrives: post kSetPose re-anchoring to a known world pose, delivered
@@ -409,7 +420,7 @@ void scenarioPoseResetInDrainsKSetPoseMatchesDirectSetPose() {
   setPoseCmd.pose = target;
   checkTrue(poseResetIn.post(setPoseCmd), "post() succeeds");
 
-  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
   checkTrue(poseResetIn.empty(), "tick() drained the posted kSetPose command");
 
   msg::PoseEstimate afterReanchor = pe.encoderPose();
@@ -434,7 +445,7 @@ void scenarioPoseResetInDrainsKSetPoseMatchesDirectSetPose() {
   now += 20;
   cumLeft += 40.0f;
   cumRight += 40.0f;
-  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
   msg::PoseEstimate afterFreshMotion = pe.encoderPose();
   checkTrue(afterFreshMotion.pose.x > afterReanchor.pose.x - 1.0f &&
                 afterFreshMotion.pose.x < afterReanchor.pose.x + 60.0f,
@@ -470,7 +481,7 @@ void scenarioPoseResetInDrainsKResetBaselineNoPhantomJump() {
     now += 20;
     cumLeft += 40.0f;
     cumRight += 40.0f;
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
   }
   msg::PoseEstimate beforeReset = pe.encoderPose();
 
@@ -483,7 +494,7 @@ void scenarioPoseResetInDrainsKResetBaselineNoPhantomJump() {
   resetCmd.kind = Rt::PoseResetCommand::kResetBaseline;
   checkTrue(poseResetIn.post(resetCmd), "post() succeeds");
 
-  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);   // dt == 0 (same now)
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);   // dt == 0 (same now)
   checkTrue(poseResetIn.empty(), "tick() drained the posted kResetBaseline command");
 
   msg::PoseEstimate afterSamePassTick = pe.encoderPose();
@@ -501,7 +512,7 @@ void scenarioPoseResetInDrainsKResetBaselineNoPhantomJump() {
   // jump. With the deferred guard, this pass's own delta is treated as zero
   // motion (the first reading after a fresh baseline).
   now += 20;
-  pe.tick(now, motorStateAt(0.0f), motorStateAt(0.0f), nullptr, poseResetIn, otosSetPoseOut);
+  pe.tick(now, motorStateAt(0.0f, now), motorStateAt(0.0f, now), nullptr, poseResetIn, otosSetPoseOut);
   msg::PoseEstimate afterRebaselineTick = pe.encoderPose();
   checkNear(afterRebaselineTick.pose.x, afterSamePassTick.pose.x, 0.0f,
             "the rebaseline-landing tick produces ZERO delta -- no phantom jump "
@@ -513,7 +524,7 @@ void scenarioPoseResetInDrainsKResetBaselineNoPhantomJump() {
   // produces a normal, bounded delta -- proves the class is still tracking
   // correctly afterward, not just frozen.
   now += 20;
-  pe.tick(now, motorStateAt(40.0f), motorStateAt(40.0f), nullptr, poseResetIn, otosSetPoseOut);
+  pe.tick(now, motorStateAt(40.0f, now), motorStateAt(40.0f, now), nullptr, poseResetIn, otosSetPoseOut);
   msg::PoseEstimate afterFreshMotion = pe.encoderPose();
   checkTrue(afterFreshMotion.pose.x > afterRebaselineTick.pose.x,
             "motion off the fresh rezeroed baseline advances encoderPose() normally");
@@ -545,7 +556,7 @@ void scenarioOtosSetPoseOutAndLastPoseStepMagnitude() {
     now += 20;
     cumLeft += 40.0f;
     cumRight += 55.0f;
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
     checkTrue(otosSetPoseOut.empty(), "otosSetPoseOut stays empty when no reset is queued");
     msg::PoseStep step = pe.lastPoseStep();
     checkNear(step.pos, 0.0f, 0.0f, "lastPoseStep().pos is zero on an ordinary tick");
@@ -576,7 +587,7 @@ void scenarioOtosSetPoseOutAndLastPoseStepMagnitude() {
   float expectedPos = std::sqrt(expectedDx * expectedDx + expectedDy * expectedDy);
   float expectedTheta = std::fabs(target.h - before.pose.h);
 
-  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
 
   checkTrue(poseResetIn.empty(), "tick() drained the posted kSetPose command");
   checkTrue(!otosSetPoseOut.empty(), "otosSetPoseOut received exactly one post for the applied kSetPose");
@@ -596,7 +607,7 @@ void scenarioOtosSetPoseOutAndLastPoseStepMagnitude() {
   now += 20;
   cumLeft += 40.0f;
   cumRight += 40.0f;
-  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
   checkTrue(otosSetPoseOut.empty(),
             "otosSetPoseOut stays empty the tick after the reset -- posted exactly once, not every tick");
   msg::PoseStep stepAfter = pe.lastPoseStep();
@@ -610,12 +621,187 @@ void scenarioOtosSetPoseOutAndLastPoseStepMagnitude() {
   resetCmd.kind = Rt::PoseResetCommand::kResetBaseline;
   checkTrue(poseResetIn.post(resetCmd), "post() succeeds");
   now += 20;
-  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
   checkTrue(poseResetIn.empty(), "tick() drained the posted kResetBaseline command");
   checkTrue(otosSetPoseOut.empty(), "kResetBaseline never posts to otosSetPoseOut");
   msg::PoseStep stepReset = pe.lastPoseStep();
   checkNear(stepReset.pos, 0.0f, 0.0f, "lastPoseStep().pos stays zero on a kResetBaseline-only tick");
   checkNear(stepReset.theta, 0.0f, 0.0f, "lastPoseStep().theta stays zero too");
+}
+
+// (h) 099-005: staggered wheel sample timing -- only one wheel's sampled_at
+// advances per tick (matching bb.motors[]'s real ~40-80ms-per-motor
+// flip-flop cadence vs. the 20ms tick cadence) -- proves two things:
+//   (i)  the TOTAL accumulated encoderPose() displacement across the whole
+//        sequence is IDENTICAL to a synchronous-pair baseline that delivers
+//        the SAME five physical arc segments one-tick-per-segment, both
+//        wheels fresh together (the telescoping-sum total is unaffected by
+//        staleness -- architecture-update.md Decision 6). This holds exactly
+//        (not just approximately) because the paired-freshness gate defers
+//        each joint step until BOTH sides are fresh, at which point it
+//        captures the FULL delta since the last joint step for both wheels
+//        in one shot -- the identical (dCenter, dTheta) the synchronous
+//        baseline computes for that same segment, applied against the
+//        identical running heading, segment by segment.
+//   (ii) the PER-TICK intermediate value on a tick where only one side is
+//        fresh is UNCHANGED from the tick before it (encoderPose() does not
+//        move at all) -- proving no local pivot is misattributed while the
+//        other side is stale, in contrast to the pre-fix (naive) formula
+//        (dCenter = dL/2 with the stale side's contribution silently
+//        treated as 0 that same tick), which is shown to predict a
+//        materially different, nonzero local pose change on the exact same
+//        raw inputs.
+void scenarioStaggeredSampleTimingMatchesSynchronousTotalNoLocalMisattribution() {
+  beginScenario(
+      "099-005: staggered sampled_at (one wheel fresh per tick) matches a "
+      "synchronous-pair baseline's TOTAL displacement exactly, with no "
+      "per-tick local misattribution while a side is stale");
+
+  struct Segment {
+    float dL;
+    float dR;
+  };
+  const Segment segments[] = {
+      {40.0f, 40.0f},   // straight
+      {30.0f, 50.0f},   // gentle turn
+      {50.0f, 20.0f},   // turn the other way
+      {45.0f, 45.0f},   // straight again
+      {0.0f, 60.0f},    // sharp turn
+  };
+  const float kTrackwidth = 128.0f;
+  const float kSlip = 0.92f;   // in [0.5, 1.0] -- effectiveSlip() passes it
+                                // through unchanged (see pose_estimator.cpp).
+
+  // --- Synchronous-pair baseline: an explicit warm-up tick (both sides
+  // fresh, zero motion) establishes haveEncBaseline_ FIRST -- matching the
+  // staggered run's own warm-up below -- so segment 0 is a genuine,
+  // fully-integrated joint step in BOTH runs, not silently absorbed as the
+  // zero-delta "first application" by whichever run happens to reach it
+  // first (haveEncBaseline_'s own pre-existing warm-up convention -- see
+  // pose_estimator.h -- otherwise makes the very first tick asymmetric
+  // between the two constructions). Each segment thereafter is delivered as
+  // ONE tick, both wheels' sampled_at advancing together -- the SAME
+  // pattern every other scenario in this file uses (motorStateAt(...,
+  // now) at every call site).
+  Subsystems::PoseEstimator baseline;
+  baseline.configure(makeConfig(kTrackwidth, kSlip, 800.0f, 4.0f, 50.0f, 0.01f));
+  Rt::WorkQueue<Rt::PoseResetCommand, 4> baselineResetIn;
+  Rt::Mailbox<msg::SetPose> baselineSetPoseOut;
+
+  uint32_t now = 0;
+  float cumLeft = 0.0f;
+  float cumRight = 0.0f;
+  baseline.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now),
+                nullptr, baselineResetIn, baselineSetPoseOut);   // warm-up
+  for (const Segment& seg : segments) {
+    now += 20;
+    cumLeft += seg.dL;
+    cumRight += seg.dR;
+    baseline.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now),
+                  nullptr, baselineResetIn, baselineSetPoseOut);
+  }
+  msg::PoseEstimate baselineFinal = baseline.encoderPose();
+
+  // Sanity: the sequence actually moved the robot (not a trivially-passing
+  // all-zero comparison).
+  checkTrue(baselineFinal.pose.x > 50.0f || baselineFinal.pose.y > 50.0f ||
+                std::fabs(baselineFinal.pose.h) > 0.01f,
+            "sanity: the segment sequence actually produced motion");
+
+  // --- Staggered run: the SAME five segments, but each delivered across TWO
+  // ticks -- an explicit warm-up tick first (both sides fresh, zero motion)
+  // cleanly establishes the paired baseline, then each segment alternates a
+  // left-only tick (right's position/sampled_at UNCHANGED -- still stale)
+  // and a right-only tick (left's UNCHANGED, closing the pair). ---
+  Subsystems::PoseEstimator staggered;
+  staggered.configure(makeConfig(kTrackwidth, kSlip, 800.0f, 4.0f, 50.0f, 0.01f));
+  Rt::WorkQueue<Rt::PoseResetCommand, 4> stagResetIn;
+  Rt::Mailbox<msg::SetPose> stagSetPoseOut;
+
+  uint32_t stagNow = 20;
+  float stagLeft = 0.0f;
+  float stagRight = 0.0f;
+  uint32_t stagLeftSampledAt = stagNow;
+  uint32_t stagRightSampledAt = stagNow;
+  staggered.tick(stagNow, motorStateAt(stagLeft, stagLeftSampledAt),
+                 motorStateAt(stagRight, stagRightSampledAt), nullptr,
+                 stagResetIn, stagSetPoseOut);
+
+  int segIndex = 0;
+  for (const Segment& seg : segments) {
+    // Left-only tick: left's position AND sampled_at advance; right's stay
+    // exactly at their last-fresh values (still stale) -- the
+    // paired-freshness gate must NOT fire.
+    stagNow += 10;
+    stagLeft += seg.dL;
+    stagLeftSampledAt = stagNow;
+    msg::PoseEstimate beforeLeftOnly = staggered.encoderPose();
+    staggered.tick(stagNow, motorStateAt(stagLeft, stagLeftSampledAt),
+                   motorStateAt(stagRight, stagRightSampledAt), nullptr,
+                   stagResetIn, stagSetPoseOut);
+    msg::PoseEstimate afterLeftOnly = staggered.encoderPose();
+
+    char label[96];
+    std::snprintf(label, sizeof(label), "segment %d left-only tick", segIndex);
+
+    checkNear(afterLeftOnly.pose.x, beforeLeftOnly.pose.x, 0.0f,
+              std::string(label) +
+                  ": encoderPose().pose.x unchanged -- no local "
+                  "misattribution while right is stale");
+    checkNear(afterLeftOnly.pose.y, beforeLeftOnly.pose.y, 0.0f,
+              std::string(label) + ": encoderPose().pose.y unchanged too");
+    checkNear(afterLeftOnly.pose.h, beforeLeftOnly.pose.h, 0.0f,
+              std::string(label) +
+                  ": encoderPose().pose.h unchanged too (no phantom pivot)");
+
+    // Confirm the fix's zero-change result above is a REAL divergence from
+    // the pre-fix (naive) formula, not a vacuous "nothing happened": a naive
+    // implementation computes this tick's delta as (this tick's raw
+    // position - the immediately-prior tick's raw position) regardless of
+    // freshness -- i.e. dL_naive = seg.dL, dR_naive = 0 (right's raw
+    // reading did not change) -- and would have integrated a materially
+    // different local pose right here.
+    if (seg.dL != 0.0f) {
+      float naiveDCenter = (seg.dL + 0.0f) * 0.5f;
+      float naiveDTheta = ((0.0f - seg.dL) / kTrackwidth) * kSlip;
+      float naiveThetaMid = beforeLeftOnly.pose.h + naiveDTheta * 0.5f;
+      float naiveX = beforeLeftOnly.pose.x + naiveDCenter * std::cos(naiveThetaMid);
+      float naiveY = beforeLeftOnly.pose.y + naiveDCenter * std::sin(naiveThetaMid);
+      bool naiveDiverges = std::fabs(naiveX - afterLeftOnly.pose.x) > 1.0f ||
+                            std::fabs(naiveY - afterLeftOnly.pose.y) > 1.0f;
+      checkTrue(naiveDiverges,
+                std::string(label) +
+                    ": the naive pre-fix formula would have computed a "
+                    "materially different (misattributed) local pose here "
+                    "-- confirms the fix's zero-change result is a genuine "
+                    "divergence, not a coincidence");
+    }
+
+    // Right-only tick: right's position AND sampled_at advance, closing the
+    // pair (left has been fresh since the tick above) -- the joint step
+    // fires NOW, capturing the FULL segment's (dL, dR) in one shot.
+    stagNow += 10;
+    stagRight += seg.dR;
+    stagRightSampledAt = stagNow;
+    staggered.tick(stagNow, motorStateAt(stagLeft, stagLeftSampledAt),
+                   motorStateAt(stagRight, stagRightSampledAt), nullptr,
+                   stagResetIn, stagSetPoseOut);
+
+    ++segIndex;
+  }
+
+  msg::PoseEstimate staggeredFinal = staggered.encoderPose();
+
+  checkNear(staggeredFinal.pose.x, baselineFinal.pose.x, 1e-3f,
+            "staggered run's TOTAL encoderPose().pose.x matches the "
+            "synchronous-pair baseline exactly (telescoping-sum total is "
+            "unaffected by staleness)");
+  checkNear(staggeredFinal.pose.y, baselineFinal.pose.y, 1e-3f,
+            "staggered run's TOTAL encoderPose().pose.y matches the "
+            "synchronous-pair baseline exactly");
+  checkNear(staggeredFinal.pose.h, baselineFinal.pose.h, 1e-4f,
+            "staggered run's TOTAL encoderPose().pose.h matches the "
+            "synchronous-pair baseline exactly");
 }
 
 }  // namespace
@@ -628,6 +814,7 @@ int main() {
   scenarioPoseResetInDrainsKSetPoseMatchesDirectSetPose();
   scenarioPoseResetInDrainsKResetBaselineNoPhantomJump();
   scenarioOtosSetPoseOutAndLastPoseStepMagnitude();
+  scenarioStaggeredSampleTimingMatchesSynchronousTotalNoLocalMisattribution();
 
   if (g_failureCount == 0) {
     std::printf("OK: all PoseEstimator scenarios passed\n");
