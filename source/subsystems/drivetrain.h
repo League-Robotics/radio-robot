@@ -208,17 +208,6 @@ class Drivetrain {
   // (MOVER, OOP 2026-07-09) replaceIn is drained between the escape hatch
   // and segmentIn: a replace supersedes the ring and replans from the
   // current velocity (SegmentExecutor::replaceStream).
-  // (098-004/M6, Stage 2, optional) While segmentMode_ is true, this method
-  // also reads hardware_.odometer()->pose()/connected() directly each tick
-  // and threads a real msg::PoseEstimate (connected() folded into the
-  // pose's own stamp.valid -- see the .cpp) into executor_.tick(), so the
-  // owned Motion::SegmentExecutor's heading source can prefer OTOS when
-  // fresh/connected -- see segment_executor.h's own file header. Requires
-  // main.cpp (or any other composition root) to tick the odometer leaf
-  // itself BEFORE this call, same pass, for the pose to be fresh --
-  // Subsystems::SimHardware::tick() already does this internally; real
-  // hardware needs the explicit `hardware.odometer()->tick(now)` call
-  // main.cpp adds.
   void tick(uint32_t now,
             Rt::WorkQueue<Motion::Segment, 8>& segmentIn,
             Rt::Mailbox<Motion::Segment>& replaceIn,

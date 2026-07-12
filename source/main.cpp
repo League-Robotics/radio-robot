@@ -10,14 +10,11 @@
 // tick telemetry (tickTelemetry() -- 096-002's loop-owned periodic STREAM
 // emission, a no-op unless STREAM has armed bb.telemetryPeriod), tick
 // Hardware (pumps the I2C flip-flop -- timing unchanged from before this
-// sprint), tick the OTOS leaf directly (098-004/M6, Stage 2, optional --
-// hardware.odometer()->tick(now), a separate I2C device from the flip-flop),
-// tick Drivetrain (drains bb.segmentIn/bb.driveIn, runs the executor/
-// escape-hatch dispatch -- reading the just-ticked OTOS pose internally for
-// its heading source -- stages this pass's wheel setpoints directly through
-// Hardware's motor refs -- flushed the FOLLOWING pass by the next
-// Hardware::tick()), then commit Drivetrain's measured state (plus the OTOS
-// pose/connected snapshot) back onto the blackboard for TLM (094-006).
+// sprint), tick Drivetrain (drains bb.segmentIn/bb.driveIn, runs the
+// executor/escape-hatch dispatch, stages this pass's wheel setpoints
+// directly through Hardware's motor refs -- flushed the FOLLOWING pass by
+// the next Hardware::tick()), then commit Drivetrain's measured state back
+// onto the blackboard for TLM (094-006).
 //
 // This is the stakeholder's explicit harmonization decision (sprint 094):
 // the Drivetrain connects into the bare main() loop DIRECTLY, as roughly
@@ -120,14 +117,10 @@ int hardware_main() {
     // to satisfy Rt::Configurator's constructor (below) -- a kDrivetrain-
     // scoped delta re-propagates to it too (configurator.cpp). Holds no
     // hardware reference (pose_estimator.h: "holds NO Hal::Motor/
-    // Hal::Odometer reference or pointer"), and stays UNTICKED by this loop
-    // -- 098-004/M6's OTOS heading revival (below, and Drivetrain::tick()'s
-    // own doc comment) reads hardware.odometer()->pose()/connected()
-    // DIRECTLY, never through this PoseEstimator's fusion path (full
-    // pose-fusion/EKF is sprint 099's scope, not this sprint's -- see
-    // architecture-update.md M6's boundary), so this instance stays
-    // constructed-but-inert -- it changes nothing about this loop's existing
-    // behavior. ---
+    // Hal::Odometer reference or pointer"), so an instance that is
+    // constructed but never ticked (Stage 2/M6's OTOS wiring -- ticket
+    // 098-004, independent of this ticket, not landed on this branch) is
+    // inert -- it changes nothing about this loop's existing behavior. ---
     static Subsystems::PoseEstimator poseEstimator;
 
     // --- Configurator (098-005/M7): the one live config-application
@@ -201,20 +194,6 @@ int hardware_main() {
         tickTelemetry(bb, router, now); // Loop-owned periodic STREAM emission (096-002) -- a no-op unless STREAM has armed bb.telemetryPeriod.
 
         hardware.tick(now);                                // pump the I2C flip-flop (timing unchanged)
-        // 098-004/M6 (Stage 2, optional): tick the OTOS leaf once per pass --
-        // a separate I2C device (0x17) from the Nezha brick's own flip-flop
-        // (0x10), so this is a standalone call, not folded into
-        // hardware.tick() above. Placed AFTER hardware.tick() (this pass's
-        // wheel/encoder collection) and BEFORE drivetrain.tick() below so a
-        // fresh OTOS pose is available THIS SAME pass -- Drivetrain::tick()
-        // reads hardware.odometer()->pose()/connected() directly, internally,
-        // to feed its owned Motion::SegmentExecutor's heading source (see
-        // drivetrain.h's own tick() doc comment). Subsystems::SimHardware
-        // already ticks its own Hal::SimOdometer inside ITS OWN tick(), so
-        // this call is what revives live OTOS sampling on REAL hardware
-        // specifically (Subsystems::NezhaHardware::tick() does not tick its
-        // otosOdometer_ member -- see nezha_hardware.cpp).
-        hardware.odometer()->tick(now);
         drivetrain.tick(now,
             bb.segmentIn,
             bb.replaceIn,
@@ -227,22 +206,7 @@ int hardware_main() {
         bb.motors = hardware.motorStates();                // commit measured motor state (incl. I2C connected)
         bb.drivetrain = drivetrain.state();                // commit measured state for TLM (094-006)
         bb.loopNow = now;                                  // commit stamp for TLM now= (cmd='s true time)
-        // 098-004/M6 (Stage 2, optional): commit this pass's OTOS pose/
-        // connected snapshot for telemetry -- previously always false/
-        // never-set on this bare loop (bb.otos/bb.otosConnected stayed at
-        // their zero-valued defaults forever -- nothing else in this loop
-        // ever wrote them). Deliberately NOT bb.otosValid: that field is
-        // Hal::Odometer::fusableThisPass()'s own EKF-fusion-gate signal,
-        // with exactly ONE sanctioned caller (Subsystems::PoseEstimator::
-        // tick(), never ticked on this branch -- see poseEstimator's own
-        // construction comment above); do not add a second
-        // fusableThisPass() caller here (architecture-update.md Decision 4's
-        // explicit note). connected() && pose().stamp.valid is this loop's
-        // own freshness/validity signal instead, matching what
-        // Drivetrain::tick() already derives internally for the executor.
-        bb.otos = hardware.odometer()->pose();
-        bb.otosConnected = hardware.odometer()->connected();
-
+        
         uBit.sleep(1);   // yield: radio RX delivery + other fibers
     }
 

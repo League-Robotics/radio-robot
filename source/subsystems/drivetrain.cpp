@@ -285,20 +285,7 @@ void Drivetrain::tick(uint32_t now,
             executor_.offerNext(ring_.take());
         }
 
-        // 098-004/M6 (Stage 2, optional): read the OTOS leaf's own pose/
-        // connected() directly through hardware_ each tick (this Drivetrain
-        // already holds Hardware&) and fold connected() into the
-        // PoseEstimate's own freshness stamp -- the executor's measured-
-        // heading step (Motion::SegmentExecutor::measuredHeading()) then has
-        // a SINGLE combined valid/connected gate to check (pose.stamp.valid),
-        // rather than needing its own second Hal-level connected() query. A
-        // NullOdometer/never-detected/stale OTOS (connected() false, or a
-        // stale stamp.valid this tick) always folds to stamp.valid == false
-        // here -- bit-identical to Stage 1's own hardcoded empty
-        // msg::PoseEstimate{}.
-        msg::PoseEstimate otosPose = hardware_.odometer()->pose();
-        otosPose.stamp.valid = otosPose.stamp.valid && hardware_.odometer()->connected();
-        msg::BodyTwist3 twist = executor_.tick(now, leftObs, rightObs, otosPose);
+        msg::BodyTwist3 twist = executor_.tick(now, leftObs, rightObs);
         float targetLeft = 0.0f;
         float targetRight = 0.0f;
         BodyKinematics::inverse(twist.v_x, twist.omega, config_.trackwidth,

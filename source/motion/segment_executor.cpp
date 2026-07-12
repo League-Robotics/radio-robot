@@ -89,15 +89,6 @@ constexpr float kHeadingTol = 0.00873f;     // [rad] ~0.5 deg
 constexpr float kHeadingRateTol = 0.0175f;  // [rad/s] ~1 deg/s
 constexpr uint32_t kHeadingDwellMs = 150;   // [ms]
 
-// wrapAngle -- wrap x into (-pi, pi]. Same atan2f(sinf, cosf) identity
-// stop_condition.cpp's own file-local wrapAngle() and source/subsystems/
-// pose_estimator.cpp's wrapPi() both use (098-004/M6: measuredHeading()'s
-// OTOS path needs the SAME identity to recover a true incremental heading
-// delta from the OTOS leaf's own wrapped absolute pose.h -- exact for any
-// single-phase rotation under +-180 deg, which is this sprint's scope:
-// PRE_PIVOT/TERMINAL_PIVOT are single in-place pivots, never multi-turn).
-float wrapAngle(float x) { return atan2f(sinf(x), cosf(x)); }
-
 }  // namespace
 
 void SegmentExecutor::configure(const msg::PlannerConfig& config) { config_ = config; }
@@ -311,8 +302,7 @@ void SegmentExecutor::beginStreamFresh(uint32_t now) {
 }
 
 void SegmentExecutor::mergePending(uint32_t now, const msg::MotorState& encLeft,
-                                   const msg::MotorState& encRight,
-                                   const msg::PoseEstimate& pose) {
+                                   const msg::MotorState& encRight) {
   Segment seg = pending_;
   hasPending_ = false;
 
@@ -369,7 +359,7 @@ void SegmentExecutor::mergePending(uint32_t now, const msg::MotorState& encLeft,
   lastReplanMs_ = now;
   phaseReplanDeadline_ = now;   // BLEND: divergence replans disabled
   phase_ = Phase::BLEND;
-  captureBaseline(now, encLeft, encRight, pose);
+  captureBaseline(now, encLeft, encRight);
   baselineCaptured_ = true;
 }
 
@@ -491,8 +481,7 @@ void SegmentExecutor::stop(uint32_t now) {
 }
 
 void SegmentExecutor::captureBaseline(uint32_t now, const msg::MotorState& encLeft,
-                                      const msg::MotorState& encRight,
-                                      const msg::PoseEstimate& pose) {
+                                      const msg::MotorState& encRight) {
   baseline_.t0 = now;
   baseline_.enc0 = 0.0f;
   baseline_.encDiff0 = 0.0f;
@@ -500,14 +489,8 @@ void SegmentExecutor::captureBaseline(uint32_t now, const msg::MotorState& encLe
     baseline_.enc0 = (encLeft.position.val + encRight.position.val) * 0.5f;
     baseline_.encDiff0 = encRight.position.val - encLeft.position.val;
   }
-  // heading0/pose0X/pose0Y are still dead fields, left at their default 0 --
-  // reserved for a future full EKF-fused pose (sprint 099's scope), not this
-  // ticket (see class comment). otosHeading0 (098-004/M6, Stage 2) IS
-  // captured here -- the OTOS leaf's own pose.h when this tick's supplied
-  // PoseEstimate is valid/connected, else 0.0f (unused/meaningless in that
-  // case, mirroring encDiff0's own "captured every phase start regardless,
-  // only meaningful when consumed" convention).
-  baseline_.otosHeading0 = pose.stamp.valid ? pose.pose.h : 0.0f;
+  // Pose-free: heading0/pose0X/pose0Y are dead fields, left at their default
+  // 0 (see class comment) -- only enc0/encDiff0/vSign/omegaSign matter here.
   if (phase_ == Phase::TRANSLATE) {
     baseline_.vSign =
         (translateTarget_ > 0.0f) ? 1.0f : (translateTarget_ < 0.0f ? -1.0f : 0.0f);
@@ -534,7 +517,7 @@ float SegmentExecutor::rotationalElapsed(uint32_t now) const {
 }
 
 // measuredHeading -- see segment_executor.h's doc comment for the contract.
-// Derivation of the ENCODER path's sign convention: rotationProgress()'s own
+// Derivation of thetaMeasured's sign convention: rotationProgress()'s own
 // STOP_ROTATION geometry (motion/stop_condition.cpp) computes signedArc =
 // ((encRight - encLeft) - baseline_.encDiff0) * omegaSign * 0.5, and that
 // condition FIRES (signedArc >= cond.a, cond.a == |rotationalTarget_| *
@@ -548,34 +531,15 @@ float SegmentExecutor::rotationalElapsed(uint32_t now) const {
 // comparable, and a positive headingError (thetaDesired - thetaMeasured)
 // always means "measured is behind the plan in the commanded direction",
 // never the reverse. Do not reintroduce an omegaSign factor here.
-//
-// 098-004/M6 (Stage 2, optional): the OTOS path is gated STRICTLY on
-// `pose.stamp.valid` (the caller's own combined valid/connected signal --
-// Subsystems::Drivetrain::tick() folds odometer()->connected() into it
-// before this is ever reached) -- when false (the default-constructed
-// `msg::PoseEstimate{}` every pre-004 caller still passes), this function is
-// BIT-IDENTICAL to ticket 002's own implementation. wrapAngle(pose.pose.h -
-// baseline_.otosHeading0) recovers a true incremental heading delta from the
-// OTOS leaf's own wrapped absolute pose.h the SAME way stop_condition.cpp's
-// headingError() does for a fused pose -- lands in the SAME relative-to-
-// phase-start signed frame the encoder path establishes above.
 void SegmentExecutor::measuredHeading(const msg::MotorState& encLeft,
-                                      const msg::MotorState& encRight,
-                                      const msg::PoseEstimate& pose, float thetaDesired,
+                                      const msg::MotorState& encRight, float thetaDesired,
                                       float omegaDesired, float* thetaMeasured,
                                       float* omegaMeasured) const {
-  if (pose.stamp.valid) {
-    *thetaMeasured = wrapAngle(pose.pose.h - baseline_.otosHeading0);
-  } else {
-    *thetaMeasured = thetaDesired;  // fallback: no correction this tick if position is momentarily absent
-    if (encLeft.position.has && encRight.position.has && trackwidth_ > 1e-3f) {
-      *thetaMeasured =
-          ((encRight.position.val - encLeft.position.val) - baseline_.encDiff0) / trackwidth_;
-    }
+  *thetaMeasured = thetaDesired;  // fallback: no correction this tick if position is momentarily absent
+  if (encLeft.position.has && encRight.position.has && trackwidth_ > 1e-3f) {
+    *thetaMeasured =
+        ((encRight.position.val - encLeft.position.val) - baseline_.encDiff0) / trackwidth_;
   }
-  // omegaMeasured stays encoder-derived ALWAYS -- Stage 2 trusts OTOS
-  // heading only, never OTOS twist/rate (architecture-update.md M6's own
-  // boundary) -- ticket 002's unmodified path.
   *omegaMeasured = omegaDesired;  // fallback -- mirrors maybeReplanPivot()'s reanchor seed exactly
   if (encLeft.velocity.has && encRight.velocity.has && trackwidth_ > 1e-3f) {
     *omegaMeasured = (encRight.velocity.val - encLeft.velocity.val) / trackwidth_;
@@ -793,13 +757,12 @@ void SegmentExecutor::armPivotStopDecel(uint32_t now) {
 }
 
 msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLeft,
-                                      const msg::MotorState& encRight,
-                                      const msg::PoseEstimate& pose) {
+                                      const msg::MotorState& encRight) {
   msg::BodyTwist3 twist{};
   if (phase_ == Phase::IDLE) return twist;  // never started, or fully converged
 
   if (!baselineCaptured_) {
-    captureBaseline(now, encLeft, encRight, pose);
+    captureBaseline(now, encLeft, encRight);
     baselineCaptured_ = true;
   }
 
@@ -809,7 +772,7 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
   // plan is solved to-rest, so a fire-time chain would re-launch from ~zero
   // velocity every segment and the stream would crawl.
   if (!stopping_ && hasPending_ && currentStream_ && !velocityMode_) {
-    mergePending(now, encLeft, encRight, pose);
+    mergePending(now, encLeft, encRight);
   }
 
   float v = 0.0f;
@@ -863,7 +826,7 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
       // replacing the raw plan-velocity passthrough this branch used to
       // emit unconditionally. Kp=Kd=0 (an unmigrated robot's PlannerConfig)
       // degenerates this to exactly that old open-loop passthrough.
-      measuredHeading(encLeft, encRight, pose, desired.position, desired.velocity, &thetaMeasured,
+      measuredHeading(encLeft, encRight, desired.position, desired.velocity, &thetaMeasured,
                       &omegaMeasured);
       omega = desired.velocity + config_.heading_kp * (desired.position - thetaMeasured) +
               config_.heading_kd * (desired.velocity - omegaMeasured);
@@ -900,7 +863,7 @@ msg::BodyTwist3 SegmentExecutor::tick(uint32_t now, const msg::MotorState& encLe
         // idle tick, since -- unlike Planner::apply(), which has no
         // observations at all -- this transition happens from inside tick(),
         // which already received encLeft/encRight this call.
-        captureBaseline(now, encLeft, encRight, pose);
+        captureBaseline(now, encLeft, encRight);
         baselineCaptured_ = true;
       }
     }
