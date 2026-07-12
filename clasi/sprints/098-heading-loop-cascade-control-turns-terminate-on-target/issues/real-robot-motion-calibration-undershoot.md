@@ -1,6 +1,12 @@
 ---
-status: pending
+status: in-progress
 sprint: 098
+tickets:
+- 098-002
+- 098-003
+- 098-004
+- 098-005
+- 098-006
 ---
 
 # Real-robot motion calibration — systematic ~6-12% undershoot on turns and straights

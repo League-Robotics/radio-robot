@@ -1,6 +1,13 @@
 ---
-status: pending
+status: in-progress
 sprint: 098
+tickets:
+- 098-001
+- 098-002
+- 098-003
+- 098-004
+- 098-005
+- 098-006
 ---
 
 # Heading-loop cascade control — turns terminate exactly on target
