@@ -17,6 +17,26 @@ struct SetPose {
     // --- array / optional-string accessors ---
 };
 
+// PoseFix
+struct PoseFix {
+    float x = 0.0f;
+    float y = 0.0f;
+    float h = 0.0f;
+    uint32_t t = 0;
+    bool reset = false;
+    bool zero_encoders = false;
+
+    // --- array / optional-string accessors ---
+};
+
+// PoseStep
+struct PoseStep {
+    float pos = 0.0f;
+    float theta = 0.0f;
+
+    // --- array / optional-string accessors ---
+};
+
 // WheelTargets
 struct WheelTargets {
     WheelTarget w_[4] = {};

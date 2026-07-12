@@ -133,7 +133,9 @@ def test_field_numbers_match_pb2_descriptors():
     this ticket was implemented) -- catches a stale/out-of-sync regeneration
     on either side, not just an implicit round-trip mismatch."""
     expected_cmd_numbers = {
-        "drive": 2, "segment": 3, "replace": 4, "config": 6, "pose": 7, "otos": 8,
+        # pose_fix (099-004): retypes the formerly-declared-only `pose`
+        # arm (was SetPose) to PoseFix -- same field number 7.
+        "drive": 2, "segment": 3, "replace": 4, "config": 6, "pose_fix": 7, "otos": 8,
         "ping": 9, "echo": 10, "get": 11, "stream": 12, "stop": 13, "id": 14,
         # hello/ver/help (stakeholder-directed 6-verb minimal command
         # surface, 2026-07-10).

@@ -117,14 +117,13 @@ int hardware_main() {
                                      hardware.motor(drivetrain.ports().right).capabilities());
 
     // --- PoseEstimator: a Subsystems-tier peer of Drivetrain (never folded
-    // into it -- pose_estimator.h's own file header). Constructed here ONLY
-    // to satisfy Rt::Configurator's constructor (below) -- a kDrivetrain-
-    // scoped delta re-propagates to it too (configurator.cpp). Holds no
-    // hardware reference (pose_estimator.h: "holds NO Hal::Motor/
-    // Hal::Odometer reference or pointer"), so an instance that is
-    // constructed but never ticked (Stage 2/M6's OTOS wiring -- ticket
-    // 098-004, independent of this ticket, not landed on this branch) is
-    // inert -- it changes nothing about this loop's existing behavior. ---
+    // into it -- pose_estimator.h's own file header). Constructed here so
+    // Rt::Configurator's constructor (below) can re-propagate a
+    // kDrivetrain-scoped delta to it (configurator.cpp) AND so `loop`
+    // (below) can tick it live every pass -- 099-004 wires it into
+    // Rt::MainLoop in ENCODER-ONLY mode (OTOS fusion is 099-007's job).
+    // Holds no hardware reference (pose_estimator.h: "holds NO Hal::Motor/
+    // Hal::Odometer reference or pointer"). ---
     static Subsystems::PoseEstimator poseEstimator;
 
     // --- Configurator (098-005/M7): the one live config-application
@@ -141,11 +140,13 @@ int hardware_main() {
     // drivetrain.tick() -> commit sequence, moved from an inline hand-rolled
     // block into the shared Rt::MainLoop class tests/_infra/sim/sim_api.cpp's
     // SimHandle already calls -- byte-identical sequencing (main_loop.cpp),
-    // pure structural move, zero behavior change (this ticket's own
-    // acceptance criteria). Constructor signature unchanged this ticket
-    // (still Hardware&/Drivetrain& only); ticket 004 grows it to add
-    // PoseEstimator&. ---
-    static Rt::MainLoop loop(hardware, drivetrain);
+    // pure structural move, zero behavior change (099-001's own acceptance
+    // criteria). 099-004 grows the constructor to add PoseEstimator& --
+    // `poseEstimator` above is already constructed by this point,
+    // previously held only to satisfy Rt::Configurator's constructor; it is
+    // now ALSO ticked, live, every pass (encoder-only this ticket; OTOS
+    // fusion is 099-007's job). ---
+    static Rt::MainLoop loop(hardware, drivetrain, poseEstimator);
 
     // The two-plane transport commands post onto, and the pointerless command
     // router that parses + dispatches inbound wire lines against it.

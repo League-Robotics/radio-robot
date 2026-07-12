@@ -272,7 +272,7 @@ SimHandle::SimHandle()
                                // must (and does) construct first.
       configurator(drivetrain, poseEstimator, hardware,
                    defaultSimDrivetrainConfig(), defaultSimMotionConfig()),
-      loop(hardware, drivetrain)
+      loop(hardware, drivetrain, poseEstimator)
 {
     // Primes all four ports' encoders — parity with main.cpp's
     // hardware.begin() call, before the Drivetrain is configured.

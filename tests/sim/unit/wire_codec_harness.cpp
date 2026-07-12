@@ -281,20 +281,25 @@ void scenarioRoundTripId() {
 }
 
 void scenarioRoundTripDeclaredOnlyPoseAndOtos() {
-  beginScenario("decode(): round-trip declared-only arms pose (SetPose) and otos (2-level nested Pose2D)");
+  beginScenario("decode(): round-trip pose_fix (PoseFix, 099-004) and otos (declared-only, 2-level nested Pose2D)");
   {
     Buf pose;
-    putFloatField(pose, 1, 10.0f);
-    putFloatField(pose, 2, -20.0f);
-    putFloatField(pose, 3, 1.57f);
+    putFloatField(pose, 1, 10.0f);    // x
+    putFloatField(pose, 2, -20.0f);   // y
+    putFloatField(pose, 3, 1.57f);    // h
+    putVarintField(pose, 4, 4242);    // t [ms]
+    putVarintField(pose, 5, 1);       // reset = true
     Buf env;
-    putMessageField(env, 7, pose);  // CommandEnvelope.cmd.pose, field 7
+    putMessageField(env, 7, pose);  // CommandEnvelope.cmd.pose_fix, field 7
     msg::CommandEnvelope out;
     msg::wire::Result r = msg::wire::decode(out, env.data, static_cast<uint16_t>(env.len));
-    checkTrue(r.ok, "pose decode succeeds");
-    checkTrue(out.cmd_kind == msg::CommandEnvelope::CmdKind::POSE, "cmd_kind == POSE");
-    checkFloatEq(out.cmd.pose.x, 10.0f, "pose.x round-trips");
-    checkFloatEq(out.cmd.pose.h, 1.57f, "pose.h round-trips");
+    checkTrue(r.ok, "pose_fix decode succeeds");
+    checkTrue(out.cmd_kind == msg::CommandEnvelope::CmdKind::POSE_FIX, "cmd_kind == POSE_FIX");
+    checkFloatEq(out.cmd.pose_fix.x, 10.0f, "pose_fix.x round-trips");
+    checkFloatEq(out.cmd.pose_fix.h, 1.57f, "pose_fix.h round-trips");
+    checkU64Eq(out.cmd.pose_fix.t, 4242, "pose_fix.t round-trips");
+    checkTrue(out.cmd.pose_fix.reset, "pose_fix.reset round-trips");
+    checkFalse(out.cmd.pose_fix.zero_encoders, "pose_fix.zero_encoders stays at zero-value default");
   }
   {
     // otos -> OdometerCommand.action.set_pose -> Pose2D: exercises TWO

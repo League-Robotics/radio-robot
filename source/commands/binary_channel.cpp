@@ -519,6 +519,42 @@ void handleGet(const msg::ConfigGet& get, Rt::Blackboard& b, uint32_t corrId,
   sendReply(reply, replyFn, replyCtx);
 }
 
+// handlePose -- 099-004: CommandEnvelope.cmd.pose_fix's dispatch (D5-D8,
+// architecture-update.md). `reset`/`zero_encoders` reuse PoseEstimator's
+// existing, already-tested setPose()/resetEncoderBaseline() dispatch
+// through the UNCHANGED bb.poseResetIn queue -- no new PoseEstimator code
+// path for SI/ZERO (both may be set in one message; both branches run).
+// Neither flag set is a genuine timestamped delayed camera fix -- declared
+// only this ticket (099-008 makes it live via bb.poseFixIn); replies
+// ERR_UNIMPLEMENTED, unchanged behavior from the pre-099-004 stub.
+void handlePose(const msg::PoseFix& fix, Rt::Blackboard& b, uint32_t corrId,
+                ReplyFn replyFn, void* replyCtx) {
+  if (!fix.reset && !fix.zero_encoders) {
+    sendError(msg::ErrCode::ERR_UNIMPLEMENTED, 7, corrId, replyFn, replyCtx);
+    return;
+  }
+
+  bool posted = true;
+  if (fix.reset) {
+    Rt::PoseResetCommand cmd;
+    cmd.kind = Rt::PoseResetCommand::kSetPose;
+    cmd.pose.x = fix.x;
+    cmd.pose.y = fix.y;
+    cmd.pose.h = fix.h;
+    posted = b.poseResetIn.post(cmd) && posted;
+  }
+  if (fix.zero_encoders) {
+    Rt::PoseResetCommand cmd;
+    cmd.kind = Rt::PoseResetCommand::kResetBaseline;
+    posted = b.poseResetIn.post(cmd) && posted;
+  }
+  if (!posted) {
+    sendError(msg::ErrCode::ERR_FULL, 0, corrId, replyFn, replyCtx);
+    return;
+  }
+  sendAck(b, corrId, replyFn, replyCtx);
+}
+
 // handleStream -- 096-005: mirrors the text handleStream()'s own
 // state-setting exactly (git history, telemetry_commands.cpp -- the text
 // STREAM/SNAP handlers were deleted outright by 097-008) -- minus the text
@@ -628,8 +664,8 @@ void handle(const char* line, ReplyFn replyFn, void* replyCtx, void* routerCtx) 
     case msg::CommandEnvelope::CmdKind::CONFIG:
       handleConfig(env.cmd.config, b, env.corr_id, replyFn, replyCtx);
       break;
-    case msg::CommandEnvelope::CmdKind::POSE:
-      sendError(msg::ErrCode::ERR_UNIMPLEMENTED, 7, env.corr_id, replyFn, replyCtx);
+    case msg::CommandEnvelope::CmdKind::POSE_FIX:
+      handlePose(env.cmd.pose_fix, b, env.corr_id, replyFn, replyCtx);
       break;
     case msg::CommandEnvelope::CmdKind::OTOS:
       sendError(msg::ErrCode::ERR_UNIMPLEMENTED, 8, env.corr_id, replyFn, replyCtx);

@@ -44,7 +44,13 @@ void PoseEstimator::configure(const msg::DrivetrainConfig& config) {
 void PoseEstimator::tick(uint32_t now, const msg::MotorState& leftObs,
                           const msg::MotorState& rightObs,
                           const msg::PoseEstimate* otosObs,
-                          Rt::WorkQueue<Rt::PoseResetCommand, 4>& poseResetIn) {
+                          Rt::WorkQueue<Rt::PoseResetCommand, 4>& poseResetIn,
+                          Rt::Mailbox<msg::SetPose>& otosSetPoseOut) {
+  // 099-004: lastPoseStep_ reflects only the IMMEDIATELY-prior tick()'s
+  // correction -- reset to {0, 0} at the very top of every call, before the
+  // drain below has a chance to (re)populate it.
+  lastPoseStep_ = msg::PoseStep();
+
   // 087-004: drain poseResetIn completely, FIFO, BEFORE anything else --
   // even before the "no observation this pass" early return below, so a
   // queued SI/ZERO reset is never skipped just because this pass's encoder
@@ -54,9 +60,28 @@ void PoseEstimator::tick(uint32_t now, const msg::MotorState& leftObs,
   while (!poseResetIn.empty()) {
     Rt::PoseResetCommand cmd = poseResetIn.take();
     switch (cmd.kind) {
-      case Rt::PoseResetCommand::kSetPose:
+      case Rt::PoseResetCommand::kSetPose: {
+        // 099-004: capture fusedPose() before/after setPose() so
+        // lastPoseStep_ reports the magnitude of THIS correction, then post
+        // the re-anchored fusedPose() to otosSetPoseOut -- MainLoop drains
+        // it into hardware_.odometer()->applySetPose(...) the same way it
+        // always has (architecture-update.md D1/D8).
+        msg::PoseEstimate before = fusedPose();
         setPose(cmd.pose);
+        msg::PoseEstimate after = fusedPose();
+
+        float dx = after.pose.x - before.pose.x;
+        float dy = after.pose.y - before.pose.y;
+        lastPoseStep_.pos = sqrtf(dx * dx + dy * dy);
+        lastPoseStep_.theta = fabsf(wrapPi(after.pose.h - before.pose.h));
+
+        msg::SetPose fixedPose;
+        fixedPose.x = after.pose.x;
+        fixedPose.y = after.pose.y;
+        fixedPose.h = after.pose.h;
+        otosSetPoseOut.post(fixedPose);
         break;
+      }
       case Rt::PoseResetCommand::kResetBaseline:
         resetEncoderBaseline();
         break;

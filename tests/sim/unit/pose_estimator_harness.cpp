@@ -145,6 +145,7 @@ void scenarioNoOtosFusedMatchesEncoderExactly() {
   // in this scenario, so it is a no-op, matching today's exact behavior
   // (see the queue-driven scenarios below for coverage of a non-empty one).
   Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+  Rt::Mailbox<msg::SetPose> otosSetPoseOut;
 
   struct Step {
     float dLeft;
@@ -166,7 +167,7 @@ void scenarioNoOtosFusedMatchesEncoderExactly() {
     now += 20;
     cumLeft += s.dLeft;
     cumRight += s.dRight;
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn);
+    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
 
     msg::PoseEstimate enc = pe.encoderPose();
     msg::PoseEstimate fused = pe.fusedPose();
@@ -205,6 +206,7 @@ void scenarioOtosDivergesFusedFromEncoder() {
 
   // 087-004: never posted to in this scenario -- see scenario (a)'s comment.
   Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+  Rt::Mailbox<msg::SetPose> otosSetPoseOut;
 
   uint32_t now = 0;
   float cumLeft = 0.0f;
@@ -217,7 +219,7 @@ void scenarioOtosDivergesFusedFromEncoder() {
     now += 20;
     cumLeft += 40.0f;
     cumRight += 40.0f;
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn);
+    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
   }
 
   msg::PoseEstimate encBefore = pe.encoderPose();
@@ -242,7 +244,7 @@ void scenarioOtosDivergesFusedFromEncoder() {
     msg::PoseEstimate otos =
         otosAt(refEnc.pose.x + kOffsetX, refEnc.pose.y, refEnc.pose.h, now);
 
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), &otos, poseResetIn);
+    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), &otos, poseResetIn, otosSetPoseOut);
   }
 
   msg::PoseEstimate encAfter = pe.encoderPose();
@@ -275,6 +277,7 @@ void scenarioZeroConfigSentinelKeepsFusionFiniteAndCorrected() {
 
   // 087-004: never posted to in this scenario -- see scenario (a)'s comment.
   Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+  Rt::Mailbox<msg::SetPose> otosSetPoseOut;
 
   uint32_t now = 0;
   float cumLeft = 0.0f;
@@ -284,7 +287,7 @@ void scenarioZeroConfigSentinelKeepsFusionFiniteAndCorrected() {
     now += 20;
     cumLeft += 40.0f;
     cumRight += 40.0f;
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn);
+    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
   }
 
   const float kOffsetX = 150.0f;  // [mm]
@@ -297,7 +300,7 @@ void scenarioZeroConfigSentinelKeepsFusionFiniteAndCorrected() {
     msg::PoseEstimate otos =
         otosAt(refEnc.pose.x + kOffsetX, refEnc.pose.y, refEnc.pose.h, now);
 
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), &otos, poseResetIn);
+    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), &otos, poseResetIn, otosSetPoseOut);
   }
 
   msg::PoseEstimate enc = pe.encoderPose();
@@ -360,6 +363,7 @@ void scenarioPoseResetInDrainsKSetPoseMatchesDirectSetPose() {
   pe.configure(makeConfig(128.0f, 0.92f, 800.0f, 4.0f, 50.0f, 0.01f));
 
   Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+  Rt::Mailbox<msg::SetPose> otosSetPoseOut;
 
   uint32_t now = 0;
   float cumLeft = 0.0f;
@@ -368,7 +372,7 @@ void scenarioPoseResetInDrainsKSetPoseMatchesDirectSetPose() {
     now += 20;
     cumLeft += 40.0f;
     cumRight += 40.0f;
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn);
+    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
   }
 
   // SI arrives: post kSetPose re-anchoring to a known world pose, delivered
@@ -387,7 +391,7 @@ void scenarioPoseResetInDrainsKSetPoseMatchesDirectSetPose() {
   setPoseCmd.pose = target;
   checkTrue(poseResetIn.post(setPoseCmd), "post() succeeds");
 
-  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn);
+  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
   checkTrue(poseResetIn.empty(), "tick() drained the posted kSetPose command");
 
   msg::PoseEstimate afterReanchor = pe.encoderPose();
@@ -412,7 +416,7 @@ void scenarioPoseResetInDrainsKSetPoseMatchesDirectSetPose() {
   now += 20;
   cumLeft += 40.0f;
   cumRight += 40.0f;
-  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn);
+  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
   msg::PoseEstimate afterFreshMotion = pe.encoderPose();
   checkTrue(afterFreshMotion.pose.x > afterReanchor.pose.x - 1.0f &&
                 afterFreshMotion.pose.x < afterReanchor.pose.x + 60.0f,
@@ -437,6 +441,7 @@ void scenarioPoseResetInDrainsKResetBaselineNoPhantomJump() {
   pe.configure(makeConfig(128.0f, 0.92f, 800.0f, 4.0f, 50.0f, 0.01f));
 
   Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+  Rt::Mailbox<msg::SetPose> otosSetPoseOut;
 
   uint32_t now = 0;
   float cumLeft = 0.0f;
@@ -447,7 +452,7 @@ void scenarioPoseResetInDrainsKResetBaselineNoPhantomJump() {
     now += 20;
     cumLeft += 40.0f;
     cumRight += 40.0f;
-    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn);
+    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
   }
   msg::PoseEstimate beforeReset = pe.encoderPose();
 
@@ -460,7 +465,7 @@ void scenarioPoseResetInDrainsKResetBaselineNoPhantomJump() {
   resetCmd.kind = Rt::PoseResetCommand::kResetBaseline;
   checkTrue(poseResetIn.post(resetCmd), "post() succeeds");
 
-  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn);   // dt == 0 (same now)
+  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);   // dt == 0 (same now)
   checkTrue(poseResetIn.empty(), "tick() drained the posted kResetBaseline command");
 
   msg::PoseEstimate afterSamePassTick = pe.encoderPose();
@@ -478,7 +483,7 @@ void scenarioPoseResetInDrainsKResetBaselineNoPhantomJump() {
   // jump. With the deferred guard, this pass's own delta is treated as zero
   // motion (the first reading after a fresh baseline).
   now += 20;
-  pe.tick(now, motorStateAt(0.0f), motorStateAt(0.0f), nullptr, poseResetIn);
+  pe.tick(now, motorStateAt(0.0f), motorStateAt(0.0f), nullptr, poseResetIn, otosSetPoseOut);
   msg::PoseEstimate afterRebaselineTick = pe.encoderPose();
   checkNear(afterRebaselineTick.pose.x, afterSamePassTick.pose.x, 0.0f,
             "the rebaseline-landing tick produces ZERO delta -- no phantom jump "
@@ -490,10 +495,109 @@ void scenarioPoseResetInDrainsKResetBaselineNoPhantomJump() {
   // produces a normal, bounded delta -- proves the class is still tracking
   // correctly afterward, not just frozen.
   now += 20;
-  pe.tick(now, motorStateAt(40.0f), motorStateAt(40.0f), nullptr, poseResetIn);
+  pe.tick(now, motorStateAt(40.0f), motorStateAt(40.0f), nullptr, poseResetIn, otosSetPoseOut);
   msg::PoseEstimate afterFreshMotion = pe.encoderPose();
   checkTrue(afterFreshMotion.pose.x > afterRebaselineTick.pose.x,
             "motion off the fresh rezeroed baseline advances encoderPose() normally");
+}
+
+// (g) 099-004: otosSetPoseOut is posted EXACTLY ONCE per applied kSetPose
+// (never on an ordinary tick, never on a kResetBaseline), and lastPoseStep()
+// reports the correct |Δp|/|Δθ| magnitude of a known setPose() re-anchor,
+// resetting to {0, 0} on every other tick (including the very next one).
+void scenarioOtosSetPoseOutAndLastPoseStepMagnitude() {
+  beginScenario(
+      "otosSetPoseOut posted exactly once per applied kSetPose (never on "
+      "kResetBaseline); lastPoseStep() reports the correct magnitude for a "
+      "known setPose() and zero on every other tick (099-004)");
+
+  Subsystems::PoseEstimator pe;
+  pe.configure(makeConfig(128.0f, 0.92f, 800.0f, 4.0f, 50.0f, 0.01f));
+
+  Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+  Rt::Mailbox<msg::SetPose> otosSetPoseOut;
+
+  uint32_t now = 0;
+  float cumLeft = 0.0f;
+  float cumRight = 0.0f;
+
+  // A handful of ordinary ticks (a mild turn, no queued reset): both new
+  // signals must stay at their inert defaults every single tick.
+  for (int i = 0; i < 5; ++i) {
+    now += 20;
+    cumLeft += 40.0f;
+    cumRight += 55.0f;
+    pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
+    checkTrue(otosSetPoseOut.empty(), "otosSetPoseOut stays empty when no reset is queued");
+    msg::PoseStep step = pe.lastPoseStep();
+    checkNear(step.pos, 0.0f, 0.0f, "lastPoseStep().pos is zero on an ordinary tick");
+    checkNear(step.theta, 0.0f, 0.0f, "lastPoseStep().theta is zero on an ordinary tick");
+  }
+
+  // kSetPose: re-anchor to a known target, same encoder reading (no wheel
+  // motion this pass) so this tick's own encoder-delta step contributes
+  // nothing further to fusedPose() beyond the reset itself -- the SAME
+  // "zero wheel motion this pass" setup scenario (e) above uses. `before` is
+  // read directly off the live object (not hand-derived) so the expected
+  // magnitudes below hold regardless of the exact accumulated heading;
+  // target.h is chosen close enough to `before.pose.h` that the delta never
+  // needs wrap-around handling (kept well under +/-pi).
+  msg::PoseEstimate before = pe.fusedPose();
+  msg::SetPose target;
+  target.x = before.pose.x + 321.0f;
+  target.y = before.pose.y - 87.0f;
+  target.h = before.pose.h + 0.3f;
+
+  Rt::PoseResetCommand cmd;
+  cmd.kind = Rt::PoseResetCommand::kSetPose;
+  cmd.pose = target;
+  checkTrue(poseResetIn.post(cmd), "post() succeeds");
+
+  float expectedDx = target.x - before.pose.x;
+  float expectedDy = target.y - before.pose.y;
+  float expectedPos = std::sqrt(expectedDx * expectedDx + expectedDy * expectedDy);
+  float expectedTheta = std::fabs(target.h - before.pose.h);
+
+  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
+
+  checkTrue(poseResetIn.empty(), "tick() drained the posted kSetPose command");
+  checkTrue(!otosSetPoseOut.empty(), "otosSetPoseOut received exactly one post for the applied kSetPose");
+  msg::SetPose posted = otosSetPoseOut.take();
+  checkTrue(otosSetPoseOut.empty(), "otosSetPoseOut.take() drained the one posted value -- posted exactly once");
+  checkNear(posted.x, target.x, 0.0f, "otosSetPoseOut carries the re-anchored fusedPose().pose.x");
+  checkNear(posted.y, target.y, 0.0f, "otosSetPoseOut carries the re-anchored fusedPose().pose.y");
+  checkNear(posted.h, target.h, 1e-4f, "otosSetPoseOut carries the re-anchored fusedPose().pose.h");
+
+  msg::PoseStep step = pe.lastPoseStep();
+  checkNear(step.pos, expectedPos, 1e-3f, "lastPoseStep().pos matches the SI re-anchor's position magnitude");
+  checkNear(step.theta, expectedTheta, 1e-4f, "lastPoseStep().theta matches the SI re-anchor's heading magnitude");
+
+  // The VERY NEXT tick, with no queued reset: lastPoseStep_ resets to {0, 0}
+  // at the top of every tick() call -- it must not keep echoing the
+  // previous tick's step, and otosSetPoseOut must not be posted to again.
+  now += 20;
+  cumLeft += 40.0f;
+  cumRight += 40.0f;
+  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
+  checkTrue(otosSetPoseOut.empty(),
+            "otosSetPoseOut stays empty the tick after the reset -- posted exactly once, not every tick");
+  msg::PoseStep stepAfter = pe.lastPoseStep();
+  checkNear(stepAfter.pos, 0.0f, 0.0f, "lastPoseStep() resets to zero on the tick following the applied reset");
+  checkNear(stepAfter.theta, 0.0f, 0.0f, "lastPoseStep().theta resets to zero too");
+
+  // kResetBaseline: must NOT post to otosSetPoseOut and must NOT produce a
+  // nonzero lastPoseStep() (no PoseStep, no otosSetPoseOut post -- ticket
+  // 099-004's AC).
+  Rt::PoseResetCommand resetCmd;
+  resetCmd.kind = Rt::PoseResetCommand::kResetBaseline;
+  checkTrue(poseResetIn.post(resetCmd), "post() succeeds");
+  now += 20;
+  pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
+  checkTrue(poseResetIn.empty(), "tick() drained the posted kResetBaseline command");
+  checkTrue(otosSetPoseOut.empty(), "kResetBaseline never posts to otosSetPoseOut");
+  msg::PoseStep stepReset = pe.lastPoseStep();
+  checkNear(stepReset.pos, 0.0f, 0.0f, "lastPoseStep().pos stays zero on a kResetBaseline-only tick");
+  checkNear(stepReset.theta, 0.0f, 0.0f, "lastPoseStep().theta stays zero too");
 }
 
 }  // namespace
@@ -505,6 +609,7 @@ int main() {
   scenarioConfigureConfigRoundTrip();
   scenarioPoseResetInDrainsKSetPoseMatchesDirectSetPose();
   scenarioPoseResetInDrainsKResetBaselineNoPhantomJump();
+  scenarioOtosSetPoseOutAndLastPoseStepMagnitude();
 
   if (g_failureCount == 0) {
     std::printf("OK: all PoseEstimator scenarios passed\n");

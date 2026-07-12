@@ -102,6 +102,21 @@ struct Blackboard {
   msg::DrivetrainState drivetrain;    // from Drivetrain
   msg::PoseEstimate encoderPose;      // from PoseEstimator
   msg::PoseEstimate fusedPose;        // from PoseEstimator
+  // bodyState (099-004, architecture-update.md Addition 2) -- reuses the
+  // existing msg::PoseEstimate shape (pose+twist+stamp): pose from
+  // fusedPose.pose, twist from BodyKinematics::forward() on the bound
+  // pair's directly-read wheel velocities, stamp from fusedPose.stamp.
+  // Published every pass by MainLoop::commit(); the ONE cell the follow-on
+  // motion-v2 subsystem's thin adapter is designed to read directly.
+  // Blackboard-only -- not on the wire this sprint (Decision 5).
+  msg::PoseEstimate bodyState;
+  // poseStepped (099-004, architecture-update.md Addition 1) -- the
+  // magnitude of whatever pose correction (SI reset this sprint; a delayed
+  // fix from 099-008 on) PoseEstimator applied on the immediately-prior
+  // tick() call; zero on every other tick. Published every pass by
+  // MainLoop::commit() from PoseEstimator::lastPoseStep(). Blackboard-only
+  // -- not on the wire this sprint (Decision 5).
+  msg::PoseStep poseStepped;
   msg::PlannerState planner;          // from Planner
   // (090-003) odometer sample fusable -- derived from Hal::Odometer::
   // fusableThisPass(), never a device-presence (`!= nullptr`) test; always

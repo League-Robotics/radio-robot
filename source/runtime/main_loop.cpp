@@ -3,18 +3,50 @@
 // tick(now)` -> `drivetrain_.tick(now, bb.segmentIn, bb.driveIn)` -> commit,
 // and deletes routeOutputs() -- Subsystems::Drivetrain (094-004) now stages
 // its own wheel writes directly through hardware_'s motor refs, so there is
-// nothing left to route.
+// nothing left to route. Sprint 099 ticket 099-004 adds a PoseEstimator
+// pass step (encoder-only this ticket -- see architecture-update.md D1's
+// pass pseudocode; OTOS fusion is ticket 099-007's "one-token flip").
 #include "runtime/main_loop.h"
+
+#include "kinematics/body_kinematics.h"
 
 namespace Rt {
 
-MainLoop::MainLoop(Subsystems::Hardware& hardware, Subsystems::Drivetrain& drivetrain)
-    : hardware_(hardware), drivetrain_(drivetrain) {}
+MainLoop::MainLoop(Subsystems::Hardware& hardware, Subsystems::Drivetrain& drivetrain,
+                    Subsystems::PoseEstimator& poseEstimator)
+    : hardware_(hardware), drivetrain_(drivetrain), poseEstimator_(poseEstimator) {}
 
 void MainLoop::commit(Blackboard& bb, uint32_t now) {
   // === COMMIT (clock edge): copy each subsystem cell into bb -> x[k+1]. ===
   bb.motors = hardware_.motorStates();
   bb.drivetrain = drivetrain_.state();
+
+  bb.encoderPose = poseEstimator_.encoderPose();
+  bb.fusedPose = poseEstimator_.fusedPose();
+  bb.poseStepped = poseEstimator_.lastPoseStep();
+
+  // bodyState (099-004, architecture-update.md Addition 2): pose from the
+  // SAME bb.fusedPose just committed above; twist via BodyKinematics::
+  // forward() on the bound pair's DIRECTLY-read wheel velocities (bb.motors[]
+  // was just refreshed above, from the SAME hardware_.tick() pass tick()'s
+  // own leftObs/rightObs reads came from -- reading it back here rather than
+  // threading leftObs/rightObs through commit()'s own signature) and
+  // poseEstimator_.trackwidth() (the ONE trackwidth source -- never a
+  // second, independently-configured copy; mirrors tlm_frame.cpp's own
+  // twist= derivation exactly). Differential-only this sprint: v_y stays 0.
+  uint32_t leftIdx = bb.drivetrainConfig.left_port - 1;
+  uint32_t rightIdx = bb.drivetrainConfig.right_port - 1;
+  const msg::MotorState& left = bb.motors[leftIdx];
+  const msg::MotorState& right = bb.motors[rightIdx];
+  float velLeft = left.velocity.has ? left.velocity.val : 0.0f;
+  float velRight = right.velocity.has ? right.velocity.val : 0.0f;
+
+  bb.bodyState.pose = bb.fusedPose.pose;
+  BodyKinematics::forward(velLeft, velRight, poseEstimator_.trackwidth(),
+                           bb.bodyState.twist.v_x, bb.bodyState.twist.omega);
+  bb.bodyState.twist.v_y = 0.0f;
+  bb.bodyState.stamp = bb.fusedPose.stamp;
+
   bb.loopNow = now;   // commit stamp for TLM now= (cmd='s true time)
 }
 
@@ -34,6 +66,29 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
   // above).
   hardware_.tick(now);
   drivetrain_.tick(now, bb.segmentIn, bb.replaceIn, bb.driveIn);
+
+  // === PoseEstimator (099-004): read the bound pair's FRESH MotorState
+  // (post hardware_.tick()/drivetrain_.tick() above -- mirrors tlm_frame.
+  // cpp's own left_port/right_port -> 0-based-index conversion pattern
+  // exactly) and tick PoseEstimator in ENCODER-ONLY mode -- otosObs is a
+  // literal nullptr this ticket; OTOS fusion is ticket 099-007's "one-token
+  // flip" (architecture-update.md, "Do not implement OTOS fusion..."). ===
+  uint32_t leftIdx = bb.drivetrainConfig.left_port - 1;
+  uint32_t rightIdx = bb.drivetrainConfig.right_port - 1;
+  msg::MotorState leftObs = hardware_.motorState(leftIdx);
+  msg::MotorState rightObs = hardware_.motorState(rightIdx);
+  poseEstimator_.tick(now, leftObs, rightObs, /*otosObs=*/nullptr, bb.poseResetIn,
+                       bb.otosSetPoseIn);
+
+  // A queued SI-equivalent re-anchor (BinaryChannel::handlePose(), 099-004)
+  // posts its freshly re-anchored fusedPose() here -- drain it into the
+  // ODOMETER's own setPose(), the existing, already-implemented
+  // Odometer::applySetPose() primitive (its own doc comment already names
+  // this exact call site as "ported verbatim from main_loop.cpp's former
+  // inline otosSetPoseIn drain").
+  if (!bb.otosSetPoseIn.empty()) {
+    hardware_.odometer()->applySetPose(bb.otosSetPoseIn.take());
+  }
 
   // === COMMIT (clock edge): x[k] -> x[k+1]. Nothing left to route --
   // Drivetrain already staged its own wheel writes above. ===

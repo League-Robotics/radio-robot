@@ -194,7 +194,7 @@ const char* cmdKindName(msg::CommandEnvelope::CmdKind k) {
     case msg::CommandEnvelope::CmdKind::SEGMENT: return "SEGMENT";
     case msg::CommandEnvelope::CmdKind::REPLACE: return "REPLACE";
     case msg::CommandEnvelope::CmdKind::CONFIG: return "CONFIG";
-    case msg::CommandEnvelope::CmdKind::POSE: return "POSE";
+    case msg::CommandEnvelope::CmdKind::POSE_FIX: return "POSE_FIX";
     case msg::CommandEnvelope::CmdKind::OTOS: return "OTOS";
     case msg::CommandEnvelope::CmdKind::PING: return "PING";
     case msg::CommandEnvelope::CmdKind::ECHO: return "ECHO";
@@ -370,7 +370,7 @@ int cmdDecode(const std::string& b64) {
     case msg::CommandEnvelope::CmdKind::STOP:
     case msg::CommandEnvelope::CmdKind::PING:
     case msg::CommandEnvelope::CmdKind::ID:
-    case msg::CommandEnvelope::CmdKind::POSE:
+    case msg::CommandEnvelope::CmdKind::POSE_FIX:
     case msg::CommandEnvelope::CmdKind::OTOS:
     case msg::CommandEnvelope::CmdKind::GET:
     case msg::CommandEnvelope::CmdKind::STREAM:

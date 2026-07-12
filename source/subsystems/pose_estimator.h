@@ -91,28 +91,40 @@ class PoseEstimator {
   //              resetEncoderBaseline() — neither method's own internals
   //              change; this is pure routing. An empty poseResetIn is a
   //              no-op, matching today's behavior when no SI/ZERO command is
-  //              in flight this pass (the wire-level routing of SI/ZERO INTO
-  //              this queue is ticket 006's job, out of this ticket's scope
-  //              — today's handlers still call setPose()/
-  //              resetEncoderBaseline() directly).
+  //              in flight this pass (099-004: the wire-level routing of
+  //              SI/ZERO INTO this queue is BinaryChannel::handlePose()'s
+  //              job, source/commands/binary_channel.cpp).
+  //   otosSetPoseOut — (099-004) the blackboard-sourced Mailbox<msg::SetPose>
+  //              a kSetPose drain (below) posts the freshly re-anchored
+  //              fusedPose() onto, mirroring bb.otosSetPoseIn's existing
+  //              shape exactly — MainLoop drains it into
+  //              hardware_.odometer()->applySetPose(...) the same way it
+  //              always has (architecture-update.md D1/D8). NOT posted to on
+  //              a kResetBaseline drain (no fused-pose change to propagate).
   //
   // Sequencing (see pose_estimator.cpp for the full rationale):
-  //   0. Drain poseResetIn completely (see above).
-  //   1. If leftObs.position or rightObs.position lacks .has, this tick's
+  //   0. lastPoseStep_ resets to {0, 0} — see lastPoseStep()'s own doc
+  //      comment below.
+  //   1. Drain poseResetIn completely (see above). A kSetPose entry also
+  //      computes lastPoseStep_ (‖Δp‖/|Δθ| of the fused pose, before vs.
+  //      after setPose()) and posts the resulting fusedPose() to
+  //      otosSetPoseOut; a kResetBaseline entry does neither.
+  //   2. If leftObs.position or rightObs.position lacks .has, this tick's
   //      update is skipped entirely — no encoder-accumulator advance, no EKF
   //      predict, no stale-data corruption. The previous-encoder baseline
   //      and last-tick timestamp are left untouched so the next valid tick's
   //      delta/dt span exactly the gap.
-  //   2. Otherwise: compute the encoder delta, midpoint-arc-integrate it into
+  //   3. Otherwise: compute the encoder delta, midpoint-arc-integrate it into
   //      the encoder-only accumulator (encoderPose()'s backing state).
-  //   3. EkfTiny::predict() runs unconditionally (dead-reckoning always
+  //   4. EkfTiny::predict() runs unconditionally (dead-reckoning always
   //      advances, whether or not an odometer is present).
-  //   4. EkfTiny::updatePosition()/updateHeading() run ONLY when otosObs is
+  //   5. EkfTiny::updatePosition()/updateHeading() run ONLY when otosObs is
   //      non-null and fresh (stamp.valid).
   void tick(uint32_t now, const msg::MotorState& leftObs,
             const msg::MotorState& rightObs,
             const msg::PoseEstimate* otosObs,
-            Rt::WorkQueue<Rt::PoseResetCommand, 4>& poseResetIn);
+            Rt::WorkQueue<Rt::PoseResetCommand, 4>& poseResetIn,
+            Rt::Mailbox<msg::SetPose>& otosSetPoseOut);
 
   // encoderPose — pure dead-reckoning pose (x, y, heading) from wheel
   // encoder deltas only. The EKF never writes here, ever. twist is left at
@@ -190,6 +202,16 @@ class PoseEstimator {
   // precedent (source/hal/sim/physics_world.h).
   float trackwidth() const { return trackwidth_; }
 
+  // lastPoseStep — (099-004, architecture-update.md Addition 1) the
+  // magnitude of whatever pose correction was applied on the immediately-
+  // PRIOR tick() call: a kSetPose drain (SI this sprint; a delayed fix from
+  // 099-008 on) sets this to the fused pose's |Δposition|/|Δheading|,
+  // before vs. after the correction; a kResetBaseline drain, or a tick with
+  // no queued reset at all, leaves it at {0, 0} — tick()'s own step 0 resets
+  // it to {0, 0} at the TOP of every call, so a stale non-zero value from
+  // two-or-more ticks ago never leaks forward.
+  msg::PoseStep lastPoseStep() const { return lastPoseStep_; }
+
  private:
   // sentinelOr — zero-as-unset substitution: returns fallback when
   // configured is exactly 0.0f, otherwise returns configured unchanged.
@@ -245,6 +267,11 @@ class PoseEstimator {
   // whose dt is genuinely > 0 (see resetEncoderBaseline()'s own doc comment
   // for why this must be deferred rather than applied synchronously).
   bool encBaselineResetPending_ = false;
+
+  // lastPoseStep_ -- 099-004 (architecture-update.md Addition 1) backing
+  // state for lastPoseStep() (above). Reset to {0, 0} at the TOP of every
+  // tick() call, then (re)computed by a kSetPose poseResetIn drain only.
+  msg::PoseStep lastPoseStep_ = {};
 
   // Encoder-only dead-reckoning accumulator (this class's own state — the
   // EKF never writes here). Backs encoderPose().
