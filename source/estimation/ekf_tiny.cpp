@@ -46,6 +46,11 @@ void EkfTiny::init(float qXy, float qTheta, float rOtosXy, float rOtosTheta) {
 
   for (int i = 0; i < EKF_N; ++i) ekf_.x[i] = 0.0f;
   for (int i = 0; i < EKF_N * EKF_N; ++i) ekf_.P[i] = 0.0f;
+
+  // Boot-only reset also clears the gate's per-channel streak state (099
+  // D4) -- a fresh init() means a fresh gate, same as a fresh filter.
+  rejPosStreak_ = 0;
+  rejHeadStreak_ = 0;
 }
 
 // ===========================================================================
@@ -118,8 +123,12 @@ void EkfTiny::predict(float dCenter, float dTheta, float thetaBefore, float dt) 
 // S^-1 is computed analytically (det = s00*s11 - s01*s10) — same as the old
 // class — to avoid the Cholesky-based ekf_update()/invert() path for a 2x2.
 // Gain and update are applied manually (no ekf_update() call) so the
-// analytic S^-1 is used end-to-end. No gating/rejection/P-inflation logic —
-// see ekf_tiny.h's file header for what was deliberately dropped.
+// analytic S^-1 is used end-to-end.
+//
+// Sprint 099 D4 bounded innovation-consistency gate: see ekf_tiny.h's doc
+// comment on this method for the full behavior. The Mahalanobis d^2
+// REUSES the S^-1 computed below for the Kalman gain — it is never
+// recomputed.
 // ===========================================================================
 void EkfTiny::updatePosition(float xOtos, float yOtos) {
   // Innovation.
@@ -132,8 +141,8 @@ void EkfTiny::updatePosition(float xOtos, float yOtos) {
   float s10 = ekf_.P[1 * EKF_N + 0];
   float s11 = ekf_.P[1 * EKF_N + 1] + rOtosXy_;
 
-  // Numerical safety only (NOT Mahalanobis gating): skip a genuinely
-  // singular S rather than divide by ~0.
+  // Numerical safety only (NOT the Mahalanobis gate below): skip a
+  // genuinely singular S rather than divide by ~0.
   float det = s00 * s11 - s01 * s10;
   if (det > -1e-9f && det < 1e-9f) {
     return;
@@ -143,6 +152,27 @@ void EkfTiny::updatePosition(float xOtos, float yOtos) {
   float si01 = -s01 * invDet;
   float si10 = -s10 * invDet;
   float si11 = s00 * invDet;
+
+  // --- Innovation-consistency gate (D4): Mahalanobis d^2 = y^T S^-1 y,
+  // reusing the analytic S^-1 computed above (never recomputed). Reject
+  // (return without modifying state) when d^2 exceeds the documented
+  // starting 2-DOF chi-square critical value. ---
+  float d2 = yi0 * (si00 * yi0 + si01 * yi1) + yi1 * (si10 * yi0 + si11 * yi1);
+  if (d2 > kChiSquare2Dof99) {
+    ++rejPosStreak_;
+    if (rejPosStreak_ % kRejectStreakThreshold == 0) {
+      // Gradual, bounded widening — never a hard reset — so a genuinely-
+      // shifted OTOS is eventually re-trusted rather than locked out
+      // forever. Capped so a permanently-disagreeing sensor cannot inflate
+      // P without bound.
+      float p00 = ekf_.P[0 * EKF_N + 0] + kPInflationBumpXY;
+      float p11 = ekf_.P[1 * EKF_N + 1] + kPInflationBumpXY;
+      ekf_.P[0 * EKF_N + 0] = (p00 < kPInflationCapXY) ? p00 : kPInflationCapXY;
+      ekf_.P[1 * EKF_N + 1] = (p11 < kPInflationCapXY) ? p11 : kPInflationCapXY;
+    }
+    return;
+  }
+  rejPosStreak_ = 0;
 
   // Kalman gain K = P*H^T * S^-1 (EKF_N x 2). P*H^T selects columns 0/1 of P.
   float k00 = ekf_.P[0 * EKF_N + 0] * si00 + ekf_.P[0 * EKF_N + 1] * si10;
@@ -185,18 +215,34 @@ void EkfTiny::updatePosition(float xOtos, float yOtos) {
 // ===========================================================================
 // updateHeading — fuse a heading observation (e.g. OTOS heading) as a scalar
 // (1-DOF) Kalman update. Applied manually (no ekf_update() call) — same
-// numerical path as the old class. No gating/rejection/P-inflation logic —
-// see ekf_tiny.h's file header for what was deliberately dropped.
+// numerical path as the old class.
+//
+// Sprint 099 D4 bounded innovation-consistency gate: see ekf_tiny.h's doc
+// comment on this method for the full behavior.
 // ===========================================================================
 void EkfTiny::updateHeading(float thetaOtos) {
   // Wrap-safe innovation.
   float y = wrapPi(thetaOtos - ekf_.x[2]);
   float s = ekf_.P[2 * EKF_N + 2] + rOtosTheta_;
 
-  // Numerical safety only (NOT chi-square gating): skip a degenerate S.
+  // Numerical safety only (NOT the sigma gate below): skip a degenerate S.
   if (s <= 1e-12f) {
     return;
   }
+
+  // --- Innovation-consistency gate (D4): reject when |y| exceeds
+  // kHeadingSigma standard deviations of S. ---
+  if (fabsf(y) > kHeadingSigma * sqrtf(s)) {
+    ++rejHeadStreak_;
+    if (rejHeadStreak_ % kRejectStreakThreshold == 0) {
+      // Gradual, bounded widening — never a hard reset (mirrors
+      // updatePosition()'s recovery mechanism exactly).
+      float p22 = ekf_.P[2 * EKF_N + 2] + kPInflationBumpTheta;
+      ekf_.P[2 * EKF_N + 2] = (p22 < kPInflationCapTheta) ? p22 : kPInflationCapTheta;
+    }
+    return;
+  }
+  rejHeadStreak_ = 0;
 
   float k0 = ekf_.P[0 * EKF_N + 2] / s;
   float k1 = ekf_.P[1 * EKF_N + 2] / s;

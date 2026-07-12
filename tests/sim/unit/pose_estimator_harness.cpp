@@ -230,7 +230,19 @@ void scenarioOtosDivergesFusedFromEncoder() {
 
   // Feed a run of OTOS observations persistently offset ahead of the
   // encoder-only path in x.
-  const float kOffsetX = 150.0f;  // [mm]
+  //
+  // 099-006: this offset was 150mm before ticket 006 added EkfTiny's
+  // bounded innovation-consistency gate (D4). 150mm is now a genuinely-
+  // shifted-sensor-class disagreement (d^2 far past the chi-square
+  // threshold at this scenario's noise level) that the gate correctly
+  // rejects tick after tick within these 8 ticks -- proving the NEW,
+  // correct behavior, not the OLD unconditional-accept one. 60mm keeps
+  // this scenario testing what it always meant to test ("the correction
+  // step actually executes") by staying inside the gate at every one of
+  // these 8 ticks (d^2 <= ~2.7, comfortably under the 9.21 threshold), and
+  // still produces a >10mm measurable divergence (see the assertion below)
+  // once the one-tick lag between `refEnc` and the correction settles out.
+  const float kOffsetX = 60.0f;  // [mm]
   for (int i = 0; i < 8; ++i) {
     now += 20;
     cumLeft += 40.0f;
@@ -290,7 +302,13 @@ void scenarioZeroConfigSentinelKeepsFusionFiniteAndCorrected() {
     pe.tick(now, motorStateAt(cumLeft), motorStateAt(cumRight), nullptr, poseResetIn, otosSetPoseOut);
   }
 
-  const float kOffsetX = 150.0f;  // [mm]
+  // 099-006: see scenario (b)'s matching comment -- this offset was 150mm
+  // before ticket 006's gate; 60mm stays inside it at every tick (same
+  // noise config as (b): kDefaultQXy/kDefaultQTheta/kDefaultROtosXy/
+  // kDefaultROtosTheta are the sentinel-default fallback for this
+  // all-zero-config scenario, numerically identical to (b)'s explicit
+  // 800/4/50/0.01).
+  const float kOffsetX = 60.0f;  // [mm]
   for (int i = 0; i < 8; ++i) {
     now += 20;
     cumLeft += 40.0f;
