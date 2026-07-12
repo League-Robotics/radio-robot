@@ -1,7 +1,7 @@
 ---
 id: 097
 title: 'Protocol v3 Sprint 3: Host completion and text retirement'
-status: planning-docs
+status: done
 branch: sprint/097-protocol-v3-sprint-3-host-completion-and-text-retirement
 use-cases: []
 issues:
