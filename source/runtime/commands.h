@@ -228,6 +228,15 @@ enum class MotorConfigField : uint8_t {
 };
 
 // One bit position per top-level field of msg::PlannerConfig.
+//
+// kHeadingKp/kHeadingKd (098-005/M7): msg::PlannerConfig grew these two
+// fields in ticket 098-001 (heading_kp/heading_kd, the outer heading-loop PD
+// gains, source/messages/planner.h) but this enum -- and foldPlanner()'s
+// matching fold lines, configurator.cpp -- were never extended to cover
+// them, leaving the two fields this whole sprint exists to make live-tunable
+// UNREACHABLE from any Rt::ConfigDelta. Added here to close that gap, one
+// bit position per the established pattern (no new capability beyond what
+// every other field here already has).
 enum class PlannerConfigField : uint8_t {
   kAMax,
   kADecel,
@@ -239,6 +248,8 @@ enum class PlannerConfigField : uint8_t {
   kArriveTol,
   kTurnInPlaceGate,
   kMinSpeed,
+  kHeadingKp,
+  kHeadingKd,
 };
 
 // One bit position per top-level field of msg::OdometerConfig.
