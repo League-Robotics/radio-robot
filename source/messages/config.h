@@ -29,6 +29,8 @@ struct DrivetrainConfigPatch {
     Opt<float> ekf_q_theta = {};
     Opt<float> ekf_r_otos_xy = {};
     Opt<float> ekf_r_otos_theta = {};
+    Opt<float> ekf_r_fix_xy = {};
+    Opt<float> ekf_r_fix_theta = {};
 
     // --- array / optional-string accessors ---
 };

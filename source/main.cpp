@@ -125,6 +125,19 @@ int hardware_main() {
     // Holds no hardware reference (pose_estimator.h: "holds NO Hal::Motor/
     // Hal::Odometer reference or pointer"). ---
     static Subsystems::PoseEstimator poseEstimator;
+    // 099-008: seed the SAME boot dtConfig drivetrain.configure() (above)
+    // already took -- a pre-existing gap (present since ticket 099-004
+    // first constructed poseEstimator here) this ticket closes: without
+    // this call, EkfTiny::init() is never reached at boot, so its q/r
+    // noise matrices stay at their C++ zero-default forever, P never grows
+    // off zero, and EVERY EkfTiny update channel (gated OTOS, ungated
+    // delayed-fix) silently no-ops via the numerically-singular-S safety
+    // guard (ekf_tiny.cpp's computePositionGain()/computeHeadingGain()) --
+    // discovered while verifying this ticket's own end-to-end sim test
+    // (a delayed fix produced zero measurable correction until this line
+    // was added). Mirrors drivetrain.configure(dtConfig) immediately above
+    // exactly -- same dtConfig, same boot-only timing.
+    poseEstimator.configure(dtConfig);
 
     // --- Configurator (098-005/M7): the one live config-application
     // authority (source/runtime/configurator.h's class comment) -- seeded

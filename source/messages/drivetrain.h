@@ -183,6 +183,8 @@ struct DrivetrainConfig {
     int32_t drivetrain_type = 0;
     uint32_t left_port = 0;
     uint32_t right_port = 0;
+    float ekf_r_fix_xy = 0.0f;
+    float ekf_r_fix_theta = 0.0f;
 
     // --- array / optional-string accessors ---
     const float* travel_calib_wheel() const { return travel_calib_wheel_; }
@@ -232,6 +234,8 @@ struct DrivetrainConfig {
     DrivetrainConfig& setDrivetrainType(int32_t v) { drivetrain_type = v; return *this; }
     DrivetrainConfig& setLeftPort(uint32_t v) { left_port = v; return *this; }
     DrivetrainConfig& setRightPort(uint32_t v) { right_port = v; return *this; }
+    DrivetrainConfig& setEkfRFixXy(float v) { ekf_r_fix_xy = v; return *this; }
+    DrivetrainConfig& setEkfRFixTheta(float v) { ekf_r_fix_theta = v; return *this; }
 };
 
 // DrivetrainCapabilities

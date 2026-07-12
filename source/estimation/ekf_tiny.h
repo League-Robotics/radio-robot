@@ -158,6 +158,32 @@ class EkfTiny {
   // never the delayed camera-fix path.
   void updateHeading(float thetaOtos);   // [rad]
 
+  // Sprint 099, ticket 008 (D5): dedicated UNGATED position/heading update
+  // entry points for a delayed camera fix. Each routes through the EXACT
+  // SAME Kalman-update math the gated method above uses (computePositionGain()
+  // /applyPositionGain(), computeHeadingGain()/applyHeadingGain() -- private
+  // helpers below, shared by both the gated and ungated public methods) --
+  // but performs NO Mahalanobis/sigma gate check and touches NEITHER
+  // channel's rejection-streak counter. The camera is treated as an
+  // authoritative absolute source (architecture-update.md D5) -- ticket
+  // 006's gate exists ONLY to protect the OTOS channel; it must never apply
+  // to a delayed camera fix.
+  //   xFix/yFix/thetaFix -- the composed implied world pose from
+  //                         PoseEstimator's rigid-compose step (already in
+  //                         this filter's world frame -- no further
+  //                         transform here).
+  //   rFixXy/rFixTheta   -- PoseEstimator-owned noise (ekf_r_fix_xy/
+  //                         ekf_r_fix_theta, zero-as-unset sentinelOr()'d
+  //                         the same way rOtosXy_/rOtosTheta_ are at
+  //                         configure() time) -- passed per-call rather
+  //                         than stored as EkfTiny state, since a delayed
+  //                         fix's noise value only matters at the rare
+  //                         moment a fix actually arrives, unlike the OTOS
+  //                         noise, which every predict-adjacent
+  //                         updatePosition()/updateHeading() call needs.
+  void updatePositionUngated(float xFix, float yFix, float rFixXy);      // [mm] [mm] [mm^2]
+  void updateHeadingUngated(float thetaFix, float rFixTheta);            // [rad] [rad^2]
+
   // Accessors.
   float x() const;       // [mm]
   float y() const;       // [mm]
@@ -182,6 +208,36 @@ class EkfTiny {
   // class's kPriorXY/kPriorTheta exactly.
   static constexpr float kPriorXY = 100.0f;       // [mm^2]
   static constexpr float kPriorTheta = 0.00762f;  // [rad^2] (5 deg)^2
+
+  // --- Shared Kalman-update core (099-008, D5) ---
+  // The position/heading channels are each split into a "compute gain" step
+  // (innovation, S, S^-1/1/s, Mahalanobis/sigma statistic, Kalman gain — NO
+  // state mutation) and an "apply gain" step (the actual x/P mutation).
+  // updatePosition()/updateHeading() (gated) call computeXGain() FIRST, gate
+  // on its returned statistic, and only call applyXGain() on accept.
+  // updatePositionUngated()/updateHeadingUngated() call the identical pair
+  // back-to-back with no gate in between. Neither public method has its own
+  // copy of the Kalman math — this is what "shares the same core" means
+  // structurally, not just in prose.
+  struct PositionGain {
+    float yi0, yi1;                       // innovation
+    float k00, k01, k10, k11, k20, k21;   // Kalman gain (EKF_N x 2)
+    float d2;                             // Mahalanobis y^T S^-1 y (gated caller's own statistic)
+  };
+  // Returns false only on a numerically singular S (a safety guard, NOT the
+  // D4 consistency gate) — state is never mutated by this call either way.
+  bool computePositionGain(float xObs, float yObs, float r, PositionGain* out) const;
+  void applyPositionGain(const PositionGain& g);
+
+  struct HeadingGain {
+    float y;        // wrap-safe innovation
+    float s;        // innovation covariance (scalar) — the sigma-gate's own denominator
+    float k0, k1, k2;
+  };
+  // Returns false only on a degenerate S (same safety-guard-only contract
+  // as computePositionGain() above).
+  bool computeHeadingGain(float thetaObs, float r, HeadingGain* out) const;
+  void applyHeadingGain(const HeadingGain& g);
 
   // --- Bounded innovation-consistency gate (architecture-update.md sprint
   // 099 Decision 4) — protects updatePosition()/updateHeading() (the OTOS

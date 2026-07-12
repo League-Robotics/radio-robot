@@ -134,6 +134,29 @@ msg::DrivetrainConfig makeConfig(float trackwidth, float rotationalSlip,
   return cfg;
 }
 
+// driveStraightTicks -- 099-008 convenience helper: ticks `pe` straight
+// (dTheta == 0 -- both wheels advance by the SAME `stepMm` each tick, so
+// encX_(t) is EXACTLY linear in t: encX_ == t - firstTickMs, since the very
+// first application is the pre-existing zero-delta warm-up tick) for
+// `count` ticks of `tickMs` each, mutating now/cumLeft/cumRight IN PLACE so
+// a caller can interleave multiple driveStraightTicks() calls with fix/
+// reset dispatches and keep accumulating from where it left off. Posts
+// nothing to poseResetIn/poseFixIn itself -- pure encoder motion, matching
+// every straight-line scenario elsewhere in this file.
+void driveStraightTicks(Subsystems::PoseEstimator& pe, int count, float stepMm, uint32_t tickMs,
+                         uint32_t& now, float& cumLeft, float& cumRight,
+                         Rt::WorkQueue<Rt::PoseResetCommand, 4>& poseResetIn,
+                         Rt::Mailbox<msg::SetPose>& otosSetPoseOut,
+                         Rt::Mailbox<Rt::PoseFixCommand>& poseFixIn) {
+  for (int i = 0; i < count; ++i) {
+    now += tickMs;
+    cumLeft += stepMm;
+    cumRight += stepMm;
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn,
+            otosSetPoseOut, poseFixIn);
+  }
+}
+
 // --- Scenarios ------------------------------------------------------------
 
 // (a) otosObs always nullptr: fusedPose() must equal encoderPose() exactly
@@ -157,6 +180,7 @@ void scenarioNoOtosFusedMatchesEncoderExactly() {
   // (see the queue-driven scenarios below for coverage of a non-empty one).
   Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
   Rt::Mailbox<msg::SetPose> otosSetPoseOut;
+  Rt::Mailbox<Rt::PoseFixCommand> poseFixIn;
 
   struct Step {
     float dLeft;
@@ -178,7 +202,7 @@ void scenarioNoOtosFusedMatchesEncoderExactly() {
     now += 20;
     cumLeft += s.dLeft;
     cumRight += s.dRight;
-    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut, poseFixIn);
 
     msg::PoseEstimate enc = pe.encoderPose();
     msg::PoseEstimate fused = pe.fusedPose();
@@ -218,6 +242,7 @@ void scenarioOtosDivergesFusedFromEncoder() {
   // 087-004: never posted to in this scenario -- see scenario (a)'s comment.
   Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
   Rt::Mailbox<msg::SetPose> otosSetPoseOut;
+  Rt::Mailbox<Rt::PoseFixCommand> poseFixIn;
 
   uint32_t now = 0;
   float cumLeft = 0.0f;
@@ -230,7 +255,7 @@ void scenarioOtosDivergesFusedFromEncoder() {
     now += 20;
     cumLeft += 40.0f;
     cumRight += 40.0f;
-    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut, poseFixIn);
   }
 
   msg::PoseEstimate encBefore = pe.encoderPose();
@@ -267,7 +292,7 @@ void scenarioOtosDivergesFusedFromEncoder() {
     msg::PoseEstimate otos =
         otosAt(refEnc.pose.x + kOffsetX, refEnc.pose.y, refEnc.pose.h, now);
 
-    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), &otos, poseResetIn, otosSetPoseOut);
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), &otos, poseResetIn, otosSetPoseOut, poseFixIn);
   }
 
   msg::PoseEstimate encAfter = pe.encoderPose();
@@ -301,6 +326,7 @@ void scenarioZeroConfigSentinelKeepsFusionFiniteAndCorrected() {
   // 087-004: never posted to in this scenario -- see scenario (a)'s comment.
   Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
   Rt::Mailbox<msg::SetPose> otosSetPoseOut;
+  Rt::Mailbox<Rt::PoseFixCommand> poseFixIn;
 
   uint32_t now = 0;
   float cumLeft = 0.0f;
@@ -310,7 +336,7 @@ void scenarioZeroConfigSentinelKeepsFusionFiniteAndCorrected() {
     now += 20;
     cumLeft += 40.0f;
     cumRight += 40.0f;
-    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut, poseFixIn);
   }
 
   // 099-006: see scenario (b)'s matching comment -- this offset was 150mm
@@ -329,7 +355,7 @@ void scenarioZeroConfigSentinelKeepsFusionFiniteAndCorrected() {
     msg::PoseEstimate otos =
         otosAt(refEnc.pose.x + kOffsetX, refEnc.pose.y, refEnc.pose.h, now);
 
-    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), &otos, poseResetIn, otosSetPoseOut);
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), &otos, poseResetIn, otosSetPoseOut, poseFixIn);
   }
 
   msg::PoseEstimate enc = pe.encoderPose();
@@ -393,6 +419,7 @@ void scenarioPoseResetInDrainsKSetPoseMatchesDirectSetPose() {
 
   Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
   Rt::Mailbox<msg::SetPose> otosSetPoseOut;
+  Rt::Mailbox<Rt::PoseFixCommand> poseFixIn;
 
   uint32_t now = 0;
   float cumLeft = 0.0f;
@@ -401,7 +428,7 @@ void scenarioPoseResetInDrainsKSetPoseMatchesDirectSetPose() {
     now += 20;
     cumLeft += 40.0f;
     cumRight += 40.0f;
-    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut, poseFixIn);
   }
 
   // SI arrives: post kSetPose re-anchoring to a known world pose, delivered
@@ -420,7 +447,7 @@ void scenarioPoseResetInDrainsKSetPoseMatchesDirectSetPose() {
   setPoseCmd.pose = target;
   checkTrue(poseResetIn.post(setPoseCmd), "post() succeeds");
 
-  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut, poseFixIn);
   checkTrue(poseResetIn.empty(), "tick() drained the posted kSetPose command");
 
   msg::PoseEstimate afterReanchor = pe.encoderPose();
@@ -445,7 +472,7 @@ void scenarioPoseResetInDrainsKSetPoseMatchesDirectSetPose() {
   now += 20;
   cumLeft += 40.0f;
   cumRight += 40.0f;
-  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut, poseFixIn);
   msg::PoseEstimate afterFreshMotion = pe.encoderPose();
   checkTrue(afterFreshMotion.pose.x > afterReanchor.pose.x - 1.0f &&
                 afterFreshMotion.pose.x < afterReanchor.pose.x + 60.0f,
@@ -471,6 +498,7 @@ void scenarioPoseResetInDrainsKResetBaselineNoPhantomJump() {
 
   Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
   Rt::Mailbox<msg::SetPose> otosSetPoseOut;
+  Rt::Mailbox<Rt::PoseFixCommand> poseFixIn;
 
   uint32_t now = 0;
   float cumLeft = 0.0f;
@@ -481,7 +509,7 @@ void scenarioPoseResetInDrainsKResetBaselineNoPhantomJump() {
     now += 20;
     cumLeft += 40.0f;
     cumRight += 40.0f;
-    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut, poseFixIn);
   }
   msg::PoseEstimate beforeReset = pe.encoderPose();
 
@@ -494,7 +522,7 @@ void scenarioPoseResetInDrainsKResetBaselineNoPhantomJump() {
   resetCmd.kind = Rt::PoseResetCommand::kResetBaseline;
   checkTrue(poseResetIn.post(resetCmd), "post() succeeds");
 
-  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);   // dt == 0 (same now)
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut, poseFixIn);   // dt == 0 (same now)
   checkTrue(poseResetIn.empty(), "tick() drained the posted kResetBaseline command");
 
   msg::PoseEstimate afterSamePassTick = pe.encoderPose();
@@ -512,7 +540,7 @@ void scenarioPoseResetInDrainsKResetBaselineNoPhantomJump() {
   // jump. With the deferred guard, this pass's own delta is treated as zero
   // motion (the first reading after a fresh baseline).
   now += 20;
-  pe.tick(now, motorStateAt(0.0f, now), motorStateAt(0.0f, now), nullptr, poseResetIn, otosSetPoseOut);
+  pe.tick(now, motorStateAt(0.0f, now), motorStateAt(0.0f, now), nullptr, poseResetIn, otosSetPoseOut, poseFixIn);
   msg::PoseEstimate afterRebaselineTick = pe.encoderPose();
   checkNear(afterRebaselineTick.pose.x, afterSamePassTick.pose.x, 0.0f,
             "the rebaseline-landing tick produces ZERO delta -- no phantom jump "
@@ -524,7 +552,7 @@ void scenarioPoseResetInDrainsKResetBaselineNoPhantomJump() {
   // produces a normal, bounded delta -- proves the class is still tracking
   // correctly afterward, not just frozen.
   now += 20;
-  pe.tick(now, motorStateAt(40.0f, now), motorStateAt(40.0f, now), nullptr, poseResetIn, otosSetPoseOut);
+  pe.tick(now, motorStateAt(40.0f, now), motorStateAt(40.0f, now), nullptr, poseResetIn, otosSetPoseOut, poseFixIn);
   msg::PoseEstimate afterFreshMotion = pe.encoderPose();
   checkTrue(afterFreshMotion.pose.x > afterRebaselineTick.pose.x,
             "motion off the fresh rezeroed baseline advances encoderPose() normally");
@@ -545,6 +573,7 @@ void scenarioOtosSetPoseOutAndLastPoseStepMagnitude() {
 
   Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
   Rt::Mailbox<msg::SetPose> otosSetPoseOut;
+  Rt::Mailbox<Rt::PoseFixCommand> poseFixIn;
 
   uint32_t now = 0;
   float cumLeft = 0.0f;
@@ -556,7 +585,7 @@ void scenarioOtosSetPoseOutAndLastPoseStepMagnitude() {
     now += 20;
     cumLeft += 40.0f;
     cumRight += 55.0f;
-    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut, poseFixIn);
     checkTrue(otosSetPoseOut.empty(), "otosSetPoseOut stays empty when no reset is queued");
     msg::PoseStep step = pe.lastPoseStep();
     checkNear(step.pos, 0.0f, 0.0f, "lastPoseStep().pos is zero on an ordinary tick");
@@ -587,7 +616,7 @@ void scenarioOtosSetPoseOutAndLastPoseStepMagnitude() {
   float expectedPos = std::sqrt(expectedDx * expectedDx + expectedDy * expectedDy);
   float expectedTheta = std::fabs(target.h - before.pose.h);
 
-  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut, poseFixIn);
 
   checkTrue(poseResetIn.empty(), "tick() drained the posted kSetPose command");
   checkTrue(!otosSetPoseOut.empty(), "otosSetPoseOut received exactly one post for the applied kSetPose");
@@ -607,7 +636,7 @@ void scenarioOtosSetPoseOutAndLastPoseStepMagnitude() {
   now += 20;
   cumLeft += 40.0f;
   cumRight += 40.0f;
-  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut, poseFixIn);
   checkTrue(otosSetPoseOut.empty(),
             "otosSetPoseOut stays empty the tick after the reset -- posted exactly once, not every tick");
   msg::PoseStep stepAfter = pe.lastPoseStep();
@@ -621,7 +650,7 @@ void scenarioOtosSetPoseOutAndLastPoseStepMagnitude() {
   resetCmd.kind = Rt::PoseResetCommand::kResetBaseline;
   checkTrue(poseResetIn.post(resetCmd), "post() succeeds");
   now += 20;
-  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn, otosSetPoseOut, poseFixIn);
   checkTrue(poseResetIn.empty(), "tick() drained the posted kResetBaseline command");
   checkTrue(otosSetPoseOut.empty(), "kResetBaseline never posts to otosSetPoseOut");
   msg::PoseStep stepReset = pe.lastPoseStep();
@@ -687,18 +716,19 @@ void scenarioStaggeredSampleTimingMatchesSynchronousTotalNoLocalMisattribution()
   baseline.configure(makeConfig(kTrackwidth, kSlip, 800.0f, 4.0f, 50.0f, 0.01f));
   Rt::WorkQueue<Rt::PoseResetCommand, 4> baselineResetIn;
   Rt::Mailbox<msg::SetPose> baselineSetPoseOut;
+  Rt::Mailbox<Rt::PoseFixCommand> baselineFixIn;
 
   uint32_t now = 0;
   float cumLeft = 0.0f;
   float cumRight = 0.0f;
   baseline.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now),
-                nullptr, baselineResetIn, baselineSetPoseOut);   // warm-up
+                nullptr, baselineResetIn, baselineSetPoseOut, baselineFixIn);   // warm-up
   for (const Segment& seg : segments) {
     now += 20;
     cumLeft += seg.dL;
     cumRight += seg.dR;
     baseline.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now),
-                  nullptr, baselineResetIn, baselineSetPoseOut);
+                  nullptr, baselineResetIn, baselineSetPoseOut, baselineFixIn);
   }
   msg::PoseEstimate baselineFinal = baseline.encoderPose();
 
@@ -717,6 +747,7 @@ void scenarioStaggeredSampleTimingMatchesSynchronousTotalNoLocalMisattribution()
   staggered.configure(makeConfig(kTrackwidth, kSlip, 800.0f, 4.0f, 50.0f, 0.01f));
   Rt::WorkQueue<Rt::PoseResetCommand, 4> stagResetIn;
   Rt::Mailbox<msg::SetPose> stagSetPoseOut;
+  Rt::Mailbox<Rt::PoseFixCommand> stagFixIn;
 
   uint32_t stagNow = 20;
   float stagLeft = 0.0f;
@@ -725,7 +756,7 @@ void scenarioStaggeredSampleTimingMatchesSynchronousTotalNoLocalMisattribution()
   uint32_t stagRightSampledAt = stagNow;
   staggered.tick(stagNow, motorStateAt(stagLeft, stagLeftSampledAt),
                  motorStateAt(stagRight, stagRightSampledAt), nullptr,
-                 stagResetIn, stagSetPoseOut);
+                 stagResetIn, stagSetPoseOut, stagFixIn);
 
   int segIndex = 0;
   for (const Segment& seg : segments) {
@@ -738,7 +769,7 @@ void scenarioStaggeredSampleTimingMatchesSynchronousTotalNoLocalMisattribution()
     msg::PoseEstimate beforeLeftOnly = staggered.encoderPose();
     staggered.tick(stagNow, motorStateAt(stagLeft, stagLeftSampledAt),
                    motorStateAt(stagRight, stagRightSampledAt), nullptr,
-                   stagResetIn, stagSetPoseOut);
+                   stagResetIn, stagSetPoseOut, stagFixIn);
     msg::PoseEstimate afterLeftOnly = staggered.encoderPose();
 
     char label[96];
@@ -785,7 +816,7 @@ void scenarioStaggeredSampleTimingMatchesSynchronousTotalNoLocalMisattribution()
     stagRightSampledAt = stagNow;
     staggered.tick(stagNow, motorStateAt(stagLeft, stagLeftSampledAt),
                    motorStateAt(stagRight, stagRightSampledAt), nullptr,
-                   stagResetIn, stagSetPoseOut);
+                   stagResetIn, stagSetPoseOut, stagFixIn);
 
     ++segIndex;
   }
@@ -804,6 +835,521 @@ void scenarioStaggeredSampleTimingMatchesSynchronousTotalNoLocalMisattribution()
             "synchronous-pair baseline exactly");
 }
 
+// ===========================================================================
+// 099-008 (architecture-update.md D5-D8): delayed camera-fix scenarios --
+// pose-history ring, interpolate/compose, ungated EKF update.
+//
+// Every scenario below drives STRAIGHT (dTheta == 0, both wheels advancing
+// by the SAME kStepMm every kTickMs) so encX_(t) is EXACTLY linear in
+// (post-warm-up) tick time: encX_(now) == now - kTickMs, independent of
+// the ring's own recording cadence. This makes "what SHOULD enc(T) be"
+// hand-computable by simple arithmetic (t - kTickMs) rather than requiring
+// a second copy of the arc-integration math, while still genuinely
+// exercising the ring/interpolate/compose pipeline: a broken interpolation
+// (e.g. returning the wrong ring entry, or not interpolating at all) would
+// make the observed post-fix fusedPose() diverge from the hand-computed
+// expectation by an amount far larger than these scenarios' tight
+// tolerances allow (see each scenario's own comment for the specific
+// divergence a bug would produce).
+//
+// A near-total-trust noise pair (kTinyR) is used for the interpolation/
+// compose/clamp scenarios specifically so the Kalman gain is close enough
+// to 1.0 that fusedPose() converges to the ALGEBRAICALLY exact composed
+// target within a tight tolerance -- proving the compose math itself, not
+// just "some correction happened." The default-fallback (sentinelOr) noise
+// is exercised instead where the scenario's own point is mechanism
+// (otosSetPoseOut/lastPoseStep/ring survival), not exact convergence.
+// ===========================================================================
+
+namespace {
+constexpr float kStepMm = 20.0f;     // [mm] both wheels, every tick -- dTheta == 0
+constexpr uint32_t kTickMs = 20;     // [ms]
+constexpr float kTinyR = 1e-6f;      // [mm^2] / [rad^2] -- near-total-trust noise
+}  // namespace
+
+// (i) interpolation BETWEEN two ring entries, vs. a hand-computed oracle.
+void scenarioFixInterpolationBetweenRingEntries() {
+  beginScenario(
+      "099-008: delayed fix interpolates BETWEEN two ring entries -- "
+      "composed correction matches a hand-computed oracle");
+
+  Subsystems::PoseEstimator pe;
+  msg::DrivetrainConfig cfg = makeConfig(128.0f, 0.92f, 800.0f, 4.0f, 50.0f, 0.01f);
+  cfg.ekf_r_fix_xy = kTinyR;
+  cfg.ekf_r_fix_theta = kTinyR;
+  pe.configure(cfg);
+
+  Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+  Rt::Mailbox<msg::SetPose> otosSetPoseOut;
+  Rt::Mailbox<Rt::PoseFixCommand> poseFixIn;
+
+  uint32_t now = 0;
+  float cumLeft = 0.0f;
+  float cumRight = 0.0f;
+  // 8 ticks -> ring entries land at t=20 (first, immediate), 80, 140 (the
+  // 50ms-vs-20ms-tick interaction documented in pose_estimator.h's own
+  // class comment); encX_(160) == 140 (== 160 - 20, the warm-up offset).
+  driveStraightTicks(pe, 8, kStepMm, kTickMs, now, cumLeft, cumRight, poseResetIn,
+                      otosSetPoseOut, poseFixIn);
+
+  msg::PoseEstimate encNow = pe.encoderPose();
+  checkNear(encNow.pose.x, 140.0f, 1e-3f, "sanity: encoderPose().pose.x == 140 after 8 ticks");
+
+  // T=100 falls strictly between the ring entries at t=80 (x=60) and
+  // t=140 (x=120) -- hand-computed oracle (linear, since motion is
+  // straight): enc(100) == 80.
+  const uint32_t kT = 100;
+  const float kOracleEncAtT = 80.0f;
+  const float kOffsetX = 300.0f;   // [mm] the "camera" claims the robot was this far ahead
+
+  Rt::PoseFixCommand fix;
+  fix.x = kOracleEncAtT + kOffsetX;
+  fix.y = 0.0f;
+  fix.h = 0.0f;
+  fix.t = kT;
+  poseFixIn.post(fix);
+  // Same-pass (dt==0) re-dispatch, mirroring every other scenario in this
+  // file's "SI/reset arrives, apply on the next tick() at the SAME now"
+  // pattern (e.g. scenario (e)/(g) above).
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn,
+          otosSetPoseOut, poseFixIn);
+
+  // implied.x = fix.x + (encNow.x - enc(T).x) = encNow.x + kOffsetX,
+  // REGARDLESS of the exact value of enc(T), PROVIDED the internal
+  // interpolation computes the SAME enc(T) this oracle does -- if it
+  // computed a different enc(T) (e.g. returned the wrong ring entry, or
+  // didn't interpolate at all), the result would differ from
+  // encNow.x + kOffsetX by exactly that error, which this tight tolerance
+  // catches.
+  float expectedX = encNow.pose.x + kOffsetX;
+  msg::PoseEstimate fused = pe.fusedPose();
+  checkNear(fused.pose.x, expectedX, 0.5f,
+            "fusedPose().pose.x converges to the composed target implied by "
+            "the CORRECT between-entries interpolation of enc(T)");
+  checkNear(fused.pose.y, encNow.pose.y, 0.5f,
+            "fusedPose().pose.y unaffected (no y offset injected; straight "
+            "motion keeps enc(T).y == encNow.y == 0)");
+  checkNear(pe.encoderPose().pose.x, encNow.pose.x, 0.0f,
+            "encoderPose() itself is untouched by applying a delayed fix");
+  checkTrue(pe.fixDropped() == 0, "the fix was applied, not dropped");
+}
+
+// (ii) interpolation from the ring's NEWEST entry to "now" (T newer than
+// every recorded ring entry), vs. a hand-computed oracle.
+void scenarioFixInterpolationNewestToNow() {
+  beginScenario(
+      "099-008: delayed fix interpolates from the ring's NEWEST entry to "
+      "\"now\" -- composed correction matches a hand-computed oracle");
+
+  Subsystems::PoseEstimator pe;
+  msg::DrivetrainConfig cfg = makeConfig(128.0f, 0.92f, 800.0f, 4.0f, 50.0f, 0.01f);
+  cfg.ekf_r_fix_xy = kTinyR;
+  cfg.ekf_r_fix_theta = kTinyR;
+  pe.configure(cfg);
+
+  Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+  Rt::Mailbox<msg::SetPose> otosSetPoseOut;
+  Rt::Mailbox<Rt::PoseFixCommand> poseFixIn;
+
+  uint32_t now = 0;
+  float cumLeft = 0.0f;
+  float cumRight = 0.0f;
+  // 6 ticks -> the ring's newest (and only second) entry lands at t=80
+  // (x=60); no further entry records before now=120 (80+40 < 130, the next
+  // recording threshold) -- encX_(120) == 100.
+  driveStraightTicks(pe, 6, kStepMm, kTickMs, now, cumLeft, cumRight, poseResetIn,
+                      otosSetPoseOut, poseFixIn);
+
+  msg::PoseEstimate encNow = pe.encoderPose();
+  checkNear(encNow.pose.x, 100.0f, 1e-3f, "sanity: encoderPose().pose.x == 100 after 6 ticks");
+
+  // T=110 is newer than the ring's newest entry (t=80) but older than now
+  // (120) -- hand-computed oracle (linear): enc(110) == 90.
+  const uint32_t kT = 110;
+  const float kOracleEncAtT = 90.0f;
+  const float kOffsetX = 300.0f;   // [mm]
+
+  Rt::PoseFixCommand fix;
+  fix.x = kOracleEncAtT + kOffsetX;
+  fix.y = 0.0f;
+  fix.h = 0.0f;
+  fix.t = kT;
+  poseFixIn.post(fix);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn,
+          otosSetPoseOut, poseFixIn);
+
+  float expectedX = encNow.pose.x + kOffsetX;
+  msg::PoseEstimate fused = pe.fusedPose();
+  checkNear(fused.pose.x, expectedX, 0.5f,
+            "fusedPose().pose.x converges to the composed target implied by "
+            "the CORRECT newest-to-now interpolation of enc(T)");
+  checkTrue(pe.fixDropped() == 0, "the fix was applied, not dropped");
+}
+
+// (iii) a future t (t > now) clamps to now -- enc(T) collapses to encNow
+// exactly, so implied.x == fix.x with NO offset contribution at all.
+void scenarioFixFutureTimestampClamps() {
+  beginScenario("099-008: a future-t (t > now) fix clamps T to now");
+
+  Subsystems::PoseEstimator pe;
+  msg::DrivetrainConfig cfg = makeConfig(128.0f, 0.92f, 800.0f, 4.0f, 50.0f, 0.01f);
+  cfg.ekf_r_fix_xy = kTinyR;
+  cfg.ekf_r_fix_theta = kTinyR;
+  pe.configure(cfg);
+
+  Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+  Rt::Mailbox<msg::SetPose> otosSetPoseOut;
+  Rt::Mailbox<Rt::PoseFixCommand> poseFixIn;
+
+  uint32_t now = 0;
+  float cumLeft = 0.0f;
+  float cumRight = 0.0f;
+  driveStraightTicks(pe, 5, kStepMm, kTickMs, now, cumLeft, cumRight, poseResetIn,
+                      otosSetPoseOut, poseFixIn);
+  msg::PoseEstimate encNow = pe.encoderPose();
+
+  // A wildly future t -- if the clamp is missing, interpolateEncAt() would
+  // extrapolate the newest-ring-entry-to-now slope far past "now", making
+  // enc(T) diverge sharply from encNow and implied.x diverge sharply from
+  // fix.x. With the clamp, T collapses to exactly "now" -- frac == 1.0 in
+  // lerpEncPose() -- so enc(T) == encNow exactly and implied.x == fix.x
+  // exactly (the (encNow.x - enc(T).x) term vanishes).
+  Rt::PoseFixCommand fix;
+  fix.x = encNow.pose.x + 250.0f;
+  fix.y = encNow.pose.y;
+  fix.h = encNow.pose.h;
+  fix.t = now + 1000;   // [ms] far future
+  poseFixIn.post(fix);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn,
+          otosSetPoseOut, poseFixIn);
+
+  msg::PoseEstimate fused = pe.fusedPose();
+  checkNear(fused.pose.x, fix.x, 0.5f,
+            "a future-t fix converges to EXACTLY fix.x (the clamp collapses "
+            "enc(T) to encNow, cancelling the (encNow - enc(T)) term) -- a "
+            "missing clamp would extrapolate far past this");
+  checkTrue(pe.fixDropped() == 0, "a future t is clamped, never dropped");
+}
+
+// (iv) SI (reset=true) clears the ring; zero_encoders does NOT; applying a
+// delayed fix does NOT either -- verified against the actual code (via
+// fixDropped()'s observable behavior), not just asserted.
+void scenarioRingClearedBySIOnlyNotZeroNotFix() {
+  beginScenario(
+      "099-008: SI clears the pose-history ring; zero_encoders does not; "
+      "applying a delayed fix does not either");
+
+  Subsystems::PoseEstimator pe;
+  pe.configure(makeConfig(128.0f, 0.92f, 800.0f, 4.0f, 50.0f, 0.01f));
+
+  Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+  Rt::Mailbox<msg::SetPose> otosSetPoseOut;
+  Rt::Mailbox<Rt::PoseFixCommand> poseFixIn;
+
+  uint32_t now = 0;
+  float cumLeft = 0.0f;
+  float cumRight = 0.0f;
+  // Ring after 5 ticks: entries at t=20, t=80 -- oldest.t == 20.
+  driveStraightTicks(pe, 5, kStepMm, kTickMs, now, cumLeft, cumRight, poseResetIn,
+                      otosSetPoseOut, poseFixIn);
+
+  // A fix timestamped well before the ring's oldest entry (t=20) -- used
+  // repeatedly below as a PROBE: it is dropped (fixDropped_ increments)
+  // exactly when the ring still has an entry older than "now" to compare
+  // against, and NOT dropped once the ring is empty.
+  auto postStaleProbe = [&]() {
+    Rt::PoseFixCommand fix;
+    fix.x = 99999.0f;
+    fix.y = 99999.0f;
+    fix.h = 3.0f;
+    fix.t = 1;   // [ms] -- older than the ring's oldest entry (t=20)
+    poseFixIn.post(fix);
+    pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn,
+            otosSetPoseOut, poseFixIn);
+  };
+
+  postStaleProbe();
+  checkTrue(pe.fixDropped() == 1, "probe #1: dropped -- the ring's oldest entry (t=20) rejects t=1");
+
+  // zero_encoders (kResetBaseline) -- must NOT clear the ring.
+  Rt::PoseResetCommand zeroCmd;
+  zeroCmd.kind = Rt::PoseResetCommand::kResetBaseline;
+  checkTrue(poseResetIn.post(zeroCmd), "post() succeeds");
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn,
+          otosSetPoseOut, poseFixIn);
+
+  postStaleProbe();
+  checkTrue(pe.fixDropped() == 2,
+            "probe #2 (after zero_encoders): STILL dropped -- zero_encoders "
+            "did not clear the ring");
+
+  // A VALID fix (t=50, within the ring's range) -- applying it must NOT
+  // clear the ring either.
+  Rt::PoseFixCommand validFix;
+  validFix.x = 500.0f;
+  validFix.y = 0.0f;
+  validFix.h = 0.0f;
+  validFix.t = 50;
+  poseFixIn.post(validFix);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn,
+          otosSetPoseOut, poseFixIn);
+  checkTrue(pe.fixDropped() == 2, "the valid fix (t=50) was applied, not dropped");
+
+  postStaleProbe();
+  checkTrue(pe.fixDropped() == 3,
+            "probe #3 (after applying a valid fix): STILL dropped -- "
+            "applying a delayed fix did not clear the ring either "
+            "(consecutive fixes compose without ring invalidation)");
+
+  // SI (kSetPose) -- MUST clear the ring.
+  Rt::PoseResetCommand siCmd;
+  siCmd.kind = Rt::PoseResetCommand::kSetPose;
+  siCmd.pose.x = 1000.0f;
+  siCmd.pose.y = -500.0f;
+  siCmd.pose.h = 0.5f;
+  checkTrue(poseResetIn.post(siCmd), "post() succeeds");
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn,
+          otosSetPoseOut, poseFixIn);
+  // NOTE: clearRing() runs INSIDE this same tick() call (from setPose()'s
+  // own dispatch), and this SAME call's own end-of-tick ring-record step
+  // (haveRingRecord_ now false) immediately re-seeds ONE fresh entry at
+  // THIS call's `now` -- the ring is never observably empty from OUTSIDE a
+  // tick() call. The correct external proof of clearing is therefore: a
+  // timestamp that WAS valid against the pre-SI ring (t=50, accepted by
+  // the "valid fix" step above, whose ring covered [20, ~100]) must now be
+  // REJECTED, because the post-SI ring's sole entry is `now` itself (100),
+  // strictly newer than 50 -- proving the pre-SI history is genuinely gone,
+  // not merely quiet.
+
+  Rt::PoseFixCommand probeAtOldValidT;
+  probeAtOldValidT.x = 0.0f;
+  probeAtOldValidT.y = 0.0f;
+  probeAtOldValidT.h = 0.0f;
+  probeAtOldValidT.t = 50;   // was ACCEPTED pre-SI (the "valid fix" step above)
+  poseFixIn.post(probeAtOldValidT);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn,
+          otosSetPoseOut, poseFixIn);
+  checkTrue(pe.fixDropped() == 4,
+            "t=50 -- valid BEFORE SI -- is now dropped AFTER SI: the ring's "
+            "pre-SI history (oldest t=20) is genuinely gone, replaced by a "
+            "ring whose only entry is SI's own `now`");
+
+  // A fix timestamped at (or after) the NEW post-SI baseline is still
+  // accepted -- the ring is alive and correct post-SI, not just perpetually
+  // rejecting everything.
+  Rt::PoseFixCommand probeAtNewBaseline;
+  probeAtNewBaseline.x = 1000.0f;
+  probeAtNewBaseline.y = -500.0f;
+  probeAtNewBaseline.h = 0.5f;
+  probeAtNewBaseline.t = now;   // == SI's own re-seeded ring entry's timestamp
+  poseFixIn.post(probeAtNewBaseline);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn,
+          otosSetPoseOut, poseFixIn);
+  checkTrue(pe.fixDropped() == 4,
+            "a fix at (or after) the NEW post-SI baseline is accepted -- "
+            "the ring works correctly post-SI, not merely empty/broken");
+
+  msg::PoseEstimate fused = pe.fusedPose();
+  checkTrue(std::isfinite(fused.pose.x) && std::isfinite(fused.pose.y) &&
+                std::isfinite(fused.pose.h),
+            "fusedPose() stays finite throughout -- no crash, no NaN");
+}
+
+// (v) two consecutive valid fixes both compose correctly (neither dropped),
+// proving the ring survives across repeated fix applications without
+// invalidation.
+void scenarioConsecutiveFixesComposeWithoutRingInvalidation() {
+  beginScenario(
+      "099-008: two consecutive delayed fixes both compose correctly -- "
+      "the ring is never invalidated by applying one");
+
+  Subsystems::PoseEstimator pe;
+  msg::DrivetrainConfig cfg = makeConfig(128.0f, 0.92f, 800.0f, 4.0f, 50.0f, 0.01f);
+  cfg.ekf_r_fix_xy = kTinyR;
+  cfg.ekf_r_fix_theta = kTinyR;
+  pe.configure(cfg);
+
+  Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+  Rt::Mailbox<msg::SetPose> otosSetPoseOut;
+  Rt::Mailbox<Rt::PoseFixCommand> poseFixIn;
+
+  uint32_t now = 0;
+  float cumLeft = 0.0f;
+  float cumRight = 0.0f;
+  driveStraightTicks(pe, 8, kStepMm, kTickMs, now, cumLeft, cumRight, poseResetIn,
+                      otosSetPoseOut, poseFixIn);
+  msg::PoseEstimate encNow1 = pe.encoderPose();
+  checkNear(encNow1.pose.x, 140.0f, 1e-3f, "sanity: encoderPose().pose.x == 140 after 8 ticks");
+
+  // Fix #1: T=100 (between the ring entries at t=80/t=140), oracle enc(100)
+  // == 80 -- same derivation as scenarioFixInterpolationBetweenRingEntries().
+  Rt::PoseFixCommand fix1;
+  fix1.x = 80.0f + 300.0f;
+  fix1.y = 0.0f;
+  fix1.h = 0.0f;
+  fix1.t = 100;
+  poseFixIn.post(fix1);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn,
+          otosSetPoseOut, poseFixIn);
+
+  checkTrue(pe.fixDropped() == 0, "fix #1 was applied, not dropped");
+  checkNear(pe.fusedPose().pose.x, encNow1.pose.x + 300.0f, 0.5f,
+            "fix #1 converges to its own composed target");
+
+  // More motion after fix #1 -- encX_/encY_/encTheta_ (the ring's OWN
+  // source series) are completely untouched by applying a fix, so they
+  // keep accumulating normally.
+  driveStraightTicks(pe, 4, kStepMm, kTickMs, now, cumLeft, cumRight, poseResetIn,
+                      otosSetPoseOut, poseFixIn);
+  msg::PoseEstimate encNow2 = pe.encoderPose();
+  checkNear(encNow2.pose.x, 220.0f, 1e-3f, "sanity: encoderPose().pose.x == 220 after 12 ticks");
+
+  // Fix #2: T=210 (newest-to-now against the ring entry recorded at
+  // t=200), oracle enc(210) == 190.
+  Rt::PoseFixCommand fix2;
+  fix2.x = 190.0f + 300.0f;
+  fix2.y = 0.0f;
+  fix2.h = 0.0f;
+  fix2.t = 210;
+  poseFixIn.post(fix2);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn,
+          otosSetPoseOut, poseFixIn);
+
+  checkTrue(pe.fixDropped() == 0, "fix #2 was ALSO applied, not dropped -- fix #1 did not invalidate the ring");
+  checkNear(pe.fusedPose().pose.x, encNow2.pose.x + 300.0f, 0.5f,
+            "fix #2 converges to its OWN composed target, computed fresh "
+            "against the ring's current state");
+}
+
+// (vi) otosSetPoseOut is posted EXACTLY ONCE per applied fix (never on a
+// tick with no fix), and lastPoseStep() reports a nonzero magnitude for the
+// tick a fix was applied, resetting to {0, 0} on every other tick -- the
+// SAME mechanism ticket 004 proved for SI (scenario (g) above), now proven
+// for a delayed fix. Uses the DEFAULT (unconfigured, sentinelOr()-
+// substituted) ekf_r_fix_xy/theta -- proves the fallback produces a REAL,
+// nonzero, finite correction, not a silent no-op.
+void scenarioFixOtosSetPoseOutPostedOnceLastPoseStepMagnitude() {
+  beginScenario(
+      "099-008: otosSetPoseOut posted exactly once per applied delayed fix; "
+      "lastPoseStep() reports its magnitude (default sentinel-fallback noise)");
+
+  Subsystems::PoseEstimator pe;
+  pe.configure(makeConfig(128.0f, 0.92f, 800.0f, 4.0f, 50.0f, 0.01f));   // ekf_r_fix_* left 0 (unset)
+
+  Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+  Rt::Mailbox<msg::SetPose> otosSetPoseOut;
+  Rt::Mailbox<Rt::PoseFixCommand> poseFixIn;
+
+  uint32_t now = 0;
+  float cumLeft = 0.0f;
+  float cumRight = 0.0f;
+  for (int i = 0; i < 5; ++i) {
+    driveStraightTicks(pe, 1, kStepMm, kTickMs, now, cumLeft, cumRight, poseResetIn,
+                        otosSetPoseOut, poseFixIn);
+    checkTrue(otosSetPoseOut.empty(), "otosSetPoseOut stays empty when no fix is queued");
+    msg::PoseStep step = pe.lastPoseStep();
+    checkNear(step.pos, 0.0f, 0.0f, "lastPoseStep().pos is zero on an ordinary tick");
+    checkNear(step.theta, 0.0f, 0.0f, "lastPoseStep().theta is zero on an ordinary tick");
+  }
+  // now == 100, encoderPose().pose.x == 80; ring entries at t=20, t=80.
+
+  Rt::PoseFixCommand fix;
+  fix.x = 30.0f + 150.0f;   // enc(50) == 30 (between t=20/t=80); +150mm offset
+  fix.y = 0.0f;
+  fix.h = 0.0f;
+  fix.t = 50;
+  poseFixIn.post(fix);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn,
+          otosSetPoseOut, poseFixIn);
+
+  checkTrue(pe.fixDropped() == 0, "the fix was applied, not dropped");
+  checkTrue(!otosSetPoseOut.empty(), "otosSetPoseOut received exactly one post for the applied fix");
+  msg::SetPose posted = otosSetPoseOut.take();
+  checkTrue(otosSetPoseOut.empty(), "otosSetPoseOut.take() drained the one posted value -- posted exactly once");
+  msg::PoseEstimate fusedAfter = pe.fusedPose();
+  checkNear(posted.x, fusedAfter.pose.x, 0.0f, "otosSetPoseOut carries the corrected fusedPose().pose.x");
+  checkNear(posted.y, fusedAfter.pose.y, 0.0f, "otosSetPoseOut carries the corrected fusedPose().pose.y");
+  checkNear(posted.h, fusedAfter.pose.h, 0.0f, "otosSetPoseOut carries the corrected fusedPose().pose.h");
+
+  msg::PoseStep step = pe.lastPoseStep();
+  checkTrue(std::isfinite(step.pos) && step.pos > 0.5f,
+            "lastPoseStep().pos is a real, nonzero, finite correction -- the "
+            "default sentinel-fallback ekf_r_fix_xy did NOT silently no-op");
+  checkTrue(step.pos < 150.0f + 50.0f,
+            "lastPoseStep().pos is a bounded fraction of the injected offset "
+            "(Kalman gain <= 1), not a runaway value");
+
+  // The VERY NEXT tick, no queued fix: both signals reset to inert.
+  driveStraightTicks(pe, 1, kStepMm, kTickMs, now, cumLeft, cumRight, poseResetIn,
+                      otosSetPoseOut, poseFixIn);
+  checkTrue(otosSetPoseOut.empty(),
+            "otosSetPoseOut stays empty the tick after the fix -- posted exactly once, not every tick");
+  msg::PoseStep stepAfter = pe.lastPoseStep();
+  checkNear(stepAfter.pos, 0.0f, 0.0f, "lastPoseStep() resets to zero on the tick following the applied fix");
+  checkNear(stepAfter.theta, 0.0f, 0.0f, "lastPoseStep().theta resets to zero too");
+}
+
+// (vii) a fix timestamped older than the ring's oldest entry is dropped:
+// fixDropped_ increments, fusedPose()/encoderPose() are EXACTLY unchanged
+// (no jump), lastPoseStep() stays {0, 0}, otosSetPoseOut stays empty, and
+// the estimator keeps working normally afterward (no crash).
+void scenarioStaleFixDroppedNoJumpNoCrash() {
+  beginScenario(
+      "099-008: a stale-timestamp fix (t older than the ring) is dropped -- "
+      "no jump, counted, no crash");
+
+  Subsystems::PoseEstimator pe;
+  pe.configure(makeConfig(128.0f, 0.92f, 800.0f, 4.0f, 50.0f, 0.01f));
+
+  Rt::WorkQueue<Rt::PoseResetCommand, 4> poseResetIn;
+  Rt::Mailbox<msg::SetPose> otosSetPoseOut;
+  Rt::Mailbox<Rt::PoseFixCommand> poseFixIn;
+
+  uint32_t now = 0;
+  float cumLeft = 0.0f;
+  float cumRight = 0.0f;
+  driveStraightTicks(pe, 8, kStepMm, kTickMs, now, cumLeft, cumRight, poseResetIn,
+                      otosSetPoseOut, poseFixIn);
+
+  msg::PoseEstimate fusedBefore = pe.fusedPose();
+  msg::PoseEstimate encBefore = pe.encoderPose();
+  checkTrue(pe.fixDropped() == 0, "sanity: nothing dropped yet");
+
+  // t=1 is older than the ring's oldest entry (t=20) -- a wildly different
+  // x/y/h so an incorrectly-applied fix would produce an unmistakable jump.
+  Rt::PoseFixCommand staleFix;
+  staleFix.x = -99999.0f;
+  staleFix.y = 99999.0f;
+  staleFix.h = 2.5f;
+  staleFix.t = 1;
+  poseFixIn.post(staleFix);
+  pe.tick(now, motorStateAt(cumLeft, now), motorStateAt(cumRight, now), nullptr, poseResetIn,
+          otosSetPoseOut, poseFixIn);
+
+  checkTrue(pe.fixDropped() == 1, "the stale fix was dropped and counted exactly once");
+
+  msg::PoseEstimate fusedAfter = pe.fusedPose();
+  msg::PoseEstimate encAfter = pe.encoderPose();
+  checkNear(fusedAfter.pose.x, fusedBefore.pose.x, 0.0f, "fusedPose().pose.x EXACTLY unchanged -- no jump");
+  checkNear(fusedAfter.pose.y, fusedBefore.pose.y, 0.0f, "fusedPose().pose.y EXACTLY unchanged too");
+  checkNear(fusedAfter.pose.h, fusedBefore.pose.h, 0.0f, "fusedPose().pose.h EXACTLY unchanged too");
+  checkNear(encAfter.pose.x, encBefore.pose.x, 0.0f, "encoderPose() EXACTLY unchanged too");
+
+  msg::PoseStep step = pe.lastPoseStep();
+  checkNear(step.pos, 0.0f, 0.0f, "lastPoseStep().pos stays zero -- nothing was applied");
+  checkNear(step.theta, 0.0f, 0.0f, "lastPoseStep().theta stays zero too");
+  checkTrue(otosSetPoseOut.empty(), "otosSetPoseOut was never posted to -- the drop path never reaches step 6");
+
+  checkTrue(std::isfinite(fusedAfter.pose.x) && std::isfinite(fusedAfter.pose.y) &&
+                std::isfinite(fusedAfter.pose.h),
+            "fusedPose() stays finite -- no crash");
+
+  // The estimator keeps working normally afterward.
+  driveStraightTicks(pe, 1, kStepMm, kTickMs, now, cumLeft, cumRight, poseResetIn,
+                      otosSetPoseOut, poseFixIn);
+  checkTrue(std::isfinite(pe.fusedPose().pose.x), "still finite after a further normal tick");
+}
+
 }  // namespace
 
 int main() {
@@ -815,6 +1361,16 @@ int main() {
   scenarioPoseResetInDrainsKResetBaselineNoPhantomJump();
   scenarioOtosSetPoseOutAndLastPoseStepMagnitude();
   scenarioStaggeredSampleTimingMatchesSynchronousTotalNoLocalMisattribution();
+
+  // 099-008: delayed camera-fix -- history ring, transport-compose, ungated
+  // EKF update.
+  scenarioFixInterpolationBetweenRingEntries();
+  scenarioFixInterpolationNewestToNow();
+  scenarioFixFutureTimestampClamps();
+  scenarioRingClearedBySIOnlyNotZeroNotFix();
+  scenarioConsecutiveFixesComposeWithoutRingInvalidation();
+  scenarioFixOtosSetPoseOutPostedOnceLastPoseStepMagnitude();
+  scenarioStaleFixDroppedNoJumpNoCrash();
 
   if (g_failureCount == 0) {
     std::printf("OK: all PoseEstimator scenarios passed\n");

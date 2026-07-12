@@ -180,6 +180,15 @@ message DrivetrainConfig {
   // `DEV DT PORTS <l> <r>` merges these two fields; wire text unchanged.
   uint32 left_port            = 40;
   uint32 right_port           = 41;
+  // ekf_r_fix_xy/ekf_r_fix_theta (099-008, D5): the delayed camera-fix's
+  // own UNGATED position/heading measurement-noise pair, mirroring
+  // ekf_r_otos_xy/ekf_r_otos_theta's own wire-tunable field shape exactly
+  // (BinaryChannel config/get, Rt::Configurator) -- see
+  // architecture-update.md D5-D8 and this ticket's own config-field
+  // Description note for why these follow ekf_r_otos_xy/theta's
+  // check_config_sync.py allowlist precedent, not gen_boot_config.py/JSON.
+  float  ekf_r_fix_xy         = 42;
+  float  ekf_r_fix_theta      = 43;
 }
 
 // Declared drivetrain capabilities.

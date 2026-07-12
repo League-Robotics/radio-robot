@@ -41,21 +41,26 @@ namespace Subsystems {
 
 class PoseEstimator {
  public:
-  // configure — reads trackwidth, rotational_slip, and the four EKF noise
-  // fields (ekf_q_xy, ekf_q_theta, ekf_r_otos_xy, ekf_r_otos_theta) from the
-  // SAME msg::DrivetrainConfig type Drivetrain::configure() already takes
-  // (no new config message, no proto change). The full incoming config is
-  // ALSO stored verbatim (config_) so config() (below) can round-trip it —
-  // mirrors Subsystems::Drivetrain's own config_ member (087-004).
+  // configure — reads trackwidth, rotational_slip, and six EKF noise fields
+  // (ekf_q_xy, ekf_q_theta, ekf_r_otos_xy, ekf_r_otos_theta, and — 099-008 —
+  // ekf_r_fix_xy/ekf_r_fix_theta) from the SAME msg::DrivetrainConfig type
+  // Drivetrain::configure() already takes (no new config message, no proto
+  // change beyond the two new DrivetrainConfig fields). The full incoming
+  // config is ALSO stored verbatim (config_) so config() (below) can
+  // round-trip it — mirrors Subsystems::Drivetrain's own config_ member
+  // (087-004).
   //
   // Zero-as-unset sentinel (mirrors the ported Odometry source's
   // effectiveSlip() pattern — see pose_estimator.cpp): a noise field arriving
   // as exactly 0.0f (the proto zero-default, meaning "never configured") is
   // substituted with a small, hardcoded, documented fallback before being
-  // passed to EkfTiny::init(). A non-zero configured value passes through
-  // unchanged. This substitution affects only the EKF's own init() call —
-  // config()'s returned value is the RAW config as given to configure(),
-  // unmodified.
+  // passed to EkfTiny::init() (the four OTOS-facing fields) or stored into
+  // rFixXy_/rFixTheta_ (the two fix-facing fields, 099-008 — EkfTiny::init()'s
+  // own signature is unchanged; applyPoseFix() reads rFixXy_/rFixTheta_
+  // directly at the moment a fix is applied). A non-zero configured value
+  // passes through unchanged either way. This substitution affects only the
+  // EKF/rFix*_ internal values — config()'s returned value is the RAW config
+  // as given to configure(), unmodified.
   //
   // Calls EkfTiny::init() — per that method's own doc comment, this is
   // BOOT-ONLY (also resets EKF state/covariance to zero); matches
@@ -101,6 +106,15 @@ class PoseEstimator {
   //              hardware_.odometer()->applySetPose(...) the same way it
   //              always has (architecture-update.md D1/D8). NOT posted to on
   //              a kResetBaseline drain (no fused-pose change to propagate).
+  //              A delayed camera fix (099-008, below) posts here too.
+  //   poseFixIn — (099-008, architecture-update.md D5-D8, 7th parameter) the
+  //              blackboard-sourced Mailbox<Rt::PoseFixCommand> a genuine
+  //              timestamped delayed camera fix arrives on
+  //              (BinaryChannel::handlePose()'s third branch is its one
+  //              producer). Drained latest-wins — at most ONE entry per
+  //              tick() call, a Mailbox, never accumulates (D7: a newer
+  //              camera frame supersedes an undrained older one, by
+  //              design). See step 1a below for the full apply sequence.
   //
   // Sequencing (see pose_estimator.cpp for the full rationale):
   //   0. lastPoseStep_ resets to {0, 0} — see lastPoseStep()'s own doc
@@ -108,7 +122,34 @@ class PoseEstimator {
   //   1. Drain poseResetIn completely (see above). A kSetPose entry also
   //      computes lastPoseStep_ (‖Δp‖/|Δθ| of the fused pose, before vs.
   //      after setPose()) and posts the resulting fusedPose() to
-  //      otosSetPoseOut; a kResetBaseline entry does neither.
+  //      otosSetPoseOut; a kResetBaseline entry does neither. A kSetPose
+  //      entry ALSO clears the pose-history ring (below) — continuity is
+  //      broken by a hard re-anchor. A kResetBaseline entry does NOT.
+  //   1a. Drain poseFixIn (099-008), if non-empty — BEFORE the early return
+  //      in step 2, same "never skip a queued correction just because this
+  //      pass's own encoder observations happen to be momentarily absent"
+  //      rationale as step 1. Reject (fixDropped_ diagnostic counter, no
+  //      state change, no crash) a `t` older than the ring's oldest entry
+  //      (an empty ring never rejects — nothing to judge staleness
+  //      against); clamp a `t` newer than `now` to `now`. Interpolate
+  //      enc(T) from the private pose-history ring (linear x/y,
+  //      wrapped-angle theta, between the two bracketing entries, or from
+  //      the newest entry to `now` if T is more recent than the ring's
+  //      last snapshot). Compose in the shared world frame: `implied.x =
+  //      fix.x + (encNow.x - enc(T).x)`, same for y; `implied.h =
+  //      wrap(fix.h + wrap(encNow.theta - enc(T).theta))` — exact, per
+  //      architecture-update.md's D5-D8 rationale (encX_/encY_ already
+  //      integrate cosf/sinf(encThetaMid) at each step, so the delta
+  //      between two world-frame dead-reckoning samples IS the correct
+  //      rigid transform the robot underwent between them). Apply as an
+  //      UNGATED EkfTiny::updatePositionUngated()/updateHeadingUngated()
+  //      correction (D5 — the camera is authoritative; ticket 006's
+  //      innovation gate protects the OTOS channel only, never this path)
+  //      using ekf_r_fix_xy/ekf_r_fix_theta (zero-as-unset sentinelOr(),
+  //      same pattern as the existing four EKF fields). Records
+  //      lastPoseStep_ and posts the resulting fusedPose() to
+  //      otosSetPoseOut — the SAME two mechanisms a kSetPose drain (step 1)
+  //      uses. NEVER clears/touches the pose-history ring.
   //   2. If leftObs.position or rightObs.position lacks .has, this tick's
   //      update is skipped entirely — no encoder-accumulator advance, no EKF
   //      predict, no stale-data corruption. The previous-encoder baseline
@@ -156,11 +197,18 @@ class PoseEstimator {
   //      regardless of encoder staleness).
   //   7. EkfTiny::updatePosition()/updateHeading() run ONLY when otosObs is
   //      non-null and fresh (stamp.valid).
+  //   8. (099-008) The pose-history ring records (now, encX_, encY_,
+  //      encTheta_) — NEVER fusedPose()/EKF state — whenever at least
+  //      kPoseHistoryPeriodMs (50) has elapsed since the last recording (a
+  //      wall-clock cadence independent of the 20ms tick cadence and of
+  //      step 4's paired-freshness gate). Only reached on a tick that did
+  //      NOT hit step 2's early return.
   void tick(uint32_t now, const msg::MotorState& leftObs,
             const msg::MotorState& rightObs,
             const msg::PoseEstimate* otosObs,
             Rt::WorkQueue<Rt::PoseResetCommand, 4>& poseResetIn,
-            Rt::Mailbox<msg::SetPose>& otosSetPoseOut);
+            Rt::Mailbox<msg::SetPose>& otosSetPoseOut,
+            Rt::Mailbox<Rt::PoseFixCommand>& poseFixIn);
 
   // encoderPose — pure dead-reckoning pose (x, y, heading) from wheel
   // encoder deltas only. The EKF never writes here, ever. twist is left at
@@ -188,6 +236,15 @@ class PoseEstimator {
   // encoder-delta tracking continues uninterrupted from wherever the wheels
   // actually are. Wraps pose.h through wrapPi() before storing, matching
   // encTheta_'s own always-wrapped invariant (tick()'s own wrapPi() call).
+  //
+  // 099-008: ALSO clears the pose-history ring (clearRing()) -- a hard
+  // re-anchor breaks continuity between whatever the ring recorded before
+  // this call and encX_/encY_/encTheta_'s new post-reset values, so any
+  // ring entry predating this call would interpolate against a baseline
+  // that no longer exists. `zero_encoders`/resetEncoderBaseline() (below)
+  // and applying a delayed fix (applyPoseFix()) do NOT clear the ring --
+  // only setPose() does (architecture-update.md's own "SI clears the ring;
+  // ZERO/a delayed fix do not" statement).
   void setPose(const msg::SetPose& pose);
 
   // resetEncoderBaseline -- 084-007 (SUC-006): `ZERO enc`'s own effect on
@@ -258,6 +315,14 @@ class PoseEstimator {
   // two-or-more ticks ago never leaks forward.
   msg::PoseStep lastPoseStep() const { return lastPoseStep_; }
 
+  // fixDropped -- (099-008) diagnostic counter: the number of poseFixIn
+  // drains rejected so far because their `t` was older than the
+  // pose-history ring's oldest entry (tick()'s doc comment, step 1a). Never
+  // decremented; monotonically increasing for the lifetime of this
+  // instance. Test-observable proof that a stale fix is dropped, not
+  // silently mis-applied.
+  uint32_t fixDropped() const { return fixDropped_; }
+
  private:
   // sentinelOr — zero-as-unset substitution: returns fallback when
   // configured is exactly 0.0f, otherwise returns configured unchanged.
@@ -279,6 +344,75 @@ class PoseEstimator {
   // config-safe), (0, 0.5) -> 0.5 (clamp floor), [0.5, 1.0] -> pass-through,
   // > 1.0 -> 1.0 (clamp ceiling).
   static float effectiveSlip(float rawSlip);
+
+  // --- Pose-history ring (099-008, architecture-update.md D5-D8) ---
+  //
+  // PoseHistoryEntry -- a single (t, encX_, encY_, encTheta_) snapshot.
+  // NEVER records fusedPose()/ekf_ state -- encoderPose() is the one series
+  // the EKF/OTOS/a prior fix never writes, so its own deltas stay clean and
+  // composable (architecture-update.md's own rationale, verbatim). 16 bytes
+  // (4x uint32_t/float, no padding); kPoseHistorySize=24 entries -> 384B
+  // total, the RAM budget architecture-update.md's Migration Concerns
+  // documents.
+  struct PoseHistoryEntry {
+    uint32_t t;      // [ms] robot-clock timestamp this entry was recorded
+    float x;         // [mm] encX_ at time t
+    float y;         // [mm] encY_ at time t
+    float theta;     // [rad] encTheta_ at time t
+  };
+  static constexpr int kPoseHistorySize = 24;
+  static constexpr uint32_t kPoseHistoryPeriodMs = 50;  // [ms] recording cadence
+
+  // EncPose -- a bare (x, y, theta) tuple, used internally by
+  // interpolateEncAt()/lerpEncPose() below. Deliberately NOT msg::Pose2D
+  // (this is intermediate compute state, never exposed outside this class).
+  struct EncPose {
+    float x;
+    float y;
+    float theta;
+  };
+
+  // pushRingEntry -- append one entry to the ring (overwrites the oldest
+  // once kPoseHistorySize is reached -- a circular buffer, never resized).
+  void pushRingEntry(uint32_t t, float x, float y, float theta);
+
+  // clearRing -- discard every ring entry (SI/kSetPose's own effect, called
+  // from setPose() -- see that method's doc comment). Also re-arms the
+  // recording cadence so the VERY NEXT valid tick() records fresh, rather
+  // than waiting out whatever fraction of kPoseHistoryPeriodMs was already
+  // elapsed before the clear.
+  void clearRing();
+
+  // interpolateEncAt -- enc(T): the encoder-frame pose the ring (plus the
+  // LIVE encX_/encY_/encTheta_ as an implicit "now" entry) implies at time
+  // t. Three cases (tick()'s doc comment, step 1a):
+  //   - an empty ring (nothing recorded yet, e.g. immediately after a
+  //     clearRing()) -- returns the live encX_/encY_/encTheta_ verbatim (T
+  //     is effectively treated as "now"; there is nothing else to
+  //     interpolate against).
+  //   - t at or before the ring's oldest entry -- returns that entry
+  //     verbatim (defensive fallback; the caller already rejects a
+  //     genuinely-stale t via fixDropped_ before ever reaching here).
+  //   - t between two ring entries, or newer than the ring's newest entry
+  //     (interpolated against the live encX_/encY_/encTheta_ at time `now`,
+  //     treated as an implicit extra ring entry) -- linear on x/y,
+  //     wrapped-angle on theta, via lerpEncPose() below.
+  EncPose interpolateEncAt(uint32_t t, uint32_t now) const;
+
+  // lerpEncPose -- linear (x, y) / wrapped-angle (theta) interpolation
+  // between two timestamped EncPose samples at time t (tA <= t <= tB
+  // guaranteed by every caller). Static: touches no instance state, pure
+  // math, independently callable from a test.
+  static EncPose lerpEncPose(uint32_t tA, const EncPose& a, uint32_t tB, const EncPose& b,
+                              uint32_t t);
+
+  // applyPoseFix -- 099-008: the full poseFixIn drain apply sequence
+  // (tick()'s doc comment, step 1a) -- reject-or-clamp t, interpolate
+  // enc(T), compose the implied world pose, apply the UNGATED EkfTiny
+  // correction, record lastPoseStep_, post to otosSetPoseOut. Never touches
+  // the ring (neither clears nor records into it).
+  void applyPoseFix(const Rt::PoseFixCommand& fix, uint32_t now,
+                     Rt::Mailbox<msg::SetPose>& otosSetPoseOut);
 
   EkfTiny ekf_;
 
@@ -344,6 +478,37 @@ class PoseEstimator {
   bool haveLastTick_ = false;
   uint32_t lastTick_ = 0;   // [ms] timestamp of the last valid tick
 
+  // Pose-history ring backing storage (099-008) -- a fixed-size circular
+  // buffer, never resized/allocated. ringHead_ is the NEXT write index;
+  // ringCount_ is the number of valid entries, capped at kPoseHistorySize.
+  // The oldest valid entry is always at index
+  // (ringHead_ - ringCount_ + kPoseHistorySize) % kPoseHistorySize; the
+  // newest is always at (ringHead_ - 1 + kPoseHistorySize) %
+  // kPoseHistorySize.
+  PoseHistoryEntry ring_[kPoseHistorySize] = {};
+  int ringHead_ = 0;
+  int ringCount_ = 0;
+
+  // Recording cadence bookkeeping (099-008) -- haveRingRecord_ guards the
+  // very first recording (nothing to compare elapsed time against yet, and
+  // clearRing() re-arms this so the recording cadence restarts cleanly
+  // after an SI reset).
+  bool haveRingRecord_ = false;
+  uint32_t lastRingRecordMs_ = 0;   // [ms]
+
+  // fixDropped_ -- (099-008) backing counter for fixDropped() (above).
+  uint32_t fixDropped_ = 0;
+
+  // rFixXy_/rFixTheta_ -- (099-008) the delayed camera-fix's own
+  // zero-as-unset sentinelOr()'d noise pair, set by configure() from
+  // config.ekf_r_fix_xy/ekf_r_fix_theta -- read by applyPoseFix() at the
+  // moment a fix is applied. Stored here (not inside EkfTiny) since a
+  // fix's noise only matters at the rare instant one arrives, unlike
+  // rOtosXy_/rOtosTheta_, which EkfTiny itself needs on every
+  // updatePosition()/updateHeading() call.
+  float rFixXy_ = 0.0f;      // [mm^2]
+  float rFixTheta_ = 0.0f;   // [rad^2]
+
   // EKF noise-fallback constants for configure()'s zero-as-unset sentinel.
   // Provenance: source_old/robot/DefaultConfig.cpp lines 57-68
   // (p.ekfQxy/ekfQtheta/ekfROtosXy/ekfROtosTheta) — the pre-082 firmware's
@@ -355,6 +520,15 @@ class PoseEstimator {
   static constexpr float kDefaultQTheta = 4.0f;         // [rad^2]
   static constexpr float kDefaultROtosXy = 50.0f;       // [mm^2]
   static constexpr float kDefaultROtosTheta = 0.01f;    // [rad^2] ~(5.7 deg)^2
+
+  // kDefaultRFixXy/kDefaultRFixTheta -- (099-008) fallback pair for
+  // ekf_r_fix_xy/ekf_r_fix_theta's own zero-as-unset sentinel, mirroring
+  // the four kDefault* constants above. A reasonable documented starting
+  // point (tighter than the OTOS pair -- D5 treats the camera as
+  // authoritative), NOT a bench-tuned value; live-retunable over the wire
+  // via ekf_r_fix_xy/ekf_r_fix_theta (Rt::Configurator) without a reflash.
+  static constexpr float kDefaultRFixXy = 25.0f;        // [mm^2]
+  static constexpr float kDefaultRFixTheta = 0.005f;    // [rad^2] ~(4 deg)^2
 };
 
 }  // namespace Subsystems

@@ -92,6 +92,11 @@ message DrivetrainConfigPatch {
   optional float ekf_q_theta      = 4;  // ekfQtheta
   optional float ekf_r_otos_xy    = 5;  // ekfROtosXy
   optional float ekf_r_otos_theta = 6;  // ekfROtosTheta
+  // ekf_r_fix_xy/ekf_r_fix_theta (099-008): the delayed camera-fix's own
+  // UNGATED noise pair -- mirrors ekf_r_otos_xy/ekf_r_otos_theta's own
+  // wire-tunable shape exactly (architecture-update.md D5-D8).
+  optional float ekf_r_fix_xy     = 7;  // ekfRFixXy
+  optional float ekf_r_fix_theta  = 8;  // ekfRFixTheta
 }
 
 // Curated patch of MotorConfig's 6 registered keys (config_commands.cpp

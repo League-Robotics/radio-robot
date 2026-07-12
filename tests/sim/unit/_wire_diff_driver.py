@@ -221,12 +221,15 @@ def encode_telemetry(binary: pathlib.Path, corr_id: int, **fields) -> bytes | No
 
 def encode_cfg_drivetrain(binary: pathlib.Path, corr_id: int, target: int, trackwidth: float,
                            rotational_slip: float, ekf_q_xy: float, ekf_q_theta: float, ekf_r_otos_xy: float,
-                           ekf_r_otos_theta: float) -> bytes | None:
-    """096-006: builds ReplyEnvelope{cfg=ConfigSnapshot{target,
-    drivetrain=DrivetrainConfigPatch{...}}}."""
+                           ekf_r_otos_theta: float, ekf_r_fix_xy: float = 25.0,
+                           ekf_r_fix_theta: float = 0.005) -> bytes | None:
+    """096-006/099-008: builds ReplyEnvelope{cfg=ConfigSnapshot{target,
+    drivetrain=DrivetrainConfigPatch{...}}}. ekf_r_fix_xy/ekf_r_fix_theta
+    default to ordinary in-range values so existing callers that predate
+    099-008 (and only care about the other six fields) don't need updating."""
     r = run_harness(binary, "encode_cfg_drivetrain", str(corr_id), str(target), repr(trackwidth),
                      repr(rotational_slip), repr(ekf_q_xy), repr(ekf_q_theta), repr(ekf_r_otos_xy),
-                     repr(ekf_r_otos_theta))
+                     repr(ekf_r_otos_theta), repr(ekf_r_fix_xy), repr(ekf_r_fix_theta))
     assert not r.crashed, f"encode_cfg_drivetrain crashed: {r.stdout}\n{r.stderr}"
     line = r.stdout.strip()
     if line == "ZERO":

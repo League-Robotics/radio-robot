@@ -185,6 +185,12 @@ PATCH_TO_PYDANTIC: dict[PatchKey, list[str]] = {
     ("DrivetrainConfigPatch", "ekf_q_theta"): [],
     ("DrivetrainConfigPatch", "ekf_r_otos_xy"): [],
     ("DrivetrainConfigPatch", "ekf_r_otos_theta"): [],
+    # ekf_r_fix_xy/ekf_r_fix_theta (099-008): the delayed camera-fix's own
+    # UNGATED measurement-noise pair. No host-side pydantic field yet --
+    # mirrors the ekf_r_otos_xy/ekf_r_otos_theta entries immediately above
+    # exactly (same "register as tunable in a future sprint" posture).
+    ("DrivetrainConfigPatch", "ekf_r_fix_xy"): [],
+    ("DrivetrainConfigPatch", "ekf_r_fix_theta"): [],
     # -- MotorConfigPatch -------------------------------------------------------
     # `side` is a selector enum (which bound motor `travel_calib` targets),
     # not a settable config value — it has no pydantic counterpart by design.

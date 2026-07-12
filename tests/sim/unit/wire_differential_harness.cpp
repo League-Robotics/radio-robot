@@ -85,6 +85,7 @@
 //
 //   encode_cfg_drivetrain <corr_id> <target> <trackwidth> <rotational_slip>
 //     <ekf_q_xy> <ekf_q_theta> <ekf_r_otos_xy> <ekf_r_otos_theta>
+//     <ekf_r_fix_xy> <ekf_r_fix_theta>
 //   encode_cfg_motor <corr_id> <target> <side> <travel_calib> <kp> <ki>
 //     <kff> <i_max> <kaw>
 //   encode_cfg_planner <corr_id> <target> <min_speed> <heading_kp> <heading_kd>
@@ -555,7 +556,7 @@ int cmdEncodeTelemetry(int argc, char** argv) {
 // Every field of the selected Patch is populated {has=true, val} (mirrors
 // BinaryChannel's `get` handler -- see this file's header comment).
 int cmdEncodeCfgDrivetrain(int argc, char** argv) {
-  if (argc < 10) {
+  if (argc < 12) {
     std::printf("USAGE_ERROR\n");
     return 1;
   }
@@ -572,6 +573,15 @@ int cmdEncodeCfgDrivetrain(int argc, char** argv) {
   p.ekf_q_theta = {true, std::strtof(argv[7], nullptr)};
   p.ekf_r_otos_xy = {true, std::strtof(argv[8], nullptr)};
   p.ekf_r_otos_theta = {true, std::strtof(argv[9], nullptr)};
+  // 099-008: ekf_r_fix_xy/ekf_r_fix_theta -- mirrors the six lines above
+  // exactly. Every field of the selected Patch must be populated (this
+  // function's own doc comment) -- an unset Opt<float> here is UNINITIALIZED
+  // (msg::ReplyEnvelope::body is a raw union with no default member
+  // initializer of its own), not merely {has=false}, so leaving these two
+  // new fields untouched crashed under UBSan (a `bool` read of garbage
+  // stack bytes) the moment the schema grew past this hand-maintained list.
+  p.ekf_r_fix_xy = {true, std::strtof(argv[10], nullptr)};
+  p.ekf_r_fix_theta = {true, std::strtof(argv[11], nullptr)};
   printEncodedOrZero(reply);
   return 0;
 }

@@ -8,12 +8,18 @@ arm's periodic TLM `pose=` field (`_binary_envelope.read_tlm_now()`).
 
 `PoseFix` (`protos/drivetrain.proto`) retypes the formerly-declared-only
 `CommandEnvelope.cmd.pose` arm (was `SetPose`) to `pose_fix` -- see
-`architecture-update.md` D5-D8, Decision 1. This ticket implements ONLY the
-`reset`/`zero_encoders` branches (both reuse `PoseEstimator`'s existing,
-already-tested `setPose()`/`resetEncoderBaseline()` dispatch through the
-UNCHANGED `bb.poseResetIn` queue). The genuine delayed-fix branch (neither
-flag set) still replies `Error{ERR_UNIMPLEMENTED, field=7}` -- ticket
-099-008 makes it live, reusing this same wire arm/message.
+`architecture-update.md` D5-D8, Decision 1. This ticket (099-004) implements
+ONLY the `reset`/`zero_encoders` branches (both reuse `PoseEstimator`'s
+existing, already-tested `setPose()`/`resetEncoderBaseline()` dispatch
+through the UNCHANGED `bb.poseResetIn` queue). The genuine delayed-fix
+branch (neither flag set) used to reply `Error{ERR_UNIMPLEMENTED, field=7}`
+-- ticket 099-008 makes it live (dispatches to the NEW `bb.poseFixIn`
+mailbox instead), so the two "neither flag" tests below now assert
+acceptance (`OK`), not the old stub error. The full compose-math/
+convergence coverage for a live delayed fix lives in
+`test_pose_fix_end_to_end.py`, not here -- this file stays scoped to
+`reset`/`zero_encoders` plus the wire-dispatch boundary of the third
+branch.
 
 Covers ticket 099-004's own sim acceptance criterion:
   - `reset=true` re-anchors `pose=` to the commanded x/y/h.
@@ -28,9 +34,9 @@ Covers ticket 099-004's own sim acceptance criterion:
   - Both flags set in one message: both branches run (`pose=` re-anchors to
     the commanded x/y/h; the encoder-delta baseline also resyncs, verified
     indirectly by confirming the request is accepted with a single `OK`).
-  - A stale/garbage neither-flag request (a genuine delayed camera fix,
-    099-008's job) replies `Error{ERR_UNIMPLEMENTED, field=7}` -- unchanged
-    behavior for the not-yet-live variant.
+  - A neither-flag request (a genuine delayed camera fix) is now (099-008)
+    accepted (`OK`) and dispatched to `bb.poseFixIn` -- see
+    `test_pose_fix_end_to_end.py` for what happens to it after that.
 """
 from __future__ import annotations
 
@@ -135,27 +141,27 @@ def test_pose_fix_both_flags_set_both_branches_run(sim):
     assert frame.pose.h == pytest.approx(-1.1, abs=1e-3)
 
 
-def test_pose_fix_neither_flag_replies_err_unimplemented(sim):
-    """A stale/garbage neither-flag request (a genuine timestamped delayed
-    camera fix -- 099-008's job, not this ticket's) replies
-    Error{ERR_UNIMPLEMENTED, field=7} -- unchanged behavior for the
-    not-yet-live variant, matching the pre-099-004 declared-only stub."""
+def test_pose_fix_neither_flag_is_accepted_and_dispatched(sim):
+    """099-008: a neither-flag request (a genuine timestamped delayed camera
+    fix) is now accepted (`OK`), not `ERR_UNIMPLEMENTED` -- it dispatches to
+    `bb.poseFixIn` (BinaryChannel::handlePose()'s third branch). `t=12345`
+    is a future timestamp relative to a fresh sim session's `now` (clamped
+    internally to `now`, per D5-D8's own future-t rule) -- still a wire-level
+    `OK` either way; see `test_pose_fix_end_to_end.py` for what the fix
+    actually does to `pose=` once applied."""
     reply = _pose_fix(sim, 30, x=1.0, y=2.0, h=3.0, t=12345)
-    assert reply.WhichOneof("body") == "err"
-    assert reply.err.code == pb_envelope.ERR_UNIMPLEMENTED
-    assert reply.err.field == 7   # CommandEnvelope.cmd.pose_fix's own field number
+    assert reply.WhichOneof("body") == "ok"
     assert reply.corr_id == 30
 
 
-def test_pose_fix_default_empty_request_replies_err_unimplemented(sim):
-    """A completely empty PoseFix{} (every field at its proto3 zero default,
-    the simplest possible "neither flag set" request) hits the SAME
-    not-yet-live branch -- confirms the false/false default itself (not
-    just an explicit x/y/h/t payload) routes to ERR_UNIMPLEMENTED."""
+def test_pose_fix_default_empty_request_is_accepted_and_dispatched(sim):
+    """099-008: a completely empty PoseFix{} (every field at its proto3 zero
+    default, the simplest possible "neither flag set" request) hits the SAME
+    now-live branch -- confirms the false/false default itself (not just an
+    explicit x/y/h/t payload) routes to `bb.poseFixIn` and acks `OK`."""
     reply = _pose_fix(sim, 31)
-    assert reply.WhichOneof("body") == "err"
-    assert reply.err.code == pb_envelope.ERR_UNIMPLEMENTED
-    assert reply.err.field == 7
+    assert reply.WhichOneof("body") == "ok"
+    assert reply.corr_id == 31
 
 
 if __name__ == "__main__":

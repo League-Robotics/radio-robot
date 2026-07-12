@@ -92,7 +92,7 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
   msg::MotorState leftObs = hardware_.motorState(leftIdx);
   msg::MotorState rightObs = hardware_.motorState(rightIdx);
   poseEstimator_.tick(now, leftObs, rightObs, /*otosObs=*/nullptr, bb.poseResetIn,
-                       bb.otosSetPoseIn);
+                       bb.otosSetPoseIn, bb.poseFixIn);
 
   // A queued SI-equivalent re-anchor (BinaryChannel::handlePose(), 099-004)
   // posts its freshly re-anchored fusedPose() here -- drain it into the

@@ -62,6 +62,10 @@ bool foldDrivetrain(msg::DrivetrainConfig& cfg, const ConfigDelta& delta) {
   if (m & bitOf(DrivetrainConfigField::kEkfQTheta)) cfg.ekf_q_theta = v.ekf_q_theta;
   if (m & bitOf(DrivetrainConfigField::kEkfROtosXy)) cfg.ekf_r_otos_xy = v.ekf_r_otos_xy;
   if (m & bitOf(DrivetrainConfigField::kEkfROtosTheta)) cfg.ekf_r_otos_theta = v.ekf_r_otos_theta;
+  // 099-008: ekf_r_fix_xy/ekf_r_fix_theta -- mirrors the two EKF-field lines
+  // immediately above exactly.
+  if (m & bitOf(DrivetrainConfigField::kEkfRFixXy)) cfg.ekf_r_fix_xy = v.ekf_r_fix_xy;
+  if (m & bitOf(DrivetrainConfigField::kEkfRFixTheta)) cfg.ekf_r_fix_theta = v.ekf_r_fix_theta;
   if (m & bitOf(DrivetrainConfigField::kEkfQV)) cfg.ekf_q_v = v.ekf_q_v;
   if (m & bitOf(DrivetrainConfigField::kEkfQOmega)) cfg.ekf_q_omega = v.ekf_q_omega;
   if (m & bitOf(DrivetrainConfigField::kEkfROtosV)) cfg.ekf_r_otos_v = v.ekf_r_otos_v;

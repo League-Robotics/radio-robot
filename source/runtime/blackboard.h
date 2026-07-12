@@ -230,6 +230,16 @@ struct Blackboard {
   Mailbox<Motion::Segment> replaceIn;
   WorkQueue<ConfigDelta, 16> configIn;        // router -> Configurator
   WorkQueue<PoseResetCommand, 4> poseResetIn;  // router -> PoseEstimator
+  // poseFixIn (099-008, architecture-update.md D7): a genuine timestamped
+  // delayed camera fix -- BinaryChannel::handlePose()'s third branch
+  // (neither `reset` nor `zero_encoders`) posts here. Latest-wins Mailbox
+  // ON PURPOSE, the dual of poseResetIn's FIFO WorkQueue immediately
+  // above: a newer camera frame supersedes an undrained older one, by
+  // design -- there is no "queue every fix and apply them all in order"
+  // requirement the way SI/ZERO resets have. Drained by
+  // Subsystems::PoseEstimator::tick() itself (its own 7th parameter), not
+  // by MainLoop directly.
+  Mailbox<PoseFixCommand> poseFixIn;
   Mailbox<msg::SetPose> otosSetPoseIn;        // SI re-anchor -> odometer
   Mailbox<msg::OdometerCommand> otosCommandIn;  // OI/OZ/OR/OV -> odometer (loop-drained)
   Mailbox<uint32_t> devWatchdogWindowIn;       // DEV WD -> loop's SerialSilenceWatchdog

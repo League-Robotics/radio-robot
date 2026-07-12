@@ -39,13 +39,21 @@ void PoseEstimator::configure(const msg::DrivetrainConfig& config) {
   float rOtosTheta = sentinelOr(config.ekf_r_otos_theta, kDefaultROtosTheta);
 
   ekf_.init(qXy, qTheta, rOtosXy, rOtosTheta);
+
+  // 099-008: ekf_r_fix_xy/ekf_r_fix_theta -- same zero-as-unset sentinel,
+  // stored here (not passed to EkfTiny::init(), which is unchanged) since
+  // applyPoseFix() reads rFixXy_/rFixTheta_ directly at the moment a fix
+  // arrives.
+  rFixXy_ = sentinelOr(config.ekf_r_fix_xy, kDefaultRFixXy);
+  rFixTheta_ = sentinelOr(config.ekf_r_fix_theta, kDefaultRFixTheta);
 }
 
 void PoseEstimator::tick(uint32_t now, const msg::MotorState& leftObs,
                           const msg::MotorState& rightObs,
                           const msg::PoseEstimate* otosObs,
                           Rt::WorkQueue<Rt::PoseResetCommand, 4>& poseResetIn,
-                          Rt::Mailbox<msg::SetPose>& otosSetPoseOut) {
+                          Rt::Mailbox<msg::SetPose>& otosSetPoseOut,
+                          Rt::Mailbox<Rt::PoseFixCommand>& poseFixIn) {
   // 099-004: lastPoseStep_ reflects only the IMMEDIATELY-prior tick()'s
   // correction -- reset to {0, 0} at the very top of every call, before the
   // drain below has a chance to (re)populate it.
@@ -86,6 +94,16 @@ void PoseEstimator::tick(uint32_t now, const msg::MotorState& leftObs,
         resetEncoderBaseline();
         break;
     }
+  }
+
+  // 099-008 (architecture-update.md D5-D8): drain poseFixIn -- latest-wins,
+  // at most ONE entry per tick() call (a Mailbox, never accumulates) --
+  // BEFORE the early return below, same "never skip a queued correction
+  // just because this pass's own encoder observations happen to be
+  // momentarily absent" rationale as the poseResetIn drain above.
+  if (!poseFixIn.empty()) {
+    Rt::PoseFixCommand fix = poseFixIn.take();
+    applyPoseFix(fix, now, otosSetPoseOut);
   }
 
   // Encoder delta requires BOTH wheels' position observation this tick. If
@@ -207,6 +225,19 @@ void PoseEstimator::tick(uint32_t now, const msg::MotorState& leftObs,
     ekf_.updateHeading(otosObs->pose.h);
   }
 
+  // 099-008: pose-history ring -- record (now, encX_, encY_, encTheta_)
+  // every kPoseHistoryPeriodMs (50ms), independent of the 20ms tick
+  // cadence and of step 4's paired-freshness gate (see pose_estimator.h's
+  // class comment). NEVER records fusedPose()/ekf_ state. Only reached on
+  // a tick that did not hit the early return above (leftObs/rightObs both
+  // present).
+  if (!haveRingRecord_ ||
+      static_cast<int32_t>(now - lastRingRecordMs_) >= static_cast<int32_t>(kPoseHistoryPeriodMs)) {
+    pushRingEntry(now, encX_, encY_, encTheta_);
+    lastRingRecordMs_ = now;
+    haveRingRecord_ = true;
+  }
+
   lastTick_ = now;
   haveLastTick_ = true;
 }
@@ -243,6 +274,9 @@ void PoseEstimator::setPose(const msg::SetPose& pose) {
   // EkfTiny::setPose() (082-001) overwrites state with a sane diagonal
   // P-prior instead of zeroing P -- see ekf_tiny.h's own doc comment.
   ekf_.setPose(pose.x, pose.y, theta);
+  // 099-008: a hard re-anchor breaks continuity with any ring entry
+  // recorded before this call -- see this method's header doc comment.
+  clearRing();
 }
 
 void PoseEstimator::resetEncoderBaseline() {
@@ -250,6 +284,145 @@ void PoseEstimator::resetEncoderBaseline() {
   // method's own doc comment (pose_estimator.h) and tick()'s matching
   // dt > 0 gate above.
   encBaselineResetPending_ = true;
+}
+
+// ===========================================================================
+// Pose-history ring + delayed-fix compose (099-008, architecture-update.md
+// D5-D8). See pose_estimator.h's doc comments for the full design.
+// ===========================================================================
+
+void PoseEstimator::pushRingEntry(uint32_t t, float x, float y, float theta) {
+  ring_[ringHead_] = PoseHistoryEntry{t, x, y, theta};
+  ringHead_ = (ringHead_ + 1) % kPoseHistorySize;
+  if (ringCount_ < kPoseHistorySize) {
+    ++ringCount_;
+  }
+}
+
+void PoseEstimator::clearRing() {
+  ringHead_ = 0;
+  ringCount_ = 0;
+  haveRingRecord_ = false;
+  lastRingRecordMs_ = 0;
+}
+
+PoseEstimator::EncPose PoseEstimator::lerpEncPose(uint32_t tA, const EncPose& a, uint32_t tB,
+                                                   const EncPose& b, uint32_t t) {
+  if (tB == tA) {
+    // Degenerate (zero-width) span -- avoid a divide by zero; either
+    // endpoint is an equally valid answer since they share a timestamp.
+    return a;
+  }
+  float frac = static_cast<float>(static_cast<int32_t>(t - tA)) /
+               static_cast<float>(static_cast<int32_t>(tB - tA));
+  EncPose result;
+  result.x = a.x + (b.x - a.x) * frac;
+  result.y = a.y + (b.y - a.y) * frac;
+  // Wrapped-angle interpolation -- interpolate along the SHORTEST angular
+  // path from a.theta to b.theta, not the raw numeric difference.
+  float dTheta = wrapPi(b.theta - a.theta);
+  result.theta = wrapPi(a.theta + dTheta * frac);
+  return result;
+}
+
+PoseEstimator::EncPose PoseEstimator::interpolateEncAt(uint32_t t, uint32_t now) const {
+  // An empty ring has nothing to interpolate against -- treat T as "now"
+  // (see this method's header doc comment).
+  if (ringCount_ == 0) {
+    return EncPose{encX_, encY_, encTheta_};
+  }
+
+  int oldestIdx = (ringHead_ - ringCount_ + kPoseHistorySize) % kPoseHistorySize;
+  int newestIdx = (ringHead_ - 1 + kPoseHistorySize) % kPoseHistorySize;
+  const PoseHistoryEntry& oldest = ring_[oldestIdx];
+  const PoseHistoryEntry& newest = ring_[newestIdx];
+
+  // T newer than the ring's last snapshot: interpolate newest -> now, "now"
+  // acting as an implicit extra ring entry carrying the LIVE encoder pose.
+  if (static_cast<int32_t>(t - newest.t) > 0) {
+    EncPose newestPose{newest.x, newest.y, newest.theta};
+    EncPose nowPose{encX_, encY_, encTheta_};
+    return lerpEncPose(newest.t, newestPose, now, nowPose, t);
+  }
+
+  // T at or before the oldest entry -- the caller (applyPoseFix()) already
+  // rejects a genuinely-stale t via fixDropped_ before ever reaching here;
+  // this is a defensive fallback (also the exact-match T == oldest.t case).
+  if (static_cast<int32_t>(t - oldest.t) <= 0) {
+    return EncPose{oldest.x, oldest.y, oldest.theta};
+  }
+
+  // Walk the ring oldest -> newest to find the bracketing pair.
+  for (int i = 0; i < ringCount_ - 1; ++i) {
+    int idxA = (oldestIdx + i) % kPoseHistorySize;
+    int idxB = (oldestIdx + i + 1) % kPoseHistorySize;
+    const PoseHistoryEntry& a = ring_[idxA];
+    const PoseHistoryEntry& b = ring_[idxB];
+    if (static_cast<int32_t>(t - a.t) >= 0 && static_cast<int32_t>(t - b.t) <= 0) {
+      return lerpEncPose(a.t, EncPose{a.x, a.y, a.theta}, b.t, EncPose{b.x, b.y, b.theta}, t);
+    }
+  }
+
+  // Unreachable given the bounds already checked above -- fallback to the
+  // newest entry rather than leaving EncPose uninitialized.
+  return EncPose{newest.x, newest.y, newest.theta};
+}
+
+void PoseEstimator::applyPoseFix(const Rt::PoseFixCommand& fix, uint32_t now,
+                                  Rt::Mailbox<msg::SetPose>& otosSetPoseOut) {
+  // 1. Reject a t older than the ring's oldest entry -- no state change, no
+  // crash, just a diagnostic counter. An empty ring (nothing recorded yet
+  // to judge staleness against) never rejects.
+  if (ringCount_ > 0) {
+    int oldestIdx = (ringHead_ - ringCount_ + kPoseHistorySize) % kPoseHistorySize;
+    uint32_t oldestT = ring_[oldestIdx].t;
+    if (static_cast<int32_t>(fix.t - oldestT) < 0) {
+      ++fixDropped_;
+      return;
+    }
+  }
+
+  // Clamp a future t to now -- this fix cannot describe a time later than
+  // "now".
+  uint32_t t = fix.t;
+  if (static_cast<int32_t>(t - now) > 0) {
+    t = now;
+  }
+
+  // 2. Interpolate enc(T).
+  EncPose encAtT = interpolateEncAt(t, now);
+  EncPose encNow{encX_, encY_, encTheta_};
+
+  // 3. Compose in the shared world frame -- exact (not approximate), per
+  // architecture-update.md's D5-D8 rationale: encX_/encY_ already integrate
+  // cosf/sinf(encThetaMid) at each step, so the delta between two
+  // world-frame dead-reckoning samples IS the correct rigid transform the
+  // robot underwent between them.
+  float impliedX = fix.x + (encNow.x - encAtT.x);
+  float impliedY = fix.y + (encNow.y - encAtT.y);
+  float impliedH = wrapPi(fix.h + wrapPi(encNow.theta - encAtT.theta));
+
+  // 4. Apply as an UNGATED EkfTiny position+heading update -- the camera is
+  // authoritative (D5); ticket 006's innovation gate protects the OTOS
+  // channel only and never applies here.
+  msg::PoseEstimate before = fusedPose();
+  ekf_.updatePositionUngated(impliedX, impliedY, rFixXy_);
+  ekf_.updateHeadingUngated(impliedH, rFixTheta_);
+  msg::PoseEstimate after = fusedPose();
+
+  // 5. Record the applied step -- the SAME mechanism ticket 004 built for SI.
+  float dx = after.pose.x - before.pose.x;
+  float dy = after.pose.y - before.pose.y;
+  lastPoseStep_.pos = sqrtf(dx * dx + dy * dy);
+  lastPoseStep_.theta = fabsf(wrapPi(after.pose.h - before.pose.h));
+
+  // 6. Post the resulting fusedPose() to otosSetPoseOut -- the SAME
+  // mechanism ticket 004 built for SI.
+  msg::SetPose posted;
+  posted.x = after.pose.x;
+  posted.y = after.pose.y;
+  posted.h = after.pose.h;
+  otosSetPoseOut.post(posted);
 }
 
 }  // namespace Subsystems
