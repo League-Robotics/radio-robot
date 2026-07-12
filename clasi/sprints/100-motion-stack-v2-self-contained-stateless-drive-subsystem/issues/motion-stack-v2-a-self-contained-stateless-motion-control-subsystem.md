@@ -1,5 +1,20 @@
 ---
-status: pending
+status: in-progress
+sprint: '100'
+tickets:
+- 100-001
+- 100-002
+- 100-003
+- 100-004
+- 100-005
+- 100-006
+- 100-007
+- 100-008
+- 100-009
+- 100-010
+- 100-011
+- 100-012
+- 100-013
 ---
 
 # Motion Stack v2 — a self-contained, stateless motion-control subsystem
