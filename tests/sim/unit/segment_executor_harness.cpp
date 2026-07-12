@@ -784,6 +784,146 @@ void scenarioReplanRetirementSubGrossNoLongerFires() {
   (void)last;
 }
 
+// 12. [Sprint 098 M6, ticket 004, Stage 2, OPTIONAL] Parity: an invalid/
+// absent PoseEstimate produces BIT-IDENTICAL twist output to ticket 002's
+// encoder-only path -- the ticket's own load-bearing safety guarantee (any
+// caller that never threads a real OTOS pose, or explicitly supplies an
+// invalid one, must see EXACTLY Stage 1's behavior, not merely an
+// approximation of it). Shadow two executors -- A never receives a pose
+// argument at all (the default-parameter path every OTHER scenario in this
+// file already exercises); B receives an EXPLICIT, deliberately invalid
+// PoseEstimate (stamp.valid == false, a nonzero pose.h to prove it is
+// ignored, not just zero-by-coincidence) every tick -- fed the IDENTICAL
+// encoder trajectory (A's own twist drives the one shared plant, mirroring
+// scenario 7's shadow pattern), across a segment that exercises PRE_PIVOT,
+// TRANSLATE, AND TERMINAL_PIVOT (the only phases that ever reach
+// measuredHeading(), the ONE place the pose argument is consulted) with
+// nonzero heading_kp/heading_kd so the pose-gate itself -- not merely
+// Kp=Kd=0 degenerating both paths to the same open-loop passthrough -- is
+// what is actually under test.
+void scenarioOtosInvalidPoseParityWithEncoderOnlyPath() {
+  beginScenario(
+      "sprint-098 M6 (ticket 004, Stage 2, optional): invalid/absent PoseEstimate is "
+      "BIT-IDENTICAL to ticket 002's encoder-only path");
+
+  msg::PlannerConfig cfg = generousConfig();
+  cfg.heading_kp = 2.0f;
+  cfg.heading_kd = 0.3f;
+
+  Motion::SegmentExecutor execA;  // default path -- never passed a pose argument
+  execA.configure(cfg);
+  Motion::SegmentExecutor execB;  // explicit invalid PoseEstimate every tick
+  execB.configure(cfg);
+
+  Motion::Segment seg;
+  seg.distance = 300.0f;
+  seg.direction = 0.8f;      // PRE_PIVOT
+  seg.finalHeading = 1.3f;   // TERMINAL_PIVOT target = 1.3 - 0.8 = 0.5 rad
+
+  uint32_t clock = 0;
+  execA.start(seg, clock, kTrackwidth);
+  execB.start(seg, clock, kTrackwidth);
+
+  msg::PoseEstimate invalidPose;
+  invalidPose.pose.h = 2.5f;        // deliberately nonzero -- proves it is ignored, not
+                                     // coincidentally zero
+  invalidPose.stamp.valid = false;  // the ONLY bit that matters -- explicitly absent/stale
+
+  VelocityAwarePlant plant;   // honest velocity feedback -- exercises the D-term identically
+                              // on both shadows (see ticket 002's own completion-notes finding
+                              // on PlantState's fabricated-zero-velocity artifact)
+  const uint32_t kDt = 20;
+  bool everMismatched = false;
+  int i = 0;
+  for (; i < 700; ++i) {
+    clock += kDt;
+    msg::BodyTwist3 twistA = execA.tick(clock, plant.leftObs(), plant.rightObs());
+    msg::BodyTwist3 twistB = execB.tick(clock, plant.leftObs(), plant.rightObs(), invalidPose);
+    if (twistA.v_x != twistB.v_x || twistA.omega != twistB.omega) everMismatched = true;
+    plant.advance(twistA, static_cast<float>(kDt) * 0.001f);  // A's own twist drives the ONE
+                                                               // shared plant both executors see
+    if (execA.converged() && execB.converged()) { ++i; break; }
+  }
+
+  checkFalse(everMismatched,
+            "an explicit invalid PoseEstimate produces bit-identical twist output to the "
+            "default (no-pose-argument) path, every tick");
+  checkTrue(execA.converged() && execB.converged(), "both shadows converge");
+  checkTrue(i < 700, "both shadows converge within the generous loop bound");
+}
+
+// 13. [Sprint 098 M6, ticket 004, Stage 2, OPTIONAL] Source selection: a
+// VALID PoseEstimate whose heading deliberately differs from the
+// encoder-derived one is actually CONSUMED by measuredHeading() -- proven by
+// an observably different PD correction than the encoder-only case, shadowed
+// the same way scenario 7 proves the PD term itself is nonzero. A (encoder-
+// only, no pose argument) tracks a zero-lag/zero-slip plant almost exactly,
+// so its own P-term stays near 0 throughout (nothing to correct against). B
+// is fed a fabricated OTOS heading that reports 40% MORE rotation than has
+// actually occurred -- a deliberately, obviously wrong reading with no
+// physical counterpart, chosen so the resulting divergence from A is
+// unambiguous -- proving the measured-heading step preferred pose.h over the
+// (still-available, still-consistent) encoder fallback.
+void scenarioOtosSourceSelectionUsesOtosHeadingWhenValid() {
+  beginScenario(
+      "sprint-098 M6 (ticket 004, Stage 2, optional): a valid PoseEstimate whose heading "
+      "deliberately differs from the encoder-derived one is actually consumed -- a different PD "
+      "correction than the encoder-only case");
+
+  msg::PlannerConfig cfg = generousConfig();
+  cfg.heading_kp = 2.0f;
+  cfg.heading_kd = 0.0f;  // isolate the P-term, matching scenario 7's own isolation choice
+
+  Motion::SegmentExecutor execA;  // encoder-only (no pose argument at all)
+  execA.configure(cfg);
+  Motion::SegmentExecutor execB;  // OTOS-sourced -- fed a deliberately offset heading
+  execB.configure(cfg);
+
+  Motion::Segment seg;
+  seg.distance = 0.0f;
+  seg.direction = 1.0f;     // [rad] -- PRE_PIVOT only
+  seg.finalHeading = 1.0f;  // == direction -- TERMINAL_PIVOT skipped
+
+  uint32_t clock = 0;
+  execA.start(seg, clock, kTrackwidth);
+  execB.start(seg, clock, kTrackwidth);
+
+  PlantState plant;   // zero-lag/zero-slip -- the encoder-derived heading tracks the Ruckig
+                      // plan's own sample essentially exactly, so A's own P-term stays ~0
+                      // throughout (nothing for the encoder path to correct against).
+  const uint32_t kDt = 20;
+  bool sawDivergentCorrection = false;
+  float trueHeading = 0.0f;   // integrated from A's own commanded omega -- the SAME encoder
+                              // trajectory both A and B observe via plant.leftObs()/rightObs()
+  for (int i = 0; i < 60; ++i) {
+    clock += kDt;
+
+    // OTOS deliberately reports 40% MORE rotation than has actually
+    // happened -- a fabricated reading with no physical counterpart, chosen
+    // so the resulting PD divergence is unambiguous (not a realistic
+    // sensor-noise magnitude).
+    msg::PoseEstimate otosPose;
+    otosPose.pose.h = trueHeading * 1.4f;
+    otosPose.stamp.valid = true;
+
+    msg::BodyTwist3 twistA = execA.tick(clock, plant.leftObs(), plant.rightObs());
+    msg::BodyTwist3 twistB = execB.tick(clock, plant.leftObs(), plant.rightObs(), otosPose);
+
+    if (fabsf(twistB.omega - twistA.omega) > 0.05f) sawDivergentCorrection = true;
+
+    plant.advance(twistA, static_cast<float>(kDt) * 0.001f);   // both A and B see the SAME
+                                                                // encoder trajectory -- A's own
+                                                                // twist drives the one shared
+                                                                // plant (mirrors scenario 7)
+    trueHeading += twistA.omega * static_cast<float>(kDt) * 0.001f;
+  }
+
+  checkTrue(sawDivergentCorrection,
+           "the OTOS-sourced executor's PD correction diverges measurably from the "
+           "encoder-only executor's -- proof the measured-heading step actually consumed "
+           "pose.h, not the encoder fallback");
+}
+
 }  // namespace
 
 int main() {
@@ -798,6 +938,8 @@ int main() {
   scenarioDwellDoesNotExhaustStopTimeBudget();
   scenarioStallProtectionGrossDivergenceStillFires();
   scenarioReplanRetirementSubGrossNoLongerFires();
+  scenarioOtosInvalidPoseParityWithEncoderOnlyPath();
+  scenarioOtosSourceSelectionUsesOtosHeadingWhenValid();
 
   if (g_failureCount > 0) {
     std::printf("\n%d FAILURE(S)\n", g_failureCount);

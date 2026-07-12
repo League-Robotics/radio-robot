@@ -36,6 +36,20 @@ struct MotionBaseline {
   // motion/stop_condition.cpp).
   float vSign = 0.0f;      // dimensionless: +1/-1/0
   float omegaSign = 0.0f;  // dimensionless: +1/-1/0
+
+  // otosHeading0 (098-004/M6, Stage 2, optional) -- the OTOS leaf's own
+  // world-frame pose.h, captured at phase start ONLY when that tick's
+  // caller-supplied msg::PoseEstimate is valid/connected (0.0f, unused,
+  // otherwise) -- mirrors encDiff0's "relative to phase start" convention
+  // above, for Motion::SegmentExecutor's measured-heading step (segment_
+  // executor.cpp's measuredHeading()) to derive an OTOS-sourced heading
+  // delta the SAME way encDiff0 derives an encoder-sourced one. Distinct
+  // from heading0 above: heading0 is reserved, still entirely dead this
+  // sprint, for a future FULL EKF-fused pose (sprint 099's scope); this
+  // field is Stage 2's deliberately narrower trust boundary -- ONE raw
+  // sensor's own heading channel, never position (architecture-update.md
+  // M6/Decision 4).
+  float otosHeading0 = 0.0f;  // [rad] OTOS pose.h at phase start, when valid
 };
 
 }  // namespace Motion

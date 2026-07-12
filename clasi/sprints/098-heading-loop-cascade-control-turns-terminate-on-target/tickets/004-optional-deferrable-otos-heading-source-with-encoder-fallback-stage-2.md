@@ -1,9 +1,11 @@
 ---
 id: '004'
 title: '[OPTIONAL/DEFERRABLE] OTOS heading source with encoder fallback (Stage 2)'
-status: open
-use-cases: [SUC-004]
-depends-on: ['003']
+status: in-progress
+use-cases:
+- SUC-004
+depends-on:
+- '003'
 github-issue: ''
 issue:
 - heading-loop-cascade-control-turns-terminate-on-target.md
@@ -44,11 +46,11 @@ on top of it.
 
 ## Acceptance Criteria
 
-- [ ] `main.cpp` ticks the OTOS leaf once per pass:
+- [x] `main.cpp` ticks the OTOS leaf once per pass:
       `hardware.odometer()->tick(now)`, placed AFTER `hardware.tick(now)`
       and BEFORE `drivetrain.tick(...)` so a fresh pose is available before
       the executor consumes it this same pass.
-- [ ] `main.cpp` commits `bb.otos = hardware.odometer()->pose()` and
+- [x] `main.cpp` commits `bb.otos = hardware.odometer()->pose()` and
       `bb.otosConnected = hardware.odometer()->connected()` for telemetry,
       using `connected() && pose().stamp.valid` (NOT `fusableThisPass()`)
       to derive freshness/validity — `fusableThisPass()`'s one-sanctioned-
@@ -56,12 +58,12 @@ on top of it.
       EKF-fusion-gate concern this loop does not have
       (`architecture-update.md` Decision 4's own note); do not introduce a
       second caller of that method.
-- [ ] `Subsystems::Drivetrain::tick()` reads `hardware_.odometer()->
+- [x] `Subsystems::Drivetrain::tick()` reads `hardware_.odometer()->
       pose()`/`connected()` directly each tick (it already holds
       `Hardware&`) and passes a real `msg::PoseEstimate` — instead of
       today's hardcoded `msg::PoseEstimate{}` — into `Motion::
       SegmentExecutor::tick()`.
-- [ ] `Motion::SegmentExecutor`'s measured-heading step (ticket 002's own
+- [x] `Motion::SegmentExecutor`'s measured-heading step (ticket 002's own
       PD/completion logic) prefers OTOS heading (`pose.h`) when the
       caller-supplied `PoseEstimate` is valid/connected, relative to a NEW
       baseline field capturing OTOS heading at phase start (mirroring
@@ -69,14 +71,14 @@ on top of it.
       back to the encoder-derived heading (ticket 002's unmodified path)
       otherwise, TICK-BY-TICK (not latched for the whole phase — if OTOS
       drops mid-phase, the very next tick falls back to encoders).
-- [ ] SIM ACCEPTANCE: a new scenario injects an invalid/absent
+- [x] SIM ACCEPTANCE: a new scenario injects an invalid/absent
       `PoseEstimate` and confirms behavior is IDENTICAL to ticket 002's
       encoder-only scenarios (bit-for-bit twist output); a second scenario
       injects a valid `PoseEstimate` with a deliberately-different heading
       than the encoder-derived one and confirms the executor's
       measured-heading step actually uses the OTOS value (observably
       different PD correction than the encoder-only case).
-- [ ] Full `uv run python -m pytest` stays green, no regression from ticket
+- [x] Full `uv run python -m pytest` stays green, no regression from ticket
       002's own baseline.
 - [ ] HARDWARE ACCEPTANCE (do not skip even though this ticket is optional
       — if executed at all, it must be verified, not merely compiled):
@@ -123,3 +125,92 @@ no new classes, matching `architecture-update.md` M6's boundary.
 
 **Documentation updates**: none required structurally; record the
 timing/accuracy measurements in this ticket's completion notes.
+
+## Completion Notes (software portion — programmer)
+
+- **`Motion::SegmentExecutor::tick()`'s signature did not yet carry a
+  `PoseEstimate` parameter.** Architecture-update.md Decision 4 assumed
+  ticket 002 (Stage 1) would add a `pose` parameter to `tick()` once,
+  passing `msg::PoseEstimate{}` unused, so Stage 2 could "just start filling
+  it with real data." Checked ticket 002's actual landed code
+  (`ed4fcba2`..`3d3de839`): it kept `tick()` at its original 094-001 arity
+  (`now, encLeft, encRight`) and the class genuinely pose-free — no
+  `PoseEstimate` parameter anywhere. This ticket adds it now: `tick(uint32_t
+  now, const msg::MotorState& encLeft, const msg::MotorState& encRight,
+  const msg::PoseEstimate& pose = msg::PoseEstimate{})` — a DEFAULTED
+  trailing parameter, so every existing caller (`Drivetrain`'s other call
+  site never existed since this was the only one; every pre-existing sim
+  scenario in `segment_executor_harness.cpp`) compiles and behaves unchanged
+  without any explicit update, which also structurally *guarantees* (not
+  just achieves via careful gating) the parity acceptance criterion: an
+  omitted 4th argument default-constructs `stamp.valid == false`, bit-
+  identical to Stage 1's own hardcoded empty `msg::PoseEstimate{}`. This is
+  a one-ticket-later landing of Decision 4's own plan, not a conflict with
+  it — flagging per the dispatch instructions' "report precisely what you
+  found" guidance rather than silently forcing a different shape.
+- **New `MotionBaseline` field is `otosHeading0`, not a reuse of the
+  existing (dead) `heading0`.** `heading0` is already declared
+  (`motion_baseline.h`) but its doc comment specifically means a future
+  FULL EKF-fused pose heading (sprint 099's scope) and it is genuinely
+  unused everywhere in `source/` today. Reusing it for Stage 2's raw,
+  single-sensor OTOS heading would create a real semantic collision for
+  whoever lands 099's fusion later (they would find `heading0` already
+  "meaning something," incorrectly). Added a distinct `otosHeading0` field
+  instead, leaving `heading0`/`pose0X`/`pose0Y` exactly as dead as before
+  this ticket.
+- **Freshness/connected combination happens once, in
+  `Subsystems::Drivetrain::tick()`**, not in the executor: `msg::
+  PoseEstimate otosPose = hardware_.odometer()->pose(); otosPose.stamp.valid
+  = otosPose.stamp.valid && hardware_.odometer()->connected();` — then
+  passed to `executor_.tick()`. `Motion::SegmentExecutor::measuredHeading()`
+  therefore has a single gate to check (`pose.stamp.valid`), never queries
+  `connected()` itself, and stays free of any `Hal::Odometer` dependency —
+  matches Decision 4's "pose-shaped-parameter-capable" framing.
+  `measuredHeading()`'s OTOS branch computes `wrapAngle(pose.pose.h -
+  baseline_.otosHeading0)` (a small local `wrapAngle()` added to
+  `segment_executor.cpp`'s anonymous namespace, identical atan2f/sinf/cosf
+  identity to `stop_condition.cpp`'s own file-local one) — exact for any
+  single-phase rotation under ±180°, which matches this sprint's scope
+  (PRE_PIVOT/TERMINAL_PIVOT are single in-place pivots, never multi-turn);
+  `omegaMeasured` stays encoder-derived unconditionally, matching the
+  ticket's explicit "OTOS heading only, never rate" scope. `main.cpp`'s
+  `bb.otos`/`bb.otosConnected` commit is separate and untouched by this —
+  telemetry-only, `bb.otosValid`/`fusableThisPass()` deliberately untouched.
+- **Parity scenario (`scenarioOtosInvalidPoseParityWithEncoderOnlyPath`,
+  `tests/sim/unit/segment_executor_harness.cpp`)**: shadows two executors —
+  A never passed a pose argument (default path every other scenario already
+  exercises); B passed an EXPLICIT invalid `PoseEstimate` (`stamp.valid =
+  false`, `pose.h = 2.5f` to prove the value is ignored, not coincidentally
+  zero) every tick — both with nonzero `heading_kp`/`heading_kd` (2.0/0.3)
+  so the pose-gate itself, not `Kp=Kd=0` degeneracy, is under test. Result:
+  **bit-identical** (`twistA.v_x == twistB.v_x && twistA.omega ==
+  twistB.omega`, exact `==`, every tick) across a PRE_PIVOT+TRANSLATE+
+  TERMINAL_PIVOT segment. Confirmed by running the compiled harness binary
+  directly (`c++ -std=gnu++20 -fno-exceptions -fno-rtti -DHOST_BUILD=1
+  -Wall -Wextra`) — all 13 scenarios print `ALL SCENARIOS PASSED`, exit 0,
+  zero compiler warnings.
+- **Source-selection scenario
+  (`scenarioOtosSourceSelectionUsesOtosHeadingWhenValid`)**: shadows A
+  (encoder-only) against B (fed a fabricated OTOS heading reporting 40% more
+  rotation than has actually occurred) on a zero-lag/zero-slip plant (so A's
+  own P-term stays ~0, nothing to correct against); asserts `|twistB.omega -
+  twistA.omega| > 0.05` rad/s is observed — confirming the OTOS value is
+  actually consumed by `measuredHeading()`, not silently ignored.
+- **Test counts**: baseline stated in the ticket is 898 passed
+  (`uv run python -m pytest tests/sim tests/unit -q`). Post-change: **898
+  passed** — unchanged, matching ticket 002's own precedent
+  (`segment_executor_harness.cpp` is one pytest test regardless of internal
+  scenario count; the two new scenarios enrich what that one test proves,
+  11 → 13 internal scenarios, without changing the pytest-level count).
+- **Builds**: `just build-sim` succeeds (host `libfirmware_host.dylib`).
+  `just build-clean` succeeds — firmware hex builds clean (FLASH 86.00%,
+  RAM 98.33%, both within the project's normal "always near-full" RAM
+  envelope, `[[codal-ram-always-near-full]]`); host sim lib rebuilds after.
+  No new compiler warnings from any touched file in either build.
+- **Not done (explicitly out of scope, left for the team-lead on
+  hardware)**: the HARDWARE ACCEPTANCE block (`bb.otosConnected` bench
+  check, `turn_sweep.py --relay --both` regression subset against ticket
+  003's baseline, loop-timing/radio-responsiveness check, and the
+  revert-if-regressed decision) — left entirely unchecked below. Frontmatter
+  `status` left at `in-progress` for the team-lead to finalize after that
+  pass.

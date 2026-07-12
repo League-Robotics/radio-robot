@@ -63,6 +63,22 @@
 // this class takes encoder observations and a `now` timestamp as tick()
 // arguments only, and returns a body twist. It has no Hal::Motor/
 // Subsystems::Drivetrain/blackboard reference or pointer.
+//
+// Sprint 098 (M6, ticket 004, Stage 2, OPTIONAL): tick() gains a fourth,
+// DEFAULTED `msg::PoseEstimate` parameter -- Decision 4's reused (not new)
+// pose seam. Defaulted so every pre-004 caller (every OTHER caller in this
+// codebase, and every one of this file's own pre-098-004 sim scenarios)
+// compiles and behaves UNCHANGED, passing no fourth argument at all, which
+// default-constructs an all-zero/`stamp.valid == false` `msg::
+// PoseEstimate{}` -- bit-identical to Stage 1's own hardcoded empty one.
+// Still POSE-FREE for X/Y and for
+// PRE_PIVOT/TERMINAL_PIVOT's own completion/replan logic (STOP_DISTANCE/
+// STOP_ROTATION/STOP_TIME, `maybeReplanPivot()`/`maybeReplanTranslate()`,
+// unchanged) -- ONLY `measuredHeading()`'s PD-cascade input (M3) prefers the
+// supplied pose's `pose.h`, and only while `pose.stamp.valid` (the caller's
+// own combined valid/connected signal -- see `Subsystems::Drivetrain::
+// tick()`'s doc comment for where that gets folded in), falling back
+// tick-by-tick to the unmodified ticket-002 encoder path otherwise.
 #pragma once
 
 #include <stdint.h>
@@ -117,8 +133,15 @@ class SegmentExecutor {
   // omega for PRE_PIVOT/TERMINAL_PIVOT, the other component always exactly
   // 0 -- a Segment's phases are never simultaneously translating and
   // pivoting).
+  //
+  // `pose` (098-004/M6, Stage 2, optional, defaulted): this tick's OTOS-
+  // sourced `msg::PoseEstimate`, consumed ONLY by PRE_PIVOT/TERMINAL_PIVOT's
+  // `measuredHeading()` step, and ONLY while `pose.stamp.valid` -- see this
+  // class's own file header and `measuredHeading()`'s doc comment. Never
+  // stored beyond this call, same as `encLeft`/`encRight`.
   msg::BodyTwist3 tick(uint32_t now, const msg::MotorState& encLeft,
-                       const msg::MotorState& encRight);
+                       const msg::MotorState& encRight,
+                       const msg::PoseEstimate& pose = msg::PoseEstimate{});
 
   // active -- true while a phase (PRE_PIVOT/TRANSLATE/TERMINAL_PIVOT/BLEND)
   // or its trailing graceful decel-to-zero is still running.
@@ -199,9 +222,12 @@ class SegmentExecutor {
   // remaining, ACCUMULATE the pending segment's distance/heading onto it,
   // retarget() both channels from their moving state, rebase the baseline
   // from this tick's observations, and rebuild the stops for the merged
-  // targets. No replans in BLEND (the next merge IS the correction).
+  // targets. No replans in BLEND (the next merge IS the correction). `pose`
+  // is threaded through to captureBaseline()'s rebase call only -- BLEND
+  // never consumes it otherwise (M3's heading PD cascade is PRE_PIVOT/
+  // TERMINAL_PIVOT only, never BLEND -- see this file's own header).
   void mergePending(uint32_t now, const msg::MotorState& encLeft,
-                    const msg::MotorState& encRight);
+                    const msg::MotorState& encRight, const msg::PoseEstimate& pose);
 
   // advancePhase -- called once the active phase's trailing graceful decel
   // has converged (or forceStopArmed_ is set): moves to the next
@@ -211,11 +237,14 @@ class SegmentExecutor {
   void advancePhase(uint32_t now);
 
   // captureBaseline -- snapshot a Motion::MotionBaseline from this tick's
-  // observations for the CURRENTLY active phase. Pose fields (heading0/
-  // pose0X/pose0Y) are left at 0 -- dead, this executor is pose-free (see
-  // class comment) -- only t0/enc0/encDiff0/vSign/omegaSign are meaningful.
+  // observations for the CURRENTLY active phase. heading0/pose0X/pose0Y stay
+  // at 0 -- still dead, reserved for a future full EKF-fused pose (sprint
+  // 099's scope), NOT this ticket. otosHeading0 (098-004/M6) IS captured --
+  // `pose.pose.h` when `pose.stamp.valid` this tick, else 0.0f (unused in
+  // that case) -- see motion_baseline.h's own field comment. t0/enc0/
+  // encDiff0/vSign/omegaSign are unchanged from before this ticket.
   void captureBaseline(uint32_t now, const msg::MotorState& encLeft,
-                       const msg::MotorState& encRight);
+                       const msg::MotorState& encRight, const msg::PoseEstimate& pose);
 
   // appendStop -- append one stop condition to the active phase's stops_[]
   // (bounded to the 4-slot cap, mirrors Planner::appendStop()).
@@ -268,20 +297,31 @@ class SegmentExecutor {
   // derivation for PRE_PIVOT/TERMINAL_PIVOT (architecture-update.md M3),
   // used by both the outer heading PD cascade and the tolerance/dwell
   // completion gate -- both need the identical quantities, every tick.
-  // thetaMeasured is the encoder-differential heading relative to the
-  // phase's OWN baseline (baseline_.encDiff0), in the SAME signed frame as
-  // rotationalTarget_/rotational_'s own sample() -- see the .cpp for the
-  // derivation note (algebraically identical to rotationProgress()'s
-  // STOP_ROTATION geometry, motion/stop_condition.cpp, just expressed in
-  // radians instead of per-wheel-arc mm). Falls back to thetaDesired
+  //
+  // thetaMeasured (098-004/M6, Stage 2): prefers the OTOS source -- wrapped
+  // `pose.pose.h - baseline_.otosHeading0`, in the SAME signed
+  // relative-to-phase-start frame as the encoder path below -- whenever
+  // `pose.stamp.valid` this tick (the caller's own combined valid/connected
+  // signal). Falls back, TICK-BY-TICK (never latched for the phase), to
+  // ticket 002's unmodified encoder-differential derivation otherwise: the
+  // encoder heading relative to the phase's OWN baseline (baseline_.
+  // encDiff0), in the SAME signed frame as rotationalTarget_/rotational_'s
+  // own sample() -- see the .cpp for the derivation note (algebraically
+  // identical to rotationProgress()'s STOP_ROTATION geometry, motion/
+  // stop_condition.cpp, just expressed in radians instead of per-wheel-arc
+  // mm). That encoder fallback itself falls back to thetaDesired
   // (headingError == 0 that tick -- never fabricate a phantom delta from a
   // momentarily missing observation) when either wheel's position.has is
-  // false, and to omegaDesired when either wheel's velocity.has is false --
-  // the latter mirrors maybeReplanPivot()'s existing reanchor-seed fallback
-  // exactly.
+  // false.
+  //
+  // omegaMeasured is ALWAYS encoder-derived, unchanged from ticket 002 --
+  // Stage 2 trusts OTOS heading only, never OTOS twist/rate (architecture-
+  // update.md M6's own boundary) -- falling back to omegaDesired when
+  // either wheel's velocity.has is false (mirrors maybeReplanPivot()'s
+  // existing reanchor-seed fallback exactly).
   void measuredHeading(const msg::MotorState& encLeft, const msg::MotorState& encRight,
-                       float thetaDesired, float omegaDesired, float* thetaMeasured,
-                       float* omegaMeasured) const;
+                       const msg::PoseEstimate& pose, float thetaDesired, float omegaDesired,
+                       float* thetaMeasured, float* omegaMeasured) const;
 
   msg::PlannerConfig config_ = {};
 
