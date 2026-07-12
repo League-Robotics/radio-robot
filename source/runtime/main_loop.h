@@ -16,10 +16,12 @@
 // `estop()` bypass) and loop-originated wire output (`EVT`/periodic `TLM`)
 // stay gone from the tick entirely -- not stubbed, deleted (their classes
 // remain parked, un-wired, on disk; see the 093 architecture update's
-// "Parked" list). Pose estimation (099-004) is back, in ENCODER-ONLY mode
-// this ticket (`otosObs` is a literal `nullptr` -- OTOS fusion is ticket
-// 099-007's "one-token flip"). Motion-goal closure is back too, in a
-// different shape: `Drivetrain` itself now owns a `Motion::SegmentExecutor`
+// "Parked" list). Pose estimation (099-004) is back; OTOS fusion (099-007,
+// "the one-token flip") is now live too -- `otosObs` is `&otosSample` when
+// `hardware_.odometer()->fusableThisPass()` (called exactly once per pass)
+// and `otosSample.stamp.valid` are both true, else `nullptr`. Motion-goal
+// closure is back too, in a different shape: `Drivetrain` itself now owns a
+// `Motion::SegmentExecutor`
 // (094-004) and stages its own output directly through `hardware_` -- there
 // is no longer a separate motion-executor subsystem for this loop to tick,
 // nor an addressed output for it to route.
@@ -74,14 +76,17 @@ class MainLoop {
 
  private:
   // commit -- copies each subsystem's freshly-ticked state into bb ->
-  // x[k+1] (bb.motors[]/bb.drivetrain, plus (099-004) bb.encoderPose/
-  // bb.fusedPose/bb.poseStepped/bb.bodyState -- no bb.otos*/otosValid/
-  // otosConnected cells yet, ticket 099-007's job, since this ticket's
-  // otosObs stays a literal nullptr). Called from tick() as its last step
-  // (094-005: routeOutputs(), formerly called after this, is deleted --
-  // Drivetrain::tick() already staged its own wheel writes directly through
-  // hardware_'s motor refs, ahead of commit()).
-  void commit(Blackboard& bb, uint32_t now);
+  // x[k+1] (bb.motors[]/bb.drivetrain, bb.encoderPose/bb.fusedPose/
+  // bb.poseStepped/bb.bodyState, and (099-007) bb.otos/bb.otosValid/
+  // bb.otosConnected). otosFusable/otosSample are THIS pass's already-read
+  // fusableThisPass()/pose() values, threaded in from tick() rather than
+  // re-read here -- fusableThisPass() is a one-shot read-and-clear signal
+  // that may be called AT MOST ONCE per pass (hal/capability/odometer.h),
+  // so commit() must never call it again itself. Called from tick() as its
+  // last step (094-005: routeOutputs(), formerly called after this, is
+  // deleted -- Drivetrain::tick() already staged its own wheel writes
+  // directly through hardware_'s motor refs, ahead of commit()).
+  void commit(Blackboard& bb, uint32_t now, bool otosFusable, const msg::PoseEstimate& otosSample);
 
   Subsystems::Hardware& hardware_;
   Subsystems::Drivetrain& drivetrain_;

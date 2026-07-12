@@ -16,7 +16,8 @@ MainLoop::MainLoop(Subsystems::Hardware& hardware, Subsystems::Drivetrain& drive
                     Subsystems::PoseEstimator& poseEstimator)
     : hardware_(hardware), drivetrain_(drivetrain), poseEstimator_(poseEstimator) {}
 
-void MainLoop::commit(Blackboard& bb, uint32_t now) {
+void MainLoop::commit(Blackboard& bb, uint32_t now, bool otosFusable,
+                       const msg::PoseEstimate& otosSample) {
   // === COMMIT (clock edge): copy each subsystem cell into bb -> x[k+1]. ===
   bb.motors = hardware_.motorStates();
   bb.drivetrain = drivetrain_.state();
@@ -25,18 +26,21 @@ void MainLoop::commit(Blackboard& bb, uint32_t now) {
   bb.fusedPose = poseEstimator_.fusedPose();
   bb.poseStepped = poseEstimator_.lastPoseStep();
 
-  // bb.otos/bb.otosConnected (099-002): the raw OTOS reading + live bus
-  // health, committed every pass regardless of whether PoseEstimator is
-  // fusing it yet (that gate is bb.otosValid/fusableThisPass(), ticket
-  // 007's job) -- hardware_.odometer() never returns null (Subsystems::
-  // Hardware's own file header). connected() is deliberately the LIVE,
-  // re-evaluated-every-tick() flag here (unlike NezhaHardware::tick()'s own
-  // scheduling gate, which needed the permanent present() instead -- see
-  // architecture-update-r1.md Decision 2): bb.otosConnected is a per-pass
-  // telemetry/diagnostic read, not a scheduling decision, so it should
-  // track the chip's actual live bus health, not just "was one ever
-  // detected."
-  bb.otos = hardware_.odometer()->pose();
+  // bb.otos/bb.otosValid/bb.otosConnected (099-002/099-007): otosSample and
+  // otosFusable are THIS pass's already-read values (tick()'s single
+  // fusableThisPass()/pose() call, threaded in as arguments rather than
+  // re-read here) -- committed every pass regardless of whether
+  // PoseEstimator actually fused it (that gate also folds in
+  // otosSample.stamp.valid; bb.otosValid reflects fusableThisPass() alone,
+  // matching architecture-update.md D1's pseudocode exactly). connected()
+  // is deliberately the LIVE, re-evaluated-every-tick() flag here (unlike
+  // NezhaHardware::tick()'s own scheduling gate, which needed the permanent
+  // present() instead -- see architecture-update-r1.md Decision 2):
+  // bb.otosConnected is a per-pass telemetry/diagnostic read, not a
+  // scheduling decision, so it should track the chip's actual live bus
+  // health, not just "was one ever detected."
+  bb.otos = otosSample;
+  bb.otosValid = otosFusable;
   bb.otosConnected = hardware_.odometer()->connected();
 
   // bodyState (099-004, architecture-update.md Addition 2): pose from the
@@ -81,18 +85,37 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
   hardware_.tick(now);
   drivetrain_.tick(now, bb.segmentIn, bb.replaceIn, bb.driveIn);
 
-  // === PoseEstimator (099-004): read the bound pair's FRESH MotorState
-  // (post hardware_.tick()/drivetrain_.tick() above -- mirrors tlm_frame.
-  // cpp's own left_port/right_port -> 0-based-index conversion pattern
-  // exactly) and tick PoseEstimator in ENCODER-ONLY mode -- otosObs is a
-  // literal nullptr this ticket; OTOS fusion is ticket 099-007's "one-token
-  // flip" (architecture-update.md, "Do not implement OTOS fusion..."). ===
+  // === PoseEstimator (099-004/099-007): read the bound pair's FRESH
+  // MotorState (post hardware_.tick()/drivetrain_.tick() above -- mirrors
+  // tlm_frame.cpp's own left_port/right_port -> 0-based-index conversion
+  // pattern exactly) and tick PoseEstimator, now WITH OTOS fusion (099-007,
+  // "the one-token flip" -- architecture-update.md D1's pseudocode,
+  // implemented verbatim below). ===
   uint32_t leftIdx = bb.drivetrainConfig.left_port - 1;
   uint32_t rightIdx = bb.drivetrainConfig.right_port - 1;
   msg::MotorState leftObs = hardware_.motorState(leftIdx);
   msg::MotorState rightObs = hardware_.motorState(rightIdx);
-  poseEstimator_.tick(now, leftObs, rightObs, /*otosObs=*/nullptr, bb.poseResetIn,
-                       bb.otosSetPoseIn, bb.poseFixIn);
+
+  // fusableThisPass() (099-007): a ONE-SHOT, read-and-clear signal --
+  // hal/capability/odometer.h's own doc comment names THIS call site as its
+  // one sanctioned caller and warns against a second call anywhere else in
+  // the same pass (it would wrongly consume the signal). Called EXACTLY
+  // ONCE per pass, right here. otosSample is read unconditionally (a cheap
+  // getter, unlike fusableThisPass()) so commit() below can still publish
+  // bb.otos regardless of fusability.
+  bool fusable = hardware_.odometer()->fusableThisPass();
+  msg::PoseEstimate otosSample = hardware_.odometer()->pose();
+
+  // otosArg: only pass a non-null observation into PoseEstimator::tick()
+  // when it is both fusable (no odometer reset landed THIS pass) and fresh
+  // (stamp.valid) -- matching pose_estimator.cpp's own consumption gate
+  // (`otosObs->stamp.valid`) exactly, so this check is never redundantly
+  // re-done inside PoseEstimator itself.
+  const msg::PoseEstimate* otosArg =
+      (fusable && otosSample.stamp.valid) ? &otosSample : nullptr;
+
+  poseEstimator_.tick(now, leftObs, rightObs, otosArg, bb.poseResetIn, bb.otosSetPoseIn,
+                       bb.poseFixIn);
 
   // A queued SI-equivalent re-anchor (BinaryChannel::handlePose(), 099-004)
   // posts its freshly re-anchored fusedPose() here -- drain it into the
@@ -106,7 +129,7 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
 
   // === COMMIT (clock edge): x[k] -> x[k+1]. Nothing left to route --
   // Drivetrain already staged its own wheel writes above. ===
-  commit(bb, now);
+  commit(bb, now, fusable, otosSample);
 }
 
 }  // namespace Rt

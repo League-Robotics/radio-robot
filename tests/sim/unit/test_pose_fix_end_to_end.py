@@ -123,15 +123,26 @@ def test_pose_fix_converges_and_leaves_encoder_pose_untouched(sim):
     # (the ungated EkfTiny update is a Kalman correction, gain < 1), but a
     # substantial fraction of the injected offset, in the RIGHT direction,
     # not a tiny/absent/wrong-direction change.
+    #
+    # Thresholds loosened from their 099-008 values (0.5 fraction / 0.5
+    # tolerance) by 099-007: OTOS fusion is now LIVE (previously otosObs was
+    # a literal nullptr, so this ungated fix's own correction was the ONLY
+    # EkfTiny update ever applied, against a covariance P that had grown
+    # unboundedly since boot -- gain near 1, near-full correction). With
+    # OTOS fusion running every pass, P is continuously pulled back down
+    # toward its (small) R_otos steady state, so the SAME fix now has a
+    # smaller, but still substantial and still measurably-converging, gain
+    # (observed ~46% of the offset covered; 0.3/0.65 below leave margin
+    # without accepting a tiny/absent/wrong-direction change).
     fused_after = read_tlm_now(sim)
     composed_target_x = enc_now_before_fix[0] + offset_x
     moved_x = fused_after.pose.x - fused_before.pose.x
-    assert moved_x > offset_x * 0.5, (
+    assert moved_x > offset_x * 0.3, (
         f"fusedPose().pose.x barely moved ({moved_x:.2f}mm) after a delayed "
         f"fix with a {offset_x}mm offset -- expected a substantial "
         "correction toward the composed target"
     )
-    assert fused_after.pose.x == pytest.approx(composed_target_x, abs=offset_x * 0.5), (
+    assert fused_after.pose.x == pytest.approx(composed_target_x, abs=offset_x * 0.65), (
         f"fusedPose().pose.x ({fused_after.pose.x:.2f}) is not converging "
         f"toward the composed target ({composed_target_x:.2f})"
     )
