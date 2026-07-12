@@ -1,9 +1,12 @@
 ---
 id: '003'
 title: 'Stage 1 hardware acceptance: encoder heading loop on the stand and playfield'
-status: open
-use-cases: [SUC-001, SUC-005]
-depends-on: ['002']
+status: in-progress
+use-cases:
+- SUC-001
+- SUC-005
+depends-on:
+- '002'
 github-issue: ''
 issue:
 - heading-loop-cascade-control-turns-terminate-on-target.md
