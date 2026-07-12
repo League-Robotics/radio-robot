@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
-// main.cpp -- sprint 094's bare-loop shape: the COMMUNICATION PLANE, plus
-// the Drivetrain motion-planner connection, in main().
+// main.cpp -- the COMMUNICATION PLANE, plus the Drivetrain motion-planner
+// connection, in main().
 //
 // main() constructs the Communicator (serial + radio), the I2C-bus-backed
 // NezhaHardware container, the Drivetrain motion planner (holding a
@@ -8,22 +8,25 @@
 // post onto), and one Rt::CommandRouter (parse + dispatch), then runs a
 // bare, explicit loop: tick the Communicator, route any arrived command,
 // tick telemetry (tickTelemetry() -- 096-002's loop-owned periodic STREAM
-// emission, a no-op unless STREAM has armed bb.telemetryPeriod), tick
-// Hardware (pumps the I2C flip-flop -- timing unchanged from before this
-// sprint), tick Drivetrain (drains bb.segmentIn/bb.driveIn, runs the
-// executor/escape-hatch dispatch, stages this pass's wheel setpoints
-// directly through Hardware's motor refs -- flushed the FOLLOWING pass by
-// the next Hardware::tick()), then commit Drivetrain's measured state back
-// onto the blackboard for TLM (094-006).
+// emission, a no-op unless STREAM has armed bb.telemetryPeriod), then call
+// `Rt::MainLoop::tick(bb, now)` (099-001) -- tick Hardware (pumps the I2C
+// flip-flop -- timing unchanged from before sprint 094), tick Drivetrain
+// (drains bb.segmentIn/bb.driveIn, runs the executor/escape-hatch dispatch,
+// stages this pass's wheel setpoints directly through Hardware's motor refs
+// -- flushed the FOLLOWING pass by the next Hardware::tick()), then commit
+// Drivetrain's measured state back onto the blackboard for TLM (094-006).
 //
-// This is the stakeholder's explicit harmonization decision (sprint 094):
-// the Drivetrain connects into the bare main() loop DIRECTLY, as roughly
-// one line calling tick on the drivetrain with the queues from the
-// blackboard -- no `Rt::MainLoop` wrapper here (that class is kept for
-// tests/_infra/sim/sim_api.cpp's SimHandle only, which shares one mandatory-
-// tick implementation instead of hand-mirroring a second copy -- see
-// runtime/main_loop.h's own file header). Minimalism is the point: this
-// loop stays the explicit, wire-everything-here shape 093 established.
+// 099-001 reverses sprint 094's "explicit inline loop, no `Rt::MainLoop`
+// wrapper" decision, pre-approved by sprint 099's architecture-update.md D1,
+// as a pure structural move with zero behavior change: main.cpp now
+// constructs one `Rt::MainLoop loop(hardware, drivetrain)` and calls
+// `loop.tick(bb, now)` in place of the previously inlined
+// `hardware.tick()`/`drivetrain.tick()`/commit block -- byte-identical
+// sequencing, the SAME `Rt::MainLoop::tick()` tests/_infra/sim/sim_api.cpp's
+// SimHandle already calls (see runtime/main_loop.h/.cpp's own file
+// headers). This is Foundation work: later sprint 099 tickets extend
+// `MainLoop`'s pass/commit steps (e.g. ticket 004 adds a `PoseEstimator&` to
+// its constructor).
 //
 // Boot config is applied once, directly, at construction
 // (`drivetrain.configure(dtConfig)`, plus `drivetrain.configureMotion(
@@ -59,6 +62,7 @@
 #include "runtime/blackboard.h"
 #include "runtime/command_router.h"
 #include "runtime/configurator.h"
+#include "runtime/main_loop.h"
 #include "subsystems/communicator.h"
 #include "subsystems/drivetrain.h"
 #include "subsystems/nezha_hardware.h"
@@ -133,6 +137,16 @@ int hardware_main() {
     static Rt::Configurator configurator(drivetrain, poseEstimator, hardware, dtConfig,
                                           plannerConfig);
 
+    // --- MainLoop (099-001): the mandatory hardware.tick() ->
+    // drivetrain.tick() -> commit sequence, moved from an inline hand-rolled
+    // block into the shared Rt::MainLoop class tests/_infra/sim/sim_api.cpp's
+    // SimHandle already calls -- byte-identical sequencing (main_loop.cpp),
+    // pure structural move, zero behavior change (this ticket's own
+    // acceptance criteria). Constructor signature unchanged this ticket
+    // (still Hardware&/Drivetrain& only); ticket 004 grows it to add
+    // PoseEstimator&. ---
+    static Rt::MainLoop loop(hardware, drivetrain);
+
     // The two-plane transport commands post onto, and the pointerless command
     // router that parses + dispatches inbound wire lines against it.
     static Rt::Blackboard bb;
@@ -193,20 +207,11 @@ int hardware_main() {
         configurator.applyOne(bb);
         tickTelemetry(bb, router, now); // Loop-owned periodic STREAM emission (096-002) -- a no-op unless STREAM has armed bb.telemetryPeriod.
 
-        hardware.tick(now);                                // pump the I2C flip-flop (timing unchanged)
-        drivetrain.tick(now,
-            bb.segmentIn,
-            bb.replaceIn,
-            bb.driveIn);
+        // 099-001: hardware.tick() -> drivetrain.tick() -> commit
+        // (bb.motors/bb.drivetrain/bb.loopNow), byte-identical to the
+        // previous inline block -- see Rt::MainLoop::tick() (main_loop.cpp).
+        loop.tick(bb, now);
 
-        //
-        // Commit state to the blackboard 
-        // 
-
-        bb.motors = hardware.motorStates();                // commit measured motor state (incl. I2C connected)
-        bb.drivetrain = drivetrain.state();                // commit measured state for TLM (094-006)
-        bb.loopNow = now;                                  // commit stamp for TLM now= (cmd='s true time)
-        
         uBit.sleep(1);   // yield: radio RX delivery + other fibers
     }
 
