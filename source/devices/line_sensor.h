@@ -1,4 +1,4 @@
-// line_sensor.h — Devices::LineSensor: the internal leaf for the PlanetX
+// line_sensor.h — Devices::LineSensorLeaf: the internal leaf for the PlanetX
 // 4-channel line sensor, I2C address 0x1A.
 //
 // Ticket DB-006 (device-bus-tickets.md). Ported from
@@ -28,6 +28,14 @@
 // DB-001's LineConfig (device_config.h) instead of a bespoke member set, so
 // this leaf's one config_ stays the single source of truth for both the
 // boot-time calibration AND any later runtime recalibration call.
+//
+// --- Renamed LineSensor -> LineSensorLeaf in DB-007 ---
+// See color_sensor.h's identical note (its own "Renamed ColorSensor ->
+// ColorSensorLeaf in DB-007" section) for the full reasoning: DB-007's
+// public handle class needs the bare `LineSensor` name
+// (`Devices::DeviceBus::line()` returns a `Devices::LineSensor&` per the
+// issue's "The public surface" sketch), so the leaf DB-006 landed under
+// that name is renamed here instead.
 #pragma once
 
 #include <cstdint>
@@ -40,9 +48,9 @@ namespace Devices {
 
 constexpr uint8_t kLineDeviceAddr = 0x1A;
 
-class LineSensor {
+class LineSensorLeaf {
  public:
-  LineSensor(I2CBus& bus, const LineConfig& config);
+  LineSensorLeaf(I2CBus& bus, const LineConfig& config);
 
   // Non-blocking single detection step. Call once per fiber cycle (DB-007's
   // detection preamble) until detectDone() is true; a no-op once it is.

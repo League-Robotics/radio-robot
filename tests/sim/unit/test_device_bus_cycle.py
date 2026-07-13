@@ -1,15 +1,19 @@
-"""Off-hardware acceptance proof for ticket DB-006 (device-bus-tickets.md).
+"""Off-hardware acceptance proof for ticket DB-007 (device-bus-tickets.md).
 
-Compiles ``devices_sensors_harness.cpp`` together with the HOST_BUILD
-implementation it needs (``source/devices/i2c_bus_host.cpp`` — the scripted
-I2CBus fake from DB-003) plus the real ``source/devices/color_sensor.cpp``
-and ``source/devices/line_sensor.cpp`` against the SAME ``source/devices/``
-headers every ARM build compiles, with ``-DHOST_BUILD`` so the HOST_BUILD
-fork is what gets exercised — no MicroBitI2C, no CODAL, no wall clock, no
-real sleeps. Mirrors ``test_devices_otos.py``'s shape exactly: compile with
-the system C++ compiler, run the resulting binary, assert it exits 0.
+Compiles ``device_bus_cycle_harness.cpp`` together with every HOST_BUILD
+implementation ``Devices::DeviceBus`` needs (``source/devices/i2c_bus_host.cpp``
+-- the scripted I2CBus fake from DB-003; ``source/devices/clock_host.cpp`` --
+the steppable Clock/Sleeper fake, also DB-003; ``source/devices/velocity_pid.cpp``
+and ``source/devices/nezha_motor.cpp`` -- DB-004; ``source/devices/otos.cpp``
+-- DB-005; ``source/devices/color_sensor.cpp`` and
+``source/devices/line_sensor.cpp`` -- DB-006; ``source/devices/device_bus.cpp``
+-- this ticket) against the SAME ``source/devices/`` headers every ARM build
+compiles, with ``-DHOST_BUILD`` so the HOST_BUILD fork is what gets exercised
+-- no MicroBitI2C, no CODAL, no wall clock, no real sleeps. Mirrors
+``test_devices_sensors.py``'s shape exactly: compile with the system C++
+compiler, run the resulting binary, assert it exits 0.
 
-Collected under ``tests/sim/unit/`` alongside the other harness wrappers —
+Collected under ``tests/sim/unit/`` alongside the other harness wrappers --
 already within ``pyproject.toml``'s ``testpaths = ["tests/sim"]``, no
 configuration change needed.
 """
@@ -20,14 +24,19 @@ import sys
 
 import pytest
 
-# tests/sim/unit/test_devices_sensors.py -> unit -> sim -> tests -> repo root
+# tests/sim/unit/test_device_bus_cycle.py -> unit -> sim -> tests -> repo root
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _SOURCE_DIR = _REPO_ROOT / "source"
 _DEVICES_DIR = _SOURCE_DIR / "devices"
-_HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "devices_sensors_harness.cpp"
+_HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "device_bus_cycle_harness.cpp"
 _I2C_HOST_FAKE_SRC = _DEVICES_DIR / "i2c_bus_host.cpp"
+_CLOCK_HOST_FAKE_SRC = _DEVICES_DIR / "clock_host.cpp"
+_VELOCITY_PID_SRC = _DEVICES_DIR / "velocity_pid.cpp"
+_NEZHA_MOTOR_SRC = _DEVICES_DIR / "nezha_motor.cpp"
+_OTOS_SRC = _DEVICES_DIR / "otos.cpp"
 _COLOR_SENSOR_SRC = _DEVICES_DIR / "color_sensor.cpp"
 _LINE_SENSOR_SRC = _DEVICES_DIR / "line_sensor.cpp"
+_DEVICE_BUS_SRC = _DEVICES_DIR / "device_bus.cpp"
 
 # messages/common.h documents its own target as "CODAL C++11" — build the
 # host harness to the same standard so it exercises exactly the language
@@ -48,15 +57,25 @@ def _find_cxx_compiler() -> str:
     raise AssertionError("unreachable")  # pragma: no cover
 
 
-def test_devices_sensors_harness_compiles_and_passes(tmp_path):
-    """Compile the Devices::ColorSensorLeaf/LineSensorLeaf leaves and the harness; assert every scenario passes."""
-    sources = [_HARNESS_SRC, _I2C_HOST_FAKE_SRC, _COLOR_SENSOR_SRC, _LINE_SENSOR_SRC]
+def test_device_bus_cycle_harness_compiles_and_passes(tmp_path):
+    """Compile the real Devices::DeviceBus root + every leaf and the harness; assert every scenario passes."""
+    sources = [
+        _HARNESS_SRC,
+        _I2C_HOST_FAKE_SRC,
+        _CLOCK_HOST_FAKE_SRC,
+        _VELOCITY_PID_SRC,
+        _NEZHA_MOTOR_SRC,
+        _OTOS_SRC,
+        _COLOR_SENSOR_SRC,
+        _LINE_SENSOR_SRC,
+        _DEVICE_BUS_SRC,
+    ]
     for src in sources:
         assert src.is_file(), f"required source missing: {src}"
     assert _SOURCE_DIR.is_dir(), f"source/ tree missing: {_SOURCE_DIR}"
 
     cxx = _find_cxx_compiler()
-    binary = tmp_path / "devices_sensors_harness"
+    binary = tmp_path / "device_bus_cycle_harness"
 
     compile_result = subprocess.run(
         [
@@ -75,7 +94,7 @@ def test_devices_sensors_harness_compiles_and_passes(tmp_path):
         text=True,
     )
     assert compile_result.returncode == 0, (
-        "devices_sensors_harness.cpp / its Devices sources failed to compile:\n"
+        "device_bus_cycle_harness.cpp / its Devices sources failed to compile:\n"
         f"stdout:\n{compile_result.stdout}\nstderr:\n{compile_result.stderr}"
     )
 
@@ -83,7 +102,7 @@ def test_devices_sensors_harness_compiles_and_passes(tmp_path):
         [str(binary)], capture_output=True, text=True,
     )
     assert run_result.returncode == 0, (
-        "devices_sensors_harness reported a scenario failure "
+        "device_bus_cycle_harness reported a scenario failure "
         f"(exit {run_result.returncode}):\n{run_result.stdout}\n{run_result.stderr}"
     )
 

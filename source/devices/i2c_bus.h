@@ -14,8 +14,8 @@
 // the nRF52 TWIM errata NRF52I2C::waitForStop documents) and the lazy
 // preClear/postClear clearance timers.
 //
-// All four device leaves this subsystem owns (Motor, Otos, LineSensor,
-// ColorSensor — DB-004..DB-006) route their bus traffic through this
+// All four device leaves this subsystem owns (Motor, Otos, LineSensorLeaf,
+// ColorSensorLeaf — DB-004..DB-006) route their bus traffic through this
 // wrapper so every transaction is counted, errors are tracked, and
 // potential re-entrancy violations are captured — without changing the
 // semantics of any transaction.
@@ -34,9 +34,9 @@
 //   left-shifts it). Known devices:
 //     0x10 — Nezha V2 motor controller (Motor)
 //     0x17 — OTOS odometry sensor (Odometer)
-//     0x1A — line sensor (LineSensor)
-//     0x39 — APDS9960 color sensor (ColorSensor, fallback variant)
-//     0x43 — alt color sensor (ColorSensor, primary variant)
+//     0x1A — line sensor (LineSensorLeaf)
+//     0x39 — APDS9960 color sensor (ColorSensorLeaf, fallback variant)
+//     0x43 — alt color sensor (ColorSensorLeaf, primary variant)
 //   Unrecognised addresses are accumulated in an "other" bucket (index
 //   kMaxDevices-1) so the table never overflows.
 //
