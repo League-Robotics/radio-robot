@@ -303,10 +303,60 @@ void dispatchRing(const Devices::Sample<Devices::MotorReading>& s, int age, Repl
   reply.kvInt("valid", s.valid ? 1 : 0);
 }
 
+// servoPin -- map a bring-up SERVO <pin> selector to a micro:bit edge pin
+// (101-001). The OTOS-servo signal on the rig is a direct micro:bit PWM pin
+// (independent of the DeviceBus I2C), so it is driven with CODAL's
+// setServoValue() directly, resurrecting source_old/hal/real/Servo.cpp's one
+// line. Selectors follow source_old/hal/real/PortIO.cpp's Nezha port->pin
+// table so the rig's J1/S1 can be found empirically by sweeping selectors and
+// watching OTOS heading (ODO) respond: 1..4 = the digital pins of Nezha ports
+// 1..4, 5..8 = the analog pins of Nezha ports 1..4, 0 = P0.
+MicroBitPin* servoPin(int sel) {
+  switch (sel) {
+    case 0: return &uBit.io.P0;
+    case 1: return &uBit.io.P8;    // Nezha port 1 digital (J1)
+    case 2: return &uBit.io.P12;   // port 2 digital
+    case 3: return &uBit.io.P14;   // port 3 digital
+    case 4: return &uBit.io.P16;   // port 4 digital
+    case 5: return &uBit.io.P1;    // Nezha port 1 analog (J1/S1 candidate)
+    case 6: return &uBit.io.P2;    // port 2 analog
+    case 7: return &uBit.io.P13;   // port 3 analog
+    case 8: return &uBit.io.P15;   // port 4 analog
+    default: return nullptr;
+  }
+}
+
 void dispatch(Devices::DeviceBus& bus, char* line, ReplyBuilder& reply) {
   char* tok = strtok(line, " ");
   if (tok == nullptr) {
     reply.raw("ERR empty");
+    return;
+  }
+
+  if (strcmp(tok, "SERVO") == 0) {
+    // SERVO <pin> <angle> -- drive setServoValue(angle) on the selected edge
+    // pin (servoPin() above). angle [deg] 0..180 (a 360 continuous-rotation
+    // servo takes 90 = stop, <90 / >90 = rotate each way). Used to command
+    // the OTOS servo and to hunt for its pin (sweep <pin>, watch ODO heading).
+    char* pinTok = strtok(nullptr, " ");
+    char* angTok = strtok(nullptr, " ");
+    if (pinTok == nullptr || angTok == nullptr) {
+      reply.raw("ERR args");
+      return;
+    }
+    int sel = atoi(pinTok);
+    int ang = atoi(angTok);
+    if (ang < 0) ang = 0;
+    if (ang > 180) ang = 180;
+    MicroBitPin* pin = servoPin(sel);
+    if (pin == nullptr) {
+      reply.raw("ERR badpin");
+      return;
+    }
+    pin->setServoValue(ang);
+    reply.raw("OK");
+    reply.kvInt("pin", sel);
+    reply.kvInt("angle", ang);
     return;
   }
 

@@ -1,0 +1,20 @@
+# opened /dev/cu.usbmodem2121102 at 2026-07-04 10:46:43
+PONG wedgelab
+>> set nwheels 2
+OK nwheels=2
+>> set tickus 10000
+OK tickus=10000
+>> set sensors 1
+OK sensors=1
+>> set resetmode 4
+OK resetmode=4
+>> set zerodwell 50
+OK zerodwell=50
+>> run reset 20
+RUN reset 20 (any byte aborts)
+STOPV ok (reset-end) att=0 d=0
+RESULT reset n=20 ep=0,0,0,0 glitch=0 errs=0 persist=0
+>> heal
+HEAL M1 ok (a=-248388 b=-247546)
+HEAL M2 ok (a=-217482 b=-216773)
+STOPV ok (heal-end) att=0 d=0

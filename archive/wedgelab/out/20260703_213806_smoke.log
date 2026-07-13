@@ -1,0 +1,23 @@
+# opened /dev/cu.usbmodem2121102 at 2026-07-03 21:38:06
+>> get
+WEDGELAB v1 built Jul  3 2026 21:34:32  (self-contained Nezha latch lab)
+commands: get | set k v | run legs|slam|burst|combo|native|spin N | heal | recover | stat | stop
+BOOT encR=0 encL=0 ok=1
+K tickus      10000  tick period us
+K preidle         0  idle before read-request us (vendor 4000)
+K settle       4000  request->read gap us (vendor 4000)
+K postwrite       0  idle after 0x60 write us
+K buskhz        100  i2c bus khz
+K cruise         32  cruise pwm pct
+K slam           80  slam amplitude pct
+K slewcap        25  max dPWM per write, 0=off
+K writemode       1  0=onchange 1=everytick 2=throttle40
+K dither          1  decel dither pct
+K zerodwell       0  coast dwell at sign crossing ms
+K readmode        0  0=both 1=alt 2=none 3=speed47
+K decelskip       0  1=no reads while pwm changing
+K latchn         15  identical reads to declare latch
+K armraw         50  raw movement to arm detector
+K healauto        1  auto re-prime at rest
+K restms        400  inter-leg rest ms
+K verbose         0  1 = per-second stats

@@ -1,0 +1,18 @@
+# opened /dev/cu.usbmodem2121102 at 2026-07-03 22:56:06
+!! no PONG from firmware — is WEDGELAB flashed?
+>> set nwheels 2
+>> set tickus 10000
+>> set cruise 45
+>> set sensors 1
+>> run legs 30
+!! timeout after 400.0s — sending abort byte
+>> stat
+>> run reset 20
+!! timeout after 400.0s — sending abort byte
+>> stat
+>> heal
+!! timeout after 400.0s — sending abort byte
+>> set sensors 0
+>> set cruise 32
+>> set nwheels 4
+>> set tickus 20000

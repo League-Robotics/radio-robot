@@ -1,0 +1,10 @@
+# opened /dev/cu.usbmodem2121102 at 2026-07-04 06:18:36
+PONG wedgelab
+>> set nwheels 2
+OK nwheels=2
+>> set tickus 10000
+OK tickus=10000
+>> set sensors 1
+OK sensors=1
+>> run legs 30
+RUN legs 30 (any byte aborts)

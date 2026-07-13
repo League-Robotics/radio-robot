@@ -1,0 +1,17 @@
+# opened /dev/cu.usbmodem2121102 at 2026-07-03 21:55:53
+PONG wedgelab
+>> stat
+STAT w=296 r=296 err=0 glitch=0 epR=0 epL=0 persist=0 runaway=0 stopretry=0
+>> run burst 10
+RUN burst 10 (any byte aborts)
+STOPV ok (burst-end) att=0 d=0
+RESULT burst n=10 epR=0 epL=0 glitch=0 errs=0
+>> stat
+RUNAWAY-AT-IDLE dR=47700 dL=48180 — forcing stop
+RING Q2.0 R2.4517 Q1.957 R1.4517 Q2.956 R2.4521 Q1.951 R1.4518 Q2.950 R2.4517 Q1.946 R1.4516 Q2.953 R2.4516 W1.4957 W2.4963 Q1.408166 R1.4517 Q2.4956 R2.4517 Q1.258019 R1.4515 Q2.4956 R2.4518 q1.4959 r1.4347 q2.4957 r2.4332 Q1.5174
+>> heal
+STOPV ok (idle-watchdog) att=0 d=0
+STAT w=2282 r=2276 err=0 glitch=0 epR=0 epL=0 persist=0 runaway=1 stopretry=0
+HEAL M1 ok (a=47700 b=48575)
+HEAL M2 ok (a=48180 b=49069)
+STOPV ok (heal-end) att=0 d=0
