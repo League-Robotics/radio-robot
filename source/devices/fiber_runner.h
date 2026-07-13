@@ -80,6 +80,23 @@ class FiberRunner {
 class CodalFiberRunner : public FiberRunner {
  public:
   void run(DeviceBus& bus) override;
+
+ private:
+  // The trampoline create_fiber() actually invokes (device_bus.cpp). A
+  // STATIC MEMBER of CodalFiberRunner, not a free function in an anonymous
+  // namespace as device_bus.cpp originally had it (DB-008) — DB-009's first
+  // real (non-HOST_BUILD) ARM compile of this file caught that the free-
+  // function form cannot call DeviceBus::runPreamble()/stopRequested()/
+  // markLoopExited() (all private): device_bus.h's own `friend class
+  // CodalFiberRunner;` grants friendship to this CLASS, not to an unrelated
+  // free function that merely happens to live in the same translation unit.
+  // A static member function has an ordinary `void(*)(void*)` function-
+  // pointer type (same as create_fiber() requires) while still being a
+  // member the friend declaration actually covers — the minimal, root-cause
+  // fix, not a workaround (e.g. widening the friend list to a free
+  // function, or making the private members public/protected, would both
+  // weaken the encapsulation the friend-based design deliberately chose).
+  static void codalFiberEntry(void* arg);
 };
 #endif
 
