@@ -42,8 +42,7 @@ Pose composeArc(const Pose& start, float kappa, float arcLength) {
   return poseAlongArc(start, kappa, arcLength);
 }
 
-ArcError projectOntoArc(const Pose& anchor, float kappa, float s, const Pose& measured) {
-  const Pose reference = poseAlongArc(anchor, kappa, s);
+ArcError projectOntoPose(const Pose& reference, const Pose& measured) {
   const float dx = measured.x - reference.x;
   const float dy = measured.y - reference.y;
   const float cosTheta = cosf(reference.h);
@@ -54,6 +53,11 @@ ArcError projectOntoArc(const Pose& anchor, float kappa, float s, const Pose& me
   error.eCross = -dx * sinTheta + dy * cosTheta;
   error.eTheta = wrapAngle(measured.h - reference.h);
   return error;
+}
+
+ArcError projectOntoArc(const Pose& anchor, float kappa, float s, const Pose& measured) {
+  const Pose reference = poseAlongArc(anchor, kappa, s);
+  return projectOntoPose(reference, measured);
 }
 
 }  // namespace Drive

@@ -91,12 +91,33 @@ struct ArcError {
   float eTheta = 0.0f;  // [rad] wrapAngle(measured.h - referenceHeading), in (-pi, pi]
 };
 
+// projectOntoPose -- the exact SE(2) tangent/normal rotation at the core of
+// projectOntoArc() below (see ArcError's doc comment for the formula),
+// given an ALREADY-KNOWN reference pose rather than one this function
+// derives from (anchor, kappa, s) itself. projectOntoArc() is implemented
+// in terms of this function (arc_math.cpp) -- the two compute provably
+// identical rotations; this is a refactor, not a new algorithm.
+//
+// The primary caller is tracker.{h,cpp} (ticket 100-004): its `reference`
+// argument is RefState's own closed-form x/y/theta, already sampled once by
+// MotionPlan::referenceAt() (ticket 100-003). The tracker's own inputs, per
+// architecture-update.md M4's boundary, are (RefState, measured, Limits) --
+// no anchor/kappa of its own -- so this overload lets it reuse the EXACT
+// projection without re-deriving the reference pose from anchor/kappa/s a
+// second time.
+//
+// @param reference  a known world pose (e.g. RefState's own x/y/theta)
+// @param measured   the measured world pose to project
+// @return           path-frame error at `reference`
+ArcError projectOntoPose(const Pose& reference, const Pose& measured);
+
 // projectOntoArc -- the exact circle projection: composes the reference
-// pose at `s` via poseAlongArc(anchor, kappa, s), then rotates `measured`'s
-// world-frame offset from it into the tangent/normal frame (see ArcError's
-// doc comment). Ticket 100-004's tracker cascade is the primary caller,
-// evaluating this once per step() tick against MotionPlan::referenceAt()'s
-// own sample.
+// pose at `s` via poseAlongArc(anchor, kappa, s), then delegates to
+// projectOntoPose() above for the tangent/normal rotation (see ArcError's
+// doc comment). Ticket 100-003's MotionPlan::step() (once it lands) is the
+// primary caller that has (anchor, kappa, s) on hand directly; callers that
+// only have an already-sampled reference pose (no anchor/kappa) use
+// projectOntoPose() instead.
 //
 // @param anchor    world pose at s == 0 (the same arc poseAlongArc() uses)
 // @param kappa     [1/mm] signed curvature

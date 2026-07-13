@@ -128,15 +128,62 @@ struct Limits {
                                // (PlannerConfig.trim_omega_max) -- same
                                // headroom-fold role as trimVMax above. The
                                // issue's control-law table lists a second,
-                               // pivot-specific 2.0 rad/s trim cap; that is
-                               // the tracker's own per-tick value (ticket
-                               // 004/005), distinct from this single
-                               // headroom-fold scalar, which the driving
-                               // issue's plan() sketch specifies as one
-                               // number (headroom = trimVMax +
-                               // trimOmegaMax*W/2)
+                               // pivot-specific 2.0 rad/s trim cap; ticket
+                               // 100-004's tracker.cpp resolves this: the
+                               // AC's own transcribed pivot formula
+                               // (omegaCmd = omegaRef + trackKTheta *
+                               // eTheta) carries NO clamp at all (matching
+                               // sprint 098's proven, unclamped heading
+                               // loop -- confirmed by reading
+                               // motion/segment_executor.cpp's own PD
+                               // cascade, which never clamps omega
+                               // either), so this single scalar is
+                               // consumed ONLY by the arc-mode clamp
+                               // (plan()'s headroom fold, above, and
+                               // track()'s own arc-mode omegaTrim clamp
+                               // below) -- the pivot-specific 2.0 rad/s
+                               // table value is not wired to any clamp by
+                               // this ticket, as transcribed
   float wheelStepMax = 0.0f;  // [mm/s] admit()'s joint wheel-speed-step
                                // cap (PlannerConfig.wheel_step_max)
+
+  // -- ticket 100-004 additions: the tracker's own P-only Kanayama gains
+  // and pivot-mode threshold (PlannerConfig fields track_k_s/
+  // track_k_theta/track_k_cross/min_speed) -- the remaining scalars
+  // tracker.{h,cpp}'s track() cascade consumes directly, alongside
+  // trimVMax/trimOmegaMax/vWheelMax above. No k_d/derivative gain field
+  // exists here, deliberately -- the P-only outer-loop rule
+  // (architecture-update.md, the issue's "encoder omega-hat is stale
+  // staggered noise" rationale); adding one would be a structural
+  // regression, not an oversight.
+  float trackKS = 0.0f;       // [1/s] along-track trim proportional gain
+                               // (PlannerConfig.track_k_s) -- tracker.cpp's
+                               // vTrim = clamp(trackKS * (reference -
+                               // measured along error), +/-trimVMax); see
+                               // tracker.h's "Reconciled sign convention"
+                               // class comment for why the sign is
+                               // reference-measured, not arc_math's own
+                               // measured-reference ArcError convention
+  float trackKTheta = 0.0f;   // [1/s] heading trim proportional gain
+                               // (PlannerConfig.track_k_theta) -- used in
+                               // both arc mode (clamped, alongside the
+                               // cross term) and pivot mode (UNCLAMPED,
+                               // omegaTrim = trackKTheta * (reference -
+                               // measured heading error) -- sprint 098's
+                               // proven heading loop; see tracker.h's
+                               // "Reconciled sign convention" class comment
+  float trackKCross = 0.0f;   // [rad/mm^2] cross-track trim gain, coupled
+                               // with the reference speed
+                               // (PlannerConfig.track_k_cross) -- arc-mode
+                               // omegaTrim's own v_ref*(reference-measured
+                               // cross error) term (same reconciled sign as
+                               // trackKTheta above); not consumed in pivot
+                               // mode (v_ref == 0 there by construction)
+  float minSpeed = 0.0f;      // [mm/s] pivot-mode threshold
+                               // (PlannerConfig.min_speed) -- track()
+                               // selects pivot mode (literal-zero v_cmd,
+                               // unclamped heading-only omega trim) iff
+                               // fabsf(ref.v) < minSpeed
 };
 
 }  // namespace Drive
