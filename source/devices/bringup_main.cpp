@@ -158,6 +158,28 @@ void formatFixed(char* out, size_t cap, float value, int decimals) {
   }
 }
 
+// formatU64 — serializes a uint64_t as decimal WITHOUT printf's %llu
+// conversion. newlib-nano (--specs=nano.specs) does not implement the %ll
+// length modifier and silently emits the literal "lu" for it — the same
+// nano-spec gap this file's header documents for %f, and the cause of the
+// `t=lu` fields the DB-009 bench observed. 64-bit integer *arithmetic* (the
+// /10 and %10 below, via libgcc's __udivdi3/__umoddi3) IS supported — only
+// the %ll format conversion is missing — so manual digit extraction is safe
+// and keeps the full 64-bit [us] stamp range (OQ3 chose uint64 for
+// wrap-freedom; truncating in the formatter would defeat that).
+void formatU64(char* out, size_t cap, uint64_t value) {
+  if (cap == 0) return;
+  char tmp[20];  // uint64_t max is 20 decimal digits
+  int i = 0;
+  do {
+    tmp[i++] = static_cast<char>('0' + static_cast<int>(value % 10));
+    value /= 10;
+  } while (value != 0 && i < static_cast<int>(sizeof(tmp)));
+  size_t j = 0;
+  while (i > 0 && j + 1 < cap) out[j++] = tmp[--i];  // reverse into out
+  out[j] = '\0';
+}
+
 // ---------------------------------------------------------------------------
 // ReplyBuilder — appends "OK"/"ERR ..." plus " key=value" fields into a
 // fixed caller-owned buffer. Every numeric append is bounds-checked against
@@ -184,9 +206,10 @@ class ReplyBuilder {
   }
 
   void kvU64(const char* key, uint64_t value) {
+    char valStr[24];
+    formatU64(valStr, sizeof(valStr), value);  // NOT %llu — nano-spec gap
     char field[48];
-    snprintf(field, sizeof(field), " %s=%llu", key,
-              static_cast<unsigned long long>(value));
+    snprintf(field, sizeof(field), " %s=%s", key, valStr);
     append(field);
   }
 
