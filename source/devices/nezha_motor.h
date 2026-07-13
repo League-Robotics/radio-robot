@@ -115,6 +115,11 @@ class NezhaMotor : public MotorArmor {
   //   1. processResetIfPending(nowMs)  — base armor policy, before this
   //      tick's encoder sample.
   //   2. sample + cache this motor's own encoder (device-specific).
+  //      Velocity/glitch computation is gated on a FRESHNESS check (the
+  //      collected raw count differs from the last FRESH raw count) --
+  //      the Nezha brick's register refreshes far slower (~80ms) than the
+  //      fiber's own cycle (~16ms, DB-007/DB-008), so most cycles re-
+  //      collect the same value; see nezha_motor.cpp's tick() comment.
   //   3. updateWedgeDetector()         — base armor policy; reads
   //      position()/appliedDuty(), both now reflecting this tick's fresh
   //      sample and last tick's write.
@@ -156,9 +161,22 @@ class NezhaMotor : public MotorArmor {
   // ---- tick() encoder-sample cache ----
   float lastPosition_ = 0.0f;          // [mm]
   float filteredVelocity_ = 0.0f;      // [mm/s] EMA-filtered (velFiltAlpha); fed to the embedded PID and velocity()
-  uint64_t lastTickUs_ = 0;            // [us] this leaf's own time seam — see file header
+  uint64_t lastTickUs_ = 0;            // [us] this leaf's own time seam — see file header; per-TICK dt, feeds ONLY the embedded PID's dt (step 4)
   bool hasLastTick_ = false;
   bool connected_ = false;
+
+  // ---- Fresh-sample tracking (tick() step 2's freshness gate) ----
+  // The Nezha brick's 0x46 register refreshes far slower (~80ms) than
+  // DeviceBus's fiber cycle (~16ms, DB-007/DB-008): most cycles re-collect
+  // the SAME raw count. Velocity/glitch computation runs ONLY when
+  // collectEncoder() returns a raw count different from the last FRESH raw
+  // count, using the elapsed time SINCE THAT sample (lastFreshUs_) instead
+  // of this tick's own (much shorter) dt — see nezha_motor.cpp's tick() for
+  // the full rationale and the hardware-confirmed bug this fixes
+  // (filteredVelocity_ permanently starved / rejected as a false glitch).
+  int32_t lastFreshRawEnc_ = 0;   // [tenths of degrees, offset-corrected] raw count at the last FRESH sample
+  uint64_t lastFreshUs_ = 0;      // [us] this leaf's own time seam, timestamp of the last FRESH sample
+  bool hasFreshSample_ = false;   // false until the first fresh sample is anchored; also cleared by hardReset()/softRebaseline()
 
   // ---- Source-side encoder outlier rejection (tick() step 2's
   // position-step plausibility gate) ----
