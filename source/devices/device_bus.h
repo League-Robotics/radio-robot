@@ -133,6 +133,21 @@ class DeviceBus {
   LineSensor& line() { return lineHandle_; }
   Odometer& odometer() { return odometerHandle_; }
 
+  // OTOS probe diagnostics (101-001): a read-only snapshot of the OTOS leaf's
+  // detect state plus this bus's transaction stats for the OTOS address, for
+  // bench triage of the DeviceBus connected=False condition. Reads counters
+  // only -- issues NO I2C traffic, so it is safe to call from the command
+  // foreground while the fiber runs.
+  struct OtosProbeDiag {
+    bool connected;
+    bool present;
+    uint32_t txnCount;   // I2C transactions to 0x17 (0 => probe never ran)
+    uint32_t errCount;   // of those, how many errored (NAK/bus)
+    int lastErr;         // last error code for 0x17
+    uint8_t lastProbeId; // last product-ID byte begin() read (0x5F = correct)
+  };
+  OtosProbeDiag otosProbeDiag() const;
+
   // --- Fiber lifecycle (DB-008; issue "The fiber and its cycle" / "The
   // public surface") ---
   //

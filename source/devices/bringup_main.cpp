@@ -333,6 +333,24 @@ void dispatch(Devices::DeviceBus& bus, char* line, ReplyBuilder& reply) {
     return;
   }
 
+  if (strcmp(tok, "ODIAG") == 0) {
+    // OTOS I2C diagnosis (101-001): report the OTOS leaf's detect state and
+    // the I2CBus transaction stats for address 0x17 -- reads counters only, no
+    // new bus traffic (safe against the fiber). txn=0 => the begin() probe
+    // never issued a transaction; err>0/lasterr!=0 => the OTOS NAK'd (not on
+    // the bus / not powered); conn=0 with err=0 => it read but returned the
+    // wrong product id.
+    Devices::DeviceBus::OtosProbeDiag d = bus.otosProbeDiag();
+    reply.raw("OK");
+    reply.kvInt("conn", d.connected ? 1 : 0);
+    reply.kvInt("present", d.present ? 1 : 0);
+    reply.kvInt("txn", static_cast<int>(d.txnCount));
+    reply.kvInt("err", static_cast<int>(d.errCount));
+    reply.kvInt("lasterr", d.lastErr);
+    reply.kvInt("id", d.lastProbeId);
+    return;
+  }
+
   if (strcmp(tok, "SERVO") == 0) {
     // SERVO <pin> <angle> -- drive setServoValue(angle) on the selected edge
     // pin (servoPin() above). angle [deg] 0..180 (a 360 continuous-rotation

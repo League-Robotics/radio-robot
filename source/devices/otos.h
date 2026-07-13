@@ -147,6 +147,11 @@ class Otos {
   // permanently stop it from ever being scheduled again.
   bool present() const;
 
+  // The last product-ID byte begin()'s probe read (101-001 bench triage of the
+  // connected=False condition): 0x5F when the OTOS answered correctly, 0xFF on
+  // a floating/NAK'd bus, some other value for a wrong device.
+  uint8_t lastProbeId() const { return lastProbeId_; }
+
   // True if a real bus read is due: either no real read has ever happened
   // (hasRead_ false — before begin(), or on a chip begin() never detected,
   // in which case this stays true forever too — a caller must always check
@@ -257,6 +262,7 @@ class Otos {
   // connected()'s own comment for why this is retried every tick() rather
   // than latching permanently false.
   bool connected_ = false;
+  uint8_t lastProbeId_ = 0;   // [101-001] last product-ID byte read by begin()
 
   PoseReading cachedPose_{};
   bool poseFresh_ = false;   // poseFresh()'s backing field
