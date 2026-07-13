@@ -247,6 +247,41 @@ class ClockSync:
             return None
         return t_robot + offset
 
+    def to_robot_time(self, host_time: float) -> float | None:  # [ms]
+        """Translate a host-monotonic timestamp to robot-clock time (ms).
+
+        The inverse of ``to_host_time()`` — needed to build a delayed
+        camera-fix ``t`` (D6, robot-clock ms): a caller captures a camera
+        observation at a known HOST time (``time.monotonic() * 1000``), then
+        maps it back to the robot's own clock before sending it as
+        ``PoseFix.t`` (``protos/drivetrain.proto``), so the fix arrives on
+        the SAME clock convention every other ``Ack.t``/``PING`` timestamp
+        uses.
+
+        Uses the skew-corrected model when available (inverting
+        ``host_mid = a·t_robot + b`` to ``t_robot = (host_mid − b) / a``),
+        otherwise the offset-only estimate (inverting ``to_host_time``'s own
+        ``t_robot + offset`` to ``host_time − offset``). Returns ``None`` if
+        no calibration data is available yet (mirrors ``to_host_time()``'s
+        own contract) or in the degenerate ``a == 0`` case.
+
+        Args:
+            host_time: Host monotonic time in ms (``time.monotonic() *
+                1000.0``) at which the observation being fixed was captured.
+
+        Returns:
+            Estimated robot-clock time in ms, or ``None`` if uncalibrated.
+        """
+        if self._skew_a is not None and self._skew_b is not None:
+            if self._skew_a == 0.0:
+                return None
+            return (host_time - self._skew_b) / self._skew_a
+
+        offset = self.best_offset()
+        if offset is None:
+            return None
+        return host_time - offset
+
     def stale(self, max_age_s: float = 60.0) -> bool:
         """Return True if no ping burst has been recorded within *max_age_s* seconds.
 

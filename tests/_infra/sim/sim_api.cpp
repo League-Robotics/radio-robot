@@ -272,14 +272,30 @@ SimHandle::SimHandle()
                                // must (and does) construct first.
       configurator(drivetrain, poseEstimator, hardware,
                    defaultSimDrivetrainConfig(), defaultSimMotionConfig()),
-      loop(hardware, drivetrain)
+      loop(hardware, drivetrain, poseEstimator)
 {
     // Primes all four ports' encoders — parity with main.cpp's
     // hardware.begin() call, before the Drivetrain is configured.
     hardware.begin();
+    // 099-002 (architecture-update-r1.md Decision 2): bb.otosPresent is a
+    // boot-time, never-changing hardware-identity fact (blackboard.h's own
+    // comment on this field) -- seeded ONCE here, immediately after
+    // hardware.begin() above, mirroring main.cpp's own identical seed line.
+    // Hal::Odometer::present() defaults `true` for any leaf with no real
+    // boot-time detection step of its own (Hal::SimHardware's
+    // Hal::SimOdometer, here) -- see odometer.h's own doc comment.
+    bb.otosPresent = hardware.odometer()->present();
 
     msg::DrivetrainConfig dtConfig = defaultSimDrivetrainConfig();
     drivetrain.configure(dtConfig);
+    // 099-008: seed poseEstimator the SAME as drivetrain immediately above --
+    // a pre-existing gap (present since ticket 099-004 first constructed
+    // poseEstimator here) this ticket closes: without this call,
+    // EkfTiny::init() is never reached at boot, so its q/r noise matrices
+    // stay at their C++ zero-default forever and EVERY EkfTiny update
+    // channel silently no-ops via the numerically-singular-S safety guard.
+    // Mirrors source/main.cpp's own identical fix.
+    poseEstimator.configure(dtConfig);
     // 096-002: mirrors main.cpp's own one-time bb.drivetrainConfig seed
     // (see that file's own comment on this line for the full rationale) --
     // no runtime Configurator is wired here either, so without this,
@@ -751,6 +767,17 @@ float sim_get_pwm_r(void* h) {
 float sim_get_otos_x(void* h) { return static_cast<SimHandle*>(h)->hardware.simOdometer().odomX(); }
 float sim_get_otos_y(void* h) { return static_cast<SimHandle*>(h)->hardware.simOdometer().odomY(); }
 float sim_get_otos_h(void* h) { return static_cast<SimHandle*>(h)->hardware.simOdometer().odomH(); }
+
+// sim_get_enc_pose_x/y/h (099-008, TEST-ONLY) -- bb.encoderPose.pose direct
+// peek, mirroring sim_get_active()'s "zero-cost bb-cell peek" precedent.
+// Subsystems::PoseEstimator::encoderPose() is never wire-visible (encpose=
+// was trimmed from Telemetry, 096-001) -- test_pose_fix_end_to_end.py needs
+// a way to prove a delayed camera-fix leaves bb.encoderPose completely
+// untouched (only bb.fusedPose/the EKF is corrected), which nothing on the
+// wire can show.
+float sim_get_enc_pose_x(void* h) { return static_cast<SimHandle*>(h)->bb.encoderPose.pose.x; }
+float sim_get_enc_pose_y(void* h) { return static_cast<SimHandle*>(h)->bb.encoderPose.pose.y; }
+float sim_get_enc_pose_h(void* h) { return static_cast<SimHandle*>(h)->bb.encoderPose.pose.h; }
 
 // ---------------------------------------------------------------------------
 // Error-knob setters — each forwards to EXACTLY ONE hal/sim/sim_setters.h

@@ -27,8 +27,32 @@ void NezhaHardware::begin()
 // (093/094 teardown) motorIn[]/motorResetIn[] consumption is gone -- see
 // hardware.h's own tick() doc comment for the full contract; this class's
 // tick() now runs ONLY the flip-flop's own scheduling decision below.
+//
+// 099-002 (architecture-update-r1.md Decision 2, revised): a scheduled-slot
+// branch for the owned Hal::OtosOdometer leaf (I2C 0x17, a separate device
+// slot from this class's own 0x10 flip-flop) sits at the TOP of this
+// method, ahead of the flip-flop switch, and only ever intercepts a
+// REQUEST_DUE call -- never COLLECT_DUE -- so it can never land inside an
+// outstanding 0x10 request's settle window (the 098-004 bus-hang-class
+// hazard this exists to close). The `present()` conjunct is mandatory: an
+// odometer that was never begin()'d, or whose begin() never detected the
+// chip, has present() permanently false, so this branch is a permanent,
+// harmless no-op for it and the flip-flop below runs completely unaffected
+// -- gating on connected() instead (the live, per-tick, re-evaluated flag)
+// would let a single transient bus glitch on an otherwise-present chip
+// permanently starve BOTH this branch (no further scheduling) and the
+// flip-flop's own bus-collision protection would then never re-arm. See
+// architecture-update-r1.md Decision 2 for the full root-cause writeup (the
+// pre-revision branch, gated on readDue() alone, permanently stalled the
+// flip-flop whenever the OTOS was undetected).
 void NezhaHardware::tick(uint32_t now)
 {
+    if (phase_ == Phase::REQUEST_DUE && otosOdometer_.present() &&
+        otosOdometer_.readDue(now)) {
+        otosOdometer_.tick(now);
+        return;   // this call's bus action; the Nezha flip-flop resumes next call
+    }
+
     if (!anyPolled()) return;                    // idle schedule (decision 1)
     if (!motorPolled_[activeIndex_]) {
         activeIndex_ = nextPolled(activeIndex_);  // defensive resync

@@ -133,7 +133,9 @@ def test_field_numbers_match_pb2_descriptors():
     this ticket was implemented) -- catches a stale/out-of-sync regeneration
     on either side, not just an implicit round-trip mismatch."""
     expected_cmd_numbers = {
-        "drive": 2, "segment": 3, "replace": 4, "config": 6, "pose": 7, "otos": 8,
+        # pose_fix (099-004): retypes the formerly-declared-only `pose`
+        # arm (was SetPose) to PoseFix -- same field number 7.
+        "drive": 2, "segment": 3, "replace": 4, "config": 6, "pose_fix": 7, "otos": 8,
         "ping": 9, "echo": 10, "get": 11, "stream": 12, "stop": 13, "id": 14,
         # hello/ver/help (stakeholder-directed 6-verb minimal command
         # surface, 2026-07-10).
@@ -208,6 +210,9 @@ def test_field_numbers_match_pb2_descriptors_096_006_new_messages():
     expected_drivetrain_patch = {
         "trackwidth": 1, "rotational_slip": 2, "ekf_q_xy": 3, "ekf_q_theta": 4, "ekf_r_otos_xy": 5,
         "ekf_r_otos_theta": 6,
+        # 099-008: ekf_r_fix_xy/ekf_r_fix_theta -- the delayed camera-fix's
+        # own UNGATED noise pair.
+        "ekf_r_fix_xy": 7, "ekf_r_fix_theta": 8,
     }
     actual_drivetrain_patch = {f.name: f.number for f in pb_config.DrivetrainConfigPatch.DESCRIPTOR.fields}
     assert actual_drivetrain_patch == expected_drivetrain_patch
@@ -714,7 +719,11 @@ def test_direction_b_telemetry_all_zero_defaults(harness):
 
 
 def test_direction_b_config_snapshot_drivetrain(harness):
-    raw = encode_cfg_drivetrain(harness, 40, pb_config.CONFIG_DRIVETRAIN, 321.0, 0.75, 1.5, 2.5, 3.5, 4.5)
+    # 099-008: ekf_r_fix_xy/ekf_r_fix_theta -- passed explicitly (not the
+    # driver's own defaults) so this differential round-trip check covers
+    # them too, mirroring the six pre-existing fields' own coverage exactly.
+    raw = encode_cfg_drivetrain(harness, 40, pb_config.CONFIG_DRIVETRAIN, 321.0, 0.75, 1.5, 2.5, 3.5, 4.5,
+                                 6.5, 7.5)
     assert raw is not None
     reply = pb_envelope.ReplyEnvelope.FromString(raw)
     assert reply.corr_id == 40
@@ -722,8 +731,9 @@ def test_direction_b_config_snapshot_drivetrain(harness):
     assert reply.cfg.target == pb_config.CONFIG_DRIVETRAIN
     assert reply.cfg.WhichOneof("patch") == "drivetrain"
     p = reply.cfg.drivetrain
-    assert (p.trackwidth, p.rotational_slip, p.ekf_q_xy, p.ekf_q_theta, p.ekf_r_otos_xy, p.ekf_r_otos_theta) == (
-        f32(321.0), f32(0.75), f32(1.5), f32(2.5), f32(3.5), f32(4.5))
+    assert (p.trackwidth, p.rotational_slip, p.ekf_q_xy, p.ekf_q_theta, p.ekf_r_otos_xy, p.ekf_r_otos_theta,
+            p.ekf_r_fix_xy, p.ekf_r_fix_theta) == (
+        f32(321.0), f32(0.75), f32(1.5), f32(2.5), f32(3.5), f32(4.5), f32(6.5), f32(7.5))
 
 
 @pytest.mark.parametrize("target,side,side_name", [

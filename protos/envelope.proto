@@ -323,7 +323,11 @@ message CommandEnvelope {
     // reassign 5 to a different field.
     ConfigDelta       config  = 6;   // -> bb.configIn (096-001: real schema;
                                       // BinaryChannel handling lands ticket 004)
-    SetPose           pose    = 7;   // -> bb.poseResetIn (declared only, 098)
+    // pose_fix (099-004, retypes the formerly-declared-only SetPose arm --
+    // architecture-update.md Decision 1): PoseFix{reset|zero_encoders} ->
+    // bb.poseResetIn (live, 099-004); PoseFix{neither flag} -> bb.poseFixIn
+    // (declared only this sprint -- 099-008 makes it live).
+    PoseFix           pose_fix = 7;
     OdometerCommand   otos    = 8;   // -> bb.otosCommandIn (declared only, 098)
     Ping              ping    = 9;
     Echo              echo    = 10;

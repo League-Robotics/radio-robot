@@ -308,16 +308,21 @@ def test_binary_help_replies_with_registered_verb_list(sim):
 
 # ===========================================================================
 # Declared-only arms -- ERR_UNIMPLEMENTED, never a crash, never silent.
-# `config`/`get` are no longer declared-only as of 096-004, and `stream` is
-# no longer declared-only as of 096-005 (see the dedicated sections below)
-# -- only `pose`/`otos` remain stubs (098 lands those).
+# `config`/`get` are no longer declared-only as of 096-004, `stream` is no
+# longer declared-only as of 096-005 (see the dedicated sections below), and
+# `pose_fix`'s reset/zero_encoders variants are no longer declared-only as
+# of 099-004 (see test_pose_fix_reset_zero.py for those two live variants).
+# `pose_fix`'s own THIRD variant (neither reset nor zero_encoders set -- a
+# genuine delayed camera fix) is ALSO no longer declared-only as of 099-008
+# (see test_pose_fix_reset_zero.py's own neither-flag acceptance tests and
+# test_pose_fix_end_to_end.py for its live behavior) -- `otos` is the one
+# remaining stub.
 # ===========================================================================
 
 
 @pytest.mark.parametrize("kwargs,expected_field", [
-    (dict(pose=pb_drivetrain.SetPose()), 7),
     (dict(otos=pb_odometer.OdometerCommand()), 8),
-], ids=["pose", "otos"])
+], ids=["otos"])
 def test_binary_declared_only_arms_reply_err_unimplemented(sim, kwargs, expected_field):
     env = pb_envelope.CommandEnvelope(corr_id=9, **kwargs)
     reply = send(sim, env)

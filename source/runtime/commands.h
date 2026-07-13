@@ -43,6 +43,21 @@ struct PoseResetCommand {
   msg::SetPose pose;  // valid when kind == kSetPose
 };
 
+// PoseFixCommand (099-008, architecture-update.md D5-D8) -- a genuine
+// timestamped delayed camera fix, posted by BinaryChannel::handlePose()'s
+// third branch (neither `reset` nor `zero_encoders` set on the wire
+// msg::PoseFix) to Rt::Blackboard::poseFixIn -- a latest-wins Mailbox (a
+// newer camera frame supersedes an undrained older one, by design, D7),
+// NOT the FIFO poseResetIn queue above: a delayed fix is a fresh belief
+// about "where the robot was," never a fan-out of multiple pending resets.
+// Mirrors PoseResetCommand's own lightweight-POD style exactly.
+struct PoseFixCommand {
+  float x;       // [mm] world x the fix claims was true at time t
+  float y;       // [mm] world y
+  float h;       // [rad] world heading
+  uint32_t t;    // [ms] robot-clock timestamp this observation was true (D6)
+};
+
 // MotionCommand (087-006) -- S/T/D/R/TURN/RT/G/STOP's fan-out to the
 // loop-owned motion-executor step (drains into Subsystems::Planner::apply(),
 // ticket 007), posted to Rt::Blackboard::motionIn (a latest-wins Mailbox --
@@ -188,6 +203,12 @@ enum class DrivetrainConfigField : uint8_t {
   kEkfQTheta,
   kEkfROtosXy,
   kEkfROtosTheta,
+  // kEkfRFixXy/kEkfRFixTheta (099-008): the delayed camera-fix's own
+  // measurement-noise pair, mirroring kEkfROtosXy/kEkfROtosTheta's fold
+  // shape exactly -- see DrivetrainConfig.ekf_r_fix_xy/ekf_r_fix_theta
+  // (protos/drivetrain.proto, fields 42/43).
+  kEkfRFixXy,
+  kEkfRFixTheta,
   kEkfQV,
   kEkfQOmega,
   kEkfROtosV,

@@ -294,6 +294,16 @@ void handleConfigDrivetrain(const msg::DrivetrainConfigPatch& p, Rt::Blackboard&
     delta.drivetrain.ekf_r_otos_theta = p.ekf_r_otos_theta.val;
     delta.mask |= Rt::bitOf(Rt::DrivetrainConfigField::kEkfROtosTheta);
   }
+  // 099-008: ekf_r_fix_xy/ekf_r_fix_theta -- mirrors the two ekf_r_otos_*
+  // blocks immediately above exactly.
+  if (p.ekf_r_fix_xy.has) {
+    delta.drivetrain.ekf_r_fix_xy = p.ekf_r_fix_xy.val;
+    delta.mask |= Rt::bitOf(Rt::DrivetrainConfigField::kEkfRFixXy);
+  }
+  if (p.ekf_r_fix_theta.has) {
+    delta.drivetrain.ekf_r_fix_theta = p.ekf_r_fix_theta.val;
+    delta.mask |= Rt::bitOf(Rt::DrivetrainConfigField::kEkfRFixTheta);
+  }
   if (delta.mask != 0 && !b.configIn.post(delta)) {
     sendError(msg::ErrCode::ERR_FULL, 0, corrId, replyFn, replyCtx);
     return;
@@ -468,6 +478,9 @@ void handleGet(const msg::ConfigGet& get, Rt::Blackboard& b, uint32_t corrId,
       p.ekf_q_theta = {true, b.drivetrainConfig.ekf_q_theta};
       p.ekf_r_otos_xy = {true, b.drivetrainConfig.ekf_r_otos_xy};
       p.ekf_r_otos_theta = {true, b.drivetrainConfig.ekf_r_otos_theta};
+      // 099-008: mirrors the two ekf_r_otos_* read-backs immediately above.
+      p.ekf_r_fix_xy = {true, b.drivetrainConfig.ekf_r_fix_xy};
+      p.ekf_r_fix_theta = {true, b.drivetrainConfig.ekf_r_fix_theta};
       break;
     }
     case msg::ConfigTarget::CONFIG_MOTOR_LEFT:
@@ -517,6 +530,55 @@ void handleGet(const msg::ConfigGet& get, Rt::Blackboard& b, uint32_t corrId,
   reply.body_kind = msg::ReplyEnvelope::BodyKind::CFG;
   reply.body.cfg = cfg;
   sendReply(reply, replyFn, replyCtx);
+}
+
+// handlePose -- 099-004/099-008: CommandEnvelope.cmd.pose_fix's dispatch
+// (D5-D8, architecture-update.md). `reset`/`zero_encoders` reuse
+// PoseEstimator's existing, already-tested setPose()/resetEncoderBaseline()
+// dispatch through the UNCHANGED bb.poseResetIn queue -- no new PoseEstimator
+// code path for SI/ZERO (both may be set in one message; both branches run).
+// Neither flag set is a genuine timestamped delayed camera fix -- 099-008
+// makes this branch live, posting Rt::PoseFixCommand{fix.x, fix.y, fix.h,
+// fix.t} to bb.poseFixIn (a latest-wins Mailbox, D7 -- post() always
+// succeeds, so there is no ERR_FULL path for this branch, unlike
+// poseResetIn's bounded WorkQueue below). Subsystems::PoseEstimator::tick()
+// (its own 7th parameter) drains it, interpolates/composes against its
+// private pose-history ring, and applies an UNGATED EkfTiny correction (D5
+// -- the camera is authoritative; ticket 006's OTOS-only innovation gate
+// never applies here). Replaces the ERR_UNIMPLEMENTED stub ticket 004 left
+// in place for this branch.
+void handlePose(const msg::PoseFix& fix, Rt::Blackboard& b, uint32_t corrId,
+                ReplyFn replyFn, void* replyCtx) {
+  if (!fix.reset && !fix.zero_encoders) {
+    Rt::PoseFixCommand cmd;
+    cmd.x = fix.x;
+    cmd.y = fix.y;
+    cmd.h = fix.h;
+    cmd.t = fix.t;
+    b.poseFixIn.post(cmd);
+    sendAck(b, corrId, replyFn, replyCtx);
+    return;
+  }
+
+  bool posted = true;
+  if (fix.reset) {
+    Rt::PoseResetCommand cmd;
+    cmd.kind = Rt::PoseResetCommand::kSetPose;
+    cmd.pose.x = fix.x;
+    cmd.pose.y = fix.y;
+    cmd.pose.h = fix.h;
+    posted = b.poseResetIn.post(cmd) && posted;
+  }
+  if (fix.zero_encoders) {
+    Rt::PoseResetCommand cmd;
+    cmd.kind = Rt::PoseResetCommand::kResetBaseline;
+    posted = b.poseResetIn.post(cmd) && posted;
+  }
+  if (!posted) {
+    sendError(msg::ErrCode::ERR_FULL, 0, corrId, replyFn, replyCtx);
+    return;
+  }
+  sendAck(b, corrId, replyFn, replyCtx);
 }
 
 // handleStream -- 096-005: mirrors the text handleStream()'s own
@@ -628,8 +690,8 @@ void handle(const char* line, ReplyFn replyFn, void* replyCtx, void* routerCtx) 
     case msg::CommandEnvelope::CmdKind::CONFIG:
       handleConfig(env.cmd.config, b, env.corr_id, replyFn, replyCtx);
       break;
-    case msg::CommandEnvelope::CmdKind::POSE:
-      sendError(msg::ErrCode::ERR_UNIMPLEMENTED, 7, env.corr_id, replyFn, replyCtx);
+    case msg::CommandEnvelope::CmdKind::POSE_FIX:
+      handlePose(env.cmd.pose_fix, b, env.corr_id, replyFn, replyCtx);
       break;
     case msg::CommandEnvelope::CmdKind::OTOS:
       sendError(msg::ErrCode::ERR_UNIMPLEMENTED, 8, env.corr_id, replyFn, replyCtx);

@@ -92,6 +92,13 @@ class Motor {
   uint32_t hardResetCount() const;   // cumulative hard (encoder-zeroing) resets
   uint32_t softResetCount() const;   // cumulative soft (non-zeroing) rebaselines
 
+  // acceleration() -- sprint 099 ticket 003 (architecture-update.md Decision
+  // 3): concrete accessor for the generic, all-4-port acceleration EMA
+  // maintained by trackAcceleration() below. Deliberately separate from
+  // DrivetrainState.acc_[]/TLM's acc_left/acc_right (Subsystems::Drivetrain's
+  // own bound-pair-only EMA), which this ticket does not touch.
+  float acceleration() const;   // [mm/s^2] EMA-filtered measured acceleration
+
   // active() -- sprint 091 ticket 003 (architecture-update.md Decision 3):
   // commanded (never measured) running/neutral state, toggled by apply()'s
   // dispatch switch below (true on DUTY_CYCLE/VOLTAGE/VELOCITY/POSITION,
@@ -135,6 +142,13 @@ class Motor {
   void updateRestTracking();                     // feeds next tick's processResetIfPending()
   void updateWedgeDetector();                    // raw stuck-encoder latch + motion-qualified wedge-suspect derivation
 
+  // trackAcceleration() -- sprint 099 ticket 003: generic per-motor
+  // acceleration EMA (alpha=0.25, ported from Drivetrain::updateAccelEma()'s
+  // own formula, not re-derived). Called once by the leaf's own tick(),
+  // right after it refreshes its filtered velocity() for this tick, using
+  // the leaf's own already-computed raw microsecond dt.
+  void trackAcceleration(float velocity, uint32_t dtUs);   // [mm/s] [us]
+
   // --- Base-owned protected state (one instance per motor — each leaf
   // object embeds one Motor base subobject). ---
   float reversalDwell_ = 0.0f;            // [ms] cached from MotorConfig
@@ -156,6 +170,8 @@ class Motor {
   bool wedgeSuspect_ = false;
 
   bool active_ = false;                   // commanded running/neutral state (never measured)
+
+  float acceleration_ = 0.0f;             // [mm/s^2] EMA-filtered measured acceleration (trackAcceleration())
 
  private:
   // Ship defaults substituted by configure() when MotorConfig's two new
@@ -180,6 +196,18 @@ class Motor {
   // semantics, per 064-004 hardening — do not reintroduce target-gating or
   // arming-grace).
   static constexpr uint8_t kWedgeThreshold = 10;
+
+  // trackAcceleration() bookkeeping — one prior velocity sample kept (the
+  // caller already supplies dtUs directly each call, so no timestamp is
+  // needed here, unlike Drivetrain::updateAccelEma()'s own
+  // lastVelSampleMs_[]).
+  float lastAccelVelocity_ = 0.0f;        // [mm/s]
+  bool haveAccelSample_ = false;
+
+  // EMA alpha for trackAcceleration() — matches Drivetrain::
+  // updateAccelEma()'s own kAccelEmaAlpha exactly (architecture-update.md
+  // Decision 3: same formula, deliberately separate surface).
+  static constexpr float kAccelEmaAlpha = 0.25f;
 };
 
 // motorCommandAllowed() -- sprint 079 extraction (architecture-update.md
@@ -214,6 +242,7 @@ inline bool Motor::wedgeSuspect() const { return wedgeSuspect_; }
 inline uint32_t Motor::hardResetCount() const { return hardResetCount_; }
 inline uint32_t Motor::softResetCount() const { return softResetCount_; }
 inline bool Motor::active() const { return active_; }
+inline float Motor::acceleration() const { return acceleration_; }
 
 inline void Motor::configure(const msg::MotorConfig& config) {
   reversalDwell_ = config.reversal_dwell.has ? config.reversal_dwell.val
@@ -309,6 +338,8 @@ inline msg::MotorState Motor::state() const {
     s.enc_glitch_count.val = encGlitchCount();
     s.sampled_at.has = true;
     s.sampled_at.val = sampleTime();
+    s.acceleration.has = true;
+    s.acceleration.val = acceleration();
   }
 
   return s;
@@ -440,6 +471,30 @@ inline void Motor::updateWedgeDetector() {
 
   if (stuckCount_ >= kWedgeThreshold) wedgeLatched_ = true;
   if (movingStuckCount_ >= kWedgeThreshold) wedgeSuspect_ = true;
+}
+
+// trackAcceleration() — sprint 099 ticket 003 (architecture-update.md
+// Decision 3): a generic, all-4-port acceleration EMA, ported (not
+// re-derived) from Drivetrain::updateAccelEma()'s own formula (alpha=0.25).
+// Unlike that gated, distinct-flip-flop-sample version (which folds in a
+// term only when a NEW velocity value arrives, deriving its own dt from
+// timestamps), this is called directly by the leaf's own tick(), once per
+// tick, right after the leaf refreshes its filtered velocity() — the caller
+// has already established a valid, positive dtUs before calling (Nezha:
+// sampleOk && haveElapsed; Sim: elapsedTime > 0.0f), so no separate
+// staleness gate is needed here; the first call merely primes
+// lastAccelVelocity_ (no prior sample to difference against).
+inline void Motor::trackAcceleration(float velocity, uint32_t dtUs) {
+  if (!haveAccelSample_) {
+    haveAccelSample_ = true;
+    lastAccelVelocity_ = velocity;
+    return;
+  }
+  if (dtUs == 0) return;
+  const float dt = static_cast<float>(dtUs) * 1e-6f;   // [s]
+  const float rawAccel = (velocity - lastAccelVelocity_) / dt;   // [mm/s^2]
+  acceleration_ = kAccelEmaAlpha * rawAccel + (1.0f - kAccelEmaAlpha) * acceleration_;
+  lastAccelVelocity_ = velocity;
 }
 
 }  // namespace Hal

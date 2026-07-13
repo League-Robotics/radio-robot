@@ -17,6 +17,38 @@ message SetPose {
   float h = 3;
 }
 
+// PoseFix — CommandEnvelope.cmd.pose_fix's payload (sprint 099, D5-D8):
+// retypes the formerly-declared-only arm 7 (was SetPose). Three variants
+// share this one shape rather than three separate arms:
+//   - reset=true            -- SI-equivalent hard re-anchor now (x, y, h;
+//                               t/zero_encoders ignored).
+//   - zero_encoders=true    -- ZERO-equivalent: resync the encoder-delta
+//                               baseline only (x, y, h, t ignored). May be
+//                               combined with reset=true in the same
+//                               message; both branches run.
+//   - neither flag set      -- a genuine timestamped delayed camera fix
+//                               (x, y, h true at robot-clock time t) --
+//                               099-004 replies ERR_UNIMPLEMENTED for this
+//                               variant; 099-008 makes it live.
+message PoseFix {
+  float  x = 1;              // [mm] world x (meaningless when only zero_encoders is set)
+  float  y = 2;               // [mm] world y
+  float  h = 3;               // [rad] world heading
+  uint32 t = 4;                // [ms] robot-clock timestamp this observation was true (D6)
+  bool   reset = 5;            // true = SI-equivalent hard re-anchor now
+  bool   zero_encoders = 6;    // true = ZERO-equivalent: resync encoder baseline
+}
+
+// PoseStep — bb.poseStepped's shape (sprint 099, Addition 1): the magnitude
+// of whatever pose correction (SI reset or, from 099-008 on, a delayed fix)
+// PoseEstimator applied on the immediately-prior tick() call; zero on every
+// other tick. Blackboard-only this sprint (not on the wire) -- see
+// architecture-update.md Decision 5.
+message PoseStep {
+  float pos   = 1;  // [mm] magnitude of the position correction applied THIS tick; 0 = none
+  float theta = 2;  // [rad] magnitude of the heading correction applied THIS tick; 0 = none
+}
+
 // Per-wheel target array; w[] has exactly kWheelCount entries.
 message WheelTargets {
   repeated WheelTarget w = 1 [(max_count) = 4];
@@ -148,6 +180,15 @@ message DrivetrainConfig {
   // `DEV DT PORTS <l> <r>` merges these two fields; wire text unchanged.
   uint32 left_port            = 40;
   uint32 right_port           = 41;
+  // ekf_r_fix_xy/ekf_r_fix_theta (099-008, D5): the delayed camera-fix's
+  // own UNGATED position/heading measurement-noise pair, mirroring
+  // ekf_r_otos_xy/ekf_r_otos_theta's own wire-tunable field shape exactly
+  // (BinaryChannel config/get, Rt::Configurator) -- see
+  // architecture-update.md D5-D8 and this ticket's own config-field
+  // Description note for why these follow ekf_r_otos_xy/theta's
+  // check_config_sync.py allowlist precedent, not gen_boot_config.py/JSON.
+  float  ekf_r_fix_xy         = 42;
+  float  ekf_r_fix_theta      = 43;
 }
 
 // Declared drivetrain capabilities.

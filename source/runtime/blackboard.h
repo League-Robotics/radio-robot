@@ -102,6 +102,21 @@ struct Blackboard {
   msg::DrivetrainState drivetrain;    // from Drivetrain
   msg::PoseEstimate encoderPose;      // from PoseEstimator
   msg::PoseEstimate fusedPose;        // from PoseEstimator
+  // bodyState (099-004, architecture-update.md Addition 2) -- reuses the
+  // existing msg::PoseEstimate shape (pose+twist+stamp): pose from
+  // fusedPose.pose, twist from BodyKinematics::forward() on the bound
+  // pair's directly-read wheel velocities, stamp from fusedPose.stamp.
+  // Published every pass by MainLoop::commit(); the ONE cell the follow-on
+  // motion-v2 subsystem's thin adapter is designed to read directly.
+  // Blackboard-only -- not on the wire this sprint (Decision 5).
+  msg::PoseEstimate bodyState;
+  // poseStepped (099-004, architecture-update.md Addition 1) -- the
+  // magnitude of whatever pose correction (SI reset this sprint; a delayed
+  // fix from 099-008 on) PoseEstimator applied on the immediately-prior
+  // tick() call; zero on every other tick. Published every pass by
+  // MainLoop::commit() from PoseEstimator::lastPoseStep(). Blackboard-only
+  // -- not on the wire this sprint (Decision 5).
+  msg::PoseStep poseStepped;
   msg::PlannerState planner;          // from Planner
   // (090-003) odometer sample fusable -- derived from Hal::Odometer::
   // fusableThisPass(), never a device-presence (`!= nullptr`) test; always
@@ -215,6 +230,16 @@ struct Blackboard {
   Mailbox<Motion::Segment> replaceIn;
   WorkQueue<ConfigDelta, 16> configIn;        // router -> Configurator
   WorkQueue<PoseResetCommand, 4> poseResetIn;  // router -> PoseEstimator
+  // poseFixIn (099-008, architecture-update.md D7): a genuine timestamped
+  // delayed camera fix -- BinaryChannel::handlePose()'s third branch
+  // (neither `reset` nor `zero_encoders`) posts here. Latest-wins Mailbox
+  // ON PURPOSE, the dual of poseResetIn's FIFO WorkQueue immediately
+  // above: a newer camera frame supersedes an undrained older one, by
+  // design -- there is no "queue every fix and apply them all in order"
+  // requirement the way SI/ZERO resets have. Drained by
+  // Subsystems::PoseEstimator::tick() itself (its own 7th parameter), not
+  // by MainLoop directly.
+  Mailbox<PoseFixCommand> poseFixIn;
   Mailbox<msg::SetPose> otosSetPoseIn;        // SI re-anchor -> odometer
   Mailbox<msg::OdometerCommand> otosCommandIn;  // OI/OZ/OR/OV -> odometer (loop-drained)
   Mailbox<uint32_t> devWatchdogWindowIn;       // DEV WD -> loop's SerialSilenceWatchdog

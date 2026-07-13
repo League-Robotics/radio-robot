@@ -240,7 +240,7 @@ def test_fuzz_encode_cfg_snapshot_extremes(asan_harness, target):
     never crash, matching decode()'s own "well-formed but semantically
     invalid" tolerance elsewhere in this schema)."""
     assert encode_cfg_drivetrain(asan_harness, 1, target, 3.4e38, -3.4e38, float("nan"), float("inf"),
-                                  float("-inf"), 0.0) is not None
+                                  float("-inf"), 0.0, float("nan"), float("inf")) is not None
     assert encode_cfg_motor(asan_harness, 1, target, 255, 3.4e38, -3.4e38, float("nan"), float("inf"),
                              float("-inf"), 0.0) is not None
     assert encode_cfg_planner(asan_harness, 1, target, float("nan"), float("inf"), float("-inf")) is not None

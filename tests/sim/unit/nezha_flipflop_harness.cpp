@@ -68,6 +68,7 @@
 
 #include "com/i2c_bus.h"
 #include "hal/nezha/nezha_motor.h"
+#include "hal/otos/otos_odometer.h"
 #include "messages/motor.h"
 #include "subsystems/nezha_hardware.h"
 
@@ -148,6 +149,49 @@ void scriptGenerousPool(I2CBus& bus, int count) {
     bus.scriptWrite(kWireAddr, /*status=*/0);
     bus.scriptRead(kWireAddr, canned, 4, /*status=*/0);
   }
+}
+
+// --- OTOS (0x17) fixture helpers -- 099-002: the new scheduled-slot branch
+// (architecture-update-r1.md Decision 2) makes NezhaHardware::begin()/
+// tick() issue real I2C traffic to a SECOND device address
+// (Hal::kOtosDeviceAddr, 0x17 -- a different device slot from this file's
+// own kAddr7/0x10) whenever the owned Hal::OtosOdometer leaf is present().
+// These helpers mirror otos_odometer_harness.cpp's own scriptGenerousWrites()/
+// scriptProductId()/scriptPosVel() exactly, duplicated here rather than
+// shared -- this file's own established convention (each harness is a
+// self-contained translation unit; see e.g. this file's own kAddr7/kWireAddr
+// pair, independently declared per harness elsewhere in the codebase).
+constexpr uint16_t kOtosAddr7 = Hal::kOtosDeviceAddr;                       // 0x17
+constexpr uint16_t kOtosWireAddr = static_cast<uint16_t>(kOtosAddr7 << 1);  // 0x2E
+
+void scriptOtosGenerousWrites(I2CBus& bus, int count) {
+  for (int i = 0; i < count; ++i) bus.scriptWrite(kOtosWireAddr, /*status=*/0);
+}
+
+void scriptOtosProductId(I2CBus& bus, uint8_t id) {
+  uint8_t data[1] = {id};
+  bus.scriptRead(kOtosWireAddr, data, 1, /*status=*/0);
+}
+
+// One scripted 12-byte POSITION_XL+VELOCITY_XL burst read (X_L X_H Y_L Y_H
+// H_L H_H, then VX_L VX_H VY_L VY_H VH_L VH_H, all LE) -- one entry is
+// consumed per real OtosOdometer::tick() bus read (readPositionVelocity()).
+void scriptOtosPosVel(I2CBus& bus, int16_t x, int16_t y, int16_t h,
+                       int16_t vx, int16_t vy, int16_t vh, int status = 0) {
+  uint8_t raw[12];
+  raw[0]  = static_cast<uint8_t>(x & 0xFF);
+  raw[1]  = static_cast<uint8_t>((x >> 8) & 0xFF);
+  raw[2]  = static_cast<uint8_t>(y & 0xFF);
+  raw[3]  = static_cast<uint8_t>((y >> 8) & 0xFF);
+  raw[4]  = static_cast<uint8_t>(h & 0xFF);
+  raw[5]  = static_cast<uint8_t>((h >> 8) & 0xFF);
+  raw[6]  = static_cast<uint8_t>(vx & 0xFF);
+  raw[7]  = static_cast<uint8_t>((vx >> 8) & 0xFF);
+  raw[8]  = static_cast<uint8_t>(vy & 0xFF);
+  raw[9]  = static_cast<uint8_t>((vy >> 8) & 0xFF);
+  raw[10] = static_cast<uint8_t>(vh & 0xFF);
+  raw[11] = static_cast<uint8_t>((vh >> 8) & 0xFF);
+  bus.scriptRead(kOtosWireAddr, raw, 12, status);
 }
 
 // Addresses a single port with `command` (non-broadcast) — the `DEV M <n>`
@@ -634,6 +678,242 @@ void scenarioFwdSignNegatesEncoderPositionSign() {
   checkUintEq(busNeg.errCount(kAddr7), 0, "no script under-run on the -1 motor's bus");
 }
 
+// 11. 099-002 (architecture-update-r1.md Decision 2): the OTOS scheduled-
+//     slot branch at the top of NezhaHardware::tick() -- present()- AND
+//     readDue()-gated, REQUEST_DUE-phase-only. Constructs a NezhaHardware
+//     with begin() actually called (so the owned Hal::OtosOdometer leaf
+//     detects a chip and present() goes true, unlike every scenario above,
+//     none of which call begin() -- see scenario 1-10's own regression
+//     guarantee: this file's ENTIRE pre-existing suite must stay 10/10 with
+//     this new branch compiled in, proven by re-running scenarios 1-10
+//     completely unmodified, above).
+//
+//     Walks one timeline proving three things at the REAL
+//     NezhaHardware::tick() caller level (not just the OtosOdometer leaf in
+//     isolation, which otos_odometer_harness.cpp's own readDue()/present()
+//     scenarios already cover):
+//       (a) the very first REQUEST_DUE call after begin() intercepts (OTOS
+//           has never been read) with ZERO Nezha (0x10) traffic;
+//       (b) the OTOS slot NEVER fires during COLLECT_DUE, even when
+//           deliberately arranged to be "due" by elapsed time alone -- the
+//           phase_==REQUEST_DUE guard, not just readDue(), keeps it out;
+//       (c) at most one OTOS slot services per kReadPeriod window -- a
+//           same-window REQUEST_DUE opportunity correctly falls through to
+//           the Nezha flip-flop instead of double-servicing OTOS, and the
+//           flip-flop resumes its own cadence on the very next eligible
+//           call either way.
+//
+//     --- Scripting note: EXACT, not generous ---
+//     source/com/i2c_bus_host.cpp's scripted fake keeps ONE shared
+//     _scriptedWrites/_scriptedReads FIFO PER I2CBUS INSTANCE, keyed by
+//     call order alone (address is only checked, per entry, at pop time --
+//     see that file's own header comment). Every other scenario in this
+//     file scripts one device (0x10) per bus and can safely over-provision
+//     ("generous pool") because leftover entries are all identical and
+//     same-addressed. This scenario is the FIRST in this file to put TWO
+//     devices (0x10 and, since 099-002, 0x17) on the SAME shared bus_ in a
+//     genuinely interleaved sequence -- a leftover entry from one device
+//     left sitting at the front of a queue would be wrongly popped (and
+//     wasted, desyncing everything after) by the OTHER device's very next
+//     real call. So every script call below is EXACTLY sized to the one
+//     real bus call it feeds, in the precise chronological order
+//     production code will issue them -- confirmed empirically (compiled
+//     and run, not hand-derived alone) against the real
+//     Subsystems::NezhaHardware::tick()/Hal::OtosOdometer::tick() bodies.
+void scenarioOtosSlotGatedByPhaseAndPeriod() {
+  beginScenario("099-002: OTOS scheduled slot -- REQUEST_DUE-only, never during COLLECT_DUE, <=1 per kReadPeriod");
+  resetDefaultConfigs(/*polledMask=*/0b0001);   // port 1 pre-polled
+  I2CBus::setClock(1000000);
+  I2CBus bus;
+  uint8_t nezhaCanned[4] = {0, 0, 0, 0};
+
+  // begin(): 4 motors' hardReset() (16 Nezha W + 16 Nezha R, in that exact
+  // order -- see nezha_motor.cpp's readEncoderAtomicRaw(), 4 calls/motor x
+  // 4 motors), THEN otosOdometer_.begin() (7 Otos W + 1 Otos R -- matches
+  // otos_odometer_harness.cpp's own kBeginTxnCount=8). EXACT counts, no
+  // slack -- see this scenario's own header note.
+  scriptGenerousPool(bus, 16);        // exactly the 4 motors' 16W+16R
+  scriptOtosGenerousWrites(bus, 7);   // exactly begin()'s 7 Otos writes
+  scriptOtosProductId(bus, 0x5F);     // exactly begin()'s 1 Otos read (the id probe)
+
+  Subsystems::NezhaHardware hal(bus, defaultConfigs);
+  hal.begin();   // primes all 4 motors' encoders AND otosOdometer_.begin()
+  checkTrue(hal.odometer()->present(), "sanity: begin() detected the OTOS chip -- present() true");
+  checkUintEq(bus.errCount(kAddr7), 0, "begin(): no Nezha script under-run");
+  checkUintEq(bus.errCount(kOtosAddr7), 0, "begin(): no OTOS script under-run");
+
+  hal.apply(addressedOne(0, neutralCommand()));   // stages NEUTRAL on port 1's own setter (already polled)
+
+  // Step 1: the very first REQUEST_DUE tick() after begin() -- OTOS has
+  // never been tick()'d (hasRead_ false), so readDue() is unconditionally
+  // true; present() is true -- the OTOS branch intercepts THIS call.
+  // phase_ stays REQUEST_DUE (the branch returns before the flip-flop
+  // switch runs), so the Nezha bus sees ZERO new traffic this call.
+  bus.scriptWrite(kOtosWireAddr, /*status=*/0);           // readPositionVelocity()'s register-select write
+  scriptOtosPosVel(bus, 1000, 500, 0, 0, 0, 0);           // ...and its 12-byte burst read
+  uint32_t nezhaBefore = bus.txnCount(kAddr7);
+  uint32_t otosBefore = bus.txnCount(kOtosAddr7);
+  hal.tick(2000);
+  checkUintEq(bus.txnCount(kOtosAddr7) - otosBefore, 2,
+              "step 1: OTOS's first service landed (1 write + 1 12-byte read)");
+  checkUintEq(bus.txnCount(kAddr7) - nezhaBefore, 0,
+              "step 1: the OTOS slot intercepted this call -- the Nezha flip-flop saw zero traffic");
+
+  // Step 2: t=2005, well inside kReadPeriod (20ms) of step 1's read --
+  // readDue() is now false, so this call falls through to the UNTOUCHED
+  // flip-flop: REQUEST_DUE fires requestSample() -> requestEncoder(), a
+  // SINGLE write (the 0x46 request) -- no read this call.
+  bus.scriptWrite(kWireAddr, /*status=*/0);
+  nezhaBefore = bus.txnCount(kAddr7);
+  otosBefore = bus.txnCount(kOtosAddr7);
+  hal.tick(2005);
+  checkUintEq(bus.txnCount(kAddr7) - nezhaBefore, 1,
+              "step 2: the flip-flop resumed -- REQUEST_DUE issued its own 0x46 request");
+  checkUintEq(bus.txnCount(kOtosAddr7) - otosBefore, 0, "step 2: OTOS not due yet -- untouched");
+
+  // Step 3: satisfy the request's postClear, then collect at t=2025 --
+  // deliberately >= kReadPeriod since step 1's OTOS read (2025-2000=25ms),
+  // so OTOS WOULD be "due" if readDue() alone gated the branch. Proves the
+  // phase_==REQUEST_DUE guard (not just readDue()) is what keeps the branch
+  // out of COLLECT_DUE: the collect proceeds completely normally (1 read +
+  // 1 write, the first-ever NEUTRAL dispatch -- mirrors scenario 2's own
+  // established first-collect shape) and OTOS sees zero traffic this call.
+  bus.scriptRead(kWireAddr, nezhaCanned, 4, /*status=*/0);   // collectEncoder()'s read
+  bus.scriptWrite(kWireAddr, /*status=*/0);                  // the first-ever NEUTRAL dispatch write
+  I2CBus::advanceClock(4000);
+  nezhaBefore = bus.txnCount(kAddr7);
+  otosBefore = bus.txnCount(kOtosAddr7);
+  hal.tick(2025);
+  checkUintEq(bus.txnCount(kAddr7) - nezhaBefore, 2,
+              "step 3: COLLECT_DUE proceeded normally -- +1 read (collectEncoder) +1 write "
+              "(first NEUTRAL dispatch, write-on-change never having seen this value before)");
+  checkUintEq(bus.txnCount(kOtosAddr7) - otosBefore, 0,
+              "step 3: the OTOS slot NEVER fires during COLLECT_DUE, even though it would be "
+              "\"due\" by elapsed time alone -- the phase_==REQUEST_DUE guard is load-bearing, "
+              "not merely readDue() alone");
+
+  // Step 4: phase_ is REQUEST_DUE again (the collect above already
+  // advanced it, within that same call). OTOS is now genuinely due (25ms
+  // since its own last read) -- the branch intercepts again: it "catches
+  // up" the very next REQUEST_DUE-phase call once truly due, not just once
+  // ever.
+  bus.scriptWrite(kOtosWireAddr, /*status=*/0);
+  scriptOtosPosVel(bus, 1100, 550, 0, 0, 0, 0);
+  nezhaBefore = bus.txnCount(kAddr7);
+  otosBefore = bus.txnCount(kOtosAddr7);
+  hal.tick(2030);
+  checkUintEq(bus.txnCount(kOtosAddr7) - otosBefore, 2, "step 4: OTOS's second service landed");
+  checkUintEq(bus.txnCount(kAddr7) - nezhaBefore, 0,
+              "step 4: the OTOS slot intercepted again -- zero Nezha traffic");
+
+  // Step 5: t=2035, 5ms after step 4's read -- well inside kReadPeriod --
+  // readDue() is false again, so the flip-flop resumes its OWN second
+  // REQUEST_DUE immediately. Proves "at most one OTOS slot per kReadPeriod
+  // window": a same-window opportunity correctly falls through to the
+  // flip-flop instead of double-servicing OTOS.
+  bus.scriptWrite(kWireAddr, /*status=*/0);
+  nezhaBefore = bus.txnCount(kAddr7);
+  otosBefore = bus.txnCount(kOtosAddr7);
+  hal.tick(2035);
+  checkUintEq(bus.txnCount(kAddr7) - nezhaBefore, 1,
+              "step 5: the flip-flop's second REQUEST_DUE issued its own 0x46 request");
+  checkUintEq(bus.txnCount(kOtosAddr7) - otosBefore, 0,
+              "step 5: OTOS not due again yet -- untouched (at most one service per period)");
+
+  checkUintEq(bus.errCount(kAddr7), 0, "no Nezha script under-run");
+  checkUintEq(bus.errCount(kOtosAddr7), 0, "no OTOS script under-run");
+}
+
+// 12. 099-002 (architecture-update-r1.md Decision 2): the transient-failure
+//     retry property -- present()-gating (not connected()-gating) means a
+//     SINGLE failed OtosOdometer::tick() bus read does not permanently stop
+//     future OTOS slots. otos_odometer_harness.cpp already proves this at
+//     the OtosOdometer leaf level in isolation; this scenario proves the
+//     SAME property at the REAL NezhaHardware::tick() caller level -- the
+//     exact ticket AC this scenario exists to close ("Transient-failure
+//     retry test").
+//
+//     Deliberately constructed with NO port polled (polledMask=0): the OTOS
+//     branch runs BEFORE tick()'s `if (!anyPolled()) return;` idle guard
+//     (see NezhaHardware::tick()'s own body), so it is unaffected either
+//     way, and every call where OTOS is not due simply hits the idle
+//     return with ZERO bus traffic of ANY kind -- eliminating any need to
+//     hand-track the Nezha flip-flop's own phase_/COLLECT_DUE state here
+//     (scenarioOtosSlotGatedByPhaseAndPeriod, above, is the scenario that
+//     specifically exercises phase_==COLLECT_DUE). This keeps this
+//     scenario's scripting exact and simple: only OTOS (0x17) ever sees
+//     bus traffic after begin() completes -- see the txnCount(kAddr7)
+//     assertions below, which stay pinned at begin()'s own count for the
+//     scenario's entire remaining timeline.
+void scenarioOtosSlotTransientFailureRetriesAtNextPeriod() {
+  beginScenario("099-002: OTOS scheduled slot -- a transient tick() failure does not permanently stop future slots");
+  resetDefaultConfigs(/*polledMask=*/0);   // no port polled -- see this scenario's own header note
+  I2CBus::setClock(1000000);
+  I2CBus bus;
+
+  // begin(): 4 motors' hardReset() (16 Nezha W + 16 Nezha R -- unconditional,
+  // regardless of polled state) then otosOdometer_.begin() (7 Otos W + 1
+  // Otos R). EXACT counts -- see scenarioOtosSlotGatedByPhaseAndPeriod's
+  // own header note on why this file's other scenarios' "generous pool"
+  // convention is unsafe once two devices share one bus_.
+  scriptGenerousPool(bus, 16);
+  scriptOtosGenerousWrites(bus, 7);
+  scriptOtosProductId(bus, 0x5F);
+
+  constexpr uint32_t kReadPeriodMs = 20;   // mirrors otos_odometer.h's private kReadPeriod
+
+  Subsystems::NezhaHardware hal(bus, defaultConfigs);
+  hal.begin();
+  checkTrue(hal.odometer()->present(), "sanity: begin() detected the OTOS chip -- present() true");
+  checkUintEq(bus.errCount(kAddr7), 0, "begin(): no Nezha script under-run");
+  checkUintEq(bus.errCount(kOtosAddr7), 0, "begin(): no OTOS script under-run");
+  uint32_t nezhaFixed = bus.txnCount(kAddr7);   // pinned -- no port is polled, so this NEVER changes again
+
+  // Baseline: the first REQUEST_DUE tick() after begin() always intercepts
+  // (hasRead_ false) -- a clean read, establishing a known-good state.
+  bus.scriptWrite(kOtosWireAddr, /*status=*/0);
+  scriptOtosPosVel(bus, 1000, 500, 0, 0, 0, 0);
+  hal.tick(1000);
+  checkTrue(hal.odometer()->connected(), "baseline service: clean read -- connected() true");
+  checkUintEq(bus.txnCount(kAddr7), nezhaFixed, "baseline service: Nezha bus untouched (no port polled)");
+
+  // Second service, at the next period boundary, INDUCED to fail.
+  bus.scriptWrite(kOtosWireAddr, /*status=*/0);
+  scriptOtosPosVel(bus, 9999, 9999, 9999, 0, 0, 0, /*status=*/-1);
+  hal.tick(1000 + kReadPeriodMs);
+  checkFalse(hal.odometer()->connected(), "induced failure: connected() flips false");
+  checkTrue(hal.odometer()->present(), "induced failure: present() stays true -- must NOT track connected_");
+  checkUintEq(bus.txnCount(kAddr7), nezhaFixed,
+              "induced failure: Nezha bus still untouched -- the OTOS slot intercepted regardless "
+              "of this call's own outcome (present()-gated, not connected()-gated)");
+
+  // A same-window follow-up call (well inside kReadPeriod of the failed
+  // service) must NOT retry immediately -- readDue() is still false -- and
+  // with no port polled, this call is a complete no-op: zero bus traffic
+  // for EITHER device.
+  uint32_t otosBefore = bus.txnCount(kOtosAddr7);
+  hal.tick(1000 + kReadPeriodMs + 5);
+  checkUintEq(bus.txnCount(kAddr7), nezhaFixed, "same-window follow-up: Nezha bus untouched");
+  checkUintEq(bus.txnCount(kOtosAddr7), otosBefore,
+              "same-window follow-up: OTOS not due yet -- and idle (no port polled), so a "
+              "complete no-op this call");
+
+  // At the next kReadPeriod boundary since the FAILED service (1000+20=1020
+  // -> due again at >=1040), the OTOS branch fires again -- present() was
+  // never latched false by the earlier failure, so a fresh clean read
+  // recovers connected().
+  bus.scriptWrite(kOtosWireAddr, /*status=*/0);
+  scriptOtosPosVel(bus, 1200, 600, 0, 0, 0, 0);
+  hal.tick(1000 + 2 * kReadPeriodMs);
+  checkTrue(hal.odometer()->connected(),
+            "retry: a subsequent clean service recovers connected() -- the branch was never "
+            "permanently stopped by the earlier transient failure");
+  checkUintEq(bus.txnCount(kAddr7), nezhaFixed, "retry: Nezha bus still untouched");
+
+  checkUintEq(bus.errCount(kAddr7), 0, "no Nezha script under-run");
+  checkUintEq(bus.errCount(kOtosAddr7), 1, "exactly the one induced OTOS failure");
+}
+
 }  // namespace
 
 int main() {
@@ -647,6 +927,8 @@ int main() {
   scenarioFirstWriteExemptFromSentinelSlew();
   scenarioRequestHonorsClearanceAfterDutyWrite();
   scenarioFwdSignNegatesEncoderPositionSign();
+  scenarioOtosSlotGatedByPhaseAndPeriod();
+  scenarioOtosSlotTransientFailureRetriesAtNextPeriod();
 
   if (g_failureCount == 0) {
     std::printf("OK: all NezhaHardware flip-flop scenarios passed\n");

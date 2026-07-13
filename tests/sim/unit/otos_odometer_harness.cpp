@@ -706,6 +706,91 @@ void scenarioSignalProcessConfigAndImuCalibrationProgressReads() {
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
 }
 
+// 11. readDue() (099-002, architecture-update-r1.md Decision 2): a pure
+//     scheduling query, no I2C traffic of its own -- true before ANY real
+//     read has ever happened (hasRead_ false; deliberately independent of
+//     present()/initialized_ -- see readDue()'s own doc comment,
+//     otos_odometer.h, for why a CALLER must check present() separately),
+//     false immediately after a real read, and true again once kReadPeriod
+//     has elapsed (signed-cast rollover-safe boundary, exactly at the
+//     period, not "one past it").
+void scenarioReadDueScheduling() {
+  beginScenario("readDue(): true before any read, false right after, true once kReadPeriod elapses");
+  I2CBus::setClock(1000000);
+  I2CBus bus;
+  scriptGenerousWrites(bus, 20);
+  scriptProductId(bus, 0x5F);
+
+  // Mirrors otos_odometer.h's private kReadPeriod (086-007) -- this file's
+  // own established convention for restating a private leaf constant (see
+  // scenarioTickRateLimitsBusReads above).
+  constexpr uint32_t kReadPeriodMs = 20;
+
+  Hal::OtosOdometer odom(bus, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  checkTrue(odom.readDue(0), "readDue() true before begin() is ever called -- no real read has happened");
+
+  odom.begin();
+  checkTrue(odom.readDue(1000),
+            "readDue() still true right after begin() -- begin()'s own product-ID probe is "
+            "not tick()'s real read (hasRead_ is tick()-only bookkeeping)");
+
+  scriptPosVel(bus, 1000, 500, 0, 0, 0, 0);
+  odom.tick(1000);
+  checkFalse(odom.readDue(1000), "readDue() false immediately after a real read (same now)");
+  checkFalse(odom.readDue(1000 + kReadPeriodMs - 1), "readDue() false just inside the kReadPeriod window");
+  checkTrue(odom.readDue(1000 + kReadPeriodMs), "readDue() true exactly at the kReadPeriod boundary");
+
+  checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
+}
+
+// 12. present() (099-002, architecture-update-r1.md Decision 2): a
+//     permanent, boot-time-only flag -- false before begin() is ever
+//     called, false after a begin() whose product-ID detect fails, true
+//     after a begin() whose detect succeeds, and -- the whole point of the
+//     present()/connected() split this ticket's revision introduces --
+//     STAYS true even after a subsequent tick() whose own bus read fails.
+//     present() must never track connected_ (see present()'s own doc
+//     comment, otos_odometer.h, for the regression this fixes: gating a
+//     caller's scheduling decision on connected() instead would let one
+//     transient bus glitch on an otherwise-present chip permanently stop
+//     it from ever being scheduled/read again).
+void scenarioPresentTracksDetectionOnly() {
+  beginScenario("present(): permanent boot-time detection flag, independent of connected()'s live per-tick health");
+  I2CBus::setClock(1000000);
+
+  // Case A: never begin()'d at all.
+  I2CBus busNeverBegun;
+  Hal::OtosOdometer odomNeverBegun(busNeverBegun, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  checkFalse(odomNeverBegun.present(), "present() false -- begin() was never called");
+  checkUintEq(busNeverBegun.errCount(kAddr7), 0, "no bus traffic at all when begin() is never called");
+
+  // Case B: begin() called, but the product-ID probe returns the wrong id.
+  I2CBus busWrongId;
+  scriptGenerousWrites(busWrongId, 20);
+  scriptProductId(busWrongId, 0x00);   // wrong id -- real chip reports 0x5F
+  Hal::OtosOdometer odomWrongId(busWrongId, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  odomWrongId.begin();
+  checkFalse(odomWrongId.present(), "present() false -- begin()'s product-ID detect failed");
+  checkUintEq(busWrongId.errCount(kAddr7), 0, "the probe's own status was OK -- just the ID didn't match");
+
+  // Case C: begin() succeeds -- present() true, and STAYS true across a
+  // subsequent failed tick() (connected() itself goes false, present() must
+  // not).
+  I2CBus busPresent;
+  scriptGenerousWrites(busPresent, 20);
+  scriptProductId(busPresent, 0x5F);
+  Hal::OtosOdometer odomPresent(busPresent, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  odomPresent.begin();
+  checkTrue(odomPresent.present(), "present() true -- begin()'s product-ID detect succeeded");
+
+  scriptPosVel(busPresent, 9999, 9999, 9999, 0, 0, 0, /*status=*/-1);   // induced burst-read failure
+  odomPresent.tick(1000);
+  checkFalse(odomPresent.connected(), "sanity: the induced failure DOES flip connected() false");
+  checkTrue(odomPresent.present(),
+            "present() stays true after a transient tick() failure -- must NOT track connected_");
+  checkUintEq(busPresent.errCount(kAddr7), 1, "exactly the one induced failure");
+}
+
 }  // namespace
 
 int main() {
@@ -723,6 +808,8 @@ int main() {
   scenarioTickRateLimitsBusReads();
   scenarioSetOffsetGetOffsetScalingRoundTrip();
   scenarioSignalProcessConfigAndImuCalibrationProgressReads();
+  scenarioReadDueScheduling();
+  scenarioPresentTracksDetectionOnly();
 
   if (g_failureCount == 0) {
     std::printf("OK: all OtosOdometer scenarios passed\n");

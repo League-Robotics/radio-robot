@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Consolidate main.cpp onto Rt::MainLoop (structural only)
-status: open
+status: done
 use-cases: [SUC-001, SUC-002, SUC-003, SUC-006, SUC-007]
 depends-on: []
 github-issue: ''
@@ -38,24 +38,28 @@ body from `main.cpp` in favor of the one `MainLoop::tick()`/`commit()`
 
 ## Acceptance Criteria
 
-- [ ] `main.cpp` constructs one `Rt::MainLoop loop(hardware, drivetrain)`
+- [x] `main.cpp` constructs one `Rt::MainLoop loop(hardware, drivetrain)`
       and its `for(;;)` body calls `loop.tick(bb, now)` in place of the
       previous hand-rolled `hardware.tick()`/`drivetrain.tick()`/commit
       sequence.
-- [ ] No other behavior in `main.cpp` changes: comms tick, command
+- [x] No other behavior in `main.cpp` changes: comms tick, command
       routing, `configurator.applyOne(bb)`, `tickTelemetry(bb, router,
       now)`, and `uBit.sleep(1)` keep their existing relative order around
       the new `loop.tick(bb, now)` call.
-- [ ] Full existing sim/unit suite passes unchanged (`uv run python -m
+- [x] Full existing sim/unit suite passes unchanged (`uv run python -m
       pytest`) — no test's assertions reference a value this refactor
-      could plausibly move.
+      could plausibly move. (1282 passed, 5 xfailed, 0 failed.)
 - [ ] Bench smoke: on the stand, `S`/binary `drive`, `TLM`/binary `stream`
       behave identically to a pre-ticket build — same wheel response, same
       TLM field values (per `.claude/rules/hardware-bench-testing.md`'s
-      standing verification gate).
-- [ ] `git diff` review confirms `main_loop.h`/`main_loop.cpp` are
+      standing verification gate). **DEFERRED** — no robot USB-attached this
+      session (only a relay dongle connected); firmware build was verified
+      clean (`just build`, both MICROBIT hex and host sim lib). Deferred to
+      the team-lead's sprint bench gate.
+- [x] `git diff` review confirms `main_loop.h`/`main_loop.cpp` are
       untouched by this ticket (the constructor/tick signature change is
-      ticket 004's job, not this one's).
+      ticket 004's job, not this one's). (`tests/_infra/sim/sim_api.cpp`
+      confirmed untouched too — empty `git diff --stat` on all three files.)
 
 ## Implementation Plan
 

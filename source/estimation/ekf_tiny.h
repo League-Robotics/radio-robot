@@ -11,13 +11,20 @@
 //   - The velocity/omega state sub-block and its updateVelocity() channel.
 //     `twist=` (TLM) is populated from directly-measured/derived rates
 //     elsewhere (ticket 004), not filtered EKF state.
-//   - Mahalanobis chi-squared gating on any channel.
-//   - P-inflation gate-recovery and the rejection-streak counters
-//     (rejHeadStreak()/rejPosStreak()/rejectedCount()/getRejectCount()).
 //   - setNoise() (live noise re-tune, independent of init()'s boot-only
 //     reset) and the old class's Python-oracle test-harness accessors
 //     (pEntry()/xEntry()/setXEntry()/setPEntry()/setRejPosStreak()/
 //     setRejHeadStreak()) — not this sprint's scope to re-validate.
+//
+// Sprint 099, ticket 006 RE-ADDS a bounded innovation-consistency gate +
+// rejection-streak P-inflation recovery on updatePosition()/updateHeading()
+// (architecture-update.md sprint 099 Decision 4) — but as fully PRIVATE,
+// internal-only state. The old class's PUBLIC test-harness accessors for
+// this (rejHeadStreak()/rejPosStreak()/rejectedCount()/getRejectCount())
+// stay dropped: PoseEstimator and the harness only ever need to observe
+// accept/reject behavior externally (does x()/y()/theta() move or not?),
+// never to read the streak counters directly — the gate is invisible to
+// every caller, by design (ticket 006's AC).
 //
 // Namespace/location choice: EkfTiny is deliberately left UN-namespaced (not
 // under Hal::, despite the ticket title's "Hal::EkfTiny" shorthand — this
@@ -123,14 +130,59 @@ class EkfTiny {
 
   // Update step: 2D position-only observation (e.g. OTOS x, y).
   // S^-1 is computed analytically (2x2) — no Cholesky ekf_update()/invert()
-  // path. No gating/rejection logic (see file header for what was dropped).
+  // path.
+  //
+  // Sprint 099 D4 bounded innovation-consistency gate: the Mahalanobis
+  // statistic d^2 = y^T S^-1 y is computed by REUSING this same analytic
+  // S^-1 (never recomputed) and compared against kChiSquare2Dof99. If
+  // d^2 exceeds it, the observation is REJECTED — the call returns without
+  // modifying state — and the position channel's private rejection-streak
+  // counter is incremented; on ACCEPT the streak resets to 0. Every
+  // kRejectStreakThreshold-th consecutive rejection inflates this channel's
+  // own P[0][0]/P[1][1] diagonal entries by a small, capped bump (never a
+  // hard reset) so a genuinely-shifted sensor is eventually re-trusted
+  // rather than locked out forever. This gate protects THIS method only —
+  // it never applies to a delayed camera-fix update (ticket 008, D5), which
+  // uses its own, separate, ungated update path.
   void updatePosition(float xOtos, float yOtos);   // [mm] [mm]
 
   // Update step: heading-only observation (e.g. OTOS heading), scalar
   // (1-DOF). Wrap-safe innovation: y = wrapPi(thetaOtos - theta()). Applied
   // manually (no ekf_update() call), same numerical path as the old class.
-  // No gating/rejection logic (see file header for what was dropped).
+  //
+  // Sprint 099 D4 bounded innovation-consistency gate: rejects when
+  // |y| > kHeadingSigma * sqrt(S). Same reject/streak/P-inflation-recovery
+  // shape as updatePosition() above, using the heading channel's own
+  // private streak counter and P[2][2]. See updatePosition()'s doc comment
+  // for the full behavior; this gate likewise protects THIS method only,
+  // never the delayed camera-fix path.
   void updateHeading(float thetaOtos);   // [rad]
+
+  // Sprint 099, ticket 008 (D5): dedicated UNGATED position/heading update
+  // entry points for a delayed camera fix. Each routes through the EXACT
+  // SAME Kalman-update math the gated method above uses (computePositionGain()
+  // /applyPositionGain(), computeHeadingGain()/applyHeadingGain() -- private
+  // helpers below, shared by both the gated and ungated public methods) --
+  // but performs NO Mahalanobis/sigma gate check and touches NEITHER
+  // channel's rejection-streak counter. The camera is treated as an
+  // authoritative absolute source (architecture-update.md D5) -- ticket
+  // 006's gate exists ONLY to protect the OTOS channel; it must never apply
+  // to a delayed camera fix.
+  //   xFix/yFix/thetaFix -- the composed implied world pose from
+  //                         PoseEstimator's rigid-compose step (already in
+  //                         this filter's world frame -- no further
+  //                         transform here).
+  //   rFixXy/rFixTheta   -- PoseEstimator-owned noise (ekf_r_fix_xy/
+  //                         ekf_r_fix_theta, zero-as-unset sentinelOr()'d
+  //                         the same way rOtosXy_/rOtosTheta_ are at
+  //                         configure() time) -- passed per-call rather
+  //                         than stored as EkfTiny state, since a delayed
+  //                         fix's noise value only matters at the rare
+  //                         moment a fix actually arrives, unlike the OTOS
+  //                         noise, which every predict-adjacent
+  //                         updatePosition()/updateHeading() call needs.
+  void updatePositionUngated(float xFix, float yFix, float rFixXy);      // [mm] [mm] [mm^2]
+  void updateHeadingUngated(float thetaFix, float rFixTheta);            // [rad] [rad^2]
 
   // Accessors.
   float x() const;       // [mm]
@@ -156,4 +208,81 @@ class EkfTiny {
   // class's kPriorXY/kPriorTheta exactly.
   static constexpr float kPriorXY = 100.0f;       // [mm^2]
   static constexpr float kPriorTheta = 0.00762f;  // [rad^2] (5 deg)^2
+
+  // --- Shared Kalman-update core (099-008, D5) ---
+  // The position/heading channels are each split into a "compute gain" step
+  // (innovation, S, S^-1/1/s, Mahalanobis/sigma statistic, Kalman gain — NO
+  // state mutation) and an "apply gain" step (the actual x/P mutation).
+  // updatePosition()/updateHeading() (gated) call computeXGain() FIRST, gate
+  // on its returned statistic, and only call applyXGain() on accept.
+  // updatePositionUngated()/updateHeadingUngated() call the identical pair
+  // back-to-back with no gate in between. Neither public method has its own
+  // copy of the Kalman math — this is what "shares the same core" means
+  // structurally, not just in prose.
+  struct PositionGain {
+    float yi0, yi1;                       // innovation
+    float k00, k01, k10, k11, k20, k21;   // Kalman gain (EKF_N x 2)
+    float d2;                             // Mahalanobis y^T S^-1 y (gated caller's own statistic)
+  };
+  // Returns false only on a numerically singular S (a safety guard, NOT the
+  // D4 consistency gate) — state is never mutated by this call either way.
+  bool computePositionGain(float xObs, float yObs, float r, PositionGain* out) const;
+  void applyPositionGain(const PositionGain& g);
+
+  struct HeadingGain {
+    float y;        // wrap-safe innovation
+    float s;        // innovation covariance (scalar) — the sigma-gate's own denominator
+    float k0, k1, k2;
+  };
+  // Returns false only on a degenerate S (same safety-guard-only contract
+  // as computePositionGain() above).
+  bool computeHeadingGain(float thetaObs, float r, HeadingGain* out) const;
+  void applyHeadingGain(const HeadingGain& g);
+
+  // --- Bounded innovation-consistency gate (architecture-update.md sprint
+  // 099 Decision 4) — protects updatePosition()/updateHeading() (the OTOS
+  // channel) ONLY. Never applies to a delayed camera-fix update (ticket
+  // 008, D5's separate ungated path). Starting values per D4, characterized
+  // (not freehanded) in tests/sim/unit/ekf_tiny_harness.cpp — see that
+  // file's gate scenarios for the derivation of every constant below and
+  // ticket 006's completion notes for what evidence (or lack of it, at the
+  // time this ticket ran) informed them. Not stakeholder-locked; retune
+  // only with fresh sim/bench evidence, per D4's "characterize, don't
+  // freehand" mandate.
+
+  // 2-DOF chi-square critical value at p=0.99 — the position channel's
+  // Mahalanobis d^2 = y^T S^-1 y gate. D4's own documented starting value
+  // ("~9.21").
+  static constexpr float kChiSquare2Dof99 = 9.21f;
+
+  // Heading channel gate: reject when |y| > kHeadingSigma * sqrt(S). D4's
+  // own documented starting value ("e.g. 3.0").
+  static constexpr float kHeadingSigma = 3.0f;
+
+  // Consecutive rejections (on a single channel) before that channel's own
+  // P diagonal is inflated. D4's own documented starting value ("e.g. 10").
+  // The streak counter keeps counting past this value if rejections
+  // continue — the widening is applied again every further
+  // kRejectStreakThreshold-th consecutive reject (10, 20, 30, ...) — and
+  // only resets to 0 on the next accept, per the AC's "streak counter
+  // resets once the gate re-opens" requirement.
+  static constexpr int kRejectStreakThreshold = 10;
+
+  // Position-channel P-inflation: additive bump to P[0][0]/P[1][1] applied
+  // each time the streak crosses a kRejectStreakThreshold multiple, capped
+  // so a permanently-disagreeing sensor cannot inflate P without bound.
+  // Sized (see ekf_tiny_harness.cpp's recovery scenario) so a ~30mm
+  // genuinely-shifted observation against a settled P is re-accepted after
+  // two widenings (~20 ticks), not on the very first one — a gradual, not
+  // abrupt, recovery.
+  static constexpr float kPInflationBumpXY = 50.0f;     // [mm^2]
+  static constexpr float kPInflationCapXY = 500.0f;     // [mm^2]
+
+  // Heading-channel P-inflation: same shape as the position channel above,
+  // applied to P[2][2] only.
+  static constexpr float kPInflationBumpTheta = 0.001f;  // [rad^2]
+  static constexpr float kPInflationCapTheta = 0.01f;    // [rad^2]
+
+  int rejPosStreak_ = 0;    // consecutive updatePosition() rejections
+  int rejHeadStreak_ = 0;   // consecutive updateHeading() rejections
 };

@@ -341,6 +341,16 @@ class Sim:
         return (float(lib.sim_get_otos_x(h)), float(lib.sim_get_otos_y(h)),
                 float(lib.sim_get_otos_h(h)))
 
+    def enc_pose(self) -> tuple[float, float, float]:
+        """Return (x, y, h) -- bb.encoderPose.pose, a direct zero-cost peek
+        (099-008, TEST-ONLY -- sim_get_enc_pose_x/y/h). PoseEstimator's pure
+        dead-reckoning accumulator is never wire-visible (encpose= was
+        trimmed from Telemetry, 096-001); this is the only way a test can
+        prove a delayed camera-fix leaves it untouched. [mm] [mm] [rad]"""
+        lib, h = self._lib, self._h
+        return (float(lib.sim_get_enc_pose_x(h)), float(lib.sim_get_enc_pose_y(h)),
+                float(lib.sim_get_enc_pose_h(h)))
+
     # ------------------------------------------------------------------
     # Error-knob setters (sim_api.cpp's 14 canonical call sites into
     # hal/sim/sim_setters.h). side: 0=left, 1=right, 2=both, matching every
@@ -477,11 +487,14 @@ class Sim:
         lib.sim_set_true_pose.restype = None
 
         # Errored observation (9) -- all no-arg float getters.
+        # sim_get_enc_pose_x/y/h (099-008, TEST-ONLY) share this same
+        # no-arg-float-getter shape -- see their own sim_api.cpp doc comment.
         for name in (
             "sim_get_enc_l", "sim_get_enc_r",
             "sim_get_vel_l", "sim_get_vel_r",
             "sim_get_pwm_l", "sim_get_pwm_r",
             "sim_get_otos_x", "sim_get_otos_y", "sim_get_otos_h",
+            "sim_get_enc_pose_x", "sim_get_enc_pose_y", "sim_get_enc_pose_h",
         ):
             fn = getattr(lib, name)
             fn.argtypes = [ctypes.c_void_p]

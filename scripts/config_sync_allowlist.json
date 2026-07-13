@@ -32,6 +32,8 @@
     "DrivetrainConfigPatch.ekf_q_theta": "no host-side pydantic field yet; carried over from the pre-096 Config.h-era allowlist's ekfQtheta entry ('register as tunable in a future sprint')",
     "DrivetrainConfigPatch.ekf_r_otos_xy": "no host-side pydantic field yet; carried over from the pre-096 Config.h-era allowlist's ekfROtosXy entry ('register as tunable in a future sprint')",
     "DrivetrainConfigPatch.ekf_r_otos_theta": "no host-side pydantic field yet; carried over from the pre-096 Config.h-era allowlist's ekfROtosTheta entry ('register as tunable in a future sprint')",
+    "DrivetrainConfigPatch.ekf_r_fix_xy": "no host-side pydantic field yet; mirrors ekf_r_otos_xy's own allowlist entry exactly (099-008: register as tunable in a future sprint)",
+    "DrivetrainConfigPatch.ekf_r_fix_theta": "no host-side pydantic field yet; mirrors ekf_r_otos_theta's own allowlist entry exactly (099-008: register as tunable in a future sprint)",
     "MotorConfigPatch.side": "enum selector for travel_calib's target only, not itself a settable config value",
     "PlannerConfigPatch.min_speed": "no host-side pydantic field yet; DriveConfig.min_drive_mm_s is a distinct host-only crawl-mode floor, not the firmware planner's trapezoidal-profile min_speed",
     "PlannerConfigPatch.heading_kp": "no host-side pydantic field; bench tuning lives in data/robots/tovez.json's control.heading_kp (baked into boot config by gen_boot_config.py, 098-001), live tuning goes through set_config(headingKp=...) directly",

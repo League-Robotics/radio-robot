@@ -171,7 +171,7 @@ struct CommandEnvelope {
         SEGMENT = 2,
         REPLACE = 3,
         CONFIG = 4,
-        POSE = 5,
+        POSE_FIX = 5,
         OTOS = 6,
         PING = 7,
         ECHO = 8,
@@ -189,7 +189,7 @@ struct CommandEnvelope {
         MotionSegment segment;
         MotionSegment replace;
         ConfigDelta config;
-        SetPose pose;
+        PoseFix pose_fix;
         OdometerCommand otos;
         Ping ping;
         Echo echo;

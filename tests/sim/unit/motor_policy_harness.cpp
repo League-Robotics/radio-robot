@@ -13,16 +13,33 @@
 // both already dependency-free (no MicroBit.h, no I2CBus), so it compiles
 // with the plain system C++ compiler — no CMake, no ARM toolchain.
 //
+// 099-003 addition: Decision 9's HOST_BUILD-fake abstinence covered the
+// ORIGINAL (078) armor-policy scenarios only — a scripted I2CBus fake and
+// the real Hal::NezhaMotor/Hal::SimMotor leaves now exist and are already
+// exercised this way elsewhere (nezha_flipflop_harness.cpp's own
+// scenarioFwdSignNegatesEncoderPositionSign(), which this ticket's Nezha
+// scenario below mirrors: a bare leaf constructed directly on its own
+// scripted bus, bypassing Subsystems::NezhaHardware/SimHardware entirely).
+// Hal::Motor::trackAcceleration() (source/hal/capability/motor.h) is base
+// policy that only ever runs from inside a REAL leaf's own tick() — a
+// MockMotor never calls it — so proving it "responds plausibly" per the
+// ticket's acceptance criteria requires the real leaves, not another
+// MockMotor scenario. See scenarioNezhaAccelerationTracksVelocityRamp()/
+// scenarioSimAccelerationTracksVelocityRamp() below, and
+// test_motor_policy.py's compile command, which now links in
+// com/i2c_bus_host.cpp, hal/nezha/nezha_motor.cpp, and hal/sim/sim_motor.cpp
+// under -DHOST_BUILD alongside this file.
+//
 // messages/common.h documents its own target as "CODAL C++11"; this harness
 // is compiled to the same standard (see test_motor_policy.py's compile
 // command) so it exercises exactly the language subset the firmware itself
 // uses.
 //
-// Plain C++ program, hand-rolled assertions (six scenarios do not warrant a
-// test-framework dependency) — prints a PASS/FAIL line per scenario and
-// exits nonzero if any assertion failed. Run by the pytest wrapper in
-// test_motor_policy.py, which compiles and runs this binary via subprocess
-// and asserts exit code 0.
+// Plain C++ program, hand-rolled assertions (a dozen scenarios do not
+// warrant a test-framework dependency) — prints a PASS/FAIL line per
+// scenario and exits nonzero if any assertion failed. Run by the pytest
+// wrapper in test_motor_policy.py, which compiles and runs this binary via
+// subprocess and asserts exit code 0.
 
 #include <cmath>
 #include <cstdint>
@@ -30,7 +47,10 @@
 #include <string>
 #include <vector>
 
+#include "com/i2c_bus.h"
 #include "hal/capability/motor.h"
+#include "hal/nezha/nezha_motor.h"
+#include "hal/sim/sim_motor.h"
 #include "hal/velocity_pid.h"
 #include "messages/common.h"
 #include "messages/motor.h"
@@ -575,6 +595,165 @@ void scenarioInvariantBDecelToZeroNoSustainedResidual() {
   checkTrue(!m.isDwelling(), "no reversal dwell left armed after settling");
 }
 
+// --- 099-003: acceleration-EMA scenarios against the REAL leaves ----------
+//
+// Hal::Motor::trackAcceleration() is only ever called from inside a real
+// leaf's own tick() (NezhaMotor::tick()/SimMotor::tick() — see
+// architecture-update.md Decision 3), so proving it "responds plausibly
+// (correct sign, settles toward zero) to a velocity ramp up/down/hold
+// sequence" per the ticket's acceptance criteria needs those real leaves,
+// not another MockMotor scenario (which never reaches trackAcceleration()
+// at all).
+
+// scriptNezhaEncoderReading -- packs `positionMm` into the little-endian
+// int32 tenths-of-degree raw encoder reading NezhaMotor::collectEncoder()
+// decodes (mirrors nezha_flipflop_harness.cpp's own scriptRead()
+// convention). Every scenario below uses travel_calib=1.0, fwd_sign=+1, so
+// raw == positionMm*10 exactly (no rounding drift across the ramp).
+void scriptNezhaEncoderReading(I2CBus& bus, uint16_t wireAddr, float positionMm) {
+  int32_t raw = static_cast<int32_t>(std::lround(positionMm * 10.0f));
+  uint8_t data[4] = {
+      static_cast<uint8_t>(raw & 0xFF),
+      static_cast<uint8_t>((raw >> 8) & 0xFF),
+      static_cast<uint8_t>((raw >> 16) & 0xFF),
+      static_cast<uint8_t>((raw >> 24) & 0xFF),
+  };
+  bus.scriptRead(wireAddr, data, 4, /*status=*/0);
+}
+
+// 11. Hal::Motor::trackAcceleration(), exercised against the REAL
+//     Hal::NezhaMotor leaf: a standalone motor on its own scripted I2CBus,
+//     bypassing Subsystems::NezhaHardware's flip-flop scheduler entirely —
+//     mirrors nezha_flipflop_harness.cpp's own
+//     scenarioFwdSignNegatesEncoderPositionSign() precedent for constructing
+//     a bare NezhaMotor directly. Drives a velocity ramp UP, a HOLD at
+//     constant velocity, then a ramp DOWN, purely by scripting successive
+//     encoder readings a fixed 20ms apart — no DUTY/VELOCITY command is
+//     ever staged (mode_ stays Mode::NONE), so tick()'s mode dispatch never
+//     writes to the bus; exactly one scripted read (collectEncoder()) is
+//     consumed per tick(). vel_filt_alpha=1.0 (no smoothing) so velocity()
+//     reflects each tick's raw difference-quotient exactly, keeping the
+//     ramp's shape uncomplicated to reason about.
+void scenarioNezhaAccelerationTracksVelocityRamp() {
+  beginScenario("099-003: NezhaMotor::trackAcceleration() responds to a velocity ramp (up/down/hold)");
+  I2CBus::setClock(1000000);
+  I2CBus bus;
+  const uint16_t addr7 = Hal::kNezhaDeviceAddr;
+  const uint16_t wireAddr = static_cast<uint16_t>(addr7 << 1);
+
+  msg::MotorConfig cfg = msg::MotorConfig{}
+      .setPort(1).setFwdSign(1).setTravelCalib(1.0f).setVelFiltAlpha(1.0f);
+  Hal::NezhaMotor motor(bus, cfg);
+
+  const float dtS = 0.02f;   // [s] fixed 20ms cadence between every tick below
+  uint32_t now = 0;
+  float position = 0.0f;   // [mm]
+
+  // Prime tick — establishes lastPosition_/lastTickUs_, no velocity/accel yet.
+  scriptNezhaEncoderReading(bus, wireAddr, position);
+  motor.tick(now);
+
+  // Ramp UP: velocity climbs 100 -> 450 mm/s in 50 mm/s steps -- constant
+  // positive rawAccel (2500 mm/s^2) each transition, so the EMA converges
+  // toward a clearly positive value.
+  const float rampUpVel[] = {100.0f, 150.0f, 200.0f, 250.0f, 300.0f, 350.0f, 400.0f, 450.0f};
+  for (float v : rampUpVel) {
+    position += v * dtS;
+    now += 20;
+    I2CBus::advanceClock(20000);
+    scriptNezhaEncoderReading(bus, wireAddr, position);
+    motor.tick(now);
+  }
+  const float afterRampUp = motor.acceleration();
+  checkTrue(afterRampUp > 0.0f,
+            "NezhaMotor: acceleration() is positive after a sustained velocity ramp UP");
+
+  // HOLD at the ramp's final constant velocity -- rawAccel ~ 0 every tick,
+  // so the EMA decays geometrically toward zero.
+  for (int i = 0; i < 8; ++i) {
+    position += 450.0f * dtS;
+    now += 20;
+    I2CBus::advanceClock(20000);
+    scriptNezhaEncoderReading(bus, wireAddr, position);
+    motor.tick(now);
+  }
+  const float afterHold = motor.acceleration();
+  checkTrue(std::fabs(afterHold) < std::fabs(afterRampUp),
+            "NezhaMotor: acceleration() magnitude shrinks toward zero while velocity holds steady");
+
+  // Ramp DOWN: velocity falls 400 -> 100 mm/s in 50 mm/s steps -- constant
+  // negative rawAccel, so the EMA swings clearly negative.
+  const float rampDownVel[] = {400.0f, 350.0f, 300.0f, 250.0f, 200.0f, 150.0f, 100.0f};
+  for (float v : rampDownVel) {
+    position += v * dtS;
+    now += 20;
+    I2CBus::advanceClock(20000);
+    scriptNezhaEncoderReading(bus, wireAddr, position);
+    motor.tick(now);
+  }
+  const float afterRampDown = motor.acceleration();
+  checkTrue(afterRampDown < 0.0f,
+            "NezhaMotor: acceleration() is negative after a sustained velocity ramp DOWN");
+
+  checkUintEq(bus.errCount(addr7), 0, "no script under-run across the whole ramp");
+}
+
+// 12. Hal::Motor::trackAcceleration(), exercised against the REAL
+//     Hal::SimMotor leaf: the standalone constructor (no PhysicsWorld/plant
+//     needed — mirrors this file's Nezha scenario's own "bare leaf, no
+//     surrounding subsystem" shape). Drives the SAME ramp UP / HOLD / ramp
+//     DOWN shape, but through SimMotor's own DUTY-mode dispatch (staging an
+//     increasing/holding/decreasing duty target each tick) rather than
+//     scripted encoder bytes: SimMotor's standalone integrator applies the
+//     just-staged duty's velocity with a one-tick latency (sim_motor.cpp's
+//     tick() step-5 comment), so a smoothly ramped duty target produces a
+//     smoothly ramped SAMPLED velocity, exactly like the Nezha scenario's
+//     scripted position ramp does. Every duty value stays positive and
+//     above the default 0.03 output deadband, so no reversal dwell ever
+//     engages.
+void scenarioSimAccelerationTracksVelocityRamp() {
+  beginScenario("099-003: SimMotor::trackAcceleration() responds to a velocity ramp (up/down/hold)");
+
+  msg::MotorConfig cfg = msg::MotorConfig{}.setVelFiltAlpha(1.0f);
+  Hal::SimMotor motor(cfg);   // standalone -- no plant
+
+  uint32_t now = 0;
+  motor.setDutyCycle(0.0f);
+  motor.tick(now);   // prime tick -- no velocity/accel yet
+
+  // Ramp UP: duty climbs 0.10 -> 0.80.
+  const float rampUpDuty[] = {0.10f, 0.20f, 0.30f, 0.40f, 0.50f, 0.60f, 0.70f, 0.80f};
+  for (float d : rampUpDuty) {
+    now += 20;
+    motor.setDutyCycle(d);
+    motor.tick(now);
+  }
+  const float afterRampUp = motor.acceleration();
+  checkTrue(afterRampUp > 0.0f,
+            "SimMotor: acceleration() is positive after a sustained velocity ramp UP");
+
+  // HOLD at the ramp's final constant duty -- constant velocity, EMA decays.
+  for (int i = 0; i < 8; ++i) {
+    now += 20;
+    motor.setDutyCycle(0.80f);
+    motor.tick(now);
+  }
+  const float afterHold = motor.acceleration();
+  checkTrue(std::fabs(afterHold) < std::fabs(afterRampUp),
+            "SimMotor: acceleration() magnitude shrinks toward zero while velocity holds steady");
+
+  // Ramp DOWN: duty falls 0.70 -> 0.10.
+  const float rampDownDuty[] = {0.70f, 0.60f, 0.50f, 0.40f, 0.30f, 0.20f, 0.10f};
+  for (float d : rampDownDuty) {
+    now += 20;
+    motor.setDutyCycle(d);
+    motor.tick(now);
+  }
+  const float afterRampDown = motor.acceleration();
+  checkTrue(afterRampDown < 0.0f,
+            "SimMotor: acceleration() is negative after a sustained velocity ramp DOWN");
+}
+
 }  // namespace
 
 int main() {
@@ -588,6 +767,8 @@ int main() {
   scenarioPidIndependence();
   scenarioInvariantAGenuineReversalStillDwells();
   scenarioInvariantBDecelToZeroNoSustainedResidual();
+  scenarioNezhaAccelerationTracksVelocityRamp();
+  scenarioSimAccelerationTracksVelocityRamp();
 
   if (g_failureCount == 0) {
     std::printf("OK: all motor policy scenarios passed\n");

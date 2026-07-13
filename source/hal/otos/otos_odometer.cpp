@@ -76,6 +76,22 @@ msg::PoseEstimate OtosOdometer::pose() const { return cachedPose_; }
 
 bool OtosOdometer::connected() const { return initialized_ && connected_; }
 
+bool OtosOdometer::present() const { return initialized_; }
+
+// ---------------------------------------------------------------------------
+// readDue() -- pure scheduling query, no I2C traffic. See otos_odometer.h's
+// own declaration comment for the full contract (in particular: deliberately
+// NOT gated on present()/initialized_ here -- that is the caller's own,
+// separate conjunct, e.g. Subsystems::NezhaHardware::tick()'s scheduled-slot
+// branch).
+// ---------------------------------------------------------------------------
+
+bool OtosOdometer::readDue(uint32_t now) const
+{
+    return !hasRead_ ||
+           static_cast<int32_t>(now - lastReadMs_) >= static_cast<int32_t>(kReadPeriod);
+}
+
 // ---------------------------------------------------------------------------
 // tick() — burst-read position + velocity, transform, cache.
 // ---------------------------------------------------------------------------
