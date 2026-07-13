@@ -78,14 +78,21 @@
 //
 // --- Wire admission (BinaryChannel, commands/binary_channel.cpp -- NOT this
 // file) --- runs synchronously at COMMAND time, before anything reaches
-// bb.segmentIn/replaceIn: a `primitive=false` segment/replace is REJECTED
-// with a typed ERR outright; a `primitive=true` one converts to a
-// Drive::Goal and runs admit() (a throwaway Drive::Drivetrain built from
-// bb.plannerConfig + bb.drivetrainConfig.trackwidth, mirroring THIS class's
-// own rebuildDriveDrivetrain()) against bb.chainTail -- Verdict::OK
-// advances bb.chainTail and posts the Goal; any other verdict replies a
-// typed ERR and leaves bb.segmentIn/replaceIn (and bb.chainTail) untouched.
-// See binary_channel.cpp's handleSegment()/handleReplace() for the full
+// bb.segmentIn/replaceIn. `segment`: a `primitive=false` (or `stream=true`,
+// BLEND) MotionSegment is REJECTED with a typed ERR outright; a real
+// `primitive=true` arc/pivot segment converts to a Drive::Goal and runs
+// admit() (a throwaway Drive::Drivetrain built from bb.plannerConfig +
+// bb.drivetrainConfig.trackwidth, mirroring THIS class's own
+// rebuildDriveDrivetrain()) against bb.chainTail -- Verdict::OK advances
+// bb.chainTail and posts the Goal; any other verdict replies a typed ERR
+// and leaves bb.segmentIn/bb.chainTail untouched. `replace` (100-008): MOVER
+// teleop's exclusive wire home -- a `primitive=false` MotionSegment is
+// REJECTED the same way, but a `primitive=true` one decodes straight into a
+// Rt::MoverRequest (time/v/omega -> deadman/target, drive_bridge.h's
+// driveMoverRequest()) and posts UNCONDITIONALLY to bb.replaceIn (a
+// Mailbox::post() always succeeds -- no admit()/chainTail check: a
+// velocity-mode plan has no pose goal to admit against). See
+// binary_channel.cpp's handleSegment()/handleReplace() for the full
 // implementation -- this class never touches a reply channel.
 //
 // --- DIRECT/escape-hatch mode -- UNCHANGED (setTwist()/setWheelTargets()/
@@ -96,8 +103,9 @@
 // longer exists in this class -- see that method's own doc comment for the
 // one documented behavior change (an instant stop instead of a graceful
 // decel-to-zero when NEUTRAL arrives mid-segment; source/drive/'s own
-// graceful-stop equivalent, planVelocity(), is ticket 100-008's MOVER scope,
-// not this one's).
+// graceful-stop equivalent, planVelocity(), is MOVER's own replaceIn path --
+// see tick()'s own doc comment below -- not driveIn's, so this NEUTRAL
+// preemption is still instant even after 100-008).
 #pragma once
 
 #include <stdint.h>
@@ -109,6 +117,7 @@
 #include "messages/envelope.h"
 #include "messages/motor.h"
 #include "messages/planner.h"
+#include "runtime/commands.h"
 #include "runtime/queue.h"
 #include "subsystems/hardware.h"
 
@@ -159,17 +168,22 @@ class Drivetrain {
   void apply(const msg::DrivetrainCommand& command);
 
   // tick -- the mandatory per-pass control step (run AFTER hardware.tick()).
-  // now: [ms]. segmentIn/replaceIn: ADMITTED Drive::Goal fan-in (wire
-  // admission already ran in BinaryChannel -- see the class comment).
-  // driveIn: the S/STOP escape-hatch fan-in, drained FIRST per the
-  // unchanged precedence rules. bodyState/poseStepped: sprint 099's
+  // now: [ms]. segmentIn: ADMITTED Drive::Goal fan-in (wire admission
+  // already ran in BinaryChannel -- see the class comment). replaceIn
+  // (100-008): a fresh Rt::MoverRequest fan-in -- drained straight into
+  // Drive::Drivetrain::planVelocity(request.target, request.deadman,
+  // current), replacing the held plan (latest-wins, Mailbox semantics; no
+  // new queueing). driveIn: the S/STOP escape-hatch fan-in, drained FIRST
+  // per the unchanged precedence rules. bodyState/poseStepped: sprint 099's
   // bb.bodyState/bb.poseStepped cells, converted at the boundary
   // (drive_bridge.h) into StepInput.measured/poseStep/poseStepTheta.
   // chainTail: bb.chainTail, re-anchored here on an ABORT_* (see the class
-  // comment's "Status reactions").
+  // comment's "Status reactions") -- NEVER touched by a MOVER replace (no
+  // pose goal, so nothing to re-anchor); only Goal-based segment/replan
+  // paths read/write it.
   void tick(uint32_t now,
             Rt::WorkQueue<Drive::Goal, 8>& segmentIn,
-            Rt::Mailbox<Drive::Goal>& replaceIn,
+            Rt::Mailbox<Rt::MoverRequest>& replaceIn,
             Rt::WorkQueue<msg::DrivetrainCommand, 8>& driveIn,
             const msg::PoseEstimate& bodyState,
             const msg::PoseStep& poseStepped,

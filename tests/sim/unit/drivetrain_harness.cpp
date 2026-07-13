@@ -155,11 +155,12 @@ msg::DrivetrainCommand neutralCommand() {
   return cmd;
 }
 
-// Shared REPLACE mailbox (MOVER) + zero poseStep/chainTail -- unused by
-// these scenarios (no delayed-pose-fix or cross-goal admission behavior to
-// prove here), but the tick() signature requires them (mirrors
-// bb.replaceIn/bb.poseStepped/bb.chainTail).
-Rt::Mailbox<Drive::Goal> g_replaceIn;
+// Shared REPLACE mailbox (MOVER, 100-008: Rt::MoverRequest -- retyped from
+// Drive::Goal, see runtime/commands.h/blackboard.h's own doc comments) +
+// zero poseStep/chainTail -- unused by these scenarios (no MOVER/
+// cross-goal admission behavior to prove here), but the tick() signature
+// requires them (mirrors bb.replaceIn/bb.poseStepped/bb.chainTail).
+Rt::Mailbox<Rt::MoverRequest> g_replaceIn;
 const msg::PoseStep g_zeroPoseStep{};
 Drive::ChainTail g_chainTail{};
 // Fixed placeholder BodyState -- scenario 4's own NezhaHardware+I2CBus-fake

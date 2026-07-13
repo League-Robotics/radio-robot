@@ -320,55 +320,57 @@ def primitives_for_move(distance: float,  # [mm]
     return segments
 
 
-def segment_for_mover(distance: float,  # [mm]
-                      direction: float,  # [cdeg]
-                      final_heading: float,  # [cdeg]
-                      time: float = 0.0,  # [ms]
-                      v: float = 0.0,  # [mm/s] signed
-                      accel_max: float = 0.0,  # [mm/s^2]
-                      jerk_max: float = 0.0,  # [mm/s^3]
-                      omega: float = 0.0,  # [cdeg/s] signed
-                      yaw_accel_max: float = 0.0,  # [cdeg/s^2]
-                      yaw_jerk_max: float = 0.0,  # [cdeg/s^3]
+def segment_for_mover(distance: float,  # [mm] UNUSED post-100-008, kept for signature stability -- see docstring
+                      direction: float,  # [cdeg] UNUSED post-100-008
+                      final_heading: float,  # [cdeg] UNUSED post-100-008
+                      time: float = 0.0,  # [ms] deadman window
+                      v: float = 0.0,  # [mm/s] signed target body-forward velocity
+                      accel_max: float = 0.0,  # UNUSED post-100-008
+                      jerk_max: float = 0.0,  # UNUSED post-100-008
+                      omega: float = 0.0,  # [cdeg/s] signed target yaw rate
+                      yaw_accel_max: float = 0.0,  # UNUSED post-100-008
+                      yaw_jerk_max: float = 0.0,  # UNUSED post-100-008
                       ) -> motion_pb2.MotionSegment:
-    """``handleMover()`` (motion_commands.cpp): ``MOVER <distance_mm>
-    <direction_cdeg> <finalHeading_cdeg> [t=][v=][w=][a=][j=][wa=][wj=]`` ->
-    ``Motion::Segment``, REPLACE semantics (posted to ``bb.replaceIn``, not
-    ``bb.segmentIn`` -- the deadman-velocity teleop shape). ``stream`` is
-    ALWAYS ``True`` (``handleMover()``'s own unconditional
-    ``seg.stream = true;``). ``v``/``omega`` are SIGNED (they carry
-    direction in time mode, unlike MOVE's unsigned ceilings); ``omega``'s
-    wire centidegrees/s convert to rad/s via ``_CDEG_TO_RAD``, same as
-    MOVE. ``speed_max = |v|``, ``yaw_rate_max = |omega|`` (converted) --
-    the ceiling ``handleMover()`` itself derives from the signed target,
-    transcribed verbatim (``seg.speedMax = fabsf(v); seg.yawRateMax =
-    fabsf(w) * kCdegToRad;``), not re-derived. ``accel_max``/``jerk_max``/
-    ``yaw_accel_max``/``yaw_jerk_max`` pass through the same way MOVE's do.
+    """(100-008) MOVER's real v2 primitive builder -- the `replace`-arm
+    dual of ``segment_for_seg()`` above: ``Drive::Drivetrain::
+    planVelocity()``'s own ``(target, deadman)`` shape
+    (source/drive/drivetrain.h), wire-carried on ``MotionSegment``'s
+    time/v/omega arm (fields 10-12, protos/motion.proto's own "time/
+    velocity arm (MOVER teleop primitive)" section) plus ``primitive=True``
+    (field 17) -- ``commands/binary_channel.cpp``'s ``handleReplace()``
+    decodes exactly these four fields
+    (``Subsystems::driveMoverRequest()``, ``source/subsystems/
+    drive_bridge.h``) and nothing else.
 
-    KNOWN BROKEN post-100-007 (THE CUTOVER), left UNCHANGED and documented
-    rather than silently patched: this builds the RETIRED non-primitive
-    (``primitive=false``) ``MotionSegment`` shape, which the firmware now
-    REJECTS outright at the wire (typed ``ERR_UNIMPLEMENTED``) -- MOVER's
-    real v2 home is ``Drive::Drivetrain::planVelocity()``, wired into the
-    adapter's ``replaceIn`` path by ticket 100-008 (M8), explicitly out of
-    ticket 100-007's own scope. Do not "fix" this function ahead of that
-    ticket; it stays a faithful transcription of the pre-cutover
-    ``handleMover()`` until 100-008 replaces it with a real primitive
-    builder."""
+    ``v``/``omega`` are SIGNED (they carry direction, unlike MOVE's
+    unsigned ceilings); ``omega``'s wire centidegrees/s converts to rad/s
+    via ``_CDEG_TO_RAD``, same as MOVE/RT/SEG.
+
+    ``distance``/``direction``/``final_heading``/``accel_max``/
+    ``jerk_max``/``yaw_accel_max``/``yaw_jerk_max`` are the RETIRED
+    per-segment shape's own fields, kept as this function's OWN positional/
+    kwarg signature ONLY so ``envelope_for_mover()``'s existing
+    ``MOVER <distance> <direction> <finalHeading> [t=][v=][w=]...`` call
+    site (and every real MOVER caller, e.g. ``tests/bench/
+    gamepad_teleop.py``'s own ``MOVER 0 0 0 t=... v=... w=...``) needs no
+    change -- silently unused now, the same "the v2 primitive shape has no
+    equivalent" posture ``primitives_for_move()``'s own docstring already
+    states for ITS dropped per-segment overrides. ``speed_max``/
+    ``yaw_rate_max``/``stream`` (the RETIRED shape's own derived
+    ceiling/BLEND fields) are likewise no longer written -- MOVER's real
+    primitive shape carries no per-call override/goal fields at all, and
+    ``replace``'s own wire admission (100-008) never reads ``stream``
+    (BLEND is a `segment`-arm-only concern, architecture-update.md M8).
+
+    Before 100-008 this built the RETIRED non-primitive (``primitive=
+    false``) ``MotionSegment`` shape, which the firmware rejected outright
+    at the wire (typed ``ERR_UNIMPLEMENTED``) -- see git history for that
+    version if a reference is ever needed."""
     seg = motion_pb2.MotionSegment()
-    seg.stream = True
     seg.time = float(time)
-    seg.distance = float(distance)
-    seg.direction = float(direction) * _CDEG_TO_RAD
-    seg.final_heading = float(final_heading) * _CDEG_TO_RAD
     seg.v = float(v)
     seg.omega = float(omega) * _CDEG_TO_RAD
-    seg.speed_max = abs(float(v))
-    seg.yaw_rate_max = abs(float(omega)) * _CDEG_TO_RAD
-    seg.accel_max = float(accel_max)
-    seg.jerk_max = float(jerk_max)
-    seg.yaw_accel_max = float(yaw_accel_max) * _CDEG_TO_RAD
-    seg.yaw_jerk_max = float(yaw_jerk_max) * _CDEG_TO_RAD
+    seg.primitive = True
     return seg
 
 

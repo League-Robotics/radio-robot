@@ -180,6 +180,13 @@ class Sim:
     # +stream shape.
     _GOAL_FIELDS = ("arc_length", "delta_heading", "exit_speed")
 
+    # (100-008) Rt::MoverRequest's own declared field order (source/runtime/
+    # commands.h) -- replaceIn's own retype away from Drive::Goal (MOVER is
+    # the `replace` arm's exclusive meaning now -- see blackboard.h/
+    # commands.h's doc comments). `v`/`omega` are MoverRequest.target's
+    # v_x/omega components (v_y is always 0.0f, no holonomic drivetrain).
+    _MOVER_FIELDS = ("v", "omega", "deadman")
+
     def peek_segment_in(self, idx: int = 0) -> dict | None:
         """Non-destructive read of bb.segmentIn[idx] (100-007, THE CUTOVER
         -- sim_peek_segment_in()). Returns a dict keyed by Drive::Goal's own
@@ -194,14 +201,16 @@ class Sim:
         return dict(zip(self._GOAL_FIELDS, (float(v) for v in out3)))
 
     def peek_replace_in(self) -> dict | None:
-        """Non-destructive read of bb.replaceIn (100-007, THE CUTOVER --
-        sim_peek_replace_in()). Same shape as peek_segment_in()."""
+        """Non-destructive read of bb.replaceIn (100-008 -- retyped to
+        Rt::MoverRequest, sim_peek_replace_in()). Returns a dict keyed by
+        MoverRequest's own field names (v/omega/deadman), or None if no
+        MoverRequest is pending."""
         out3 = (ctypes.c_float * 3)()
         present_out = ctypes.c_int()
         self._lib.sim_peek_replace_in(self._h, out3, ctypes.byref(present_out))
         if not present_out.value:
             return None
-        return dict(zip(self._GOAL_FIELDS, (float(v) for v in out3)))
+        return dict(zip(self._MOVER_FIELDS, (float(v) for v in out3)))
 
     def chain_tail(self) -> dict:
         """bb.chainTail (100-007, THE CUTOVER, test-only -- sim_get_chain_tail()):

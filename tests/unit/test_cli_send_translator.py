@@ -196,16 +196,20 @@ def test_send_move_produces_a_segment_with_kv_overrides(monkeypatch):
 
 def test_send_mover_produces_a_replace_arm_not_segment(monkeypatch):
     """MOVER posts to bb.replaceIn (REPLACE semantics), not bb.segmentIn --
-    the envelope's `replace` oneof arm, distinct from MOVE's `segment` arm."""
+    the envelope's `replace` oneof arm, distinct from MOVE's `segment` arm.
+    100-008: the real v2 primitive shape -- time/v/omega + primitive=True,
+    no speed_max/stream (those belong to the retired per-segment shape)."""
     reply = envelope_pb2.ReplyEnvelope(corr_id=6, ok=envelope_pb2.Ack(q=1))
     fake = _run_send(
         monkeypatch, ["MOVER", "0", "0", "0", "t=400", "v=-300", "w=-4500"],
         envelope_reply=reply)
     assert fake.envelope_sent.WhichOneof("cmd") == "replace"
     seg = fake.envelope_sent.replace
-    assert seg.stream is True
+    assert seg.primitive is True
+    assert seg.time == pytest.approx(400.0)
     assert seg.v == pytest.approx(-300.0)
-    assert seg.speed_max == pytest.approx(300.0)  # |v|, not v
+    assert seg.speed_max == pytest.approx(0.0)  # retired field -- no longer written
+    assert seg.stream is False  # retired field -- no longer written
 
 
 def test_send_echo_produces_an_echo_envelope(monkeypatch):

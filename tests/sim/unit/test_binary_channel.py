@@ -189,15 +189,59 @@ def test_binary_segment_admits_and_translates_the_3_goal_fields(sim):
     assert tail["x"] == pytest.approx(250.0), "wire admission must advance bb.chainTail"
 
 
-def test_binary_replace_admits_and_translates_the_3_goal_fields(sim):
-    seg = pb_motion.MotionSegment(**_PRIMITIVE_SHAPE)
+def test_binary_replace_translates_the_mover_shape(sim):
+    """(100-008) `replace` is MOVER's exclusive wire home now -- decodes
+    time/v/omega straight into bb.replaceIn's Rt::MoverRequest, no
+    admit()/chainTail involvement (a velocity-mode plan has no pose goal).
+    Supersedes the pre-100-008 Goal-shaped
+    test_binary_replace_admits_and_translates_the_3_goal_fields (git
+    history has that version if a reference is ever needed) -- `replace`
+    never had any OTHER producer than MOVER (grep of every
+    legacy_verbs.py BINARY_DISPATCH entry), so there is no Goal-shaped
+    `replace` behavior left to preserve."""
+    seg = pb_motion.MotionSegment(time=800.0, v=250.0, omega=1.0, primitive=True)
+    tail_before = sim.chain_tail()
     reply = send_no_tick(sim, pb_envelope.CommandEnvelope(corr_id=4, replace=seg))
     assert reply.WhichOneof("body") == "ok"
     assert reply.corr_id == 4
 
     peeked = sim.peek_replace_in()
-    assert peeked is not None, "admitted Goal never reached bb.replaceIn"
-    _assert_goal_matches_shape(peeked, _PRIMITIVE_SHAPE)
+    assert peeked is not None, "MoverRequest never reached bb.replaceIn"
+    assert peeked["v"] == pytest.approx(250.0)
+    assert peeked["omega"] == pytest.approx(1.0)
+    assert peeked["deadman"] == pytest.approx(800.0)
+
+    # No admit()/chainTail check for MOVER -- unlike segment/replace's
+    # pre-100-008 Goal path, bb.chainTail is never read or advanced here.
+    tail_after = sim.chain_tail()
+    assert tail_after == tail_before, "MOVER must never touch bb.chainTail"
+
+
+def test_binary_replace_primitive_false_rejected_err_unimplemented(sim):
+    """The retired (pre-cutover) non-primitive MotionSegment shape is
+    REJECTED on `replace` too, the same way handleSegment() rejects it --
+    never a silent MOVER interpretation of a malformed/legacy request."""
+    seg = pb_motion.MotionSegment(time=400.0, v=250.0, primitive=False)
+    reply = send_no_tick(sim, pb_envelope.CommandEnvelope(corr_id=18, replace=seg))
+    assert reply.WhichOneof("body") == "err"
+    assert reply.err.code == pb_envelope.ERR_UNIMPLEMENTED
+    assert sim.peek_replace_in() is None, "a rejected replace must leave bb.replaceIn untouched"
+
+
+def test_binary_replace_stream_true_is_not_blend_still_admits_as_mover(sim):
+    """AC (100-008): BLEND (`stream=true`) on `segment` still ERRs (see
+    test_binary_segment_stream_true_rejected_err_unimplemented above,
+    UNCHANGED by this ticket) -- but `stream` is not even inspected on
+    `replace` (architecture-update.md M8: BLEND is a `segment`-arm-only
+    concern), so a MOVER request that happens to also carry `stream=true`
+    (matching every pre-100-008 caller's own habit) is NOT accidentally
+    rejected -- it admits normally, exactly like any other MOVER."""
+    seg = pb_motion.MotionSegment(time=400.0, v=200.0, primitive=True, stream=True)
+    reply = send_no_tick(sim, pb_envelope.CommandEnvelope(corr_id=19, replace=seg))
+    assert reply.WhichOneof("body") == "ok"
+    peeked = sim.peek_replace_in()
+    assert peeked is not None
+    assert peeked["v"] == pytest.approx(200.0)
 
 
 def test_binary_segment_primitive_false_rejected_err_unimplemented(sim):
