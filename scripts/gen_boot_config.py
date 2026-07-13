@@ -59,6 +59,7 @@ defaults so the build always succeeds.
 """
 
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -403,6 +404,27 @@ def min_speed_for_config(cfg: dict):
     return float(_get(ctrl, "min_speed", default=MIN_SPEED_DEFAULT))
 
 
+def profile_rot_limits_for_config(cfg: dict):
+    """Return (yaw_rate_max, yaw_acc_max) in [rad/s] / [rad/s^2] for the
+    rotational master-profile ceiling (PlannerConfig fields 4-5).
+
+    Mirrors heading_gains_for_config()'s exact shape: read from the robot
+    JSON's ``control`` block when present — ``control.yaw_rate_max`` [deg/s]
+    and ``control.max_rot_accel_dps2`` [deg/s^2], converted to radians here —
+    falling back to the rad-valued firmware defaults above when absent. Before
+    this mapping (ticket 100-014) the generator emitted the hardcoded 6.0
+    rad/s / 20.0 rad/s^2 defaults unconditionally, silently ignoring the
+    robot JSON's own (much lower) pivot-speed intent and driving pivots at
+    ~500 mm/s at the wheels -- unstable overshoot on the latent real plant.
+    """
+    ctrl = cfg.get("control", {}) or {}
+    yr = _get(ctrl, "yaw_rate_max", default=None)        # [deg/s]
+    ya = _get(ctrl, "max_rot_accel_dps2", default=None)  # [deg/s^2]
+    yaw_rate_max = math.radians(float(yr)) if yr is not None else YAW_RATE_MAX_DEFAULT
+    yaw_acc_max = math.radians(float(ya)) if ya is not None else YAW_ACC_MAX_DEFAULT
+    return yaw_rate_max, yaw_acc_max
+
+
 def drive_limits_for_config(cfg: dict):
     """Return the 17-tuple of msg::PlannerConfig fields 15-31 (Drive::Limits'
     wire/config source, 100-001), in field-number order.
@@ -452,6 +474,7 @@ def generate(cfg: dict, source_path: str) -> str:
     (otos_offset_x, otos_offset_y, otos_offset_yaw,
      otos_linear_scale, otos_angular_scale) = otos_boot_config_values(cfg)
     heading_kp, heading_kd = heading_gains_for_config(cfg)
+    yaw_rate_max, yaw_acc_max = profile_rot_limits_for_config(cfg)
     min_speed = min_speed_for_config(cfg)
     (v_wheel_max, steer_headroom, wheel_step_max,
      track_k_s, track_k_theta, track_k_cross,
@@ -589,8 +612,8 @@ msg::PlannerConfig defaultPlannerConfig() {{
     cfg.setAMax({_f(A_MAX_DEFAULT)});               // [mm/s^2]
     cfg.setADecel({_f(A_DECEL_DEFAULT)});             // [mm/s^2]
     cfg.setVBodyMax({_f(V_BODY_MAX_DEFAULT)});           // [mm/s]
-    cfg.setYawRateMax({_f(YAW_RATE_MAX_DEFAULT)});         // [rad/s]
-    cfg.setYawAccMax({_f(YAW_ACC_MAX_DEFAULT)});          // [rad/s^2]
+    cfg.setYawRateMax({_f(yaw_rate_max)});         // [rad/s] (control.yaw_rate_max [deg/s])
+    cfg.setYawAccMax({_f(yaw_acc_max)});          // [rad/s^2] (control.max_rot_accel_dps2 [deg/s^2])
     cfg.setJMax({_f(J_MAX_DEFAULT)});                // [mm/s^3] ~6x a_max -- ~0.16s jerk-limited edges
     cfg.setYawJerkMax({_f(YAW_JERK_MAX_DEFAULT)});         // [rad/s^3] ~5x yaw_acc_max -- ~0.2s
     cfg.setHeadingKp({_f(heading_kp)});              // [1/s] outer heading-loop proportional gain
