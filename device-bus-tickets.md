@@ -274,16 +274,55 @@ DB-001) enforces it against every subsequent ticket.
   4. serial/radio health (binary-vs-text same-boot discriminator);
   5. flash/RAM delta check (flash overflow is the real limit).
   (098/099 motion non-regression gates are cutover-time, out of scope here.)
-- **Acceptance criteria:** `tests/bench/device_bus_bringup.py` drives the
-  bring-up image on the bench and records: a wheel actuates within ~one cycle
-  of a staged `setVelocity` (latency win vs the ~80–160 ms flip-flop); handles
-  report fresh timestamped readings for each connected device; reversal-stress
-  produces no runaway/wedge escape; serial/radio health no worse than the
-  per-transaction IRQ-guard baseline; measured `fiber_sleep(4)` distribution
-  and flash/RAM deltas are logged. Results captured per
-  `.claude/rules/hardware-bench-testing.md`.
+- **Acceptance criteria:**
+  - [x] `source/devices/bringup_main.cpp` exists: DeviceBus is the ONLY
+        thing running (own `create_fiber` via the real `CodalFiberRunner`),
+        driven by a minimal self-contained DEV command parser (stage
+        targets / toggle PID / read handles / dump rings) — uses only
+        `Devices::` + CODAL, no legacy-stack include.
+  - [x] `codal.devicebus.json` (+ a small opt-in CMakeLists.txt switch it
+        triggers) is the single sanctioned build-config addition selecting
+        `bringup_main.cpp` as the image entry point; no `source/main.cpp`
+        or other existing legacy-stack `source/` file is modified.
+  - [x] The bring-up image COMPILES: a full ARM firmware build (`cp
+        codal.devicebus.json codal.json && uv run python3 build.py
+        --fw-only`, then restore `codal.json`) links a `MICROBIT.hex`
+        whose only `source/` translation units are `source/devices/*.cpp`
+        (verified: `build/CMakeFiles/MICROBIT.dir/source/devices/` holds
+        exactly the 8 real (non-HOST_BUILD) leaf/root `.cpp` files plus
+        `bringup_main.cpp.obj` — no legacy-stack object, no
+        `i2c_bus_host.cpp`/`clock_host.cpp` object). FLASH 140636 B / 364
+        KB (37.7%), RAM 120768 B / 122816 B (98.3%, expected near-full by
+        design on this target).
+  - [x] `tests/bench/device_bus_bringup.py` exists, ready to run: implements
+        all five DB-009-scoped bench gates (pipelining probe, cycle-latency/
+        `fiber_sleep(4)` proxy distribution, reversal-stress, serial health,
+        flash/RAM), with a `finally`-block safety stop per
+        `.claude/rules/hardware-bench-testing.md`. Syntax/import-verified
+        and its pure helper logic (reply parsing, stats, gate thresholds)
+        has host pytest coverage
+        (`tests/unit/test_device_bus_bringup_bench.py`, 28 tests).
+  - [ ] **BENCH MANDATORY**: run `tests/bench/device_bus_bringup.py`
+        against the real robot; it demonstrates all five bench gates
+        passing at least once, recorded as this ticket's completion
+        evidence. **DEFERRED — the bench robot currently runs the verified
+        sprint-099 firmware; flashing this bring-up image would displace
+        it, and it is hardware-serial with sprint 100's cutover. Not run
+        this session — see this ticket's own implementation report for the
+        exact flash/run sequence.** (Mirrors sprint 099's aprilcam ticket
+        009, whose own BENCH/PLAYFIELD MANDATORY criterion was deferred the
+        same way for the same class of reason — no live hardware session
+        available.)
 - **Files:** create `source/devices/bringup_main.cpp`, `codal.devicebus.json`
-  (dedicated bring-up build config); `tests/bench/device_bus_bringup.py`.
+  (dedicated bring-up build config); `tests/bench/device_bus_bringup.py`,
+  `tests/unit/test_device_bus_bringup_bench.py`. Also: a small opt-in
+  `CMakeLists.txt` addition (the `codal.application_entry` switch
+  `codal.devicebus.json` sets — see that block's own comment) and a 2-file
+  bugfix in `source/devices/device_bus.cpp`/`fiber_runner.h` (DB-008's
+  `CodalFiberRunner` fiber trampoline could not actually compile for real
+  ARM hardware — a private-member-access error only surfaced by this
+  ticket's first real, non-`HOST_BUILD` compile of that code; root-caused
+  and fixed, see those files' own updated comments).
 
 ---
 
