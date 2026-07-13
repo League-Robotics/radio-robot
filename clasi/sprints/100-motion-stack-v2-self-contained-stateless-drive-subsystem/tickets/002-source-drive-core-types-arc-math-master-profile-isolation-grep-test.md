@@ -1,9 +1,12 @@
 ---
 id: '002'
 title: 'source/drive/ core: types, arc_math, master_profile + isolation grep test'
-status: open
-use-cases: [SUC-002, SUC-008]
-depends-on: ['001']
+status: done
+use-cases:
+- SUC-002
+- SUC-008
+depends-on:
+- '001'
 github-issue: ''
 issue: motion-stack-v2-a-self-contained-stateless-motion-control-subsystem.md
 completes_issue: true
@@ -34,17 +37,17 @@ sentinel) to preserve in the copy.
 
 ## Acceptance Criteria
 
-- [ ] `source/drive/types.h` defines `Pose{x,y,h}` / `Twist{v_x,v_y,
+- [x] `source/drive/types.h` defines `Pose{x,y,h}` / `Twist{v_x,v_y,
       omega}` / `WheelState` / `BodyState` / `WheelVelocities` / `Limits`
       as plain value types — zero `msg::`, zero `Hal::`, zero CODAL
       includes. Naming follows `.claude/rules/naming-and-style.md`: no
       units in identifiers, units in `// [unit]` tags, `UpperCamelCase`
       types, `lowerCamelCase` members/functions.
-- [ ] `source/drive/arc_math.{h,cpp}`: `composeArc`/`poseAlongArc`/exact
+- [x] `source/drive/arc_math.{h,cpp}`: `composeArc`/`poseAlongArc`/exact
       circle projection/`wrapAngle`, hand-ported from
       `body_kinematics.{h,cpp}` (that file itself is untouched by this
       ticket — verify with `git diff --stat source/kinematics/`).
-- [ ] `source/drive/master_profile.{h,cpp}`: the Ruckig wrapper,
+- [x] `source/drive/master_profile.{h,cpp}`: the Ruckig wrapper,
       hand-ported from `jerk_trajectory.{h,cpp}` (untouched by this
       ticket). `solveToExit(targetPosition, exitVelocity, maxVelocity)`
       supports a NONZERO `exitVelocity` via Ruckig's own
@@ -55,12 +58,12 @@ sentinel) to preserve in the copy.
       remembered last sample, never a measured observation) and the
       jerk-sentinel (`0.0f` -> Ruckig's own `+infinity` default)
       verbatim.
-- [ ] Grep isolation test exists and fails loudly (naming the offending
+- [x] Grep isolation test exists and fails loudly (naming the offending
       file/line) if any file under `source/drive/` references `msg::`,
       `Hal::`, `Subsystems::`, `MicroBit`, `kOutputHops`, or `kDeadTime`,
       or `#include`s anything outside `source/drive/`, libc/libm, or
       `libraries/ruckig`.
-- [ ] C++ unit harnesses (`tests/sim/unit` compile-and-run pattern,
+- [x] C++ unit harnesses (`tests/sim/unit` compile-and-run pattern,
       mirroring `jerk_trajectory_harness.cpp`/`test_jerk_trajectory.py`
       exactly — `gnu++20 -fno-exceptions -fno-rtti`, matching
       `CMakeLists.txt`'s actual firmware flags): arc-math round-trips
@@ -69,13 +72,13 @@ sentinel) to preserve in the copy.
       `solveToVelocity(0)`'s existing shape; nonzero exit speed within
       `maxVelocity` solves; `|exitVelocity| > maxVelocity` fails cleanly,
       never UB).
-- [ ] `just build` (or the project's equivalent firmware build recipe)
+- [x] `just build` (or the project's equivalent firmware build recipe)
       succeeds with `source/drive/*.cpp` present but uncalled from
       `main.cpp`. `arm-none-eabi-size` before/after comparison shows a
       near-zero flash delta (architecture-update.md Decision 3 — this is
       an empirical claim to VERIFY, not assume). Record the actual byte
       delta in completion notes.
-- [ ] `uv run python -m pytest` passes.
+- [x] `uv run python -m pytest` passes.
 
 ## Testing
 
