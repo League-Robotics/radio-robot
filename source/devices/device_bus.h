@@ -271,6 +271,14 @@ class DeviceBus {
   // hardReset()'s own kMaxRetries).
   static constexpr int kMaxPreambleTicks = 64;
 
+  // OTOS product-ID probe retry (101-001): the SparkFun OTOS needs ~1s after
+  // power-on before its ID register reads 0x5F. Otos::begin() is a single probe
+  // with no retry, so runPreamble() retries it up to kOtosBeginAttempts times
+  // paced kOtosBeginRetryPacingMs apart (~2s worst case) so a slow OTOS boot no
+  // longer marks the sensor absent forever (the connected=False root cause).
+  static constexpr int kOtosBeginAttempts = 20;
+  static constexpr uint32_t kOtosBeginRetryPacingMs = 100;  // [ms]
+
   // [ms] vendor settle window between each motor's own request and collect
   // inside serviceMotor()
   // -- matches nezha_motor.cpp's own requestEncoder()/writeMotorRun()

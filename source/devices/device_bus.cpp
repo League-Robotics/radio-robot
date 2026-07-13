@@ -283,7 +283,18 @@ void DeviceBus::runPreamble() {
   // not loop either of them itself.
   motor1_.begin();
   motor2_.begin();
-  otos_.begin();
+
+  // OTOS (SparkFun) needs ~1s after power-on before its product-ID register
+  // (0x17 reg 0x00) reads 0x5F. Otos::begin() is a single probe with no retry,
+  // so if it ran before the chip booted the OTOS was marked absent FOREVER --
+  // the DeviceBus `connected=False` root cause found on the bench rig (101-001).
+  // Retry the probe with pacing until it detects or attempts run out. begin()
+  // early-returns cheaply on a non-match, so retries cost only the paced reads.
+  for (int attempt = 0; attempt < kOtosBeginAttempts; ++attempt) {
+    otos_.begin();
+    if (otos_.connected()) break;
+    sleeper_.sleepMillis(kOtosBeginRetryPacingMs);
+  }
 
   // Color/line detection: a bounded, LOCAL retry-pacing loop over each
   // leaf's own non-blocking beginStep(nowUs) state machine -- see this
