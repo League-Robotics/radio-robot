@@ -6,7 +6,10 @@
 // (msg::wire::encode -> WireRuntime::base64Encode) -> replyFn. Every exit
 // path replies exactly once, armored the same way -- no bare text ever
 // escapes this file (a binary client only ever sees `*B<base64>` lines
-// back, matching what it sent).
+// back, matching what it sent) -- EXCEPT handlePlanDump() (100-009), which
+// calls sendReply()/the PlanRecord equivalent zero or more times for ONE
+// incoming CommandEnvelope (one armored line per dumpable ring entry,
+// sharing corr_id); see that function's own doc comment.
 //
 // Layout: handle() is dearmor + decode + a thin one-call-per-arm dispatch
 // switch. Each oneof arm's behavior lives in its own handle<Arm>() helper
@@ -28,8 +31,8 @@
 #include "commands/text_channel.h"
 #include "messages/wire.h"
 #include "messages/wire_runtime.h"
-#include "motion/segment.h"
 #include "runtime/command_router.h"
+#include "subsystems/drive_bridge.h"
 #include "types/clock.h"
 
 namespace BinaryChannel {
@@ -58,29 +61,42 @@ constexpr size_t kMaxEnvelopeBytes =
 // transport a request arrived on.
 constexpr size_t kArmoredBufSize = 256;
 
-// toSegment -- Decision 2's one-directional, field-by-field copy from the
-// decoded wire message into the SegmentExecutor's own internal
-// representation. Every field is already in Motion::Segment's native units
-// (mm, rad, mm/s, ...) -- protos/motion.proto's own header comment: the
-// binary plane parses real floats natively, so (unlike handleMove's/
-// handleMover's own wire-cdeg -> rad conversion) no unit conversion happens
-// here, only the name mapping.
-Motion::Segment toSegment(const msg::MotionSegment& src) {
-  Motion::Segment seg;
-  seg.distance = src.distance;
-  seg.direction = src.direction;
-  seg.finalHeading = src.final_heading;
-  seg.speedMax = src.speed_max;
-  seg.accelMax = src.accel_max;
-  seg.jerkMax = src.jerk_max;
-  seg.yawRateMax = src.yaw_rate_max;
-  seg.yawAccelMax = src.yaw_accel_max;
-  seg.yawJerkMax = src.yaw_jerk_max;
-  seg.time = src.time;
-  seg.v = src.v;
-  seg.omega = src.omega;
-  seg.stream = src.stream;
-  return seg;
+// admitSegment -- (100-007, THE CUTOVER) wire admission's own throwaway
+// Drive::Drivetrain: admit()/advance() are pure functions of Limits +
+// trackwidth (bb.plannerConfig/bb.drivetrainConfig.trackwidth -- the SAME
+// published cells Subsystems::Drivetrain::rebuildDriveDrivetrain() reads,
+// via the SAME drive_bridge.h::driveLimitsFromConfig() conversion this file
+// now shares with the adapter), so a fresh, stack-only Drive::Drivetrain
+// value constructed HERE is numerically identical to the adapter's own held
+// instance -- without this pointerless command-family translator (SUC-006:
+// never a Subsystems::* reference) ever needing one. bb.chainTail is the
+// ONE piece of admission-relevant state that persists across calls -- see
+// blackboard.h's own doc comment on that cell for the full two-writer
+// rationale (this function is one of its two writers; Subsystems::
+// Drivetrain::abortAndFlush() is the other).
+//
+// Runs the CHEAP, conservative admit() check only (never the exact plan()
+// solve -- that stays the adapter's own job, at ring-pop time, per
+// source/drive/drivetrain.cpp's own admit()/plan() doc comments: admit()
+// is "a coarse kinematic v^2 bound... deliberately conservative, not
+// exact", plan() is "the exact jerk-limited answer"). On Verdict::OK,
+// advances bb.chainTail and writes `*outGoal` -- the caller posts it onto
+// bb.segmentIn/replaceIn ("Verdict::OK stages the plan": the Goal enters
+// the staging ring for the adapter's own later, exact plan() call). On any
+// other verdict, bb.chainTail is left untouched and `*outGoal` is not
+// written -- "queue untouched on rejection" (ticket 100-007's own
+// acceptance criteria).
+Drive::Verdict admitSegment(const msg::MotionSegment& src, Rt::Blackboard& b,
+                             Drive::Goal* outGoal) {
+  Drive::Drivetrain dt(Subsystems::driveLimitsFromConfig(b.plannerConfig),
+                       b.drivetrainConfig.trackwidth);
+  const Drive::Goal goal = Subsystems::driveGoal(src);
+  const Drive::Verdict verdict = dt.admit(goal, b.chainTail);
+  if (verdict == Drive::Verdict::OK) {
+    b.chainTail = dt.advance(goal, b.chainTail);
+    *outGoal = goal;
+  }
+  return verdict;
 }
 
 // sendReply -- encode+armor+send one ReplyEnvelope. The one exit path
@@ -153,24 +169,155 @@ void handleDrive(const msg::DrivetrainCommand& cmd, Rt::Blackboard& b, uint32_t 
   sendAck(b, corrId, replyFn, replyCtx);
 }
 
-// handleSegment -- queue one segment. The ERR_FULL reply mirrors
-// handleMove()'s own `ERR full` text behavior -- not field-specific (0),
-// the same way handleMove's ERR carries no detail token for this case.
+// handleSegment -- (100-007, THE CUTOVER) wire admission for the `segment`
+// arm. `primitive=false` is REJECTED outright (ERR_UNIMPLEMENTED -- the
+// retired, pre-cutover MotionSegment shape this arm used to accept
+// silently; binary_channel.h's own file header already documents
+// ERR_UNIMPLEMENTED as this file's "not supported this way" convention).
+// `stream=true` (BLEND, the MOVE s=1 streaming merge) is explicitly
+// deferred per architecture-update.md M8 -- also a typed ERR, never a
+// silent accept-and-ignore. A primitive, non-streaming segment runs
+// admitSegment() (admit() + bb.chainTail advance, see that function's own
+// doc comment); Verdict::OK posts the resulting Drive::Goal onto
+// bb.segmentIn (ERR_FULL on the (should-not-happen-in-practice) 8-slot cap,
+// mirroring the pre-cutover ERR_FULL convention exactly); any other verdict
+// replies a typed ERR (errCodeForVerdict()) with the SPECIFIC Drive::Verdict
+// ordinal in Error.field, and leaves bb.segmentIn/bb.chainTail untouched.
 void handleSegment(const msg::MotionSegment& src, Rt::Blackboard& b, uint32_t corrId,
                    ReplyFn replyFn, void* replyCtx) {
-  if (!b.segmentIn.post(toSegment(src))) {
+  if (!src.primitive) {
+    sendError(msg::ErrCode::ERR_UNIMPLEMENTED, 0, corrId, replyFn, replyCtx);
+    return;
+  }
+  if (src.stream) {
+    sendError(msg::ErrCode::ERR_UNIMPLEMENTED, 0, corrId, replyFn, replyCtx);
+    return;
+  }
+
+  Drive::Goal goal;
+  const Drive::Verdict verdict = admitSegment(src, b, &goal);
+  if (verdict != Drive::Verdict::OK) {
+    sendError(Subsystems::errCodeForVerdict(verdict), static_cast<uint16_t>(verdict), corrId,
+              replyFn, replyCtx);
+    return;
+  }
+  if (!b.segmentIn.post(goal)) {
     sendError(msg::ErrCode::ERR_FULL, 0, corrId, replyFn, replyCtx);
     return;
   }
   sendAck(b, corrId, replyFn, replyCtx);
 }
 
-// handleReplace -- Mailbox<Motion::Segment>::post() always succeeds
-// (latest-wins), mirroring handleMover()'s own unchecked post.
+// handleReplace -- (100-008) wire admission for the `replace` arm -- MOVER
+// (deadman-velocity teleop)'s EXCLUSIVE wire home: no other verb in this
+// codebase ever builds a `replace`-arm envelope (grep every
+// legacy_verbs.py BINARY_DISPATCH entry -- only envelope_for_mover() does),
+// so unlike handleSegment() above, this arm no longer runs admit()/touches
+// bb.chainTail at all -- a velocity-mode plan (Drive::Drivetrain::
+// planVelocity()) has no pose goal to admit against (drivetrain.h's own
+// planVelocity() doc comment: "no pose goal"). `primitive=false` is
+// REJECTED the SAME way handleSegment() rejects it (the retired,
+// pre-cutover MotionSegment shape); `stream` is NOT checked here (MOVER's
+// own wire shape never needed it -- 100-007's BLEND deferral is a
+// `segment`-arm-only concern, architecture-update.md M8). A `primitive=true`
+// MotionSegment decodes straight into an Rt::MoverRequest
+// (Subsystems::driveMoverRequest(), drive_bridge.h -- the time/v/omega arm,
+// fields 10-12) and posts UNCONDITIONALLY to bb.replaceIn.
+// Mailbox<Rt::MoverRequest>::post() always succeeds (latest-wins), mirroring
+// the pre-cutover handleReplace()'s own unchecked post -- there is no
+// ERR_FULL case for a Mailbox.
 void handleReplace(const msg::MotionSegment& src, Rt::Blackboard& b, uint32_t corrId,
                    ReplyFn replyFn, void* replyCtx) {
-  b.replaceIn.post(toSegment(src));
+  if (!src.primitive) {
+    sendError(msg::ErrCode::ERR_UNIMPLEMENTED, 0, corrId, replyFn, replyCtx);
+    return;
+  }
+
+  b.replaceIn.post(Subsystems::driveMoverRequest(src));
   sendAck(b, corrId, replyFn, replyCtx);
+}
+
+// sendPlanRecord -- one PlanRecord reply. A second reply-shape helper
+// alongside sendReply()/sendError()/sendAck() above, used exclusively by
+// handlePlanDump() below (the one arm that replies more than once per
+// incoming CommandEnvelope -- see this file's own header comment).
+void sendPlanRecord(const msg::PlanRecord& record, uint32_t corrId, ReplyFn replyFn,
+                    void* replyCtx) {
+  msg::ReplyEnvelope reply;
+  reply.corr_id = corrId;
+  reply.body_kind = msg::ReplyEnvelope::BodyKind::PLAN;
+  reply.body.plan = record;
+  sendReply(reply, replyFn, replyCtx);
+}
+
+// handlePlanDump -- (100-009) PlanDumpRequest's real implementation,
+// replacing the ERR_UNIMPLEMENTED stub ticket 001 left in place. Replies
+// one PlanRecord per DUMPABLE ring entry, sharing corrId (envelope.proto's
+// own "N replies share one corr_id" idiom):
+//   - entry 0, if bb.hasActivePlan: the adapter's own currently-active
+//     plan_'s ALREADY-SOLVED PlanRecord (bb.activePlanRecord, committed
+//     every pass by MainLoop::commit() -- FREE, no new solve here).
+//   - entries 1..N, one per bb.planRingGoals[0..planRingCount): each
+//     still-QUEUED, unsolved Drive::Goal is preview-SOLVED HERE, on
+//     demand, via a throwaway, stack-only Drive::Drivetrain -- the SAME
+//     pattern admitSegment() above already established (a pure value,
+//     never a Subsystems::* reference, SUC-006) -- chained the SAME way
+//     Subsystems::Drivetrain::startNextPlan() chains a REAL ring pop: each
+//     preview's own goal()/exitSpeed() becomes the NEXT preview's start
+//     pose/entrySpeed. A preview solve failure (rare -- admit()'s own
+//     coarse queue-time check already passed when this Goal was admitted;
+//     mirrors startNextPlan()'s own "late solve failure" case) skips that
+//     ring index's row outright -- never fabricates a record, never aborts
+//     the whole dump. This is a READ-ONLY diagnostic: it never touches
+//     bb.chainTail/bb.segmentIn/bb.replaceIn or any queue -- only reads
+//     bb.plannerConfig/bb.drivetrainConfig/bb.hasActivePlan/
+//     bb.activePlanRecord/bb.planRingGoals/bb.bodyState.
+// A totally empty dump (no active plan, no queued Goal) replies a single
+// Ack{q:0} instead of zero PlanRecords -- a pipelined client correlating
+// replies on corr_id must always see SOMETHING back for a request it sent
+// (binary_channel.h's own file header documents this as the one relaxation
+// of "every arm replies exactly once" this file makes).
+void handlePlanDump(Rt::Blackboard& b, uint32_t corrId, ReplyFn replyFn, void* replyCtx) {
+  uint32_t sent = 0;
+
+  // Chain anchor/entry-speed for the ring preview below: starts from the
+  // active plan's own frozen goal/exit speed (mirrors startNextPlan()'s own
+  // haveAnchor_ ? plan_.goal() : measured-pose chaining), or the current
+  // measured body pose/rest when nothing is active yet.
+  Drive::Pose anchor = b.hasActivePlan ? Subsystems::drivePose(b.activePlanRecord.goal)
+                                       : Subsystems::driveBodyState(b.bodyState).pose;
+  float chainedEntrySpeed = b.hasActivePlan ? b.activePlanRecord.exit_speed : 0.0f;
+
+  if (b.hasActivePlan) {
+    sendPlanRecord(b.activePlanRecord, corrId, replyFn, replyCtx);
+    ++sent;
+  }
+
+  if (b.planRingCount > 0) {
+    Drive::Drivetrain dt(Subsystems::driveLimitsFromConfig(b.plannerConfig),
+                         b.drivetrainConfig.trackwidth);
+    for (uint32_t i = 0; i < b.planRingCount; ++i) {
+      Drive::PlanRequest request;
+      request.goal = b.planRingGoals[i];
+      request.start = anchor;
+      request.entrySpeed = chainedEntrySpeed;
+      request.entryAccel = 0.0f;
+
+      const Drive::PlanResult result = dt.plan(request);
+      if (result.verdict != Drive::Verdict::OK) {
+        continue;  // rare preview-solve failure -- skip, never fabricate
+      }
+
+      sendPlanRecord(Subsystems::drivePlanRecord(result.plan, 0), corrId, replyFn, replyCtx);
+      ++sent;
+      anchor = result.plan.goal();
+      chainedEntrySpeed = result.plan.exitSpeed();
+    }
+  }
+
+  if (sent == 0) {
+    sendAck(b, corrId, replyFn, replyCtx);
+  }
 }
 
 // handleStop -- byte-identical to the text handleStop()'s own construction
@@ -604,6 +751,12 @@ void handleStream(const msg::StreamControl& sc, Rt::Blackboard& b, void* routerC
   // even for period 0 (disabling still records "this channel asked last").
   b.telemetryChannel = static_cast<Rt::CommandRouter*>(routerCtx)->currentChannel();
   b.telemetryBinary = sc.binary;
+  // telemetryTrace (100-009) -- unconditionally written every STREAM,
+  // mirroring telemetryBinary's own not-gated assignment immediately
+  // above. tickTelemetry() reads this to decide whether to ALSO emit a
+  // MotionTrace push (bb.motionTrace) alongside the regular Telemetry
+  // frame, at the same period.
+  b.telemetryTrace = sc.trace;
   // Deliberately NOT reproducing handleStream()'s old same-reply
   // "immediate first frame" concatenation (Open Question 5, ticket 002's
   // own note) -- the first frame arrives one pass later via
@@ -701,6 +854,9 @@ void handle(const char* line, ReplyFn replyFn, void* replyCtx, void* routerCtx) 
       break;
     case msg::CommandEnvelope::CmdKind::STREAM:
       handleStream(env.cmd.stream, b, routerCtx, env.corr_id, replyFn, replyCtx);
+      break;
+    case msg::CommandEnvelope::CmdKind::PLAN_DUMP:
+      handlePlanDump(b, env.corr_id, replyFn, replyCtx);
       break;
     case msg::CommandEnvelope::CmdKind::NONE:
     default:

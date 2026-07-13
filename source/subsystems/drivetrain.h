@@ -1,117 +1,123 @@
-// drivetrain.h -- Subsystems::Drivetrain: the two-wheel differential
-// Drivetrain MOTION PLANNER (sprint 094 rewrite -- ticket 094-004,
-// clasi/sprints/094-drivetrain-becomes-the-motion-planner-segment-executor-
-// move-command/architecture-update.md Section 3, "Subsystems::Drivetrain
-// (rewrite) -- the motion planner").
+// drivetrain.h -- Subsystems::Drivetrain: THE WAFER ADAPTER (sprint 100
+// ticket 100-007, THE CUTOVER -- clasi/sprints/100-motion-stack-v2-self-
+// contained-stateless-drive-subsystem/architecture-update.md M7). Bridges
+// `source/drive/` (the self-contained, stateless Level-1 motion planner/
+// tracker) to the rest of the firmware -- queues, blackboard, HAL staging,
+// wire acks -- with ZERO control math anywhere in this file (greppable: no
+// Kanayama/IK/saturation math outside source/drive/ after this ticket).
 //
-// Before this ticket, Drivetrain was a thin faceplate: it held no motor
-// reference, received the full per-port observation array as a tick()
-// argument, and HELD its output (a Hal::DrivetrainToHardwareCommand) for
-// Rt::MainLoop to drain via hasCommand()/takeCommand() (sprint 079's
-// held-output design, later 087-003's driveIn queue). That whole
-// hold-and-route chain is gone: Drivetrain now HOLDS `Hardware& hardware_`,
-// resolves its own bound wheel pair through it, and STAGES its output
-// directly via `hardware_.motor(port).apply(cmd)` -- there is nothing left
-// for the loop to route (main_loop.cpp's former routeOutputs() step is
-// deleted, ticket 094-005).
+// Replaces the sprint 094 rewrite that made this class own a
+// Motion::SegmentExecutor (the retired 3-phase Ruckig machine). That class
+// (source/motion/segment_executor.{h,cpp}, plus segment.h/motion_baseline.h/
+// stop_condition.{h,cpp}) is PARKED, not deleted (stays on disk, ticket
+// 100-013 deletes it later, gated on bench/field sign-off) -- this class no
+// longer references any of it.
 //
-// This ticket also folds in the sprint's motion-planning half: Drivetrain
-// now owns one Motion::SegmentExecutor (source/motion/segment_executor.h --
-// the lifted, near-verbatim Ruckig-based trajectory engine from
-// Subsystems::Planner, ticket 094-001) plus an 8-slot Rt::WorkQueue<
-// Motion::Segment, 8> ring. `MOVE`'s wire handler (094-006, not this
-// ticket) posts parsed Motion::Segments to the BLACKBOARD's own
-// `bb.segmentIn` queue (094-005); THIS class drains that queue into its
-// own internal ring_ every tick() and executes the ring's head segment via
-// executor_.
+// --- What this class HOLDS (architecture-update.md M7's own list) ---
+//   - `Hardware& hardware_` (unchanged -- resolves the bound wheel pair and
+//     stages output through it, exactly as before this ticket).
+//   - `Drive::Drivetrain driveDrivetrain_` -- immutable config (Drive::
+//     Limits + trackwidth), rebuilt whenever configure()/configureMotion()
+//     supplies a fresh value for either half (source/subsystems/
+//     drive_bridge.h's driveLimitsFromConfig() is THE single
+//     msg::PlannerConfig -> Drive::Limits conversion point).
+//   - `Drive::MotionPlan plan_` -- the CURRENT held plan value. Drive::
+//     MotionPlan is copy-CONSTRUCTIBLE but NOT copy-ASSIGNABLE (master_
+//     profile.h's own ruckig::Ruckig<1> const members -- documented at
+//     tests/_infra/drive/drive_api.cpp's own file header) -- replacePlan()
+//     below is the ONE place this class ever "reassigns" it, via placement-
+//     new (no heap, matching this project's no-heap-in-hot-path rule,
+//     runtime/queue.h's own doc comment).
+//   - `Drive::StepState state_` -- the subsystem's one explicit
+//     statelessness residue (five scalars -- motion_plan.h's own
+//     "Statelessness accounting").
+//   - `planStart_` -- [ms] this class's own clock anchor; StepInput.t is
+//     computed as `(now - planStart_) * 0.001f` every tick -- the ONLY
+//     place this subsystem's elapsed-time clock is derived from firmware
+//     time (the issue's own "the adapter is also the ONLY place the
+//     subsystem's clock ... is computed from firmware time").
+//   - `Rt::WorkQueue<Drive::Goal, 8> ring_` -- ADMITTED, not-yet-planned
+//     segments (wire admission -- BinaryChannel's handleSegment()/
+//     handleReplace() -- already ran admit() before anything reaches this
+//     ring; Drive::Drivetrain::plan()'s real Ruckig solve happens once an
+//     entry is POPPED to become the active plan_, in startNextPlan()).
+// `ChainTail` is NOT a member of this class -- it is threaded in as a
+// `Drive::ChainTail&` (bb.chainTail) every tick(), the SAME "individual
+// blackboard-cell reference, never a Blackboard&" convention every other
+// parameter here already follows (subsystems never include blackboard.h --
+// see runtime/blackboard.h's own file header). BinaryChannel's wire
+// admission ALSO reads/advances the SAME bb.chainTail cell synchronously,
+// at wire time -- see blackboard.h's own doc comment on chainTail for the
+// full two-writer rationale.
 //
-// --- The two command sources, and their precedence (architecture-update.md
-//     Section 6, "Command precedence and the 'no hiccups' requirement") ---
+// --- Boundary conversions (M7) -- all in source/subsystems/drive_bridge.h
+// --- msg::MotorState -> Drive::WheelState; bb.bodyState (msg::PoseEstimate)
+// -> Drive::BodyState; bb.poseStepped (msg::PoseStep) ->
+// StepInput.poseStep/poseStepTheta; Drive::WheelVelocities -> msg::
+// MotorCommand velocity staging via hardware_.motor(i).apply() -- the
+// UNCHANGED staging path (this class still calls governRatio() on the
+// Drive::-produced wheel targets before staging, exactly as it did on the
+// retired executor's targets -- M13/ticket 100-013, not this one, is where
+// that call retires, once Drive::'s own saturate/clamp cascade is bench/
+// field-proven to supersede it).
 //
-// `driveIn` (Rt::WorkQueue<msg::DrivetrainCommand, 8>) is now the S/STOP
-// ESCAPE-HATCH input to this Drivetrain ONLY -- there is no more Planner
-// producer, no more routeOutputs() consumer (087-003's arbitration
-// commentary describing a Planner producer is stale; see blackboard.h's own
-// updated doc comment). `segmentIn` (Rt::WorkQueue<Motion::Segment, 8>) is
-// `MOVE`'s fan-in. Every tick():
-//   1. `driveIn` is drained ONE command per tick (FIFO pop, matching this
-//      class's pre-094 drain cadence) and applied FIRST. A WHEELS or NEUTRAL
-//      command PREEMPTS: it clears ring_ and switches this tick (and every
-//      subsequent tick, until a fresh Motion::Segment reclaims it -- see
-//      below) to DIRECT mode -- immediate, ungoverned-by-the-executor wheel
-//      targets, exactly like today's `S`. TWIST is dispatched the same way
-//      (kept for oneof-dispatch symmetry -- see commandedWheelTargets() --
-//      though no live producer posts TWIST via driveIn this sprint).
-//      NEUTRAL is special: if a segment is actively executing (SEGMENT mode
-//      AND executor_.active()), NEUTRAL does NOT preempt to direct/instant-
-//      zero -- it calls executor_.stop(now), which arms the executor's OWN
-//      presolved graceful decel-to-zero (solveToVelocity(0, ...) from the
-//      channel's current sampled state) and this Drivetrain stays in
-//      SEGMENT mode, riding that decel down to a literal 0.0f twist over
-//      subsequent ticks -- see segment_executor.h's own stop() doc comment.
-//      Only when there is nothing in-flight to decelerate (DIRECT mode was
-//      already active, or the executor was already idle) does NEUTRAL fall
-//      through to an instant zero-velocity command, matching pre-094 `STOP`
-//      behavior for the case that behavior applies to (a plain `S` then
-//      `STOP`, with no segment ever in flight).
-//   2. Otherwise (driveIn did not just preempt this tick) `segmentIn` is
-//      drained IN FULL into ring_ (a WorkQueue post() that returns false --
-//      ring_ already at its 8-slot cap -- silently drops the excess; this
-//      should not occur in ordinary operation since segmentIn itself caps
-//      at the same depth and is drained every tick). Queuing at least one
-//      fresh segment switches (or keeps) this Drivetrain in SEGMENT mode --
-//      a `MOVE` reclaims control from a stale DIRECT-mode `S`, deliberately
-//      (a wire MOVE is an explicit "please plan this" request; it should
-//      not be silently ignored just because an earlier `S` happened to be
-//      the last escape-hatch command).
+// --- Status reactions (M7) ---
+//   REPLAN_DUE -> Drivetrain::replan(), swap plan_ (replacePlan()); a
+//     SOLVE_FAILED result leaves plan_/state_ untouched (drivetrain.cpp's
+//     own replan() doc comment: "the CALLER keeps the old plan").
+//   DONE_STOP/DONE_HANDOFF -> pop the next ring_ entry next tick (seeded
+//     from the REFERENCE's own exitSpeed on a HANDOFF, per ticket 100-005's
+//     handoff spec -- policy.cpp's own "Seeding contract" comment) or
+//     neutral the motors once the ring is empty.
+//   ABORT_TIMEOUT/ABORT_REPLAN_LIMIT -> flush the ring, re-anchor
+//     ChainTail to the current measured pose, populate lastEvent() (an
+//     msg::EventNotify) for MainLoop::commit() to publish onto bb.lastEvent
+//     (see blackboard.h's own doc comment -- no loop-originated wire output
+//     exists yet post-093 for this ticket to transmit it through; ticket
+//     100-009 is the wire-arm ticket).
 //
-// In SEGMENT mode, once executor_ is idle() and ring_ is non-empty, the
-// ring's head segment is popped and handed to executor_.start() -- "pop on
-// completion, start next." The executor's per-tick body twist
-// (msg::BodyTwist3, v_x for TRANSLATE / omega for PRE_PIVOT/TERMINAL_PIVOT,
-// pose-free -- segment_executor.h) is converted to wheel targets via the
-// SAME BodyKinematics::inverse() the TWIST arm always used, then governed by
-// the SAME governRatio() (below, UNCHANGED math) before being staged.
+// --- Wire admission (BinaryChannel, commands/binary_channel.cpp -- NOT this
+// file) --- runs synchronously at COMMAND time, before anything reaches
+// bb.segmentIn/replaceIn. `segment`: a `primitive=false` (or `stream=true`,
+// BLEND) MotionSegment is REJECTED with a typed ERR outright; a real
+// `primitive=true` arc/pivot segment converts to a Drive::Goal and runs
+// admit() (a throwaway Drive::Drivetrain built from bb.plannerConfig +
+// bb.drivetrainConfig.trackwidth, mirroring THIS class's own
+// rebuildDriveDrivetrain()) against bb.chainTail -- Verdict::OK advances
+// bb.chainTail and posts the Goal; any other verdict replies a typed ERR
+// and leaves bb.segmentIn/bb.chainTail untouched. `replace` (100-008): MOVER
+// teleop's exclusive wire home -- a `primitive=false` MotionSegment is
+// REJECTED the same way, but a `primitive=true` one decodes straight into a
+// Rt::MoverRequest (time/v/omega -> deadman/target, drive_bridge.h's
+// driveMoverRequest()) and posts UNCONDITIONALLY to bb.replaceIn (a
+// Mailbox::post() always succeeds -- no admit()/chainTail check: a
+// velocity-mode plan has no pose goal to admit against). See
+// binary_channel.cpp's handleSegment()/handleReplace() for the full
+// implementation -- this class never touches a reply channel.
 //
-// A freshly constructed Drivetrain starts in DIRECT mode with mode_ ==
-// NEUTRAL (matches the pre-094 idle default: an explicit NEUTRAL command
-// staged every tick until a real command arrives, not a spurious
-// VELOCITY(0) -- see tick()'s own body).
-//
-// No PID lives here -- that stays entirely inside NezhaMotor. The only
-// control law this class runs is the ratio (sync) governor: see
-// governRatio() below, whose math this ticket does not change.
-//
-// --- Staging-only write path (architecture-update.md Section 5) ---
-// Drivetrain computes leftCmd/rightCmd (msg::MotorCommand) and STAGES them:
-// `hardware_.motor(port).apply(cmd)`. Hal::Motor::apply() only calls the
-// leaf's primitive setters (setVelocity()/setNeutral()/...), which are
-// themselves staging-only (Hal::NezhaMotor::setVelocity()/setDutyCycle()
-// only set mode_/velocityTarget_/dutyTarget_ -- confirmed by this ticket's
-// own host unit test, tests/sim/unit/nezha_staging_only_harness.cpp). The
-// actual I2C write happens only inside NezhaMotor::tick()'s mode dispatch,
-// itself called only from NezhaHardware::tick()'s COLLECT_DUE case
-// (unchanged this sprint -- harmonized against the bare `main()` loop: the
-// 094-003 `serviceBus()` rename in the design note was DROPPED, Hardware
-// keeps the name `tick()`). So a setpoint staged THIS pass is flushed at
-// Hardware::tick()'s own cadence -- the bare loop runs `hardware.tick(now)`
-// BEFORE `drivetrain.tick(now, ...)` every pass (source/main.cpp,
-// tests/_infra/sim/sim_api.cpp), so a setpoint staged this pass is flushed
-// the FOLLOWING pass: identical one-pass latency to the pre-094
-// `routeOutputs() -> bb.motorIn[] -> next-pass drain` chain. Timing is
-// untouched.
-//
-// `hasCommand()`/`takeCommand()`/the held `Hal::DrivetrainToHardwareCommand`
-// output are DELETED -- there is nothing left to route.
+// --- DIRECT/escape-hatch mode -- UNCHANGED (setTwist()/setWheelTargets()/
+// setNeutral(), governRatio() for TWIST/WHEELS) --- these methods are
+// byte-identical to before this ticket; only tick()'s own ORCHESTRATION of
+// WHEN a driveIn command preempts segment mode changed (dispatchEscapeHatch()
+// below), because the thing it used to preempt (Motion::SegmentExecutor) no
+// longer exists in this class -- see that method's own doc comment for the
+// one documented behavior change (an instant stop instead of a graceful
+// decel-to-zero when NEUTRAL arrives mid-segment; source/drive/'s own
+// graceful-stop equivalent, planVelocity(), is MOVER's own replaceIn path --
+// see tick()'s own doc comment below -- not driveIn's, so this NEUTRAL
+// preemption is still instant even after 100-008).
 #pragma once
 
 #include <stdint.h>
 
+#include "drive/drivetrain.h"
+#include "drive/motion_plan.h"
+#include "drive/types.h"
 #include "messages/drivetrain.h"
+#include "messages/envelope.h"
 #include "messages/motor.h"
 #include "messages/planner.h"
-#include "motion/segment.h"
-#include "motion/segment_executor.h"
+#include "runtime/commands.h"
 #include "runtime/queue.h"
 #include "subsystems/hardware.h"
 
@@ -120,13 +126,6 @@ namespace Subsystems {
 // The Drivetrain's bound wheel-motor pair, as 0-based Hardware motor
 // indices -- read via ports() (`DEV DT PORTS` -> DrivetrainConfig.
 // left_port/right_port, per sprint 079 decision 8; unchanged this ticket).
-// (0-based motor indices, OOP refactor) msg::DrivetrainConfig.left_port/
-// right_port are wire/serialized keys and stay 1-based (the brick label);
-// configure() converts them to 0-based indices EXACTLY ONCE, the moment a
-// DrivetrainConfig arrives -- see configure()'s own doc comment, the single
-// conversion point for this Drivetrain. ports() returns those already-
-// converted indices; every other member uses them directly, with no
-// further `- 1`/`+ 1` anywhere in this class.
 struct DrivetrainPorts {
   uint32_t left;   // 0-based Hardware motor index
   uint32_t right;  // 0-based Hardware motor index
@@ -135,200 +134,210 @@ struct DrivetrainPorts {
 class Drivetrain {
  public:
   // Stores hardware BY REFERENCE (never copied) -- the container this
-  // Drivetrain resolves its bound wheel pair through every tick() (see the
-  // class comment). Declaration-order note for both composition roots
-  // (main.cpp / tests/_infra/sim/sim_api.cpp, ticket 094-005): `hardware`
-  // must be constructed before `drivetrain`.
+  // Drivetrain resolves its bound wheel pair through every tick().
   explicit Drivetrain(Hardware& hardware);
 
   // --- Primitive setters -- the DIRECT (escape-hatch) arms' real
-  // implementation. Unchanged shape from before this ticket (do not change
-  // the TWIST/WHEELS/NEUTRAL dispatch shape) -- only how they are reached
-  // (via tick()'s driveIn precedence, below) and what they compete with
-  // (the segment ring) changed. ---
-
-  // A twist is a directed body-frame velocity: v_x, v_y, omega (matches
-  // msg::BodyTwist3). v_y is always ignored -- this Drivetrain is
-  // differential-only (capabilities().holonomic is always false).
+  // implementation. UNCHANGED this ticket -- see the class comment. ---
   void setTwist(float v_x, float v_y, float omega);   // [mm/s] [mm/s] [rad/s]
-
-  // Direct per-wheel velocity targets -- bypasses kinematics AND the
-  // segment executor entirely (the coupled bench rig's curve tests use
-  // this on ports 3+4, same as before this ticket). Still passes through
-  // the ratio governor.
   void setWheelTargets(float left, float right);      // [mm/s] signed wheel velocities
-
   void setNeutral(msg::Neutral mode);
 
   // --- Faceplate verbs. ---
 
-  // configure() -- THE single conversion point (0-based motor indices, OOP
-  // refactor) where this Drivetrain's bound wheel pair, carried on the wire
-  // as msg::DrivetrainConfig.left_port/right_port (1-based brick labels,
-  // unchanged -- a wire/serialized key), is converted to 0-based Hardware
-  // motor indices EXACTLY ONCE: `boundLeft_ = config.left_port - 1;`
-  // `boundRight_ = config.right_port - 1;`. Every other member of this
-  // class (tick()/state()/ports()) uses boundLeft_/boundRight_ directly --
-  // no further port math anywhere else in this Drivetrain.
+  // configure() -- THE single conversion point (0-based motor indices)
+  // where this Drivetrain's bound wheel pair (msg::DrivetrainConfig.
+  // left_port/right_port, 1-based brick labels) is converted to 0-based
+  // Hardware motor indices EXACTLY ONCE. ALSO caches config.trackwidth and
+  // rebuilds driveDrivetrain_ (rebuildDriveDrivetrain()) -- trackwidth is
+  // one of driveDrivetrain_'s two construction arguments (the other,
+  // Drive::Limits, comes from configureMotion() below); either call
+  // rebuilds from the currently-cached pair of the other.
   void configure(const msg::DrivetrainConfig& config);
 
-  // configureMotion -- boot-only motion-limit defaults for the owned
-  // Motion::SegmentExecutor (msg::PlannerConfig, reused as-is --
-  // architecture-update.md Section 8's jerk-config knob). Forwards to
-  // executor_.configure(). Per-segment MOVE overrides (094-006's
-  // speedMax/accelMax/jerkMax/yawRateMax/yawAccelMax/yawJerkMax fields,
-  // segment.h) take precedence per-solve when nonzero; this is only the
-  // fallback a 0 field resolves to. No runtime SET/GET path calls this --
-  // both composition roots (main.cpp / sim_api.cpp) call it exactly once,
-  // at construction (094-005).
+  // configureMotion() -- (100-007, THE CUTOVER) now populates Drive::Limits
+  // via drive_bridge.h's driveLimitsFromConfig() and rebuilds
+  // driveDrivetrain_ -- replaces the pre-cutover
+  // `executor_.configure(config)` forward. Same call sites, same cadence
+  // (boot-only direct call from both composition roots; ticket 098-005's
+  // Configurator re-applies it live on a `CONFIG_PLANNER` delta).
   void configureMotion(const msg::PlannerConfig& config);
 
   // Unpacks the oneof -> the setters above, THEN dispatches the standby
-  // side-channel (see the class comment's "Authority arbitration" heritage,
-  // unchanged this ticket). Called from tick() below, AFTER the
-  // ring/segmentMode side effects tick() itself decides based on the same
-  // command's control_kind (see tick()'s own doc comment) -- this method
-  // has no ring/segmentMode side effects of its own; it is the shared
-  // "unpack the oneof into mode_/targets" step both the escape hatch and
-  // (indirectly, informationally) the graceful-stop path route through.
+  // side-channel. UNCHANGED this ticket.
   void apply(const msg::DrivetrainCommand& command);
 
-  // tick -- the mandatory per-pass control step (run AFTER hardware.tick()
-  // -- 094-005). now: [ms]. segmentIn: the blackboard's `MOVE`-command
-  // fan-in (drained into ring_ -- see the class comment). driveIn: the
-  // S/STOP escape-hatch fan-in (drained FIRST, one command per tick, per
-  // the class comment's precedence rules). Resolves this Drivetrain's OWN
-  // bound wheel pair via `hardware_.motorState(i)`/`hardware_.motor(i)`
-  // internally, using boundLeft_/boundRight_ (already-converted 0-based
-  // indices -- see configure()'s own doc comment, the ONE place a `- 1`
-  // exists in this class) -- Hardware::state()/motor() take a 0-based index
-  // and do their own out-of-range clamping (each concrete owner's own doc
-  // comment). The range assert below is kept as a defensive guard against a
-  // misconfigured (out-of-range) bound index.
-  // (MOVER, OOP 2026-07-09) replaceIn is drained between the escape hatch
-  // and segmentIn: a replace supersedes the ring and replans from the
-  // current velocity (SegmentExecutor::replaceStream).
+  // tick -- the mandatory per-pass control step (run AFTER hardware.tick()).
+  // now: [ms]. segmentIn: ADMITTED Drive::Goal fan-in (wire admission
+  // already ran in BinaryChannel -- see the class comment). replaceIn
+  // (100-008): a fresh Rt::MoverRequest fan-in -- drained straight into
+  // Drive::Drivetrain::planVelocity(request.target, request.deadman,
+  // current), replacing the held plan (latest-wins, Mailbox semantics; no
+  // new queueing). driveIn: the S/STOP escape-hatch fan-in, drained FIRST
+  // per the unchanged precedence rules. bodyState/poseStepped: sprint 099's
+  // bb.bodyState/bb.poseStepped cells, converted at the boundary
+  // (drive_bridge.h) into StepInput.measured/poseStep/poseStepTheta.
+  // chainTail: bb.chainTail, re-anchored here on an ABORT_* (see the class
+  // comment's "Status reactions") -- NEVER touched by a MOVER replace (no
+  // pose goal, so nothing to re-anchor); only Goal-based segment/replan
+  // paths read/write it.
   void tick(uint32_t now,
-            Rt::WorkQueue<Motion::Segment, 8>& segmentIn,
-            Rt::Mailbox<Motion::Segment>& replaceIn,
-            Rt::WorkQueue<msg::DrivetrainCommand, 8>& driveIn);
+            Rt::WorkQueue<Drive::Goal, 8>& segmentIn,
+            Rt::Mailbox<Rt::MoverRequest>& replaceIn,
+            Rt::WorkQueue<msg::DrivetrainCommand, 8>& driveIn,
+            const msg::PoseEstimate& bodyState,
+            const msg::PoseStep& poseStepped,
+            Drive::ChainTail& chainTail);
 
-  // Assembled from getters. enc_[]/vel_[] are sourced from
-  // hardware_.motorState(port) -- MEASURED, not commanded (replaces the pre-094
-  // "reports the pre-governor commanded target" behavior entirely: this is
-  // a genuinely different, measured source, not a preserved one -- see
-  // architecture-update.md Section 3's Drivetrain boundary and ticket
-  // 094-004's own acceptance criteria).
+  // Assembled from getters. enc_[]/vel_[]/cmd_[]/acc_[] sourced from
+  // hardware_.motorState(port) exactly as before this ticket (MEASURED, not
+  // commanded). active/busy/queue/rem now read planActive_/ring_/
+  // remainingLinear_ instead of the retired executor_'s own state -- see
+  // drivetrain.cpp's state() for the exact mapping.
   msg::DrivetrainState state() const;
   msg::DrivetrainCapabilities capabilities() const;
 
-  // Records the two bound wheel motors' capabilities, needed only so
-  // capabilities().onboard_position can report accurately without this
-  // class holding a second, redundant Hal::Motor reference of its own
-  // (hardware_ already gives it one). Unchanged from before this ticket.
   void setMotorCapabilities(const msg::MotorCapabilities& left,
                              const msg::MotorCapabilities& right);
 
-  // --- Port binding + authority arbitration (unchanged from before this
-  // ticket -- sprint 079's design, not touched by 094). ---
+  // lastEvent -- (100-007) the most recent msg::EventNotify this class
+  // populated on an ABORT_* status -- see blackboard.h's own doc comment on
+  // bb.lastEvent (MainLoop::commit() publishes this every pass, mirroring
+  // bb.drivetrain's own publish shape).
+  msg::EventNotify lastEvent() const { return lastEvent_; }
 
+  // lastRecord -- (100-009) the most recent Drive::TrackRecord this class's
+  // own tick() captured from plan_.step()'s StepOutput, converted via
+  // drive_bridge.h's driveMotionTrace() -- committed to bb.motionTrace
+  // every pass by MainLoop::commit(), mirroring lastEvent()'s own publish
+  // shape. Overwritten every pass planActive_ (i.e. every pass step() actually
+  // ran); holds the LAST such value (never reset to a default) on a pass
+  // that does not step, the same "last-known, not gated on freshness" the
+  // sim's own TLM fields already follow.
+  msg::MotionTrace lastRecord() const { return lastRecord_; }
+
+  // hasActivePlan/activePlanRecord -- (100-009, PlanDumpRequest's own wire
+  // arm) the currently held plan_'s dumpable summary, entry 0 of the ring
+  // dump BinaryChannel::handlePlanDump() assembles. FREE -- plan_'s own
+  // const query surface plus state_.replanCount, no new Ruckig solve.
+  // activePlanRecord() on a !hasActivePlan() plan returns a default
+  // (zeroed) PlanRecord -- see motion_plan.h's own "default-constructed
+  // MotionPlan" doc comment; callers must check hasActivePlan() first
+  // (mirrors this whole file's existing has/val-gated Opt<T> convention).
+  bool hasActivePlan() const { return planActive_; }
+  msg::PlanRecord activePlanRecord() const;
+
+  // ringGoals -- (100-009) a NON-DESTRUCTIVE snapshot of ring_'s raw,
+  // unsolved Drive::Goal entries (queue.h's own peek()/size(), never
+  // take()) -- copies up to `capacity` entries into `out` and returns the
+  // count actually written. Cheap: no Ruckig solve, just copying already-
+  // held Goal values -- BinaryChannel::handlePlanDump() does its own
+  // read-only preview solve of each one, on demand, at PlanDumpRequest
+  // time (never here, never every pass -- see this method's own .cpp
+  // comment for why a per-pass preview solve is deliberately avoided).
+  uint32_t ringGoals(Drive::Goal* out, uint32_t capacity) const;
+
+  // --- Port binding + authority arbitration (unchanged from before this
+  // ticket -- sprint 079's design, not touched by 094 or 100). ---
   DrivetrainPorts ports() const;
   bool active() const;
   void standby();
 
  private:
-  // The DIRECT (escape-hatch) arm currently staged -- consulted only while
-  // NOT in SEGMENT mode (see tick()'s dispatch). Shape unchanged from
-  // before this ticket.
   enum class Mode : uint8_t { NEUTRAL, TWIST, WHEELS };
 
   // dispatchEscapeHatch -- tick()'s own helper: decides the ring-clearing/
-  // segmentMode_/executor_.stop() side effects a driveIn command causes
-  // (see the class comment's precedence rules) BEFORE calling apply() to
-  // unpack the oneof into mode_/targets. Returns true if this command
-  // PREEMPTS segmentIn's drain for this tick (WHEELS/TWIST/NEUTRAL -- an
-  // actual arm was dispatched), false for POSE/NONE (no arm dispatched,
-  // matching apply()'s own "no action" default case -- nothing to preempt
-  // with).
-  bool dispatchEscapeHatch(const msg::DrivetrainCommand& command, uint32_t now);
+  // segmentMode_ side effects a driveIn command causes BEFORE calling
+  // apply() to unpack the oneof into mode_/targets. Returns true if this
+  // command PREEMPTS segmentIn's drain for this tick (WHEELS/TWIST/NEUTRAL
+  // -- an actual arm was dispatched), false for POSE/NONE. See the class
+  // comment's own note on the one documented behavior change vs. the
+  // pre-cutover graceful-NEUTRAL-during-a-segment special case.
+  bool dispatchEscapeHatch(const msg::DrivetrainCommand& command);
 
   // Drains ring_ completely (repeated take()s -- Rt::WorkQueue has no
-  // clear()). Used when an escape-hatch command preempts an in-flight (or
-  // merely queued) segment plan.
+  // clear()).
   void clearRing();
 
+  // startNextPlan -- pops ring_ entries (skipping any that fail plan()'s
+  // real solve -- see this method's own body comment) until one plans
+  // successfully (planActive_ becomes true, plan_/state_/planStart_ are
+  // set) or the ring is exhausted (planActive_ stays false). start pose is
+  // plan_.goal() (the just-completed plan's frozen goal, when haveAnchor_)
+  // or the current measured pose (the first plan since boot/an abort).
+  void startNextPlan(uint32_t now, const msg::PoseEstimate& bodyState);
+
+  // replacePlan -- placement-new "reassignment" of plan_ (Drive::MotionPlan
+  // is not copy-assignable -- see the class comment). No heap.
+  void replacePlan(const Drive::MotionPlan& newPlan);
+
+  // abortAndFlush -- ABORT_TIMEOUT/ABORT_REPLAN_LIMIT reaction: flush
+  // ring_, re-anchor chainTail to `measured`, populate lastEvent_.
+  void abortAndFlush(Drive::ChainTail& chainTail, Drive::Status status,
+                      const Drive::BodyState& measured, const Drive::TrackRecord& record);
+
+  // rebuildDriveDrivetrain -- reconstructs driveDrivetrain_ from the
+  // currently-cached plannerConfig_/config_.trackwidth pair -- called from
+  // both configure() and configureMotion(), whichever last changed.
+  void rebuildDriveDrivetrain();
+
   // Computes this Drivetrain's currently-commanded DIRECT-mode wheel
-  // velocity targets, BEFORE the ratio governor -- kinematics for TWIST, a
-  // direct pass-through for WHEELS, zero for NEUTRAL. Unchanged shape from
-  // before this ticket. Only consulted from tick() while NOT in SEGMENT
-  // mode.
+  // velocity targets, BEFORE the ratio governor. UNCHANGED this ticket.
   void commandedWheelTargets(float* targetLeft, float* targetRight) const;
 
-  // Ratio (sync) governor: if a wheel underachieves its target (bogged
-  // down), lower the shared speed ceiling so left/right hold their
-  // commanded ratio (curvature), instead of letting the healthy wheel run
-  // away. UNCHANGED MATH this ticket -- applied uniformly to DIRECT-mode
-  // targets (TWIST/WHEELS) and to SEGMENT-mode targets (the executor's body
-  // twist, converted via BodyKinematics::inverse()) alike; only a literal
-  // NEUTRAL instant-zero bypasses it, exactly as before this ticket.
-  // DrivetrainConfig.sync_gain is the tuning knob (0 = fully independent).
+  // Ratio (sync) governor. UNCHANGED MATH this ticket -- see the class
+  // comment.
   void governRatio(float* targetLeft, float* targetRight,
                     const msg::MotorState& leftObs,
                     const msg::MotorState& rightObs) const;
 
   Hardware& hardware_;
 
-  // The lifted Ruckig-based trajectory engine (094-001) this Drivetrain now
-  // owns. Pose-free, encoder-only -- see segment_executor.h.
-  Motion::SegmentExecutor executor_;
+  // Drive:: (Level 1) state -- see the class comment for what each member
+  // is and why it exists.
+  Drive::Drivetrain driveDrivetrain_{Drive::Limits{}, 0.0f};  // rebuilt by configure()/configureMotion()
+  Drive::MotionPlan plan_;              // default-constructed = invalid/empty (motion_plan.h)
+  Drive::StepState state_;
+  uint32_t planStart_ = 0;              // [ms]
+  bool planActive_ = false;             // true: plan_/state_ drive this tick's output
+  bool haveAnchor_ = false;             // true: plan_.goal() is a valid start-pose anchor
+  float nextEntrySpeed_ = 0.0f;         // [mm/s] seeded into the NEXT startNextPlan() call
+  uint32_t segSeq_ = 0;                 // monotonic "which plan generation" counter (lastEvent_.seg_seq)
+  uint32_t lateSolveFailures_ = 0;      // diagnostic: admit() passed, the real plan() solve did not
+  Rt::WorkQueue<Drive::Goal, 8> ring_;  // admitted, not-yet-planned segments
+  msg::EventNotify lastEvent_ = {};
+  msg::MotionTrace lastRecord_ = {};    // (100-009) last step()'s TrackRecord, converted -- lastRecord()
 
-  // The 8-slot segment ring "owned by the Drivetrain" the originating
-  // issue calls for -- matches bb.segmentIn's own depth (094-005) so a
-  // full blackboard drain never has to be rejected by this ring under
-  // ordinary operation.
-  Rt::WorkQueue<Motion::Segment, 8> ring_;
-
-  // true: ring_/executor_ drives this tick's staged output (SEGMENT mode).
+  // true: ring_/plan_ drives this tick's staged output (SEGMENT mode).
   // false: mode_/commandedWheelTargets() drives it (DIRECT/escape-hatch
-  // mode). Starts false (DIRECT, mode_ == NEUTRAL) -- see the class
-  // comment's "freshly constructed" note. Set true whenever segmentIn
-  // drains at least one fresh segment into ring_ (a MOVE reclaims control);
-  // set false by a WHEELS/TWIST escape-hatch command, or by a NEUTRAL that
-  // finds nothing in-flight to gracefully decelerate. A NEUTRAL that DOES
-  // find an in-flight segment leaves this true (see dispatchEscapeHatch()).
+  // mode). Same shape/defaults as before this ticket.
   bool segmentMode_ = false;
 
   msg::DrivetrainConfig config_ = {};
+  msg::PlannerConfig plannerConfig_ = {};  // cached for rebuildDriveDrivetrain()
   Mode mode_ = Mode::NEUTRAL;
 
-  // The bound wheel pair, as 0-based Hardware motor indices -- converted
-  // from config_.left_port/right_port (1-based wire labels) EXACTLY ONCE,
-  // in configure() (this class's single conversion point). ports() returns
-  // these verbatim; tick()/state() resolve hardware_.motor(i)/state(i)
-  // through these, never through config_.left_port/right_port directly.
   uint32_t boundLeft_ = 0;
   uint32_t boundRight_ = 1;
 
-  // DIRECT/TWIST-arm state.
+  // DIRECT/TWIST-arm state. UNCHANGED.
   float v_x_ = 0.0f;      // [mm/s]
   float v_y_ = 0.0f;      // [mm/s] always ignored -- see setTwist()
   float omega_ = 0.0f;    // [rad/s]
 
-  // DIRECT/WHEELS-arm state.
+  // DIRECT/WHEELS-arm state. UNCHANGED.
   float wheelTargetLeft_ = 0.0f;    // [mm/s]
   float wheelTargetRight_ = 0.0f;   // [mm/s]
 
-  // Last pass's post-governor commanded wheel velocities, surfaced via
-  // state()/TLM `cmd=` (measured vel= vs the setpoint the velocity PID
-  // chases). Written by tick(); read by the const state().
+  // Last pass's post-governor commanded wheel velocities -- state()/TLM
+  // cmd=. UNCHANGED.
   float cmdVel_[2] = {0.0f, 0.0f};   // [mm/s]
 
-  // Executor's remaining translation, cached each tick for state()/rem=.
+  // Remaining master-DOF distance in the live plan [mm] -- state()/rem=.
+  // 0.0f for a pivot (no established v2 convention for a pivot's own
+  // "remaining translation" -- see drivetrain.cpp's own tick() comment).
   float remainingLinear_ = 0.0f;   // [mm]
 
-  // Measured per-wheel acceleration, EMA-filtered in firmware (see
-  // updateAccelEma()'s doc comment in drivetrain.cpp) -- surfaced via
-  // state()/TLM `acc=`. Indexed [0]=bound left wheel, [1]=bound right.
   void updateAccelEma(uint32_t now, int wheel, const msg::MotorState& obs);
   float accelEma_[2] = {0.0f, 0.0f};        // [mm/s^2]
   float lastVelSample_[2] = {0.0f, 0.0f};   // [mm/s] last DISTINCT velocity sample
@@ -340,9 +349,6 @@ class Drivetrain {
   msg::MotorCapabilities leftMotorCaps_ = {};
   msg::MotorCapabilities rightMotorCaps_ = {};
 
-  // Authority state (sprint 079, unchanged shape). No live producer posts
-  // an authority-steal (`standby=true` alone) this sprint -- kept for API
-  // symmetry/a future revival, exactly as it already was pre-094.
   bool active_ = false;
 };
 

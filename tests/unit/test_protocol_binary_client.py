@@ -647,13 +647,16 @@ def test_timed_sends_segment_envelope_matching_legacy_translate():
         result = proto.timed(200, 200, 1000)
 
     # handleT() transcription (legacy_translate.segment_for_timed): v=200,
-    # distance = 200 * (1000/1000) = 200.
+    # arc_length = 200 * (1000/1000) = 200 (100-007, THE CUTOVER: a v2
+    # primitive now, not the retired `distance` field).
     assert result == ["OK drive l=200 r=200 ms=1000 q=2 rem=50.0"]
     sent = fake.sent_envelopes[0]
     assert sent.WhichOneof("cmd") == "segment"
-    assert sent.segment.distance == pytest.approx(200.0)
+    assert sent.segment.arc_length == pytest.approx(200.0)
+    assert sent.segment.primitive is True
     reference = envelope_pb2.CommandEnvelope(corr_id=sent.corr_id)
-    reference.segment.distance = 200.0
+    reference.segment.arc_length = 200.0
+    reference.segment.primitive = True
     assert sent.SerializeToString() == reference.SerializeToString()
     _assert_wire_bytes_match(fake, 0, reference)
 
@@ -671,13 +674,16 @@ def test_distance_sends_segment_envelope_matching_legacy_translate():
         result = proto.distance(-200, -200, 500)
 
     # handleD() transcription (legacy_translate.segment_for_distance): v=-200
-    # (< 0) -> sign=-1, distance = -1 * 500 = -500.
+    # (< 0) -> sign=-1, arc_length = -1 * 500 = -500 (100-007, THE CUTOVER:
+    # a v2 primitive now, not the retired `distance` field).
     assert result == ["OK drive l=-200 r=-200 mm=500 q=1 rem=0.0"]
     sent = fake.sent_envelopes[0]
     assert sent.WhichOneof("cmd") == "segment"
-    assert sent.segment.distance == pytest.approx(-500.0)
+    assert sent.segment.arc_length == pytest.approx(-500.0)
+    assert sent.segment.primitive is True
     reference = envelope_pb2.CommandEnvelope(corr_id=sent.corr_id)
-    reference.segment.distance = -500.0
+    reference.segment.arc_length = -500.0
+    reference.segment.primitive = True
     assert sent.SerializeToString() == reference.SerializeToString()
     _assert_wire_bytes_match(fake, 0, reference)
 

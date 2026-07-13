@@ -85,6 +85,23 @@
   "vel_filt": 0.3,
   "heading_kp": 6.0,
   "heading_kd": 0.0,
+  "v_wheel_max": 620.0,
+  "steer_headroom": 20.0,
+  "wheel_step_max": 150.0,
+  "track_k_s": 2.0,
+  "track_k_theta": 6.0,
+  "track_k_cross": 1.5e-5,
+  "trim_v_max": 120.0,
+  "trim_omega_max": 2.0,
+  "replan_err_pos": 40.0,
+  "replan_err_theta": 0.15,
+  "replan_hold": 0.2,
+  "replan_min_period": 0.3,
+  "replan_max": 3.0,
+  "handoff_tol_pos": 40.0,
+  "handoff_tol_v": 0.14,
+  "arrive_vel_tol": 15.0,
+  "arrive_dwell": 0.15,
   "sync": 1.0,
   "turn_gate": 35,
   "yaw_rate_max": 70,
@@ -94,6 +111,7 @@
   "_vel_ki_note": "kept 0.0018 in the 2026-07-11 session; motion_control.ipynb then showed the loop is FF-dominated with 40-50% step overshoot and weak steady-state correction -- a feedback-dominant retune (kp/ki up, acceptance via motion_control.ipynb) is the open next step.",
   "_vel_gains_note": "2026-07-12 RING-TUNED on the stand (live SET, step-response method): vel_kp 0.0018->0.0014, vel_ki 0.008->0.005, vel_kaw 15->20. The 0.0018 loop had a ~140 mm/s overshoot RESONANCE (+24..+33% on a velocity step) that the heading loop drove the wheels straight into (over-drive to 1.5x ceiling), producing the trajectory ringing. kp=0.0014 halves the step overshoot to ~+11%; endpoint stays good (full grid mean 0.40deg, 95% within +/-1deg, worst cells -30@384 -1.75 and 180@70 -1.05 -- a small, stakeholder-accepted trade vs the pristine 0.0018 loop's 100%/0.59deg for the smoother trajectory). kp=0.0010 was too soft (endpoint max 1.4deg). The clean 'both' fix -- keep 0.0018 AND clamp the heading-loop output to the yaw ceiling so it stops over-driving the wheels into this ~140mm/s resonance -- is deferred (see clasi/issues/heading-loop-output-clamp-and-velocity-resonance.md). kff=1/740 and vel_filt=0.3 unchanged. Method: tests/bench velocity-step response at 70/140/250 mm/s on the stand.",
   "_vel_filt_note": "kept 0.3: raising to 0.6 (2026-07-11) cut measurement lag but pushed step overshoot to ~11% and turns to +6/+9/+7 -- the decel-lag surplus just became an overshoot surplus. 0.3 is the verified optimum of that trade with the current gains.",
-  "_heading_gains_note": "2026-07-12 BENCH-TUNED (sprint 098-003, playfield over radio): heading_kp = 6.0, heading_kd = 0.0 (pure P). Full angle x speed grid (30/90/180/360 deg x 70..384 mm/s, both directions) lands 100% within +/-1 deg, max |error| 0.84 deg, 90-deg full-ceiling ridge eliminated (was +8..+10 deg open-loop). heading_kp started at 3.0 (98-001) which left a residual ~1-2 deg full-ceiling UNDERSHOOT: a proportional-control steady-state error against terminal motor stiction (near target the P command falls below the wheel deadband and stalls short); kp=6.0 overcomes stiction closer in. Zero commanded terminal reversal (no encoder-wedge trigger). Per-robot tunable: a future integral term would null the last <1 deg entirely -- see clasi/issues/heading-loop-cascade-control-turns-terminate-on-target.md. Re-verify with tests/bench/turn_sweep.py --relay --both."
+  "_heading_gains_note": "2026-07-12 BENCH-TUNED (sprint 098-003, playfield over radio): heading_kp = 6.0, heading_kd = 0.0 (pure P). Full angle x speed grid (30/90/180/360 deg x 70..384 mm/s, both directions) lands 100% within +/-1 deg, max |error| 0.84 deg, 90-deg full-ceiling ridge eliminated (was +8..+10 deg open-loop). heading_kp started at 3.0 (98-001) which left a residual ~1-2 deg full-ceiling UNDERSHOOT: a proportional-control steady-state error against terminal motor stiction (near target the P command falls below the wheel deadband and stalls short); kp=6.0 overcomes stiction closer in. Zero commanded terminal reversal (no encoder-wedge trigger). Per-robot tunable: a future integral term would null the last <1 deg entirely -- see clasi/issues/heading-loop-cascade-control-turns-terminate-on-target.md. Re-verify with tests/bench/turn_sweep.py --relay --both.",
+  "_drive_limits_note": "2026-07-12 (sprint 100-001, motion-stack-v2 M1): starting values, not yet bench-tuned, for the new source/drive/ subsystem's Drive::Limits/tracker/policy tunables (PlannerConfig fields 15-31). v_wheel_max=620.0 is the one BENCH-MEASURED exception (mm/s plateau, matching the 2026-07-11 duty-saturated measurements already cited by _vel_kff_note -- NOT a starting guess). track_k_s/track_k_theta/track_k_cross/trim_v_max carry the issue's own Kanayama trim-law table verbatim (2.0/6.0/1.5e-5/120.0 -- track_k_theta=6.0 additionally matches heading_kp's own sprint-098 hardware-proven value, since both are the same physical outer-loop gain generalized). trim_omega_max=2.0 is the issue table's PIVOT-mode value ('1.0 arc / 2.0 pivot [rad/s]'); the lower arc-mode ceiling is left to the tracker's own per-mode logic (ticket 004), not a second wire field -- flagged. replan_err_pos=40.0/handoff_tol_pos=40.0 approximate BOTH the along-track envelope's flat term (40mm) and the cross-track bound (35mm/30mm respectively) with one shared value each -- flagged. handoff_tol_v=0.14 is the issue's flying-handoff formula's own velocity-coupling slope ('e_along <= 0.14*vExit + 40mm'), dimensionally a time constant despite the '_v' name -- flagged. steer_headroom=20.0/wheel_step_max=150.0 have no issue-table anchor at all; picked conservative placeholders (steer_headroom mirrors the old RobotConfig.steerHeadroom starting value; wheel_step_max is ~1.25x trim_v_max) -- flagged. replan_hold=0.2/replan_min_period=0.3/replan_max=3.0/replan_err_theta=0.15/arrive_vel_tol=15.0/arrive_dwell=0.15 are direct transcriptions of the issue's replan-envelope/terminal tables. See ticket 001's completion notes for the full field-by-field derivation; M11 (bench: arc_sweep grids) re-tunes all of these against the real plant."
  }
 }

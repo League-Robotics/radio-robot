@@ -18,6 +18,15 @@ defaultMotionConfig() used to hardcode) and that heading_kp/heading_kd
 resolve to the tovez.json starting values (3.0/0.0) for the active robot
 config -- this ticket's own acceptance criteria.
 
+Extended by ticket 100-001 (motion-stack-v2 M1): drive_limits_for_config()'s
+17-field mapping for PlannerConfig's new fields 15-31 (Drive::Limits' wire/
+config source, architecture-update.md M1/Decision 2) -- present-in-JSON
+(tovez.json's real values, including the one bench-measured exception,
+v_wheel_max) and absent-from-JSON/fallback-default cases, mirroring
+test_heading_gains_for_config_reads_tovez_json()/
+test_heading_gains_for_config_falls_back_to_firmware_defaults()'s exact
+shape.
+
 Mirrors tests/sim/unit/test_gen_boot_config_fwd_sign.py's exact in-process
 pattern (invokes the generator module directly rather than shelling out) and
 is placed under tests/sim/unit/ for the same reason that file gives: this is
@@ -37,6 +46,7 @@ factory function returning the same msg::PlannerConfig type).
 """
 
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -61,6 +71,32 @@ _EXPECTED_MOTION_LIMITS = {
     "j_max": 5000.0,         # [mm/s^3]
     "yaw_jerk_max": 100.0,   # [rad/s^3]
 }
+
+
+# The 17 Drive::Limits tunables (100-001) -- field name -> (setter, tovez
+# value, firmware-default constant name). tovez.json's real values (see
+# data/robots/tovez.json's control block and its own _drive_limits_note)
+# EQUAL the firmware defaults for every field except v_wheel_max (the one
+# bench-MEASURED exception -- 620.0 vs the generic 350.0 fallback).
+_DRIVE_LIMIT_FIELDS = [
+    ("v_wheel_max",       "setVWheelMax",       620.0,  "V_WHEEL_MAX_DEFAULT"),
+    ("steer_headroom",    "setSteerHeadroom",   20.0,   "STEER_HEADROOM_DEFAULT"),
+    ("wheel_step_max",    "setWheelStepMax",    150.0,  "WHEEL_STEP_MAX_DEFAULT"),
+    ("track_k_s",         "setTrackKS",         2.0,    "TRACK_K_S_DEFAULT"),
+    ("track_k_theta",     "setTrackKTheta",     6.0,    "TRACK_K_THETA_DEFAULT"),
+    ("track_k_cross",     "setTrackKCross",     1.5e-5, "TRACK_K_CROSS_DEFAULT"),
+    ("trim_v_max",        "setTrimVMax",        120.0,  "TRIM_V_MAX_DEFAULT"),
+    ("trim_omega_max",    "setTrimOmegaMax",    2.0,    "TRIM_OMEGA_MAX_DEFAULT"),
+    ("replan_err_pos",    "setReplanErrPos",    40.0,   "REPLAN_ERR_POS_DEFAULT"),
+    ("replan_err_theta",  "setReplanErrTheta",  0.15,   "REPLAN_ERR_THETA_DEFAULT"),
+    ("replan_hold",       "setReplanHold",      0.2,    "REPLAN_HOLD_DEFAULT"),
+    ("replan_min_period", "setReplanMinPeriod", 0.3,    "REPLAN_MIN_PERIOD_DEFAULT"),
+    ("replan_max",        "setReplanMax",       3.0,    "REPLAN_MAX_DEFAULT"),
+    ("handoff_tol_pos",   "setHandoffTolPos",   40.0,   "HANDOFF_TOL_POS_DEFAULT"),
+    ("handoff_tol_v",     "setHandoffTolV",     0.14,   "HANDOFF_TOL_V_DEFAULT"),
+    ("arrive_vel_tol",    "setArriveVelTol",    15.0,   "ARRIVE_VEL_TOL_DEFAULT"),
+    ("arrive_dwell",      "setArriveDwell",     0.15,   "ARRIVE_DWELL_DEFAULT"),
+]
 
 
 def _motion_limit_setter_lines() -> list[str]:
@@ -117,13 +153,15 @@ def test_heading_gains_for_config_reads_arbitrary_json_values():
     assert kd == 1.25
 
 
-def test_generate_emits_default_planner_config_with_unchanged_motion_limits():
-    """generate()'s output gains Config::defaultPlannerConfig(), carrying the
-    seven motion-limit fields through with the EXACT pre-ticket hardcoded
-    values (the regression pin against a silent value change during the
-    move off main.cpp) plus tovez.json's real heading gains -- while the
-    pre-existing generated functions (motor configs, drivetrain config, OTOS
-    boot config) remain present and undisturbed."""
+def test_generate_emits_default_planner_config_with_config_motion_limits():
+    """generate()'s output gains Config::defaultPlannerConfig(). Five of the
+    seven motion-limit fields (a_max/a_decel/v_body_max/j_max/yaw_jerk_max)
+    stay firmware defaults; the two rotational-profile ceilings
+    (yaw_rate_max/yaw_acc_max) now come from tovez.json's control block
+    (ticket 100-014, deg->rad) -- control.yaw_rate_max=70 deg/s and
+    control.max_rot_accel_dps2=600 deg/s^2 -- plus tovez.json's real heading
+    gains, while the pre-existing generated functions (motor configs,
+    drivetrain config, OTOS boot config) remain present and undisturbed."""
     cfg = json.loads(_TOVEZ_JSON.read_text())
     content = gbc.generate(cfg, "data/robots/tovez.json")
 
@@ -135,8 +173,17 @@ def test_generate_emits_default_planner_config_with_unchanged_motion_limits():
     # New (098-001): the PlannerConfig boot-default generator function.
     assert "msg::PlannerConfig defaultPlannerConfig()" in content
 
-    for line in _motion_limit_setter_lines():
+    # Five firmware-default motion limits, unchanged.
+    for field in ("a_max", "a_decel", "v_body_max", "j_max", "yaw_jerk_max"):
+        setter = {"a_max": "setAMax", "a_decel": "setADecel",
+                  "v_body_max": "setVBodyMax", "j_max": "setJMax",
+                  "yaw_jerk_max": "setYawJerkMax"}[field]
+        line = f"cfg.{setter}({gbc._f(_EXPECTED_MOTION_LIMITS[field])});"
         assert line in content, f"missing/changed motion-limit setter: {line}"
+
+    # Two rotational-profile ceilings now read from tovez.json control (100-014).
+    assert f"cfg.setYawRateMax({gbc._f(math.radians(70.0))});" in content
+    assert f"cfg.setYawAccMax({gbc._f(math.radians(600.0))});" in content
 
     # heading_kp/heading_kd resolve to tovez.json's real bench-tuned values
     # (6.0/0.0, sprint 098-003) for the active robot config.
@@ -145,14 +192,12 @@ def test_generate_emits_default_planner_config_with_unchanged_motion_limits():
 
 
 def test_generate_motion_limits_unchanged_with_no_robot_config():
-    """The seven motion-limit fields are firmware defaults, NOT robot-JSON-
-    configurable (unlike heading_kp/heading_kd) -- they must be identical
-    whether or not a robot config is found, exactly reproducing the
-    pre-ticket main.cpp::defaultMotionConfig() behavior (which never read
-    any robot JSON at all). heading_kp/heading_kd fall back to the firmware
-    defaults (3.0/0.0) -- the conservative starting values for an
-    uncharacterized robot; tovez.json overrides kp to its bench-tuned 6.0
-    (098-003), so the firmware default deliberately no longer matches it."""
+    """With NO robot config, all seven motion-limit fields take their firmware
+    defaults -- including yaw_rate_max/yaw_acc_max, which ARE robot-JSON-
+    configurable as of ticket 100-014 (control.yaw_rate_max/max_rot_accel_dps2)
+    but fall back to the 6.0 rad/s / 20.0 rad/s^2 firmware defaults when the
+    keys are absent, exactly the same fall-back discipline as heading_kp/
+    heading_kd (which fall back to 3.0/0.0 here)."""
     content = gbc.generate({}, "(firmware defaults)")
 
     assert "msg::PlannerConfig defaultPlannerConfig()" in content
@@ -161,6 +206,133 @@ def test_generate_motion_limits_unchanged_with_no_robot_config():
 
     assert "cfg.setHeadingKp(3.0f);" in content
     assert "cfg.setHeadingKd(0.0f);" in content
+
+
+# ---------------------------------------------------------------------------
+# 100-014: profile_rot_limits_for_config() -- the rotational-profile ceiling
+# (yaw_rate_max/yaw_acc_max) now read from control.* (deg->rad), not hardcoded.
+# ---------------------------------------------------------------------------
+
+def test_profile_rot_limits_for_config_reads_tovez_json():
+    """profile_rot_limits_for_config() reads tovez.json's control.yaw_rate_max
+    [deg/s] and control.max_rot_accel_dps2 [deg/s^2], converting to rad. Before
+    100-014 these were silently hardcoded to 6.0 rad/s / 20.0 rad/s^2, ignoring
+    the robot JSON and driving pivots at ~500 mm/s (unstable overshoot on the
+    latent real plant); tovez's 70 deg/s -> ~78 mm/s at the wheels."""
+    cfg = json.loads(_TOVEZ_JSON.read_text())
+
+    yaw_rate_max, yaw_acc_max = gbc.profile_rot_limits_for_config(cfg)
+
+    assert yaw_rate_max == math.radians(70.0)     # control.yaw_rate_max [deg/s]
+    assert yaw_acc_max == math.radians(600.0)     # control.max_rot_accel_dps2 [deg/s^2]
+
+
+def test_profile_rot_limits_for_config_falls_back_to_firmware_defaults():
+    """With no control.yaw_rate_max/max_rot_accel_dps2 (or no robot config),
+    both fall back to the rad-valued firmware defaults."""
+    yaw_rate_max, yaw_acc_max = gbc.profile_rot_limits_for_config({})
+
+    assert yaw_rate_max == gbc.YAW_RATE_MAX_DEFAULT == 6.0
+    assert yaw_acc_max == gbc.YAW_ACC_MAX_DEFAULT == 20.0
+
+
+def test_profile_rot_limits_for_config_reads_arbitrary_json_values():
+    """Proves the mapping genuinely reads from the JSON (deg->rad), not merely
+    returning the default."""
+    cfg = {"control": {"yaw_rate_max": 90.0, "max_rot_accel_dps2": 360.0}}
+
+    yaw_rate_max, yaw_acc_max = gbc.profile_rot_limits_for_config(cfg)
+
+    assert yaw_rate_max == math.radians(90.0)
+    assert yaw_acc_max == math.radians(360.0)
+
+
+# ---------------------------------------------------------------------------
+# 100-001 (motion-stack-v2 M1): drive_limits_for_config()'s 17-field mapping.
+# ---------------------------------------------------------------------------
+
+def test_drive_limits_for_config_reads_tovez_json():
+    """drive_limits_for_config() reads tovez.json's real control.* starting
+    values (see _DRIVE_LIMIT_FIELDS above) -- including v_wheel_max, the one
+    BENCH-MEASURED exception (620.0, not the generic 350.0 firmware
+    default)."""
+    cfg = json.loads(_TOVEZ_JSON.read_text())
+
+    values = gbc.drive_limits_for_config(cfg)
+
+    for (field, _setter, expected, _default_name), actual in zip(_DRIVE_LIMIT_FIELDS, values):
+        assert actual == expected, f"{field}: expected {expected}, got {actual}"
+
+
+def test_drive_limits_for_config_falls_back_to_firmware_defaults():
+    """With no control.* keys in the robot JSON (or no robot config at all),
+    every field falls back to its firmware default constant -- matching
+    every other mapping's fall-back-to-firmware-default behavior in this
+    generator."""
+    values = gbc.drive_limits_for_config({})
+
+    for (field, _setter, _tovez_value, default_name), actual in zip(_DRIVE_LIMIT_FIELDS, values):
+        expected_default = getattr(gbc, default_name)
+        assert actual == expected_default, f"{field}: expected default {expected_default}, got {actual}"
+
+
+def test_drive_limits_for_config_reads_arbitrary_json_values():
+    """Proves the mapping genuinely reads from the JSON (not merely always
+    returning the default, which would be indistinguishable from the
+    fallback test above for the 16 fields whose tovez.json value happens to
+    equal the firmware default)."""
+    cfg = {
+        "control": {
+            "v_wheel_max": 555.0,
+            "steer_headroom": 33.0,
+            "wheel_step_max": 111.0,
+            "track_k_s": 1.1,
+            "track_k_theta": 5.5,
+            "track_k_cross": 2.5e-5,
+            "trim_v_max": 99.0,
+            "trim_omega_max": 1.5,
+            "replan_err_pos": 44.0,
+            "replan_err_theta": 0.22,
+            "replan_hold": 0.25,
+            "replan_min_period": 0.35,
+            "replan_max": 4.0,
+            "handoff_tol_pos": 33.0,
+            "handoff_tol_v": 0.2,
+            "arrive_vel_tol": 12.0,
+            "arrive_dwell": 0.1,
+        }
+    }
+
+    values = gbc.drive_limits_for_config(cfg)
+
+    expected = tuple(cfg["control"][field] for field, *_rest in _DRIVE_LIMIT_FIELDS)
+    assert values == expected
+
+
+def test_generate_emits_default_planner_config_with_drive_limits():
+    """generate()'s output gains the 17 Drive::Limits setter calls (100-001)
+    inside defaultPlannerConfig(), resolving to tovez.json's real starting
+    values -- additive to the pre-existing motion-limit/heading-gain
+    setters (test_generate_emits_default_planner_config_with_unchanged_motion_limits
+    above)."""
+    cfg = json.loads(_TOVEZ_JSON.read_text())
+    content = gbc.generate(cfg, "data/robots/tovez.json")
+
+    for field, setter, expected, _default_name in _DRIVE_LIMIT_FIELDS:
+        line = f"cfg.{setter}({gbc._f(expected)});"
+        assert line in content, f"missing/changed {field} setter: {line}"
+
+
+def test_generate_drive_limits_fall_back_with_no_robot_config():
+    """With no robot config found, every Drive::Limits setter emits its
+    firmware-default literal (mirrors
+    test_generate_motion_limits_unchanged_with_no_robot_config's shape)."""
+    content = gbc.generate({}, "(firmware defaults)")
+
+    for field, setter, _tovez_value, default_name in _DRIVE_LIMIT_FIELDS:
+        default_value = getattr(gbc, default_name)
+        line = f"cfg.{setter}({gbc._f(default_value)});"
+        assert line in content, f"missing/changed {field} default setter: {line}"
 
 
 if __name__ == "__main__":

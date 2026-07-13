@@ -165,9 +165,9 @@ class Sim:
     def route_no_tick(self, line: str, channel: int = CHANNEL_SERIAL) -> str:
         """Like command_on(), but skips the trailing Rt::MainLoop::tick()
         replay (095-007, test-only -- sim_route_no_tick()). Lets a test peek
-        bb.segmentIn/bb.replaceIn's raw just-posted Motion::Segment (via
+        bb.segmentIn/bb.replaceIn's raw just-ADMITTED Drive::Goal (via
         peek_segment_in()/peek_replace_in() below) BEFORE Drivetrain::tick()
-        drains it into its own ring_/executor_."""
+        drains it into its own ring_."""
         buf = ctypes.create_string_buffer(_REPLY_BUF_SIZE)
         n = self._lib.sim_route_no_tick(self._h, line.encode(), ctypes.c_int(channel),
                                          buf, _REPLY_BUF_SIZE)
@@ -175,42 +175,66 @@ class Sim:
             return ""
         return buf.raw[:n].decode(errors="replace")
 
-    _SEGMENT_FIELDS = (
-        "distance", "direction", "final_heading", "speed_max", "accel_max", "jerk_max",
-        "yaw_rate_max", "yaw_accel_max", "yaw_jerk_max", "time", "v", "omega",
-    )
+    # (100-007, THE CUTOVER) Drive::Goal's own declared field order
+    # (source/drive/drivetrain.h) -- retyped from Motion::Segment's 12-field
+    # +stream shape.
+    _GOAL_FIELDS = ("arc_length", "delta_heading", "exit_speed")
+
+    # (100-008) Rt::MoverRequest's own declared field order (source/runtime/
+    # commands.h) -- replaceIn's own retype away from Drive::Goal (MOVER is
+    # the `replace` arm's exclusive meaning now -- see blackboard.h/
+    # commands.h's doc comments). `v`/`omega` are MoverRequest.target's
+    # v_x/omega components (v_y is always 0.0f, no holonomic drivetrain).
+    _MOVER_FIELDS = ("v", "omega", "deadman")
 
     def peek_segment_in(self, idx: int = 0) -> dict | None:
-        """Non-destructive read of bb.segmentIn[idx] (095-007, test-only --
-        sim_peek_segment_in()). Returns a dict keyed by Motion::Segment's
-        own field names (Motion::Segment's OWN spelling, e.g. `final_heading`
-        not `finalHeading`, to match the wire message's field names 1:1 for
-        a direct field-by-field translation check) plus `stream`, or None if
-        no segment is queued at that position."""
-        out12 = (ctypes.c_float * 12)()
-        stream_out = ctypes.c_int()
+        """Non-destructive read of bb.segmentIn[idx] (100-007, THE CUTOVER
+        -- sim_peek_segment_in()). Returns a dict keyed by Drive::Goal's own
+        field names (arc_length/delta_heading/exit_speed), or None if no
+        Goal is queued at that position."""
+        out3 = (ctypes.c_float * 3)()
         present_out = ctypes.c_int()
-        self._lib.sim_peek_segment_in(self._h, ctypes.c_int(idx), out12,
-                                       ctypes.byref(stream_out), ctypes.byref(present_out))
+        self._lib.sim_peek_segment_in(self._h, ctypes.c_int(idx), out3,
+                                       ctypes.byref(present_out))
         if not present_out.value:
             return None
-        result = dict(zip(self._SEGMENT_FIELDS, (float(v) for v in out12)))
-        result["stream"] = bool(stream_out.value)
-        return result
+        return dict(zip(self._GOAL_FIELDS, (float(v) for v in out3)))
 
     def peek_replace_in(self) -> dict | None:
-        """Non-destructive read of bb.replaceIn (095-007, test-only --
-        sim_peek_replace_in()). Same shape as peek_segment_in()."""
-        out12 = (ctypes.c_float * 12)()
-        stream_out = ctypes.c_int()
+        """Non-destructive read of bb.replaceIn (100-008 -- retyped to
+        Rt::MoverRequest, sim_peek_replace_in()). Returns a dict keyed by
+        MoverRequest's own field names (v/omega/deadman), or None if no
+        MoverRequest is pending."""
+        out3 = (ctypes.c_float * 3)()
         present_out = ctypes.c_int()
-        self._lib.sim_peek_replace_in(self._h, out12,
-                                       ctypes.byref(stream_out), ctypes.byref(present_out))
+        self._lib.sim_peek_replace_in(self._h, out3, ctypes.byref(present_out))
         if not present_out.value:
             return None
-        result = dict(zip(self._SEGMENT_FIELDS, (float(v) for v in out12)))
-        result["stream"] = bool(stream_out.value)
-        return result
+        return dict(zip(self._MOVER_FIELDS, (float(v) for v in out3)))
+
+    def chain_tail(self) -> dict:
+        """bb.chainTail (100-007, THE CUTOVER, test-only -- sim_get_chain_tail()):
+        the predicted world state at the end of everything currently
+        admitted -- x/y/heading/exit_speed/kappa."""
+        x, y, h, exit_speed, kappa = (ctypes.c_float() for _ in range(5))
+        self._lib.sim_get_chain_tail(self._h, ctypes.byref(x), ctypes.byref(y),
+                                      ctypes.byref(h), ctypes.byref(exit_speed),
+                                      ctypes.byref(kappa))
+        return {"x": x.value, "y": y.value, "h": h.value,
+                "exit_speed": exit_speed.value, "kappa": kappa.value}
+
+    def last_event(self) -> dict:
+        """bb.lastEvent (100-007, THE CUTOVER, test-only --
+        sim_get_last_event()): the most recent msg::EventNotify the adapter
+        populated on an ABORT_* -- seg_seq/status (Drive::Status ordinal)/
+        e_final_pos/e_final_theta."""
+        seg_seq = ctypes.c_uint32()
+        status = ctypes.c_int()
+        e_final_pos, e_final_theta = ctypes.c_float(), ctypes.c_float()
+        self._lib.sim_get_last_event(self._h, ctypes.byref(seg_seq), ctypes.byref(status),
+                                      ctypes.byref(e_final_pos), ctypes.byref(e_final_theta))
+        return {"seg_seq": seg_seq.value, "status": status.value,
+                "e_final_pos": e_final_pos.value, "e_final_theta": e_final_theta.value}
 
     def reply_store_len(self, channel: int) -> int:
         """Read a channel's CURRENT reply-store length without draining or
@@ -239,21 +263,37 @@ class Sim:
             return ""
         return buf.raw[:n].decode(errors="replace")
 
-    def post_segment(self, distance: float, direction: float, final_heading: float,
-                      speed_max: float = 0.0, accel_max: float = 0.0, jerk_max: float = 0.0,
-                      yaw_rate_max: float = 0.0, yaw_accel_max: float = 0.0,
-                      yaw_jerk_max: float = 0.0) -> bool:
-        """Post one Motion::Segment directly to bb.segmentIn (094-005,
-        test-only -- sim_post_segment()), bypassing the wire entirely ahead
-        of 094-006's `MOVE` verb. Angle args (direction/final_heading) are
-        RADIANS -- Motion::Segment's own native unit (segment.h), not the
-        wire's eventual centidegrees. Returns True if segmentIn accepted it
-        (False only if segmentIn is already at its 8-slot cap)."""
+    def drain_reply_store(self, channel: int) -> str:
+        """DESTRUCTIVE read of one channel's CURRENT ReplyStore content (097,
+        test-only -- sim_drain_reply_store()): returns exactly what
+        peek_reply_store() would, then resets (clears) THAT ONE channel's
+        store. Companion to peek_reply_store(): a test collecting several
+        tick_for() passes' worth of periodic frames (100-009: a MotionTrace +
+        Telemetry pair per pass, once StreamControl.trace is armed) drains
+        between reads so ReplyStore's fixed-size, no-wraparound buffer
+        (sim_api.cpp's own ReplyStore struct) never silently overflows and
+        freezes mid-run.
+        """
+        buf = ctypes.create_string_buffer(_REPLY_BUF_SIZE)
+        n = self._lib.sim_drain_reply_store(self._h, ctypes.c_int(channel), buf, _REPLY_BUF_SIZE)
+        if n <= 0:
+            return ""
+        return buf.raw[:n].decode(errors="replace")
+
+    def post_segment(self, arc_length: float, delta_heading: float = 0.0,
+                      exit_speed: float = 0.0) -> bool:
+        """Post one Drive::Goal directly to bb.segmentIn (100-007, THE
+        CUTOVER -- sim_post_segment()), BYPASSING wire admission entirely
+        (no admit() check, no bb.chainTail advance -- use command()/
+        command_on() with a real `segment`/`replace` CommandEnvelope to
+        exercise admission). Angle arg (delta_heading) is RADIANS --
+        Drive::Goal's own native unit (source/drive/drivetrain.h). Returns
+        True if segmentIn accepted it (False only if segmentIn is already
+        at its 8-slot cap)."""
         accepted = self._lib.sim_post_segment(
             self._h,
-            ctypes.c_float(distance), ctypes.c_float(direction), ctypes.c_float(final_heading),
-            ctypes.c_float(speed_max), ctypes.c_float(accel_max), ctypes.c_float(jerk_max),
-            ctypes.c_float(yaw_rate_max), ctypes.c_float(yaw_accel_max), ctypes.c_float(yaw_jerk_max),
+            ctypes.c_float(arc_length), ctypes.c_float(delta_heading),
+            ctypes.c_float(exit_speed),
         )
         return bool(accepted)
 
@@ -442,30 +482,46 @@ class Sim:
             ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
         lib.sim_peek_reply_store.restype = ctypes.c_int
 
+        # sim_drain_reply_store (097, test-only) -- sim_peek_reply_store's
+        # argtypes exactly (same signature; DESTRUCTIVE instead of peek).
+        lib.sim_drain_reply_store.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+        lib.sim_drain_reply_store.restype = ctypes.c_int
+
         # sim_route_no_tick (095-007, test-only) -- sim_command_on()'s
         # argtypes exactly (same signature, different behavior).
         lib.sim_route_no_tick.argtypes = [
             ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
         lib.sim_route_no_tick.restype = ctypes.c_int
 
-        # sim_peek_segment_in / sim_peek_replace_in (095-007, test-only) --
-        # non-destructive Motion::Segment reads.
+        # sim_peek_segment_in / sim_peek_replace_in (100-007, THE CUTOVER) --
+        # non-destructive Drive::Goal reads.
         lib.sim_peek_segment_in.argtypes = [
             ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_float),
-            ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
+            ctypes.POINTER(ctypes.c_int)]
         lib.sim_peek_segment_in.restype = None
 
         lib.sim_peek_replace_in.argtypes = [
-            ctypes.c_void_p, ctypes.POINTER(ctypes.c_float),
-            ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_int)]
         lib.sim_peek_replace_in.restype = None
 
         lib.sim_get_async_evts.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
         lib.sim_get_async_evts.restype = ctypes.c_int
 
-        # sim_post_segment (094-005, test-only) -- direct bb.segmentIn producer.
-        lib.sim_post_segment.argtypes = [ctypes.c_void_p] + [ctypes.c_float] * 9
+        # sim_post_segment (100-007, THE CUTOVER) -- direct bb.segmentIn
+        # Drive::Goal producer.
+        lib.sim_post_segment.argtypes = [ctypes.c_void_p] + [ctypes.c_float] * 3
         lib.sim_post_segment.restype = ctypes.c_int
+
+        # sim_get_chain_tail / sim_get_last_event (100-007, THE CUTOVER,
+        # test-only) -- bb.chainTail/bb.lastEvent peeks.
+        lib.sim_get_chain_tail.argtypes = [ctypes.c_void_p] + [ctypes.POINTER(ctypes.c_float)] * 5
+        lib.sim_get_chain_tail.restype = None
+
+        lib.sim_get_last_event.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float)]
+        lib.sim_get_last_event.restype = None
 
         # Ground truth (12) -- all no-arg float getters, plus two setters.
         for name in (

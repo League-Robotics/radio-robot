@@ -42,6 +42,7 @@ from __future__ import annotations
 import pytest
 
 from robot_radio.robot import legacy_translate
+from robot_radio.robot.pb2 import motion_pb2
 
 
 # ---------------------------------------------------------------------------
@@ -115,11 +116,16 @@ def test_wheel_targets_for_drive_is_a_direct_per_wheel_passthrough(v_left, v_rig
 def test_segment_for_timed_matches_handle_t_distance_computation(
     v_left, v_right, duration, expected_distance
 ):
+    """100-007, THE CUTOVER: segment_for_timed() now builds a v2 primitive
+    (arc_length, not the retired `distance` field) via segment_for_seg()."""
     seg = legacy_translate.segment_for_timed(v_left, v_right, duration)
-    assert seg.distance == pytest.approx(expected_distance)
-    # Every other field stays at its proto3 zero default (handleT() leaves
-    # Motion::Segment's speedMax/etc. at 0 -- "falls back to the executor's
-    # configured default").
+    assert seg.arc_length == pytest.approx(expected_distance)
+    assert seg.delta_heading == pytest.approx(0.0)
+    assert seg.exit_speed == pytest.approx(0.0)
+    assert seg.primitive is True
+    # Every retired field stays at its proto3 zero default -- segment_for_seg()
+    # never touches them.
+    assert seg.distance == pytest.approx(0.0)
     assert seg.direction == pytest.approx(0.0)
     assert seg.final_heading == pytest.approx(0.0)
     assert seg.speed_max == pytest.approx(0.0)
@@ -160,8 +166,14 @@ def test_segment_for_timed_matches_handle_t_distance_computation(
 def test_segment_for_distance_matches_handle_d_sign_computation(
     v_left, v_right, travel, expected_distance
 ):
+    """100-007, THE CUTOVER: segment_for_distance() now builds a v2
+    primitive (arc_length, not the retired `distance` field)."""
     seg = legacy_translate.segment_for_distance(v_left, v_right, travel)
-    assert seg.distance == pytest.approx(expected_distance)
+    assert seg.arc_length == pytest.approx(expected_distance)
+    assert seg.delta_heading == pytest.approx(0.0)
+    assert seg.exit_speed == pytest.approx(0.0)
+    assert seg.primitive is True
+    assert seg.distance == pytest.approx(0.0)
     assert seg.direction == pytest.approx(0.0)
     assert seg.final_heading == pytest.approx(0.0)
     assert seg.speed_max == pytest.approx(0.0)
@@ -190,12 +202,18 @@ _CDEG_TO_RAD = 3.14159265 / 18000.0
     [(9000,), (-4500,), (0,), (18000,), (-18000,)],
 )
 def test_segment_for_rt_matches_handle_rt_final_heading_computation(rel_angle):
+    """100-007, THE CUTOVER: segment_for_rt() now builds a v2 primitive
+    pivot (delta_heading, not the retired `final_heading` field) via
+    segment_for_seg()."""
     seg = legacy_translate.segment_for_rt(rel_angle)
-    assert seg.final_heading == pytest.approx(rel_angle * _CDEG_TO_RAD)
-    # Every other field stays at its proto3 zero default -- handleRT() never
-    # touches distance/direction/speedMax/etc.
+    assert seg.delta_heading == pytest.approx(rel_angle * _CDEG_TO_RAD)
+    assert seg.arc_length == pytest.approx(0.0)
+    assert seg.exit_speed == pytest.approx(0.0)
+    assert seg.primitive is True
+    # Every retired field stays at its proto3 zero default.
     assert seg.distance == pytest.approx(0.0)
     assert seg.direction == pytest.approx(0.0)
+    assert seg.final_heading == pytest.approx(0.0)
     assert seg.speed_max == pytest.approx(0.0)
     assert seg.stream is False
 
@@ -243,10 +261,13 @@ def test_segment_for_move_defaults_match_kvfloat_zero_sentinel():
 
 
 # ---------------------------------------------------------------------------
-# segment_for_mover() -- handleMover() (motion_commands.cpp): MOVER
-# <distance_mm> <direction_cdeg> <finalHeading_cdeg> [t=][v=][w=][a=][j=]
-# [wa=][wj=] -> Motion::Segment, REPLACE semantics: stream ALWAYS True;
-# v/omega SIGNED; speed_max=|v|, yaw_rate_max=|omega| (converted).
+# segment_for_mover() -- 100-008: MOVER's real v2 primitive builder --
+# Drive::Drivetrain::planVelocity()'s own (target, deadman) shape, wire-
+# carried on MotionSegment's time/v/omega arm + primitive=True. v/omega
+# SIGNED; distance/direction/final_heading/accel_max/jerk_max/
+# yaw_accel_max/yaw_jerk_max/speed_max/yaw_rate_max/stream are all either
+# vestigial-but-accepted (kept for signature stability) or simply no longer
+# written -- see segment_for_mover()'s own docstring.
 # ---------------------------------------------------------------------------
 
 
@@ -254,81 +275,96 @@ def test_segment_for_move_defaults_match_kvfloat_zero_sentinel():
     ("v", "omega"),
     [(300.0, 4500.0), (-300.0, -4500.0), (0.0, 0.0), (-150.0, 2000.0)],
 )
-def test_segment_for_mover_speed_max_and_yaw_rate_max_are_absolute_value(v, omega):
+def test_segment_for_mover_is_a_v2_primitive_with_time_v_omega(v, omega):
     seg = legacy_translate.segment_for_mover(0, 0, 0, time=400, v=v, omega=omega)
+    assert seg.primitive is True
+    assert seg.time == pytest.approx(400.0)
     assert seg.v == pytest.approx(v)
     assert seg.omega == pytest.approx(omega * _CDEG_TO_RAD)
-    # handleMover(): seg.speedMax = fabsf(v); seg.yawRateMax = fabsf(w) * kCdegToRad;
-    assert seg.speed_max == pytest.approx(abs(v))
-    assert seg.yaw_rate_max == pytest.approx(abs(omega) * _CDEG_TO_RAD)
-    assert seg.time == pytest.approx(400.0)
 
 
-def test_segment_for_mover_stream_is_always_true():
-    """handleMover()'s own unconditional ``seg.stream = true;`` -- unlike
-    MOVE's caller-controlled s=1 kv, MOVER is always a streaming segment
-    (the deadman-velocity teleop shape), even with every kwarg left at its
-    default."""
-    seg = legacy_translate.segment_for_mover(0, 0, 0)
-    assert seg.stream is True
+def test_segment_for_mover_retired_fields_are_never_written():
+    """The retired per-segment shape's own fields (distance/direction/
+    final_heading/speed_max/accel_max/jerk_max/yaw_rate_max/yaw_accel_max/
+    yaw_jerk_max/stream) all stay at their proto3 zero/false default --
+    segment_for_mover()'s signature still ACCEPTS distance/direction/
+    final_heading/accel_max/jerk_max/yaw_accel_max/yaw_jerk_max (so real
+    callers like envelope_for_mover()'s `MOVER <distance> <direction>
+    <finalHeading> [a=][j=][wa=][wj=]` need no change) but none of them
+    reach the wire message any more -- the v2 primitive shape has no
+    per-call override/goal fields at all (the same posture
+    segment_for_seg()'s own callers already have)."""
+    seg = legacy_translate.segment_for_mover(
+        500, 9000, -4500, time=400, v=250.0, accel_max=800.0, jerk_max=5000.0,
+        omega=4500.0, yaw_accel_max=100000.0, yaw_jerk_max=200000.0)
+    assert seg.distance == pytest.approx(0.0)
+    assert seg.direction == pytest.approx(0.0)
+    assert seg.final_heading == pytest.approx(0.0)
+    assert seg.speed_max == pytest.approx(0.0)
+    assert seg.accel_max == pytest.approx(0.0)
+    assert seg.jerk_max == pytest.approx(0.0)
+    assert seg.yaw_rate_max == pytest.approx(0.0)
+    assert seg.yaw_accel_max == pytest.approx(0.0)
+    assert seg.yaw_jerk_max == pytest.approx(0.0)
+    assert seg.arc_length == pytest.approx(0.0)
+    assert seg.delta_heading == pytest.approx(0.0)
+    assert seg.exit_speed == pytest.approx(0.0)
+    assert seg.stream is False
 
 
-def test_segment_for_mover_distance_direction_final_heading_pass_through():
-    seg = legacy_translate.segment_for_mover(500, 9000, -4500, v=0.0, omega=0.0)
-    assert seg.distance == pytest.approx(500.0)
-    assert seg.direction == pytest.approx(9000 * _CDEG_TO_RAD)
-    assert seg.final_heading == pytest.approx(-4500 * _CDEG_TO_RAD)
+def test_segment_for_mover_wire_shape_is_exactly_time_v_omega_primitive():
+    """AC (100-008): the MOVER wire shape is exactly time/v/omega +
+    primitive=true -- no new/different field carries the request. Verified
+    by byte-for-byte comparison against a hand-built MotionSegment setting
+    ONLY those four fields, proving segment_for_mover() introduces no wire
+    schema change of its own (grep-verifiable: this ticket adds no new
+    protos/motion.proto field)."""
+    seg = legacy_translate.segment_for_mover(0, 0, 0, time=800.0, v=250.0, omega=0.0)
+    hand_built = motion_pb2.MotionSegment(time=800.0, v=250.0, omega=0.0, primitive=True)
+    assert seg.SerializeToString() == hand_built.SerializeToString()
 
 
 # ---------------------------------------------------------------------------
-# segment_for_arc() (097) -- handleR()'s omega=speed/radius formula
-# (transcribed; radius==0 -> omega=0), mapped onto a TIME-BOUNDED
-# replace-arm velocity pulse (no continuous-arc shape exists on the
-# segment/replace arms -- see the function's own docstring for the
-# deviation from handleR()'s original unbounded VelocityGoal).
+# segment_for_arc() (100-007, THE CUTOVER -- supersedes the 097 open-loop
+# velocity-pulse approximation) -- handleR()'s omega=speed/radius formula
+# (transcribed; radius==0 -> omega=0) now maps onto a REAL, single,
+# primitive=true arc segment: arc_length = speed*(duration/1000),
+# delta_heading = arc_length/radius, exit_speed = 0 -- see the function's
+# own docstring for the full derivation.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("speed", "radius", "expected_omega"),
+    ("speed", "radius", "duration", "expected_arc_length", "expected_delta_heading"),
     [
-        (200.0, 500.0, 200.0 / 500.0),
-        (-200.0, 500.0, -200.0 / 500.0),
-        (200.0, -500.0, -200.0 / 500.0),
-        (200.0, 0.0, 0.0),  # handleR(): omega = 0 when radius == 0
+        (200.0, 500.0, 1000.0, 200.0, 200.0 / 500.0),
+        (-200.0, 500.0, 1000.0, -200.0, -200.0 / 500.0),
+        (200.0, -500.0, 1000.0, 200.0, -200.0 / 500.0),
+        (200.0, 0.0, 1000.0, 200.0, 0.0),  # radius == 0 -> delta_heading == 0
+        (200.0, 500.0, 500.0, 100.0, 100.0 / 500.0),  # duration scales arc_length
     ],
 )
-def test_segment_for_arc_omega_matches_handle_r_formula(speed, radius, expected_omega):
-    seg = legacy_translate.segment_for_arc(speed, radius)
-    assert seg.v == pytest.approx(speed)
-    assert seg.omega == pytest.approx(expected_omega)
-    assert seg.speed_max == pytest.approx(abs(speed))
-    assert seg.yaw_rate_max == pytest.approx(abs(expected_omega))
-
-
-def test_segment_for_arc_is_time_bounded_and_streaming():
-    """Unlike handleR()'s original unbounded VelocityGoal, this is a
-    TIME-BOUNDED replace-arm pulse (segment.h's own "time > 0 -> time-
-    bounded" invariant) -- distance/direction/final_heading stay at 0
-    (unused in time mode)."""
-    seg = legacy_translate.segment_for_arc(200.0, 500.0, duration=750.0)
-    assert seg.time == pytest.approx(750.0)
-    assert seg.stream is True
-    assert seg.distance == pytest.approx(0.0)
-    assert seg.direction == pytest.approx(0.0)
-    assert seg.final_heading == pytest.approx(0.0)
+def test_segment_for_arc_matches_handle_r_formula(
+    speed, radius, duration, expected_arc_length, expected_delta_heading
+):
+    seg = legacy_translate.segment_for_arc(speed, radius, duration=duration)
+    assert seg.arc_length == pytest.approx(expected_arc_length)
+    assert seg.delta_heading == pytest.approx(expected_delta_heading)
+    assert seg.exit_speed == pytest.approx(0.0)
+    assert seg.primitive is True
 
 
 def test_segment_for_arc_default_duration_is_1000ms():
     seg = legacy_translate.segment_for_arc(200.0, 500.0)
-    assert seg.time == pytest.approx(1000.0)
+    assert seg.arc_length == pytest.approx(200.0)  # 200 mm/s * 1.0s
 
 
 # ---------------------------------------------------------------------------
-# segment_for_turn() (097) -- handleTURN()'s original closed-loop turn is
-# approximated open-loop AS IF the robot always starts at heading 0 (the
-# SAME pure in-place-turn shape segment_for_rt() builds): distance=0,
-# final_heading=heading (converted cdeg -> rad).
+# segment_for_turn() (097; primitive shape 100-007) -- handleTURN()'s
+# original closed-loop turn is approximated open-loop AS IF the robot
+# always starts at heading 0 (the SAME pure in-place-turn shape
+# segment_for_rt() builds): arc_length=0, delta_heading=heading (converted
+# cdeg -> rad).
 # ---------------------------------------------------------------------------
 
 
@@ -338,50 +374,60 @@ def test_segment_for_arc_default_duration_is_1000ms():
 )
 def test_segment_for_turn_matches_segment_for_rt_shape(heading):
     """The open-loop approximation is BYTE-IDENTICAL in shape to
-    segment_for_rt() -- both build a pure in-place-turn segment; only the
-    semantic interpretation (relative vs. from-zero-absolute) differs at
-    the call site, not the wire payload."""
+    segment_for_rt() -- both build a pure in-place-turn primitive segment;
+    only the semantic interpretation (relative vs. from-zero-absolute)
+    differs at the call site, not the wire payload."""
     turn_seg = legacy_translate.segment_for_turn(heading)
     rt_seg = legacy_translate.segment_for_rt(heading)
-    assert turn_seg.final_heading == pytest.approx(heading * _CDEG_TO_RAD)
-    assert turn_seg.final_heading == pytest.approx(rt_seg.final_heading)
-    assert turn_seg.distance == pytest.approx(0.0)
+    assert turn_seg.delta_heading == pytest.approx(heading * _CDEG_TO_RAD)
+    assert turn_seg.delta_heading == pytest.approx(rt_seg.delta_heading)
+    assert turn_seg.arc_length == pytest.approx(0.0)
     assert turn_seg.speed_max == pytest.approx(0.0)
     assert turn_seg.stream is False
+    assert turn_seg.primitive is True
 
 
 # ---------------------------------------------------------------------------
-# segment_for_goto_relative() (097) -- handleG()'s original Planner pursuit
-# loop is approximated open-loop as a single pre-pivot-then-straight
-# segment: distance=hypot(x,y), direction=atan2(y,x), final_heading=
-# direction (finish facing the direction of travel, not the start heading).
+# segment_for_goto_relative() (097; primitive-list shape 100-007) --
+# handleG()'s original Planner pursuit loop is approximated open-loop as a
+# pivot-then-straight primitive PAIR (via primitives_for_move(), since
+# final_heading == direction always omits the trailing pivot): arc_length=
+# hypot(x,y) on the straight phase, delta_heading=atan2(y,x) on the leading
+# pivot phase (finish facing the direction of travel, not the start
+# heading).
 # ---------------------------------------------------------------------------
 
 
 def test_segment_for_goto_relative_distance_and_direction():
     import math
 
-    seg = legacy_translate.segment_for_goto_relative(300.0, 400.0, speed=150.0)
-    assert seg.distance == pytest.approx(500.0)  # 3-4-5 triangle
-    assert seg.direction == pytest.approx(math.atan2(400.0, 300.0))
-    # Finishes facing the direction of travel, not pivoting back to 0.
-    assert seg.final_heading == pytest.approx(seg.direction)
-    assert seg.speed_max == pytest.approx(150.0)
+    segs = legacy_translate.segment_for_goto_relative(300.0, 400.0, speed=150.0)
+    assert len(segs) == 2, "pivot-then-straight -- final_heading == direction always"
+    pivot, straight = segs
+    assert pivot.delta_heading == pytest.approx(math.atan2(400.0, 300.0))
+    assert pivot.arc_length == pytest.approx(0.0)
+    assert straight.arc_length == pytest.approx(500.0)  # 3-4-5 triangle
+    assert straight.delta_heading == pytest.approx(0.0)
+    for seg in segs:
+        assert seg.primitive is True
 
 
 def test_segment_for_goto_relative_at_origin_is_a_zero_distance_no_op():
-    seg = legacy_translate.segment_for_goto_relative(0.0, 0.0)
-    assert seg.distance == pytest.approx(0.0)
-    assert seg.direction == pytest.approx(0.0)
-    assert seg.final_heading == pytest.approx(0.0)
+    """x=y=0 -- both phases degenerate (zero pivot, zero straight) --
+    primitives_for_move() omits BOTH, returning an empty list."""
+    segs = legacy_translate.segment_for_goto_relative(0.0, 0.0)
+    assert segs == []
 
 
 def test_segment_for_goto_relative_default_speed_is_zero_sentinel():
-    """speed=0 (the default) falls back to the SegmentExecutor's configured
-    profile, matching every other translator's "0 => executor default"
-    convention."""
-    seg = legacy_translate.segment_for_goto_relative(300.0, 400.0)
-    assert seg.speed_max == pytest.approx(0.0)
+    """speed (the old speed_max ceiling) has no v2 primitive equivalent --
+    primitives_for_move() never sets it at all (see that function's own
+    docstring); a caller passing speed=0 (the default) or any other value
+    gets byte-identical primitives either way."""
+    with_speed = legacy_translate.segment_for_goto_relative(300.0, 400.0, speed=150.0)
+    without_speed = legacy_translate.segment_for_goto_relative(300.0, 400.0)
+    assert [(s.arc_length, s.delta_heading) for s in with_speed] == \
+        [(s.arc_length, s.delta_heading) for s in without_speed]
 
 
 if __name__ == "__main__":

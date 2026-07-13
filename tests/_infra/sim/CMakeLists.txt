@@ -151,6 +151,18 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 # ---------------------------------------------------------------------------
 file(GLOB KINEMATICS_SOURCES "${SOURCE_DIR}/kinematics/*.cpp")
 file(GLOB MOTION_SOURCES     "${SOURCE_DIR}/motion/*.cpp")
+# source/drive/ (100-007, THE CUTOVER): Subsystems::Drivetrain (the wafer
+# adapter, subsystems/drivetrain.cpp above) now HOLDS a Drive::Drivetrain
+# and a Drive::MotionPlan -- this glob is what actually LINKS Drive::'s own
+# symbols into libfirmware_host.dylib; ticket 100-002 already proved
+# source/drive/ compiles standalone (tests/_infra/drive/), this is the
+# SEPARATE step of it joining the firmware-shaped host build. motion/*.cpp
+# (segment_executor.{h,cpp}/stop_condition.{h,cpp}, globbed above) stays in
+# this list UNCHANGED -- parked, not deleted (ticket 100-013 deletes it
+# later); nothing in the adapter references it any more post-cutover, so it
+# compiles here but is dead weight, same posture the real ARM firmware gets
+# for free via --gc-sections (architecture-update.md (100) Decision 3).
+file(GLOB DRIVE_SOURCES      "${SOURCE_DIR}/drive/*.cpp")
 file(GLOB HAL_SIM_SOURCES    "${SOURCE_DIR}/hal/sim/*.cpp")
 # libraries/ruckig (Sprint 089, Decision 7): the vendored solver's 11 core
 # .cpp sources, appended the same way as the ARM build's root CMakeLists.txt
@@ -161,6 +173,7 @@ file(GLOB RUCKIG_SOURCES     "${REPO_ROOT}/libraries/ruckig/src/*.cpp")
 set(FIRMWARE_SOURCES
     ${KINEMATICS_SOURCES}
     ${MOTION_SOURCES}
+    ${DRIVE_SOURCES}
     "${SOURCE_DIR}/subsystems/drivetrain.cpp"
     "${SOURCE_DIR}/subsystems/sim_hardware.cpp"
     "${SOURCE_DIR}/subsystems/pose_estimator.cpp"

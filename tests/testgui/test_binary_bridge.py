@@ -74,13 +74,18 @@ def proto():
 
 
 def test_r_translates_to_replace_arm_and_is_no_longer_unsupported(proto):
+    """100-007, THE CUTOVER: R now sends `segment` (a REAL, single,
+    primitive=true arc) -- was `replace` (a velocity-pulse approximation)
+    pre-cutover; see legacy_translate.segment_for_arc()'s own docstring for
+    the deviation."""
     nezha, conn = proto
     conn.queue_reply(_ack_reply())
 
     reply_line = binary_bridge.translate_command(nezha, "R 200 500")
 
     assert len(conn.envelope_calls) == 1
-    assert conn.envelope_calls[0].WhichOneof("cmd") == "replace"
+    assert conn.envelope_calls[0].WhichOneof("cmd") == "segment"
+    assert conn.envelope_calls[0].segment.primitive is True
     assert "unsupported" not in reply_line
     assert reply_line.startswith("OK arc")
 
@@ -98,13 +103,20 @@ def test_turn_translates_to_segment_arm_and_is_no_longer_unsupported(proto):
 
 
 def test_g_translates_to_segment_arm_and_is_no_longer_unsupported(proto):
+    """100-007, THE CUTOVER: G 300 400 150 decomposes to TWO v2 primitives
+    (primitives_for_move(), via segment_for_goto_relative() -- a leading
+    pivot to face the relative target, then the straight run; the trailing
+    pivot phase is always omitted here since final_heading == direction by
+    construction) -- both sent, in order, as `segment`."""
     nezha, conn = proto
+    conn.queue_reply(_ack_reply())
     conn.queue_reply(_ack_reply())
 
     reply_line = binary_bridge.translate_command(nezha, "G 300 400 150")
 
-    assert len(conn.envelope_calls) == 1
+    assert len(conn.envelope_calls) == 2
     assert conn.envelope_calls[0].WhichOneof("cmd") == "segment"
+    assert conn.envelope_calls[1].WhichOneof("cmd") == "segment"
     assert "unsupported" not in reply_line
     assert reply_line.startswith("OK goto")
 

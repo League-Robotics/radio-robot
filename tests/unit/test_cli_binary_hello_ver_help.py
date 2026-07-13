@@ -131,7 +131,7 @@ def test_cmd_binary_help_no_reply_prints_timeout_notice(monkeypatch, capsys):
 
 
 def test_envelope_for_hello_builds_hello_arm():
-    env = legacy_verbs.envelope_for_hello([], {})
+    env = legacy_verbs.envelope_for_hello([], {})[0]
     assert env.WhichOneof("cmd") == "hello"
 
 
@@ -140,12 +140,12 @@ def test_envelope_for_ver_builds_dedicated_ver_arm_not_id():
     outright); it now builds its own `{ver: Ver{}}` request -- distinct
     from ID's `{id: DeviceId{}}` on the wire, even though both still reply
     the identical DeviceId shape firmware-side."""
-    env = legacy_verbs.envelope_for_ver([], {})
+    env = legacy_verbs.envelope_for_ver([], {})[0]
     assert env.WhichOneof("cmd") == "ver"
 
 
 def test_envelope_for_help_builds_help_arm():
-    env = legacy_verbs.envelope_for_help([], {})
+    env = legacy_verbs.envelope_for_help([], {})[0]
     assert env.WhichOneof("cmd") == "help"
 
 

@@ -101,19 +101,48 @@ msg::PlannerConfig defaultPlannerConfig() {
     // heading_kp/heading_kd are the new outer heading-loop PD gains
     // (architecture-update.md M1/M2), baked from the robot JSON's
     // control.heading_kp/heading_kd, falling back to conservative firmware
-    // starting defaults when absent. arrive_tol/turn_in_place_gate/min_speed
-    // are left unset (0.0f default) -- unchanged behavior, main.cpp's old
-    // function never set them either.
+    // starting defaults when absent. arrive_tol/turn_in_place_gate are left
+    // unset (0.0f default) -- unchanged behavior, main.cpp's old function
+    // never set them either (neither has a live consumer). min_speed is NO
+    // LONGER left unset (100-007, THE CUTOVER) -- see MIN_SPEED_DEFAULT's
+    // own comment above for why 0.0f silently broke pivot-mode detection
+    // the moment source/drive/tracker.cpp became this field's first live
+    // reader.
+    //
+    // Fields 15-31 (100-001 — Drive::Limits' wire/config source,
+    // architecture-update.md M1/Decision 2): baked from the robot JSON's
+    // control.* keys via drive_limits_for_config(), falling back to
+    // conservative firmware starting defaults when absent — see this
+    // generator's own field-default constants and data/robots/tovez.json's
+    // `_drive_limits_note` for the full per-field derivation.
     msg::PlannerConfig cfg;
     cfg.setAMax(800.0f);               // [mm/s^2]
     cfg.setADecel(800.0f);             // [mm/s^2]
     cfg.setVBodyMax(1000.0f);           // [mm/s]
-    cfg.setYawRateMax(6.0f);         // [rad/s]
-    cfg.setYawAccMax(20.0f);          // [rad/s^2]
+    cfg.setYawRateMax(1.22173f);         // [rad/s] (control.yaw_rate_max [deg/s])
+    cfg.setYawAccMax(10.47198f);          // [rad/s^2] (control.max_rot_accel_dps2 [deg/s^2])
     cfg.setJMax(5000.0f);                // [mm/s^3] ~6x a_max -- ~0.16s jerk-limited edges
     cfg.setYawJerkMax(100.0f);         // [rad/s^3] ~5x yaw_acc_max -- ~0.2s
     cfg.setHeadingKp(6.0f);              // [1/s] outer heading-loop proportional gain
     cfg.setHeadingKd(0.0f);              // dimensionless outer heading-loop derivative gain
+    cfg.setMinSpeed(10.0f);               // [mm/s] Drive:: tracker pivot-mode threshold (100-007)
+    cfg.setVWheelMax(620.0f);              // [mm/s]
+    cfg.setSteerHeadroom(20.0f);          // [mm/s]
+    cfg.setWheelStepMax(150.0f);          // [mm/s]
+    cfg.setTrackKS(2.0f);                // [1/s]
+    cfg.setTrackKTheta(6.0f);            // [1/s]
+    cfg.setTrackKCross(1.5e-05f);            // [rad/mm^2]
+    cfg.setTrimVMax(120.0f);               // [mm/s]
+    cfg.setTrimOmegaMax(2.0f);           // [rad/s]
+    cfg.setReplanErrPos(40.0f);           // [mm]
+    cfg.setReplanErrTheta(0.15f);         // [rad]
+    cfg.setReplanHold(0.2f);              // [s]
+    cfg.setReplanMinPeriod(0.3f);        // [s]
+    cfg.setReplanMax(3.0f);               // dimensionless
+    cfg.setHandoffTolPos(40.0f);          // [mm]
+    cfg.setHandoffTolV(0.14f);            // [s]
+    cfg.setArriveVelTol(15.0f);           // [mm/s]
+    cfg.setArriveDwell(0.15f);             // [s]
     return cfg;
 }
 

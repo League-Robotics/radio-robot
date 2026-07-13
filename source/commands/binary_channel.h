@@ -12,6 +12,12 @@
 // validation) yields a typed `Error{code, field}` reply -- never a crash,
 // never a silent drop.
 //
+// `plan_dump` (100-009) is the ONE arm that replies MORE than once: zero or
+// more `PlanRecord`s (one per dumpable ring entry) sharing the triggering
+// CommandEnvelope's own corr_id, or a single `Ack{q:0}` when nothing is
+// dumpable -- see handlePlanDump()'s own doc comment in binary_channel.cpp.
+// Every OTHER arm still replies exactly once.
+//
 // Reaches the Blackboard ONLY through the same opaque
 // handlerCtx-cast-to-Rt::CommandRouter* idiom every text command family
 // already uses (see architecture-update.md Decision 1) -- never a stored

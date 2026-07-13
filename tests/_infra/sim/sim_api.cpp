@@ -71,7 +71,6 @@
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
 #include "messages/planner.h"
-#include "motion/segment.h"
 #include "runtime/blackboard.h"
 #include "runtime/command_router.h"
 #include "runtime/configurator.h"
@@ -199,6 +198,35 @@ msg::PlannerConfig defaultSimMotionConfig() {
     cfg.yaw_acc_max = 20.0f;    // [rad/s^2]
     cfg.j_max = 5000.0f;        // [mm/s^3]
     cfg.yaw_jerk_max = 100.0f;  // [rad/s^3]
+
+    // Drive::Limits/tracker fields (100-007, THE CUTOVER) -- PlannerConfig
+    // fields 10 (min_speed) and 15-31, plant-specific like v_body_max above
+    // (not the real robot's tovez.json-measured values -- scripts/
+    // gen_boot_config.py's own MIN_SPEED_DEFAULT/*_DEFAULT constants are
+    // the firmware-generic starting points; sim_api.cpp cannot call the
+    // generator either, see this function's own file header). vWheelMax is
+    // capped well under kNominalMaxSpeed (headroom for the trim law to
+    // still command a positive correction without saturating the plant);
+    // trimVMax/trimOmegaMax are scaled down from tovez.json's own
+    // bench-measured 120.0/2.0 to match this tighter wheel budget --
+    // headroom = trimVMax + trimOmegaMax*trackwidth/2 must leave a
+    // meaningfully positive wheelBudget = vWheelMax - headroom for
+    // Drivetrain::plan() to ever produce Verdict::OK (drivetrain.cpp's own
+    // ceiling fold) -- 60 + 1.0*64 = 124, wheelBudget = 350-124 = 226 mm/s,
+    // comfortably below kNominalMaxSpeed=400. track_k_s/track_k_theta/
+    // track_k_cross are the issue's own Kanayama trim-law table values,
+    // unscaled (dimensionless-ish gains, not plant-capacity-dependent).
+    // min_speed=10 avoids the min_speed==0.0f pivot-mode-never-fires bug
+    // (see gen_boot_config.py's own MIN_SPEED_DEFAULT comment for the full
+    // derivation).
+    cfg.v_wheel_max = 350.0f;      // [mm/s]
+    cfg.wheel_step_max = 150.0f;   // [mm/s]
+    cfg.track_k_s = 2.0f;          // [1/s]
+    cfg.track_k_theta = 6.0f;      // [1/s]
+    cfg.track_k_cross = 1.5e-5f;   // [rad/mm^2]
+    cfg.trim_v_max = 60.0f;        // [mm/s]
+    cfg.trim_omega_max = 1.0f;     // [rad/s]
+    cfg.min_speed = 10.0f;         // [mm/s]
     return cfg;
 }
 
@@ -508,85 +536,106 @@ int sim_route_no_tick(void* h, const char* line, int channel, char* reply, int s
 }
 
 // ---------------------------------------------------------------------------
-// sim_peek_segment_in / sim_peek_replace_in (095-007, TEST-ONLY) --
-// non-destructive reads of a just-posted Motion::Segment (bb.segmentIn's
-// WorkQueue::peek(idx) / bb.replaceIn's Mailbox::peek(), both already
-// non-destructive by design -- queue.h). Writes the 12 float fields into
-// out12[] in Motion::Segment's own declared order (segment.h): distance,
-// direction, finalHeading, speedMax, accelMax, jerkMax, yawRateMax,
-// yawAccelMax, yawJerkMax, time, v, omega -- `stream` (bool) is written
-// separately via *streamOut since it is not a float. *presentOut is set to
-// 1 if a segment was found at that position, 0 otherwise (out12_/streamOut
-// left untouched when absent -- caller must check presentOut first).
+// sim_peek_segment_in (100-007, THE CUTOVER: retyped from Motion::Segment to
+// Drive::Goal) -- non-destructive read of a just-ADMITTED Drive::Goal
+// (bb.segmentIn's WorkQueue::peek(idx), already non-destructive by design --
+// queue.h). Writes the 3 float fields into out3[] in Drive::Goal's own
+// declared order (source/drive/drivetrain.h): arcLength, deltaHeading,
+// exitSpeed. *presentOut is set to 1 if a Goal was found at that position,
+// 0 otherwise (out3 left untouched when absent -- caller must check
+// presentOut first).
 // ---------------------------------------------------------------------------
-void writeSegmentOut(const Motion::Segment& seg, float* out12, int* streamOut) {
-    out12[0] = seg.distance;
-    out12[1] = seg.direction;
-    out12[2] = seg.finalHeading;
-    out12[3] = seg.speedMax;
-    out12[4] = seg.accelMax;
-    out12[5] = seg.jerkMax;
-    out12[6] = seg.yawRateMax;
-    out12[7] = seg.yawAccelMax;
-    out12[8] = seg.yawJerkMax;
-    out12[9] = seg.time;
-    out12[10] = seg.v;
-    out12[11] = seg.omega;
-    *streamOut = seg.stream ? 1 : 0;
+void writeGoalOut(const Drive::Goal& goal, float* out3) {
+    out3[0] = goal.arcLength;
+    out3[1] = goal.deltaHeading;
+    out3[2] = goal.exitSpeed;
 }
 
-void sim_peek_segment_in(void* h, int idx, float* out12, int* streamOut, int* presentOut) {
+void sim_peek_segment_in(void* h, int idx, float* out3, int* presentOut) {
     SimHandle* s = static_cast<SimHandle*>(h);
-    const Motion::Segment* seg = s->bb.segmentIn.peek(static_cast<uint32_t>(idx));
-    if (!seg) {
+    const Drive::Goal* goal = s->bb.segmentIn.peek(static_cast<uint32_t>(idx));
+    if (!goal) {
         *presentOut = 0;
         return;
     }
-    writeSegmentOut(*seg, out12, streamOut);
-    *presentOut = 1;
-}
-
-void sim_peek_replace_in(void* h, float* out12, int* streamOut, int* presentOut) {
-    SimHandle* s = static_cast<SimHandle*>(h);
-    const Motion::Segment* seg = s->bb.replaceIn.peek();
-    if (!seg) {
-        *presentOut = 0;
-        return;
-    }
-    writeSegmentOut(*seg, out12, streamOut);
+    writeGoalOut(*goal, out3);
     *presentOut = 1;
 }
 
 // ---------------------------------------------------------------------------
-// sim_post_segment (094-005, TEST-ONLY) -- posts one Motion::Segment
-// directly to bb.segmentIn, bypassing the wire entirely. `MOVE` (094-006)
-// is not wired yet this ticket; this is the direct producer 094-005's own
-// acceptance criteria call for ("a direct bb.segmentIn.post(...)") to prove
-// the loop reorder (main_loop.cpp: hardware.tick -> drivetrain.tick ->
-// commit) + this blackboard wiring work end to end, ahead of the wire verb.
-// Returns 1 if segmentIn accepted it (Rt::WorkQueue<T,8>::post()'s own
-// true/false contract -- false only if segmentIn is already at its 8-slot
-// cap), 0 otherwise. Angle fields (direction/finalHeading) are RADIANS here
-// (Motion::Segment's own native unit, segment.h) -- unlike the eventual
-// `MOVE` wire verb, which will take centidegrees; this entry point is a
-// direct struct-field producer, not a wire-grammar parser, so it uses
-// Motion::Segment's own units throughout.
+// sim_peek_replace_in (100-008: retyped from Drive::Goal to
+// Rt::MoverRequest, mirroring bb.replaceIn's own retype -- see blackboard.h/
+// commands.h's doc comments) -- non-destructive read of a just-posted
+// Rt::MoverRequest (bb.replaceIn's Mailbox::peek(), already non-destructive
+// by design -- queue.h). Writes the 3 float fields into out3[] in
+// MoverRequest's own declared order (source/runtime/commands.h): v (target's
+// v_x), omega (target's omega), deadman. *presentOut is set to 1 if a
+// MoverRequest was found, 0 otherwise (out3 left untouched when absent --
+// caller must check presentOut first).
 // ---------------------------------------------------------------------------
-int sim_post_segment(void* h, float distance, float direction, float finalHeading,
-                      float speedMax, float accelMax, float jerkMax,
-                      float yawRateMax, float yawAccelMax, float yawJerkMax) {
+void sim_peek_replace_in(void* h, float* out3, int* presentOut) {
     SimHandle* s = static_cast<SimHandle*>(h);
-    Motion::Segment seg;
-    seg.distance = distance;
-    seg.direction = direction;
-    seg.finalHeading = finalHeading;
-    seg.speedMax = speedMax;
-    seg.accelMax = accelMax;
-    seg.jerkMax = jerkMax;
-    seg.yawRateMax = yawRateMax;
-    seg.yawAccelMax = yawAccelMax;
-    seg.yawJerkMax = yawJerkMax;
-    return s->bb.segmentIn.post(seg) ? 1 : 0;
+    const Rt::MoverRequest* request = s->bb.replaceIn.peek();
+    if (!request) {
+        *presentOut = 0;
+        return;
+    }
+    out3[0] = request->target.v_x;
+    out3[1] = request->target.omega;
+    out3[2] = request->deadman;
+    *presentOut = 1;
+}
+
+// ---------------------------------------------------------------------------
+// sim_post_segment (100-007, THE CUTOVER: retyped from Motion::Segment to
+// Drive::Goal) -- posts one Drive::Goal directly to bb.segmentIn, BYPASSING
+// wire admission entirely (no admit() check, no bb.chainTail advance -- a
+// test wanting to exercise real wire admission must go through
+// sim_command()/sim_command_on() with a `segment`/`replace` CommandEnvelope
+// instead, tests/sim/unit/_binary_envelope.py's send_segment()/
+// send_replace()). Retained for tests that isolate the ADAPTER's own
+// pop/plan/step behavior from admission (mirrors the pre-cutover
+// 094-005/095-007 test-only precedent this function already established).
+// Returns 1 if segmentIn accepted it (false only if segmentIn is already at
+// its 8-slot cap), 0 otherwise.
+// ---------------------------------------------------------------------------
+int sim_post_segment(void* h, float arcLength, float deltaHeading, float exitSpeed) {
+    SimHandle* s = static_cast<SimHandle*>(h);
+    Drive::Goal goal;
+    goal.arcLength = arcLength;
+    goal.deltaHeading = deltaHeading;
+    goal.exitSpeed = exitSpeed;
+    return s->bb.segmentIn.post(goal) ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// sim_get_chain_tail / sim_get_last_event (100-007, THE CUTOVER, TEST-ONLY)
+// -- direct bb.chainTail/bb.lastEvent peeks, mirroring sim_get_active()'s
+// own "zero-cost bb-cell peek" precedent. Lets a tier-1 test observe
+// ChainTail's wire-admission advance/abort-reanchor and the adapter's own
+// populated EventNotify on an ABORT_* without a wire-level EVT transport
+// (that lands in ticket 100-009 -- see blackboard.h's own doc comment on
+// bb.lastEvent).
+// ---------------------------------------------------------------------------
+void sim_get_chain_tail(void* h, float* x, float* y, float* heading, float* exitSpeed,
+                         float* kappa) {
+    SimHandle* s = static_cast<SimHandle*>(h);
+    const Drive::ChainTail& tail = s->bb.chainTail;
+    *x = tail.pose.x;
+    *y = tail.pose.y;
+    *heading = tail.pose.h;
+    *exitSpeed = tail.exitSpeed;
+    *kappa = tail.kappa;
+}
+
+void sim_get_last_event(void* h, uint32_t* segSeq, int* status, float* eFinalPos,
+                         float* eFinalTheta) {
+    SimHandle* s = static_cast<SimHandle*>(h);
+    const msg::EventNotify& evt = s->bb.lastEvent;
+    *segSeq = evt.seg_seq;
+    *status = static_cast<int>(evt.status);
+    *eFinalPos = evt.e_final_pos;
+    *eFinalTheta = evt.e_final_theta;
 }
 
 // ---------------------------------------------------------------------------

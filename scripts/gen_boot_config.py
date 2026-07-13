@@ -59,6 +59,7 @@ defaults so the build always succeeds.
 """
 
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -145,6 +146,62 @@ YAW_JERK_MAX_DEFAULT = 100.0    # [rad/s^3] ~5x yaw_acc_max -- ~0.2s
 # on the real plant.
 HEADING_KP_DEFAULT = 3.0    # [1/s]
 HEADING_KD_DEFAULT = 0.0    # dimensionless
+
+# Drive::Limits/tracker/policy defaults for msg::PlannerConfig's fields
+# 15-31 (100-001 -- motion-stack-v2 M1, architecture-update.md Decision 2).
+# source/drive/ (landing tickets 002+) is self-contained and does NOT read
+# DrivetrainConfig.v_wheel_max/steer_headroom (fields 10/11) -- these are
+# genuinely NEW, separate fields, not a rename of the old ones. Every value
+# below is a CONSERVATIVE STARTING firmware default (not yet bench-tuned),
+# EXCEPT V_WHEEL_MAX_DEFAULT: 350.0 here is the generic firmware fallback
+# for an uncharacterized robot (e.g. togov, per architecture-update.md Open
+# Question 6); tovez.json overrides it with its own bench-MEASURED plateau
+# (620.0), the same "generic firmware default vs. per-robot bench value"
+# split heading_kp/heading_kd already established. See
+# data/robots/tovez.json's own `_drive_limits_note` for the full per-field
+# derivation and every documented ambiguity (trim_omega_max's arc-vs-pivot
+# value, replan_err_pos/handoff_tol_pos's along-vs-cross approximation,
+# handoff_tol_v's velocity-coupling-slope reading, steer_headroom/
+# wheel_step_max's unanchored placeholders) -- ticket 001's completion
+# notes carry the same derivation for reviewers who do not have the JSON
+# open.
+V_WHEEL_MAX_DEFAULT       = 350.0    # [mm/s]
+STEER_HEADROOM_DEFAULT    = 20.0     # [mm/s]
+WHEEL_STEP_MAX_DEFAULT    = 150.0    # [mm/s]
+TRACK_K_S_DEFAULT         = 2.0      # [1/s]
+TRACK_K_THETA_DEFAULT     = 6.0      # [1/s]
+TRACK_K_CROSS_DEFAULT     = 1.5e-5   # [rad/mm^2]
+TRIM_V_MAX_DEFAULT        = 120.0    # [mm/s]
+TRIM_OMEGA_MAX_DEFAULT    = 2.0      # [rad/s] pivot-mode value; see _drive_limits_note
+REPLAN_ERR_POS_DEFAULT    = 40.0     # [mm]
+REPLAN_ERR_THETA_DEFAULT  = 0.15     # [rad]
+REPLAN_HOLD_DEFAULT       = 0.2      # [s]
+REPLAN_MIN_PERIOD_DEFAULT = 0.3      # [s]
+REPLAN_MAX_DEFAULT        = 3.0      # dimensionless
+HANDOFF_TOL_POS_DEFAULT   = 40.0     # [mm]
+HANDOFF_TOL_V_DEFAULT     = 0.14     # [s] velocity-coupling slope; see _drive_limits_note
+ARRIVE_VEL_TOL_DEFAULT    = 15.0     # [mm/s]
+ARRIVE_DWELL_DEFAULT      = 0.15     # [s]
+
+# MIN_SPEED_DEFAULT (100-007, THE CUTOVER): min_speed (PlannerConfig field
+# 10) predates this sprint and was NEVER populated by this generator --
+# "left unset (0.0f default)... main.cpp's old function never set them
+# either" (see defaultPlannerConfig()'s own comment, below, kept verbatim
+# for arrive_tol/turn_in_place_gate, which stay genuinely unused). That was
+# harmless while nothing read it; ticket 100-007 makes it load-bearing for
+# the first time -- source/drive/tracker.cpp's own pivot-mode gate is
+# `fabsf(ref.v) < limits.minSpeed`, so a min_speed of EXACTLY 0.0 can never
+# be true even for a genuine pivot (whose ref.v is the LITERAL 0.0f
+# motion_plan.cpp's own isPivot_ branch sets), silently routing every pivot
+# through the arc-mode trim law instead of the pivot-mode one. A small,
+# conservative positive threshold (order of magnitude below any real
+# cruise speed, matching policy.cpp's own kArriveTolVel=15.0f terminal
+# velocity-tolerance scale) fixes this without narrowing arc-mode's own
+# operating range. Starting value, not yet bench-tuned -- same posture as
+# every other field 15-31 default above (M11 re-tunes against the real
+# plant); overridable via a future robot JSON `control.min_speed` key,
+# mirroring every other field's own override mechanism, once one exists.
+MIN_SPEED_DEFAULT         = 10.0     # [mm/s]
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +395,76 @@ def heading_gains_for_config(cfg: dict):
     return float(kp), float(kd)
 
 
+def min_speed_for_config(cfg: dict):
+    """Return min_speed (PlannerConfig field 10) -- see MIN_SPEED_DEFAULT's
+    own comment above for why this is no longer left at 0.0f. Read from the
+    robot JSON's ``control.min_speed`` when present (mirroring every other
+    mapping's fall-back discipline), else MIN_SPEED_DEFAULT."""
+    ctrl = cfg.get("control", {}) or {}
+    return float(_get(ctrl, "min_speed", default=MIN_SPEED_DEFAULT))
+
+
+def profile_rot_limits_for_config(cfg: dict):
+    """Return (yaw_rate_max, yaw_acc_max) in [rad/s] / [rad/s^2] for the
+    rotational master-profile ceiling (PlannerConfig fields 4-5).
+
+    Mirrors heading_gains_for_config()'s exact shape: read from the robot
+    JSON's ``control`` block when present — ``control.yaw_rate_max`` [deg/s]
+    and ``control.max_rot_accel_dps2`` [deg/s^2], converted to radians here —
+    falling back to the rad-valued firmware defaults above when absent. Before
+    this mapping (ticket 100-014) the generator emitted the hardcoded 6.0
+    rad/s / 20.0 rad/s^2 defaults unconditionally, silently ignoring the
+    robot JSON's own (much lower) pivot-speed intent and driving pivots at
+    ~500 mm/s at the wheels -- unstable overshoot on the latent real plant.
+    """
+    ctrl = cfg.get("control", {}) or {}
+    yr = _get(ctrl, "yaw_rate_max", default=None)        # [deg/s]
+    ya = _get(ctrl, "max_rot_accel_dps2", default=None)  # [deg/s^2]
+    yaw_rate_max = math.radians(float(yr)) if yr is not None else YAW_RATE_MAX_DEFAULT
+    yaw_acc_max = math.radians(float(ya)) if ya is not None else YAW_ACC_MAX_DEFAULT
+    return yaw_rate_max, yaw_acc_max
+
+
+def drive_limits_for_config(cfg: dict):
+    """Return the 17-tuple of msg::PlannerConfig fields 15-31 (Drive::Limits'
+    wire/config source, 100-001), in field-number order.
+
+    Mirrors heading_gains_for_config()'s exact shape: read from the robot
+    JSON's ``control`` block when present, falling back to the conservative
+    firmware defaults above when absent -- an unmigrated robot JSON (or
+    togov, per architecture-update.md Open Question 6) simply inherits the
+    firmware defaults, same fall-back discipline as every other mapping in
+    this file.
+    """
+    ctrl = cfg.get("control", {}) or {}
+    v_wheel_max       = _get(ctrl, "v_wheel_max",       default=V_WHEEL_MAX_DEFAULT)
+    steer_headroom    = _get(ctrl, "steer_headroom",    default=STEER_HEADROOM_DEFAULT)
+    wheel_step_max    = _get(ctrl, "wheel_step_max",    default=WHEEL_STEP_MAX_DEFAULT)
+    track_k_s         = _get(ctrl, "track_k_s",         default=TRACK_K_S_DEFAULT)
+    track_k_theta     = _get(ctrl, "track_k_theta",     default=TRACK_K_THETA_DEFAULT)
+    track_k_cross     = _get(ctrl, "track_k_cross",     default=TRACK_K_CROSS_DEFAULT)
+    trim_v_max        = _get(ctrl, "trim_v_max",        default=TRIM_V_MAX_DEFAULT)
+    trim_omega_max    = _get(ctrl, "trim_omega_max",    default=TRIM_OMEGA_MAX_DEFAULT)
+    replan_err_pos    = _get(ctrl, "replan_err_pos",    default=REPLAN_ERR_POS_DEFAULT)
+    replan_err_theta  = _get(ctrl, "replan_err_theta",  default=REPLAN_ERR_THETA_DEFAULT)
+    replan_hold       = _get(ctrl, "replan_hold",       default=REPLAN_HOLD_DEFAULT)
+    replan_min_period = _get(ctrl, "replan_min_period", default=REPLAN_MIN_PERIOD_DEFAULT)
+    replan_max        = _get(ctrl, "replan_max",        default=REPLAN_MAX_DEFAULT)
+    handoff_tol_pos   = _get(ctrl, "handoff_tol_pos",   default=HANDOFF_TOL_POS_DEFAULT)
+    handoff_tol_v     = _get(ctrl, "handoff_tol_v",     default=HANDOFF_TOL_V_DEFAULT)
+    arrive_vel_tol    = _get(ctrl, "arrive_vel_tol",    default=ARRIVE_VEL_TOL_DEFAULT)
+    arrive_dwell      = _get(ctrl, "arrive_dwell",      default=ARRIVE_DWELL_DEFAULT)
+    return (
+        float(v_wheel_max), float(steer_headroom), float(wheel_step_max),
+        float(track_k_s), float(track_k_theta), float(track_k_cross),
+        float(trim_v_max), float(trim_omega_max),
+        float(replan_err_pos), float(replan_err_theta),
+        float(replan_hold), float(replan_min_period), float(replan_max),
+        float(handoff_tol_pos), float(handoff_tol_v),
+        float(arrive_vel_tol), float(arrive_dwell),
+    )
+
+
 def generate(cfg: dict, source_path: str) -> str:
     trackwidth   = _get(cfg, "geometry", "trackwidth", default=TRACKWIDTH_DEFAULT)
     vel_kp, vel_ki, vel_kff, vel_imax, vel_kaw, vel_filt = vel_gains_for_config(cfg)
@@ -347,6 +474,15 @@ def generate(cfg: dict, source_path: str) -> str:
     (otos_offset_x, otos_offset_y, otos_offset_yaw,
      otos_linear_scale, otos_angular_scale) = otos_boot_config_values(cfg)
     heading_kp, heading_kd = heading_gains_for_config(cfg)
+    yaw_rate_max, yaw_acc_max = profile_rot_limits_for_config(cfg)
+    min_speed = min_speed_for_config(cfg)
+    (v_wheel_max, steer_headroom, wheel_step_max,
+     track_k_s, track_k_theta, track_k_cross,
+     trim_v_max, trim_omega_max,
+     replan_err_pos, replan_err_theta,
+     replan_hold, replan_min_period, replan_max,
+     handoff_tol_pos, handoff_tol_v,
+     arrive_vel_tol, arrive_dwell) = drive_limits_for_config(cfg)
 
     calib_lines = "\n".join(
         f"    out[{i}].setTravelCalib({_f(v)});   // [mm/deg] port {i + 1}"
@@ -458,19 +594,48 @@ msg::PlannerConfig defaultPlannerConfig() {{
     // heading_kp/heading_kd are the new outer heading-loop PD gains
     // (architecture-update.md M1/M2), baked from the robot JSON's
     // control.heading_kp/heading_kd, falling back to conservative firmware
-    // starting defaults when absent. arrive_tol/turn_in_place_gate/min_speed
-    // are left unset (0.0f default) -- unchanged behavior, main.cpp's old
-    // function never set them either.
+    // starting defaults when absent. arrive_tol/turn_in_place_gate are left
+    // unset (0.0f default) -- unchanged behavior, main.cpp's old function
+    // never set them either (neither has a live consumer). min_speed is NO
+    // LONGER left unset (100-007, THE CUTOVER) -- see MIN_SPEED_DEFAULT's
+    // own comment above for why 0.0f silently broke pivot-mode detection
+    // the moment source/drive/tracker.cpp became this field's first live
+    // reader.
+    //
+    // Fields 15-31 (100-001 — Drive::Limits' wire/config source,
+    // architecture-update.md M1/Decision 2): baked from the robot JSON's
+    // control.* keys via drive_limits_for_config(), falling back to
+    // conservative firmware starting defaults when absent — see this
+    // generator's own field-default constants and data/robots/tovez.json's
+    // `_drive_limits_note` for the full per-field derivation.
     msg::PlannerConfig cfg;
     cfg.setAMax({_f(A_MAX_DEFAULT)});               // [mm/s^2]
     cfg.setADecel({_f(A_DECEL_DEFAULT)});             // [mm/s^2]
     cfg.setVBodyMax({_f(V_BODY_MAX_DEFAULT)});           // [mm/s]
-    cfg.setYawRateMax({_f(YAW_RATE_MAX_DEFAULT)});         // [rad/s]
-    cfg.setYawAccMax({_f(YAW_ACC_MAX_DEFAULT)});          // [rad/s^2]
+    cfg.setYawRateMax({_f(yaw_rate_max)});         // [rad/s] (control.yaw_rate_max [deg/s])
+    cfg.setYawAccMax({_f(yaw_acc_max)});          // [rad/s^2] (control.max_rot_accel_dps2 [deg/s^2])
     cfg.setJMax({_f(J_MAX_DEFAULT)});                // [mm/s^3] ~6x a_max -- ~0.16s jerk-limited edges
     cfg.setYawJerkMax({_f(YAW_JERK_MAX_DEFAULT)});         // [rad/s^3] ~5x yaw_acc_max -- ~0.2s
     cfg.setHeadingKp({_f(heading_kp)});              // [1/s] outer heading-loop proportional gain
     cfg.setHeadingKd({_f(heading_kd)});              // dimensionless outer heading-loop derivative gain
+    cfg.setMinSpeed({_f(min_speed)});               // [mm/s] Drive:: tracker pivot-mode threshold (100-007)
+    cfg.setVWheelMax({_f(v_wheel_max)});              // [mm/s]
+    cfg.setSteerHeadroom({_f(steer_headroom)});          // [mm/s]
+    cfg.setWheelStepMax({_f(wheel_step_max)});          // [mm/s]
+    cfg.setTrackKS({_f(track_k_s)});                // [1/s]
+    cfg.setTrackKTheta({_f(track_k_theta)});            // [1/s]
+    cfg.setTrackKCross({_f(track_k_cross)});            // [rad/mm^2]
+    cfg.setTrimVMax({_f(trim_v_max)});               // [mm/s]
+    cfg.setTrimOmegaMax({_f(trim_omega_max)});           // [rad/s]
+    cfg.setReplanErrPos({_f(replan_err_pos)});           // [mm]
+    cfg.setReplanErrTheta({_f(replan_err_theta)});         // [rad]
+    cfg.setReplanHold({_f(replan_hold)});              // [s]
+    cfg.setReplanMinPeriod({_f(replan_min_period)});        // [s]
+    cfg.setReplanMax({_f(replan_max)});               // dimensionless
+    cfg.setHandoffTolPos({_f(handoff_tol_pos)});          // [mm]
+    cfg.setHandoffTolV({_f(handoff_tol_v)});            // [s]
+    cfg.setArriveVelTol({_f(arrive_vel_tol)});           // [mm/s]
+    cfg.setArriveDwell({_f(arrive_dwell)});             // [s]
     return cfg;
 }}
 

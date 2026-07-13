@@ -341,6 +341,24 @@ list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/types/clock_host\\.cpp$")
 # exclusion above does not catch it -- it needs its own explicit exclusion,
 # mirroring the i2c_bus_host.cpp/clock_host.cpp pattern immediately above.
 list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/subsystems/sim_hardware\\.cpp$")
+# DeviceBus (source/devices/) merged into the sprint-100 branch. In the
+# DEFAULT firmware build (application=source, main.cpp) the recursive glob
+# above now sweeps in source/devices/*.cpp too. Three of those must be
+# excluded from this legacy/default build, mirroring the host-fake and
+# bring-up exclusions already established above and in the codal.devicebus.json
+# entry block below:
+#  - i2c_bus_host.cpp / clock_host.cpp: HOST_BUILD-only scripted fakes that
+#    define the same symbols as the real i2c_bus.cpp/clock_real.cpp (same
+#    reason com/i2c_bus_host.cpp and types/clock_host.cpp are excluded above).
+#  - bringup_main.cpp: the standalone DeviceBus bring-up image's own main()
+#    (source/devices/bringup_main.cpp) -- only ever the entry point under
+#    codal.devicebus.json; in the default build it would be a SECOND main()
+#    alongside source/main.cpp. Until the complete cutover replaces main.cpp's
+#    device layer with DeviceBus, the rest of source/devices/*.cpp compiles in
+#    (unused, like source/drive/ before its cutover).
+list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/devices/i2c_bus_host\\.cpp$")
+list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/devices/clock_host\\.cpp$")
+list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/devices/bringup_main\\.cpp$")
 
 # Production-build toggle (034-006).
 #
@@ -381,6 +399,42 @@ list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/robot/MecanumHAL\\.cpp$")
 # vendored (libraries/ruckig/README.vendored.md).
 file(GLOB RUCKIG_SOURCES "${PROJECT_SOURCE_DIR}/libraries/ruckig/src/*.cpp")
 list(APPEND SOURCE_FILES ${RUCKIG_SOURCES})
+
+# ---------------------------------------------------------------------------
+# DB-009 (device-bus-tickets.md): dedicated DeviceBus bring-up entry point.
+#
+# codal.devicebus.json (repo root) sets "application_entry": "devices" --
+# the ONE opt-in switch (never set by codal.json/codal.dev.json/
+# codal.ble.json) that swaps the linked application from source/main.cpp
+# (the legacy Subsystems:: stack) to source/devices/bringup_main.cpp
+# (DeviceBus only), per clasi/issues/device-bus-fiber-owned-self-contained-
+# device-subsystem.md open question 5's resolution: "no runtime coexistence
+# with the legacy stack, ever -- the two systems never both run in one
+# binary". Without this block, CODAL_APP_SOURCE_DIR="source" (needed so
+# source/devices/*'s own path-qualified `#include "devices/xxx.h"` style --
+# identical to every other module's com/*.h, hal/*.h, etc. -- keeps
+# resolving against the SAME source/ include root the ordinary firmware
+# build already set up above) means the *.cpp glob a few lines up ALWAYS
+# sweeps in every file under source/, including source/main.cpp AND
+# source/devices/bringup_main.cpp together -- two `main()` definitions,
+# a link error, not a build-config problem this ticket can solve by
+# choosing a different "application" value alone.
+#
+# When set, this block REPLACES SOURCE_FILES (computed above from the whole
+# "source" tree) with just source/devices/*.cpp -- still excluding the two
+# HOST_BUILD-only fakes (i2c_bus_host.cpp/clock_host.cpp), the same
+# treatment the com/i2c_bus_host.cpp / types/clock_host.cpp exclusions
+# above already give their own directories (those regexes don't match
+# source/devices/*, so this ticket needs its own pair). INCLUDE_DIRS is
+# left completely untouched (computed from CODAL_APP_SOURCE_DIR="source"
+# above, before this block runs) -- only the *.cpp file list changes.
+if("${codal.application_entry}" STRGREATER "")
+    set(SOURCE_FILES "")
+    RECURSIVE_FIND_FILE(SOURCE_FILES
+        "${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}/${codal.application_entry}" "*.cpp")
+    list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/devices/i2c_bus_host\\.cpp$")
+    list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/devices/clock_host\\.cpp$")
+endif()
 
 if("${SOURCE_FILES}" STREQUAL "")
     message(FATAL_ERROR "${BoldRed}No user application to build, please add a main.cpp at: ${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}${ColourReset}")

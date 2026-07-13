@@ -28,9 +28,10 @@
 //     CommunicatorToCommandProcessorCommand, lives in the CODAL-free
 //     source/subsystems/wire_command.h -- NOT subsystems/communicator.h,
 //     which pulls in MicroBit.h/com/radio.h/com/serial_port.h.
-//   - segmentIn's payload, Motion::Segment (source/motion/segment.h, ticket
-//     094-001), is a plain POD with zero CODAL dependency -- added 094-005
-//     (see "Command plane" below).
+//   - segmentIn's payload (100-007, THE CUTOVER: retyped from Motion::
+//     Segment to Drive::Goal) is a plain POD with zero CODAL dependency --
+//     source/drive/'s own isolation rule guarantees this (SUC-008); see
+//     "Command plane" below.
 // This is what makes Rt::Blackboard instantiable in a host test harness
 // (tests/sim/unit/runtime_blackboard_harness.cpp) with the plain system
 // C++ compiler -- no ARM toolchain, no MicroBit.h transitively included.
@@ -72,12 +73,13 @@
 #include <array>
 #include <cstdint>
 
+#include "drive/drivetrain.h"
 #include "messages/common.h"
 #include "messages/drivetrain.h"
+#include "messages/envelope.h"
 #include "messages/motor.h"
 #include "messages/odometer.h"
 #include "messages/planner.h"
-#include "motion/segment.h"
 #include "runtime/commands.h"
 #include "runtime/queue.h"
 #include "subsystems/hardware.h"
@@ -117,6 +119,71 @@ struct Blackboard {
   // MainLoop::commit() from PoseEstimator::lastPoseStep(). Blackboard-only
   // -- not on the wire this sprint (Decision 5).
   msg::PoseStep poseStepped;
+
+  // chainTail (100-007, THE CUTOVER) -- Drive::ChainTail: the predicted
+  // world state at the end of everything currently admitted (executing +
+  // queued), the issue's own "committed to the blackboard for queue-time
+  // admission NACKs" cell. TWO cooperating writers, both documented at
+  // their own call site: BinaryChannel's handleSegment()/handleReplace()
+  // (commands/binary_channel.cpp) advance() it SYNCHRONOUSLY, at wire time,
+  // on every successfully admitted segment/replace -- this is what lets a
+  // stateless, pointerless wire handler (SUC-006: never a Subsystems::*
+  // reference) NACK an infeasible ask against the REAL predicted queue tail
+  // without needing a live Subsystems::Drivetrain reference; Subsystems::
+  // Drivetrain::tick() (the adapter) re-anchors it to the current held/
+  // measured pose on ABORT_*/an emptied ring, since a flush invalidates
+  // whatever the wire handler had predicted. Not part of the "committed
+  // snapshot x[k] written only by the loop's commit step" contract every
+  // other state-plane cell above follows -- an explicit, narrow exception,
+  // mirroring devWatchdogWindow/streamWatchdogWindow's own "loop-owned, not
+  // strictly x[k]" precedent immediately below.
+  Drive::ChainTail chainTail;
+
+  // lastEvent (100-007, THE CUTOVER) -- the most recent msg::EventNotify
+  // Subsystems::Drivetrain populated on an ABORT_* status (ring flushed,
+  // ChainTail re-anchored -- see chainTail's own doc comment). Published
+  // every pass by MainLoop::commit() from the adapter's own lastEvent()
+  // getter, mirroring bb.drivetrain's publish shape exactly. Blackboard-
+  // only this ticket -- wiring an actual unsolicited EVT reply onto the
+  // wire is ticket 100-009's job (M9, "Trace/plan-dump wire arms"); no
+  // loop-originated wire output exists yet post-093's removal (main_loop.h's
+  // own "Safety supervision... and loop-originated wire output... stay gone
+  // from the tick entirely" note) for this ticket to plug into.
+  msg::EventNotify lastEvent;
+
+  // motionTrace (100-009, PlanDumpRequest/MotionTrace wire arms) -- the
+  // adapter's own last-captured Drive::TrackRecord (Subsystems::
+  // Drivetrain::lastRecord(), converted via drive_bridge.h's
+  // driveMotionTrace()), published every pass by MainLoop::commit(),
+  // mirroring bb.lastEvent's own publish shape immediately above.
+  // tickTelemetry() (source/telemetry/telemetry_tick.cpp) sources the
+  // `trace` reply arm from this cell when bb.telemetryTrace is armed.
+  msg::MotionTrace motionTrace;
+
+  // hasActivePlan/activePlanRecord (100-009) -- the adapter's own
+  // CURRENTLY held plan_'s dumpable summary, published every pass
+  // (Subsystems::Drivetrain::hasActivePlan()/activePlanRecord(), both
+  // FREE -- no new Ruckig solve). Entry 0 of BinaryChannel::
+  // handlePlanDump()'s own ring dump.
+  bool hasActivePlan = false;
+  msg::PlanRecord activePlanRecord;
+
+  // planRingGoals/planRingCount (100-009) -- a non-destructive snapshot of
+  // the adapter's own ring_ (Subsystems::Drivetrain::ringGoals(), queue.h's
+  // peek()/size() -- never take()): the QUEUED, not-yet-active Drive::Goal
+  // entries, RAW/unsolved. BinaryChannel::handlePlanDump() preview-SOLVES
+  // each one on demand, at PlanDumpRequest time (a throwaway Drive::
+  // Drivetrain, the SAME pattern admitSegment() already uses) -- never
+  // here, never every pass (a per-pass preview solve of up to 8 queued
+  // Goals would be real, permanent hot-path cost for a rarely-requested
+  // diagnostic -- this project has already burned time on exactly this
+  // class of mistake, folding non-essential per-pass work into the motion
+  // tick, e.g. 100-004's reverted per-pass OTOS read; the fix there was the
+  // same one applied here: keep anything not essential to THIS tick's own
+  // control output out of the hot path).
+  std::array<Drive::Goal, 8> planRingGoals;
+  uint32_t planRingCount = 0;
+
   msg::PlannerState planner;          // from Planner
   // (090-003) odometer sample fusable -- derived from Hal::Odometer::
   // fusableThisPass(), never a device-presence (`!= nullptr`) test; always
@@ -199,35 +266,59 @@ struct Blackboard {
   // 005's binary `stream` arm is the first thing to ever set it true.
   bool telemetryBinary = false;
 
+  // telemetryTrace (100-009, StreamControl.trace) -- the branch point
+  // tickTelemetry() reads to decide whether to ALSO emit a MotionTrace
+  // reply (bb.motionTrace, above) alongside the regular Telemetry push, at
+  // the same period. Set unconditionally by BinaryChannel's `stream` arm
+  // handler (mirrors telemetryBinary's own "written every STREAM, not
+  // gated" pattern). Defaults false -- no MotionTrace pushes unless a
+  // client explicitly arms StreamControl.trace.
+  bool telemetryTrace = false;
+
   // === Command plane: queues. Each drained by exactly ONE consumer. ===
   WorkQueue<Subsystems::CommunicatorToCommandProcessorCommand, 16>
       commandsIn;                            // Communicator -> router
-  // driveIn (094-005): now the S/STOP ESCAPE-HATCH input to
-  // Subsystems::Drivetrain ONLY -- drained (one command per tick, FIFO) and
-  // applied FIRST, ahead of segmentIn (below), inside Drivetrain::tick()
-  // (see drivetrain.h's class comment for the full precedence rules).
-  // There is no more Planner producer (Planner is parked, ticket 094-002)
-  // and no more Rt::MainLoop routeOutputs() consumer (deleted, 094-005 --
-  // Drivetrain stages its own output directly through
-  // hardware_.motor(port).apply(), nothing left to route).
+  // driveIn: the S/STOP ESCAPE-HATCH input to Subsystems::Drivetrain ONLY --
+  // drained (one command per tick, FIFO) and applied FIRST, ahead of
+  // segmentIn (below), inside Drivetrain::tick() (see drivetrain.h's class
+  // comment for the full precedence rules). UNCHANGED by the 100-007
+  // cutover -- the DIRECT/escape-hatch path never went through the retired
+  // Motion::SegmentExecutor and has no source/drive/ equivalent to migrate
+  // to (architecture-update.md (100) "Impact on Existing Components").
   WorkQueue<msg::DrivetrainCommand, 8> driveIn;
-  // segmentIn (094-005, new): `MOVE`'s fan-in (094-006's wire handler is
-  // this queue's eventual producer -- not wired yet this ticket; a direct
-  // test-only bb.segmentIn.post()/sim_post_segment() proves the loop
-  // reorder + this wiring end to end ahead of 094-006's wire verb). An
-  // Rt::WorkQueue, NOT a latest-wins Mailbox: multiple MOVEs can arrive
-  // between mandatory ticks and must ALL apply, in order (the communicator
-  // issue's "no dropped commands" requirement) -- a Mailbox would silently
-  // drop all but the last. Drained by Subsystems::Drivetrain::tick() into
-  // its own internal ring_ every pass (see drivetrain.h).
-  WorkQueue<Motion::Segment, 8> segmentIn;
-  // replaceIn (MOVER, OOP 2026-07-09): the REPLACE-semantics segment slot --
-  // a latest-wins Mailbox ON PURPOSE, the exact dual of segmentIn's
-  // no-dropped-commands WorkQueue: a joystick's deadman-velocity command
-  // stream WANTS "only the newest matters" (two MOVERs in one pass = the
-  // second replaces the first). Drained by Drivetrain::tick() ahead of
-  // segmentIn; the executor replans from its CURRENT velocity.
-  Mailbox<Motion::Segment> replaceIn;
+  // segmentIn (100-007, THE CUTOVER: retyped from Motion::Segment to
+  // Drive::Goal) -- ADMITTED primitive segments' fan-in. BinaryChannel's
+  // handleSegment() (commands/binary_channel.cpp) is this queue's ONLY
+  // producer: it runs wire admission (primitive-flag check +
+  // Drive::Drivetrain::admit(), synchronously, against bb.chainTail) BEFORE
+  // ever posting here -- an admission failure replies a typed ERR and never
+  // reaches this queue at all ("queue untouched on rejection", ticket
+  // 100-007's own acceptance criteria). An Rt::WorkQueue, NOT a latest-wins
+  // Mailbox: multiple admitted segments can arrive between mandatory ticks
+  // and must ALL apply, in order (the communicator issue's "no dropped
+  // commands" requirement). Drained by Subsystems::Drivetrain::tick() into
+  // its own internal ring_ every pass (see drivetrain.h) -- the actual
+  // Drive::Drivetrain::plan() solve happens once a ring entry is POPPED to
+  // become the active plan, not at admission time (admit() is the cheap,
+  // conservative queue-time check; plan() is the exact, more expensive
+  // Ruckig solve -- source/drive/drivetrain.cpp's own admit()/plan() doc
+  // comments).
+  WorkQueue<Drive::Goal, 8> segmentIn;
+  // replaceIn (100-008: retyped from Drive::Goal to MoverRequest) -- a
+  // latest-wins Mailbox ON PURPOSE, the exact dual of segmentIn's
+  // no-dropped-commands WorkQueue: MOVER teleop's "each fresh MOVER
+  // replaces the held plan" contract (SUC-010) IS Mailbox semantics, no new
+  // queueing behavior. BinaryChannel::handleReplace() (commands/
+  // binary_channel.cpp) is this queue's ONLY producer -- it decodes the
+  // `replace`-arm MotionSegment's time/v/omega fields (primitive=true
+  // required, ERR_UNIMPLEMENTED otherwise) straight into a MoverRequest, no
+  // admit()/chainTail involvement (a velocity-mode plan has no pose goal to
+  // admit against). Drained by Subsystems::Drivetrain::tick() into
+  // Drive::Drivetrain::planVelocity(request.target, request.deadman,
+  // current) every pass a fresh MOVER is pending -- see drivetrain.cpp's
+  // own replaceIn-drain comment for the full swap-vs-keep-old-plan
+  // contract on a SOLVE_FAILED/CEILING_INFEASIBLE verdict.
+  Mailbox<MoverRequest> replaceIn;
   WorkQueue<ConfigDelta, 16> configIn;        // router -> Configurator
   WorkQueue<PoseResetCommand, 4> poseResetIn;  // router -> PoseEstimator
   // poseFixIn (099-008, architecture-update.md D7): a genuine timestamped

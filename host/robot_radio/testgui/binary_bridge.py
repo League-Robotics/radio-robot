@@ -53,6 +53,7 @@ from typing import Any
 from robot_radio.robot import legacy_render as render
 from robot_radio.robot import legacy_verbs
 from robot_radio.robot import protocol
+from robot_radio.robot.pb2 import envelope_pb2
 from robot_radio.robot.protocol import NezhaProtocol
 
 # kStreamFloorMs mirror (source/commands/telemetry_commands.cpp /
@@ -134,20 +135,28 @@ def translate_command(proto: NezhaProtocol, raw_line: str) -> str:
 def _handle_binary_verb(proto: NezhaProtocol, verb: str, pos: list[str],
                         kv: dict[str, str], corr_id: int | None) -> str:
     try:
-        env = legacy_verbs.BINARY_DISPATCH[verb](pos, kv)
+        envs = legacy_verbs.BINARY_DISPATCH[verb](pos, kv)
     except ValueError as exc:
         return render.render_err("badarg", str(exc), corr_id)
 
-    # NezhaProtocol._send_envelope() normalizes SerialConnection's
-    # (dict-wrapped) vs. SimConnection's (bare ReplyEnvelope) different
-    # send_envelope() return shapes -- see that method's own docstring.
-    reply = proto._send_envelope(env, read_timeout=500)
+    # (100-007, THE CUTOVER) envs may hold up to 3 envelopes (MOVE's
+    # <=3-primitive decomposition) or 2 (G's) -- send every one IN ORDER,
+    # stopping at the first rejected/timed-out reply. NezhaProtocol.
+    # _send_envelope() normalizes SerialConnection's (dict-wrapped) vs.
+    # SimConnection's (bare ReplyEnvelope) different send_envelope() return
+    # shapes -- see that method's own docstring.
+    reply = None
+    for env in envs:
+        reply = proto._send_envelope(env, read_timeout=500)
+        if reply is None:
+            return render.render_err("unknown", "timeout", corr_id)
+        if reply.WhichOneof("body") == "err":
+            return render.render_error(reply.err, corr_id)
+
     if reply is None:
-        return render.render_err("unknown", "timeout", corr_id)
+        return render.render_ok_for_verb(verb, pos, kv, envelope_pb2.Ack(), corr_id)
 
     which = reply.WhichOneof("body")
-    if which == "err":
-        return render.render_error(reply.err, corr_id)
     if which == "echo":
         return render.render_ok("echo", reply.echo.payload.decode("utf-8", "replace"), corr_id)
     if which == "id":

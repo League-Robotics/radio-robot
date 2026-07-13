@@ -28,6 +28,7 @@
 
 #include <cstdint>
 
+#include "drive/types.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
 #include "messages/odometer.h"
@@ -56,6 +57,39 @@ struct PoseFixCommand {
   float y;       // [mm] world y
   float h;       // [rad] world heading
   uint32_t t;    // [ms] robot-clock timestamp this observation was true (D6)
+};
+
+// MoverRequest (100-008) -- bb.replaceIn's own item type: MOVER's
+// deadman-velocity teleop target, posted by BinaryChannel::handleReplace()
+// (commands/binary_channel.cpp) and drained by Subsystems::Drivetrain::
+// tick() (subsystems/drivetrain.cpp) straight into Drive::Drivetrain::
+// planVelocity(request.target, request.deadman, current) -- the SAME
+// (target, deadman) argument pair planVelocity() itself takes
+// (source/drive/drivetrain.h), just bundled for the Mailbox boundary.
+//
+// Replaces Drive::Goal as replaceIn's payload type (100-007's own interim
+// choice, "full MOVER deadman-velocity semantics are ticket 100-008's
+// job" -- blackboard.h's own doc comment) now that the `replace`
+// CommandEnvelope arm has exactly one producer/meaning in this codebase:
+// MOVER (grep of every legacy_verbs.py BINARY_DISPATCH entry shows only
+// envelope_for_mover() ever builds a `replace`-arm envelope) -- there is no
+// Goal-shaped "replace the ring with a new arc/pivot primitive" use case to
+// preserve.
+//
+// source/drive/ itself never needs a bundled struct like this one --
+// planVelocity() takes `target`/`deadman` as two separate parameters, and
+// stays pure/self-contained (SUC-008) either way; this type is pure
+// Mailbox-boundary transport shape, the same role PoseResetCommand/
+// PoseFixCommand/MotionCommand above already play for their own queues.
+struct MoverRequest {
+  Drive::Twist target;   // [mm/s][mm/s][rad/s] body-frame velocity target
+                          // (v_y always 0.0f -- no holonomic drivetrain yet,
+                          // matching Drive::Twist's own doc comment)
+  float deadman = 0.0f;  // [ms] deadman window -- becomes the resulting
+                          // MotionPlan's own duration() (motion_plan.h's
+                          // own "no separate watchdog" doc comment: the SAME
+                          // terminal machine that handles a stop segment's
+                          // t >= T_plan also handles this elapsing)
 };
 
 // MotionCommand (087-006) -- S/T/D/R/TURN/RT/G/STOP's fan-out to the

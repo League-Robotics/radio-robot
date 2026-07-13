@@ -243,7 +243,14 @@ def test_fuzz_encode_cfg_snapshot_extremes(asan_harness, target):
                                   float("-inf"), 0.0, float("nan"), float("inf")) is not None
     assert encode_cfg_motor(asan_harness, 1, target, 255, 3.4e38, -3.4e38, float("nan"), float("inf"),
                              float("-inf"), 0.0) is not None
-    assert encode_cfg_planner(asan_harness, 1, target, float("nan"), float("inf"), float("-inf")) is not None
+    # 100-001: PlannerConfigPatch grew from 3 to 20 fields (Drive::Limits'
+    # wire-tunable subset, planner.proto 15-31) -- cycle the same extreme
+    # values ([nan, inf, -inf, 3.4e38, -3.4e38, 0.0]) across all 17 new
+    # fields rather than hand-counting 17 positional float() literals.
+    _extreme_cycle = [float("nan"), float("inf"), float("-inf"), 3.4e38, -3.4e38, 0.0]
+    extras = [_extreme_cycle[i % len(_extreme_cycle)] for i in range(17)]
+    assert encode_cfg_planner(asan_harness, 1, target, float("nan"), float("inf"), float("-inf"),
+                               *extras) is not None
     assert encode_cfg_watchdog(asan_harness, 1, target, _UINT32_MAX) is not None
 
 
@@ -256,7 +263,11 @@ def test_fuzz_encode_cfg_snapshot_every_target_and_side(asan_harness):
         assert encode_cfg_drivetrain(asan_harness, 1, target, 321.0, 0.75, 1.5, 2.5, 3.5, 4.5) is not None
         for side in (pb_config.LEFT, pb_config.RIGHT):
             assert encode_cfg_motor(asan_harness, 1, target, side, 1.111, 9.5, 8.5, 7.5, 6.5, 5.5) is not None
-        assert encode_cfg_planner(asan_harness, 1, target, 42.0, 6.0, 0.25) is not None
+        # 100-001: PlannerConfigPatch's 17 new fields, ordinary in-range
+        # values (tovez.json's own starting values, planner.proto 15-31).
+        assert encode_cfg_planner(asan_harness, 1, target, 42.0, 6.0, 0.25,
+                                   620.0, 20.0, 150.0, 2.0, 6.0, 1.5e-5, 120.0, 2.0,
+                                   40.0, 0.15, 0.2, 0.3, 3.0, 40.0, 0.14, 15.0, 0.15) is not None
         assert encode_cfg_watchdog(asan_harness, 1, target, 4242) is not None
 
 

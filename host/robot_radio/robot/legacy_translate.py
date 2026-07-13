@@ -150,54 +150,79 @@ def wheel_targets_for_drive(v_left: float, v_right: float,  # [mm/s]
     return wt
 
 
+def segment_for_seg(arc_length: float = 0.0,      # [mm] signed; 0 = pivot
+                    delta_heading: float = 0.0,   # [rad] signed, CCW+
+                    exit_speed: float = 0.0,       # [mm/s] boundary velocity
+                    ) -> motion_pb2.MotionSegment:
+    """The v2-native arc/pivot PRIMITIVE builder (100-007, THE CUTOVER) --
+    a direct 1:1 mapping onto ``Drive::Goal``'s own three fields
+    (``arcLength``/``deltaHeading``/``exitSpeed``, source/drive/
+    drivetrain.h), ``primitive=True``. This is the ``SEG`` proxy verb's own
+    builder (the issue's "a segment_for_seg()-style builder for real arcs");
+    every OTHER builder in this module that now produces a v2 primitive
+    segment (``segment_for_timed``/``_distance``/``_rt``/``_turn``/``_arc``,
+    ``primitives_for_move``) is a thin, verb-specific wrapper over this same
+    shape -- transcribed once here, reused everywhere, never duplicated."""
+    seg = motion_pb2.MotionSegment()
+    seg.arc_length = float(arc_length)
+    seg.delta_heading = float(delta_heading)
+    seg.exit_speed = float(exit_speed)
+    seg.primitive = True
+    return seg
+
+
 def segment_for_timed(v_left: float, v_right: float,  # [mm/s]
                       duration: int,  # [ms]
                       ) -> motion_pb2.MotionSegment:
-    """``handleT()`` (motion_commands.cpp): ``T <l> <r> <ms>`` -> one
-    straight ``Motion::Segment``, ``distance = v * (ms / 1000)`` where ``v``
-    is ``BodyKinematics::forward()``'s ``v`` output (``(vR + vL) * 0.5``;
-    ``omega`` is discarded by ``handleT()``, so it is never computed here).
-    Every other ``MotionSegment`` field is left at its proto3 zero default,
-    matching ``Motion::Segment``'s own "0 => executor's configured default"
-    convention (``handleT()`` leaves ``speedMax`` at 0 for the same reason
-    -- see that handler's own comment)."""
+    """``handleT()`` (motion_commands.cpp, pre-097-006 gut): ``T <l> <r>
+    <ms>`` -> one straight v2 primitive segment, ``arc_length = v * (ms /
+    1000)`` where ``v`` is ``BodyKinematics::forward()``'s ``v`` output
+    (``(vR + vL) * 0.5``; ``omega`` is discarded by the original
+    ``handleT()``, so it is never computed here).
+
+    DEVIATION (100-007, THE CUTOVER): the pre-cutover ``distance``/
+    ``speed_max`` MotionSegment shape this function used to build is
+    REJECTED at the wire post-cutover (``primitive=false``) -- this now
+    builds a ``primitive=true`` segment via ``segment_for_seg()`` instead.
+    The per-segment ``speedMax`` fallback-to-executor-default the original
+    ``handleT()`` relied on has no v2 equivalent (``Drive::Goal`` carries no
+    speed override at all -- see ``primitives_for_move()``'s own docstring
+    for the full rationale, shared verbatim here)."""
     v = (v_right + v_left) * 0.5
-    seg = motion_pb2.MotionSegment()
-    seg.distance = v * (float(duration) / 1000.0)
-    return seg
+    return segment_for_seg(arc_length=v * (float(duration) / 1000.0))
 
 
 def segment_for_distance(v_left: float, v_right: float,  # [mm/s]
                          travel: int,  # [mm]
                          ) -> motion_pb2.MotionSegment:
-    """``handleD()`` (motion_commands.cpp): ``D <l> <r> <mm>`` -> one
-    straight ``Motion::Segment``, ``distance = sign(v) * mm`` where ``v`` is
-    ``BodyKinematics::forward()``'s ``v`` output (``omega`` discarded, same
-    reasoning as ``segment_for_timed()`` above). ``sign`` matches
-    ``handleD()``'s own ``(v < 0.0f) ? -1.0f : 1.0f`` exactly -- ``v == 0``
-    yields ``+1``, not 0. Every other field 0, same reasoning as
-    ``segment_for_timed()``."""
+    """``handleD()`` (motion_commands.cpp, pre-097-006 gut): ``D <l> <r>
+    <mm>`` -> one straight v2 primitive segment, ``arc_length = sign(v) *
+    mm`` where ``v`` is ``BodyKinematics::forward()``'s ``v`` output
+    (``omega`` discarded, same reasoning as ``segment_for_timed()`` above).
+    ``sign`` matches ``handleD()``'s own ``(v < 0.0f) ? -1.0f : 1.0f``
+    exactly -- ``v == 0`` yields ``+1``, not 0.
+
+    DEVIATION (100-007, THE CUTOVER): same as ``segment_for_timed()`` above
+    -- builds ``primitive=true`` via ``segment_for_seg()`` now, no
+    per-segment speed override."""
     v = (v_right + v_left) * 0.5
     sign = -1.0 if v < 0.0 else 1.0
-    seg = motion_pb2.MotionSegment()
-    seg.distance = sign * float(travel)
-    return seg
+    return segment_for_seg(arc_length=sign * float(travel))
 
 
 def segment_for_rt(rel_angle: float,  # [cdeg]
                    ) -> motion_pb2.MotionSegment:
-    """``handleRT()`` (motion_commands.cpp): ``RT <relAngle>`` -> one pure
-    in-place-turn ``Motion::Segment``: ``distance = 0``, ``finalHeading =
-    relAngle`` (relative, CCW+), wire centidegrees converted to radians via
-    ``_CDEG_TO_RAD`` (``kCdegToRad`` transcription, see this module's file
-    header). Every other field stays at its proto3 zero default -- RT posts
-    to ``bb.segmentIn`` exactly like MOVE (the Planner path is parked), so
-    this builds the SAME ``MotionSegment`` shape ``segment_for_timed()``/
-    ``segment_for_distance()`` do, just with ``finalHeading`` set instead of
-    ``distance``."""
-    seg = motion_pb2.MotionSegment()
-    seg.final_heading = float(rel_angle) * _CDEG_TO_RAD
-    return seg
+    """``handleRT()`` (motion_commands.cpp, pre-097-006 gut): ``RT
+    <relAngle>`` -> one pure in-place-turn v2 primitive segment:
+    ``arc_length = 0`` (a pivot), ``delta_heading = relAngle`` (relative,
+    CCW+), wire centidegrees converted to radians via ``_CDEG_TO_RAD``
+    (``kCdegToRad`` transcription, see this module's file header).
+
+    DEVIATION (100-007, THE CUTOVER): builds ``primitive=true`` via
+    ``segment_for_seg()`` now (was ``final_heading`` on the retired
+    non-primitive shape) -- same reasoning as ``segment_for_timed()``
+    above."""
+    return segment_for_seg(delta_heading=float(rel_angle) * _CDEG_TO_RAD)
 
 
 def segment_for_move(distance: float,  # [mm]
@@ -238,44 +263,114 @@ def segment_for_move(distance: float,  # [mm]
     return seg
 
 
-def segment_for_mover(distance: float,  # [mm]
-                      direction: float,  # [cdeg]
-                      final_heading: float,  # [cdeg]
-                      time: float = 0.0,  # [ms]
-                      v: float = 0.0,  # [mm/s] signed
-                      accel_max: float = 0.0,  # [mm/s^2]
-                      jerk_max: float = 0.0,  # [mm/s^3]
-                      omega: float = 0.0,  # [cdeg/s] signed
-                      yaw_accel_max: float = 0.0,  # [cdeg/s^2]
-                      yaw_jerk_max: float = 0.0,  # [cdeg/s^3]
+def primitives_for_move(distance: float,  # [mm]
+                        direction: float,  # [cdeg]
+                        final_heading: float,  # [cdeg]
+                        ) -> list[motion_pb2.MotionSegment]:
+    """(100-007, THE CUTOVER) decomposes a legacy ``MOVE <distance>
+    <direction> <finalHeading>`` into <=3 v2 PRIMITIVE ``MotionSegment``s
+    (``primitive=True`` each, via ``segment_for_seg()``): a leading pivot to
+    ``direction`` (if nonzero), a straight run of ``distance`` (if
+    nonzero), and a trailing pivot from ``direction`` to ``final_heading``
+    (if the two differ) -- the SAME three-phase shape the pre-cutover
+    ``handleMove()``'s single ``Motion::Segment`` drove through the retired
+    ``Motion::SegmentExecutor`` (PRE_PIVOT/TRANSLATE/TERMINAL_PIVOT,
+    source/motion/segment_executor.h -- parked, not deleted). The v2 wire
+    has no per-message multi-phase encoding (``Drive::Goal`` is ONE
+    constant-curvature arc primitive -- source/drive/drivetrain.h), so this
+    function performs the decomposition HOST-SIDE; the caller sends each
+    result as its OWN ``segment`` ``CommandEnvelope``, in order (see
+    ``legacy_verbs.py``'s own multi-envelope send, ``envelope_for_move()``).
+
+    Decomposition strategy, exactly: phase 1 (pivot) fires iff
+    ``direction != 0``, with ``delta_heading = direction`` (converted to
+    radians); phase 2 (straight) fires iff ``distance != 0``, with
+    ``arc_length = distance``; phase 3 (trailing pivot) fires iff
+    ``final_heading != direction``, with ``delta_heading = final_heading -
+    direction`` (both converted to radians first, so the trailing delta is
+    computed in the SAME frame ``segment_for_seg()``'s pivots already use).
+    A phase whose own delta is exactly 0.0 is OMITTED entirely (never sent
+    as a degenerate zero-motion segment) -- e.g. ``MOVE 500 0 0`` (straight
+    only) sends exactly ONE segment.
+
+    DEVIATION from the pre-cutover single-segment translation (095 Decision
+    5's "transcribe, don't re-derive... document deviations" discipline,
+    reapplied here): ``v=``/``a=``/``j=``/``w=``/``wa=``/``wj=`` per-segment
+    speed/accel/jerk overrides are NOT supported and are silently dropped --
+    ``Drive::Goal``/``PlanRequest`` (source/drive/drivetrain.h) carry no
+    such field at all; ``Drive::Drivetrain::plan()`` always solves against
+    the ONE construction-time ``Drive::Limits``, never a per-call override
+    (a structural consequence of the v2 primitive shape, not an oversight
+    of this function). ``s=1`` (BLEND, the streaming merge) has no v2
+    primitive equivalent either -- the firmware rejects
+    ``primitive=true`` combined with ``stream=true`` outright (typed ERR,
+    architecture-update.md M8); this function never sets ``stream``, and a
+    caller must not either."""
+    direction_rad = float(direction) * _CDEG_TO_RAD
+    final_heading_rad = float(final_heading) * _CDEG_TO_RAD
+
+    segments: list[motion_pb2.MotionSegment] = []
+    if direction_rad != 0.0:
+        segments.append(segment_for_seg(delta_heading=direction_rad))
+    if float(distance) != 0.0:
+        segments.append(segment_for_seg(arc_length=float(distance)))
+    trailing = final_heading_rad - direction_rad
+    if trailing != 0.0:
+        segments.append(segment_for_seg(delta_heading=trailing))
+    return segments
+
+
+def segment_for_mover(distance: float,  # [mm] UNUSED post-100-008, kept for signature stability -- see docstring
+                      direction: float,  # [cdeg] UNUSED post-100-008
+                      final_heading: float,  # [cdeg] UNUSED post-100-008
+                      time: float = 0.0,  # [ms] deadman window
+                      v: float = 0.0,  # [mm/s] signed target body-forward velocity
+                      accel_max: float = 0.0,  # UNUSED post-100-008
+                      jerk_max: float = 0.0,  # UNUSED post-100-008
+                      omega: float = 0.0,  # [cdeg/s] signed target yaw rate
+                      yaw_accel_max: float = 0.0,  # UNUSED post-100-008
+                      yaw_jerk_max: float = 0.0,  # UNUSED post-100-008
                       ) -> motion_pb2.MotionSegment:
-    """``handleMover()`` (motion_commands.cpp): ``MOVER <distance_mm>
-    <direction_cdeg> <finalHeading_cdeg> [t=][v=][w=][a=][j=][wa=][wj=]`` ->
-    ``Motion::Segment``, REPLACE semantics (posted to ``bb.replaceIn``, not
-    ``bb.segmentIn`` -- the deadman-velocity teleop shape). ``stream`` is
-    ALWAYS ``True`` (``handleMover()``'s own unconditional
-    ``seg.stream = true;``). ``v``/``omega`` are SIGNED (they carry
-    direction in time mode, unlike MOVE's unsigned ceilings); ``omega``'s
-    wire centidegrees/s convert to rad/s via ``_CDEG_TO_RAD``, same as
-    MOVE. ``speed_max = |v|``, ``yaw_rate_max = |omega|`` (converted) --
-    the ceiling ``handleMover()`` itself derives from the signed target,
-    transcribed verbatim (``seg.speedMax = fabsf(v); seg.yawRateMax =
-    fabsf(w) * kCdegToRad;``), not re-derived. ``accel_max``/``jerk_max``/
-    ``yaw_accel_max``/``yaw_jerk_max`` pass through the same way MOVE's do."""
+    """(100-008) MOVER's real v2 primitive builder -- the `replace`-arm
+    dual of ``segment_for_seg()`` above: ``Drive::Drivetrain::
+    planVelocity()``'s own ``(target, deadman)`` shape
+    (source/drive/drivetrain.h), wire-carried on ``MotionSegment``'s
+    time/v/omega arm (fields 10-12, protos/motion.proto's own "time/
+    velocity arm (MOVER teleop primitive)" section) plus ``primitive=True``
+    (field 17) -- ``commands/binary_channel.cpp``'s ``handleReplace()``
+    decodes exactly these four fields
+    (``Subsystems::driveMoverRequest()``, ``source/subsystems/
+    drive_bridge.h``) and nothing else.
+
+    ``v``/``omega`` are SIGNED (they carry direction, unlike MOVE's
+    unsigned ceilings); ``omega``'s wire centidegrees/s converts to rad/s
+    via ``_CDEG_TO_RAD``, same as MOVE/RT/SEG.
+
+    ``distance``/``direction``/``final_heading``/``accel_max``/
+    ``jerk_max``/``yaw_accel_max``/``yaw_jerk_max`` are the RETIRED
+    per-segment shape's own fields, kept as this function's OWN positional/
+    kwarg signature ONLY so ``envelope_for_mover()``'s existing
+    ``MOVER <distance> <direction> <finalHeading> [t=][v=][w=]...`` call
+    site (and every real MOVER caller, e.g. ``tests/bench/
+    gamepad_teleop.py``'s own ``MOVER 0 0 0 t=... v=... w=...``) needs no
+    change -- silently unused now, the same "the v2 primitive shape has no
+    equivalent" posture ``primitives_for_move()``'s own docstring already
+    states for ITS dropped per-segment overrides. ``speed_max``/
+    ``yaw_rate_max``/``stream`` (the RETIRED shape's own derived
+    ceiling/BLEND fields) are likewise no longer written -- MOVER's real
+    primitive shape carries no per-call override/goal fields at all, and
+    ``replace``'s own wire admission (100-008) never reads ``stream``
+    (BLEND is a `segment`-arm-only concern, architecture-update.md M8).
+
+    Before 100-008 this built the RETIRED non-primitive (``primitive=
+    false``) ``MotionSegment`` shape, which the firmware rejected outright
+    at the wire (typed ``ERR_UNIMPLEMENTED``) -- see git history for that
+    version if a reference is ever needed."""
     seg = motion_pb2.MotionSegment()
-    seg.stream = True
     seg.time = float(time)
-    seg.distance = float(distance)
-    seg.direction = float(direction) * _CDEG_TO_RAD
-    seg.final_heading = float(final_heading) * _CDEG_TO_RAD
     seg.v = float(v)
     seg.omega = float(omega) * _CDEG_TO_RAD
-    seg.speed_max = abs(float(v))
-    seg.yaw_rate_max = abs(float(omega)) * _CDEG_TO_RAD
-    seg.accel_max = float(accel_max)
-    seg.jerk_max = float(jerk_max)
-    seg.yaw_accel_max = float(yaw_accel_max) * _CDEG_TO_RAD
-    seg.yaw_jerk_max = float(yaw_jerk_max) * _CDEG_TO_RAD
+    seg.primitive = True
     return seg
 
 
@@ -303,29 +398,27 @@ def segment_for_arc(speed: float,  # [mm/s]
     ``msg::VelocityGoal`` that ran until an explicit ``STOP``/``stop=``
     clause fired.
 
-    DEVIATION (097, this ticket): ``Motion::Segment`` (the ``segment``/
-    ``replace`` arms) has no "run forever" shape -- ``segment.h``'s own
-    "distance-bounded (time == 0) or time-bounded (time > 0), never both"
-    invariant means every segment self-terminates. The Planner-only
-    continuous ``VelocityGoal`` handleR() posted has no reachable
-    equivalent while Planner stays parked. This builds the CLOSEST
-    available replace-arm shape instead: a TIME-BOUNDED velocity pulse
-    (the SAME time/velocity fields ``segment_for_mover()``'s teleop
-    deadman uses) -- ``v=speed``, ``omega=speed/radius`` for ``duration``
-    ms, then the SegmentExecutor decelerates gracefully to rest. A
-    repeated Send re-arms the pulse. Documented approximation, not a
-    silent behavior change; a re-armed Planner (098+) could restore the
-    true continuous arc.
+    DEVIATION (100-007, THE CUTOVER -- supersedes the 097 open-loop
+    velocity-pulse approximation this function used to build): the v2
+    stack's own ``Drive::Goal`` (source/drive/drivetrain.h) IS a constant-
+    curvature arc primitive, so R's translation no longer needs a
+    replace-arm velocity-pulse approximation at all -- this now builds a
+    REAL, single, ``primitive=true`` arc segment via ``segment_for_seg()``:
+    ``arc_length = speed * (duration / 1000)`` [mm]; ``delta_heading =
+    arc_length / radius`` [rad] (0 when ``radius == 0``, the SAME zero-guard
+    the original ``handleR()``'s own ``omega = speed/radius`` used,
+    transcribed verbatim); ``exit_speed = 0.0`` (a stop segment -- R's own
+    pre-097 continuous-until-STOP shape still has no v2 primitive
+    equivalent; this ends gracefully at rest after ``duration`` instead of
+    running forever, same practical effect as the 097 pulse approximation
+    it replaces, just via a real segment/plan instead of a replace-arm
+    velocity target). Sent as ``segment`` (not ``replace``) by
+    ``envelope_for_r()`` (legacy_verbs.py) -- it is now a genuine finite
+    primitive, not a replace-semantics velocity pulse.
     """
-    omega = (speed / radius) if radius != 0.0 else 0.0
-    seg = motion_pb2.MotionSegment()
-    seg.stream = True
-    seg.time = float(duration)
-    seg.v = float(speed)
-    seg.omega = float(omega)
-    seg.speed_max = abs(float(speed))
-    seg.yaw_rate_max = abs(float(omega))
-    return seg
+    arc_length = float(speed) * (float(duration) / 1000.0)
+    delta_heading = (arc_length / radius) if radius != 0.0 else 0.0
+    return segment_for_seg(arc_length=arc_length, delta_heading=delta_heading, exit_speed=0.0)
 
 
 def segment_for_turn(heading: float,  # [cdeg] absolute target heading
@@ -336,54 +429,57 @@ def segment_for_turn(heading: float,  # [cdeg] absolute target heading
     signed delta to the absolute target, and closes a ``HEADING`` stop
     condition around that delta.
 
-    DEVIATION (097, this ticket): fused pose is pinned at (0,0,0) until
-    sprint 098 (``Telemetry.pose`` never moves -- ``Subsystems::
-    PoseEstimator::tick()`` is not called anywhere in ``source/`` yet), so
-    "current heading" cannot be read host-side. This approximates the
-    closed-loop turn AS IF the robot always starts at heading 0: it builds
-    the SAME pure in-place-turn ``Motion::Segment`` shape
-    ``segment_for_rt()`` does (``distance=0``, ``final_heading=heading``),
-    i.e. it treats the absolute target as a from-zero relative turn.
-    Correct immediately after a fresh pose reset; drifts from the true
-    absolute-heading meaning across repeated turns until 098 lands a live
-    fused heading this function can subtract. ``eps`` (the closed-loop
-    tolerance gate) has no open-loop analogue -- the SegmentExecutor's own
-    Ruckig terminal pivot self-terminates on its own encoder arc
+    DEVIATION (097, carried forward unchanged by 100-007): fused pose is
+    not readable host-side (``Telemetry.pose`` is not on the wire), so
+    "current heading" cannot be subtracted here either. This approximates
+    the closed-loop turn AS IF the robot always starts at heading 0: it
+    builds the SAME pure in-place-turn v2 primitive segment
+    ``segment_for_rt()`` does (``arc_length=0``, ``delta_heading=heading``,
+    ``primitive=True`` -- via ``segment_for_seg()``, 100-007's own
+    conversion of this function to the primitive shape), i.e. it treats the
+    absolute target as a from-zero relative turn. Correct immediately after
+    a fresh pose reset; drifts from the true absolute-heading meaning
+    across repeated turns until a live fused heading this function can
+    subtract is wired host-side (unrelated to this sprint). ``eps`` (the
+    closed-loop tolerance gate) has no open-loop analogue -- ``Drive::``'s
+    own terminal settle machine self-terminates on measured state
     regardless -- so callers accept it for the OK reply body only; it is
     not a parameter here.
     """
-    seg = motion_pb2.MotionSegment()
-    seg.final_heading = float(heading) * _CDEG_TO_RAD
+    seg = segment_for_seg(delta_heading=float(heading) * _CDEG_TO_RAD)
     return seg
 
 
 def segment_for_goto_relative(x: float,  # [mm]
                               y: float,  # [mm]
                               speed: float = 0.0,  # [mm/s]
-                              ) -> motion_pb2.MotionSegment:
+                              ) -> list[motion_pb2.MotionSegment]:
     """``handleG()`` (motion_commands.cpp, pre-097-006 gut): ``G <x> <y>
     <speed>`` posts a ``msg::GotoGoal`` -- ``Subsystems::Planner`` owns an
     internal PRE_ROTATE/PURSUE state machine that closes the loop on fused
     pose the entire way to the target.
 
-    DEVIATION (097, this ticket): Planner is parked and fused pose is not
-    live until 098, so this builds the open-loop segment approximation
-    ``MOVE`` itself would use for a single pre-pivot-then-straight leg:
-    pivot to face the relative target (``direction = atan2(y, x)``), drive
-    the straight-line distance to it (``distance = hypot(x, y)``), and
-    finish facing the direction of travel (``final_heading = direction``,
-    a deliberate choice -- NOT 0 -- so the robot does not waste motion
-    pivoting back to its start heading once it arrives). No mid-course
-    correction: one open-loop segment, not a pursuit loop. ``speed`` (mm/s)
-    becomes the segment's ``speed_max`` ceiling; 0 (the default) falls back
-    to the SegmentExecutor's configured profile, the same "0 => executor
-    default" convention every other translator in this module documents.
+    DEVIATION (097, carried forward as a LIST by 100-007): Planner is
+    parked and fused pose is not live host-side, so this builds the
+    open-loop segment approximation ``MOVE`` itself would use for a single
+    pre-pivot-then-straight leg: pivot to face the relative target
+    (``direction = atan2(y, x)``), drive the straight-line distance to it
+    (``distance = hypot(x, y)``), and finish facing the direction of travel
+    (``final_heading = direction``, a deliberate choice -- NOT 0 -- so the
+    robot does not waste motion pivoting back to its start heading once it
+    arrives). No mid-course correction: open-loop primitives, not a pursuit
+    loop.
+
+    100-007, THE CUTOVER: reuses ``primitives_for_move()`` verbatim
+    (``final_heading == direction``, so its own trailing-pivot phase is
+    ALWAYS omitted here by construction -- at most 2 primitives: a leading
+    pivot then a straight run) -- returns a LIST, not a single
+    ``MotionSegment``, mirroring MOVE's own multi-envelope shape. ``speed``
+    (mm/s, the old ``speed_max`` ceiling) has no v2 primitive equivalent --
+    see ``primitives_for_move()``'s own docstring on why per-segment speed/
+    accel/jerk overrides are dropped, not an oversight of this function.
     """
     distance = math.hypot(x, y)
-    direction = math.atan2(y, x)
-    seg = motion_pb2.MotionSegment()
-    seg.distance = distance
-    seg.direction = direction
-    seg.final_heading = direction
-    seg.speed_max = float(speed)
-    return seg
+    direction_rad = math.atan2(y, x)
+    direction_cdeg = direction_rad / _CDEG_TO_RAD
+    return primitives_for_move(distance, direction_cdeg, direction_cdeg)

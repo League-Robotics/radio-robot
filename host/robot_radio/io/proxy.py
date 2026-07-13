@@ -456,18 +456,33 @@ class ProtocolBridge:
     def _handle_binary_verb(self, verb: str, pos: list[str], kv: dict[str, str],
                             corr_id: int | None) -> str:
         try:
-            env = legacy_verbs.BINARY_DISPATCH[verb](pos, kv)
+            envs = legacy_verbs.BINARY_DISPATCH[verb](pos, kv)
         except ValueError as exc:
             return render.render_err("badarg", str(exc), corr_id)
 
-        result = self._conn.send_envelope(env, read_timeout=500)
-        reply = result.get("reply")
+        # (100-007, THE CUTOVER) envs may hold up to 3 envelopes (MOVE's
+        # <=3-primitive decomposition, legacy_translate.primitives_for_move())
+        # or 2 (G's) -- send every one IN ORDER, stopping at the first
+        # rejected/timed-out reply ("queue untouched on rejection" holds
+        # per-segment: whatever already admitted stays queued, nothing
+        # further is sent). The reply this function renders is the LAST one
+        # actually received -- the final queued state on success, or the
+        # rejecting ERR on failure.
+        reply = None
+        for env in envs:
+            result = self._conn.send_envelope(env, read_timeout=500)
+            reply = result.get("reply")
+            if reply is None:
+                return render.render_err("unknown", "timeout", corr_id)
+            if reply.WhichOneof("body") == "err":
+                return render.render_error(reply.err, corr_id)
+
         if reply is None:
-            return render.render_err("unknown", "timeout", corr_id)
+            # envs was empty (e.g. a degenerate all-zero MOVE with no
+            # motion at all) -- a legal no-op, not an error.
+            return render.render_ok_for_verb(verb, pos, kv, envelope_pb2.Ack(), corr_id)
 
         which = reply.WhichOneof("body")
-        if which == "err":
-            return render.render_error(reply.err, corr_id)
         if which == "echo":
             return render.render_ok("echo", reply.echo.payload.decode("utf-8", "replace"), corr_id)
         if which == "id":

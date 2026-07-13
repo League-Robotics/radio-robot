@@ -123,4 +123,58 @@ message MotionSegment {
   // in-flight plan rather than executing sequentially. Dimensionless; no
   // bound.
   bool stream = 13;
+
+  // --- arc/pivot primitive fields (100-001, motion-stack-v2 M1) ---------
+  //
+  // Declared-only this ticket: the wire/config contract for Drive::Goal
+  // (drivetrain.h's own struct, architecture-update.md's two core header
+  // sketches, transcribed verbatim below) lands NOW so ticket 007's
+  // cutover adapter and the host proxy's primitives_for_move() decomposer
+  // (legacy_translate.py) can both build against a stable schema; no C++
+  // consumer reads these four fields yet (that is ticket 007's job). No
+  // (min)/(max)/(abs_max) bound is attached -- unlike distance/direction/
+  // final_heading above, there is no existing text-handler constant to
+  // transcribe a bound FROM (Decision 5's own discipline: transcribe,
+  // never invent) -- a future ticket adds bounds once Drive::Limits'
+  // admission check (Drivetrain::admit()) is the live source of truth.
+
+  // [mm] signed path length; 0 = pivot in place. Mirrors Drive::Goal::
+  // arcLength exactly (source/drive/drivetrain.h's sketch in
+  // architecture-update.md).
+  float arc_length = 14;
+
+  // [rad] total heading change, CCW+. Mirrors Drive::Goal::deltaHeading.
+  // straight segment: delta_heading = 0. pivot segment: arc_length = 0.
+  float delta_heading = 15;
+
+  // [mm/s] boundary velocity at segment end; 0 = stop (the common case).
+  // Mirrors Drive::Goal::exitSpeed. Pivot segments require exit_speed = 0
+  // (Drivetrain::admit()'s PIVOT_NONZERO_EXIT verdict, ticket 003+).
+  float exit_speed = 16;
+
+  // Marks this segment as a Drive::Goal-shaped arc/pivot primitive (the
+  // ONLY shape firmware accepts once the motion-stack-v2 cutover (ticket
+  // 007) lands -- primitive=false is rejected post-cutover; every legacy
+  // MOVE/MOVER/TURN/ROTATE text verb reaches the wire only through the
+  // host proxy's primitives_for_move() decomposition, which always sets
+  // primitive=true). NOT enforced by this ticket -- declared only, per
+  // this ticket's own scope (schema, not behavior).
+  bool primitive = 17;
+}
+
+// MotionStatus (100-001, motion-stack-v2 M1) -- mirrors Drive::MotionPlan's
+// Status enum verbatim (motion_plan.h's sketch in architecture-update.md):
+// the per-tick outcome of Drive::MotionPlan::step(), reused on the wire by
+// both EventNotify (unsolicited abort/flush notification) and MotionTrace
+// (the per-tick trace payload, envelope.proto) so both arms describe
+// "what's happening to this segment" with the SAME vocabulary the C++
+// control code itself uses -- never re-derived or renamed for the wire.
+enum MotionStatus {
+  RUNNING             = 0;  // tracking the reference
+  SETTLING            = 1;  // stop segment past T_plan: banded one-sided walk-in
+  REPLAN_DUE          = 2;  // caller should invoke Drivetrain::replan and swap plans
+  DONE_STOP           = 3;  // completion gate held (pose+vel tolerance, dwelled)
+  DONE_HANDOFF        = 4;  // vExit != 0: exhausted AND within handoff envelope
+  ABORT_TIMEOUT       = 5;  // explicit failure -- never silent
+  ABORT_REPLAN_LIMIT  = 6;
 }

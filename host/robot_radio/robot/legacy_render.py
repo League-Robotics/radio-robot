@@ -144,12 +144,13 @@ def render_device_banner(device_id: "envelope_pb2.DeviceId") -> str:
 def render_ok_for_verb(verb: str, pos: list[str], kv: dict[str, str],
                        ack: "envelope_pb2.Ack", corr_id: int | str | None) -> str:
     """Render the ``OK`` reply line for a verb whose binary reply is a
-    plain ``Ack{q, rem, t}`` -- ``S``/``T``/``D``/``RT``/``R``/``TURN``/
-    ``G``/``MOVE``/``MOVER``/``PING``/``STOP`` (``R``/``TURN``/``G`` added
-    097, this ticket -- see ``legacy_translate.py``'s ``segment_for_arc()``/
-    ``segment_for_turn()``/``segment_for_goto_relative()`` for the
-    open-loop translations these render the reply for). Raises
-    ``ValueError`` for any other verb (no Ack-shaped reply defined for it)."""
+    plain ``Ack{q, rem, t}`` -- ``S``/``T``/``D``/``RT``/``SEG``/``R``/
+    ``TURN``/``G``/``MOVE``/``MOVER``/``PING``/``STOP`` (``R``/``TURN``/
+    ``G`` added 097; ``SEG`` added 100-007, THE CUTOVER -- see
+    ``legacy_translate.py``'s ``segment_for_arc()``/``segment_for_turn()``/
+    ``segment_for_goto_relative()``/``segment_for_seg()`` for the
+    translations these render the reply for). Raises ``ValueError`` for any
+    other verb (no Ack-shaped reply defined for it)."""
     if verb == "S":
         # handleS(): "OK drive l=%d r=%d"
         return render_ok("drive", f"l={int(float(pos[0]))} r={int(float(pos[1]))}", corr_id)
@@ -164,6 +165,16 @@ def render_ok_for_verb(verb: str, pos: list[str], kv: dict[str, str],
     if verb == "RT":
         # handleRT(): "OK rt rot=%d"
         return render_ok("rt", f"rot={int(float(pos[0]))}", corr_id)
+    if verb == "SEG":
+        # segment_for_seg() (100-007, THE CUTOVER): "OK seg arc=%d dh=%d
+        # exit=%d q=%u rem=%d" -- q/rem come from the Ack, exit from the
+        # RAW kv value (no live handler to derive it from, same posture as
+        # TURN's eps/MOVER's t/v/w below).
+        from robot_radio.robot.legacy_verbs import kvfloat
+        exit_speed = int(kvfloat(kv, "exit_speed"))
+        body = (f"arc={int(float(pos[0]))} dh={int(float(pos[1]))} "
+                f"exit={exit_speed} q={ack.q} rem={int(ack.rem)}")
+        return render_ok("seg", body, corr_id)
     if verb == "R":
         # handleR(): "OK arc speed=%d radius=%d"
         body = f"speed={int(float(pos[0]))} radius={int(float(pos[1]))}"
@@ -202,9 +213,10 @@ def render_ok_for_verb(verb: str, pos: list[str], kv: dict[str, str],
     raise ValueError(f"no Ack-shaped OK renderer for verb {verb}")
 
 
-# Verbs whose Ack success arms the EVT-done watch (T/D/RT/MOVE only --
-# S/MOVER/PING/STOP do not; see io/proxy.py's _EvtWatcher wiring).
-EVT_ARMING_VERBS = frozenset({"T", "D", "RT", "MOVE"})
+# Verbs whose Ack success arms the EVT-done watch (T/D/RT/SEG/MOVE only --
+# S/MOVER/PING/STOP do not; SEG added 100-007, THE CUTOVER, alongside its
+# T/D/RT/MOVE segment-arm siblings; see io/proxy.py's _EvtWatcher wiring).
+EVT_ARMING_VERBS = frozenset({"T", "D", "RT", "SEG", "MOVE"})
 
 
 # ---------------------------------------------------------------------------
