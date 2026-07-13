@@ -327,7 +327,6 @@ void DeviceBus::neutralizeAllMotors() {
 // ---------------------------------------------------------------------------
 
 #ifndef HOST_BUILD
-namespace {
 // The trampoline create_fiber() actually invokes (real CODAL builds only).
 // DB-009 verifies this against real hardware -- in particular, that
 // create_fiber()'s signature (a bare `void(*)(void*)` entry point plus a
@@ -337,7 +336,16 @@ namespace {
 // ships in this project's vendored CODAL; this is the ONE call site in the
 // whole subsystem that touches create_fiber(), by design (fiber_runner.h's
 // own header comment).
-void codalFiberEntry(void* arg) {
+//
+// A STATIC MEMBER of CodalFiberRunner (fiber_runner.h), not a free function
+// in an anonymous namespace (DB-008's original form here) -- DB-009's first
+// real (non-HOST_BUILD) ARM compile of this file caught that the free-
+// function form cannot reach DeviceBus::runPreamble()/stopRequested()/
+// markLoopExited() (all private): device_bus.h's `friend class
+// CodalFiberRunner;` grants friendship to that CLASS, not to an unrelated
+// free function. See fiber_runner.h's own declaration comment for the full
+// reasoning.
+void CodalFiberRunner::codalFiberEntry(void* arg) {
   DeviceBus* bus = static_cast<DeviceBus*>(arg);
   bus->runPreamble();
   while (!bus->stopRequested()) {
@@ -345,7 +353,6 @@ void codalFiberEntry(void* arg) {
   }
   bus->markLoopExited();
 }
-}  // namespace
 
 void CodalFiberRunner::run(DeviceBus& bus) {
   create_fiber(&codalFiberEntry, static_cast<void*>(&bus));
