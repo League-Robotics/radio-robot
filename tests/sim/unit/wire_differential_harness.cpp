@@ -88,7 +88,16 @@
 //     <ekf_r_fix_xy> <ekf_r_fix_theta>
 //   encode_cfg_motor <corr_id> <target> <side> <travel_calib> <kp> <ki>
 //     <kff> <i_max> <kaw>
-//   encode_cfg_planner <corr_id> <target> <min_speed> <heading_kp> <heading_kd>
+//   encode_cfg_planner <corr_id> <target> <min_speed> <heading_kp>
+//     <heading_kd> <v_wheel_max> <steer_headroom> <wheel_step_max>
+//     <track_k_s> <track_k_theta> <track_k_cross> <trim_v_max>
+//     <trim_omega_max> <replan_err_pos> <replan_err_theta> <replan_hold>
+//     <replan_min_period> <replan_max> <handoff_tol_pos> <handoff_tol_v>
+//     <arrive_vel_tol> <arrive_dwell>
+//     (100-001, motion-stack-v2 M1: v_wheel_max..arrive_dwell are
+//     PlannerConfigPatch's new fields 4-20, Drive::Limits' wire-tunable
+//     subset of PlannerConfig 15-31 -- extended from the pre-100-001 3-arg
+//     shape, positional in config.proto's own field-number order.)
 //   encode_cfg_watchdog <corr_id> <target> <watchdog>
 //     Builds ReplyEnvelope{cfg=ConfigSnapshot{target, patch=<arm>}} -- one
 //     verb per `patch` oneof arm, each populating EVERY field of its own
@@ -610,7 +619,10 @@ int cmdEncodeCfgMotor(int argc, char** argv) {
 }
 
 int cmdEncodeCfgPlanner(int argc, char** argv) {
-  if (argc < 7) {
+  // argv[0]=program, argv[1]="encode_cfg_planner", argv[2]=corr_id,
+  // argv[3]=target, argv[4..23]=PlannerConfigPatch's 20 fields (100-001) in
+  // field-number order -- argc must be >= 24 (indices 0..23 all used).
+  if (argc < 24) {
     std::printf("USAGE_ERROR\n");
     return 1;
   }
@@ -620,9 +632,27 @@ int cmdEncodeCfgPlanner(int argc, char** argv) {
   msg::ConfigSnapshot& cfg = reply.body.cfg;
   cfg.target = static_cast<msg::ConfigTarget>(std::strtoul(argv[3], nullptr, 10));
   cfg.patch_kind = msg::ConfigSnapshot::PatchKind::PLANNER;
-  cfg.patch.planner.min_speed = {true, std::strtof(argv[4], nullptr)};
-  cfg.patch.planner.heading_kp = {true, std::strtof(argv[5], nullptr)};
-  cfg.patch.planner.heading_kd = {true, std::strtof(argv[6], nullptr)};
+  msg::PlannerConfigPatch& p = cfg.patch.planner;
+  p.min_speed         = {true, std::strtof(argv[4], nullptr)};
+  p.heading_kp        = {true, std::strtof(argv[5], nullptr)};
+  p.heading_kd         = {true, std::strtof(argv[6], nullptr)};
+  p.v_wheel_max        = {true, std::strtof(argv[7], nullptr)};
+  p.steer_headroom     = {true, std::strtof(argv[8], nullptr)};
+  p.wheel_step_max     = {true, std::strtof(argv[9], nullptr)};
+  p.track_k_s          = {true, std::strtof(argv[10], nullptr)};
+  p.track_k_theta      = {true, std::strtof(argv[11], nullptr)};
+  p.track_k_cross      = {true, std::strtof(argv[12], nullptr)};
+  p.trim_v_max         = {true, std::strtof(argv[13], nullptr)};
+  p.trim_omega_max     = {true, std::strtof(argv[14], nullptr)};
+  p.replan_err_pos     = {true, std::strtof(argv[15], nullptr)};
+  p.replan_err_theta   = {true, std::strtof(argv[16], nullptr)};
+  p.replan_hold        = {true, std::strtof(argv[17], nullptr)};
+  p.replan_min_period  = {true, std::strtof(argv[18], nullptr)};
+  p.replan_max         = {true, std::strtof(argv[19], nullptr)};
+  p.handoff_tol_pos    = {true, std::strtof(argv[20], nullptr)};
+  p.handoff_tol_v      = {true, std::strtof(argv[21], nullptr)};
+  p.arrive_vel_tol     = {true, std::strtof(argv[22], nullptr)};
+  p.arrive_dwell       = {true, std::strtof(argv[23], nullptr)};
   printEncodedOrZero(reply);
   return 0;
 }

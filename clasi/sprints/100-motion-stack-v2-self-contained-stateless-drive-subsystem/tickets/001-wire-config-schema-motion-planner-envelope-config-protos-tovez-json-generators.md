@@ -1,8 +1,10 @@
 ---
 id: '001'
-title: 'Wire/config schema: motion, planner, envelope, config protos + tovez.json generators'
-status: open
-use-cases: [SUC-011]
+title: 'Wire/config schema: motion, planner, envelope, config protos + tovez.json
+  generators'
+status: done
+use-cases:
+- SUC-011
 depends-on: []
 github-issue: ''
 issue: motion-stack-v2-a-self-contained-stateless-motion-control-subsystem.md
@@ -36,12 +38,12 @@ apparent duplication by consolidating them.
 
 ## Acceptance Criteria
 
-- [ ] `protos/motion.proto`: `MotionSegment` gains `arc_length`(14, `[mm]`
+- [x] `protos/motion.proto`: `MotionSegment` gains `arc_length`(14, `[mm]`
       signed), `delta_heading`(15, `[rad]`), `exit_speed`(16, `[mm/s]`),
       `primitive`(17, `bool`); firmware will reject `primitive=false`
       after cutover (ticket 007) — not enforced yet by this ticket, just
       declared.
-- [ ] `protos/planner.proto`: `PlannerConfig` gains fields 15-31 exactly
+- [x] `protos/planner.proto`: `PlannerConfig` gains fields 15-31 exactly
       per the issue's list: `v_wheel_max`, `steer_headroom`,
       `wheel_step_max`, `track_k_s`, `track_k_theta`, `track_k_cross`,
       `trim_v_max`, `trim_omega_max`, `replan_err_pos`, `replan_err_theta`,
@@ -50,7 +52,7 @@ apparent duplication by consolidating them.
       `arrive_dwell` — 17 fields, numbers 15 through 31 inclusive. Each
       field's doc comment carries a `// [unit]` tag (no units in the
       field name itself, per `.claude/rules/naming-and-style.md`).
-- [ ] `protos/config.proto`: `PlannerConfigPatch` grows to cover the new
+- [x] `protos/config.proto`: `PlannerConfigPatch` grows to cover the new
       live-tunable subset of fields 15-31 (`optional float`, matching the
       existing 3-field pattern). Run `scripts/gen_messages.py` and
       capture the `kMaxEncodedSize` report for `ConfigDelta`/
@@ -60,7 +62,7 @@ apparent duplication by consolidating them.
       selected by a new `CONFIG_PLANNER_TRACK` `ConfigTarget` value
       (architecture-update.md Decision 4's specified fallback — do not
       invent a different split mechanism).
-- [ ] `protos/envelope.proto`: new `PlanDumpRequest` (`CommandEnvelope.cmd`
+- [x] `protos/envelope.proto`: new `PlanDumpRequest` (`CommandEnvelope.cmd`
       arm 18), `PlanRecord` (`ReplyEnvelope.body` arm 10, ~85B:
       goal/anchor/v_eff/duration/exit_speed/entry_speed/replan_count),
       `MotionTrace` (`ReplyEnvelope.body` arm 11, ~90-120B, a serialized
@@ -69,27 +71,27 @@ apparent duplication by consolidating them.
       get/stream and pose/otos precedent already in this file's header
       comments). `EventNotify` (existing empty placeholder, arm 6) gets a
       real body: `seg_seq`, `status`, `e_final_pos`, `e_final_theta`.
-- [ ] `protos/telemetry.proto` is NOT touched by this ticket — verify by
+- [x] `protos/telemetry.proto` is NOT touched by this ticket — verify by
       diff that `message Telemetry` gains no new field (`MotionTrace` is
       a separate reply arm, never a `Telemetry` extension; the existing
       ~166B budget stays untouched).
-- [ ] `data/robots/tovez.json` gains new `control.*`/`geometry.*` keys for
+- [x] `data/robots/tovez.json` gains new `control.*`/`geometry.*` keys for
       every new `PlannerConfig` tunable, seeded with the issue's starting
       values (`track_k_s`≈2.0, `track_k_theta`≈6.0, `track_k_cross`≈1.5e-5,
       `trim_v_max`≈120, `trim_omega_max`≈1.0/2.0, plus the replan/handoff/
       arrive envelope defaults from the issue's tables), each annotated
       "starting values, not yet bench-tuned" (mirroring the existing
       `_heading_gains_note` convention exactly).
-- [ ] `scripts/gen_boot_config.py` gains a mapping for the new
+- [x] `scripts/gen_boot_config.py` gains a mapping for the new
       `PlannerConfig` fields, mirroring `heading_gains_for_config()`'s
       exact shape (read from `data/robots/*.json`'s `control`/`geometry`
       block, falling back to a firmware default when absent).
-- [ ] `scripts/check_config_sync.py`'s `PATCH_TO_PYDANTIC` map gains an
+- [x] `scripts/check_config_sync.py`'s `PATCH_TO_PYDANTIC` map gains an
       entry for every new `PlannerConfigPatch` field (allowlisted `[]`
       where no host pydantic field exists yet, matching the
       `ekf_r_otos_*`/`heading_kp` precedent exactly — never a silent
       omission). `python scripts/check_config_sync.py` exits 0.
-- [ ] `uv run python -m pytest` passes (existing
+- [x] `uv run python -m pytest` passes (existing
       `test_gen_boot_config_planner.py`-style tests extended for the new
       fields).
 

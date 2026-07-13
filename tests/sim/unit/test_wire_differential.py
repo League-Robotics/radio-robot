@@ -140,6 +140,9 @@ def test_field_numbers_match_pb2_descriptors():
         # hello/ver/help (stakeholder-directed 6-verb minimal command
         # surface, 2026-07-10).
         "hello": 15, "ver": 16, "help": 17,
+        # plan_dump (100-001, motion-stack-v2 M9): declared-only, replies
+        # ERR_UNIMPLEMENTED until ticket 009.
+        "plan_dump": 18,
     }
     actual_cmd_numbers = {
         f.name: f.number for f in pb_envelope.CommandEnvelope.DESCRIPTOR.oneofs_by_name["cmd"].fields
@@ -151,6 +154,9 @@ def test_field_numbers_match_pb2_descriptors():
         # helptext (stakeholder-directed 6-verb minimal command surface,
         # 2026-07-10) -- HELP's reply; hello/ver reuse the existing `id` arm.
         "helptext": 9,
+        # plan/trace (100-001, motion-stack-v2 M9): declared-only, replies
+        # ERR_UNIMPLEMENTED (plan) until ticket 009.
+        "plan": 10, "trace": 11,
     }
     actual_body_numbers = {
         f.name: f.number for f in pb_envelope.ReplyEnvelope.DESCRIPTOR.oneofs_by_name["body"].fields
@@ -160,6 +166,9 @@ def test_field_numbers_match_pb2_descriptors():
     expected_motion_segment_numbers = {
         "distance": 1, "direction": 2, "final_heading": 3, "speed_max": 4, "accel_max": 5, "jerk_max": 6,
         "yaw_rate_max": 7, "yaw_accel_max": 8, "yaw_jerk_max": 9, "time": 10, "v": 11, "omega": 12, "stream": 13,
+        # arc/pivot primitive fields (100-001, motion-stack-v2 M1) --
+        # declared only, no C++ consumer until ticket 007.
+        "arc_length": 14, "delta_heading": 15, "exit_speed": 16, "primitive": 17,
     }
     from _wire_diff_driver import pb_motion  # local import: avoid unused-at-module-scope lint noise
     actual_motion_segment_numbers = {f.name: f.number for f in pb_motion.MotionSegment.DESCRIPTOR.fields}
@@ -221,7 +230,18 @@ def test_field_numbers_match_pb2_descriptors_096_006_new_messages():
     actual_motor_patch = {f.name: f.number for f in pb_config.MotorConfigPatch.DESCRIPTOR.fields}
     assert actual_motor_patch == expected_motor_patch
 
-    expected_planner_patch = {"min_speed": 1, "heading_kp": 2, "heading_kd": 3}
+    expected_planner_patch = {
+        "min_speed": 1, "heading_kp": 2, "heading_kd": 3,
+        # v_wheel_max..arrive_dwell (100-001, motion-stack-v2 M1):
+        # Drive::Limits' wire-tunable subset of PlannerConfig fields 15-31.
+        "v_wheel_max": 4, "steer_headroom": 5, "wheel_step_max": 6,
+        "track_k_s": 7, "track_k_theta": 8, "track_k_cross": 9,
+        "trim_v_max": 10, "trim_omega_max": 11,
+        "replan_err_pos": 12, "replan_err_theta": 13,
+        "replan_hold": 14, "replan_min_period": 15, "replan_max": 16,
+        "handoff_tol_pos": 17, "handoff_tol_v": 18,
+        "arrive_vel_tol": 19, "arrive_dwell": 20,
+    }
     actual_planner_patch = {f.name: f.number for f in pb_config.PlannerConfigPatch.DESCRIPTOR.fields}
     assert actual_planner_patch == expected_planner_patch
 
@@ -751,12 +771,21 @@ def test_direction_b_config_snapshot_motor(harness, target, side, side_name):
 
 
 def test_direction_b_config_snapshot_planner(harness):
-    raw = encode_cfg_planner(harness, 42, pb_config.CONFIG_PLANNER, 42.0, 6.0, 0.25)
+    # 100-001: PlannerConfigPatch's 17 new fields (Drive::Limits' wire-
+    # tunable subset, planner.proto 15-31) -- tovez.json's own starting
+    # values.
+    new_fields = (620.0, 20.0, 150.0, 2.0, 6.0, 1.5e-5, 120.0, 2.0,
+                  40.0, 0.15, 0.2, 0.3, 3.0, 40.0, 0.14, 15.0, 0.15)
+    raw = encode_cfg_planner(harness, 42, pb_config.CONFIG_PLANNER, 42.0, 6.0, 0.25, *new_fields)
     reply = pb_envelope.ReplyEnvelope.FromString(raw)
     assert reply.cfg.target == pb_config.CONFIG_PLANNER
     assert reply.cfg.WhichOneof("patch") == "planner"
-    assert (reply.cfg.planner.min_speed, reply.cfg.planner.heading_kp, reply.cfg.planner.heading_kd) == (
-        f32(42.0), f32(6.0), f32(0.25))
+    p = reply.cfg.planner
+    assert (p.min_speed, p.heading_kp, p.heading_kd) == (f32(42.0), f32(6.0), f32(0.25))
+    assert (p.v_wheel_max, p.steer_headroom, p.wheel_step_max, p.track_k_s, p.track_k_theta, p.track_k_cross,
+            p.trim_v_max, p.trim_omega_max, p.replan_err_pos, p.replan_err_theta, p.replan_hold,
+            p.replan_min_period, p.replan_max, p.handoff_tol_pos, p.handoff_tol_v, p.arrive_vel_tol,
+            p.arrive_dwell) == tuple(f32(v) for v in new_fields)
 
 
 @pytest.mark.parametrize("watchdog", [0, 1, 4242, 4294967295])

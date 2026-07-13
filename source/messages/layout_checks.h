@@ -62,6 +62,8 @@ static_assert(std::is_standard_layout<Ver>::value,
               "msg::Ver must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Help>::value,
               "msg::Help must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<PlanDumpRequest>::value,
+              "msg::PlanDumpRequest must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Ack>::value,
               "msg::Ack must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Error>::value,
@@ -74,6 +76,10 @@ static_assert(std::is_standard_layout<EventNotify>::value,
               "msg::EventNotify must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<HelpText>::value,
               "msg::HelpText must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<PlanRecord>::value,
+              "msg::PlanRecord must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<MotionTrace>::value,
+              "msg::MotionTrace must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<BodyTwist3>::value,
               "msg::BodyTwist3 must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<WheelTargets>::value,

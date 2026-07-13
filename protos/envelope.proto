@@ -3,6 +3,7 @@ syntax = "proto3";
 package robot;
 
 import "options.proto";
+import "common.proto";
 import "drivetrain.proto";
 import "motion.proto";
 import "odometer.proto";
@@ -36,6 +37,15 @@ import "config.proto";
 // telemetry.proto/config.proto), but `BinaryChannel` runtime behavior for
 // these three arms still lands later this sprint (tickets 002-005); until
 // then they still reply `Error{ERR_UNIMPLEMENTED}` exactly as before.
+//
+// **Declared only** (100-001, motion-stack-v2 M1, same "schema now, runtime
+// later" precedent as config/get/stream/pose/otos above): `plan_dump`
+// (`CommandEnvelope.cmd` arm 18, replies `plan`/`PlanRecord`, arm 10) and
+// `trace` (`ReplyEnvelope.body` arm 11, `MotionTrace`, armed via
+// `StreamControl.trace`). `BinaryChannel` replies `Error{ERR_UNIMPLEMENTED}`
+// for `plan_dump` until ticket 009 makes it live. `EventNotify` (`evt`,
+// arm 6) gains a REAL body this ticket (Decision 5) -- still unsolicited/
+// no live producer until the wafer adapter (ticket 007) exists.
 //
 // `motion` (field 5, `PlannerCommand`) is NOT declared this sprint --
 // architecture-update-r1.md Decision 6 (095, revising this document's
@@ -303,7 +313,110 @@ message ConfigSnapshot {
 // event.proto round-trip once gen_messages.py can express per-field
 // char-array sizes, or some other resolution) -- flagged, not resolved,
 // per the same Decision 5 precedent cited above.
-message EventNotify {}
+//
+// 100-001 (motion-stack-v2 M1, architecture-update.md Decision 5): gives
+// EventNotify its REAL body -- resolving the standing "what does
+// EventNotify carry" half of the 096/097 open question (NOT the separate
+// msg::Event ODR-collision question above, which stays open). Carries the
+// unsolicited abort/flush notification the wafer adapter (ticket 007)
+// emits on ABORT_*/queue-flush: which ring segment, what MotionStatus it
+// ended in, and the final tracking error at that moment. Four scalar
+// fields -- no char arrays, no shape overlap with msg::Event's own
+// four-differently-sized-char-array struct, so no new ODR hazard is
+// introduced by filling this body in.
+message EventNotify {
+  uint32       seg_seq       = 1;  // ring position of the segment this event describes
+  MotionStatus status         = 2;  // Drive::MotionPlan::Status at event time (motion.proto)
+  float        e_final_pos    = 3;  // [mm] along-track error at abort/flush
+  float        e_final_theta  = 4;  // [rad] heading error at abort/flush
+}
+
+// PlanDumpRequest (100-001, motion-stack-v2 M9) -- CommandEnvelope.cmd arm
+// 18: requests a dump of the wafer adapter's current plan/ring, one
+// PlanRecord reply per ring entry sharing this request's corr_id (the
+// same "N replies share one corr_id" idiom the issue's own text
+// specifies). Empty request -- "cannot be malformed" shape, mirroring
+// Ping/Stop/Hello/Ver/Help above: there is no per-request filter this
+// ticket's own acceptance criteria call for (dump the WHOLE ring).
+// Declared only this ticket -- BinaryChannel replies ERR_UNIMPLEMENTED
+// until ticket 009 makes it live (matching the config/get/stream and
+// pose/otos precedent cited in this file's own header comment).
+message PlanDumpRequest {}
+
+// PlanRecord (100-001, motion-stack-v2 M9) -- ReplyEnvelope.body arm 10:
+// one ring entry's solved-plan summary, replying to PlanDumpRequest.
+// Field list transcribed verbatim from this ticket's own acceptance
+// criteria ("goal/anchor/v_eff/duration/exit_speed/entry_speed/
+// replan_count") -- mirrors Drive::MotionPlan's const query surface
+// (motion_plan.h's sketch in architecture-update.md: goal()/anchor()/
+// effectiveCeiling()/duration()/exitSpeed()) plus StepState::replanCount.
+// Declared only this ticket -- see PlanDumpRequest's own comment for the
+// ERR_UNIMPLEMENTED posture until ticket 009.
+message PlanRecord {
+  Pose2D goal          = 1;  // world goal pose, frozen at plan time
+  Pose2D anchor        = 2;  // world pose at segment start
+  float  v_eff          = 3;  // [mm/s]|[rad/s] the folded ceiling (arc: body speed; pivot: yaw rate)
+  float  duration        = 4;  // [s]
+  float  exit_speed      = 5;  // [mm/s]
+  float  entry_speed     = 6;  // [mm/s]
+  uint32 replan_count    = 7;  // StepState::replanCount at dump time
+}
+
+// MotionTrace (100-001, motion-stack-v2 M9) -- ReplyEnvelope.body arm 11:
+// one step()'s trace record, armed via StreamControl.trace at the TLM
+// period (emitted from bb.motionTrace, ticket 007+). A CURATED subset of
+// Drive::MotionPlan's full TrackRecord (motion_plan.h's sketch) -- the
+// issue's own text sizes this arm at ~90-120B and notes "full reference
+// tables are dumped host-side by linking the same code (tier 0), not over
+// the wire," so this is a deliberately lossy diagnostic sample (the SAME
+// "trim to fit budget, document it" discipline telemetry.proto's own
+// header comment applies to its encpose trim), not a full-fidelity
+// TrackRecord mirror. Flattened scalars (no nested Pose2D) to keep the
+// per-field tag overhead down, matching Telemetry's own flattening style.
+// Fields grouped by TrackRecord's own sub-shapes:
+//   - StepInput replay fields: t, pose_step, pose_step_theta
+//     (measured/wheelLeft/wheelRight are NOT replayed here -- Telemetry's
+//     own enc=/vel= fields already carry per-wheel state at the TLM
+//     period; duplicating them here would burn budget for no new
+//     information)
+//   - RefState (the sampled reference): ref_x/ref_y/ref_theta/ref_v/
+//     ref_omega (the closed-form world-frame point, the most directly
+//     plottable subset for M12's plan-vs-actual overlay -- s/a/alpha are
+//     NOT carried, reconstructable host-side from the plan's own
+//     referenceAt() via tier 0, which links the identical C++ code)
+//   - tracked error: e_along, e_cross, e_theta
+//   - trims (post-clamp) and the body command: v_trim/omega_trim,
+//     v_cmd/omega_cmd
+//   - final wheel setpoints: wheel_left, wheel_right
+//   - seg_seq (ring position, correlates a trace sample to a segment --
+//     not part of TrackRecord itself, added so a client can tell which
+//     segment a streamed sample belongs to without a separate PlanRecord
+//     round-trip)
+//   - trim_saturated, status (Drive::MotionPlan::Status, motion.proto)
+// Declared only this ticket -- see PlanDumpRequest's own comment for the
+// ERR_UNIMPLEMENTED posture until ticket 009.
+message MotionTrace {
+  float        t                = 1;   // [s] elapsed since plan start
+  float        ref_x             = 2;   // [mm]
+  float        ref_y             = 3;   // [mm]
+  float        ref_theta         = 4;   // [rad]
+  float        ref_v             = 5;   // [mm/s]
+  float        ref_omega         = 6;   // [rad/s]
+  float        e_along           = 7;   // [mm]
+  float        e_cross           = 8;   // [mm]
+  float        e_theta           = 9;   // [rad]
+  float        v_trim            = 10;  // [mm/s] post-clamp
+  float        omega_trim        = 11;  // [rad/s] post-clamp
+  float        v_cmd             = 12;  // [mm/s] body command
+  float        omega_cmd         = 13;  // [rad/s] body command
+  float        wheel_left        = 14;  // [mm/s] post-IK/saturate/clamp setpoint
+  float        wheel_right       = 15;  // [mm/s] post-IK/saturate/clamp setpoint
+  float        pose_step         = 16;  // [mm] StepInput.poseStep replay
+  float        pose_step_theta   = 17;  // [rad] StepInput.poseStepTheta replay
+  uint32       seg_seq           = 18;  // ring position this sample belongs to
+  bool         trim_saturated    = 19;
+  MotionStatus status            = 20;
+}
 
 // One command in. corr_id is echoed back on ReplyEnvelope so a pipelined
 // client can correlate replies out of order.
@@ -345,6 +458,10 @@ message CommandEnvelope {
                                       // (reply.body.id, field 7)
     Help              help    = 17;  // empty request, replies HelpText
                                       // (reply.body.helptext, field 9)
+    // plan_dump (100-001, motion-stack-v2 M9): requests a PlanRecord dump
+    // of the wafer adapter's ring -- declared only, ERR_UNIMPLEMENTED
+    // until ticket 009 (see PlanDumpRequest's own comment).
+    PlanDumpRequest   plan_dump = 18;
   }
 }
 
@@ -378,5 +495,11 @@ message ReplyEnvelope {
     // ver (fields 15/16) reuse the EXISTING `id` arm above instead of
     // adding their own -- only help needed a new reply shape.
     HelpText        helptext = 9;
+    // plan (100-001, motion-stack-v2 M9): one PlanRecord dump reply
+    // (declared only -- see PlanDumpRequest's own comment).
+    PlanRecord      plan = 10;
+    // trace (100-001, motion-stack-v2 M9): one MotionTrace sample
+    // (declared only -- see MotionTrace's own comment).
+    MotionTrace     trace = 11;
   }
 }

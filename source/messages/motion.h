@@ -8,6 +8,16 @@
 
 namespace msg {
 
+enum class MotionStatus : uint8_t {
+    RUNNING = 0,
+    SETTLING = 1,
+    REPLAN_DUE = 2,
+    DONE_STOP = 3,
+    DONE_HANDOFF = 4,
+    ABORT_TIMEOUT = 5,
+    ABORT_REPLAN_LIMIT = 6,
+};
+
 // MotionSegment
 struct MotionSegment {
     float distance = 0.0f;
@@ -23,6 +33,10 @@ struct MotionSegment {
     float v = 0.0f;
     float omega = 0.0f;
     bool stream = false;
+    float arc_length = 0.0f;
+    float delta_heading = 0.0f;
+    float exit_speed = 0.0f;
+    bool primitive = false;
 
     // --- array / optional-string accessors ---
 };

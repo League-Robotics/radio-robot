@@ -231,6 +231,23 @@ struct PlannerConfig {
     float min_speed = 0.0f;
     float heading_kp = 0.0f;
     float heading_kd = 0.0f;
+    float v_wheel_max = 0.0f;
+    float steer_headroom = 0.0f;
+    float wheel_step_max = 0.0f;
+    float track_k_s = 0.0f;
+    float track_k_theta = 0.0f;
+    float track_k_cross = 0.0f;
+    float trim_v_max = 0.0f;
+    float trim_omega_max = 0.0f;
+    float replan_err_pos = 0.0f;
+    float replan_err_theta = 0.0f;
+    float replan_hold = 0.0f;
+    float replan_min_period = 0.0f;
+    float replan_max = 0.0f;
+    float handoff_tol_pos = 0.0f;
+    float handoff_tol_v = 0.0f;
+    float arrive_vel_tol = 0.0f;
+    float arrive_dwell = 0.0f;
 
     // --- array / optional-string accessors ---
 
@@ -247,6 +264,23 @@ struct PlannerConfig {
     PlannerConfig& setMinSpeed(float v) { min_speed = v; return *this; }
     PlannerConfig& setHeadingKp(float v) { heading_kp = v; return *this; }
     PlannerConfig& setHeadingKd(float v) { heading_kd = v; return *this; }
+    PlannerConfig& setVWheelMax(float v) { v_wheel_max = v; return *this; }
+    PlannerConfig& setSteerHeadroom(float v) { steer_headroom = v; return *this; }
+    PlannerConfig& setWheelStepMax(float v) { wheel_step_max = v; return *this; }
+    PlannerConfig& setTrackKS(float v) { track_k_s = v; return *this; }
+    PlannerConfig& setTrackKTheta(float v) { track_k_theta = v; return *this; }
+    PlannerConfig& setTrackKCross(float v) { track_k_cross = v; return *this; }
+    PlannerConfig& setTrimVMax(float v) { trim_v_max = v; return *this; }
+    PlannerConfig& setTrimOmegaMax(float v) { trim_omega_max = v; return *this; }
+    PlannerConfig& setReplanErrPos(float v) { replan_err_pos = v; return *this; }
+    PlannerConfig& setReplanErrTheta(float v) { replan_err_theta = v; return *this; }
+    PlannerConfig& setReplanHold(float v) { replan_hold = v; return *this; }
+    PlannerConfig& setReplanMinPeriod(float v) { replan_min_period = v; return *this; }
+    PlannerConfig& setReplanMax(float v) { replan_max = v; return *this; }
+    PlannerConfig& setHandoffTolPos(float v) { handoff_tol_pos = v; return *this; }
+    PlannerConfig& setHandoffTolV(float v) { handoff_tol_v = v; return *this; }
+    PlannerConfig& setArriveVelTol(float v) { arrive_vel_tol = v; return *this; }
+    PlannerConfig& setArriveDwell(float v) { arrive_dwell = v; return *this; }
 };
 
 }  // namespace msg

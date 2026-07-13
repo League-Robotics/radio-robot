@@ -253,12 +253,21 @@ def encode_cfg_motor(binary: pathlib.Path, corr_id: int, target: int, side: int,
 
 
 def encode_cfg_planner(binary: pathlib.Path, corr_id: int, target: int, min_speed: float, heading_kp: float,
-                        heading_kd: float) -> bytes | None:
-    """096-006 (+ 098-005: heading_kp/heading_kd): builds ReplyEnvelope{
-    cfg=ConfigSnapshot{target, planner=PlannerConfigPatch{min_speed,
-    heading_kp, heading_kd}}}."""
+                        heading_kd: float, v_wheel_max: float, steer_headroom: float, wheel_step_max: float,
+                        track_k_s: float, track_k_theta: float, track_k_cross: float, trim_v_max: float,
+                        trim_omega_max: float, replan_err_pos: float, replan_err_theta: float, replan_hold: float,
+                        replan_min_period: float, replan_max: float, handoff_tol_pos: float, handoff_tol_v: float,
+                        arrive_vel_tol: float, arrive_dwell: float) -> bytes | None:
+    """096-006 (+ 098-005: heading_kp/heading_kd; 100-001: v_wheel_max..
+    arrive_dwell, Drive::Limits' wire-tunable subset of PlannerConfig
+    15-31): builds ReplyEnvelope{cfg=ConfigSnapshot{target,
+    planner=PlannerConfigPatch{...all 20 fields...}}}."""
     r = run_harness(binary, "encode_cfg_planner", str(corr_id), str(target), repr(min_speed), repr(heading_kp),
-                     repr(heading_kd))
+                     repr(heading_kd), repr(v_wheel_max), repr(steer_headroom), repr(wheel_step_max),
+                     repr(track_k_s), repr(track_k_theta), repr(track_k_cross), repr(trim_v_max),
+                     repr(trim_omega_max), repr(replan_err_pos), repr(replan_err_theta), repr(replan_hold),
+                     repr(replan_min_period), repr(replan_max), repr(handoff_tol_pos), repr(handoff_tol_v),
+                     repr(arrive_vel_tol), repr(arrive_dwell))
     assert not r.crashed, f"encode_cfg_planner crashed: {r.stdout}\n{r.stderr}"
     line = r.stdout.strip()
     if line == "ZERO":

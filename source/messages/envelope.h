@@ -159,6 +159,55 @@ struct ConfigSnapshot {
 
 // EventNotify
 struct EventNotify {
+    uint32_t seg_seq = 0;
+    MotionStatus status = static_cast<MotionStatus>(0);
+    float e_final_pos = 0.0f;
+    float e_final_theta = 0.0f;
+
+    // --- array / optional-string accessors ---
+};
+
+// PlanDumpRequest
+struct PlanDumpRequest {
+
+    // --- array / optional-string accessors ---
+};
+
+// PlanRecord
+struct PlanRecord {
+    Pose2D goal = {};
+    Pose2D anchor = {};
+    float v_eff = 0.0f;
+    float duration = 0.0f;
+    float exit_speed = 0.0f;
+    float entry_speed = 0.0f;
+    uint32_t replan_count = 0;
+
+    // --- array / optional-string accessors ---
+};
+
+// MotionTrace
+struct MotionTrace {
+    float t = 0.0f;
+    float ref_x = 0.0f;
+    float ref_y = 0.0f;
+    float ref_theta = 0.0f;
+    float ref_v = 0.0f;
+    float ref_omega = 0.0f;
+    float e_along = 0.0f;
+    float e_cross = 0.0f;
+    float e_theta = 0.0f;
+    float v_trim = 0.0f;
+    float omega_trim = 0.0f;
+    float v_cmd = 0.0f;
+    float omega_cmd = 0.0f;
+    float wheel_left = 0.0f;
+    float wheel_right = 0.0f;
+    float pose_step = 0.0f;
+    float pose_step_theta = 0.0f;
+    uint32_t seg_seq = 0;
+    bool trim_saturated = false;
+    MotionStatus status = static_cast<MotionStatus>(0);
 
     // --- array / optional-string accessors ---
 };
@@ -182,6 +231,7 @@ struct CommandEnvelope {
         HELLO = 13,
         VER = 14,
         HELP = 15,
+        PLAN_DUMP = 16,
     };
     CmdKind cmd_kind = CmdKind::NONE;
     union {
@@ -200,6 +250,7 @@ struct CommandEnvelope {
         Hello hello;
         Ver ver;
         Help help;
+        PlanDumpRequest plan_dump;
     } cmd = {};
 
     uint32_t corr_id = 0;
@@ -219,6 +270,8 @@ struct ReplyEnvelope {
         ID = 6,
         ECHO = 7,
         HELPTEXT = 8,
+        PLAN = 9,
+        TRACE = 10,
     };
     BodyKind body_kind = BodyKind::NONE;
     union {
@@ -230,6 +283,8 @@ struct ReplyEnvelope {
         DeviceId id;
         Echo echo;
         HelpText helptext;
+        PlanRecord plan;
+        MotionTrace trace;
     } body = {};
 
     uint32_t corr_id = 0;
