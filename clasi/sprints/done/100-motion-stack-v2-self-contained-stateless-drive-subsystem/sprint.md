@@ -1,7 +1,7 @@
 ---
 id: '100'
 title: 'Motion stack v2: self-contained stateless drive subsystem'
-status: planning-docs
+status: done
 branch: sprint/100-motion-stack-v2-self-contained-stateless-drive-subsystem
 use-cases:
 - SUC-001
