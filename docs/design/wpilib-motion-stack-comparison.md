@@ -526,6 +526,13 @@ is exactly the right experiment — this comparison just says: treat
 "OTOS-primary, encoder-fallback" as a live candidate, not a fallback, when
 reading those results.
 
+**Update (2026-07-12):** the stakeholder proposed a concrete design for this —
+a gated switch (OTOS heading verbatim when its per-interval delta passes a
+rate-limit check and a cross-sensor agreement check; otherwise encoder deltas
+rebased onto the last trusted OTOS heading), filed as
+[`clasi/issues/heading-source-arbiter-otos-primary-with-encoder-delta-fallback.md`](../../clasi/issues/heading-source-arbiter-otos-primary-with-encoder-delta-fallback.md)
+for decision before sprint 099 executes.
+
 ### L7. Constraint composability — a shape to remember, not to build
 
 Their `TrajectoryConstraint` interface (max velocity + accel interval as a
