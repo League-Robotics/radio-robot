@@ -3,7 +3,7 @@ id: '014'
 title: 'Fix pivot rotational velocity: bake control.yaw_rate_max/max_rot_accel through
   gen_boot_config (was hardcoded 6.0 rad/s, ~500mm/s wheels, caused unstable overshooting
   turns on hardware)'
-status: in-progress
+status: done
 use-cases: []
 depends-on: []
 github-issue: ''

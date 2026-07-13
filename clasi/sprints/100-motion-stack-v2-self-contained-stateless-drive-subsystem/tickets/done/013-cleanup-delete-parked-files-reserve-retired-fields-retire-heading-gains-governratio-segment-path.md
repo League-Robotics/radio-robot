@@ -1,7 +1,7 @@
 ---
 id: '013'
 title: 'Cleanup: delete parked files, reserve retired fields, retire heading gains + governRatio segment path'
-status: open
+status: done
 use-cases: [SUC-015]
 depends-on: ['012']
 github-issue: ''
