@@ -182,6 +182,26 @@ HANDOFF_TOL_V_DEFAULT     = 0.14     # [s] velocity-coupling slope; see _drive_l
 ARRIVE_VEL_TOL_DEFAULT    = 15.0     # [mm/s]
 ARRIVE_DWELL_DEFAULT      = 0.15     # [s]
 
+# MIN_SPEED_DEFAULT (100-007, THE CUTOVER): min_speed (PlannerConfig field
+# 10) predates this sprint and was NEVER populated by this generator --
+# "left unset (0.0f default)... main.cpp's old function never set them
+# either" (see defaultPlannerConfig()'s own comment, below, kept verbatim
+# for arrive_tol/turn_in_place_gate, which stay genuinely unused). That was
+# harmless while nothing read it; ticket 100-007 makes it load-bearing for
+# the first time -- source/drive/tracker.cpp's own pivot-mode gate is
+# `fabsf(ref.v) < limits.minSpeed`, so a min_speed of EXACTLY 0.0 can never
+# be true even for a genuine pivot (whose ref.v is the LITERAL 0.0f
+# motion_plan.cpp's own isPivot_ branch sets), silently routing every pivot
+# through the arc-mode trim law instead of the pivot-mode one. A small,
+# conservative positive threshold (order of magnitude below any real
+# cruise speed, matching policy.cpp's own kArriveTolVel=15.0f terminal
+# velocity-tolerance scale) fixes this without narrowing arc-mode's own
+# operating range. Starting value, not yet bench-tuned -- same posture as
+# every other field 15-31 default above (M11 re-tunes against the real
+# plant); overridable via a future robot JSON `control.min_speed` key,
+# mirroring every other field's own override mechanism, once one exists.
+MIN_SPEED_DEFAULT         = 10.0     # [mm/s]
+
 
 # ---------------------------------------------------------------------------
 # Config resolution (mirrors scripts/gen_default_config.py so both generators
@@ -374,6 +394,15 @@ def heading_gains_for_config(cfg: dict):
     return float(kp), float(kd)
 
 
+def min_speed_for_config(cfg: dict):
+    """Return min_speed (PlannerConfig field 10) -- see MIN_SPEED_DEFAULT's
+    own comment above for why this is no longer left at 0.0f. Read from the
+    robot JSON's ``control.min_speed`` when present (mirroring every other
+    mapping's fall-back discipline), else MIN_SPEED_DEFAULT."""
+    ctrl = cfg.get("control", {}) or {}
+    return float(_get(ctrl, "min_speed", default=MIN_SPEED_DEFAULT))
+
+
 def drive_limits_for_config(cfg: dict):
     """Return the 17-tuple of msg::PlannerConfig fields 15-31 (Drive::Limits'
     wire/config source, 100-001), in field-number order.
@@ -423,6 +452,7 @@ def generate(cfg: dict, source_path: str) -> str:
     (otos_offset_x, otos_offset_y, otos_offset_yaw,
      otos_linear_scale, otos_angular_scale) = otos_boot_config_values(cfg)
     heading_kp, heading_kd = heading_gains_for_config(cfg)
+    min_speed = min_speed_for_config(cfg)
     (v_wheel_max, steer_headroom, wheel_step_max,
      track_k_s, track_k_theta, track_k_cross,
      trim_v_max, trim_omega_max,
@@ -541,9 +571,13 @@ msg::PlannerConfig defaultPlannerConfig() {{
     // heading_kp/heading_kd are the new outer heading-loop PD gains
     // (architecture-update.md M1/M2), baked from the robot JSON's
     // control.heading_kp/heading_kd, falling back to conservative firmware
-    // starting defaults when absent. arrive_tol/turn_in_place_gate/min_speed
-    // are left unset (0.0f default) -- unchanged behavior, main.cpp's old
-    // function never set them either.
+    // starting defaults when absent. arrive_tol/turn_in_place_gate are left
+    // unset (0.0f default) -- unchanged behavior, main.cpp's old function
+    // never set them either (neither has a live consumer). min_speed is NO
+    // LONGER left unset (100-007, THE CUTOVER) -- see MIN_SPEED_DEFAULT's
+    // own comment above for why 0.0f silently broke pivot-mode detection
+    // the moment source/drive/tracker.cpp became this field's first live
+    // reader.
     //
     // Fields 15-31 (100-001 — Drive::Limits' wire/config source,
     // architecture-update.md M1/Decision 2): baked from the robot JSON's
@@ -561,6 +595,7 @@ msg::PlannerConfig defaultPlannerConfig() {{
     cfg.setYawJerkMax({_f(YAW_JERK_MAX_DEFAULT)});         // [rad/s^3] ~5x yaw_acc_max -- ~0.2s
     cfg.setHeadingKp({_f(heading_kp)});              // [1/s] outer heading-loop proportional gain
     cfg.setHeadingKd({_f(heading_kd)});              // dimensionless outer heading-loop derivative gain
+    cfg.setMinSpeed({_f(min_speed)});               // [mm/s] Drive:: tracker pivot-mode threshold (100-007)
     cfg.setVWheelMax({_f(v_wheel_max)});              // [mm/s]
     cfg.setSteerHeadroom({_f(steer_headroom)});          // [mm/s]
     cfg.setWheelStepMax({_f(wheel_step_max)});          // [mm/s]

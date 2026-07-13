@@ -136,7 +136,8 @@ def test_send_s_produces_the_same_wire_bytes_as_binary_drive(monkeypatch):
 def test_send_d_produces_the_correct_segment_envelope(monkeypatch):
     """`rogo send D 200 200 300` -- acceptance criterion 2: the equivalent
     binary `segment` envelope, via M4's segment_for_distance() (handleD()'s
-    own sign-then-distance computation)."""
+    own sign-then-distance computation, now a v2 primitive -- 100-007, THE
+    CUTOVER -- arc_length, not the retired `distance` field)."""
     reply = envelope_pb2.ReplyEnvelope(corr_id=2, ok=envelope_pb2.Ack(q=1))
     fake = _run_send(monkeypatch, ["D", "200", "200", "300"], envelope_reply=reply)
 
@@ -146,15 +147,16 @@ def test_send_d_produces_the_correct_segment_envelope(monkeypatch):
     expected_seg = legacy_translate.segment_for_distance(200.0, 200.0, 300)
     expected = envelope_pb2.CommandEnvelope(segment=expected_seg)
     assert fake.envelope_sent.SerializeToString() == expected.SerializeToString()
-    # Straight forward drive (v = 200 > 0) -> sign +1 -> distance = +300.
-    assert fake.envelope_sent.segment.distance == pytest.approx(300.0)
+    # Straight forward drive (v = 200 > 0) -> sign +1 -> arc_length = +300.
+    assert fake.envelope_sent.segment.arc_length == pytest.approx(300.0)
+    assert fake.envelope_sent.segment.primitive is True
 
 
 def test_send_t_produces_the_correct_segment_envelope(monkeypatch):
     reply = envelope_pb2.ReplyEnvelope(corr_id=3, ok=envelope_pb2.Ack(q=1))
     fake = _run_send(monkeypatch, ["T", "200", "200", "1000"], envelope_reply=reply)
     assert fake.envelope_sent.WhichOneof("cmd") == "segment"
-    assert fake.envelope_sent.segment.distance == pytest.approx(200.0)
+    assert fake.envelope_sent.segment.arc_length == pytest.approx(200.0)
 
 
 def test_send_rt_produces_a_segment_with_final_heading_only(monkeypatch):
@@ -162,22 +164,34 @@ def test_send_rt_produces_a_segment_with_final_heading_only(monkeypatch):
     fake = _run_send(monkeypatch, ["RT", "9000"], envelope_reply=reply)
     assert fake.envelope_sent.WhichOneof("cmd") == "segment"
     seg = fake.envelope_sent.segment
-    assert seg.distance == pytest.approx(0.0)
-    assert seg.final_heading == pytest.approx(1.5707963705062866, abs=1e-6)
+    assert seg.arc_length == pytest.approx(0.0)
+    assert seg.delta_heading == pytest.approx(1.5707963705062866, abs=1e-6)
+    assert seg.primitive is True
 
 
 def test_send_move_produces_a_segment_with_kv_overrides(monkeypatch):
+    """`rogo send MOVE 500 9000 9000 v=300 w=4500 s=1` -- 100-007, THE
+    CUTOVER: decomposes to TWO v2 primitives (primitives_for_move() -- a
+    leading 90deg pivot since direction != 0, then a 500mm straight; the
+    trailing pivot is omitted since final_heading == direction), sent in
+    order. `_FakeConn.envelope_sent` records only the LAST call -- the
+    straight phase. v=/w=/s= are silently dropped (no v2 primitive
+    equivalent -- primitives_for_move()'s own documented deviation), unlike
+    the pre-cutover single segment_for_move()-built envelope this test used
+    to expect."""
     reply = envelope_pb2.ReplyEnvelope(corr_id=5, ok=envelope_pb2.Ack(q=1))
     fake = _run_send(
         monkeypatch, ["MOVE", "500", "9000", "9000", "v=300", "w=4500", "s=1"],
         envelope_reply=reply)
     assert fake.envelope_sent.WhichOneof("cmd") == "segment"
     seg = fake.envelope_sent.segment
-    assert seg.distance == pytest.approx(500.0)
-    assert seg.direction == pytest.approx(1.5707963705062866, abs=1e-6)
-    assert seg.speed_max == pytest.approx(300.0)
-    assert seg.yaw_rate_max == pytest.approx(0.7853981852531433, abs=1e-6)
-    assert seg.stream is True
+    assert seg.arc_length == pytest.approx(500.0)
+    assert seg.delta_heading == pytest.approx(0.0)
+    assert seg.primitive is True
+    # The dropped kv overrides land on none of the retired fields either.
+    assert seg.speed_max == pytest.approx(0.0)
+    assert seg.yaw_rate_max == pytest.approx(0.0)
+    assert seg.stream is False
 
 
 def test_send_mover_produces_a_replace_arm_not_segment(monkeypatch):

@@ -131,12 +131,25 @@ def test_route_rt_matches_legacy_translate():
 
 
 def test_route_move_matches_legacy_translate_and_arms_evt():
+    """100-007, THE CUTOVER: `MOVE 500 9000 9000` decomposes to TWO v2
+    primitives (primitives_for_move() -- a leading 90deg pivot since
+    direction != 0, then a 500mm straight; the trailing pivot phase is
+    omitted since final_heading == direction) -- the bridge sends BOTH, in
+    order, and renders off the LAST reply. v=300/w=4500/s=1 are silently
+    dropped by primitives_for_move() (no v2 primitive equivalent -- see
+    that function's own docstring), so the routed envelopes carry none of
+    them, unlike the pre-cutover single segment_for_move()-built envelope
+    this test used to expect."""
     bridge, fake = _bridge()
-    fake.queue_reply(_ack(q=2, rem=5.0))
+    fake.queue_reply(_ack(q=1))            # pivot phase ack
+    fake.queue_reply(_ack(q=2, rem=5.0))   # straight phase ack -- the one rendered
     line = bridge._handle_client_line("MOVE 500 9000 9000 v=300 w=4500 s=1")
-    expected = envelope_pb2.CommandEnvelope(segment=legacy_translate.segment_for_move(
-        500.0, 9000.0, 9000.0, speed_max=300.0, yaw_rate_max=4500.0, stream=True))
-    assert fake.envelope_calls[-1].SerializeToString() == expected.SerializeToString()
+
+    expected_segs = legacy_translate.primitives_for_move(500.0, 9000.0, 9000.0)
+    assert len(expected_segs) == 2, "pivot then straight -- trailing pivot omitted"
+    expected_envs = [envelope_pb2.CommandEnvelope(segment=seg) for seg in expected_segs]
+    assert [e.SerializeToString() for e in fake.envelope_calls[-2:]] == \
+        [e.SerializeToString() for e in expected_envs]
     assert line == "OK move dist=500 dir=9000 fh=9000 q=2 rem=5"
     assert bridge._evt_watcher.pending is True
 

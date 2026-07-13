@@ -26,6 +26,11 @@ void MainLoop::commit(Blackboard& bb, uint32_t now, bool otosFusable,
   bb.fusedPose = poseEstimator_.fusedPose();
   bb.poseStepped = poseEstimator_.lastPoseStep();
 
+  // lastEvent (100-007, THE CUTOVER) -- published every pass from the
+  // adapter's own lastEvent() getter, mirroring bb.drivetrain's publish
+  // shape immediately above. See blackboard.h's own doc comment.
+  bb.lastEvent = drivetrain_.lastEvent();
+
   // bb.otos/bb.otosValid/bb.otosConnected (099-002/099-007): otosSample and
   // otosFusable are THIS pass's already-read values (tick()'s single
   // fusableThisPass()/pose() call, threaded in as arguments rather than
@@ -83,7 +88,15 @@ void MainLoop::tick(Blackboard& bb, uint32_t now) {
   // and stages THIS pass's setpoints (flushed next pass by the step
   // above).
   hardware_.tick(now);
-  drivetrain_.tick(now, bb.segmentIn, bb.replaceIn, bb.driveIn);
+  // (100-007, THE CUTOVER) drivetrain_.tick() now ALSO takes bb.bodyState/
+  // bb.poseStepped (sprint 099's own cells -- committed by THIS function's
+  // own commit() step below, so this read is one pass stale, the SAME
+  // staleness every other bb.* read at the TOP of a pass already has -- see
+  // architecture-update.md (100) M7) and bb.chainTail (re-anchored here on
+  // an ABORT_*, also read/advanced synchronously by BinaryChannel's wire
+  // admission -- blackboard.h's own doc comment on chainTail).
+  drivetrain_.tick(now, bb.segmentIn, bb.replaceIn, bb.driveIn, bb.bodyState, bb.poseStepped,
+                    bb.chainTail);
 
   // === PoseEstimator (099-004/099-007): read the bound pair's FRESH
   // MotorState (post hardware_.tick()/drivetrain_.tick() above -- mirrors

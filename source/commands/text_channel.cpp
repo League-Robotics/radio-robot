@@ -56,14 +56,13 @@ namespace {
 // history for the full story). No EVT. Reply stays `OK stop`.
 //
 // PHYSICAL EFFECT: Subsystems::Drivetrain::dispatchEscapeHatch()
-// (drivetrain.cpp) inspects whether a Motion::Segment is actively
-// executing when a NEUTRAL arrives -- if so, it arms the owned
-// Motion::SegmentExecutor's own presolved graceful decel-to-zero instead
-// of zeroing the wheels instantly. Only when there is nothing in-flight to
-// decelerate does STOP fall straight through to instant-neutral behavior.
-// This handler itself needs no code change for that behavior switch --
-// entirely a Drivetrain-level decision on the same NEUTRAL command shape
-// this handler already builds.
+// (drivetrain.cpp) preempts INSTANTLY on a NEUTRAL, even while a
+// source/drive/ plan is actively executing (100-007, THE CUTOVER -- the
+// pre-cutover graceful decel-to-zero, Motion::SegmentExecutor::stop(), has
+// no source/drive/ equivalent in scope; see drivetrain.h's own class
+// comment for the documented deviation). This handler itself needs no code
+// change for that behavior switch -- entirely a Drivetrain-level decision
+// on the same NEUTRAL command shape this handler already builds.
 // ---------------------------------------------------------------------------
 void handleStop(const ArgList& /*args*/, const char* corrId, ReplyFn replyFn, void* replyCtx,
                 void* handlerCtx) {

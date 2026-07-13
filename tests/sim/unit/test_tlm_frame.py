@@ -43,6 +43,10 @@ _SOURCE_DIR = _REPO_ROOT / "source"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "tlm_frame_harness.cpp"
 _TLM_FRAME_SRC = _SOURCE_DIR / "telemetry" / "tlm_frame.cpp"
 _BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
+# 100-007, THE CUTOVER: runtime/blackboard.h (pulled in transitively via
+# telemetry/tlm_frame.h) now #includes drive/drivetrain.h, which reaches
+# "ruckig/ruckig.hpp" -- see test_runtime_blackboard.py's identical note.
+_RUCKIG_INCLUDE = _REPO_ROOT / "libraries" / "ruckig" / "include"
 
 # messages/common.h documents its own target as "CODAL C++11" -- build the
 # host harness to the same standard so it exercises exactly the language
@@ -80,6 +84,8 @@ def test_tlm_frame_harness_compiles_and_passes(tmp_path):
             "-Wextra",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_RUCKIG_INCLUDE),
             "-o",
             str(binary),
             str(_HARNESS_SRC),

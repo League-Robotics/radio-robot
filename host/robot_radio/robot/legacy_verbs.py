@@ -119,65 +119,96 @@ def kvfloat(kv: dict[str, str], key: str, default: float = 0.0) -> float:
 # ---------------------------------------------------------------------------
 
 
-def envelope_for_drive(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+def envelope_for_drive(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
     """``S <left> <right>`` -> ``{drive: DrivetrainCommand{wheels}}``
     (``handleS()``, motion_commands.cpp, via ``legacy_translate.
-    wheel_targets_for_drive()``, ticket 002)."""
+    wheel_targets_for_drive()``, ticket 002). DIRECT/escape-hatch mode --
+    UNCHANGED by 100-007 (THE CUTOVER); still exactly one envelope."""
     if len(pos) < 2:
         raise ValueError("S requires <left> <right>")
     wheels = legacy_translate.wheel_targets_for_drive(float(pos[0]), float(pos[1]))
     env = envelope_pb2.CommandEnvelope()
     env.drive.wheels.CopyFrom(wheels)
-    return env
+    return [env]
 
 
-def envelope_for_timed(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+def envelope_for_timed(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
     """``T <left> <right> <ms>`` -> ``{segment: MotionSegment}``
-    (``handleT()``, via ``legacy_translate.segment_for_timed()``, ticket 002)."""
+    (``handleT()``, via ``legacy_translate.segment_for_timed()`` -- 100-007
+    now builds a ``primitive=true`` segment, see that function's own
+    docstring)."""
     if len(pos) < 3:
         raise ValueError("T requires <left> <right> <ms>")
     seg = legacy_translate.segment_for_timed(float(pos[0]), float(pos[1]), int(float(pos[2])))
-    return envelope_pb2.CommandEnvelope(segment=seg)
+    return [envelope_pb2.CommandEnvelope(segment=seg)]
 
 
-def envelope_for_distance(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+def envelope_for_distance(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
     """``D <left> <right> <mm>`` -> ``{segment: MotionSegment}``
-    (``handleD()``, via ``legacy_translate.segment_for_distance()``, ticket 002)."""
+    (``handleD()``, via ``legacy_translate.segment_for_distance()`` --
+    100-007 now builds a ``primitive=true`` segment)."""
     if len(pos) < 3:
         raise ValueError("D requires <left> <right> <mm>")
     seg = legacy_translate.segment_for_distance(float(pos[0]), float(pos[1]), int(float(pos[2])))
-    return envelope_pb2.CommandEnvelope(segment=seg)
+    return [envelope_pb2.CommandEnvelope(segment=seg)]
 
 
-def envelope_for_rt(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
-    """``RT <relAngle_cdeg>`` -> ``{segment: MotionSegment}`` (final_heading
-    only) (``handleRT()``, via ``legacy_translate.segment_for_rt()``)."""
+def envelope_for_rt(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
+    """``RT <relAngle_cdeg>`` -> ``{segment: MotionSegment}`` (``handleRT()``,
+    via ``legacy_translate.segment_for_rt()`` -- 100-007 now builds a
+    ``primitive=true`` pivot segment)."""
     if len(pos) < 1:
         raise ValueError("RT requires <relAngle>")
     seg = legacy_translate.segment_for_rt(float(pos[0]))
-    return envelope_pb2.CommandEnvelope(segment=seg)
+    return [envelope_pb2.CommandEnvelope(segment=seg)]
 
 
-def envelope_for_move(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+def envelope_for_seg(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
+    """``SEG <arc_length_mm> <delta_heading_cdeg> [exit_speed=]`` ->
+    ``{segment: MotionSegment}`` -- the v2-native real-arc/pivot PRIMITIVE
+    verb (100-007, THE CUTOVER's own "a segment_for_seg()-style builder for
+    real arcs"), via ``legacy_translate.segment_for_seg()``. ``arc_length``
+    [mm] (0 = pivot in place); ``delta_heading`` [cdeg], converted to
+    radians (matching every other angle argument this module's verbs take);
+    ``exit_speed`` [mm/s] (kwarg, default 0 = a stop segment)."""
+    if len(pos) < 2:
+        raise ValueError("SEG requires <arc_length> <delta_heading>")
+    seg = legacy_translate.segment_for_seg(
+        arc_length=float(pos[0]),
+        delta_heading=float(pos[1]) * legacy_translate._CDEG_TO_RAD,
+        exit_speed=kvfloat(kv, "exit_speed"))
+    return [envelope_pb2.CommandEnvelope(segment=seg)]
+
+
+def envelope_for_move(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
     """``MOVE <distance> <direction> <finalHeading> [v=][a=][j=][w=][wa=]
-    [wj=][s=]`` -> ``{segment: MotionSegment}`` (``handleMove()``, via
-    ``legacy_translate.segment_for_move()``)."""
+    [wj=][s=]`` -> UP TO THREE ``{segment: MotionSegment}`` envelopes
+    (100-007, THE CUTOVER), via ``legacy_translate.primitives_for_move()``
+    -- see that function's own docstring for the exact <=3-phase
+    decomposition strategy and its documented deviations (per-segment
+    speed/accel/jerk overrides and ``s=``/BLEND are silently dropped -- the
+    v2 primitive shape has no equivalent for either). The caller
+    (``cli.py``'s ``cmd_send``, ``io/proxy.py``'s ``_handle_binary_verb``)
+    sends every returned envelope IN ORDER, stopping at the first
+    rejection."""
     if len(pos) < 3:
         raise ValueError("MOVE requires <distance> <direction> <finalHeading>")
-    seg = legacy_translate.segment_for_move(
-        float(pos[0]), float(pos[1]), float(pos[2]),
-        speed_max=kvfloat(kv, "v"), accel_max=kvfloat(kv, "a"),
-        jerk_max=kvfloat(kv, "j"), yaw_rate_max=kvfloat(kv, "w"),
-        yaw_accel_max=kvfloat(kv, "wa"), yaw_jerk_max=kvfloat(kv, "wj"),
-        stream=kvfloat(kv, "s") > 0.5)
-    return envelope_pb2.CommandEnvelope(segment=seg)
+    segs = legacy_translate.primitives_for_move(float(pos[0]), float(pos[1]), float(pos[2]))
+    return [envelope_pb2.CommandEnvelope(segment=seg) for seg in segs]
 
 
-def envelope_for_mover(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+def envelope_for_mover(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
     """``MOVER <distance> <direction> <finalHeading> [t=][v=][w=][a=][j=]
     [wa=][wj=]`` -> ``{replace: MotionSegment}`` (``handleMover()``, via
     ``legacy_translate.segment_for_mover()``) -- REPLACE semantics, not
-    ``segment``."""
+    ``segment``.
+
+    KNOWN BROKEN post-100-007 (THE CUTOVER): ``segment_for_mover()`` still
+    builds the retired ``primitive=false`` shape, which the firmware now
+    rejects outright (typed ``ERR_UNIMPLEMENTED``) -- see that function's
+    own docstring. MOVER's real v2 wiring is ticket 100-008's job
+    (``Drive::Drivetrain::planVelocity()``). Left unchanged/undisguised
+    rather than silently patched around."""
     if len(pos) < 3:
         raise ValueError("MOVER requires <distance> <direction> <finalHeading>")
     seg = legacy_translate.segment_for_mover(
@@ -185,86 +216,89 @@ def envelope_for_mover(pos: list[str], kv: dict[str, str]) -> envelope_pb2.Comma
         time=kvfloat(kv, "t"), v=kvfloat(kv, "v"), accel_max=kvfloat(kv, "a"),
         jerk_max=kvfloat(kv, "j"), omega=kvfloat(kv, "w"),
         yaw_accel_max=kvfloat(kv, "wa"), yaw_jerk_max=kvfloat(kv, "wj"))
-    return envelope_pb2.CommandEnvelope(replace=seg)
+    return [envelope_pb2.CommandEnvelope(replace=seg)]
 
 
-def envelope_for_r(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
-    """``R <speed> <radius>`` -> ``{replace: MotionSegment}`` (``handleR()``,
-    via ``legacy_translate.segment_for_arc()`` -- 097's open-loop,
-    time-bounded approximation of the original continuous arc; see that
-    function's own docstring for the deviation)."""
+def envelope_for_r(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
+    """``R <speed> <radius>`` -> ``{segment: MotionSegment}`` (``handleR()``,
+    via ``legacy_translate.segment_for_arc()`` -- 100-007 now builds a REAL
+    single ``primitive=true`` arc segment, sent as ``segment`` (was
+    ``replace`` pre-cutover) -- see that function's own docstring for the
+    deviation)."""
     if len(pos) < 2:
         raise ValueError("R requires <speed> <radius>")
     seg = legacy_translate.segment_for_arc(float(pos[0]), float(pos[1]))
-    return envelope_pb2.CommandEnvelope(replace=seg)
+    return [envelope_pb2.CommandEnvelope(segment=seg)]
 
 
-def envelope_for_turn(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+def envelope_for_turn(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
     """``TURN <heading> [eps=]`` -> ``{segment: MotionSegment}``
     (``handleTURN()``, via ``legacy_translate.segment_for_turn()`` -- 097's
     open-loop, from-zero-heading approximation of the original
-    fused-heading closed loop; ``eps`` is accepted but has no open-loop
-    effect, see that function's own docstring)."""
+    fused-heading closed loop, now a ``primitive=true`` pivot (100-007);
+    ``eps`` is accepted but has no open-loop effect, see that function's
+    own docstring)."""
     if len(pos) < 1:
         raise ValueError("TURN requires <heading>")
     seg = legacy_translate.segment_for_turn(float(pos[0]))
-    return envelope_pb2.CommandEnvelope(segment=seg)
+    return [envelope_pb2.CommandEnvelope(segment=seg)]
 
 
-def envelope_for_g(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
-    """``G <x> <y> <speed>`` -> ``{segment: MotionSegment}`` (``handleG()``,
-    via ``legacy_translate.segment_for_goto_relative()`` -- 097's open-loop
-    single-leg approximation of the original Planner pursuit loop; see
-    that function's own docstring)."""
+def envelope_for_g(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
+    """``G <x> <y> <speed>`` -> UP TO TWO ``{segment: MotionSegment}``
+    envelopes (``handleG()``, via ``legacy_translate.
+    segment_for_goto_relative()`` -- 097's open-loop single-leg
+    approximation of the original Planner pursuit loop, now returning a
+    LIST of v2 primitives (100-007); see that function's own docstring)."""
     if len(pos) < 3:
         raise ValueError("G requires <x> <y> <speed>")
-    seg = legacy_translate.segment_for_goto_relative(
+    segs = legacy_translate.segment_for_goto_relative(
         float(pos[0]), float(pos[1]), speed=float(pos[2]))
-    return envelope_pb2.CommandEnvelope(segment=seg)
+    return [envelope_pb2.CommandEnvelope(segment=seg) for seg in segs]
 
 
-def envelope_for_echo(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+def envelope_for_echo(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
     """``ECHO <text...>`` -> ``{echo: Echo{payload}}``. Every positional
     token is re-joined space-separated (mirrors ``handleEcho()``'s own
     token reassembly, motion_commands.cpp/system_commands.cpp)."""
     payload = " ".join(pos)
     env = envelope_pb2.CommandEnvelope()
     env.echo.payload = payload.encode("utf-8")
-    return env
+    return [env]
 
 
-def envelope_for_ping(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+def envelope_for_ping(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
     """``PING`` -> ``{ping: Ping{}}`` (zero-field arm)."""
     env = envelope_pb2.CommandEnvelope()
     env.ping.SetInParent()
-    return env
+    return [env]
 
 
-def envelope_for_stop(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+def envelope_for_stop(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
     """``STOP`` -> ``{stop: Stop{}}`` (zero-field arm, "cannot be malformed")."""
     env = envelope_pb2.CommandEnvelope()
     env.stop.SetInParent()
-    return env
+    return [env]
 
 
-def envelope_for_id(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+def envelope_for_id(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
     """``ID`` -> ``{id: DeviceId{}}`` (empty request, Decision 4)."""
     env = envelope_pb2.CommandEnvelope()
     env.id.SetInParent()
-    return env
+    return [env]
 
 
-def envelope_for_hello(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+def envelope_for_hello(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
     """``HELLO`` -> ``{hello: Hello{}}`` (empty request, stakeholder-
     directed 6-verb minimal command surface, 2026-07-10 -- replies the SAME
     DeviceId shape ``ID`` does; BinaryChannel::handleId() is reused
     firmware-side)."""
     env = envelope_pb2.CommandEnvelope()
     env.hello.SetInParent()
-    return env
+    return [env]
 
 
-def envelope_for_ver(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+def envelope_for_ver(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
     """``VER`` -> ``{ver: Ver{}}`` (empty request, stakeholder-directed
     6-verb minimal command surface, 2026-07-10) -- VER's content is a
     strict subset of ID's reply fields (fw_version/proto_version), so it
@@ -273,25 +307,32 @@ def envelope_for_ver(pos: list[str], kv: dict[str, str]) -> envelope_pb2.Command
     before this addition when it aliased ``envelope_for_id``."""
     env = envelope_pb2.CommandEnvelope()
     env.ver.SetInParent()
-    return env
+    return [env]
 
 
-def envelope_for_help(pos: list[str], kv: dict[str, str]) -> envelope_pb2.CommandEnvelope:
+def envelope_for_help(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
     """``HELP`` -> ``{help: Help{}}`` (empty request, stakeholder-directed
     6-verb minimal command surface, 2026-07-10) -- replies
     ``{helptext: HelpText{text}}``, the live registered verb list."""
     env = envelope_pb2.CommandEnvelope()
     env.help.SetInParent()
-    return env
+    return [env]
 
 
 # ---------------------------------------------------------------------------
 # Dispatch tables
 # ---------------------------------------------------------------------------
 
-_EnvelopeBuilder = Callable[[list[str], dict[str, str]], envelope_pb2.CommandEnvelope]
+# _EnvelopeBuilder -- (100-007, THE CUTOVER) returns a LIST of
+# CommandEnvelopes, not a single one: MOVE/G can now decompose into UP TO
+# THREE/TWO v2 primitive `segment` envelopes (legacy_translate.py's
+# primitives_for_move()/segment_for_goto_relative()) -- every other verb
+# still returns a single-element list. Callers (cli.py's cmd_send,
+# io/proxy.py's _handle_binary_verb) send every envelope IN ORDER, stopping
+# at the first rejection ("legacy_verbs multi-envelope send").
+_EnvelopeBuilder = Callable[[list[str], dict[str, str]], list[envelope_pb2.CommandEnvelope]]
 
-# BINARY_DISPATCH: every verb with a 1:1 CommandEnvelope translation. Wider
+# BINARY_DISPATCH: every verb with a CommandEnvelope translation. Wider
 # than PROTOCOL_VERBS below -- the proxy (io/proxy.py) also routes
 # PING/STOP/ID/VER through here (it has no text rump to fall back to);
 # cmd_send only consults this table for verbs in PROTOCOL_VERBS.
@@ -310,11 +351,15 @@ _EnvelopeBuilder = Callable[[list[str], dict[str, str]], envelope_pb2.CommandEnv
 # behavior; it just means the table is now a complete, tested mirror of
 # every rump verb's binary arm, not merely the ones the proxy happens to
 # route through it.
+#
+# SEG (100-007, THE CUTOVER): the new v2-native real-arc/pivot primitive
+# proxy verb -- envelope_for_seg(), via legacy_translate.segment_for_seg().
 BINARY_DISPATCH: dict[str, _EnvelopeBuilder] = {
     "S": envelope_for_drive,
     "D": envelope_for_distance,
     "T": envelope_for_timed,
     "RT": envelope_for_rt,
+    "SEG": envelope_for_seg,
     "R": envelope_for_r,
     "TURN": envelope_for_turn,
     "G": envelope_for_g,
@@ -329,10 +374,12 @@ BINARY_DISPATCH: dict[str, _EnvelopeBuilder] = {
     "HELP": envelope_for_help,
 }
 
-# PROTOCOL_VERBS: the seven verbs `rogo send` translates to binary --
-# architecture-update.md (097) Step 1's own list, reused verbatim by the
-# committed test_cli_send_translator.py.
-PROTOCOL_VERBS = frozenset({"S", "D", "T", "RT", "MOVE", "MOVER", "ECHO"})
+# PROTOCOL_VERBS: the verbs `rogo send` translates to binary --
+# architecture-update.md (097) Step 1's own seven-verb list
+# (S/D/T/RT/MOVE/MOVER/ECHO), extended by 100-007 (THE CUTOVER) with SEG --
+# reused verbatim by the committed test_cli_send_translator.py (updated
+# alongside this ticket).
+PROTOCOL_VERBS = frozenset({"S", "D", "T", "RT", "SEG", "MOVE", "MOVER", "ECHO"})
 
 # RUMP_VERBS: architecture-update.md (097) Step 1's five-verb safety rump
 # (PING/ID/HELLO/HELP/STOP) -- `rogo send` sends these as plain text,

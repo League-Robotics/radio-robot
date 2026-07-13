@@ -26,6 +26,13 @@ import pytest
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _SOURCE_DIR = _REPO_ROOT / "source"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "runtime_blackboard_harness.cpp"
+# 100-007, THE CUTOVER: runtime/blackboard.h now #includes drive/drivetrain.h
+# (Drive::Goal/Drive::ChainTail -- bb.segmentIn/replaceIn/chainTail), which
+# transitively reaches drive/motion_plan.h -> drive/master_profile.h ->
+# "ruckig/ruckig.hpp" -- this bare-minimum "just blackboard.h" harness needs
+# the vendored include path now too, even though it never names a Drive::
+# type itself.
+_RUCKIG_INCLUDE = _REPO_ROOT / "libraries" / "ruckig" / "include"
 
 # messages/common.h documents its own target as "CODAL C++11" -- build the
 # host harness to the same standard so it exercises exactly the language
@@ -61,6 +68,8 @@ def test_runtime_blackboard_harness_compiles_and_passes(tmp_path):
             "-Wextra",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_RUCKIG_INCLUDE),
             "-o",
             str(binary),
             str(_HARNESS_SRC),

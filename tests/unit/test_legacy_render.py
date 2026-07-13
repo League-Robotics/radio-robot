@@ -217,7 +217,9 @@ def test_render_ok_for_verb_unknown_verb_raises():
 
 
 def test_evt_arming_verbs_exactly_t_d_rt_move():
-    assert render.EVT_ARMING_VERBS == frozenset({"T", "D", "RT", "MOVE"})
+    """100-007, THE CUTOVER: SEG (the new v2-native arc/pivot primitive
+    proxy verb) joins its T/D/RT/MOVE segment-arm siblings."""
+    assert render.EVT_ARMING_VERBS == frozenset({"T", "D", "RT", "SEG", "MOVE"})
 
 
 # ---------------------------------------------------------------------------

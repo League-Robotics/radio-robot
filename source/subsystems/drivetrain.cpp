@@ -1,10 +1,14 @@
 // drivetrain.cpp -- Subsystems::Drivetrain implementation. See drivetrain.h
-// for the class-level design notes (the 094-004 motion-planner rewrite).
+// for the class-level design notes (the 100-007 THE CUTOVER rewrite into
+// the thin wafer adapter over source/drive/).
 #include "subsystems/drivetrain.h"
 
 #include <cassert>
+#include <cmath>
+#include <new>
 
 #include "kinematics/body_kinematics.h"
+#include "subsystems/drive_bridge.h"
 
 namespace Subsystems {
 
@@ -33,18 +37,25 @@ void Drivetrain::setNeutral(msg::Neutral mode) {
 
 void Drivetrain::configure(const msg::DrivetrainConfig& config) {
     config_ = config;
-    // THE single conversion point (0-based motor indices, OOP refactor):
-    // config.left_port/right_port are wire/serialized 1-based brick labels
-    // (msg::DrivetrainConfig, unchanged) -- converted to 0-based Hardware
-    // motor indices here, exactly once, and never again anywhere else in
-    // this class (see drivetrain.h's own doc comments on configure()/
-    // boundLeft_/boundRight_).
+    // THE single conversion point (0-based motor indices): config.
+    // left_port/right_port are wire/serialized 1-based brick labels,
+    // converted to 0-based Hardware motor indices here, exactly once.
     boundLeft_ = config.left_port - 1;
     boundRight_ = config.right_port - 1;
+    rebuildDriveDrivetrain();
 }
 
 void Drivetrain::configureMotion(const msg::PlannerConfig& config) {
-    executor_.configure(config);
+    plannerConfig_ = config;
+    rebuildDriveDrivetrain();
+}
+
+void Drivetrain::rebuildDriveDrivetrain() {
+    // Drive::Drivetrain IS copy-assignable (unlike Drive::MotionPlan --
+    // Drivetrain itself holds no ruckig:: member, only a Limits value and a
+    // trackwidth float, both trivially assignable) -- a plain assignment is
+    // correct and sufficient here, no placement-new needed.
+    driveDrivetrain_ = Drive::Drivetrain(driveLimitsFromConfig(plannerConfig_), config_.trackwidth);
 }
 
 void Drivetrain::apply(const msg::DrivetrainCommand& command) {
@@ -56,10 +67,6 @@ void Drivetrain::apply(const msg::DrivetrainCommand& command) {
         }
         case msg::DrivetrainCommand::ControlKind::WHEELS: {
             const msg::WheelTargets& wheels = command.control.wheels;
-            // This Drivetrain has exactly two wheels (capabilities().wheel_count
-            // == 2): index 0 is left, index 1 is right. A WheelTargets with
-            // fewer than 2 entries leaves the missing side at 0 rather than
-            // reading past w_count.
             float left = 0.0f;
             float right = 0.0f;
             if (wheels.w_count_val() > 0 && wheels.w()[0].speed.has) {
@@ -75,25 +82,13 @@ void Drivetrain::apply(const msg::DrivetrainCommand& command) {
             setNeutral(command.control.neutral);
             break;
         case msg::DrivetrainCommand::ControlKind::POSE:
-            // The pose (imperative re-anchor) arm is ignored this sprint:
-            // this differential dev-bench Drivetrain has no odometry/EKF to
-            // re-anchor. Explicitly a documented no-op, not a silent drop:
-            // apply() takes no action for this arm rather than touching any
-            // setter above.
+            // Ignored this sprint -- documented no-op, not a silent drop.
             break;
         case msg::DrivetrainCommand::ControlKind::NONE:
         default:
-            // No control arm set -- e.g. an authority-steal command whose
-            // only payload is standby=true (see below). Nothing to dispatch
-            // here; mode_/the last commanded target are left untouched, on
-            // purpose (the class comment's "Authority arbitration" section).
             break;
     }
 
-    // The standby side-channel rides beside the oneof exactly like
-    // MotorCommand's feedforward/reset_position -- processed AFTER the oneof
-    // above so `{control=NEUTRAL, standby=true}` sets mode_ AND drops
-    // authority in the same call (see the class comment).
     if (command.standby.has && command.standby.val) {
         standby();
     }
@@ -105,46 +100,102 @@ void Drivetrain::clearRing() {
     }
 }
 
-bool Drivetrain::dispatchEscapeHatch(const msg::DrivetrainCommand& command, uint32_t now) {
+void Drivetrain::replacePlan(const Drive::MotionPlan& newPlan) {
+    // Drive::MotionPlan is copy-CONSTRUCTIBLE but NOT copy-ASSIGNABLE
+    // (master_profile.h's own ruckig::Ruckig<1> const members) -- placement
+    // new is the no-heap "reassignment" idiom (see drivetrain.h's own class
+    // comment). Well-defined even the FIRST time this is called: plan_'s
+    // default constructor already ran at Drivetrain construction, so there
+    // is always a live object here to destroy first.
+    plan_.~MotionPlan();
+    new (&plan_) Drive::MotionPlan(newPlan);
+}
+
+bool Drivetrain::dispatchEscapeHatch(const msg::DrivetrainCommand& command) {
     using Kind = msg::DrivetrainCommand::ControlKind;
     bool preempted = (command.control_kind == Kind::TWIST ||
                       command.control_kind == Kind::WHEELS ||
                       command.control_kind == Kind::NEUTRAL);
 
     if (preempted) {
+        // (100-007) Instant preemption for every arm, including NEUTRAL
+        // while a plan is in flight -- see drivetrain.h's own class comment
+        // for the documented deviation from the pre-cutover graceful
+        // decel-to-zero (Motion::SegmentExecutor::stop()) this replaces:
+        // that mechanism has no source/drive/ equivalent in this ticket's
+        // scope (planVelocity()-based decel is ticket 100-008's MOVER job).
         clearRing();
-
-        if (command.control_kind == Kind::NEUTRAL && segmentMode_ && executor_.active()) {
-            // A segment is actively executing (or already mid-graceful-stop)
-            // -- NEUTRAL arms the executor's OWN presolved graceful
-            // decel-to-zero instead of an instant zero-velocity command
-            // (architecture-update.md Section 6's "STOP triggers the
-            // graceful decel-to-zero"). segmentMode_ stays true: tick()
-            // keeps riding executor_'s decel down to a literal 0.0f twist
-            // over subsequent ticks, then idles.
-            executor_.stop(now);
-        } else {
-            // Nothing in-flight to gracefully decelerate (DIRECT mode was
-            // already active, or the executor was already idle) -- fall
-            // through to the instant DIRECT-mode zero/target this command
-            // sets below (apply()'s setNeutral()/setWheelTargets()/
-            // setTwist()).
-            segmentMode_ = false;
-        }
+        planActive_ = false;
+        haveAnchor_ = false;
+        segmentMode_ = false;
     }
 
     apply(command);
     return preempted;
 }
 
+void Drivetrain::startNextPlan(uint32_t now, const msg::PoseEstimate& bodyState) {
+    while (!ring_.empty()) {
+        const Drive::Goal goal = ring_.take();
+        const Drive::Pose start =
+            haveAnchor_ ? plan_.goal() : driveBodyState(bodyState).pose;
+
+        Drive::PlanRequest request;
+        request.goal = goal;
+        request.start = start;
+        request.entrySpeed = nextEntrySpeed_;
+        request.entryAccel = 0.0f;
+
+        const Drive::PlanResult result = driveDrivetrain_.plan(request);
+        if (result.verdict != Drive::Verdict::OK) {
+            // Late plan() failure: admit()'s coarse, conservative
+            // queue-time check (BinaryChannel, wire time) passed, but the
+            // exact Ruckig solve did not -- rare (both checks fold the SAME
+            // v_eff ceiling math), and there is no live wire corr_id left
+            // to reply an ERR to any more (the segment's own ACK already
+            // happened at admission time). Drop this ring entry and try
+            // the next one, same tick -- diagnostic counter only, no
+            // EventNotify (this is not one of the Drive::Status ABORT_*
+            // cases the ticket's own EventNotify contract covers).
+            ++lateSolveFailures_;
+            continue;
+        }
+
+        replacePlan(result.plan);
+        planStart_ = now;
+        // A freshly popped ring entry is a genuinely NEW segment -- unlike
+        // a same-segment REPLAN_DUE (which preserves state_ across
+        // Drivetrain::replan(), see tick()'s own comment), starting the
+        // NEXT queued goal resets the policy-timer history.
+        state_ = Drive::StepState{};
+        planActive_ = true;
+        haveAnchor_ = true;
+        nextEntrySpeed_ = 0.0f;
+        ++segSeq_;
+        return;
+    }
+}
+
+void Drivetrain::abortAndFlush(Drive::ChainTail& chainTail, Drive::Status status,
+                                const Drive::BodyState& measured,
+                                const Drive::TrackRecord& record) {
+    clearRing();
+    planActive_ = false;
+    haveAnchor_ = false;
+
+    // Re-anchor ChainTail to the current measured pose -- whatever the wire
+    // handler had predicted for the (now-flushed) queue is moot.
+    chainTail = Drive::ChainTail{measured.pose, 0.0f, 0.0f};
+
+    lastEvent_.seg_seq = segSeq_;
+    lastEvent_.status = toMotionStatus(status);
+    lastEvent_.e_final_pos = std::sqrt(record.eAlong * record.eAlong + record.eCross * record.eCross);
+    lastEvent_.e_final_theta = record.eTheta;
+}
+
 void Drivetrain::commandedWheelTargets(float* targetLeft, float* targetRight) const {
     switch (mode_) {
         case Mode::TWIST:
-            // v_y_ is never read here: this Drivetrain is differential-only
-            // (capabilities().holonomic == false this sprint). This
-            // differential path calls the scalar (v_x, omega) overload
-            // directly; BodyKinematics's msg::BodyTwist3 array overload is
-            // for the holonomic/mecanum path.
             BodyKinematics::inverse(v_x_, omega_, config_.trackwidth,
                                      *targetLeft, *targetRight);
             break;
@@ -163,37 +214,20 @@ void Drivetrain::commandedWheelTargets(float* targetLeft, float* targetRight) co
 void Drivetrain::governRatio(float* targetLeft, float* targetRight,
                               const msg::MotorState& leftObs,
                               const msg::MotorState& rightObs) const {
-    if (config_.sync_gain <= 0.0f) return;   // SET sync=0 -> independent (ported semantics)
+    if (config_.sync_gain <= 0.0f) return;
 
-    // Only couple when both wheels are commanded in the SAME direction
-    // (straight or curve). A spin-in-place has opposite-signed targets;
-    // coupling those would degenerate the spin toward a single wheel
-    // (ported caveat from source_old/control/MotorController.cpp's
-    // tgtSpeed product>0 gate). A zero target on either side also skips
-    // governing -- there is no ratio to hold against a stopped wheel.
     if (*targetLeft == 0.0f || *targetRight == 0.0f) return;
     if ((*targetLeft) * (*targetRight) <= 0.0f) return;
 
     if (!leftObs.velocity.has || !rightObs.velocity.has) return;
 
-    // Achievement fraction: how much of ITS OWN commanded target each wheel
-    // is actually hitting. 1.0 = on target; < 1.0 = bogged down (or
-    // reversing relative to its command, which clamps to 0 below).
     float achievedLeft = leftObs.velocity.val / *targetLeft;
     float achievedRight = rightObs.velocity.val / *targetRight;
     float achievedMin = (achievedLeft < achievedRight) ? achievedLeft : achievedRight;
 
-    if (achievedMin >= 1.0f) return;   // neither wheel is bogged down
+    if (achievedMin >= 1.0f) return;
     if (achievedMin < 0.0f) achievedMin = 0.0f;
 
-    // Blend the shared ceiling toward the bogged-down wheel's actual pace by
-    // sync_gain (sync_gain=1 fully commits every tick; smaller values ease
-    // in). Scaling BOTH targets by the SAME factor holds the commanded
-    // left/right ratio exactly (curvature preserved) -- this is the
-    // re-targeting of source_old's syncGain (which nudged only the leading
-    // wheel's effective target toward a computed "coupled" value) onto
-    // velocity targets: a single shared scale is the ratio-exact form of the
-    // same idea, and never touches duty cycle.
     float scale = 1.0f - config_.sync_gain * (1.0f - achievedMin);
     if (scale < 0.0f) scale = 0.0f;
     *targetLeft *= scale;
@@ -201,121 +235,152 @@ void Drivetrain::governRatio(float* targetLeft, float* targetRight,
 }
 
 void Drivetrain::tick(uint32_t now,
-                       Rt::WorkQueue<Motion::Segment, 8>& segmentIn,
-                       Rt::Mailbox<Motion::Segment>& replaceIn,
-                       Rt::WorkQueue<msg::DrivetrainCommand, 8>& driveIn) {
-    // 1. driveIn drained FIRST -- one command per tick (FIFO pop, matching
-    // this class's pre-094 drain cadence), applied via the escape-hatch
-    // dispatcher (see the class comment's precedence rules).
+                       Rt::WorkQueue<Drive::Goal, 8>& segmentIn,
+                       Rt::Mailbox<Drive::Goal>& replaceIn,
+                       Rt::WorkQueue<msg::DrivetrainCommand, 8>& driveIn,
+                       const msg::PoseEstimate& bodyState,
+                       const msg::PoseStep& poseStepped,
+                       Drive::ChainTail& chainTail) {
+    // 1. driveIn drained FIRST -- unchanged escape-hatch precedence.
     bool preempted = false;
     if (!driveIn.empty()) {
-        preempted = dispatchEscapeHatch(driveIn.take(), now);
+        preempted = dispatchEscapeHatch(driveIn.take());
     }
 
-    // 1b. replaceIn (MOVER): REPLACE whatever motion is in flight --
-    // latest-wins by construction (a Mailbox), replanned from the current
-    // velocity by the executor. Clears the ring: replace semantics
-    // supersede anything queued.
+    // 1b. replaceIn -- interim ticket-100-007 REPLACE semantics: clears the
+    // ring, queues just this one already-admitted Goal (see blackboard.h's
+    // own doc comment on replaceIn; full MOVER/planVelocity() semantics are
+    // ticket 100-008's job).
     if (!preempted && !replaceIn.empty()) {
-        Motion::Segment seg = replaceIn.take();
+        const Drive::Goal goal = replaceIn.take();
         clearRing();
-        executor_.replaceStream(seg, now, config_.trackwidth);
+        ring_.post(goal);
         segmentMode_ = true;
     }
 
-    // 2. Otherwise, drain segmentIn IN FULL into ring_ this tick -- queuing
-    // at least one fresh segment (re)claims SEGMENT mode (see the class
-    // comment).
+    // 2. Otherwise, drain segmentIn IN FULL into ring_ this tick.
     if (!preempted) {
         bool queuedAny = false;
         while (!segmentIn.empty()) {
             if (ring_.post(segmentIn.take())) {
                 queuedAny = true;
             }
-            // A post() failure (ring_ already at its 8-slot cap) silently
-            // drops the excess -- should not occur in ordinary operation,
-            // since segmentIn itself caps at the same depth and is drained
-            // every tick.
         }
         if (queuedAny) {
             segmentMode_ = true;
         }
     }
 
-    // 090-001 (moved, 094-004): resolve this Drivetrain's OWN bound wheel
-    // pair -- boundLeft_/boundRight_ are already-converted 0-based indices
-    // (configure()'s own single conversion point), and Hardware::state()/
-    // motor() take a 0-based index and do their own out-of-range clamping
-    // (see drivetrain.h's tick() doc comment), so there is no further `- 1`
-    // conversion to perform here; the range assert below is kept as a
-    // defensive guard against a misconfigured bound index.
     DrivetrainPorts bound = ports();
     assert(bound.left < Hardware::kMotorCount);
     assert(bound.right < Hardware::kMotorCount);
     const msg::MotorState leftObs = hardware_.motorState(bound.left);
     const msg::MotorState rightObs = hardware_.motorState(bound.right);
 
-    // Measured per-wheel acceleration, EMA-filtered -- surfaced via
-    // state()/TLM `acc=`. Raw d(vel)/dt of the (quantized, flip-flop-cadence)
-    // velocity samples is dominated by noise; the EMA lives HERE in the
-    // firmware so every consumer gets the same smooth signal instead of each
-    // deriving its own (stakeholder direction, 2026-07-09).
     updateAccelEma(now, 0, leftObs);
     updateAccelEma(now, 1, rightObs);
 
     msg::MotorCommand leftCmd;
     msg::MotorCommand rightCmd;
+    bool neutral = false;
+    float targetLeft = 0.0f;
+    float targetRight = 0.0f;
 
     if (segmentMode_) {
-        // Pop-on-completion, start-next: once the executor is idle (never
-        // started, or the previous segment -- including its own trailing
-        // graceful stop -- fully converged) and the ring is non-empty, hand
-        // it the next queued segment.
-        if (!executor_.active() && !ring_.empty()) {
-            Motion::Segment seg = ring_.take();
-            executor_.start(seg, now, config_.trackwidth);
-        } else if (executor_.streaming() && !executor_.hasPending() && !ring_.empty() &&
-                   ring_.peek(0) != nullptr && ring_.peek(0)->stream) {
-            // Streaming merge feed: while a STREAM segment executes and the
-            // next queued segment is also a stream one, top up the executor's
-            // one-deep pending slot -- it merges mid-plan on the executor's
-            // next tick (SegmentExecutor::offerNext()'s contract). Discrete
-            // segments never enter this path: they wait for idle and execute
-            // fully sequentially, exactly as before.
-            executor_.offerNext(ring_.take());
+        if (!planActive_ && !ring_.empty()) {
+            startNextPlan(now, bodyState);
         }
 
-        msg::BodyTwist3 twist = executor_.tick(now, leftObs, rightObs);
-        float targetLeft = 0.0f;
-        float targetRight = 0.0f;
-        BodyKinematics::inverse(twist.v_x, twist.omega, config_.trackwidth,
-                                 targetLeft, targetRight);
-        governRatio(&targetLeft, &targetRight, leftObs, rightObs);
-        leftCmd.setVelocity(targetLeft);
-        rightCmd.setVelocity(targetRight);
+        if (planActive_) {
+            const float elapsed =
+                static_cast<float>(static_cast<int32_t>(now - planStart_)) * 0.001f;
+
+            Drive::StepInput in;
+            in.t = elapsed;
+            in.measured = driveBodyState(bodyState);
+            in.left = driveWheelState(leftObs);
+            in.right = driveWheelState(rightObs);
+            in.poseStep = poseStepped.pos;
+            in.poseStepTheta = poseStepped.theta;
+
+            const Drive::StepOutput out = plan_.step(in, &state_);
+            targetLeft = out.command.left;
+            targetRight = out.command.right;
+
+            // Remaining master-DOF distance [mm] -- state()/rem=. 0 for a
+            // pivot (the master DOF there is heading, radians, not a
+            // translation -- see drivetrain.h's own field comment).
+            remainingLinear_ =
+                plan_.isPivot()
+                    ? 0.0f
+                    : fabsf(plan_.referenceAt(plan_.duration()).s - plan_.referenceAt(elapsed).s);
+
+            switch (out.status) {
+                case Drive::Status::REPLAN_DUE: {
+                    const Drive::PlanResult result =
+                        driveDrivetrain_.replan(plan_, in.measured, elapsed);
+                    if (result.verdict == Drive::Verdict::OK) {
+                        replacePlan(result.plan);
+                        planStart_ = now;
+                        // state_ intentionally NOT reset -- policy.cpp's
+                        // attemptReplan() already reset sustainStart/
+                        // dwellStart/settling as part of producing THIS
+                        // tick's REPLAN_DUE status; replanCount/lastReplan
+                        // must persist across the replan (the rate-limit/
+                        // N-max history is for the whole segment).
+                    }
+                    // else SOLVE_FAILED: the caller keeps the OLD plan_/
+                    // state_ (drivetrain.cpp's own replan() doc comment) --
+                    // out.command (already computed above, against the
+                    // pre-replan plan_) is still this tick's correct
+                    // staged output.
+                    break;
+                }
+                case Drive::Status::DONE_STOP:
+                case Drive::Status::DONE_HANDOFF:
+                    // Seed the NEXT startNextPlan() call from the
+                    // REFERENCE's own exit speed on a flying handoff
+                    // (policy.cpp's own "Seeding contract" comment: never
+                    // from measured state), or from rest on an ordinary
+                    // stop.
+                    nextEntrySpeed_ =
+                        (out.status == Drive::Status::DONE_HANDOFF) ? plan_.exitSpeed() : 0.0f;
+                    planActive_ = false;
+                    break;
+                case Drive::Status::ABORT_TIMEOUT:
+                case Drive::Status::ABORT_REPLAN_LIMIT:
+                    abortAndFlush(chainTail, out.status, in.measured, out.record);
+                    break;
+                default:
+                    break;  // RUNNING, SETTLING
+            }
+        }
+
+        if (!planActive_ && ring_.empty()) {
+            // Nothing queued, nothing in flight -- idle out of segment mode,
+            // matching the pre-cutover "S ... STOP with no segment ever in
+            // flight" idle shape.
+            segmentMode_ = false;
+            neutral = true;
+        }
     } else if (mode_ == Mode::NEUTRAL) {
+        neutral = true;
+    } else {
+        commandedWheelTargets(&targetLeft, &targetRight);
+    }
+
+    if (neutral) {
         leftCmd.setNeutral(neutralMode_);
         rightCmd.setNeutral(neutralMode_);
+        if (!segmentMode_) {
+            remainingLinear_ = 0.0f;
+        }
     } else {
-        float targetLeft = 0.0f;
-        float targetRight = 0.0f;
-        commandedWheelTargets(&targetLeft, &targetRight);
         governRatio(&targetLeft, &targetRight, leftObs, rightObs);
-
         leftCmd.setVelocity(targetLeft);
         rightCmd.setVelocity(targetRight);
     }
 
-    // Staged, not held -- flushed at hardware_'s own tick() cadence (see
-    // drivetrain.h's class comment and architecture-update.md Section 5).
-    // Streaming flow-control signal: the executor's remaining translation,
-    // cached here (tick has `now`; the const state() does not) -- surfaced
-    // as rem= in the MOVE ack.
-    remainingLinear_ = segmentMode_ ? executor_.remainingLinear(now) : 0.0f;
-
-    // Nothing left to route. Remember this pass's post-governor commanded
-    // wheel velocities so state()/TLM can surface cmd= (measured vel= vs the
-    // setpoint the velocity PID is chasing).
     using CK = msg::MotorCommand::ControlKind;
     cmdVel_[0] = (leftCmd.control_kind == CK::VELOCITY) ? leftCmd.control.velocity : 0.0f;
     cmdVel_[1] = (rightCmd.control_kind == CK::VELOCITY) ? rightCmd.control.velocity : 0.0f;
@@ -323,31 +388,27 @@ void Drivetrain::tick(uint32_t now,
     hardware_.motor(bound.right).apply(rightCmd);
 }
 
-// updateAccelEma -- one wheel's measured-acceleration EMA. Velocity samples
-// refresh at the I2C flip-flop's cadence (~80ms per motor on hardware), while
-// tick() runs every loop pass -- so a new EMA term is folded in only when the
-// velocity VALUE actually changes (a fresh sample), with dt measured between
-// those changes. Between samples the EMA holds. kAccelEmaAlpha trades lag for
-// smoothness; raw d(vel)/dt is quantization hash (the whole reason this lives
-// in firmware).
+// updateAccelEma -- one wheel's measured-acceleration EMA. UNCHANGED this
+// ticket -- see the pre-100-007 doc comment (git history): a new EMA term
+// folds in only when the velocity VALUE actually changes (a fresh sample).
 namespace {
 constexpr float kAccelEmaAlpha = 0.25f;
 }
 
 void Drivetrain::updateAccelEma(uint32_t now, int wheel, const msg::MotorState& obs) {
     if (!obs.velocity.has) return;
-    const float v = obs.velocity.val;   // [mm/s]
+    const float v = obs.velocity.val;
     if (!haveVelSample_[wheel]) {
         haveVelSample_[wheel] = true;
         lastVelSample_[wheel] = v;
         lastVelSampleMs_[wheel] = now;
         return;
     }
-    if (v == lastVelSample_[wheel]) return;   // no fresh sample this pass
+    if (v == lastVelSample_[wheel]) return;
     const float dt = static_cast<float>(static_cast<int32_t>(now - lastVelSampleMs_[wheel]))
-                     * 0.001f;   // [s]
+                     * 0.001f;
     if (dt <= 0.0f) return;
-    const float rawAccel = (v - lastVelSample_[wheel]) / dt;   // [mm/s^2]
+    const float rawAccel = (v - lastVelSample_[wheel]) / dt;
     accelEma_[wheel] = kAccelEmaAlpha * rawAccel + (1.0f - kAccelEmaAlpha) * accelEma_[wheel];
     lastVelSample_[wheel] = v;
     lastVelSampleMs_[wheel] = now;
@@ -356,12 +417,6 @@ void Drivetrain::updateAccelEma(uint32_t now, int wheel, const msg::MotorState& 
 msg::DrivetrainState Drivetrain::state() const {
     msg::DrivetrainState s;
 
-    // enc_[]/vel_[] are sourced from hardware_.motorState(i) -- MEASURED, not
-    // commanded (094-004: replaces the pre-094 "reports the pre-governor
-    // commanded target" behavior entirely). Pose/EKF fields (fused/encoder/
-    // optical, otos, wheel_wedged[], connected, otos_status,
-    // otos_fusion_blocked) stay at their zero defaults -- this differential
-    // dev-bench Drivetrain has no odometry/EKF this sprint.
     DrivetrainPorts bound = ports();
     if (bound.left < Hardware::kMotorCount && bound.right < Hardware::kMotorCount) {
         msg::MotorState leftObs = hardware_.motorState(bound.left);
@@ -375,47 +430,27 @@ msg::DrivetrainState Drivetrain::state() const {
         s.vel_[1] = rightObs.velocity.has ? rightObs.velocity.val : 0.0f;
         s.vel_count = 2;
 
-        s.cmd_[0] = cmdVel_[0];   // [mm/s] post-governor commanded (vs measured vel_)
+        s.cmd_[0] = cmdVel_[0];
         s.cmd_[1] = cmdVel_[1];
         s.cmd_count = 2;
 
-        s.acc_[0] = accelEma_[0];   // [mm/s^2] EMA-filtered measured acceleration
+        s.acc_[0] = accelEma_[0];
         s.acc_[1] = accelEma_[1];
         s.acc_count = 2;
     }
 
-    // Authority mode, readable from this state cell without a Drivetrain*,
-    // OR'd with the owned Motion::SegmentExecutor's own active/idle status
-    // (094-006): `active_` alone (the pre-079 authority-arbitration flag)
-    // is set ONLY by setTwist()/setWheelTargets()/setNeutral() -- i.e. only
-    // by a driveIn (S/STOP) escape-hatch command -- so a session driven
-    // entirely by `MOVE`/segmentIn would report `active=false` throughout
-    // even while a segment is actively executing (or riding its own
-    // graceful decel-to-zero), which is useless for `TLM`'s active/idle
-    // poll (architecture-update.md Section 7, "Telemetry and the deferred
-    // completion event"). `segmentMode_ && executor_.active()` covers that
-    // case without changing `active_`'s own pre-existing meaning for the
-    // DIRECT-mode/authority path.
-    s.active = active_ || (segmentMode_ && executor_.active());
+    // Authority mode -- (100-007) segmentMode_ && planActive_ replaces the
+    // retired executor_.active() read; active_ itself is unchanged (set
+    // only by a driveIn escape-hatch command).
+    s.active = active_ || (segmentMode_ && planActive_);
 
-    // busy -- MOTION in progress, the flag TLM's active= token actually
-    // reports (094 OOP fix). `active_` is the pre-079 AUTHORITY flag:
-    // setNeutral() sets it TRUE too (holding neutral IS governing the bound
-    // pair), so it latches 1 after the first STOP ever sent and can never
-    // mean "idle" -- the notebook/bench completion polls were reading a
-    // permanently-1 flag. Segment mode: busy while the executor has a phase
-    // in flight (incl. its trailing graceful decel). Direct mode: busy while
-    // a WHEELS/TWIST drive command is the standing mode (S...STOP window).
-    s.busy = segmentMode_ ? executor_.active()
+    // busy -- MOTION in progress, the flag TLM's active= token reports.
+    s.busy = segmentMode_ ? planActive_
                           : (mode_ == Mode::WHEELS || mode_ == Mode::TWIST);
 
-    // Motion-queue depth: segments waiting in the ring PLUS the one
-    // currently executing. Surfaced in the MOVE ack (`q=`) so a streaming
-    // teleop client can flow-control its send rate against the real backlog.
-    s.queue = ring_.size() + ((segmentMode_ && executor_.active()) ? 1u : 0u);
+    // Motion-queue depth: ring_ entries PLUS the one currently executing.
+    s.queue = ring_.size() + ((segmentMode_ && planActive_) ? 1u : 0u);
 
-    // Remaining translation in the live plan [mm] -- the streaming teleop's
-    // buffer-depth feedback (rem= in the MOVE ack).
     s.rem = remainingLinear_;
 
     return s;
@@ -423,7 +458,7 @@ msg::DrivetrainState Drivetrain::state() const {
 
 msg::DrivetrainCapabilities Drivetrain::capabilities() const {
     msg::DrivetrainCapabilities caps;
-    caps.holonomic = false;   // differential-only this sprint (Tovez) -- see setTwist()
+    caps.holonomic = false;
     caps.wheel_count = 2;
     caps.onboard_position = leftMotorCaps_.position && rightMotorCaps_.position;
     return caps;
@@ -436,9 +471,6 @@ void Drivetrain::setMotorCapabilities(const msg::MotorCapabilities& left,
 }
 
 DrivetrainPorts Drivetrain::ports() const {
-    // Already-converted 0-based indices (configure()'s single conversion
-    // point) -- NOT config_.left_port/right_port (the 1-based wire labels)
-    // directly.
     return {boundLeft_, boundRight_};
 }
 

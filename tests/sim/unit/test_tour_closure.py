@@ -159,27 +159,31 @@ def _ideal_tour_poses(steps: list[str]) -> list[tuple[float, float, float]]:
     """Return the ideal rigid-body pose (x, y, h_rad) after each step,
     starting from (0, 0, 0).
 
-    Each step's ``MotionSegment`` (distance/direction/final_heading) is
-    built by the EXACT SAME code the sim dispatches (``legacy_verbs.
-    BINARY_DISPATCH``); the geometric integration below is a direct
-    transcription of ``Motion::SegmentExecutor``'s own documented 3-phase
-    contract (segment_executor.h's phase table: PRE_PIVOT rotates by
-    ``direction``, TRANSLATE moves ``distance`` along the NEW heading,
-    TERMINAL_PIVOT rotates by ``final_heading - direction``) -- an ideal,
-    zero-slip, zero-coast rigid-body model of what the firmware's own
-    kinematics are DEFINED to command, not an independently-invented one.
+    Each step's ``MotionSegment`` (arc_length/delta_heading, the v2
+    primitive shape -- 100-007, THE CUTOVER) is built by the EXACT SAME
+    code the sim dispatches (``legacy_verbs.BINARY_DISPATCH``, now
+    returning a list of envelopes per step -- TOUR_1's own two verbs, D and
+    RT, always decompose to exactly one primitive each, so ``[0]`` is safe
+    here). D (``segment_for_distance()``) is now a PURE translate
+    (delta_heading always 0); RT (``segment_for_rt()``) is now a PURE pivot
+    (arc_length always 0) -- unlike the pre-cutover 3-phase
+    Motion::SegmentExecutor contract this function used to transcribe
+    (PRE_PIVOT/TRANSLATE/TERMINAL_PIVOT in one message), so the ideal
+    integration collapses to "rotate by delta_heading, then translate
+    arc_length along the resulting heading" -- an ideal, zero-slip,
+    zero-coast rigid-body model of what the firmware's own kinematics are
+    DEFINED to command, not an independently-invented one.
     """
     x = y = h = 0.0
     poses: list[tuple[float, float, float]] = []
     for line in steps:
         stripped, _corr_id = legacy_verbs.split_corr_id(line)
         verb, pos, kv = legacy_verbs.tokenize_send_line(stripped)
-        env = legacy_verbs.BINARY_DISPATCH[verb](pos, kv)
-        seg = env.segment
-        h += seg.direction
-        x += seg.distance * math.cos(h)
-        y += seg.distance * math.sin(h)
-        h += seg.final_heading - seg.direction
+        envs = legacy_verbs.BINARY_DISPATCH[verb](pos, kv)
+        seg = envs[0].segment
+        h += seg.delta_heading
+        x += seg.arc_length * math.cos(h)
+        y += seg.arc_length * math.sin(h)
         poses.append((x, y, h))
     return poses
 

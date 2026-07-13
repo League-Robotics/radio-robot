@@ -101,9 +101,13 @@ msg::PlannerConfig defaultPlannerConfig() {
     // heading_kp/heading_kd are the new outer heading-loop PD gains
     // (architecture-update.md M1/M2), baked from the robot JSON's
     // control.heading_kp/heading_kd, falling back to conservative firmware
-    // starting defaults when absent. arrive_tol/turn_in_place_gate/min_speed
-    // are left unset (0.0f default) -- unchanged behavior, main.cpp's old
-    // function never set them either.
+    // starting defaults when absent. arrive_tol/turn_in_place_gate are left
+    // unset (0.0f default) -- unchanged behavior, main.cpp's old function
+    // never set them either (neither has a live consumer). min_speed is NO
+    // LONGER left unset (100-007, THE CUTOVER) -- see MIN_SPEED_DEFAULT's
+    // own comment above for why 0.0f silently broke pivot-mode detection
+    // the moment source/drive/tracker.cpp became this field's first live
+    // reader.
     //
     // Fields 15-31 (100-001 — Drive::Limits' wire/config source,
     // architecture-update.md M1/Decision 2): baked from the robot JSON's
@@ -121,6 +125,7 @@ msg::PlannerConfig defaultPlannerConfig() {
     cfg.setYawJerkMax(100.0f);         // [rad/s^3] ~5x yaw_acc_max -- ~0.2s
     cfg.setHeadingKp(6.0f);              // [1/s] outer heading-loop proportional gain
     cfg.setHeadingKd(0.0f);              // dimensionless outer heading-loop derivative gain
+    cfg.setMinSpeed(10.0f);               // [mm/s] Drive:: tracker pivot-mode threshold (100-007)
     cfg.setVWheelMax(620.0f);              // [mm/s]
     cfg.setSteerHeadroom(20.0f);          // [mm/s]
     cfg.setWheelStepMax(150.0f);          // [mm/s]

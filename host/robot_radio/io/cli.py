@@ -1225,13 +1225,19 @@ def cmd_send(args):
     """Send a v2 command line: ``rogo send <verb> [args...] [--decode]``.
 
     A verb with a proven binary replacement (``legacy_verbs.
-    PROTOCOL_VERBS`` -- S/D/T/RT/MOVE/MOVER/ECHO) is translated to a
-    ``*B<base64>`` ``CommandEnvelope`` via ``legacy_verbs.BINARY_DISPATCH``
-    and sent with ``SerialConnection.send_envelope()``; every other verb
-    (the five-verb safety rump PING/ID/HELLO/HELP/STOP, or anything with no
-    binary replacement at all -- R/TURN/G/DEV/unrecognized) goes out as
-    plain text, unchanged, via ``SerialConnection.send()`` -- this command
-    never invents a translation the firmware never had.
+    PROTOCOL_VERBS`` -- S/D/T/RT/SEG/MOVE/MOVER/ECHO) is translated to ONE
+    OR MORE ``*B<base64>`` ``CommandEnvelope``s via ``legacy_verbs.
+    BINARY_DISPATCH`` (100-007, THE CUTOVER: MOVE/G can now decompose into
+    up to three/two v2 primitive `segment` envelopes -- see
+    ``legacy_translate.primitives_for_move()``) and sent, IN ORDER, with
+    ``SerialConnection.send_envelope()``, stopping at the first rejected
+    reply; every other verb (the five-verb safety rump PING/ID/HELLO/HELP/
+    STOP, or anything with no binary replacement at all -- R/TURN/G/DEV/
+    unrecognized -- note R/TURN/G DO have binary replacements as of 100-007
+    but are not in PROTOCOL_VERBS, matching the pre-existing 097 Step 1
+    list this ticket did not otherwise revisit) goes out as plain text,
+    unchanged, via ``SerialConnection.send()`` -- this command never
+    invents a translation the firmware never had.
 
     ``args.message`` is the list of raw argv tokens making up the command
     (argparse ``nargs="+"``) -- re-joined space-separated before
@@ -1244,13 +1250,21 @@ def cmd_send(args):
 
     if verb in legacy_verbs.PROTOCOL_VERBS:
         try:
-            env = legacy_verbs.BINARY_DISPATCH[verb](pos, kv)
+            envs = legacy_verbs.BINARY_DISPATCH[verb](pos, kv)
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             conn.disconnect()
             sys.exit(1)
-        result = conn.send_envelope(env, read_timeout=args.read_timeout)
-        _print_binary_reply(result, decode=args.decode)
+        result = None
+        for i, env in enumerate(envs):
+            if len(envs) > 1:
+                print(f"[{i + 1}/{len(envs)}]", end=" ")
+            result = conn.send_envelope(env, read_timeout=args.read_timeout)
+            _print_binary_reply(result, decode=args.decode)
+            if "error" in result or result.get("reply") is None:
+                break
+            if result["reply"].WhichOneof("body") == "err":
+                break
     else:
         result = conn.send(raw, read_timeout=args.read_timeout)
         if "error" in result:

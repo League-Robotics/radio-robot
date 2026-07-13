@@ -95,27 +95,29 @@ def send_no_tick(sim, envelope: "pb_envelope.CommandEnvelope") -> "pb_envelope.R
     return dearmor(sim.route_no_tick(armor(envelope)))
 
 
-_SEGMENT_SHAPE = dict(
-    distance=456.5, direction=0.11, final_heading=0.22, speed_max=700.0, accel_max=1500.0,
-    jerk_max=25000.0, yaw_rate_max=4.0, yaw_accel_max=30.0, yaw_jerk_max=80.0,
-    time=123.0, v=-88.5, omega=1.75, stream=True,
-)
+# (100-007, THE CUTOVER) _PRIMITIVE_SHAPE -- a well-formed, ADMITTABLE
+# primitive segment: a modest straight arc (deltaHeading=0, so admit()'s
+# curvature-transition checks are moot at zero joint speed regardless), no
+# exit speed (a stop segment, always admits from a rest ChainTail).
+# Drive::Goal has exactly 3 fields (source/drive/drivetrain.h) -- the retired
+# 13-field Motion::Segment shape (distance/direction/final_heading/
+# speed_max/.../stream) has no wire-admission-visible equivalent any more
+# (primitive=false is REJECTED outright -- see
+# test_binary_segment_primitive_false_rejected_err_unimplemented below).
+_PRIMITIVE_SHAPE = dict(arc_length=250.0, delta_heading=0.0, exit_speed=0.0, primitive=True)
 
 
-def _assert_segment_matches_shape(peeked: dict, shape: dict) -> None:
-    # peek_segment_in()/peek_replace_in() key their dict by MotionSegment's
-    # own proto field spelling (final_heading, speed_max, ...) -- see
-    # firmware.py's _SEGMENT_FIELDS -- so this compares 1:1 against `shape`
-    # (also keyed that way) with no name translation needed at the test
-    # level; BinaryChannel's OWN translation (proto snake_case ->
-    # Motion::Segment's camelCase) already happened C++-side before
-    # sim_peek_segment_in() ever ran.
+def _assert_goal_matches_shape(peeked: dict, shape: dict) -> None:
+    # peek_segment_in()/peek_replace_in() key their dict by Drive::Goal's
+    # own field names (arc_length/delta_heading/exit_speed -- see
+    # firmware.py's _GOAL_FIELDS) -- so this compares 1:1 against `shape`
+    # (also keyed that way, minus `primitive` which the ring no longer
+    # carries -- admission already consumed/verified it).
     for key, expected in shape.items():
-        if key == "stream":
-            assert peeked["stream"] == expected
-        else:
-            assert peeked[key] == pytest.approx(expected, rel=1e-5), \
-                f"{key}: got {peeked[key]}, expected {expected}"
+        if key == "primitive":
+            continue
+        assert peeked[key] == pytest.approx(expected, rel=1e-5), \
+            f"{key}: got {peeked[key]}, expected {expected}"
 
 
 # ===========================================================================
@@ -161,45 +163,93 @@ def test_binary_stop_posts_neutral_brake(sim):
 
 
 # ===========================================================================
-# segment / replace -- all 13 MotionSegment fields, translated individually.
+# segment / replace -- 100-007, THE CUTOVER: wire admission over the v2
+# primitive shape (arc_length/delta_heading/exit_speed/primitive). Every
+# test below supersedes its pre-cutover Motion::Segment-shaped counterpart
+# (git history has the old 13-field version if a reference is ever needed).
 # ===========================================================================
 
 
-def test_binary_segment_translates_all_13_fields(sim):
-    seg = pb_motion.MotionSegment(**_SEGMENT_SHAPE)
+def test_binary_segment_admits_and_translates_the_3_goal_fields(sim):
+    seg = pb_motion.MotionSegment(**_PRIMITIVE_SHAPE)
     reply = send_no_tick(sim, pb_envelope.CommandEnvelope(corr_id=3, segment=seg))
     assert reply.WhichOneof("body") == "ok"
     assert reply.corr_id == 3
     # q = bb.segmentIn.size() (1, just posted) + bb.drivetrain.queue (0,
-    # nothing drained yet on a fresh sim) -- same formula handleMove()'s own
-    # ack uses (motion_commands.cpp).
+    # nothing drained yet on a fresh sim) -- same formula the pre-cutover
+    # ack used.
     assert reply.ok.q == 1
     assert reply.ok.rem == pytest.approx(0.0)
 
     peeked = sim.peek_segment_in(0)
-    assert peeked is not None, "segment never reached bb.segmentIn"
-    _assert_segment_matches_shape(peeked, _SEGMENT_SHAPE)
+    assert peeked is not None, "admitted Goal never reached bb.segmentIn"
+    _assert_goal_matches_shape(peeked, _PRIMITIVE_SHAPE)
+
+    tail = sim.chain_tail()
+    assert tail["x"] == pytest.approx(250.0), "wire admission must advance bb.chainTail"
 
 
-def test_binary_replace_translates_all_13_fields(sim):
-    seg = pb_motion.MotionSegment(**_SEGMENT_SHAPE)
+def test_binary_replace_admits_and_translates_the_3_goal_fields(sim):
+    seg = pb_motion.MotionSegment(**_PRIMITIVE_SHAPE)
     reply = send_no_tick(sim, pb_envelope.CommandEnvelope(corr_id=4, replace=seg))
     assert reply.WhichOneof("body") == "ok"
     assert reply.corr_id == 4
 
     peeked = sim.peek_replace_in()
-    assert peeked is not None, "segment never reached bb.replaceIn"
-    _assert_segment_matches_shape(peeked, _SEGMENT_SHAPE)
+    assert peeked is not None, "admitted Goal never reached bb.replaceIn"
+    _assert_goal_matches_shape(peeked, _PRIMITIVE_SHAPE)
+
+
+def test_binary_segment_primitive_false_rejected_err_unimplemented(sim):
+    """The retired (pre-cutover) non-primitive MotionSegment shape is
+    REJECTED outright at the wire, never silently accepted -- ticket
+    100-007's own acceptance criteria."""
+    seg = pb_motion.MotionSegment(distance=300.0, primitive=False)
+    reply = send_no_tick(sim, pb_envelope.CommandEnvelope(corr_id=15, segment=seg))
+    assert reply.WhichOneof("body") == "err"
+    assert reply.err.code == pb_envelope.ERR_UNIMPLEMENTED
+    assert sim.peek_segment_in(0) is None, "a rejected segment must leave the queue untouched"
+
+
+def test_binary_segment_stream_true_rejected_err_unimplemented(sim):
+    """BLEND (the pre-097 `MOVE s=1` streaming merge) has no v2 primitive
+    equivalent -- architecture-update.md M8: replies ERR to stream=true."""
+    seg = pb_motion.MotionSegment(arc_length=100.0, primitive=True, stream=True)
+    reply = send_no_tick(sim, pb_envelope.CommandEnvelope(corr_id=16, segment=seg))
+    assert reply.WhichOneof("body") == "err"
+    assert reply.err.code == pb_envelope.ERR_UNIMPLEMENTED
+    assert sim.peek_segment_in(0) is None
+
+
+def test_binary_segment_infeasible_admission_typed_err_queue_untouched(sim):
+    """A pivot (arc_length=0) with a nonzero exit speed is
+    Drive::Verdict::PIVOT_NONZERO_EXIT -- admit() rejects it, the wire
+    replies a typed ERR (ERR_RANGE, field=the specific Verdict ordinal),
+    and the queue/bb.chainTail are left untouched (SUC-003's own
+    postcondition)."""
+    tail_before = sim.chain_tail()
+    seg = pb_motion.MotionSegment(arc_length=0.0, delta_heading=0.5, exit_speed=100.0,
+                                  primitive=True)
+    reply = send_no_tick(sim, pb_envelope.CommandEnvelope(corr_id=17, segment=seg))
+    assert reply.WhichOneof("body") == "err"
+    assert reply.err.code == pb_envelope.ERR_RANGE
+    # Verdict::PIVOT_NONZERO_EXIT is enumerator index 4 (OK, EXIT_UNREACHABLE,
+    # JOINT_STEP_TOO_LARGE, JOINT_SIGN_REVERSAL, PIVOT_NONZERO_EXIT, ... --
+    # source/drive/drivetrain.h).
+    assert reply.err.field == 4
+    assert sim.peek_segment_in(0) is None, "an admission rejection must leave the queue untouched"
+    tail_after = sim.chain_tail()
+    assert tail_after == tail_before, "an admission rejection must leave bb.chainTail untouched"
 
 
 def test_binary_segment_drives_the_plant(sim):
     """Lighter behavioral companion to the field-level proof above -- a
-    binary MOVE-equivalent segment actually reaches the executor and drives
-    the wheels, the same end-to-end proof test_bare_loop_move_and_tlm.py's
-    text-plane MOVE tests already establish."""
-    seg = pb_motion.MotionSegment(distance=300.0, direction=0.0, final_heading=0.0, speed_max=0.0,
-                                  accel_max=0.0, jerk_max=0.0, yaw_rate_max=0.0, yaw_accel_max=0.0,
-                                  yaw_jerk_max=0.0, time=0.0, v=0.0, omega=0.0, stream=False)
+    binary v2 primitive segment actually reaches the adapter, gets planned,
+    and drives the wheels, the same end-to-end proof
+    test_bare_loop_move_and_tlm.py's text-plane MOVE tests already
+    establish for the pre-cutover stack."""
+    seg = pb_motion.MotionSegment(arc_length=300.0, delta_heading=0.0, exit_speed=0.0,
+                                  primitive=True)
     reply = send(sim, pb_envelope.CommandEnvelope(corr_id=5, segment=seg))
     assert reply.WhichOneof("body") == "ok"
 
@@ -212,10 +262,13 @@ def test_binary_segment_drives_the_plant(sim):
 
 
 def test_binary_segment_full_queue_replies_err_full(sim):
-    """bb.segmentIn is an Rt::WorkQueue<Motion::Segment, 8> -- mirrors
-    handleMove()'s own `ERR full` text behavior once the queue is at
-    capacity. route_no_tick() never drains it, so 8 posts fill it exactly."""
-    seg = pb_motion.MotionSegment(distance=10.0)
+    """bb.segmentIn is an Rt::WorkQueue<Drive::Goal, 8> -- mirrors the
+    pre-cutover ERR_FULL behavior once the queue is at capacity.
+    route_no_tick() never drains it, so 8 ADMITTED posts fill it exactly --
+    each is a short straight run (zero joint speed at admission time, since
+    nothing is executing yet, so admit()'s curvature-transition checks
+    never fire for this all-straight chain)."""
+    seg = pb_motion.MotionSegment(arc_length=10.0, primitive=True)
     for i in range(8):
         reply = send_no_tick(sim, pb_envelope.CommandEnvelope(corr_id=100 + i, segment=seg))
         assert reply.WhichOneof("body") == "ok", f"post {i} unexpectedly rejected"

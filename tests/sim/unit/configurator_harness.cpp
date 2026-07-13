@@ -52,29 +52,46 @@
 //   8. applyOne() pops AT MOST one delta per call — two queued deltas need
 //      two calls to both apply.
 //   9. applyOne() on an empty configIn is a well-defined no-op.
-//   10. [098-005/M7] kPlanner delta (heading_kp) reaches the LIVE
-//      Subsystems::Drivetrain — Configurator::applyOne()'s kPlanner case now
-//      ALSO calls drivetrain_.configureMotion(plannerConfig_) (a residue of
-//      ticket 094-002 relocating Subsystems::Planner out of source/ left that
-//      case fold-and-publish only, never reaching a live subsystem — see
-//      configurator.cpp's own kPlanner case comment). Proven end to end: a
-//      segment posted AFTER a live heading_kp delta commands a materially
-//      different twist on its own first tick than an IDENTICAL segment
-//      posted BEFORE the delta — the sim-harness "config-delta injection
+//   10. [100-007, THE CUTOVER] kPlanner delta (v_body_max) reaches the LIVE
+//      Subsystems::Drivetrain (the wafer adapter) — Configurator::applyOne()'s
+//      kPlanner case still calls drivetrain_.configureMotion(plannerConfig_)
+//      post-cutover, which now rebuilds the adapter's held Drive::Drivetrain
+//      (driveLimitsFromConfig()) instead of the retired Motion::
+//      SegmentExecutor::configure(). Proven end to end: a straight primitive
+//      segment posted AFTER a live v_body_max delta cruises at a materially
+//      HIGHER peak commanded speed than an IDENTICAL segment posted BEFORE
+//      the delta (v_body_max is the binding ceiling in both, chosen well
+//      under v_wheel_max so the linear-channel ceiling — not the wheel-budget
+//      fold — is what changes) — the sim-harness "config-delta injection
 //      surface" this scenario exercises is bb.configIn.post() directly
 //      (scenarios 1-9's own pattern above), the same queue a binary `SET`/
 //      `config` wire command (commands/binary_channel.cpp) ultimately feeds.
+//      NOTE: this scenario originally used heading_kp (098-005/M7) — that
+//      gain's only consumer, Motion::SegmentExecutor, is retired from the
+//      active call path by 100-007 (parked, not deleted — source/motion/
+//      segment_executor.{h,cpp}), so a heading_kp delta reaching the live
+//      Drivetrain is no longer OBSERVABLE (nothing left downstream reads
+//      it) — v_body_max is 100-007's own replacement proof, exercising the
+//      SAME Configurator wiring path through the NEW Drive:: pipeline
+//      instead. PlannerConfigField (runtime/commands.h) was NOT extended
+//      for PlannerConfig's new fields 15-31 by ticket 100-001 — v_wheel_max/
+//      trim_v_max/track_k_s/etc. have NO live-reconfiguration path via
+//      bb.configIn's field-masked fold today (foldPlanner(), configurator.cpp)
+//      — only the pre-existing fields 1-12 (a_max..heading_kd) do, which is
+//      why v_body_max (not a Drive::Limits-only field) is what this scenario
+//      uses; flagged as a follow-up gap (a live-tunable v_wheel_max/trim_*/
+//      track_k_* surface), not this ticket's own scope to close.
 
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <string>
 
+#include "drive/drivetrain.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
 #include "messages/odometer.h"
 #include "messages/planner.h"
-#include "motion/segment.h"
 #include "runtime/blackboard.h"
 #include "runtime/commands.h"
 #include "runtime/configurator.h"
@@ -465,16 +482,15 @@ void scenarioApplyOneOnEmptyQueueIsNoop() {
 // the bench-tuned 6.0f -- data/robots/tovez.json, untouched by this ticket)
 // to make the effect obviously larger than any float/kinematics-governor
 // noise, since this scenario proves the WIRING, not a tuning value.
-void scenarioPlannerHeadingKpDeltaReachesLiveDrivetrainNextSegment() {
+void scenarioPlannerVBodyMaxDeltaReachesLiveDrivetrainNextSegment() {
   beginScenario(
-      "098-005/M7: kPlanner heading_kp delta reaches the live Drivetrain -- next segment's "
-      "commanded twist reflects the new gain, no restart");
+      "100-007: kPlanner v_body_max delta reaches the live Drivetrain -- next segment's "
+      "peak commanded speed reflects the new ceiling, no restart");
   // A REAL (nonzero) velocity-PID config -- unlike fillDefaultConfigs() (used
   // by scenarios 1-9 above, which never actually run a segment's physics),
-  // this scenario needs the plant to genuinely respond so segment A converges
-  // via the M4 tolerance+dwell gate rather than the STOP_TIME stall backstop.
-  // Values mirror drivetrain_harness.cpp's own defaultMotorConfigSet() (a
-  // plant known to converge cleanly).
+  // this scenario needs the plant to genuinely respond. Values mirror
+  // drivetrain_harness.cpp's own defaultMotorConfigSet() (a plant known to
+  // converge cleanly).
   msg::MotorConfig motorConfigs[Subsystems::Hardware::kMotorCount];
   msg::Gains velGains;
   velGains.kp = 0.0005f;
@@ -495,84 +511,101 @@ void scenarioPlannerHeadingKpDeltaReachesLiveDrivetrainNextSegment() {
   dtConfig.setTrackwidth(150.0f).setLeftPort(1).setRightPort(2);
   drivetrain.configure(dtConfig);
 
+  // Boot Drive::Limits: v_body_max=100 is deliberately the BINDING ceiling
+  // (v_wheel_max/trim_* left generous so the wheel-budget fold never binds
+  // first -- drivetrain.cpp's plan() ceiling = min(vBodyMax, ..., wheelBudget
+  // /denom)). Fast accel so the plant actually reaches cruise within this
+  // scenario's tick budget; min_speed nonzero so a straight (non-pivot)
+  // Goal is tracked in arc mode (see gen_boot_config.py's own
+  // MIN_SPEED_DEFAULT comment for why 0.0f would misclassify this).
   msg::PlannerConfig bootPlannerConfig;
-  bootPlannerConfig.yaw_rate_max = 3.0f;   // [rad/s]
-  bootPlannerConfig.yaw_acc_max = 15.0f;   // [rad/s^2]
-  bootPlannerConfig.heading_kp = 0.0f;     // boot: open-loop -- isolates the P-term below
-  bootPlannerConfig.heading_kd = 0.0f;
+  bootPlannerConfig.a_max = 2000.0f;         // [mm/s^2]
+  bootPlannerConfig.a_decel = 2000.0f;       // [mm/s^2]
+  bootPlannerConfig.v_body_max = 100.0f;     // [mm/s] -- the value this scenario changes live
+  bootPlannerConfig.yaw_rate_max = 3.0f;     // [rad/s]
+  bootPlannerConfig.yaw_acc_max = 15.0f;     // [rad/s^2]
+  bootPlannerConfig.v_wheel_max = 1000.0f;   // [mm/s] generous -- never the binding ceiling
+  bootPlannerConfig.wheel_step_max = 1000.0f;
+  bootPlannerConfig.track_k_s = 2.0f;
+  bootPlannerConfig.track_k_theta = 6.0f;
+  bootPlannerConfig.track_k_cross = 1.5e-5f;
+  bootPlannerConfig.trim_v_max = 0.0f;       // no headroom subtracted from v_wheel_max
+  bootPlannerConfig.trim_omega_max = 0.0f;
+  bootPlannerConfig.min_speed = 10.0f;       // [mm/s]
   drivetrain.configureMotion(bootPlannerConfig);
 
   Rt::Configurator configurator(drivetrain, poseEstimator, hardware, dtConfig, bootPlannerConfig);
 
-  // --- Segment A: open-loop (boot heading_kp=0.0f). ---
-  Motion::Segment segA;
-  segA.distance = 0.0f;
-  segA.direction = 0.5f;      // [rad] PRE_PIVOT-only (finalHeading == direction)
-  segA.finalHeading = 0.5f;
-  checkTrue(bb.segmentIn.post(segA), "segmentIn accepts segment A");
+  const msg::PoseEstimate zeroBodyState{};
+  const msg::PoseStep zeroPoseStep{};
+  Drive::ChainTail chainTail{};
 
-  // Captured on the segment's SECOND tick (i == 1), not its first: a fresh
-  // SegmentExecutor::start() latches its baseline/elapsed-clock on the SAME
-  // tick it fires, so the FIRST tick always samples the Ruckig plan at
-  // elapsed==0 (desired.position/velocity both exactly 0.0f, omega==0.0f
-  // regardless of heading_kp) -- confirmed by direct trace during this
-  // scenario's own development. The SECOND tick samples the plan at
-  // elapsed==20ms (genuinely nonzero desired.position/velocity) while
-  // thetaMeasured is STILL ~0.0f (the wheel had nothing but a 0.0f target to
-  // respond to for the ONE dt in between) -- exactly the deterministic,
-  // plant-lag-free P-term isolation this scenario's file header describes.
+  // --- Segment A: a long straight run, capped at the boot v_body_max=100. ---
+  Drive::Goal goalA;
+  goalA.arcLength = 2000.0f;   // [mm] -- long enough to reach and hold cruise
+  checkTrue(bb.segmentIn.post(goalA), "segmentIn accepts Goal A");
+
   uint32_t now = 0;
-  float cmdA = 0.0f;
-  for (int i = 0; i < 300; ++i) {   // 6s -- ample settle time for a 0.5rad turn at 3rad/s
+  float peakA = 0.0f;
+  for (int i = 0; i < 200; ++i) {   // 4s -- ample time to reach cruise, well short of completion
     now += 20;
     hardware.tick(now);
-    drivetrain.tick(now, bb.segmentIn, bb.replaceIn, bb.driveIn);
-    if (i == 1) cmdA = drivetrain.state().cmd()[0];   // [mm/s] left wheel, 2nd-tick commanded
+    drivetrain.tick(now, bb.segmentIn, bb.replaceIn, bb.driveIn, zeroBodyState, zeroPoseStep,
+                    chainTail);
+    const float cmd = std::fabs(drivetrain.state().cmd()[0]);
+    if (cmd > peakA) peakA = cmd;
   }
-  msg::DrivetrainState settled = drivetrain.state();
-  checkTrue(std::fabs(settled.vel()[0]) < 5.0f && std::fabs(settled.vel()[1]) < 5.0f,
-            "precondition: segment A has converged and the plant is at rest before segment B");
+  checkTrue(peakA > 50.0f && peakA < 120.0f,
+            "precondition: segment A's peak commanded speed sits near the boot v_body_max=100 "
+            "ceiling (not stalled, not blown through it)");
 
-  // --- Live delta: heading_kp 0.0f -> 50.0f, posted to bb.configIn exactly
-  // as scenarios 1-9 above post theirs, then drained through the SAME
-  // Configurator::applyOne() call main.cpp's loop now makes once per pass
-  // (098-005/M7). ---
+  // --- Live delta: v_body_max 100.0f -> 300.0f, posted to bb.configIn
+  // exactly as scenarios 1-9 above post theirs, then drained through the
+  // SAME Configurator::applyOne() call main.cpp's loop makes once per pass. ---
   Rt::ConfigDelta delta;
   delta.target = Rt::ConfigDelta::kPlanner;
-  delta.mask = Rt::bitOf(Rt::PlannerConfigField::kHeadingKp);
-  delta.planner.heading_kp = 50.0f;
-  checkTrue(bb.configIn.post(delta), "post() heading_kp delta succeeds");
+  delta.mask = Rt::bitOf(Rt::PlannerConfigField::kVBodyMax);
+  delta.planner.v_body_max = 300.0f;
+  checkTrue(bb.configIn.post(delta), "post() v_body_max delta succeeds");
   checkTrue(configurator.pending(bb), "pending() true before applyOne()");
   configurator.applyOne(bb);
   checkFalse(configurator.pending(bb), "pending() false after draining the one delta");
-  checkFloatEq(bb.plannerConfig.heading_kp, 50.0f, "bb.plannerConfig.heading_kp published");
+  checkFloatEq(bb.plannerConfig.v_body_max, 300.0f, "bb.plannerConfig.v_body_max published");
 
-  // --- Segment B: SAME shape as segment A, posted AFTER the live delta --
-  // "the VERY NEXT segment". Captured on its own second tick, same argument
-  // as segment A above. ---
-  Motion::Segment segB;
-  segB.distance = 0.0f;
-  segB.direction = 0.5f;
-  segB.finalHeading = 0.5f;
-  checkTrue(bb.segmentIn.post(segB), "segmentIn accepts segment B");
+  // Preempt segment A's still-in-flight ring/plan with an escape-hatch
+  // NEUTRAL before queuing segment B -- otherwise B would sit queued behind
+  // A's own still-unfinished 2000mm run for the whole scenario budget.
+  msg::DrivetrainCommand stop;
+  stop.setNeutral(msg::Neutral::BRAKE);
+  checkTrue(bb.driveIn.post(stop), "driveIn accepts the NEUTRAL preempt");
+  now += 20;
+  hardware.tick(now);
+  drivetrain.tick(now, bb.segmentIn, bb.replaceIn, bb.driveIn, zeroBodyState, zeroPoseStep,
+                  chainTail);
 
-  float cmdB = 0.0f;
-  for (int i = 0; i < 2; ++i) {
+  // --- Segment B: SAME shape as segment A, posted AFTER the live delta. ---
+  Drive::Goal goalB;
+  goalB.arcLength = 2000.0f;
+  checkTrue(bb.segmentIn.post(goalB), "segmentIn accepts Goal B");
+
+  float peakB = 0.0f;
+  for (int i = 0; i < 200; ++i) {
     now += 20;
     hardware.tick(now);
-    drivetrain.tick(now, bb.segmentIn, bb.replaceIn, bb.driveIn);
-    if (i == 1) cmdB = drivetrain.state().cmd()[0];
+    drivetrain.tick(now, bb.segmentIn, bb.replaceIn, bb.driveIn, zeroBodyState, zeroPoseStep,
+                    chainTail);
+    const float cmd = std::fabs(drivetrain.state().cmd()[0]);
+    if (cmd > peakB) peakB = cmd;
   }
 
-  // If the kPlanner delta never reached the live Drivetrain (the 094-002
-  // regression this ticket fixes), segment B's own Motion::SegmentExecutor
-  // would still be configured with the STALE heading_kp=0.0f boot value --
-  // cmdB would equal cmdA (same segment shape, same open-loop trajectory,
-  // same zero P-term). A meaningfully larger magnitude proves the new gain
-  // reached the executor that actually ran segment B, with no restart.
-  checkTrue(std::fabs(cmdB) > std::fabs(cmdA) + 2.0f,
-            "segment B's commanded wheel speed reflects the new heading_kp -- meaningfully larger "
-            "in magnitude than segment A's open-loop value, no restart between them");
+  // If the kPlanner delta never reached the live Drivetrain, segment B's own
+  // Drive::Drivetrain would still be configured with the STALE
+  // v_body_max=100 boot value -- peakB would equal peakA (same segment
+  // shape, same ceiling). A meaningfully larger peak proves the new ceiling
+  // reached the adapter that actually planned/ran segment B, with no restart.
+  checkTrue(peakB > peakA + 50.0f,
+            "segment B's peak commanded speed reflects the new v_body_max -- meaningfully "
+            "larger than segment A's, no restart between them");
 }
 
 }  // namespace
@@ -587,7 +620,7 @@ int main() {
   scenarioSameTargetDisjointFieldsDoNotClobber();
   scenarioApplyOneDrainsExactlyOnePerCall();
   scenarioApplyOneOnEmptyQueueIsNoop();
-  scenarioPlannerHeadingKpDeltaReachesLiveDrivetrainNextSegment();
+  scenarioPlannerVBodyMaxDeltaReachesLiveDrivetrainNextSegment();
 
   if (g_failureCount > 0) {
     std::printf("\n%d scenario failure(s)\n", g_failureCount);

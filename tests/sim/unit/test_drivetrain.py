@@ -1,21 +1,26 @@
-"""Off-hardware acceptance proof for ticket 094-004 (SUC-001/SUC-002/SUC-004):
-the REWRITTEN Subsystems::Drivetrain -- now holding a Hardware& and owning a
-Motion::SegmentExecutor + an 8-slot segment ring instead of the pre-094
-held-output faceplate.
+"""Off-hardware acceptance proof for ticket 100-007 (THE CUTOVER):
+Subsystems::Drivetrain, now the THIN WAFER ADAPTER over source/drive/
+(holding a Drive::Drivetrain + Drive::MotionPlan + an 8-slot Drive::Goal
+ring, instead of a Motion::SegmentExecutor -- see drivetrain.h's own class
+comment). Supersedes the pre-cutover 094-004 acceptance proof (git history
+has the old Motion::Segment-shaped harness if a reference is ever needed).
 
 Compiles ``drivetrain_harness.cpp`` together with the real sources it now
 transitively depends on -- ``subsystems/drivetrain.cpp``, ``kinematics/
-body_kinematics.cpp``, the lifted executor (``motion/{segment_executor,
-jerk_trajectory,stop_condition}.cpp`` + vendored Ruckig), the SimHardware
-plant (``subsystems/sim_hardware.cpp`` + ``hal/sim/*.cpp`` +
+body_kinematics.cpp``, ``source/drive/*.cpp`` (+ vendored Ruckig, the
+adapter's new Level-1 control stack), the SimHardware plant
+(``subsystems/sim_hardware.cpp`` + ``hal/sim/*.cpp`` +
 ``hal/velocity_pid.cpp``), and the REAL NezhaHardware/NezhaMotor
 (``subsystems/nezha_hardware.cpp`` + ``hal/nezha/nezha_motor.cpp``) against
 the HOST_BUILD scripted I2CBus fake (``com/i2c_bus_host.cpp``) for the
 sprint's mandatory staging-only verification scenario -- against the SAME
-``source/subsystems/drivetrain.h`` every ARM build compiles. Mirrors
-``test_segment_executor.py``'s/``test_nezha_flipflop.py``'s own shape:
-compile with the system C++ compiler, run the resulting binary, assert it
-exits 0.
+``source/subsystems/drivetrain.h`` every ARM build compiles. The retired
+``motion/{segment_executor,jerk_trajectory,stop_condition}.cpp`` (parked,
+not deleted) are deliberately NOT in this harness's own source list any
+more -- nothing in the rewritten Drivetrain references them post-cutover.
+Mirrors ``test_segment_executor.py``'s/``test_nezha_flipflop.py``'s own
+shape: compile with the system C++ compiler, run the resulting binary,
+assert it exits 0.
 
 Collected under ``tests/sim/unit/`` -- already within ``pyproject.toml``'s
 ``testpaths``, no configuration change needed.
@@ -36,9 +41,7 @@ _SOURCES = [
     _HARNESS_SRC,
     _SOURCE_DIR / "subsystems" / "drivetrain.cpp",
     _SOURCE_DIR / "kinematics" / "body_kinematics.cpp",
-    _SOURCE_DIR / "motion" / "segment_executor.cpp",
-    _SOURCE_DIR / "motion" / "jerk_trajectory.cpp",
-    _SOURCE_DIR / "motion" / "stop_condition.cpp",
+    *sorted((_SOURCE_DIR / "drive").glob("*.cpp")),
     _SOURCE_DIR / "subsystems" / "sim_hardware.cpp",
     _SOURCE_DIR / "hal" / "sim" / "physics_world.cpp",
     _SOURCE_DIR / "hal" / "sim" / "sim_motor.cpp",
