@@ -8,7 +8,7 @@ namespace {
 constexpr int kOk = 0;
 }  // namespace
 
-ColorSensor::ColorSensor(I2CBus& bus, const ColorConfig& config)
+ColorSensorLeaf::ColorSensorLeaf(I2CBus& bus, const ColorConfig& config)
     : bus_(bus), config_(config) {
   // ColorConfig's fields all zero-default (device_config.h) — the
   // "unconfigured" sentinel this leaf resolves to its ship default, mirroring
@@ -23,7 +23,7 @@ ColorSensor::ColorSensor(I2CBus& bus, const ColorConfig& config)
 // declaration comment for the full phase contract.
 // ---------------------------------------------------------------------------
 
-void ColorSensor::beginStep(uint64_t nowUs) {
+void ColorSensorLeaf::beginStep(uint64_t nowUs) {
   if (phase_ == DetectPhase::Done) return;
 
   if (phase_ == DetectPhase::AltProbe) {
@@ -70,17 +70,17 @@ void ColorSensor::beginStep(uint64_t nowUs) {
   phase_ = DetectPhase::Done;
 }
 
-bool ColorSensor::detectDone() const { return phase_ == DetectPhase::Done; }
+bool ColorSensorLeaf::detectDone() const { return phase_ == DetectPhase::Done; }
 
-bool ColorSensor::present() const { return initialized_; }
+bool ColorSensorLeaf::present() const { return initialized_; }
 
-bool ColorSensor::connected() const { return initialized_ && connected_; }
+bool ColorSensorLeaf::connected() const { return initialized_ && connected_; }
 
 // ---------------------------------------------------------------------------
 // readDue() -- pure scheduling query, no I2C traffic.
 // ---------------------------------------------------------------------------
 
-bool ColorSensor::readDue(uint64_t nowUs) const {
+bool ColorSensorLeaf::readDue(uint64_t nowUs) const {
   uint64_t periodUs = static_cast<uint64_t>(config_.lagColor) * 1000;
   return !hasRead_ || (nowUs - lastReadUs_) >= periodUs;
 }
@@ -90,7 +90,7 @@ bool ColorSensor::readDue(uint64_t nowUs) const {
 // comment for the full contract (ports pollRGBC(), not readRGBC()).
 // ---------------------------------------------------------------------------
 
-void ColorSensor::tick(uint64_t nowUs) {
+void ColorSensorLeaf::tick(uint64_t nowUs) {
   if (!initialized_) return;  // beginStep() never found a chip -- no bus traffic
   if (!readDue(nowUs)) return;  // rate-limited -- no bus traffic
 
@@ -152,9 +152,9 @@ void ColorSensor::tick(uint64_t nowUs) {
   }
 }
 
-ColorReading ColorSensor::reading() const { return cachedReading_; }
+ColorReading ColorSensorLeaf::reading() const { return cachedReading_; }
 
-bool ColorSensor::readingFresh() const { return readingFresh_; }
+bool ColorSensorLeaf::readingFresh() const { return readingFresh_; }
 
 // ---------------------------------------------------------------------------
 // initApds() -- ported unchanged, except ATIME/CONTROL now come from
@@ -164,7 +164,7 @@ bool ColorSensor::readingFresh() const { return readingFresh_; }
 // place of the pre-port file's hardcoded 252 / 0x03.
 // ---------------------------------------------------------------------------
 
-void ColorSensor::initApds() {
+void ColorSensorLeaf::initApds() {
   writeReg8(kColorDeviceAddrApds, 0x81, static_cast<uint8_t>(config_.integration));  // ATIME
   writeReg8(kColorDeviceAddrApds, 0x8F, static_cast<uint8_t>(config_.gain));         // CONTROL
   writeReg8(kColorDeviceAddrApds, 0x80, 0x00);                                       // ENABLE: power off
@@ -179,12 +179,12 @@ void ColorSensor::initApds() {
 // Private register-map helpers.
 // ---------------------------------------------------------------------------
 
-void ColorSensor::writeReg8(uint8_t addr, uint8_t reg, uint8_t val) {
+void ColorSensorLeaf::writeReg8(uint8_t addr, uint8_t reg, uint8_t val) {
   uint8_t buf[2] = {reg, val};
   bus_.write(static_cast<uint16_t>(addr << 1), buf, 2, false);
 }
 
-bool ColorSensor::readReg8Status(uint8_t addr, uint8_t reg, uint8_t& out) {
+bool ColorSensorLeaf::readReg8Status(uint8_t addr, uint8_t reg, uint8_t& out) {
   int writeStatus = bus_.write(static_cast<uint16_t>(addr << 1), &reg, 1, false);
   uint8_t result = 0;
   int readStatus = bus_.read(static_cast<uint16_t>(addr << 1), &result, 1, false);
@@ -192,13 +192,13 @@ bool ColorSensor::readReg8Status(uint8_t addr, uint8_t reg, uint8_t& out) {
   return writeStatus == kOk && readStatus == kOk;
 }
 
-uint8_t ColorSensor::readReg8(uint8_t addr, uint8_t reg) {
+uint8_t ColorSensorLeaf::readReg8(uint8_t addr, uint8_t reg) {
   uint8_t out = 0;
   readReg8Status(addr, reg, out);
   return out;
 }
 
-bool ColorSensor::readReg16Status(uint8_t addr, uint8_t regLo, uint16_t& out) {
+bool ColorSensorLeaf::readReg16Status(uint8_t addr, uint8_t regLo, uint16_t& out) {
   // Read two consecutive bytes: [regLo, regLo+1] -> little-endian uint16.
   uint8_t raw[2] = {0, 0};
   int writeStatus = bus_.write(static_cast<uint16_t>(addr << 1), &regLo, 1, false);
@@ -207,13 +207,13 @@ bool ColorSensor::readReg16Status(uint8_t addr, uint8_t regLo, uint16_t& out) {
   return writeStatus == kOk && readStatus == kOk;
 }
 
-uint16_t ColorSensor::readReg16(uint8_t addr, uint8_t regLo) {
+uint16_t ColorSensorLeaf::readReg16(uint8_t addr, uint8_t regLo) {
   uint16_t out = 0;
   readReg16Status(addr, regLo, out);
   return out;
 }
 
-bool ColorSensor::readReg16AltStatus(uint8_t regLo, uint16_t& out) {
+bool ColorSensorLeaf::readReg16AltStatus(uint8_t regLo, uint16_t& out) {
   // Alt-chip (0x43) single-byte protocol: two separate write-reg/read-1-byte
   // transactions instead of one 2-byte burst read -- mirrors the upstream
   // PlanetX driver exactly (i2cread_color lo + i2cread_color hi * 256).
@@ -224,7 +224,7 @@ bool ColorSensor::readReg16AltStatus(uint8_t regLo, uint16_t& out) {
   return okLo && okHi;
 }
 
-uint16_t ColorSensor::readReg16Alt(uint8_t regLo) {
+uint16_t ColorSensorLeaf::readReg16Alt(uint8_t regLo) {
   uint16_t out = 0;
   readReg16AltStatus(regLo, out);
   return out;

@@ -8,7 +8,7 @@ namespace {
 constexpr int kOk = 0;
 }  // namespace
 
-LineSensor::LineSensor(I2CBus& bus, const LineConfig& config)
+LineSensorLeaf::LineSensorLeaf(I2CBus& bus, const LineConfig& config)
     : bus_(bus), config_(config) {
   // LineConfig::lagLine zero-defaults (device_config.h) -- the
   // "unconfigured" sentinel this leaf resolves to its ship default, mirroring
@@ -33,7 +33,7 @@ LineSensor::LineSensor(I2CBus& bus, const LineConfig& config)
 // declaration comment for the full contract.
 // ---------------------------------------------------------------------------
 
-void LineSensor::beginStep(uint64_t nowUs) {
+void LineSensorLeaf::beginStep(uint64_t nowUs) {
   if (phase_ == DetectPhase::Done) return;
 
   if (hasAttempted_ && (nowUs - lastAttemptUs_) < kRetryPeriod) {
@@ -58,17 +58,17 @@ void LineSensor::beginStep(uint64_t nowUs) {
   }
 }
 
-bool LineSensor::detectDone() const { return phase_ == DetectPhase::Done; }
+bool LineSensorLeaf::detectDone() const { return phase_ == DetectPhase::Done; }
 
-bool LineSensor::present() const { return initialized_; }
+bool LineSensorLeaf::present() const { return initialized_; }
 
-bool LineSensor::connected() const { return initialized_ && connected_; }
+bool LineSensorLeaf::connected() const { return initialized_ && connected_; }
 
 // ---------------------------------------------------------------------------
 // readDue() -- pure scheduling query, no I2C traffic.
 // ---------------------------------------------------------------------------
 
-bool LineSensor::readDue(uint64_t nowUs) const {
+bool LineSensorLeaf::readDue(uint64_t nowUs) const {
   uint64_t periodUs = static_cast<uint64_t>(config_.lagLine) * 1000;
   return !hasRead_ || (nowUs - lastReadUs_) >= periodUs;
 }
@@ -78,7 +78,7 @@ bool LineSensor::readDue(uint64_t nowUs) const {
 // Ported math from the pre-port file's readNormalized().
 // ---------------------------------------------------------------------------
 
-void LineSensor::tick(uint64_t nowUs) {
+void LineSensorLeaf::tick(uint64_t nowUs) {
   if (!initialized_) return;    // beginStep() never found a chip -- no bus traffic
   if (!readDue(nowUs)) return;  // rate-limited -- no bus traffic
 
@@ -127,29 +127,29 @@ void LineSensor::tick(uint64_t nowUs) {
   readingFresh_ = true;
 }
 
-LineReading LineSensor::reading() const { return cachedReading_; }
+LineReading LineSensorLeaf::reading() const { return cachedReading_; }
 
-bool LineSensor::readingFresh() const { return readingFresh_; }
+bool LineSensorLeaf::readingFresh() const { return readingFresh_; }
 
 // ---------------------------------------------------------------------------
 // Calibration -- each issues its own fresh, non-blocking read.
 // ---------------------------------------------------------------------------
 
-bool LineSensor::captureCalibMin() {
+bool LineSensorLeaf::captureCalibMin() {
   uint16_t raw[4] = {0, 0, 0, 0};
   if (!readRaw(raw)) return false;
   for (uint8_t ch = 0; ch < 4; ++ch) config_.calMin[ch] = raw[ch];
   return true;
 }
 
-bool LineSensor::captureCalibMax() {
+bool LineSensorLeaf::captureCalibMax() {
   uint16_t raw[4] = {0, 0, 0, 0};
   if (!readRaw(raw)) return false;
   for (uint8_t ch = 0; ch < 4; ++ch) config_.calMax[ch] = raw[ch];
   return true;
 }
 
-void LineSensor::setSmoothingAlpha(float alpha) {
+void LineSensorLeaf::setSmoothingAlpha(float alpha) {
   if (alpha < 0.0f) alpha = 0.0f;
   if (alpha >= 1.0f) alpha = 0.99f;  // clamp to keep the EMA stable
   config_.filtAlpha = alpha;
@@ -160,7 +160,7 @@ void LineSensor::setSmoothingAlpha(float alpha) {
 // file -- no fiber_sleep). Four write(channel-index)/read(1-byte) pairs.
 // ---------------------------------------------------------------------------
 
-bool LineSensor::readRaw(uint16_t out[4]) {
+bool LineSensorLeaf::readRaw(uint16_t out[4]) {
   for (uint8_t ch = 0; ch < 4; ++ch) {
     uint8_t chByte = ch;
     int writeStatus = bus_.write(static_cast<uint16_t>(kLineDeviceAddr << 1), &chByte, 1, false);

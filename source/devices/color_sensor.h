@@ -1,4 +1,4 @@
-// color_sensor.h — Devices::ColorSensor: the internal leaf for RGBC color
+// color_sensor.h — Devices::ColorSensorLeaf: the internal leaf for RGBC color
 // sensing. Supports two chip variants: an alt/"PlanetX" chip at I2C address
 // 0x43 (primary) and an APDS9960 at 0x39 (fallback).
 //
@@ -45,6 +45,21 @@
 // source_old/subsystems/sensors/SensorsConfig.h's own "polling budget, ms"
 // comment on the field this config's lagColor descends from) before this
 // port folded that gate into the leaf itself.
+//
+// --- Renamed ColorSensor -> ColorSensorLeaf in DB-007 ---
+// DB-006 originally landed this class as `Devices::ColorSensor`. DB-007
+// (device-bus-tickets.md) needs that exact name for the PUBLIC HANDLE class
+// the issue's "The public surface" sketch specifies
+// (`class ColorSensor { ... }`, same `Devices` namespace) — a straight
+// class-name collision two tickets couldn't both have. DB-004's leaf
+// (`NezhaMotor`) and DB-005's leaf (`Otos`) never collided with their own
+// handle names (`Motor`/`Odometer`) because they already carried a
+// vendor/chip-distinct name; DB-006's leaves didn't. Renamed the LEAF, not
+// the handle, so the issue's own public-surface vocabulary
+// (`DeviceBus::color()` returning a `Devices::ColorSensor&`) stays exactly
+// as specified — see source/devices/handles.h (DB-007) for the handle this
+// leaf now sits behind. LineSensor -> LineSensorLeaf is the identical fix,
+// same ticket, same reasoning (line_sensor.h).
 #pragma once
 
 #include <cstdint>
@@ -58,9 +73,9 @@ namespace Devices {
 constexpr uint8_t kColorDeviceAddrApds = 0x39;
 constexpr uint8_t kColorDeviceAddrAlt = 0x43;
 
-class ColorSensor {
+class ColorSensorLeaf {
  public:
-  ColorSensor(I2CBus& bus, const ColorConfig& config);
+  ColorSensorLeaf(I2CBus& bus, const ColorConfig& config);
 
   // Non-blocking single detection step. Call once per fiber cycle (DB-007's
   // detection preamble) until detectDone() is true; a no-op once it is.

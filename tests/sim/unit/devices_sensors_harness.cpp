@@ -1,6 +1,6 @@
 // devices_sensors_harness.cpp — off-hardware acceptance harness for ticket
-// DB-006 (device-bus-tickets.md): exercises the REAL Devices::ColorSensor
-// and Devices::LineSensor leaves (source/devices/color_sensor.cpp,
+// DB-006 (device-bus-tickets.md): exercises the REAL Devices::ColorSensorLeaf
+// and Devices::LineSensorLeaf leaves (source/devices/color_sensor.cpp,
 // source/devices/line_sensor.cpp) against DB-003's HOST_BUILD scripted
 // Devices::I2CBus fake -- no MicroBitI2C, no CODAL, no real hardware.
 //
@@ -145,7 +145,7 @@ void scriptApdsStatus(Devices::I2CBus& bus, uint8_t statusByte) {
   bus.scriptRead(kApdsWireAddr, data, 1, 0);
 }
 
-// Scripts one LineSensor readRaw() call: 4 channel write(index)/read(byte)
+// Scripts one LineSensorLeaf readRaw() call: 4 channel write(index)/read(byte)
 // pairs.
 void scriptLineRead(Devices::I2CBus& bus, const uint16_t raw[4]) {
   for (int ch = 0; ch < 4; ++ch) {
@@ -155,7 +155,7 @@ void scriptLineRead(Devices::I2CBus& bus, const uint16_t raw[4]) {
   }
 }
 
-// Local oracle for LineSensor::tick()'s normalize step (line_sensor.cpp) --
+// Local oracle for LineSensorLeaf::tick()'s normalize step (line_sensor.cpp) --
 // this file's own established convention (mirrors devices_otos_harness.cpp's
 // testSensorToCentre()) for a test oracle that can't reach a production
 // symbol directly. alpha == 0 in every scenario below, so emaState is unused
@@ -177,7 +177,7 @@ int32_t expectedNormalize(uint16_t raw, uint32_t mn, uint32_t mx) {
 
 // --- Scenarios ------------------------------------------------------------
 
-// 1. ColorSensor: ALT chip detection succeeds only after several re-wake
+// 1. ColorSensorLeaf: ALT chip detection succeeds only after several re-wake
 //    retries (the exact docs/knowledge/encoders-read-zero-i2c-bus-hang.md
 //    "re-assert wake registers each retry" sequence), never blocking (each
 //    beginStep() call returns immediately; the harness paces nowUs itself).
@@ -185,11 +185,11 @@ int32_t expectedNormalize(uint16_t raw, uint32_t mn, uint32_t mx) {
 //    immediately-repeated tick() (readDue() still false) issues zero further
 //    bus traffic.
 void scenarioColorAltDetectionSucceedsViaRewakeRetry() {
-  beginScenario("ColorSensor: ALT detection succeeds via re-wake retry, then decodes a scripted frame");
+  beginScenario("ColorSensorLeaf: ALT detection succeeds via re-wake retry, then decodes a scripted frame");
 
   Devices::I2CBus bus;
   Devices::ColorConfig cfg;  // zero-defaulted -> leaf applies its ship defaults
-  Devices::ColorSensor sensor(bus, cfg);
+  Devices::ColorSensorLeaf sensor(bus, cfg);
 
   // Attempts 1 and 2: chip still powering up -- probe reads back zero.
   scriptAltDetectAttempt(bus, 0x0000);
@@ -245,16 +245,16 @@ void scenarioColorAltDetectionSucceedsViaRewakeRetry() {
   checkUintEq(bus.errCount(Devices::kColorDeviceAddrAlt), 0, "no script under-run across the frame decode");
 }
 
-// 2. ColorSensor: ALT never responds across all kMaxAltAttempts retries --
+// 2. ColorSensorLeaf: ALT never responds across all kMaxAltAttempts retries --
 //    detection falls back to probing the APDS9960 at 0x39, which answers;
 //    present()/connected() become true via the fallback path. A scripted
 //    APDS frame then decodes to the expected r/g/b/c too.
 void scenarioColorFallsBackToApds() {
-  beginScenario("ColorSensor: ALT never responds -- detection falls back to APDS9960");
+  beginScenario("ColorSensorLeaf: ALT never responds -- detection falls back to APDS9960");
 
   Devices::I2CBus bus;
   Devices::ColorConfig cfg;
-  Devices::ColorSensor sensor(bus, cfg);
+  Devices::ColorSensorLeaf sensor(bus, cfg);
 
   for (int i = 0; i < kMaxAltAttempts; ++i) {
     scriptAltDetectAttempt(bus, 0x0000);  // every ALT attempt reads back zero
@@ -296,15 +296,15 @@ void scenarioColorFallsBackToApds() {
   checkUintEq(bus.errCount(Devices::kColorDeviceAddrApds), 0, "no script under-run across the APDS frame decode");
 }
 
-// 3. LineSensor: detection succeeds (a single successful readRaw() probe),
+// 3. LineSensorLeaf: detection succeeds (a single successful readRaw() probe),
 //    then a scripted raw frame normalizes to the expected 4-channel values
 //    under two different calibration windows (ship-default and custom).
 void scenarioLineRawToNormalized() {
-  beginScenario("LineSensor: raw -> normalized produces the expected 4-channel values");
+  beginScenario("LineSensorLeaf: raw -> normalized produces the expected 4-channel values");
 
   Devices::I2CBus bus;
   Devices::LineConfig cfg;  // zero-defaulted -> calMin=0, calMax defaults to 255/channel
-  Devices::LineSensor sensor(bus, cfg);
+  Devices::LineSensorLeaf sensor(bus, cfg);
 
   uint16_t probeRaw[4] = {5, 5, 5, 5};
   scriptLineRead(bus, probeRaw);  // beginStep()'s detection probe
@@ -331,14 +331,14 @@ void scenarioLineRawToNormalized() {
   }
 
   // Custom calibration window (calMin=50, calMax=200/channel) -- a fresh
-  // LineSensor so beginStep()'s config_ starts from these explicit bounds.
+  // LineSensorLeaf so beginStep()'s config_ starts from these explicit bounds.
   Devices::I2CBus bus2;
   Devices::LineConfig cfg2;
   for (int ch = 0; ch < 4; ++ch) {
     cfg2.calMin[ch] = 50;
     cfg2.calMax[ch] = 200;
   }
-  Devices::LineSensor sensor2(bus2, cfg2);
+  Devices::LineSensorLeaf sensor2(bus2, cfg2);
   uint16_t probeRaw2[4] = {100, 100, 100, 100};
   scriptLineRead(bus2, probeRaw2);
   sensor2.beginStep(0);
@@ -364,13 +364,13 @@ void scenarioLineRawToNormalized() {
 // 4. Absent-device detection: a completely unscripted I2CBus (every
 //    write()/read() call returns the fake's "mismatch" status and decodes to
 //    zero bytes -- exactly how a chip that never answers behaves) marks
-//    BOTH ColorSensor and LineSensor not-connected within a small, BOUNDED
+//    BOTH ColorSensorLeaf and LineSensorLeaf not-connected within a small, BOUNDED
 //    number of beginStep() calls -- proving termination (never hangs)
 //    without any real sleep or an unbounded loop.
 void scenarioAbsentDeviceNeverHangs() {
   beginScenario("Absent-device detection: bounded termination, present()/connected() stay false");
 
-  // ColorSensor: no chip at either 0x43 or 0x39. beginStep()'s AltProbe/
+  // ColorSensorLeaf: no chip at either 0x43 or 0x39. beginStep()'s AltProbe/
   // ApdsProbe branches ignore transaction STATUS (an exact port of the
   // pre-port driver, which never checked it either -- see color_sensor.h's
   // file header) -- they only look at the decoded DATA value, so "absent"
@@ -388,7 +388,7 @@ void scenarioAbsentDeviceNeverHangs() {
     }
     scriptApdsDetectProbe(bus, 0xFF);  // readback != 0x00 -- APDS never answered either
     Devices::ColorConfig cfg;
-    Devices::ColorSensor sensor(bus, cfg);
+    Devices::ColorSensorLeaf sensor(bus, cfg);
 
     int callsUsed = 0;
     const int kBound = kMaxAltAttempts + 2;  // 20 ALT attempts + 1 APDS attempt + margin
@@ -398,21 +398,21 @@ void scenarioAbsentDeviceNeverHangs() {
       if (sensor.detectDone()) break;
     }
 
-    checkTrue(sensor.detectDone(), "ColorSensor: detectDone() reached within a bounded call count");
-    checkTrue(callsUsed <= kBound, "ColorSensor: termination bounded (never an unbounded/hanging loop)");
-    checkFalse(sensor.present(), "ColorSensor: present() false -- neither chip ever answered");
-    checkFalse(sensor.connected(), "ColorSensor: connected() false -- neither chip ever answered");
+    checkTrue(sensor.detectDone(), "ColorSensorLeaf: detectDone() reached within a bounded call count");
+    checkTrue(callsUsed <= kBound, "ColorSensorLeaf: termination bounded (never an unbounded/hanging loop)");
+    checkFalse(sensor.present(), "ColorSensorLeaf: present() false -- neither chip ever answered");
+    checkFalse(sensor.connected(), "ColorSensorLeaf: connected() false -- neither chip ever answered");
 
     // tick() on a never-detected leaf is a safe, total no-op.
     sensor.tick(999999999);
-    checkFalse(sensor.readingFresh(), "ColorSensor: tick() on a never-detected leaf stays not-fresh");
+    checkFalse(sensor.readingFresh(), "ColorSensorLeaf: tick() on a never-detected leaf stays not-fresh");
   }
 
-  // LineSensor: no chip at 0x1A.
+  // LineSensorLeaf: no chip at 0x1A.
   {
     Devices::I2CBus bus;  // no scripts queued at all
     Devices::LineConfig cfg;
-    Devices::LineSensor sensor(bus, cfg);
+    Devices::LineSensorLeaf sensor(bus, cfg);
 
     int callsUsed = 0;
     const int kBound = kMaxLineAttempts + 2;
@@ -422,13 +422,13 @@ void scenarioAbsentDeviceNeverHangs() {
       if (sensor.detectDone()) break;
     }
 
-    checkTrue(sensor.detectDone(), "LineSensor: detectDone() reached within a bounded call count");
-    checkTrue(callsUsed <= kBound, "LineSensor: termination bounded (never an unbounded/hanging loop)");
-    checkFalse(sensor.present(), "LineSensor: present() false -- chip never answered");
-    checkFalse(sensor.connected(), "LineSensor: connected() false -- chip never answered");
+    checkTrue(sensor.detectDone(), "LineSensorLeaf: detectDone() reached within a bounded call count");
+    checkTrue(callsUsed <= kBound, "LineSensorLeaf: termination bounded (never an unbounded/hanging loop)");
+    checkFalse(sensor.present(), "LineSensorLeaf: present() false -- chip never answered");
+    checkFalse(sensor.connected(), "LineSensorLeaf: connected() false -- chip never answered");
 
     sensor.tick(999999999);
-    checkFalse(sensor.readingFresh(), "LineSensor: tick() on a never-detected leaf stays not-fresh");
+    checkFalse(sensor.readingFresh(), "LineSensorLeaf: tick() on a never-detected leaf stays not-fresh");
   }
 }
 
@@ -441,7 +441,7 @@ int main() {
   scenarioAbsentDeviceNeverHangs();
 
   if (g_failureCount == 0) {
-    std::printf("OK: all Devices::ColorSensor/LineSensor scenarios passed\n");
+    std::printf("OK: all Devices::ColorSensorLeaf/LineSensorLeaf scenarios passed\n");
     return 0;
   }
   std::printf("FAILED: %d assertion(s) across the Devices sensor scenarios\n", g_failureCount);
