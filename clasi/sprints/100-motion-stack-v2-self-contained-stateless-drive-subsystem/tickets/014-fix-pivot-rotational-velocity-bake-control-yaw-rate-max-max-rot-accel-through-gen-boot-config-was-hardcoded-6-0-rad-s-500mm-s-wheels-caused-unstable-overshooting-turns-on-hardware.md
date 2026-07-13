@@ -69,3 +69,13 @@ deg/s → ~78 mm/s wheels (under 200). No firmware control-law change.
 - **New tests to write**: generator unit check that a control block with yaw_rate_max/max_rot_accel_dps2 is honored (deg→rad) and that absence falls back to defaults.
 - **Verification command**: `uv run python -m pytest`
 - **HITL**: stand pivot wheel-velocity check + floor camera turn-accuracy sweep (pivot_sweep.py).
+
+---
+## Status at sprint-100 close (2026-07-13)
+
+CODE COMPLETE + committed + tested (commit 0df45d37; gen_boot_config now bakes
+control.yaw_rate_max=1.22173 rad/s; 13 planner-gen tests pass; full sim suite
+1489 passed). This is a NECESSARY but INSUFFICIENT part of the turn fix: bench
+diagnosis then found the heading FEEDBACK is broken (OTOS frozen), which no
+config change can fix. The remaining hardware turn validation is deferred to
+sprint 101 (debugging).
