@@ -163,10 +163,12 @@ void NezhaMotor::tick(uint64_t nowUs)
     float pos = (static_cast<float>(raw) / 10.0f)
               * config_.wheelTravelCalib * static_cast<float>(config_.fwdSign);
 
-    // Elapsed time from this leaf's own us time seam (nowUs), NOT the ms
-    // derivation above -- sample intervals are 20-50ms, so a ms-only clock's
-    // +/-1ms quantization alone injects up to ~4% per-sample velocity noise
-    // into rawVel below -- and into the PID's dt.
+    // Per-TICK elapsed time from this leaf's own us time seam (nowUs), NOT
+    // the ms derivation above -- a ms-only clock's +/-1ms quantization
+    // would inject noise into a us-scale dt. Feeds ONLY the embedded PID's
+    // dt at step 4 below (kNominalDt fallback before the first tick) --
+    // deliberately NOT used for the velocity/glitch computation below; see
+    // the freshness gate's own comment for why.
     float elapsedTime = 0.0f;   // [s]
     bool haveElapsed = false;
     if (hasLastTick_) {
@@ -175,44 +177,104 @@ void NezhaMotor::tick(uint64_t nowUs)
     } else {
         hasLastTick_ = true;
     }
-
-    // Source-side outlier rejection: a single-sample position step implying
-    // a speed beyond kMaxPlausibleStepSpeed is a corrupted I2C read, not
-    // motion. Reject the WHOLE sample: hold last-good position AND
-    // velocity, count it. If kGlitchStreakAccept consecutive samples all
-    // "glitch", the encoder genuinely moved (e.g. an external re-anchor) --
-    // accept and re-anchor rather than rejecting forever.
-    bool sampleOk = true;
-    if (haveElapsed) {
-        float step = fabsf(pos - lastPosition_);   // [mm]
-        if (step > kMaxPlausibleStepSpeed * elapsedTime) {
-            ++encGlitchCount_;
-            if (++encGlitchStreak_ < kGlitchStreakAccept) {
-                sampleOk = false;
-            } else {
-                encGlitchStreak_ = 0;   // re-anchor to the new reality
-            }
-        } else {
-            encGlitchStreak_ = 0;
-        }
-    }
-
-    if (sampleOk) {
-        if (haveElapsed) {
-            float rawVel = (pos - lastPosition_) / elapsedTime;
-            if (fabsf(rawVel) <= kMaxPlausibleSpeed) {
-                float a = config_.velFiltAlpha;   // EMA smoothing
-                filteredVelocity_ = a * rawVel + (1.0f - a) * filteredVelocity_;
-            }
-            // else: implausible-but-sub-step velocity -- hold filteredVelocity_.
-        }
-        lastPosition_ = pos;
-    }
     lastTickUs_ = nowUs;
 
-    // 3. Wedge detector -- reads position() (== pos, just cached above) and
-    // appliedDuty() (last tick's write; this tick's mode dispatch has not
-    // run yet).
+    // Freshness gate (HARDWARE-CONFIRMED fix -- DB-009 bring-up image: `M 1
+    // STATE` reported vel=0.000 ALWAYS, glitch count climbing, wedged=1
+    // false-latching, even while a raw DUTY command physically moved the
+    // wheel ~717mm). The Nezha brick's 0x46 register refreshes only every
+    // ~80ms; DeviceBus's fiber cycle (DB-007/DB-008) runs every ~16ms.
+    // Running the velocity/glitch computation on every TICK (as before)
+    // meant most cycles re-collected an IDENTICAL raw count (step==0,
+    // rawVel==0 -- decaying filteredVelocity_ toward 0 every stale cycle),
+    // and when a genuinely fresh count finally landed, the ~5-cycle-
+    // accumulated step divided by a SINGLE cycle's elapsedTime looked ~5x
+    // too fast -- permanently rejected by kMaxPlausibleStepSpeed as a
+    // "glitch". Fix: run the velocity/glitch computation ONLY on a sample
+    // whose raw count differs from the last FRESH raw count, using the
+    // elapsed time SINCE THAT sample (lastFreshUs_), never this tick's own
+    // (much shorter) elapsedTime. Compared at the raw wire-count level (not
+    // the derived `pos`) -- collectEncoder() carries no brick-side sample
+    // timestamp to key off, so an unchanged raw count is the direct,
+    // unambiguous signal that the brick has not refreshed yet.
+    bool freshSample = !hasFreshSample_ || (raw != lastFreshRawEnc_);
+
+    if (freshSample && !hasFreshSample_) {
+        // Boot/reset anchor -- the first-ever fresh sample (or the first
+        // after hardReset()/softRebaseline(), which clear hasFreshSample_
+        // the same way they clear hasLastTick_) seeds the baseline WITHOUT
+        // computing a velocity or running the plausibility gate. The brick
+        // reports a large lifetime-accumulated raw count on first contact
+        // (hardware-observed: ~-33526mm) -- NORMAL, not a glitch -- so
+        // anchor directly to it rather than diffing against an assumed
+        // lastPosition_ of 0.
+        lastPosition_ = pos;
+        lastFreshRawEnc_ = raw;
+        lastFreshUs_ = nowUs;
+        hasFreshSample_ = true;
+    } else if (freshSample) {
+        float freshElapsed = static_cast<float>(nowUs - lastFreshUs_) / 1e6f;   // [s] since the last FRESH sample
+        bool sampleOk = true;
+        if (freshElapsed > 0.0f) {
+            // Source-side outlier rejection, now gated on genuinely fresh
+            // samples: a step implying a speed beyond kMaxPlausibleStepSpeed
+            // is a corrupted I2C read, not motion. Reject the WHOLE sample:
+            // hold last-good position AND velocity, count it. If
+            // kGlitchStreakAccept consecutive FRESH samples all "glitch",
+            // the encoder genuinely moved (e.g. an external re-anchor) --
+            // accept and re-anchor rather than rejecting forever.
+            float step = fabsf(pos - lastPosition_);   // [mm]
+            if (step > kMaxPlausibleStepSpeed * freshElapsed) {
+                ++encGlitchCount_;
+                if (++encGlitchStreak_ < kGlitchStreakAccept) {
+                    sampleOk = false;
+                } else {
+                    encGlitchStreak_ = 0;   // re-anchor to the new reality
+                }
+            } else {
+                encGlitchStreak_ = 0;
+            }
+
+            if (sampleOk) {
+                float rawVel = (pos - lastPosition_) / freshElapsed;
+                if (fabsf(rawVel) <= kMaxPlausibleSpeed) {
+                    float a = config_.velFiltAlpha;   // EMA smoothing
+                    filteredVelocity_ = a * rawVel + (1.0f - a) * filteredVelocity_;
+                }
+                // else: implausible-but-sub-step velocity -- hold filteredVelocity_.
+            }
+        }
+        // else: non-positive elapsed time since the last fresh sample
+        // (clock regression) -- defensive only, should not occur in
+        // practice; sampleOk stays true so the anchor below still advances,
+        // but no velocity is computed from a non-positive dt.
+
+        if (sampleOk) {
+            lastPosition_ = pos;
+            lastFreshRawEnc_ = raw;
+            lastFreshUs_ = nowUs;
+        }
+        // else: glitch rejected -- hold lastPosition_/filteredVelocity_/
+        // lastFreshRawEnc_/lastFreshUs_, so the NEXT fresh sample's elapsed
+        // time is measured from the last ACCEPTED anchor, not this
+        // rejected one.
+    }
+    // else (!freshSample && hasFreshSample_): repeated raw value -- the
+    // brick has not refreshed since the last fresh sample. Hold
+    // lastPosition_/filteredVelocity_ unchanged this cycle -- running the
+    // plausibility gate against a same-value, near-zero-elapsed step here
+    // is exactly the false-glitch bug this fix removes.
+
+    // 3. Wedge detector -- reads position() (== lastPosition_, just
+    // maintained above by the freshness gate) and appliedDuty() (last
+    // tick's write; this tick's mode dispatch has not run yet). A repeated
+    // raw sample between two brick refreshes now holds position() constant
+    // for only the handful of fiber cycles between refreshes (matching the
+    // brick's own refresh cadence), well under kWedgeThreshold's 10-
+    // consecutive-identical-reads bound -- normal driving no longer false-
+    // latches (the pre-fix false latch came from the OLD per-tick glitch
+    // path silently holding lastPosition_ across MULTIPLE refresh windows
+    // at a time, a much longer stall than one brick-refresh interval).
     updateWedgeDetector();
 
     // 4. Mode dispatch. Mode::Active covers both PID-on (chase
@@ -437,6 +499,13 @@ void NezhaMotor::hardReset()
             filteredVelocity_ = 0.0f;
             hasLastTick_ = false;
             lastGoodRawEnc_ = 0;
+            // Clear the fresh-sample anchor too -- the next collectEncoder()
+            // after a hard reset must re-run the boot-anchor branch (tick()
+            // step 2), not diff against a pre-reset raw count that encOffset_
+            // has just invalidated.
+            hasFreshSample_ = false;
+            lastFreshRawEnc_ = 0;
+            lastFreshUs_ = 0;
             return;
         }
         encOffset_ -= snapshot;
@@ -456,6 +525,9 @@ void NezhaMotor::hardReset()
     filteredVelocity_ = 0.0f;
     hasLastTick_ = false;
     lastGoodRawEnc_ = 0;
+    hasFreshSample_ = false;
+    lastFreshRawEnc_ = 0;
+    lastFreshUs_ = 0;
 }
 
 void NezhaMotor::softRebaseline()
@@ -478,6 +550,9 @@ void NezhaMotor::softRebaseline()
     filteredVelocity_ = 0.0f;
     hasLastTick_ = false;
     lastGoodRawEnc_ = 0;
+    hasFreshSample_ = false;
+    lastFreshRawEnc_ = 0;
+    lastFreshUs_ = 0;
 
     // softResetCount_ is base-owned (MotorArmor); this leaf increments it
     // directly (it is protected, inherited) rather than duplicating a

@@ -512,6 +512,144 @@ void scenarioPidOffRoutesRawDutyThroughArmorUnchanged() {
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the PID-off sequence");
 }
 
+// 8. Fresh-sample gate (HARDWARE-CONFIRMED DB-004 fix): the Nezha brick's
+//    encoder register refreshes far slower (~80ms) than DeviceBus's fiber
+//    cycle (~16ms, DB-007/DB-008). Scripts the SAME raw encoder value for
+//    several consecutive request/collect cycles (simulating the brick not
+//    having refreshed yet), then a jump to a fresh value, repeated across
+//    several refresh windows -- while ALSO commanding a duty so
+//    appliedDuty() is nonzero throughout ("normal driving"). Proves
+//    velocity() computes the CORRECT speed (step / real elapsed time since
+//    the LAST FRESH sample, not this tick's own dt) on every fresh sample,
+//    is never rejected as a glitch, is never left starved at/near 0, and
+//    that the wedge detector does not false-latch (neither wedged() nor
+//    wedgeSuspect()) across the run -- reproducing and proving the fix for
+//    the exact bring-up-image symptom (vel=0.000 always, glitch count
+//    climbing, wedged=1) while the wheel was physically moving.
+void scenarioFreshSampleGateSurvivesSlowBrickRefreshUnderFastFiberCycle() {
+  beginScenario("fresh-sample gate survives slow brick refresh under fast fiber cycle");
+  Devices::I2CBus::setClock(1000000);
+  Devices::I2CBus bus;
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::MotorConfig cfg = baseNezhaConfig();   // velFiltAlpha=1.0 -- velocity() reflects each fresh sample's raw difference-quotient exactly
+  Devices::NezhaMotor motor(bus, cfg);
+
+  // Drive a raw duty throughout (PID off, to keep the plant simple/
+  // deterministic) so appliedDuty() is nonzero -- exercises the
+  // wedgeSuspect() ("commanded but not moving") path alongside the raw
+  // wedged() latch, matching the ticket's "normal driving" concern.
+  motor.setPidEnabled(false);
+  motor.setDuty(0.4f);
+
+  const uint64_t kFiberCycleUs = 16000;    // [us] ~16ms fiber cycle (DB-007/DB-008)
+  const int kStaleCyclesPerRefresh = 4;    // 4 stale + 1 fresh = 5 cycles per ~80ms brick refresh
+  const float kStepPerRefresh = 40.0f;     // [mm] realistic per-refresh position step (500mm/s-class motion)
+
+  // Prime cycle: boot-anchor at position 0. Scripts an extra write slack
+  // entry (scriptEncoderRequestCollect already provides one) to absorb the
+  // very first duty write this tick's mode dispatch may also issue.
+  uint64_t nowUs = 0;
+  float position = 0.0f;
+  scriptEncoderRequestCollect(bus, wireAddr, position);
+  motor.requestSample();
+  motor.tick(nowUs);
+  checkFloatEq(motor.position(), 0.0f, "primed position is 0");
+  checkUintEq(motor.encGlitchCount(), 0, "boot anchor is not counted as a glitch");
+
+  for (int refresh = 0; refresh < 6; ++refresh) {
+    // Stale cycles: the brick has NOT refreshed -- same raw value.
+    for (int i = 0; i < kStaleCyclesPerRefresh; ++i) {
+      nowUs += kFiberCycleUs;
+      scriptEncoderRequestCollect(bus, wireAddr, position);   // unchanged raw
+      motor.requestSample();
+      motor.tick(nowUs);
+    }
+
+    // Fresh cycle: the brick has refreshed -- position jumps by a realistic
+    // step. freshElapsed is ALWAYS exactly (kStaleCyclesPerRefresh+1) fiber
+    // cycles here (every window is the same length), so the expected
+    // velocity is constant across every refresh window.
+    position += kStepPerRefresh;
+    nowUs += kFiberCycleUs;
+    scriptEncoderRequestCollect(bus, wireAddr, position);
+    motor.requestSample();
+    motor.tick(nowUs);
+
+    const float freshElapsed = static_cast<float>(kFiberCycleUs) *
+                                static_cast<float>(kStaleCyclesPerRefresh + 1) / 1e6f;
+    const float expectedVel = kStepPerRefresh / freshElapsed;   // 40mm / 0.08s = 500mm/s
+
+    checkFloatEq(motor.position(), position, "position reflects the fresh sample, not a stale intermediate one");
+    checkFloatEq(motor.velocity(), expectedVel,
+                 "velocity == step / real elapsed time since the LAST FRESH sample (not per-tick)", 1.0f);
+    checkTrue(motor.velocity() > 100.0f,
+              "velocity is not starved to ~0 by the intervening stale cycles");
+  }
+
+  checkUintEq(motor.encGlitchCount(), 0,
+              "no false glitches across repeated stale-then-fresh refresh windows");
+  checkTrue(!motor.wedged(),
+            "raw wedge latch does not false-trigger across normal stale-then-fresh cycling");
+  checkTrue(!motor.wedgeSuspect(),
+            "motion-qualified wedge-suspect does not false-trigger while genuinely driving");
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the run");
+}
+
+// 9. Boot anchor: the first-ever fresh sample may report a large lifetime-
+//    accumulated raw count (hardware-observed: ~-33526mm) -- this is
+//    NORMAL (an already-running brick's accumulated register), not a
+//    glitch. It must be anchored directly (no diff-from-0 "glitch"), and
+//    stale/fresh cycling immediately after boot must not re-glitch or
+//    loop on the anchor, nor false-latch the wedge detector.
+void scenarioBootAnchorAcceptsLargeInitialPositionWithoutGlitchOrWedge() {
+  beginScenario("boot anchor accepts a large initial position without glitch or wedge");
+  Devices::I2CBus::setClock(1000000);
+  Devices::I2CBus bus;
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::NezhaMotor motor(bus, baseNezhaConfig());
+
+  const float kBootPosition = -33526.0f;   // [mm] hardware-observed lifetime-accumulated boot value
+
+  scriptEncoderRequestCollect(bus, wireAddr, kBootPosition);
+  motor.requestSample();
+  motor.tick(0);
+
+  checkFloatEq(motor.position(), kBootPosition,
+               "boot anchor lands directly on the first sample, no diff-from-0 glitch");
+  checkFloatEq(motor.velocity(), 0.0f, "no spurious velocity computed on the boot anchor itself");
+  checkUintEq(motor.encGlitchCount(), 0, "boot anchor is never counted as a glitch");
+  checkTrue(!motor.wedged(), "boot anchor alone does not latch the wedge");
+
+  // A handful of stale cycles right after boot (brick hasn't refreshed
+  // yet) must hold the anchor, not loop or re-glitch on it.
+  uint64_t nowUs = 0;
+  float position = kBootPosition;
+  for (int i = 0; i < 3; ++i) {
+    nowUs += 16000;
+    scriptEncoderRequestCollect(bus, wireAddr, position);   // still stale
+    motor.requestSample();
+    motor.tick(nowUs);
+  }
+  checkFloatEq(motor.position(), kBootPosition, "position holds through stale post-boot cycles");
+  checkUintEq(motor.encGlitchCount(), 0, "stale post-boot cycles are not glitches (simply not fresh)");
+  checkTrue(!motor.wedged(), "stale post-boot cycles alone do not latch the wedge");
+
+  // First genuinely fresh post-boot sample: real, realistic motion off the
+  // large boot anchor computes correctly and is not misclassified.
+  nowUs += 16000;
+  position += 40.0f;
+  scriptEncoderRequestCollect(bus, wireAddr, position);
+  motor.requestSample();
+  motor.tick(nowUs);
+  checkFloatEq(motor.position(), position, "first post-boot fresh sample lands correctly");
+  checkTrue(motor.velocity() > 100.0f, "first post-boot fresh sample yields a real (non-zero) velocity");
+  checkUintEq(motor.encGlitchCount(), 0, "genuine post-boot motion off a large anchor is not a glitch");
+  checkTrue(!motor.wedged(), "no wedge latch through the boot+stale+fresh sequence");
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the boot sequence");
+}
+
 }  // namespace
 
 int main() {
@@ -522,6 +660,8 @@ int main() {
   scenarioRequestCollectPairingYieldsExpectedPositionVelocity();
   scenarioPidOnChasesVelocityTarget();
   scenarioPidOffRoutesRawDutyThroughArmorUnchanged();
+  scenarioFreshSampleGateSurvivesSlowBrickRefreshUnderFastFiberCycle();
+  scenarioBootAnchorAcceptsLargeInitialPositionWithoutGlitchOrWedge();
 
   if (g_failureCount == 0) {
     std::printf("OK: all devices motor scenarios passed\n");
