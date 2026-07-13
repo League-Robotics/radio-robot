@@ -341,6 +341,24 @@ list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/types/clock_host\\.cpp$")
 # exclusion above does not catch it -- it needs its own explicit exclusion,
 # mirroring the i2c_bus_host.cpp/clock_host.cpp pattern immediately above.
 list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/subsystems/sim_hardware\\.cpp$")
+# DeviceBus (source/devices/) merged into the sprint-100 branch. In the
+# DEFAULT firmware build (application=source, main.cpp) the recursive glob
+# above now sweeps in source/devices/*.cpp too. Three of those must be
+# excluded from this legacy/default build, mirroring the host-fake and
+# bring-up exclusions already established above and in the codal.devicebus.json
+# entry block below:
+#  - i2c_bus_host.cpp / clock_host.cpp: HOST_BUILD-only scripted fakes that
+#    define the same symbols as the real i2c_bus.cpp/clock_real.cpp (same
+#    reason com/i2c_bus_host.cpp and types/clock_host.cpp are excluded above).
+#  - bringup_main.cpp: the standalone DeviceBus bring-up image's own main()
+#    (source/devices/bringup_main.cpp) -- only ever the entry point under
+#    codal.devicebus.json; in the default build it would be a SECOND main()
+#    alongside source/main.cpp. Until the complete cutover replaces main.cpp's
+#    device layer with DeviceBus, the rest of source/devices/*.cpp compiles in
+#    (unused, like source/drive/ before its cutover).
+list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/devices/i2c_bus_host\\.cpp$")
+list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/devices/clock_host\\.cpp$")
+list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/devices/bringup_main\\.cpp$")
 
 # Production-build toggle (034-006).
 #
