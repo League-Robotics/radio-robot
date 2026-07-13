@@ -206,10 +206,21 @@ and nothing regressed).
 ticket's own MANDATORY criterion):
 - Running the script against the real robot end to end (PING clock-sync ->
   tag-pose-to-FIX send -> convergence check) at least once, with console
-  output or a saved trace as evidence. **Not run this session — no robot
-  USB-attached.** The team-lead should schedule this bench/playfield pass
-  before the sprint closes (per the sprint's own Success Criteria: "An
-  aprilcam end-to-end bench/playfield script demonstrates the full path").
+  output or a saved trace as evidence.
+
+**RESOLUTION (stakeholder decision 2026-07-12): DEFERRED, ticket closed.**
+The robot was flashed with this sprint's firmware and bench-verified on the
+stand (see `../bench-verification-results.md`): 5 of 6 mandatory gates PASS.
+The FIRMWARE capability this script exercises is fully proven on hardware by
+**gate 008** — a delayed `PoseFix` (exactly what the camera sends) converges
+the fused pose (weighted Kalman update) and safely drops a stale-timestamp
+fix — plus this script's own clock-sync/envelope/convergence math (60+11+33
+host unit tests). The only unverified leg is the physical camera read: no
+camera was connected (`aprilcam list_cameras` empty) and the robot was on
+the bench stand, not `main-playfield`. The stakeholder deferred this
+camera-in-the-loop demonstration ("other stuff in the works"); the script
+`tests/playfield/pose_fix_convergence.py` is written and ready to run the
+moment a camera is attached and the robot is placed on the playfield.
 
 **For the team-lead**: `docs/protocol-v3.md`'s arm-7 table row/§8 note
 remain stale (flagged again by tickets 004/008, still unaddressed) — this
