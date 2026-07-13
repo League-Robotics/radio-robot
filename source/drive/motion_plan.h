@@ -111,25 +111,18 @@ class MotionPlan {
   RefState referenceAt(float elapsed) const;   // [s] closed-form, pure
 
   // --- the step: const on the plan; ALL mutation in *state ---
-  // reference sample -> path-frame errors (exact circle projection) ->
-  // P-trims (clamped; pivot mode: v == literal 0, heading-only) -> IK ->
-  // curvature-preserving saturate -> one-sided wheel clamp (forward arcs)
-  // -> wheel velocity setpoints. Terminal state machine per the settle
-  // spec (LEVEL 2, the leaf PID, turns setpoints into duty outside).
-  // Emits REPLAN_DUE (never replans itself); large pose-fix steps bypass
-  // the sustain filter; small ones reset it.
-  //
-  // TICKET 100-003 STUB: this ticket produces the immutable, closed-form-
-  // samplable plan only -- the tracker cascade (ticket 004) and the
-  // policy/terminal machine + this method's real composition (ticket 005)
-  // do not exist yet. This body is a harmless placeholder: it echoes `in`
-  // into the returned TrackRecord (so a caller can see what it fed in),
-  // reports Status::RUNNING, commands a literal-zero WheelVelocities, and
-  // never touches *state. It is NOT an assert/abort -- drive_api.cpp
-  // (ticket 006) and any exploratory host tooling may legitimately call
-  // step() before 005 lands, and must get a well-defined, inert answer,
-  // never a crash. Ticket 005 replaces this ENTIRE body; nothing here is
-  // meant to survive that ticket.
+  // reference sample (referenceAt(), above) -> tracker cascade
+  // (tracker.{h,cpp}, ticket 100-004: path-frame errors -> P-trims -> IK ->
+  // curvature-preserving saturate -> one-sided wheel clamp) -> policy
+  // evaluation (policy.{h,cpp}, ticket 100-005: replan envelopes, the
+  // terminal settle machine, the flying-handoff envelope, pose-fix
+  // absorption/bypass) -> StepOutput. NEVER calls Drivetrain::replan()
+  // itself (the issue's explicit rule) -- only emits Status::REPLAN_DUE;
+  // large pose-fix steps bypass the sustain filter, small ones reset it,
+  // and none of it applies while the terminal dwell is actively counting
+  // (policy.h's own class comment has the full contract). Pure: the SAME
+  // (plan, in, *state) always produces the SAME (StepOutput, *state) --
+  // see policy.h for the one caller-owned statelessness residue.
   StepOutput step(const StepInput& in, StepState* state) const;
 
  private:

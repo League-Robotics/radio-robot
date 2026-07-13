@@ -1,18 +1,24 @@
-"""Off-hardware acceptance proof for ticket 100-003 (SUC-001/SUC-003).
+"""Off-hardware acceptance proof for ticket 100-005 (SUC-005/SUC-006/SUC-007).
 
-Compiles ``drive_plan_harness.cpp`` together with ``source/drive/
-{drivetrain,motion_plan,master_profile,arc_math}.cpp`` and the vendored
-Ruckig sources (``libraries/ruckig/src/*.cpp``) using the system C++
-compiler under the firmware's EXACT build constraints (``gnu++20
--fno-exceptions -fno-rtti``, mirroring ``test_drive_master_profile.py``/
-``test_jerk_trajectory.py``), runs the resulting binary, and asserts it
-exits 0. Mirrors those files' compile-and-run pattern: no CMake, no ARM
-toolchain, no hardware.
+Compiles ``drive_step_harness.cpp`` together with ``source/drive/
+{policy,tracker,motion_plan,drivetrain,master_profile,arc_math}.cpp`` and
+the vendored Ruckig sources (``libraries/ruckig/src/*.cpp``) using the
+system C++ compiler under the firmware's EXACT build constraints (``gnu++20
+-fno-exceptions -fno-rtti``, mirroring ``test_drive_policy.py``/``test_
+drive_tracker.py``), runs the resulting binary, and asserts it exits 0.
+Mirrors those files' compile-and-run pattern: no CMake, no ARM toolchain,
+no hardware.
 
-The harness exercises the v_eff/omega_eff fold invariant (SUC-003's core
-acceptance criterion), plan() boundary conditions, referenceAt()'s
-closed-form composition against a dense numerical integration, and
-replan()'s re-time (round trip + clean failure on a backward ask).
+The harness exercises the FULL ``Drive::MotionPlan::step()`` composition
+(reference sample -> tracker cascade -> policy evaluation -- ticket
+100-005's own real body, replacing the 100-003 stub) against REAL solved
+``Drive::Drivetrain::plan()`` plans and a first-order plant stub: closed-
+loop stop-segment convergence with a dedicated no-reversal regression, a
+terminal overshoot completing at a literal 0.0f, a pathological
+non-convergent plant reaching an explicit abort, chained-segment handoff
+velocity continuity, an out-of-envelope handoff never silently completing,
+pose-fix absorption/bypass via ``step()``, dwell suppression during an
+active terminal dwell, and StepState round-trip determinism.
 """
 
 import pathlib
@@ -21,17 +27,16 @@ import sys
 
 import pytest
 
-# tests/sim/unit/test_drive_plan.py -> unit -> sim -> tests -> repo root
+# tests/sim/unit/test_drive_step.py -> unit -> sim -> tests -> repo root
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _SOURCE_DIR = _REPO_ROOT / "source"
 _DRIVE_DIR = _SOURCE_DIR / "drive"
-_HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "drive_plan_harness.cpp"
+_HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "drive_step_harness.cpp"
 _DRIVE_SOURCES = [
-    _DRIVE_DIR / "drivetrain.cpp",
-    _DRIVE_DIR / "motion_plan.cpp",
-    # motion_plan.cpp's step() calls Drive::track()/Drive::evaluate() (tickets 100-004/100-005).
-    _DRIVE_DIR / "tracker.cpp",
     _DRIVE_DIR / "policy.cpp",
+    _DRIVE_DIR / "tracker.cpp",
+    _DRIVE_DIR / "motion_plan.cpp",
+    _DRIVE_DIR / "drivetrain.cpp",
     _DRIVE_DIR / "master_profile.cpp",
     _DRIVE_DIR / "arc_math.cpp",
 ]
@@ -54,7 +59,7 @@ def _find_cxx_compiler() -> str:
     raise AssertionError("unreachable")  # pragma: no cover
 
 
-def test_drive_plan_harness_compiles_and_passes(tmp_path):
+def test_drive_step_harness_compiles_and_passes(tmp_path):
     assert _HARNESS_SRC.is_file(), f"harness missing: {_HARNESS_SRC}"
     for src in _DRIVE_SOURCES:
         assert src.is_file(), f"source missing: {src}"
@@ -63,7 +68,7 @@ def test_drive_plan_harness_compiles_and_passes(tmp_path):
     assert ruckig_srcs, f"no vendored ruckig sources under {_RUCKIG_SRC_DIR}"
 
     cxx = _find_cxx_compiler()
-    binary = tmp_path / "drive_plan_harness"
+    binary = tmp_path / "drive_step_harness"
 
     compile_cmd = [
         cxx,
@@ -80,16 +85,16 @@ def test_drive_plan_harness_compiles_and_passes(tmp_path):
     ]
     compiled = subprocess.run(compile_cmd, capture_output=True, text=True)
     assert compiled.returncode == 0, (
-        "drive_plan_harness.cpp failed to compile under -std=gnu++20 "
+        "drive_step_harness.cpp failed to compile under -std=gnu++20 "
         f"-fno-exceptions -fno-rtti:\nstdout:\n{compiled.stdout}\nstderr:\n{compiled.stderr}"
     )
 
     run = subprocess.run([str(binary)], capture_output=True, text=True)
     assert run.returncode == 0, (
-        f"drive_plan_harness reported a scenario failure (exit {run.returncode}):\n"
+        f"drive_step_harness reported a scenario failure (exit {run.returncode}):\n"
         f"{run.stdout}\n{run.stderr}"
     )
-    assert "OK: all Drive::Drivetrain/MotionPlan plan scenarios passed" in run.stdout, run.stdout
+    assert "OK: all Drive:: step() closed-loop scenarios passed" in run.stdout, run.stdout
 
 
 if __name__ == "__main__":

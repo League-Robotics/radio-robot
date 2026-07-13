@@ -29,6 +29,9 @@ _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "drive_admission_harnes
 _DRIVE_SOURCES = [
     _DRIVE_DIR / "drivetrain.cpp",
     _DRIVE_DIR / "motion_plan.cpp",
+    # motion_plan.cpp's step() calls Drive::track()/Drive::evaluate() (tickets 100-004/100-005).
+    _DRIVE_DIR / "tracker.cpp",
+    _DRIVE_DIR / "policy.cpp",
     _DRIVE_DIR / "master_profile.cpp",
     _DRIVE_DIR / "arc_math.cpp",
 ]

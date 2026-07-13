@@ -48,6 +48,7 @@ _TRACKER_SRC = _DRIVE_DIR / "tracker.cpp"
 _DRIVE_SOURCES = [
     _TRACKER_SRC,
     _DRIVE_DIR / "motion_plan.cpp",
+    _DRIVE_DIR / "policy.cpp",  # motion_plan.cpp's step() calls Drive::evaluate() (ticket 100-005)
     _DRIVE_DIR / "drivetrain.cpp",
     _DRIVE_DIR / "master_profile.cpp",
     _DRIVE_DIR / "arc_math.cpp",

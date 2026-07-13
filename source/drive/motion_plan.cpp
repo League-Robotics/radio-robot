@@ -1,9 +1,14 @@
 // motion_plan.cpp -- Drive::MotionPlan implementation. See motion_plan.h
 // for the class-level design notes (the private-field elaboration beyond
-// the driving issue's own sketch, the step() stub's exact shape).
+// the driving issue's own sketch). step()'s composition (reference sample
+// -> tracker cascade -> policy evaluation -> StepOutput) is ticket 100-005's
+// own work -- see tracker.h/policy.h for the two cascades' individual
+// design notes.
 #include "drive/motion_plan.h"
 
 #include "drive/arc_math.h"
+#include "drive/policy.h"
+#include "drive/tracker.h"
 
 namespace Drive {
 
@@ -98,15 +103,39 @@ RefState MotionPlan::referenceAt(float elapsed) const {
 }
 
 StepOutput MotionPlan::step(const StepInput& in, StepState* state) const {
-  // TICKET 100-003 STUB -- see motion_plan.h's own doc comment on step()
-  // for the exact contract this placeholder honors (harmless, no crash,
-  // *state untouched). Ticket 005 replaces this entire body with the
-  // tracker + policy + terminal machine composition.
-  (void)state;
   StepOutput out;
-  out.status = Status::RUNNING;
   out.record.in = in;
-  out.record.status = Status::RUNNING;
+
+  if (!valid_) {
+    // Default-constructed (invalid/empty) plan -- every query above
+    // returns a safe zero/default; step() matches: no tracking possible,
+    // *state untouched, a well-defined inert RUNNING/zero answer.
+    out.status = Status::RUNNING;
+    out.record.status = Status::RUNNING;
+    return out;
+  }
+
+  const RefState ref = referenceAt(in.t);
+  const TrackerOutput tracked = track(ref, in.measured, limits_, trackwidth_);
+  const PolicyResult policyResult = evaluate(duration_, exitSpeed_, isPivot_, isVelocityMode_,
+                                              limits_, ref, tracked, in, state);
+
+  out.command = policyResult.command;
+  out.status = policyResult.status;
+
+  out.record.ref = ref;
+  out.record.eAlong = tracked.eAlong;
+  out.record.eCross = tracked.eCross;
+  out.record.eTheta = tracked.eTheta;
+  out.record.vTrim = tracked.vTrim;
+  out.record.omegaTrim = tracked.omegaTrim;
+  out.record.vCmd = tracked.vCmd;
+  out.record.omegaCmd = tracked.omegaCmd;
+  out.record.wheelLeft = out.command.left;
+  out.record.wheelRight = out.command.right;
+  out.record.trimSaturated = tracked.trimSaturated;
+  out.record.status = out.status;
+
   return out;
 }
 
