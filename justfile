@@ -56,6 +56,13 @@ build-sim:
     cmake -S tests/_infra/sim -B tests/_infra/sim/build -DROBOT_RUN_MODE=SIM
     cmake --build tests/_infra/sim/build --parallel
 
+# Build ONLY the host tier-0 Drive:: library (libdrive_host) -- source/
+# drive/ compiles standalone (ticket 100-002's own isolation boundary,
+# SUC-008), so unlike build-sim this needs no codegen step at all.
+build-drive:
+    cmake -S tests/_infra/drive -B tests/_infra/drive/build
+    cmake --build tests/_infra/drive/build --parallel
+
 mbd-install:
     pipx install git+https://github.com/Busboombot/mbdeploy.git
 

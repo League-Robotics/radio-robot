@@ -1,7 +1,7 @@
 ---
 id: '006'
 title: Tier-0 ctypes ABI + Python test suite (plant model, closed loop, replay, plan-table notebooks)
-status: open
+status: done
 use-cases: [SUC-001, SUC-002, SUC-004, SUC-005, SUC-006, SUC-007]
 depends-on: ['005']
 github-issue: ''
@@ -31,7 +31,7 @@ the temporary scaffolding — check both tickets' completion notes first.
 
 ## Acceptance Criteria
 
-- [ ] `tests/_infra/drive/drive_api.cpp` exposes (mirroring
+- [x] `tests/_infra/drive/drive_api.cpp` exposes (mirroring
       `sim_api.cpp`'s `extern "C"` pattern): create
       `Drivetrain(limits, trackwidth)`, destroy, `plan(request)` ->
       `PlanResult`, `admit(goal, tail)` -> `Verdict`, `referenceAt(plan,
@@ -41,41 +41,41 @@ the temporary scaffolding — check both tickets' completion notes first.
       (...)` -> `PlanResult`. Builds into `libdrive_host` via a new
       `tests/_infra/drive/CMakeLists.txt` mirroring `tests/_infra/sim/
       CMakeLists.txt`.
-- [ ] `tests/_infra/drive/drive.py` (ctypes loader, mirrors `tests/
+- [x] `tests/_infra/drive/drive.py` (ctypes loader, mirrors `tests/
       _infra/sim/firmware.py`'s `Sim` class shape): a `Drive` class
       wrapping the ABI with Python-friendly types (dataclasses or
       equivalent for `Pose`/`Twist`/`Limits`/`StepState`/`StepOutput`/
       `TrackRecord`).
-- [ ] A Python plant model (location: `tests/_infra/drive/` or a new
+- [x] A Python plant model (location: `tests/_infra/drive/` or a new
       `tests/sim/drive/` — programmer's judgment, document choice)
       implements first-order lag 120-140ms, stiction, encoder staleness
       ~80ms, quantization, and slip as independently configurable knobs,
       conceptually aligned with the sim's own fault-knob philosophy
       (`motor_lag`/`enc_slip`/`stiction`/`trackwidth`/`scrub` on the
       `Sim` class) so tier-0 and tier-1 plant behavior stay comparable.
-- [ ] Closed-loop convergence tests: an arc and a pivot segment converge
+- [x] Closed-loop convergence tests: an arc and a pivot segment converge
       to `DONE_STOP` within the plant model's lag/stiction range, using
       the issue's gains (`k_θ`=6.0, `k_c`=1.5e-5, `k_s`=2.0, `k_d`=0).
-- [ ] Purity/property tests (SUC-002): determinism (same inputs ->
+- [x] Purity/property tests (SUC-002): determinism (same inputs ->
       identical output, across arc/pivot/velocity-mode plans);
       `StepState` round-trips through the ctypes struct boundary
       unchanged when nothing in the tick would alter it; a fuzz test
       over `>=1000` generated `StepInput`/config combinations asserts
       zero `NaN`/`Inf` in `StepOutput`.
-- [ ] Replay harness: given a recorded `TrackRecord.in` sequence (from
+- [x] Replay harness: given a recorded `TrackRecord.in` sequence (from
       ANY tier — sim, bench, field), replay it through `step()` and
       reproduce the recorded output bit-exact. This is the mechanism
       every higher-tier ticket (007/010/011/012) relies on to isolate a
       defect to `source/drive/` itself vs. the adapter/plant.
-- [ ] Plan-table notebook(s) under `tests/notebooks/`: at least one arc
+- [x] Plan-table notebook(s) under `tests/notebooks/`: at least one arc
       and one pivot plan table (`referenceAt()` dump) plotted, before any
       `step()` call — the "interpretability deliverable at its purest"
       (SUC-001).
-- [ ] A static/source check (or, if impractical, an explicit code-review
+- [x] A static/source check (or, if impractical, an explicit code-review
       note in completion notes) confirms no method in `source/drive/`
       mutates a `const MotionPlan&` or reads global/static mutable
       state.
-- [ ] `uv run python -m pytest` passes; the full tier-0 suite runs in
+- [x] `uv run python -m pytest` passes; the full tier-0 suite runs in
       well under a second per run per the issue's "milliseconds per run"
       characterization — record actual wall-clock time in completion
       notes.

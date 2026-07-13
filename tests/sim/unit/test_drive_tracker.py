@@ -18,11 +18,15 @@ The harness exercises the trim law's clamp behavior across all four error
 quadrants, the reverse-travel signed-v_ref cross term, the pivot-mode
 literal-zero-v rule (with an UNCLAMPED heading trim), the trimSaturated
 exact-true-iff-clamped contract (independently for each of trimVMax/
-trimOmegaMax), the one-sided forward-arc wheel clamp as a wide-grid
-property test, and a minimal closed-loop convergence smoke test (both arc
-and pivot) against a ticket-scoped first-order plant stub -- see the
-ticket's own note: this stub is superseded once ticket 100-006's real
-plant model lands.
+trimOmegaMax), and the one-sided forward-arc wheel clamp as a wide-grid
+property test. (100-006 reconciliation: this harness ORIGINALLY also carried
+a minimal closed-loop convergence smoke test (arc + pivot) against a
+ticket-scoped first-order plant stub, documented there as "superseded once
+ticket 100-006's real plant model lands" -- ticket 100-006 landed the real
+tier-0 plant model and its own closed-loop convergence tests
+(tests/sim/drive/test_drive_closed_loop.py), so that scenario and its
+PlantState/stepPlant stub were REMOVED from this harness rather than kept as
+a duplicate.)
 
 A second, non-compiled check greps tracker.{h,cpp} for a derivative/
 integral term, mirroring test_drive_isolation.py's forbidden-token

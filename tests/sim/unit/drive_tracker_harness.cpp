@@ -22,16 +22,25 @@
 //      a wide deterministic grid of trim/error inputs (including
 //      deliberately-saturating ones) -- neither wheel is ever negative on
 //      a forward arc.
-//  (f) closed-loop convergence: a minimal first-order plant stub, both for
-//      an arc (lateral + heading offset against a straight reference) and
-//      a pivot (heading-only offset) -- tracked error shrinks over time.
-//      Ticket-scoped per the ticket's own "superseded once ticket 006
-//      lands" note (ticket 006's real plant model has not landed yet).
+//
+// (100-006 reconciliation): this harness ORIGINALLY carried a scenario (f)
+// -- closed-loop convergence (arc + pivot) against a ticket-scoped, minimal
+// first-order-lag plant stub (`PlantState`/`stepPlant`) -- explicitly
+// documented there as "superseded once ticket 100-006's real plant model
+// lands" (ticket 100-004's own completion notes repeat this verbatim).
+// Ticket 100-006 landed the real tier-0 instrument (tests/_infra/drive/
+// drive_api.cpp + drive.py + plant.py, a proper independently-configurable
+// lag/stiction/staleness/quantization/slip plant model) and its own
+// closed-loop convergence tests (tests/sim/drive/test_drive_closed_loop.py,
+// arc + pivot, using the issue's gains) -- so scenario (f) and its stub are
+// REMOVED here, not duplicated. Scenarios (a)-(e) above (trim-law mechanics,
+// pivot-mode, trimSaturated exactness, the one-sided-clamp property test)
+// are untouched: they test tracker.track() in isolation with exact numeric
+// control, a granularity the tier-0 closed-loop suite does not replace.
 #include <cmath>
 #include <cstdio>
 #include <string>
 
-#include "drive/arc_math.h"
 #include "drive/motion_plan.h"
 #include "drive/tracker.h"
 #include "drive/types.h"
@@ -330,104 +339,13 @@ void scenarioOneSidedForwardArcClampProperty() {
                "zero forward-arc combinations produced a negative wheel command");
 }
 
-// (f) Closed-loop convergence: minimal first-order plant stub. Ticket-
-// scoped per the ticket's own "superseded once ticket 006 lands" note.
-
-struct PlantState {
-  Drive::Pose pose;
-  float v = 0.0f;      // [mm/s] current actual body speed (lags commanded)
-  float omega = 0.0f;  // [rad/s] current actual body yaw rate (lags commanded)
-};
-
-// stepPlant -- forward-kinematics the commanded wheel speeds into a body
-// twist, first-order-lags the plant's actual twist toward it, then Euler-
-// integrates the plant's pose forward by `dt`. A MINIMAL stand-in for
-// ticket 100-006's real plant model (not yet landed) -- exactly what this
-// ticket's own Testing section calls for.
-void stepPlant(PlantState* plant, float wheelLeft, float wheelRight, float trackwidth, float dt,
-               float lagAlpha) {
-  const float vCmd = (wheelLeft + wheelRight) * 0.5f;
-  const float omegaCmd = (wheelRight - wheelLeft) / trackwidth;
-
-  plant->v += lagAlpha * (vCmd - plant->v);
-  plant->omega += lagAlpha * (omegaCmd - plant->omega);
-
-  plant->pose.x += plant->v * std::cos(plant->pose.h) * dt;
-  plant->pose.y += plant->v * std::sin(plant->pose.h) * dt;
-  plant->pose.h = Drive::wrapAngle(plant->pose.h + plant->omega * dt);
-}
-
-void scenarioClosedLoopArcConvergence() {
-  beginScenario("closed-loop convergence: arc (lateral + heading offset) shrinks toward zero");
-
-  // This gain set is DELIBERATELY overdamped/slow on the cross-track axis
-  // (the issue's own gain-table rationale: "omega_n = v*sqrt(k_c) <= 2.3
-  // rad/s at plateau; zeta >= 1.3 everywhere" -- k_c = 1.5e-5 is tiny by
-  // design, tuned for a real actuation lag this ticket-scoped plant stub
-  // does not model). Linearizing the closed loop around a straight
-  // reference (trace = -trackKTheta = -6, det = trackKCross*vRef^2 = 0.6
-  // at vRef=200) gives characteristic roots ~-0.1/s and ~-5.9/s -- the
-  // slow pole's own 10s time constant is why this test runs for 20s
-  // (2000 ticks) and only requires a 5x reduction, not a fast, tightly-
-  // bounded convergence: this is a stability/convergence smoke test, not
-  // a tuned settling-time gate (ticket 100-006's real plant + ticket
-  // 100-005's policy/terminal machine own that).
-  const Drive::Limits limits = makeLimits();
-  const float vRef = 200.0f;  // [mm/s] straight-line reference (kappa == 0)
-  const float dt = 0.01f;     // [s]
-  const int ticks = 2000;     // 20 s
-
-  PlantState plant;
-  plant.pose = Drive::Pose{0.0f, 30.0f, 0.25f};  // 30mm cross + 0.25 rad heading offset
-
-  float initialErrorMag = 0.0f;
-  float finalErrorMag = 0.0f;
-
-  for (int i = 0; i < ticks; ++i) {
-    const float t = static_cast<float>(i) * dt;
-    const Drive::Pose refPose = Drive::poseAlongArc(Drive::Pose{0.0f, 0.0f, 0.0f}, 0.0f, vRef * t);
-    Drive::RefState ref = makeRef(refPose.x, refPose.y, refPose.h, vRef, 0.0f);
-
-    const Drive::BodyState measured = makeMeasured(plant.pose);
-    const Drive::TrackerOutput out = Drive::track(ref, measured, limits, kTrackwidth);
-
-    const float errorMag = std::fabs(out.eCross) + std::fabs(out.eTheta) * 100.0f;
-    if (i == 0) initialErrorMag = errorMag;
-    if (i == ticks - 1) finalErrorMag = errorMag;
-
-    stepPlant(&plant, out.command.left, out.command.right, kTrackwidth, dt, 0.3f);
-  }
-
-  std::printf("  initial |eCross|+100*|eTheta| = %g, final = %g\n", (double)initialErrorMag,
-              (double)finalErrorMag);
-  checkTrue(finalErrorMag < initialErrorMag * 0.2f,
-            "tracked error (cross + heading) shrinks by at least 5x over 20s");
-}
-
-void scenarioClosedLoopPivotConvergence() {
-  beginScenario("closed-loop convergence: pivot (heading-only offset) shrinks toward zero");
-
-  const Drive::Limits limits = makeLimits();
-  const float dt = 0.01f;  // [s]
-  const int ticks = 300;   // 3 s
-
-  PlantState plant;
-  plant.pose = Drive::Pose{0.0f, 0.0f, 1.0f};  // 1 rad heading offset, in place
-
-  const Drive::RefState ref = makeRef(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);  // pivot target: heading 0
-
-  float initialTheta = std::fabs(plant.pose.h);
-  for (int i = 0; i < ticks; ++i) {
-    const Drive::BodyState measured = makeMeasured(plant.pose);
-    const Drive::TrackerOutput out = Drive::track(ref, measured, limits, kTrackwidth);
-    stepPlant(&plant, out.command.left, out.command.right, kTrackwidth, dt, 0.3f);
-  }
-  const float finalTheta = std::fabs(plant.pose.h);
-
-  std::printf("  initial |theta| = %g, final |theta| = %g\n", (double)initialTheta,
-              (double)finalTheta);
-  checkTrue(finalTheta < initialTheta * 0.1f, "pivot heading error shrinks by at least 10x over 3s");
-}
+// (100-006 reconciliation): scenario (f) -- closed-loop convergence against
+// a ticket-scoped PlantState/stepPlant first-order-lag stub -- REMOVED here;
+// see this file's own header comment. Superseded by tests/sim/drive/
+// test_drive_closed_loop.py's arc/pivot convergence tests, which drive the
+// SAME Drive::track() cascade (via the full Drivetrain::plan() +
+// MotionPlan::step() composition) against tests/_infra/drive/plant.py's
+// real, independently-configurable plant model.
 
 }  // namespace
 
@@ -437,8 +355,6 @@ int main() {
   scenarioPivotMode();
   scenarioTrimSaturatedExactness();
   scenarioOneSidedForwardArcClampProperty();
-  scenarioClosedLoopArcConvergence();
-  scenarioClosedLoopPivotConvergence();
 
   if (g_failureCount == 0) {
     std::printf("OK: all Drive:: tracker scenarios passed\n");
