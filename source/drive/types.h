@@ -106,6 +106,37 @@ struct ProfileLimits {
 struct Limits {
   ProfileLimits linear;      // path-length master DOF (arcs)
   ProfileLimits rotational;  // heading master DOF (pivots; also arc omega)
+
+  // -- ticket 100-003 additions: the PlannerConfig-sourced scalars
+  // Drivetrain::admit()/plan()/planVelocity() consume directly, beyond the
+  // two ProfileLimits channels above. Tracker/policy gains (track_k_s/
+  // track_k_theta/track_k_cross, replan envelopes, handoff/arrive
+  // tolerances -- architecture-update.md M1's remaining PlannerConfig
+  // fields 15-31) are deliberately NOT added here; they land with tickets
+  // 004/005, the modules that actually consume them (this struct's own
+  // "grown incrementally, not speculatively" rule, stated above).
+  float vWheelMax = 0.0f;     // [mm/s] wheel velocity ceiling
+                               // (PlannerConfig.v_wheel_max) -- plan()'s
+                               // v_eff/omega_eff wheel-budget fold
+  float trimVMax = 0.0f;      // [mm/s] along-track trim clamp
+                               // (PlannerConfig.trim_v_max) -- plan()'s
+                               // headroom fold uses this scalar directly;
+                               // the TRACKER's (ticket 004/005) own
+                               // per-tick clamp is a separate, later
+                               // consumer of the same wire field
+  float trimOmegaMax = 0.0f;  // [rad/s] heading trim clamp
+                               // (PlannerConfig.trim_omega_max) -- same
+                               // headroom-fold role as trimVMax above. The
+                               // issue's control-law table lists a second,
+                               // pivot-specific 2.0 rad/s trim cap; that is
+                               // the tracker's own per-tick value (ticket
+                               // 004/005), distinct from this single
+                               // headroom-fold scalar, which the driving
+                               // issue's plan() sketch specifies as one
+                               // number (headroom = trimVMax +
+                               // trimOmegaMax*W/2)
+  float wheelStepMax = 0.0f;  // [mm/s] admit()'s joint wheel-speed-step
+                               // cap (PlannerConfig.wheel_step_max)
 };
 
 }  // namespace Drive
