@@ -38,14 +38,17 @@ import "config.proto";
 // these three arms still lands later this sprint (tickets 002-005); until
 // then they still reply `Error{ERR_UNIMPLEMENTED}` exactly as before.
 //
-// **Declared only** (100-001, motion-stack-v2 M1, same "schema now, runtime
-// later" precedent as config/get/stream/pose/otos above): `plan_dump`
-// (`CommandEnvelope.cmd` arm 18, replies `plan`/`PlanRecord`, arm 10) and
-// `trace` (`ReplyEnvelope.body` arm 11, `MotionTrace`, armed via
-// `StreamControl.trace`). `BinaryChannel` replies `Error{ERR_UNIMPLEMENTED}`
-// for `plan_dump` until ticket 009 makes it live. `EventNotify` (`evt`,
-// arm 6) gains a REAL body this ticket (Decision 5) -- still unsolicited/
-// no live producer until the wafer adapter (ticket 007) exists.
+// **Live since 100-009** (declared schema-only by 100-001, same "schema now,
+// runtime later" precedent as config/get/stream/pose/otos above): `plan_dump`
+// (`CommandEnvelope.cmd` arm 18, replies `plan`/`PlanRecord`, arm 10 -- one
+// `PlanRecord` per ring entry, sharing `corr_id`) and `trace`
+// (`ReplyEnvelope.body` arm 11, `MotionTrace`, armed via
+// `StreamControl.trace`, emitted alongside the regular `tlm` push at the
+// same period). `EventNotify` (`evt`, arm 6) gained a real body at 100-001
+// (Decision 5); publication onto the wire is still a documented gap this
+// sprint (source/runtime/blackboard.h's own `bb.lastEvent` doc comment) --
+// out of this ticket's scope (only the trace/plan-dump arms are this
+// ticket's own job).
 //
 // `motion` (field 5, `PlannerCommand`) is NOT declared this sprint --
 // architecture-update-r1.md Decision 6 (095, revising this document's
@@ -201,11 +204,22 @@ message ConfigGet {
 }
 
 // binary: true selects the binary telemetry emitter over the text one.
-// period: telemetry emission period. Declared-only this sprint (096 owns
-// StreamControl.binary's actual wiring), kept minimal.
+// period: telemetry emission period.
+// trace (100-009, motion-stack-v2 M9): arms MotionTrace (arm 11, below)
+// emission alongside the regular Telemetry frame, at the SAME period --
+// this field was not part of ticket 100-001's own schema-only pass (which
+// only declared the PlanDumpRequest/PlanRecord/MotionTrace shapes
+// themselves) and is added directly here, live, by the ticket that gives
+// those shapes a real BinaryChannel/tickTelemetry consumer. A developer
+// arms both `binary=true` (096) and `trace=true` (this field) to receive
+// one Telemetry + one MotionTrace push per period -- SUC-011's own Main
+// Flow step 2. false (the default) preserves every pre-existing STREAM
+// caller's behavior unchanged (no MotionTrace pushes unless explicitly
+// requested).
 message StreamControl {
   bool   binary = 1;
   uint32 period = 2;  // [ms]
+  bool   trace  = 3;
 }
 
 // Zero-field oneof arm (Decision 3): a panic-stop must have zero ways to
@@ -337,10 +351,12 @@ message EventNotify {
 // same "N replies share one corr_id" idiom the issue's own text
 // specifies). Empty request -- "cannot be malformed" shape, mirroring
 // Ping/Stop/Hello/Ver/Help above: there is no per-request filter this
-// ticket's own acceptance criteria call for (dump the WHOLE ring).
-// Declared only this ticket -- BinaryChannel replies ERR_UNIMPLEMENTED
-// until ticket 009 makes it live (matching the config/get/stream and
-// pose/otos precedent cited in this file's own header comment).
+// ticket's own acceptance criteria call for (dump the WHOLE ring). Live
+// since 100-009 -- BinaryChannel::handlePlanDump() replies one PlanRecord
+// per dumpable ring entry (the adapter's own currently-active plan, if
+// any, plus a preview solve of each still-QUEUED Drive::Goal), or a single
+// Ack{q:0} when nothing is dumpable at all (never zero replies -- a
+// pipelined client correlating on corr_id must always see something back).
 message PlanDumpRequest {}
 
 // PlanRecord (100-001, motion-stack-v2 M9) -- ReplyEnvelope.body arm 10:
@@ -350,8 +366,7 @@ message PlanDumpRequest {}
 // replan_count") -- mirrors Drive::MotionPlan's const query surface
 // (motion_plan.h's sketch in architecture-update.md: goal()/anchor()/
 // effectiveCeiling()/duration()/exitSpeed()) plus StepState::replanCount.
-// Declared only this ticket -- see PlanDumpRequest's own comment for the
-// ERR_UNIMPLEMENTED posture until ticket 009.
+// Live since 100-009 -- see PlanDumpRequest's own comment.
 message PlanRecord {
   Pose2D goal          = 1;  // world goal pose, frozen at plan time
   Pose2D anchor        = 2;  // world pose at segment start
@@ -393,8 +408,11 @@ message PlanRecord {
 //     segment a streamed sample belongs to without a separate PlanRecord
 //     round-trip)
 //   - trim_saturated, status (Drive::MotionPlan::Status, motion.proto)
-// Declared only this ticket -- see PlanDumpRequest's own comment for the
-// ERR_UNIMPLEMENTED posture until ticket 009.
+// Live since 100-009 -- armed via StreamControl.trace (this file's own
+// message, above), emitted from bb.motionTrace (committed every pass the
+// adapter's plan_.step() runs -- source/subsystems/drivetrain.cpp) by
+// tickTelemetry() (source/telemetry/telemetry_tick.cpp) alongside the
+// regular Telemetry push, same period.
 message MotionTrace {
   float        t                = 1;   // [s] elapsed since plan start
   float        ref_x             = 2;   // [mm]
@@ -459,8 +477,8 @@ message CommandEnvelope {
     Help              help    = 17;  // empty request, replies HelpText
                                       // (reply.body.helptext, field 9)
     // plan_dump (100-001, motion-stack-v2 M9): requests a PlanRecord dump
-    // of the wafer adapter's ring -- declared only, ERR_UNIMPLEMENTED
-    // until ticket 009 (see PlanDumpRequest's own comment).
+    // of the wafer adapter's ring -- live since 100-009 (see
+    // PlanDumpRequest's own comment).
     PlanDumpRequest   plan_dump = 18;
   }
 }
@@ -495,11 +513,11 @@ message ReplyEnvelope {
     // ver (fields 15/16) reuse the EXISTING `id` arm above instead of
     // adding their own -- only help needed a new reply shape.
     HelpText        helptext = 9;
-    // plan (100-001, motion-stack-v2 M9): one PlanRecord dump reply
-    // (declared only -- see PlanDumpRequest's own comment).
+    // plan (100-001, motion-stack-v2 M9): one PlanRecord dump reply --
+    // live since 100-009 (see PlanDumpRequest's own comment).
     PlanRecord      plan = 10;
-    // trace (100-001, motion-stack-v2 M9): one MotionTrace sample
-    // (declared only -- see MotionTrace's own comment).
+    // trace (100-001, motion-stack-v2 M9): one MotionTrace sample -- live
+    // since 100-009 (see MotionTrace's own comment).
     MotionTrace     trace = 11;
   }
 }

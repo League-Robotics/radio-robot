@@ -151,6 +151,39 @@ struct Blackboard {
   // from the tick entirely" note) for this ticket to plug into.
   msg::EventNotify lastEvent;
 
+  // motionTrace (100-009, PlanDumpRequest/MotionTrace wire arms) -- the
+  // adapter's own last-captured Drive::TrackRecord (Subsystems::
+  // Drivetrain::lastRecord(), converted via drive_bridge.h's
+  // driveMotionTrace()), published every pass by MainLoop::commit(),
+  // mirroring bb.lastEvent's own publish shape immediately above.
+  // tickTelemetry() (source/telemetry/telemetry_tick.cpp) sources the
+  // `trace` reply arm from this cell when bb.telemetryTrace is armed.
+  msg::MotionTrace motionTrace;
+
+  // hasActivePlan/activePlanRecord (100-009) -- the adapter's own
+  // CURRENTLY held plan_'s dumpable summary, published every pass
+  // (Subsystems::Drivetrain::hasActivePlan()/activePlanRecord(), both
+  // FREE -- no new Ruckig solve). Entry 0 of BinaryChannel::
+  // handlePlanDump()'s own ring dump.
+  bool hasActivePlan = false;
+  msg::PlanRecord activePlanRecord;
+
+  // planRingGoals/planRingCount (100-009) -- a non-destructive snapshot of
+  // the adapter's own ring_ (Subsystems::Drivetrain::ringGoals(), queue.h's
+  // peek()/size() -- never take()): the QUEUED, not-yet-active Drive::Goal
+  // entries, RAW/unsolved. BinaryChannel::handlePlanDump() preview-SOLVES
+  // each one on demand, at PlanDumpRequest time (a throwaway Drive::
+  // Drivetrain, the SAME pattern admitSegment() already uses) -- never
+  // here, never every pass (a per-pass preview solve of up to 8 queued
+  // Goals would be real, permanent hot-path cost for a rarely-requested
+  // diagnostic -- this project has already burned time on exactly this
+  // class of mistake, folding non-essential per-pass work into the motion
+  // tick, e.g. 100-004's reverted per-pass OTOS read; the fix there was the
+  // same one applied here: keep anything not essential to THIS tick's own
+  // control output out of the hot path).
+  std::array<Drive::Goal, 8> planRingGoals;
+  uint32_t planRingCount = 0;
+
   msg::PlannerState planner;          // from Planner
   // (090-003) odometer sample fusable -- derived from Hal::Odometer::
   // fusableThisPass(), never a device-presence (`!= nullptr`) test; always
@@ -232,6 +265,15 @@ struct Blackboard {
   // true yet -- the binary formatter itself lands in ticket 003, and ticket
   // 005's binary `stream` arm is the first thing to ever set it true.
   bool telemetryBinary = false;
+
+  // telemetryTrace (100-009, StreamControl.trace) -- the branch point
+  // tickTelemetry() reads to decide whether to ALSO emit a MotionTrace
+  // reply (bb.motionTrace, above) alongside the regular Telemetry push, at
+  // the same period. Set unconditionally by BinaryChannel's `stream` arm
+  // handler (mirrors telemetryBinary's own "written every STREAM, not
+  // gated" pattern). Defaults false -- no MotionTrace pushes unless a
+  // client explicitly arms StreamControl.trace.
+  bool telemetryTrace = false;
 
   // === Command plane: queues. Each drained by exactly ONE consumer. ===
   WorkQueue<Subsystems::CommunicatorToCommandProcessorCommand, 16>

@@ -263,6 +263,23 @@ class Sim:
             return ""
         return buf.raw[:n].decode(errors="replace")
 
+    def drain_reply_store(self, channel: int) -> str:
+        """DESTRUCTIVE read of one channel's CURRENT ReplyStore content (097,
+        test-only -- sim_drain_reply_store()): returns exactly what
+        peek_reply_store() would, then resets (clears) THAT ONE channel's
+        store. Companion to peek_reply_store(): a test collecting several
+        tick_for() passes' worth of periodic frames (100-009: a MotionTrace +
+        Telemetry pair per pass, once StreamControl.trace is armed) drains
+        between reads so ReplyStore's fixed-size, no-wraparound buffer
+        (sim_api.cpp's own ReplyStore struct) never silently overflows and
+        freezes mid-run.
+        """
+        buf = ctypes.create_string_buffer(_REPLY_BUF_SIZE)
+        n = self._lib.sim_drain_reply_store(self._h, ctypes.c_int(channel), buf, _REPLY_BUF_SIZE)
+        if n <= 0:
+            return ""
+        return buf.raw[:n].decode(errors="replace")
+
     def post_segment(self, arc_length: float, delta_heading: float = 0.0,
                       exit_speed: float = 0.0) -> bool:
         """Post one Drive::Goal directly to bb.segmentIn (100-007, THE
@@ -464,6 +481,12 @@ class Sim:
         lib.sim_peek_reply_store.argtypes = [
             ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
         lib.sim_peek_reply_store.restype = ctypes.c_int
+
+        # sim_drain_reply_store (097, test-only) -- sim_peek_reply_store's
+        # argtypes exactly (same signature; DESTRUCTIVE instead of peek).
+        lib.sim_drain_reply_store.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+        lib.sim_drain_reply_store.restype = ctypes.c_int
 
         # sim_route_no_tick (095-007, test-only) -- sim_command_on()'s
         # argtypes exactly (same signature, different behavior).

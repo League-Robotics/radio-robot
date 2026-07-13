@@ -20,6 +20,7 @@
 #pragma once
 
 #include "drive/drivetrain.h"
+#include "drive/motion_plan.h"
 #include "drive/types.h"
 #include "messages/common.h"
 #include "messages/envelope.h"
@@ -133,6 +134,20 @@ inline Drive::WheelState driveWheelState(const msg::MotorState& obs) {
 
 inline Drive::Pose drivePose(const msg::Pose2D& pose) { return Drive::Pose{pose.x, pose.y, pose.h}; }
 
+// wirePose2D -- the inverse of drivePose() above: Drive::Pose -> msg::Pose2D.
+// Needed starting 100-009 (PlanRecord.goal/anchor are both Pose2D, the ONLY
+// two places this direction of the conversion is needed -- every other
+// msg::<->Drive:: boundary in this file only ever goes msg:: -> Drive::,
+// since source/drive/'s outputs before this ticket were all scalar
+// WheelVelocities/Status, never a Pose).
+inline msg::Pose2D wirePose2D(const Drive::Pose& pose) {
+  msg::Pose2D p;
+  p.x = pose.x;
+  p.y = pose.y;
+  p.h = pose.h;
+  return p;
+}
+
 inline Drive::Twist driveTwist(const msg::BodyTwist3& twist) {
   return Drive::Twist{twist.v_x, twist.v_y, twist.omega};
 }
@@ -171,6 +186,71 @@ inline msg::MotionStatus toMotionStatus(Drive::Status status) {
 inline msg::ErrCode errCodeForVerdict(Drive::Verdict verdict) {
   (void)verdict;
   return msg::ErrCode::ERR_RANGE;
+}
+
+// drivePlanRecord -- (100-009) Drive::MotionPlan's const query surface ->
+// msg::PlanRecord, THE single conversion point for both of this ticket's
+// PlanRecord producers: Subsystems::Drivetrain::activePlanRecord() (the
+// adapter's own already-solved plan_, `replanCount` = the LIVE state_.
+// replanCount) and BinaryChannel::handlePlanDump()'s own throwaway preview
+// solves of each still-QUEUED ring_ Goal (`replanCount` = 0 -- a preview
+// has never run, so there is no replan history to report). `entry_speed`
+// has no direct MotionPlan query (motion_plan.h's own public surface never
+// stored the PlanRequest.entrySpeed that seeded the solve) -- it is
+// reconstructed as referenceAt(0.0f).v, the master profile's own t=0
+// boundary velocity, which the "closed-form, exact" query IS the entry
+// speed for every non-pivot plan (a pivot's own v is always literally 0.0f
+// regardless of entrySpeed, matching Goal's own "pivot: exitSpeed must be
+// 0" convention -- entrySpeed into a pivot is likewise never meaningful).
+inline msg::PlanRecord drivePlanRecord(const Drive::MotionPlan& plan, uint32_t replanCount) {
+  msg::PlanRecord record;
+  record.goal = wirePose2D(plan.goal());
+  record.anchor = wirePose2D(plan.anchor());
+  record.v_eff = plan.effectiveCeiling();
+  record.duration = plan.duration();
+  record.exit_speed = plan.exitSpeed();
+  record.entry_speed = plan.referenceAt(0.0f).v;
+  record.replan_count = replanCount;
+  return record;
+}
+
+// driveMotionTrace -- (100-009) Drive::TrackRecord -> msg::MotionTrace, THE
+// single conversion point for Subsystems::Drivetrain::tick()'s own
+// per-pass capture (lastRecord_, committed to bb.motionTrace every pass
+// plan_.step() runs -- source/subsystems/drivetrain.cpp). A CURATED subset
+// per MotionTrace's own doc comment (envelope.proto): every StepInput
+// replay field EXCEPT measured/left/right (Telemetry's own pose=/twist=/
+// enc=/vel= already carry those at the same period -- a developer's
+// tooling zips the two same-period frames back into a full StepInput, see
+// envelope.proto's MotionTrace doc comment), the sampled RefState's
+// world-frame point, tracked error, post-clamp trims, the body command,
+// the final wheel setpoints, and `segSeq` (NOT part of TrackRecord itself
+// -- threaded in by the caller, the adapter's own segSeq_ generation
+// counter, so a client can tell which segment a streamed sample belongs to
+// without a separate PlanRecord round-trip).
+inline msg::MotionTrace driveMotionTrace(const Drive::TrackRecord& record, uint32_t segSeq) {
+  msg::MotionTrace trace;
+  trace.t = record.in.t;
+  trace.ref_x = record.ref.x;
+  trace.ref_y = record.ref.y;
+  trace.ref_theta = record.ref.theta;
+  trace.ref_v = record.ref.v;
+  trace.ref_omega = record.ref.omega;
+  trace.e_along = record.eAlong;
+  trace.e_cross = record.eCross;
+  trace.e_theta = record.eTheta;
+  trace.v_trim = record.vTrim;
+  trace.omega_trim = record.omegaTrim;
+  trace.v_cmd = record.vCmd;
+  trace.omega_cmd = record.omegaCmd;
+  trace.wheel_left = record.wheelLeft;
+  trace.wheel_right = record.wheelRight;
+  trace.pose_step = record.in.poseStep;
+  trace.pose_step_theta = record.in.poseStepTheta;
+  trace.seg_seq = segSeq;
+  trace.trim_saturated = record.trimSaturated;
+  trace.status = toMotionStatus(record.status);
+  return trace;
 }
 
 }  // namespace Subsystems
