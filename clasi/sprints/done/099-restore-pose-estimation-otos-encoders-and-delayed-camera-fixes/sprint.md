@@ -1,7 +1,7 @@
 ---
 id: 099
 title: 'Restore pose estimation: OTOS, encoders, and delayed camera fixes'
-status: ticketing
+status: done
 branch: sprint/099-restore-pose-estimation-otos-encoders-and-delayed-camera-fixes
 use-cases:
 - SUC-001
