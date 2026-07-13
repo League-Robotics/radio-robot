@@ -23,17 +23,20 @@
 // comment establishes this precedent; this file's scriptMotorCycle() below
 // follows it exactly). Both of motor1_/motor2_ share ONE wire address
 // (0x10 << 1) — the motorId lives in the payload, which this fake never
-// inspects — so their writes/reads share one FIFO each, in the SAME order
-// runCycleOnce() actually calls them (device_bus.h's own documented
-// schedule: request1, request2, [collect1, duty1?], [collect2, duty2?]).
+// inspects — so their writes/reads share one FIFO each; because the fake
+// checks only the per-kind COUNT (never content or write-vs-read
+// interleaving), the push order here need not mirror the consumption order.
+// runCycleOnce()'s actual order is now ALTERNATING (device_bus.h's schedule):
+// request1, collect1, [duty1?], request2, collect2, [duty2?].
 //
 // --- How this harness proves the 093 hazard is structurally absent ---
-// runCycleOnce()'s fixed call order means requestEncoders() (both motors)
-// always completes in full BEFORE collectAndDrive() (both motors) begins —
-// there is no code path by which a duty write (which only ever originates
-// inside NezhaMotor::tick(), only ever called from collectAndDrive()) can
-// land between any one motor's own request and that SAME motor's own
-// collect. This harness demonstrates the OBSERVABLE consequence of that
+// runCycleOnce() services each motor with its OWN serviceMotor() (request ->
+// settle -> collect), motor1 fully before motor2 begins — there is no code
+// path by which a duty write (which only ever originates inside
+// NezhaMotor::tick(), only ever called from serviceMotor() AFTER that same
+// motor's collect) can land between any one motor's own request and that
+// SAME motor's own collect. This harness demonstrates the OBSERVABLE
+// consequence of that
 // structural guarantee two ways: (1) scenarioScheduleOrderDeterministicBaseline()
 // proves the exact, minimal per-cycle transaction count (2 requests + 2
 // collects, zero duty) when no motion is staged; (2) scenario
@@ -144,8 +147,10 @@ void pushEncoderRead(Devices::I2CBus& bus, float positionMm) {
 // harmless, drained by a later cycle -- devices_motor_harness.cpp's own
 // established precedent), then motor1's and motor2's collectEncoder() reads
 // carrying the given positions. Both motors share ONE wire address, so
-// writes/reads are pushed as one combined FIFO push per kind, exactly
-// matching runCycleOnce()'s actual call order (device_bus.h's schedule).
+// writes/reads are pushed as one combined FIFO push per kind -- the fake is
+// count-only, so this push order need not mirror runCycleOnce()'s actual
+// (now alternating: request1, collect1, request2, collect2) call order; only
+// the per-kind counts (2 requests + slack writes; 2 collect reads) must match.
 void scriptMotorCycle(Devices::I2CBus& bus, float position1Mm, float position2Mm,
                        int extraDutySlack) {
   bus.scriptWrite(kNezhaWireAddr, 0);  // motor1 requestSample() 0x46
@@ -295,16 +300,19 @@ void scenarioScheduleOrderDeterministicBaseline() {
     checkFloatEq(deviceBus.motor(2).latest().value.position, pos2,
                  "motor2 position reflects this cycle's collected sample");
 
-    // Exactly TWO sleeps per cycle (the settle sleep between requests and
-    // collects, then the pace sleep) -- the settle sleep's PLACEMENT
-    // between request and collect is a structural property of
+    // Exactly THREE sleeps per cycle: one settle sleep INSIDE each motor's
+    // own serviceMotor() (between that motor's own request and its own
+    // collect -- the brick holds only ONE pending 0x46 request, so the two
+    // motors cannot share a settle window; see device_bus.h's alternating
+    // note), then the single pace sleep. The settle sleep's PLACEMENT between
+    // a motor's request and its collect is a structural property of
     // runCycleOnce()'s fixed call order (device_bus.cpp); this harness
     // verifies the observable consequence available through the Sleeper
-    // seam: exactly two sleepMillis() calls per cycle, the last of which is
+    // seam: exactly three sleepMillis() calls per cycle, the last of which is
     // the pace-sleep (kCyclePaceMs = 12, device_bus.h).
     uint32_t sleepsAfter = static_cast<uint32_t>(deviceBus.sleeper().sleepCount());
-    checkUintEq(sleepsAfter - sleepsBefore, 2u,
-                "exactly two sleeps this cycle (settle, then pace)");
+    checkUintEq(sleepsAfter - sleepsBefore, 3u,
+                "exactly three sleeps this cycle (settle x2, one per motor, then pace)");
     checkUintEq(deviceBus.sleeper().lastSleepMillis(), 12u,
                 "the cycle's LAST sleep is the pace-sleep (kCyclePaceMs)");
 

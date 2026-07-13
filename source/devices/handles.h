@@ -86,7 +86,7 @@ inline uint32_t lerpUint(uint32_t older, uint32_t newer, float frac) {
 class Motor {
  public:
   // --- Setters: stage the command (via the leaf's own fields); the
-  // fiber's next collect+PID+write step (DeviceBus::collectAndDrive(),
+  // fiber's next collect+PID+write step (DeviceBus::serviceMotor(),
   // device_bus.cpp) executes it. ---
   void setVelocity(float velocity);  // [mm/s] signed — PID target
   void setDuty(float duty);          // [-1, 1] raw duty target (PID-off only)
