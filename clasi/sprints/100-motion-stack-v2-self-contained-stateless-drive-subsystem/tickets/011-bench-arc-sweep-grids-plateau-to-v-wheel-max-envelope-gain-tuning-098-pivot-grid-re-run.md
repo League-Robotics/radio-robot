@@ -87,3 +87,14 @@ gains).
 
 **Documentation updates**: `tovez.json`'s own inline notes (per the
 existing convention) document what was measured/changed and when.
+
+---
+## DEFERRED to sprint 101 (2026-07-13)
+
+Not completed in sprint 100. Bench diagnosis found the DeviceBus firmware's
+**heading feedback is broken** (raw OTOS heading frozen during an open-loop
+spin; fused heading garbage/resetting; OTOS re-init commands accepted-inert),
+so closed-loop turn accuracy cannot be validated or tuned until that is fixed.
+That debugging — and the arc/turn accuracy sweeps, camera-verified field runs,
+and the parked-file cleanup that depends on field sign-off — is re-scoped into
+sprint 101 (debugging). Carried forward, superseded by 101's tickets.

@@ -92,3 +92,14 @@ residue remains from ticket 007).
 **Documentation updates**: none required (the `docs/protocol-v3.md`
 follow-up remains flagged from ticket 001, still the team-lead's to
 schedule).
+
+---
+## DEFERRED to sprint 101 (2026-07-13)
+
+Not completed in sprint 100. Bench diagnosis found the DeviceBus firmware's
+**heading feedback is broken** (raw OTOS heading frozen during an open-loop
+spin; fused heading garbage/resetting; OTOS re-init commands accepted-inert),
+so closed-loop turn accuracy cannot be validated or tuned until that is fixed.
+That debugging — and the arc/turn accuracy sweeps, camera-verified field runs,
+and the parked-file cleanup that depends on field sign-off — is re-scoped into
+sprint 101 (debugging). Carried forward, superseded by 101's tickets.
