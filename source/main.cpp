@@ -55,7 +55,6 @@
 // ---------------------------------------------------------------------------
 
 #include "MicroBit.h"
-#include "com/i2c_bus.h"
 #include "config/boot_config.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
@@ -64,8 +63,8 @@
 #include "runtime/configurator.h"
 #include "runtime/main_loop.h"
 #include "subsystems/communicator.h"
+#include "subsystems/device_bus_hardware.h"
 #include "subsystems/drivetrain.h"
-#include "subsystems/nezha_hardware.h"
 #include "subsystems/pose_estimator.h"
 #include "telemetry/telemetry_tick.h"
 
@@ -94,12 +93,22 @@ int hardware_main() {
     comm.configure(msg::CommunicatorConfig());
     comm.begin();
 
-    // --- Hardware: the I2C brick flip-flop container (NezhaHardware). ---
-    static I2CBus bus(uBit.i2c);
-    static msg::MotorConfig motorConfigs[Subsystems::NezhaHardware::kMotorCount];
+    // --- Hardware: Devices::DeviceBus, the fiber-owned device layer (100-DBX,
+    // THE COMPLETE CUTOVER -- see clasi/sprints/100-.../device-bus-cutover-
+    // ticket.md). Subsystems::DeviceBusHardware fills the SAME Subsystems::
+    // Hardware seam Subsystems::NezhaHardware used to (source/subsystems/
+    // device_bus_hardware.h) -- everything below this construction
+    // (Drivetrain, PoseEstimator, MainLoop, the loop body) is unchanged.
+    // Constructed directly against uBit.i2c: Devices::DeviceBus's own
+    // real-build constructor takes a raw MicroBitI2C&, not the project's
+    // I2CBus wrapper NezhaHardware used, so no separate `bus` object is
+    // needed here any more. NezhaHardware/Hal::NezhaMotor/Hal::OtosOdometer
+    // are left on disk, parked, unreferenced from this file now (a later
+    // cleanup ticket removes them). ---
+    static msg::MotorConfig motorConfigs[Subsystems::DeviceBusHardware::kMotorCount];
     Config::defaultMotorConfigs(motorConfigs);
-    static Subsystems::NezhaHardware hardware(bus, motorConfigs,
-                                               Config::defaultOtosBootConfig());
+    static Subsystems::DeviceBusHardware hardware(uBit.i2c, motorConfigs,
+                                                   Config::defaultOtosBootConfig());
     hardware.begin();
 
     // --- Drivetrain: differential (Tovez), motion planner (094-004). Holds

@@ -68,12 +68,38 @@ behavior is fine (fiber is faster than the loop). The measurement rings make
 the handle reads snapshot-safe across the fiber boundary.
 
 ## Verify
-- Host: build (`just build`) — the real firmware now links DeviceBusHardware;
+- [x] Host: build (`just build`) — the real firmware now links DeviceBusHardware;
   sim lib unaffected (sim still uses SimHardware). Host-test the conversion
   helpers (Devices::MotorReading→msg::MotorState, PoseReading→PoseEstimate,
   MotorCommand→handle) with a small harness.
-- Full `uv run python -m pytest` stays green (sim path unchanged).
-- HARDWARE (team-lead runs): flash the real firmware, confirm the standing
+  - DONE. `source/subsystems/device_bus_hardware.{h,cpp}` implements
+    `Subsystems::DeviceBusHardware`/`DeviceBusMotor`/`DeviceBusOdometer`;
+    `source/main.cpp` swapped `Subsystems::NezhaHardware` →
+    `Subsystems::DeviceBusHardware` (constructed directly against `uBit.i2c`).
+    Real ARM firmware build: FLASH 340540 B / 364 KB = **91.36%**, RAM
+    120768 B / 122816 B = **98.33%** (normal per project convention — see
+    `.clasi/knowledge/codal-ram-always-near-full.md`). Host sim lib
+    (`libfirmware_host`) built unaffected — it does not reference the new
+    bridge file at all (its CMakeLists.txt uses an explicit source list, not
+    a glob). `tests/sim/unit/device_bus_hardware_harness.cpp` +
+    `test_device_bus_hardware.py` host-test the conversion helpers
+    (`deviceBusMotorConfigToMsg`/`msgToDeviceBusMotorConfig`/
+    `otosBootConfigToDeviceBus`/`deviceBusPoseToEstimate`/
+    `msgNeutralToDeviceBus`) AND a real, host-constructed `DeviceBusHardware`
+    (capabilities/apply()-gating/active()-toggling/motorConfig()/odometer()
+    wiring) — 12 scenarios, all passing.
+- [x] Full `uv run python -m pytest` stays green (sim path unchanged).
+  - DONE. **1458 passed, 3 skipped, 4 xfailed, 1 xpassed** (was 1457/3/4/1
+    before this ticket's one added test file) — zero failures, zero
+    regressions. `test_devices_isolation.py` re-verified passing (source/
+    devices/ gained no messages::/hal:: include from this ticket).
+- [ ] HARDWARE (team-lead runs): flash the real firmware, confirm the standing
   bench gate — sensors alive (encoders, OTOS, color, line), wheels drive both
   directions + encoders increment, a MOVE/segment motion command executes,
   pose updates. This is the real cutover validation.
+  - NOT YET RUN (out of this agent's scope per the dispatch — "HITL deferred
+    to team-lead"). See the programmer's final report for the exact HITL
+    steps and the known limitations (wedged()/wedgeSuspect()/
+    hardResetCount()/acceleration() telemetry gap; live `DEV M <n> CFG`/OI/
+    OR/OL/OA no-ops; color/line sensors out of this ticket's bridge scope)
+    the team-lead should be aware of while validating on the stand.
