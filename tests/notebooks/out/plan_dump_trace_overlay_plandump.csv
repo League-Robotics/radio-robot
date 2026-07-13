@@ -1,0 +1,2 @@
+anchor_x,anchor_y,anchor_h,goal_x,goal_y,goal_h,v_eff,duration,exit_speed,entry_speed,replan_count
+0.0,0.0,0.0,584.1275024414062,118.40853118896484,0.4000000059604645,216.75192260742188,3.1990814208984375,0.0,0.0,0

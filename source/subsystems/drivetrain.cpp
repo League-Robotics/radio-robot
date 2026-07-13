@@ -328,6 +328,15 @@ void Drivetrain::tick(uint32_t now,
             targetLeft = out.command.left;
             targetRight = out.command.right;
 
+            // lastRecord_ (100-009) -- captured EVERY pass step() runs,
+            // regardless of out.status (RUNNING/SETTLING/REPLAN_DUE/
+            // DONE_*/ABORT_*) -- MainLoop::commit() publishes this to
+            // bb.motionTrace unconditionally every pass, mirroring
+            // lastEvent_'s own "last-known value" semantics (never reset to
+            // a default between passes; simply overwritten by the next
+            // capture).
+            lastRecord_ = Subsystems::driveMotionTrace(out.record, segSeq_);
+
             // Remaining master-DOF distance [mm] -- state()/rem=. 0 for a
             // pivot (the master DOF there is heading, radians, not a
             // translation -- see drivetrain.h's own field comment).
@@ -475,6 +484,25 @@ msg::DrivetrainState Drivetrain::state() const {
     s.rem = remainingLinear_;
 
     return s;
+}
+
+msg::PlanRecord Drivetrain::activePlanRecord() const {
+    // planActive_ == false leaves plan_ at its default-constructed
+    // (invalid/empty) value -- drivePlanRecord() on that is well-defined
+    // (motion_plan.h's own "every query returns a safe zero/default"
+    // contract) but callers should check hasActivePlan() first (this
+    // class's own header comment on this method).
+    return Subsystems::drivePlanRecord(plan_, state_.replanCount);
+}
+
+uint32_t Drivetrain::ringGoals(Drive::Goal* out, uint32_t capacity) const {
+    uint32_t n = ring_.size();
+    if (n > capacity) n = capacity;
+    for (uint32_t i = 0; i < n; ++i) {
+        const Drive::Goal* g = ring_.peek(i);
+        out[i] = g ? *g : Drive::Goal{};
+    }
+    return n;
 }
 
 msg::DrivetrainCapabilities Drivetrain::capabilities() const {

@@ -6,7 +6,10 @@
 // (msg::wire::encode -> WireRuntime::base64Encode) -> replyFn. Every exit
 // path replies exactly once, armored the same way -- no bare text ever
 // escapes this file (a binary client only ever sees `*B<base64>` lines
-// back, matching what it sent).
+// back, matching what it sent) -- EXCEPT handlePlanDump() (100-009), which
+// calls sendReply()/the PlanRecord equivalent zero or more times for ONE
+// incoming CommandEnvelope (one armored line per dumpable ring entry,
+// sharing corr_id); see that function's own doc comment.
 //
 // Layout: handle() is dearmor + decode + a thin one-call-per-arm dispatch
 // switch. Each oneof arm's behavior lives in its own handle<Arm>() helper
@@ -232,6 +235,89 @@ void handleReplace(const msg::MotionSegment& src, Rt::Blackboard& b, uint32_t co
 
   b.replaceIn.post(Subsystems::driveMoverRequest(src));
   sendAck(b, corrId, replyFn, replyCtx);
+}
+
+// sendPlanRecord -- one PlanRecord reply. A second reply-shape helper
+// alongside sendReply()/sendError()/sendAck() above, used exclusively by
+// handlePlanDump() below (the one arm that replies more than once per
+// incoming CommandEnvelope -- see this file's own header comment).
+void sendPlanRecord(const msg::PlanRecord& record, uint32_t corrId, ReplyFn replyFn,
+                    void* replyCtx) {
+  msg::ReplyEnvelope reply;
+  reply.corr_id = corrId;
+  reply.body_kind = msg::ReplyEnvelope::BodyKind::PLAN;
+  reply.body.plan = record;
+  sendReply(reply, replyFn, replyCtx);
+}
+
+// handlePlanDump -- (100-009) PlanDumpRequest's real implementation,
+// replacing the ERR_UNIMPLEMENTED stub ticket 001 left in place. Replies
+// one PlanRecord per DUMPABLE ring entry, sharing corrId (envelope.proto's
+// own "N replies share one corr_id" idiom):
+//   - entry 0, if bb.hasActivePlan: the adapter's own currently-active
+//     plan_'s ALREADY-SOLVED PlanRecord (bb.activePlanRecord, committed
+//     every pass by MainLoop::commit() -- FREE, no new solve here).
+//   - entries 1..N, one per bb.planRingGoals[0..planRingCount): each
+//     still-QUEUED, unsolved Drive::Goal is preview-SOLVED HERE, on
+//     demand, via a throwaway, stack-only Drive::Drivetrain -- the SAME
+//     pattern admitSegment() above already established (a pure value,
+//     never a Subsystems::* reference, SUC-006) -- chained the SAME way
+//     Subsystems::Drivetrain::startNextPlan() chains a REAL ring pop: each
+//     preview's own goal()/exitSpeed() becomes the NEXT preview's start
+//     pose/entrySpeed. A preview solve failure (rare -- admit()'s own
+//     coarse queue-time check already passed when this Goal was admitted;
+//     mirrors startNextPlan()'s own "late solve failure" case) skips that
+//     ring index's row outright -- never fabricates a record, never aborts
+//     the whole dump. This is a READ-ONLY diagnostic: it never touches
+//     bb.chainTail/bb.segmentIn/bb.replaceIn or any queue -- only reads
+//     bb.plannerConfig/bb.drivetrainConfig/bb.hasActivePlan/
+//     bb.activePlanRecord/bb.planRingGoals/bb.bodyState.
+// A totally empty dump (no active plan, no queued Goal) replies a single
+// Ack{q:0} instead of zero PlanRecords -- a pipelined client correlating
+// replies on corr_id must always see SOMETHING back for a request it sent
+// (binary_channel.h's own file header documents this as the one relaxation
+// of "every arm replies exactly once" this file makes).
+void handlePlanDump(Rt::Blackboard& b, uint32_t corrId, ReplyFn replyFn, void* replyCtx) {
+  uint32_t sent = 0;
+
+  // Chain anchor/entry-speed for the ring preview below: starts from the
+  // active plan's own frozen goal/exit speed (mirrors startNextPlan()'s own
+  // haveAnchor_ ? plan_.goal() : measured-pose chaining), or the current
+  // measured body pose/rest when nothing is active yet.
+  Drive::Pose anchor = b.hasActivePlan ? Subsystems::drivePose(b.activePlanRecord.goal)
+                                       : Subsystems::driveBodyState(b.bodyState).pose;
+  float chainedEntrySpeed = b.hasActivePlan ? b.activePlanRecord.exit_speed : 0.0f;
+
+  if (b.hasActivePlan) {
+    sendPlanRecord(b.activePlanRecord, corrId, replyFn, replyCtx);
+    ++sent;
+  }
+
+  if (b.planRingCount > 0) {
+    Drive::Drivetrain dt(Subsystems::driveLimitsFromConfig(b.plannerConfig),
+                         b.drivetrainConfig.trackwidth);
+    for (uint32_t i = 0; i < b.planRingCount; ++i) {
+      Drive::PlanRequest request;
+      request.goal = b.planRingGoals[i];
+      request.start = anchor;
+      request.entrySpeed = chainedEntrySpeed;
+      request.entryAccel = 0.0f;
+
+      const Drive::PlanResult result = dt.plan(request);
+      if (result.verdict != Drive::Verdict::OK) {
+        continue;  // rare preview-solve failure -- skip, never fabricate
+      }
+
+      sendPlanRecord(Subsystems::drivePlanRecord(result.plan, 0), corrId, replyFn, replyCtx);
+      ++sent;
+      anchor = result.plan.goal();
+      chainedEntrySpeed = result.plan.exitSpeed();
+    }
+  }
+
+  if (sent == 0) {
+    sendAck(b, corrId, replyFn, replyCtx);
+  }
 }
 
 // handleStop -- byte-identical to the text handleStop()'s own construction
@@ -665,6 +751,12 @@ void handleStream(const msg::StreamControl& sc, Rt::Blackboard& b, void* routerC
   // even for period 0 (disabling still records "this channel asked last").
   b.telemetryChannel = static_cast<Rt::CommandRouter*>(routerCtx)->currentChannel();
   b.telemetryBinary = sc.binary;
+  // telemetryTrace (100-009) -- unconditionally written every STREAM,
+  // mirroring telemetryBinary's own not-gated assignment immediately
+  // above. tickTelemetry() reads this to decide whether to ALSO emit a
+  // MotionTrace push (bb.motionTrace) alongside the regular Telemetry
+  // frame, at the same period.
+  b.telemetryTrace = sc.trace;
   // Deliberately NOT reproducing handleStream()'s old same-reply
   // "immediate first frame" concatenation (Open Question 5, ticket 002's
   // own note) -- the first frame arrives one pass later via
@@ -762,6 +854,9 @@ void handle(const char* line, ReplyFn replyFn, void* replyCtx, void* routerCtx) 
       break;
     case msg::CommandEnvelope::CmdKind::STREAM:
       handleStream(env.cmd.stream, b, routerCtx, env.corr_id, replyFn, replyCtx);
+      break;
+    case msg::CommandEnvelope::CmdKind::PLAN_DUMP:
+      handlePlanDump(b, env.corr_id, replyFn, replyCtx);
       break;
     case msg::CommandEnvelope::CmdKind::NONE:
     default:

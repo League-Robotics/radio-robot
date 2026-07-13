@@ -67,6 +67,41 @@ void telemetryEmitBinary(Rt::Blackboard& b, uint32_t now, ReplyFn replyFn, void*
   replyFn(armored, replyCtx);
 }
 
+// telemetryEmitTrace -- (100-009) the MotionTrace push path, sourced from
+// bb.motionTrace (committed every pass by MainLoop::commit() from the
+// wafer adapter's own lastRecord() getter -- see blackboard.h's own doc
+// comment). Same encode+armor+send shape as telemetryEmitBinary() above,
+// a SEPARATE ReplyEnvelope arm (`trace`, never a Telemetry extension --
+// envelope.proto's own MotionTrace doc comment), corr_id = 0 (unsolicited
+// PUSH, same reasoning as telemetryEmitBinary()). Only called from
+// tickTelemetry() below, and only when bb.telemetryTrace is armed
+// (StreamControl.trace, BinaryChannel's `stream` arm handler).
+void telemetryEmitTrace(Rt::Blackboard& b, ReplyFn replyFn, void* replyCtx) {
+  if (replyFn == nullptr) return;
+
+  msg::ReplyEnvelope reply;
+  reply.corr_id = 0;
+  reply.body_kind = msg::ReplyEnvelope::BodyKind::TRACE;
+  reply.body.trace = b.motionTrace;
+
+  uint8_t rawBuf[msg::wire::kReplyEnvelopeMaxEncodedSize];
+  const uint16_t n = msg::wire::encode(reply, rawBuf, static_cast<uint16_t>(sizeof(rawBuf)));
+  if (n == 0) {
+    // Unreachable in practice -- same sizing argument as telemetryEmitBinary().
+    return;
+  }
+
+  char armored[kArmoredBufSize];
+  armored[0] = '*';
+  armored[1] = 'B';
+  size_t b64Len = 0;
+  if (!WireRuntime::base64Encode(rawBuf, n, armored + 2, sizeof(armored) - 3, &b64Len)) {
+    return;   // same unreachable-in-practice sizing argument as above
+  }
+  armored[2 + b64Len] = '\0';
+  replyFn(armored, replyCtx);
+}
+
 }  // namespace
 
 void tickTelemetry(Rt::Blackboard& bb, Rt::CommandRouter& router, uint32_t now) {
@@ -87,6 +122,12 @@ void tickTelemetry(Rt::Blackboard& bb, Rt::CommandRouter& router, uint32_t now) 
   // update-r2.md Open Question 1), not touched here since blackboard.h is
   // outside this ticket's file scope.
   telemetryEmitBinary(bb, now, replyFn, replyCtx);
+
+  // (100-009) MotionTrace push -- ADDITIONAL to the Telemetry push above,
+  // same period, only when StreamControl.trace armed it (bb.telemetryTrace).
+  if (bb.telemetryTrace) {
+    telemetryEmitTrace(bb, replyFn, replyCtx);
+  }
 
   // Mirrors the deleted text handleStream()'s own immediate-first-frame
   // bookkeeping: update unconditionally (even if telemetryEmitBinary() was

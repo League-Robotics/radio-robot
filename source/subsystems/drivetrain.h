@@ -206,6 +206,37 @@ class Drivetrain {
   // bb.drivetrain's own publish shape).
   msg::EventNotify lastEvent() const { return lastEvent_; }
 
+  // lastRecord -- (100-009) the most recent Drive::TrackRecord this class's
+  // own tick() captured from plan_.step()'s StepOutput, converted via
+  // drive_bridge.h's driveMotionTrace() -- committed to bb.motionTrace
+  // every pass by MainLoop::commit(), mirroring lastEvent()'s own publish
+  // shape. Overwritten every pass planActive_ (i.e. every pass step() actually
+  // ran); holds the LAST such value (never reset to a default) on a pass
+  // that does not step, the same "last-known, not gated on freshness" the
+  // sim's own TLM fields already follow.
+  msg::MotionTrace lastRecord() const { return lastRecord_; }
+
+  // hasActivePlan/activePlanRecord -- (100-009, PlanDumpRequest's own wire
+  // arm) the currently held plan_'s dumpable summary, entry 0 of the ring
+  // dump BinaryChannel::handlePlanDump() assembles. FREE -- plan_'s own
+  // const query surface plus state_.replanCount, no new Ruckig solve.
+  // activePlanRecord() on a !hasActivePlan() plan returns a default
+  // (zeroed) PlanRecord -- see motion_plan.h's own "default-constructed
+  // MotionPlan" doc comment; callers must check hasActivePlan() first
+  // (mirrors this whole file's existing has/val-gated Opt<T> convention).
+  bool hasActivePlan() const { return planActive_; }
+  msg::PlanRecord activePlanRecord() const;
+
+  // ringGoals -- (100-009) a NON-DESTRUCTIVE snapshot of ring_'s raw,
+  // unsolved Drive::Goal entries (queue.h's own peek()/size(), never
+  // take()) -- copies up to `capacity` entries into `out` and returns the
+  // count actually written. Cheap: no Ruckig solve, just copying already-
+  // held Goal values -- BinaryChannel::handlePlanDump() does its own
+  // read-only preview solve of each one, on demand, at PlanDumpRequest
+  // time (never here, never every pass -- see this method's own .cpp
+  // comment for why a per-pass preview solve is deliberately avoided).
+  uint32_t ringGoals(Drive::Goal* out, uint32_t capacity) const;
+
   // --- Port binding + authority arbitration (unchanged from before this
   // ticket -- sprint 079's design, not touched by 094 or 100). ---
   DrivetrainPorts ports() const;
@@ -275,6 +306,7 @@ class Drivetrain {
   uint32_t lateSolveFailures_ = 0;      // diagnostic: admit() passed, the real plan() solve did not
   Rt::WorkQueue<Drive::Goal, 8> ring_;  // admitted, not-yet-planned segments
   msg::EventNotify lastEvent_ = {};
+  msg::MotionTrace lastRecord_ = {};    // (100-009) last step()'s TrackRecord, converted -- lastRecord()
 
   // true: ring_/plan_ drives this tick's staged output (SEGMENT mode).
   // false: mode_/commandedWheelTargets() drives it (DIRECT/escape-hatch

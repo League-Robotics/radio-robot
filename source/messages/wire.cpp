@@ -412,8 +412,9 @@ constexpr MessageTable kTable_ConfigGet = { kFields_ConfigGet, 1 };
 constexpr FieldDesc kFields_StreamControl[] = {
     { .number = 1, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kBool, .offset = offsetof(StreamControl, binary), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // binary
     { .number = 2, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kUint32, .offset = offsetof(StreamControl, period), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // period
+    { .number = 3, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kBool, .offset = offsetof(StreamControl, trace), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // trace
 };
-constexpr MessageTable kTable_StreamControl = { kFields_StreamControl, 2 };
+constexpr MessageTable kTable_StreamControl = { kFields_StreamControl, 3 };
 
 constexpr MessageTable kTable_Stop = { nullptr, 0 };
 

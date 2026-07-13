@@ -93,6 +93,7 @@ struct ConfigGet {
 struct StreamControl {
     bool binary = false;
     uint32_t period = 0;
+    bool trace = false;
 
     // --- array / optional-string accessors ---
 };

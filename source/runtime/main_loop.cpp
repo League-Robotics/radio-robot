@@ -31,6 +31,17 @@ void MainLoop::commit(Blackboard& bb, uint32_t now, bool otosFusable,
   // shape immediately above. See blackboard.h's own doc comment.
   bb.lastEvent = drivetrain_.lastEvent();
 
+  // motionTrace/hasActivePlan/activePlanRecord/planRingGoals+Count
+  // (100-009, PlanDumpRequest/MotionTrace wire arms) -- published every
+  // pass from the adapter's own getters, mirroring bb.lastEvent's publish
+  // shape immediately above. See blackboard.h's own doc comments on each
+  // cell.
+  bb.motionTrace = drivetrain_.lastRecord();
+  bb.hasActivePlan = drivetrain_.hasActivePlan();
+  bb.activePlanRecord = bb.hasActivePlan ? drivetrain_.activePlanRecord() : msg::PlanRecord{};
+  bb.planRingCount =
+      drivetrain_.ringGoals(bb.planRingGoals.data(), static_cast<uint32_t>(bb.planRingGoals.size()));
+
   // bb.otos/bb.otosValid/bb.otosConnected (099-002/099-007): otosSample and
   // otosFusable are THIS pass's already-read values (tick()'s single
   // fusableThisPass()/pose() call, threaded in as arguments rather than

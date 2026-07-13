@@ -110,6 +110,23 @@ def send_no_tick(sim, envelope: "pb_envelope.CommandEnvelope") -> "pb_envelope.R
     return dearmor(sim.route_no_tick(armor(envelope)))
 
 
+def send_multi(sim, envelope: "pb_envelope.CommandEnvelope",
+                channel: int = CHANNEL_SERIAL) -> list["pb_envelope.ReplyEnvelope"]:
+    """Binary parity for arms that reply MORE than once per incoming
+    CommandEnvelope (100-009: `plan_dump` -- BinaryChannel::handlePlanDump()
+    calls sendReply()/sendPlanRecord() zero or more times, sharing corr_id,
+    into the SAME channel's ReplyStore -- see binary_channel.cpp's own file
+    header). ``sim.command_on()`` already returns every line the store
+    accumulated during this one dt=0 synchronous-command call (ReplyStore::
+    append() joins each call with '\\n', sim_api.cpp) -- send()/dearmor()
+    above only ever split/decode the FIRST line, so this is a separate
+    entry point rather than a send() overload, to keep every existing
+    single-reply caller's return type (one ReplyEnvelope, not a list)
+    unchanged."""
+    raw = sim.command_on(armor(envelope), channel)
+    return [dearmor(line) for line in raw.splitlines() if line.strip()]
+
+
 # ---------------------------------------------------------------------------
 # Verb -> envelope convenience wrappers, one per deleted text verb this
 # sprint gives a binary parity arm. Each is a thin CommandEnvelope wrapper
