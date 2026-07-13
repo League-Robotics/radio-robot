@@ -1,7 +1,7 @@
 ---
 id: '011'
 title: 'Bench: arc_sweep grids, plateau to v_wheel_max, envelope/gain tuning, 098 pivot grid re-run'
-status: open
+status: done
 use-cases: [SUC-013]
 depends-on: ['008', '009', '010']
 github-issue: ''

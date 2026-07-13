@@ -1,7 +1,7 @@
 ---
 id: '012'
 title: 'Field: camera-verified chain + live PoseFix runs'
-status: open
+status: done
 use-cases: [SUC-014]
 depends-on: ['011']
 github-issue: ''
