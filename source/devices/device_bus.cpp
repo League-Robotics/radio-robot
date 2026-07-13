@@ -200,4 +200,166 @@ void DeviceBus::publishSamples(uint64_t nowUs) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Fiber lifecycle (DB-008) -- start()/stop()/running(), the detection
+// preamble, and the neutralize epilogue. See device_bus.h's own declaration
+// comments for start()/stop()/runPreamble()/neutralizeAllMotors() for the
+// full contract; this section is the implementation those comments describe.
+// ---------------------------------------------------------------------------
+
+void DeviceBus::start() {
+  stopRequested_ = false;
+  loopExited_ = false;
+  running_ = true;
+  fiberRunner_->run(*this);  // real: spawns async, returns immediately.
+                              // host: runs the preamble + a bounded number
+                              // of cycles synchronously, in place, THEN
+                              // returns -- see fiber_runner.h.
+}
+
+void DeviceBus::stop() {
+  stopRequested_ = true;  // (1) request exit -- the cycle loop (wherever it
+                           //     is actually running) exits at its next
+                           //     while-condition check.
+
+  while (!loopExited_) {  // (2) join -- cooperative yield-poll. A no-op in
+    sleeper_.yield();     //     host builds: the bounded loop already ran
+  }                        //     to completion inside start(), so
+                           //     loopExited_ is already true by the time
+                           //     stop() is ever called.
+
+  neutralizeAllMotors();  // (3) neutralize -- see this method's own header
+                           //     comment (device_bus.h) for why this call,
+                           //     not the fiber body's own tail, is what
+                           //     guarantees "wheels never left driven."
+
+  running_ = false;
+}
+
+// ---------------------------------------------------------------------------
+// runPreamble() -- the detection preamble (issue "The fiber and its cycle"
+// step 1). See device_bus.h's own declaration comment for the full contract.
+//
+// --- Why nowUs is advanced BY HAND, never re-read from clock_, between
+// color_/line_ retry attempts ---
+// color_.beginStep(nowUs)/line_.beginStep(nowUs) each gate their own next
+// attempt on `nowUs - lastAttemptUs_ >= <their own retry period>` (color_
+// sensor.cpp/line_sensor.cpp) -- a REAL elapsed-time check, not a call
+// counter. On real hardware this "just works": sleeper_.sleepMillis()
+// really blocks/yields for the requested duration, so a fresh
+// clock_.nowMicros() read after it genuinely reflects that much elapsed
+// time. HOST_BUILD's Sleeper is a pure bookkeeping no-op (clock.h/
+// clock_host.cpp: "No wall-clock block") and HOST_BUILD's Clock only moves
+// when a test calls setMicros()/advanceMicros() directly -- it does NOT
+// self-advance the way I2CBus's OWN separate internal fake clock does
+// during a live entry-spin (i2c_bus_host.cpp). So if this method re-read
+// clock_.nowMicros() after each sleeper_.sleepMillis() call instead, nowUs
+// would never actually change in a host test (nothing here calls
+// clock_.advanceMicros()), every attempt after the first would perpetually
+// read as "not due yet," and a scripted multi-attempt retry could never
+// reach detectDone(). Advancing a LOCAL nowUs by the exact requested sleep
+// duration instead needs no HOST_BUILD-specific branch at all: it is
+// correct on real hardware (fiber_sleep() reliably sleeps AT LEAST that
+// long) and it is what makes retry pacing deterministic and CODAL-free in
+// a host test -- the identical "cache now once, advance deliberately"
+// discipline runCycleOnce() itself already uses for its own nowUs.
+// ---------------------------------------------------------------------------
+
+void DeviceBus::runPreamble() {
+  sleeper_.sleepMillis(kPowerSettleMs);  // power-settle wait
+
+  // Motor/OTOS detection: one self-contained, already-bounded begin() call
+  // each (NezhaMotor::begin()'s hardReset() has its own internal median-of-3
+  // retry; Otos::begin() is a single product-ID probe with no retry at all)
+  // -- see device_bus.h's own runPreamble() comment for why this method does
+  // not loop either of them itself.
+  motor1_.begin();
+  motor2_.begin();
+  otos_.begin();
+
+  // Color/line detection: a bounded, LOCAL retry-pacing loop over each
+  // leaf's own non-blocking beginStep(nowUs) state machine -- see this
+  // function's own header comment above for why nowUs is advanced by hand.
+  // Absent devices are marked (present() false) and structurally skipped
+  // from then on (device_bus.h's runPreamble() comment) -- this loop's only
+  // job is to keep calling beginStep() until EVERY leaf's own detectDone()
+  // is true (found, or retries exhausted), never to decide presence itself.
+  uint64_t nowUs = clock_.nowMicros();
+  for (int tick = 0;
+       tick < kMaxPreambleTicks && !(color_.detectDone() && line_.detectDone());
+       ++tick) {
+    if (!color_.detectDone()) color_.beginStep(nowUs);
+    if (!line_.detectDone()) line_.beginStep(nowUs);
+    if (color_.detectDone() && line_.detectDone()) break;
+
+    sleeper_.sleepMillis(kPreambleRetryPacingMs);
+    nowUs += static_cast<uint64_t>(kPreambleRetryPacingMs) * 1000ULL;  // [us]
+  }
+}
+
+// ---------------------------------------------------------------------------
+// neutralizeAllMotors() -- stop()'s own epilogue. See device_bus.h's own
+// declaration comment for the full contract (why this reuses requestEncoders()/
+// collectAndDrive() rather than reaching into NezhaMotor's write path
+// directly, and why the resulting write is unconditionally each motor's LAST
+// bus action from this call).
+// ---------------------------------------------------------------------------
+
+void DeviceBus::neutralizeAllMotors() {
+  motor1_.setNeutral(Neutral::Coast);
+  motor2_.setNeutral(Neutral::Coast);
+
+  requestEncoders();                      // 0x46 write, motor1 then motor2 -- pairs
+  sleeper_.sleepMillis(kEncoderSettleMs); // [ms] the SAME settle window runCycleOnce() uses
+
+  const uint64_t nowUs = clock_.nowMicros();
+  collectAndDrive(nowUs);  // collect (read) THEN each motor's Mode::Neutral
+                            // dispatch -> armoredWrite(0, ...) -- the write
+                            // is always the LAST bus action per motor here.
+}
+
+// ---------------------------------------------------------------------------
+// FiberRunner implementations (fiber_runner.h) -- defined here, not in
+// fiber_runner.h itself, because both need DeviceBus to be a COMPLETE type
+// (to call runPreamble()/runCycleOnce()/stopRequested()/markLoopExited()),
+// which is only true once this file's own #include "devices/device_bus.h"
+// has pulled in the full class definition above.
+// ---------------------------------------------------------------------------
+
+#ifndef HOST_BUILD
+namespace {
+// The trampoline create_fiber() actually invokes (real CODAL builds only).
+// DB-009 verifies this against real hardware -- in particular, that
+// create_fiber()'s signature (a bare `void(*)(void*)` entry point plus a
+// void* context argument, the common CODAL-core convention this project's
+// own clock_real.cpp precedent for fiber_sleep()/schedule() already relies
+// on being available via a plain "MicroBit.h" include) matches what actually
+// ships in this project's vendored CODAL; this is the ONE call site in the
+// whole subsystem that touches create_fiber(), by design (fiber_runner.h's
+// own header comment).
+void codalFiberEntry(void* arg) {
+  DeviceBus* bus = static_cast<DeviceBus*>(arg);
+  bus->runPreamble();
+  while (!bus->stopRequested()) {
+    bus->runCycleOnce();
+  }
+  bus->markLoopExited();
+}
+}  // namespace
+
+void CodalFiberRunner::run(DeviceBus& bus) {
+  create_fiber(&codalFiberEntry, static_cast<void*>(&bus));
+}
+#endif
+
+#ifdef HOST_BUILD
+void HostFiberRunner::run(DeviceBus& bus) {
+  bus.runPreamble();
+  for (int i = 0; i < maxCycles_ && !bus.stopRequested(); ++i) {
+    bus.runCycleOnce();
+  }
+  bus.markLoopExited();
+}
+#endif
+
 }  // namespace Devices
