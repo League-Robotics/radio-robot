@@ -262,18 +262,21 @@ struct Blackboard {
   // Ruckig solve -- source/drive/drivetrain.cpp's own admit()/plan() doc
   // comments).
   WorkQueue<Drive::Goal, 8> segmentIn;
-  // replaceIn (100-007, THE CUTOVER: retyped from Motion::Segment to
-  // Drive::Goal) -- a latest-wins Mailbox ON PURPOSE, the exact dual of
-  // segmentIn's no-dropped-commands WorkQueue. Runs the SAME wire admission
-  // as segmentIn (BinaryChannel::handleReplace()), then REPLACES the ring
-  // (Drivetrain::tick() clears ring_ and queues just this one Goal) rather
-  // than appending -- an interim, ticket-100-007-scoped behavior: full
-  // MOVER deadman-velocity semantics (Drive::Drivetrain::planVelocity(),
-  // the issue's own M8) are ticket 100-008's job, not this one's; this
-  // ticket only needs replaceIn's TYPE to align with segmentIn's so the
-  // `replace` wire arm keeps a well-defined (if not yet feature-complete)
-  // meaning through the cutover instead of going dead.
-  Mailbox<Drive::Goal> replaceIn;
+  // replaceIn (100-008: retyped from Drive::Goal to MoverRequest) -- a
+  // latest-wins Mailbox ON PURPOSE, the exact dual of segmentIn's
+  // no-dropped-commands WorkQueue: MOVER teleop's "each fresh MOVER
+  // replaces the held plan" contract (SUC-010) IS Mailbox semantics, no new
+  // queueing behavior. BinaryChannel::handleReplace() (commands/
+  // binary_channel.cpp) is this queue's ONLY producer -- it decodes the
+  // `replace`-arm MotionSegment's time/v/omega fields (primitive=true
+  // required, ERR_UNIMPLEMENTED otherwise) straight into a MoverRequest, no
+  // admit()/chainTail involvement (a velocity-mode plan has no pose goal to
+  // admit against). Drained by Subsystems::Drivetrain::tick() into
+  // Drive::Drivetrain::planVelocity(request.target, request.deadman,
+  // current) every pass a fresh MOVER is pending -- see drivetrain.cpp's
+  // own replaceIn-drain comment for the full swap-vs-keep-old-plan
+  // contract on a SOLVE_FAILED/CEILING_INFEASIBLE verdict.
+  Mailbox<MoverRequest> replaceIn;
   WorkQueue<ConfigDelta, 16> configIn;        // router -> Configurator
   WorkQueue<PoseResetCommand, 4> poseResetIn;  // router -> PoseEstimator
   // poseFixIn (099-008, architecture-update.md D7): a genuine timestamped

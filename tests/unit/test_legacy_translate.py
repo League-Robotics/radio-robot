@@ -42,6 +42,7 @@ from __future__ import annotations
 import pytest
 
 from robot_radio.robot import legacy_translate
+from robot_radio.robot.pb2 import motion_pb2
 
 
 # ---------------------------------------------------------------------------
@@ -260,10 +261,13 @@ def test_segment_for_move_defaults_match_kvfloat_zero_sentinel():
 
 
 # ---------------------------------------------------------------------------
-# segment_for_mover() -- handleMover() (motion_commands.cpp): MOVER
-# <distance_mm> <direction_cdeg> <finalHeading_cdeg> [t=][v=][w=][a=][j=]
-# [wa=][wj=] -> Motion::Segment, REPLACE semantics: stream ALWAYS True;
-# v/omega SIGNED; speed_max=|v|, yaw_rate_max=|omega| (converted).
+# segment_for_mover() -- 100-008: MOVER's real v2 primitive builder --
+# Drive::Drivetrain::planVelocity()'s own (target, deadman) shape, wire-
+# carried on MotionSegment's time/v/omega arm + primitive=True. v/omega
+# SIGNED; distance/direction/final_heading/accel_max/jerk_max/
+# yaw_accel_max/yaw_jerk_max/speed_max/yaw_rate_max/stream are all either
+# vestigial-but-accepted (kept for signature stability) or simply no longer
+# written -- see segment_for_mover()'s own docstring.
 # ---------------------------------------------------------------------------
 
 
@@ -271,30 +275,53 @@ def test_segment_for_move_defaults_match_kvfloat_zero_sentinel():
     ("v", "omega"),
     [(300.0, 4500.0), (-300.0, -4500.0), (0.0, 0.0), (-150.0, 2000.0)],
 )
-def test_segment_for_mover_speed_max_and_yaw_rate_max_are_absolute_value(v, omega):
+def test_segment_for_mover_is_a_v2_primitive_with_time_v_omega(v, omega):
     seg = legacy_translate.segment_for_mover(0, 0, 0, time=400, v=v, omega=omega)
+    assert seg.primitive is True
+    assert seg.time == pytest.approx(400.0)
     assert seg.v == pytest.approx(v)
     assert seg.omega == pytest.approx(omega * _CDEG_TO_RAD)
-    # handleMover(): seg.speedMax = fabsf(v); seg.yawRateMax = fabsf(w) * kCdegToRad;
-    assert seg.speed_max == pytest.approx(abs(v))
-    assert seg.yaw_rate_max == pytest.approx(abs(omega) * _CDEG_TO_RAD)
-    assert seg.time == pytest.approx(400.0)
 
 
-def test_segment_for_mover_stream_is_always_true():
-    """handleMover()'s own unconditional ``seg.stream = true;`` -- unlike
-    MOVE's caller-controlled s=1 kv, MOVER is always a streaming segment
-    (the deadman-velocity teleop shape), even with every kwarg left at its
-    default."""
-    seg = legacy_translate.segment_for_mover(0, 0, 0)
-    assert seg.stream is True
+def test_segment_for_mover_retired_fields_are_never_written():
+    """The retired per-segment shape's own fields (distance/direction/
+    final_heading/speed_max/accel_max/jerk_max/yaw_rate_max/yaw_accel_max/
+    yaw_jerk_max/stream) all stay at their proto3 zero/false default --
+    segment_for_mover()'s signature still ACCEPTS distance/direction/
+    final_heading/accel_max/jerk_max/yaw_accel_max/yaw_jerk_max (so real
+    callers like envelope_for_mover()'s `MOVER <distance> <direction>
+    <finalHeading> [a=][j=][wa=][wj=]` need no change) but none of them
+    reach the wire message any more -- the v2 primitive shape has no
+    per-call override/goal fields at all (the same posture
+    segment_for_seg()'s own callers already have)."""
+    seg = legacy_translate.segment_for_mover(
+        500, 9000, -4500, time=400, v=250.0, accel_max=800.0, jerk_max=5000.0,
+        omega=4500.0, yaw_accel_max=100000.0, yaw_jerk_max=200000.0)
+    assert seg.distance == pytest.approx(0.0)
+    assert seg.direction == pytest.approx(0.0)
+    assert seg.final_heading == pytest.approx(0.0)
+    assert seg.speed_max == pytest.approx(0.0)
+    assert seg.accel_max == pytest.approx(0.0)
+    assert seg.jerk_max == pytest.approx(0.0)
+    assert seg.yaw_rate_max == pytest.approx(0.0)
+    assert seg.yaw_accel_max == pytest.approx(0.0)
+    assert seg.yaw_jerk_max == pytest.approx(0.0)
+    assert seg.arc_length == pytest.approx(0.0)
+    assert seg.delta_heading == pytest.approx(0.0)
+    assert seg.exit_speed == pytest.approx(0.0)
+    assert seg.stream is False
 
 
-def test_segment_for_mover_distance_direction_final_heading_pass_through():
-    seg = legacy_translate.segment_for_mover(500, 9000, -4500, v=0.0, omega=0.0)
-    assert seg.distance == pytest.approx(500.0)
-    assert seg.direction == pytest.approx(9000 * _CDEG_TO_RAD)
-    assert seg.final_heading == pytest.approx(-4500 * _CDEG_TO_RAD)
+def test_segment_for_mover_wire_shape_is_exactly_time_v_omega_primitive():
+    """AC (100-008): the MOVER wire shape is exactly time/v/omega +
+    primitive=true -- no new/different field carries the request. Verified
+    by byte-for-byte comparison against a hand-built MotionSegment setting
+    ONLY those four fields, proving segment_for_mover() introduces no wire
+    schema change of its own (grep-verifiable: this ticket adds no new
+    protos/motion.proto field)."""
+    seg = legacy_translate.segment_for_mover(0, 0, 0, time=800.0, v=250.0, omega=0.0)
+    hand_built = motion_pb2.MotionSegment(time=800.0, v=250.0, omega=0.0, primitive=True)
+    assert seg.SerializeToString() == hand_built.SerializeToString()
 
 
 # ---------------------------------------------------------------------------

@@ -236,7 +236,7 @@ void Drivetrain::governRatio(float* targetLeft, float* targetRight,
 
 void Drivetrain::tick(uint32_t now,
                        Rt::WorkQueue<Drive::Goal, 8>& segmentIn,
-                       Rt::Mailbox<Drive::Goal>& replaceIn,
+                       Rt::Mailbox<Rt::MoverRequest>& replaceIn,
                        Rt::WorkQueue<msg::DrivetrainCommand, 8>& driveIn,
                        const msg::PoseEstimate& bodyState,
                        const msg::PoseStep& poseStepped,
@@ -247,15 +247,36 @@ void Drivetrain::tick(uint32_t now,
         preempted = dispatchEscapeHatch(driveIn.take());
     }
 
-    // 1b. replaceIn -- interim ticket-100-007 REPLACE semantics: clears the
-    // ring, queues just this one already-admitted Goal (see blackboard.h's
-    // own doc comment on replaceIn; full MOVER/planVelocity() semantics are
-    // ticket 100-008's job).
+    // 1b. replaceIn -- MOVER (100-008): a fresh Rt::MoverRequest replaces
+    // the held plan (latest-wins, Mailbox semantics -- no new queueing).
+    // clearRing() unconditionally: a fresh MOVER always retires any queued
+    // arc/pivot Goal, regardless of whether THIS planVelocity() call itself
+    // succeeds (matches the dispatchEscapeHatch() preemption above, and
+    // AC2's own "no new queueing behavior introduced"). planVelocity() has
+    // no pose goal, so -- unlike startNextPlan()'s Goal-based plan() call --
+    // this never reads/writes chainTail/haveAnchor_ as a chaining anchor.
     if (!preempted && !replaceIn.empty()) {
-        const Drive::Goal goal = replaceIn.take();
+        const Rt::MoverRequest request = replaceIn.take();
         clearRing();
-        ring_.post(goal);
-        segmentMode_ = true;
+        const Drive::PlanResult result = driveDrivetrain_.planVelocity(
+            request.target, request.deadman, driveBodyState(bodyState));
+        if (result.verdict == Drive::Verdict::OK) {
+            replacePlan(result.plan);
+            planStart_ = now;
+            state_ = Drive::StepState{};
+            planActive_ = true;
+            haveAnchor_ = false;  // velocity-mode plan has no chainable anchor pose
+            nextEntrySpeed_ = 0.0f;
+            ++segSeq_;
+            segmentMode_ = true;
+        }
+        // else SOLVE_FAILED/CEILING_INFEASIBLE (e.g. a misconfigured
+        // trimVMax >= v_body_max leaving no linear-channel headroom): the
+        // ring is already cleared above, but plan_/planActive_/segmentMode_
+        // are left untouched -- mirrors replan()'s own "the caller keeps
+        // the old plan" contract (this same tick()'s REPLAN_DUE handling
+        // below), rather than an unconditional stop for a single rejected
+        // refresh.
     }
 
     // 2. Otherwise, drain segmentIn IN FULL into ring_ this tick.

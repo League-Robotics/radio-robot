@@ -536,10 +536,9 @@ int sim_route_no_tick(void* h, const char* line, int channel, char* reply, int s
 }
 
 // ---------------------------------------------------------------------------
-// sim_peek_segment_in / sim_peek_replace_in (100-007, THE CUTOVER: retyped
-// from Motion::Segment to Drive::Goal) -- non-destructive reads of a
-// just-ADMITTED Drive::Goal (bb.segmentIn's WorkQueue::peek(idx) /
-// bb.replaceIn's Mailbox::peek(), both already non-destructive by design --
+// sim_peek_segment_in (100-007, THE CUTOVER: retyped from Motion::Segment to
+// Drive::Goal) -- non-destructive read of a just-ADMITTED Drive::Goal
+// (bb.segmentIn's WorkQueue::peek(idx), already non-destructive by design --
 // queue.h). Writes the 3 float fields into out3[] in Drive::Goal's own
 // declared order (source/drive/drivetrain.h): arcLength, deltaHeading,
 // exitSpeed. *presentOut is set to 1 if a Goal was found at that position,
@@ -563,14 +562,27 @@ void sim_peek_segment_in(void* h, int idx, float* out3, int* presentOut) {
     *presentOut = 1;
 }
 
+// ---------------------------------------------------------------------------
+// sim_peek_replace_in (100-008: retyped from Drive::Goal to
+// Rt::MoverRequest, mirroring bb.replaceIn's own retype -- see blackboard.h/
+// commands.h's doc comments) -- non-destructive read of a just-posted
+// Rt::MoverRequest (bb.replaceIn's Mailbox::peek(), already non-destructive
+// by design -- queue.h). Writes the 3 float fields into out3[] in
+// MoverRequest's own declared order (source/runtime/commands.h): v (target's
+// v_x), omega (target's omega), deadman. *presentOut is set to 1 if a
+// MoverRequest was found, 0 otherwise (out3 left untouched when absent --
+// caller must check presentOut first).
+// ---------------------------------------------------------------------------
 void sim_peek_replace_in(void* h, float* out3, int* presentOut) {
     SimHandle* s = static_cast<SimHandle*>(h);
-    const Drive::Goal* goal = s->bb.replaceIn.peek();
-    if (!goal) {
+    const Rt::MoverRequest* request = s->bb.replaceIn.peek();
+    if (!request) {
         *presentOut = 0;
         return;
     }
-    writeGoalOut(*goal, out3);
+    out3[0] = request->target.v_x;
+    out3[1] = request->target.omega;
+    out3[2] = request->deadman;
     *presentOut = 1;
 }
 

@@ -205,13 +205,24 @@ void handleSegment(const msg::MotionSegment& src, Rt::Blackboard& b, uint32_t co
   sendAck(b, corrId, replyFn, replyCtx);
 }
 
-// handleReplace -- (100-007, THE CUTOVER) wire admission for the `replace`
-// arm -- the SAME primitive-flag gate and admitSegment() call as
-// handleSegment() above (no `stream` check here: architecture-update.md M8
-// frames BLEND specifically as MOVE's `s=1`, a `segment`-arm concern, not
-// `replace`'s). Mailbox<Drive::Goal>::post() always succeeds (latest-wins),
-// mirroring the pre-cutover handleReplace()'s own unchecked post -- there
-// is no ERR_FULL case for a Mailbox.
+// handleReplace -- (100-008) wire admission for the `replace` arm -- MOVER
+// (deadman-velocity teleop)'s EXCLUSIVE wire home: no other verb in this
+// codebase ever builds a `replace`-arm envelope (grep every
+// legacy_verbs.py BINARY_DISPATCH entry -- only envelope_for_mover() does),
+// so unlike handleSegment() above, this arm no longer runs admit()/touches
+// bb.chainTail at all -- a velocity-mode plan (Drive::Drivetrain::
+// planVelocity()) has no pose goal to admit against (drivetrain.h's own
+// planVelocity() doc comment: "no pose goal"). `primitive=false` is
+// REJECTED the SAME way handleSegment() rejects it (the retired,
+// pre-cutover MotionSegment shape); `stream` is NOT checked here (MOVER's
+// own wire shape never needed it -- 100-007's BLEND deferral is a
+// `segment`-arm-only concern, architecture-update.md M8). A `primitive=true`
+// MotionSegment decodes straight into an Rt::MoverRequest
+// (Subsystems::driveMoverRequest(), drive_bridge.h -- the time/v/omega arm,
+// fields 10-12) and posts UNCONDITIONALLY to bb.replaceIn.
+// Mailbox<Rt::MoverRequest>::post() always succeeds (latest-wins), mirroring
+// the pre-cutover handleReplace()'s own unchecked post -- there is no
+// ERR_FULL case for a Mailbox.
 void handleReplace(const msg::MotionSegment& src, Rt::Blackboard& b, uint32_t corrId,
                    ReplyFn replyFn, void* replyCtx) {
   if (!src.primitive) {
@@ -219,14 +230,7 @@ void handleReplace(const msg::MotionSegment& src, Rt::Blackboard& b, uint32_t co
     return;
   }
 
-  Drive::Goal goal;
-  const Drive::Verdict verdict = admitSegment(src, b, &goal);
-  if (verdict != Drive::Verdict::OK) {
-    sendError(Subsystems::errCodeForVerdict(verdict), static_cast<uint16_t>(verdict), corrId,
-              replyFn, replyCtx);
-    return;
-  }
-  b.replaceIn.post(goal);
+  b.replaceIn.post(Subsystems::driveMoverRequest(src));
   sendAck(b, corrId, replyFn, replyCtx);
 }
 

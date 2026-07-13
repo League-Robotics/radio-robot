@@ -1,7 +1,7 @@
 ---
 id: '008'
 title: 'MOVER velocity mode: planVelocity + adapter replaceIn path'
-status: open
+status: done
 use-cases: [SUC-010]
 depends-on: ['007']
 github-issue: ''
@@ -29,33 +29,36 @@ mailbox. MOVER's wire shape is UNCHANGED (`time`/`v`/`omega` +
 
 ## Acceptance Criteria
 
-- [ ] `Subsystems::Drivetrain`'s `replaceIn` drain path calls
+- [x] `Subsystems::Drivetrain`'s `replaceIn` drain path calls
       `planVelocity(target, deadman, current)` instead of the old
       segment-replace path, for a `MotionSegment` carrying MOVER's
       `time`/`v`/`omega` + `primitive=true` shape. Verify by diffing the
       wire bytes of a MOVER command before/after this ticket that the
       WIRE shape is byte-identical — only the firmware-side handling
       changes.
-- [ ] Each fresh MOVER replaces the held plan (latest-wins, matching
+- [x] Each fresh MOVER replaces the held plan (latest-wins, matching
       `replaceIn`'s existing `Mailbox` semantics — no new queueing
       behavior introduced).
-- [ ] Deadman expiry (no fresh MOVER within the window) results in the
+- [x] Deadman expiry (no fresh MOVER within the window) results in the
       terminal machine (ticket 005) decelerating to a literal `0.0f` —
       no separate watchdog logic duplicated in the adapter (grep-
       verifiable: no new timer/deadline field added to `Subsystems::
       Drivetrain` for this purpose).
-- [ ] BLEND (`stream=true` on the `segment`/`replace` arm outside the
+- [x] BLEND (`stream=true` on the `segment`/`replace` arm outside the
       MOVER shape) continues to reply `ERR` — explicitly verified NOT
       accidentally enabled by this ticket's changes.
 - [ ] HITL: a streamed MOVER sequence (via `tests/bench`'s existing
       teleop tooling, e.g. `gamepad_teleop.py`) drives the robot smoothly
       on the stand at commanded `(v, omega)`; releasing the deadman
       brings the robot to a literal-zero setpoint within the terminal
-      machine's dwell.
-- [ ] Tier-1 sim test: a MOVER sequence with a deliberately-expired
+      machine's dwell. **UNCHECKED — team-lead to validate on the robot**
+      (firmware builds clean over DeviceBusHardware, `MICROBIT.hex`
+      regenerated this ticket; not yet flashed/driven on the stand by
+      this session).
+- [x] Tier-1 sim test: a MOVER sequence with a deliberately-expired
       deadman decelerates and stops; a fresh MOVER before expiry
       replaces the plan without a velocity discontinuity.
-- [ ] `uv run python -m pytest` passes.
+- [x] `uv run python -m pytest` passes.
 
 ## Testing
 

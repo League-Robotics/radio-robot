@@ -26,6 +26,7 @@
 #include "messages/motion.h"
 #include "messages/motor.h"
 #include "messages/planner.h"
+#include "runtime/commands.h"
 
 namespace Subsystems {
 
@@ -91,6 +92,30 @@ inline Drive::Goal driveGoal(const msg::MotionSegment& seg) {
   goal.deltaHeading = seg.delta_heading;
   goal.exitSpeed = seg.exit_speed;
   return goal;
+}
+
+// driveMoverRequest -- msg::MotionSegment's time/v/omega arm (MOVER's own
+// wire shape, fields 10-12 -- protos/motion.proto's "time/velocity arm
+// (MOVER teleop primitive)" section) -> Rt::MoverRequest, THE single
+// conversion point for MOVER (100-008) -- the `replace`-arm dual of
+// driveGoal() above. `v`/`omega` are SIGNED body-frame targets (v_y is
+// always 0.0f -- no holonomic drivetrain yet, matching Drive::Twist's own
+// doc comment); `time` [ms] passes straight through as
+// MoverRequest::deadman, Drive::Drivetrain::planVelocity()'s own second
+// argument (source/drive/drivetrain.h) -- both are already [ms], no unit
+// conversion needed. Every OTHER MotionSegment field (distance/direction/
+// final_heading/speed_max/accel_max/jerk_max/yaw_rate_max/yaw_accel_max/
+// yaw_jerk_max/stream/arc_length/delta_heading/exit_speed) is deliberately
+// NOT read here -- those belong to either the RETIRED legacy per-segment
+// shape or the Goal-shaped arc/pivot primitive `segment` already owns;
+// MOVER's own real primitive shape carries no override/goal fields at all,
+// the same "v2 primitive has no per-segment override" posture driveGoal()'s
+// own doc comment states for its shape.
+inline Rt::MoverRequest driveMoverRequest(const msg::MotionSegment& seg) {
+  Rt::MoverRequest request;
+  request.target = Drive::Twist{seg.v, 0.0f, seg.omega};
+  request.deadman = seg.time;
+  return request;
 }
 
 // driveWheelState -- msg::MotorState (Hardware's per-wheel observation) ->

@@ -199,16 +199,14 @@ def envelope_for_move(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.C
 
 def envelope_for_mover(pos: list[str], kv: dict[str, str]) -> list[envelope_pb2.CommandEnvelope]:
     """``MOVER <distance> <direction> <finalHeading> [t=][v=][w=][a=][j=]
-    [wa=][wj=]`` -> ``{replace: MotionSegment}`` (``handleMover()``, via
+    [wa=][wj=]`` -> ``{replace: MotionSegment}`` (100-008, via
     ``legacy_translate.segment_for_mover()``) -- REPLACE semantics, not
-    ``segment``.
-
-    KNOWN BROKEN post-100-007 (THE CUTOVER): ``segment_for_mover()`` still
-    builds the retired ``primitive=false`` shape, which the firmware now
-    rejects outright (typed ``ERR_UNIMPLEMENTED``) -- see that function's
-    own docstring. MOVER's real v2 wiring is ticket 100-008's job
-    (``Drive::Drivetrain::planVelocity()``). Left unchanged/undisguised
-    rather than silently patched around."""
+    ``segment``: the real v2 wiring, ``Drive::Drivetrain::planVelocity()``
+    through the adapter's ``replaceIn`` path. ``<distance> <direction>
+    <finalHeading>`` and ``a=``/``j=``/``wa=``/``wj=`` are the retired
+    per-segment shape's own vestigial fields -- see
+    ``segment_for_mover()``'s own docstring for why they are still accepted
+    (signature stability) but silently unused on the wire."""
     if len(pos) < 3:
         raise ValueError("MOVER requires <distance> <direction> <finalHeading>")
     seg = legacy_translate.segment_for_mover(
