@@ -115,6 +115,7 @@ from __future__ import annotations
 import logging
 import math
 import sys
+import time
 
 _log = logging.getLogger(__name__)
 
@@ -322,6 +323,8 @@ def _build_main_window():  # type: ignore[return]
     from robot_radio.testgui import traces as traces_mod
     from robot_radio.testgui.traces import TraceModel
     from robot_radio.testgui.canvas import build_canvas
+    from robot_radio.testgui.turn_graphs import TurnGraphPanel
+    from robot_radio.testgui.turn_control import TurnControlServer
     from robot_radio.testgui.telemetry_panel import (
         build_telemetry_panel,
         is_telemetry_log_line,
@@ -667,6 +670,43 @@ def _build_main_window():  # type: ignore[return]
         _row_send_getters.append((btn, cmd_spec, getters))
 
     left_layout.addWidget(cmd_rows_widget)
+
+    # Turn buttons — one-click in-place pivots through the motion-v2 stack.
+    # Each sends the binary SEG primitive (arc_length=0 => pure pivot), CCW+,
+    # delta_heading in centidegrees: "SEG 0 <cdeg>" (binary_bridge translates
+    # to CommandEnvelope{segment}). Enabled on connect via _send_buttons.
+    # Shared by the buttons AND the turn-control socket (turn_control.py).
+    def _send_seg_turn(deg_value: float) -> None:
+        transport = _state.get("transport")
+        if transport is None:
+            _append_log("[WARN] Not connected")
+            return
+        cdeg = int(round(deg_value * 100))
+        _append_log(f"[TURN] {deg_value:+g} deg  ->  SEG 0 {cdeg}")
+        try:
+            transport.command(f"SEG 0 {cdeg}", read_timeout=500)
+        except Exception as exc:  # noqa: BLE001
+            _append_log(f"[ERROR] {exc}")
+
+    def _make_turn_handler(deg_value: int):
+        return lambda: _send_seg_turn(deg_value)
+
+    turn_row = QWidget()
+    turn_layout = QHBoxLayout(turn_row)
+    turn_layout.setContentsMargins(0, 0, 0, 0)
+    turn_layout.setSpacing(4)
+    turn_layout.addWidget(QLabel("Turn:"))
+    for _deg in (90, -90, 180, -180, 270, -270, 360, -360):
+        _tbtn = QPushButton(f"{_deg:+d}")
+        _tbtn.setObjectName(f"turn_btn_{_deg}")
+        _tbtn.setEnabled(False)
+        _tbtn.setFixedWidth(46)
+        _tbtn.setToolTip(f"Pivot in place {_deg:+d}° (SEG 0 {_deg * 100})")
+        _tbtn.clicked.connect(_make_turn_handler(_deg))
+        turn_layout.addWidget(_tbtn)
+        _send_buttons.append(_tbtn)
+    turn_layout.addStretch()
+    left_layout.addWidget(turn_row)
 
     # Tour buttons — run a pre-programmed motion sequence (one per named tour).
     # Each button resets the robot to the origin, then sends the tour's moves
@@ -1108,7 +1148,36 @@ def _build_main_window():  # type: ignore[return]
         _canvas_view.setAlignment(
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
         )
-    right_splitter.addWidget(canvas_widget)
+    # Wrap the playfield canvas in a tabbed panel: "Playfield" tab + live
+    # turn/drive graph tabs (Wheel speed / Wheel position / Heading /
+    # Distance), plus a Clear button. Fed by the telemetry + camera hooks
+    # below (graph_panel.add_tlm / add_camera). Inserted at splitter index 0
+    # so the stretch factors / setSizes below still apply.
+    graph_panel = TurnGraphPanel(playfield_widget=canvas_widget)
+    right_splitter.addWidget(graph_panel)
+
+    # Turn-control socket (turn_control.py) — lets an external process drive
+    # turns / send config / pull the recorded traces THROUGH the running GUI
+    # (single relay owner). send_line/clear/get are marshalled onto this Qt
+    # main thread by the server's QObject bridge.
+    def _control_send(wire_line: str) -> str:
+        transport = _state.get("transport")
+        if transport is None:
+            return "not connected"
+        try:
+            return transport.command(wire_line, read_timeout=800) or "OK"
+        except Exception as exc:  # noqa: BLE001
+            return f"error: {exc}"
+
+    _turn_control = TurnControlServer(
+        send_line=_control_send,
+        clear_fn=graph_panel.clear,
+        get_series=lambda: graph_panel.recorder.series,
+    )
+    _control_port = _turn_control.start()
+    _state["turn_control"] = _turn_control  # keep a reference alive
+    if _control_port:
+        _log.info("turn-control socket listening on 127.0.0.1:%d", _control_port)
 
     # Parsed-telemetry breakout panel — sits between the canvas and the
     # console.  Fed structured TLMFrames by on_frame_ready(); the raw TLM
@@ -1312,6 +1381,7 @@ def _build_main_window():  # type: ignore[return]
                     break
                 last_frame = frame
                 trace_model.feed(frame)
+                graph_panel.add_tlm(time.monotonic(), frame)
                 avatar_yaw_rad = trace_model.encoder_yaw
                 if avatar_yaw_rad is None and frame.pose is not None:
                     avatar_yaw_rad = math.radians(frame.pose[2] / 100.0)
@@ -1344,6 +1414,7 @@ def _build_main_window():  # type: ignore[return]
             ``set_avatar_pose`` call.
             """
             trace_model.feed_truth(x_cm, y_cm, yaw_rad)
+            graph_panel.add_camera(time.monotonic(), x_cm, y_cm, math.degrees(yaw_rad))
             if not _state.get("live_view_active"):
                 canvas_ctrl.refresh()
 
