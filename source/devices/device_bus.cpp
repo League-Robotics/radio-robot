@@ -67,12 +67,11 @@ NezhaMotor& DeviceBus::motorLeaf(uint8_t port) {
 void DeviceBus::runCycleOnce() {
   drainStagedInputs();  // targets, watchdog gate -- no bus
 
-  requestEncoders();                      // 0x46 write, motor1 then motor2
-  sleeper_.sleepMillis(kEncoderSettleMs);  // [ms] vendor settle -- YIELDS, never spins
+  serviceMotor(motor1_);  // alternating ports: one request->settle->collect pair
+  serviceMotor(motor2_);  // EACH -- the brick holds only ONE pending 0x46 request
+                          // (DB-009 HITL); pipelining both starved motor 2.
 
-  const uint64_t nowUs = clock_.nowMicros();  // [us] one "now" for this whole cycle's collect/perceive/publish
-  collectAndDrive(nowUs);                     // collect+PID+armored write, motor1 then motor2
-
+  const uint64_t nowUs = clock_.nowMicros();  // [us] one "now" for this cycle's perceive/publish
   perceptionSlotStep(nowUs);  // round-robin ONE of: line | color | OTOS
   publishSamples(nowUs);      // ring publishes -- plain stores, no yield
 
@@ -115,19 +114,28 @@ void DeviceBus::applyStaleGate(Motor& handle, NezhaMotor& leaf, uint64_t nowUs) 
 }
 
 // ---------------------------------------------------------------------------
-// requestEncoders() / collectAndDrive() -- split across the settle sleep;
-// see device_bus.h's header comment for why NO duty write can ever land
-// between one motor's own request and its own collect.
+// serviceMotor() -- one motor's uncontested request -> settle -> collect+drive
+// pair. The Nezha brick holds only ONE pending 0x46 encoder request at a time:
+// DB-009's HITL bench proved the pipelined "request BOTH motors, then collect
+// both" form (device_bus.h's original schedule) permanently starved motor 2 --
+// its 0x46 request was dropped every cycle while motor 1's stayed pending, so
+// motor 2's encoder never refreshed (frozen position, vel=0, false wedge
+// latch) even though its wheel spun. So each motor gets its OWN settle window,
+// serviced in alternation -- exactly the fallback device_bus.h's
+// "pipelined-vs-alternating" note pre-specified.
+//
+// This also keeps the 093 REQUEST->COLLECT hazard structurally absent, and
+// more tightly than the pipelined form did: NOTHING now touches the bus
+// between a motor's own 0x46 request and its own collect (previously the other
+// motor's request sat in that window). Each motor's tick() does the collect
+// (read) then, if a target is staged, its own armored 0x60 duty write -- still
+// that motor's LAST bus action before the next motor is serviced.
 // ---------------------------------------------------------------------------
 
-void DeviceBus::requestEncoders() {
-  motor1_.requestSample();
-  motor2_.requestSample();
-}
-
-void DeviceBus::collectAndDrive(uint64_t nowUs) {
-  motor1_.tick(nowUs);
-  motor2_.tick(nowUs);
+void DeviceBus::serviceMotor(NezhaMotor& motor) {
+  motor.requestSample();                   // 0x46 encoder-select write
+  sleeper_.sleepMillis(kEncoderSettleMs);  // [ms] vendor settle -- YIELDS, never spins
+  motor.tick(clock_.nowMicros());          // [us] collect (read) + PID + armored duty write
 }
 
 // ---------------------------------------------------------------------------
@@ -309,13 +317,13 @@ void DeviceBus::neutralizeAllMotors() {
   motor1_.setNeutral(Neutral::Coast);
   motor2_.setNeutral(Neutral::Coast);
 
-  requestEncoders();                      // 0x46 write, motor1 then motor2 -- pairs
-  sleeper_.sleepMillis(kEncoderSettleMs); // [ms] the SAME settle window runCycleOnce() uses
-
-  const uint64_t nowUs = clock_.nowMicros();
-  collectAndDrive(nowUs);  // collect (read) THEN each motor's Mode::Neutral
-                            // dispatch -> armoredWrite(0, ...) -- the write
-                            // is always the LAST bus action per motor here.
+  // Alternating request->settle->collect+neutral-write per motor -- the SAME
+  // serviceMotor() step runCycleOnce() uses (the brick holds only one pending
+  // 0x46 request). Each motor's tick() collects (read) THEN dispatches its
+  // staged Neutral::Coast -> armoredWrite(0, ...); that neutral write is
+  // always the LAST bus action per motor here.
+  serviceMotor(motor1_);
+  serviceMotor(motor2_);
 }
 
 // ---------------------------------------------------------------------------

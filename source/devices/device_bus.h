@@ -26,45 +26,38 @@
 // — that ad hoc path and the real preamble both remain valid, independent
 // ways to get a leaf detected in a host test.
 //
-// --- The exact runCycleOnce() schedule (device-bus-tickets.md's DB-007
-// section, itself a firmer commitment than the issue's own illustrative,
-// bench-gated-pending sketch — see the "pipelined vs alternating ports"
-// note below) ---
+// --- The exact runCycleOnce() schedule ---
 //   drainStagedInputs()          -- targets, watchdog gate; no bus
-//   requestEncoders()            -- 0x46 write, motor1 THEN motor2
-//   sleeper_.sleepMillis(4)      -- [ms] vendor settle -- YIELDS, never spins
-//   collectAndDrive(now)         -- collect+PID+armored write, motor1 THEN motor2
+//   serviceMotor(motor1)         -- 0x46 request -> settle-sleep -> collect+PID+armored write
+//   serviceMotor(motor2)         -- same, SEPARATELY (see the alternating note below)
 //   perceptionSlotStep(now)      -- round-robin ONE of: line | color | OTOS
 //   publishSamples(now)          -- ring publishes -- plain stores, no yield
 //   sleeper_.sleepMillis(pace)   -- [ms] pace the cycle
 //
-// --- Why the 093 REQUEST->COLLECT hazard is STRUCTURALLY absent ---
-// Every motor's requestSample() (encoder-select 0x46 write) happens in
-// requestEncoders(), and every motor's collect+possible duty write (0x60)
-// happens in collectAndDrive() — and requestEncoders() always runs to
-// completion, for BOTH motors, strictly before collectAndDrive() begins.
-// There is therefore no code path by which ANY duty write (which only ever
-// originates inside NezhaMotor::tick(), itself only ever called from
-// collectAndDrive()) can land between motor N's own request and motor N's
-// own collect: the only bus traffic between them is motor (3-N)'s OWN
-// encoder request (also a 0x46 select write, not a 0x60 duty write) — never
-// a duty write. This is a structural property of runCycleOnce()'s fixed
-// call order, not a runtime check — matching the issue's own claim ("there
-// is no longer any way for another actor to inject a 0x60 write between a
-// pending request and its collect").
+// --- Alternating dual-request: resolved by DB-009 HITL ---
+// The issue's cycle sketch and device-bus-tickets.md's DB-007 section
+// originally committed to a PIPELINED form -- requestEncoder(BOTH motors) ->
+// ONE settle-sleep -> collect(BOTH) -- and hedged it pending DB-009's bench
+// gate #1 ("Does the Nezha brick hold two per-motorId encoder requests
+// pending simultaneously?"). DB-009's HITL bench answered it: NO. The brick
+// holds only ONE pending 0x46 request, so the pipelined form dropped motor
+// 2's request every cycle (motor 1's request, issued first, stayed pending)
+// and motor 2's encoder never refreshed -- frozen position, vel=0, false
+// wedge latch -- even as its wheel physically spun. The pre-specified
+// fallback is now wired in: serviceMotor() gives EACH motor its own
+// request -> settle -> collect pair, serviced in alternation. It is local to
+// the motor phase, not a redesign of this file's public surface, exactly as
+// the hedge anticipated.
 //
-// --- Pipelined-vs-alternating dual-request note ---
-// The issue's own cycle sketch ("The fiber and its cycle") hedges this exact
-// point pending DB-009's bench gate #1 ("Does the Nezha brick hold two
-// per-motorId encoder requests pending simultaneously?"). device-bus-
-// tickets.md's DB-007 section resolves the hedge for THIS ticket by
-// specifying "requestEncoder (all motors) -> settle-sleep -> collect... (all
-// motors)" explicitly — i.e. commits to the pipelined dual-request form.
-// DB-009 (HITL, later) re-verifies this against real hardware; if the brick
-// cannot hold two pending requests, that ticket's own bench gate is where
-// the fallback (alternating ports, one request+collect pair per cycle) gets
-// wired in — a schedule change local to requestEncoders()/collectAndDrive(),
-// not a redesign of this file's public surface.
+// --- Why the 093 REQUEST->COLLECT hazard is STRUCTURALLY absent ---
+// A duty write (0x60) only ever originates inside NezhaMotor::tick(), itself
+// called only from serviceMotor(), AFTER that same motor's own collect.
+// Nothing at all touches the bus between a motor's own 0x46 request and its
+// own collect -- the alternating form makes this even tighter than the
+// pipelined one did (which had the OTHER motor's request sitting in that
+// window). So there is no code path by which any actor can inject a 0x60
+// write between a pending request and its collect -- a structural property
+// of runCycleOnce()'s fixed call order, not a runtime check.
 //
 // --- Stale-target / RX-watchdog neutralize gate ---
 // drainStagedInputs() (device_bus.cpp) re-asserts Neutral::Coast on any
@@ -248,9 +241,9 @@ class DeviceBus {
 
   // stop()'s own epilogue (see stop()'s own comment above for why this is
   // NOT called from inside the fiber body/FiberRunner): stages Neutral on
-  // both motors then runs exactly one more request->settle->collect pass
-  // (reusing requestEncoders()/collectAndDrive(), the SAME two private
-  // steps runCycleOnce() itself calls) so each motor's neutral duty write
+  // both motors then serviceMotor()s each once more (the SAME per-motor
+  // request->settle->collect step runCycleOnce() itself calls, in the SAME
+  // alternating order) so each motor's neutral duty write
   // lands through a properly-paired encoder request/collect, never a bare
   // unpaired bus read -- and, because NezhaMotor::tick()'s own 5-step order
   // always collects (reads) BEFORE it dispatches this tick's mode (writes),
@@ -278,7 +271,8 @@ class DeviceBus {
   // hardReset()'s own kMaxRetries).
   static constexpr int kMaxPreambleTicks = 64;
 
-  // [ms] vendor settle window between requestEncoders() and collectAndDrive()
+  // [ms] vendor settle window between each motor's own request and collect
+  // inside serviceMotor()
   // -- matches nezha_motor.cpp's own requestEncoder()/writeMotorRun()
   // clearance windows and the issue's own cycle sketch's `fiber_sleep(4)`.
   static constexpr uint32_t kEncoderSettleMs = 4;
@@ -304,8 +298,7 @@ class DeviceBus {
 
   void drainStagedInputs();
   void applyStaleGate(Motor& handle, NezhaMotor& leaf, uint64_t nowUs);  // [us]
-  void requestEncoders();
-  void collectAndDrive(uint64_t nowUs);    // [us]
+  void serviceMotor(NezhaMotor& motor);     // one request->settle->collect pair
   void perceptionSlotStep(uint64_t nowUs);  // [us]
   void publishSamples(uint64_t nowUs);      // [us]
 

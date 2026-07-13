@@ -122,10 +122,13 @@ void pushEncoderRead(Devices::I2CBus& bus, float positionMm) {
   bus.scriptRead(kNezhaWireAddr, data, 4, /*status=*/0);
 }
 
-// Scripts ONE runCycleOnce()'s worth of MOTOR-ONLY bus traffic: motor1's
-// requestSample() write, motor2's requestSample() write, up to
-// `extraDutySlack` possible same-cycle duty writes, then motor1's and
-// motor2's collectEncoder() reads carrying the given positions. Does NOT
+// Scripts ONE runCycleOnce()'s worth of MOTOR-ONLY bus traffic. The cycle
+// now services each motor in alternation (request1, collect1, request2,
+// collect2 -- device_bus.h), but the fake bus is count-only (separate
+// write/read FIFOs, content/interleaving unchecked), so this pushes the
+// per-kind counts: two requestSample() writes, up to `extraDutySlack`
+// possible same-cycle duty writes, then motor1's and motor2's
+// collectEncoder() reads carrying the given positions. Does NOT
 // account for whatever perceptionSlotStep() does this same cycle (line/
 // color/OTOS) -- each scenario below scripts that separately, in call
 // order, when its round-robin turn is expected to land on a present leaf.
