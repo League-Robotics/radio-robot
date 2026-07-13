@@ -46,6 +46,7 @@ factory function returning the same msg::PlannerConfig type).
 """
 
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -152,13 +153,15 @@ def test_heading_gains_for_config_reads_arbitrary_json_values():
     assert kd == 1.25
 
 
-def test_generate_emits_default_planner_config_with_unchanged_motion_limits():
-    """generate()'s output gains Config::defaultPlannerConfig(), carrying the
-    seven motion-limit fields through with the EXACT pre-ticket hardcoded
-    values (the regression pin against a silent value change during the
-    move off main.cpp) plus tovez.json's real heading gains -- while the
-    pre-existing generated functions (motor configs, drivetrain config, OTOS
-    boot config) remain present and undisturbed."""
+def test_generate_emits_default_planner_config_with_config_motion_limits():
+    """generate()'s output gains Config::defaultPlannerConfig(). Five of the
+    seven motion-limit fields (a_max/a_decel/v_body_max/j_max/yaw_jerk_max)
+    stay firmware defaults; the two rotational-profile ceilings
+    (yaw_rate_max/yaw_acc_max) now come from tovez.json's control block
+    (ticket 100-014, deg->rad) -- control.yaw_rate_max=70 deg/s and
+    control.max_rot_accel_dps2=600 deg/s^2 -- plus tovez.json's real heading
+    gains, while the pre-existing generated functions (motor configs,
+    drivetrain config, OTOS boot config) remain present and undisturbed."""
     cfg = json.loads(_TOVEZ_JSON.read_text())
     content = gbc.generate(cfg, "data/robots/tovez.json")
 
@@ -170,8 +173,17 @@ def test_generate_emits_default_planner_config_with_unchanged_motion_limits():
     # New (098-001): the PlannerConfig boot-default generator function.
     assert "msg::PlannerConfig defaultPlannerConfig()" in content
 
-    for line in _motion_limit_setter_lines():
+    # Five firmware-default motion limits, unchanged.
+    for field in ("a_max", "a_decel", "v_body_max", "j_max", "yaw_jerk_max"):
+        setter = {"a_max": "setAMax", "a_decel": "setADecel",
+                  "v_body_max": "setVBodyMax", "j_max": "setJMax",
+                  "yaw_jerk_max": "setYawJerkMax"}[field]
+        line = f"cfg.{setter}({gbc._f(_EXPECTED_MOTION_LIMITS[field])});"
         assert line in content, f"missing/changed motion-limit setter: {line}"
+
+    # Two rotational-profile ceilings now read from tovez.json control (100-014).
+    assert f"cfg.setYawRateMax({gbc._f(math.radians(70.0))});" in content
+    assert f"cfg.setYawAccMax({gbc._f(math.radians(600.0))});" in content
 
     # heading_kp/heading_kd resolve to tovez.json's real bench-tuned values
     # (6.0/0.0, sprint 098-003) for the active robot config.
@@ -180,14 +192,12 @@ def test_generate_emits_default_planner_config_with_unchanged_motion_limits():
 
 
 def test_generate_motion_limits_unchanged_with_no_robot_config():
-    """The seven motion-limit fields are firmware defaults, NOT robot-JSON-
-    configurable (unlike heading_kp/heading_kd) -- they must be identical
-    whether or not a robot config is found, exactly reproducing the
-    pre-ticket main.cpp::defaultMotionConfig() behavior (which never read
-    any robot JSON at all). heading_kp/heading_kd fall back to the firmware
-    defaults (3.0/0.0) -- the conservative starting values for an
-    uncharacterized robot; tovez.json overrides kp to its bench-tuned 6.0
-    (098-003), so the firmware default deliberately no longer matches it."""
+    """With NO robot config, all seven motion-limit fields take their firmware
+    defaults -- including yaw_rate_max/yaw_acc_max, which ARE robot-JSON-
+    configurable as of ticket 100-014 (control.yaw_rate_max/max_rot_accel_dps2)
+    but fall back to the 6.0 rad/s / 20.0 rad/s^2 firmware defaults when the
+    keys are absent, exactly the same fall-back discipline as heading_kp/
+    heading_kd (which fall back to 3.0/0.0 here)."""
     content = gbc.generate({}, "(firmware defaults)")
 
     assert "msg::PlannerConfig defaultPlannerConfig()" in content
@@ -196,6 +206,45 @@ def test_generate_motion_limits_unchanged_with_no_robot_config():
 
     assert "cfg.setHeadingKp(3.0f);" in content
     assert "cfg.setHeadingKd(0.0f);" in content
+
+
+# ---------------------------------------------------------------------------
+# 100-014: profile_rot_limits_for_config() -- the rotational-profile ceiling
+# (yaw_rate_max/yaw_acc_max) now read from control.* (deg->rad), not hardcoded.
+# ---------------------------------------------------------------------------
+
+def test_profile_rot_limits_for_config_reads_tovez_json():
+    """profile_rot_limits_for_config() reads tovez.json's control.yaw_rate_max
+    [deg/s] and control.max_rot_accel_dps2 [deg/s^2], converting to rad. Before
+    100-014 these were silently hardcoded to 6.0 rad/s / 20.0 rad/s^2, ignoring
+    the robot JSON and driving pivots at ~500 mm/s (unstable overshoot on the
+    latent real plant); tovez's 70 deg/s -> ~78 mm/s at the wheels."""
+    cfg = json.loads(_TOVEZ_JSON.read_text())
+
+    yaw_rate_max, yaw_acc_max = gbc.profile_rot_limits_for_config(cfg)
+
+    assert yaw_rate_max == math.radians(70.0)     # control.yaw_rate_max [deg/s]
+    assert yaw_acc_max == math.radians(600.0)     # control.max_rot_accel_dps2 [deg/s^2]
+
+
+def test_profile_rot_limits_for_config_falls_back_to_firmware_defaults():
+    """With no control.yaw_rate_max/max_rot_accel_dps2 (or no robot config),
+    both fall back to the rad-valued firmware defaults."""
+    yaw_rate_max, yaw_acc_max = gbc.profile_rot_limits_for_config({})
+
+    assert yaw_rate_max == gbc.YAW_RATE_MAX_DEFAULT == 6.0
+    assert yaw_acc_max == gbc.YAW_ACC_MAX_DEFAULT == 20.0
+
+
+def test_profile_rot_limits_for_config_reads_arbitrary_json_values():
+    """Proves the mapping genuinely reads from the JSON (deg->rad), not merely
+    returning the default."""
+    cfg = {"control": {"yaw_rate_max": 90.0, "max_rot_accel_dps2": 360.0}}
+
+    yaw_rate_max, yaw_acc_max = gbc.profile_rot_limits_for_config(cfg)
+
+    assert yaw_rate_max == math.radians(90.0)
+    assert yaw_acc_max == math.radians(360.0)
 
 
 # ---------------------------------------------------------------------------
