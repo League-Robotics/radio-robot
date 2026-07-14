@@ -1,10 +1,11 @@
 ---
-id: "003"
-title: "P0 spike: wire-frame budget dry run"
-status: open
-use-cases: ["SUC-003"]
+id: '003'
+title: 'P0 spike: wire-frame budget dry run'
+status: done
+use-cases:
+- SUC-003
 depends-on: []
-github-issue: ""
+github-issue: ''
 issue: single-loop-firmware-de-fiber-delete-the-elite-plumbing-telemetry-only-return-path.md
 completes_issue: false
 ---
@@ -32,26 +33,61 @@ production protocol surface.
 
 ## Acceptance Criteria
 
-- [ ] Work happens on a scratch branch (not this sprint's branch), branched
+- [x] Work happens on a scratch branch (not this sprint's branch), branched
       from the current HEAD.
-- [ ] `protos/envelope.proto` pruned per the issue's field list: `twist`,
+- [x] `protos/envelope.proto` pruned per the issue's field list: `twist`,
       `config`, `stop` command arms + `corr_id`; segment/mover/plan_dump/
       STREAM/GET/EVT arms removed.
-- [ ] `protos/telemetry.proto` extended with the ack ring (4-8 entries,
+- [x] `protos/telemetry.proto` extended with the ack ring (4-8 entries,
       `{corr_id, status, err_code}`) and fault/event bits; `acc_*`,
       `glitch_*`, `ts_*`, `cmd_vel_*` moved to a slower secondary frame
       definition.
-- [ ] `scripts/gen_messages.py` runs clean against the draft protos and
+- [x] `scripts/gen_messages.py` runs clean against the draft protos and
       regenerates the message headers on the scratch branch.
-- [ ] The build's `wire.h` static_asserts are read as the pass/fail
+- [x] The build's `wire.h` static_asserts are read as the pass/fail
       verdict — no separate interpretation layer. If they fail, the
       specific overflowing field(s) and their byte cost are reported so P4
       (sprint 103/104) can resize before committing to the design.
-- [ ] Scratch branch and its generated output are explicitly NOT merged
+- [x] Scratch branch and its generated output are explicitly NOT merged
       into sprint 102's branch or into `master`'s `protos/` — verify no
       `protos/` or generated-message diff appears in this sprint's actual
       commits.
-- [ ] No hardware used for this ticket.
+- [x] No hardware used for this ticket.
+
+## Completion Notes (2026-07-14)
+
+Executed on scratch branch `scratch/102-003-frame-budget`
+(commit `10985ec1d46737090c00f6b9f7b33f1fa2de9ed0`, branched from this
+sprint's HEAD `7aaea0a5`). Full numbers, methodology, and the sprint-103
+tradeoff are recorded in
+[`../spike-003-frame-budget.md`](../spike-003-frame-budget.md).
+
+**Verdict**: `CommandEnvelope` (twist/config/stop) worst case = **115 B**
+(well under 186 B). `ReplyEnvelope{tlm}` ("main frame") fits at **ack-ring
+depth=3** (179 B, 7 B margin) but **NOT at the issue's requested depth
+4-8** — depth=4 measures 195 B (9 B over). This is the "does not fit,
+here's the max that does" outcome the ticket's own testing plan explicitly
+accepts as a success. A concrete 9 B trim (moving `active`/`conn_left`/
+`conn_right` to the new secondary frame) lands depth=4 at exactly 186 B
+with zero margin — measured, not recommended as-is (too fragile). Both the
+header's `static_assert`s AND a real host compile (`c++ -std=c++20`,
+wire.h/wire.cpp/wire_runtime.cpp/layout_checks.cpp) were used to confirm
+pass/fail, plus a hand-built round-trip program exercising the real
+generated `msg::wire::decode()`/`encode()` against
+`CommandEnvelope{twist,stop}` and `ReplyEnvelope{tlm}` with a populated
+ack ring — all passed. `TelemetrySecondary` (the new slower diagnostic
+frame carrying `acc_*`/`glitch_*`/`ts_*`/`cmd_vel_*`) measures 52 B
+standalone, comfortable margin.
+
+`tests/sim/unit/wire_codec_harness.cpp` does not compile against the
+pruned schema (references removed arms like `drive`/`segment`) — expected,
+out of this spike's scope per its own testing plan, and flagged in the
+results note as known sprint-103 follow-up work (the harness needs a P4-
+scope rewrite regardless of this spike).
+
+Verified clean: `git diff --stat protos/ source/messages/` against this
+sprint's branch is empty after returning from the scratch branch — no
+protos/generated-message diff landed here. No hardware used.
 
 ## Implementation Plan
 

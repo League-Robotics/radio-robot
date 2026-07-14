@@ -1,10 +1,11 @@
 ---
-id: "001"
-title: "P0 spike: relay sustained-push telemetry"
+id: '001'
+title: 'P0 spike: relay sustained-push telemetry'
 status: open
-use-cases: ["SUC-001"]
+use-cases:
+- SUC-001
 depends-on: []
-github-issue: ""
+github-issue: ''
 issue: single-loop-firmware-de-fiber-delete-the-elite-plumbing-telemetry-only-return-path.md
 completes_issue: false
 ---
