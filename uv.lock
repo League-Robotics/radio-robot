@@ -45,7 +45,7 @@ wheels = [
 
 [[package]]
 name = "aprilcam"
-version = "0.20260627.5"
+version = "0.20260713.4"
 source = { editable = "../AprilTags" }
 dependencies = [
     { name = "grpcio" },
@@ -1781,7 +1781,7 @@ wheels = [
 
 [[package]]
 name = "microbit-v2-samples-tools"
-version = "0.20260712.4"
+version = "0.20260713.1"
 source = { editable = "." }
 dependencies = [
     { name = "aprilcam" },

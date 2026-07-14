@@ -131,6 +131,89 @@ void NezhaMotor::setPidEnabled(bool on)
     pidEnabled_ = on;
 }
 
+void NezhaMotor::setVelEstimator(uint8_t mode, uint8_t window)
+{
+    velEstMode_ = (mode == kVelEstLineFit) ? kVelEstLineFit : kVelEstEma;
+    if (window < 3) window = 3;
+    if (window > kMaxVelWindow) window = kMaxVelWindow;
+    velWindow_ = window;
+}
+
+// ---------------------------------------------------------------------------
+// Velocity-estimator helpers (sprint 101). pushVelSample()/clearVelWindow()
+// maintain the fresh-sample ring; lineFitVelocity() is the mode-1 estimator.
+// ---------------------------------------------------------------------------
+void NezhaMotor::pushVelSample(uint64_t t, float position)
+{
+    velWinT_[velWinHead_] = t;
+    velWinP_[velWinHead_] = position;
+    velWinHead_ = static_cast<uint8_t>((velWinHead_ + 1) % kMaxVelWindow);
+    if (velWinCount_ < kMaxVelWindow) ++velWinCount_;
+}
+
+void NezhaMotor::clearVelWindow()
+{
+    velWinCount_ = 0;
+    velWinHead_ = 0;
+    dutyRingCount_ = 0;   // output-average ring is derived state too; clear together
+    dutyRingHead_ = 0;
+}
+
+void NezhaMotor::setDutyAvg(uint8_t window)
+{
+    if (window < 1) window = 1;
+    if (window > kMaxDutyAvg) window = kMaxDutyAvg;
+    dutyAvgWindow_ = window;
+}
+
+// averageDuty() — boxcar moving average of the last dutyAvgWindow_ PID duty
+// outputs (sprint 101). window 1 short-circuits to the raw duty (default /
+// unchanged behavior). Pushes every call so a live window change has history.
+float NezhaMotor::averageDuty(float duty)
+{
+    dutyRing_[dutyRingHead_] = duty;
+    dutyRingHead_ = static_cast<uint8_t>((dutyRingHead_ + 1) % kMaxDutyAvg);
+    if (dutyRingCount_ < kMaxDutyAvg) ++dutyRingCount_;
+
+    if (dutyAvgWindow_ <= 1) return duty;
+    uint8_t n = (dutyRingCount_ < dutyAvgWindow_) ? dutyRingCount_ : dutyAvgWindow_;
+    float sum = 0.0f;
+    for (uint8_t k = 0; k < n; ++k) {
+        uint8_t idx = static_cast<uint8_t>((dutyRingHead_ + kMaxDutyAvg - 1 - k) % kMaxDutyAvg);
+        sum += dutyRing_[idx];
+    }
+    return sum / static_cast<float>(n);
+}
+
+// lineFitVelocity() — least-squares slope of position vs. time over the last
+// min(velWinCount_, velWindow_) accepted fresh samples (Savitzky-Golay order
+// 1). Closed-form (no matrix work): four running sums + one divide, ~O(N).
+// Times are taken relative to the oldest sample in the window and scaled to
+// seconds before summing, so the sums stay small (a us-scale absolute stamp
+// squared would lose float precision). Fewer than 3 points cannot smooth a
+// line, so it falls back to the last filtered value (matching the EMA path's
+// "hold on no new information" behavior).
+float NezhaMotor::lineFitVelocity() const
+{
+    uint8_t n = (velWinCount_ < velWindow_) ? velWinCount_ : velWindow_;
+    if (n < 3) return filteredVelocity_;
+
+    uint8_t oldest = static_cast<uint8_t>((velWinHead_ + kMaxVelWindow - n) % kMaxVelWindow);
+    uint64_t tref = velWinT_[oldest];
+
+    float sx = 0.0f, sy = 0.0f, sxx = 0.0f, sxy = 0.0f;
+    for (uint8_t k = 0; k < n; ++k) {
+        uint8_t idx = static_cast<uint8_t>((oldest + k) % kMaxVelWindow);
+        float x = static_cast<float>(velWinT_[idx] - tref) / 1e6f;   // [s]
+        float y = velWinP_[idx];                                     // [mm]
+        sx += x; sy += y; sxx += x * x; sxy += x * y;
+    }
+    float fn = static_cast<float>(n);
+    float denom = fn * sxx - sx * sx;
+    if (fabsf(denom) < 1e-9f) return filteredVelocity_;
+    return (fn * sxy - sx * sy) / denom;   // [mm/s]
+}
+
 // ---------------------------------------------------------------------------
 // Primitive getters.
 // ---------------------------------------------------------------------------
@@ -212,6 +295,7 @@ void NezhaMotor::tick(uint64_t nowUs)
         lastFreshRawEnc_ = raw;
         lastFreshUs_ = nowUs;
         hasFreshSample_ = true;
+        pushVelSample(nowUs, pos);   // seed the line-fit window with the anchor
     } else if (freshSample) {
         float freshElapsed = static_cast<float>(nowUs - lastFreshUs_) / 1e6f;   // [s] since the last FRESH sample
         bool sampleOk = true;
@@ -236,12 +320,22 @@ void NezhaMotor::tick(uint64_t nowUs)
             }
 
             if (sampleOk) {
-                float rawVel = (pos - lastPosition_) / freshElapsed;
-                if (fabsf(rawVel) <= kMaxPlausibleSpeed) {
-                    float a = config_.velFiltAlpha;   // EMA smoothing
-                    filteredVelocity_ = a * rawVel + (1.0f - a) * filteredVelocity_;
+                // Ring is maintained for BOTH modes (so a live switch to
+                // line-fit has history to fit immediately); the mode only
+                // decides which estimate feeds filteredVelocity_.
+                pushVelSample(nowUs, pos);
+                if (velEstMode_ == kVelEstLineFit) {
+                    float v = lineFitVelocity();
+                    if (fabsf(v) <= kMaxPlausibleSpeed) filteredVelocity_ = v;
+                    // else: implausible -- hold filteredVelocity_.
+                } else {
+                    float rawVel = (pos - lastPosition_) / freshElapsed;
+                    if (fabsf(rawVel) <= kMaxPlausibleSpeed) {
+                        float a = config_.velFiltAlpha;   // EMA smoothing
+                        filteredVelocity_ = a * rawVel + (1.0f - a) * filteredVelocity_;
+                    }
+                    // else: implausible-but-sub-step velocity -- hold filteredVelocity_.
                 }
-                // else: implausible-but-sub-step velocity -- hold filteredVelocity_.
             }
         }
         // else: non-positive elapsed time since the last fresh sample
@@ -286,6 +380,7 @@ void NezhaMotor::tick(uint64_t nowUs)
                 float dt = haveElapsed ? elapsedTime : kNominalDt;
                 float duty = pid_.compute(velocityTarget_, filteredVelocity_, dt,
                                            config_.velGains, config_.velDeadband);
+                duty = averageDuty(duty);   // boxcar output smoothing (DUTYAVG; no-op at window 1)
                 armoredWrite(duty, nowMs);
             } else {
                 armoredWrite(dutyTarget_, nowMs);
@@ -506,6 +601,7 @@ void NezhaMotor::hardReset()
             hasFreshSample_ = false;
             lastFreshRawEnc_ = 0;
             lastFreshUs_ = 0;
+            clearVelWindow();
             return;
         }
         encOffset_ -= snapshot;
@@ -528,6 +624,7 @@ void NezhaMotor::hardReset()
     hasFreshSample_ = false;
     lastFreshRawEnc_ = 0;
     lastFreshUs_ = 0;
+    clearVelWindow();
 }
 
 void NezhaMotor::softRebaseline()
@@ -553,6 +650,7 @@ void NezhaMotor::softRebaseline()
     hasFreshSample_ = false;
     lastFreshRawEnc_ = 0;
     lastFreshUs_ = 0;
+    clearVelWindow();
 
     // softResetCount_ is base-owned (MotorArmor); this leaf increments it
     // directly (it is protected, inherited) rather than duplicating a

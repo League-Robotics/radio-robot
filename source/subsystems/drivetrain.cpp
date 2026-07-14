@@ -14,10 +14,11 @@ namespace Subsystems {
 
 Drivetrain::Drivetrain(Hardware& hardware) : hardware_(hardware) {}
 
-void Drivetrain::setTwist(float v_x, float v_y, float omega) {
+void Drivetrain::setTwist(float v_x, float /*v_y*/, float omega) {
+    // v_y is accepted for signature symmetry but never consumed: the
+    // differential drivetrain is non-holonomic -- see commandedWheelTargets().
     mode_ = Mode::TWIST;
     v_x_ = v_x;
-    v_y_ = v_y;   // stored but never consumed -- see commandedWheelTargets()
     omega_ = omega;
     active_ = true;
 }
@@ -505,25 +506,9 @@ uint32_t Drivetrain::ringGoals(Drive::Goal* out, uint32_t capacity) const {
     return n;
 }
 
-msg::DrivetrainCapabilities Drivetrain::capabilities() const {
-    msg::DrivetrainCapabilities caps;
-    caps.holonomic = false;
-    caps.wheel_count = 2;
-    caps.onboard_position = leftMotorCaps_.position && rightMotorCaps_.position;
-    return caps;
-}
-
-void Drivetrain::setMotorCapabilities(const msg::MotorCapabilities& left,
-                                       const msg::MotorCapabilities& right) {
-    leftMotorCaps_ = left;
-    rightMotorCaps_ = right;
-}
-
 DrivetrainPorts Drivetrain::ports() const {
     return {boundLeft_, boundRight_};
 }
-
-bool Drivetrain::active() const { return active_; }
 
 void Drivetrain::standby() { active_ = false; }
 

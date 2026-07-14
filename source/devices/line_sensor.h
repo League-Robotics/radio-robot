@@ -88,20 +88,6 @@ class LineSensorLeaf {
   LineReading reading() const;
   bool readingFresh() const;
 
-  // Snapshot the CURRENT raw readings into the calibration bounds -- call
-  // while physically over a white (captureCalibMin()) or black
-  // (captureCalibMax()) surface. Each issues its own fresh, non-blocking
-  // readRaw() (ungated by readDue() -- an explicit calibration action is
-  // not subject to the steady-read rate limit). Returns false (config_
-  // unchanged) if the read fails or the chip was never detected.
-  bool captureCalibMin();
-  bool captureCalibMax();
-
-  // EMA smoothing coefficient applied in tick()'s normalize step.
-  // alpha == 0.0 means no smoothing (default); clamped to [0, 0.99] --
-  // ported unchanged from setSmoothingAlpha()'s pre-port clamp.
-  void setSmoothingAlpha(float alpha);
-
  private:
   enum class DetectPhase : uint8_t { Probing, Done };
 

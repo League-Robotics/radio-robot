@@ -122,8 +122,6 @@ int hardware_main() {
     drivetrain.configure(dtConfig);
     msg::PlannerConfig plannerConfig = Config::defaultPlannerConfig();
     drivetrain.configureMotion(plannerConfig);
-    drivetrain.setMotorCapabilities(hardware.motor(drivetrain.ports().left).capabilities(),
-                                     hardware.motor(drivetrain.ports().right).capabilities());
 
     // --- PoseEstimator: a Subsystems-tier peer of Drivetrain (never folded
     // into it -- pose_estimator.h's own file header). Constructed here so

@@ -195,10 +195,6 @@ class Drivetrain {
   // remainingLinear_ instead of the retired executor_'s own state -- see
   // drivetrain.cpp's state() for the exact mapping.
   msg::DrivetrainState state() const;
-  msg::DrivetrainCapabilities capabilities() const;
-
-  void setMotorCapabilities(const msg::MotorCapabilities& left,
-                             const msg::MotorCapabilities& right);
 
   // lastEvent -- (100-007) the most recent msg::EventNotify this class
   // populated on an ABORT_* status -- see blackboard.h's own doc comment on
@@ -240,7 +236,6 @@ class Drivetrain {
   // --- Port binding + authority arbitration (unchanged from before this
   // ticket -- sprint 079's design, not touched by 094 or 100). ---
   DrivetrainPorts ports() const;
-  bool active() const;
   void standby();
 
  private:
@@ -322,7 +317,6 @@ class Drivetrain {
 
   // DIRECT/TWIST-arm state. UNCHANGED.
   float v_x_ = 0.0f;      // [mm/s]
-  float v_y_ = 0.0f;      // [mm/s] always ignored -- see setTwist()
   float omega_ = 0.0f;    // [rad/s]
 
   // DIRECT/WHEELS-arm state. UNCHANGED.
@@ -345,9 +339,6 @@ class Drivetrain {
   bool haveVelSample_[2] = {false, false};
 
   msg::Neutral neutralMode_ = msg::Neutral::BRAKE;
-
-  msg::MotorCapabilities leftMotorCaps_ = {};
-  msg::MotorCapabilities rightMotorCaps_ = {};
 
   bool active_ = false;
 };

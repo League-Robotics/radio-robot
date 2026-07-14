@@ -1,6 +1,6 @@
 [project]
 name = "microbit-v2-samples-tools"
-version = "0.20260713.1"
+version = "0.20260714.1"
 description = "Build/deploy tooling for microbit-v2-samples plus the robot_radio host controller and rogo CLI"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -106,16 +106,18 @@ aprilcam = { path = "../AprilTags", editable = true }
 #                                 skip cleanly (not error) if `just build-sim`
 #                                 hasn't been run.
 #
-# tests_old/ and source_old/ are the parked pre-rebuild trees (rollback =
-# codal.json application flip back to source_old) — never collected, never
-# descended into. vendor/ sims are excluded below too.
+# archive/tests_old/ and archive/source_old/ are the parked pre-rebuild trees
+# (rollback = restore archive/source_old/ to source_old/, then codal.json
+# application flip back to source_old) — never collected, never descended into.
+# The norecursedirs entries below still match them by basename (fnmatch) despite
+# the archive/ prefix. vendor/ sims are excluded below too.
 #
 # tests/sim/parked-093/ is sprint 093's own parking leaf (Decision 3): sim
 # tests obsoleted by the main-loop gut to {PING, HELLO, S, STOP}, moved
 # rather than deleted (see tests/sim/parked-093/README.md). norecursedirs
-# matches by directory basename (fnmatch), the same way the top-level
-# "tests_old"/"source_old" bare names already exclude those trees despite
-# living several directories deep from wherever pytest starts collecting --
+# matches by directory basename (fnmatch), the same way the
+# "tests_old"/"source_old" bare names already exclude those trees (now under
+# archive/) despite living several directories deep from wherever pytest starts --
 # so the bare leaf name "parked-093" is sufficient here too, no path prefix
 # needed.
 #

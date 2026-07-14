@@ -283,7 +283,20 @@ void DeviceBus::runPreamble() {
   // not loop either of them itself.
   motor1_.begin();
   motor2_.begin();
-  otos_.begin();
+
+  // OTOS (SparkFun) needs ~1s after power-on before its product-ID register
+  // (0x17 reg 0x00) reads 0x5F. Otos::begin() is a single probe with no retry,
+  // so retry it with pacing until it detects or attempts run out (begin() early-
+  // returns cheaply on a miss). 101-001: on the bench rig every OTOS transaction
+  // returns DEVICE_I2C_ERROR even on a clean bus probed BEFORE any motor traffic
+  // (ODIAG: txn==err, id==0) -- the OTOS does not ACK at 0x17 there, a wiring/
+  // power issue on that rig, NOT a firmware or bus-state fault. This retry stays
+  // as correct robustness for a real, wired OTOS with a slow boot.
+  for (int attempt = 0; attempt < kOtosBeginAttempts; ++attempt) {
+    otos_.begin();
+    if (otos_.connected()) break;
+    sleeper_.sleepMillis(kOtosBeginRetryPacingMs);
+  }
 
   // Color/line detection: a bounded, LOCAL retry-pacing loop over each
   // leaf's own non-blocking beginStep(nowUs) state machine -- see this
@@ -303,6 +316,21 @@ void DeviceBus::runPreamble() {
     sleeper_.sleepMillis(kPreambleRetryPacingMs);
     nowUs += static_cast<uint64_t>(kPreambleRetryPacingMs) * 1000ULL;  // [us]
   }
+}
+
+// ---------------------------------------------------------------------------
+// otosProbeDiag() -- read-only OTOS detect + I2C stats snapshot (101-001).
+// ---------------------------------------------------------------------------
+
+DeviceBus::OtosProbeDiag DeviceBus::otosProbeDiag() const {
+  return OtosProbeDiag{
+      otos_.connected(),
+      otos_.present(),
+      bus_.txnCount(kOtosDeviceAddr),
+      bus_.errCount(kOtosDeviceAddr),
+      bus_.lastErr(kOtosDeviceAddr),
+      otos_.lastProbeId(),
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,6 @@
+# opened /dev/cu.usbmodem2121102 at 2026-07-03 21:54:37
+>> stat
+WEDGELAB v1 built Jul  3 2026 21:53:14  (self-contained Nezha latch lab)
+commands: get | set k v | run legs|slam|burst|combo|native|spin N | heal | recover | stat | stop
+BOOT encR=0 encL=0 ok=1
+STAT w=4 r=4 err=0 glitch=0 epR=0 epL=0 persist=0 runaway=0 stopretry=0

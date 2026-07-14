@@ -299,10 +299,8 @@ message("${BoldBlue}ROBOT_RUN_MODE: ${ROBOT_RUN_MODE}${ColourReset}")
 # The hal/sim/ directory has no MicroBit/CODAL dependencies
 # and must not be compiled into firmware — it is used by the host CMake build
 # (ticket 020-003, tests/_infra/sim/CMakeLists.txt) and the Python test harness
-# only. ReplayHAL is the REPLAY-mode stub (host-side) and is likewise excluded
-# from the REAL firmware build.
+# only.
 list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/hal/sim/.*")
-list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/hal/ReplayHAL\\.cpp$")
 # SimCommands.cpp (069-003) is the sim-build-only SIMSET/SIMGET Commandable.
 # It lives in source/commands/ (not hal/sim/, since it registers wire commands
 # rather than implementing a device), so it must be excluded here explicitly --
@@ -359,27 +357,6 @@ list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/subsystems/sim_hardware\\.cpp$")
 list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/devices/i2c_bus_host\\.cpp$")
 list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/devices/clock_host\\.cpp$")
 list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/devices/bringup_main\\.cpp$")
-
-# Production-build toggle (034-006).
-#
-# PRODUCTION_BUILD defaults OFF so the default firmware build is unchanged:
-#   - OFF (default): defines BENCH_OTOS_ENABLED → BenchOtosSensor + DBG OTOS
-#     commands are compiled in.  Stakeholder bench testing works as before.
-#   - ON: BENCH_OTOS_ENABLED is NOT defined → bench code excluded.
-#
-# To produce a production firmware: cmake <build_dir> -DPRODUCTION_BUILD=ON
-#
-# Polarity: OFF → BENCH_OTOS_ENABLED defined → #ifdef BENCH_OTOS_ENABLED
-# includes the bench code.  Always use #ifdef (not #ifndef) in source guards.
-option(PRODUCTION_BUILD "Exclude bench-testing infrastructure (BenchOtosSensor, DBG OTOS commands) from the build" OFF)
-
-if(NOT PRODUCTION_BUILD)
-    add_definitions(-DBENCH_OTOS_ENABLED)
-endif()
-
-# 060-004: USE_ORDERED_TICK is now the default compile-time path — the ordered-tick
-# control loop (LoopTickOnce.cpp #else branch) is active in all builds.
-add_definitions(-DUSE_ORDERED_TICK)
 
 # ---------------------------------------------------------------------------
 # Drivetrain HAL exclusions (048-004): the firmware build is always

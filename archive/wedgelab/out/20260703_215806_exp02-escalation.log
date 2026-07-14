@@ -1,0 +1,36 @@
+# opened /dev/cu.usbmodem2121102 at 2026-07-03 21:58:07
+PONG wedgelab
+>> run burst 30
+RUN burst 30 (any byte aborts)
+STOPV ok (burst-end) att=0 d=0
+RESULT burst n=30 epR=0 epL=0 glitch=0 errs=0
+>> stat
+STAT w=6794 r=6790 err=0 glitch=0 epR=0 epL=0 persist=0 runaway=0 stopretry=0
+>> heal
+HEAL M1 ok (a=192848 b=193704)
+HEAL M2 ok (a=194509 b=195359)
+STOPV ok (heal-end) att=0 d=0
+>> run slam 20
+RUN slam 20 (any byte aborts)
+STOPV ok (slam-end) att=0 d=0
+RESULT slam n=20 epR=0 epL=0 glitch=0 errs=0
+>> stat
+STAT w=4452 r=4410 err=0 glitch=0 epR=0 epL=0 persist=0 runaway=0 stopretry=0
+>> heal
+HEAL M1 ok (a=192668 b=193518)
+HEAL M2 ok (a=195562 b=196446)
+STOPV ok (heal-end) att=0 d=0
+>> set readmode 1
+OK readmode=1
+>> run spin 30
+RUN spin 30 (any byte aborts)
+STOPV ok (spin-end) att=0 d=0
+RESULT spin sec=30 epR=0 epL=0 glitch=0 errs=0
+>> set readmode 0
+OK readmode=0
+>> stat
+STAT w=3016 r=3012 err=0 glitch=0 epR=0 epL=0 persist=0 runaway=0 stopretry=0
+>> heal
+HEAL M1 ok (a=312552 b=313463)
+HEAL M2 ok (a=314560 b=315471)
+STOPV ok (heal-end) att=0 d=0

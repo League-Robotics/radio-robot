@@ -1,0 +1,5 @@
+# opened /dev/cu.usbmodem2121102 at 2026-07-03 21:38:40
+>> heal
+HEAL M1 ok (a=19027 b=19844)
+HEAL M2 ok (a=18680 b=19511)
+!! timeout after 15.0s — sending abort byte

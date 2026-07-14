@@ -134,9 +134,9 @@ struct Limits {
                                // (omegaCmd = omegaRef + trackKTheta *
                                // eTheta) carries NO clamp at all (matching
                                // sprint 098's proven, unclamped heading
-                               // loop -- confirmed by reading
+                               // loop -- confirmed by the now-removed
                                // motion/segment_executor.cpp's own PD
-                               // cascade, which never clamps omega
+                               // cascade, which never clamped omega
                                // either), so this single scalar is
                                // consumed ONLY by the arc-mode clamp
                                // (plan()'s headroom fold, above, and

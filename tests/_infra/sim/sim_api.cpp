@@ -350,12 +350,6 @@ SimHandle::SimHandle()
     // "Two reply-store instances".
     router.setReplyChannels(storeReply, &syncStoreSerial, storeReply, &syncStoreRadio);
 
-    // Prime the capabilities cache for the default DEV DT PORTS binding —
-    // read back via ports() (not a local copy), mirroring main.cpp exactly.
-    Subsystems::DrivetrainPorts bootPorts = drivetrain.ports();
-    drivetrain.setMotorCapabilities(hardware.motor(bootPorts.left).capabilities(),
-                                     hardware.motor(bootPorts.right).capabilities());
-
     // Start the host fake clock at 0, mirroring main.cpp's boot moment (093:
     // there is no watchdog left to feed here).
     Types::setHostClockNow(0);

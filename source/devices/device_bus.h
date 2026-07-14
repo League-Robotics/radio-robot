@@ -133,6 +133,21 @@ class DeviceBus {
   LineSensor& line() { return lineHandle_; }
   Odometer& odometer() { return odometerHandle_; }
 
+  // OTOS probe diagnostics (101-001): a read-only snapshot of the OTOS leaf's
+  // detect state plus this bus's transaction stats for the OTOS address, for
+  // bench triage of the DeviceBus connected=False condition. Reads counters
+  // only -- issues NO I2C traffic, so it is safe to call from the command
+  // foreground while the fiber runs.
+  struct OtosProbeDiag {
+    bool connected;
+    bool present;
+    uint32_t txnCount;   // I2C transactions to 0x17 (0 => probe never ran)
+    uint32_t errCount;   // of those, how many errored (NAK/bus)
+    int lastErr;         // last error code for 0x17
+    uint8_t lastProbeId; // last product-ID byte begin() read (0x5F = correct)
+  };
+  OtosProbeDiag otosProbeDiag() const;
+
   // --- Fiber lifecycle (DB-008; issue "The fiber and its cycle" / "The
   // public surface") ---
   //
@@ -270,6 +285,14 @@ class DeviceBus {
   // infinite loop (the same defensive-bound spirit as NezhaMotor::
   // hardReset()'s own kMaxRetries).
   static constexpr int kMaxPreambleTicks = 64;
+
+  // OTOS product-ID probe retry (101-001): the SparkFun OTOS needs ~1s after
+  // power-on before its ID register reads 0x5F. Otos::begin() is a single probe
+  // with no retry, so runPreamble() retries it up to kOtosBeginAttempts times
+  // paced kOtosBeginRetryPacingMs apart (~2s worst case) so a slow OTOS boot no
+  // longer marks the sensor absent forever (the connected=False root cause).
+  static constexpr int kOtosBeginAttempts = 20;
+  static constexpr uint32_t kOtosBeginRetryPacingMs = 100;  // [ms]
 
   // [ms] vendor settle window between each motor's own request and collect
   // inside serviceMotor()

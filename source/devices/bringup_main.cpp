@@ -32,24 +32,30 @@
 // runs the detection preamble then the straight-line request/settle/collect/
 // perceive/publish cycle (device_bus.h's own header comment) forever, fully
 // asynchronously from this file's own foreground loop. This file's
-// foreground loop does exactly one more thing: pump a tiny line-buffered
+// foreground loop does two more things: (1) pump a tiny line-buffered
 // serial reader and dispatch each line as one DEV command against the
 // SAME DeviceBus handles (`bus.motor(port)`/`bus.color()`/`bus.line()`/
 // `bus.odometer()`) any other consumer would use — it never reaches past
 // the handle API into a leaf or the bus directly (device-bus-tickets.md's
 // own "no coexistence" spirit extends to this file's own conduct, not just
-// what it links).
+// what it links); and (2) push an unsolicited fixed-cadence "TLM ..."
+// telemetry line every STREAM period (default 80 ms) built from the same
+// handle API — the gap-free host-capture path that replaces per-sample
+// polling (see the grammar block and emitTelemetry() below).
 //
 // --- The DEV command grammar (this file's own bespoke, minimal parser —
 // NOT docs/protocol-v2.md's `DEV ...` family, which is the legacy stack's
 // text_channel.cpp surface; this bring-up image has no CommandProcessor at
 // all) ---
 //   PING                              -> OK pong
+//   STREAM <ms>                       -> OK stream=<ms>  (unsolicited-telemetry push period; 0 = off; default 80)
 //   RUNNING                           -> OK running=<0|1>
 //   STOP                              -> OK  (both motors -> Neutral::Coast)
 //   M <port:1|2> VEL <mm/s>           -> OK  (Motor::setVelocity)
 //   M <port> DUTY <-1..1>             -> OK  (Motor::setDuty, PID-off only)
 //   M <port> PID <0|1>                -> OK  (Motor::setPidEnabled)
+//   M <port> VESTIM <mode> [N]        -> OK vestim= win=  (velocity estimator: 0=EMA, 1=line-fit over N fresh samples)
+//   M <port> DUTYAVG <n>              -> OK dutyavg=  (boxcar moving-average window on PID duty output; 1=off)
 //   M <port> NEUTRAL <C|B>            -> OK  (Motor::setNeutral)
 //   M <port> RESET                    -> OK  (Motor::resetPosition)
 //   M <port> STATE                    -> OK pos= vel= applied= t= valid= conn= wedged= suspect= glitch=
@@ -62,6 +68,17 @@
 //   ODO SETPOSE <x mm> <y mm> <h rad> -> OK  (Odometer::setPose)
 //   ODO RING <age 0..4>               -> OK age= x= y= h= vx= vy= w= t= valid=
 //   anything else                     -> ERR unknown / ERR badport / ERR badarg / ...
+//
+// Unsolicited (pushed, not a reply) once every STREAM period, default 80 ms:
+//   TLM t=<emit ms> 1p= 1v= 1a= 1t=<sample us> 2p= 2v= 2a= 2t=<sample us>
+// Carries no corr-id suffix and is prefixed "TLM" so a polling host's reply
+// matcher skips it. This is the gap-free capture path (vs. per-sample polling,
+// whose request/reply lags past a host timeout under motor+I2C load).
+//
+// Slow perception devices ride a companion line at 1/3 the motor cadence:
+//   STLM t=<emit ms> ox= oy= oh= oc= n0= n1= n2= n3= lc= r= g= b= cw= cc=
+//   (OTOS pose x/y/heading + connected; 4 normalized line channels + connected;
+//    color RGBC + connected). Prefixed "STLM" so a motor-"TLM" reader skips it.
 //
 // Any line may end with a trailing " #<digits>" correlation-id suffix
 // (matching host/robot_radio/io/serial_conn.py's `SerialConnection.send()`,
@@ -139,6 +156,18 @@ class BringupSerial {
   char rxBuf_[256] = {};
   uint16_t rxLen_ = 0;
 };
+
+// Periodic telemetry push period [ms]. The DeviceBus fiber publishes fresh
+// samples into the leaves' rings asynchronously; the foreground loop pushes
+// an unsolicited "TLM ..." line every gStreamPeriodMs so a host can capture a
+// gap-free, fixed-cadence stream WITHOUT polling (a per-sample request/reply
+// that can lag past a host timeout under motor+I2C load -- the raggedy,
+// half-missing traces the poll path produced). Default 80 ms = the Nezha
+// brick's own encoder-refresh cadence, so each TLM lands ~one fresh encoder
+// step. `STREAM <ms>` retunes it live; `STREAM 0` disables. Read by
+// bringupMain()'s loop; set by dispatch()'s STREAM handler -- both run in the
+// single foreground fiber, so a plain file-scope value needs no guard.
+uint32_t gStreamPeriodMs = 80;   // [ms] 0 = off
 
 // formatFixed — serializes `value` as a fixed-point decimal with `decimals`
 // fractional digits, WITHOUT printf's %f conversion. See this file's own
@@ -303,10 +332,154 @@ void dispatchRing(const Devices::Sample<Devices::MotorReading>& s, int age, Repl
   reply.kvInt("valid", s.valid ? 1 : 0);
 }
 
+// servoPin -- map a bring-up SERVO <pin> selector to a micro:bit edge pin
+// (101-001). The OTOS-servo signal on the rig is a direct micro:bit PWM pin
+// (independent of the DeviceBus I2C), so it is driven with CODAL's
+// setServoValue() directly, resurrecting source_old/hal/real/Servo.cpp's one
+// line. Selectors follow source_old/hal/real/PortIO.cpp's Nezha port->pin
+// table so the rig's J1/S1 can be found empirically by sweeping selectors and
+// watching OTOS heading (ODO) respond: 1..4 = the digital pins of Nezha ports
+// 1..4, 5..8 = the analog pins of Nezha ports 1..4, 0 = P0.
+MicroBitPin* servoPin(int sel) {
+  switch (sel) {
+    case 0: return &uBit.io.P0;
+    case 1: return &uBit.io.P8;    // Nezha port 1 digital (J1)
+    case 2: return &uBit.io.P12;   // port 2 digital
+    case 3: return &uBit.io.P14;   // port 3 digital
+    case 4: return &uBit.io.P16;   // port 4 digital
+    case 5: return &uBit.io.P1;    // Nezha port 1 analog (J1/S1 candidate)
+    case 6: return &uBit.io.P2;    // port 2 analog
+    case 7: return &uBit.io.P13;   // port 3 analog
+    case 8: return &uBit.io.P15;   // port 4 analog
+    default: return nullptr;
+  }
+}
+
+// emitTelemetry — build and push one unsolicited "TLM ..." line carrying both
+// motors' latest published sample (position/velocity/appliedDuty + the
+// fiber-side sample stamp) plus the foreground emit time. Prefixed "TLM" (not
+// "OK"/"ERR") and carries no corr-id suffix, so a polling host's reply matcher
+// (serial_conn.py / rig_dev.py await_reply, which only accepts OK/ERR lines
+// ending in the awaited "#<id>") skips it cleanly -- unsolicited telemetry
+// never collides with a command reply. `1t=`/`2t=` are the [us] stamps of when
+// the fiber actually sampled each encoder, so a host can confirm the ~80 ms
+// refresh directly rather than inferring it from position plateaus.
+void emitTelemetry(Devices::DeviceBus& bus, BringupSerial& serial, uint32_t nowMs) {
+  char buf[220];
+  ReplyBuilder t(buf, sizeof(buf));
+  t.raw("TLM");
+  t.kvU32("t", nowMs);
+  Devices::Sample<Devices::MotorReading> s1 = bus.motor(1).latest();
+  Devices::Sample<Devices::MotorReading> s2 = bus.motor(2).latest();
+  t.kvFloat("1p", s1.value.position);
+  t.kvFloat("1v", s1.value.velocity);
+  t.kvFloat("1a", s1.value.appliedDuty, 3);
+  t.kvU64("1t", s1.stamp);
+  t.kvFloat("2p", s2.value.position);
+  t.kvFloat("2v", s2.value.velocity);
+  t.kvFloat("2a", s2.value.appliedDuty, 3);
+  t.kvU64("2t", s2.stamp);
+  serial.send(buf);
+}
+
+// emitSensorTelemetry — companion to emitTelemetry() carrying the slow
+// perception devices: OTOS pose (x/y/heading + connected), the 4 normalized
+// line channels, and the color RGBC. Prefixed "STLM" (distinct from motor
+// "TLM"), no corr-id, so both a polling host's reply matcher AND a motor-TLM
+// reader (which keys on the "TLM " prefix) skip it. Pushed at a fraction of
+// the motor cadence (sensors change slowly) to keep serial TX load modest so
+// it does not degrade command RX while driving.
+void emitSensorTelemetry(Devices::DeviceBus& bus, BringupSerial& serial, uint32_t nowMs) {
+  char buf[220];
+  ReplyBuilder t(buf, sizeof(buf));
+  t.raw("STLM");
+  t.kvU32("t", nowMs);
+  Devices::Sample<Devices::PoseReading> o = bus.odometer().latest();
+  t.kvFloat("ox", o.value.x);
+  t.kvFloat("oy", o.value.y);
+  t.kvFloat("oh", o.value.heading, 4);
+  t.kvInt("oc", bus.odometer().connected() ? 1 : 0);
+  Devices::Sample<Devices::LineReading> l = bus.line().latest();
+  for (int i = 0; i < 4; ++i) {
+    char key[4];
+    snprintf(key, sizeof(key), "n%d", i);
+    t.kvU32(key, l.value.normalized[i]);
+  }
+  t.kvInt("lc", bus.line().connected() ? 1 : 0);
+  Devices::Sample<Devices::ColorReading> c = bus.color().latest();
+  t.kvU32("r", c.value.r);
+  t.kvU32("g", c.value.g);
+  t.kvU32("b", c.value.b);
+  t.kvU32("cw", c.value.c);   // clear/white channel (key "cw" to avoid a bare "c")
+  t.kvInt("cc", bus.color().connected() ? 1 : 0);
+  serial.send(buf);
+}
+
 void dispatch(Devices::DeviceBus& bus, char* line, ReplyBuilder& reply) {
   char* tok = strtok(line, " ");
   if (tok == nullptr) {
     reply.raw("ERR empty");
+    return;
+  }
+
+  if (strcmp(tok, "ODIAG") == 0) {
+    // OTOS I2C diagnosis (101-001): report the OTOS leaf's detect state and
+    // the I2CBus transaction stats for address 0x17 -- reads counters only, no
+    // new bus traffic (safe against the fiber). txn=0 => the begin() probe
+    // never issued a transaction; err>0/lasterr!=0 => the OTOS NAK'd (not on
+    // the bus / not powered); conn=0 with err=0 => it read but returned the
+    // wrong product id.
+    Devices::DeviceBus::OtosProbeDiag d = bus.otosProbeDiag();
+    reply.raw("OK");
+    reply.kvInt("conn", d.connected ? 1 : 0);
+    reply.kvInt("present", d.present ? 1 : 0);
+    reply.kvInt("txn", static_cast<int>(d.txnCount));
+    reply.kvInt("err", static_cast<int>(d.errCount));
+    reply.kvInt("lasterr", d.lastErr);
+    reply.kvInt("id", d.lastProbeId);
+    return;
+  }
+
+  if (strcmp(tok, "SERVO") == 0) {
+    // SERVO <pin> <angle> -- drive setServoValue(angle) on the selected edge
+    // pin (servoPin() above). angle [deg] 0..180 (a 360 continuous-rotation
+    // servo takes 90 = stop, <90 / >90 = rotate each way). Used to command
+    // the OTOS servo and to hunt for its pin (sweep <pin>, watch ODO heading).
+    char* pinTok = strtok(nullptr, " ");
+    char* angTok = strtok(nullptr, " ");
+    if (pinTok == nullptr || angTok == nullptr) {
+      reply.raw("ERR args");
+      return;
+    }
+    int sel = atoi(pinTok);
+    int ang = atoi(angTok);
+    if (ang < 0) ang = 0;
+    if (ang > 180) ang = 180;
+    MicroBitPin* pin = servoPin(sel);
+    if (pin == nullptr) {
+      reply.raw("ERR badpin");
+      return;
+    }
+    pin->setServoValue(ang);
+    reply.raw("OK");
+    reply.kvInt("pin", sel);
+    reply.kvInt("angle", ang);
+    return;
+  }
+
+  if (strcmp(tok, "STREAM") == 0) {
+    // STREAM <ms> -- set the unsolicited-telemetry push period (0 = off).
+    // See gStreamPeriodMs / emitTelemetry() above.
+    char* v = strtok(nullptr, " ");
+    if (v == nullptr) {
+      reply.raw("ERR noval");
+      return;
+    }
+    int ms = atoi(v);
+    if (ms < 0) ms = 0;
+    gStreamPeriodMs = static_cast<uint32_t>(ms);
+    reply.raw("OK");
+    reply.kvInt("stream", ms);
     return;
   }
 
@@ -372,6 +545,38 @@ void dispatch(Devices::DeviceBus& bus, char* line, ReplyBuilder& reply) {
       }
       m.setPidEnabled(atoi(v) != 0);
       reply.raw("OK");
+    } else if (strcmp(verb, "VESTIM") == 0) {
+      // M <port> VESTIM <mode> [N] -- velocity estimator: 0 = EMA (default),
+      // 1 = line-fit over N fresh samples. Clamped here to match the leaf's
+      // own clamp so the reply echoes what was actually applied.
+      char* mo = strtok(nullptr, " ");
+      char* wn = strtok(nullptr, " ");
+      if (mo == nullptr) {
+        reply.raw("ERR noval");
+        return;
+      }
+      int mode = (atoi(mo) == 1) ? 1 : 0;
+      int win = wn ? atoi(wn) : 6;
+      if (win < 3) win = 3;
+      if (win > 8) win = 8;
+      m.setVelEstimator(static_cast<uint8_t>(mode), static_cast<uint8_t>(win));
+      reply.raw("OK");
+      reply.kvInt("vestim", mode);
+      reply.kvInt("win", win);
+    } else if (strcmp(verb, "DUTYAVG") == 0) {
+      // M <port> DUTYAVG <n> -- boxcar moving-average window on the PID duty
+      // output (1 = off). Clamped [1, 8] to match the leaf.
+      char* wn = strtok(nullptr, " ");
+      if (wn == nullptr) {
+        reply.raw("ERR noval");
+        return;
+      }
+      int win = atoi(wn);
+      if (win < 1) win = 1;
+      if (win > 8) win = 8;
+      m.setDutyAvg(static_cast<uint8_t>(win));
+      reply.raw("OK");
+      reply.kvInt("dutyavg", win);
     } else if (strcmp(verb, "NEUTRAL") == 0) {
       char* v = strtok(nullptr, " ");
       Devices::Neutral mode = Devices::Neutral::Coast;
@@ -592,6 +797,9 @@ int bringupMain() {
   char corrId[16];
   char replyBuf[220];
 
+  uint32_t lastTlmMs = 0;   // [ms] last telemetry push (see gStreamPeriodMs)
+  uint32_t tlmTick = 0;     // motor-TLM emit counter (gates the slower sensor push)
+
   for (;;) {
     if (serial.readLine(line, sizeof(line))) {
       stripCorrId(line, corrId, sizeof(corrId));
@@ -604,6 +812,22 @@ int bringupMain() {
         reply.raw(corrId);
       }
       serial.send(replyBuf);
+    }
+
+    // Unsolicited fixed-cadence telemetry push (default 80 ms; STREAM <ms>
+    // retunes, STREAM 0 disables). A single serial writer -- this foreground
+    // fiber -- emits both command replies and TLM lines, so they never
+    // interleave mid-line; dispatch() never blocks (all I2C is the fiber's),
+    // so an 80 ms cadence is comfortably met even while servicing commands.
+    if (gStreamPeriodMs > 0) {
+      uint32_t nowMs = static_cast<uint32_t>(system_timer_current_time());
+      if (nowMs - lastTlmMs >= gStreamPeriodMs) {
+        lastTlmMs = nowMs;
+        emitTelemetry(bus, serial, nowMs);
+        // Slow perception devices (OTOS/line/color) every 3rd motor push --
+        // they change slowly and this keeps serial TX load down while driving.
+        if (++tlmTick % 3 == 0) emitSensorTelemetry(bus, serial, nowMs);
+      }
     }
 
     uBit.sleep(1);  // yield: lets the DeviceBus fiber (and radio/other

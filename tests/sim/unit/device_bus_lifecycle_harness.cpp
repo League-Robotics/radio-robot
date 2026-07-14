@@ -169,9 +169,20 @@ void scriptMotorBeginConverge(Devices::I2CBus& bus) {
 // harness's shared script FIFO aligned (see this file's own header
 // comment) in scenarios that do not care about OTOS's own preamble outcome.
 void scriptOtosBeginAbsent(Devices::I2CBus& bus) {
-  bus.scriptWrite(kOtosWireAddr, 0);  // readReg8(kRegProductId)'s reg-select write
-  uint8_t wrongId[1] = {0x00};        // != kExpectedProductId -- deterministic absence
-  bus.scriptRead(kOtosWireAddr, wrongId, 1, 0);
+  // 101-001: runPreamble() retries Otos::begin() up to DeviceBus::
+  // kOtosBeginAttempts (20) times whenever it does not detect, and each absent
+  // attempt is a full readReg8(kRegProductId) (1 reg-select write + 1 read,
+  // otos.cpp). Script ALL of them -- otherwise attempts 2..N pop the FIFO
+  // entries a scenario scripts AFTER this call (color/line/motor), desyncing
+  // every later leaf (this file's header comment). MUST equal DeviceBus::
+  // kOtosBeginAttempts (a private constant, so mirrored here): if that cap
+  // changes, THIS test under-runs and fails, pointing right back to this line.
+  constexpr int kOtosBeginAttemptsMirror = 20;
+  for (int attempt = 0; attempt < kOtosBeginAttemptsMirror; ++attempt) {
+    bus.scriptWrite(kOtosWireAddr, 0);  // readReg8(kRegProductId)'s reg-select write
+    uint8_t wrongId[1] = {0x00};        // != kExpectedProductId -- deterministic absence
+    bus.scriptRead(kOtosWireAddr, wrongId, 1, 0);
+  }
 }
 
 // scriptColorAltDetectSuccess() -- scripts ONE successful ColorSensorLeaf

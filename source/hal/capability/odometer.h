@@ -101,12 +101,6 @@ class Odometer {
   // all four actions participate, not only SET_POSE.
   virtual bool fusableThisPass();
 
-  // Message plane — declared, not defined (no caller needs this yet;
-  // dev_loop.cpp/telemetry_commands.cpp both read pose() directly instead —
-  // see capability/gripper.h's file header for the "declared, not defined"
-  // mechanism this relies on).
-  msg::PoseEstimate state() const;
-
  private:
   // resetAppliedThisPass_ (090-002) — set true by apply()'s dispatch for
   // every one of the four reset actions (INIT/ZERO/RESET_TRACKING/SET_POSE)

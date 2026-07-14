@@ -58,14 +58,11 @@ _PHYSICS_WORLD_SRC = _SOURCE_DIR / "hal" / "sim" / "physics_world.cpp"
 _SIM_MOTOR_SRC = _SOURCE_DIR / "hal" / "sim" / "sim_motor.cpp"
 _SIM_ODOMETER_SRC = _SOURCE_DIR / "hal" / "sim" / "sim_odometer.cpp"
 _VELOCITY_PID_SRC = _SOURCE_DIR / "hal" / "velocity_pid.cpp"
-_SEGMENT_EXECUTOR_SRC = _SOURCE_DIR / "motion" / "segment_executor.cpp"
-_JERK_TRAJECTORY_SRC = _SOURCE_DIR / "motion" / "jerk_trajectory.cpp"
-_STOP_CONDITION_SRC = _SOURCE_DIR / "motion" / "stop_condition.cpp"
 # 100-007, THE CUTOVER: Subsystems::Drivetrain now holds a Drive::Drivetrain/
-# Drive::MotionPlan -- source/drive/*.cpp must link too. segment_executor/
-# jerk_trajectory/stop_condition.cpp stay in this list (parked, not deleted;
-# nothing in Drivetrain references them any more post-cutover, but this
-# harness's own -Wall/-Wextra compile-only proof doesn't care either way).
+# Drive::MotionPlan -- source/drive/*.cpp must link too. The retired
+# source/motion/ tree (segment_executor/jerk_trajectory/stop_condition) was
+# deleted after bench/field sign-off; nothing in Drivetrain references it
+# post-cutover, so it is no longer part of this harness's link set.
 _DRIVE_SOURCES = sorted((_SOURCE_DIR / "drive").glob("*.cpp"))
 
 _SOURCES = [
@@ -80,9 +77,6 @@ _SOURCES = [
     _SIM_MOTOR_SRC,
     _SIM_ODOMETER_SRC,
     _VELOCITY_PID_SRC,
-    _SEGMENT_EXECUTOR_SRC,
-    _JERK_TRAJECTORY_SRC,
-    _STOP_CONDITION_SRC,
     *_DRIVE_SOURCES,
 ]
 

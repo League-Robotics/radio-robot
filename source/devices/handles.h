@@ -50,18 +50,6 @@ namespace Devices {
 
 class DeviceBus;  // handles are constructed only by DeviceBus (friend, below)
 
-// lerpUint — the integer-reading counterpart to interpolation.h's float
-// lerp(), for ColorReading/LineReading's uint32_t channel fields (raw ADC
-// counts — see device_types.h). Rounds to nearest, clamped at 0 (frac is
-// already clamped to [0,1] by lerpFraction(), and both endpoints are
-// non-negative, so the only real edge case is round-to-nearest at frac==0/1
-// landing exactly on `older`/`newer`).
-inline uint32_t lerpUint(uint32_t older, uint32_t newer, float frac) {
-  float v = lerp(static_cast<float>(older), static_cast<float>(newer), frac);
-  if (v < 0.0f) v = 0.0f;
-  return static_cast<uint32_t>(v + 0.5f);
-}
-
 // ---------------------------------------------------------------------------
 // Motor — the differential-drive wheel handle (NezhaMotor leaf, DB-004).
 //
@@ -93,6 +81,8 @@ class Motor {
   void setNeutral(Neutral mode);     // coast / brake
   void resetPosition();              // zero encoder (staged, at-rest-guarded)
   void setPidEnabled(bool on);       // default true — armor applies in both modes
+  void setVelEstimator(uint8_t mode, uint8_t window);  // 0=EMA, 1=line-fit(window); bench A/B (101)
+  void setDutyAvg(uint8_t window);   // boxcar moving-average on PID duty output (1=off); bench (101)
 
   // --- Getters: latest published sample, never touch the bus. ---
   Sample<MotorReading> latest() const { return ring_.latest(); }
@@ -146,6 +136,12 @@ inline void Motor::resetPosition() { leaf_.resetPosition(); }
 
 inline void Motor::setPidEnabled(bool on) { leaf_.setPidEnabled(on); }
 
+inline void Motor::setVelEstimator(uint8_t mode, uint8_t window) {
+  leaf_.setVelEstimator(mode, window);
+}
+
+inline void Motor::setDutyAvg(uint8_t window) { leaf_.setDutyAvg(window); }
+
 inline bool Motor::sampleAt(uint64_t t, MotorReading& out) const {
   Sample<MotorReading> older, newer;
   if (!ring_.bracket(t, older, newer)) return false;
@@ -165,7 +161,6 @@ class ColorSensor {
  public:
   Sample<ColorReading> latest() const { return ring_.latest(); }
   Sample<ColorReading> sample(uint8_t age) const { return ring_.sample(age); }
-  bool sampleAt(uint64_t t, ColorReading& out) const;  // [us] bracketed lerp
   uint64_t updatedAt() const { return ring_.latest().stamp; }  // [us]
   bool connected() const { return leaf_.connected(); }
 
@@ -180,17 +175,6 @@ class ColorSensor {
   MeasurementRing<ColorReading>& ring_;
 };
 
-inline bool ColorSensor::sampleAt(uint64_t t, ColorReading& out) const {
-  Sample<ColorReading> older, newer;
-  if (!ring_.bracket(t, older, newer)) return false;
-  float frac = lerpFraction(older.stamp, newer.stamp, t);
-  out.r = lerpUint(older.value.r, newer.value.r, frac);
-  out.g = lerpUint(older.value.g, newer.value.g, frac);
-  out.b = lerpUint(older.value.b, newer.value.b, frac);
-  out.c = lerpUint(older.value.c, newer.value.c, frac);
-  return true;
-}
-
 // ---------------------------------------------------------------------------
 // LineSensor — the 4-channel handle (LineSensorLeaf leaf, DB-006). No
 // setters, same reasoning as ColorSensor above.
@@ -199,7 +183,6 @@ class LineSensor {
  public:
   Sample<LineReading> latest() const { return ring_.latest(); }
   Sample<LineReading> sample(uint8_t age) const { return ring_.sample(age); }
-  bool sampleAt(uint64_t t, LineReading& out) const;  // [us] bracketed lerp
   uint64_t updatedAt() const { return ring_.latest().stamp; }  // [us]
   bool connected() const { return leaf_.connected(); }
 
@@ -213,17 +196,6 @@ class LineSensor {
   LineSensorLeaf& leaf_;
   MeasurementRing<LineReading>& ring_;
 };
-
-inline bool LineSensor::sampleAt(uint64_t t, LineReading& out) const {
-  Sample<LineReading> older, newer;
-  if (!ring_.bracket(t, older, newer)) return false;
-  float frac = lerpFraction(older.stamp, newer.stamp, t);
-  for (int i = 0; i < 4; ++i) {
-    out.raw[i] = lerpUint(older.value.raw[i], newer.value.raw[i], frac);
-    out.normalized[i] = lerpUint(older.value.normalized[i], newer.value.normalized[i], frac);
-  }
-  return true;
-}
 
 // ---------------------------------------------------------------------------
 // Odometer — the OTOS pose handle (Otos leaf, DB-005).
@@ -248,7 +220,6 @@ class Odometer {
 
   Sample<PoseReading> latest() const { return ring_.latest(); }
   Sample<PoseReading> sample(uint8_t age) const { return ring_.sample(age); }
-  bool sampleAt(uint64_t t, PoseReading& out) const;  // [us] bracketed lerp (wrap-aware heading)
   uint64_t updatedAt() const { return ring_.latest().stamp; }  // [us]
   bool connected() const { return leaf_.connected(); }
 
@@ -262,21 +233,5 @@ class Odometer {
   Otos& leaf_;
   MeasurementRing<PoseReading>& ring_;
 };
-
-inline bool Odometer::sampleAt(uint64_t t, PoseReading& out) const {
-  Sample<PoseReading> older, newer;
-  if (!ring_.bracket(t, older, newer)) return false;
-  float frac = lerpFraction(older.stamp, newer.stamp, t);
-  out.x = lerp(older.value.x, newer.value.x, frac);
-  out.y = lerp(older.value.y, newer.value.y, frac);
-  // heading is the issue's flagged wrap-aware case (interpolation.h's own
-  // lerpAngle() header comment) -- every other PoseReading field is an
-  // ordinary linear quantity.
-  out.heading = lerpAngle(older.value.heading, newer.value.heading, frac);
-  out.v_x = lerp(older.value.v_x, newer.value.v_x, frac);
-  out.v_y = lerp(older.value.v_y, newer.value.v_y, frac);
-  out.omega = lerp(older.value.omega, newer.value.omega, frac);
-  return true;
-}
 
 }  // namespace Devices
