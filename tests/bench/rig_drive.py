@@ -69,6 +69,16 @@ def gentle_limits() -> Limits:
         track_k_s=1.5, track_k_theta=2.5, track_k_cross=1.5e-5, min_speed=15.0)
 
 
+def slow_move_limits() -> Limits:
+    # Slow linear profile so the line index (256 mm/rev) is sampled reliably by
+    # the 240 ms sensor telemetry -- for the secondary-encoder distance check.
+    return Limits(
+        linear=ProfileLimits(velocity=55.0, accel=120.0, decel=120.0),
+        rotational=ProfileLimits(velocity=0.8, accel=2.0, decel=2.0),
+        v_wheel_max=120.0, trim_v_max=40.0, trim_omega_max=0.5,
+        track_k_s=1.5, track_k_theta=2.5, track_k_cross=1.5e-5, min_speed=15.0)
+
+
 def _wrap(a: float) -> float:  # [rad] -> (-pi, pi]
     return math.atan2(math.sin(a), math.cos(a))
 
@@ -82,12 +92,16 @@ _TERMINAL = (Status.DONE_STOP, Status.DONE_HANDOFF,
              Status.ABORT_TIMEOUT, Status.ABORT_REPLAN_LIMIT)
 
 
+DRUM_MM_PER_REV = 256.1   # [mm] motor-1 encoder travel per drum revolution (line-index calibration)
+
+
 def run_turn(deg: float, otos_in_loop: bool, dt: float = 0.05,
              lead_rad: float = 0.05, timeout: float = 12.0, limits: Limits | None = None,
-             fuse_k: float = 0.3):
-    """Execute one in-place turn of `deg` degrees on the rig via the real drive
-    tracker. Returns (rows, final_status). Each row: t, pos_l/r, vel_l/r,
-    cmd_l/r, heading_enc, heading_meas, heading_otos [deg], status."""
+             fuse_k: float = 0.3, arc_length: float = 0.0):
+    """Execute one drive Goal on the rig via the real drive tracker: an in-place
+    turn of `deg` degrees and/or a straight `arc_length` mm move. Returns
+    (rows, final_status). Each row: t, pos_l/r, vel_l/r, cmd_l/r, heading_enc,
+    heading_meas, heading_otos [deg], n0 (line index), status."""
     rig = Rig(settle=3.0)
     rig.stream(80)
     for p in (LEFT_PORT, RIGHT_PORT):
@@ -97,7 +111,7 @@ def run_turn(deg: float, otos_in_loop: bool, dt: float = 0.05,
     rig.flush()
 
     drive = Drive(limits or gentle_limits(), TRACKWIDTH)
-    res = drive.plan(PlanRequest(goal=Goal(arc_length=0.0, delta_heading=math.radians(deg)),
+    res = drive.plan(PlanRequest(goal=Goal(arc_length=arc_length, delta_heading=math.radians(deg)),
                                  start=Pose()))
     if res.verdict != Verdict.OK:
         rig.close()
@@ -121,6 +135,8 @@ def run_turn(deg: float, otos_in_loop: bool, dt: float = 0.05,
     t_wall = 0.0
     status = Status.RUNNING
     wall0 = time.monotonic()
+    x_od = y_od = 0.0          # [mm] dead-reckoned position (tracker needs it for moves)
+    prev_pl = prev_pr = None
     while t_wall < timeout:
         pump()
         pos_l = last_tlm.get(f"{LEFT_PORT}p"); pos_r = last_tlm.get(f"{RIGHT_PORT}p")
@@ -130,6 +146,12 @@ def run_turn(deg: float, otos_in_loop: bool, dt: float = 0.05,
             continue  # wait for first telemetry frame
         heading_enc = (pos_r - pos_l) / TRACKWIDTH
         omega_enc = ((vel_r or 0.0) - (vel_l or 0.0)) / TRACKWIDTH
+        # dead-reckon (x, y) from wheel-travel deltas along the current heading
+        if prev_pl is not None:
+            ds = ((pos_l - prev_pl) + (pos_r - prev_pr)) / 2.0
+            x_od += ds * math.cos(heading_enc)
+            y_od += ds * math.sin(heading_enc)
+        prev_pl, prev_pr = pos_l, pos_r
 
         if otos_in_loop:
             # Synthesize the "robot rotated" feedback: drive the servo (which
@@ -147,7 +169,7 @@ def run_turn(deg: float, otos_in_loop: bool, dt: float = 0.05,
             heading_meas = heading_enc
 
         si = StepInput(t=t_plan,
-                       measured=BodyState(Pose(0.0, 0.0, heading_meas),
+                       measured=BodyState(Pose(x_od, y_od, heading_meas),
                                           Twist(0.0, 0.0, omega_enc)),
                        left=WheelState(pos_l, vel_l or 0.0, True, True),
                        right=WheelState(pos_r, vel_r or 0.0, True, True))
@@ -163,6 +185,10 @@ def run_turn(deg: float, otos_in_loop: bool, dt: float = 0.05,
             "heading_enc": math.degrees(heading_enc),
             "heading_meas": math.degrees(heading_meas),
             "heading_otos": (math.degrees(oh) if oh is not None else None),
+            "x_od": x_od, "y_od": y_od,  # [mm] dead-reckoned position
+            "n0": last_stlm.get("n0"),   # line-sensor index channel (secondary encoder)
+            "ref_omega": out.record.ref.omega,   # [rad/s] planned yaw rate (accel-limit check)
+            "ref_v": out.record.ref.v,           # [mm/s] planned body speed
             "status": int(out.status),
         })
         status = out.status
