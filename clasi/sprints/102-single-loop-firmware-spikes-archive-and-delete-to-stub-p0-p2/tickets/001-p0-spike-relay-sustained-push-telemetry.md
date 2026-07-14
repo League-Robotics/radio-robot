@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: 'P0 spike: relay sustained-push telemetry'
-status: open
+status: done
 use-cases:
 - SUC-001
 depends-on: []
@@ -47,33 +47,75 @@ past what serial's fixed 115200 baud can carry.
 
 ## Acceptance Criteria
 
-- [ ] Binary `STREAM` armed at ~30 Hz against current firmware.
-- [ ] Direct-USB frame delivery captured for at least several minutes; frame
+- [x] Binary `STREAM` armed at ~30 Hz against current firmware. (33 ms
+      period, ~30.3 Hz target, robot v0.20260714.2.)
+- [x] Direct-USB frame delivery captured for at least several minutes; frame
       count, gap pattern, and any corrupted/malformed frames recorded with
       concrete numbers, and a sustainable frames/sec figure computed at the
-      fixed 115200 baud (no baud switching in this ticket).
-- [ ] Same capture repeated through the radio relay's `!GO` data plane
+      fixed 115200 baud (no baud switching in this ticket). (240 s,
+      6430/6430 delivered, 0.00% drop, 0 malformed, 26.79 fps.)
+- [x] Same capture repeated through the radio relay's `!GO` data plane
       (opened with DTR asserted, `!GO` sent to enter the data plane, per
       `.clasi/knowledge/` protocol notes) for a comparable duration, with its
-      own sustainable frames/sec figure computed.
-- [ ] Delivered-frame rate and drop pattern compared numerically between
+      own sustainable frames/sec figure computed. (240 s, 6428/6430
+      delivered, 0.031% drop, 26.78 fps, `entered_data_plane: true`
+      confirmed in connect info.)
+- [x] Delivered-frame rate and drop pattern compared numerically between
       direct-USB and relay paths (e.g. frames/sec, % dropped, longest gap).
-- [ ] `.clasi/knowledge/2026-06-12-relay-go-data-plane-and-docs.md` updated
+      (26.79 vs 26.78 fps; 0.00% vs 0.031% drop; longest gap 0 vs 1;
+      relay loss classified uniform/sparse — two isolated single-frame
+      gaps, not a burst. See spike-001-relay-telemetry.md.)
+- [x] `.clasi/knowledge/2026-06-12-relay-go-data-plane-and-docs.md` updated
       with an explicit confirm-or-retract verdict on "async STREAM frames
       dropped by the bridge" against the CURRENT relay firmware, dated and
-      backed by the measurement numbers above.
-- [ ] A push-vs-host-paced-poll recommendation is written down for the
+      backed by the measurement numbers above. (2026-07-14 correction
+      block added: claim RETRACTED.)
+- [x] A push-vs-host-paced-poll recommendation is written down for the
       P4/P5 designers (sprint 103/104), stating which return-path strategy
-      the ack-ring telemetry design should assume.
-- [ ] The ticket's verdict explicitly records all three rate-setting numbers
+      the ack-ring telemetry design should assume. (PUSH/STREAM recommended;
+      see spike-001-relay-telemetry.md "Push vs. host-paced-poll
+      recommendation".)
+- [x] The ticket's verdict explicitly records all three rate-setting numbers
       — relay-sustained rate, direct-USB-at-115200-sustained rate, and the
       recommended common cadence (their minimum, with headroom) — as the
       telemetry rate budget both transports must honor. This replaces the
       dropped serial baud-ceiling spike (former ticket 002); no baud change
-      is proposed or implied anywhere in the stack.
-- [ ] No production firmware or host source file is modified by this
+      is proposed or implied anywhere in the stack. (Relay 26.78 fps,
+      direct-USB 26.79 fps, recommended common cadence 25 Hz / 40 ms
+      period, no baud change.)
+- [x] No production firmware or host source file is modified by this
       ticket — only the knowledge-note doc and this ticket's own
-      documentation.
+      documentation. (Confirmed: only the knowledge note, this ticket, the
+      new spike-001-relay-telemetry.md results note, and the new
+      tests/bench/relay_telemetry_rate.py diagnostic script changed.)
+
+## Completion Notes (2026-07-14)
+
+Measured on the bench rig against current firmware (robot v0.20260714.2,
+tovez/2314287040; relay "zavaz"/4076631795) — no firmware or production host
+code changed. Two sequential 240 s sustained-push captures at a 33 ms
+(~30.3 Hz) armed `STREAM` period:
+
+- **Direct USB (115200 baud)**: 6430/6430 delivered, 0.00% drop, 0
+  malformed, sustained 26.79 fps.
+- **Relay (`!GO` data plane)**: 6428/6430 delivered, 0.031% drop (2 isolated
+  single-frame gaps, uniform/sparse — traced to `source/com/radio.cpp:62-71`'s
+  single-slot RX mailbox, not a bridge-wide async-drop behavior), sustained
+  26.78 fps.
+- **Verdict**: the 2026-06-12 knowledge note's "async STREAM frames are
+  dropped by the bridge" claim is RETRACTED for current relay firmware.
+  PUSH telemetry is recommended for the P4/P5 ack-ring design over
+  host-paced polling.
+- **Three rate-setting numbers**: relay-sustained 26.78 fps,
+  direct-USB-sustained 26.79 fps, recommended common cadence **25 Hz
+  (40 ms period)** for both transports, no baud change.
+
+Full writeup:
+`clasi/sprints/102-single-loop-firmware-spikes-archive-and-delete-to-stub-p0-p2/spike-001-relay-telemetry.md`.
+Knowledge note updated:
+`.clasi/knowledge/2026-06-12-relay-go-data-plane-and-docs.md` (2026-07-14
+correction block). Diagnostic script committed:
+`tests/bench/relay_telemetry_rate.py`.
 
 ## Implementation Plan
 
