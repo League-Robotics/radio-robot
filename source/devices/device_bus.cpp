@@ -209,40 +209,12 @@ void DeviceBus::publishSamples(uint64_t nowUs) {
 }
 
 // ---------------------------------------------------------------------------
-// Fiber lifecycle (DB-008) -- start()/stop()/running(), the detection
-// preamble, and the neutralize epilogue. See device_bus.h's own declaration
-// comments for start()/stop()/runPreamble()/neutralizeAllMotors() for the
-// full contract; this section is the implementation those comments describe.
+// Single-loop lifecycle (narrowed by sprint 102 ticket 005 -- see this
+// file's own header comment). runPreamble()/runCycleOnce()/
+// neutralizeAllMotors() are called directly by the single foreground loop;
+// there is no fiber, no start()/stop()/running(), no FiberRunner
+// indirection left in this subsystem.
 // ---------------------------------------------------------------------------
-
-void DeviceBus::start() {
-  stopRequested_ = false;
-  loopExited_ = false;
-  running_ = true;
-  fiberRunner_->run(*this);  // real: spawns async, returns immediately.
-                              // host: runs the preamble + a bounded number
-                              // of cycles synchronously, in place, THEN
-                              // returns -- see fiber_runner.h.
-}
-
-void DeviceBus::stop() {
-  stopRequested_ = true;  // (1) request exit -- the cycle loop (wherever it
-                           //     is actually running) exits at its next
-                           //     while-condition check.
-
-  while (!loopExited_) {  // (2) join -- cooperative yield-poll. A no-op in
-    sleeper_.yield();     //     host builds: the bounded loop already ran
-  }                        //     to completion inside start(), so
-                           //     loopExited_ is already true by the time
-                           //     stop() is ever called.
-
-  neutralizeAllMotors();  // (3) neutralize -- see this method's own header
-                           //     comment (device_bus.h) for why this call,
-                           //     not the fiber body's own tail, is what
-                           //     guarantees "wheels never left driven."
-
-  running_ = false;
-}
 
 // ---------------------------------------------------------------------------
 // runPreamble() -- the detection preamble (issue "The fiber and its cycle"
@@ -353,56 +325,5 @@ void DeviceBus::neutralizeAllMotors() {
   serviceMotor(motor1_);
   serviceMotor(motor2_);
 }
-
-// ---------------------------------------------------------------------------
-// FiberRunner implementations (fiber_runner.h) -- defined here, not in
-// fiber_runner.h itself, because both need DeviceBus to be a COMPLETE type
-// (to call runPreamble()/runCycleOnce()/stopRequested()/markLoopExited()),
-// which is only true once this file's own #include "devices/device_bus.h"
-// has pulled in the full class definition above.
-// ---------------------------------------------------------------------------
-
-#ifndef HOST_BUILD
-// The trampoline create_fiber() actually invokes (real CODAL builds only).
-// DB-009 verifies this against real hardware -- in particular, that
-// create_fiber()'s signature (a bare `void(*)(void*)` entry point plus a
-// void* context argument, the common CODAL-core convention this project's
-// own clock_real.cpp precedent for fiber_sleep()/schedule() already relies
-// on being available via a plain "MicroBit.h" include) matches what actually
-// ships in this project's vendored CODAL; this is the ONE call site in the
-// whole subsystem that touches create_fiber(), by design (fiber_runner.h's
-// own header comment).
-//
-// A STATIC MEMBER of CodalFiberRunner (fiber_runner.h), not a free function
-// in an anonymous namespace (DB-008's original form here) -- DB-009's first
-// real (non-HOST_BUILD) ARM compile of this file caught that the free-
-// function form cannot reach DeviceBus::runPreamble()/stopRequested()/
-// markLoopExited() (all private): device_bus.h's `friend class
-// CodalFiberRunner;` grants friendship to that CLASS, not to an unrelated
-// free function. See fiber_runner.h's own declaration comment for the full
-// reasoning.
-void CodalFiberRunner::codalFiberEntry(void* arg) {
-  DeviceBus* bus = static_cast<DeviceBus*>(arg);
-  bus->runPreamble();
-  while (!bus->stopRequested()) {
-    bus->runCycleOnce();
-  }
-  bus->markLoopExited();
-}
-
-void CodalFiberRunner::run(DeviceBus& bus) {
-  create_fiber(&codalFiberEntry, static_cast<void*>(&bus));
-}
-#endif
-
-#ifdef HOST_BUILD
-void HostFiberRunner::run(DeviceBus& bus) {
-  bus.runPreamble();
-  for (int i = 0; i < maxCycles_ && !bus.stopRequested(); ++i) {
-    bus.runCycleOnce();
-  }
-  bus.markLoopExited();
-}
-#endif
 
 }  // namespace Devices

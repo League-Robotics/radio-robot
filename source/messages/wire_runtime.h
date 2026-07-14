@@ -15,8 +15,13 @@
 // `envelope.h`/`motion.h`/any other `messages/*.h` or naming a `msg::*`
 // type. Ticket 005's GENERATED `wire.{h,cpp}` (M4) is built on top of these
 // primitives to walk a specific message's field table; `source/commands/
-// binary_channel.{h,cpp}` (ticket 007, M5) calls the base64 functions here
-// directly for the `*B<base64>` armor layer. Speaks raw protobuf bytes only:
+// binary_channel.{h,cpp}` (ticket 007, M5) called the base64 functions here
+// directly for the `*B<base64>` armor layer -- deleted sprint 102 ticket 005
+// alongside the rest of the Elite orchestration stack (the armor/dearmor
+// call sequence is transcribed for sprint 103's `Comms` at clasi/sprints/
+// 102-.../notes/armor-wire-codec-transcription.md; these primitives
+// themselves are untouched and still the base64 codec any new caller uses).
+// Speaks raw protobuf bytes only:
 // varint, zigzag, fixed32, length-delimited framing, packed-repeated
 // arrays, unknown-field skip, base64. Knows nothing about field numbers,
 // offsets, or bounds belonging to any specific message -- that is M4's job.

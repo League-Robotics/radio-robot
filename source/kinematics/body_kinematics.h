@@ -77,8 +77,12 @@ void saturate(float vL, float vR,
 
 /**
  * Array-form overloads — differential adapter for the shared IKinematics
- * contract (046-002). These allow BodyKinematics to be used via the
- * compile-time namespace alias in i_kinematics.h alongside MecanumKinematics.
+ * contract (046-002), originally so BodyKinematics could be used via a
+ * compile-time namespace alias alongside MecanumKinematics
+ * (source/kinematics/i_kinematics.h, deleted sprint 102 ticket 005 alongside
+ * the rest of the Elite orchestration stack that was its only consumer).
+ * Kept here as the array-form API surface; no current caller requires the
+ * shared-contract alias.
  *
  * wheels[2] = {vL, vR} (same sign convention as the scalar forms above).
  * v_y is always 0 for a differential drivetrain; inverse ignores t.v_y and

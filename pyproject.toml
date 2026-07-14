@@ -99,12 +99,15 @@ aprilcam = { path = "../AprilTags", editable = true }
 #   tests/tools/                — kept category; skeleton only for now, not
 #                                 collected until it holds real tests.
 #   tests/testgui/              — headless PySide6 GUI tests for the Robot
-#                                 Test GUI cockpit (ticket 083-004), offscreen
-#                                 (QT_QPA_PLATFORM=offscreen), no hardware.
-#                                 Requires `uv sync --group gui`; tests that
-#                                 also need the compiled sim lib additionally
-#                                 skip cleanly (not error) if `just build-sim`
-#                                 hasn't been run.
+#                                 Test GUI cockpit (ticket 083-004). Dropped
+#                                 from testpaths by sprint 102 ticket 005:
+#                                 testgui is parked (its `build-sim`
+#                                 dependency, and much of what it drives, was
+#                                 deleted along with the Elite orchestration
+#                                 stack) -- not pytest-collected until a
+#                                 later sprint revives it against the new
+#                                 single-loop firmware. The directory itself
+#                                 is left on disk, untouched.
 #
 # archive/tests_old/ and archive/source_old/ are the parked pre-rebuild trees
 # (rollback = restore archive/source_old/ to source_old/, then codal.json
@@ -131,7 +134,7 @@ aprilcam = { path = "../AprilTags", editable = true }
 # tests/sim/unit/test_bare_loop_commands.py.) Parked, not deleted (see
 # tests/sim/parked-094/README.md), with the same bare-name basename-fnmatch
 # exclusion as parked-093.
-testpaths = ["tests/sim", "tests/unit", "tests/testgui"]
+testpaths = ["tests/sim", "tests/unit"]
 norecursedirs = [
     "tests_old", "source_old", "parked-093", "parked-094",
     "vendor", "build", ".venv", "node_modules",
