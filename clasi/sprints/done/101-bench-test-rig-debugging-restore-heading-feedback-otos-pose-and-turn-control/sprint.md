@@ -1,7 +1,7 @@
 ---
-id: "101"
-title: "Bench test-rig debugging: restore heading feedback (OTOS/pose) and turn control"
-status: roadmap
+id: '101'
+title: 'Bench test-rig debugging: restore heading feedback (OTOS/pose) and turn control'
+status: done
 branch: sprint/101-bench-test-rig-debugging-restore-heading-feedback-otos-pose-and-turn-control
 use-cases: []
 issues: []
