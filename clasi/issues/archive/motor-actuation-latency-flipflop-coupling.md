@@ -1,6 +1,10 @@
 ---
-status: pending
+status: obsolete
 ---
+
+> **OBSOLETE (2026-07-14 stakeholder triage).** Superseded by the single-loop
+> firmware rebuild (`clasi/issues/single-loop-firmware-de-fiber-delete-the-elite-plumbing-telemetry-only-return-path.md`;
+> review: `docs/code_review/2026-07-13-devices-drive-review.md`). Actuation remains bus-scheduled by design in the single-loop rebuild (a clean decouple hung the bus, per knowledge); the surviving substance — model the ~120-140ms latency explicitly and tune against it — is carried by host-planner-design-lessons-from-drive-v2-review.md item 8.
 
 # Motor actuation lags command by ~80–160 ms — actuation is coupled to encoder sensing on the shared I²C brick
 

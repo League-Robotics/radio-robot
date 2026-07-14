@@ -1,6 +1,10 @@
 ---
-status: pending
+status: obsolete
 ---
+
+> **OBSOLETE (2026-07-14 stakeholder triage).** Superseded by the single-loop
+> firmware rebuild (`clasi/issues/single-loop-firmware-de-fiber-delete-the-elite-plumbing-telemetry-only-return-path.md`;
+> review: `docs/code_review/2026-07-13-devices-drive-review.md`). The commands/ dispatch layer (router/processor/binary_channel) is deleted; the new surface is three commands decoded in the loop's comm window. No dispatch architecture to redesign.
 
 # Message-Processor Dispatch for the Binary Command Plane
 

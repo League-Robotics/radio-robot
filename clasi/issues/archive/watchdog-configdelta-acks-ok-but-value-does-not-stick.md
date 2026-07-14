@@ -1,6 +1,10 @@
 ---
-status: pending
+status: obsolete
 ---
+
+> **OBSOLETE (2026-07-14 stakeholder triage).** Superseded by the single-loop
+> firmware rebuild (`clasi/issues/single-loop-firmware-de-fiber-delete-the-elite-plumbing-telemetry-only-return-path.md`;
+> review: `docs/code_review/2026-07-13-devices-drive-review.md`). The ConfigDelta watchdog path (Configurator/blackboard config plumbing) is deleted; the rebuild replaces it with one unified deadman armed by every actuation command, verified by the P5 kill-test.
 
 # Watchdog ConfigDelta acks ok but the value does not stick
 

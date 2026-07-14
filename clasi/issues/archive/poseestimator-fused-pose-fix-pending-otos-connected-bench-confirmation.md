@@ -1,6 +1,10 @@
 ---
-status: pending
+status: obsolete
 ---
+
+> **OBSOLETE (2026-07-14 stakeholder triage).** Superseded by the single-loop
+> firmware rebuild (`clasi/issues/single-loop-firmware-de-fiber-delete-the-elite-plumbing-telemetry-only-return-path.md`;
+> review: `docs/code_review/2026-07-13-devices-drive-review.md`). Subsystems::PoseEstimator and EkfTiny are deleted; the robot stops fusing (host fuses OTOS/camera against encoder odometry).
 
 # PoseEstimator frozen fused-pose: root-cause hypothesis formed, fix pending one bench confirmation
 

@@ -1,5 +1,12 @@
 ---
-status: pending
+status: in-progress
+sprint: '102'
+tickets:
+- 102-001
+- 102-002
+- 102-003
+- 102-004
+- 102-005
 ---
 
 # Single-Loop Firmware: de-fiber, delete the Elite plumbing, telemetry-only return path
@@ -16,7 +23,11 @@ follower with continuous, honest telemetry — a firmware you can read top to bo
 
 Decisions (stakeholder, 2026-07-14): host-side planning; **delete the old stack up
 front** (fallback = git tag + archived hex, not parked code); keep `*B` base64-armored
-line framing and **raise the serial baud**; **relay stream spike first**.
+line framing; **relay stream spike first**. REVISED 2026-07-14 (stakeholder): the
+baud raise is DROPPED — the radio is the production interface and its throughput is
+fixed, so raising USB baud only lets the bench diverge from the field. Instead the
+measured radio-path throughput (P0 relay spike) SETS the telemetry budget, and serial
+runs at the same effective rate so bench behavior equals field behavior.
 
 ## The main loop (the whole program, one page)
 
@@ -126,9 +137,13 @@ in the port.
   Budget: worst-case TLM is 165 B against a 186 B envelope ceiling (wire.h:53-59,
   static-asserted at build) — move `acc_*`, `glitch_*`, `ts_*`, `cmd_vel_*` to a
   slower secondary frame. All edits in `protos/` + generators, never generated files.
-- **Baud:** `SerialPort::setBaud()` already exists (serial_port.cpp:70-82; 230400/921600/1M).
-  Boot at 115200, host commands the switch on an open port (reopen pulses DTR = reset).
-  30 Hz × ~252 B armored ≈ 66% of 115200 — the raise is load-bearing.
+- **Rate budget (revised 2026-07-14 — no baud change):** serial stays at 115200. The
+  radio path is the production interface and the binding constraint; the P0 relay spike
+  measures its sustainable frame rate, and THAT number sizes the telemetry cadence and
+  frame split for BOTH transports (one cadence everywhere — the bench must not enjoy
+  bandwidth the field doesn't have). 30 Hz x ~252 B armored is ~66% of 115200, so if the
+  radio measurement supports ~30 Hz, serial carries it without a baud change; if the
+  radio supports less, the cadence (or frame size) comes down to match, not up.
 
 ## Delete / keep (full inventory: Plan-agent report, merged below)
 
@@ -173,8 +188,9 @@ verify) die; already-stale DEV-era scripts deleted.
 - **P0 spikes:** (a) relay sustained-push: stream binary TLM @30 Hz through the relay
   with CURRENT firmware, measure delivery (standing note says async STREAM drops;
   ack-ring design tolerates loss, but if the relay hard-blocks pushes, fix relay fw or
-  fall back to host-paced polling of the same frame). (b) baud ceiling on DAPLink —
-  robot USB and relay dongle both. (c) frame budget: draft protos, run gen_messages —
+  fall back to host-paced polling of the same frame). This spike's measured sustainable
+  rate SETS the telemetry cadence for both transports (baud-raise spike dropped
+  2026-07-14 — radio is the production interface; serial matches it). (b) frame budget: draft protos, run gen_messages —
   the wire.h static_asserts are the pass/fail, no hardware needed.
 - **P1 tag + archive:** annotated tag `pre-single-loop`; archive known-good default hex
   AND a devicebus-bringup hex (rig keeps working through P3–P5); reflash once to prove
@@ -191,7 +207,8 @@ verify) die; already-stale DEV-era scripts deleted.
 - **P4 wire protocol:** pruned protos + ack ring + secondary frame; unified deadman;
   always-on 30 Hz emission. Gate: wire tests green; scope confirms cadence; budget
   asserts pass.
-- **P5 host:** twist/config/stop builders, ack-ring matcher, baud raise both ends.
+- **P5 host:** twist/config/stop builders, ack-ring matcher (no baud change — serial
+  stays 115200; cadence per the P0 radio measurement).
   Gate: live round-trip — twist drives wheels, ack observed in TLM, kill host
   mid-stream → wheels stop on deadman.
 - **P6 bench gate:** rewritten rig_dev/rig_soak binary-plane soak — zero I2C errors,
@@ -206,7 +223,7 @@ single-slot (host command spacing > cycle period; ack ring makes drops detectabl
 keep `MICROBIT_RADIO_MAX_PACKET_SIZE=250` in codal.json; keep newline-terminated
 armored lines ≤ ~250 B (relay line-splitting + 256 B RX buffers); settle windows must
 `uBit.sleep`, never spin, never `sendReliable()` (5 ms wait > 4 ms window); newlib-nano
-has no %f; DTR pulse on port-reopen resets the robot (baud switch on open port);
+has no %f; DTR pulse on port-reopen resets the robot;
 CODAL RAM near-full is normal.
 
 ## Verification

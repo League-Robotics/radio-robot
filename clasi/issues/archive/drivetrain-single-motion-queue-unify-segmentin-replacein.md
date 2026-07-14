@@ -1,6 +1,10 @@
 ---
-status: pending
+status: obsolete
 ---
+
+> **OBSOLETE (2026-07-14 stakeholder triage).** Superseded by the single-loop
+> firmware rebuild (`clasi/issues/single-loop-firmware-de-fiber-delete-the-elite-plumbing-telemetry-only-return-path.md`;
+> review: `docs/code_review/2026-07-13-devices-drive-review.md`). subsystems/drivetrain and both its queues (segmentIn/replaceIn) are deleted; the command surface becomes twist/config/stop with one unified deadman. Nothing to unify.
 
 # Drivetrain gets ONE motion queue — unify segmentIn/replaceIn, retire DrivetrainCommand
 

@@ -1,6 +1,10 @@
 ---
-status: pending
+status: obsolete
 ---
+
+> **OBSOLETE (2026-07-14 stakeholder triage).** Superseded by the single-loop
+> firmware rebuild (`clasi/issues/single-loop-firmware-de-fiber-delete-the-elite-plumbing-telemetry-only-return-path.md`;
+> review: `docs/code_review/2026-07-13-devices-drive-review.md`). Superseded wholesale: the rebuild's P5 realigns host tooling to the NEW three-command surface (twist/config/stop + always-on TLM); the surface this issue targets is deleted.
 
 # Realign host tooling (TestGUI / robot_radio) + testgui tests to the current wire surface
 

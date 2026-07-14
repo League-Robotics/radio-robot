@@ -2,6 +2,13 @@
 status: pending
 ---
 
+> **RETARGETED (2026-07-14 stakeholder triage).** SimMotor/SimHardware and
+> the current host sim harness are deleted by the single-loop rebuild; the
+> ASK survives unchanged as a design requirement for the rebuild's P7 sim
+> (a thin steppable-loop sim over the devices layer's HOST_BUILD fakes,
+> whose scripted I2CBus can natively fake NAKs, stale reads, and wedge
+> latch-ups — a better fault-injection seam than SimMotor ever was).
+
 # Sim hardware fault injection — disconnect, wedge, encoder dropout
 
 ## Problem

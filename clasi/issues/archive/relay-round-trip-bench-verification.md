@@ -1,6 +1,10 @@
 ---
-status: pending
+status: obsolete
 ---
+
+> **OBSOLETE (2026-07-14 stakeholder triage).** Superseded by the single-loop
+> firmware rebuild (`clasi/issues/single-loop-firmware-de-fiber-delete-the-elite-plumbing-telemetry-only-return-path.md`;
+> review: `docs/code_review/2026-07-13-devices-drive-review.md`). Superseded by the rebuild's P0 relay push-stream spike and P6 bench gate, which verify the relay round-trip against the NEW surface; the surface this issue targets is deleted.
 
 # Bench-verify the current command surface over the radio-relay round-trip (not just direct serial)
 

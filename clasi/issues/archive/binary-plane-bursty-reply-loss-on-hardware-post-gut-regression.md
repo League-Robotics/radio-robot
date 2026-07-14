@@ -1,6 +1,10 @@
 ---
-status: pending
+status: obsolete
 ---
+
+> **OBSOLETE (2026-07-14 stakeholder triage).** Superseded by the single-loop
+> firmware rebuild (`clasi/issues/single-loop-firmware-de-fiber-delete-the-elite-plumbing-telemetry-only-return-path.md`;
+> review: `docs/code_review/2026-07-13-devices-drive-review.md`). Per-command replies are eliminated: ACKs/NACKs ride in the always-on ~30Hz telemetry frame's ack ring, repeated across frames, so single-frame loss cannot lose an ack — the loss-recovery design this issue asked for. The P0 relay/rate spikes measure stream delivery directly.
 
 # Binary command plane: bursty reply loss on hardware (post-gut regression candidate)
 

@@ -1,6 +1,10 @@
 ---
-status: pending
+status: obsolete
 ---
+
+> **OBSOLETE (2026-07-14 stakeholder triage).** Superseded by the single-loop
+> firmware rebuild (`clasi/issues/single-loop-firmware-de-fiber-delete-the-elite-plumbing-telemetry-only-return-path.md`;
+> review: `docs/code_review/2026-07-13-devices-drive-review.md`). Chip-native mounting-offset compensation is moot: fusion moves host-side and the host applies the lever-arm (per the standing otos-offset knowledge, the register was unwritable anyway); the OI/OR/OL/OA verb family dies with the wire pruning.
 
 # OTOS REG_OFFSET bench re-test deferred — confirm whether the chip honors chip-native mounting-offset compensation
 

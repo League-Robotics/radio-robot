@@ -1,6 +1,10 @@
 ---
-status: pending
+status: obsolete
 ---
+
+> **OBSOLETE (2026-07-14 stakeholder triage).** Superseded by the single-loop
+> firmware rebuild (`clasi/issues/single-loop-firmware-de-fiber-delete-the-elite-plumbing-telemetry-only-return-path.md`;
+> review: `docs/code_review/2026-07-13-devices-drive-review.md`). The rogo translator proxy and the whole legacy_translate/legacy_verbs stack are deleted in the rebuild's host fallout; legacy text clients are not a supported surface of the new wire protocol.
 
 # rogo translator proxy still gates R/TURN/G as "unsupported" — drifted duplicate of _ALWAYS_UNSUPPORTED_VERBS
 
