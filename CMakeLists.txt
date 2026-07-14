@@ -180,10 +180,10 @@ endif()
 # -std=gnu++20 here overrides the c++11 in ${device.cpp_flags} above WITHOUT
 # editing the fetched/vendored libraries/codal-microbit-v2/target.json (which
 # codal re-fetches and would clobber). gnu++20 (not strict c++20): C++20 with
-# GNU extensions, needed because vendored Ruckig's roots.hpp uses M_PI, which
-# newlib hides under strict -std=c++20 (__STRICT_ANSI__). gnu++20 is a strict
-# superset, so nothing that built at c++20 regresses. Motivation: vendoring
-# Ruckig -- see clasi/issues/planner-motion-planning-via-vendored-ruckig.md.
+# GNU extensions -- originally needed because vendored Ruckig's roots.hpp used
+# M_PI, which newlib hides under strict -std=c++20 (__STRICT_ANSI__); Ruckig
+# was deleted (sprint 102 ticket 005) but the wider C++20-with-GNU-extensions
+# standard is kept as the project's general build target, not reverted.
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++20")
 
 # linker opts
@@ -218,18 +218,14 @@ set(LIB_FOLDERS "")
 # Add the root of the libraries folder as a search path. Useful for disambiguating header files with duplicated names.
 MESSAGE (STATUS "Adding library path: (${PROJECT_SOURCE_DIR}/${LIB_DEST})")
 include_directories(${PROJECT_SOURCE_DIR}/${LIB_DEST})
-# libraries/cmon-pid: float-adapted vendored header (Sprint 049, Phase A).
-# Added explicitly because cmon-pid is not a CODAL dependency managed via
-# add_subdirectory — it is a plain vendored-in-place header.
-include_directories(${PROJECT_SOURCE_DIR}/libraries/cmon-pid)
-# libraries/tinyekf: header-only EKF LA backend (Sprint 050, Phase B).
-include_directories(${PROJECT_SOURCE_DIR}/libraries/tinyekf)
-# libraries/ruckig: vendored jerk-limited trajectory generator (Sprint 089).
-# Header-only include path, same as cmon-pid/tinyekf above; its 11 core .cpp
-# sources are appended into SOURCE_FILES below (Decision 7 -- appended to the
-# flat source list, not a separate static-library target, since no build
-# file was vendored -- see libraries/ruckig/README.vendored.md).
-include_directories(${PROJECT_SOURCE_DIR}/libraries/ruckig/include)
+# libraries/{cmon-pid,tinyekf,ruckig} (previously vendored here: cmon-pid PID
+# header Sprint 049, tinyekf header-only EKF backend Sprint 050, ruckig
+# jerk-limited trajectory generator Sprint 089) were deleted wholesale by
+# sprint 102 ticket 005 alongside the Elite orchestration stack that was
+# their only consumer (source/hal/velocity_pid.*, source/estimation/,
+# source/drive/) -- nothing in the tree references any of the three any
+# more, so their include_directories()/GLOB lines are removed, not just
+# their vendored trees.
 
 #add_subdirectory("${PROJECT_SOURCE_DIR}/${LIB_DEST}/${dep}")
 
@@ -263,8 +259,8 @@ endif()
 RECURSIVE_FIND_DIR(INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}" "*.h")
 RECURSIVE_FIND_DIR(HPP_DIRS "${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}" "*.hpp")
 list(APPEND INCLUDE_DIRS ${HPP_DIRS})
-# 039-001: add the source/ root so path-qualified capability includes
-# (e.g. #include "hal/capability/IBusDiagnostics.h") resolve in the firmware
+# 039-001: add the source/ root so path-qualified includes
+# (e.g. #include "devices/device_bus.h") resolve in the firmware
 # build, matching the host build which already lists source/. RECURSIVE_FIND_DIR
 # only adds directories that directly contain headers, and source/ has none.
 list(APPEND INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}")
@@ -279,139 +275,30 @@ list(APPEND SOURCE_FILES ${C_FILES})
 list(APPEND SOURCE_FILES ${CC_FILES})
 
 # ---------------------------------------------------------------------------
-# ROBOT_RUN_MODE (039-005): explicit build-target run mode. The firmware (CODAL)
-# build is REAL by default — build.py passes -DROBOT_RUN_MODE=REAL. REAL compiles
-# the hal/real/ device impls and excludes the host-only hal/sim/ mock device set
-# and the hal/ReplayHAL stub.
-#
-#   REAL   (default firmware) — hal/real/ impls; hal/sim/ + hal/ReplayHAL excluded.
-#   SIM    — host build (tests/_infra/sim/CMakeLists.txt); not produced here.
-#   REPLAY — SIM source set + hal/ReplayHAL stub (Phase F TLM replay).
-#
-# PRODUCTION_BUILD and BENCH_OTOS_ENABLED stay ORTHOGONAL to ROBOT_RUN_MODE.
+# ROBOT_RUN_MODE (039-005): explicit build-target run mode. Retained as a
+# structural marker (REAL is the only mode this build ever produces now --
+# sprint 102 ticket 005 deleted hal/ + its REAL/SIM/REPLAY device-impl split
+# wholesale, along with hal/sim/ and every mode this comment used to name).
 # ---------------------------------------------------------------------------
 if (NOT "${ROBOT_RUN_MODE}" STRGREATER "")
     set(ROBOT_RUN_MODE "REAL")
 endif()
 message("${BoldBlue}ROBOT_RUN_MODE: ${ROBOT_RUN_MODE}${ColourReset}")
 
-# Exclude host-only sim/mock device files from the firmware (CODAL) build.
-# The hal/sim/ directory has no MicroBit/CODAL dependencies
-# and must not be compiled into firmware — it is used by the host CMake build
-# (ticket 020-003, tests/_infra/sim/CMakeLists.txt) and the Python test harness
-# only.
-list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/hal/sim/.*")
-# SimCommands.cpp (069-003) is the sim-build-only SIMSET/SIMGET Commandable.
-# It lives in source/commands/ (not hal/sim/, since it registers wire commands
-# rather than implementing a device), so it must be excluded here explicitly --
-# otherwise it would compile into the ARM firmware, requiring hal/sim/ types
-# (PhysicsWorld/SimHardware) it depends on. SystemCommands.cpp's HOST_BUILD
-# guard keeps it un-#included from the ARM build regardless; this exclusion
-# additionally keeps it un-compiled, giving it zero ARM footprint (see
-# architecture-update.md Design Rationale Decision 1).
-list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/commands/SimCommands\\.cpp$")
-# i2c_bus_host.cpp (079-001) is the HOST_BUILD scripted-fake I2CBus
-# implementation (source/com/i2c_bus_host.cpp) -- it defines the same
-# I2CBus:: symbols as i2c_bus.cpp against the header's #ifdef HOST_BUILD
-# fork, so it must never be compiled into the ARM firmware (which does not
-# define HOST_BUILD): compiling it there would both duplicate i2c_bus.cpp's
-# symbols and mismatch the header's non-HOST_BUILD declarations. Used only
-# by the host pytest harness (tests/sim/unit/), which compiles it directly
-# with -DHOST_BUILD via the system C++ compiler, not through this CMake file.
-list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/com/i2c_bus_host\\.cpp$")
-# clock_host.cpp (081-002) is the HOST_BUILD fake implementation of
-# Types::systemClockNow() (source/types/clock_host.cpp) -- it defines the
-# same Types:: symbol as clock.cpp against clock.h's #ifdef HOST_BUILD fork,
-# so it must never be compiled into the ARM firmware (which does not define
-# HOST_BUILD), for the identical reason i2c_bus_host.cpp is excluded above.
-# Not yet consumed by any build as of 081-002; ticket 081-004's host sim
-# CMakeLists.txt is what links it in.
-list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/types/clock_host\\.cpp$")
-# sim_hardware.cpp (081-003) is Subsystems::SimHardware, the simulated-
-# device owner/scheduler (source/subsystems/sim_hardware.cpp). It depends on
-# source/hal/sim/* (Hal::PhysicsWorld/SimMotor/SimOdometer, already excluded
-# above by the blanket ".*/hal/sim/.*" regex -- e.g. PhysicsWorld's
-# HOST_BUILD-gated std::mt19937 members) and is never linked into the ARM
-# firmware, only into the host sim library (ticket 004's tests/_infra/sim/
-# CMakeLists.txt). Unlike hal/sim/*, it lives under source/subsystems/ (per
-# architecture-update.md (081) Decision 2: SimHardware is a Subsystems-tier
-# peer of NezhaHardware, not a Hal:: leaf), so the blanket hal/sim/
-# exclusion above does not catch it -- it needs its own explicit exclusion,
-# mirroring the i2c_bus_host.cpp/clock_host.cpp pattern immediately above.
-list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/subsystems/sim_hardware\\.cpp$")
-# DeviceBus (source/devices/) merged into the sprint-100 branch. In the
-# DEFAULT firmware build (application=source, main.cpp) the recursive glob
-# above now sweeps in source/devices/*.cpp too. Three of those must be
-# excluded from this legacy/default build, mirroring the host-fake and
-# bring-up exclusions already established above and in the codal.devicebus.json
-# entry block below:
-#  - i2c_bus_host.cpp / clock_host.cpp: HOST_BUILD-only scripted fakes that
-#    define the same symbols as the real i2c_bus.cpp/clock_real.cpp (same
-#    reason com/i2c_bus_host.cpp and types/clock_host.cpp are excluded above).
-#  - bringup_main.cpp: the standalone DeviceBus bring-up image's own main()
-#    (source/devices/bringup_main.cpp) -- only ever the entry point under
-#    codal.devicebus.json; in the default build it would be a SECOND main()
-#    alongside source/main.cpp. Until the complete cutover replaces main.cpp's
-#    device layer with DeviceBus, the rest of source/devices/*.cpp compiles in
-#    (unused, like source/drive/ before its cutover).
+# devices/{i2c_bus_host,clock_host}.cpp are load-bearing CMake duplicate-
+# symbol exclusion guards (sprint 102 architecture-update.md Decision 4):
+# both are HOST_BUILD-only scripted fakes that define the SAME I2CBus::/
+# Types:: symbols as the real devices/i2c_bus.cpp/clock_real.cpp against
+# each header's #ifdef HOST_BUILD fork, so they must never be compiled into
+# the ARM firmware (which does not define HOST_BUILD) -- compiling them
+# here would duplicate those symbols. Used only by the host pytest harness
+# (tests/sim/unit/), which compiles them directly with -DHOST_BUILD via the
+# system C++ compiler, not through this CMake file. Do NOT remove these
+# alongside the (now-deleted) com/i2c_bus_host.cpp / types/clock_host.cpp
+# exclusions that used to sit near this block -- devices/i2c_bus.{h,cpp}/
+# devices/clock.h survive this sprint's delete and still need this guard.
 list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/devices/i2c_bus_host\\.cpp$")
 list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/devices/clock_host\\.cpp$")
-list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/devices/bringup_main\\.cpp$")
-
-# ---------------------------------------------------------------------------
-# Drivetrain HAL exclusions (048-004): the firmware build is always
-# differential (NezhaHAL). MecanumHAL.cpp is retained in-tree for future
-# mecanum work but excluded from the firmware build unconditionally.
-# MecanumKinematics.cpp is pure math and remains compiled (source/kinematics/).
-# NezhaHAL/MecanumHAL now live in source/robot/ (055-001 reorganization).
-# ---------------------------------------------------------------------------
-# retained in-tree for future mecanum; excluded from firmware build
-list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/robot/MecanumHAL\\.cpp$")
-
-# libraries/ruckig (Sprint 089, Decision 7): the vendored solver's 11 core
-# .cpp sources are not under source/, so RECURSIVE_FIND_FILE above never
-# reaches them -- append them to the flat source list directly, the same
-# treatment every other source/ translation unit already gets. No
-# add_subdirectory(): Ruckig's own upstream build files were deliberately not
-# vendored (libraries/ruckig/README.vendored.md).
-file(GLOB RUCKIG_SOURCES "${PROJECT_SOURCE_DIR}/libraries/ruckig/src/*.cpp")
-list(APPEND SOURCE_FILES ${RUCKIG_SOURCES})
-
-# ---------------------------------------------------------------------------
-# DB-009 (device-bus-tickets.md): dedicated DeviceBus bring-up entry point.
-#
-# codal.devicebus.json (repo root) sets "application_entry": "devices" --
-# the ONE opt-in switch (never set by codal.json/codal.dev.json/
-# codal.ble.json) that swaps the linked application from source/main.cpp
-# (the legacy Subsystems:: stack) to source/devices/bringup_main.cpp
-# (DeviceBus only), per clasi/issues/device-bus-fiber-owned-self-contained-
-# device-subsystem.md open question 5's resolution: "no runtime coexistence
-# with the legacy stack, ever -- the two systems never both run in one
-# binary". Without this block, CODAL_APP_SOURCE_DIR="source" (needed so
-# source/devices/*'s own path-qualified `#include "devices/xxx.h"` style --
-# identical to every other module's com/*.h, hal/*.h, etc. -- keeps
-# resolving against the SAME source/ include root the ordinary firmware
-# build already set up above) means the *.cpp glob a few lines up ALWAYS
-# sweeps in every file under source/, including source/main.cpp AND
-# source/devices/bringup_main.cpp together -- two `main()` definitions,
-# a link error, not a build-config problem this ticket can solve by
-# choosing a different "application" value alone.
-#
-# When set, this block REPLACES SOURCE_FILES (computed above from the whole
-# "source" tree) with just source/devices/*.cpp -- still excluding the two
-# HOST_BUILD-only fakes (i2c_bus_host.cpp/clock_host.cpp), the same
-# treatment the com/i2c_bus_host.cpp / types/clock_host.cpp exclusions
-# above already give their own directories (those regexes don't match
-# source/devices/*, so this ticket needs its own pair). INCLUDE_DIRS is
-# left completely untouched (computed from CODAL_APP_SOURCE_DIR="source"
-# above, before this block runs) -- only the *.cpp file list changes.
-if("${codal.application_entry}" STRGREATER "")
-    set(SOURCE_FILES "")
-    RECURSIVE_FIND_FILE(SOURCE_FILES
-        "${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}/${codal.application_entry}" "*.cpp")
-    list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/devices/i2c_bus_host\\.cpp$")
-    list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/devices/clock_host\\.cpp$")
-endif()
 
 if("${SOURCE_FILES}" STREQUAL "")
     message(FATAL_ERROR "${BoldRed}No user application to build, please add a main.cpp at: ${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}${ColourReset}")

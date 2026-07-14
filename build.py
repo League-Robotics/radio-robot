@@ -220,7 +220,7 @@ def print_build_summary(fw_only):
     """Print a one-glance summary so there is no guessing which versions exist."""
     ver = _project_version()
     print("\n=== build summary ===")
-    print("  firmware hex   v%s   (bench, BENCH_OTOS_ENABLED)   -> MICROBIT.hex" % ver)
+    print("  firmware hex   v%s   -> MICROBIT.hex" % ver)
     if fw_only:
         print("  host sim lib   (skipped: --fw-only)")
     elif not os.path.isdir(_host_sim_dir()):

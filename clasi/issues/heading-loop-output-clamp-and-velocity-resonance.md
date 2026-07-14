@@ -2,6 +2,16 @@
 status: pending
 ---
 
+> **SCOPE REDUCED (2026-07-14 stakeholder triage).** Part 1 (clamp the
+> heading-loop output in Motion::SegmentExecutor) is OBSOLETE — the executor
+> and the on-robot heading loop are deleted by the single-loop rebuild
+> (`clasi/issues/single-loop-firmware-de-fiber-delete-the-elite-plumbing-telemetry-only-return-path.md`).
+> Part 2 SURVIVES and matters MORE: the ~140 mm/s inner velocity-PID
+> resonance lives in the kept Devices::MotorVelocityPid, and the rebuilt
+> robot is a pure velocity follower — the inner loop becomes the only loop.
+> Characterize and tame it (filter/feedforward/notch) against the new
+> firmware with the on-stand step harness.
+
 # Trajectory ringing: clamp the heading-loop output + tame the ~140 mm/s velocity resonance
 
 ## Context (found 2026-07-12 on the stand, after sprint 098)

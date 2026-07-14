@@ -26,53 +26,17 @@ build:
 build-clean:
     uv run python3 build.py --clean
 
-# Build ONLY the host-simulation library (libfirmware_host) — skips the ARM
-# firmware, so it's fast (~8s clean, <1s incremental) and needs no ARM toolchain.
-# Runs the same codegen steps build.py does so generated sources stay fresh.
-# Note: `just build` already builds BOTH the firmware hex and this sim library.
-build-sim:
-    # 077-001 / 081-004: gen_default_config.py writes to source/robot/
-    # DefaultConfig.cpp -- a directory the greenfield rebuild's new source/
-    # tree deliberately does not (yet) create. build.py already guards this
-    # structurally (see its own 077-001 comment); this recipe had never been
-    # updated to match, so it hard-failed the moment tests/_infra/sim/
-    # existed for this recipe to reach the cmake steps below. Mirror
-    # build.py's guard here so it self-heals the same way once source/robot/
-    # reappears.
-    if [ -d source/robot ]; then uv run python3 scripts/gen_default_config.py; fi
-    uv run python3 scripts/gen_messages.py
-    # 095-002: regenerate the host's compiled pb2 bindings from the SAME
-    # protos/*.proto (M7 Host Codec Mirror) so they never skew from the
-    # firmware tables gen_messages.py just wrote.
-    uv run python3 scripts/gen_pb2.py
-    uv run python3 scripts/gen_boot_config.py
-    # 2026-07-11: bake the CURRENT pyproject version into the sim dylib too
-    # (source/types/version_generated.h). Without this, `VER` from a sim
-    # session reports whatever version the header held at some prior full
-    # build -- which defeats the stale-sim provenance handshake the
-    # wheel_motion_trace notebook (and any other sim client) relies on to
-    # detect a long-lived kernel still holding an old in-process dylib.
-    uv run python3 scripts/gen_version.py
-    cmake -S tests/_infra/sim -B tests/_infra/sim/build -DROBOT_RUN_MODE=SIM
-    cmake --build tests/_infra/sim/build --parallel
-
-# Build ONLY the host tier-0 Drive:: library (libdrive_host) -- source/
-# drive/ compiles standalone (ticket 100-002's own isolation boundary,
-# SUC-008), so unlike build-sim this needs no codegen step at all.
-build-drive:
-    cmake -S tests/_infra/drive -B tests/_infra/drive/build
-    cmake --build tests/_infra/drive/build --parallel
-
 mbd-install:
     pipx install git+https://github.com/Busboombot/mbdeploy.git
 
-# Launch the Robot Test GUI (PySide6 cockpit) against the simulator or real
-# hardware (083-004). One-time prerequisite: `uv sync --group gui` (installs
-# PySide6 + aprilcam -- see pyproject.toml's [dependency-groups] gui comment).
-# Depends on build-sim so Sim mode always has a freshly (re)built
-# libfirmware_host to Connect to -- build-sim is fast on an unchanged tree
-# (<1s incremental), so gating on it here costs nothing on the common case.
-testgui: build-sim
+# Launch the Robot Test GUI (PySide6 cockpit) against real hardware
+# (083-004). One-time prerequisite: `uv sync --group gui` (installs PySide6 +
+# aprilcam -- see pyproject.toml's [dependency-groups] gui comment).
+# Sim mode is unavailable: build-sim (and tests/_infra/sim, its target) were
+# deleted by sprint 102 ticket 005 alongside the Elite orchestration stack --
+# testgui is parked until a later sprint revives it against the new
+# single-loop firmware.
+testgui:
     uv run python -m robot_radio.testgui
 
 list:

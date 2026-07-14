@@ -3,28 +3,32 @@
 // time seam; hands out the handle classes (handles.h) that are the ONLY way
 // the rest of the firmware ever touches a device.
 //
-// Tickets DB-007 and DB-008 (device-bus-tickets.md). Implements clasi/issues/
-// device-bus-fiber-owned-self-contained-device-subsystem.md's "The public
-// surface", "The fiber and its cycle", and "Concurrency contract" sections.
+// Tickets DB-007 and DB-008 (device-bus-tickets.md), narrowed by sprint 102
+// ticket 005 (single-loop firmware rebuild): the fiber-owned lifecycle
+// (start()/stop()/running(), the pluggable FiberRunner injection seam) is
+// REMOVED — sprint 102 deletes the background-fiber concurrency model
+// wholesale (fiber_runner.h, devices/bringup_main.cpp) in favor of ONE
+// single foreground loop that calls runPreamble() once at boot and
+// runCycleOnce() every pass directly, with no fiber, no CODAL create_fiber()
+// call anywhere in this subsystem. runPreamble()/neutralizeAllMotors() are
+// therefore public now (previously private, reached only through the
+// now-deleted FiberRunner friend seam) — a single-loop caller invokes them
+// directly, the same way it already calls runCycleOnce().
 //
 // --- Scope: DB-007 vs DB-008 ---
 // DB-007 delivered the ROOT OBJECT and the straight-line CYCLE BODY
 // (runCycleOnce()) — the "host-steppable seam" device-bus-tickets.md's
 // header resolves the issue's own open cycle-testability question into:
 // "the for(;;) fiber body is factored into a plain runCycleOnce() method the
-// host harness steps deterministically; the real fiber is just
-// while(!stopRequested_) runCycleOnce();". DB-008 (this revision) adds
-// start()/stop()/running() and the detection preamble (issue "The fiber and
-// its cycle", step 1: power-settle wait, per-device begin()/beginStep()
-// retries, absent-device slot-skipping) — see runPreamble()/start()/stop()'s
-// own declaration comments, below, and fiber_runner.h for the FiberRunner
-// seam that lets a host test exercise start()/stop() without CODAL. A host
-// test that wants a leaf primed WITHOUT exercising start()'s own preamble
-// (e.g. DB-007's own device_bus_cycle_harness.cpp, predating this ticket)
-// may still drive begin()/beginStep() directly through the HOST_BUILD
-// test-seam accessors below (motorLeaf()/otosLeaf()/colorLeaf()/lineLeaf())
-// — that ad hoc path and the real preamble both remain valid, independent
-// ways to get a leaf detected in a host test.
+// host harness steps deterministically". DB-008 added the detection preamble
+// (issue "The fiber and its cycle", step 1: power-settle wait, per-device
+// begin()/beginStep() retries, absent-device slot-skipping) — see
+// runPreamble()'s own declaration comment below. A host test that wants a
+// leaf primed WITHOUT exercising runPreamble() (e.g. DB-007's own
+// device_bus_cycle_harness.cpp) may still drive begin()/beginStep() directly
+// through the HOST_BUILD test-seam accessors below (motorLeaf()/otosLeaf()/
+// colorLeaf()/lineLeaf()) — that ad hoc path and the real preamble both
+// remain valid, independent ways to get a leaf detected in a host test.
 //
 // --- The exact runCycleOnce() schedule ---
 //   drainStagedInputs()          -- targets, watchdog gate; no bus
@@ -69,8 +73,9 @@
 // more elaborate.
 //
 // --- Concurrency contract (issue) ---
-// 1. This object (via runCycleOnce(), eventually fiber-hosted by DB-008) is
-//    the ONLY writer of every ring and the ONLY bus toucher; handle setters
+// 1. This object (via runCycleOnce(), called every pass of the single
+//    foreground loop — see this file's own header comment) is the ONLY
+//    writer of every ring and the ONLY bus toucher; handle setters
 //    (handles.h) are the only writers of staged-input state, and every one
 //    of them is a plain, yield-free store (see handles.h's own design
 //    notes for Motor/Odometer).
@@ -78,7 +83,7 @@
 //    sample-copy — all plain struct stores/copies (measurement_ring.h's own
 //    publish()/latest()/sample()/bracket() are already yield-free by
 //    construction).
-// 3. Handles are main-loop-fiber API only — nothing here is ISR-safe.
+// 3. Handles are single-foreground-loop API only — nothing here is ISR-safe.
 #pragma once
 #ifndef HOST_BUILD
 #include "MicroBit.h"
@@ -89,7 +94,6 @@
 #include "devices/color_sensor.h"
 #include "devices/device_config.h"
 #include "devices/device_types.h"
-#include "devices/fiber_runner.h"
 #include "devices/handles.h"
 #include "devices/i2c_bus.h"
 #include "devices/line_sensor.h"
@@ -136,8 +140,8 @@ class DeviceBus {
   // OTOS probe diagnostics (101-001): a read-only snapshot of the OTOS leaf's
   // detect state plus this bus's transaction stats for the OTOS address, for
   // bench triage of the DeviceBus connected=False condition. Reads counters
-  // only -- issues NO I2C traffic, so it is safe to call from the command
-  // foreground while the fiber runs.
+  // only -- issues NO I2C traffic, so it is safe to call any time from the
+  // single foreground loop.
   struct OtosProbeDiag {
     bool connected;
     bool present;
@@ -148,53 +152,30 @@ class DeviceBus {
   };
   OtosProbeDiag otosProbeDiag() const;
 
-  // --- Fiber lifecycle (DB-008; issue "The fiber and its cycle" / "The
-  // public surface") ---
+  // --- Single-loop lifecycle (narrowed by sprint 102 ticket 005 -- see this
+  // file's own header comment) ---
   //
-  // start() -- hands the fiber body (detection preamble, then
-  // `while (!stopRequested_) runCycleOnce();`) to the currently-injected
-  // FiberRunner (fiber_runner.h) and marks running() true. Real (CODAL)
-  // builds: the FiberRunner spawns an async fiber and start() returns to its
-  // caller IMMEDIATELY -- detection retries never block boot (issue: "the
-  // main loop is already serving serial/radio while detection proceeds").
-  // Host builds: the default (or injected) FiberRunner runs the preamble
-  // plus a BOUNDED number of cycles synchronously, in place -- see
-  // fiber_runner.h's own header comment.
-  void start();
-
-  // stop() -- request exit, join, THEN neutralize (device-bus-tickets.md's
-  // DB-008 section's own three-step ordering, not the issue's illustrative
-  // sketch, which puts the neutralize call at the tail of the fiber body
-  // itself -- see fiber_runner.h's header comment and this file's own
-  // neutralizeAllMotors() comment for why stop() -- not the fiber body --
-  // owns the neutralize call here): (1) stopRequested_ = true so the cycle
-  // loop exits at its next while-condition check; (2) join -- block
-  // (cooperative yield-poll; a no-op in host builds, where the loop already
-  // finished synchronously inside start()) until nothing is still touching
-  // the bus; (3) neutralizeAllMotors() -- a real, synchronous bus write per
-  // motor, run HERE, so it is unconditionally the LAST bus action any motor
-  // sees before stop() returns. running() is false only once all three
-  // steps are complete.
-  void stop();
-
-  bool running() const { return running_; }
-
-  // Lets a host test inject a different FiberRunner than the one this
-  // object constructs for itself by default (defaultFiberRunner_, below) --
-  // device-bus-tickets.md's own DB-008 wording: "an interface letting host
-  // tests inject a synchronous runner." Must be called before start();
-  // `runner` must outlive every start()/stop() call made against this
-  // object. Not gated behind HOST_BUILD -- any FiberRunner-conforming
-  // object may be injected on real hardware too, though CodalFiberRunner is
-  // the only sensible choice there.
-  void setFiberRunner(FiberRunner& runner) { fiberRunner_ = &runner; }
+  // runPreamble() -- the detection preamble (power-settle wait, per-device
+  // begin()/beginStep() retries, absent-device slot-skipping). Call ONCE at
+  // boot, directly from the single foreground loop, before the first
+  // runCycleOnce() call. Previously private + reached only through the
+  // now-deleted FiberRunner friend seam; public now that there is no fiber
+  // to hide it behind. See this method's own definition comment
+  // (device_bus.cpp) for the full contract.
+  void runPreamble();
 
   // runCycleOnce() -- the host-steppable cycle core; see this file's own
-  // header comment for the exact schedule. The real fiber body (run by
-  // whichever FiberRunner start() is holding, above) is
-  // `while (!stopRequested_) runCycleOnce();`; a host harness (this
-  // ticket's and DB-007's own acceptance tests) may also step it directly.
+  // header comment for the exact schedule. Call every pass of the single
+  // foreground loop, directly -- no fiber, no FiberRunner indirection.
   void runCycleOnce();
+
+  // neutralizeAllMotors() -- a real, synchronous bus write per motor,
+  // unconditionally each motor's LAST bus action from this call. Call
+  // directly on shutdown/e-stop; previously stop()'s own private epilogue,
+  // public now for the same reason runPreamble() is (no fiber, no owning
+  // stop() method left to call it from). See this method's own definition
+  // comment (device_bus.cpp) for the full contract.
+  void neutralizeAllMotors();
 
 #ifdef HOST_BUILD
   // -------------------------------------------------------------------
@@ -218,54 +199,6 @@ class DeviceBus {
 #endif
 
  private:
-  // FiberRunner implementations (fiber_runner.h) are separate types, not
-  // members of Devices::DeviceBus, but need to call runPreamble()/
-  // stopRequested()/markLoopExited() below (all private) as part of running
-  // this object's fiber body -- friended rather than made public, matching
-  // handles.h's own friend-based access pattern for the same reason (a
-  // minimal public surface with a named, auditable exception list). Only
-  // the ONE concrete FiberRunner this build actually compiles is friended.
-#ifndef HOST_BUILD
-  friend class CodalFiberRunner;
-#else
-  friend class HostFiberRunner;
-#endif
-
-  // --- Fiber-body primitives -- called ONLY by the FiberRunner in play
-  // (via the friend declarations above) as part of running this object's
-  // fiber body; never called directly by ordinary consumer code. ---
-
-  // The detection preamble (issue "The fiber and its cycle" step 1):
-  // power-settle wait, then each device's begin()-style detection. Motor/
-  // OTOS detection is a single begin() call each -- NezhaMotor::begin()
-  // (hardReset()) and Otos::begin() (product-ID probe) are both already
-  // fully self-contained, bounded operations (DB-004/DB-005); this method
-  // does not loop either of them. Color/line detection instead uses each
-  // leaf's own non-blocking beginStep(nowUs) state machine (DB-006), so
-  // THIS method drives a bounded, LOCAL retry-pacing loop -- see
-  // device_bus.cpp's own comment on why nowUs is advanced by hand rather
-  // than re-read from clock_ between attempts. Absent devices are marked
-  // (present() false) and structurally skipped from then on: every leaf's
-  // own tick()/beginStep() already no-ops when !initialized_ (DB-004
-  // through DB-006's own precedent), so this method adds no separate
-  // "skip" bookkeeping of its own.
-  void runPreamble();
-
-  bool stopRequested() const { return stopRequested_; }
-  void markLoopExited() { loopExited_ = true; }
-
-  // stop()'s own epilogue (see stop()'s own comment above for why this is
-  // NOT called from inside the fiber body/FiberRunner): stages Neutral on
-  // both motors then serviceMotor()s each once more (the SAME per-motor
-  // request->settle->collect step runCycleOnce() itself calls, in the SAME
-  // alternating order) so each motor's neutral duty write
-  // lands through a properly-paired encoder request/collect, never a bare
-  // unpaired bus read -- and, because NezhaMotor::tick()'s own 5-step order
-  // always collects (reads) BEFORE it dispatches this tick's mode (writes),
-  // the neutral WRITE is unconditionally the last bus action either motor
-  // sees from this call.
-  void neutralizeAllMotors();
-
   // [ms] boot power-settle wait, the preamble's first step (issue "The
   // fiber and its cycle" step 1) -- a starting, bench-tunable value
   // (DB-009's job to tighten against real chip power-up timing).
@@ -355,35 +288,6 @@ class DeviceBus {
   // own comment for why a fresh-flag check alone is not enough).
   PerceptionSlot perceptionSlot_ = PerceptionSlot::Line;
   PerceptionSlot lastPerceptionSlot_ = PerceptionSlot::Line;
-
-  // ---- Fiber lifecycle state (DB-008) ----
-  bool running_ = false;         // running()'s backing field -- see stop()/start()
-  bool stopRequested_ = false;   // the cycle loop's own exit condition
-  bool loopExited_ = true;       // true whenever no fiber body is currently
-                                  // mid-loop -- starts true (nothing has
-                                  // ever been spawned yet); start() clears
-                                  // it, the FiberRunner in play sets it back
-                                  // via markLoopExited() once the loop
-                                  // itself has stopped calling
-                                  // runCycleOnce() (see fiber_runner.h);
-                                  // stop()'s join polls this before its own
-                                  // neutralizeAllMotors() call.
-
-  // The FiberRunner this object uses -- defaults to an internally-owned
-  // instance (real: CodalFiberRunner; host: a HostFiberRunner with a 0-cycle
-  // budget, i.e. "run the preamble only unless a test injects a different
-  // one" -- see setFiberRunner()/fiber_runner.h's own header comment).
-  // defaultFiberRunner_ MUST be declared before fiberRunner_ (declaration
-  // order is construction order -- the same rule this file's own
-  // "Declaration order IS construction order" comment states for the
-  // bus_/leaf/ring/handle chain above) so fiberRunner_'s default member
-  // initializer can safely take its address.
-#ifndef HOST_BUILD
-  CodalFiberRunner defaultFiberRunner_;
-#else
-  HostFiberRunner defaultFiberRunner_{0};
-#endif
-  FiberRunner* fiberRunner_ = &defaultFiberRunner_;
 };
 
 }  // namespace Devices

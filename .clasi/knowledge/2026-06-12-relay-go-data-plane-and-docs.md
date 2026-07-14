@@ -6,6 +6,40 @@ related-tickets: ["032-001"]
 
 # Talking to the robot through the relay (the `!GO` data plane) + where the docs are
 
+> **CORRECTION (2026-07-14, sprint 102-001, bench-verified — RETRACTS the
+> async-STREAM-drop claim in "What Worked" step 4 below).** The claim "async
+> STREAM frames are dropped by the bridge" is **RETRACTED** against CURRENT
+> relay firmware ("gozop", `!GO` data-plane protocol) and CURRENT robot
+> firmware (v0.20260714.2). Measured: binary `STREAM` armed at a 33 ms period
+> (~30.3 Hz target), two sustained 240 s captures on the bench rig (robot
+> "tovez"/2314287040, relay "zavaz"/4076631795), same period, run
+> sequentially:
+>   - **Direct USB** (fixed 115200 baud): 6430/6430 delivered (seq-span
+>     match), **0.00% drop**, 0 malformed, sustained **26.79 fps**.
+>   - **Through the relay** (`!GO` data plane): 6428/6430 delivered,
+>     **0.031% drop** — exactly two isolated single-frame gaps (t≈59 s,
+>     t≈110 s), classified uniform/sparse, not a burst. Sustained
+>     **26.78 fps**. Root cause of the two drops: `source/com/radio.cpp:62-71`'s
+>     single-slot RX reassembly mailbox silently drops a new message that
+>     completes before the previous one is drained — a real, low-rate, expected
+>     loss source, NOT a systematic "bridge drops async pushes" behavior.
+>   - The two sustained rates are statistically indistinguishable
+>     (26.79 vs 26.78 fps) — the relay is not the bottleneck at this rate;
+>     both transports comfortably deliver whatever the firmware actually
+>     emits (both landed at ~37.3 ms actual period despite a 33 ms armed
+>     period — a firmware emission-pacing characteristic, not a link limit).
+>
+> **Verdict: PUSH telemetry (`STREAM`) is reliable through the current relay
+> firmware.** The P4/P5 ack-ring telemetry design (sprint 103/104) may rely
+> on a pushed stream through the relay; it does not need to fall back to
+> host-paced `SNAP` polling for the common case — the design's own
+> loss/redelivery tolerance already covers the rare single-frame radio-mailbox
+> drop. **Recommended common telemetry cadence for BOTH transports: 25 Hz
+> (40 ms period)** — the minimum of the two measured sustained rates
+> (26.78 fps) with headroom, no baud change (serial stays at the fixed
+> 115200 baud per the 2026-07-14 stakeholder decision). Full measurement
+> writeup: `clasi/sprints/102-single-loop-firmware-spikes-archive-and-delete-to-stub-p0-p2/spike-001-relay-telemetry.md`.
+
 > **CORRECTION (2026-06-13, sprint 036-007, bench-verified).** The claim below that
 > "forcing `dtr=False` actually SUPPRESSES the relay … leaves it mute" is **FALSE**.
 > Verified live: opening with `dtr=False` and spamming `HELLO` returns the `DEVICE:`
