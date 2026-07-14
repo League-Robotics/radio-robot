@@ -1,10 +1,14 @@
 ---
-id: "005"
-title: "P2 delete Elite plumbing + banner-only stub main (one commit)"
-status: open
-use-cases: ["SUC-005"]
-depends-on: ["001", "003", "004"]
-github-issue: ""
+id: '005'
+title: P2 delete Elite plumbing + banner-only stub main (one commit)
+status: done
+use-cases:
+- SUC-005
+depends-on:
+- '001'
+- '003'
+- '004'
+github-issue: ''
 issue: single-loop-firmware-de-fiber-delete-the-elite-plumbing-telemetry-only-return-path.md
 completes_issue: false
 ---
@@ -93,34 +97,47 @@ Decision 5).
 
 ## Acceptance Criteria
 
-- [ ] `*B` armor + `msg::wire` encode/decode logic transcribed out of
+- [x] `*B` armor + `msg::wire` encode/decode logic transcribed out of
       `source/commands/binary_channel.cpp` into a standalone note/snippet
       BEFORE that file is deleted, and referenced from this ticket (for
-      sprint 103 to consume).
-- [ ] Full delete inventory above removed, correctly excluding what commit
+      sprint 103 to consume). — `clasi/sprints/102-.../notes/
+      armor-wire-codec-transcription.md`.
+- [x] Full delete inventory above removed, correctly excluding what commit
       `3c4a8c0a` already deleted.
-- [ ] `devices/{i2c_bus_host,clock_host}.cpp` are UNCHANGED (not deleted);
+- [x] `devices/{i2c_bus_host,clock_host}.cpp` are UNCHANGED (not deleted);
       `com/i2c_bus.{h,cpp}` and `com/i2c_bus_host.cpp` ARE deleted.
-- [ ] `source/main.cpp` replaced with a banner-only stub (~50 lines); grep
+- [x] `source/main.cpp` replaced with a banner-only stub (~50 lines); grep
       confirms no motor/device energization call exists anywhere in the
       stub or anything it calls.
-- [ ] `source/robot/` and `source/app/` do NOT exist after this ticket.
-- [ ] All of the above lands as exactly one commit.
-- [ ] `just build-clean` succeeds and produces a hex.
-- [ ] The stub is flashed to the bench robot and confirmed to banner
+- [x] `source/robot/` and `source/app/` do NOT exist after this ticket.
+- [x] All of the above lands as exactly one commit. — `72d8be7e`.
+- [x] `just build-clean` succeeds and produces a hex.
+- [x] The stub is flashed to the bench robot and confirmed to banner
       (boot message visible over serial) — per
       `.claude/rules/hardware-bench-testing.md`, connect-only verification
       since the stub never energizes motors (no wheel/sensor check
-      applicable to an inert stub).
-- [ ] The surviving pytest subset passes (`uv run python -m pytest`).
-- [ ] A repo-wide grep for every deleted header/module name (e.g.
+      applicable to an inert stub). Then the archived default hex
+      (v0.20260714.3) was reflashed and HELLO confirmed, leaving the bench
+      robot functional.
+- [x] The surviving pytest subset passes (`uv run python -m pytest`). —
+      923 passed.
+- [x] A repo-wide grep for every deleted header/module name (e.g.
       `runtime/`, `subsystems/`, `drive/`, `telemetry/`, `estimation/`,
       `hal/capability`, `i_kinematics`, `binary_channel`, `bringup_main`,
       `fiber_runner`, `codal.devicebus.json`, `ruckig`, `tinyekf`,
-      `cmon-pid`) returns nothing under `source/`, `tests/`, `host/`.
-- [ ] `codal.json`'s `MICROBIT_RADIO_MAX_PACKET_SIZE=250` setting is
+      `cmon-pid`) returns nothing under `source/`, `tests/`, `host/` — swept
+      as `#include` paths specifically (comment/docstring prose mentioning a
+      deleted path by name for historical/provenance reasons is not a
+      dangling reference); the two live doc comments that overstated a
+      current dependency (`kinematics/body_kinematics.h`, `messages/
+      wire_runtime.h`) were corrected. One pre-existing exception:
+      `tests/sim/parked-094/` still `#include`s several deleted paths — it
+      was already parked (excluded from pytest collection via
+      `norecursedirs`, referencing an even older `source_parked/094/` tree)
+      before this ticket and is out of this ticket's delete inventory.
+- [x] `codal.json`'s `MICROBIT_RADIO_MAX_PACKET_SIZE=250` setting is
       unchanged (not part of this delete — confirm it wasn't
-      inadvertently touched).
+      inadvertently touched). — confirmed, no diff.
 
 ## Implementation Plan
 
@@ -169,3 +186,56 @@ identity via `mbdeploy list`'s ROLE column before flashing.
   after the prune (reduced test count expected; failures are not).
 - **New tests to write**: none (deletion ticket).
 - **Verification command**: `uv run pytest`
+
+## Completion Notes
+
+- **Commit**: `72d8be7e` (the one deletion commit) on this branch, plus a
+  separate ticket-status/frontmatter commit and a version-bump commit per
+  project convention.
+- **Lines**: `git diff --shortstat 7acafd07..72d8be7e` — 194 files changed,
+  294 insertions(+), 42987 deletions(-) (the vendored `libraries/ruckig`
+  tree alone accounts for the bulk of the deletion beyond the ~15,900-line
+  Elite-stack estimate).
+- **`device_bus.{h,cpp}`/`handles.h` narrowing**: `handles.h` needed no
+  edit — it never referenced `fiber_runner.h` or the fiber lifecycle at all
+  (its "staging" is per-handle passthrough onto leaf fields, unrelated to
+  the fiber). `device_bus.{h,cpp}` lost `start()`/`stop()`/`running()`/
+  `setFiberRunner()`, the `CodalFiberRunner`/`HostFiberRunner` friend
+  declarations, and the fiber lifecycle state fields; `runPreamble()`/
+  `neutralizeAllMotors()` moved from private+friend-only to public so a
+  future single foreground loop (sprint 103) can call them directly.
+  `runCycleOnce()` and the bus-arbitration/cycle-schedule internals
+  (`drainStagedInputs`/`serviceMotor`/`perceptionSlotStep`/
+  `publishSamples`) are untouched. `device_bus_lifecycle_harness.cpp` +
+  `test_device_bus_lifecycle.py` (DB-008's own acceptance harness for the
+  now-removed `FiberRunner` injection seam) were deleted rather than
+  rewritten — this ticket is deletion-only, no new tests.
+- **`check_config_sync.py` — deviation from the written plan**: the ticket
+  description's Test/build/host-fallout list says its map should be
+  "updated to drop references to deleted config surface." Investigation
+  found no such references exist to drop: the script's `PATCH_TO_PYDANTIC`
+  map diffs `protos/config.proto`'s generated `Patch` messages against
+  `host/robot_radio/config/robot_config.py`'s pydantic model — both kept,
+  neither ever pointed at a deleted C++ path (the one `source/commands/
+  config_commands.cpp` mention in the script's docstring is historical
+  prose about an already-earlier-deleted file, not a live reference). Its
+  own test (`tests/unit/test_check_config_sync.py`, 10 tests) passed
+  unchanged before and after this ticket. No edit made.
+- **`source/config/boot_config.{h,cpp}` — not slimmed**: the linked issue's
+  summary mentions "gen_boot_config drops planner emission" as part of the
+  sprint's overall keep-list, but ticket 005 itself lists `config/
+  boot_config` only under Keep, with no action item, and `defaultPlanner
+  Config()` has no dependency on anything deleted (it returns a
+  `msg::PlannerConfig`, a kept `messages/` type). Left untouched — planner
+  emission slimming, if wanted, is not gated by this ticket's acceptance
+  criteria.
+- **Surprises**: (1) `tests/_infra/sim`'s gitignored local `build/`/
+  `__pycache__/` directories survived `git rm` (only tracked files are
+  removed), which made `build.py`'s own `os.path.isdir(_host_sim_dir())`
+  self-heal check see a stale local directory and try (and fail) to run
+  cmake against it — not a regression, a leftover local build artifact; a
+  clean checkout never has this directory. (2) `mbdeploy deploy --hex`
+  resolves the hex path relative to the invocation, and the CODAL build
+  writes `MICROBIT.hex` to the repo root (`CODAL_APP_OUTPUT_DIR "."` in
+  `CMakeLists.txt`), not `build/MICROBIT.hex` — the first flash attempt
+  pointed at the wrong path.
