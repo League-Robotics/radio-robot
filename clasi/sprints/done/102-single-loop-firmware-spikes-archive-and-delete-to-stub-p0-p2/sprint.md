@@ -1,9 +1,13 @@
 ---
 id: '102'
 title: 'Single-loop firmware: spikes, archive, and delete to stub (P0-P2)'
-status: planning-docs
+status: done
 branch: sprint/102-single-loop-firmware-spikes-archive-and-delete-to-stub-p0-p2
-use-cases: ["SUC-001", "SUC-003", "SUC-004", "SUC-005"]
+use-cases:
+- SUC-001
+- SUC-003
+- SUC-004
+- SUC-005
 issues:
 - single-loop-firmware-de-fiber-delete-the-elite-plumbing-telemetry-only-return-path.md
 ---
