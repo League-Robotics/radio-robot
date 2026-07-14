@@ -32,24 +32,30 @@
 // runs the detection preamble then the straight-line request/settle/collect/
 // perceive/publish cycle (device_bus.h's own header comment) forever, fully
 // asynchronously from this file's own foreground loop. This file's
-// foreground loop does exactly one more thing: pump a tiny line-buffered
+// foreground loop does two more things: (1) pump a tiny line-buffered
 // serial reader and dispatch each line as one DEV command against the
 // SAME DeviceBus handles (`bus.motor(port)`/`bus.color()`/`bus.line()`/
 // `bus.odometer()`) any other consumer would use — it never reaches past
 // the handle API into a leaf or the bus directly (device-bus-tickets.md's
 // own "no coexistence" spirit extends to this file's own conduct, not just
-// what it links).
+// what it links); and (2) push an unsolicited fixed-cadence "TLM ..."
+// telemetry line every STREAM period (default 80 ms) built from the same
+// handle API — the gap-free host-capture path that replaces per-sample
+// polling (see the grammar block and emitTelemetry() below).
 //
 // --- The DEV command grammar (this file's own bespoke, minimal parser —
 // NOT docs/protocol-v2.md's `DEV ...` family, which is the legacy stack's
 // text_channel.cpp surface; this bring-up image has no CommandProcessor at
 // all) ---
 //   PING                              -> OK pong
+//   STREAM <ms>                       -> OK stream=<ms>  (unsolicited-telemetry push period; 0 = off; default 80)
 //   RUNNING                           -> OK running=<0|1>
 //   STOP                              -> OK  (both motors -> Neutral::Coast)
 //   M <port:1|2> VEL <mm/s>           -> OK  (Motor::setVelocity)
 //   M <port> DUTY <-1..1>             -> OK  (Motor::setDuty, PID-off only)
 //   M <port> PID <0|1>                -> OK  (Motor::setPidEnabled)
+//   M <port> VESTIM <mode> [N]        -> OK vestim= win=  (velocity estimator: 0=EMA, 1=line-fit over N fresh samples)
+//   M <port> DUTYAVG <n>              -> OK dutyavg=  (boxcar moving-average window on PID duty output; 1=off)
 //   M <port> NEUTRAL <C|B>            -> OK  (Motor::setNeutral)
 //   M <port> RESET                    -> OK  (Motor::resetPosition)
 //   M <port> STATE                    -> OK pos= vel= applied= t= valid= conn= wedged= suspect= glitch=
@@ -62,6 +68,12 @@
 //   ODO SETPOSE <x mm> <y mm> <h rad> -> OK  (Odometer::setPose)
 //   ODO RING <age 0..4>               -> OK age= x= y= h= vx= vy= w= t= valid=
 //   anything else                     -> ERR unknown / ERR badport / ERR badarg / ...
+//
+// Unsolicited (pushed, not a reply) once every STREAM period, default 80 ms:
+//   TLM t=<emit ms> 1p= 1v= 1a= 1t=<sample us> 2p= 2v= 2a= 2t=<sample us>
+// Carries no corr-id suffix and is prefixed "TLM" so a polling host's reply
+// matcher skips it. This is the gap-free capture path (vs. per-sample polling,
+// whose request/reply lags past a host timeout under motor+I2C load).
 //
 // Any line may end with a trailing " #<digits>" correlation-id suffix
 // (matching host/robot_radio/io/serial_conn.py's `SerialConnection.send()`,
@@ -139,6 +151,18 @@ class BringupSerial {
   char rxBuf_[256] = {};
   uint16_t rxLen_ = 0;
 };
+
+// Periodic telemetry push period [ms]. The DeviceBus fiber publishes fresh
+// samples into the leaves' rings asynchronously; the foreground loop pushes
+// an unsolicited "TLM ..." line every gStreamPeriodMs so a host can capture a
+// gap-free, fixed-cadence stream WITHOUT polling (a per-sample request/reply
+// that can lag past a host timeout under motor+I2C load -- the raggedy,
+// half-missing traces the poll path produced). Default 80 ms = the Nezha
+// brick's own encoder-refresh cadence, so each TLM lands ~one fresh encoder
+// step. `STREAM <ms>` retunes it live; `STREAM 0` disables. Read by
+// bringupMain()'s loop; set by dispatch()'s STREAM handler -- both run in the
+// single foreground fiber, so a plain file-scope value needs no guard.
+uint32_t gStreamPeriodMs = 80;   // [ms] 0 = off
 
 // formatFixed — serializes `value` as a fixed-point decimal with `decimals`
 // fractional digits, WITHOUT printf's %f conversion. See this file's own
@@ -326,6 +350,33 @@ MicroBitPin* servoPin(int sel) {
   }
 }
 
+// emitTelemetry — build and push one unsolicited "TLM ..." line carrying both
+// motors' latest published sample (position/velocity/appliedDuty + the
+// fiber-side sample stamp) plus the foreground emit time. Prefixed "TLM" (not
+// "OK"/"ERR") and carries no corr-id suffix, so a polling host's reply matcher
+// (serial_conn.py / rig_dev.py await_reply, which only accepts OK/ERR lines
+// ending in the awaited "#<id>") skips it cleanly -- unsolicited telemetry
+// never collides with a command reply. `1t=`/`2t=` are the [us] stamps of when
+// the fiber actually sampled each encoder, so a host can confirm the ~80 ms
+// refresh directly rather than inferring it from position plateaus.
+void emitTelemetry(Devices::DeviceBus& bus, BringupSerial& serial, uint32_t nowMs) {
+  char buf[220];
+  ReplyBuilder t(buf, sizeof(buf));
+  t.raw("TLM");
+  t.kvU32("t", nowMs);
+  Devices::Sample<Devices::MotorReading> s1 = bus.motor(1).latest();
+  Devices::Sample<Devices::MotorReading> s2 = bus.motor(2).latest();
+  t.kvFloat("1p", s1.value.position);
+  t.kvFloat("1v", s1.value.velocity);
+  t.kvFloat("1a", s1.value.appliedDuty, 3);
+  t.kvU64("1t", s1.stamp);
+  t.kvFloat("2p", s2.value.position);
+  t.kvFloat("2v", s2.value.velocity);
+  t.kvFloat("2a", s2.value.appliedDuty, 3);
+  t.kvU64("2t", s2.stamp);
+  serial.send(buf);
+}
+
 void dispatch(Devices::DeviceBus& bus, char* line, ReplyBuilder& reply) {
   char* tok = strtok(line, " ");
   if (tok == nullptr) {
@@ -375,6 +426,22 @@ void dispatch(Devices::DeviceBus& bus, char* line, ReplyBuilder& reply) {
     reply.raw("OK");
     reply.kvInt("pin", sel);
     reply.kvInt("angle", ang);
+    return;
+  }
+
+  if (strcmp(tok, "STREAM") == 0) {
+    // STREAM <ms> -- set the unsolicited-telemetry push period (0 = off).
+    // See gStreamPeriodMs / emitTelemetry() above.
+    char* v = strtok(nullptr, " ");
+    if (v == nullptr) {
+      reply.raw("ERR noval");
+      return;
+    }
+    int ms = atoi(v);
+    if (ms < 0) ms = 0;
+    gStreamPeriodMs = static_cast<uint32_t>(ms);
+    reply.raw("OK");
+    reply.kvInt("stream", ms);
     return;
   }
 
@@ -440,6 +507,38 @@ void dispatch(Devices::DeviceBus& bus, char* line, ReplyBuilder& reply) {
       }
       m.setPidEnabled(atoi(v) != 0);
       reply.raw("OK");
+    } else if (strcmp(verb, "VESTIM") == 0) {
+      // M <port> VESTIM <mode> [N] -- velocity estimator: 0 = EMA (default),
+      // 1 = line-fit over N fresh samples. Clamped here to match the leaf's
+      // own clamp so the reply echoes what was actually applied.
+      char* mo = strtok(nullptr, " ");
+      char* wn = strtok(nullptr, " ");
+      if (mo == nullptr) {
+        reply.raw("ERR noval");
+        return;
+      }
+      int mode = (atoi(mo) == 1) ? 1 : 0;
+      int win = wn ? atoi(wn) : 6;
+      if (win < 3) win = 3;
+      if (win > 8) win = 8;
+      m.setVelEstimator(static_cast<uint8_t>(mode), static_cast<uint8_t>(win));
+      reply.raw("OK");
+      reply.kvInt("vestim", mode);
+      reply.kvInt("win", win);
+    } else if (strcmp(verb, "DUTYAVG") == 0) {
+      // M <port> DUTYAVG <n> -- boxcar moving-average window on the PID duty
+      // output (1 = off). Clamped [1, 8] to match the leaf.
+      char* wn = strtok(nullptr, " ");
+      if (wn == nullptr) {
+        reply.raw("ERR noval");
+        return;
+      }
+      int win = atoi(wn);
+      if (win < 1) win = 1;
+      if (win > 8) win = 8;
+      m.setDutyAvg(static_cast<uint8_t>(win));
+      reply.raw("OK");
+      reply.kvInt("dutyavg", win);
     } else if (strcmp(verb, "NEUTRAL") == 0) {
       char* v = strtok(nullptr, " ");
       Devices::Neutral mode = Devices::Neutral::Coast;
@@ -660,6 +759,8 @@ int bringupMain() {
   char corrId[16];
   char replyBuf[220];
 
+  uint32_t lastTlmMs = 0;   // [ms] last telemetry push (see gStreamPeriodMs)
+
   for (;;) {
     if (serial.readLine(line, sizeof(line))) {
       stripCorrId(line, corrId, sizeof(corrId));
@@ -672,6 +773,19 @@ int bringupMain() {
         reply.raw(corrId);
       }
       serial.send(replyBuf);
+    }
+
+    // Unsolicited fixed-cadence telemetry push (default 80 ms; STREAM <ms>
+    // retunes, STREAM 0 disables). A single serial writer -- this foreground
+    // fiber -- emits both command replies and TLM lines, so they never
+    // interleave mid-line; dispatch() never blocks (all I2C is the fiber's),
+    // so an 80 ms cadence is comfortably met even while servicing commands.
+    if (gStreamPeriodMs > 0) {
+      uint32_t nowMs = static_cast<uint32_t>(system_timer_current_time());
+      if (nowMs - lastTlmMs >= gStreamPeriodMs) {
+        lastTlmMs = nowMs;
+        emitTelemetry(bus, serial, nowMs);
+      }
     }
 
     uBit.sleep(1);  // yield: lets the DeviceBus fiber (and radio/other

@@ -27,6 +27,12 @@ import serial
 ROBOT_PORT = "/dev/cu.usbmodem2121102"
 SERVO_PIN = 5  # P1 = Nezha J1/S1 (found by OTOS-heading response, 101-001)
 
+# The fiber neutralizes a motor whose last setVelocity() is older than this
+# (DeviceBus::kVelocityStaleUs). Re-send VEL comfortably faster than this to
+# keep driving; stream_capture() feeds it every VEL_FEED_S.
+VELOCITY_STALE_S = 0.300  # [s] RX-watchdog neutralize horizon
+VEL_FEED_S = 0.100        # [s] setpoint re-send period (< VELOCITY_STALE_S)
+
 _KV = re.compile(r"(\w+)=(-?[\d.]+)")
 
 
@@ -46,6 +52,35 @@ class Rig:
         self._cid += 1
         self.ser.write((f"{s} #{self._cid}\r\n").encode())
         return self._cid
+
+    def flush(self) -> None:
+        """Drop the RX buffer + any queued serial data (resync after a lag)."""
+        self._buf = ""
+        try:
+            self.ser.reset_input_buffer()
+        except Exception:
+            pass
+
+    def stream(self, ms: int) -> None:  # [ms]
+        """Set the firmware's unsolicited TLM push period (0 = off)."""
+        self.cmd(f"STREAM {int(ms)}")
+
+    def read_tlm(self) -> list[dict]:
+        """Drain available serial and return parsed unsolicited TLM frames
+        since the last call. Shares the persistent buffer with await_reply()
+        (TLM lines start with 'TLM', command replies with 'OK'/'ERR', so the
+        two never claim the same line). Each dict carries the raw wire keys:
+        t (emit [ms]), 1p/1v/1a/1t and 2p/2v/2a/2t per motor."""
+        self._buf += self.ser.read(self.ser.in_waiting or 1).decode(errors="replace")
+        out: list[dict] = []
+        if "\n" in self._buf:
+            lines = self._buf.split("\n")
+            self._buf = lines[-1]
+            for ln in lines[:-1]:
+                ln = ln.strip()
+                if ln.startswith("TLM"):
+                    out.append({m[0]: float(m[1]) for m in _KV.findall(ln)})
+        return out
 
     def await_reply(self, cid: int, timeout: float = 0.6) -> tuple[str, dict] | tuple[None, dict]:
         """Poll the persistent buffer for the reply matching `cid`."""
@@ -127,10 +162,12 @@ def waveform(kind: str, t: float, period: float, amp: float) -> float:
 
 
 def run_waveform(rig: Rig, port: int, kind: str, period: float, amp: float,
-                 cycles: float = 3.0):
-    """Drive motor `port` with a sine/square velocity reference and capture
-    commanded vs measured (encoder) velocity. Returns a list of dict rows:
-    {t, cmd, vel, pos, applied}. Sends VEL then reads STATE each iteration."""
+                 cycles: float = 3.0, offset: float = 0.0):
+    """Drive motor `port` with a sine/square velocity reference (plus a DC
+    `offset` -- use a positive offset >= amp to keep the drive one-directional,
+    i.e. no reversal) and capture commanded vs measured (encoder) velocity.
+    Returns a list of dict rows: {t, cmd, vel, pos, applied, wedged, glitch}.
+    Sends VEL then reads STATE each iteration."""
     rig.reset(port)
     rows = []
     t0 = time.monotonic()
@@ -139,7 +176,7 @@ def run_waveform(rig: Rig, port: int, kind: str, period: float, amp: float,
         t = time.monotonic() - t0
         if t >= dur:
             break
-        cmd = waveform(kind, t, period, amp)
+        cmd = offset + waveform(kind, t, period, amp)
         rig.send(f"M {port} VEL {cmd:.1f}")     # fire-and-forget setpoint
         cid = rig.send(f"M {port} STATE")       # then read the state back
         _, st = rig.await_reply(cid, timeout=0.15)
@@ -147,6 +184,57 @@ def run_waveform(rig: Rig, port: int, kind: str, period: float, amp: float,
             "t": t, "cmd": cmd,
             "vel": st.get("vel"), "pos": st.get("pos"),
             "applied": st.get("applied"),
+            "wedged": st.get("wedged"), "glitch": st.get("glitch"),
         })
+    rig.neutral(port)
+    return rows
+
+
+def stream_capture(rig: Rig, port: int, drive, duration: float,
+                   stream_ms: int = 80, offset: float = 0.0):
+    """Characterization capture over the RELIABLE telemetry-stream path
+    (vs. run_waveform's lossy per-sample STATE polling). Turns on the
+    firmware's 80 ms TLM push, drives motor `port` with velocity setpoint
+    `drive(t)` re-sent every VEL_FEED_S (feeds the RX watchdog), and records
+    ONLY the pushed TLM frames -- so the result is gap-free at the encoder's
+    own ~80 ms refresh cadence. Returns rows keyed off the firmware's own emit
+    stamp: {t [s], cmd, pos, vel, applied, stamp [us]}."""
+    pk, vk, ak, tk = f"{port}p", f"{port}v", f"{port}a", f"{port}t"
+    rig.stream(stream_ms)
+    rig.reset(port)
+    rig.cmd(f"M {port} PID 1")
+    # Let the STAGED reset + encoder boot-anchor settle before recording.
+    # The Nezha brick reports its huge lifetime-accumulated raw count for a
+    # frame or two after RESET (nezha_motor.cpp documents "~-33526mm on first
+    # contact, NORMAL") until the software offset zeroes it; capturing through
+    # that would blow out the position axis. Settle, then flush the transient.
+    time.sleep(0.4)
+    rig.flush()
+    rows: list[dict] = []
+    t0 = time.monotonic()
+    last_feed = -1.0
+    t_emit0 = None
+    while time.monotonic() - t0 < duration:
+        t = time.monotonic() - t0
+        if t - last_feed >= VEL_FEED_S:
+            last_feed = t
+            rig.send(f"M {port} VEL {offset + drive(t):.1f}")
+        for d in rig.read_tlm():
+            if pk not in d or "t" not in d:
+                continue
+            # Defensive: drop any residual boot-anchor / corrupt outlier frame
+            # (no real bench run travels tens of metres) so it never distorts
+            # the plot's autoscale.
+            if abs(d.get(pk, 0.0)) > 20000.0:
+                continue
+            if t_emit0 is None:
+                t_emit0 = d["t"]
+            rows.append({
+                "t": (d["t"] - t_emit0) / 1000.0,        # [s] firmware emit clock
+                "cmd": offset + drive((d["t"] - t_emit0) / 1000.0),
+                "pos": d.get(pk), "vel": d.get(vk),
+                "applied": d.get(ak), "stamp": d.get(tk),
+            })
+        time.sleep(0.005)
     rig.neutral(port)
     return rows

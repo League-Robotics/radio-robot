@@ -101,6 +101,28 @@ class NezhaMotor : public MotorArmor {
   void setNeutral(Neutral mode);      // coast / brake — Nezha maps both to the same 0x60 speed-0 write (no distinct brake register)
   void setPidEnabled(bool on);        // default true (OQ2) — armor applies in both modes
 
+  // Velocity-estimator selection (bench A/B, sprint 101). mode 0 = EMA
+  // (velFiltAlpha — the shipped/default behavior); mode 1 = least-squares
+  // line-fit slope over the last `window` FRESH position samples
+  // (Savitzky-Golay order 1). The line fit rejects encoder-quantization noise
+  // with less lag than an equivalent heavier EMA. `window` is clamped to
+  // [3, kMaxVelWindow]; it is ignored in mode 0. Live-settable so the bench
+  // can compare EMA vs. line-fit(N) on the stand without reflashing.
+  void setVelEstimator(uint8_t mode, uint8_t window);
+  uint8_t velEstMode() const { return velEstMode_; }
+  uint8_t velWindow() const { return velWindow_; }
+
+  // Output duty smoothing (bench, sprint 101). Applies a boxcar moving
+  // average of the last `window` PID duty outputs before the armored write,
+  // to smooth the visible/electrical duty jitter (the write path quantizes
+  // duty to integer percent, so a jittering PID output toggles the written
+  // percent by +/-1-2 LSB every ~40ms). window 1 = off (default, no
+  // averaging — unchanged behavior). Clamped to [1, kMaxDutyAvg]. Adds a
+  // small amount of control-output lag (~window/2 cycles); live-settable so
+  // the bench can find the point where smoothing stops being worth the lag.
+  void setDutyAvg(uint8_t window);
+  uint8_t dutyAvgWindow() const { return dutyAvgWindow_; }
+
   // --- Primitive getters (MotorArmor overrides) ---
   float position() const override;      // [mm]
   float velocity() const override;      // [mm/s] signed, filtered
@@ -183,6 +205,32 @@ class NezhaMotor : public MotorArmor {
   uint32_t encGlitchCount_ = 0;   // cumulative rejected samples (never resets)
   uint8_t encGlitchStreak_ = 0;   // consecutive rejections; re-anchor at kGlitchStreakAccept
 
+  // ---- Velocity estimator (sprint 101 bench A/B) ----
+  // A short ring of the most recent ACCEPTED fresh (time, position) samples.
+  // mode 1 fits a least-squares line through the last `velWindow_` of them and
+  // takes the slope as the velocity; mode 0 ignores the ring and uses the
+  // legacy 2-point + EMA path. Cleared on any encoder discontinuity
+  // (hardReset()/softRebaseline()) so a fit never spans a re-anchor.
+  static constexpr uint8_t kVelEstEma = 0;
+  static constexpr uint8_t kVelEstLineFit = 1;
+  static constexpr uint8_t kMaxVelWindow = 8;
+  uint8_t velEstMode_ = kVelEstEma;   // default: shipped EMA behavior
+  uint8_t velWindow_ = 6;             // line-fit sample count, clamped [3, kMaxVelWindow]
+  uint64_t velWinT_[kMaxVelWindow] = {};   // [us] fresh-sample times (ring)
+  float velWinP_[kMaxVelWindow] = {};      // [mm] fresh-sample positions (ring)
+  uint8_t velWinCount_ = 0;                // valid entries in the ring (<= kMaxVelWindow)
+  uint8_t velWinHead_ = 0;                 // next write slot
+
+  // ---- Output duty smoothing (sprint 101 bench) ----
+  // Boxcar moving average of the last dutyAvgWindow_ PID duty outputs, applied
+  // just before armoredWrite(). window 1 = off (default). Ring cleared on an
+  // encoder discontinuity alongside the velocity window (clearVelWindow()).
+  static constexpr uint8_t kMaxDutyAvg = 8;
+  uint8_t dutyAvgWindow_ = 1;              // 1 = off (default, unchanged behavior)
+  float dutyRing_[kMaxDutyAvg] = {};       // [-1,1] recent PID duty outputs (ring)
+  uint8_t dutyRingCount_ = 0;
+  uint8_t dutyRingHead_ = 0;
+
   // ---- Write path ----
   int8_t lastWrittenPct_ = -128;        // [%] sentinel (outside +/-100) forces the first write
   uint64_t lastWriteTimeUs_ = 0;        // [us]
@@ -202,6 +250,12 @@ class NezhaMotor : public MotorArmor {
 
   // ---- Private helpers: write path ----
   void writeMotorRun(uint8_t direction, uint8_t speed);   // ported writeMotorCmd() (0x60)
+
+  // ---- Private helpers: velocity estimator ----
+  void pushVelSample(uint64_t t, float position);   // [us] [mm] append an accepted fresh sample to the ring
+  void clearVelWindow();                             // reset the vel + duty rings on an encoder discontinuity
+  float lineFitVelocity() const;                     // [mm/s] least-squares slope over the last velWindow_ samples
+  float averageDuty(float duty);                     // [-1,1] boxcar moving average of the last dutyAvgWindow_ duties
 
   // ---- Private helpers: encoder read paths ----
   int32_t readEncoderAtomicRaw();   // one-off sample: preClear/postClear-settled 0x46 write -> read

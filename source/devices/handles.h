@@ -93,6 +93,8 @@ class Motor {
   void setNeutral(Neutral mode);     // coast / brake
   void resetPosition();              // zero encoder (staged, at-rest-guarded)
   void setPidEnabled(bool on);       // default true — armor applies in both modes
+  void setVelEstimator(uint8_t mode, uint8_t window);  // 0=EMA, 1=line-fit(window); bench A/B (101)
+  void setDutyAvg(uint8_t window);   // boxcar moving-average on PID duty output (1=off); bench (101)
 
   // --- Getters: latest published sample, never touch the bus. ---
   Sample<MotorReading> latest() const { return ring_.latest(); }
@@ -145,6 +147,12 @@ inline void Motor::setNeutral(Neutral mode) {
 inline void Motor::resetPosition() { leaf_.resetPosition(); }
 
 inline void Motor::setPidEnabled(bool on) { leaf_.setPidEnabled(on); }
+
+inline void Motor::setVelEstimator(uint8_t mode, uint8_t window) {
+  leaf_.setVelEstimator(mode, window);
+}
+
+inline void Motor::setDutyAvg(uint8_t window) { leaf_.setDutyAvg(window); }
 
 inline bool Motor::sampleAt(uint64_t t, MotorReading& out) const {
   Sample<MotorReading> older, newer;
