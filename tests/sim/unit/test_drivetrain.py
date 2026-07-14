@@ -47,10 +47,6 @@ _SOURCES = [
     _SOURCE_DIR / "hal" / "sim" / "sim_motor.cpp",
     _SOURCE_DIR / "hal" / "sim" / "sim_odometer.cpp",
     _SOURCE_DIR / "hal" / "velocity_pid.cpp",
-    _SOURCE_DIR / "subsystems" / "nezha_hardware.cpp",
-    _SOURCE_DIR / "hal" / "nezha" / "nezha_motor.cpp",
-    _SOURCE_DIR / "hal" / "otos" / "otos_odometer.cpp",
-    _SOURCE_DIR / "com" / "i2c_bus_host.cpp",
 ]
 
 _RUCKIG_INCLUDE = _REPO_ROOT / "libraries" / "ruckig" / "include"

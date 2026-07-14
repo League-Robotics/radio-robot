@@ -150,7 +150,6 @@ set(SOURCE_DIR "${REPO_ROOT}/source")
 #                                      Decision 3).
 # ---------------------------------------------------------------------------
 file(GLOB KINEMATICS_SOURCES "${SOURCE_DIR}/kinematics/*.cpp")
-file(GLOB MOTION_SOURCES     "${SOURCE_DIR}/motion/*.cpp")
 # source/drive/ (100-007, THE CUTOVER): Subsystems::Drivetrain (the wafer
 # adapter, subsystems/drivetrain.cpp above) now HOLDS a Drive::Drivetrain
 # and a Drive::MotionPlan -- this glob is what actually LINKS Drive::'s own
@@ -172,7 +171,6 @@ file(GLOB RUCKIG_SOURCES     "${REPO_ROOT}/libraries/ruckig/src/*.cpp")
 
 set(FIRMWARE_SOURCES
     ${KINEMATICS_SOURCES}
-    ${MOTION_SOURCES}
     ${DRIVE_SOURCES}
     "${SOURCE_DIR}/subsystems/drivetrain.cpp"
     "${SOURCE_DIR}/subsystems/sim_hardware.cpp"

@@ -132,30 +132,6 @@ LineReading LineSensorLeaf::reading() const { return cachedReading_; }
 bool LineSensorLeaf::readingFresh() const { return readingFresh_; }
 
 // ---------------------------------------------------------------------------
-// Calibration -- each issues its own fresh, non-blocking read.
-// ---------------------------------------------------------------------------
-
-bool LineSensorLeaf::captureCalibMin() {
-  uint16_t raw[4] = {0, 0, 0, 0};
-  if (!readRaw(raw)) return false;
-  for (uint8_t ch = 0; ch < 4; ++ch) config_.calMin[ch] = raw[ch];
-  return true;
-}
-
-bool LineSensorLeaf::captureCalibMax() {
-  uint16_t raw[4] = {0, 0, 0, 0};
-  if (!readRaw(raw)) return false;
-  for (uint8_t ch = 0; ch < 4; ++ch) config_.calMax[ch] = raw[ch];
-  return true;
-}
-
-void LineSensorLeaf::setSmoothingAlpha(float alpha) {
-  if (alpha < 0.0f) alpha = 0.0f;
-  if (alpha >= 1.0f) alpha = 0.99f;  // clamp to keep the EMA stable
-  config_.filtAlpha = alpha;
-}
-
-// ---------------------------------------------------------------------------
 // readRaw() -- ported byte-for-byte (already non-blocking in the pre-port
 // file -- no fiber_sleep). Four write(channel-index)/read(1-byte) pairs.
 // ---------------------------------------------------------------------------

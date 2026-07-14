@@ -83,9 +83,6 @@ class Communicator {
   // from under them (e.g. once queued by value in an Rt::WorkQueue).
   CommunicatorToCommandProcessorCommand takeCommand();
 
-  msg::CommunicatorState state() const;
-  msg::CommunicatorCapabilities capabilities() const;
-
   // Primitive sends -- reply adapters build on these. Same semantics as the
   // drivers' send() (serial: ASYNC drop-on-full; radio: fragmented RAW250).
   void sendSerial(const char* msg);
@@ -106,9 +103,6 @@ class Communicator {
 
   bool hasCommand_ = false;                 // a command is held, unread
   Channel heldReturnPath_ = Channel::NONE;  // return path for the held command
-
-  uint32_t serialLines_ = 0;  // complete lines received over serial
-  uint32_t radioLines_ = 0;   // complete lines received over radio
 };
 
 }  // namespace Subsystems

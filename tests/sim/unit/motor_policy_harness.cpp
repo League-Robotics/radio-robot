@@ -47,9 +47,7 @@
 #include <string>
 #include <vector>
 
-#include "com/i2c_bus.h"
 #include "hal/capability/motor.h"
-#include "hal/nezha/nezha_motor.h"
 #include "hal/sim/sim_motor.h"
 #include "hal/velocity_pid.h"
 #include "messages/common.h"
@@ -605,100 +603,7 @@ void scenarioInvariantBDecelToZeroNoSustainedResidual() {
 // not another MockMotor scenario (which never reaches trackAcceleration()
 // at all).
 
-// scriptNezhaEncoderReading -- packs `positionMm` into the little-endian
-// int32 tenths-of-degree raw encoder reading NezhaMotor::collectEncoder()
-// decodes (mirrors nezha_flipflop_harness.cpp's own scriptRead()
-// convention). Every scenario below uses travel_calib=1.0, fwd_sign=+1, so
-// raw == positionMm*10 exactly (no rounding drift across the ramp).
-void scriptNezhaEncoderReading(I2CBus& bus, uint16_t wireAddr, float positionMm) {
-  int32_t raw = static_cast<int32_t>(std::lround(positionMm * 10.0f));
-  uint8_t data[4] = {
-      static_cast<uint8_t>(raw & 0xFF),
-      static_cast<uint8_t>((raw >> 8) & 0xFF),
-      static_cast<uint8_t>((raw >> 16) & 0xFF),
-      static_cast<uint8_t>((raw >> 24) & 0xFF),
-  };
-  bus.scriptRead(wireAddr, data, 4, /*status=*/0);
-}
-
 // 11. Hal::Motor::trackAcceleration(), exercised against the REAL
-//     Hal::NezhaMotor leaf: a standalone motor on its own scripted I2CBus,
-//     bypassing Subsystems::NezhaHardware's flip-flop scheduler entirely —
-//     mirrors nezha_flipflop_harness.cpp's own
-//     scenarioFwdSignNegatesEncoderPositionSign() precedent for constructing
-//     a bare NezhaMotor directly. Drives a velocity ramp UP, a HOLD at
-//     constant velocity, then a ramp DOWN, purely by scripting successive
-//     encoder readings a fixed 20ms apart — no DUTY/VELOCITY command is
-//     ever staged (mode_ stays Mode::NONE), so tick()'s mode dispatch never
-//     writes to the bus; exactly one scripted read (collectEncoder()) is
-//     consumed per tick(). vel_filt_alpha=1.0 (no smoothing) so velocity()
-//     reflects each tick's raw difference-quotient exactly, keeping the
-//     ramp's shape uncomplicated to reason about.
-void scenarioNezhaAccelerationTracksVelocityRamp() {
-  beginScenario("099-003: NezhaMotor::trackAcceleration() responds to a velocity ramp (up/down/hold)");
-  I2CBus::setClock(1000000);
-  I2CBus bus;
-  const uint16_t addr7 = Hal::kNezhaDeviceAddr;
-  const uint16_t wireAddr = static_cast<uint16_t>(addr7 << 1);
-
-  msg::MotorConfig cfg = msg::MotorConfig{}
-      .setPort(1).setFwdSign(1).setTravelCalib(1.0f).setVelFiltAlpha(1.0f);
-  Hal::NezhaMotor motor(bus, cfg);
-
-  const float dtS = 0.02f;   // [s] fixed 20ms cadence between every tick below
-  uint32_t now = 0;
-  float position = 0.0f;   // [mm]
-
-  // Prime tick — establishes lastPosition_/lastTickUs_, no velocity/accel yet.
-  scriptNezhaEncoderReading(bus, wireAddr, position);
-  motor.tick(now);
-
-  // Ramp UP: velocity climbs 100 -> 450 mm/s in 50 mm/s steps -- constant
-  // positive rawAccel (2500 mm/s^2) each transition, so the EMA converges
-  // toward a clearly positive value.
-  const float rampUpVel[] = {100.0f, 150.0f, 200.0f, 250.0f, 300.0f, 350.0f, 400.0f, 450.0f};
-  for (float v : rampUpVel) {
-    position += v * dtS;
-    now += 20;
-    I2CBus::advanceClock(20000);
-    scriptNezhaEncoderReading(bus, wireAddr, position);
-    motor.tick(now);
-  }
-  const float afterRampUp = motor.acceleration();
-  checkTrue(afterRampUp > 0.0f,
-            "NezhaMotor: acceleration() is positive after a sustained velocity ramp UP");
-
-  // HOLD at the ramp's final constant velocity -- rawAccel ~ 0 every tick,
-  // so the EMA decays geometrically toward zero.
-  for (int i = 0; i < 8; ++i) {
-    position += 450.0f * dtS;
-    now += 20;
-    I2CBus::advanceClock(20000);
-    scriptNezhaEncoderReading(bus, wireAddr, position);
-    motor.tick(now);
-  }
-  const float afterHold = motor.acceleration();
-  checkTrue(std::fabs(afterHold) < std::fabs(afterRampUp),
-            "NezhaMotor: acceleration() magnitude shrinks toward zero while velocity holds steady");
-
-  // Ramp DOWN: velocity falls 400 -> 100 mm/s in 50 mm/s steps -- constant
-  // negative rawAccel, so the EMA swings clearly negative.
-  const float rampDownVel[] = {400.0f, 350.0f, 300.0f, 250.0f, 200.0f, 150.0f, 100.0f};
-  for (float v : rampDownVel) {
-    position += v * dtS;
-    now += 20;
-    I2CBus::advanceClock(20000);
-    scriptNezhaEncoderReading(bus, wireAddr, position);
-    motor.tick(now);
-  }
-  const float afterRampDown = motor.acceleration();
-  checkTrue(afterRampDown < 0.0f,
-            "NezhaMotor: acceleration() is negative after a sustained velocity ramp DOWN");
-
-  checkUintEq(bus.errCount(addr7), 0, "no script under-run across the whole ramp");
-}
-
-// 12. Hal::Motor::trackAcceleration(), exercised against the REAL
 //     Hal::SimMotor leaf: the standalone constructor (no PhysicsWorld/plant
 //     needed — mirrors this file's Nezha scenario's own "bare leaf, no
 //     surrounding subsystem" shape). Drives the SAME ramp UP / HOLD / ramp
@@ -767,7 +672,6 @@ int main() {
   scenarioPidIndependence();
   scenarioInvariantAGenuineReversalStillDwells();
   scenarioInvariantBDecelToZeroNoSustainedResidual();
-  scenarioNezhaAccelerationTracksVelocityRamp();
   scenarioSimAccelerationTracksVelocityRamp();
 
   if (g_failureCount == 0) {

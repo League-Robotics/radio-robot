@@ -63,10 +63,9 @@ inline float lerp(float older, float newer, float frac) {
 }
 
 // wrapAngle — wrap `angle` into (-pi, pi], via the same atan2(sin, cos)
-// identity source/motion/stop_condition.cpp's wrapAngle() and
-// source/subsystems/pose_estimator.cpp's wrapPi() both use. Reimplemented
+// identity source/subsystems/pose_estimator.cpp's wrapPi() uses. Reimplemented
 // locally rather than shared: the isolation invariant forbids
-// source/devices/ from including either file (device-bus-tickets.md's
+// source/devices/ from including it (device-bus-tickets.md's
 // "Standing isolation invariant").
 inline float wrapAngle(float angle) {  // [rad] -> [rad] in (-pi, pi]
   return std::atan2(std::sin(angle), std::cos(angle));

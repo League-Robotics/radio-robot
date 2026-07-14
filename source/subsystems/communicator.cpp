@@ -58,11 +58,9 @@ void Communicator::tick(uint32_t now) {
   // Serial first; a radio line not taken this tick stays latched in the
   // Radio driver until the next poll -- see the header's tick() comment.
   if (serial_.readLine(line_, sizeof(line_))) {
-    ++serialLines_;
     hasCommand_ = true;
     heldReturnPath_ = Channel::SERIAL;
   } else if (radio_.poll(line_, sizeof(line_))) {
-    ++radioLines_;
     hasCommand_ = true;
     heldReturnPath_ = Channel::RADIO;
   }
@@ -81,21 +79,6 @@ CommunicatorToCommandProcessorCommand Communicator::takeCommand() {
   hasCommand_ = false;
   heldReturnPath_ = Channel::NONE;
   return out;
-}
-
-msg::CommunicatorState Communicator::state() const {
-  msg::CommunicatorState s;
-  s.radio_channel = static_cast<uint32_t>(channel_);
-  s.serial_lines = serialLines_;
-  s.radio_lines = radioLines_;
-  return s;
-}
-
-msg::CommunicatorCapabilities Communicator::capabilities() const {
-  msg::CommunicatorCapabilities caps;
-  caps.serial = true;
-  caps.radio = true;
-  return caps;
 }
 
 void Communicator::sendSerial(const char* msg) { serial_.send(msg); }

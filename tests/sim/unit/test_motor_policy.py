@@ -47,11 +47,10 @@ _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "motor_policy_harness.c
 # NezhaMotor and SimMotor embed a Hal::MotorVelocityPid member).
 _PID_SRC = _SOURCE_DIR / "hal" / "velocity_pid.cpp"
 
-# 099-003: the scripted I2CBus fake (HOST_BUILD-only) plus the REAL
-# NezhaMotor/SimMotor leaf translation units — mirrors
-# test_nezha_flipflop.py's identical source list for the Nezha half.
-_I2C_HOST_FAKE_SRC = _SOURCE_DIR / "com" / "i2c_bus_host.cpp"
-_NEZHA_MOTOR_SRC = _SOURCE_DIR / "hal" / "nezha" / "nezha_motor.cpp"
+# 099-003: the REAL SimMotor leaf translation unit exercises
+# Hal::Motor::trackAcceleration() end-to-end. (The Nezha half of this
+# scenario was retired with the legacy hal/nezha cluster; SimMotor alone
+# covers the acceleration-EMA acceptance criterion.)
 _SIM_MOTOR_SRC = _SOURCE_DIR / "hal" / "sim" / "sim_motor.cpp"
 
 # messages/common.h documents its own target as "CODAL C++11" — build the
@@ -76,8 +75,6 @@ def test_motor_policy_harness_compiles_and_passes(tmp_path):
     """Compile the MockMotor + real-leaf harness and assert every scenario passes."""
     assert _HARNESS_SRC.is_file(), f"harness source missing: {_HARNESS_SRC}"
     assert _PID_SRC.is_file(), f"velocity_pid.cpp missing: {_PID_SRC}"
-    assert _I2C_HOST_FAKE_SRC.is_file(), f"HOST_BUILD I2CBus fake missing: {_I2C_HOST_FAKE_SRC}"
-    assert _NEZHA_MOTOR_SRC.is_file(), f"nezha_motor.cpp missing: {_NEZHA_MOTOR_SRC}"
     assert _SIM_MOTOR_SRC.is_file(), f"sim_motor.cpp missing: {_SIM_MOTOR_SRC}"
     assert _SOURCE_DIR.is_dir(), f"source/ tree missing: {_SOURCE_DIR}"
 
@@ -97,8 +94,6 @@ def test_motor_policy_harness_compiles_and_passes(tmp_path):
             str(binary),
             str(_HARNESS_SRC),
             str(_PID_SRC),
-            str(_I2C_HOST_FAKE_SRC),
-            str(_NEZHA_MOTOR_SRC),
             str(_SIM_MOTOR_SRC),
         ],
         capture_output=True,

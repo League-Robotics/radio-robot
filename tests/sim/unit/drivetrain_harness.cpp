@@ -21,16 +21,13 @@
 #include <cstdio>
 #include <string>
 
-#include "com/i2c_bus.h"
 #include "drive/drivetrain.h"
-#include "hal/nezha/nezha_motor.h"
 #include "kinematics/body_kinematics.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
 #include "messages/planner.h"
 #include "runtime/queue.h"
 #include "subsystems/drivetrain.h"
-#include "subsystems/nezha_hardware.h"
 #include "subsystems/sim_hardware.h"
 
 namespace {
@@ -53,15 +50,6 @@ void fail(const std::string& what) {
 
 void checkTrue(bool condition, const std::string& what) {
   if (!condition) fail(what + " -- expected true, got false");
-}
-
-void checkUintEq(uint32_t actual, uint32_t expected, const std::string& what) {
-  if (actual != expected) {
-    char buf[256];
-    std::snprintf(buf, sizeof(buf), "%s -- expected %u, got %u", what.c_str(),
-                  static_cast<unsigned>(expected), static_cast<unsigned>(actual));
-    fail(buf);
-  }
 }
 
 // --- SimHardware fixture helpers (mirrors sim_api.cpp's
@@ -163,11 +151,6 @@ msg::DrivetrainCommand neutralCommand() {
 Rt::Mailbox<Rt::MoverRequest> g_replaceIn;
 const msg::PoseStep g_zeroPoseStep{};
 Drive::ChainTail g_chainTail{};
-// Fixed placeholder BodyState -- scenario 4's own NezhaHardware+I2CBus-fake
-// setup has no Hal::PhysicsWorld/.plant() to read ground truth from, and
-// never posts a Drive::Goal at all (DIRECT/WHEELS-mode only, no Drive::
-// tracking to feed), so a fixed value is fine there.
-const msg::PoseEstimate g_zeroBodyState{};
 
 // groundTruthBodyState -- this bare harness has no Subsystems::PoseEstimator
 // wired up (unlike tests/_infra/sim/sim_api.cpp's SimHandle, which ticks a
@@ -335,75 +318,12 @@ void scenarioStopMidPlanInstantPreemptNoReverseCreep() {
             "measured velocity settles near zero after STOP");
 }
 
-// --- Scenario 4 (NezhaHardware + HOST_BUILD scripted I2CBus fake): the
-// sprint's mandatory staging-only verification. ---
-
-constexpr uint16_t kAddr7 = 0x10;
-constexpr uint16_t kWireAddr = static_cast<uint16_t>(kAddr7 << 1);
-
-void scriptGenerousPool(I2CBus& bus, int count) {
-  static uint8_t canned[4] = {0, 0, 0, 0};
-  for (int i = 0; i < count; ++i) {
-    bus.scriptWrite(kWireAddr, /*status=*/0);
-    bus.scriptRead(kWireAddr, canned, 4, /*status=*/0);
-  }
-}
-
-void scenarioStagingOnlyNoI2CWriteUntilExplicitHardwareTick() {
-  beginScenario(
-      "staging-only: Drivetrain::tick() alone issues ZERO I2C writes -- only an explicit "
-      "hardware.tick() flushes them");
-  msg::MotorConfig configs[Subsystems::NezhaHardware::kMotorCount];
-  for (uint32_t i = 0; i < Subsystems::NezhaHardware::kMotorCount; ++i) {
-    configs[i] = msg::MotorConfig();
-    configs[i].setPort(i + 1).setFwdSign(1).setTravelCalib(1.0f);
-    configs[i].setPolled(i + 1 == 1 || i + 1 == 2);   // the drive pair
-  }
-
-  I2CBus::setClock(1000000);
-  I2CBus bus;
-  Subsystems::NezhaHardware hardware(bus, configs);
-  scriptGenerousPool(bus, 40);
-
-  Subsystems::Drivetrain dt(hardware);
-  msg::DrivetrainConfig dtConfig;
-  dtConfig.setTrackwidth(150.0f);
-  dtConfig.setLeftPort(1);
-  dtConfig.setRightPort(2);
-  dt.configure(dtConfig);
-  dt.configureMotion(generousMotionConfig());
-
-  Rt::WorkQueue<Drive::Goal, 8> segmentIn;
-  Rt::WorkQueue<msg::DrivetrainCommand, 8> driveIn;
-  checkTrue(driveIn.post(wheelsCommand(150.0f, 150.0f)), "driveIn accepts the WHEELS command");
-
-  uint32_t before = bus.txnCount(kAddr7);
-  checkUintEq(before, 0, "precondition: no I2C traffic before any tick() at all");
-
-  // Drivetrain::tick() alone -- drains driveIn, computes the governed
-  // targets, and STAGES them via hardware.motor(port).apply(cmd)
-  // (Hal::Motor::apply() -> the leaf's setVelocity(), itself staging-only:
-  // NezhaMotor::setVelocity() only writes mode_/velocityTarget_, per
-  // motor.h/nezha_motor.cpp's own contract). This must issue NO bus
-  // transaction of any kind.
-  dt.tick(1000, segmentIn, g_replaceIn, driveIn, g_zeroBodyState, g_zeroPoseStep, g_chainTail);
-  checkUintEq(bus.txnCount(kAddr7), before,
-              "Drivetrain::tick() (stage-only) issued ZERO I2C transactions");
-
-  // Only an EXPLICIT hardware.tick() (the flip-flop's own REQUEST_DUE/
-  // COLLECT_DUE schedule) ever touches the bus.
-  hardware.tick(1010);   // REQUEST_DUE
-  checkTrue(bus.txnCount(kAddr7) > before,
-            "an explicit hardware.tick() call is what finally issues the I2C transaction");
-}
-
 }  // namespace
 
 int main() {
   scenarioSingleGoalEnqueueExecutePop();
   scenarioEscapeHatchPreemptionClearsRingImmediately();
   scenarioStopMidPlanInstantPreemptNoReverseCreep();
-  scenarioStagingOnlyNoI2CWriteUntilExplicitHardwareTick();
 
   if (g_failureCount == 0) {
     std::printf("OK: all Drivetrain 100-007 scenarios passed\n");

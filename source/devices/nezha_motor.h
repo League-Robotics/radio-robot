@@ -130,7 +130,6 @@ class NezhaMotor : public MotorArmor {
 
   bool connected() const { return connected_; }
   uint32_t encGlitchCount() const { return encGlitchCount_; }   // cumulative rejected samples (never resets)
-  uint64_t sampleTime() const { return lastTickUs_; }           // [us]
   bool pidEnabled() const { return pidEnabled_; }
 
   // tick() — the leaf's 5-step call-order contract (see nezha_motor.cpp):
