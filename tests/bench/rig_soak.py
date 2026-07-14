@@ -29,6 +29,7 @@ def _num(d, k):
 
 def soak(seconds: float = 120.0) -> dict:
     rig = Rig(settle=3.0)
+    rig.cmd("STREAM 0")  # pure poll-path stress: no unsolicited TLM/STLM TX competing with the request/reply reads
     fail = []
     stats = {
         "cycles": 0, "reads": 0, "timeouts": 0,
@@ -108,14 +109,15 @@ def soak(seconds: float = 120.0) -> dict:
                 stats["color_disc"] += 1
             stats["cycles"] = i
             if i % 50 == 0:
-                dg = rig.odiag()
+                _, dg = read1("ODIAG")  # resync-retry; may still be empty under load
+                ev = _num(dg, "err")
                 print(f"  t={t:5.0f}s cyc={i:4d} reads={stats['reads']:5d} "
-                      f"i2c_err={int(_num(dg, 'err'))} timeouts={stats['timeouts']} "
+                      f"i2c_err={'?' if math.isnan(ev) else int(ev)} timeouts={stats['timeouts']} "
                       f"wedge={stats['wedge_max']} glitch={stats['glitch_max']}")
             dt = time.monotonic() - cstart
             if dt < period:
                 time.sleep(period - dt)
-        end = rig.odiag()
+        _, end = read1("ODIAG")
         stats["i2c_err_end"] = end.get("err")
     finally:
         rig.close()

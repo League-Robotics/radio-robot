@@ -75,6 +75,11 @@
 // matcher skips it. This is the gap-free capture path (vs. per-sample polling,
 // whose request/reply lags past a host timeout under motor+I2C load).
 //
+// Slow perception devices ride a companion line at 1/3 the motor cadence:
+//   STLM t=<emit ms> ox= oy= oh= oc= n0= n1= n2= n3= lc= r= g= b= cw= cc=
+//   (OTOS pose x/y/heading + connected; 4 normalized line channels + connected;
+//    color RGBC + connected). Prefixed "STLM" so a motor-"TLM" reader skips it.
+//
 // Any line may end with a trailing " #<digits>" correlation-id suffix
 // (matching host/robot_radio/io/serial_conn.py's `SerialConnection.send()`,
 // which appends one to every command and blocks on a reply carrying the
@@ -374,6 +379,39 @@ void emitTelemetry(Devices::DeviceBus& bus, BringupSerial& serial, uint32_t nowM
   t.kvFloat("2v", s2.value.velocity);
   t.kvFloat("2a", s2.value.appliedDuty, 3);
   t.kvU64("2t", s2.stamp);
+  serial.send(buf);
+}
+
+// emitSensorTelemetry — companion to emitTelemetry() carrying the slow
+// perception devices: OTOS pose (x/y/heading + connected), the 4 normalized
+// line channels, and the color RGBC. Prefixed "STLM" (distinct from motor
+// "TLM"), no corr-id, so both a polling host's reply matcher AND a motor-TLM
+// reader (which keys on the "TLM " prefix) skip it. Pushed at a fraction of
+// the motor cadence (sensors change slowly) to keep serial TX load modest so
+// it does not degrade command RX while driving.
+void emitSensorTelemetry(Devices::DeviceBus& bus, BringupSerial& serial, uint32_t nowMs) {
+  char buf[220];
+  ReplyBuilder t(buf, sizeof(buf));
+  t.raw("STLM");
+  t.kvU32("t", nowMs);
+  Devices::Sample<Devices::PoseReading> o = bus.odometer().latest();
+  t.kvFloat("ox", o.value.x);
+  t.kvFloat("oy", o.value.y);
+  t.kvFloat("oh", o.value.heading, 4);
+  t.kvInt("oc", bus.odometer().connected() ? 1 : 0);
+  Devices::Sample<Devices::LineReading> l = bus.line().latest();
+  for (int i = 0; i < 4; ++i) {
+    char key[4];
+    snprintf(key, sizeof(key), "n%d", i);
+    t.kvU32(key, l.value.normalized[i]);
+  }
+  t.kvInt("lc", bus.line().connected() ? 1 : 0);
+  Devices::Sample<Devices::ColorReading> c = bus.color().latest();
+  t.kvU32("r", c.value.r);
+  t.kvU32("g", c.value.g);
+  t.kvU32("b", c.value.b);
+  t.kvU32("cw", c.value.c);   // clear/white channel (key "cw" to avoid a bare "c")
+  t.kvInt("cc", bus.color().connected() ? 1 : 0);
   serial.send(buf);
 }
 
@@ -760,6 +798,7 @@ int bringupMain() {
   char replyBuf[220];
 
   uint32_t lastTlmMs = 0;   // [ms] last telemetry push (see gStreamPeriodMs)
+  uint32_t tlmTick = 0;     // motor-TLM emit counter (gates the slower sensor push)
 
   for (;;) {
     if (serial.readLine(line, sizeof(line))) {
@@ -785,6 +824,9 @@ int bringupMain() {
       if (nowMs - lastTlmMs >= gStreamPeriodMs) {
         lastTlmMs = nowMs;
         emitTelemetry(bus, serial, nowMs);
+        // Slow perception devices (OTOS/line/color) every 3rd motor push --
+        // they change slowly and this keeps serial TX load down while driving.
+        if (++tlmTick % 3 == 0) emitSensorTelemetry(bus, serial, nowMs);
       }
     }
 

@@ -82,6 +82,41 @@ class Rig:
                     out.append({m[0]: float(m[1]) for m in _KV.findall(ln)})
         return out
 
+    def read_frames(self) -> tuple[list[dict], list[dict]]:
+        """Drain serial ONCE and return (tlm_rows, stlm_rows). Use this instead
+        of read_tlm()+read_stlm() when you need both -- those each drain the
+        shared buffer and the first one called discards (eats) the other's
+        lines. Command-reply (OK/ERR) lines are drained and ignored."""
+        self._buf += self.ser.read(self.ser.in_waiting or 1).decode(errors="replace")
+        tlm: list[dict] = []
+        stlm: list[dict] = []
+        if "\n" in self._buf:
+            lines = self._buf.split("\n")
+            self._buf = lines[-1]
+            for ln in lines[:-1]:
+                ln = ln.strip()
+                if ln.startswith("STLM"):
+                    stlm.append({m[0]: float(m[1]) for m in _KV.findall(ln)})
+                elif ln.startswith("TLM"):
+                    tlm.append({m[0]: float(m[1]) for m in _KV.findall(ln)})
+        return tlm, stlm
+
+    def read_stlm(self) -> list[dict]:
+        """Drain available serial and return parsed unsolicited STLM (sensor)
+        frames since the last call: t (emit [ms]), OTOS ox/oy/oh/oc, line
+        n0..n3/lc, color r/g/b/cw/cc. Non-STLM lines (motor TLM, command
+        replies) are drained and discarded -- a sensor capture keeps only these."""
+        self._buf += self.ser.read(self.ser.in_waiting or 1).decode(errors="replace")
+        out: list[dict] = []
+        if "\n" in self._buf:
+            lines = self._buf.split("\n")
+            self._buf = lines[-1]
+            for ln in lines[:-1]:
+                ln = ln.strip()
+                if ln.startswith("STLM"):
+                    out.append({m[0]: float(m[1]) for m in _KV.findall(ln)})
+        return out
+
     def await_reply(self, cid: int, timeout: float = 0.6) -> tuple[str, dict] | tuple[None, dict]:
         """Poll the persistent buffer for the reply matching `cid`."""
         tag = f"#{cid}"
@@ -186,6 +221,37 @@ def run_waveform(rig: Rig, port: int, kind: str, period: float, amp: float,
             "applied": st.get("applied"),
             "wedged": st.get("wedged"), "glitch": st.get("glitch"),
         })
+    rig.neutral(port)
+    return rows
+
+
+def sensor_capture(rig: Rig, port: int, drive, duration: float,
+                   stream_ms: int = 80, offset: float = 0.0):
+    """Drive motor `port` (to rotate the drum, which sweeps the line pattern,
+    color target, and OTOS) and record the gap-free STLM sensor stream. Returns
+    rows: {t [s], ox, oy, oh, oc, n0..n3, lc, r, g, b, cw, cc}. Same watchdog-
+    fed drive discipline as stream_capture()."""
+    rig.stream(stream_ms)
+    rig.reset(port)
+    rig.cmd(f"M {port} PID 1")
+    rig.flush()
+    rows: list[dict] = []
+    t0 = time.monotonic()
+    last_feed = -1.0
+    t_emit0 = None
+    while time.monotonic() - t0 < duration:
+        t = time.monotonic() - t0
+        if t - last_feed >= VEL_FEED_S:
+            last_feed = t
+            rig.send(f"M {port} VEL {offset + drive(t):.1f}")
+        for d in rig.read_stlm():
+            if "t" not in d:
+                continue
+            if t_emit0 is None:
+                t_emit0 = d["t"]
+            d["_t"] = (d["t"] - t_emit0) / 1000.0   # [s] firmware emit clock
+            rows.append(d)
+        time.sleep(0.005)
     rig.neutral(port)
     return rows
 
