@@ -1,5 +1,18 @@
 # robot_radio — canonical Python library for the Nezha robot (protocol v2)
 
+> **STALE (104-002, 2026-07-14):** this README documents the pre-103 text
+> wire protocol (`T`/`D`/`STREAM`/`SNAP`/`stream_drive()`/`EVT done ...`).
+> Sprint 103's single-loop firmware rebuild pruned the wire down to
+> `twist`/`config`/`stop` only, with a telemetry-only ack-ring return path
+> (see `host/robot_radio/robot/protocol.py`'s own module docstring) — there
+> is no text-plane parser on the firmware side any more at all. `Nezha`
+> (`nezha.py`) and everything below it in this README's package layout
+> still target the retired API and are **not functional against a P4
+> firmware robot** as of this note. Tracked in
+> `clasi/issues/nezha-facade-and-midlayer-dead-verb-residue.md` — a future
+> sprint redesigns this layer atop `twist()`/`wait_for_ack()`; this README
+> is stale until that lands.
+
 `host/robot_radio/` is the **canonical, fully-tested** Python library for all
 host-side robot interaction.  Everything that talks to the physical robot goes
 through this package.  Protocol v2 is the only supported wire format.

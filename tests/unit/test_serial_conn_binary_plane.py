@@ -49,7 +49,7 @@ import queue
 import pytest
 
 from robot_radio.io.serial_conn import SerialConnection
-from robot_radio.robot.pb2 import config_pb2, envelope_pb2
+from robot_radio.robot.pb2 import envelope_pb2
 
 
 # ---------------------------------------------------------------------------
@@ -59,33 +59,38 @@ from robot_radio.robot.pb2 import config_pb2, envelope_pb2
 
 def test_envelope_pb2_importable_and_roundtrips():
     """`from robot_radio.robot.pb2 import envelope_pb2` works at runtime, and
-    a message defined directly in envelope.proto serializes/parses."""
+    a message defined directly in envelope.proto serializes/parses.
+
+    104-002: ``ping`` was pruned by 103-001's schema prune (reserved, not a
+    live oneof arm) -- ``stop`` is the P4 wire's live zero-field arm and
+    exercises the same "importable + roundtrips" property."""
     env = envelope_pb2.CommandEnvelope(corr_id=5)
-    env.ping.SetInParent()
+    env.stop.SetInParent()
 
     data = env.SerializeToString()
     env2 = envelope_pb2.CommandEnvelope.FromString(data)
 
     assert env2.corr_id == 5
-    assert env2.WhichOneof("cmd") == "ping"
+    assert env2.WhichOneof("cmd") == "stop"
 
 
 def test_envelope_pb2_cross_file_import_resolves():
     """envelope_pb2.py contains bare top-level cross-file imports (protoc's
-    flat -I protos output, e.g. `import drivetrain_pb2 as drivetrain__pb2`)
-    that only resolve because host/robot_radio/robot/pb2/__init__.py inserts
-    its own directory onto sys.path before any *_pb2 submodule loads.
-    Touching a field whose TYPE lives in a different .proto file (drive ->
-    DrivetrainCommand, defined in drivetrain.proto, referenced via
-    MotionSegment's sibling `wheels`/`w` chain into common.proto's
-    WheelTarget) exercises the actual cross-module reference end to end,
-    not just envelope_pb2's own locally-defined messages."""
-    env = envelope_pb2.CommandEnvelope()
-    env.drive.wheels.w.add(speed=123.0)
+    flat -I protos output, e.g. `import config_pb2 as config__pb2`) that
+    only resolve because host/robot_radio/robot/pb2/__init__.py inserts its
+    own directory onto sys.path before any *_pb2 submodule loads.
 
-    assert env.WhichOneof("cmd") == "drive"
-    assert env.drive.WhichOneof("control") == "wheels"
-    assert env.drive.wheels.w[0].speed == pytest.approx(123.0)
+    104-002: ``drive`` (DrivetrainCommand) was pruned by 103-001 -- ``config``
+    (ConfigDelta -> DrivetrainConfigPatch, defined in config.proto) is the
+    P4 wire's live cross-file reference and exercises the actual
+    cross-module reference end to end, not just envelope_pb2's own
+    locally-defined messages."""
+    env = envelope_pb2.CommandEnvelope()
+    env.config.drivetrain.trackwidth = 128.0
+
+    assert env.WhichOneof("cmd") == "config"
+    assert env.config.WhichOneof("patch") == "drivetrain"
+    assert env.config.drivetrain.trackwidth == pytest.approx(128.0)
 
 
 # ---------------------------------------------------------------------------
@@ -313,32 +318,6 @@ def test_binary_tlm_queue_drops_oldest_on_overflow():
     assert [r.tlm.seq for r in remaining] == [2, 3, 4]
 
 
-def test_reader_loop_routes_binary_cfg_reply_by_corr_id():
-    """096-007: a synthetic `*B<base64>` ReplyEnvelope{cfg=ConfigSnapshot{...}}
-    line -- 096's other NEW body oneof arm -- demuxes the same way, proving
-    095's generic corr-id routing covers 096's additions with zero
-    serial_conn.py changes (this ticket's own acceptance criterion)."""
-    conn = _new_conn()
-    reply_q: queue.Queue = queue.Queue()
-    conn._reply_queues["8"] = reply_q
-
-    envelope = envelope_pb2.ReplyEnvelope(corr_id=8)
-    envelope.cfg.target = config_pb2.CONFIG_PLANNER
-    envelope.cfg.planner.min_speed = 42.0
-    armored = "*B" + base64.b64encode(envelope.SerializeToString()).decode("ascii")
-
-    conn._ser = _FakeSerial([(armored + "\n").encode("ascii")])
-    conn._reader_loop()
-
-    reply = reply_q.get_nowait()
-    assert isinstance(reply, envelope_pb2.ReplyEnvelope)
-    assert reply.corr_id == 8
-    assert reply.WhichOneof("body") == "cfg"
-    assert reply.cfg.target == config_pb2.CONFIG_PLANNER
-    assert reply.cfg.WhichOneof("patch") == "planner"
-    assert reply.cfg.planner.min_speed == pytest.approx(42.0)
-
-
 def test_reader_loop_binary_reply_with_no_registered_queue_is_dropped():
     """No queue registered for the envelope's corr_id -- dropped silently,
     same "no listener" semantics the text plane's OK/ERR/CFG/ID branch has
@@ -414,7 +393,7 @@ def test_send_envelope_round_trips_against_loopback():
     conn._start_reader()
     try:
         env = envelope_pb2.CommandEnvelope()
-        env.ping.SetInParent()
+        env.stop.SetInParent()  # 104-002: ping pruned, stop is the live zero-field arm
         result = conn.send_envelope(env, read_timeout=500)
     finally:
         conn._stop_reader()
@@ -432,7 +411,7 @@ def test_send_envelope_round_trips_against_loopback():
 def test_send_envelope_not_connected_returns_error():
     conn = _new_conn()  # _ser stays None -- never connected
     env = envelope_pb2.CommandEnvelope()
-    env.ping.SetInParent()
+    env.stop.SetInParent()  # 104-002: ping pruned, stop is the live zero-field arm
 
     result = conn.send_envelope(env, read_timeout=100)
 
