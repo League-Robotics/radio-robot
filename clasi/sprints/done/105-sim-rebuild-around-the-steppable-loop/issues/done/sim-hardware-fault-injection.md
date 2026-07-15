@@ -1,5 +1,8 @@
 ---
-status: pending
+status: done
+sprint: '105'
+tickets:
+- 105-005
 ---
 
 > **RETARGETED (2026-07-14 stakeholder triage).** SimMotor/SimHardware and
@@ -8,6 +11,46 @@ status: pending
 > (a thin steppable-loop sim over the devices layer's HOST_BUILD fakes,
 > whose scripted I2CBus can natively fake NAKs, stale reads, and wedge
 > latch-ups — a better fault-injection seam than SimMotor ever was).
+
+> **DELIVERED (2026-07-15, ticket 105-005).** Disconnect, wedge, and dropout
+> are built against `tests/sim/plant/wheel_plant.{h,cpp}`'s three new
+> knobs — `WheelPlant::setDisconnected(bool)`, `WheelPlant::freezePosition
+> (bool)`, `WheelPlant::setDropoutRate(float)` — each changing only HOW
+> `WheelPlant::scriptEncoderResponse()` scripts its next `Devices::I2CBus`
+> response (never `step()`'s own duty→velocity→position integration), the
+> exact "thin steppable-loop sim over the devices layer's HOST_BUILD
+> fakes" seam this issue's retargeting called for. `TestSim::SimApi`
+> exposes them via `plantLeft()`/`plantRight()` accessors
+> (`tests/sim/support/sim_api.h`). Proven end-to-end, against the FIRMWARE's
+> own observable reaction in decoded telemetry (not just the plant/leaf in
+> isolation), by three pytest scenarios in
+> `tests/sim/system/faults/fault_knobs_harness.cpp` +
+> `test_fault_knobs.py` (`uv run python -m pytest tests/sim/system/ -k
+> fault -v`):
+>   - **Motor disconnect** — `connLeft`/`connRight` flip false in decoded
+>     telemetry while the knob is active on one motor only, and recover to
+>     true once cleared (`Devices::NezhaMotor::connected()` is recomputed
+>     fresh every `collectEncoder()` call, never latched, so no separate
+>     "reconnect" step is needed).
+>   - **Encoder wedge** — `kFaultWedgeLatch` sets in decoded telemetry
+>     within `Devices::MotorArmor`'s own `kWedgeThreshold` (10 consecutive
+>     unchanged reads) while driving, and — set AND clear semantics,
+>     `robot_loop.cpp`'s own live `tlm_.setFault(kFaultWedgeLatch,
+>     motorL_.wedged() || motorR_.wedged())` call, never a one-shot latch at
+>     the wire level — clears again once the knob releases and the reported
+>     position catches up to the plant's own live position (which kept
+>     advancing underneath the whole time).
+>   - **Encoder dropout** — at a 25% hold rate, decoded telemetry shows no
+>     false `kFaultWedgeLatch` and `velLeft` never starves toward zero,
+>     matching the freshness-gate contract
+>     `devices_motor_harness.cpp` scenario 8 already proves in isolation for
+>     the leaf alone, now driven through the full loop.
+>
+> **OTOS staleness/warn-bit injection remains deferred** — the firmware
+> does not fuse OTOS at all yet (`App::Odometry`'s own file header: "no
+> pose fusion happens here... the robot does not fuse"), so there is no
+> firmware reaction to verify against. Revisit once host-side fusion (106+)
+> exists.
 
 # Sim hardware fault injection — disconnect, wedge, encoder dropout
 

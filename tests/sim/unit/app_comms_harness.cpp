@@ -17,20 +17,22 @@
 // MicroBit.h anywhere in this graph under HOST_BUILD -- comms.h/comms.cpp's
 // SerialTransport/RadioTransport adapters are compiled out).
 //
-// FakeTransport (App::Transport) is defined HERE, not in comms.h, per the
-// ticket's own design decision -- a scripted queue of inbound lines plus a
-// log of every send()/sendReliable() call, so scenarios can feed input and
-// assert exactly what got sent.
+// FakeTransport (App::Transport) is TestSupport::FakeTransport
+// (tests/sim/support/fake_transport.h, ticket 105-002) -- the ONE canonical
+// scripted queue of inbound lines plus a log of every send()/sendReliable()
+// call, so scenarios can feed input and assert exactly what got sent. This
+// harness previously carried its own ad hoc copy; it now builds on the
+// shared primitive (105-002's dedup mandate) with no scenario changes.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
-#include <vector>
 
 #include "app/comms.h"
 #include "messages/envelope.h"
 #include "messages/wire.h"
 #include "messages/wire_runtime.h"
+#include "support/fake_transport.h"
 
 namespace {
 
@@ -129,33 +131,7 @@ std::string armor(const uint8_t* raw, size_t rawLen) {
   return out;
 }
 
-// --- FakeTransport -- scripted queue of inbound lines + a log of every
-// send()/sendReliable() call. ---
-
-class FakeTransport : public App::Transport {
- public:
-  void queueLine(const std::string& line) { queue_.push_back(line); }
-
-  bool readLine(char* buf, uint16_t len) override {
-    if (queue_.empty()) return false;
-    std::string line = queue_.front();
-    queue_.erase(queue_.begin());
-    std::snprintf(buf, len, "%s", line.c_str());
-    return true;
-  }
-
-  void send(const char* msg) override { sendLog_.push_back(msg); }
-  void sendReliable(const char* msg) override { sendReliableLog_.push_back(msg); }
-
-  size_t queueSize() const { return queue_.size(); }
-  const std::vector<std::string>& sendLog() const { return sendLog_; }
-  const std::vector<std::string>& sendReliableLog() const { return sendReliableLog_; }
-
- private:
-  std::vector<std::string> queue_;
-  std::vector<std::string> sendLog_;
-  std::vector<std::string> sendReliableLog_;
-};
+using TestSupport::FakeTransport;
 
 // ===========================================================================
 // 1. Twist round-trip: hand-build a CommandEnvelope, armor it, feed it
@@ -178,7 +154,7 @@ void scenarioTwistRoundTrip() {
 
   FakeTransport serialFake;
   FakeTransport radioFake;
-  serialFake.queueLine(line);
+  serialFake.enqueueInbound(line.c_str());
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
@@ -206,7 +182,7 @@ void scenarioMalformedArmorPrefixRejected() {
 
   FakeTransport serialFake;
   FakeTransport radioFake;
-  serialFake.queueLine("*Xsomeunrecognizedarmor");
+  serialFake.enqueueInbound("*Xsomeunrecognizedarmor");
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
@@ -223,7 +199,7 @@ void scenarioMalformedTruncatedBase64Rejected() {
 
   FakeTransport serialFake;
   FakeTransport radioFake;
-  serialFake.queueLine("*BQQ");  // "QQ" -- 2 chars, not a multiple of 4
+  serialFake.enqueueInbound("*BQQ");  // "QQ" -- 2 chars, not a multiple of 4
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
@@ -252,7 +228,7 @@ void scenarioMalformedCorruptProtobufRejected() {
 
   FakeTransport serialFake;
   FakeTransport radioFake;
-  serialFake.queueLine(line);
+  serialFake.enqueueInbound(line.c_str());
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
@@ -274,7 +250,7 @@ void scenarioHelloRepliesWithBannerViaSendReliable() {
 
   FakeTransport serialFake;
   FakeTransport radioFake;
-  serialFake.queueLine("HELLO");
+  serialFake.enqueueInbound("HELLO");
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
@@ -283,11 +259,11 @@ void scenarioHelloRepliesWithBannerViaSendReliable() {
   comms.pump(cmd);
 
   checkTrue(cmd.status == App::CmdStatus::kNone, "HELLO never decodes a Cmd");
-  checkU64Eq(serialFake.sendReliableLog().size(), 1, "exactly one sendReliable() call");
-  if (!serialFake.sendReliableLog().empty()) {
-    checkStrEq(serialFake.sendReliableLog()[0], banner, "sendReliable() carried the banner verbatim");
+  checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
+  if (!serialFake.sentReliable().empty()) {
+    checkStrEq(serialFake.sentReliable()[0], banner, "sendReliable() carried the banner verbatim");
   }
-  checkU64Eq(serialFake.sendLog().size(), 0, "no send() (async) call for a text-plane reply");
+  checkU64Eq(serialFake.sent().size(), 0, "no send() (async) call for a text-plane reply");
   checkU64Eq(comms.malformedCount(), 0, "HELLO does not count as malformed");
 }
 
@@ -296,7 +272,7 @@ void scenarioPingRepliesOkPongViaSendReliable() {
 
   FakeTransport serialFake;
   FakeTransport radioFake;
-  serialFake.queueLine("PING");
+  serialFake.enqueueInbound("PING");
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
@@ -304,9 +280,9 @@ void scenarioPingRepliesOkPongViaSendReliable() {
   App::Cmd cmd;
   comms.pump(cmd);
 
-  checkU64Eq(serialFake.sendReliableLog().size(), 1, "exactly one sendReliable() call");
-  if (!serialFake.sendReliableLog().empty()) {
-    checkStrEq(serialFake.sendReliableLog()[0], "OK pong", "sendReliable() carried \"OK pong\"");
+  checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
+  if (!serialFake.sentReliable().empty()) {
+    checkStrEq(serialFake.sentReliable()[0], "OK pong", "sendReliable() carried \"OK pong\"");
   }
 }
 
@@ -320,8 +296,8 @@ void scenarioPumpBoundedToOneTransportPerCall() {
 
   FakeTransport serialFake;
   FakeTransport radioFake;
-  serialFake.queueLine("PING");
-  radioFake.queueLine("PING");
+  serialFake.enqueueInbound("PING");
+  radioFake.enqueueInbound("PING");
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
@@ -329,16 +305,16 @@ void scenarioPumpBoundedToOneTransportPerCall() {
   App::Cmd cmd;
   comms.pump(cmd);
 
-  checkU64Eq(serialFake.queueSize(), 0, "serial's queued line was drained this call");
-  checkU64Eq(radioFake.queueSize(), 1, "radio's queued line was NOT touched this call (serial had one)");
-  checkU64Eq(serialFake.sendReliableLog().size(), 1, "serial received the PING reply");
-  checkU64Eq(radioFake.sendReliableLog().size(), 0, "radio received no reply (never polled this call)");
+  checkU64Eq(serialFake.inboundSize(), 0, "serial's queued line was drained this call");
+  checkU64Eq(radioFake.inboundSize(), 1, "radio's queued line was NOT touched this call (serial had one)");
+  checkU64Eq(serialFake.sentReliable().size(), 1, "serial received the PING reply");
+  checkU64Eq(radioFake.sentReliable().size(), 0, "radio received no reply (never polled this call)");
 
   // A second pump() call now drains radio's queued line.
   App::Cmd cmd2;
   comms.pump(cmd2);
-  checkU64Eq(radioFake.queueSize(), 0, "radio's queued line is drained on the NEXT call");
-  checkU64Eq(radioFake.sendReliableLog().size(), 1, "radio received the PING reply on the second call");
+  checkU64Eq(radioFake.inboundSize(), 0, "radio's queued line is drained on the NEXT call");
+  checkU64Eq(radioFake.sentReliable().size(), 1, "radio received the PING reply on the second call");
 }
 
 // ===========================================================================
@@ -364,13 +340,13 @@ void scenarioSendReplyBroadcastsIdenticalLineOnBothTransports() {
 
   comms.sendReply(reply);
 
-  checkU64Eq(serialFake.sendLog().size(), 1, "exactly one serial send() call");
-  checkU64Eq(radioFake.sendLog().size(), 1, "exactly one radio send() call");
-  checkU64Eq(serialFake.sendReliableLog().size(), 0, "sendReply() never uses sendReliable()");
-  checkU64Eq(radioFake.sendReliableLog().size(), 0, "sendReply() never uses sendReliable()");
+  checkU64Eq(serialFake.sent().size(), 1, "exactly one serial send() call");
+  checkU64Eq(radioFake.sent().size(), 1, "exactly one radio send() call");
+  checkU64Eq(serialFake.sentReliable().size(), 0, "sendReply() never uses sendReliable()");
+  checkU64Eq(radioFake.sentReliable().size(), 0, "sendReply() never uses sendReliable()");
 
-  if (!serialFake.sendLog().empty() && !radioFake.sendLog().empty()) {
-    checkStrEq(serialFake.sendLog()[0], radioFake.sendLog()[0],
+  if (!serialFake.sent().empty() && !radioFake.sent().empty()) {
+    checkStrEq(serialFake.sent()[0], radioFake.sent()[0],
                "serial and radio received byte-identical armored lines");
   }
 
@@ -384,8 +360,8 @@ void scenarioSendReplyBroadcastsIdenticalLineOnBothTransports() {
   std::string expected = armor(rawBuf, n);
   checkTrue(!expected.empty(), "independent armor() succeeds");
 
-  if (!serialFake.sendLog().empty()) {
-    checkStrEq(serialFake.sendLog()[0], expected, "sendReply()'s line matches an independent re-encode+armor");
+  if (!serialFake.sent().empty()) {
+    checkStrEq(serialFake.sent()[0], expected, "sendReply()'s line matches an independent re-encode+armor");
   }
 }
 

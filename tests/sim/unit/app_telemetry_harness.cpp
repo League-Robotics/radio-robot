@@ -29,13 +29,13 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
-#include <vector>
 
 #include "app/comms.h"
 #include "app/telemetry.h"
 #include "messages/envelope.h"
 #include "messages/wire.h"
 #include "messages/wire_runtime.h"
+#include "support/fake_transport.h"
 
 namespace {
 
@@ -104,50 +104,19 @@ std::string armorReply(const msg::ReplyEnvelope& env) {
   return armor(rawBuf, n);
 }
 
-// --- FakeTransport -- see app_comms_harness.cpp for the same shape. ------
+// --- FakeTransport is TestSupport::FakeTransport
+// (tests/sim/support/fake_transport.h, ticket 105-002) -- the ONE canonical
+// scripted queue of inbound lines plus a log of every send()/sendReliable()
+// call. This harness previously carried its own ad hoc FakeTransport
+// (readLine() hardcoded to return false, since Telemetry never reads) AND a
+// second, separately-named QueueableFakeTransport variant (needed only by
+// scenario 8 below, which drives Comms::pump() to produce a real
+// App::Comms::malformedCount() > 0). Both collapse into this one shared
+// class: its readLine() already returns false whenever nothing was ever
+// enqueued (every scenario except #8), and #8 now calls enqueueInbound()
+// on the same type. ---------------------------------------------------
 
-class FakeTransport : public App::Transport {
- public:
-  bool readLine(char*, uint16_t) override { return false; }  // Telemetry never reads
-  void send(const char* msg) override { sendLog_.push_back(msg); }
-  void sendReliable(const char* msg) override { sendReliableLog_.push_back(msg); }
-
-  const std::vector<std::string>& sendLog() const { return sendLog_; }
-  const std::vector<std::string>& sendReliableLog() const { return sendReliableLog_; }
-
- private:
-  std::vector<std::string> sendLog_;
-  std::vector<std::string> sendReliableLog_;
-};
-
-// --- QueueableFakeTransport -- same shape as app_comms_harness.cpp's own
-// FakeTransport (a scripted queue of inbound lines), needed ONLY by
-// scenario 8 below, which drives Comms::pump() (not just Telemetry::emit())
-// to produce a real App::Comms::malformedCount() > 0 the way main.cpp's own
-// loop would see it. -----------------------------------------------------
-
-class QueueableFakeTransport : public App::Transport {
- public:
-  void queueLine(const std::string& line) { queue_.push_back(line); }
-
-  bool readLine(char* buf, uint16_t len) override {
-    if (queue_.empty()) return false;
-    std::string line = queue_.front();
-    queue_.erase(queue_.begin());
-    std::snprintf(buf, len, "%s", line.c_str());
-    return true;
-  }
-
-  void send(const char* msg) override { sendLog_.push_back(msg); }
-  void sendReliable(const char* msg) override { sendReliableLog_.push_back(msg); }
-
-  const std::vector<std::string>& sendLog() const { return sendLog_; }
-
- private:
-  std::vector<std::string> queue_;
-  std::vector<std::string> sendLog_;
-  std::vector<std::string> sendReliableLog_;
-};
+using TestSupport::FakeTransport;
 
 // ===========================================================================
 // 1. Primary frame assembly: emit() with a fully-populated Frame builds
@@ -188,9 +157,9 @@ void scenarioPrimaryFrameAssemblyMatchesIndependentEncode() {
 
   telemetry.emit(1234);  // first call -- always sends primary (boot, no arming)
 
-  checkU64Eq(serialFake.sendLog().size(), 1, "exactly one serial send() for the primary frame");
-  checkU64Eq(radioFake.sendLog().size(), 1, "exactly one radio send() for the primary frame");
-  checkU64Eq(serialFake.sendReliableLog().size(), 0, "primary frame never uses sendReliable()");
+  checkU64Eq(serialFake.sent().size(), 1, "exactly one serial send() for the primary frame");
+  checkU64Eq(radioFake.sent().size(), 1, "exactly one radio send() for the primary frame");
+  checkU64Eq(serialFake.sentReliable().size(), 0, "primary frame never uses sendReliable()");
 
   msg::Telemetry expected;
   expected.acks_[0] = {7, msg::AckStatus::ACK_STATUS_OK, 0};
@@ -222,11 +191,11 @@ void scenarioPrimaryFrameAssemblyMatchesIndependentEncode() {
   std::string expectedLine = armorReply(env);
   checkTrue(!expectedLine.empty(), "independent encode+armor of the expected frame succeeds");
 
-  if (!serialFake.sendLog().empty()) {
-    checkStrEq(serialFake.sendLog()[0], expectedLine, "sent line matches an independent re-encode+armor");
+  if (!serialFake.sent().empty()) {
+    checkStrEq(serialFake.sent()[0], expectedLine, "sent line matches an independent re-encode+armor");
   }
-  if (!serialFake.sendLog().empty() && !radioFake.sendLog().empty()) {
-    checkStrEq(serialFake.sendLog()[0], radioFake.sendLog()[0], "serial and radio received byte-identical lines");
+  if (!serialFake.sent().empty() && !radioFake.sent().empty()) {
+    checkStrEq(serialFake.sent()[0], radioFake.sent()[0], "serial and radio received byte-identical lines");
   }
 }
 
@@ -254,7 +223,7 @@ void scenarioAckRingSurvivesADroppedFrame() {
   telemetry.emit(0);   // frame #1 -- the "lost" frame; not inspected below
   telemetry.emit(40);  // frame #2 -- the frame that IS read
 
-  checkU64Eq(serialFake.sendLog().size(), 2, "two successive primary frames were sent");
+  checkU64Eq(serialFake.sent().size(), 2, "two successive primary frames were sent");
 
   msg::Telemetry expected;
   expected.acks_[0] = {2, msg::AckStatus::ACK_STATUS_OK, 0};
@@ -271,8 +240,8 @@ void scenarioAckRingSurvivesADroppedFrame() {
   std::string expectedLine = armorReply(env);
   checkTrue(!expectedLine.empty(), "independent encode+armor of the expected second frame succeeds");
 
-  if (serialFake.sendLog().size() == 2) {
-    checkStrEq(serialFake.sendLog()[1], expectedLine,
+  if (serialFake.sent().size() == 2) {
+    checkStrEq(serialFake.sent()[1], expectedLine,
                "the SECOND (read) frame carries the newest 3 acks -- the first frame's own loss cost nothing");
   }
 }
@@ -306,8 +275,8 @@ void scenarioAckRingBelowCapacityReportsExactCount() {
   env.body.tlm = expected;
   std::string expectedLine = armorReply(env);
 
-  if (!serialFake.sendLog().empty()) {
-    checkStrEq(serialFake.sendLog()[0], expectedLine, "acks_count == 1, no phantom second/third entry emitted");
+  if (!serialFake.sent().empty()) {
+    checkStrEq(serialFake.sent()[0], expectedLine, "acks_count == 1, no phantom second/third entry emitted");
   }
 }
 
@@ -347,8 +316,8 @@ void scenarioFaultAndEventBitsReflectRealCallSiteValues() {
   envSet.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
   envSet.body.tlm = expectedSet;
   std::string expectedSetLine = armorReply(envSet);
-  if (!serialFake.sendLog().empty()) {
-    checkStrEq(serialFake.sendLog()[0], expectedSetLine, "first frame carries both bits set");
+  if (!serialFake.sent().empty()) {
+    checkStrEq(serialFake.sent()[0], expectedSetLine, "first frame carries both bits set");
   }
 
   // Condition clears -- the caller mirrors that too, and the NEXT frame
@@ -368,8 +337,8 @@ void scenarioFaultAndEventBitsReflectRealCallSiteValues() {
   envClear.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
   envClear.body.tlm = expectedClear;
   std::string expectedClearLine = armorReply(envClear);
-  if (serialFake.sendLog().size() == 2) {
-    checkStrEq(serialFake.sendLog()[1], expectedClearLine, "second frame carries both bits cleared");
+  if (serialFake.sent().size() == 2) {
+    checkStrEq(serialFake.sent()[1], expectedClearLine, "second frame carries both bits cleared");
   }
 }
 
@@ -434,7 +403,7 @@ void scenarioSecondaryNeverCoincidesWithPrimaryAndDoesNotDelayIt() {
 
   // Every send() call (both transports, both frame types) accounted for
   // exactly -- no call produced an untracked extra line.
-  checkU64Eq(serialFake.sendLog().size(), telemetry.primaryEmitCount() + telemetry.secondaryEmitCount(),
+  checkU64Eq(serialFake.sent().size(), telemetry.primaryEmitCount() + telemetry.secondaryEmitCount(),
              "serial send() log size == primary + secondary emit counts (no untracked sends)");
 
   // Primary cadence never stretched past kPrimaryPeriod + one scheduling
@@ -485,7 +454,7 @@ void scenarioSecondaryNeverCoincidesWithPrimaryAndDoesNotDelayIt() {
   checkTrue(!expectedLine.empty(), "independent armor() of the secondary frame succeeds");
 
   bool found = false;
-  for (const auto& line : serialFake.sendLog()) {
+  for (const auto& line : serialFake.sent()) {
     if (line == expectedLine) {
       found = true;
       break;
@@ -591,12 +560,12 @@ void scenarioMeasuredCadenceReport() {
 void scenarioMalformedFrameSetsCommsMalformedFaultBit() {
   beginScenario("malformed frame -> Comms::malformedCount() -> setFault(kFaultCommsMalformed) sets the wire bit");
 
-  QueueableFakeTransport serialFake;
-  QueueableFakeTransport radioFake;
+  FakeTransport serialFake;
+  FakeTransport radioFake;
   // Bad armor prefix -- same malformed input app_comms_harness.cpp's own
   // scenarioMalformedArmorPrefixRejected() uses to increment
   // malformedCount() by exactly 1.
-  serialFake.queueLine("*Xsomeunrecognizedarmor");
+  serialFake.enqueueInbound("*Xsomeunrecognizedarmor");
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
@@ -623,8 +592,8 @@ void scenarioMalformedFrameSetsCommsMalformedFaultBit() {
   envSet.body.tlm = expectedSet;
   std::string expectedSetLine = armorReply(envSet);
   checkTrue(!expectedSetLine.empty(), "independent encode+armor of the expected frame succeeds");
-  if (!serialFake.sendLog().empty()) {
-    checkStrEq(serialFake.sendLog()[0], expectedSetLine, "the frame AFTER the malformed pump() carries the bit set");
+  if (!serialFake.sent().empty()) {
+    checkStrEq(serialFake.sent()[0], expectedSetLine, "the frame AFTER the malformed pump() carries the bit set");
   }
 
   // No further malformed input arrives -- the caller mirrors that too
@@ -645,8 +614,8 @@ void scenarioMalformedFrameSetsCommsMalformedFaultBit() {
   envClear.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
   envClear.body.tlm = expectedClear;
   std::string expectedClearLine = armorReply(envClear);
-  if (serialFake.sendLog().size() == 2) {
-    checkStrEq(serialFake.sendLog()[1], expectedClearLine, "second frame carries the bit cleared");
+  if (serialFake.sent().size() == 2) {
+    checkStrEq(serialFake.sent()[1], expectedClearLine, "second frame carries the bit cleared");
   }
 }
 

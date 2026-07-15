@@ -1,0 +1,422 @@
+// plant_harness.cpp -- off-hardware acceptance harness for ticket 105-003
+// (SUC-020): proves TestSim::WheelPlant + TestSim::OtosPlant (this
+// directory) satisfy the ticket's own acceptance criteria --
+//   1. a velocity-step scenario shows a visible RAMP (not an instantaneous
+//      step) with a time constant in the 120-140ms range;
+//   2. two runs of the SAME command script with the SAME (implicit --
+//      there is no RNG in this plant, see wheel_plant.h's file header)
+//      seed produce bit-identical trajectories;
+//   3. a pivot (differential-duty, turn-in-place) scenario's resulting
+//      heading, read ENTIRELY through App::Odometry's own integration over
+//      the plant's two wheel positions (never read from the plant
+//      directly), is sane -- the sprint's own "B3 doesn't reappear" check.
+//
+// Drives the REAL Devices::NezhaMotor x2 + Devices::Otos + App::Odometry
+// against the scripted Devices::I2CBus (DB-003), exactly as
+// devices_motor_harness.cpp scenario 6 and app_odometry_harness.cpp already
+// do for their own narrower scopes -- this harness generalizes that same
+// proven idiom across the whole loop (both motors + OTOS), per
+// architecture-update.md Decision 2. No RobotLoop/sim_api involvement --
+// that composition is ticket 105-004's own job (architecture-update.md
+// Step 3's "Plant" boundary: "the plant is driven BY the harness, between
+// cycles, never inside a runAndWait block").
+//
+// Hand-rolled assertions, PASS/FAIL per scenario, nonzero exit on any
+// failure -- mirrors every other tests/sim/unit harness's own shape. Run by
+// test_plant.py, which compiles this file together with wheel_plant.cpp,
+// otos_plant.cpp, and the HOST_BUILD Devices/App/Kinematics sources it
+// needs, then runs the resulting binary via subprocess.
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <string>
+#include <vector>
+
+#include "app/odometry.h"
+#include "devices/device_config.h"
+#include "devices/device_types.h"
+#include "devices/i2c_bus.h"
+#include "devices/nezha_motor.h"
+#include "devices/otos.h"
+#include "otos_plant.h"
+#include "wheel_plant.h"
+
+namespace {
+
+// --- Hand-rolled assertion plumbing (mirrors every other tests/sim/unit
+// harness in this codebase) -------------------------------------------------
+
+int g_failureCount = 0;
+std::string g_scenarioName;
+
+void beginScenario(const std::string& name) {
+  g_scenarioName = name;
+  std::printf("--- %s\n", name.c_str());
+}
+
+void fail(const std::string& what) {
+  ++g_failureCount;
+  std::printf("  FAIL [%s]: %s\n", g_scenarioName.c_str(), what.c_str());
+}
+
+void checkTrue(bool condition, const std::string& what) {
+  if (!condition) fail(what + " -- expected true, got false");
+}
+
+void checkFloatEq(float actual, float expected, const std::string& what,
+                   float tol = 1e-3f) {
+  if (std::fabs(actual - expected) > tol) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "%s -- expected %g, got %g (tol %g)",
+                  what.c_str(), static_cast<double>(expected),
+                  static_cast<double>(actual), static_cast<double>(tol));
+    fail(buf);
+  }
+}
+
+// --- Devices::NezhaMotor / Devices::Otos fixture helpers --------------------
+
+constexpr uint16_t kMotorWireAddr =
+    static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+constexpr uint16_t kOtosWireAddr =
+    static_cast<uint16_t>(Devices::kOtosDeviceAddr << 1);
+
+// begin()'s full successful-detect transaction count, duplicated from
+// devices_otos_harness.cpp's own kBeginTxnCount comment: 1 write + 1 read
+// (product-ID probe) + 3 writes (init(): signal-process-cfg, reset,
+// imu-calibration) + 1 write (setLinearScalar) + 1 write (setAngularScalar)
+// + 1 write (zero position/heading) = 7 writes total. Scripted EXACTLY (not
+// "generously over-provisioned" the way a single-device-only harness can
+// afford to) -- this harness shares Devices::I2CBus's ONE global write/read
+// FIFO per direction across BOTH motors AND the OTOS leaf (i2c_bus.h's own
+// file header), so any leftover slack here would desync every subsequent
+// cycle's address matching for every device, not just this one.
+constexpr int kOtosBeginWriteCount = 7;
+
+void scriptOtosBeginExact(Devices::I2CBus& bus) {
+  for (int i = 0; i < kOtosBeginWriteCount; ++i) {
+    bus.scriptWrite(kOtosWireAddr, /*status=*/0);
+  }
+  uint8_t productId[1] = {0x5F};   // Devices::Otos::kExpectedProductId
+  bus.scriptRead(kOtosWireAddr, productId, 1, /*status=*/0);
+}
+
+Devices::MotorConfig baseMotorConfig(uint32_t port) {
+  Devices::MotorConfig cfg;
+  cfg.port = port;
+  cfg.fwdSign = 1;
+  cfg.wheelTravelCalib = 1.0f;
+  cfg.velFiltAlpha = 1.0f;
+  return cfg;
+}
+
+// ===========================================================================
+// 1. Velocity-step scenario: a single wheel/motor, isolated (single I2C
+//    device address -- safe to over-provision the "2 writes always"
+//    convention scriptEncoderRequestCollect()/WheelPlant::
+//    scriptEncoderResponse()'s own default already documents, matching
+//    devices_motor_harness.cpp scenario 6's own precedent exactly). Proves
+//    the plant's own simulated velocity RAMPS (not steps) toward the
+//    commanded target, with a time constant in the 120-140ms range.
+// ===========================================================================
+
+void scenarioVelocityStepShowsRampWithTauInRange() {
+  beginScenario("velocity step: plant velocity ramps, not steps, with tau in the 120-140ms range");
+
+  checkTrue(TestSim::kDefaultTau >= 0.12f && TestSim::kDefaultTau <= 0.14f,
+            "kDefaultTau itself sits in the bench-characterized 120-140ms range");
+
+  Devices::I2CBus::setClock(1000000);
+  Devices::I2CBus bus;
+
+  Devices::MotorConfig cfg = baseMotorConfig(1);
+  Devices::NezhaMotor motor(bus, cfg);
+  motor.setPidEnabled(false);
+  const float duty = 0.6f;
+  motor.setDuty(duty);
+
+  TestSim::WheelPlant plant(TestSim::kDefaultDutyVelMax, TestSim::kDefaultTau);
+  const float finalTargetVel = TestSim::kDefaultDutyVelMax * duty;   // 300 mm/s
+
+  const float dtS = 0.02f;          // [s]
+  const uint64_t dtUs = 20000;      // [us]
+  uint64_t nowUs = 50000;           // starts >=40ms so cycle 0's first duty
+                                     // write is not write-rate-throttled --
+                                     // see nezha_motor.cpp's writeRawDuty()
+                                     // and every other harness's identical
+                                     // convention (e.g.
+                                     // scenarioNakedStopWriteIsRetriedNextTickNotLatched()).
+
+  const int kCycles = 250;   // 5s of virtual time -- >>30*tau, fully converges
+  std::vector<float> velTrace;
+  velTrace.reserve(static_cast<size_t>(kCycles));
+
+  for (int i = 0; i < kCycles; ++i) {
+    plant.step(motor.appliedDuty(), dtS);
+    plant.scriptEncoderResponse(bus, kMotorWireAddr);   // single device on this bus -- default writeCount=1 is
+                                                          // ALSO exact here (see below); 2 is only needed on the
+                                                          // one cycle a duty write actually lands.
+    if (i == 0) {
+      // Cycle 0 is this motor's very first tick(): lastWrittenPct_ is still
+      // the -128 sentinel, so the write-on-change guard lets the initial
+      // duty write through in addition to requestEncoder()'s own write.
+      bus.scriptWrite(kMotorWireAddr, /*status=*/0);   // the extra duty write
+    }
+    motor.requestSample();
+    motor.tick(nowUs);
+    velTrace.push_back(plant.velocity());
+    nowUs += dtUs;
+  }
+
+  checkTrue(velTrace[0] == 0.0f,
+            "cycle 0: appliedDuty() was still 0 (no write had landed yet) -- plant starts at rest");
+
+  // Not an instantaneous step: one dt after the duty first lands (cycle 1),
+  // velocity is still a small fraction of the final target -- a true "step"
+  // plant would already be at (or very near) finalTargetVel here.
+  checkTrue(velTrace[1] < 0.3f * finalTargetVel,
+            "one cycle after the duty write lands, velocity is still well below the final target (a ramp, not a step)");
+
+  // Converges to the commanded target well within the run.
+  checkFloatEq(velTrace.back(), finalTargetVel, "velocity converges to dutyVelMax*duty after many cycles", 1.0f);
+
+  // Monotonic, no overshoot -- the signature of a first-order lag with no
+  // oscillatory/derivative term.
+  bool monotonic = true;
+  for (size_t i = 1; i < velTrace.size(); ++i) {
+    if (velTrace[i] + 1e-4f < velTrace[i - 1] || velTrace[i] > finalTargetVel + 1e-3f) {
+      monotonic = false;
+      break;
+    }
+  }
+  checkTrue(monotonic, "velocity rises monotonically toward the target with no overshoot");
+
+  // Time-constant check: the analytic first-order step response crosses
+  // (1 - 1/e) ~= 63.2% of its final value at t == tau after the step
+  // begins. The step begins being APPLIED at cycle 1 (cycle 0's plant.step()
+  // still saw appliedDuty()==0 -- see above), so "time since step" for the
+  // sample recorded at index i (i >= 1) is (i - 1) * dtS + dtS = i * dtS
+  // measured from the start of cycle 1's OWN integration window -- i.e.
+  // velTrace[i] is the value AFTER i total ramping steps starting at
+  // index 1. Find the first index whose value crosses the 63.2% mark and
+  // check its time falls within one dt of tau.
+  const float crossing = finalTargetVel * (1.0f - std::exp(-1.0f));
+  int crossingIndex = -1;
+  for (size_t i = 1; i < velTrace.size(); ++i) {
+    if (velTrace[i] >= crossing) {
+      crossingIndex = static_cast<int>(i);
+      break;
+    }
+  }
+  checkTrue(crossingIndex > 0, "velocity trace actually crosses the 63.2%-of-final mark within the run");
+  if (crossingIndex > 0) {
+    // Elapsed ramping time since the duty first landed (cycle 1's own
+    // integration is the first ramping step, at t=dtS since the step).
+    float elapsedSinceStep = static_cast<float>(crossingIndex) * dtS;
+    checkFloatEq(elapsedSinceStep, TestSim::kDefaultTau,
+                 "the 63.2%-of-final crossing time matches tau (proves the time constant, within one cycle's dt)",
+                 dtS + 1e-3f);
+  }
+
+  checkTrue(bus.errCount(Devices::kNezhaDeviceAddr) == 0, "no script under-run across the ramp run");
+}
+
+// ===========================================================================
+// Shared multi-device fixture: two NezhaMotor + one Otos + one App::Odometry,
+// all sharing ONE Devices::I2CBus, driven by two WheelPlant + one OtosPlant.
+// Used by BOTH the pivot scenario and the determinism scenario below --
+// exercising "the WHOLE plant (both motors + OTOS)", not one leaf in
+// isolation, per architecture-update.md's own framing of this ticket.
+// ===========================================================================
+
+constexpr float kTrackWidth = 130.0f;   // [mm]
+
+struct CycleSample {
+  float posLeft;
+  float posRight;
+  float velLeft;
+  float velRight;
+  float otosX;
+  float otosY;
+  float otosHeading;
+  float odomX;
+  float odomY;
+  float odomTheta;
+};
+
+// Runs a fresh two-motor + OTOS + Odometry scenario for `cycles` cycles at a
+// constant differential duty target, returning the full per-cycle trace.
+// Every instance (bus, motors, otos, plants, odometry) is constructed LOCAL
+// to this call -- two calls with identical arguments are two fully
+// independent runs, which the determinism scenario relies on.
+std::vector<CycleSample> runScenario(float dutyLeft, float dutyRight, int cycles) {
+  Devices::I2CBus::setClock(1000000);
+  Devices::I2CBus bus;
+
+  Devices::NezhaMotor motorLeft(bus, baseMotorConfig(1));
+  Devices::NezhaMotor motorRight(bus, baseMotorConfig(2));
+  motorLeft.setPidEnabled(false);
+  motorRight.setPidEnabled(false);
+  motorLeft.setDuty(dutyLeft);
+  motorRight.setDuty(dutyRight);
+
+  Devices::OtosConfig otosCfg;   // identity mounting (offsetX=offsetY=offsetYaw=0) --
+                                  // see otos_plant.h's own "Identity-mounting assumption".
+  Devices::Otos otos(bus, otosCfg);
+  scriptOtosBeginExact(bus);
+  otos.begin();
+
+  App::Odometry odom(motorLeft, motorRight, kTrackWidth);
+
+  TestSim::WheelPlant plantLeft(TestSim::kDefaultDutyVelMax, TestSim::kDefaultTau);
+  TestSim::WheelPlant plantRight(TestSim::kDefaultDutyVelMax, TestSim::kDefaultTau);
+  TestSim::OtosPlant otosPlant(kTrackWidth);
+
+  const float dtS = 0.02f;        // [s]
+  const uint64_t dtUs = 20000;    // [us] == Devices::Otos's own kReadPeriod, so
+                                   // readDue() is true every single cycle --
+                                   // see otos_plant.h's own scriptPoseResponse()
+                                   // comment for why this keeps the shared FIFO
+                                   // exactly balanced (no leftover slack ever).
+  uint64_t nowUs = 50000;         // avoid the first-write throttle edge (see
+                                   // the ramp scenario's identical comment).
+
+  std::vector<CycleSample> trace;
+  trace.reserve(static_cast<size_t>(cycles));
+
+  for (int i = 0; i < cycles; ++i) {
+    plantLeft.step(motorLeft.appliedDuty(), dtS);
+    plantRight.step(motorRight.appliedDuty(), dtS);
+    otosPlant.step(plantLeft.position(), plantRight.position());
+
+    // Exact write counts (2 only on each motor's own first tick, 1
+    // afterward), NOT the "always over-provision" convention a
+    // single-address harness can use -- see wheel_plant.h's own
+    // scriptEncoderResponse() comment for why a multi-device shared FIFO
+    // requires this.
+    int writeCount = (i == 0) ? 2 : 1;
+    plantLeft.scriptEncoderResponse(bus, kMotorWireAddr, writeCount);
+    plantRight.scriptEncoderResponse(bus, kMotorWireAddr, writeCount);
+    otosPlant.scriptPoseResponse(bus, kOtosWireAddr);
+
+    // Call order MUST match the order the scripts above assumed: both
+    // requestSample()s first (their own request writes), then tick() in
+    // left, right, otos order (each tick's own read, then either's
+    // possible duty write, in that same relative order).
+    motorLeft.requestSample();
+    motorRight.requestSample();
+    motorLeft.tick(nowUs);
+    motorRight.tick(nowUs);
+    otos.tick(nowUs);
+
+    odom.integrate();
+
+    trace.push_back(CycleSample{
+        motorLeft.position(), motorRight.position(),
+        motorLeft.velocity(), motorRight.velocity(),
+        otos.pose().x, otos.pose().y, otos.pose().heading,
+        odom.x(), odom.y(), odom.theta(),
+    });
+
+    nowUs += dtUs;
+  }
+
+  return trace;
+}
+
+// ===========================================================================
+// 2. Pivot scenario: equal-and-opposite duty targets on the two wheels (a
+//    turn-in-place). Heading is asserted ENTIRELY through App::Odometry's
+//    own integrate()/theta() -- never read from OtosPlant or WheelPlant
+//    directly -- the sprint's own "B3 doesn't reappear" re-verification
+//    (architecture-update.md Decision 3).
+// ===========================================================================
+
+void scenarioPivotHeadingSaneViaOdometry() {
+  beginScenario("pivot: differential duty produces a sane heading, read entirely through Odometry");
+
+  const float dutyMag = 0.25f;
+  const int kCycles = 50;   // 1.0s of virtual time
+
+  std::vector<CycleSample> trace = runScenario(/*dutyLeft=*/-dutyMag, /*dutyRight=*/dutyMag, kCycles);
+  const CycleSample& last = trace.back();
+
+  // BodyKinematics::forward(): omega = (vR - vL) / b. vR > 0, vL < 0 here,
+  // so omega > 0 -- a positive (CCW) turn.
+  checkTrue(last.odomTheta > 0.3f,
+            "Odometry::theta() is a significant, positive (CCW) rotation after the pivot run");
+  checkTrue(last.odomTheta < 3.0f,
+            "Odometry::theta() stays well under a half-turn -- a plausible, non-runaway result "
+            "(this ticket does not exercise the +/-pi register-wrap boundary; that is a later, "
+            "system-level scenario's job)");
+
+  // Equal-and-opposite wheel duties are an exact pivot: each cycle's
+  // BodyKinematics::forward() distance term is (vR + vL)/2 == 0 exactly
+  // (vL == -vR by construction), so Odometry's x_/y_ never accumulate any
+  // translation.
+  checkFloatEq(last.odomX, 0.0f, "pivot: Odometry::x() shows no translation", 1e-2f);
+  checkFloatEq(last.odomY, 0.0f, "pivot: Odometry::y() shows no translation", 1e-2f);
+
+  // Sanity cross-check (NOT the primary assertion -- Decision 3's own
+  // "will always agree closely, by design" consequence): the plant's own
+  // OTOS pose derives from the SAME two wheel positions via the SAME
+  // BodyKinematics::forward() call, so it should land close to Odometry's
+  // independently-integrated heading.
+  checkFloatEq(last.otosHeading, last.odomTheta,
+               "OtosPlant's simulated heading tracks Odometry's own heading closely (same wheel positions, same kinematics)",
+               0.05f);
+}
+
+// ===========================================================================
+// 3. Determinism: two independent runs of the SAME command script (same
+//    duty targets, same cycle count -- and implicitly the same "seed", since
+//    this plant has no RNG anywhere, see wheel_plant.h's file header)
+//    produce bit-identical trajectories across every recorded field, every
+//    cycle. Reuses the pivot scenario's own script (both motors + OTOS +
+//    Odometry) so this proves determinism of "the WHOLE plant", not one
+//    leaf.
+// ===========================================================================
+
+void scenarioDeterminismAcrossTwoRuns() {
+  beginScenario("determinism: two runs of the same command script produce bit-identical trajectories");
+
+  const float dutyMag = 0.25f;
+  const int kCycles = 50;
+
+  std::vector<CycleSample> runA = runScenario(-dutyMag, dutyMag, kCycles);
+  std::vector<CycleSample> runB = runScenario(-dutyMag, dutyMag, kCycles);
+
+  checkTrue(runA.size() == runB.size(), "both runs recorded the same number of cycles");
+
+  bool identical = (runA.size() == runB.size());
+  for (size_t i = 0; identical && i < runA.size(); ++i) {
+    const CycleSample& a = runA[i];
+    const CycleSample& b = runB[i];
+    if (a.posLeft != b.posLeft || a.posRight != b.posRight ||
+        a.velLeft != b.velLeft || a.velRight != b.velRight ||
+        a.otosX != b.otosX || a.otosY != b.otosY || a.otosHeading != b.otosHeading ||
+        a.odomX != b.odomX || a.odomY != b.odomY || a.odomTheta != b.odomTheta) {
+      identical = false;
+      char buf[256];
+      std::snprintf(buf, sizeof(buf), "cycle %zu diverged between the two runs", i);
+      fail(buf);
+      break;
+    }
+  }
+  checkTrue(identical, "every recorded field, every cycle, is bit-identical across both runs");
+}
+
+}  // namespace
+
+int main() {
+  scenarioVelocityStepShowsRampWithTauInRange();
+  scenarioPivotHeadingSaneViaOdometry();
+  scenarioDeterminismAcrossTwoRuns();
+
+  if (g_failureCount == 0) {
+    std::printf("OK: all plant scenarios passed\n");
+    return 0;
+  }
+  std::printf("FAILED: %d assertion(s) across the plant scenarios\n", g_failureCount);
+  return 1;
+}

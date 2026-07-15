@@ -1,13 +1,13 @@
-"""Off-hardware acceptance proof for ticket 103-004 (SUC-004), App::Comms
-(``source/app/comms.{h,cpp}``).
+"""Off-hardware acceptance proof for ticket 105-002 (SUC-019),
+``TestSupport::FakeTransport`` (``tests/sim/support/fake_transport.h``).
 
-Compiles ``app_comms_harness.cpp`` together with ``source/app/comms.cpp``,
-``source/messages/wire.cpp``, and ``source/messages/wire_runtime.cpp`` with
-``-DHOST_BUILD`` so comms.cpp's ``SerialTransport``/``RadioTransport`` ARM
-adapters (guarded ``#ifndef HOST_BUILD``) are compiled out entirely -- no
-``MicroBit.h`` anywhere in this graph. Mirrors ``test_wire_codec.py``'s
-exact shape: compile with the system C++ compiler, run the resulting
-binary, assert it exits 0.
+Compiles ``fake_transport_harness.cpp`` with ``-DHOST_BUILD``.
+``fake_transport.h`` only pulls in ``source/app/comms.h`` for the abstract
+``App::Transport`` base class (a pure interface -- no ``.cpp`` to link), so
+this is the smallest possible compile unit: no ``comms.cpp``, no
+``wire.cpp``/``wire_runtime.cpp``, no ``MicroBit.h`` anywhere in this graph.
+Mirrors ``test_app_comms.py``'s exact shape: compile with the system C++
+compiler, run the resulting binary, assert it exits 0.
 
 Collected under ``tests/sim/unit/`` -- already within ``pyproject.toml``'s
 ``testpaths = ["tests/sim"]``, no configuration change needed.
@@ -19,14 +19,12 @@ import sys
 
 import pytest
 
-# tests/sim/unit/test_app_comms.py -> unit -> sim -> tests -> repo root
+# tests/sim/unit/test_fake_transport.py -> unit -> sim -> tests -> repo root
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _SOURCE_DIR = _REPO_ROOT / "source"
 _TESTS_SIM_DIR = _REPO_ROOT / "tests" / "sim"
-_HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_comms_harness.cpp"
-_COMMS_SRC = _SOURCE_DIR / "app" / "comms.cpp"
-_WIRE_SRC = _SOURCE_DIR / "messages" / "wire.cpp"
-_WIRE_RUNTIME_SRC = _SOURCE_DIR / "messages" / "wire_runtime.cpp"
+_HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "fake_transport_harness.cpp"
+_FAKE_TRANSPORT_HDR = _TESTS_SIM_DIR / "support" / "fake_transport.h"
 
 # Matches every other tests/sim/unit harness's own compiled standard --
 # the project's actual compiled standard is -std=gnu++20 (095-003's
@@ -46,16 +44,14 @@ def _find_cxx_compiler() -> str:
     raise AssertionError("unreachable")  # pragma: no cover
 
 
-def test_app_comms_harness_compiles_and_passes(tmp_path):
-    """Compile App::Comms + the harness (HOST_BUILD) and assert every scenario passes."""
+def test_fake_transport_harness_compiles_and_passes(tmp_path):
+    """Compile FakeTransport + the harness (HOST_BUILD) and assert every scenario passes."""
     assert _HARNESS_SRC.is_file(), f"harness source missing: {_HARNESS_SRC}"
-    assert _COMMS_SRC.is_file(), f"comms.cpp missing: {_COMMS_SRC}"
-    assert _WIRE_SRC.is_file(), f"wire.cpp missing (run scripts/gen_messages.py?): {_WIRE_SRC}"
-    assert _WIRE_RUNTIME_SRC.is_file(), f"wire_runtime.cpp missing: {_WIRE_RUNTIME_SRC}"
+    assert _FAKE_TRANSPORT_HDR.is_file(), f"fake_transport.h missing: {_FAKE_TRANSPORT_HDR}"
     assert _SOURCE_DIR.is_dir(), f"source/ tree missing: {_SOURCE_DIR}"
 
     cxx = _find_cxx_compiler()
-    binary = tmp_path / "app_comms_harness"
+    binary = tmp_path / "fake_transport_harness"
 
     compile_result = subprocess.run(
         [
@@ -71,21 +67,18 @@ def test_app_comms_harness_compiles_and_passes(tmp_path):
             "-o",
             str(binary),
             str(_HARNESS_SRC),
-            str(_COMMS_SRC),
-            str(_WIRE_SRC),
-            str(_WIRE_RUNTIME_SRC),
         ],
         capture_output=True,
         text=True,
     )
     assert compile_result.returncode == 0, (
-        "app_comms_harness.cpp / comms.cpp failed to compile:\n"
+        "fake_transport_harness.cpp / fake_transport.h failed to compile:\n"
         f"stdout:\n{compile_result.stdout}\nstderr:\n{compile_result.stderr}"
     )
 
     run_result = subprocess.run([str(binary)], capture_output=True, text=True)
     assert run_result.returncode == 0, (
-        "app_comms_harness reported a scenario failure "
+        "fake_transport_harness reported a scenario failure "
         f"(exit {run_result.returncode}):\n{run_result.stdout}\n{run_result.stderr}"
     )
 

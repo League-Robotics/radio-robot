@@ -23,6 +23,7 @@ import pytest
 # tests/sim/unit/test_app_telemetry.py -> unit -> sim -> tests -> repo root
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _SOURCE_DIR = _REPO_ROOT / "source"
+_TESTS_SIM_DIR = _REPO_ROOT / "tests" / "sim"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_telemetry_harness.cpp"
 _TELEMETRY_SRC = _SOURCE_DIR / "app" / "telemetry.cpp"
 _COMMS_SRC = _SOURCE_DIR / "app" / "comms.cpp"
@@ -68,6 +69,8 @@ def test_app_telemetry_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_TESTS_SIM_DIR),
             "-o",
             str(binary),
             str(_HARNESS_SRC),

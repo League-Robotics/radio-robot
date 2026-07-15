@@ -1,10 +1,17 @@
 ---
-id: "105"
-title: "Sim rebuild around the steppable loop"
-status: roadmap
+id: '105'
+title: Sim rebuild around the steppable loop
+status: done
 branch: sprint/105-sim-rebuild-around-the-steppable-loop
-use-cases: []
-issues: []
+use-cases:
+- SUC-018
+- SUC-019
+- SUC-020
+- SUC-021
+- SUC-022
+- SUC-023
+issues:
+- sim-hardware-fault-injection.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -101,7 +108,18 @@ sim-only sprint. TestGUI revival remains explicitly out of scope — sprint
 
 ## Test Strategy
 
-(Deferred to detail-mode planning for this sprint.)
+Off-hardware only, matching the existing `tests/sim/unit/` compile-and-run
+convention (a pytest wrapper compiles a small C++ harness + the exact
+production sources under `-DHOST_BUILD` via `subprocess`, runs the
+resulting binary, asserts exit code / parses decoded telemetry) —
+extended, not replaced, by this sprint's new `tests/sim/plant/` (physics)
+and `tests/sim/system/` (whole-loop scenarios) tiers. One exception:
+ticket 001 (the `RobotLoop` extraction) additionally requires a REAL bench
+re-verification per `.claude/rules/hardware-bench-testing.md`, since it is
+the one ticket touching the ARM firmware's actual entry point — every
+later ticket's sim result is only as trustworthy as that extraction being
+behavior-preserving. `uv run python -m pytest` (full suite, no path
+filter) is the sprint's own Definition-of-Done gate (ticket 006).
 
 ## Architecture Notes
 
@@ -118,13 +136,22 @@ detailed.
 
 Before tickets can be created, all of the following must be true:
 
-- [ ] Sprint planning documents are complete (sprint.md, use cases, architecture)
-- [ ] Architecture review passed
-- [ ] Stakeholder has approved the sprint plan
+- [x] Sprint planning documents are complete (sprint.md, use cases, architecture)
+- [x] Architecture review passed
+- [x] Stakeholder has approved the sprint plan
 
 ## Tickets
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 001 | Extract the steppable loop: RobotLoop on Devices::Clock/Sleeper | — |
+| 002 | FakeTransport: App::Transport HOST_BUILD implementation | — |
+| 003 | Deterministic motor+OTOS plant (tests/sim/plant/) | — |
+| 004 | sim_api: steppable harness composition + virtual-cycle timing diagnostic | 001, 002, 003 |
+| 005 | Fault injection: disconnect, wedge, dropout knobs | 003, 004 |
+| 006 | Pytest sim tier: scripted-twist demo, fault scenarios, conftest fix | 004, 005 |
 
-Tickets execute serially in the order listed.
+Tickets execute serially in the order listed. 002 and 003 have no
+dependency on 001 or each other and may be authored in parallel if a
+future execution pass chooses to; every other edge above is a hard
+dependency.
