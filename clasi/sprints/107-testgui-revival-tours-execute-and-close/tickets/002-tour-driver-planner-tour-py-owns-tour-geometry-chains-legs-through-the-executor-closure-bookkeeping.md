@@ -1,25 +1,15 @@
 ---
-id: "002"
-title: "Tour driver: planner/tour.py owns tour geometry, chains legs through the executor, closure bookkeeping"
-status: open
-use-cases: [SUC-033]
-depends-on: ["001"]
-github-issue: ""
-issue: ""
-# completes_issue: Controls whether linked issues are archived when this ticket
-# is moved to done. Default: true (archive when all referencing tickets are done).
-# Set to false (scalar) to suppress archival for ALL linked issues on this ticket.
-# Set to a mapping {filename.md: false} to suppress archival per issue filename.
-# Use false for tickets that partially address a multi-sprint umbrella issue.
+id: '002'
+title: 'Tour driver: planner/tour.py owns tour geometry, chains legs through the executor,
+  closure bookkeeping'
+status: done
+use-cases:
+- SUC-033
+depends-on:
+- '001'
+github-issue: ''
+issue: ''
 completes_issue: true
-# exception: Written by a lower agent when it cannot proceed (see architecture §exception-protocol).
-# exception:
-#   thrown_by: "programmer"          # "programmer" | "sprint-planner"
-#   thrown_at: "2026-05-07T14:23:00Z"
-#   attempted: |
-#     Description of what was attempted before giving up.
-#   conflict: "architecture-update.md §3 — reason the agent is blocked"
-#   surface: "internal"              # "user-visible" | "internal"
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -52,10 +42,10 @@ this module existing as a shared dependency of both). Serves SUC-033.
 
 ## Acceptance Criteria
 
-- [ ] `planner/tour.py` owns `TOUR_1`/`TOUR_2`'s raw wire-string geometry
+- [x] `planner/tour.py` owns `TOUR_1`/`TOUR_2`'s raw wire-string geometry
       (moved from `testgui/commands.py`, byte-for-byte — same leg
       distances/angles, same order).
-- [ ] A pure parser converts a `TOUR_1`/`TOUR_2`-shaped wire-string list
+- [x] A pure parser converts a `TOUR_1`/`TOUR_2`-shaped wire-string list
       into an ordered sequence of typed legs (signed straight distance in
       mm, or signed turn angle in degrees, matching `RT`'s own sign
       convention — positive CCW/left). Unit-tested directly against
@@ -63,37 +53,120 @@ this module existing as a shared dependency of both). Serves SUC-033.
       against silent drift) — e.g. asserts leg count, first/last leg
       values, and total leg count matches the wire-string list's own step
       count.
-- [ ] A `run_tour(transport, params, heading, legs, ...)`-shaped public
+- [x] A `run_tour(transport, params, heading, legs, ...)`-shaped public
       function (exact signature implementer's call) runs each leg's
       profile (`profile_for_distance`/`profile_for_turn`) through a
       `StreamingExecutor` built from the caller-supplied `transport`/
       `params`/`heading`, in order, stopping immediately — no further legs
       attempted — on any leg outcome other than `RunOutcome.COMPLETED`,
       and reporting which leg index and what outcome caused the stop.
-- [ ] Tour closure (position delta + heading delta) is computed: the
+- [x] Tour closure (position delta + heading delta) is computed: the
       measured pose (`TLMFrame.pose`) is captured once immediately before
       leg 1's `begin()` (the tour's own closure baseline — `App::Odometry`
       never resets across a boot session, so this is always a RELATIVE
       baseline, never an absolute zero) and once after the final leg's
       settle window; the delta between the two is returned to the caller.
-- [ ] The per-leg run loop accepts an OPTIONAL per-tick row-callback hook
+- [x] The per-leg run loop accepts an OPTIONAL per-tick row-callback hook
       (or equivalent extension point, implementer's call) so a caller that
       wants a full commanded-vs-measured trace (ticket 005's bench script)
       can capture one without `tour.py` itself knowing about CSV/JSON file
       formats, and a caller that only wants per-leg progress narration
       (ticket 003's TestGUI) can ignore it.
-- [ ] `tour.py` never imports `NezhaProtocol`/`SerialConnection`/
+- [x] `tour.py` never imports `NezhaProtocol`/`SerialConnection`/
       `SimConnection` directly — it accepts a `TwistTransport`-compatible
       object from its caller, the same pattern `executor.py` itself
       already uses.
-- [ ] `testgui/commands.py`'s `TOURS: dict[str, list[str]]` becomes a read
+- [x] `testgui/commands.py`'s `TOURS: dict[str, list[str]]` becomes a read
       FROM `planner.tour.TOUR_1`/`TOUR_2` (GUI labeling only) — the
       corrected `[Presentation]→[Domain]` direction. No other field of
       `commands.py` changes.
-- [ ] 100% unit-tested under `tests/unit/`, no hardware/sim dependency for
+- [x] 100% unit-tested under `tests/unit/`, no hardware/sim dependency for
       the parsing/chaining/closure logic itself (a `FakeTransport` double,
       mirroring `tests/unit/test_planner_executor.py`'s own convention).
-- [ ] Full suite (`uv run python -m pytest`) stays green.
+- [x] Full suite (`uv run python -m pytest`) stays green.
+
+## Completion Notes
+
+Implemented `host/robot_radio/planner/tour.py`:
+
+- `TOUR_1`/`TOUR_2` moved verbatim (copy, not retyped) from
+  `testgui/commands.py`.
+- `TourLeg` (frozen dataclass): `kind: Literal["distance","turn"]`,
+  `value: float` (signed mm / signed deg), plus an extra `speed: float |
+  None` field beyond AC2's minimal description — the D wire string's own
+  left/right speed (averaged; TOUR_1/2 always have left==right), `None` for
+  turn legs (RT carries no rate field). This lets `run_tour()` honor the
+  tour's authored per-leg speed per the Implementation Plan's own Step 3,
+  which the two-field `TourLeg` shape in AC2's prose couldn't otherwise
+  support — noted here since it's a deliberate reading of "implementer's
+  call", not an oversight.
+- `parse_tour()`: parses `"D <l> <r> <mm>"` / `"RT <cdeg>"`, raises
+  `ValueError` on any other verb or malformed step.
+- `run_tour(transport, params, heading, legs, *, v_max=150, a_max=400,
+  omega_max=1.0, alpha_max=3.0, cadence=None, inter_leg_settle=0.3,
+  final_settle=0.6, row_callback=None, on_leg=None, should_stop=None,
+  clock_fn=time.monotonic, sleep_fn=time.sleep) -> TourResult`. Builds ONE
+  `StreamingExecutor`, calls `begin()` fresh per leg (never `preempt()` —
+  each leg's own run already ended cleanly before the next starts), stops
+  immediately (no further legs) on any non-`COMPLETED` outcome.
+  `should_stop`, if given, is polled once per tick (not just per leg
+  boundary) so an external caller (ticket 003's `_TourRunner.stop()`) can
+  interrupt mid-leg; a `True` result calls `StreamingExecutor.stop_now()`
+  and reports `RunOutcome.STOPPED` for the interrupted leg.
+- Two independent, optional extension points per AC4: `row_callback(tick_index,
+  leg_index, leg, TickResult, TLMFrame|None)` (global tick_index across the
+  WHOLE tour, matching the CSV convention ticket 005's bench script needs)
+  and `on_leg(leg_index, total_legs, leg, TourLegResult)` (per-leg
+  narration only, no CSV/trace knowledge needed).
+- Closure: `TLMFrame.pose` (not `HeadingCorrector.measured_heading()`, which
+  reads whichever source the caller's corrector is configured for) is read
+  at leg 1's own `begin()`-time baseline drain (reusing `begin()`'s own
+  bounded-retry logic rather than duplicating it) and again after the final
+  leg's settle window. `TourClosure.position_delta`/`heading_delta` are
+  `None` unless every leg reaches `COMPLETED` — an early-stopped tour never
+  reaches "the final leg's settle window" AC3 defines closure against, so
+  reporting a partial/best-effort closure for a faulted tour would be
+  inventing a number the ticket doesn't define. `heading_delta` uses
+  `controllers.pid.normalize_angle` (reused, no new angle-wrap code).
+- `testgui/commands.py`: `TOUR_1`/`TOUR_2` now imported from
+  `planner.tour` at module top; `TOURS` dict body unchanged. No other field
+  of `commands.py` touched.
+- Also added a `TestTours.test_tours_are_read_from_planner_tour` case to
+  the EXISTING `tests/testgui/test_commands.py` (the ticket's Testing Plan
+  names `tests/unit/test_commands.py`, which does not exist — the real,
+  existing file for `commands.py` is `tests/testgui/test_commands.py`,
+  confirmed against ticket 004's own description: `tests/testgui/` is not
+  in `pyproject.toml`'s `testpaths` yet — ticket 004 re-adds it — so this
+  new case runs today only via a direct `pytest tests/testgui/
+  test_commands.py` invocation (verified: 72 passed), not via the full-suite
+  gate; it will start running under the full suite once ticket 004 lands).
+
+Testing: `tests/unit/test_planner_tour.py` (28 tests) — parser regression
+tests against real `TOUR_1`/`TOUR_2` data (leg counts, first/last leg,
+turn-sign preservation, malformed/unknown-verb rejection), an AST-based
+import guard (no `NezhaProtocol`/`SerialConnection`/`SimConnection`
+import), a clean 3-leg run with closure math (including a synthetic
+position+heading drift), leg-count-preserving "no leg after the last one"
+check, FAULT and OVERSHOOT mid-tour early-stop tests (remaining legs never
+attempted, closure fields `None`), a `should_stop()` mid-leg preemption
+test, independent `row_callback`/`on_leg` hook tests (including "neither
+hook supplied" still works), a per-leg-speed-honored test, and direct
+`_compute_closure()` unit tests (simple drift, `±π` wraparound via
+`normalize_angle`, zero-movement, missing-pose `None` propagation).
+`FakeTransport` here is a "current frame" double (simpler than
+`test_planner_executor.py`'s batch queue) — tests needing staged telemetry
+mutate `transport.current_frame` from inside `row_callback`/`on_leg`, which
+fire synchronously and deterministically from `run_tour()`'s own call
+stack, avoiding any dependency on `begin()`'s exact retry-call count.
+
+Full suite: `uv run python -m pytest` — 703 passed (was 675 before this
+ticket; +28 new). `tests/testgui/test_commands.py` run directly (not yet
+collected — ticket 004): 72 passed.
+
+No surprises requiring an exception — the only judgment call was the
+`TourLeg.speed` field addition (documented above) and the "closure only on
+full completion" design (also documented above), both within "implementer's
+call" per the ticket's own wording.
 
 ## Implementation Plan
 

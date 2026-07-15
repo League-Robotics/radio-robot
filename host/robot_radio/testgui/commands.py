@@ -45,6 +45,8 @@ from __future__ import annotations
 import re
 from typing import Any, TypedDict
 
+from robot_radio.planner.tour import TOUR_1, TOUR_2
+
 
 # ---------------------------------------------------------------------------
 # Parameter spec
@@ -285,49 +287,16 @@ def build_wire_string(spec: CommandSpec, values: dict[str, Any]) -> str:
 # Pre-programmed tours
 # ---------------------------------------------------------------------------
 #
-# A "tour" is an ordered list of firmware wire strings the GUI sends one at a
-# time, waiting for each bounded move to physically complete (SNAP ``mode``
-# returns to ``I`` = idle) before dispatching the next.  The tour is prefixed
-# by a "Set Robot @ 0,0" origin reset performed by the GUI itself, so the list
-# below contains only the motion steps.
-#
-
-TOUR_1: list[str] = [
-    "D 200 200 345",
-    "RT 9000",
-    "D 200 200 240",
-    "RT 9000",
-    "D 200 200 700",
-    "RT 9000",
-    "D 200 200 480",
-    "RT 9000",
-    "D 200 200 700",
-    "RT 9000",
-    "D 200 200 240",
-    "RT 9000",
-    "D 200 200 345"
-]
-
-
-TOUR_2: list[str] = [
-    "D 200 200 345",
-    "RT 9000",
-    "D 200 200 240",
-    "RT 12400",
-    "D 200 200 850",
-    "RT -21700",
-    "D 200 200 700",
-    "RT 14600",
-    "D 200 200 850",
-    "RT 21500",
-    "D 200 200 700",
-    "RT -9000",
-    "D 200 200 240",
-    "RT -9000",
-    "D 200 200 345",
-]
-
-
+# 107-002: TOUR_1/TOUR_2's own raw wire-string geometry MOVED to
+# planner/tour.py (architecture-update.md Decision 3, corrected during that
+# document's own self-review to keep the dependency direction
+# [Presentation] -> [Domain], not the reverse) -- this module now only reads
+# the geometry back for GUI labeling (TOURS below). planner.tour.run_tour()
+# (ticket 002) is what actually drives a tour now -- not a per-step wire
+# string sent through this module's own build_wire_string()/binary_bridge
+# translation, which targeted the now-deleted segment/replace envelope arms
+# (see planner/tour.py's own module docstring for the full history).
+# TOUR_1/TOUR_2 themselves are imported at module top (from planner.tour).
 
 #: Named tours available to the GUI (label → ordered wire strings).
 TOURS: dict[str, list[str]] = {
