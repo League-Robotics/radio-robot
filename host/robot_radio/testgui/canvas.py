@@ -105,9 +105,19 @@ _HERE = pathlib.Path(__file__).parent        # host/robot_radio/testgui/
 _HOST = _HERE.parent.parent                  # host/
 _REPO = _HOST.parent                         # repo root
 
-_PLAYFIELD_IMAGE = _REPO / "tests_old" / "old" / "playfield_tour" / "playfield.jpg"
-_PLAYFIELD_DESKEWED = _REPO / "tests_old" / "old" / "playfield_tour" / "playfield_deskewed.jpg"
-_PLAYFIELD_CALIB = _REPO / "tests_old" / "old" / "playfield_tour" / "playfield_calibration.json"
+# 107-004: repointed under archive/tests_old/ -- the reorg that parked
+# tests_old/ under archive/ (commit ea9b3e28, `{tests_old => archive/tests_old}`)
+# never updated these three constants, so every load silently fell back to
+# the hardcoded defaults again (tests/testgui/test_canvas.py, dropped from
+# testpaths at 102, went stale and never caught it). Re-adding tests/testgui/
+# to testpaths (this ticket) surfaced it.
+_PLAYFIELD_IMAGE = _REPO / "archive" / "tests_old" / "old" / "playfield_tour" / "playfield.jpg"
+_PLAYFIELD_DESKEWED = (
+    _REPO / "archive" / "tests_old" / "old" / "playfield_tour" / "playfield_deskewed.jpg"
+)
+_PLAYFIELD_CALIB = (
+    _REPO / "archive" / "tests_old" / "old" / "playfield_tour" / "playfield_calibration.json"
+)
 
 # Default field dimensions (cm) — used if calibration file is missing.
 _FIELD_WIDTH_CM_DEFAULT = 134.0

@@ -46,6 +46,10 @@ from robot_radio.testgui.transport import Transport
 
 @pytest.fixture(scope="module")
 def qapp():
+    # 107-004: turn a missing `gui` dependency group into a clean skip, not
+    # a hard collection/run error -- see test_tour1_geometry.py's module
+    # docstring for the full rationale.
+    pytest.importorskip("PySide6")
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance()

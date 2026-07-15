@@ -84,6 +84,10 @@ _NOISE_SENTINELS: dict[str, float] = {
 @pytest.fixture(scope="module")
 def qapp():
     """QApplication for the module (offscreen platform set by conftest)."""
+    # 107-004: turn a missing `gui` dependency group into a clean skip, not
+    # a hard collection/run error -- see test_tour1_geometry.py's module
+    # docstring for the full rationale.
+    pytest.importorskip("PySide6")
     import sys
 
     from PySide6.QtWidgets import QApplication  # type: ignore[import-untyped]

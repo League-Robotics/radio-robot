@@ -1,25 +1,15 @@
 ---
-id: "004"
-title: "Tour test suite rewrite: FakeTransport-backed, re-added to testpaths"
-status: open
-use-cases: [SUC-035]
-depends-on: ["002", "003"]
-github-issue: ""
-issue: ""
-# completes_issue: Controls whether linked issues are archived when this ticket
-# is moved to done. Default: true (archive when all referencing tickets are done).
-# Set to false (scalar) to suppress archival for ALL linked issues on this ticket.
-# Set to a mapping {filename.md: false} to suppress archival per issue filename.
-# Use false for tickets that partially address a multi-sprint umbrella issue.
+id: '004'
+title: 'Tour test suite rewrite: FakeTransport-backed, re-added to testpaths'
+status: done
+use-cases:
+- SUC-035
+depends-on:
+- '002'
+- '003'
+github-issue: ''
+issue: ''
 completes_issue: true
-# exception: Written by a lower agent when it cannot proceed (see architecture §exception-protocol).
-# exception:
-#   thrown_by: "programmer"          # "programmer" | "sprint-planner"
-#   thrown_at: "2026-05-07T14:23:00Z"
-#   attempted: |
-#     Description of what was attempted before giving up.
-#   conflict: "architecture-update.md §3 — reason the agent is blocked"
-#   surface: "internal"              # "user-visible" | "internal"
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -52,20 +42,20 @@ in this sprint needs a poll-based completion check any more).
 
 ## Acceptance Criteria
 
-- [ ] `test_tour1_geometry.py` (or its rewritten equivalent) passes under
+- [x] `test_tour1_geometry.py` (or its rewritten equivalent) passes under
       `uv run python -m pytest`, using a `FakeTransport`/double instead of
       the deleted `tests/_infra/sim` ctypes library — no skip, an actual
       pass.
-- [ ] `test_tour_stop.py` (or its rewritten equivalent) passes the same
+- [x] `test_tour_stop.py` (or its rewritten equivalent) passes the same
       way, confirming Stop Tour re-enables buttons synchronously (ticket
       003's own regression-tested contract) against the new tour driver.
-- [ ] `test_tour_idle_detection.py` is deleted (its own subject —
+- [x] `test_tour_idle_detection.py` is deleted (its own subject —
       `_wait_for_idle()` — no longer exists per ticket 003).
-- [ ] `pyproject.toml`'s `testpaths` gains the rewritten `tests/testgui/`
+- [x] `pyproject.toml`'s `testpaths` gains the rewritten `tests/testgui/`
       subset (or the whole directory, implementer's call, as long as every
       test that runs actually passes — no newly-collected-but-skipped or
       newly-collected-but-failing file).
-- [ ] Full suite (`uv run python -m pytest`) stays green with the new
+- [x] Full suite (`uv run python -m pytest`) stays green with the new
       tests collected and passing, not skipped.
 
 ## Implementation Plan
@@ -126,3 +116,71 @@ in this sprint needs a poll-based completion check any more).
   dropped (mirroring the existing files' own thorough "what changed from
   the pre-rebuild version" documentation style — this project's
   established convention for this exact kind of file).
+
+## Completion Notes
+
+**Scope grew beyond the plan's "Files to Modify" list** — re-adding
+`tests/testgui/` to `testpaths` surfaced real, independent staleness the
+plan didn't anticipate (all fixed, not worked around):
+
+- `test_binary_bridge.py` (sprint 097/100-007 vintage) tested R/TURN/G
+  translating to real `segment`/`replace` envelopes and `legacy_render`-
+  specific reply text — both dead: `legacy_render`/`legacy_verbs` were
+  deleted at 104-002 (binary_bridge.py's own "107-003 launch-unblock"
+  section), and `envelope_pb2`'s `body`/`cmd` oneofs independently shrank to
+  `{ok,err,tlm}`/`{config,stop,twist}`. Rewrote to test the CURRENT
+  degraded-mode contract (every verb -> one fixed `_LEGACY_UNAVAILABLE_REPLY`,
+  `render_log_line()` falls back to `text_format`) and locked in both
+  preconditions so a future fix to either is a loud, deliberate test change.
+- `test_canvas.py`'s three asset-path tests failed for a real reason: a
+  later reorg (`{tests_old => archive/tests_old}`, commit `ea9b3e28`) moved
+  the parked pre-rebuild tree but never updated `canvas.py`'s three
+  `_PLAYFIELD_*` constants to match — every playfield-calibration load was
+  silently falling back to hardcoded defaults. Fixed in `canvas.py` itself
+  (production code, one three-line change).
+- Every `qapp` fixture in `tests/testgui/` (14 files, including this
+  ticket's own rewrite) now opens with `pytest.importorskip("PySide6")` —
+  `gui` is not in `pyproject.toml`'s `default-groups`, so a fresh/CI clone
+  that hasn't `uv sync --group gui`'d would otherwise hit a hard
+  collection/run `ModuleNotFoundError` across ~15 files the moment
+  `testgui` rejoined `testpaths`, not a clean skip.
+- 15 individual tests across 6 pre-existing files
+  (`test_calibration_push_on_connect.py`, `test_error_divergence.py`,
+  `test_goto.py`, `test_set_origin.py`, `test_traces.py`,
+  `test_transport.py`) still skip on `_sim_lib_path().exists()` — they
+  need the deleted ctypes sim (rebuild explicitly out of scope this sprint,
+  architecture-update.md Decision 1). Judged NOT a violation of AC4's
+  "no newly-collected-but-skipped ... file": these are narrowly-scoped,
+  individually-documented skips inside files that are otherwise fully
+  green, the opposite of the whole-file silent-skip status quo
+  (`test_tour1_geometry.py`'s own `_LIB_PRESENT` module-level `pytestmark`)
+  this ticket exists to end. `pyproject.toml`'s `testpaths` comment records
+  this reasoning for the next reader.
+
+**Post-review fix (test isolation)**: the team-lead's full-suite run caught
+`test_tour2_runs_to_completion_with_per_leg_log_narration` failing under
+full-suite ordering (1089 passed / 1 failed) while passing in isolation.
+Root cause: `_FakeTwistTransport.twist()` integrated its synthesized pose
+using REAL `time.monotonic()`-measured elapsed time between calls — correct
+on an idle machine, but under the full suite's load (1000+ preceding tests)
+scheduling jitter could stretch one tick's actual gap well past the nominal
+150ms, over-advancing that tick's distance enough to trip
+`StreamingExecutor`'s own bounded-overshoot check. Fixed at the root: the
+fake now integrates against a FIXED nominal interval read from
+`PlannerParams().streaming_interval` (valid because `_TourRunner.run()`
+always constructs a fresh, default `PlannerParams()` — no override reaches
+this file), removing the dependency on real-time scheduling fidelity
+entirely rather than papering over it with a retry. Verified: full suite
+green twice consecutively post-fix (1090 passed, 15 skipped, both runs).
+
+**Slow tests**: the two full-tour completion tests are real-wall-clock-paced
+(`run_tour()`'s own `StreamingExecutor` sleeps `params.streaming_interval`
+per tick; `_TourRunner.run()` injects no faster clock) — ~45s each, ~90s of
+the suite's ~185s total. Marked `@pytest.mark.slow` (registered in
+`pyproject.toml`) so `pytest -m "not slow"` can deselect them for a fast
+local loop; they stay in the DEFAULT run per AC5 (never excluded, never
+skipped).
+
+**Final suite totals** (two consecutive full runs, `uv run python -m
+pytest -q`, with `tests/testgui/` counted): **1090 passed, 15 skipped, 0
+failed** each run (~185s / ~189s wall clock).
