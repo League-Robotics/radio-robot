@@ -650,6 +650,75 @@ void scenarioBootAnchorAcceptsLargeInitialPositionWithoutGlitchOrWedge() {
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the boot sequence");
 }
 
+// 10. C1 fix (103-002, 2026-07-13 code review): a NAK'd STOP write (pct==0)
+//     must NOT be latched as "already written" -- write-on-change (nezha_
+//     motor.cpp's writeRawDuty()) must retry the SAME value next tick
+//     instead of permanently suppressing it, and appliedDuty() must keep
+//     reporting the PREVIOUS (still physically applied) duty until a write
+//     actually succeeds -- the exact scenario the review flagged: a failed
+//     stop leaving the watchdog's "re-assert Neutral every cycle"
+//     (DeviceBus::applyStaleGate()) permanently defeated.
+void scenarioNakedStopWriteIsRetriedNextTickNotLatched() {
+  beginScenario("a NAK'd stop write is retried next tick, not permanently latched-as-written");
+  Devices::I2CBus::setClock(1000000);
+  Devices::I2CBus bus;
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::MotorConfig cfg = baseNezhaConfig();
+  cfg.slewRate = 100.0f;   // no slew clamping -- isolates the write-status behavior
+  Devices::NezhaMotor motor(bus, cfg);
+  motor.setPidEnabled(false);
+
+  // Starts at 50ms (not 0): writeRawDuty()'s write-rate throttle compares
+  // this tick's nowUs against lastWriteTimeUs_'s zero-init value, so a
+  // first tick at nowUs==0 would itself read as "0us since the last write"
+  // and be throttled away — every other scenario in this file sidesteps
+  // this the same way (see scenarioPidOffRoutesRawDutyThroughArmorUnchanged).
+  uint64_t nowUs = 50000;
+  const float stationaryPosition = 0.0f;
+
+  // Cycle 1: establish a nonzero applied duty via a successful write.
+  motor.setDuty(0.5f);
+  scriptEncoderRequestCollect(bus, wireAddr, stationaryPosition);
+  motor.requestSample();
+  motor.tick(nowUs);
+  checkFloatEq(motor.appliedDuty(), 0.5f, "nonzero duty established by a successful write");
+
+  // Cycle 2: command a stop, but script its 0x60 duty write to FAIL (NAK).
+  // requestEncoder()'s own 0x46 write and collectEncoder()'s read both
+  // succeed -- only the duty write NAKs.
+  motor.setDuty(0.0f);
+  nowUs += 50000;   // clears the 40ms write-rate throttle (stop is exempt anyway)
+  bus.scriptWrite(wireAddr, /*status=*/0);    // requestEncoder()'s 0x46 write
+  uint8_t data[4] = {0, 0, 0, 0};              // unchanged raw count -- stale sample, irrelevant here
+  bus.scriptRead(wireAddr, data, 4, /*status=*/0);   // collectEncoder()
+  bus.scriptWrite(wireAddr, /*status=*/-5);    // the stop's 0x60 write -- NAK'd
+  motor.requestSample();
+  motor.tick(nowUs);
+
+  checkFloatEq(motor.appliedDuty(), 0.5f,
+               "a NAK'd stop write does NOT latch -- appliedDuty() still reflects the "
+               "PREVIOUS (still physically applied) duty, not the failed 0.0 attempt");
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 1,
+              "exactly one scripted error (the NAK'd stop write) recorded so far");
+
+  // Cycle 3: the SAME stop target is retried -- write-on-change must NOT
+  // suppress it just because pct==0 was already attempted (only a
+  // SUCCESSFUL write may latch lastWrittenPct_). This time the write
+  // succeeds.
+  nowUs += 50000;
+  bus.scriptWrite(wireAddr, /*status=*/0);    // requestEncoder()
+  bus.scriptRead(wireAddr, data, 4, /*status=*/0);    // collectEncoder()
+  bus.scriptWrite(wireAddr, /*status=*/0);    // the retried stop write -- succeeds this time
+  motor.requestSample();
+  motor.tick(nowUs);
+
+  checkFloatEq(motor.appliedDuty(), 0.0f,
+               "the retried stop write actually reaches the bus and succeeds -- appliedDuty() is now 0");
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 1,
+              "no new error -- the retry succeeded; errCount stays at the one earlier NAK");
+}
+
 }  // namespace
 
 int main() {
@@ -662,6 +731,7 @@ int main() {
   scenarioPidOffRoutesRawDutyThroughArmorUnchanged();
   scenarioFreshSampleGateSurvivesSlowBrickRefreshUnderFastFiberCycle();
   scenarioBootAnchorAcceptsLargeInitialPositionWithoutGlitchOrWedge();
+  scenarioNakedStopWriteIsRetriedNextTickNotLatched();
 
   if (g_failureCount == 0) {
     std::printf("OK: all devices motor scenarios passed\n");

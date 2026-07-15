@@ -248,7 +248,11 @@ class NezhaMotor : public MotorArmor {
   static constexpr float kDefaultSlewRate = 25.0f;   // ports the original's kMaxDeltaPwmPerWrite default
 
   // ---- Private helpers: write path ----
-  void writeMotorRun(uint8_t direction, uint8_t speed);   // ported writeMotorCmd() (0x60)
+  // Returns the CODAL status from bus_.write() (0/kOk == success) -- 103-002
+  // (C1 fix): writeRawDuty() commits lastWrittenPct_/lastWriteTimeUs_ ONLY
+  // when this status is kOk, so a NAK'd write is retried next tick instead
+  // of being latched as "already written."
+  int writeMotorRun(uint8_t direction, uint8_t speed);   // ported writeMotorCmd() (0x60)
 
   // ---- Private helpers: velocity estimator ----
   void pushVelSample(uint64_t t, float position);   // [us] [mm] append an accepted fresh sample to the ring

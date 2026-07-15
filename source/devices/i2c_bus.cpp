@@ -21,6 +21,7 @@ I2CBus::I2CBus(MicroBitI2C& bus)
       reentryViolations_(0),
       reentryInFlightAddr_(0),
       reentryNewAddr_(0),
+      clearanceSafetyNetCount_(0),
       deviceCount_(0),
       logHead_(0),
       logTotal_(0),
@@ -54,18 +55,18 @@ int I2CBus::write(uint16_t address, uint8_t* data, int len, bool repeated,
   // address is the 8-bit wire address (7-bit addr << 1).
   uint16_t addr7 = static_cast<uint16_t>(address >> 1);
 
-  // Lazy per-device clearance spin — BEFORE the re-entrancy guard's
+  // Lazy per-device clearance wait — BEFORE the re-entrancy guard's
   // target_disable_irq() critical section starts (never mask interrupts for
-  // a multi-ms spin). Defaults (preClear=postClear=0) collapse
+  // a multi-ms wait). Defaults (preClear=postClear=0) collapse
   // entryDeadline to lastEnd, already in the past by the time the NEXT call
-  // happens, so every existing 4-argument call site spins zero time —
-  // byte-identical to before.
+  // happens, so every existing 4-argument call site waits zero time —
+  // byte-identical to before. See waitForClearance()'s own comment (103-002,
+  // M1 fix) for why this no longer spins.
   int idx = findOrAdd(addr7);
   uint64_t entryDeadline = devices_[idx].readyAt;
   uint64_t preDeadline = devices_[idx].lastEnd + static_cast<uint64_t>(preClear);
   if (preDeadline > entryDeadline) entryDeadline = preDeadline;
-  while (clockUs() < entryDeadline) { /* spin — vendor no-interleave property */
-  }
+  waitForClearance(entryDeadline);
 
   const bool guard = irqGuard_;
 
@@ -109,8 +110,7 @@ int I2CBus::read(uint16_t address, uint8_t* data, int len, bool repeated,
   uint64_t entryDeadline = devices_[idx].readyAt;
   uint64_t preDeadline = devices_[idx].lastEnd + static_cast<uint64_t>(preClear);
   if (preDeadline > entryDeadline) entryDeadline = preDeadline;
-  while (clockUs() < entryDeadline) { /* spin — vendor no-interleave property */
-  }
+  waitForClearance(entryDeadline);
 
   const bool guard = irqGuard_;
 
@@ -140,6 +140,29 @@ int I2CBus::read(uint16_t address, uint8_t* data, int len, bool repeated,
   devices_[idx].readyAt = devices_[idx].lastEnd + static_cast<uint64_t>(postClear);
 
   return status;
+}
+
+// ---------------------------------------------------------------------------
+// Clearance safety-net wait (103-002, M1 fix)
+// ---------------------------------------------------------------------------
+
+void I2CBus::waitForClearance(uint64_t entryDeadline) {
+  uint64_t now = clockUs();
+  if (now >= entryDeadline) return;
+
+  // Entered before the clearance deadline -- the loop was supposed to own
+  // this gap (runAndWait/sleepUntil, ticket 008); count the trip (i2c_bus.h's
+  // own accessor comment: the narrow signal ticket 001 numbered as
+  // Telemetry.fault_bits bit 0). NEVER spin: yield the shortfall via
+  // fiber_sleep() -- the same cooperative primitive clock.h's Sleeper wraps
+  // -- rounded UP to whole milliseconds. fiber_sleep() reliably sleeps AT
+  // LEAST the requested duration, so rounding up never shortchanges the real
+  // vendor clearance requirement (docs/knowledge/2026-07-04-encoder-wedge.md)
+  // -- it only ever waits slightly longer than strictly necessary.
+  ++clearanceSafetyNetCount_;
+  uint64_t shortfallUs = entryDeadline - now;
+  uint32_t shortfallMs = static_cast<uint32_t>((shortfallUs + 999) / 1000);
+  if (shortfallMs > 0) fiber_sleep(shortfallMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -237,6 +260,7 @@ void I2CBus::resetStats() {
   reentryViolations_ = 0;
   reentryInFlightAddr_ = 0;
   reentryNewAddr_ = 0;
+  clearanceSafetyNetCount_ = 0;
   inUse_ = false;
   inFlightAddr_ = 0;
 

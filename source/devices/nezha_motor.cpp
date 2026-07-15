@@ -405,10 +405,13 @@ void NezhaMotor::tick(uint64_t nowUs)
 
 // ---------------------------------------------------------------------------
 // Write path — ported from the pre-port file's writeRawDuty(), itself
-// ported from source_old's Motor::setSpeed(). Byte-for-byte identical
-// write-on-change guard, write-rate limit, slew cap, and coast-at-zero
-// exemption, including the -128 sentinel's interaction with the slew clamp
-// on the very first write.
+// ported from source_old's Motor::setSpeed(). Write-on-change guard,
+// write-rate limit, slew cap, and coast-at-zero exemption, including the
+// -128 sentinel's interaction with the slew clamp on the very first write,
+// are all unchanged from the port. ONE behavior is new (103-002, C1 fix,
+// 2026-07-13 code review): lastWrittenPct_/lastWriteTimeUs_ now commit ONLY
+// when the bus write actually succeeds (status == kOk) -- see the bottom of
+// this function for why.
 //
 // Time source: `now` below reads lastTickUs_, which tick() step 2 already
 // set to THIS tick's nowUs before step 4's dispatch calls down into here
@@ -449,24 +452,43 @@ void NezhaMotor::writeRawDuty(float duty)
         ? pct
         : clampStep(lastWrittenPct_, pct, static_cast<uint8_t>(config_.slewRate));
 
-    lastWriteTimeUs_ = now;
-    lastWrittenPct_ = written;
-
     // Apply fwdSign: positive written = logical forward.
     int16_t effective = static_cast<int16_t>(config_.fwdSign) * static_cast<int16_t>(written);
+    int status;
     if (effective == 0) {
         // Zero speed: COAST via 0x60 speed 0 -- NOT 0x5F, which wedges
         // subsequent encoder reads (see writeMotorRun()).
-        writeMotorRun(kDirCw, 0);
+        status = writeMotorRun(kDirCw, 0);
     } else {
         uint8_t dir = (effective > 0) ? kDirCw : kDirCcw;
         uint8_t speed = (effective > 0) ? static_cast<uint8_t>(effective)
                                          : static_cast<uint8_t>(-effective);
-        writeMotorRun(dir, speed);
+        status = writeMotorRun(dir, speed);
+    }
+
+    // 103-002 (C1 fix, 2026-07-13 code review): commit lastWrittenPct_/
+    // lastWriteTimeUs_ ONLY on a successful write. The old unconditional
+    // commit latched a NAK'd write as "already written" -- write-on-change
+    // (above) then suppressed every retry of the SAME value forever. That
+    // was catastrophic specifically for a failed STOP (pct==0): the
+    // watchdog's "re-assert Neutral every cycle" robustness
+    // (DeviceBus::applyStaleGate()) calls armoredWrite(0) every cycle, which
+    // always dispatches straight to writeRawDuty(0) (motor_armor.h) --  but
+    // once pct==0==lastWrittenPct_ was falsely latched, every subsequent
+    // call hit the write-on-change guard above and returned before ever
+    // touching the bus again, even though the wheel was still physically
+    // spinning. Leaving lastWrittenPct_ at its PRIOR value on failure is
+    // also the correct MotorArmor semantics: appliedDuty() must reflect
+    // what the hardware is actually doing, and a NAK'd write means the
+    // PREVIOUS duty is still the one physically applied, not the one just
+    // attempted.
+    if (status == kOk) {
+        lastWriteTimeUs_ = now;
+        lastWrittenPct_ = written;
     }
 }
 
-void NezhaMotor::writeMotorRun(uint8_t direction, uint8_t speed)
+int NezhaMotor::writeMotorRun(uint8_t direction, uint8_t speed)
 {
     uint8_t buf[8] = {
         0xFF, 0xF9,
@@ -482,7 +504,7 @@ void NezhaMotor::writeMotorRun(uint8_t direction, uint8_t speed)
     // preClear on the other side of the cycle -- see
     // docs/knowledge/2026-07-04-encoder-wedge.md for the stall this
     // clearance window prevents.
-    bus_.write(static_cast<uint16_t>(kNezhaDeviceAddr << 1), buf, 8, false, /*preClear=*/0, /*postClear=*/4000);
+    return bus_.write(static_cast<uint16_t>(kNezhaDeviceAddr << 1), buf, 8, false, /*preClear=*/0, /*postClear=*/4000);
 }
 
 // ---------------------------------------------------------------------------

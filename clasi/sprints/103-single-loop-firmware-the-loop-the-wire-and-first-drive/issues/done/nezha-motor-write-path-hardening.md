@@ -1,8 +1,8 @@
 ---
-status: in-progress
+status: done
 sprint: '103'
 tickets:
-- 103-002
+- '002'
 ---
 
 # NezhaMotor write-path hardening: commit state only on successful write; no busy-spin clearances

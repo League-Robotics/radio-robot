@@ -52,6 +52,7 @@ I2CBus::I2CBus()
       reentryViolations_(0),
       reentryInFlightAddr_(0),
       reentryNewAddr_(0),
+      clearanceSafetyNetCount_(0),
       deviceCount_(0),
       logHead_(0),
       logTotal_(0),
@@ -96,16 +97,15 @@ int I2CBus::write(uint16_t address, uint8_t* data, int len, bool repeated,
   // as the real fork.
   uint16_t addr7 = static_cast<uint16_t>(address >> 1);
 
-  // Same lazy-clearance entry spin as the real fork (i2c_bus.cpp), against
-  // the fake clock instead of system_timer_current_time_us(). See the file
-  // header for why this self-advances rather than truly blocking.
+  // Same lazy-clearance entry wait as the real fork (i2c_bus.cpp), against
+  // the fake clock instead of system_timer_current_time_us(). See
+  // waitForClearance()'s own comment (103-002, M1 fix) for why this no
+  // longer spins.
   int idx = findOrAdd(addr7);
   uint64_t entryDeadline = devices_[idx].readyAt;
   uint64_t preDeadline = devices_[idx].lastEnd + static_cast<uint64_t>(preClear);
   if (preDeadline > entryDeadline) entryDeadline = preDeadline;
-  while (clockUs() < entryDeadline) {
-    advanceClock(1);
-  }
+  waitForClearance(entryDeadline);
 
   int status = kScriptMismatch;
   if (!scriptedWrites_.empty()) {
@@ -133,9 +133,7 @@ int I2CBus::read(uint16_t address, uint8_t* data, int len, bool repeated,
   uint64_t entryDeadline = devices_[idx].readyAt;
   uint64_t preDeadline = devices_[idx].lastEnd + static_cast<uint64_t>(preClear);
   if (preDeadline > entryDeadline) entryDeadline = preDeadline;
-  while (clockUs() < entryDeadline) {
-    advanceClock(1);
-  }
+  waitForClearance(entryDeadline);
 
   int status = kScriptMismatch;
   if (!scriptedReads_.empty()) {
@@ -159,6 +157,24 @@ int I2CBus::read(uint16_t address, uint8_t* data, int len, bool repeated,
   devices_[idx].readyAt = devices_[idx].lastEnd + static_cast<uint64_t>(postClear);
 
   return status;
+}
+
+// ---------------------------------------------------------------------------
+// Clearance safety-net wait (103-002, M1 fix) — same semantics as the real
+// fork's own waitForClearance() (i2c_bus.cpp), against the fake clock. No
+// wall clock and no fiber scheduler here, so there is nothing to genuinely
+// "sleep" against; the fake clock instead jumps directly to entryDeadline in
+// ONE step (never a spin loop), preserving the exact same observable
+// end-state every existing scripted scenario already relies on (the fake
+// clock lands at/after the deadline) while adding the new counter bump.
+// ---------------------------------------------------------------------------
+
+void I2CBus::waitForClearance(uint64_t entryDeadline) {
+  uint64_t now = clockUs();
+  if (now >= entryDeadline) return;
+
+  ++clearanceSafetyNetCount_;
+  advanceClock(entryDeadline - now);
 }
 
 // ---------------------------------------------------------------------------
@@ -267,6 +283,7 @@ void I2CBus::resetStats() {
   reentryViolations_ = 0;
   reentryInFlightAddr_ = 0;
   reentryNewAddr_ = 0;
+  clearanceSafetyNetCount_ = 0;
   inUse_ = false;
   inFlightAddr_ = 0;
 
