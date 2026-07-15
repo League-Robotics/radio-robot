@@ -242,6 +242,55 @@ def test_malformed_armor_passes_through_unchanged_never_raises():
     assert binary_bridge.render_log_line(garbage, outbound=False) == garbage
 
 
+# ---------------------------------------------------------------------------
+# render_log_line() — TelemetrySecondary disambiguation (emergency fix,
+# stakeholder report: Tour 1 froze/died and the message monitor flooded at
+# ~4 lines/s with bare "corr_id: N" lines). A bare TelemetrySecondary frame
+# (its own armored *B line, NOT ReplyEnvelope-wrapped — telemetry.proto,
+# 104-003) "successfully" parses as a ReplyEnvelope with an EMPTY body oneof:
+# TelemetrySecondary's first field (`now`, its millisecond timestamp) and
+# ReplyEnvelope's first field (`corr_id`) are both wire type 13 (uint32),
+# so the bytes decode without error into a ReplyEnvelope carrying only
+# corr_id set and no body arm. Fixed with the same structural
+# disambiguation io/serial_conn.py's _handle_binary_reply() already uses:
+# treat a ReplyEnvelope parse as real only when WhichOneof("body") is set;
+# otherwise retry as TelemetrySecondary and drop the line on success (same
+# policy as a primary `tlm` push frame).
+# ---------------------------------------------------------------------------
+
+
+def test_bare_telemetry_secondary_frame_is_dropped_not_misrendered():
+    from robot_radio.robot.pb2 import telemetry_pb2
+
+    secondary = telemetry_pb2.TelemetrySecondary()
+    secondary.now = 123456
+    secondary.has_cmd_vel = True
+    secondary.cmd_vel_left = 150.0
+    secondary.cmd_vel_right = 150.0
+    secondary.acc_left = 0.5
+    secondary.acc_right = 0.4
+    secondary.glitch_left = 0
+    secondary.glitch_right = 0
+    secondary.ts_left = 12
+    secondary.ts_right = 12
+
+    rendered = binary_bridge.render_log_line(_armor(secondary), outbound=False)
+
+    assert rendered is None
+
+
+def test_reply_envelope_with_set_body_still_renders_not_dropped():
+    """Regression guard for the fix above: a REAL ReplyEnvelope (body oneof
+    actually set) must still render normally, not get swept into the new
+    TelemetrySecondary fallback."""
+    reply = envelope_pb2.ReplyEnvelope()
+    reply.corr_id = 7
+    reply.ok.q = 1
+    rendered = binary_bridge.render_log_line(_armor(reply), outbound=False)
+    assert rendered is not None
+    assert not rendered.startswith("*B")
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))
