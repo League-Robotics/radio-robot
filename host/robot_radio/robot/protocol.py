@@ -1097,6 +1097,118 @@ class NezhaProtocol:
         envelope = envelope_pb2.CommandEnvelope(stop=envelope_pb2.Stop())
         return self._conn.send_envelope_fast(envelope)
 
+    def config(self, **deltas: Any) -> int:
+        """Build and send a ``ConfigDelta`` envelope (``CommandEnvelope{
+        config: delta}``, ``envelope.proto`` field 6) — the P4 wire's THIRD
+        and last ``cmd`` oneof arm, alongside ``twist()``/``stop()``
+        (``envelope.proto``'s own oneof comment: "config/stop keep their
+        pre-102 field numbers... twist is genuinely new"). This ticket
+        (104-001) is what gives ``config`` a host-side builder — before it,
+        every OTHER oneof arm (``twist``/``stop``) had one but ``config``
+        did not, despite being schema-defined since 103-001.
+
+        Fire-and-poll, the SAME shape as ``twist()``/``stop()`` (103-009,
+        Decision 2's "telemetry-only return path"): a ``config`` command's
+        outcome rides the ack ring inside a subsequent ``Telemetry`` push,
+        never a synchronous ``ReplyEnvelope`` — see ``wait_for_ack()``. This
+        method writes the bytes and returns immediately.
+
+        ``deltas`` reuses the SAME flat wire-key vocabulary ``set_config()``
+        curates (module-level ``_DRIVETRAIN_KEYS``/``_MOTOR_PID_KEYS``/
+        ``_PLANNER_KEYS``/``ml``/``mr``/``sTimeout`` — together
+        ``_ALL_SET_KEYS``), so a key added to one map is automatically
+        available to the other; nothing here re-derives that vocabulary.
+        UNLIKE ``set_config()``, which fans a multi-target kwargs dict out
+        into MULTIPLE round trips (one per touched ``ConfigDelta.patch``
+        oneof arm, since a single ``ConfigDelta`` carries only one patch at
+        a time), ``config()`` builds and sends exactly ONE
+        ``CommandEnvelope`` carrying exactly ONE ``ConfigDelta`` — matching
+        ``twist()``/``stop()``'s own "one call, one envelope, one corr_id"
+        shape. Passing kwargs that span more than one ``ConfigDelta.patch``
+        target (e.g. ``tw=`` and ``pid.kp=`` together — drivetrain vs. motor)
+        is a caller error: raises ``ValueError``, since no single
+        ``ConfigDelta`` could carry both. Same for empty ``deltas`` or a key
+        outside the known vocabulary. ``pid.*`` keys and ``ml``/``mr`` may be
+        mixed freely in one call — both target the SAME ``MotorConfigPatch``
+        oneof arm (mirroring ``set_config()``'s own ``motor_left_patch``/
+        ``motor_right_patch`` grouping); ``side`` selects ``travel_calib``'s
+        target only and is meaningless for the ``pid.*`` fields
+        (``config.proto``'s own ``MotorConfigPatch.side`` comment), so a
+        pure-``pid.*`` call (no ``ml``/``mr``) still needs SOME side value on
+        the wire — it defaults to ``LEFT``, the same default
+        ``set_config()``'s own ``motor_left_patch`` branch always used.
+
+        Confirmed against the merged 103 tree's ``main.cpp`` (resolving
+        103's Step 7 Open Question 3, ``architecture-update.md``): the
+        firmware's dispatch switch decodes ``CONFIG`` successfully but does
+        NOT apply it — the ``CmdKind::CONFIG`` case acks
+        ``ACK_STATUS_ERR``/``ERR_UNIMPLEMENTED`` unconditionally
+        ("ConfigDelta runtime application deferred this sprint"). This
+        method still builds and sends the envelope regardless — ``config()``
+        is a wire builder, not a promise the firmware applies the delta;
+        pass the returned corr_id to ``wait_for_ack()`` to observe today's
+        ``ERR_UNIMPLEMENTED`` outcome, which will flip to a live-apply Ack
+        once a future ticket wires the runtime side (not this one — see
+        this ticket's completion notes).
+
+        Returns the corr_id assigned to this command. Raises
+        ``ConnectionError`` if not connected (``send_envelope_fast()``'s own
+        not-open contract); raises ``ValueError`` for empty, unknown-key, or
+        multi-target ``deltas``.
+        """
+        if not deltas:
+            raise ValueError("config() requires at least one key=value delta")
+        unknown = sorted(k for k in deltas if k not in _ALL_SET_KEYS)
+        if unknown:
+            raise ValueError(f"config(): unknown key(s) {unknown!r}")
+
+        drivetrain_patch: dict[str, float] = {}
+        motor_patch: dict[str, float] = {}
+        motor_side = config_pb2.LEFT
+        planner_patch: dict[str, float] = {}
+        watchdog_value: int | None = None
+
+        for key, value in deltas.items():
+            if key in _DRIVETRAIN_KEYS:
+                drivetrain_patch[_DRIVETRAIN_KEYS[key]] = float(value)
+            elif key == "ml":
+                motor_patch["travel_calib"] = float(value)
+                motor_side = config_pb2.LEFT
+            elif key == "mr":
+                motor_patch["travel_calib"] = float(value)
+                motor_side = config_pb2.RIGHT
+            elif key in _MOTOR_PID_KEYS:
+                motor_patch[_MOTOR_PID_KEYS[key]] = float(value)
+            elif key in _PLANNER_KEYS:
+                planner_patch[_PLANNER_KEYS[key]] = float(value)
+            elif key == "sTimeout":
+                watchdog_value = int(value)
+
+        targets_touched = sum([
+            bool(drivetrain_patch), bool(motor_patch),
+            bool(planner_patch), watchdog_value is not None,
+        ])
+        if targets_touched > 1:
+            raise ValueError(
+                "config(): kwargs span more than one ConfigDelta.patch "
+                f"target (got {sorted(deltas)}) — a single ConfigDelta "
+                "carries only one patch; call config() once per target")
+
+        if drivetrain_patch:
+            delta = envelope_pb2.ConfigDelta(
+                drivetrain=config_pb2.DrivetrainConfigPatch(**drivetrain_patch))
+        elif motor_patch:
+            delta = envelope_pb2.ConfigDelta(motor=config_pb2.MotorConfigPatch(
+                side=motor_side, **motor_patch))
+        elif planner_patch:
+            delta = envelope_pb2.ConfigDelta(
+                planner=config_pb2.PlannerConfigPatch(**planner_patch))
+        else:
+            delta = envelope_pb2.ConfigDelta(watchdog=watchdog_value)
+
+        envelope = envelope_pb2.CommandEnvelope(config=delta)
+        return self._conn.send_envelope_fast(envelope)
+
     def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "AckEntry | None":  # [ms]
         """Poll incoming ``Telemetry`` pushes for an ack-ring entry matching
         ``corr_id``, for up to ``timeout`` ms. Returns the matched
@@ -1104,9 +1216,10 @@ class NezhaProtocol:
         this wait is always bounded, never infinite.
 
         The ack-ring matcher for the P4 "telemetry-only return path"
-        (103-009, Decision 2): ``twist()``/``stop()`` (and, in principle,
-        any future fire-and-poll command) get no synchronous
-        ``ReplyEnvelope`` of their own — their outcome rides the ack ring
+        (103-009, Decision 2): ``twist()``/``stop()``/``config()`` (104-001
+        — every ``CommandEnvelope`` oneof arm now uses this same shape) get
+        no synchronous ``ReplyEnvelope`` of their own — their outcome rides
+        the ack ring
         (``Telemetry.acks``, depth 3) inside the next one or more regular
         ``Telemetry`` pushes after the command reaches the firmware. Because
         the ring is depth 3 and telemetry pushes at ~25 Hz, the SAME
