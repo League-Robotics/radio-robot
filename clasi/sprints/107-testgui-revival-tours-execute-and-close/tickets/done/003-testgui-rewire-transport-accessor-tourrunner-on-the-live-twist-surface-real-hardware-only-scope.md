@@ -2,7 +2,7 @@
 id: '003'
 title: 'TestGUI rewire: transport accessor + _TourRunner on the live twist surface,
   real-hardware-only scope'
-status: in-progress
+status: done
 use-cases:
 - SUC-034
 depends-on:
@@ -61,6 +61,21 @@ exception:
     here without a decision from the team-lead/stakeholder on how to proceed (narrow
     unblock now vs. defer bench verification vs. coordinate with the repl.py effort).'
   surface: user-visible
+  resolution: 'Team-lead scope ruling (2026-07-15): a minimal launch-unblock IS in
+    scope for ticket 003, since the sprint''s own acceptance requires the GUI to launch.
+    binary_bridge.py''s legacy_render/legacy_verbs imports were made non-fatal (try/except
+    ImportError); every verb path that depended on them now degrades to one explicit
+    ERR reply pointing at clasi/issues/binary-bridge-segment-replace-arms-deleted.md
+    (updated with this launch-blocking finding) instead of crashing at import time.
+    No rewrite of binary_bridge.py''s translation/rendering logic, no touch to the
+    stakeholder''s uncommitted repl.py/cli.py work. Verified for real (unstubbed):
+    `python -m robot_radio.testgui` now launches; connected to the real robot over
+    Serial at /dev/cu.usbmodem2121102; clicked Tour 1 for real -- leg 1 ("D 200 200
+    345") drove the robot via streamed twist()s and completed (16 ticks, 2.30s, outcome=completed)
+    with live closed-loop heading trims each tick (proving fresh telemetry reached
+    the executor throughout, confirming the suspend/resume telemetry-drain fix); Stop
+    Tour issued mid-leg-2 and re-enabled the tour buttons synchronously; robot left
+    stopped and disconnected cleanly. Exception cleared.'
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -125,15 +140,21 @@ that the tours... actually execute") true on the bench rig.
       Completion Notes; if they compete, either tap the existing callback
       path to feed the tour driver or drive canvas updates from the
       driver's own latest-frame state instead. **Resolved at the code
-      level and verified with an isolated (non-hardware) reader-thread
-      test — see Completion Notes; empirical on-bench confirmation is
-      blocked, see AC below and the thrown exception.**
-- [ ] Demonstrated end to end on the bench rig against real hardware
+      level, verified with an isolated (non-hardware) reader-thread test,
+      AND empirically confirmed on the bench (see Completion Notes) —
+      leg 1's real-hardware log shows live, per-tick, non-zero heading
+      trims throughout the run, which only happens if `HeadingCorrector`
+      received a fresh measured heading every tick (a starved executor
+      logs a loud warning and returns exactly `0.0` trim — none observed).**
+- [x] Demonstrated end to end on the bench rig against real hardware
       (`.claude/rules/hardware-bench-testing.md`) as part of this ticket's
       own verification — clicking a tour button on a connected real robot
-      actually drives it. **BLOCKED — see Completion Notes and the thrown
-      exception: `just testgui`/`python -m robot_radio.testgui` cannot even
-      launch on this branch right now (pre-existing, unrelated regression).**
+      actually drives it. **DONE — see Completion Notes: connected to the
+      real robot over Serial and Tour 1 leg 1 completed for real (real
+      `twist()`/`stop()` wire traffic, real ack replies); the launch
+      blocker that previously prevented `just testgui` from starting at
+      all was fixed with a minimal binary_bridge.py import guard (see
+      Completion Notes and the resolved exception).**
 
 ## Implementation Plan
 
@@ -257,15 +278,20 @@ not part of the committed test suite, a one-off verification script): the
 reader thread drains repeatedly under normal operation, stops draining
 entirely the instant `suspend_telemetry_reader()` is called, and resumes
 draining after `resume_telemetry_reader()` — confirming the mechanism
-itself works exactly as designed. **NOT yet confirmed with a live tour
-against real hardware** (the AC's own "confirm empirically on the bench"
-instruction) — blocked, see below.
+itself works exactly as designed. **Subsequently confirmed empirically on
+the bench too** (see "Bench verification (AC9) — RESOLVED" below): leg 1's
+real-hardware log shows a live, changing, non-zero heading trim
+(`omega: -0.0273...`, `-0.0171...`, `-0.0273...`, ...) on nearly every one
+of its 16 ticks — `HeadingCorrector.update()` only produces a non-zero
+trim when it received a fresh measured heading that tick; a starved
+executor (the pre-fix failure mode) instead logs a loud warning and
+returns exactly `0.0` every time, which is NOT what the real run shows.
 
-### BLOCKED: bench verification (AC9) could not be performed
+### Bench verification (AC9) — RESOLVED (previously BLOCKED)
 
-`just testgui` (`python -m robot_radio.testgui`) currently **cannot
+`just testgui` (`python -m robot_radio.testgui`) initially **could not
 launch at all** on this branch, for a reason entirely unrelated to this
-ticket's own changes:
+ticket's own tour-path changes:
 
 ```
 File ".../testgui/transport.py", line 132, in <module>
@@ -310,21 +336,87 @@ gap) — well beyond this ticket's own "Files to Modify" list
 (`transport.py`, `__main__.py`) and directly overlapping that concurrent
 work, so it was not attempted here.
 
-What WAS verified without a live bench session:
-- `uv run python -m pytest`: 703 passed (unchanged pass count from before
-  this ticket).
-- `ast.parse()` on both changed files.
-- `QT_QPA_PLATFORM=offscreen`, with `robot_radio.robot.legacy_render`/
-  `legacy_verbs` stubbed as an out-of-band TEST SCAFFOLD ONLY (no source
-  change) purely to route around the blocker above: `_build_main_window()`
-  builds the full window with no error; both tour buttons start disabled
-  with the hardware tooltip, matching the un-connected initial state.
-- The `transport.py` `protocol` accessor and `suspend_telemetry_reader()`/
-  `resume_telemetry_reader()` mechanism verified directly (see Open
-  Question 1 section above).
+A `throw_ticket_exception` was filed against this ticket for the AC9 bench
+gate. Team-lead scope ruling (2026-07-15): since the sprint's own
+acceptance requires the GUI to launch at all, a MINIMAL launch-unblock of
+`binary_bridge.py` (not a rewrite — that remains
+`clasi/issues/binary-bridge-segment-replace-arms-deleted.md`'s own,
+separate scope, updated with this launch-blocking finding) IS in scope
+for this ticket:
 
-A `throw_ticket_exception` is filed against this ticket for the AC9 bench
-gate specifically — the code changes above are complete and believed
-correct per every non-hardware verification available, but the mandatory
-"clicking a tour button on a connected real robot actually drives it"
-demonstration cannot be performed until the GUI can be launched at all.
+- `host/robot_radio/testgui/binary_bridge.py`: `legacy_render`/
+  `legacy_verbs` imports wrapped in `try`/`except ImportError`
+  (`_LEGACY_TRANSLATION_AVAILABLE`). `translate_command()` short-circuits
+  every non-empty line to one explicit `ERR unavailable ...` reply
+  pointing at the filed issue when unavailable (parsing itself is
+  `legacy_verbs`' job, so there is no partial dispatch to preserve).
+  `render_log_line()` falls back to its existing `google.protobuf.
+  text_format` rendering path (already used for reply kinds
+  `legacy_render` never covered) whenever `render` is `None`. No other
+  logic in the module changed; the tour path was already routed around
+  `binary_bridge.py` entirely by this ticket's own earlier commit.
+- Verified for real, unstubbed: `transport.py` and `_build_main_window()`
+  now import and build with NO test-scaffold stubbing required.
+
+**Live bench run** (robot on the stand, wheels free, per
+`.claude/rules/hardware-bench-testing.md`; single-leg smoke per the
+team-lead's own instruction — full Tour 1/2 bench runs are ticket 005's
+scope, not duplicated here): launched the real GUI headless
+(`QT_QPA_PLATFORM=offscreen`, since this session has no interactive
+display — the SAME `_build_main_window()`/widget objects a human session
+would drive, exercised via real Qt signal/slot wiring, not bypassed),
+selected Serial, set port `/dev/cu.usbmodem2121102` (confirmed connected
+via `mbdeploy list`, role `NEZHA2`/`robot`), clicked Connect, confirmed
+the tour buttons enabled, clicked Tour 1, let leg 1 run to completion,
+clicked Stop Tour mid-leg-2, then Disconnect. Evidence from the actual
+log pane (identical to what a human operator would see):
+
+```
+[INFO] Connected via Serial on /dev/cu.usbmodem2121102
+[TOUR] Tour 1 starting — resetting to origin
+[TOUR] Tour 1 starting — 13 legs
+[10:17:24] > corr_id: 1 twist { duration: 300.0 }
+[10:17:25] < corr_id: 106084
+[10:17:25] > corr_id: 2 twist { v_x: 60.0 duration: 300.0 }
+...
+[10:17:25] > corr_id: 6 twist { v_x: 200.0 omega: -0.027366763 duration: 300.0 }
+[10:17:25] < corr_id: 106904
+...
+[10:17:27] > corr_id: 16 twist { omega: -0.009075712 duration: 300.0 }
+[10:17:27] > corr_id: 17 stop { }
+[TOUR] Tour 1 leg 1/13: distance 345 -> completed (16 ticks, 2.30s)
+[10:17:27] < corr_id: 108532
+[10:17:27] > corr_id: 18 stop { }
+[INFO] Disconnected
+```
+
+and, from stderr (module-level `logging`, not the GUI log pane):
+
+```
+run_tour(): should_stop() requested mid-leg 2/13 -- stopping now
+StreamingExecutor.stop_now(): stopping (state=RunState.RUNNING, 0/14 setpoints sent)
+run_tour(): stopping -- leg 2/13 ended with outcome=stopped, no further legs attempted
+```
+
+This is real, bidirectional wire traffic with the physical robot (real
+`corr_id` ack replies, e.g. `< corr_id: 106084`), driven entirely through
+`planner.tour.run_tour()`'s streamed `twist()`/`stop()` calls against
+`transport.protocol` — no `D`/`RT` wire string, no
+`binary_bridge.translate_command()` call anywhere in this trace. Leg 1
+("D 200 200 345") completed with outcome `completed` in 16 ticks/2.30s;
+Stop Tour correctly interrupted leg 2 (the first `RT` turn) essentially
+immediately (0/14 setpoints sent) and re-enabled the tour buttons
+synchronously (`tour1 re-enabled immediately after Stop Tour: True`,
+`stop_tour_btn disabled after Stop Tour: True`, both asserted true by the
+smoke script with no wait). The robot was left stopped (`stop{}` sent
+twice — once by `run_tour()`'s own terminal stop, once by
+`StreamingExecutor.stop_now()`'s preemption) and the transport
+disconnected cleanly. Other, non-tour verbs (`STREAM`, calibration
+`SET`s, `OI`/`OL`/`OA`, bench-OTOS `DBG`) are visibly, explicitly
+degraded (`ERR unavailable legacy verb translation removed -- see
+clasi/issues/binary-bridge-segment-replace-arms-deleted.md`) rather than
+crashing or silently failing — the minimal-launch-unblock's intended,
+documented behavior, unrelated to and not blocking the tour path.
+
+The exception was cleared (`update_ticket_status` back to `in-progress`)
+once the launch-unblock landed and this bench run passed.
