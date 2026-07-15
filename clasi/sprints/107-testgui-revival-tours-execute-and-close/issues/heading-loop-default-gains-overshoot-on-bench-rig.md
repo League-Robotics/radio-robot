@@ -1,8 +1,9 @@
 ---
-status: pending
-sprint: '106'
+status: in-progress
+sprint: '107'
 tickets:
 - 106-006
+- 107-001
 ---
 
 # PlannerParams' default heading-loop gains overshoot on the bench rig's turn leg

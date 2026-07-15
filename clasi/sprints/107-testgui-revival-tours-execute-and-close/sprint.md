@@ -1,10 +1,12 @@
 ---
-id: "107"
-title: "TestGUI revival: tours execute and close"
-status: roadmap
+id: '107'
+title: 'TestGUI revival: tours execute and close'
+status: ticketing
 branch: sprint/107-testgui-revival-tours-execute-and-close
 use-cases: []
-issues: []
+issues:
+- executor-fault-check-needs-baseline-exclusion.md
+- heading-loop-default-gains-overshoot-on-bench-rig.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -133,7 +135,23 @@ Design deferred to this sprint's own detail-mode planning pass. Steer:
 
 ## Test Strategy
 
-(Deferred to detail-mode planning for this sprint.)
+- **Unit** (`tests/unit/`, no hardware/sim): `planner/executor.py`'s
+  baseline-relative fault handling (001), `planner/tour.py`'s geometry
+  parser + closure computation against a `FakeTransport` double (002).
+- **Headless GUI** (`tests/testgui/`, re-added to `pyproject.toml`'s
+  `testpaths` by ticket 004): tour-button control flow, Stop Tour
+  reactivation, against a `FakeTransport`-backed harness — no dependency
+  on the deleted `tests/_infra/sim` ctypes library.
+- **Bench** (`.claude/rules/hardware-bench-testing.md`, real hardware on
+  the stand): both tours run end-to-end via the TestGUI (003) and via a
+  dedicated bench script capturing per-leg traces and tour closure (005),
+  2-3 repeat runs per tour to characterize run-to-run variance before a
+  closure tolerance is finalized.
+- **Notebook** (006): executes end-to-end, reviewed against the `dataviz`
+  skill's own guidance for chart quality.
+- Sim-mode tour coverage is explicitly OUT of scope this sprint (see
+  Architecture Notes / architecture-update.md Decision 1) — a follow-up
+  issue is filed, not built here.
 
 ## Architecture Notes
 
@@ -152,13 +170,35 @@ written when this sprint is detailed.
 
 Before tickets can be created, all of the following must be true:
 
-- [ ] Sprint planning documents are complete (sprint.md, use cases, architecture)
-- [ ] Architecture review passed
-- [ ] Stakeholder has approved the sprint plan
+- [x] Sprint planning documents are complete (sprint.md, use cases, architecture)
+- [x] Architecture review passed
+- [x] Stakeholder has approved the sprint plan (auto-approved under the
+      stakeholder's standing 2026-07-14 power-through directive)
 
 ## Tickets
 
-| # | Title | Depends On |
-|---|-------|------------|
+| # | Title | Use Cases | Depends On |
+|---|-------|-----------|------------|
+| 001 | Planner production hardening: fault-check baseline exclusion + heading-gain retune | SUC-031, SUC-032 | — |
+| 002 | Tour driver: planner/tour.py owns tour geometry, chains legs through the executor, closure bookkeeping | SUC-033 | 001 |
+| 003 | TestGUI rewire: transport accessor + _TourRunner on the live twist surface, real-hardware-only scope | SUC-034 | 002 |
+| 004 | Tour test suite rewrite: FakeTransport-backed, re-added to testpaths | SUC-035 | 002, 003 |
+| 005 | Bench tour runs + trace capture | SUC-036 | 003 |
+| 006 | Deliverable notebook: accel/decel and tour-closure charts | SUC-037 | 005 |
 
 Tickets execute serially in the order listed.
+
+## Follow-up Issues Filed
+
+Out of this sprint's own scope, filed for a future sprint:
+
+- `clasi/issues/sim-api-ctypes-abi-for-sim-mode-tours.md` — a new ctypes C
+  ABI over `tests/sim/support/sim_api.h`'s `SimApi` is needed before
+  TestGUI tours (or `SimTransport` generally) can run in Sim mode; the
+  backing library this sprint would have used was deleted wholesale at
+  sprint 102 ticket 005.
+- `clasi/issues/binary-bridge-segment-replace-arms-deleted.md` —
+  `testgui/binary_bridge.py`'s `R`/`TURN`/`G` translation (and the manual
+  `D`/`RT` GUI command rows, as opposed to the tour buttons this sprint
+  fixed) still targets `segment`/`replace` envelope arms that no longer
+  exist in `protos/envelope.proto` at all.
