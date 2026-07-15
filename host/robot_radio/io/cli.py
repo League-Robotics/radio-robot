@@ -1433,6 +1433,26 @@ def main():
 
     sub = parser.add_subparsers(dest="command", help="Available commands")
 
+    p_repl = sub.add_parser(
+        "repl", aliases=["run", "exec"],
+        help="Run commands over one persistent connection: from the argument "
+             "list, piped stdin, or an interactive prompt. Optional "
+             "telemetry->JSONL recording.",
+        description="Execute rogo commands over a single persistent binary "
+                    "connection.\n"
+                    "  rogo repl \"twist 150 0 1000\" stop   # argument list\n"
+                    "  cat run.rogo | rogo repl               # piped stdin\n"
+                    "  rogo repl                              # interactive\n"
+                    "Add --record FILE.jsonl to log every telemetry frame as "
+                    "JSON lines.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_repl.add_argument("commands", nargs="*",
+                        help="Commands to run (each a full command line); if "
+                             "omitted, read from stdin")
+    p_repl.add_argument("--record", default=None, metavar="FILE.jsonl",
+                        help="Record every telemetry frame to this JSON-lines file")
+
     sub.add_parser("ports", help="List available serial ports")
     sub.add_parser("hello", help="Probe device (send HELLO, print announcement)")
 
@@ -1759,6 +1779,10 @@ def main():
     if args.command is None:
         parser.print_help()
         sys.exit(1)
+
+    if args.command in ("repl", "run", "exec"):
+        from robot_radio.io import repl as _repl
+        sys.exit(_repl.run(args, _verbose))
 
     if args.command == "sync":
         sync_commands = {

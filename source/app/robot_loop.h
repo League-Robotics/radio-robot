@@ -99,6 +99,19 @@ class RobotLoop {
   template <typename Body>
   void runAndWait(uint32_t gap, Body body);  // [ms]
 
+
+
+  // Update tlm_ from bus_/motorL_/motorR_/ comms_. 
+  void updateTlm();
+
+  // Dispatches the <=1 decoded command in cmd to its own handler by
+  // cmd_kind (NONE is a no-op). Each handler applies its command and acks
+  // via the telemetry ack ring.
+  void processMessage(const Cmd& cmd);
+  void handleTwist(const msg::CommandEnvelope& env);
+  void handleConfig(const msg::CommandEnvelope& env);
+  void handleStop(const msg::CommandEnvelope& env);
+
   Devices::I2CBus& bus_;
   Devices::NezhaMotor& motorL_;
   Devices::NezhaMotor& motorR_;

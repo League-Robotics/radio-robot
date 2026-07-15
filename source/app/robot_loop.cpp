@@ -106,6 +106,115 @@ void RobotLoop::runAndWait(uint32_t gap, Body body) {  // [ms]
   sleepUntil(mark, gap);
 }
 
+
+void RobotLoop::updateTlm() {
+
+  frame_.mode = driving_ ? msg::DriveMode::VELOCITY : msg::DriveMode::IDLE;
+  frame_.hasEnc = true;
+  frame_.encLeft = motorL_.position();
+  frame_.encRight = motorR_.position();
+  frame_.hasVel = true;
+  frame_.velLeft = motorL_.velocity();
+  frame_.velRight = motorR_.velocity();
+  frame_.hasPose = true;
+  frame_.active = driving_;
+  frame_.connLeft = motorL_.connected();
+  frame_.connRight = motorR_.connected();
+
+  tlm_.setFault(kFaultI2CSafetyNet, bus_.clearanceSafetyNetCount() > 0);
+  tlm_.setFault(kFaultWedgeLatch, motorL_.wedged() || motorR_.wedged());
+  tlm_.setFault(kFaultCommsMalformed, comms_.malformedCount() > 0);
+  tlm_.setFrame(frame_);
+}
+
+void RobotLoop::handleTwist(const msg::CommandEnvelope& env) {
+  drive_.setTwist(env.cmd.twist.v_x, env.cmd.twist.omega);
+  deadman_.arm(env.cmd.twist.duration);
+  driving_ = true;
+  tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
+}
+
+// ConfigDelta runtime application (106-002/SUC-025, resolving
+// architecture-update.md (103) Step 7 Open Question 3 for the ONE patch
+// type this sprint scopes -- architecture-update.md (106) Decision 2): a
+// MotorConfigPatch is live-applied below; every other patch kind
+// (DRIVETRAIN/PLANNER/WATCHDOG/NONE) stays ERR_UNIMPLEMENTED, deliberately
+// out of scope (DrivetrainConfigPatch has no on-robot fusion consumer this
+// sprint; PlannerConfigPatch's heading_kp/heading_kd target
+// Motion::SegmentExecutor, deleted post-102).
+void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
+  if (env.cmd.config.patch_kind != msg::ConfigDelta::PatchKind::MOTOR) {
+    tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
+              static_cast<uint32_t>(msg::ErrCode::ERR_UNIMPLEMENTED));
+    return;
+  }
+
+  const msg::MotorConfigPatch& patch = env.cmd.config.patch.motor;
+
+  // Merge each motor's OWN current gains against whatever wire fields are
+  // PRESENT (config.proto's Opt<T>-presence convention) -- NOT a blanket
+  // mirror of one motor's gains onto the other, since the two leaves'
+  // calibration can legitimately differ.
+  Devices::Gains gainsL = motorL_.gains();
+  Devices::Gains gainsR = motorR_.gains();
+  if (patch.kp.has) { gainsL.kp = patch.kp.val; gainsR.kp = patch.kp.val; }
+  if (patch.ki.has) { gainsL.ki = patch.ki.val; gainsR.ki = patch.ki.val; }
+  if (patch.kff.has) { gainsL.kff = patch.kff.val; gainsR.kff = patch.kff.val; }
+  if (patch.i_max.has) { gainsL.iMax = patch.i_max.val; gainsR.iMax = patch.i_max.val; }
+  if (patch.kaw.has) { gainsL.kaw = patch.kaw.val; gainsR.kaw = patch.kaw.val; }
+
+  // travel_calib is side-selected (config.proto's own MotorConfigPatch.side
+  // comment) -- applies to exactly one leaf.
+  Devices::Opt<float> travelCalibL;
+  Devices::Opt<float> travelCalibR;
+  if (patch.travel_calib.has) {
+    if (patch.side == msg::BoundMotorSide::LEFT) {
+      travelCalibL.has = true;
+      travelCalibL.val = patch.travel_calib.val;
+    } else {
+      travelCalibR.has = true;
+      travelCalibR.val = patch.travel_calib.val;
+    }
+  }
+
+  motorL_.applyGains(gainsL, travelCalibL);
+  motorR_.applyGains(gainsR, travelCalibR);
+
+  tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
+}
+
+void RobotLoop::handleStop(const msg::CommandEnvelope& env) {
+  drive_.stop();
+  deadman_.disarm();
+  driving_ = false;
+  tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
+}
+
+// Dispatches the <=1 decoded command in cmd to its own handler by
+// cmd_kind. `cmd` is a fresh, cycle-local variable (populated by at most
+// one comms_.pump() call this cycle), so reading it here bounds dispatch
+// to at most once per cycle by construction -- no separate "take" flag is
+// needed.
+void RobotLoop::processMessage(const Cmd& cmd) {
+  msg::CommandEnvelope::CmdKind kind = (cmd.status == CmdStatus::kDecoded)
+      ? cmd.env.cmd_kind
+      : msg::CommandEnvelope::CmdKind::NONE;
+  switch (kind) {
+    case msg::CommandEnvelope::CmdKind::TWIST:
+      handleTwist(cmd.env);
+      break;
+    case msg::CommandEnvelope::CmdKind::CONFIG:
+      handleConfig(cmd.env);
+      break;
+    case msg::CommandEnvelope::CmdKind::STOP:
+      handleStop(cmd.env);
+      break;
+    case msg::CommandEnvelope::CmdKind::NONE:
+    default:
+      break;
+  }
+}
+
 [[noreturn]] void RobotLoop::run() {
   boot();
   for (;;) {
@@ -148,10 +257,13 @@ void RobotLoop::cycle() {
   uint32_t cycleStart = markTime();  // [ms] pace anchor
 
   Cmd cmd;
+
   motorL_.requestSample();  // 0x46 write (brick holds ONE pending read)
+
   runAndWait(kSettle, [&] {           // >=4ms: L encoder settling, meanwhile --
     comms_.pump(cmd);                 //   drain RX, decode <=1 frame into cmd
   });
+
   motorL_.tick(clock_.nowMicros());   // collect -> velocity PID -> armored duty write
 
   runAndWait(kClear, [&] {  // >=4ms: brick clears L's duty write, meanwhile --
@@ -159,101 +271,20 @@ void RobotLoop::cycle() {
     // persistent `frame_` (pose/otos were last updated at the END of the
     // PREVIOUS cycle, below -- still the frame's own "last staged
     // snapshot" contract) and emit.
-    frame_.mode = driving_ ? msg::DriveMode::VELOCITY : msg::DriveMode::IDLE;
-    frame_.hasEnc = true;
-    frame_.encLeft = motorL_.position();
-    frame_.encRight = motorR_.position();
-    frame_.hasVel = true;
-    frame_.velLeft = motorL_.velocity();
-    frame_.velRight = motorR_.velocity();
-    frame_.hasPose = true;
-    frame_.active = driving_;
-    frame_.connLeft = motorL_.connected();
-    frame_.connRight = motorR_.connected();
 
-    tlm_.setFault(kFaultI2CSafetyNet, bus_.clearanceSafetyNetCount() > 0);
-    tlm_.setFault(kFaultWedgeLatch, motorL_.wedged() || motorR_.wedged());
-    tlm_.setFault(kFaultCommsMalformed, comms_.malformedCount() > 0);
-
-    tlm_.setFrame(frame_);
+    updateTlm();
     tlm_.emit(cycleStart);
   });
 
   motorR_.requestSample();
+
   runAndWait(kSettle, [&] {  // >=4ms: R encoder settling, meanwhile --
     // Apply <=1 decoded command; every path that applies one acks via the
     // telemetry ack ring. `cmd` is a fresh, cycle-local variable (declared
     // above, populated by at most one comms_.pump() call this cycle), so
     // reading it here bounds dispatch to at most once per cycle by
     // construction -- no separate "take" flag is needed.
-    msg::CommandEnvelope::CmdKind kind = (cmd.status == CmdStatus::kDecoded)
-        ? cmd.env.cmd_kind
-        : msg::CommandEnvelope::CmdKind::NONE;
-    switch (kind) {
-      case msg::CommandEnvelope::CmdKind::TWIST:
-        drive_.setTwist(cmd.env.cmd.twist.v_x, cmd.env.cmd.twist.omega);
-        deadman_.arm(cmd.env.cmd.twist.duration);
-        driving_ = true;
-        tlm_.ack(cmd.env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
-        break;
-      case msg::CommandEnvelope::CmdKind::CONFIG:
-        // ConfigDelta runtime application (106-002/SUC-025, resolving
-        // architecture-update.md (103) Step 7 Open Question 3 for the ONE
-        // patch type this sprint scopes -- architecture-update.md (106)
-        // Decision 2): a MotorConfigPatch is live-applied below; every
-        // other patch kind (DRIVETRAIN/PLANNER/WATCHDOG/NONE) stays
-        // ERR_UNIMPLEMENTED, deliberately out of scope (DrivetrainConfigPatch
-        // has no on-robot fusion consumer this sprint; PlannerConfigPatch's
-        // heading_kp/heading_kd target Motion::SegmentExecutor, deleted
-        // post-102).
-        if (cmd.env.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::MOTOR) {
-          const msg::MotorConfigPatch& patch = cmd.env.cmd.config.patch.motor;
-
-          // Merge each motor's OWN current gains against whatever wire
-          // fields are PRESENT (config.proto's Opt<T>-presence convention)
-          // -- NOT a blanket mirror of one motor's gains onto the other,
-          // since the two leaves' calibration can legitimately differ.
-          Devices::Gains gainsL = motorL_.gains();
-          Devices::Gains gainsR = motorR_.gains();
-          if (patch.kp.has) { gainsL.kp = patch.kp.val; gainsR.kp = patch.kp.val; }
-          if (patch.ki.has) { gainsL.ki = patch.ki.val; gainsR.ki = patch.ki.val; }
-          if (patch.kff.has) { gainsL.kff = patch.kff.val; gainsR.kff = patch.kff.val; }
-          if (patch.i_max.has) { gainsL.iMax = patch.i_max.val; gainsR.iMax = patch.i_max.val; }
-          if (patch.kaw.has) { gainsL.kaw = patch.kaw.val; gainsR.kaw = patch.kaw.val; }
-
-          // travel_calib is side-selected (config.proto's own
-          // MotorConfigPatch.side comment) -- applies to exactly one leaf.
-          Devices::Opt<float> travelCalibL;
-          Devices::Opt<float> travelCalibR;
-          if (patch.travel_calib.has) {
-            if (patch.side == msg::BoundMotorSide::LEFT) {
-              travelCalibL.has = true;
-              travelCalibL.val = patch.travel_calib.val;
-            } else {
-              travelCalibR.has = true;
-              travelCalibR.val = patch.travel_calib.val;
-            }
-          }
-
-          motorL_.applyGains(gainsL, travelCalibL);
-          motorR_.applyGains(gainsR, travelCalibR);
-
-          tlm_.ack(cmd.env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
-        } else {
-          tlm_.ack(cmd.env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
-                    static_cast<uint32_t>(msg::ErrCode::ERR_UNIMPLEMENTED));
-        }
-        break;
-      case msg::CommandEnvelope::CmdKind::STOP:
-        drive_.stop();
-        deadman_.disarm();
-        driving_ = false;
-        tlm_.ack(cmd.env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
-        break;
-      case msg::CommandEnvelope::CmdKind::NONE:
-      default:
-        break;
-    }
+    processMessage(cmd);
 
     bool expired = deadman_.expired();
     tlm_.setEvent(kEventDeadmanExpired, expired);
@@ -264,6 +295,7 @@ void RobotLoop::cycle() {
 
     drive_.tick();  // twist -> wheel targets (R consumes them below)
   });
+  
   motorR_.tick(clock_.nowMicros());
 
   // Final (perception + odometry + pace) block -- the schedule's 4th
