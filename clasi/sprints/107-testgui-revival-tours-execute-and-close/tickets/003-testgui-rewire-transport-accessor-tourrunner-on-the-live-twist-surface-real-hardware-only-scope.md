@@ -2,7 +2,7 @@
 id: '003'
 title: 'TestGUI rewire: transport accessor + _TourRunner on the live twist surface,
   real-hardware-only scope'
-status: in-progress
+status: exception
 use-cases:
 - SUC-034
 depends-on:
@@ -10,6 +10,57 @@ depends-on:
 github-issue: ''
 issue: ''
 completes_issue: true
+exception:
+  thrown_by: programmer
+  thrown_at: '2026-07-15T17:08:50.249871+00:00'
+  attempted: 'Implemented all of ticket 003''s own code scope: _HardwareTransport.protocol
+    (transport.py), _TourRunner.run() rewired onto planner.tour.run_tour() with parse_tour()/on_leg/row_callback/should_stop,
+    removal of _wait_for_idle()/SPINUP_S/POLL_S/SNAP_REPLY_TIMEOUT_S/MOVE_TIMEOUT_S/STREAM_FRESH_S
+    (grep-verified no remaining callers repo-wide), Sim-only tour-button gating in
+    _on_connect() mirroring operations.py''s own is_sim_transport() pattern, and investigated+resolved
+    the telemetry-drain competition (Open Question 1) by adding suspend_telemetry_reader()/resume_telemetry_reader()
+    to _HardwareTransport so a tour becomes the shared binary-TLM-queue''s sole consumer
+    and re-feeds frames through the existing on_telemetry Qt-bridge path. Verified
+    via: uv run python -m pytest (703 passed), ast.parse on both changed files, an
+    isolated (non-hardware) threading test proving suspend/resume actually pauses/resumes
+    the reader loop''s queue drain, and a QT_QPA_PLATFORM=offscreen headless build
+    of the full window (with legacy_render/legacy_verbs stubbed as a throwaway, out-of-band
+    TEST SCAFFOLD only, no source change) confirming _build_main_window() constructs
+    with no error and tour buttons start correctly disabled/tooltipped. Then attempted
+    the ticket''s own mandated step: `just testgui` / `python -m robot_radio.testgui`
+    for real, unstubbed -- it crashes immediately on import, before any window appears,
+    with ImportError: cannot import name ''legacy_render'' from robot_radio.robot,
+    raised from testgui/binary_bridge.py''s own module-level `from robot_radio.robot
+    import legacy_render as render` (transport.py imports binary_bridge unconditionally
+    at its own module level, so this blocks transport.py, and therefore all of __main__.py,
+    from importing at all -- unrelated to whether the tour path itself still calls
+    binary_bridge, which it no longer does).'
+  conflict: 'architecture-update.md Step 7 Finding 1 explicitly scoped fixing testgui/binary_bridge.py
+    OUT of sprint 107 ("This sprint does not claim to fix binary_bridge.py generally
+    -- only the tour path is rerouted around it"), on the basis that its D/RT/R/TURN/G
+    translators target a segment/replace envelope arm the current 3-arm (twist/config/stop)
+    protobuf schema no longer has -- a semantic dead-arm problem. That finding did
+    not account for a more severe, separate fact: commit 129cbcb3 (feat(104-002):
+    delete retired legacy-translator/rogo-proxy modules, landed ~6h before this sprint
+    was created) deleted robot/legacy_render.py and robot/legacy_verbs.py WHOLESALE
+    with no replacement, and binary_bridge.py (never updated to match) still imports
+    both at module level and depends on ~800 lines of their now-deleted surface throughout
+    (tokenizing, one-arm verb dispatch, all reply rendering). The practical effect:
+    binary_bridge.py cannot be imported AT ALL right now, which means transport.py
+    cannot be imported, which means the entire TestGUI cannot launch -- not a narrower
+    "some verbs behave wrong" problem the architecture doc anticipated, but "the GUI
+    does not start," which makes AC9''s mandatory real-hardware demonstration ("clicking
+    a tour button on a connected real robot actually drives it") impossible to perform
+    as specified, through no defect in this ticket''s own (correctly scoped, binary_bridge-free)
+    tour-path implementation. Properly fixing binary_bridge.py is a substantial, separate
+    rewrite against the current 3-arm wire (comparable in scope to the ~425-line host/robot_radio/io/repl.py
+    the stakeholder is visibly building out-of-process, uncommitted, in this same
+    checkout right now, as an apparent from-scratch replacement for exactly this legacy-translation
+    gap) -- well outside this ticket''s own Files-to-Modify list (transport.py, __main__.py)
+    and directly overlapping that concurrent work, so it was deliberately not attempted
+    here without a decision from the team-lead/stakeholder on how to proceed (narrow
+    unblock now vs. defer bench verification vs. coordinate with the repl.py effort).'
+  surface: user-visible
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
