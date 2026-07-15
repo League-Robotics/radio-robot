@@ -245,16 +245,29 @@ def main() -> int:
             return 2
         print(f"  connected: mode={info.get('mode')}")
         proto = NezhaProtocol(conn)
-        time.sleep(1.0)  # let boot-time telemetry queue drain before the first step
+        time.sleep(1.5)  # let boot-time telemetry queue drain before the first command
         proto.read_pending_binary_tlm_frames()
 
         if gains:
             print(f"  applying gains live (no reflash): {gains}")
-            corr_id = proto.config(**gains)
-            ack = dev_wait_ack(proto, corr_id)
+            # Retry the config() SEND itself, not just the ack wait -- the
+            # direct-USB CDC link is a characterized, pre-existing bench
+            # gotcha (occasional dropped outbound bytes, not just dropped
+            # replies -- see run_step()'s own retry rationale). A caller
+            # that only retries wait_for_ack() can't recover from a
+            # genuinely dropped config() send.
+            ack = None
+            for attempt in range(3):
+                corr_id = proto.config(**gains)
+                ack = dev_wait_ack(proto, corr_id)
+                if ack is not None and ack.ok:
+                    break
+                print(f"    (retry {attempt + 1}/3: config() did not ack OK -- re-sending)")
+                time.sleep(0.3)
             print(f"    config() ack: {ack}")
             if ack is None or not ack.ok:
-                print("  WARNING: config() did not ack OK -- gains may not have applied")
+                print("  ERROR: config() never acked OK after 3 attempts -- aborting this trial")
+                return 3
         else:
             print("  --no-config: characterizing whatever gains are already live")
 
@@ -267,6 +280,19 @@ def main() -> int:
         for target in speeds:
             print(f"\n  --- step target={target:g} mm/s ---")
             time.sleep(args.settle)
+            # Confirm a genuine standstill before the next step -- otherwise
+            # a not-yet-decayed tail from the PREVIOUS step can fool the
+            # next step's own "moved" retry-break check (run_step()) into
+            # accepting a dropped twist() as if it landed. Bounded: gives up
+            # and proceeds anyway after ~1s so a persistent nonzero reading
+            # (e.g. encoder noise) can't hang the sweep.
+            stopped_deadline = time.monotonic() + 1.0
+            while time.monotonic() < stopped_deadline:
+                settle_frames = proto.read_binary_tlm_frames(120)
+                still_moving = any(f.vel is not None and (abs(f.vel[0]) > 5 or abs(f.vel[1]) > 5)
+                                    for f in settle_frames)
+                if not still_moving:
+                    break
             result = run_step(proto, target, args.step_duration, args.capture)
             results.append(result)
             for t_ms, vl, vr in result["trace"]:

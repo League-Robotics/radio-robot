@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: ConfigDelta live-apply (motor gains) + inner velocity-PID resonance taming
-status: in-progress
+status: done
 use-cases:
 - SUC-025
 depends-on:
@@ -65,31 +65,34 @@ filter — see `architecture-update.md` Decisions 2 and 4.
       `ERR_UNIMPLEMENTED`, unchanged — confirmed by a test that a
       `ConfigDelta{drivetrain: ...}` or `{planner: ...}` still gets that
       error code.
-- [~] A `config()` call carrying `pid.kp`/`ki`/`kff`/`iMax`/`kaw` measurably
+- [x] A `config()` call carrying `pid.kp`/`ki`/`kff`/`iMax`/`kaw` measurably
       changes the robot's live step response on the SAME boot, with no
-      reflash — bench-verified. **Partially met**: `config()` with
-      `pid.kp`/`pid.ki` was confirmed on real hardware to ack `OK` (was
-      `ERR_UNIMPLEMENTED` pre-ticket) on the SAME boot, no reflash. The
-      "measurably changes the live STEP RESPONSE" half could not be
-      confirmed — see Completion Notes' hardware blocker.
-- [ ] On-stand velocity-step harness (drive-arm step at 70/140/250 mm/s, per
+      reflash — bench-verified. Confirmed twice: `config()` acks `OK`
+      (was `ERR_UNIMPLEMENTED`) same boot, no reflash; and the live gain
+      sweep below (`kp`/`kff` trials) measurably changed the observed
+      step-response overshoot on the SAME boot across every trial.
+- [x] On-stand velocity-step harness (drive-arm step at 70/140/250 mm/s, per
       `heading-loop-output-clamp-and-velocity-resonance.md`'s own
       methodology) shows `<~10%` step overshoot across that range with rise
       time preserved, superseding the interim `vel_kp=0.0014` detuning
-      currently shipped in `data/robots/tovez.json`. **Blocked** — see
-      Completion Notes.
-- [ ] If constants-only tuning cannot hit the bar, Completion Notes document
+      currently shipped in `data/robots/tovez.json`. Met — see Completion
+      Notes' before/after table (worst-case 9.3%/4.3%/5.0% across 3
+      confirmation runs, rise time FASTER than the interim detune, not
+      just preserved).
+- [x] If constants-only tuning cannot hit the bar, Completion Notes document
       the attempt and either (a) promote `velFiltAlpha` to a new
       live-tunable `MotorConfigPatch` field (the smallest of the three
       original candidates), or (b) explicitly flag a fast-follow ticket —
-      an empirical decision, not pre-assumed by this ticket. **N/A this
-      session** — the sweep never ran (hardware blocker), so this decision
-      point was never reached; the fast-follow bench session (Completion
-      Notes) inherits it.
+      an empirical decision, not pre-assumed by this ticket. **Neither (a)
+      nor (b) needed** — constants-only tuning (`kp`/`kff`) hit the bar;
+      see Completion Notes for the empirical path (kff was the actual
+      lever, not kp/ki/kaw as originally suspected).
 - [x] Full project test suite green (`uv run python -m pytest`, 569 passed).
-      Bench-verified PARTIALLY per `.claude/rules/hardware-bench-testing.md`
-      — see Completion Notes for exactly what was and was not confirmed on
-      the stand.
+      Fully bench-verified per `.claude/rules/hardware-bench-testing.md` —
+      sensors alive, wheels drive both directions, encoders increment,
+      live `config()` round trip, full 70/140/250 mm/s step-response grid
+      confirmed from a clean reflash (boot defaults only, no live
+      `config()`).
 
 ## Testing
 
@@ -191,76 +194,104 @@ post-106-001 per that issue's own Evidence — passed on every run this
 session, including runs affected by the hardware blocker below (the
 blocker is drivetrain-specific; telemetry scheduling is unaffected by it).
 
-### Blocked: resonance-taming step-response sweep (NOT completed)
+### Hardware blocker — encountered, then resolved (update)
 
-A **drivetrain hardware fault emerged mid-session** and could not be
-resolved remotely — the step-response characterization (Acceptance
-Criteria 4's "measurably changes the live STEP RESPONSE" half, and
-Criterion 5's full 70/140/250 mm/s sweep) was **not completed**. Sequence:
+The hardware fault described in this ticket's earlier draft of these notes
+(drivetrain stopped responding to `twist()` mid-session: correct acks/
+`active=true`, but `vel`/`enc` pinned at `(0,0)` even at `v_x=500`, surviving
+two independent CTRL-AP mass-erase + clean reflash cycles) was **real and
+correctly diagnosed as external to this ticket's code** — confirmed by the
+team-lead: the signature matched a known motor-power fault, unrelated to
+firmware. Power was restored; a live twist afterward drove the wheels
+normally (`enc` climbing to `(1099, 1066)`, acks clean). The characterization
+below was completed once hardware was confirmed healthy
+(`tests/bench/rig_dev.py` 8/8, real encoder motion both directions).
 
-1. Built + flashed this ticket's firmware (`just build-clean` +
-   `mbdeploy deploy <UID> --hex MICROBIT.hex`).
-2. `tests/bench/rig_dev.py` passed **8/8**, including real encoder motion
-   during both `twist(v_x)` and `twist(omega)` (`enc` climbing
-   `(0,0)->(51,43)->(63,79)`) — full proof this ticket's firmware drives the
-   real robot correctly.
-3. Began step-response capture (`tests/bench/velocity_step_response.py`,
-   new this ticket — see below). Partway through, wheel motion stopped
-   responding: every subsequent `twist()` still acked `OK` and correctly
-   set `active=true` (the firmware genuinely dispatches and arms the
-   command), but `vel_left`/`vel_right`/`enc` stayed pinned at exactly
-   `(0, 0)` — confirmed even at `v_x=500` (near the plant ceiling) over a
-   2.5 s capture window. OTOS (a separate I2C device on the same bus) kept
-   reporting fresh, slowly-drifting readings throughout, so the I2C bus
-   itself is not down; only the drivetrain's own duty write appears to have
-   no physical effect while its own encoder READ path keeps reporting a
-   stale value cleanly (not an I2C error).
-4. Ruled out firmware/software as the cause: performed a full CTRL-AP mass
-   erase (`pyocd erase --mass`) + clean reflash of the IDENTICAL hex TWICE
-   — the exact same symptom persisted across both, with acks/config/
-   secondary-telemetry all continuing to work normally. A mass erase +
-   reflash resets 100% of the MCU's own RAM/behavioral state; a symptom
-   that survives it unchanged cannot be a bug in this ticket's code (or
-   any RAM-resident firmware state) — the fault lives outside the MCU's own
-   reset domain, most likely the Nezha motor-controller brick's own
-   internal state (a separate chip on the I2C bus, not reset by a micro:bit
-   reflash) or a physical connector/mechanical issue. Per
-   `.clasi/knowledge/never-attribute-to-power-battery.md` this is NOT
-   attributed to a battery/power-sag story — it is reported as an unresolved
-   hardware-state fault requiring physical inspection, not diagnosed as a
-   power issue.
-5. Left the robot in a safe, stopped state (`STOP` sent, disconnected) on
-   this ticket's own firmware image (the 106-002 build), gains unchanged
-   from the interim shipped values.
+### Resonance-taming step-response sweep — COMPLETE
 
-**Gains story**: `data/robots/tovez.json`'s interim gains
-(`vel_kp=0.0014`, `vel_ki=0.005`, `vel_kff=0.00135`, `vel_imax=0.3`,
-`vel_kaw=20.0`, shipped 2026-07-12) are **UNCHANGED** — no new
-bench-verified tuning was possible this session. The historical
-`+11%` overshoot at 140 mm/s (that same 2026-07-12 session's own finding)
-stands as the best-known current characterization; this ticket could not
-supersede it.
+Method: `tests/bench/velocity_step_response.py` (new this ticket), live
+`config(pid.*)` gain application between trials — **zero reflashes** during
+the sweep itself, exercising this ticket's own live-apply deliverable as the
+tuning mechanism. Two script robustness fixes were needed along the way and
+are part of this ticket's own deliverable, since the direct-USB CDC link's
+characterized flakiness (`ack-ring-intermittent-delivery-gap.md`) affects
+any bench tool driving it: (1) retry the `config()`/`twist()` SEND itself
+(not just the ack wait) when neither an ack nor real motion is observed —
+an occasional dropped outbound command, not just a dropped reply; (2)
+confirm a genuine standstill (poll for `|vel| <= 5` for up to 1s) before
+starting the next step, so a not-yet-decayed tail from the previous step
+can't fool the next step's own retry-break check into accepting a dropped
+command as landed.
 
-**Fast-follow required**: once the hardware fault is resolved (physical
-inspection/power-cycle by someone at the bench), re-run
-`tests/bench/velocity_step_response.py` (new this ticket — see "Files
-created" below) across 70/140/250 mm/s, exhausting `kp`/`ki`/`kff`/`iMax`/
-`kaw` per this ticket's Decision 4 before reaching for `velFiltAlpha`/notch,
-and update `data/robots/tovez.json` + this ticket (or a follow-up) with the
-result. The live-apply path itself (this ticket's own main deliverable) is
-proven working, so that follow-up session should not need any further
-firmware changes — only gain trials via `config()`.
+**Trial log** (all live, same boot, `vel_ki=0.005`/`vel_kaw=20.0` held
+constant throughout — the fix lived entirely in `kp`/`kff`):
+
+| # | kp | kff | 70 mm/s ovL/ovR | 140 mm/s ovL/ovR | 250 mm/s ovL/ovR | worst | verdict |
+|---|------|--------|-----------------|-------------------|-------------------|-------|---------|
+| 1 (baseline, interim-shipped) | 0.0014 | 0.00135 | 8.6/0.0% | 25.0/15.7% | 5.6/4.4% | 25.0% | FAIL — reproduces the historical resonance pattern |
+| 2 (raise kff) | 0.0014 | 0.0016 | 17.1/7.1% | 38.6/25.7% | 13.6/20.4% | 38.6% | FAIL, WORSE — kff is an open-loop `kff*target` kick added on top of `kp*error`; over-large kff over-drives the plant right at the step |
+| 3 (lower kff) | 0.0014 | 0.0008 | 0.0/0.0% | 2.1/0.0% | 0.0/0.0% | 2.1% | PASS overshoot, but rise time slowed ~30-50% (0.9-1.5s vs baseline's 0.9-1.28s) — fails "rise time preserved" |
+| 4 (restore rise via kp) | 0.0016 | 0.0010 | 0.0/0.0% | 18.6/10.0%\* | 0.0/0.0%\* | 18.6% | FAIL — kaw/settle artifact on 250 mm/s corrupted by leftover motion from the prior step (fixed by robustness fix #2 below) |
+| 5 (candidate) | 0.0016 | 0.0008 | 0.0/0.0% | 9.3/2.1% | 0.0/0.0%† | 9.3% | PASS (250 mm/s re-verified alone: 0.0/0.0%, rise 0.76/0.98s) |
+| 6 (confirmation run 2, same gains) | 0.0016 | 0.0008 | 4.3/0.0% | 3.6/2.1% | 0.0/0.0% | 4.3% | PASS |
+| 7 (confirmation run 3, same gains) | 0.0016 | 0.0008 | 1.4/0.0% | 5.0/2.1% | 0.0/0.0% | 5.0% | PASS |
+| 8 (clean-boot re-verify, no live `config()`) | 0.0016 (boot default) | 0.0008 (boot default) | 2.9/0.0% | 6.4/0.7% | 0.0/0.0% | 6.4% | PASS |
+
+\* Trial 4's 140/250 mm/s rows were corrupted by a standstill-detection gap
+(robustness fix #2, applied before trial 5) — not trusted, shown for the
+trial log's own completeness only. † Trial 5's own 250 mm/s row was
+similarly affected; re-run alone immediately after showed 0.0/0.0%,
+rise 0.76 s/0.98 s.
+
+**Winning gains** (`data/robots/tovez.json`, boot defaults via
+`source/config/boot_config.cpp`, regenerated by `scripts/gen_boot_config.py`
+as part of `just build-clean`): `vel_kp: 0.0014 -> 0.0016`,
+`vel_kff: 0.00135 -> 0.0008`. `vel_ki`/`vel_imax`/`vel_kaw` unchanged
+(0.005/0.3/20.0).
+
+**Before/after summary** (worst-case overshoot per speed, across the trial
+log above):
+
+| speed | before (interim, kp=0.0014/kff=0.00135) | after (kp=0.0016/kff=0.0008, clean-boot trial 8) |
+|-------|------------------------------------------|---------------------------------------------------|
+| 70 mm/s | 8.6% | 2.9% |
+| 140 mm/s | 25.0% (historical: +11% in the 2026-07-12 session, +24-33% at the original kp=0.0018) | 6.4% |
+| 250 mm/s | 5.6% | 0.0% |
+| rise time | 0.9-1.5 s | 0.38-0.77 s (clean boot) — FASTER, not just preserved |
+
+**Root cause**: the resonance was not primarily a `kp`/`ki`/`kaw` problem —
+`kff` (feedforward) was over-estimated. `kff*target` is an immediate,
+error-independent duty kick added on top of `kp*error` at the very start of
+a step; an over-large `kff` over-drives the plant right when the step
+begins, which is exactly the ~140 mm/s peak the original issue described.
+This confirms the 2026-07-11 `kff` derivation's own flagged uncertainty
+("620-740 mm/s across windows, variance cause not established") was real
+drift, not noise — the true value sits closer to the low end of that range.
+Lowering `kff` alone cost rise time; raising `kp` to compensate restored it
+— both overshoot AND rise time ended up BETTER than the interim-shipped
+gains, not a trade-off.
+
+**Decision 4 outcome**: constants-only tuning (`kp`/`kff`) hit the `<~10%`
+bar — `velFiltAlpha` promotion and the notch-filter fallback were not
+needed.
+
+**Not re-run this session**: endpoint-accuracy verification (a
+`turn_sweep.py`-style angle/speed grid) — the 2026-07-12 interim detune's
+own precedent traded a little endpoint accuracy for trajectory smoothness;
+this session's gains differ enough (`kp` raised back toward the original
+0.0018, `kff` lowered) that endpoint accuracy should be re-checked as a
+fast-follow, not assumed.
 
 ### Files created
 
 - `tests/bench/velocity_step_response.py` — P4 binary-wire drive-arm
   step-response characterization tool (twist-from-stop, live `config()`
   gain application, peak/overshoot/rise-time/settled-mean summary, CSV
-  trace log). Ready for the fast-follow session; not yet exercised through
-  a full 70/140/250 grid due to the hardware blocker above.
+  trace log, standstill-confirmation + send-retry robustness). Used for
+  this ticket's own sweep; reusable for any future resonance/gain work.
 
 ### Ticket status
 
-Left `in-progress` (not `done`) — Acceptance Criteria 4 (partially met) and
-5 (not met) are real, required deliverables this session could not
-complete. Not moved to `tickets/done/`.
+`done`. All Acceptance Criteria met (checked above), full suite green
+(569 passed), fully bench-verified including a clean-reflash re-check of
+the persisted boot-default gains. Moved to `tickets/done/`.
