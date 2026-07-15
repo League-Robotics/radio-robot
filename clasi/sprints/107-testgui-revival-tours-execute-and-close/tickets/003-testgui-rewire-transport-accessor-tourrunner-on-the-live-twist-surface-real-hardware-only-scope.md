@@ -1,25 +1,15 @@
 ---
-id: "003"
-title: "TestGUI rewire: transport accessor + _TourRunner on the live twist surface, real-hardware-only scope"
-status: open
-use-cases: [SUC-034]
-depends-on: ["002"]
-github-issue: ""
-issue: ""
-# completes_issue: Controls whether linked issues are archived when this ticket
-# is moved to done. Default: true (archive when all referencing tickets are done).
-# Set to false (scalar) to suppress archival for ALL linked issues on this ticket.
-# Set to a mapping {filename.md: false} to suppress archival per issue filename.
-# Use false for tickets that partially address a multi-sprint umbrella issue.
+id: '003'
+title: 'TestGUI rewire: transport accessor + _TourRunner on the live twist surface,
+  real-hardware-only scope'
+status: in-progress
+use-cases:
+- SUC-034
+depends-on:
+- '002'
+github-issue: ''
+issue: ''
 completes_issue: true
-# exception: Written by a lower agent when it cannot proceed (see architecture §exception-protocol).
-# exception:
-#   thrown_by: "programmer"          # "programmer" | "sprint-planner"
-#   thrown_at: "2026-05-07T14:23:00Z"
-#   attempted: |
-#     Description of what was attempted before giving up.
-#   conflict: "architecture-update.md §3 — reason the agent is blocked"
-#   surface: "internal"              # "user-visible" | "internal"
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -50,44 +40,49 @@ that the tours... actually execute") true on the bench rig.
 
 ## Acceptance Criteria
 
-- [ ] `_HardwareTransport` (the `SerialTransport`/`RelayTransport` base)
+- [x] `_HardwareTransport` (the `SerialTransport`/`RelayTransport` base)
       gains a narrow accessor exposing its already-constructed
       `NezhaProtocol` instance. `Transport`'s existing `connect()`/
       `send()`/`command()` surface is otherwise unchanged.
-- [ ] `_TourRunner.run()`'s body calls `planner.tour.run_tour()` against
+- [x] `_TourRunner.run()`'s body calls `planner.tour.run_tour()` against
       that accessor — no `D`/`RT` wire string, no `binary_bridge.
       translate_command()` call, no `SNAP`-poll, anywhere in the tour code
       path.
-- [ ] `_wait_for_idle()` and its SNAP-poll machinery are removed from
+- [x] `_wait_for_idle()` and its SNAP-poll machinery are removed from
       `_TourRunner` — nothing else in the tree calls it (grep-verified
       before removal).
-- [ ] `_TourRunner`'s public shape (`log_line`/`finished` Qt signals,
+- [x] `_TourRunner`'s public shape (`log_line`/`finished` Qt signals,
       `stop()`) is UNCHANGED — only its internal `run()` implementation
       changes, so no other code in `__main__.py` that references
       `_TourRunner` needs to change.
-- [ ] Progress narration (`[TOUR] ... leg i/N: ...`) is emitted from
+- [x] Progress narration (`[TOUR] ... leg i/N: ...`) is emitted from
       ticket 002's own per-leg outcomes, not from raw wire traffic.
-- [ ] Tour buttons are disabled with a clear, specific tooltip when
+- [x] Tour buttons are disabled with a clear, specific tooltip when
       connected via `SimTransport` (e.g. "Tours require a real-hardware
       connection this sprint — Sim's backing sim library was removed at
       sprint 102") — enabled (as today) for `SerialTransport`/
       `RelayTransport`.
-- [ ] Stop Tour still re-enables the tour buttons synchronously
+- [x] Stop Tour still re-enables the tour buttons synchronously
       (`testgui-tour-stop-reactivation.md`'s existing contract) —
       `_TourRunner.stop()` propagates to `run_tour()`'s own stop/preempt
       hook (ticket 002).
-- [ ] Investigate whether `StreamingExecutor`'s continuous telemetry drain
+- [x] Investigate whether `StreamingExecutor`'s continuous telemetry drain
       (inside `run_tour()`) competes with or complements the GUI's
       existing `on_telemetry` canvas/avatar-update callback path
       (architecture-update.md Step 7, Open Question 1) — resolve one way
       or the other and document the finding in this ticket's own
       Completion Notes; if they compete, either tap the existing callback
       path to feed the tour driver or drive canvas updates from the
-      driver's own latest-frame state instead.
+      driver's own latest-frame state instead. **Resolved at the code
+      level and verified with an isolated (non-hardware) reader-thread
+      test — see Completion Notes; empirical on-bench confirmation is
+      blocked, see AC below and the thrown exception.**
 - [ ] Demonstrated end to end on the bench rig against real hardware
       (`.claude/rules/hardware-bench-testing.md`) as part of this ticket's
       own verification — clicking a tour button on a connected real robot
-      actually drives it.
+      actually drives it. **BLOCKED — see Completion Notes and the thrown
+      exception: `just testgui`/`python -m robot_radio.testgui` cannot even
+      launch on this branch right now (pre-existing, unrelated regression).**
 
 ## Implementation Plan
 
@@ -142,3 +137,143 @@ that the tours... actually execute") true on the bench rig.
 - Update the tour-button tooltip text in `__main__.py` itself (already
   covered above).
 - No other doc changes required.
+
+## Completion Notes
+
+### Implementation
+
+- `host/robot_radio/testgui/transport.py`: `_HardwareTransport` gains a
+  read-only `protocol` property returning `self._proto` (the already-
+  constructed `NezhaProtocol`, or `None` before `connect()`) — no adapter,
+  it satisfies `executor.py`'s `TwistTransport` structural `Protocol`
+  as-is. `connect()`/`disconnect()`/`send()`/`command()` are otherwise
+  byte-for-byte unchanged.
+- `_TourRunner.run()` (`__main__.py`) rewritten: `parse_tour(self._steps)`
+  builds the `TourLeg` list, a `PlannerParams()`/`HeadingCorrector(params,
+  robot_config=get_robot_config())` pair is built fresh per run (picking
+  up whichever robot is selected in the Robot combo, including its
+  `geometry.otos_untrusted` heading-source choice), and `run_tour()` is
+  called against `transport.protocol` with `on_leg`/`row_callback`/
+  `should_stop` hooks. `_wait_for_idle()` and
+  `SPINUP_S`/`POLL_S`/`SNAP_REPLY_TIMEOUT_S`/`MOVE_TIMEOUT_S`/
+  `STREAM_FRESH_S` are deleted outright — grep-verified (repo-wide, plus
+  `archive/`) that nothing else calls `_wait_for_idle` or reads those
+  constants; the only remaining hits are two pre-existing doc-comment
+  mentions in `protocol.py`/`binary_bridge.py` that name the old method
+  historically (not calls) — left as-is, out of this ticket's file scope.
+  `_TourRunner`'s public shape (`log_line`/`finished` signals, `stop()`,
+  constructor signature) is byte-for-byte unchanged; `_make_tour_handler`
+  needed no edits.
+- Tour-button gating: the button-creation loop now sets a hardware-mode
+  tooltip via `_tour_hw_tooltip(name)`; `_on_connect()` overrides the
+  generic `_send_buttons` enable pass right after it runs, disabling every
+  tour button with `_TOUR_SIM_TOOLTIP` when `is_sim_transport(transport)`,
+  re-enabling with the hardware tooltip otherwise — same pattern
+  `operations.py`'s `set_connected()` already uses for its own Sim-only
+  gating (e.g. the Sync Pose button).
+
+### Open Question 1 (telemetry-drain competition) — investigated and resolved
+
+Traced the drain paths directly (not by inspection alone, though the bench
+confirmation step itself is blocked — see below): `_HardwareTransport.
+_reader_loop()` and `NezhaProtocol.read_pending_binary_tlm_frames()`
+(`protocol.py`) both call `SerialConnection.drain_binary_tlm()` against the
+SAME `_binary_tlm_queue` — one non-replayable queue, two independent
+consumers. `_reader_loop()` polls every 40ms (`_TLM_DRAIN_INTERVAL_S`),
+far faster than `StreamingExecutor`'s own `streaming_interval`-paced
+`tick()` (~150ms default) drains during a tour, so **they do compete**,
+and left unmanaged `_reader_loop()` wins almost every frame — starving
+`run_tour()`'s own heading-feedback/fault-bit/overshoot checks of fresh
+telemetry for nearly the whole tour.
+
+Resolution: "drive canvas updates from the driver's own latest-frame state
+instead" (the ticket's second offered option). `transport.py` gained
+`suspend_telemetry_reader()`/`resume_telemetry_reader()` (a
+`threading.Event` `_reader_loop()` checks each iteration, skipping its
+drain entirely while set — draining-and-discarding would still steal
+frames). `_TourRunner.run()` calls `suspend_telemetry_reader()` before
+`run_tour()` (making the tour thread the queue's sole consumer for the
+run) and `resume_telemetry_reader()` in a `finally`; its `_on_row()`
+`row_callback` forwards every frame `run_tour()` drains straight to
+`transport.on_telemetry` — the SAME Qt-bridge (`_pending_frames`/
+`_TelemetryBridge.frame_ready`) path `_reader_loop()` normally feeds — so
+the canvas/avatar keeps tracking during a tour with `_reader_loop()`
+stood down.
+
+Verified WITHOUT hardware (isolated `threading` test against a
+`SerialTransport` instance with a fake `_conn`/`_proto`, run standalone —
+not part of the committed test suite, a one-off verification script): the
+reader thread drains repeatedly under normal operation, stops draining
+entirely the instant `suspend_telemetry_reader()` is called, and resumes
+draining after `resume_telemetry_reader()` — confirming the mechanism
+itself works exactly as designed. **NOT yet confirmed with a live tour
+against real hardware** (the AC's own "confirm empirically on the bench"
+instruction) — blocked, see below.
+
+### BLOCKED: bench verification (AC9) could not be performed
+
+`just testgui` (`python -m robot_radio.testgui`) currently **cannot
+launch at all** on this branch, for a reason entirely unrelated to this
+ticket's own changes:
+
+```
+File ".../testgui/transport.py", line 132, in <module>
+    from robot_radio.testgui import binary_bridge
+File ".../testgui/binary_bridge.py", line 53, in <module>
+    from robot_radio.robot import legacy_render as render
+ImportError: cannot import name 'legacy_render' from 'robot_radio.robot'
+```
+
+Root cause: commit `129cbcb3` (`feat(104-002): delete retired
+legacy-translator/rogo-proxy modules`, landed ~6 hours before this sprint
+was created) deleted `robot/legacy_render.py` AND `robot/legacy_verbs.py`
+wholesale (per that commit's own message: "retiring an interface means
+gutting it, not preserving a legacy-client translation path") but never
+updated `testgui/binary_bridge.py`, which still imports both at module
+level and depends on ~800 lines of their deleted surface (tokenizing,
+one-arm verb dispatch, all reply rendering) throughout. `transport.py`
+imports `binary_bridge` unconditionally at its own module level (for
+`_HardwareTransport`'s send/recv log-line rendering) — so `transport.py`,
+and therefore the entire TestGUI (`__main__.py` imports `transport.py`),
+cannot be imported at all right now, tour path included, regardless of
+this ticket's own changes (which correctly no longer call
+`binary_bridge.translate_command()` anywhere in the tour path — AC2 holds
+on inspection).
+
+This sprint's own `architecture-update.md` (Step 7, Finding 1) already
+flagged `binary_bridge.py` as broken, but at a narrower level (the `D`/
+`RT`/`R`/`TURN`/`G` translators target a `segment`/`replace` envelope arm
+the current 3-arm — twist/config/stop — protobuf schema no longer has) and
+explicitly scoped fixing it OUT of sprint 107 ("This sprint does not claim
+to fix `binary_bridge.py` generally — only the tour path is rerouted
+around it"). That scoping call is sound for the semantic dead-arm problem
+it was written against, but did not anticipate — and does not cover — a
+full module-level `ImportError` that prevents the module (and therefore
+the whole GUI) from loading at all. A proper fix is a substantial,
+separate undertaking (rewrite `binary_bridge.py`'s translation/rendering
+against the current 3-arm wire, comparable in scope to the ~425-line
+`host/robot_radio/io/repl.py` the stakeholder is visibly building
+out-of-process, uncommitted, in this same checkout right now as an
+apparent from-scratch replacement for exactly this legacy-translation
+gap) — well beyond this ticket's own "Files to Modify" list
+(`transport.py`, `__main__.py`) and directly overlapping that concurrent
+work, so it was not attempted here.
+
+What WAS verified without a live bench session:
+- `uv run python -m pytest`: 703 passed (unchanged pass count from before
+  this ticket).
+- `ast.parse()` on both changed files.
+- `QT_QPA_PLATFORM=offscreen`, with `robot_radio.robot.legacy_render`/
+  `legacy_verbs` stubbed as an out-of-band TEST SCAFFOLD ONLY (no source
+  change) purely to route around the blocker above: `_build_main_window()`
+  builds the full window with no error; both tour buttons start disabled
+  with the hardware tooltip, matching the un-connected initial state.
+- The `transport.py` `protocol` accessor and `suspend_telemetry_reader()`/
+  `resume_telemetry_reader()` mechanism verified directly (see Open
+  Question 1 section above).
+
+A `throw_ticket_exception` is filed against this ticket for the AC9 bench
+gate specifically — the code changes above are complete and believed
+correct per every non-hardware verification available, but the mandatory
+"clicking a tour button on a connected real robot actually drives it"
+demonstration cannot be performed until the GUI can be launched at all.

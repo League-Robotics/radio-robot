@@ -487,6 +487,12 @@ class _HardwareTransport(Transport):
         self._reader_thread: threading.Thread | None = None
         self._truth_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        # 107-003: raised by a caller (testgui's _TourRunner) that needs
+        # EXCLUSIVE drain access to the shared binary TLM queue for the
+        # duration of a tour -- see suspend_telemetry_reader()'s own
+        # docstring for why unmanaged draining starves a tour's own
+        # StreamingExecutor of fresh telemetry.
+        self._reader_suspended = threading.Event()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -563,6 +569,7 @@ class _HardwareTransport(Transport):
 
         self._reader_thread = None
         self._truth_thread = None
+        self._reader_suspended.clear()
 
         if self._conn is not None:
             try:
@@ -571,6 +578,59 @@ class _HardwareTransport(Transport):
                 _log.exception("Error during SerialConnection.disconnect")
             self._conn = None
         self._proto = None
+
+    # ------------------------------------------------------------------
+    # Twist-surface accessor (107-003)
+    # ------------------------------------------------------------------
+
+    @property
+    def protocol(self) -> NezhaProtocol | None:
+        """The already-constructed ``NezhaProtocol`` wrapping this
+        transport's connection, or ``None`` if not connected.
+
+        Narrow, read-only accessor -- exposes exactly the slice
+        ``planner/executor.py``'s ``TwistTransport`` structural ``Protocol``
+        needs (``twist()``/``stop()``/``read_pending_binary_tlm_frames()``);
+        a real ``NezhaProtocol`` already satisfies that protocol as-is, no
+        adapter needed. Added 107-003 so ``testgui``'s ``_TourRunner`` can
+        drive ``planner.tour.run_tour()`` directly against the live wire
+        instead of routing each tour step through ``binary_bridge.
+        translate_command()``'s dead ``segment``/``replace`` envelope arms
+        (see ``planner/tour.py``'s own module docstring for that history).
+        """
+        return self._proto
+
+    def suspend_telemetry_reader(self) -> None:
+        """Pause ``_reader_loop()``'s drain of the shared binary TLM queue.
+
+        107-003 (architecture-update.md Step 7, Open Question 1):
+        ``_reader_loop()`` and ``NezhaProtocol.read_pending_binary_tlm_frames()``
+        (called by ``planner.executor.StreamingExecutor`` during a tour) both
+        ultimately drain the SAME underlying ``SerialConnection.
+        _binary_tlm_queue`` -- one non-replayable queue, two independent
+        consumers. ``_reader_loop()`` polls every ``_TLM_DRAIN_INTERVAL_S``
+        (40ms), far faster than the executor's own ``streaming_interval``-
+        paced ``tick()`` (~150ms default), so left unmanaged it wins almost
+        every frame -- starving the executor's heading-feedback/fault-bit/
+        overshoot checks of fresh telemetry for nearly the whole tour
+        (confirmed on the bench, this ticket's own investigation).
+
+        A caller (``testgui``'s ``_TourRunner``) calls this before handing
+        ``self.protocol`` to ``run_tour()``, becoming the queue's SOLE
+        consumer for the run's duration, and forwards each frame it drains
+        back through ``on_telemetry`` itself (via ``run_tour()``'s own
+        ``row_callback`` hook) so the canvas/avatar keeps tracking while
+        ``_reader_loop()`` stands down. Pairs with
+        ``resume_telemetry_reader()``, which the caller invokes in a
+        ``finally``. Idempotent; safe to call whether or not a reader thread
+        is currently running.
+        """
+        self._reader_suspended.set()
+
+    def resume_telemetry_reader(self) -> None:
+        """Undo ``suspend_telemetry_reader()`` -- ``_reader_loop()`` resumes
+        draining the shared binary TLM queue on its own. Idempotent."""
+        self._reader_suspended.clear()
 
     # ------------------------------------------------------------------
     # Commands
@@ -635,6 +695,15 @@ class _HardwareTransport(Transport):
         while not self._stop_event.is_set():
             if self._conn is None or not self._conn.is_open:
                 break
+            if self._reader_suspended.is_set():
+                # 107-003: a tour owns the shared binary TLM queue right now
+                # (see suspend_telemetry_reader()'s own docstring) -- skip
+                # this iteration's drain entirely. Draining-and-discarding
+                # would still steal frames from the tour's own executor, so
+                # this thread must not touch the queue at all while
+                # suspended.
+                self._stop_event.wait(timeout=_TLM_DRAIN_INTERVAL_S)
+                continue
             try:
                 replies = self._conn.drain_binary_tlm()
             except Exception:
