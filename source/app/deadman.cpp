@@ -14,9 +14,9 @@ void Deadman::arm(float duration) {
 
   // [ms] -> [us]. Multiply while still float-typed so sub-millisecond
   // fractions of `clamped` are not truncated before the unit conversion.
-  const uint64_t deltaMicros = static_cast<uint64_t>(clamped * 1000.0f);
+  const uint64_t delta = static_cast<uint64_t>(clamped * 1000.0f);  // [us]
 
-  deadlineMicros_ = clock_.nowMicros() + deltaMicros;
+  deadline_ = clock_.nowMicros() + delta;
   armed_ = true;
 }
 
@@ -24,7 +24,7 @@ void Deadman::disarm() { armed_ = false; }
 
 bool Deadman::expired() const {
   if (!armed_) return false;
-  return clock_.nowMicros() >= deadlineMicros_;
+  return clock_.nowMicros() >= deadline_;
 }
 
 }  // namespace App

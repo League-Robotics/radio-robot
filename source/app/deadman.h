@@ -37,7 +37,7 @@ class Deadman {
  private:
   const Devices::Clock& clock_;
   bool armed_ = false;
-  uint64_t deadlineMicros_ = 0;  // [us]
+  uint64_t deadline_ = 0;  // [us]
 };
 
 }  // namespace App
