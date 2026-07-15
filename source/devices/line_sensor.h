@@ -32,10 +32,12 @@
 // --- Renamed LineSensor -> LineSensorLeaf in DB-007 ---
 // See color_sensor.h's identical note (its own "Renamed ColorSensor ->
 // ColorSensorLeaf in DB-007" section) for the full reasoning: DB-007's
-// public handle class needs the bare `LineSensor` name
-// (`Devices::DeviceBus::line()` returns a `Devices::LineSensor&` per the
-// issue's "The public surface" sketch), so the leaf DB-006 landed under
-// that name is renamed here instead.
+// planned public handle class needed the bare `LineSensor` name
+// (`line()` returns a `Devices::LineSensor&` per the issue's "The public
+// surface" sketch), so the leaf DB-006 landed under that name was renamed
+// here instead. Per sprint 103 architecture-update.md Decision 1, the
+// handle layer that rename anticipated was retired — the loop constructs
+// and drives this leaf directly.
 #pragma once
 
 #include <cstdint>

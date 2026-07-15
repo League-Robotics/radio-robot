@@ -40,10 +40,9 @@
 //   Unrecognised addresses are accumulated in an "other" bucket (index
 //   kMaxDevices-1) so the table never overflows.
 //
-// Usage (source/devices/device_bus.cpp, DB-007): one I2CBus instance, owned
-// by DeviceBus, constructed before any device leaf and passed to each by
-// reference — mirrors the ported source's own `static I2CBus bus(uBit.i2c);`
-// usage note.
+// Usage: one I2CBus instance, owned by the loop, constructed before any
+// device leaf and passed to each by reference — mirrors the ported source's
+// own `static I2CBus bus(uBit.i2c);` usage note.
 //
 // Thread safety:
 //   The inUse_ flag window is intentionally narrow (3-4 instructions) so the

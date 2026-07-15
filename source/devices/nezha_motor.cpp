@@ -239,8 +239,8 @@ void NezhaMotor::tick(uint64_t nowUs)
     processResetIfPending(nowMs);
 
     // 2. Per-tick position sample -- collects a sample that was REQUESTED
-    // in a previous slice (requestSample() -> requestEncoder()) by
-    // DeviceBus's fiber cycle (DB-007). Non-blocking: no write here, no
+    // in a previous slice (requestSample() -> requestEncoder()) by the
+    // loop's own cycle. Non-blocking: no write here, no
     // spin, just the 4-byte read.
     int32_t raw = collectEncoder();
     float pos = (static_cast<float>(raw) / 10.0f)
@@ -266,7 +266,7 @@ void NezhaMotor::tick(uint64_t nowUs)
     // STATE` reported vel=0.000 ALWAYS, glitch count climbing, wedged=1
     // false-latching, even while a raw DUTY command physically moved the
     // wheel ~717mm). The Nezha brick's 0x46 register refreshes only every
-    // ~80ms; DeviceBus's fiber cycle (DB-007/DB-008) runs every ~16ms.
+    // ~80ms; the loop's own cycle runs every ~16ms.
     // Running the velocity/glitch computation on every TICK (as before)
     // meant most cycles re-collected an IDENTICAL raw count (step==0,
     // rawVel==0 -- decaying filteredVelocity_ toward 0 every stale cycle),
@@ -471,8 +471,8 @@ void NezhaMotor::writeRawDuty(float duty)
     // commit latched a NAK'd write as "already written" -- write-on-change
     // (above) then suppressed every retry of the SAME value forever. That
     // was catastrophic specifically for a failed STOP (pct==0): the
-    // watchdog's "re-assert Neutral every cycle" robustness
-    // (DeviceBus::applyStaleGate()) calls armoredWrite(0) every cycle, which
+    // watchdog's "re-assert Neutral every cycle" robustness (the loop's
+    // stale-target gate) calls armoredWrite(0) every cycle, which
     // always dispatches straight to writeRawDuty(0) (motor_armor.h) --  but
     // once pct==0==lastWrittenPct_ was falsely latched, every subsequent
     // call hit the write-on-change guard above and returned before ever
@@ -543,7 +543,7 @@ int32_t NezhaMotor::readEncoderAtomicRaw()
 void NezhaMotor::requestSample()
 {
     // Public split-phase phase-1 entry point -- the ONLY caller is
-    // DeviceBus's fiber cycle (DB-007), once per bus slice, only for the
+    // the loop's own cycle, once per bus slice, only for the
     // currently-active in-use port.
     requestEncoder();
 }

@@ -1,5 +1,5 @@
 // clock.h — Devices::Clock / Devices::Sleeper: the time/yield seam the
-// DeviceBus fiber cycle (DB-007, runCycleOnce()) is parameterized on.
+// loop's own cycle is parameterized on.
 //
 // Ticket DB-003 (device-bus-tickets.md; issue "Sim / host-test story": "The
 // cycle body is parameterized on a sleeper/clock interface: fiber_sleep +
@@ -19,10 +19,10 @@
 //
 // Clock/Sleeper are a SEPARATE seam from I2CBus's own internal fake clock
 // (I2CBus::setClock()/advanceClock(), used only for that class's per-
-// transaction clearance-timer bookkeeping). DeviceBus (DB-007) owns one
-// Clock and one Sleeper instance and uses them for the fiber's OWN
-// cycle-level time reads — publish() stamps, staleness deadlines, cycle
-// pacing — not the bus's clearance windows.
+// transaction clearance-timer bookkeeping). The loop owns one Clock and one
+// Sleeper instance and uses them for its own cycle-level time reads —
+// publish() stamps, staleness deadlines, cycle pacing — not the bus's
+// clearance windows.
 #pragma once
 #ifndef HOST_BUILD
 #include "MicroBit.h"

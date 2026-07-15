@@ -6,9 +6,10 @@
 // `source/devices/` subsystem (namespace `Devices`), per clasi/issues/
 // device-bus-fiber-owned-self-contained-device-subsystem.md's "Shape" / "The
 // public surface". This is the internal LEAF (mirrors nezha_motor.h's
-// NezhaMotor role for the motor channel) — DB-007's DeviceBus::Odometer
-// handle class is the Devices-native public surface a consumer actually
-// reaches; this leaf is what that handle's fiber-side implementation drives.
+// NezhaMotor role for the motor channel). Per sprint 103
+// architecture-update.md Decision 1, the loop constructs and drives this
+// leaf directly — the Devices-native public surface a consumer actually
+// reaches is the loop itself, not a handle class.
 //
 // Carried VERBATIM in behavior from the ported source (device-bus-tickets.md's
 // DB-005 section is explicit that these must not be lost in the port):
@@ -201,8 +202,8 @@ class Otos {
 
   // --- Remaining primitive setters/getters — each a no-op (zero return
   // where applicable) if begin() never detected the chip, mirroring every
-  // primitive above. Unlike setVelocity()-style DeviceBus handle setters,
-  // these issue their write immediately (not staged) — matches the
+  // primitive above. Unlike setVelocity()-style staged setters, these
+  // issue their write immediately (not staged) — matches the
   // pre-port file's own OI/OR/OL/OA wire-command shape, which this ticket
   // does not change (wiring any of these to a live command is a later
   // ticket's job). ---

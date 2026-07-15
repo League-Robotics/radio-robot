@@ -513,8 +513,8 @@ void scenarioPidOffRoutesRawDutyThroughArmorUnchanged() {
 }
 
 // 8. Fresh-sample gate (HARDWARE-CONFIRMED DB-004 fix): the Nezha brick's
-//    encoder register refreshes far slower (~80ms) than DeviceBus's fiber
-//    cycle (~16ms, DB-007/DB-008). Scripts the SAME raw encoder value for
+//    encoder register refreshes far slower (~80ms) than the loop's own
+//    cycle (~16ms). Scripts the SAME raw encoder value for
 //    several consecutive request/collect cycles (simulating the brick not
 //    having refreshed yet), then a jump to a fresh value, repeated across
 //    several refresh windows -- while ALSO commanding a duty so
@@ -656,8 +656,8 @@ void scenarioBootAnchorAcceptsLargeInitialPositionWithoutGlitchOrWedge() {
 //     instead of permanently suppressing it, and appliedDuty() must keep
 //     reporting the PREVIOUS (still physically applied) duty until a write
 //     actually succeeds -- the exact scenario the review flagged: a failed
-//     stop leaving the watchdog's "re-assert Neutral every cycle"
-//     (DeviceBus::applyStaleGate()) permanently defeated.
+//     stop leaving the watchdog's "re-assert Neutral every cycle" (the
+//     loop's stale-target gate) permanently defeated.
 void scenarioNakedStopWriteIsRetriedNextTickNotLatched() {
   beginScenario("a NAK'd stop write is retried next tick, not permanently latched-as-written");
   Devices::I2CBus::setClock(1000000);

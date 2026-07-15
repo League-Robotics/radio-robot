@@ -260,7 +260,7 @@ RECURSIVE_FIND_DIR(INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}" 
 RECURSIVE_FIND_DIR(HPP_DIRS "${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}" "*.hpp")
 list(APPEND INCLUDE_DIRS ${HPP_DIRS})
 # 039-001: add the source/ root so path-qualified includes
-# (e.g. #include "devices/device_bus.h") resolve in the firmware
+# (e.g. #include "devices/otos.h") resolve in the firmware
 # build, matching the host build which already lists source/. RECURSIVE_FIND_DIR
 # only adds directories that directly contain headers, and source/ has none.
 list(APPEND INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}")
