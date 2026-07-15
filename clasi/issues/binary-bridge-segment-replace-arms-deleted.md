@@ -4,6 +4,59 @@ status: pending
 
 # `testgui/binary_bridge.py`'s R/TURN/G translation targets envelope arms that no longer exist on the wire
 
+## Update (107-003): the breakage was worse than "wrong verbs" — a total import failure
+
+Ticket 003's own bench-verification step (attempting to actually launch
+`just testgui` / `python -m robot_radio.testgui` for the first time since
+this issue was filed) discovered that this module's problem was not
+limited to `R`/`TURN`/`G` constructing a dead `segment`/`replace` envelope
+arm at RUNTIME, as originally diagnosed below. It could not even be
+IMPORTED:
+
+```
+File ".../testgui/transport.py", line 132, in <module>
+    from robot_radio.testgui import binary_bridge
+File ".../testgui/binary_bridge.py", line 53, in <module>
+    from robot_radio.robot import legacy_render as render
+ImportError: cannot import name 'legacy_render' from 'robot_radio.robot'
+```
+
+Root cause: commit `129cbcb3` (`feat(104-002): delete retired
+legacy-translator/rogo-proxy modules`, landed ~6 hours before sprint 107
+was created) deleted `robot/legacy_render.py` AND `robot/legacy_verbs.py`
+**wholesale**, with no replacement, but never updated `binary_bridge.py`
+(which imports both at module level and depends on ~800 lines of their
+surface throughout: tokenizing, one-arm verb dispatch, and every reply
+rendering path). Because `testgui/transport.py` imports `binary_bridge`
+unconditionally at ITS OWN module level (for `_HardwareTransport`'s
+send/recv log-line rendering), this didn't just break the verbs this
+issue originally diagnosed — it prevented `transport.py`, and therefore
+the entire TestGUI (`__main__.py` imports `transport.py`), from importing
+**at all**. Every command row, not just `D`/`RT`/`R`/`TURN`/`G`, and the
+tour buttons themselves (even after 107-003's own rewrite onto the
+twist-based `planner.tour.run_tour()` surface, which no longer calls
+`binary_bridge` in the tour path at all) were blocked from ever running,
+because the GUI process itself could not start.
+
+**107-003's disposition**: per team-lead scope ruling, a MINIMAL
+launch-unblock was applied directly in `binary_bridge.py` (not a rewrite,
+and this issue's own scope below is UNCHANGED) — both imports are now
+guarded (`try`/`except ImportError`), and every code path that needs
+`legacy_render`/`legacy_verbs` degrades to an explicit, user-visible `ERR`
+reply (`translate_command()`) or falls back to `google.protobuf.
+text_format` rendering (`render_log_line()`) instead of crashing at import
+time. This makes `transport.py`/the TestGUI importable and launchable
+again, but `S`/`T`/`SET`/`GET`/`STREAM`/`SNAP` and every other verb this
+module used to translate are now UNIFORMLY non-functional through
+`binary_bridge.py` (they all return the same explicit
+`_LEGACY_UNAVAILABLE_REPLY`, pointing back at this issue) — a WIDER
+regression than this issue originally scoped (which believed `S`/`T`/
+one-arm binary verbs still worked; see "Recommended direction" step 1
+below, now stale on that specific claim). The tour path itself is
+unaffected (107-003 rerouted it around `binary_bridge.py` entirely).
+Fixing this module's translation/rendering for real — the scope described
+in the rest of this issue — remains open and unattempted.
+
 ## Problem
 
 `host/robot_radio/testgui/binary_bridge.py`'s `translate_command()`

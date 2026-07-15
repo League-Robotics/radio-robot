@@ -2,7 +2,7 @@
 id: '003'
 title: 'TestGUI rewire: transport accessor + _TourRunner on the live twist surface,
   real-hardware-only scope'
-status: exception
+status: in-progress
 use-cases:
 - SUC-034
 depends-on:
