@@ -76,6 +76,17 @@ class GeometryConfig(BaseModel):
     # this is true, firmware negates chip_x before applying yaw rotation
     # and translation offset.
     odometry_chip_upside_down: bool = False
+    # True when the OTOS chip is mechanically decoupled from the wheels on
+    # THIS robot's current physical mount (e.g. the bench rig's OTOS lives
+    # on a 360-degree servo, not the chassis) so its reported pose is
+    # structurally invalid — a per-robot mounting fact, not a runtime
+    # tuning value. The single-loop firmware never fuses pose on-robot
+    # (host-side fusion, sprint 106+), so this field has no on-robot
+    # consumer yet; it exists so host-side fusion has an authoritative,
+    # version-controlled source to ignore OTOS pose from day one instead
+    # of relying on a per-session manual step. See
+    # clasi/issues/rig-persistent-otos-distrust.md.
+    otos_untrusted: bool = False
     trackwidth: Optional[float] = None
     wheelbase_mm: Optional[float] = None
 

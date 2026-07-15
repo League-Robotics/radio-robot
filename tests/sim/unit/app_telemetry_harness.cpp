@@ -6,6 +6,10 @@
 // call sites -- see telemetry.h's own bit-layout comment), TelemetrySecondary's
 // own independently-armored line never coinciding with a primary send in
 // the same emit() call, and realized emission cadence for both frame types.
+// Also proves (ticket 104-004, scenario 8): a malformed inbound frame
+// pumped through App::Comms sets App::kFaultCommsMalformed (bit 3) in the
+// telemetry frame that follows, once a caller mirrors
+// Comms::malformedCount() via setFault() the way main.cpp's own loop does.
 //
 // Mirrors app_comms_harness.cpp's exact shape: hand-rolled
 // beginScenario/fail/checkTrue/checkStrEq assertion plumbing, PASS/FAIL
@@ -112,6 +116,35 @@ class FakeTransport : public App::Transport {
   const std::vector<std::string>& sendReliableLog() const { return sendReliableLog_; }
 
  private:
+  std::vector<std::string> sendLog_;
+  std::vector<std::string> sendReliableLog_;
+};
+
+// --- QueueableFakeTransport -- same shape as app_comms_harness.cpp's own
+// FakeTransport (a scripted queue of inbound lines), needed ONLY by
+// scenario 8 below, which drives Comms::pump() (not just Telemetry::emit())
+// to produce a real App::Comms::malformedCount() > 0 the way main.cpp's own
+// loop would see it. -----------------------------------------------------
+
+class QueueableFakeTransport : public App::Transport {
+ public:
+  void queueLine(const std::string& line) { queue_.push_back(line); }
+
+  bool readLine(char* buf, uint16_t len) override {
+    if (queue_.empty()) return false;
+    std::string line = queue_.front();
+    queue_.erase(queue_.begin());
+    std::snprintf(buf, len, "%s", line.c_str());
+    return true;
+  }
+
+  void send(const char* msg) override { sendLog_.push_back(msg); }
+  void sendReliable(const char* msg) override { sendReliableLog_.push_back(msg); }
+
+  const std::vector<std::string>& sendLog() const { return sendLog_; }
+
+ private:
+  std::vector<std::string> queue_;
   std::vector<std::string> sendLog_;
   std::vector<std::string> sendReliableLog_;
 };
@@ -544,6 +577,79 @@ void scenarioMeasuredCadenceReport() {
   checkTrue(secondaryHz > 2.0 && secondaryHz < 8.0, "measured secondary Hz is in a sane neighborhood of the ~5 Hz target");
 }
 
+// ===========================================================================
+// 8. kFaultCommsMalformed (104-004, bit 3): a malformed/undecodable inbound
+//    frame pumped through the SAME App::Comms instance Telemetry's own
+//    Comms::sendReply() rides -- App::Comms::malformedCount() rising above
+//    0 -- sets App::kFaultCommsMalformed in the NEXT telemetry frame, once
+//    a caller mirrors it via setFault() exactly the way main.cpp's own loop
+//    does (App::Telemetry::setFault(App::kFaultCommsMalformed,
+//    comms.malformedCount() > 0)). Bit clears on a later frame if the
+//    caller stops reporting it -- same level-set discipline as scenario 4.
+// ===========================================================================
+
+void scenarioMalformedFrameSetsCommsMalformedFaultBit() {
+  beginScenario("malformed frame -> Comms::malformedCount() -> setFault(kFaultCommsMalformed) sets the wire bit");
+
+  QueueableFakeTransport serialFake;
+  QueueableFakeTransport radioFake;
+  // Bad armor prefix -- same malformed input app_comms_harness.cpp's own
+  // scenarioMalformedArmorPrefixRejected() uses to increment
+  // malformedCount() by exactly 1.
+  serialFake.queueLine("*Xsomeunrecognizedarmor");
+
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  App::Telemetry telemetry(comms, serialFake, radioFake);
+
+  App::Cmd cmd;
+  comms.pump(cmd);
+  checkU64Eq(comms.malformedCount(), 1, "malformedCount() incremented by the malformed line");
+
+  // Mirrors main.cpp's own call site exactly (source/main.cpp):
+  // tlm.setFault(App::kFaultCommsMalformed, comms.malformedCount() > 0);
+  telemetry.setFault(App::kFaultCommsMalformed, comms.malformedCount() > 0);
+  checkU64Eq(telemetry.faultBits(), App::kFaultCommsMalformed, "faultBits() reflects kFaultCommsMalformed");
+
+  telemetry.emit(0);
+
+  msg::Telemetry expectedSet;
+  expectedSet.now = 0;
+  expectedSet.seq = 0;
+  expectedSet.fault_bits = App::kFaultCommsMalformed;
+  msg::ReplyEnvelope envSet;
+  envSet.corr_id = 0;
+  envSet.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
+  envSet.body.tlm = expectedSet;
+  std::string expectedSetLine = armorReply(envSet);
+  checkTrue(!expectedSetLine.empty(), "independent encode+armor of the expected frame succeeds");
+  if (!serialFake.sendLog().empty()) {
+    checkStrEq(serialFake.sendLog()[0], expectedSetLine, "the frame AFTER the malformed pump() carries the bit set");
+  }
+
+  // No further malformed input arrives -- the caller mirrors that too
+  // (malformedCount() is monotonic and never clears on its own, so a real
+  // main.cpp call site would keep this bit latched; this half of the
+  // scenario only proves Telemetry's own level-set discipline, matching
+  // scenario 4's fault/event bit treatment).
+  telemetry.setFault(App::kFaultCommsMalformed, false);
+  checkU64Eq(telemetry.faultBits(), 0, "faultBits() clears once the caller reports the condition cleared");
+
+  telemetry.emit(40);
+
+  msg::Telemetry expectedClear;
+  expectedClear.now = 40;
+  expectedClear.seq = 1;
+  msg::ReplyEnvelope envClear;
+  envClear.corr_id = 0;
+  envClear.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
+  envClear.body.tlm = expectedClear;
+  std::string expectedClearLine = armorReply(envClear);
+  if (serialFake.sendLog().size() == 2) {
+    checkStrEq(serialFake.sendLog()[1], expectedClearLine, "second frame carries the bit cleared");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -554,6 +660,7 @@ int main() {
   scenarioSecondaryNeverCoincidesWithPrimaryAndDoesNotDelayIt();
   scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase();
   scenarioMeasuredCadenceReport();
+  scenarioMalformedFrameSetsCommsMalformedFaultBit();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Telemetry scenarios passed\n");

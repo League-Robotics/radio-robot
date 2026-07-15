@@ -1,36 +1,42 @@
-"""NezhaProtocol — v2 wire-protocol adapter for the Nezha firmware.
+"""NezhaProtocol — binary wire-protocol adapter for the P4 single-loop
+Nezha firmware (103-001 onward).
 
 Owns the SerialConnection and is the only code that touches the serial port.
 All command encoding and response parsing lives here; higher-level objects
 (NezhaState, Nezha) delegate every wire operation to this class.
 
-Wire format — protocol v2
---------------------------
-Requests:
-  One '\n'-terminated line, whitespace-delimited tokens.
-  Verb is upper-cased by the firmware; remaining tokens preserve case.
-  Optional trailing '#<id>' for request correlation.
-  Example: "S 200 150\n", "SET ml=0.487\n", "T 200 200 1000 #7\n"
+Wire format — P4 (single-loop firmware, 103-001)
+-------------------------------------------------
+The command plane is binary-only: one ``CommandEnvelope`` (protobuf,
+``protos/envelope.proto``) per outbound command, armored as a `*B<base64>`
+line. ``CommandEnvelope``'s ``cmd`` oneof carries exactly THREE arms —
+``twist``/``config``/``stop`` — every earlier arm (ping/echo/id/hello/ver/
+help/get/drive/segment/replace/motion/pose_fix/otos/stream/plan_dump) was
+pruned by 103-001's schema prune and is `reserved`, not reused (see
+``envelope.proto``'s own header comment). There is no per-command
+synchronous reply for ``twist``/``config``/``stop`` — a command's outcome
+rides the ack ring inside the next ``Telemetry`` push (``wait_for_ack()``).
 
-Responses:
-  OK   — command accepted:       "OK pong t=12345"
-  ERR  — rejected:               "ERR badarg missing key"
-  EVT  — async event:            "EVT done T", "EVT done T #12", "EVT safety_stop"
-                                 May carry a trailing reason= token, e.g.:
-                                 "EVT done T reason=time", "EVT safety_stop reason=watchdog"
-  TLM  — telemetry frame:        "TLM t=12345 enc=1024,1019 pose=350,-12,1780"
-  CFG  — config dump:            "CFG ml=0.487 mr=0.481 ..."
-  ID   — identity/capabilities:  "ID model=Nezha2 name=GUTOV ..."
+Telemetry is always-on (no STREAM arm to arm first): the firmware pushes a
+``ReplyEnvelope{tlm: Telemetry}`` frame unconditionally at ~25 Hz — see
+``read_binary_tlm_frames()``/``read_pending_binary_tlm_frames()``.
 
-EVT done T/D/G and EVT safety_stop carry a trailing '#<id>' when the
-originating T/D/G command included one.  Bare events (no id) are unchanged.
+104-002 deleted every method targeting a now-reserved arm (ping/echo/get_id/
+get_ver/get_help/get_config/get_config_binary/pose_fix/drive/timed/distance/
+arc/vw/turn/go_to/grip/zero_*/otos_*/port_*/stream/stream_fields/snap/
+stream_drive/wait_for_evt_done/cancel and the ``Stop`` stop-clause-token
+builder) — see this ticket's completion notes for the full disposition
+table. ``set_config()``/``set_config_binary()`` survive (target the still-
+live ``config`` arm); there is no live config READ-back path any more (the
+``get`` arm is reserved) — a genuine, permanent wire-schema gap until a
+future sprint adds one.
 """
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Generator
+from typing import Any
 
 from robot_radio.io.serial_conn import SerialConnection
 
@@ -42,14 +48,7 @@ from robot_radio.io.serial_conn import SerialConnection
 # robot_radio.robot's own __init__.py is still mid-execution (which is
 # always the case when this module is first loaded -- __init__.py imports
 # this module itself) never re-enters a partially-initialized module.
-from robot_radio.robot.pb2 import config_pb2, drivetrain_pb2, envelope_pb2, planner_pb2, telemetry_pb2
-
-# legacy_translate (097-002, M4 Legacy Verb Translator): pure/stateless
-# verb -> pb2-message functions, no SerialConnection/I/O reference. Same
-# "no circular-import hazard" reasoning as the robot.pb2 import above --
-# robot_radio.robot.legacy_translate depends only on robot_radio.robot.pb2,
-# never back onto robot_radio.robot's own __init__.py or this module.
-from robot_radio.robot import legacy_translate
+from robot_radio.robot.pb2 import config_pb2, envelope_pb2, planner_pb2, telemetry_pb2
 
 
 # ---------------------------------------------------------------------------
@@ -63,15 +62,6 @@ from robot_radio.robot import legacy_translate
 # Same scale factor, same truncate-toward-zero int() cast the firmware's
 # static_cast<int> applies -- see TLMFrame.from_pb2().
 _ANGLE_SCALE = 5729.5779513  # [cdeg/rad]
-
-# kStreamFloorMs mirror (source/commands/telemetry_commands.cpp /
-# binary_channel.cpp): the firmware's own minimum non-zero STREAM period --
-# handleStream() clamps any 1..19 request up to this floor. snap()'s
-# arm-wait-disarm synthesis (097-003, M3, architecture-update.md Decision 4)
-# arms at this floor so its one-shot wait is as short as the firmware allows;
-# no host-side clamping semantics are implied beyond "this is what the
-# firmware will actually use".
-_STREAM_FLOOR_MS = 20  # [ms]
 
 # modeChar() mirror (source/telemetry/tlm_frame.cpp): maps msg::DriveMode
 # (telemetry.mode, planner.proto) to the SAME single-character mode= wire
@@ -201,13 +191,15 @@ class TLMFrame:
 
         Adapts telemetry.proto's wire shape onto this SAME dataclass shape
         the historical text-plane TLM parser (retired 097-003; see
-        ``tests/unit/test_protocol_binary_client.py`` for the frozen
-        reference copy used to verify field-for-field parity) already
-        produced from a text STREAM/SNAP line — for every field the two
-        formats share, ``from_pb2(telemetry)`` is field-for-field equal to
-        what that historical parser produced from the matching text line.
-        This is an ADAPTER, not a redesign: TLMFrame's existing fields/shape
-        are unchanged; pb2's shape bends to fit them, never the reverse.
+        ``robot_radio.robot._legacy_tlm_text.parse_historical_tlm_line`` for
+        the frozen reference copy kept for parity-testing and the narrow set
+        of non-``SerialConnection`` consumers that module's own docstring
+        names) already produced from a text STREAM/SNAP line — for every
+        field the two formats share, ``from_pb2(telemetry)`` is field-for-
+        field equal to what that historical parser produced from the
+        matching text line. This is an ADAPTER, not a redesign: TLMFrame's
+        existing fields/shape are unchanged; pb2's shape bends to fit them,
+        never the reverse.
 
         Truncation matches the firmware's own text formatter exactly
         (``buildTlmFrame()``'s ``static_cast<int>``, i.e. truncate-toward-
@@ -236,49 +228,30 @@ class TLMFrame:
             ``otosconn=`` token into any TLMFrame field either, so
             ``otos_connected`` is dropped here too, for parity with the
             text path this dataclass already models.
-          - ``acc_left``/``acc_right``/``conn_left``/``conn_right``/
-            ``glitch_left``/``glitch_right``/``ts_left``/``ts_right`` —
-            telemetry.proto ALSO curates these from the separate one-shot
-            ``TLM`` verb's ``OK tlm ...`` reply (``handleTlm()``,
-            motion_commands.cpp) — a DIFFERENT text wire shape than the
-            STREAM/SNAP ``TLM t=... mode=...`` line this dataclass models.
-            TLMFrame has no slot for these; they are silently dropped here,
-            like any other field this dataclass does not declare.
-          - ``cmd_vel`` (103-009, NEW gap): the pre-103 ``Telemetry`` carried
-            ``has_cmd_vel``/``cmd_vel_left``/``cmd_vel_right`` at the primary
-            cadence; 103-001's prune (telemetry.proto's own file header)
-            moved them OUT to the new, slower ``TelemetrySecondary`` message
-            — the primary ``Telemetry`` this method decodes no longer
-            declares any of the three fields at all, so reading them here
-            would raise ``AttributeError`` (a live break this ticket fixes,
-            not just a documentation update — every previously-queued
-            binary telemetry frame crashed ``from_pb2()``, and therefore
-            ``read_pending_binary_tlm_frames()``/``wait_for_ack()``, before
-            this fix). Like ``encpose`` above, this is a genuine, permanent
-            gap for a caller polling the PRIMARY telemetry stream — the
+          - ``cmd_vel`` (103-009, permanent gap): 103-001's prune
+            (telemetry.proto's own file header) moved
+            ``has_cmd_vel``/``cmd_vel_left``/``cmd_vel_right`` OUT of the
+            primary ``Telemetry`` message to the new, slower
+            ``TelemetrySecondary`` message — the primary ``Telemetry`` this
+            method decodes no longer declares any of the three fields at
+            all. Like ``encpose`` above, this is a genuine, permanent gap
+            for a caller polling the PRIMARY telemetry stream — the
             velocity PID setpoint is still available, just on
             ``TelemetrySecondary`` (own cadence, own decode path — no
             ``TLMFrame`` adapter exists for it yet as of this ticket).
+          - ``acc_left``/``acc_right``/``glitch_left``/``glitch_right``/
+            ``ts_left``/``ts_right`` — 103-001 moved these to
+            ``TelemetrySecondary`` too (telemetry.proto's own file header);
+            same permanent-gap treatment as ``cmd_vel`` above.
           - ``active`` is the ONE exception to the paragraph above (097,
             this ticket): unlike the other bench-diagnostic fields,
             ``telemetry.active`` (``bb.drivetrain.busy`` — motion in
-            progress, telemetry.proto field 22) is ALSO present, unconditionally,
-            on every STREAM/SNAP binary frame (telemetry.proto declares one
-            ``Telemetry`` message for both the periodic and one-shot
-            shapes; only the historical TEXT parser split them into two
-            wire lines). It is populated below because it is the ONE
-            reliable segment/replace-arm completion signal: ``mode``
-            (``bb.planner.mode``) never leaves ``IDLE`` for segment-arm
-            motion (S/D/T/RT/R/TURN/G/MOVE/MOVER all post to
-            ``bb.segmentIn``/``bb.replaceIn``/``bb.driveIn``, never to
-            ``bb.motionIn``/``Subsystems::Planner`` — Planner is parked),
-            so a caller polling ``mode == "I"`` for "did the last segment
-            finish" would see a false-positive IMMEDIATELY. ``active``
-            (``Subsystems::Drivetrain::tick()``'s own
-            ``segmentMode_ ? executor_.active() : ...`` assignment,
-            drivetrain.cpp) tracks the SegmentExecutor directly and is
-            correct for every arm. ``__main__.py``'s ``_TourRunner.
-            _wait_for_idle`` uses it for exactly this reason.
+            progress, telemetry.proto field 18) is ALSO present,
+            unconditionally, on every telemetry frame. It is populated
+            below because it is the ONE reliable motion-complete signal —
+            ``mode`` does not reliably track it for every drive path.
+            ``__main__.py``'s ``_TourRunner._wait_for_idle`` uses it for
+            exactly this reason.
 
         ``vel``/``cmd_vel``/``twist`` are always built as the DIFFERENTIAL
         tuple shape (matching this build's differential-only drivetrain and
@@ -341,92 +314,22 @@ class TLMFrame:
 
 @dataclass
 class ParsedResponse:
-    """Structured representation of a single response line from the firmware.
+    """Structured representation of a single text-plane response line.
 
-    ``tlm`` (097-003): populated only when this ``ParsedResponse`` was
-    synthesized by ``NezhaProtocol.stream_drive()`` from a binary-plane
-    telemetry push frame (``tag="TLM"``, every other field at its default) --
-    ``stream_drive()`` arms streaming via ``stream()``, which is binary-only
-    after this ticket, so no text ``TLM ...`` line is ever produced for it to
-    parse (``raw``/``tokens``/``kv`` stay empty for a binary-sourced frame).
-    Every text-sourced ``ParsedResponse`` (``OK``/``ERR``/``EVT``/...) leaves
-    ``tlm`` at its default ``None``.
+    Retained as generic line-parsing infrastructure (``parse_response()``
+    below) — not itself a "verb" method targeting a specific
+    ``CommandEnvelope`` oneof arm, so out of 104-002's dead-verb-deletion
+    scope. No ``NezhaProtocol`` method in this file constructs one any
+    more (the binary-only P4 command plane has no per-command
+    ``ReplyEnvelope`` line to parse this way) — surviving callers are
+    outside this file (e.g. relay-transport EVT/keepalive line handling).
     """
     tag: str          # "OK", "ERR", "EVT", "TLM", "CFG", "ID"
     tokens: list[str] = field(default_factory=list)  # plain tokens after tag
     kv: dict[str, str] = field(default_factory=dict) # key=value pairs
     corr_id: str | None = None                       # trailing #<id>, if any
     raw: str = ""                                    # original stripped line
-    tlm: "TLMFrame | None" = None                     # 097-003: binary-sourced frame, if any
-
-
-# ---------------------------------------------------------------------------
-# Stop clause builder
-# ---------------------------------------------------------------------------
-
-class Stop:
-    """Builder for stop= clause tokens sent with motion commands.
-
-    Each class method returns a formatted stop= string that can be passed
-    in the stop=[...] list argument to motion command methods (vw, drive,
-    arc, timed, distance, turn).
-
-    Grammar matches the firmware mc_parseStopToken dispatch table:
-      stop=t:<ms>
-      stop=d:<mm>
-      stop=line:<ge|le>:<thr>
-      stop=sensor:<ch>:<ge|le>:<thr>
-      stop=color:<h>:<s>:<v>:<dist>
-      stop=heading:<heading>:<eps>  (cdeg, cdeg)
-      stop=rot:<arc>  (mm)
-    """
-
-    @classmethod
-    def time(cls, duration: int) -> str:  # [ms]
-        """Stop after ``duration`` milliseconds."""
-        return f"stop=t:{duration}"
-
-    @classmethod
-    def dist(cls, distance: int) -> str:  # [mm]
-        """Stop after ``distance`` millimetres of travel."""
-        return f"stop=d:{distance}"
-
-    @classmethod
-    def line(cls, cmp: str, threshold: int) -> str:
-        """Stop when the line sensor crosses the threshold.
-
-        Args:
-            cmp: ``'ge'`` (>=) or ``'le'`` (<=).
-            threshold: Raw sensor count.
-        """
-        return f"stop=line:{cmp}:{threshold}"
-
-    @classmethod
-    def sensor(cls, channel: str, cmp: str, threshold: int) -> str:
-        """Stop when a named sensor channel crosses the threshold.
-
-        Args:
-            channel: One of line0–line3, colorR, colorG, colorB, colorC,
-                     analogIn0–analogIn3.
-            cmp: ``'ge'`` (>=) or ``'le'`` (<=).
-            threshold: Raw sensor count.
-        """
-        return f"stop=sensor:{channel}:{cmp}:{threshold}"
-
-    @classmethod
-    def color(cls, h: float, s: float, v: float, dist: float) -> str:
-        """Stop when the color sensor matches (h, s, v) within ``dist``."""
-        return f"stop=color:{h}:{s}:{v}:{dist}"
-
-    @classmethod
-    def heading(cls, heading: int, eps: int) -> str:  # [cdeg]
-        """Stop when the robot reaches heading ``heading`` ± ``eps`` (centi-degrees)."""
-        return f"stop=heading:{heading}:{eps}"
-
-    @classmethod
-    def rot(cls, arc_length: int) -> str:  # [mm]
-        """Stop after ``arc_length`` millimetres of arc travel."""
-        return f"stop=rot:{arc_length}"
+    tlm: "TLMFrame | None" = None                     # binary-sourced frame, if any
 
 
 # ---------------------------------------------------------------------------
@@ -442,10 +345,12 @@ def _strip_relay(line: str) -> str:
 
 
 def parse_response(line: str) -> ParsedResponse | None:
-    """Parse one v2 response line into a ParsedResponse, or None if unrecognised.
+    """Parse one text-plane response line into a ParsedResponse, or None if
+    unrecognised.
 
-    Handles relay prefix stripping, optional trailing '#<id>' correlation token,
-    and key=value pair extraction.
+    Handles relay prefix stripping, optional trailing '#<id>' correlation
+    token, and key=value pair extraction. See ``ParsedResponse``'s own
+    docstring for why this parser survives 104-002's dead-verb sweep.
     """
     s = _strip_relay(line)
     if not s:
@@ -524,21 +429,15 @@ def tlm_drop_rate(frames: "list[TLMFrame]") -> float:
 
 # ---------------------------------------------------------------------------
 # Config key <-> binary target/field mapping (097-002, M2 NezhaProtocol Core
-# Conversion). NezhaProtocol.get_config()/.set_config() keep their text-plane
-# **kwargs/*keys signature -- a flat "wire key" vocabulary -- but the binary
-# plane's ConfigDelta/ConfigGet/ConfigSnapshot (config.proto, 096-001) are
-# typed, per-SLICE Patch messages, not a generic key/value map. This table is
-# the translation between the two: it curates the SAME 15 keys
-# config_commands.cpp's kAllKeys registers on the text plane (that file's own
-# list, transcribed here -- config.proto's own header comment already
-# establishes the 1:1 correspondence between kAllKeys and the three curated
-# Patch messages, so this map does not invent anything new), PLUS
-# headingKp/headingKd (098-005) -- two keys with no kAllKeys precedent at all
-# (added to PlannerConfig, and wired all the way to the wire Patch, after
-# config_commands.cpp was already deleted, 097-007). A key not in this table
-# has no binary wire target at all (mirrors the text plane's own ERR badkey
-# -- see get_config()/set_config()'s own docstrings for the resulting
-# behavior).
+# Conversion). NezhaProtocol.set_config()/.config() keep a flat "wire key"
+# vocabulary -- a flat "wire key" vocabulary -- but the binary plane's
+# ConfigDelta (config.proto, 096-001) is typed, per-SLICE Patch messages,
+# not a generic key/value map. This table is the translation between the
+# two: it curates the SAME 15 keys config_commands.cpp's kAllKeys used to
+# register on the (now-retired) text plane, transcribed here, PLUS
+# headingKp/headingKd (098-005). There is no live config READ-back path
+# (the binary `get` arm was pruned by 103-001) -- this table now serves
+# `set_config()`/`config()` only.
 # ---------------------------------------------------------------------------
 
 # tw/rotSlip/ekfQxy/ekfQtheta/ekfROtosXy/ekfROtosTheta -> DrivetrainConfigPatch
@@ -556,10 +455,7 @@ _DRIVETRAIN_KEYS = {
 # bound motors from a SINGLE patch server-side (handleConfigMotor(),
 # binary_channel.cpp -- "any present Gains field applies to BOTH bound
 # motors unconditionally... never a per-side Gains split"), so a set_config()
-# call needs only ONE motor envelope carrying these, never two. Read back
-# from the LEFT motor's snapshot (config_commands.cpp's own
-# formatConfigKeyFromBb() comment: "pid.* reads the LEFT bound motor's
-# published config").
+# call needs only ONE motor envelope carrying these, never two.
 _MOTOR_PID_KEYS = {
     "pid.kp": "kp",
     "pid.ki": "ki",
@@ -570,12 +466,10 @@ _MOTOR_PID_KEYS = {
 
 # minSpeed -> PlannerConfigPatch.min_speed, config_pb2.CONFIG_PLANNER.
 # headingKp/headingKd (098-005): the two outer heading-loop PD gains added to
-# PlannerConfigPatch by ticket 098-005, after config_commands.cpp's own
-# kAllKeys curation list (which minSpeed mirrors) had already been deleted
-# (097-007) -- there is no legacy text key for these two; added directly here
-# so set_config(headingKp=...)/get_config("headingKp") reach the SAME
-# PlannerConfigPatch.heading_kp field binary_channel.cpp's handleConfigPlanner()
-# now decodes (source/commands/binary_channel.cpp).
+# PlannerConfigPatch by ticket 098-005 -- there is no legacy text key for
+# these two; added directly here so set_config(headingKp=...) reaches the
+# SAME PlannerConfigPatch.heading_kp field binary_channel.cpp's
+# handleConfigPlanner() decodes (source/commands/binary_channel.cpp).
 _PLANNER_KEYS = {
     "minSpeed": "min_speed",
     "headingKp": "heading_kp",
@@ -592,28 +486,6 @@ _ALL_SET_KEYS = frozenset(
     set(_DRIVETRAIN_KEYS) | set(_MOTOR_PID_KEYS) | set(_PLANNER_KEYS)
     | {"ml", "mr", "sTimeout"})
 
-# get_config()'s target-per-key lookup (which ConfigGet.target a given key's
-# CURRENT value is read from). pid.* reads LEFT (see _MOTOR_PID_KEYS above).
-_TARGET_FOR_KEY: dict[str, int] = {}
-_TARGET_FOR_KEY.update({k: config_pb2.CONFIG_DRIVETRAIN for k in _DRIVETRAIN_KEYS})
-_TARGET_FOR_KEY.update({k: config_pb2.CONFIG_MOTOR_LEFT for k in _MOTOR_PID_KEYS})
-_TARGET_FOR_KEY["ml"] = config_pb2.CONFIG_MOTOR_LEFT
-_TARGET_FOR_KEY["mr"] = config_pb2.CONFIG_MOTOR_RIGHT
-_TARGET_FOR_KEY.update({k: config_pb2.CONFIG_PLANNER for k in _PLANNER_KEYS})
-_TARGET_FOR_KEY["sTimeout"] = config_pb2.CONFIG_WATCHDOG
-
-# get_config() with no keys: the full dump, in kAllKeys' own order
-# (config_commands.cpp) -- not required for correctness (dict order is not a
-# documented part of get_config()'s contract) but keeps a printed/iterated
-# result stable and diffable against the text plane's own dump order.
-_ALL_GET_KEYS = (
-    "tw", "ml", "mr",
-    "pid.kp", "pid.ki", "pid.kff", "pid.iMax", "pid.kaw",
-    "rotSlip",
-    "ekfQxy", "ekfQtheta", "ekfROtosXy", "ekfROtosTheta",
-    "minSpeed", "headingKp", "headingKd", "sTimeout",
-)
-
 
 def _format_config_value(value: Any) -> str:
     """Format a set_config() kwarg value into the SAME string shape the
@@ -625,73 +497,18 @@ def _format_config_value(value: Any) -> str:
     return str(value)
 
 
-def _read_config_snapshot_value(key: str, snapshot: "envelope_pb2.ConfigSnapshot") -> str | None:
-    """Read one get_config() key's current value out of the ConfigSnapshot
-    for the target _TARGET_FOR_KEY[key] names. BinaryChannel's handleGet()
-    (binary_channel.cpp) always populates EVERY field of a target's Patch on
-    a GET reply (no partial-presence case to handle here -- unlike a SET
-    delta, a GET snapshot is a full read of the target's current state)."""
-    if key in _DRIVETRAIN_KEYS:
-        return _format_config_value(getattr(snapshot.drivetrain, _DRIVETRAIN_KEYS[key]))
-    if key in ("ml", "mr"):
-        return _format_config_value(snapshot.motor.travel_calib)
-    if key in _MOTOR_PID_KEYS:
-        return _format_config_value(getattr(snapshot.motor, _MOTOR_PID_KEYS[key]))
-    if key in _PLANNER_KEYS:
-        # Generic getattr, not a hardcoded `.min_speed` -- _PLANNER_KEYS grew
-        # a second/third entry (headingKp/headingKd, 098-005) after this line
-        # was originally written for minSpeed alone; mirrors _DRIVETRAIN_KEYS/
-        # _MOTOR_PID_KEYS' own getattr(..., _XXX_KEYS[key]) shape immediately
-        # above, which was already generic since those tables always had more
-        # than one entry.
-        return _format_config_value(getattr(snapshot.planner, _PLANNER_KEYS[key]))
-    if key == "sTimeout":
-        return str(snapshot.watchdog)
-    return None
-
-
-def build_pose_fix_envelope(x: float, y: float, h: float, t: int,  # [mm] [mm] [rad] [ms]
-                            *, reset: bool = False,
-                            zero_encoders: bool = False) -> "envelope_pb2.CommandEnvelope":
-    """Build a ``CommandEnvelope{pose_fix: PoseFix{...}}`` (arm 7, 099-004/
-    099-008 -- ``protos/drivetrain.proto``/``protos/envelope.proto``).
-
-    Pure/stateless -- no I/O, no ``SerialConnection`` reference, mirroring
-    ``legacy_verbs.py``'s own ``envelope_for_*()`` builders (095 Decision
-    5's "transcribe, don't re-derive" discipline). ``PoseFix`` has no
-    legacy text-v2 verb of its own -- it is new sprint-099 wire capability
-    (the formerly ``ERR_UNIMPLEMENTED``-only ``pose`` arm), so this builder
-    lives here (next to the ``NezhaProtocol`` method that sends it) rather
-    than in ``legacy_verbs.py``, whose own docstring scopes it to the FULL
-    text-v2 verb surface a legacy client might still send.
-
-    ``x``/``y``/``h``/``t`` are meaningless when only ``reset``/
-    ``zero_encoders`` are set (``protos/drivetrain.proto``'s own ``PoseFix``
-    field comments; architecture-update.md (099) D5-D8) -- callers sending a
-    genuine delayed camera fix (the only branch ticket 099-008 makes live)
-    leave both flags ``False``.
-    """
-    return envelope_pb2.CommandEnvelope(
-        pose_fix=drivetrain_pb2.PoseFix(
-            x=x, y=y, h=h, t=t, reset=reset, zero_encoders=zero_encoders))
-
-
 # ---------------------------------------------------------------------------
 # NezhaProtocol
 # ---------------------------------------------------------------------------
 
 class NezhaProtocol:
-    """Wire protocol v2 adapter for the Nezha firmware.
+    """Binary wire-protocol adapter for the P4 single-loop Nezha firmware.
 
-    Owns a SerialConnection and exposes one method per firmware command group.
-    All response parsing delegates to module-level parse_* functions so callers
-    can reuse them on lines received through other paths (streaming generators).
-
-    v2 protocol rules:
-    - Commands are whitespace-separated tokens, verb upper-cased only.
-    - Integer values are literal mm (no implicit scaling, no sign prefix).
-    - Optional trailing '#<id>' for request/response correlation.
-    - Response tags: OK, ERR, EVT, TLM, CFG, ID.
+    Owns a SerialConnection and exposes one method per firmware command group
+    (``twist``/``stop``/``config``) plus telemetry read accessors. All
+    response parsing delegates to module-level parse_* functions so callers
+    can reuse them on lines received through other paths (streaming
+    generators).
     """
 
     def __init__(self, conn: SerialConnection) -> None:
@@ -728,12 +545,9 @@ class NezhaProtocol:
         ``None``) DIRECTLY -- its own docstring explains why: the sim call
         is already synchronous (one in-process C call, no interleaving is
         possible), so there is no dict wrapper to build. Every
-        ``NezhaProtocol`` method below sends over EITHER connection type
-        (``testgui.binary_bridge`` — 097's TestGUI transport migration —
-        constructs one ``NezhaProtocol`` per connection, hardware or sim,
-        and routes every command through it), so this is the ONE place
-        that reconciles the two shapes rather than each call site
-        special-casing ``isinstance(result, dict)`` itself.
+        ``NezhaProtocol`` method below sends over EITHER connection type,
+        so this is the ONE place that reconciles the two shapes rather than
+        each call site special-casing ``isinstance(result, dict)`` itself.
         """
         result = self._conn.send_envelope(envelope, read_timeout=read_timeout)
         if isinstance(result, dict):
@@ -741,7 +555,13 @@ class NezhaProtocol:
         return result
 
     def send(self, cmd: str, read_timeout: int = 500) -> dict:  # [ms]
-        """Send a v2 command, return raw response dict (for ad-hoc / pass-through)."""
+        """Send a text-plane command, return raw response dict (for ad-hoc /
+        pass-through). NOTE: the P4 firmware has no text-plane command
+        parser (``main.cpp``'s dispatch switch decodes binary
+        ``CommandEnvelope`` only) -- this passthrough survives as generic
+        transport plumbing (``SerialConnection.send()``), not a verb this
+        ticket's dead-arm sweep targets, but a text line sent through it
+        reaches no live firmware handler."""
         return self._conn.send(cmd, read_timeout)
 
     def send_fast(self, cmd: str) -> None:
@@ -762,147 +582,15 @@ class NezhaProtocol:
 
     @staticmethod
     def parse_response(line: str) -> ParsedResponse | None:
-        """Parse a v2 response line. Delegates to module-level parse_response()."""
+        """Parse a text-plane response line. Delegates to module-level
+        parse_response()."""
         return parse_response(line)
 
     # ------------------------------------------------------------------
-    # Liveness / identity
+    # Config: SET (096-007/097-002, M2/M6). No live READ-back path -- the
+    # binary `get` arm was pruned by 103-001 (envelope.proto reserves it);
+    # get_config()/get_config_binary() were deleted by 104-002 alongside it.
     # ------------------------------------------------------------------
-
-    def ping(self, corr_id: str | None = None) -> tuple[int, float] | None:
-        """Send PING, parse the reply's robot-clock timestamp (ms).
-
-        Returns (t_robot, rtt) or None if no valid response, both in ms.
-        rtt is the round-trip time measured by this call.
-
-        Binary implementation (097-002, M2 NezhaProtocol Core Conversion):
-        CommandEnvelope{ping: Ping{}} via send_envelope() -- the Ack reply's
-        `t` field (set only by BinaryChannel's ping arm, mirroring text
-        PING's `OK pong t=<ms>`) is `t_robot`. `corr_id` is accepted for
-        signature compatibility but has no binary wire home -- the
-        envelope's own corr_id field is fully owned/overwritten by
-        SerialConnection.send_envelope() for reply routing, unlike the text
-        plane's independent trailing '#<id>' token. No caller in this tree
-        passes it today (grep-verified); contract (return type/shape)
-        unchanged.
-        """
-        envelope = envelope_pb2.CommandEnvelope(ping=envelope_pb2.Ping())
-        t0 = time.monotonic()
-        reply = self._send_envelope(envelope, read_timeout=500)
-        t1 = time.monotonic()
-        rtt = (t1 - t0) * 1000.0  # [ms]
-
-        if reply is not None and reply.WhichOneof("body") == "ok":
-            return (int(reply.ok.t), rtt)
-        return None
-
-    def echo(self, payload: str) -> str | None:
-        """Send ECHO <payload>, return echoed payload string or None.
-
-        Binary implementation (097-002): CommandEnvelope{echo: Echo{payload}}
-        via send_envelope(); the reply's echo arm carries the payload back
-        verbatim (envelope.proto's own "reuse the request-side message on
-        the reply side" pattern). Contract (return type/shape) unchanged.
-        """
-        envelope = envelope_pb2.CommandEnvelope(
-            echo=envelope_pb2.Echo(payload=payload.encode("utf-8")))
-        reply = self._send_envelope(envelope, read_timeout=500)
-        if reply is not None and reply.WhichOneof("body") == "echo":
-            return reply.echo.payload.decode("utf-8")
-        return None
-
-    def get_id(self) -> dict[str, str] | None:
-        """Send ID command. Returns kv dict (model, name, serial, fw, proto, caps) or None.
-
-        Binary implementation (097-002): CommandEnvelope{id: DeviceId{}}
-        (empty request, envelope.proto Decision 4) via send_envelope(); the
-        reply's DeviceId fields (model/name/serial/fw_version/proto_version)
-        map onto the SAME kv keys the text ID reply's `handleId()`
-        (system_commands.cpp) emits today -- `caps=` is not emitted by
-        either plane (that field was dropped pre-097; see handleId()'s own
-        comment). Contract (return type/shape) unchanged.
-        """
-        envelope = envelope_pb2.CommandEnvelope(id=envelope_pb2.DeviceId())
-        reply = self._send_envelope(envelope, read_timeout=500)
-        if reply is not None and reply.WhichOneof("body") == "id":
-            d = reply.id
-            return {
-                "model": d.model,
-                "name": d.name,
-                "serial": str(d.serial),
-                "fw": d.fw_version,
-                "proto": str(d.proto_version),
-            }
-        return None
-
-    def get_ver(self) -> dict[str, str] | None:
-        """Send VER command. Returns kv dict (fw, proto) or None.
-
-        Binary implementation (097-002): VER's content is a strict SUBSET of
-        ID's reply -- no independent binary `ver` arm exists or is added
-        (architecture-update.md (097) M2). Sends the SAME CommandEnvelope{id:
-        DeviceId{}} get_id() does and reads only fw_version/proto_version off
-        the reply. Contract (return type/shape) unchanged.
-        """
-        envelope = envelope_pb2.CommandEnvelope(id=envelope_pb2.DeviceId())
-        reply = self._send_envelope(envelope, read_timeout=500)
-        if reply is not None and reply.WhichOneof("body") == "id":
-            return {"fw": reply.id.fw_version, "proto": str(reply.id.proto_version)}
-        return None
-
-    def get_help(self) -> str | None:
-        """Send HELP. Returns the verb-list string or None."""
-        resp_dict = self._conn.send("HELP", read_timeout=500)
-        for raw_line in resp_dict.get("responses", []):
-            r = parse_response(raw_line)
-            if r and r.tag == "OK" and r.tokens and r.tokens[0] == "help":
-                return " ".join(r.tokens[1:])
-        return None
-
-    # ------------------------------------------------------------------
-    # Config: GET / SET
-    # ------------------------------------------------------------------
-
-    def get_config(self, *keys: str) -> dict[str, str] | None:
-        """Send GET [keys...], parse CFG response into key->value dict.
-
-        With no keys, returns the full config dump (all registered keys).
-        Returns None if no CFG line was received.
-
-        Binary implementation (097-002): thin wrapper over get_config_binary()
-        (096-007). The text plane's single "GET [keys]" line becomes one
-        get_config_binary() round trip PER DISTINCT ConfigTarget the
-        requested keys span (module-level _TARGET_FOR_KEY) -- ConfigGet only
-        names one target per request (config.proto), unlike the text plane's
-        single free-form key list, so a multi-target request (or the full,
-        no-args dump, which spans all 5 targets) costs multiple round trips.
-        A key outside the module-level _ALL_SET_KEYS vocabulary has no
-        binary wire target -- returns None (mirrors the text plane's own ERR
-        badkey producing no CFG line). A target whose round trip times out
-        contributes no keys to the result (best-effort merge, matching the
-        text plane's own "merge every CFG line received" behavior across a
-        multi-line dump) rather than failing the whole call.
-        """
-        requested = keys if keys else _ALL_GET_KEYS
-        if any(k not in _TARGET_FOR_KEY for k in requested):
-            return None
-
-        targets = sorted({_TARGET_FOR_KEY[k] for k in requested})
-        snapshots: dict[int, envelope_pb2.ConfigSnapshot] = {}
-        for target in targets:
-            snapshot = self.get_config_binary(target)
-            if snapshot is not None:
-                snapshots[target] = snapshot
-
-        result: dict[str, str] = {}
-        for key in requested:
-            snapshot = snapshots.get(_TARGET_FOR_KEY[key])
-            if snapshot is None:
-                continue
-            value = _read_config_snapshot_value(key, snapshot)
-            if value is not None:
-                result[key] = value
-        return result if result else None
 
     def set_config(self, **kwargs: Any) -> dict[str, str] | None:
         """Send SET key=value ..., parse OK set response.
@@ -911,24 +599,27 @@ class NezhaProtocol:
         Floats are formatted with up to 6 significant digits.
 
         Binary implementation (097-002): thin wrapper over set_config_binary()
-        (096-007). Unlike the text plane's single atomic SET line, a
+        (096-007). Unlike the (retired) text plane's single atomic SET line, a
         ConfigDelta's oneof carries only ONE Patch at a time (config.proto),
         so kwargs spanning multiple targets (e.g. tw= + sTimeout=) become
         MULTIPLE set_config_binary() round trips, one per touched target --
-        NOT atomic across targets the way the single text SET line was
-        (flagged, not silently reconciled, per this project's "transcribe,
-        never re-derive; flag genuine gaps" discipline: a true cross-target
-        atomic SET is not achievable without new binary wire capability,
-        out of this sprint's scope). Any kwarg key outside the module-level
+        NOT atomic across targets (flagged, not silently reconciled, per this
+        project's "transcribe, never re-derive; flag genuine gaps"
+        discipline: a true cross-target atomic SET is not achievable without
+        new binary wire capability). Any kwarg key outside the module-level
         _ALL_SET_KEYS vocabulary fails the WHOLE call (returns None, no wire
-        traffic at all) -- mirrors the text plane's own atomic-SET "one bad
-        key rejects the whole line" posture (config_commands.cpp's own file
-        header). If every touched target's round trip Acks, the returned
-        dict echoes the kwargs actually sent (formatted the same way the
-        pre-097-002 text implementation formatted them) -- the binary Ack
-        carries no per-key echo the way the text "OK set ..." reply did, so
-        this is the closest same-shape substitute, not a wire round trip of
-        the applied value.
+        traffic at all). If every touched target's round trip Acks, the
+        returned dict echoes the kwargs actually sent (formatted the same
+        way the pre-097-002 text implementation formatted them) -- the
+        binary Ack carries no per-key echo the way the text "OK set ..."
+        reply did, so this is the closest same-shape substitute, not a wire
+        round trip of the applied value.
+
+        See also ``config()`` (104-001): a stricter, single-envelope-per-
+        call builder for the same ``ConfigDelta`` arm — raises ``ValueError``
+        instead of silently no-op'ing on a multi-target or unknown-key
+        call. Both survive; neither supersedes the other (see 104-002
+        completion notes).
         """
         if not kwargs:
             return None
@@ -989,21 +680,7 @@ class NezhaProtocol:
         return {key: _format_config_value(value) for key, value in kwargs.items()}
 
     # ------------------------------------------------------------------
-    # Config: binary GET / SET (096-007, M6 Host Config/Telemetry Client)
-    #
-    # Alongside the text SET/GET wrappers above, NOT a replacement for
-    # them — same public-API-stability posture 095 established for
-    # drive/segment/replace (this class's existing methods/signatures are
-    # untouched; these are new, additive envelope builders). Both build a
-    # CommandEnvelope and hand it to SerialConnection.send_envelope() (095's
-    # corr-id-correlated binary round trip), then unwrap the ONE reply arm
-    # each request can produce — mirroring BinaryChannel's own CONFIG/GET
-    # arms (source/commands/binary_channel.cpp) exactly: CONFIG replies
-    # Ack on success, GET replies exactly one ConfigSnapshot. Neither
-    # method distinguishes a rejected (``Error``) reply from a plain
-    # timeout/not-connected — both return None, matching get_config()/
-    # set_config()'s own above "no failure detail" posture on the text
-    # plane.
+    # Config: binary SET (096-007, M6 Host Config/Telemetry Client)
     # ------------------------------------------------------------------
 
     def set_config_binary(self, delta: "envelope_pb2.ConfigDelta",
@@ -1023,22 +700,6 @@ class NezhaProtocol:
         reply = self._send_envelope(envelope, read_timeout=read_timeout)
         if reply is not None and reply.WhichOneof("body") == "ok":
             return reply.ok
-        return None
-
-    def get_config_binary(self, target: int,
-                          read_timeout: int = 500) -> "envelope_pb2.ConfigSnapshot | None":  # [ms]
-        """Send CommandEnvelope{get: ConfigGet{target}}; return the
-        ConfigSnapshot reply (exactly one slice, per BinaryChannel's GET
-        arm), or None (timeout, not connected, or an Error reply).
-
-        ``target`` is one of ``config_pb2.CONFIG_DRIVETRAIN`` /
-        ``CONFIG_MOTOR_LEFT`` / ``CONFIG_MOTOR_RIGHT`` / ``CONFIG_PLANNER``
-        / ``CONFIG_WATCHDOG``.
-        """
-        envelope = envelope_pb2.CommandEnvelope(get=envelope_pb2.ConfigGet(target=target))
-        reply = self._send_envelope(envelope, read_timeout=read_timeout)
-        if reply is not None and reply.WhichOneof("body") == "cfg":
-            return reply.cfg
         return None
 
     # ------------------------------------------------------------------
@@ -1079,22 +740,126 @@ class NezhaProtocol:
         docstring for why): the P4 firmware reports ``stop``'s outcome via
         the ack ring (``wait_for_ack()``), not a synchronous reply, so this
         call writes the STOP bytes and returns immediately rather than
-        blocking on a reply that will not come. This supersedes the pre-
-        103-009 implementation, which blocked up to ~800ms on
-        ``send_envelope()``'s reply-queue wait for an Ack the P4 firmware no
-        longer sends for this arm — fire-and-poll is not just consistent
-        with ``twist()``, it is also STRICTLY more responsive for a
-        panic-stop (the write happens up front either way; only the
-        pointless post-write wait is removed).
+        blocking on a reply that will not come.
 
         Returns the corr_id assigned to this command — pass it to
         ``wait_for_ack()`` to confirm the firmware accepted it. Raises
-        ``ConnectionError`` if not connected. Return type changed from
-        ``None`` (pre-103-009) to ``int``; every existing caller in this
+        ``ConnectionError`` if not connected. Every existing caller in this
         tree calls ``stop()`` as a bare statement and ignores the return
-        value, so this is source-compatible.
+        value.
         """
         envelope = envelope_pb2.CommandEnvelope(stop=envelope_pb2.Stop())
+        return self._conn.send_envelope_fast(envelope)
+
+    def config(self, **deltas: Any) -> int:
+        """Build and send a ``ConfigDelta`` envelope (``CommandEnvelope{
+        config: delta}``, ``envelope.proto`` field 6) — the P4 wire's THIRD
+        and last ``cmd`` oneof arm, alongside ``twist()``/``stop()``
+        (``envelope.proto``'s own oneof comment: "config/stop keep their
+        pre-102 field numbers... twist is genuinely new"). 104-001 is what
+        gives ``config`` a host-side builder — before it, every OTHER
+        oneof arm (``twist``/``stop``) had one but ``config`` did not,
+        despite being schema-defined since 103-001.
+
+        Fire-and-poll, the SAME shape as ``twist()``/``stop()`` (103-009,
+        Decision 2's "telemetry-only return path"): a ``config`` command's
+        outcome rides the ack ring inside a subsequent ``Telemetry`` push,
+        never a synchronous ``ReplyEnvelope`` — see ``wait_for_ack()``. This
+        method writes the bytes and returns immediately.
+
+        ``deltas`` reuses the SAME flat wire-key vocabulary ``set_config()``
+        curates (module-level ``_DRIVETRAIN_KEYS``/``_MOTOR_PID_KEYS``/
+        ``_PLANNER_KEYS``/``ml``/``mr``/``sTimeout`` — together
+        ``_ALL_SET_KEYS``), so a key added to one map is automatically
+        available to the other; nothing here re-derives that vocabulary.
+        UNLIKE ``set_config()``, which fans a multi-target kwargs dict out
+        into MULTIPLE round trips (one per touched ``ConfigDelta.patch``
+        oneof arm, since a single ``ConfigDelta`` carries only one patch at
+        a time), ``config()`` builds and sends exactly ONE
+        ``CommandEnvelope`` carrying exactly ONE ``ConfigDelta`` — matching
+        ``twist()``/``stop()``'s own "one call, one envelope, one corr_id"
+        shape. Passing kwargs that span more than one ``ConfigDelta.patch``
+        target (e.g. ``tw=`` and ``pid.kp=`` together — drivetrain vs. motor)
+        is a caller error: raises ``ValueError``, since no single
+        ``ConfigDelta`` could carry both. Same for empty ``deltas`` or a key
+        outside the known vocabulary. ``pid.*`` keys and ``ml``/``mr`` may be
+        mixed freely in one call — both target the SAME ``MotorConfigPatch``
+        oneof arm (mirroring ``set_config()``'s own ``motor_left_patch``/
+        ``motor_right_patch`` grouping); ``side`` selects ``travel_calib``'s
+        target only and is meaningless for the ``pid.*`` fields
+        (``config.proto``'s own ``MotorConfigPatch.side`` comment), so a
+        pure-``pid.*`` call (no ``ml``/``mr``) still needs SOME side value on
+        the wire — it defaults to ``LEFT``, the same default
+        ``set_config()``'s own ``motor_left_patch`` branch always used.
+
+        Confirmed against the merged 103 tree's ``main.cpp`` (resolving
+        103's Step 7 Open Question 3, ``architecture-update.md``): the
+        firmware's dispatch switch decodes ``CONFIG`` successfully but does
+        NOT apply it — the ``CmdKind::CONFIG`` case acks
+        ``ACK_STATUS_ERR``/``ERR_UNIMPLEMENTED`` unconditionally
+        ("ConfigDelta runtime application deferred this sprint"). This
+        method still builds and sends the envelope regardless — ``config()``
+        is a wire builder, not a promise the firmware applies the delta;
+        pass the returned corr_id to ``wait_for_ack()`` to observe today's
+        ``ERR_UNIMPLEMENTED`` outcome, which will flip to a live-apply Ack
+        once a future ticket wires the runtime side.
+
+        Returns the corr_id assigned to this command. Raises
+        ``ConnectionError`` if not connected (``send_envelope_fast()``'s own
+        not-open contract); raises ``ValueError`` for empty, unknown-key, or
+        multi-target ``deltas``.
+        """
+        if not deltas:
+            raise ValueError("config() requires at least one key=value delta")
+        unknown = sorted(k for k in deltas if k not in _ALL_SET_KEYS)
+        if unknown:
+            raise ValueError(f"config(): unknown key(s) {unknown!r}")
+
+        drivetrain_patch: dict[str, float] = {}
+        motor_patch: dict[str, float] = {}
+        motor_side = config_pb2.LEFT
+        planner_patch: dict[str, float] = {}
+        watchdog_value: int | None = None
+
+        for key, value in deltas.items():
+            if key in _DRIVETRAIN_KEYS:
+                drivetrain_patch[_DRIVETRAIN_KEYS[key]] = float(value)
+            elif key == "ml":
+                motor_patch["travel_calib"] = float(value)
+                motor_side = config_pb2.LEFT
+            elif key == "mr":
+                motor_patch["travel_calib"] = float(value)
+                motor_side = config_pb2.RIGHT
+            elif key in _MOTOR_PID_KEYS:
+                motor_patch[_MOTOR_PID_KEYS[key]] = float(value)
+            elif key in _PLANNER_KEYS:
+                planner_patch[_PLANNER_KEYS[key]] = float(value)
+            elif key == "sTimeout":
+                watchdog_value = int(value)
+
+        targets_touched = sum([
+            bool(drivetrain_patch), bool(motor_patch),
+            bool(planner_patch), watchdog_value is not None,
+        ])
+        if targets_touched > 1:
+            raise ValueError(
+                "config(): kwargs span more than one ConfigDelta.patch "
+                f"target (got {sorted(deltas)}) — a single ConfigDelta "
+                "carries only one patch; call config() once per target")
+
+        if drivetrain_patch:
+            delta = envelope_pb2.ConfigDelta(
+                drivetrain=config_pb2.DrivetrainConfigPatch(**drivetrain_patch))
+        elif motor_patch:
+            delta = envelope_pb2.ConfigDelta(motor=config_pb2.MotorConfigPatch(
+                side=motor_side, **motor_patch))
+        elif planner_patch:
+            delta = envelope_pb2.ConfigDelta(
+                planner=config_pb2.PlannerConfigPatch(**planner_patch))
+        else:
+            delta = envelope_pb2.ConfigDelta(watchdog=watchdog_value)
+
+        envelope = envelope_pb2.CommandEnvelope(config=delta)
         return self._conn.send_envelope_fast(envelope)
 
     def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "AckEntry | None":  # [ms]
@@ -1104,356 +869,46 @@ class NezhaProtocol:
         this wait is always bounded, never infinite.
 
         The ack-ring matcher for the P4 "telemetry-only return path"
-        (103-009, Decision 2): ``twist()``/``stop()`` (and, in principle,
-        any future fire-and-poll command) get no synchronous
-        ``ReplyEnvelope`` of their own — their outcome rides the ack ring
-        (``Telemetry.acks``, depth 3) inside the next one or more regular
-        ``Telemetry`` pushes after the command reaches the firmware. Because
-        the ring is depth 3 and telemetry pushes at ~25 Hz, the SAME
-        ``corr_id`` legitimately appears in more than one polled frame in a
-        row — that is ring RE-DELIVERY, not an error and not a duplicate
-        ack. This matcher tolerates it by construction: it returns on the
-        FIRST frame where ``corr_id`` is found, so a caller never sees (and
-        never has to dedupe) the re-delivered copies.
+        (103-009, Decision 2): ``twist()``/``stop()``/``config()`` (104-001
+        — every ``CommandEnvelope`` oneof arm now uses this same shape) get
+        no synchronous ``ReplyEnvelope`` of their own — their outcome rides
+        the ack ring (``Telemetry.acks``, depth 3) inside the next one or
+        more regular ``Telemetry`` pushes after the command reaches the
+        firmware. Because the ring is depth 3 and telemetry pushes at
+        ~25 Hz, the SAME ``corr_id`` legitimately appears in more than one
+        polled frame in a row — that is ring RE-DELIVERY, not an error and
+        not a duplicate ack — and tolerating it (returning on the FIRST
+        frame where ``corr_id`` is found, so a caller never sees or has to
+        dedupe the re-delivered copies) is part of the matcher's contract.
 
-        Polls ``read_pending_binary_tlm_frames()`` — the same non-blocking
-        binary-telemetry drain other callers already use — in a short sleep
-        loop. Telemetry is always-on in the P4 design (no ``STREAM`` arm to
-        arm first, unlike ``snap()``'s pre-103 synthesis), so there is
-        nothing to arm before polling; this method only drains frames the
-        firmware was already pushing.
+        104-003: the actual poll/match/timeout loop is no longer inline
+        here — it was promoted to ``SerialConnection.wait_for_ack()`` (see
+        that method's own docstring for the full algorithm, including the
+        ring-wrap-is-just-a-timeout note) so every future caller reading
+        telemetry directly off ``SerialConnection`` — not just
+        ``NezhaProtocol`` — gets the identical matching guarantee without a
+        second copy of the algorithm. This method is now a thin adapter:
+        delegate to the shared implementation, then wrap the raw
+        ``telemetry_pb2.AckEntry`` result in this module's own ``AckEntry``
+        dataclass (the same adaptation ``TLMFrame.from_pb2()`` performs for
+        telemetry frames generally).
         """
-        deadline = time.monotonic() + (timeout / 1000.0)
-        while True:
-            for frame in self.read_pending_binary_tlm_frames():
-                if not frame.acks:
-                    continue
-                for ack in frame.acks:
-                    if ack.corr_id == corr_id:
-                        return ack
-            if time.monotonic() >= deadline:
-                return None
-            time.sleep(0.01)
-
-    def cancel(self) -> None:
-        """Cancel the active motion command (hard stop). Sends X."""
-        self._conn.send_fast("X")
-
-    def arc(self, speed: int, radius: int,  # [mm/s], [mm]
-            corr_id: str | None = None,
-            stop: list[str] | None = None) -> None:
-        """Send R arc command — sets body arc motion (open-ended, no built-in timeout).
-
-        Format: R <speed> <radius> [stop=<kind>:<args> ...] [#id]
-        - ``speed``: forward speed in mm/s (−1000 … +1000).
-        - ``radius``: arc radius in mm (−10000 … +10000; 0 = straight).
-          **Sign convention: positive radius ⇒ CCW (left arc).**
-          Matches BodyKinematics::inverse where CCW-positive ω gives vL < vR.
-        - ``corr_id``: optional correlation id; echoed in EVT done R.
-        - ``stop``: optional list of stop= clause strings from the Stop builder.
-
-        Uses fire-and-forget (send_fast). The arc runs until the host sends X
-        (hard cancel) or R 0 <r> (speed=0 triggers SOFT ramp-down + EVT done R).
-        To use as a keepalive-driven command, re-send within the firmware sTimeout
-        window; the firmware does NOT have a built-in keepalive watchdog for R.
-
-        Robot replies ``OK arc speed=… radius=…`` synchronously. On soft-stop
-        (speed=0), the firmware emits ``EVT done R`` asynchronously.
-        """
-        cmd = f"R {speed} {radius}"
-        if stop:
-            cmd += " " + " ".join(stop)
-        if corr_id is not None:
-            cmd += f" #{corr_id}"
-        self._conn.send_fast(cmd)
-
-    def vw(self, v: int, omega: int,  # [mm/s], [mrad/s]
-           corr_id: str | None = None,
-           stop: list[str] | None = None) -> None:
-        """Send a VW command — sets body-twist velocity, resets system watchdog.
-
-        Format: VW <v> <omega> [stop=<kind>:<args> ...] [#id]
-        - ``v``: forward speed in mm/s (−1000 … +1000).
-        - ``omega``: yaw rate in milli-radians/s (−3142 … +3142).
-          Positive = CCW (left turn).
-        - ``corr_id``: optional correlation id; echoed in EVT safety_stop.
-        - ``stop``: optional list of stop= clause strings from the Stop builder.
-
-        Uses fire-and-forget (send_fast) so it can be called at streaming
-        rate without blocking.  The firmware echoes ``OK vw v=… omega=…``
-        synchronously, but callers driving at high frequency typically ignore
-        the per-frame reply.
-
-        **Do not use VW as a keepalive during non-VW commands (TURN, G, T,
-        D, R, RT).**  Since firmware 027-003, the firmware detects an active
-        non-VW command and replies ``OK vw busy=<origin>`` without updating
-        the command target, so a ``VW 0 0`` keepalive will NOT reset the
-        watchdog for those commands.  Non-VW commands have a built-in TIME
-        stop net and do not require keepalives.
-        """
-        cmd = f"VW {v} {omega}"
-        if stop:
-            cmd += " " + " ".join(stop)
-        if corr_id is not None:
-            cmd += f" #{corr_id}"
-        self._conn.send_fast(cmd)
-
-    def drive(self, left: int, right: int,  # [mm/s]
-              stop: list[str] | None = None) -> None:
-        """Send an S streaming command — sets streaming wheel speeds, resets watchdog.
-
-        Format: S <l> <r> [stop=<kind>:<args> ...]  (space-separated integers, literal mm/s)
-        - ``stop``: optional list of stop= clause strings from the Stop builder.
-
-        **Do not use S as a keepalive during non-VW commands (TURN, G, T,
-        D, R, RT).**  S converts to a VW command internally; since firmware
-        027-003 the firmware detects an active non-VW command and replies
-        ``OK vw busy=<origin>`` without updating the command target.  Non-VW
-        commands have a built-in TIME stop net and do not require keepalives.
-
-        Binary implementation (097-002): CommandEnvelope{drive:
-        DrivetrainCommand{wheels}} via send_envelope(), the per-wheel-speed
-        target legacy_translate.wheel_targets_for_drive() builds (handleS()'s
-        own construction, transcribed). ``stop`` has no binary wire home --
-        WheelTargets/DrivetrainCommand carry no stop-clause capability, and
-        the CURRENT text S handler (parseS(), motion_commands.cpp, 093-001)
-        already rejects any stop=/sensor= kv outright with ERR badarg (no
-        motor effect) -- and drive()'s prior fire-and-forget send_fast()
-        never read that ERR reply either, so passing ``stop`` was ALREADY a
-        silent no-motor-effect call before this conversion. This binary
-        implementation preserves that "no motor effect" outcome by sending
-        no envelope at all when ``stop`` is given, rather than silently
-        starting to drive (which the old text-plane behavior never did
-        either) -- kept as an unused-but-signature-compatible parameter.
-        """
-        if stop:
-            return
-        wheels = legacy_translate.wheel_targets_for_drive(left, right)
-        envelope = envelope_pb2.CommandEnvelope(
-            drive=drivetrain_pb2.DrivetrainCommand(wheels=wheels))
-        self._conn.send_envelope(envelope, read_timeout=300)
-
-    def timed(self, left: int, right: int,  # [mm/s]
-             duration: int,  # [ms]
-             sensor: str | None = None,
-             stop: list[str] | None = None) -> list[str]:
-        """Send T command; return initial response lines.
-
-        Format: T <l> <r> <ms> [sensor=<ch>:<op>:<thr>] [stop=<kind>:<args> ...]
-        Robot replies OK drive ...; later sends EVT done T.
-
-        Optional ``sensor`` modifier stops the drive early when a sensor crosses
-        a threshold.  Format: ``"<ch>:<op>:<thr>"`` where ch ∈ line0–line3,
-        colorR/G/B/C; op ∈ ge|le; thr is an integer raw ADC count.
-        Example: sensor="line0:ge:512"
-
-        Optional ``stop`` is a list of stop= clause strings from the Stop builder.
-        Multiple conditions are appended space-separated before any '#id'.
-
-        Binary implementation (097-002): CommandEnvelope{segment:
-        MotionSegment} via send_envelope(), built by
-        legacy_translate.segment_for_timed() (handleT()'s own l/r-sign-then-
-        distance computation via BodyKinematics::forward(), transcribed).
-        ``sensor``/``stop`` are accepted but inert on BOTH planes today --
-        the CURRENT handleT() (motion_commands.cpp, post-093/094) never
-        reads past args[0..2] (l/r/ms), so a text-plane sensor=/stop= token
-        was already silently ignored before this conversion; MotionSegment
-        has no matching field either. Returns a synthesized single-line list
-        (``["OK drive ..."]`` on Ack, ``[]`` on timeout/error) reproducing
-        the pre-conversion contract's SHAPE (a list of response-line
-        strings) -- no caller in this tree inspects the actual line text
-        (grep-verified).
-        """
-        seg = legacy_translate.segment_for_timed(left, right, duration)
-        envelope = envelope_pb2.CommandEnvelope(segment=seg)
-        reply = self._send_envelope(envelope, read_timeout=300)
-        if reply is not None and reply.WhichOneof("body") == "ok":
-            return [f"OK drive l={left} r={right} ms={duration} "
-                    f"q={reply.ok.q} rem={reply.ok.rem:.1f}"]
-        return []
-
-    def distance(self, left: int, right: int,  # [mm/s]
-                travel: int,  # [mm]
-                sensor: str | None = None,
-                stop: list[str] | None = None) -> list[str]:
-        """Send D command; return initial response lines.
-
-        Format: D <l> <r> <mm> [sensor=<ch>:<op>:<thr>] [stop=<kind>:<args> ...]
-        Robot replies OK drive ...; later sends EVT done D.
-
-        Optional ``sensor`` modifier stops the drive early when a sensor crosses
-        a threshold.  Format: ``"<ch>:<op>:<thr>"`` (same as timed()).
-        Example: sensor="colorC:ge:800"
-
-        Optional ``stop`` is a list of stop= clause strings from the Stop builder.
-
-        Binary implementation (097-002): CommandEnvelope{segment:
-        MotionSegment} via send_envelope(), built by
-        legacy_translate.segment_for_distance() (handleD()'s own
-        sign-then-distance computation via BodyKinematics::forward(),
-        transcribed). ``sensor``/``stop`` are accepted but inert on BOTH
-        planes today, same reasoning as timed() above. Return-value shape
-        unchanged (synthesized single-line list on Ack, [] on timeout/error;
-        same "no caller inspects the text" note as timed()).
-        """
-        seg = legacy_translate.segment_for_distance(left, right, travel)
-        envelope = envelope_pb2.CommandEnvelope(segment=seg)
-        reply = self._send_envelope(envelope, read_timeout=300)
-        if reply is not None and reply.WhichOneof("body") == "ok":
-            return [f"OK drive l={left} r={right} mm={travel} "
-                    f"q={reply.ok.q} rem={reply.ok.rem:.1f}"]
-        return []
-
-    def go_to(self, x: int, y: int,  # [mm]
-              speed: int) -> list[str]:  # [mm/s]
-        """Send G go-to command; return initial response lines.
-
-        Format: G <x> <y> <speed>
-        Robot replies OK goto ...; later sends EVT done G.
-        """
-        resp = self._conn.send(f"G {x} {y} {speed}", read_timeout=300)
-        return resp.get("responses", [])
-
-    def turn(self, heading: int, eps: int | None = None,  # [cdeg]
-             corr_id: str | None = None,
-             sensor: str | None = None,
-             stop: list[str] | None = None) -> list[str]:
-        """Send TURN command — rotate to an absolute heading and stop within eps.
-
-        Format: TURN <heading> [eps=<cdeg>] [sensor=<ch>:<op>:<thr>]
-                     [stop=<kind>:<args> ...] [#id]
-        - ``heading``: target heading in centidegrees (−18000 … +18000 = ±180°).
-          Positive values are CCW (matches OTOS CCW convention).
-        - ``eps``: optional tolerance in centidegrees (default 300 = 3°;
-          range 10–1800). Pass a tighter value for calibration use (e.g. 100 = 1°).
-        - ``sensor``: optional early-stop modifier; format ``"<ch>:<op>:<thr>"``
-          (same as timed() / distance()). Example: sensor="line0:ge:512"
-        - ``corr_id``: optional correlation id; echoed in EVT done TURN.
-        - ``stop``: optional list of stop= clause strings from the Stop builder.
-
-        Robot replies ``OK turn heading=<cdeg> eps=<cdeg>`` synchronously.
-        On arrival within eps (or sensor trip): ``EVT done TURN [#<id>]`` emitted async.
-
-        To wait for completion, use ``wait_for_evt_done("TURN", timeout)``.
-        Example::
-
-            proto.turn(9000, eps=100, corr_id="1")  # turn to +90° (CCW), 1° eps
-            result, reason = proto.wait_for_evt_done("TURN", timeout=10000, corr_id="1")
-        """
-        cmd = f"TURN {heading}"
-        if eps is not None:
-            cmd += f" eps={eps}"
-        if sensor is not None:
-            cmd += f" sensor={sensor}"
-        if stop:
-            cmd += " " + " ".join(stop)
-        if corr_id is not None:
-            cmd += f" #{corr_id}"
-        resp = self._conn.send(cmd, read_timeout=300)
-        return resp.get("responses", [])
-
-    def drive_until_sensor(self, left: int, right: int,  # [mm/s]
-                           duration: int,  # [ms]
-                           channel: str, threshold: int,
-                           op: str = "ge") -> list[str]:
-        """Drive timed until a sensor crosses a threshold (or duration expires).
-
-        Convenience wrapper around T with a ``sensor=`` modifier.  The drive stops
-        at whichever comes first: the sensor condition or the time limit.
-
-        Args:
-            left:   Left wheel speed in mm/s (−1000 … +1000).
-            right:  Right wheel speed in mm/s (−1000 … +1000).
-            duration: Maximum duration in ms (1 … 30000). Acts as a safety timeout.
-            channel:    Sensor channel name: line0–line3, colorR, colorG, colorB, colorC.
-            threshold:  Integer threshold in raw sensor units (uint16_t ADC counts).
-            op:         Comparison operator: "ge" (≥, default) or "le" (≤).
-
-        Returns:
-            Initial response lines from the firmware (OK drive … or ERR …).
-            EVT done T is emitted asynchronously; wait with wait_for_evt_done("T").
-
-        Wire format: ``T <left> <right> <duration> sensor=<channel>:<op>:<threshold>``
-
-        Example::
-
-            proto.drive_until_sensor(200, 200, 10000, "line0", 512)
-            result, reason = proto.wait_for_evt_done("T", timeout=12000)
-            # result is "done" (sensor tripped) or "timeout"; reason is e.g. "sensor" or None
-        """
-        sensor_token = f"{channel}:{op}:{threshold}"
-        return self.timed(left, right, duration, sensor=sensor_token)
-
-    def grip(self, angle: int | None = None) -> int | None:  # [deg]
-        """Send GRIP [angle] command. Returns confirmed degree or None.
-
-        Format: GRIP <angle>  or  GRIP (query only)
-        Robot replies OK grip deg=<deg>.
-        """
-        cmd = f"GRIP {angle}" if angle is not None else "GRIP"
-        resp = self._conn.send(cmd, read_timeout=300)
-        for raw_line in resp.get("responses", []):
-            r = parse_response(raw_line)
-            if r and r.tag == "OK" and r.tokens and r.tokens[0] == "grip":
-                try:
-                    return int(r.kv["deg"])
-                except (KeyError, ValueError):
-                    pass
-        return None
-
-    def zero_encoders(self) -> None:
-        """Zero encoders (ZERO enc command)."""
-        self._conn.send("ZERO enc", read_timeout=200)
-
-    def zero_otos(self) -> None:
-        """Zero OTOS pose tracking (ZERO pose command)."""
-        self._conn.send("ZERO pose", read_timeout=200)
-
-    def zero_all(self) -> None:
-        """Zero both encoders and OTOS pose (ZERO enc pose command)."""
-        self._conn.send("ZERO enc pose", read_timeout=200)
+        raw_ack = self._conn.wait_for_ack(corr_id, timeout=timeout)
+        if raw_ack is None:
+            return None
+        return AckEntry.from_pb2(raw_ack)
 
     # ------------------------------------------------------------------
-    # Telemetry streaming
+    # Telemetry
     # ------------------------------------------------------------------
-
-    def stream(self, period: int) -> None:  # [ms]
-        """Set TLM streaming period in ms (0 = off).
-
-        Binary implementation (097-003, M3 NezhaProtocol Telemetry
-        Conversion): ``period`` maps 1:1 onto ``CommandEnvelope{stream:
-        StreamControl{period, binary: true}}`` via ``send_envelope()`` --
-        handleStream()'s own 20ms floor (``binary_channel.cpp``, mirrored
-        from ``kStreamFloorMs``) applies firmware-side exactly as it did for
-        the text plane, so no host-side clamping is needed here.
-        ``binary=true`` selects ``telemetryEmitBinary()`` over the text
-        emitter for every periodic frame this stream produces from now on
-        -- the only telemetry plane ``stream()``/``snap()`` speak after this
-        ticket. The Ack reply is read and discarded (return type ``None``
-        unchanged), matching ``stop()``'s "block briefly for the Ack, but
-        return nothing" posture.
-        """
-        envelope = envelope_pb2.CommandEnvelope(
-            stream=envelope_pb2.StreamControl(period=period, binary=True))
-        self._conn.send_envelope(envelope, read_timeout=300)
-
-    def stream_fields(self, fields: str) -> None:
-        """Set TLM streaming with a field subset.
-
-        Format: STREAM fields=enc,pose,line
-        ``fields`` is a comma-separated string of field names.
-        """
-        self._conn.send(f"STREAM fields={fields}", read_timeout=300)
 
     def read_binary_tlm_frames(self, duration: int) -> "list[TLMFrame]":  # [ms]
         """Block for up to ``duration`` ms, returning every binary telemetry
         frame received during that window as ``TLMFrame`` objects (097-003).
 
-        The binary-plane counterpart of the pre-097-003 text-plane idiom of
-        reading ``read_lines(duration)`` and parsing each ``TLM`` line into a
-        ``TLMFrame`` -- reads ``SerialConnection.read_binary_tlm()``
-        (``_binary_tlm_queue``) instead of ``_tlm_queue``, and adapts each
-        raw ``pb2.ReplyEnvelope`` via ``TLMFrame.from_pb2()``.
+        Telemetry is always-on in the P4 design (no arming step) — reads
+        ``SerialConnection.read_binary_tlm()`` (``_binary_tlm_queue``) and
+        adapts each raw ``pb2.ReplyEnvelope`` via ``TLMFrame.from_pb2()``.
         """
         return [TLMFrame.from_pb2(reply.tlm)
                 for reply in self._conn.read_binary_tlm(duration)]
@@ -1465,302 +920,3 @@ class NezhaProtocol:
         """
         return [TLMFrame.from_pb2(reply.tlm)
                 for reply in self._conn.drain_binary_tlm()]
-
-    def snap(self) -> "TLMFrame | None":
-        """Request ONE telemetry frame synchronously and return it (parsed).
-
-        Binary implementation (097-003, M3, architecture-update.md Decision
-        4): SYNTHESIZED host-side from the existing binary ``stream`` arm --
-        no new firmware wire capability is added (096 Open Question 2
-        deferred exactly this resolution to 097). There is no binary
-        one-shot SNAP arm; instead:
-
-        1. Drain any stale frames already queued in ``_binary_tlm_queue``
-           (leftovers from a previous ``stream()``/``snap()`` session), so a
-           stale snapshot is never returned.
-        2. Arm streaming at the firmware's own 20ms floor via ``stream()``
-           (``StreamControl{period=_STREAM_FLOOR_MS, binary=true}``).
-        3. Block on ``_binary_tlm_queue`` for up to 400 ms for exactly ONE
-           frame.
-        4. Disarm via ``stream(0)`` (``StreamControl{period=0,
-           binary=true}``), regardless of whether step 3 timed out.
-
-        This costs a two-round-trip latency profile (arm ack, then wait for
-        a frame) instead of a true single request/reply -- a documented,
-        accepted trade (architecture-update.md (097) Decision 4
-        Consequences). Contract (``TLMFrame | None``) unchanged.
-        """
-        self._conn.drain_binary_tlm()
-        self.stream(_STREAM_FLOOR_MS)
-        try:
-            frames = self._conn.read_binary_tlm(duration=400)
-        finally:
-            self.stream(0)
-        if not frames:
-            return None
-        return TLMFrame.from_pb2(frames[0].tlm)
-
-    # ------------------------------------------------------------------
-    # OTOS sensor
-    # ------------------------------------------------------------------
-
-    def otos_init(self) -> None:
-        """Enable OTOS signal processing (OI command)."""
-        self._conn.send("OI", read_timeout=500)
-
-    def otos_zero(self) -> None:
-        """Zero OTOS position to current location (OZ command)."""
-        self._conn.send("OZ", read_timeout=200)
-
-    def otos_reset_tracking(self) -> None:
-        """Reset OTOS Kalman filters (OR command)."""
-        self._conn.send("OR", read_timeout=200)
-
-    def otos_get_position(self) -> tuple[int, int, int] | None:
-        """Query OTOS position (OP command). Returns (x, y, heading) or None
-        (x, y in mm, heading in cdeg)."""
-        resp = self._conn.send("OP", read_timeout=300)
-        for raw_line in resp.get("responses", []):
-            r = parse_response(raw_line)
-            if r and r.tag == "OK" and r.tokens and r.tokens[0] == "pos":
-                try:
-                    return (int(r.kv["x"]), int(r.kv["y"]), int(r.kv["h"]))
-                except (KeyError, ValueError):
-                    pass
-        return None
-
-    def otos_set_position(self, x: int, y: int,  # [mm]
-                          heading: int) -> None:  # [cdeg]
-        """Set OTOS world-frame position (OV command) — nudges the RAW OTOS chip
-        only; does NOT set the motion controller's pose.  Prefer set_internal_pose
-        (SI) for a camera fix.  NOTE: OV writes the chip's raw registers, which
-        readTransformed then rotates by the OTOS mount angle (odomYawDeg) — so a
-        world (x,y) passed here lands rotated; that mismatch is why OV must not be
-        used to anchor the world pose."""
-        self._conn.send(f"OV {x} {y} {heading}", read_timeout=300)
-
-    def set_internal_pose(self, x: int, y: int,  # [mm]
-                          heading: int) -> None:  # [cdeg]
-        """Set the motion controller's onboard pose from an external (camera) fix
-        (SI command -> Odometry::setPose).  This writes poseX/poseY/poseHrad — the
-        pose getPose/telemetry report and G/D/TURN drive against — so the robot
-        tracks in WORLD coordinates.  Heading is centi-degrees in the camera world
-        frame (0 = +x/east, CCW-positive)."""
-        self._conn.send(f"SI {x} {y} {heading}", read_timeout=300)
-
-    def otos_set_linear_scalar(self, val: int) -> int | None:
-        """Set OTOS linear scalar (OL <val> command). Returns confirmed value or None."""
-        resp = self._conn.send(f"OL {val}", read_timeout=500)
-        for raw_line in resp.get("responses", []):
-            r = parse_response(raw_line)
-            if r and r.tag == "OK" and r.tokens and r.tokens[0] == "linear":
-                try:
-                    return int(r.kv["scalar"])
-                except (KeyError, ValueError):
-                    pass
-        return None
-
-    def otos_get_linear_scalar(self) -> int | None:
-        """Read back OTOS linear scalar (OL no-arg command). Returns value or None."""
-        resp = self._conn.send("OL", read_timeout=300)
-        for raw_line in resp.get("responses", []):
-            r = parse_response(raw_line)
-            if r and r.tag == "OK" and r.tokens and r.tokens[0] == "linear":
-                try:
-                    return int(r.kv["scalar"])
-                except (KeyError, ValueError):
-                    pass
-        return None
-
-    def otos_set_angular_scalar(self, val: int) -> int | None:
-        """Set OTOS angular scalar (OA <val> command). Returns confirmed value or None."""
-        resp = self._conn.send(f"OA {val}", read_timeout=500)
-        for raw_line in resp.get("responses", []):
-            r = parse_response(raw_line)
-            if r and r.tag == "OK" and r.tokens and r.tokens[0] == "angular":
-                try:
-                    return int(r.kv["scalar"])
-                except (KeyError, ValueError):
-                    pass
-        return None
-
-    def otos_get_angular_scalar(self) -> int | None:
-        """Read back OTOS angular scalar (OA no-arg command). Returns value or None."""
-        resp = self._conn.send("OA", read_timeout=300)
-        for raw_line in resp.get("responses", []):
-            r = parse_response(raw_line)
-            if r and r.tag == "OK" and r.tokens and r.tokens[0] == "angular":
-                try:
-                    return int(r.kv["scalar"])
-                except (KeyError, ValueError):
-                    pass
-        return None
-
-    # ------------------------------------------------------------------
-    # Pose fix (099-008/099-009): delayed camera fix, binary arm 7
-    # ------------------------------------------------------------------
-
-    def pose_fix(self, x: float, y: float, h: float, t: int,  # [mm] [mm] [rad] [ms]
-                *, reset: bool = False, zero_encoders: bool = False,
-                read_timeout: int = 500,  # [ms]
-                ) -> "envelope_pb2.ReplyEnvelope | None":
-        """Send a ``PoseFix`` (``CommandEnvelope.cmd.pose_fix``, arm 7,
-        099-004/099-008) -- the delayed camera-fix capability this sprint
-        adds. ``x``/``y`` are world-frame millimetres, ``h`` is world-frame
-        radians, ``t`` is the robot-clock ms (D6) timestamp the observation
-        was true at (map a host-side capture time via
-        ``ClockSync.to_robot_time()`` before calling this for a genuine
-        delayed fix; ``t`` is ignored firmware-side when ``reset`` or
-        ``zero_encoders`` is set).
-
-        Returns the raw ``ReplyEnvelope`` (``ok``/``err`` oneof arm) so a
-        caller can distinguish an ``Ack`` from an ``Error`` -- unlike most
-        of this class's other methods, no other host-side plane parses a
-        ``PoseFix`` reply yet, so there is no existing return-shape
-        convention to preserve here (mirrors ``set_config_binary()``'s own
-        "hand back the raw reply" posture for a new-capability method).
-        """
-        envelope = build_pose_fix_envelope(
-            x, y, h, t, reset=reset, zero_encoders=zero_encoders)
-        return self._send_envelope(envelope, read_timeout=read_timeout)
-
-    # ------------------------------------------------------------------
-    # J-port I/O
-    # ------------------------------------------------------------------
-
-    def port_read(self, port: int) -> int | None:
-        """Read digital J-port (P <port> command). Returns 0/1 or None."""
-        resp = self._conn.send(f"P {port}", read_timeout=300)
-        for raw_line in resp.get("responses", []):
-            r = parse_response(raw_line)
-            if r and r.tag == "OK" and r.tokens and r.tokens[0] == "port":
-                try:
-                    return int(r.kv["v"])
-                except (KeyError, ValueError):
-                    pass
-        return None
-
-    def port_write(self, port: int, value: bool) -> None:
-        """Write digital J-port (P <port> <val> command)."""
-        self._conn.send(f"P {port} {1 if value else 0}", read_timeout=200)
-
-    def port_read_analog(self, port: int) -> int | None:
-        """Read analog J-port (PA <port> command). Returns 0-1023 or None."""
-        resp = self._conn.send(f"PA {port}", read_timeout=300)
-        for raw_line in resp.get("responses", []):
-            r = parse_response(raw_line)
-            if r and r.tag == "OK" and r.tokens and r.tokens[0] == "aport":
-                try:
-                    return int(r.kv["v"])
-                except (KeyError, ValueError):
-                    pass
-        return None
-
-    def port_write_analog(self, port: int, value: int) -> None:
-        """Write PWM (0-1023) to J-port (PA <port> <val> command)."""
-        self._conn.send(f"PA {port} {value}", read_timeout=200)
-
-    # ------------------------------------------------------------------
-    # Blocking drive helpers (wait for EVT done or safety_stop)
-    # ------------------------------------------------------------------
-
-    def wait_for_evt_done(self, verb: str, timeout: int,  # [ms]
-                          corr_id: str | None = None) -> tuple[str, str | None]:
-        """Block until 'EVT done <verb>' or 'EVT safety_stop' arrives.
-
-        Returns ``(outcome, reason)`` where:
-          ``outcome``: ``"done"``, ``"safety_stop"``, or ``"timeout"``.
-          ``reason``: the ``reason=`` token from the EVT line, or ``None`` if
-                      absent (e.g. pre-052 firmware or EVT safety_stop without
-                      ``reason=watchdog``).
-
-        If ``corr_id`` is provided, only EVT lines carrying that id (or bare
-        EVT lines without any id) are accepted.  This lets the host distinguish
-        completions when multiple correlated drives are in flight.
-        """
-        deadline = time.time() + timeout / 1000.0
-        while time.time() < deadline:
-            for raw_line in self._conn.read_lines(duration=100):
-                r = parse_response(raw_line)
-                if r is None:
-                    continue
-                if r.tag == "EVT":
-                    # When a corr_id filter is specified, skip EVT lines that
-                    # carry a *different* id.  Bare EVT lines (r.corr_id None)
-                    # are always accepted.
-                    if corr_id is not None and r.corr_id is not None:
-                        if r.corr_id != corr_id:
-                            continue
-                    reason = r.kv.get("reason")  # None if absent
-                    if r.tokens and r.tokens[0] == "done":
-                        # Accept if verb matches or no verb given in EVT.
-                        if len(r.tokens) < 2 or r.tokens[1] == verb:
-                            return "done", reason
-                    elif r.tokens and r.tokens[0] == "safety_stop":
-                        return "safety_stop", reason
-        return "timeout", None
-
-    # ------------------------------------------------------------------
-    # Streaming drive generator
-    # ------------------------------------------------------------------
-
-    def stream_drive(
-        self,
-        speeds: list[int],
-        *,
-        period: int = 40,  # [ms]
-        watchdog: int = 500,  # [ms]
-    ) -> Generator[ParsedResponse, None, None]:
-        """Streaming drive generator. Yields ParsedResponse for each incoming line.
-
-        Enables TLM streaming on entry, sends S keepalives, disables streaming
-        on GeneratorExit. Mutate ``speeds`` in the caller loop to change velocity.
-        Ends naturally on EVT safety_stop.
-
-        Args:
-            speeds: Mutable [left, right] list (mm/s); mutate to steer.
-            period: TLM streaming period in ms.
-            watchdog: S keepalive deadline (ms); must re-send within firmware
-                watchdog timeout or motors stop.
-
-        097-003: ``stream()`` is binary-only now, so telemetry no longer
-        arrives as text ``TLM ...`` lines through ``read_lines()`` -- EVT
-        lines (``safety_stop``) still do, unaffected. Each pass also drains
-        ``_binary_tlm_queue`` and yields one ``ParsedResponse(tag="TLM",
-        tlm=<TLMFrame>)`` per frame (see ``ParsedResponse.tlm``'s own
-        docstring) -- callers that used to text-parse ``resp.raw`` when
-        ``resp.tag == "TLM"`` now read ``resp.tlm`` instead; the frame is
-        already parsed, not re-derived from text.
-        """
-        self.stream(period)
-        keepalive_s = watchdog * 0.30 / 1000.0
-
-        def _resend_if_due(last: float) -> float:
-            now = time.monotonic()
-            if now - last >= keepalive_s:
-                self._conn.send_fast(f"S {speeds[0]} {speeds[1]}")
-                return now
-            return last
-
-        try:
-            self._conn.send_fast(f"S {speeds[0]} {speeds[1]}")
-            last_send = time.monotonic()
-            while True:
-                for raw_line in self._conn.read_lines(duration=50):
-                    r = parse_response(raw_line)
-                    if r is None:
-                        continue
-                    if r.tag == "EVT" and r.tokens and r.tokens[0] == "safety_stop":
-                        return
-                    yield r
-                    last_send = _resend_if_due(last_send)
-                for reply in self._conn.drain_binary_tlm():
-                    yield ParsedResponse(tag="TLM", tlm=TLMFrame.from_pb2(reply.tlm))
-                    last_send = _resend_if_due(last_send)
-                last_send = _resend_if_due(last_send)
-        except GeneratorExit:
-            try:
-                self._conn.send_fast("STOP")
-                self.stream(0)
-            except Exception:
-                pass

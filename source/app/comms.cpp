@@ -108,8 +108,10 @@ void Comms::decodeArmoredLine(const char* line, Cmd& out) {
   // ("ACKs ride the ack ring, not per-command") -- the transcription
   // note's own sendError(ErrCode::ERR_DECODE, ...) calls on this path are
   // deliberately NOT reproduced; a malformed frame is silently counted
-  // (malformedCount_) and surfaced later as a Telemetry fault bit (ticket
-  // 005), not answered synchronously.
+  // (malformedCount_) and surfaced as a Telemetry fault bit
+  // (App::kFaultCommsMalformed, wired live by main.cpp's loop -- ticket
+  // 104-004; ticket 103-005 declared the counter but did NOT wire it),
+  // not answered synchronously.
   msg::CommandEnvelope decoded;
   const msg::wire::Result r = msg::wire::decode(decoded, rawBuf, static_cast<uint16_t>(rawLen));
   if (!r.ok) {

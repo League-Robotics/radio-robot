@@ -72,6 +72,39 @@ Radio channel note:
 Reader loop:
    Lines beginning with ``#`` are relay status/comment lines.  The reader loop
    drops them silently; they do not generate protocol errors.
+
+Ack-ring matcher and TelemetrySecondary decode (104-003):
+-----------------------------------------------------------
+Two pieces of P4 wire-protocol support live here, promoted/added by this
+sprint so every caller -- not just ``NezhaProtocol`` -- gets the same
+guarantee without duplicating either algorithm:
+
+- ``wait_for_ack(corr_id, timeout)`` -- the ack-ring matcher. Sprint 103's
+  ``twist``/``stop``/``config`` commands get no synchronous reply; their
+  outcome rides the depth-3 ack ring inside a subsequent ``Telemetry`` push
+  (``_binary_tlm_queue``). This method polls that queue (via
+  ``drain_binary_tlm()``) for an entry matching ``corr_id``, bounded by
+  ``timeout``, and tolerates ring re-delivery (the same ``corr_id`` riding
+  more than one polled frame) by returning on the FIRST match. Previously
+  this loop lived inline in ``robot_radio.robot.protocol.NezhaProtocol.
+  wait_for_ack()``; that method now delegates here so the algorithm has
+  exactly one implementation.
+- ``drain_binary_secondary_tlm()`` / ``read_binary_secondary_tlm()`` -- the
+  ``TelemetrySecondary`` counterparts of ``drain_binary_tlm()``/
+  ``read_binary_tlm()``. ``TelemetrySecondary`` (the slower ~5 Hz
+  acc/glitch/ts/cmd_vel diagnostic frame, telemetry.proto) rides its own
+  independently-armored ``*B`` line (103-001 Decision 3) -- NOT a
+  ``ReplyEnvelope.body`` oneof arm, since that oneof is fixed at
+  ``ok``/``err``/``tlm``. The wire has no discriminator byte distinguishing
+  a ``TelemetrySecondary`` line from a ``ReplyEnvelope`` line -- both share
+  the identical ``*B`` prefix. ``_handle_binary_reply()`` disambiguates
+  structurally: it tries ``ReplyEnvelope`` first (the common case), and
+  falls back to ``TelemetrySecondary`` only when that parse either raises or
+  succeeds with no oneof ``body`` populated (every real ``ReplyEnvelope``
+  this firmware ever sends -- unsolicited ``tlm`` pushes and corr-id'd
+  ``ok``/``err`` replies alike -- always sets one). See
+  ``_handle_binary_reply()``'s own docstring for the full disambiguation
+  rationale.
 """
 
 import base64
@@ -90,9 +123,10 @@ if TYPE_CHECKING:
     # __init__.py imports robot_radio.robot.protocol, which imports
     # SerialConnection from THIS module, so importing anything under
     # robot_radio.robot (pb2 included) from serial_conn.py's top level would
-    # re-enter this partially-initialized module. See _get_envelope_pb2()
-    # below for the runtime (lazy, deferred-past-module-load) equivalent.
-    from robot_radio.robot.pb2 import envelope_pb2
+    # re-enter this partially-initialized module. See _get_envelope_pb2()/
+    # _get_telemetry_pb2() below for the runtime (lazy, deferred-past-
+    # module-load) equivalent.
+    from robot_radio.robot.pb2 import envelope_pb2, telemetry_pb2
 
 BAUD_RATE = 115200
 DEFAULT_PORT = "/dev/cu.usbmodem21431202"
@@ -151,9 +185,11 @@ _CORR_ID_RE = re.compile(r"#(\d+)$")
 # text verb, `OK/ERR/...` reply prefix, or the relay's `#`-line convention.
 _BINARY_ARMOR_PREFIX = "*B"
 
-# Module-level cache for the lazily-imported envelope_pb2 module (see
-# _get_envelope_pb2()'s docstring for why this cannot be a top-level import).
+# Module-level cache for the lazily-imported envelope_pb2/telemetry_pb2
+# modules (see _get_envelope_pb2()'s docstring for why this cannot be a
+# top-level import).
 _envelope_pb2_module = None
+_telemetry_pb2_module = None
 
 
 def _get_envelope_pb2():
@@ -173,6 +209,22 @@ def _get_envelope_pb2():
         from robot_radio.robot.pb2 import envelope_pb2 as _mod
         _envelope_pb2_module = _mod
     return _envelope_pb2_module
+
+
+def _get_telemetry_pb2():
+    """Lazily import and cache robot_radio.robot.pb2.telemetry_pb2 (104-003).
+
+    Same circular-import hazard and same deferred-past-module-load fix as
+    ``_get_envelope_pb2()`` above -- see that function's docstring. Used by
+    ``_handle_binary_reply()`` to decode a ``TelemetrySecondary`` frame (see
+    that method's own docstring for why a SECOND pb2 message type is decoded
+    off the same ``*B`` armor prefix ``envelope_pb2.ReplyEnvelope`` uses).
+    """
+    global _telemetry_pb2_module
+    if _telemetry_pb2_module is None:
+        from robot_radio.robot.pb2 import telemetry_pb2 as _mod
+        _telemetry_pb2_module = _mod
+    return _telemetry_pb2_module
 
 
 def _disable_hupcl(ser) -> None:
@@ -214,6 +266,29 @@ def _parse_device_banner(line: str) -> dict[str, Any] | None:
     }
 
 
+def _match_ack_in_frames(
+    frames: "list[envelope_pb2.ReplyEnvelope]", corr_id: int
+) -> "telemetry_pb2.AckEntry | None":
+    """Scan a batch of binary-plane ``tlm``-body ``ReplyEnvelope`` frames
+    (as returned by ``drain_binary_tlm()``) for an ack-ring entry whose
+    ``corr_id`` matches. Returns the entry from the FIRST frame (in list
+    order) where a match is found -- ``SerialConnection.wait_for_ack()``'s
+    own pure-function matching core, split out so it can be unit-tested
+    directly against synthetic frame batches without a real queue/thread.
+
+    Defensively re-checks ``WhichOneof("body") == "tlm"`` per frame (rather
+    than assuming every element of ``frames`` already is one) so a caller
+    can also feed it raw, unfiltered ``ReplyEnvelope`` batches in a test.
+    """
+    for reply in frames:
+        if reply.WhichOneof("body") != "tlm":
+            continue
+        for ack in reply.tlm.acks:
+            if ack.corr_id == corr_id:
+                return ack
+    return None
+
+
 class SerialConnection:
     """Manages a serial connection to a micro:bit relay or direct device.
 
@@ -227,6 +302,9 @@ class SerialConnection:
     - ``_binary_tlm_queue`` for binary-plane ``*B`` replies whose body is
       ``tlm`` (097-001) -- unsolicited push frames, always ``corr_id=0``,
       routed BEFORE the corr-id lookup above; see ``_handle_binary_reply()``.
+    - ``_binary_secondary_queue`` for binary-plane ``*B`` lines that decode
+      as a ``TelemetrySecondary`` rather than a ``ReplyEnvelope`` (104-003)
+      -- see ``_handle_binary_reply()``.
     - ``_evt_queue`` for ``EVT`` lines.
 
     ``send()`` appends ``#<corr_id>`` to every command and blocks on the
@@ -276,6 +354,16 @@ class SerialConnection:
         # Drain/read accessors added 097-003 (drain_binary_tlm()/
         # read_binary_tlm()) -- see those methods below.
         self._binary_tlm_queue: queue.Queue = queue.Queue(maxsize=_TLM_QUEUE_DEPTH)
+
+        # Bounded TelemetrySecondary queue (104-003): the slower ~5 Hz
+        # diagnostic frame (acc/glitch/ts/cmd_vel -- telemetry.proto's own
+        # TelemetrySecondary message) rides its OWN independently-armored
+        # `*B` line (103-001 Decision 3), decoded by _handle_binary_reply()
+        # and queued here -- the TelemetrySecondary counterpart of
+        # _binary_tlm_queue above, same depth constant and same
+        # drop-oldest-on-overflow policy. See drain_binary_secondary_tlm()/
+        # read_binary_secondary_tlm() below.
+        self._binary_secondary_queue: queue.Queue = queue.Queue(maxsize=_TLM_QUEUE_DEPTH)
 
         # EVT queue: unbounded — EVT lines must not be dropped.
         self._evt_queue: queue.Queue = queue.Queue()
@@ -612,7 +700,11 @@ class SerialConnection:
           ``send_envelope()`` call is waiting on. Every other body
           (``ok``/``err``/``cfg``/``id``/``echo``) routes to
           ``_reply_queues[envelope.corr_id]`` exactly like an
-          ``OK``/``ERR``/``CFG``/``ID`` reply above.
+          ``OK``/``ERR``/``CFG``/``ID`` reply above. A ``*B`` line that does
+          NOT decode as a ``ReplyEnvelope`` with a populated ``body`` oneof
+          is retried as a ``TelemetrySecondary`` (104-003) and, on success,
+          routed to ``_binary_secondary_queue`` (drop oldest if full) --
+          see ``_handle_binary_reply()``'s own docstring.
         - Anything else → dropped silently
         """
         while not self._reader_stop.is_set():
@@ -700,8 +792,37 @@ class SerialConnection:
         """Dearmor, decode, and route one ``*B<base64>`` binary reply line.
 
         Called only from ``_reader_loop`` (see its docstring). Strips the
-        ``*B`` armor prefix, base64-decodes, and parses the result as a
-        ``pb2.ReplyEnvelope``.
+        ``*B`` armor prefix and base64-decodes; a decode failure here
+        (malformed base64) is swallowed and the line dropped outright --
+        there are no bytes to try a second interpretation against.
+
+        Two message types share this exact ``*B<base64>`` armor (103-001
+        Decision 3, hardened 104-003): ``pb2.ReplyEnvelope`` (the common
+        case -- corr-id'd ``ok``/``err`` replies and unsolicited ``tlm``
+        pushes) and ``pb2.TelemetrySecondary`` (the slower ~5 Hz
+        acc/glitch/ts/cmd_vel diagnostic frame, telemetry.proto). The wire
+        carries NO discriminator byte between them -- ``TelemetrySecondary``
+        rides as its OWN independently-armored line specifically because
+        ``ReplyEnvelope.body``'s oneof is fixed at ``ok``/``err``/``tlm``
+        (envelope.proto) and cannot grow a fourth arm for it
+        (``source/app/telemetry.cpp``'s ``emitSecondary()`` encodes and
+        armors a bare ``TelemetrySecondary`` directly, never wrapping it in
+        a ``ReplyEnvelope``).
+
+        Disambiguation: try ``ReplyEnvelope`` FIRST. Every real
+        ``ReplyEnvelope`` this firmware ever sends populates the ``body``
+        oneof -- ``Comms::sendReply()`` (corr-id'd ``ok``/``err``) and
+        ``Telemetry::emitPrimary()`` (unsolicited ``tlm``, ``corr_id=0``)
+        both always set one of the three arms; nothing constructs an empty
+        one. So if the ``ReplyEnvelope`` parse either raises OR succeeds
+        with ``WhichOneof("body") is None``, the bytes were never a valid
+        ``ReplyEnvelope`` in the first place, and the line is retried as a
+        ``TelemetrySecondary``. (Protobuf's wire format is not
+        self-describing about message type -- a field-number/wire-type
+        collision between the two schemas could in principle parse
+        "successfully" into a ``ReplyEnvelope`` with an empty oneof, which is
+        exactly the case this fallback exists to catch, alongside an
+        outright parse failure.)
 
         097-001: a ``tlm`` body is checked FIRST, before the corr-id lookup,
         and routed unconditionally to the bounded, drop-oldest
@@ -711,8 +832,8 @@ class SerialConnection:
         frames (firmware's ``telemetryEmitBinary()``, sprint 096) always
         carry ``corr_id=0``, and no ``send()``/``send_envelope()`` call ever
         registers a queue under ``"0"`` -- routing them through the corr-id
-        table silently dropped every one of them (the bug this ticket
-        fixes).
+        table silently dropped every one of them (the bug that ticket
+        fixed).
 
         Every other body (``ok``/``err``/``cfg``/``id``/``echo``) keeps
         routing to ``_reply_queues[str(envelope.corr_id)]``, the SAME queue
@@ -722,39 +843,74 @@ class SerialConnection:
         reply is dropped silently (same "no listener" semantics as the text
         plane).
 
-        Any decode/parse failure (malformed base64, malformed protobuf
-        bytes) is swallowed and the line dropped -- a single corrupted
-        binary reply must not crash the reader thread, matching this loop's
-        existing tolerance for undecodable bytes elsewhere (e.g. the
-        UTF-8-decode ``except Exception: continue`` above).
+        A successfully-decoded ``TelemetrySecondary`` (104-003) routes,
+        unconditionally, to the bounded, drop-oldest
+        ``_binary_secondary_queue`` -- there is no corr-id to route it by
+        (``TelemetrySecondary`` carries no ``corr_id`` field at all; it is a
+        pure unsolicited push, like primary ``tlm``).
+
+        Any decode/parse failure of EITHER shape (malformed base64,
+        malformed protobuf bytes, or bytes that are neither a well-formed
+        ``ReplyEnvelope`` nor a well-formed ``TelemetrySecondary``) is
+        swallowed and the line dropped -- a single corrupted binary reply
+        must not crash the reader thread, matching this loop's existing
+        tolerance for undecodable bytes elsewhere (e.g. the UTF-8-decode
+        ``except Exception: continue`` above).
         """
         armored = text[len(_BINARY_ARMOR_PREFIX):]
         try:
             raw_bytes = base64.b64decode(armored)
-            reply = _get_envelope_pb2().ReplyEnvelope.FromString(raw_bytes)
         except Exception:
             return
 
-        if reply.WhichOneof("body") == "tlm":
-            # Bounded binary TLM queue: drop oldest frame on overflow,
-            # mirroring _tlm_queue's own policy in _reader_loop's TLM branch.
-            if self._binary_tlm_queue.full():
+        reply = None
+        try:
+            reply = _get_envelope_pb2().ReplyEnvelope.FromString(raw_bytes)
+        except Exception:
+            reply = None
+
+        if reply is not None and reply.WhichOneof("body") is not None:
+            if reply.WhichOneof("body") == "tlm":
+                # Bounded binary TLM queue: drop oldest frame on overflow,
+                # mirroring _tlm_queue's own policy in _reader_loop's TLM
+                # branch.
+                if self._binary_tlm_queue.full():
+                    try:
+                        self._binary_tlm_queue.get_nowait()
+                    except queue.Empty:
+                        pass
                 try:
-                    self._binary_tlm_queue.get_nowait()
-                except queue.Empty:
-                    pass
-            try:
-                self._binary_tlm_queue.put_nowait(reply)
-            except queue.Full:
-                pass  # extremely unlikely race; drop
+                    self._binary_tlm_queue.put_nowait(reply)
+                except queue.Full:
+                    pass  # extremely unlikely race; drop
+                return
+
+            corr_id = str(reply.corr_id)
+            with self._reply_lock:
+                q = self._reply_queues.get(corr_id)
+            if q is not None:
+                q.put(reply)
+            # If no queue is registered for this id, drop silently.
             return
 
-        corr_id = str(reply.corr_id)
-        with self._reply_lock:
-            q = self._reply_queues.get(corr_id)
-        if q is not None:
-            q.put(reply)
-        # If no queue is registered for this id, drop silently.
+        # Not a (recognizable) ReplyEnvelope -- try TelemetrySecondary
+        # (104-003; see this method's own docstring for the disambiguation
+        # rationale).
+        try:
+            secondary = _get_telemetry_pb2().TelemetrySecondary.FromString(raw_bytes)
+        except Exception:
+            return  # neither shape decoded -- drop, matching this loop's
+                     # tolerance for undecodable bytes elsewhere.
+
+        if self._binary_secondary_queue.full():
+            try:
+                self._binary_secondary_queue.get_nowait()
+            except queue.Empty:
+                pass
+        try:
+            self._binary_secondary_queue.put_nowait(secondary)
+        except queue.Full:
+            pass  # extremely unlikely race; drop
 
     def _poll_ready(self, total_timeout_s: float = _POLL_TOTAL_NORMAL_S) -> list[str]:
         """Poll PING until the device responds or total_timeout_s is exceeded.
@@ -1229,6 +1385,108 @@ class SerialConnection:
                 time.sleep(_sleep)
 
         return frames
+
+    def drain_binary_secondary_tlm(self) -> list["telemetry_pb2.TelemetrySecondary"]:
+        """Non-blocking drain of ``_binary_secondary_queue`` (104-003).
+
+        The ``TelemetrySecondary`` counterpart of ``drain_binary_tlm()``:
+        returns every currently-queued ``TelemetrySecondary`` frame (raw
+        ``pb2.TelemetrySecondary`` objects -- see ``_handle_binary_reply()``)
+        without blocking. Exposes ``acc``/``glitch``/``ts``/``cmd_vel``
+        fields the same way primary telemetry fields are exposed: as plain
+        attributes on the decoded pb2 message (``.acc_left``,
+        ``.cmd_vel_right``, etc.) -- this module stays at the raw-decoded
+        layer, matching ``drain_binary_tlm()``'s own "raw message, caller
+        adapts" split.
+        """
+        frames: list = []
+        while True:
+            try:
+                frames.append(self._binary_secondary_queue.get_nowait())
+            except queue.Empty:
+                break
+        return frames
+
+    def read_binary_secondary_tlm(self, duration: int) -> list["telemetry_pb2.TelemetrySecondary"]:  # [ms]
+        """Block for up to ``duration`` ms, draining ``_binary_secondary_queue``
+        (104-003).
+
+        The ``TelemetrySecondary`` counterpart of ``read_binary_tlm()``: does
+        NOT call ``_ser.readline()`` -- the reader thread already feeds
+        ``_binary_secondary_queue`` independently via ``_handle_binary_reply()``,
+        this just polls it. Returns every ``pb2.TelemetrySecondary`` received
+        during the window, in arrival order; may be empty if none arrived.
+        """
+        if not self.is_open:
+            return []
+
+        frames: list = []
+        deadline = time.time() + (duration / 1000.0)
+        _sleep = 0.005  # 5 ms between drain attempts
+
+        while time.time() < deadline:
+            drained_this_pass = False
+            while True:
+                try:
+                    frames.append(self._binary_secondary_queue.get_nowait())
+                except queue.Empty:
+                    break
+                drained_this_pass = True
+
+            if not drained_this_pass:
+                time.sleep(_sleep)
+
+        return frames
+
+    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.AckEntry | None":  # [ms]
+        """Poll incoming binary ``Telemetry`` pushes for an ack-ring entry
+        matching ``corr_id``, for up to ``timeout`` ms.  Returns the matched
+        raw ``pb2.AckEntry``, or ``None`` if the deadline passes with no
+        match -- this wait is always bounded, never infinite.
+
+        The ONE shared ack-ring matcher (104-003, promoted out of
+        ``robot_radio.robot.protocol.NezhaProtocol.wait_for_ack()``, which
+        now delegates here -- see this module's own file-header note): every
+        ``CommandEnvelope`` oneof arm (``twist``/``stop``/``config``) gets no
+        synchronous ``ReplyEnvelope`` of its own on the P4 wire -- its
+        outcome rides the ack ring (``Telemetry.acks``, depth 3) inside the
+        next one or more regular ``Telemetry`` pushes after the command
+        reaches the firmware (103-009, Decision 2's "telemetry-only return
+        path"). Because the ring is depth 3 and telemetry pushes at ~25 Hz,
+        the SAME ``corr_id`` legitimately rides more than one polled frame in
+        a row -- that is ring RE-DELIVERY, not an error and not a duplicate
+        ack. This matcher tolerates it by construction: it returns on the
+        FIRST frame where ``corr_id`` is found (via ``_match_ack_in_frames()``
+        below), so a caller never sees (and never has to dedupe) the
+        re-delivered copies.
+
+        Ring-wrap (an older, un-observed ``corr_id`` evicted from the depth-3
+        ring before this method ever sees a frame carrying it) is a real,
+        bounded failure, not a bug: it surfaces as this method's own
+        ``timeout``, exactly like a corr_id that was never acked at all --
+        there is no separate "evicted" outcome to report, because from the
+        host's perspective the two are indistinguishable (no frame this
+        method polled ever carried a matching entry).
+
+        Polls ``drain_binary_tlm()`` -- the same non-blocking binary-
+        telemetry drain other callers already use -- in a short sleep loop.
+        Telemetry is always-on in the P4 design (no ``STREAM`` arm to arm
+        first), so there is nothing to arm before polling; this method only
+        drains frames the firmware was already pushing. Note: draining is
+        DESTRUCTIVE (frames not matching ``corr_id`` are consumed and
+        discarded), so two concurrent ``wait_for_ack()`` calls for different
+        corr_ids can race each other over the same queue -- pre-existing
+        behavior carried over unchanged from the 103-009 implementation this
+        method promotes, not a new defect.
+        """
+        deadline = time.monotonic() + (timeout / 1000.0)
+        while True:
+            ack = _match_ack_in_frames(self.drain_binary_tlm(), corr_id)
+            if ack is not None:
+                return ack
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.01)
 
     def handshake(self, line: bytes) -> None:
         """Write a raw line to the serial port, no relay prefix, no corr-id.

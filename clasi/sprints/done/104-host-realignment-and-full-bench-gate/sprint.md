@@ -1,7 +1,7 @@
 ---
 id: '104'
 title: Host realignment and full bench gate
-status: planning-docs
+status: done
 branch: sprint/104-host-realignment-and-full-bench-gate
 use-cases: []
 issues:

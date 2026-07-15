@@ -1,306 +1,331 @@
-"""tests/bench/rig_dev.py — DEV client + waveform driver for the DeviceBus
-bench test rig (sprint 101).
+#!/usr/bin/env python3
+"""tests/bench/rig_dev.py — bench "Rig" helper for the binary twist/config/
+stop plane (104-006), replacing the pre-103 DeviceBus-era `DEV`-grammar
+`Rig` client (`M <port> VEL`/`SERVO`/`ODIAG`/`ODO`/`LINE`/`COLOR`, sprint 101).
 
-The rig runs the DeviceBus bring-up image (source/devices/bringup_main.cpp): a
-text DEV command surface driving the device subsystem DIRECTLY (no planner).
-This module is the host-side counterpart used by the sprint-101 notebooks and
-the device soak test.
+The P4 single-loop firmware's wire surface has exactly THREE `cmd` oneof
+arms — `twist`/`config`/`stop` (`protos/envelope.proto`, `NezhaProtocol` —
+see `host/robot_radio/robot/protocol.py`'s own module docstring) — and no
+per-port addressing, no `SERVO` verb, and no `ODO SETPOSE` arm at all. The
+rig's two bench motors (port 1 = drum: OTOS/line/color; port 2 = high-
+inertia 3-wheel cluster — see `.clasi/knowledge/bench-test-rig-layout.md`)
+are driven the SAME way the real robot's own two drive wheels are: as the
+firmware's own left/right drivetrain, via `twist(v_x, omega, duration)`.
+There is no independent per-port VEL/SERVO control left on this wire at
+all — a `v_x`-only twist drives both rig motors symmetrically forward/back;
+an `omega`-only twist drives them in opposition. This is a REAL, permanent
+capability loss versus the DeviceBus-era rig grammar (no more raw per-motor
+setpoints, no more sweeping the 360° OTOS servo) — not an oversight, and
+not something this ticket's wire surface can restore; see this ticket's own
+completion notes for the disposition of the three downstream scripts
+(`rig_drive.py`/`rig_stress.py`/`otos_drift.py`) that depended on that
+finer-grained control and are left broken by this rewrite.
 
-Rig layout (see memory `bench-test-rig-layout`):
-  - Motor 1 (port 1)  -> drum: OTOS (above), line sensor (0..7 count + ch1
-    index), color sensor.
-  - Motor 2 (port 2)  -> 3 wheels, HIGH INERTIA (velocity-PID stress).
-  - Servo on pin 5 (P1 = Nezha J1/S1), 360deg continuous: SERVO 5 90 = stop,
-    <90 / >90 rotate. (pin 0 = P0 = micro:bit speaker -- do NOT drive it.)
+Provides:
+  - `Rig` — thin operator-facing wrapper over `SerialConnection` +
+    `NezhaProtocol` (connect once via `Rig.open()`, then `twist()`/`stop()`/
+    `config()`/`wait_for_ack()`/`read_tlm()`/`read_secondary_tlm()`). Used
+    both interactively (a Python REPL/notebook, matching the pre-103 `Rig`
+    class's own notebook-driving purpose) and by `rig_soak.py`'s sustained
+    loop.
+  - `waveform()` — pure sine/square reference-velocity generator (kept from
+    the pre-103 `rig_dev.py`, unchanged in shape), reused by `rig_soak.py`
+    to vary the commanded twist smoothly (no zero-dwell reversal — see
+    `rig_soak.py`'s own module docstring for why that matters on this rig).
+  - `secondary_to_dict()` — pure adapter from a `telemetry_pb2.
+    TelemetrySecondary` frame to a plain dict: the binary-plane counterpart
+    of the diagnostics the DeviceBus-era STLM/`M <port> STATE` replies used
+    to carry (`glitch`/`acc`/`ts`/`cmd_vel`), now riding `TelemetrySecondary`
+    (103-001) instead.
 
-DEV commands used: PING, RUNNING, STOP, ODIAG, ODO, LINE, COLOR,
-  M <port> {VEL|DUTY|PID|NEUTRAL|RESET|STATE}, SERVO <pin> <angle>.
-Replies are correlation-id matched (bring-up echoes ' #<cid>') for reliability.
+Run directly for a smoke-level bench verification (this ticket's own
+Acceptance Criterion 4 — a single connect/twist/config/stop pass, distinct
+from `rig_soak.py`'s sustained run):
+    uv run python tests/bench/rig_dev.py
+    uv run python tests/bench/rig_dev.py --port /dev/cu.usbmodem2121102
 """
 from __future__ import annotations
 
-import re
+import argparse
+import math
+import sys
 import time
+from typing import Any
 
-import serial
+from robot_radio.io.serial_conn import SerialConnection
+from robot_radio.robot.protocol import AckEntry, NezhaProtocol, TLMFrame
 
-ROBOT_PORT = "/dev/cu.usbmodem2121102"
-SERVO_PIN = 5  # P1 = Nezha J1/S1 (found by OTOS-heading response, 101-001)
-
-# The fiber neutralizes a motor whose last setVelocity() is older than this
-# (DeviceBus::kVelocityStaleUs). Re-send VEL comfortably faster than this to
-# keep driving; stream_capture() feeds it every VEL_FEED_S.
-VELOCITY_STALE_S = 0.300  # [s] RX-watchdog neutralize horizon
-VEL_FEED_S = 0.100        # [s] setpoint re-send period (< VELOCITY_STALE_S)
-
-_KV = re.compile(r"(\w+)=(-?[\d.]+)")
+DEFAULT_PORT = "/dev/cu.usbmodem2121102"
+ACK_TIMEOUT = 500  # [ms] wait_for_ack() bound for each command's ack
 
 
-class Rig:
-    """Correlation-id-matched, retry-on-timeout DEV client for the rig."""
+# ---------------------------------------------------------------------------
+# Pure helpers — no I/O, no hardware. Unit-tested directly in
+# tests/unit/test_rig_dev.py.
+# ---------------------------------------------------------------------------
 
-    def __init__(self, port: str = ROBOT_PORT, settle: float = 2.5) -> None:
-        self.ser = serial.Serial(port, 115200, timeout=0.02)
-        self.ser.dtr = True
-        time.sleep(settle)  # DeviceBus preamble incl. OTOS retry (~2s)
-        self.ser.reset_input_buffer()
-        self._cid = 0
-        self._buf = ""  # persistent RX buffer (corr-id demux, never flushed mid-run)
-
-    def send(self, s: str) -> int:
-        """Fire-and-forget one command; returns its correlation id."""
-        self._cid += 1
-        self.ser.write((f"{s} #{self._cid}\r\n").encode())
-        return self._cid
-
-    def flush(self) -> None:
-        """Drop the RX buffer + any queued serial data (resync after a lag)."""
-        self._buf = ""
-        try:
-            self.ser.reset_input_buffer()
-        except Exception:
-            pass
-
-    def stream(self, ms: int) -> None:  # [ms]
-        """Set the firmware's unsolicited TLM push period (0 = off)."""
-        self.cmd(f"STREAM {int(ms)}")
-
-    def read_tlm(self) -> list[dict]:
-        """Drain available serial and return parsed unsolicited TLM frames
-        since the last call. Shares the persistent buffer with await_reply()
-        (TLM lines start with 'TLM', command replies with 'OK'/'ERR', so the
-        two never claim the same line). Each dict carries the raw wire keys:
-        t (emit [ms]), 1p/1v/1a/1t and 2p/2v/2a/2t per motor."""
-        self._buf += self.ser.read(self.ser.in_waiting or 1).decode(errors="replace")
-        out: list[dict] = []
-        if "\n" in self._buf:
-            lines = self._buf.split("\n")
-            self._buf = lines[-1]
-            for ln in lines[:-1]:
-                ln = ln.strip()
-                if ln.startswith("TLM"):
-                    out.append({m[0]: float(m[1]) for m in _KV.findall(ln)})
-        return out
-
-    def read_frames(self) -> tuple[list[dict], list[dict]]:
-        """Drain serial ONCE and return (tlm_rows, stlm_rows). Use this instead
-        of read_tlm()+read_stlm() when you need both -- those each drain the
-        shared buffer and the first one called discards (eats) the other's
-        lines. Command-reply (OK/ERR) lines are drained and ignored."""
-        self._buf += self.ser.read(self.ser.in_waiting or 1).decode(errors="replace")
-        tlm: list[dict] = []
-        stlm: list[dict] = []
-        if "\n" in self._buf:
-            lines = self._buf.split("\n")
-            self._buf = lines[-1]
-            for ln in lines[:-1]:
-                ln = ln.strip()
-                if ln.startswith("STLM"):
-                    stlm.append({m[0]: float(m[1]) for m in _KV.findall(ln)})
-                elif ln.startswith("TLM"):
-                    tlm.append({m[0]: float(m[1]) for m in _KV.findall(ln)})
-        return tlm, stlm
-
-    def read_stlm(self) -> list[dict]:
-        """Drain available serial and return parsed unsolicited STLM (sensor)
-        frames since the last call: t (emit [ms]), OTOS ox/oy/oh/oc, line
-        n0..n3/lc, color r/g/b/cw/cc. Non-STLM lines (motor TLM, command
-        replies) are drained and discarded -- a sensor capture keeps only these."""
-        self._buf += self.ser.read(self.ser.in_waiting or 1).decode(errors="replace")
-        out: list[dict] = []
-        if "\n" in self._buf:
-            lines = self._buf.split("\n")
-            self._buf = lines[-1]
-            for ln in lines[:-1]:
-                ln = ln.strip()
-                if ln.startswith("STLM"):
-                    out.append({m[0]: float(m[1]) for m in _KV.findall(ln)})
-        return out
-
-    def await_reply(self, cid: int, timeout: float = 0.6) -> tuple[str, dict] | tuple[None, dict]:
-        """Poll the persistent buffer for the reply matching `cid`."""
-        tag = f"#{cid}"
-        t0 = time.monotonic()
-        while time.monotonic() - t0 < timeout:
-            self._buf += self.ser.read(self.ser.in_waiting or 1).decode(errors="replace")
-            if "\n" in self._buf:
-                lines = self._buf.split("\n")
-                self._buf = lines[-1]  # keep the partial tail
-                for ln in lines[:-1]:
-                    toks = ln.rstrip().split()
-                    if toks and toks[-1] == tag and (ln.startswith("OK") or ln.startswith("ERR")):
-                        return ln.rstrip(), {m[0]: float(m[1]) for m in _KV.findall(ln)}
-            time.sleep(0.002)
-        return None, {}
-
-    def cmd(self, s: str, timeout: float = 0.8, retries: int = 2) -> tuple[str, dict]:
-        """Reliable one-off: send + await, retrying on timeout."""
-        for _ in range(retries + 1):
-            cid = self.send(s)
-            ln, d = self.await_reply(cid, timeout)
-            if ln is not None:
-                return ln, d
-        return "(timeout)", {}
-
-    # --- device helpers ---------------------------------------------------
-    def ping(self) -> bool:
-        return self.cmd("PING")[0].startswith("OK")
-
-    def odiag(self) -> dict:
-        return self.cmd("ODIAG")[1]
-
-    def odo(self) -> dict:
-        return self.cmd("ODO")[1]
-
-    def line(self) -> dict:
-        return self.cmd("LINE")[1]
-
-    def color(self) -> dict:
-        return self.cmd("COLOR")[1]
-
-    def mstate(self, port: int) -> dict:
-        return self.cmd(f"M {port} STATE")[1]
-
-    def mvel(self, port: int, v: float) -> None:  # [mm/s]
-        self.send(f"M {port} VEL {v:.1f}")  # fire-and-forget for high-rate drive
-
-    def neutral(self, port: int) -> None:
-        self.cmd(f"M {port} NEUTRAL")
-
-    def reset(self, port: int) -> None:
-        self.cmd(f"M {port} RESET")
-
-    def servo(self, angle: int, pin: int = SERVO_PIN) -> None:
-        self.cmd(f"SERVO {pin} {int(angle)}")
-
-    def stop(self) -> None:
-        self.cmd("STOP")
-
-    def close(self) -> None:
-        try:
-            self.stop()
-        except Exception:
-            pass
-        try:
-            self.ser.close()
-        except Exception:
-            pass
-
-
-def waveform(kind: str, t: float, period: float, amp: float) -> float:
-    """Reference velocity [mm/s] at time t for 'sine' or 'square'."""
-    import math
+def waveform(kind: str, t: float, period: float, amp: float) -> float:  # [s] [s]
+    """Reference value at time `t` for a 'sine' or 'square' waveform of the
+    given `period` [s] and `amp`litude. Used to vary a commanded twist
+    component (`v_x` or `omega`) smoothly over a soak run — a sine always
+    crosses zero WITH a dwell either side (never an instantaneous zero-dwell
+    reversal, the encoder-wedge trigger — see `.clasi/knowledge/
+    encoder-wedge-boundary-latch.md`)."""
     phase = (t % period) / period
     if kind == "square":
         return amp if phase < 0.5 else -amp
     return amp * math.sin(2.0 * math.pi * phase)
 
 
-def run_waveform(rig: Rig, port: int, kind: str, period: float, amp: float,
-                 cycles: float = 3.0, offset: float = 0.0):
-    """Drive motor `port` with a sine/square velocity reference (plus a DC
-    `offset` -- use a positive offset >= amp to keep the drive one-directional,
-    i.e. no reversal) and capture commanded vs measured (encoder) velocity.
-    Returns a list of dict rows: {t, cmd, vel, pos, applied, wedged, glitch}.
-    Sends VEL then reads STATE each iteration."""
-    rig.reset(port)
-    rows = []
-    t0 = time.monotonic()
-    dur = period * cycles
-    while True:
-        t = time.monotonic() - t0
-        if t >= dur:
-            break
-        cmd = offset + waveform(kind, t, period, amp)
-        rig.send(f"M {port} VEL {cmd:.1f}")     # fire-and-forget setpoint
-        cid = rig.send(f"M {port} STATE")       # then read the state back
-        _, st = rig.await_reply(cid, timeout=0.15)
-        rows.append({
-            "t": t, "cmd": cmd,
-            "vel": st.get("vel"), "pos": st.get("pos"),
-            "applied": st.get("applied"),
-            "wedged": st.get("wedged"), "glitch": st.get("glitch"),
-        })
-    rig.neutral(port)
-    return rows
+def secondary_to_dict(secondary: Any) -> dict[str, Any]:
+    """Adapt one `telemetry_pb2.TelemetrySecondary` frame to a plain dict —
+    the ~5 Hz diagnostic frame (`acc`/`glitch`/`ts`/`cmd_vel`, moved off the
+    primary `Telemetry` message by 103-001) that is the binary-plane
+    counterpart of the DeviceBus-era STLM/`M <port> STATE` diagnostics.
+    `secondary` is typed `Any` (not `telemetry_pb2.TelemetrySecondary`) so
+    this module never imports `robot_radio.robot.pb2` at module scope purely
+    for a type hint — the only real dependency is duck-typed field access,
+    matching `TLMFrame.from_pb2()`'s own adapter style."""
+    return {
+        "t": int(secondary.now),
+        "cmd_vel_left": float(secondary.cmd_vel_left) if secondary.has_cmd_vel else None,
+        "cmd_vel_right": float(secondary.cmd_vel_right) if secondary.has_cmd_vel else None,
+        "acc_left": float(secondary.acc_left),      # [mm/s^2]
+        "acc_right": float(secondary.acc_right),     # [mm/s^2]
+        "glitch_left": int(secondary.glitch_left),
+        "glitch_right": int(secondary.glitch_right),
+        "ts_left": int(secondary.ts_left),            # [ms]
+        "ts_right": int(secondary.ts_right),           # [ms]
+    }
 
 
-def sensor_capture(rig: Rig, port: int, drive, duration: float,
-                   stream_ms: int = 80, offset: float = 0.0):
-    """Drive motor `port` (to rotate the drum, which sweeps the line pattern,
-    color target, and OTOS) and record the gap-free STLM sensor stream. Returns
-    rows: {t [s], ox, oy, oh, oc, n0..n3, lc, r, g, b, cw, cc}. Same watchdog-
-    fed drive discipline as stream_capture()."""
-    rig.stream(stream_ms)
-    rig.reset(port)
-    rig.cmd(f"M {port} PID 1")
-    rig.flush()
-    rows: list[dict] = []
-    t0 = time.monotonic()
-    last_feed = -1.0
-    t_emit0 = None
-    while time.monotonic() - t0 < duration:
-        t = time.monotonic() - t0
-        if t - last_feed >= VEL_FEED_S:
-            last_feed = t
-            rig.send(f"M {port} VEL {offset + drive(t):.1f}")
-        for d in rig.read_stlm():
-            if "t" not in d:
-                continue
-            if t_emit0 is None:
-                t_emit0 = d["t"]
-            d["_t"] = (d["t"] - t_emit0) / 1000.0   # [s] firmware emit clock
-            rows.append(d)
-        time.sleep(0.005)
-    rig.neutral(port)
-    return rows
+# ---------------------------------------------------------------------------
+# Rig — operator-facing wrapper over SerialConnection + NezhaProtocol
+# ---------------------------------------------------------------------------
+
+class Rig:
+    """Binary-plane (twist/config/stop) operator wrapper. Construct via
+    `Rig.open()` for real hardware (does the connect); the bare constructor
+    takes an already-connected `conn`/`proto` pair so tests can inject fakes
+    without touching a serial port at all (see `tests/unit/test_rig_dev.py`).
+    """
+
+    def __init__(self, conn: SerialConnection, proto: NezhaProtocol | None = None) -> None:
+        self.conn = conn
+        self.proto = proto if proto is not None else NezhaProtocol(conn)
+
+    @classmethod
+    def open(cls, port: str = DEFAULT_PORT, mode: str | None = None,
+             settle: float = 2.5) -> "Rig":  # [s]
+        """Connect to the robot and return a ready `Rig`. `mode` is `None`
+        (auto-detect direct-USB vs relay from the boot `DEVICE:` banner —
+        `SerialConnection.connect()`'s own default), `"direct"`, or
+        `"relay"`. `settle` gives the firmware's boot `Preamble` device
+        detection time to finish before the first command is sent; any
+        telemetry frames queued during that window are drained before
+        returning so a caller's first `read_tlm()` only sees fresh pushes.
+        """
+        conn = SerialConnection(port=port, mode=mode)
+        info = conn.connect()
+        if info.get("status") not in ("connected", "already_connected"):
+            raise ConnectionError(f"connect failed: {info}")
+        time.sleep(settle)
+        rig = cls(conn)
+        rig.proto.read_pending_binary_tlm_frames()
+        return rig
+
+    # --- commands (the wire's only three cmd oneof arms) -------------------
+
+    def twist(self, v_x: float, omega: float, duration: float) -> int:  # [mm/s] [rad/s] [ms]
+        """Fire-and-poll body-frame twist — see `NezhaProtocol.twist()`.
+        Returns the corr_id; pass it to `wait_for_ack()` to confirm."""
+        return self.proto.twist(v_x=v_x, omega=omega, duration=duration)
+
+    def stop(self) -> int:
+        """Fire-and-poll panic-stop — see `NezhaProtocol.stop()`."""
+        return self.proto.stop()
+
+    def config(self, **deltas: Any) -> int:
+        """Fire-and-poll `ConfigDelta` — see `NezhaProtocol.config()`. Today
+        the firmware acks every `config` with `ERR_UNIMPLEMENTED`
+        (`ConfigDelta` decode succeeds, runtime application is deferred —
+        `source/main.cpp`'s `CmdKind::CONFIG` case); this wrapper still
+        sends it so the wire round trip itself is exercised."""
+        return self.proto.config(**deltas)
+
+    def wait_for_ack(self, corr_id: int, timeout: int = ACK_TIMEOUT) -> AckEntry | None:  # [ms]
+        return self.proto.wait_for_ack(corr_id, timeout=timeout)
+
+    # --- telemetry -----------------------------------------------------------
+
+    def read_tlm(self) -> list[TLMFrame]:
+        """Non-blocking drain of every queued PRIMARY telemetry frame."""
+        return self.proto.read_pending_binary_tlm_frames()
+
+    def read_secondary_tlm(self) -> list[dict[str, Any]]:
+        """Non-blocking drain of every queued SECONDARY (slow diagnostic)
+        telemetry frame, adapted via `secondary_to_dict()`."""
+        return [secondary_to_dict(s) for s in self.conn.drain_binary_secondary_tlm()]
+
+    def close(self) -> None:
+        """Guaranteed stop + disconnect — motors must never be left
+        running (`.claude/rules/hardware-bench-testing.md`)."""
+        try:
+            self.proto.stop()
+        except Exception:
+            pass
+        try:
+            self.conn.disconnect()
+        except Exception:
+            pass
 
 
-def stream_capture(rig: Rig, port: int, drive, duration: float,
-                   stream_ms: int = 80, offset: float = 0.0):
-    """Characterization capture over the RELIABLE telemetry-stream path
-    (vs. run_waveform's lossy per-sample STATE polling). Turns on the
-    firmware's 80 ms TLM push, drives motor `port` with velocity setpoint
-    `drive(t)` re-sent every VEL_FEED_S (feeds the RX watchdog), and records
-    ONLY the pushed TLM frames -- so the result is gap-free at the encoder's
-    own ~80 ms refresh cadence. Returns rows keyed off the firmware's own emit
-    stamp: {t [s], cmd, pos, vel, applied, stamp [us]}."""
-    pk, vk, ak, tk = f"{port}p", f"{port}v", f"{port}a", f"{port}t"
-    rig.stream(stream_ms)
-    rig.reset(port)
-    rig.cmd(f"M {port} PID 1")
-    # Let the STAGED reset + encoder boot-anchor settle before recording.
-    # The Nezha brick reports its huge lifetime-accumulated raw count for a
-    # frame or two after RESET (nezha_motor.cpp documents "~-33526mm on first
-    # contact, NORMAL") until the software offset zeroes it; capturing through
-    # that would blow out the position axis. Settle, then flush the transient.
-    time.sleep(0.4)
-    rig.flush()
-    rows: list[dict] = []
-    t0 = time.monotonic()
-    last_feed = -1.0
-    t_emit0 = None
-    while time.monotonic() - t0 < duration:
-        t = time.monotonic() - t0
-        if t - last_feed >= VEL_FEED_S:
-            last_feed = t
-            rig.send(f"M {port} VEL {offset + drive(t):.1f}")
-        for d in rig.read_tlm():
-            if pk not in d or "t" not in d:
-                continue
-            # Defensive: drop any residual boot-anchor / corrupt outlier frame
-            # (no real bench run travels tens of metres) so it never distorts
-            # the plot's autoscale.
-            if abs(d.get(pk, 0.0)) > 20000.0:
-                continue
-            if t_emit0 is None:
-                t_emit0 = d["t"]
-            rows.append({
-                "t": (d["t"] - t_emit0) / 1000.0,        # [s] firmware emit clock
-                "cmd": offset + drive((d["t"] - t_emit0) / 1000.0),
-                "pos": d.get(pk), "vel": d.get(vk),
-                "applied": d.get(ak), "stamp": d.get(tk),
-            })
-        time.sleep(0.005)
-    rig.neutral(port)
-    return rows
+# ---------------------------------------------------------------------------
+# Smoke verification — this ticket's own Acceptance Criterion 4
+# ---------------------------------------------------------------------------
+
+class Result:
+    def __init__(self) -> None:
+        self.checks: list[tuple[str, bool, str]] = []
+
+    def record(self, name: str, ok: bool, detail: str = "") -> None:
+        self.checks.append((name, ok, detail))
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f"  ({detail})" if detail else ""))
+
+    def ok(self) -> bool:
+        passed = sum(1 for _, k, _ in self.checks if k)
+        print(f"\n==== {passed}/{len(self.checks)} checks passed ====")
+        return passed == len(self.checks)
+
+
+def _args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--port", default=DEFAULT_PORT)
+    p.add_argument("--relay", action="store_true",
+                   help="port is a radio relay dongle (default: auto-detect)")
+    p.add_argument("--v-x", type=float, default=120.0,  # [mm/s]
+                   help="body-frame forward velocity for the twist() check")
+    p.add_argument("--omega", type=float, default=0.8,  # [rad/s]
+                   help="body-frame yaw rate for the second twist() check")
+    p.add_argument("--duration", type=float, default=600.0,  # [ms]
+                   help="deadman arm window for each twist command")
+    p.add_argument("--watch", type=float, default=0.5,  # [s]
+                   help="how long to watch telemetry for encoder movement "
+                        "after each twist's ack lands")
+    return p.parse_args()
+
+
+def main() -> int:
+    args = _args()
+    result = Result()
+    mode = "relay" if args.relay else None
+
+    try:
+        rig = Rig.open(port=args.port, mode=mode)
+    except ConnectionError as exc:
+        print(f"ERROR: {exc}")
+        return 2
+    result.record("connect()", True, f"mode={rig.conn.mode}")
+
+    # Bench finding (104-006, hardware verification session): the live wire
+    # occasionally drops/delays an individual command's ack-ring entry even
+    # when well-separated from any other command (confirmed via ad-hoc
+    # single-command diagnostics against bare NezhaProtocol.twist()/
+    # wait_for_ack() -- NOT caused by this script's own logic) -- see this
+    # ticket's completion notes / clasi/issues/ for the filed follow-up.
+    # `wait_for_ack()`'s own docstring already names this class of outcome
+    # ("Ring-wrap... a real, bounded failure, not a bug") -- one bounded
+    # retry absorbs the common case without masking a genuinely dead link
+    # (both attempts timing out).
+    def wait_for_ack_retrying(corr_id: int, attempts: int = 2) -> "object | None":
+        ack = None
+        for _ in range(attempts):
+            ack = rig.wait_for_ack(corr_id)
+            if ack is not None:
+                return ack
+        return ack
+
+    # Running "last known enc" snapshot, updated by every read_tlm() drain
+    # below -- NOT re-established fresh after wait_for_ack(), because
+    # wait_for_ack() destructively drains the same telemetry queue while
+    # searching for its own corr_id match (its own docstring: "draining is
+    # DESTRUCTIVE"), so any frame it inspects along the way is gone by the
+    # time a caller tries to read it afterward. Capturing the baseline
+    # BEFORE each twist() call (matching twist_drive.py's own proven order)
+    # is the fix.
+    last_enc: list = [None]
+
+    def drain() -> None:
+        for frame in rig.read_tlm():
+            if frame.enc is not None:
+                last_enc[0] = frame.enc
+
+    def watch_enc_moves(label: str, enc_before) -> None:
+        deadline = time.monotonic() + args.watch
+        moved = False
+        while time.monotonic() < deadline:
+            drain()
+            if enc_before is not None and last_enc[0] is not None and last_enc[0] != enc_before:
+                moved = True
+            time.sleep(0.02)
+        result.record(f"encoders moving during {label}", moved,
+                       f"before={enc_before} after={last_enc[0]}")
+
+    try:
+        # Establish a fresh enc baseline before the first command. A single
+        # drain() right after Rig.open() can race the firmware's own ~40 ms
+        # telemetry cadence and see nothing yet (matching twist_drive.py's
+        # own "give the firmware one push cycle" fallback) -- retry a few
+        # times, a short sleep apart, before accepting enc_before as None.
+        for _ in range(5):
+            drain()
+            if last_enc[0] is not None:
+                break
+            time.sleep(0.1)
+
+        # --- twist(): forward -------------------------------------------
+        enc_before = last_enc[0]
+        corr_id = rig.twist(v_x=args.v_x, omega=0.0, duration=args.duration)
+        ack = wait_for_ack_retrying(corr_id)
+        result.record("twist(v_x) ack confirmed via ack ring", ack is not None and ack.ok,
+                       f"ack={ack}")
+        watch_enc_moves("twist(v_x)", enc_before)
+
+        # --- twist(): turn -------------------------------------------------
+        enc_before = last_enc[0]
+        corr_id = rig.twist(v_x=0.0, omega=args.omega, duration=args.duration)
+        ack = wait_for_ack_retrying(corr_id)
+        result.record("twist(omega) ack confirmed via ack ring", ack is not None and ack.ok,
+                       f"ack={ack}")
+        watch_enc_moves("twist(omega)", enc_before)
+
+        # --- stop() ----------------------------------------------------------
+        corr_id = rig.stop()
+        ack = wait_for_ack_retrying(corr_id)
+        result.record("stop() ack confirmed via ack ring", ack is not None and ack.ok,
+                       f"ack={ack}")
+
+        # --- config(): round trip only -- firmware acks ERR_UNIMPLEMENTED
+        # today (source/main.cpp's CmdKind::CONFIG case); a genuine ack
+        # (ok=False, err_code=ERR_UNIMPLEMENTED) counts as the round trip
+        # working -- only a timeout (ack is None) fails this check.
+        corr_id = rig.config(sTimeout=1000)
+        ack = wait_for_ack_retrying(corr_id)
+        result.record("config() round trip acked (ERR_UNIMPLEMENTED expected today)",
+                       ack is not None, f"ack={ack}")
+
+        # --- secondary telemetry (glitch/acc/ts/cmd_vel diagnostics) -----
+        time.sleep(0.3)  # TelemetrySecondary rides its own ~5 Hz cadence
+        secondary = rig.read_secondary_tlm()
+        result.record("secondary telemetry (glitch/acc/ts diagnostics) received",
+                       len(secondary) > 0,
+                       f"{secondary[-1] if secondary else {}}")
+    finally:
+        rig.close()
+
+    return 0 if result.ok() else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

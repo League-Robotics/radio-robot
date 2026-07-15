@@ -117,10 +117,27 @@ message Telemetry {
   //
   // fault_bits:
   //   bit 0 -- I2CBus `readyAt` clearance safety-net trip (source/devices/
-  //            i2c_bus.*; wired live by ticket 002/005)
+  //            i2c_bus.*; wired live by ticket 002/005). CHARACTERIZED by
+  //            103-010's bench session: a boot-time ONE-SHOT latch -- it
+  //            fires once, coincident with `Preamble::done()`'s
+  //            first-true transition (plausibly preamble's own
+  //            `hardReset()`-driven back-to-back device-detection writes),
+  //            and then never re-fires; observed pegged at exactly 1
+  //            across sustained driving in every re-run capture in that
+  //            session, with no behavioral signal correlated with driving
+  //            activity. A healthy robot can show `fault_bits` bit 0 set
+  //            permanently after boot with no ongoing problem -- do not
+  //            chase a steady `fault=1` as live evidence of a defect; only
+  //            a bit that flips DURING driving (not just at boot) is
+  //            actionable.
   //   bit 1 -- NezhaMotor/I2CBus wedge-latch detected
   //   bit 2 -- I2C bus NAK/timeout error
-  //   bits 3-31 -- reserved for future faults
+  //   bit 3 -- malformed/undecodable inbound frame (App::Comms::
+  //            malformedCount() > 0 -- source/app/comms.*; malformed armor
+  //            prefix, malformed base64, malformed protobuf decode, or an
+  //            unrecognized text-plane line all count. Wired live by
+  //            ticket 104-004.)
+  //   bits 4-31 -- reserved for future faults
   //
   // event_bits:
   //   bit 0 -- Deadman staleness timer expired (source/app/deadman.*;
