@@ -166,6 +166,15 @@ class SimApi {
   Devices::NezhaMotor& motorRight() { return motorR_; }
   Devices::Clock& clock() { return clock_; }
 
+  // Plant-level fault-injection seam (105-005, SUC-022) -- a scenario flips
+  // one of WheelPlant's own knobs (setDisconnected()/freezePosition()/
+  // setDropoutRate(), wheel_plant.h) directly on the plant driving the named
+  // wheel, then calls step() and inspects decoded telemetry for the
+  // firmware's own observable reaction. Non-const: every knob mutates the
+  // plant.
+  WheelPlant& plantLeft() { return plantLeft_; }
+  WheelPlant& plantRight() { return plantRight_; }
+
   // [ms] the fixed per-cycle virtual-time advance step() applies before
   // every robotLoop_.cycle() call -- >=40ms so a fresh duty write is never
   // write-rate-throttled (nezha_motor.cpp's kMinWriteIntervalUs) and
