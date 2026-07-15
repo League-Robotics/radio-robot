@@ -135,9 +135,14 @@ DEFAULT_OMEGA_MAX = 1.0  # [rad/s] turn-leg cruise rate -- RT carries no rate fi
 # NOT PlannerParams' own more aggressive omega_max=2.0 hard ceiling.
 DEFAULT_ALPHA_MAX = 3.0  # [rad/s^2] turn-leg accel/decel, same rationale as DEFAULT_OMEGA_MAX.
 
-DEFAULT_INTER_LEG_SETTLE = 0.3  # [s] gap between two legs' own run loops, giving the plant real
-# time to decelerate before the NEXT leg's begin() re-baselines telemetry -- a bench-safe default,
-# not empirically bench-tuned this ticket (ticket 005's own bench session may retune it).
+DEFAULT_INTER_LEG_SETTLE = 1.0  # [s] gap between two legs' own run loops, giving the plant real
+# time to decelerate before the NEXT leg's begin() re-baselines telemetry. Retuned from 0.3 ->
+# 1.0 by ticket 107-005's own bench session (Completion Notes, "Bench findings" #1): the 0.3s
+# value reproduced a kFaultWedgeLatch trip at the straight->turn boundary on the FIRST turn leg
+# (traces 20260715T201348Z/20260715T201419Z) -- 0/N repeats after widening to 1.0s. This is the
+# GUI-driven default too (testgui/__main__.py's `_TourRunner` calls `run_tour()` with no
+# `inter_leg_settle` override), so the production default must match the bench-proven value, not
+# just the bench script's own CLI override.
 DEFAULT_FINAL_SETTLE = 0.6  # [s] post-terminal-stop settle window before capturing the tour's own
 # closure end pose -- matches profiled_motion_verify.py's own settle-window convention (106-006):
 # the terminal tick() sends stop() and returns immediately, but the PLANT needs real time to

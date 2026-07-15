@@ -108,10 +108,25 @@ class PlannerParams:
     completion_tolerance_linear: float = 5.0  # [mm] how close to the
     # signed target distance counts as "reached" at run end.
     completion_tolerance_angular: float = 0.02  # [rad] same, for turns.
-    overshoot_bound_linear: float = 30.0  # [mm] outer bound (BOTH
+    overshoot_bound_linear: float = 60.0  # [mm] outer bound (BOTH
     # directions of the signed target) -- exceeding it mid-run is a
     # logged failure, not silently accepted (binding requirement #6).
-    overshoot_bound_angular: float = 0.1  # [rad] same, for turns.
+    # Retuned from 30.0 -> 60.0: 106-006's own bench session found 30mm too
+    # tight for a single leg's real first-tick transient response on this
+    # rig; 107-005's own bench session reproduced the identical false-abort
+    # mode chaining a 13-leg tour (e.g. a 700mm leg landing at 734mm, 4mm
+    # past the 30mm interval, aborting the WHOLE tour) and confirmed 60mm
+    # resolves it. This is the GUI-driven default too (testgui/__main__.py's
+    # `_TourRunner` builds a bare `PlannerParams()`, no override), so the
+    # production default must match the bench-proven value.
+    overshoot_bound_angular: float = 0.5  # [rad] same, for turns. Retuned
+    # from 0.1 -> 0.5 by the same two bench sessions: 106-006 widened to
+    # 0.35rad for a single leg; 107-005's own bench session found TOUR_2's
+    # `RT -21700` leg (-217deg, the largest single turn in either tour)
+    # still narrowly exceeded 0.35rad (~21.4deg past target vs ~20.05deg
+    # allowed, 2/2 reproductions) -- widening further to 0.5rad resolved it.
+    # 0.5 also covers TOUR_1's own bench-proven 0.35rad with headroom, so one
+    # shared default serves both GUI-launched tours.
 
     # ------------------------------------------------------------------
     # Live-editable load/override plumbing
