@@ -249,23 +249,30 @@ std::vector<TestSupport::DecodedLine> SimApi::drainTelemetry() {
 // top of the loop in step()). So EVERY runAndWait/sleepUntil call inside
 // THIS single cycle() call sees elapsed-since-mark == 0, meaning each of
 // the four sleeps robot_loop.cpp's cycle() body issues (L-settle,
-// clearance, R-settle, final cycle-pace) requests exactly its OWN gap
-// parameter, no more, no less -- an invariant provable from robot_loop.cpp's
-// own runAndWait()/sleepUntil() bodies, not merely observed here. That
-// invariant is what lets a HOST_BUILD harness report a deterministic
-// virtual total at all (a real ARM cycle's sleeps interact with genuine
-// elapsed wall time and do NOT sum this way -- see the comparison this
-// method's own caller records in the ticket's completion notes).
+// clearance, R-settle, final perception+odometry+pace) requests exactly its
+// OWN gap parameter, no more, no less -- an invariant provable from
+// robot_loop.cpp's own runAndWait()/sleepUntil() bodies, not merely
+// observed here. That invariant is what lets a HOST_BUILD harness report a
+// deterministic virtual total at all (a real ARM cycle's sleeps interact
+// with genuine elapsed wall time and do NOT sum this way -- see the
+// comparison this method's own caller records in ticket 106-001's
+// completion notes).
 //
 // virtualCycleMillis is therefore the SUM of the four sleeps robot_loop.cpp's
 // own published constants declare (kSettle=4, kClear=4, kSettle=4,
-// kCycle=16 -- robot_loop.cpp's own anonymous-namespace constants, not
+// kPace=28 -- robot_loop.cpp's own anonymous-namespace constants, not
 // exported, duplicated here by citation per this codebase's established
-// per-file fixture-duplication convention) -- 4+4+4+16 = 28ms. sleepCount
-// and lastSleepMillis below are the OBSERVED corroboration (not merely
-// hardcoded trust): sleepCount must be exactly 4 (three runAndWait blocks
-// plus the final sleepUntil), and lastSleepMillis must equal the final
-// (cycle-pace) block's own 16ms -- both checked live, not assumed.
+// per-file fixture-duplication convention) -- 4+4+4+28 = 40ms == kCycle.
+// This equality (not an inequality, not a coincidence) is 106-001's own
+// fix: robot_loop.cpp's kPace is DERIVED as kCycle minus the three
+// settle/clear windows specifically so this sum lands on kCycle exactly,
+// closing the gap 105-004 found (the pre-106-001 code passed kCycle, not
+// kPace, to the final block, so this same sum was 4+4+4+16=28ms against a
+// 16ms kCycle target -- 12ms unabsorbed). sleepCount and lastSleepMillis
+// below are the OBSERVED corroboration (not merely hardcoded trust):
+// sleepCount must be exactly 4 (three runAndWait blocks plus the final
+// perception+odometry+pace block), and lastSleepMillis must equal the
+// final block's own kPace=28ms -- both checked live, not assumed.
 CycleTimingReport SimApi::measureOneCycle() {
   CycleTimingReport report;
   int sleepsBefore = sleeper_.sleepCount();

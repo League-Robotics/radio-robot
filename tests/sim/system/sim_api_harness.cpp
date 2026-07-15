@@ -231,31 +231,43 @@ void scenarioDeadmanExpiryStopsPlant() {
 }
 
 // ===========================================================================
-// 5. Virtual-cycle-timing diagnostic (105-004 AC #3) -- no pass/fail
-//    assertion on the timing NUMBERS themselves (this is explicitly a
-//    diagnostic for sprint 106), only that the report's own internal
-//    invariants hold (exactly 4 sleeps per cycle(), the final one matching
-//    the cycle-pace block) and that it prints for a human/106 to read.
+// 5. Virtual-cycle-timing diagnostic (105-004 AC #3) -- PROMOTED (106-001
+//    AC #2) from an observational report to a hard pass/fail regression
+//    assertion on the schedule's own NUMBERS: a future change that re-adds
+//    105-004's diagnosed defect (the three settle/clearance windows
+//    stacking additively under the final pace block instead of being
+//    absorbed into kCycle's stated total) fails this checkTrue -- and
+//    therefore fails `uv run python -m pytest` -- not just a future bench
+//    session. The expected numbers below are 106-001's retargeted ~25 Hz
+//    (~40ms) schedule (robot_loop.cpp's own kSettle/kClear/kCycle/kPace),
+//    not the pre-106-001 16ms-target/28ms-virtual figures this same
+//    assertion used to lock in.
 // ===========================================================================
 
 void scenarioVirtualCycleTimingDiagnostic() {
-  beginScenario("timing: virtual-cycle diagnostic reports a 4-sleep schedule, final block = cycle pace");
+  beginScenario("timing: virtual-cycle schedule is exactly kSettle+kClear+kSettle+kPace == kCycle (106-001)");
 
   TestSim::SimApi sim;
   sim.step(1);  // boot
   TestSim::CycleTimingReport report = sim.measureOneCycle();
 
   checkTrue(report.sleepCount == 4,
-            "exactly 4 Sleeper::sleepMillis() calls per cycle() (3 runAndWait blocks + final sleepUntil)");
-  checkTrue(report.lastSleepMillis == 16, "the final (cycle-pace) block requests exactly kCycle=16ms");
+            "exactly 4 Sleeper::sleepMillis() calls per cycle() (3 runAndWait blocks + final pace block)");
+  checkTrue(report.lastSleepMillis == 28,
+            "the final (perception+odometry+pace) block requests exactly kPace=28ms "
+            "(kCycle=40ms minus the 12ms already consumed by the 3 settle/clear windows -- "
+            "NOT a fresh, unabsorbed kCycle=40ms on top of them)");
   checkTrue(report.yieldCount == 0, "RobotLoop::cycle() never calls Sleeper::yield() directly");
-  checkTrue(report.virtualCycleMillis == 28,
-            "derived total virtual schedule == 3*4ms (settle/clear/settle) + 16ms (pace) == 28ms");
+  checkTrue(report.virtualCycleMillis == 40,
+            "derived total virtual schedule == 3*4ms (settle/clear/settle) + 28ms (pace) == 40ms == kCycle -- "
+            "proves the three windows are absorbed into the retargeted 40ms budget, not additive on top of "
+            "it (106-001; pre-fix this was 28ms > the old kCycle=16ms target)");
 
   std::printf(
       "  TIMING: sleepCount=%d lastSleepMillis=%ums yieldCount=%d virtualCycleMillis=%ums "
-      "(vs. kCycle=16ms design target, vs. sprint 104's ~36ms measured hardware cycle -- "
-      "see this ticket's completion notes for the comparison)\n",
+      "(== kCycle=40ms/~25Hz design target, retargeted 106-001 from the unachievable 16ms/28ms-virtual "
+      "pre-fix figures -- see this ticket's completion notes for the bench-measured real-hardware "
+      "reconciliation against sprint 104's ~36ms and the ack-ring issue's ~72ms/13.87Hz)\n",
       report.sleepCount, static_cast<unsigned>(report.lastSleepMillis), report.yieldCount,
       static_cast<unsigned>(report.virtualCycleMillis));
 }
