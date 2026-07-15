@@ -1,10 +1,17 @@
 ---
 id: '105'
 title: Sim rebuild around the steppable loop
-status: planning-docs
+status: done
 branch: sprint/105-sim-rebuild-around-the-steppable-loop
-use-cases: [SUC-018, SUC-019, SUC-020, SUC-021, SUC-022, SUC-023]
-issues: [sim-hardware-fault-injection.md]
+use-cases:
+- SUC-018
+- SUC-019
+- SUC-020
+- SUC-021
+- SUC-022
+- SUC-023
+issues:
+- sim-hardware-fault-injection.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
