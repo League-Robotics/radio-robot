@@ -82,16 +82,27 @@ class PlannerParams:
     # by whatever caller builds a profile.py ProfileLimits for a turn leg.
 
     # -- Heading-correction loop (binding requirements #9, #10) ------------
-    heading_kp: float = 2.0
+    heading_kp: float = 0.4  # 107-001: bench-proven default (was 2.0's
+    # "starting point" -- ticket 106-006's real bench session found the
+    # shipped 2.0/0.5 pair saturated the correction trim on this rig's
+    # high-inertia proxy load, landing a 60 deg turn at ~79 deg (+19 deg,
+    # ~+32% overshoot)). 0.4 measured much better across 4 clean-gain bench
+    # runs: -4.09, -1.18, +2.10, +15.75 deg landing error (one outlier --
+    # see ticket 107-001's own Completion Notes; this is a real improvement,
+    # NOT a fully solved gain -- a tight (+-3 deg) tolerance across
+    # repeated runs is explicitly deferred to a later, dedicated
+    # gain-tuning session, per both issues' own "Recommended follow-up").
     heading_ki: float = 0.0
     heading_kd: float = 0.0
-    heading_omega_clamp: float = 0.5  # [rad/s] symmetric PID output clamp
-    # -- carries forward the deleted on-robot heading loop's own lesson
+    heading_omega_clamp: float = 0.2  # [rad/s] symmetric PID output clamp,
+    # 107-001 bench-proven default (was 0.5) -- carries forward the deleted
+    # on-robot heading loop's own lesson
     # (heading-loop-output-clamp-and-velocity-resonance.md Part 1): an
     # unclamped correction over-drove the wheels into the ~140mm/s
-    # resonance band ticket 002 tames. Ticket 006's bench session measures
-    # the ACTUAL achievable correction bandwidth before any gain here is
-    # treated as final (binding requirement #10).
+    # resonance band ticket 002 tames. Lowering the clamp to 0.2 bounds the
+    # maximum "catch-up" contribution that was driving the 106-006
+    # saturation/overshoot failure mode; see heading_kp's own comment above
+    # for the bench evidence and the carried-forward outlier risk.
 
     # -- Completion / bounded-overshoot (binding requirements #1, #6) ------
     completion_tolerance_linear: float = 5.0  # [mm] how close to the

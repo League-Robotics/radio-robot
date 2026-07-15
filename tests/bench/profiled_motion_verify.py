@@ -84,85 +84,26 @@ from robot_radio.planner.profile import ProfileLimits, profile_for_distance, pro
 from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
 
 # ---------------------------------------------------------------------------
-# Baseline fault-bit masking transport
+# Baseline fault-bit masking -- now lives in production, not here
 # ---------------------------------------------------------------------------
 #
-# BENCH FINDING (this ticket's own hardware session): `StreamingExecutor.
-# tick()` (planner/executor.py, ticket 005) stops the run the instant ANY
-# drained frame's `fault_bits` is nonzero (`fault = any(f.fault_bits for f
-# in frames if f.fault_bits is not None)`) -- with NO baseline-relative
-# exclusion for the boot-time one-shot `kFaultI2CSafetyNet` bit, unlike
-# EVERY other bench script in this tree (`rig_soak.py`'s own "only a bit
-# that turns on DURING the run... counts as a NEW fault" convention,
-# reproduced in this script's own `gate_check()` for the SUMMARY-level
-# check). On real hardware `kFaultI2CSafetyNet` is latched from boot and
-# essentially always present (confirmed here: `fault_bits=1` on the very
-# first real drained frame of every leg) -- so `StreamingExecutor.run()`/
-# `tick()`-loop as written NEVER completes a real run; it fault-stops on
-# tick 2 every single time. Ticket 005's own unit-test coverage
-# (`tests/unit/test_planner_executor.py::test_fault_bit_mid_run_stops_and_
-# logs`) never exercised a nonzero BASELINE (its `FakeTransport` always
-# starts implicitly at 0), so this real-hardware-only failure mode was
-# never caught before this bench session.
+# BENCH FINDING (106-006's own hardware session, filed as
+# `executor-fault-check-needs-baseline-exclusion.md`): `StreamingExecutor.
+# tick()` used to stop the run the instant ANY drained frame's `fault_bits`
+# was nonzero, with no baseline-relative exclusion for the boot-time
+# one-shot `kFaultI2CSafetyNet` bit -- so a real run fault-stopped on tick 2
+# every single time. This script originally worked around that with a
+# local `BaselineFaultMaskingTransport` wrapper around `NezhaProtocol`.
 #
-# This wrapper is a WORKAROUND scoped to this bench script, not a change to
-# executor.py itself (ticket 006's own plan: "Files to modify: none beyond
-# what tickets 001-005 already changed") -- it masks OUT exactly the bits
-# already present in the FIRST frame drained after construction (mirroring
-# rig_soak.py's own baseline-relative philosophy) from every frame's
-# `fault_bits` before `StreamingExecutor` ever sees it; any bit that turns
-# on NEWLY during the run is left unmasked and still correctly stops the
-# run. `executor.py` itself is used completely unmodified (`TwistTransport`
-# is a `Protocol` precisely so this kind of adapter needs no source change).
-# A follow-up issue is filed (`clasi/issues/`) recommending this baseline
-# logic move INTO `executor.py` itself so every real caller benefits, not
-# just this script.
-class BaselineFaultMaskingTransport:
-    def __init__(self, inner: NezhaProtocol) -> None:
-        self._inner = inner
-        self._baseline_mask: int | None = None
-        self.observed_raw_fault_bits = 0  # union of every RAW (unmasked) fault_bits ever seen -- diagnostic
-
-    def rebaseline(self) -> None:
-        """Force the NEXT drained frame's fault_bits to become the new
-        baseline mask. Call this before each leg's own `begin()` (not just
-        once globally): a genuinely idle, stationary robot can latch
-        `kFaultWedgeLatch` (bit 1) as a benign, well-characterized artifact
-        of several consecutive IDENTICAL encoder reads while stopped
-        (`.clasi/knowledge/encoder-wedge-boundary-latch.md` -- a "boundary
-        latch", not a real mechanical wedge) -- confirmed during this
-        ticket's own bench session: it appeared during the 0.5s idle gap
-        this script inserts BETWEEN the two legs, with the straight leg's
-        own trace showing fault_bits==0 throughout its ENTIRE active run.
-        A single global baseline (captured once, before leg 1) cannot
-        absorb a benign bit that only appears LATER, during an intentional
-        idle window -- so it would incorrectly poison leg 2's own fault
-        gate for the rest of the session. Re-baselining before each leg
-        matches rig_soak.py's own per-run (not per-process) baseline
-        philosophy, while still correctly catching a bit that turns on
-        NEWLY during that leg's own active motion.
-        """
-        self._baseline_mask = None
-
-    def twist(self, v_x: float, omega: float, duration: float) -> int:
-        return self._inner.twist(v_x, omega, duration)
-
-    def stop(self) -> int:
-        return self._inner.stop()
-
-    def read_pending_binary_tlm_frames(self) -> list[TLMFrame]:
-        frames = self._inner.read_pending_binary_tlm_frames()
-        if self._baseline_mask is None and frames:
-            self._baseline_mask = frames[0].fault_bits or 0
-        out = []
-        for f in frames:
-            if f.fault_bits is not None:
-                self.observed_raw_fault_bits |= f.fault_bits
-                if self._baseline_mask:
-                    f = dataclasses.replace(f, fault_bits=f.fault_bits & ~self._baseline_mask)
-            out.append(f)
-        return out
-
+# 107-001 promoted that baseline-exclusion logic INTO `planner/executor.py`
+# itself (`StreamingExecutor.begin()` now captures the first drained
+# frame's `fault_bits` as `self._fault_baseline`; `tick()`'s fault check is
+# baseline-relative) so every real caller benefits, not just this script.
+# `NezhaProtocol` (`proto` below) is now handed to `StreamingExecutor`
+# directly, no adapter needed -- confirmed on hardware (this ticket's own
+# bench session) that the executor no longer fault-stops on the boot-latched
+# `kFaultI2CSafetyNet` bit while still correctly stopping on a genuinely NEW
+# bit observed mid-run.
 DEFAULT_PORT = "/dev/cu.usbmodem2121102"
 DEFAULT_OUT_DIR = Path(__file__).resolve().parent / "out"
 
@@ -295,7 +236,7 @@ class LegResult:
         return self.final_heading - self.baseline_heading
 
 
-def run_leg(transport: BaselineFaultMaskingTransport, params: PlannerParams, heading: HeadingCorrector, setpoints,
+def run_leg(transport: NezhaProtocol, params: PlannerParams, heading: HeadingCorrector, setpoints,
            target: float, axis: str, label: str) -> LegResult:
     ex = StreamingExecutor(transport, params, heading)
     ex.begin(setpoints, target=target, axis=axis)
@@ -625,16 +566,15 @@ def main() -> int:
         metadata["planner_params"] = dataclasses.asdict(params)
         metadata["heading_source"] = heading.source
 
-        # See this file's own "Baseline fault-bit masking transport" section
-        # (module scope, above) for why this wrapper exists -- a bench
-        # finding, not a design choice: the REAL, unmodified StreamingExecutor
-        # fault-stops immediately without it (kFaultI2CSafetyNet latched from
-        # boot). `rebaseline()` is called again just before EACH leg's own
-        # begin() (see below) -- a fresh, per-leg baseline, not one captured
-        # only once globally (see rebaseline()'s own docstring for why: a
-        # benign kFaultWedgeLatch boundary-latch can appear during this
-        # script's OWN idle gap between legs).
-        masked_transport = BaselineFaultMaskingTransport(proto)
+        # 107-001: StreamingExecutor.begin() now captures its own baseline-
+        # relative fault-bit exclusion directly (see this file's own
+        # "Baseline fault-bit masking" section, module scope, above) -- no
+        # wrapper needed; `proto` (NezhaProtocol) is handed to the executor
+        # as-is. Each leg's own `begin()` call re-baselines fresh (matching
+        # the dropped wrapper's own per-leg `rebaseline()` philosophy): a
+        # benign kFaultWedgeLatch boundary-latch that appears during this
+        # script's own idle gap between legs is absorbed by leg 2's own
+        # fresh baseline, not carried as a global poison from leg 1.
 
         straight_limits = ProfileLimits(v_max=args.v_max, a_max=args.a_max)
         straight_setpoints = profile_for_distance(args.distance, straight_limits, cadence=params.streaming_interval)
@@ -646,17 +586,15 @@ def main() -> int:
         metadata["turn_limits"] = dataclasses.asdict(turn_limits)
 
         print("\n--- leg 1: profiled straight ---")
-        masked_transport.rebaseline()
-        straight = run_leg(masked_transport, params, heading, straight_setpoints, args.distance, "linear", "straight")
+        straight = run_leg(proto, params, heading, straight_setpoints, args.distance, "linear", "straight")
         heading.reset()
         time.sleep(0.5)
         proto.read_pending_binary_tlm_frames()
 
         print("\n--- leg 2: profiled turn ---")
-        masked_transport.rebaseline()
-        turn = run_leg(masked_transport, params, heading, turn_setpoints, angle_rad, "angular", "turn")
+        turn = run_leg(proto, params, heading, turn_setpoints, angle_rad, "angular", "turn")
 
-        metadata["raw_fault_bits_ever_observed"] = masked_transport.observed_raw_fault_bits
+        metadata["raw_fault_bits_ever_observed"] = straight.fault_bits_ever | turn.fault_bits_ever
 
         print("\n--- writing traces ---")
         straight_csv, straight_json = write_trace(straight, out_dir, metadata, timestamp)

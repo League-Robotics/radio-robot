@@ -134,6 +134,12 @@ class TickResult:
 _LINEAR = "linear"
 _ANGULAR = "angular"
 
+# 107-001: bounded retry for begin()'s own first telemetry drain -- see
+# begin()'s own docstring for why a single non-blocking drain can
+# legitimately race an idle queue.
+_BEGIN_DRAIN_RETRIES = 5
+_BEGIN_DRAIN_RETRY_INTERVAL = 0.05  # [s]
+
 
 class StreamingExecutor:
     """Streams a profile's setpoint sequence as paced `twist()` calls,
@@ -157,6 +163,7 @@ class StreamingExecutor:
         self._target = 0.0
         self._run_start: float | None = None
         self._baseline = 0.0
+        self._fault_baseline = 0
         self._commanded_heading = 0.0
         self._latest_frame: "TLMFrame | None" = None
         self._state = RunState.IDLE
@@ -183,6 +190,35 @@ class StreamingExecutor:
         re-baselines progress/commanded-heading from a FRESHLY drained
         telemetry frame (binding requirement #4) -- never carries state
         from a previous run, including one this call is preempting.
+
+        Also captures that same first-drained frame's `fault_bits` as this
+        run's own `_fault_baseline` (107-001, mirroring `rig_soak.py`'s
+        "only a bit that turns on DURING the run counts as new" convention):
+        on real hardware `kFaultI2CSafetyNet` is a boot-time one-shot latch
+        that is essentially always present by the time any run begins, and
+        a benign `kFaultWedgeLatch` boundary latch can assert during an
+        idle gap between runs -- neither should fault-stop `tick()` on tick
+        2 of every run. Re-baselining per-`begin()` call (not once per
+        process) means `preempt()` (which always calls `begin()` fresh)
+        automatically gets a new fault baseline too, same as it already
+        gets a fresh progress baseline.
+
+        The first drain is retried a few times (bounded, `_BEGIN_DRAIN_RETRIES`
+        attempts) if it comes back empty, before falling back to the
+        `None`/zero baseline: `read_pending_binary_tlm_frames()` is a
+        non-blocking poll of an async-pushed queue (`~25Hz` push cadence),
+        so a single call can legitimately race an idle queue between two
+        pushes and return nothing yet -- confirmed on real hardware
+        (107-001's own bench session) immediately after the standing
+        preflight's own reverse nudge. Without the retry, that race
+        silently produces a `_fault_baseline` of 0 even though a fault bit
+        (e.g. an already-latched `kFaultWedgeLatch`) is genuinely already
+        asserted, so the very NEXT drained frame looks like a brand-new
+        fault and false-positive fault-stops the run on tick 1 -- exactly
+        the footgun this ticket exists to remove. Mirrors
+        `profiled_motion_verify.py`'s own pre-existing bench-script-local
+        retry for `baseline_heading`, promoted here because it affects the
+        fault baseline the same way.
         """
         if not setpoints:
             raise ValueError("begin(): setpoints must be non-empty")
@@ -197,16 +233,26 @@ class StreamingExecutor:
         self._heading.reset()
 
         frames = self._transport.read_pending_binary_tlm_frames()
+        retries = 0
+        while not frames and retries < _BEGIN_DRAIN_RETRIES:
+            self._sleep_fn(_BEGIN_DRAIN_RETRY_INTERVAL)
+            frames = self._transport.read_pending_binary_tlm_frames()
+            retries += 1
         self._latest_frame = frames[-1] if frames else None
         self._baseline = self._progress(self._latest_frame) or 0.0
+        self._fault_baseline = (
+            self._latest_frame.fault_bits
+            if self._latest_frame is not None and self._latest_frame.fault_bits is not None
+            else 0)
         measured_heading = self._heading.measured_heading(self._latest_frame)
         self._commanded_heading = measured_heading if measured_heading is not None else 0.0
 
         self._state = RunState.RUNNING
         logger.info(
             "StreamingExecutor.begin(): axis=%s target=%r setpoints=%d "
-            "baseline=%r commanded_heading=%r",
-            axis, target, len(self._setpoints), self._baseline, self._commanded_heading)
+            "baseline=%r commanded_heading=%r fault_baseline=%r",
+            axis, target, len(self._setpoints), self._baseline, self._commanded_heading,
+            self._fault_baseline)
 
     def preempt(self, setpoints: Sequence["ProfileSetpoint"], target: float,
                axis: str = _LINEAR) -> None:
@@ -266,8 +312,13 @@ class StreamingExecutor:
 
         # Continuous telemetry drain (Decision 5) -- feeds the NEXT tick's
         # heading/completion check; also this tick's own fault-bit check.
+        # Baseline-relative (107-001): a bit already present in this run's
+        # own `_fault_baseline` (captured by begin()) never trips the fault
+        # gate -- only a bit that turns on NEW relative to that baseline
+        # does.
         frames = self._transport.read_pending_binary_tlm_frames()
-        fault = any(f.fault_bits for f in frames if f.fault_bits is not None)
+        fault = any((f.fault_bits & ~self._fault_baseline) for f in frames
+                    if f.fault_bits is not None)
         if frames:
             self._latest_frame = frames[-1]
 

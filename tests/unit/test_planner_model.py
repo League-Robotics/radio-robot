@@ -22,6 +22,17 @@ def test_defaults_construct_with_no_arguments():
     assert params.heading_omega_clamp > 0
 
 
+def test_heading_gain_defaults_are_107_001s_bench_proven_values():
+    """107-001: promotes ticket 106-006's bench-measured gains
+    (heading_kp=0.4, heading_omega_clamp=0.2) to PlannerParams' own field
+    defaults, replacing the 2.0/0.5 "starting point" that saturated the
+    correction trim on the bench rig's high-inertia proxy load. A cheap
+    regression guard against an accidental revert."""
+    params = PlannerParams()
+    assert params.heading_kp == pytest.approx(0.4)
+    assert params.heading_omega_clamp == pytest.approx(0.2)
+
+
 def test_fields_are_directly_mutable_no_redeploy_needed():
     """The core live-tunability mechanism: a plain attribute set."""
     params = PlannerParams()
