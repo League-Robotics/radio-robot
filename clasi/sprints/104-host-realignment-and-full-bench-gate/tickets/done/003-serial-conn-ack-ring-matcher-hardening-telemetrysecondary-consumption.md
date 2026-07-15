@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: serial_conn ack-ring matcher hardening + TelemetrySecondary consumption
-status: open
+status: done
 use-cases:
 - SUC-013
 depends-on:
@@ -38,22 +38,22 @@ dead-arm handling in the same file.
 
 ## Acceptance Criteria
 
-- [ ] The ack-ring matcher (match/timeout/re-delivery-tolerance/ring-wrap
+- [x] The ack-ring matcher (match/timeout/re-delivery-tolerance/ring-wrap
       logic) lives in `serial_conn.py`, not duplicated per-caller;
       `NezhaProtocol.twist()`/`stop()`/`config()` call the shared
       implementation (update their call sites; do not leave the old inline
       copy in place alongside the new one).
-- [ ] Matcher has dedicated unit coverage for: exact `corr_id` match,
+- [x] Matcher has dedicated unit coverage for: exact `corr_id` match,
       tolerated re-delivery (same `corr_id` in more than one frame is not
       an error — matches 103-009's own documented contract), ring-wrap (an
       older un-observed `corr_id` evicted from the depth-3 ring before it
       was seen — a real, bounded failure per 103 Decision 2, not a bug),
       and a bounded timeout (never an infinite wait).
-- [ ] `TelemetrySecondary` is decoded in `serial_conn.py` per the wire
+- [x] `TelemetrySecondary` is decoded in `serial_conn.py` per the wire
       shape ticket 103-001's Decision 3 actually chose (confirm against
       the merged tree — do not assume either of the two candidate shapes
       that decision's Alternatives Considered listed).
-- [ ] A unit test round-trips a synthetic `TelemetrySecondary` frame and
+- [x] A unit test round-trips a synthetic `TelemetrySecondary` frame and
       asserts every field (`acc`, `glitch`, `ts`, `cmd_vel`) decodes
       correctly.
 
@@ -104,3 +104,70 @@ Parent: `single-loop-firmware-p3-p7-continuation.md` (P5 remainder).
 - **Postconditions**: One shared matcher implementation; secondary
   telemetry fields readable host-side.
 - **Acceptance Criteria**: see above.
+
+## Completion Notes
+
+**Matcher promotion.** The poll/match/timeout loop that was `NezhaProtocol.
+wait_for_ack()`'s own inline body (103-009) moved to
+`SerialConnection.wait_for_ack(corr_id, timeout)` in
+`host/robot_radio/io/serial_conn.py`, split into a pure matching core
+(`_match_ack_in_frames(frames, corr_id)`, module-level, independently unit-
+testable) plus the bounded poll loop around `drain_binary_tlm()`.
+`NezhaProtocol.wait_for_ack()` (`host/robot_radio/robot/protocol.py`) is now
+a thin adapter: delegates to `self._conn.wait_for_ack(...)` and wraps the
+raw `telemetry_pb2.AckEntry` in this module's own `AckEntry` dataclass. No
+second copy of the algorithm exists anywhere in the tree.
+`twist()`/`stop()`/`config()` themselves are unchanged (they only ever
+called `send_envelope_fast()` and returned a corr_id — matching
+architecture-update.md (104) Decision 1's own framing: "`NezhaProtocol`'s
+`twist()`/`stop()`/`config()` become thin callers of `serial_conn.py`'s
+matcher" refers to the ONE method (`wait_for_ack()`) that resolves all
+three commands' outcomes, not to `twist()`/`stop()`/`config()` gaining a
+direct call to the matcher themselves).
+
+**TelemetrySecondary wire shape (103-001 Decision 3, resolved).** Confirmed
+against the merged tree (`protos/telemetry.proto`'s own
+`TelemetrySecondary` doc comment + `source/app/telemetry.cpp`'s
+`emitSecondary()`): Decision 3 picked alternative (a) — a SECOND,
+independently-armored `*B<base64>` line, carrying a **bare**
+`msg::TelemetrySecondary` (never wrapped in a `ReplyEnvelope`) — because
+`ReplyEnvelope.body`'s oneof is fixed at `ok`/`err`/`tlm` and cannot grow a
+fourth arm.
+
+A real wire-framing gap this ticket had to resolve, not just document: both
+message types share the IDENTICAL `*B` armor prefix, and there is no
+discriminator byte between them. `_handle_binary_reply()`
+(`host/robot_radio/io/serial_conn.py`) disambiguates structurally — try
+`ReplyEnvelope` first; if that parse either raises OR succeeds with
+`WhichOneof("body") is None` (every real `ReplyEnvelope` this firmware
+sends always populates one of `ok`/`err`/`tlm`), retry the same bytes as
+`TelemetrySecondary`. A successfully-decoded `TelemetrySecondary` routes to
+the new `_binary_secondary_queue`, exposed via
+`drain_binary_secondary_tlm()`/`read_binary_secondary_tlm()` — the raw-pb2,
+"caller adapts" layer, mirroring `drain_binary_tlm()`/`read_binary_tlm()`
+exactly (no new `TLMFrame`-style dataclass added in this ticket's scope;
+`serial_conn.py`'s decode-and-expose pattern is "expose the decoded pb2
+message," which `TelemetrySecondary.acc_left`/`.glitch_left`/`.ts_left`/
+`.cmd_vel_left` etc. already satisfy field-for-field).
+
+**Test updates for the promotion.** `tests/unit/test_twist_stop_ack_matcher.py`
+section 3 and `tests/unit/test_protocol_config.py` section 3 previously
+monkeypatched `NezhaProtocol.read_pending_binary_tlm_frames()` to script
+the matcher's own scenarios (exact match, re-delivery, timeout) at the
+`NezhaProtocol` layer. Since the algorithm moved out, those tests now
+script a fake connection's `wait_for_ack()` directly and assert only the
+adapter's delegation/translation behavior; the algorithm's own scenario
+coverage lives in the new `tests/unit/test_serial_conn_ack_ring.py`.
+
+**Test numbers.** Two new files: `tests/unit/test_serial_conn_ack_ring.py`
+(14 tests) and `tests/unit/test_serial_conn_telemetry_secondary.py`
+(11 tests). Full suite: 568 passed (up from the 546-test baseline: +25 new,
+-2 net in `test_twist_stop_ack_matcher.py`, -1 net in
+`test_protocol_config.py` from the monkeypatch-scenario consolidation
+above). No regressions.
+
+**No surprises beyond the wire-framing gap above** — twist/stop/config
+envelope construction, `send_envelope_fast()`, and every other
+`_reader_loop` branch are untouched; `git diff` confirms no behavioral
+change outside `_handle_binary_reply()`'s new fallback branch and the two
+new accessor/matcher additions.

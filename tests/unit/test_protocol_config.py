@@ -31,25 +31,33 @@ from __future__ import annotations
 import pytest
 
 from robot_radio.robot.pb2 import config_pb2, envelope_pb2
-from robot_radio.robot.protocol import AckEntry, NezhaProtocol, TLMFrame
+from robot_radio.robot.protocol import AckEntry, NezhaProtocol
 from robot_radio.robot.pb2 import telemetry_pb2
 
 
 class _FakeFastConn:
-    """Minimal fake connection: implements ONLY ``send_envelope_fast()`` --
-    the same fake ``test_twist_stop_ack_matcher.py`` (103-009) uses for
-    ``twist()``/``stop()``. ``config()`` calls nothing else on
-    ``self._conn``."""
+    """Minimal fake connection: implements ``send_envelope_fast()`` -- the
+    same fake ``test_twist_stop_ack_matcher.py`` (103-009) uses for
+    ``twist()``/``stop()`` -- plus ``wait_for_ack()`` (104-003: the shared
+    matcher now lives on ``SerialConnection``, so ``NezhaProtocol.
+    wait_for_ack()`` delegates to ``self._conn.wait_for_ack()``; this fake's
+    own ``wait_for_ack()`` just returns whatever ``ack_result`` a test
+    scripts, defaulting to ``None`` -- a bounded-timeout-with-no-match).
+    ``config()`` calls nothing else on ``self._conn``."""
 
     def __init__(self) -> None:
         self.sent: list["envelope_pb2.CommandEnvelope"] = []
         self._next_corr_id = 0
+        self.ack_result: "telemetry_pb2.AckEntry | None" = None
 
     def send_envelope_fast(self, envelope: "envelope_pb2.CommandEnvelope") -> int:
         self._next_corr_id += 1
         envelope.corr_id = self._next_corr_id
         self.sent.append(envelope)
         return self._next_corr_id
+
+    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.AckEntry | None":
+        return self.ack_result
 
 
 # ---------------------------------------------------------------------------
@@ -244,24 +252,14 @@ def test_config_invalid_call_sends_nothing():
 
 # ---------------------------------------------------------------------------
 # 3. config() -> wait_for_ack() round trip (103-009's existing ack-ring
-#    matcher; no new matching logic added by this ticket).
+#    matcher; no new matching logic added by this ticket). 104-003 promoted
+#    the actual match/timeout algorithm out of NezhaProtocol into
+#    SerialConnection.wait_for_ack() -- these tests now script the fake
+#    connection's own wait_for_ack() (a raw telemetry_pb2.AckEntry or None)
+#    rather than a batch of TLMFrame polls. The algorithm's own scenario
+#    coverage (exact match, ring re-delivery tolerance, ring-wrap, bounded
+#    timeout) lives in tests/unit/test_serial_conn_ack_ring.py.
 # ---------------------------------------------------------------------------
-
-
-def _telemetry_with_acks(acks: list[tuple[int, bool, int]], **kwargs) -> "telemetry_pb2.Telemetry":
-    pb_acks = [
-        telemetry_pb2.AckEntry(
-            corr_id=corr_id,
-            status=telemetry_pb2.ACK_STATUS_OK if ok else telemetry_pb2.ACK_STATUS_ERR,
-            err_code=err_code,
-        )
-        for corr_id, ok, err_code in acks
-    ]
-    return telemetry_pb2.Telemetry(acks=pb_acks, **kwargs)
-
-
-def _frame(acks: list[tuple[int, bool, int]]) -> TLMFrame:
-    return TLMFrame.from_pb2(_telemetry_with_acks(acks))
 
 
 def test_config_corr_id_round_trips_through_wait_for_ack():
@@ -274,9 +272,9 @@ def test_config_corr_id_round_trips_through_wait_for_ack():
     proto = NezhaProtocol(conn)
     corr_id = proto.config(tw=128.0)
 
-    proto.read_pending_binary_tlm_frames = lambda: [
-        _frame([(corr_id, False, envelope_pb2.ERR_UNIMPLEMENTED)])
-    ]
+    conn.ack_result = telemetry_pb2.AckEntry(
+        corr_id=corr_id, status=telemetry_pb2.ACK_STATUS_ERR,
+        err_code=envelope_pb2.ERR_UNIMPLEMENTED)
 
     ack = proto.wait_for_ack(corr_id, timeout=200)
 
@@ -284,30 +282,12 @@ def test_config_corr_id_round_trips_through_wait_for_ack():
         corr_id=corr_id, ok=False, err_code=envelope_pb2.ERR_UNIMPLEMENTED)
 
 
-def test_config_ack_tolerates_ring_redelivery():
-    conn = _FakeFastConn()
-    proto = NezhaProtocol(conn)
-    corr_id = proto.config(sTimeout=1000)
-
-    redelivered_batch = [
-        _frame([(corr_id, False, envelope_pb2.ERR_UNIMPLEMENTED)]),
-        _frame([(corr_id, False, envelope_pb2.ERR_UNIMPLEMENTED)]),
-    ]
-    proto.read_pending_binary_tlm_frames = lambda: redelivered_batch
-
-    ack = proto.wait_for_ack(corr_id, timeout=200)
-
-    assert ack is not None
-    assert ack.corr_id == corr_id
-    assert ack.ok is False
-
-
 def test_config_ack_returns_none_on_timeout_with_no_matching_corr_id():
     conn = _FakeFastConn()
     proto = NezhaProtocol(conn)
     corr_id = proto.config(headingKp=6.0)
-
-    proto.read_pending_binary_tlm_frames = lambda: [_frame([(corr_id + 99, True, 0)])]
+    # conn.ack_result stays at its default None -- the shared matcher timed
+    # out with no matching corr_id (see SerialConnection.wait_for_ack()).
 
     ack = proto.wait_for_ack(corr_id, timeout=50)
 

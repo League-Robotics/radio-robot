@@ -20,20 +20,23 @@ none of which need live hardware or even a real `SerialConnection`:
    `has_cmd_vel`/`cmd_vel_left`/`cmd_vel_right` fields and raised
    `AttributeError` on every real `Telemetry` frame).
 
-3. `NezhaProtocol.wait_for_ack()` — the ack-ring matcher, exercised against
-   a scripted `read_pending_binary_tlm_frames()` (monkeypatched on the
-   instance; `wait_for_ack()` touches no other `NezhaProtocol`/
-   `SerialConnection` state) with synthetic `TLMFrame` batches, including a
-   batch where the SAME corr_id rides more than one frame at once (ring
-   re-delivery) and a genuine timeout with no match.
+3. `NezhaProtocol.wait_for_ack()` — 104-003 promoted the actual poll/match/
+   timeout algorithm out of this method into
+   `SerialConnection.wait_for_ack()` (see
+   `tests/unit/test_serial_conn_ack_ring.py` for that algorithm's own
+   dedicated coverage: exact match, ring re-delivery tolerance, ring-wrap,
+   bounded timeout — all against synthetic frames, no `NezhaProtocol`
+   involved). What remains here is `NezhaProtocol.wait_for_ack()`'s own thin
+   adapter role: delegate to `self._conn.wait_for_ack(corr_id, timeout)` and
+   wrap the raw `telemetry_pb2.AckEntry` result in this module's own
+   `AckEntry` dataclass (or pass `None` through unchanged on a timeout) —
+   exercised against a fake connection that implements only `wait_for_ack()`.
 
 Collected under `tests/unit/` — `pyproject.toml`'s `testpaths` includes
 `tests/unit`, so `uv run python -m pytest` collects it by default.
 """
 
 from __future__ import annotations
-
-import time
 
 import pytest
 
@@ -184,85 +187,60 @@ def test_from_pb2_does_not_crash_on_a_full_primary_frame_and_cmd_vel_stays_none(
 
 
 # ---------------------------------------------------------------------------
-# 3. wait_for_ack() -- the ack-ring matcher
+# 3. wait_for_ack() -- 104-003: thin adapter over SerialConnection.wait_for_ack()
 # ---------------------------------------------------------------------------
 
 
-def _frame(acks: list[tuple[int, bool, int]]) -> TLMFrame:
-    return TLMFrame.from_pb2(_telemetry_with_acks(acks))
+class _FakeConnWithAck:
+    """Minimal fake connection: implements ONLY `wait_for_ack()` --
+    `NezhaProtocol.wait_for_ack()` (104-003) delegates the ENTIRE poll/
+    match/timeout algorithm to `SerialConnection.wait_for_ack()`; this fake
+    lets the delegation itself be tested (call forwarded with the right
+    args, raw pb2 AckEntry adapted to this module's AckEntry dataclass,
+    `None` passed through unchanged) without a real queue/thread. The
+    algorithm's own scenario coverage (exact match, ring re-delivery
+    tolerance, ring-wrap, bounded timeout) lives in
+    `tests/unit/test_serial_conn_ack_ring.py`, against the real
+    `SerialConnection.wait_for_ack()`."""
+
+    def __init__(self, result: "telemetry_pb2.AckEntry | None") -> None:
+        self.result = result
+        self.calls: list[tuple[int, int]] = []
+
+    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.AckEntry | None":
+        self.calls.append((corr_id, timeout))
+        return self.result
 
 
-def _scripted_poller(batches: list[list[TLMFrame]]):
-    """Return a callable that yields each of `batches` in turn on
-    successive calls, then `[]` forever after -- stands in for
-    `read_pending_binary_tlm_frames()`'s non-blocking drain."""
-    it = iter(batches)
+def test_wait_for_ack_delegates_to_shared_matcher_and_adapts_ok_result():
+    raw_ack = telemetry_pb2.AckEntry(
+        corr_id=5, status=telemetry_pb2.ACK_STATUS_OK, err_code=0)
+    conn = _FakeConnWithAck(raw_ack)
+    proto = NezhaProtocol(conn)
 
-    def _poll() -> list[TLMFrame]:
-        return next(it, [])
-
-    return _poll
-
-
-def _protocol_with_scripted_polls(batches: list[list[TLMFrame]]) -> NezhaProtocol:
-    proto = NezhaProtocol(conn=None)  # wait_for_ack() never touches self._conn
-    proto.read_pending_binary_tlm_frames = _scripted_poller(batches)
-    return proto
-
-
-def test_wait_for_ack_matches_on_first_poll():
-    proto = _protocol_with_scripted_polls([[_frame([(5, True, 0)])]])
-
-    ack = proto.wait_for_ack(5, timeout=200)
-
-    assert ack == AckEntry(corr_id=5, ok=True, err_code=0)
-
-
-def test_wait_for_ack_skips_non_matching_frames_then_matches_on_a_later_poll():
-    proto = _protocol_with_scripted_polls([
-        [_frame([(1, True, 0)]), _frame([(2, True, 0)])],  # poll 1: no match
-        [_frame([])],                                       # poll 2: empty ring
-        [_frame([(5, False, envelope_pb2.ERR_BADARG)])],    # poll 3: match
-    ])
-
-    ack = proto.wait_for_ack(5, timeout=500)
-
-    assert ack == AckEntry(corr_id=5, ok=False, err_code=envelope_pb2.ERR_BADARG)
-
-
-def test_wait_for_ack_tolerates_the_same_corr_id_riding_multiple_frames_in_one_batch():
-    """Ring re-delivery: depth-3 acks legitimately repeat the same corr_id
-    across consecutive Telemetry pushes. A single non-blocking drain can
-    return several such frames at once -- this must not raise or behave
-    any differently than a single match."""
-    redelivered_batch = [
-        _frame([(5, True, 0)]),
-        _frame([(5, True, 0)]),
-        _frame([(5, True, 0)]),
-    ]
-    proto = _protocol_with_scripted_polls([redelivered_batch])
-
-    ack = proto.wait_for_ack(5, timeout=200)
+    ack = proto.wait_for_ack(5, timeout=250)
 
     assert ack == AckEntry(corr_id=5, ok=True, err_code=0)
+    assert conn.calls == [(5, 250)]
 
 
-def test_wait_for_ack_returns_none_on_timeout():
-    proto = _protocol_with_scripted_polls([[_frame([(1, True, 0)])]])  # never corr_id 5
+def test_wait_for_ack_delegates_to_shared_matcher_and_adapts_err_result():
+    raw_ack = telemetry_pb2.AckEntry(
+        corr_id=9, status=telemetry_pb2.ACK_STATUS_ERR, err_code=envelope_pb2.ERR_BADARG)
+    conn = _FakeConnWithAck(raw_ack)
+    proto = NezhaProtocol(conn)
 
-    start = time.monotonic()
+    ack = proto.wait_for_ack(9)
+
+    assert ack == AckEntry(corr_id=9, ok=False, err_code=envelope_pb2.ERR_BADARG)
+    assert conn.calls == [(9, 500)]  # default timeout forwarded unchanged
+
+
+def test_wait_for_ack_passes_none_through_on_shared_matcher_timeout():
+    conn = _FakeConnWithAck(None)
+    proto = NezhaProtocol(conn)
+
     ack = proto.wait_for_ack(5, timeout=50)
-    elapsed = time.monotonic() - start
 
     assert ack is None
-    # Bounded wait -- never blocks past (roughly) the requested timeout.
-    assert elapsed < 1.0
-
-
-def test_wait_for_ack_ignores_frames_with_no_acks():
-    proto = _protocol_with_scripted_polls([[_frame([])], [_frame([(5, True, 0)])]])
-
-    ack = proto.wait_for_ack(5, timeout=200)
-
-    assert ack is not None
-    assert ack.corr_id == 5
+    assert conn.calls == [(5, 50)]

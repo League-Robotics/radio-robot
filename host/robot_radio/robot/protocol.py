@@ -872,33 +872,31 @@ class NezhaProtocol:
         (103-009, Decision 2): ``twist()``/``stop()``/``config()`` (104-001
         — every ``CommandEnvelope`` oneof arm now uses this same shape) get
         no synchronous ``ReplyEnvelope`` of their own — their outcome rides
-        the ack ring
-        (``Telemetry.acks``, depth 3) inside the next one or more regular
-        ``Telemetry`` pushes after the command reaches the firmware. Because
-        the ring is depth 3 and telemetry pushes at ~25 Hz, the SAME
-        ``corr_id`` legitimately appears in more than one polled frame in a
-        row — that is ring RE-DELIVERY, not an error and not a duplicate
-        ack. This matcher tolerates it by construction: it returns on the
-        FIRST frame where ``corr_id`` is found, so a caller never sees (and
-        never has to dedupe) the re-delivered copies.
+        the ack ring (``Telemetry.acks``, depth 3) inside the next one or
+        more regular ``Telemetry`` pushes after the command reaches the
+        firmware. Because the ring is depth 3 and telemetry pushes at
+        ~25 Hz, the SAME ``corr_id`` legitimately appears in more than one
+        polled frame in a row — that is ring RE-DELIVERY, not an error and
+        not a duplicate ack — and tolerating it (returning on the FIRST
+        frame where ``corr_id`` is found, so a caller never sees or has to
+        dedupe the re-delivered copies) is part of the matcher's contract.
 
-        Polls ``read_pending_binary_tlm_frames()`` — the same non-blocking
-        binary-telemetry drain other callers already use — in a short sleep
-        loop. Telemetry is always-on in the P4 design (no ``STREAM`` arm to
-        arm first), so there is nothing to arm before polling; this method
-        only drains frames the firmware was already pushing.
+        104-003: the actual poll/match/timeout loop is no longer inline
+        here — it was promoted to ``SerialConnection.wait_for_ack()`` (see
+        that method's own docstring for the full algorithm, including the
+        ring-wrap-is-just-a-timeout note) so every future caller reading
+        telemetry directly off ``SerialConnection`` — not just
+        ``NezhaProtocol`` — gets the identical matching guarantee without a
+        second copy of the algorithm. This method is now a thin adapter:
+        delegate to the shared implementation, then wrap the raw
+        ``telemetry_pb2.AckEntry`` result in this module's own ``AckEntry``
+        dataclass (the same adaptation ``TLMFrame.from_pb2()`` performs for
+        telemetry frames generally).
         """
-        deadline = time.monotonic() + (timeout / 1000.0)
-        while True:
-            for frame in self.read_pending_binary_tlm_frames():
-                if not frame.acks:
-                    continue
-                for ack in frame.acks:
-                    if ack.corr_id == corr_id:
-                        return ack
-            if time.monotonic() >= deadline:
-                return None
-            time.sleep(0.01)
+        raw_ack = self._conn.wait_for_ack(corr_id, timeout=timeout)
+        if raw_ack is None:
+            return None
+        return AckEntry.from_pb2(raw_ack)
 
     # ------------------------------------------------------------------
     # Telemetry
