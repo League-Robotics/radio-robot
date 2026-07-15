@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '105'
+tickets:
+- 105-005
 ---
 
 > **RETARGETED (2026-07-14 stakeholder triage).** SimMotor/SimHardware and
