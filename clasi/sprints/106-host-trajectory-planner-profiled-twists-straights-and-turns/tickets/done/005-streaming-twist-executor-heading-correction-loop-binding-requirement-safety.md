@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Streaming twist executor + heading-correction loop + binding-requirement safety
-status: open
+status: done
 use-cases:
 - SUC-028
 - SUC-029
@@ -70,37 +70,37 @@ implemented — see the disposition table below (reproduced from
 
 ## Acceptance Criteria
 
-- [ ] Executor's completion check is sign-aware (never `fabsf` on a signed
+- [x] Executor's completion check is sign-aware (never `fabsf` on a signed
       measured quantity) with a bounded outer tolerance in BOTH directions
       (binding requirements #1, #6).
-- [ ] No control decision anywhere in `executor.py` is gated on a bounded
+- [x] No control decision anywhere in `executor.py` is gated on a bounded
       `wait_for_ack()` call — verified by code inspection/grep (binding
       requirement #2, Decision 5).
-- [ ] The executor uses a single segment-global elapsed-time clock per
+- [x] The executor uses a single segment-global elapsed-time clock per
       profile run; a preemption starts a fresh clock, never rebasing a
       stale one (binding requirement #3).
-- [ ] Preempting a running profile and starting a new one is unit-tested
+- [x] Preempting a running profile and starting a new one is unit-tested
       (fake transport/telemetry double) confirming the new profile plans
       from injected "current" state, not carried state from the interrupted
       one (binding requirement #4).
-- [ ] Every `twist()` magnitude is validated against `model.py`'s configured
+- [x] Every `twist()` magnitude is validated against `model.py`'s configured
       ceilings immediately before sending, independent of `profile.py`'s own
       validation (binding requirement #5).
-- [ ] The terminal setpoint of any profile run is an explicit `stop()` call,
+- [x] The terminal setpoint of any profile run is an explicit `stop()` call,
       never reliance on deadman timeout alone; no phase commands a
       zero-dwell sign reversal (binding requirement #7).
-- [ ] Streaming cadence, acceleration/deceleration limits, and every gain
+- [x] Streaming cadence, acceleration/deceleration limits, and every gain
       the executor/heading loop use are adjustable at runtime via
       `model.py` with no code redeploy (binding requirement #9).
-- [ ] `HeadingCorrector` reads `otos_untrusted` from the active robot config
+- [x] `HeadingCorrector` reads `otos_untrusted` from the active robot config
       and uses encoder-derived `pose`, never `otos`, when the flag is set —
       unit-tested with a fake config + fake telemetry frame.
-- [ ] `HeadingCorrector`'s output is clamped to a stated, live-tunable
+- [x] `HeadingCorrector`'s output is clamped to a stated, live-tunable
       ceiling — unit-tested: a large injected heading error never produces
       an omega trim above the ceiling.
-- [ ] A fault bit observed mid-run (via drained telemetry) produces a
+- [x] A fault bit observed mid-run (via drained telemetry) produces a
       logged stop, never silence (binding requirement #2, concrete case).
-- [ ] Full unit test suite green; this ticket's own acceptance requires no
+- [x] Full unit test suite green; this ticket's own acceptance requires no
       hardware (bench verification is ticket 006's).
 
 ## Testing
@@ -177,3 +177,141 @@ docstrings each document their own slice of the binding-requirements
 mapping (mirroring the table above) so a future reader does not need to
 cross-reference the sprint's architecture doc to understand why a given
 check exists.
+
+## Completion Notes
+
+**Delivered exactly as planned**: `host/robot_radio/planner/model.py`
+(`PlannerParams`), `host/robot_radio/planner/heading.py`
+(`HeadingCorrector`), `host/robot_radio/planner/executor.py`
+(`StreamingExecutor`), plus `tests/unit/test_planner_model.py`,
+`tests/unit/test_planner_heading.py`, `tests/unit/test_planner_executor.py`.
+No existing `robot_radio` module was modified — this ticket is a pure new
+caller, as planned.
+
+**Ten-item binding-requirements traceability** (architecture-update.md
+Step 6 disposition table, reproduced in this ticket's own Description):
+
+1. **Sign-aware completion, no `fabsf`-blind predicates** —
+   `StreamingExecutor._within_bound()` (`executor.py`) builds a signed
+   `[min(0,target)-tol, max(0,target)+tol]` interval and tests containment
+   — never `abs()`/`fabsf()` on a measured value. AST-verified (not raw
+   grep, since the module's own header docstring mentions `abs()`/`fabsf()`
+   by name while explaining their absence — a substring search would
+   false-positive) by
+   `test_within_bound_never_calls_abs_or_fabs_on_a_signed_quantity`.
+2. **No silent drops** — every clamp (`_clamp_ceiling()`), degraded-
+   feedback condition (`HeadingCorrector.update()`), and fault-bit
+   observation logs loudly (`logger.warning`/`logger.error`) before
+   acting; the executor never calls `wait_for_ack()` anywhere (AST-
+   verified by `test_no_wait_for_ack_call_anywhere_in_executor`).
+3. **Clock discipline** — `self._run_start` is captured once in `begin()`
+   and consumed unchanged by every `tick()` in that run; a preemption's
+   own `begin()` call captures a fresh one.
+   `test_run_start_clock_is_captured_once_at_begin_not_rebased_per_tick`/
+   `test_preemption_captures_a_fresh_clock_never_rebasing_the_stale_one`.
+4. **Preemption invalidates chain state** — `preempt()` calls
+   `transport.stop()` FIRST, then `begin()` re-drains telemetry and
+   rebuilds baseline/commanded-heading/index from that fresh frame.
+   `test_preempt_stops_first_then_replans_from_fresh_telemetry_not_carried_state`.
+5. **Validate wire inputs** — `_clamp_ceiling()` re-validates `|v_x|`/
+   `|omega|` against `PlannerParams.v_max`/`omega_max` immediately before
+   every `twist()` send, independent of `profile.py`'s own boundary
+   validation.
+6. **Bounded overshoot** — the SAME `_within_bound()` interval check is
+   run every tick against `overshoot_bound_linear`/`_angular`; tripping it
+   ends the run with a logged `RunOutcome.OVERSHOOT`.
+7. **Terminal-phase care, no zero-dwell reversal** — the terminal setpoint
+   always triggers an explicit `transport.stop()` call in `tick()`;
+   `profile.py`'s own terminal setpoint already lands at exactly zero, so
+   no reversal is ever reintroduced (`test_completion_never_reintroduces_a_sign_reversal`).
+8. **Latency as a first-class parameter** — `PlannerParams.latency_tau` is
+   genuinely CONSUMED, not merely declared: `tick()` computes
+   `lead_heading = commanded_heading + setpoint.omega * latency_tau` (a
+   first-order dead-time lead compensation — the twist sent this tick only
+   actuates ~`latency_tau` later, so the corrector aims at where the
+   profile will be by then) before calling `HeadingCorrector.update()`.
+   Zero on a straight leg (`omega == 0`), so "hold heading" is unaffected.
+   Covered by `test_latency_tau_zero_produces_no_lead_on_a_turn`/
+   `test_latency_tau_nonzero_leads_the_commanded_heading_on_a_turn`/
+   `test_latency_tau_lead_is_zero_on_a_straight_leg`.
+9. **Everything tunable live** — every field `executor.py`/`heading.py`
+   read comes from `self._params.<field>`, re-read fresh every call (the
+   wrapped PID's own gains/clamp are re-synced from `params` inside
+   `HeadingCorrector.update()` itself, not just at construction).
+   `test_streaming_interval_change_is_reflected_in_next_ticks_duration`/
+   `test_heading_gain_change_is_reflected_in_next_ticks_trim`/
+   `test_clamp_mutated_after_construction_takes_effect_next_update`/
+   `test_kp_mutated_after_construction_takes_effect_next_update`.
+   `PlannerParams.load()` additionally layers a JSON file and/or
+   `PLANNER_<FIELD>` env vars on top of the defaults, callable again at
+   any time with no process restart.
+10. **Heading-loop bandwidth verified empirically** — explicitly out of
+    this ticket's scope; ticket 006's bench session is the empirical
+    measurement. This ticket's `heading_kp=2.0`/`heading_kd=0.0`/
+    `heading_omega_clamp=0.5` defaults are a documented starting point,
+    not a final tuning.
+
+**Design decisions not spelled out verbatim in the plan**:
+- **Stepped `tick()` API, not a single blocking `execute()`.** The plan's
+  prose describes a walking loop; this ticket implements it as
+  `begin()`/`tick()`/`preempt()`/`stop_now()` plus a blocking `run()`
+  convenience wrapper (`begin()` then `tick()` in a loop, pacing with an
+  injectable `sleep_fn`). The stepped shape is what makes preemption,
+  synthetic on-time/late/dropped-frame telemetry scripting, and the
+  binding-requirement unit tests possible without real threads or real
+  sleeping — `run()` is the production entry point; tests drive `tick()`
+  directly.
+- **`TwistTransport` is a `typing.Protocol`**, not a concrete
+  `NezhaProtocol` import — structural typing so `tests/unit/
+  test_planner_executor.py`'s `FakeTransport` (a plain
+  `twist()`/`stop()`/`read_pending_binary_tlm_frames()` double, no real
+  serial port or protobuf codec) satisfies the executor's dependency with
+  zero adapter code. A real `NezhaProtocol` instance already satisfies
+  the same Protocol as-is.
+- **Straight-hold and turn-tracking are the SAME mechanism.** `tick()`
+  advances `self._commanded_heading` by a trapezoidal integration of each
+  setpoint's own `omega` (never the measured value) — for a straight leg
+  (`omega == 0` throughout) this never moves, so "hold heading" falls out
+  of the identical code path a turn's "track the planned trajectory"
+  uses, with no special-casing.
+- **`_progress()`/axis parameter.** `begin(setpoints, target, axis=...)`
+  takes an explicit signed `target` (the same literal distance/angle the
+  caller passed to `profile_for_distance()`/`profile_for_turn()`) and
+  `axis` (`"linear"`/`"angular"`) so the bounded-overshoot check has a
+  concrete signed quantity to compare against — `"linear"` reads the mean
+  of `TLMFrame.enc`, `"angular"` reads `HeadingCorrector.measured_heading()`
+  (the SAME `otos_untrusted`-selected source heading correction uses).
+
+**Scope note — no live sim-transport integration in this ticket.** The
+team-lead's dispatch asked for a SimApi-driven end-to-end sim proof
+(profile → executor → `SimApi` → plant trace) in addition to this
+ticket's own unit-test gate. That capability does not exist yet and is
+not this ticket's to build: `host/robot_radio/io/sim_conn.py`
+(`SimConnection`) targets a ctypes ABI (`tests/_infra/sim/`) that sprint
+102 ticket 005 deleted — confirmed dead (`justfile`'s own `build-sim`
+comment: "Sim mode is unavailable... testgui is parked until a later
+sprint revives it"). The only live `SimApi` is the C++ harness
+(`tests/sim/support/sim_api.{h,cpp}`), reachable only from a compiled C++
+test binary, not from Python. Ticket 006's own Acceptance Criteria #1 and
+Implementation Plan Phase 1 already own exactly this work (`tests/sim/
+system/` profiled-straight/turn scenarios against `SimApi`, SUC-030) and
+its own Phase 1 prose anticipates the same gap ("`architecture-update.md`
+(105) Decision 4 explicitly deferred `io/sim_conn.py` to sprint 107, so
+this ticket likely instead injects the SAME setpoint sequence
+`planner/profile.py` would generate directly into `SimApi.injectTwist()`
+calls"). Building a new Python-to-`SimApi` transport inside ticket 005
+would duplicate/pre-empt ticket 006's own planned work and its
+`architecture-update.md` Step 3 boundary ("outside — `SimApi` itself...
+and the planner modules... does not reimplement their logic. Serves
+SUC-030"). This ticket's own Testing section already states its gate is
+unit tests only ("No hardware required for this ticket's own gate;
+ticket 006 is the hardware proof") — flagging this rather than silently
+skipping it, per this project's own no-silent-drops discipline.
+
+**Test totals**: `uv run python -m pytest tests/unit/test_planner_executor.py
+tests/unit/test_planner_heading.py tests/unit/test_planner_model.py -v` —
+50 passed (8 model, 15 heading, 27 executor — one section per binding-
+requirement acceptance criterion, plus the latency_tau traceability
+section and the synthetic on-time/late/dropped-frame TLM stream tests).
+Full project suite `uv run python -m pytest` — 667 passed, 0 failed, 0
+skipped, no regressions in any existing suite.
