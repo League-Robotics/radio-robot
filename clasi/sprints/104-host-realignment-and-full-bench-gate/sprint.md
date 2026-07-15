@@ -1,10 +1,11 @@
 ---
-id: "104"
-title: "Host realignment and full bench gate"
-status: roadmap
+id: '104'
+title: Host realignment and full bench gate
+status: planning-docs
 branch: sprint/104-host-realignment-and-full-bench-gate
 use-cases: []
-issues: []
+issues:
+- rig-persistent-otos-distrust.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -85,14 +86,25 @@ fires.
 
 ## Test Strategy
 
-(Deferred to detail-mode planning for this sprint.)
+`uv run python -m pytest tests/unit -q` must report 0 failed/0 errors by
+ticket 002 and stay that way through ticket 007 (baseline measured
+2026-07-14 against the merged 103 tree: 112 failed, 5 errors, 297
+passed). Firmware-side (ticket 004) gets `HOST_BUILD` unit coverage for
+the new fault bit. No sprint in this arc closes on tests alone — ticket
+007's real-hardware soak session (both transports, sustained duration) is
+this sprint's actual Definition of Done, per
+`.claude/rules/hardware-bench-testing.md`.
 
 ## Architecture Notes
 
 Builds directly on sprint 103's `source/app/{Comms,Telemetry,Deadman,Drive,
-Odometry}` and the pruned `protos/{envelope,telemetry}.proto` — no firmware
-architecture change is anticipated, only host-side. Full architecture-update.md
-is written when this sprint is detailed.
+Odometry}` and the pruned `protos/{envelope,telemetry}.proto`. One small
+firmware touch this sprint after all (ticket 004: `kFaultCommsMalformed`
+bit + `kFaultI2CSafetyNet` doc correction) — additive/documentation-only,
+no wire schema change, no behavioral change to the loop or dispatch path.
+Everything else is host-side (`host/robot_radio/`, `tests/bench/`,
+`data/robots/*.json`). See `architecture-update.md` for the full 7-step
+document (module list, diagrams, design rationale, open questions).
 
 ## GitHub Issues
 
@@ -102,13 +114,23 @@ is written when this sprint is detailed.
 
 Before tickets can be created, all of the following must be true:
 
-- [ ] Sprint planning documents are complete (sprint.md, use cases, architecture)
-- [ ] Architecture review passed
-- [ ] Stakeholder has approved the sprint plan
+- [x] Sprint planning documents are complete (sprint.md, use cases, architecture)
+- [x] Architecture review passed
+- [x] Stakeholder has approved the sprint plan
 
 ## Tickets
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 001 | Host command surface completed — NezhaProtocol.config() | — |
+| 002 | Legacy translator and dead-verb deletion | 001 |
+| 003 | serial_conn ack-ring matcher hardening + TelemetrySecondary consumption | 002 |
+| 004 | Firmware fault-bit follow-ups — kFaultCommsMalformed + kFaultI2CSafetyNet characterization | — |
+| 005 | Rig profile — persistent OTOS-untrusted marker | — |
+| 006 | Bench script family rewritten to the binary twist/config/stop plane | 001, 003 |
+| 007 | P6 soak gate — sustained dual-transport bench-runnable verification | 001, 002, 003, 004, 005, 006 |
 
-Tickets execute serially in the order listed.
+Tickets execute serially in the order listed. 004 and 005 have no
+dependency on 001-003 and could run in parallel with them in a future
+execution pass that chooses to parallelize despite this plan's serial
+order (architecture-update.md Migration Concerns); 007 is strictly last.

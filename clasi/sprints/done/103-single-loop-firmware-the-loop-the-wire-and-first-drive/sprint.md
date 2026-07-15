@@ -1,7 +1,7 @@
 ---
 id: '103'
 title: 'Single-loop firmware: the loop, the wire, and first drive'
-status: ticketing
+status: done
 branch: sprint/103-single-loop-firmware-the-loop-the-wire-and-first-drive
 use-cases:
 - SUC-001

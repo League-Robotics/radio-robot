@@ -1,6 +1,6 @@
 ---
 status: in-progress
-sprint: '103'
+sprint: '104'
 tickets:
 - 103-001
 - 103-003
@@ -12,6 +12,12 @@ tickets:
 - 103-009
 - 103-010
 - 103-002
+- 104-001
+- 104-002
+- 104-003
+- 104-004
+- 104-006
+- 104-007
 ---
 
 # Single-loop firmware, phases P3–P7 (continuation of the archived 102 plan)
