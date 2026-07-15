@@ -551,6 +551,119 @@ def test_no_fault_bit_does_not_stop():
 
 
 # ---------------------------------------------------------------------------
+# 107-001: fault-check baseline exclusion -- a bit ALREADY present in the
+# run's own first-drained frame (begin()'s baseline) never fault-stops the
+# run; a bit that turns on freshly DURING a run still does (regression-
+# protected, not weakened). Mirrors real hardware: kFaultI2CSafetyNet is a
+# boot-time one-shot latch essentially always present by the time any run
+# begins.
+# ---------------------------------------------------------------------------
+
+
+def test_baseline_fault_bit_present_at_begin_does_not_trip_the_run():
+    """The first frame drained by begin() itself carries a nonzero
+    fault_bits (e.g. kFaultI2CSafetyNet, latched from boot) -- the run must
+    NOT fault-stop on it, on tick 2 or ever, as long as no NEW bit appears."""
+    ex, transport, _ = _executor()
+    setpoints = _straight_setpoints(distance=500.0, cadence=0.1)
+
+    transport.queue(_frame(fault_bits=1))  # begin()'s own baseline frame
+    ex.begin(setpoints, target=500.0, axis="linear")
+    assert ex._fault_baseline == 1
+
+    # Every subsequent frame still carries the SAME baseline bit, nothing
+    # new -- must never fault-stop.
+    result = None
+    for _ in range(len(setpoints)):
+        transport.queue(_frame(fault_bits=1))
+        result = ex.tick()
+        if result.done:
+            break
+
+    assert result is not None
+    assert result.outcome == RunOutcome.COMPLETED
+    assert transport.stop_calls == 1  # only the terminal stop(), not a fault stop
+
+
+def test_new_fault_bit_during_run_still_stops_after_zero_baseline(caplog):
+    """A zero-baseline run (begin()'s own frame carries no fault bits) that
+    later sees a bit turn on DURING the run must still fault-stop --
+    baseline exclusion narrows the check, it does not disable it."""
+    ex, transport, _ = _executor()
+    setpoints = _straight_setpoints(distance=500.0, cadence=0.1)
+
+    transport.queue(_frame(fault_bits=0))
+    ex.begin(setpoints, target=500.0, axis="linear")
+    assert ex._fault_baseline == 0
+
+    transport.queue(_frame(fault_bits=2))  # a bit turns on fresh mid-run
+
+    with caplog.at_level("ERROR"):
+        result = ex.tick()
+
+    assert result.done is True
+    assert result.outcome == RunOutcome.FAULT
+    assert transport.stop_calls == 1
+
+
+def test_begin_retries_an_empty_first_drain_before_defaulting_the_baseline():
+    """107-001 (HITL-discovered): `read_pending_binary_tlm_frames()` is a
+    non-blocking poll of an async-pushed queue -- a single call in begin()
+    can legitimately race an idle queue and return nothing yet (confirmed
+    on real hardware immediately after the standing preflight's own
+    reverse nudge). begin() must retry a bounded few times before falling
+    back to a zero/None baseline, so a fault bit that is ALREADY asserted
+    (just not queued yet at the exact instant of the first read) is still
+    correctly captured as baseline -- not missed and then mistaken for a
+    brand-new fault on the very next tick."""
+    ex, transport, _ = _executor()
+    setpoints = _straight_setpoints(distance=500.0, cadence=0.1)
+
+    transport.queue_empty()  # races the queue -- nothing pushed yet
+    transport.queue_empty()
+    transport.queue(_frame(fault_bits=1))  # arrives on the 3rd drain attempt
+    ex.begin(setpoints, target=500.0, axis="linear")
+
+    assert ex._fault_baseline == 1
+    assert ex.latest_frame is not None and ex.latest_frame.fault_bits == 1
+
+
+def test_begin_falls_back_to_zero_baseline_if_every_retry_is_empty():
+    """The bounded retry still gives up eventually -- begin() must not
+    hang or raise if telemetry genuinely never arrives."""
+    ex, transport, _ = _executor()
+    setpoints = _straight_setpoints(distance=500.0, cadence=0.1)
+
+    for _ in range(10):
+        transport.queue_empty()
+
+    ex.begin(setpoints, target=500.0, axis="linear")
+
+    assert ex._fault_baseline == 0
+    assert ex.latest_frame is None
+
+
+def test_new_fault_bit_on_top_of_a_baseline_bit_still_stops():
+    """The baseline carries one bit (e.g. bit 0, kFaultI2CSafetyNet); a
+    DIFFERENT bit (bit 1) turning on fresh during the run must still
+    fault-stop -- the exclusion is per-bit (a bitmask), not "any nonzero
+    fault_bits value seen at begin() disables the check entirely"."""
+    ex, transport, _ = _executor()
+    setpoints = _straight_setpoints(distance=500.0, cadence=0.1)
+
+    transport.queue(_frame(fault_bits=1))  # baseline: bit 0 only
+    ex.begin(setpoints, target=500.0, axis="linear")
+    assert ex._fault_baseline == 1
+
+    transport.queue(_frame(fault_bits=3))  # bit 0 (baseline) + bit 1 (NEW)
+
+    result = ex.tick()
+
+    assert result.done is True
+    assert result.outcome == RunOutcome.FAULT
+
+
+# ---------------------------------------------------------------------------
 # AC 11 (full suite green) is enforced by CI/the verification command, not
 # a test in this file.
 # ---------------------------------------------------------------------------

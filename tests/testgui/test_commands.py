@@ -597,6 +597,21 @@ class TestTours:
             f"({x:.1f}, {y:.1f}) mm"
         )
 
+    def test_tours_are_read_from_planner_tour(self):
+        """107-002: TOUR_1/TOUR_2's own raw wire-string geometry moved to
+        planner/tour.py (architecture-update.md Decision 3) -- commands.py
+        now only reads it back for GUI labeling ([Presentation] ->
+        [Domain], not the reverse). `commands.TOURS` must be built from the
+        SAME objects planner.tour owns, not a re-typed copy that could
+        silently drift."""
+        from robot_radio.planner import tour as planner_tour
+        from robot_radio.testgui.commands import TOUR_1, TOUR_2, TOURS
+
+        assert TOUR_1 is planner_tour.TOUR_1
+        assert TOUR_2 is planner_tour.TOUR_2
+        assert TOURS["Tour 1"] is planner_tour.TOUR_1
+        assert TOURS["Tour 2"] is planner_tour.TOUR_2
+
     def test_tour_all_steps_are_wire_strings(self):
         """Every step is a non-empty string beginning with a known verb."""
         from robot_radio.testgui.commands import TOUR_1, TOUR_2

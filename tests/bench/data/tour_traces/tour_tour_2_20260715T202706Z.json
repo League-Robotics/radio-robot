@@ -1,0 +1,66 @@
+{
+  "port": "/dev/cu.usbmodem2121102",
+  "mode": "direct",
+  "tool_version": "0.20260715.27",
+  "date": "2026-07-15",
+  "planner_params": {
+    "streaming_interval": 0.15,
+    "link_latency_margin": 0.15,
+    "latency_tau": 0.13,
+    "v_max": 200.0,
+    "a_max": 500.0,
+    "omega_max": 2.0,
+    "alpha_max": 6.0,
+    "heading_kp": 0.4,
+    "heading_ki": 0.0,
+    "heading_kd": 0.0,
+    "heading_omega_clamp": 0.2,
+    "completion_tolerance_linear": 5.0,
+    "completion_tolerance_angular": 0.02,
+    "overshoot_bound_linear": 60.0,
+    "overshoot_bound_angular": 0.35
+  },
+  "heading_source": "pose",
+  "firmware_velocity_gains": {
+    "vel_kp": 0.0016,
+    "vel_kff": 0.0008,
+    "note": "firmware boot-time defaults persisted in data/robots/tovez.json (106-002 resonance retune) -- NOT set by this script."
+  },
+  "pass_label": "loose",
+  "closure_tolerance_mm": null,
+  "closure_tolerance_deg": null,
+  "tour": "TOUR_2",
+  "run_index": 2,
+  "timestamp": "20260715T202706Z",
+  "tick_count": 2,
+  "duration_s": 0.20535454200580716,
+  "leg_count": 1,
+  "legs": [
+    {
+      "index": 0,
+      "kind": "distance",
+      "value": 345.0,
+      "outcome": "fault",
+      "heading_before_rad": -1.3318607521968728,
+      "heading_after_rad": -1.3318607521968728,
+      "duration_s": 0.15394600000581704,
+      "fault": true,
+      "tick_count": 2
+    }
+  ],
+  "stopped_at": 0,
+  "stopped_outcome": "fault",
+  "start_pose": [
+    -369.0,
+    348.0,
+    -1.3318607521968728
+  ],
+  "end_pose": null,
+  "closure_position_delta_mm": null,
+  "closure_heading_delta_rad": null,
+  "closure_heading_delta_deg": null,
+  "fault_bits_ever": 3,
+  "deadman_tripped": false,
+  "deadman_trip_tick": null,
+  "trace_csv": "/Volumes/Proj/proj/RobotProjects/radio-robot-elite/tests/bench/out/tour_tour_2_20260715T202706Z.csv"
+}

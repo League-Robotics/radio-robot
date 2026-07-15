@@ -1,6 +1,6 @@
 [project]
 name = "microbit-v2-samples-tools"
-version = "0.20260715.21"
+version = "0.20260715.30"
 description = "Build/deploy tooling for microbit-v2-samples plus the robot_radio host controller and rogo CLI"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -100,14 +100,47 @@ aprilcam = { path = "../AprilTags", editable = true }
 #                                 collected until it holds real tests.
 #   tests/testgui/              — headless PySide6 GUI tests for the Robot
 #                                 Test GUI cockpit (ticket 083-004). Dropped
-#                                 from testpaths by sprint 102 ticket 005:
-#                                 testgui is parked (its `build-sim`
+#                                 from testpaths by sprint 102 ticket 005
+#                                 (testgui was parked: its `build-sim`
 #                                 dependency, and much of what it drives, was
 #                                 deleted along with the Elite orchestration
-#                                 stack) -- not pytest-collected until a
-#                                 later sprint revives it against the new
-#                                 single-loop firmware. The directory itself
-#                                 is left on disk, untouched.
+#                                 stack) -- RE-ADDED by sprint 107 ticket 004
+#                                 against the new single-loop firmware:
+#                                 test_tour1_geometry.py/test_tour_stop.py
+#                                 rewritten against a FakeTransport-backed
+#                                 harness (no ctypes sim needed -- see
+#                                 test_tour1_geometry.py's own module
+#                                 docstring), test_tour_idle_detection.py
+#                                 deleted (its own subject, _wait_for_idle,
+#                                 no longer exists per ticket 003),
+#                                 test_binary_bridge.py rewritten for the
+#                                 current launch-unblock degraded-mode wire
+#                                 behavior, canvas.py's stale
+#                                 tests_old/-vs-archive/tests_old/ asset
+#                                 paths fixed, and every qapp fixture in the
+#                                 directory guarded with
+#                                 `pytest.importorskip("PySide6")` so a
+#                                 headless environment that hasn't `uv sync
+#                                 --group gui`'d gets a clean skip, not a
+#                                 hard collection/run error. A handful of
+#                                 individual, pre-existing tests (in
+#                                 test_calibration_push_on_connect.py,
+#                                 test_error_divergence.py, test_goto.py,
+#                                 test_set_origin.py, test_traces.py,
+#                                 test_transport.py) still skip on
+#                                 `_sim_lib_path().exists()` -- they need the
+#                                 deleted ctypes sim, whose rebuild is
+#                                 explicitly out of scope this sprint
+#                                 (architecture-update.md Decision 1); those
+#                                 are pre-existing, narrowly-scoped,
+#                                 individually-documented skips within files
+#                                 that otherwise fully pass, NOT the
+#                                 whole-file silent-skip status quo ticket
+#                                 004 ended (test_tour1_geometry.py's own
+#                                 `_LIB_PRESENT` module-level `pytestmark`,
+#                                 which skipped literally every test in the
+#                                 file with no other coverage of that
+#                                 ground).
 #
 # archive/tests_old/ and archive/source_old/ are the parked pre-rebuild trees
 # (rollback = restore archive/source_old/ to source_old/, then codal.json
@@ -134,9 +167,20 @@ aprilcam = { path = "../AprilTags", editable = true }
 # tests/sim/unit/test_bare_loop_commands.py.) Parked, not deleted (see
 # tests/sim/parked-094/README.md), with the same bare-name basename-fnmatch
 # exclusion as parked-093.
-testpaths = ["tests/sim", "tests/unit"]
+testpaths = ["tests/sim", "tests/unit", "tests/testgui"]
 norecursedirs = [
     "tests_old", "source_old", "parked-093", "parked-094",
     "vendor", "build", ".venv", "node_modules",
     "*.egg", ".*", "dist", "{arch}", "__pycache__",
+]
+# 107-004: registers the "slow" marker so it doesn't warn as unknown.
+# tests/testgui/test_tour1_geometry.py's two full-tour completion tests
+# (~45s each, real 1x wall-clock pacing -- run_tour()'s own StreamingExecutor
+# paces ticks via time.sleep(params.streaming_interval), and _TourRunner.run()
+# injects no faster clock) carry it; they stay in the default run (this
+# ticket's own AC5: the full suite must include them, not skip them) -- the
+# marker exists so `pytest -m "not slow"` can deselect them for a fast local
+# loop without dropping them from CI/the default `pytest` invocation.
+markers = [
+    "slow: marks tests as slow (real wall-clock pacing) -- deselect via -m \"not slow\", never excluded by default",
 ]

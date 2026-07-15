@@ -12,10 +12,16 @@ re-enabled the buttons) never runs. The fix re-enables the buttons
 synchronously inside ``_stop_tour`` / ``_stop_goto`` themselves, right after
 the join, instead of depending on the signal.
 
-Direct read of ``host/robot_radio/testgui/__main__.py`` (``_stop_tour``
-~line 1796, ``_on_tour_finished`` ~line 1831, ``_stop_goto``'s counterpart)
-confirms this control flow is UNCHANGED since the historical fix — the
-inline re-implementations below match line-for-line.
+Direct read of ``host/robot_radio/testgui/__main__.py`` (``_stop_tour`` ~line
+2069, ``_on_tour_finished`` ~line 2110 as of 107-004 -- line numbers drift as
+the surrounding file grows; re-verified this ticket after 107-002/003's own
+``_TourRunner`` rewire) confirms this control flow is UNCHANGED since the
+historical fix, and UNCHANGED again by 107-003's own ``run_tour()`` rewire
+(that ticket touched only ``_TourRunner.run()``'s internals -- see its own
+class docstring -- never ``_stop_tour``/``_on_tour_finished`` themselves) —
+the inline re-implementations below still match line-for-line, so this file
+needed no logic changes for 107-004, only this docstring refresh (its own
+"tests/testgui/ rejoins testpaths" ticket).
 
 ``host/robot_radio/testgui/__main__.py``'s internals are closures with no
 test seam (``_build_main_window()`` returns only ``(window, app)``). Per the
@@ -24,11 +30,14 @@ re-implement the exact production control flow inline using fake
 worker/thread doubles, so the logic is verified deterministically without
 real ``QThread`` timing.
 
-Real-firmware coverage: ``test_tour1_geometry.py`` (this same directory)
-additionally clicks the real ``Stop Tour`` button mid-run against a live
-``SimTransport``-backed tour and asserts the same synchronous re-enable —
-this file pins down the exact control flow deterministically; that one
-proves it holds against the real GUI/QThread/SimTransport stack.
+Real-hardware-shaped coverage: ``test_tour1_geometry.py`` (this same
+directory, rewritten 107-004) additionally clicks the real ``Stop Tour``
+button mid-run against a live tour driven through the real GUI/``_TourRunner``/
+``QThread`` stack (backed by a ``FakeTwistTransport`` double now that
+``SimTransport`` no longer supports tours at all -- see that file's own
+module docstring) and asserts the same synchronous re-enable — this file
+pins down the exact control flow deterministically; that one proves it holds
+against the real GUI/QThread stack end to end.
 
 Qt-free: these tests import only pure helpers / fake QPushButton stand-ins
 and do not require a QApplication (except where noted).

@@ -1,212 +1,314 @@
-"""tests/testgui/test_tour1_geometry.py — the tour buttons must actually tour
-(ported from ``tests_old/testgui/`` per sprint 085 ticket 002).
+"""tests/testgui/test_tour1_geometry.py — the tour buttons must actually
+tour (107-004 rewrite: ``FakeTransport``-backed, no ctypes sim).
 
-End-to-end headless GUI tests (``QT_QPA_PLATFORM=offscreen``, the real ctypes
-firmware sim, built against ``source/`` by sprint 084). This is the FIRST time
-Tour 1 / Tour 2 have run against real sprint-084 firmware/sim
-(``architecture-update.md`` Grounding fact 1) — everything here (the
-``_TourRunner`` worker, the ``SNAP``-poll ``mode=I`` completion detection, the
-``D``/``RT`` wire verbs) predates the greenfield rebuild and was dormant
-until now.
+End-to-end headless GUI tests (``QT_QPA_PLATFORM=offscreen``) driving the
+REAL GUI objects — the transport combo + Connect button, the tour
+``QPushButton``s, ``_TourRunner`` on its own ``QThread`` — exactly the path
+an operator exercises. Only the BACKING transport is fake; nothing about
+"drive it through the real GUI" changes from this file's original
+(085-002/086-004/097) incarnation.
 
-What changed from the ``tests_old`` version of this file
-----------------------------------------------------------
-The pre-rebuild file asserted a STRICT per-waypoint/final-heading trace
-(``xfail(strict=True)``), root-caused to ``source_old``'s ``rotationalSlip``
-(0.92) being baked into the compiled firmware ``DefaultConfig`` in a way GUI
-robot selection could never override. Direct investigation this ticket
-(reproduced against both the real GUI/``SimTransport``/``QThread`` stack AND,
-independently, the raw ``tests/_infra/sim`` ``firmware.Sim`` ctypes wrapper —
-same magnitude of drift in both, ruling out a GUI/threading bug) found that
-per-waypoint/heading tracing STILL does not hold exactly in this tree either
-— but for a different, already-diagnosed and explicitly out-of-scope reason:
+What changed from the pre-107-004 version of this file
+--------------------------------------------------------
+The original file drove tours against a real ``SimTransport`` wrapping the
+``tests/_infra/sim`` ctypes firmware simulator (built via ``cmake --build
+build`` in that directory), gated the whole file behind an ``_LIB_PRESENT``
+``skipif`` when that library wasn't built. Two independent, later changes
+made that approach dead:
 
-  * The active robot (``data/robots/tovez_nocal.json`` — "no calibration")
-    pushes ``SET rotSlip=0`` on Connect (the documented no-correction
-    sentinel — ``calibration/push.py``'s ``calibration_commands()``), which
-    ``config_commands.cpp`` accepts and ``PoseEstimator::effectiveSlip()``
-    maps to ``1.0`` (no slip correction) — so, unlike ``source_old``, the
-    new tree's firmware default is NOT pre-loaded with a rotational-slip
-    inflation the GUI can't reach. This part of the OLD bug is fixed.
-  * ``RT``'s own stop condition, however, is deliberately open-loop and
-    slip-uncorrected by design — ``source/commands/motion_commands.cpp``'s
-    ``handleRT`` doc comment: "closed-loop against the per-wheel encoder
-    arc ... minus its rotational-slip/coast-anticipation refinement ...
-    coast-anticipation is not part of this ticket's [084-003] acceptance
-    bar". ``tests/sim/unit/test_motion_commands_arc_turn.py`` independently
-    measures and documents a single isolated ``RT 9000`` overshooting by
-    ~4-5° from the SMOOTH-stop ramp's coast (its own tolerance is ±10°).
-    Chained across a 6-7 turn tour, with each ``D``/``RT`` step dispatched
-    immediately once ``mode=I`` is observed (i.e. before any residual coast
-    fully settles), this compounds into tens of degrees of final-heading
-    drift — a real, repeatable firmware/motion-control characteristic, not
-    a tour-plumbing bug, and explicitly deferred by ticket 084-003's own
-    architecture decision ("no coast-anticipation this ticket"). It is out
-    of scope for sprint 085 (host-only; this ticket's job is SNAP-poll
-    completion verification, not motion-control accuracy tuning).
+1. The ctypes sim was deleted wholesale at sprint 102 ticket 005 (``git show
+   72d8be7e --stat``) — ``_LIB_PRESENT`` has been permanently ``False``
+   ever since, so every test in this file has silently SKIPPED on every
+   ``uv run python -m pytest`` run since before the single-loop rebuild
+   (``tests/testgui`` was also dropped from ``pyproject.toml``'s
+   ``testpaths`` at the same ticket, so nobody even saw the skip). Rebuilding
+   that sim library is explicitly out of scope this sprint
+   (``architecture-update.md`` Decision 1, sprint 107).
+2. 107-003 rewired ``_TourRunner`` onto ``planner.tour.run_tour()``, driven
+   directly against ``transport.protocol`` (a ``NezhaProtocol``-shaped
+   ``TwistTransport``) — a property ``_HardwareTransport`` (the
+   ``SerialTransport``/``RelayTransport`` base) exposes but ``SimTransport``
+   does NOT. Tour buttons are therefore explicitly GATED OFF (disabled, with
+   an explanatory tooltip — see ``__main__.py``'s ``_tour_hw_tooltip()``/
+   ``_TOUR_SIM_TOOLTIP`` and the ``is_sim_transport()`` gating in
+   ``_on_connect()``) whenever connected via Sim: "Tours require a
+   real-hardware connection this sprint". Even with a rebuilt sim library,
+   clicking a tour button against a live ``SimTransport`` connection today
+   is a no-op (the button is disabled) — the pre-107-004 version of this
+   file's whole approach (Sim connect -> click tour button) no longer
+   reaches ``_TourRunner`` at all.
 
-Per this ticket's (085-002) own acceptance criteria, the bar here is
-therefore intentionally the SOFTER one the ticket text itself states: each
-tour "runs to completion ... with no step timing out, and the robot's fused
-pose ends near world origin (the tour is a closed geometric loop)" —
-position-only closure, not exact waypoint/heading tracing. Measured at the
-time (085-002, pre-086): Tour 1 ends within ~20-40 mm of the origin; Tour 2
-within ~95-175 mm (looser — six-plus RT legs compound more drift than
-Tour 1's; still a small fraction of the tour's own leg lengths, up to
-850 mm). No production code was changed to reach this — this ticket is a
-real-firmware verification pass that found the tour-completion plumbing
-(SNAP-poll ``mode=I``, stale-frame rejection, stop-button reactivation)
-already correct; the residual heading drift above is a pre-existing,
-already-documented, different-ticket's concern.
+This rewrite drives the SAME real GUI/``_TourRunner``/``QThread`` stack, but
+connects via the "Serial" combo entry (so 107-003's real-hardware-only tour
+gate leaves the buttons enabled — see point 2 above) with
+``transport.SerialTransport`` monkeypatched to ``_FakeHardwareTransport``
+(this file, below): a ``Transport`` that looks like a connected, non-Sim
+backend to every ``is_sim_transport()``/``isinstance(..., SimTransport)``
+check in ``__main__.py``, but talks to nothing real. Its ``.protocol``
+exposes ``_FakeTwistTransport`` — a double satisfying
+``planner.executor.TwistTransport``'s structural protocol (``twist()``/
+``stop()``/``read_pending_binary_tlm_frames()``), mirroring
+``tests/unit/test_planner_executor.py``'s own ``FakeTransport`` convention
+(the project's established double style for this exact protocol) — driven
+through the real GUI/``_TourRunner``/``QThread``, not called directly.
+``_FakeTwistTransport`` synthesizes a plausible, monotonically-advancing
+encoder pose on every ``twist()`` (open-loop unicycle integration: heading
++= omega*dt, x/y advance along the post-turn heading by v_x*dt, dt taken
+from ``twist()``'s own ``duration`` argument), so ``run_tour()``'s own
+closure computation (``planner/tour.py``'s ``TourClosure`` — the pose
+delta between leg 1's ``begin()`` and the final leg's settle window) has
+something meaningful to compute against, and every ``StreamingExecutor``
+safety check that needs feedback (bounded-overshoot, heading trim) sees
+believable, moving telemetry rather than a frozen frame.
 
-086-004 retune (post 086-002 motor-loop fix + 086-003 Planner terminal-decel
-anticipation)
--------------------------------------------------------------------------------
-Re-measured against this same headless GUI path (2026-07-06, three repeat
-runs each, real 1x wall-clock pacing as before): Tour 1's fused pose now
-ends **51-52 mm** from the origin (essentially unchanged from the pre-086
-~20-40 mm range — within run-to-run noise of it); Tour 2's now ends
-**~53 mm** from the origin, a real improvement over the pre-086 ~95-175 mm
-range (086-003's ``STOP_ROTATION`` anticipation helps more, proportionally,
-the more turns a tour chains). Neither number is nearly as tight as
-``tests/sim/system/test_tour_geometry.py``'s own per-leg tolerances (that
-file's whole point is that the endpoint alone cannot distinguish "every leg
-was tight" from "errors happened to cancel") — this file's own per-leg
-geometry is unaffected by 086-002/003 for the same reason
-``test_tour_geometry.py``'s own docstring documents: ``RT``'s ~5-7 deg
-per-turn coast (``handleRT``'s own deliberately-open-loop, no-coast-
-anticipation-bar design) is a distinct, already out-of-scope characteristic
-from the reverse-spin defect 086-002 fixed, and compounds across a
-multi-turn tour regardless. ``_ORIGIN_TOL_MM`` is tightened below from
-300 mm to 100 mm (still ~1.9x headroom over the worst repeat-run value
-observed, 53.2 mm) — a real tightening of the rubber-stamp bound, not a
-claim that the residual itself shrank to near-zero.
-
-Fused pose, not ground truth
------------------------------
-The ticket's acceptance criterion is phrased "fused pose" — the firmware's
-own ``TLM``/``SNAP`` ``pose=`` field (``PoseEstimator::fusedPose()``,
-confirmed by reading ``source/commands/telemetry_commands.cpp``), i.e. what
-an operator watching the GUI's avatar actually sees — not the sim's
-ground-truth plant pose. This file reads it via a spy on
-``transport.on_telemetry`` (the very cache ``_wait_for_idle`` itself polls),
-and separately records the ground-truth trace for informational span/
-sanity-checking only (proving the tour actually drove somewhere, not that it
-idled at the origin the whole time).
-
-Zero-error Sim profile, pinned nocal config
----------------------------------------------
-Every Sim Errors panel knob is zeroed via the real spinboxes + Apply (as the
-pre-rebuild file did) so the run is reproducible: every additive/noise knob
-0.0, every multiplicative knob 1.0, and the plant trackwidth equal to the
-firmware's configured ``trackwidthMm`` (128.0) so plant geometry matches the
-firmware's kinematic calibration. The active robot config is pinned (via
-``ROBOT_CONFIG``) to a literal, uncalibrated ("nocal") config matching
-``data/robots/tovez_nocal.json``'s relevant fields, independent of whatever
-the repo's ``active_robot.json`` pointer happens to select.
-
-No sim fast-forward hack: real-time pacing
---------------------------------------------
-Unlike the pre-rebuild file (which re-paced ``SimTransport``'s tick-thread
-~5x via ``_SIM_TICK_SLEEP_S``), this file runs the sim at real 1x wall-clock
-pacing. The GUI's own polling windows (``_TourRunner.SPINUP_S``/``POLL_S``)
-are real host-clock sleeps, NOT scaled by the sim's tick-thread pacing — at
-5x, a fixed 0.3 s ``POLL_S`` window covers 5x more *simulated* time than at
-1x, which measurably changes how much residual per-step coast has settled
-by the time the next command is dispatched (confirmed empirically: the same
-tour's final-pose numbers shift beyond noise between 1x and 5x pacing).
-Real 1x pacing is what an operator (or the radio relay / bench, whose SNAP
-round-trip is real-time by nature) actually experiences, so it is what this
-file measures against. Each tour therefore takes ~30-45 s wall-clock to run.
-
-097 un-gating (this ticket)
-----------------------------
-Tour buttons were gated OFF (permanently disabled) for the middle of sprint
-097, because every tour opens with ``_set_origin()``'s ``OZ``/``SI`` calls,
-which had no binary arm. This ticket un-gates the tour buttons: D/RT (the
-tour steps themselves) already had binary arms before this ticket, and
-``_set_origin()``'s ``OZ``/``SI``/``ZERO`` calls, while STILL gated no-ops
-(genuinely deferred to sprint 098's fused pose), no longer block a tour from
-running — see ``__main__.py``'s ``_set_origin()`` docstring. The three tests
-below un-xfail accordingly.
-
-**Caveat on the "fused pose ends near origin" assertion**: ``Telemetry.pose``
-is pinned at (0, 0, 0) for the ENTIRE run until sprint 098 wires
-``Subsystems::PoseEstimator::tick()`` (nothing in ``source/`` calls it yet).
-``_assert_tour_ran_and_closed_the_loop()``'s ``dist <= _ORIGIN_TOL_MM`` check
-against ``fused_pose`` is therefore VACUOUSLY true today (distance is always
-exactly 0) — it is no longer evidence the tour geometrically closed the
-loop. The MEANINGFUL assertion in the same helper is the ground-truth span
-check (``span_x > 300 and span_y > 200``), which proves the tour actually
-drove the plant around instead of idling at the origin; that check is
-unaffected by the fused-pose gap and is what makes these tests non-trivial.
-Once 098 lands a live fused pose, the origin-closure assertion regains its
-original meaning without any change to this file.
+Bar for this file, per ticket 107-004's own scope
+---------------------------------------------------
+``run_tour()``'s own leg-chaining/closure-math/preemption behavior against a
+scripted ``FakeTransport`` is ALREADY exhaustively covered by
+``tests/unit/test_planner_tour.py`` (ticket 002) — this file does not
+re-prove that. This file's job is proving the GUI's own wiring is correct:
+the tour buttons actually reach ``_TourRunner``/``run_tour()`` with real
+Qt/``QThread`` machinery in the loop, each tour runs to completion (no leg
+timing out) with per-leg ``[TOUR]`` log narration appearing in the log pane,
+and Stop Tour mid-run re-enables the tour buttons synchronously against a
+REAL, running tour (complementing ``test_tour_stop.py``'s own inline,
+Qt-free re-implementation of the exact same control flow). No physics
+accuracy claim is made (or checked) here — the fake transport integrates
+open-loop with zero slip/noise, so a tight closure number would prove
+nothing about the real robot; ticket 005's bench script is where physical
+closure is measured against real hardware.
 
 Run:
     QT_QPA_PLATFORM=offscreen uv run pytest tests/testgui/test_tour1_geometry.py -v
 """
 from __future__ import annotations
 
-import json
 import math
-import pathlib
 import time
 
 import pytest
 
-_REPO = pathlib.Path(__file__).parent.parent.parent
-_SIM_BUILD = _REPO / "tests" / "_infra" / "sim" / "build"
+# 107-004: turn a missing `gui` dependency group into a clean skip, not a
+# hard collection/run error, so re-adding tests/testgui/ to testpaths this
+# ticket never breaks a headless CI run that hasn't `uv sync --group gui`'d
+# (the aprilcam/OpenCV-bearing group `default-groups` deliberately excludes
+# -- pyproject.toml's own comment). Every other qapp fixture in this
+# directory picked up the same guard this ticket (see each file's own
+# import line).
+pytest.importorskip("PySide6")
 
-_LIB_PRESENT = any(
-    (_SIM_BUILD / name).exists()
-    for name in ("libfirmware_host.dylib", "libfirmware_host.so")
-)
+# _FakeTwistTransport's own nominal tick interval -- read off PlannerParams'
+# own default rather than duplicated as a hand-picked literal (0.15) that
+# would silently drift if that default ever changed. Valid because
+# _TourRunner.run() (__main__.py) always constructs a FRESH, default
+# PlannerParams() for every tour run -- no override reaches this file (see
+# _FakeTwistTransport's own class docstring for why this matters).
+from robot_radio.planner.model import PlannerParams  # noqa: E402
 
-pytestmark = pytest.mark.skipif(
-    not _LIB_PRESENT,
-    reason="firmware sim lib not built (tests/_infra/sim: cmake --build build)",
-)
+_NOMINAL_TICK_INTERVAL_S = PlannerParams().streaming_interval  # [s]
+
 
 # ---------------------------------------------------------------------------
-# Zero-error Sim Errors panel values (spinbox objectName -> value).
-#
-# Additive/noise knobs zero; multiplicative knobs 1.0; trackwidth matches the
-# firmware's configured trackwidthMm (128.0 — pose_estimator.h / sim_prefs.py)
-# so the plant's geometry agrees with the firmware's kinematic calibration.
+# Tour geometry integrity -- Qt-free, fast: the GUI's own TOURS dict (what
+# the tour buttons are actually labeled/wired from) is the SAME data as
+# planner.tour's TOUR_1/TOUR_2 (commands.py imports them directly -- see
+# that module's own 107-002 comment), not a stale duplicate copy.
 # ---------------------------------------------------------------------------
-_FIRMWARE_TRACKWIDTH = 128.0
 
-_ZERO_ERROR_SPINS: dict[str, float] = {
-    "sim_err_encoder_mm": 0.0,
-    "sim_err_enc_scale_l": 0.0,
-    "sim_err_enc_scale_r": 0.0,
-    "sim_err_slip_turn": 0.0,
-    "sim_err_body_rot_scrub": 1.0,
-    "sim_err_body_lin_scrub": 1.0,
-    "sim_err_motor_offset_l": 1.0,
-    "sim_err_motor_offset_r": 1.0,
-    "sim_err_trackwidth": _FIRMWARE_TRACKWIDTH,
-    "sim_err_otos_linear": 0.0,
-    "sim_err_otos_yaw": 0.0,
-    "sim_err_otos_lin_scale": 0.0,
-    "sim_err_otos_ang_scale": 0.0,
-    "sim_err_otos_lin_drift": 0.0,
-    "sim_err_otos_yaw_drift": 0.0,
-}
 
-#: How near the origin the firmware's FUSED pose must end up, in mm, for a
-#: tour to count as "a closed geometric loop" per this ticket's acceptance
-#: criterion. Retuned by ticket 086-004 (was 300.0, pre-086 measured range
-#: Tour 1 ~20-40 mm / Tour 2 ~95-175 mm): re-measured post-086-002/003
-#: (module docstring's "086-004 retune" section) Tour 1 now ~51-52 mm, Tour 2
-#: now ~53 mm across repeated runs — 100.0 keeps ~1.9x headroom over the
-#: highest observed value (53.2 mm) while still being a small fraction of
-#: the tour's own leg lengths (up to 850 mm), a real tightening of the old
-#: 300 mm rubber-stamp bound.
-_ORIGIN_TOL_MM = 100.0
+def test_gui_tours_dict_is_the_real_tour_1_and_tour_2_geometry():
+    from robot_radio.planner.tour import TOUR_1, TOUR_2, parse_tour
+    from robot_radio.testgui.commands import TOURS
 
-#: Wall-clock ceilings (real 1x sim pacing — see module docstring).
+    assert TOURS["Tour 1"] is TOUR_1
+    assert TOURS["Tour 2"] is TOUR_2
+
+    legs_1 = parse_tour(TOURS["Tour 1"])
+    legs_2 = parse_tour(TOURS["Tour 2"])
+    assert len(legs_1) == 13
+    assert len(legs_2) == 15
+    # Every step parses to a recognized "distance"/"turn" leg (parse_tour()
+    # raises ValueError on anything else) -- the assertion above already
+    # proves this by not raising, but assert the leg-kind mix explicitly so
+    # a future tour that accidentally drops all its turns (or vice versa)
+    # fails loudly here instead of only inside the slow end-to-end tests
+    # below.
+    assert {leg.kind for leg in legs_1} == {"distance", "turn"}
+    assert {leg.kind for leg in legs_2} == {"distance", "turn"}
+
+
+# ---------------------------------------------------------------------------
+# _FakeTwistTransport -- TwistTransport double (mirrors
+# tests/unit/test_planner_executor.py's own FakeTransport convention),
+# driven through the real GUI/_TourRunner/QThread stack below, never called
+# directly by this file's own test bodies.
+# ---------------------------------------------------------------------------
+
+
+class _FakeTwistTransport:
+    """Synthesizes a plausible, monotonically-advancing encoder pose on
+    every ``twist()`` (see module docstring) -- open-loop unicycle
+    integration, no slip/noise. ``enc``/``pose``/``otos`` all carry the SAME
+    synthesized values so this file's outcome is independent of whichever
+    field the active robot config's ``geometry.otos_untrusted`` happens to
+    select for ``HeadingCorrector`` (``planner/heading.py``).
+
+    ``dt`` is a FIXED, NOMINAL interval (``_NOMINAL_TICK_INTERVAL_S``, sourced
+    from ``PlannerParams()``'s own default ``streaming_interval`` -- not a
+    hand-duplicated literal, so this fake tracks that default automatically
+    if it ever changes), NOT measured wall-clock time and NOT ``twist()``'s
+    own ``duration`` argument. Two things were tried and rejected first:
+
+    1. ``twist()``'s own ``duration`` argument -- the firmware deadman ARM
+       window (``streaming_interval + link_latency_margin``, deliberately
+       padded past the tick cadence so the deadman never expires between
+       ticks -- ``executor.py``'s own docstring, binding requirement #8),
+       not the actual spacing between two ``twist()`` sends. Integrating
+       against it double-counts the latency margin on every tick and
+       over-advances the synthesized pose (confirmed: trips the executor's
+       own bounded-overshoot check almost immediately).
+    2. Real ``time.monotonic()``-measured elapsed time between calls --
+       correct in isolation (``run_tour()`` really does pace ticks via
+       ``time.sleep(params.streaming_interval)``), but flaky under the FULL
+       suite's load (1000+ preceding tests): scheduling jitter/GC pauses can
+       stretch an individual tick's actual wall-clock gap well past the
+       nominal 150ms, over-advancing that one tick's synthesized distance
+       enough to trip the SAME bounded-overshoot check the ``duration`` bug
+       did -- confirmed via team-lead's full-suite run
+       (``test_tour2_runs_to_completion_with_per_leg_log_narration`` failed
+       in full-suite ordering, passed in isolation; not a Qt/PlannerParams/
+       fixture leak -- this class's OWN wall-clock coupling was the
+       isolation defect). A fake whose correctness depends on the test
+       process's real-time scheduling fidelity is unsound test design
+       regardless of how it behaves on an idle machine; the nominal-interval
+       fix removes the coupling to real-time scheduling entirely, matching
+       what ``_TourRunner.run()`` ACTUALLY configures (a fresh, default
+       ``PlannerParams()`` every call -- no override reaches this file), not
+       what the wall clock happens to measure on any given run.
+
+    ``read_pending_binary_tlm_frames()`` always returns a single frame
+    reflecting the CURRENT state (mirrors ``test_planner_tour.py``'s own
+    "current frame" double convention -- simpler than
+    ``test_planner_executor.py``'s batch-queue double, and deliberately so
+    here: a real telemetry stream pushes continuously (~25Hz) independent of
+    whether a command was just sent, so it is never genuinely empty by the
+    time ``StreamingExecutor.begin()``'s own bounded retry drains it for a
+    fresh leg. An empty-then-refilled queue (this class's own first
+    attempt) starves a leg's ``begin()`` of a fresh baseline whenever the
+    inter-leg settle window's own discard-read empties the queue before the
+    new leg's first ``twist()`` -- confirmed: baseline silently resets to
+    0.0 instead of the prior leg's own end-state, and the next leg
+    immediately false-trips the bounded-overshoot check against its own
+    stale, un-baselined progress).
+    """
+
+    def __init__(self) -> None:
+        self.twist_calls: list[tuple[float, float, float]] = []
+        self.stop_calls: int = 0
+        self._corr_id = 0
+        self._x = 0.0    # [mm]
+        self._y = 0.0    # [mm]
+        self._heading = 0.0  # [rad]
+        self._enc = 0.0  # [mm] forward-distance accumulator (StreamingExecutor
+        # reads (enc[0]+enc[1])/2 as "linear" progress -- both wheels report
+        # the same value, this fake models no per-wheel differential)
+
+    def twist(self, v_x: float, omega: float, duration: float) -> int:  # [mm/s] [rad/s] [ms]
+        self._corr_id += 1
+        self.twist_calls.append((v_x, omega, duration))
+        dt = _NOMINAL_TICK_INTERVAL_S  # [s] -- see class docstring
+        self._heading += omega * dt
+        self._x += v_x * math.cos(self._heading) * dt
+        self._y += v_x * math.sin(self._heading) * dt
+        self._enc += v_x * dt
+        return self._corr_id
+
+    def stop(self) -> int:
+        self._corr_id += 1
+        self.stop_calls += 1
+        return self._corr_id
+
+    def read_pending_binary_tlm_frames(self) -> list:
+        return [self._make_frame()]
+
+    def _make_frame(self):
+        from robot_radio.robot.protocol import TLMFrame
+
+        enc_i = int(self._enc)
+        pose = (
+            int(self._x), int(self._y),
+            int(round(math.degrees(self._heading) * 100.0)),  # [cdeg]
+        )
+        return TLMFrame(enc=(enc_i, enc_i), pose=pose, otos=pose,
+                        fault_bits=0, event_bits=0)
+
+
+# ---------------------------------------------------------------------------
+# _FakeHardwareTransport -- looks like a connected, non-Sim Transport to
+# every is_sim_transport()/isinstance(..., SimTransport) check in
+# __main__.py (see module docstring, point 2), so 107-003's real-hardware-
+# only tour gate leaves the buttons enabled. Talks to nothing real.
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_hardware_transport_class():
+    """Builds ``_FakeHardwareTransport`` lazily (needs ``transport.Transport``,
+    a PySide6-adjacent import deferred like everywhere else in this
+    directory)."""
+    from robot_radio.testgui.transport import Transport
+
+    class _FakeHardwareTransport(Transport):
+        """Fake, non-Sim ``Transport`` -- every command/send is a tolerant
+        no-op (mirrors how ``__main__.py`` itself treats an empty/failed
+        reply: best-effort, logged, never raised past the caller -- see
+        e.g. ``_check_firmware_version()``'s/``_push_robot_calibration()``'s
+        own ``except Exception`` handling). ``.protocol`` exposes a fresh
+        ``_FakeTwistTransport`` once "connected"."""
+
+        def __init__(self, port: str = "") -> None:
+            super().__init__()
+            self._port = port
+            self._connected = False
+            self._twist_transport = _FakeTwistTransport()
+            self._suspended = False
+
+        def connect(self) -> None:
+            self._connected = True
+
+        def disconnect(self) -> None:
+            self._connected = False
+
+        def send(self, line: str) -> None:
+            pass
+
+        def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
+            return ""
+
+        # -- 107-003's twist surface (see transport.py's _HardwareTransport
+        # -- this fake is the "Serial" stand-in, so it needs the SAME
+        # protocol/suspend/resume surface _TourRunner.run() actually calls).
+        @property
+        def protocol(self):
+            return self._twist_transport if self._connected else None
+
+        def suspend_telemetry_reader(self) -> None:
+            self._suspended = True
+
+        def resume_telemetry_reader(self) -> None:
+            self._suspended = False
+
+    return _FakeHardwareTransport
+
+
+# ---------------------------------------------------------------------------
+# GUI harness
+# ---------------------------------------------------------------------------
+
+#: Wall-clock ceilings -- real 1x pacing (StreamingExecutor's own
+#: streaming_interval-paced sleep_fn=time.sleep; _TourRunner.run() calls
+#: run_tour() with no clock_fn/sleep_fn override, so this is genuinely real
+#: time, same as the pre-107-004 version of this file against real
+#: SimTransport pacing).
 _TOUR_START_DEADLINE_S = 10.0
 _TOUR_DEADLINE_S = 90.0
 
@@ -241,143 +343,78 @@ def _spin_until(qapp, predicate, timeout_s: float) -> bool:
     return predicate()
 
 
-def _run_tour_headless(qapp, monkeypatch, tmp_path, button_name: str):
-    """Zero the Sim Errors panel via the GUI and run one tour button.
+def _connect_via_fake_hardware(qapp, monkeypatch):
+    """Build the real GUI window and Connect via "Serial", monkeypatched
+    onto ``_FakeHardwareTransport`` (see class docstring above). Returns
+    ``(window, fake_transport_class)`` -- callers here never need the
+    constructed instance itself (every assertion reads button state / the
+    log pane), only that Connect succeeded.
 
-    Returns ``(truth_trace, fused_pose)``:
-
-    - ``truth_trace``: the recorded plant ground-truth trace as (x, y, h)
-      tuples (mm, mm, rad) — informational only (span sanity-check), NOT the
-      value asserted against ``_ORIGIN_TOL_MM``.
-    - ``fused_pose``: the LAST ``TLMFrame.pose`` observed — (x, y, h) in
-      (mm, mm, cdeg) — the firmware's own fused pose, read via a spy on
-      ``transport.on_telemetry`` (the same ``state["last_tlm"]`` cache
-      ``_wait_for_idle`` itself polls). ``None`` if no TLM frame with a pose
-      was ever observed (a real failure — every SNAP reply in this tree
-      unconditionally carries ``pose=``, per ``telemetry_commands.cpp``).
-
-    Everything runs through the real GUI objects — the transport combo +
-    Connect button, the Sim Errors spinboxes + Apply, the tour QPushButtons,
-    ``_TourRunner`` on its QThread, and ``SimTransport``'s tick-thread —
-    exactly the path an operator exercises.
+    Mirrors this file's own pre-107-004 ``SimTransport``-monkeypatch
+    technique (``__main__.py``'s transport classes are imported function-
+    locally inside ``_build_main_window()``, so patching the module
+    attribute BEFORE that call is the only seam available -- there is no
+    dependency-injection hook).
     """
     from PySide6.QtWidgets import (  # type: ignore[import-untyped]
         QComboBox,
-        QDoubleSpinBox,
+        QLineEdit,
         QPushButton,
     )
 
     import robot_radio.testgui.__main__ as gui_main
-    from robot_radio.config import robot_config as rc_mod
-    from robot_radio.testgui import sim_prefs
     from robot_radio.testgui import transport as transport_mod
 
-    # Pin the active robot to a literal, uncalibrated ("nocal") config
-    # matching data/robots/tovez_nocal.json's relevant fields: Connect now
-    # pushes the active robot's calibration to the firmware (SET rotSlip=0
-    # for an uncalibrated robot — the documented no-correction sentinel), and
-    # this test's expectations are defined against that push; the pin keeps
-    # the test independent of the repo's active_robot.json pointer (operator
-    # state) regardless of which robot is currently selected on disk.
-    baked_cfg = tmp_path / "baked_tovez_nocal.json"
-    baked_cfg.write_text(json.dumps({
-        "schema_version": 2,
-        "identity": {"robot_name": "tovez-nocal-baked", "uid": "tovez-nocal-baked"},
-        "connection": {"device_announcement_name": "tovez"},
-        "geometry": {"trackwidth": 128},
-        "calibration": {},
-    }))
-    monkeypatch.setenv("ROBOT_CONFIG", str(baked_cfg))
-    rc_mod._reset_robot_config()
-
-    # Keep the operator's persisted error profile untouched: point sim_prefs
-    # persistence at a temp file for the whole test (the panel's Apply saves
-    # it, and SimTransport.connect() re-loads it).
-    monkeypatch.setattr(sim_prefs, "_PREFS_DIR", tmp_path)
-    monkeypatch.setattr(
-        sim_prefs, "_PREFS_PATH", tmp_path / "sim_error_profile.json"
-    )
-
-    # The GUI keeps its live transport in a closure with no accessor; the
-    # seam is the SimTransport name _build_main_window imports (function-
-    # locally) from the transport module, so the patch must land BEFORE the
-    # window is built.  The subclass must be named exactly "SimTransport":
-    # operations.is_sim_transport() duck-checks type(t).__name__, and the
-    # origin-reset plant teleport hangs off that check.
-    _RealSimTransport = transport_mod.SimTransport
-    created: list = []
-
-    class SimTransport(_RealSimTransport):
-        def __init__(self) -> None:
-            super().__init__()
-            created.append(self)
-
-    monkeypatch.setattr(transport_mod, "SimTransport", SimTransport)
+    fake_cls = _make_fake_hardware_transport_class()
+    monkeypatch.setattr(transport_mod, "SerialTransport", fake_cls)
 
     window, _app = gui_main._build_main_window()
-    truth: list[tuple[float, float, float]] = []  # (x, y, h) in (mm, mm, rad)
-    fused: dict = {"pose": None}
+
+    combo = window.findChild(QComboBox, "transport_combo")
+    assert combo is not None, "transport_combo not found"
+    combo.setCurrentText("Serial")
+
+    # Pre-fill a bogus-but-non-empty port so _on_connect()'s auto-detect
+    # branch (which scans real serial ports via list_ports()) is skipped
+    # entirely -- SerialTransport(port) is monkeypatched to ignore the
+    # value anyway.
+    port_edit = window.findChild(QLineEdit, "port_edit")
+    assert port_edit is not None, "port_edit not found"
+    port_edit.setText("FAKE0")
+
+    connect_btn = window.findChild(QPushButton, "connect_btn")
+    assert connect_btn is not None, "connect_btn not found"
+    connect_btn.click()
+    _spin_events(qapp, 0.3)
+
+    return window, fake_cls
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: tour buttons drive _TourRunner/run_tour() via the real GUI
+# ---------------------------------------------------------------------------
+
+
+def _run_tour_via_gui(qapp, monkeypatch, button_name: str, tour_label: str) -> str:
+    """Connect via the fake hardware transport, click ``button_name``, wait
+    for it to run to completion, and return the log pane's full text (for
+    ``[TOUR]`` narration assertions). Always disconnects/hides the window in
+    a ``finally``."""
+    from PySide6.QtWidgets import QPlainTextEdit, QPushButton  # type: ignore[import-untyped]
+
+    window, _fake_cls = _connect_via_fake_hardware(qapp, monkeypatch)
 
     try:
-        combo = window.findChild(QComboBox, "transport_combo")
-        assert combo is not None, "transport_combo not found"
-        combo.setCurrentText("Sim")
-
-        connect_btn = window.findChild(QPushButton, "connect_btn")
-        assert connect_btn is not None, "connect_btn not found"
-        connect_btn.click()
-        _spin_events(qapp, 0.3)
-
-        assert created, "Connect did not construct a SimTransport"
-        transport = created[-1]
-        assert transport._connected, "SimTransport failed to connect"
-
-        # Record every plant ground-truth delivery (tick-thread callback),
-        # chaining to the GUI's own handler so the canvas still updates.
-        gui_truth_cb = transport.on_truth
-
-        def _truth_spy(pose) -> None:
-            if pose is not None:
-                x_cm, y_cm, h_rad = pose
-                truth.append((x_cm * 10.0, y_cm * 10.0, h_rad))
-            if gui_truth_cb is not None:
-                gui_truth_cb(pose)
-
-        transport.on_truth = _truth_spy
-
-        # Record every TLM frame (same cache _wait_for_idle polls) so we can
-        # read the LAST fused pose observed — chaining to the GUI's own
-        # handler so _state["last_tlm"] (and the canvas) still update.
-        gui_tlm_cb = transport.on_telemetry
-
-        def _tlm_spy(frame) -> None:
-            pose = getattr(frame, "pose", None)
-            if pose is not None:
-                fused["pose"] = pose
-            if gui_tlm_cb is not None:
-                gui_tlm_cb(frame)
-
-        transport.on_telemetry = _tlm_spy
-
-        # Zero every error knob through the real spinboxes, then Apply.
-        for name, value in _ZERO_ERROR_SPINS.items():
-            spin = window.findChild(QDoubleSpinBox, name)
-            assert spin is not None, f"Sim Errors spinbox {name!r} not found"
-            spin.setValue(value)
-        apply_btn = window.findChild(QPushButton, "sim_errors_apply_btn")
-        assert apply_btn is not None, "sim_errors_apply_btn not found"
-        apply_btn.click()
-        # The apply action runs on the sim tick-thread via the command queue;
-        # give it a moment to land before the tour starts.
-        _spin_events(qapp, 0.3)
-
         tour_btn = window.findChild(QPushButton, button_name)
         stop_btn = window.findChild(QPushButton, "stop_tour_btn")
         assert tour_btn is not None, f"tour button {button_name!r} not found"
         assert stop_btn is not None
-        assert tour_btn.isEnabled(), f"{button_name} not enabled after connect"
+        assert tour_btn.isEnabled(), (
+            f"{button_name} not enabled after connecting via Serial -- "
+            "107-003's real-hardware-only tour gate should leave tour "
+            "buttons enabled for any non-Sim transport"
+        )
 
-        n_truth_before = len(truth)
         tour_btn.click()
 
         assert _spin_until(qapp, stop_btn.isEnabled, _TOUR_START_DEADLINE_S), (
@@ -386,147 +423,81 @@ def _run_tour_headless(qapp, monkeypatch, tmp_path, button_name: str):
         assert _spin_until(
             qapp, lambda: not stop_btn.isEnabled(), _TOUR_DEADLINE_S
         ), (
-            f"tour did not finish within {_TOUR_DEADLINE_S:.0f} s wall clock "
-            "— a step timed out (see the [TOUR] log lines for which one)"
+            f"{tour_label} did not finish within {_TOUR_DEADLINE_S:.0f} s "
+            "wall clock -- a leg timed out (see the [TOUR] log lines for "
+            "which one)"
         )
-        # Let the final truth/TLM deliveries drain.
-        _spin_events(qapp, 0.5)
+        # Let the final [TOUR] complete/closure log line land.
+        _spin_events(qapp, 0.2)
+
+        log_pane = window.findChild(QPlainTextEdit, "log_pane")
+        assert log_pane is not None, "log_pane not found"
+        return log_pane.toPlainText()
     finally:
         disconnect_btn = window.findChild(QPushButton, "disconnect_btn")
         if disconnect_btn is not None and disconnect_btn.isEnabled():
             disconnect_btn.click()
             _spin_events(qapp, 0.3)
         window.hide()
-        # Drop the pinned-config singleton so later tests re-resolve.
-        rc_mod._reset_robot_config()
-
-    return truth[n_truth_before:], fused["pose"]
 
 
-def _assert_tour_ran_and_closed_the_loop(trace, fused_pose, tour_name: str) -> None:
-    """Sanity-check the plant actually moved, then assert fused-pose closure.
+@pytest.mark.slow
+def test_tour1_runs_to_completion_with_per_leg_log_narration(qapp, monkeypatch):
+    """Tour 1 (13 legs) runs to completion via the real GUI/_TourRunner
+    stack against the fake transport -- no leg times out -- and every leg's
+    ``[TOUR] Tour 1 leg i/13: ...`` narration line lands in the log pane.
 
-    ``trace`` (ground truth) is used ONLY for the span sanity check — proving
-    the tour actually drove around, not that it idled at the origin the
-    whole time. The closure assertion itself is against ``fused_pose`` (the
-    firmware's own TLM ``pose=``), per this ticket's acceptance criterion.
-    """
-    assert len(trace) > 50, (
-        f"expected a dense ground-truth trace over {tour_name}, got "
-        f"{len(trace)} samples — did the sim truth callback run?"
-    )
+    Real wall-clock pacing (``run_tour()``'s own ``StreamingExecutor`` paces
+    ticks via ``time.sleep(params.streaming_interval)``, and ``_TourRunner.
+    run()`` injects no faster clock) -- ~45s. Marked ``slow`` so a fast local
+    loop can deselect it (``pytest -m "not slow"``); stays in the default run
+    (this ticket's own AC5)."""
+    log_text = _run_tour_via_gui(qapp, monkeypatch, "tour_btn_tour_1", "Tour 1")
 
-    span_x = max(p[0] for p in trace) - min(p[0] for p in trace)
-    span_y = max(p[1] for p in trace) - min(p[1] for p in trace)
-    assert span_x > 300.0 and span_y > 200.0, (
-        f"plant barely moved (span {span_x:.0f} x {span_y:.0f} mm) — "
-        f"{tour_name} did not run"
-    )
-
-    assert fused_pose is not None, (
-        f"no fused pose (TLM pose=) was ever observed during {tour_name} — "
-        "SNAP should unconditionally carry pose= (telemetry_commands.cpp)"
-    )
-    fx, fy, fh_cdeg = fused_pose
-    dist = math.hypot(fx, fy)
-    assert dist <= _ORIGIN_TOL_MM, (
-        f"{tour_name}'s fused pose ended {dist:.0f} mm from world origin "
-        f"(x={fx}, y={fy}, h={fh_cdeg / 100.0:.1f} deg) — tolerance is "
-        f"{_ORIGIN_TOL_MM:.0f} mm (see module docstring for measured range "
-        "and rationale)"
-    )
+    assert "[TOUR] Tour 1 starting" in log_text
+    for i in range(1, 14):
+        assert f"[TOUR] Tour 1 leg {i}/13:" in log_text, (
+            f"leg {i}/13 narration missing from the log pane -- full log:\n{log_text}"
+        )
+    assert "[TOUR] Tour 1 complete" in log_text
+    assert "stopped at leg" not in log_text
 
 
-def test_tour1_completes_and_fused_pose_returns_near_origin(qapp, monkeypatch, tmp_path):
-    """Tour 1 runs to completion (no step timeout) and drives around.
+@pytest.mark.slow
+def test_tour2_runs_to_completion_with_per_leg_log_narration(qapp, monkeypatch):
+    """Tour 2 (15 legs, mixed-sign turns) runs to completion the same way
+    (~45s, real wall-clock pacing -- see ``test_tour1_runs_...``'s own
+    docstring)."""
+    log_text = _run_tour_via_gui(qapp, monkeypatch, "tour_btn_tour_2", "Tour 2")
 
-    097: un-xfailed -- tour buttons no longer permanently disabled (see
-    module docstring's "097 un-gating" section). The fused-pose distance
-    assertion is vacuously true today (``Telemetry.pose`` pinned at
-    (0,0,0) until sprint 098) -- the meaningful check here is the
-    ground-truth span, proving Tour 1 actually drove around.
-    """
-    trace, fused_pose = _run_tour_headless(
-        qapp, monkeypatch, tmp_path, "tour_btn_tour_1"
-    )
-    _assert_tour_ran_and_closed_the_loop(trace, fused_pose, "Tour 1")
-
-
-def test_tour2_completes_and_fused_pose_returns_near_origin(qapp, monkeypatch, tmp_path):
-    """Tour 2 runs to completion (no step timeout) and drives around.
-
-    097: un-xfailed -- see test_tour1_completes_...'s identical docstring
-    note above (module docstring's "097 un-gating" section) for why the
-    fused-pose assertion is vacuous today and the ground-truth span check
-    is what actually matters.
-    """
-    trace, fused_pose = _run_tour_headless(
-        qapp, monkeypatch, tmp_path, "tour_btn_tour_2"
-    )
-    _assert_tour_ran_and_closed_the_loop(trace, fused_pose, "Tour 2")
+    assert "[TOUR] Tour 2 starting" in log_text
+    for i in range(1, 16):
+        assert f"[TOUR] Tour 2 leg {i}/15:" in log_text, (
+            f"leg {i}/15 narration missing from the log pane -- full log:\n{log_text}"
+        )
+    assert "[TOUR] Tour 2 complete" in log_text
+    assert "stopped at leg" not in log_text
 
 
-def test_stopping_a_running_tour_reenables_buttons_synchronously(
-    qapp, monkeypatch, tmp_path
-):
+def test_stopping_a_running_tour_reenables_buttons_synchronously(qapp, monkeypatch):
     """Clicking Stop Tour mid-run re-enables the tour buttons immediately.
 
     Complements ``test_tour_stop.py``'s inline re-implementation (which
     exercises the exact ``_stop_tour()`` control flow deterministically
     against fake worker/thread doubles) by clicking the REAL Stop Tour
-    button against a live, running ``SimTransport``-backed tour — the
-    ``QPushButton.clicked`` signal is a same-thread (GUI-thread) direct
-    connection, so ``_stop_tour()`` runs synchronously inside ``.click()``;
-    no additional event-loop spin should be needed before the buttons
-    reflect the stopped state (acceptance criterion: re-enable is
-    synchronous, "not dependent on the finished signal being delivered
-    during the blocking thread.wait()" — testgui-tour-stop-reactivation.md).
+    button against a live, running tour -- the ``QPushButton.clicked``
+    signal is a same-thread (GUI-thread) direct connection, so
+    ``_stop_tour()`` runs synchronously inside ``.click()``; no additional
+    event-loop spin should be needed before the buttons reflect the stopped
+    state (acceptance criterion: re-enable is synchronous, "not dependent on
+    the finished signal being delivered during the blocking thread.wait()"
+    -- testgui-tour-stop-reactivation.md).
     """
-    from PySide6.QtWidgets import (  # type: ignore[import-untyped]
-        QComboBox,
-        QPushButton,
-    )
+    from PySide6.QtWidgets import QPushButton  # type: ignore[import-untyped]
 
-    import robot_radio.testgui.__main__ as gui_main
-    from robot_radio.config import robot_config as rc_mod
-    from robot_radio.testgui import sim_prefs
-    from robot_radio.testgui import transport as transport_mod
-
-    baked_cfg = tmp_path / "baked_tovez_nocal.json"
-    baked_cfg.write_text(json.dumps({
-        "schema_version": 2,
-        "identity": {"robot_name": "tovez-nocal-baked", "uid": "tovez-nocal-baked"},
-        "connection": {"device_announcement_name": "tovez"},
-        "geometry": {"trackwidth": 128},
-        "calibration": {},
-    }))
-    monkeypatch.setenv("ROBOT_CONFIG", str(baked_cfg))
-    rc_mod._reset_robot_config()
-    monkeypatch.setattr(sim_prefs, "_PREFS_DIR", tmp_path)
-    monkeypatch.setattr(
-        sim_prefs, "_PREFS_PATH", tmp_path / "sim_error_profile.json"
-    )
-
-    _RealSimTransport = transport_mod.SimTransport
-    created: list = []
-
-    class SimTransport(_RealSimTransport):
-        def __init__(self) -> None:
-            super().__init__()
-            created.append(self)
-
-    monkeypatch.setattr(transport_mod, "SimTransport", SimTransport)
-
-    window, _app = gui_main._build_main_window()
+    window, _fake_cls = _connect_via_fake_hardware(qapp, monkeypatch)
 
     try:
-        combo = window.findChild(QComboBox, "transport_combo")
-        combo.setCurrentText("Sim")
-        connect_btn = window.findChild(QPushButton, "connect_btn")
-        connect_btn.click()
-        _spin_events(qapp, 0.3)
-        assert created and created[-1]._connected, "SimTransport failed to connect"
-
         # Tour 2 (the longer tour) so there is ample time to click Stop
         # mid-flight, well before natural completion.
         tour_btn = window.findChild(QPushButton, "tour_btn_tour_2")
@@ -557,4 +528,3 @@ def test_stopping_a_running_tour_reenables_buttons_synchronously(
             disconnect_btn.click()
             _spin_events(qapp, 0.3)
         window.hide()
-        rc_mod._reset_robot_config()

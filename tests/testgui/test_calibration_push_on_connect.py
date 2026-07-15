@@ -200,6 +200,11 @@ def test_push_loop_logs_and_continues_past_a_genuine_err_reply() -> None:
 
 @pytest.fixture(scope="module")
 def qapp():
+    # 107-004: turn a missing `gui` dependency group into a clean skip, not
+    # a hard collection/run error -- see test_tour1_geometry.py's module
+    # docstring for the full rationale (tests/testgui/ re-added to
+    # pyproject.toml's testpaths this ticket).
+    pytest.importorskip("PySide6")
     import sys
 
     from PySide6.QtWidgets import QApplication  # type: ignore[import-untyped]

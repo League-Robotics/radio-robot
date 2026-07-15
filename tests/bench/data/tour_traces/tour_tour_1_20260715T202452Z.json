@@ -1,0 +1,202 @@
+{
+  "port": "/dev/cu.usbmodem2121102",
+  "mode": "direct",
+  "tool_version": "0.20260715.27",
+  "date": "2026-07-15",
+  "planner_params": {
+    "streaming_interval": 0.15,
+    "link_latency_margin": 0.15,
+    "latency_tau": 0.13,
+    "v_max": 200.0,
+    "a_max": 500.0,
+    "omega_max": 2.0,
+    "alpha_max": 6.0,
+    "heading_kp": 0.4,
+    "heading_ki": 0.0,
+    "heading_kd": 0.0,
+    "heading_omega_clamp": 0.2,
+    "completion_tolerance_linear": 5.0,
+    "completion_tolerance_angular": 0.02,
+    "overshoot_bound_linear": 60.0,
+    "overshoot_bound_angular": 0.35
+  },
+  "heading_source": "pose",
+  "firmware_velocity_gains": {
+    "vel_kp": 0.0016,
+    "vel_kff": 0.0008,
+    "note": "firmware boot-time defaults persisted in data/robots/tovez.json (106-002 resonance retune) -- NOT set by this script."
+  },
+  "pass_label": "loose",
+  "closure_tolerance_mm": null,
+  "closure_tolerance_deg": null,
+  "tour": "TOUR_1",
+  "run_index": 1,
+  "timestamp": "20260715T202452Z",
+  "tick_count": 219,
+  "duration_s": 45.09030512502068,
+  "leg_count": 13,
+  "legs": [
+    {
+      "index": 0,
+      "kind": "distance",
+      "value": 345.0,
+      "outcome": "completed",
+      "heading_before_rad": 0.0,
+      "heading_after_rad": -0.006806784082777885,
+      "duration_s": 2.2933446249808185,
+      "fault": false,
+      "tick_count": 16
+    },
+    {
+      "index": 1,
+      "kind": "turn",
+      "value": 90.0,
+      "outcome": "completed",
+      "heading_before_rad": -0.043807764225057666,
+      "heading_after_rad": 0.7475245186291712,
+      "duration_s": 2.0074991250003222,
+      "fault": false,
+      "tick_count": 14
+    },
+    {
+      "index": 2,
+      "kind": "distance",
+      "value": 240.0,
+      "outcome": "completed",
+      "heading_before_rad": 0.7571238295151401,
+      "heading_after_rad": 0.7082546104592988,
+      "duration_s": 1.8483467499900144,
+      "fault": false,
+      "tick_count": 13
+    },
+    {
+      "index": 3,
+      "kind": "turn",
+      "value": 90.0,
+      "outcome": "completed",
+      "heading_before_rad": 0.7040658202545125,
+      "heading_after_rad": 2.3057544748097087,
+      "duration_s": 2.007918666000478,
+      "fault": false,
+      "tick_count": 14
+    },
+    {
+      "index": 4,
+      "kind": "distance",
+      "value": 700.0,
+      "outcome": "completed",
+      "heading_before_rad": 2.324604030731247,
+      "heading_after_rad": 2.263168441061047,
+      "duration_s": 4.1588901249924675,
+      "fault": false,
+      "tick_count": 28
+    },
+    {
+      "index": 5,
+      "kind": "turn",
+      "value": 90.0,
+      "outcome": "completed",
+      "heading_before_rad": 2.261248578883853,
+      "heading_after_rad": 3.138451060936203,
+      "duration_s": 1.9928009160212241,
+      "fault": false,
+      "tick_count": 14
+    },
+    {
+      "index": 6,
+      "kind": "distance",
+      "value": 480.0,
+      "outcome": "completed",
+      "heading_before_rad": 3.119950570865063,
+      "heading_after_rad": 3.052057262962484,
+      "duration_s": 3.0743639580032323,
+      "fault": false,
+      "tick_count": 21
+    },
+    {
+      "index": 7,
+      "kind": "turn",
+      "value": 90.0,
+      "outcome": "completed",
+      "heading_before_rad": 3.0663689628288373,
+      "heading_after_rad": 4.536459791783661,
+      "duration_s": 1.9970260830014013,
+      "fault": false,
+      "tick_count": 14
+    },
+    {
+      "index": 8,
+      "kind": "distance",
+      "value": 700.0,
+      "outcome": "completed",
+      "heading_before_rad": 4.57660236457953,
+      "heading_after_rad": 4.528605810149687,
+      "duration_s": 4.151895040995441,
+      "fault": false,
+      "tick_count": 28
+    },
+    {
+      "index": 9,
+      "kind": "turn",
+      "value": 90.0,
+      "outcome": "completed",
+      "heading_before_rad": 4.503298535995769,
+      "heading_after_rad": 6.073920329865466,
+      "duration_s": 2.0083884579944424,
+      "fault": false,
+      "tick_count": 14
+    },
+    {
+      "index": 10,
+      "kind": "distance",
+      "value": 240.0,
+      "outcome": "completed",
+      "heading_before_rad": 6.110746777082546,
+      "heading_after_rad": 5.979847083182971,
+      "duration_s": 1.8433257089927793,
+      "fault": false,
+      "tick_count": 13
+    },
+    {
+      "index": 11,
+      "kind": "turn",
+      "value": 90.0,
+      "outcome": "completed",
+      "heading_before_rad": 6.000965567132103,
+      "heading_after_rad": 7.568969367123808,
+      "duration_s": 1.9918151670135558,
+      "fault": false,
+      "tick_count": 14
+    },
+    {
+      "index": 12,
+      "kind": "distance",
+      "value": 345.0,
+      "outcome": "completed",
+      "heading_before_rad": 7.614173394750462,
+      "heading_after_rad": 7.510500837181998,
+      "duration_s": 2.3115440419933293,
+      "fault": false,
+      "tick_count": 16
+    }
+  ],
+  "stopped_at": null,
+  "stopped_outcome": null,
+  "start_pose": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "end_pose": [
+    -252.0,
+    248.0,
+    7.564955109844221
+  ],
+  "closure_position_delta_mm": 353.5647041207592,
+  "closure_heading_delta_rad": 1.281769802664635,
+  "closure_heading_delta_deg": 73.43999999999996,
+  "fault_bits_ever": 3,
+  "deadman_tripped": false,
+  "deadman_trip_tick": null,
+  "trace_csv": "/Volumes/Proj/proj/RobotProjects/radio-robot-elite/tests/bench/out/tour_tour_1_20260715T202452Z.csv"
+}

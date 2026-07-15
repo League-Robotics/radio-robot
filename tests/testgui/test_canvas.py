@@ -8,6 +8,18 @@ so ``_load_calibration()``/``_build_playfield_calibration()`` always hit the
 ``except`` branch and silently fell back to the hardcoded default field
 dimensions (``_FIELD_WIDTH_CM_DEFAULT``/``_FIELD_HEIGHT_CM_DEFAULT``).
 
+107-004: a later reorg (commit ``ea9b3e28``) moved the whole parked tree from
+``tests_old/`` to ``archive/tests_old/`` and never updated ``canvas.py``'s
+three constants to match -- the exact same stale-path failure mode this
+file's own ticket (083-003) originally fixed, recurring one level deeper.
+Nobody caught it because this file was dropped from ``testpaths`` at sprint
+102 ticket 005 (``tests/testgui`` parked wholesale) before the reorg landed.
+Re-adding ``tests/testgui/`` to ``testpaths`` (this ticket) surfaced it;
+``canvas.py``'s constants now point at ``archive/tests_old/old/
+playfield_tour/`` -- this file's own assertions (``"tests_old" in parts``,
+etc.) still hold unchanged since ``archive/tests_old/...`` still contains a
+``tests_old`` path component, just one directory deeper.
+
 No ``QApplication`` is needed here: importing ``robot_radio.testgui.canvas``
 and calling its module-level path constants / ``_load_calibration()`` /
 ``_build_playfield_calibration()`` touches no PySide6 (deferred inside
@@ -15,8 +27,8 @@ and calling its module-level path constants / ``_load_calibration()`` /
 
     QT_QPA_PLATFORM=offscreen uv run pytest tests/testgui/test_canvas.py -q
 
-This module is not yet wired into ``pyproject.toml``'s ``testpaths`` (ticket
-083-004's job) -- run it directly, per ticket 083-003's Testing section.
+Collected under ``tests/testgui/`` per ``pyproject.toml``'s ``testpaths``
+(107-004 re-added the directory -- dropped at sprint 102 ticket 005).
 """
 from __future__ import annotations
 

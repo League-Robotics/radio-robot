@@ -1,8 +1,9 @@
 ---
-status: pending
-sprint: '106'
+status: done
+sprint: '107'
 tickets:
 - 106-006
+- 107-001
 ---
 
 # planner/executor.py's StreamingExecutor fault check has no baseline exclusion

@@ -44,17 +44,49 @@ field 5's own comment) — they are approximations of their original
 closed-loop/continuous firmware behavior, each documented at its
 translator function. The genuinely fused-pose/OTOS-chip/camera-dependent
 verbs above stay gated.
+
+107-003 launch-unblock: ``legacy_render``/``legacy_verbs`` were deleted
+wholesale by commit ``129cbcb3`` (104-002) with no replacement, and were
+never re-pointed here — every name below was already dead-verb residue
+(see ``clasi/issues/binary-bridge-segment-replace-arms-deleted.md``), but
+the unconditional module-level import made this an ``ImportError`` that
+prevented ``transport.py`` — and therefore the whole TestGUI — from
+importing at all, blocking sprint 107's own tour path along with
+everything else (docs/issue updated to record this). Both imports are now
+guarded: when unavailable, ``translate_command()`` short-circuits to a
+single explicit ``ERR`` line (``_LEGACY_UNAVAILABLE_REPLY``) for every
+verb, and ``render_log_line()`` falls back to ``google.protobuf.
+text_format`` rendering (already its fallback for reply kinds
+``legacy_render`` never covered). This is a MINIMAL launch-unblock only —
+it does not restore legacy verb translation or rewrite this module's
+segment/replace logic; that remains the filed issue's own, separate scope.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from robot_radio.robot import legacy_render as render
-from robot_radio.robot import legacy_verbs
 from robot_radio.robot import protocol
 from robot_radio.robot.pb2 import envelope_pb2
 from robot_radio.robot.protocol import NezhaProtocol
+
+try:
+    from robot_radio.robot import legacy_render as render
+    from robot_radio.robot import legacy_verbs
+    _LEGACY_TRANSLATION_AVAILABLE = True
+except ImportError:
+    render = None  # type: ignore[assignment]
+    legacy_verbs = None  # type: ignore[assignment]
+    _LEGACY_TRANSLATION_AVAILABLE = False
+
+# Fixed reply for every verb when legacy_render/legacy_verbs are missing
+# (see this module's own docstring, "107-003 launch-unblock"). Deliberately
+# NOT built via `render.render_err()` -- render itself may be the thing
+# that's unavailable.
+_LEGACY_UNAVAILABLE_REPLY = (
+    "ERR unavailable legacy verb translation removed -- see "
+    "clasi/issues/binary-bridge-segment-replace-arms-deleted.md"
+)
 
 # kStreamFloorMs mirror (source/commands/telemetry_commands.cpp /
 # binary_channel.cpp) — same floor protocol.py's own NezhaProtocol.stream()/
@@ -97,7 +129,16 @@ def translate_command(proto: NezhaProtocol, raw_line: str) -> str:
     wire traffic) -- mirrors ``ProtocolBridge._handle_client_line``'s own
     "not stripped, no verb -> None" short-circuit, translated to this
     module's "always return a string" contract.
+
+    107-003 launch-unblock: if ``legacy_render``/``legacy_verbs`` are not
+    importable (see this module's own docstring), every non-empty line
+    short-circuits to ``_LEGACY_UNAVAILABLE_REPLY`` instead of dispatching
+    -- parsing the line at all is itself `legacy_verbs`' job, so there is
+    no partial/degraded dispatch to fall back to.
     """
+    if not _LEGACY_TRANSLATION_AVAILABLE:
+        return _LEGACY_UNAVAILABLE_REPLY if raw_line.strip() else ""
+
     stripped, corr_id_str = legacy_verbs.split_corr_id(raw_line)
     corr_id = int(corr_id_str) if corr_id_str else None
     verb, pos, kv = legacy_verbs.tokenize_send_line(stripped)
@@ -363,15 +404,20 @@ def render_log_line(raw_line: str, *, outbound: bool) -> str | None:
     corr_id = reply.corr_id or None
     if which == "tlm":
         return None
-    if which == "err":
-        return render.render_error(reply.err, corr_id)
-    if which == "id":
-        return render.render_id_line(reply.id, corr_id)
-    if which == "echo":
-        return render.render_ok("echo", reply.echo.payload.decode("utf-8", "replace"), corr_id)
-    if which == "helptext":
-        return render.render_ok("help", reply.helptext.text, corr_id)
+    # 107-003 launch-unblock: render may be None (legacy_render unavailable
+    # -- see this module's own docstring); every branch below falls through
+    # to the text_format fallback in that case, same as "ok"/"cfg"/"evt".
+    if render is not None:
+        if which == "err":
+            return render.render_error(reply.err, corr_id)
+        if which == "id":
+            return render.render_id_line(reply.id, corr_id)
+        if which == "echo":
+            return render.render_ok("echo", reply.echo.payload.decode("utf-8", "replace"), corr_id)
+        if which == "helptext":
+            return render.render_ok("help", reply.helptext.text, corr_id)
     # "ok" (Ack)/"cfg" (ConfigSnapshot)/"evt" (EventNotify) -- no verb-
     # agnostic legacy_render renderer exists (see this function's own
-    # docstring); text_format gives readable text without guessing.
+    # docstring); text_format gives readable text without guessing. Also
+    # reached for err/id/echo/helptext when render itself is unavailable.
     return text_format.MessageToString(reply, as_one_line=True).strip() or raw_line

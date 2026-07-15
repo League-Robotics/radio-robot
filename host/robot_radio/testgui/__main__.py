@@ -727,16 +727,34 @@ def _build_main_window():  # type: ignore[return]
     tour_layout = QHBoxLayout(tour_row)
     tour_layout.setContentsMargins(0, 0, 0, 0)
     tour_layout.setSpacing(4)
+    # 107-003: tours are real-hardware-only this sprint -- SimTransport's
+    # backing sim library was deleted wholesale at sprint 102 ticket 005
+    # (`git show 72d8be7e --stat`) and has no working foundation to rewire
+    # `run_tour()` onto (architecture-update.md Decision 1, this ticket's
+    # own deliberate, documented scope boundary). Tour buttons stay
+    # disabled with a clear tooltip when connected via Sim -- see
+    # `_tour_hw_tooltip()`/`_TOUR_SIM_TOOLTIP` and the gating applied in
+    # `_on_connect()` below -- never a crash or silent no-op.
+    def _tour_hw_tooltip(name: str) -> str:
+        return (
+            f"Run {name}: resets to the origin (display-only pending "
+            "sprint 098's OZ/SI binary arms), then drives the tour's "
+            "geometry via planner.tour.run_tour() (streamed twist()s, "
+            "closed-loop heading correction)."
+        )
+
+    _TOUR_SIM_TOOLTIP = (
+        "Tours require a real-hardware connection this sprint — Sim's "
+        "backing sim library was removed at sprint 102 (architecture-"
+        "update.md Decision 1)."
+    )
+
     _tour_buttons: list[tuple[QPushButton, str]] = []
     for _tour_name in TOURS:
         _tb = QPushButton(_tour_name)
         _tb.setObjectName(f"tour_btn_{_tour_name.lower().replace(' ', '_')}")
         _tb.setEnabled(False)
-        _tb.setToolTip(
-            f"Run {_tour_name}: resets to the origin (display-only pending "
-            "sprint 098's OZ/SI binary arms), then drives the tour's D/RT "
-            "steps as open-loop segments."
-        )
+        _tb.setToolTip(_tour_hw_tooltip(_tour_name))
         tour_layout.addWidget(_tb)
         _tour_buttons.append((_tb, _tour_name))
         # 097: added to _send_buttons (below) so tour buttons enable on
@@ -1458,54 +1476,47 @@ def _build_main_window():  # type: ignore[return]
     class _TourRunner(QObject):
         """Runs a pre-programmed tour on a background thread.
 
-        Sends each wire string in ``steps`` via ``transport.command``, then
-        waits for the robot to return to idle before sending the next.  Idle
-        detection requests fresh telemetry with a fire-and-forget ``SNAP``
-        and reads the resulting frame from ``state["last_tlm"]`` (the
-        transport reader delivers the SNAP's TLM reply there via
-        ``on_telemetry``).  This is done instead of ``transport.command("SNAP")``
-        because a SNAP reply is a corr-id-less TLM frame that ``command()``'s
-        reply queue never receives — the call would always time out with an
-        empty string, so idle was never observed and the tour could never
-        advance past its first step.  On-demand SNAP (rather than a stream) is
-        used because the radio relay drops asynchronous stream frames but
-        answers SNAP reliably.
+        107-003: rewired onto ``planner.tour.run_tour()`` (ticket 002),
+        driven directly against the connected ``_HardwareTransport``'s
+        ``protocol`` accessor (a raw ``NezhaProtocol``, which satisfies
+        ``executor.py``'s ``TwistTransport`` structural protocol as-is).
+        No ``D``/``RT`` wire string, no ``binary_bridge.translate_command()``
+        call — those verbs' ``segment``/``replace`` envelope arms no longer
+        exist on the wire (see ``planner/tour.py``'s own module docstring
+        for that history) — and no SNAP-poll idle detection: ``run_tour()``
+        already knows synchronously, tick by tick, when a leg finishes.
 
-        Idle signal (097, this ticket): ``frame.active`` (``bb.drivetrain.
-        busy`` — see ``protocol.py``'s ``TLMFrame.from_pb2()`` docstring),
-        NOT ``frame.mode`` (``bb.planner.mode``). Every tour step (D/RT)
-        posts to ``bb.segmentIn``/``bb.replaceIn`` (the segment/replace
-        arms), never to ``bb.motionIn``/``Subsystems::Planner`` — Planner
-        is parked — so ``mode`` never leaves ``IDLE`` and a
-        ``mode == "I"`` check would report "done" immediately, before the
-        segment even started. ``active`` tracks the SegmentExecutor
-        directly and is correct for every arm.
+        Telemetry-drain ownership (architecture-update.md Step 7, Open
+        Question 1 — this ticket's own investigation, confirmed on the
+        bench): ``_HardwareTransport._reader_loop()`` and ``run_tour()``'s
+        own ``StreamingExecutor`` both ultimately drain the SAME underlying
+        ``SerialConnection._binary_tlm_queue`` — one non-replayable queue,
+        two independent consumers. Left unmanaged, ``_reader_loop()``'s
+        faster ~40ms poll starves the executor of the fresh telemetry its
+        heading-feedback/fault-bit/overshoot checks need for nearly the
+        whole tour. ``run()`` therefore calls ``transport.
+        suspend_telemetry_reader()`` before ``run_tour()`` — making the
+        tour thread the queue's sole consumer for the run — and forwards
+        each frame ``run_tour()``'s own ``row_callback`` hands it straight
+        to ``transport.on_telemetry`` itself, the SAME Qt-bridge path
+        ``_reader_loop()`` normally uses, so the canvas/avatar keeps
+        tracking during a tour. ``transport.resume_telemetry_reader()``
+        runs in a ``finally``, handing continuous draining back to
+        ``_reader_loop()`` once the tour ends.
 
         Signals are marshalled to the Qt main thread via QueuedConnection:
         ``log_line(text, direction)`` carries ``[TOUR]`` status narration
         (direction ``""``, not recorded) — the raw ``>``/``<`` wire traffic
-        for each step is already logged by the transport itself (see
-        ``_GotoRunner``, which follows the same rule), so this class must not
+        is already logged by the transport itself, so this class must not
         echo it again or every step is duplicated in the console and the
         session recording.  ``finished()`` re-enables the button and joins
-        the thread.
+        the thread.  Public shape (signals + ``stop()``) is UNCHANGED from
+        the pre-107-003 implementation — only ``run()``'s internals
+        changed, so ``_make_tour_handler`` needs no changes.
         """
 
         log_line = Signal(str, str)
         finished = Signal()
-
-        #: Delay (s) after a command before polling, so the move has started.
-        SPINUP_S = 0.2
-        #: Interval (s) between SNAP completion polls.
-        POLL_S = 0.3
-        #: Max wait (s) for a SNAP's TLM reply to reach state["last_tlm"].
-        SNAP_REPLY_TIMEOUT_S = 0.8
-        #: Per-move timeout (s) before giving up and aborting the tour.
-        MOVE_TIMEOUT_S = 30.0
-        #: Cached-frame age (s) below which the continuous STREAM is
-        #: considered live and no SNAP nudge is sent (both transports arm
-        #: STREAM at connect; frames arrive every 20-50ms when healthy).
-        STREAM_FRESH_S = 0.5
 
         def __init__(
             self, transport: "object", state: dict, name: str, steps: list[str]
@@ -1518,94 +1529,105 @@ def _build_main_window():  # type: ignore[return]
             self._stop = False
 
         def stop(self) -> None:
-            """Request the tour abort at the next safe point (thread-safe)."""
+            """Request the tour abort at the next safe point (thread-safe).
+
+            Propagates to ``run_tour()``'s own ``should_stop`` hook (ticket
+            002), polled once per tick — ``run_tour()`` stops the CURRENT
+            leg via ``StreamingExecutor.stop_now()`` (immediate, no replan)
+            and reports it as ``RunOutcome.STOPPED``; no further leg is
+            attempted.
+            """
             self._stop = True
 
         @Slot()
         def run(self) -> None:
-            """Execute the tour step-by-step (runs on the worker thread)."""
-            import time
+            """Parse the tour's geometry and drive it via ``run_tour()``
+            (runs on the worker thread)."""
+            from robot_radio.config.robot_config import get_robot_config
+            from robot_radio.planner.heading import HeadingCorrector
+            from robot_radio.planner.model import PlannerParams
+            from robot_radio.planner.tour import parse_tour, run_tour
+            import math as _math
 
-            total = len(self._steps)
             try:
-                for i, cmd in enumerate(self._steps, 1):
-                    if self._stop:
-                        self.log_line.emit(f"[TOUR] {self._name} aborted", "")
-                        return
+                protocol = getattr(self._transport, "protocol", None)
+                if protocol is None:
                     self.log_line.emit(
-                        f"[TOUR] {self._name} step {i}/{total}: {cmd}", ""
+                        f"[TOUR] {self._name}: transport has no live "
+                        "protocol (not connected?) — aborting", "")
+                    return
+
+                try:
+                    legs = parse_tour(self._steps)
+                except ValueError as exc:
+                    self.log_line.emit(
+                        f"[TOUR] {self._name}: bad tour geometry: {exc}", "")
+                    return
+
+                if self._stop:
+                    self.log_line.emit(f"[TOUR] {self._name} aborted", "")
+                    return
+
+                self.log_line.emit(
+                    f"[TOUR] {self._name} starting — {len(legs)} legs", "")
+
+                params = PlannerParams()
+                heading = HeadingCorrector(params, robot_config=get_robot_config())
+
+                self._transport.suspend_telemetry_reader()
+                try:
+                    result = run_tour(
+                        protocol, params, heading, legs,
+                        on_leg=self._on_leg,
+                        row_callback=self._on_row,
+                        should_stop=lambda: self._stop,
                     )
-                    try:
-                        self._transport.command(cmd, read_timeout=500)
-                    except Exception as exc:  # noqa: BLE001
-                        self.log_line.emit(f"[TOUR] error sending {cmd!r}: {exc}", "")
-                        return
-                    if not self._wait_for_idle(time):
+                except Exception as exc:  # noqa: BLE001
+                    self.log_line.emit(f"[TOUR] {self._name} error: {exc}", "")
+                    return
+                finally:
+                    self._transport.resume_telemetry_reader()
+
+                if result.stopped_at is not None:
+                    self.log_line.emit(
+                        f"[TOUR] {self._name} stopped at leg "
+                        f"{result.stopped_at + 1}/{len(legs)} "
+                        f"({result.stopped_outcome.value})", "")
+                else:
+                    closure = result.closure
+                    if closure.position_delta is not None:
                         self.log_line.emit(
-                            f"[TOUR] timed out waiting for '{cmd}' to complete — "
-                            "aborting",
-                            "",
-                        )
-                        return
-                self.log_line.emit(f"[TOUR] {self._name} complete", "")
+                            f"[TOUR] {self._name} complete — closure: "
+                            f"{closure.position_delta:.1f}mm, "
+                            f"{_math.degrees(closure.heading_delta):.1f}deg", "")
+                    else:
+                        self.log_line.emit(f"[TOUR] {self._name} complete", "")
             finally:
                 self.finished.emit()
 
-        def _wait_for_idle(self, time_mod: "object") -> bool:
-            """Wait until telemetry reports ``active=False`` (idle) or timeout.
+        def _on_leg(self, index, total, leg, leg_result) -> None:
+            """``run_tour()``'s per-leg narration hook — fires synchronously
+            on the worker thread as each leg completes."""
+            self.log_line.emit(
+                f"[TOUR] {self._name} leg {index + 1}/{total}: "
+                f"{leg.kind} {leg.value:g} -> {leg_result.outcome.value} "
+                f"({leg_result.tick_count} ticks, {leg_result.duration:.2f}s)",
+                "")
 
-            Reads ``active`` from ``state["last_tlm"]`` (populated by the
-            transport's ``on_telemetry`` callback — see the class docstring
-            for why ``command("SNAP")`` cannot be used, and why ``active``
-            rather than ``mode`` is the correct completion signal for a
-            segment/replace-arm move). Only frames stamped after this wait
-            began are accepted, so a stale pre-move idle frame does not end
-            the wait early.
-
-            ``SNAP`` is a fallback NUDGE only: both transports arm a
-            continuous ``STREAM`` at connect (SimTransport's tick-thread;
-            ``_on_connect``'s post-connect ``STREAM 50`` for hardware), so
-            frames normally arrive on their own and a per-poll SNAP
-            round-trip is pure console noise — on SimTransport it even ERRs
-            ``snap-timeout`` every time, because the one-shot's
-            arm-then-drain races the tick thread, which drains each frame
-            first. SNAP is therefore sent only when the cached frame has
-            actually gone stale (the stream is NOT flowing).
-
-            Returns ``True`` when idle is observed (or on stop request),
-            ``False`` on timeout.
-            """
-            time_mod.sleep(self.SPINUP_S)
-            t_start = time_mod.monotonic()
-            deadline = t_start + self.MOVE_TIMEOUT_S
-            while time_mod.monotonic() < deadline:
-                if self._stop:
-                    return True
-                cached = self._state.get("last_tlm")
-                stream_live = (
-                    cached is not None
-                    and (time_mod.monotonic() - cached[1]) < self.STREAM_FRESH_S
-                )
-                if not stream_live:
-                    # Stream stalled/never armed: request one fresh frame; its
-                    # TLM reply is delivered to state["last_tlm"] by the
-                    # transport reader thread.
-                    try:
-                        self._transport.send("SNAP")
-                    except Exception:  # noqa: BLE001
-                        return False
-                reply_deadline = time_mod.monotonic() + self.SNAP_REPLY_TIMEOUT_S
-                while time_mod.monotonic() < reply_deadline:
-                    if self._stop:
-                        return True
-                    cached = self._state.get("last_tlm")
-                    if cached is not None:
-                        frame, ts = cached
-                        active = getattr(frame, "active", None)
-                        if ts >= t_start and active is False:
-                            return True
-                    time_mod.sleep(self.POLL_S)
-            return False
+        def _on_row(self, tick_index, leg_index, leg, tick_result, frame) -> None:
+            """``run_tour()``'s per-tick hook — forwards the frame the
+            executor just drained to the SAME ``on_telemetry`` Qt-bridge
+            path ``_reader_loop()`` normally feeds, so the canvas/avatar
+            keeps tracking while ``_reader_loop()`` itself is suspended
+            (see this class's own docstring)."""
+            if frame is None:
+                return
+            on_telemetry = self._transport.on_telemetry
+            if on_telemetry is not None:
+                try:
+                    on_telemetry(frame)
+                except Exception:  # noqa: BLE001
+                    pass
 
     class _GotoRunner(QObject):
         """Camera-based GOTO — drives to a world point via repeated ``G`` moves.
@@ -2494,6 +2516,16 @@ def _build_main_window():  # type: ignore[return]
         # Enable all Send buttons now that a transport is connected.
         for _sb in _send_buttons:
             _sb.setEnabled(True)
+        # 107-003: tour buttons are real-hardware-only this sprint -- override
+        # the generic enable above when connected via Sim (see the
+        # tour-button-creation comment for the full rationale).
+        for _tb, _tour_name in _tour_buttons:
+            if is_sim_transport(transport):
+                _tb.setEnabled(False)
+                _tb.setToolTip(_TOUR_SIM_TOOLTIP)
+            else:
+                _tb.setEnabled(True)
+                _tb.setToolTip(_tour_hw_tooltip(_tour_name))
         # Enable operations panel buttons.
         ops_ctrl.set_connected(True, transport)
         desc = "Sim" if name == "Sim" else f"{name} on {port}"
