@@ -719,6 +719,124 @@ void scenarioNakedStopWriteIsRetriedNextTickNotLatched() {
               "no new error -- the retry succeeded; errCount stays at the one earlier NAK");
 }
 
+// 11. applyGains() takes effect on the SAME instance, same boot, no
+//     reflash/reconstruction (106-002/SUC-025): with gains initially at 0
+//     (PID output stays pinned at 0 regardless of error), the plant never
+//     moves; applyGains() with real gains, called mid-run on the SAME
+//     NezhaMotor object, makes it start chasing the target on the very
+//     next tick.
+void scenarioApplyGainsTakesEffectSameBootNoReflash() {
+  beginScenario("applyGains() changes subsequent PID output on the same boot, no reflash");
+  Devices::I2CBus::setClock(1000000);
+  Devices::I2CBus bus;
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::MotorConfig cfg = baseNezhaConfig();
+  cfg.velDeadband = 5.0f;   // well below the target -- not in deadband
+  // cfg.velGains left at Devices::Gains{}'s all-zero default -- PID output
+  // is inert (0) regardless of error.
+
+  Devices::NezhaMotor motor(bus, cfg);
+  checkFloatEq(motor.gains().kp, 0.0f, "gains() reflects the constructed (zero) kp before applyGains()");
+
+  const float target = 300.0f;   // [mm/s]
+  const uint32_t dtMs = 20;      // [ms] cycle cadence
+  const float dtS = 0.02f;       // [s]
+  motor.setVelocity(target);
+
+  float position = 0.0f;
+  float measuredVel = 0.0f;
+  uint64_t nowUs = 0;
+
+  scriptEncoderRequestCollect(bus, wireAddr, position);
+  motor.requestSample();
+  motor.tick(nowUs);
+
+  // Phase 1: zero gains -- output stays pinned at 0 despite a large error.
+  for (int i = 0; i < 20; ++i) {
+    float duty = motor.appliedDuty();
+    measuredVel += (duty * 500.0f - measuredVel) * 0.1f;
+    position += measuredVel * dtS;
+    nowUs += static_cast<uint64_t>(dtMs) * 1000;
+    scriptEncoderRequestCollect(bus, wireAddr, position);
+    motor.requestSample();
+    motor.tick(nowUs);
+  }
+  checkFloatEq(motor.appliedDuty(), 0.0f, "zero gains -- applied duty stays 0 despite a large error");
+  checkFloatEq(motor.velocity(), 0.0f, "zero gains -- plant never moves");
+  float errorBeforeGainChange = std::fabs(target - motor.velocity());
+
+  // Live gain-apply, no reconstruction -- the SAME motor instance.
+  Devices::Gains newGains{/*kp=*/0.01f, /*ki=*/0.05f, /*kff=*/0.002f,
+                           /*iMax=*/1.0f, /*kaw=*/2.0f};
+  motor.applyGains(newGains);
+  checkFloatEq(motor.gains().kp, 0.01f, "gains() reflects the newly-applied kp immediately");
+
+  // Phase 2: same instance, same plant state, same target -- now converges.
+  for (int i = 0; i < 400; ++i) {
+    float duty = motor.appliedDuty();
+    measuredVel += (duty * 500.0f - measuredVel) * 0.1f;
+    position += measuredVel * dtS;
+    nowUs += static_cast<uint64_t>(dtMs) * 1000;
+    scriptEncoderRequestCollect(bus, wireAddr, position);
+    motor.requestSample();
+    motor.tick(nowUs);
+  }
+  float errorAfterGainChange = std::fabs(target - motor.velocity());
+
+  checkTrue(errorAfterGainChange < errorBeforeGainChange,
+            "after applyGains(), tracking error shrinks on the SAME instance -- no reflash/reconstruction needed");
+  checkTrue(motor.appliedDuty() != 0.0f, "post-applyGains() duty is no longer pinned at 0");
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the gain-change sequence");
+}
+
+// 12. applyGains(): travelCalib only updates config_.wheelTravelCalib when
+//     explicitly PRESENT (Opt<float>{has=true}); a gains-only call (default
+//     travelCalib, absent) leaves it unchanged -- proves the two parameters
+//     are independently gated, matching RobotLoop's own per-side
+//     travel_calib vs. both-sides kp/ki/kff/iMax/kaw application split
+//     (config.proto's MotorConfigPatch.side comment).
+void scenarioApplyGainsTravelCalibAppliesWhenPresentOtherwiseUnchanged() {
+  beginScenario("applyGains(): travelCalib updates wheelTravelCalib only when explicitly present");
+  Devices::I2CBus::setClock(1000000);
+  Devices::I2CBus bus;
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::MotorConfig cfg = baseNezhaConfig();   // wheelTravelCalib = 1.0, fwdSign = 1
+  Devices::NezhaMotor motor(bus, cfg);
+
+  // Prime cycle: anchor at raw=0.
+  scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
+  motor.requestSample();
+  motor.tick(0);
+
+  // Gains-only applyGains() (default travelCalib -- absent) must leave
+  // wheelTravelCalib unchanged: a raw step scripted for "10.0mm at
+  // calib=1.0" still lands at 10.0mm.
+  motor.applyGains(Devices::Gains{0.02f, 0.0f, 0.0f, 1.0f, 1.0f});
+  scriptEncoderRequestCollect(bus, wireAddr, 10.0f);
+  motor.requestSample();
+  motor.tick(20000);
+  checkFloatEq(motor.position(), 10.0f,
+               "gains-only applyGains() call leaves wheelTravelCalib unchanged (still 1.0)");
+
+  // applyGains() WITH travelCalib=2.0 present -- the SAME raw register
+  // value (this helper's own positionMm*10 raw convention, still assuming
+  // calib=1.0 to construct the raw bytes) now decodes to DOUBLE the mm,
+  // proving the side-selected field landed live, same boot, no reflash.
+  Devices::Opt<float> travelCalib;
+  travelCalib.has = true;
+  travelCalib.val = 2.0f;
+  motor.applyGains(motor.gains(), travelCalib);
+  scriptEncoderRequestCollect(bus, wireAddr, 15.0f);   // raw=150 -- at calib=2.0 this decodes to 30.0mm
+  motor.requestSample();
+  motor.tick(40000);
+  checkFloatEq(motor.position(), 30.0f,
+               "travelCalib=2.0 doubles the SAME raw-derived reading into mm -- confirms the applied change");
+
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the travelCalib sequence");
+}
+
 }  // namespace
 
 int main() {
@@ -732,6 +850,8 @@ int main() {
   scenarioFreshSampleGateSurvivesSlowBrickRefreshUnderFastFiberCycle();
   scenarioBootAnchorAcceptsLargeInitialPositionWithoutGlitchOrWedge();
   scenarioNakedStopWriteIsRetriedNextTickNotLatched();
+  scenarioApplyGainsTakesEffectSameBootNoReflash();
+  scenarioApplyGainsTravelCalibAppliesWhenPresentOtherwiseUnchanged();
 
   if (g_failureCount == 0) {
     std::printf("OK: all devices motor scenarios passed\n");

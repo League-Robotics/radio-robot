@@ -197,12 +197,52 @@ void RobotLoop::cycle() {
         tlm_.ack(cmd.env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
         break;
       case msg::CommandEnvelope::CmdKind::CONFIG:
-        // ConfigDelta runtime application deferred (architecture-update.md
-        // (103) Step 7 Open Question 3) -- decode succeeds, but nothing is
-        // applied; ack ERR_UNIMPLEMENTED so the host does not mistake
-        // silence for success.
-        tlm_.ack(cmd.env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
-                  static_cast<uint32_t>(msg::ErrCode::ERR_UNIMPLEMENTED));
+        // ConfigDelta runtime application (106-002/SUC-025, resolving
+        // architecture-update.md (103) Step 7 Open Question 3 for the ONE
+        // patch type this sprint scopes -- architecture-update.md (106)
+        // Decision 2): a MotorConfigPatch is live-applied below; every
+        // other patch kind (DRIVETRAIN/PLANNER/WATCHDOG/NONE) stays
+        // ERR_UNIMPLEMENTED, deliberately out of scope (DrivetrainConfigPatch
+        // has no on-robot fusion consumer this sprint; PlannerConfigPatch's
+        // heading_kp/heading_kd target Motion::SegmentExecutor, deleted
+        // post-102).
+        if (cmd.env.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::MOTOR) {
+          const msg::MotorConfigPatch& patch = cmd.env.cmd.config.patch.motor;
+
+          // Merge each motor's OWN current gains against whatever wire
+          // fields are PRESENT (config.proto's Opt<T>-presence convention)
+          // -- NOT a blanket mirror of one motor's gains onto the other,
+          // since the two leaves' calibration can legitimately differ.
+          Devices::Gains gainsL = motorL_.gains();
+          Devices::Gains gainsR = motorR_.gains();
+          if (patch.kp.has) { gainsL.kp = patch.kp.val; gainsR.kp = patch.kp.val; }
+          if (patch.ki.has) { gainsL.ki = patch.ki.val; gainsR.ki = patch.ki.val; }
+          if (patch.kff.has) { gainsL.kff = patch.kff.val; gainsR.kff = patch.kff.val; }
+          if (patch.i_max.has) { gainsL.iMax = patch.i_max.val; gainsR.iMax = patch.i_max.val; }
+          if (patch.kaw.has) { gainsL.kaw = patch.kaw.val; gainsR.kaw = patch.kaw.val; }
+
+          // travel_calib is side-selected (config.proto's own
+          // MotorConfigPatch.side comment) -- applies to exactly one leaf.
+          Devices::Opt<float> travelCalibL;
+          Devices::Opt<float> travelCalibR;
+          if (patch.travel_calib.has) {
+            if (patch.side == msg::BoundMotorSide::LEFT) {
+              travelCalibL.has = true;
+              travelCalibL.val = patch.travel_calib.val;
+            } else {
+              travelCalibR.has = true;
+              travelCalibR.val = patch.travel_calib.val;
+            }
+          }
+
+          motorL_.applyGains(gainsL, travelCalibL);
+          motorR_.applyGains(gainsR, travelCalibR);
+
+          tlm_.ack(cmd.env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
+        } else {
+          tlm_.ack(cmd.env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
+                    static_cast<uint32_t>(msg::ErrCode::ERR_UNIMPLEMENTED));
+        }
         break;
       case msg::CommandEnvelope::CmdKind::STOP:
         drive_.stop();

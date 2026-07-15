@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: ConfigDelta live-apply (motor gains) + inner velocity-PID resonance taming
-status: open
+status: in-progress
 use-cases:
 - SUC-025
 depends-on:
