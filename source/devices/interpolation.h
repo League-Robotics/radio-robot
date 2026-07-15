@@ -11,9 +11,8 @@
 // ±180° is a known trap."
 //
 // This ticket supplies the two primitives every later sampleAt()
-// implementation (DB-007's DeviceBus handle classes are where a reading
-// type's own sampleAt() will pick, per field, which helper applies) is
-// built from:
+// implementation (a reading type's own sampleAt() picks, per field, which
+// helper applies) is built from:
 //   - lerpFraction()/lerp() — ordinary linear interpolation, for every
 //     non-angular field (MotorReading::position/velocity, PoseReading::
 //     x/y/v_x/v_y/omega — device_types.h).

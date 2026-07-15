@@ -282,6 +282,47 @@ void scenarioIrqGuardDefaultOn() {
   checkTrue(bus.irqGuard(), "setIrqGuard(true) turns the guard back on");
 }
 
+// 9. 103-002 (M1 fix, 2026-07-13 code review): a call that arrives BEFORE
+//    a device's clearance deadline bumps clearanceSafetyNetCount() exactly
+//    once per early call, and the fake clock still lands at/after the
+//    deadline (the HOST_BUILD fork's own "sleep the shortfall in one jump,
+//    never a spin loop" mechanism -- see i2c_bus_host.cpp's own
+//    waitForClearance()). A call that is ALREADY clear never bumps the
+//    counter -- the safety net only trips when it's actually needed.
+void scenarioEarlyCallBumpsClearanceSafetyNetCounter() {
+  beginScenario("an early call bumps clearanceSafetyNetCount() and lands at/after the deadline, never spinning");
+  Devices::I2CBus::setClock(50000);
+  Devices::I2CBus bus;
+  checkU32Eq(bus.clearanceSafetyNetCount(), 0, "counter starts at 0");
+
+  bus.scriptWrite(kWireAddr, /*status=*/0);   // motor1-shaped duty write: arms postClear
+  bus.scriptWrite(kWireAddr, /*status=*/0);   // motor2-shaped request write: arrives early
+
+  bus.write(kWireAddr, dummyFrame, 8, false, /*preClear=*/0, /*postClear=*/4000);
+  checkU32Eq(bus.clearanceSafetyNetCount(), 0,
+             "the FIRST write (nothing stamped yet) never trips the safety net");
+  uint64_t readyAt = Devices::I2CBus::clock() + 4000;   // lastEnd (== clock() here) + postClear
+
+  // No advanceClock() call -- the second write arrives immediately, well
+  // before readyAt (the exact "motor1 write -> motor2 request" hot site the
+  // 2026-07-13 review's M1 finding flagged).
+  int status2 = bus.write(kWireAddr, dummyFrame, 8, false,
+                           /*preClear=*/4000, /*postClear=*/0);
+
+  checkIntEq(status2, 0, "the early (safety-net-tripped) write still returns its scripted status");
+  checkU32Eq(bus.clearanceSafetyNetCount(), 1,
+             "exactly one safety-net trip recorded for the one early call");
+  checkTrue(Devices::I2CBus::clock() >= readyAt,
+            "fake clock landed at/after the deadline once the shortfall was 'slept'");
+
+  // A THIRD call, already clear (clock is now >= its own trivial deadline),
+  // must NOT bump the counter again.
+  bus.scriptWrite(kWireAddr, /*status=*/0);
+  bus.write(kWireAddr, dummyFrame, 8, false, /*preClear=*/0, /*postClear=*/0);
+  checkU32Eq(bus.clearanceSafetyNetCount(), 1,
+             "a call that is already clear does not trip the safety net");
+}
+
 }  // namespace
 
 int main() {
@@ -293,6 +334,7 @@ int main() {
   scenarioFifoOrdering();
   scenarioPerDeviceCounters();
   scenarioIrqGuardDefaultOn();
+  scenarioEarlyCallBumpsClearanceSafetyNetCounter();
 
   if (g_failureCount == 0) {
     std::printf("OK: all Devices::I2CBus scenarios passed\n");

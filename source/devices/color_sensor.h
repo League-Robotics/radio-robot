@@ -56,10 +56,11 @@
 // handle names (`Motor`/`Odometer`) because they already carried a
 // vendor/chip-distinct name; DB-006's leaves didn't. Renamed the LEAF, not
 // the handle, so the issue's own public-surface vocabulary
-// (`DeviceBus::color()` returning a `Devices::ColorSensor&`) stays exactly
-// as specified — see source/devices/handles.h (DB-007) for the handle this
-// leaf now sits behind. LineSensor -> LineSensorLeaf is the identical fix,
-// same ticket, same reasoning (line_sensor.h).
+// (`color()` returning a `Devices::ColorSensor&`) stays exactly as
+// specified. Per sprint 103 architecture-update.md Decision 1, the handle
+// layer this rename originally anticipated was retired — the loop
+// constructs and drives this leaf directly. LineSensor -> LineSensorLeaf is
+// the identical fix, same ticket, same reasoning (line_sensor.h).
 #pragma once
 
 #include <cstdint>

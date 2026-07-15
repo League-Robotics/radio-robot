@@ -2,129 +2,173 @@ syntax = "proto3";
 
 package robot;
 
+import "options.proto";
 import "common.proto";
 import "planner.proto";
 
 // ---------------------------------------------------------------------------
-// Telemetry (096-001, M1). The wire contract for the binary telemetry plane
-// (ReplyEnvelope.body.tlm, envelope.proto) -- a curated UNION of two
-// currently-disjoint text surfaces (architecture-update.md (096) Decision 6):
-//   - the STREAM/SNAP periodic frame (Telemetry::TlmFrameInput,
-//     source/telemetry/tlm_frame.h -- now/mode/seq/enc/vel/cmd/pose/
-//     encpose/otos+otosconn/twist), and
-//   - the separate, one-shot `TLM` verb's bench-diagnostic fields
-//     (handleTlm(), source/commands/motion_commands.cpp -- acc/active/
-//     conn/glitch/ts).
-// Every field below traces 1:1 to one of those two sources -- no field
-// invents new firmware capability (this ticket's own acceptance
-// criterion). Field names are new wire identifiers this ticket controls
-// (not a rename of any existing text wire-key token, which the
-// no-units-in-identifiers convention's "wire keys are excluded" carve-out
-// does not need to reach here), so they follow the project's normal
-// naming rules -- snake_case (proto convention), quantity named precisely,
-// units in a leading `// [unit]` comment tag, not in the name.
+// Telemetry -- PRUNED and extended to the P4 "telemetry-only return path"
+// (103-001, SUC-001/SUC-005, architecture-update.md (103) Decisions 2/3).
+// `Telemetry` gains an ACK RING (`repeated AckEntry acks`, depth 3 --
+// Decision 2) and two fault/event bitmasks, replacing envelope.proto's
+// removed per-command `ReplyEnvelope` arms and `EventNotify` reply as the
+// primary way a client learns a command's outcome or an unsolicited
+// condition. The one-shot bench-diagnostic fields the pre-103 schema
+// carried at the primary cadence (`acc_*`/`glitch_*`/`ts_*`/`cmd_vel_*`)
+// move OUT to a new, slower `TelemetrySecondary` message (below) -- they
+// are not needed every cycle, and the primary frame's byte budget is
+// tight (7B margin at ring depth 3, spike-003's number; this ticket's own
+// completion notes record the re-measured real number).
 //
-// Presence: `has_*` fields mirror `TlmFrameInput`'s OWN `has*` convention
-// (explicit bool flags alongside plain value fields), NOT proto3
-// `optional` -- transcribed, not re-derived, the same "transcribe, never
-// re-derive" discipline this architecture applies elsewhere (095 Decision
-// 5; 096 Decision 5 for `MotorConfigPatch`'s side selector). Only
-// `has_cmd_vel` and `has_otos` (+ its paired `otos_connected`) are ever
-// actually false in the CURRENT `tick()` implementation
-// (`bb.drivetrain.vel_count() < 2` / `!bb.otosPresent`, respectively) --
-// every other `has_*` flag is unconditionally true today, but is still
-// declared explicitly here, mirroring `TlmFrameInput`'s own
-// per-field-group flags rather than collapsing the ones that happen to
-// always be true right now.
+// This is a RE-DERIVATION of sprint 102's unmerged spike-003 dry run
+// (`scratch/102-003-frame-budget`), not a straight cherry-pick -- every
+// judgment call spike-003 flagged as "P4's to confirm or revise" (keeping
+// `active`/`conn_left`/`conn_right` in the primary frame; ring depth 3, not
+// 4-8; `fault_bits`/`event_bits`' bit layout) is confirmed or decided here,
+// not inherited silently. See this ticket's own completion notes for the
+// real `gen_messages.py`-measured worst-case sizes.
 //
-// The bench-diagnostic fields (acc/active/conn/glitch/ts, below) carry NO
-// `has_*` flag: `handleTlm()`'s own text reply never omits them.
+// `Telemetry` has NEVER shipped to a real robot (declared-only until
+// ticket 005 wires a live emitter) -- like the pre-103 schema's own
+// encpose-gap precedent (see the now-superseded field-number comment this
+// replaces), this prune freely renumbers every field rather than
+// `reserved`-ing the old numbers: there is no deployed client depending on
+// a specific field number for a message that has never been on the wire.
 //
-// TRIM APPLIED (096-001 completion notes; architecture-update.md (096)
-// Decision 6's documented order): the full field set (this file's first
-// draft, including `has_enc_pose`/`enc_pose`) put `ReplyEnvelope`'s
-// generated worst case at 192B -- 6B over the 186-byte budget
-// (`tlm` arm alone = 186B; `+6B` non-oneof `corr_id` = 192B; see
-// gen_messages.py's own `kMaxEncodedSize` report). Per Decision 6's FIRST
-// trim step, `has_enc_pose`/`enc_pose` (encpose=<x>,<y>,<h>, reconstructable
-// from `enc_left`/`enc_right` + `twist`) were dropped, bringing the `tlm`
-// arm to 166B and the `ReplyEnvelope` total to 172B -- comfortably under
-// 186B, so Decision 6's SECOND trim step (`has_otos`/`otos`/
-// `otos_connected`) was NOT needed and those fields are still present
-// below. Final field list is exactly what this message declares now --
-// every STREAM/SNAP field EXCEPT `encpose`, plus all five bench-diagnostic
-// field groups.
+// Presence: `has_*` fields mirror the pre-103 schema's own convention
+// (explicit bool flags alongside plain value fields), unchanged by this
+// prune.
 // ---------------------------------------------------------------------------
+
+// AckStatus -- coarse pass/fail for one ack-ring entry. `err_code` (below)
+// carries the specific ErrCode (envelope.proto) value when status is
+// ACK_STATUS_ERR; kept as a separate raw uint32 rather than importing
+// envelope.proto's ErrCode enum here to avoid a telemetry.proto <->
+// envelope.proto import cycle (envelope.proto already imports
+// telemetry.proto for the `tlm` reply arm).
+enum AckStatus {
+  ACK_STATUS_OK  = 0;
+  ACK_STATUS_ERR = 1;
+}
+
+// One ack-ring entry: which command (corr_id), and whether it succeeded.
+message AckEntry {
+  uint32    corr_id  = 1;
+  AckStatus status   = 2;
+  uint32    err_code = 3;  // raw ErrCode value (envelope.proto) when status=ACK_STATUS_ERR
+}
+
 message Telemetry {
-  uint32    now  = 1;   // [ms] t= -- always present
-  DriveMode mode = 2;   // mode= -- always present. Source: bb.planner.mode
-                         // (msg::DriveMode, planner.proto); the text
-                         // formatter maps this to a single wire character
-                         // (tlm_frame.cpp's modeChar()) -- the binary
-                         // formatter (ticket 003) carries the enum itself.
-  uint32    seq  = 3;    // seq= -- always present (bb.telemetrySeq)
+  // Ack ring FIRST (field 1): a repeated MESSAGE field is never packed --
+  // each of the (max_count) ring entries costs its own tag+len, so this is
+  // the single most expensive field in the frame. Field number 1 keeps its
+  // tag at the cheapest 1-byte width (every field number 1-15 fits a
+  // 1-byte tag; 16+ needs 2) -- multiplied by (max_count), a 2-byte tag
+  // here would cost (max_count) extra bytes, not 1.
+  //
+  // Depth 3 (architecture-update.md (103) Decision 2): spike-003 measured
+  // depth 3 (179B) as the maximum that fits the 186B envelope with this
+  // frame's field set (margin 7B); depth 4 needs a real trim elsewhere in
+  // this message and was rejected (Decision 2) as fragile (zero margin).
+  // This ticket re-measured the real number for this exact field set --
+  // see completion notes.
+  repeated AckEntry acks = 1 [(max_count) = 3];
 
-  // enc=<l>,<r> -- per-wheel accumulated encoder distance
-  // (TlmFrameInput.hasEnc/encLeft/encRight).
-  bool  has_enc   = 4;
-  float enc_left  = 5;   // [mm]
-  float enc_right = 6;   // [mm]
+  uint32    now  = 2;   // [ms] t= -- always present
+  DriveMode mode = 3;   // mode= -- always present
+  uint32    seq  = 4;   // seq= -- always present
 
-  // vel=<l>,<r> -- per-wheel MEASURED velocity
-  // (TlmFrameInput.hasVel/velLeft/velRight).
-  bool  has_vel   = 7;
-  float vel_left  = 8;   // [mm/s] signed
-  float vel_right = 9;   // [mm/s] signed
+  // enc=<l>,<r> -- per-wheel accumulated encoder distance.
+  bool  has_enc   = 5;
+  float enc_left  = 6;   // [mm]
+  float enc_right = 7;   // [mm]
 
-  // cmd=<l>,<r> -- per-wheel COMMANDED velocity, the velocity PID's own
-  // setpoint (TlmFrameInput.hasCmdVel/cmdVelLeft/cmdVelRight). The one
-  // STREAM/SNAP field group that is conditionally absent today
-  // (bb.drivetrain.vel_count() < 2).
-  bool  has_cmd_vel   = 10;
-  float cmd_vel_left  = 11;  // [mm/s] signed
-  float cmd_vel_right = 12;  // [mm/s] signed
+  // vel=<l>,<r> -- per-wheel MEASURED velocity.
+  bool  has_vel   = 8;
+  float vel_left  = 9;   // [mm/s] signed
+  float vel_right = 10;  // [mm/s] signed
 
-  // pose=<x>,<y>,<h> -- fused world pose, the EKF belief
-  // (TlmFrameInput.hasPose/pose).
-  bool   has_pose = 13;
-  Pose2D pose     = 14;
+  // pose=<x>,<y>,<h> -- fused world pose.
+  bool   has_pose = 11;
+  Pose2D pose     = 12;
 
-  // encpose=<x>,<y>,<h> -- TRIMMED (see file header): field numbers 15/16
-  // are deliberately left unassigned here, not reserved via `reserved`
-  // (this message has never shipped -- nothing depends on a specific
-  // number for a field that never existed on the wire). If a future
-  // ticket needs to re-add encpose, add it back as a normal new field
-  // (any free number), same as any other schema growth.
+  // otos=<x>,<y>,<h> -- raw sampled odometer pose, conditionally present.
+  bool   has_otos       = 13;
+  Pose2D otos           = 14;
+  bool   otos_connected = 15;
 
-  // otos=<x>,<y>,<h> -- raw sampled odometer pose
-  // (TlmFrameInput.hasOtos/otos), conditionally present
-  // (bb.otosPresent -- the other STREAM/SNAP field group that is
-  // conditionally absent today). otos_connected (092-002) is a SEPARATE
-  // token sharing the SAME gate as otos, mirroring the text plane's own
-  // otosconn= precedent (tlm_frame.h). Decision 6's SECOND trim
-  // candidate -- NOT needed this ticket (see file header); still present.
-  bool   has_otos       = 15;
-  Pose2D otos           = 16;
-  bool   otos_connected = 17;
+  // twist=<v>,<omega> -- directly-measured/derived body twist.
+  bool       has_twist = 16;
+  BodyTwist3 twist     = 17;
 
-  // twist=<v>,<omega> -- directly-measured/derived body twist
-  // (TlmFrameInput.hasTwist/twist).
-  bool       has_twist = 18;
-  BodyTwist3 twist     = 19;
+  // active/conn_* -- kept at the primary cadence (NOT trimmed out with
+  // acc_*/glitch_*/ts_*/cmd_vel_* below): motion-in-progress and per-motor
+  // bus connectivity are cheap (1 byte each) and load-bearing for the
+  // hardware-bench-testing.md "sensors alive"/"wheels drive" gate at full
+  // rate (architecture-update.md (103) Decision 2's own reasoning).
+  bool active     = 18;  // motion in progress
+  bool conn_left  = 19;  // left motor bus connectivity
+  bool conn_right = 20;  // right motor bus connectivity
 
-  // --- Bench-diagnostic fields (one-shot TLM verb, handleTlm() in
-  // motion_commands.cpp) -- unconditionally present, no has_* flag:
-  // handleTlm()'s own text reply never omits them. NEVER trim these (see
-  // file header) -- they are exactly what
-  // .claude/rules/hardware-bench-testing.md's "sensors are alive"/
-  // "encoders increment" verification reads.
-  float  acc_left     = 20;  // [mm/s^2] bb.drivetrain.acc()[0], EMA-filtered
-  float  acc_right    = 21;  // [mm/s^2] bb.drivetrain.acc()[1], EMA-filtered
-  bool   active        = 22;  // bb.drivetrain.busy -- motion in progress
-  bool   conn_left    = 23;  // bb.motors[0].connected
-  bool   conn_right   = 24;  // bb.motors[1].connected
-  uint32 glitch_left  = 25;  // bb.motors[0].enc_glitch_count
-  uint32 glitch_right = 26;  // bb.motors[1].enc_glitch_count
-  uint32 ts_left       = 27;  // [ms] bb.motors[0].sampled_at
-  uint32 ts_right      = 28;  // [ms] bb.motors[1].sampled_at
+  // Fault/event bitmasks (NEW this ticket) -- replace envelope.proto's
+  // removed EventNotify/`evt` reply arm as the wire's unsolicited-condition
+  // channel. Bit layout (this ticket's own decision -- spike-003 left it
+  // undefined):
+  //
+  // fault_bits:
+  //   bit 0 -- I2CBus `readyAt` clearance safety-net trip (source/devices/
+  //            i2c_bus.*; wired live by ticket 002/005)
+  //   bit 1 -- NezhaMotor/I2CBus wedge-latch detected
+  //   bit 2 -- I2C bus NAK/timeout error
+  //   bits 3-31 -- reserved for future faults
+  //
+  // event_bits:
+  //   bit 0 -- Deadman staleness timer expired (source/app/deadman.*;
+  //            wired live by ticket 004/005)
+  //   bit 1 -- boot-ready transition (Preamble::done() first true)
+  //   bit 2 -- a ConfigDelta was applied
+  //   bits 3-31 -- reserved for future events
+  //
+  // This ticket declares the fields and the bit NUMBERING only -- actually
+  // flipping a given bit at its real call site is ticket 005's own
+  // acceptance criterion (architecture-update.md (103) Step 3 "Telemetry"
+  // responsibility).
+  uint32 fault_bits = 21;  // bitmask -- see numbering above
+  uint32 event_bits = 22;  // bitmask -- see numbering above
+}
+
+// TelemetrySecondary (NEW this ticket) -- the slower diagnostic frame:
+// acc_*/glitch_*/ts_*/cmd_vel_* moved OUT of the always-on primary
+// Telemetry frame above (one-shot bench-diagnostic fields, not needed at
+// the primary cadence) and INTO this message.
+//
+// Wire framing (architecture-update.md (103) Decision 3, resolved by this
+// ticket): TelemetrySecondary rides as a SECOND, independently-armored
+// `*B`-armored line, NOT a `ReplyEnvelope.body` oneof arm. This is not just
+// a preference -- `ReplyEnvelope.body` is fixed at exactly `ok`/`err`/`tlm`
+// by this ticket's own acceptance criteria (envelope.proto), so a fourth
+// `tlm2`-style arm is not an available option regardless of preference.
+// `source/app/telemetry.{h,cpp}` (ticket 005) emits it as its own top-level
+// armored payload, own cadence (a P4 implementation decision ticket 005
+// still owns -- see architecture-update.md Step 7 Open Question 4), using
+// the `msg::wire::encode(const TelemetrySecondary&, ...)` codec this
+// ticket's generator change adds (mirroring `ReplyEnvelope`'s own
+// encode-only treatment -- TelemetrySecondary is firmware-emitted only,
+// never host-decoded on the robot side).
+message TelemetrySecondary {
+  uint32 now = 1;  // [ms] t= -- same clock as Telemetry.now, sampled at this frame's own
+                    // (slower) emission cadence
+
+  bool  has_cmd_vel   = 2;
+  float cmd_vel_left  = 3;  // [mm/s] signed -- velocity PID setpoint, left
+  float cmd_vel_right = 4;  // [mm/s] signed -- velocity PID setpoint, right
+
+  float acc_left  = 5;  // [mm/s^2] EMA-filtered
+  float acc_right = 6;  // [mm/s^2] EMA-filtered
+
+  uint32 glitch_left  = 7;  // encoder glitch count, left
+  uint32 glitch_right = 8;  // encoder glitch count, right
+
+  uint32 ts_left  = 9;   // [ms] last-sample timestamp, left
+  uint32 ts_right = 10;  // [ms] last-sample timestamp, right
 }

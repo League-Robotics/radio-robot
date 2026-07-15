@@ -146,8 +146,8 @@ void scenarioYieldRecordedSeparatelyFromSleep() {
 }
 
 // 6. A Sleeper never advances a Clock on its own — the two seams are
-//    independent objects; a harness driving DeviceBus's cycle (DB-007) must
-//    step the Clock itself even while the cycle calls Sleeper.sleepMillis().
+//    independent objects; a harness driving the loop's cycle must step the
+//    Clock itself even while the cycle calls Sleeper.sleepMillis().
 void scenarioSleeperNeverAdvancesClock() {
   beginScenario("Sleeper never touches a Clock instance");
   Devices::Clock clock;

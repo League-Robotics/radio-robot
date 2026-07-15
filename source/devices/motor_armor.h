@@ -15,10 +15,11 @@
 //   - NOT ported: Hal::Motor's message plane (apply()/state()/
 //     capabilities()/msg::MotorCommand/msg::MotorState) — it is msg::-typed
 //     outright, which the isolation invariant forbids
-//     (device-bus-tickets.md's "Standing isolation invariant"). DB-007's
-//     DeviceBus handle classes (issue "The public surface") are the
-//     Devices-native replacement for that surface, not this internal leaf
-//     base.
+//     (device-bus-tickets.md's "Standing isolation invariant"). Per sprint
+//     103 architecture-update.md Decision 1, the loop constructs and drives
+//     this leaf directly (no handle-mediated staging layer) — the
+//     Devices-native replacement for that surface is the loop itself, not
+//     this internal leaf base.
 //   - NOT ported: Hal::Motor's later, non-armor additions —
 //     trackAcceleration()/acceleration() (099-003), active() (091-003),
 //     encGlitchCount()/sampleTime() virtuals. These are leaf-specific
@@ -67,8 +68,8 @@ class MotorArmor {
   uint32_t softResetCount() const;   // cumulative soft (non-zeroing) rebaselines
 
   // --- Leaf-supplied getters (public pure virtuals — callers outside the
-  // leaf, e.g. a test harness or a future DeviceBus handle, read these
-  // directly; the armor internals below also read them). ---
+  // leaf, e.g. a test harness or the loop, read these directly; the armor
+  // internals below also read them). ---
   virtual float position() const = 0;      // [mm]
   virtual float velocity() const = 0;      // [mm/s] signed
   virtual float appliedDuty() const = 0;   // [-1, 1]

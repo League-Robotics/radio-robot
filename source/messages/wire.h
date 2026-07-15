@@ -49,14 +49,18 @@ struct Result {
 // build-sim`), so a future schema change that pushes an envelope over the
 // 186-byte budget fails one of the two static_asserts below at build time,
 // not at runtime on a truncated wire line.
-//   CommandEnvelope: drive=56B, segment=83B, replace=83B, config=109B, pose_fix=27B, otos=19B, ping=2B, echo=68B, get=4B, stream=12B, stop=2B, id=162B, hello=2B, ver=3B, help=3B, plan_dump=3B (worst=id=162B) + non-oneof=6B => total=168B
-//   ReplyEnvelope: ok=19B, err=10B, tlm=165B, cfg=111B, evt=20B, id=162B, echo=68B, helptext=67B, plan=62B, trace=102B (worst=tlm=165B) + non-oneof=6B => total=171B
-constexpr uint16_t kCommandEnvelopeMaxEncodedSize = 168;
-constexpr uint16_t kReplyEnvelopeMaxEncodedSize = 171;
+//   CommandEnvelope: config=109B, stop=2B, twist=18B (worst=config=109B) + non-oneof=6B => total=115B
+//   ReplyEnvelope: ok=19B, err=10B, tlm=173B (worst=tlm=173B) + non-oneof=6B => total=179B
+//   TelemetrySecondary: standalone worst case = 52B (own *B-armored line, not a ReplyEnvelope oneof arm -- Decision 3)
+constexpr uint16_t kCommandEnvelopeMaxEncodedSize = 115;
+constexpr uint16_t kReplyEnvelopeMaxEncodedSize = 179;
+constexpr uint16_t kTelemetrySecondaryMaxEncodedSize = 52;
 static_assert(kCommandEnvelopeMaxEncodedSize <= 186,
               "CommandEnvelope worst-case encoded size exceeds the 186-byte envelope budget");
 static_assert(kReplyEnvelopeMaxEncodedSize <= 186,
               "ReplyEnvelope worst-case encoded size exceeds the 186-byte envelope budget");
+static_assert(kTelemetrySecondaryMaxEncodedSize <= 186,
+              "TelemetrySecondary worst-case encoded size exceeds the 186-byte envelope budget");
 
 // decode(): walks CommandEnvelope's generated FieldDesc table per incoming
 // wire tag, validating (min)/(max)/(abs_max)/(req) inline during the same
@@ -75,6 +79,15 @@ Result decode(CommandEnvelope& out, const uint8_t* buf, uint16_t len);
 // google.protobuf). Returns 0 (never a truncated/corrupt buffer) if `cap`
 // is smaller than the required output.
 uint16_t encode(const ReplyEnvelope& in, uint8_t* buf, uint16_t cap);
+
+// encode(TelemetrySecondary): same encode-only treatment as ReplyEnvelope
+// above (103-001, architecture-update.md (103) Decision 3) -- the slow
+// diagnostic frame is firmware-emitted only, never host-decoded on the
+// robot side, and rides the wire as its own independently-armored line
+// rather than a ReplyEnvelope oneof arm (telemetry.proto's own doc
+// comment). Returns 0 (never a truncated/corrupt buffer) if `cap` is
+// smaller than the required output.
+uint16_t encode(const TelemetrySecondary& in, uint8_t* buf, uint16_t cap);
 
 }  // namespace wire
 }  // namespace msg

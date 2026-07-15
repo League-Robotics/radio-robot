@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '104'
+tickets:
+- 104-005
 ---
 
 # Rig profile: persist OTOS distrust instead of a per-session SET ritual

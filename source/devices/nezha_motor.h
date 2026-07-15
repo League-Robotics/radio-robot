@@ -16,8 +16,10 @@
 // leaf's public API is scoped to match):
 //   - Message-plane surface (setVoltage()/capabilities()/apply()/state(),
 //     msg::MotorCommand/msg::MotorCapabilities) is NOT ported — msg::-typed
-//     outright, forbidden by the isolation invariant. DB-007's DeviceBus
-//     handle classes are the Devices-native replacement, not this leaf.
+//     outright, forbidden by the isolation invariant. Per sprint 103
+//     architecture-update.md Decision 1, the loop is the Devices-native
+//     replacement — it constructs and drives this leaf directly, not this
+//     leaf.
 //   - POSITION mode (the onboard 0x5D absolute-angle move, setPosition()/
 //     writePositionMove()) is NOT ported — absent from the issue's public
 //     surface `Devices::Motor` sketch entirely, so this scoped-down leaf
@@ -32,8 +34,8 @@
 //     directly, with no additive feedforward term.
 //   - The NOT PORTED flip-flop cross-pass sequencer's public split-phase
 //     entry point (requestSample(), wrapping requestEncoder()) IS still
-//     ported — the fiber (DB-007) becomes its new, sole caller in place of
-//     the retired Subsystems::NezhaHardware.
+//     ported — the loop's own cycle becomes its new, sole caller in place
+//     of the retired Subsystems::NezhaHardware.
 //   - PID on/off (OQ2, issue "The public surface"): setPidEnabled()/
 //     setDuty() are new relative to the pre-port file — Mode::Active now
 //     covers what used to be the separate DUTY/VELOCITY modes, selected at
@@ -51,8 +53,8 @@
 //     I2CBus's own internal clearance clock (a different seam, scoped to
 //     I2CBus's own preClear/postClear bookkeeping — see i2c_bus.h) the way
 //     the pre-port file's HOST_BUILD shim did, this leaf takes its "now" as
-//     a plain parameter supplied by its caller (ultimately DeviceBus's own
-//     Clock, once DB-007 wires the fiber) — fully deterministic for a host
+//     a plain parameter supplied by its caller (ultimately the loop's own
+//     Clock instance) — fully deterministic for a host
 //     harness with zero clock coupling, and behaviorally identical (armor
 //     timing (dwell/rest-tracking) still runs in ms, matching MotorConfig's
 //     documented [ms] reversalDwell unit; the write-rate throttle inside
@@ -87,7 +89,7 @@ class NezhaMotor : public MotorArmor {
   void begin();
 
   // Split-phase phase 1, public entry point. Wraps the already-ported
-  // requestEncoder() so DeviceBus's fiber cycle (DB-007) can request this
+  // requestEncoder() so the loop's own cycle can request this
   // port's encoder sample without reaching into NezhaMotor's private
   // register-verb surface. NOT a MotorArmor virtual: request/collect
   // splitting is a Nezha-specific consequence of four ports sharing one
@@ -188,7 +190,7 @@ class NezhaMotor : public MotorArmor {
 
   // ---- Fresh-sample tracking (tick() step 2's freshness gate) ----
   // The Nezha brick's 0x46 register refreshes far slower (~80ms) than
-  // DeviceBus's fiber cycle (~16ms, DB-007/DB-008): most cycles re-collect
+  // the loop's own cycle (~16ms): most cycles re-collect
   // the SAME raw count. Velocity/glitch computation runs ONLY when
   // collectEncoder() returns a raw count different from the last FRESH raw
   // count, using the elapsed time SINCE THAT sample (lastFreshUs_) instead
@@ -248,7 +250,11 @@ class NezhaMotor : public MotorArmor {
   static constexpr float kDefaultSlewRate = 25.0f;   // ports the original's kMaxDeltaPwmPerWrite default
 
   // ---- Private helpers: write path ----
-  void writeMotorRun(uint8_t direction, uint8_t speed);   // ported writeMotorCmd() (0x60)
+  // Returns the CODAL status from bus_.write() (0/kOk == success) -- 103-002
+  // (C1 fix): writeRawDuty() commits lastWrittenPct_/lastWriteTimeUs_ ONLY
+  // when this status is kOk, so a NAK'd write is retried next tick instead
+  // of being latched as "already written."
+  int writeMotorRun(uint8_t direction, uint8_t speed);   // ported writeMotorCmd() (0x60)
 
   // ---- Private helpers: velocity estimator ----
   void pushVelSample(uint64_t t, float position);   // [us] [mm] append an accepted fresh sample to the ring

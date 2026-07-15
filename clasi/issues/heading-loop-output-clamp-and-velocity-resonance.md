@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: '106'
 ---
 
 > **SCOPE REDUCED (2026-07-14 stakeholder triage).** Part 1 (clamp the

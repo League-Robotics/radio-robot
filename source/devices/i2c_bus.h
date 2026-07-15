@@ -40,10 +40,9 @@
 //   Unrecognised addresses are accumulated in an "other" bucket (index
 //   kMaxDevices-1) so the table never overflows.
 //
-// Usage (source/devices/device_bus.cpp, DB-007): one I2CBus instance, owned
-// by DeviceBus, constructed before any device leaf and passed to each by
-// reference — mirrors the ported source's own `static I2CBus bus(uBit.i2c);`
-// usage note.
+// Usage: one I2CBus instance, owned by the loop, constructed before any
+// device leaf and passed to each by reference — mirrors the ported source's
+// own `static I2CBus bus(uBit.i2c);` usage note.
 //
 // Thread safety:
 //   The inUse_ flag window is intentionally narrow (3-4 instructions) so the
@@ -123,6 +122,31 @@ class I2CBus {
   // address write()/read() take (an easy off-by-one-bit trap). A device
   // never transacted with (no slot yet) is always clear.
   bool clear(uint16_t addr7) const;
+
+  // ---------------------------------------------------------------------
+  // Clearance safety-net diagnostics (103-002, M1 fix — 2026-07-13 code
+  // review). write()/read()'s entry-side clearance wait used to be a hard
+  // `while(clockUs()<deadline){}` spin with no yield — up to ~4ms of
+  // scheduler-blocking spin nearly every cycle (the motor1-duty-write ->
+  // motor2-request hot site the review flagged; both motors share address
+  // 0x10, so motor1's postClear stamp is almost always still in motor2's
+  // future). In the single-loop design the LOOP is meant to own this gap
+  // (explicit runAndWait/sleepUntil calls, ticket 008's own scope) — this
+  // per-device readyAt stamp is the backstop for a caller that still
+  // arrives early. It never spins: see i2c_bus.cpp's (real fork,
+  // fiber_sleep()) and i2c_bus_host.cpp's (HOST_BUILD fork, a direct fake-
+  // clock jump) own write()/read() for the exact non-spinning mechanism.
+  // ---------------------------------------------------------------------
+
+  // Total number of times write()/read() found itself called BEFORE a
+  // device's clearance deadline (readyAt/preClear) had elapsed. This is the
+  // narrow signal ticket 001 already numbered as Telemetry.fault_bits bit 0
+  // ("I2CBus readyAt clearance safety-net trip (ticket 002/005)") — it
+  // "should never fire if the loop schedule is right" (the issue's own
+  // words). Wiring the actual fault_bits write is ticket 005's job:
+  // source/app/'s telemetry-population code doesn't exist yet as of this
+  // ticket (002), only source/devices/ does.
+  uint32_t clearanceSafetyNetCount() const { return clearanceSafetyNetCount_; }
 
   // ---------------------------------------------------------------------
   // Re-entrancy diagnostics
@@ -243,6 +267,10 @@ class I2CBus {
   uint16_t reentryInFlightAddr_;
   uint16_t reentryNewAddr_;
 
+  // Clearance safety-net trip count — see the public accessor's own comment
+  // above for what this feeds.
+  uint32_t clearanceSafetyNetCount_;
+
   // Per-device slot table.
   DeviceSlot devices_[kMaxDevices];
   int deviceCount_;
@@ -279,6 +307,20 @@ class I2CBus {
   // timestamp) goes through this single point so the two forks stay
   // structurally parallel.
   static uint64_t clockUs();
+
+  // waitForClearance — write()/read()'s entry-side clearance wait (103-002,
+  // M1 fix). If entryDeadline is still in the future, bumps
+  // clearanceSafetyNetCount_ and waits out the shortfall WITHOUT spinning:
+  // the real fork (i2c_bus.cpp) sleeps via fiber_sleep() — the same
+  // cooperative primitive clock.h's Sleeper wraps, rounded up to whole
+  // milliseconds (fiber_sleep() reliably sleeps at least the requested
+  // duration, so rounding up never shortchanges the real vendor clearance
+  // requirement docs/knowledge/2026-07-04-encoder-wedge.md documents); the
+  // HOST_BUILD fork (i2c_bus_host.cpp) jumps its fake clock directly to
+  // entryDeadline in one step (no wall clock, no fiber scheduler to sleep
+  // against). A no-op (no counter bump, no wait) if entryDeadline has
+  // already elapsed.
+  void waitForClearance(uint64_t entryDeadline);
 
   // findOrAdd — return the slot index for the given 7-bit address.
   //

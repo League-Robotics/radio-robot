@@ -90,6 +90,40 @@ _DRIVE_MODE_CHAR = {
 }
 
 
+@dataclass(frozen=True)
+class AckEntry:
+    """One ack-ring entry from a ``Telemetry`` push (``telemetry.proto``
+    ``AckEntry``, adapted onto a plain host-side shape the same way
+    ``TLMFrame`` adapts ``Telemetry`` itself).
+
+    Reports the outcome of ONE previously-sent command (matched by
+    ``corr_id``) via the ack ring riding inside every ``Telemetry`` frame
+    (103-009, Decision 2's "telemetry-only return path") — the P4 wire has
+    no per-command synchronous ``ReplyEnvelope`` for ``twist``/``stop``/
+    ``config``, so this is the ONLY place their outcome is reported.
+
+    The ring is depth 3 (``telemetry.proto``'s own comment on
+    ``Telemetry.acks``): the SAME ``corr_id`` legitimately rides more than
+    one consecutive ``Telemetry`` push in a row. That is ring
+    RE-DELIVERY, not a duplicate ack or an error — ``NezhaProtocol.
+    wait_for_ack()`` tolerates it by construction (it simply returns on the
+    first frame where a match is found; a caller never sees the re-delivered
+    copies at all).
+    """
+    corr_id: int
+    ok: bool
+    err_code: int  # raw ErrCode (envelope.proto) value when ok is False, else 0 (ERR_NONE)
+
+    @classmethod
+    def from_pb2(cls, entry: "telemetry_pb2.AckEntry") -> "AckEntry":
+        """Adapt one ``telemetry_pb2.AckEntry`` onto this dataclass."""
+        return cls(
+            corr_id=int(entry.corr_id),
+            ok=(entry.status == telemetry_pb2.ACK_STATUS_OK),
+            err_code=int(entry.err_code),
+        )
+
+
 @dataclass
 class TLMFrame:
     """Parsed TLM telemetry frame from the firmware.
@@ -129,6 +163,16 @@ class TLMFrame:
     terminates. Populated from every binary STREAM/SNAP frame (see
     ``from_pb2()``'s own docstring for why this is the reliable motion-
     complete signal, unlike ``mode``).
+    ``acks`` (103-009) is the ack ring riding this frame — up to 3
+    ``AckEntry`` entries (``telemetry.proto`` ``Telemetry.acks``, depth 3),
+    the ONLY way a P4 ``twist()``/``stop()``/``config`` command's outcome is
+    reported (no per-command synchronous reply — see ``NezhaProtocol.
+    wait_for_ack()``). Always present (an empty tuple, never None, once a
+    frame has gone through ``from_pb2()`` — unconditional like ``active``).
+    ``fault_bits``/``event_bits`` (103-009) are the raw firmware bitmasks
+    (``telemetry.proto`` ``Telemetry.fault_bits``/``event_bits``) — see
+    ``telemetry.proto``'s own comment for the bit numbering. Also always
+    present once a frame has gone through ``from_pb2()``.
     """
     t: int | None = None
     mode: str | None = None
@@ -146,6 +190,9 @@ class TLMFrame:
     encpose: tuple[int, int, int] | None = None  # (x, y, heading) [mm, mm, cdeg] — encoder-only pose (068-001)
     otos_health: tuple[int, bool] | None = None  # (raw STATUS byte, fusion_blocked) — OTOS health (074-004)
     active: bool | None = None                   # bb.drivetrain.busy — motion in progress (097, this ticket)
+    acks: tuple[AckEntry, ...] | None = None      # ack-ring entries riding this frame, depth 3 (103-009)
+    fault_bits: int | None = None                 # bitmask — see telemetry.proto Telemetry.fault_bits (103-009)
+    event_bits: int | None = None                 # bitmask — see telemetry.proto Telemetry.event_bits (103-009)
 
     @classmethod
     def from_pb2(cls, telemetry: "telemetry_pb2.Telemetry") -> "TLMFrame":
@@ -197,6 +244,21 @@ class TLMFrame:
             STREAM/SNAP ``TLM t=... mode=...`` line this dataclass models.
             TLMFrame has no slot for these; they are silently dropped here,
             like any other field this dataclass does not declare.
+          - ``cmd_vel`` (103-009, NEW gap): the pre-103 ``Telemetry`` carried
+            ``has_cmd_vel``/``cmd_vel_left``/``cmd_vel_right`` at the primary
+            cadence; 103-001's prune (telemetry.proto's own file header)
+            moved them OUT to the new, slower ``TelemetrySecondary`` message
+            — the primary ``Telemetry`` this method decodes no longer
+            declares any of the three fields at all, so reading them here
+            would raise ``AttributeError`` (a live break this ticket fixes,
+            not just a documentation update — every previously-queued
+            binary telemetry frame crashed ``from_pb2()``, and therefore
+            ``read_pending_binary_tlm_frames()``/``wait_for_ack()``, before
+            this fix). Like ``encpose`` above, this is a genuine, permanent
+            gap for a caller polling the PRIMARY telemetry stream — the
+            velocity PID setpoint is still available, just on
+            ``TelemetrySecondary`` (own cadence, own decode path — no
+            ``TLMFrame`` adapter exists for it yet as of this ticket).
           - ``active`` is the ONE exception to the paragraph above (097,
             this ticket): unlike the other bench-diagnostic fields,
             ``telemetry.active`` (``bb.drivetrain.busy`` — motion in
@@ -225,12 +287,21 @@ class TLMFrame:
         firmware always zero-fills ``v_y`` for a differential build
         (tlm_frame.cpp), so ``v_y`` is dropped here exactly as the text
         plane's own 2-value ``twist=%d,%d`` already drops it.
+
+        ``acks``/``fault_bits``/``event_bits`` (103-009) are populated
+        unconditionally, the same "always present, not gated by a has_*
+        flag" treatment as ``active`` above — ``telemetry.acks`` is a plain
+        (possibly empty) repeated field, and ``fault_bits``/``event_bits``
+        are plain uint32 fields, so there is no presence flag to check.
         """
         frame = cls()
         frame.t = telemetry.now
         frame.mode = _DRIVE_MODE_CHAR.get(telemetry.mode, "I")
         frame.seq = telemetry.seq
         frame.active = bool(telemetry.active)
+        frame.acks = tuple(AckEntry.from_pb2(entry) for entry in telemetry.acks)
+        frame.fault_bits = int(telemetry.fault_bits)
+        frame.event_bits = int(telemetry.event_bits)
 
         if telemetry.has_enc:
             frame.enc = (int(telemetry.enc_left), int(telemetry.enc_right))
@@ -238,8 +309,12 @@ class TLMFrame:
         if telemetry.has_vel:
             frame.vel = (int(telemetry.vel_left), int(telemetry.vel_right))
 
-        if telemetry.has_cmd_vel:
-            frame.cmd_vel = (int(telemetry.cmd_vel_left), int(telemetry.cmd_vel_right))
+        # cmd_vel: NOT read here (103-009) -- telemetry.proto no longer
+        # declares has_cmd_vel/cmd_vel_left/cmd_vel_right on the primary
+        # Telemetry message (moved to TelemetrySecondary); see this
+        # method's own docstring "Fields left at this dataclass's own
+        # default" list for the permanent-gap explanation. frame.cmd_vel
+        # stays at its dataclass default (None).
 
         if telemetry.has_pose:
             frame.pose = (
@@ -970,21 +1045,95 @@ class NezhaProtocol:
     # Drive commands
     # ------------------------------------------------------------------
 
-    def stop(self) -> None:
-        """Stop motors immediately (STOP command).
+    def twist(self, v_x: float, omega: float, duration: float) -> int:  # [mm/s] [rad/s] [ms]
+        """Command a body-frame twist setpoint for ``duration`` ms — the P4
+        wire's ONLY motion command (``CommandEnvelope{twist: Twist{v_x,
+        omega, duration}}``, envelope.proto). The host computes the whole
+        trajectory and streams twist setpoints; the robot only servos to
+        them and arms the unified Deadman for ``duration`` (envelope.proto's
+        own ``Twist`` doc comment).
 
-        Binary implementation (097-002): CommandEnvelope{stop: Stop{}} via
-        send_envelope() -- a zero-field oneof arm that "cannot be
-        malformed" (envelope.proto Decision 3), byte-identical in spirit to
-        the text handleStop()'s own NEUTRAL/BRAKE construction. The STOP
-        bytes reach the wire immediately (send_envelope()'s write happens
-        before it blocks on the reply queue) -- no less safety-responsive
-        than the prior fire-and-forget send_fast("STOP"); only the Python
-        call itself now blocks briefly (<=300ms) for the discarded Ack.
-        Return type (None) unchanged.
+        Fire-and-poll, NOT fire-and-wait (103-009, Decision 2's
+        "telemetry-only return path"): the P4 wire has no per-command
+        synchronous ``ReplyEnvelope`` for ``twist`` — this call's own outcome
+        arrives later, riding the ack ring inside a subsequent ``Telemetry``
+        push (see ``wait_for_ack()``). This method returns as soon as the
+        bytes reach the wire; it never blocks waiting for a reply that will
+        not come.
+
+        Returns the corr_id assigned to this command — pass it to
+        ``wait_for_ack()`` to confirm the firmware accepted it. Raises
+        ``ConnectionError`` if not connected (``send_envelope_fast()``'s own
+        not-open contract).
+        """
+        envelope = envelope_pb2.CommandEnvelope(
+            twist=envelope_pb2.Twist(v_x=v_x, omega=omega, duration=duration))
+        return self._conn.send_envelope_fast(envelope)
+
+    def stop(self) -> int:
+        """Panic-stop the drivetrain (``CommandEnvelope{stop: Stop{}}``) — a
+        zero-field oneof arm that "cannot be malformed" (envelope.proto
+        Decision 3).
+
+        Fire-and-poll, the SAME shape as ``twist()`` (103-009, see its
+        docstring for why): the P4 firmware reports ``stop``'s outcome via
+        the ack ring (``wait_for_ack()``), not a synchronous reply, so this
+        call writes the STOP bytes and returns immediately rather than
+        blocking on a reply that will not come. This supersedes the pre-
+        103-009 implementation, which blocked up to ~800ms on
+        ``send_envelope()``'s reply-queue wait for an Ack the P4 firmware no
+        longer sends for this arm — fire-and-poll is not just consistent
+        with ``twist()``, it is also STRICTLY more responsive for a
+        panic-stop (the write happens up front either way; only the
+        pointless post-write wait is removed).
+
+        Returns the corr_id assigned to this command — pass it to
+        ``wait_for_ack()`` to confirm the firmware accepted it. Raises
+        ``ConnectionError`` if not connected. Return type changed from
+        ``None`` (pre-103-009) to ``int``; every existing caller in this
+        tree calls ``stop()`` as a bare statement and ignores the return
+        value, so this is source-compatible.
         """
         envelope = envelope_pb2.CommandEnvelope(stop=envelope_pb2.Stop())
-        self._conn.send_envelope(envelope, read_timeout=300)
+        return self._conn.send_envelope_fast(envelope)
+
+    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "AckEntry | None":  # [ms]
+        """Poll incoming ``Telemetry`` pushes for an ack-ring entry matching
+        ``corr_id``, for up to ``timeout`` ms. Returns the matched
+        ``AckEntry``, or ``None`` if the deadline passes with no match —
+        this wait is always bounded, never infinite.
+
+        The ack-ring matcher for the P4 "telemetry-only return path"
+        (103-009, Decision 2): ``twist()``/``stop()`` (and, in principle,
+        any future fire-and-poll command) get no synchronous
+        ``ReplyEnvelope`` of their own — their outcome rides the ack ring
+        (``Telemetry.acks``, depth 3) inside the next one or more regular
+        ``Telemetry`` pushes after the command reaches the firmware. Because
+        the ring is depth 3 and telemetry pushes at ~25 Hz, the SAME
+        ``corr_id`` legitimately appears in more than one polled frame in a
+        row — that is ring RE-DELIVERY, not an error and not a duplicate
+        ack. This matcher tolerates it by construction: it returns on the
+        FIRST frame where ``corr_id`` is found, so a caller never sees (and
+        never has to dedupe) the re-delivered copies.
+
+        Polls ``read_pending_binary_tlm_frames()`` — the same non-blocking
+        binary-telemetry drain other callers already use — in a short sleep
+        loop. Telemetry is always-on in the P4 design (no ``STREAM`` arm to
+        arm first, unlike ``snap()``'s pre-103 synthesis), so there is
+        nothing to arm before polling; this method only drains frames the
+        firmware was already pushing.
+        """
+        deadline = time.monotonic() + (timeout / 1000.0)
+        while True:
+            for frame in self.read_pending_binary_tlm_frames():
+                if not frame.acks:
+                    continue
+                for ack in frame.acks:
+                    if ack.corr_id == corr_id:
+                        return ack
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.01)
 
     def cancel(self) -> None:
         """Cancel the active motion command (hard stop). Sends X."""

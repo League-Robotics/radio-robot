@@ -1039,6 +1039,55 @@ class SerialConnection:
 
         return {"sent": envelope, "mode": self._mode, "reply": reply}
 
+    def send_envelope_fast(self, envelope: "envelope_pb2.CommandEnvelope") -> int:
+        """Fire-and-forget binary send: assign a corr_id, write the armored
+        envelope, return immediately -- no reply-queue registration, no wait.
+
+        The binary-plane counterpart of ``send_fast()`` (103-009, P4
+        "telemetry-only return path"): ``send_envelope()`` above registers
+        ``_reply_queues[str(corr_id)]`` and blocks up to
+        ``read_timeout + 0.5s`` for a ``ReplyEnvelope`` that answers this
+        specific ``corr_id`` -- exactly right for arms the firmware still
+        answers synchronously (``ping``/``id``/``get``/...), but wrong for
+        ``twist``/``stop``/``config``: the P4 firmware reports THEIR outcome
+        via the ack ring riding inside the next ``Telemetry`` push
+        (``telemetry.proto`` ``Telemetry.acks``), never a dedicated
+        ``ReplyEnvelope`` for that ``corr_id`` -- waiting on a
+        ``_reply_queues`` entry for one of those arms would always time out.
+        This method skips that registration/wait entirely: it assigns
+        ``envelope.corr_id`` from the SAME ``_corr_counter`` sequence
+        ``send_envelope()`` uses (so binary corr-ids never collide whichever
+        send path issued them), writes the ``*B<base64>`` armored line, and
+        returns the assigned corr_id for the caller to match against the ack
+        ring itself (see ``NezhaProtocol.wait_for_ack()``).
+
+        Raises ``ConnectionError`` if not connected, mirroring
+        ``send_fast()``'s own not-open handling (unlike ``send_envelope()``,
+        which returns an ``{"error": ...}`` dict -- this method's return
+        type is a bare ``int`` corr_id, so there is no dict shape to fold an
+        error into).
+        """
+        if not self.is_open:
+            raise ConnectionError("Not connected. Call connect first.")
+
+        with self._reply_lock:
+            self._corr_counter += 1
+            corr_id = self._corr_counter
+
+        envelope.corr_id = corr_id
+        armored = base64.b64encode(envelope.SerializeToString()).decode("ascii")
+        line = f"{_BINARY_ARMOR_PREFIX}{armored}\n"
+
+        if self.on_send:
+            self.on_send(line.rstrip())
+
+        with self._write_lock:
+            self._ser.write(line.encode("ascii"))
+            self._ser.flush()
+            self._last_write_s = time.monotonic()  # defer the next "+"
+
+        return corr_id
+
     def send_fast(self, message: str) -> None:
         """Fire-and-forget: send plain command, no response reading.
 

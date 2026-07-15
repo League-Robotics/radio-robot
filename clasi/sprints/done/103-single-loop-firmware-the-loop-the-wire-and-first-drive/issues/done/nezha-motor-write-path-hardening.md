@@ -1,5 +1,8 @@
 ---
-status: pending
+status: done
+sprint: '103'
+tickets:
+- '002'
 ---
 
 # NezhaMotor write-path hardening: commit state only on successful write; no busy-spin clearances

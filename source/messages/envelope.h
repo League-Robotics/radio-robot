@@ -5,9 +5,6 @@
 
 #include "messages/common.h"
 #include "messages/config.h"
-#include "messages/drivetrain.h"
-#include "messages/motion.h"
-#include "messages/odometer.h"
 #include "messages/telemetry.h"
 
 
@@ -41,76 +38,17 @@ struct Error {
     // --- array / optional-string accessors ---
 };
 
-// Ping
-struct Ping {
-
-    // --- array / optional-string accessors ---
-};
-
-// Hello
-struct Hello {
-
-    // --- array / optional-string accessors ---
-};
-
-// Ver
-struct Ver {
-
-    // --- array / optional-string accessors ---
-};
-
-// Help
-struct Help {
-
-    // --- array / optional-string accessors ---
-};
-
-// HelpText
-struct HelpText {
-    char text[64] = {};
-
-    // --- array / optional-string accessors ---
-};
-
-// Echo
-struct Echo {
-    uint8_t payload_[64] = {};
-    uint8_t payload_count = 0;
-
-    // --- array / optional-string accessors ---
-    const uint8_t* payload() const { return payload_; }
-    uint8_t payload_count_val() const { return payload_count; }
-};
-
-// ConfigGet
-struct ConfigGet {
-    Opt<ConfigTarget> target = {};
-
-    // --- array / optional-string accessors ---
-};
-
-// StreamControl
-struct StreamControl {
-    bool binary = false;
-    uint32_t period = 0;
-    bool trace = false;
+// Twist
+struct Twist {
+    float v_x = 0.0f;
+    float omega = 0.0f;
+    float duration = 0.0f;
 
     // --- array / optional-string accessors ---
 };
 
 // Stop
 struct Stop {
-
-    // --- array / optional-string accessors ---
-};
-
-// DeviceId
-struct DeviceId {
-    char model[48] = {};
-    char name[48] = {};
-    uint32_t serial = 0;
-    char fw_version[48] = {};
-    uint32_t proto_version = 0;
 
     // --- array / optional-string accessors ---
 };
@@ -136,122 +74,19 @@ struct ConfigDelta {
     // --- array / optional-string accessors ---
 };
 
-// ConfigSnapshot
-struct ConfigSnapshot {
-    enum class PatchKind : uint8_t {
-        NONE = 0,
-        DRIVETRAIN = 1,
-        MOTOR = 2,
-        PLANNER = 3,
-        WATCHDOG = 4,
-    };
-    PatchKind patch_kind = PatchKind::NONE;
-    union {
-        DrivetrainConfigPatch drivetrain;
-        MotorConfigPatch motor;
-        PlannerConfigPatch planner;
-        uint32_t watchdog;
-    } patch = {};
-
-    ConfigTarget target = static_cast<ConfigTarget>(0);
-
-    // --- array / optional-string accessors ---
-};
-
-// EventNotify
-struct EventNotify {
-    uint32_t seg_seq = 0;
-    MotionStatus status = static_cast<MotionStatus>(0);
-    float e_final_pos = 0.0f;
-    float e_final_theta = 0.0f;
-
-    // --- array / optional-string accessors ---
-};
-
-// PlanDumpRequest
-struct PlanDumpRequest {
-
-    // --- array / optional-string accessors ---
-};
-
-// PlanRecord
-struct PlanRecord {
-    Pose2D goal = {};
-    Pose2D anchor = {};
-    float v_eff = 0.0f;
-    float duration = 0.0f;
-    float exit_speed = 0.0f;
-    float entry_speed = 0.0f;
-    uint32_t replan_count = 0;
-
-    // --- array / optional-string accessors ---
-};
-
-// MotionTrace
-struct MotionTrace {
-    float t = 0.0f;
-    float ref_x = 0.0f;
-    float ref_y = 0.0f;
-    float ref_theta = 0.0f;
-    float ref_v = 0.0f;
-    float ref_omega = 0.0f;
-    float e_along = 0.0f;
-    float e_cross = 0.0f;
-    float e_theta = 0.0f;
-    float v_trim = 0.0f;
-    float omega_trim = 0.0f;
-    float v_cmd = 0.0f;
-    float omega_cmd = 0.0f;
-    float wheel_left = 0.0f;
-    float wheel_right = 0.0f;
-    float pose_step = 0.0f;
-    float pose_step_theta = 0.0f;
-    uint32_t seg_seq = 0;
-    bool trim_saturated = false;
-    MotionStatus status = static_cast<MotionStatus>(0);
-
-    // --- array / optional-string accessors ---
-};
-
 // CommandEnvelope
 struct CommandEnvelope {
     enum class CmdKind : uint8_t {
         NONE = 0,
-        DRIVE = 1,
-        SEGMENT = 2,
-        REPLACE = 3,
-        CONFIG = 4,
-        POSE_FIX = 5,
-        OTOS = 6,
-        PING = 7,
-        ECHO = 8,
-        GET = 9,
-        STREAM = 10,
-        STOP = 11,
-        ID = 12,
-        HELLO = 13,
-        VER = 14,
-        HELP = 15,
-        PLAN_DUMP = 16,
+        CONFIG = 1,
+        STOP = 2,
+        TWIST = 3,
     };
     CmdKind cmd_kind = CmdKind::NONE;
     union {
-        DrivetrainCommand drive;
-        MotionSegment segment;
-        MotionSegment replace;
         ConfigDelta config;
-        PoseFix pose_fix;
-        OdometerCommand otos;
-        Ping ping;
-        Echo echo;
-        ConfigGet get;
-        StreamControl stream;
         Stop stop;
-        DeviceId id;
-        Hello hello;
-        Ver ver;
-        Help help;
-        PlanDumpRequest plan_dump;
+        Twist twist;
     } cmd = {};
 
     uint32_t corr_id = 0;
@@ -266,26 +101,12 @@ struct ReplyEnvelope {
         OK = 1,
         ERR = 2,
         TLM = 3,
-        CFG = 4,
-        EVT = 5,
-        ID = 6,
-        ECHO = 7,
-        HELPTEXT = 8,
-        PLAN = 9,
-        TRACE = 10,
     };
     BodyKind body_kind = BodyKind::NONE;
     union {
         Ack ok;
         Error err;
         Telemetry tlm;
-        ConfigSnapshot cfg;
-        EventNotify evt;
-        DeviceId id;
-        Echo echo;
-        HelpText helptext;
-        PlanRecord plan;
-        MotionTrace trace;
     } body = {};
 
     uint32_t corr_id = 0;

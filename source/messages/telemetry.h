@@ -9,8 +9,24 @@
 
 namespace msg {
 
+enum class AckStatus : uint8_t {
+    ACK_STATUS_OK = 0,
+    ACK_STATUS_ERR = 1,
+};
+
+// AckEntry
+struct AckEntry {
+    uint32_t corr_id = 0;
+    AckStatus status = static_cast<AckStatus>(0);
+    uint32_t err_code = 0;
+
+    // --- array / optional-string accessors ---
+};
+
 // Telemetry
 struct Telemetry {
+    AckEntry acks_[3] = {};
+    uint8_t acks_count = 0;
     uint32_t now = 0;
     DriveMode mode = static_cast<DriveMode>(0);
     uint32_t seq = 0;
@@ -20,9 +36,6 @@ struct Telemetry {
     bool has_vel = false;
     float vel_left = 0.0f;
     float vel_right = 0.0f;
-    bool has_cmd_vel = false;
-    float cmd_vel_left = 0.0f;
-    float cmd_vel_right = 0.0f;
     bool has_pose = false;
     Pose2D pose = {};
     bool has_otos = false;
@@ -30,11 +43,25 @@ struct Telemetry {
     bool otos_connected = false;
     bool has_twist = false;
     BodyTwist3 twist = {};
-    float acc_left = 0.0f;
-    float acc_right = 0.0f;
     bool active = false;
     bool conn_left = false;
     bool conn_right = false;
+    uint32_t fault_bits = 0;
+    uint32_t event_bits = 0;
+
+    // --- array / optional-string accessors ---
+    const AckEntry* acks() const { return acks_; }
+    uint8_t acks_count_val() const { return acks_count; }
+};
+
+// TelemetrySecondary
+struct TelemetrySecondary {
+    uint32_t now = 0;
+    bool has_cmd_vel = false;
+    float cmd_vel_left = 0.0f;
+    float cmd_vel_right = 0.0f;
+    float acc_left = 0.0f;
+    float acc_right = 0.0f;
     uint32_t glitch_left = 0;
     uint32_t glitch_right = 0;
     uint32_t ts_left = 0;

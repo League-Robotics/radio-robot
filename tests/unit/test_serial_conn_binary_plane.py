@@ -440,6 +440,92 @@ def test_send_envelope_not_connected_returns_error():
 
 
 # ---------------------------------------------------------------------------
+# 3b. send_envelope_fast() (103-009 -- P4 telemetry-only return path)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingSerial:
+    """A fake `_ser` that just records every write -- send_envelope_fast()
+    never reads a reply (that is the whole point), so there is nothing to
+    synthesize on write() the way `_LoopbackSerial` does for send_envelope()."""
+
+    is_open = True
+
+    def __init__(self) -> None:
+        self.writes: list[bytes] = []
+
+    def write(self, data: bytes) -> int:
+        self.writes.append(data)
+        return len(data)
+
+    def flush(self) -> None:
+        pass
+
+
+def test_send_envelope_fast_writes_armored_envelope_and_returns_corr_id():
+    conn = _new_conn()
+    conn._ser = _RecordingSerial()
+    env = envelope_pb2.CommandEnvelope()
+    env.stop.SetInParent()
+
+    corr_id = conn.send_envelope_fast(env)
+
+    assert corr_id == 1
+    assert env.corr_id == 1  # envelope.corr_id assigned in place
+    [written] = conn._ser.writes
+    text = written.decode("ascii").strip()
+    assert text.startswith("*B")
+    decoded = envelope_pb2.CommandEnvelope.FromString(base64.b64decode(text[2:]))
+    assert decoded.corr_id == 1
+    assert decoded.WhichOneof("cmd") == "stop"
+
+
+def test_send_envelope_fast_registers_no_reply_queue():
+    """The whole point of the _fast suffix: no _reply_queues entry is ever
+    registered for this corr_id -- there is nothing to wait on and nothing
+    to leak/clean up."""
+    conn = _new_conn()
+    conn._ser = _RecordingSerial()
+    env = envelope_pb2.CommandEnvelope()
+    env.stop.SetInParent()
+
+    conn.send_envelope_fast(env)
+
+    assert conn._reply_queues == {}
+
+
+def test_send_envelope_fast_shares_the_corr_counter_with_send_envelope():
+    """Binary corr-ids never collide regardless of which send path issued
+    them -- send_envelope_fast() draws from the SAME _corr_counter sequence
+    send_envelope() uses."""
+    conn = _new_conn()
+    conn._ser = _LoopbackSerial()
+    conn._start_reader()
+    try:
+        env1 = envelope_pb2.CommandEnvelope()
+        env1.stop.SetInParent()
+        result = conn.send_envelope(env1, read_timeout=200)
+        assert "error" not in result
+
+        env2 = envelope_pb2.CommandEnvelope()
+        env2.stop.SetInParent()
+        corr_id2 = conn.send_envelope_fast(env2)
+    finally:
+        conn._stop_reader()
+
+    assert corr_id2 == env1.corr_id + 1
+
+
+def test_send_envelope_fast_not_connected_raises():
+    conn = _new_conn()  # _ser stays None -- never connected
+    env = envelope_pb2.CommandEnvelope()
+    env.stop.SetInParent()
+
+    with pytest.raises(ConnectionError):
+        conn.send_envelope_fast(env)
+
+
+# ---------------------------------------------------------------------------
 # 4. drain_binary_tlm() / read_binary_tlm() (097-003)
 # ---------------------------------------------------------------------------
 

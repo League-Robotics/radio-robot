@@ -1,100 +1,75 @@
-"""Fuzz corpus for ticket 095-006 (SUC-005, architecture-update.md M8 "Codec
-Test Harness").
+"""Fuzz corpus for the P4-pruned wire protocol (103-001, SUC-001,
+architecture-update.md (103) Decisions 2/3).
 
-***Part of the correctness gate `BinaryChannel` (ticket 007) is built on top
-of -- see test_wire_differential.py's module docstring for the full "this is
-a blocking regression, not an xfail" statement, which applies equally here.***
+***Part of the correctness gate the `source/app/` tickets (004+) are built
+on top of -- see test_wire_differential.py's module docstring for the full
+"this is a blocking regression, not an xfail" statement, which applies
+equally here.***
 
 Feeds >= 200 generated malformed/adversarial byte strings to the firmware
 decoder (`msg::wire::decode(CommandEnvelope&, ...)`, via
 ``wire_differential_harness``'s `decode` argv command) across the four
-categories the ticket names:
+categories:
 
   1. **random** -- uniformly random byte strings of random length.
   2. **truncated** -- a valid, pb2-serialized `CommandEnvelope` chopped at
      EVERY byte boundary (0..len-1).
   3. **oversized** -- a valid encoding plus trailing random garbage.
   4. **salted** -- a valid encoding with an extra, unrecognized top-level
-     field (field number 99) spliced in at a genuine FIELD BOUNDARY
-     (prepended or appended to the whole message -- never spliced into the
-     middle of an existing field's own bytes, which would just be a
-     different malformed-input case, not a clean "extra unknown field"
-     case).
+     field (field number 99) spliced in at a genuine FIELD BOUNDARY.
 
 For categories 1-3 the only acceptance bar is: the harness process must
 exit 0 with a well-formed "OK ..."/"ERR field=<n> code=<NAME>" line -- NEVER
 crash, NEVER trip ASan/UBSan. `decode()` returning `ok=false` for garbage
 input is a normal, correct outcome, not a test failure.
 
-For category 4 the bar is stronger, per the ticket text ("always returns...
-`ok=true` with the unknown field correctly skipped"): decode() must
-additionally succeed (`OK`) with the ORIGINAL message's known fields
-(`corr_id`, the active arm) intact and unaffected by the spliced-in unknown
-field.
+For category 4 the bar is stronger: decode() must additionally succeed
+(`OK`) with the ORIGINAL message's known fields (`corr_id`, the active arm)
+intact and unaffected by the spliced-in unknown field.
 
 **Run under ASan/UBSan** (`-fsanitize=address,undefined -fno-omit-frame-
-pointer -g`, matching wire_codec_harness.cpp's/wire_runtime_harness.cpp's
-own precedent from tickets 004/005) -- this is the ENTIRE point of the
-fuzz sub-suite: `WireRuntime`'s primitives and the generated field-table
-walker in `wire.cpp` operate on raw, adversarial byte buffers with pointer
-arithmetic and fixed-size stack/struct buffers; ASan/UBSan is what actually
-proves "never reads/writes out of bounds", not just "returned the right
-bool".
+pointer -g`) -- this is the ENTIRE point of the fuzz sub-suite:
+`WireRuntime`'s primitives and the generated field-table walker in
+`wire.cpp` operate on raw, adversarial byte buffers with pointer arithmetic
+and fixed-size stack/struct buffers; ASan/UBSan is what actually proves
+"never reads/writes out of bounds", not just "returned the right bool".
 """
 from __future__ import annotations
 
-import os
 import pathlib
 import random
 
 import pytest
 
 from _wire_diff_driver import (  # noqa: E402
-    build_motion_segment,
     compile_harness,
     decode,
-    encode_cfg_drivetrain,
-    encode_cfg_motor,
-    encode_cfg_planner,
-    encode_cfg_watchdog,
     encode_telemetry,
+    encode_telemetry_secondary,
     env_config_drivetrain,
-    env_drive_twist,
-    env_drive_wheels,
-    env_echo,
-    env_segment,
+    env_stop,
+    env_twist,
     parse_decode_line,
-    pb_config,
     unknown_varint_field,
 )
 
 # ---------------------------------------------------------------------------
 # Representative valid CommandEnvelope encodings the truncated/oversized/
-# salted categories are built from -- span drive (twist + wheels), segment,
-# echo, and (096-006) config, so the corpus isn't skewed toward a single
-# arm's byte shape.
+# salted categories are built from -- span all three live arms (twist,
+# config, stop), so the corpus isn't skewed toward a single arm's byte
+# shape.
 # ---------------------------------------------------------------------------
 
-_VALID_SEGMENT = env_segment(100, build_motion_segment(
-    distance=-1500.0, direction=0.5, final_heading=1.2, speed_max=800.0, accel_max=2000.0, jerk_max=30000.0,
-    yaw_rate_max=6.0, yaw_accel_max=40.0, yaw_jerk_max=100.0,
-))
-_VALID_DRIVE_WHEELS = env_drive_wheels(101, [(100.0, -5.0), (200.0, 10.0), (300.0, None), (None, 400.0)])
-_VALID_DRIVE_TWIST = env_drive_twist(102, 500.0, 600.0, 700.0, seed=True, standby=True)
-_VALID_ECHO = env_echo(103, bytes(range(40)))
-# 096-006: ConfigDelta{drivetrain} -- exercises the new CONFIG decode-side
-# printing this ticket added to wire_differential_harness.cpp's cmdDecode()
-# under truncation/salting the same way every other arm already is.
+_VALID_TWIST = env_twist(100, 500.0, 3.0, 700.0)
 _VALID_CONFIG_DRIVETRAIN = env_config_drivetrain(
     104, trackwidth=321.0, rotational_slip=0.75, ekf_q_xy=1.5, ekf_q_theta=2.5, ekf_r_otos_xy=3.5,
     ekf_r_otos_theta=4.5)
+_VALID_STOP = env_stop(105)
 
 _VALID_MESSAGES = {
-    "segment": (_VALID_SEGMENT, 100, "SEGMENT"),
-    "drive_wheels": (_VALID_DRIVE_WHEELS, 101, "DRIVE"),
-    "drive_twist": (_VALID_DRIVE_TWIST, 102, "DRIVE"),
-    "echo": (_VALID_ECHO, 103, "ECHO"),
+    "twist": (_VALID_TWIST, 100, "TWIST"),
     "config_drivetrain": (_VALID_CONFIG_DRIVETRAIN, 104, "CONFIG"),
+    "stop": (_VALID_STOP, 105, "STOP"),
 }
 
 
@@ -111,8 +86,14 @@ def _build_corpus() -> list[tuple[str, bytes, str, int | None, str | None]]:
     cases: list[tuple[str, bytes, str, int | None, str | None]] = []
 
     # 1. Random bytes -- fixed seed for a reproducible, non-flaky corpus.
+    # 150 (raised from the pre-103 suite's 60): the pruned P4 schema's 3
+    # live arms (twist/config/stop) are much shorter on average than the
+    # pre-103 schema's ~9, so the truncated category (one case per byte
+    # boundary per valid message, this corpus's dominant contributor before)
+    # shrank a lot -- widen the random category to keep the corpus above the
+    # acceptance criterion's 200-case floor (see test_corpus_size_at_least_200).
     rng = random.Random(20260710)
-    for i in range(60):
+    for i in range(150):
         length = rng.randint(0, 250)
         raw = bytes(rng.getrandbits(8) for _ in range(length))
         cases.append((f"random_{i}_len{length}", raw, "any", None, None))
@@ -144,7 +125,18 @@ _CORPUS = _build_corpus()
 
 
 def test_corpus_size_at_least_200():
-    """Acceptance criterion: the fuzz corpus is >= 200 cases."""
+    """Acceptance criterion: the fuzz corpus is >= 200 cases.
+
+    NOTE: the pruned P4 schema has only 3 live arms (twist/config/stop)
+    against the pre-103 schema's ~9 -- the truncated category (the corpus's
+    dominant contributor, one case per byte boundary per valid message) is
+    correspondingly smaller (60 cases vs. the pre-103 suite's much larger
+    total). The random-byte category was widened (60 -> 150, see
+    `_build_corpus()`) to keep the total comfortably above 200; this
+    assertion is the actual gate, not the category counts -- if a future
+    schema change drops below 200, widen the random category further
+    rather than silently lowering this bar.
+    """
     assert len(_CORPUS) >= 200, f"fuzz corpus only has {len(_CORPUS)} cases, need >= 200"
 
 
@@ -194,20 +186,21 @@ def test_fuzz_case(asan_harness, case_id, raw, kind, expected_corr_id, expected_
 
 
 # ---------------------------------------------------------------------------
-# 096-006: ASan/UBSan encode-side check for Telemetry/ConfigSnapshot, this
-# ticket's two new REPLY-only (encode-only) messages. The categories above
-# all target decode() (adversarial raw BYTES); encode() instead takes a
+# ASan/UBSan encode-side check for Telemetry/TelemetrySecondary, this
+# schema's two REPLY-only (encode-only) messages. The categories above all
+# target decode() (adversarial raw BYTES); encode() instead takes a
 # fully-typed, harness-constructed C++ struct, so there is no "malformed
 # input" surface to fuzz the same way -- what CAN still go wrong is a
 # buffer-sizing bug in encodeInto()/encodeNestedMessage()'s fixed-size
 # scratch buffers (wire.cpp's kEncodeScratchCap) once a message grows this
-# large: Telemetry is the single biggest oneof arm in ReplyEnvelope
-# (~165B, wire.h's own kReplyEncodedSize breakdown), with THREE nested
-# messages (pose/otos/twist) and 28 fields total -- the most encode() field-
-# table walking any single call in this schema does. Extreme scalar values
-# (glitch_left/right/ts_left/ts_right at UINT32_MAX, every float at its
-# IEEE-754 extreme, mode past its declared enum range) exercise every
-# encodeScalarValue() branch at its own type's boundary under ASan/UBSan.
+# large: Telemetry is the single biggest oneof arm in ReplyEnvelope (~173B,
+# wire.h's own kReplyEnvelopeMaxEncodedSize breakdown), with a depth-3
+# repeated-message ack ring PLUS three nested messages (pose/otos/twist) --
+# the most encode() field-table walking any single call in this schema
+# does. Extreme scalar values (fault_bits/event_bits/ack err_code at
+# UINT32_MAX, every float at its IEEE-754 extreme, mode past its declared
+# enum range) exercise every encodeScalarValue() branch at its own type's
+# boundary under ASan/UBSan.
 # ---------------------------------------------------------------------------
 
 _UINT32_MAX = 4294967295
@@ -216,14 +209,13 @@ _FLOAT_EXTREMES = [3.4028235e38, -3.4028235e38, 1.1754944e-38, 0.0, float("nan")
 
 @pytest.mark.parametrize("value", _FLOAT_EXTREMES, ids=[f"f{i}" for i in range(len(_FLOAT_EXTREMES))])
 def test_fuzz_encode_telemetry_float_extremes(asan_harness, value):
-    r = encode_telemetry(asan_harness, 1, now=_UINT32_MAX, mode=255, seq=_UINT32_MAX, has_enc=True,
+    acks = ((_UINT32_MAX, 1, _UINT32_MAX), (_UINT32_MAX, 1, _UINT32_MAX), (_UINT32_MAX, 1, _UINT32_MAX))
+    r = encode_telemetry(asan_harness, 1, acks=acks, now=_UINT32_MAX, mode=255, seq=_UINT32_MAX, has_enc=True,
                           enc_left=value, enc_right=value, has_vel=True, vel_left=value, vel_right=value,
-                          has_cmd_vel=True, cmd_vel_left=value, cmd_vel_right=value, has_pose=True, pose_x=value,
-                          pose_y=value, pose_h=value, has_otos=True, otos_x=value, otos_y=value, otos_h=value,
-                          otos_connected=True, has_twist=True, twist_vx=value, twist_vy=value, twist_omega=value,
-                          acc_left=value, acc_right=value, active=True, conn_left=True, conn_right=True,
-                          glitch_left=_UINT32_MAX, glitch_right=_UINT32_MAX, ts_left=_UINT32_MAX,
-                          ts_right=_UINT32_MAX)
+                          has_pose=True, pose_x=value, pose_y=value, pose_h=value, has_otos=True, otos_x=value,
+                          otos_y=value, otos_h=value, otos_connected=True, has_twist=True, twist_vx=value,
+                          twist_vy=value, twist_omega=value, active=True, conn_left=True, conn_right=True,
+                          fault_bits=_UINT32_MAX, event_bits=_UINT32_MAX)
     # No ASan/UBSan finding is the only bar here (encode_telemetry() itself
     # already asserts !crashed and a well-formed "B64 .../ZERO" line via
     # run_harness()'s own crashed-detection -- calling it at all under the
@@ -231,44 +223,13 @@ def test_fuzz_encode_telemetry_float_extremes(asan_harness, value):
     assert r is None or len(r) > 0
 
 
-@pytest.mark.parametrize("target", [0, 1, 2, 3, 4, 255])
-def test_fuzz_encode_cfg_snapshot_extremes(asan_harness, target):
-    """Every ConfigSnapshot `patch` arm, extreme field values, plus an
-    out-of-declared-range `target`/`side` enum value (255 -- the generated
-    encoder has no enum-range validation on ITS OWN output, only decode()
-    validates incoming enums; encoding an out-of-range value must still
-    never crash, matching decode()'s own "well-formed but semantically
-    invalid" tolerance elsewhere in this schema)."""
-    assert encode_cfg_drivetrain(asan_harness, 1, target, 3.4e38, -3.4e38, float("nan"), float("inf"),
-                                  float("-inf"), 0.0, float("nan"), float("inf")) is not None
-    assert encode_cfg_motor(asan_harness, 1, target, 255, 3.4e38, -3.4e38, float("nan"), float("inf"),
-                             float("-inf"), 0.0) is not None
-    # 100-001: PlannerConfigPatch grew from 3 to 20 fields (Drive::Limits'
-    # wire-tunable subset, planner.proto 15-31) -- cycle the same extreme
-    # values ([nan, inf, -inf, 3.4e38, -3.4e38, 0.0]) across all 17 new
-    # fields rather than hand-counting 17 positional float() literals.
-    _extreme_cycle = [float("nan"), float("inf"), float("-inf"), 3.4e38, -3.4e38, 0.0]
-    extras = [_extreme_cycle[i % len(_extreme_cycle)] for i in range(17)]
-    assert encode_cfg_planner(asan_harness, 1, target, float("nan"), float("inf"), float("-inf"),
-                               *extras) is not None
-    assert encode_cfg_watchdog(asan_harness, 1, target, _UINT32_MAX) is not None
-
-
-def test_fuzz_encode_cfg_snapshot_every_target_and_side(asan_harness):
-    """Sanity companion to the extremes case above -- every DECLARED
-    ConfigTarget/BoundMotorSide value, ordinary in-range field values, under
-    ASan/UBSan."""
-    for target in (pb_config.CONFIG_DRIVETRAIN, pb_config.CONFIG_MOTOR_LEFT, pb_config.CONFIG_MOTOR_RIGHT,
-                   pb_config.CONFIG_PLANNER, pb_config.CONFIG_WATCHDOG):
-        assert encode_cfg_drivetrain(asan_harness, 1, target, 321.0, 0.75, 1.5, 2.5, 3.5, 4.5) is not None
-        for side in (pb_config.LEFT, pb_config.RIGHT):
-            assert encode_cfg_motor(asan_harness, 1, target, side, 1.111, 9.5, 8.5, 7.5, 6.5, 5.5) is not None
-        # 100-001: PlannerConfigPatch's 17 new fields, ordinary in-range
-        # values (tovez.json's own starting values, planner.proto 15-31).
-        assert encode_cfg_planner(asan_harness, 1, target, 42.0, 6.0, 0.25,
-                                   620.0, 20.0, 150.0, 2.0, 6.0, 1.5e-5, 120.0, 2.0,
-                                   40.0, 0.15, 0.2, 0.3, 3.0, 40.0, 0.14, 15.0, 0.15) is not None
-        assert encode_cfg_watchdog(asan_harness, 1, target, 4242) is not None
+@pytest.mark.parametrize("value", _FLOAT_EXTREMES, ids=[f"f{i}" for i in range(len(_FLOAT_EXTREMES))])
+def test_fuzz_encode_telemetry_secondary_float_extremes(asan_harness, value):
+    r = encode_telemetry_secondary(asan_harness, now=_UINT32_MAX, has_cmd_vel=True, cmd_vel_left=value,
+                                    cmd_vel_right=value, acc_left=value, acc_right=value,
+                                    glitch_left=_UINT32_MAX, glitch_right=_UINT32_MAX, ts_left=_UINT32_MAX,
+                                    ts_right=_UINT32_MAX)
+    assert r is None or len(r) > 0
 
 
 if __name__ == "__main__":

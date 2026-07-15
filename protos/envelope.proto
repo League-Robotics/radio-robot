@@ -2,94 +2,44 @@ syntax = "proto3";
 
 package robot;
 
-import "options.proto";
-import "common.proto";
-import "drivetrain.proto";
-import "motion.proto";
-import "odometer.proto";
-import "telemetry.proto";
 import "config.proto";
+import "telemetry.proto";
 
 // ---------------------------------------------------------------------------
-// Binary command-plane envelope (095-001, SUC-001). The wire contract for
-// the `*B<base64(envelope_bytes)>` armored binary framing (see
-// architecture-update.md (095) "Framing"). `CommandEnvelope` carries one
-// command in; `ReplyEnvelope` carries one reply out. Rule: one `cmd` oneof
-// arm per Rt::Blackboard command-plane queue plus system verbs — the
-// firmware dispatcher (source/commands/binary_channel.{h,cpp}, ticket 007)
-// becomes a switch, not a verb table.
+// Binary command-plane envelope -- PRUNED to the P4 wire surface (103-001,
+// SUC-001, architecture-update.md (103) Decision 2/3). The single-loop
+// firmware is a velocity/yaw follower, not a planner: `CommandEnvelope`
+// carries exactly THREE command arms -- `twist`/`config`/`stop` -- every
+// command still carries `corr_id`, but the per-command REPLY path is gone
+// (Decision 2's "telemetry-only return path"): a command's outcome is
+// reported via the ack ring riding inside every `Telemetry` push
+// (telemetry.proto), not a dedicated `ReplyEnvelope` for that command.
+// `ReplyEnvelope` itself survives, narrowed to `ok`/`err`/`tlm` -- see its
+// own doc comment below for why `ok`/`err` are kept even though the ack
+// ring is now the primary ack path.
 //
-// **Implemented this sprint** (095, tickets 003-007 build runtime behavior
-// on these arms): drive, segment, replace, stop, ping, echo, id.
-// **Declared only** this sprint (schema exists now so 096/098 slot in
-// without a later schema break; `BinaryChannel` replies
-// `Error{ERR_UNIMPLEMENTED}` for these until their owning sprint lands):
-// config/get/stream (096), pose/otos (098).
+// This is a RE-DERIVATION of sprint 102's unmerged spike-003 dry run
+// (`scratch/102-003-frame-budget`, commit `10985ec1d4`), not a straight
+// cherry-pick -- see this ticket's own completion notes for the real
+// `gen_messages.py`-measured worst-case sizes (spike-003's numbers were a
+// dry run against a slightly different field set and are not reused here
+// silently).
 //
-// **hello/ver/help (stakeholder-directed, 2026-07-10)**: added so every
-// verb in the text safety rump (HELP/HELLO/PING/ID/VER/STOP,
-// docs/protocol-v3.md section 6) also has a binary arm -- `BinaryChannel`
-// (source/commands/binary_channel.cpp) handles all three live, same as
-// ping/stop/id.
-//
-// 096-001 gives config/get/stream a REAL schema (`Telemetry`/`ConfigDelta`/
-// `ConfigSnapshot` are no longer empty placeholders -- see below and
-// telemetry.proto/config.proto), but `BinaryChannel` runtime behavior for
-// these three arms still lands later this sprint (tickets 002-005); until
-// then they still reply `Error{ERR_UNIMPLEMENTED}` exactly as before.
-//
-// **Live since 100-009** (declared schema-only by 100-001, same "schema now,
-// runtime later" precedent as config/get/stream/pose/otos above): `plan_dump`
-// (`CommandEnvelope.cmd` arm 18, replies `plan`/`PlanRecord`, arm 10 -- one
-// `PlanRecord` per ring entry, sharing `corr_id`) and `trace`
-// (`ReplyEnvelope.body` arm 11, `MotionTrace`, armed via
-// `StreamControl.trace`, emitted alongside the regular `tlm` push at the
-// same period). `EventNotify` (`evt`, arm 6) gained a real body at 100-001
-// (Decision 5); publication onto the wire is still a documented gap this
-// sprint (source/runtime/blackboard.h's own `bb.lastEvent` doc comment) --
-// out of this ticket's scope (only the trace/plan-dump arms are this
-// ticket's own job).
-//
-// `motion` (field 5, `PlannerCommand`) is NOT declared this sprint --
-// architecture-update-r1.md Decision 6 (095, revising this document's
-// original "declare all arms now" framing): `PlannerCommand`'s own
-// worst-case encoded size is 327B, over the 186B envelope budget on its
-// own (dominated by `repeated StopCondition stops = 9 [(max_count) = 4]`
-// = 160B, never packed since it's repeated-message), and it has a live
-// text-plane consumer (`motion_commands.cpp`'s R/TURN/G handlers) that
-// makes shrinking it out of this ticket's scope. Field number 5 is
-// RESERVED, not reused -- a future sprint that un-parks
-// `Subsystems::Planner` defines a new, deliberately-bounded wire payload
-// type for `motion` first (the same move Decision 2 already made for
-// `segment`/`replace`: a purpose-built `MotionSegment` rather than
-// `Motion::Segment` directly), then declares it at field 5. Adding a new
-// oneof arm later is non-breaking in protobuf (ticket 004's unknown-
-// field-skip means older builds simply skip a field number they don't
-// recognize yet) -- there is no cost to reserving field 5 for later and
-// no benefit to declaring it now, unbounded.
-//
-// Cross-file message references (drive->DrivetrainCommand, segment/
-// replace->MotionSegment, pose->SetPose, otos->OdometerCommand): this was
-// the FIRST protos/*.proto file in this tree to import a subsystem-specific
-// proto file other than common.proto/options.proto (ticket 001). The
-// resulting generator gap (scripts/gen_messages.py's `_emit_file()`
-// emitting only a fixed `#include "messages/common.h"`, no per-file
-// cross-reference tracking) was fixed in ticket 003 --
-// `_cross_file_include_block()` now emits one additional `#include` per
-// OTHER proto file this file's own `import` lines name; see ticket 003's
-// completion notes for the fix and verification.
+// Every pre-102 arm this prune removes (drive, segment, replace, pose_fix,
+// otos, ping, echo, get, stream, id, hello, ver, help, plan_dump) is
+// `reserved`, not reused -- CommandEnvelope/ReplyEnvelope shipped and were
+// exercised on real hardware across sprints 095-100, so the project's
+// existing "reserved, not reused" wire-stability discipline (already used
+// for `motion`'s field 5, below) applies to every arm this ticket removes
+// too. `config`/`stop` are KEPT (not removed) and keep their pre-102 field
+// numbers (6/13) unchanged -- only genuinely NEW arms (`twist`) get a fresh,
+// previously-unused field number (19).
 // ---------------------------------------------------------------------------
 
-// Binary reply/error taxonomy (Open Question 4, resolved this ticket).
-// Mirrors the text plane's existing "unknown"/"badarg"/"range"/"full" reply
-// codes (see e.g. motion_commands.cpp's res.err.code string literals) plus
-// binary-specific additions (DECODE/UNIMPLEMENTED/OVERSIZE have no text-
-// plane equivalent — the text plane's hand-tokenizer never needed a
-// generic "malformed bytes" or "arm not wired yet" code). Numeric values
-// are wire-stable once wire.cpp/tests (later tickets) depend on them; only
-// the C++ enum name follows normal CamelCase naming
-// (.claude/rules/naming-and-style.md) -- the enumerator VALUES are
-// wire-key-adjacent constants, not renamed by that convention.
+// Binary reply/error taxonomy -- unchanged shape from the pre-102 schema;
+// still needed for whichever of ERR_BADARG/RANGE/DECODE/etc. the pruned
+// twist/config/stop arms (or the ack ring's own err_code, telemetry.proto)
+// can still produce.
 enum ErrCode {
   ERR_NONE          = 0;
   ERR_UNKNOWN        = 1;  // no such oneof arm / unknown target
@@ -101,20 +51,18 @@ enum ErrCode {
   ERR_OVERSIZE       = 7;  // encoded reply would exceed the envelope cap
 }
 
-// Flow-control ack. Mirrors the q=/rem= fields of the text plane's MOVE/
-// MOVER acks exactly (motion_commands.cpp handleMove/handleMover) -- a
-// streaming teleop client reads q (queue depth) / rem (remaining
-// translation, mm) off this ack the same way it does off the text OK reply.
-//
-// t (095-007, schema-gap closure -- same "cheap, downstream-critical,
-// closed rather than silently dropped" treatment Decision 4 gave the `id`
-// request arm): robot-clock timestamp, set ONLY by BinaryChannel's `ping`
-// reply -- mirrors text PING's `OK pong t=<ms>` reply exactly (Types::
-// systemClockNow()). Every other Ack producer (drive/segment/replace/stop)
-// leaves it at its zero default. Sprint 098's pose-estimation work
-// (Decision 6, camera-fix clock-sync) depends on a binary PING carrying a
-// timestamp for parity with the text plane -- ticket 007's own completion
-// notes.
+// Flow-control ack -- unchanged shape (q/rem/t) from the pre-102 schema.
+// Kept as `ReplyEnvelope.ok`'s payload even though the ack ring
+// (telemetry.proto's `Telemetry.acks`) is now the PRIMARY per-command ack
+// path (Decision 2): `ok`/`err` stay declared because `ReplyEnvelope`
+// itself is kept as a distinct top-level type (this ticket's own
+// re-measurement confirmed dropping it entirely bought nothing -- see
+// completion notes), and a future ticket may still want a synchronous
+// same-line ack for a command whose result cannot wait a full telemetry
+// cycle. No `source/app/` ticket this sprint is required to emit `ok`/`err`
+// live (ticket 004/008's own discretion) -- schema now, runtime later,
+// matching the project's established precedent (e.g. 096's config/get/
+// stream arms).
 message Ack {
   uint32 q   = 1;
   float  rem = 2;  // [mm]
@@ -129,395 +77,73 @@ message Error {
   uint32  field = 2;
 }
 
-// --- Leaf messages (six new types this ticket adds) -------------------
-
-message Ping {}
-
-// Hello/Ver/Help -- zero-field oneof arms (stakeholder-directed 6-verb
-// minimal command surface, 2026-07-10): give the text safety rump's
-// remaining three verbs -- HELLO, VER, HELP -- their own binary parity,
-// completing the set PING/STOP/ID already had. Same "cannot be malformed"
-// shape Ping/Stop/DeviceId's own request side already use.
-//
-// hello/ver both reply the EXISTING DeviceId message (Decision 4's
-// reasoning extended: DeviceId already carries model/name/serial/
-// fw_version/proto_version, which IS both HELLO's announcement content and
-// VER's fw/proto content) -- no new reply message for either. help replies
-// the new HelpText message below (a HELP-specific text payload has no
-// existing reply shape to reuse).
-message Hello {}
-message Ver {}
-message Help {}
-
-// HelpText -- HELP's reply body: the live registered verb list
-// (Rt::CommandRouter::listVerbs(), the SAME source text HELP's text-plane
-// handler reads), space-separated. `text` stays at the generator's default
-// `char[64]` width (no `(str_len)` override) -- the rump is 6 short verbs
-// ("HELP HELLO PING ID VER STOP", 28 bytes), nowhere near the 63-byte
-// content budget a 64-byte array gives on the wire (kString's cap includes
-// the decoder's own reserved null-terminator byte, wire.cpp), and this
-// message is never nested inside anything larger than the top-level
-// ReplyEnvelope.body arm it occupies.
-message HelpText {
-  string text = 1;
+// Twist -- the P4 command shape's ONLY motion command (NEW this ticket).
+// Replaces drive/segment/replace/pose_fix/otos entirely: the host computes
+// the whole trajectory and streams twist setpoints; the robot only servos
+// to them (`Drive::setTwist`, source/app/drive.*, ticket 006) and arms the
+// unified `Deadman` (ticket 004) for `duration`.
+message Twist {
+  float v_x      = 1;  // [mm/s] body-frame forward velocity
+  float omega    = 2;  // [rad/s] body-frame yaw rate
+  float duration = 3;  // [ms] deadman arm window
 }
 
-// payload: up to 64 raw bytes, echoed back verbatim.
-//
-// DEVIATION (flagged, not hand-patched): scripts/gen_messages.py's
-// `_emit_message()` only special-cases `(max_count)` for REPEATED fields
-// (`is_repeated` branch -> fixed C array + `_count`). `bytes` is a
-// proto3 SCALAR type (like `string`), not inherently repeated, so a
-// singular `bytes` field with `(max_count)` falls through to the generic
-// scalar branch and is emitted as a single `uint8_t payload = 0;` --  a
-// ONE-byte field, not the intended fixed 64-byte buffer. Verified against
-// the real `gen_messages.py` run for this ticket (see completion notes).
-// Writing `repeated uint32 payload` instead would dodge the gap but
-// silently change the wire representation from a raw byte string to a
-// packed varint list -- a different wire format than specified, not a
-// schema-authoring decision this ticket may make silently. The proto
-// stays exactly `bytes payload = 1 [(max_count) = 64]` as specified;
-// ticket 004/005 (codegen extension) must special-case TYPE_BYTES +
-// (max_count) the same way it special-cases repeated + (max_count).
-message Echo {
-  bytes payload = 1 [(max_count) = 64];
-}
-
-// target: which config slice to fetch. Retyped `uint32` -> `ConfigTarget`
-// (096-001, config.proto) -- the enum 095 anticipated but left undefined
-// ("096 defines the target enum/numbering").
-//
-// `target` is `optional` + `(req) = true` (095-005 Step 1-4 testing need:
-// the schema had no field exercising the generated decoder's `req`
-// validation path -- see ticket 005's completion notes). `optional` gives
-// this field real protobuf explicit-presence semantics (a synthetic oneof,
-// `Opt<ConfigTarget>` in the generated struct) rather than proto3's default
-// implicit presence, which is required for `(req)` to be meaningful: a
-// plain (non-optional) scalar/enum field's zero value is indistinguishable
-// from "never sent" once a real protobuf encoder omits it, so marking a
-// non-optional field `req` would spuriously reject a legitimate
-// `target = CONFIG_DRIVETRAIN` (enum value 0). `optional` forces every
-// encoder (including the host's real `google.protobuf` bindings, M7) to
-// serialize the field whenever it is explicitly set, zero value or not.
-message ConfigGet {
-  optional ConfigTarget target = 1 [(req) = true];
-}
-
-// binary: true selects the binary telemetry emitter over the text one.
-// period: telemetry emission period.
-// trace (100-009, motion-stack-v2 M9): arms MotionTrace (arm 11, below)
-// emission alongside the regular Telemetry frame, at the SAME period --
-// this field was not part of ticket 100-001's own schema-only pass (which
-// only declared the PlanDumpRequest/PlanRecord/MotionTrace shapes
-// themselves) and is added directly here, live, by the ticket that gives
-// those shapes a real BinaryChannel/tickTelemetry consumer. A developer
-// arms both `binary=true` (096) and `trace=true` (this field) to receive
-// one Telemetry + one MotionTrace push per period -- SUC-011's own Main
-// Flow step 2. false (the default) preserves every pre-existing STREAM
-// caller's behavior unchanged (no MotionTrace pushes unless explicitly
-// requested).
-message StreamControl {
-  bool   binary = 1;
-  uint32 period = 2;  // [ms]
-  bool   trace  = 3;
-}
-
-// Zero-field oneof arm (Decision 3): a panic-stop must have zero ways to
-// be malformed. BinaryChannel (ticket 007) handles this by constructing
-// msg::DrivetrainCommand{NEUTRAL=BRAKE} itself and posting to driveIn --
-// byte-identical to handleStop()'s own construction (motion_commands.cpp).
+// Zero-field oneof arm (same "cannot be malformed" shape the pre-102 schema's
+// Stop already used) -- a panic-stop must have zero ways to be malformed.
 message Stop {}
 
-// Used BOTH as the empty-bodied CommandEnvelope.cmd.id request (Decision 4
-// -- sprint.md's Scope commits to binary `id` this sprint even though the
-// issue's own envelope sketch only showed DeviceId on the reply side) AND
-// the populated ReplyEnvelope.body.id reply, mirroring handleId()'s text
-// reply fields in system_commands.cpp exactly: `model=NEZHA2 name=<n>
-// serial=<s> fw=<ver> proto=<n>`. On the request arm every field stays at
-// its zero-value default (the request carries no payload of its own --
-// same "cannot be malformed" shape Stop gets above).
-message DeviceId {
-  // (str_len)=48 (095-005 Step 0b, architecture-update-r1.md Decision 6):
-  // shrunk from the generator's default char[64] so
-  // `ReplyEnvelope{DeviceId}`'s worst-case kMaxEncodedSize fits the 186-byte
-  // envelope budget (~171B after this shrink; see ticket 005's completion
-  // notes for the full computation) -- Open Question 3's already-sanctioned
-  // latitude.
-  string model         = 1 [(str_len) = 48];
-  string name          = 2 [(str_len) = 48];
-  uint32 serial        = 3;
-  string fw_version    = 4 [(str_len) = 48];
-  uint32 proto_version = 5;
-}
-
-// --- Config plane (096-001; replaces 095's empty placeholders) ---------
-//
-// architecture-update.md (095)'s own envelope.proto sketch (echoing the
-// driving issue's sketch) named `ConfigDelta`, `Telemetry`, and
-// `ConfigSnapshot` as the payload types for the config/tlm/cfg arms below,
-// but none of the three existed anywhere in protos/*.proto at the time:
-//   - `ConfigDelta` existed ONLY as `Rt::ConfigDelta`, a hand-written,
-//     field-masked C++ struct in source/runtime/commands.h (Rt::, not
-//     msg::; a completely different shape -- target+port+field-mask, not
-//     a wire-friendly value message). No collision risk (different
-//     namespace), but no reusable shape either -- `robot.ConfigDelta`
-//     below is a NEW, purpose-built wire message, not a mirror of
-//     `Rt::ConfigDelta`'s own internal shape.
-//   - `Telemetry` / `ConfigSnapshot` had no existing definition anywhere in
-//     this tree (proto or hand-written).
-// 095 declared minimal EMPTY placeholder messages here so the oneof arms
-// its own acceptance criteria required could exist at all, without 095
-// inventing a config-delta/telemetry/config-snapshot wire shape it had no
-// mandate to design -- flagged per that ticket's own Decision 5 "record
-// the discrepancy, don't silently reconcile" precedent (the same pattern
-// protos/odometer.proto's own header comment uses for its Pose2D-vs-SetPose
-// reuse call).
-//
-// 096-001 replaces those placeholder BODIES (Decision 2/4, config.proto):
-// `ConfigDelta`/`ConfigSnapshot` are each a `oneof` over config.proto's
-// three curated Patch types plus a bare `uint32` watchdog-window case
-// (`CONFIG_WATCHDOG`, `sTimeout` -- Open Question 4, NOT one of the
-// Configurator's four fold targets; routes to `bb.streamWatchdogWindowIn`,
-// never `bb.configIn`, at the `BinaryChannel` boundary, ticket 004) -- the
-// SAME oneof idiom `CommandEnvelope.cmd` itself already uses.
-// `ConfigSnapshot` additionally carries a `ConfigTarget target` field so a
-// reply self-identifies which slice it is (Decision 4). `Telemetry`
-// itself is no longer declared here at all -- its real body now lives in
-// telemetry.proto (imported above), the SAME "declare the leaf type in its
-// own subsystem proto file, reference it bare from the envelope oneof"
-// pattern DrivetrainCommand/MotionSegment/SetPose/OdometerCommand already
-// established; `ReplyEnvelope.body.tlm` below references it directly.
+// ConfigDelta -- unchanged from the pre-102 schema (096-001): still
+// references config.proto's three curated Patch types plus the watchdog
+// window escape hatch. Runtime application of a decoded `ConfigDelta` is a
+// ticket-008-time decision (architecture-update.md (103) Step 7 Open
+// Question 3, not pre-decided by this ticket) -- the schema exists so
+// `Comms`/`main.cpp`'s dispatch switch can decode it now, whether or not it
+// is wired to `bb`-equivalent state this sprint.
 message ConfigDelta {
   oneof patch {
     DrivetrainConfigPatch drivetrain = 1;
     MotorConfigPatch      motor      = 2;
     PlannerConfigPatch    planner    = 3;
-    uint32                watchdog   = 4;  // [ms] sTimeout -- StreamingDriveWatchdog
-                                            // window; NOT one of the Configurator's
-                                            // four fold targets (Open Question 4) --
-                                            // BinaryChannel (ticket 004) posts this
-                                            // straight to bb.streamWatchdogWindowIn,
-                                            // never bb.configIn.
+    uint32                watchdog   = 4;  // [ms] sTimeout -- StreamingDriveWatchdog window
   }
 }
 
-message ConfigSnapshot {
-  ConfigTarget target = 1;
-  oneof patch {
-    DrivetrainConfigPatch drivetrain = 2;
-    MotorConfigPatch      motor      = 3;
-    PlannerConfigPatch    planner    = 4;
-    uint32                watchdog   = 5;  // [ms] sTimeout -- see ConfigDelta.watchdog above
-  }
-}
-
-// `Event` is NOT reused here: source/messages/event.h already hand-
-// authors `msg::Event` (explicitly NOT scripts/gen_messages.py-generated
-// -- its own header comment rejects a proto round-trip because it needs
-// four DIFFERENTLY-sized char arrays, a shape gen_messages.py's flat
-// `char[64]`-per-string rule cannot produce). Declaring `message Event`
-// here would generate a SECOND `struct Event` inside the SAME `namespace
-// msg` (every generated header's types live in `namespace msg` --
-// _emit_file()) -- an ODR violation the moment one translation unit
-// includes both source/messages/event.h and source/messages/envelope.h,
-// which is inevitable once BinaryChannel (ticket 006+) needs both. Named
-// `EventNotify` here instead, as a minimal declared-only placeholder;
-// 096/097 must decide how to reconcile it with the hand-authored
-// msg::Event (retire the hand-authored type in favor of a real
-// event.proto round-trip once gen_messages.py can express per-field
-// char-array sizes, or some other resolution) -- flagged, not resolved,
-// per the same Decision 5 precedent cited above.
-//
-// 100-001 (motion-stack-v2 M1, architecture-update.md Decision 5): gives
-// EventNotify its REAL body -- resolving the standing "what does
-// EventNotify carry" half of the 096/097 open question (NOT the separate
-// msg::Event ODR-collision question above, which stays open). Carries the
-// unsolicited abort/flush notification the wafer adapter (ticket 007)
-// emits on ABORT_*/queue-flush: which ring segment, what MotionStatus it
-// ended in, and the final tracking error at that moment. Four scalar
-// fields -- no char arrays, no shape overlap with msg::Event's own
-// four-differently-sized-char-array struct, so no new ODR hazard is
-// introduced by filling this body in.
-message EventNotify {
-  uint32       seg_seq       = 1;  // ring position of the segment this event describes
-  MotionStatus status         = 2;  // Drive::MotionPlan::Status at event time (motion.proto)
-  float        e_final_pos    = 3;  // [mm] along-track error at abort/flush
-  float        e_final_theta  = 4;  // [rad] heading error at abort/flush
-}
-
-// PlanDumpRequest (100-001, motion-stack-v2 M9) -- CommandEnvelope.cmd arm
-// 18: requests a dump of the wafer adapter's current plan/ring, one
-// PlanRecord reply per ring entry sharing this request's corr_id (the
-// same "N replies share one corr_id" idiom the issue's own text
-// specifies). Empty request -- "cannot be malformed" shape, mirroring
-// Ping/Stop/Hello/Ver/Help above: there is no per-request filter this
-// ticket's own acceptance criteria call for (dump the WHOLE ring). Live
-// since 100-009 -- BinaryChannel::handlePlanDump() replies one PlanRecord
-// per dumpable ring entry (the adapter's own currently-active plan, if
-// any, plus a preview solve of each still-QUEUED Drive::Goal), or a single
-// Ack{q:0} when nothing is dumpable at all (never zero replies -- a
-// pipelined client correlating on corr_id must always see something back).
-message PlanDumpRequest {}
-
-// PlanRecord (100-001, motion-stack-v2 M9) -- ReplyEnvelope.body arm 10:
-// one ring entry's solved-plan summary, replying to PlanDumpRequest.
-// Field list transcribed verbatim from this ticket's own acceptance
-// criteria ("goal/anchor/v_eff/duration/exit_speed/entry_speed/
-// replan_count") -- mirrors Drive::MotionPlan's const query surface
-// (motion_plan.h's sketch in architecture-update.md: goal()/anchor()/
-// effectiveCeiling()/duration()/exitSpeed()) plus StepState::replanCount.
-// Live since 100-009 -- see PlanDumpRequest's own comment.
-message PlanRecord {
-  Pose2D goal          = 1;  // world goal pose, frozen at plan time
-  Pose2D anchor        = 2;  // world pose at segment start
-  float  v_eff          = 3;  // [mm/s]|[rad/s] the folded ceiling (arc: body speed; pivot: yaw rate)
-  float  duration        = 4;  // [s]
-  float  exit_speed      = 5;  // [mm/s]
-  float  entry_speed     = 6;  // [mm/s]
-  uint32 replan_count    = 7;  // StepState::replanCount at dump time
-}
-
-// MotionTrace (100-001, motion-stack-v2 M9) -- ReplyEnvelope.body arm 11:
-// one step()'s trace record, armed via StreamControl.trace at the TLM
-// period (emitted from bb.motionTrace, ticket 007+). A CURATED subset of
-// Drive::MotionPlan's full TrackRecord (motion_plan.h's sketch) -- the
-// issue's own text sizes this arm at ~90-120B and notes "full reference
-// tables are dumped host-side by linking the same code (tier 0), not over
-// the wire," so this is a deliberately lossy diagnostic sample (the SAME
-// "trim to fit budget, document it" discipline telemetry.proto's own
-// header comment applies to its encpose trim), not a full-fidelity
-// TrackRecord mirror. Flattened scalars (no nested Pose2D) to keep the
-// per-field tag overhead down, matching Telemetry's own flattening style.
-// Fields grouped by TrackRecord's own sub-shapes:
-//   - StepInput replay fields: t, pose_step, pose_step_theta
-//     (measured/wheelLeft/wheelRight are NOT replayed here -- Telemetry's
-//     own enc=/vel= fields already carry per-wheel state at the TLM
-//     period; duplicating them here would burn budget for no new
-//     information)
-//   - RefState (the sampled reference): ref_x/ref_y/ref_theta/ref_v/
-//     ref_omega (the closed-form world-frame point, the most directly
-//     plottable subset for M12's plan-vs-actual overlay -- s/a/alpha are
-//     NOT carried, reconstructable host-side from the plan's own
-//     referenceAt() via tier 0, which links the identical C++ code)
-//   - tracked error: e_along, e_cross, e_theta
-//   - trims (post-clamp) and the body command: v_trim/omega_trim,
-//     v_cmd/omega_cmd
-//   - final wheel setpoints: wheel_left, wheel_right
-//   - seg_seq (ring position, correlates a trace sample to a segment --
-//     not part of TrackRecord itself, added so a client can tell which
-//     segment a streamed sample belongs to without a separate PlanRecord
-//     round-trip)
-//   - trim_saturated, status (Drive::MotionPlan::Status, motion.proto)
-// Live since 100-009 -- armed via StreamControl.trace (this file's own
-// message, above), emitted from bb.motionTrace (committed every pass the
-// adapter's plan_.step() runs -- source/subsystems/drivetrain.cpp) by
-// tickTelemetry() (source/telemetry/telemetry_tick.cpp) alongside the
-// regular Telemetry push, same period.
-message MotionTrace {
-  float        t                = 1;   // [s] elapsed since plan start
-  float        ref_x             = 2;   // [mm]
-  float        ref_y             = 3;   // [mm]
-  float        ref_theta         = 4;   // [rad]
-  float        ref_v             = 5;   // [mm/s]
-  float        ref_omega         = 6;   // [rad/s]
-  float        e_along           = 7;   // [mm]
-  float        e_cross           = 8;   // [mm]
-  float        e_theta           = 9;   // [rad]
-  float        v_trim            = 10;  // [mm/s] post-clamp
-  float        omega_trim        = 11;  // [rad/s] post-clamp
-  float        v_cmd             = 12;  // [mm/s] body command
-  float        omega_cmd         = 13;  // [rad/s] body command
-  float        wheel_left        = 14;  // [mm/s] post-IK/saturate/clamp setpoint
-  float        wheel_right       = 15;  // [mm/s] post-IK/saturate/clamp setpoint
-  float        pose_step         = 16;  // [mm] StepInput.poseStep replay
-  float        pose_step_theta   = 17;  // [rad] StepInput.poseStepTheta replay
-  uint32       seg_seq           = 18;  // ring position this sample belongs to
-  bool         trim_saturated    = 19;
-  MotionStatus status            = 20;
-}
-
-// One command in. corr_id is echoed back on ReplyEnvelope so a pipelined
-// client can correlate replies out of order.
+// One command in. corr_id is echoed back via the ack ring riding in every
+// Telemetry push (telemetry.proto), NOT a per-command ReplyEnvelope --
+// Decision 2's "telemetry-only return path".
 message CommandEnvelope {
-  reserved 5;  // PlannerCommand motion -- see the oneof's own comment below
+  // Every pre-102 arm this ticket removes -- drive(2)/segment(3)/
+  // replace(4)/motion(5, already reserved pre-102)/pose_fix(7)/otos(8)/
+  // ping(9)/echo(10)/get(11)/stream(12)/id(14)/hello(15)/ver(16)/help(17)/
+  // plan_dump(18) -- reserved, not reused (see this file's own header
+  // comment). A future sprint that re-adds any of these functionality
+  // never reassigns one of these numbers to a different field.
+  reserved 2, 3, 4, 5, 7 to 12, 14 to 18;
   uint32 corr_id = 1;
   oneof cmd {
-    DrivetrainCommand drive   = 2;   // -> bb.driveIn
-    MotionSegment     segment = 3;   // -> bb.segmentIn   (MOVE)
-    MotionSegment     replace = 4;   // -> bb.replaceIn   (MOVER)
-    // 5 reserved -- `PlannerCommand motion`, removed 095-005 Step 0a
-    // (architecture-update-r1.md Decision 6): PlannerCommand's 327B
-    // worst-case size can't fit the 186B budget and has a live text-plane
-    // consumer out of this ticket's scope to shrink. A future sprint
-    // re-declares `motion` at field 5 with a new, deliberately-bounded
-    // wire payload type once Subsystems::Planner un-parks -- never
-    // reassign 5 to a different field.
-    ConfigDelta       config  = 6;   // -> bb.configIn (096-001: real schema;
-                                      // BinaryChannel handling lands ticket 004)
-    // pose_fix (099-004, retypes the formerly-declared-only SetPose arm --
-    // architecture-update.md Decision 1): PoseFix{reset|zero_encoders} ->
-    // bb.poseResetIn (live, 099-004); PoseFix{neither flag} -> bb.poseFixIn
-    // (declared only this sprint -- 099-008 makes it live).
-    PoseFix           pose_fix = 7;
-    OdometerCommand   otos    = 8;   // -> bb.otosCommandIn (declared only, 098)
-    Ping              ping    = 9;
-    Echo              echo    = 10;
-    ConfigGet         get     = 11;  // 096-001: real schema (target now ConfigTarget);
-                                      // BinaryChannel handling lands ticket 004
-    StreamControl     stream  = 12;  // 096-001: schema unchanged (095); periodic
-                                      // wiring lands tickets 002/003/005
-    Stop              stop    = 13;
-    DeviceId          id      = 14;  // Decision 4 -- empty request
-    Hello             hello   = 15;  // stakeholder-directed 6-verb minimal
-                                      // command surface (2026-07-10) --
-                                      // empty request, replies DeviceId
-                                      // (reply.body.id, field 7)
-    Ver               ver     = 16;  // empty request, replies DeviceId
-                                      // (reply.body.id, field 7)
-    Help              help    = 17;  // empty request, replies HelpText
-                                      // (reply.body.helptext, field 9)
-    // plan_dump (100-001, motion-stack-v2 M9): requests a PlanRecord dump
-    // of the wafer adapter's ring -- live since 100-009 (see
-    // PlanDumpRequest's own comment).
-    PlanDumpRequest   plan_dump = 18;
+    // config/stop keep their pre-102 field numbers (6/13) -- they are KEPT
+    // arms, not new ones. twist is genuinely new -- assigned a fresh,
+    // never-before-used field number (19), never one of the reserved
+    // numbers above.
+    ConfigDelta config = 6;
+    Stop        stop   = 13;
+    Twist       twist  = 19;
   }
 }
 
 // One reply out. corr_id echoes the CommandEnvelope's corr_id that
-// triggered this reply (0 for an unsolicited reply, e.g. a future async
-// EVT/TLM push once 096/097 wire those arms live).
+// triggered this reply (0 for an unsolicited reply).
 message ReplyEnvelope {
+  // Every pre-102 arm this ticket removes -- cfg(5)/evt(6)/id(7)/echo(8)/
+  // helptext(9)/plan(10)/trace(11) -- reserved, not reused. `evt`
+  // (EventNotify) is not just removed but structurally superseded:
+  // fault/event notification now rides `Telemetry.fault_bits`/
+  // `event_bits` (telemetry.proto) instead of a dedicated reply arm.
+  reserved 5 to 11;
   uint32 corr_id = 1;
   oneof body {
-    Ack             ok   = 2;
-    Error           err  = 3;
-    Telemetry       tlm  = 4;   // 096-001: real schema (telemetry.proto);
-                                 // binary formatter + tick wiring land
-                                 // tickets 002/003/005
-    ConfigSnapshot  cfg  = 5;   // 096-001: real schema; BinaryChannel `get`
-                                 // handling lands ticket 004
-    EventNotify     evt  = 6;   // declared only, 096/097 (see EventNotify's own comment)
-    DeviceId        id   = 7;
-    // echo (095-007, schema-gap closure): the issue's own envelope sketch
-    // declared CommandEnvelope.cmd.echo (field 10) but never gave
-    // ReplyEnvelope.body a matching arm to carry the payload back on --
-    // handleEcho()'s text behavior ("OK echo <payload>") echoes the
-    // payload verbatim, so a binary ECHO reply needs somewhere to put it.
-    // Reuses the EXISTING Echo leaf message (no new message type) on a NEW
-    // oneof arm, the same "reuse the request-side message on the reply
-    // side" move Decision 4 already made for DeviceId/id.
-    Echo            echo = 8;
-    // helptext (stakeholder-directed 6-verb minimal command surface,
-    // 2026-07-10): the binary `help` request arm's reply (field 17 on
-    // CommandEnvelope.cmd) -- see HelpText's own doc comment above. hello/
-    // ver (fields 15/16) reuse the EXISTING `id` arm above instead of
-    // adding their own -- only help needed a new reply shape.
-    HelpText        helptext = 9;
-    // plan (100-001, motion-stack-v2 M9): one PlanRecord dump reply --
-    // live since 100-009 (see PlanDumpRequest's own comment).
-    PlanRecord      plan = 10;
-    // trace (100-001, motion-stack-v2 M9): one MotionTrace sample -- live
-    // since 100-009 (see MotionTrace's own comment).
-    MotionTrace     trace = 11;
+    Ack       ok   = 2;
+    Error     err  = 3;
+    Telemetry tlm  = 4;
   }
 }
