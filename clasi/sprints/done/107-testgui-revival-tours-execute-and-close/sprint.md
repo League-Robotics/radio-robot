@@ -1,7 +1,7 @@
 ---
 id: '107'
 title: 'TestGUI revival: tours execute and close'
-status: ticketing
+status: done
 branch: sprint/107-testgui-revival-tours-execute-and-close
 use-cases: []
 issues:
