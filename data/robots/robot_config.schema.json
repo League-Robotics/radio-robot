@@ -63,6 +63,10 @@
         "drive_axle_offset_mm":    { "$ref": "#/$defs/OffsetXY" },
         "odometry_offset_mm":      { "$ref": "#/$defs/OffsetXYYaw" },
         "odometry_chip_upside_down": { "type": "boolean" },
+        "otos_untrusted": {
+          "type": "boolean",
+          "description": "True when the OTOS chip is mechanically decoupled from the wheels on this robot's current physical mount (e.g. servo-mounted on the bench rig instead of chassis-mounted) — its reported pose is structurally invalid. A per-robot mounting fact, not a runtime tuning value. Host-side only; no on-robot fusion consumes this today (single-loop firmware does not fuse pose on-robot) — persisted for sprint 106's host-side fusion to read. Default false."
+        },
         "trackwidth": {
           "type": ["number", "null"],
           "description": "Wheel track width (mm).",

@@ -8,6 +8,7 @@
     "geometry.drive_axle_offset_mm.*": "host-side lever-arm geometry for camera/goto math; never a wire config verb",
     "geometry.odometry_offset_mm.*": "OTOS lever-arm offset — OTOS ignores REG_OFFSET writes so this is host-side-only (see .clasi/knowledge/otos-offset-register-unwritable.md), pushed via the OI/OL/OA verbs, not the 096 Patch surface",
     "geometry.odometry_chip_upside_down": "construction-time HAL wiring flag (mirrors the pre-096 Config.h-era odomUpsideDown allowlist entry: 'runtime SET would not re-init the sensor')",
+    "geometry.otos_untrusted": "per-robot OTOS-mounting fact (104-005, clasi/issues/rig-persistent-otos-distrust.md); host-side-only until sprint 106's host fusion reads it, no wire config verb",
     "geometry.wheelbase_mm": "mecanum-only geometry; the 096 curated Patch surface covers only the differential trackwidth key (tw)",
     "wheels.*": "host-side wheel geometry used to derive mm_per_tick; not a Patch field itself",
     "encoders.*": "host-side capability/count flags; never a wire config verb",
