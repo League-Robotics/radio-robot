@@ -52,6 +52,31 @@ namespace App {
 //                                  -- ticket 002). WIRED this ticket: the
 //                                  real call site's boolean result is what
 //                                  a caller passes to setFault().
+//                                  CHARACTERIZED by ticket 103-010's bench
+//                                  session: a boot-time ONE-SHOT latch, not
+//                                  a continuous/live indicator -- it fires
+//                                  once, coincident with the frame
+//                                  `event_bits` first shows
+//                                  kEventBootReady (Preamble::done()'s
+//                                  first-true transition; plausibly
+//                                  preamble's own hardReset()-driven
+//                                  back-to-back device-detection writes),
+//                                  and then never re-fires (matches
+//                                  clearanceSafetyNetCount()'s own
+//                                  monotonic, never-cleared counter
+//                                  semantics). Observed pegged at exactly 1
+//                                  across sustained driving in every
+//                                  re-run capture in that session, with no
+//                                  behavioral signal (no stall, no dropped
+//                                  ack, no missed cycle) correlated with
+//                                  driving activity. A healthy robot can
+//                                  show fault_bits bit 0 set permanently
+//                                  after boot with no ongoing problem -- a
+//                                  future bench reader should NOT chase a
+//                                  steady fault=1 as live evidence of a
+//                                  defect; only a bit that flips DURING
+//                                  driving (not just once at boot) is
+//                                  actionable.
 //   bit 1 (kFaultWedgeLatch)   -- NezhaMotor/I2CBus wedge-latch detected
 //                                  (Devices::MotorArmor::wedged(), ticket
 //                                  002/003). Declared, not yet wired live
@@ -62,7 +87,17 @@ namespace App {
 //   bit 2 (kFaultI2CNak)       -- I2C bus NAK/timeout error. Declared, not
 //                                  yet wired live (no per-transaction NAK
 //                                  aggregate exists at this ticket's scope).
-//   bits 3-31 -- reserved for future faults.
+//   bit 3 (kFaultCommsMalformed) -- malformed/undecodable inbound frame
+//                                  (App::Comms::malformedCount() > 0 --
+//                                  source/app/comms.h/.cpp; malformed
+//                                  armor prefix, malformed base64,
+//                                  malformed protobuf decode, or an
+//                                  unrecognized text-plane line all
+//                                  increment it). WIRED by ticket 104-004:
+//                                  main.cpp's loop reads
+//                                  Comms::malformedCount() every cycle,
+//                                  same idiom as kFaultI2CSafetyNet above.
+//   bits 4-31 -- reserved for future faults.
 //
 // event_bits:
 //   bit 0 (kEventDeadmanExpired) -- Deadman staleness timer expired
@@ -82,6 +117,7 @@ namespace App {
 constexpr uint32_t kFaultI2CSafetyNet = 1u << 0;
 constexpr uint32_t kFaultWedgeLatch = 1u << 1;
 constexpr uint32_t kFaultI2CNak = 1u << 2;
+constexpr uint32_t kFaultCommsMalformed = 1u << 3;
 
 constexpr uint32_t kEventDeadmanExpired = 1u << 0;
 constexpr uint32_t kEventBootReady = 1u << 1;

@@ -250,6 +250,7 @@ int main() {
 
       tlm.setFault(App::kFaultI2CSafetyNet, bus.clearanceSafetyNetCount() > 0);
       tlm.setFault(App::kFaultWedgeLatch, motorL.wedged() || motorR.wedged());
+      tlm.setFault(App::kFaultCommsMalformed, comms.malformedCount() > 0);
 
       tlm.setFrame(frame);
       tlm.emit(cycleStart);

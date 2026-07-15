@@ -142,8 +142,9 @@ class Comms {
 
   // Diagnostic counter -- malformed armor, malformed base64, malformed
   // protobuf decode, AND unrecognized text-plane lines (not "*", not
-  // HELLO, not PING) all increment this. Ticket 005 reads it as a
-  // telemetry fault-bit source.
+  // HELLO, not PING) all increment this. main.cpp's loop reads it as the
+  // App::kFaultCommsMalformed telemetry fault-bit source (ticket 104-004;
+  // ticket 103-005 declared the bit but did not wire this call site).
   uint32_t malformedCount() const { return malformedCount_; }
 
  private:
