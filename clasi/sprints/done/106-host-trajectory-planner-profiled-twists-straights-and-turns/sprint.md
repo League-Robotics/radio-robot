@@ -1,7 +1,7 @@
 ---
 id: '106'
 title: 'Host trajectory planner: profiled twists, straights and turns'
-status: planning-docs
+status: done
 branch: sprint/106-host-trajectory-planner-profiled-twists-straights-and-turns
 use-cases: []
 issues:
