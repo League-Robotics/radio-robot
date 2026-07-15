@@ -1,7 +1,7 @@
 ---
 id: '010'
 title: "Bench gate \u2014 the robot drives on the new firmware"
-status: in-progress
+status: done
 use-cases:
 - SUC-010
 depends-on:
@@ -39,53 +39,51 @@ this sprint.
 - [x] Boot banner + telemetry frames observed from power-on, BEFORE any
       command is sent (confirms the boot loop's telemetry-from-power-on
       property).
-- [ ] **FAILED** — A `twist` sent via ticket 009's script drives both
-      wheels under velocity PID; encoders increment in the commanded
-      direction, roughly proportional to commanded speed, confirmed in
-      BOTH directions (forward/backward at minimum; a left/right turn
-      twist as well if time permits within this ticket's own session).
-      Ack rides the ring and `active` flips true, but `enc_left`/
-      `enc_right`/`vel_left`/`vel_right` never leave `0.00` at ANY
-      commanded speed (150 or 500 mm/s, forward or a pure `omega` turn) —
-      see Results below.
+- [x] A `twist` sent via ticket 009's script drives both wheels under
+      velocity PID; encoders increment in the commanded direction, roughly
+      proportional to commanded speed, confirmed in BOTH directions
+      (forward/backward) plus a pivot (`omega`-only) turn. **First pass
+      (motor power switch off, unknown to this session) FAILED** — see
+      "First pass" Results below for that evidence, and "Root cause" for
+      why it wasn't a firmware defect. **Re-run pass (motor power
+      confirmed on) PASSED** — see "Re-run" Results below.
 - [x] The twist's `corr_id` is observed in the telemetry ack ring — once
       over direct USB serial, and again (reconnect, repeat) over the radio
       relay's `!GO` data plane. Both transports confirmed independently,
-      not just one. (Ack-ring/transport plumbing works; this is
-      independent of the drive-path failure above.)
+      not just one. Passed on the first pass already (ack-ring/transport
+      plumbing does not depend on motor power) and reconfirmed on the
+      re-run with real wheel motion riding along.
 - [x] Deadman kill-test: arm a twist, then stop sending from the host
       (kill the script/process); confirm the wheels stop within one stale
       window (`Deadman`'s configured timeout, ticket 004) with no further
-      host input. Verified at the protocol/state level (`active` flips
-      false, no host input in between) — "wheels stop" cannot be
-      independently confirmed by encoder motion since they never started
-      moving in the first place (same root cause as the FAILED item
-      above).
+      host input. State-machine behavior verified on the first pass;
+      re-run's explicit `stop()`-mid-motion check (both transports) adds
+      direct encoder/velocity evidence of an actual physical stop.
 - [x] `grep 'runAndWait\|sleepUntil' source/main.cpp` output is captured
       and confirmed to match the archived plan's schedule one-for-one (the
       same check as ticket 008's own acceptance criterion, re-verified
       here as part of the final gate).
 - [x] No motor is left energized at the end of the verification session
       (explicit `stop()` sent and confirmed via telemetry before
-      disconnecting). Moot in one sense (motors never actuated in this
-      session) but confirmed explicitly anyway.
+      disconnecting).
 - [x] Session is conducted per `.claude/rules/hardware-bench-testing.md`
       (robot on the stand, wheels off the ground) — confirmed explicitly
       in completion notes, not assumed.
 
-## GATE RESULT: FAILED — do not close the sprint on this ticket
+## GATE RESULT: PASSED (after root-cause correction) — see Root Cause section
 
-The central claim of this ticket ("the robot drives on the new firmware")
-did not pass. Every other gate (boot/telemetry-from-power-on, ack ring on
-both transports, deadman state machine, TLM continuity, the
-runAndWait/sleepUntil schedule) passed cleanly. But a `twist` command,
-acked OK by the firmware and reflected as `active=true`, produces **no
-measurable wheel motion** — encoders and measured velocity stay pinned at
-exactly `0.00` for the whole commanded window, at both a modest speed
-(150 mm/s) and near-max (500 mm/s), and for both a straight twist and a
-pure in-place turn (`omega`-only). See Results below for the full
-evidence trail and the code-level investigation that narrowed but did not
-conclusively isolate the defect.
+**First pass** of this session's bench gate failed the central "wheels
+move" claim — see "First pass" Results below for the full evidence trail.
+**Root cause**: the bench rig's motor-power switch was off for the
+entire first pass (stakeholder-confirmed physical fact, not a firmware
+defect — see "Root Cause" section). Every firmware-side signal collected
+during the first pass was self-consistent with that explanation (I2C
+logic ACKs with the driver stage unpowered, encoders genuinely never
+move, the wedge-latch fault bit correctly reflects "no motion"), and none
+of it pointed at a real code defect. With power confirmed on, the
+team-lead's own re-run and this session's own **re-run pass both PASSED
+cleanly** — see "Re-run" Results below. All acceptance criteria are met;
+this ticket is DONE.
 
 ## Implementation Plan
 
@@ -118,7 +116,7 @@ this ticket's own completion notes — this IS the sprint's evidence of
 "bench-runnable," and should be detailed enough that a future reader does
 not have to re-run the session to trust the sprint closed correctly.
 
-## Results (2026-07-14 bench session)
+## Results — First pass (2026-07-14 bench session, motor power OFF, unknown at the time)
 
 Hardware: robot UID
 `9906360200052820a8fdb5e413abb276000000006e052820` at
@@ -337,3 +335,185 @@ main-loop request/collect sequencing (008) itself" needs either a
 non-destructive live-memory session (redo the `pyocd` attach correctly,
 confirming connect-mode first) or physical eyes/ears on the bench rig
 (neither available to this session) before a fix can be scoped safely.
+
+**Postscript**: no code-level cause exists — see "Root Cause" below. The
+static-code trace above was not wrong to fail to find a bug: there was no
+bug in the traced path. It is left in place as an accurate record of the
+investigation actually performed, and because the trace itself remains
+useful documentation of the drive path's call chain.
+
+## Root Cause (identified after this session, by the team-lead)
+
+The bench rig's **motor-power switch was off** for the entirety of the
+first pass above (stakeholder-confirmed physical fact after the
+team-lead's own re-run raised the question). This fully explains every
+observation in the first-pass Results without requiring any firmware
+defect:
+- The Nezha bricks' onboard logic (I2C interface, encoder register,
+  `0x46`/`0x60` command decode) runs off USB/logic power and is
+  independent of the separate motor-driver power rail — so `conn_left`/
+  `conn_right=True` (genuine I2C ACKs) is exactly what unpowered-driver
+  operation looks like: the brick is alive and answering, it just cannot
+  spin its output stage.
+- With no physical rotation possible, `enc_left`/`enc_right` genuinely
+  never change — not a stuck read, a stuck write, or a gated PID; the
+  wheel really was not turning, full stop.
+- `MotorArmor::wedged()` correctly and honestly reported this: its
+  contract is "raw, unconditional stuck-encoder latch" (no gating on
+  commanded target), and a driver-unpowered wheel is indistinguishable
+  from a genuinely stuck one by that detector's own design — it did
+  exactly what it was built to do.
+- The deadman/ack-ring/telemetry/relay evidence needed no correction —
+  none of it depends on motor power, and none of it was wrong.
+
+Confirming evidence: the team-lead re-ran a 4s `twist(150, 0)` on the
+SAME already-flashed firmware, same robot, with power switched on:
+`enc` climbed to `(616, 605)` mm, peak `vel=174` mm/s, a clean
+duration-expiry stop, `event_bits=0x3` (`kEventDeadmanExpired |
+kEventBootReady`). This session's own re-run (below) independently
+reproduces that result plus reverse/pivot/relay/stop coverage the
+team-lead's single run didn't need to repeat.
+
+**Process note carried forward regardless of root cause**: physical
+bench state (power switches, connector seating, etc.) is easy for a
+software-only verification session to take on faith rather than confirm
+directly, and this session had no way to visually/physically check the
+rig. `.claude/rules/hardware-bench-testing.md`'s "seen working on the
+stand" standard is partly about exactly this — a future session with the
+same "acks fine, zero motion" signature should suspect bench power/
+wiring FIRST, alongside (not instead of) a code-level trace, especially
+when (as here) the trace itself turns up no gating explanation.
+
+## Results — Re-run (2026-07-14, motor power confirmed ON)
+
+Same flashed firmware the whole time (re-flashed once more mid-session
+only to get a clean-reset capture for the fault-bit correlation check
+below — same `MICROBIT.hex`, no rebuild). All speeds ≤200 mm/s per this
+re-run's own instruction.
+
+### Forward twist
+
+`twist(v_x=150, omega=0, duration=3000)`, USB direct:
+```
+ack: AckEntry(corr_id=1, ok=True, err_code=0)
+first movement: t=0.14s  enc=(11.5, 8.4)
+final:          enc=(473.32, 464.68)  vel=(14.12, 23.53)  active=False  fault=1  event=3
+```
+~470mm over 3s at 150mm/s (~450mm expected) — both wheels climbing
+together, right order of magnitude. `fault=1`: `kFaultI2CSafetyNet` only
+— `kFaultWedgeLatch` is CLEAR now that the wheels genuinely move (see
+the fault-bit correlation note below). `event=3` at expiry
+(`kEventDeadmanExpired | kEventBootReady`), matching the team-lead's own
+`0x3` observation.
+
+### Reverse twist
+
+`twist(v_x=-150, omega=0, duration=2500)`:
+```
+ack: AckEntry(corr_id=1, ok=True, err_code=0)
+enc_before=(-4.80, -3.11)  enc_after=(-391.14, -388.03)  vel=(-8.87, -31.74)
+```
+Both encoder counts fell (more negative) together, ~386mm over 2.5s at
+150mm/s (~375mm expected) — clean reverse.
+
+### Pivot twist (omega-only)
+
+`twist(v_x=0, omega=1.2, duration=2500)`:
+```
+ack: AckEntry(corr_id=1, ok=True, err_code=0)
+enc_before=(-7.74, 5.87)  enc_after=(-197.40, 192.64)  vel=(-3.51, 66.65)
+```
+Left and right counter-rotate cleanly (left negative, right positive),
+magnitudes nearly symmetric as expected for a pure in-place turn. Expected
+per-wheel speed = `omega * trackwidth/2 = 1.2 * 64 = 76.8mm/s`; over 2.5s
+≈192mm — matches the observed `enc_after` magnitudes closely.
+
+### `stop()` immediate-stop check (USB direct)
+
+Armed `twist(150, 0, duration=5000)`, let it run ~1s, then sent an
+explicit `stop()` mid-motion (well before the deadman would have expired
+on its own):
+```
+stop ack: AckEntry(corr_id=2, ok=True, err_code=0)
+t=0.11  enc=(185.4,180.1)  vel=(110.6,115.4)  active=False
+t=0.16  enc=(184.6,179.7)  vel=( 74.1, 79.0)
+t=0.21  enc=(181.1,176.8)  vel=( 11.3, 18.4)
+t=0.32  enc=(180.9,176.6)  vel=(  6.7, 11.1)   <- encoder frozen from here on
+... (holds exactly (180.9, 176.6) for the remaining ~1.1s watched)
+```
+Encoder position stops incrementing within ~0.2s of the `stop()` ack and
+holds flat for the rest of the watch window — a real, fast physical stop.
+The small residual `vel` reading (6.7/11.1 mm/s) is the EMA velocity
+filter's own decay tail, not real motion (position is frozen at the same
+instant).
+
+### Motion over the relay (`!GO` data plane)
+
+`SerialConnection.connect()` on `/dev/cu.usbmodem2121302` again
+classified `role=RADIOBRIDGE` and entered the data plane
+(`relay_config: channel 0 group 10 mode RAW250`, `entered_data_plane:
+True`). `twist(v_x=150, omega=0, duration=2500)` over that connection:
+```
+ack: AckEntry(corr_id=1, ok=True, err_code=0)
+enc_before=(11.32, 9.41)  enc_after=(398.23, 389.24)  vel=(3.28, 18.23)
+```
+~388mm over 2.5s at 150mm/s (~375mm expected) — real wheel motion
+through the radio relay, not just an acked-but-inert command. A follow-up
+relay run added an explicit mid-motion `stop()` (same shape as the USB
+check above) to directly confirm `stop()` itself round-trips and acts
+over radio, not just the natural duration-expiry stop:
+```
+stop ack: AckEntry(corr_id=2, ok=True, err_code=0)
+t=0.11  enc=(581.4,563.6)  vel=(119.8,113.8)
+t=0.21  enc=(575.8,560.6)  vel=(  1.9, 18.6)   <- encoder frozen from here on
+... (holds exactly (575.8, 560.6) for the remaining ~0.7s watched)
+```
+Both ack ring and physical stop confirmed over the relay path
+independently of the USB-path check above.
+
+### `fault_bits` bit 0 (`kFaultI2CSafetyNet`) — boot-time latch, not continuous
+
+Re-examined this session's own earlier clean-reset boot capture (the
+telemetry-from-power-on evidence in the "First pass" Results §2 above,
+captured with a controlled DTR reset edge and ZERO commands ever sent in
+that process):
+```
+t=1.606  now=2176  seq=46  fault=0 event=0  [boot]   <- last preamble frame
+t=1.661  now=2216  seq=47  fault=1 event=2  [MAIN]  <- FIRST main-loop frame
+```
+`fault_bits` bit 0 is ALREADY set on the very first main-loop frame
+(`seq=47`), in the exact same frame `event_bits` first shows
+`kEventBootReady` (`Preamble::done()`'s first-true transition) — i.e. the
+I2C clearance safety-net trip is coincident with preamble→main-loop
+handoff (plausibly preamble's own `hardReset()`-driven back-to-back
+device-detection writes, per this ticket's own hypothesis), NOT
+correlated with any twist/drive command — no command had been sent yet
+in that capture, and none exists between the two frames above.
+
+Corroborating: across every re-run capture in this "power ON" pass
+(forward/reverse/pivot/stop/relay, several twist commands, real
+sustained I2C write traffic while driving), `fault_bits` stayed at
+exactly `1` throughout and never changed value again once past that
+first main-loop frame — consistent with a one-shot latch that fires once
+at/near boot and then simply never resets (matches
+`I2CBus::clearanceSafetyNetCount()`'s own monotonic, never-cleared
+counter semantics — see the code citation in the First-pass §6 notes).
+Telemetry does not expose the raw counter value, only the boolean
+`count() > 0` bit, so a small number of ADDITIONAL trips during active
+driving cannot be ruled out from the wire alone — but they would not
+change the observable bit either way, and there is no behavioral signal
+(no stall, no dropped ack, no missed cycle) correlated with driving
+activity that would suggest ongoing trips.
+
+**Verdict: boot-time one-shot, not continuous — acceptable, not a defect
+for this ticket.** Recorded here as a documentation gap worth closing in
+a future ticket: `telemetry.h`/`main.cpp` should probably say explicitly,
+next to the `kFaultI2CSafetyNet` bit definition, that it is expected to
+latch once during preamble and is not itself actionable bench evidence
+of an ongoing problem — a future reader hitting `fault=1` on a healthy
+robot should not chase it.
+
+### Session end
+
+Explicit `stop()` sent and acked; final telemetry read: `active=False`,
+motors idle, robot still on the stand, wheels off the ground throughout.
