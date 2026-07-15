@@ -1,0 +1,77 @@
+{
+  "port": "/dev/cu.usbmodem2121102",
+  "mode": "direct",
+  "tool_version": "0.20260715.27",
+  "date": "2026-07-15",
+  "planner_params": {
+    "streaming_interval": 0.15,
+    "link_latency_margin": 0.15,
+    "latency_tau": 0.13,
+    "v_max": 200.0,
+    "a_max": 500.0,
+    "omega_max": 2.0,
+    "alpha_max": 6.0,
+    "heading_kp": 0.4,
+    "heading_ki": 0.0,
+    "heading_kd": 0.0,
+    "heading_omega_clamp": 0.2,
+    "completion_tolerance_linear": 5.0,
+    "completion_tolerance_angular": 0.02,
+    "overshoot_bound_linear": 30.0,
+    "overshoot_bound_angular": 0.1
+  },
+  "heading_source": "pose",
+  "firmware_velocity_gains": {
+    "vel_kp": 0.0016,
+    "vel_kff": 0.0008,
+    "note": "firmware boot-time defaults persisted in data/robots/tovez.json (106-002 resonance retune) -- NOT set by this script."
+  },
+  "pass_label": "loose",
+  "closure_tolerance_mm": null,
+  "closure_tolerance_deg": null,
+  "tour": "TOUR_1",
+  "run_index": 1,
+  "timestamp": "20260715T201724Z",
+  "tick_count": 30,
+  "duration_s": 5.434343375003664,
+  "leg_count": 2,
+  "legs": [
+    {
+      "index": 0,
+      "kind": "distance",
+      "value": 345.0,
+      "outcome": "completed",
+      "heading_before_rad": -0.0900589894029074,
+      "heading_after_rad": -0.1064650843716541,
+      "duration_s": 2.313076499995077,
+      "fault": false,
+      "tick_count": 16
+    },
+    {
+      "index": 1,
+      "kind": "turn",
+      "value": 90.0,
+      "outcome": "overshoot",
+      "heading_before_rad": -0.13788101090755203,
+      "heading_after_rad": 1.53588974175501,
+      "duration_s": 2.009829874994466,
+      "fault": false,
+      "tick_count": 14
+    }
+  ],
+  "stopped_at": 1,
+  "stopped_outcome": "overshoot",
+  "start_pose": [
+    -5.0,
+    2.0,
+    -0.0900589894029074
+  ],
+  "end_pose": null,
+  "closure_position_delta_mm": null,
+  "closure_heading_delta_rad": null,
+  "closure_heading_delta_deg": null,
+  "fault_bits_ever": 3,
+  "deadman_tripped": false,
+  "deadman_trip_tick": null,
+  "trace_csv": "/Volumes/Proj/proj/RobotProjects/radio-robot-elite/tests/bench/out/tour_tour_1_20260715T201724Z.csv"
+}
