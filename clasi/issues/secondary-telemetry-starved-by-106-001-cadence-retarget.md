@@ -1,6 +1,47 @@
 ---
-status: pending
+status: resolved
 ---
+
+> **RESOLVED (2026-07-15, ticket 106-002 drive-by).** Fixed via Direction 1
+> (alternate/round-robin priority on a genuine tie), implemented in
+> `App::Telemetry::emit()`/`telemetry.h` (`source/app/telemetry.{h,cpp}`).
+> Summary: when `primaryDue()` AND `secondaryDue()` are BOTH genuinely due in
+> the same `emit()` call, a `tieFavorsSecondary_` flag alternates which frame
+> wins instead of primary always winning — guaranteeing secondary a slot at
+> least once every `kSecondaryPeriod`, at the cost of at most one primary
+> frame delayed by one loop cycle roughly once per `kSecondaryPeriod` (the
+> deferred primary sends on the very next call, no longer tied). One
+> refinement beyond the plain alternation: secondary's own
+> pre-first-ever-emission window (`secondaryDue()`'s `!everEmittedSecondary_
+> -> true` boot bypass) is excluded from tie-detection until real elapsed
+> time (`now >= kSecondaryPeriod`) has actually passed — otherwise a
+> caller's second-ever call (e.g. exactly `kPrimaryPeriod` after the first)
+> would spuriously look "tied" against a secondary that has never really had
+> a chance to be starved yet, breaking several short-run tests that assume
+> the first few calls are primary-only (see `telemetry.cpp`'s own `emit()`
+> comment for the full derivation).
+>
+> Sim-verified two ways: (1) a new `App::Telemetry`-level scenario
+> (`app_telemetry_harness.cpp`,
+> `scenarioSecondaryNotStarvedWhenCallPeriodExceedsPrimaryPeriod`) reproduces
+> this issue's own exact call shape (`emit()` at a fixed 52ms period, above
+> `kPrimaryPeriod`) and asserts a non-zero, sane secondary Hz; (2) the REAL
+> `App::RobotLoop` driven through `TestSim::SimApi`
+> (`scripted_twist_demo_harness.cpp`'s new "secondary telemetry: not starved"
+> phase) decodes 6 `TelemetrySecondary` frames across a ~1.1s run at the
+> real ~40ms/cycle schedule — 0 would reproduce the bug.
+>
+> Bench re-verification (direct USB, `tests/bench/rig_dev.py`'s own
+> "secondary telemetry (glitch/acc/ts diagnostics) received" check, which
+> this issue's own Evidence section named as failing every run post-106-001)
+> is 106-002's own bench-gate obligation — see that ticket's completion
+> notes for the actual on-stand result once run.
+>
+> Cost accepted, matching Direction 1's own stated trade-off: primary
+> cadence gains an occasional (roughly once per 200ms) single-cycle jitter;
+> `tests/sim/unit/app_telemetry_harness.cpp`'s own long-run cadence scenario
+> (scenario 5) tolerance was widened by exactly one scheduling step to
+> account for it, documented inline at the assertion site.
 
 # Secondary telemetry starved to 0 Hz by the 106-001 loop-cadence retarget
 

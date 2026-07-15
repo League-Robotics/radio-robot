@@ -406,11 +406,22 @@ void scenarioSecondaryNeverCoincidesWithPrimaryAndDoesNotDelayIt() {
   checkU64Eq(serialFake.sent().size(), telemetry.primaryEmitCount() + telemetry.secondaryEmitCount(),
              "serial send() log size == primary + secondary emit counts (no untracked sends)");
 
-  // Primary cadence never stretched past kPrimaryPeriod + one scheduling
-  // step by a competing secondary send -- "does not starve or delay the
-  // primary frame's cadence" (AC #4).
-  checkTrue(maxPrimaryGap <= App::kPrimaryPeriod + kStep,
-            "no observed primary-to-primary gap exceeds kPrimaryPeriod by more than one scheduling step");
+  // Primary cadence never stretched past kPrimaryPeriod by more than TWO
+  // scheduling steps: one step is the pre-existing sampling-granularity
+  // slack (emit() only observes time at kStep resolution -- the same
+  // quantizedPeriod() rationale below), the second is 106-002's own
+  // documented tie-break cost (telemetry.h's emit() comment: "at most ONE
+  // primary frame delayed by one loop cycle roughly once per
+  // kSecondaryPeriod") -- this scenario's own long run (3000 ms) crosses
+  // kSecondaryPeriod (200 ms) many times over, so it WILL observe that
+  // occasional extra-step delay at least once; a bound of kPrimaryPeriod +
+  // kStep (the pre-106-002 tolerance) is no longer correct, not because
+  // primary cadence regressed without limit, but because the fix
+  // deliberately trades one bounded step of primary jitter for
+  // guaranteeing secondary a slot at all.
+  checkTrue(maxPrimaryGap <= App::kPrimaryPeriod + 2 * kStep,
+            "no observed primary-to-primary gap exceeds kPrimaryPeriod by more than the sampling-granularity "
+            "step plus 106-002's own one-step tie-break cost");
 
   // Expected counts, +/-1 for boundary quantization: primary roughly every
   // kPrimaryPeriod, secondary roughly every kSecondaryPeriod.
@@ -619,6 +630,72 @@ void scenarioMalformedFrameSetsCommsMalformedFaultBit() {
   }
 }
 
+// ===========================================================================
+// 9. 106-002 fix: secondary telemetry is NOT starved to 0 Hz when the
+//    caller's own per-call period exceeds kPrimaryPeriod -- the ACTUAL bug
+//    (`clasi/issues/secondary-telemetry-starved-by-106-001-cadence-
+//    retarget.md`): 106-001 retargeted the REAL loop period to ~52ms,
+//    ABOVE kPrimaryPeriod=40ms, so primaryDue() was true on EVERY call and
+//    the pre-106-002 "primary always wins a same-call tie" rule left
+//    secondary starved forever (confirmed empirically on the bench: 0
+//    secondary frames over a 3s window). Scenario 5 above (a 7ms call
+//    step, well BELOW kPrimaryPeriod) does not reproduce this -- primary
+//    is naturally not due every call there, so the tie path never
+//    triggers. This scenario reproduces the bug's own exact call shape.
+// ===========================================================================
+
+void scenarioSecondaryNotStarvedWhenCallPeriodExceedsPrimaryPeriod() {
+  beginScenario("emit(): secondary is not starved to 0 Hz when called at a fixed period > kPrimaryPeriod "
+                "(106-001's real ~52ms loop)");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  App::Telemetry telemetry(comms, serialFake, radioFake);
+
+  // Reproduces the bug's own real-measured cadence: emit() called once per
+  // "cycle" at a fixed 52ms period (ABOVE kPrimaryPeriod=40ms), so
+  // primaryDue() is true on EVERY call -- exactly the condition that
+  // starved secondary to 0 Hz pre-106-002.
+  const uint32_t kCallPeriod = 52;  // [ms]
+  const int kCalls = 100;           // ~5.2s of simulated loop time
+  uint32_t now = 0;
+  uint32_t lastPrimarySeen = 0;
+  bool sawPrimary = false;
+  uint32_t maxPrimaryGap = 0;
+  for (int i = 0; i < kCalls; ++i) {
+    uint32_t beforePrimary = telemetry.primaryEmitCount();
+    telemetry.emit(now);
+    if (telemetry.primaryEmitCount() > beforePrimary) {
+      if (sawPrimary) {
+        uint32_t gap = now - lastPrimarySeen;
+        if (gap > maxPrimaryGap) maxPrimaryGap = gap;
+      }
+      lastPrimarySeen = now;
+      sawPrimary = true;
+    }
+    now += kCallPeriod;
+  }
+
+  checkTrue(telemetry.secondaryEmitCount() > 0,
+            "secondary is NOT starved to 0 Hz -- at least one secondary frame sent over ~5s at a 52ms call period");
+
+  double secondsElapsed = static_cast<double>(now) / 1000.0;
+  double secondaryHz = static_cast<double>(telemetry.secondaryEmitCount()) / secondsElapsed;
+  std::printf("  measured: secondary %.2f Hz (target ~5 Hz/200 ms) at a 52 ms emit() call period\n", secondaryHz);
+  checkTrue(secondaryHz > 2.0 && secondaryHz < 8.0,
+            "secondary rate is in a sane neighborhood of the ~5 Hz target even though the caller's own "
+            "period exceeds kPrimaryPeriod");
+
+  // The tie-break's own documented cost (telemetry.h's emit() comment): at
+  // most one primary frame delayed by one call period, roughly once per
+  // kSecondaryPeriod -- primary cadence stays well short of stalling.
+  checkTrue(maxPrimaryGap <= App::kSecondaryPeriod,
+            "no primary-to-primary gap approaches kSecondaryPeriod -- the tie-break costs at most an "
+            "occasional single-cycle delay, not a stall");
+}
+
 }  // namespace
 
 int main() {
@@ -630,6 +707,7 @@ int main() {
   scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase();
   scenarioMeasuredCadenceReport();
   scenarioMalformedFrameSetsCommsMalformedFaultBit();
+  scenarioSecondaryNotStarvedWhenCallPeriodExceedsPrimaryPeriod();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Telemetry scenarios passed\n");

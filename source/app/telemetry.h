@@ -209,21 +209,38 @@ class Telemetry {
 
   // Cadence-gated: call once per loop cycle with the current time [ms]
   // (also the wire `now` field's value for whichever frame this call
-  // sends). Sends AT MOST ONE frame type per call -- the primary frame if
-  // due (checked first, so secondary can never delay it), otherwise the
-  // secondary frame if IT is due, otherwise nothing. Bounded work: one
-  // frame build, one encode, one armor, up to two Transport sends -- never
+  // sends). Sends AT MOST ONE frame type per call. Bounded work: one frame
+  // build, one encode, one armor, up to two Transport sends -- never
   // sleeps, never touches the I2C bus. ALWAYS ON from boot: the first
-  // call always sends the primary frame (no arming step).
+  // call always sends the primary frame (no arming step, and a tie on
+  // that very first call always resolves to primary -- see the tie-break
+  // note below).
   //
-  // Scheduling note: this internal gate assumes emit() is called more
-  // often than kPrimaryPeriod (the loop's own per-cycle rate, well under
-  // 40 ms per architecture-update.md's runAndWait design) -- a caller that
-  // invokes emit() at EXACTLY the primary period would starve the
-  // secondary frame (primary always wins a same-call tie by design; this
-  // ticket's own acceptance criteria require secondary never delay
-  // primary, not the reverse). Not a defect this ticket resolves --
-  // flagged for ticket 008's own loop-cadence choice.
+  // Tie-break (106-002 fix, `secondary-telemetry-starved-by-106-001-
+  // cadence-retarget.md`): 106-001 retargeted the real loop period to
+  // ~52 ms, ABOVE kPrimaryPeriod (40 ms), so primaryDue() is true on
+  // EVERY call -- under the old "primary always wins a same-call tie"
+  // rule (this file's own pre-106-002 comment, and the 103-009 comment it
+  // quoted), secondary NEVER got a turn at all (measured 0 Hz on the
+  // stand). The fix: when BOTH frames are genuinely due in the same call,
+  // ALTERNATE instead of always favoring primary -- `tieFavorsSecondary_`
+  // flips after every tie. "Genuinely due" for secondary's own
+  // pre-first-ever-emission window means real elapsed time
+  // (`now >= kSecondaryPeriod`), NOT secondaryDue()'s own
+  // "!everEmittedSecondary_ -> true" boot bypass -- otherwise a caller
+  // whose second-ever call already lands on/after kPrimaryPeriod (e.g.
+  // exactly kPrimaryPeriod after the first, long before any real
+  // starvation) would spuriously tie-divert onto secondary (emit.cpp's
+  // own comment has the full derivation). Because secondaryDue() only
+  // stays true once every kSecondaryPeriod (200 ms) until an actual
+  // secondary send resets it, this alternation costs at most ONE primary
+  // frame delayed by one loop cycle roughly once per kSecondaryPeriod
+  // (the very next call, no longer tied, sends the deferred primary
+  // immediately) -- primary's own steady-state cadence is otherwise
+  // untouched, and secondary is guaranteed a slot within roughly one
+  // kSecondaryPeriod instead of starving forever. A non-tied call (only
+  // one of the two genuinely due) is unaffected: that frame sends
+  // immediately, exactly as before.
   void emit(uint32_t now);
 
   // Measurement/test seam -- lets a HOST_BUILD test report the realized
@@ -262,6 +279,13 @@ class Telemetry {
   bool everEmittedSecondary_ = false;
   uint32_t lastSecondaryEmit_ = 0;  // [ms]
   uint32_t secondaryEmitCount_ = 0;
+
+  // 106-002 tie-break state (see emit()'s own comment): false means the
+  // NEXT simultaneous-due tie favors primary, true means it favors
+  // secondary. Starts false so the very first-ever call (both "due" by
+  // construction) still sends primary, preserving the documented
+  // no-arming-step boot contract.
+  bool tieFavorsSecondary_ = false;
 };
 
 }  // namespace App

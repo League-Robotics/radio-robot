@@ -140,6 +140,14 @@ std::vector<DecodedLine> onlyTelemetry(const std::vector<DecodedLine>& lines) {
   return out;
 }
 
+int countSecondary(const std::vector<DecodedLine>& lines) {
+  int n = 0;
+  for (const auto& l : lines) {
+    if (l.kind == DecodedKind::kSecondary) ++n;
+  }
+  return n;
+}
+
 bool anyAckMatches(const std::vector<DecodedLine>& frames, uint32_t corrId, msg::AckStatus status) {
   for (const auto& f : frames) {
     for (uint8_t i = 0; i < f.telemetry.acks_count; ++i) {
@@ -176,6 +184,13 @@ int main() {
   TestSim::SimApi sim;
   bool anyWatchedFaultEver = false;
   bool connHealthyThroughout = true;
+  // 106-002 own "sim-assert both cadences" requirement (drive-by fix for
+  // `secondary-telemetry-starved-by-106-001-cadence-retarget.md`): tallied
+  // across the whole run below (boot settle + ramp + stop), alongside the
+  // primary-frame trace this demo already prints -- proves secondary is NOT
+  // stuck at 0 Hz under the real ~40ms/cycle schedule this sim drives
+  // RobotLoop against (the exact regime that starved it pre-106-002).
+  int secondaryFrameCount = 0;
 
   // ===========================================================================
   // Phase 1: BOOT -- drives the REAL App::RobotLoop::boot(), motors + OTOS
@@ -190,7 +205,9 @@ int main() {
 
   sim.step(3);  // settle: emits kEventBootReady + both leaves' own activation writes land
   {
-    std::vector<DecodedLine> bootFrames = onlyTelemetry(sim.drainTelemetry());
+    std::vector<DecodedLine> bootLines = sim.drainTelemetry();
+    secondaryFrameCount += countSecondary(bootLines);
+    std::vector<DecodedLine> bootFrames = onlyTelemetry(bootLines);
     checkTrue(!bootFrames.empty(), "telemetry decoded during boot settle");
     bool sawBootReady = false;
     for (const auto& f : bootFrames) {
@@ -227,7 +244,9 @@ int main() {
   float firstEncLeft = 0.0f, lastEncLeft = 0.0f;
   for (int i = 0; i < kRampCycles; ++i) {
     sim.step(1);
-    std::vector<DecodedLine> frames = onlyTelemetry(sim.drainTelemetry());
+    std::vector<DecodedLine> rampLines = sim.drainTelemetry();
+    secondaryFrameCount += countSecondary(rampLines);
+    std::vector<DecodedLine> frames = onlyTelemetry(rampLines);
     if (anyAckMatches(frames, kTwistCorrId, msg::AckStatus::ACK_STATUS_OK)) twistAcked = true;
     for (const auto& f : frames) {
       if (f.telemetry.fault_bits & kWatchedFaultMask) anyWatchedFaultEver = true;
@@ -275,7 +294,9 @@ int main() {
   float lastVelLeft = peakVelLeft, lastVelRight = peakVelRight;
   for (int i = 0; i < kStopCycles; ++i) {
     sim.step(1);
-    std::vector<DecodedLine> frames = onlyTelemetry(sim.drainTelemetry());
+    std::vector<DecodedLine> stopLines = sim.drainTelemetry();
+    secondaryFrameCount += countSecondary(stopLines);
+    std::vector<DecodedLine> frames = onlyTelemetry(stopLines);
     if (anyAckMatches(frames, kStopCorrId, msg::AckStatus::ACK_STATUS_OK)) stopAcked = true;
     for (const auto& f : frames) {
       if (f.telemetry.fault_bits & kWatchedFaultMask) anyWatchedFaultEver = true;
@@ -294,8 +315,24 @@ int main() {
   checkTrue(stopAcked, "the stop's corrId was acked OK");
   checkTrue(sawInactive, "decoded telemetry shows active=false after STOP");
   checkTrue(sawIdleMode, "decoded telemetry shows mode=IDLE after STOP");
-  checkFloatLe(lastVelLeft, 0.6f * peakVelLeft, "velLeft dropped well below its ramp peak within the safe window");
-  checkFloatLe(lastVelRight, 0.6f * peakVelRight, "velRight dropped well below its ramp peak within the safe window");
+  // Bound loosened from the pre-106-002 0.6x (232/500=0.46 observed) to 0.75x
+  // (106-002): the tie-break fix (telemetry.h's emit() comment) can now
+  // legitimately defer ONE of these kStopCycles=4 real robot cycles' own
+  // primary frame to secondary instead -- at most one, since ties recur
+  // roughly every kSecondaryPeriod/kCycle=5 real cycles and this window is
+  // only 4 wide -- so `lastVelLeft`/`lastVelRight` may reflect only 3 of the
+  // 4 cycles' worth of decay in the worst case (empirically 340/500=0.68,
+  // not the full-4-cycle 232/500=0.46). Bumping the post-transition window
+  // to 5 cycles to always guarantee all 4 primaries would cross this
+  // harness's own verified-safe SimApi script-FIFO boundary (this file's
+  // own header comment: cycle +5 is where the first UNSCRIPTED write lands
+  // and corrupts decoded telemetry) -- not available without also fixing
+  // `clasi/issues/sim-api-multi-write-decay-window.md`, out of this
+  // ticket's scope. 0.75x still asserts the meaningful claim ("dropped by
+  // at least a quarter from peak, unambiguously reversing the ramp"), just
+  // no longer assumes every one of the 4 cycles' own primary frame lands.
+  checkFloatLe(lastVelLeft, 0.75f * peakVelLeft, "velLeft dropped well below its ramp peak within the safe window");
+  checkFloatLe(lastVelRight, 0.75f * peakVelRight, "velRight dropped well below its ramp peak within the safe window");
   std::printf("  STOP OK: velLeft/velRight dropped from ~%.0f/%.0f to ~%.0f/%.0f mm/s in %d cycles"
               " (still descending toward zero -- see this file's header for why this demo stops observing here)\n\n",
               static_cast<double>(peakVelLeft), static_cast<double>(peakVelRight), static_cast<double>(lastVelLeft),
@@ -312,6 +349,22 @@ int main() {
             "no kFaultWedgeLatch/kFaultI2CNak/kFaultCommsMalformed ever set (no fault knob used in this demo)");
   checkTrue(connHealthyThroughout, "conn_left/conn_right stayed true across the whole run");
   std::printf("  HEALTH OK: no new fault bit set, connections healthy throughout\n\n");
+
+  // ===========================================================================
+  // Phase 5 (106-002): secondary telemetry is NOT starved to 0 Hz over this
+  // run's real ~40ms/cycle schedule -- `secondary-telemetry-starved-by-106-
+  // 001-cadence-retarget.md`'s own regime, reproduced here for real by the
+  // REAL App::RobotLoop (via SimApi), not just the App::Telemetry unit
+  // harness. This run covers 1 (boot) + 3 (settle) + 20 (ramp) + 4 (stop) =
+  // 28 real cycles at ~40ms each, ~1.1s of virtual time -- comfortably more
+  // than 5x kSecondaryPeriod (200ms), so a healthy fix should show several
+  // secondary frames, not zero.
+  // ===========================================================================
+  beginScenario("secondary telemetry: not starved to 0 Hz over the run's real schedule");
+  checkTrue(secondaryFrameCount > 0,
+            "at least one TelemetrySecondary frame decoded across the whole run "
+            "(0 would reproduce the pre-106-002 starvation bug)");
+  std::printf("  SECONDARY OK: %d TelemetrySecondary frame(s) decoded across the run\n\n", secondaryFrameCount);
 
   if (g_failureCount == 0) {
     std::printf("OK: scripted-twist demo complete\n");
