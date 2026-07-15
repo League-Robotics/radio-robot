@@ -1,8 +1,9 @@
 ---
 id: '002'
 title: NezhaMotor/I2CBus write-path hardening (C1, M1)
-status: open
-use-cases: [SUC-002]
+status: in-progress
+use-cases:
+- SUC-002
 depends-on: []
 github-issue: ''
 issue:
