@@ -1,6 +1,13 @@
 ---
-status: pending
+status: in-progress
 sprint: '106'
+tickets:
+- 106-001
+- 106-002
+- 106-003
+- 106-004
+- 106-005
+- 106-006
 ---
 
 > **SCOPE REDUCED (2026-07-14 stakeholder triage).** Part 1 (clamp the

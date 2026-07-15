@@ -1,7 +1,7 @@
 ---
-id: "106"
-title: "Host trajectory planner: profiled twists, straights and turns"
-status: roadmap
+id: '106'
+title: 'Host trajectory planner: profiled twists, straights and turns'
+status: planning-docs
 branch: sprint/106-host-trajectory-planner-profiled-twists-straights-and-turns
 use-cases: []
 issues:
@@ -156,13 +156,26 @@ any unaddressed.
 
 Before tickets can be created, all of the following must be true:
 
-- [ ] Sprint planning documents are complete (sprint.md, use cases, architecture)
-- [ ] Architecture review passed
-- [ ] Stakeholder has approved the sprint plan
+- [x] Sprint planning documents are complete (sprint.md, use cases, architecture)
+- [x] Architecture review passed
+- [x] Stakeholder has approved the sprint plan
 
 ## Tickets
 
 | # | Title | Depends On |
 |---|-------|------------|
+| 001 | Firmware loop-cadence fix | — |
+| 002 | ConfigDelta live-apply (motor gains) + inner velocity-PID resonance taming | 001 |
+| 003 | Sim decay-window generalization (SimApi duty-changed scripting) | — |
+| 004 | Pure trapezoidal profile generator (straight distance + in-place turn) | — |
+| 005 | Streaming twist executor + heading-correction loop + binding-requirement safety | 002, 003, 004 |
+| 006 | Bench gate: sim-validated then real profiled straight + turn, captured traces | 001, 002, 003, 004, 005 |
 
-Tickets execute serially in the order listed.
+Tickets execute serially in the order listed. 001, 003, and 004 have no
+dependency on each other or on any other ticket in this sprint and may be
+built in parallel if a future execution pass chooses to; 002 depends on 001
+(a trustworthy, internally-consistent telemetry cadence before
+characterizing the inner-loop step response); 005 is the integration point
+(needs tamed gains, the sim decay-window fix, and the profiler); 006 is
+strictly last, matching 103/104/105's own precedent of ordering the
+Definition-of-Done gate last.
