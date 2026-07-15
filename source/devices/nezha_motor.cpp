@@ -131,6 +131,17 @@ void NezhaMotor::setPidEnabled(bool on)
     pidEnabled_ = on;
 }
 
+// applyGains() -- see nezha_motor.h's own comment for the isolation-
+// invariant rationale. Plain field mutation, no armor/write-path
+// interaction: pid_.compute() (called from tick()'s own dispatch) reads
+// config_.velGains fresh on its very next call, so this takes effect on
+// the SAME boot with no reflash.
+void NezhaMotor::applyGains(const Gains& gains, Opt<float> travelCalib)
+{
+    config_.velGains = gains;
+    if (travelCalib.has) config_.wheelTravelCalib = travelCalib.val;
+}
+
 void NezhaMotor::setVelEstimator(uint8_t mode, uint8_t window)
 {
     velEstMode_ = (mode == kVelEstLineFit) ? kVelEstLineFit : kVelEstEma;

@@ -103,6 +103,29 @@ class NezhaMotor : public MotorArmor {
   void setNeutral(Neutral mode);      // coast / brake — Nezha maps both to the same 0x60 speed-0 write (no distinct brake register)
   void setPidEnabled(bool on);        // default true (OQ2) — armor applies in both modes
 
+  // Live gain-apply (106-002/SUC-025): mutates this motor's velocity-PID
+  // gains (and, optionally, its wheel-travel calibration) in place -- no
+  // reflash, no I2C side effect (MotorVelocityPid::compute() reads
+  // config_.velGains fresh every tick, per compute()'s own signature).
+  // Parameters are exclusively Devices-local types (Gains, Opt<float>) --
+  // never the wire msg::MotorConfigPatch -- preserving source/devices/'s
+  // standing isolation invariant (never #include "messages/..."):
+  // RobotLoop (source/app/, which already includes messages/...) is the
+  // one legitimate translation boundary between the wire patch and this
+  // call, mirroring config.proto's own documented BinaryChannel precedent
+  // for the SAME MotorConfigPatch type (architecture-update.md (106)
+  // Decision 2/Step 3). `travelCalib` defaults to absent (has=false) --
+  // pass it only when the caller means to also update
+  // config_.wheelTravelCalib (config.proto's `travel_calib` is
+  // side-selected; `gains` is not).
+  void applyGains(const Gains& gains, Opt<float> travelCalib = {});
+
+  // Current live gains -- lets a caller (RobotLoop's CONFIG dispatch) merge
+  // a partially-populated wire patch against whatever this motor is
+  // actually running today, field by field, rather than clobbering an
+  // absent field back to some default.
+  const Gains& gains() const { return config_.velGains; }
+
   // Velocity-estimator selection (bench A/B, sprint 101). mode 0 = EMA
   // (velFiltAlpha — the shipped/default behavior); mode 1 = least-squares
   // line-fit slope over the last `window` FRESH position samples

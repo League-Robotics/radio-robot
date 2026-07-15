@@ -3,6 +3,10 @@
 // tuning rationale.
 #include "sim_api.h"
 
+#include <cmath>
+
+#include "kinematics/body_kinematics.h"
+
 namespace TestSim {
 
 namespace {
@@ -150,6 +154,152 @@ void SimApi::step(int cycles) {
 // Per-cycle plant + bus scripting
 // ---------------------------------------------------------------------------
 
+// DutyPredictor::tickPredict() -- see sim_api.h's own class comment for the
+// full derivation/scope. Mirrors nezha_motor.cpp's tick() steps 2-4 (the
+// pieces that decide whether writeRawDuty() actually reaches the bus) under
+// this harness's own fixed gains.
+bool SimApi::DutyPredictor::tickPredict(float position, int cycle) {
+  // Step 2 (nezha_motor.cpp tick()) analogue: freshness-gated velocity
+  // update. Runs UNCONDITIONALLY every tick() call -- steps 1-3 of the real
+  // tick() execute regardless of mode_ (only step 4's SWITCH dispatch is
+  // mode-gated); motorL_.tick()/motorR_.tick() are themselves called every
+  // single robotLoop_.cycle() from cycle 0 onward for BOTH leaves,
+  // independent of either leaf's own activationCycle_ below. Gating this
+  // block on `active_` (as an earlier version of this predictor did) is a
+  // bug: it would skip L's real encoder anchor at cycle 0 (mode_ is still
+  // None then, but collectEncoder() still ran and still anchored
+  // lastFreshRawEnc_/lastFreshUs_), pushing the predictor's own anchor one
+  // cycle late and desyncing every freshElapsed computed after L's first
+  // real velocity change -- caught empirically via a throwaway stderr trace
+  // comparing this predictor's per-cycle state against decoded telemetry
+  // during this ticket's own verification.
+  //
+  // raw uses the SAME tenths-of-mm quantization
+  // WheelPlant::scriptEncoderResponse() encodes (wheelTravelCalib=1.0,
+  // fwdSign=+1, this harness's own fixed convention -- see sim_api.h's
+  // "Plant/PID tuning" section).
+  int32_t raw = static_cast<int32_t>(std::lround(position * 10.0f));
+  bool freshSample = !hasFreshSample_ || (raw != lastFreshRaw_);
+  if (freshSample) {
+    if (hasFreshSample_) {
+      // elapsed-since-last-fresh-sample, derived from cycle COUNT rather
+      // than a us clock read -- kCycleDtUs is a fixed per-cycle constant
+      // (see sim_api.h's own comment), so (cycle - lastFreshCycle_) *
+      // kCycleDtUs is exactly what NezhaMotor's own
+      // (nowUs - lastFreshUs_) would read, with no clock-seam coupling.
+      float freshElapsed = static_cast<float>(cycle - lastFreshCycle_) * (static_cast<float>(kCycleDtUs) / 1e6f);
+      if (freshElapsed > 0.0f) {
+        float lastPos = static_cast<float>(lastFreshRaw_) / 10.0f;
+        float pos = static_cast<float>(raw) / 10.0f;
+        filteredVelocity_ = (pos - lastPos) / freshElapsed;  // velFiltAlpha == 1.0 -- direct assignment, no EMA blend
+      }
+      // else: non-positive elapsed (defensive only, mirrors nezha_motor.cpp) -- hold filteredVelocity_.
+    }
+    // else: first-ever fresh sample -- anchor only, no velocity computed (matches tick()'s boot-anchor branch).
+    hasFreshSample_ = true;
+    lastFreshRaw_ = raw;
+    lastFreshCycle_ = cycle;
+  }
+  // else: repeated raw (encoder hasn't advanced enough to change the tenths-of-mm quantum this cycle) --
+  // hold filteredVelocity_ unchanged, matching tick()'s own "brick hasn't refreshed" branch.
+
+  // Step 4 dispatch analogue -- Mode::None (no PID, no write, no-op) until
+  // this leaf's own structural activation cycle; matches tick()'s own
+  // switch(mode_) None/default case.
+  if (!active_) {
+    if (cycle < activationCycle_) return false;
+    active_ = true;  // mode transitions to Active THIS cycle
+  }
+
+  // Pure-P PID (this harness's own fixed gains -- see sim_api.h's
+  // DutyPredictor comment for why ki/kff/iMax/kaw's residual effect is
+  // skipped), clamped to the PID's own output domain.
+  constexpr float kPidKp = 0.01f;  // mirrors makeMotorConfig()'s own kp below
+  float requestedDuty = kPidKp * (target_ - filteredVelocity_);
+  requestedDuty = (requestedDuty < -1.0f) ? -1.0f : (requestedDuty > 1.0f ? 1.0f : requestedDuty);
+  // averageDuty() (nezha_motor.cpp, sprint 101 boxcar output smoothing) is a
+  // deliberately omitted no-op here: dutyAvgWindow_ defaults to 1 (off,
+  // unchanged behavior, nezha_motor.h), and nothing in this harness ever
+  // calls setDutyAvg() -- so requestedDuty above IS averageDuty(requestedDuty).
+
+  // MotorArmor::armoredWrite() gate (motor_armor.h) -- reversal-dwell +
+  // output-deadband. Sits BETWEEN the PID's raw output and writeRawDuty()'s
+  // own write-on-change/slew gate below; MISSING this layer was this
+  // predictor's first (wrong) hypothesis during verification -- a duty
+  // sign flip (e.g. the STOP-after-forward-ramp transition) does NOT reach
+  // writeRawDuty() as-is, it gets FORCED TO ZERO for a dwell window first.
+  // This harness's own MotorConfig (makeMotorConfig()) leaves both armor
+  // fields (reversalDwell/outputDeadband) unset, so configureArmor()
+  // substitutes MotorArmor's own ship defaults exactly (motor_armor.h):
+  // kDefaultOutputDeadband = 0.03, kDefaultReversalDwell = 100ms. nowMs is
+  // derived from cycle count the same way freshElapsed is above (kCycleDtUs
+  // is a fixed 50ms/cycle constant, so cycle*50 is exactly what
+  // NezhaMotor's own nowMs would read at this tick, up to a constant
+  // boot-time offset that never matters -- only RELATIVE now-vs-deadline
+  // comparisons drive this gate).
+  constexpr float kOutputDeadband = 0.03f;
+  constexpr float kReversalDwellMs = 100.0f;
+  uint32_t nowMs = static_cast<uint32_t>(cycle) * (kCycleDtUs / 1000);
+
+  float dutyToWrite;
+  if (requestedDuty == 0.0f || std::fabs(requestedDuty) < kOutputDeadband) {
+    // Stop always wins: immediate, unclamped, cancels any dwell in flight.
+    dwelling_ = false;
+    lastRequestedDuty_ = 0.0f;
+    dutyToWrite = 0.0f;
+  } else {
+    bool forwardAsIs = true;
+    if (dwelling_) {
+      if (nowMs < dwellDeadline_) {
+        // Still holding at commanded-zero through the dwell window.
+        lastRequestedDuty_ = 0.0f;
+        dutyToWrite = 0.0f;
+        forwardAsIs = false;
+      } else {
+        dwelling_ = false;  // dwell elapsed -- proceed in the new direction below
+      }
+    } else if (kReversalDwellMs > 0.0f && lastRequestedDuty_ != 0.0f &&
+               ((requestedDuty > 0.0f) != (lastRequestedDuty_ > 0.0f))) {
+      // Commanded sign change relative to the last duty actually forwarded --
+      // write 0 now and arm the dwell; the new direction is withheld until
+      // the dwell deadline.
+      dwelling_ = true;
+      dwellDeadline_ = nowMs + static_cast<uint32_t>(kReversalDwellMs);
+      lastRequestedDuty_ = 0.0f;
+      dutyToWrite = 0.0f;
+      forwardAsIs = false;
+    }
+    if (forwardAsIs) {
+      // Same-sign duty (or no prior direction to reverse from, or the dwell
+      // just elapsed): forward as-is.
+      lastRequestedDuty_ = requestedDuty;
+      dutyToWrite = requestedDuty;
+    }
+  }
+
+  // writeRawDuty() analogue (nezha_motor.cpp) -- quantize -> write-on-change -> slew -> stop exemption.
+  int8_t pct = static_cast<int8_t>(std::lround(dutyToWrite * 100.0f));
+  if (pct > 100) pct = 100;
+  if (pct < -100) pct = -100;
+
+  if (pct == lastWrittenPct_) return false;  // write-on-change gate
+
+  bool stopping = (pct == 0);
+  bool firstWrite = (lastWrittenPct_ == -128);
+  int8_t written = pct;
+  if (!stopping && !firstWrite) {
+    constexpr uint8_t kSlewRate = 100;  // mirrors makeMotorConfig()'s own slewRate below
+    int16_t delta = static_cast<int16_t>(pct) - static_cast<int16_t>(lastWrittenPct_);
+    if (delta > static_cast<int16_t>(kSlewRate)) {
+      written = static_cast<int8_t>(lastWrittenPct_ + kSlewRate);
+    } else if (delta < -static_cast<int16_t>(kSlewRate)) {
+      written = static_cast<int8_t>(lastWrittenPct_ - kSlewRate);
+    }
+  }
+  lastWrittenPct_ = written;
+  return true;
+}
+
 // Pushes exactly the I2CBus writes/reads THIS upcoming robotLoop_.cycle()
 // call will issue, in the SAME chronological order (source/app/robot_loop.cpp
 // cycle()'s own call sequence: L request -> L collect(+maybe duty) -> R
@@ -163,46 +313,49 @@ void SimApi::step(int cycles) {
 // "writes first, then the read" push order is exactly this call's own
 // request-write/collect-read/[duty-write] shape once writeCount is right).
 //
-// extraDutyWrites (2 vs. the steady-state 1) fires on exactly two kinds of
-// cycle, both single-write, immediately-saturated transitions (see
-// sim_api.h's "Plant/PID tuning" section for why every transition this
-// harness ever provokes is a full-saturation jump, never a multi-write
-// slew ramp):
-//   1. Each leaf's OWN one-time mode-activation write. App::Drive::tick()
-//      runs BETWEEN motorL_.tick() and motorR_.tick() within ONE cycle()
-//      call (robot_loop.cpp's own cycle() body) -- so R's mode_ is already
-//      Active (Drive::tick() ran moments earlier, same cycle 0) by the time
-//      motorR_.tick() runs on cycle 0: R gets its own first write THAT
-//      cycle. L's motorL_.tick() runs BEFORE drive_.tick() has EVER
-//      executed (cycle 0): L's own first write is deferred to cycle 1.
-//      Byte-for-byte the same derivation app_robot_loop_harness.cpp's own
-//      scriptMotorCycle() comment documents for the identical RobotLoop+
-//      Drive composition.
-//   2. pendingEventCycle_ (set by injectTwist()/injectStop()/
+// Whether a SECOND ("extra") write lands on this cycle -- vs. the
+// steady-state 1 (the request-write only) -- is now predicted dynamically,
+// per leaf, per cycle, by DutyPredictor (106-003, SUC-026), superseding the
+// single hand-derived pendingEventCycle_ index ticket 105-004 originally
+// used. Two staging inputs feed the predictors:
+//   1. Each leaf's OWN structural mode-activation cycle (R: cycle 0, L:
+//      cycle 1) -- App::Drive::tick() runs BETWEEN motorL_.tick() and
+//      motorR_.tick() within ONE cycle() call (robot_loop.cpp's own
+//      cycle() body), so R's mode_ is already Active (Drive::tick() ran
+//      moments earlier, same cycle 0) by the time motorR_.tick() runs on
+//      cycle 0; L's motorL_.tick() runs BEFORE drive_.tick() has EVER
+//      executed (cycle 0), so L's own first write is deferred to cycle 1.
+//      DutyPredictor's own activationCycle_ constructor argument encodes
+//      this directly (byte-for-byte the same derivation
+//      app_robot_loop_harness.cpp's own scriptMotorCycle() comment
+//      documents for the identical RobotLoop+Drive composition).
+//   2. pendingCycle_/pendingVL_/pendingVR_ (staged by
+//      stageActuationChange(), called from injectTwist()/injectStop()/
 //      notePendingActuationChange()): a fresh command is DISPATCHED (the
 //      switch in cycle()'s third runAndWait block) BEFORE that same
 //      block's own drive_.tick() call, so R's very next tick() (later in
-//      that SAME cycle) sees the new target -- R's write lands on
-//      pendingEventCycle_ itself; L's own tick() for that cycle already
-//      ran EARLIER (before dispatch), so L does not see the new target
-//      until pendingEventCycle_ + 1.
+//      that SAME cycle) sees the new target -- R's predictor target
+//      updates on pendingCycle_ itself; L's own tick() for that cycle
+//      already ran EARLIER (before dispatch), so L's predictor target
+//      does not update until pendingCycle_ + 1.
+// From there, DutyPredictor::tickPredict() runs the ACTUAL write-on-change
+// decision every cycle, for as many cycles/transitions as a scenario steps
+// through -- not just the first one.
 void SimApi::scriptCycleBusResponses() {
-  // pendingEventCycle_ == -1 means "no event pending" -- guarded explicitly
-  // (not just relying on cycleCount_ never being negative) because
-  // pendingEventCycle_ + 1 == 0 would otherwise spuriously match
-  // cycleCount_ == 0 and hand L a phantom second write on the very first
-  // cycle of any run that hasn't injected a command yet (found via the
-  // ramp scenario's own errCount() desync during systematic debugging).
-  bool eventPending = pendingEventCycle_ >= 0;
-  int extraR = (cycleCount_ == 0 || (eventPending && cycleCount_ == pendingEventCycle_)) ? 1 : 0;
-  int extraL = (cycleCount_ == 1 || (eventPending && cycleCount_ == pendingEventCycle_ + 1)) ? 1 : 0;
+  if (pendingCycle_ >= 0) {
+    if (cycleCount_ == pendingCycle_) predictorRight_.setTarget(pendingVR_);
+    if (cycleCount_ == pendingCycle_ + 1) predictorLeft_.setTarget(pendingVL_);
+  }
 
   plantLeft_.step(motorL_.appliedDuty(), static_cast<float>(kCycleDtUs) / 1e6f);
   plantRight_.step(motorR_.appliedDuty(), static_cast<float>(kCycleDtUs) / 1e6f);
   otosPlant_.step(plantLeft_.position(), plantRight_.position());
 
-  plantLeft_.scriptEncoderResponse(bus_, kMotorWireAddr, 1 + extraL);
-  plantRight_.scriptEncoderResponse(bus_, kMotorWireAddr, 1 + extraR);
+  bool extraL = predictorLeft_.tickPredict(plantLeft_.position(), cycleCount_);
+  bool extraR = predictorRight_.tickPredict(plantRight_.position(), cycleCount_);
+
+  plantLeft_.scriptEncoderResponse(bus_, kMotorWireAddr, extraL ? 2 : 1);
+  plantRight_.scriptEncoderResponse(bus_, kMotorWireAddr, extraR ? 2 : 1);
   otosPlant_.scriptPoseResponse(bus_, kOtosWireAddr);  // always due -- kCycleDtUs (50ms) >= Otos::kReadPeriod (20ms)
 }
 
@@ -212,16 +365,30 @@ void SimApi::scriptCycleBusResponses() {
 
 void SimApi::injectCommand(const char* armoredLine) { serialLink_.enqueueInbound(armoredLine); }
 
-void SimApi::notePendingActuationChange(int atCycle) { pendingEventCycle_ = atCycle; }
+void SimApi::stageActuationChange(int atCycle, float vL, float vR) {
+  pendingCycle_ = atCycle;
+  pendingVL_ = vL;
+  pendingVR_ = vR;
+}
+
+void SimApi::notePendingActuationChange(int atCycle) {
+  stageActuationChange(atCycle, /*vL=*/0.0f, /*vR=*/0.0f);  // every caller today is an autonomous
+                                                              // App::Drive::stop() (deadman expiry) --
+                                                              // see sim_api.h's own comment
+}
 
 void SimApi::injectTwist(float v_x, float omega, float duration, uint32_t corrId) {
   injectCommand(TestSupport::armorTwistCommand(v_x, omega, duration, corrId).c_str());
-  notePendingActuationChange(cycleCount_);  // consumed on the NEXT step()'s first cycle
+  // Same wheel-target math App::Drive::tick() runs (BodyKinematics::inverse()) -- the predictors need the
+  // REAL staged target, not just "something changed", to predict decay-window writes (106-003).
+  float vL = 0.0f, vR = 0.0f;
+  BodyKinematics::inverse(v_x, omega, kTrackWidth, vL, vR);
+  stageActuationChange(cycleCount_, vL, vR);  // consumed on the NEXT step()'s first cycle
 }
 
 void SimApi::injectStop(uint32_t corrId) {
   injectCommand(TestSupport::armorStopCommand(corrId).c_str());
-  notePendingActuationChange(cycleCount_);
+  stageActuationChange(cycleCount_, /*vL=*/0.0f, /*vR=*/0.0f);  // App::Drive::stop() always stages (0, 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -249,23 +416,30 @@ std::vector<TestSupport::DecodedLine> SimApi::drainTelemetry() {
 // top of the loop in step()). So EVERY runAndWait/sleepUntil call inside
 // THIS single cycle() call sees elapsed-since-mark == 0, meaning each of
 // the four sleeps robot_loop.cpp's cycle() body issues (L-settle,
-// clearance, R-settle, final cycle-pace) requests exactly its OWN gap
-// parameter, no more, no less -- an invariant provable from robot_loop.cpp's
-// own runAndWait()/sleepUntil() bodies, not merely observed here. That
-// invariant is what lets a HOST_BUILD harness report a deterministic
-// virtual total at all (a real ARM cycle's sleeps interact with genuine
-// elapsed wall time and do NOT sum this way -- see the comparison this
-// method's own caller records in the ticket's completion notes).
+// clearance, R-settle, final perception+odometry+pace) requests exactly its
+// OWN gap parameter, no more, no less -- an invariant provable from
+// robot_loop.cpp's own runAndWait()/sleepUntil() bodies, not merely
+// observed here. That invariant is what lets a HOST_BUILD harness report a
+// deterministic virtual total at all (a real ARM cycle's sleeps interact
+// with genuine elapsed wall time and do NOT sum this way -- see the
+// comparison this method's own caller records in ticket 106-001's
+// completion notes).
 //
 // virtualCycleMillis is therefore the SUM of the four sleeps robot_loop.cpp's
 // own published constants declare (kSettle=4, kClear=4, kSettle=4,
-// kCycle=16 -- robot_loop.cpp's own anonymous-namespace constants, not
+// kPace=28 -- robot_loop.cpp's own anonymous-namespace constants, not
 // exported, duplicated here by citation per this codebase's established
-// per-file fixture-duplication convention) -- 4+4+4+16 = 28ms. sleepCount
-// and lastSleepMillis below are the OBSERVED corroboration (not merely
-// hardcoded trust): sleepCount must be exactly 4 (three runAndWait blocks
-// plus the final sleepUntil), and lastSleepMillis must equal the final
-// (cycle-pace) block's own 16ms -- both checked live, not assumed.
+// per-file fixture-duplication convention) -- 4+4+4+28 = 40ms == kCycle.
+// This equality (not an inequality, not a coincidence) is 106-001's own
+// fix: robot_loop.cpp's kPace is DERIVED as kCycle minus the three
+// settle/clear windows specifically so this sum lands on kCycle exactly,
+// closing the gap 105-004 found (the pre-106-001 code passed kCycle, not
+// kPace, to the final block, so this same sum was 4+4+4+16=28ms against a
+// 16ms kCycle target -- 12ms unabsorbed). sleepCount and lastSleepMillis
+// below are the OBSERVED corroboration (not merely hardcoded trust):
+// sleepCount must be exactly 4 (three runAndWait blocks plus the final
+// perception+odometry+pace block), and lastSleepMillis must equal the
+// final block's own kPace=28ms -- both checked live, not assumed.
 CycleTimingReport SimApi::measureOneCycle() {
   CycleTimingReport report;
   int sleepsBefore = sleeper_.sleepCount();

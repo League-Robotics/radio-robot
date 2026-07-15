@@ -1,9 +1,12 @@
-// scripted_twist_demo_harness.cpp -- this sprint's own Definition of Done
-// (105-006, SUC-023): a headless, readable, end-to-end "run one command and
-// see the sim loop move" narrative built ENTIRELY on already-shipped
-// primitives -- TestSim::SimApi (105-004) and its plant (105-003) -- boot,
-// twist forward, watch the plant's real first-order velocity ramp, stop,
-// watch velocity reverse its ramp and head back toward zero.
+// scripted_twist_demo_harness.cpp -- 105-006's own Definition of Done
+// (SUC-023): a headless, readable, end-to-end "run one command and see the
+// sim loop move" narrative built ENTIRELY on already-shipped primitives --
+// TestSim::SimApi (105-004) and its plant (105-003) -- boot, twist forward,
+// watch the plant's real first-order velocity ramp, stop, watch velocity
+// converge to (approximately) zero. The STOP phase's convergence assertion
+// was strengthened 106-003 (SUC-026) once SimApi::DutyPredictor lifted the
+// old ~4-cycle safe-observation bound -- see this file's own header comment
+// below for the full derivation.
 //
 // Hand-rolled assertions, PASS/FAIL per phase, nonzero exit on any failure,
 // PLUS a human-readable cycle-by-cycle trace printed to stdout -- mirrors
@@ -15,51 +18,58 @@
 // HOST_BUILD Devices/App/messages/kinematics dependency graph
 // test_sim_api.py already compiles.
 //
-// --- Why the post-STOP window is exactly 3 cycles (a verified, not
-// arbitrary, bound) ---
-// SimApi's own scripted-I2CBus-FIFO contract (sim_api.cpp's
-// scriptCycleBusResponses(), and sim_api.h's "Plant/PID tuning" section)
-// pre-provisions EXACTLY ONE extra ("mode-activation" or "fresh command")
+// --- Why the post-STOP window is 12 cycles, and asserts FULL convergence
+// (106-003, SUC-026 -- supersedes the ~4-cycle bound this comment used to
+// document) ---
+// Ticket 105-006's original version of this file bounded the post-STOP
+// observation window to 4 cycles: `SimApi::scriptCycleBusResponses()` used
+// to pre-provision exactly ONE extra ("mode-activation" or "fresh command")
 // duty write per injected command, at a single hand-derived cycle index --
-// correct because every EXISTING scenario in this codebase (ticket 004's
-// own ramp/stop/deadman scenarios, ticket 005's fault-knob scenarios) keeps
-// the commanded |v_x| far enough above the plant's achievable ceiling
-// (TestSim::kDefaultDutyVelMax) that the velocity-PID output stays
-// saturated at +-1.0 duty FOREVER once set -- so "one write, then never
-// again" is always true for THEM. STOP is different: it commands a
-// velocity TARGET of exactly 0 while the plant is still doing ~500mm/s, so
-// the PID's saturated output eventually (after roughly one time constant,
-// ~0.13s) crosses back into its UNSATURATED region as the error shrinks --
-// and once unsaturated, NezhaMotor's write-on-change gate (nezha_motor.cpp)
-// legitimately issues SEVERAL more duty writes as the quantized percent
-// counts down toward 0, none of which SimApi's single-transition script
-// provisions for.
+// correct for every OTHER scenario in this codebase (their commanded
+// |v_x| stays far enough above the plant's ceiling that the PID output
+// stays saturated forever), but wrong for STOP, whose target (0) the plant
+// can actually reach: once the PID's saturated output crosses back into its
+// UNSATURATED region as the error shrinks, NezhaMotor's write-on-change
+// gate (nezha_motor.cpp) legitimately issues SEVERAL more duty writes as
+// the quantized percent counts down toward 0 -- more writes than the old
+// single-transition script provisioned for, desyncing the shared I2CBus
+// script FIFO a few cycles in (verified empirically at the time: connRight
+// flipping false, velLeft freezing at a wrong value, a false
+// kFaultWedgeLatch trip). See `clasi/issues/sim-api-multi-write-decay-
+// window.md` for the original finding.
 //
-// This was not theorized -- it was verified empirically with a throwaway
-// probe harness before this file was written: stepping the REAL RobotLoop
-// past cycle pendingEventCycle_+4 after an injectStop() desyncs the shared
-// I2CBus script FIFO (an unscripted write consumes an entry meant for a
-// DIFFERENT device's encoder request), producing directly OBSERVABLE
-// corruption in decoded telemetry -- connRight flipping false, velLeft
-// freezing at a wrong value, and a FALSE kFaultWedgeLatch trip a few cycles
-// later. Cycles pendingEventCycle_+1 through +4 (R's write, L's lagged
-// write, two clean decay cycles) are provably clean; +5 is where the first
-// unscripted write lands. This harness therefore observes STOP for exactly
-// 4 cycles -- one more than `sim_api_harness.cpp`'s own
-// scenarioStopAcksAndClearsActive() (its own step(3) after injectStop(),
-// which never asserts on velocity at all and so never needed to find this
-// exact boundary) -- and asserts the STRONGEST TRUE claim that window
-// supports: velocity has unambiguously reversed the ramp's own trend and
-// dropped well below its peak (empirically ~500 -> ~230, a >50% drop, in 4
-// cycles), not that it has reached exactly zero. A literal
-// "settles to exactly zero" assertion would require SimApi to script a
-// VARIABLE number of post-transition duty writes (a real capability gap,
-// not a scenario bug) -- out of this integration ticket's own stated scope
-// ("consumes sim_api and fault knobs as ALREADY-BUILT primitives", ticket
-// 105-006's own Implementation Plan) to add. See this ticket's completion
-// notes for the same finding, and
-// clasi/issues/sim-api-multi-write-decay-window.md for the deferred
-// follow-up.
+// 106-003 generalized the scripting mechanism (`SimApi::DutyPredictor`,
+// sim_api.{h,cpp}) to predict, per leaf, per cycle, whether NezhaMotor's
+// tick() will actually emit a duty write THIS cycle -- including replicating
+// `Devices::MotorArmor::armoredWrite()`'s own reversal-dwell/output-deadband
+// gate (motor_armor.h), which forces a same-cycle-or-later duty SIGN FLIP to
+// zero for a 100ms dwell window before letting the new direction reach the
+// bus -- discovered only by comparing this predictor's own per-cycle state
+// against decoded telemetry, since a naive write-on-change-only replica
+// (ignoring the dwell) mis-predicts by exactly one write at the STOP
+// transition. That generalization is what makes a MULTI-CYCLE, ARBITRARY-
+// LENGTH decay observable at all -- this demo's own STOP phase is the first
+// consumer.
+//
+// 12 cycles (not 4, not "until true zero") is itself a verified, not
+// arbitrary, bound: the plant's residual velocity keeps shrinking under
+// closed-loop control until it drops below `Devices::MotorVelocityPid`'s own
+// effective deadband-equivalent (~3mm/s here, this harness's own
+// `kOutputDeadband` in `DutyPredictor` -- mirrors `MotorArmor`'s
+// `kDefaultOutputDeadband`), at which point duty locks at EXACTLY 0 and the
+// plant's own further decay (now open-loop, duty=0) becomes too slow per
+// 50ms cycle to move the encoder's own tenths-of-mm quantization -- the
+// SAME "boundary-latch" flavor `.clasi/knowledge/encoder-wedge-boundary-
+// latch.md` documents for the real hardware. Left unobserved long enough,
+// this scenario's own converged residual would eventually accumulate
+// `Devices::MotorArmor`'s own `kWedgeThreshold` (10) consecutive identical
+// raw reads and trip a REAL (not false) `kFaultWedgeLatch` -- verified by
+// stepping this same scenario out to 60+ cycles during this ticket's own
+// implementation. 12 cycles lands comfortably inside the converged-and-
+// clean window (velocity already within ~2mm/s of zero by cycle 5-6 post-
+// STOP, consecutive-identical-read count still single digits by cycle 12)
+// while being 3x the OLD 4-cycle bound -- unambiguous proof the bound was
+// lifted, not a coincidental pass.
 //
 // --- Why "fault bits stay quiet" is phrased as "no NEW fault types" ---
 // kFaultI2CSafetyNet (bit 0, telemetry.h) trips once during SimApi's own
@@ -140,6 +150,14 @@ std::vector<DecodedLine> onlyTelemetry(const std::vector<DecodedLine>& lines) {
   return out;
 }
 
+int countSecondary(const std::vector<DecodedLine>& lines) {
+  int n = 0;
+  for (const auto& l : lines) {
+    if (l.kind == DecodedKind::kSecondary) ++n;
+  }
+  return n;
+}
+
 bool anyAckMatches(const std::vector<DecodedLine>& frames, uint32_t corrId, msg::AckStatus status) {
   for (const auto& f : frames) {
     for (uint8_t i = 0; i < f.telemetry.acks_count; ++i) {
@@ -176,6 +194,13 @@ int main() {
   TestSim::SimApi sim;
   bool anyWatchedFaultEver = false;
   bool connHealthyThroughout = true;
+  // 106-002 own "sim-assert both cadences" requirement (drive-by fix for
+  // `secondary-telemetry-starved-by-106-001-cadence-retarget.md`): tallied
+  // across the whole run below (boot settle + ramp + stop), alongside the
+  // primary-frame trace this demo already prints -- proves secondary is NOT
+  // stuck at 0 Hz under the real ~40ms/cycle schedule this sim drives
+  // RobotLoop against (the exact regime that starved it pre-106-002).
+  int secondaryFrameCount = 0;
 
   // ===========================================================================
   // Phase 1: BOOT -- drives the REAL App::RobotLoop::boot(), motors + OTOS
@@ -190,7 +215,9 @@ int main() {
 
   sim.step(3);  // settle: emits kEventBootReady + both leaves' own activation writes land
   {
-    std::vector<DecodedLine> bootFrames = onlyTelemetry(sim.drainTelemetry());
+    std::vector<DecodedLine> bootLines = sim.drainTelemetry();
+    secondaryFrameCount += countSecondary(bootLines);
+    std::vector<DecodedLine> bootFrames = onlyTelemetry(bootLines);
     checkTrue(!bootFrames.empty(), "telemetry decoded during boot settle");
     bool sawBootReady = false;
     for (const auto& f : bootFrames) {
@@ -227,7 +254,9 @@ int main() {
   float firstEncLeft = 0.0f, lastEncLeft = 0.0f;
   for (int i = 0; i < kRampCycles; ++i) {
     sim.step(1);
-    std::vector<DecodedLine> frames = onlyTelemetry(sim.drainTelemetry());
+    std::vector<DecodedLine> rampLines = sim.drainTelemetry();
+    secondaryFrameCount += countSecondary(rampLines);
+    std::vector<DecodedLine> frames = onlyTelemetry(rampLines);
     if (anyAckMatches(frames, kTwistCorrId, msg::AckStatus::ACK_STATUS_OK)) twistAcked = true;
     for (const auto& f : frames) {
       if (f.telemetry.fault_bits & kWatchedFaultMask) anyWatchedFaultEver = true;
@@ -257,15 +286,19 @@ int main() {
 
   // ===========================================================================
   // Phase 3: STOP -- an explicit STOP command acks OK, `active` clears, and
-  // velocity unambiguously reverses the ramp's own trend, dropping well
-  // below its peak within the harness's own verified-safe 3-cycle
-  // post-transition window -- see this file's own header comment for the
-  // derivation of why 3, not "until it reaches zero."
+  // velocity converges to (approximately) zero within the harness's own
+  // verified-safe 12-cycle post-transition window -- 3x the pre-106-003
+  // 4-cycle bound, and a full-convergence assertion rather than a partial-
+  // drop one now that DutyPredictor (sim_api.{h,cpp}) scripts the shared
+  // I2CBus FIFO correctly for however many duty writes the decay actually
+  // needs. See this file's own header comment for the verified derivation
+  // of both the 12-cycle window and the ~3mm/s convergence bound.
   // ===========================================================================
   constexpr uint32_t kStopCorrId = 2;
-  constexpr int kStopCycles = 4;
+  constexpr int kStopCycles = 12;
+  constexpr float kConvergedVelocity = 5.0f;  // [mm/s] "approximately zero" -- see header comment
 
-  beginScenario("stop: STOP acks OK, active clears, velocity reverses the ramp and heads toward zero");
+  beginScenario("stop: STOP acks OK, active clears, velocity converges to (approximately) zero");
   std::printf("  STOP commanded (corrId=%u)\n", kStopCorrId);
   sim.injectStop(kStopCorrId);
 
@@ -275,7 +308,9 @@ int main() {
   float lastVelLeft = peakVelLeft, lastVelRight = peakVelRight;
   for (int i = 0; i < kStopCycles; ++i) {
     sim.step(1);
-    std::vector<DecodedLine> frames = onlyTelemetry(sim.drainTelemetry());
+    std::vector<DecodedLine> stopLines = sim.drainTelemetry();
+    secondaryFrameCount += countSecondary(stopLines);
+    std::vector<DecodedLine> frames = onlyTelemetry(stopLines);
     if (anyAckMatches(frames, kStopCorrId, msg::AckStatus::ACK_STATUS_OK)) stopAcked = true;
     for (const auto& f : frames) {
       if (f.telemetry.fault_bits & kWatchedFaultMask) anyWatchedFaultEver = true;
@@ -294,12 +329,18 @@ int main() {
   checkTrue(stopAcked, "the stop's corrId was acked OK");
   checkTrue(sawInactive, "decoded telemetry shows active=false after STOP");
   checkTrue(sawIdleMode, "decoded telemetry shows mode=IDLE after STOP");
-  checkFloatLe(lastVelLeft, 0.6f * peakVelLeft, "velLeft dropped well below its ramp peak within the safe window");
-  checkFloatLe(lastVelRight, 0.6f * peakVelRight, "velRight dropped well below its ramp peak within the safe window");
-  std::printf("  STOP OK: velLeft/velRight dropped from ~%.0f/%.0f to ~%.0f/%.0f mm/s in %d cycles"
-              " (still descending toward zero -- see this file's header for why this demo stops observing here)\n\n",
+  // Full convergence, not a partial-drop bound (106-003 lifts the old
+  // ~4-cycle ceiling on how far this demo can safely observe): the last
+  // decoded velocity sample in the 12-cycle window must sit within
+  // kConvergedVelocity of zero on BOTH sides (fabs, not just an upper
+  // bound -- the closed loop can legitimately overshoot slightly negative
+  // on its way to zero, see this file's header's own per-cycle trace).
+  checkFloatLe(std::fabs(lastVelLeft), kConvergedVelocity, "velLeft converged to (approximately) zero within the window");
+  checkFloatLe(std::fabs(lastVelRight), kConvergedVelocity, "velRight converged to (approximately) zero within the window");
+  std::printf("  STOP OK: velLeft/velRight converged from ~%.0f/%.0f to ~%.1f/%.1f mm/s in %d cycles"
+              " (within %.0fmm/s of zero -- full convergence, not a partial drop)\n\n",
               static_cast<double>(peakVelLeft), static_cast<double>(peakVelRight), static_cast<double>(lastVelLeft),
-              static_cast<double>(lastVelRight), kStopCycles);
+              static_cast<double>(lastVelRight), kStopCycles, static_cast<double>(kConvergedVelocity));
 
   // ===========================================================================
   // Phase 4: no NEW fault bit ever set, connLeft/connRight stayed healthy
@@ -312,6 +353,22 @@ int main() {
             "no kFaultWedgeLatch/kFaultI2CNak/kFaultCommsMalformed ever set (no fault knob used in this demo)");
   checkTrue(connHealthyThroughout, "conn_left/conn_right stayed true across the whole run");
   std::printf("  HEALTH OK: no new fault bit set, connections healthy throughout\n\n");
+
+  // ===========================================================================
+  // Phase 5 (106-002): secondary telemetry is NOT starved to 0 Hz over this
+  // run's real ~40ms/cycle schedule -- `secondary-telemetry-starved-by-106-
+  // 001-cadence-retarget.md`'s own regime, reproduced here for real by the
+  // REAL App::RobotLoop (via SimApi), not just the App::Telemetry unit
+  // harness. This run covers 1 (boot) + 3 (settle) + 20 (ramp) + 12 (stop,
+  // 106-003's widened window) = 36 real cycles at ~40ms each, ~1.4s of
+  // virtual time -- comfortably more than 5x kSecondaryPeriod (200ms), so a
+  // healthy fix should show several secondary frames, not zero.
+  // ===========================================================================
+  beginScenario("secondary telemetry: not starved to 0 Hz over the run's real schedule");
+  checkTrue(secondaryFrameCount > 0,
+            "at least one TelemetrySecondary frame decoded across the whole run "
+            "(0 would reproduce the pre-106-002 starvation bug)");
+  std::printf("  SECONDARY OK: %d TelemetrySecondary frame(s) decoded across the run\n\n", secondaryFrameCount);
 
   if (g_failureCount == 0) {
     std::printf("OK: scripted-twist demo complete\n");

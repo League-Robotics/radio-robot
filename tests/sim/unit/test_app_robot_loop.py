@@ -26,6 +26,7 @@ import pytest
 # tests/sim/unit/test_app_robot_loop.py -> unit -> sim -> tests -> repo root
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _SOURCE_DIR = _REPO_ROOT / "source"
+_TESTS_SIM_DIR = _REPO_ROOT / "tests" / "sim"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_robot_loop_harness.cpp"
 
 _ROBOT_LOOP_SRC = _SOURCE_DIR / "app" / "robot_loop.cpp"
@@ -103,6 +104,8 @@ def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_TESTS_SIM_DIR),
             "-o",
             str(binary),
             *[str(src) for src in sources],

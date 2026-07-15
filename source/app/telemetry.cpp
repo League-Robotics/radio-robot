@@ -60,13 +60,47 @@ bool Telemetry::secondaryDue(uint32_t now) const {
 }
 
 void Telemetry::emit(uint32_t now) {
-  // Primary checked first, unconditionally sent when due -- secondary can
-  // never delay it (this file's own scheduling note).
-  if (primaryDue(now)) {
+  bool pDue = primaryDue(now);
+  bool sDue = secondaryDue(now);
+
+  // Tie-detection uses a STRICTER "genuinely due" test for secondary's
+  // pre-first-ever-emission window: secondaryDue()'s own "!everEmitted
+  // Secondary_ -> true" boot bypass (unchanged, still governs the
+  // non-tied branch below exactly as before) makes secondary look "due"
+  // from t=0, long before a real kSecondaryPeriod has ever elapsed --
+  // harmless under the OLD "primary always wins" rule (that bypass value
+  // was simply never reached whenever primary was also due), but WOULD
+  // spuriously tie-alternate a caller's SECOND-ever call (e.g. exactly
+  // kPrimaryPeriod after the first) onto secondary, well before any real
+  // starvation exists. Substituting a real elapsed-time check
+  // (`now >= kSecondaryPeriod`) for that ONE pre-first-emission window
+  // preserves every existing short-run caller's expectation that early
+  // calls are primary-only, while still guaranteeing secondary its first
+  // slot (via a tie, same as any later one) once genuine time has passed
+  // -- exactly the `secondary-telemetry-starved-by-106-001-cadence-
+  // retarget.md` bug's own regime (a real ~52 ms loop period run for
+  // multiple seconds).
+  bool sDueForTie = everEmittedSecondary_ ? sDue : (now >= kSecondaryPeriod);
+
+  // Tie: both genuinely due in the same call -- alternate rather than
+  // always favoring primary (telemetry.h's own 106-002 comment: at the
+  // real ~52 ms loop period, primary is due EVERY call, so an
+  // unconditional primary-wins rule starves secondary to 0 Hz forever).
+  if (pDue && sDueForTie) {
+    if (tieFavorsSecondary_) {
+      emitSecondary(now);
+    } else {
+      emitPrimary(now);
+    }
+    tieFavorsSecondary_ = !tieFavorsSecondary_;
+    return;
+  }
+
+  if (pDue) {
     emitPrimary(now);
     return;
   }
-  if (secondaryDue(now)) {
+  if (sDue) {
     emitSecondary(now);
   }
 }

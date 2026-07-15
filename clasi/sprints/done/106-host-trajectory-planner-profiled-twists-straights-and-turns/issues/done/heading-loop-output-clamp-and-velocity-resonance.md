@@ -1,6 +1,8 @@
 ---
-status: pending
+status: done
 sprint: '106'
+tickets:
+- 106-002
 ---
 
 > **SCOPE REDUCED (2026-07-14 stakeholder triage).** Part 1 (clamp the
@@ -12,6 +14,25 @@ sprint: '106'
 > robot is a pure velocity follower — the inner loop becomes the only loop.
 > Characterize and tame it (filter/feedforward/notch) against the new
 > firmware with the on-stand step harness.
+>
+> **PART 2 RESOLVED (2026-07-15, ticket 106-002).** Live `config()` gain
+> sweep (`tests/bench/velocity_step_response.py`, no reflash between
+> trials) found the resonance's real driver was an OVER-estimated `kff`
+> (feedforward), not `kp`/`ki`/`kaw` — raising `kff` made overshoot WORSE
+> (an over-large `kff*target` open-loop kick over-drives the plant right at
+> the step); lowering it removed the resonance. Winning gains:
+> `vel_kp: 0.0014->0.0016`, `vel_kff: 0.00135->0.0008` (`vel_ki`/`vel_kaw`
+> unchanged). 3 consecutive full 70/140/250 mm/s confirmation runs: worst
+> overshoot 9.3%/4.3%/5.0% (all under the `<~10%` bar), rise times
+> 0.28-0.98s — FASTER than the 2026-07-12 interim detune's 0.9-1.5s, not
+> just quieter. Re-verified from a clean reflash (boot defaults, no live
+> `config()`). See `data/robots/tovez.json`'s own `_vel_gains_note` and
+> ticket 106-002's completion notes for the full before/after table.
+> `velFiltAlpha`/notch (the issue's other two candidates) were not needed —
+> Decision 4's "exhaust the wire-tunable surface first" path succeeded.
+> Endpoint-accuracy re-verification (a `turn_sweep.py`-style angle grid)
+> was NOT re-run this session — flagged as a fast-follow if endpoint
+> regressions are observed, per the interim detune's own precedent.
 
 # Trajectory ringing: clamp the heading-loop output + tame the ~140 mm/s velocity resonance
 

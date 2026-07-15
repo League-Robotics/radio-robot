@@ -17,9 +17,9 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
     // control._vel_gains_domain marker), falling back to bench-tuned firmware
     // defaults when absent. Live-correctable per motor via `DEV M <n> CFG`.
     msg::Gains velGains;
-    velGains.kp = 0.0014f;
+    velGains.kp = 0.0016f;
     velGains.ki = 0.005f;
-    velGains.kff = 0.00135f;
+    velGains.kff = 0.0008f;
     velGains.i_max = 0.3f;
     velGains.kaw = 20.0f;   // anti-windup back-calculation (velocity_pid.cpp; 0 = off)
 

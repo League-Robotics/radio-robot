@@ -21,12 +21,43 @@ namespace {
 // Otos already use for every bus_.write()/bus_.read() postClear/preClear
 // pair (nezha_motor.cpp's requestEncoder()/writeMotorRun(), otos.h's
 // kBusClearance) for the post-duty-write clearance window the 3-block
-// schedule below adds. kCycle is the archived plan's own sketch comment
-// ("sleepUntil(cycleStart, kCycle); // pace to ~16ms") verbatim -- unit in
-// the trailing comment, per naming-and-style.md.
-constexpr uint32_t kSettle = 4;         // [ms] encoder-settle window, both motors
-constexpr uint32_t kClear = 4;          // [ms] post-duty-write clearance window
-constexpr uint32_t kCycle = 16;         // [ms] cycle pace target (~60 Hz)
+// schedule below adds.
+//
+// kCycle (106-001, retargeted from the archived plan's original,
+// never-achievable "sleepUntil(cycleStart, kCycle); // pace to ~16ms"
+// sketch comment): ticket 105-004's virtual-cycle-timing diagnostic proved
+// that 16ms was arithmetically impossible -- the three kSettle/kClear
+// windows below alone already consume 12 of that 16ms budget, leaving 4ms
+// for two PID ticks, two encoder requests, a full telemetry frame
+// build+emit, an OTOS sample, and odometry integration. kCycle is now the
+// STATED TOTAL for the whole schedule (all four pacing blocks, not just the
+// trailing one) -- ~25 Hz/~40ms, matching Devices::Telemetry's own
+// kPrimaryPeriod=40ms (telemetry.h) so the primary-frame throttle and the
+// loop's own pace agree by construction. See architecture-update.md
+// (106) Decision 1.
+constexpr uint32_t kSettle = 4;  // [ms] encoder-settle window, both motors
+constexpr uint32_t kClear = 4;   // [ms] post-duty-write clearance window
+constexpr uint32_t kCycle = 40;  // [ms] whole-schedule pace target (~25 Hz)
+
+// kWindows is what the three settle/clearance blocks above ALREADY consume
+// before the final (perception+odometry+pace) block ever runs; kPace is
+// that final block's own gap, DERIVED so it absorbs kWindows into kCycle's
+// total rather than stacking a fresh kCycle on top of it (105-004's
+// diagnosed defect: the OLD code called `sleepUntil(cycleStart, kCycle)`
+// for the final block, which -- proved by the sim's zero-real-time-cost
+// virtual clock, where every block's own elapsed-since-mark is provably 0
+// -- requested kCycle IN ADDITION to the 12ms already spent, not instead of
+// it: 4+4+4+16=28ms virtual against a 16ms target). Passing kPace (not
+// kCycle) to the final block's own runAndWait fixes this by construction:
+// the schedule's four blocks now sum to EXACTLY kCycle under the sim's
+// worst-case frozen clock, the same invariant the other three blocks
+// already had individually.
+constexpr uint32_t kWindows = 2 * kSettle + kClear;  // [ms] time the 3 settle/clear
+                                                      // blocks consume before the pace block
+static_assert(kWindows <= kCycle,
+              "kSettle+kClear+kSettle must fit inside the kCycle budget");
+constexpr uint32_t kPace = kCycle - kWindows;  // [ms] final block's own gap, absorbing kWindows
+
 constexpr uint32_t kPreamblePace = 10;  // [ms] boot-loop probe pacing
 
 }  // namespace
@@ -107,10 +138,12 @@ void RobotLoop::boot() {
 // required gap is a runAndWait block: it marks time on entry (immediately
 // after the bus event that starts the clock), runs its body, then sleeps
 // until at least the gap has elapsed since the mark. The block visibly
-// scopes exactly the work that borrows the dead time; the body never
-// touches the bus and never sleeps. I2CBus keeps per-device readyAt stamps
-// as a sleep-not-spin safety net (+ telemetry fault bit), so a mis-ordered
-// loop degrades loudly, never silently. ----
+// scopes exactly the work that borrows the dead time. I2CBus keeps
+// per-device readyAt stamps as a sleep-not-spin safety net (+ telemetry
+// fault bit), so a mis-ordered loop degrades loudly, never silently. The
+// three settle/clearance blocks' own bodies never touch the bus and never
+// sleep; the schedule's 4th block (the trailing perception+odometry+pace
+// block, kPace) is the one exception -- see its own comment below. ----
 void RobotLoop::cycle() {
   uint32_t cycleStart = markTime();  // [ms] pace anchor
 
@@ -164,12 +197,52 @@ void RobotLoop::cycle() {
         tlm_.ack(cmd.env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
         break;
       case msg::CommandEnvelope::CmdKind::CONFIG:
-        // ConfigDelta runtime application deferred (architecture-update.md
-        // (103) Step 7 Open Question 3) -- decode succeeds, but nothing is
-        // applied; ack ERR_UNIMPLEMENTED so the host does not mistake
-        // silence for success.
-        tlm_.ack(cmd.env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
-                  static_cast<uint32_t>(msg::ErrCode::ERR_UNIMPLEMENTED));
+        // ConfigDelta runtime application (106-002/SUC-025, resolving
+        // architecture-update.md (103) Step 7 Open Question 3 for the ONE
+        // patch type this sprint scopes -- architecture-update.md (106)
+        // Decision 2): a MotorConfigPatch is live-applied below; every
+        // other patch kind (DRIVETRAIN/PLANNER/WATCHDOG/NONE) stays
+        // ERR_UNIMPLEMENTED, deliberately out of scope (DrivetrainConfigPatch
+        // has no on-robot fusion consumer this sprint; PlannerConfigPatch's
+        // heading_kp/heading_kd target Motion::SegmentExecutor, deleted
+        // post-102).
+        if (cmd.env.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::MOTOR) {
+          const msg::MotorConfigPatch& patch = cmd.env.cmd.config.patch.motor;
+
+          // Merge each motor's OWN current gains against whatever wire
+          // fields are PRESENT (config.proto's Opt<T>-presence convention)
+          // -- NOT a blanket mirror of one motor's gains onto the other,
+          // since the two leaves' calibration can legitimately differ.
+          Devices::Gains gainsL = motorL_.gains();
+          Devices::Gains gainsR = motorR_.gains();
+          if (patch.kp.has) { gainsL.kp = patch.kp.val; gainsR.kp = patch.kp.val; }
+          if (patch.ki.has) { gainsL.ki = patch.ki.val; gainsR.ki = patch.ki.val; }
+          if (patch.kff.has) { gainsL.kff = patch.kff.val; gainsR.kff = patch.kff.val; }
+          if (patch.i_max.has) { gainsL.iMax = patch.i_max.val; gainsR.iMax = patch.i_max.val; }
+          if (patch.kaw.has) { gainsL.kaw = patch.kaw.val; gainsR.kaw = patch.kaw.val; }
+
+          // travel_calib is side-selected (config.proto's own
+          // MotorConfigPatch.side comment) -- applies to exactly one leaf.
+          Devices::Opt<float> travelCalibL;
+          Devices::Opt<float> travelCalibR;
+          if (patch.travel_calib.has) {
+            if (patch.side == msg::BoundMotorSide::LEFT) {
+              travelCalibL.has = true;
+              travelCalibL.val = patch.travel_calib.val;
+            } else {
+              travelCalibR.has = true;
+              travelCalibR.val = patch.travel_calib.val;
+            }
+          }
+
+          motorL_.applyGains(gainsL, travelCalibL);
+          motorR_.applyGains(gainsR, travelCalibR);
+
+          tlm_.ack(cmd.env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
+        } else {
+          tlm_.ack(cmd.env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
+                    static_cast<uint32_t>(msg::ErrCode::ERR_UNIMPLEMENTED));
+        }
         break;
       case msg::CommandEnvelope::CmdKind::STOP:
         drive_.stop();
@@ -193,17 +266,25 @@ void RobotLoop::cycle() {
   });
   motorR_.tick(clock_.nowMicros());
 
-  // Perception (OTOS only -- architecture-update.md (103) Step 7 Open
-  // Question 1) + odometry, outside any motor request/collect window (this
-  // class's own bus-discipline responsibility per odometry.h's file
-  // header). Both stage into `frame_` for the NEXT cycle's
-  // tlm_.setFrame()/emit() call, per applyOtosSample()'s own "reaches
-  // Telemetry before that cycle's frame is built" contract.
-  applyOtosSample(otos_, clock_.nowMicros(), frame_);
-  odom_.integrate();  // odometry from both fresh wheel samples
-  frame_.pose = {odom_.x(), odom_.y(), odom_.theta()};
-
-  sleepUntil(cycleStart, kCycle);  // pace to ~16ms; covers post-R-write
-}                                  //   clearance; always sleeps >=1ms
+  // Final (perception + odometry + pace) block -- the schedule's 4th
+  // runAndWait, matching the same "own mark, own gap" shape as the three
+  // settle/clearance blocks above (106-001: this used to be a bare trailing
+  // `sleepUntil(cycleStart, kCycle)` anchored to the CYCLE'S start rather
+  // than its own; see kPace's own comment above for why that double-counted
+  // kWindows against the sim's zero-real-time-cost virtual clock). Body:
+  // OTOS (architecture-update.md (103) Step 7 Open Question 1) + odometry,
+  // outside any motor request/collect window (this class's own
+  // bus-discipline responsibility per odometry.h's file header) -- both
+  // stage into `frame_` for the NEXT cycle's tlm_.setFrame()/emit() call,
+  // per applyOtosSample()'s own "reaches Telemetry before that cycle's
+  // frame is built" contract. Unlike the other three blocks, this one DOES
+  // touch the bus (the OTOS read) -- it is the schedule's pace block, not a
+  // settle/clearance window, so that constraint doesn't apply to it.
+  runAndWait(kPace, [&] {
+    applyOtosSample(otos_, clock_.nowMicros(), frame_);
+    odom_.integrate();  // odometry from both fresh wheel samples
+    frame_.pose = {odom_.x(), odom_.y(), odom_.theta()};
+  });
+}
 
 }  // namespace App
