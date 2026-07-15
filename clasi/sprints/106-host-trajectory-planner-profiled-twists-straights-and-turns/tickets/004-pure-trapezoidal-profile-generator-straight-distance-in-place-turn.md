@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Pure trapezoidal profile generator (straight distance + in-place turn)
-status: open
+status: done
 use-cases:
 - SUC-027
 depends-on: []
@@ -43,28 +43,61 @@ graph). No dependency on any other ticket in this sprint.
 
 ## Acceptance Criteria
 
-- [ ] A function generating a straight-distance profile and a function
+- [x] A function generating a straight-distance profile and a function
       generating a turn-angle profile (names are this ticket's own call,
       e.g. `profile_for_distance(distance, limits)`/`profile_for_turn(angle,
       limits)`) each return a deterministic setpoint sequence.
-- [ ] Unit tests assert: the acceleration phase never exceeds the configured
+- [x] Unit tests assert: the acceleration phase never exceeds the configured
       `a_max`; the cruise phase (when reached) holds exactly `v_max`; the
       final setpoint lands at exactly zero velocity with the commanded sign
       preserved throughout the WHOLE sequence (never a `fabsf`-blind
       predicate anywhere in the generator or its tests — binding
       requirement #1).
-- [ ] A short-distance/short-angle case that never reaches cruise (a pure
+- [x] A short-distance/short-angle case that never reaches cruise (a pure
       triangle profile) is covered by its own test and produces a shape
       distinct from — not a truncated/incorrect version of — the trapezoid
       case.
-- [ ] Both a positive and a negative (reverse/CW) input are tested, proving
+- [x] Both a positive and a negative (reverse/CW) input are tested, proving
       the sign is preserved through every setpoint, not just the first/last.
-- [ ] A degenerate/invalid input (zero distance/angle, a non-positive limit,
+- [x] A degenerate/invalid input (zero distance/angle, a non-positive limit,
       a non-finite value) raises immediately rather than producing any
       setpoint sequence.
-- [ ] 100% unit-tested under `tests/unit/`, with zero hardware or sim
+- [x] 100% unit-tested under `tests/unit/`, with zero hardware or sim
       dependency — importable and testable with no robot connected.
-- [ ] Full project test suite green.
+- [x] Full project test suite green.
+
+## Completion Notes
+
+Implemented exactly per the plan: `host/robot_radio/planner/profile.py`
+holds `ProfileLimits`/`ProfileSetpoint` dataclasses, the shared internal
+`_scalar_trapezoidal_profile()` timing helper, and the two public entry
+points `profile_for_distance()`/`profile_for_turn()`, which map the same
+scalar-velocity sequence onto `v_x` (omega=0) and `omega` (v_x=0)
+respectively — no duplicated shape math. Validation
+(`_validate_scalar`/`_validate_limits`/`_validate_cadence`) runs at the top
+of the shared helper before any setpoint is generated, rejecting
+non-finite/non-positive limits and zero/non-finite distance/angle/cadence
+with `ValueError`. Cadence is a caller-supplied parameter (default
+`DEFAULT_CADENCE = 0.05`), not a buried constant — no latency modeling in
+this ticket (that is ticket 005's `model.py`/`executor.py`, per its own
+Implementation Plan). `planner/__init__.py` re-exports the public API and
+documents that this ticket ships only `profile.py` (executor/heading/model
+are 106-005) and that the package deliberately does not reuse `nav/`
+(architecture-update.md Decision 3).
+
+`tests/unit/test_planner_profile.py` adds 48 tests across six sections:
+trapezoid shape (area-under-curve via trapezoidal-rule integration, cruise
+plateau, accel-phase slope bound), triangle shape (never reaches
+v_max/omega_max, distinct from trapezoid — no plateau), sign preservation
+(positive/negative distance and angle, mirror-image check, no
+sign-reversal-anywhere check), terminal velocity (parametrized exact-zero
+checks), cadence sampling (spacing, monotonic elapsed, first-setpoint-at-
+rest, finer-cadence-more-setpoints), and validation (zero distance/angle,
+non-positive v_max/a_max, non-finite distance/angle/v_max/a_max/cadence,
+each parametrized over inf/-inf/nan as applicable).
+
+Full suite: `uv run python -m pytest` — 617 passed (0:01:25), including the
+new 48. No regressions.
 
 ## Testing
 
