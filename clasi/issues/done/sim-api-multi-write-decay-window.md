@@ -1,5 +1,7 @@
 ---
-status: pending
+status: done
+tickets:
+- 106-003
 ---
 
 # TestSim::SimApi cannot safely observe a closed-loop decay to exactly zero

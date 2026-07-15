@@ -43,20 +43,22 @@
 // production-realistic 0.0f every other harness in this codebase uses,
 // which -- see nezha_motor.cpp's clampStep() -- makes duty permanently
 // stuck at whatever the FIRST write was; this harness's own scenarios need
-// REAL duty movement, so slewRate must be nonzero). Any twist target this
-// harness ever injects has |v_x| well above TestSim::kDefaultDutyVelMax (the
+// REAL duty movement, so slewRate must be nonzero). Every scenario BUILT
+// THROUGH sprint 105 keeps |v_x| well above TestSim::kDefaultDutyVelMax (the
 // plant's own achievable ceiling), so the velocity error the PID chases
-// NEVER shrinks below (target - kDefaultDutyVelMax) for the life of any
-// scenario -- with kp = 0.01 that error alone (>= 500 * 0.01 = 5.0) always
-// clamps the PID's output to +-1.0. The practical consequence, verified by
-// hand against nezha_motor.cpp's write-on-change/write-rate/slew gates
-// (see this file's own sim_api.cpp scriptCycleBusResponses() comment): every
-// actuation change this harness ever provokes (the initial mode-activation
-// write, a fresh twist, an explicit stop, or a deadman expiry) is a SINGLE,
-// immediately-saturated duty write, never a multi-write slew ramp or a
-// write-rate-throttled sequence -- which keeps this harness's own required
-// EXACT shared-I2CBus-FIFO script counts (105-003's own "CRITICAL prior
-// finding") tractable by hand instead of needing a full control-law replica.
+// NEVER shrinks below (target - kDefaultDutyVelMax) -- with kp = 0.01 that
+// error alone (>= 500 * 0.01 = 5.0) always clamps the PID's output to
+// +-1.0, meaning every actuation change those scenarios ever provoke is a
+// SINGLE, immediately-saturated duty write. A scenario that lets the target
+// be REACHABLE (106-003's own decay-to-zero scenario, and any future
+// profile deceleration) drives the PID output back out of saturation as the
+// error shrinks, producing SEVERAL more duty writes as NezhaMotor's
+// write-on-change gate (nezha_motor.cpp) lets the quantized percent count
+// down -- see DutyPredictor below (106-003, SUC-026) for how
+// scriptCycleBusResponses() now scripts exactly that, for an ARBITRARY
+// number of cycles, instead of assuming a single hand-derived transition
+// index (105-004's original design, superseded this ticket -- see
+// clasi/issues/sim-api-multi-write-decay-window.md).
 #pragma once
 
 #include <cstdint>
@@ -135,12 +137,20 @@ class SimApi {
   void injectStop(uint32_t corrId = 0);
 
   // A caller that provokes an actuation change WITHOUT injecting a new
-  // command (this ticket's own deadman-expiry scenario: the change is the
-  // ABSENCE of a fresh command over time, not a new one arriving) calls
-  // this directly with the hand-computed cycle index the expiry will first
-  // be observed on (see sim_api.cpp's scriptCycleBusResponses() comment for
-  // why deadman expiry produces the identical single-cycle write-on-change
-  // signature a fresh command does).
+  // command (the deadman-expiry scenario: the change is the ABSENCE of a
+  // fresh command over time, not a new one arriving) calls this directly
+  // with the hand-computed cycle index the expiry will first be observed
+  // on -- see sim_api.cpp's scriptCycleBusResponses() comment for why
+  // deadman expiry stages the identical R(this cycle)/L(next cycle) target
+  // transition a fresh command does. The staged target is always (0, 0):
+  // every caller of this entry point today is App::Drive::stop() firing on
+  // its own (the deadman path never stages a nonzero target) -- see
+  // sim_api.cpp's stageActuationChange() if a future caller needs
+  // otherwise. Retained (106-003, SUC-026) alongside DutyPredictor's own
+  // dynamic per-cycle write detection below -- NOT superseded by it,
+  // because DutyPredictor only PREDICTS from a staged target it is told
+  // about; something still has to tell it a target changed with no
+  // injected command to point at, and this is that entry point.
   void notePendingActuationChange(int atCycle);
 
   // Decodes and returns every outbound line captured on the serial
@@ -185,8 +195,95 @@ class SimApi {
   static constexpr uint32_t kCycleDtUs = 50000;  // [us]
 
  private:
+  // DutyPredictor -- 106-003 (SUC-026): a minimal, deliberately-scoped
+  // replica of NezhaMotor::tick()'s write-path decision (write-on-change +
+  // slew clamp + first-write/stop exemption, nezha_motor.cpp's
+  // writeRawDuty()) plus Devices::MotorVelocityPid::compute()'s pure-P
+  // reduction under THIS harness's own fixed gains (kp = 0.01, ki = kff =
+  // iMax = kaw = 0, velDeadband = 0 -- see makeMotorConfig() in
+  // sim_api.cpp -- collapses compute() to output = clamp(kp*err, -1, 1);
+  // the residual anti-windup drift compute() still applies even at ki=0 is
+  // orders of magnitude below pct-quantization scale and is deliberately
+  // not replicated here). Lets scriptCycleBusResponses() know, BEFORE
+  // calling robotLoop_.cycle(), whether THIS cycle's tick() will emit a
+  // SECOND (duty) bus write -- for an ARBITRARY number of cycles/target
+  // changes, generalizing the single hand-derived pendingEventCycle_ index
+  // ticket 105-004 originally used (see this file's own "Plant/PID tuning"
+  // section above, and clasi/issues/sim-api-multi-write-decay-window.md).
+  //
+  // Deliberately ignores the fault-injection knobs' (105-005) effect on
+  // the SCRIPTED read (freeze/dropout/disconnect can make the firmware's
+  // actual collected raw differ from the plant's own live position()) --
+  // every existing fault-knob scenario (tests/sim/system/faults/) keeps
+  // its commanded target far enough above the plant's ceiling that the PID
+  // stays saturated regardless of the measured value, so this predictor
+  // reaches the same write/no-write answer either way. A future scenario
+  // combining a REACHABLE target with an active fault knob simultaneously
+  // would need this widened -- not needed by any scenario this ticket or
+  // its known consumers (106-005/006) build.
+  //
+  // Also deliberately omits nezha_motor.cpp's write-RATE throttle
+  // (kMinWriteIntervalUs = 40ms): kCycleDtUs (50ms) is documented above as
+  // always exceeding it, so it can never bind for any scenario this
+  // harness can express -- replicating a gate that can provably never fire
+  // would just be dead code.
+  class DutyPredictor {
+   public:
+    // activationCycle: the FIXED cycle index (0 for R, 1 for L -- see
+    // scriptCycleBusResponses()'s own header comment for the call-order
+    // derivation) at which App::Drive's very first setVelocity() call
+    // (NezhaMotor's mode_ transition None -> Active) reaches this leaf --
+    // true regardless of whether any command has ever been injected
+    // (Drive::tick() runs unconditionally every cycle).
+    explicit DutyPredictor(int activationCycle) : activationCycle_(activationCycle) {}
+
+    // Stages a new velocity target, effective from the caller's very next
+    // tickPredict() call -- SimApi applies this at the correct R(this
+    // cycle)/L(next cycle) offset (see stageActuationChange()).
+    void setTarget(float target) { target_ = target; }
+
+    // Call once per cycle, BEFORE robotLoop_.cycle() -- position: this
+    // leaf's WheelPlant::position() AFTER this cycle's plant.step() (the
+    // exact value about to be scripted as this cycle's encoder read);
+    // cycle: cycleCount_ (the cycle about to run, BEFORE its own
+    // robotLoop_.cycle() call). Returns true iff a SECOND (duty) bus write
+    // is predicted this cycle.
+    bool tickPredict(float position, int cycle);
+
+   private:
+    int activationCycle_;
+    bool active_ = false;
+    float target_ = 0.0f;   // [mm/s] signed -- this leaf's current wheel velocity target
+
+    bool hasFreshSample_ = false;
+    int32_t lastFreshRaw_ = 0;   // tenths-of-mm, mirrors NezhaMotor's own raw wire units
+    int lastFreshCycle_ = 0;     // cycleCount_ value of the last fresh sample (see .cpp: cycle-count-based
+                                  // elapsed time, not a us clock read -- kCycleDtUs is fixed/constant, so
+                                  // (cycle - lastFreshCycle_) * kCycleDtUs is exactly what NezhaMotor's own
+                                  // (nowUs - lastFreshUs_) would read, with no clock-seam coupling needed)
+    float filteredVelocity_ = 0.0f;   // [mm/s] signed -- mirrors NezhaMotor's own filteredVelocity_
+
+    // MotorArmor::armoredWrite() replica state (motor_armor.h) -- the
+    // reversal-dwell/output-deadband gate that sits between the PID's raw
+    // output and writeRawDuty(). See .cpp's own comment for why this layer
+    // is required (a duty sign flip is forced to zero for a dwell window,
+    // not forwarded as-is).
+    bool dwelling_ = false;
+    uint32_t dwellDeadline_ = 0;          // [ms] cycle-derived, see .cpp
+    float lastRequestedDuty_ = 0.0f;      // [-1,1] last duty actually forwarded to the write-on-change gate
+
+    int8_t lastWrittenPct_ = -128;   // matches NezhaMotor's own "no write yet" sentinel
+  };
+
   void driveBootToDone();
   void scriptCycleBusResponses();
+
+  // Stages a target change for BOTH leaves at once, applied at the R(this
+  // cycle)/L(next cycle) offset scriptCycleBusResponses() enforces --
+  // shared by injectTwist()/injectStop() (a real command, target computed
+  // via BodyKinematics::inverse()) and notePendingActuationChange() (an
+  // autonomous change with no injected command, target always (0, 0)).
+  void stageActuationChange(int atCycle, float vL, float vR);
 
   Devices::I2CBus bus_;
   Devices::Clock clock_;
@@ -216,8 +313,15 @@ class SimApi {
 
   bool booted_ = false;
   int cycleCount_ = 0;              // total robotLoop_.cycle() calls made so far
-  int pendingEventCycle_ = -1;      // cycleCount_ value at which R's duty write is expected to
-                                     // change (L's follows one cycle later) -- -1 == none pending
+
+  DutyPredictor predictorLeft_{1};    // activation cycle 1 -- see DutyPredictor's own comment
+  DutyPredictor predictorRight_{0};   // activation cycle 0
+
+  int pendingCycle_ = -1;   // cycleCount_ value at which R's staged target is expected to
+                            // apply (L's applies one cycle later) -- -1 == none pending
+  float pendingVL_ = 0.0f;  // [mm/s] signed -- staged by stageActuationChange()
+  float pendingVR_ = 0.0f;  // [mm/s] signed
+
   size_t telemetryDrainIndex_ = 0;  // index into serialLink_.sent() already returned by drainTelemetry()
 };
 

@@ -27,15 +27,18 @@ linked directly into each harness binary.
   asserted against the firmware's own observable reaction in decoded
   telemetry.
 - **`scripted_twist_demo_harness.cpp` / `test_scripted_twist_demo.py`**
-  (105-006, SUC-023) — this sprint's own Definition of Done: a readable,
+  (105-006, SUC-023; STOP phase strengthened 106-003, SUC-026) — a readable,
   narrated, end-to-end story built entirely on the two primitives above —
   boot, twist forward, watch the plant's real first-order velocity ramp,
-  stop, watch velocity reverse the ramp and head back toward zero — with a
-  human-readable cycle-by-cycle trace printed to stdout. See that file's own
-  header comment for why the post-STOP observation window is bounded to 4
-  cycles (a verified limit of `SimApi`'s current bus-scripting design, not
-  an arbitrary choice — `clasi/issues/sim-api-multi-write-decay-window.md`
-  tracks the deferred fix).
+  stop, watch velocity converge to (approximately) zero over a 12-cycle
+  post-STOP window — with a human-readable cycle-by-cycle trace printed to
+  stdout. The post-STOP window used to be bounded to 4 cycles (a verified
+  limit of `SimApi`'s bus-scripting design, `clasi/issues/sim-api-multi-
+  write-decay-window.md`); 106-003's `SimApi::DutyPredictor`
+  (`tests/sim/support/sim_api.{h,cpp}`) generalized the scripting mechanism
+  to predict duty writes dynamically per cycle instead of assuming a single
+  transition, lifting the bound — see that file's own header comment for the
+  verified 12-cycle derivation.
 
 ## Running
 
