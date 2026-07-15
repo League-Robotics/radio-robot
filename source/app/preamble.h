@@ -48,7 +48,7 @@
 // This ticket's own acceptance criterion requires deciding, not leaving
 // implicit, whether to keep an explicit power-settle wait (mirroring the
 // retired DeviceBus::kPowerSettleMs) or rely on each leaf's own retry
-// pacing alone. Decision: KEEP it, unchanged in value (kPowerSettleUs,
+// pacing alone. Decision: KEEP it, unchanged in value (kPowerSettle,
 // below) -- it is cheap (step() simply does nothing until it elapses, no
 // leaf touched, no bus traffic), it is a bench-tuned value already proven
 // on real hardware (device_bus.h's own comment: "a starting, bench-tunable
@@ -60,7 +60,7 @@
 // instead" is not actually available for the very first device probed.
 //
 // --- Ported constants (from device_bus.h, git history 88e04f1b^) ---
-//   kPowerSettleUs        = 50000   [us]  (was kPowerSettleMs = 50)
+//   kPowerSettle          = 50000   [us]  (was kPowerSettleMs = 50)
 //   kOtosBeginAttempts    = 20            (unchanged)
 //   kOtosBeginRetryPeriod = 100000  [us]  (was kOtosBeginRetryPacingMs = 100)
 // color_sensor.h's kMaxAltAttempts/kAltRetryPeriod and line_sensor.h's
@@ -69,12 +69,12 @@
 // re-implementing their own internal pacing (see step()'s contract above).
 //
 // --- Defensive bound (this ticket's own, NOT kMaxPreambleTicks verbatim) ---
-// kMaxPreambleUs (below) is a wall-clock safety net, not the primary
+// kMaxPreamble (below) is a wall-clock safety net, not the primary
 // termination mechanism: every slot already self-bounds (motor: one call;
 // OTOS: Preamble's own kOtosBeginAttempts counter; color/line: each leaf's
 // own kMaxAltAttempts/kMaxAttempts internal bound) PROVIDED step() is
 // called often enough with real elapsed time between calls (the boot
-// loop's job). kMaxPreambleUs exists only to guard against a future leaf
+// loop's job). kMaxPreamble exists only to guard against a future leaf
 // regression (e.g. a detectDone() that never returns true) turning this
 // into a real infinite loop -- the same defensive-bound spirit as the
 // retired DeviceBus::kMaxPreambleTicks, expressed as an elapsed-wall-time
@@ -84,7 +84,7 @@
 // generously above the natural worst case (OTOS-bound:
 // 20 * 100ms = 2000ms; color/line: ~21 * 50ms = 1050ms and 20 * 50ms =
 // 1000ms respectively; plus the 50ms power-settle wait) -- see
-// kMaxPreambleUs's own comment.
+// kMaxPreamble's own comment.
 #pragma once
 
 #include <cstdint>
@@ -117,7 +117,7 @@ class Preamble {
   // True once every device has reached a terminal state: present-and-ready,
   // OR confirmed-absent after exhausting its own (or Preamble's, for OTOS)
   // retry budget. An absent sensor cannot hang this forever -- see
-  // kMaxPreambleUs's own comment.
+  // kMaxPreamble's own comment.
   bool done() const;
 
   // --- Per-device status accessors -- boot telemetry (ticket 008 wires
@@ -142,10 +142,10 @@ class Preamble {
   enum class Slot : uint8_t { Left, Right, Otos, Color, Line, kCount };
   static constexpr uint8_t kSlotCount = static_cast<uint8_t>(Slot::kCount);
 
-  // [us] boot power-settle wait, ported from device_bus.h's kPowerSettleMs
-  // (50) -- see this file's header "Decision: KEEP the boot power-settle
-  // wait" comment.
-  static constexpr uint64_t kPowerSettleUs = 50000;
+  // Boot power-settle wait, ported from device_bus.h's kPowerSettleMs (50)
+  // -- see this file's header "Decision: KEEP the boot power-settle wait"
+  // comment.
+  static constexpr uint64_t kPowerSettle = 50000;  // [us]
 
   // OTOS product-ID probe retry, ported from device_bus.h's
   // kOtosBeginAttempts/kOtosBeginRetryPacingMs -- Otos::begin() is a single
@@ -156,9 +156,9 @@ class Preamble {
   static constexpr int kOtosBeginAttempts = 20;
   static constexpr uint64_t kOtosBeginRetryPeriod = 100000;  // [us]
 
-  // [us] defensive wall-clock bound -- see this file's header "Defensive
-  // bound" comment for the derivation (~2s natural worst case + margin).
-  static constexpr uint64_t kMaxPreambleUs = 5000000;
+  // Defensive wall-clock bound -- see this file's header "Defensive bound"
+  // comment for the derivation (~2s natural worst case + margin).
+  static constexpr uint64_t kMaxPreamble = 5000000;  // [us]
 
   bool dueSlot(Slot slot, uint64_t nowUs) const;
   void probeSlot(Slot slot, uint64_t nowUs);

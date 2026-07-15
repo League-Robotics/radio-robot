@@ -35,13 +35,13 @@ void Preamble::step() {
   // Boot power-settle wait -- no leaf is touched at all until this
   // elapses. Also satisfies "no I2C traffic before Preamble has begun
   // probing" for the very first probe (there is no probe to issue yet).
-  if (nowUs - startUs_ < kPowerSettleUs) return;
+  if (nowUs - startUs_ < kPowerSettle) return;
 
   // Defensive wall-clock bound (this file's header "Defensive bound"
   // comment) -- never reached by a correctly-functioning leaf; forces
   // every remaining slot terminal so done() cannot hang forever even if a
   // leaf's own detectDone() has a latent bug.
-  if (nowUs - startUs_ >= kMaxPreambleUs) {
+  if (nowUs - startUs_ >= kMaxPreamble) {
     forceResolveAll();
     return;
   }
