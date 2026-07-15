@@ -1,73 +1,34 @@
-"""tests/sim/conftest.py — SIM domain fixtures (ticket 081-005).
+"""tests/sim/conftest.py — SIM domain fixtures.
 
-Replaces the 077-006 placeholder (no fixtures, no harness) now that the
-new-tree simulator exists: ticket 004's compiled ``libfirmware_host`` C ABI
-(``tests/_infra/sim/sim_api.cpp``) plus this ticket's Python wrapper
-(``tests/_infra/sim/firmware.py``'s ``Sim`` class).
+105-006: this file used to carry `build_lib`/`sim` fixtures (081-005)
+wired to `tests/_infra/sim/sim_api.cpp` (a compiled `libfirmware_host` C
+ABI) and `tests/_infra/sim/firmware.py`'s ctypes `Sim` wrapper, built via
+a `just build-sim` recipe. All three -- the compiled lib, the Python
+wrapper, and the justfile recipe -- were deleted before this ticket
+(confirmed by reading both `tests/_infra/` and the `justfile` directly),
+so any test depending on `sim`/`build_lib` failed immediately on
+collection-adjacent use; `git grep` confirmed zero live callers anywhere
+under `tests/sim/` before this file was cut down.
 
-Provides:
-  build_lib — session-scoped: builds libfirmware_host once per session
-              (``just build-sim``). NOT autouse — only tests that actually
-              need the compiled sim library depend on it (directly, or
-              transitively via the ``sim`` fixture below); the existing
-              ``tests/sim/unit/*_harness.cpp``-backed tests compile their
-              own throwaway binary ad hoc and never touch this fixture.
-  sim       — function-scoped: a fresh ``Sim()`` per test. No longer widens
-              a watchdog on setup (093-003) -- ticket 093 removed the
-              serial-silence watchdog, ``estop()``, and the ``DEV`` command
-              family entirely from ``Rt::CommandRouter::buildTable()``
-              (architecture-update.md Decision 2), so there is nothing left
-              to widen; see the fixture's own docstring below.
+Ticket-time call (105-006, architecture-update.md Step 7 Open Question 2:
+"a shared `sim_api`-backed fixture is worth adding" — a ticket-time call
+given the established ad hoc per-file compile convention). DEFAULT bias
+per the ticket's own plan: delete rather than invent a replacement,
+unless writing 2+ new scenario files without one proves genuinely
+repetitive. It didn't -- this ticket added exactly one new scenario file
+(`system/test_scripted_twist_demo.py`), and it follows the SAME
+already-established pattern every sibling file in this tier already uses
+(`plant/test_plant.py`, `system/test_sim_api.py`,
+`system/faults/test_fault_knobs.py`): a pytest file compiles its own
+throwaway C++ harness binary + the shared `tests/sim/support/sim_api.{h,
+cpp}`/plant sources via `subprocess` into a per-test `tmp_path`, runs it,
+and asserts exit 0. `TestSim::SimApi` is a C++ class linked directly into
+each harness binary -- there is no ctypes/dlopen boundary left for a
+Python fixture to wrap, so a `sim` fixture would have nothing to return.
 
-sys.path setup ensures ``from firmware import Sim`` resolves from any test
-under ``tests/sim/`` (mirrors tests_old/conftest.py's precedent).
+No fixtures live here. The file is kept (rather than deleted outright) as
+the documented landing spot for this decision, and as the natural place a
+future *Python-level* SIM domain fixture would go if one is ever actually
+needed.
 """
 from __future__ import annotations
-
-import pathlib
-import subprocess
-import sys
-
-import pytest
-
-# ---------------------------------------------------------------------------
-# Path constants
-# ---------------------------------------------------------------------------
-_TESTS_SIM_DIR = pathlib.Path(__file__).resolve().parent      # tests/sim/
-_TESTS_DIR = _TESTS_SIM_DIR.parent                             # tests/
-_REPO_ROOT = _TESTS_DIR.parent                                 # repo root
-_SIM_INFRA_DIR = _TESTS_DIR / "_infra" / "sim"                 # tests/_infra/sim/
-
-if str(_SIM_INFRA_DIR) not in sys.path:
-    sys.path.insert(0, str(_SIM_INFRA_DIR))
-
-@pytest.fixture(scope="session")
-def build_lib() -> None:
-    """Build libfirmware_host once per test session (`just build-sim`)."""
-    subprocess.run(["just", "build-sim"], cwd=_REPO_ROOT, check=True)
-
-
-@pytest.fixture
-def sim(build_lib: None):
-    """Fresh Sim instance per test; destroyed in a finally so a failing
-    test still frees its SimHandle.
-
-    093-003: this used to widen the serial-silence watchdog to the
-    firmware's own maximum (``DEV WD 60000``) immediately after
-    ``sim_create()``, because a long ``tick_for()`` would otherwise trip the
-    1 s default window and neutralize every motor mid-test. Ticket 093
-    (architecture-update.md Decision 2) removed that watchdog -- and the
-    entire ``DEV`` command family -- from ``Rt::CommandRouter::
-    buildTable()``, so the widen call became a silent ``ERR unknown`` at the
-    top of every single test using this fixture. Removed rather than left in
-    place: there is no watchdog left to widen, and the bench-posture
-    (stand-mounted, wheels-off-the-ground) justification for its removal is
-    documented at ``.claude/rules/hardware-bench-testing.md``.
-    """
-    from firmware import Sim  # noqa: PLC0415 -- import after build_lib runs
-
-    s = Sim()
-    try:
-        yield s
-    finally:
-        s.close()

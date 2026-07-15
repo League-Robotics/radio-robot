@@ -15,12 +15,41 @@ one CI gate:
 - **`sim/`** — runs on a developer laptop against a firmware simulator, no
   hardware involved. Merges the old `tests_old/sim/` + `tests_old/simulation/`
   pair (both wrapped the same simulated firmware; the split was an artifact
-  of history, not a real domain boundary). **This ticket (077-006) creates
-  only the skeleton** — `unit/`, `system/`, and a `conftest.py` — because a
-  fresh simulator harness for the new `source/` tree does not exist yet
-  (later-ticket work). `uv run python -m pytest` currently collects this
-  domain (see `pyproject.toml`'s `testpaths`) and finds nothing to run until
-  that harness lands.
+  of history, not a real domain boundary). 077-006 created only the skeleton
+  (`unit/`, `system/`, `conftest.py`); sprint 105 built the real harness on
+  top of it:
+  - `unit/` — per-module `App::`/`Devices::` host-build harnesses (one
+    `*_harness.cpp` + `test_*.py` pair per module, e.g.
+    `test_app_robot_loop.py`, `test_devices_motor.py`) — each compiles its
+    own throwaway binary via `subprocess`, no shared build step.
+  - `plant/` — `TestSim::WheelPlant`/`OtosPlant` (105-003, SUC-020): a
+    deterministic, seeded duty->velocity->position first-order model
+    standing in for one physical wheel + Nezha channel, plus three
+    fault-injection knobs (motor disconnect, encoder wedge, encoder
+    dropout — 105-005, SUC-022).
+  - `support/` — `TestSim::SimApi` (`sim_api.h`, 105-004, SUC-021): wires
+    the REAL `App::RobotLoop` against the REAL plant and a scripted
+    `Devices::I2CBus` into one reusable, steppable harness other test
+    binaries link against, plus `TestSupport::FakeTransport` (the
+    `App::Transport` HOST_BUILD double, 105-002) and a hand-written wire
+    codec (`wire_test_codec.h`) for decoding outbound telemetry / encoding
+    inbound commands in tests.
+  - `system/` — whole-robot scenario tests built on `SimApi`: the
+    acceptance harness for `SimApi` itself, the three fault-injection
+    scenarios, and the scripted-twist demo (105-006, SUC-023) — this
+    sprint's own Definition of Done, a readable narrated end-to-end story
+    (boot -> twist -> real plant ramp -> stop -> velocity heads back
+    toward zero) runnable both under pytest and standalone. See
+    `tests/sim/system/README.md` for the full layout and how to add a new
+    scenario.
+  - `conftest.py` — no fixtures (105-006 removed the stale `build_lib`/
+    `sim` fixtures that referenced deleted `tests/_infra/sim` — see the
+    file's own header for the ticket-time call). Every harness compiles
+    its own binary ad hoc; there is no shared Python-level fixture.
+
+  `uv run python -m pytest` collects this domain (see `pyproject.toml`'s
+  `testpaths`) and, as of sprint 105, actually runs a real simulator
+  against the current `source/` tree end to end.
 - **`bench/`** — runs against a real robot on the bench/stand, wired over USB
   or the radio relay. HITL (human-in-the-loop): a person is present to
   hand-load wheels, watch for runaways, and read dashboards. These are
