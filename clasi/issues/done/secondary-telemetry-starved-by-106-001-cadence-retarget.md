@@ -1,5 +1,7 @@
 ---
-status: resolved
+status: done
+tickets:
+- 106-002
 ---
 
 > **RESOLVED (2026-07-15, ticket 106-002 drive-by).** Fixed via Direction 1
@@ -31,11 +33,15 @@ status: resolved
 > phase) decodes 6 `TelemetrySecondary` frames across a ~1.1s run at the
 > real ~40ms/cycle schedule — 0 would reproduce the bug.
 >
-> Bench re-verification (direct USB, `tests/bench/rig_dev.py`'s own
+> Bench re-verified (direct USB, `/dev/cu.usbmodem2121102`, 2026-07-15,
+> robot `tovez`, post-106-002 build): `tests/bench/rig_dev.py`'s own
 > "secondary telemetry (glitch/acc/ts diagnostics) received" check, which
-> this issue's own Evidence section named as failing every run post-106-001)
-> is 106-002's own bench-gate obligation — see that ticket's completion
-> notes for the actual on-stand result once run.
+> this issue's own Evidence section named as failing every run post-106-001,
+> **passes** on every run this session (including runs affected by an
+> unrelated drivetrain hardware fault discovered mid-session — see 106-002's
+> own completion notes; that fault blocks the ticket's resonance-taming
+> bench work but does not touch telemetry scheduling at all, and secondary
+> frames kept arriving normally throughout).
 >
 > Cost accepted, matching Direction 1's own stated trade-off: primary
 > cadence gains an occasional (roughly once per 200ms) single-cycle jitter;
