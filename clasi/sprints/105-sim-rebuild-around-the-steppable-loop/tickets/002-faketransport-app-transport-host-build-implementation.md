@@ -1,11 +1,12 @@
 ---
-id: "002"
-title: "FakeTransport: App::Transport HOST_BUILD implementation"
-status: open
-use-cases: [SUC-019]
+id: '002'
+title: 'FakeTransport: App::Transport HOST_BUILD implementation'
+status: in-progress
+use-cases:
+- SUC-019
 depends-on: []
-github-issue: ""
-issue: ""
+github-issue: ''
+issue: ''
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
