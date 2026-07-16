@@ -57,14 +57,14 @@ Both concrete hardware backends:
 - Join all threads on disconnect().
 
 SimTransport()
-    Drives the ctypes firmware simulator through a ``SimConnection``
-    (``robot_radio.io.sim_conn`` — sprint 081/082's ctypes ABI) instead of
-    real hardware.  Owns a background tick-thread that constructs the
-    ``SimConnection`` via ``connect()``, advances it one ``conn.tick(...)``
-    call per wall-clock iteration (~20 ms/step by default), and delivers
-    ground-truth pose from ``conn.get_true_pose()`` via the on_truth
-    callback.  The ``SimConnection`` is destroyed via ``disconnect()`` when
-    the tick-thread exits.
+    NOT YET REWIRED (108-006): historically drove the ctypes firmware
+    simulator through ``SimConnection`` (sprint 081/082's ctypes ABI,
+    deleted). This class's own tick-thread now fails cleanly on connect
+    instead of touching the deleted name -- see ``_tick_loop()``'s own
+    docstring. Rewiring it onto ``robot_radio.io.sim_loop.SimLoop`` (a
+    materially different, TwistTransport-shaped ABI wrapper -- no
+    generic wire/config channel simulation at all) is ticket 108-007's
+    job, not this one's.
 
     Unit conversion: sim true-pose is (x, y, h) in (mm, mm, rad); on_truth receives
     (x_cm, y_cm, yaw_rad) — x and y are divided by 10; heading is passed
@@ -127,7 +127,6 @@ import time
 from typing import Callable
 
 from robot_radio.io.serial_conn import SerialConnection, list_serial_ports
-from robot_radio.io.sim_conn import SimConnection
 from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
 from robot_radio.testgui import binary_bridge
 from robot_radio.testgui import sim_prefs
@@ -857,10 +856,18 @@ _SIM_READY_TIMEOUT_S = 5.0
 class SimTransport(Transport):
     """Transport backend that drives the ctypes firmware simulator.
 
-    Owns a ``SimConnection`` instance (``robot_radio.io.sim_conn`` —
-    sprint 081/082's ctypes ABI) and a daemon tick-thread that advances
-    simulation at wall-clock rate via ``conn.tick(...)``, and delivers
-    ground-truth pose via ``on_truth``.
+    NOT YET REWIRED (108-006): this class used to own a ``SimConnection``
+    instance (sprint 081/082's ctypes ABI) and a daemon tick-thread that
+    advanced simulation at wall-clock rate via ``conn.tick(...)``,
+    delivering ground-truth pose via ``on_truth``. ``SimConnection`` (and
+    the ~40-symbol ABI it bound) is deleted -- its replacement,
+    ``robot_radio.io.sim_loop.SimLoop``, is a differently-shaped
+    ``TwistTransport`` wrapper with no generic wire/config-channel
+    simulation surface, so this class cannot simply swap the import; the
+    rewire is ticket 108-007's job. Until then ``connect()`` starts the
+    tick thread, which immediately logs a clear error and reports
+    "not connected" instead of touching the deleted name or hanging --
+    see ``_tick_loop()``'s own docstring.
 
     Unit conversion
     ---------------
@@ -1109,97 +1116,29 @@ class SimTransport(Transport):
     # ------------------------------------------------------------------
 
     def _tick_loop(self) -> None:
-        """Own a ``SimConnection`` for the tick-thread's lifetime.
+        """NOT YET REWIRED (108-006): this used to own a ``SimConnection``
+        for the tick-thread's lifetime (construct/connect it, apply the
+        field-error profile, arm binary ``STREAM``, then loop
+        ``conn.tick()``/drain telemetry/deliver ground truth, disconnecting
+        on exit). ``SimConnection`` (and the ABI it bound) is deleted --
+        see this class's own docstring for why a straight import swap onto
+        ``robot_radio.io.sim_loop.SimLoop`` is not a like-for-like fix
+        (ticket 108-007's job).
 
-        This is the only thread that touches the ``SimConnection`` object.
-        On entry it constructs and connects it (``SimConnection.connect()``),
-        configures the field-error profile, and sends ``STREAM 50`` to start
-        TLM streaming.  On exit it disconnects it (``SimConnection.disconnect()``).
+        Until rewired, this fails FAST and CLEANLY: logs an error, unblocks
+        ``connect()``'s own ready-wait immediately (rather than the 5s
+        timeout a silent hang would cost), and returns without ever
+        touching the deleted name -- ``self._conn`` stays ``None``, so
+        ``connect()`` correctly reports ``self._connected = False``.
         """
-        conn = SimConnection()
-        try:
-            result = conn.connect()
-        except Exception as exc:
-            _log.error("SimTransport: SimConnection.connect() raised: %s", exc)
-            self._log(f"[ERROR] Failed to load simulator: {exc}")
-            self._sim_ready_event.set()  # unblock connect()'s wait — failed
-            return
-
-        if "error" in result:
-            _log.error(
-                "SimTransport: SimConnection.connect() failed: %s", result["error"]
-            )
-            self._log(f"[ERROR] Failed to connect simulator: {result['error']}")
-            self._sim_ready_event.set()  # unblock connect()'s wait — failed
-            return
-
-        self._conn = conn
-        # NezhaProtocol wrapping conn -- the same binary-translation entry
-        # point (binary_bridge.translate_command()) the hardware backends
-        # use, so a text motion/config line never reaches SimConnection
-        # un-translated either (097).
-        proto = NezhaProtocol(conn)
-        # SimConnection.connect() succeeded — unblock connect()'s wait.
-        self._sim_ready_event.set()
-
-        try:
-            self._apply_field_profile(conn)
-            # Arm binary telemetry streaming (097): translate_command()
-            # turns "STREAM 50" into CommandEnvelope{stream: StreamControl
-            # {binary: true, period: 50}} -- the same envelope the hardware
-            # backends' connect-time STREAM arm sends. Periodic frames land
-            # in conn's ReplyStore and are drained via conn.drain_binary_tlm()
-            # below, exactly mirroring _HardwareTransport._reader_loop().
-            reply_line = binary_bridge.translate_command(proto, "STREAM 50")
-            self._log(f"[INFO] STREAM 50 → {reply_line or 'OK'}")
-
-            tick_count = 0
-            while not self._stop_event.is_set():
-                t0 = time.monotonic()
-
-                # Drain commands from the queue.
-                self._drain_cmd_queue(proto)
-
-                # Advance simulation: one conn.tick() call per wall-clock
-                # iteration, speed_factor x the base step duration — the
-                # SimConnection's own internal advance loop (sim_conn.py's
-                # _advance()) steps at its configured granularity and drains
-                # any async EVT lines after every internal step, returning
-                # them all here in one list.
-                speed = self._speed_factor
-                evt_lines = conn.tick(speed * _SIM_TICK_STEP_DURATION)
-                self._handle_evt_lines(evt_lines)
-
-                # Drain binary telemetry pushed by the armed stream above --
-                # the sim-side counterpart of _HardwareTransport._reader_loop()
-                # (097: replaces the old per-iteration text SNAP poll; text
-                # STREAM/SNAP no longer exist on the wire at all).
-                for reply in conn.drain_binary_tlm():
-                    self._deliver_tlm(TLMFrame.from_pb2(reply.tlm))
-
-                # Bound the state log (built for bounded pytest runs, not an
-                # open-ended GUI session) — SimTransport never reads it.
-                conn.clear_state_log()
-
-                # Deliver ground-truth pose periodically.
-                tick_count += 1
-                if tick_count % _SIM_TRUTH_EVERY_N_TICKS == 0:
-                    self._deliver_sim_truth(conn)
-
-                # Pace to wall-clock rate.
-                elapsed = time.monotonic() - t0
-                sleep_s = _SIM_TICK_SLEEP_S - elapsed
-                if sleep_s > 0:
-                    self._stop_event.wait(timeout=sleep_s)
-        except Exception as exc:
-            _log.error("SimTransport tick-loop crashed: %s", exc)
-            self._log(f"[ERROR] Sim tick-loop crashed: {exc}")
-        finally:
-            try:
-                conn.disconnect()
-            except Exception:
-                _log.exception("SimTransport: SimConnection.disconnect() failed")
-            self._conn = None
+        _log.error(
+            "SimTransport: sim backend not yet rewired onto sim_loop.SimLoop "
+            "(ticket 108-007 pending) -- Sim connections are non-functional "
+            "until then")
+        self._log(
+            "[ERROR] Sim backend not yet rewired onto sim_loop.SimLoop "
+            "(ticket 108-007 pending)")
+        self._sim_ready_event.set()  # unblock connect()'s wait — failed
 
     def _drain_cmd_queue(self, proto: NezhaProtocol) -> None:
         """Drain all pending commands from the queue and execute them.

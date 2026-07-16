@@ -19,8 +19,10 @@ no longer exists — ``source/commands/`` has no ``SIMSET`` verb (confirmed by
 reading every ``makeCmd``/``makeSchemaCmd`` registration; the current verb
 set is ``PING``/``VER``/``HELP``/``ECHO``/``ID``/``STREAM``/``SNAP``/
 ``DEV M``/``DEV DT``/``DEV STATE``/``DEV STOP``/``DEV WD``).  Every key below
-is now applied directly through a ``robot_radio.io.sim_conn.SimConnection``
-ctypes setter, either via ``PROFILE_TO_SIM_SETTER`` (the 1:1-mapped keys) or
+is now applied directly through a ctypes sim-connection setter (108-006:
+``robot_radio.io.sim_loop.SimLoop`` -- see that module's own docstring for
+the reconciliation from the deleted predecessor this comment originally
+described), either via ``PROFILE_TO_SIM_SETTER`` (the 1:1-mapped keys) or
 via a small number of keys ``transport.py``'s ``_apply_profile_to_sim()``
 special-cases (documented under each key below and in that map's own
 docstring).

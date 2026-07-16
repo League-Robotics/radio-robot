@@ -540,14 +540,16 @@ class NezhaProtocol:
         because a real serial link's request/reply is genuinely
         asynchronous (a background reader thread fills a corr-id-keyed
         queue that could just as easily be filled by an unrelated frame
-        first). ``SimConnection.send_envelope()`` (``robot_radio/io/
-        sim_conn.py``, 097) returns the decoded ``ReplyEnvelope`` (or
-        ``None``) DIRECTLY -- its own docstring explains why: the sim call
-        is already synchronous (one in-process C call, no interleaving is
-        possible), so there is no dict wrapper to build. Every
-        ``NezhaProtocol`` method below sends over EITHER connection type,
-        so this is the ONE place that reconciles the two shapes rather than
-        each call site special-casing ``isinstance(result, dict)`` itself.
+        first). A historical ctypes sim connection backend used to return
+        the decoded ``ReplyEnvelope`` (or ``None``) DIRECTLY instead, since
+        that sim call was already synchronous -- see this method's own git
+        history for the reconciliation this reflects. 108-006: that
+        backend is deleted; its ctypes successor
+        (``robot_radio.io.sim_loop.SimLoop``) is a ``TwistTransport``
+        implementation, not a ``SerialConnection``-shaped object
+        ``NezhaProtocol`` wraps, so this dict-vs-direct reconciliation is
+        now purely a ``SerialConnection`` implementation detail this method
+        still normalizes defensively.
         """
         result = self._conn.send_envelope(envelope, read_timeout=read_timeout)
         if isinstance(result, dict):

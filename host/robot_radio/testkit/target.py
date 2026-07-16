@@ -8,7 +8,8 @@ Usage::
 
     from robot_radio.testkit import make_target, TestRobot
 
-    # Sim (no hardware): SimConnection drives libfirmware_host.
+    # Sim (no hardware): NOT currently implemented (108-006) -- raises
+    # NotImplementedError; see make_target()'s own "sim target" branch.
     tr = make_target("sim")
 
     # Bench (real robot, sim OTOS enabled for bench calibration):
@@ -124,44 +125,28 @@ def make_target(
     # sim target                                                           #
     # ------------------------------------------------------------------ #
     if target == "sim":
-        from robot_radio.io.sim_conn import SimConnection
-        from robot_radio.robot.protocol import NezhaProtocol
-        from robot_radio.robot.nezha import Nezha
-        from robot_radio.testkit.pose import FirmwarePose
-
-        # Pass real_time forward-compatibly: SimConnection does not yet have
-        # this param (ticket 002 adds it).  We accept it here so callers can
-        # pass it, and wire it in once available.
-        try:
-            conn = SimConnection(real_time=real_time)
-        except TypeError:
-            # SimConnection does not yet accept real_time — ignore for now.
-            conn = SimConnection()
-
-        result = conn.connect()
-        if "error" in result:
-            raise RuntimeError(
-                f"SimConnection.connect() failed: {result['error']}\n"
-                "Make sure the firmware sim library is built: "
-                "cmake -S tests/sim -B tests/sim/build && "
-                "cmake --build tests/sim/build"
-            )
-
-        proto = NezhaProtocol(conn)
-        robot = Nezha(proto)
-
-        if sim_otos:
-            conn.send("DBG OTOS BENCH 1", 200)
-
-        pose = FirmwarePose(robot)
-        return TestRobot(
-            robot=robot,
-            conn=conn,
-            playfield=None,
-            pose=pose,
-            target=target,
-            real_time=real_time,
-        )
+        # 108-006: the ~40-symbol ctypes ABI this branch used to bind
+        # (Hal::PhysicsWorld/Hal::SimOdometer, wrapped as a
+        # SerialConnection-compatible backend so NezhaProtocol could sit on
+        # top unmodified) was deleted along with its whole subsystem graph
+        # by the sprint-102/108 greenfield rebuild -- this branch has
+        # raised (previously via a "Sim library not found" connect()
+        # failure) since before that rebuild. The CURRENT sim harness
+        # (tests/_infra/sim/, ticket 108-005/006) exposes a materially
+        # different, narrower surface -- command injection + telemetry
+        # drain + fault knobs, no generic wire/config channel -- via
+        # robot_radio.io.sim_loop.SimLoop, which implements
+        # planner.executor.TwistTransport directly rather than standing in
+        # for a SerialConnection NezhaProtocol can wrap. Rewiring this
+        # make_target("sim") branch onto that shape is future work, not
+        # scoped to 108-006 (its only named consumer is
+        # testgui/transport.py's SimTransport, itself only partially
+        # rewired -- see that module's own _tick_loop docstring).
+        raise NotImplementedError(
+            "make_target('sim') is not implemented against the current "
+            "sim harness (robot_radio.io.sim_loop.SimLoop) -- it needs a "
+            "TwistTransport-shaped rewrite, not a SerialConnection-"
+            "compatible backend. See this branch's own comment.")
 
     # ------------------------------------------------------------------ #
     # bench / production targets                                           #

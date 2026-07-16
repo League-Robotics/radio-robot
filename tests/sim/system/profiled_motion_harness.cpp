@@ -12,8 +12,8 @@
 // This harness does NOT drive the REAL planner/executor.py StreamingExecutor
 // against SimApi -- ticket 006's own Implementation Plan explicitly
 // anticipated this gap ("architecture-update.md (105) Decision 4 explicitly
-// deferred io/sim_conn.py to sprint 107, so this ticket likely instead
-// injects the SAME setpoint sequence planner/profile.py would generate
+// deferred the Python sim ctypes wrapper to sprint 107, so this ticket likely
+// instead injects the SAME setpoint sequence planner/profile.py would generate
 // directly into SimApi.injectTwist() calls... without requiring a full
 // Python-to-sim transport this sprint") and left the exact wiring to the
 // implementer. That path is taken here: the setpoint SEQUENCE (elapsed,
@@ -35,9 +35,10 @@
 // `profile.py`'s own generated sequence, played open-loop into the real
 // firmware, produces a genuine trapezoidal plant response, not just a
 // mathematically correct setpoint list. A true StreamingExecutor-vs-SimApi
-// bridge (e.g. over a persistent pipe, or `io/sim_conn.py` rebuilt against
-// this tree's ABI) is future work for whichever ticket revives
-// `io/sim_conn.py` (105's Decision 4 already scopes that to sprint 107).
+// bridge (e.g. over a persistent pipe, or a Python sim ctypes wrapper
+// rebuilt against this tree's ABI) is future work for whichever ticket
+// revives that wrapper (105's Decision 4 already scoped that to sprint
+// 107; landed as `host/robot_radio/io/sim_loop.py`, ticket 108-006).
 //
 // --- Why v_x/omega_max here are REACHABLE (not saturating) ---
 // Every OTHER scenario in this codebase deliberately commands a target far
