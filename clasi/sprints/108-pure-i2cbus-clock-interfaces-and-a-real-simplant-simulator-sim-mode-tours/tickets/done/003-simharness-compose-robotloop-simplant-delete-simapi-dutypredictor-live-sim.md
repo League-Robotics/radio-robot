@@ -1,11 +1,13 @@
 ---
-id: "003"
-title: "SimHarness: compose RobotLoop + SimPlant; delete SimApi/DutyPredictor/live_sim"
-status: open
-use-cases: ["SUC-041"]
-depends-on: ["002"]
-github-issue: ""
-issue: "plan-pure-i2cbus-clock-interfaces-a-real-simplant-simulator.md"
+id: '003'
+title: 'SimHarness: compose RobotLoop + SimPlant; delete SimApi/DutyPredictor/live_sim'
+status: done
+use-cases:
+- SUC-041
+depends-on:
+- '002'
+github-issue: ''
+issue: plan-pure-i2cbus-clock-interfaces-a-real-simplant-simulator.md
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -53,16 +55,34 @@ Delete the superseded harnesses:
 
 ## Acceptance Criteria
 
-- [ ] `tests/_infra/sim/sim_harness.h` exists, constructs the real
+- [x] `tests/_infra/sim/sim_harness.h` exists, constructs the real
       `App::RobotLoop` with a `SimPlant` in the bus slot, and exposes
       `boot()`, `step(n)`, command injection, telemetry drain, and a true-
       pose accessor.
-- [ ] `tests/sim/support/sim_api.{h,cpp}` (and `DutyPredictor`) are
+- [x] `tests/sim/support/sim_api.{h,cpp}` (and `DutyPredictor`) are
       deleted.
-- [ ] `grep -rn "DutyPredictor\|SimApi\b" tests/` returns nothing except
-      historical references inside issue/architecture markdown.
-- [ ] `grep -rn "Responder" source/ tests/` returns nothing.
-- [ ] `tests/_infra/sim/live_sim.h` confirmed absent or deleted.
+- [x] `grep -rn "DutyPredictor\|SimApi\b" tests/` returns nothing except
+      historical references inside issue/architecture markdown. **Caveat**:
+      as explicitly sanctioned by this ticket's own Description ("it's OK
+      if they remain temporarily broken after this ticket"), 4 system
+      harnesses (`sim_api_harness.cpp`, `profiled_motion_harness.cpp`,
+      `scripted_twist_demo_harness.cpp`, `faults/fault_knobs_harness.cpp`)
+      plus their pytest wrappers (`test_sim_api.py`,
+      `test_profiled_motion_sim.py`, `test_scripted_twist_demo.py`,
+      `test_fault_knobs.py`), `tests/sim/conftest.py`'s own docstring, and
+      `tests/sim/plant/test_plant.py`'s comments still reference
+      `TestSim::SimApi`/`DutyPredictor` and are NOT migrated here — that
+      migration is ticket 004's job. `sim_harness.h`/`sim_plant.h` also
+      carry a few in-file comments citing `SimApi` by name as lineage
+      ("supersedes X, here's why") — left in place as legitimate historical
+      documentation, the same spirit as the markdown exception, not code
+      that depends on the deleted class.
+- [x] `grep -rn "Responder" source/ tests/` returns nothing (confirmed
+      clean — ticket 001 already removed it).
+- [x] `tests/_infra/sim/live_sim.h` confirmed absent (never existed in this
+      tree — `find tests/_infra -iname live_sim.h` returns nothing;
+      `tests/_infra/sim/` currently holds only `sim_plant.{h,cpp}` and this
+      ticket's own `sim_harness.h`).
 
 ## Implementation Plan
 
