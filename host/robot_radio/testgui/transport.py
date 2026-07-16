@@ -906,10 +906,19 @@ class SimTransport(Transport):
         self._error_profile: dict | None = None
         # Fast-forward multiple: sim-time advanced per wall-clock tick.
         # Written from the GUI thread via set_speed_factor(); applied to the
-        # connected SimLoop's own _speed_factor attribute (read once per
+        # connected SimLoop via its own set_speed_factor() (read once per
         # SimLoop tick-thread iteration -- a plain int attribute is atomic
         # under the GIL, no lock needed) and re-applied on every connect().
         self._speed_factor: int = 1
+        # Background thread driving a direct-motion command (SEG/D/RT --
+        # see command()'s own routing) through planner.tour, so command()
+        # itself returns promptly instead of blocking the GUI thread for the
+        # whole motion. One at a time -- a second direct-motion request
+        # while one is in flight is rejected (logged), not queued or
+        # interleaved, since two StreamingExecutors driving the same
+        # SimLoop concurrently would race its single-consumer command queue.
+        self._motion_thread: threading.Thread | None = None
+        self._motion_stop_event = threading.Event()
 
     @property
     def protocol(self) -> SimLoop | None:
@@ -981,7 +990,7 @@ class SimTransport(Transport):
             self._log(f"[ERROR] SimTransport failed to connect: {exc}")
             return
 
-        loop._speed_factor = self._speed_factor
+        loop.set_speed_factor(self._speed_factor)
 
         self._loop = loop
         self._connected = True
@@ -990,6 +999,10 @@ class SimTransport(Transport):
 
     def disconnect(self) -> None:
         """Tear down the connected ``SimLoop`` (joins its tick-thread)."""
+        self._motion_stop_event.set()
+        if self._motion_thread is not None and self._motion_thread.is_alive():
+            self._motion_thread.join(timeout=3.0)
+        self._motion_thread = None
         if self._loop is not None:
             try:
                 self._loop.disconnect()
@@ -1022,58 +1035,189 @@ class SimTransport(Transport):
     # Commands
     # ------------------------------------------------------------------
     #
-    # 108-007: unlike ``SimConnection``, ``SimLoop`` has NO generic wire/
-    # config-channel simulation surface at all -- there is nothing for an
-    # arbitrary text-v2 line to translate onto. send()/command() are
-    # therefore accepted-and-logged, best-effort no-ops; driving the sim for
-    # real happens exclusively through ``.protocol``'s twist()/stop()
-    # surface (a tour, or KeyboardDriver's direct twist calls). Neither
-    # method calls binary_bridge.translate_command() -- SimTransport's own
-    # call graph never reaches binary_bridge's segment/replace builders (see
+    # 108-007 left send()/command() as accepted-and-logged no-ops --
+    # ``SimLoop`` has no generic wire/config-channel simulation surface for
+    # an arbitrary text-v2 line to translate onto the way
+    # ``binary_bridge.translate_command()`` does for real hardware (and
+    # neither method calls into that module -- SimTransport's own call
+    # graph never reaches binary_bridge's segment/replace builders; see
     # this class's module-docstring entry and
-    # clasi/issues/binary-bridge-segment-replace-arms-deleted.md).
+    # clasi/issues/binary-bridge-segment-replace-arms-deleted.md). This
+    # follow-up fix (TestGUI Sim command-surface) routes the handful of
+    # wire verbs the GUI's OWN buttons actually send through command()/
+    # send() -- STOP/X, the Turn buttons' "SEG 0 <cdeg>" pivots, the
+    # COMMANDS panel's "D <l> <r> <mm>"/"RT <cdeg>" direct-motion rows, and
+    # the pose-reset verbs _set_origin() sends (SI/OZ/ZERO enc) -- onto
+    # ``self._loop`` so Sim mode's direct buttons are no longer silent.
+    # Every other verb (S/T/R/TURN/G, and anything else) still has no sim
+    # backing -- accepted-and-logged, just with a short message instead of
+    # the old multi-line essay.
+
+    # Verbs recognized by parse_tour() as-is: "D <l> <r> <mm>" (a straight
+    # leg) and "RT <cdeg>" (a relative in-place turn) -- see
+    # planner/tour.py's own parse_tour() docstring. Both are direct rows in
+    # testgui/commands.py's COMMANDS schema.
+    _MOTION_VERBS = ("D", "RT")
 
     def send(self, line: str) -> None:
-        """Fire-and-forget: log-only no-op -- see class docstring."""
+        """Fire-and-forget: routes recognized verbs into the sim; anything
+        else is accepted and logged (see class docstring)."""
         if not self._connected:
             raise ConnectionError("SimTransport is not connected")
         self._log(f"> {line}")
-        self._log(
-            f"[INFO] SimTransport.send(): {line!r} not routed -- sim mode "
-            "drives via twist()/stop() (transport.protocol) only"
-        )
+        self._dispatch(line)
 
     def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
-        """Log-only no-op returning ``""`` -- see class docstring."""
+        """Routes recognized verbs into the sim; anything else is accepted
+        and logged, returning ``""`` either way (see class docstring) --
+        there is no real reply to wait ``read_timeout`` for."""
         if not self._connected:
             return ""
         self._log(f"> {line}")
-        self._log(
-            f"[INFO] SimTransport.command(): {line!r} not supported in this "
-            "sim -- sim mode drives via twist()/stop() (transport.protocol) only"
-        )
+        self._dispatch(line)
         return ""
 
+    def _dispatch(self, line: str) -> None:
+        """Route one wire-verb ``line`` to whatever sim-side action it maps
+        onto. Never raises -- a malformed line is logged and dropped, same
+        tolerance the real wire has for a bad reply."""
+        tokens = line.split()
+        if not tokens:
+            return
+        verb = tokens[0].upper()
+
+        if verb in ("STOP", "X"):
+            self._sim_stop()
+        elif verb == "SEG" and len(tokens) == 3 and tokens[1] == "0":
+            # In-place pivot: "SEG 0 <cdeg>" -- arc_length=0 means pure
+            # rotation. parse_tour() doesn't know "SEG", but its own
+            # "RT <cdeg>" verb is the exact same shape (both carry a signed
+            # centidegree turn angle), so translate onto that.
+            self._run_motion_async(f"RT {tokens[2]}")
+        elif verb in self._MOTION_VERBS:
+            self._run_motion_async(line)
+        elif verb == "SI":
+            self._sim_setpose(tokens)
+        elif verb in ("OZ", "ZERO"):
+            # OZ re-references the OTOS heading-zero to the robot's CURRENT
+            # physical orientation; ZERO clears the encoder integrators.
+            # Neither has a well-defined "teleport to origin" meaning on its
+            # own (that's SI's job, and _set_origin() already calls
+            # set_true_pose(0,0,0) directly before sending these) -- quiet
+            # no-op so the caller's sequence doesn't error.
+            _log.debug("SimTransport: %s accepted, no-op in sim", verb)
+        elif verb == "SET":
+            # Calibration lines (e.g. trackwidth) -- quiet no-op. Applying
+            # trackwidth live has no SimLoop ABI backing (it's fixed at
+            # sim_create() time -- see _apply_profile_to_sim()'s own
+            # docstring); every other SET key has no sim analogue at all.
+            _log.debug("SimTransport: %s accepted, no-op in sim", line)
+        else:
+            self._log(f"[INFO] SimTransport: {line!r} not supported in this sim")
+
+    def _sim_stop(self) -> None:
+        """STOP/X: halt the sim immediately AND signal any in-flight
+        direct-motion thread to abort at its next tick (``run_tour()``'s
+        own ``should_stop`` poll -- see ``_run_motion_async()``)."""
+        self._motion_stop_event.set()
+        if self._loop is not None:
+            try:
+                self._loop.stop()
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("SimTransport: loop.stop() raised: %s", exc)
+
+    def _sim_setpose(self, tokens: list) -> None:
+        """``SI <x_mm> <y_mm> <h_cdeg>`` -- teleports the plant to that pose
+        (wire units per ``robot_radio.robot.sync_pose.pose_to_setpose_line``:
+        x/y in mm, heading in centidegrees)."""
+        if len(tokens) != 4:
+            self._log(f"[WARN] SimTransport: malformed SI line: {' '.join(tokens)!r}")
+            return
+        try:
+            x_mm, y_mm, h_cdeg = (float(t) for t in tokens[1:])
+        except ValueError:
+            self._log(f"[WARN] SimTransport: malformed SI line: {' '.join(tokens)!r}")
+            return
+        self.set_true_pose(x_mm / 10.0, y_mm / 10.0, math.radians(h_cdeg / 100.0))
+
+    def _run_motion_async(self, wire_step: str) -> None:
+        """Drive ``wire_step`` (a single "D .../"RT ..." tour-shaped leg)
+        through ``planner.tour.parse_tour()``/``run_tour()`` against
+        ``self._loop`` on a background thread, mirroring ``__main__.py``'s
+        own ``_TourRunner.run()`` construction (same ``PlannerParams``/
+        ``HeadingCorrector`` recipe) -- so a Turn/Drive button press is a
+        real profiled motion in Sim, not a silent no-op, without blocking
+        the calling (GUI) thread for the motion's whole duration."""
+        if self._loop is None:
+            return
+        if self._motion_thread is not None and self._motion_thread.is_alive():
+            self._log(
+                f"[WARN] SimTransport: motion already in progress, ignoring {wire_step!r}")
+            return
+
+        self._motion_stop_event.clear()
+        loop = self._loop
+
+        def _worker() -> None:
+            from robot_radio.config.robot_config import get_robot_config
+            from robot_radio.planner.heading import HeadingCorrector
+            from robot_radio.planner.model import PlannerParams
+            from robot_radio.planner.tour import parse_tour, run_tour
+
+            try:
+                legs = parse_tour([wire_step])
+            except ValueError as exc:
+                self._log(f"[ERROR] SimTransport: {exc}")
+                return
+
+            params = PlannerParams()
+            heading = HeadingCorrector(params, robot_config=get_robot_config())
+
+            try:
+                result = run_tour(
+                    loop, params, heading, legs,
+                    should_stop=self._motion_stop_event.is_set,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"[ERROR] SimTransport: {wire_step!r} failed: {exc}")
+                return
+
+            outcome = result.legs[0].outcome.value if result.legs else "unknown"
+            self._log(f"[INFO] SimTransport: {wire_step!r} -> {outcome}")
+
+        self._motion_thread = threading.Thread(
+            target=_worker, name="sim-direct-motion", daemon=True)
+        self._motion_thread.start()
+
     def set_true_pose(self, x_cm: float, y_cm: float, yaw_rad: float) -> None:
-        """No-op (logged) -- ``SimLoop``'s 19-symbol ABI has no
-        ``set_true_pose`` entry point (unlike the deleted ``SimConnection``,
-        which had one). The canvas avatar in Sim mode currently has no way
-        to be teleported; it starts wherever the sim plant boots.
+        """Teleport the sim plant to ``(x_cm, y_cm, yaw_rad)`` --
+        ``SimLoop.set_true_pose()``'s own (mm, mm, rad) contract, so x/y are
+        scaled by 10 here (same cm->mm convention every other SimTransport
+        pose call uses -- see ``_on_loop_truth()``'s own x/10.0 the other
+        direction). This is what makes the canvas avatar actually move on
+        "Set Robot @ 0,0"/SI in Sim mode -- the avatar follows the plant's
+        ground truth, and there is no operator to place the robot the way
+        real hardware's reset workflow assumes.
         """
-        if not self._connected:
+        if not self._connected or self._loop is None:
+            return
+        try:
+            self._loop.set_true_pose(x_cm * 10.0, y_cm * 10.0, yaw_rad)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("SimTransport: set_true_pose() raised: %s", exc)
+            self._log(f"[ERROR] SimTransport: set_true_pose failed: {exc}")
             return
         self._log(
-            f"[WARN] set_true_pose({x_cm:.1f}cm, {y_cm:.1f}cm, "
-            f"{math.degrees(yaw_rad):.1f}°) not supported in this sim -- "
-            "SimLoop's ABI has no plant-teleport entry point"
+            f"[INFO] SimTransport: teleported to ({x_cm:.1f}cm, {y_cm:.1f}cm, "
+            f"{math.degrees(yaw_rad):.1f}°)"
         )
 
     def set_speed_factor(self, factor: int) -> None:
         """Set the sim fast-forward multiple (1 = real time).
 
         Clamped to [``_SIM_SPEED_MIN``, ``_SIM_SPEED_MAX``].  Safe to call
-        at any time, connected or not -- applied to the connected
-        ``SimLoop``'s own ``_speed_factor`` immediately (takes effect on its
+        at any time, connected or not -- delegates to the connected
+        ``SimLoop.set_speed_factor()`` immediately (takes effect on its
         tick-thread's next iteration) and re-applied fresh on every
         ``connect()``.
         """
@@ -1082,7 +1226,7 @@ class SimTransport(Transport):
             return
         self._speed_factor = clamped
         if self._loop is not None:
-            self._loop._speed_factor = clamped
+            self._loop.set_speed_factor(clamped)
         self._log(f"[INFO] Sim speed set to {clamped}x")
 
     # ------------------------------------------------------------------

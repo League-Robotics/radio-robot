@@ -105,6 +105,29 @@ if TYPE_CHECKING:
 #: default sim_prefs.py/test_tour1_geometry.py already use.
 _DEFAULT_TRACKWIDTH = 128.0  # [mm]
 
+# TestGUI Sim command-surface fix (2026-07): idle-jitter trace-growth guard.
+# Sim mode's tick thread keeps streaming telemetry forever once connected
+# (not just during a tour/drive) -- and ticket 108-011's rest-encoder dither
+# (WheelPlant's opt-in +-1 wire-LSB alternation while at rest, added so a
+# stopped wheel doesn't false-positive Devices::MotorArmor's wedge-latch
+# detector -- see tests/sim/plant/wheel_plant.h's own "Rest-dither tuning"
+# comment) means a genuinely-idle sim's encoder-derived pose micro-jitters by
+# a fraction of a millimetre every frame, forever. Every _feed_* helper below
+# used to append EVERY frame's point unconditionally, so an idle connection
+# grew its trace lists without bound -- visually indistinguishable from "the
+# tour is still running" (the reported "point count climbs, resets, keeps
+# counting" symptom) even though run_tour() had already returned. Below this
+# threshold a new point is idle jitter, not real motion, and is dropped
+# instead of appended -- see _append_if_moved(). 0.05cm (0.5mm) is 5x the
+# dither's own +-0.1mm wheel-position amplitude (comfortably filters the
+# noise) and two orders of magnitude below a single tick's real-motion
+# displacement at any commanded speed the GUI's own S/T/D rows allow (>=1
+# mm/s * a 20ms-50ms tick is already >=0.02-0.05mm... in practice every real
+# drive command commands tens of mm/s, so real motion clears this bound by
+# 100x+ per tick -- see tests/testgui/test_traces.py's own forward-drive
+# assertions, unaffected by this change).
+_TRACE_IDLE_EPSILON_CM = 0.05  # [cm]
+
 
 class EncoderDeadReckoner:
     """Host-side differential-drive dead reckoning from cumulative per-wheel
@@ -371,7 +394,7 @@ class TraceModel:
         yaw_rad:
             Robot heading in radians.
         """
-        self.camera.append((x_cm, y_cm))
+        self._append_if_moved(self.camera, (x_cm, y_cm))
 
     def clear(self) -> None:
         """Reset all four polylines and accumulated baselines.
@@ -458,6 +481,21 @@ class TraceModel:
         wy = self._anchor_y + dx_cm * s + dy_cm * c
         return (wx, wy)
 
+    @staticmethod
+    def _append_if_moved(trace: list, point: tuple[float, float]) -> None:
+        """Append ``point`` to ``trace`` unless it is within
+        ``_TRACE_IDLE_EPSILON_CM`` of the last point already in it -- see
+        this module's own header comment for why (idle rest-jitter must not
+        grow a trace forever). The very first point in an empty trace
+        always appends (there is nothing to compare against yet)."""
+        if trace:
+            last_x, last_y = trace[-1]
+            dx = point[0] - last_x
+            dy = point[1] - last_y
+            if dx * dx + dy * dy < _TRACE_IDLE_EPSILON_CM * _TRACE_IDLE_EPSILON_CM:
+                return
+        trace.append(point)
+
     def _feed_encpose(self, encpose: tuple[int, int, int]) -> None:
         """Compute encoder-only pose displacement and append to the encoder trace.
 
@@ -493,7 +531,11 @@ class TraceModel:
         dx_cm = (encpose[0] - self._encpose_baseline[0]) / 10.0
         dy_cm = (encpose[1] - self._encpose_baseline[1]) / 10.0
         rot = self._anchor_h - math.radians(self._encpose_baseline[2] / 100.0)
-        self.encoder.append(self._rw(dx_cm, dy_cm, rot))
+        self._append_if_moved(self.encoder, self._rw(dx_cm, dy_cm, rot))
+        # encoder_yaw always tracks the latest heading, even on a frame
+        # whose position was too small to append (idle jitter) -- it's a
+        # scalar (the canvas avatar's heading source), not a growing list,
+        # so there's no "grows forever" concern gating it would address.
         self.encoder_yaw = rot + math.radians(encpose[2] / 100.0)
 
     def _feed_otos(self, otos: tuple[int, int, int]) -> None:
@@ -519,7 +561,7 @@ class TraceModel:
         dx_cm = (otos[0] - self._otos_baseline[0]) / 10.0
         dy_cm = (otos[1] - self._otos_baseline[1]) / 10.0
         rot = self._anchor_h - math.radians(self._otos_baseline[2] / 100.0)
-        self.otos.append(self._rw(dx_cm, dy_cm, rot))
+        self._append_if_moved(self.otos, self._rw(dx_cm, dy_cm, rot))
 
     def _feed_fused(self, pose: tuple[int, int, int]) -> None:
         """Compute fused pose displacement and append to the fused trace.
@@ -541,4 +583,4 @@ class TraceModel:
         dx_cm = (pose[0] - self._pose_baseline[0]) / 10.0
         dy_cm = (pose[1] - self._pose_baseline[1]) / 10.0
         rot = self._anchor_h - math.radians(self._pose_baseline[2] / 100.0)
-        self.fused.append(self._rw(dx_cm, dy_cm, rot))
+        self._append_if_moved(self.fused, self._rw(dx_cm, dy_cm, rot))

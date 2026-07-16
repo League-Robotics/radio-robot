@@ -225,6 +225,12 @@ void SimPlant::setOtosDrift(float xDrift, float yDrift, float headingDrift) {
   otos_.setDrift(xDrift, yDrift, headingDrift);
 }
 
+void SimPlant::setTruePose(float x, float y, float heading) {
+  left_.resetPosition(0.0f);
+  right_.resetPosition(0.0f);
+  otos_.reset(x, y, heading);
+}
+
 const WheelPlant& SimPlant::wheelPlant(int port) const {
   return (port == 2) ? right_ : left_;
 }

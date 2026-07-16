@@ -69,6 +69,15 @@
 //     -- bypasses OTOS drift/noise fault knobs entirely; see sim_harness.h's
 //     own header for why these three are "the" true pose.
 //
+//   void sim_set_true_pose(SimHandle h, float x, float y, float h_rad);  // [mm][mm][rad]
+//     Plant teleport -- snaps the OtosPlant's ground-truth pose to
+//     (x, y, h_rad) and resets both WheelPlant positions to 0 in the same
+//     call (SimHarness::setTruePose() -> SimPlant::setTruePose()). Added
+//     for the TestGUI Sim command-surface fix: Sim mode has no operator to
+//     physically place the robot at the playfield centre the way real
+//     hardware's "Set Robot @ 0,0" workflow assumes, so
+//     host/robot_radio/io/sim_loop.py's set_true_pose() calls this instead.
+//
 // ---- Fault-condition setters ----
 // Thin call-throughs to SimPlant's own knobs (sim_plant.h). port: 1 = left
 // (Nezha motorId 1), 2 = right (motorId 2) -- same numbering the real wire
@@ -212,6 +221,10 @@ int sim_drain_tlm(SimHandle h, char* buf, int buflen) {
 float sim_true_x(SimHandle h) { return asHarness(h)->trueX(); }
 float sim_true_y(SimHandle h) { return asHarness(h)->trueY(); }
 float sim_true_h(SimHandle h) { return asHarness(h)->trueHeading(); }
+
+void sim_set_true_pose(SimHandle h, float x, float y, float h_rad) {
+  asHarness(h)->setTruePose(x, y, h_rad);
+}
 
 // ---- Fault-condition setters ----
 
