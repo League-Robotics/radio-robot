@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from typing import Any
+from typing import Any, Callable
 
 from .traces import EncoderDeadReckoner
 
@@ -248,9 +248,17 @@ class TurnGraphPanel(QWidget):
 
     def __init__(self, recorder: TurnTraceRecorder | None = None,
                  playfield_widget: QWidget | None = None,
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None,
+                 on_clear_extra: "Callable[[], None] | None" = None) -> None:
         super().__init__(parent)
         self.recorder = recorder if recorder is not None else TurnTraceRecorder()
+        # OOP sim-motor-state fix (unify the two "Clear Traces" buttons):
+        # optional hook invoked at the end of clear() so this panel's own
+        # header "Clear traces" button ALSO clears the playfield TraceModel
+        # (owned by __main__.py, outside this widget) -- see clear()'s own
+        # docstring and __main__.py's _clear_traces()/wiring for the other
+        # direction (the ops-panel button clearing this panel).
+        self._on_clear_extra = on_clear_extra
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -285,6 +293,14 @@ class TurnGraphPanel(QWidget):
         self._timer.timeout.connect(self._maybe_redraw)
         self._timer.start(150)
 
+    def set_on_clear_extra(self, cb: "Callable[[], None] | None") -> None:
+        """Set (or clear, with ``cb=None``) the ``on_clear_extra`` hook
+        after construction -- lets a caller wire this panel to another
+        trace store defined LATER in its own setup sequence (e.g.
+        ``__main__.py``'s ``_clear_playfield_traces()``, which is defined
+        after this panel is constructed)."""
+        self._on_clear_extra = cb
+
     # feed hooks (call from the GUI thread) --------------------------------
     def add_tlm(self, now: float, frame: Any) -> None:
         if self.recorder.add_tlm(now, frame):
@@ -295,8 +311,17 @@ class TurnGraphPanel(QWidget):
         self._dirty = True
 
     def clear(self) -> None:
+        """Clear this panel's own four recorded traces and redraw.
+
+        OOP sim-motor-state fix: also invokes ``on_clear_extra`` (if given
+        at construction) so this header's "Clear traces" button clears the
+        playfield ``TraceModel`` too -- unifying it with the ops-panel
+        "Clear Traces" button, which calls this method in the other
+        direction (see ``__main__.py``'s ``_clear_traces()``)."""
         self.recorder.clear()
         self._redraw_current()
+        if self._on_clear_extra is not None:
+            self._on_clear_extra()
 
     # redraw plumbing ------------------------------------------------------
     def _maybe_redraw(self) -> None:

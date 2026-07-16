@@ -47,6 +47,26 @@ class _FakeButton:
         self.text = value
 
 
+class _FakeOriginButton:
+    """Minimal stand-in for ``origin_btn`` -- records ``setEnabled``/
+    ``setVisible``/``setToolTip`` calls (OOP sim-motor-state fix: origin_btn
+    gating tests below)."""
+
+    def __init__(self) -> None:
+        self.enabled: bool | None = None
+        self.visible: bool | None = None
+        self.tooltip: str | None = None
+
+    def setEnabled(self, value: bool) -> None:
+        self.enabled = value
+
+    def setVisible(self, value: bool) -> None:
+        self.visible = value
+
+    def setToolTip(self, value: str) -> None:
+        self.tooltip = value
+
+
 class _FakeTransport(Transport):
     """Records every ``command()``/``send()`` line; no real IO."""
 
@@ -87,6 +107,27 @@ def _make_controller(transport: "Transport | None") -> tuple[OpsController, list
     return controller, logs, stream_btn
 
 
+def _make_controller_with_origin(
+    transport: "Transport | None",
+) -> tuple[OpsController, _FakeOriginButton]:
+    """Build an OpsController with a fake ``origin_btn`` -- for the
+    OOP sim-motor-state gating tests below."""
+    origin_btn = _FakeOriginButton()
+    controller = OpsController(
+        transport_ref={"transport": transport},
+        log_cb=lambda _msg: None,
+        sync_btn=None,
+        zero_btn=None,
+        stop_btn=None,
+        clear_btn=None,
+        refresh_btn=None,
+        stream_btn=_FakeButton(),
+        origin_btn=origin_btn,
+        transport_buttons=[],
+    )
+    return controller, origin_btn
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -102,6 +143,66 @@ def test_on_stop_sends_stop_then_stream_0() -> None:
     assert any("STOP sent" in line for line in logs)
     assert stream_btn.checked is False
     assert stream_btn.text == "STREAM: off"
+
+
+# ---------------------------------------------------------------------------
+# origin_btn gating (OOP sim-motor-state fix): enabled iff connected AND no
+# tour is running.
+# ---------------------------------------------------------------------------
+
+
+def test_origin_btn_starts_disabled_before_any_connect() -> None:
+    controller, origin_btn = _make_controller_with_origin(None)
+    assert origin_btn.enabled is None  # OpsController never touched it yet
+
+
+def test_origin_btn_enabled_when_connected_and_no_tour() -> None:
+    transport = _FakeTransport()
+    controller, origin_btn = _make_controller_with_origin(transport)
+
+    controller.set_connected(True, transport)
+
+    assert origin_btn.enabled is True
+
+
+def test_origin_btn_disabled_when_disconnected() -> None:
+    transport = _FakeTransport()
+    controller, origin_btn = _make_controller_with_origin(transport)
+
+    controller.set_connected(True, transport)
+    assert origin_btn.enabled is True
+
+    controller.set_connected(False)
+    assert origin_btn.enabled is False
+
+
+def test_origin_btn_ghosted_while_tour_running() -> None:
+    transport = _FakeTransport()
+    controller, origin_btn = _make_controller_with_origin(transport)
+
+    controller.set_connected(True, transport)
+    assert origin_btn.enabled is True
+
+    controller.set_tour_running(True)
+    assert origin_btn.enabled is False, "must ghost while a tour runs"
+
+    controller.set_tour_running(False)
+    assert origin_btn.enabled is True, "must re-enable once the tour ends (still connected)"
+
+
+def test_origin_btn_stays_disabled_if_tour_ends_while_disconnected() -> None:
+    """A tour-finished callback firing after disconnect (e.g. on app
+    teardown) must not spuriously re-enable origin_btn."""
+    transport = _FakeTransport()
+    controller, origin_btn = _make_controller_with_origin(transport)
+
+    controller.set_connected(True, transport)
+    controller.set_tour_running(True)
+    controller.set_connected(False)
+    assert origin_btn.enabled is False
+
+    controller.set_tour_running(False)
+    assert origin_btn.enabled is False, "must stay disabled -- not connected"
 
 
 def test_on_stop_cancels_motion_worker_before_sending_stop() -> None:

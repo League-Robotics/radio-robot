@@ -364,7 +364,27 @@ class TraceModel:
         -- so it flows through the EXISTING ``_feed_encpose()`` baseline/
         anchor-rotation machinery unchanged. A real firmware ``encpose``
         (if a future build ever adds it back) always takes priority.
+
+        Motion-state gate (``frame.active`` -- OOP sim-motor-state fix)
+        -----------------------------------------------------------------
+        ``frame.active`` (``bb.drivetrain.busy`` -- TRUE while a motion is
+        in progress, FALSE once it completes) is the authoritative "is the
+        robot actually moving" signal -- stronger than the
+        ``_TRACE_IDLE_EPSILON_CM`` dead-band above, which only filters
+        SMALL jitter and still lets a stopped motion's point COUNT climb
+        forever (each below-threshold call is a no-op append, but the
+        canvas/consumer code that previously counted "did feed() run"
+        couldn't tell rest-jitter from real motion). When a frame
+        EXPLICITLY reports ``active is False``, this method returns
+        immediately without touching any trace list at all -- a finished
+        motion's point count freezes, full stop. ``active is None``
+        (older/pre-fault frames that never set the field) keeps prior
+        behavior -- fall through to the epsilon-gated append below, since
+        "unknown" must not be treated the same as a confirmed idle.
         """
+        if frame.active is False:
+            return
+
         if not self._anchor_set:
             self.anchor(0.0, 0.0, 0.0)
 
