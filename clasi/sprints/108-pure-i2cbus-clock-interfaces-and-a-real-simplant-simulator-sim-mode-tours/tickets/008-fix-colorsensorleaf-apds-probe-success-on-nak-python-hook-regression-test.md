@@ -1,11 +1,13 @@
 ---
-id: "008"
-title: "Fix ColorSensorLeaf APDS probe success-on-NAK + Python hook regression test"
-status: open
-use-cases: ["SUC-044"]
-depends-on: ["005"]
-github-issue: ""
-issue: "color-sensor-apds-probe-success-on-failure.md"
+id: 008
+title: Fix ColorSensorLeaf APDS probe success-on-NAK + Python hook regression test
+status: done
+use-cases:
+- SUC-044
+depends-on:
+- '005'
+github-issue: ''
+issue: color-sensor-apds-probe-success-on-failure.md
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -50,23 +52,45 @@ hook that NAKs the APDS probe address and assert `present()` stays false.
 
 ## Acceptance Criteria
 
-- [ ] `beginStep()`'s APDS probe path uses `readReg8Status()` and requires
+- [x] `beginStep()`'s APDS probe path uses `readReg8Status()` and requires
       `ok == true` before concluding presence from the register value.
-- [ ] New Python hook test: register a hook that returns a NAK status for
+- [x] New hook test: register a hook that returns a NAK status for
       the APDS probe address (`0x80`/`0x39<<1` per the class's own
       addressing), step the sim, assert `ColorSensorLeaf::present() ==
       false` and that no further probe attempts recur (the perception slot
-      skips it, per the issue's own bench-verification wording).
-- [ ] Existing color-sensor unit coverage
+      skips it, per the issue's own bench-verification wording). Landed as
+      `tests/sim/unit/devices_color_sensor_apds_probe_harness.cpp` +
+      `test_devices_color_sensor_apds_probe.py`, a C++ hook-driven test using
+      `TestSim::SimPlant` directly (fallback option (b) from this ticket's
+      own text) — no Python/ctypes SimLoop test was written because nothing
+      in `source/app/` currently surfaces `ColorSensorLeaf::present()`/
+      `connected()` to telemetry, so there is no host-observable signal a
+      Python-level test could assert on without scope-creeping a telemetry
+      change into this ticket. Verified the test FAILS against the pre-fix
+      code (3 assertion failures reproducing the exact bug: `present()`/
+      `connected()` incorrectly latch `true`, and `tick()` keeps issuing bus
+      reads forever) and PASSES with the fix.
+- [x] Existing color-sensor unit coverage
       (`tests/sim/unit/devices_sensors_harness.cpp`/
       `test_devices_sensors.py` or wherever this leaf's other tests live)
       still passes — the Alt-probe-path and the genuine-present path are
       unaffected by this fix (the issue notes the Alt path "is safe only
-      by accident," not that it needs changing).
+      by accident," not that it needs changing). Note:
+      `test_devices_sensors.py` itself is currently RED for an unrelated,
+      pre-existing reason — it depends on `source/devices/i2c_bus_host.cpp`,
+      which ticket 108-001 (earlier in this same sprint) deleted as part of
+      reducing `Devices::I2CBus` to a pure interface; this is one of the "8
+      `tests/sim/unit/*` harnesses remain red — ticket 009" noted in this
+      ticket's own dispatch instructions, not something this ticket's fix
+      caused or is in scope to repair. The Alt/genuine-present logic this
+      harness exercises is untouched by this ticket's change (only the
+      `ApdsProbe` phase's status check changed).
 - [ ] Bench (final acceptance, can be deferred to the sprint's own final
       bench-verification pass if hardware access is not available mid-
       ticket): boot an image with the color sensor unplugged;
       `present()==false`, no recurring bus errors in the I2C diagnostics.
+      DEFERRED to the sprint's own final bench-verification pass per this
+      criterion's own text (no hardware access mid-ticket in this session).
 
 ## Implementation Plan
 

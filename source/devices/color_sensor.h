@@ -151,10 +151,13 @@ class ColorSensorLeaf {
   void initApds();
 
   // writeReg8()/readReg8()/readReg16()/readReg16Alt() ignore the I2C
-  // transaction status — matches the pre-port beginStep()/initApds() code,
-  // which never checked it either. The *Status() variants below are used
-  // ONLY by tick()'s steady-state path, which (like NezhaMotor/Otos) DOES
-  // track bus health for connected().
+  // transaction status — matches the pre-port initApds()/AltProbe code,
+  // which never checked it either. The *Status() variants below are used by
+  // tick()'s steady-state path (which, like NezhaMotor/Otos, DOES track bus
+  // health for connected()) AND by beginStep()'s ApdsProbe phase (see
+  // color_sensor.cpp's ApdsProbe comment — clasi/issues/color-sensor-apds-
+  // probe-success-on-failure.md: a status-ignoring probe read there
+  // latched present()==true on a NAK).
   void writeReg8(uint8_t addr, uint8_t reg, uint8_t val);
   uint8_t readReg8(uint8_t addr, uint8_t reg);
   uint16_t readReg16(uint8_t addr, uint8_t regLo);
