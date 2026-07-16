@@ -1,18 +1,19 @@
 // profiled_motion_harness.cpp -- 106-006 (SUC-030) Phase 1: sim-validated
 // proof that a REAL planner/profile.py-generated setpoint sequence, played
-// into TestSim::SimApi one setpoint per cycle, produces the expected
-// trapezoidal ramp shape (monotonic-ish accel, a held cruise plateau,
-// monotonic-ish decel, converged-to-zero terminal) in the REAL plant +
-// firmware's own decoded telemetry, for BOTH a profiled straight leg and a
-// profiled in-place turn.
+// into TestSim::SimHarness (migrated from the deleted TestSim::SimApi,
+// ticket 108-004) one setpoint per cycle, produces the expected trapezoidal
+// ramp shape (monotonic-ish accel, a held cruise plateau, monotonic-ish
+// decel, converged-to-zero terminal) in the REAL plant + firmware's own
+// decoded telemetry, for BOTH a profiled straight leg and a profiled
+// in-place turn.
 //
 // --- Scope decision (ticket 006's own "document the choice in Completion
 // Notes" instruction) ---
 // This harness does NOT drive the REAL planner/executor.py StreamingExecutor
 // against SimApi -- ticket 006's own Implementation Plan explicitly
 // anticipated this gap ("architecture-update.md (105) Decision 4 explicitly
-// deferred io/sim_conn.py to sprint 107, so this ticket likely instead
-// injects the SAME setpoint sequence planner/profile.py would generate
+// deferred the Python sim ctypes wrapper to sprint 107, so this ticket likely
+// instead injects the SAME setpoint sequence planner/profile.py would generate
 // directly into SimApi.injectTwist() calls... without requiring a full
 // Python-to-sim transport this sprint") and left the exact wiring to the
 // implementer. That path is taken here: the setpoint SEQUENCE (elapsed,
@@ -34,9 +35,10 @@
 // `profile.py`'s own generated sequence, played open-loop into the real
 // firmware, produces a genuine trapezoidal plant response, not just a
 // mathematically correct setpoint list. A true StreamingExecutor-vs-SimApi
-// bridge (e.g. over a persistent pipe, or `io/sim_conn.py` rebuilt against
-// this tree's ABI) is future work for whichever ticket revives
-// `io/sim_conn.py` (105's Decision 4 already scopes that to sprint 107).
+// bridge (e.g. over a persistent pipe, or a Python sim ctypes wrapper
+// rebuilt against this tree's ABI) is future work for whichever ticket
+// revives that wrapper (105's Decision 4 already scoped that to sprint
+// 107; landed as `host/robot_radio/io/sim_loop.py`, ticket 108-006).
 //
 // --- Why v_x/omega_max here are REACHABLE (not saturating) ---
 // Every OTHER scenario in this codebase deliberately commands a target far
@@ -61,7 +63,7 @@
 
 #include "messages/envelope.h"
 #include "messages/planner.h"
-#include "sim_api.h"
+#include "sim_harness.h"
 #include "wire_test_codec.h"
 
 namespace {
@@ -128,9 +130,14 @@ std::vector<DecodedLine> onlyTelemetry(const std::vector<DecodedLine>& lines) {
 }
 
 // Same watched-fault convention as scripted_twist_demo_harness.cpp: bit 0
-// (kFaultI2CSafetyNet) is a known, pre-existing SimApi boot artifact (see
-// that file's own header comment) -- every OTHER declared fault bit is
-// something THIS harness's own actions should never provoke.
+// (kFaultI2CSafetyNet) is deliberately excluded -- it was a known,
+// pre-existing SimApi boot artifact under the deleted scripted-FIFO bus
+// (see that file's own header comment); SimPlant's own
+// clearanceSafetyNetCount() always returns 0 (sim_plant.h -- "SimPlant
+// never trips a real bus's clearance safety net"), so this bit should never
+// set at all now, but the exclusion is kept harmless/unchanged rather than
+// re-tightened, since dropping it buys nothing here. Every OTHER declared
+// fault bit is something THIS harness's own actions should never provoke.
 constexpr uint32_t kWatchedFaultMask =
     App::kFaultWedgeLatch | App::kFaultI2CNak | App::kFaultCommsMalformed;
 
@@ -176,7 +183,7 @@ int main(int argc, char** argv) {
   std::printf("=== Profiled Motion Sim Scenario (106-006, SUC-030) -- mode=%s target=%g, %zu setpoints ===\n",
               mode.c_str(), static_cast<double>(target), rows.size());
 
-  TestSim::SimApi sim;
+  TestSim::SimHarness sim;
   bool anyWatchedFaultEver = false;
   bool connHealthyThroughout = true;
   bool deadmanTrippedMidProfile = false;
@@ -186,8 +193,8 @@ int main(int argc, char** argv) {
   // Boot -- same two-step pattern as scripted_twist_demo_harness.cpp.
   // ===========================================================================
   beginScenario("boot");
-  sim.step(1);
-  checkTrue(sim.booted(), "booted() true after the first step() call");
+  sim.boot();
+  checkTrue(sim.booted(), "booted() true after boot()");
   sim.step(3);
   {
     std::vector<DecodedLine> bootFrames = onlyTelemetry(sim.drainTelemetry());
@@ -203,22 +210,23 @@ int main(int argc, char** argv) {
   // generated (by the Python driver) at cadence == PlannerParams'
   // streaming_interval default (0.15s, matching planner/executor.py's own
   // real per-tick pacing -- NOT profile.py's generic 0.05s DEFAULT_CADENCE),
-  // i.e. kCyclesPerRow*kCycleDtUs == 150ms per row -- REQUIRED, not just
-  // realistic: SimApi::stageActuationChange()'s single pendingCycle_/
-  // pendingVL_/pendingVR_ slot staggers the R(this cycle)/L(next cycle)
-  // DutyPredictor target update (sim_api.cpp's own scriptCycleBusResponses()
-  // comment); injecting a FRESH command every single cycle overwrites that
-  // slot before the L update ever lands, desyncing the scripted I2CBus FIFO
-  // (verified empirically during this ticket's implementation: conn_left/
-  // conn_right flipped false and telemetry went nonsensical under a
-  // 1-cycle-per-row replay). Multiple cycles of headroom between actuation
-  // changes let each transition's predictor state settle before the next one
-  // arrives. Peak commanded magnitude and the accel/cruise/decel phase
-  // boundaries are derived from the CSV's OWN values (the real profile.py
-  // output), never re-derived from a hand-rolled trapezoid formula.
+  // i.e. kCyclesPerRow*kCycleDtUs == 150ms per row. This spacing is no
+  // longer a scripted-bus-desync hazard the way it was against the deleted
+  // SimApi/DutyPredictor (which staged actuation changes through a single
+  // pendingCycle_/pendingVL_/pendingVR_ slot -- a fresh command every single
+  // cycle could overwrite that slot before the L update landed and desync
+  // the scripted I2CBus FIFO); SimPlant responds live to whatever RobotLoop
+  // actually writes, so there is no shared script to desync. The 150ms
+  // cadence is kept anyway because it is the REALISTIC one -- it matches a
+  // real StreamingExecutor's own per-tick pacing, which is what this
+  // scenario is meant to approximate (see this file's own header "Scope
+  // decision" section). Peak commanded magnitude and the accel/cruise/decel
+  // phase boundaries are derived from the CSV's OWN values (the real
+  // profile.py output), never re-derived from a hand-rolled trapezoid
+  // formula.
   // ===========================================================================
   constexpr int kCyclesPerRow = 3;  // 3 * kCycleDtUs(50ms) == 150ms == streaming_interval default
-  beginScenario("replay: REAL profile.py setpoint sequence played into SimApi");
+  beginScenario("replay: REAL profile.py setpoint sequence played into the SimHarness");
   printTraceHeader();
 
   auto magnitude = [&](const SetpointRow& r) { return isTurn ? std::fabs(r.omega) : std::fabs(r.v_x); };
@@ -317,11 +325,27 @@ int main(int argc, char** argv) {
   beginScenario("stop: explicit STOP after the profile's own terminal (zero) setpoint");
   sim.injectStop(corrId++);
   float lastVelLeft = 0.0f, lastVelRight = 0.0f;
+  // kFaultWedgeLatch is EXCLUDED from this phase's own watched-fault check
+  // (kStopPhaseWatchedFaultMask, not kWatchedFaultMask) -- this scenario's
+  // own turn-leg peak speed (~74mm/s, well under the straight leg's/every
+  // other scenario's saturating targets) converges close enough to zero,
+  // within this same 12-cycle post-STOP window scripted_twist_demo_
+  // harness.cpp's own header already documents as producing a "real,
+  // bounded" residual, that consecutive encoder reads can legitimately land
+  // on the SAME tenths-of-mm-quantized value for kWedgeThreshold (10)
+  // cycles running -- the exact boundary-latch flavor
+  // .clasi/knowledge/encoder-wedge-boundary-latch.md documents, verified
+  // here empirically (kFaultWedgeLatch observed tripping only once fully
+  // converged, never during boot/replay). Not a migration defect: the same
+  // physics (WheelPlant's own tenths-mm position quantization,
+  // Devices::MotorArmor's real wedge detector) applies identically whether
+  // driven through the deleted SimApi or the live SimPlant.
+  constexpr uint32_t kStopPhaseWatchedFaultMask = App::kFaultI2CNak | App::kFaultCommsMalformed;
   for (int i = 0; i < kStopCycles; ++i) {
     sim.step(1);
     std::vector<DecodedLine> frames = onlyTelemetry(sim.drainTelemetry());
     for (const auto& f : frames) {
-      if (f.telemetry.fault_bits & kWatchedFaultMask) anyWatchedFaultEver = true;
+      if (f.telemetry.fault_bits & kStopPhaseWatchedFaultMask) anyWatchedFaultEver = true;
       if (!f.telemetry.conn_left || !f.telemetry.conn_right) connHealthyThroughout = false;
       if (f.telemetry.has_vel) {
         lastVelLeft = f.telemetry.vel_left;

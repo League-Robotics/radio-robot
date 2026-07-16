@@ -1,30 +1,42 @@
 // devices_sensors_harness.cpp — off-hardware acceptance harness for ticket
 // DB-006 (device-bus-tickets.md): exercises the REAL Devices::ColorSensorLeaf
 // and Devices::LineSensorLeaf leaves (source/devices/color_sensor.cpp,
-// source/devices/line_sensor.cpp) against DB-003's HOST_BUILD scripted
-// Devices::I2CBus fake -- no MicroBitI2C, no CODAL, no real hardware.
+// source/devices/line_sensor.cpp) against a TestSim::SimPlant (108-002),
+// scripted deterministically via TestSim::ScriptedI2CHook (108-009) -- no
+// MicroBitI2C, no CODAL, no real hardware.
+//
+// Migrated by sprint 108 ticket 009 off the deleted source/devices/
+// i2c_bus_host.cpp scripted-FIFO Devices::I2CBus fake (ticket 001 reduced
+// Devices::I2CBus to a pure interface and removed it) -- see
+// devices_motor_harness.cpp's/scripted_i2c_hook.h's own header for the
+// migration rationale. Every scenario below is otherwise UNCHANGED from the
+// pre-migration harness -- only the bus/scripting plumbing moved. NOTE: this
+// file's own NAK-latches-absent color-sensor scenario is deliberately NOT
+// duplicated here -- that exact regression is ticket 108-008's own
+// devices_color_sensor_apds_probe_harness.cpp, against the real SimPlant
+// default (unhooked) NAK behavior; see scenarioAbsentDeviceNeverHangs()
+// below for the cross-reference.
 //
 // Modeled on tests/sim/unit/devices_otos_harness.cpp (that file's own header
 // comment is this harness's explicit test precedent) -- compiles the ACTUAL
 // source/devices/{color_sensor,line_sensor}.cpp against the SAME
 // source/devices/{color_sensor,line_sensor}.h every ARM build compiles, with
-// -DHOST_BUILD selecting source/devices/i2c_bus_host.cpp's scripted fake in
-// place of the real MicroBitI2C-backed i2c_bus.cpp. Hand-rolled assertions,
-// PASS/FAIL per scenario, nonzero exit on any failure. Run by
-// test_devices_sensors.py, which compiles and runs this binary via
-// subprocess. Includes ONLY devices/ headers plus plain C/C++ stdlib
-// (isolation invariant) -- no messages/*.h, no hal/*, no source_old/*.
+// -DHOST_BUILD. Hand-rolled assertions, PASS/FAIL per scenario, nonzero exit
+// on any failure. Run by test_devices_sensors.py, which compiles and runs
+// this binary via subprocess. Includes ONLY devices/ headers plus plain
+// C/C++ stdlib (isolation invariant) -- no messages/*.h, no hal/*, no
+// source_old/*.
 //
-// --- Scripting model recap (i2c_bus_host.cpp) ---
-// scriptWrite()/scriptRead() are TWO SEPARATE FIFOs (writes vs. reads), each
+// --- Scripting model recap (scripted_i2c_hook.h) ---
+// queueWrite()/queueRead() are TWO SEPARATE FIFOs (writes vs. reads), each
 // matched strictly in the order the leaf under test calls write()/read() --
 // content is not checked for writes (only address+order); reads deliver the
 // scripted payload bytes IF the address matches, else the caller's buffer is
 // left as pre-initialized (typically 0). An UNSCRIPTED write/read (empty
 // queue) returns a distinct "mismatch" status without crashing -- this
 // harness deliberately leans on that for the "absent device" scenario (an
-// entirely empty I2CBus decodes to all-zero reads, exactly modeling a chip
-// that never answers).
+// entirely unscripted hook decodes to all-zero reads, exactly modeling a
+// chip that never answers).
 //
 // The scriptXxx() helpers below each push EXACTLY the writes+reads one call
 // to the leaf's corresponding private helper issues, in the SAME order --
@@ -38,8 +50,9 @@
 #include "devices/color_sensor.h"
 #include "devices/device_config.h"
 #include "devices/device_types.h"
-#include "devices/i2c_bus.h"
 #include "devices/line_sensor.h"
+#include "scripted_i2c_hook.h"
+#include "sim_plant.h"
 
 namespace {
 
@@ -92,66 +105,66 @@ constexpr int kMaxLineAttempts = 20;
 
 // Scripts one readReg16Alt()-shaped call: two write(reg-addr)/read(1-byte)
 // pairs (lo then hi), matching readReg16AltStatus()'s exact call order.
-void scriptAltReg16(Devices::I2CBus& bus, uint16_t value) {
-  bus.scriptWrite(kAltWireAddr, 0);
-  bus.scriptWrite(kAltWireAddr, 0);
+void scriptAltReg16(TestSim::ScriptedI2CHook& bus, uint16_t value) {
+  bus.queueWrite(kAltWireAddr, 0);
+  bus.queueWrite(kAltWireAddr, 0);
   uint8_t lo[1] = {static_cast<uint8_t>(value & 0xFF)};
   uint8_t hi[1] = {static_cast<uint8_t>((value >> 8) & 0xFF)};
-  bus.scriptRead(kAltWireAddr, lo, 1, 0);
-  bus.scriptRead(kAltWireAddr, hi, 1, 0);
+  bus.queueRead(kAltWireAddr, lo, 1, 0);
+  bus.queueRead(kAltWireAddr, hi, 1, 0);
 }
 
 // Scripts one beginStep() AltProbe attempt: writeReg8(0x81) + writeReg8(0x80)
 // + readReg16Alt(0xA4) -- 4 writes + 2 reads total (color_sensor.cpp
 // beginStep()'s AltProbe branch).
-void scriptAltDetectAttempt(Devices::I2CBus& bus, uint16_t probeValue) {
-  bus.scriptWrite(kAltWireAddr, 0);  // writeReg8(0x81, 0xCA)
-  bus.scriptWrite(kAltWireAddr, 0);  // writeReg8(0x80, 0x17)
+void scriptAltDetectAttempt(TestSim::ScriptedI2CHook& bus, uint16_t probeValue) {
+  bus.queueWrite(kAltWireAddr, 0);  // writeReg8(0x81, 0xCA)
+  bus.queueWrite(kAltWireAddr, 0);  // writeReg8(0x80, 0x17)
   scriptAltReg16(bus, probeValue);   // readReg16Alt(0xA4) -- adds 2W + 2R
 }
 
 // Scripts beginStep()'s ApdsProbe attempt (2 writes + 1 read): writeReg8
 // (0x80,0x00) then readReg8(0x80).
-void scriptApdsDetectProbe(Devices::I2CBus& bus, uint8_t enReadback) {
-  bus.scriptWrite(kApdsWireAddr, 0);
-  bus.scriptWrite(kApdsWireAddr, 0);
+void scriptApdsDetectProbe(TestSim::ScriptedI2CHook& bus, uint8_t enReadback) {
+  bus.queueWrite(kApdsWireAddr, 0);
+  bus.queueWrite(kApdsWireAddr, 0);
   uint8_t data[1] = {enReadback};
-  bus.scriptRead(kApdsWireAddr, data, 1, 0);
+  bus.queueRead(kApdsWireAddr, data, 1, 0);
 }
 
 // Scripts initApds()'s full register program (8 writes + 1 read) -- called
 // by beginStep() only when scriptApdsDetectProbe()'s enReadback == 0x00.
-void scriptInitApds(Devices::I2CBus& bus, uint8_t enBeforeOr) {
-  for (int i = 0; i < 6; ++i) bus.scriptWrite(kApdsWireAddr, 0);  // ATIME/CONTROL/EN off/AB/E7/EN on
-  bus.scriptWrite(kApdsWireAddr, 0);                              // readReg8(0x80)'s internal write
+void scriptInitApds(TestSim::ScriptedI2CHook& bus, uint8_t enBeforeOr) {
+  for (int i = 0; i < 6; ++i) bus.queueWrite(kApdsWireAddr, 0);  // ATIME/CONTROL/EN off/AB/E7/EN on
+  bus.queueWrite(kApdsWireAddr, 0);                              // readReg8(0x80)'s internal write
   uint8_t data[1] = {enBeforeOr};
-  bus.scriptRead(kApdsWireAddr, data, 1, 0);
-  bus.scriptWrite(kApdsWireAddr, 0);  // final writeReg8(0x80, en|0x02)
+  bus.queueRead(kApdsWireAddr, data, 1, 0);
+  bus.queueWrite(kApdsWireAddr, 0);  // final writeReg8(0x80, en|0x02)
 }
 
 // Scripts one readReg16Status()-shaped call (single 2-byte burst read) --
 // the APDS steady-read register shape (tick()'s c/r/g/b reads).
-void scriptApdsReg16(Devices::I2CBus& bus, uint16_t value) {
-  bus.scriptWrite(kApdsWireAddr, 0);
+void scriptApdsReg16(TestSim::ScriptedI2CHook& bus, uint16_t value) {
+  bus.queueWrite(kApdsWireAddr, 0);
   uint8_t raw[2] = {static_cast<uint8_t>(value & 0xFF), static_cast<uint8_t>((value >> 8) & 0xFF)};
-  bus.scriptRead(kApdsWireAddr, raw, 2, 0);
+  bus.queueRead(kApdsWireAddr, raw, 2, 0);
 }
 
 // Scripts one readReg8Status()-shaped call to the APDS STATUS register
 // (0x93) -- tick()'s AVALID poll.
-void scriptApdsStatus(Devices::I2CBus& bus, uint8_t statusByte) {
-  bus.scriptWrite(kApdsWireAddr, 0);
+void scriptApdsStatus(TestSim::ScriptedI2CHook& bus, uint8_t statusByte) {
+  bus.queueWrite(kApdsWireAddr, 0);
   uint8_t data[1] = {statusByte};
-  bus.scriptRead(kApdsWireAddr, data, 1, 0);
+  bus.queueRead(kApdsWireAddr, data, 1, 0);
 }
 
 // Scripts one LineSensorLeaf readRaw() call: 4 channel write(index)/read(byte)
 // pairs.
-void scriptLineRead(Devices::I2CBus& bus, const uint16_t raw[4]) {
+void scriptLineRead(TestSim::ScriptedI2CHook& bus, const uint16_t raw[4]) {
   for (int ch = 0; ch < 4; ++ch) {
-    bus.scriptWrite(kLineWireAddr, 0);
+    bus.queueWrite(kLineWireAddr, 0);
     uint8_t data[1] = {static_cast<uint8_t>(raw[ch])};
-    bus.scriptRead(kLineWireAddr, data, 1, 0);
+    bus.queueRead(kLineWireAddr, data, 1, 0);
   }
 }
 
@@ -187,9 +200,10 @@ int32_t expectedNormalize(uint16_t raw, uint32_t mn, uint32_t mx) {
 void scenarioColorAltDetectionSucceedsViaRewakeRetry() {
   beginScenario("ColorSensorLeaf: ALT detection succeeds via re-wake retry, then decodes a scripted frame");
 
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   Devices::ColorConfig cfg;  // zero-defaulted -> leaf applies its ship defaults
-  Devices::ColorSensorLeaf sensor(bus, cfg);
+  Devices::ColorSensorLeaf sensor(plant, cfg);
 
   // Attempts 1 and 2: chip still powering up -- probe reads back zero.
   scriptAltDetectAttempt(bus, 0x0000);
@@ -252,9 +266,10 @@ void scenarioColorAltDetectionSucceedsViaRewakeRetry() {
 void scenarioColorFallsBackToApds() {
   beginScenario("ColorSensorLeaf: ALT never responds -- detection falls back to APDS9960");
 
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   Devices::ColorConfig cfg;
-  Devices::ColorSensorLeaf sensor(bus, cfg);
+  Devices::ColorSensorLeaf sensor(plant, cfg);
 
   for (int i = 0; i < kMaxAltAttempts; ++i) {
     scriptAltDetectAttempt(bus, 0x0000);  // every ALT attempt reads back zero
@@ -302,9 +317,10 @@ void scenarioColorFallsBackToApds() {
 void scenarioLineRawToNormalized() {
   beginScenario("LineSensorLeaf: raw -> normalized produces the expected 4-channel values");
 
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   Devices::LineConfig cfg;  // zero-defaulted -> calMin=0, calMax defaults to 255/channel
-  Devices::LineSensorLeaf sensor(bus, cfg);
+  Devices::LineSensorLeaf sensor(plant, cfg);
 
   uint16_t probeRaw[4] = {5, 5, 5, 5};
   scriptLineRead(bus, probeRaw);  // beginStep()'s detection probe
@@ -332,13 +348,14 @@ void scenarioLineRawToNormalized() {
 
   // Custom calibration window (calMin=50, calMax=200/channel) -- a fresh
   // LineSensorLeaf so beginStep()'s config_ starts from these explicit bounds.
-  Devices::I2CBus bus2;
+  TestSim::SimPlant plant2;
+  TestSim::ScriptedI2CHook bus2(plant2);
   Devices::LineConfig cfg2;
   for (int ch = 0; ch < 4; ++ch) {
     cfg2.calMin[ch] = 50;
     cfg2.calMax[ch] = 200;
   }
-  Devices::LineSensorLeaf sensor2(bus2, cfg2);
+  Devices::LineSensorLeaf sensor2(plant2, cfg2);
   uint16_t probeRaw2[4] = {100, 100, 100, 100};
   scriptLineRead(bus2, probeRaw2);
   sensor2.beginStep(0);
@@ -382,13 +399,14 @@ void scenarioAbsentDeviceNeverHangs() {
   // test (probe != 0); 0xFF correctly fails the APDS test (readback ==
   // 0x00) the way a floating/un-acked real bus would.
   {
-    Devices::I2CBus bus;
+    TestSim::SimPlant plant;
+    TestSim::ScriptedI2CHook bus(plant);
     for (int i = 0; i < kMaxAltAttempts; ++i) {
       scriptAltDetectAttempt(bus, 0x0000);
     }
     scriptApdsDetectProbe(bus, 0xFF);  // readback != 0x00 -- APDS never answered either
     Devices::ColorConfig cfg;
-    Devices::ColorSensorLeaf sensor(bus, cfg);
+    Devices::ColorSensorLeaf sensor(plant, cfg);
 
     int callsUsed = 0;
     const int kBound = kMaxAltAttempts + 2;  // 20 ALT attempts + 1 APDS attempt + margin
@@ -410,9 +428,10 @@ void scenarioAbsentDeviceNeverHangs() {
 
   // LineSensorLeaf: no chip at 0x1A.
   {
-    Devices::I2CBus bus;  // no scripts queued at all
+    TestSim::SimPlant plant;
+    TestSim::ScriptedI2CHook bus(plant);  // no scripts queued at all
     Devices::LineConfig cfg;
-    Devices::LineSensorLeaf sensor(bus, cfg);
+    Devices::LineSensorLeaf sensor(plant, cfg);
 
     int callsUsed = 0;
     const int kBound = kMaxLineAttempts + 2;

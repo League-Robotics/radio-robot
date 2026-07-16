@@ -1,5 +1,8 @@
 ---
-status: pending
+status: done
+sprint: '108'
+tickets:
+- 108-008
 ---
 
 # Color sensor APDS probe detects "present" on a NAK'd bus read

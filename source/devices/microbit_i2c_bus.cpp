@@ -1,9 +1,9 @@
-// i2c_bus.cpp — Devices::I2CBus real (non-HOST_BUILD) implementation.
-// Ported from source/com/i2c_bus.cpp; see i2c_bus.h's file header for the
-// port/re-casing notes. Behavior is byte-for-byte identical to the ported
-// source — only member names changed (leading-underscore -> trailing-
-// underscore) and the enclosing namespace (Devices).
-#include "devices/i2c_bus.h"
+// microbit_i2c_bus.cpp — Devices::MicroBitI2CBus real implementation.
+// Moved verbatim from the old i2c_bus.cpp (ticket DB-003, device-bus-
+// tickets.md) when i2c_bus.h was reduced to a pure interface (sprint 108
+// ticket 001) — only the class name changed (I2CBus -> MicroBitI2CBus) and
+// the include; no behavior change.
+#include "devices/microbit_i2c_bus.h"
 #include "codal_target_hal.h"  // target_disable_irq() / target_enable_irq()
 #include "MicroBit.h"          // system_timer_current_time_us()
 #include <cstdio>
@@ -14,7 +14,7 @@ namespace Devices {
 // Construction
 // ---------------------------------------------------------------------------
 
-I2CBus::I2CBus(MicroBitI2C& bus)
+MicroBitI2CBus::MicroBitI2CBus(MicroBitI2C& bus)
     : bus_(bus),
       inUse_(false),
       inFlightAddr_(0),
@@ -44,14 +44,15 @@ I2CBus::I2CBus(MicroBitI2C& bus)
 // Clock
 // ---------------------------------------------------------------------------
 
-uint64_t I2CBus::clockUs() { return system_timer_current_time_us(); }
+uint64_t MicroBitI2CBus::clockUs() { return system_timer_current_time_us(); }
 
 // ---------------------------------------------------------------------------
 // I2C forwarding
 // ---------------------------------------------------------------------------
 
-int I2CBus::write(uint16_t address, uint8_t* data, int len, bool repeated,
-                   uint32_t preClear, uint32_t postClear) {
+int MicroBitI2CBus::write(uint16_t address, uint8_t* data, int len,
+                           bool repeated, uint32_t preClear,
+                           uint32_t postClear) {
   // address is the 8-bit wire address (7-bit addr << 1).
   uint16_t addr7 = static_cast<uint16_t>(address >> 1);
 
@@ -72,8 +73,8 @@ int I2CBus::write(uint16_t address, uint8_t* data, int len, bool repeated,
 
   // Always mask IRQs for the flag check-and-set. When irqGuard_ is on we
   // KEEP them masked through the whole bus_ transaction (nRF52 TWIM errata
-  // fix — see i2c_bus.h / NRF52I2C::waitForStop); when off, we re-enable
-  // before the transaction (original narrow-guard behaviour).
+  // fix — see microbit_i2c_bus.h / NRF52I2C::waitForStop); when off, we
+  // re-enable before the transaction (original narrow-guard behaviour).
   target_disable_irq();
   bool alreadyInUse = inUse_;
   if (alreadyInUse) {
@@ -102,8 +103,9 @@ int I2CBus::write(uint16_t address, uint8_t* data, int len, bool repeated,
   return status;
 }
 
-int I2CBus::read(uint16_t address, uint8_t* data, int len, bool repeated,
-                  uint32_t preClear, uint32_t postClear) {
+int MicroBitI2CBus::read(uint16_t address, uint8_t* data, int len,
+                          bool repeated, uint32_t preClear,
+                          uint32_t postClear) {
   uint16_t addr7 = static_cast<uint16_t>(address >> 1);
 
   int idx = findOrAdd(addr7);
@@ -146,19 +148,20 @@ int I2CBus::read(uint16_t address, uint8_t* data, int len, bool repeated,
 // Clearance safety-net wait (103-002, M1 fix)
 // ---------------------------------------------------------------------------
 
-void I2CBus::waitForClearance(uint64_t entryDeadline) {
+void MicroBitI2CBus::waitForClearance(uint64_t entryDeadline) {
   uint64_t now = clockUs();
   if (now >= entryDeadline) return;
 
   // Entered before the clearance deadline -- the loop was supposed to own
-  // this gap (runAndWait/sleepUntil, ticket 008); count the trip (i2c_bus.h's
-  // own accessor comment: the narrow signal ticket 001 numbered as
-  // Telemetry.fault_bits bit 0). NEVER spin: yield the shortfall via
-  // fiber_sleep() -- the same cooperative primitive clock.h's Sleeper wraps
-  // -- rounded UP to whole milliseconds. fiber_sleep() reliably sleeps AT
-  // LEAST the requested duration, so rounding up never shortchanges the real
-  // vendor clearance requirement (docs/knowledge/2026-07-04-encoder-wedge.md)
-  // -- it only ever waits slightly longer than strictly necessary.
+  // this gap (runAndWait/sleepUntil, ticket 008); count the trip
+  // (microbit_i2c_bus.h's own accessor comment: the narrow signal ticket
+  // 001 numbered as Telemetry.fault_bits bit 0). NEVER spin: yield the
+  // shortfall via fiber_sleep() -- the same cooperative primitive clock.h's
+  // Sleeper wraps -- rounded UP to whole milliseconds. fiber_sleep()
+  // reliably sleeps AT LEAST the requested duration, so rounding up never
+  // shortchanges the real vendor clearance requirement
+  // (docs/knowledge/2026-07-04-encoder-wedge.md) -- it only ever waits
+  // slightly longer than strictly necessary.
   ++clearanceSafetyNetCount_;
   uint64_t shortfallUs = entryDeadline - now;
   uint32_t shortfallMs = static_cast<uint32_t>((shortfallUs + 999) / 1000);
@@ -169,8 +172,8 @@ void I2CBus::waitForClearance(uint64_t entryDeadline) {
 // Transaction log (diagnostic ring buffer)
 // ---------------------------------------------------------------------------
 
-void I2CBus::logTxn(uint16_t addr7, uint8_t rw, int len, const uint8_t* data,
-                     int status) {
+void MicroBitI2CBus::logTxn(uint16_t addr7, uint8_t rw, int len,
+                             const uint8_t* data, int status) {
   if (!logOn_) return;
   TxnLog& e = log_[logHead_];
   e.t = static_cast<uint32_t>(clockUs());  // [us]
@@ -188,7 +191,8 @@ void I2CBus::logTxn(uint16_t addr7, uint8_t rw, int len, const uint8_t* data,
   ++logTotal_;
 }
 
-void I2CBus::dumpRecent(void (*fn)(const char*, void*), void* ctx) const {
+void MicroBitI2CBus::dumpRecent(void (*fn)(const char*, void*),
+                                 void* ctx) const {
   if (!fn || !ctx) return;
   // Walk the ring oldest->newest. If we've wrapped, oldest is at logHead_;
   // otherwise the buffer filled 0..logHead_-1.
@@ -218,21 +222,21 @@ void I2CBus::dumpRecent(void (*fn)(const char*, void*), void* ctx) const {
 // Per-device statistics
 // ---------------------------------------------------------------------------
 
-uint32_t I2CBus::txnCount(uint16_t addr) const {
+uint32_t MicroBitI2CBus::txnCount(uint16_t addr) const {
   for (int i = 0; i < deviceCount_; ++i) {
     if (devices_[i].addr == addr) return devices_[i].txnCount;
   }
   return 0;
 }
 
-uint32_t I2CBus::errCount(uint16_t addr) const {
+uint32_t MicroBitI2CBus::errCount(uint16_t addr) const {
   for (int i = 0; i < deviceCount_; ++i) {
     if (devices_[i].addr == addr) return devices_[i].errCount;
   }
   return 0;
 }
 
-int I2CBus::lastErr(uint16_t addr) const {
+int MicroBitI2CBus::lastErr(uint16_t addr) const {
   for (int i = 0; i < deviceCount_; ++i) {
     if (devices_[i].addr == addr) return devices_[i].lastErr;
   }
@@ -243,7 +247,7 @@ int I2CBus::lastErr(uint16_t addr) const {
 // Lazy per-device clearance timers — non-spinning peek
 // ---------------------------------------------------------------------------
 
-bool I2CBus::clear(uint16_t addr7) const {
+bool MicroBitI2CBus::clear(uint16_t addr7) const {
   for (int i = 0; i < deviceCount_; ++i) {
     if (devices_[i].addr == addr7) {
       return clockUs() >= devices_[i].readyAt;
@@ -256,7 +260,7 @@ bool I2CBus::clear(uint16_t addr7) const {
 // Utility
 // ---------------------------------------------------------------------------
 
-void I2CBus::resetStats() {
+void MicroBitI2CBus::resetStats() {
   reentryViolations_ = 0;
   reentryInFlightAddr_ = 0;
   reentryNewAddr_ = 0;
@@ -282,7 +286,7 @@ void I2CBus::resetStats() {
 // Private helpers
 // ---------------------------------------------------------------------------
 
-int I2CBus::findOrAdd(uint16_t addr7) {
+int MicroBitI2CBus::findOrAdd(uint16_t addr7) {
   // Linear scan: return existing slot if found.
   for (int i = 0; i < deviceCount_; ++i) {
     if (devices_[i].addr == addr7) return i;
@@ -312,7 +316,7 @@ int I2CBus::findOrAdd(uint16_t addr7) {
   return overflow;
 }
 
-void I2CBus::record(uint16_t addr7, int status) {
+void MicroBitI2CBus::record(uint16_t addr7, int status) {
   int idx = findOrAdd(addr7);
   ++devices_[idx].txnCount;
   if (status != MICROBIT_OK) {

@@ -12,8 +12,16 @@
 // devices_otos_harness.cpp's Otos-scripting convention, duplicated here per
 // this codebase's established per-harness-file fixture convention.
 // Compiled by test_app_odometry.py with -DHOST_BUILD against odometry.cpp,
-// nezha_motor.cpp, velocity_pid.cpp, otos.cpp, i2c_bus_host.cpp,
-// body_kinematics.cpp.
+// nezha_motor.cpp, velocity_pid.cpp, otos.cpp, sim_plant.cpp,
+// {wheel,otos}_plant.cpp, body_kinematics.cpp.
+//
+// Migrated by sprint 108 ticket 009 off the deleted source/devices/
+// i2c_bus_host.cpp scripted-FIFO Devices::I2CBus fake (ticket 001 reduced
+// Devices::I2CBus to a pure interface and removed it) onto a
+// TestSim::SimPlant scripted deterministically via TestSim::ScriptedI2CHook
+// -- see devices_motor_harness.cpp's/scripted_i2c_hook.h's own header for
+// the migration rationale. Every scenario below is otherwise UNCHANGED from
+// the pre-migration harness -- only the bus/scripting plumbing moved.
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -23,10 +31,11 @@
 #include "app/telemetry.h"
 #include "devices/device_config.h"
 #include "devices/device_types.h"
-#include "devices/i2c_bus.h"
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "kinematics/body_kinematics.h"
+#include "scripted_i2c_hook.h"
+#include "sim_plant.h"
 
 namespace {
 
@@ -75,10 +84,10 @@ void checkNear(float actual, float expected, float tol, const std::string& what)
 // --- Devices::NezhaMotor scripting helpers (duplicated from
 // devices_motor_harness.cpp) ------------------------------------------------
 
-void scriptEncoderRequestCollect(Devices::I2CBus& bus, uint16_t wireAddr,
+void scriptEncoderRequestCollect(TestSim::ScriptedI2CHook& bus, uint16_t wireAddr,
                                   float positionMm) {
-  bus.scriptWrite(wireAddr, /*status=*/0);   // requestEncoder()'s 0x46 write
-  bus.scriptWrite(wireAddr, /*status=*/0);   // slack: a possible same-cycle duty write (0x60)
+  bus.queueWrite(wireAddr, /*status=*/0);   // requestEncoder()'s 0x46 write
+  bus.queueWrite(wireAddr, /*status=*/0);   // slack: a possible same-cycle duty write (0x60)
 
   int32_t raw = static_cast<int32_t>(std::lround(positionMm * 10.0f));
   uint8_t data[4] = {
@@ -87,7 +96,7 @@ void scriptEncoderRequestCollect(Devices::I2CBus& bus, uint16_t wireAddr,
       static_cast<uint8_t>((raw >> 16) & 0xFF),
       static_cast<uint8_t>((raw >> 24) & 0xFF),
   };
-  bus.scriptRead(wireAddr, data, 4, /*status=*/0);   // collectEncoder()'s 4-byte read
+  bus.queueRead(wireAddr, data, 4, /*status=*/0);   // collectEncoder()'s 4-byte read
 }
 
 Devices::MotorConfig baseNezhaConfig(uint32_t port) {
@@ -99,7 +108,7 @@ Devices::MotorConfig baseNezhaConfig(uint32_t port) {
   return cfg;
 }
 
-void driveToPosition(Devices::NezhaMotor& motor, Devices::I2CBus& bus,
+void driveToPosition(Devices::NezhaMotor& motor, TestSim::ScriptedI2CHook& bus,
                       uint16_t wireAddr, float positionMm, uint64_t nowUs) {
   scriptEncoderRequestCollect(bus, wireAddr, positionMm);
   motor.requestSample();
@@ -119,16 +128,16 @@ constexpr uint16_t kOtosWireAddr = static_cast<uint16_t>(kOtosAddr7 << 1);     /
 constexpr float kPosMmPerLsb = 0.305f;
 constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);
 
-void scriptGenerousWrites(Devices::I2CBus& bus, int count) {
-  for (int i = 0; i < count; ++i) bus.scriptWrite(kOtosWireAddr, /*status=*/0);
+void scriptGenerousWrites(TestSim::ScriptedI2CHook& bus, int count) {
+  for (int i = 0; i < count; ++i) bus.queueWrite(kOtosWireAddr, /*status=*/0);
 }
 
-void scriptProductId(Devices::I2CBus& bus, uint8_t id, int status = 0) {
+void scriptProductId(TestSim::ScriptedI2CHook& bus, uint8_t id, int status = 0) {
   uint8_t data[1] = {id};
-  bus.scriptRead(kOtosWireAddr, data, 1, status);
+  bus.queueRead(kOtosWireAddr, data, 1, status);
 }
 
-void scriptPosVel(Devices::I2CBus& bus, int16_t x, int16_t y, int16_t h,
+void scriptPosVel(TestSim::ScriptedI2CHook& bus, int16_t x, int16_t y, int16_t h,
                    int16_t vx, int16_t vy, int16_t vh, int status = 0) {
   uint8_t raw[12];
   raw[0]  = static_cast<uint8_t>(x & 0xFF);
@@ -143,7 +152,7 @@ void scriptPosVel(Devices::I2CBus& bus, int16_t x, int16_t y, int16_t h,
   raw[9]  = static_cast<uint8_t>((vy >> 8) & 0xFF);
   raw[10] = static_cast<uint8_t>(vh & 0xFF);
   raw[11] = static_cast<uint8_t>((vh >> 8) & 0xFF);
-  bus.scriptRead(kOtosWireAddr, raw, 12, status);
+  bus.queueRead(kOtosWireAddr, raw, 12, status);
 }
 
 // ===========================================================================
@@ -156,12 +165,12 @@ void scriptPosVel(Devices::I2CBus& bus, int16_t x, int16_t y, int16_t h,
 void scenarioStraightLineAccumulatesDistanceNoHeadingChange() {
   beginScenario("Odometry::integrate(): straight-line (equal wheel deltas) accumulates x, leaves theta at 0");
 
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor left(bus, baseNezhaConfig(1));
-  Devices::NezhaMotor right(bus, baseNezhaConfig(2));
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
 
   const float trackWidth = 200.0f;  // [mm]
   App::Odometry odom(left, right, trackWidth);
@@ -189,12 +198,12 @@ void scenarioStraightLineAccumulatesDistanceNoHeadingChange() {
 void scenarioPureRotationAccumulatesHeadingNoTranslation() {
   beginScenario("Odometry::integrate(): pure-rotation (vL == -vR analog) accumulates theta, leaves x/y at 0");
 
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor left(bus, baseNezhaConfig(1));
-  Devices::NezhaMotor right(bus, baseNezhaConfig(2));
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
 
   const float trackWidth = 200.0f;  // [mm]
   App::Odometry odom(left, right, trackWidth);
@@ -231,12 +240,12 @@ void scenarioPureRotationAccumulatesHeadingNoTranslation() {
 void scenarioBaselineSeededFromLeafPositionAtConstruction() {
   beginScenario("Odometry constructor seeds the delta baseline from the leaves' own position() -- no phantom first jump");
 
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor left(bus, baseNezhaConfig(1));
-  Devices::NezhaMotor right(bus, baseNezhaConfig(2));
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
 
   // Advance both leaves to a nonzero position BEFORE constructing Odometry.
   driveToPosition(left, bus, wireAddr, 500.0f, 20000);
@@ -259,10 +268,10 @@ void scenarioBaselineSeededFromLeafPositionAtConstruction() {
 void scenarioApplyOtosSamplePresentAndConnectedCopiesPose() {
   beginScenario("applyOtosSample(): present+connected -- frame carries hasOtos/otosConnected/otos pose");
 
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   Devices::OtosConfig cfg;  // zero offsets, scale 1.0 -- identity transform
-  Devices::Otos otos(bus, cfg);
+  Devices::Otos otos(plant, cfg);
 
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
@@ -284,10 +293,10 @@ void scenarioApplyOtosSamplePresentAndConnectedCopiesPose() {
 void scenarioApplyOtosSampleBurstFailureHoldsStalePoseReportsDisconnected() {
   beginScenario("applyOtosSample(): a failed burst read holds the stale pose but reports otosConnected=false");
 
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   Devices::OtosConfig cfg;
-  Devices::Otos otos(bus, cfg);
+  Devices::Otos otos(plant, cfg);
 
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
@@ -312,10 +321,10 @@ void scenarioApplyOtosSampleBurstFailureHoldsStalePoseReportsDisconnected() {
 void scenarioApplyOtosSampleNeverDetectedLeavesFrameUntouched() {
   beginScenario("applyOtosSample(): a never-detected chip leaves frame.otos untouched, both bools false");
 
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   Devices::OtosConfig cfg;
-  Devices::Otos otos(bus, cfg);
+  Devices::Otos otos(plant, cfg);
 
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x00);  // wrong id -- real chip reports 0x5F
@@ -345,10 +354,10 @@ void scenarioApplyOtosSampleNeverDetectedLeavesFrameUntouched() {
 void scenarioApplyOtosSampleRateLimitSkipStillReachesFrame() {
   beginScenario("applyOtosSample(): a too-soon call issues zero extra bus traffic but still reaches the frame");
 
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   Devices::OtosConfig cfg;
-  Devices::Otos otos(bus, cfg);
+  Devices::Otos otos(plant, cfg);
 
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);

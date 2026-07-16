@@ -17,13 +17,7 @@ void WheelPlant::step(float appliedDuty, float dt) {
   position_ += velocity_ * dt;
 }
 
-void WheelPlant::scriptEncoderResponse(Devices::I2CBus& bus, uint16_t wireAddr,
-                                        int writeCount) {
-  int status = disconnected_ ? kNakStatus : 0;
-  for (int i = 0; i < writeCount; ++i) {
-    bus.scriptWrite(wireAddr, status);
-  }
-
+float WheelPlant::reportedPosition() {
   // Fault-knob precedence: freeze wins outright (an explicitly frozen
   // reading is never itself subject to dropout-driven staleness -- there is
   // nothing "fresher" to fall back to while frozen). Otherwise the dropout
@@ -40,22 +34,24 @@ void WheelPlant::scriptEncoderResponse(Devices::I2CBus& bus, uint16_t wireAddr,
     } else {
       reportPosition = position_;
     }
+  } else if (encoderJitter_ && std::fabs(velocity_) < kRestVelocityThreshold) {
+    // At rest: dither by one wire LSB, flipping sign only once every
+    // kDitherPeriod calls (held steady in between) -- see kDitherPeriod's
+    // own comment in wheel_plant.h for why every-call alternation (the
+    // 108-011 original) is wrong. position_ itself (plant truth) is never
+    // touched.
+    reportPosition = position_ + (ditherPhase_ ? kDitherLsb : -kDitherLsb);
+    if (++ditherCounter_ >= kDitherPeriod) {
+      ditherCounter_ = 0;
+      ditherPhase_ = !ditherPhase_;
+    }
   } else {
+    // Moving again -- next rest period starts its dither cycle fresh.
+    ditherCounter_ = 0;
     reportPosition = position_;
   }
   lastReportedPosition_ = reportPosition;
-
-  // wheelTravelCalib=1.0, fwdSign=+1 convention (matches every existing
-  // scriptEncoderRequestCollect()-style helper in this codebase): raw ==
-  // reportPosition in tenths of a millimeter, exactly.
-  int32_t raw = static_cast<int32_t>(std::lround(reportPosition * 10.0f));
-  uint8_t data[4] = {
-      static_cast<uint8_t>(raw & 0xFF),
-      static_cast<uint8_t>((raw >> 8) & 0xFF),
-      static_cast<uint8_t>((raw >> 16) & 0xFF),
-      static_cast<uint8_t>((raw >> 24) & 0xFF),
-  };
-  bus.scriptRead(wireAddr, data, 4, status);
+  return reportPosition;
 }
 
 void WheelPlant::freezePosition(bool freeze) {

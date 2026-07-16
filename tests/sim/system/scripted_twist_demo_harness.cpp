@@ -1,12 +1,16 @@
 // scripted_twist_demo_harness.cpp -- 105-006's own Definition of Done
 // (SUC-023): a headless, readable, end-to-end "run one command and see the
 // sim loop move" narrative built ENTIRELY on already-shipped primitives --
-// TestSim::SimApi (105-004) and its plant (105-003) -- boot, twist forward,
-// watch the plant's real first-order velocity ramp, stop, watch velocity
-// converge to (approximately) zero. The STOP phase's convergence assertion
-// was strengthened 106-003 (SUC-026) once SimApi::DutyPredictor lifted the
-// old ~4-cycle safe-observation bound -- see this file's own header comment
-// below for the full derivation.
+// TestSim::SimHarness (migrated 108-004 from the deleted TestSim::SimApi,
+// 105-004) and its plant (TestSim::SimPlant, 108-002, formerly 105-003's
+// scripted plant) -- boot, twist forward, watch the plant's real
+// first-order velocity ramp, stop, watch velocity converge to
+// (approximately) zero. The STOP phase's convergence assertion was
+// strengthened 106-003 (SUC-026) once the deleted SimApi::DutyPredictor
+// lifted the old ~4-cycle safe-observation bound; SimPlant (108-002)
+// responds live rather than predicting, so the same full-convergence
+// observation holds with no predictor to keep in sync at all -- see this
+// file's own header comment below for the full historical derivation.
 //
 // Hand-rolled assertions, PASS/FAIL per phase, nonzero exit on any failure,
 // PLUS a human-readable cycle-by-cycle trace printed to stdout -- mirrors
@@ -94,7 +98,7 @@
 
 #include "messages/envelope.h"
 #include "messages/planner.h"
-#include "sim_api.h"
+#include "sim_harness.h"
 #include "wire_test_codec.h"
 
 namespace {
@@ -191,7 +195,7 @@ int main() {
   std::printf("A readable, headless, off-hardware proof: boot -> twist forward -> the REAL plant's\n");
   std::printf("first-order velocity ramp -> stop -> velocity reverses the ramp and heads back to zero.\n\n");
 
-  TestSim::SimApi sim;
+  TestSim::SimHarness sim;
   bool anyWatchedFaultEver = false;
   bool connHealthyThroughout = true;
   // 106-002 own "sim-assert both cadences" requirement (drive-by fix for
@@ -208,8 +212,8 @@ int main() {
   // ===========================================================================
   beginScenario("boot: motors + OTOS connect, kEventBootReady observed");
 
-  sim.step(1);  // boot phase -- see SimApi::step()'s own doc comment
-  checkTrue(sim.booted(), "booted() true after the first step() call");
+  sim.boot();
+  checkTrue(sim.booted(), "booted() true after boot()");
   checkTrue(sim.motorLeft().connected(), "left motor connected after boot");
   checkTrue(sim.motorRight().connected(), "right motor connected after boot");
 

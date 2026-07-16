@@ -1,9 +1,11 @@
 // devices_clock_harness.cpp — off-hardware acceptance harness for ticket
-// DB-003 (device-bus-tickets.md): proves the HOST_BUILD Devices::Clock fake
-// (source/devices/clock_host.cpp) advances ONLY when a test steps it
-// explicitly (setMicros()/advanceMicros()), never on its own, and that the
-// HOST_BUILD Devices::Sleeper fake records every requested sleepMillis()/
-// yield() call without blocking on a wall clock or sleeping for real.
+// DB-003 (device-bus-tickets.md), migrated by sprint 108 ticket 010 to the
+// pure-interface split: proves TestSim::SimClock (tests/_infra/sim/
+// sim_clock.h, the Devices::Clock host-test fake) advances ONLY when a
+// test steps it explicitly (setMicros()/advanceMicros()), never on its
+// own, and that TestSim::SimSleeper (the Devices::Sleeper host-test fake)
+// records every requested sleepMillis()/yield() call without blocking on a
+// wall clock or sleeping for real.
 //
 // Plain C++ program, hand-rolled assertions — mirrors devices_i2c_bus_
 // harness.cpp / motor_policy_harness.cpp's shape exactly: prints a
@@ -14,7 +16,7 @@
 #include <cstdio>
 #include <string>
 
-#include "devices/clock.h"
+#include "sim_clock.h"
 
 namespace {
 
@@ -69,7 +71,7 @@ void checkU64Eq(uint64_t actual, uint64_t expected, const std::string& what) {
 //    spin).
 void scenarioStartsAtZeroAndDoesNotSelfAdvance() {
   beginScenario("Clock starts at 0us and never advances on its own");
-  Devices::Clock clock;
+  TestSim::SimClock clock;
 
   checkU64Eq(clock.nowMicros(), 0, "fresh Clock reads 0us");
   checkU64Eq(clock.nowMicros(), 0, "a second read is still 0us — no self-advance");
@@ -80,7 +82,7 @@ void scenarioStartsAtZeroAndDoesNotSelfAdvance() {
 //    forward by exactly the requested delta, cumulatively.
 void scenarioSetAndAdvanceMicros() {
   beginScenario("setMicros()/advanceMicros() step the fake clock exactly");
-  Devices::Clock clock;
+  TestSim::SimClock clock;
 
   clock.setMicros(5000);
   checkU64Eq(clock.nowMicros(), 5000, "setMicros(5000) reads back 5000us");
@@ -97,8 +99,8 @@ void scenarioSetAndAdvanceMicros() {
 //    the other (a per-instance fake, unlike I2CBus's shared static one).
 void scenarioInstancesAreIndependent() {
   beginScenario("separate Clock instances do not share state");
-  Devices::Clock a;
-  Devices::Clock b;
+  TestSim::SimClock a;
+  TestSim::SimClock b;
 
   a.setMicros(1000);
   b.setMicros(9000);
@@ -117,7 +119,7 @@ void scenarioInstancesAreIndependent() {
 //    durations, and it does not).
 void scenarioSleeperRecordsRequestedSleeps() {
   beginScenario("Sleeper.sleepMillis() records requests without blocking");
-  Devices::Sleeper sleeper;
+  TestSim::SimSleeper sleeper;
 
   checkIntEq(sleeper.sleepCount(), 0, "fresh Sleeper has made zero sleep requests");
 
@@ -135,7 +137,7 @@ void scenarioSleeperRecordsRequestedSleeps() {
 //    distinguishable from its timed settle/pace sleeps (fiber_sleep()).
 void scenarioYieldRecordedSeparatelyFromSleep() {
   beginScenario("Sleeper.yield() is counted separately from sleepMillis()");
-  Devices::Sleeper sleeper;
+  TestSim::SimSleeper sleeper;
 
   sleeper.yield();
   sleeper.yield();
@@ -150,8 +152,8 @@ void scenarioYieldRecordedSeparatelyFromSleep() {
 //    Clock itself even while the cycle calls Sleeper.sleepMillis().
 void scenarioSleeperNeverAdvancesClock() {
   beginScenario("Sleeper never touches a Clock instance");
-  Devices::Clock clock;
-  Devices::Sleeper sleeper;
+  TestSim::SimClock clock;
+  TestSim::SimSleeper sleeper;
 
   clock.setMicros(1234);
   sleeper.sleepMillis(4);
@@ -171,10 +173,10 @@ int main() {
   scenarioSleeperNeverAdvancesClock();
 
   if (g_failureCount == 0) {
-    std::printf("OK: all Devices::Clock/Sleeper scenarios passed\n");
+    std::printf("OK: all TestSim::SimClock/Sleeper scenarios passed\n");
     return 0;
   }
-  std::printf("FAILED: %d assertion(s) across the Devices::Clock/Sleeper scenarios\n",
+  std::printf("FAILED: %d assertion(s) across the TestSim::SimClock/Sleeper scenarios\n",
               g_failureCount);
   return 1;
 }

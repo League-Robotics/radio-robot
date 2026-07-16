@@ -1,19 +1,21 @@
-"""Off-hardware acceptance proof for ticket 105-004 (SUC-021): TestSim::SimApi
-(``tests/sim/support/sim_api.{h,cpp}``), the composed, steppable harness
-wiring the REAL ``App::RobotLoop`` against the REAL plant
-(``tests/sim/plant/``) and a scripted ``Devices::I2CBus``.
+"""Off-hardware acceptance proof, migrated (ticket 108-004) from TestSim::
+SimApi (``tests/sim/support/sim_api.{h,cpp}``, deleted ticket 108-003) onto
+TestSim::SimHarness/TestSim::SimPlant (``tests/_infra/sim/``), the composed,
+steppable harness wiring the REAL ``App::RobotLoop`` against the REAL plant
+(``tests/sim/plant/``) and a REAL, wire-protocol-parsing ``Devices::I2CBus``
+implementation.
 
-Compiles ``sim_api_harness.cpp`` together with ``sim_api.cpp``,
+Compiles ``sim_api_harness.cpp`` together with ``sim_plant.cpp``,
 ``wire_test_codec.cpp``, the plant sources, and every HOST_BUILD Devices/App
 source the graph needs, with ``-DHOST_BUILD``, against the SAME headers
 every ARM build compiles. Mirrors ``test_plant.py``'s/``test_app_robot_loop.
 py``'s exact shape: compile with the system C++ compiler, run the resulting
 binary, assert it exits 0.
 
-Also asserts (105-004 AC #4) that no MicroBit.h dependency crept into the
-compiled translation units -- the same "no MicroBit.h in the compiled
-translation units" check ticket 001 established, re-run here since sim_api
-composes ticket 001's own RobotLoop plus several more modules.
+Also asserts (originally 105-004 AC #4) that no MicroBit.h dependency crept
+into the compiled translation units -- the same "no MicroBit.h in the
+compiled translation units" check ticket 001 established, re-run here since
+this harness composes ticket 001's own RobotLoop plus several more modules.
 
 Collected under ``tests/sim/system/`` -- already within ``pyproject.toml``'s
 ``testpaths = ["tests/sim"]``, no configuration change needed.
@@ -31,9 +33,10 @@ _SOURCE_DIR = _REPO_ROOT / "source"
 _SYSTEM_DIR = pathlib.Path(__file__).resolve().parent
 _SUPPORT_DIR = _SYSTEM_DIR.parent / "support"
 _PLANT_DIR = _SYSTEM_DIR.parent / "plant"
+_INFRA_SIM_DIR = _REPO_ROOT / "tests" / "_infra" / "sim"
 
 _HARNESS_SRC = _SYSTEM_DIR / "sim_api_harness.cpp"
-_SIM_API_SRC = _SUPPORT_DIR / "sim_api.cpp"
+_SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WIRE_TEST_CODEC_SRC = _SUPPORT_DIR / "wire_test_codec.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
@@ -48,8 +51,7 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "preamble.cpp",
 ]
 _DEVICE_SOURCES = [
-    _SOURCE_DIR / "devices" / "i2c_bus_host.cpp",
-    _SOURCE_DIR / "devices" / "clock_host.cpp",
+    _INFRA_SIM_DIR / "sim_clock.cpp",
     _SOURCE_DIR / "devices" / "velocity_pid.cpp",
     _SOURCE_DIR / "devices" / "nezha_motor.cpp",
     _SOURCE_DIR / "devices" / "otos.cpp",
@@ -81,7 +83,7 @@ def _find_cxx_compiler() -> str:
 
 def _all_sources():
     return (
-        [_HARNESS_SRC, _SIM_API_SRC, _WIRE_TEST_CODEC_SRC, _WHEEL_PLANT_SRC, _OTOS_PLANT_SRC]
+        [_HARNESS_SRC, _SIM_PLANT_SRC, _WIRE_TEST_CODEC_SRC, _WHEEL_PLANT_SRC, _OTOS_PLANT_SRC]
         + _APP_SOURCES
         + _DEVICE_SOURCES
         + _MESSAGE_SOURCES
@@ -90,7 +92,7 @@ def _all_sources():
 
 
 def test_sim_api_harness_compiles_and_passes(tmp_path):
-    """Compile sim_api + its full dependency graph + the harness; assert
+    """Compile SimPlant + its full dependency graph + the harness; assert
     every scenario passes."""
     sources = _all_sources()
     for src in sources:
@@ -113,6 +115,8 @@ def test_sim_api_harness_compiles_and_passes(tmp_path):
             str(_SUPPORT_DIR),
             "-I",
             str(_PLANT_DIR),
+            "-I",
+            str(_INFRA_SIM_DIR),
             "-o",
             str(binary),
             *[str(src) for src in sources],
@@ -134,12 +138,17 @@ def test_sim_api_harness_compiles_and_passes(tmp_path):
 
 
 def test_sim_api_no_microbit_dependency():
-    """105-004 AC #4: sim_api's own public surface has no dependency on
-    MicroBit.h or any ARM-only header -- grep sim_api.{h,cpp} directly (the
-    compile step above already proves the whole graph builds HOST_BUILD-clean,
-    this is the same static "no MicroBit.h in the compiled translation units"
-    check ticket 001 established, re-applied to sim_api's own two files)."""
-    for path in (_SUPPORT_DIR / "sim_api.h", _SUPPORT_DIR / "sim_api.cpp"):
+    """No dependency on MicroBit.h or any ARM-only header -- grep
+    sim_harness.h/sim_plant.{h,cpp} directly (the compile step above already
+    proves the whole graph builds HOST_BUILD-clean; this is the same static
+    "no MicroBit.h in the compiled translation units" check ticket 001
+    established, re-applied to this harness's own composition-root files,
+    now that they replace the deleted sim_api.{h,cpp})."""
+    for path in (
+        _INFRA_SIM_DIR / "sim_harness.h",
+        _INFRA_SIM_DIR / "sim_plant.h",
+        _INFRA_SIM_DIR / "sim_plant.cpp",
+    ):
         text = path.read_text()
         assert "MicroBit.h" not in text, f"{path} must not depend on MicroBit.h"
 

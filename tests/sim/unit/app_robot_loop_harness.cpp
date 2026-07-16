@@ -3,20 +3,40 @@
 // boot loop + main cycle body extracted from source/main.cpp.
 //
 // Proves the extraction is genuinely host-buildable and runnable: constructs
-// every leaf/app module RobotLoop needs over a scripted Devices::I2CBus
-// (i2c_bus_host.cpp) and a scripted Devices::Clock/Sleeper pair
-// (clock_host.cpp), a minimal App::Transport stub in place of real
-// serial/radio, drives boot() to completion, then cycle() a few times, and
-// asserts: no bus script under/over-run (proves cycle ordering matches what
-// main.cpp's pre-extraction body actually issued), encoder-derived
-// position()/velocity() reflect the scripted samples (proves the
-// request/settle/collect timing survived the move), the Sleeper recorded a
-// sleep for every runAndWait/pace point (proves markTime()/sleepUntil() now
-// route through Devices::Clock/Sleeper, not system_timer_current_time()/
-// uBit.sleep()), and Telemetry emitted real bytes on both the primary and
-// (given enough cycles) secondary cadence. No MicroBit.h is included by
-// this file, robot_loop.h, or robot_loop.cpp -- compiled with -DHOST_BUILD
-// against the same headers the ARM build uses.
+// every leaf/app module RobotLoop needs over a TestSim::SimPlant (108-002),
+// scripted deterministically via TestSim::ScriptedI2CHook (108-009), and a
+// TestSim::SimClock/SimSleeper pair (tests/_infra/sim/sim_clock.cpp, the
+// Devices::Clock/Sleeper host-test fakes -- sprint 108 ticket 010), a
+// minimal App::Transport stub in place of real serial/radio, drives boot()
+// to completion, then cycle() a few times, and asserts: no bus script
+// under/over-run (proves cycle ordering matches what main.cpp's
+// pre-extraction body actually issued), encoder-derived position()/
+// velocity() reflect the scripted samples (proves the request/settle/collect
+// timing survived the move), the Sleeper recorded a sleep for every
+// runAndWait/pace point (proves markTime()/sleepUntil() now route through
+// Devices::Clock/Sleeper, not system_timer_current_time()/uBit.sleep()), and
+// Telemetry emitted real bytes on both the primary and (given enough
+// cycles) secondary cadence. No MicroBit.h is included by this file,
+// robot_loop.h, or robot_loop.cpp -- compiled with -DHOST_BUILD against the
+// same headers the ARM build uses.
+//
+// Migrated by sprint 108 ticket 009 off the deleted source/devices/
+// i2c_bus_host.cpp scripted-FIFO Devices::I2CBus fake (ticket 001 reduced
+// Devices::I2CBus to a pure interface and removed it) -- see
+// devices_motor_harness.cpp's/scripted_i2c_hook.h's own header for the
+// migration rationale. Every scenario below is otherwise UNCHANGED from the
+// pre-migration harness -- only the bus/scripting plumbing moved. This
+// harness needs exact, cycle-by-cycle register control (an exact
+// write/read transaction budget across two motors + OTOS interleaved on one
+// bus, a specific CONFIG-dispatch ack-ring fingerprint) that SimPlant's own
+// live physics responses cannot give directly -- so it stays a small C++
+// SimPlant-hook harness rather than a pure-Python SimHarness/SimLoop test
+// (ticket 009's own documented fallback for scenarios needing
+// host-unobservable, exact register-level control). Note ticket 108-003's
+// TestSim::SimHarness/tests/sim/system/ now cover the SAME "whole loop end
+// to end" ground with the REAL, live-responding SimPlant physics (no
+// scripting) -- this harness's own value is the exact register-level
+// transaction-budget/CONFIG-ack proof those system tests don't attempt.
 //
 // Mirrors app_preamble_harness.cpp's exact scripting/assertion-plumbing
 // conventions (this codebase's established per-harness-file style).
@@ -33,15 +53,16 @@
 #include "app/preamble.h"
 #include "app/robot_loop.h"
 #include "app/telemetry.h"
-#include "devices/clock.h"
 #include "devices/color_sensor.h"
 #include "devices/device_config.h"
 #include "devices/device_types.h"
-#include "devices/i2c_bus.h"
 #include "devices/line_sensor.h"
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "messages/wire_runtime.h"
+#include "scripted_i2c_hook.h"
+#include "sim_clock.h"
+#include "sim_plant.h"
 #include "support/fake_transport.h"
 
 namespace {
@@ -113,41 +134,41 @@ Devices::MotorConfig baseMotorConfig(uint32_t port) {
   return cfg;
 }
 
-void scriptEncoderCall(Devices::I2CBus& bus, int writeStatus, int readStatus) {
-  bus.scriptWrite(kMotorWireAddr, writeStatus);
+void scriptEncoderCall(TestSim::ScriptedI2CHook& bus, int writeStatus, int readStatus) {
+  bus.queueWrite(kMotorWireAddr, writeStatus);
   uint8_t data[4] = {0, 0, 0, 0};
-  bus.scriptRead(kMotorWireAddr, data, 4, readStatus);
+  bus.queueRead(kMotorWireAddr, data, 4, readStatus);
 }
 
 // begin()'s hardReset(): 4 calls (3 median snapshots + 1 readback), all
 // succeeding, all reading back raw=0 -- see app_preamble_harness.cpp's
 // identical helper for the full derivation.
-void scriptMotorBeginSuccess(Devices::I2CBus& bus) {
+void scriptMotorBeginSuccess(TestSim::ScriptedI2CHook& bus) {
   for (int i = 0; i < 4; ++i) scriptEncoderCall(bus, /*writeStatus=*/0, /*readStatus=*/0);
 }
 
-void scriptOtosBeginSuccess(Devices::I2CBus& bus) {
-  for (int i = 0; i < 7; ++i) bus.scriptWrite(kOtosWireAddr, 0);
+void scriptOtosBeginSuccess(TestSim::ScriptedI2CHook& bus) {
+  for (int i = 0; i < 7; ++i) bus.queueWrite(kOtosWireAddr, 0);
   uint8_t id[1] = {0x5F};
-  bus.scriptRead(kOtosWireAddr, id, 1, 0);
+  bus.queueRead(kOtosWireAddr, id, 1, 0);
 }
 
-void scriptColorBeginSuccess(Devices::I2CBus& bus) {
-  bus.scriptWrite(kColorAltWireAddr, 0);  // writeReg8(0x81, 0xCA)
-  bus.scriptWrite(kColorAltWireAddr, 0);  // writeReg8(0x80, 0x17)
-  bus.scriptWrite(kColorAltWireAddr, 0);  // readReg16Alt(0xA4) lo-byte select
-  bus.scriptWrite(kColorAltWireAddr, 0);  // readReg16Alt(0xA4) hi-byte select
+void scriptColorBeginSuccess(TestSim::ScriptedI2CHook& bus) {
+  bus.queueWrite(kColorAltWireAddr, 0);  // writeReg8(0x81, 0xCA)
+  bus.queueWrite(kColorAltWireAddr, 0);  // writeReg8(0x80, 0x17)
+  bus.queueWrite(kColorAltWireAddr, 0);  // readReg16Alt(0xA4) lo-byte select
+  bus.queueWrite(kColorAltWireAddr, 0);  // readReg16Alt(0xA4) hi-byte select
   uint8_t lo[1] = {0x34};
   uint8_t hi[1] = {0x12};
-  bus.scriptRead(kColorAltWireAddr, lo, 1, 0);
-  bus.scriptRead(kColorAltWireAddr, hi, 1, 0);
+  bus.queueRead(kColorAltWireAddr, lo, 1, 0);
+  bus.queueRead(kColorAltWireAddr, hi, 1, 0);
 }
 
-void scriptLineBeginSuccess(Devices::I2CBus& bus) {
+void scriptLineBeginSuccess(TestSim::ScriptedI2CHook& bus) {
   for (int ch = 0; ch < 4; ++ch) {
-    bus.scriptWrite(kLineWireAddr, 0);
+    bus.queueWrite(kLineWireAddr, 0);
     uint8_t data[1] = {100};
-    bus.scriptRead(kLineWireAddr, data, 1, 0);
+    bus.queueRead(kLineWireAddr, data, 1, 0);
   }
 }
 
@@ -160,7 +181,7 @@ void scriptLineBeginSuccess(Devices::I2CBus& bus) {
 // per cycle because an unconsumed entry simply rolls forward into that
 // SAME motor's own next cycle, harmlessly), RobotLoop::cycle() interleaves
 // TWO motors AND the OTOS burst read on the SAME global write/read FIFO
-// (i2c_bus_host.cpp's own file-header: scriptWrite()/scriptRead() are each
+// (i2c_bus_host.cpp's own file-header: queueWrite()/queueRead() are each
 // ONE queue shared across every address, matched by address only) -- an
 // over-provisioned "maybe" write left unconsumed at a motor's own address
 // does NOT roll forward harmlessly here; it gets wrongly popped by the
@@ -185,10 +206,10 @@ void scriptLineBeginSuccess(Devices::I2CBus& bus) {
 // each leaf's own first write -- write-on-change then skips every
 // subsequent cycle for that leaf, matching this scenario's own 3/3/2
 // write-count schedule below.
-void scriptMotorCycle(Devices::I2CBus& bus, float positionMm, int extraDutyWrites) {
-  bus.scriptWrite(kMotorWireAddr, /*status=*/0);  // requestEncoder()'s 0x46 write
+void scriptMotorCycle(TestSim::ScriptedI2CHook& bus, float positionMm, int extraDutyWrites) {
+  bus.queueWrite(kMotorWireAddr, /*status=*/0);  // requestEncoder()'s 0x46 write
   for (int i = 0; i < extraDutyWrites; ++i) {
-    bus.scriptWrite(kMotorWireAddr, /*status=*/0);  // this leaf's own one-time first duty write
+    bus.queueWrite(kMotorWireAddr, /*status=*/0);  // this leaf's own one-time first duty write
   }
   int32_t raw = static_cast<int32_t>(positionMm * 10.0f);
   uint8_t data[4] = {
@@ -197,7 +218,7 @@ void scriptMotorCycle(Devices::I2CBus& bus, float positionMm, int extraDutyWrite
       static_cast<uint8_t>((raw >> 16) & 0xFF),
       static_cast<uint8_t>((raw >> 24) & 0xFF),
   };
-  bus.scriptRead(kMotorWireAddr, data, 4, /*status=*/0);
+  bus.queueRead(kMotorWireAddr, data, 4, /*status=*/0);
 }
 
 // One 1-write + 12-byte-read OTOS burst (Otos::readPositionVelocity()) --
@@ -206,10 +227,10 @@ void scriptMotorCycle(Devices::I2CBus& bus, float positionMm, int extraDutyWrite
 // cycle() call in this harness runs at the SAME frozen fake-Clock value, so
 // (nowUs - lastReadUs_) stays 0 < kReadPeriod and Otos::tick() performs zero
 // bus traffic -- no further scripting needed for a "few cycles" smoke test.
-void scriptOtosReadZeroPose(Devices::I2CBus& bus) {
-  bus.scriptWrite(kOtosWireAddr, /*status=*/0);
+void scriptOtosReadZeroPose(TestSim::ScriptedI2CHook& bus) {
+  bus.queueWrite(kOtosWireAddr, /*status=*/0);
   uint8_t raw[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-  bus.scriptRead(kOtosWireAddr, raw, 12, /*status=*/0);
+  bus.queueRead(kOtosWireAddr, raw, 12, /*status=*/0);
 }
 
 // --- Hand-rolled wire-byte builder (mirrors app_comms_harness.cpp's own
@@ -311,16 +332,16 @@ Buf ackErrUnimplementedFingerprint(uint32_t corrId) {
 void scenarioBootThenAFewCyclesRunToCompletion() {
   beginScenario("RobotLoop: boot() resolves all devices, cycle() runs a few passes cleanly");
 
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
-  Devices::Clock clock;
-  Devices::Sleeper sleeper;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  TestSim::SimClock clock;
+  TestSim::SimSleeper sleeper;
 
-  Devices::NezhaMotor motorL(bus, baseMotorConfig(1));
-  Devices::NezhaMotor motorR(bus, baseMotorConfig(2));
-  Devices::Otos otos(bus, Devices::OtosConfig{});
-  Devices::ColorSensorLeaf color(bus, Devices::ColorConfig{});
-  Devices::LineSensorLeaf line(bus, Devices::LineConfig{});
+  Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
+  Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
+  Devices::Otos otos(plant, Devices::OtosConfig{});
+  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
+  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
 
   NullTransport serialLink;
   NullTransport radioLink;
@@ -356,7 +377,7 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   scriptColorBeginSuccess(bus);
   scriptLineBeginSuccess(bus);
 
-  App::RobotLoop robotLoop(bus, motorL, motorR, otos, comms, tlm, drive, odom,
+  App::RobotLoop robotLoop(plant, motorL, motorR, otos, comms, tlm, drive, odom,
                             deadman, preamble, clock, sleeper);
 
   int sleepsBeforeBoot = sleeper.sleepCount();
@@ -443,16 +464,16 @@ void scenarioConfigMotorPatchAppliesWhileDrivetrainPlannerStayUnimplemented() {
   beginScenario("RobotLoop CONFIG: MotorConfigPatch live-applies + acks OK; "
                 "Drivetrain/PlannerConfigPatch stay ERR_UNIMPLEMENTED");
 
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
-  Devices::Clock clock;
-  Devices::Sleeper sleeper;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  TestSim::SimClock clock;
+  TestSim::SimSleeper sleeper;
 
-  Devices::NezhaMotor motorL(bus, baseMotorConfig(1));
-  Devices::NezhaMotor motorR(bus, baseMotorConfig(2));
-  Devices::Otos otos(bus, Devices::OtosConfig{});
-  Devices::ColorSensorLeaf color(bus, Devices::ColorConfig{});
-  Devices::LineSensorLeaf line(bus, Devices::LineConfig{});
+  Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
+  Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
+  Devices::Otos otos(plant, Devices::OtosConfig{});
+  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
+  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
 
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
@@ -472,7 +493,7 @@ void scenarioConfigMotorPatchAppliesWhileDrivetrainPlannerStayUnimplemented() {
   scriptColorBeginSuccess(bus);
   scriptLineBeginSuccess(bus);
 
-  App::RobotLoop robotLoop(bus, motorL, motorR, otos, comms, tlm, drive, odom,
+  App::RobotLoop robotLoop(plant, motorL, motorR, otos, comms, tlm, drive, odom,
                             deadman, preamble, clock, sleeper);
   robotLoop.boot();
   checkTrue(preamble.done(), "boot() completes against the FakeTransport-based fixture too");

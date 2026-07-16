@@ -56,9 +56,20 @@ void ColorSensorLeaf::beginStep(uint64_t nowUs) {
 
   // phase_ == ApdsProbe: exactly one attempt (the pre-port fallback has no
   // retry loop for APDS either — see file header).
+  //
+  // Uses readReg8Status() (transaction-OK-checking), NOT readReg8() (which
+  // ignores status and leaves out=0 on a NAK) -- clasi/issues/color-sensor-
+  // apds-probe-success-on-failure.md (2026-07-13 code review finding M4).
+  // A NAK'd readback used to decode as en==0x00, which is exactly the
+  // "detected" condition -- a robot with NO color sensor at all latched
+  // present()==true and issued failing APDS transactions at every due
+  // perception slot forever. Requiring ok==true before trusting en's value
+  // closes that hole; the ALT-chip probe path above never had this bug
+  // (failure -> 0 -> correctly "not found").
   writeReg8(kColorDeviceAddrApds, 0x80, 0x00);
-  uint8_t en = readReg8(kColorDeviceAddrApds, 0x80);
-  if (en == 0x00) {
+  uint8_t en = 0;
+  bool ok = readReg8Status(kColorDeviceAddrApds, 0x80, en);
+  if (ok && en == 0x00) {
     isAlt_ = false;
     initApds();
     initialized_ = true;

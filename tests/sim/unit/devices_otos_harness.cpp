@@ -1,27 +1,32 @@
 // devices_otos_harness.cpp — off-hardware acceptance harness for ticket
 // DB-005 (device-bus-tickets.md): exercises the REAL Devices::Otos leaf
-// (source/devices/otos.cpp) against DB-003's HOST_BUILD scripted
-// Devices::I2CBus fake -- no MicroBitI2C, no CODAL, no real hardware.
+// (source/devices/otos.cpp) against a TestSim::SimPlant (108-002), scripted
+// deterministically via TestSim::ScriptedI2CHook (108-009) -- no
+// MicroBitI2C, no CODAL, no real hardware.
+//
+// Migrated by sprint 108 ticket 009 off the deleted source/devices/
+// i2c_bus_host.cpp scripted-FIFO Devices::I2CBus fake (ticket 001 reduced
+// Devices::I2CBus to a pure interface and removed it) -- see
+// devices_motor_harness.cpp's/scripted_i2c_hook.h's own header for the
+// migration rationale. Every scenario below is otherwise UNCHANGED from the
+// pre-migration harness -- only the bus/scripting plumbing moved.
 //
 // Modeled on tests/sim/unit/otos_odometer_harness.cpp (that file's own
 // header comment is this harness's explicit test precedent) -- compiles the
 // ACTUAL source/devices/otos.cpp against the SAME source/devices/otos.h
-// every ARM build compiles, with -DHOST_BUILD selecting
-// source/devices/i2c_bus_host.cpp's scripted fake in place of the real
-// MicroBitI2C-backed i2c_bus.cpp. Hand-rolled assertions, PASS/FAIL per
-// scenario, nonzero exit on any failure. Run by test_devices_otos.py, which
-// compiles and runs this binary via subprocess. Includes ONLY devices/
-// headers plus plain C/C++ stdlib (isolation invariant) -- no messages/*.h,
-// no config/boot_config.h, no com/i2c_bus.h.
+// every ARM build compiles, with -DHOST_BUILD. Hand-rolled assertions,
+// PASS/FAIL per scenario, nonzero exit on any failure. Run by
+// test_devices_otos.py, which compiles and runs this binary via subprocess.
 //
 // --- Why these scenarios can't inspect exact written register bytes ---
-// The HOST_BUILD scripted fake (i2c_bus_host.cpp) does not record a write()
-// call's payload bytes -- only the address and per-device txnCount()/
-// errCount() are observable. So these scenarios prove behavior through
-// txnCount() deltas, connected()/present()/poseFresh() (the leaf's own
-// observable state), and scripted READ payloads (which the fake DOES
-// deliver back), letting these scenarios verify the read-side register
-// scaling + mounting-rotation + lever-arm math end to end.
+// TestSim::ScriptedI2CHook does not record a write() call's payload bytes --
+// only the address and per-device txnCount()/errCount() are observable
+// (same limitation the deleted i2c_bus_host.cpp fake had). So these
+// scenarios prove behavior through txnCount() deltas, connected()/present()/
+// poseFresh() (the leaf's own observable state), and scripted READ payloads
+// (which the hook DOES deliver back), letting these scenarios verify the
+// read-side register scaling + mounting-rotation + lever-arm math end to
+// end.
 
 #include <cmath>
 #include <cstdint>
@@ -30,8 +35,9 @@
 
 #include "devices/device_config.h"
 #include "devices/device_types.h"
-#include "devices/i2c_bus.h"
 #include "devices/otos.h"
+#include "scripted_i2c_hook.h"
+#include "sim_plant.h"
 
 namespace {
 
@@ -131,19 +137,19 @@ Devices::OtosConfig makeConfig(float offsetX, float offsetY, float offsetYaw,
   return cfg;
 }
 
-void scriptGenerousWrites(Devices::I2CBus& bus, int count) {
-  for (int i = 0; i < count; ++i) bus.scriptWrite(kWireAddr, /*status=*/0);
+void scriptGenerousWrites(TestSim::ScriptedI2CHook& bus, int count) {
+  for (int i = 0; i < count; ++i) bus.queueWrite(kWireAddr, /*status=*/0);
 }
 
-void scriptProductId(Devices::I2CBus& bus, uint8_t id, int status = 0) {
+void scriptProductId(TestSim::ScriptedI2CHook& bus, uint8_t id, int status = 0) {
   uint8_t data[1] = {id};
-  bus.scriptRead(kWireAddr, data, 1, status);
+  bus.queueRead(kWireAddr, data, 1, status);
 }
 
 // Queues one scripted 12-byte burst read (X_L X_H Y_L Y_H H_L H_H, then
 // VX_L VX_H VY_L VY_H VH_L VH_H, all LE) for the next readPositionVelocity()
 // call.
-void scriptPosVel(Devices::I2CBus& bus, int16_t x, int16_t y, int16_t h,
+void scriptPosVel(TestSim::ScriptedI2CHook& bus, int16_t x, int16_t y, int16_t h,
                    int16_t vx, int16_t vy, int16_t vh, int status = 0) {
   uint8_t raw[12];
   raw[0]  = static_cast<uint8_t>(x & 0xFF);
@@ -158,7 +164,7 @@ void scriptPosVel(Devices::I2CBus& bus, int16_t x, int16_t y, int16_t h,
   raw[9]  = static_cast<uint8_t>((vy >> 8) & 0xFF);
   raw[10] = static_cast<uint8_t>(vh & 0xFF);
   raw[11] = static_cast<uint8_t>((vh >> 8) & 0xFF);
-  bus.scriptRead(kWireAddr, raw, 12, status);
+  bus.queueRead(kWireAddr, raw, 12, status);
 }
 
 // begin()'s full successful-detect transaction count: 1 write + 1 read
@@ -178,12 +184,12 @@ void scenarioProductIdGatesAllTraffic() {
 
   // Case A: mismatch -- only the failed probe touches the bus.
   {
-    Devices::I2CBus::setClock(1000000);
-    Devices::I2CBus bus;
+    TestSim::SimPlant plant;
+    TestSim::ScriptedI2CHook bus(plant);
     scriptGenerousWrites(bus, 20);
     scriptProductId(bus, 0x00);   // wrong id -- real chip reports 0x5F
 
-    Devices::Otos odom(bus, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+    Devices::Otos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
     odom.begin();
 
     checkFalse(odom.present(), "mismatch: present() false");
@@ -194,10 +200,10 @@ void scenarioProductIdGatesAllTraffic() {
 
   // Case B: begin() never called at all -- every primitive is a total no-op.
   {
-    Devices::I2CBus::setClock(1000000);
-    Devices::I2CBus bus;   // no scripts queued -- any traffic surfaces as an error
+    TestSim::SimPlant plant;
+    TestSim::ScriptedI2CHook bus(plant);   // no scripts queued -- any traffic surfaces as an error
 
-    Devices::Otos odom(bus, makeConfig(-47.7f, 3.5f, 0.0f, 1.067f, 0.987f));
+    Devices::Otos odom(plant, makeConfig(-47.7f, 3.5f, 0.0f, 1.067f, 0.987f));
 
     float ox = 0, oy = 0, oh = 0;
     odom.init();
@@ -227,12 +233,12 @@ void scenarioProductIdGatesAllTraffic() {
 
   // Case C: successful detect -- runs the full init sequence.
   {
-    Devices::I2CBus::setClock(1000000);
-    Devices::I2CBus bus;
+    TestSim::SimPlant plant;
+    TestSim::ScriptedI2CHook bus(plant);
     scriptGenerousWrites(bus, 20);
     scriptProductId(bus, 0x5F);
 
-    Devices::Otos odom(bus, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+    Devices::Otos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
     odom.begin();
 
     checkTrue(odom.present(), "match: present() true");
@@ -249,12 +255,12 @@ void scenarioProductIdGatesAllTraffic() {
 //    stale rather than re-publishing.
 void scenarioReadDueRateLimitsRealReads() {
   beginScenario("readDue()/tick(): rate-limits real bus reads to kReadPeriod");
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
 
-  Devices::Otos odom(bus, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Devices::Otos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   checkTrue(odom.readDue(0), "readDue() true before begin() is ever called");
 
   odom.begin();
@@ -294,14 +300,14 @@ void scenarioReadDueRateLimitsRealReads() {
 //     from the mounting-yaw rotation step (3b isolates that one instead).
 void scenarioTickLeverArmOnlyTransform() {
   beginScenario("tick(): a burst decodes to the expected pose -- lever-arm-only transform");
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
 
   constexpr float kOffsetX = -47.7f;   // [mm] tovez.json-realistic
   constexpr float kOffsetY = 3.5f;     // [mm]
-  Devices::Otos odom(bus, makeConfig(kOffsetX, kOffsetY, 0.0f, 1.0f, 1.0f));
+  Devices::Otos odom(plant, makeConfig(kOffsetX, kOffsetY, 0.0f, 1.0f, 1.0f));
   odom.begin();
 
   constexpr int16_t kRx = 2000, kRy = 1000, kRh = 5217;
@@ -338,13 +344,13 @@ void scenarioTickLeverArmOnlyTransform() {
 //     non-zero offsetYaw) -- isolates the rotation step from the lever arm.
 void scenarioTickMountingYawRotationOnlyTransform() {
   beginScenario("tick(): a burst decodes to the expected pose -- mounting-yaw-only transform");
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
 
   constexpr float kOffsetYaw = 0.3f;   // [rad] a hypothetical rotated mount
-  Devices::Otos odom(bus, makeConfig(0.0f, 0.0f, kOffsetYaw, 1.0f, 1.0f));
+  Devices::Otos odom(plant, makeConfig(0.0f, 0.0f, kOffsetYaw, 1.0f, 1.0f));
   odom.begin();
 
   constexpr int16_t kRx = 1500, kRy = -800, kRh = 2000;
@@ -377,14 +383,14 @@ void scenarioTickMountingYawRotationOnlyTransform() {
 //    through the REAL tick()/sensorToCentre() wiring, not a local oracle.
 void scenarioLeverArmCancelsOnPureSpin() {
   beginScenario("tick(): lever-arm compensation cancels on a pure spin -- no phantom translation");
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   scriptGenerousWrites(bus, 200);
   scriptProductId(bus, 0x5F);
 
   constexpr float kOffsetX = -47.7f;   // [mm] tovez.json-realistic
   constexpr float kOffsetY = 3.5f;     // [mm]
-  Devices::Otos odom(bus, makeConfig(kOffsetX, kOffsetY, 0.0f, 1.0f, 1.0f));
+  Devices::Otos odom(plant, makeConfig(kOffsetX, kOffsetY, 0.0f, 1.0f, 1.0f));
   odom.begin();
 
   // Spin sweep -- spread across most of the chip's representable heading
@@ -428,12 +434,12 @@ void scenarioLeverArmCancelsOnPureSpin() {
 //    tick() proves the failure did not permanently latch.
 void scenarioBurstFailureHoldsPriorPoseAndMarksStale() {
   beginScenario("tick(): a burst-read failure holds the last-good pose, marks it stale, and recovers");
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
 
-  Devices::Otos odom(bus, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Devices::Otos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   odom.begin();
 
   // Tick 1: clean burst -- establishes a known-good cached pose.
@@ -473,29 +479,30 @@ void scenarioBurstFailureHoldsPriorPoseAndMarksStale() {
 //    fails (only connected() tracks that).
 void scenarioPresentTracksDetectionOnlyIndependentOfConnected() {
   beginScenario("present(): permanent boot-time detection flag, independent of connected()'s live per-tick health");
-  Devices::I2CBus::setClock(1000000);
-
   // Case A: never begin()'d at all.
-  Devices::I2CBus busNeverBegun;
-  Devices::Otos odomNeverBegun(busNeverBegun, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  TestSim::SimPlant plantNeverBegun;
+  TestSim::ScriptedI2CHook busNeverBegun(plantNeverBegun);
+  Devices::Otos odomNeverBegun(plantNeverBegun, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   checkFalse(odomNeverBegun.present(), "present() false -- begin() was never called");
   checkUintEq(busNeverBegun.errCount(kAddr7), 0, "no bus traffic at all when begin() is never called");
 
   // Case B: begin() called, product-ID probe returns the wrong id.
-  Devices::I2CBus busWrongId;
+  TestSim::SimPlant plantWrongId;
+  TestSim::ScriptedI2CHook busWrongId(plantWrongId);
   scriptGenerousWrites(busWrongId, 20);
   scriptProductId(busWrongId, 0x00);
-  Devices::Otos odomWrongId(busWrongId, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Devices::Otos odomWrongId(plantWrongId, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   odomWrongId.begin();
   checkFalse(odomWrongId.present(), "present() false -- begin()'s product-ID detect failed");
 
   // Case C: begin() succeeds -- present() true, and STAYS true across a
   // subsequent failed tick() (connected() itself goes false, present() must
   // not).
-  Devices::I2CBus busPresent;
+  TestSim::SimPlant plantPresent;
+  TestSim::ScriptedI2CHook busPresent(plantPresent);
   scriptGenerousWrites(busPresent, 20);
   scriptProductId(busPresent, 0x5F);
-  Devices::Otos odomPresent(busPresent, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Devices::Otos odomPresent(plantPresent, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   odomPresent.begin();
   checkTrue(odomPresent.present(), "present() true -- begin()'s product-ID detect succeeded");
 
@@ -515,12 +522,12 @@ void scenarioPresentTracksDetectionOnlyIndependentOfConnected() {
 //    tick() then resumes the normal rate-limited read cycle.
 void scenarioSetPoseStagedReanchorAppliesAtNextTick() {
   beginScenario("setPose(): stages a re-anchor request; tick() drains it as exactly one write");
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
 
-  Devices::Otos odom(bus, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Devices::Otos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   odom.begin();
 
   // Establish a known-good cached pose first.
@@ -556,12 +563,12 @@ void scenarioSetPoseStagedReanchorAppliesAtNextTick() {
 //    the msg::Pose2D -> plain-float port.
 void scenarioSecondaryPrimitivesRoundTrip() {
   beginScenario("secondary primitives: setOffset/getOffset, signal-cfg, imu-calib, resetTracking");
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
 
-  Devices::Otos odom(bus, makeConfig(10.0f, -5.0f, 0.0f, 1.0f, 1.0f));
+  Devices::Otos odom(plant, makeConfig(10.0f, -5.0f, 0.0f, 1.0f, 1.0f));
   odom.begin();
   uint32_t base = bus.txnCount(kAddr7);
 
@@ -582,7 +589,7 @@ void scenarioSecondaryPrimitivesRoundTrip() {
       static_cast<uint8_t>(ry & 0xFF), static_cast<uint8_t>((ry >> 8) & 0xFF),
       static_cast<uint8_t>(rh & 0xFF), static_cast<uint8_t>((rh >> 8) & 0xFF),
   };
-  bus.scriptRead(kWireAddr, raw, 6, /*status=*/0);
+  bus.queueRead(kWireAddr, raw, 6, /*status=*/0);
 
   float gx = 0, gy = 0, gh = 0;
   odom.getOffset(gx, gy, gh);
@@ -593,14 +600,14 @@ void scenarioSecondaryPrimitivesRoundTrip() {
   base = bus.txnCount(kAddr7);
 
   uint8_t signalRaw[1] = {0x0F};
-  bus.scriptRead(kWireAddr, signalRaw, 1, /*status=*/0);
+  bus.queueRead(kWireAddr, signalRaw, 1, /*status=*/0);
   uint8_t signalCfg = odom.signalProcessConfig();
   checkUintEq(bus.txnCount(kAddr7) - base, 2, "signalProcessConfig() issues exactly one write + one read");
   checkUintEq(signalCfg, 0x0F, "signalProcessConfig() returns the raw scripted byte unmodified");
   base = bus.txnCount(kAddr7);
 
   uint8_t imuRaw[1] = {37};
-  bus.scriptRead(kWireAddr, imuRaw, 1, /*status=*/0);
+  bus.queueRead(kWireAddr, imuRaw, 1, /*status=*/0);
   uint8_t imuRemaining = odom.imuCalibrationSamplesRemaining();
   checkUintEq(bus.txnCount(kAddr7) - base, 2, "imuCalibrationSamplesRemaining() issues exactly one write + one read");
   checkUintEq(imuRemaining, 37, "imuCalibrationSamplesRemaining() returns the raw scripted byte unmodified");

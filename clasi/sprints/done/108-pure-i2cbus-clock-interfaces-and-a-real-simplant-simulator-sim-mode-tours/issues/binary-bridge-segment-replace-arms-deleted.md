@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '108'
+tickets:
+- 108-007
 ---
 
 # `testgui/binary_bridge.py`'s R/TURN/G translation targets envelope arms that no longer exist on the wire

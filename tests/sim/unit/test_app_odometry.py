@@ -3,12 +3,19 @@
 
 Compiles ``app_odometry_harness.cpp`` together with the HOST_BUILD
 implementations it needs (``source/app/odometry.cpp``,
-``source/devices/i2c_bus_host.cpp``, ``source/devices/velocity_pid.cpp``,
+``tests/_infra/sim/sim_plant.cpp`` -- ticket 108-002's real Devices::I2CBus
+implementation -- plus its own ``tests/sim/plant/{wheel,otos}_plant.cpp``
+physics dependencies, ``source/devices/velocity_pid.cpp``,
 ``source/devices/nezha_motor.cpp``, ``source/devices/otos.cpp``,
 ``source/kinematics/body_kinematics.cpp``) with ``-DHOST_BUILD``, against the
 SAME headers every ARM build compiles. Mirrors ``test_app_drive.py``'s exact
 shape: compile with the system C++ compiler, run the resulting binary,
 assert it exits 0.
+
+Migrated by sprint 108 ticket 009 off the deleted ``source/devices/
+i2c_bus_host.cpp`` scripted-FIFO Devices::I2CBus fake — see
+``app_odometry_harness.cpp``'s own header and ``scripted_i2c_hook.h`` for
+the migration rationale.
 
 Collected under ``tests/sim/unit/`` -- already within ``pyproject.toml``'s
 ``testpaths = ["tests/sim"]``, no configuration change needed.
@@ -23,9 +30,13 @@ import pytest
 # tests/sim/unit/test_app_odometry.py -> unit -> sim -> tests -> repo root
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _SOURCE_DIR = _REPO_ROOT / "source"
+_INFRA_SIM_DIR = _REPO_ROOT / "tests" / "_infra" / "sim"
+_PLANT_DIR = _REPO_ROOT / "tests" / "sim" / "plant"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_odometry_harness.cpp"
 _ODOMETRY_SRC = _SOURCE_DIR / "app" / "odometry.cpp"
-_I2C_HOST_FAKE_SRC = _SOURCE_DIR / "devices" / "i2c_bus_host.cpp"
+_SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
+_WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
+_OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 _VELOCITY_PID_SRC = _SOURCE_DIR / "devices" / "velocity_pid.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "devices" / "nezha_motor.cpp"
 _OTOS_SRC = _SOURCE_DIR / "devices" / "otos.cpp"
@@ -48,11 +59,14 @@ def _find_cxx_compiler() -> str:
 
 
 def test_app_odometry_harness_compiles_and_passes(tmp_path):
-    """Compile App::Odometry + its Devices leaf dependencies + the harness; assert every scenario passes."""
+    """Compile App::Odometry + its Devices leaf dependencies + SimPlant +
+    the harness; assert every scenario passes."""
     sources = [
         _HARNESS_SRC,
         _ODOMETRY_SRC,
-        _I2C_HOST_FAKE_SRC,
+        _SIM_PLANT_SRC,
+        _WHEEL_PLANT_SRC,
+        _OTOS_PLANT_SRC,
         _VELOCITY_PID_SRC,
         _NEZHA_MOTOR_SRC,
         _OTOS_SRC,
@@ -74,6 +88,10 @@ def test_app_odometry_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_INFRA_SIM_DIR),
+            "-I",
+            str(_PLANT_DIR),
             "-o",
             str(binary),
             *[str(src) for src in sources],

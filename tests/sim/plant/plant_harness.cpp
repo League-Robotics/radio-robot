@@ -12,20 +12,35 @@
 //      directly), is sane -- the sprint's own "B3 doesn't reappear" check.
 //
 // Drives the REAL Devices::NezhaMotor x2 + Devices::Otos + App::Odometry
-// against the scripted Devices::I2CBus (DB-003), exactly as
+// against a real Devices::I2CBus implementation, exactly as
 // devices_motor_harness.cpp scenario 6 and app_odometry_harness.cpp already
 // do for their own narrower scopes -- this harness generalizes that same
 // proven idiom across the whole loop (both motors + OTOS), per
-// architecture-update.md Decision 2. No RobotLoop/sim_api involvement --
-// that composition is ticket 105-004's own job (architecture-update.md
-// Step 3's "Plant" boundary: "the plant is driven BY the harness, between
+// architecture-update.md Decision 2. No App::RobotLoop involvement -- that
+// composition is TestSim::SimHarness's own job (architecture-update.md Step
+// 3's "Plant" boundary: "the plant is driven BY the harness, between
 // cycles, never inside a runAndWait block").
+//
+// Bus: TestSim::SimPlant (tests/_infra/sim/sim_plant.{h,cpp}, ticket
+// 108-002) -- sprint 108 ticket 001 reduced Devices::I2CBus to a pure
+// interface and deleted its old scripted-FIFO HOST_BUILD fake
+// (queueWrite()/queueRead()/errCount(), and WheelPlant/OtosPlant's own
+// scriptEncoderResponse()/scriptPoseResponse() helpers that targeted it --
+// see wheel_plant.h's/otos_plant.h's own file headers), so this file no
+// longer scripts exact per-cycle bus responses; it drives SimPlant live
+// (bus.tick(dt) each cycle, motor/otos calls read back whatever SimPlant's
+// OWN WheelPlant/OtosPlant instances actually computed). SimPlant itself
+// has zero App::RobotLoop dependency -- it is purely a wire-protocol
+// responder over these same plant classes -- so reusing it here does not
+// pull in the RobotLoop/sim_api composition layer this file's own header
+// has always disclaimed; it only replaces the deleted scripted-FIFO
+// plumbing with a real (if more capable) I2CBus implementation.
 //
 // Hand-rolled assertions, PASS/FAIL per scenario, nonzero exit on any
 // failure -- mirrors every other tests/sim/unit harness's own shape. Run by
 // test_plant.py, which compiles this file together with wheel_plant.cpp,
-// otos_plant.cpp, and the HOST_BUILD Devices/App/Kinematics sources it
-// needs, then runs the resulting binary via subprocess.
+// otos_plant.cpp, sim_plant.cpp, and the HOST_BUILD Devices/App/Kinematics
+// sources it needs, then runs the resulting binary via subprocess.
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -38,8 +53,7 @@
 #include "devices/i2c_bus.h"
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
-#include "otos_plant.h"
-#include "wheel_plant.h"
+#include "sim_plant.h"
 
 namespace {
 
@@ -76,31 +90,6 @@ void checkFloatEq(float actual, float expected, const std::string& what,
 
 // --- Devices::NezhaMotor / Devices::Otos fixture helpers --------------------
 
-constexpr uint16_t kMotorWireAddr =
-    static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-constexpr uint16_t kOtosWireAddr =
-    static_cast<uint16_t>(Devices::kOtosDeviceAddr << 1);
-
-// begin()'s full successful-detect transaction count, duplicated from
-// devices_otos_harness.cpp's own kBeginTxnCount comment: 1 write + 1 read
-// (product-ID probe) + 3 writes (init(): signal-process-cfg, reset,
-// imu-calibration) + 1 write (setLinearScalar) + 1 write (setAngularScalar)
-// + 1 write (zero position/heading) = 7 writes total. Scripted EXACTLY (not
-// "generously over-provisioned" the way a single-device-only harness can
-// afford to) -- this harness shares Devices::I2CBus's ONE global write/read
-// FIFO per direction across BOTH motors AND the OTOS leaf (i2c_bus.h's own
-// file header), so any leftover slack here would desync every subsequent
-// cycle's address matching for every device, not just this one.
-constexpr int kOtosBeginWriteCount = 7;
-
-void scriptOtosBeginExact(Devices::I2CBus& bus) {
-  for (int i = 0; i < kOtosBeginWriteCount; ++i) {
-    bus.scriptWrite(kOtosWireAddr, /*status=*/0);
-  }
-  uint8_t productId[1] = {0x5F};   // Devices::Otos::kExpectedProductId
-  bus.scriptRead(kOtosWireAddr, productId, 1, /*status=*/0);
-}
-
 Devices::MotorConfig baseMotorConfig(uint32_t port) {
   Devices::MotorConfig cfg;
   cfg.port = port;
@@ -111,13 +100,10 @@ Devices::MotorConfig baseMotorConfig(uint32_t port) {
 }
 
 // ===========================================================================
-// 1. Velocity-step scenario: a single wheel/motor, isolated (single I2C
-//    device address -- safe to over-provision the "2 writes always"
-//    convention scriptEncoderRequestCollect()/WheelPlant::
-//    scriptEncoderResponse()'s own default already documents, matching
-//    devices_motor_harness.cpp scenario 6's own precedent exactly). Proves
-//    the plant's own simulated velocity RAMPS (not steps) toward the
-//    commanded target, with a time constant in the 120-140ms range.
+// 1. Velocity-step scenario: a single wheel/motor, isolated on its own
+//    SimPlant (nothing else attached to the bus). Proves the plant's own
+//    simulated velocity RAMPS (not steps) toward the commanded target, with
+//    a time constant in the 120-140ms range.
 // ===========================================================================
 
 void scenarioVelocityStepShowsRampWithTauInRange() {
@@ -126,8 +112,8 @@ void scenarioVelocityStepShowsRampWithTauInRange() {
   checkTrue(TestSim::kDefaultTau >= 0.12f && TestSim::kDefaultTau <= 0.14f,
             "kDefaultTau itself sits in the bench-characterized 120-140ms range");
 
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant bus;   // owns its own left/right WheelPlant + OtosPlant internally --
+                            // this scenario only ever drives port 1 (left).
 
   Devices::MotorConfig cfg = baseMotorConfig(1);
   Devices::NezhaMotor motor(bus, cfg);
@@ -135,7 +121,6 @@ void scenarioVelocityStepShowsRampWithTauInRange() {
   const float duty = 0.6f;
   motor.setDuty(duty);
 
-  TestSim::WheelPlant plant(TestSim::kDefaultDutyVelMax, TestSim::kDefaultTau);
   const float finalTargetVel = TestSim::kDefaultDutyVelMax * duty;   // 300 mm/s
 
   const float dtS = 0.02f;          // [s]
@@ -152,19 +137,16 @@ void scenarioVelocityStepShowsRampWithTauInRange() {
   velTrace.reserve(static_cast<size_t>(kCycles));
 
   for (int i = 0; i < kCycles; ++i) {
-    plant.step(motor.appliedDuty(), dtS);
-    plant.scriptEncoderResponse(bus, kMotorWireAddr);   // single device on this bus -- default writeCount=1 is
-                                                          // ALSO exact here (see below); 2 is only needed on the
-                                                          // one cycle a duty write actually lands.
-    if (i == 0) {
-      // Cycle 0 is this motor's very first tick(): lastWrittenPct_ is still
-      // the -128 sentinel, so the write-on-change guard lets the initial
-      // duty write through in addition to requestEncoder()'s own write.
-      bus.scriptWrite(kMotorWireAddr, /*status=*/0);   // the extra duty write
-    }
+    // bus.tick(dt) integrates SimPlant's own left WheelPlant off whatever
+    // duty motor.tick() last actually WROTE to the wire -- 0 until this
+    // motor's own first duty write lands (mirrors the deleted scripted
+    // harness's identical "plant.step(motor.appliedDuty(), dtS)" call,
+    // just against the live wire-parsed duty instead of appliedDuty()'s
+    // own getter directly).
+    bus.tick(dtS);
     motor.requestSample();
     motor.tick(nowUs);
-    velTrace.push_back(plant.velocity());
+    velTrace.push_back(bus.wheelPlant(1).velocity());
     nowUs += dtUs;
   }
 
@@ -218,12 +200,11 @@ void scenarioVelocityStepShowsRampWithTauInRange() {
                  dtS + 1e-3f);
   }
 
-  checkTrue(bus.errCount(Devices::kNezhaDeviceAddr) == 0, "no script under-run across the ramp run");
 }
 
 // ===========================================================================
 // Shared multi-device fixture: two NezhaMotor + one Otos + one App::Odometry,
-// all sharing ONE Devices::I2CBus, driven by two WheelPlant + one OtosPlant.
+// all sharing ONE SimPlant (its own left/right WheelPlant + OtosPlant).
 // Used by BOTH the pivot scenario and the determinism scenario below --
 // exercising "the WHOLE plant (both motors + OTOS)", not one leaf in
 // isolation, per architecture-update.md's own framing of this ticket.
@@ -246,12 +227,12 @@ struct CycleSample {
 
 // Runs a fresh two-motor + OTOS + Odometry scenario for `cycles` cycles at a
 // constant differential duty target, returning the full per-cycle trace.
-// Every instance (bus, motors, otos, plants, odometry) is constructed LOCAL
-// to this call -- two calls with identical arguments are two fully
-// independent runs, which the determinism scenario relies on.
+// Every instance (bus, motors, otos, odometry) is constructed LOCAL to this
+// call -- two calls with identical arguments are two fully independent
+// runs, which the determinism scenario relies on.
 std::vector<CycleSample> runScenario(float dutyLeft, float dutyRight, int cycles) {
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant bus(kTrackWidth);   // trackWidth MUST match the App::Odometry instance
+                                         // below -- see otos_plant.h's own "MUST match" comment.
 
   Devices::NezhaMotor motorLeft(bus, baseMotorConfig(1));
   Devices::NezhaMotor motorRight(bus, baseMotorConfig(2));
@@ -263,21 +244,15 @@ std::vector<CycleSample> runScenario(float dutyLeft, float dutyRight, int cycles
   Devices::OtosConfig otosCfg;   // identity mounting (offsetX=offsetY=offsetYaw=0) --
                                   // see otos_plant.h's own "Identity-mounting assumption".
   Devices::Otos otos(bus, otosCfg);
-  scriptOtosBeginExact(bus);
-  otos.begin();
+  otos.begin();   // SimPlant answers the product-ID probe + init/config writes live --
+                   // no bus scripting needed (the deleted scripted-FIFO fake's own
+                   // exact-write-count bookkeeping does not apply to a real responder).
 
   App::Odometry odom(motorLeft, motorRight, kTrackWidth);
 
-  TestSim::WheelPlant plantLeft(TestSim::kDefaultDutyVelMax, TestSim::kDefaultTau);
-  TestSim::WheelPlant plantRight(TestSim::kDefaultDutyVelMax, TestSim::kDefaultTau);
-  TestSim::OtosPlant otosPlant(kTrackWidth);
-
   const float dtS = 0.02f;        // [s]
   const uint64_t dtUs = 20000;    // [us] == Devices::Otos's own kReadPeriod, so
-                                   // readDue() is true every single cycle --
-                                   // see otos_plant.h's own scriptPoseResponse()
-                                   // comment for why this keeps the shared FIFO
-                                   // exactly balanced (no leftover slack ever).
+                                   // readDue() is true every single cycle.
   uint64_t nowUs = 50000;         // avoid the first-write throttle edge (see
                                    // the ramp scenario's identical comment).
 
@@ -285,27 +260,30 @@ std::vector<CycleSample> runScenario(float dutyLeft, float dutyRight, int cycles
   trace.reserve(static_cast<size_t>(cycles));
 
   for (int i = 0; i < cycles; ++i) {
-    plantLeft.step(motorLeft.appliedDuty(), dtS);
-    plantRight.step(motorRight.appliedDuty(), dtS);
-    otosPlant.step(plantLeft.position(), plantRight.position());
+    // Integrate SimPlant's own left/right WheelPlant + OtosPlant off
+    // whatever duty each motor's own last tick() actually wrote to the
+    // wire (0 until each motor's own first duty write lands) -- mirrors
+    // the deleted scripted harness's identical per-cycle
+    // plantLeft.step()/plantRight.step()/otosPlant.step() call sequence,
+    // just against the live wire-parsed duty instead of appliedDuty()'s
+    // own getter directly.
+    bus.tick(dtS);
 
-    // Exact write counts (2 only on each motor's own first tick, 1
-    // afterward), NOT the "always over-provision" convention a
-    // single-address harness can use -- see wheel_plant.h's own
-    // scriptEncoderResponse() comment for why a multi-device shared FIFO
-    // requires this.
-    int writeCount = (i == 0) ? 2 : 1;
-    plantLeft.scriptEncoderResponse(bus, kMotorWireAddr, writeCount);
-    plantRight.scriptEncoderResponse(bus, kMotorWireAddr, writeCount);
-    otosPlant.scriptPoseResponse(bus, kOtosWireAddr);
-
-    // Call order MUST match the order the scripts above assumed: both
-    // requestSample()s first (their own request writes), then tick() in
-    // left, right, otos order (each tick's own read, then either's
-    // possible duty write, in that same relative order).
+    // Call order: each motor's requestSample() (the 0x46 encoder-select
+    // write) MUST be immediately followed by that SAME motor's own tick()
+    // (the read that consumes the selection) before the OTHER motor
+    // touches the bus -- unlike the deleted scripted-FIFO fake (a plain
+    // response queue, order-insensitive across devices), SimPlant tracks
+    // "which port is currently selected" as one piece of live protocol
+    // state (sim_plant.h's own selectedPort_); interleaving both
+    // requestSample() calls before either tick() would let the second
+    // select overwrite the first before its own read lands. This also
+    // matches App::RobotLoop::cycle()'s own real schedule (robot_loop.cpp):
+    // motorL_.requestSample() -> ... -> motorL_.tick() -> motorR_.
+    // requestSample() -> ... -> motorR_.tick().
     motorLeft.requestSample();
-    motorRight.requestSample();
     motorLeft.tick(nowUs);
+    motorRight.requestSample();
     motorRight.tick(nowUs);
     otos.tick(nowUs);
 

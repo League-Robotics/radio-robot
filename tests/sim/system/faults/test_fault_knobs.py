@@ -1,12 +1,16 @@
-"""Off-hardware acceptance proof for ticket 105-005 (SUC-022): TestSim::
+"""Off-hardware acceptance proof, migrated (ticket 108-004) from TestSim::
 WheelPlant's three fault-injection knobs (``setDisconnected()``/
-``freezePosition()``/``setDropoutRate()``, ``tests/sim/plant/wheel_plant.h``),
-driven through the REAL ``TestSim::SimApi`` (105-004) and asserted against the
-FIRMWARE's own observable reaction in decoded telemetry -- the retargeted
-``sim-hardware-fault-injection.md`` issue's ask, delivered against this
-sprint's own plant/harness rather than the deleted SimMotor sim.
+``freezePosition()``/``setDropoutRate()``, ``tests/sim/plant/wheel_plant.h``)
+driven through the deleted ``TestSim::SimApi`` (105-005, SUC-022) onto the
+same knobs now surfaced per-port on ``TestSim::SimPlant``
+(``tests/_infra/sim/sim_plant.h``) via ``TestSim::SimHarness::plant()``, and
+asserted against the FIRMWARE's own observable reaction in decoded
+telemetry -- the retargeted ``sim-hardware-fault-injection.md`` issue's ask,
+delivered against this sprint's own plant/harness rather than the deleted
+SimMotor sim.
 
-Compiles ``fault_knobs_harness.cpp`` together with ``sim_api.cpp``,
+Compiles ``fault_knobs_harness.cpp`` together with ``sim_plant.cpp``
+(``tests/_infra/sim/`` -- replacing the deleted ``sim_api.cpp``),
 ``wire_test_codec.cpp``, the plant sources, and the same full HOST_BUILD
 Devices/App/messages/kinematics dependency graph ``test_sim_api.py`` already
 compiles, with ``-DHOST_BUILD``, against the SAME headers every ARM build
@@ -32,9 +36,10 @@ _SOURCE_DIR = _REPO_ROOT / "source"
 _FAULTS_DIR = pathlib.Path(__file__).resolve().parent
 _SUPPORT_DIR = _FAULTS_DIR.parent.parent / "support"
 _PLANT_DIR = _FAULTS_DIR.parent.parent / "plant"
+_INFRA_SIM_DIR = _REPO_ROOT / "tests" / "_infra" / "sim"
 
 _HARNESS_SRC = _FAULTS_DIR / "fault_knobs_harness.cpp"
-_SIM_API_SRC = _SUPPORT_DIR / "sim_api.cpp"
+_SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WIRE_TEST_CODEC_SRC = _SUPPORT_DIR / "wire_test_codec.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
@@ -49,8 +54,7 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "preamble.cpp",
 ]
 _DEVICE_SOURCES = [
-    _SOURCE_DIR / "devices" / "i2c_bus_host.cpp",
-    _SOURCE_DIR / "devices" / "clock_host.cpp",
+    _INFRA_SIM_DIR / "sim_clock.cpp",
     _SOURCE_DIR / "devices" / "velocity_pid.cpp",
     _SOURCE_DIR / "devices" / "nezha_motor.cpp",
     _SOURCE_DIR / "devices" / "otos.cpp",
@@ -82,7 +86,7 @@ def _find_cxx_compiler() -> str:
 
 def _all_sources():
     return (
-        [_HARNESS_SRC, _SIM_API_SRC, _WIRE_TEST_CODEC_SRC, _WHEEL_PLANT_SRC, _OTOS_PLANT_SRC]
+        [_HARNESS_SRC, _SIM_PLANT_SRC, _WIRE_TEST_CODEC_SRC, _WHEEL_PLANT_SRC, _OTOS_PLANT_SRC]
         + _APP_SOURCES
         + _DEVICE_SOURCES
         + _MESSAGE_SOURCES
@@ -114,6 +118,8 @@ def test_fault_knobs_harness_compiles_and_passes(tmp_path):
             str(_SUPPORT_DIR),
             "-I",
             str(_PLANT_DIR),
+            "-I",
+            str(_INFRA_SIM_DIR),
             "-o",
             str(binary),
             *[str(src) for src in sources],

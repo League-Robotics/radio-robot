@@ -1,12 +1,14 @@
-"""Off-hardware acceptance proof for ticket DB-003 (device-bus-tickets.md).
+"""Off-hardware acceptance proof for ticket DB-003 (device-bus-tickets.md),
+migrated by sprint 108 ticket 010 to the pure-interface split.
 
-Compiles ``devices_clock_harness.cpp`` together with the HOST_BUILD
-scripted-fake implementation (``source/devices/clock_host.cpp``) against the
-SAME ``source/devices/clock.h`` every ARM build compiles, with
-``-DHOST_BUILD`` so the header's/the .cpp's HOST_BUILD fork is what gets
-exercised — no MicroBit.h, no CODAL, no wall clock, no real sleeps. Mirrors
-``test_devices_i2c_bus.py``'s shape exactly: compile with the system C++
-compiler, run the resulting binary, assert it exits 0.
+Compiles ``devices_clock_harness.cpp`` together with the TestSim::SimClock/
+SimSleeper host-test fake implementation (``tests/_infra/sim/
+sim_clock.cpp``) against ``source/devices/clock.h`` (now a pure interface,
+every ARM build compiles the same header) with ``-DHOST_BUILD``, matching
+every other tests/sim/unit harness's own compile shape — no MicroBit.h, no
+CODAL, no wall clock, no real sleeps. Mirrors ``test_devices_i2c_bus.py``'s
+shape exactly: compile with the system C++ compiler, run the resulting
+binary, assert it exits 0.
 
 Collected under ``tests/sim/unit/`` alongside the other harness wrappers —
 already within ``pyproject.toml``'s ``testpaths = ["tests/sim"]``, no
@@ -22,8 +24,9 @@ import pytest
 # tests/sim/unit/test_devices_clock.py -> unit -> sim -> tests -> repo root
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _SOURCE_DIR = _REPO_ROOT / "source"
+_INFRA_SIM_DIR = _REPO_ROOT / "tests" / "_infra" / "sim"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "devices_clock_harness.cpp"
-_HOST_FAKE_SRC = _SOURCE_DIR / "devices" / "clock_host.cpp"
+_HOST_FAKE_SRC = _INFRA_SIM_DIR / "sim_clock.cpp"
 
 # messages/common.h documents its own target as "CODAL C++11" — build the
 # host harness to the same standard so it exercises exactly the language
@@ -62,6 +65,8 @@ def test_devices_clock_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_INFRA_SIM_DIR),
             "-o",
             str(binary),
             str(_HARNESS_SRC),

@@ -31,8 +31,10 @@ reasons, neither of which this ticket can resolve by editing host code:
        (``_conn_helpers.py``'s own header comment) -- not
        ``SerialConnection``.
      - ``host/robot_radio/testgui/transport.py``'s ``SimTransport`` -- uses
-       ``robot_radio.io.sim_conn.SimConnection``, a ctypes ABI directly
-       wrapping the compiled sim library, again not ``SerialConnection``.
+       a ctypes ABI directly wrapping the compiled sim library, again not
+       ``SerialConnection`` (108-006: rebuilt as
+       ``robot_radio.io.sim_loop.SimLoop``, over a differently-shaped ABI
+       than the one this note originally described).
 
 2. **The data itself is gone from the binary wire schema** --
    ``host/robot_radio/calibration/fit_sim_error_model.py``'s residual

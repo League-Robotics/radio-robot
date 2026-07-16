@@ -1,13 +1,15 @@
 """tests/sim/system/test_scripted_twist_demo.py -- 105-006 (SUC-023), this
 sprint's own Definition of Done: the headless scripted-twist demo.
 
-Compiles ``scripted_twist_demo_harness.cpp`` together with ``sim_api.cpp``,
-``wire_test_codec.cpp``, the plant sources, and the same full HOST_BUILD
-Devices/App/messages/kinematics dependency graph ``test_sim_api.py``/
-``test_fault_knobs.py`` already compile, with ``-DHOST_BUILD``, against the
-SAME headers every ARM build compiles. Mirrors their exact shape: compile
-with the system C++ compiler, run the resulting binary, assert it exits 0,
-print its stdout (the human-readable cycle-by-cycle trace).
+Compiles ``scripted_twist_demo_harness.cpp`` together with ``sim_plant.cpp``
+(``tests/_infra/sim/`` -- ticket 108-004's migration off the deleted
+``sim_api.cpp``), ``wire_test_codec.cpp``, the plant sources, and the same
+full HOST_BUILD Devices/App/messages/kinematics dependency graph
+``test_sim_api.py``/``test_fault_knobs.py`` already compile, with
+``-DHOST_BUILD``, against the SAME headers every ARM build compiles.
+Mirrors their exact shape: compile with the system C++ compiler, run the
+resulting binary, assert it exits 0, print its stdout (the human-readable
+cycle-by-cycle trace).
 
 Collected under ``tests/sim/system/`` -- already within ``pyproject.toml``'s
 ``testpaths = ["tests/sim"]``, no configuration change needed. Run just this
@@ -28,13 +30,14 @@ pytest assertion machinery at all, compile and run the harness directly,
 e.g.:
 
     c++ -std=c++20 -DHOST_BUILD -I source -I tests/sim/support -I tests/sim/plant \\
+        -I tests/_infra/sim \\
         -o /tmp/scripted_twist_demo \\
         tests/sim/system/scripted_twist_demo_harness.cpp \\
-        tests/sim/support/sim_api.cpp tests/sim/support/wire_test_codec.cpp \\
+        tests/_infra/sim/sim_plant.cpp tests/sim/support/wire_test_codec.cpp \\
         tests/sim/plant/wheel_plant.cpp tests/sim/plant/otos_plant.cpp \\
         source/app/robot_loop.cpp source/app/comms.cpp source/app/telemetry.cpp \\
         source/app/deadman.cpp source/app/drive.cpp source/app/odometry.cpp \\
-        source/app/preamble.cpp source/devices/i2c_bus_host.cpp source/devices/clock_host.cpp \\
+        source/app/preamble.cpp tests/_infra/sim/sim_clock.cpp \\
         source/devices/velocity_pid.cpp source/devices/nezha_motor.cpp source/devices/otos.cpp \\
         source/devices/color_sensor.cpp source/devices/line_sensor.cpp \\
         source/messages/wire.cpp source/messages/wire_runtime.cpp source/kinematics/body_kinematics.cpp \\
@@ -53,9 +56,10 @@ _SOURCE_DIR = _REPO_ROOT / "source"
 _SYSTEM_DIR = pathlib.Path(__file__).resolve().parent
 _SUPPORT_DIR = _SYSTEM_DIR.parent / "support"
 _PLANT_DIR = _SYSTEM_DIR.parent / "plant"
+_INFRA_SIM_DIR = _REPO_ROOT / "tests" / "_infra" / "sim"
 
 _HARNESS_SRC = _SYSTEM_DIR / "scripted_twist_demo_harness.cpp"
-_SIM_API_SRC = _SUPPORT_DIR / "sim_api.cpp"
+_SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WIRE_TEST_CODEC_SRC = _SUPPORT_DIR / "wire_test_codec.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
@@ -70,8 +74,7 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "preamble.cpp",
 ]
 _DEVICE_SOURCES = [
-    _SOURCE_DIR / "devices" / "i2c_bus_host.cpp",
-    _SOURCE_DIR / "devices" / "clock_host.cpp",
+    _INFRA_SIM_DIR / "sim_clock.cpp",
     _SOURCE_DIR / "devices" / "velocity_pid.cpp",
     _SOURCE_DIR / "devices" / "nezha_motor.cpp",
     _SOURCE_DIR / "devices" / "otos.cpp",
@@ -103,7 +106,7 @@ def _find_cxx_compiler() -> str:
 
 def _all_sources():
     return (
-        [_HARNESS_SRC, _SIM_API_SRC, _WIRE_TEST_CODEC_SRC, _WHEEL_PLANT_SRC, _OTOS_PLANT_SRC]
+        [_HARNESS_SRC, _SIM_PLANT_SRC, _WIRE_TEST_CODEC_SRC, _WHEEL_PLANT_SRC, _OTOS_PLANT_SRC]
         + _APP_SOURCES
         + _DEVICE_SOURCES
         + _MESSAGE_SOURCES
@@ -135,6 +138,8 @@ def test_scripted_twist_demo_compiles_and_tells_the_story(tmp_path):
             str(_SUPPORT_DIR),
             "-I",
             str(_PLANT_DIR),
+            "-I",
+            str(_INFRA_SIM_DIR),
             "-o",
             str(binary),
             *[str(src) for src in sources],

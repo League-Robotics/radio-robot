@@ -2,12 +2,12 @@
 (``source/app/deadman.{h,cpp}``).
 
 Compiles ``app_deadman_harness.cpp`` together with ``source/app/deadman.cpp``
-and the HOST_BUILD scripted-fake ``source/devices/clock_host.cpp`` against
-the SAME ``source/devices/clock.h`` every ARM build compiles, with
-``-DHOST_BUILD`` so the header's/the .cpp's HOST_BUILD fork is what gets
-exercised -- no MicroBit.h, no CODAL, no wall clock, no real sleeps.
-Mirrors ``test_devices_clock.py``'s shape exactly: compile with the system
-C++ compiler, run the resulting binary, assert it exits 0.
+and the TestSim::SimClock host-test fake (``tests/_infra/sim/
+sim_clock.cpp``) against ``source/devices/clock.h`` (a pure interface,
+sprint 108 ticket 010) with ``-DHOST_BUILD`` -- no MicroBit.h, no CODAL, no
+wall clock, no real sleeps. Mirrors ``test_devices_clock.py``'s shape
+exactly: compile with the system C++ compiler, run the resulting binary,
+assert it exits 0.
 
 Collected under ``tests/sim/unit/`` -- already within ``pyproject.toml``'s
 ``testpaths = ["tests/sim"]``, no configuration change needed.
@@ -22,9 +22,10 @@ import pytest
 # tests/sim/unit/test_app_deadman.py -> unit -> sim -> tests -> repo root
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _SOURCE_DIR = _REPO_ROOT / "source"
+_INFRA_SIM_DIR = _REPO_ROOT / "tests" / "_infra" / "sim"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_deadman_harness.cpp"
 _DEADMAN_SRC = _SOURCE_DIR / "app" / "deadman.cpp"
-_CLOCK_HOST_SRC = _SOURCE_DIR / "devices" / "clock_host.cpp"
+_CLOCK_HOST_SRC = _INFRA_SIM_DIR / "sim_clock.cpp"
 
 # Matches every other tests/sim/unit harness's own compiled standard --
 # the project's actual compiled standard is -std=gnu++20.
@@ -62,6 +63,8 @@ def test_app_deadman_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_INFRA_SIM_DIR),
             "-o",
             str(binary),
             str(_HARNESS_SRC),
