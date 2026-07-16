@@ -114,15 +114,20 @@ def test_calibration_commands_calibrated_pushes_actual_rotslip() -> None:
     assert ("SET rotSlip=0.85", 200) in cmds
 
 
-def test_calibration_commands_always_includes_oi_ol_oa() -> None:
+def test_calibration_commands_no_longer_pushes_dead_otos_verbs() -> None:
+    """OI/OL/OA were DROPPED (2026-07-16): they have no path over the current
+    binary wire (no OTOS ConfigDelta patch; scalars are set at boot from
+    boot_config), so pushing them on connect only produced 'not supported' /
+    'nodev' noise. Re-add once clasi/issues/otos-calibration-config-message.md
+    restores a runtime OTOS-config path."""
     from robot_radio.calibration.push import calibration_commands
 
     cmds = calibration_commands(_cfg())
     verbs = [c.split()[0] for c, _t in cmds]
 
-    assert "OI" in verbs
-    assert any(c.startswith("OL ") for c, _t in cmds)
-    assert any(c.startswith("OA ") for c, _t in cmds)
+    assert "OI" not in verbs
+    assert not any(c.startswith("OL ") for c, _t in cmds)
+    assert not any(c.startswith("OA ") for c, _t in cmds)
 
 
 # ---------------------------------------------------------------------------
@@ -173,11 +178,14 @@ def _push_calibration_loop(transport, cfg, append_log):
 
 
 def test_push_loop_tolerates_nodev_reply_and_continues_all_commands() -> None:
-    """A NODEV reply on OI (no OTOS device -- normal for real hardware
-    without the sim's model) must not abort the loop -- every remaining
-    command is still sent, and NODEV is not counted as a rejection."""
+    """A NODEV reply on any command must not abort the loop -- every remaining
+    command is still sent, and NODEV is not counted as a rejection. (The OTOS
+    verbs that used to produce NODEV are no longer pushed -- see
+    test_calibration_commands_no_longer_pushes_dead_otos_verbs -- so this scripts
+    the NODEV onto a still-sent command to keep exercising the loop's
+    resilience.)"""
     cfg = _cfg(robot_name="tovez nocal")
-    transport = _ScriptedReplyTransport({"OI": "ERR nodev"})
+    transport = _ScriptedReplyTransport({"SET rotSlip": "ERR nodev"})
     log: list[str] = []
 
     cmds, n_bad, n_nodev = _push_calibration_loop(transport, cfg, log.append)

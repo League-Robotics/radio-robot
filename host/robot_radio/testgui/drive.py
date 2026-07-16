@@ -253,18 +253,14 @@ class KeyboardDriver:
         self._transport = transport
         self._window = window
 
-        # One-time DEV DT PORTS bind for this drive session -- must happen
-        # before any DEV DT VW so the drivetrain is bound to the ports this
-        # driver assumes it commands.  Module-level DEFAULT_PORTS matches
-        # the firmware boot default and the sim's default plant binding (see
-        # tests/_infra/sim/firmware.py's vel() docstring: "port 1=LEFT, port
-        # 2=RIGHT").  Transport-agnostic: sent for every Transport subclass,
-        # not just SimTransport.
-        left, right = DEFAULT_PORTS
-        try:
-            transport.send(f"DEV DT PORTS {left} {right}")
-        except Exception as exc:
-            _log.warning("KeyboardDriver: failed to bind DEV DT PORTS: %s", exc)
+        # DEV DT PORTS bind DROPPED (2026-07-16, out-of-process): `DEV *` has no
+        # binary arm on the current wire (real robot OR sim -- see
+        # binary_bridge.py / RobotLoop dispatch), so this only produced "not
+        # supported" noise on every connect. It was also redundant: DEFAULT_PORTS
+        # (1=LEFT, 2=RIGHT) already matches the firmware boot default and the
+        # sim's default plant binding, so the drivetrain is bound to the right
+        # ports without it. Restore this bind if/when a DEV (or config) arm for
+        # runtime drivetrain-port assignment is added to the protocol.
 
         # Create the keepalive timer (lazy PySide6 import).
         from PySide6.QtCore import QTimer  # type: ignore[import-untyped]

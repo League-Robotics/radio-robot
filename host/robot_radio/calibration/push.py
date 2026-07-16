@@ -24,7 +24,6 @@ import math
 import sys
 from typing import Any
 
-from robot_radio.calibration.helpers import scale_to_int8
 
 
 def push_calibration(conn_or_proto: Any, config: Any) -> dict[str, Any]:
@@ -140,22 +139,20 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
     rot_slip = float(rot_slip) if rot_slip is not None else 0.0
     cmds.append((f"SET rotSlip={rot_slip:g}", 200))
 
-    # ── OTOS init (must precede scalar writes) ────────────────────────────
-    cmds.append(("OI", 500))
-
-    # ── OTOS scalars ──────────────────────────────────────────────────────
-    lin_scale = getattr(cal, "otos_linear_scale",  None) if cal else None
-    ang_scale = getattr(cal, "otos_angular_scale", None) if cal else None
-    lin_scale = float(lin_scale) if lin_scale is not None else 1.0
-    ang_scale = float(ang_scale) if ang_scale is not None else 1.0
-
-    cmds.append((f"OL {scale_to_int8(lin_scale)}", 200))
-    cmds.append((f"OA {scale_to_int8(ang_scale)}", 200))
-
-    # NOTE (ticket 085-005): no OTOS mounting-offset (`odomOffX`/`odomOffY`/
-    # `odomYaw`) push here — see this function's docstring for why. Those
-    # keys are not registered by `config_commands.cpp` and get `ERR badkey`
-    # on the current firmware/sim.
+    # ── OTOS init + scalars: DROPPED (2026-07-16, out-of-process) ─────────
+    # `OI`/`OL`/`OA` have NO path over the current binary wire on the real
+    # robot OR the sim: `envelope.proto`'s ConfigDelta carries only Drivetrain/
+    # Motor/Planner patches, `RobotLoop::handleConfig` applies only Motor, and
+    # the OTOS scalars are set once at boot from `boot_config`. Sending them
+    # only produced "not supported"/"nodev" noise on every connect. The robot's
+    # OTOS calibration is already baked in at build time, so this runtime push
+    # is redundant even when it works. Re-add these (in whatever binary form
+    # that ticket defines) once `clasi/issues/otos-calibration-config-message.md`
+    # restores a runtime OTOS-config path; the sim honors it per
+    # `clasi/issues/sim-honors-otos-calibration.md`.
+    #
+    # (The NOTE about OTOS mounting-offset never being pushable — `odomOff*`
+    # aren't registered SET keys — still holds; that stays out too.)
 
     return cmds
 
