@@ -727,14 +727,14 @@ def _build_main_window():  # type: ignore[return]
     tour_layout = QHBoxLayout(tour_row)
     tour_layout.setContentsMargins(0, 0, 0, 0)
     tour_layout.setSpacing(4)
-    # 107-003: tours are real-hardware-only this sprint -- SimTransport's
-    # backing sim library was deleted wholesale at sprint 102 ticket 005
-    # (`git show 72d8be7e --stat`) and has no working foundation to rewire
-    # `run_tour()` onto (architecture-update.md Decision 1, this ticket's
-    # own deliberate, documented scope boundary). Tour buttons stay
-    # disabled with a clear tooltip when connected via Sim -- see
-    # `_tour_hw_tooltip()`/`_TOUR_SIM_TOOLTIP` and the gating applied in
-    # `_on_connect()` below -- never a crash or silent no-op.
+    # 108-007: tours now run against BOTH backends -- SimTransport is
+    # rewired onto robot_radio.io.sim_loop.SimLoop (the real, compiled
+    # firmware simulator), which satisfies planner.executor.TwistTransport
+    # directly, the same shape _HardwareTransport.protocol already exposed
+    # for a live NezhaProtocol (see transport.py's SimTransport.protocol).
+    # Tour buttons therefore enable identically for Sim and hardware
+    # connections -- see _on_connect() below, which no longer disables them
+    # for is_sim_transport(transport).
     def _tour_hw_tooltip(name: str) -> str:
         return (
             f"Run {name}: resets to the origin (display-only pending "
@@ -743,11 +743,13 @@ def _build_main_window():  # type: ignore[return]
             "closed-loop heading correction)."
         )
 
-    _TOUR_SIM_TOOLTIP = (
-        "Tours require a real-hardware connection this sprint — Sim's "
-        "backing sim library was removed at sprint 102 (architecture-"
-        "update.md Decision 1)."
-    )
+    def _tour_sim_tooltip(name: str) -> str:
+        return (
+            f"Run {name}: drives the tour's geometry against the compiled "
+            "firmware simulator (SimLoop) via planner.tour.run_tour() "
+            "(streamed twist()s, closed-loop heading correction) -- the "
+            "same driver path as hardware."
+        )
 
     _tour_buttons: list[tuple[QPushButton, str]] = []
     for _tour_name in TOURS:
@@ -2432,8 +2434,10 @@ def _build_main_window():  # type: ignore[return]
         except Exception as exc:  # noqa: BLE001
             _append_log(f"[WARN] Could not start latest-session capture: {exc}")
 
-        # For Sim transport, STREAM 50 is sent internally by the tick-thread.
-        # For hardware transports, send STREAM 50 here.
+        # For Sim transport, telemetry flows unconditionally every SimLoop
+        # tick (no STREAM verb to send -- SimLoop has no wire/config-channel
+        # simulation surface at all, see transport.py's SimTransport
+        # docstring). For hardware transports, send STREAM 50 here.
         if not isinstance(transport, SimTransport):
             # Loudly flag a robot running stale firmware (hardware only —
             # the sim library is always built from this tree).
@@ -2516,15 +2520,14 @@ def _build_main_window():  # type: ignore[return]
         # Enable all Send buttons now that a transport is connected.
         for _sb in _send_buttons:
             _sb.setEnabled(True)
-        # 107-003: tour buttons are real-hardware-only this sprint -- override
-        # the generic enable above when connected via Sim (see the
-        # tour-button-creation comment for the full rationale).
+        # 108-007: tour buttons enable for Sim exactly like hardware now --
+        # SimTransport.protocol exposes a live SimLoop (see the
+        # tour-button-creation comment for the full rationale). Already
+        # enabled by the generic loop above; only the tooltip differs.
         for _tb, _tour_name in _tour_buttons:
             if is_sim_transport(transport):
-                _tb.setEnabled(False)
-                _tb.setToolTip(_TOUR_SIM_TOOLTIP)
+                _tb.setToolTip(_tour_sim_tooltip(_tour_name))
             else:
-                _tb.setEnabled(True)
                 _tb.setToolTip(_tour_hw_tooltip(_tour_name))
         # Enable operations panel buttons.
         ops_ctrl.set_connected(True, transport)

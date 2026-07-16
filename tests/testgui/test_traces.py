@@ -10,13 +10,14 @@ that ``TraceModel`` actually accumulates plausible forward-motion traces --
 closing the loop the architecture doc's Step 1 investigation opened but did
 not itself verify.
 
-Drives a connected ``SimTransport`` (ticket 083-001) directly -- bypassing
-``KeyboardDriver`` entirely -- via ``transport.send("S 200 200")`` (097:
-``DEV DT VW``/``DEV DT PORTS`` have no binary arm and never will -- the
-legacy ``DEV`` debug command family was retired along with the rest of the
-text plane; ``binary_bridge.translate_command()`` translates ``S`` into a
-binary ``CommandEnvelope{drive: DrivetrainCommand{wheels}}``, the same
-per-wheel-speed drive a real TestGUI session's S row Send button issues).
+Drives a connected ``SimTransport`` directly -- bypassing ``KeyboardDriver``
+entirely -- via ``transport.protocol.twist()`` (108-007: ``SimLoop`` has no
+generic wire/config-channel simulation surface at all, so ``send()``/
+``command()`` text verbs no longer route to anything on Sim; a single
+``twist(v_x, omega, duration)`` call arms the firmware's deadman for
+``duration`` ms and the robot drives at that commanded twist until it
+expires -- see ``source/app/robot_loop.cpp``'s ``deadman_.arm()`` call --
+so one call with a generous duration covers this file's whole wait window).
 
 Run with::
 
@@ -102,7 +103,9 @@ def test_encoder_trace_grows_with_forward_drive_via_dead_reckoning(
     model = TraceModel()
     transport.on_telemetry = model.feed
 
-    transport.send("S 200 200")
+    protocol = transport.protocol
+    assert protocol is not None
+    protocol.twist(200.0, 0.0, 6000.0)
 
     assert _wait_until(lambda: len(model.encoder) >= _MIN_TRACE_POINTS), (
         f"encoder trace only reached {len(model.encoder)} points within "
@@ -154,7 +157,9 @@ def test_otos_fused_traces_still_flat_pending_098(transport: SimTransport) -> No
     model = TraceModel()
     transport.on_telemetry = model.feed
 
-    transport.send("S 200 200")
+    protocol = transport.protocol
+    assert protocol is not None
+    protocol.twist(200.0, 0.0, 6000.0)
 
     assert _wait_until(lambda: len(model.otos) >= _MIN_TRACE_POINTS), (
         f"otos trace only reached {len(model.otos)} points within "
@@ -201,7 +206,9 @@ def test_camera_trace_grows_in_step_with_ground_truth(transport: SimTransport) -
 
     transport.on_truth = _on_truth
 
-    transport.send("S 200 200")
+    protocol = transport.protocol
+    assert protocol is not None
+    protocol.twist(200.0, 0.0, 6000.0)
 
     assert _wait_until(lambda: len(model.camera) >= 3), (
         f"camera trace only reached {len(model.camera)} points within "

@@ -18,109 +18,101 @@ Keys
 no longer exists — ``source/commands/`` has no ``SIMSET`` verb (confirmed by
 reading every ``makeCmd``/``makeSchemaCmd`` registration; the current verb
 set is ``PING``/``VER``/``HELP``/``ECHO``/``ID``/``STREAM``/``SNAP``/
-``DEV M``/``DEV DT``/``DEV STATE``/``DEV STOP``/``DEV WD``).  Every key below
-is now applied directly through a ctypes sim-connection setter (108-006:
-``robot_radio.io.sim_loop.SimLoop`` -- see that module's own docstring for
-the reconciliation from the deleted predecessor this comment originally
-described), either via ``PROFILE_TO_SIM_SETTER`` (the 1:1-mapped keys) or
-via a small number of keys ``transport.py``'s ``_apply_profile_to_sim()``
-special-cases (documented under each key below and in that map's own
-docstring).
+``DEV M``/``DEV DT``/``DEV STATE``/``DEV STOP``/``DEV WD``).
+
+108-007: repointed a SECOND time, from the deleted ``SimConnection``
+(sprint 081/082's ~40-symbol ctypes ABI) onto
+``robot_radio.io.sim_loop.SimLoop`` (108-005/006's real, 19-symbol
+``sim_ctypes.cpp`` ABI over ``TestSim::SimHarness``/``TestSim::SimPlant``).
+The new ABI backs FAR fewer fault-condition knobs than the old one did --
+``SimLoop`` exposes exactly four fault setters (``set_wheel_disconnected``/
+``set_wheel_freeze``/``set_wheel_dropout_rate``/``set_otos_drift``), of
+which only ``set_otos_drift`` maps onto any key below at all (the
+``otos_lin_drift``/``otos_yaw_drift`` pair, combined into one call). Every
+other key in this module has NO ``SimLoop`` setter backing it -- applying
+is skipped outright and a ``[WARN]`` is logged if the profile carries a
+non-neutral value for it. ``PROFILE_TO_SIM_SETTER`` (below) is therefore
+now EMPTY: there is no remaining profile key with a bare 1:1
+(key -> single-arg setter) mapping onto ``SimLoop`` -- the one real mapping
+that exists (``otos_lin_drift``/``otos_yaw_drift``) needs its two keys
+combined into one three-argument ``set_otos_drift(x_drift, y_drift,
+heading_drift)`` call, so it is handled as a special case in
+``transport.py``'s ``SimTransport._apply_profile_to_sim()`` instead, the
+same way ``enc_scale_err_l``/``enc_scale_err_r`` was special-cased under
+the deleted ABI. See that method's own docstring for the authoritative,
+narrowed mapping.
 
 ``encoder_noise``
-    Per-side encoder noise sigma, in millimetres. Default ``0.0``. Applied to
-    both sides in ONE call, ``SimConnection.set_enc_noise(2, value)`` (side=2
-    = both) — excluded from ``PROFILE_TO_SIM_SETTER`` (fans out specially).
+    Per-side encoder noise sigma, in millimetres. Default ``0.0``. **No
+    ``SimLoop`` setter backs this knob** -- applying is skipped, with a
+    ``[WARN]`` logged if set away from its neutral ``0.0``.
 ``slip_turn_extra``
     Fractional encoder over-report during turns (turn-slip scrub model).
-    Default ``0.0`` (ticket 073-003 — previously ``0.26``). **No ctypes ABI
-    entry point backs this knob at all** in the sprint-081/082 ABI (no
-    turn-rate-dependent slip knob is wired — see
-    ``SimConnection.set_slip()``'s own docstring) — excluded from
-    ``PROFILE_TO_SIM_SETTER``; ``_apply_profile_to_sim()`` skips applying it
-    and logs a one-time ``[WARN]`` if it is set away from its neutral ``0.0``.
-    See ``resolve_calibration_defaults()`` for the reconciliation this
-    default is (historically) part of.
+    Default ``0.0`` (ticket 073-003 — previously ``0.26``). **No ``SimLoop``
+    setter backs this knob** (no turn-rate-dependent slip knob is wired
+    into the current ABI either) -- applying is skipped, with a ``[WARN]``
+    logged if set away from its neutral ``0.0``. See
+    ``resolve_calibration_defaults()`` for the reconciliation this default
+    is (historically) part of.
 ``otos_linear_noise``
     OTOS linear-position noise sigma, as a fraction of arc. Default ``0.05``.
-    ``PROFILE_TO_SIM_SETTER`` key: ``set_otos_linear_noise``.
+    **No ``SimLoop`` setter backs this knob** -- applying is skipped, with a
+    ``[WARN]`` logged if set away from its neutral ``0.05``.
 ``otos_yaw_noise``
-    OTOS yaw noise sigma, as a fraction. Default ``0.0``.
-    ``PROFILE_TO_SIM_SETTER`` key: ``set_otos_yaw_noise``.
+    OTOS yaw noise sigma, as a fraction. Default ``0.0``. **No ``SimLoop``
+    setter backs this knob** -- applying is skipped, with a ``[WARN]``
+    logged if set away from its neutral ``0.0``.
 
 Additive/noise terms — ``0.0`` is a genuine no-op:
 
 ``enc_scale_err_l`` / ``enc_scale_err_r``
-    Fractional per-side encoder over/under-report (0 = perfect). Each needs
-    an explicit ``side`` argument (``SimConnection.set_enc_scale_error(0/1,
-    value)``) — excluded from ``PROFILE_TO_SIM_SETTER`` (same reason as
-    ``encoder_noise``) and applied by two explicit calls in
-    ``_apply_profile_to_sim()``.
+    Fractional per-side encoder over/under-report (0 = perfect). **No
+    ``SimLoop`` setter backs either knob** -- applying is skipped, with a
+    ``[WARN]`` logged if either is set away from its neutral ``0.0``.
 ``otos_lin_scale_err`` / ``otos_ang_scale_err``
-    Fractional OTOS linear/angular scale error (0 = perfect).
-    ``PROFILE_TO_SIM_SETTER`` keys: ``set_otos_linear_scale_error`` /
-    ``set_otos_angular_scale_error``.
+    Fractional OTOS linear/angular scale error (0 = perfect). **No
+    ``SimLoop`` setter backs either knob** -- applying is skipped, with a
+    ``[WARN]`` logged if either is set away from its neutral ``0.0``.
 ``otos_lin_drift`` / ``otos_yaw_drift``
-    OTOS linear/yaw drift, applied as a constant ADDITIVE term once per
-    ``Hal::SimOdometer`` tick (``setLinearDriftPerTick()``/
-    ``setYawDriftPerTick()`` — ``source/hal/sim/sim_odometer.{h,cpp}``) — NOT
-    a one-shot bias and NOT a per-SECOND rate.  (The retired ``SIMSET`` wire
-    keys ``otosLinDriftMmS``/``otosYawDriftDegS`` were a mm/s, deg/s rate,
-    with ``SimCommands.cpp`` converting to per-tick internally; that
-    conversion layer no longer exists, so this module and the GUI now deal
-    in the SAME per-tick unit the ctypes setter takes directly — confirmed
-    by reading ``physics_world.h``/``sim_odometer.h`` and
-    ``sim_odometer.cpp``'s ``tick()``, which adds
-    ``linearDriftPerTick_``/``yawDriftPerTick_`` to the accumulator exactly
-    once per call, unconditional on elapsed time.)  ``otos_lin_drift`` is in
-    millimetres PER TICK; ``otos_yaw_drift`` is in RADIANS per tick (not
-    degrees — ``sim_set_otos_yaw_drift`` takes radians directly and there is
-    no host-side unit conversion). ``PROFILE_TO_SIM_SETTER`` keys:
-    ``set_otos_linear_drift`` / ``set_otos_yaw_drift``.
+    OTOS linear/yaw drift. THE ONE surviving mapping: combined into a
+    single ``SimLoop.set_otos_drift(otos_lin_drift, 0.0, otos_yaw_drift)``
+    call (``otos_lin_drift`` -> the ABI's ``x_drift`` term; ``y_drift`` is
+    left at its neutral ``0.0`` -- the pre-108-007 profile shape has no
+    separate x/y drift terms to split across). ``otos_lin_drift`` is in
+    millimetres; ``otos_yaw_drift`` is in radians -- matching
+    ``sim_ctypes.cpp``'s ``sim_set_otos_drift`` argument units directly, no
+    host-side conversion. See ``transport.py``'s
+    ``SimTransport._apply_profile_to_sim()`` for the actual call.
 
-Multiplicative terms — ``1.0`` is the genuine no-op, NOT ``0.0`` (see
-``PhysicsWorld``'s ``_bodyRotationalScrub``/``_bodyLinearScrub``/
-``_offsetFactorL``/``_offsetFactorR`` field defaults, all ``1.0f``):
+Multiplicative terms — ``1.0`` is the genuine no-op, NOT ``0.0``:
 
 ``body_rot_scrub`` / ``body_lin_scrub``
-    Body-truth rotational/linear scrub factor, clamped to ``(0, 1]`` on the
-    firmware side. ``PROFILE_TO_SIM_SETTER`` keys:
-    ``set_body_rotational_scrub`` / ``set_body_linear_scrub``.
+    Body-truth rotational/linear scrub factor. **No ``SimLoop`` setter backs
+    either knob** -- applying is skipped, with a ``[WARN]`` logged if either
+    is set away from its neutral ``1.0``.
     ``DEFAULT_PROFILE["body_rot_scrub"]`` itself stays the neutral ``1.0``
     (a bare, no-calibration-lookup profile dict must remain a genuine
     no-op) — but ``load_sim_error_profile()``'s FALLBACK path (no persisted
     file, or a persisted file missing this key) resolves it from the active
     robot's calibration via ``resolve_calibration_defaults()`` instead,
-    ticket 073-003.
+    ticket 073-003 (this reconciliation still runs; it just no longer has
+    any live sim effect after 108-007's ABI narrowing).
 ``motor_offset_l`` / ``motor_offset_r``
     Per-side motor actuation offset factor (multiplies commanded velocity).
-    **No ctypes ABI entry point backs this knob at all**
-    (``Hal::PhysicsWorld::setOffsetFactor()`` is deliberately left unwrapped
-    by ticket 081-004's ``sim_api.cpp`` — see
-    ``SimConnection.set_motor_offset()``'s own docstring) — excluded from
-    ``PROFILE_TO_SIM_SETTER``; ``_apply_profile_to_sim()`` skips applying
-    either and logs a one-time ``[WARN]`` if either is set away from its
-    neutral ``1.0``.
+    **No ``SimLoop`` setter backs either knob** -- applying is skipped, with
+    a ``[WARN]`` logged if either is set away from its neutral ``1.0``.
 
 ``trackwidth``
-    The plant's trackwidth, in millimetres. Has NO safe zero default —
-    ``PhysicsWorld::update()``'s sub-step B divides by it. Defaults to
-    ``128.0``, matching ``PhysicsWorld::kDefaultTrackwidth`` (``source/hal/
-    sim/physics_world.h`` — fixed from a stale 150.0 to the project's real
-    128.0 during the 097-OOP wheelbase-consistency investigation: that
-    constant is ALSO what ``tests/_infra/sim/sim_api.cpp``'s
-    ``defaultSimDrivetrainConfig()`` seeds the firmware's OWN kinematics
-    trackwidth from, so it is the sim's single point of truth for both
-    sides). This keeps the plant's geometry matched to the firmware's
-    kinematic calibration (a mismatch makes every encoder-arc turn land
-    off-angle by the ratio) even for a caller that applies THIS knob
-    without also pushing an equivalent ``SET tw=`` to the firmware (the
-    TestGUI's own Connect flow already does that separately, via
-    ``__main__.py``'s ``_push_robot_calibration()`` — this default is
-    belt-and-suspenders for callers below that layer). This is NOT a
-    sentinel meaning "don't touch" — every Apply unconditionally calls
-    ``SimConnection.set_trackwidth(value)`` and overwrites the plant's
-    trackwidth. ``PROFILE_TO_SIM_SETTER`` key: ``set_trackwidth``.
+    The plant's trackwidth, in millimetres. Has NO safe zero default.
+    Defaults to ``128.0``, matching ``PhysicsWorld::kDefaultTrackwidth``
+    (``source/hal/sim/physics_world.h``). 108-007: ``SimLoop``'s
+    ``track_width`` is fixed at CONSTRUCTION time (``sim_create()``'s own
+    argument) -- there is no live setter for it any more. ``SimTransport.
+    connect()`` reads this key from the persisted profile and passes it to
+    ``SimLoop(track_width=...)``; a live Apply with a changed trackwidth
+    logs an explicit "takes effect on next Connect" note (NOT the generic
+    "not supported" warning, since it genuinely does take effect, just not
+    live).
 """
 from __future__ import annotations
 
@@ -182,34 +174,24 @@ DEFAULT_PROFILE: dict = {
     "trackwidth": 128.0,
 }
 
-#: Maps every profile key that has a 1:1 ``SimConnection`` setter equivalent
-#: to that setter's method name (e.g. ``"body_rot_scrub":
-#: "set_body_rotational_scrub"``), called with the single profile value as
-#: its only argument (``transport.py``'s ``_apply_profile_to_sim()``).
+#: Maps every profile key that has a 1:1 ``SimLoop`` setter equivalent to
+#: that setter's method name, called with the single profile value as its
+#: only argument (``transport.py``'s ``SimTransport._apply_profile_to_sim()``).
 #:
-#: Deliberately excludes five ``DEFAULT_PROFILE`` keys that do NOT fit that
-#: shape — each documented in the module docstring's "Keys" section and
-#: handled by explicit code in ``_apply_profile_to_sim()`` instead:
-#:   - "encoder_noise": fans out to ONE call, both sides at once
-#:     (``set_enc_noise(2, value)``).
-#:   - "enc_scale_err_l" / "enc_scale_err_r": each need an explicit ``side``
-#:     argument (``set_enc_scale_error(0/1, value)``).
-#:   - "motor_offset_l" / "motor_offset_r": no ctypes ABI entry point backs
-#:     this knob at all in the sprint-081/082 ABI — applying is skipped
-#:     outright (with a one-time ``[WARN]`` if non-neutral).
-#:   - "slip_turn_extra": likewise no ctypes ABI backing at all — same
-#:     skip-and-warn treatment.
-PROFILE_TO_SIM_SETTER: dict = {
-    "otos_lin_scale_err": "set_otos_linear_scale_error",
-    "otos_ang_scale_err": "set_otos_angular_scale_error",
-    "otos_linear_noise": "set_otos_linear_noise",
-    "otos_yaw_noise": "set_otos_yaw_noise",
-    "otos_lin_drift": "set_otos_linear_drift",
-    "otos_yaw_drift": "set_otos_yaw_drift",
-    "body_rot_scrub": "set_body_rotational_scrub",
-    "body_lin_scrub": "set_body_linear_scrub",
-    "trackwidth": "set_trackwidth",
-}
+#: 108-007: repointed onto ``robot_radio.io.sim_loop.SimLoop``'s far
+#: narrower 19-symbol ABI (down from the deleted ``SimConnection``'s
+#: ~40-symbol one) -- EMPTY as of this ticket. No remaining
+#: ``DEFAULT_PROFILE`` key has a bare 1:1 (key -> single-arg setter) mapping
+#: onto ``SimLoop``: the one surviving fault mapping
+#: (``otos_lin_drift``/``otos_yaw_drift`` -> ``set_otos_drift(x, y,
+#: heading)``) needs two keys combined into one three-argument call, so it
+#: is handled as an explicit special case in ``_apply_profile_to_sim()``
+#: instead (see that method's own docstring for the authoritative mapping
+#: and every "not supported in this sim" key). Kept as a (currently empty)
+#: dict, not deleted, so a future ``SimLoop`` fault setter that DOES land a
+#: bare 1:1 shape has an obvious place to register without another
+#: call-site change.
+PROFILE_TO_SIM_SETTER: dict = {}
 
 
 def resolve_calibration_defaults(

@@ -452,19 +452,18 @@ class TestLoadFallbackResolvesBodyRotScrubFromCalibration:
 
 class TestProfileToSimSetterMap:
     def test_map_contents(self):
+        """108-007: repointed from the deleted ``SimConnection`` ABI onto
+        ``robot_radio.io.sim_loop.SimLoop``'s far narrower 19-symbol one --
+        no remaining ``DEFAULT_PROFILE`` key has a bare 1:1 (key -> single-
+        arg setter) mapping onto ``SimLoop`` (the one surviving fault
+        mapping, ``otos_lin_drift``/``otos_yaw_drift`` -> ``set_otos_drift``,
+        needs its two keys combined into one three-argument call, so it is
+        handled as an explicit special case in ``transport.py``'s
+        ``SimTransport._apply_profile_to_sim()`` instead -- see that
+        module's own docstring)."""
         from robot_radio.testgui.sim_prefs import PROFILE_TO_SIM_SETTER
 
-        assert PROFILE_TO_SIM_SETTER == {
-            "otos_lin_scale_err": "set_otos_linear_scale_error",
-            "otos_ang_scale_err": "set_otos_angular_scale_error",
-            "otos_linear_noise": "set_otos_linear_noise",
-            "otos_yaw_noise": "set_otos_yaw_noise",
-            "otos_lin_drift": "set_otos_linear_drift",
-            "otos_yaw_drift": "set_otos_yaw_drift",
-            "body_rot_scrub": "set_body_rotational_scrub",
-            "body_lin_scrub": "set_body_linear_scrub",
-            "trackwidth": "set_trackwidth",
-        }
+        assert PROFILE_TO_SIM_SETTER == {}
 
     def test_map_keys_are_all_valid_profile_keys(self):
         """Every key in the map must actually exist in DEFAULT_PROFILE."""
@@ -501,18 +500,32 @@ class TestProfileToSimSetterMap:
         assert len(setter_names) == len(set(setter_names))
 
     def test_map_covers_every_default_profile_key_together_with_exclusions(self):
-        """Every DEFAULT_PROFILE key is either in the 1:1 map or one of the
-        six keys _apply_profile_to_sim() special-cases -- no key is silently
-        dropped on the floor between the two."""
+        """108-007: every DEFAULT_PROFILE key is either in the (now empty)
+        1:1 map or explicitly handled by ``SimTransport._apply_profile_to_sim()``
+        -- ``otos_lin_drift``/``otos_yaw_drift`` (the one surviving mapping,
+        combined into a single ``set_otos_drift()`` call) and ``trackwidth``
+        (applied at ``SimLoop`` construction time, not live) are handled by
+        name; every other key has no ``SimLoop`` setter at all and is
+        skip-and-warn only -- no key is silently dropped on the floor
+        between the two."""
         from robot_radio.testgui.sim_prefs import DEFAULT_PROFILE, PROFILE_TO_SIM_SETTER
 
         special_cased = {
+            "otos_lin_drift",
+            "otos_yaw_drift",
+            "trackwidth",
             "encoder_noise",
+            "slip_turn_extra",
+            "otos_linear_noise",
+            "otos_yaw_noise",
             "enc_scale_err_l",
             "enc_scale_err_r",
+            "otos_lin_scale_err",
+            "otos_ang_scale_err",
+            "body_rot_scrub",
+            "body_lin_scrub",
             "motor_offset_l",
             "motor_offset_r",
-            "slip_turn_extra",
         }
         assert set(PROFILE_TO_SIM_SETTER) | special_cased == set(DEFAULT_PROFILE)
 
