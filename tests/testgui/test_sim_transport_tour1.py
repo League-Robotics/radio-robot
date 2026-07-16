@@ -149,12 +149,15 @@ def test_tour_shaped_sequence_via_direct_twist_calls_drives_and_closes(sim_trans
 
 
 # ---------------------------------------------------------------------------
-# Full run_tour(TOUR_1) -- known-unreliable in Sim (see the issue below),
-# NOT a regression from this ticket's transport rewire (the seam itself is
-# proven correct by the direct-twist test above). xfail(strict=False): an
-# unexpected pass is reported, never hidden, but this bug -- entirely
-# outside ticket 108-007's transport-plumbing scope -- does not permanently
-# redden the suite.
+# Full run_tour(TOUR_1) -- was known-unreliable in Sim (see the closed issue
+# below): WheelPlant::reportedPosition() reported a stopped wheel's position
+# with zero noise, so a stopped wheel emitted byte-identical tenths every
+# cycle and starved Devices::MotorArmor::updateWedgeDetector() of the jitter
+# a real, healthy encoder always has at rest, latching kFaultWedgeLatch at
+# every leg boundary. Fixed by ticket 108-011 (a per-wheel, rest-gated,
+# seeded ±1 LSB dither in WheelPlant::reportedPosition()'s nominal branch --
+# see tests/sim/plant/wheel_plant.{h,cpp}). This test now runs for real, no
+# xfail.
 # ---------------------------------------------------------------------------
 
 _MAX_TOUR_ATTEMPTS = 5
@@ -163,12 +166,6 @@ _MAX_CLOSURE_POSITION_MM = 600.0  # [mm] -- see the direct-twist test's own
 # COMPLETED cleanly. This only catches an implausible blowup.
 
 
-@pytest.mark.xfail(
-    reason="sim-mode Tour 1 reliably trips kFaultWedgeLatch via run_tour()'s "
-           "baseline-exclusion timing -- see clasi/issues/"
-           "sim-mode-tour-1-fault-baseline-exclusion-mismatch.md",
-    strict=False,
-)
 def test_tour_1_runs_to_completion_with_finite_small_closure(sim_transport):
     """The programmatic equivalent of "press Tour 1 and watch the trace
     draw": every leg of TOUR_1 runs to completion (RunOutcome.COMPLETED)

@@ -34,7 +34,20 @@ float WheelPlant::reportedPosition() {
     } else {
       reportPosition = position_;
     }
+  } else if (encoderJitter_ && std::fabs(velocity_) < kRestVelocityThreshold) {
+    // At rest: dither by one wire LSB, flipping sign only once every
+    // kDitherPeriod calls (held steady in between) -- see kDitherPeriod's
+    // own comment in wheel_plant.h for why every-call alternation (the
+    // 108-011 original) is wrong. position_ itself (plant truth) is never
+    // touched.
+    reportPosition = position_ + (ditherPhase_ ? kDitherLsb : -kDitherLsb);
+    if (++ditherCounter_ >= kDitherPeriod) {
+      ditherCounter_ = 0;
+      ditherPhase_ = !ditherPhase_;
+    }
   } else {
+    // Moving again -- next rest period starts its dither cycle fresh.
+    ditherCounter_ = 0;
     reportPosition = position_;
   }
   lastReportedPosition_ = reportPosition;

@@ -3,12 +3,20 @@ id: '108'
 title: Pure I2CBus/Clock interfaces and a real SimPlant simulator (sim-mode tours)
 status: planning-docs
 branch: sprint/108-pure-i2cbus-clock-interfaces-and-a-real-simplant-simulator-sim-mode-tours
-use-cases: ["SUC-038", "SUC-039", "SUC-040", "SUC-041", "SUC-042", "SUC-043", "SUC-044"]
+use-cases:
+- SUC-038
+- SUC-039
+- SUC-040
+- SUC-041
+- SUC-042
+- SUC-043
+- SUC-044
 issues:
 - plan-pure-i2cbus-clock-interfaces-a-real-simplant-simulator.md
 - sim-api-ctypes-abi-for-sim-mode-tours.md
 - binary-bridge-segment-replace-arms-deleted.md
 - color-sensor-apds-probe-success-on-failure.md
+- sim-mode-tour-1-fault-baseline-exclusion-mismatch.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -171,10 +179,14 @@ Before tickets can be created, all of the following must be true:
 | 008 | Fix ColorSensorLeaf APDS probe success-on-NAK + Python hook regression test | 005 |
 | 009 | Migrate the 13 register-level unit tests to Python SimPlant hook tests; delete C++ harnesses | 008 |
 | 010 | Clock/Sleeper purification: pure interfaces + MicroBit/Sim impls; end-to-end verification | 003, 009 |
+| 011 | Dither stopped-wheel plant reads to stop Tour 1 false wedge-latch faults | — |
 
 Tickets execute serially in the order listed. Note: 008 branches off 005
 in parallel with 006/007 (both depend only on 005), but is listed after
 007 in execution order since 009 depends on it and the master sequence is
 otherwise linear; 010 waits on both 003 (sim harness must exist to update)
 and 009 (needs the full pytest gate green before its own final
-verification pass).
+verification pass). 011 is a standalone sim-fidelity fix discovered
+during 007's own execution (see `clasi/issues/sim-mode-tour-1-fault-
+baseline-exclusion-mismatch.md`) with no blocking dependency on any
+prior ticket.

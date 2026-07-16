@@ -216,6 +216,11 @@ void SimPlant::setDropoutRate(int port, float fraction) {
   mutableWheelPlant(port).setDropoutRate(fraction);
 }
 
+void SimPlant::setEncoderJitter(bool enabled) {
+  left_.setEncoderJitter(enabled);
+  right_.setEncoderJitter(enabled);
+}
+
 void SimPlant::setOtosDrift(float xDrift, float yDrift, float headingDrift) {
   otos_.setDrift(xDrift, yDrift, headingDrift);
 }

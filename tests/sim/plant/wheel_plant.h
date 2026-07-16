@@ -44,6 +44,86 @@ namespace TestSim {
 constexpr float kDefaultTau = 0.13f;           // [s]
 constexpr float kDefaultDutyVelMax = 500.0f;   // [mm/s] velocity at |duty|==1.0
 
+// Rest-dither tuning (108-011, SUC-042). OPT-IN, default OFF (see
+// setEncoderJitter() below): the very first cut of this ticket applied the
+// dither unconditionally to EVERY WheelPlant, which broke every C++
+// scenario test that asserts an exact, byte-stable stopped-wheel
+// reportedPosition() (e.g. tests/sim/system/test_scripted_twist_demo.py,
+// straight_twist, fault_knobs, plant_harness) -- WheelPlant's own "seeded,
+// deterministic, run-A==run-B" contract (this file's header comment) is a
+// documented default those tests correctly rely on. A real encoder never
+// reports two consecutive byte-identical readings while sitting still -- it
+// jitters by roughly a count. This plant's nominal (no-fault-knob, jitter
+// OFF) reportedPosition() reports the exact same quantized position_ every
+// call while at rest -- realistic-LOOKING but wrong ONLY for the
+// hardware-realistic ctypes/tour path, which is why jitter is enabled
+// there (tests/_infra/sim/sim_ctypes.cpp's sim_create(), see that file) and
+// left off everywhere else. With jitter OFF, it starves
+// Devices::MotorArmor::updateWedgeDetector() (kWedgeThreshold=10 consecutive
+// identical reads) of the natural jitter that keeps a real, healthy encoder
+// from ever latching the wedge fault while idle -- see
+// clasi/issues/sim-mode-tour-1-fault-baseline-exclusion-mismatch.md. Below
+// kRestVelocityThreshold (sub-LSB-per-cycle regime -- the wheel is not
+// covering a full kDitherLsb of ground within one tick anyway) the reported
+// position alternates by one wire LSB around the true position_, seeded by a
+// per-instance phase bit (no RNG -- see this file's own "seeded" doc).
+//
+// kDitherPeriod (added after the first cut of this ticket flushed out a
+// regression -- see wheel_plant.cpp's reportedPosition() and the ticket's
+// own completion notes): the FIRST implementation flipped the dither's sign
+// on EVERY rest-branch call (kDitherPeriod effectively 1). That satisfied
+// the wedge detector (a change every single read, nowhere near
+// kWedgeThreshold=10) but, driven through the REAL Devices::NezhaMotor
+// velocity PID this harness wires up (tests/_infra/sim/sim_harness.h's
+// makeMotorConfig(): velFiltAlpha=1.0, i.e. NO smoothing, plus a raw
+// proportional term that is NEVER zeroed by MotorConfig.velDeadband --
+// Devices::MotorVelocityPid::compute() only freezes the INTEGRAL in the
+// deadband, never the kp*err term itself, source/devices/velocity_pid.cpp),
+// produced a REAL, sustained ~4mm/s phantom velocity reading every single
+// tick -- and App::Drive::tick() (source/app/drive.cpp) calls
+// left_/right_.setVelocity(0) unconditionally every cycle from boot, so
+// Mode::Active's PID chases that phantom reading continuously, even with no
+// twist ever commanded. Once anything (e.g. a test's write hook) stops
+// FURTHER duty writes from landing, whatever small corrective duty was
+// in-flight at that instant is stuck forever, and the plant keeps
+// integrating it -- see tests/testgui/test_sim_loop.py's
+// test_write_hook_can_swallow_a_command, which caught this as sustained
+// several-mm/s drift over less than a second.
+//
+// Fix: flip the dither's sign only once every kDitherPeriod calls (held
+// steady the calls in between), not every call. A held value between flips
+// means most rest-branch reads are BYTE-IDENTICAL to the last "fresh"
+// sample Devices::NezhaMotor's own freshness gate anchored on
+// (nezha_motor.cpp's `raw != lastFreshRawEnc_` check) -- exactly the real-
+// hardware-realistic case that gate exists for -- so filteredVelocity_ is
+// simply HELD (not recomputed, let alone driven to a new nonzero value) on
+// every one of those calls, and the PID's proportional term sees 0 most of
+// the time rather than a continuous alternating nonzero signal.
+//
+// kDitherPeriod=3 keeps the max byte-identical run at 3 -- comfortably
+// under kWedgeThreshold=10, with a much wider margin than strictly
+// required -- and was the smallest period, of {1..8} checked empirically
+// against both regression harnesses, that satisfies BOTH: (a)
+// test_write_hook_can_swallow_a_command's <1mm/~0.7s no-motion invariant
+// (every write swallowed) and (b) straight_twist_harness's <8deg heading
+// tolerance for a held 150mm/s straight run. Larger periods (4, 5, 8 were
+// all tried) do NOT monotonically improve either check -- e.g. period=8
+// passes the write-swallow test (worst-case phantom velocity per flip is
+// smaller) but FAILS straight-twist (heading drifts to >20deg), because a
+// longer hold means a LARGER one-time positional bias can accumulate
+// between the two wheels' independent dither phases exactly during the
+// brief below-kRestVelocityThreshold spin-up window at the start of a
+// twist, before the wheels reach cruising speed -- a longer hold does not
+// uniformly shrink risk, it just relocates it. Given that non-monotonic,
+// aliasing-like sensitivity to the exact period (a product of this
+// harness's specific tick cadence and PID gains, not a general law), the
+// period was chosen by exhaustive empirical check across the acceptance
+// suite rather than derived from a closed-form bound -- see the ticket's
+// own completion notes for the raw pass/fail table across periods 1-8.
+constexpr float kRestVelocityThreshold = 1.0f;  // [mm/s]
+constexpr float kDitherLsb = 0.1f;              // [mm] one wire tenths-of-mm count
+constexpr int kDitherPeriod = 3;                // [reportedPosition() calls]
+
 class WheelPlant {
  public:
   // dutyVelMax: [mm/s] steady-state wheel speed at |appliedDuty|==1.0.
@@ -134,6 +214,15 @@ class WheelPlant {
   void setDropoutRate(float fraction);   // [0,1]
   float dropoutRate() const { return dropoutRate_; }
 
+  // Rest-encoder jitter (108-011, SUC-042, see this file's "Rest-dither
+  // tuning" comment above). Default OFF -- reportedPosition() then returns
+  // exactly position_ at rest, matching every C++ scenario test's
+  // deterministic-stopped-wheel assumption. ON is opt-in per instance; the
+  // ctypes/hardware-realistic path (tests/_infra/sim/sim_ctypes.cpp's
+  // sim_create()) is the one caller that turns it on.
+  void setEncoderJitter(bool enabled) { encoderJitter_ = enabled; }
+  bool encoderJitter() const { return encoderJitter_; }
+
  private:
   float dutyVelMax_;         // [mm/s]
   float tau_;                // [s]
@@ -147,6 +236,13 @@ class WheelPlant {
   float dropoutRate_ = 0.0f;         // [0,1]
   float dropoutAccum_ = 0.0f;        // fractional accumulator, see setDropoutRate()
   float lastReportedPosition_ = 0.0f;  // [mm] the last value reportedPosition() actually returned
+  bool encoderJitter_ = false;         // 108-011: opt-in, default OFF -- see setEncoderJitter()
+
+  // Rest-dither phase (108-011): flips every kDitherPeriod dithered reads,
+  // own per-instance state so left/right wheels dither independently. See
+  // kRestVelocityThreshold/kDitherLsb/kDitherPeriod above.
+  bool ditherPhase_ = false;
+  int ditherCounter_ = 0;  // [reportedPosition() calls since the last flip]
 };
 
 }  // namespace TestSim

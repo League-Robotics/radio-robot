@@ -122,6 +122,14 @@ class SimPlant : public Devices::I2CBus {
   void freezePosition(int port, bool freeze);
   void setDropoutRate(int port, float fraction);  // [0,1]
 
+  // Rest-encoder jitter (108-011) -- fans out to BOTH WheelPlants (left and
+  // right); there is no per-port knob here, unlike the three fault-injection
+  // knobs above, because jitter is a plant-fidelity default for a whole
+  // SimPlant, not a scenario-scripted per-wheel fault. See
+  // WheelPlant::setEncoderJitter()'s own comment (wheel_plant.h) for why
+  // this defaults OFF and who turns it on.
+  void setEncoderJitter(bool enabled);
+
   // OTOS drift/bias -- deterministic, per OtosPlant::setDrift()'s own
   // comment (no RNG anywhere in either plant).
   void setOtosDrift(float xDrift, float yDrift, float headingDrift);  // [mm] [mm] [rad]

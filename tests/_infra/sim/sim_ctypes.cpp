@@ -154,6 +154,18 @@ using SimHookFn = int (*)(void* ctx, uint16_t addr, uint8_t* data, int len);
 SimHandle sim_create(float trackWidth) {
   TestSim::SimHarness* harness = trackWidth > 0.0f ? new TestSim::SimHarness(trackWidth)
                                                     : new TestSim::SimHarness();
+  // Rest-encoder jitter (108-011) is enabled ONLY on this ctypes/hardware-
+  // realistic path -- every Python consumer of the sim (the tour runner,
+  // TestGUI's sim-mode transport) gets hardware-like encoders that never
+  // hold a byte-identical stopped-wheel reading long enough to false-
+  // positive Devices::MotorArmor's wedge-latch detector (kWedgeThreshold=10
+  // consecutive identical reads) -- see wheel_plant.h's own "Rest-dither
+  // tuning" comment for why. The plain C++ SimHarness/SimPlant construction
+  // path (used directly by tests/sim/system/*.cpp scenario tests and
+  // plant_harness.cpp) never calls this file, so it stays on WheelPlant's
+  // deterministic default (jitter OFF) -- those tests assert an exact,
+  // byte-stable stopped-wheel reportedPosition() and must not see jitter.
+  harness->plant().setEncoderJitter(true);
   harness->boot();
   return harness;
 }
