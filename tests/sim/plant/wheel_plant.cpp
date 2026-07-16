@@ -17,13 +17,7 @@ void WheelPlant::step(float appliedDuty, float dt) {
   position_ += velocity_ * dt;
 }
 
-void WheelPlant::scriptEncoderResponse(Devices::I2CBus& bus, uint16_t wireAddr,
-                                        int writeCount) {
-  int status = disconnected_ ? kNakStatus : 0;
-  for (int i = 0; i < writeCount; ++i) {
-    bus.scriptWrite(wireAddr, status);
-  }
-
+float WheelPlant::reportedPosition() {
   // Fault-knob precedence: freeze wins outright (an explicitly frozen
   // reading is never itself subject to dropout-driven staleness -- there is
   // nothing "fresher" to fall back to while frozen). Otherwise the dropout
@@ -44,18 +38,7 @@ void WheelPlant::scriptEncoderResponse(Devices::I2CBus& bus, uint16_t wireAddr,
     reportPosition = position_;
   }
   lastReportedPosition_ = reportPosition;
-
-  // wheelTravelCalib=1.0, fwdSign=+1 convention (matches every existing
-  // scriptEncoderRequestCollect()-style helper in this codebase): raw ==
-  // reportPosition in tenths of a millimeter, exactly.
-  int32_t raw = static_cast<int32_t>(std::lround(reportPosition * 10.0f));
-  uint8_t data[4] = {
-      static_cast<uint8_t>(raw & 0xFF),
-      static_cast<uint8_t>((raw >> 8) & 0xFF),
-      static_cast<uint8_t>((raw >> 16) & 0xFF),
-      static_cast<uint8_t>((raw >> 24) & 0xFF),
-  };
-  bus.scriptRead(wireAddr, data, 4, status);
+  return reportPosition;
 }
 
 void WheelPlant::freezePosition(bool freeze) {

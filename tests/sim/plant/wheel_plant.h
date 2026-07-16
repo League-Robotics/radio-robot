@@ -35,8 +35,6 @@
 
 #include <cstdint>
 
-#include "devices/i2c_bus.h"
-
 namespace TestSim {
 
 // Ship-default plant tuning, reused by every scenario in plant_harness.cpp.
@@ -63,34 +61,22 @@ class WheelPlant {
   float velocity() const { return velocity_; }   // [mm/s] signed
   float position() const { return position_; }   // [mm]
 
-  // Schedules the encoder response Devices::NezhaMotor's NEXT
-  // requestSample()+tick() pair will consume, from this plant's CURRENT
-  // position() (subject to the fault knobs below) -- mirrors
-  // devices_motor_harness.cpp's scriptEncoderRequestCollect() two-write-one-
-  // read convention exactly (wheelTravelCalib=1.0, fwdSign=+1 convention:
-  // raw == reported-position()*10).
+  // Selects the position this plant currently reports to a bus read,
+  // applying the freeze/dropout fault knobs below (see each knob's own
+  // comment) -- NEVER touches step()'s own duty->velocity->position
+  // integration.
   //
-  // writeCount selects how many writes to pre-queue for this device
-  // address (1 or 2): requestEncoder() always issues exactly one 0x46
-  // write; tick()'s OWN mode dispatch (armoredWrite()->writeRawDuty())
-  // issues a SECOND write to the SAME address only on the specific cycle a
-  // new duty value actually reaches the bus (write-on-change gates every
-  // later repeat). Devices::I2CBus's scripted fake uses ONE global
-  // write/read FIFO per direction shared across every device address, not
-  // one per address (i2c_bus.h's own file header) -- so when this plant is
-  // composed alongside a second wheel and/or an OtosPlant sharing the SAME
-  // bus (a different device address), an unconsumed "slack" write here
-  // would be wrongly popped by that OTHER device's own next write() call,
-  // corrupting its address match. A single-wheel, single-address harness
-  // (this ticket's own ramp scenario) can safely over-provision (push 2
-  // unconditionally, matching scriptEncoderRequestCollect()'s own
-  // documented "harmless slack" precedent -- there is no other address for
-  // a stray entry to misalign); a MULTI-device harness (this ticket's
-  // pivot/determinism scenarios, and every future full-loop composition)
-  // must pass the EXACT count instead. Defaults to 1 (request-only) as the
-  // safe choice for a multi-device caller; pass 2 explicitly on a leaf's
-  // own first tick (the one cycle its write-on-change guard is certain to
-  // let a duty write through).
+  // Formerly packaged as scriptEncoderResponse(Devices::I2CBus&, ...),
+  // which pushed the selected position (plus a scripted status) onto the
+  // scripted-FIFO Devices::I2CBus fake sprint 108 ticket 001 deleted
+  // (I2CBus is now a pure interface with no scriptWrite()/scriptRead()).
+  // The fault-knob precedence logic itself is UNCHANGED -- only its
+  // packaging moved: TestSim::SimPlant (tests/_infra/sim/sim_plant.cpp) is
+  // now the sole caller, and packs the returned position into the wire's
+  // own 4-byte LE tenths-of-mm frame itself. This keeps WheelPlant owning
+  // only the physics + its own fault-injection state (architecture-
+  // update.md Decision 3: "SimPlant owns the protocol, not the physics"),
+  // never any bus/wire-format knowledge.
   //
   // NOT const (105-005): the dropout knob's own fractional accumulator and
   // "last reported position" bookkeeping (see below) are mutated on every
@@ -98,31 +84,26 @@ class WheelPlant {
   // (but still fully seeded/deterministic, per this file's own "seeded"
   // doc) state this class carries; step()'s own duty->velocity->position
   // integration remains completely unaffected by any knob here.
-  void scriptEncoderResponse(Devices::I2CBus& bus, uint16_t wireAddr,
-                              int writeCount = 1);
+  float reportedPosition();   // [mm]
 
   // --- Fault-injection knobs (ticket 105-005, SUC-022) ---------------------
-  // Each knob changes ONLY how scriptEncoderResponse() above scripts its
-  // next I2CBus response -- never step()'s own duty->velocity->position
-  // integration. This is the "plant driven BY the harness, between cycles"
-  // seam ticket 003 already established (see this file's own header),
-  // extended with three orthogonal toggles a scenario can flip mid-run.
+  // Each knob changes ONLY what reportedPosition() above returns (or, for
+  // disconnect, how the caller -- SimPlant -- scripts the transaction
+  // status) -- never step()'s own duty->velocity->position integration.
+  // Three orthogonal toggles a scenario can flip mid-run.
 
-  // Motor disconnect: while true, scriptEncoderResponse() scripts
-  // kNakStatus (not kOk) for every write/read it pushes for this motor's
-  // wire address -- the SAME transaction shape (exact write/read count
-  // unchanged, so the shared-FIFO script-count contract other devices on
-  // the same bus depend on stays intact), just a failing status.
+  // Motor disconnect: SimPlant checks this directly (not through
+  // reportedPosition()) and scripts a NAK status for the motor's wire
+  // transactions instead of calling reportedPosition() at all --
   // Devices::NezhaMotor::connected() is recomputed fresh every
   // collectEncoder() call (nezha_motor.cpp -- never latched), so clearing
-  // this knob and letting the next scriptEncoderResponse() resume normal
-  // kOk responses recovers connected() to true on the very next cycle, no
+  // this knob recovers connected() to true on the very next cycle, no
   // separate "reconnect" step needed.
   void setDisconnected(bool disconnected) { disconnected_ = disconnected; }
   bool disconnected() const { return disconnected_; }
 
-  // Encoder wedge / stuck value: while true, scriptEncoderResponse() keeps
-  // reporting the position CAPTURED at the moment this knob went true
+  // Encoder wedge / stuck value: while true, reportedPosition() keeps
+  // returning the position CAPTURED at the moment this knob went true
   // (frozenPosition_) -- never step()'s own live, still-advancing
   // position_. The plant's internal velocity/position integration keeps
   // running underneath exactly as if nothing were wrong (this plant "knows"
@@ -140,29 +121,20 @@ class WheelPlant {
   void freezePosition(bool freeze);
   bool positionFrozen() const { return freezePosition_; }
 
-  // Encoder dropout: `fraction` (0..1) of scriptEncoderResponse() calls
-  // report the LAST reported position again (stale-not-fresh) instead of a
-  // fresh sample off position_ -- deterministic (no RNG anywhere in this
-  // plant, per this file's own "seeded" doc): a fixed fractional
-  // accumulator advances by `fraction` every call and fires a hold whenever
-  // it crosses 1.0, so e.g. a 0.25 dropout rate holds exactly every 4th
-  // call, on the dot, run after run. 0.0 (the default) disables the knob --
-  // every call reports position_ fresh, matching the pre-105-005 behavior
-  // exactly. Resets the accumulator's phase on every call (a rate change
+  // Encoder dropout: `fraction` (0..1) of reportedPosition() calls return
+  // the LAST reported position again (stale-not-fresh) instead of a fresh
+  // sample off position_ -- deterministic (no RNG anywhere in this plant,
+  // per this file's own "seeded" doc): a fixed fractional accumulator
+  // advances by `fraction` every call and fires a hold whenever it crosses
+  // 1.0, so e.g. a 0.25 dropout rate holds exactly every 4th call, on the
+  // dot, run after run. 0.0 (the default) disables the knob -- every call
+  // reports position_ fresh, matching the pre-105-005 behavior exactly.
+  // Resets the accumulator's phase on every call (a rate change
   // mid-scenario does not inherit a stale phase from the previous rate).
   void setDropoutRate(float fraction);   // [0,1]
   float dropoutRate() const { return dropoutRate_; }
 
  private:
-  // Status Devices::I2CBus's scripted fake returns for a failing
-  // transaction -- any nonzero value reads as a failure (device_types.h's
-  // own `kOk = 0` convention, duplicated in nezha_motor.cpp/otos.cpp/
-  // line_sensor.cpp/color_sensor.cpp; devices_motor_harness.cpp's own NAK
-  // scenarios use -5, this file picks a different-but-equally-valid nonzero
-  // value on purpose, to prove no caller anywhere accidentally compares
-  // against a specific NAK status rather than "!= kOk").
-  static constexpr int kNakStatus = -1;
-
   float dutyVelMax_;         // [mm/s]
   float tau_;                // [s]
   float velocity_ = 0.0f;    // [mm/s] signed
@@ -174,7 +146,7 @@ class WheelPlant {
   float frozenPosition_ = 0.0f;      // [mm] captured on the freeze knob's rising edge
   float dropoutRate_ = 0.0f;         // [0,1]
   float dropoutAccum_ = 0.0f;        // fractional accumulator, see setDropoutRate()
-  float lastReportedPosition_ = 0.0f;  // [mm] the last value scriptEncoderResponse() actually scripted
+  float lastReportedPosition_ = 0.0f;  // [mm] the last value reportedPosition() actually returned
 };
 
 }  // namespace TestSim

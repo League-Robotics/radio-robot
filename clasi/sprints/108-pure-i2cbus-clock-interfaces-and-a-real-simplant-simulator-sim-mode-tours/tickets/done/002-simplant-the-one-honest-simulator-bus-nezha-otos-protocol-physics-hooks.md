@@ -1,11 +1,14 @@
 ---
-id: "002"
-title: "SimPlant: the one honest simulator bus (Nezha/OTOS protocol + physics + hooks)"
-status: open
-use-cases: ["SUC-040", "SUC-041"]
-depends-on: ["001"]
-github-issue: ""
-issue: "plan-pure-i2cbus-clock-interfaces-a-real-simplant-simulator.md"
+id: '002'
+title: 'SimPlant: the one honest simulator bus (Nezha/OTOS protocol + physics + hooks)'
+status: done
+use-cases:
+- SUC-040
+- SUC-041
+depends-on:
+- '001'
+github-issue: ''
+issue: plan-pure-i2cbus-clock-interfaces-a-real-simplant-simulator.md
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -61,22 +64,22 @@ Devices::I2CBus`.
 
 ## Acceptance Criteria
 
-- [ ] `tests/_infra/sim/sim_plant.{h,cpp}` exist; `SimPlant : public
+- [x] `tests/_infra/sim/sim_plant.{h,cpp}` exist; `SimPlant : public
       Devices::I2CBus`; compiles as a HOST_BUILD-style host binary (no ARM
       dependency).
-- [ ] `defaultWrite()` correctly parses the Nezha `0x60` duty-write and
+- [x] `defaultWrite()` correctly parses the Nezha `0x60` duty-write and
       `0x46` encoder-select frames and the OTOS register-pointer writes;
       `defaultRead()` returns live physics-integrated encoder/pose bytes,
       never a back-channel `appliedDuty()` read.
-- [ ] `read()`/`write()` call the registered hook when present, the
+- [x] `read()`/`write()` call the registered hook when present, the
       `default*` path otherwise; `defaultRead`/`defaultWrite` never call
       back into the hook.
-- [ ] `tick(dt)` steps both `WheelPlant`s and the `OtosPlant` from
+- [x] `tick(dt)` steps both `WheelPlant`s and the `OtosPlant` from
       wire-parsed duty only.
-- [ ] Fault-injection knobs (disconnect, freeze, dropout, OTOS noise/drift)
+- [x] Fault-injection knobs (disconnect, freeze, dropout, OTOS noise/drift)
       exist as plain methods on `SimPlant`/its owned plants, not on
       `I2CBus`.
-- [ ] Naming conforms to `.claude/rules/naming-and-style.md` (CamelCase,
+- [x] Naming conforms to `.claude/rules/naming-and-style.md` (CamelCase,
       no unit-suffixed identifiers — units in `// [unit]` comment tags).
 
 ## Implementation Plan

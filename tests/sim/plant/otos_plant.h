@@ -22,19 +22,15 @@
 // 180/360-degree pivot heading bug). No formula in this file originates
 // there.
 //
-// Identity-mounting assumption: scriptPoseResponse() below packs this
-// plant's own centre-frame (x, y, heading) DIRECTLY as the OTOS chip's raw
-// register values, without any lever-arm (sensorToCentre()/
-// centreToSensor()) or mounting-yaw inverse transform. This is only valid
-// when the Devices::OtosConfig under test uses offsetX=offsetY=offsetYaw=0
-// (identity mounting) -- plant_harness.cpp's scenarios all construct their
-// Devices::Otos this way. A future scenario wanting a non-identity mount
-// would need to invert Otos::tick()'s own transform here first.
+// Identity-mounting assumption: a caller packing this plant's own
+// centre-frame (x, y, heading) directly as the OTOS chip's raw register
+// values (TestSim::SimPlant does exactly this) does so WITHOUT any
+// lever-arm (sensorToCentre()/centreToSensor()) or mounting-yaw inverse
+// transform. This is only valid when the Devices::OtosConfig under test
+// uses offsetX=offsetY=offsetYaw=0 (identity mounting). A future scenario
+// wanting a non-identity mount would need to invert Otos::tick()'s own
+// transform first.
 #pragma once
-
-#include <cstdint>
-
-#include "devices/i2c_bus.h"
 
 namespace TestSim {
 
@@ -55,29 +51,38 @@ class OtosPlant {
   // once per cycle, after both WheelPlant::step() calls for that cycle.
   void step(float leftPosition, float rightPosition);   // [mm] [mm]
 
+  // Reported pose == the true accumulator (x_/y_/heading_) plus the
+  // deterministic drift/bias knobs below. Kept separate from x()/y()/
+  // heading() (the TRUE pose) so a future true-pose export (ticket 003's
+  // SimHarness) can still see ground truth even while a fault scenario has
+  // biased what the OTOS chip itself would report.
+  float reportedX() const { return x_ + driftX_; }              // [mm]
+  float reportedY() const { return y_ + driftY_; }              // [mm]
+  float reportedHeading() const { return heading_ + driftHeading_; }  // [rad]
+
   float x() const { return x_; }              // [mm]
   float y() const { return y_; }              // [mm]
   float heading() const { return heading_; }  // [rad]
 
-  // Schedules the 12-byte POSITION_XL+VELOCITY_XL burst-read response
-  // Devices::Otos's NEXT tick() call will consume, from this plant's
-  // CURRENT (x, y, heading) -- mirrors devices_otos_harness.cpp's
-  // scriptPosVel() packing exactly (little-endian int16 sextuple, the same
-  // kPosMmPerLsb/kHdgRadPerLsb scale factors otos.cpp itself uses).
-  // Velocity registers are always scripted as zero -- no scenario in this
-  // ticket asserts on OTOS's twist, only its pose.
-  //
-  // Like WheelPlant::scriptEncoderResponse(), this schedules exactly ONE
-  // write (the register-address write) -- Devices::Otos::tick()'s burst
-  // read is unconditionally a single write + single read, never a second,
-  // "maybe" write the way a motor's duty write is. A caller composing this
-  // alongside WheelPlant on the SAME Devices::I2CBus (one global write/read
-  // FIFO per direction, shared across every device address -- i2c_bus.h's
-  // file header) must still push this AFTER the wheel plants' own pushes
-  // for the same cycle, in the same order Devices::Otos::tick() is called
-  // relative to the two NezhaMotor::tick() calls, or the shared FIFO's
-  // address matching desyncs.
-  void scriptPoseResponse(Devices::I2CBus& bus, uint16_t wireAddr) const;
+  // Deterministic OTOS drift/bias knob (105-005's WheelPlant fault knobs'
+  // sibling for this plant -- see wheel_plant.h's own "seeded" doc: no RNG
+  // anywhere in either plant, so "noise" here means a fixed, reproducible
+  // bias, not a random jitter). Sets a CONSTANT offset added on top of the
+  // true accumulated pose for every reportedX()/reportedY()/
+  // reportedHeading() call from this point on -- models a persistent
+  // sensor bias/drift (e.g. an uncorrected mounting error or slow Kalman
+  // drift), not per-cycle random noise. 0/0/0 (the default) disables the
+  // knob -- reportedX/Y/Heading() then equal x()/y()/heading() exactly.
+  void setDrift(float xDrift, float yDrift, float headingDrift);  // [mm] [mm] [rad]
+
+  // Formerly this class also had scriptPoseResponse(Devices::I2CBus&,
+  // uint16_t) const, which packed a 12-byte POSITION_XL+VELOCITY_XL burst
+  // (little-endian int16 sextuple, kPosMmPerLsb/kHdgRadPerLsb-scaled) onto
+  // the scripted-FIFO Devices::I2CBus fake sprint 108 ticket 001 deleted.
+  // That packing is now done directly by TestSim::SimPlant
+  // (tests/_infra/sim/sim_plant.cpp's handleOtosRead()) straight off this
+  // class's own x()/y()/heading() accessors -- no bus/wire-format
+  // knowledge belongs on this class (architecture-update.md Decision 3).
 
  private:
   float trackWidth_;         // [mm]
@@ -87,6 +92,11 @@ class OtosPlant {
   float x_ = 0.0f;          // [mm]
   float y_ = 0.0f;          // [mm]
   float heading_ = 0.0f;    // [rad]
+
+  // ---- Drift/bias knob state ----
+  float driftX_ = 0.0f;        // [mm]
+  float driftY_ = 0.0f;        // [mm]
+  float driftHeading_ = 0.0f;  // [rad]
 };
 
 }  // namespace TestSim
