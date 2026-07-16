@@ -1,9 +1,8 @@
 ---
-status: in-progress
+status: done
 sprint: '108'
 tickets:
-- 108-005
-- 108-006
+- '005'
 ---
 
 # A new ctypes C ABI over `SimApi` is needed before TestGUI tours can run in Sim mode

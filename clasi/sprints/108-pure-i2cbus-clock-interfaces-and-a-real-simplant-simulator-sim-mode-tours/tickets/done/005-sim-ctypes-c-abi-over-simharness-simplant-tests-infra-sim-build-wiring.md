@@ -1,13 +1,16 @@
 ---
-id: "005"
-title: "sim_ctypes C ABI over SimHarness/SimPlant + tests/_infra/sim build wiring"
-status: open
-use-cases: ["SUC-040", "SUC-042"]
-depends-on: ["004"]
-github-issue: ""
+id: '005'
+title: sim_ctypes C ABI over SimHarness/SimPlant + tests/_infra/sim build wiring
+status: done
+use-cases:
+- SUC-040
+- SUC-042
+depends-on:
+- '004'
+github-issue: ''
 issue:
-  - "plan-pure-i2cbus-clock-interfaces-a-real-simplant-simulator.md"
-  - "sim-api-ctypes-abi-for-sim-mode-tours.md"
+- plan-pure-i2cbus-clock-interfaces-a-real-simplant-simulator.md
+- sim-api-ctypes-abi-for-sim-mode-tours.md
 completes_issue:
   plan-pure-i2cbus-clock-interfaces-a-real-simplant-simulator.md: false
   sim-api-ctypes-abi-for-sim-mode-tours.md: true
@@ -69,18 +72,18 @@ have drifted.
 
 ## Acceptance Criteria
 
-- [ ] `tests/_infra/sim/CMakeLists.txt` exists; `python build.py` (default,
+- [x] `tests/_infra/sim/CMakeLists.txt` exists; `python build.py` (default,
       not `--fw-only`) builds `libfirmware_host` successfully.
-- [ ] `tests/_infra/sim/sim_ctypes.cpp` exports create/destroy/step/
+- [x] `tests/_infra/sim/sim_ctypes.cpp` exports create/destroy/step/
       inject_twist/inject_stop/drain_tlm/true-pose, the fault-condition
       setters, and the hook-registration + pass-through exports.
-- [ ] Every export is a thin call-through (no decision logic) — verified
+- [x] Every export is a thin call-through (no decision logic) — verified
       by code review, not just tests.
-- [ ] A ctypes smoke test from Python (can be a throwaway script for this
+- [x] A ctypes smoke test from Python (can be a throwaway script for this
       ticket's own verification, formalized in ticket 006) loads the
       library, creates a harness, injects a twist, steps, and reads back a
       moved true pose.
-- [ ] A Python-registered write hook (via the raw ctypes call, ahead of
+- [x] A Python-registered write hook (via the raw ctypes call, ahead of
       ticket 006's nicer wrapper) can swallow a duty write and the wheel
       does not move, proving the hook ABI works end-to-end from Python.
 

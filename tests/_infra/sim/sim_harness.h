@@ -180,6 +180,23 @@ class SimHarness {
     return result;
   }
 
+  // Raw (still-armored "*B...") outbound lines captured on the serial
+  // FakeTransport since the last call to THIS method -- a separate drain
+  // index from drainTelemetry()'s own telemetryDrainIndex_, so a caller
+  // using one drain method is unaffected by (and does not starve) the
+  // other. Ticket 108-005's sim_ctypes.cpp C ABI wants raw wire text (its
+  // Python caller dearmors/decodes with the same pb2 codec a real robot's
+  // replies use, per sim_ctypes.cpp's own header) rather than the
+  // C++-side TestSupport::DecodedLine drainTelemetry() returns.
+  std::vector<std::string> drainRawTelemetry() {
+    std::vector<std::string> result;
+    const auto& sent = serialLink_.sent();
+    for (; rawTelemetryDrainIndex_ < sent.size(); ++rawTelemetryDrainIndex_) {
+      result.push_back(sent[rawTelemetryDrainIndex_]);
+    }
+    return result;
+  }
+
   bool booted() const { return booted_; }
   int cycleCount() const { return cycleCount_; }  // total robotLoop_.cycle() calls made so far
 
@@ -288,6 +305,7 @@ class SimHarness {
   int cycleCount_ = 0;
 
   size_t telemetryDrainIndex_ = 0;  // index into serialLink_.sent() already returned by drainTelemetry()
+  size_t rawTelemetryDrainIndex_ = 0;  // index into serialLink_.sent() already returned by drainRawTelemetry()
 };
 
 }  // namespace TestSim
