@@ -214,11 +214,21 @@ class SimHarness {
   float trueY() const { return plant_.otosPlant().y(); }              // [mm]
   float trueHeading() const { return plant_.otosPlant().heading(); }  // [rad]
 
-  // Plant teleport -- thin call-through to SimPlant::setTruePose(). See
-  // that method's own comment for why the OtosPlant re-baseline and the
-  // WheelPlant position resets it performs must happen together.
+  // Pose reset ("Set Robot @ 0,0" / SI). Teleports the plant TRUTH (OtosPlant)
+  // AND resets the firmware's own encoder-derived state to match, so the
+  // telemetry pose/otos the UI shows actually snap to (x,y,heading) -- not
+  // just the avatar. Without the firmware half, the wire's SI/OZ/ZERO verbs
+  // (no binary arm yet) leave the firmware believing its old pose.
   void setTruePose(float x, float y, float heading) {  // [mm] [mm] [rad]
     plant_.setTruePose(x, y, heading);
+    // Zero each motor's software encoder offset against its CURRENT (kept-
+    // continuous) raw so position() reads 0 with no discontinuity, then snap
+    // odometry to (x,y,heading) with its delta baseline re-anchored to those
+    // now-zero positions. begin() == hardReset() (nezha_motor.cpp) and is
+    // public; it drives the bus (SimPlant answers it).
+    motorL_.begin();
+    motorR_.begin();
+    odom_.reset(x, y, heading);
   }
 
   Devices::NezhaMotor& motorLeft() { return motorL_; }

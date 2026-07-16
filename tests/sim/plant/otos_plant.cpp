@@ -34,12 +34,13 @@ void OtosPlant::setDrift(float xDrift, float yDrift, float headingDrift) {
   driftHeading_ = headingDrift;
 }
 
-void OtosPlant::reset(float x, float y, float heading) {
+void OtosPlant::reset(float x, float y, float heading,
+                      float baseLeft, float baseRight) {
   x_ = x;
   y_ = y;
   heading_ = heading;
-  lastLeft_ = 0.0f;
-  lastRight_ = 0.0f;
+  lastLeft_ = baseLeft;
+  lastRight_ = baseRight;
 }
 
 }  // namespace TestSim

@@ -35,6 +35,17 @@ void Odometry::integrate() {
   theta_ += headingDelta;
 }
 
+void Odometry::reset(float x, float y, float theta) {
+  x_ = x;
+  y_ = y;
+  theta_ = theta;
+  // Re-anchor the delta baseline to the leaves' CURRENT positions so the very
+  // next integrate() computes a zero delta (mirrors the constructor's own
+  // "first integrate() sees zero delta" anchoring).
+  lastLeft_ = left_.position();
+  lastRight_ = right_.position();
+}
+
 void applyOtosSample(Devices::Otos& otos, uint64_t now, Telemetry::Frame& frame) {
   otos.tick(now);
   frame.hasOtos = otos.present();

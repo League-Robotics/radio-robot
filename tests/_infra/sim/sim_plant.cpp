@@ -226,9 +226,14 @@ void SimPlant::setOtosDrift(float xDrift, float yDrift, float headingDrift) {
 }
 
 void SimPlant::setTruePose(float x, float y, float heading) {
-  left_.resetPosition(0.0f);
-  right_.resetPosition(0.0f);
-  otos_.reset(x, y, heading);
+  // Do NOT zero the wheel plants. Keeping their encoder raw continuous is what
+  // lets the firmware motors' hardReset() (SimHarness::setTruePose()) re-zero
+  // their software offset with no discontinuity on the next collectEncoder()
+  // -- zeroing the wheels here made the firmware read a fresh 0 against a
+  // stale motor offset and jump. Re-anchor the OTOS truth to (x,y,heading)
+  // with its wheel-delta baseline at the wheels' CURRENT positions so its next
+  // step() integrates a zero delta, not a phantom jump.
+  otos_.reset(x, y, heading, left_.position(), right_.position());
 }
 
 const WheelPlant& SimPlant::wheelPlant(int port) const {

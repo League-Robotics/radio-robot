@@ -87,7 +87,14 @@ class OtosPlant {
   // the (position_before_reset - 0) gap. Drift/bias knob state
   // (driftX_/driftY_/driftHeading_) is left untouched -- a pose reset is
   // not a fault-knob reset.
-  void reset(float x, float y, float heading);  // [mm] [mm] [rad]
+  // Snap this plant's (x, y, heading) truth and re-anchor its wheel-delta
+  // baseline to (baseLeft, baseRight). Callers that ALSO zero the wheel
+  // plants pass the default 0/0; a caller that keeps the wheel plants
+  // continuous (SimPlant::setTruePose, to avoid a firmware encoder
+  // discontinuity) passes the wheels' CURRENT positions so the next step()
+  // integrates a zero delta.
+  void reset(float x, float y, float heading,          // [mm] [mm] [rad]
+             float baseLeft = 0.0f, float baseRight = 0.0f);  // [mm] [mm]
 
   // Formerly this class also had scriptPoseResponse(Devices::I2CBus&,
   // uint16_t) const, which packed a 12-byte POSITION_XL+VELOCITY_XL burst

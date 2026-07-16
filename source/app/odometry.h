@@ -85,6 +85,16 @@ class Odometry {
   float y() const { return y_; }          // [mm]
   float theta() const { return theta_; }  // [rad]
 
+  // Snap the dead-reckoned pose to (x, y, theta) and RE-ANCHOR the delta
+  // baseline to each leaf's CURRENT position(), so the next integrate() sees
+  // a zero delta rather than a phantom jump from the old baseline. This is
+  // the in-session pose reset the wire's SI/OZ/ZERO verbs were meant to drive
+  // (deferred, no binary arm yet -- see robot_loop.cpp's handleConfig scope);
+  // it is exercised today by the host simulator's teleport-to-origin
+  // (tests/_infra/sim/sim_harness.h SimHarness::setTruePose()). Additive: no
+  // existing caller's behaviour changes unless it calls reset().
+  void reset(float x, float y, float theta);  // [mm] [mm] [rad]
+
  private:
   Devices::NezhaMotor& left_;
   Devices::NezhaMotor& right_;
