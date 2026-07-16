@@ -201,6 +201,14 @@ class SimHarness {
   Devices::NezhaMotor& motorRight() { return motorR_; }
   Devices::Clock& clock() { return clock_; }
 
+  // Ticket 108-004's own migrated sim_api_harness.cpp timing-diagnostic
+  // scenario needs this to reproduce the deleted SimApi::measureOneCycle()'s
+  // sleepCount()/lastSleepMillis()/yieldCount() deltas directly -- exposed
+  // here rather than re-adding a bespoke CycleTimingReport wrapper, matching
+  // this class's existing "expose the owned device, let the caller read it"
+  // pattern (motorLeft()/motorRight()/clock() above).
+  Devices::Sleeper& sleeper() { return sleeper_; }
+
   // [us] the fixed per-cycle virtual-time advance step() applies before
   // every robotLoop_.cycle() call -- matches sim_api.h's own kCycleDtUs
   // derivation (>=40ms so a fresh duty write is never write-rate-throttled;

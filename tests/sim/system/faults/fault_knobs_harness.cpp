@@ -1,25 +1,32 @@
-// fault_knobs_harness.cpp -- off-hardware acceptance harness for ticket
-// 105-005 (SUC-022), TestSim::WheelPlant's three fault-injection knobs
-// (setDisconnected()/freezePosition()/setDropoutRate(), tests/sim/plant/
-// wheel_plant.h) driven through the REAL TestSim::SimApi (105-004) and
-// asserted against the FIRMWARE's own observable reaction in decoded
-// telemetry -- exactly the retargeted issue's own ask
+// fault_knobs_harness.cpp -- off-hardware acceptance harness, migrated
+// (ticket 108-004) from TestSim::WheelPlant's three fault-injection knobs
+// driven directly through the deleted TestSim::SimApi/its plantLeft()
+// accessor (105-005, SUC-022) onto the SAME three knobs (setDisconnected()/
+// freezePosition()/setDropoutRate()), now surfaced via
+// TestSim::SimHarness::plant()'s own per-port wrappers
+// (tests/_infra/sim/sim_plant.h -- TestSim::SimPlant::setDisconnected(port,
+// ...)/freezePosition(port, ...)/setDropoutRate(port, ...), port 1 == left)
+// -- asserted against the FIRMWARE's own observable reaction in decoded
+// telemetry, exactly the retargeted issue's own ask
 // (clasi/sprints/105-sim-rebuild-around-the-steppable-loop/issues/
 // sim-hardware-fault-injection.md): "a thin steppable-loop sim over the
 // devices layer's HOST_BUILD fakes, whose scripted I2CBus can natively fake
 // NAKs, stale reads, and wedge latch-ups -- a better fault-injection seam
 // than SimMotor ever was."
 //
-// Three independent scenarios, ONE knob active at a time on ONE plant (the
-// other motor's plant, and the other two knobs, left at their default/
+// Three independent scenarios, ONE knob active at a time on ONE plant (port
+// 1/left; port 2/right, and the other two knobs, left at their default/
 // inactive state) -- per this ticket's own "keep failure attribution
-// unambiguous" testing plan.
+// unambiguous" testing plan. The SCENARIO logic (what fault is injected,
+// what telemetry reaction is asserted) is unchanged from the pre-migration
+// SimApi version -- only the accessor changed (sim.plantLeft().setX(...) ->
+// sim.plant().setX(1, ...)).
 //
 // Hand-rolled assertions, PASS/FAIL per scenario, nonzero exit on any
 // failure -- mirrors sim_api_harness.cpp's own shape exactly (same
-// SimApi/DecodedLine plumbing). Run by test_fault_knobs.py, which compiles
-// this file together with sim_api.cpp and the same full HOST_BUILD
-// dependency graph test_sim_api.py already compiles.
+// DecodedLine plumbing). Run by test_fault_knobs.py, which compiles this
+// file together with sim_plant.cpp and the same full HOST_BUILD dependency
+// graph test_sim_api.py already compiles.
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -28,7 +35,7 @@
 
 #include "messages/envelope.h"
 #include "messages/planner.h"
-#include "sim_api.h"
+#include "sim_harness.h"
 #include "wire_test_codec.h"
 
 namespace {
@@ -87,12 +94,12 @@ constexpr int kWedgeThreshold = 10;
 void scenarioMotorDisconnectFlipsConnLeftAndRecovers() {
   beginScenario("motor disconnect: connLeft flips false while active, recovers once cleared");
 
-  TestSim::SimApi sim;
-  sim.step(1);  // boot
+  TestSim::SimHarness sim;
+  sim.boot();
   sim.step(3);  // settle: both leaves' own one-time activation writes land
   (void)sim.drainTelemetry();
 
-  sim.plantLeft().setDisconnected(true);
+  sim.plant().setDisconnected(/*port=*/1, true);  // 1 == left
   sim.step(5);  // well under kWedgeThreshold -- isolates the connLeft signal
 
   std::vector<DecodedLine> disconnectedFrames = onlyTelemetry(sim.drainTelemetry());
@@ -108,7 +115,7 @@ void scenarioMotorDisconnectFlipsConnLeftAndRecovers() {
   checkTrue(rightStayedConnectedThroughout,
             "conn_right stays true throughout -- the fault is per-motor, not bus-wide");
 
-  sim.plantLeft().setDisconnected(false);
+  sim.plant().setDisconnected(/*port=*/1, false);
   sim.step(5);  // recovery window
 
   std::vector<DecodedLine> recoveredFrames = onlyTelemetry(sim.drainTelemetry());
@@ -123,13 +130,14 @@ void scenarioMotorDisconnectFlipsConnLeftAndRecovers() {
 }
 
 // ===========================================================================
-// 2. Encoder wedge (AC #2): WheelPlant::freezePosition(true) on the LEFT
+// 2. Encoder wedge (AC #2): SimPlant::freezePosition(1, true) on the LEFT
 //    plant, WHILE driving (a twist keeps appliedDuty() nonzero throughout --
 //    the "moving-but-stuck" flavor devices_motor_harness.cpp scenario 4(b)
 //    already proves in isolation), freezes the REPORTED encoder value while
 //    the plant's own internal velocity/position state keeps advancing
-//    underneath (WheelPlant::step() runs every cycle in SimApi regardless
-//    of the knob -- see wheel_plant.h/.cpp). Asserts kFaultWedgeLatch sets
+//    underneath (WheelPlant::step(), called every SimHarness::step() cycle
+//    via SimPlant::tick(), runs regardless of the knob -- see
+//    wheel_plant.h/.cpp). Asserts kFaultWedgeLatch sets
 //    in decoded telemetry within kWedgeThreshold cycles, and -- the set/
 //    clear semantics robot_loop.cpp's own live
 //    `tlm_.setFault(kFaultWedgeLatch, motorL_.wedged() || motorR_.wedged())`
@@ -141,8 +149,8 @@ void scenarioMotorDisconnectFlipsConnLeftAndRecovers() {
 void scenarioEncoderWedgeSetsFaultBitAndClearsOnRelease() {
   beginScenario("encoder wedge: kFaultWedgeLatch sets while frozen, clears once released");
 
-  TestSim::SimApi sim;
-  sim.step(1);  // boot
+  TestSim::SimHarness sim;
+  sim.boot();
   sim.step(3);  // settle
   (void)sim.drainTelemetry();
 
@@ -150,7 +158,7 @@ void scenarioEncoderWedgeSetsFaultBitAndClearsOnRelease() {
   sim.step(5);  // ramp a bit -- appliedDuty() is genuinely nonzero once frozen
   (void)sim.drainTelemetry();
 
-  sim.plantLeft().freezePosition(true);
+  sim.plant().freezePosition(/*port=*/1, true);  // 1 == left
   sim.step(kWedgeThreshold + 5);  // comfortably past the threshold
 
   std::vector<DecodedLine> frozenFrames = onlyTelemetry(sim.drainTelemetry());
@@ -162,7 +170,7 @@ void scenarioEncoderWedgeSetsFaultBitAndClearsOnRelease() {
   }
   checkTrue(sawWedgeLatch, "kFaultWedgeLatch sets in decoded telemetry within the wedge threshold");
 
-  sim.plantLeft().freezePosition(false);
+  sim.plant().freezePosition(/*port=*/1, false);
   sim.step(kWedgeThreshold + 5);  // enough cycles for the changed reading to clear the latch
 
   std::vector<DecodedLine> releasedFrames = onlyTelemetry(sim.drainTelemetry());
@@ -178,7 +186,7 @@ void scenarioEncoderWedgeSetsFaultBitAndClearsOnRelease() {
 }
 
 // ===========================================================================
-// 3. Encoder dropout (AC #3): WheelPlant::setDropoutRate() on the LEFT
+// 3. Encoder dropout (AC #3): SimPlant::setDropoutRate(1, ...) on the LEFT
 //    plant holds a moderate fraction (25%) of scripted encoder reads at the
 //    last value instead of a fresh one -- the exact stale-vs-fresh pattern
 //    devices_motor_harness.cpp scenario 8 already proves NezhaMotor's own
@@ -190,8 +198,8 @@ void scenarioEncoderWedgeSetsFaultBitAndClearsOnRelease() {
 void scenarioEncoderDropoutStaysSaneUnderModerateLoss() {
   beginScenario("encoder dropout: telemetry stays sane under moderate (25%) sample loss");
 
-  TestSim::SimApi sim;
-  sim.step(1);  // boot
+  TestSim::SimHarness sim;
+  sim.boot();
   sim.step(3);  // settle
   (void)sim.drainTelemetry();
 
@@ -200,7 +208,7 @@ void scenarioEncoderDropoutStaysSaneUnderModerateLoss() {
                  // own scenarioTwistDrivesRealPlantRamp() timing (>=300mm/s within 15 cycles)
   (void)sim.drainTelemetry();
 
-  sim.plantLeft().setDropoutRate(0.25f);
+  sim.plant().setDropoutRate(/*port=*/1, 0.25f);  // 1 == left
   sim.step(40);  // sustained run under dropout -- several dropout holds AND several fresh samples
 
   std::vector<DecodedLine> frames = onlyTelemetry(sim.drainTelemetry());

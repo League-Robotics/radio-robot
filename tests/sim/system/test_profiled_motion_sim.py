@@ -6,10 +6,11 @@ Generates each setpoint sequence via the REAL, unmodified
 (no reimplemented trapezoid math here or in the C++ harness -- see
 ``profiled_motion_harness.cpp``'s own file header for the full scope
 decision), writes it to a small CSV, compiles
-``profiled_motion_harness.cpp`` together with ``sim_api.cpp``,
-``wire_test_codec.cpp``, the plant sources, and the same full HOST_BUILD
-Devices/App/messages/kinematics dependency graph every sibling
-``test_*.py`` in this directory already compiles (mirrors
+``profiled_motion_harness.cpp`` together with ``sim_plant.cpp``
+(``tests/_infra/sim/`` -- ticket 108-004's migration off the deleted
+``sim_api.cpp``), ``wire_test_codec.cpp``, the plant sources, and the same
+full HOST_BUILD Devices/App/messages/kinematics dependency graph every
+sibling ``test_*.py`` in this directory already compiles (mirrors
 ``test_scripted_twist_demo.py``'s exact shape), runs the harness against
 that CSV, and asserts it exits 0 -- printing its own human-readable
 cycle-by-cycle trace.
@@ -36,9 +37,10 @@ _SOURCE_DIR = _REPO_ROOT / "source"
 _SYSTEM_DIR = pathlib.Path(__file__).resolve().parent
 _SUPPORT_DIR = _SYSTEM_DIR.parent / "support"
 _PLANT_DIR = _SYSTEM_DIR.parent / "plant"
+_INFRA_SIM_DIR = _REPO_ROOT / "tests" / "_infra" / "sim"
 
 _HARNESS_SRC = _SYSTEM_DIR / "profiled_motion_harness.cpp"
-_SIM_API_SRC = _SUPPORT_DIR / "sim_api.cpp"
+_SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WIRE_TEST_CODEC_SRC = _SUPPORT_DIR / "wire_test_codec.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
@@ -53,7 +55,6 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "preamble.cpp",
 ]
 _DEVICE_SOURCES = [
-    _SOURCE_DIR / "devices" / "i2c_bus_host.cpp",
     _SOURCE_DIR / "devices" / "clock_host.cpp",
     _SOURCE_DIR / "devices" / "velocity_pid.cpp",
     _SOURCE_DIR / "devices" / "nezha_motor.cpp",
@@ -73,10 +74,12 @@ _CXX_STANDARD = "c++20"
 
 # Profile parameters -- deliberately REACHABLE (well under the plant's own
 # 500mm/s duty-velocity ceiling, tests/sim/plant/wheel_plant.h's own
-# kDefaultDutyVelMax, and comfortably under SimApi's kTrackWidth=130mm
-# turn-rate-to-wheel-velocity conversion) so the trapezoid actually leaves
-# saturation and traces a real accelerate/cruise/decelerate shape -- see
-# profiled_motion_harness.cpp's own file header for why this matters.
+# kDefaultDutyVelMax, and comfortably under SimHarness's default
+# trackWidth=128mm turn-rate-to-wheel-velocity conversion,
+# tests/_infra/sim/sim_plant.h's own kDefaultTrackWidth) so the trapezoid
+# actually leaves saturation and traces a real accelerate/cruise/decelerate
+# shape -- see profiled_motion_harness.cpp's own file header for why this
+# matters.
 _STRAIGHT_DISTANCE = 600.0  # [mm]
 _STRAIGHT_LIMITS = ProfileLimits(v_max=200.0, a_max=500.0)  # matches PlannerParams field defaults
 _TURN_ANGLE = 1.5707963267948966  # [rad] pi/2, 90deg
@@ -85,10 +88,10 @@ _TURN_LIMITS = ProfileLimits(v_max=1.0, a_max=3.0)  # omega_max/alpha_max (profi
 # Cadence == PlannerParams.streaming_interval's own default (0.15s) -- NOT
 # profile.py's generic DEFAULT_CADENCE (0.05s) -- matching how a real
 # StreamingExecutor run pairs one profile setpoint with one twist() tick
-# (planner/model.py's own streaming_interval docstring). Also required by
-# profiled_motion_harness.cpp's own replay loop (kCyclesPerRow=3, 150ms):
-# see that file's header for why SimApi's single-slot actuation-change
-# staging cannot track a fresh command every single 50ms sim cycle.
+# (planner/model.py's own streaming_interval docstring). Also matches
+# profiled_motion_harness.cpp's own replay loop (kCyclesPerRow=3, 150ms) --
+# see that file's header for why this cadence is kept even though it is no
+# longer a scripted-bus-desync requirement against the now-live SimPlant.
 _CADENCE = 0.15  # [s]
 
 
@@ -106,7 +109,7 @@ def _find_cxx_compiler() -> str:
 
 def _all_sources():
     return (
-        [_HARNESS_SRC, _SIM_API_SRC, _WIRE_TEST_CODEC_SRC, _WHEEL_PLANT_SRC, _OTOS_PLANT_SRC]
+        [_HARNESS_SRC, _SIM_PLANT_SRC, _WIRE_TEST_CODEC_SRC, _WHEEL_PLANT_SRC, _OTOS_PLANT_SRC]
         + _APP_SOURCES
         + _DEVICE_SOURCES
         + _MESSAGE_SOURCES
@@ -136,6 +139,8 @@ def _compile_harness(tmp_path: pathlib.Path) -> pathlib.Path:
             str(_SUPPORT_DIR),
             "-I",
             str(_PLANT_DIR),
+            "-I",
+            str(_INFRA_SIM_DIR),
             "-o",
             str(binary),
             *[str(src) for src in sources],

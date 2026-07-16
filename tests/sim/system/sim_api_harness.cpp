@@ -1,17 +1,31 @@
-// sim_api_harness.cpp -- off-hardware acceptance harness for ticket 105-004
-// (SUC-021), TestSim::SimApi (tests/sim/support/sim_api.{h,cpp}). Proves:
-// boot completes through the REAL App::RobotLoop (kEventBootReady visible
-// in decoded telemetry), an injected twist drives REAL plant velocity
-// ramping (visible as encLeft/encRight/velLeft/velRight in decoded
-// telemetry), an explicit STOP command acks and clears `active`, a deadman
-// expiry (no STOP ever sent) independently sets kEventDeadmanExpired and
-// clears `active`, and the virtual-cycle-timing diagnostic (105-004's own
-// AC #3) produces a report.
+// sim_api_harness.cpp -- off-hardware acceptance harness, migrated (ticket
+// 108-004) from TestSim::SimApi (tests/sim/support/sim_api.{h,cpp}, deleted
+// ticket 108-003) onto TestSim::SimHarness/TestSim::SimPlant
+// (tests/_infra/sim/{sim_harness.h,sim_plant.h}). Proves: boot completes
+// through the REAL App::RobotLoop (kEventBootReady visible in decoded
+// telemetry), an injected twist drives REAL plant velocity ramping (visible
+// as encLeft/encRight/velLeft/velRight in decoded telemetry), an explicit
+// STOP command acks and clears `active`, a deadman expiry (no STOP ever
+// sent) independently sets kEventDeadmanExpired and clears `active`, and
+// the virtual-cycle-timing diagnostic (originally 105-004 AC #3) still
+// holds against the real RobotLoop schedule.
+//
+// The SCENARIO logic is unchanged from the pre-migration SimApi version --
+// only the simulator/harness plumbing changed: TestSim::SimHarness replaces
+// TestSim::SimApi, and the deadman-expiry scenario's old
+// `sim.notePendingActuationChange(3)` call (a SimApi::DutyPredictor-only
+// hint for its now-deleted scripted-FIFO bus) is simply gone -- SimPlant
+// responds live to whatever firmware actually writes, so there is nothing
+// left to hint. The timing scenario now reads Devices::Sleeper deltas
+// directly off `sim.sleeper()` (SimHarness's own accessor) instead of a
+// bespoke SimApi::CycleTimingReport/measureOneCycle() wrapper -- same
+// formula (105-004's own derivation: 3 non-final 4ms settle/clear blocks +
+// the observed final pace block == the whole cycle's virtual schedule).
 //
 // Hand-rolled assertions, PASS/FAIL per scenario, nonzero exit on any
 // failure -- mirrors every other tests/sim/{unit,plant} harness's own shape
 // (see plant_harness.cpp/app_robot_loop_harness.cpp). Run by
-// test_sim_api.py, which compiles this file together with sim_api.cpp,
+// test_sim_api.py, which compiles this file together with sim_plant.cpp,
 // wire_test_codec.cpp, the plant sources, and every HOST_BUILD Devices/App
 // source it needs, then runs the resulting binary via subprocess.
 #include <cmath>
@@ -20,9 +34,10 @@
 #include <string>
 #include <vector>
 
+#include "devices/clock.h"
 #include "messages/envelope.h"
 #include "messages/planner.h"
-#include "sim_api.h"
+#include "sim_harness.h"
 #include "wire_test_codec.h"
 
 namespace {
@@ -87,7 +102,7 @@ bool anyAckMatches(const std::vector<DecodedLine>& frames, uint32_t corrId, msg:
 }
 
 // ===========================================================================
-// 1. Boot: SimApi's first step() drives App::Preamble to done() and calls
+// 1. Boot: SimHarness::boot() drives App::Preamble to done() and calls
 //    the REAL App::RobotLoop::boot() -- both motors and OTOS resolve
 //    connected (scripted success); kEventBootReady becomes visible in
 //    decoded telemetry once at least one cycle() has run past boot (the
@@ -97,13 +112,15 @@ bool anyAckMatches(const std::vector<DecodedLine>& frames, uint32_t corrId, msg:
 // ===========================================================================
 
 void scenarioBootCompletesThroughRealRobotLoop() {
-  beginScenario("boot: SimApi drives the REAL RobotLoop::boot(), motors+OTOS connect, kEventBootReady visible");
+  beginScenario("boot: SimHarness drives the REAL RobotLoop::boot(), motors+OTOS connect, kEventBootReady visible");
 
-  TestSim::SimApi sim;
-  checkTrue(!sim.booted(), "not booted before the first step() call");
+  TestSim::SimHarness sim;
+  checkTrue(!sim.booted(), "not booted before boot() is called");
 
-  sim.step(1);  // boot phase -- see SimApi::step()'s own doc comment
-  checkTrue(sim.booted(), "booted() true after the first step() call");
+  sim.boot();  // SimHarness's own dedicated boot() entry point -- see sim_harness.h's file header
+               // for why boot()/step() are two separate calls here, unlike the deleted SimApi's
+               // single overloaded step().
+  checkTrue(sim.booted(), "booted() true after boot()");
   checkTrue(sim.motorLeft().connected(), "left motor connected after boot");
   checkTrue(sim.motorRight().connected(), "right motor connected after boot");
 
@@ -131,8 +148,8 @@ void scenarioBootCompletesThroughRealRobotLoop() {
 void scenarioTwistDrivesRealPlantRamp() {
   beginScenario("twist: injected command drives REAL plant velocity ramp, visible in decoded TLM");
 
-  TestSim::SimApi sim;
-  sim.step(1);  // boot
+  TestSim::SimHarness sim;
+  sim.boot();
   sim.step(3);  // settle: both leaves' own one-time zero-duty activation writes land (cycles 0, 1)
   (void)sim.drainTelemetry();  // discard boot/settle frames -- this scenario only cares about the ramp
 
@@ -175,8 +192,8 @@ void scenarioTwistDrivesRealPlantRamp() {
 void scenarioStopAcksAndClearsActive() {
   beginScenario("stop: explicit STOP command acks OK, decoded telemetry active clears");
 
-  TestSim::SimApi sim;
-  sim.step(1);  // boot
+  TestSim::SimHarness sim;
+  sim.boot();
   sim.injectTwist(1000.0f, 0.0f, 100000.0f, /*corrId=*/7);
   sim.step(5);  // ramp a bit so there is real motion to stop
   (void)sim.drainTelemetry();
@@ -211,11 +228,14 @@ void scenarioStopAcksAndClearsActive() {
 void scenarioDeadmanExpiryStopsPlant() {
   beginScenario("deadman: expiry (no STOP ever sent) sets kEventDeadmanExpired, clears active");
 
-  TestSim::SimApi sim;
-  sim.step(1);  // boot
+  TestSim::SimHarness sim;
+  sim.boot();
   sim.injectTwist(1000.0f, 0.0f, /*duration=*/120.0f, /*corrId=*/5);  // [ms] -- expires in 3 cycles
   sim.step(2);  // cycles 0, 1 -- twist's own R/L activation writes land, not yet expired
-  sim.notePendingActuationChange(3);  // the expiry-triggered duty change -- see this file's own header comment
+  // No SimApi::notePendingActuationChange() hint needed here -- that call
+  // primed the deleted scripted-FIFO bus for the expiry-triggered duty
+  // write it could not otherwise predict; SimPlant just responds live to
+  // whatever RobotLoop actually writes when the deadman trips.
   sim.step(3);  // cycles 2 (quiet), 3 (expiry fires, R writes), 4 (L writes)
   sim.step(1);  // emit-lag buffer cycle
 
@@ -247,18 +267,34 @@ void scenarioDeadmanExpiryStopsPlant() {
 void scenarioVirtualCycleTimingDiagnostic() {
   beginScenario("timing: virtual-cycle schedule is exactly kSettle+kClear+kSettle+kPace == kCycle (106-001)");
 
-  TestSim::SimApi sim;
-  sim.step(1);  // boot
-  TestSim::CycleTimingReport report = sim.measureOneCycle();
+  TestSim::SimHarness sim;
+  sim.boot();
 
-  checkTrue(report.sleepCount == 4,
+  // Reproduces the deleted SimApi::measureOneCycle()'s own deltas directly
+  // off Devices::Sleeper (sim.sleeper(), added to SimHarness by this
+  // ticket) -- same formula as the original CycleTimingReport: 3 non-final
+  // 4ms settle/clear blocks (robot_loop.cpp's own kSettle/kClear) plus the
+  // observed final pace block equal the whole cycle's virtual schedule.
+  Devices::Sleeper& sleeper = sim.sleeper();
+  int sleepsBefore = sleeper.sleepCount();
+  int yieldsBefore = sleeper.yieldCount();
+
+  sim.step(1);
+
+  int sleepCount = sleeper.sleepCount() - sleepsBefore;
+  uint32_t lastSleepMillis = sleeper.lastSleepMillis();
+  int yieldCount = sleeper.yieldCount() - yieldsBefore;
+  constexpr uint32_t kNonFinalBlockMillis = 4;
+  uint32_t virtualCycleMillis = 3 * kNonFinalBlockMillis + lastSleepMillis;
+
+  checkTrue(sleepCount == 4,
             "exactly 4 Sleeper::sleepMillis() calls per cycle() (3 runAndWait blocks + final pace block)");
-  checkTrue(report.lastSleepMillis == 28,
+  checkTrue(lastSleepMillis == 28,
             "the final (perception+odometry+pace) block requests exactly kPace=28ms "
             "(kCycle=40ms minus the 12ms already consumed by the 3 settle/clear windows -- "
             "NOT a fresh, unabsorbed kCycle=40ms on top of them)");
-  checkTrue(report.yieldCount == 0, "RobotLoop::cycle() never calls Sleeper::yield() directly");
-  checkTrue(report.virtualCycleMillis == 40,
+  checkTrue(yieldCount == 0, "RobotLoop::cycle() never calls Sleeper::yield() directly");
+  checkTrue(virtualCycleMillis == 40,
             "derived total virtual schedule == 3*4ms (settle/clear/settle) + 28ms (pace) == 40ms == kCycle -- "
             "proves the three windows are absorbed into the retargeted 40ms budget, not additive on top of "
             "it (106-001; pre-fix this was 28ms > the old kCycle=16ms target)");
@@ -268,8 +304,7 @@ void scenarioVirtualCycleTimingDiagnostic() {
       "(== kCycle=40ms/~25Hz design target, retargeted 106-001 from the unachievable 16ms/28ms-virtual "
       "pre-fix figures -- see this ticket's completion notes for the bench-measured real-hardware "
       "reconciliation against sprint 104's ~36ms and the ack-ring issue's ~72ms/13.87Hz)\n",
-      report.sleepCount, static_cast<unsigned>(report.lastSleepMillis), report.yieldCount,
-      static_cast<unsigned>(report.virtualCycleMillis));
+      sleepCount, static_cast<unsigned>(lastSleepMillis), yieldCount, static_cast<unsigned>(virtualCycleMillis));
 }
 
 // ===========================================================================

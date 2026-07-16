@@ -1,14 +1,18 @@
 """Off-hardware acceptance proof for ticket 105-003 (SUC-020): the
 deterministic motor+OTOS plant (``tests/sim/plant/{wheel,otos}_plant.{h,cpp}``).
 
-Compiles ``plant_harness.cpp`` together with the plant classes themselves
-and the HOST_BUILD Devices/App/Kinematics sources they exercise
-(``source/devices/i2c_bus_host.cpp``, ``source/devices/velocity_pid.cpp``,
-``source/devices/nezha_motor.cpp``, ``source/devices/otos.cpp``,
-``source/kinematics/body_kinematics.cpp``, ``source/app/odometry.cpp``) with
-``-DHOST_BUILD``, against the SAME headers every ARM build compiles. Mirrors
-``test_app_odometry.py``'s exact shape: compile with the system C++
-compiler, run the resulting binary, assert it exits 0.
+Compiles ``plant_harness.cpp`` together with the plant classes themselves,
+``TestSim::SimPlant`` (``tests/_infra/sim/sim_plant.cpp`` -- ticket 108-002's
+real ``Devices::I2CBus`` implementation these plant classes' wheel/pose
+physics feed; ticket 108-004 migrated this harness onto it, replacing the
+deleted scripted-FIFO ``Devices::I2CBus`` fake ticket 108-001 removed), and
+the HOST_BUILD Devices/App/Kinematics sources they exercise
+(``source/devices/velocity_pid.cpp``, ``source/devices/nezha_motor.cpp``,
+``source/devices/otos.cpp``, ``source/kinematics/body_kinematics.cpp``,
+``source/app/odometry.cpp``) with ``-DHOST_BUILD``, against the SAME headers
+every ARM build compiles. Mirrors ``test_app_odometry.py``'s exact shape:
+compile with the system C++ compiler, run the resulting binary, assert it
+exits 0.
 
 Collected under ``tests/sim/plant/`` -- already within ``pyproject.toml``'s
 ``testpaths = ["tests/sim"]``, no configuration change needed.
@@ -24,12 +28,13 @@ import pytest
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _SOURCE_DIR = _REPO_ROOT / "source"
 _PLANT_DIR = pathlib.Path(__file__).resolve().parent
+_INFRA_SIM_DIR = _REPO_ROOT / "tests" / "_infra" / "sim"
 
 _HARNESS_SRC = _PLANT_DIR / "plant_harness.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
+_SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _ODOMETRY_SRC = _SOURCE_DIR / "app" / "odometry.cpp"
-_I2C_HOST_FAKE_SRC = _SOURCE_DIR / "devices" / "i2c_bus_host.cpp"
 _VELOCITY_PID_SRC = _SOURCE_DIR / "devices" / "velocity_pid.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "devices" / "nezha_motor.cpp"
 _OTOS_SRC = _SOURCE_DIR / "devices" / "otos.cpp"
@@ -58,8 +63,8 @@ def test_plant_harness_compiles_and_passes(tmp_path):
         _HARNESS_SRC,
         _WHEEL_PLANT_SRC,
         _OTOS_PLANT_SRC,
+        _SIM_PLANT_SRC,
         _ODOMETRY_SRC,
-        _I2C_HOST_FAKE_SRC,
         _VELOCITY_PID_SRC,
         _NEZHA_MOTOR_SRC,
         _OTOS_SRC,
@@ -83,6 +88,8 @@ def test_plant_harness_compiles_and_passes(tmp_path):
             str(_SOURCE_DIR),
             "-I",
             str(_PLANT_DIR),
+            "-I",
+            str(_INFRA_SIM_DIR),
             "-o",
             str(binary),
             *[str(src) for src in sources],

@@ -1,11 +1,14 @@
 ---
-id: "004"
-title: "Migrate whole-robot scenario tests onto SimPlant/SimHarness; verify straight-twist stays straight"
-status: open
-use-cases: ["SUC-041"]
-depends-on: ["003"]
-github-issue: ""
-issue: "plan-pure-i2cbus-clock-interfaces-a-real-simplant-simulator.md"
+id: '004'
+title: Migrate whole-robot scenario tests onto SimPlant/SimHarness; verify straight-twist
+  stays straight
+status: done
+use-cases:
+- SUC-041
+depends-on:
+- '003'
+github-issue: ''
+issue: plan-pure-i2cbus-clock-interfaces-a-real-simplant-simulator.md
 completes_issue: false
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -42,15 +45,15 @@ plan's Context section.
 
 ## Acceptance Criteria
 
-- [ ] All 4 migrated system tests (`sim_api`, `profiled_motion`,
+- [x] All 4 migrated system tests (`sim_api`, `profiled_motion`,
       `scripted_twist_demo`, `faults/fault_knobs`) pass against
       `SimPlant`/`sim_harness.h`.
-- [ ] A standalone straight-twist driver/test: command a straight twist,
+- [x] A standalone straight-twist driver/test: command a straight twist,
       step for a realistic duration (order of the tour leg lengths this
       sprint's SUC-042 targets), assert heading stays within a small bound
       of 0 for the ENTIRE run (not just the final sample) — demonstrating
       the left-freezes/right-runs-away desync is gone.
-- [ ] No test in `tests/sim/system/` references the deleted `SimApi`/
+- [x] No test in `tests/sim/system/` references the deleted `SimApi`/
       `DutyPredictor` classes.
 
 ## Implementation Plan

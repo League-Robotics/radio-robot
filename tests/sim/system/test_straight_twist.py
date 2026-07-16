@@ -1,24 +1,20 @@
-"""Off-hardware acceptance proof, migrated (ticket 108-004) from TestSim::
-SimApi (``tests/sim/support/sim_api.{h,cpp}``, deleted ticket 108-003) onto
-TestSim::SimHarness/TestSim::SimPlant (``tests/_infra/sim/``), the composed,
-steppable harness wiring the REAL ``App::RobotLoop`` against the REAL plant
-(``tests/sim/plant/``) and a REAL, wire-protocol-parsing ``Devices::I2CBus``
-implementation.
+"""tests/sim/system/test_straight_twist.py -- ticket 108-004's own headline
+acceptance (SUC-041): the direct regression proof that the divergence bug
+(left encoder freezes, right runs away under an arbitrary twist stream) that
+motivated sprint 108 is gone, against the REAL, live-responding
+TestSim::SimHarness/TestSim::SimPlant.
 
-Compiles ``sim_api_harness.cpp`` together with ``sim_plant.cpp``,
-``wire_test_codec.cpp``, the plant sources, and every HOST_BUILD Devices/App
-source the graph needs, with ``-DHOST_BUILD``, against the SAME headers
-every ARM build compiles. Mirrors ``test_plant.py``'s/``test_app_robot_loop.
-py``'s exact shape: compile with the system C++ compiler, run the resulting
-binary, assert it exits 0.
-
-Also asserts (originally 105-004 AC #4) that no MicroBit.h dependency crept
-into the compiled translation units -- the same "no MicroBit.h in the
-compiled translation units" check ticket 001 established, re-run here since
-this harness composes ticket 001's own RobotLoop plus several more modules.
+Compiles ``straight_twist_harness.cpp`` together with ``sim_plant.cpp``
+(``tests/_infra/sim/``), ``wire_test_codec.cpp``, the plant sources, and the
+same full HOST_BUILD Devices/App/messages/kinematics dependency graph every
+sibling ``test_*.py`` in this directory already compiles, runs the
+resulting binary, and asserts it exits 0 -- printing its own
+human-readable cycle-by-cycle trace.
 
 Collected under ``tests/sim/system/`` -- already within ``pyproject.toml``'s
-``testpaths = ["tests/sim"]``, no configuration change needed.
+``testpaths = ["tests/sim"]``, no configuration change needed:
+
+    uv run python -m pytest tests/sim/system/test_straight_twist.py -v -s
 """
 
 import pathlib
@@ -27,7 +23,7 @@ import sys
 
 import pytest
 
-# tests/sim/system/test_sim_api.py -> system -> sim -> tests -> repo root
+# tests/sim/system/test_straight_twist.py -> system -> sim -> tests -> repo root
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _SOURCE_DIR = _REPO_ROOT / "source"
 _SYSTEM_DIR = pathlib.Path(__file__).resolve().parent
@@ -35,7 +31,7 @@ _SUPPORT_DIR = _SYSTEM_DIR.parent / "support"
 _PLANT_DIR = _SYSTEM_DIR.parent / "plant"
 _INFRA_SIM_DIR = _REPO_ROOT / "tests" / "_infra" / "sim"
 
-_HARNESS_SRC = _SYSTEM_DIR / "sim_api_harness.cpp"
+_HARNESS_SRC = _SYSTEM_DIR / "straight_twist_harness.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WIRE_TEST_CODEC_SRC = _SUPPORT_DIR / "wire_test_codec.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
@@ -91,16 +87,16 @@ def _all_sources():
     )
 
 
-def test_sim_api_harness_compiles_and_passes(tmp_path):
-    """Compile SimPlant + its full dependency graph + the harness; assert
-    every scenario passes."""
+def test_straight_twist_stays_straight(tmp_path):
+    """Compile straight_twist_harness.cpp + its full dependency graph;
+    assert the regression scenario passes and print its own trace."""
     sources = _all_sources()
     for src in sources:
         assert src.is_file(), f"required source missing: {src}"
     assert _SOURCE_DIR.is_dir(), f"source/ tree missing: {_SOURCE_DIR}"
 
     cxx = _find_cxx_compiler()
-    binary = tmp_path / "sim_api_harness"
+    binary = tmp_path / "straight_twist_harness"
 
     compile_result = subprocess.run(
         [
@@ -125,33 +121,19 @@ def test_sim_api_harness_compiles_and_passes(tmp_path):
         text=True,
     )
     assert compile_result.returncode == 0, (
-        "sim_api_harness.cpp / its dependencies failed to compile:\n"
+        "straight_twist_harness.cpp / its dependencies failed to compile:\n"
         f"stdout:\n{compile_result.stdout}\nstderr:\n{compile_result.stderr}"
     )
 
     run_result = subprocess.run([str(binary)], capture_output=True, text=True)
+    print(run_result.stdout)
     assert run_result.returncode == 0, (
-        "sim_api_harness reported a scenario failure "
+        "straight_twist_harness reported a scenario failure "
         f"(exit {run_result.returncode}):\n{run_result.stdout}\n{run_result.stderr}"
     )
-    print(run_result.stdout)
-
-
-def test_sim_api_no_microbit_dependency():
-    """No dependency on MicroBit.h or any ARM-only header -- grep
-    sim_harness.h/sim_plant.{h,cpp} directly (the compile step above already
-    proves the whole graph builds HOST_BUILD-clean; this is the same static
-    "no MicroBit.h in the compiled translation units" check ticket 001
-    established, re-applied to this harness's own composition-root files,
-    now that they replace the deleted sim_api.{h,cpp})."""
-    for path in (
-        _INFRA_SIM_DIR / "sim_harness.h",
-        _INFRA_SIM_DIR / "sim_plant.h",
-        _INFRA_SIM_DIR / "sim_plant.cpp",
-    ):
-        text = path.read_text()
-        assert "MicroBit.h" not in text, f"{path} must not depend on MicroBit.h"
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    # -s: don't capture stdout -- see this file's own header for the
+    # standalone invocation.
+    sys.exit(pytest.main([__file__, "-v", "-s"]))
