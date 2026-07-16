@@ -27,12 +27,12 @@ build-clean:
     uv run python3 build.py --clean
 
 # Build ONLY the host simulation library (libfirmware_host.dylib) via the
-# tests/_infra/sim CMake project -- fast (~8s clean, <1s incremental), skips the
+# src/sim CMake project -- fast (~8s clean, <1s incremental), skips the
 # slow micro:bit firmware compile. This is what TestGUI Sim mode / sim_loop load.
 # Restored sprint 108 (SimPlant sim rebuild).
 build-sim:
-    cmake -S tests/_infra/sim -B tests/_infra/sim/build -DROBOT_RUN_MODE=SIM
-    cmake --build tests/_infra/sim/build --parallel
+    cmake -S src/sim -B src/sim/build -DROBOT_RUN_MODE=SIM
+    cmake --build src/sim/build --parallel
 
 mbd-install:
     pipx install git+https://github.com/Busboombot/mbdeploy.git

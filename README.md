@@ -6,7 +6,7 @@ This repository provides the necessary tooling to compile a C/C++ CODAL program 
 
 ## Python host library — robot_radio
 
-`host/robot_radio/` is the **canonical, tested Python library** for all
+`src/host/robot_radio/` is the **canonical, tested Python library** for all
 host-side robot interaction (protocol v2).  It provides a layered architecture:
 
 - **`NezhaProtocol`** (`robot/protocol.py`) — serial port owner; all v2 wire I/O
@@ -15,8 +15,8 @@ host-side robot interaction (protocol v2).  It provides a layered architecture:
 - **`nav/`, `path/`, `controllers/`** — navigation, path planning, path controllers
 - **`kinematics/`** — differential-drive kinematics
 
-All robot interaction goes through this library.  Tests live in `host/tests/`
-(library, 409 tests) and `tests/` (firmware-logic, ~600 tests).
+All robot interaction goes through this library.  Tests live in `src/tests/` (sim / unit / testgui domains, plus
+bench and playfield HITL tools).
 
 **Run the full suite** (1012 tests, ~1 s):
 
@@ -33,13 +33,13 @@ uv run --with pytest python -m pytest -q
 **Calibration tool** (bench, hardware required):
 
 ```sh
-uv run python tests/calibrate/calibrate_linear.py
+uv run python -m robot_radio.calibration.linear
 ```
 
 Run from the repo root; `aprilcam` is provided by the `calibrate` uv dep group
 (included in `default-groups` — no extra flags needed).
 
-Full library documentation: **[host/robot_radio/README.md](host/robot_radio/README.md)**
+Full library documentation: **[src/host/robot_radio/README.md](src/host/robot_radio/README.md)**
 
 ## Raising Issues
 Any issues regarding the micro:bit are gathered on the [lancaster-university/codal-microbit-v2](https://github.com/lancaster-university/codal-microbit-v2) repository. Please raise yours there too.

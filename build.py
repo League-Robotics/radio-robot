@@ -29,7 +29,7 @@ import platform
 import json
 import shutil
 import re
-from utils.python.codal_utils import system, build, read_json, checkgit, read_config, update, revision, printstatus, status, get_next_version, lock, delete_build_folder, generate_docs
+from src.utils.python.codal_utils import system, build, read_json, checkgit, read_config, update, revision, printstatus, status, get_next_version, lock, delete_build_folder, generate_docs
 
 parser = optparse.OptionParser(usage="usage: %prog target-name-or-url [options]", description="This script manages the build system for a codal device. Passing a target-name generates a codal.json for that devices, to list all devices available specify the target-name as 'ls'.")
 parser.add_option('-c', '--clean', dest='clean', action="store_true", help='Whether to clean before building. Applicable only to unix based builds.', default=False)
@@ -47,7 +47,7 @@ parser.add_option('-d', '--dev', dest='dev', action="store_true", help='enable d
 parser.add_option('-g', '--generate-docs', dest='generate_docs', action="store_true", help='generate documentation for the current target', default=False)
 parser.add_option('-j', '--parallelism', dest='parallelism', action="store", help='Set the number of parallel threads to build with, if supported', default=10)
 parser.add_option('-n', '--lines', dest='detail_lines', action="store", help="Sets the number of detail lines to output (only relevant to --status)", default=3 )
-parser.add_option('--fw-only', dest='fw_only', action="store_true", help='Build ONLY the micro:bit firmware; skip the host-simulation library. By default build.py builds BOTH the bench firmware (MICROBIT.hex) and the full-simulation library (tests/_infra/sim/build/libfirmware_host).', default=False)
+parser.add_option('--fw-only', dest='fw_only', action="store_true", help='Build ONLY the micro:bit firmware; skip the host-simulation library. By default build.py builds BOTH the bench firmware (MICROBIT.hex) and the full-simulation library (src/sim/build/libfirmware_host).', default=False)
 
 (options, args) = parser.parse_args()
 
@@ -73,48 +73,48 @@ if options.revision:
 # Regenerate DefaultConfig.cpp from the active robot JSON config so
 # calibration values are baked into the firmware at compile time.
 #
-# 077-001: skipped while source/robot/ does not exist. gen_default_config.py
-# writes to source/robot/DefaultConfig.cpp -- a directory the greenfield
+# 077-001: skipped while src/firm/robot/ does not exist. gen_default_config.py
+# writes to src/firm/robot/DefaultConfig.cpp -- a directory the greenfield
 # rebuild's new source/ tree deliberately does not create until a later
 # sprint adds a Robot/ConfigRegistry back. The check is structural (does
-# source/robot/ exist?), not a version flag, so it self-heals the moment that
+# src/firm/robot/ exist?), not a version flag, so it self-heals the moment that
 # directory reappears (architecture-update.md Design Rationale Decision 4).
 # check_config_sync.py is a separate CI lint (.github/workflows/build.yml),
 # not something build.py itself calls -- nothing to condition for it here.
 import subprocess as _sp
-_source_robot_dir = os.path.join(os.path.dirname(__file__), "source", "robot")
+_source_robot_dir = os.path.join(os.path.dirname(__file__), "src", "firm", "robot")
 if os.path.isdir(_source_robot_dir):
-    _gen = os.path.join(os.path.dirname(__file__), "scripts", "gen_default_config.py")
+    _gen = os.path.join(os.path.dirname(__file__), "src", "scripts", "gen_default_config.py")
     _sp.run([sys.executable, _gen], check=True)
 else:
-    print("build.py: source/robot/ absent -- skipping gen_default_config.py (077-001)")
+    print("build.py: src/firm/robot/ absent -- skipping gen_default_config.py (077-001)")
 
-# Regenerate source/messages/*.h from protos/*.proto (C++11 POD headers).
-_gen_msgs = os.path.join(os.path.dirname(__file__), "scripts", "gen_messages.py")
+# Regenerate src/firm/messages/*.h from src/protos/*.proto (C++11 POD headers).
+_gen_msgs = os.path.join(os.path.dirname(__file__), "src", "scripts", "gen_messages.py")
 _sp.run([sys.executable, _gen_msgs], check=True)
 
-# Regenerate host/robot_radio/robot/pb2/*_pb2.py from the SAME protos/*.proto
+# Regenerate src/host/robot_radio/robot/pb2/*_pb2.py from the SAME src/protos/*.proto
 # (095-002, M7 Host Codec Mirror) via grpc_tools.protoc --python_out, so
 # device tables (above) and host pb2 bindings can never skew independently.
-_gen_pb2 = os.path.join(os.path.dirname(__file__), "scripts", "gen_pb2.py")
+_gen_pb2 = os.path.join(os.path.dirname(__file__), "src", "scripts", "gen_pb2.py")
 _sp.run([sys.executable, _gen_pb2], check=True)
 
-# Regenerate source/config/boot_config.cpp from the active robot JSON so the
+# Regenerate src/firm/config/boot_config.cpp from the active robot JSON so the
 # subsystems tree's boot MotorConfig/DrivetrainConfig defaults are baked in at
 # compile time -- main.cpp no longer hardcodes calibration.
-_gen_boot = os.path.join(os.path.dirname(__file__), "scripts", "gen_boot_config.py")
+_gen_boot = os.path.join(os.path.dirname(__file__), "src", "scripts", "gen_boot_config.py")
 _sp.run([sys.executable, _gen_boot], check=True)
 
-# Regenerate source/types/version_generated.h from pyproject.toml so the
+# Regenerate src/firm/types/version_generated.h from pyproject.toml so the
 # firmware's compiled-in FIRMWARE_VERSION (reported by VER/ID) tracks the
 # canonical project version instead of drifting from a hand-edited constant.
-_gen_version = os.path.join(os.path.dirname(__file__), "scripts", "gen_version.py")
+_gen_version = os.path.join(os.path.dirname(__file__), "src", "scripts", "gen_version.py")
 _sp.run([sys.executable, _gen_version], check=True)
 
 # out of source build!
 os.chdir("build")
 
-test_json = read_json("../utils/targets.json")
+test_json = read_json("../src/utils/targets.json")
 
 # configure the target a user has specified:
 if len(args) == 1:
@@ -188,14 +188,14 @@ def _project_version():
 
 
 def build_host_sim(clean):
-    """Build the host-simulation library (libfirmware_host) via the tests/_infra/sim
+    """Build the host-simulation library (libfirmware_host) via the src/sim
     CMake build (HOST_BUILD) — the 'full simulation' target the pytest harness
     uses. Fast: ~8s clean, <1s incremental. Uses absolute paths from __file__ so
     it is correct regardless of the current working directory. Raises on failure.
     """
     import subprocess
     root = os.path.dirname(os.path.abspath(__file__))
-    sim_dir = os.path.join(root, "tests", "_infra", "sim")
+    sim_dir = os.path.join(root, "src", "sim")
     build_dir = os.path.join(sim_dir, "build")
     if clean and os.path.isdir(build_dir):
         shutil.rmtree(build_dir)
@@ -213,7 +213,7 @@ def build_host_sim(clean):
 def _host_sim_dir():
     """Absolute path to the host-sim CMake project, wherever tests/ currently lives."""
     root = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(root, "tests", "_infra", "sim")
+    return os.path.join(root, "src", "sim")
 
 
 def print_build_summary(fw_only):
@@ -224,9 +224,9 @@ def print_build_summary(fw_only):
     if fw_only:
         print("  host sim lib   (skipped: --fw-only)")
     elif not os.path.isdir(_host_sim_dir()):
-        print("  host sim lib   (skipped: tests/_infra/sim/ absent -- parked in tests_old/, 077-001)")
+        print("  host sim lib   (skipped: src/sim/ absent -- parked in tests_old/, 077-001)")
     else:
-        print("  host sim lib   v%s   (HOST_BUILD)   -> tests/_infra/sim/build/libfirmware_host" % ver)
+        print("  host sim lib   v%s   (HOST_BUILD)   -> src/sim/build/libfirmware_host" % ver)
     print()
 
 
@@ -247,17 +247,17 @@ if not options.test_platform:
     # build always leaves both artifacts in sync — no guessing which you have.
     # --fw-only skips this. The host-sim build is fast (~8s clean, <1s incremental).
     #
-    # 077-001: also skipped (structurally) while tests/_infra/sim/ does not
+    # 077-001: also skipped (structurally) while src/sim/ does not
     # exist -- it is parked under tests_old/ by the greenfield rebuild's test
     # rename, and a fresh sim harness under tests/sim/ is later-ticket work
     # (architecture-update.md: "Host-side sim/test builds reference old paths
     # — expected broken; do not chase them this ticket"). Self-heals once
-    # tests/_infra/sim/ (or its replacement) reappears.
+    # src/sim/ (or its replacement) reappears.
     if not options.fw_only:
         if os.path.isdir(_host_sim_dir()):
             build_host_sim(options.clean)
         else:
-            print("\nbuild.py: tests/_infra/sim/ absent -- skipping host-sim build (077-001)")
+            print("\nbuild.py: src/sim/ absent -- skipping host-sim build (077-001)")
 
     print_build_summary(options.fw_only)
     exit(0)
@@ -273,14 +273,14 @@ for json_obj in test_json:
     delete_build_folder()
 
     # clean libs
-    if os.path.exists("../libraries"):
-        shutil.rmtree('../libraries')
+    if os.path.exists("../src/libraries"):
+        shutil.rmtree('../src/libraries')
 
     # configure the target and tests...
     config = {
         "target":json_obj,
         "output":".",
-        "application":"libraries/"+json_obj["name"]+"/tests/"
+        "application":"src/libraries/"+json_obj["name"]+"/tests/"
     }
 
     with open("../codal.json", 'w') as codal_json:

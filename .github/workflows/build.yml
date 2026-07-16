@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Check config registry sync
-        run: python scripts/check_config_sync.py
+        run: python src/scripts/check_config_sync.py
 
   host-transport-boundary:
     runs-on: ubuntu-22.04
@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Enforce _ser encapsulation
         run: |
-          result=$(grep -rn '\b_ser\b' host/robot_radio | grep -v 'io/serial_conn.py' || true)
+          result=$(grep -rn '\b_ser\b' src/host/robot_radio | grep -v 'io/serial_conn.py' || true)
           if [ -n "$result" ]; then
             echo "Transport boundary violation: _ser accessed outside io/serial_conn.py"
             echo "$result"
@@ -83,7 +83,7 @@ jobs:
           rm codal.json
           mv codal.ble.json codal.json
           python -c "import pathlib; \
-            f=pathlib.Path('source/main.cpp'); \
+            f=pathlib.Path('src/firm/main.cpp'); \
             f.write_text(f.read_text().replace('out_of_box_experience()', 'ble_test()'))"
           cat codal.json
       - name: Build BLE project using build.py

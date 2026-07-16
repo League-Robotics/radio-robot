@@ -36,7 +36,7 @@ recordings/
 data/aprilcam/
 
 # Generated firmware version header (scripts/gen_version.py, from pyproject.toml).
-source/types/version_generated.h
+src/firm/types/version_generated.h
 
 # CMake-generated files, wherever they land in the tree.
 # These names are always generated and are never checked-in source
@@ -64,11 +64,11 @@ wedgelab/MICROBIT.bin
 # tests/bench/ HITL run artifacts (CSV logs from pid_hold_speed.py,
 # ratio_governor_curve.py, etc.) -- paths are recorded in ticket results,
 # not committed.
-tests/bench/out/
+src/tests/bench/out/
 
 # tests/sim/system/ rendered-trace PNGs (render_tour_trace.py, ticket 086-004)
-# -- regenerable build artifacts, same rationale as tests/bench/out/ above.
-tests/sim/system/out/
+# -- regenerable build artifacts, same rationale as src/tests/bench/out/ above.
+src/tests/sim/system/out/
 
 # SQLite WAL-mode sidecar files for the CLASI state DB (.clasi/.clasi.db) --
 # transient; the checkpointed .clasi.db is the tracked source of truth.

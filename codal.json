@@ -10,5 +10,5 @@
         "MICROBIT_BLE_PAIRING_MODE": 0,
         "MICROBIT_RADIO_MAX_PACKET_SIZE": 250
     },
-    "application": "source"
+    "application": "src/firm"
 }

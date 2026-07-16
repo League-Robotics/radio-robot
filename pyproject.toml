@@ -24,11 +24,12 @@ rogo = "robot_radio.io.cli:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-# The importable robot_radio package lives under host/. Ship it as the wheel's
-# top-level package — hatchling strips the host/ prefix, so `import robot_radio`
-# resolves. (Formerly built from a standalone host/pyproject.toml; folded here.)
+# The importable robot_radio package lives under src/host/. Ship it as the
+# wheel's top-level package — hatchling strips the src/host/ prefix, so
+# `import robot_radio` resolves. (Formerly host/robot_radio; moved under the
+# unified src/ root 2026-07-16.)
 [tool.hatch.build.targets.wheel]
-packages = ["host/robot_radio"]
+packages = ["src/host/robot_radio"]
 
 [dependency-groups]
 # Bench calibration / camera-ground-truth tooling (tests/calibrate/). Pulls in
@@ -167,7 +168,7 @@ aprilcam = { path = "../AprilTags", editable = true }
 # tests/sim/unit/test_bare_loop_commands.py.) Parked, not deleted (see
 # tests/sim/parked-094/README.md), with the same bare-name basename-fnmatch
 # exclusion as parked-093.
-testpaths = ["tests/sim", "tests/unit", "tests/testgui"]
+testpaths = ["src/tests/sim", "src/tests/unit", "src/tests/testgui"]
 norecursedirs = [
     "tests_old", "source_old", "parked-093", "parked-094",
     "vendor", "build", ".venv", "node_modules",
