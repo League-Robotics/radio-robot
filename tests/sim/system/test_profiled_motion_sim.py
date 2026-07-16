@@ -55,7 +55,7 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "preamble.cpp",
 ]
 _DEVICE_SOURCES = [
-    _SOURCE_DIR / "devices" / "clock_host.cpp",
+    _INFRA_SIM_DIR / "sim_clock.cpp",
     _SOURCE_DIR / "devices" / "velocity_pid.cpp",
     _SOURCE_DIR / "devices" / "nezha_motor.cpp",
     _SOURCE_DIR / "devices" / "otos.cpp",

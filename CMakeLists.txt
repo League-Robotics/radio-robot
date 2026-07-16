@@ -285,19 +285,13 @@ if (NOT "${ROBOT_RUN_MODE}" STRGREATER "")
 endif()
 message("${BoldBlue}ROBOT_RUN_MODE: ${ROBOT_RUN_MODE}${ColourReset}")
 
-# devices/clock_host.cpp is a load-bearing CMake duplicate-symbol exclusion
-# guard (sprint 102 architecture-update.md Decision 4): a HOST_BUILD-only
-# scripted fake that defines the SAME Types:: symbols as the real devices/
-# clock_real.cpp against clock.h's #ifdef HOST_BUILD fork, so it must never
-# be compiled into the ARM firmware (which does not define HOST_BUILD) --
-# compiling it here would duplicate those symbols. Used only by the host
-# pytest harness (tests/sim/unit/), which compiles it directly with
-# -DHOST_BUILD via the system C++ compiler, not through this CMake file.
-# devices/i2c_bus_host.cpp's own twin exclude was removed in sprint 108
-# ticket 001 -- i2c_bus.h is now a pure interface with no HOST_BUILD fork
-# and i2c_bus_host.cpp was deleted; devices/clock.h survives this sprint's
-# delete and still needs this guard until ticket 010.
-list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/devices/clock_host\\.cpp$")
+# devices/clock_host.cpp's CMake duplicate-symbol exclusion guard (sprint
+# 102 architecture-update.md Decision 4) was removed in sprint 108 ticket
+# 010, its final ticket -- clock.h is now a pure interface with no
+# HOST_BUILD fork (mirroring devices/i2c_bus_host.cpp's own twin exclude,
+# removed by ticket 001) and clock_host.cpp/clock_real.cpp were both
+# deleted. There is no `list(FILTER ... EXCLUDE)` host line left in this
+# file.
 
 if("${SOURCE_FILES}" STREQUAL "")
     message(FATAL_ERROR "${BoldRed}No user application to build, please add a main.cpp at: ${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}${ColourReset}")

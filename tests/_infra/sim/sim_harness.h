@@ -79,13 +79,13 @@
 #include "app/preamble.h"
 #include "app/robot_loop.h"
 #include "app/telemetry.h"
-#include "devices/clock.h"
 #include "devices/color_sensor.h"
 #include "devices/device_config.h"
 #include "devices/line_sensor.h"
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "fake_transport.h"
+#include "sim_clock.h"
 #include "sim_plant.h"
 #include "wire_test_codec.h"
 
@@ -216,15 +216,21 @@ class SimHarness {
 
   Devices::NezhaMotor& motorLeft() { return motorL_; }
   Devices::NezhaMotor& motorRight() { return motorR_; }
-  Devices::Clock& clock() { return clock_; }
+
+  // Concrete TestSim::SimClock&, not Devices::Clock& -- callers (this
+  // class's own driveBootToDone(), sim_api_harness.cpp) need the
+  // setMicros()/advanceMicros() stepping surface, which only the concrete
+  // fake exposes now that Devices::Clock is a pure interface (ticket 010).
+  TestSim::SimClock& clock() { return clock_; }
 
   // Ticket 108-004's own migrated sim_api_harness.cpp timing-diagnostic
   // scenario needs this to reproduce the deleted SimApi::measureOneCycle()'s
   // sleepCount()/lastSleepMillis()/yieldCount() deltas directly -- exposed
   // here rather than re-adding a bespoke CycleTimingReport wrapper, matching
   // this class's existing "expose the owned device, let the caller read it"
-  // pattern (motorLeft()/motorRight()/clock() above).
-  Devices::Sleeper& sleeper() { return sleeper_; }
+  // pattern (motorLeft()/motorRight()/clock() above). Concrete
+  // TestSim::SimSleeper&, for the same reason as clock() above.
+  TestSim::SimSleeper& sleeper() { return sleeper_; }
 
   // [us] the fixed per-cycle virtual-time advance step() applies before
   // every robotLoop_.cycle() call -- matches sim_api.h's own kCycleDtUs
@@ -280,8 +286,8 @@ class SimHarness {
   }
 
   SimPlant plant_;
-  Devices::Clock clock_;
-  Devices::Sleeper sleeper_;
+  TestSim::SimClock clock_;
+  TestSim::SimSleeper sleeper_;
 
   Devices::NezhaMotor motorL_;
   Devices::NezhaMotor motorR_;

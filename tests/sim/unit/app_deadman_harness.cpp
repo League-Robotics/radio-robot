@@ -1,19 +1,20 @@
 // app_deadman_harness.cpp -- off-hardware acceptance harness for ticket
 // 103-004 (SUC-004), App::Deadman (source/app/deadman.{h,cpp}). Proves
-// arm(duration)/disarm()/expired() against the HOST_BUILD scripted-fake
-// Devices::Clock (source/devices/clock_host.cpp) -- no wall clock, no real
-// sleeps, every scenario steps time explicitly.
+// arm(duration)/disarm()/expired() against TestSim::SimClock
+// (tests/_infra/sim/sim_clock.cpp, the TestSim::SimClock host-test fake --
+// sprint 108 ticket 010) -- no wall clock, no real sleeps, every scenario
+// steps time explicitly.
 //
 // Mirrors devices_clock_harness.cpp's exact shape: hand-rolled assertion
 // plumbing, PASS/FAIL printf, exit nonzero on failure. Compiled by
 // test_app_deadman.py with -DHOST_BUILD against deadman.cpp and
-// devices/clock_host.cpp.
+// sim_clock.cpp.
 #include <cstdint>
 #include <cstdio>
 #include <string>
 
 #include "app/deadman.h"
-#include "devices/clock.h"
+#include "sim_clock.h"
 
 namespace {
 
@@ -46,7 +47,7 @@ void checkFalse(bool condition, const std::string& what) {
 //    true at/after.
 void scenarioArmExpiresAtDeadline() {
   beginScenario("arm(100): expired() false before the 100ms deadline, true at/after");
-  Devices::Clock clock;
+  TestSim::SimClock clock;
   App::Deadman dm(clock);
 
   dm.arm(100.0f);  // [ms]
@@ -65,7 +66,7 @@ void scenarioArmExpiresAtDeadline() {
 // 2. disarm() -> expired() stays false regardless of further advance.
 void scenarioDisarmCancelsUnconditionally() {
   beginScenario("disarm(): expired() stays false regardless of further clock advance");
-  Devices::Clock clock;
+  TestSim::SimClock clock;
   App::Deadman dm(clock);
 
   dm.arm(100.0f);
@@ -84,7 +85,7 @@ void scenarioDisarmCancelsUnconditionally() {
 //    second arm() set a FRESH deadline from the now-current clock.
 void scenarioReArmResetsDeadline() {
   beginScenario("arm() re-armed mid-window sets a FRESH deadline from now (re-arming, not stacking)");
-  Devices::Clock clock;
+  TestSim::SimClock clock;
   App::Deadman dm(clock);
 
   dm.arm(100.0f);              // deadline = 100ms
@@ -102,14 +103,14 @@ void scenarioReArmResetsDeadline() {
 //    immediate expiry, not a crash or an unbounded window.
 void scenarioNegativeAndNanDurationClampToImmediateExpiry() {
   beginScenario("arm(): negative/NaN duration clamps to 0 -- immediate expiry");
-  Devices::Clock clock;
+  TestSim::SimClock clock;
   App::Deadman dmNeg(clock);
 
   clock.setMicros(1000);
   dmNeg.arm(-50.0f);
   checkTrue(dmNeg.expired(), "arm(negative) expires immediately (clamped to 0)");
 
-  Devices::Clock clock2;
+  TestSim::SimClock clock2;
   App::Deadman dmNan(clock2);
   clock2.setMicros(2000);
   float nan = 0.0f / 0.0f;
@@ -121,7 +122,7 @@ void scenarioNegativeAndNanDurationClampToImmediateExpiry() {
 //    elapsed yet.
 void scenarioNeverArmedIsNotExpired() {
   beginScenario("a fresh, never-armed Deadman reads expired() == false");
-  Devices::Clock clock;
+  TestSim::SimClock clock;
   App::Deadman dm(clock);
 
   checkFalse(dm.expired(), "never-armed Deadman is not expired");

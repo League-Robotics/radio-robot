@@ -5,9 +5,10 @@
 // Proves the extraction is genuinely host-buildable and runnable: constructs
 // every leaf/app module RobotLoop needs over a TestSim::SimPlant (108-002),
 // scripted deterministically via TestSim::ScriptedI2CHook (108-009), and a
-// scripted Devices::Clock/Sleeper pair (clock_host.cpp), a minimal
-// App::Transport stub in place of real serial/radio, drives boot() to
-// completion, then cycle() a few times, and asserts: no bus script
+// TestSim::SimClock/SimSleeper pair (tests/_infra/sim/sim_clock.cpp, the
+// Devices::Clock/Sleeper host-test fakes -- sprint 108 ticket 010), a
+// minimal App::Transport stub in place of real serial/radio, drives boot()
+// to completion, then cycle() a few times, and asserts: no bus script
 // under/over-run (proves cycle ordering matches what main.cpp's
 // pre-extraction body actually issued), encoder-derived position()/
 // velocity() reflect the scripted samples (proves the request/settle/collect
@@ -52,7 +53,6 @@
 #include "app/preamble.h"
 #include "app/robot_loop.h"
 #include "app/telemetry.h"
-#include "devices/clock.h"
 #include "devices/color_sensor.h"
 #include "devices/device_config.h"
 #include "devices/device_types.h"
@@ -61,6 +61,7 @@
 #include "devices/otos.h"
 #include "messages/wire_runtime.h"
 #include "scripted_i2c_hook.h"
+#include "sim_clock.h"
 #include "sim_plant.h"
 #include "support/fake_transport.h"
 
@@ -333,8 +334,8 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  Devices::Clock clock;
-  Devices::Sleeper sleeper;
+  TestSim::SimClock clock;
+  TestSim::SimSleeper sleeper;
 
   Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
   Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
@@ -465,8 +466,8 @@ void scenarioConfigMotorPatchAppliesWhileDrivetrainPlannerStayUnimplemented() {
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  Devices::Clock clock;
-  Devices::Sleeper sleeper;
+  TestSim::SimClock clock;
+  TestSim::SimSleeper sleeper;
 
   Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
   Devices::NezhaMotor motorR(plant, baseMotorConfig(2));

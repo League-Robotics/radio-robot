@@ -37,7 +37,7 @@ e.g.:
         tests/sim/plant/wheel_plant.cpp tests/sim/plant/otos_plant.cpp \\
         source/app/robot_loop.cpp source/app/comms.cpp source/app/telemetry.cpp \\
         source/app/deadman.cpp source/app/drive.cpp source/app/odometry.cpp \\
-        source/app/preamble.cpp source/devices/clock_host.cpp \\
+        source/app/preamble.cpp tests/_infra/sim/sim_clock.cpp \\
         source/devices/velocity_pid.cpp source/devices/nezha_motor.cpp source/devices/otos.cpp \\
         source/devices/color_sensor.cpp source/devices/line_sensor.cpp \\
         source/messages/wire.cpp source/messages/wire_runtime.cpp source/kinematics/body_kinematics.cpp \\
@@ -74,7 +74,7 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "preamble.cpp",
 ]
 _DEVICE_SOURCES = [
-    _SOURCE_DIR / "devices" / "clock_host.cpp",
+    _INFRA_SIM_DIR / "sim_clock.cpp",
     _SOURCE_DIR / "devices" / "velocity_pid.cpp",
     _SOURCE_DIR / "devices" / "nezha_motor.cpp",
     _SOURCE_DIR / "devices" / "otos.cpp",

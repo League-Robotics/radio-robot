@@ -3,9 +3,9 @@
 // step() resolves every leaf to a terminal state (done()) via each leaf's
 // own REAL begin()/beginStep(nowUs) entry point over a TestSim::SimPlant
 // (108-002), scripted deterministically via TestSim::ScriptedI2CHook
-// (108-009), and a scripted Devices::Clock fake (source/devices/
-// clock_host.cpp) -- no MicroBitI2C, no CODAL, no real hardware, no wall
-// clock.
+// (108-009), and TestSim::SimClock (tests/_infra/sim/sim_clock.cpp, the
+// Devices::Clock host-test fake -- sprint 108 ticket 010) -- no MicroBitI2C,
+// no CODAL, no real hardware, no wall clock.
 //
 // Migrated by sprint 108 ticket 009 off the deleted source/devices/
 // i2c_bus_host.cpp scripted-FIFO Devices::I2CBus fake (ticket 001 reduced
@@ -39,7 +39,6 @@
 #include <string>
 
 #include "app/preamble.h"
-#include "devices/clock.h"
 #include "devices/color_sensor.h"
 #include "devices/device_config.h"
 #include "devices/device_types.h"
@@ -47,6 +46,7 @@
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "scripted_i2c_hook.h"
+#include "sim_clock.h"
 #include "sim_plant.h"
 
 namespace {
@@ -217,7 +217,7 @@ void scenarioAllPresentHappyPath() {
   TestSim::SimPlant plant;
 
   TestSim::ScriptedI2CHook bus(plant);
-  Devices::Clock clock;
+  TestSim::SimClock clock;
 
   Devices::NezhaMotor left(plant, baseMotorConfig(1));
   Devices::NezhaMotor right(plant, baseMotorConfig(2));
@@ -297,7 +297,7 @@ void scenarioOtosAbsentLatchesAfterRetries() {
   TestSim::SimPlant plant;
 
   TestSim::ScriptedI2CHook bus(plant);
-  Devices::Clock clock;
+  TestSim::SimClock clock;
 
   Devices::NezhaMotor left(plant, baseMotorConfig(1));
   Devices::NezhaMotor right(plant, baseMotorConfig(2));
@@ -380,7 +380,7 @@ void scenarioTransientMotorNakDuringBeginNotLatched() {
   TestSim::SimPlant plant;
 
   TestSim::ScriptedI2CHook bus(plant);
-  Devices::Clock clock;
+  TestSim::SimClock clock;
 
   Devices::NezhaMotor left(plant, baseMotorConfig(1));
   Devices::NezhaMotor right(plant, baseMotorConfig(2));
@@ -431,7 +431,7 @@ void scenarioMultipleAbsentLeavesStillTerminates() {
   TestSim::SimPlant plant;
 
   TestSim::ScriptedI2CHook bus(plant);
-  Devices::Clock clock;
+  TestSim::SimClock clock;
 
   Devices::NezhaMotor left(plant, baseMotorConfig(1));
   Devices::NezhaMotor right(plant, baseMotorConfig(2));

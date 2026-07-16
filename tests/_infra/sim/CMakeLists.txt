@@ -8,10 +8,9 @@ project(radio_robot_host CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# HOST_BUILD gates the host-only forks that already exist in source/
-# (devices/clock_host.cpp vs. the real vendor-clock fork, etc.) -- the same
-# define every tests/sim/*.py host-build harness compiles with (see e.g.
-# tests/sim/system/test_straight_twist.py's own subprocess compile
+# HOST_BUILD gates the host-only forks that already exist in source/ -- the
+# same define every tests/sim/*.py host-build harness compiles with (see
+# e.g. tests/sim/system/test_straight_twist.py's own subprocess compile
 # invocation, which this CMakeLists.txt's source list mirrors).
 add_definitions(-DHOST_BUILD=1)
 
@@ -39,8 +38,6 @@ set(PLANT_DIR "${REPO_ROOT}/tests/sim/plant")
 #   app/*.cpp                 -- Comms/Deadman/Drive/Odometry/Preamble/
 #                                 RobotLoop/Telemetry (the single-loop
 #                                 rebuild's whole App:: graph)
-#   devices/clock_host.cpp    -- HOST_BUILD fake Clock (NOT clock_real.cpp,
-#                                 the real vendor-clock fork)
 #   devices/velocity_pid.cpp, devices/nezha_motor.cpp, devices/otos.cpp,
 #   devices/color_sensor.cpp, devices/line_sensor.cpp
 #                              -- the device leaves SimPlant answers wire
@@ -52,13 +49,16 @@ set(PLANT_DIR "${REPO_ROOT}/tests/sim/plant")
 #                              -- pure math, no CODAL deps
 #   sim_ctypes.cpp             -- this ticket's C ABI (108-005)
 #   sim_plant.cpp               -- ticket 108-002's SimPlant (tests/_infra/sim/)
+#   sim_clock.cpp                -- ticket 108-010's TestSim::SimClock/
+#                                 SimSleeper (tests/_infra/sim/), the
+#                                 Devices::Clock/Sleeper fakes
 #   tests/sim/support/wire_test_codec.cpp
 #                              -- TestSupport::armor*Command()/decodeOutboundLine()
 #   tests/sim/plant/{wheel,otos}_plant.cpp
 #                              -- the reused, deterministic physics models
 #
 # Absent (deliberately):
-#   devices/clock_real.cpp, devices/microbit_i2c_bus.cpp
+#   devices/microbit_clock.cpp, devices/microbit_i2c_bus.cpp
 #                              -- the REAL CODAL-only forks (MicroBit.h)
 #   com/*.cpp                 -- real serial/radio transport (CODAL-only);
 #                                 SimHarness uses TestSupport::FakeTransport
@@ -86,7 +86,6 @@ set(APP_SOURCES
     "${SOURCE_DIR}/app/telemetry.cpp"
 )
 set(DEVICE_SOURCES
-    "${SOURCE_DIR}/devices/clock_host.cpp"
     "${SOURCE_DIR}/devices/velocity_pid.cpp"
     "${SOURCE_DIR}/devices/nezha_motor.cpp"
     "${SOURCE_DIR}/devices/otos.cpp"
@@ -103,6 +102,7 @@ set(KINEMATICS_SOURCES
 set(SIM_SOURCES
     "${CMAKE_SOURCE_DIR}/sim_ctypes.cpp"
     "${CMAKE_SOURCE_DIR}/sim_plant.cpp"
+    "${CMAKE_SOURCE_DIR}/sim_clock.cpp"
     "${SUPPORT_DIR}/wire_test_codec.cpp"
     "${PLANT_DIR}/wheel_plant.cpp"
     "${PLANT_DIR}/otos_plant.cpp"

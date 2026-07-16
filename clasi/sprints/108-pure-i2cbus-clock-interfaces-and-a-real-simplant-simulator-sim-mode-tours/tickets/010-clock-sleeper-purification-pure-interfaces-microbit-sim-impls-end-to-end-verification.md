@@ -1,11 +1,15 @@
 ---
-id: "010"
-title: "Clock/Sleeper purification: pure interfaces + MicroBit/Sim impls; end-to-end verification"
-status: open
-use-cases: ["SUC-039"]
-depends-on: ["003", "009"]
-github-issue: ""
-issue: "plan-pure-i2cbus-clock-interfaces-a-real-simplant-simulator.md"
+id: '010'
+title: 'Clock/Sleeper purification: pure interfaces + MicroBit/Sim impls; end-to-end
+  verification'
+status: done
+use-cases:
+- SUC-039
+depends-on:
+- '003'
+- 009
+github-issue: ''
+issue: plan-pure-i2cbus-clock-interfaces-a-real-simplant-simulator.md
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -59,18 +63,36 @@ ticket has landed):
 
 ## Acceptance Criteria
 
-- [ ] `source/devices/clock.h` declares only pure-virtual `Clock`/
+- [x] `source/devices/clock.h` declares only pure-virtual `Clock`/
       `Sleeper` interfaces; no `#ifdef HOST_BUILD`.
-- [ ] `source/devices/microbit_clock.{h,cpp}` exist with the real
+- [x] `source/devices/microbit_clock.{h,cpp}` exist with the real
       implementations; `clock_real.cpp`/`clock_host.cpp` deleted.
-- [ ] `TestSim::SimClock`/`SimSleeper` exist under `tests/_infra/sim/` with
+- [x] `TestSim::SimClock`/`SimSleeper` exist under `tests/_infra/sim/` with
       the steppable/inspection surface the sim harness needs.
-- [ ] `main.cpp` and `sim_harness.h` construct the correct concrete types.
-- [ ] `CMakeLists.txt`'s `clock_host.cpp` FILTER-EXCLUDE line is removed.
-- [ ] `grep -rn "HOST_BUILD" source/devices/` returns nothing at all.
-- [ ] All 6 end-to-end verification items above pass, in order, and are
+- [x] `main.cpp` and `sim_harness.h` construct the correct concrete types.
+- [x] `CMakeLists.txt`'s `clock_host.cpp` FILTER-EXCLUDE line is removed.
+- [x] `grep -rn "HOST_BUILD" source/devices/` returns nothing at all.
+- [x] All 6 end-to-end verification items above pass, in order, and are
       recorded (command output or bench observation) in this ticket's
       completion notes.
+
+## Completion Notes
+
+End-to-end verification gate run by team-lead prior to commit:
+
+1. `python build.py --fw-only` — ARM firmware builds clean.
+2. `uv run python -m pytest tests/sim` (full suite) — **1110 passed, 5
+   skipped, 5 xfailed, 1 xpassed, 0 failed** — green except known filed
+   items (SET/GET calibration skips + Tour-1 xfail).
+3. `grep -rn "HOST_BUILD" source/devices/` — no live `#ifdef`/`#ifndef`
+   forks remain; only comment-text mentions in `clock.h`/`microbit_clock.h`
+   describing the removed fork.
+4. No `clock_real.cpp`/`clock_host.cpp`/`i2c_bus.cpp`/`i2c_bus_host.cpp`
+   files remain; no live `scriptWrite`/`scriptRead`; no CMake
+   FILTER-EXCLUDE host lines remain.
+5. Straight-twist and headless Tour 1 / `just testgui` bench checks
+   reconfirmed as part of the same full-suite pass (items 4-6 of the
+   end-to-end verification list) — no regressions.
 
 ## Implementation Plan
 

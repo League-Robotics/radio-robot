@@ -30,10 +30,10 @@
 #include "com/radio.h"
 #include "com/serial_port.h"
 #include "config/boot_config.h"
-#include "devices/clock.h"
 #include "devices/color_sensor.h"
 #include "devices/device_config.h"
 #include "devices/i2c_bus.h"
+#include "devices/microbit_clock.h"
 #include "devices/microbit_i2c_bus.h"
 #include "devices/line_sensor.h"
 #include "devices/nezha_motor.h"
@@ -125,8 +125,8 @@ int main() {
   static Devices::LineConfig lineConfig;
   static Devices::LineSensorLeaf line(bus, lineConfig);
 
-  static Devices::Clock clock;
-  static Devices::Sleeper sleeper;
+  static Devices::MicroBitClock clock;
+  static Devices::MicroBitSleeper sleeper;
 
   static App::SerialTransport serialLink(serial);
   static App::RadioTransport radioLink(radio);

@@ -34,7 +34,6 @@
 #include <string>
 #include <vector>
 
-#include "devices/clock.h"
 #include "messages/envelope.h"
 #include "messages/planner.h"
 #include "sim_harness.h"
@@ -275,7 +274,7 @@ void scenarioVirtualCycleTimingDiagnostic() {
   // ticket) -- same formula as the original CycleTimingReport: 3 non-final
   // 4ms settle/clear blocks (robot_loop.cpp's own kSettle/kClear) plus the
   // observed final pace block equal the whole cycle's virtual schedule.
-  Devices::Sleeper& sleeper = sim.sleeper();
+  TestSim::SimSleeper& sleeper = sim.sleeper();
   int sleepsBefore = sleeper.sleepCount();
   int yieldsBefore = sleeper.yieldCount();
 

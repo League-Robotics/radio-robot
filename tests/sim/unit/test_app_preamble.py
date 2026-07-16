@@ -3,13 +3,15 @@
 
 Compiles ``app_preamble_harness.cpp`` together with the HOST_BUILD
 implementations it needs (``source/app/preamble.cpp``,
-``source/devices/{nezha_motor,velocity_pid,otos,color_sensor,line_sensor,
-clock_host}.cpp``, ``tests/_infra/sim/sim_plant.cpp`` -- ticket 108-002's
-real Devices::I2CBus implementation -- plus its own ``tests/sim/plant/
-{wheel,otos}_plant.cpp`` physics dependencies) with ``-DHOST_BUILD``,
-against the SAME headers every ARM build compiles. Mirrors
-``test_app_drive.py``/``test_devices_otos.py``'s exact shape: compile with
-the system C++ compiler, run the resulting binary, assert it exits 0.
+``source/devices/{nezha_motor,velocity_pid,otos,color_sensor,
+line_sensor}.cpp``, ``tests/_infra/sim/sim_plant.cpp`` -- ticket 108-002's
+real Devices::I2CBus implementation -- ``tests/_infra/sim/sim_clock.cpp``
+-- ticket 108-010's TestSim::SimClock, the Devices::Clock host-test fake --
+plus its own ``tests/sim/plant/{wheel,otos}_plant.cpp`` physics
+dependencies) with ``-DHOST_BUILD``, against the SAME headers every ARM
+build compiles. Mirrors ``test_app_drive.py``/``test_devices_otos.py``'s
+exact shape: compile with the system C++ compiler, run the resulting
+binary, assert it exits 0.
 
 Migrated by sprint 108 ticket 009 off the deleted ``source/devices/
 i2c_bus_host.cpp`` scripted-FIFO Devices::I2CBus fake — see
@@ -38,7 +40,7 @@ _VELOCITY_PID_SRC = _SOURCE_DIR / "devices" / "velocity_pid.cpp"
 _OTOS_SRC = _SOURCE_DIR / "devices" / "otos.cpp"
 _COLOR_SENSOR_SRC = _SOURCE_DIR / "devices" / "color_sensor.cpp"
 _LINE_SENSOR_SRC = _SOURCE_DIR / "devices" / "line_sensor.cpp"
-_CLOCK_HOST_FAKE_SRC = _SOURCE_DIR / "devices" / "clock_host.cpp"
+_CLOCK_HOST_FAKE_SRC = _INFRA_SIM_DIR / "sim_clock.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"

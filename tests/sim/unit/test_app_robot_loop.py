@@ -4,17 +4,18 @@ extracted from ``source/main.cpp``.
 
 Compiles ``app_robot_loop_harness.cpp`` together with every HOST_BUILD
 implementation it needs (``robot_loop.cpp`` itself, every ``app/`` module it
-composes, every ``devices/`` leaf those modules touch, the HOST_BUILD
-``Devices::Clock``/``Devices::Sleeper`` fakes, ``TestSim::SimPlant``
-(``tests/_infra/sim/sim_plant.cpp`` -- ticket 108-002's real Devices::I2CBus
-implementation, plus its own ``tests/sim/plant/{wheel,otos}_plant.cpp``
-physics dependencies), and the wire codec ``App::Comms``/``App::Telemetry``
-need to encode/decode) with ``-DHOST_BUILD``, against the SAME headers every
-ARM build compiles -- ``robot_loop.h``/``robot_loop.cpp`` include no
-``MicroBit.h`` anywhere in this graph (the ticket's own acceptance
-criterion). Mirrors ``test_app_preamble.py``/``test_app_odometry.py``'s
-exact shape: compile with the system C++ compiler, run the resulting
-binary, assert it exits 0.
+composes, every ``devices/`` leaf those modules touch,
+``TestSim::SimClock``/``TestSim::SimSleeper`` (``tests/_infra/sim/
+sim_clock.cpp`` -- ticket 108-010's Devices::Clock/Sleeper host-test fakes),
+``TestSim::SimPlant`` (``tests/_infra/sim/sim_plant.cpp`` -- ticket
+108-002's real Devices::I2CBus implementation, plus its own ``tests/sim/
+plant/{wheel,otos}_plant.cpp`` physics dependencies), and the wire codec
+``App::Comms``/``App::Telemetry`` need to encode/decode) with
+``-DHOST_BUILD``, against the SAME headers every ARM build compiles --
+``robot_loop.h``/``robot_loop.cpp`` include no ``MicroBit.h`` anywhere in
+this graph (the ticket's own acceptance criterion). Mirrors
+``test_app_preamble.py``/``test_app_odometry.py``'s exact shape: compile
+with the system C++ compiler, run the resulting binary, assert it exits 0.
 
 Migrated by sprint 108 ticket 009 off the deleted ``source/devices/
 i2c_bus_host.cpp`` scripted-FIFO Devices::I2CBus fake — see
@@ -52,7 +53,7 @@ _VELOCITY_PID_SRC = _SOURCE_DIR / "devices" / "velocity_pid.cpp"
 _OTOS_SRC = _SOURCE_DIR / "devices" / "otos.cpp"
 _COLOR_SENSOR_SRC = _SOURCE_DIR / "devices" / "color_sensor.cpp"
 _LINE_SENSOR_SRC = _SOURCE_DIR / "devices" / "line_sensor.cpp"
-_CLOCK_HOST_FAKE_SRC = _SOURCE_DIR / "devices" / "clock_host.cpp"
+_CLOCK_HOST_FAKE_SRC = _INFRA_SIM_DIR / "sim_clock.cpp"
 
 _BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
 
