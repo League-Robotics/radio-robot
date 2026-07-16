@@ -814,8 +814,15 @@ class SimLoop:
                 # by sleeping the full cycle duration here.
                 continue
 
+            # Pace ONE iteration to a single cycle's wall time, regardless of
+            # how many sim cycles it stepped -- so speed_factor N steps N cycles
+            # per 50ms wall = N x real-time (the previous `* cycles` here paced N
+            # cycles to N*50ms wall, i.e. always 1x, so speed_factor did nothing).
+            # At a high enough speed_factor the compute for N cycles exceeds one
+            # cycle's wall budget and this sleeps 0 -- the sim then free-runs at
+            # full compute speed (what the "fast tour" wants).
             elapsed = time.monotonic() - t0
-            sleep_s = _CYCLE_DURATION_S * cycles - elapsed
+            sleep_s = _CYCLE_DURATION_S - elapsed
             if sleep_s > 0:
                 self._stop_event.wait(timeout=sleep_s)
 

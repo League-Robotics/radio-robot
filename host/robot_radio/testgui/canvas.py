@@ -139,7 +139,7 @@ _TRACE_COLORS = {
 }
 
 _TRACE_LABELS = {
-    "camera":  "Camera (truth)",
+    "camera":  "Camera / Truth",
     "encoder": "Encoder",
     "otos":    "OTOS",
     "fused":   "Fused",
@@ -452,7 +452,7 @@ def build_canvas(trace_model: "TraceModel") -> "tuple[object, object]":
     checkbox_layout.setSpacing(4)
 
     checkboxes: dict[str, QCheckBox] = {}
-    for name in ("camera", "encoder", "otos", "fused"):
+    for name in ("camera", "fused", "otos", "encoder"):
         r, g, b, _ = _TRACE_COLORS[name]
         label = _TRACE_LABELS[name]
         cb = QCheckBox(label)
