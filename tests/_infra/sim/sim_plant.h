@@ -134,6 +134,17 @@ class SimPlant : public Devices::I2CBus {
   // comment (no RNG anywhere in either plant).
   void setOtosDrift(float xDrift, float yDrift, float headingDrift);  // [mm] [mm] [rad]
 
+  // Plant teleport (sim command-surface fix): snaps the OtosPlant's ground-
+  // truth pose to (x, y, heading) AND resets both WheelPlants' positions to
+  // 0 in the same call -- see OtosPlant::reset()'s own comment for why the
+  // two resets must be coupled (a wheel-position reset with no matching
+  // OtosPlant re-baseline, or vice versa, injects a phantom one-cycle jump
+  // on the very next tick()). This is what backs the TestGUI Sim mode's
+  // "reset to origin"/SI-verb pose reset (host/robot_radio/io/sim_loop.py's
+  // set_true_pose()) -- there is no operator to physically place the robot
+  // the way real-hardware "Set Robot @ 0,0" assumes.
+  void setTruePose(float x, float y, float heading);  // [mm] [mm] [rad]
+
   // Read-only accessors, mainly for tests/a future harness's true-pose
   // export.
   const WheelPlant& wheelPlant(int port) const;

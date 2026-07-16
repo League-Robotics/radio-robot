@@ -148,6 +148,11 @@ _TLM_QUEUE_MAXSIZE = 512
 # rate).
 _TRUTH_EVERY_N_TICKS = 4
 
+# set_speed_factor() clamp range -- matches testgui/transport.py's own
+# _SIM_SPEED_MIN/_SIM_SPEED_MAX (1x..20x fast-forward).
+_SPEED_FACTOR_MIN = 1
+_SPEED_FACTOR_MAX = 20
+
 # Generous scratch buffer for sim_drain_tlm()'s snprintf-style fill --
 # "a handful of KB comfortably covers a burst of frames from one step()
 # call" (sim_ctypes.cpp's own doc comment). Retried once, sized exactly, if
@@ -233,6 +238,10 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
     lib.sim_true_y.restype = ctypes.c_float
     lib.sim_true_h.argtypes = [ctypes.c_void_p]
     lib.sim_true_h.restype = ctypes.c_float
+
+    lib.sim_set_true_pose.argtypes = [
+        ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float]
+    lib.sim_set_true_pose.restype = None
 
     lib.sim_set_wheel_disconnected.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
     lib.sim_set_wheel_disconnected.restype = None
@@ -438,6 +447,23 @@ class SimLoop:
             "h": float(self._lib.sim_true_h(self._handle)),
         }
 
+    def set_true_pose(self, x: float, y: float, heading: float) -> None:  # [mm] [mm] [rad]
+        """Teleport the plant's ground-truth pose to ``(x, y, heading)`` --
+        ``sim_set_true_pose()``'s own Python binding. Synchronous round-trip
+        onto the tick thread when one is running (see module docstring's
+        "Threading model" section, same rationale as ``get_true_pose()``):
+        a caller that immediately reads the pose back afterward must see the
+        teleport already applied, not "eventually applied" the way
+        ``twist()``/``stop()`` are.
+
+        Resets both ``WheelPlant`` positions to 0 in the same call
+        (``SimPlant::setTruePose()``'s own C++ contract) -- see that
+        method's own comment for why the OtosPlant re-baseline and the
+        wheel-position resets must happen together."""
+        self._require_connected()
+        self._call_on_tick_thread(lambda: self._lib.sim_set_true_pose(
+            self._handle, ctypes.c_float(x), ctypes.c_float(y), ctypes.c_float(heading)))
+
     # ------------------------------------------------------------------
     # Fault-condition setters (thin call-throughs, port: 1=left, 2=right)
     # ------------------------------------------------------------------
@@ -480,6 +506,23 @@ class SimLoop:
         unsynchronized handle."""
         self._require_connected()
         self._lib.sim_step(self._handle, int(cycles))
+
+    def set_speed_factor(self, factor: int) -> None:
+        """Set the sim's fast-forward multiple: the tick thread advances
+        ``max(1, int(_speed_factor))`` sim cycles per wall-clock tick (see
+        ``_tick_loop()``). Clamped to ``[_SPEED_FACTOR_MIN, _SPEED_FACTOR_MAX]``.
+
+        Plain-attribute write, not round-tripped onto the tick thread: the
+        tick thread reads ``self._speed_factor`` fresh every iteration, and a
+        bare Python ``int`` attribute assignment is atomic under the GIL --
+        no lock needed, same reasoning ``testgui/transport.py``'s
+        ``SimTransport.set_speed_factor()`` already documented for its own
+        direct write to this same attribute (this method now backs that
+        call instead of the caller poking the attribute directly). Safe to
+        call before ``connect()`` -- takes effect on the tick thread's next
+        iteration once one exists.
+        """
+        self._speed_factor = max(_SPEED_FACTOR_MIN, min(_SPEED_FACTOR_MAX, int(factor)))
 
     def booted(self) -> bool:
         self._require_connected()

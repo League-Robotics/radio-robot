@@ -26,16 +26,22 @@ build:
 build-clean:
     uv run python3 build.py --clean
 
+# Build ONLY the host simulation library (libfirmware_host.dylib) via the
+# tests/_infra/sim CMake project -- fast (~8s clean, <1s incremental), skips the
+# slow micro:bit firmware compile. This is what TestGUI Sim mode / sim_loop load.
+# Restored sprint 108 (SimPlant sim rebuild).
+build-sim:
+    cmake -S tests/_infra/sim -B tests/_infra/sim/build -DROBOT_RUN_MODE=SIM
+    cmake --build tests/_infra/sim/build --parallel
+
 mbd-install:
     pipx install git+https://github.com/Busboombot/mbdeploy.git
 
 # Launch the Robot Test GUI (PySide6 cockpit) against real hardware
 # (083-004). One-time prerequisite: `uv sync --group gui` (installs PySide6 +
 # aprilcam -- see pyproject.toml's [dependency-groups] gui comment).
-# Sim mode is unavailable: build-sim (and tests/_infra/sim, its target) were
-# deleted by sprint 102 ticket 005 alongside the Elite orchestration stack --
-# testgui is parked until a later sprint revives it against the new
-# single-loop firmware.
+# Sim mode is available again (sprint 108): build the sim lib first with
+# `just build-sim` (or `just build`), then Connect in Sim mode.
 testgui:
     uv run python -m robot_radio.testgui
 

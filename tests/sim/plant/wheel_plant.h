@@ -223,6 +223,23 @@ class WheelPlant {
   void setEncoderJitter(bool enabled) { encoderJitter_ = enabled; }
   bool encoderJitter() const { return encoderJitter_; }
 
+  // Plant teleport (sim command-surface fix, host TestGUI Sim "reset to
+  // origin"/SI support): re-baselines this wheel to `pos` -- position_,
+  // lastReportedPosition_, and frozenPosition_ all snap to it, velocity_
+  // zeros (a teleported robot is at rest), and the dropout/dither
+  // accumulators clear so the next reportedPosition() call starts a fresh
+  // phase rather than inheriting one from before the jump. Does NOT touch
+  // the disconnected_/freezePosition_/dropoutRate_/encoderJitter_ fault
+  // knobs themselves -- only the physics state a fault knob reads from.
+  void resetPosition(float pos = 0.0f) {  // [mm]
+    position_ = pos;
+    velocity_ = 0.0f;
+    lastReportedPosition_ = pos;
+    frozenPosition_ = pos;
+    dropoutAccum_ = 0.0f;
+    ditherCounter_ = 0;
+  }
+
  private:
   float dutyVelMax_;         // [mm/s]
   float tau_;                // [s]

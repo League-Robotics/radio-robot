@@ -75,6 +75,20 @@ class OtosPlant {
   // knob -- reportedX/Y/Heading() then equal x()/y()/heading() exactly.
   void setDrift(float xDrift, float yDrift, float headingDrift);  // [mm] [mm] [rad]
 
+  // Plant teleport (sim command-surface fix, host TestGUI Sim "reset to
+  // origin"/SI support): snaps the accumulator directly to (x, y, heading)
+  // -- bypassing step()'s own incremental wheel-delta integration entirely
+  // -- and re-baselines lastLeft_/lastRight_ to 0. This is only correct
+  // when the caller (TestSim::SimPlant::setTruePose()) ALSO resets both
+  // WheelPlant positions to 0 in the same call: step()'s next call computes
+  // this cycle's delta as `wheelPosition - lastLeft_/lastRight_`, so lastLeft_/
+  // lastRight_ must match whatever position the just-reset wheels report,
+  // or the very next step() would inject a phantom one-cycle jump sized by
+  // the (position_before_reset - 0) gap. Drift/bias knob state
+  // (driftX_/driftY_/driftHeading_) is left untouched -- a pose reset is
+  // not a fault-knob reset.
+  void reset(float x, float y, float heading);  // [mm] [mm] [rad]
+
   // Formerly this class also had scriptPoseResponse(Devices::I2CBus&,
   // uint16_t) const, which packed a 12-byte POSITION_XL+VELOCITY_XL burst
   // (little-endian int16 sextuple, kPosMmPerLsb/kHdgRadPerLsb-scaled) onto

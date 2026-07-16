@@ -214,6 +214,13 @@ class SimHarness {
   float trueY() const { return plant_.otosPlant().y(); }              // [mm]
   float trueHeading() const { return plant_.otosPlant().heading(); }  // [rad]
 
+  // Plant teleport -- thin call-through to SimPlant::setTruePose(). See
+  // that method's own comment for why the OtosPlant re-baseline and the
+  // WheelPlant position resets it performs must happen together.
+  void setTruePose(float x, float y, float heading) {  // [mm] [mm] [rad]
+    plant_.setTruePose(x, y, heading);
+  }
+
   Devices::NezhaMotor& motorLeft() { return motorL_; }
   Devices::NezhaMotor& motorRight() { return motorR_; }
 
