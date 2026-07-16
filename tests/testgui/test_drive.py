@@ -162,11 +162,15 @@ def test_vw_line_for_key_set_combo_returns_one_valid_command() -> None:
 
 
 # ---------------------------------------------------------------------------
-# KeyboardDriver.attach() -- DEV DT PORTS bind exactly once per attach.
+# KeyboardDriver.attach() -- the DEV DT PORTS bind was DROPPED (2026-07-16).
 # ---------------------------------------------------------------------------
 
 
-def test_attach_sends_ports_bind_exactly_once(qapp) -> None:
+def test_attach_no_longer_sends_dead_ports_bind(qapp) -> None:
+    """`DEV DT PORTS` was dropped: `DEV *` has no binary arm on the current wire
+    (real robot OR sim) and DEFAULT_PORTS already matches the firmware boot /
+    sim default binding, so attach() no longer emits it (it was pure 'not
+    supported' noise). Restore if a runtime drivetrain-port arm is added."""
     from PySide6.QtCore import Qt
 
     driver = KeyboardDriver()
@@ -175,10 +179,8 @@ def test_attach_sends_ports_bind_exactly_once(qapp) -> None:
 
     driver.attach(window, transport)
     try:
-        assert transport.sent == ["DEV DT PORTS 1 2"]
+        assert transport.sent == []  # attach itself sends nothing now
 
-        # Multiple presses/releases across all four arrow keys must not
-        # resend the PORTS bind.
         for key in (
             Qt.Key.Key_Up,
             Qt.Key.Key_Down,
@@ -193,12 +195,14 @@ def test_attach_sends_ports_bind_exactly_once(qapp) -> None:
                 driver._on_timer_tick()
 
         ports_sends = [l for l in transport.sent if l.startswith("DEV DT PORTS")]
-        assert ports_sends == ["DEV DT PORTS 1 2"]
+        assert ports_sends == []  # no PORTS bind ever sent
     finally:
         driver.detach()
 
 
-def test_attach_ports_bind_precedes_any_vw(qapp) -> None:
+def test_attach_first_command_is_vw_not_a_ports_bind(qapp) -> None:
+    """With the PORTS bind dropped, the FIRST command a key press emits is the
+    VW itself, not a PORTS-bind prefix."""
     driver = KeyboardDriver()
     window = _FakeWindow()
     transport = _FakeTransport()
@@ -206,8 +210,8 @@ def test_attach_ports_bind_precedes_any_vw(qapp) -> None:
     driver.attach(window, transport)
     try:
         driver._on_key_press(_FakeKeyEvent(_up_key()))
-        assert transport.sent[0] == "DEV DT PORTS 1 2"
-        assert transport.sent[1] == "DEV DT VW 200 0 0"
+        assert transport.sent[0] == "DEV DT VW 200 0 0"
+        assert not any(l.startswith("DEV DT PORTS") for l in transport.sent)
     finally:
         driver.detach()
 

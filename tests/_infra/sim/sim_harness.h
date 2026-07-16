@@ -270,6 +270,12 @@ class SimHarness {
     cfg.wheelTravelCalib = 1.0f;
     cfg.velFiltAlpha = 1.0f;
     cfg.slewRate = 100.0f;
+    // Velocity feedforward so the sim tracks the COMMANDED velocity (like the
+    // real robot's calibrated gains do), instead of under-tracking ~17% on
+    // pure-P and undershooting every drive/turn. kff = 1/kDefaultDutyVelMax:
+    // duty = target/500 -> plant velocity = 500*duty = target (open-loop
+    // exact), with kp trimming transients/disturbance.
+    cfg.velGains.kff = 1.0f / TestSim::kDefaultDutyVelMax;  // 0.002 duty per mm/s
     cfg.velGains.kp = 0.01f;
     return cfg;
   }
