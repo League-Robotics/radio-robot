@@ -1969,10 +1969,39 @@ def _build_main_window():  # type: ignore[return]
 
     # ---------------------------------------------------------------- ops panel callbacks
 
-    def _clear_traces() -> None:
-        """Clear all traces and refresh the canvas."""
+    def _clear_playfield_traces() -> None:
+        """Clear ONLY the playfield ``TraceModel`` polylines and refresh the
+        canvas -- the low-level half of the unified clear (see
+        ``_clear_traces()``'s docstring). Also handed to ``TurnGraphPanel``
+        as ``on_clear_extra`` (at construction, above) so ITS "Clear
+        traces" header button reaches the playfield too, without calling
+        back into ``graph_panel.clear()`` (which would otherwise recurse)."""
         trace_model.clear()
         canvas_ctrl.refresh()
+
+    def _clear_traces() -> None:
+        """Clear all traces and refresh the canvas.
+
+        OOP sim-motor-state fix (unify the two "Clear Traces" buttons): the
+        ops-panel "Clear Traces" button used to clear ONLY the playfield
+        ``TraceModel`` polylines, leaving the turn-graphs tab's four
+        recorded traces (wheel speed/position, heading, distance) intact --
+        confusingly different scope from the turn-graphs header's own
+        "Clear traces" button (``graph_panel.clear()``), which cleared ONLY
+        those. This now also clears ``graph_panel`` so either button clears
+        everything -- ``graph_panel.clear()`` in turn calls
+        ``_clear_playfield_traces()`` (its ``on_clear_extra`` hook) for the
+        other direction; that helper does NOT call back into
+        ``graph_panel.clear()``, so there is no clear<->clear recursion."""
+        _clear_playfield_traces()
+        graph_panel.clear()
+
+    # Wire the OTHER direction: graph_panel's own "Clear traces" header
+    # button also clears the playfield TraceModel (see _clear_traces()'s
+    # docstring and _clear_playfield_traces()'s own docstring for why this
+    # is a post-construction set_on_clear_extra() call rather than a
+    # constructor argument -- this function is defined after graph_panel).
+    graph_panel.set_on_clear_extra(_clear_playfield_traces)
 
     def _refresh_playfield(pixmap: "object", origin_x: float, origin_y: float) -> None:
         """Swap canvas background and update the A1 origin atomically.
@@ -2108,6 +2137,10 @@ def _build_main_window():  # type: ignore[return]
         for _tb, _ in _tour_buttons:
             _tb.setEnabled(True)
         stop_tour_btn.setEnabled(False)
+        # OOP sim-motor-state fix: re-gate "Set Robot @ 0,0" now that no
+        # tour is running (enabled iff also still connected -- see
+        # OpsController.set_tour_running()).
+        ops_ctrl.set_tour_running(False)
 
     def _on_tour_finished() -> None:
         """Main-thread slot: tour ended — join the thread, re-enable buttons.
@@ -2131,6 +2164,8 @@ def _build_main_window():  # type: ignore[return]
         for _tb, _ in _tour_buttons:
             _tb.setEnabled(True)
         stop_tour_btn.setEnabled(False)
+        # OOP sim-motor-state fix: see _stop_tour()'s identical call.
+        ops_ctrl.set_tour_running(False)
 
     def _make_tour_handler(name: str, steps: list[str]):
         def _on_tour_clicked() -> None:
@@ -2155,6 +2190,9 @@ def _build_main_window():  # type: ignore[return]
             for _tb, _ in _tour_buttons:
                 _tb.setEnabled(False)
             stop_tour_btn.setEnabled(True)
+            # OOP sim-motor-state fix: ghost "Set Robot @ 0,0" for the
+            # duration of the tour (see OpsController.set_tour_running()).
+            ops_ctrl.set_tour_running(True)
             from PySide6.QtCore import QThread  # type: ignore[import-untyped]
 
             worker = _TourRunner(transport, _state, name, list(steps))

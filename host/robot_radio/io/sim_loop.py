@@ -153,6 +153,29 @@ _TRUTH_EVERY_N_TICKS = 4
 _SPEED_FACTOR_MIN = 1
 _SPEED_FACTOR_MAX = 20
 
+# Motor-state-aware tick cadence (OOP sim-motor-state fix). While the plant
+# reports ``active`` (TLMFrame.active -- bb.drivetrain.busy) TRUE, the tick
+# thread runs at the usual full real-time rate (_CYCLE_DURATION_S per cycle,
+# scaled by _speed_factor). Once ``active`` goes FALSE (a motion finished),
+# the thread drops to a slow HEARTBEAT: step + drain/deliver one frame every
+# _IDLE_HEARTBEAT_INTERVAL_S instead of every _CYCLE_DURATION_S, so an idle
+# connection stops flooding the UI/consumers with full-rate telemetry the way
+# a real, idle robot would not. _IDLE_POLL_INTERVAL_S is the cmd-queue poll
+# granularity used WHILE waiting out a heartbeat interval -- draining the cmd
+# queue at this fine grain (not the coarse heartbeat interval) is what makes
+# an incoming twist/stop feel immediate rather than laggy by up to 2s. See
+# _tick_loop()'s own docstring for the full state machine.
+_IDLE_HEARTBEAT_INTERVAL_S = 2.0  # [s] idle step+telemetry cadence
+_IDLE_POLL_INTERVAL_S = 0.05      # [s] cmd-queue poll granularity while idle
+# Grace window: after the last command OR the last `active=True` frame, keep
+# stepping at FULL rate for this long before dropping to the idle heartbeat.
+# Two reasons this must be > a few cycles: (1) the plant takes a cycle or two
+# after a twist is injected to actually report `active=True` back — throttling
+# on the instantaneous `active is False` reading deadlocks (never steps, so
+# never observes the plant wake up); (2) a tour's inter-leg settle (~1.0s, no
+# twists sent) must keep simulating deceleration at full rate, not freeze.
+_IDLE_GRACE_S = 1.5  # [s]
+
 # Generous scratch buffer for sim_drain_tlm()'s snprintf-style fill --
 # "a handful of KB comfortably covers a burst of frames from one step()
 # call" (sim_ctypes.cpp's own doc comment). Retried once, sized exactly, if
@@ -302,6 +325,16 @@ class SimLoop:
         self._corr_lock = threading.Lock()
         self._corr_id = 0
         self._speed_factor = 1
+
+        # Motor-state-aware tick cadence (see module-level
+        # _IDLE_HEARTBEAT_INTERVAL_S doc comment and _tick_loop()'s own
+        # docstring). ``None`` == "no frame drained yet -- unknown", treated
+        # as full-rate (the safe default: never silently throttle before
+        # we've actually heard the plant say it's idle). Updated from the
+        # latest drained TLMFrame's ``.active`` field; a frame with
+        # ``active is None`` (older/pre-fault frame) leaves the last known
+        # state alone.
+        self._active: "bool | None" = None
 
         # Kept alive for as long as a hook is registered -- ctypes holds no
         # reference of its own to a CFUNCTYPE-wrapped callback (see module
@@ -690,52 +723,134 @@ class SimLoop:
     # ------------------------------------------------------------------
 
     def _tick_loop(self) -> None:
-        """Advance the sim at real-time (1x, or ``_speed_factor``x) pace,
-        draining commands and telemetry each iteration. See module
-        docstring's "Threading model" section."""
+        """Advance the sim, draining commands and telemetry each iteration,
+        at a cadence that depends on the plant's own reported motor state
+        (OOP sim-motor-state fix).
+
+        State machine
+        --------------
+        Two speeds, chosen from ``self._active`` (last known
+        ``TLMFrame.active``, updated by ``_drain_tlm_into_queue()``)::
+
+            ACTIVE  (self._active in (True, None) -- moving, or unknown/
+                     not-yet-heard-from-plant, which defaults to the safe
+                     "don't throttle" side):
+                One ``sim_step()`` + drain per iteration, exactly like
+                before this fix -- full real-time pace, ``_CYCLE_DURATION_S``
+                per cycle, ``_speed_factor`` cycles per iteration.
+
+            IDLE (self._active is False -- the plant confirmed the last
+                  motion finished):
+                Step/drain/deliver only once every
+                ``_IDLE_HEARTBEAT_INTERVAL_S`` (~2s) instead of every
+                ``_CYCLE_DURATION_S`` (~50ms) -- a slow "I'm still here"
+                heartbeat matching a real idle robot's cadence, instead of
+                full-rate churn over a pose that (modulo sprint 108's
+                intentional rest-dither) isn't changing.
+
+        Regardless of which speed is active, ``_drain_cmd_queue()`` runs
+        EVERY iteration -- including every ``_IDLE_POLL_INTERVAL_S`` (~50ms)
+        poll tick spent waiting out a heartbeat interval -- so an incoming
+        twist/stop/inject is picked up with no more than one poll tick of
+        lag, never delayed by the ~2s heartbeat. The moment a command runs
+        (``had_cmd``) this iteration steps at full rate regardless of the
+        current ``self._active`` reading (the plant hasn't had a chance to
+        report ``active=True`` back yet) -- this is what makes resuming
+        motion feel immediate, not just "eventually catches up."
+        """
         tick_count = 0
+        last_heartbeat = time.monotonic()
+        # Timestamp of the last "activity" (a command ran, or the plant last
+        # reported active=True). The idle heartbeat only kicks in once this is
+        # older than _IDLE_GRACE_S — see that constant's own comment for why an
+        # instantaneous `active is False` check deadlocks / breaks tours.
+        last_active_ts = time.monotonic()
         while not self._stop_event.is_set():
             t0 = time.monotonic()
 
-            self._drain_cmd_queue()
+            had_cmd = self._drain_cmd_queue()
+            if had_cmd:
+                last_active_ts = t0
 
-            cycles = max(1, int(self._speed_factor))
+            idle = (t0 - last_active_ts) > _IDLE_GRACE_S
+            if idle:
+                if t0 - last_heartbeat < _IDLE_HEARTBEAT_INTERVAL_S:
+                    # Still within the heartbeat window -- poll the cmd
+                    # queue again shortly rather than sleeping the full
+                    # interval, so a fresh command isn't delayed by up to 2s.
+                    self._stop_event.wait(timeout=_IDLE_POLL_INTERVAL_S)
+                    continue
+                last_heartbeat = t0
+                cycles = 1
+            else:
+                cycles = max(1, int(self._speed_factor))
+
             try:
                 self._lib.sim_step(self._handle, cycles)
             except Exception:
                 break
 
             self._drain_tlm_into_queue()
+            # Keep the grace window fresh while the plant reports motion, so a
+            # sustained drive/turn stays at full rate for its whole duration.
+            if self._active is True:
+                last_active_ts = time.monotonic()
 
             tick_count += 1
-            if tick_count % _TRUTH_EVERY_N_TICKS == 0 and self.on_truth is not None:
+            # During an idle heartbeat, every step is already ~2s apart, so
+            # always deliver truth on it (the modulo cadence below exists to
+            # slow down FULL-RATE delivery, and would otherwise mean a
+            # heartbeat step only "counts" 1-in-_TRUTH_EVERY_N_TICKS of the
+            # time -- i.e. an up-to-8s-stale UI "I'm here" signal).
+            if (idle or tick_count % _TRUTH_EVERY_N_TICKS == 0) and self.on_truth is not None:
                 try:
                     pose = self._read_true_pose()
                     self.on_truth((pose["x"], pose["y"], pose["h"]))
                 except Exception:
                     pass
 
+            if idle:
+                # Heartbeat pacing is handled by last_heartbeat above, not
+                # by sleeping the full cycle duration here.
+                continue
+
             elapsed = time.monotonic() - t0
             sleep_s = _CYCLE_DURATION_S * cycles - elapsed
             if sleep_s > 0:
                 self._stop_event.wait(timeout=sleep_s)
 
-    def _drain_cmd_queue(self) -> None:
+    def _drain_cmd_queue(self) -> bool:
+        """Run every currently-queued command. Returns ``True`` if at least
+        one command ran this call -- ``_tick_loop()`` uses this to resume
+        full-rate stepping immediately on a fresh command, without waiting
+        for the plant's own ``active`` flag to catch up (see that method's
+        docstring)."""
+        ran = False
         try:
             while True:
                 fn = self._cmd_queue.get_nowait()
+                ran = True
                 try:
                     fn()
                 except Exception:
                     pass
         except queue.Empty:
             pass
+        return ran
 
     def _drain_tlm_into_queue(self) -> None:
         """One ``sim_drain_tlm()`` call, decoded into ``TLMFrame`` objects,
         pushed onto the bounded internal queue (drop-oldest on overflow --
         mirrors ``SerialConnection``'s own ``_binary_tlm_queue`` policy),
-        and (unless suspended) delivered to ``on_telemetry``."""
+        and (unless suspended) delivered to ``on_telemetry``.
+
+        Also updates ``self._active`` (OOP sim-motor-state fix) from the
+        LAST frame decoded this call whose ``.active`` field is not
+        ``None`` -- an explicit ``True``/``False`` always overwrites the
+        previous reading; a frame that never sets the field (older/
+        pre-fault frames) leaves the last known state alone rather than
+        being treated as "idle" by default. See ``_tick_loop()``'s
+        docstring for how this drives the tick cadence."""
         from robot_radio.robot.protocol import TLMFrame
 
         buf = ctypes.create_string_buffer(_TLM_DRAIN_BUFFER)
@@ -761,6 +876,9 @@ class SimLoop:
             if reply is None or reply.WhichOneof("body") != "tlm":
                 continue
             frame = TLMFrame.from_pb2(reply.tlm)
+
+            if frame.active is not None:
+                self._active = bool(frame.active)
 
             if self._tlm_queue.full():
                 try:

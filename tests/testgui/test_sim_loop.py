@@ -192,3 +192,76 @@ def test_write_hook_can_swallow_a_command(loop):
     assert len(swallowed) > 0, "write hook never fired"
     assert abs(pose1["x"] - pose0["x"]) < 1.0, (
         f"wheel moved despite every write being swallowed: {pose0} -> {pose1}")
+
+
+# ---------------------------------------------------------------------------
+# Motor-state-aware tick cadence (OOP sim-motor-state fix)
+# ---------------------------------------------------------------------------
+
+
+def test_active_flag_goes_true_during_motion_and_false_after(loop):
+    """``TLMFrame.active`` (bb.drivetrain.busy) is the authoritative
+    motor-state signal the idle-heartbeat and trace-active-gating fixes
+    both key off of: it must go True while a commanded twist is still
+    executing, and False once the twist's commanded duration elapses."""
+    loop.twist(150.0, 0.0, 400.0)  # [mm/s] [rad/s] [ms]
+
+    seen_active_true = []
+
+    def _saw_active_true() -> bool:
+        for f in loop.read_pending_binary_tlm_frames():
+            if f.active is True:
+                seen_active_true.append(f)
+        return len(seen_active_true) > 0
+
+    assert _wait_until(_saw_active_true, timeout_s=2.0), (
+        "expected at least one TLMFrame with active=True during the twist")
+
+    def _saw_active_false() -> bool:
+        for f in loop.read_pending_binary_tlm_frames():
+            if f.active is False:
+                return True
+        return False
+
+    assert _wait_until(_saw_active_false, timeout_s=3.0), (
+        "expected active=False once the twist's commanded duration elapsed")
+
+
+def test_tick_thread_slows_to_heartbeat_when_idle_and_resumes_on_command(loop):
+    """Once the plant confirms idle (``active=False``), the tick thread's
+    ``cycle_count()`` growth rate must drop to the ~2s idle heartbeat
+    (``_IDLE_HEARTBEAT_INTERVAL_S``); injecting a fresh twist must resume
+    full-rate stepping immediately, not after the heartbeat interval
+    elapses -- see ``SimLoop._tick_loop()``'s own docstring for the state
+    machine this asserts against."""
+    from robot_radio.io.sim_loop import _IDLE_GRACE_S
+
+    loop.twist(150.0, 0.0, 300.0)
+    time.sleep(0.6)  # motion completes + a frame confirming idle is drained
+    assert _wait_until(lambda: loop._active is False, timeout_s=3.0), (
+        "expected SimLoop to observe active=False after the twist finished")
+
+    # The tick loop stays FULL rate for _IDLE_GRACE_S after the last activity
+    # (so a tour's inter-leg settle keeps simulating) -- wait it out before
+    # measuring, then measure over a couple of heartbeat intervals.
+    time.sleep(_IDLE_GRACE_S + 0.3)
+    c0 = loop.cycle_count()
+    time.sleep(2.0)
+    c1 = loop.cycle_count()
+    idle_rate = (c1 - c0) / 2.0  # [cycle/s] while idle
+
+    # Resume: inject a fresh twist and confirm cycle_count grows quickly
+    # again, well within the next full-rate iteration (~50ms), not delayed
+    # by the ~2s heartbeat window.
+    loop.twist(150.0, 0.0, 300.0)
+    time.sleep(0.3)
+    c2 = loop.cycle_count()
+    resumed_rate = (c2 - c1) / 0.3  # [cycle/s] just after resuming
+
+    assert idle_rate < 2.0, (
+        f"expected the idle heartbeat (~0.5 cycle/s), got {idle_rate:.2f}/s "
+        f"(cycle_count {c0} -> {c1} over 1.0s)")
+    assert resumed_rate > 10.0, (
+        f"expected full-rate stepping to resume immediately on a fresh "
+        f"command (~20 cycle/s), got {resumed_rate:.2f}/s "
+        f"(cycle_count {c1} -> {c2} over 0.3s)")

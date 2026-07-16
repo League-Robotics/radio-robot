@@ -22,9 +22,10 @@ Refresh Playfield                                              Read cam-3 frame 
 STREAM on/off toggle                                          Send ``STREAM 50`` / ``STREAM 0``
 Set Robot @ 0,0                                                Call ``set_origin_cb`` hook
                                                                (display-only, no wire cmd);
-                                                               GATED (097) while connected --
-                                                               the callback's own OZ/SI reset
-                                                               has no binary arm until 098
+                                                               enabled while connected AND no
+                                                               tour is running -- ghosted while
+                                                               disconnected or mid-tour (OOP
+                                                               sim-motor-state fix)
 ============================================================  =============================
 
 Design rules
@@ -37,8 +38,12 @@ Design rules
   after ``transport.connect()`` to enable them.
 - STREAM button starts disabled like the others; toggling it on sends
   ``STREAM 50``, toggling it off sends ``STREAM 0``.
-- "Set Robot @ 0,0" is always enabled while disconnected (display-only, no
-  transport needed); disabled while connected (097 gate -- see above).
+- "Set Robot @ 0,0" is enabled while connected AND no tour is running;
+  ghosted (disabled) while disconnected, and ghosted while a tour is
+  running (``set_tour_running(True)`` -- called from ``__main__.py``'s
+  tour-click/tour-finished/tour-stop handlers, since the origin reset's
+  ``STOP`` + pose-teleport would fight an in-flight tour worker that keeps
+  re-issuing its own motion commands).
 - "Sync Pose" and "Zero Encoders" are permanently disabled (097 gate --
   SI/ZERO have no binary arm until sprint 098): never added to
   ``_transport_buttons``, so ``set_connected()`` never re-enables them.
@@ -285,7 +290,9 @@ def build_panel(
     row2_layout.addWidget(stream_btn)
     layout.addWidget(row2)
 
-    # Row 3: Set Robot @ 0,0 (display-only, always enabled)
+    # Row 3: Set Robot @ 0,0 (display-only; enabled connected+idle, ghosted
+    # while disconnected or a tour is running -- see OpsController.
+    # set_tour_running()).
     row3 = QWidget()
     row3_layout = QHBoxLayout(row3)
     row3_layout.setContentsMargins(0, 0, 0, 0)
@@ -298,7 +305,9 @@ def build_panel(
         "Physically place the robot at the playfield centre first.\n"
         "Display-only — sends NO motion command to the robot."
     )
-    origin_btn.setEnabled(True)  # Works without transport (display-only)
+    # Starts disabled -- no transport connected yet; set_connected(True, ...)
+    # enables it (unless a tour is already running, see set_tour_running()).
+    origin_btn.setEnabled(False)
 
     row3_layout.addWidget(origin_btn)
     row3_layout.addStretch()
@@ -403,6 +412,10 @@ class OpsController:
         self.set_origin_cb = set_origin_cb
         self.stop_motion_cb = stop_motion_cb
         self._stream_on = False  # tracks stream toggle state
+        # origin_btn gating state (OOP sim-motor-state fix): the button is
+        # enabled iff both are true -- see set_connected()/set_tour_running().
+        self._connected = False
+        self._tour_running = False
 
     # ------------------------------------------------------------------
     # Public API — called by __main__.py after connect()/disconnect()
@@ -419,12 +432,12 @@ class OpsController:
         (0, 0) instead of re-seeding the firmware pose. All other
         transport-dependent buttons are enabled.
 
-        097: "Set Robot @ 0,0" is ALSO disabled (not just hidden) whenever
-        connected, regardless of transport/mode -- the callback's wire
-        sequence (``_set_origin()`` in ``__main__.py``: STOP, ZERO enc, OZ,
-        SI) needs OZ/SI, which have no binary arm until sprint 098. It stays
-        enabled while disconnected: the display-only reset (re-anchor/clear/
-        centre the avatar) still works with no transport.
+        "Set Robot @ 0,0" is enabled iff BOTH connected and no tour is
+        currently running (OOP sim-motor-state fix -- see
+        ``set_tour_running()``): ghosted while disconnected (nothing to
+        reset), and ghosted while a tour runs (the reset's ``STOP`` +
+        pose-teleport would otherwise fight the tour worker, which keeps
+        re-issuing its own motion commands on a background thread).
 
         Parameters
         ----------
@@ -437,6 +450,8 @@ class OpsController:
         for btn in self._transport_buttons:
             btn.setEnabled(connected)  # type: ignore[attr-defined]
 
+        self._connected = connected
+
         # "Set Robot @ 0,0" is meaningless in playfield mode (camera-sourced
         # pose): hide it when connected via Relay, show it otherwise.
         if self._origin_btn is not None:
@@ -446,20 +461,7 @@ class OpsController:
                 and is_relay_transport(transport)
             )
             self._origin_btn.setVisible(not hide_origin)  # type: ignore[attr-defined]
-            # 097 gate: disable while connected (OZ/SI have no binary arm
-            # yet); re-enable the display-only reset while disconnected.
-            self._origin_btn.setEnabled(not connected)  # type: ignore[attr-defined]
-            if connected:
-                self._origin_btn.setToolTip(  # type: ignore[attr-defined]
-                    "Set Robot @ 0,0 requires sprint 098 -- the pose reset "
-                    "(OZ/SI) has no binary arm yet."
-                )
-            else:
-                self._origin_btn.setToolTip(  # type: ignore[attr-defined]
-                    "Re-anchor the avatar to the playfield centre (world 0,0).\n"
-                    "Physically place the robot at the playfield centre first.\n"
-                    "Display-only — sends NO motion command to the robot."
-                )
+            self._refresh_origin_enabled()
 
         if connected and transport is not None and is_sim_transport(transport):
             self._sync_btn.setEnabled(False)  # type: ignore[attr-defined]
@@ -474,6 +476,28 @@ class OpsController:
             self._stream_btn.setChecked(False)  # type: ignore[attr-defined]
             self._stream_btn.setText("STREAM: off")  # type: ignore[attr-defined]
             self._stream_on = False
+
+    def _refresh_origin_enabled(self) -> None:
+        """Apply the origin_btn enabled rule: connected AND no tour running.
+
+        Called from both ``set_connected()`` (connection state changed) and
+        ``set_tour_running()`` (tour started/stopped/finished) so either
+        input's change is reflected immediately."""
+        if self._origin_btn is not None:
+            self._origin_btn.setEnabled(  # type: ignore[attr-defined]
+                self._connected and not self._tour_running
+            )
+
+    def set_tour_running(self, running: bool) -> None:
+        """Track tour-running state; re-gates ``origin_btn`` accordingly.
+
+        Call with ``True`` when a tour starts (``__main__.py``'s
+        ``_on_tour_clicked``) and ``False`` when it ends, whether by
+        natural completion (``_on_tour_finished``) or explicit stop
+        (``_stop_tour``). See ``set_connected()``'s docstring for why the
+        button must be ghosted mid-tour."""
+        self._tour_running = running
+        self._refresh_origin_enabled()
 
     # ------------------------------------------------------------------
     # Button handlers
