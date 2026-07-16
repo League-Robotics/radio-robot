@@ -1,5 +1,8 @@
 ---
-status: pending
+status: done
+sprint: '108'
+tickets:
+- 108-011
 ---
 
 # Sim-mode Tour 1 reliably trips `kFaultWedgeLatch` mid-tour; real hardware doesn't (108-007 discovery)

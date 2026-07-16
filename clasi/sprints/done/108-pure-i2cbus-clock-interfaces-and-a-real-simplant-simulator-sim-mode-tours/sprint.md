@@ -1,7 +1,7 @@
 ---
 id: '108'
 title: Pure I2CBus/Clock interfaces and a real SimPlant simulator (sim-mode tours)
-status: planning-docs
+status: done
 branch: sprint/108-pure-i2cbus-clock-interfaces-and-a-real-simplant-simulator-sim-mode-tours
 use-cases:
 - SUC-038
