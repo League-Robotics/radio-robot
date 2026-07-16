@@ -24,7 +24,7 @@
 // Bus: TestSim::SimPlant (tests/_infra/sim/sim_plant.{h,cpp}, ticket
 // 108-002) -- sprint 108 ticket 001 reduced Devices::I2CBus to a pure
 // interface and deleted its old scripted-FIFO HOST_BUILD fake
-// (scriptWrite()/scriptRead()/errCount(), and WheelPlant/OtosPlant's own
+// (queueWrite()/queueRead()/errCount(), and WheelPlant/OtosPlant's own
 // scriptEncoderResponse()/scriptPoseResponse() helpers that targeted it --
 // see wheel_plant.h's/otos_plant.h's own file headers), so this file no
 // longer scripts exact per-cycle bus responses; it drives SimPlant live

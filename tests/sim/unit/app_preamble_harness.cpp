@@ -1,10 +1,25 @@
 // app_preamble_harness.cpp -- off-hardware acceptance harness for ticket
 // 103-007 (SUC-007), App::Preamble (source/app/preamble.{h,cpp}). Proves:
 // step() resolves every leaf to a terminal state (done()) via each leaf's
-// own REAL begin()/beginStep(nowUs) entry point over a scripted
-// Devices::I2CBus fake (source/devices/i2c_bus_host.cpp) and a scripted
-// Devices::Clock fake (source/devices/clock_host.cpp) -- no MicroBitI2C, no
-// CODAL, no real hardware, no wall clock.
+// own REAL begin()/beginStep(nowUs) entry point over a TestSim::SimPlant
+// (108-002), scripted deterministically via TestSim::ScriptedI2CHook
+// (108-009), and a scripted Devices::Clock fake (source/devices/
+// clock_host.cpp) -- no MicroBitI2C, no CODAL, no real hardware, no wall
+// clock.
+//
+// Migrated by sprint 108 ticket 009 off the deleted source/devices/
+// i2c_bus_host.cpp scripted-FIFO Devices::I2CBus fake (ticket 001 reduced
+// Devices::I2CBus to a pure interface and removed it) -- see
+// devices_motor_harness.cpp's/scripted_i2c_hook.h's own header for the
+// migration rationale. Every scenario below is otherwise UNCHANGED from the
+// pre-migration harness -- only the bus/scripting plumbing moved. This
+// harness needs exact per-leaf, per-attempt register control (a specific
+// transient NAK inside one begin() call, an OTOS that never answers across
+// exactly kOtosBeginAttempts retries, a bounded-probe-action count per
+// step() call) that SimPlant's own live physics responses cannot give
+// directly -- so it stays a small C++ SimPlant-hook harness rather than a
+// pure-Python SimHarness/SimLoop test (ticket 009's own documented fallback
+// for scenarios needing host-unobservable, exact register-level control).
 //
 // Mirrors devices_otos_harness.cpp/devices_sensors_harness.cpp's exact
 // scripting conventions (this codebase's established per-harness-file
@@ -12,7 +27,7 @@
 // nonzero exit on any failure. Compiled by test_app_preamble.py with
 // -DHOST_BUILD against preamble.cpp + every leaf .cpp it drives.
 //
-// scriptWrite()/scriptRead() are TWO SEPARATE FIFOs (see i2c_bus_host.cpp's
+// queueWrite()/queueRead() are TWO SEPARATE FIFOs (see scripted_i2c_hook.h's
 // own header) -- scenarios that need MULTIPLE leaves to resolve therefore
 // queue each leaf's scripted transactions in the EXACT chronological order
 // Preamble's round-robin will call them (Left, Right, Otos, Color, Line --
@@ -28,10 +43,11 @@
 #include "devices/color_sensor.h"
 #include "devices/device_config.h"
 #include "devices/device_types.h"
-#include "devices/i2c_bus.h"
 #include "devices/line_sensor.h"
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
+#include "scripted_i2c_hook.h"
+#include "sim_plant.h"
 
 namespace {
 
@@ -86,17 +102,17 @@ Devices::MotorConfig baseMotorConfig(uint32_t port) {
 // hardReset() -- one write (0x46 select) + one 4-byte read (raw encoder,
 // value 0 -> {0,0,0,0}), independently statusable per side (nezha_motor.cpp
 // issues the read unconditionally even if the write failed).
-void scriptEncoderCall(Devices::I2CBus& bus, int writeStatus, int readStatus) {
-  bus.scriptWrite(kMotorWireAddr, writeStatus);
+void scriptEncoderCall(TestSim::ScriptedI2CHook& bus, int writeStatus, int readStatus) {
+  bus.queueWrite(kMotorWireAddr, writeStatus);
   uint8_t data[4] = {0, 0, 0, 0};
-  bus.scriptRead(kMotorWireAddr, data, 4, readStatus);
+  bus.queueRead(kMotorWireAddr, data, 4, readStatus);
 }
 
 // begin()'s hardReset(): 3 median snapshot reads + 1 readback read, ALL
 // succeeding and reading back raw=0 (within the +/-2 threshold) -- the
 // first OUTER attempt succeeds immediately. 4 calls total (nezha_motor.cpp
 // hardReset()'s own comment) == 8 transactions (4 writes + 4 reads).
-void scriptMotorBeginSuccess(Devices::I2CBus& bus) {
+void scriptMotorBeginSuccess(TestSim::ScriptedI2CHook& bus) {
   for (int i = 0; i < 4; ++i) scriptEncoderCall(bus, /*writeStatus=*/0, /*readStatus=*/0);
 }
 
@@ -109,7 +125,7 @@ void scriptMotorBeginSuccess(Devices::I2CBus& bus) {
 // not the scripted bytes, on any I2C failure), so every read carries {0}
 // regardless -- the readback threshold check still passes (0 is within
 // +/-2), so this SAME outer attempt returns without a second attempt.
-void scriptMotorBeginTransientNakThenSuccess(Devices::I2CBus& bus) {
+void scriptMotorBeginTransientNakThenSuccess(TestSim::ScriptedI2CHook& bus) {
   scriptEncoderCall(bus, /*writeStatus=*/-5, /*readStatus=*/0);  // snapshot s0: write NAK'd
   scriptEncoderCall(bus, /*writeStatus=*/0, /*readStatus=*/-5);  // snapshot s1: read NAK'd
   scriptEncoderCall(bus, /*writeStatus=*/0, /*readStatus=*/0);   // snapshot s2: clean
@@ -120,37 +136,37 @@ void scriptMotorBeginTransientNakThenSuccess(Devices::I2CBus& bus) {
 // harness.cpp's own kBeginTxnCount derivation, reproduced here): 1 write +
 // 1 read (product-ID probe, 0x5F) + 3 writes (init()) + 1 write
 // (setLinearScalar) + 1 write (setAngularScalar) + 1 write (zero pose) = 7
-// writes + 1 read = 8 total. scriptWrite()/scriptRead() are separate FIFOs
+// writes + 1 read = 8 total. queueWrite()/queueRead() are separate FIFOs
 // so enqueue order between them doesn't matter, only within each.
-void scriptOtosBeginSuccess(Devices::I2CBus& bus) {
-  for (int i = 0; i < 7; ++i) bus.scriptWrite(kOtosWireAddr, 0);
+void scriptOtosBeginSuccess(TestSim::ScriptedI2CHook& bus) {
+  for (int i = 0; i < 7; ++i) bus.queueWrite(kOtosWireAddr, 0);
   uint8_t id[1] = {0x5F};
-  bus.scriptRead(kOtosWireAddr, id, 1, 0);
+  bus.queueRead(kOtosWireAddr, id, 1, 0);
 }
 
 // ColorSensorLeaf::beginStep()'s AltProbe branch, ONE attempt, succeeding
 // immediately (nonzero probe value): writeReg8(0x81) + writeReg8(0x80) +
 // readReg16Alt(0xA4) (2 writes + 2 reads) == 4 writes + 2 reads total,
 // matching devices_sensors_harness.cpp's scriptAltDetectAttempt().
-void scriptColorBeginSuccess(Devices::I2CBus& bus) {
-  bus.scriptWrite(kColorAltWireAddr, 0);  // writeReg8(0x81, 0xCA)
-  bus.scriptWrite(kColorAltWireAddr, 0);  // writeReg8(0x80, 0x17)
-  bus.scriptWrite(kColorAltWireAddr, 0);  // readReg16Alt(0xA4) lo-byte select
-  bus.scriptWrite(kColorAltWireAddr, 0);  // readReg16Alt(0xA4) hi-byte select
+void scriptColorBeginSuccess(TestSim::ScriptedI2CHook& bus) {
+  bus.queueWrite(kColorAltWireAddr, 0);  // writeReg8(0x81, 0xCA)
+  bus.queueWrite(kColorAltWireAddr, 0);  // writeReg8(0x80, 0x17)
+  bus.queueWrite(kColorAltWireAddr, 0);  // readReg16Alt(0xA4) lo-byte select
+  bus.queueWrite(kColorAltWireAddr, 0);  // readReg16Alt(0xA4) hi-byte select
   uint8_t lo[1] = {0x34};
   uint8_t hi[1] = {0x12};
-  bus.scriptRead(kColorAltWireAddr, lo, 1, 0);
-  bus.scriptRead(kColorAltWireAddr, hi, 1, 0);
+  bus.queueRead(kColorAltWireAddr, lo, 1, 0);
+  bus.queueRead(kColorAltWireAddr, hi, 1, 0);
 }
 
 // LineSensorLeaf::beginStep()'s readRaw() probe, ONE attempt, all 4
 // channels succeeding -- 4 write(index)/read(byte) pairs, matches
 // devices_sensors_harness.cpp's scriptLineRead().
-void scriptLineBeginSuccess(Devices::I2CBus& bus) {
+void scriptLineBeginSuccess(TestSim::ScriptedI2CHook& bus) {
   for (int ch = 0; ch < 4; ++ch) {
-    bus.scriptWrite(kLineWireAddr, 0);
+    bus.queueWrite(kLineWireAddr, 0);
     uint8_t data[1] = {100};
-    bus.scriptRead(kLineWireAddr, data, 1, 0);
+    bus.queueRead(kLineWireAddr, data, 1, 0);
   }
 }
 
@@ -166,7 +182,7 @@ struct TxnSnapshot {
   uint32_t motor, otos, colorAlt, colorApds, line;
 };
 
-TxnSnapshot snapshotTxns(const Devices::I2CBus& bus) {
+TxnSnapshot snapshotTxns(const TestSim::ScriptedI2CHook& bus) {
   return TxnSnapshot{
       bus.txnCount(Devices::kNezhaDeviceAddr),
       bus.txnCount(Devices::kOtosDeviceAddr),
@@ -198,14 +214,16 @@ int countChangedAddrs(const TxnSnapshot& before, const TxnSnapshot& after) {
 void scenarioAllPresentHappyPath() {
   beginScenario("Preamble: all-present happy path -- done() reached, every leaf present/connected");
 
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+
+  TestSim::ScriptedI2CHook bus(plant);
   Devices::Clock clock;
 
-  Devices::NezhaMotor left(bus, baseMotorConfig(1));
-  Devices::NezhaMotor right(bus, baseMotorConfig(2));
-  Devices::Otos otos(bus, Devices::OtosConfig{});
-  Devices::ColorSensorLeaf color(bus, Devices::ColorConfig{});
-  Devices::LineSensorLeaf line(bus, Devices::LineConfig{});
+  Devices::NezhaMotor left(plant, baseMotorConfig(1));
+  Devices::NezhaMotor right(plant, baseMotorConfig(2));
+  Devices::Otos otos(plant, Devices::OtosConfig{});
+  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
+  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
 
   checkUintEq(snapshotTxns(bus).motor + snapshotTxns(bus).otos + snapshotTxns(bus).colorAlt +
                   snapshotTxns(bus).colorApds + snapshotTxns(bus).line,
@@ -276,18 +294,20 @@ void scenarioAllPresentHappyPath() {
 void scenarioOtosAbsentLatchesAfterRetries() {
   beginScenario("Preamble: OTOS absent -- latches un-present after exactly kOtosBeginAttempts retries, done() still reachable");
 
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+
+  TestSim::ScriptedI2CHook bus(plant);
   Devices::Clock clock;
 
-  Devices::NezhaMotor left(bus, baseMotorConfig(1));
-  Devices::NezhaMotor right(bus, baseMotorConfig(2));
-  Devices::Otos otos(bus, Devices::OtosConfig{});  // never scripted -- always absent
-  Devices::ColorSensorLeaf color(bus, Devices::ColorConfig{});
-  Devices::LineSensorLeaf line(bus, Devices::LineConfig{});
+  Devices::NezhaMotor left(plant, baseMotorConfig(1));
+  Devices::NezhaMotor right(plant, baseMotorConfig(2));
+  Devices::Otos otos(plant, Devices::OtosConfig{});  // never scripted -- always absent
+  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
+  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
 
   App::Preamble preamble(left, right, otos, color, line, clock);
 
-  // scriptWrite()/scriptRead() are ONE shared FIFO per I2CBus instance
+  // queueWrite()/queueRead() are ONE shared FIFO per I2CBus instance
   // covering EVERY address -- an unscripted call (OTOS here) pops nothing
   // only while the queue is genuinely empty (i2c_bus_host.cpp's own guard).
   // Queuing Color's/Line's scripts too far ahead would let OTOS's own
@@ -357,14 +377,16 @@ void scenarioOtosAbsentLatchesAfterRetries() {
 void scenarioTransientMotorNakDuringBeginNotLatched() {
   beginScenario("Preamble: transient I2C NAK during NezhaMotor::begin() does not latch connected() false");
 
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+
+  TestSim::ScriptedI2CHook bus(plant);
   Devices::Clock clock;
 
-  Devices::NezhaMotor left(bus, baseMotorConfig(1));
-  Devices::NezhaMotor right(bus, baseMotorConfig(2));
-  Devices::Otos otos(bus, Devices::OtosConfig{});
-  Devices::ColorSensorLeaf color(bus, Devices::ColorConfig{});
-  Devices::LineSensorLeaf line(bus, Devices::LineConfig{});
+  Devices::NezhaMotor left(plant, baseMotorConfig(1));
+  Devices::NezhaMotor right(plant, baseMotorConfig(2));
+  Devices::Otos otos(plant, Devices::OtosConfig{});
+  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
+  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
 
   App::Preamble preamble(left, right, otos, color, line, clock);
 
@@ -406,14 +428,16 @@ void scenarioTransientMotorNakDuringBeginNotLatched() {
 void scenarioMultipleAbsentLeavesStillTerminates() {
   beginScenario("Preamble: OTOS + color + line all absent simultaneously -- done() still bounded-reachable");
 
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+
+  TestSim::ScriptedI2CHook bus(plant);
   Devices::Clock clock;
 
-  Devices::NezhaMotor left(bus, baseMotorConfig(1));
-  Devices::NezhaMotor right(bus, baseMotorConfig(2));
-  Devices::Otos otos(bus, Devices::OtosConfig{});          // absent
-  Devices::ColorSensorLeaf color(bus, Devices::ColorConfig{});  // absent
-  Devices::LineSensorLeaf line(bus, Devices::LineConfig{});     // absent
+  Devices::NezhaMotor left(plant, baseMotorConfig(1));
+  Devices::NezhaMotor right(plant, baseMotorConfig(2));
+  Devices::Otos otos(plant, Devices::OtosConfig{});          // absent
+  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});  // absent
+  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});     // absent
 
   App::Preamble preamble(left, right, otos, color, line, clock);
 

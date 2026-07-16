@@ -4,7 +4,20 @@
 // resets, motion-qualified wedge reporting) through a dependency-free
 // MockDeviceMotor leaf, AND Devices::NezhaMotor's own request/collect
 // encoder pairing, embedded PID, and PID-on/off dispatch through the real
-// leaf against the scripted Devices::I2CBus (DB-003).
+// leaf against a TestSim::SimPlant (108-002), scripted deterministically via
+// TestSim::ScriptedI2CHook (108-009 -- see that header's own comment for why
+// a register-level scripting seam is still needed on top of SimPlant's own
+// live physics responses).
+//
+// Migrated by sprint 108 ticket 009
+// (clasi/sprints/108-pure-i2cbus-clock-interfaces-and-a-real-simplant-
+// simulator-sim-mode-tours/tickets/009-migrate-the-13-register-level-unit-
+// tests-to-python-simplant-hook-tests-delete-c-harnesses.md) off the deleted
+// source/devices/i2c_bus_host.cpp scripted-FIFO Devices::I2CBus fake (ticket
+// 001 reduced Devices::I2CBus to a pure interface and removed it). Every
+// scenario below is otherwise UNCHANGED from the pre-migration harness --
+// only the bus/scripting plumbing moved from the deleted concrete
+// Devices::I2CBus onto TestSim::SimPlant + TestSim::ScriptedI2CHook.
 //
 // Modeled on tests/sim/unit/motor_policy_harness.cpp (the MockMotor-style
 // armor scenarios) + tests/sim/unit/velocity_pid_harness.cpp (the PID
@@ -16,9 +29,10 @@
 // Plain C++ program, hand-rolled assertions -- prints a PASS/FAIL line per
 // scenario and exits nonzero if any assertion failed. Run by the pytest
 // wrapper in test_devices_motor.py, which compiles this file together with
-// source/devices/i2c_bus_host.cpp, source/devices/velocity_pid.cpp, and
-// source/devices/nezha_motor.cpp under -DHOST_BUILD, then runs the
-// resulting binary via subprocess and asserts exit code 0.
+// tests/_infra/sim/sim_plant.cpp, tests/sim/plant/{wheel,otos}_plant.cpp,
+// source/devices/velocity_pid.cpp, and source/devices/nezha_motor.cpp under
+// -DHOST_BUILD, then runs the resulting binary via subprocess and asserts
+// exit code 0.
 
 #include <cmath>
 #include <cstdint>
@@ -32,6 +46,8 @@
 #include "devices/motor_armor.h"
 #include "devices/nezha_motor.h"
 #include "devices/velocity_pid.h"
+#include "scripted_i2c_hook.h"
+#include "sim_plant.h"
 
 namespace {
 
@@ -331,13 +347,13 @@ void scenarioWedgeLatchAndSuspectDeriveAsBefore() {
 // at most one writeRawDuty() call, which itself writes to the bus at most
 // once) and harmless when the duty write doesn't land that cycle (write-
 // on-change/throttle skip) — the unused slack entry is simply drained by a
-// later cycle's write instead, and this fake's scriptWrite() never checks
+// later cycle's write instead, and this fake's queueWrite() never checks
 // the written payload, only address+order, so which "logical" write
 // consumes which slot does not matter.
-void scriptEncoderRequestCollect(Devices::I2CBus& bus, uint16_t wireAddr,
+void scriptEncoderRequestCollect(TestSim::ScriptedI2CHook& bus, uint16_t wireAddr,
                                   float positionMm) {
-  bus.scriptWrite(wireAddr, /*status=*/0);   // requestEncoder()'s 0x46 write
-  bus.scriptWrite(wireAddr, /*status=*/0);   // slack: a possible same-cycle duty write (0x60)
+  bus.queueWrite(wireAddr, /*status=*/0);   // requestEncoder()'s 0x46 write
+  bus.queueWrite(wireAddr, /*status=*/0);   // slack: a possible same-cycle duty write (0x60)
 
   int32_t raw = static_cast<int32_t>(std::lround(positionMm * 10.0f));
   uint8_t data[4] = {
@@ -346,7 +362,7 @@ void scriptEncoderRequestCollect(Devices::I2CBus& bus, uint16_t wireAddr,
       static_cast<uint8_t>((raw >> 16) & 0xFF),
       static_cast<uint8_t>((raw >> 24) & 0xFF),
   };
-  bus.scriptRead(wireAddr, data, 4, /*status=*/0);   // collectEncoder()'s 4-byte read
+  bus.queueRead(wireAddr, data, 4, /*status=*/0);   // collectEncoder()'s 4-byte read
 }
 
 Devices::MotorConfig baseNezhaConfig() {
@@ -365,11 +381,11 @@ Devices::MotorConfig baseNezhaConfig() {
 //    across two paired cycles.
 void scenarioRequestCollectPairingYieldsExpectedPositionVelocity() {
   beginScenario("request->collect encoder pairing yields expected position()/velocity()");
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor motor(bus, baseNezhaConfig());
+  Devices::NezhaMotor motor(plant, baseNezhaConfig());
 
   // Prime cycle: request -> collect at position 0.
   scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
@@ -397,8 +413,8 @@ void scenarioRequestCollectPairingYieldsExpectedPositionVelocity() {
 //    tracking error shrinks substantially from the first cycle to the last.
 void scenarioPidOnChasesVelocityTarget() {
   beginScenario("PID-on chases a velocity target");
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
 
   Devices::MotorConfig cfg = baseNezhaConfig();
@@ -406,7 +422,7 @@ void scenarioPidOnChasesVelocityTarget() {
                                  /*iMax=*/1.0f, /*kaw=*/2.0f};
   cfg.velDeadband = 5.0f;   // [mm/s] well below the target — not in deadband
 
-  Devices::NezhaMotor motor(bus, cfg);
+  Devices::NezhaMotor motor(plant, cfg);
   checkTrue(motor.pidEnabled(), "PID is enabled by default");
 
   const float target = 300.0f;   // [mm/s]
@@ -457,13 +473,13 @@ void scenarioPidOnChasesVelocityTarget() {
 //    both modes ("armor applies in both modes").
 void scenarioPidOffRoutesRawDutyThroughArmorUnchanged() {
   beginScenario("PID-off feeds raw duty through the armor unchanged");
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
 
   Devices::MotorConfig cfg = baseNezhaConfig();
   cfg.slewRate = 100.0f;   // no slew clamping — isolates armor gating (reversal dwell) from the independent slew-cap concern
-  Devices::NezhaMotor motor(bus, cfg);
+  Devices::NezhaMotor motor(plant, cfg);
 
   motor.setPidEnabled(false);
   motor.setVelocity(999.0f);   // staged but must be ignored while PID is off
@@ -528,12 +544,12 @@ void scenarioPidOffRoutesRawDutyThroughArmorUnchanged() {
 //    climbing, wedged=1) while the wheel was physically moving.
 void scenarioFreshSampleGateSurvivesSlowBrickRefreshUnderFastFiberCycle() {
   beginScenario("fresh-sample gate survives slow brick refresh under fast fiber cycle");
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
 
   Devices::MotorConfig cfg = baseNezhaConfig();   // velFiltAlpha=1.0 -- velocity() reflects each fresh sample's raw difference-quotient exactly
-  Devices::NezhaMotor motor(bus, cfg);
+  Devices::NezhaMotor motor(plant, cfg);
 
   // Drive a raw duty throughout (PID off, to keep the plant simple/
   // deterministic) so appliedDuty() is nonzero -- exercises the
@@ -604,11 +620,11 @@ void scenarioFreshSampleGateSurvivesSlowBrickRefreshUnderFastFiberCycle() {
 //    loop on the anchor, nor false-latch the wedge detector.
 void scenarioBootAnchorAcceptsLargeInitialPositionWithoutGlitchOrWedge() {
   beginScenario("boot anchor accepts a large initial position without glitch or wedge");
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor motor(bus, baseNezhaConfig());
+  Devices::NezhaMotor motor(plant, baseNezhaConfig());
 
   const float kBootPosition = -33526.0f;   // [mm] hardware-observed lifetime-accumulated boot value
 
@@ -660,13 +676,13 @@ void scenarioBootAnchorAcceptsLargeInitialPositionWithoutGlitchOrWedge() {
 //     loop's stale-target gate) permanently defeated.
 void scenarioNakedStopWriteIsRetriedNextTickNotLatched() {
   beginScenario("a NAK'd stop write is retried next tick, not permanently latched-as-written");
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
 
   Devices::MotorConfig cfg = baseNezhaConfig();
   cfg.slewRate = 100.0f;   // no slew clamping -- isolates the write-status behavior
-  Devices::NezhaMotor motor(bus, cfg);
+  Devices::NezhaMotor motor(plant, cfg);
   motor.setPidEnabled(false);
 
   // Starts at 50ms (not 0): writeRawDuty()'s write-rate throttle compares
@@ -689,10 +705,10 @@ void scenarioNakedStopWriteIsRetriedNextTickNotLatched() {
   // succeed -- only the duty write NAKs.
   motor.setDuty(0.0f);
   nowUs += 50000;   // clears the 40ms write-rate throttle (stop is exempt anyway)
-  bus.scriptWrite(wireAddr, /*status=*/0);    // requestEncoder()'s 0x46 write
+  bus.queueWrite(wireAddr, /*status=*/0);    // requestEncoder()'s 0x46 write
   uint8_t data[4] = {0, 0, 0, 0};              // unchanged raw count -- stale sample, irrelevant here
-  bus.scriptRead(wireAddr, data, 4, /*status=*/0);   // collectEncoder()
-  bus.scriptWrite(wireAddr, /*status=*/-5);    // the stop's 0x60 write -- NAK'd
+  bus.queueRead(wireAddr, data, 4, /*status=*/0);   // collectEncoder()
+  bus.queueWrite(wireAddr, /*status=*/-5);    // the stop's 0x60 write -- NAK'd
   motor.requestSample();
   motor.tick(nowUs);
 
@@ -707,9 +723,9 @@ void scenarioNakedStopWriteIsRetriedNextTickNotLatched() {
   // SUCCESSFUL write may latch lastWrittenPct_). This time the write
   // succeeds.
   nowUs += 50000;
-  bus.scriptWrite(wireAddr, /*status=*/0);    // requestEncoder()
-  bus.scriptRead(wireAddr, data, 4, /*status=*/0);    // collectEncoder()
-  bus.scriptWrite(wireAddr, /*status=*/0);    // the retried stop write -- succeeds this time
+  bus.queueWrite(wireAddr, /*status=*/0);    // requestEncoder()
+  bus.queueRead(wireAddr, data, 4, /*status=*/0);    // collectEncoder()
+  bus.queueWrite(wireAddr, /*status=*/0);    // the retried stop write -- succeeds this time
   motor.requestSample();
   motor.tick(nowUs);
 
@@ -727,8 +743,8 @@ void scenarioNakedStopWriteIsRetriedNextTickNotLatched() {
 //     next tick.
 void scenarioApplyGainsTakesEffectSameBootNoReflash() {
   beginScenario("applyGains() changes subsequent PID output on the same boot, no reflash");
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
 
   Devices::MotorConfig cfg = baseNezhaConfig();
@@ -736,7 +752,7 @@ void scenarioApplyGainsTakesEffectSameBootNoReflash() {
   // cfg.velGains left at Devices::Gains{}'s all-zero default -- PID output
   // is inert (0) regardless of error.
 
-  Devices::NezhaMotor motor(bus, cfg);
+  Devices::NezhaMotor motor(plant, cfg);
   checkFloatEq(motor.gains().kp, 0.0f, "gains() reflects the constructed (zero) kp before applyGains()");
 
   const float target = 300.0f;   // [mm/s]
@@ -798,12 +814,12 @@ void scenarioApplyGainsTakesEffectSameBootNoReflash() {
 //     (config.proto's MotorConfigPatch.side comment).
 void scenarioApplyGainsTravelCalibAppliesWhenPresentOtherwiseUnchanged() {
   beginScenario("applyGains(): travelCalib updates wheelTravelCalib only when explicitly present");
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
 
   Devices::MotorConfig cfg = baseNezhaConfig();   // wheelTravelCalib = 1.0, fwdSign = 1
-  Devices::NezhaMotor motor(bus, cfg);
+  Devices::NezhaMotor motor(plant, cfg);
 
   // Prime cycle: anchor at raw=0.
   scriptEncoderRequestCollect(bus, wireAddr, 0.0f);

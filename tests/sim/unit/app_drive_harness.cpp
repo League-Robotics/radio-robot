@@ -22,7 +22,16 @@
 // codebase's established per-harness-file fixture convention (see that
 // file's own header note, and otos_odometer_harness.cpp's precedent).
 // Compiled by test_app_drive.py with -DHOST_BUILD against drive.cpp,
-// nezha_motor.cpp, velocity_pid.cpp, i2c_bus_host.cpp, body_kinematics.cpp.
+// nezha_motor.cpp, velocity_pid.cpp, sim_plant.cpp, {wheel,otos}_plant.cpp,
+// body_kinematics.cpp.
+//
+// Migrated by sprint 108 ticket 009 off the deleted source/devices/
+// i2c_bus_host.cpp scripted-FIFO Devices::I2CBus fake (ticket 001 reduced
+// Devices::I2CBus to a pure interface and removed it) onto a
+// TestSim::SimPlant scripted deterministically via TestSim::ScriptedI2CHook
+// -- see devices_motor_harness.cpp's/scripted_i2c_hook.h's own header for
+// the migration rationale. Every scenario below is otherwise UNCHANGED from
+// the pre-migration harness -- only the bus/scripting plumbing moved.
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -31,9 +40,10 @@
 #include "app/drive.h"
 #include "devices/device_config.h"
 #include "devices/device_types.h"
-#include "devices/i2c_bus.h"
 #include "devices/nezha_motor.h"
 #include "kinematics/body_kinematics.h"
+#include "scripted_i2c_hook.h"
+#include "sim_plant.h"
 
 namespace {
 
@@ -69,10 +79,10 @@ void checkFloatEq(float actual, float expected, const std::string& what,
 // --- Devices::NezhaMotor scripting helpers (duplicated from
 // devices_motor_harness.cpp -- see this file's own header note) ----------
 
-void scriptEncoderRequestCollect(Devices::I2CBus& bus, uint16_t wireAddr,
+void scriptEncoderRequestCollect(TestSim::ScriptedI2CHook& bus, uint16_t wireAddr,
                                   float positionMm) {
-  bus.scriptWrite(wireAddr, /*status=*/0);   // requestEncoder()'s 0x46 write
-  bus.scriptWrite(wireAddr, /*status=*/0);   // slack: a possible same-cycle duty write (0x60)
+  bus.queueWrite(wireAddr, /*status=*/0);   // requestEncoder()'s 0x46 write
+  bus.queueWrite(wireAddr, /*status=*/0);   // slack: a possible same-cycle duty write (0x60)
 
   int32_t raw = static_cast<int32_t>(std::lround(positionMm * 10.0f));
   uint8_t data[4] = {
@@ -81,7 +91,7 @@ void scriptEncoderRequestCollect(Devices::I2CBus& bus, uint16_t wireAddr,
       static_cast<uint8_t>((raw >> 16) & 0xFF),
       static_cast<uint8_t>((raw >> 24) & 0xFF),
   };
-  bus.scriptRead(wireAddr, data, 4, /*status=*/0);   // collectEncoder()'s 4-byte read
+  bus.queueRead(wireAddr, data, 4, /*status=*/0);   // collectEncoder()'s 4-byte read
 }
 
 // writeRawDuty()'s own write-rate limiter (nezha_motor.cpp) throttles any
@@ -114,7 +124,7 @@ Devices::MotorConfig baseNezhaConfig(uint32_t port) {
 // so lastPosition_/lastTickUs_ are established before any staged target is
 // executed -- mirrors devices_motor_harness.cpp's own "prime cycle"
 // convention.
-void primeAtZero(Devices::NezhaMotor& motor, Devices::I2CBus& bus, uint16_t wireAddr) {
+void primeAtZero(Devices::NezhaMotor& motor, TestSim::ScriptedI2CHook& bus, uint16_t wireAddr) {
   scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
   motor.requestSample();
   motor.tick(0);
@@ -124,7 +134,7 @@ void primeAtZero(Devices::NezhaMotor& motor, Devices::I2CBus& bus, uint16_t wire
 // position at 0 (so filteredVelocity_ stays exactly 0 -- isolates the
 // staged target's effect on appliedDuty() from any plant/PID convergence
 // dynamics).
-void runOneCycleAtZeroPosition(Devices::NezhaMotor& motor, Devices::I2CBus& bus,
+void runOneCycleAtZeroPosition(Devices::NezhaMotor& motor, TestSim::ScriptedI2CHook& bus,
                                 uint16_t wireAddr, uint64_t nowUs) {
   scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
   motor.requestSample();
@@ -140,12 +150,12 @@ void runOneCycleAtZeroPosition(Devices::NezhaMotor& motor, Devices::I2CBus& bus,
 void scenarioStraightLineStagesEqualSameSignTargets() {
   beginScenario("Drive::tick(): straight twist stages equal, same-sign wheel targets via inverse()");
 
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor left(bus, baseNezhaConfig(1));
-  Devices::NezhaMotor right(bus, baseNezhaConfig(2));
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
   primeAtZero(left, bus, wireAddr);
   primeAtZero(right, bus, wireAddr);
 
@@ -180,12 +190,12 @@ void scenarioStraightLineStagesEqualSameSignTargets() {
 void scenarioPureRotationStagesOppositeSignTargets() {
   beginScenario("Drive::tick(): pure-rotation twist stages opposite-sign wheel targets via inverse()");
 
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor left(bus, baseNezhaConfig(1));
-  Devices::NezhaMotor right(bus, baseNezhaConfig(2));
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
   primeAtZero(left, bus, wireAddr);
   primeAtZero(right, bus, wireAddr);
 
@@ -221,12 +231,12 @@ void scenarioPureRotationStagesOppositeSignTargets() {
 void scenarioStopZeroesBothTargetsWithinOneCycle() {
   beginScenario("Drive::stop(): both wheel targets reach 0 within one cycle of the next tick()");
 
-  Devices::I2CBus::setClock(1000000);
-  Devices::I2CBus bus;
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor left(bus, baseNezhaConfig(1));
-  Devices::NezhaMotor right(bus, baseNezhaConfig(2));
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
   primeAtZero(left, bus, wireAddr);
   primeAtZero(right, bus, wireAddr);
 
