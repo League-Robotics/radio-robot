@@ -1,10 +1,13 @@
 ---
-id: '008'
+id: 008
 title: 'Host adoption: MOVE-queue tours, config-patch live tuning, retire streaming
   path, tour1-freeze verification'
-status: open
-use-cases: [SUC-003, SUC-005]
-depends-on: ['007']
+status: in-progress
+use-cases:
+- SUC-003
+- SUC-005
+depends-on:
+- '007'
 github-issue: ''
 issue: tour1-freeze-investigation-2026-07-15.md
 completes_issue: true
