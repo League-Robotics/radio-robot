@@ -2,9 +2,15 @@
 id: '007'
 title: 'Sim fidelity: OTOS drift/raw-scale-error + calibration honoring + encoder
   error model'
-status: open
-use-cases: [SUC-002, SUC-004, SUC-005]
-depends-on: ['002', '004', '006']
+status: in-progress
+use-cases:
+- SUC-002
+- SUC-004
+- SUC-005
+depends-on:
+- '002'
+- '004'
+- '006'
 github-issue: ''
 issue: sim-honors-otos-calibration.md
 completes_issue: true
