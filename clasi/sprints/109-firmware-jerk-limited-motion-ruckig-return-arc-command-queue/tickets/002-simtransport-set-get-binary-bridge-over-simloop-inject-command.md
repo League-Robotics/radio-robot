@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: TestGUI Sim-mode config path over typed binary patches
-status: open
+status: in-progress
 use-cases:
 - SUC-005
 depends-on: []
