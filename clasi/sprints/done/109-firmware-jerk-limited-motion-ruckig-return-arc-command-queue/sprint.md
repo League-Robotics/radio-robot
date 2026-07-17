@@ -1,10 +1,15 @@
 ---
 id: '109'
 title: 'Firmware jerk-limited motion: Ruckig return + arc-command queue'
-status: executing
+status: closed
 branch: sprint/109-firmware-jerk-limited-motion-ruckig-return-arc-command-queue
 worktree: false
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004, SUC-005]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
 issues:
 - firmware-jerk-limited-motion-ruckig-return-arc-command-queue.md
 - sim-honors-otos-calibration.md
