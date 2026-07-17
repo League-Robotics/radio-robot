@@ -32,6 +32,8 @@ Baked from JSON when present (matching semantics, so no behaviour surprise):
     and OtosBootConfig's own doc comment in src/firm/config/boot_config.h for why
     this is boot-time-baked only, never a live SET/wire surface)
   * control.heading_kp/control.heading_kd  -> PlannerConfig.heading_kp/heading_kd
+  * control.heading_source ("auto"/"otos"/"encoder", 109-005) -> PlannerConfig.
+    heading_source (App::HeadingSource's per-robot policy override)
     (098-001 — the outer heading-loop PD gains, per-robot tunable; see
     heading_gains_for_config() and architecture-update.md M1/M2. Also new
     this ticket: PlannerConfig's seven motion-limit fields (a_max/a_decel/
@@ -146,6 +148,22 @@ YAW_JERK_MAX_DEFAULT = 100.0    # [rad/s^3] ~5x yaw_acc_max -- ~0.2s
 # on the real plant.
 HEADING_KP_DEFAULT = 3.0    # [1/s]
 HEADING_KD_DEFAULT = 0.0    # dimensionless
+
+# 109-005: App::HeadingSource per-robot policy override + the heading-dwell
+# completion gate. HEADING_SOURCE_DEFAULT is the string form read from the
+# robot JSON's control.heading_source key ("auto"/"otos"/"encoder" ->
+# msg::HeadingSourceMode); AUTO is the normal OTOS-first/encoder-fallback
+# policy (App::HeadingSource's own file header) -- a robot with a known-bad
+# OTOS mount, or a bench rig with none wired at all, overrides to "encoder".
+# The dwell tolerance/rate match sprint-098's own proven turn-accuracy bar
+# (0.5deg/1deg-per-s -- see .clasi/knowledge/heading-loop-solves-turn-
+# accuracy.md); not yet exposed as a robot-JSON key (no robot has needed a
+# different value yet) -- add a control.heading_dwell_tol_deg/
+# heading_dwell_rate_dps mapping here if one ever does, mirroring
+# heading_gains_for_config()'s own shape.
+HEADING_SOURCE_DEFAULT = "auto"
+HEADING_DWELL_TOL_DEG_DEFAULT = 0.5    # [deg]
+HEADING_DWELL_RATE_DPS_DEFAULT = 1.0   # [deg/s]
 
 # Drive::Limits/tracker/policy defaults for msg::PlannerConfig's fields
 # 15-31 (100-001 -- motion-stack-v2 M1, architecture-update.md Decision 2).
@@ -395,6 +413,32 @@ def heading_gains_for_config(cfg: dict):
     return float(kp), float(kd)
 
 
+_HEADING_SOURCE_WIRE_NAMES = {
+    "auto": "msg::HeadingSourceMode::HEADING_SOURCE_AUTO",
+    "otos": "msg::HeadingSourceMode::HEADING_SOURCE_FORCE_OTOS",
+    "encoder": "msg::HeadingSourceMode::HEADING_SOURCE_FORCE_ENCODER",
+}
+
+
+def heading_source_for_config(cfg: dict) -> str:
+    """Return the C++ msg::HeadingSourceMode enumerator literal for the robot
+    JSON's control.heading_source key (case-insensitive "auto"/"otos"/
+    "encoder"), falling back to HEADING_SOURCE_DEFAULT ("auto") when absent
+    or unrecognized -- mirrors heading_gains_for_config()'s own fall-back
+    discipline."""
+    ctrl = cfg.get("control", {}) or {}
+    raw = str(_get(ctrl, "heading_source", default=HEADING_SOURCE_DEFAULT)).strip().lower()
+    return _HEADING_SOURCE_WIRE_NAMES.get(raw, _HEADING_SOURCE_WIRE_NAMES["auto"])
+
+
+def heading_dwell_for_config(cfg: dict):
+    """Return (heading_dwell_tol, heading_dwell_rate) in [rad]/[rad/s] --
+    see HEADING_DWELL_TOL_DEG_DEFAULT/HEADING_DWELL_RATE_DPS_DEFAULT's own
+    comment. No robot-JSON override key yet (not yet needed by any robot)."""
+    return (math.radians(HEADING_DWELL_TOL_DEG_DEFAULT),
+            math.radians(HEADING_DWELL_RATE_DPS_DEFAULT))
+
+
 def min_speed_for_config(cfg: dict):
     """Return min_speed (PlannerConfig field 10) -- see MIN_SPEED_DEFAULT's
     own comment above for why this is no longer left at 0.0f. Read from the
@@ -474,6 +518,8 @@ def generate(cfg: dict, source_path: str) -> str:
     (otos_offset_x, otos_offset_y, otos_offset_yaw,
      otos_linear_scale, otos_angular_scale) = otos_boot_config_values(cfg)
     heading_kp, heading_kd = heading_gains_for_config(cfg)
+    heading_source_wire = heading_source_for_config(cfg)
+    heading_dwell_tol, heading_dwell_rate = heading_dwell_for_config(cfg)
     yaw_rate_max, yaw_acc_max = profile_rot_limits_for_config(cfg)
     min_speed = min_speed_for_config(cfg)
     (v_wheel_max, steer_headroom, wheel_step_max,
@@ -636,6 +682,15 @@ msg::PlannerConfig defaultPlannerConfig() {{
     cfg.setHandoffTolV({_f(handoff_tol_v)});            // [s]
     cfg.setArriveVelTol({_f(arrive_vel_tol)});           // [mm/s]
     cfg.setArriveDwell({_f(arrive_dwell)});             // [s]
+
+    // 109-005: App::HeadingSource per-robot policy override + the heading-
+    // dwell completion gate. heading_source baked from the robot JSON's
+    // control.heading_source ("auto"/"otos"/"encoder"); the dwell
+    // tolerance/rate are firmware defaults today (no robot-JSON key yet --
+    // see heading_dwell_for_config()'s own comment).
+    cfg.setHeadingSource({heading_source_wire});
+    cfg.setHeadingDwellTol({_f(heading_dwell_tol)});        // [rad]
+    cfg.setHeadingDwellRate({_f(heading_dwell_rate)});       // [rad/s]
     return cfg;
 }}
 

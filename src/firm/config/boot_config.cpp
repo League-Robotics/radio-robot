@@ -143,6 +143,15 @@ msg::PlannerConfig defaultPlannerConfig() {
     cfg.setHandoffTolV(0.14f);            // [s]
     cfg.setArriveVelTol(15.0f);           // [mm/s]
     cfg.setArriveDwell(0.15f);             // [s]
+
+    // 109-005: App::HeadingSource per-robot policy override + the heading-
+    // dwell completion gate. heading_source baked from the robot JSON's
+    // control.heading_source ("auto"/"otos"/"encoder"); the dwell
+    // tolerance/rate are firmware defaults today (no robot-JSON key yet --
+    // see heading_dwell_for_config()'s own comment).
+    cfg.setHeadingSource(msg::HeadingSourceMode::HEADING_SOURCE_AUTO);
+    cfg.setHeadingDwellTol(0.008726646f);        // [rad]
+    cfg.setHeadingDwellRate(0.01745329f);       // [rad/s]
     return cfg;
 }
 

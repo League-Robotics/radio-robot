@@ -49,6 +49,7 @@
 #include "app/comms.h"
 #include "app/deadman.h"
 #include "app/drive.h"
+#include "app/heading_source.h"
 #include "app/odometry.h"
 #include "app/pilot.h"
 #include "app/preamble.h"
@@ -380,7 +381,8 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   scriptLineBeginSuccess(bus);
 
   Motion::Executor executor;
-  App::Pilot pilot(executor, drive);
+  App::HeadingSource headingSource(otos, motorL, motorR, /*trackWidth=*/120.0f);
+  App::Pilot pilot(executor, drive, headingSource, odom);
   App::RobotLoop robotLoop(plant, motorL, motorR, otos, comms, tlm, drive, odom,
                             deadman, preamble, pilot, clock, sleeper);
 
@@ -498,7 +500,8 @@ void scenarioConfigMotorPatchAppliesWhileDrivetrainPlannerStayUnimplemented() {
   scriptLineBeginSuccess(bus);
 
   Motion::Executor executor;
-  App::Pilot pilot(executor, drive);
+  App::HeadingSource headingSource(otos, motorL, motorR, /*trackWidth=*/120.0f);
+  App::Pilot pilot(executor, drive, headingSource, odom);
   App::RobotLoop robotLoop(plant, motorL, motorR, otos, comms, tlm, drive, odom,
                             deadman, preamble, pilot, clock, sleeper);
   robotLoop.boot();

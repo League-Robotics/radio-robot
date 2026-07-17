@@ -27,6 +27,11 @@ enum class ExecutorState : uint8_t {
     EXEC_STOPPING = 3,
 };
 
+enum class HeadingSourceStatus : uint8_t {
+    HEADING_SOURCE_STATUS_OTOS = 0,
+    HEADING_SOURCE_STATUS_ENCODER = 1,
+};
+
 // AckEntry
 struct AckEntry {
     uint32_t corr_id = 0;
@@ -64,6 +69,7 @@ struct Telemetry {
     uint32_t queue_depth = 0;
     uint32_t active_id = 0;
     ExecutorState exec_state = static_cast<ExecutorState>(0);
+    HeadingSourceStatus heading_source = static_cast<HeadingSourceStatus>(0);
 
     // --- array / optional-string accessors ---
     const AckEntry* acks() const { return acks_; }

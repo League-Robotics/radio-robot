@@ -71,13 +71,13 @@ The directory map:
 
 | Directory | Namespace | Role | Doc |
 |---|---|---|---|
-| `app/` | `App` | The loop and its passive app modules: RobotLoop, Comms, Telemetry, Drive, Odometry, Deadman, Preamble, Pilot (109-003) | [app/DESIGN.md](app/DESIGN.md) |
+| `app/` | `App` | The loop and its passive app modules: RobotLoop, Comms, Telemetry, Drive, Odometry, Deadman, Preamble, Pilot (109-003/109-005), HeadingSource (109-005) | [app/DESIGN.md](app/DESIGN.md) |
 | `devices/` | `Devices` | Device leaves (NezhaMotor, Otos, ColorSensorLeaf, LineSensorLeaf), the MotorArmor policy base, velocity PID, and the pure seam interfaces `I2CBus`/`Clock`/`Sleeper` plus their `MicroBit*` ARM impls | [devices/DESIGN.md](devices/DESIGN.md) |
 | `com/` | (global / `radiochan`) | Raw transports: `SerialPort` (USB CDC), `Radio` (micro:bit radio), persisted radio-channel storage | [com/DESIGN.md](com/DESIGN.md) |
 | `messages/` | `msg` | Wire schema: generated message structs, generated envelope codec (`wire.{h,cpp}`), hand-written byte-level runtime (`wire_runtime.{h,cpp}`), layout gates | [messages/DESIGN.md](messages/DESIGN.md) |
 | `config/` | `Config` | Generated boot configuration — per-robot calibration baked at build time from `data/robots/active_robot.json` | [config/DESIGN.md](config/DESIGN.md) |
 | `kinematics/` | `BodyKinematics` | Stateless differential-drive math: inverse/forward twist↔wheel maps, saturation | [kinematics/DESIGN.md](kinematics/DESIGN.md) |
-| `motion/` | `Motion` | Jerk-limited single-channel trajectory solving (`JerkTrajectory`, wrapping vendored Ruckig, `vendor/ruckig/`, restored 109-001) plus the ring-queue/state-machine sequencer (`Cmd`/`Executor`, 109-003) that drives it; `App::Pilot` is its one consumer | [motion/DESIGN.md](motion/DESIGN.md) |
+| `motion/` | `Motion` | Jerk-limited single-channel trajectory solving (`JerkTrajectory`, wrapping vendored Ruckig, `vendor/ruckig/`, restored 109-001) plus the ring-queue/state-machine sequencer (`Cmd`/`Executor`, 109-003 TIMED mode, 109-005 DISTANCE-mode arcs/pivots) that drives it; `App::Pilot` is its one consumer | [motion/DESIGN.md](motion/DESIGN.md) |
 | `types/` | (global) | Protocol v2 text-tag constants, protocol/firmware version, reply-context plumbing types | [types/DESIGN.md](types/DESIGN.md) |
 | `main.cpp` | — | ARM entry point: constructs the real hardware singletons and every module, wires them, hands off to `RobotLoop::run()` (never returns) | this doc, §4 |
 

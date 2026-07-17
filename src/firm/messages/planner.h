@@ -45,6 +45,12 @@ enum class StopKind : uint8_t {
     STOP_ROTATION = 8,
 };
 
+enum class HeadingSourceMode : uint8_t {
+    HEADING_SOURCE_AUTO = 0,
+    HEADING_SOURCE_FORCE_OTOS = 1,
+    HEADING_SOURCE_FORCE_ENCODER = 2,
+};
+
 // StopCondition
 struct StopCondition {
     StopKind kind = static_cast<StopKind>(0);
@@ -248,6 +254,9 @@ struct PlannerConfig {
     float handoff_tol_v = 0.0f;
     float arrive_vel_tol = 0.0f;
     float arrive_dwell = 0.0f;
+    HeadingSourceMode heading_source = static_cast<HeadingSourceMode>(0);
+    float heading_dwell_tol = 0.0f;
+    float heading_dwell_rate = 0.0f;
 
     // --- array / optional-string accessors ---
 
@@ -281,6 +290,9 @@ struct PlannerConfig {
     PlannerConfig& setHandoffTolV(float v) { handoff_tol_v = v; return *this; }
     PlannerConfig& setArriveVelTol(float v) { arrive_vel_tol = v; return *this; }
     PlannerConfig& setArriveDwell(float v) { arrive_dwell = v; return *this; }
+    PlannerConfig& setHeadingSource(HeadingSourceMode v) { heading_source = v; return *this; }
+    PlannerConfig& setHeadingDwellTol(float v) { heading_dwell_tol = v; return *this; }
+    PlannerConfig& setHeadingDwellRate(float v) { heading_dwell_rate = v; return *this; }
 };
 
 }  // namespace msg

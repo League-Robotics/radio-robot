@@ -204,6 +204,14 @@ bool decodeTelemetryMessage(const uint8_t* buf, size_t len, msg::Telemetry* out)
         out->exec_state = static_cast<msg::ExecutorState>(v);
         break;
       }
+      case 26: {
+        // heading_source (109-005, SUC-004).
+        if (wireType != WireType::kVarint) return false;
+        uint32_t v = 0;
+        if (!readVarintU32(buf, len, &pos, &v)) return false;
+        out->heading_source = static_cast<msg::HeadingSourceStatus>(v);
+        break;
+      }
       default:
         if (!WireRuntime::skipField(buf, len, &pos, wireType)) return false;
         break;

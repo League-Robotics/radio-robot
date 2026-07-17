@@ -51,6 +51,21 @@ enum StopKind {
   STOP_ROTATION = 8;
 }
 
+// HeadingSourceMode -- 109-005: per-robot override of App::HeadingSource's
+// own OTOS-first/encoder-fallback policy, baked at boot from the robot
+// JSON's `control.heading_source` key (gen_boot_config.py) into
+// PlannerConfig.heading_source below. AUTO is the normal policy (OTOS
+// whenever present/connected/fresh, encoder fallback after N stale cycles,
+// re-promote on recovery); the two FORCE_* values let a robot with a known-
+// bad OTOS mount (or a bench rig with no OTOS wired at all) skip the
+// fallback state machine entirely rather than trust a policy that will
+// never see a good OTOS reading in the first place.
+enum HeadingSourceMode {
+  HEADING_SOURCE_AUTO           = 0;
+  HEADING_SOURCE_FORCE_OTOS     = 1;
+  HEADING_SOURCE_FORCE_ENCODER  = 2;
+}
+
 // A single stop condition evaluated per tick.
 message StopCondition {
   StopKind kind   = 1;
@@ -310,4 +325,26 @@ message PlannerConfig {
   // issue's own field-15-31 list has no separate "arrive tolerance
   // position" entry, confirming field 8 is the intended reuse).
   float arrive_dwell = 31;
+
+  // --- 109-005: DISTANCE-mode arc/pivot heading-PD-cascade dwell gate ---
+  // (Motion::Executor's own rest-terminated-heading-command completion
+  // criterion, App::HeadingSource's per-robot override.)
+
+  // heading_source -- App::HeadingSource's per-robot policy override, baked
+  // from the robot JSON's `control.heading_source` (gen_boot_config.py).
+  // See HeadingSourceMode's own doc comment above.
+  HeadingSourceMode heading_source = 32;
+
+  // [rad] the heading-dwell completion gate's own angular-error half:
+  // |delta_heading - measured_heading| must fall below this AND
+  // heading_dwell_rate below before the hold timer (arrive_dwell, reused
+  // -- see that field's own comment) starts counting. 0.5 deg default
+  // (sprint-098's own proven turn-accuracy bar,
+  // .clasi/knowledge/heading-loop-solves-turn-accuracy.md).
+  float heading_dwell_tol = 33;
+
+  // [rad/s] the heading-dwell completion gate's own angular-RATE half:
+  // |measured heading rate| must fall below this AND heading_dwell_tol
+  // above before the hold timer starts counting. 1 deg/s default.
+  float heading_dwell_rate = 34;
 }

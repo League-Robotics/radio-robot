@@ -47,6 +47,7 @@ _TELEMETRY_SRC = _SOURCE_DIR / "app" / "telemetry.cpp"
 _DEADMAN_SRC = _SOURCE_DIR / "app" / "deadman.cpp"
 _DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
 _ODOMETRY_SRC = _SOURCE_DIR / "app" / "odometry.cpp"
+_HEADING_SOURCE_SRC = _SOURCE_DIR / "app" / "heading_source.cpp"
 _PILOT_SRC = _SOURCE_DIR / "app" / "pilot.cpp"
 # 109-003: robot_loop.h now includes app/pilot.h -> motion/executor.h ->
 # motion/jerk_trajectory.h -> vendor/ruckig.
@@ -98,6 +99,7 @@ def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
         _DEADMAN_SRC,
         _DRIVE_SRC,
         _ODOMETRY_SRC,
+        _HEADING_SOURCE_SRC,
         _PILOT_SRC,
         _JERK_TRAJECTORY_SRC,
         _EXECUTOR_SRC,

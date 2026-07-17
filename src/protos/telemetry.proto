@@ -102,6 +102,17 @@ enum ExecutorState {
   EXEC_STOPPING      = 3;
 }
 
+// HeadingSourceStatus -- 109-005, SUC-004: App::HeadingSource's REPORTED,
+// currently-active sensor for heading -- distinct from
+// PlannerConfig.HeadingSourceMode (planner.proto), which is the per-robot
+// POLICY override, not a live status. TestGUI's own non-gyro indicator is
+// driven directly off this field: HEADING_SOURCE_STATUS_ENCODER means OTOS
+// is NOT currently trusted for heading, regardless of why.
+enum HeadingSourceStatus {
+  HEADING_SOURCE_STATUS_OTOS     = 0;
+  HEADING_SOURCE_STATUS_ENCODER  = 1;
+}
+
 message Telemetry {
   // Ack ring FIRST (field 1): a repeated MESSAGE field is never packed --
   // each of the (max_count) ring entries costs its own tag+len, so this is
@@ -188,7 +199,13 @@ message Telemetry {
   //            wired live by ticket 004/005)
   //   bit 1 -- boot-ready transition (Preamble::done() first true)
   //   bit 2 -- a ConfigDelta was applied
-  //   bits 3-31 -- reserved for future events
+  //   bit 3 -- App::HeadingSource fallback/re-promotion TRANSITION this
+  //            cycle (109-005, SUC-004) -- fires the SAME cycle
+  //            heading_source below flips either direction (OTOS->encoder
+  //            OR encoder->OTOS); level-set like every other event bit here
+  //            (true only on the transition cycle itself, false otherwise),
+  //            not a sticky latch.
+  //   bits 4-31 -- reserved for future events
   //
   // This ticket declares the fields and the bit NUMBERING only -- actually
   // flipping a given bit at its real call site is ticket 005's own
@@ -219,6 +236,12 @@ message Telemetry {
   uint32 active_id = 24 [(max) = 65535];
 
   ExecutorState exec_state = 25;
+
+  // heading_source -- App::HeadingSource's currently-active sensor (109-005,
+  // SUC-004), polled every primary frame like exec_state above. TestGUI's
+  // non-gyro indicator reads this directly; event_bits bit 3 fires the one
+  // cycle this value actually changes.
+  HeadingSourceStatus heading_source = 26;
 }
 
 // TelemetrySecondary (NEW this ticket) -- the slower diagnostic frame:

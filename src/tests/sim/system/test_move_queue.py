@@ -45,6 +45,7 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "deadman.cpp",
     _SOURCE_DIR / "app" / "drive.cpp",
     _SOURCE_DIR / "app" / "odometry.cpp",
+    _SOURCE_DIR / "app" / "heading_source.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
     _SOURCE_DIR / "app" / "pilot.cpp",
 ]

@@ -19,8 +19,12 @@ the passive modules it drives:
 * `Odometry` (dead reckoning),
 * `Deadman` (the one staleness gate), 
 * `Preamble` (boot-time device detection), and
-* `Pilot` (109-003 — bridges `Motion::Executor` into the loop's cycle;
-  see §2's own subsection and `motion/DESIGN.md`).
+* `Pilot` (109-003/109-005 — bridges `Motion::Executor` into the loop's
+  cycle and computes the heading PD cascade on top of it; see §2's own
+  subsection and `motion/DESIGN.md`), and
+* `HeadingSource` (109-005 — decides which sensor is truth for heading
+  right now: OTOS-first, encoder-differential fallback; see §2's own
+  subsection).
 
 This is the seam that owns the robot's *timing* — every I2C
 transaction, every wait, every cadence decision lives here or is called from
@@ -47,21 +51,64 @@ frame, the secondary diagnostic frame, or (on a tie) alternate between them.
 polled once per cycle and gates `Drive::stop()`. See `robot_loop.cpp` for
 the exact call order — it is the schedule's single source of truth.
 
-**`Pilot` (109-003).** `Pilot::tick(now)` runs in the motorR settle block
-(after `processMessage()`/the deadman check, before `drive_.tick()`) and
-samples `Motion::Executor`, staging the result onto `Drive` via
-`setTwist()` whenever the executor is not `kIdle` — while `kIdle` it does
-nothing at all, so a same-cycle raw `TWIST` (which always calls
-`Pilot::flush()` first) is never immediately overwritten. `Pilot::plan()`
-runs in the trailing `kPace` block (after `odom_.integrate()`) and performs
-at most one `JerkTrajectory` solve per cycle (`Motion::Executor::plan()`'s
-own budget). `RobotLoop::handleMove()` decodes a `Move` command
-(`Comms::pump()`/`processMessage()`, same dispatch switch as
-`TWIST`/`CONFIG`/`STOP`) into a `Motion::Cmd` and calls
+**`Pilot` (109-003/109-005).** `Pilot::tick(now)` runs in the motorR settle
+block (after `processMessage()`/the deadman check, before `drive_.tick()`)
+and samples `HeadingSource` (see below) and `Motion::Executor`, staging the
+result onto `Drive` via `setTwist()` whenever the executor is not `kIdle` —
+while `kIdle` it does nothing at all, so a same-cycle raw `TWIST` (which
+always calls `Pilot::flush()` first) is never immediately overwritten.
+`Pilot::plan()` runs in the trailing `kPace` block (after
+`odom_.integrate()`) and performs at most one `JerkTrajectory` solve per
+cycle (`Motion::Executor::plan()`'s own budget). `RobotLoop::handleMove()`
+decodes a `Move` command (`Comms::pump()`/`processMessage()`, same dispatch
+switch as `TWIST`/`CONFIG`/`STOP`) into a `Motion::Cmd` and calls
 `Pilot::enqueue()`; `RobotLoop::drainPilotEvents()` drains
 `Motion::Executor`'s completion-event FIFO into `Telemetry`'s ack ring
 every cycle. See `motion/DESIGN.md` §2b for the executor's own queue/state-
 machine contract.
+
+**The heading PD cascade lives in `Pilot::tick()`, not `Executor`
+(109-005).** `Motion::Executor::tick()` returns a `Twist` carrying the
+feedforward rate (`omega`/`omegaDes`, meaningful as feedforward-ONLY when
+`headingActive` is true), the arc/pivot's own progressive heading reference
+(`thetaRef`), and the measured heading rebaselined to the command's own
+activation instant (`thetaMeas`, computed from whatever `Pilot` passed into
+`tick()` — see below). `Pilot::tick()` adds `heading_kp*(thetaRef -
+thetaMeas) + heading_kd*(omegaDes - omegaMeasEst)` on top of `omega` when
+`headingActive` is true — `omegaMeasEst` is `Pilot`'s OWN finite-difference
+estimate of `thetaMeas`'s rate across consecutive `tick()` calls, kept
+separately from `Executor`'s own internal dwell-rate estimate (same method,
+two independent state variables, serving two different decisions — "what
+should the PD command right now" vs. "is this command done"). This split
+(gains/arithmetic in `Pilot`, plan/reference/measurement-relative-to-
+activation in `Executor`) matches sprint.md's own SUC-002 flow ("Each
+cycle, Pilot::tick() computes omega_cmd = omega_ff + heading_kp*(...)") and
+keeps every sensor type and every gain out of `motion/` entirely — see
+`motion/DESIGN.md` §2c for the executor-side half.
+
+**`HeadingSource` (109-005).** A passive reader, no bus traffic of its
+own — `sample()` reads `Devices::Otos::pose()`/`poseFresh()`/`connected()`/
+`present()` and `Devices::NezhaMotor::position()` (both leaves), all
+already refreshed elsewhere in THIS SAME cycle by `applyOtosSample()`/the
+motors' own `tick()` calls, never issuing a read itself. Policy: OTOS
+whenever `present() && connected() && poseFresh()`; after
+`kFallbackStaleCycles` (5, v1/not-bench-tuned) CONSECUTIVE cycles without
+that, demote to the encoder-differential formula `(right.position() -
+left.position()) / trackWidth`; re-promote to OTOS on the very next cycle
+it is usable again (no analogous hysteresis on the recovery side).
+`msg::PlannerConfig.heading_source` (`HeadingSourceMode`) overrides this
+per-robot (`FORCE_OTOS`/`FORCE_ENCODER` skip the state machine entirely —
+for a robot with a known-bad OTOS mount, or a bench rig with none wired at
+all) — baked from the robot JSON's `control.heading_source` via
+`gen_boot_config.py`. `Pilot::tick()` calls `sample()` every cycle
+(`kIdle` included, so a fallback that happens between commands is still
+visible) and forwards `heading()` into `Executor::tick()`'s own
+`measuredHeadingAbs` parameter. Visibility: `Telemetry`'s primary frame
+gains `headingSource` (mirrors `telemetry.proto`'s `HeadingSourceStatus`);
+`event_bits` bit 3 (`kEventHeadingFallback`) fires the one cycle the active
+source flips either direction — see `Pilot::headingSourceIsOtos()`/
+`headingSourceFellBack()`/`headingSourceRecovered()` and
+`RobotLoop::updateTlm()`.
 
 ## 3. Constraints and Invariants
 
@@ -271,11 +318,16 @@ called with real elapsed time between calls).
   never blocks; `done()` is true once every device has reached a terminal
   state (present-and-ready or confirmed-absent).
 - **`Pilot::enqueue(cmd)`/`flush()`/`plan()`/`tick(now)`/`popEvent(out)`/
-  `queueDepth()`/`activeId()`/`state()`** (109-003): see this file's own
-  §2 "`Pilot` (109-003)" subsection for the cycle-placement contract.
-  `Telemetry`'s primary frame gains `queueDepth`/`activeId`/`execState`
-  (mirroring `telemetry.proto`'s `queue_depth`/`active_id`/`exec_state`),
-  populated by `RobotLoop::updateTlm()` from these same accessors.
+  `queueDepth()`/`activeId()`/`state()`/`configureHeading(config)`**
+  (109-003/109-005): see this file's own §2 "`Pilot`" subsection for the
+  cycle-placement contract. `Telemetry`'s primary frame gains
+  `queueDepth`/`activeId`/`execState`/`headingSource` (mirroring
+  `telemetry.proto`'s `queue_depth`/`active_id`/`exec_state`/
+  `heading_source`), populated by `RobotLoop::updateTlm()` from `Pilot`'s
+  own accessors (the last also from `Pilot::headingSourceIsOtos()`).
+- **`HeadingSource::configure(config)`/`sample()`/`heading()`/
+  `usingOtos()`/`fellBackThisSample()`/`recoveredThisSample()`**
+  (109-005): see this file's own §2 "`HeadingSource`" subsection.
 
 ### Consumes
 
@@ -293,7 +345,7 @@ called with real elapsed time between calls).
   [com/DESIGN.md](../com/DESIGN.md).
 - **`Motion::Executor`, `Motion::Cmd`, `Motion::fromMove()`** (109-003) —
   the queue/state-machine `Pilot` bridges into the loop's cycle; see
-  [motion/DESIGN.md](../motion/DESIGN.md) §2b.
+  [motion/DESIGN.md](../motion/DESIGN.md) §2b/§2c.
 
 ## 6. Open Questions / Known Limitations
 
@@ -309,3 +361,31 @@ called with real elapsed time between calls).
   no binary command arms it from the wire today.
 - **`kFaultI2CNak` and `kEventConfigApplied` are declared but unwired** —
   reserved bit numbers with no live producer yet.
+- **`HeadingSource`'s `kFallbackStaleCycles` (5) is a v1, NOT-bench-tuned
+  constant** — a conservative guess ("a few tenths of a second"), flagged
+  for revision once a real bench arc/pivot sweep exists (ticket 009's own
+  gate). Same posture as `Motion::Executor`'s own `kTerminalDecelWindowS`/
+  `kStopTimeBackstopFactor` (`motion/DESIGN.md` §2c) and `kDeadTime`
+  (§6 below).
+- **`kDeadTime` (divergence-replan dead-time projection, ticket 006's own
+  consumer) is re-derived, not carried over from the old 120ms/20ms-tick
+  value, but NOT freshly bench-characterized this ticket.** Ticket 005's
+  own acceptance criterion calls for a fresh stand characterization; the
+  USB deploy path was confirmed broken this session (one `mbdeploy probe`
+  attempt, per `.claude/rules/hardware-bench-testing.md`'s own escalation
+  path — see this ticket's completion notes for the exact failure/output).
+  In its place, `kDeadTime` is set to 130ms — the midpoint of the ALREADY
+  bench-measured `motor_lag` figure sprint 100's own
+  `architecture-update.md` records ("120-140ms" — a real-time physical
+  actuation-transport delay, independently re-derived from THAT bench
+  session, not a tick-count artifact of the old 20ms cycle) — rather than
+  hand-picked by scaling the OLD constant's own tick count onto the new
+  40ms cycle (explicitly disallowed by ticket 005's own semantics item 6:
+  "do not hand-pick a new constant from the old one"). This value has NO
+  live call site yet (ticket 006 is the first consumer, via
+  `retarget()`/`reanchor()`'s own divergence triggers) — it is declared
+  (`Motion::kDeadTime`, `motion/executor.h`) and derived here so ticket 006
+  does not have to re-derive it from scratch, and is flagged for a real
+  fresh bench characterization (not a reuse of a DIFFERENT sprint's
+  measurement, however well-reasoned) once USB deploy is fixed, per this
+  ticket's own acceptance criterion.

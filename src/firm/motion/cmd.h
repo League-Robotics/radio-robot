@@ -35,6 +35,16 @@ struct Cmd {
   bool isDegenerate() const {
     return distance == 0.0f && deltaHeading == 0.0f && time <= 0.0f;
   }
+
+  // isPivot -- 109-005: DISTANCE mode (not TIMED, not degenerate -- both
+  // already ruled out by the classification order in Executor::enqueue())
+  // with zero linear distance: the rotational channel is the dominant (and
+  // only planned) channel, driven directly to `deltaHeading`. The
+  // complementary DISTANCE case (`distance != 0`, an arc or a straight leg)
+  // has no equivalent named helper -- Executor::activate() just tests
+  // `!isTimed() && !isPivot()` inline, since "arc" isn't a third thing to
+  // classify, just "not a pivot".
+  bool isPivot() const { return !isTimed() && distance == 0.0f; }
 };
 
 inline Cmd fromMove(const msg::Move& move) {

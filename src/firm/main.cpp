@@ -9,6 +9,7 @@
 #include "app/comms.h"
 #include "app/deadman.h"
 #include "app/drive.h"
+#include "app/heading_source.h"
 #include "app/odometry.h"
 #include "app/pilot.h"
 #include "app/preamble.h"
@@ -120,12 +121,17 @@ int main() {
   static App::Odometry odom(motorL, motorR, drivetrainConfig.trackwidth);
   static App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
-  // Motion::Executor + App::Pilot (109-003) -- configured from the same
-  // boot PlannerConfig defaults the pre-rebuild segment executor used
-  // (Config::defaultPlannerConfig(), config/boot_config.h).
+  // Motion::Executor + App::HeadingSource + App::Pilot (109-003/109-005) --
+  // configured from the same boot PlannerConfig defaults the pre-rebuild
+  // segment executor used (Config::defaultPlannerConfig(),
+  // config/boot_config.h).
+  msg::PlannerConfig plannerConfig = Config::defaultPlannerConfig();
   static Motion::Executor executor;
-  executor.configure(Config::defaultPlannerConfig());
-  static App::Pilot pilot(executor, drive);
+  executor.configure(plannerConfig);
+  static App::HeadingSource headingSource(otos, motorL, motorR, drivetrainConfig.trackwidth);
+  headingSource.configure(plannerConfig);
+  static App::Pilot pilot(executor, drive, headingSource, odom);
+  pilot.configureHeading(plannerConfig);
 
   // Boot loop + main cycle -- takes every leaf/app module above by
   // reference plus the Clock/Sleeper time seam. run() never returns.

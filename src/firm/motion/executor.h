@@ -4,63 +4,118 @@
 // events; calls into Motion::JerkTrajectory for the actual solve, never
 // does the solve math itself (jerk_trajectory.h's own boundary).
 //
-// 109-003 scope -- TIMED mode + replace only. This is the sprint's own
-// staged scope (sprint.md's ticket table): TIMED (`Move.time > 0`) is the
-// teleop primitive and is implemented end to end here (both linear and
-// rotational channels driven directly and independently by
-// `Cmd::vMax`/`Cmd::omega` -- unlike DISTANCE mode's dominant/slaved-
-// channel coupling, TIMED mode has no heading reference to slave against,
-// so both channels just each track their own commanded velocity). DISTANCE
-// mode (`Move.time <= 0`, non-degenerate) is DECLARED on the wire
-// (envelope.proto's Move message) but this ticket does not implement
-// dominant-channel arc planning or the heading PD cascade for it --
-// enqueue() returns EnqueueOutcome::kUnimplemented for a DISTANCE-mode
-// Move rather than half-implement a mode ticket 005 replaces wholesale
-// (dead-time re-derivation, heading reference, dwell completion all land
-// together there). A degenerate Move (Cmd::isDegenerate()) is classified
-// BEFORE the TIMED/DISTANCE branch and never reaches either.
+// 109-003 scope -- TIMED mode + replace only (see that ticket's own history
+// below, kept for provenance). 109-005 scope -- DISTANCE mode: dominant-
+// channel arc/pivot planning, the heading-reference/feedforward the arc
+// ratio implies, dwell completion, and encoder-relative distance completion
+// with a same-sign overshoot carry. Both modes share ONE state machine and
+// ONE ring -- there is no separate "distance executor".
 //
-// -- Deadline-driven RAMP_TO_REST (TIMED mode's "ramp down to finish at
-// the deadline") --
-// A TIMED command's own `time` is a total-duration deadline, ramps
-// included (sprint.md's own stakeholder-decision note). Rather than
-// pre-computing an exact three-segment (ramp-up/hold/ramp-down) plan up
-// front, this executor treats "ramp to rest at the deadline" as ONE MORE
-// reason to enter the SAME RAMP_TO_REST state the general state machine
-// already has for "queue ran empty at speed" (sprint.md's own state-
-// machine section) -- every cycle, `tick()` compares the command's
-// remaining time against an ANALYTIC estimate of how long this channel's
-// own configured decel would take from its current sampled velocity
-// (`estimateStopDuration()` below); once remaining time is at or below
-// that estimate, both channels get a fresh `solveToVelocity(0, ...)`
-// request and the state flips to RAMP_TO_REST. The estimate is a v1
-// approximation (trapezoidal decel time `|v|/aDecel`, plus one jerk-ramp
-// term `aDecel/jerk` for the S-curve case) -- it decides WHEN to trigger
-// the real (exact, jerk-limited) decel solve, not what shape that decel
-// takes; Ruckig's own solve is what actually executes it. No acceptance
-// criterion in this ticket's testing plan asserts exact-deadline landing
-// precision (that is a natural follow-on refinement, not a defect).
+// -- Three Cmd modes (Executor::Mode below, decided once at activate()) --
+//   kTimed -- Cmd::isTimed() (time > 0): both channels driven directly and
+//     independently by Cmd::vMax/Cmd::omega (109-003's own scope, unchanged
+//     by this ticket).
+//   kPivot -- Cmd::isPivot() (distance == 0, not timed, not degenerate): the
+//     ROTATIONAL channel is the only planned channel, solved directly to
+//     `deltaHeading` (JerkTrajectory::solveToRest()) -- the linear channel is
+//     never solved at all (JerkTrajectory::sample() on an un-calculate()'d
+//     instance safely returns a zero State{}, so `v` is 0 throughout with no
+//     special-casing needed here).
+//   kArc -- distance != 0, not timed: the LINEAR channel is the dominant,
+//     planned channel (solved to `effectiveDistance_`, see the overshoot-
+//     carry note below); the rotational channel is never solved -- it is
+//     SLAVED every tick to the linear channel's own sampled (position,
+//     velocity) via the arc ratio `headingRatioPerMm_ = deltaHeading /
+//     distance` (computed ONCE at activation from the Cmd's own, un-adjusted
+//     distance -- the arc's curvature is a property of the REQUESTED
+//     geometry, independent of exactly how far the overshoot carry nudges
+//     the effective target): `thetaRef(t) = headingRatioPerMm_ *
+//     linear.position(t)`, `omegaFf(t) = headingRatioPerMm_ *
+//     linear.velocity(t)`. `deltaHeading == 0` (a plain straight leg) is
+//     just the `headingRatioPerMm_ == 0` special case of the same formula --
+//     no separate branch.
 //
-// -- Solve budget --
-// `plan()` performs AT MOST ONE JerkTrajectory solve per call (the
-// `kPace`-block budget, per src/firm/DESIGN.md Sec 3 and sprint.md's own
-// cycle-placement table) -- a fresh command that needs BOTH channels
-// solved (the common case: TIMED commands almost always carry a nonzero
-// v_max and/or omega) takes two `plan()` calls, i.e. ~2 loop cycles
-// (~80ms), to become fully planned -- explicitly called out as acceptable
-// in sprint.md ("a fresh command is ready ~2 cycles/80ms after enqueue").
-// `tick()` never solves -- it is sample-only (`JerkTrajectory::sample()`),
-// matching `App::Pilot::tick()`'s own motor-settle-block placement.
+// -- Heading feedforward vs. the heading PD cascade --
+// This class computes and exposes the feedforward half (`omegaFf`/
+// `thetaRef` in Twist below) and the MEASURED-heading bookkeeping needed to
+// close the loop (`thetaMeas`, the command-relative measured heading), but
+// the PD CORRECTION TERM ITSELF (`heading_kp*(thetaRef-thetaMeas) +
+// heading_kd*(omegaDes-omegaMeas)`) is computed by App::Pilot::tick(), not
+// here -- sprint.md's own SUC-002 flow assigns that arithmetic to Pilot
+// explicitly ("Each cycle, Pilot::tick() computes omega_cmd = omega_ff +
+// heading_kp*(...)"). This keeps every heading GAIN (`heading_kp`/
+// `heading_kd`) and every MEASUREMENT source (App::HeadingSource) entirely
+// out of this leaf -- Executor stays a pure planner or msg::PlannerConfig
+// and its own remembered command-relative state, never touching
+// Devices::Otos/NezhaMotor or a sensor-fusion policy. Twist.omega therefore
+// means TWO different things depending on mode: for kTimed and for a
+// non-heading-bearing kArc leg (`deltaHeading == 0`), it is the FINAL
+// commanded rate; for a heading-bearing kArc/kPivot command with
+// `headingActive` true, it is `omegaFf` ONLY -- Pilot adds the PD term on
+// top before calling Drive::setTwist(). This is a deliberate overload
+// (documented here, not a bug) -- see Twist's own field comments.
 //
-// -- Completion events --
-// Ride Telemetry's existing depth-3 ack ring (telemetry.proto's AckStatus
-// DONE/TRIVIAL/SUPERSEDED/FLUSHED/TIMEOUT/SOLVE_FAIL additions) rather
-// than the orphaned `messages/event.h` -- see telemetry.proto's own doc
-// comment for the full resolution of sprint.md's Open Question 3. This
-// class holds its own small internal FIFO (popEvent()) so `motion/` never
-// reaches into `app/`'s Telemetry directly (devices/app-layer boundary,
-// src/firm/DESIGN.md Sec 2 dependency diagram) -- App::Pilot/RobotLoop
-// drains it into the wire.
+// -- Terminal-decel PD gate --
+// `headingActive` is ALSO false once the command has ALREADY satisfied the
+// dwell gate's own tolerance/rate test (`headingDwellTol_`/
+// `headingDwellRate_` -- the SAME test `tick()`'s completion logic uses),
+// even for a heading-bearing command still technically "active" (not yet
+// dwell-held long enough to complete, or not terminal so no dwell needed at
+// all) -- "gated off during terminal decel" (sprint.md/ticket 005's own
+// semantics item 3), read as an ERROR-based condition ("already landed,
+// stop nudging it") rather than a fixed time-before-planned-completion
+// window. A time-based window was this ticket's OWN first implementation
+// and was caught by this ticket's own sim system test
+// (test_heading_source.py): it disabled the PD correction during the final
+// portion of the PLANNED trajectory's own duration regardless of the REAL
+// plant's measured error at that point, so a real (non-ideal, laggy) plant
+// that was still meaningfully off target when the window opened had its
+// correction authority pulled right when it was needed most, latching a
+// several-degree overshoot the PD was never given the chance to close. The
+// error-based gate closes exactly the failure mode
+// `.clasi/knowledge/d-drive-terminal-instability.md` documents (a commanded
+// REVERSAL right at an ALREADY-GOOD landing) without also disabling
+// correction while genuinely still far from the target.
+//
+// -- Distance completion + same-sign overshoot carry --
+// "Encoder-relative travel" (ticket 005's own wording) means App::Pilot
+// accumulates App::Odometry::lastDistance() every tick while a command is
+// active and passes the running total into THIS class's own tick() call
+// (`measuredDistanceDelta` -- Executor holds the accumulator
+// (`measuredPathSinceActivation_`), not Pilot, so completion stays this
+// class's own decision, matching the file's boundary comment: "calls into
+// JerkTrajectory for the actual solve, never does the solve math itself" --
+// Executor still gets to decide WHEN a command is done, from measured
+// inputs Pilot merely samples and hands over). A kArc command (distance !=
+// 0) completes its DISTANCE half once `|measuredPathSinceActivation_| >=
+// |effectiveDistance_|`; the signed remainder (`measuredPathSinceActivation_
+// - effectiveDistance_`) becomes `pendingOvershoot_`, consumed (added into
+// `effectiveDistance_ = cmd.distance - pendingOvershoot_`) by the VERY NEXT
+// activation IFF that next command is itself a same-sign kArc command --
+// any other next command (kTimed, kPivot, opposite-sign kArc) silently
+// drops the pending carry rather than applying it somewhere it doesn't
+// belong. This is single-command bookkeeping only, NOT the full boundary-
+// velocity carry (ticket 006's own scope) -- there is no attempt here to
+// avoid decelerating to rest at the shared boundary, only to not silently
+// lose a few mm of over/under-travel at a queue boundary.
+//
+// -- Dwell completion (heading-bearing commands) --
+// A REST-TERMINATED heading-bearing command (this is the LAST command in
+// the queue -- `queueCount_ == 0` at the moment its own distance/pivot
+// criterion is met) must additionally hold `|deltaHeading - thetaMeas| <
+// heading_dwell_tol` AND `|thetaRate| < heading_dwell_rate`
+// (msg::PlannerConfig, ticket 005's own new fields) for `arrive_dwell`
+// seconds (REUSED from the existing terminal-completion dwell field --
+// ticket 005's own semantics item 4 numeric match: 150ms is both the
+// existing arrive_dwell default AND the ticket's own dwell-hold spec) before
+// completing DONE; a `STOP_TIME` backstop (`stopTimeBackstopMs()`, a
+// generous multiple of the dominant channel's own solved duration) forces
+// completion regardless, so a persistent oscillation or a measurement fault
+// can never wedge the executor open forever. A CHAINED (non-terminal --
+// `queueCount_ > 0`) heading-bearing command skips the hold-timer/rate gate
+// entirely and completes on the tolerance test alone (no dwell) --
+// "chained... use encoder/OTOS-accurate handoff without a dwell" (ticket
+// 005's own semantics item 4).
 #pragma once
 
 #include <cstdint>
@@ -95,31 +150,83 @@ struct CompletionEvent {
 // happened to a PREVIOUSLY admitted command" (acked against that command's
 // own Move.id) and can arrive many cycles later.
 enum class EnqueueOutcome : uint8_t {
-  kAccepted,      // activated immediately or appended to the ring
-  kReplaced,      // replaced the ring tail or retargeted the active command
-  kFull,          // ring already at kQueueDepth; plan untouched
-  kTrivial,       // degenerate Move -- never queued
-  kUnimplemented  // DISTANCE mode -- not implemented this ticket (005)
+  kAccepted,  // activated immediately or appended to the ring
+  kReplaced,  // replaced the ring tail or retargeted the active command
+  kFull,      // ring already at kQueueDepth; plan untouched
+  kTrivial,   // degenerate Move -- never queued
 };
 
 constexpr uint8_t kQueueDepth = 8;
 constexpr uint8_t kEventRingDepth = 8;
 
+// kDeadTime -- [ms] the divergence-replan dead-time projection ticket 006's
+// own retarget()/reanchor() triggers will use to project "where should the
+// plan already be" forward past a measurement's own transport lag. Re-
+// derived at the 40ms cycle (109-005) -- see app/DESIGN.md's own "kDeadTime"
+// Open-Questions entry for the full derivation: NOT hand-picked by scaling
+// the old 120ms/20ms-tick constant onto the new cycle (explicitly
+// disallowed by this ticket's own semantics), but also NOT a fresh bench
+// characterization (the USB deploy path was confirmed broken this session
+// -- one `mbdeploy probe` attempt, per hardware-bench-testing.md's own
+// escalation path). Set to 130ms -- the midpoint of sprint 100's own
+// ALREADY bench-measured `motor_lag` figure (120-140ms,
+// architecture-update.md), a real-time physical actuation-transport delay
+// independent of cycle period, not a tick-count artifact. No live call
+// site yet -- declared here so ticket 006 does not have to re-derive it,
+// flagged for a real fresh bench characterization once USB deploy is
+// fixed.
+constexpr uint32_t kDeadTime = 130;  // [ms]
+
 class Executor {
  public:
   struct Twist {
-    float v = 0.0f;      // [mm/s]
+    float v = 0.0f;      // [mm/s] linear velocity to command this cycle
+    // omega -- see this file's own "Heading feedforward vs. the heading PD
+    // cascade" comment for the mode-dependent meaning: FINAL commanded rate
+    // unless headingActive is true, in which case this is omegaFf ONLY and
+    // the caller (App::Pilot) must add the PD term.
     float omega = 0.0f;  // [rad/s]
+
+    // headingActive -- true iff the caller should compute and add the
+    // heading PD term this cycle (a heading-bearing kArc/kPivot command,
+    // NOT in its terminal-decel window). false for kTimed, for a non-
+    // heading-bearing kArc leg, and during terminal decel.
+    bool headingActive = false;
+
+    // thetaRef/thetaMeas -- both RELATIVE to this command's own activation
+    // (its own theta==0 origin), same units/frame, meaningful only when
+    // headingActive (or, for thetaMeas, whenever a heading-bearing command
+    // is active at all, active-decel-window included -- Pilot's own
+    // finite-difference rate estimate needs a continuous thetaMeas
+    // sequence, not one that goes stale the instant headingActive flips
+    // off). thetaRef is the arc/pivot's own progressive desired heading
+    // (headingRatioPerMm_ * linear.position(t) for kArc, rotational.
+    // position(t) for kPivot); thetaMeas is `measuredHeadingAbs -
+    // headingBaselineAbs_` (wrapped), where measuredHeadingAbs is this
+    // tick()'s own caller-supplied App::HeadingSource reading.
+    float thetaRef = 0.0f;   // [rad]
+    float thetaMeas = 0.0f;  // [rad]
+
+    // omegaDes -- the heading PD law's own "omega_des" term (see this
+    // file's own header comment for the full formula) -- for a heading-
+    // bearing command this equals omegaFf (the SAME feedforward rate
+    // driving `omega` above), exposed under its own name for readability at
+    // the Pilot call site, which needs it paired with a separately-computed
+    // omegaMeas (a measured-heading finite difference Pilot itself keeps,
+    // since it spans TWO ticks and Executor's own tick() call is stateless
+    // from Pilot's point of view). 0 when !headingActive.
+    float omegaDes = 0.0f;  // [rad/s]
   };
 
   // configure -- stores both channels' own limits (forwarded to the two
   // owned JerkTrajectory instances' configure()) plus the decel/jerk pair
-  // this class's own estimateStopDuration() scheduling heuristic needs.
+  // this class's own estimateStopDuration() scheduling heuristic needs, and
+  // (109-005) the heading-dwell gate's own tolerance/rate/hold-time fields.
   // Must be called before the first enqueue().
   void configure(const msg::PlannerConfig& config);
 
   // enqueue -- classify and admit one Cmd. See this class's own doc
-  // comment for the degenerate/DISTANCE/TIMED/replace decision tree.
+  // comment for the degenerate/kTimed/kArc/kPivot/replace decision tree.
   EnqueueOutcome enqueue(const Cmd& cmd);
 
   // flush -- TWIST/STOP preemption (App::Pilot::flush()). Empties the ring
@@ -129,15 +236,28 @@ class Executor {
   void flush();
 
   // plan -- at most one JerkTrajectory solve this call. See this class's
-  // own "Solve budget" doc comment.
+  // own "Solve budget" doc comment (kept from 109-003, unchanged in shape:
+  // still exactly one solveToVelocity()/solveToRest() call per plan(),
+  // just dispatched to the right one for this command's own Mode).
   void plan();
 
   // tick -- sample-only: advances the active command's own elapsed time by
-  // dtMs, samples both channels, evaluates the RAMP_TO_REST deadline
-  // trigger and RAMP_TO_REST completion, and returns the twist this
-  // cycle's Drive::setTwist() call should stage ({0,0} while kIdle). Never
-  // solves, never touches the bus.
-  Twist tick(uint32_t dtMs);  // [ms]
+  // dtMs, samples the planned channel(s), evaluates completion (TIMED
+  // deadline/RAMP_TO_REST, or 109-005's DISTANCE/dwell criteria), and
+  // returns the twist this cycle's Drive::setTwist() call should stage
+  // ({0,0} while kIdle). Never solves, never touches the bus.
+  //
+  // measuredDistanceDelta -- App::Odometry::lastDistance() THIS cycle
+  // ([mm], encoder-relative, signed) -- accumulated internally into
+  // measuredPathSinceActivation_ for the DISTANCE-completion criterion.
+  // measuredHeadingAbs -- App::HeadingSource::heading() THIS cycle ([rad],
+  // absolute) -- rebaselined internally to this command's own activation
+  // instant to produce Twist::thetaMeas. Both are harmless to pass even
+  // when the active command doesn't use them (kTimed ignores both) --
+  // defaulted to 0 so 109-003's own kTimed-only test callers (which never
+  // needed either) keep compiling unchanged.
+  Twist tick(uint32_t dtMs, float measuredDistanceDelta = 0.0f,
+             float measuredHeadingAbs = 0.0f);  // [ms] [mm] [rad]
 
   // popEvent -- drains one pending completion event, oldest first. Returns
   // false (out untouched) when none pending.
@@ -148,13 +268,20 @@ class Executor {
   State state() const { return state_; }
 
  private:
+  // Mode -- which of the three shapes (file header) the ACTIVE command is.
+  // Decided once, in activate(), from the Cmd's own isTimed()/isPivot().
+  enum class Mode : uint8_t { kTimed, kArc, kPivot };
+
   // activate -- makes cmd the active command. retarget=false is a fresh
   // start-from-rest activation (JerkTrajectory::reset() on both channels);
   // retarget=true is a replace-while-active in-place retarget (channels
   // keep their own remembered last-sample seed -- see jerk_trajectory.h's
   // seeding contract -- so the new target is approached smoothly, never as
-  // an instantaneous step). Either way, requests fresh solves for both
-  // channels (serviced by the next one or two plan() calls).
+  // an instantaneous step). Either way, requests fresh solve(s) for
+  // whichever channel(s) this Cmd's own Mode needs (serviced by the next
+  // one or two plan() calls) and resets every piece of per-activation
+  // bookkeeping (elapsed clocks, the measured-progress accumulator, the
+  // heading baseline, the dwell hold timer).
   void activate(const Cmd& cmd, bool retarget);
 
   // activateNextOrIdle -- pops the ring's head (if any) and activates it
@@ -162,11 +289,26 @@ class Executor {
   // kIdle. Called when the active command reaches its own DONE criterion.
   void activateNextOrIdle();
 
+  // completeActive -- shared tail for every completion path (TIMED
+  // deadline/RAMP_TO_REST rest, DISTANCE/dwell criteria, solve failure):
+  // stages pendingOvershoot_ (kArc only -- see this file's own "Distance
+  // completion" comment; a no-op for kTimed/kPivot), pushes the completion
+  // event, and calls activateNextOrIdle().
+  void completeActive(CompletionStatus status);
+
+  // stopTimeBackstopMs -- 109-005's own STOP_TIME backstop for a dwell-
+  // gated heading command: a generous multiple of the dominant channel's
+  // own solved duration, so a persistent oscillation or a stuck measurement
+  // can never wedge the executor open forever. See this file's own "Dwell
+  // completion" comment.
+  uint32_t stopTimeBackstopMs() const;  // [ms]
+
   void pushEvent(uint32_t id, CompletionStatus status);
 
   Cmd active_;
   bool activeValid_ = false;
   uint32_t activeElapsedMs_ = 0;  // [ms] since this active command's own activate()
+  Mode mode_ = Mode::kTimed;
 
   Cmd ring_[kQueueDepth]{};
   uint8_t queueCount_ = 0;
@@ -178,8 +320,9 @@ class Executor {
 
   bool needLinearSolve_ = false;
   bool needRotationalSolve_ = false;
-  float pendingLinearTarget_ = 0.0f;      // [mm/s]
-  float pendingRotationalTarget_ = 0.0f;  // [rad/s]
+  float pendingLinearTarget_ = 0.0f;      // [mm/s] kTimed's own solveToVelocity() target
+  float pendingRotationalTarget_ = 0.0f;  // [rad/s] kTimed's own solveToVelocity() target
+  float pendingLinearVMax_ = 0.0f;        // [mm/s] kArc's own solveToRest() per-call ceiling (Cmd::vMax)
 
   // Elapsed time since EACH channel's own last successful solve -- NOT
   // since activation. JerkTrajectory::sample()'s own contract ("elapsed
@@ -203,6 +346,21 @@ class Executor {
   float jerkRotational_ = 0.0f;    // [rad/s^3]
   float linearCeiling_ = 0.0f;     // [mm/s]
   float rotationalCeiling_ = 0.0f; // [rad/s]
+
+  // -- 109-005: DISTANCE-mode (kArc/kPivot) bookkeeping --
+  float headingRatioPerMm_ = 0.0f;  // [rad/mm] deltaHeading/distance, kArc only, set once at activate()
+  float effectiveDistance_ = 0.0f;  // [mm] cmd.distance adjusted by a carried-in same-sign overshoot
+  float measuredPathSinceActivation_ = 0.0f;  // [mm] signed, App::Odometry::lastDistance() accumulated
+  float pendingOvershoot_ = 0.0f;   // [mm] signed carry -- see this file's own "Distance completion" comment
+
+  bool headingBaselineSet_ = false;
+  float headingBaselineAbs_ = 0.0f;  // [rad] measuredHeadingAbs sampled on this command's own first tick()
+  float prevThetaMeasRel_ = 0.0f;    // [rad] previous tick()'s thetaMeas -- this class's own dwell-rate estimate
+  uint32_t dwellHeldMs_ = 0;         // [ms] how long the dwell gate has held continuously
+
+  float headingDwellTol_ = 0.0f;   // [rad] msg::PlannerConfig.heading_dwell_tol
+  float headingDwellRate_ = 0.0f;  // [rad/s] msg::PlannerConfig.heading_dwell_rate
+  float headingDwellHoldS_ = 0.0f; // [s] msg::PlannerConfig.arrive_dwell (REUSED, see file header)
 
   CompletionEvent events_[kEventRingDepth]{};
   uint8_t eventCount_ = 0;

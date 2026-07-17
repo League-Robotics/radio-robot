@@ -87,6 +87,7 @@ set(APP_SOURCES
     "${SOURCE_DIR}/app/comms.cpp"
     "${SOURCE_DIR}/app/deadman.cpp"
     "${SOURCE_DIR}/app/drive.cpp"
+    "${SOURCE_DIR}/app/heading_source.cpp"
     "${SOURCE_DIR}/app/odometry.cpp"
     "${SOURCE_DIR}/app/pilot.cpp"
     "${SOURCE_DIR}/app/preamble.cpp"

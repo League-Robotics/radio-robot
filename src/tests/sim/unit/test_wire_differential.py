@@ -155,6 +155,8 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
         "fault_bits": 21, "event_bits": 22,
         # 109-003: Motion::Executor visibility.
         "queue_depth": 23, "active_id": 24, "exec_state": 25,
+        # 109-005: App::HeadingSource visibility.
+        "heading_source": 26,
     }
     actual_telemetry_numbers = {f.name: f.number for f in pb_telemetry.Telemetry.DESCRIPTOR.fields}
     assert actual_telemetry_numbers == expected_telemetry_numbers

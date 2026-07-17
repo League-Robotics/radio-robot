@@ -151,6 +151,16 @@ void RobotLoop::updateTlm() {
   frame_.activeId = pilot_.activeId();
   frame_.execState = toWireExecState(pilot_.state());
 
+  // App::HeadingSource visibility (109-005, SUC-004) -- polled every
+  // primary frame like exec_state above; event_bits bit 3 fires the ONE
+  // cycle the active source actually flips (level-set, not sticky --
+  // telemetry.proto's own doc comment).
+  frame_.headingSource = pilot_.headingSourceIsOtos()
+                             ? msg::HeadingSourceStatus::HEADING_SOURCE_STATUS_OTOS
+                             : msg::HeadingSourceStatus::HEADING_SOURCE_STATUS_ENCODER;
+  tlm_.setEvent(kEventHeadingFallback,
+                pilot_.headingSourceFellBack() || pilot_.headingSourceRecovered());
+
   tlm_.setFault(kFaultI2CSafetyNet, bus_.clearanceSafetyNetCount() > 0);
   tlm_.setFault(kFaultWedgeLatch, motorL_.wedged() || motorR_.wedged());
   tlm_.setFault(kFaultCommsMalformed, comms_.malformedCount() > 0);
@@ -291,12 +301,6 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
     case Motion::EnqueueOutcome::kFull:
       tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
                 static_cast<uint32_t>(msg::ErrCode::ERR_FULL));
-      break;
-    case Motion::EnqueueOutcome::kUnimplemented:
-      // DISTANCE mode -- not implemented until ticket 005 (see
-      // executor.h's own doc comment).
-      tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
-                static_cast<uint32_t>(msg::ErrCode::ERR_UNIMPLEMENTED));
       break;
   }
 }

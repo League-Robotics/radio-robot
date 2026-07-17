@@ -75,6 +75,7 @@
 #include "app/comms.h"
 #include "app/deadman.h"
 #include "app/drive.h"
+#include "app/heading_source.h"
 #include "app/odometry.h"
 #include "app/pilot.h"
 #include "app/preamble.h"
@@ -116,18 +117,23 @@ class SimHarness {
         drive_(motorL_, motorR_, trackWidth),
         odom_(motorL_, motorR_, trackWidth),
         preamble_(motorL_, motorR_, otos_, color_, line_, clock_),
-        pilot_(executor_, drive_),
+        headingSource_(otos_, motorL_, motorR_, trackWidth),
+        pilot_(executor_, drive_, headingSource_, odom_),
         robotLoop_(plant_, motorL_, motorR_, otos_, comms_, tlm_, drive_, odom_,
                    deadman_, preamble_, pilot_, clock_, sleeper_) {
-    // Motion::Executor (109-003) -- configured from the same default
-    // msg::PlannerConfig{} zero-value struct main.cpp's real
-    // Config::defaultPlannerConfig() would otherwise supply; the sim harness
-    // has no boot_config.cpp to read from, so tests that need real gains
-    // set them explicitly via a future accessor (none needed by this
-    // ticket's own tests, which only exercise TIMED-mode ramps against the
-    // vBodyMax/yawRateMax/aDecel/jMax that DO need non-zero defaults --
-    // see makeExecutorConfig() below).
-    executor_.configure(makeExecutorConfig());
+    // Motion::Executor + App::HeadingSource + App::Pilot (109-003/109-005)
+    // -- configured from the same default msg::PlannerConfig{} zero-value
+    // struct main.cpp's real Config::defaultPlannerConfig() would otherwise
+    // supply; the sim harness has no boot_config.cpp to read from, so
+    // tests that need real gains set them explicitly via a future accessor
+    // (none needed by this ticket's own tests, which only exercise
+    // TIMED-mode ramps and 109-005's own DISTANCE/heading-PD scenarios
+    // against the vBodyMax/yawRateMax/aDecel/jMax/headingKp/headingDwell*
+    // values makeExecutorConfig() below supplies).
+    msg::PlannerConfig cfg = makeExecutorConfig();
+    executor_.configure(cfg);
+    headingSource_.configure(cfg);
+    pilot_.configureHeading(cfg);
 
     // "Pre-boot state": everything above is constructed and wired, but
     // App::Preamble::step() has not yet been called even once -- boot() is
@@ -193,6 +199,12 @@ class SimHarness {
   uint8_t pilotQueueDepth() const { return pilot_.queueDepth(); }
   uint32_t pilotActiveId() const { return pilot_.activeId(); }
   Motion::State pilotState() const { return pilot_.state(); }
+
+  // App::HeadingSource visibility (109-005) -- test-only accessors mirroring
+  // the new TLM heading_source field/event bit, for tests that want to
+  // assert the active source directly rather than only via decoded
+  // telemetry.
+  bool headingSourceIsOtos() const { return pilot_.headingSourceIsOtos(); }
 
   // Decodes and returns every outbound line captured on the serial
   // FakeTransport since the last call (both FakeTransport instances receive
@@ -326,6 +338,17 @@ class SimHarness {
     cfg.yaw_acc_max = 20.0f;    // [rad/s^2]
     cfg.j_max = 8000.0f;        // [mm/s^3]
     cfg.yaw_jerk_max = 80.0f;   // [rad/s^3]
+    // 109-005: heading PD cascade gain + dwell-completion gate. kp=6.0
+    // matches data/robots/tovez.json's own bench-proven sprint-098 value
+    // (see .clasi/knowledge/heading-loop-solves-turn-accuracy.md); the
+    // dwell tolerance/rate/hold match this same file's own
+    // planner.proto/gen_boot_config.py default derivation (0.5deg/1deg-per-
+    // s/150ms).
+    cfg.heading_kp = 6.0f;                     // [1/s]
+    cfg.heading_kd = 0.0f;                     // dimensionless
+    cfg.heading_dwell_tol = 0.5f * 3.14159265f / 180.0f;   // [rad]
+    cfg.heading_dwell_rate = 1.0f * 3.14159265f / 180.0f;  // [rad/s]
+    cfg.arrive_dwell = 0.15f;                  // [s]
     return cfg;
   }
 
@@ -378,6 +401,7 @@ class SimHarness {
   App::Preamble preamble_;
 
   Motion::Executor executor_;
+  App::HeadingSource headingSource_;
   App::Pilot pilot_;
 
   App::RobotLoop robotLoop_;

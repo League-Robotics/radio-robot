@@ -25,8 +25,9 @@ consumer: it holds two `JerkTrajectory` instances (linear and rotational
 channel), sequences a fixed ring of normalized arc commands through them,
 and is itself driven from the loop's cycle via `App::Pilot`
 (`app/pilot.{h,cpp}`) — see `app/DESIGN.md` for the loop-glue half of this
-story. 109-001 restored the solver only; 109-003 is the first real call
-site.
+story. 109-001 restored the solver only; 109-003 was the first real call
+site (TIMED mode); 109-005 added DISTANCE mode (coupled arcs and pure
+pivots, §2c) — the sprint's own turn-accuracy motivation.
 
 ## 2. Orientation
 
@@ -82,32 +83,33 @@ map/boundary altitude and does not repeat it.
   `messages/event.h` (sprint.md's Open Question 3, resolved by this
   ticket).
 
-**109-003 scope is TIMED mode + `replace` only.** `Cmd::isTimed()`
-(`Move.time > 0`) is the teleop primitive, implemented end to end: unlike
-DISTANCE mode's dominant/slaved-channel coupling (a future ticket), TIMED
-drives BOTH channels independently and directly from `Cmd::vMax`/
-`Cmd::omega` — there is no heading reference to slave against yet.
-`enqueue()` classifies every incoming `Cmd` in this order:
+**109-003 scope was TIMED mode + `replace` only; 109-005 adds DISTANCE
+mode (kArc/kPivot) — see §2c below.** `Cmd::isTimed()` (`Move.time > 0`)
+is the teleop primitive, implemented end to end: TIMED drives BOTH
+channels independently and directly from `Cmd::vMax`/`Cmd::omega` — there
+is no heading reference to slave against (unlike DISTANCE mode's
+dominant/slaved-channel coupling, §2c). `enqueue()` classifies every
+incoming `Cmd` in this order:
 
 1. **Degenerate** (`Cmd::isDegenerate()`: zero distance, zero heading
    delta, `time<=0`) → `EnqueueOutcome::kTrivial`, never queued.
-2. **DISTANCE mode** (`time<=0`, non-degenerate) →
-   `EnqueueOutcome::kUnimplemented` — declared on the wire
-   (`msg::Move`'s `distance`/`delta_heading` fields exist), but this
-   ticket does not implement dominant-channel arc planning or the heading
-   PD cascade; ticket 005 replaces this branch wholesale (dead-time
-   re-derivation, heading reference, dwell completion land together
-   there, not incrementally on top of a partial DISTANCE path here).
-3. **TIMED, `replace==false`** → activates immediately if `kIdle` and the
+2. **TIMED, `replace==false`** → activates immediately if `kIdle` and the
    ring is empty, else appends to the ring tail (`kFull` if already at
    `kQueueDepth`, plan untouched).
-4. **TIMED, `replace==true`** → replaces the ring's own tail if
+3. **TIMED, `replace==true`** → replaces the ring's own tail if
    non-empty (`kSuperseded` completion event for the evicted entry),
    else retargets the ACTIVE command in place if one is running (a fresh
    `solveToVelocity()` toward the new target, seeded from the channel's
    own last sample per `JerkTrajectory`'s seeding contract — smooth, never
    an instantaneous step; `kSuperseded` for the old active id), else
    behaves like a fresh enqueue.
+4. **DISTANCE mode** (`time<=0`, non-degenerate) → `Cmd::isPivot()`
+   (`distance==0`) selects `Mode::kPivot`; otherwise `Mode::kArc`
+   (`distance!=0`, `deltaHeading` possibly 0 for a plain straight leg).
+   Both activate/queue exactly like TIMED (same ring, same `kFull`/
+   `replace` rules) — the ONLY difference is which channel(s) `activate()`
+   requests a solve for and how `tick()` computes the twist and decides
+   completion. See §2c.
 
 **Deadline-driven `RAMP_TO_REST`.** A TIMED command's `time` is a total
 duration from activation, ramps included (sprint.md's own
@@ -157,6 +159,99 @@ returning to `kIdle`. It does not itself touch `Drive` — see
 for how a raw `TWIST`/panic-stop `STOP` and `flush()` interact within one
 cycle.
 
+### 2c. DISTANCE mode — `kArc`/`kPivot`, the heading feedforward, dwell completion, overshoot carry (109-005)
+
+**Dominant-channel planning.** `Cmd::isPivot()` (`distance==0`) plans
+ONLY the rotational channel (`solveToRest(deltaHeading, ...)`) — the
+linear channel is never solved (`JerkTrajectory::sample()` on an
+un-`calculate()`'d instance returns a safe zero `State{}`, so `v` stays 0
+throughout with no special-casing). Otherwise (`distance!=0`, a `kArc`
+command — a straight leg when `deltaHeading==0`, a curve otherwise) ONLY
+the linear channel is solved (`solveToRest(effectiveDistance_, ...)`,
+ceilinged by `Cmd::vMax`); the rotational channel is never solved — it is
+SLAVED every `tick()` to the linear channel's own sampled (position,
+velocity) via the arc ratio `headingRatioPerMm_ = deltaHeading/distance`
+(computed ONCE at `activate()` from the Cmd's own UN-adjusted `distance` —
+the arc's curvature is a property of the requested geometry, independent
+of how the overshoot carry below nudges the effective target):
+`thetaRef(t) = headingRatioPerMm_ * linear.position(t)`, `omegaFf(t) =
+headingRatioPerMm_ * linear.velocity(t)`. This reuses the SAME single-
+channel `JerkTrajectory` wrapper unchanged for both cases — no multi-DOF
+solve, per sprint.md's own Decision 2 ("dominant-channel planning... vs.
+a true 2-DOF simultaneous solve").
+
+**The heading PD cascade lives in `App::Pilot`, not here.** `Executor`
+computes and exposes the feedforward half only (`Twist::omega`/
+`omegaDes`/`thetaRef`, plus the command-relative measured heading
+`thetaMeas`) — `Pilot::tick()` adds `heading_kp*(thetaRef-thetaMeas) +
+heading_kd*(omegaDes-omegaMeas)` on top when `Twist::headingActive` is
+true (sprint.md's own SUC-002 flow explicitly assigns this arithmetic to
+`Pilot`). This keeps every sensor type and every gain entirely out of
+`motion/` — see `app/DESIGN.md`'s own `Pilot`/`HeadingSource` subsections
+for the other half of this split.
+
+**The terminal-decel PD gate is ERROR-based, not time-based.**
+`headingActive` goes false once the command has ALREADY satisfied the
+dwell gate's own tolerance/rate test (below), not during a fixed final
+window of the dominant channel's own PLANNED duration. A time-based
+window was this ticket's own FIRST implementation and was caught by this
+ticket's own sim system test (`test_heading_source.py`): a real (laggy)
+plant that was still meaningfully off target when the fixed window opened
+had its correction authority pulled exactly when it was needed most,
+latching a several-degree overshoot the PD was never given the chance to
+close (~96° vs. a commanded 90° pivot, observed in that test before the
+fix). The error-based gate ("stop correcting once you've already landed
+within tolerance", not "stop correcting once the plan says you should be
+nearly done") closes the intended failure mode (a commanded reversal
+right at an ALREADY-GOOD landing —
+`.clasi/knowledge/d-drive-terminal-instability.md`) without also
+disabling correction while genuinely still far off — see `executor.h`'s
+own "Terminal-decel PD gate" comment for the full before/after.
+
+**Distance completion + same-sign overshoot carry.** A `kArc` command's
+own distance criterion is `|measuredPathSinceActivation_| >=
+|effectiveDistance_|`, where `measuredPathSinceActivation_` accumulates
+`App::Odometry::lastDistance()` (encoder-relative, NOT OTOS) every
+`tick()` since activation — `Executor` holds this accumulator (not
+`Pilot`), so the completion DECISION stays here even though the raw
+sample comes from outside. The signed remainder
+(`measuredPathSinceActivation_ - effectiveDistance_`) becomes
+`pendingOvershoot_`, consumed by the VERY NEXT activation IFF that
+command is itself a same-sign `kArc` command (`effectiveDistance_ =
+cmd.distance - pendingOvershoot_`, clamped to a same-sign residual rather
+than ever flipping direction) — any other next command silently drops
+the carry. This is single-command bookkeeping only, NOT the full
+boundary-velocity carry (ticket 006's own scope, which is about NOT
+decelerating to rest at the shared boundary at all).
+
+**Dwell completion (heading-bearing commands).** A REST-TERMINATED
+heading-bearing command (`queueCount_==0` at the moment its own
+distance/pivot criterion is met) additionally holds
+`|deltaHeading-thetaMeas| < heading_dwell_tol` AND `|thetaRate| <
+heading_dwell_rate` (`msg::PlannerConfig`, both new fields) for
+`arrive_dwell` seconds (REUSED from the pre-existing terminal-completion
+dwell field — its 150ms default is also exactly ticket 005's own dwell-
+hold spec) before completing `kDone`; a `STOP_TIME` backstop
+(`stopTimeBackstopMs()` — a generous multiple of the dominant channel's
+own solved duration, v1/not-bench-tuned) forces completion regardless, so
+a persistent oscillation or a stuck measurement can never wedge the
+executor open forever. A CHAINED (non-terminal) heading-bearing command
+skips the hold-timer/rate gate entirely and completes on the tolerance
+test alone ("accurate handoff... without a dwell", sprint.md's own
+semantics item 4).
+
+**`kDeadTime` (`Motion::kDeadTime`, `executor.h`) is declared but has no
+live call site yet** — ticket 006's own divergence-replan
+`retarget()`/`reanchor()` triggers are the first consumer. Re-derived at
+the 40ms cycle from sprint 100's own already-bench-measured `motor_lag`
+figure (120-140ms, `architecture-update.md`) rather than hand-picked by
+scaling the old 120ms/20ms-tick constant onto the new cycle (explicitly
+disallowed by this ticket's own semantics) — but NOT itself a fresh bench
+characterization (USB deploy was confirmed broken this session; one
+`mbdeploy probe` attempt per `hardware-bench-testing.md`'s own escalation
+path). See `app/DESIGN.md`'s own "kDeadTime" Open-Questions entry for the
+full derivation and the flag for a real re-characterization later.
+
 ## 3. Constraints and Invariants
 
 - **HOST_BUILD-pure, no `MicroBit.h`.** `jerk_trajectory.{h,cpp}` compile
@@ -196,13 +291,15 @@ cycle.
   this subsystem.
 - **`Motion::Executor` calls `JerkTrajectory` — it never solves the math
   itself** (§2b's own "calls into JerkTrajectory... never does the solve
-  math itself" boundary). Divergence thresholds, boundary-velocity carry
-  across DISTANCE commands, and the heading PD cascade are explicitly OUT
-  of this ticket's scope (tickets 005/006) — do not add them to `Executor`
-  incrementally; ticket 005 replaces the DISTANCE branch wholesale.
-  `Executor` still owns nothing beyond the ring/state machine/solve
-  requests/completion events — no bus access, no wire codec, no
-  `App::Drive` reference (that is `App::Pilot`'s own boundary).
+  math itself" boundary). Divergence thresholds and boundary-velocity carry
+  across a DISTANCE command BOUNDARY (not-decelerating-to-rest at a shared
+  boundary) are still explicitly OUT of scope (ticket 006) — do not add
+  them to `Executor` incrementally. The heading PD cascade's own GAINS and
+  ARITHMETIC live in `App::Pilot`, not here (§2c) — `Executor` owns nothing
+  beyond the ring/state machine/solve requests/completion events/the
+  feedforward+measured-heading bookkeeping §2c describes — no bus access,
+  no wire codec, no `App::Drive` reference, no `heading_kp`/`heading_kd`
+  (that is `App::Pilot`'s own boundary).
 
 ## 4. Design
 
@@ -232,8 +329,13 @@ never a caller-supplied flag.
 - **`Motion::Cmd`** (`cmd.h`) — the normalized command value type,
   `fromMove()`.
 - **`Motion::Executor`** (`executor.h`) — `configure()`, `enqueue()`,
-  `flush()`, `plan()`, `tick()`, `popEvent()`, `queueDepth()`/
-  `activeId()`/`state()`. See §2b above for the full contract.
+  `flush()`, `plan()`, `tick(dtMs, measuredDistanceDelta,
+  measuredHeadingAbs)`, `popEvent()`, `queueDepth()`/`activeId()`/
+  `state()`. See §2b/§2c above for the full contract; `Executor::Twist`'s
+  `headingActive`/`thetaRef`/`thetaMeas`/`omegaDes` fields (109-005) are
+  what `App::Pilot`'s heading PD cascade consumes.
+- **`Motion::kDeadTime`** (`executor.h`, 109-005) — the divergence-replan
+  dead-time constant; no live call site yet (ticket 006's own consumer).
 
 ### Consumes
 
@@ -249,10 +351,14 @@ never a caller-supplied flag.
 
 ### Consumed by
 
-`App::Pilot` (`app/pilot.{h,cpp}`, 109-003) is `Motion::Executor`'s one
-consumer, driven from `App::RobotLoop`'s own cycle — the root
-`src/firm/DESIGN.md` §2 dependency diagram's `app -> motion` edge this
-ticket adds. See `app/DESIGN.md` for the loop-glue half.
+`App::Pilot` (`app/pilot.{h,cpp}`, 109-003/109-005) is `Motion::Executor`'s
+one consumer, driven from `App::RobotLoop`'s own cycle — the root
+`src/firm/DESIGN.md` §2 dependency diagram's `app -> motion` edge 109-003
+added. `App::HeadingSource` (109-005) is NOT a `motion/` consumer — it is
+a separate `app/`-only seam `Pilot` samples and feeds into `Executor::
+tick()`'s own `measuredHeadingAbs` parameter as a plain `float`; no new
+dependency edge from `motion/` to `app/` or `devices/` is introduced. See
+`app/DESIGN.md` for the loop-glue half.
 
 ## 6. Open Questions / Known Limitations
 
@@ -264,9 +370,9 @@ ticket adds. See `app/DESIGN.md` for the loop-glue half.
   correct outcome, but it is the CALLER's job (`Motion::Executor`) to never
   construct such a request — same caller-responsibility boundary as
   `retarget()`/`reanchor()`'s unguarded backward target. `Executor` itself
-  never calls `solveToState()` yet (109-003's TIMED mode only calls
-  `solveToVelocity()`) — this remains untested until ticket 005's DISTANCE
-  mode (the boundary-velocity-carry consumer) lands.
+  still never calls `solveToState()` (109-005's DISTANCE mode uses
+  `solveToRest()` — a target-velocity-0 boundary handoff is ticket 006's
+  own boundary-velocity-carry scope) — this remains untested until then.
 - **Flash budget grew for real at this ticket** (109-001's own "flash-
   neutral until something calls it" note no longer holds — this IS the
   first real call site). `arm-none-eabi-size` after this ticket: FLASH
@@ -274,11 +380,24 @@ ticket adds. See `app/DESIGN.md` for the loop-glue half.
   region — still comfortably within budget, but a real, expected jump now
   that Ruckig's actual solve code is linked in (no longer dead-code-
   eliminated). Track this number, don't be alarmed by it in isolation.
-- **DISTANCE mode, boundary-velocity carry, divergence replan, the heading
-  PD cascade, and `App::HeadingSource` do not exist yet** — 109-003 landed
-  TIMED mode + `replace` only (see §2b). Tickets 005/006/007 add the rest;
-  the sprint 109 `sprint.md` Architecture section is the forward-looking
-  reference.
+- **Boundary-velocity carry and divergence replan do not exist yet** —
+  109-003 landed TIMED mode + `replace` (§2b); 109-005 added DISTANCE mode
+  (kArc/kPivot), the heading PD cascade split with `App::Pilot`, dwell
+  completion, and single-command distance-overshoot carry (§2c). Ticket
+  006 adds cross-boundary carry (no decel-to-rest at a shared same-`v_max`
+  boundary) and the `retarget()`/`reanchor()` divergence-replan triggers
+  (`Motion::kDeadTime`'s first consumer); the sprint 109 `sprint.md`
+  Architecture section is the forward-looking reference.
+- **Dominant-channel-with-slaved-PD accuracy under curved arcs is an
+  empirical bet, not derived analytically** (sprint.md's own Open Question
+  1) — this ticket's own sim system test
+  (`tests/sim/system/test_heading_source.py`) shows near-exact pivot/arc
+  landing under the sim's IDEAL (no drift/noise) OTOS after fixing the
+  terminal-decel gate to be error-based (§2c), but the SPRINT's own
+  decisive 1°-with-drift-enabled/exact-without-it gate is ticket 009's job,
+  not this one's — a real bench arc/pivot sweep (this ticket's own
+  acceptance criterion) has not been run (USB deploy confirmed broken this
+  session).
 - **`estimateStopDuration()`'s v1 approximation is scheduling-only, not
   exact-landing-time.** No acceptance criterion in this ticket's testing
   plan asserts a TIMED command lands at rest AT EXACTLY its own deadline —
