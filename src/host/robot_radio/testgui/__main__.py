@@ -1202,7 +1202,10 @@ def _build_main_window():  # type: ignore[return]
     # Parsed-telemetry breakout panel — sits between the canvas and the
     # console.  Fed structured TLMFrames by on_frame_ready(); the raw TLM
     # wire lines are filtered out of the console (see _append_log).
-    telemetry_widget, telemetry_ctrl = build_telemetry_panel()
+    # 110-002: share the SAME TurnTraceRecorder the top graph tabs
+    # (graph_panel) own -- the telemetry pane's rolling 10-second strip
+    # charts are a windowed VIEW over it, not a second recorder/consumer.
+    telemetry_widget, telemetry_ctrl = build_telemetry_panel(recorder=graph_panel.recorder)
     right_splitter.addWidget(telemetry_widget)
 
     # Log pane (QPlainTextEdit) — receives timestamped TX/RX lines, minus the

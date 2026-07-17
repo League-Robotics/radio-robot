@@ -13,6 +13,14 @@ The recorder (`TurnTraceRecorder`) is Qt-free and unit-testable; the
 `TurnGraphTabs` QTabWidget owns one recorder and four canvases. Heading is
 UNWRAPPED per source so a ±360 turn draws a single continuous ramp rather than
 a saw-tooth at the ±180 wrap.
+
+`StripChartCanvas` (110-002) is a `_GraphCanvas` variant that plots only the
+trailing N seconds (default 10s) of each series at redraw time — a pure
+windowing FILTER over the SAME `TurnTraceRecorder.series` these full-history
+canvases read, never a second recorder or a second telemetry-consumption
+path. `telemetry_panel.py`'s rolling strip-chart tabs are built on it,
+sharing whichever `TurnTraceRecorder` the caller passes in (normally the
+SAME one this module's own `TurnGraphPanel` owns).
 """
 from __future__ import annotations
 
@@ -188,6 +196,21 @@ class TurnTraceRecorder:
         self._heading("head_cam", now, heading_deg)
         self._distance("dist_cam", now, x_cm, y_cm)
 
+    def latest_t(self) -> "float | None":
+        """Most recent elapsed-time ``t`` value recorded across every
+        series -- the reference point a TRAILING-WINDOW view (the
+        telemetry-pane strip charts, 110-002) anchors its cutoff to, since
+        different series can have different lengths/last-updated points
+        (e.g. ``enc_l`` may lag ``cmd_l`` by a frame or two). Returns
+        ``None`` if nothing has been recorded yet."""
+        latest: "float | None" = None
+        for pts in self.series.values():
+            if pts:
+                t = pts[-1][0]
+                if latest is None or t > latest:
+                    latest = t
+        return latest
+
 
 # --- Qt widgets -------------------------------------------------------------
 # Imported lazily-friendly at module top so the recorder half stays Qt-free
@@ -240,6 +263,58 @@ class _GraphCanvas(FigureCanvasQTAgg):
         ax.set_xlabel("t [s]")
         ax.set_ylabel(self._ylabel)
         ax.grid(True, alpha=0.3)
+        if any_pts:
+            ax.legend(loc="best", fontsize=8, ncol=2)
+        self.draw_idle()
+
+
+class StripChartCanvas(_GraphCanvas):
+    """A ``_GraphCanvas`` variant that plots only the trailing ``window``
+    seconds of each series at redraw time (110-002, telemetry-pane strip
+    charts).
+
+    This is a pure WINDOWING FILTER over the SAME ``TurnTraceRecorder.
+    series`` the full-history top graphs already read -- not a second
+    recorder, not a second telemetry-consumption path (per the origin
+    issue's own instruction: "reuse, don't duplicate"). Once more than
+    ``window`` seconds have accumulated, the oldest points scroll off this
+    canvas's own left edge; ``recorder.series`` itself (and the unwindowed
+    top-graph view of it) is completely unaffected -- the same list object
+    is read, never mutated, by both views.
+    """
+
+    def __init__(self, title: str, ylabel: str, series: list[tuple[str, str]],
+                 window: float = 10.0) -> None:  # [s]
+        super().__init__(title, ylabel, series)
+        self._window = window
+
+    def redraw(self, recorder: TurnTraceRecorder) -> None:
+        ax = self._ax
+        ax.clear()
+        any_pts = False
+        now = recorder.latest_t()
+        cutoff = None if now is None else now - self._window
+        for key, label in self._series:
+            pts = recorder.series.get(key)
+            if not pts:
+                continue
+            if cutoff is not None:
+                pts = [p for p in pts if p[0] >= cutoff]
+                if not pts:
+                    continue
+            any_pts = True
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            ax.plot(xs, ys, label=label, color=_SRC_COLOR.get(key), linewidth=1.4)
+        ax.set_title(self._title)
+        ax.set_xlabel("t [s]")
+        ax.set_ylabel(self._ylabel)
+        ax.grid(True, alpha=0.3)
+        if now is not None:
+            # Always show a fixed `window`-second-wide axis (even before
+            # `window` seconds have actually elapsed) so the strip chart's
+            # scale doesn't visibly jump as data first accumulates.
+            ax.set_xlim(max(0.0, now - self._window), max(now, self._window))
         if any_pts:
             ax.legend(loc="best", fontsize=8, ncol=2)
         self.draw_idle()

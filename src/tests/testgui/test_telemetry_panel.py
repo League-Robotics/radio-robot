@@ -25,11 +25,13 @@ from robot_radio.testgui.telemetry_panel import (
     arrow_fraction,
     body_to_screen,
     fmt_enc,
+    fmt_heading_source,
     fmt_pose,
     fmt_seq,
     fmt_time,
     fmt_twist,
     fmt_vel,
+    is_heading_source_fallback,
     is_telemetry_log_line,
     twist_velocity,
     wheel_velocity,
@@ -121,6 +123,23 @@ class TestTwistVelocity:
         assert wheel_velocity(None) is None
 
 
+class TestHeadingSourceVisibility:
+    """``heading_source`` — the stakeholder-mandated OTOS-vs-encoder
+    visibility signal (SUC-004, 110-002)."""
+
+    def test_otos_is_not_fallback(self):
+        assert is_heading_source_fallback(0) is False
+        assert fmt_heading_source(0) == "OTOS"
+
+    def test_encoder_is_fallback(self):
+        assert is_heading_source_fallback(1) is True
+        assert fmt_heading_source(1) == "ENCODER (fallback)"
+
+    def test_none_is_not_fallback_and_renders_placeholder(self):
+        assert is_heading_source_fallback(None) is False
+        assert fmt_heading_source(None) == "—"
+
+
 class TestFormatting:
     """Value formatters render numbers, and ``—`` for absent fields."""
 
@@ -191,6 +210,31 @@ class TestPanelWiring:
             # Both velocity arrows exist.
             assert widget.findChild(QWidget, "tlm_arrow_vel") is not None
             assert widget.findChild(QWidget, "tlm_arrow_twist") is not None
+        finally:
+            widget.deleteLater()
+
+    def test_heading_source_indicator_updates_on_otos_to_encoder_transition(self, qapp):
+        from PySide6.QtWidgets import QLabel
+
+        from robot_radio.testgui.telemetry_panel import build_telemetry_panel
+        from robot_radio.robot.protocol import TLMFrame
+
+        widget, ctrl = build_telemetry_panel()
+        try:
+            heading_lbl = widget.findChild(QLabel, "tlm_val_heading_source")
+            assert heading_lbl is not None
+
+            ctrl.update_frame(TLMFrame(t=1, heading_source=0))
+            assert heading_lbl.text() == "OTOS"
+            assert heading_lbl.styleSheet() == ""
+
+            ctrl.update_frame(TLMFrame(t=2, heading_source=1))
+            assert heading_lbl.text() == "ENCODER (fallback)"
+            assert heading_lbl.styleSheet() != ""  # loud styling applied
+
+            ctrl.update_frame(TLMFrame(t=3, heading_source=0))
+            assert heading_lbl.text() == "OTOS"
+            assert heading_lbl.styleSheet() == ""  # styling cleared on recovery
         finally:
             widget.deleteLater()
 
