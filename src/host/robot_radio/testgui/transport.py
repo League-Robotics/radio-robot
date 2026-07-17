@@ -144,7 +144,7 @@ import pathlib
 import sys
 import threading
 import time
-from typing import Callable
+from typing import Any, Callable
 
 from robot_radio.io.serial_conn import SerialConnection, list_serial_ports
 from robot_radio.io.sim_loop import SimLoop
@@ -1229,6 +1229,8 @@ class SimTransport(Transport):
             return self._handle_config_set(tokens[1])
         elif verb == "GET" and len(tokens) == 2:
             return self._handle_config_get(tokens[1])
+        elif verb in ("OL", "OA", "OI"):
+            return self._handle_otos_patch(verb, tokens[1:])
         else:
             self._log(f"[INFO] SimTransport: {line!r} not supported in this sim")
         return None
@@ -1310,6 +1312,55 @@ class SimTransport(Transport):
             self._log(f"[WARN] SimTransport: {msg}")
             return msg
         msg = f"{key}={self._config_echo[key]}"
+        self._log(f"< {msg}")
+        return msg
+
+    def _handle_otos_patch(self, verb: str, pos: list[str]) -> str:
+        """``OL <scale>``/``OA <scale>``/``OI`` (109-004, Architecture
+        Revision 1): route through the SAME direct-patch-send mechanism
+        hardware transports use (``NezhaProtocol.otos_config()``,
+        constructed by ``self._config_proto`` and injected via
+        ``SimLoop.inject_command()`` -- see ``_SimConfigConn``), mirroring
+        ``_handle_config_set()``'s own shape exactly. Unlike SET/GET, there
+        is no unsupported-key gating here -- ``RobotLoop::handleConfig``
+        DOES apply ``OtosConfigPatch`` live (see that method's own
+        comment), so every one of these three verbs has a real firmware
+        consumer."""
+        try:
+            if verb == "OL":
+                if not pos:
+                    msg = "ERR badarg OL requires <scale>"
+                    self._log(f"[WARN] SimTransport: {msg}")
+                    return msg
+                kwargs: dict[str, Any] = {"linear_scale": float(pos[0])}
+            elif verb == "OA":
+                if not pos:
+                    msg = "ERR badarg OA requires <scale>"
+                    self._log(f"[WARN] SimTransport: {msg}")
+                    return msg
+                kwargs = {"angular_scale": float(pos[0])}
+            else:  # OI
+                kwargs = {"init": True}
+        except ValueError:
+            msg = f"ERR badarg {verb} {' '.join(pos)}"
+            self._log(f"[WARN] SimTransport: {msg}")
+            return msg
+
+        assert self._config_proto is not None  # only reachable while connected
+        assert self._config_conn is not None
+        corr_id = self._config_proto.otos_config(**kwargs)
+
+        ack = self._config_conn.poll_ack(corr_id, timeout=500)
+        if ack is None:
+            msg = f"ERR timeout {verb}"
+            self._log(f"[WARN] SimTransport: {msg}")
+            return msg
+        if not ack.ok:
+            msg = f"ERR nak {verb} err_code={ack.err_code}"
+            self._log(f"[WARN] SimTransport: {msg}")
+            return msg
+
+        msg = f"OK {verb.lower()}"
         self._log(f"< {msg}")
         return msg
 

@@ -89,15 +89,21 @@ see root `DESIGN.md` §3, devices isolation invariant), and never touches
   it means a silently-wrong calibration (bench placeholders on what should
   be a calibrated robot) looks identical to a clean build. Check the
   generated file's `// Source:` comment line when calibration looks off.
-- **`OtosBootConfig` is boot-time-baked only, deliberately not a live wire
-  surface:** there is no `SET otosOffsetX/Y/Yaw` (or scale) command. The
-  lever-arm offset and scale multipliers are consumed once, at
-  `Hal::OtosOdometer` construction/`begin()`, in `main.cpp`. Do not add a
-  live SET path for these without revisiting the rationale in
-  `boot_config.h`'s `OtosBootConfig` doc comment and the root
-  `architecture-update.md` Design Rationale it references — the multipliers
-  are converted to the OTOS chip's own raw register scalar once, not
-  re-derived per wire call.
+- **`OtosBootConfig` itself is still boot-time-baked only** — the BOOT
+  defaults (baked from the robot JSON's `geometry.odometry_offset_mm`/
+  `calibration.otos_*`) are still consumed exactly once, at `Devices::Otos`
+  construction/`begin()`, in `main.cpp`; there is no live SET path for
+  `OtosBootConfig` itself and none is planned. **109-004 added a SEPARATE,
+  live runtime OVERRIDE** on top of that boot baking: `OtosConfigPatch`
+  (`config.proto`/`envelope.proto`), applied by `RobotLoop::handleConfig`
+  directly against `Devices::Otos`'s existing `setLinearScalar()`/
+  `setAngularScalar()`/`setOffset()`/`init()` primitives (`OL`/`OA`/`OI`,
+  host-side `NezhaProtocol.otos_config()`) — a live wire-triggered
+  RE-calibration after boot, not a rebaking of the boot config struct
+  itself. `Otos::setLinearScalar()`/`setAngularScalar()` still write the
+  chip's own raw int8 register scalar directly (not the `OtosBootConfig`
+  multiplier `begin()` converts once) — see `otos.h`'s own OL/OA doc
+  comment.
 
 ## 4. Design
 

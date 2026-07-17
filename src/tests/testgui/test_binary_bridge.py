@@ -64,7 +64,7 @@ import base64
 
 import pytest
 
-from robot_radio.robot.pb2 import envelope_pb2
+from robot_radio.robot.pb2 import envelope_pb2, telemetry_pb2
 from robot_radio.robot.protocol import NezhaProtocol
 from robot_radio.testgui import binary_bridge
 
@@ -80,6 +80,13 @@ class _FakeConn:
     def __init__(self) -> None:
         self.envelope_calls: list[envelope_pb2.CommandEnvelope] = []
         self._reply_queue: list["envelope_pb2.ReplyEnvelope | None"] = []
+        self._next_corr_id = 0
+        # otos_config() uses send_envelope_fast() + wait_for_ack() (the
+        # SAME fire-and-poll shape twist()/stop()/config() use), NOT
+        # send_envelope() -- see NezhaProtocol.otos_config()'s own
+        # docstring. ack_result scripts wait_for_ack()'s return value,
+        # mirroring test_protocol_config.py's _FakeFastConn.
+        self.ack_result: "object | None" = None
 
     def queue_reply(self, reply: "envelope_pb2.ReplyEnvelope | None") -> None:
         self._reply_queue.append(reply)
@@ -88,6 +95,15 @@ class _FakeConn:
                       read_timeout: int = 500) -> "envelope_pb2.ReplyEnvelope | None":
         self.envelope_calls.append(envelope)
         return self._reply_queue.pop(0) if self._reply_queue else None
+
+    def send_envelope_fast(self, envelope: "envelope_pb2.CommandEnvelope") -> int:
+        self._next_corr_id += 1
+        envelope.corr_id = self._next_corr_id
+        self.envelope_calls.append(envelope)
+        return self._next_corr_id
+
+    def wait_for_ack(self, corr_id: int, timeout: int = 500):
+        return self.ack_result
 
     def drain_binary_tlm(self) -> list:
         return []
@@ -131,7 +147,6 @@ def test_legacy_translation_is_unavailable():
     "SI 0 0 0",
     "ZERO enc",
     "OZ",
-    "OI",
     "OP",
     "BOGUSVERB 1 2 3",
 ])
@@ -153,6 +168,113 @@ def test_empty_line_returns_empty_string_no_wire_call(proto):
 
     for line in ("", "   ", "\t\n"):
         assert binary_bridge.translate_command(nezha, line) == ""
+    assert conn.envelope_calls == []
+
+
+# ---------------------------------------------------------------------------
+# 109-004: OL/OA/OI direct-patch-send -- intercepted BEFORE the launch-
+# unblock short-circuit above, so these three verbs are the ONLY ones that
+# still build and send a real envelope through translate_command().
+# ---------------------------------------------------------------------------
+
+
+def test_ol_sends_otos_config_patch_with_linear_scale(proto):
+    nezha, conn = proto
+    conn.ack_result = telemetry_pb2.AckEntry(
+        corr_id=1, status=telemetry_pb2.ACK_STATUS_OK)
+
+    reply = binary_bridge.translate_command(nezha, "OL 1.05")
+
+    assert reply == "OK ol"
+    assert len(conn.envelope_calls) == 1
+    sent = conn.envelope_calls[0]
+    assert sent.WhichOneof("cmd") == "config"
+    assert sent.config.WhichOneof("patch") == "otos"
+    assert sent.config.otos.linear_scale == pytest.approx(1.05)
+
+
+def test_oa_sends_otos_config_patch_with_angular_scale(proto):
+    nezha, conn = proto
+    conn.ack_result = telemetry_pb2.AckEntry(
+        corr_id=1, status=telemetry_pb2.ACK_STATUS_OK)
+
+    reply = binary_bridge.translate_command(nezha, "OA -0.98")
+
+    assert reply == "OK oa"
+    sent = conn.envelope_calls[0]
+    assert sent.config.otos.angular_scale == pytest.approx(-0.98)
+
+
+def test_oi_sends_otos_config_patch_with_init_trigger(proto):
+    nezha, conn = proto
+    conn.ack_result = telemetry_pb2.AckEntry(
+        corr_id=1, status=telemetry_pb2.ACK_STATUS_OK)
+
+    reply = binary_bridge.translate_command(nezha, "OI")
+
+    assert reply == "OK oi"
+    sent = conn.envelope_calls[0]
+    assert sent.config.otos.init is True
+
+
+def test_ol_with_no_scale_is_badarg_no_wire_call(proto):
+    nezha, conn = proto
+
+    reply = binary_bridge.translate_command(nezha, "OL")
+
+    assert reply.startswith("ERR badarg")
+    assert conn.envelope_calls == []
+
+
+def test_oa_with_no_scale_is_badarg_no_wire_call(proto):
+    nezha, conn = proto
+
+    reply = binary_bridge.translate_command(nezha, "OA")
+
+    assert reply.startswith("ERR badarg")
+    assert conn.envelope_calls == []
+
+
+def test_ol_with_non_numeric_scale_is_badarg_no_wire_call(proto):
+    nezha, conn = proto
+
+    reply = binary_bridge.translate_command(nezha, "OL notanumber")
+
+    assert reply.startswith("ERR badarg")
+    assert conn.envelope_calls == []
+
+
+def test_ol_ack_timeout_renders_err(proto):
+    nezha, conn = proto
+    conn.ack_result = None  # no matching ack ever arrives
+
+    reply = binary_bridge.translate_command(nezha, "OL 1.05")
+
+    assert reply.startswith("ERR unknown")
+    assert len(conn.envelope_calls) == 1  # the envelope was still sent
+
+
+def test_ol_nak_ack_renders_err(proto):
+    nezha, conn = proto
+    conn.ack_result = telemetry_pb2.AckEntry(
+        corr_id=1, status=telemetry_pb2.ACK_STATUS_ERR,
+        err_code=envelope_pb2.ERR_UNIMPLEMENTED)
+
+    reply = binary_bridge.translate_command(nezha, "OL 1.05")
+
+    assert reply.startswith("ERR nak")
+
+
+def test_ov_op_or_still_render_unavailable_reply_unchanged(proto):
+    """OV/OP/OR have no direct-patch-send equivalent this ticket -- they
+    fall through to the SAME launch-unblock short-circuit every other
+    non-OL/OA/OI verb hits (no envelope sent)."""
+    nezha, conn = proto
+
+    for verb in ("OV 0 0 0", "OP", "OR"):
+        reply = binary_bridge.translate_command(nezha, verb)
+        assert reply == binary_bridge._LEGACY_UNAVAILABLE_REPLY
+
     assert conn.envelope_calls == []
 
 

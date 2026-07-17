@@ -115,12 +115,24 @@ machine contract.
   them — deliberately deferred (see §6). Do not "helpfully" wire a
   line/color read into the trailing block without also extending
   `Telemetry`'s wire schema; there is nowhere for the data to go yet.
-- **Config patches only cover `MotorConfigPatch` today.**
+- **Config patches cover `MotorConfigPatch` and `OtosConfigPatch` (109-004).**
   `RobotLoop::handleConfig` replies `ERR_UNIMPLEMENTED` for every other
-  `ConfigDelta` patch kind. This is a scope boundary, not an oversight —
-  `DrivetrainConfigPatch` has no on-robot fusion consumer, and
-  `PlannerConfigPatch`'s heading gains target a segment executor that no
-  longer exists in this tree.
+  `ConfigDelta` patch kind (`DRIVETRAIN`/`PLANNER`/`WATCHDOG`/`NONE`). This
+  is a scope boundary, not an oversight — `DrivetrainConfigPatch` has no
+  on-robot fusion consumer, and `PlannerConfigPatch`'s heading gains target
+  a segment executor that no longer exists in this tree. `OtosConfigPatch`
+  is the one addition since this note was first written (issue
+  `otos-calibration-config-message.md`): it restores a RUNTIME path to
+  `Devices::Otos::setLinearScalar()`/`setAngularScalar()`/`setOffset()`/
+  `init()` — previously only ever called once at boot from baked
+  `boot_config` — applied the same way `MotorConfigPatch` already is,
+  immediately and synchronously inside `handleConfig()` (still "the loop's
+  own cycle" per the single-loop bus ownership invariant above: this is a
+  rare, command-triggered I2C transaction sandwiched into the existing
+  schedule, not a new per-cycle bus consumer, and `otos.h`'s own doc
+  comment already documents these four primitives as issuing their write
+  immediately rather than staging it, "matching the OI/OR/OL/OA
+  wire-command shape").
 
 ## 4. Design
 
@@ -289,8 +301,9 @@ called with real elapsed time between calls).
   presence at boot; no cycle slot samples either sensor in steady state,
   and `Telemetry`'s wire schema carries no line/color fields yet. A full
   perception round-robin (otos|line|color) is deliberately deferred.
-- **Only `MotorConfigPatch` is live-appliable.** Drivetrain and planner
-  config patches reply `ERR_UNIMPLEMENTED`; see §3.
+- **Only `MotorConfigPatch` and `OtosConfigPatch` are live-appliable
+  (109-004).** Drivetrain and planner config patches reply
+  `ERR_UNIMPLEMENTED`; see §3.
 - **In-session pose reset has no wire verb yet.** `Odometry::reset()`
   exists and is exercised by the host simulator's teleport-to-origin, but
   no binary command arms it from the wire today.

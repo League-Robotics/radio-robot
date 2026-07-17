@@ -253,3 +253,38 @@ def test_config_get_before_set_reports_no_data(transport: SimTransport) -> None:
     firmware query attempted; an honest "no data yet" error."""
     reply = transport.command("GET pid.ki", read_timeout=500)
     assert reply.startswith("ERR nodata pid.ki"), reply
+
+
+# ---------------------------------------------------------------------------
+# (e) 109-004: OL/OA/OI -- OtosConfigPatch direct-patch-send, exercised
+# end to end against the REAL compiled sim firmware (RobotLoop::
+# handleConfig's new OTOS case actually runs, not just the host-side
+# envelope construction test_protocol_config.py covers).
+# ---------------------------------------------------------------------------
+
+def test_ol_round_trips_against_the_real_sim_firmware(transport: SimTransport) -> None:
+    reply = transport.command("OL 1.05", read_timeout=500)
+    assert reply == "OK ol", reply
+
+
+def test_oa_round_trips_against_the_real_sim_firmware(transport: SimTransport) -> None:
+    reply = transport.command("OA 0.98", read_timeout=500)
+    assert reply == "OK oa", reply
+
+
+def test_oi_round_trips_against_the_real_sim_firmware(transport: SimTransport) -> None:
+    reply = transport.command("OI", read_timeout=500)
+    assert reply == "OK oi", reply
+
+
+def test_ol_with_no_scale_is_badarg_no_wire_call(transport: SimTransport) -> None:
+    loop = transport.protocol
+    assert loop is not None
+
+    def _must_not_be_called(_line: str) -> None:
+        raise AssertionError("OL with no <scale> must never reach inject_command()")
+
+    loop.inject_command = _must_not_be_called  # type: ignore[method-assign]
+
+    reply = transport.command("OL", read_timeout=500)
+    assert reply.startswith("ERR badarg"), reply

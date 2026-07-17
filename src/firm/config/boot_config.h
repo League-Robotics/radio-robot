@@ -35,11 +35,16 @@ msg::DrivetrainConfig defaultDrivetrainConfig();
 // Additive to defaultMotorConfigs()/defaultDrivetrainConfig() above — no
 // existing mapping is touched.
 //
-// Boot-time-baked only, deliberately NOT a live SET/wire surface — see
-// DESIGN.md §3/§4 for why. Consumed directly by main.cpp's
-// Hal::OtosOdometer construction; the scale multipliers are converted to
-// the OTOS chip's raw register scalar once at Hal::OtosOdometer::begin(),
-// not re-derived per wire call (docs/protocol-v2.md §11).
+// Boot-time-baked only, deliberately NOT a live SET/wire surface itself —
+// see DESIGN.md §3/§4 for why. Consumed directly by main.cpp's
+// Devices::Otos construction; the scale multipliers are converted to the
+// OTOS chip's raw register scalar once at Devices::Otos::begin(), not
+// re-derived per wire call (docs/protocol-v2.md §11). 109-004 added a
+// SEPARATE, live runtime override on top of this boot bake —
+// `OtosConfigPatch` (config.proto), applied by RobotLoop::handleConfig
+// directly against Devices::Otos's setLinearScalar()/setAngularScalar()/
+// setOffset()/init() — this struct itself is still never touched at
+// runtime; only the chip's own registers are re-written.
 struct OtosBootConfig {
   float offsetX = 0.0f;      // [mm] mounting offset from chassis centre to sensor
   float offsetY = 0.0f;      // [mm]

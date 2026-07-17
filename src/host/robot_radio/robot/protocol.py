@@ -864,6 +864,70 @@ class NezhaProtocol:
         envelope = envelope_pb2.CommandEnvelope(config=delta)
         return self._conn.send_envelope_fast(envelope)
 
+    def otos_config(self, *, linear_scale: float | None = None,
+                    angular_scale: float | None = None,
+                    offset_x: float | None = None,
+                    offset_y: float | None = None,
+                    offset_yaw: float | None = None,
+                    init: bool = False) -> int:
+        """Build and send an ``OtosConfigPatch`` ``ConfigDelta`` envelope
+        (``CommandEnvelope{config: ConfigDelta{otos: ...}}``, 109-004) — the
+        ``OL``/``OA``/``OI`` wire-verb family's direct-patch-send mechanism
+        (sprint 109's Architecture Revision 1: "OL/OA/OI construct and send
+        an OtosConfigPatch directly", never through the dead
+        ``binary_bridge.translate_command()`` legacy-verb layer).
+
+        A SEPARATE method from ``config()`` rather than folding OTOS keys
+        into ``_ALL_SET_KEYS``: OL/OA/OI were never flat ``SET key=value``
+        text verbs (unlike ``tw``/``pid.kp``/... — they are their own
+        one-or-zero-positional-argument verbs), so there is no existing flat
+        wire-key vocabulary to extend; this mirrors ``config()``'s own
+        "build exactly ONE envelope carrying exactly ONE patch" shape
+        instead of that method's kwargs-to-flat-key mapping.
+
+        ``linear_scale``/``angular_scale`` map 1:1 to
+        ``Otos::setLinearScalar()``/``setAngularScalar()`` (OL/OA);
+        ``offset_x``/``offset_y``/``offset_yaw`` map to ``Otos::
+        setOffset()`` (no wire verb sends these yet this ticket — schema
+        capacity for a future OV-equivalent); ``init=True`` maps to
+        ``Otos::init()`` (OI) — a plain trigger flag, not a value, so it has
+        no corresponding keyword default other than ``False``.
+
+        Fire-and-poll, the SAME shape as ``twist()``/``stop()``/``config()``
+        (103-009's "telemetry-only return path"): this call writes the bytes
+        and returns immediately; its outcome rides the ack ring
+        (``wait_for_ack()``).
+
+        Returns the corr_id assigned to this command. Raises
+        ``ConnectionError`` if not connected; raises ``ValueError`` if no
+        field is set at all (every kwarg ``None`` and ``init`` falsy — an
+        empty patch is a caller error, mirroring ``config()``'s own empty-
+        ``deltas`` rejection).
+        """
+        fields: dict[str, Any] = {}
+        if linear_scale is not None:
+            fields["linear_scale"] = float(linear_scale)
+        if angular_scale is not None:
+            fields["angular_scale"] = float(angular_scale)
+        if offset_x is not None:
+            fields["offset_x"] = float(offset_x)
+        if offset_y is not None:
+            fields["offset_y"] = float(offset_y)
+        if offset_yaw is not None:
+            fields["offset_yaw"] = float(offset_yaw)
+        if init:
+            fields["init"] = True
+
+        if not fields:
+            raise ValueError(
+                "otos_config() requires at least one field (linear_scale/"
+                "angular_scale/offset_x/offset_y/offset_yaw/init)")
+
+        delta = envelope_pb2.ConfigDelta(
+            otos=config_pb2.OtosConfigPatch(**fields))
+        envelope = envelope_pb2.CommandEnvelope(config=delta)
+        return self._conn.send_envelope_fast(envelope)
+
     def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "AckEntry | None":  # [ms]
         """Poll incoming ``Telemetry`` pushes for an ack-ring entry matching
         ``corr_id``, for up to ``timeout`` ms. Returns the matched

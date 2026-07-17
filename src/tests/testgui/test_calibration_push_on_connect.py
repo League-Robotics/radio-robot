@@ -127,20 +127,42 @@ def test_calibration_commands_calibrated_pushes_actual_rotslip() -> None:
     assert ("SET rotSlip=0.85", 200) in cmds
 
 
-def test_calibration_commands_no_longer_pushes_dead_otos_verbs() -> None:
-    """OI/OL/OA were DROPPED (2026-07-16): they have no path over the current
-    binary wire (no OTOS ConfigDelta patch; scalars are set at boot from
-    boot_config), so pushing them on connect only produced 'not supported' /
-    'nodev' noise. Re-add once clasi/issues/otos-calibration-config-message.md
-    restores a runtime OTOS-config path."""
+def test_calibration_commands_pushes_oi_ol_oa_unconditionally() -> None:
+    """109-004 RESTORES the OI/OL/OA push (dropped 2026-07-16 when these
+    verbs had no path over the binary wire at all -- see this module's own
+    docstring / calibration_commands()'s own docstring for the full
+    restoration rationale). All three are pushed unconditionally -- OI
+    (chip init) always, and OL/OA with the SAME "uncalibrated -> neutral
+    sentinel" discipline rotSlip already uses: a bare _cfg() with no
+    otos_linear_scale/otos_angular_scale calibration still pushes the 1.0
+    (no-correction) default, encoded as ``OL 0``/``OA 0``, not omitted."""
     from robot_radio.calibration.push import calibration_commands
 
     cmds = calibration_commands(_cfg())
-    verbs = [c.split()[0] for c, _t in cmds]
 
-    assert "OI" not in verbs
-    assert not any(c.startswith("OL ") for c, _t in cmds)
-    assert not any(c.startswith("OA ") for c, _t in cmds)
+    assert ("OI", 500) in cmds
+    assert ("OL 0", 200) in cmds
+    assert ("OA 0", 200) in cmds
+    verbs = [c.split()[0] for c, _t in cmds]
+    assert verbs.index("OI") < verbs.index("OL") < verbs.index("OA")
+
+
+def test_calibration_commands_pushes_encoded_otos_scale() -> None:
+    """OL/OA carry the chip's RAW int8 register scalar (scale_to_int8()),
+    not the raw multiplier -- e.g. otos_linear_scale=1.027 -> ``OL 27``."""
+    from robot_radio.calibration.push import calibration_commands
+
+    cfg = _cfg(calibration=types.SimpleNamespace(
+        otos_linear_scale=1.027, otos_angular_scale=0.987))
+    cmds = calibration_commands(cfg)
+
+    assert ("OI", 500) in cmds
+    assert ("OL 27", 200) in cmds
+    assert ("OA -13", 200) in cmds
+    # OI precedes OL/OA (chip init must run before the scale writes).
+    verbs = [c.split()[0] for c, _t in cmds]
+    assert verbs.index("OI") < verbs.index("OL")
+    assert verbs.index("OI") < verbs.index("OA")
 
 
 # ---------------------------------------------------------------------------
@@ -192,10 +214,10 @@ def _push_calibration_loop(transport, cfg, append_log):
 
 def test_push_loop_tolerates_nodev_reply_and_continues_all_commands() -> None:
     """A NODEV reply on any command must not abort the loop -- every remaining
-    command is still sent, and NODEV is not counted as a rejection. (The OTOS
-    verbs that used to produce NODEV are no longer pushed -- see
-    test_calibration_commands_no_longer_pushes_dead_otos_verbs -- so this scripts
-    the NODEV onto a still-sent command to keep exercising the loop's
+    command is still sent, and NODEV is not counted as a rejection. (109-004:
+    OI/OL/OA are pushed again and have a real firmware consumer now, so they
+    no longer produce NODEV on their own -- this scripts the NODEV onto a
+    still-sent SET command instead, to keep exercising the loop's
     resilience.)"""
     cfg = _cfg(robot_name="tovez nocal")
     transport = _ScriptedReplyTransport({"SET rotSlip": "ERR nodev"})

@@ -21,19 +21,32 @@ module owns (the GUI has its own tour idle-detection via live telemetry,
 not a synthesized ``EVT``).
 
 ``translate_command(proto, raw_line)`` is the single entry point. For a
-verb with no binary arm at all — the legacy pose/otos family (SI/ZERO/OZ/
-OI/OR/OP/OV/OL/OA — envelope.proto's ``pose``/``otos`` oneof arms are
-declared-only until 098), GRIP/QLEN (never had a binary arm), and the
-legacy ``DEV`` debug family (retired with the rest of the text plane, no
-binary arm was ever planned for it) — it returns a typed ``ERR ...`` reply
-line WITHOUT sending anything on the wire. The OTOS-chip hardware verbs
-(OI/OL/OA/OV/OP/OR) render with the ``nodev`` code specifically (not
-``unsupported``): this preserves ``calibration_commands()``'s existing
-NODEV-tolerant push loop (``__main__.py``'s ``_push_robot_calibration`` /
-``push.py``'s own docstring) — those three verbs already meant "no
-physical OTOS chip attached" in Sim mode on the old text plane, and reads
-the same way today for the same physical reason (096/098 have not wired a
-real detection path either way).
+verb with no binary arm at all — the legacy pose family (SI/ZERO/OZ —
+envelope.proto's ``pose`` oneof arm is declared-only until 098), GRIP/QLEN
+(never had a binary arm), and the legacy ``DEV`` debug family (retired with
+the rest of the text plane, no binary arm was ever planned for it) — it
+returns a typed ``ERR ...`` reply line WITHOUT sending anything on the
+wire. The remaining OTOS-chip hardware verbs with no direct-patch-send
+equivalent (OV/OP/OR — raw position write/query, Kalman reset) render with
+the ``nodev`` code specifically (not ``unsupported``): this preserves
+``calibration_commands()``'s existing NODEV-tolerant push loop
+(``__main__.py``'s ``_push_robot_calibration`` / ``push.py``'s own
+docstring) — those three verbs already meant "no physical OTOS chip
+attached" in Sim mode on the old text plane, and read the same way today
+for the same physical reason (096/098 have not wired a real detection path
+either way).
+
+109-004 (Architecture Revision 1): OI/OL/OA are NO LONGER part of that
+gated set — each now constructs and sends an ``OtosConfigPatch``
+``ConfigDelta`` directly via ``NezhaProtocol.otos_config()``
+(``_handle_otos_patch()`` below), intercepted at the very top of
+``translate_command()`` before even the ``_LEGACY_TRANSLATION_AVAILABLE``
+check — never through this module's dead ``legacy_verbs``/
+``translate_command()`` dispatch. This is the SAME mechanism on every
+transport (``SerialTransport``/``RelayTransport`` via this function;
+``SimTransport`` via its own ``_handle_otos_patch()`` in ``transport.py``,
+reusing ``NezhaProtocol.otos_config()`` for envelope construction the exact
+same way ``_handle_config_set()``/``config()`` already do for SET/GET).
 
 R/TURN/G (097, this ticket): UN-GATED — each now translates to an
 open-loop ``segment``/``replace`` envelope via ``legacy_translate.
@@ -113,12 +126,56 @@ _POSE_RESET_VERBS = frozenset({"SI", "ZERO", "OZ"})
 
 # OTOS-chip hardware verbs: OI (init)/OL (linear scalar)/OA (angular
 # scalar)/OV (raw position write)/OP (position query)/OR (Kalman reset).
-# Same "declared-only until 098" status as the pose-reset verbs above, but
-# rendered as "nodev" -- see this module's own docstring for why
-# (calibration_commands() NODEV-tolerance).
-_OTOS_DEVICE_VERBS = frozenset({"OI", "OL", "OA", "OV", "OP", "OR"})
+# 109-004 (Architecture Revision 1): OL/OA/OI are no longer gated here --
+# each now constructs and sends an OtosConfigPatch ConfigDelta DIRECTLY via
+# NezhaProtocol.otos_config() (see _handle_otos_patch() below), bypassing
+# this module's dead translate_command()/legacy_verbs path entirely, on
+# EVERY transport (this function is what SerialTransport/RelayTransport
+# route every outbound line through). OV/OP/OR have no direct-patch-send
+# equivalent yet (no wire arm for a raw position write/query, and OR --
+# Kalman reset -- has no ConfigDelta field) -- they keep rendering "nodev",
+# same as before.
+_OTOS_PATCH_VERBS = frozenset({"OI", "OL", "OA"})
+_OTOS_DEVICE_VERBS = frozenset({"OV", "OP", "OR"})
 
 _UNSUPPORTED_REASON = "requires sprint 098 (no binary arm yet)"
+
+
+def _handle_otos_patch(proto: NezhaProtocol, verb: str, pos: list[str]) -> str:
+    """``OL <scale>``/``OA <scale>``/``OI`` -> direct ``OtosConfigPatch``
+    construct-and-send (109-004, Architecture Revision 1's direct-patch-send
+    mechanism), reusing ``NezhaProtocol.otos_config()`` -- the SAME
+    envelope-building path on every transport, never ``translate_command()``
+    's dead legacy-verb dispatch. Called BEFORE the
+    ``_LEGACY_TRANSLATION_AVAILABLE`` short-circuit below, so this works
+    whether or not ``legacy_verbs``/``legacy_render`` are importable.
+
+    Returns a plain, hand-rolled ``OK``/``ERR`` reply line (not built via
+    ``render.render_ok``/``render_err`` -- those may be unavailable, and
+    this path must not depend on them).
+    """
+    try:
+        if verb == "OL":
+            if not pos:
+                return "ERR badarg OL requires <scale>"
+            corr_id = proto.otos_config(linear_scale=float(pos[0]))
+        elif verb == "OA":
+            if not pos:
+                return "ERR badarg OA requires <scale>"
+            corr_id = proto.otos_config(angular_scale=float(pos[0]))
+        else:  # OI
+            corr_id = proto.otos_config(init=True)
+    except ValueError as exc:
+        return f"ERR badarg {exc}"
+    except ConnectionError as exc:
+        return f"ERR unknown {exc}"
+
+    ack = proto.wait_for_ack(corr_id, timeout=500)
+    if ack is None:
+        return f"ERR unknown {verb} timeout"
+    if not ack.ok:
+        return f"ERR nak {verb} err_code={ack.err_code}"
+    return f"OK {verb.lower()}"
 
 
 def translate_command(proto: NezhaProtocol, raw_line: str) -> str:
@@ -130,12 +187,25 @@ def translate_command(proto: NezhaProtocol, raw_line: str) -> str:
     "not stripped, no verb -> None" short-circuit, translated to this
     module's "always return a string" contract.
 
+    109-004: ``OL``/``OA``/``OI`` are intercepted here, BEFORE the
+    ``_LEGACY_TRANSLATION_AVAILABLE`` short-circuit below -- they construct
+    and send an ``OtosConfigPatch`` directly (``_handle_otos_patch()``) and
+    never touch ``legacy_verbs``/``legacy_render`` at all, so they work even
+    though that layer stays permanently unavailable (107-003).
+
     107-003 launch-unblock: if ``legacy_render``/``legacy_verbs`` are not
-    importable (see this module's own docstring), every non-empty line
-    short-circuits to ``_LEGACY_UNAVAILABLE_REPLY`` instead of dispatching
-    -- parsing the line at all is itself `legacy_verbs`' job, so there is
-    no partial/degraded dispatch to fall back to.
+    importable (see this module's own docstring), every OTHER non-empty
+    line short-circuits to ``_LEGACY_UNAVAILABLE_REPLY`` instead of
+    dispatching -- parsing the line at all is itself `legacy_verbs`' job, so
+    there is no partial/degraded dispatch to fall back to.
     """
+    stripped_for_otos = raw_line.strip()
+    if stripped_for_otos:
+        first_verb = stripped_for_otos.split()[0].upper()
+        if first_verb in _OTOS_PATCH_VERBS:
+            return _handle_otos_patch(
+                proto, first_verb, stripped_for_otos.split()[1:])
+
     if not _LEGACY_TRANSLATION_AVAILABLE:
         return _LEGACY_UNAVAILABLE_REPLY if raw_line.strip() else ""
 

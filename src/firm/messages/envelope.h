@@ -74,6 +74,7 @@ struct ConfigDelta {
         MOTOR = 2,
         PLANNER = 3,
         WATCHDOG = 4,
+        OTOS = 5,
     };
     PatchKind patch_kind = PatchKind::NONE;
     union {
@@ -81,6 +82,7 @@ struct ConfigDelta {
         MotorConfigPatch motor;
         PlannerConfigPatch planner;
         uint32_t watchdog;
+        OtosConfigPatch otos;
     } patch = {};
 
 

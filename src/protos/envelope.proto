@@ -129,19 +129,26 @@ message Move {
                               // sprint.md Open Question 3)
 }
 
-// ConfigDelta -- unchanged from the pre-102 schema (096-001): still
-// references config.proto's three curated Patch types plus the watchdog
-// window escape hatch. Runtime application of a decoded `ConfigDelta` is a
-// ticket-008-time decision (architecture-update.md (103) Step 7 Open
-// Question 3, not pre-decided by this ticket) -- the schema exists so
-// `Comms`/`main.cpp`'s dispatch switch can decode it now, whether or not it
-// is wired to `bb`-equivalent state this sprint.
+// ConfigDelta -- unchanged from the pre-102 schema (096-001) except for the
+// `otos` arm (109-004): still references config.proto's curated Patch types
+// plus the watchdog window escape hatch. Runtime application of a decoded
+// `ConfigDelta` is a ticket-008-time decision (architecture-update.md (103)
+// Step 7 Open Question 3, not pre-decided by this ticket) -- the schema
+// exists so `Comms`/`main.cpp`'s dispatch switch can decode it now, whether
+// or not it is wired to `bb`-equivalent state this sprint. `otos` (field 5,
+// a fresh never-before-used number, same convention CommandEnvelope's own
+// `twist`/`move` additions follow) is the one exception: `RobotLoop::
+// handleConfig` DOES apply it live, the same way `motor` already is (see
+// that method's own comment) -- restoring the runtime OTOS-calibration path
+// `clasi/sprints/109-.../issues/otos-calibration-config-message.md`
+// describes.
 message ConfigDelta {
   oneof patch {
     DrivetrainConfigPatch drivetrain = 1;
     MotorConfigPatch      motor      = 2;
     PlannerConfigPatch    planner    = 3;
     uint32                watchdog   = 4;  // [ms] sTimeout -- StreamingDriveWatchdog window
+    OtosConfigPatch       otos       = 5;
   }
 }
 

@@ -169,10 +169,50 @@ void RobotLoop::handleTwist(const msg::CommandEnvelope& env) {
   tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
 }
 
-// ConfigDelta runtime application: a MotorConfigPatch is live-applied
-// below; every other patch kind (DRIVETRAIN/PLANNER/WATCHDOG/NONE) stays
-// ERR_UNIMPLEMENTED, deliberately out of scope -- see DESIGN.md §3.
+// ConfigDelta runtime application: MotorConfigPatch and OtosConfigPatch
+// (109-004) are live-applied below; every other patch kind (DRIVETRAIN/
+// PLANNER/WATCHDOG/NONE) stays ERR_UNIMPLEMENTED, deliberately out of scope
+// -- see DESIGN.md §3.
 void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
+  // OTOS (109-004, issue otos-calibration-config-message.md): restores a
+  // runtime path to Otos::setLinearScalar()/setAngularScalar()/setOffset()/
+  // init() -- previously only ever called once at boot from baked
+  // boot_config. Direct, immediate calls (no staging): otos.h's own doc
+  // comment for these four primitives already documents them as issuing
+  // their I2C write immediately, "matching the OI/OR/OL/OA wire-command
+  // shape" -- exactly this call site. This is still "the loop's own cycle"
+  // doing the bus traffic (DESIGN.md §3's single-loop bus ownership
+  // invariant): handleConfig() runs synchronously inside RobotLoop::cycle()
+  // (via processMessage()), never from Otos's own tick()/staging methods or
+  // an ISR -- it is a rare, command-triggered transaction sandwiched into
+  // the loop's existing schedule, not a new per-cycle bus consumer.
+  if (env.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::OTOS) {
+    const msg::OtosConfigPatch& patch = env.cmd.config.patch.otos;
+
+    if (patch.linear_scale.has) otos_.setLinearScalar(patch.linear_scale.val);
+    if (patch.angular_scale.has) otos_.setAngularScalar(patch.angular_scale.val);
+
+    // Offset triple is merge-then-write (mirrors the MOTOR patch's gains
+    // merge below): setOffset() always writes x/y/heading together, so any
+    // field NOT present in this patch must carry the chip's own current
+    // value, read via getOffset() first, rather than clobbering it with 0.
+    if (patch.offset_x.has || patch.offset_y.has || patch.offset_yaw.has) {
+      float x = 0.0f, y = 0.0f, heading = 0.0f;
+      otos_.getOffset(x, y, heading);
+      if (patch.offset_x.has) x = patch.offset_x.val;
+      if (patch.offset_y.has) y = patch.offset_y.val;
+      if (patch.offset_yaw.has) heading = patch.offset_yaw.val;
+      otos_.setOffset(x, y, heading);
+    }
+
+    // init is a plain trigger (not Opt<T>-wrapped) -- fire whenever true,
+    // independent of whatever else this same patch carries.
+    if (patch.init) otos_.init();
+
+    tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
+    return;
+  }
+
   if (env.cmd.config.patch_kind != msg::ConfigDelta::PatchKind::MOTOR) {
     tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
               static_cast<uint32_t>(msg::ErrCode::ERR_UNIMPLEMENTED));

@@ -131,7 +131,9 @@ def test_field_numbers_match_pb2_descriptors():
     }
     assert actual_err_codes == expected_err_codes
 
-    expected_config_delta_patch = {"drivetrain": 1, "motor": 2, "planner": 3, "watchdog": 4}
+    expected_config_delta_patch = {
+        "drivetrain": 1, "motor": 2, "planner": 3, "watchdog": 4, "otos": 5,  # 109-004
+    }
     actual_config_delta_patch = {
         f.name: f.number for f in pb_envelope.ConfigDelta.DESCRIPTOR.oneofs_by_name["patch"].fields
     }
