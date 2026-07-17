@@ -1,13 +1,14 @@
 ---
-status: in-progress
+status: done
 sprint: '109'
 tickets:
-- 109-001
-- 109-003
-- 109-005
-- 109-006
-- 109-009
-- 109-010
+- '001'
+- '003'
+- '005'
+- '006'
+- 008
+- 009
+- '010'
 ---
 
 # Firmware Jerk-Limited Motion: Ruckig Return + Arc-Command Queue

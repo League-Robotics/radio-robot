@@ -1,12 +1,8 @@
 ---
-status: in-progress
+status: done
 sprint: '109'
 tickets:
-- 109-003
-- 109-005
-- 109-006
-- 109-007
-- 109-009
+- '007'
 ---
 
 # Sim should honor the OTOS calibration scalars (simulate a calibrated chip)

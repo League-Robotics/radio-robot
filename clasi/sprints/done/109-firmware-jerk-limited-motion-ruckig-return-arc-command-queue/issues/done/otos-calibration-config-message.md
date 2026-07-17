@@ -1,12 +1,8 @@
 ---
-status: in-progress
+status: done
 sprint: '109'
 tickets:
-- 109-003
-- 109-004
-- 109-005
-- 109-006
-- 109-009
+- '004'
 ---
 
 # Restore a runtime OTOS-calibration config message (protocol + firmware)

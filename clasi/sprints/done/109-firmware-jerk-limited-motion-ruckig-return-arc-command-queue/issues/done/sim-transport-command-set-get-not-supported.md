@@ -1,12 +1,8 @@
 ---
-status: in-progress
+status: done
 sprint: '109'
 tickets:
-- 109-002
-- 109-003
-- 109-005
-- 109-006
-- 109-009
+- '002'
 ---
 
 # SimTransport.command()/send() no longer route SET/GET (or any text verb) — 108-007 capability gap
