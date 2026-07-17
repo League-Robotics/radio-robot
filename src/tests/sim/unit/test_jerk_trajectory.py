@@ -4,7 +4,7 @@ SUC-004/SUC-005).
 
 Compiles ``jerk_trajectory_harness.cpp`` together with
 ``src/firm/motion/jerk_trajectory.cpp`` and the vendored Ruckig sources
-(``src/vendor/ruckig/src/*.cpp``) using the system C++ compiler under the
+(``vendor/ruckig/src/*.cpp``) using the system C++ compiler under the
 firmware's EXACT build constraints (``gnu++20 -fno-exceptions -fno-rtti``,
 mirroring ``test_ruckig_smoke.py``'s original precedent), runs the
 resulting binary, and asserts it exits 0. No CMake, no ARM toolchain, no
@@ -29,8 +29,8 @@ _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "jerk_trajectory_harness.cpp"
 _JERK_TRAJECTORY_HEADER = _SOURCE_DIR / "motion" / "jerk_trajectory.h"
 _JERK_TRAJECTORY_SRC = _SOURCE_DIR / "motion" / "jerk_trajectory.cpp"
-_RUCKIG_INCLUDE = _REPO_ROOT / "src" / "vendor" / "ruckig" / "include"
-_RUCKIG_SRC_DIR = _REPO_ROOT / "src" / "vendor" / "ruckig" / "src"
+_RUCKIG_INCLUDE = _REPO_ROOT / "vendor" / "ruckig" / "include"
+_RUCKIG_SRC_DIR = _REPO_ROOT / "vendor" / "ruckig" / "src"
 
 # Match the firmware build EXACTLY (test_ruckig_smoke.py's own precedent):
 # gnu++20 (GNU extensions -- newlib exposes M_PI, which Ruckig's roots.hpp

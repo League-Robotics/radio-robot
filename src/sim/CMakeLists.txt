@@ -23,7 +23,7 @@ get_filename_component(REPO_ROOT "${CMAKE_SOURCE_DIR}/../.." ABSOLUTE)
 set(SOURCE_DIR "${REPO_ROOT}/src/firm")
 set(SUPPORT_DIR "${REPO_ROOT}/src/tests/sim/support")
 set(PLANT_DIR "${REPO_ROOT}/src/tests/sim/plant")
-set(RUCKIG_DIR "${REPO_ROOT}/src/vendor/ruckig")
+set(RUCKIG_DIR "${REPO_ROOT}/vendor/ruckig")
 
 # ---------------------------------------------------------------------------
 # Explicit source list -- no glob-then-filter. Mirrors
@@ -50,7 +50,7 @@ set(RUCKIG_DIR "${REPO_ROOT}/src/vendor/ruckig")
 #   motion/jerk_trajectory.cpp -- Motion::JerkTrajectory (109-001), the
 #                                 restored Ruckig<1> wrapper; HOST_BUILD-pure,
 #                                 no CODAL deps
-#   src/vendor/ruckig/src/*.cpp -- the vendored Ruckig solver sources
+#   vendor/ruckig/src/*.cpp -- the vendored Ruckig solver sources
 #                                 Motion::JerkTrajectory links against, listed
 #                                 explicitly (not globbed) matching this
 #                                 file's own convention
@@ -111,7 +111,7 @@ set(MOTION_SOURCES
 )
 # Explicit list (not a glob), matching this file's own house style --
 # mirrors the vendored library's 11 core state-to-state solver sources
-# (see src/vendor/ruckig/README.vendored.md's "What was vendored" list).
+# (see vendor/ruckig/README.vendored.md's "What was vendored" list).
 set(RUCKIG_SOURCES
     "${RUCKIG_DIR}/src/brake.cpp"
     "${RUCKIG_DIR}/src/position_first_step1.cpp"

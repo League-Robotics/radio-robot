@@ -3,11 +3,40 @@ title: src/vendor is a symlink into an unrelated sibling repo's working tree —
 status: open
 filed-by: programmer (sprint 109 ticket 001)
 filed-date: 2026-07-17
+updated: 2026-07-17 — ruckig relocated out of src/vendor, resolved for
+  ruckig specifically; the shared reference pool's remaining contents are
+  the still-open question.
 ---
 
 # `src/vendor` is a symlink into an unrelated sibling repo's working tree
 
-## What was found
+## Update 2026-07-17 — ruckig resolved, moved to repo-root `vendor/`
+
+The concrete trigger for filing this issue (sprint 109 ticket 001's Ruckig
+restore landing as uncommitted files inside the sibling repo's working
+tree) is **resolved**: Ruckig now lives at this repo's own root,
+`vendor/ruckig/` (a REAL, git-tracked directory, sibling to `src/`, NOT
+under the `src/vendor` symlink) — a compiled-in firmware dependency has to
+be reproducible from radio-robot-elite's own git history alone, which
+`src/vendor/*` structurally cannot provide (see below). Every reference
+(`CMakeLists.txt`, `src/sim/CMakeLists.txt`, `src/firm/motion/DESIGN.md`,
+`src/firm/DESIGN.md`, `vendor/ruckig/README.vendored.md`) was updated to
+the new path; `git ls-files vendor/ruckig` confirms the files are tracked
+in this repo; the stray untracked copy that had landed in the sibling
+repo's working tree was removed, restoring that repo to exactly the state
+it was found in (its own pre-existing unrelated dirty state, untouched).
+
+**What remains open** (the rest of this issue, below, is otherwise
+unchanged): the `src/vendor` symlink itself was deliberately left as-is —
+it still serves the OTHER, reference-only material (`PurePursuit`,
+`PythonRobotics`, `pxt-Cutebot-Pro`, `pxt-nezha2`, `pxt-planetx`, `docs`),
+none of which anything compiles against. Whether THAT shared pool should
+also move in-repo (or be documented/bootstrapped more robustly) is still
+a stakeholder decision — ruckig was the one entry with a compiled-in
+build dependency forcing an immediate fix; the rest can wait for a
+deliberate decision rather than an emergency one.
+
+## What was found (original filing)
 
 `src/vendor` (radio-robot-elite) is a tracked symlink (git mode `120000`,
 committed in `refactor(repo): unify all source trees under src/`) pointing

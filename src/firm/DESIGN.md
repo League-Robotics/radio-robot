@@ -73,7 +73,7 @@ The directory map:
 | `messages/` | `msg` | Wire schema: generated message structs, generated envelope codec (`wire.{h,cpp}`), hand-written byte-level runtime (`wire_runtime.{h,cpp}`), layout gates | [messages/DESIGN.md](messages/DESIGN.md) |
 | `config/` | `Config` | Generated boot configuration — per-robot calibration baked at build time from `data/robots/active_robot.json` | [config/DESIGN.md](config/DESIGN.md) |
 | `kinematics/` | `BodyKinematics` | Stateless differential-drive math: inverse/forward twist↔wheel maps, saturation | [kinematics/DESIGN.md](kinematics/DESIGN.md) |
-| `motion/` | `Motion` | Jerk-limited single-channel trajectory solving (`JerkTrajectory`, wrapping vendored Ruckig, `src/vendor/ruckig/`); restored 109-001, a leaf like `kinematics/` — dormant until a future queue/executor calls it | [motion/DESIGN.md](motion/DESIGN.md) |
+| `motion/` | `Motion` | Jerk-limited single-channel trajectory solving (`JerkTrajectory`, wrapping vendored Ruckig, `vendor/ruckig/`); restored 109-001, a leaf like `kinematics/` — dormant until a future queue/executor calls it | [motion/DESIGN.md](motion/DESIGN.md) |
 | `types/` | (global) | Protocol v2 text-tag constants, protocol/firmware version, reply-context plumbing types | [types/DESIGN.md](types/DESIGN.md) |
 | `main.cpp` | — | ARM entry point: constructs the real hardware singletons and every module, wires them, hands off to `RobotLoop::run()` (never returns) | this doc, §4 |
 

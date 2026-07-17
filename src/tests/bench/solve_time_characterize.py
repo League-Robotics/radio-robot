@@ -8,7 +8,7 @@ Two modes:
 **HOST mode (default, `--host`)** -- compiles
 `solve_time_timing_harness.cpp` together with `src/firm/motion/
 jerk_trajectory.cpp` and the vendored Ruckig sources
-(`src/vendor/ruckig/src/*.cpp`) under the firmware's exact build
+(`vendor/ruckig/src/*.cpp`) under the firmware's exact build
 constraints (gnu++20, -fno-exceptions -fno-rtti), runs it, and reports p50/
 p99 wall-clock solve time per channel from `std::chrono::steady_clock`
 samples. This is the gate this ticket (109-001) actually closes with --
@@ -71,8 +71,8 @@ import time
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
-_RUCKIG_INCLUDE = _REPO_ROOT / "src" / "vendor" / "ruckig" / "include"
-_RUCKIG_SRC_DIR = _REPO_ROOT / "src" / "vendor" / "ruckig" / "src"
+_RUCKIG_INCLUDE = _REPO_ROOT / "vendor" / "ruckig" / "include"
+_RUCKIG_SRC_DIR = _REPO_ROOT / "vendor" / "ruckig" / "src"
 _JERK_TRAJECTORY_SRC = _SOURCE_DIR / "motion" / "jerk_trajectory.cpp"
 _TIMING_HARNESS_SRC = pathlib.Path(__file__).parent / "solve_time_timing_harness.cpp"
 _GDB_BATCH = pathlib.Path(__file__).parent / "solve_time_gdb_batch.gdb"

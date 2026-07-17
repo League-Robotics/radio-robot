@@ -127,7 +127,7 @@ never a caller-supplied flag.
   `yaw_acc_max`/`yaw_rate_max`/`yaw_jerk_max` (rotational channel). This is
   the ONLY `msg::*` type this subsystem references.
 - **`ruckig::Ruckig<1>`/`ruckig::Trajectory<1>`/`ruckig::InputParameter<1>`**
-  (`src/vendor/ruckig/`) — the vendored solver this class wraps; a private
+  (`vendor/ruckig/`) — the vendored solver this class wraps; a private
   implementation detail never exposed past this header/`.cpp` pair.
 
 ### Not yet consumed by anything
@@ -149,7 +149,7 @@ edge yet. Ticket 003 (`Motion::Cmd`/`Motion::Executor`) and a future
   as `retarget()`/`reanchor()`'s unguarded backward target.
 - **Flash budget.** Restoring Ruckig is flash-neutral until something
   calls it (dead-code-eliminated by `-Wl,--gc-sections` — see
-  `src/vendor/ruckig/README.vendored.md`); this ticket's own
+  `vendor/ruckig/README.vendored.md`); this ticket's own
   `arm-none-eabi-size` before/after baseline is recorded in ticket
   001's completion notes for later tickets (the first real call site) to
   track against.

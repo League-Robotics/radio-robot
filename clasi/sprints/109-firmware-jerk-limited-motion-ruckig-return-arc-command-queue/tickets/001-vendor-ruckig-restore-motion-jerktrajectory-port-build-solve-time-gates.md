@@ -23,7 +23,7 @@ the solver builds, runs, and fits the ARM budget.
 
 1. Restore vendored Ruckig from history: `git show c63ec6c:libraries/ruckig`
    (or `git archive c63ec6c libraries/ruckig | tar -x`) into
-   `src/vendor/ruckig/`, matching this project's current `src/vendor/`
+   `vendor/ruckig/`, matching this project's current `src/vendor/`
    layout conventions (see `src/vendor/CLAUDE.md` if one exists for house
    rules on vendored code).
 2. Port `source/motion/jerk_trajectory.{h,cpp}` from the same commit into
@@ -71,7 +71,7 @@ the solver builds, runs, and fits the ARM budget.
 
 ## Acceptance Criteria
 
-- [x] `src/vendor/ruckig/` restored from `c63ec6c` and builds under both
+- [x] `vendor/ruckig/` restored from `c63ec6c` and builds under both
       the ARM CMake target and `src/sim/CMakeLists.txt`'s host build.
 - [x] `src/firm/motion/jerk_trajectory.{h,cpp}` compiles under
       `-DHOST_BUILD` with no `MicroBit.h` anywhere in the translation
@@ -124,7 +124,7 @@ depends on anything except this one existing) so a solver-only regression
 is trivially bisectable.
 
 **Files to create**:
-- `src/vendor/ruckig/**` (restored from `git show c63ec6c`)
+- `vendor/ruckig/**` (restored from `git show c63ec6c`)
 - `src/firm/motion/jerk_trajectory.h`
 - `src/firm/motion/jerk_trajectory.cpp`
 - `src/firm/motion/DESIGN.md`
@@ -148,30 +148,38 @@ motion` edge when `Pilot`/`Executor` start calling it).
 
 ## Completion Notes (2026-07-17)
 
-**Repo-topology discovery (flag for the team):** `src/vendor` is a tracked
-symlink (mode 120000, committed in `refactor(repo): unify all source trees
-under src/`) pointing OUTSIDE this repo to
+**Repo-topology discovery, found then corrected (2026-07-17):** `src/vendor`
+is a tracked symlink (mode 120000, committed in `refactor(repo): unify all
+source trees under src/`) pointing OUTSIDE this repo to
 `/Volumes/Proj/proj/league-projects/scratch/radio-robot/vendor` — a
-sibling checkout of the *older* `radio-robot` repo (a different GitHub
-remote), currently sitting mid-work on an unrelated branch
-(`sprint/011-sequester-tn-and-g-command-logic`) with its own unrelated
-dirty state. `PurePursuit`/`PythonRobotics` there are real git submodules
-of that other repo; `pxt-*`/`docs` are its other vendored content. This
-ticket's `src/vendor/ruckig/` restore necessarily landed as loose,
-untracked files inside THAT repo's working tree (matching the existing
-convention — same host directory every other `src/vendor/*` entry already
-lives in) — `git status` in radio-robot-elite never shows it, by design of
-the symlink boundary, the same way `src/libraries/` is invisible via
-`.gitignore`. I did **not** commit anything in that other repo (out of
-scope for this ticket, and it is mid-unrelated-work on a different
-branch) — the vendored Ruckig content is real on disk and the build finds
-it via the symlink, but it is not captured by any commit this ticket
-makes. If this machine-local scratch cache is ever wiped or a fresh
-clone/CI runner lacks it, `src/vendor/ruckig/` will be absent and the
-build will fail to find `ruckig/ruckig.hpp` — worth a follow-up issue
-(filed as `clasi/issues/vendor-symlink-not-reproducible-fresh-clone.md`)
-but out of scope to fix here, since every other `src/vendor/*` entry has
-the exact same property already.
+shared reference pool that is itself the working tree of a sibling
+checkout of the *older* `radio-robot` repo (a different GitHub remote),
+mid-work on an unrelated branch with its own unrelated dirty state.
+`PurePursuit`/`PythonRobotics` there are real git submodules of that other
+repo; `pxt-*`/`docs` are its other reference-only content.
+
+The first pass of this ticket restored Ruckig into `src/vendor/ruckig/`,
+which landed as loose, untracked files inside that OTHER repo's working
+tree — invisible to `git status` in radio-robot-elite, uncommitted in
+EITHER repo. The team-lead caught this before the sprint proceeded: a
+compiled-in firmware dependency cannot live somewhere the build can't
+reproduce from this repo's own git history alone (the stakeholder tests
+on `master` from a fresh checkout). **Fix applied**: Ruckig was relocated
+to a REAL, git-tracked directory at this repo's own root, `vendor/ruckig/`
+(sibling to `src/`, NOT under the `src/vendor` symlink) — every reference
+(`CMakeLists.txt`, `src/sim/CMakeLists.txt`, both `DESIGN.md` files,
+`vendor/ruckig/README.vendored.md`) was updated to the new path, the
+stray untracked copy under the sibling repo's working tree was removed
+(`rm -rf .../radio-robot/vendor/ruckig`, restoring that repo to exactly
+how it was found — nothing else touched there), both build targets and
+the full test suite were re-run clean, and `git ls-files vendor/ruckig`
+now confirms the files are tracked in THIS repo's own history. The
+`src/vendor` symlink itself is untouched — it still serves the other,
+reference-only material (PurePursuit/PythonRobotics/pxt-*), which is a
+separate, still-open question tracked by
+`clasi/issues/vendor-symlink-not-reproducible-fresh-clone.md` (updated to
+note ruckig is resolved; the symlink's remaining reference-only contents
+are the open item).
 
 **Build gates (both passed):**
 - `python build.py --clean` (ARM + host sim, single invocation): both

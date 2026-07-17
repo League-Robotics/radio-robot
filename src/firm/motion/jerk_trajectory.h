@@ -1,6 +1,6 @@
 // jerk_trajectory.h -- Motion::JerkTrajectory: a single-channel,
 // jerk-limited motion planner wrapping one vendored ruckig::Ruckig<1>/
-// ruckig::Trajectory<1> pair (src/vendor/ruckig). One instance plans and
+// ruckig::Trajectory<1> pair (vendor/ruckig, repo-root). One instance plans and
 // samples ONE 1-DoF channel; a future Motion::Executor (sprint 109 ticket
 // 003) holds two -- linear and rotational.
 //
