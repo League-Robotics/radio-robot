@@ -86,6 +86,7 @@
 //   void sim_set_wheel_freeze(SimHandle h, int port, int freeze);              // 1/0
 //   void sim_set_wheel_dropout_rate(SimHandle h, int port, float fraction);    // [0,1]
 //   void sim_set_otos_drift(SimHandle h, float xDrift, float yDrift, float headingDrift);  // [mm][mm][rad]
+//   void sim_set_enc_scale_err(SimHandle h, int port, float fraction);  // fractional over/under-report (109-002)
 //
 // ---- Hook surface -- THE point of this sprint's scripting model ----
 // (master plan's Target architecture, verbatim; see sim_plant.h's own
@@ -242,6 +243,10 @@ void sim_set_wheel_dropout_rate(SimHandle h, int port, float fraction) {
 
 void sim_set_otos_drift(SimHandle h, float xDrift, float yDrift, float headingDrift) {
   asHarness(h)->plant().setOtosDrift(xDrift, yDrift, headingDrift);
+}
+
+void sim_set_enc_scale_err(SimHandle h, int port, float fraction) {
+  asHarness(h)->plant().setEncScaleErr(port, fraction);
 }
 
 // ---- Hook surface ----

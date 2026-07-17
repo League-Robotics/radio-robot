@@ -21,7 +21,19 @@ from pydantic import BaseModel, model_validator
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+# This file: src/host/robot_radio/config/robot_config.py -- parent(config)/
+# parent(robot_radio)/parent(host)/parent(src)/parent(repo root) = FIVE hops
+# from __file__, not four. 109-002 fix: the "unify all source trees under
+# src/" refactor (commit 575ef391) added one path-depth level under every
+# package without updating this constant, so it silently pointed at
+# src/ instead of the repo root (list_robots()'s own _ROBOTS_DIR glob then
+# found nothing -- surfaced by src/tests/testgui/test_calibration_push_on_connect.py's
+# robot-combo test, which is the one caller that actually lists
+# data/robots/*.json rather than pointing ROBOT_CONFIG at a temp file
+# directly). See testgui/canvas.py's own _HERE/_SRC/_REPO constants (fixed
+# for this identical off-by-one by ticket 107-004) for the same reasoning
+# spelled out per path segment.
+_PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
 
 
 # ---------------------------------------------------------------------------

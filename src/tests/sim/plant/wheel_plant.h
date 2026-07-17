@@ -223,6 +223,20 @@ class WheelPlant {
   void setEncoderJitter(bool enabled) { encoderJitter_ = enabled; }
   bool encoderJitter() const { return encoderJitter_; }
 
+  // Encoder scale error (109-002, SimTransport config path ticket): a
+  // fractional per-wheel over/under-*report* -- reportedPosition() returns
+  // whatever the existing fault-knob precedence above selected, scaled by
+  // (1 + fraction). 0.0 (the default) is a genuine no-op (reports position_
+  // verbatim, matching every pre-existing scenario's assumption). This is a
+  // pure reporting bias -- like the fault knobs above, it never touches
+  // step()'s own duty->velocity->position integration, so the PLANT's true
+  // motion is unaffected; only what the simulated encoder claims happened
+  // changes. Backs the TestGUI Sim Errors panel's `enc_scale_err_l`/
+  // `enc_scale_err_r` knobs (see sim_prefs.py's own docstring) and
+  // test_error_divergence.py's headline assertion.
+  void setScaleErr(float fraction) { scaleErr_ = fraction; }
+  float scaleErr() const { return scaleErr_; }
+
   // Plant teleport (sim command-surface fix, host TestGUI Sim "reset to
   // origin"/SI support): re-baselines this wheel to `pos` -- position_,
   // lastReportedPosition_, and frozenPosition_ all snap to it, velocity_
@@ -254,6 +268,7 @@ class WheelPlant {
   float dropoutAccum_ = 0.0f;        // fractional accumulator, see setDropoutRate()
   float lastReportedPosition_ = 0.0f;  // [mm] the last value reportedPosition() actually returned
   bool encoderJitter_ = false;         // 108-011: opt-in, default OFF -- see setEncoderJitter()
+  float scaleErr_ = 0.0f;              // [fractional over/under-report, 0=perfect] see setScaleErr()
 
   // Rest-dither phase (108-011): flips every kDitherPeriod dithered reads,
   // own per-instance state so left/right wheels dither independently. See

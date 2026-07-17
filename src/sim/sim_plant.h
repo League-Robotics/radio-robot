@@ -122,6 +122,11 @@ class SimPlant : public Devices::I2CBus {
   void freezePosition(int port, bool freeze);
   void setDropoutRate(int port, float fraction);  // [0,1]
 
+  // Encoder scale error (109-002, SimTransport config path ticket): fans out
+  // to the selected port's WheelPlant::setScaleErr() -- see that method's own
+  // comment. port numbering matches the three knobs above (1=left, 2=right).
+  void setEncScaleErr(int port, float fraction);  // [fractional over/under-report]
+
   // Rest-encoder jitter (108-011) -- fans out to BOTH WheelPlants (left and
   // right); there is no per-port knob here, unlike the three fault-injection
   // knobs above, because jitter is a plant-fidelity default for a whole

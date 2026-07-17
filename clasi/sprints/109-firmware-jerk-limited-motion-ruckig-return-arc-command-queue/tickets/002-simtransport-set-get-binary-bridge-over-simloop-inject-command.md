@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: TestGUI Sim-mode config path over typed binary patches
-status: in-progress
+status: done
 use-cases:
 - SUC-005
 depends-on: []
@@ -97,39 +97,101 @@ through a different, working, direct-construction mechanism.
 
 ## Acceptance Criteria
 
-- [ ] The existing direct-patch-send mechanism hardware transports use
+- [x] The existing direct-patch-send mechanism hardware transports use
       for `MotorConfigPatch` is identified (file:line cited in this
       ticket's implementation notes) and reused — not reinvented — for
       `SimTransport`.
-- [ ] `SimTransport` sends typed `ConfigDelta` patches (motor gains at
+- [x] `SimTransport` sends typed `ConfigDelta` patches (motor gains at
       minimum) via that same mechanism, injected through
       `SimLoop.inject_command()`, with replies correctly correlated via
       `read_pending_binary_tlm_frames()`'s ack ring.
-- [ ] `binary_bridge.translate_command()` is **not** modified, restored,
+- [x] `binary_bridge.translate_command()` is **not** modified, restored,
       or routed through by this ticket — it stays dead. No
       `legacy_render`/`legacy_verbs` code is resurrected.
-- [ ] Requests targeting a `ConfigDelta` patch kind with no live firmware
+- [x] Requests targeting a `ConfigDelta` patch kind with no live firmware
       consumer (`DrivetrainConfigPatch`: `rotSlip`, `tw`) return an
       explicit host-side "unsupported" error — no wire round-trip
       attempted, no silent no-op, no fabricated value.
-- [ ] GET for a supported key returns the host's own last-pushed value
+- [x] GET for a supported key returns the host's own last-pushed value
       (echo), not a fabricated or firmware-queried value.
-- [ ] `enc_scale_err_l`/`enc_scale_err_r` are settable via the Sim backend
+- [x] `enc_scale_err_l`/`enc_scale_err_r` are settable via the Sim backend
       (new `SimLoop`/`sim_ctypes.cpp` knob), independent of the above.
-- [ ] `test_calibration_push_on_connect.py`'s four tests are each either
+- [x] `test_calibration_push_on_connect.py`'s four tests are each either
       passing against a retargeted real-consumer key, or revised to
       assert the honest unsupported-key error for `rotSlip`/`tw` — with
       the choice and rationale recorded (not silently unskipped
       unchanged).
-- [ ] `test_error_divergence.py::
+- [x] `test_error_divergence.py::
       test_enc_scale_err_separates_encoder_trace_from_camera_truth`
       passes (un-skipped, targets the sim-only fault knob only).
-- [ ] Hardware transports (`SerialTransport`/`RelayTransport`) are
+- [x] Hardware transports (`SerialTransport`/`RelayTransport`) are
       unaffected — no shared-path regression; the direct-patch-send
       mechanism they already use for `MotorConfigPatch` is read, not
       modified, by this ticket.
-- [ ] This ticket does not touch `src/firm/` — no `DESIGN.md` update
+- [x] This ticket does not touch `src/firm/` — no `DESIGN.md` update
       required (host/Python-only change).
+
+## Implementation Notes
+
+- **Mechanism identified and reused**: `NezhaProtocol.config(**deltas)`
+  (`src/host/robot_radio/robot/protocol.py:756`) — builds exactly ONE
+  `ConfigDelta` envelope from the existing flat wire-key vocabulary
+  (`_DRIVETRAIN_KEYS`/`_MOTOR_PID_KEYS`/`_PLANNER_KEYS`/`ml`/`mr`/
+  `sTimeout`, lines 443-487) and sends it via
+  `self._conn.send_envelope_fast(envelope)` — confirmed live/tested against
+  hardware transports (`src/tests/unit/test_protocol_config.py`), NOT
+  through `binary_bridge.translate_command()` (which
+  `set_config()`/`set_config_binary()` also don't use — both are
+  independent, real mechanisms; `config()` is the fire-and-poll one whose
+  ack rides the telemetry ack ring, matching `twist()`/`stop()`'s own
+  shape, which is the one `SimTransport` needed to inject via
+  `SimLoop.inject_command()`).
+- **`SimTransport` wiring** (`src/host/robot_radio/testgui/transport.py`):
+  new `_SimConfigConn` (duck-typed `SerialConnection` substitute — only
+  `send_envelope_fast()`; ack correlation is its own `poll_ack()`, called
+  directly rather than through `NezhaProtocol.wait_for_ack()`, whose
+  re-wrap expects a raw `pb2.AckEntry`, not `SimLoop`'s already-adapted
+  `TLMFrame`/`AckEntry` — see that class's own docstring) wraps a `SimLoop`;
+  `SimTransport.connect()` constructs `NezhaProtocol(_SimConfigConn(loop))`
+  as `self._config_proto`. `_dispatch()` routes `SET key=value`/`GET key`
+  to new `_handle_config_set()`/`_handle_config_get()`, which classify
+  every key in `NezhaProtocol._ALL_SET_KEYS` as either `_CONFIG_MOTOR_KEYS`
+  (has a real consumer — `pid.*`/`ml`/`mr`) or `_CONFIG_UNSUPPORTED_KEYS`
+  (everything else — no consumer, per `RobotLoop::handleConfig()` only
+  applying `MOTOR` patch kind); unsupported keys return immediately with no
+  wire traffic at all (verified by a test that makes `inject_command()`
+  raise if called). `self._config_echo` is the host-side GET-echo store.
+- **`enc_scale_err_l/r` knob**: new `WheelPlant::setScaleErr()`
+  (`src/tests/sim/plant/wheel_plant.h`/`.cpp`) applied last in
+  `reportedPosition()`; `SimPlant::setEncScaleErr(port, fraction)`
+  (`src/sim/sim_plant.{h,cpp}`) fans out to the selected wheel; new
+  `sim_set_enc_scale_err()` C ABI export (`src/sim/sim_ctypes.cpp`); new
+  `SimLoop.set_enc_scale_err()` Python binding
+  (`src/host/robot_radio/io/sim_loop.py`); wired into
+  `SimTransport._apply_profile_to_sim()` alongside the existing
+  `set_otos_drift` mapping.
+- **Test disposition (`test_calibration_push_on_connect.py`)**: chose
+  option (a) — retarget the round-trip assertion from `rotSlip`/`tw`
+  (DrivetrainConfigPatch, no consumer) onto `ml` (MotorConfigPatch.
+  travel_calib, a real consumer that `calibration_commands()` ALSO
+  pushes) — this preserves each test's actual intent ("Connect pushes
+  this robot's calibration into firmware, overwriting whatever was
+  there") without asserting something structurally impossible.
+  `rotSlip`/`tw` are still exercised in the same tests: each now asserts
+  the honest, immediate "unsupported" error instead of a fabricated
+  value. Full rationale recorded in the test file's own module-docstring
+  update.
+- **Drive-by fix**: `robot_config.py`/`camera_prefs.py`/`sim_prefs.py`'s
+  `_PROJECT_ROOT` was off by one `.parent` (pointed at `src/` instead of
+  the repo root) since the "unify all source trees under src/" refactor
+  (commit `575ef391`) — `canvas.py` got the equivalent fix under ticket
+  107-004 but these three were missed. This silently broke
+  `list_robots()` (empty `data/robots/` glob), surfaced by
+  `test_robot_combo_change_while_connected_repushes_and_overwrites` (the
+  one calibration-push test that actually lists real robot configs rather
+  than pointing `ROBOT_CONFIG` at a temp file) — fixed as a narrow,
+  host-only, one-line-per-file correction, required to make that test's
+  acceptance achievable.
 
 ## Testing
 

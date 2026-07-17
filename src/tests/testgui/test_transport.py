@@ -94,16 +94,20 @@ def test_drive_produces_moving_telemetry(transport: SimTransport) -> None:
 def test_apply_error_profile_calls_setters_and_warns_no_op_fields(
     transport: SimTransport,
 ) -> None:
-    """108-007: ``SimLoop``'s 19-symbol ABI backs exactly ONE profile
+    """108-007: ``SimLoop``'s 19-symbol ABI backed exactly ONE profile
     mapping (``otos_lin_drift``/``otos_yaw_drift`` -> a single
-    ``set_otos_drift(x, y, heading)`` call); every other
-    ``DEFAULT_PROFILE`` key has no ``SimLoop`` setter at all and is
+    ``set_otos_drift(x, y, heading)`` call). 109-002 added a second:
+    ``enc_scale_err_l``/``enc_scale_err_r`` -> two ``set_enc_scale_err(port,
+    fraction)`` calls (port 1=left, 2=right). Every OTHER
+    ``DEFAULT_PROFILE`` key still has no ``SimLoop`` setter at all and is
     skip-and-warn only when set away from its neutral default."""
     loop = transport.protocol
     assert loop is not None
 
     mocked = MagicMock()
     loop.set_otos_drift = mocked
+    mocked_enc_scale_err = MagicMock()
+    loop.set_enc_scale_err = mocked_enc_scale_err
 
     logs: list[str] = []
     transport.on_log = logs.append
@@ -113,8 +117,8 @@ def test_apply_error_profile_calls_setters_and_warns_no_op_fields(
         "slip_turn_extra": 0.42,        # no SimLoop setter -> warn
         "otos_linear_noise": 2.22,      # no SimLoop setter -> warn
         "otos_yaw_noise": 3.33,         # no SimLoop setter -> warn
-        "enc_scale_err_l": 4.44,        # no SimLoop setter -> warn
-        "enc_scale_err_r": 5.55,        # no SimLoop setter -> warn
+        "enc_scale_err_l": 4.44,        # -> set_enc_scale_err(1, 4.44)
+        "enc_scale_err_r": 5.55,        # -> set_enc_scale_err(2, 5.55)
         "otos_lin_scale_err": 6.66,     # no SimLoop setter -> warn
         "otos_ang_scale_err": 7.77,     # no SimLoop setter -> warn
         "otos_lin_drift": 8.88,         # -> set_otos_drift(8.88, 0.0, 9.99)
@@ -128,15 +132,20 @@ def test_apply_error_profile_calls_setters_and_warns_no_op_fields(
     transport.apply_error_profile(profile)
 
     mocked.assert_called_once_with(8.88, 0.0, 9.99)
+    mocked_enc_scale_err.assert_any_call(1, 4.44)
+    mocked_enc_scale_err.assert_any_call(2, 5.55)
 
     warn_logs = [line for line in logs if "[WARN]" in line]
     for key in (
         "encoder_noise", "slip_turn_extra", "otos_linear_noise",
-        "otos_yaw_noise", "enc_scale_err_l", "enc_scale_err_r",
+        "otos_yaw_noise",
         "otos_lin_scale_err", "otos_ang_scale_err", "body_rot_scrub",
         "body_lin_scrub", "motor_offset_l", "motor_offset_r",
     ):
         assert any(key in line for line in warn_logs), (key, warn_logs)
+    # enc_scale_err_l/r are now supported (109-002) -- must NOT warn.
+    assert not any("enc_scale_err_l" in line for line in warn_logs)
+    assert not any("enc_scale_err_r" in line for line in warn_logs)
 
     info_logs = [line for line in logs if "[INFO]" in line]
     assert any("trackwidth" in line and "NEXT Connect" in line for line in info_logs), info_logs
@@ -167,3 +176,80 @@ def test_disconnect_joins_tick_thread_cleanly() -> None:
     # Idempotent -- disconnecting an already-disconnected transport must
     # not hang or raise.
     t.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# (d) 109-002: Sim-mode config path -- typed ConfigDelta patches via the
+# SAME NezhaProtocol.config() mechanism hardware transports use, injected
+# via SimLoop.inject_command() (see transport.py's _SimConfigConn). In
+# isolation from the calibration-push feature (test_calibration_push_on_
+# connect.py exercises this same mechanism through the GUI's own Connect
+# flow; these tests drive SimTransport.command() directly instead).
+# ---------------------------------------------------------------------------
+
+def test_config_set_get_round_trips_a_motor_gain(transport: SimTransport) -> None:
+    """A key with a real firmware consumer (``pid.kp``, MotorConfigPatch)
+    round-trips: SET constructs+sends the real ConfigDelta patch (correlated
+    via the ack ring), GET echoes the host's own last-pushed value."""
+    set_reply = transport.command("SET pid.kp=1.5", read_timeout=500)
+    assert set_reply == "OK set pid.kp=1.5", set_reply
+
+    get_reply = transport.command("GET pid.kp", read_timeout=500)
+    assert get_reply == "pid.kp=1.5", get_reply
+
+
+def test_config_set_get_round_trips_wheel_travel_calib(transport: SimTransport) -> None:
+    """``ml``/``mr`` (MotorConfigPatch.travel_calib, side-selected) --
+    the same keys ``calibration_commands()`` pushes on Connect."""
+    assert transport.command("SET ml=0.487", read_timeout=500) == "OK set ml=0.487"
+    assert transport.command("GET ml", read_timeout=500) == "ml=0.487"
+
+    assert transport.command("SET mr=0.481", read_timeout=500) == "OK set mr=0.481"
+    assert transport.command("GET mr", read_timeout=500) == "mr=0.481"
+
+
+def test_config_unsupported_key_gets_no_wire_round_trip(transport: SimTransport) -> None:
+    """A key whose patch kind has no live firmware consumer this sprint
+    (``DrivetrainConfigPatch``'s ``rotSlip``/``tw`` -- Architecture Revision
+    1, sprint.md) must get an explicit, immediate host-side "unsupported"
+    error -- no wire round trip attempted, no silent no-op, no fabricated
+    value. Asserted by patching ``SimLoop.inject_command`` to fail loudly if
+    called -- proving no envelope was ever sent for these keys."""
+    loop = transport.protocol
+    assert loop is not None
+
+    def _must_not_be_called(_line: str) -> None:
+        raise AssertionError(
+            "SET on an unsupported key must never reach inject_command() "
+            "(no wire round trip permitted)"
+        )
+
+    loop.inject_command = _must_not_be_called  # type: ignore[method-assign]
+
+    set_reply = transport.command("SET rotSlip=0.5", read_timeout=500)
+    assert set_reply.startswith("ERR unsupported rotSlip"), set_reply
+
+    get_reply = transport.command("GET rotSlip", read_timeout=500)
+    assert get_reply.startswith("ERR unsupported rotSlip"), get_reply
+
+    tw_set_reply = transport.command("SET tw=100", read_timeout=500)
+    assert tw_set_reply.startswith("ERR unsupported tw"), tw_set_reply
+
+
+def test_config_unknown_key_gets_badkey_error(transport: SimTransport) -> None:
+    """A key outside the wire-key vocabulary entirely gets ``ERR badkey``,
+    distinct from the "unsupported" error a KNOWN-but-consumerless key
+    gets (this ticket's own distinction between "not a real key" and "a
+    real key with no firmware consumer yet")."""
+    reply = transport.command("SET notARealKey=1.0", read_timeout=500)
+    assert reply.startswith("ERR badkey"), reply
+
+    reply = transport.command("GET notARealKey", read_timeout=500)
+    assert reply.startswith("ERR badkey"), reply
+
+
+def test_config_get_before_set_reports_no_data(transport: SimTransport) -> None:
+    """GET on a supported-but-never-SET key -- no fabricated value, no
+    firmware query attempted; an honest "no data yet" error."""
+    reply = transport.command("GET pid.ki", read_timeout=500)
+    assert reply.startswith("ERR nodata pid.ki"), reply

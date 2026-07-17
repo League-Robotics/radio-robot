@@ -275,6 +275,8 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
     lib.sim_set_otos_drift.argtypes = [
         ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float]
     lib.sim_set_otos_drift.restype = None
+    lib.sim_set_enc_scale_err.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_float]
+    lib.sim_set_enc_scale_err.restype = None
 
     lib.sim_set_read_hook.argtypes = [ctypes.c_void_p, _SimHookFn, ctypes.c_void_p]
     lib.sim_set_read_hook.restype = None
@@ -526,6 +528,17 @@ class SimLoop:
             lambda: self._lib.sim_set_otos_drift(
                 self._handle, ctypes.c_float(x_drift), ctypes.c_float(y_drift),
                 ctypes.c_float(heading_drift)))
+
+    def set_enc_scale_err(self, port: int, fraction: float) -> None:  # [fractional over/under-report]
+        """109-002: fractional per-side encoder over/under-report knob --
+        ``sim_ctypes.cpp``'s ``sim_set_enc_scale_err()``, added this ticket
+        alongside the other three fault-condition setters above (``sim_plant.h``'s
+        ``SimPlant::setEncScaleErr()`` -> ``WheelPlant::setScaleErr()``).
+        port: 1=left, 2=right, matching every other port-keyed knob here."""
+        self._require_connected()
+        self._call_on_tick_thread(
+            lambda: self._lib.sim_set_enc_scale_err(
+                self._handle, int(port), ctypes.c_float(fraction)))
 
     # ------------------------------------------------------------------
     # Manual stepping (no tick thread required -- ticket 009's shape)

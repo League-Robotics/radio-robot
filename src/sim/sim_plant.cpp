@@ -216,6 +216,10 @@ void SimPlant::setDropoutRate(int port, float fraction) {
   mutableWheelPlant(port).setDropoutRate(fraction);
 }
 
+void SimPlant::setEncScaleErr(int port, float fraction) {
+  mutableWheelPlant(port).setScaleErr(fraction);
+}
+
 void SimPlant::setEncoderJitter(bool enabled) {
   left_.setEncoderJitter(enabled);
   right_.setEncoderJitter(enabled);

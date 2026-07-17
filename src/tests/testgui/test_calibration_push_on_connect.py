@@ -48,18 +48,31 @@ _requires_sim_lib = pytest.mark.skipif(
     reason="sim lib not built -- run `just build-sim` first",
 )
 
-# 108-007: SimTransport.send()/command() no longer route SET/GET (or any
-# text verb) to the firmware -- SimLoop's ABI has no generic wire/config-
-# channel simulation surface at all (unlike the deleted SimConnection).
-# _push_robot_calibration() (__main__.py) now silently no-ops for Sim; the
-# four GUI-level tests below assert `GET rotSlip`/`GET tw` reflect a pushed
-# value, which SimTransport can no longer provide. See
-# clasi/issues/sim-transport-command-set-get-not-supported.md for the full
-# writeup and the two remediation options recorded there.
-_sim_calibration_push_unsupported = pytest.mark.skip(
-    reason="SimTransport.command() no longer routes SET/GET (108-007) -- see "
-           "clasi/issues/sim-transport-command-set-get-not-supported.md",
-)
+# 109-002: UN-SKIPPED. 108-007 left SimTransport.send()/command() routing
+# no SET/GET at all; 109-002 gave SimTransport a real config path -- typed
+# ConfigDelta patches constructed via the SAME NezhaProtocol.config()
+# hardware transports use, injected via SimLoop.inject_command() (see
+# transport.py's _SimConfigConn/_handle_config_set()/_handle_config_get()).
+#
+# Architecture Revision 1 (sprint.md, this ticket's sprint) found a THIRD,
+# deeper fact along the way: RobotLoop::handleConfig() only ever applied
+# MotorConfigPatch (pid.*/ml/mr) -- every other ConfigDelta patch kind
+# (DrivetrainConfigPatch, PlannerConfigPatch, the watchdog arm) replies
+# ERR_UNIMPLEMENTED unconditionally, a documented scope boundary
+# (src/firm/app/DESIGN.md §3), not something 109-002 could fix (it is
+# host-only scope). Concretely: `rotSlip`/`tw` (DrivetrainConfigPatch) have
+# NO firmware consumer on any transport this sprint, so "GET rotSlip
+# reflects a pushed value" can never legitimately pass again -- the four
+# tests below were revised (not simply un-skipped) per Architecture
+# Revision 1's explicit direction: retarget the round-trip assertion onto
+# `ml` (MotorConfigPatch.travel_calib -- a key calibration_commands()
+# ALSO pushes, and one with a real firmware consumer), which preserves
+# each test's actual intent ("Connect pushes this robot's calibration into
+# firmware, overwriting whatever was there") without asserting something
+# structurally impossible. `rotSlip`/`tw` still get exercised -- each test
+# now asserts they get the honest, immediate "unsupported" error (no wire
+# round trip, no silent no-op, no fabricated value), which is itself
+# meaningful coverage of Architecture Revision 1's own decision.
 
 
 # ---------------------------------------------------------------------------
@@ -328,41 +341,83 @@ def _nocal_config() -> dict:
     }
 
 
+def _expected_ml(wheel_diameter_mm: float = 80.77) -> str:
+    """The default ``ml``/``mr`` wheel-travel-calib ``calibration_commands()``
+    pushes when a config carries no ``mm_per_wheel_deg_left/right`` override
+    (``push.py``'s own ``default_wheel_travel_calib = math.pi*wd/360.0``),
+    formatted the SAME way ``SimTransport._handle_config_set()`` echoes it
+    back (``protocol._format_config_value()``'s ``:.6g``) -- so tests assert
+    against the real formatting path, never a hand-duplicated one."""
+    import math
+
+    from robot_radio.robot import protocol
+
+    return protocol._format_config_value(math.pi * wheel_diameter_mm / 360.0)
+
+
+_UNSUPPORTED_ERR_PREFIX = "ERR unsupported"
+
+
 @_requires_sim_lib
-@_sim_calibration_push_unsupported
 def test_connect_pushes_nocal_neutral_calibration_into_firmware(
     qapp, monkeypatch, tmp_path
 ) -> None:
-    """Connect with an uncalibrated active robot -> the firmware's baked
-    rotationalSlip=0.92 is overwritten with the neutral sentinel 0."""
+    """Connect with an uncalibrated active robot.
+
+    109-002 retarget (Architecture Revision 1): ``rotSlip``/``tw``
+    (DrivetrainConfigPatch) have no live firmware consumer on ANY transport
+    this sprint (RobotLoop::handleConfig only applies MotorConfigPatch) --
+    asserting they "reflect a pushed value" is no longer legal. Both now
+    assert the honest, immediate "unsupported" error instead (no wire round
+    trip attempted, no silent no-op). ``ml`` (MotorConfigPatch.travel_calib,
+    a key calibration_commands() ALSO pushes and one with a real firmware
+    consumer) carries the "connect pushes calibration into firmware" intent
+    that ``rotSlip`` used to: the nocal config has no
+    ``mm_per_wheel_deg_left`` override, so its push lands the wheel-diameter
+    -derived default.
+    """
     window, transport = _connect_gui_with_config(
         qapp, monkeypatch, tmp_path, _nocal_config()
     )
     try:
-        reply = transport.command("GET rotSlip", read_timeout=500)
-        assert "rotSlip=0.000" in reply, (
-            f"nocal connect must neutralize the baked rotationalSlip; "
-            f"firmware reports {reply.strip()!r}"
+        rot_reply = transport.command("GET rotSlip", read_timeout=500)
+        assert rot_reply.startswith(_UNSUPPORTED_ERR_PREFIX), (
+            f"rotSlip has no firmware consumer this sprint -- GET must be an "
+            f"honest unsupported error, not a fabricated value: {rot_reply!r}"
         )
-        assert "tw=128" in transport.command("GET tw", read_timeout=500)
+        tw_reply = transport.command("GET tw", read_timeout=500)
+        assert tw_reply.startswith(_UNSUPPORTED_ERR_PREFIX), (
+            f"tw has no firmware consumer this sprint -- GET must be an "
+            f"honest unsupported error, not a fabricated value: {tw_reply!r}"
+        )
+        ml_reply = transport.command("GET ml", read_timeout=500)
+        assert f"ml={_expected_ml()}" in ml_reply, (
+            f"nocal connect must push the wheel-diameter-derived default "
+            f"travel calib via the real MotorConfigPatch consumer; firmware "
+            f"reports {ml_reply.strip()!r}"
+        )
     finally:
         _teardown(qapp, window)
 
 
 @_requires_sim_lib
-@_sim_calibration_push_unsupported
 def test_connect_pushes_calibrated_values_into_firmware(
     qapp, monkeypatch, tmp_path
 ) -> None:
-    """Connect with a calibrated active robot -> its values land verbatim
-    (here deliberately different from the baked 0.92 to prove overwrite)."""
+    """Connect with a calibrated active robot -> its values land verbatim.
+
+    109-002 retarget: was ``rotational_slip=0.85`` (no firmware consumer,
+    see module docstring); now ``mm_per_wheel_deg_left`` (MotorConfigPatch,
+    a real consumer), deliberately different from the nocal default to
+    prove overwrite.
+    """
     cfg = _nocal_config()
     cfg["identity"] = {"robot_name": "tovez-custom", "uid": "tovez-custom"}
-    cfg["calibration"] = {"rotational_slip": 0.85}
+    cfg["calibration"] = {"mm_per_wheel_deg_left": 0.5}
     window, transport = _connect_gui_with_config(qapp, monkeypatch, tmp_path, cfg)
     try:
-        reply = transport.command("GET rotSlip", read_timeout=500)
-        assert "rotSlip=0.850" in reply, (
+        reply = transport.command("GET ml", read_timeout=500)
+        assert "ml=0.5" in reply, (
             f"connect must push the active robot's calibration; firmware "
             f"reports {reply.strip()!r}"
         )
@@ -371,7 +426,6 @@ def test_connect_pushes_calibrated_values_into_firmware(
 
 
 @_requires_sim_lib
-@_sim_calibration_push_unsupported
 def test_connect_with_real_tovez_nocal_config_does_not_hit_badkey_on_odom_offset(
     qapp, monkeypatch, tmp_path
 ) -> None:
@@ -379,7 +433,16 @@ def test_connect_with_real_tovez_nocal_config_does_not_hit_badkey_on_odom_offset
     ``data/robots/tovez_nocal.json`` carries a non-zero
     ``geometry.odometry_offset_mm`` (x=-47.7) -- before the fix, Connect's
     calibration push sent ``SET odomOffX=-47.700`` and got ``ERR badkey``
-    from the current firmware/sim."""
+    from the current firmware/sim.
+
+    109-002: the blanket "no REJECTED at all" assertion no longer holds --
+    ``rotSlip``/``tw`` NOW legitimately get rejected every Connect (the
+    honest unsupported-key error, Architecture Revision 1), which is
+    correct, documented behavior, not a regression. What still must never
+    happen is a REJECTED entry for anything OTHER than those two known-
+    unsupported keys (in particular, no ``badkey`` at all -- the odom-offset
+    bug this test guards against).
+    """
     real_cfg_path = _REPO / "data" / "robots" / "tovez_nocal.json"
     assert real_cfg_path.exists(), f"missing {real_cfg_path}"
 
@@ -391,16 +454,26 @@ def test_connect_with_real_tovez_nocal_config_does_not_hit_badkey_on_odom_offset
         assert "badkey" not in log_text.lower(), (
             f"calibration push must not hit ERR badkey on Connect:\n{log_text}"
         )
-        assert "REJECTED" not in log_text, (
-            f"calibration push had rejected commands:\n{log_text}"
+        rejected_lines = [
+            line for line in log_text.splitlines() if "rejected:" in line.lower()
+        ]
+        unexpected_rejections = [
+            line for line in rejected_lines
+            if "rotSlip" not in line and "tw=" not in line
+        ]
+        assert not unexpected_rejections, (
+            f"only rotSlip/tw (known-unsupported this sprint) may be "
+            f"rejected; found other rejections:\n{unexpected_rejections}"
         )
-        assert "rotSlip=0.000" in transport.command("GET rotSlip", read_timeout=500)
+        rot_reply = transport.command("GET rotSlip", read_timeout=500)
+        assert rot_reply.startswith(_UNSUPPORTED_ERR_PREFIX), (
+            f"rotSlip has no firmware consumer this sprint: {rot_reply!r}"
+        )
     finally:
         _teardown(qapp, window)
 
 
 @_requires_sim_lib
-@_sim_calibration_push_unsupported
 def test_robot_combo_change_while_connected_repushes_and_overwrites(
     qapp, monkeypatch, tmp_path
 ) -> None:
@@ -470,16 +543,24 @@ def test_robot_combo_change_while_connected_repushes_and_overwrites(
         transport = created[-1]
         assert transport._connected, "SimTransport failed to connect"
 
-        assert "rotSlip=0.000" in transport.command("GET rotSlip", read_timeout=500), (
-            "connecting with 'tovez nocal' active must push the neutral sentinel"
-        )
+        # 109-002 retarget (Architecture Revision 1): rotSlip has no
+        # firmware consumer this sprint -- ml (MotorConfigPatch.
+        # travel_calib, a real consumer) carries the "combo switch
+        # re-pushes and overwrites" intent instead. tovez_nocal.json has no
+        # mm_per_wheel_deg_left override (wheel-diameter-derived default,
+        # see _expected_ml()); tovez.json's calibration carries
+        # mm_per_wheel_deg_left=0.7165 -- a genuinely different value,
+        # proving the re-push overwrote it.
+        assert f"ml={_expected_ml()}" in transport.command(
+            "GET ml", read_timeout=500
+        ), "connecting with 'tovez nocal' active must push its default travel calib"
 
         robot_combo.setCurrentIndex(cal_idx)
         _spin_events(qapp, 0.3)
 
-        assert "rotSlip=0.920" in transport.command("GET rotSlip", read_timeout=500), (
+        assert "ml=0.7165" in transport.command("GET ml", read_timeout=500), (
             "switching to the calibrated 'tovez' robot while connected must "
-            "re-push and overwrite the firmware's rotSlip"
+            "re-push and overwrite the firmware's ml"
         )
 
         log_text = _log_text(window)

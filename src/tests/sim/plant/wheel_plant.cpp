@@ -50,6 +50,11 @@ float WheelPlant::reportedPosition() {
     ditherCounter_ = 0;
     reportPosition = position_;
   }
+  // Scale error applies last, uniformly across every branch above (fresh,
+  // held/dropout, frozen, or dithered) -- a fractional over/under-report
+  // bias on whatever value was otherwise going to be reported, never
+  // touching position_/velocity_ themselves. 0.0 is a genuine no-op.
+  reportPosition *= (1.0f + scaleErr_);
   lastReportedPosition_ = reportPosition;
   return reportPosition;
 }
