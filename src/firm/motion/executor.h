@@ -160,21 +160,35 @@ constexpr uint8_t kQueueDepth = 8;
 constexpr uint8_t kEventRingDepth = 8;
 
 // kDeadTime -- [ms] the divergence-replan dead-time projection ticket 006's
-// own retarget()/reanchor() triggers will use to project "where should the
+// own checkDivergence() is documented to use, projecting "where should the
 // plan already be" forward past a measurement's own transport lag. Re-
-// derived at the 40ms cycle (109-005) -- see app/DESIGN.md's own "kDeadTime"
-// Open-Questions entry for the full derivation: NOT hand-picked by scaling
-// the old 120ms/20ms-tick constant onto the new cycle (explicitly
+// derived at the 40ms cycle (109-005) -- see app/DESIGN.md's own
+// "kDeadTime" Open-Questions entry for the full derivation: NOT hand-picked
+// by scaling the old 120ms/20ms-tick constant onto the new cycle (explicitly
 // disallowed by this ticket's own semantics), but also NOT a fresh bench
 // characterization (the USB deploy path was confirmed broken this session
 // -- one `mbdeploy probe` attempt, per hardware-bench-testing.md's own
 // escalation path). Set to 130ms -- the midpoint of sprint 100's own
 // ALREADY bench-measured `motor_lag` figure (120-140ms,
 // architecture-update.md), a real-time physical actuation-transport delay
-// independent of cycle period, not a tick-count artifact. No live call
-// site yet -- declared here so ticket 006 does not have to re-derive it,
-// flagged for a real fresh bench characterization once USB deploy is
-// fixed.
+// independent of cycle period, not a tick-count artifact.
+//
+// STILL NOT LIVE, by deliberate choice, not oversight: ticket 006's own
+// implementation tried wiring this into checkDivergence() as a
+// `peek(elapsed + kDeadTime)` lead and found it produces FALSE-POSITIVE
+// divergence triggers against these sub-second pivot/arc trajectories in
+// the sim system tests (109-005's own scenarios 8/9/11 in
+// `motion_executor_harness.cpp` regressed) -- 130ms is a large fraction of
+// a typical pivot's own total duration, so "where the plan will be 130ms
+// from now" is not a fair stand-in for "where the plan already is" without
+// a matching measured-transport-lag model on the OTHER side of the
+// comparison (the sim's own measured signal today has no real transport
+// lag to project past at all). `checkDivergence()` compares against the
+// CURRENT elapsed sample instead (correct for a zero-lag measured signal);
+// this constant stays declared, with its derivation preserved here, for
+// the real dead-time wiring once a genuine bench characterization exists
+// (USB deploy confirmed broken this session) to validate the projection
+// against.
 constexpr uint32_t kDeadTime = 130;  // [ms]
 
 class Executor {
@@ -284,17 +298,132 @@ class Executor {
   // heading baseline, the dwell hold timer).
   void activate(const Cmd& cmd, bool retarget);
 
-  // activateNextOrIdle -- pops the ring's head (if any) and activates it
-  // fresh-from-rest; otherwise clears the active command and returns to
-  // kIdle. Called when the active command reaches its own DONE criterion.
+  // activateNextOrIdle -- pops the ring's head (if any) and activates it;
+  // otherwise clears the active command and returns to kIdle. Called when
+  // the active command reaches its own DONE criterion.
+  //
+  // 109-006: velocity-continuous handoff (trigger (d)). Rather than an
+  // unconditional fresh-from-rest reset of BOTH channels, this seeds the
+  // JUST-COMPLETED command's own dominant channel (linear_ for kArc,
+  // rotational_ for kPivot) from THIS tick's own last sample
+  // (completionLinearVelocity_/completionLinearAcceleration_ or the
+  // rotational twin -- set every kArc/kPivot tick(), see that method's own
+  // comment) before calling activate(next, retarget=true) -- position
+  // resets to 0 (the new command's own frame), velocity/acceleration carry
+  // through unchanged. Harmless when the completing command's own exit
+  // velocity was 0 (a rest-terminated or sign-reversal-forced completion):
+  // its own last sample is already at (or within epsilon of) rest, so
+  // seeding from it reads the same as a hard reset(). The non-dominant
+  // channel (and a kTimed completion, which skips this seeding entirely)
+  // still gets a full reset() -- only the ONE channel actually carrying a
+  // boundary velocity is ever seeded nonzero.
   void activateNextOrIdle();
 
   // completeActive -- shared tail for every completion path (TIMED
   // deadline/RAMP_TO_REST rest, DISTANCE/dwell criteria, solve failure):
   // stages pendingOvershoot_ (kArc only -- see this file's own "Distance
   // completion" comment; a no-op for kTimed/kPivot), pushes the completion
-  // event, and calls activateNextOrIdle().
+  // event, and calls activateNextOrIdle() -- EXCEPT for kSolveFail (109-006):
+  // a solve failure flushes the REST of the ring too (each own kFlushed --
+  // continuing to the next queued command on the same, evidently broken,
+  // channel configuration is not obviously safer than stopping outright)
+  // and enters emergencyStopping_ (both channels solveToVelocity(0), see
+  // that field's own comment) instead of calling activateNextOrIdle()
+  // immediately -- activateNextOrIdle() itself only runs once tick() has
+  // observed both channels actually at rest, so Drive is never left
+  // holding a stale nonzero twist just because state() dropped to kIdle
+  // before either channel had a chance to decelerate.
   void completeActive(CompletionStatus status);
+
+  // computeExitVelocity -- ticket 006's own exitSpeed(active, next)
+  // formula (sprint.md/the sprint issue's own "Boundary velocity" section,
+  // verbatim): 0 when there is no queued successor, the successor is
+  // TIMED (boundary-velocity carry is a DISTANCE-mode-only concept -- a
+  // TIMED successor is handled by 109-003's own in-place
+  // solveToVelocity()/replace path instead), or the active/successor pair
+  // mismatches on pivot-ness (an arc chaining into a pivot or vice versa --
+  // "pivot on either side" forces a full decel-to-rest at the boundary,
+  // since a pivot's own dominant channel is rotational, not linear, so
+  // there is no shared channel to carry a velocity through) or reverses
+  // sign (a genuine direction change must decelerate through zero, never
+  // carry a signed velocity across a reversal). Otherwise: the domain
+  // (linear for an active/next kArc pair, rotational for an active/next
+  // kPivot pair -- "pivot->pivot chains carry rotational velocity through
+  // the SAME rule in the rotational domain") ceiling-mins the active and
+  // next commands' own effective vmax, then additionally clamps by
+  // reachableEntrySpeed(|next's own linear distance or angular delta|) --
+  // the fastest speed this channel could enter a segment of that length at
+  // and still be able to decelerate to rest by its own end, given this
+  // channel's own aDecel/jerk. One-command lookahead only (never chases a
+  // second successor beyond ring_[0]) -- reads active_/mode_/ring_[0]/
+  // queueCount_, does not mutate anything.
+  float computeExitVelocity() const;
+
+  // maybeRetargetActiveForSuccessorChange -- replan triggers (a)/(b)-tail:
+  // recomputes computeExitVelocity() (the active's immediate successor,
+  // ring_[0], may have just changed -- an append to a previously-empty
+  // ring, or a tail replace when ring_[0] IS the tail) and, if the new
+  // value differs from the currently-planned exitVelocity_ by more than
+  // the domain's own threshold (>1mm/s linear, >0.02rad/s rotational),
+  // requests a fresh in-place solveToState() re-solve of the active's own
+  // dominant channel toward the SAME target position at the NEW exit
+  // velocity (seeded from that channel's own remembered last sample --
+  // never a measured observation, matching JerkTrajectory's own seeding
+  // contract). A change at or below threshold still updates exitVelocity_
+  // (kept accurate for the NEXT comparison) but does not spend a plan()
+  // solve on an imperceptible adjustment. Safe to call after ANY ring_/
+  // queueCount_ mutation regardless of whether it actually changed ring_[0]
+  // -- if it did not, computeExitVelocity() returns the same value and
+  // this is a no-op.
+  void maybeRetargetActiveForSuccessorChange();
+
+  // checkDivergence -- replan trigger (c), called once per kArc/kPivot
+  // tick() (never for kTimed -- that mode has no position-control target
+  // to diverge from). Compares the MEASURED channel state against the
+  // dominant channel's own kDeadTime-projected planned position (see that
+  // constant's own doc comment) and, past a threshold, sets a pending-
+  // solve flag/parameter members for plan() to service next -- this
+  // method itself never calls into JerkTrajectory (tick() "never solves",
+  // this file's own header comment; every actual retarget()/reanchor()
+  // call happens inside plan(), see this file's own "Solve budget" note
+  // carried from 109-003).
+  //   - kArc, linear domain: |measuredPathSinceActivation_ minus the
+  //     projected planned position| >= 40mm (and at least
+  //     kDivergenceReanchorMinIntervalMs since the last reanchor, either
+  //     channel) -> pendingLinearReanchor_ (the ONE sanctioned measured-
+  //     velocity seed, via a finite difference of this tick's own
+  //     measuredDistanceDelta/dt -- reanchor()'s own documented exception,
+  //     acceleration forced to 0 by reanchor() itself); >= 5mm (below the
+  //     reanchor threshold) -> pendingLinearRetarget_ (a position-target
+  //     correction only -- still seeded from the channel's own remembered
+  //     velocity/acceleration, never measured, matching retarget()'s own
+  //     contract).
+  //   - kPivot, rotational domain: >= 0.3rad -> pendingRotationalReanchor_
+  //     only -- no separate small-threshold retarget tier for heading (the
+  //     PD cascade in App::Pilot already continuously corrects small
+  //     heading drift; only a GROSS divergence during a pivot warrants
+  //     replanning the trajectory itself).
+  // A retarget() re-baselines its own channel's position frame to 0 --
+  // linearFrameOffset_/rotationalFrameOffset_ (this file's own field
+  // comments) track the cumulative rebase so thetaRef/omegaFf (both
+  // derived from the dominant channel's own sampled position) stay correct
+  // in the command's own since-activation frame across any number of
+  // rebases; reanchor() does NOT rebase (its position argument is supplied
+  // directly in the channel's own current frame), so no offset update
+  // follows a reanchor.
+  //
+  // plannedPositionSinceActivation is the SAME frame-offset-adjusted
+  // dominant-channel position tick() already computed this cycle for
+  // Twist::thetaRef (kArc: linearFrameOffset_ + the linear channel's own
+  // sampled position; kPivot: rotationalFrameOffset_ + the rotational
+  // channel's own sampled position) -- compared at the CURRENT elapsed
+  // time, not a kDeadTime-projected one; see kDeadTime's own doc comment
+  // for why the dead-time lead is declared but not yet wired into this
+  // comparison (a naive elapsed+kDeadTime projection produced false-
+  // positive divergence triggers against these sub-second pivot/arc
+  // trajectories during this ticket's own implementation).
+  void checkDivergence(float dtS, float measuredDistanceDelta, float thetaMeasRel, float thetaRate,
+                        float plannedPositionSinceActivation);
 
   // stopTimeBackstopMs -- 109-005's own STOP_TIME backstop for a dwell-
   // gated heading command: a generous multiple of the dominant channel's
@@ -361,6 +490,88 @@ class Executor {
   float headingDwellTol_ = 0.0f;   // [rad] msg::PlannerConfig.heading_dwell_tol
   float headingDwellRate_ = 0.0f;  // [rad/s] msg::PlannerConfig.heading_dwell_rate
   float headingDwellHoldS_ = 0.0f; // [s] msg::PlannerConfig.arrive_dwell (REUSED, see file header)
+
+  // -- 109-006: boundary-velocity carry + divergence replan --
+
+  // exitVelocity_ -- the target-velocity argument fed to the ACTIVE
+  // command's own dominant channel's solveToState() call (kArc: linear_,
+  // kPivot: rotational_) -- computeExitVelocity()'s own current value.
+  // Recomputed at activate() and by maybeRetargetActiveForSuccessorChange()
+  // whenever the active's immediate successor (ring_[0]) changes; see
+  // those methods' own comments.
+  float exitVelocity_ = 0.0f;  // [mm/s] or [rad/s] signed, domain per mode_
+
+  // linearFrameOffset_/rotationalFrameOffset_ -- the cumulative amount
+  // added to the dominant channel's own sampled `position` to recover
+  // "position since this command's own activation" (thetaRef/omegaFf's
+  // own frame) after any number of divergence retarget() rebases (each of
+  // which re-baselines that channel's OWN internal position frame to 0 --
+  // see checkDivergence()'s own comment). 0 until the first retarget();
+  // reset to 0 in activate() (a fresh command starts its own fresh frame).
+  float linearFrameOffset_ = 0.0f;      // [mm]
+  float rotationalFrameOffset_ = 0.0f;  // [rad]
+
+  // pendingLinearReanchor_/pendingLinearRetarget_/pendingRotationalReanchor_
+  // -- set by checkDivergence() (tick()), serviced by plan() (the ONLY
+  // place that ever calls JerkTrajectory::retarget()/reanchor() -- tick()
+  // itself never solves). No small-threshold rotational retarget tier --
+  // see checkDivergence()'s own comment.
+  bool pendingLinearReanchor_ = false;
+  bool pendingLinearRetarget_ = false;
+  bool pendingRotationalReanchor_ = false;
+
+  // linearRetargetStreak_ -- consecutive-tick counter for the 5mm linear
+  // retarget tier's own anti-transient guard (checkDivergence()'s own doc
+  // comment, executor.cpp) -- counts ticks the divergence has stayed past
+  // the 5mm threshold WITHOUT dropping back under it; reset to 0 the
+  // moment it drops back under, and at activate().
+  uint8_t linearRetargetStreak_ = 0;
+
+  // msSinceLastReanchor_ -- time since the last reanchor() on EITHER
+  // channel (a single shared timer -- only one of linear_/rotational_ is
+  // ever the active dominant channel at a time, so there is never a need
+  // to distinguish which channel it last gated). Reset to
+  // kDivergenceReanchorMinIntervalMs (this file's own anonymous-namespace
+  // constant, executor.cpp) at activate() so a fresh command's own first
+  // possible reanchor is never blocked by a PREVIOUS command's timer.
+  uint32_t msSinceLastReanchor_ = 0;  // [ms]
+
+  // lastMeasuredVelocity_/lastThetaMeasRel_/lastThetaRate_ -- this tick's
+  // own measured-state snapshot, cached so plan() (which runs AFTER tick()
+  // within the same cycle, per app/DESIGN.md's own cycle-placement table)
+  // can read them when servicing a pendingLinearReanchor_/
+  // pendingRotationalReanchor_ request -- reanchor()'s own caller-supplied
+  // position/velocity seed (the one sanctioned measured-state exception)
+  // without plan() needing its own measured-signal parameters (plan()
+  // takes none, matching its existing 109-003 signature).
+  float lastMeasuredVelocity_ = 0.0f;  // [mm/s] measuredDistanceDelta/dt, this tick's own estimate
+  float lastThetaMeasRel_ = 0.0f;      // [rad] this tick's own thetaMeasRel
+  float lastThetaRate_ = 0.0f;         // [rad/s] this tick's own thetaRate
+
+  // completionLinear{Velocity,Acceleration}_/completionRotational{Velocity,
+  // Acceleration}_ -- this tick's own dominant-channel sample, refreshed
+  // every kArc/kPivot tick() (unconditionally, cheap) so that IF this
+  // tick's own completion test fires, activateNextOrIdle()'s velocity-
+  // continuous handoff (this file's own doc comment) has a same-cycle,
+  // exact seed to hand the next command's own dominant channel -- never
+  // stale by even one cycle.
+  float completionLinearVelocity_ = 0.0f;          // [mm/s]
+  float completionLinearAcceleration_ = 0.0f;      // [mm/s^2]
+  float completionRotationalVelocity_ = 0.0f;      // [rad/s]
+  float completionRotationalAcceleration_ = 0.0f;  // [rad/s^2]
+
+  // emergencyStopping_ -- 109-006's own solve-failure safety net
+  // (completeActive()'s own kSolveFail branch): true while both channels
+  // are being driven to solveToVelocity(0) after a solve failure, checked
+  // first (ahead of mode_/pendingLinear*_ dispatch) by BOTH plan() (always
+  // solveToVelocity(0), never the normal mode_-dependent solve) and tick()
+  // (a dedicated sample-both/check-rest/activateNextOrIdle() branch at the
+  // very top, bypassing the normal kTimed/kArc/kPivot dispatch and its own
+  // distance/dwell completion tests entirely) -- prevents Drive from being
+  // left holding a stale nonzero twist just because a solve failed mid-
+  // cruise (state()!=kIdle is the ONLY thing that keeps App::Pilot::tick()
+  // calling Drive::setTwist() at all).
+  bool emergencyStopping_ = false;
 
   CompletionEvent events_[kEventRingDepth]{};
   uint8_t eventCount_ = 0;

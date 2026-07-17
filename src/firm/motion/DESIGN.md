@@ -27,7 +27,9 @@ and is itself driven from the loop's cycle via `App::Pilot`
 (`app/pilot.{h,cpp}`) — see `app/DESIGN.md` for the loop-glue half of this
 story. 109-001 restored the solver only; 109-003 was the first real call
 site (TIMED mode); 109-005 added DISTANCE mode (coupled arcs and pure
-pivots, §2c) — the sprint's own turn-accuracy motivation.
+pivots, §2c) — the sprint's own turn-accuracy motivation; 109-006 added
+cross-boundary carry (the "no decel between same-vmax commands" headline
+requirement) and the divergence-replan triggers (§2d).
 
 ## 2. Orientation
 
@@ -240,17 +242,170 @@ skips the hold-timer/rate gate entirely and completes on the tolerance
 test alone ("accurate handoff... without a dwell", sprint.md's own
 semantics item 4).
 
-**`kDeadTime` (`Motion::kDeadTime`, `executor.h`) is declared but has no
-live call site yet** — ticket 006's own divergence-replan
-`retarget()`/`reanchor()` triggers are the first consumer. Re-derived at
-the 40ms cycle from sprint 100's own already-bench-measured `motor_lag`
-figure (120-140ms, `architecture-update.md`) rather than hand-picked by
-scaling the old 120ms/20ms-tick constant onto the new cycle (explicitly
-disallowed by this ticket's own semantics) — but NOT itself a fresh bench
-characterization (USB deploy was confirmed broken this session; one
-`mbdeploy probe` attempt per `hardware-bench-testing.md`'s own escalation
-path). See `app/DESIGN.md`'s own "kDeadTime" Open-Questions entry for the
-full derivation and the flag for a real re-characterization later.
+**`kDeadTime` (`Motion::kDeadTime`, `executor.h`) is declared, with its
+derivation preserved, but STILL has no live call site** — ticket 006's own
+`checkDivergence()` (below) is documented as the intended first consumer,
+but wiring it in as a `peek(elapsed + kDeadTime)` projection was tried
+during this ticket's own implementation and reverted: 130ms is a large
+fraction of a typical sub-second pivot/arc's own total duration, so
+"where the plan will be 130ms from now" is not a fair stand-in for "where
+the plan already is" without a matching measured-transport-lag model on
+the OTHER side of the comparison (the sim's own measured signal has no
+real transport lag to project past). `checkDivergence()` compares against
+the CURRENT elapsed sample instead. Re-derived at the 40ms cycle from
+sprint 100's own already-bench-measured `motor_lag` figure (120-140ms,
+`architecture-update.md`) rather than hand-picked by scaling the old
+120ms/20ms-tick constant onto the new cycle (explicitly disallowed by this
+ticket's own semantics) — but NOT itself a fresh bench characterization
+(USB deploy was confirmed broken this session; one `mbdeploy probe`
+attempt per `hardware-bench-testing.md`'s own escalation path). See
+`app/DESIGN.md`'s own "kDeadTime" Open-Questions entry for the full
+derivation and the flag for a real re-characterization later.
+
+### 2d. Boundary-velocity carry + replan triggers (109-006)
+
+**`exitSpeed(active, next)` — the "no decel between same-vmax commands"
+primitive.** `Executor::computeExitVelocity()` implements the sprint
+issue's own formula verbatim, evaluated with ONE-command lookahead only
+(`ring_[0]`, never a second successor beyond it), recomputed at `activate()`
+and whenever the active's own immediate successor changes
+(`maybeRetargetActiveForSuccessorChange()`, triggers (a)/(b)-tail below):
+
+| Condition | `exitSpeed` |
+|---|---|
+| No queued successor (`ring_[0]` empty) | 0 (decelerate to rest) |
+| Successor is TIMED | 0 (TIMED chaining is 109-003's own in-place `solveToVelocity()`/replace path, not this carry) |
+| Pivot on either side (an arc chaining into a pivot, or vice versa) | 0 (no shared dominant channel to carry a velocity through) |
+| Sign reversal (opposite-signed `distance`/`deltaHeading`) | 0 (decelerates THROUGH zero, never carries a signed velocity across a reversal) |
+| Arc → arc, same sign | `min(vmaxEff(active), vmaxEff(next), reachableEntrySpeed(\|next.distance\|))`, linear domain |
+| Pivot → pivot, same sign | the SAME rule, evaluated in the rotational domain (`deltaHeading`/`yaw_rate_max`/`yaw_acc_max`/`yaw_jerk_max` in place of `distance`/`v_body_max`/`a_decel`/`j_max`) |
+
+`reachableEntrySpeed(d) = -k + sqrt(k^2 + 2*aDecel*d)`, `k = aDecel^2/(2*jerk)`
+(`jerk<=0`, the existing "off" sentinel, collapses to `sqrt(2*aDecel*d)`) —
+the fastest speed a channel could enter a `d`-length decel-to-rest segment
+at and still reach rest by its own end. The result feeds
+`JerkTrajectory::solveToState()`'s own `targetVelocity` argument (`plan()`'s
+own kArc/kPivot branch, replacing 109-005's `solveToRest()` call) — Ruckig
+itself is what actually avoids decelerating to rest at the boundary; this
+class only computes what velocity to ask it to arrive at. Only rest-
+terminated pivots still get the dwell landing (109-005's own restriction,
+`executor.h`'s own "Dwell completion" comment) — a chained pivot now
+genuinely sweeps through its own boundary at nonzero rate instead of
+landing and re-accelerating, which is what actually exercises that
+restriction with a real non-dwelling handoff.
+
+**Velocity-continuous handoff (trigger (d)).** `activateNextOrIdle()`
+no longer unconditionally `reset()`s both channels to zero on a queue
+pop — it resets both, then re-seeds ONLY the just-completed command's own
+dominant channel (`linear_` for `kArc`, `rotational_` for `kPivot`) from
+THIS tick's own last sample (`completionLinearVelocity_`/
+`completionLinearAcceleration_` or the rotational twin, refreshed every
+`kArc`/`kPivot` tick()) via `JerkTrajectory::seedCurrent(0, velocity,
+acceleration)` before `activate(next, retarget=true)`. Harmless when the
+completing command's own exit velocity was 0 (its own last sample is
+already at, or within epsilon of, rest) — the SAME code path handles both
+a full-stop handoff and a velocity-continuous one; only the sampled state
+differs.
+
+**Replan triggers (a)-(e):**
+
+| Trigger | What re-solves | Seed |
+|---|---|---|
+| (a) enqueue adjacent to active, exit speed changes beyond threshold (>1mm/s linear / >0.02rad/s rotational) | in-place `solveToState()` toward the SAME target at the NEW exit velocity | the channel's own remembered last sample (never measured) |
+| (b) replace — tail | as (a) (`maybeRetargetActiveForSuccessorChange()` after a tail replace) | as (a) |
+| (b) replace — active | in-place `solveToVelocity()` (TIMED) or a full re-`activate()` from the moving state (DISTANCE) — both already `retarget=true` (109-003/109-005) | the channel's own remembered last sample |
+| (c) divergence — 5mm retarget (linear only) | `JerkTrajectory::retarget(newRemaining)`, `newRemaining` computed against the MEASURED position | velocity/acceleration from the channel's own remembered state (retarget()'s own contract); the FRAME rebase itself (`linearFrameOffset_`) is set to the measured position, not the channel's own pre-rebase position — see this section's own "Two bugs this ticket caught" below |
+| (c) divergence — 40mm/0.3rad reanchor | `JerkTrajectory::reanchor(position, velocity)` | the ONE sanctioned measured-state seed (position AND velocity), acceleration forced to 0 by `reanchor()` itself |
+| (d) handoff | `activateNextOrIdle()`'s own velocity-continuous seed (above) | this tick's own last sample |
+| (e) STOP | `RobotLoop::handleStop()`'s existing immediate `Drive::stop()` + `Pilot::flush()` (109-003's own established deviation, NOT changed by this ticket — see below) | n/a |
+
+Divergence thresholds (c) are evaluated once per `kArc`/`kPivot` `tick()`
+(`checkDivergence()`), comparing the MEASURED channel state against the
+dominant channel's own CURRENT-elapsed sampled position (not a
+`kDeadTime`-projected one, per this section's own kDeadTime note above) —
+`tick()` only ever SETS a pending flag (`pendingLinearReanchor_`/
+`pendingLinearRetarget_`/`pendingRotationalReanchor_`); the actual
+`retarget()`/`reanchor()` call happens inside the NEXT `plan()` (tick()
+"never solves", this file's own boundary). A reanchor is additionally
+rate-limited to at most one per `kDivergenceReanchorMinIntervalMs` (60ms).
+The 5mm linear retarget tier ALSO requires the divergence to persist for
+`kDivergenceRetargetStreakTicks` (3) CONSECUTIVE ticks before acting —
+this is NOT part of the sprint issue's own verbatim threshold table; see
+"Two bugs this ticket caught" below for why it was added. The rotational
+domain has no equivalent small-threshold retarget tier at all — the
+heading PD cascade in `App::Pilot` already continuously corrects small
+heading drift; only a GROSS (0.3rad) divergence during a pivot warrants
+replanning the trajectory itself.
+
+**STOP (trigger (e)) is unchanged, by design, not oversight.** The sprint
+issue's own trigger table describes "flush queue + `solveToVelocity(0)`
+both channels" for STOP; ticket 003 already established (and this ticket's
+own acceptance criteria are silent on changing it) that the wire `STOP`
+command's panic-stop path stays an IMMEDIATE `Drive::stop()` for safety,
+with `Pilot::flush()` clearing the executor's own queue/active command
+alongside it (`RobotLoop::handleStop()`'s own comment) — a graceful
+`solveToVelocity(0)` decel is what `Executor`'s OWN internally-triggered
+stops (`RAMP_TO_REST`, and 109-006's own `emergencyStopping_` solve-failure
+safety net below) use, not the wire STOP path itself.
+
+**Solve failure → `emergencyStopping_` (an edge case, not a formal
+acceptance criterion).** A failed solve (any of `solveToState()`/
+`solveToVelocity()`/`retarget()`/`reanchor()` returning false) inside
+`plan()`'s NORMAL (fresh/continuing) dispatch branch is fatal for the
+active command (`completeActive(kSolveFail)`, unchanged from 109-003) —
+but this ticket additionally flushes the REST of the ring (each own
+`kFlushed`) and drives BOTH channels to `solveToVelocity(0)` before
+`activateNextOrIdle()` (`emergencyStopping_`, a dedicated `tick()`
+sample-only branch bypassing the normal completion tests entirely) rather
+than dropping straight to `kIdle` at whatever velocity was live —
+`App::Pilot::tick()` only calls `Drive::setTwist()` while
+`state()!=kIdle`, so an immediate `kIdle` transition on solve failure
+would otherwise leave `Drive` holding a stale nonzero twist forever. A
+failed divergence-triggered `retarget()`/`reanchor()` (as opposed to a
+fresh/continuing solve) is deliberately NOT treated as fatal — see "Two
+bugs this ticket caught" immediately below.
+
+**`RAMP_TO_REST` accepts a mid-decel enqueue.** `enqueue()`'s own
+immediate-activation condition now also covers `state_==kRampToRest` (not
+only `kIdle`) when the queue is empty, with `retarget=true` (moving-state
+replan, keeps whatever velocity/acceleration seed the decelerating command
+still has) instead of `retarget=false` — a TIMED command coasting to rest
+with nothing queued behind it no longer has to reach FULL rest before a
+newly enqueued command can take over.
+
+**Two bugs this ticket caught (both against `test_heading_source.py`'s own
+ideal-plant ACCURACY gate, not a contrived edge case):**
+
+1. **A `+kDeadTime` divergence-comparison lead produced false-positive
+   triggers against short pivot/arc trajectories** (this section's own
+   kDeadTime note above) — reverted to comparing against the current
+   elapsed sample.
+2. **A single-tick divergence-retarget reaction to ordinary velocity-PID
+   ramp-lag silently regressed heading accuracy.** The real (non-ideal)
+   wheel plant's own encoder-measured position routinely lags the
+   Ruckig-planned position by a few mm during a command's own ramp-up
+   (expected, self-resolving PID tracking behavior, not a fault) —
+   reacting to a SINGLE momentary sample past the 5mm threshold rebased
+   the linear channel's own frame down to the momentarily-lagging measured
+   value with nothing to claw it back, and doing this two or three times
+   over a command's own lifetime compounded into a multi-degree heading
+   undershoot by completion (caught by the coupled-arc scenario:
+   ~2.9deg short of a commanded 45deg arc). Fixed two ways: (a) the frame
+   rebase itself must be set to the MEASURED position the `retarget()`
+   call's own `newRemaining` was computed against, not the channel's own
+   pre-rebase position (getting this backwards reintroduces the exact
+   same divergence into `thetaRef` every retarget, since the "corrected"
+   frame origin no longer matches what `newRemaining` assumed); (b) the
+   5mm tier additionally requires `kDivergenceRetargetStreakTicks` (3)
+   CONSECUTIVE ticks past threshold before acting, filtering a transient
+   ramp-lag blip from a genuinely sustained divergence. A failed
+   divergence `retarget()`/`reanchor()` is also NOT treated as fatal
+   (`plan()`'s own dispatch, above) — `JerkTrajectory::solvePositionControl()`
+   only ever commits a solve into the held trajectory on success, so a
+   failed correction attempt leaves the previous, still-valid trajectory
+   completely untouched; silently declining and letting `checkDivergence()`
+   re-evaluate next tick is strictly safer than tearing the whole active
+   command down over one bad correction attempt.
 
 ## 3. Constraints and Invariants
 
@@ -291,15 +446,16 @@ full derivation and the flag for a real re-characterization later.
   this subsystem.
 - **`Motion::Executor` calls `JerkTrajectory` — it never solves the math
   itself** (§2b's own "calls into JerkTrajectory... never does the solve
-  math itself" boundary). Divergence thresholds and boundary-velocity carry
-  across a DISTANCE command BOUNDARY (not-decelerating-to-rest at a shared
-  boundary) are still explicitly OUT of scope (ticket 006) — do not add
-  them to `Executor` incrementally. The heading PD cascade's own GAINS and
-  ARITHMETIC live in `App::Pilot`, not here (§2c) — `Executor` owns nothing
-  beyond the ring/state machine/solve requests/completion events/the
-  feedforward+measured-heading bookkeeping §2c describes — no bus access,
-  no wire codec, no `App::Drive` reference, no `heading_kp`/`heading_kd`
-  (that is `App::Pilot`'s own boundary).
+  math itself" boundary). This still holds after 109-006's own boundary-
+  velocity/divergence-replan additions (§2d): `tick()` never solves (it
+  only DETECTS divergence and sets a pending flag) — every actual
+  `solveToState()`/`solveToVelocity()`/`retarget()`/`reanchor()` call
+  happens inside `plan()`, still at most one per call. The heading PD
+  cascade's own GAINS and ARITHMETIC live in `App::Pilot`, not here (§2c) —
+  `Executor` owns nothing beyond the ring/state machine/solve requests/
+  completion events/the feedforward+measured-heading bookkeeping §2c/§2d
+  describe — no bus access, no wire codec, no `App::Drive` reference, no
+  `heading_kp`/`heading_kd` (that is `App::Pilot`'s own boundary).
 
 ## 4. Design
 
@@ -331,11 +487,13 @@ never a caller-supplied flag.
 - **`Motion::Executor`** (`executor.h`) — `configure()`, `enqueue()`,
   `flush()`, `plan()`, `tick(dtMs, measuredDistanceDelta,
   measuredHeadingAbs)`, `popEvent()`, `queueDepth()`/`activeId()`/
-  `state()`. See §2b/§2c above for the full contract; `Executor::Twist`'s
+  `state()`. See §2b/§2c/§2d above for the full contract; `Executor::Twist`'s
   `headingActive`/`thetaRef`/`thetaMeas`/`omegaDes` fields (109-005) are
   what `App::Pilot`'s heading PD cascade consumes.
 - **`Motion::kDeadTime`** (`executor.h`, 109-005) — the divergence-replan
-  dead-time constant; no live call site yet (ticket 006's own consumer).
+  dead-time constant; declared, derivation preserved, but STILL no live
+  call site (§2d's own kDeadTime note — a naive projection regressed a
+  sim accuracy test and was reverted).
 
 ### Consumes
 
@@ -369,10 +527,11 @@ dependency edge from `motion/` to `app/` or `devices/` is introduced. See
   invariant) would reject such an input as infeasible, which is the
   correct outcome, but it is the CALLER's job (`Motion::Executor`) to never
   construct such a request — same caller-responsibility boundary as
-  `retarget()`/`reanchor()`'s unguarded backward target. `Executor` itself
-  still never calls `solveToState()` (109-005's DISTANCE mode uses
-  `solveToRest()` — a target-velocity-0 boundary handoff is ticket 006's
-  own boundary-velocity-carry scope) — this remains untested until then.
+  `retarget()`/`reanchor()`'s unguarded backward target. `computeExitVelocity()`
+  (§2d, 109-006) is the guard that keeps this true in practice — it only
+  ever returns a same-sign, reachable exit velocity, or 0 — but this
+  remains an invariant `Executor` must uphold, not one `JerkTrajectory`
+  itself enforces.
 - **Flash budget grew for real at this ticket** (109-001's own "flash-
   neutral until something calls it" note no longer holds — this IS the
   first real call site). `arm-none-eabi-size` after this ticket: FLASH
@@ -380,14 +539,21 @@ dependency edge from `motion/` to `app/` or `devices/` is introduced. See
   region — still comfortably within budget, but a real, expected jump now
   that Ruckig's actual solve code is linked in (no longer dead-code-
   eliminated). Track this number, don't be alarmed by it in isolation.
-- **Boundary-velocity carry and divergence replan do not exist yet** —
-  109-003 landed TIMED mode + `replace` (§2b); 109-005 added DISTANCE mode
+- **Boundary-velocity carry and divergence replan now exist (109-006, §2d)**
+  — 109-003 landed TIMED mode + `replace` (§2b); 109-005 added DISTANCE mode
   (kArc/kPivot), the heading PD cascade split with `App::Pilot`, dwell
-  completion, and single-command distance-overshoot carry (§2c). Ticket
-  006 adds cross-boundary carry (no decel-to-rest at a shared same-`v_max`
-  boundary) and the `retarget()`/`reanchor()` divergence-replan triggers
-  (`Motion::kDeadTime`'s first consumer); the sprint 109 `sprint.md`
-  Architecture section is the forward-looking reference.
+  completion, and single-command distance-overshoot carry (§2c); 109-006
+  adds cross-boundary carry (no decel-to-rest at a shared same-`v_max`
+  boundary) and the `retarget()`/`reanchor()` divergence-replan triggers.
+  `Motion::kDeadTime` remains declared but unconsumed (§2d's own note) —
+  the dead-time projection this constant was reserved for is deferred to a
+  real bench characterization (USB deploy confirmed broken this session).
+  A solve-failure fault-bit wire-up (`App::Telemetry`'s own `fault_bits`)
+  was considered for the "solve failure" edge case but deferred — it
+  requires touching `app/telemetry.h`/`robot_loop.cpp`, outside this
+  ticket's own stated file scope (`executor.{h,cpp}`, `motion/DESIGN.md`);
+  `Executor`'s own `emergencyStopping_` safety net (§2d) handles the
+  behavior-level requirement (flush + decel to rest) without it.
 - **Dominant-channel-with-slaved-PD accuracy under curved arcs is an
   empirical bet, not derived analytically** (sprint.md's own Open Question
   1) — this ticket's own sim system test

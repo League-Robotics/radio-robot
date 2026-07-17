@@ -381,11 +381,21 @@ called with real elapsed time between calls).
   session, not a tick-count artifact of the old 20ms cycle) — rather than
   hand-picked by scaling the OLD constant's own tick count onto the new
   40ms cycle (explicitly disallowed by ticket 005's own semantics item 6:
-  "do not hand-pick a new constant from the old one"). This value has NO
-  live call site yet (ticket 006 is the first consumer, via
-  `retarget()`/`reanchor()`'s own divergence triggers) — it is declared
-  (`Motion::kDeadTime`, `motion/executor.h`) and derived here so ticket 006
-  does not have to re-derive it from scratch, and is flagged for a real
-  fresh bench characterization (not a reuse of a DIFFERENT sprint's
-  measurement, however well-reasoned) once USB deploy is fixed, per this
-  ticket's own acceptance criterion.
+  "do not hand-pick a new constant from the old one"). Ticket 006 (the
+  intended first consumer, via `checkDivergence()`'s own divergence-
+  comparison) tried wiring it in as a `peek(elapsed + kDeadTime)` lead and
+  reverted it: 130ms is a large fraction of a typical sub-second pivot/arc's
+  own total duration, so "where the plan will be 130ms from now" is not a
+  fair stand-in for "where the plan already is" without a matching
+  measured-transport-lag model on the OTHER side of the comparison (the
+  sim's own measured signal has none to project past) — the projection
+  produced false-positive divergence triggers against
+  `motion_executor_harness.cpp`'s own pivot dwell scenarios.
+  `checkDivergence()` compares against the CURRENT elapsed sample instead;
+  `kDeadTime` STILL has no live call site. It stays declared
+  (`Motion::kDeadTime`, `motion/executor.h`) with its derivation preserved
+  here, flagged for a real fresh bench characterization (not a reuse of a
+  DIFFERENT sprint's measurement, however well-reasoned) once USB deploy is
+  fixed — a genuine measured-transport-lag model on the comparison's other
+  side is likely a precondition for this projection ever being safe to
+  wire in, not just a better constant value.

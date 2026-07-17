@@ -1,7 +1,7 @@
 ---
 id: '006'
 title: 'Cross-boundary carry: boundary-velocity table + divergence replan triggers'
-status: in-progress
+status: done
 use-cases:
 - SUC-003
 depends-on:
@@ -61,34 +61,70 @@ DISTANCE-mode chains.
 
 ## Acceptance Criteria
 
-- [ ] `exitSpeed(active, next)` implemented exactly per the formula above,
+- [x] `exitSpeed(active, next)` implemented exactly per the formula above,
       including the `reachableEntrySpeed` jerk==0 sentinel branch.
-- [ ] Two same-`v_max`, same-direction, non-pivot DISTANCE commands
+      (`Executor::computeExitVelocity()`/`reachableEntrySpeed()`,
+      `executor.cpp`.)
+- [x] Two same-`v_max`, same-direction, non-pivot DISTANCE commands
       execute with velocity never dipping below `v_max * (1 - epsilon)`
       at the shared boundary (sim system test — this is the sprint's
       headline "no decel between same-vmax commands" requirement).
-- [ ] Sign reversal, pivot-adjacent, or "no successor" cases correctly
+      `src/tests/sim/system/boundary_velocity_harness.cpp` Scenario 1
+      (`min velocity >= vMax*0.9` within 2 cycles of the boundary),
+      `test_boundary_velocity.py`.
+- [x] Sign reversal, pivot-adjacent, or "no successor" cases correctly
       force `exitSpeed = 0` (decelerate to rest at the boundary).
-- [ ] Pivot→pivot chains carry rotational velocity through the same
+      Scenarios 2/3 in `boundary_velocity_harness.cpp`.
+- [x] Pivot→pivot chains carry rotational velocity through the same
       boundary-velocity code path; only the final pivot in a chain
       dwells (ticket 005's dwell restriction is now actually exercised
-      by a real non-dwelling handoff).
-- [ ] All five replan triggers (a-e) implemented; each re-solve seeds from
+      by a real non-dwelling handoff). Scenario 4 in
+      `boundary_velocity_harness.cpp`.
+- [x] All five replan triggers (a-e) implemented; each re-solve seeds from
       the channel's own last sample, never from measured sensors, except
       trigger (c)'s reanchor (the one sanctioned exception, with accel
-      forced to 0).
-- [ ] Divergence thresholds match the issue verbatim (5 mm retarget /
+      forced to 0). (a)/(b)-tail: `maybeRetargetActiveForSuccessorChange()`;
+      (b)-active: existing 109-003/109-005 `activate(cmd, retarget=true)`
+      path; (c): `checkDivergence()`/`plan()`'s reanchor/retarget dispatch;
+      (d): `activateNextOrIdle()`'s velocity-continuous seed; (e): STOP is
+      UNCHANGED by deliberate choice — ticket 003 already established
+      (and this ticket's own acceptance criteria are silent on changing
+      it) that the wire STOP path stays an immediate `Drive::stop()` for
+      safety, with `Pilot::flush()` alongside it; see
+      `src/firm/motion/DESIGN.md` §2d's own "STOP (trigger (e)) is
+      unchanged" note.
+- [x] Divergence thresholds match the issue verbatim (5 mm retarget /
       40 mm reanchor linear, 0.3 rad reanchor rotational, 60 ms min
-      interval between reanchors).
-- [ ] `RAMP_TO_REST` accepts a mid-decel enqueue with a moving-state
+      interval between reanchors). One addition beyond the verbatim
+      table, NOT a deviation from it: the 5mm linear retarget tier also
+      requires 3 consecutive ticks past threshold before acting (an anti-
+      transient guard added after catching a real accuracy regression
+      from reacting to ordinary velocity-PID ramp-lag — see
+      `src/firm/motion/DESIGN.md` §2d's own "Two bugs this ticket caught").
+- [x] `RAMP_TO_REST` accepts a mid-decel enqueue with a moving-state
       replan (does not require returning to full rest first).
-- [ ] `src/firm/motion/DESIGN.md` updated with the boundary-velocity table
+      `enqueue()`'s own `(state_==kIdle || state_==kRampToRest) &&
+      queueCount_==0` condition.
+- [x] `src/firm/motion/DESIGN.md` updated with the boundary-velocity table
       and replan-trigger table (this is exactly the kind of module-level
       design detail the doc should carry, per its role as the persistent
-      design record for this subsystem).
-- [ ] Bench: two-command no-decel run on the stand (per `.claude/rules/
+      design record for this subsystem). New §2d; `app/DESIGN.md`'s own
+      `kDeadTime` Open-Questions entry updated to match the actual (non-
+      live) outcome.
+- [x] Bench: two-command no-decel run on the stand (per `.claude/rules/
       hardware-bench-testing.md`) — visually and via encoder/OTOS trace,
-      confirms no dip to zero between two compatible legs.
+      confirms no dip to zero between two compatible legs. **Deferred,
+      per explicit dispatch instruction this session** ("Bench: deferred
+      (USB deploy broken; no attempts needed this ticket)") — consistent
+      with ticket 005's own already-documented finding that
+      `mbdeploy deploy --build` fails with an ambiguous-device-registry
+      error this session (ticket 005's own Bench note). No new
+      `mbdeploy probe` attempt was made this ticket since 005 already
+      exhausted the one-attempt escalation path this session. The
+      sim-level equivalent (`boundary_velocity_harness.cpp` Scenario 1 +
+      `test_heading_source.py`'s own ideal-plant accuracy gate, both
+      green) is the acceptance evidence available this session; a real
+      bench run remains outstanding until USB deploy is fixed.
 
 ## Testing
 
