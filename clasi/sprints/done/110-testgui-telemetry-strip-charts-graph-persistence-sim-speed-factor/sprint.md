@@ -1,10 +1,13 @@
 ---
 id: '110'
 title: 'TestGUI: telemetry strip charts, graph persistence, sim speed factor'
-status: ticketing
+status: closed
 branch: sprint/110-testgui-telemetry-strip-charts-graph-persistence-sim-speed-factor
 worktree: false
-use-cases: [SUC-001, SUC-002, SUC-003]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
 issues:
 - testgui-telemetry-strip-charts.md
 - testgui-graphs-not-persistent-on-view-switch.md

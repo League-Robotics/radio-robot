@@ -187,6 +187,59 @@ def test_from_pb2_populates_active_for_segment_completion_detection(raw_active):
 
 
 # ---------------------------------------------------------------------------
+# 1b. queue_depth/active_id/exec_state/heading_source (109-003/109-005,
+# decoded by 110-002) -- plain proto3 scalars on the primary Telemetry
+# message with no has_* gate, so from_pb2() populates them unconditionally,
+# the same "always present" treatment as active/acks/fault_bits/event_bits.
+# ---------------------------------------------------------------------------
+
+
+def test_from_pb2_decodes_executor_and_heading_source_fields():
+    telemetry = telemetry_pb2.Telemetry(
+        now=1, mode=planner_pb2.IDLE, seq=0,
+        queue_depth=3, active_id=42,
+        exec_state=telemetry_pb2.EXEC_RUNNING,
+        heading_source=telemetry_pb2.HEADING_SOURCE_STATUS_ENCODER,
+    )
+
+    frame = TLMFrame.from_pb2(telemetry)
+
+    assert frame.queue_depth == 3
+    assert frame.active_id == 42
+    assert frame.exec_state == telemetry_pb2.EXEC_RUNNING
+    assert frame.heading_source == telemetry_pb2.HEADING_SOURCE_STATUS_ENCODER
+
+
+def test_from_pb2_executor_and_heading_source_default_when_unset():
+    """A bare Telemetry() (older firmware construction path / no explicit
+    value) has no has_* gate for these fields -- proto3 zero-value defaults
+    apply: queue_depth=0, active_id=0, exec_state=EXEC_IDLE (0),
+    heading_source=HEADING_SOURCE_STATUS_OTOS (0). This is the SAME
+    "documented default, no crash" degrade-gracefully behavior `active`
+    already has for older firmware that never sets it."""
+    telemetry = telemetry_pb2.Telemetry(now=1, mode=planner_pb2.IDLE, seq=0)
+
+    frame = TLMFrame.from_pb2(telemetry)
+
+    assert frame.queue_depth == 0
+    assert frame.active_id == 0
+    assert frame.exec_state == telemetry_pb2.EXEC_IDLE
+    assert frame.heading_source == telemetry_pb2.HEADING_SOURCE_STATUS_OTOS
+
+
+def test_tlmframe_dataclass_defaults_to_none_for_new_fields():
+    """A plain TLMFrame() built WITHOUT going through from_pb2() (e.g. a
+    test double, or a legacy construction path) leaves these four fields at
+    the dataclass's own None default -- distinguishing "never decoded" from
+    "decoded as the proto3 zero value" for any caller that cares."""
+    frame = TLMFrame()
+    assert frame.queue_depth is None
+    assert frame.active_id is None
+    assert frame.exec_state is None
+    assert frame.heading_source is None
+
+
+# ---------------------------------------------------------------------------
 # 2. NezhaProtocol.set_config_binary() -- the live half of 096-007's binary
 # config client (get_config_binary() targeted the now-reserved `get` arm --
 # deleted by 104-002, see this file's own header note).

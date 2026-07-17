@@ -12,6 +12,13 @@ one labelled row per component:
     encpose— encoder-only dead-reckoned pose              [mm, mm, deg]
     otos   — raw OTOS pose                                [mm, mm, deg]
     twist  — fused body-frame velocity + velocity arrow   [mm/s, deg/s]
+    heading src — App::HeadingSource's currently-active sensor (109-005,
+                  SUC-004; decoded 110-002). This is a standing stakeholder
+                  requirement ("I want to know if you're using the
+                  [encoders]... that's a big deal") — the row is styled
+                  loudly (amber background + "(fallback)" text) whenever
+                  the source is ENCODER, not just a plain text value like
+                  every other row above.
 
 Velocity vectors (``vel`` and ``twist``) are additionally drawn as an arrow
 whose direction is the body-frame direction of motion (forward = up, left =
@@ -161,6 +168,38 @@ def fmt_vel(vel: "tuple[int, ...] | None") -> str:
     return "  ".join(f"{w:+d}" for w in vel) + "   mm/s"
 
 
+# HeadingSourceStatus raw values (telemetry.proto) -- mirrored here rather
+# than importing telemetry_pb2 into this Qt-free formatting module, matching
+# TLMFrame.from_pb2()'s own comment that these are the raw enum ints.
+# HEADING_SOURCE_STATUS_OTOS = 0, HEADING_SOURCE_STATUS_ENCODER = 1.
+_HEADING_SOURCE_ENCODER = 1
+
+
+def is_heading_source_fallback(heading_source: "int | None") -> bool:
+    """True when ``heading_source`` reports the ENCODER fallback (OTOS is
+    NOT currently trusted for heading) -- the stakeholder-mandated
+    visibility signal (SUC-004). ``None`` (undecoded / pre-109-005
+    firmware) is NOT a fallback state -- there is nothing to flag."""
+    return heading_source == _HEADING_SOURCE_ENCODER
+
+
+def fmt_heading_source(heading_source: "int | None") -> str:
+    """Render ``heading_source`` as a short, unambiguous label.
+
+    ``None`` — undecoded (older firmware/frame path) — renders ``—``, the
+    same placeholder every other absent field in this panel uses.
+    ``HEADING_SOURCE_STATUS_OTOS`` (0) renders ``OTOS``.
+    ``HEADING_SOURCE_STATUS_ENCODER`` (1) renders ``ENCODER (fallback)`` —
+    deliberately verbose, not just ``ENCODER``, so the fallback state reads
+    as an alert on its own, independent of the row's background styling.
+    """
+    if heading_source is None:
+        return "—"
+    if is_heading_source_fallback(heading_source):
+        return "ENCODER (fallback)"
+    return "OTOS"
+
+
 def fmt_twist(twist: "tuple[int, ...] | None") -> str:
     """Body-frame twist; differential ``(v, ω)`` or mecanum ``(vx, vy, ω)``."""
     parsed = twist_velocity(twist)
@@ -176,22 +215,47 @@ def fmt_twist(twist: "tuple[int, ...] | None") -> str:
 # Qt widget builder (lazy PySide6 import)
 # ---------------------------------------------------------------------------
 
-def build_telemetry_panel() -> "tuple[Any, Any]":
+def build_telemetry_panel(recorder: "Any" = None) -> "tuple[Any, Any]":
     """Build the telemetry breakout panel.
 
     Returns ``(widget, controller)``.  ``controller.update_frame(frame)`` must
     be called on the Qt main thread with each ``TLMFrame``; it refreshes every
     value label and repaints the two velocity arrows.
+
+    ``recorder`` (110-002) is the SAME ``turn_graphs.TurnTraceRecorder`` the
+    top graph tabs (``TurnGraphPanel``) already own -- passed in by the
+    caller (``__main__.py`` hands it ``graph_panel.recorder``) so the
+    rolling 10-second strip charts occupying this panel's previously-unused
+    right-hand space read the identical telemetry history the top graphs
+    do. No second recorder is created and no telemetry frame is processed
+    twice: this panel never calls ``add_tlm``/``add_camera`` on the
+    recorder itself, it only reads ``recorder.series`` at redraw time. If
+    omitted (e.g. a standalone test of this panel alone), a private, empty
+    ``TurnTraceRecorder`` is created so the strip-chart tabs still render
+    (with no data) rather than failing to build.
     """
-    from PySide6.QtCore import Qt  # type: ignore[import-untyped]
+    from PySide6.QtCore import Qt, QTimer  # type: ignore[import-untyped]
     from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPolygonF  # type: ignore[import-untyped]
     from PySide6.QtCore import QPointF
     from PySide6.QtWidgets import (  # type: ignore[import-untyped]
         QGridLayout,
         QLabel,
         QSizePolicy,
+        QTabWidget,
         QWidget,
     )
+
+    from .turn_graphs import (  # lazy, same reason as the PySide6 imports above
+        DISTANCE,
+        HEADING,
+        WHEEL_POS,
+        WHEEL_SPEED,
+        StripChartCanvas,
+        TurnTraceRecorder,
+    )
+
+    if recorder is None:
+        recorder = TurnTraceRecorder()
 
     class _ArrowIndicator(QWidget):
         """Square widget that paints a velocity arrow from its centre.
@@ -297,6 +361,7 @@ def build_telemetry_panel() -> "tuple[Any, Any]":
         ("encpose", "tlm_val_encpose", False, None),
         ("otos", "tlm_val_otos", False, None),
         ("twist", "tlm_val_twist", True, "tlm_arrow_twist"),
+        ("heading src", "tlm_val_heading_source", False, None),
     ]
 
     value_labels: dict[str, Any] = {}
@@ -319,8 +384,38 @@ def build_telemetry_panel() -> "tuple[Any, Any]":
             grid.addWidget(arrow, i, 2, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             arrows[arrow_obj] = arrow
 
-    # A trailing empty column absorbs horizontal slack so the value text and
-    # its arrow stay packed together on the left rather than spreading apart.
+    # Rolling 10-second strip charts (110-002) occupy the right-hand column
+    # that used to be pure horizontal-slack padding -- a tabbed widget
+    # (playfield-mode tab styling: a plain QTabWidget, same as
+    # TurnGraphPanel's own tab bar) spanning every row of this grid.
+    strip_tabs = QTabWidget()
+    strip_tabs.setObjectName("telemetry_strip_charts")
+    _strip_speed = StripChartCanvas("Wheel speed", "mm/s", WHEEL_SPEED)
+    _strip_pos = StripChartCanvas("Wheel position", "mm", WHEEL_POS)
+    _strip_head = StripChartCanvas("Heading Δ", "deg", HEADING)
+    _strip_dist = StripChartCanvas("Distance", "cm", DISTANCE)
+    for w, obj_name, name in ((_strip_speed, "strip_chart_wheel_speed", "Wheel speed"),
+                              (_strip_pos, "strip_chart_wheel_position", "Wheel position"),
+                              (_strip_head, "strip_chart_heading", "Heading"),
+                              (_strip_dist, "strip_chart_distance", "Distance")):
+        w.setObjectName(obj_name)
+        strip_tabs.addTab(w, name)
+
+    def _redraw_current_strip_chart() -> None:
+        w = strip_tabs.currentWidget()
+        if isinstance(w, StripChartCanvas):
+            w.redraw(recorder)
+
+    strip_tabs.currentChanged.connect(lambda _i: _redraw_current_strip_chart())
+    strip_timer = QTimer(panel)
+    strip_timer.timeout.connect(_redraw_current_strip_chart)
+    strip_timer.start(200)  # [ms] throttled redraw of the visible tab only
+
+    grid.addWidget(strip_tabs, 0, 3, len(rows) + 1, 1)
+
+    # Column 0-2 hold the label/value/arrow columns above; column 3 now
+    # holds the strip-chart tabs and gets ALL the stretch (it previously
+    # absorbed horizontal slack with nothing in it).
     grid.setColumnStretch(0, 0)
     grid.setColumnStretch(1, 0)
     grid.setColumnStretch(2, 0)
@@ -343,6 +438,20 @@ def build_telemetry_panel() -> "tuple[Any, Any]":
             self._values["tlm_val_encpose"].setText(fmt_pose(getattr(frame, "encpose", None)))
             self._values["tlm_val_otos"].setText(fmt_pose(getattr(frame, "otos", None)))
             self._values["tlm_val_twist"].setText(fmt_twist(getattr(frame, "twist", None)))
+
+            heading_source = getattr(frame, "heading_source", None)
+            heading_lbl = self._values["tlm_val_heading_source"]
+            heading_lbl.setText(fmt_heading_source(heading_source))
+            if is_heading_source_fallback(heading_source):
+                # Loud, impossible-to-miss styling for the stakeholder's
+                # "big deal" non-gyro state (SUC-004) -- amber background,
+                # bold text, not just a plain label value like every other
+                # row in this panel.
+                heading_lbl.setStyleSheet(
+                    "background-color: #ffb300; color: #1a1a1a; "
+                    "font-weight: bold; padding: 1px 4px; border-radius: 3px;")
+            else:
+                heading_lbl.setStyleSheet("")
 
             wheel = wheel_velocity(getattr(frame, "vel", None))
             self._arrows["tlm_arrow_vel"].set_vector(*(wheel or (0.0, 0.0)))

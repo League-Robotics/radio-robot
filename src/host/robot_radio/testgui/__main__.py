@@ -1202,7 +1202,10 @@ def _build_main_window():  # type: ignore[return]
     # Parsed-telemetry breakout panel — sits between the canvas and the
     # console.  Fed structured TLMFrames by on_frame_ready(); the raw TLM
     # wire lines are filtered out of the console (see _append_log).
-    telemetry_widget, telemetry_ctrl = build_telemetry_panel()
+    # 110-002: share the SAME TurnTraceRecorder the top graph tabs
+    # (graph_panel) own -- the telemetry pane's rolling 10-second strip
+    # charts are a windowed VIEW over it, not a second recorder/consumer.
+    telemetry_widget, telemetry_ctrl = build_telemetry_panel(recorder=graph_panel.recorder)
     right_splitter.addWidget(telemetry_widget)
 
     # Log pane (QPlainTextEdit) — receives timestamped TX/RX lines, minus the
@@ -1392,19 +1395,52 @@ def _build_main_window():  # type: ignore[return]
             sprint 098, so a fused-only heading would never move either.
             Falls back to fused once the encoder trace has no data yet
             (matches the position fallback in canvas.py).
+
+            110-003 (Sim speed-up factor stutter/breakage fix): ``feed()``/
+            ``add_tlm()`` run for EVERY drained frame (cheap accumulation --
+            ``TurnGraphPanel.add_tlm()`` only sets a dirty flag a separate
+            150ms QTimer redraws from), but ``canvas_ctrl.refresh()`` is
+            called AT MOST ONCE per drain, after the loop, from the LAST
+            frame's state -- not once per frame inside it. At sim speed
+            factor N, ``SimLoop``'s tick thread steps N cycles per
+            wall-clock iteration and the (real, unmodified) firmware
+            simulator emits one TLM line per cycle
+            (``TestSim::SimHarness::step()``), so ``SimLoop.
+            _drain_tlm_into_queue()`` delivers all N of a single iteration's
+            frames to ``on_telemetry`` back to back before this slot next
+            runs -- confirmed by this ticket's own harness
+            (``test_sim_speed_factor.py``): burst size scales 1:1 with the
+            selected multiplier. Refreshing here per frame meant
+            ``canvas_ctrl.refresh()`` -- which REBUILDS every trace's full
+            ``QPainterPath`` from scratch each call (``CanvasController.
+            _update_traces()``, cost scaling with total accumulated trace
+            length) -- ran up to N times per ~50ms iteration instead of
+            once, the actual GUI-thread-congestion mechanism behind the
+            reported 10x "herky-jerky"/20x "broken" symptom (not sim-side
+            mistiming -- the sim's own pacing is unchanged by this fix; see
+            the ticket file's own diagnosis). Coalescing to one refresh per
+            drained burst removes the redundant, discarded intermediate
+            redraws entirely -- the final on-screen state (drawn from the
+            last frame's data, with every frame's data already fed into the
+            TraceModel/graph panel first) is identical to before, just
+            without repainting N-1 throwaway times.
             """
             last_frame = None
+            avatar_yaw_rad = None
+            any_frame = False
             while True:
                 try:
                     frame = _pending_frames.get_nowait()
                 except Exception:
                     break
+                any_frame = True
                 last_frame = frame
                 trace_model.feed(frame)
                 graph_panel.add_tlm(time.monotonic(), frame)
                 avatar_yaw_rad = trace_model.encoder_yaw
                 if avatar_yaw_rad is None and frame.pose is not None:
                     avatar_yaw_rad = math.radians(frame.pose[2] / 100.0)
+            if any_frame:
                 if _state.get("live_view_active"):
                     canvas_ctrl.refresh(update_marker=False)
                 else:

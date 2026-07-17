@@ -1,9 +1,11 @@
 ---
 id: '002'
 title: Telemetry-pane rolling 10-second strip charts + heading-source visibility
-status: open
-use-cases: [SUC-002]
-depends-on: ['001']
+status: done
+use-cases:
+- SUC-002
+depends-on:
+- '001'
 github-issue: ''
 issue: testgui-telemetry-strip-charts.md
 completes_issue: true
@@ -58,26 +60,83 @@ telemetry pane since that field shipped, so close the gap now:
 
 ## Acceptance Criteria
 
-- [ ] A new tabbed widget (playfield-mode-tab styling) occupies the
+- [x] A new tabbed widget (playfield-mode-tab styling) occupies the
       telemetry section's previously-unused right-hand space, with four
       tabs: wheel speed, wheel position, heading, distance.
-- [ ] Each tab shows a continuously-scrolling window of at most the last
+- [x] Each tab shows a continuously-scrolling window of at most the last
       10 seconds of that series — verified by a windowing test (points
       older than 10 s excluded from the strip-chart view; the SAME points
       remain present in the unaffected top-graph recorder/view).
-- [ ] The strip charts read from the SAME `TurnTraceRecorder` the (by-now
+- [x] The strip charts read from the SAME `TurnTraceRecorder` the (by-now
       fixed, ticket 001) top graphs use — no second recorder, no second
       telemetry-consumption path.
-- [ ] `queue_depth`, `active_id`, `exec_state`, `heading_source` are all
+- [x] `queue_depth`, `active_id`, `exec_state`, `heading_source` are all
       added to the `TLMFrame` dataclass and decoded in `from_pb2()`,
       following its existing additive-field/optional-default convention.
-- [ ] `heading_source` is visibly surfaced in the telemetry pane (OTOS vs.
+- [x] `heading_source` is visibly surfaced in the telemetry pane (OTOS vs.
       encoder-fallback) — the hard, stakeholder-driven bar.
-- [ ] Older firmware that doesn't set these fields (or older `TLMFrame`
+- [x] Older firmware that doesn't set these fields (or older `TLMFrame`
       construction paths) degrades gracefully — fields read `None`/a
       documented default, no crash.
-- [ ] Full `src/tests/testgui/` suite stays green; `TLMFrame.from_pb2()`'s
+- [x] Full `src/tests/testgui/` suite stays green; `TLMFrame.from_pb2()`'s
       own existing decode tests are extended, not replaced.
+
+## Findings / Completion Notes (2026-07-17)
+
+**Decode gap closure**: `TLMFrame` (protocol.py) gained four new fields
+(`queue_depth`, `active_id`, `exec_state`, `heading_source`), decoded
+unconditionally in `from_pb2()` (telemetry.proto declares them as plain
+proto3 scalars with no `has_*` gate — the SAME "always present" treatment
+`active`/`acks`/`fault_bits`/`event_bits` already get). `exec_state`/
+`heading_source` are kept as raw enum ints (matching `AckEntry.status`'s
+own raw-int convention), not decoded into a host-side string — a caller
+compares against `telemetry_pb2.EXEC_*`/`HEADING_SOURCE_STATUS_*`
+directly. Older firmware / a bare `TLMFrame()` not built via `from_pb2()`
+stays at the dataclass's own `None` default (not a crash); a `Telemetry()`
+built with no explicit value for these fields decodes to the proto3
+zero-value default (0 for each), the same graceful-degrade shape `active`
+already has.
+
+**`queue_depth`/`active_id`/`exec_state` — decoded but NOT displayed.**
+Per this ticket's own item 3, these three are decoded into `TLMFrame` (same
+frame, same adapter method, cheap) but left UNSHOWN in the telemetry pane
+this ticket — only `heading_source` (the stakeholder-mandated visibility
+requirement) got a panel row. Surfacing executor queue/state visibility is
+left as a future ticket's own UI work if wanted.
+
+**`heading_source` visibility**: new "heading src" row in the telemetry
+panel grid (`telemetry_panel.py`), styled loudly (amber background, bold
+text, "ENCODER (fallback)" text) whenever `heading_source ==
+HEADING_SOURCE_STATUS_ENCODER` — the non-gyro state is visually impossible
+to miss, not just a plain text value like every other row. `None`
+(undecoded/older firmware) is NOT treated as fallback — renders `—` like
+every other absent field.
+
+**Strip charts**: `turn_graphs.py` gained `TurnTraceRecorder.latest_t()`
+(Qt-free "now" reference) and `StripChartCanvas` (a `_GraphCanvas`
+subclass that filters `recorder.series[key]` to the trailing `window`
+(default 10s) at redraw time — a pure windowing filter, never a second
+recorder or a second `add_tlm`/`add_camera` call site).
+`build_telemetry_panel()` gained an optional `recorder` parameter;
+`__main__.py` passes `graph_panel.recorder` — the SAME recorder
+`TurnGraphPanel` (the top graphs) already owns and feeds — so the two
+views can never disagree about what was recorded. The four strip-chart
+tabs occupy telemetry panel grid column 3 (previously pure horizontal-slack
+padding with nothing in it), styled the same plain `QTabWidget` as
+`TurnGraphPanel`'s own tab bar (no separate "playfield-mode" widget class
+exists to reuse; visual parity achieved via the same widget type).
+
+**New tests**: `src/tests/testgui/test_telemetry_strip_charts.py` (new) —
+`latest_t()` unit tests, `StripChartCanvas` windowing tests (feed 30
+frames/15s of synthetic history, assert the canvas's own plotted lines
+only carry the trailing 10s while `recorder.series` still has all 30
+points), and `build_telemetry_panel(recorder=...)` wiring tests (the panel
+reads the caller-supplied recorder, not a private one). Extended
+`src/tests/unit/test_protocol_binary_client.py` (decode tests for the four
+new fields) and `src/tests/testgui/test_telemetry_panel.py`
+(`heading_source` formatting + widget-level OTOS→ENCODER→OTOS transition
+test) — none of the pre-existing tests in either file were replaced, only
+added to.
 
 ## Testing
 

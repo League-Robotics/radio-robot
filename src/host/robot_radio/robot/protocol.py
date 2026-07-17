@@ -172,6 +172,21 @@ class TLMFrame:
     (``telemetry.proto`` ``Telemetry.fault_bits``/``event_bits``) — see
     ``telemetry.proto``'s own comment for the bit numbering. Also always
     present once a frame has gone through ``from_pb2()``.
+    ``queue_depth``/``active_id``/``exec_state``/``heading_source``
+    (109-003/109-005, decoded by 110-002) are ``Motion::Executor``'s
+    queue/state visibility and ``App::HeadingSource``'s currently-active
+    sensor — plain proto3 scalar fields on the primary ``Telemetry``
+    message with no ``has_*`` gate (telemetry.proto fields 23-26), so they
+    are populated unconditionally, the same "always present" treatment as
+    ``active``/``acks``/``fault_bits``/``event_bits`` above. ``exec_state``/
+    ``heading_source`` are kept as the RAW enum ints (``telemetry_pb2.
+    ExecutorState``/``telemetry_pb2.HeadingSourceStatus`` values) rather
+    than decoded into a host-side string, mirroring ``AckEntry.status``'s
+    own raw-int convention — a caller compares against
+    ``telemetry_pb2.EXEC_*``/``telemetry_pb2.HEADING_SOURCE_STATUS_*``
+    directly. ``heading_source`` is the ONE stakeholder-mandated visibility
+    requirement of the four (SUC-004: "know if you're using the encoders");
+    the TestGUI telemetry pane surfaces it directly (``telemetry_panel.py``).
     """
     t: int | None = None
     mode: str | None = None
@@ -192,6 +207,10 @@ class TLMFrame:
     acks: tuple[AckEntry, ...] | None = None      # ack-ring entries riding this frame, depth 3 (103-009)
     fault_bits: int | None = None                 # bitmask — see telemetry.proto Telemetry.fault_bits (103-009)
     event_bits: int | None = None                 # bitmask — see telemetry.proto Telemetry.event_bits (103-009)
+    queue_depth: int | None = None    # pending Motion::Cmd entries, 0-8 (109-003, telemetry.proto field 23)
+    active_id: int | None = None      # running command's Move.id, 0 when idle (109-003, field 24)
+    exec_state: int | None = None     # raw ExecutorState value (telemetry.proto), IDLE/RUNNING/RAMP_TO_REST/STOPPING (109-003, field 25)
+    heading_source: int | None = None  # raw HeadingSourceStatus value, OTOS=0/ENCODER=1 (109-005, field 26)
 
     @classmethod
     def from_pb2(cls, telemetry: "telemetry_pb2.Telemetry") -> "TLMFrame":
@@ -284,6 +303,10 @@ class TLMFrame:
         frame.acks = tuple(AckEntry.from_pb2(entry) for entry in telemetry.acks)
         frame.fault_bits = int(telemetry.fault_bits)
         frame.event_bits = int(telemetry.event_bits)
+        frame.queue_depth = int(telemetry.queue_depth)
+        frame.active_id = int(telemetry.active_id)
+        frame.exec_state = int(telemetry.exec_state)
+        frame.heading_source = int(telemetry.heading_source)
 
         if telemetry.has_enc:
             frame.enc = (int(telemetry.enc_left), int(telemetry.enc_right))
