@@ -85,22 +85,36 @@ def _make_on_frame_ready(state: dict, trace_model, canvas_ctrl, pending_frames):
 
     Mirrors the production code in
     ``src/host/robot_radio/testgui/__main__.py::_TelemetryBridge.on_frame_ready``.
+
+    110-003: every queued frame is still fed into ``trace_model`` (cheap
+    accumulation), but ``canvas_ctrl.refresh()`` -- the expensive full
+    trace-path rebuild -- is now called AT MOST ONCE per drain (using the
+    LAST frame's pose/heading), not once per frame, so a burst-delivered
+    batch (e.g. from a fast-forwarded Sim speed factor) redraws once
+    instead of once per frame in the burst. See that ticket's own
+    ``test_sim_speed_factor.py`` and ``__main__.py::on_frame_ready``'s own
+    updated docstring for the full mechanism/evidence.
     """
 
     def on_frame_ready() -> None:
+        fused_yaw_rad = None
+        any_frame = False
         while True:
             try:
                 frame = pending_frames.get_nowait()
             except Exception:
                 break
+            any_frame = True
             trace_model.feed(frame)
             fused_yaw_rad = None
             if frame.pose is not None:
                 fused_yaw_rad = math.radians(frame.pose[2] / 100.0)
-            if state.get("live_view_active"):
-                canvas_ctrl.refresh(update_marker=False)
-            else:
-                canvas_ctrl.refresh(fused_yaw_rad)
+        if not any_frame:
+            return
+        if state.get("live_view_active"):
+            canvas_ctrl.refresh(update_marker=False)
+        else:
+            canvas_ctrl.refresh(fused_yaw_rad)
 
     return on_frame_ready
 
@@ -179,8 +193,12 @@ class TestOnFrameReadyLiveViewActive:
 
         assert trace_model.fed_frames == [frame]
 
-    def test_multiple_frames_all_gated_in_live_view(self):
-        """Every queued frame in a batch is refreshed with update_marker=False."""
+    def test_multiple_frames_coalesce_into_one_refresh_in_live_view(self):
+        """110-003: a whole batch of queued frames (a burst-delivered Sim
+        speed-factor drain) redraws ONCE per drain, not once per frame --
+        every frame is still fed into the TraceModel, but the expensive
+        canvas_ctrl.refresh() call is coalesced to a single call using the
+        last frame's state."""
         state = {"live_view_active": True}
         trace_model = _FakeTraceModel()
         canvas_ctrl = _FakeCanvasCtrl()
@@ -191,9 +209,13 @@ class TestOnFrameReadyLiveViewActive:
         on_frame_ready = _make_on_frame_ready(state, trace_model, canvas_ctrl, pending)
         on_frame_ready()
 
-        assert len(canvas_ctrl.refresh_calls) == 4
-        for args, kwargs in canvas_ctrl.refresh_calls:
-            assert kwargs.get("update_marker") is False
+        assert len(trace_model.fed_frames) == 4, "every frame must still be fed"
+        assert len(canvas_ctrl.refresh_calls) == 1, (
+            f"expected exactly ONE refresh() per drained burst regardless of "
+            f"frame count, got {len(canvas_ctrl.refresh_calls)}"
+        )
+        args, kwargs = canvas_ctrl.refresh_calls[0]
+        assert kwargs.get("update_marker") is False
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +254,30 @@ class TestOnFrameReadyLiveViewInactive:
 
         args, kwargs = canvas_ctrl.refresh_calls[0]
         assert args == (None,)
+
+    def test_multiple_frames_coalesce_into_one_refresh_using_last_frame_yaw(self):
+        """110-003: outside live view too, a batch of queued frames redraws
+        once per drain (not once per frame), using the LAST frame's fused
+        heading -- every frame is still fed into the TraceModel first."""
+        state = {"live_view_active": False}
+        trace_model = _FakeTraceModel()
+        canvas_ctrl = _FakeCanvasCtrl()
+        pending: "queue.Queue" = queue.Queue()
+        for i in range(5):
+            pending.put(_make_frame(pose=(i * 100, 0, i * 1000)))
+
+        on_frame_ready = _make_on_frame_ready(state, trace_model, canvas_ctrl, pending)
+        on_frame_ready()
+
+        assert len(trace_model.fed_frames) == 5, "every frame must still be fed"
+        assert len(canvas_ctrl.refresh_calls) == 1, (
+            f"expected exactly ONE refresh() per drained burst regardless of "
+            f"frame count, got {len(canvas_ctrl.refresh_calls)}"
+        )
+        args, kwargs = canvas_ctrl.refresh_calls[0]
+        assert kwargs == {}
+        # Last frame's pose is (400, 0, 4000 centideg) -> 40 deg.
+        assert args[0] == pytest.approx(math.radians(40.0))
 
     def test_missing_live_view_active_key_defaults_to_inactive(self):
         """If _state lacks the 'live_view_active' key entirely, behave as if False

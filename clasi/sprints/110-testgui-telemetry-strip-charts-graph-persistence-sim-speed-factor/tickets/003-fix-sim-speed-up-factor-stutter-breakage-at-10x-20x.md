@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Fix Sim speed-up factor stutter/breakage at 10x/20x
-status: in-progress
+status: done
 use-cases:
 - SUC-003
 depends-on: []
@@ -50,28 +50,79 @@ mechanism, THEN fix.
 
 ## Acceptance Criteria
 
-- [ ] A deterministic sim-stepping test harness exists (modeled on ticket
+- [x] A deterministic sim-stepping test harness exists (modeled on ticket
       109-009's own `SimLoop`/`sim_ctypes.cpp` pattern — explicit
       `step(cycles)` calls, `start_tick_thread=False` or equivalent, no
       wall-clock racing) that can drive the sim at each of the five
       offered multipliers and measure actual cycles-advanced and/or
       frames-delivered per unit of test time.
-- [ ] The harness is used to confirm (or refute) the burst-telemetry-vs-
+- [x] The harness is used to confirm (or refute) the burst-telemetry-vs-
       `QueuedConnection`-bridge hypothesis above; the ticket records
       which mechanism was found to be the real cause, with evidence (not
       an assumption carried over from planning).
-- [ ] The real cause (whatever it turns out to be) is fixed such that all
+- [x] The real cause (whatever it turns out to be) is fixed such that all
       five offered multipliers (1×, 2×, 5×, 10×, 20×) advance the
       simulation smoothly and proportionally, with no stutter and no
       breakage at 10×/20×.
-- [ ] The deterministic harness becomes a permanent regression test —
+- [x] The deterministic harness becomes a permanent regression test —
       it must fail if the stutter/breakage is reintroduced.
-- [ ] No change to the underlying physics/trajectory integration — per
+- [x] No change to the underlying physics/trajectory integration — per
       the existing tooltip's own promise ("physics integration step is
       unchanged — trajectories are identical at every speed"), only the
       pacing/delivery mechanism is in scope.
-- [ ] Full `src/tests/testgui/` suite (and any `sim_loop.py`-adjacent
+- [x] Full `src/tests/testgui/` suite (and any `sim_loop.py`-adjacent
       tests) stays green.
+
+## Findings (2026-07-17)
+
+**Part A — burst-delivery premise, confirmed against the real compiled sim.**
+Using `SimLoop.connect(start_tick_thread=False)` + explicit `step(cycles)`
+calls (no wall-clock racing — new `test_sim_speed_factor.py`), one
+iteration's worth of stepping at `cycles=N` delivers a burst of TLM frames
+that grows with `N` (empirically ~0.8 frame/cycle at this firmware's own
+STREAM period, e.g. 20 cycles → 16 frames in one drain), confirmed strictly
+larger at 10x/20x than at 2x/5x. This matches `_tick_loop()`'s own per-
+iteration `cycles = max(1, int(speed_factor))` step exactly — the burst-
+delivery half of the sprint-planning hypothesis is real.
+
+**Part B — the actual GUI-side mechanism (refined from the hypothesis).**
+The hypothesis named "`QueuedConnection` bridge throughput" generically;
+reading `__main__.py`'s `_TelemetryBridge.on_frame_ready` (the actual
+consumer) found the PRECISE mechanism: every queued `TLMFrame` in a drained
+burst triggered its own `canvas_ctrl.refresh()` call, called INSIDE the
+per-frame while-loop, not once per drain. `canvas.py`'s
+`CanvasController._update_traces()` (called by `refresh()`) REBUILDS all
+four trace `QPainterPath`s from scratch every call — cost scales with the
+total accumulated trace length, not O(1). Benchmarked directly (2000
+accumulated trace points, matching a realistic mid-session length): one
+`refresh()` call costs ~0.7-0.8ms; 16 back-to-back calls (the measured 20x
+burst size) cost ~13ms — i.e. at 20x the GUI thread was asked to spend
+~13ms on REDUNDANT, immediately-discarded intermediate redraws inside a
+single ~50ms tick-thread iteration, and this cost only grows as a session's
+trace history grows. At 2x/5x the burst (2-4 frames) makes this
+imperceptible; at 10x/20x it is not — this exactly explains the reported
+"herky-jerky at 10x / broken at 20x" shape. `sim_loop.py`'s own pacing
+(`_tick_loop()`) is untouched and confirmed correct, matching the sprint-
+planning-time reading. The rolling strip charts (110-002) and the trace
+recorder's idle-freeze gate (110-001) both key off `time.monotonic()`
+wall-clock timestamps, not sim time — verified this is the CORRECT choice
+(an operator watching the screen cares about real elapsed wall time,
+which is exactly what a fast-forwarded session should compress into), not
+a second time-base bug.
+
+**Fix.** `__main__.py::_TelemetryBridge.on_frame_ready` now feeds every
+drained frame into `trace_model`/`graph_panel` (cheap, dirty-flag-gated
+accumulation, unchanged), but calls `canvas_ctrl.refresh()` AT MOST ONCE
+per drain — after the loop, using the last frame's state — instead of once
+per frame. Final on-screen state after a burst is identical (drawn from the
+same last-frame data); only the N-1 discarded intermediate redraws are
+removed. No sim/physics change.
+
+**Tests**: `src/tests/testgui/test_sim_speed_factor.py` (new — the
+deterministic harness, Part A) and `src/tests/testgui/test_telemetry_gating.py`
+(updated — its established closure-mirroring pattern now asserts exactly
+one `refresh()` call per drained burst regardless of frame count; the
+prior version asserted N calls for N frames, i.e. the bug itself).
 
 ## Testing
 
