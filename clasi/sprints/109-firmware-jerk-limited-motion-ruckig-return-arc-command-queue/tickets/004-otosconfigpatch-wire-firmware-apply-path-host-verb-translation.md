@@ -1,9 +1,11 @@
 ---
 id: '004'
 title: OtosConfigPatch wire + firmware apply path + host direct-patch send
-status: open
-use-cases: [SUC-005]
-depends-on: ['003']
+status: in-progress
+use-cases:
+- SUC-005
+depends-on:
+- '003'
 github-issue: ''
 issue: otos-calibration-config-message.md
 completes_issue: true
