@@ -103,11 +103,13 @@ still preempts (flushes) the queue.
 
 Folded-in work: a new `OtosConfigPatch` in the `ConfigDelta` oneof gives
 `OL`/`OA`/`OI` a live runtime path (both hardware and, once the sim models
-a correctable raw OTOS scale error, Sim); `SimTransport.send()`/`.command()`
-regain a real `SET`/`GET` bridge over `SimLoop.inject_command()` so
-calibration push-on-connect and fault injection work for the Sim backend
-again; and the host adoption ticket verifies the 2026-07-15 tour-freeze
-symptom is structurally impossible on the new MOVE-queue tour path.
+a correctable raw OTOS scale error, Sim); `SimTransport` gains a config
+path for Sim-mode `SET`/`GET`-shaped needs, built directly on typed
+`ConfigDelta` patches (see **Architecture Revision 1** below — the
+original "bridge onto `binary_bridge.translate_command()`" plan proved
+impossible and was revised during execution); and the host adoption
+ticket verifies the 2026-07-15 tour-freeze symptom is structurally
+impossible on the new MOVE-queue tour path.
 
 The sprint's decisive acceptance is a simulation gate, not a bench
 walkthrough: TestGUI → Sim → Tour 1 AND Tour 2 must complete, close the
@@ -162,13 +164,14 @@ impossibility argument.
 - `OtosConfigPatch` wire + firmware apply path (`RobotLoop::handleConfig`).
 - Sim plant fidelity: OTOS drift/noise + raw-scale-error model (honoring
   calibration scalars), encoder tick-quantization/scale/slip error model.
-- `SimTransport` `SET`/`GET` binary bridge over `SimLoop.inject_command()`.
-- Host adoption: TestGUI/tours send `MOVE` queues instead of streamed
-  twists; host planner demoted to teleop input shaping; dead host
-  streaming path for tours retired; live `PlannerConfig` gain patches
-  un-stubbed.
-- `binary_bridge`/`NezhaProtocol` translation for `OL`/`OA`/`OI` and for
-  the new `Move` verb.
+- `SimTransport` config path for Sim-mode `SET`/`GET`-shaped needs, built
+  on typed `ConfigDelta` patches with real firmware consumers (motor
+  gains today, `OtosConfigPatch` after that ticket lands, `PlannerConfig`
+  gains after tickets 005/008) — **not** a revival of the deleted
+  legacy text-verb translation layer (see Architecture Revision 1).
+- Direct typed-patch construction/send for `OL`/`OA`/`OI` (ticket 004)
+  and for the new `Move` verb — bypassing the dead
+  `binary_bridge.translate_command()` stub entirely, not restoring it.
 - New `src/firm/motion/DESIGN.md`; updates to root `src/firm/DESIGN.md`
   and any other touched subsystem `DESIGN.md`.
 
@@ -193,11 +196,16 @@ impossibility argument.
   TLM `headingSource` visibility); TWIST/STOP preemption; queue overflow
   → `ERR_FULL`; `JerkTrajectory` seeding-contract regression test (ported
   from c63ec6c); boundary-velocity table unit tests.
-- **Host tests** (`uv run python -m pytest`): `SimTransport` SET/GET round
-  trip; OTOS calibration push-on-connect (un-skips the four tests parked
-  by `sim-transport-command-set-get-not-supported.md`); `enc_scale_err_l/r`
-  fault-injection regression (un-skips `test_error_divergence.py`); Move
-  command encoding in `wire_test_codec.cpp` (`armorMoveCommand()`).
+- **Host tests** (`uv run python -m pytest`): `SimTransport` direct
+  typed-patch config round trip (motor gains, then OTOS/planner once
+  tickets 004/008 land); OTOS calibration push-on-connect (revises/
+  un-skips the four tests parked by
+  `sim-transport-command-set-get-not-supported.md` per Architecture
+  Revision 1 — the two `rotSlip`/`tw` assertions are retargeted or
+  revised to the honest unsupported-key error, not un-skipped as
+  originally written); `enc_scale_err_l/r` fault-injection regression
+  (un-skips `test_error_divergence.py`); Move command encoding in
+  `wire_test_codec.cpp` (`armorMoveCommand()`).
 - **Sim tour-closure gate** (decisive acceptance, final ticket): TestGUI →
   Sim → Tour 1 and Tour 2, both with and without OTOS drift/encoder error
   enabled; visual + numeric (1° / exact) verification; iterate until
@@ -429,6 +437,129 @@ firmware already rejects unknown values for).
    flagged here so it isn't silently decided without anyone noticing the
    orphaned-module question it brushes against.
 
+### Architecture Revision 1 (2026-07-17) — ticket 002 exception
+
+The text above (Steps 1-7) is the original, unmodified sprint-planning
+architecture and is preserved as written — it is still correct for
+everything except the one item this revision narrows. This subsection
+records a mid-execution correction triggered by an `internal`-surface
+architecture exception thrown by the programmer on ticket 002 during
+sprint execution (thrown 2026-07-17T08:46:08Z), after ticket 001 had
+already landed (`done`).
+
+**Trigger — verified findings (programmer, file:line-cited on the
+ticket):**
+1. `binary_bridge.translate_command()` is a **universal stub** for every
+   verb on every transport — hardware included, not a Sim-specific gap.
+   `legacy_render`/`legacy_verbs` were deleted wholesale by commit
+   `129cbcb3` (sprint 104 ticket 002) and never rebuilt; the function has
+   returned a fixed `"ERR unavailable legacy verb translation
+   removed..."` for every call site ever since. Ticket 002's original
+   plan ("wire `SimTransport` onto the existing `binary_bridge` path
+   `SerialTransport`/`RelayTransport` already use") assumed a path that
+   does not exist.
+2. `ReplyEnvelope` has no config-value/query arm (fields 5-11 reserved)
+   and `CommandEnvelope`'s `cmd` oneof has no query arm either — there is
+   no wire-schema path for a config VALUE to travel firmware→host at all,
+   on any transport, without a new firmware wire-schema change.
+3. `RobotLoop::handleConfig()` only applies `MotorConfigPatch` today;
+   every other patch kind (`DrivetrainConfigPatch`/`PlannerConfigPatch`/
+   `WatchdogConfigPatch`) replies `ERR_UNIMPLEMENTED` — a **documented,
+   deliberate** scope boundary (`src/firm/app/DESIGN.md` §3: "this is a
+   scope boundary, not an oversight — `DrivetrainConfigPatch` has no
+   on-robot fusion consumer"). Concretely: `rotSlip`/`tw`, the two exact
+   `DrivetrainConfigPatch` fields the ticket's four target tests assert
+   on, have **no firmware consumer at all** today, on any transport.
+
+**Decision: do not resurrect the deleted legacy layer.** Rebuilding
+`legacy_render`/`legacy_verbs` to make `translate_command()` real again
+would reopen exactly the text-verb parsing surface the stakeholder's
+2026-07-10 "gut decisively — firmware stays pure binary" decision closed.
+This sprint does not reopen that decision. `translate_command()` stays
+dead; nothing routes through it.
+
+**Decision: SET/GET-shaped host needs route through typed `ConfigDelta`
+patches with real consumers, not through a text-verb translation layer,
+on every transport uniformly.** Concretely:
+- A SET-shaped need (`OL <scale>`, `SET rotSlip=0`, a future planner-gain
+  push, ...) is satisfied by constructing and sending the matching typed
+  `ConfigDelta` patch directly — motor gains today (`MotorConfigPatch`,
+  already live via `RobotLoop::handleConfig`, and already reached by
+  hardware transports through *some* existing direct-construction path
+  that is **not** `translate_command()` — locate and reuse it, don't
+  invent a second one), `OtosConfigPatch` once ticket 004 lands,
+  `PlannerConfigPatch` gains once tickets 005/008 land. This is
+  transport-agnostic: `SimTransport` uses the exact same direct-
+  construction call as `SerialTransport`/`RelayTransport`, just injected
+  via `SimLoop.inject_command()` instead of a live serial write — one
+  mechanism, not a Sim-specific fork.
+- A key whose patch kind has **no firmware consumer today**
+  (`DrivetrainConfigPatch`'s `rotSlip`/`tw`, per finding 3 above) gets an
+  **honest host-side "unsupported" error** — no wire round-trip, no
+  silent no-op, no fabricated success. This is the direct consequence of
+  finding 3: those two keys cannot be genuinely round-tripped through
+  firmware under this sprint's scope, full stop, regardless of transport
+  or bridge fixes.
+- GET is answered from **host-side state** (the last value the host
+  itself pushed, echoed back) for keys that have a real consumer — not
+  from a new firmware query wire arm. Finding 2's wire-schema gap is a
+  real architecture-level constraint, but this sprint declines to close
+  it: adding a `ReplyEnvelope` config-value arm is a firmware wire-schema
+  change beyond what's already scoped (ticket 004's `OtosConfigPatch` is
+  a command/apply-only patch, not a query), and the host-echo approach is
+  sufficient for what this sprint's tests actually need (confirming a
+  pushed value took effect), without expanding scope mid-sprint. If a
+  real firmware query arm is ever justified, that is a follow-up issue,
+  not part of 109.
+
+**Consequence for the four originally-targeted
+`test_calibration_push_on_connect.py` tests:** two of them assert `GET
+rotSlip`/`GET tw` reflect a pushed value — exactly the two
+`DrivetrainConfigPatch` fields finding 3 shows have no firmware consumer.
+These cannot be "un-skipped as originally written" under any legal
+mechanism (resurrecting legacy verbs and fabricating Sim-only semantics
+are both ruled out above). Ticket 002 (revised) directs the implementer
+to either (a) retarget the assertion onto a key that does have a real
+consumer if that satisfies the calibration-push-on-connect feature's
+actual intent, or (b) revise the assertion to expect the honest
+unsupported-key error for `rotSlip`/`tw` specifically — whichever more
+faithfully preserves the original test's intent — and to record which
+choice was made and why.
+
+**Re-scope: ticket 002.** Renamed from "SimTransport SET/GET binary
+bridge over SimLoop.inject_command()" to "TestGUI Sim-mode config path
+over typed binary patches". Scope is now: (1) locate and reuse whatever
+mechanism hardware transports already use to send a typed `ConfigDelta`
+patch (not `translate_command()`); (2) make `SimTransport` use the same
+mechanism, injected via `SimLoop.inject_command()`; (3) host-side GET
+echo of last-pushed state for supported keys; (4) honest unsupported-key
+error for `DrivetrainConfigPatch` fields; (5) the `enc_scale_err_l/r`
+fault-injection knob (unaffected by any of the above — it is a sim-only
+ctypes ABI setter, not a `ConfigDelta` patch, and never depended on
+`translate_command()`). Ticket 002 keeps `depends-on: []` — everything in
+its revised scope (motor-gain patches, the fault knob, host-echo GET) is
+buildable today, with no new dependency on tickets 003/004/005/008.
+Ticket 002's own OTOS- and planner-specific extensions of this same
+mechanism are **not** duplicated here — they are ticket 004's and ticket
+008's respective scope, reusing 002's mechanism when their patch kind
+lands.
+
+**Consistency check — tickets 004 and 008:** Ticket 004's original step 3
+("restore the `binary_bridge`/`NezhaProtocol` translation arm for
+`OL`/`OA`/`OI`") assumed the same nonexistent path and is revised: `OL`/
+`OA`/`OI` now construct and send an `OtosConfigPatch` directly via
+ticket 002's mechanism, uniformly across hardware and Sim. Ticket 008's
+"un-stub live `PlannerConfig` gain patches" was already mechanism-neutral
+wording and did not itself assume `translate_command()`; it is annotated
+to explicitly reuse ticket 002's direct-patch-send mechanism for clarity,
+with no other change to its scope.
+
+**Dependency graph impact:** no new edges required beyond what's noted
+above — 002 remains dependency-free; 004 and 008 are unaffected in their
+existing `depends-on` (004→003 for merge-friction reasons only, as
+before; 008→007 unchanged, and transitively depends on 002 through 007's
+existing `002` dependency). No cycle is introduced.
+
 ## Use Cases
 
 ### SUC-001: Firmware solves a jerk-limited trajectory for a single arc command
@@ -547,13 +678,15 @@ Parent: UC (configuration / calibration)
 - **Main Flow**:
   1. Operator issues `OL <scale>` / `OA <scale>` / `OI` from the TestGUI
      (or connect-time calibration push).
-  2. `binary_bridge`/`NezhaProtocol` translates to an `OtosConfigPatch`
-     envelope; `RobotLoop::handleConfig` applies it via
-     `Otos::setLinearScalar()`/`setAngularScalar()`.
-  3. On Sim, `SimTransport`'s SET/GET bridge round-trips the patch through
-     `SimLoop.inject_command()`; `SimPlant`'s OTOS burst-read response
-     already includes a raw scale error that the newly-applied scalar
-     corrects.
+  2. The host constructs an `OtosConfigPatch` `ConfigDelta` directly
+     (the same direct-patch-send mechanism ticket 002 establishes —
+     **not** `binary_bridge.translate_command()`, which is dead and not
+     being resurrected) and sends it; `RobotLoop::handleConfig` applies
+     it via `Otos::setLinearScalar()`/`setAngularScalar()`.
+  3. On Sim, the same direct-patch-send mechanism routes the envelope
+     through `SimLoop.inject_command()`; `SimPlant`'s OTOS burst-read
+     response already includes a raw scale error that the newly-applied
+     scalar corrects.
   4. Operator reads back OTOS pose/velocity (real or Sim) and observes
      truth when correctly calibrated, and a proportional error when not.
 - **Postconditions**: OTOS calibration is a live, no-reflash operation on
@@ -584,9 +717,9 @@ files, listed in frontmatter `issues:`.)
 | # | Title | Depends On |
 |---|-------|------------|
 | 001 | Vendor Ruckig restore + Motion::JerkTrajectory port + build/solve-time gates | — |
-| 002 | SimTransport SET/GET binary bridge over SimLoop.inject_command() | — |
+| 002 | TestGUI Sim-mode config path over typed binary patches (revised — see Architecture Revision 1) | — |
 | 003 | Move wire message + Motion::Cmd ring queue + Executor TIMED/velocity mode + Pilot wiring | 001 |
-| 004 | OtosConfigPatch wire + firmware apply path + host verb translation | 003 |
+| 004 | OtosConfigPatch wire + firmware apply path + host direct-patch send | 003 |
 | 005 | DISTANCE arcs + heading PD cascade + dwell completion + HeadingSource seam | 003 |
 | 006 | Cross-boundary carry: boundary-velocity table + divergence replan triggers | 005 |
 | 007 | Sim fidelity: OTOS drift/raw-scale-error + calibration honoring + encoder error model | 002, 004, 006 |

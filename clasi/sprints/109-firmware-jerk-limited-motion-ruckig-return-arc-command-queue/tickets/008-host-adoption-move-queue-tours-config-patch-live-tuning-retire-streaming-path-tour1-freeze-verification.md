@@ -39,6 +39,11 @@ DISTANCE/pivot planning now lives entirely in firmware (tickets 003-006).
    `heading_kp`/`heading_kd` (ticket 005) be tuned from the TestGUI
    without a reflash, matching the existing "Velocity + heading gains
    live-tunable on stand" precedent from sprint 098 (per project memory).
+   Note (2026-07-17, Architecture Revision 1 on ticket 002): construct
+   and send `PlannerConfigPatch` directly via the same direct-patch-send
+   mechanism tickets 002/004 establish and reuse — never via
+   `binary_bridge.translate_command()`, which is dead and is not being
+   resurrected this sprint (see sprint.md's Architecture Revision 1).
 5. Verify `tour1-freeze-investigation-2026-07-15.md`'s freeze symptom
    cannot recur on the new MOVE-queue path: that investigation's verdict
    was a real `kFaultWedgeLatch` firmware fault at the straight->turn

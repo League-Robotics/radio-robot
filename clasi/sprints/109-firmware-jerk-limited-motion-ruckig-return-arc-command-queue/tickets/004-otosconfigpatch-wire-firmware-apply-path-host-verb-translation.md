@@ -1,6 +1,6 @@
 ---
 id: '004'
-title: OtosConfigPatch wire + firmware apply path + host verb translation
+title: OtosConfigPatch wire + firmware apply path + host direct-patch send
 status: open
 use-cases: [SUC-005]
 depends-on: ['003']
@@ -10,9 +10,23 @@ completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
-# OtosConfigPatch wire + firmware apply path + host verb translation
+# OtosConfigPatch wire + firmware apply path + host direct-patch send
 
 ## Description
+
+**Note (2026-07-17, Architecture Revision 1 on ticket 002):** step 3
+below originally read "restore the `binary_bridge`/`NezhaProtocol`
+translation arm for `OL`/`OA`/`OI`". That assumed
+`binary_bridge.translate_command()` was a working path that merely needed
+an OTOS-specific arm re-enabled. It is not — it is a universal stub for
+every verb on every transport (`legacy_render`/`legacy_verbs` were
+deleted wholesale in sprint 104 ticket 002 and never rebuilt), and this
+sprint does not resurrect it (stakeholder's 2026-07-10 "firmware stays
+pure binary" decision stands). Step 3 is revised below accordingly: `OL`/
+`OA`/`OI` construct and send an `OtosConfigPatch` directly, via the same
+direct-patch-send mechanism ticket 002 establishes/reuses, uniformly
+across hardware and Sim transports. See sprint.md's Architecture
+Revision 1 for the full narrative.
 
 `Devices::Otos` already has `setLinearScalar()`/`setAngularScalar()`
 (`source/devices/otos.h:217-218` per the issue) but they're only ever
@@ -40,10 +54,14 @@ execution model).
    `Otos::setLinearScalar()`/`setAngularScalar()` (and offset/pose
    setters as needed), the same way the MOTOR patch is already live-
    applied — this is additive, not a rewrite of `handleConfig`.
-3. Host: restore the `binary_bridge`/`NezhaProtocol` translation arm for
-   `OL`/`OA`/`OI` → the new `OtosConfigPatch` envelope. `binary_bridge
-   .py`'s `_OTOS_DEVICE_VERBS` currently renders them "nodev / requires
-   sprint 098" — update that gate now that the wire path exists.
+3. Host: `OL`/`OA`/`OI` construct and send an `OtosConfigPatch`
+   `ConfigDelta` directly, using ticket 002's direct-patch-send mechanism
+   (the same non-`translate_command()` path `MotorConfigPatch` already
+   uses) — not via `binary_bridge.translate_command()`, which stays dead.
+   `binary_bridge.py`'s `_OTOS_DEVICE_VERBS` currently renders these
+   "nodev / requires sprint 098"; replace that gate with the new
+   direct-send call rather than routing it through the legacy-verb
+   translation layer.
 
 ## Acceptance Criteria
 
@@ -53,10 +71,12 @@ execution model).
       `Otos::setLinearScalar()`/`setAngularScalar()` (and offset/pose
       setters), live (no reflash required) — matching how `MotorConfig`
       is already live-applied.
-- [ ] `binary_bridge.py`'s `_OTOS_DEVICE_VERBS` gate removed/updated;
-      `OL <scale>` / `OA <scale>` / `OI` translate to the new
-      `OtosConfigPatch` envelope and reach the firmware over the real
-      wire (hardware transport).
+- [ ] `binary_bridge.py`'s `_OTOS_DEVICE_VERBS` gate is replaced (not
+      restored) with a direct `OtosConfigPatch` construct-and-send call
+      using ticket 002's mechanism; `OL <scale>` / `OA <scale>` / `OI`
+      reach the firmware over the real wire on hardware, and via
+      `SimLoop.inject_command()` on Sim — with no code path through
+      `binary_bridge.translate_command()`.
 - [ ] `src/firm/devices/DESIGN.md` updated if `Otos`'s public interface
       or invariants changed (setters were already public; note the new
       runtime call path exists now, if the doc describes call sites);
@@ -91,8 +111,8 @@ beyond "do it the way MOTOR already does it."
   oneof/`ConfigTarget` entries
 - `src/firm/app/robot_loop.cpp` (or the current `handleConfig` location —
   locate via `grep -rn "handleConfig"`) — new case
-- `host/.../binary_bridge.py` — `_OTOS_DEVICE_VERBS` gate removal +
-  translation arm
+- `host/.../binary_bridge.py` — `_OTOS_DEVICE_VERBS` gate replaced with a
+  direct-patch-send call (ticket 002's mechanism), not a translation arm
 - `src/firm/devices/DESIGN.md`, `src/firm/DESIGN.md` (if call-site
   documentation needs updating)
 

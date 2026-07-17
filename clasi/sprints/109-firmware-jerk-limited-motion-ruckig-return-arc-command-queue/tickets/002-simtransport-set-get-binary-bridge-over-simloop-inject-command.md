@@ -1,8 +1,9 @@
 ---
 id: '002'
-title: SimTransport SET/GET binary bridge over SimLoop.inject_command()
+title: TestGUI Sim-mode config path over typed binary patches
 status: open
-use-cases: [SUC-005]
+use-cases:
+- SUC-005
 depends-on: []
 github-issue: ''
 issue: sim-transport-command-set-get-not-supported.md
@@ -10,102 +11,161 @@ completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
-# SimTransport SET/GET binary bridge over SimLoop.inject_command()
+# TestGUI Sim-mode config path over typed binary patches
 
 ## Description
 
-Sprint 108 ticket 007 rewired `SimTransport` onto the narrower `SimLoop`/
-`sim_ctypes.cpp` ABI (`twist()`/`stop()`/`inject_command()` + fault
-setters), leaving `SimTransport.send()`/`.command()` as best-effort no-ops
-for any other text verb — in particular `SET`/`GET`. This regresses
-calibration push-on-connect and the `enc_scale_err_l/r` fault-injection
-knob for the Sim backend specifically (hardware transports are unaffected).
-This ticket is option (a) from the issue: build the real bridge, since this
-sprint's decisive sim tour-closure gate (ticket 009) needs `SET`/`GET` to
-actually work in Sim — for OTOS calibration (ticket 007) and for the
-fault-injection knobs the sim-fidelity work depends on.
+**Revised 2026-07-17** after a programmer-thrown `internal` architecture
+exception on this ticket's original scope ("wire `SimTransport` onto the
+existing `binary_bridge.translate_command()` path `SerialTransport`/
+`RelayTransport` already use"). That path does not exist to wire onto:
+`binary_bridge.translate_command()` is a universal stub for every verb on
+every transport (hardware included) — `legacy_render`/`legacy_verbs` were
+deleted wholesale by commit `129cbcb3` (sprint 104 ticket 002) and never
+rebuilt. Full root-cause narrative and the two other stacked findings
+(no wire arm exists for a config VALUE to travel firmware→host at all;
+`RobotLoop::handleConfig()` only applies `MotorConfigPatch`, so
+`DrivetrainConfigPatch` fields like `rotSlip`/`tw` have no firmware
+consumer today) are preserved in this sprint's `sprint.md`, **Architecture
+Revision 1**. Read that section before implementing this ticket — it is
+the authoritative record of why the approach changed and explicitly rules
+out two tempting-but-forbidden fixes: resurrecting `legacy_render`/
+`legacy_verbs` (reopens the stakeholder's 2026-07-10 "firmware stays pure
+binary" decision), and fabricating Sim-only GET/SET semantics that
+hardware could never match (violates this project's Sim-must-not-diverge-
+from-real-firmware-capability discipline).
 
-This ticket is independent of the Ruckig/motion work (ticket 001) and can
-be done in either order relative to it — it has no `depends-on`. It is a
-prerequisite for ticket 007 (sim fidelity) because that ticket's tests need
-a working `SET`/`GET` path to dial in fault knobs and verify calibration
-correction.
+**Revised scope**: route SET-shaped host needs through typed `ConfigDelta`
+patches that have a real firmware consumer, constructed and sent directly
+— never through `binary_bridge.translate_command()`, which stays dead.
+This works identically on hardware and Sim transports (one mechanism, not
+a Sim-specific fork), which also incidentally fixes the fact that
+hardware's own `translate_command()`-based text-verb path was already
+just as dead as Sim's — it was simply unnoticed because the only SET/GET
+paths anyone actually exercised in practice (motor gains) already went
+through a different, working, direct-construction mechanism.
 
-1. Implement `SimTransport.send()`/`.command()` to encode an arbitrary
-   text-v2 line (`SET ...`, `GET ...`) into a binary `CommandEnvelope` via
-   the existing `binary_bridge.translate_command()` (the same path
-   `SerialTransport`/`RelayTransport` already use), inject it via
-   `SimLoop.inject_command()` (the raw escape hatch already exists per the
-   issue), and correlate the reply by polling
-   `read_pending_binary_tlm_frames()`'s ack ring for the matching
-   correlation id.
-2. Restore the `enc_scale_err_l/r` fault-injection knob on `SimLoop`/
-   `sim_ctypes.cpp` (currently absent per `sim_prefs.py`'s own docstring) —
-   whatever plumbing is simplest given `SimPlant`'s existing per-wheel
-   error hooks (this ticket only needs the ABI knob to exist and be
-   settable; ticket 007 owns the actual error-model fidelity work).
-3. Un-skip the tests parked against this issue: the four
-   `@_requires_sim_lib` tests in
-   `tests/testgui/test_calibration_push_on_connect.py`, and
-   `tests/testgui/test_error_divergence.py::
-   test_enc_scale_err_separates_encoder_trace_from_camera_truth`.
+1. **Find the existing direct-patch-send mechanism.** `MotorConfigPatch`
+   already reaches the firmware live today (`RobotLoop::handleConfig`
+   applies it) on hardware transports, and it is NOT going through
+   `translate_command()` (that function is a universal stub). Locate the
+   actual call path (likely `NezhaProtocol.set_config()`/
+   `set_config_binary()` or similar in `protocol.py` — grep for whatever
+   constructs a `ConfigDelta`/`MotorConfigPatch` envelope directly from
+   typed Python values) before writing anything new. This is the
+   mechanism to reuse, not reinvent.
+2. **Make `SimTransport` use the same mechanism.** Wire `SimTransport` to
+   call the same direct-construction path `SerialTransport`/
+   `RelayTransport` already use for `MotorConfigPatch`, injecting the
+   resulting envelope via `SimLoop.inject_command()` (the raw escape
+   hatch already exists) instead of a live serial write. Correlate the
+   reply by polling `read_pending_binary_tlm_frames()`'s ack ring for the
+   matching correlation id, same as before.
+3. **Honest unsupported-key behavior.** For any SET/GET-shaped request
+   whose target key belongs to a `ConfigDelta` patch kind with no live
+   firmware consumer today (currently: `DrivetrainConfigPatch` —
+   `rotSlip`, `tw`; per Architecture Revision 1 finding 3), return an
+   explicit, immediate host-side "unsupported" error. Do not attempt a
+   wire round-trip for these keys, do not silently no-op, and do not
+   fabricate a value.
+4. **Host-side GET.** For keys with a real consumer, GET answers from
+   host-side state — the last value the host itself pushed via SET,
+   echoed back — not from a new firmware query wire arm (Architecture
+   Revision 1 explains why a real query arm is out of scope this sprint).
+5. **`enc_scale_err_l/r` fault-injection knob** — unaffected by any of the
+   above; this was never a `ConfigDelta` patch and never depended on
+   `translate_command()`. Add the knob directly to `SimLoop`/
+   `sim_ctypes.cpp` (currently absent per `sim_prefs.py`'s own docstring),
+   mirroring the existing OTOS-drift-knob pattern in the same file.
+6. **Test disposition — `test_calibration_push_on_connect.py`'s four
+   `@_requires_sim_lib` tests.** Two of them assert `GET rotSlip`/`GET tw`
+   reflect a pushed value — exactly the two keys step 3 above shows have
+   no firmware consumer. Per Architecture Revision 1's explicit direction:
+   either (a) retarget those two assertions onto a key that does have a
+   real consumer (e.g. a motor-gain field) if that satisfies the
+   calibration-push-on-connect feature's actual intent, or (b) revise them
+   to assert the honest unsupported-key error from step 3. Pick whichever
+   more faithfully preserves the original test's intent, and record which
+   choice was made (and why) in this ticket or the test file's own
+   docstring. Do not simply remove `pytest.mark.skip` unchanged — that is
+   exactly the move the exception ruled out.
+7. **`test_error_divergence.py::
+   test_enc_scale_err_separates_encoder_trace_from_camera_truth`** — this
+   test targets the sim-only fault knob (step 5), not a `ConfigDelta`
+   patch; it is unaffected by the architecture revision and should
+   un-skip and pass once step 5 lands.
 
 ## Acceptance Criteria
 
-- [ ] `SimTransport.send()`/`.command()` round-trips an arbitrary `SET`/
-      `GET` text-v2 line through `binary_bridge.translate_command()` +
-      `SimLoop.inject_command()`, with the reply correctly correlated back
-      to the caller (not a no-op, not `""`).
+- [ ] The existing direct-patch-send mechanism hardware transports use
+      for `MotorConfigPatch` is identified (file:line cited in this
+      ticket's implementation notes) and reused — not reinvented — for
+      `SimTransport`.
+- [ ] `SimTransport` sends typed `ConfigDelta` patches (motor gains at
+      minimum) via that same mechanism, injected through
+      `SimLoop.inject_command()`, with replies correctly correlated via
+      `read_pending_binary_tlm_frames()`'s ack ring.
+- [ ] `binary_bridge.translate_command()` is **not** modified, restored,
+      or routed through by this ticket — it stays dead. No
+      `legacy_render`/`legacy_verbs` code is resurrected.
+- [ ] Requests targeting a `ConfigDelta` patch kind with no live firmware
+      consumer (`DrivetrainConfigPatch`: `rotSlip`, `tw`) return an
+      explicit host-side "unsupported" error — no wire round-trip
+      attempted, no silent no-op, no fabricated value.
+- [ ] GET for a supported key returns the host's own last-pushed value
+      (echo), not a fabricated or firmware-queried value.
 - [ ] `enc_scale_err_l`/`enc_scale_err_r` are settable via the Sim backend
-      (new `SimLoop`/`sim_ctypes.cpp` knob).
-- [ ] The four skipped `@_requires_sim_lib` tests in
-      `test_calibration_push_on_connect.py` pass (un-skipped, not deleted).
+      (new `SimLoop`/`sim_ctypes.cpp` knob), independent of the above.
+- [ ] `test_calibration_push_on_connect.py`'s four tests are each either
+      passing against a retargeted real-consumer key, or revised to
+      assert the honest unsupported-key error for `rotSlip`/`tw` — with
+      the choice and rationale recorded (not silently unskipped
+      unchanged).
 - [ ] `test_error_divergence.py::
-      test_enc_scale_err_separates_encoder_trace_from_camera_truth` passes
-      (un-skipped, not deleted).
+      test_enc_scale_err_separates_encoder_trace_from_camera_truth`
+      passes (un-skipped, targets the sim-only fault knob only).
 - [ ] Hardware transports (`SerialTransport`/`RelayTransport`) are
-      unaffected — no shared-path regression (existing SET/GET tests
-      against real/relay transports still pass).
-- [ ] This ticket does not touch `src/firm/` — no `DESIGN.md` update is
-      required (host/Python-only change), consistent with the sprint's
-      standing rule (`src/firm/`-touching tickets only).
+      unaffected — no shared-path regression; the direct-patch-send
+      mechanism they already use for `MotorConfigPatch` is read, not
+      modified, by this ticket.
+- [ ] This ticket does not touch `src/firm/` — no `DESIGN.md` update
+      required (host/Python-only change).
 
 ## Testing
 
-- **Existing tests to run**: `uv run python -m pytest tests/testgui/
-  test_calibration_push_on_connect.py tests/testgui/
-  test_error_divergence.py` (confirm previously-skipped tests now pass);
-  full `uv run python -m pytest` for regressions on the hardware-transport
-  SET/GET paths (`binary_bridge`, `NezhaProtocol`).
-- **New tests to write**: a direct `SimTransport` SET/GET round-trip test
-  if the existing skipped tests don't already cover the bridge mechanism
-  itself in isolation from the calibration-push feature.
+- **Existing tests to run**: full `uv run python -m pytest` for
+  regressions on the hardware-transport `MotorConfigPatch` push path
+  (must remain byte-for-byte unchanged in behavior — this ticket only
+  reads and reuses it, never edits it).
+- **New tests to write**: a direct `SimTransport` typed-patch round-trip
+  test (motor gains) in isolation from the calibration-push feature;
+  an unsupported-key error test for `DrivetrainConfigPatch` fields.
 - **Verification command**: `uv run python -m pytest tests/testgui/ -k
   "calibration or error_divergence"` plus the full suite.
 
 ## Implementation Plan
 
-**Approach**: Build the bridge described in the issue's own recommended
-direction (a): encode via the existing `binary_bridge` translation used by
-hardware transports, inject via the existing `SimLoop.inject_command()`
-escape hatch, correlate via the existing ack-ring reader. No new wire
-format — reuses the same `CommandEnvelope`/`ReplyEnvelope` encoding
-already used for hardware.
+**Approach**: Reuse, don't rebuild. The whole point of this revision is
+that hardware already has a working, non-`translate_command()` path for
+the one patch kind that already has a firmware consumer (`MotorConfig`);
+this ticket's job is to find that path and point `SimTransport` at it,
+plus add the two purely-host-side behaviors (unsupported-key error,
+GET-from-echo) that don't need any wire mechanism at all.
 
 **Files to modify**:
-- `testgui/*` or `host/robot_radio/io/sim_loop.py`/`SimTransport`'s actual
-  module (locate via `grep -rn "class SimTransport"`) — add the SET/GET
-  bridge.
-- `src/sim/sim_ctypes.cpp` (new `enc_scale_err_l/r` setter(s), mirroring
-  existing fault-setter patterns in the same file).
-- `tests/testgui/test_calibration_push_on_connect.py` (remove
-  `pytest.mark.skip`).
-- `tests/testgui/test_error_divergence.py` (remove `pytest.mark.skip`).
+- `host/robot_radio/io/sim_loop.py` / wherever `class SimTransport` lives
+  (locate via `grep -rn "class SimTransport"`) — direct-patch-send +
+  host-echo GET + unsupported-key error
+- `host/.../protocol.py` (read-only reference — do not modify the
+  existing hardware mechanism, just call it)
+- `src/sim/sim_ctypes.cpp` — new `enc_scale_err_l/r` setter(s)
+- `tests/testgui/test_calibration_push_on_connect.py` — revise the two
+  `rotSlip`/`tw` assertions per step 6; un-skip the rest
+- `tests/testgui/test_error_divergence.py` — remove `pytest.mark.skip`
 
-**Testing plan**: as above — un-skip and pass the two parked test files;
-add a direct bridge round-trip test if needed for isolated coverage.
+**Testing plan**: as above.
 
 **Documentation updates**: none required in `src/firm/` (host-only
-change); if this project keeps host-side module docs (check
-`host/CLAUDE.md` or equivalent), note the restored SimTransport capability
-there if such a doc exists.
+change). This ticket's revision is documented in `sprint.md`'s
+Architecture Revision 1 — no separate architecture file exists under
+this sprint's single-doc model.
