@@ -1,11 +1,6 @@
 // robot_loop.cpp -- App::RobotLoop implementation. See robot_loop.h's file
-// header for the module's boundary and the "mechanical extraction, zero
-// behavior change" contract this ticket (105-001) is held to.
-//
-// Every comment below that describes WHY a step exists (not just what it
-// does) is carried forward from main.cpp's pre-extraction inline
-// documentation (105-001's own acceptance criterion: "do not lose it in the
-// move"), not re-derived.
+// header for the module's boundary and entry points; DESIGN.md for the
+// timing-schedule rationale.
 #include "app/robot_loop.h"
 
 #include "messages/envelope.h"
@@ -14,44 +9,32 @@ namespace App {
 
 namespace {
 
-// --- Loop timing constants -- ported from the retired DeviceBus
-// (device_bus.h, git history 88e04f1b^): kEncoderSettleMs = 4 (the vendor
-// settle window between a motor's own request and collect, shared here by
-// BOTH motors' settle windows) and the same 4ms clearance value NezhaMotor/
-// Otos already use for every bus_.write()/bus_.read() postClear/preClear
-// pair (nezha_motor.cpp's requestEncoder()/writeMotorRun(), otos.h's
-// kBusClearance) for the post-duty-write clearance window the 3-block
-// schedule below adds.
+// Loop timing constants. kSettle is the vendor settle window between a
+// motor's own request and collect, shared by both motors' settle windows;
+// kClear is the same clearance value NezhaMotor/Otos use for every
+// bus_.write()/bus_.read() postClear/preClear pair, applied here as the
+// post-duty-write clearance window.
 //
-// kCycle (106-001, retargeted from the archived plan's original,
-// never-achievable "sleepUntil(cycleStart, kCycle); // pace to ~16ms"
-// sketch comment): ticket 105-004's virtual-cycle-timing diagnostic proved
-// that 16ms was arithmetically impossible -- the three kSettle/kClear
-// windows below alone already consume 12 of that 16ms budget, leaving 4ms
-// for two PID ticks, two encoder requests, a full telemetry frame
-// build+emit, an OTOS sample, and odometry integration. kCycle is now the
-// STATED TOTAL for the whole schedule (all four pacing blocks, not just the
-// trailing one) -- ~25 Hz/~40ms, matching Devices::Telemetry's own
-// kPrimaryPeriod=40ms (telemetry.h) so the primary-frame throttle and the
-// loop's own pace agree by construction. See architecture-update.md
-// (106) Decision 1.
+// kCycle is the STATED TOTAL for the whole schedule (all four pacing
+// blocks, not just the trailing one) -- ~25 Hz/~40ms, matching
+// Devices::Telemetry's own kPrimaryPeriod=40ms (telemetry.h) so the
+// primary-frame throttle and the loop's own pace agree by construction.
 constexpr uint32_t kSettle = 4;  // [ms] encoder-settle window, both motors
 constexpr uint32_t kClear = 4;   // [ms] post-duty-write clearance window
 constexpr uint32_t kCycle = 40;  // [ms] whole-schedule pace target (~25 Hz)
 
-// kWindows is what the three settle/clearance blocks above ALREADY consume
-// before the final (perception+odometry+pace) block ever runs; kPace is
-// that final block's own gap, DERIVED so it absorbs kWindows into kCycle's
-// total rather than stacking a fresh kCycle on top of it (105-004's
-// diagnosed defect: the OLD code called `sleepUntil(cycleStart, kCycle)`
-// for the final block, which -- proved by the sim's zero-real-time-cost
-// virtual clock, where every block's own elapsed-since-mark is provably 0
-// -- requested kCycle IN ADDITION to the 12ms already spent, not instead of
-// it: 4+4+4+16=28ms virtual against a 16ms target). Passing kPace (not
-// kCycle) to the final block's own runAndWait fixes this by construction:
-// the schedule's four blocks now sum to EXACTLY kCycle under the sim's
-// worst-case frozen clock, the same invariant the other three blocks
-// already had individually.
+// kWindows is what the three settle/clearance blocks above already consume
+// before the final (perception+odometry+pace) block runs; kPace is that
+// final block's own gap, DERIVED so it absorbs kWindows into kCycle's total
+// rather than stacking a fresh kCycle on top of it -- anchoring the final
+// block to kCycle directly (instead of kPace) would double-count kWindows
+// under a zero-real-time-cost virtual clock, where every block's own
+// elapsed-since-mark is provably 0 (each of the four blocks would then
+// request its full nominal gap on top of the others instead of the whole
+// schedule summing to kCycle). Passing kPace to the final block's own
+// runAndWait keeps the schedule's four blocks summing to exactly kCycle
+// under that worst case, the same invariant the other three blocks already
+// have individually.
 constexpr uint32_t kWindows = 2 * kSettle + kClear;  // [ms] time the 3 settle/clear
                                                       // blocks consume before the pace block
 static_assert(kWindows <= kCycle,
@@ -80,14 +63,12 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::NezhaMotor& motorL,
       clock_(clock),
       sleeper_(sleeper) {}
 
-// --- Timing primitives (stakeholder-mandated shape, unchanged by the move
-// -- see robot_loop.h's header). markTime() now reads clock_.nowMicros()
-// ([us]) and converts to [ms], the unit every other timing constant/field
-// in this file already uses. sleepUntil() now sleeps via
-// sleeper_.sleepMillis() instead of uBit.sleep() -- always sleeps >=1ms,
-// never a zero-length "sleep" (that would be a spin in disguise), always a
-// real yield back to the radio/serial fibers on the real Sleeper impl, so
-// no runAndWait block can ever degrade into a busy-wait. ---
+// --- Timing primitives -- see robot_loop.h's header. markTime() reads
+// clock_.nowMicros() ([us]) and converts to [ms], the unit every other
+// timing constant/field in this file uses. sleepUntil() always sleeps
+// >=1ms, never a zero-length "sleep" (that would be a spin in disguise),
+// so it is always a real yield back to the radio/serial fibers on the real
+// Sleeper impl -- no runAndWait block can ever degrade into a busy-wait. ---
 
 uint32_t RobotLoop::markTime() const {
   return static_cast<uint32_t>(clock_.nowMicros() / 1000);  // [us] -> [ms]
@@ -134,14 +115,9 @@ void RobotLoop::handleTwist(const msg::CommandEnvelope& env) {
   tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
 }
 
-// ConfigDelta runtime application (106-002/SUC-025, resolving
-// architecture-update.md (103) Step 7 Open Question 3 for the ONE patch
-// type this sprint scopes -- architecture-update.md (106) Decision 2): a
-// MotorConfigPatch is live-applied below; every other patch kind
-// (DRIVETRAIN/PLANNER/WATCHDOG/NONE) stays ERR_UNIMPLEMENTED, deliberately
-// out of scope (DrivetrainConfigPatch has no on-robot fusion consumer this
-// sprint; PlannerConfigPatch's heading_kp/heading_kd target
-// Motion::SegmentExecutor, deleted post-102).
+// ConfigDelta runtime application: a MotorConfigPatch is live-applied
+// below; every other patch kind (DRIVETRAIN/PLANNER/WATCHDOG/NONE) stays
+// ERR_UNIMPLEMENTED, deliberately out of scope -- see DESIGN.md §3.
 void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
   if (env.cmd.config.patch_kind != msg::ConfigDelta::PatchKind::MOTOR) {
     tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
@@ -193,7 +169,7 @@ void RobotLoop::handleStop(const msg::CommandEnvelope& env) {
 // Dispatches the <=1 decoded command in cmd to its own handler by
 // cmd_kind. `cmd` is a fresh, cycle-local variable (populated by at most
 // one comms_.pump() call this cycle), so reading it here bounds dispatch
-// to at most once per cycle by construction -- no separate "take" flag is
+// to at most once per cycle by construction -- no separate "take" flag
 // needed.
 void RobotLoop::processMessage(const Cmd& cmd) {
   msg::CommandEnvelope::CmdKind kind = (cmd.status == CmdStatus::kDecoded)
@@ -224,7 +200,7 @@ void RobotLoop::processMessage(const Cmd& cmd) {
 
 // ---- Boot: resolve every device before entering the control loop.
 // Telemetry flows from power-on (frames report per-device status), so the
-// host can tell booting from dead; commands are NOT consumed until the
+// host can tell booting from dead; commands are not consumed until the
 // main loop starts (no Comms::pump() call here). ----
 void RobotLoop::boot() {
   while (!preamble_.done()) {
@@ -243,7 +219,7 @@ void RobotLoop::boot() {
 }
 
 // ---- Main cycle: devices resolved, no readiness checks below this line.
-// TIMING: device calls are pure bus transactions and NEVER sleep. Every
+// TIMING: device calls are pure bus transactions and never sleep. Every
 // required gap is a runAndWait block: it marks time on entry (immediately
 // after the bus event that starts the clock), runs its body, then sleeps
 // until at least the gap has elapsed since the mark. The block visibly
@@ -300,18 +276,14 @@ void RobotLoop::cycle() {
 
   // Final (perception + odometry + pace) block -- the schedule's 4th
   // runAndWait, matching the same "own mark, own gap" shape as the three
-  // settle/clearance blocks above (106-001: this used to be a bare trailing
-  // `sleepUntil(cycleStart, kCycle)` anchored to the CYCLE'S start rather
-  // than its own; see kPace's own comment above for why that double-counted
-  // kWindows against the sim's zero-real-time-cost virtual clock). Body:
-  // OTOS (architecture-update.md (103) Step 7 Open Question 1) + odometry,
-  // outside any motor request/collect window (this class's own
-  // bus-discipline responsibility per odometry.h's file header) -- both
-  // stage into `frame_` for the NEXT cycle's tlm_.setFrame()/emit() call,
-  // per applyOtosSample()'s own "reaches Telemetry before that cycle's
-  // frame is built" contract. Unlike the other three blocks, this one DOES
-  // touch the bus (the OTOS read) -- it is the schedule's pace block, not a
-  // settle/clearance window, so that constraint doesn't apply to it.
+  // settle/clearance blocks above (see kPace's own comment for why the gap
+  // must be derived, not a bare kCycle anchored to the cycle start). Body:
+  // OTOS + odometry, outside any motor request/collect window (this
+  // class's own bus-discipline responsibility) -- both stage into `frame_`
+  // for the NEXT cycle's tlm_.setFrame()/emit() call. Unlike the other
+  // three blocks, this one DOES touch the bus (the OTOS read) -- it is the
+  // schedule's pace block, not a settle/clearance window, so that
+  // constraint doesn't apply to it.
   runAndWait(kPace, [&] {
     applyOtosSample(otos_, clock_.nowMicros(), frame_);
     odom_.integrate();  // odometry from both fresh wheel samples

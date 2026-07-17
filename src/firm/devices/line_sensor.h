@@ -1,43 +1,26 @@
 // line_sensor.h — Devices::LineSensorLeaf: the internal leaf for the PlanetX
-// 4-channel line sensor, I2C address 0x1A.
+// 4-channel line sensor, I2C address 0x1A. The loop constructs and drives
+// this leaf directly — there is no separate handle class.
 //
-// Ticket DB-006 (device-bus-tickets.md). Ported from
-// source_old/hal/real/LineSensor.{h,cpp} into the greenfield
-// `source/devices/` subsystem (namespace `Devices`), per clasi/issues/
-// device-bus-fiber-owned-self-contained-device-subsystem.md's "Shape" —
-// "Line and color sensing don't exist in the new tree yet." Mirrors
-// color_sensor.h's leaf shape (this ticket's sibling): a non-blocking
-// beginStep(nowUs) detection state machine, present()/connected(), and a
-// non-blocking tick(nowUs) that publishes a combined raw+normalized
-// LineReading.
+// Mirrors color_sensor.h's leaf shape: a non-blocking beginStep(nowUs)
+// detection state machine, present()/connected(), and a non-blocking
+// tick(nowUs) that publishes a combined raw+normalized LineReading.
 //
 // Protocol: write a 1-byte channel index (0-3), then read 1 byte of
 // grayscale data (0 = white, 255 = black approximately) -- FOUR such
-// write/read pairs per full sample. This primitive (readRaw(), below) was
-// ALREADY non-blocking in the pre-port driver (no fiber_sleep anywhere in
-// it) -- device-bus-tickets.md's DB-006 "If the source_old driver has
-// blocking waits, restructure to non-blocking" note therefore applies here
-// ONLY to begin()'s detection retry loop (see beginStep()'s own comment),
-// not to the steady-state read path, which is carried over unchanged.
+// write/read pairs per full sample (readRaw(), below) — already
+// non-blocking (no fiber_sleep anywhere in the read path); only
+// detection's retry loop needed restructuring into beginStep() (see its
+// own comment).
 //
 // Calibration (captureCalibMin()/captureCalibMax()/setSmoothingAlpha(),
-// below) is preserved from the pre-port public surface, operating on a
-// local mutable copy of the LineConfig this leaf was constructed with
-// (config_.calMin/calMax/filtAlpha) rather than the pre-port file's own
-// dedicated _calMin/_calMax/_alpha members -- same fields, sourced from
-// DB-001's LineConfig (device_config.h) instead of a bespoke member set, so
-// this leaf's one config_ stays the single source of truth for both the
-// boot-time calibration AND any later runtime recalibration call.
+// below) operates on a local mutable copy of the LineConfig this leaf was
+// constructed with (config_.calMin/calMax/filtAlpha), so this leaf's one
+// config_ stays the single source of truth for both the boot-time
+// calibration AND any later runtime recalibration call.
 //
-// --- Renamed LineSensor -> LineSensorLeaf in DB-007 ---
-// See color_sensor.h's identical note (its own "Renamed ColorSensor ->
-// ColorSensorLeaf in DB-007" section) for the full reasoning: DB-007's
-// planned public handle class needed the bare `LineSensor` name
-// (`line()` returns a `Devices::LineSensor&` per the issue's "The public
-// surface" sketch), so the leaf DB-006 landed under that name was renamed
-// here instead. Per sprint 103 architecture-update.md Decision 1, the
-// handle layer that rename anticipated was retired — the loop constructs
-// and drives this leaf directly.
+// See color_sensor.h's "ColorSensorLeaf / LineSensorLeaf naming" note for
+// why this class carries a `Leaf` suffix.
 #pragma once
 
 #include <cstdint>
@@ -54,37 +37,34 @@ class LineSensorLeaf {
  public:
   LineSensorLeaf(I2CBus& bus, const LineConfig& config);
 
-  // Non-blocking single detection step. Call once per fiber cycle (DB-007's
-  // detection preamble) until detectDone() is true; a no-op once it is.
+  // Non-blocking single detection step. Call once per fiber cycle until
+  // detectDone() is true; a no-op once it is.
   //
   // Up to kMaxAttempts attempts, kRetryPeriod apart (paced by nowUs, never a
-  // real sleep) -- the non-blocking restructuring of the pre-port begin()'s
-  // `for (...) { if (readRaw()) return true; fiber_sleep(50); }` loop (a
-  // successful 4-channel raw read means present; retried with a settle
-  // pause so a sensor still powering up after a cold boot is caught once it
-  // answers). present()/connected() become true on the first successful
-  // attempt; both stay false if every attempt is exhausted.
+  // real sleep): a successful 4-channel raw read means present; retried
+  // with a settle pause so a sensor still powering up after a cold boot is
+  // caught once it answers. present()/connected() become true on the first
+  // successful attempt; both stay false if every attempt is exhausted.
   void beginStep(uint64_t nowUs);  // [us]
   bool detectDone() const;
 
-  // present()/connected(): same sprint-099 distinction as otos.h/
-  // color_sensor.h. present() is set once by beginStep() and never
-  // re-evaluated; connected() is the live, per-tick() bus-health result.
+  // present()/connected(): same distinction as otos.h/color_sensor.h.
+  // present() is set once by beginStep() and never re-evaluated;
+  // connected() is the live, per-tick() bus-health result.
   bool present() const;
   bool connected() const;
 
   // True if a real bus read is due: no real read has ever happened, or at
   // least (LineConfig::lagLine * 1000) [us] have elapsed since the last one
-  // -- LineConfig::lagLine is the same "sensor polling budget" gate the
-  // pre-port architecture's Sensors::periodic() applied at the consumer
-  // layer (see color_sensor.h's identical readDue() note for lagColor).
+  // -- the leaf's own "sensor polling budget" (see color_sensor.h's
+  // identical readDue() note for lagColor).
   bool readDue(uint64_t nowUs) const;  // [us]
 
   // The leaf's one steady-state bus-touching entry point: a single
   // non-blocking 4-channel raw read (readRaw()), normalized against
-  // config_.calMin/calMax with optional EMA smoothing (config_.filtAlpha) --
-  // the exact math of the pre-port file's readNormalized(). No-op (no bus
-  // traffic) if beginStep() never found a chip, or before readDue() is true.
+  // config_.calMin/calMax with optional EMA smoothing (config_.filtAlpha).
+  // No-op (no bus traffic) if beginStep() never found a chip, or before
+  // readDue() is true.
   void tick(uint64_t nowUs);  // [us]
 
   LineReading reading() const;

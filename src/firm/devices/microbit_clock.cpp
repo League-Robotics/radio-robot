@@ -6,9 +6,7 @@
 namespace Devices {
 
 uint64_t MicroBitClock::nowMicros() const {
-  return system_timer_current_time_us();  // [us] vendor SDK call — excluded
-                                           // from the no-units-in-identifiers
-                                           // rename (coding-standards.md)
+  return system_timer_current_time_us();  // [us]
 }
 
 void MicroBitSleeper::sleepMillis(uint32_t duration) {

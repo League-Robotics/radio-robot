@@ -1,42 +1,24 @@
 // motor_armor.h — Devices::MotorArmor: the shared write-gate/reset/wedge
-// armor policy shared by every Devices motor leaf.
+// armor policy shared by every Devices motor leaf: reversal dwell, output
+// deadband, standstill-guarded resets, wedge detector.
 //
-// Ticket DB-004 (device-bus-tickets.md). Ported from
-// source/hal/capability/motor.h's Hal::Motor base class (sprint 078 — see
-// that file's header for the full state-diagram provenance) into the
-// greenfield `source/devices/` subsystem, per clasi/issues/device-bus-fiber-
-// owned-self-contained-device-subsystem.md's "Armor stays intact": reversal
-// dwell, output deadband, standstill-guarded resets, wedge detector —
-// ported VERBATIM in behavior, re-cased to the project's CamelCase rule.
+// Deliberately narrower than a full motor abstraction: no message plane
+// (apply()/state()/capabilities()/msg::MotorCommand — msg:: is unreachable
+// under the isolation invariant; the loop is the Devices-native replacement
+// for that surface, not this leaf base) and no acceleration tracking or
+// active()/encGlitchCount()/sampleTime() virtuals (leaf-specific
+// bookkeeping, not shared armor policy — Devices::NezhaMotor keeps its own).
 //
-// Scope deliberately narrower than Hal::Motor: this port carries forward
-// ONLY the four armor behaviors device-bus-tickets.md's DB-004 section and
-// the issue's "Armor stays intact" list name.
-//   - NOT ported: Hal::Motor's message plane (apply()/state()/
-//     capabilities()/msg::MotorCommand/msg::MotorState) — it is msg::-typed
-//     outright, which the isolation invariant forbids
-//     (device-bus-tickets.md's "Standing isolation invariant"). Per sprint
-//     103 architecture-update.md Decision 1, the loop constructs and drives
-//     this leaf directly (no handle-mediated staging layer) — the
-//     Devices-native replacement for that surface is the loop itself, not
-//     this internal leaf base.
-//   - NOT ported: Hal::Motor's later, non-armor additions —
-//     trackAcceleration()/acceleration() (099-003), active() (091-003),
-//     encGlitchCount()/sampleTime() virtuals. These are leaf-specific
-//     bookkeeping, not shared armor policy; Devices::NezhaMotor keeps its
-//     own encGlitchCount()/sampleTime() directly (device_config.h's
-//     encoder-outlier-rejection scope), and no consumer of this ticket
-//     needs active()/acceleration() yet.
+// Leaf contract: a concrete leaf (Devices::NezhaMotor today) derives from
+// MotorArmor, supplies the three device-specific protected primitives below
+// (writeRawDuty()/hardReset()/softRebaseline()) plus its own position()/
+// velocity()/appliedDuty() getters, calls configureArmor() once from its own
+// config-caching path, and calls the four protected armor steps
+// (processResetIfPending()/updateWedgeDetector()/armoredWrite()/
+// updateRestTracking()) from its own tick() in that order (nezha_motor.cpp
+// documents the full 5-step contract).
 //
-// Leaf contract (unchanged from the original): a concrete leaf (Devices::
-// NezhaMotor today) derives from MotorArmor, supplies the three device-
-// specific protected primitives below (writeRawDuty()/hardReset()/
-// softRebaseline()) plus its own position()/velocity()/appliedDuty()
-// getters, calls configureArmor() once from its own config-caching path,
-// and calls the four protected armor steps (processResetIfPending()/
-// updateWedgeDetector()/armoredWrite()/updateRestTracking()) from its own
-// tick() at the same call-order points the original NezhaMotor::tick()
-// documented (nezha_motor.cpp carries the same 5-step contract forward).
+// Design/rationale: DESIGN.md.
 #pragma once
 
 #include <cmath>
@@ -110,28 +92,27 @@ class MotorArmor {
 
  private:
   // Ship defaults substituted by configureArmor() when MotorConfig's two
-  // armor fields are unset (Design Rationale carried from the original:
-  // optional, not a zero-sentinel, because an explicit 0 must remain a
-  // valid, distinct, meaningful configuration for both fields).
+  // armor fields are unset. Optional, not a zero-sentinel, because an
+  // explicit 0 must remain a valid, distinct, meaningful configuration for
+  // both fields.
   static constexpr float kDefaultReversalDwell = 100.0f;    // [ms]
   static constexpr float kDefaultOutputDeadband = 0.03f;    // [-1,1] fraction
 
   // Standstill-guard constants for updateRestTracking()/
-  // processResetIfPending() — engineering starting guesses (unchanged from
-  // the original — a bench-tuning question, not a rename target).
+  // processResetIfPending() — engineering starting guesses, a bench-tuning
+  // question, not a rename target.
   static constexpr float kRestVelocity = 5.0f;        // [mm/s] proposed starting guess
   static constexpr uint8_t kRestTicksRequired = 5;    // proposed starting guess
 
-  // Consecutive-identical-reading threshold for the wedge latch — ported
-  // unchanged (064-004 hardening — do not reintroduce target-gating or
-  // arming-grace).
+  // Consecutive-identical-reading threshold for the wedge latch — do not
+  // reintroduce target-gating or arming-grace here (see updateWedgeDetector()
+  // below).
   static constexpr uint8_t kWedgeThreshold = 10;
 };
 
 // --- resetPosition()/wedged()/wedgeSuspect()/hardResetCount()/
 // softResetCount()/configureArmor(): small concrete accessors and the
-// config cache, defined inline here (headers-only, matching the original's
-// own "no capability/motor.cpp exists" precedent). ---
+// config cache, defined inline here (headers-only). ---
 
 inline void MotorArmor::resetPosition() { resetPending_ = true; }
 
@@ -147,9 +128,8 @@ inline void MotorArmor::configureArmor(const MotorConfig& config) {
                                                : kDefaultOutputDeadband;
 }
 
-// --- Armor policy (sprint 078, ported unchanged) — zero-dwell reversal,
-// output deadband, standstill-guarded resets, motion-qualified wedge
-// reporting. ---
+// --- Armor policy — zero-dwell reversal, output deadband, standstill-
+// guarded resets, motion-qualified wedge reporting. ---
 
 // armoredWrite() — the write-path gate every DUTY/VELOCITY/NEUTRAL mode
 // tick funnels through. Stop (duty == 0) and sub-deadband duty are always
@@ -233,8 +213,8 @@ inline void MotorArmor::updateRestTracking() {
 
 // updateWedgeDetector() — the raw, unconditional stuck-encoder latch
 // (stuckCount_/wedgeLatched_) counts consecutive identical position() reads
-// with no gating by commanded target or arming grace (064-004 hardening —
-// do NOT reintroduce those blind spots). wedgeSuspect_ is a second,
+// with no gating by commanded target or arming grace — do NOT reintroduce
+// those blind spots. wedgeSuspect_ is a second,
 // independent derivation of the same identical-reads test, additionally
 // gated on |appliedDuty()| > outputDeadband_ (the motor was actually being
 // asked to move). Both counters reset whenever their own gating condition

@@ -1,27 +1,14 @@
-// i2c_bus.h — Devices::I2CBus: pure abstract I2C bus interface.
-//
-// Sprint 108 ticket 001 (clasi/issues/plan-pure-i2cbus-clock-interfaces-a-
-// real-simplant-simulator.md, Stage 1). This used to be a concrete class
-// with two build-mode-conditional forks (real MicroBitI2C machinery vs. a
-// scripted-FIFO test fake). It is now a plain virtual base — same style as
-// `App::Transport` (source/app/comms.h) and `Devices::MotorArmor`
-// (source/devices/motor_armor.h) — so this header never drags in
-// MicroBit.h and has zero preprocessor forks. The real ARM
-// implementation lives in `source/devices/microbit_i2c_bus.h/.cpp`
-// (`Devices::MicroBitI2CBus`).
+// i2c_bus.h — Devices::I2CBus: pure abstract I2C bus interface. Plain
+// virtual base (no preprocessor forks); the real ARM implementation lives
+// in microbit_i2c_bus.h/.cpp (Devices::MicroBitI2CBus).
 //
 // Surface: exactly the 3 methods any command handler or device leaf calls
-// today (grep-confirmed against source/) — write(), read(), and
-// clearanceSafetyNetCount(). Every other member the old concrete class
-// exposed (txnCount/errCount/lastErr/clear/reentryViolations/
-// reentryInFlightAddr/reentryNewAddr/resetStats/dumpRecent/setLogging/
-// setIrqGuard/irqGuard) is only ever called from i2c_bus.cpp/.h themselves
-// (now microbit_i2c_bus.cpp/.h) and stays on the concrete
-// `Devices::MicroBitI2CBus` class, not this interface.
+// — write(), read(), and clearanceSafetyNetCount(). The diagnostic/stats
+// surface (txnCount/errCount/lastErr/clear/reentryViolations/resetStats/
+// dumpRecent/setLogging/setIrqGuard/irqGuard) stays on the concrete
+// Devices::MicroBitI2CBus class, not this interface.
 //
-// All four device leaves this subsystem owns (Motor, Otos, LineSensorLeaf,
-// ColorSensorLeaf) route their bus traffic through an `I2CBus&` reference —
-// they are unaffected by this split.
+// Design/rationale: DESIGN.md.
 #pragma once
 #include <cstdint>
 
@@ -52,13 +39,11 @@ class I2CBus {
                     uint32_t postClear = 0) = 0;
 
   // ---------------------------------------------------------------------
-  // Clearance safety-net diagnostics (103-002, M1 fix — 2026-07-13 code
-  // review). Total number of times write()/read() found itself called
-  // BEFORE a device's clearance deadline (readyAt/preClear) had elapsed.
-  // This is the narrow signal ticket 001 (103) numbered as
-  // Telemetry.fault_bits bit 0 ("I2CBus readyAt clearance safety-net trip")
-  // — it "should never fire if the loop schedule is right." Read by
-  // source/app/robot_loop.cpp each cycle to populate that fault bit.
+  // Clearance safety-net diagnostics. Total number of times write()/
+  // read() found itself called BEFORE a device's clearance deadline
+  // (readyAt/preClear) had elapsed — should never fire if the loop
+  // schedule is right. Read by app/robot_loop.cpp each cycle to populate
+  // Telemetry.fault_bits bit 0.
   // ---------------------------------------------------------------------
 
   virtual uint32_t clearanceSafetyNetCount() const = 0;

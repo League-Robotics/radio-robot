@@ -3,9 +3,7 @@
 #include <cmath>
 
 // ---------------------------------------------------------------------------
-// I2C wire protocol constants (verified against PlanetX pxt-nezha2/main.ts,
-// via source/hal/nezha/nezha_motor.cpp / source_old/hal/real/Motor.cpp —
-// ported byte-for-byte, not re-derived).
+// I2C wire protocol constants (verified against PlanetX pxt-nezha2/main.ts).
 //
 // Every command is an 8-byte write to address 0x10. The frame always starts
 // with 0xFF 0xF9 followed by the motorId byte (== config_.port, 1..4 on a
@@ -53,16 +51,11 @@ float clampf(float v, float lo, float hi) {
     return v;
 }
 
-// clampStep — bound |target - lastWritten| to at most maxDelta. Ported
-// verbatim from source/hal/nezha/motor_slew.h's MotorSlew::clampStep()
-// (itself ported unchanged from source_old/hal/real/MotorSlew.h, 064-002).
-// Not split into its own devices/motor_slew.h file — device-bus-tickets.md's
-// DB-004 "Files" list scopes this ticket to velocity_pid.{h,cpp}/
-// motor_armor.h/nezha_motor.{h,cpp}; this pure, dependency-free helper is
-// small enough to keep local to its one call site (writeRawDuty() below)
-// rather than add an unlisted file for a three-line function. Has NO
-// concept of a "stop" command -- pct==0 is just another target value here;
-// the caller special-cases pct==0 as an immediate, unclamped, full write.
+// clampStep — bound |target - lastWritten| to at most maxDelta. Kept local
+// to its one call site (writeRawDuty() below) rather than split into its
+// own file — small, pure, dependency-free. Has NO concept of a "stop"
+// command -- pct==0 is just another target value here; the caller
+// special-cases pct==0 as an immediate, unclamped, full write.
 int8_t clampStep(int8_t lastWritten, int8_t target, uint8_t maxDelta) {
     int16_t delta = static_cast<int16_t>(target) - static_cast<int16_t>(lastWritten);
     if (delta > static_cast<int16_t>(maxDelta)) {
@@ -84,9 +77,8 @@ NezhaMotor::NezhaMotor(I2CBus& bus, const MotorConfig& config)
     // configureArmor() (MotorArmor, base) caches the two armor fields
     // (reversalDwell/outputDeadband, defaulting when unset); this
     // constructor then caches the rest of config_ itself (no separate
-    // configureDevice() virtual dispatch step -- NezhaMotor is this
-    // ticket's only leaf, so the extra indirection the pre-port file used
-    // to support future leaves overriding a virtual configureDevice() adds
+    // configureDevice() virtual dispatch step -- NezhaMotor is currently
+    // this subsystem's only motor leaf, so that extra indirection adds
     // nothing here).
     configureArmor(config);
     config_ = config;
@@ -151,8 +143,8 @@ void NezhaMotor::setVelEstimator(uint8_t mode, uint8_t window)
 }
 
 // ---------------------------------------------------------------------------
-// Velocity-estimator helpers (sprint 101). pushVelSample()/clearVelWindow()
-// maintain the fresh-sample ring; lineFitVelocity() is the mode-1 estimator.
+// Velocity-estimator helpers. pushVelSample()/clearVelWindow() maintain the
+// fresh-sample ring; lineFitVelocity() is the mode-1 estimator.
 // ---------------------------------------------------------------------------
 void NezhaMotor::pushVelSample(uint64_t t, float position)
 {
@@ -178,7 +170,7 @@ void NezhaMotor::setDutyAvg(uint8_t window)
 }
 
 // averageDuty() — boxcar moving average of the last dutyAvgWindow_ PID duty
-// outputs (sprint 101). window 1 short-circuits to the raw duty (default /
+// outputs. window 1 short-circuits to the raw duty (default /
 // unchanged behavior). Pushes every call so a live window change has history.
 float NezhaMotor::averageDuty(float duty)
 {
@@ -273,11 +265,11 @@ void NezhaMotor::tick(uint64_t nowUs)
     }
     lastTickUs_ = nowUs;
 
-    // Freshness gate (HARDWARE-CONFIRMED fix -- DB-009 bring-up image: `M 1
-    // STATE` reported vel=0.000 ALWAYS, glitch count climbing, wedged=1
-    // false-latching, even while a raw DUTY command physically moved the
-    // wheel ~717mm). The Nezha brick's 0x46 register refreshes only every
-    // ~80ms; the loop's own cycle runs every ~16ms.
+    // Freshness gate (HARDWARE-CONFIRMED fix -- a raw DUTY command that
+    // physically moved the wheel was previously reported as vel=0.000
+    // ALWAYS, with the glitch count climbing and a false wedge latch). The
+    // Nezha brick's 0x46 register refreshes only every ~80ms; the loop's
+    // own cycle runs every ~16ms.
     // Running the velocity/glitch computation on every TICK (as before)
     // meant most cycles re-collected an IDENTICAL raw count (step==0,
     // rawVel==0 -- decaying filteredVelocity_ toward 0 every stale cycle),
@@ -383,7 +375,7 @@ void NezhaMotor::tick(uint64_t nowUs)
     updateWedgeDetector();
 
     // 4. Mode dispatch. Mode::Active covers both PID-on (chase
-    // velocityTarget_) and PID-off (raw dutyTarget_ passthrough) -- OQ2:
+    // velocityTarget_) and PID-off (raw dutyTarget_ passthrough) --
     // armoredWrite() gates BOTH paths identically.
     switch (mode_) {
         case Mode::Active:
@@ -415,14 +407,11 @@ void NezhaMotor::tick(uint64_t nowUs)
 }
 
 // ---------------------------------------------------------------------------
-// Write path — ported from the pre-port file's writeRawDuty(), itself
-// ported from source_old's Motor::setSpeed(). Write-on-change guard,
-// write-rate limit, slew cap, and coast-at-zero exemption, including the
-// -128 sentinel's interaction with the slew clamp on the very first write,
-// are all unchanged from the port. ONE behavior is new (103-002, C1 fix,
-// 2026-07-13 code review): lastWrittenPct_/lastWriteTimeUs_ now commit ONLY
-// when the bus write actually succeeds (status == kOk) -- see the bottom of
-// this function for why.
+// Write path — write-on-change guard, write-rate limit, slew cap, and
+// coast-at-zero exemption, including the -128 sentinel's interaction with
+// the slew clamp on the very first write. lastWrittenPct_/lastWriteTimeUs_
+// commit ONLY when the bus write actually succeeds (status == kOk) -- see
+// the bottom of this function for why.
 //
 // Time source: `now` below reads lastTickUs_, which tick() step 2 already
 // set to THIS tick's nowUs before step 4's dispatch calls down into here
@@ -477,10 +466,10 @@ void NezhaMotor::writeRawDuty(float duty)
         status = writeMotorRun(dir, speed);
     }
 
-    // 103-002 (C1 fix, 2026-07-13 code review): commit lastWrittenPct_/
-    // lastWriteTimeUs_ ONLY on a successful write. The old unconditional
-    // commit latched a NAK'd write as "already written" -- write-on-change
-    // (above) then suppressed every retry of the SAME value forever. That
+    // Commit lastWrittenPct_/lastWriteTimeUs_ ONLY on a successful write.
+    // An unconditional commit here would latch a NAK'd write as "already
+    // written" -- write-on-change (above) would then suppress every retry
+    // of the SAME value forever. That
     // was catastrophic specifically for a failed STOP (pct==0): the
     // watchdog's "re-assert Neutral every cycle" robustness (the loop's
     // stale-target gate) calls armoredWrite(0) every cycle, which
@@ -519,7 +508,7 @@ int NezhaMotor::writeMotorRun(uint8_t direction, uint8_t speed)
 }
 
 // ---------------------------------------------------------------------------
-// Encoder reads — all ported byte-for-byte from the pre-port file.
+// Encoder reads
 // ---------------------------------------------------------------------------
 
 int32_t NezhaMotor::readEncoderAtomicRaw()
@@ -561,7 +550,7 @@ void NezhaMotor::requestSample()
 
 void NezhaMotor::requestEncoder()
 {
-    // Split-phase phase 1 -- ported byte-for-byte. preClear=4000 holds this
+    // Split-phase phase 1. preClear=4000 holds this
     // write back until a real >=4ms has elapsed since the LAST transaction
     // to 0x10; postClear=4000 attaches the settle window to THIS write's
     // I2CBus deadline, holding off any subsequent transaction to 0x10 until
@@ -602,9 +591,9 @@ int32_t NezhaMotor::collectEncoder()
 
 void NezhaMotor::hardReset()
 {
-    // Ported unchanged: median-of-3 atomic-read snapshot + readback-verify
-    // + retry. processResetIfPending() (base) increments hardResetCount_
-    // after calling this.
+    // Median-of-3 atomic-read snapshot + readback-verify + retry.
+    // processResetIfPending() (base) increments hardResetCount_ after
+    // calling this.
     static constexpr int kMaxRetries = 2;
     static constexpr int32_t kReadbackThreshold = 2;
 
@@ -662,7 +651,7 @@ void NezhaMotor::hardReset()
 
 void NezhaMotor::softRebaseline()
 {
-    // Ported unchanged: software-only encoder rebaseline -- folds the
+    // Software-only encoder rebaseline -- folds the
     // already-tick-cached lastPosition_ (populated by this tick's
     // collectEncoder() call, not a new atomic read) back into raw
     // tenths-of-degrees and adds it to encOffset_, then zeroes the cache

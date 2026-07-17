@@ -1,35 +1,30 @@
 // telemetry.h -- App::Telemetry: the always-on outbound frame. Builds and
 // emits the primary msg::Telemetry frame (ack ring + fault/event bits) at a
 // fixed cadence, and the slower msg::TelemetrySecondary diagnostic frame on
-// other cycles, NEVER both in the same emit() call.
+// other cycles, never both in the same emit() call.
 //
-// architecture-update.md (103) Step 3 "Telemetry" boundary: inside --
-// primary/secondary frame assembly, the depth-3 ack ring, fault/event bit
-// encoding, cadence pacing; outside -- deciding WHEN a fault occurred
-// (callers -- I2CBus's safety net, Deadman's trip -- set the bit; Telemetry
-// only carries it). Serves SUC-005.
+// Boundary: inside -- primary/secondary frame assembly, the depth-3 ack
+// ring, fault/event bit encoding, cadence pacing; outside -- deciding WHEN
+// a fault occurred (callers -- I2CBus's safety net, Deadman's trip -- set
+// the bit; Telemetry only carries it).
 //
-// Two send paths, per protos/telemetry.proto's own Decision 3 resolution
-// (ticket 001's completion notes): the PRIMARY frame rides a
+// Two send paths: the PRIMARY frame rides a
 // msg::ReplyEnvelope{corr_id=0, body_kind=TLM} through Comms::sendReply()
-// (ticket 004) -- Telemetry holds a Comms& for this. TelemetrySecondary is
-// NOT a ReplyEnvelope oneof arm (envelope.proto's body oneof is fixed at
+// -- Telemetry holds a Comms& for this. TelemetrySecondary is NOT a
+// ReplyEnvelope oneof arm (envelope.proto's body oneof is fixed at
 // ok/err/tlm) -- it rides as its own, independently-armored "*B" line, so
-// Telemetry also holds the two Transport& references directly (the
-// architecture-update.md (103) Step 4 "Telemetry --> Com" dependency-graph
-// edge, distinct from -- and in addition to -- "Telemetry --> Comms" for
-// the primary path) and performs its own armor+broadcast for that one
-// frame type, reusing Comms's public kArmoredBufSize constant and
-// WireRuntime::base64Encode() (the same primitives Comms::sendReply()
-// itself is built on) rather than duplicating a private encode path.
+// Telemetry also holds the two Transport& references directly and performs
+// its own armor+broadcast for that one frame type, reusing Comms's public
+// kArmoredBufSize constant and WireRuntime::base64Encode() (the same
+// primitives Comms::sendReply() itself is built on) rather than
+// duplicating a private encode path.
 //
-// This ticket (103-005) builds Telemetry as a standalone, testable class:
-// it never holds a pointer to a leaf, I2CBus, or Deadman instance (that
-// wiring is ticket 008's loop construction). Callers stage the next
-// frame's data via setFrame()/setSecondaryFrame() and report fault/event
-// conditions via setFault()/setEvent() using the bit constants below --
-// Telemetry only carries whatever the caller last told it, per the
-// boundary comment above.
+// Telemetry is a standalone, testable class: it never holds a pointer to a
+// leaf, I2CBus, or Deadman instance (that wiring is RobotLoop's job).
+// Callers stage the next frame's data via setFrame()/setSecondaryFrame()
+// and report fault/event conditions via setFault()/setEvent() using the
+// bit constants below -- Telemetry only carries whatever the caller last
+// told it. Design/rationale: DESIGN.md.
 #pragma once
 
 #include <cstdint>
@@ -41,78 +36,48 @@
 namespace App {
 
 // --- fault_bits / event_bits layout -----------------------------------
-// Decided by ticket 001 (protos/telemetry.proto's own doc comment) and
-// reproduced here verbatim, per this ticket's own documentation-update
-// requirement, as the single place a future reader looks to decode a bit.
+// The single place a reader decodes a bit against. Callers pass the
+// current boolean state to setFault()/setEvent(); Telemetry only carries
+// it (see this file's boundary comment above).
 //
 // fault_bits:
 //   bit 0 (kFaultI2CSafetyNet) -- I2CBus `readyAt` clearance safety-net
-//                                  trip (source/devices/i2c_bus.h,
-//                                  Devices::I2CBus::clearanceSafetyNetCount()
-//                                  -- ticket 002). WIRED this ticket: the
-//                                  real call site's boolean result is what
-//                                  a caller passes to setFault().
-//                                  CHARACTERIZED by ticket 103-010's bench
-//                                  session: a boot-time ONE-SHOT latch, not
-//                                  a continuous/live indicator -- it fires
-//                                  once, coincident with the frame
-//                                  `event_bits` first shows
-//                                  kEventBootReady (Preamble::done()'s
-//                                  first-true transition; plausibly
-//                                  preamble's own hardReset()-driven
-//                                  back-to-back device-detection writes),
-//                                  and then never re-fires (matches
-//                                  clearanceSafetyNetCount()'s own
+//                                  trip (Devices::I2CBus::
+//                                  clearanceSafetyNetCount() > 0). Bench-
+//                                  characterized as a boot-time ONE-SHOT
+//                                  latch, not a continuous/live indicator:
+//                                  it fires once, coincident with
+//                                  event_bits first showing
+//                                  kEventBootReady, and never re-fires
+//                                  (matches clearanceSafetyNetCount()'s own
 //                                  monotonic, never-cleared counter
-//                                  semantics). Observed pegged at exactly 1
-//                                  across sustained driving in every
-//                                  re-run capture in that session, with no
-//                                  behavioral signal (no stall, no dropped
-//                                  ack, no missed cycle) correlated with
-//                                  driving activity. A healthy robot can
-//                                  show fault_bits bit 0 set permanently
-//                                  after boot with no ongoing problem -- a
-//                                  future bench reader should NOT chase a
-//                                  steady fault=1 as live evidence of a
-//                                  defect; only a bit that flips DURING
-//                                  driving (not just once at boot) is
-//                                  actionable.
+//                                  semantics). A healthy robot can show
+//                                  fault_bits bit 0 set permanently after
+//                                  boot with no ongoing problem -- do NOT
+//                                  read a steady fault=1 as live evidence
+//                                  of a defect; only a bit that flips
+//                                  DURING driving (not just once at boot)
+//                                  is actionable.
 //   bit 1 (kFaultWedgeLatch)   -- NezhaMotor/I2CBus wedge-latch detected
-//                                  (Devices::MotorArmor::wedged(), ticket
-//                                  002/003). Declared, not yet wired live
-//                                  by any ticket -- no dead-bit ambiguity:
-//                                  the constant exists so a future ticket
-//                                  (008) calls setFault(kFaultWedgeLatch, ...)
-//                                  without inventing a new bit number.
+//                                  (Devices::MotorArmor::wedged()).
 //   bit 2 (kFaultI2CNak)       -- I2C bus NAK/timeout error. Declared, not
 //                                  yet wired live (no per-transaction NAK
-//                                  aggregate exists at this ticket's scope).
+//                                  aggregate exists yet).
 //   bit 3 (kFaultCommsMalformed) -- malformed/undecodable inbound frame
 //                                  (App::Comms::malformedCount() > 0 --
-//                                  source/app/comms.h/.cpp; malformed
-//                                  armor prefix, malformed base64,
-//                                  malformed protobuf decode, or an
+//                                  malformed armor prefix, malformed
+//                                  base64, malformed protobuf decode, or an
 //                                  unrecognized text-plane line all
-//                                  increment it). WIRED by ticket 104-004:
-//                                  main.cpp's loop reads
-//                                  Comms::malformedCount() every cycle,
-//                                  same idiom as kFaultI2CSafetyNet above.
+//                                  increment it).
 //   bits 4-31 -- reserved for future faults.
 //
 // event_bits:
 //   bit 0 (kEventDeadmanExpired) -- Deadman staleness timer expired
-//                                    (source/app/deadman.h,
-//                                    App::Deadman::expired() -- ticket
-//                                    004). WIRED this ticket.
+//                                    (App::Deadman::expired()).
 //   bit 1 (kEventBootReady)      -- boot-ready transition
-//                                    (Preamble::done() first true, ticket
-//                                    007). Declared, not yet wired --
-//                                    Preamble does not exist yet.
+//                                    (Preamble::done() first true).
 //   bit 2 (kEventConfigApplied)  -- a ConfigDelta was applied. Declared,
-//                                    not yet wired -- runtime ConfigDelta
-//                                    application is a ticket-008-time
-//                                    decision (architecture-update.md (103)
-//                                    Step 7 Open Question 3).
+//                                    not yet wired.
 //   bits 3-31 -- reserved for future events.
 constexpr uint32_t kFaultI2CSafetyNet = 1u << 0;
 constexpr uint32_t kFaultWedgeLatch = 1u << 1;
@@ -123,18 +88,14 @@ constexpr uint32_t kEventDeadmanExpired = 1u << 0;
 constexpr uint32_t kEventBootReady = 1u << 1;
 constexpr uint32_t kEventConfigApplied = 1u << 2;
 
-// Primary cadence target: spike-001's 25 Hz/40 ms measurement
-// (architecture-update.md (103) Step 7 Open Question 5) -- this ticket
-// does not need to HIT this exactly, only pace against it and measure its
-// own real number (this ticket's own acceptance criterion).
+// Primary cadence target: ~25 Hz/40 ms. Callers pace against this and
+// measure their own real number; emit() does not need to hit it exactly.
 constexpr uint32_t kPrimaryPeriod = 40;  // [ms] ~25 Hz
 
-// Secondary cadence: this ticket's own P4 implementation decision
-// (architecture-update.md (103) Step 7 Open Question 4, left open by
-// Decision 3) -- 5x the primary period (~5 Hz) keeps the diagnostic frame
-// far enough from the primary's own deadline that the two essentially
-// never contend for the same emit() call, while still refreshing at a
-// useful bench-diagnostic rate.
+// Secondary cadence: 5x the primary period (~5 Hz) keeps the diagnostic
+// frame far enough from the primary's own deadline that the two
+// essentially never contend for the same emit() call, while still
+// refreshing at a useful bench-diagnostic rate.
 constexpr uint32_t kSecondaryPeriod = 200;  // [ms] ~5 Hz
 
 class Telemetry {
@@ -216,31 +177,26 @@ class Telemetry {
   // that very first call always resolves to primary -- see the tie-break
   // note below).
   //
-  // Tie-break (106-002 fix, `secondary-telemetry-starved-by-106-001-
-  // cadence-retarget.md`): 106-001 retargeted the real loop period to
-  // ~52 ms, ABOVE kPrimaryPeriod (40 ms), so primaryDue() is true on
-  // EVERY call -- under the old "primary always wins a same-call tie"
-  // rule (this file's own pre-106-002 comment, and the 103-009 comment it
-  // quoted), secondary NEVER got a turn at all (measured 0 Hz on the
-  // stand). The fix: when BOTH frames are genuinely due in the same call,
-  // ALTERNATE instead of always favoring primary -- `tieFavorsSecondary_`
-  // flips after every tie. "Genuinely due" for secondary's own
+  // Tie-break: at a real loop period at or above kPrimaryPeriod (40ms),
+  // primaryDue() can be true on EVERY call -- an unconditional "primary
+  // always wins a tie" rule then starves secondary to 0 Hz forever. The
+  // fix: when BOTH frames are genuinely due in the same call, ALTERNATE
+  // instead of always favoring primary -- `tieFavorsSecondary_` flips
+  // after every tie. "Genuinely due" for secondary's own
   // pre-first-ever-emission window means real elapsed time
   // (`now >= kSecondaryPeriod`), NOT secondaryDue()'s own
   // "!everEmittedSecondary_ -> true" boot bypass -- otherwise a caller
-  // whose second-ever call already lands on/after kPrimaryPeriod (e.g.
-  // exactly kPrimaryPeriod after the first, long before any real
-  // starvation) would spuriously tie-divert onto secondary (emit.cpp's
-  // own comment has the full derivation). Because secondaryDue() only
-  // stays true once every kSecondaryPeriod (200 ms) until an actual
-  // secondary send resets it, this alternation costs at most ONE primary
-  // frame delayed by one loop cycle roughly once per kSecondaryPeriod
-  // (the very next call, no longer tied, sends the deferred primary
-  // immediately) -- primary's own steady-state cadence is otherwise
-  // untouched, and secondary is guaranteed a slot within roughly one
-  // kSecondaryPeriod instead of starving forever. A non-tied call (only
-  // one of the two genuinely due) is unaffected: that frame sends
-  // immediately, exactly as before.
+  // whose second-ever call already lands on/after kPrimaryPeriod (long
+  // before any real starvation) would spuriously tie-divert onto
+  // secondary. Because secondaryDue() only stays true once every
+  // kSecondaryPeriod (200 ms) until an actual secondary send resets it,
+  // this alternation costs at most ONE primary frame delayed by one loop
+  // cycle roughly once per kSecondaryPeriod (the very next call, no
+  // longer tied, sends the deferred primary immediately) -- primary's own
+  // steady-state cadence is otherwise untouched, and secondary is
+  // guaranteed a slot within roughly one kSecondaryPeriod instead of
+  // starving forever. A non-tied call (only one of the two genuinely due)
+  // is unaffected: that frame sends immediately.
   void emit(uint32_t now);
 
   // Measurement/test seam -- lets a HOST_BUILD test report the realized
@@ -280,11 +236,11 @@ class Telemetry {
   uint32_t lastSecondaryEmit_ = 0;  // [ms]
   uint32_t secondaryEmitCount_ = 0;
 
-  // 106-002 tie-break state (see emit()'s own comment): false means the
-  // NEXT simultaneous-due tie favors primary, true means it favors
-  // secondary. Starts false so the very first-ever call (both "due" by
-  // construction) still sends primary, preserving the documented
-  // no-arming-step boot contract.
+  // Tie-break state (see emit()'s own comment): false means the NEXT
+  // simultaneous-due tie favors primary, true means it favors secondary.
+  // Starts false so the very first-ever call (both "due" by construction)
+  // still sends primary, preserving the documented no-arming-step boot
+  // contract.
   bool tieFavorsSecondary_ = false;
 };
 

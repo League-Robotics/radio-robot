@@ -1,21 +1,7 @@
-// ---------------------------------------------------------------------------
-// main.cpp -- the ARM entry point. Owns the real MicroBit hardware singleton
-// and constructs every leaf/app module, then hands off to App::RobotLoop
-// (source/app/robot_loop.{h,cpp}) for the boot loop + main cycle body.
-//
-// Sprint 103 ticket 008 originally built the single loop inline here (see
-// git history for that shape: a telemetry-emitting boot loop, then the
-// runAndWait/markTime/sleepUntil main cycle, wired per the archived plan's
-// canonical "The main loop (the whole program, one page)" sketch). Sprint
-// 105 ticket 001 extracted that boot loop and cycle body verbatim into
-// App::RobotLoop, parameterized on Devices::Clock&/Devices::Sleeper&
-// instead of raw vendor timer/sleep calls, so it compiles under
-// -DHOST_BUILD with no MicroBit.h dependency -- a mechanical move, zero
-// intended behavior change on ARM (robot_loop.h/.cpp carry the full
-// rationale and the preserved inline documentation). This file's own
-// remaining logic is limited to real hardware construction and wiring --
-// no cycle logic remains inline here.
-// ---------------------------------------------------------------------------
+// main.cpp -- the ARM entry point. Owns the real MicroBit hardware singleton,
+// constructs and wires every leaf/app module, then hands off to
+// App::RobotLoop (app/robot_loop.{h,cpp}) for the boot loop + main cycle.
+// No cycle logic lives here. Design/rationale: DESIGN.md.
 #include <cstdio>
 
 #include "MicroBit.h"
@@ -43,9 +29,8 @@ static MicroBit uBit;
 
 namespace {
 
-// DEVICE:NEZHA2:robot:<name>:<serial> -- byte-identical to the sprint-102
-// stub's own formatDeviceAnnouncement() (main.cpp git history) so a host
-// client's existing banner parser keeps working unchanged.
+// DEVICE:NEZHA2:robot:<name>:<serial> -- byte-frozen wire format; host
+// banner parsers depend on it.
 void formatBanner(char* buf, int size) {
   const char* name = microbit_friendly_name();
   uint32_t serial = microbit_serial_number();
@@ -54,11 +39,10 @@ void formatBanner(char* buf, int size) {
 }
 
 // Converts the boot config's wire-plane msg::MotorConfig into the
-// Devices-local MotorConfig NezhaMotor's constructor needs. Lives here (not
-// in source/devices/ or source/config/) because it is the one place both
-// types are reachable: the isolation invariant forbids source/devices/ from
-// including messages/ or config/ (device_config.h's own file header), and
-// config/boot_config.h has no reason to know Devices:: exists.
+// Devices-local MotorConfig NezhaMotor's constructor needs. Lives here
+// because main.cpp is the one place both types are reachable -- the
+// devices/ isolation invariant (DESIGN.md) forbids devices/ from including
+// messages/ or config/.
 Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
   Devices::MotorConfig cfg;
   cfg.wheelTravelCalib = src.travel_calib;
@@ -93,10 +77,8 @@ int main() {
   static char banner[64];
   formatBanner(banner, sizeof(banner));
 
-  // ---- Construction order matches device_bus.h's own documented
-  // rationale (bus before leaves, leaves before app/ modules that read
-  // them) even though DeviceBus itself is gone -- this ticket's own
-  // acceptance criterion. ----
+  // Construction order: bus before leaves, leaves before app/ modules that
+  // read them (DESIGN.md §4).
   static Devices::MicroBitI2CBus bus(uBit.i2c);
 
   msg::MotorConfig motorConfigs[Config::kMotorConfigCount];
@@ -104,9 +86,8 @@ int main() {
   msg::DrivetrainConfig drivetrainConfig = Config::defaultDrivetrainConfig();
   Config::OtosBootConfig otosBootConfig = Config::defaultOtosBootConfig();
 
-  // left_port/right_port are 1-based port labels (boot_config.h's own
-  // convention, tovez.json: left_port=1, right_port=2) -> 0-based index
-  // into the 4-entry motorConfigs array.
+  // left_port/right_port are 1-based port labels (boot_config.h's
+  // convention) -> 0-based index into the motorConfigs array.
   static Devices::NezhaMotor motorL(
       bus, toDeviceMotorConfig(motorConfigs[drivetrainConfig.left_port - 1]));
   static Devices::NezhaMotor motorR(
@@ -137,8 +118,7 @@ int main() {
   static App::Odometry odom(motorL, motorR, drivetrainConfig.trackwidth);
   static App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
-  // The extracted boot loop + main cycle body (sprint 105 ticket 001,
-  // source/app/robot_loop.{h,cpp}) -- takes every leaf/app module above by
+  // Boot loop + main cycle -- takes every leaf/app module above by
   // reference plus the Clock/Sleeper time seam. run() never returns.
   static App::RobotLoop robotLoop(bus, motorL, motorR, otos, comms, tlm,
                                    drive, odom, deadman, preamble, clock,

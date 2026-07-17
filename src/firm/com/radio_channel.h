@@ -3,20 +3,12 @@
 
 /**
  * RadioChannel — persistent radio-channel (nRF frequency band) storage.
+ * Design/rationale: DESIGN.md.
  *
- * The robot's radio group is ALWAYS 10 (kGroup); only the channel (frequency
- * band) is configurable.  The channel is persisted in the micro:bit's
- * flash-backed key-value store (uBit.storage) so it survives power cycles.
- *
- * Channel range is 0..35 so it renders as a single base-36 character on the
- * LED matrix (0-9 then A-Z, so channel 10 = 'A').  The nRF hardware supports
- * bands up to 83, but we only need a handful and one digit keeps the boot
- * display glanceable.  An unset or out-of-range stored value falls back to
- * kDefault (0), which matches the RadioRelay's default.
- *
- * Changing the channel over the radio breaks the link the instant the robot
- * re-tunes (the relay is still on the old channel), so the channel is normally
- * changed via the on-board buttons at boot or the `RF` command over USB serial.
+ * Group is always kGroup (10); only the channel is persisted, in the
+ * micro:bit's flash-backed key-value store (uBit.storage). Range 0..35
+ * (single base-36 LED-matrix digit); unset/out-of-range falls back to
+ * kDefault (0).
  */
 namespace radiochan {
 

@@ -15,9 +15,8 @@ void Radio::begin(int channel) {
     _instance = this;
     _channel = channel;
     _radio.enable();
-    // Match the RadioRelay: configurable channel (frequency band), group 10.
-    // CODAL does not default to band 0, so this must be set explicitly or the
-    // robot and relay sit on different frequencies and never hear each other.
+    // CODAL does not default to band 0 — must set explicitly or the robot
+    // and relay sit on different frequencies and never hear each other.
     _radio.setFrequencyBand(channel);
     _radio.setGroup(10);
     _radio.setTransmitPower(7);
@@ -82,13 +81,10 @@ bool Radio::poll(char* buf, uint16_t len) {
 }
 
 void Radio::send(const char* msg) {
-    // Terminate every message with '\n', mirroring SerialPort::send's "\r\n".
-    // The radio START/END framing alone delimits messages for the relay's
-    // COMMAND plane (which re-adds newlines), but after !GO the relay is a
-    // transparent byte pipe: without an embedded newline, consecutive robot→host
-    // messages (TLM frames, OK/ID/EVT replies) concatenate on the host and its
-    // line reader can't split them — replies get lost mid-stream. The '\n' is
-    // the last payload byte (msgLen counts it) so it survives reassembly.
+    // Terminate every message with '\n' (mirrors SerialPort::send's "\r\n") —
+    // required so the host's line reader can split consecutive messages after
+    // !GO; see DESIGN.md. The '\n' is the last payload byte (msgLen counts
+    // it) so it survives reassembly.
     int msgLen = (int)strlen(msg) + 1;   // +1 for the trailing '\n'
     int off = 0;
     bool first = true;

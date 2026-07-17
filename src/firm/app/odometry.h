@@ -1,36 +1,27 @@
 // odometry.h -- App::Odometry: integrates wheel motion into a world pose
-// estimate (encoder-only dead reckoning), plus the sprint's minimal
-// OTOS-only perception step (applyOtosSample() below).
+// estimate (encoder-only dead reckoning), plus the minimal OTOS-only
+// perception step (applyOtosSample() below).
 //
-// architecture-update.md (103) Step 3 "Odometry" boundary: inside --
-// reading both motors' position deltas, calling BodyKinematics::forward(),
-// accumulating x/y/theta; outside -- fusing with OTOS/camera (the HOST's
-// job, unchanged by this sprint) and minimal OTOS sampling itself
-// (explicitly listed as OUTSIDE Odometry's own boundary in the
-// architecture doc). applyOtosSample() below is therefore a FREE FUNCTION,
-// not an Odometry method -- it lives in this same file pair only because
-// the ticket's own file layout lists exactly drive.{h,cpp}/odometry.{h,cpp}
-// ("owned by this ticket, not a separate module" -- ticket 006's own
-// description). Serves SUC-006.
+// Boundary: inside -- reading both motors' position deltas, calling
+// BodyKinematics::forward(), accumulating x/y/theta; outside -- fusing
+// with OTOS/camera (the host's job) and minimal OTOS sampling itself.
+// applyOtosSample() below is therefore a FREE FUNCTION, not an Odometry
+// method -- it lives in this same file pair as a bounded perception step,
+// not a separate module.
 //
-// Ticket 103-006's minimal-OTOS-only-perception decision
-// (architecture-update.md Step 7 Open Question 1): the archived plan's full
-// 3-way Perception round-robin (otos|line|color) is deliberately NOT built
-// this sprint -- telemetry.proto carries no line=/color= fields at all yet,
-// so there is nothing for those two slots to feed. `Preamble` (ticket 007)
-// still detects line/color PRESENCE at boot; only their steady-state
-// sampling is absent this sprint. applyOtosSample() implements the AC's "a
-// direct call" option (over "a small shared struct"): it samples the Otos
-// leaf and copies the result straight into a Telemetry::Frame -- no new
-// perception class, no round-robin scheduler. Otos::tick()'s OWN internal
-// rate limiting (kReadPeriod, otos.h) is left completely unchanged;
-// applyOtosSample() is safe to call every cycle (the AC's "at least once
-// per cycle" contract) because a too-soon call is already a documented
-// no-bus-traffic no-op inside Otos::tick() itself -- see
-// app_odometry_harness.cpp's rate-limit scenario. Bus discipline (never
-// calling this from inside a motor request->collect window) is the LOOP's
-// job (ticket 008); this function itself is a single bounded call with no
-// internal sleeps.
+// Minimal-OTOS-only-perception: a full 3-way Perception round-robin
+// (otos|line|color) is deliberately NOT built -- Telemetry carries no
+// line=/color= fields yet, so there is nothing for those two slots to
+// feed. `Preamble` still detects line/color PRESENCE at boot; only their
+// steady-state sampling is absent (see DESIGN.md §6). applyOtosSample()
+// samples the Otos leaf and copies the result straight into a
+// Telemetry::Frame -- no perception class, no round-robin scheduler.
+// Otos::tick()'s OWN internal rate limiting (kReadPeriod, otos.h) is left
+// completely unchanged; applyOtosSample() is safe to call every cycle
+// because a too-soon call is already a documented no-bus-traffic no-op
+// inside Otos::tick() itself. Bus discipline (never calling this from
+// inside a motor request->collect window) is the loop's job; this
+// function itself is a single bounded call with no internal sleeps.
 #pragma once
 
 #include <cstdint>
@@ -51,18 +42,17 @@ class Odometry {
   // very first integrate() call sees a zero delta, not a phantom jump from
   // whatever the leaf's boot-time absolute position happens to be.
   //
-  // Rebaselining note (encoder-reset-on-reboot semantics, per this
-  // ticket's own documentation requirement): NezhaMotor's own position()
-  // is relative to ITS OWN encoder zero, which is re-anchored every
-  // firmware boot (nezha_motor.h's begin()/hardReset() -- unchanged this
-  // sprint). Odometry's x_/y_/theta_ are therefore only ever continuous
-  // WITHIN one firmware session -- a reboot resets both the leaves' own
-  // encoder baseline AND this class's fresh-constructed x_/y_/theta_ to
-  // zero together, with no attempt made here to reconcile across the
-  // discontinuity. A host consuming this pose over the wire is responsible
-  // for detecting a reboot (e.g. a telemetry sequence-number reset) and
-  // handling the discontinuity itself -- this ticket does not add any
-  // reboot-detection or cross-session pose-splicing logic.
+  // Rebaselining note (encoder-reset-on-reboot semantics): NezhaMotor's own
+  // position() is relative to ITS OWN encoder zero, which is re-anchored
+  // every firmware boot (nezha_motor.h's begin()/hardReset()). Odometry's
+  // x_/y_/theta_ are therefore only ever continuous WITHIN one firmware
+  // session -- a reboot resets both the leaves' own encoder baseline AND
+  // this class's fresh-constructed x_/y_/theta_ to zero together, with no
+  // attempt made here to reconcile across the discontinuity. A host
+  // consuming this pose over the wire is responsible for detecting a
+  // reboot (e.g. a telemetry sequence-number reset) and handling the
+  // discontinuity itself -- this class does not add any reboot-detection
+  // or cross-session pose-splicing logic.
   Odometry(Devices::NezhaMotor& left, Devices::NezhaMotor& right, float trackWidth);
 
   // Reads both leaves' position() (the leaf's OWN cached encoder position
@@ -88,11 +78,11 @@ class Odometry {
   // Snap the dead-reckoned pose to (x, y, theta) and RE-ANCHOR the delta
   // baseline to each leaf's CURRENT position(), so the next integrate() sees
   // a zero delta rather than a phantom jump from the old baseline. This is
-  // the in-session pose reset the wire's SI/OZ/ZERO verbs were meant to drive
-  // (deferred, no binary arm yet -- see robot_loop.cpp's handleConfig scope);
-  // it is exercised today by the host simulator's teleport-to-origin
-  // (tests/_infra/sim/sim_harness.h SimHarness::setTruePose()). Additive: no
-  // existing caller's behaviour changes unless it calls reset().
+  // the in-session pose reset a future wire verb will drive (no binary arm
+  // exists yet -- see DESIGN.md §6); it is exercised today by the host
+  // simulator's teleport-to-origin (tests/_infra/sim/sim_harness.h
+  // SimHarness::setTruePose()). Additive: no existing caller's behaviour
+  // changes unless it calls reset().
   void reset(float x, float y, float theta);  // [mm] [mm] [rad]
 
  private:
@@ -108,23 +98,21 @@ class Odometry {
   float theta_ = 0.0f;  // [rad]
 };
 
-// applyOtosSample() -- the ticket's minimal OTOS-only perception step (see
-// file header). Samples `otos` (rate-limited internally by its own
+// applyOtosSample() -- the minimal OTOS-only perception step (see file
+// header). Samples `otos` (rate-limited internally by its own
 // readDue()/kReadPeriod, unchanged) and copies the result into `frame`'s
-// otos/otosConnected/hasOtos fields, to be called BEFORE the caller's next
-// Telemetry::setFrame(frame)/emit() -- the AC's "reaches Telemetry before
-// that cycle's frame is built" contract. `hasOtos` mirrors otos.present()
-// (a chip was ever detected at boot) rather than a per-tick freshness bit,
-// because Telemetry always carries the LAST staged snapshot (telemetry.h's
-// own doc comment) -- a rate-limit-skipped cycle should still report the
-// most recent real reading, not flip has_otos off. `otosConnected` mirrors
-// the leaf's own live, per-tick connected(). No pose fusion happens here --
-// the robot does not fuse; the raw OTOS pose rides to the host verbatim for
-// host-side fusion. A chip that was never detected (present() false) is a
-// total no-op beyond setting the two bools false -- `frame.otos` is left
-// exactly as the caller staged it (mirrors Otos::tick()'s own "never begun
-// -> zero bus traffic" contract; nothing here invents a zero/clobber
-// convention Otos itself doesn't already have).
+// otos/otosConnected/hasOtos fields; call this BEFORE the caller's next
+// Telemetry::setFrame(frame)/emit() -- it must reach Telemetry before that
+// cycle's frame is built. `hasOtos` mirrors otos.present() (a chip was
+// ever detected at boot) rather than a per-tick freshness bit, because
+// Telemetry always carries the LAST staged snapshot -- a rate-limit-skipped
+// cycle should still report the most recent real reading, not flip
+// has_otos off. `otosConnected` mirrors the leaf's own live, per-tick
+// connected(). No pose fusion happens here -- the robot does not fuse; the
+// raw OTOS pose rides to the host verbatim for host-side fusion. A chip
+// that was never detected (present() false) is a total no-op beyond
+// setting the two bools false -- `frame.otos` is left exactly as the
+// caller staged it.
 void applyOtosSample(Devices::Otos& otos, uint64_t now, Telemetry::Frame& frame);  // [us]
 
 }  // namespace App

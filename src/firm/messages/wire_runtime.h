@@ -1,38 +1,29 @@
 // wire_runtime.h -- **BASE64 ALPHABET: STANDARD (RFC 4648 `+/`), NOT
 // URL-SAFE (`-_`).** This is pinned ONCE, here, because both sides of the
-// `*B<base64>` armor must agree: `host/robot_radio/io/serial_conn.py`'s
-// `send_envelope()`/binary reply path (095-002) calls Python stdlib
-// `base64.b64encode`/`base64.b64decode`, whose DEFAULT alphabet is this same
-// standard `+/` one (`base64.urlsafe_b64encode` would require an explicit,
-// separate call the host code does not make -- verified by grepping
-// serial_conn.py for this ticket). Do not "fix" this to url-safe on either
-// side without updating both; there is no negotiation, no version byte --
-// whichever alphabet this file encodes/decodes with IS the wire format.
+// `*B<base64>` armor must agree: the host's binary reply path calls Python
+// stdlib `base64.b64encode`/`base64.b64decode`, whose DEFAULT alphabet is
+// this same standard `+/` one (`base64.urlsafe_b64encode` would require an
+// explicit, separate call the host code does not make). Do not "fix" this
+// to url-safe on either side without updating both; there is no
+// negotiation, no version byte -- whichever alphabet this file
+// encodes/decodes with IS the wire format.
 //
 // WireRuntime: the ONE hand-written, schema-agnostic byte-level codec
-// toolkit in the whole protocol-v3 codec stack (095, architecture-update.md
-// M3 "Wire Runtime", SUC-003) -- never regenerated, and never `#include`ing
+// toolkit in this directory -- never regenerated, and never `#include`ing
 // `envelope.h`/`motion.h`/any other `messages/*.h` or naming a `msg::*`
-// type. Ticket 005's GENERATED `wire.{h,cpp}` (M4) is built on top of these
-// primitives to walk a specific message's field table; `source/commands/
-// binary_channel.{h,cpp}` (ticket 007, M5) called the base64 functions here
-// directly for the `*B<base64>` armor layer -- deleted sprint 102 ticket 005
-// alongside the rest of the Elite orchestration stack (the armor/dearmor
-// call sequence is transcribed for sprint 103's `Comms` at clasi/sprints/
-// 102-.../notes/armor-wire-codec-transcription.md; these primitives
-// themselves are untouched and still the base64 codec any new caller uses).
-// Speaks raw protobuf bytes only:
+// type. The GENERATED `wire.{h,cpp}` is built on top of these primitives to
+// walk a specific message's field table. Speaks raw protobuf bytes only:
 // varint, zigzag, fixed32, length-delimited framing, packed-repeated
 // arrays, unknown-field skip, base64. Knows nothing about field numbers,
-// offsets, or bounds belonging to any specific message -- that is M4's job.
+// offsets, or bounds belonging to any specific message -- that is
+// `wire.{h,cpp}`'s job. See messages/DESIGN.md for the three-layer split.
 //
 // Every function below operates on a caller-owned buffer passed by
 // pointer+size (or a `size_t*` cursor into one); nothing in this file
 // allocates (no `new`, no `malloc`, no `std::vector`/`std::string`). Target
-// is CODAL's actual compiled standard for this project (`-std=gnu++20` --
-// see 095-003's `layout_checks.h` for why "CODAL C++11" in older doc
-// comments is the vendored target's nominal pin, not the real compiled
-// standard), built `-fno-exceptions -fno-rtti` clean, newlib-nano-safe (no
+// is CODAL's actual compiled standard for this project (`-std=gnu++20`,
+// not the vendored target's nominal C++11 pin -- see messages/DESIGN.md
+// §3), built `-fno-exceptions -fno-rtti` clean, newlib-nano-safe (no
 // `%f`/float `snprintf` -- these are pure binary encode/decode functions
 // with no text formatting at all, so that constraint is satisfied by
 // construction, not by a workaround).
@@ -66,15 +57,14 @@ enum class WireType : uint8_t {
   kFixed32 = 5,           // fixed32/sfixed32/float
 };
 
-// Length-delimited recursion depth bound (item 4 -- "Length-delimited
-// framing"). This schema's actual max nesting is shallow (CommandEnvelope
-// -> e.g. DrivetrainCommand -> WheelTargets -> repeated WheelTarget is the
-// deepest chain today, 3 levels) -- 8 is small-constant headroom over that,
-// per the ticket's own "e.g. 8" guidance, chosen to reject a
+// Length-delimited recursion depth bound. This schema's actual max nesting
+// is shallow (CommandEnvelope -> e.g. DrivetrainCommand -> WheelTargets ->
+// repeated WheelTarget is the deepest chain today, 3 levels) -- 8 is
+// small-constant headroom over that, chosen to reject a
 // maliciously/accidentally over-nested input with a clean `false` rather
-// than risk unbounded recursion overflowing the stack in the (future,
-// ticket 005) generated decoder that recurses through beginLengthDelimited()
-// once per nested message level.
+// than risk unbounded recursion overflowing the stack in the generated
+// decoder, which recurses through beginLengthDelimited() once per nested
+// message level.
 constexpr int kMaxNestingDepth = 8;
 
 // Max bytes a base-128 varint can occupy encoding a full 64-bit value:
@@ -92,16 +82,11 @@ bool decodeVarint(const uint8_t* buf, size_t len, size_t* pos, uint64_t* value);
 
 // --- 2. Zigzag (signed <-> unsigned mapping for sint32/sint64) ----------
 //
-// This schema (protos/motion.proto, protos/envelope.proto -- 095-001) has
-// no sint32/sint64 fields today: every signed/bounded quantity is a
-// protobuf `float` (fixed32 wire type, see item 3), not a zigzag-mapped
-// integer -- confirmed by reading every field in motion.proto/envelope.proto
-// for this ticket. Implemented anyway per the ticket's own instruction
-// ("implement it anyway... confirm against ticket 001's actual field types
-// before deciding it's unused") since it is a cheap, standard primitive a
-// future schema addition may need, and leaving it unimplemented would just
-// move the same "confirm it's unused" question onto whichever later ticket
-// first needs a signed integer field.
+// This schema has no sint32/sint64 fields today: every signed/bounded
+// quantity is a protobuf `float` (fixed32 wire type, see item 3), not a
+// zigzag-mapped integer. Implemented anyway as a cheap, standard primitive
+// a future schema addition may need -- currently unused; confirm it is
+// still unused before assuming it can be deleted.
 uint32_t zigzagEncode32(int32_t value);
 int32_t zigzagDecode32(uint32_t value);
 uint64_t zigzagEncode64(int64_t value);
@@ -123,10 +108,10 @@ bool decodeFloat(const uint8_t* buf, size_t len, size_t* pos, float* value);
 
 // --- Tag (field_number << 3 | wire_type), varint-encoded ----------------
 //
-// Not one of the ticket's numbered 7 primitives by name, but the building
-// block both "length-delimited framing" and "unknown-field skip" need to
-// learn a field's wire type before they can act on it -- exposed as its own
-// pair of functions rather than duplicated inline in both.
+// The building block both "length-delimited framing" and "unknown-field
+// skip" need to learn a field's wire type before they can act on it --
+// exposed as its own pair of functions rather than duplicated inline in
+// both.
 bool encodeTag(uint32_t fieldNumber, WireType wireType, uint8_t* buf, size_t cap, size_t* pos);
 bool decodeTag(const uint8_t* buf, size_t len, size_t* pos, uint32_t* fieldNumber, WireType* wireType);
 
@@ -154,14 +139,14 @@ bool beginLengthDelimited(const uint8_t* buf, size_t len, size_t* pos, int depth
 //
 // `payload`/`payloadLen` is the byte range already extracted by a prior
 // beginLengthDelimited() call (i.e. the packed field's own payload, not the
-// enclosing message). Mirrors gen_messages.py's existing `(max_count)`
-// convention: every element in the payload is parsed (so a malformed
-// trailing element is still caught and rejected even past the cap), but
-// only the first `maxCount` are WRITTEN into `out` -- `*outCount` is the
-// number actually written (<= maxCount), never more than `out`'s own
-// capacity. Two variants cover the only two packable scalar wire shapes
-// this tree's generated arrays actually use (see e.g. messages/common.h's
-// `command_modes_[8]` (uint32_t) and `args_[4]` (float)):
+// enclosing message). Mirrors the generator's `(max_count)` convention:
+// every element in the payload is parsed (so a malformed trailing element
+// is still caught and rejected even past the cap), but only the first
+// `maxCount` are WRITTEN into `out` -- `*outCount` is the number actually
+// written (<= maxCount), never more than `out`'s own capacity. Two variants
+// cover the only two packable scalar wire shapes this tree's generated
+// arrays actually use (see e.g. messages/common.h's `command_modes_[8]`
+// (uint32_t) and `args_[4]` (float)):
 bool decodePackedVarint(const uint8_t* payload, size_t payloadLen, uint32_t* out, size_t maxCount, size_t* outCount);
 bool decodePackedFixed32(const uint8_t* payload, size_t payloadLen, float* out, size_t maxCount, size_t* outCount);
 

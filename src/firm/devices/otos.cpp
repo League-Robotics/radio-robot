@@ -129,10 +129,9 @@ void Otos::tick(uint64_t nowUs)
     float yF = static_cast<float>(ry) * kPosMmPerLsb;    // [mm]
     float hF = static_cast<float>(rh) * kHdgRadPerLsb;   // [rad]
 
-    // 092-003 finding (carried forward unchanged, out of this ticket's
-    // scope): the VELOCITY registers reuse the SAME kPosMmPerLsb/
-    // kHdgRadPerLsb constants as position/offset despite the chip
-    // documenting a different native velocity LSB scale -- see otos.h's
+    // Known discrepancy: the VELOCITY registers reuse the SAME
+    // kPosMmPerLsb/kHdgRadPerLsb constants as position/offset despite the
+    // chip documenting a different native velocity LSB scale -- see otos.h's
     // kPosMmPerLsb declaration comment.
     float vxF = static_cast<float>(rvx) * kPosMmPerLsb;    // [mm/s]
     float vyF = static_cast<float>(rvy) * kPosMmPerLsb;    // [mm/s]
@@ -165,8 +164,7 @@ void Otos::tick(uint64_t nowUs)
 
 // ---------------------------------------------------------------------------
 // applyPendingPose() -- exact inverse of tick()'s read transform: finds the
-// sensor-frame pose that reads back as the given world CENTRE pose. Ported
-// from the pre-port file's setPose() write-side math, unchanged.
+// sensor-frame pose that reads back as the given world CENTRE pose.
 // ---------------------------------------------------------------------------
 
 void Otos::applyPendingPose()
@@ -266,7 +264,7 @@ void Otos::setAngularScalar(float scalar)
 }
 
 // ---------------------------------------------------------------------------
-// scaleToRegister -- ported from OtosSensor::scaleToInt8().
+// scaleToRegister
 // ---------------------------------------------------------------------------
 
 int8_t Otos::scaleToRegister(float scale)
@@ -279,9 +277,9 @@ int8_t Otos::scaleToRegister(float scale)
 }
 
 // ---------------------------------------------------------------------------
-// sensorToCentre()/centreToSensor() -- OTOS lever-arm compensation, ported
-// unchanged -- see otos.h's declaration comments for the full same-instant-
-// heading contract this relies on.
+// sensorToCentre()/centreToSensor() -- OTOS lever-arm compensation -- see
+// otos.h's declaration comments for the full same-instant-heading contract
+// this relies on.
 // ---------------------------------------------------------------------------
 
 void Otos::sensorToCentre(float sensorX, float sensorY, float sensorHeading,
@@ -307,7 +305,7 @@ void Otos::centreToSensor(float centreX, float centreY, float centreHeading,
 }
 
 // ---------------------------------------------------------------------------
-// Private register-map helpers -- ported byte-for-byte.
+// Private register-map helpers.
 // ---------------------------------------------------------------------------
 
 void Otos::writeReg8(uint8_t reg, uint8_t val)

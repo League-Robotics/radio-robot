@@ -4,21 +4,10 @@
 /**
  * BodyKinematics — stateless differential-drive kinematic maps and saturation.
  *
- * Implements the mathematical foundation for the differential-drive control
- * stack (Layer 2 in the kinematics model). All functions are pure: no I2C,
- * no global state, no heap allocation.
+ * All functions are pure: no I2C, no global state, no heap allocation.
  *
- * Unit conventions (follow docs/kinematics-model.md §1.3 and §1.7):
- *   - v       : body forward speed, mm/s
- *   - omega   : body yaw rate, rad/s (CCW-positive)
- *   - vL, vR  : left and right wheel speeds, mm/s (signed)
- *   - b       : track width, mm (lateral distance between wheel contact patches)
- *   - vWheelMax   : wheel speed ceiling for saturation, mm/s
- *   - steerHeadroom : headroom below vWheelMax reserved for steering, mm/s
- *
- * References:
- *   docs/kinematics-model.md §1.3 (inverse/forward maps)
- *   docs/kinematics-model.md §1.7 (saturation scaling, curvature preservation)
+ * See DESIGN.md (this directory) for the subsystem contract and
+ * docs/kinematics-model.md §1.3/§1.7 for the math this implements.
  */
 namespace BodyKinematics {
 
@@ -76,15 +65,8 @@ void saturate(float vL, float vR,
               float& vL_out, float& vR_out);
 
 /**
- * Array-form overloads — differential adapter for the shared IKinematics
- * contract (046-002), originally so BodyKinematics could be used via a
- * compile-time namespace alias alongside MecanumKinematics
- * (source/kinematics/i_kinematics.h, deleted sprint 102 ticket 005 alongside
- * the rest of the Elite orchestration stack that was its only consumer).
- * Kept here as the array-form API surface; no current caller requires the
- * shared-contract alias.
- *
- * wheels[2] = {vL, vR} (same sign convention as the scalar forms above).
+ * Array-form overloads — wheels[2] = {vL, vR} (same sign convention as the
+ * scalar forms above). See DESIGN.md for why this API shape exists.
  * v_y is always 0 for a differential drivetrain; inverse ignores t.v_y and
  * forward sets t_out.v_y = 0.
  *

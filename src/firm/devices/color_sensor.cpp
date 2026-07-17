@@ -11,8 +11,8 @@ constexpr int kOk = 0;
 ColorSensorLeaf::ColorSensorLeaf(I2CBus& bus, const ColorConfig& config)
     : bus_(bus), config_(config) {
   // ColorConfig's fields all zero-default (device_config.h) — the
-  // "unconfigured" sentinel this leaf resolves to its ship default, mirroring
-  // nezha_motor.cpp's identical `if (config_.slewRate <= 0.0f) ...` pattern.
+  // "unconfigured" sentinel this leaf resolves to its ship default (same
+  // pattern as NezhaMotor's slewRate fixup).
   if (config_.lagColor == 0) config_.lagColor = kDefaultLagColor;
   if (config_.integration == 0) config_.integration = kDefaultIntegration;
   if (config_.gain == 0) config_.gain = kDefaultGain;
@@ -34,9 +34,8 @@ void ColorSensorLeaf::beginStep(uint64_t nowUs) {
     lastAttemptUs_ = nowUs;
     ++altAttempts_;
 
-    // EXACT port of upstream PlanetX initColor: re-assert the wake writes
-    // INSIDE every retry (see file header), then check the 16-bit value at
-    // 0xA4/0xA5 is non-zero.
+    // Re-assert the wake writes INSIDE every retry (see file header), then
+    // check the 16-bit value at 0xA4/0xA5 is non-zero.
     writeReg8(kColorDeviceAddrAlt, 0x81, 0xCA);
     writeReg8(kColorDeviceAddrAlt, 0x80, 0x17);
     uint16_t probe = readReg16Alt(0xA4);
@@ -54,18 +53,17 @@ void ColorSensorLeaf::beginStep(uint64_t nowUs) {
     return;
   }
 
-  // phase_ == ApdsProbe: exactly one attempt (the pre-port fallback has no
-  // retry loop for APDS either — see file header).
+  // phase_ == ApdsProbe: exactly one attempt (the APDS fallback has no
+  // retry loop).
   //
   // Uses readReg8Status() (transaction-OK-checking), NOT readReg8() (which
-  // ignores status and leaves out=0 on a NAK) -- clasi/issues/color-sensor-
-  // apds-probe-success-on-failure.md (2026-07-13 code review finding M4).
-  // A NAK'd readback used to decode as en==0x00, which is exactly the
-  // "detected" condition -- a robot with NO color sensor at all latched
-  // present()==true and issued failing APDS transactions at every due
-  // perception slot forever. Requiring ok==true before trusting en's value
-  // closes that hole; the ALT-chip probe path above never had this bug
-  // (failure -> 0 -> correctly "not found").
+  // ignores status and leaves out=0 on a NAK): a NAK'd readback decodes as
+  // en==0x00, which is exactly the "detected" condition -- a robot with NO
+  // color sensor at all would otherwise latch present()==true and issue
+  // failing APDS transactions at every due perception slot forever.
+  // Requiring ok==true before trusting en's value closes that hole; the
+  // ALT-chip probe path above never had this bug (failure -> 0 -> correctly
+  // "not found").
   writeReg8(kColorDeviceAddrApds, 0x80, 0x00);
   uint8_t en = 0;
   bool ok = readReg8Status(kColorDeviceAddrApds, 0x80, en);
@@ -109,8 +107,7 @@ void ColorSensorLeaf::tick(uint64_t nowUs) {
   hasRead_ = true;
 
   if (isAlt_) {
-    // Alt chip: non-zero clear channel (0xA6) means fresh data is ready --
-    // mirrors pollRGBC()'s ALT branch exactly.
+    // Alt chip: non-zero clear channel (0xA6) means fresh data is ready.
     uint16_t probe = 0;
     bool ok = readReg16AltStatus(0xA6, probe);
     if (!ok) {
@@ -134,8 +131,7 @@ void ColorSensorLeaf::tick(uint64_t nowUs) {
     cachedReading_ = ColorReading{r, g, b, probe};
     readingFresh_ = true;
   } else {
-    // APDS9960: AVALID bit (STATUS, 0x93) without blocking -- mirrors
-    // pollRGBC()'s APDS branch exactly.
+    // APDS9960: AVALID bit (STATUS, 0x93) without blocking.
     uint8_t status = 0;
     bool ok = readReg8Status(kColorDeviceAddrApds, 0x93, status);
     if (!ok) {
@@ -168,11 +164,8 @@ ColorReading ColorSensorLeaf::reading() const { return cachedReading_; }
 bool ColorSensorLeaf::readingFresh() const { return readingFresh_; }
 
 // ---------------------------------------------------------------------------
-// initApds() -- ported unchanged, except ATIME/CONTROL now come from
-// ColorConfig::integration/gain (device_config.h's own doc comments name
-// these fields exactly as the pre-port literals below: "raw sensor
-// integration-time register value" / "raw sensor gain register value") in
-// place of the pre-port file's hardcoded 252 / 0x03.
+// initApds() -- ATIME/CONTROL come from ColorConfig::integration/gain
+// (device_config.h) rather than hardcoded literals.
 // ---------------------------------------------------------------------------
 
 void ColorSensorLeaf::initApds() {

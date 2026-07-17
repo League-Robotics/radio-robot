@@ -11,18 +11,16 @@ constexpr int kOk = 0;
 LineSensorLeaf::LineSensorLeaf(I2CBus& bus, const LineConfig& config)
     : bus_(bus), config_(config) {
   // LineConfig::lagLine zero-defaults (device_config.h) -- the
-  // "unconfigured" sentinel this leaf resolves to its ship default, mirroring
-  // nezha_motor.cpp's identical `if (config_.slewRate <= 0.0f) ...` pattern.
+  // "unconfigured" sentinel this leaf resolves to its ship default (same
+  // pattern as NezhaMotor's slewRate fixup).
   if (config_.lagLine == 0) config_.lagLine = kDefaultLagLine;
 
-  // LineConfig::calMax[] ALSO zero-defaults (device_config.h), unlike the
-  // pre-port file's own constructor, which defaulted _calMax[ch] to 255 per
-  // channel. A calibration max of exactly 0 is never meaningful for a real
-  // sensor (it would clamp every non-zero raw reading straight to 1000 --
-  // see tick()'s normalize step), so 0 is treated as the same "unconfigured"
-  // sentinel here and re-defaulted to match the pre-port ship default.
-  // calMin[] needs no such fixup -- 0 is both DB-001's zero-default AND the
-  // pre-port file's own default for that bound.
+  // LineConfig::calMax[] ALSO zero-defaults (device_config.h). A
+  // calibration max of exactly 0 is never meaningful for a real sensor (it
+  // would clamp every non-zero raw reading straight to 1000 -- see tick()'s
+  // normalize step), so 0 is treated as the same "unconfigured" sentinel
+  // here and re-defaulted to the ship default. calMin[] needs no such
+  // fixup -- 0 is a valid, meaningful floor.
   for (uint8_t ch = 0; ch < 4; ++ch) {
     if (config_.calMax[ch] == 0) config_.calMax[ch] = kDefaultCalMax;
   }
@@ -75,7 +73,6 @@ bool LineSensorLeaf::readDue(uint64_t nowUs) const {
 
 // ---------------------------------------------------------------------------
 // tick() -- single non-blocking raw read, then normalize + EMA smooth.
-// Ported math from the pre-port file's readNormalized().
 // ---------------------------------------------------------------------------
 
 void LineSensorLeaf::tick(uint64_t nowUs) {
@@ -132,8 +129,8 @@ LineReading LineSensorLeaf::reading() const { return cachedReading_; }
 bool LineSensorLeaf::readingFresh() const { return readingFresh_; }
 
 // ---------------------------------------------------------------------------
-// readRaw() -- ported byte-for-byte (already non-blocking in the pre-port
-// file -- no fiber_sleep). Four write(channel-index)/read(1-byte) pairs.
+// readRaw() -- non-blocking (no fiber_sleep). Four write(channel-index)/
+// read(1-byte) pairs.
 // ---------------------------------------------------------------------------
 
 bool LineSensorLeaf::readRaw(uint16_t out[4]) {

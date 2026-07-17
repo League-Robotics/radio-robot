@@ -1,18 +1,7 @@
 // boot_config.h — Config: the robot's build-time boot configuration.
 //
-// The functions declared here are DEFINED by the AUTO-GENERATED
-// source/config/boot_config.cpp, which scripts/gen_boot_config.py rewrites
-// from the active robot JSON (data/robots/active_robot.json, or ROBOT_CONFIG)
-// before every firmware build. That generated .cpp is the whole boot config:
-// nothing but the per-port msg::MotorConfig defaults and the msg::Drivetrain-
-// Config default, with per-robot calibration baked in at compile time.
-//
-// main.cpp calls these instead of hardcoding calibration in the dev loop. A
-// robot's calibration lives in its JSON config (and, once running, is
-// correctable live over the wire via `DEV M <n> CFG` / `DEV DT CFG`), never in
-// main.cpp — mirroring the old tree's generated defaultRobotConfig()
-// (source/robot/DefaultConfig.cpp) that this replaces for the message-based
-// subsystems tree.
+// DEFINED by the AUTO-GENERATED config/boot_config.cpp — see DESIGN.md.
+// Never hand-edit boot_config.cpp; never hardcode calibration in main.cpp.
 #pragma once
 
 #include <stdint.h>
@@ -25,7 +14,7 @@ namespace Config {
 
 // Number of per-motor MotorConfig entries defaultMotorConfigs() fills. Must
 // equal Subsystems::NezhaHardware::kMotorCount — main.cpp static_asserts the
-// two agree so a motor-count change forces this generator to be re-run.
+// two agree. See DESIGN.md §3.
 constexpr uint32_t kMotorConfigCount = 4;
 
 // Fill out[0 .. kMotorConfigCount-1] with the per-motor boot MotorConfig
@@ -33,30 +22,24 @@ constexpr uint32_t kMotorConfigCount = 4;
 // wire/serialized key, the 1-based brick label, unchanged). Calibration is
 // baked from the active robot JSON where a matching key exists; otherwise
 // the bench-tuned firmware defaults are used (see boot_config.cpp /
-// gen_boot_config.py).
+// gen_boot_config.py, and DESIGN.md).
 void defaultMotorConfigs(msg::MotorConfig* out);
 
 // The boot DrivetrainConfig default — trackwidth (baked from the robot JSON)
 // and the drive-pair port binding.
 msg::DrivetrainConfig defaultDrivetrainConfig();
 
-// OtosBootConfig (086-005) — the OTOS lever-arm mounting offset plus
-// linear/angular scale multipliers, baked from the active robot JSON's
-// geometry.odometry_offset_mm (x/y/yaw_rad) and calibration.
-// otos_linear_scale/otos_angular_scale. Additive to defaultMotorConfigs()/
-// defaultDrivetrainConfig() above — no existing mapping is touched.
+// The OTOS lever-arm mounting offset plus linear/angular scale multipliers,
+// baked from the active robot JSON's geometry.odometry_offset_mm
+// (x/y/yaw_rad) and calibration.otos_linear_scale/otos_angular_scale.
+// Additive to defaultMotorConfigs()/defaultDrivetrainConfig() above — no
+// existing mapping is touched.
 //
-// Boot-time-baked only, deliberately NOT a live SET/wire surface
-// (architecture-update.md Design Rationale 4; sprint 085-005 removed a dead
-// `SET odomOffX/Y/Yaw` push because no such wire key exists). Ticket 086-006's
-// Hal::OtosOdometer leaf is constructed directly with these values (main.cpp)
-// — the offset feeds Hal::OtosOdometer's own private sensorToCentre()/
-// centreToSensor() methods (092-004 — folded from the former standalone
-// source/hal/lever_arm.h); the scale multipliers are converted to the OTOS chip's
-// raw int8 register scalar once at Hal::OtosOdometer::begin() (the same
-// scaleToInt8()-style conversion source_old/hal/real/OtosSensor.cpp::begin()
-// applied), NOT re-derived at every OL/OA wire call (those operate on the
-// raw register scalar directly — docs/protocol-v2.md §11).
+// Boot-time-baked only, deliberately NOT a live SET/wire surface — see
+// DESIGN.md §3/§4 for why. Consumed directly by main.cpp's
+// Hal::OtosOdometer construction; the scale multipliers are converted to
+// the OTOS chip's raw register scalar once at Hal::OtosOdometer::begin(),
+// not re-derived per wire call (docs/protocol-v2.md §11).
 struct OtosBootConfig {
   float offsetX = 0.0f;      // [mm] mounting offset from chassis centre to sensor
   float offsetY = 0.0f;      // [mm]
@@ -70,14 +53,13 @@ struct OtosBootConfig {
 // 1.0 scale = no correction) otherwise.
 OtosBootConfig defaultOtosBootConfig();
 
-// The boot PlannerConfig default (098-001) — the seven motion-limit fields
-// (a_max/a_decel/v_body_max/yaw_rate_max/yaw_acc_max/j_max/yaw_jerk_max),
-// moved verbatim from main.cpp's old hand-written defaultMotionConfig(),
-// plus the outer heading-loop PD gains (heading_kp/heading_kd) baked from
-// the robot JSON's control.heading_kp/heading_kd where present (see
-// gen_boot_config.py's heading_gains_for_config()). arrive_tol/
-// turn_in_place_gate/min_speed stay unset (0.0f default) — main.cpp's old
-// function never set them either.
+// The boot PlannerConfig default — motion-limit fields (a_max/a_decel/
+// v_body_max/yaw_rate_max/yaw_acc_max/j_max/yaw_jerk_max), the outer
+// heading-loop PD gains (heading_kp/heading_kd), and the Drive::Limits
+// tracker/policy fields, each baked from the robot JSON's control.* keys
+// where present, else a firmware default (see gen_boot_config.py).
+// arrive_tol/turn_in_place_gate stay unset (0.0f default) — unused by any
+// current consumer.
 msg::PlannerConfig defaultPlannerConfig();
 
 }  // namespace Config

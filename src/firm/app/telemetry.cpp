@@ -68,23 +68,20 @@ void Telemetry::emit(uint32_t now) {
   // Secondary_ -> true" boot bypass (unchanged, still governs the
   // non-tied branch below exactly as before) makes secondary look "due"
   // from t=0, long before a real kSecondaryPeriod has ever elapsed --
-  // harmless under the OLD "primary always wins" rule (that bypass value
-  // was simply never reached whenever primary was also due), but WOULD
-  // spuriously tie-alternate a caller's SECOND-ever call (e.g. exactly
+  // harmless under a "primary always wins" tie rule (that bypass value is
+  // never reached whenever primary is also due), but WOULD spuriously
+  // tie-alternate a caller's SECOND-ever call (e.g. exactly
   // kPrimaryPeriod after the first) onto secondary, well before any real
   // starvation exists. Substituting a real elapsed-time check
   // (`now >= kSecondaryPeriod`) for that ONE pre-first-emission window
   // preserves every existing short-run caller's expectation that early
   // calls are primary-only, while still guaranteeing secondary its first
-  // slot (via a tie, same as any later one) once genuine time has passed
-  // -- exactly the `secondary-telemetry-starved-by-106-001-cadence-
-  // retarget.md` bug's own regime (a real ~52 ms loop period run for
-  // multiple seconds).
+  // slot (via a tie, same as any later one) once genuine time has passed.
   bool sDueForTie = everEmittedSecondary_ ? sDue : (now >= kSecondaryPeriod);
 
   // Tie: both genuinely due in the same call -- alternate rather than
-  // always favoring primary (telemetry.h's own 106-002 comment: at the
-  // real ~52 ms loop period, primary is due EVERY call, so an
+  // always favoring primary (see telemetry.h's emit() comment: at a real
+  // loop period at/above kPrimaryPeriod, primary is due every call, so an
   // unconditional primary-wins rule starves secondary to 0 Hz forever).
   if (pDue && sDueForTie) {
     if (tieFavorsSecondary_) {
@@ -164,9 +161,9 @@ void Telemetry::emitSecondary(uint32_t now) {
   sec.ts_left = secondaryFrame_.tsLeft;
   sec.ts_right = secondaryFrame_.tsRight;
 
-  // Own top-level armored payload (telemetry.proto's own Decision 3
-  // resolution) -- same encode+armor sequence as Comms::sendReply(), reused
-  // here via App::kArmoredBufSize/WireRuntime::base64Encode() rather than
+  // Own top-level armored payload -- same encode+armor sequence as
+  // Comms::sendReply(), reused here via
+  // App::kArmoredBufSize/WireRuntime::base64Encode() rather than
   // duplicated in a private helper, since Comms's own send path only
   // accepts a ReplyEnvelope (TelemetrySecondary is not one of its oneof
   // arms).

@@ -1,8 +1,5 @@
 // microbit_i2c_bus.cpp — Devices::MicroBitI2CBus real implementation.
-// Moved verbatim from the old i2c_bus.cpp (ticket DB-003, device-bus-
-// tickets.md) when i2c_bus.h was reduced to a pure interface (sprint 108
-// ticket 001) — only the class name changed (I2CBus -> MicroBitI2CBus) and
-// the include; no behavior change.
+// Design/rationale: DESIGN.md.
 #include "devices/microbit_i2c_bus.h"
 #include "codal_target_hal.h"  // target_disable_irq() / target_enable_irq()
 #include "MicroBit.h"          // system_timer_current_time_us()
@@ -60,9 +57,7 @@ int MicroBitI2CBus::write(uint16_t address, uint8_t* data, int len,
   // target_disable_irq() critical section starts (never mask interrupts for
   // a multi-ms wait). Defaults (preClear=postClear=0) collapse
   // entryDeadline to lastEnd, already in the past by the time the NEXT call
-  // happens, so every existing 4-argument call site waits zero time —
-  // byte-identical to before. See waitForClearance()'s own comment (103-002,
-  // M1 fix) for why this no longer spins.
+  // happens, so every existing 4-argument call site waits zero time.
   int idx = findOrAdd(addr7);
   uint64_t entryDeadline = devices_[idx].readyAt;
   uint64_t preDeadline = devices_[idx].lastEnd + static_cast<uint64_t>(preClear);
@@ -145,7 +140,7 @@ int MicroBitI2CBus::read(uint16_t address, uint8_t* data, int len,
 }
 
 // ---------------------------------------------------------------------------
-// Clearance safety-net wait (103-002, M1 fix)
+// Clearance safety-net wait
 // ---------------------------------------------------------------------------
 
 void MicroBitI2CBus::waitForClearance(uint64_t entryDeadline) {
@@ -153,15 +148,14 @@ void MicroBitI2CBus::waitForClearance(uint64_t entryDeadline) {
   if (now >= entryDeadline) return;
 
   // Entered before the clearance deadline -- the loop was supposed to own
-  // this gap (runAndWait/sleepUntil, ticket 008); count the trip
-  // (microbit_i2c_bus.h's own accessor comment: the narrow signal ticket
-  // 001 numbered as Telemetry.fault_bits bit 0). NEVER spin: yield the
-  // shortfall via fiber_sleep() -- the same cooperative primitive clock.h's
-  // Sleeper wraps -- rounded UP to whole milliseconds. fiber_sleep()
-  // reliably sleeps AT LEAST the requested duration, so rounding up never
-  // shortchanges the real vendor clearance requirement
-  // (docs/knowledge/2026-07-04-encoder-wedge.md) -- it only ever waits
-  // slightly longer than strictly necessary.
+  // this gap (runAndWait/sleepUntil); count the trip (feeds
+  // Telemetry.fault_bits bit 0 -- see microbit_i2c_bus.h's accessor
+  // comment). NEVER spin: yield the shortfall via fiber_sleep() -- the same
+  // cooperative primitive clock.h's Sleeper wraps -- rounded UP to whole
+  // milliseconds. fiber_sleep() reliably sleeps AT LEAST the requested
+  // duration, so rounding up never shortchanges the real vendor clearance
+  // requirement (docs/knowledge/2026-07-04-encoder-wedge.md) -- it only
+  // ever waits slightly longer than strictly necessary.
   ++clearanceSafetyNetCount_;
   uint64_t shortfallUs = entryDeadline - now;
   uint32_t shortfallMs = static_cast<uint32_t>((shortfallUs + 999) / 1000);

@@ -1,18 +1,8 @@
 // otos.h — Devices::Otos: the internal leaf for the SparkFun Optical
-// Tracking Odometry Sensor (OTOS), I2C address 0x17.
+// Tracking Odometry Sensor (OTOS), I2C address 0x17. The loop constructs
+// and drives this leaf directly — there is no separate handle class.
 //
-// Ticket DB-005 (device-bus-tickets.md). Ported from source/hal/otos/
-// otos_odometer.{h,cpp} (Hal::OtosOdometer) into the greenfield
-// `source/devices/` subsystem (namespace `Devices`), per clasi/issues/
-// device-bus-fiber-owned-self-contained-device-subsystem.md's "Shape" / "The
-// public surface". This is the internal LEAF (mirrors nezha_motor.h's
-// NezhaMotor role for the motor channel). Per sprint 103
-// architecture-update.md Decision 1, the loop constructs and drives this
-// leaf directly — the Devices-native public surface a consumer actually
-// reaches is the loop itself, not a handle class.
-//
-// Carried VERBATIM in behavior from the ported source (device-bus-tickets.md's
-// DB-005 section is explicit that these must not be lost in the port):
+// Notable behaviors this leaf preserves:
 //   - Fire-and-forget IMU-calibration kickoff — init() WRITES
 //     REG_IMU_CALIBRATION and returns; it does NOT block-poll for the chip's
 //     background bias calibration to finish (the chip finishes on its own
@@ -28,67 +18,54 @@
 //     multi-second stall a zero-clearance burst reproduces).
 //   - Same-instant-heading lever-arm compensation (sensorToCentre()/
 //     centreToSensor()) — see those methods' own comments below for the
-//     db11b7c phantom-translation regression this contract prevents.
+//     phantom-translation regression this contract prevents.
 //   - Wrap-aware heading: the chip's HEADING register is a signed int16
 //     whose full range maps to exactly (-pi, +pi] (kHdgRadPerLsb below) — the
 //     hardware itself wraps at the same point radians do, so every heading
-//     this leaf ever reports is already in wrap-safe range for DB-002's
-//     angular-lerp interpolation to consume later; no separate unwrap step
-//     is needed or added here.
+//     this leaf ever reports is already in wrap-safe range for angular-lerp
+//     interpolation to consume later; no separate unwrap step is needed or
+//     added here.
 //
-// present()/connected() distinction (sprint 099's lesson, ported unchanged —
-// see present()'s own doc comment below): present() is a permanent,
-// boot-time-only flag set once by begin()'s product-ID detect and never
-// reassigned; connected() is the live, per-tick bus-health result, retried
-// every tick() regardless of a prior failure. A caller deciding whether to
-// schedule this leaf a bus slot at all must use present(), never connected()
-// — gating scheduling on connected() would let one transient I2C glitch
-// permanently stop an otherwise-healthy chip from ever being read again.
+// present()/connected() distinction (see present()'s own doc comment
+// below): present() is a permanent, boot-time-only flag set once by
+// begin()'s product-ID detect and never reassigned; connected() is the
+// live, per-tick bus-health result, retried every tick() regardless of a
+// prior failure. A caller deciding whether to schedule this leaf a bus slot
+// at all must use present(), never connected() — gating scheduling on
+// connected() would let one transient I2C glitch permanently stop an
+// otherwise-healthy chip from ever being read again.
 //
-// Staged setPose() re-anchor (issue "The public surface" — Odometer's
-// "staged setPose() re-anchor request ... replacing MainLoop::
-// applySetPose()"): setPose() below stages an (x, y, heading) request and
-// touches no bus; tick() drains it at the top of its next call (see tick()'s
-// own comment). DB-007's fiber is the only thing that ever calls tick(), so
-// "the fiber drains it at a safe slot" falls directly out of tick()'s own
-// call-order — no separate mechanism is needed here. Wiring the actual fiber
-// loop is DB-007's job; this ticket only defines the staged cell and the
-// apply logic.
+// Staged setPose() re-anchor: setPose() below stages an (x, y, heading)
+// request and touches no bus; tick() drains it at the top of its next call
+// (see tick()'s own comment) — the loop's cycle is the only caller of
+// tick(), so "drained at a safe slot" falls directly out of tick()'s own
+// call order.
 //
-// Scope changes from the pre-port Hal::OtosOdometer (isolation-invariant
-// driven, mirrors nezha_motor.h's own "Scope changes" precedent):
-//   - msg::Pose2D-typed parameters (setPose()/setOffset()/getOffset()) are
-//     replaced by plain (x, y, heading) float triples — msg:: is
-//     unreachable under the isolation invariant, and a Devices-local
-//     "Pose2D" struct would add a type this leaf's own callers don't need
-//     (PoseReading already covers the one place a pose+twist STRUCT is
-//     actually useful — the published reading itself).
-//   - Config::OtosBootConfig -> Devices::OtosConfig (device_config.h,
-//     DB-001) — identical fields (offsetX/offsetY/offsetYaw/linearScale/
+// Scope changes from a full odometer abstraction (isolation-invariant
+// driven, mirrors nezha_motor.h's own precedent):
+//   - No msg::Pose2D-typed parameters (setPose()/setOffset()/getOffset()) —
+//     plain (x, y, heading) float triples instead. msg:: is unreachable
+//     under the isolation invariant, and a Devices-local "Pose2D" struct
+//     would add a type this leaf's own callers don't need (PoseReading
+//     already covers the one place a pose+twist STRUCT is actually useful —
+//     the published reading itself).
+//   - Devices::OtosConfig (device_config.h), not Config::OtosBootConfig —
+//     identical fields (offsetX/offsetY/offsetYaw/linearScale/
 //     angularScale), Devices-local so this leaf never includes config/.
-//   - msg::PoseEstimate's stamp.valid freshness bit has no Devices-local
-//     counterpart on PoseReading itself (device_types.h's own file header:
-//     that scaffolding is deliberately deferred to DB-002's Sample<T>
-//     wrapper, "one level up"). This leaf still needs to say "the pose I'm
+//   - No freshness/valid bit on PoseReading itself (device_types.h's own
+//     file header: that scaffolding belongs one level up, in a ring's own
+//     Sample<T> wrapper). This leaf still needs to say "the pose I'm
 //     holding right now was NOT refreshed by this tick() call" — the
-//     rate-limit-skip and burst-failure cases both need it, and DB-007's
-//     ring publish decision (DB-007, not this ticket) will need to read it
-//     too — so it is carried at the leaf level as poseFresh() below instead
-//     of a struct field, pending DB-007's Sample<T>-wrapped ring taking over
-//     that job for good.
-//   - readDue()/tick() move from a [ms] uint32_t "now" parameter to a [us]
-//     uint64_t nowUs parameter — device-bus-tickets.md's resolved "Sim/
-//     host-test story" note and nezha_motor.h's own precedent both establish
-//     the fiber-level Devices::Clock ([us], uint64_t) as THE time seam; this
-//     leaf, like NezhaMotor, takes "now" as a plain parameter rather than
-//     reading a clock itself (fully deterministic for a host harness, zero
-//     clock coupling). kReadPeriod is therefore expressed in [us] (20000)
-//     rather than the pre-port file's [ms] (20). The pre-port file's
-//     signed-cast rollover-safe subtraction (needed because a [ms] uint32_t
-//     wraps in ~49 days) is dropped: a [us] uint64_t clock does not wrap on
-//     any timescale this firmware will ever run, so a plain unsigned
-//     subtraction is exact and simpler — a deliberate, documented
-//     simplification, not an oversight.
+//     rate-limit-skip and burst-failure cases both need it — so it is
+//     carried at the leaf level as poseFresh() below instead of a struct
+//     field.
+//   - readDue()/tick() take a [us] uint64_t nowUs parameter (Devices::Clock
+//     is THE fiber-level time seam; see clock.h) rather than a [ms]
+//     uint32_t plus an internal clock read. kReadPeriod is expressed in
+//     [us] (20000). A [us] uint64_t clock does not wrap on any timescale
+//     this firmware will ever run, so a plain unsigned subtraction is exact
+//     and simpler than a rollover-safe signed-cast subtraction would be —
+//     a deliberate, documented simplification, not an oversight.
 #pragma once
 
 #include <cstdint>
@@ -129,9 +106,8 @@ class Otos {
   // True iff pose() reflects a sample this leaf actually refreshed on the
   // MOST RECENT tick() call — false when that call was rate-limited
   // (readDue() was false), drained a staged setPose() instead of reading, or
-  // its burst read failed. The Devices-local stand-in for the pre-port
-  // file's cachedPose_.stamp.valid — see file header's "Scope changes" note
-  // for why PoseReading itself carries no such bit yet.
+  // its burst read failed. See file header's "Scope changes" note for why
+  // PoseReading itself carries no such bit yet.
   bool poseFresh() const;
 
   // True once PRODUCT_ID was detected at begin() AND the most recent tick()
@@ -148,9 +124,9 @@ class Otos {
   // permanently stop it from ever being scheduled again.
   bool present() const;
 
-  // The last product-ID byte begin()'s probe read (101-001 bench triage of the
-  // connected=False condition): 0x5F when the OTOS answered correctly, 0xFF on
-  // a floating/NAK'd bus, some other value for a wrong device.
+  // The last product-ID byte begin()'s probe read (bench triage of a
+  // connected=False condition): 0x5F when the OTOS answered correctly, 0xFF
+  // on a floating/NAK'd bus, some other value for a wrong device.
   uint8_t lastProbeId() const { return lastProbeId_; }
 
   // True if a real bus read is due: either no real read has ever happened
@@ -160,12 +136,11 @@ class Otos {
   // least kReadPeriod [us] has elapsed since the last real read. A pure
   // function of this leaf's own hasRead_/lastReadUs_ bookkeeping — no bus
   // traffic, deliberately NOT itself gated on present()/initialized_ (that
-  // is the caller's own, separate conjunct — see this method's file-header
-  // "Scope changes" note on the [us]/uint64_t time-seam change).
+  // is the caller's own, separate conjunct).
   bool readDue(uint64_t nowUs) const;  // [us]
 
-  // The leaf's one bus-touching entry point, called once per cycle by
-  // DB-007's fiber. No-op (no bus traffic, no bookkeeping) if begin() never
+  // The leaf's one bus-touching entry point, called once per cycle by the
+  // loop. No-op (no bus traffic, no bookkeeping) if begin() never
   // detected the chip.
   //
   // Drain order: a staged setPose() re-anchor request (if any) is applied
@@ -174,8 +149,7 @@ class Otos {
   // registers would be worse than just deferring the read one more cycle.
   // poseFresh() is false after a drain (no read happened) and pose() is
   // left unchanged until a later tick's read actually confirms the new
-  // anchor — mirrors the pre-port file's own setPose(), which only ever
-  // wrote registers and let the NEXT tick()'s read refresh cachedPose_.
+  // anchor.
   //
   // Otherwise: rate-limited to at most one real read every kReadPeriod
   // (readDue()) — a tick() call that arrives sooner performs zero bus
@@ -190,23 +164,20 @@ class Otos {
   void tick(uint64_t nowUs);  // [us]
 
   // Stages an (x, y, heading) re-anchor request; touches no bus. Drained by
-  // the next tick() call (see tick()'s own "Drain order" comment above) —
-  // this is the "staged setPose() re-anchor" the issue's public-surface
-  // Odometer sketch describes, replacing MainLoop's former inline
-  // applySetPose(). Used to anchor the OTOS to an external fix (e.g. a
-  // camera observation) so its absolute readings agree with the controller
-  // pose instead of dragging against the boot frame. Safe to call before
-  // begin()/before present() — the drain in tick() is itself a no-op on an
-  // uninitialized chip, exactly like every other primitive below.
+  // the next tick() call (see tick()'s own "Drain order" comment above).
+  // Used to anchor the OTOS to an external fix (e.g. a camera observation)
+  // so its absolute readings agree with the controller pose instead of
+  // dragging against the boot frame. Safe to call before begin()/before
+  // present() — the drain in tick() is itself a no-op on an uninitialized
+  // chip, exactly like every other primitive below.
   void setPose(float x, float y, float heading);  // [mm] [mm] [rad]
 
   // --- Remaining primitive setters/getters — each a no-op (zero return
   // where applicable) if begin() never detected the chip, mirroring every
   // primitive above. Unlike setVelocity()-style staged setters, these
-  // issue their write immediately (not staged) — matches the
-  // pre-port file's own OI/OR/OL/OA wire-command shape, which this ticket
-  // does not change (wiring any of these to a live command is a later
-  // ticket's job). ---
+  // issue their write immediately (not staged) — this matches the OI/OR/
+  // OL/OA wire-command shape (wiring any of these to a live command is a
+  // separate concern). ---
 
   void resetTracking();  // OR — reset Kalman tracking
 
@@ -225,11 +196,10 @@ class Otos {
   // (config_.offsetX/offsetY/offsetYaw's own domain), not a world/chassis-
   // centre pose that must be converted THROUGH the lever arm the way
   // setPose() converts one.
-  // Not `const` — like the pre-port file's identical getOffset()/
-  // signalProcessConfig()/imuCalibrationSamplesRemaining(), these issue a
-  // real I2C read as an externally-visible side effect (bus traffic,
-  // txnCount()), so they are read ACCESSORS in the "getter" sense but not
-  // in the const-method sense.
+  // Not `const` — getOffset()/signalProcessConfig()/
+  // imuCalibrationSamplesRemaining() all issue a real I2C read as an
+  // externally-visible side effect (bus traffic, txnCount()), so they are
+  // read ACCESSORS in the "getter" sense but not in the const-method sense.
   void setOffset(float x, float y, float heading);       // [mm] [mm] [rad]
   void getOffset(float& x, float& y, float& heading);    // [mm] [mm] [rad]
 
@@ -311,9 +281,7 @@ class Otos {
   // for the identical CODAL NRF52I2C::waitForStop() TWIM stall.
   static constexpr uint32_t kBusClearance = 4000;  // [us]
 
-  // Minimum spacing between real OTOS bus reads inside tick() — see file
-  // header's "Scope changes" note for the [us]/uint64_t conversion from the
-  // pre-port file's kReadPeriod = 20 [ms].
+  // Minimum spacing between real OTOS bus reads inside tick().
   static constexpr uint64_t kReadPeriod = 20000;  // [us]
 
   // Convert a calibration scale multiplier (e.g. 1.05) to the chip's signed
@@ -324,8 +292,7 @@ class Otos {
   void applyPendingPose();
 
   // --- sensorToCentre()/centreToSensor() — OTOS lever-arm (mounting-offset)
-  // compensation math, ported unchanged from otos_odometer.cpp (itself
-  // folded from the former standalone source/hal/lever_arm.h).
+  // compensation math.
   //
   // The chip reports the SENSOR's own pose (its physical position on the
   // chassis, offset from the robot's centre of rotation by offsetX/

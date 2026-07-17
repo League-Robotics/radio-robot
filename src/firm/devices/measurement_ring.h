@@ -2,12 +2,6 @@
 // 6-slot gap-write ring every measurement stream (each motor's encoder
 // reading, OTOS pose, line, color) publishes through.
 //
-// Ticket DB-002 (device-bus-tickets.md). Part of the greenfield
-// `source/devices/` subsystem (namespace `Devices`) described in
-// clasi/issues/device-bus-fiber-owned-self-contained-device-subsystem.md's
-// "Measurement rings (the 6-slot gap-write buffer)" section — this file
-// implements that section's sketch, not a redesign of it.
-//
 // --- The gap-write protocol, exactly ---
 //
 // 6 PHYSICAL slots, 5 PUBLISHED. At any moment the "published window" is the
@@ -22,8 +16,7 @@
 //   2. Advance head_ to that same index with a single store. THIS is the
 //      instant the sample becomes published — head_ is a single uint8_t, so
 //      this step is one aligned store, atomic with respect to any reader
-//      running between fiber yield points (the issue's "Concurrency
-//      contract").
+//      running between fiber yield points.
 // The tail is implicit: it is always head_ - 4 (mod kSlots), never tracked
 // as its own variable.
 //
@@ -36,24 +29,19 @@
 // CURRENT gap slot, and a slot does not become "the gap" again until 5 more
 // publishes have advanced head_ past it and back around. This holds
 // independent of the cooperative-scheduler argument (belt and suspenders —
-// the issue is explicit this stays correct even under a preemptive writer,
-// though none is being built here).
+// it stays correct even under a preemptive writer, though none is being
+// built here).
 //
-// --- Sample<T>::stamp width (OQ3) ---
+// --- Sample<T>::stamp width ---
 //
-// The issue's own sketch shows `uint32_t stamp` (system_timer_current_time_
-// us() truncated to 32 bits). device-bus-tickets.md's "Resolved open
-// questions" overrides this: stamp is `uint64_t` [us] so bracket()/lerp are
-// wrap-free (a uint32_t microsecond counter wraps in ~71 minutes; a uint64_t
-// one does not wrap on any timescale this firmware will ever run — the same
-// reasoning otos.h's own DB-005 "Scope changes" note already applied to
-// readDue()/tick()'s "now" parameter). This is a deliberate, documented
-// deviation from the sketch, not an oversight.
+// stamp is `uint64_t` [us] so bracket()/lerp are wrap-free (a uint32_t
+// microsecond counter wraps in ~71 minutes; a uint64_t one does not wrap on
+// any timescale this firmware will ever run).
 //
 // Pure host-clean C++: <cstdint> only. No bus, no CODAL, no yields anywhere
 // in this file — publish()/latest()/sample()/bracket() are all plain struct
-// stores/copies, matching the concurrency contract's rule 2 ("No yield
-// inside a publish, a staged-input store, or a consumer-side sample copy").
+// stores/copies (no yield inside a publish, a staged-input store, or a
+// consumer-side sample copy).
 #pragma once
 
 #include <cstdint>
@@ -67,7 +55,7 @@ namespace Devices {
 template <typename T>
 struct Sample {
   T value{};
-  uint64_t stamp = 0;  // [us] fiber-read timestamp at publish() (OQ3)
+  uint64_t stamp = 0;  // [us] fiber-read timestamp at publish()
   bool valid = false;
 };
 

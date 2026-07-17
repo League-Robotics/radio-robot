@@ -2,10 +2,6 @@
  * body_kinematics.cpp — implementation of stateless differential-drive maps.
  *
  * See body_kinematics.h for full API documentation and unit conventions.
- *
- * References:
- *   docs/kinematics-model.md §1.3 (inverse/forward maps)
- *   docs/kinematics-model.md §1.7 (saturation scaling, curvature preservation)
  */
 #include "body_kinematics.h"
 #include "messages/common.h"
@@ -43,8 +39,7 @@ void saturate(float vL, float vR,
 }
 
 // ---------------------------------------------------------------------------
-// Array-form overloads (046-002) — differential adapter for IKinematics.
-// wheels[2] = {vL, vR}. v_y is always 0 for differential.
+// Array-form overloads. wheels[2] = {vL, vR}. v_y is always 0 for differential.
 // ---------------------------------------------------------------------------
 
 void inverse(msg::BodyTwist3 t, float b, float wheels[2]) {

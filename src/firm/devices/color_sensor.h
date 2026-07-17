@@ -1,66 +1,38 @@
 // color_sensor.h — Devices::ColorSensorLeaf: the internal leaf for RGBC color
 // sensing. Supports two chip variants: an alt/"PlanetX" chip at I2C address
-// 0x43 (primary) and an APDS9960 at 0x39 (fallback).
+// 0x43 (primary) and an APDS9960 at 0x39 (fallback). The loop constructs and
+// drives this leaf directly — there is no separate handle class.
 //
-// Ticket DB-006 (device-bus-tickets.md). Ported from
-// source_old/hal/real/ColorSensor.{h,cpp} into the greenfield
-// `source/devices/` subsystem (namespace `Devices`), per clasi/issues/
-// device-bus-fiber-owned-self-contained-device-subsystem.md's "Shape" —
-// "Line and color sensing don't exist in the new tree yet." Mirrors
-// nezha_motor.h/otos.h's leaf shape (DB-004/DB-005): a begin-style detection
-// entry point, present()/connected() (sprint-099 distinction, carried
-// forward per otos.h's own precedent), and a non-blocking tick(nowUs) that
+// Mirrors nezha_motor.h/otos.h's leaf shape: a begin-style detection entry
+// point, present()/connected(), and a non-blocking tick(nowUs) that
 // publishes into reading().
 //
 // --- Re-wake-each-retry detection (PRESERVED) ---
-// docs/knowledge/encoders-read-zero-i2c-bus-hang.md's "Color detection must
-// re-assert its wake registers each retry" lesson: the pre-port begin()
+// Color detection must re-assert its wake registers each retry: begin()
 // re-asserts the ALT chip's wake writes (0x81=0xCA, 0x80=0x17) INSIDE every
 // retry, settles ~50ms, then checks the 16-bit value at 0xA4/0xA5 is
 // non-zero — a wake-once version fails to detect a chip that was still
-// powering up on the first attempt. That exact write-then-check sequence is
-// preserved verbatim below (beginStep()'s AltProbe phase). What changes is
-// the RETRY PACING: the pre-port file's `for (...) { ...; fiber_sleep(50); }`
-// blocking loop (up to 20 * 50ms = 1s worst case) becomes beginStep(nowUs), a
-// non-blocking single-step state machine driven by Devices::Clock — the
-// caller (DB-007's fiber detection preamble) calls it once per cycle until
-// detectDone() is true, exactly matching the issue's own description
-// ("Because this runs in the fiber, retries no longer freeze the control
-// loop") and device-bus-tickets.md's DB-006 "NON-BLOCKING reads only" note:
-// no source/devices/ leaf may fiber_sleep() itself (there is no Sleeper
-// wired to this leaf, only a plain nowUs parameter — the same time-seam
-// convention DB-004/DB-005 already established).
+// powering up on the first attempt (docs/knowledge/encoders-read-zero-i2c-
+// bus-hang.md). beginStep(nowUs) is a non-blocking single-step state
+// machine driven by Devices::Clock, paced instead of blocked on
+// fiber_sleep(50) — the caller (the fiber detection preamble) calls it once
+// per cycle until detectDone() is true (see the "No leaf sleeps or blocks"
+// invariant, DESIGN.md §3): no devices/ leaf may fiber_sleep() itself.
 //
 // --- Steady-state reads (tick(), below) ---
-// Ports pollRGBC() — NOT the blocking readRGBC() (which fiber_sleep(100)s
-// the ALT chip's integration window or polls the APDS STATUS register up to
-// 250ms/50 tries). pollRGBC() was already the pre-port driver's own
-// non-blocking counterpart ("Use this in time-critical loops instead of
-// readRGBC()."): a single cheap register peek, decode only if the chip's own
-// data-ready condition is met THIS call, otherwise leave the cached reading
-// alone and retry next call. tick() also carries a readDue(nowUs) rate-limit
-// gate sourced from ColorConfig::lagColor — this is not a NEW invention: the
-// pre-port architecture's own `Sensors::periodic()` used cfg.lagColor as
-// exactly this "sensor polling budget" gate (see
-// source_old/subsystems/sensors/SensorsConfig.h's own "polling budget, ms"
-// comment on the field this config's lagColor descends from) before this
-// port folded that gate into the leaf itself.
+// Uses a non-blocking poll (a single cheap register peek, decode only if
+// the chip's own data-ready condition is met THIS call, otherwise leave the
+// cached reading alone and retry next call) rather than a blocking read
+// (which would fiber_sleep(100) the ALT chip's integration window, or poll
+// the APDS STATUS register up to 250ms/50 tries). tick() also carries a
+// readDue(nowUs) rate-limit gate sourced from ColorConfig::lagColor — the
+// leaf's own "sensor polling budget."
 //
-// --- Renamed ColorSensor -> ColorSensorLeaf in DB-007 ---
-// DB-006 originally landed this class as `Devices::ColorSensor`. DB-007
-// (device-bus-tickets.md) needs that exact name for the PUBLIC HANDLE class
-// the issue's "The public surface" sketch specifies
-// (`class ColorSensor { ... }`, same `Devices` namespace) — a straight
-// class-name collision two tickets couldn't both have. DB-004's leaf
-// (`NezhaMotor`) and DB-005's leaf (`Otos`) never collided with their own
-// handle names (`Motor`/`Odometer`) because they already carried a
-// vendor/chip-distinct name; DB-006's leaves didn't. Renamed the LEAF, not
-// the handle, so the issue's own public-surface vocabulary
-// (`color()` returning a `Devices::ColorSensor&`) stays exactly as
-// specified. Per sprint 103 architecture-update.md Decision 1, the handle
-// layer this rename originally anticipated was retired — the loop
-// constructs and drives this leaf directly. LineSensor -> LineSensorLeaf is
-// the identical fix, same ticket, same reasoning (line_sensor.h).
+// --- ColorSensorLeaf / LineSensorLeaf naming ---
+// Both leaves carry a `Leaf` suffix (rather than the bare `ColorSensor`/
+// `LineSensor`) to leave those bare names free for a future public handle
+// type in the same `Devices` namespace, should one ever be reintroduced —
+// the loop currently constructs and drives both leaves directly.
 #pragma once
 
 #include <cstdint>
@@ -87,7 +59,7 @@ class ColorSensorLeaf {
   // non-zero means found: present()/connected() become true, isAlt_ true,
   // phase Done.
   // Phase 2 (ApdsProbe): entered once AltProbe is exhausted; exactly ONE
-  // attempt (the pre-port fallback has no retry loop either) — write ENABLE
+  // attempt (the APDS fallback has no retry loop) — write ENABLE
   // off (0x80=0x00) and read it back; 0x00 means the APDS9960 answered:
   // initApds() runs its register program, present()/connected() become
   // true, phase Done. Either way (found or not), phase becomes Done after
@@ -96,7 +68,7 @@ class ColorSensorLeaf {
   void beginStep(uint64_t nowUs);  // [us]
   bool detectDone() const;
 
-  // present()/connected(): sprint-099 distinction, ported from otos.h.
+  // present()/connected(): same distinction as otos.h.
   // present() is set once by beginStep() reaching a successful terminal
   // state and never re-evaluated; connected() is the live, per-tick()
   // bus-health result (see tick()'s own comment).
@@ -142,22 +114,22 @@ class ColorSensorLeaf {
   uint64_t lastReadUs_ = 0;  // [us] time of the most recent real tick() read
   bool hasRead_ = false;
 
-  static constexpr uint8_t kMaxAltAttempts = 20;         // matches the ported retry count
-  static constexpr uint64_t kAltRetryPeriod = 50000;      // [us] matches the ported fiber_sleep(50)
-  static constexpr uint32_t kDefaultLagColor = 100;       // [ms] matches source_old DefaultConfig p.lagColor
-  static constexpr uint8_t kDefaultIntegration = 252;     // matches initApds()'s ported ATIME literal
-  static constexpr uint8_t kDefaultGain = 0x03;           // matches initApds()'s ported CONTROL literal
+  static constexpr uint8_t kMaxAltAttempts = 20;
+  static constexpr uint64_t kAltRetryPeriod = 50000;      // [us]
+  static constexpr uint32_t kDefaultLagColor = 100;       // [ms]
+  static constexpr uint8_t kDefaultIntegration = 252;     // ATIME register default
+  static constexpr uint8_t kDefaultGain = 0x03;           // CONTROL register default
 
   void initApds();
 
   // writeReg8()/readReg8()/readReg16()/readReg16Alt() ignore the I2C
-  // transaction status — matches the pre-port initApds()/AltProbe code,
-  // which never checked it either. The *Status() variants below are used by
-  // tick()'s steady-state path (which, like NezhaMotor/Otos, DOES track bus
-  // health for connected()) AND by beginStep()'s ApdsProbe phase (see
-  // color_sensor.cpp's ApdsProbe comment — clasi/issues/color-sensor-apds-
-  // probe-success-on-failure.md: a status-ignoring probe read there
-  // latched present()==true on a NAK).
+  // transaction status. The *Status() variants below are used by tick()'s
+  // steady-state path (which, like NezhaMotor/Otos, DOES track bus health
+  // for connected()) AND by beginStep()'s ApdsProbe phase — a
+  // status-ignoring probe read there once latched present()==true on a NAK
+  // (a status-ignoring readback decodes a NAK as en==0x00, exactly the
+  // "detected" condition), so that phase must always use the *Status()
+  // variant.
   void writeReg8(uint8_t addr, uint8_t reg, uint8_t val);
   uint8_t readReg8(uint8_t addr, uint8_t reg);
   uint16_t readReg16(uint8_t addr, uint8_t regLo);

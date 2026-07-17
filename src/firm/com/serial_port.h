@@ -4,6 +4,7 @@
 
 /**
  * SerialPort — line-buffered 115200-baud serial over USB.
+ * Design/rationale: DESIGN.md.
  *
  * Non-blocking: readLine() drains the CODAL ASYNC receive buffer each call
  * and returns true only when a complete '\n'-terminated line is ready.

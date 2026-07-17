@@ -2,17 +2,8 @@
 // interpolate between the two Sample<T>s a MeasurementRing<T>::bracket()
 // call returns.
 //
-// Ticket DB-002 (device-bus-tickets.md). Part of the greenfield
-// `source/devices/` subsystem (namespace `Devices`) described in
-// clasi/issues/device-bus-fiber-owned-self-contained-device-subsystem.md's
-// "Measurement rings" section: "sampleAt(t) brackets a past instant and
-// linearly interpolates ... Each reading type supplies its own lerp; OTOS
-// heading needs wrap-aware angular lerp — naive linear interpolation across
-// ±180° is a known trap."
-//
-// This ticket supplies the two primitives every later sampleAt()
-// implementation (a reading type's own sampleAt() picks, per field, which
-// helper applies) is built from:
+// Two primitives, each a reading type's own sampleAt() picks between per
+// struct field:
 //   - lerpFraction()/lerp() — ordinary linear interpolation, for every
 //     non-angular field (MotorReading::position/velocity, PoseReading::
 //     x/y/v_x/v_y/omega — device_types.h).
@@ -61,26 +52,24 @@ inline float lerp(float older, float newer, float frac) {
   return older + (newer - older) * frac;
 }
 
-// wrapAngle — wrap `angle` into (-pi, pi], via the same atan2(sin, cos)
-// identity source/subsystems/pose_estimator.cpp's wrapPi() uses. Reimplemented
-// locally rather than shared: the isolation invariant forbids
-// source/devices/ from including it (device-bus-tickets.md's
-// "Standing isolation invariant").
+// wrapAngle — wrap `angle` into (-pi, pi], via the atan2(sin, cos) identity.
+// Reimplemented locally rather than shared: the isolation invariant
+// forbids devices/ from including code outside its own headers.
 inline float wrapAngle(float angle) {  // [rad] -> [rad] in (-pi, pi]
   return std::atan2(std::sin(angle), std::cos(angle));
 }
 
 // lerpAngle — wrap-aware angular interpolation. Radians in, radians out,
-// (-pi, pi] both ways. This is the issue's flagged trap: naive
-// lerp(older, newer, frac) across the ±pi seam goes the LONG way around
-// (170°->-170° naively interpolated toward the midpoint drifts DOWN through
-// 0°, not up through ±180° — the wrong direction and 9x the true angular
-// distance). Instead this takes the SHORTEST signed angular delta from
-// older to newer — wrapAngle(newer - older), itself always in (-pi, pi] —
-// and steps `frac` of THAT delta from `older`, re-wrapping the result. For
-// the issue's own worked example (170°->-170°), the shortest delta is +20°
-// (continuing past +180° into -170°, not the 340° the long way would
-// cover), so the frac=0.5 midpoint lands at ~180° (the short way), not 0°.
+// (-pi, pi] both ways. A KNOWN TRAP: naive lerp(older, newer, frac) across
+// the ±pi seam goes the LONG way around (170°->-170° naively interpolated
+// toward the midpoint drifts DOWN through 0°, not up through ±180° — the
+// wrong direction and 9x the true angular distance). Instead this takes the
+// SHORTEST signed angular delta from older to newer — wrapAngle(newer -
+// older), itself always in (-pi, pi] — and steps `frac` of THAT delta from
+// `older`, re-wrapping the result. Worked example: for 170°->-170°, the
+// shortest delta is +20° (continuing past +180° into -170°, not the 340°
+// the long way would cover), so the frac=0.5 midpoint lands at ~180° (the
+// short way), not 0°.
 inline float lerpAngle(float older, float newer,
                         float frac) {  // [rad] [rad] dimensionless -> [rad]
   const float delta = wrapAngle(newer - older);

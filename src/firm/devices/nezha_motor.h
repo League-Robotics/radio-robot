@@ -1,67 +1,37 @@
 // nezha_motor.h — Devices::NezhaMotor: the concrete internal leaf for one
-// channel of the PlanetX Nezha V2 motor controller.
+// channel of the PlanetX Nezha V2 motor controller. Owns the register map,
+// split-phase 0x46 encoder sequencing, slew limiting, and wedge-latch
+// signal (see nezha_motor.cpp for the per-function notes); embeds one
+// velocity PID (Devices::MotorVelocityPid) per motor.
 //
-// Ticket DB-004 (device-bus-tickets.md). Ported from
-// source/hal/nezha/nezha_motor.{h,cpp} into the greenfield `source/devices/`
-// subsystem (namespace `Devices`), per clasi/issues/device-bus-fiber-owned-
-// self-contained-device-subsystem.md's "Shape" / "The public surface". The
-// register map, split-phase 0x46 encoder sequencing, slew limiting, and
-// wedge-latch signal are ported byte-for-byte (see nezha_motor.cpp for the
-// per-function notes); the embedded velocity PID (a `Devices::
-// MotorVelocityPid pid_` member, one per motor) follows the control law in
-// velocity_pid.cpp exactly as before.
-//
-// Scope changes from the pre-port Hal::NezhaMotor (all deliberate — see the
-// issue's "The public surface" `Devices::Motor` sketch, which this internal
-// leaf's public API is scoped to match):
-//   - Message-plane surface (setVoltage()/capabilities()/apply()/state(),
-//     msg::MotorCommand/msg::MotorCapabilities) is NOT ported — msg::-typed
-//     outright, forbidden by the isolation invariant. Per sprint 103
-//     architecture-update.md Decision 1, the loop is the Devices-native
-//     replacement — it constructs and drives this leaf directly, not this
-//     leaf.
-//   - POSITION mode (the onboard 0x5D absolute-angle move, setPosition()/
-//     writePositionMove()) is NOT ported — absent from the issue's public
-//     surface `Devices::Motor` sketch entirely, so this scoped-down leaf
-//     does not carry it forward. Likewise the "vendor register wrappers
-//     ported for completeness ... NOT reachable from the public faceplate"
-//     block the pre-port file itself flagged as already-unreachable
-//     (timedMove()/0x70, resetHome()/0x1D, setGlobalSpeed()/0x77,
-//     readVersion()/0x88) is dropped rather than carried forward as
-//     unreferenced dead code.
-//   - setFeedforward()/feedforward_ is NOT ported — absent from the issue's
-//     public surface sketch; VELOCITY-mode duty is pid_.compute()'s output
-//     directly, with no additive feedforward term.
-//   - The NOT PORTED flip-flop cross-pass sequencer's public split-phase
-//     entry point (requestSample(), wrapping requestEncoder()) IS still
-//     ported — the loop's own cycle becomes its new, sole caller in place
-//     of the retired Subsystems::NezhaHardware.
-//   - PID on/off (OQ2, issue "The public surface"): setPidEnabled()/
-//     setDuty() are new relative to the pre-port file — Mode::Active now
-//     covers what used to be the separate DUTY/VELOCITY modes, selected at
-//     tick() time by pidEnabled_ rather than by which setter was last
-//     called (see tick()'s own comment). Armor (armoredWrite()) applies in
-//     BOTH cases — the write-gate call is identical either way.
+// Deliberate scope-downs from a full motor abstraction:
+//   - No message-plane surface (apply()/state()/capabilities()/
+//     msg::MotorCommand) — msg:: is unreachable under the isolation
+//     invariant; the loop constructs and drives this leaf directly.
+//   - No POSITION mode (the onboard 0x5D absolute-angle move) — this leaf
+//     only covers velocity-PID and raw-duty modes (see DESIGN.md §3).
+//   - No additive velocity feedforward beyond Gains::kff — VELOCITY-mode
+//     duty is pid_.compute()'s output directly.
+//   - PID on/off: setPidEnabled()/setDuty() let Mode::Active cover both the
+//     PID-chase and raw-duty-passthrough cases, selected at tick() time by
+//     pidEnabled_ rather than by which setter was last called (see tick()'s
+//     own comment). Armor (armoredWrite()) applies identically either way.
 //   - Time seam: tick() takes a single `uint64_t nowUs` [us] parameter
-//     instead of the pre-port file's `uint32_t nowMs` PLUS an internal
-//     `system_timer_current_time_us()` call (itself HOST_BUILD-shimmed to
-//     I2CBus::clock() in the pre-port file). device-bus-tickets.md's
-//     resolved "Sim/host-test story" note establishes `Devices::Clock` (DB-
-//     003, source/devices/clock.h) as THE fiber-level time seam — and its
-//     own header explicitly scopes it to "the fiber's OWN cycle-level time
-//     reads ... not the bus's clearance windows." Rather than reach for
-//     I2CBus's own internal clearance clock (a different seam, scoped to
-//     I2CBus's own preClear/postClear bookkeeping — see i2c_bus.h) the way
-//     the pre-port file's HOST_BUILD shim did, this leaf takes its "now" as
-//     a plain parameter supplied by its caller (ultimately the loop's own
-//     Clock instance) — fully deterministic for a host
-//     harness with zero clock coupling, and behaviorally identical (armor
-//     timing (dwell/rest-tracking) still runs in ms, matching MotorConfig's
+//     rather than reading a clock internally — Devices::Clock (clock.h) is
+//     the fiber-level time seam, scoped to "the fiber's OWN cycle-level
+//     time reads ... not the bus's clearance windows" (a DIFFERENT seam
+//     from I2CBus's own internal clearance-timer bookkeeping — see
+//     i2c_bus.h). This leaf takes "now" as a plain parameter supplied by
+//     its caller (ultimately the loop's own Clock instance) — fully
+//     deterministic for a host harness with zero clock coupling. Armor
+//     timing (dwell/rest-tracking) runs in ms, matching MotorConfig's
 //     documented [ms] reversalDwell unit; the write-rate throttle inside
-//     writeRawDuty() still runs in us, reading the SAME nowUs this tick
-//     already cached in lastTickUs_ before dispatch — see writeRawDuty()'s
-//     own comment for why that is exactly equivalent to a fresh clock read
-//     at that point).
+//     writeRawDuty() runs in us, reading the SAME nowUs this tick already
+//     cached in lastTickUs_ before dispatch — see writeRawDuty()'s own
+//     comment for why that is exactly equivalent to a fresh clock read at
+//     that point.
+//
+// Design/rationale: DESIGN.md.
 #pragma once
 
 #include <cstdint>
@@ -83,41 +53,34 @@ class NezhaMotor : public MotorArmor {
   NezhaMotor(I2CBus& bus, const MotorConfig& config);
 
   // Primes the encoder: the Nezha 0x46 register sits frozen at 0 until the
-  // chip receives its first atomic read transaction. Ports the pre-port
-  // file's begin() (which calls hardReset()) exactly; DB-007's fiber
-  // preamble calls this once per port before the cycle starts.
+  // chip receives its first atomic read transaction (calls hardReset()).
+  // The fiber preamble calls this once per port before the cycle starts.
   void begin();
 
-  // Split-phase phase 1, public entry point. Wraps the already-ported
-  // requestEncoder() so the loop's own cycle can request this
-  // port's encoder sample without reaching into NezhaMotor's private
-  // register-verb surface. NOT a MotorArmor virtual: request/collect
-  // splitting is a Nezha-specific consequence of four ports sharing one
-  // device address (0x10), not a universal concept a future leaf would
-  // need.
+  // Split-phase phase 1, public entry point. Wraps requestEncoder() so the
+  // loop's own cycle can request this port's encoder sample without
+  // reaching into NezhaMotor's private register-verb surface. NOT a
+  // MotorArmor virtual: request/collect splitting is a Nezha-specific
+  // consequence of four ports sharing one device address (0x10), not a
+  // universal concept a future leaf would need.
   void requestSample();
 
   // --- Primitive setters — stage the command; tick() executes it. ---
   void setVelocity(float velocity);   // [mm/s] signed — PID target (consumed only while PID is enabled)
   void setDuty(float duty);           // [-1, 1] raw duty target (consumed only while PID is disabled)
   void setNeutral(Neutral mode);      // coast / brake — Nezha maps both to the same 0x60 speed-0 write (no distinct brake register)
-  void setPidEnabled(bool on);        // default true (OQ2) — armor applies in both modes
+  void setPidEnabled(bool on);        // default true — armor applies in both modes
 
-  // Live gain-apply (106-002/SUC-025): mutates this motor's velocity-PID
-  // gains (and, optionally, its wheel-travel calibration) in place -- no
-  // reflash, no I2C side effect (MotorVelocityPid::compute() reads
-  // config_.velGains fresh every tick, per compute()'s own signature).
-  // Parameters are exclusively Devices-local types (Gains, Opt<float>) --
-  // never the wire msg::MotorConfigPatch -- preserving source/devices/'s
-  // standing isolation invariant (never #include "messages/..."):
-  // RobotLoop (source/app/, which already includes messages/...) is the
-  // one legitimate translation boundary between the wire patch and this
-  // call, mirroring config.proto's own documented BinaryChannel precedent
-  // for the SAME MotorConfigPatch type (architecture-update.md (106)
-  // Decision 2/Step 3). `travelCalib` defaults to absent (has=false) --
-  // pass it only when the caller means to also update
-  // config_.wheelTravelCalib (config.proto's `travel_calib` is
-  // side-selected; `gains` is not).
+  // Live gain-apply: mutates this motor's velocity-PID gains (and,
+  // optionally, its wheel-travel calibration) in place -- no reflash, no
+  // I2C side effect (MotorVelocityPid::compute() reads config_.velGains
+  // fresh every tick). Parameters are exclusively Devices-local types
+  // (Gains, Opt<float>) -- never the wire msg::MotorConfigPatch --
+  // preserving the isolation invariant: RobotLoop (app/, which already
+  // includes messages/...) is the one legitimate translation boundary
+  // between the wire patch and this call. `travelCalib` defaults to absent
+  // (has=false) -- pass it only when the caller means to also update
+  // config_.wheelTravelCalib.
   void applyGains(const Gains& gains, Opt<float> travelCalib = {});
 
   // Current live gains -- lets a caller (RobotLoop's CONFIG dispatch) merge
@@ -126,7 +89,7 @@ class NezhaMotor : public MotorArmor {
   // absent field back to some default.
   const Gains& gains() const { return config_.velGains; }
 
-  // Velocity-estimator selection (bench A/B, sprint 101). mode 0 = EMA
+  // Velocity-estimator selection (bench A/B). mode 0 = EMA
   // (velFiltAlpha — the shipped/default behavior); mode 1 = least-squares
   // line-fit slope over the last `window` FRESH position samples
   // (Savitzky-Golay order 1). The line fit rejects encoder-quantization noise
@@ -137,7 +100,7 @@ class NezhaMotor : public MotorArmor {
   uint8_t velEstMode() const { return velEstMode_; }
   uint8_t velWindow() const { return velWindow_; }
 
-  // Output duty smoothing (bench, sprint 101). Applies a boxcar moving
+  // Output duty smoothing (bench). Applies a boxcar moving
   // average of the last `window` PID duty outputs before the armored write,
   // to smooth the visible/electrical duty jitter (the write path quantizes
   // duty to integer percent, so a jittering PID output toggles the written
@@ -164,8 +127,8 @@ class NezhaMotor : public MotorArmor {
   //      Velocity/glitch computation is gated on a FRESHNESS check (the
   //      collected raw count differs from the last FRESH raw count) --
   //      the Nezha brick's register refreshes far slower (~80ms) than the
-  //      fiber's own cycle (~16ms, DB-007/DB-008), so most cycles re-
-  //      collect the same value; see nezha_motor.cpp's tick() comment.
+  //      fiber's own cycle (~16ms), so most cycles re-collect the same
+  //      value; see nezha_motor.cpp's tick() comment.
   //   3. updateWedgeDetector()         — base armor policy; reads
   //      position()/appliedDuty(), both now reflecting this tick's fresh
   //      sample and last tick's write.
@@ -179,18 +142,16 @@ class NezhaMotor : public MotorArmor {
 
  protected:
   // --- Device-specific armor primitives (MotorArmor) ---
-  void writeRawDuty(float duty) override;    // ported write path, minus the reversal-exemption branch (unreachable — armoredWrite() never forwards a raw sign flip here)
-  void hardReset() override;                 // ported median-of-3 + readback-verify + retry, unchanged
-  void softRebaseline() override;            // ported software-only rebaseline
+  void writeRawDuty(float duty) override;    // write path; the reversal-exemption branch is unreachable here — armoredWrite() never forwards a raw sign flip
+  void hardReset() override;                 // median-of-3 + readback-verify + retry
+  void softRebaseline() override;            // software-only rebaseline
 
  private:
-  // Mode::Active covers what the pre-port file split into separate
-  // Mode::DUTY / Mode::VELOCITY states — tick() picks PID vs. raw duty at
-  // dispatch time via pidEnabled_ (OQ2) rather than by which setter was
-  // last called, so setVelocity()/setDuty() can both be staged and the
-  // live pidEnabled_ flag decides which one actually drives the write each
-  // tick (the bench/DEV surface's whole point — issue "The public
-  // surface").
+  // Mode::Active covers both the raw-duty and velocity-PID cases — tick()
+  // picks PID vs. raw duty at dispatch time via pidEnabled_ rather than by
+  // which setter was last called, so setVelocity()/setDuty() can both be
+  // staged and the live pidEnabled_ flag decides which one actually drives
+  // the write each tick (the bench/DEV surface's whole point).
   enum class Mode : uint8_t { None, Active, Neutral };
 
   // ---- Wiring ----
@@ -202,7 +163,7 @@ class NezhaMotor : public MotorArmor {
   float velocityTarget_ = 0.0f;               // [mm/s]
   float dutyTarget_ = 0.0f;                   // [-1, 1]
   Neutral neutralTarget_ = Neutral::Coast;
-  bool pidEnabled_ = true;                    // OQ2 default
+  bool pidEnabled_ = true;                    // default
 
   // ---- tick() encoder-sample cache ----
   float lastPosition_ = 0.0f;          // [mm]
@@ -270,14 +231,14 @@ class NezhaMotor : public MotorArmor {
   // ---- Register-map wire constants ----
   static constexpr uint8_t kDirCw = 1;      // positive speed from chip perspective
   static constexpr uint8_t kDirCcw = 2;     // negative speed from chip perspective
-  static constexpr float kDefaultSlewRate = 25.0f;   // ports the original's kMaxDeltaPwmPerWrite default
+  static constexpr float kDefaultSlewRate = 25.0f;   // default max |delta PWM| per write
 
   // ---- Private helpers: write path ----
-  // Returns the CODAL status from bus_.write() (0/kOk == success) -- 103-002
-  // (C1 fix): writeRawDuty() commits lastWrittenPct_/lastWriteTimeUs_ ONLY
-  // when this status is kOk, so a NAK'd write is retried next tick instead
-  // of being latched as "already written."
-  int writeMotorRun(uint8_t direction, uint8_t speed);   // ported writeMotorCmd() (0x60)
+  // Returns the CODAL status from bus_.write() (0/kOk == success):
+  // writeRawDuty() commits lastWrittenPct_/lastWriteTimeUs_ ONLY when this
+  // status is kOk, so a NAK'd write is retried next tick instead of being
+  // latched as "already written."
+  int writeMotorRun(uint8_t direction, uint8_t speed);   // writes the 0x60 motor-run command
 
   // ---- Private helpers: velocity estimator ----
   void pushVelSample(uint64_t t, float position);   // [us] [mm] append an accepted fresh sample to the ring
@@ -287,8 +248,8 @@ class NezhaMotor : public MotorArmor {
 
   // ---- Private helpers: encoder read paths ----
   int32_t readEncoderAtomicRaw();   // one-off sample: preClear/postClear-settled 0x46 write -> read
-  void requestEncoder();            // split-phase phase 1 (ported byte-for-byte); wrapped by the public requestSample() above
-  int32_t collectEncoder();         // split-phase phase 2 (ported byte-for-byte); wired into tick()'s step 2
+  void requestEncoder();            // split-phase phase 1; wrapped by the public requestSample() above
+  int32_t collectEncoder();         // split-phase phase 2; wired into tick()'s step 2
 };
 
 }  // namespace Devices

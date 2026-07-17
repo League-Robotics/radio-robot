@@ -1,13 +1,11 @@
 // device_config.h — Devices-local configuration/calibration types.
 //
-// Ticket DB-001 (device-bus-tickets.md). See device_types.h's file header
-// for the isolation invariant these types exist to satisfy (Devices-local
-// counterparts of the equivalent `msg::*`/`Config::*` types, since
-// `source/devices/` may never `#include "messages/..."` or
-// `#include "config/..."`). Every type below is, like device_types.h's, a
-// plain aggregate — default-constructible, no virtuals/pointers/user-
-// declared special member functions — so DB-001's
-// trivially_copyable/standard_layout acceptance criteria hold for it too.
+// See device_types.h's file header for the isolation invariant these types
+// exist to satisfy (Devices-local counterparts of the equivalent
+// `msg::*`/`Config::*` types, since `devices/` may never
+// `#include "messages/..."` or `#include "config/..."`). Every type below
+// is, like device_types.h's, a plain aggregate — default-constructible, no
+// virtuals/pointers/user-declared special member functions.
 #pragma once
 
 #include <cstdint>
@@ -20,8 +18,8 @@ namespace Devices {
 // included from messages/common.h (isolation invariant). Needed wherever an
 // explicit value (including an explicit 0) must stay distinguishable from
 // "not configured, substitute the ship default" — see MotorConfig::
-// reversalDwell/outputDeadband below, and hal/capability/motor.h's own
-// Design Rationale 2 for why a zero-sentinel cannot serve the same purpose.
+// reversalDwell/outputDeadband below; a zero-sentinel cannot serve the same
+// purpose because an explicit 0 must remain valid and distinct.
 template <typename T>
 struct Opt {
   bool has = false;
@@ -30,9 +28,7 @@ struct Opt {
 
 // Gains — a generic PI(+feedforward+anti-windup) gain set. Devices-local
 // counterpart to msg::Gains (messages/common.h). Dimensionless (gain
-// coefficients carry no `// [unit]` tag — coding-standards.md's
-// "Dimensionless fields carry no tag", which lists this exact family
-// (velKp/kFF) as its own worked example).
+// coefficients carry no `// [unit]` tag).
 struct Gains {
   float kp = 0.0f;
   float ki = 0.0f;
@@ -42,14 +38,11 @@ struct Gains {
 };
 
 // MotorConfig — one motor channel's calibration plus the armor tuning
-// hal/capability/motor.h's Motor::configure() caches. Devices-local
-// counterpart to msg::MotorConfig (messages/motor.h) plus its two
-// base-class-owned armor fields.
+// MotorArmor::configureArmor() caches. Devices-local counterpart to
+// msg::MotorConfig (messages/motor.h) plus its two base-class-owned armor
+// fields.
 struct MotorConfig {
-  // [mm/deg] wheel linear travel per motor-shaft degree of rotation —
-  // coding-standards.md's own worked rename example
-  // (mmPerDegL -> wheelTravelCalibL) applied to this per-port config.
-  float wheelTravelCalib = 0.0f;
+  float wheelTravelCalib = 0.0f;  // [mm/deg] wheel linear travel per motor-shaft degree of rotation
 
   // +1 or -1: corrects a mirror-mounted wheel's encoder/duty sign
   // (dimensionless — no unit tag).
@@ -58,26 +51,21 @@ struct MotorConfig {
   Gains velGains = {};
 
   // EMA smoothing coefficient applied to the raw velocity sample
-  // (dimensionless, matches coding-standards.md's velKp precedent).
+  // (dimensionless).
   float velFiltAlpha = 0.0f;
 
   // [mm/s] |target velocity| at/below this freezes the embedded PID's
   // integrator. Named for what it actually gates, not the wire field it
-  // mirrors: msg::MotorConfig's wire key is `min_duty`, but
-  // hal/velocity_pid.cpp's compute() documents that despite that name it
-  // thresholds the VELOCITY target, never a duty — "minDuty plays
-  // minWheelSpeed's role here ... despite its proto name." Wire keys are
-  // excluded from the renaming convention (coding-standards.md); this
-  // Devices-local field is not a wire key, so it is named for what it is
-  // (naming-and-style.md rule 5: never propagate a violating/misleading
-  // name into new code).
+  // mirrors: msg::MotorConfig's wire key is `min_duty`, but this field
+  // thresholds the VELOCITY target, never a duty — wire keys are excluded
+  // from the renaming convention (coding-standards.md); this Devices-local
+  // field is not a wire key, so it is named for what it is.
   float velDeadband = 0.0f;
 
   // Maximum |duty write step| per tick, in the leaf's own raw hardware
   // write domain (e.g. Nezha's int8 PWM-percent register) — a device-write
   // primitive, not itself a physical quantity, so no `// [unit]` tag
-  // applies (mirrors otos_odometer.h's imuCalibrationSamplesRemaining()
-  // "a sample count ... no unit tag applies" precedent).
+  // applies.
   float slewRate = 0.0f;
 
   // 1-based port label (wire/config convention) — dimensionless.

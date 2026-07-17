@@ -47,9 +47,8 @@ void Preamble::step() {
   }
 
   // Round robin: at most ONE leaf's own detection entry point is called
-  // per step() -- "one bounded probe action per pass," the archived
-  // plan's own wording (this file's header comment, "The boot loop this
-  // drives").
+  // per step() -- one bounded probe action per pass (see this file's
+  // header comment, "The boot loop this drives").
   for (uint8_t i = 0; i < kSlotCount; ++i) {
     Slot slot = static_cast<Slot>((cursor_ + i) % kSlotCount);
     uint8_t slotIndex = static_cast<uint8_t>(slot);

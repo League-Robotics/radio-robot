@@ -1,6 +1,5 @@
-// comms.cpp -- App::Comms implementation. See comms.h's file header for the
-// module's boundary and provenance (transcribed from the deleted
-// source/commands/binary_channel.cpp, sprint 102's transcription note).
+// comms.cpp -- App::Comms implementation. See comms.h's file header for
+// the module's boundary.
 #include "app/comms.h"
 
 #include <cstring>
@@ -57,9 +56,7 @@ bool Comms::pumpTransport(Transport& t, Cmd& out) {
   char line[kArmoredBufSize];
   if (!t.readLine(line, sizeof(line))) return false;
 
-  // Text plane (checked BEFORE the '*' armor check, per the ticket's
-  // design decision) -- byte-identical to today's main.cpp stub's own
-  // HELLO/PING replies.
+  // Text plane, checked BEFORE the '*' armor check -- HELLO/PING replies.
   if (std::strcmp(line, "HELLO") == 0) {
     t.sendReliable(banner_);
     return true;
@@ -81,7 +78,7 @@ bool Comms::pumpTransport(Transport& t, Cmd& out) {
 void Comms::decodeArmoredLine(const char* line, Cmd& out) {
   // Caller guarantees line[0] == '*'; line[1] != 'B' is still a real
   // possibility (a malformed/future-armor line) and must be rejected
-  // cleanly, not assumed away (transcription note's own dearmor comment).
+  // cleanly, not assumed away.
   if (line[1] != 'B') {
     ++malformedCount_;
     return;
@@ -102,16 +99,10 @@ void Comms::decodeArmoredLine(const char* line, Cmd& out) {
   }
 
   // Decode into a LOCAL temporary; only publish into `out` on success --
-  // see comms.h's pump() doc comment. Deviation from the transcription
-  // note: NO sendError()/per-command ERR reply here. Ticket 103-004's
-  // design decisions are explicit that Comms's dearmor path never replies
-  // ("ACKs ride the ack ring, not per-command") -- the transcription
-  // note's own sendError(ErrCode::ERR_DECODE, ...) calls on this path are
-  // deliberately NOT reproduced; a malformed frame is silently counted
-  // (malformedCount_) and surfaced as a Telemetry fault bit
-  // (App::kFaultCommsMalformed, wired live by main.cpp's loop -- ticket
-  // 104-004; ticket 103-005 declared the counter but did NOT wire it),
-  // not answered synchronously.
+  // see comms.h's pump() doc comment. Comms's dearmor path never replies
+  // synchronously (no sendError()/per-command ERR reply): a malformed
+  // frame is silently counted (malformedCount_) and surfaced as a
+  // Telemetry fault bit (App::kFaultCommsMalformed) instead.
   msg::CommandEnvelope decoded;
   const msg::wire::Result r = msg::wire::decode(decoded, rawBuf, static_cast<uint16_t>(rawLen));
   if (!r.ok) {
@@ -129,8 +120,7 @@ void Comms::sendReply(const msg::ReplyEnvelope& reply) {
   if (n == 0) {
     // Unreachable in practice: kMaxEnvelopeBytes is sized from the SAME
     // generated kCommandEnvelopeMaxEncodedSize/kReplyEnvelopeMaxEncodedSize
-    // constants encode() itself is budgeted against -- see the
-    // transcription note's own sendReply() comment.
+    // constants encode() itself is budgeted against.
     return;
   }
 
@@ -145,8 +135,8 @@ void Comms::sendReply(const msg::ReplyEnvelope& reply) {
 
   // Broadcast on BOTH transports every call, via the async/drop-on-full
   // send() path (never sendReliable()) -- telemetry is always-on and must
-  // never stall the loop on backpressure (SUC-005: primary+secondary
-  // frames go out on both transports every cadence).
+  // never stall the loop on backpressure (primary+secondary frames go out
+  // on both transports every cadence).
   serialLink_.send(armored);
   radioLink_.send(armored);
 }

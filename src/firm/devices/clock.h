@@ -1,30 +1,14 @@
 // clock.h — Devices::Clock / Devices::Sleeper: the time/yield seam the
-// loop's own cycle is parameterized on.
+// loop's own cycle is parameterized on. Plain virtual bases (no
+// preprocessor forks); the real ARM implementation lives in
+// microbit_clock.h/.cpp, the host-test fake under tests/.
 //
-// Sprint 108 ticket 010 (clasi/issues/plan-pure-i2cbus-clock-interfaces-a-
-// real-simplant-simulator.md, Stage 5). These used to be concrete classes
-// with an `#ifdef HOST_BUILD` fork inside the SAME header (a scripted-fake
-// member/method surface compiled in for host tests, the real CODAL wrapper
-// compiled in for ARM). They are now plain virtual bases — same style as
-// `App::Transport` (source/app/comms.h), `Devices::MotorArmor`
-// (source/devices/motor_armor.h), and `Devices::I2CBus`
-// (source/devices/i2c_bus.h, sprint 108 ticket 001) — so this header never
-// drags in MicroBit.h and has zero preprocessor forks.
+// Design/rationale: DESIGN.md.
 //
-// The real ARM implementation lives in `source/devices/microbit_clock.h/
-// .cpp` (`Devices::MicroBitClock` wraps `system_timer_current_time_us()`;
-// `Devices::MicroBitSleeper` wraps `fiber_sleep()`/`schedule()`). The
-// steppable/inspectable host fake lives in `tests/_infra/sim/sim_clock.h/
-// .cpp` (`TestSim::SimClock`/`TestSim::SimSleeper`) — test infrastructure,
-// not a `source/` concern (mirrors i2c_bus.h's own split: `source/` holds
-// only interfaces + ARM impls).
-//
-// Clock/Sleeper are a SEPARATE seam from I2CBus's own internal fake clock
-// (I2CBus::setClock()/advanceClock(), used only for that class's per-
-// transaction clearance-timer bookkeeping). The loop owns one Clock and one
-// Sleeper instance and uses them for its own cycle-level time reads —
-// publish() stamps, staleness deadlines, cycle pacing — not the bus's
-// clearance windows.
+// Clock/Sleeper are a SEPARATE seam from I2CBus's own internal clearance-
+// timer clock. The loop owns one Clock and one Sleeper instance and uses
+// them for its own cycle-level time reads — publish() stamps, staleness
+// deadlines, cycle pacing — not the bus's clearance windows.
 #pragma once
 #include <cstdint>
 

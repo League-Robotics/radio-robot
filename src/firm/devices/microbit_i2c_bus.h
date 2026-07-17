@@ -1,24 +1,17 @@
 // microbit_i2c_bus.h — Devices::MicroBitI2CBus: the real ARM implementation
-// of Devices::I2CBus, wrapping MicroBitI2C.
-//
-// Sprint 108 ticket 001 split. This class holds the machinery that used to
-// live directly in `Devices::I2CBus` before that header was reduced to a
-// pure interface (source/devices/i2c_bus.h): the MicroBitI2C& member,
+// of Devices::I2CBus, wrapping MicroBitI2C. Holds the MicroBitI2C& member,
 // re-entrancy guard, lazy preClear/postClear clearance timers, per-device
-// stats, the transaction ring log, and the IRQ guard. Moved verbatim from
-// the old i2c_bus.cpp/.h (ticket DB-003, device-bus-tickets.md) — no
-// behavior change, only the class name and file split.
+// stats, the transaction ring log, and the IRQ guard.
 //
-// Behavior is otherwise ported verbatim, in particular the IRQ guard
-// default-ON (non-negotiable — `.claude/rules/naming-and-style.md`'s "Armor
-// stays intact" precedent, and the nRF52 TWIM errata NRF52I2C::waitForStop
-// documents) and the lazy preClear/postClear clearance timers.
+// The IRQ guard defaults ON — non-negotiable (the nRF52 TWIM errata
+// NRF52I2C::waitForStop documents; see class comments below).
 //
-// All four device leaves this subsystem owns (Motor, Otos, LineSensorLeaf,
-// ColorSensorLeaf) route their bus traffic through this wrapper (held via
-// an `I2CBus&` reference) so every transaction is counted, errors are
-// tracked, and potential re-entrancy violations are captured — without
-// changing the semantics of any transaction.
+// Every device leaf (Motor, Otos, LineSensorLeaf, ColorSensorLeaf) routes
+// its bus traffic through this wrapper (held via an `I2CBus&` reference)
+// so every transaction is counted, errors are tracked, and potential
+// re-entrancy violations are captured.
+//
+// Design/rationale: DESIGN.md.
 //
 // Re-entrancy guard (diagnostic, NOT a lock):
 //   inUse_ is checked and set atomically via target_disable_irq() /
@@ -41,10 +34,7 @@
 //   kMaxDevices-1) so the table never overflows.
 //
 // Usage: one MicroBitI2CBus instance, owned by main(), constructed before
-// any device leaf and passed to each by reference (as an `I2CBus&`) —
-// mirrors the ported source's own `static I2CBus bus(uBit.i2c);` usage
-// note, now `static Devices::MicroBitI2CBus bus(uBit.i2c);` (source/
-// main.cpp).
+// any device leaf and passed to each by reference (as an `I2CBus&`).
 //
 // Thread safety:
 //   The inUse_ flag window is intentionally narrow (3-4 instructions) so the
