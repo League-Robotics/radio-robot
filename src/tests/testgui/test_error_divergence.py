@@ -8,12 +8,20 @@ stack (SimTransport + TraceModel, tickets 083-001/002/003 together, not in
 isolation) exactly the way an operator would from the GUI:
 
 1. Connect a real ``SimTransport`` (ctypes sim, ticket 083-001).
-2. Drive forward with ``S 200 200`` (097: ``DEV DT VW``/``DEV DT PORTS`` --
-   the wire strings ``KeyboardDriver`` used pre-097 -- have no binary arm
-   and never will; the legacy ``DEV`` debug command family was retired
-   along with the rest of the text plane. ``S`` is translated to a binary
-   ``CommandEnvelope{drive: DrivetrainCommand{wheels}}`` and commands
-   ``Drivetrain`` directly, the same as ``DEV DT VW`` did).
+2. Drive forward via ``transport.protocol.twist(v_x, omega, duration)``
+   (109-002: ``transport.send("S 200 200")`` no longer drives anything --
+   Architecture Revision 1 (``sprint.md``, this ticket's sprint) found
+   ``binary_bridge.translate_command()`` is a universal dead stub on EVERY
+   transport, hardware included, ever since ``legacy_render``/
+   ``legacy_verbs`` were deleted by commit ``129cbcb3``; ``SimTransport``'s
+   own ``_dispatch()`` never routes through it either and has no ``"S"``
+   verb handling of its own -- see ``transport.py``'s ``_MOTION_VERBS``.
+   ``SimLoop``/``SimTransport.protocol`` directly satisfies
+   ``planner.executor.TwistTransport`` -- ``twist(v_x, omega, duration)`` is
+   the real, live mechanism every other direct-motion caller in this tree
+   already uses (``SimTransport._run_motion_async()``,
+   ``NezhaProtocol.twist()`` on hardware) -- so this test now calls it
+   directly instead of a dead text-verb round trip).
 3. Apply a nonzero ``enc_scale_err_l`` error profile via
    ``SimTransport.apply_error_profile()`` (ticket 083-001).
 4. Tick the sim forward in real time and feed telemetry into a
@@ -67,13 +75,15 @@ import pytest
 from robot_radio.testgui.transport import SimTransport, _sim_lib_path
 from robot_radio.testgui.traces import TraceModel
 
-pytestmark = pytest.mark.skip(
-    reason="108-007: enc_scale_err_l has no robot_radio.io.sim_loop.SimLoop "
-           "setter at all in the current 19-symbol sim_ctypes.cpp ABI (narrowed "
-           "from the deleted ~40-symbol SimConnection one) -- see "
-           "clasi/issues/sim-transport-command-set-get-not-supported.md and "
-           "sim_prefs.py's own module docstring for the full mapping.",
-)
+# 109-002: un-skipped. ``enc_scale_err_l`` now has a real ``SimLoop``
+# setter (``set_enc_scale_err()``, backed by ``sim_ctypes.cpp``'s new
+# ``sim_set_enc_scale_err()`` -> ``SimPlant::setEncScaleErr()`` ->
+# ``WheelPlant::setScaleErr()``) -- see ``sim_prefs.py``'s and
+# ``transport.py``'s ``_apply_profile_to_sim()``'s own docstrings for the
+# mapping. This test also needed its OWN drive call fixed (see module
+# docstring's step 2) -- ``transport.send("S 200 200")`` was independently
+# dead (a universal ``binary_bridge.translate_command()`` stub, unrelated
+# to the enc_scale_err_l gap this skip reason used to cite).
 
 _WAIT_TIMEOUT_S = 10.0
 _POLL_INTERVAL_S = 0.02
@@ -157,9 +167,12 @@ def test_enc_scale_err_separates_encoder_trace_from_camera_truth(
     # defaults[key])` per field).
     transport.apply_error_profile({"enc_scale_err_l": _ENC_SCALE_ERR_L})
 
-    # 097: DEV DT VW/PORTS have no binary arm (see module docstring) --
-    # drive forward via the binary-translated S verb instead.
-    transport.send("S 200 200")
+    # 109-002: drive forward directly via TwistTransport.twist() (see
+    # module docstring's step 2 for why "S 200 200" no longer works) --
+    # v_x=200mm/s, omega=0 matches the old "S 200 200" (both wheels
+    # 200mm/s, straight). duration is generous (well beyond this test's
+    # own wait timeouts) so the deadman never disarms mid-test.
+    transport.protocol.twist(200.0, 0.0, 15000.0)
 
     assert _wait_until(lambda: len(model.encoder) >= _MIN_TRACE_POINTS), (
         f"encoder trace only reached {len(model.encoder)} points within "

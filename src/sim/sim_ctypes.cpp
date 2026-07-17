@@ -86,6 +86,10 @@
 //   void sim_set_wheel_freeze(SimHandle h, int port, int freeze);              // 1/0
 //   void sim_set_wheel_dropout_rate(SimHandle h, int port, float fraction);    // [0,1]
 //   void sim_set_otos_drift(SimHandle h, float xDrift, float yDrift, float headingDrift);  // [mm][mm][rad]
+//   void sim_set_enc_scale_err(SimHandle h, int port, float fraction);  // fractional over/under-report (109-002)
+//   void sim_set_otos_raw_scale_err(SimHandle h, float linearFraction, float angularFraction);  // fractional over/under-report, 0=perfect (109-007)
+//   void sim_set_enc_tick_quant(SimHandle h, int port, float tickSizeMm);  // [mm] (109-007)
+//   void sim_set_enc_slip(SimHandle h, int port, float rate, float magnitudeMm);  // [0,1] [mm] (109-007)
 //
 // ---- Hook surface -- THE point of this sprint's scripting model ----
 // (master plan's Target architecture, verbatim; see sim_plant.h's own
@@ -242,6 +246,45 @@ void sim_set_wheel_dropout_rate(SimHandle h, int port, float fraction) {
 
 void sim_set_otos_drift(SimHandle h, float xDrift, float yDrift, float headingDrift) {
   asHarness(h)->plant().setOtosDrift(xDrift, yDrift, headingDrift);
+}
+
+void sim_set_enc_scale_err(SimHandle h, int port, float fraction) {
+  asHarness(h)->plant().setEncScaleErr(port, fraction);
+}
+
+void sim_set_otos_raw_scale_err(SimHandle h, float linearFraction, float angularFraction) {
+  asHarness(h)->plant().setOtosRawScaleErr(linearFraction, angularFraction);
+}
+
+void sim_set_enc_tick_quant(SimHandle h, int port, float tickSizeMm) {
+  asHarness(h)->plant().setEncTickQuantization(port, tickSizeMm);
+}
+
+void sim_set_enc_slip(SimHandle h, int port, float rate, float magnitudeMm) {
+  asHarness(h)->plant().setEncSlip(port, rate, magnitudeMm);
+}
+
+// 109-010: rate-sweep characterization harness hook -- see SimHarness::
+// setLeadCompensation()'s own doc comment (sim_harness.h) for why this is a
+// sim-only ctypes path (no wire PlannerConfigPatch arm for these three
+// fields; they are boot-baked-default-only).
+void sim_set_lead_compensation(SimHandle h, float headingLeadBias, float planLead,
+                                float terminalLead) {
+  asHarness(h)->setLeadCompensation(headingLeadBias, planLead, terminalLead);
+}
+
+// 109-010: rate-sweep characterization harness hook -- see SimHarness::
+// setYawRateMax()'s own doc comment.
+void sim_set_yaw_rate_max(SimHandle h, float yawRateMax) {
+  asHarness(h)->setYawRateMax(yawRateMax);
+}
+
+// 109-010 diagnostic-only export -- see SimHarness::debugHeadingLead()'s own
+// doc comment. TEMPORARY characterization instrumentation.
+void sim_debug_heading_lead(SimHandle h, int* usingOtos, float* heading, float* headingLead) {
+  bool u = false;
+  asHarness(h)->debugHeadingLead(&u, heading, headingLead);
+  *usingOtos = u ? 1 : 0;
 }
 
 // ---- Hook surface ----

@@ -32,6 +32,8 @@ constexpr int kNezhaFrameLen = 8;
 constexpr uint8_t kOtosDeviceAddr = 0x17;                                  // 7-bit
 constexpr uint16_t kOtosWireAddr = static_cast<uint16_t>(kOtosDeviceAddr << 1);
 constexpr uint8_t kOtosRegProductId = 0x00;
+constexpr uint8_t kOtosRegLinearScalar = 0x04;   // 109-007 -- see handleOtosWrite()
+constexpr uint8_t kOtosRegAngularScalar = 0x05;  // 109-007 -- see handleOtosWrite()
 constexpr uint8_t kOtosRegPositionXl = 0x20;
 constexpr uint8_t kOtosExpectedProductId = 0x5F;
 constexpr float kPosMmPerLsb = 0.305f;                              // [mm/LSB]
@@ -157,6 +159,23 @@ int SimPlant::handleOtosWrite(uint8_t* data, int len) {
   // bytes (data[1..]) -- SimPlant's OtosPlant is driven purely from wheel
   // positions (architecture-update.md Decision 3), never from a write.
   otosRegPtr_ = data[0];
+  // 109-007: the ONE exception to "swallow every OTOS write payload" above
+  // -- a write to the chip's own linear/angular calibration-scalar
+  // registers (the REAL Devices::Otos::setLinearScalar()/setAngularScalar()
+  // wire path, driven by begin()'s boot-config push, a live OtosConfigPatch,
+  // or the OL/OA text verb) is captured and applied to this plant's
+  // OtosPlant, so a firmware-pushed calibration genuinely corrects the
+  // raw-scale-error fault knob's effect on subsequent reads (see
+  // otos_plant.h's own setLinearScalarReg()/setAngularScalarReg() comment).
+  // This is NOT a second, independent model of chip behavior -- it is the
+  // exact register the real chip documents multiplying its raw measurement
+  // by, ported here the same way handleOtosRead() already ports the
+  // POSITION_XL+VELOCITY_XL burst layout.
+  if (len >= 2 && otosRegPtr_ == kOtosRegLinearScalar) {
+    otos_.setLinearScalarReg(static_cast<int8_t>(data[1]));
+  } else if (len >= 2 && otosRegPtr_ == kOtosRegAngularScalar) {
+    otos_.setAngularScalarReg(static_cast<int8_t>(data[1]));
+  }
   return kOk;
 }
 
@@ -174,15 +193,27 @@ int SimPlant::handleOtosRead(uint8_t* data, int len) {
     // here directly since there is no I2CBus FIFO left for a
     // scriptPoseResponse()-style helper to target. reportedX/Y/Heading()
     // (not the bare x()/y()/heading() ground truth) apply OtosPlant's own
-    // drift/bias fault knob. Velocity registers are always zero -- no
-    // scenario in this ticket asserts on OTOS's twist.
+    // drift/bias fault knob.
     int16_t rx = static_cast<int16_t>(std::lround(otos_.reportedX() / kPosMmPerLsb));
     int16_t ry = static_cast<int16_t>(std::lround(otos_.reportedY() / kPosMmPerLsb));
     int16_t rh = static_cast<int16_t>(std::lround(otos_.reportedHeading() / kHdgRadPerLsb));
     writeLeInt16(data + 0, rx);
     writeLeInt16(data + 2, ry);
     writeLeInt16(data + 4, rh);
-    for (int i = 6; i < 12; ++i) data[i] = 0;
+    // 109-010: VELOCITY_XL's own angular-rate word (rvh, decoded by
+    // Devices::Otos::readPositionVelocity() as `whF` -- see that method's
+    // own "reuses the SAME kPosMmPerLsb/kHdgRadPerLsb" comment for why the
+    // SAME kHdgRadPerLsb scale applies here too) is now OtosPlant::omega(),
+    // a real finite-difference rate estimate -- App::HeadingSource's own
+    // measurement-age projection (locus 1) needs a real omega_meas to
+    // characterize/validate at all; before this ticket this word was
+    // always zero ("no scenario asserts on OTOS's twist" -- ticket 010 is
+    // the first that does). Linear velocity (rvx/rvy) stays zero -- no
+    // consumer of this ticket's own three lead-compensation loci reads
+    // pose().v_x/v_y, only pose().omega.
+    int16_t rvh = static_cast<int16_t>(std::lround(otos_.omega() / kHdgRadPerLsb));
+    for (int i = 6; i < 10; ++i) data[i] = 0;  // rvx, rvy -- unmodeled, see above
+    writeLeInt16(data + 10, rvh);
     return kOk;
   }
   // Any other register pointer -- zeros, ACK.
@@ -197,7 +228,7 @@ int SimPlant::handleOtosRead(uint8_t* data, int len) {
 void SimPlant::tick(float dt) {
   left_.step(leftDuty_, dt);
   right_.step(rightDuty_, dt);
-  otos_.step(left_.position(), right_.position());
+  otos_.step(left_.position(), right_.position(), dt);  // 109-010: dt drives omega()
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +247,18 @@ void SimPlant::setDropoutRate(int port, float fraction) {
   mutableWheelPlant(port).setDropoutRate(fraction);
 }
 
+void SimPlant::setEncScaleErr(int port, float fraction) {
+  mutableWheelPlant(port).setScaleErr(fraction);
+}
+
+void SimPlant::setEncTickQuantization(int port, float tickSizeMm) {
+  mutableWheelPlant(port).setTickQuantization(tickSizeMm);
+}
+
+void SimPlant::setEncSlip(int port, float rate, float magnitudeMm) {
+  mutableWheelPlant(port).setSlip(rate, magnitudeMm);
+}
+
 void SimPlant::setEncoderJitter(bool enabled) {
   left_.setEncoderJitter(enabled);
   right_.setEncoderJitter(enabled);
@@ -223,6 +266,10 @@ void SimPlant::setEncoderJitter(bool enabled) {
 
 void SimPlant::setOtosDrift(float xDrift, float yDrift, float headingDrift) {
   otos_.setDrift(xDrift, yDrift, headingDrift);
+}
+
+void SimPlant::setOtosRawScaleErr(float linearFraction, float angularFraction) {
+  otos_.setRawScaleErr(linearFraction, angularFraction);
 }
 
 void SimPlant::setTruePose(float x, float y, float heading) {

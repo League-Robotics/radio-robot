@@ -24,23 +24,33 @@ set is ``PING``/``VER``/``HELP``/``ECHO``/``ID``/``STREAM``/``SNAP``/
 (sprint 081/082's ~40-symbol ctypes ABI) onto
 ``robot_radio.io.sim_loop.SimLoop`` (108-005/006's real, 19-symbol
 ``sim_ctypes.cpp`` ABI over ``TestSim::SimHarness``/``TestSim::SimPlant``).
-The new ABI backs FAR fewer fault-condition knobs than the old one did --
-``SimLoop`` exposes exactly four fault setters (``set_wheel_disconnected``/
+The new ABI backed FAR fewer fault-condition knobs than the old one did --
+``SimLoop`` exposed exactly four fault setters (``set_wheel_disconnected``/
 ``set_wheel_freeze``/``set_wheel_dropout_rate``/``set_otos_drift``), of
-which only ``set_otos_drift`` maps onto any key below at all (the
-``otos_lin_drift``/``otos_yaw_drift`` pair, combined into one call). Every
-other key in this module has NO ``SimLoop`` setter backing it -- applying
-is skipped outright and a ``[WARN]`` is logged if the profile carries a
-non-neutral value for it. ``PROFILE_TO_SIM_SETTER`` (below) is therefore
-now EMPTY: there is no remaining profile key with a bare 1:1
-(key -> single-arg setter) mapping onto ``SimLoop`` -- the one real mapping
-that exists (``otos_lin_drift``/``otos_yaw_drift``) needs its two keys
-combined into one three-argument ``set_otos_drift(x_drift, y_drift,
-heading_drift)`` call, so it is handled as a special case in
-``transport.py``'s ``SimTransport._apply_profile_to_sim()`` instead, the
-same way ``enc_scale_err_l``/``enc_scale_err_r`` was special-cased under
-the deleted ABI. See that method's own docstring for the authoritative,
-narrowed mapping.
+which only ``set_otos_drift`` mapped onto any key below (the
+``otos_lin_drift``/``otos_yaw_drift`` pair, combined into one call).
+
+109-002 added a FIFTH setter, ``set_enc_scale_err(port, fraction)``, giving
+``enc_scale_err_l``/``enc_scale_err_r`` a real 1:1 mapping each (port
+1=left, 2=right) -- see ``transport.py``'s
+``SimTransport._apply_profile_to_sim()`` for the actual calls.
+
+109-007 added a SIXTH, ``set_otos_raw_scale_err(linear, angular)``, giving
+``otos_lin_scale_err``/``otos_ang_scale_err`` a real, combined mapping
+(models a physically mis-calibrated OTOS chip; a firmware-pushed OL/OA
+calibration scalar corrects it back out).
+
+Every OTHER key in this module still has NO ``SimLoop`` setter backing it
+-- applying is skipped outright and a ``[WARN]`` is logged if the profile
+carries a non-neutral value for it. ``PROFILE_TO_SIM_SETTER`` (below) stays
+EMPTY: even ``enc_scale_err_l/r``'s mapping is a port-keyed call and
+``otos_lin_scale_err``/``otos_ang_scale_err``'s is a two-keys-combined
+call, neither a bare 1:1 (key -> single-arg setter) shape this table's own
+contract expects, so both (like ``otos_lin_drift``/``otos_yaw_drift``
+before them) are handled as a
+special case directly in ``SimTransport._apply_profile_to_sim()`` instead
+of through this table. See that method's own docstring for the
+authoritative, current mapping.
 
 ``encoder_noise``
     Per-side encoder noise sigma, in millimetres. Default ``0.0``. **No
@@ -66,13 +76,17 @@ narrowed mapping.
 Additive/noise terms — ``0.0`` is a genuine no-op:
 
 ``enc_scale_err_l`` / ``enc_scale_err_r``
-    Fractional per-side encoder over/under-report (0 = perfect). **No
-    ``SimLoop`` setter backs either knob** -- applying is skipped, with a
-    ``[WARN]`` logged if either is set away from its neutral ``0.0``.
+    Fractional per-side encoder over/under-report (0 = perfect). 109-002:
+    each maps 1:1 onto ``SimLoop.set_enc_scale_err(port, fraction)``
+    (port 1=left, 2=right) -- see ``transport.py``'s
+    ``SimTransport._apply_profile_to_sim()`` for the actual calls.
 ``otos_lin_scale_err`` / ``otos_ang_scale_err``
-    Fractional OTOS linear/angular scale error (0 = perfect). **No
-    ``SimLoop`` setter backs either knob** -- applying is skipped, with a
-    ``[WARN]`` logged if either is set away from its neutral ``0.0``.
+    Fractional OTOS linear/angular scale error (0 = perfect) -- models a
+    physically MIS-calibrated OTOS chip. 109-007: combined into a single
+    ``SimLoop.set_otos_raw_scale_err(linear, angular)`` call (see
+    ``transport.py``'s ``SimTransport._apply_profile_to_sim()``) -- a
+    firmware-pushed OL/OA calibration scalar corrects the injected error
+    back out (``SimPlant::handleOtosWrite()``'s new register-write path).
 ``otos_lin_drift`` / ``otos_yaw_drift``
     OTOS linear/yaw drift. THE ONE surviving mapping: combined into a
     single ``SimLoop.set_otos_drift(otos_lin_drift, 0.0, otos_yaw_drift)``
@@ -124,8 +138,17 @@ from pathlib import Path
 _log = logging.getLogger(__name__)
 
 # src/host/robot_radio/testgui/sim_prefs.py -> repo root (same depth as
-# src/host/robot_radio/testgui/camera_prefs.py's _PROJECT_ROOT).
-_PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+# src/host/robot_radio/testgui/camera_prefs.py's _PROJECT_ROOT). 109-002
+# fix: FIVE hops from __file__ (testgui/robot_radio/host/src/repo-root),
+# not four -- the "unify all source trees under src/" refactor (commit
+# 575ef391) added one path-depth level without updating this constant, so
+# it silently pointed at src/data/testgui/ instead of the real
+# data/testgui/ (masked in every test here, which monkeypatches
+# _PREFS_DIR/_PREFS_PATH directly rather than exercising this constant).
+# See canvas.py's own _HERE/_SRC/_REPO (fixed for this identical off-by-one
+# by ticket 107-004) and robot_config.py's _PROJECT_ROOT (109-002's other
+# instance of the same bug).
+_PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
 _PREFS_DIR = _PROJECT_ROOT / "data" / "testgui"
 _PREFS_PATH = _PREFS_DIR / "sim_error_profile.json"
 

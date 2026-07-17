@@ -158,6 +158,20 @@ def test_tour_shaped_sequence_via_direct_twist_calls_drives_and_closes(sim_trans
 # seeded ±1 LSB dither in WheelPlant::reportedPosition()'s nominal branch --
 # see src/tests/sim/plant/wheel_plant.{h,cpp}). This test now runs for real, no
 # xfail.
+#
+# 109-008: `run_tour()` itself was rewired onto the MOVE-queue path this
+# ticket (one `Move` per leg, firmware-owned queue/boundary-carry/heading PD
+# -- see `planner/tour.py`'s own file header). This is also this ticket's
+# own verification of `tour1-freeze-investigation-2026-07-15.md`: that
+# investigation's verdict was a real `kFaultWedgeLatch` firmware fault
+# tripping the OLD path's own "stop the whole tour on any nonzero fault_bits"
+# polling -- the new path has no such polling at all (a leg's own outcome is
+# driven solely by that Move's own terminal ack-ring status), so a transient
+# fault bit can no longer freeze/stop a tour on its own. This test running
+# TOUR_1 to completion end to end over the real compiled firmware sim is the
+# concrete demonstration that the boundary crossings (13 legs, 6 straight-
+# >turn/turn->straight transitions) do not reproduce the freeze symptom on
+# this path.
 # ---------------------------------------------------------------------------
 
 _MAX_TOUR_ATTEMPTS = 5
@@ -166,6 +180,21 @@ _MAX_CLOSURE_POSITION_MM = 600.0  # [mm] -- see the direct-twist test's own
 # COMPLETED cleanly. This only catches an implausible blowup.
 
 
+# 109-009 (round 2, resolved): this test regressed to a consistent leg-12
+# STOP_TIME fault after round 1's completion-gate fixes landed (see
+# clasi/issues/tour1-via-simtransport-leg12-stop-time-regression.md for the
+# full history) -- the xfail below is REMOVED, not just loosened, because
+# round 2 found and fixed the actual root cause: `Motion::Executor`'s dwell
+# gate combined (1) a hard reset-to-zero on any single tolerance/rate miss
+# with (2) a rate test built on a RAW one-sample finite-difference
+# derivative, which is highly sensitive to per-cycle heading-measurement
+# noise. Fixed with a leaky/decaying hold counter (a miss now costs one
+# cycle, not the whole accumulated hold) plus a light exponential low-pass
+# filter on the rate estimate the dwell gate itself uses (see
+# `motion/executor.cpp`'s own dwell-completion comment and `motion/
+# DESIGN.md`'s dwell-completion entry). Verified: this test now passes
+# reliably (3/3 repeated pytest invocations, each with its own fresh
+# SimTransport connection) -- see the issue file's own resolution note.
 def test_tour_1_runs_to_completion_with_finite_small_closure(sim_transport):
     """The programmatic equivalent of "press Tour 1 and watch the trace
     draw": every leg of TOUR_1 runs to completion (RunOutcome.COMPLETED)

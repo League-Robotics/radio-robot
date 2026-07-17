@@ -191,6 +191,27 @@ bool decodeTelemetryMessage(const uint8_t* buf, size_t len, msg::Telemetry* out)
       case 22:
         if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->event_bits)) return false;
         break;
+      case 23:
+        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->queue_depth)) return false;
+        break;
+      case 24:
+        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->active_id)) return false;
+        break;
+      case 25: {
+        if (wireType != WireType::kVarint) return false;
+        uint32_t v = 0;
+        if (!readVarintU32(buf, len, &pos, &v)) return false;
+        out->exec_state = static_cast<msg::ExecutorState>(v);
+        break;
+      }
+      case 26: {
+        // heading_source (109-005, SUC-004).
+        if (wireType != WireType::kVarint) return false;
+        uint32_t v = 0;
+        if (!readVarintU32(buf, len, &pos, &v)) return false;
+        out->heading_source = static_cast<msg::HeadingSourceStatus>(v);
+        break;
+      }
       default:
         if (!WireRuntime::skipField(buf, len, &pos, wireType)) return false;
         break;
@@ -340,6 +361,40 @@ size_t encodeStopEnvelope(uint32_t corrId, uint8_t* buf, size_t cap) {
   return pos;
 }
 
+bool encodeBoolField(uint32_t fieldNumber, bool value, uint8_t* buf, size_t cap, size_t* pos) {
+  if (!value) return true;  // proto3 implicit presence
+  if (!WireRuntime::encodeTag(fieldNumber, WireType::kVarint, buf, cap, pos)) return false;
+  return WireRuntime::encodeVarint(1, buf, cap, pos);
+}
+
+// Encodes {distance, delta_heading, v_max, omega, time, replace, id} into
+// `scratch` (msg::Move's own field order, envelope.proto), wraps it as
+// CommandEnvelope field 20 (move, length-delimited oneof arm), then field 1
+// (corr_id) if nonzero.
+size_t encodeMoveEnvelope(float distance, float deltaHeading, float vMax, float omega,
+                          float timeMs, bool replace, uint32_t id, uint32_t corrId, uint8_t* buf,
+                          size_t cap) {
+  size_t pos = 0;
+  if (!encodeVarintField(1, corrId, buf, cap, &pos)) return 0;
+
+  uint8_t scratch[48];
+  size_t scratchPos = 0;
+  if (!encodeFloatField(1, distance, scratch, sizeof(scratch), &scratchPos)) return 0;
+  if (!encodeFloatField(2, deltaHeading, scratch, sizeof(scratch), &scratchPos)) return 0;
+  if (!encodeFloatField(3, vMax, scratch, sizeof(scratch), &scratchPos)) return 0;
+  if (!encodeFloatField(4, omega, scratch, sizeof(scratch), &scratchPos)) return 0;
+  if (!encodeFloatField(5, timeMs, scratch, sizeof(scratch), &scratchPos)) return 0;
+  if (!encodeBoolField(6, replace, scratch, sizeof(scratch), &scratchPos)) return 0;
+  if (!encodeVarintField(7, id, scratch, sizeof(scratch), &scratchPos)) return 0;
+
+  if (!WireRuntime::encodeTag(20, WireType::kLengthDelimited, buf, cap, &pos)) return 0;
+  if (!WireRuntime::encodeVarint(scratchPos, buf, cap, &pos)) return 0;
+  if (cap - pos < scratchPos) return 0;
+  std::memcpy(buf + pos, scratch, scratchPos);
+  pos += scratchPos;
+  return pos;
+}
+
 std::string armor(const uint8_t* raw, size_t rawLen) {
   char b64[512] = {};
   size_t b64Len = 0;
@@ -395,6 +450,15 @@ std::string armorTwistCommand(float v_x, float omega, float duration, uint32_t c
 std::string armorStopCommand(uint32_t corrId) {
   uint8_t rawBuf[32];
   size_t n = encodeStopEnvelope(corrId, rawBuf, sizeof(rawBuf));
+  if (n == 0) return std::string();
+  return armor(rawBuf, n);
+}
+
+std::string armorMoveCommand(float distance, float deltaHeading, float vMax, float omega,
+                              float timeMs, bool replace, uint32_t id, uint32_t corrId) {
+  uint8_t rawBuf[128];
+  size_t n = encodeMoveEnvelope(distance, deltaHeading, vMax, omega, timeMs, replace, id, corrId,
+                                 rawBuf, sizeof(rawBuf));
   if (n == 0) return std::string();
   return armor(rawBuf, n);
 }

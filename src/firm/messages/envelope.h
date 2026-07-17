@@ -53,6 +53,19 @@ struct Stop {
     // --- array / optional-string accessors ---
 };
 
+// Move
+struct Move {
+    float distance = 0.0f;
+    float delta_heading = 0.0f;
+    float v_max = 0.0f;
+    float omega = 0.0f;
+    float time = 0.0f;
+    bool replace = false;
+    uint32_t id = 0;
+
+    // --- array / optional-string accessors ---
+};
+
 // ConfigDelta
 struct ConfigDelta {
     enum class PatchKind : uint8_t {
@@ -61,6 +74,7 @@ struct ConfigDelta {
         MOTOR = 2,
         PLANNER = 3,
         WATCHDOG = 4,
+        OTOS = 5,
     };
     PatchKind patch_kind = PatchKind::NONE;
     union {
@@ -68,6 +82,7 @@ struct ConfigDelta {
         MotorConfigPatch motor;
         PlannerConfigPatch planner;
         uint32_t watchdog;
+        OtosConfigPatch otos;
     } patch = {};
 
 
@@ -81,12 +96,14 @@ struct CommandEnvelope {
         CONFIG = 1,
         STOP = 2,
         TWIST = 3,
+        MOVE = 4,
     };
     CmdKind cmd_kind = CmdKind::NONE;
     union {
         ConfigDelta config;
         Stop stop;
         Twist twist;
+        Move move;
     } cmd = {};
 
     uint32_t corr_id = 0;

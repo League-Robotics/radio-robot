@@ -122,6 +122,19 @@ class SimPlant : public Devices::I2CBus {
   void freezePosition(int port, bool freeze);
   void setDropoutRate(int port, float fraction);  // [0,1]
 
+  // Encoder scale error (109-002, SimTransport config path ticket): fans out
+  // to the selected port's WheelPlant::setScaleErr() -- see that method's own
+  // comment. port numbering matches the three knobs above (1=left, 2=right).
+  void setEncScaleErr(int port, float fraction);  // [fractional over/under-report]
+
+  // Encoder tick quantization + slip events (109-007, encoder-error-model
+  // half of sim-honors-otos-calibration.md): fan out to the selected port's
+  // WheelPlant::setTickQuantization()/setSlip() -- see those methods' own
+  // comments (wheel_plant.h). Same port numbering as every other per-port
+  // knob above (1=left, 2=right).
+  void setEncTickQuantization(int port, float tickSizeMm);  // [mm]
+  void setEncSlip(int port, float rate, float magnitudeMm); // [0,1] [mm]
+
   // Rest-encoder jitter (108-011) -- fans out to BOTH WheelPlants (left and
   // right); there is no per-port knob here, unlike the three fault-injection
   // knobs above, because jitter is a plant-fidelity default for a whole
@@ -133,6 +146,15 @@ class SimPlant : public Devices::I2CBus {
   // OTOS drift/bias -- deterministic, per OtosPlant::setDrift()'s own
   // comment (no RNG anywhere in either plant).
   void setOtosDrift(float xDrift, float yDrift, float headingDrift);  // [mm] [mm] [rad]
+
+  // Raw OTOS scale error (109-007): fans out to OtosPlant::setRawScaleErr()
+  // -- see that method's own comment. Fractional over/under-report, 0=perfect
+  // (default). This models the physically mis-calibrated chip; the
+  // firmware's own OtosConfigPatch-pushed calibration scalar (captured by
+  // handleOtosWrite() below, via the REAL Devices::Otos::setLinearScalar()/
+  // setAngularScalar() write path) corrects it back -- see otos_plant.h's
+  // own setLinearScalarReg()/setAngularScalarReg() comment.
+  void setOtosRawScaleErr(float linearFraction, float angularFraction);  // [fractional over/under-report, 0=perfect]
 
   // Plant teleport (sim command-surface fix): snaps the OtosPlant's ground-
   // truth pose to (x, y, heading) AND resets both WheelPlants' positions to

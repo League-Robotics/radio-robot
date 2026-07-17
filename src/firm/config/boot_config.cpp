@@ -143,6 +143,23 @@ msg::PlannerConfig defaultPlannerConfig() {
     cfg.setHandoffTolV(0.14f);            // [s]
     cfg.setArriveVelTol(15.0f);           // [mm/s]
     cfg.setArriveDwell(0.15f);             // [s]
+
+    // 109-005: App::HeadingSource per-robot policy override + the heading-
+    // dwell completion gate. heading_source baked from the robot JSON's
+    // control.heading_source ("auto"/"otos"/"encoder"); the dwell
+    // tolerance/rate are firmware defaults today (no robot-JSON key yet --
+    // see heading_dwell_for_config()'s own comment).
+    cfg.setHeadingSource(msg::HeadingSourceMode::HEADING_SOURCE_AUTO);
+    cfg.setHeadingDwellTol(0.008726646f);        // [rad]
+    cfg.setHeadingDwellRate(0.01745329f);       // [rad/s]
+
+    // 109-010: three independently-tunable lead-compensation Δt's, fitted
+    // from the rate-sweep regression -- see planner.proto's own field
+    // comments and src/firm/motion/DESIGN.md's "Turn-error characterization"
+    // entry for the full derivation.
+    cfg.setHeadingLeadBias(-0.05f);        // [s] locus 1
+    cfg.setPlanLead(0.0f);                // [s] locus 2
+    cfg.setTerminalLead(0.0f);           // [s] locus 3
     return cfg;
 }
 

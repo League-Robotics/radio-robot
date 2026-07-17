@@ -58,8 +58,11 @@ from pathlib import Path
 _log = logging.getLogger(__name__)
 
 # src/host/robot_radio/testgui/camera_prefs.py -> repo root (same depth as
-# src/host/robot_radio/config/robot_config.py's _PROJECT_ROOT).
-_PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+# src/host/robot_radio/config/robot_config.py's _PROJECT_ROOT). 109-002 fix:
+# FIVE hops from __file__, not four -- see robot_config.py's own
+# _PROJECT_ROOT comment for the full off-by-one explanation (the "unify all
+# source trees under src/" refactor, commit 575ef391).
+_PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
 _PREFS_DIR = _PROJECT_ROOT / "data" / "testgui"
 _PREFS_PATH = _PREFS_DIR / "camera_prefs.json"
 

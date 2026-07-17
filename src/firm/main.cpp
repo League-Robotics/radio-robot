@@ -9,7 +9,9 @@
 #include "app/comms.h"
 #include "app/deadman.h"
 #include "app/drive.h"
+#include "app/heading_source.h"
 #include "app/odometry.h"
+#include "app/pilot.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
 #include "app/telemetry.h"
@@ -24,6 +26,7 @@
 #include "devices/line_sensor.h"
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
+#include "motion/executor.h"
 
 static MicroBit uBit;
 
@@ -118,10 +121,22 @@ int main() {
   static App::Odometry odom(motorL, motorR, drivetrainConfig.trackwidth);
   static App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
+  // Motion::Executor + App::HeadingSource + App::Pilot (109-003/109-005) --
+  // configured from the same boot PlannerConfig defaults the pre-rebuild
+  // segment executor used (Config::defaultPlannerConfig(),
+  // config/boot_config.h).
+  msg::PlannerConfig plannerConfig = Config::defaultPlannerConfig();
+  static Motion::Executor executor;
+  executor.configure(plannerConfig);
+  static App::HeadingSource headingSource(otos, motorL, motorR, drivetrainConfig.trackwidth);
+  headingSource.configure(plannerConfig);
+  static App::Pilot pilot(executor, drive, headingSource, odom);
+  pilot.configureHeading(plannerConfig);
+
   // Boot loop + main cycle -- takes every leaf/app module above by
   // reference plus the Clock/Sleeper time seam. run() never returns.
   static App::RobotLoop robotLoop(bus, motorL, motorR, otos, comms, tlm,
-                                   drive, odom, deadman, preamble, clock,
-                                   sleeper);
+                                   drive, odom, deadman, preamble, pilot,
+                                   clock, sleeper);
   robotLoop.run();
 }

@@ -279,7 +279,8 @@ def test_config_corr_id_round_trips_through_wait_for_ack():
     ack = proto.wait_for_ack(corr_id, timeout=200)
 
     assert ack == AckEntry(
-        corr_id=corr_id, ok=False, err_code=envelope_pb2.ERR_UNIMPLEMENTED)
+        corr_id=corr_id, ok=False, err_code=envelope_pb2.ERR_UNIMPLEMENTED,
+        status=telemetry_pb2.ACK_STATUS_ERR)
 
 
 def test_config_ack_returns_none_on_timeout_with_no_matching_corr_id():
@@ -288,6 +289,146 @@ def test_config_ack_returns_none_on_timeout_with_no_matching_corr_id():
     corr_id = proto.config(headingKp=6.0)
     # conn.ack_result stays at its default None -- the shared matcher timed
     # out with no matching corr_id (see SerialConnection.wait_for_ack()).
+
+    ack = proto.wait_for_ack(corr_id, timeout=50)
+
+    assert ack is None
+
+
+# ---------------------------------------------------------------------------
+# 4. otos_config() (109-004) -- the OL/OA/OI direct-patch-send builder.
+#    Mirrors config()'s own "one envelope, one patch, fire-and-poll" shape
+#    (section 1/3 above), but for OtosConfigPatch, which config()'s flat
+#    _ALL_SET_KEYS vocabulary never covered (OL/OA/OI were never SET
+#    key=value text verbs).
+# ---------------------------------------------------------------------------
+
+
+def test_otos_config_linear_scale_builds_correct_envelope():
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+
+    corr_id = proto.otos_config(linear_scale=1.05)
+
+    assert corr_id == 1
+    sent = conn.sent[0]
+    expected = envelope_pb2.CommandEnvelope(
+        corr_id=1,
+        config=envelope_pb2.ConfigDelta(
+            otos=config_pb2.OtosConfigPatch(linear_scale=1.05)))
+    assert sent.SerializeToString() == expected.SerializeToString()
+    assert sent.config.WhichOneof("patch") == "otos"
+
+
+def test_otos_config_angular_scale_builds_correct_envelope():
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+
+    proto.otos_config(angular_scale=-0.98)
+
+    sent = conn.sent[0]
+    expected = envelope_pb2.CommandEnvelope(
+        corr_id=1,
+        config=envelope_pb2.ConfigDelta(
+            otos=config_pb2.OtosConfigPatch(angular_scale=-0.98)))
+    assert sent.SerializeToString() == expected.SerializeToString()
+
+
+def test_otos_config_init_builds_correct_envelope():
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+
+    proto.otos_config(init=True)
+
+    sent = conn.sent[0]
+    expected = envelope_pb2.CommandEnvelope(
+        corr_id=1,
+        config=envelope_pb2.ConfigDelta(
+            otos=config_pb2.OtosConfigPatch(init=True)))
+    assert sent.SerializeToString() == expected.SerializeToString()
+
+
+def test_otos_config_offset_fields_build_correct_envelope():
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+
+    proto.otos_config(offset_x=-47.7, offset_y=0.0, offset_yaw=1.5708)
+
+    sent = conn.sent[0]
+    expected = envelope_pb2.CommandEnvelope(
+        corr_id=1,
+        config=envelope_pb2.ConfigDelta(
+            otos=config_pb2.OtosConfigPatch(
+                offset_x=-47.7, offset_y=0.0, offset_yaw=1.5708)))
+    assert sent.SerializeToString() == expected.SerializeToString()
+
+
+def test_otos_config_fields_can_combine_on_one_patch():
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+
+    proto.otos_config(linear_scale=1.05, angular_scale=0.98, init=True)
+
+    sent = conn.sent[0]
+    expected = envelope_pb2.CommandEnvelope(
+        corr_id=1,
+        config=envelope_pb2.ConfigDelta(
+            otos=config_pb2.OtosConfigPatch(
+                linear_scale=1.05, angular_scale=0.98, init=True)))
+    assert sent.SerializeToString() == expected.SerializeToString()
+
+
+def test_otos_config_with_no_fields_raises_value_error():
+    proto = NezhaProtocol(_FakeFastConn())
+
+    with pytest.raises(ValueError):
+        proto.otos_config()
+
+
+def test_otos_config_invalid_call_sends_nothing():
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+
+    with pytest.raises(ValueError):
+        proto.otos_config()
+
+    assert conn.sent == []
+
+
+def test_otos_config_each_call_gets_a_fresh_corr_id():
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+
+    c1 = proto.otos_config(linear_scale=1.05)
+    c2 = proto.otos_config(angular_scale=0.98)
+    c3 = proto.otos_config(init=True)
+
+    assert [c1, c2, c3] == [1, 2, 3]
+    assert len(conn.sent) == 3
+
+
+def test_otos_config_corr_id_round_trips_through_wait_for_ack():
+    """End-to-end shape of an otos_config() call: send, then confirm
+    receipt via the SAME ack-ring matcher config()/twist()/stop() already
+    use. Unlike config()'s ERR_UNIMPLEMENTED-for-everything-but-MOTOR
+    scripting, RobotLoop::handleConfig DOES apply OTOS live (see that
+    method's own comment) -- scripts a real ACK_STATUS_OK."""
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+    corr_id = proto.otos_config(linear_scale=1.05)
+
+    conn.ack_result = telemetry_pb2.AckEntry(
+        corr_id=corr_id, status=telemetry_pb2.ACK_STATUS_OK)
+
+    ack = proto.wait_for_ack(corr_id, timeout=200)
+
+    assert ack == AckEntry(corr_id=corr_id, ok=True, err_code=0)
+
+
+def test_otos_config_ack_returns_none_on_timeout_with_no_matching_corr_id():
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+    corr_id = proto.otos_config(init=True)
 
     ack = proto.wait_for_ack(corr_id, timeout=50)
 

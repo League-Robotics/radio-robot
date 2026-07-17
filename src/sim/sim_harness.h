@@ -75,7 +75,9 @@
 #include "app/comms.h"
 #include "app/deadman.h"
 #include "app/drive.h"
+#include "app/heading_source.h"
 #include "app/odometry.h"
+#include "app/pilot.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
 #include "app/telemetry.h"
@@ -85,6 +87,7 @@
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "fake_transport.h"
+#include "motion/executor.h"
 #include "sim_clock.h"
 #include "sim_plant.h"
 #include "wire_test_codec.h"
@@ -114,8 +117,24 @@ class SimHarness {
         drive_(motorL_, motorR_, trackWidth),
         odom_(motorL_, motorR_, trackWidth),
         preamble_(motorL_, motorR_, otos_, color_, line_, clock_),
+        headingSource_(otos_, motorL_, motorR_, trackWidth),
+        pilot_(executor_, drive_, headingSource_, odom_),
         robotLoop_(plant_, motorL_, motorR_, otos_, comms_, tlm_, drive_, odom_,
-                   deadman_, preamble_, clock_, sleeper_) {
+                   deadman_, preamble_, pilot_, clock_, sleeper_) {
+    // Motion::Executor + App::HeadingSource + App::Pilot (109-003/109-005)
+    // -- configured from the same default msg::PlannerConfig{} zero-value
+    // struct main.cpp's real Config::defaultPlannerConfig() would otherwise
+    // supply; the sim harness has no boot_config.cpp to read from, so
+    // tests that need real gains set them explicitly via a future accessor
+    // (none needed by this ticket's own tests, which only exercise
+    // TIMED-mode ramps and 109-005's own DISTANCE/heading-PD scenarios
+    // against the vBodyMax/yawRateMax/aDecel/jMax/headingKp/headingDwell*
+    // values makeExecutorConfig() below supplies).
+    msg::PlannerConfig cfg = makeExecutorConfig();
+    executor_.configure(cfg);
+    headingSource_.configure(cfg);
+    pilot_.configureHeading(cfg);
+
     // "Pre-boot state": everything above is constructed and wired, but
     // App::Preamble::step() has not yet been called even once -- boot() is
     // the caller's job (the first call after construction), not the
@@ -164,6 +183,85 @@ class SimHarness {
   }
   void injectStop(uint32_t corrId = 0) {
     injectCommand(TestSupport::armorStopCommand(corrId).c_str());
+  }
+  // injectMove -- 109-003. See wire_test_codec.h's armorMoveCommand() for
+  // the field order (mirrors msg::Move field-for-field).
+  void injectMove(float distance, float deltaHeading, float vMax, float omega, float timeMs,
+                   bool replace, uint32_t id, uint32_t corrId = 0) {
+    injectCommand(TestSupport::armorMoveCommand(distance, deltaHeading, vMax, omega, timeMs,
+                                                 replace, id, corrId)
+                       .c_str());
+  }
+
+  // Motion::Executor visibility -- test-only accessors mirroring the new
+  // TLM fields (queueDepth/activeId/state), for tests that want to assert
+  // executor state directly rather than only via decoded telemetry.
+  uint8_t pilotQueueDepth() const { return pilot_.queueDepth(); }
+  uint32_t pilotActiveId() const { return pilot_.activeId(); }
+  Motion::State pilotState() const { return pilot_.state(); }
+
+  // App::HeadingSource visibility (109-005) -- test-only accessors mirroring
+  // the new TLM heading_source field/event bit, for tests that want to
+  // assert the active source directly rather than only via decoded
+  // telemetry.
+  bool headingSourceIsOtos() const { return pilot_.headingSourceIsOtos(); }
+
+  // debugHeadingLead -- 109-010 diagnostic-only accessor (temporary
+  // instrumentation, mirrors this sprint's own precedent of ad hoc trace
+  // instrumentation during characterization -- see ticket 009's own
+  // Iteration Log): exposes heading()/headingLead() and usingOtos() so the
+  // characterization work can directly confirm the projection is actually
+  // engaged before trusting a sweep's own numbers.
+  void debugHeadingLead(bool* usingOtos, float* heading, float* headingLead) const {
+    *usingOtos = headingSource_.usingOtos();
+    *heading = headingSource_.heading();
+    *headingLead = headingSource_.headingLead();
+  }
+
+  // setLeadCompensation -- 109-010: test-only hook for the rate-sweep
+  // characterization harness to try different lead-compensation Δt's
+  // WITHOUT a reflash/rebuild -- these three fields have no wire
+  // PlannerConfigPatch arm (they are boot-baked-default-only per this
+  // ticket's own scope, see planner.proto's own field comments), so this
+  // sim-only C++/ctypes path (mirrored by sim_ctypes.cpp's
+  // sim_set_lead_compensation() and SimLoop.set_lead_compensation() on the
+  // Python side) is the ONLY way a test can vary them against the compiled
+  // sim. Re-applies the full current makeExecutorConfig() baseline plus the
+  // three overrides to every consumer (Executor::configure()/
+  // HeadingSource::configure()/Pilot::configureHeading()), the same
+  // re-apply-to-every-consumer shape Pilot::applyPlannerPatch() already
+  // uses for a live wire patch.
+  void setLeadCompensation(float headingLeadBias, float planLead, float terminalLead) {
+    lastHeadingLeadBias_ = headingLeadBias;
+    lastPlanLead_ = planLead;
+    lastTerminalLead_ = terminalLead;
+    msg::PlannerConfig cfg = makeExecutorConfig();
+    cfg.heading_lead_bias = headingLeadBias;
+    cfg.plan_lead = planLead;
+    cfg.terminal_lead = terminalLead;
+    cfg.yaw_rate_max = lastYawRateMax_;
+    executor_.configure(cfg);
+    headingSource_.configure(cfg);
+    pilot_.configureHeading(cfg);
+  }
+
+  // setYawRateMax -- 109-010 rate-sweep characterization harness hook: vary
+  // the pivot cruise-rate ceiling (Motion::JerkTrajectory's own rotational
+  // channel ceiling, `PlannerConfig.yaw_rate_max`) across a test's own sweep
+  // of commanded rates WITHOUT a reflash/rebuild, the same sim-only-hook
+  // shape as setLeadCompensation() above (and re-applying whatever lead
+  // compensation was last set, so the two hooks compose regardless of call
+  // order).
+  void setYawRateMax(float yawRateMax) {
+    lastYawRateMax_ = yawRateMax;
+    msg::PlannerConfig cfg = makeExecutorConfig();
+    cfg.yaw_rate_max = yawRateMax;
+    cfg.heading_lead_bias = lastHeadingLeadBias_;
+    cfg.plan_lead = lastPlanLead_;
+    cfg.terminal_lead = lastTerminalLead_;
+    executor_.configure(cfg);
+    headingSource_.configure(cfg);
+    pilot_.configureHeading(cfg);
   }
 
   // Decodes and returns every outbound line captured on the serial
@@ -280,6 +378,58 @@ class SimHarness {
     return cfg;
   }
 
+  // makeExecutorConfig -- a non-zero msg::PlannerConfig for Motion::
+  // Executor's own configure() call (109-003). This harness has no
+  // boot_config.cpp to read a real per-robot value from (main.cpp's own
+  // Config::defaultPlannerConfig()); these are reasonable stand-in values
+  // (matching data/robots/tovez.json's own order of magnitude) sufficient
+  // for a TIMED-mode ramp/hold/ramp-down to exercise real jerk-limited
+  // motion in a sim test -- NOT bench-tuned, and not meant to be (no
+  // bench/sim test in this ticket asserts a SPECIFIC numeric gain, only
+  // jerk-boundedness/no-instant-step/queue-mechanics).
+  static msg::PlannerConfig makeExecutorConfig() {
+    msg::PlannerConfig cfg;
+    cfg.a_max = 800.0f;         // [mm/s^2]
+    cfg.a_decel = 1000.0f;      // [mm/s^2]
+    cfg.v_body_max = 600.0f;    // [mm/s]
+    cfg.yaw_rate_max = 4.0f;    // [rad/s]
+    cfg.yaw_acc_max = 20.0f;    // [rad/s^2]
+    cfg.j_max = 8000.0f;        // [mm/s^3]
+    cfg.yaw_jerk_max = 80.0f;   // [rad/s^3]
+    // 109-005: heading PD cascade gain + dwell-completion gate. kp=6.0
+    // matches data/robots/tovez.json's own bench-proven sprint-098 value
+    // (see .clasi/knowledge/heading-loop-solves-turn-accuracy.md); the
+    // dwell tolerance/rate/hold match this same file's own
+    // planner.proto/gen_boot_config.py default derivation (0.5deg/1deg-per-
+    // s/150ms).
+    cfg.heading_kp = 6.0f;                     // [1/s]
+    cfg.heading_kd = 0.0f;                     // dimensionless
+    cfg.heading_dwell_tol = 0.5f * 3.14159265f / 180.0f;   // [rad]
+    cfg.heading_dwell_rate = 1.0f * 3.14159265f / 180.0f;  // [rad/s]
+    cfg.arrive_dwell = 0.15f;                  // [s]
+    // 109-010: lead-compensation defaults. heading_lead_bias defaults to
+    // -0.05 -- NOT 0.0 -- matching gen_boot_config.py's own shipped
+    // HEADING_LEAD_BIAS_DEFAULT (see that constant's own doc comment for
+    // the full characterization writeup): a genuinely UNCOMPENSATED raw
+    // age lead (bias=0.0) was found, DURING this ticket's own work, to
+    // actively FAULT pre-existing sim system tests that construct a
+    // SimHarness/SimLoop and never call setLeadCompensation() at all
+    // (test_sim_transport_tour1.py, heading_source_harness.cpp) -- this
+    // class's own OTOS burst-read omega used to always read 0 (TestSim::
+    // OtosPlant's own pre-109-010 stub), so the projection was silently
+    // inert everywhere until this ticket's own OtosPlant::omega() fix
+    // made it real; -0.05 (this harness's own 50ms kCycleDtUs, exactly
+    // canceled) restores the pre-109-010 NO-OP behavior as the harness's
+    // own default, matching the shipped firmware default's own posture.
+    // plan_lead/terminal_lead default to 0.0 (genuine no-ops, unaffected
+    // by the omega fix). setLeadCompensation() below overrides all three
+    // for a test that wants to sweep them.
+    cfg.heading_lead_bias = -0.05f;  // [s]
+    cfg.plan_lead = 0.0f;            // [s]
+    cfg.terminal_lead = 0.0f;        // [s]
+    return cfg;
+  }
+
   // Drives App::Preamble to done() via preamble_.step() calls issued
   // OURSELVES, advancing the fake Clock between each one -- see this file's
   // own header comment for why (color_/line_'s own retry pacing needs real
@@ -328,6 +478,10 @@ class SimHarness {
   App::Odometry odom_;
   App::Preamble preamble_;
 
+  Motion::Executor executor_;
+  App::HeadingSource headingSource_;
+  App::Pilot pilot_;
+
   App::RobotLoop robotLoop_;
 
   bool booted_ = false;
@@ -335,6 +489,17 @@ class SimHarness {
 
   size_t telemetryDrainIndex_ = 0;  // index into serialLink_.sent() already returned by drainTelemetry()
   size_t rawTelemetryDrainIndex_ = 0;  // index into serialLink_.sent() already returned by drainRawTelemetry()
+
+  // 109-010: setLeadCompensation()/setYawRateMax() each re-derive a fresh
+  // msg::PlannerConfig from makeExecutorConfig() (there is no single
+  // persisted PlannerConfig instance this harness keeps outside that
+  // factory function) -- these remember whichever of the two was last set
+  // by EITHER hook so the other can re-apply it instead of silently
+  // clobbering it back to 0.
+  float lastYawRateMax_ = 4.0f;  // [rad/s] matches makeExecutorConfig()'s own default
+  float lastHeadingLeadBias_ = -0.05f;  // [s] matches makeExecutorConfig()'s own default
+  float lastPlanLead_ = 0.0f;          // [s]
+  float lastTerminalLead_ = 0.0f;      // [s]
 };
 
 }  // namespace TestSim

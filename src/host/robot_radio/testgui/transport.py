@@ -137,16 +137,18 @@ Helpers:
 from __future__ import annotations
 
 import abc
+import base64
 import logging
 import math
 import pathlib
 import sys
 import threading
 import time
-from typing import Callable
+from typing import Any, Callable
 
 from robot_radio.io.serial_conn import SerialConnection, list_serial_ports
 from robot_radio.io.sim_loop import SimLoop
+from robot_radio.robot import protocol
 from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
 from robot_radio.testgui import binary_bridge
 from robot_radio.testgui import sim_prefs
@@ -872,6 +874,100 @@ _SIM_TRUTH_EVERY_N_TICKS = max(1, round(200 / _SIM_TICK_STEP_DURATION))
 _SIM_READY_TIMEOUT_S = 5.0
 
 
+# ---------------------------------------------------------------------------
+# Sim-mode config path (109-002, Architecture Revision 1): SET/GET-shaped
+# host needs route through typed ConfigDelta patches with REAL firmware
+# consumers, constructed via the SAME NezhaProtocol.config()/wait_for_ack()
+# hardware transports already use -- never through binary_bridge.
+# translate_command() (a universal dead stub on every transport since
+# legacy_render/legacy_verbs were deleted, see Architecture Revision 1).
+# ---------------------------------------------------------------------------
+
+# The ConfigDelta patch kinds RobotLoop::handleConfig() applies live
+# (src/firm/app/robot_loop.cpp's handleConfig(): MOTOR, OTOS, and, as of
+# 109-008, PLANNER -- every other patch_kind (DRIVETRAIN/WATCHDOG/NONE)
+# still replies ACK_STATUS_ERR/ERR_UNIMPLEMENTED unconditionally, a
+# documented scope boundary, not an oversight, per src/firm/app/DESIGN.md
+# §3). Keys landing on MotorConfigPatch (pid.*/ml/mr) or PlannerConfigPatch
+# (minSpeed/headingKp/headingKd) have a real consumer; DrivetrainConfigPatch's
+# tw/rotSlip/ekfQ*/ekfR* and the bare watchdog sTimeout arm do not, on ANY
+# transport, this sprint. This table is reused (not re-derived) from
+# protocol.py's own key-vocabulary -- see that module's "Config key <->
+# binary target/field mapping" header comment for the authoritative per-key
+# target list.
+_CONFIG_MOTOR_KEYS = frozenset(protocol._MOTOR_PID_KEYS) | {"ml", "mr"}
+_CONFIG_PLANNER_KEYS = frozenset(protocol._PLANNER_KEYS)
+_CONFIG_SUPPORTED_KEYS = _CONFIG_MOTOR_KEYS | _CONFIG_PLANNER_KEYS
+_CONFIG_UNSUPPORTED_KEYS = frozenset(protocol._ALL_SET_KEYS) - _CONFIG_SUPPORTED_KEYS
+
+
+class _SimConfigConn:
+    """Duck-typed ``SerialConnection`` substitute so ``NezhaProtocol.
+    config()`` can be reused VERBATIM against a ``SimLoop`` -- Architecture
+    Revision 1's "one mechanism, not a Sim-specific fork": the exact same
+    envelope-building/key-vocabulary code hardware transports use, just
+    injected via ``SimLoop.inject_command()`` instead of a live serial
+    write.
+
+    Implements only ``send_envelope_fast()`` -- the one method
+    ``NezhaProtocol.config()`` calls on ``self._conn`` (duck-typed, no
+    ``isinstance`` check inside it). Deliberately does NOT implement
+    ``wait_for_ack()``: ``NezhaProtocol.wait_for_ack()`` unconditionally
+    re-wraps whatever ``self._conn.wait_for_ack()`` returns via
+    ``AckEntry.from_pb2()``, which expects a RAW ``telemetry_pb2.AckEntry``
+    (``.status``/``.corr_id``/``.err_code``) -- but ``SimLoop.
+    read_pending_binary_tlm_frames()`` already returns adapted ``TLMFrame``/
+    ``AckEntry`` dataclasses, one layer past that raw shape. Correlating the
+    ack ring is this class's OWN job instead (``poll_ack()`` below), called
+    directly by ``SimTransport`` rather than through
+    ``NezhaProtocol.wait_for_ack()``.
+    """
+
+    def __init__(self, loop: SimLoop) -> None:
+        self._loop = loop
+        self._corr_counter = 0
+
+    def send_envelope_fast(self, envelope: "envelope_pb2.CommandEnvelope") -> int:
+        """Assign a corr_id (own counter -- this adapter is the only sender
+        on this path, so no cross-source collision risk the way hardware's
+        shared ``_corr_counter`` guards against), armor, and inject via
+        ``SimLoop.inject_command()`` -- the exact ``*B<base64>`` shape
+        ``SerialConnection.send_envelope_fast()`` writes to a real serial
+        port (see that method's own docstring), minus the trailing
+        newline framing a live serial stream needs and a direct
+        ``inject_command()`` call does not (``FakeTransport::
+        enqueueInbound()`` takes one already-delimited line per call)."""
+        self._corr_counter += 1
+        corr_id = self._corr_counter
+        envelope.corr_id = corr_id
+        armored = base64.b64encode(envelope.SerializeToString()).decode("ascii")
+        self._loop.inject_command(f"*B{armored}")
+        return corr_id
+
+    def poll_ack(self, corr_id: int, timeout: int = 500,  # [ms]
+                ) -> "protocol.AckEntry | None":
+        """Poll ``SimLoop.read_pending_binary_tlm_frames()``'s ack ring for
+        ``corr_id``, mirroring ``SerialConnection.wait_for_ack()``'s own
+        re-delivery-tolerant matching (returns on the FIRST frame carrying a
+        match) -- a small, Sim-local reimplementation rather than an import
+        of that method's private ``_match_ack_in_frames()`` helper, since
+        that helper matches against raw ``pb2.ReplyEnvelope`` objects
+        (``reply.tlm.acks``) off ``drain_binary_tlm()``, not the already-
+        adapted ``TLMFrame``/``AckEntry`` dataclasses ``SimLoop.
+        read_pending_binary_tlm_frames()`` returns."""
+        deadline = time.monotonic() + (timeout / 1000.0)
+        while True:
+            for frame in self._loop.read_pending_binary_tlm_frames():
+                if not frame.acks:
+                    continue
+                for ack in frame.acks:
+                    if ack.corr_id == corr_id:
+                        return ack
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.01)
+
+
 class SimTransport(Transport):
     """Transport backend that drives the real compiled firmware simulator
     (``src/sim/build/libfirmware_host.{dylib,so}``) via
@@ -919,6 +1015,20 @@ class SimTransport(Transport):
         # SimLoop concurrently would race its single-consumer command queue.
         self._motion_thread: threading.Thread | None = None
         self._motion_stop_event = threading.Event()
+        # 109-002: config path -- constructed in connect(), torn down in
+        # disconnect(). ``_config_proto`` is a real ``NezhaProtocol`` wrapping
+        # ``_config_conn`` (a ``_SimConfigConn``, see that class's own
+        # docstring) so ``config()`` (the envelope-building/key-vocabulary
+        # code) is reused verbatim, never reimplemented; ack correlation
+        # goes straight through ``_config_conn.poll_ack()`` instead (see
+        # that class's own docstring for why). ``_config_echo`` is the
+        # host-side GET answer store (Architecture Revision 1: "GET is
+        # answered from host-side state... not a new firmware query wire
+        # arm") -- wire key -> last formatted value actually acked by the
+        # firmware this session.
+        self._config_conn: "_SimConfigConn | None" = None
+        self._config_proto: NezhaProtocol | None = None
+        self._config_echo: dict[str, str] = {}
 
     @property
     def protocol(self) -> SimLoop | None:
@@ -994,6 +1104,9 @@ class SimTransport(Transport):
 
         self._loop = loop
         self._connected = True
+        self._config_conn = _SimConfigConn(loop)
+        self._config_proto = NezhaProtocol(self._config_conn)  # type: ignore[arg-type]
+        self._config_echo = {}
         self._apply_profile_to_sim(loop, profile)
         self._log("[INFO] SimTransport connected")
 
@@ -1010,6 +1123,9 @@ class SimTransport(Transport):
                 _log.warning("SimTransport: SimLoop.disconnect() raised: %s", exc)
         self._loop = None
         self._connected = False
+        self._config_conn = None
+        self._config_proto = None
+        self._config_echo = {}
         self._log("[INFO] SimTransport disconnected")
 
     def suspend_telemetry_reader(self) -> None:
@@ -1068,22 +1184,28 @@ class SimTransport(Transport):
         self._dispatch(line)
 
     def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
-        """Routes recognized verbs into the sim; anything else is accepted
-        and logged, returning ``""`` either way (see class docstring) --
-        there is no real reply to wait ``read_timeout`` for."""
+        """Routes recognized verbs into the sim. ``SET``/``GET`` (109-002)
+        return a real reply string from the config path below (see
+        ``_handle_config_set()``/``_handle_config_get()``); every other
+        recognized/unrecognized verb is accepted and logged, returning
+        ``""`` (see class docstring) -- there is no real reply to wait
+        ``read_timeout`` for those."""
         if not self._connected:
             return ""
         self._log(f"> {line}")
-        self._dispatch(line)
-        return ""
+        reply = self._dispatch(line)
+        return reply if reply is not None else ""
 
-    def _dispatch(self, line: str) -> None:
+    def _dispatch(self, line: str) -> "str | None":
         """Route one wire-verb ``line`` to whatever sim-side action it maps
-        onto. Never raises -- a malformed line is logged and dropped, same
-        tolerance the real wire has for a bad reply."""
+        onto. Returns a reply string for verbs that have a real one
+        (``SET``/``GET``, 109-002); ``None`` for every fire-and-forget verb
+        (unchanged contract for those). Never raises -- a malformed line is
+        logged and dropped/replied ``ERR``, same tolerance the real wire has
+        for a bad line."""
         tokens = line.split()
         if not tokens:
-            return
+            return None
         verb = tokens[0].upper()
 
         if verb in ("STOP", "X"):
@@ -1106,14 +1228,145 @@ class SimTransport(Transport):
             # set_true_pose(0,0,0) directly before sending these) -- quiet
             # no-op so the caller's sequence doesn't error.
             _log.debug("SimTransport: %s accepted, no-op in sim", verb)
-        elif verb == "SET":
-            # Calibration lines (e.g. trackwidth) -- quiet no-op. Applying
-            # trackwidth live has no SimLoop ABI backing (it's fixed at
-            # sim_create() time -- see _apply_profile_to_sim()'s own
-            # docstring); every other SET key has no sim analogue at all.
-            _log.debug("SimTransport: %s accepted, no-op in sim", line)
+        elif verb == "SET" and len(tokens) == 2 and "=" in tokens[1]:
+            return self._handle_config_set(tokens[1])
+        elif verb == "GET" and len(tokens) == 2:
+            return self._handle_config_get(tokens[1])
+        elif verb in ("OL", "OA", "OI"):
+            return self._handle_otos_patch(verb, tokens[1:])
         else:
             self._log(f"[INFO] SimTransport: {line!r} not supported in this sim")
+        return None
+
+    def _handle_config_set(self, kv: str) -> str:
+        """``SET <key>=<value>`` (109-002): route through the SAME typed
+        ``ConfigDelta`` patch mechanism hardware transports use
+        (``NezhaProtocol.config()``), constructed by ``self._config_proto``
+        and injected via ``SimLoop.inject_command()`` (see
+        ``_SimConfigConn``). A key with no live firmware consumer
+        (``_CONFIG_UNSUPPORTED_KEYS``) gets an explicit, immediate host-side
+        "unsupported" error -- NO wire round trip is attempted for it
+        (Architecture Revision 1, sprint.md: "no wire round trip, no silent
+        no-op, no fabricated success")."""
+        key, _, raw_value = kv.partition("=")
+        if key not in protocol._ALL_SET_KEYS:
+            msg = f"ERR badkey {key}"
+            self._log(f"[WARN] SimTransport: {msg}")
+            return msg
+        if key in _CONFIG_UNSUPPORTED_KEYS:
+            msg = (
+                f"ERR unsupported {key} -- no live firmware consumer this "
+                f"sprint (RobotLoop::handleConfig applies MotorConfigPatch/"
+                f"OtosConfigPatch/PlannerConfigPatch only; see sprint 109's "
+                f"Architecture Revision 1)"
+            )
+            self._log(f"[WARN] SimTransport: {msg}")
+            return msg
+        try:
+            value = float(raw_value)
+        except ValueError:
+            msg = f"ERR badval {kv}"
+            self._log(f"[WARN] SimTransport: {msg}")
+            return msg
+
+        assert self._config_proto is not None  # only reachable while connected
+        assert self._config_conn is not None
+        try:
+            corr_id = self._config_proto.config(**{key: value})
+        except ValueError as exc:
+            msg = f"ERR {exc}"
+            self._log(f"[WARN] SimTransport: {msg}")
+            return msg
+
+        ack = self._config_conn.poll_ack(corr_id, timeout=500)
+        if ack is None:
+            msg = f"ERR timeout {key}"
+            self._log(f"[WARN] SimTransport: {msg}")
+            return msg
+        if not ack.ok:
+            msg = f"ERR nak {key} err_code={ack.err_code}"
+            self._log(f"[WARN] SimTransport: {msg}")
+            return msg
+
+        formatted = protocol._format_config_value(value)
+        self._config_echo[key] = formatted
+        msg = f"OK set {key}={formatted}"
+        self._log(f"< {msg}")
+        return msg
+
+    def _handle_config_get(self, key: str) -> str:
+        """``GET <key>`` (109-002): host-side echo of the last value THIS
+        session itself pushed via ``SET`` -- never a new firmware query wire
+        arm (Architecture Revision 1: "GET is answered from host-side
+        state... the host-echo approach is sufficient for what this
+        sprint's tests actually need")."""
+        if key not in protocol._ALL_SET_KEYS:
+            msg = f"ERR badkey {key}"
+            self._log(f"[WARN] SimTransport: {msg}")
+            return msg
+        if key in _CONFIG_UNSUPPORTED_KEYS:
+            msg = (
+                f"ERR unsupported {key} -- no live firmware consumer this "
+                f"sprint (see sprint 109's Architecture Revision 1)"
+            )
+            self._log(f"[WARN] SimTransport: {msg}")
+            return msg
+        if key not in self._config_echo:
+            msg = f"ERR nodata {key} -- not SET this session"
+            self._log(f"[WARN] SimTransport: {msg}")
+            return msg
+        msg = f"{key}={self._config_echo[key]}"
+        self._log(f"< {msg}")
+        return msg
+
+    def _handle_otos_patch(self, verb: str, pos: list[str]) -> str:
+        """``OL <scale>``/``OA <scale>``/``OI`` (109-004, Architecture
+        Revision 1): route through the SAME direct-patch-send mechanism
+        hardware transports use (``NezhaProtocol.otos_config()``,
+        constructed by ``self._config_proto`` and injected via
+        ``SimLoop.inject_command()`` -- see ``_SimConfigConn``), mirroring
+        ``_handle_config_set()``'s own shape exactly. Unlike SET/GET, there
+        is no unsupported-key gating here -- ``RobotLoop::handleConfig``
+        DOES apply ``OtosConfigPatch`` live (see that method's own
+        comment), so every one of these three verbs has a real firmware
+        consumer."""
+        try:
+            if verb == "OL":
+                if not pos:
+                    msg = "ERR badarg OL requires <scale>"
+                    self._log(f"[WARN] SimTransport: {msg}")
+                    return msg
+                kwargs: dict[str, Any] = {"linear_scale": float(pos[0])}
+            elif verb == "OA":
+                if not pos:
+                    msg = "ERR badarg OA requires <scale>"
+                    self._log(f"[WARN] SimTransport: {msg}")
+                    return msg
+                kwargs = {"angular_scale": float(pos[0])}
+            else:  # OI
+                kwargs = {"init": True}
+        except ValueError:
+            msg = f"ERR badarg {verb} {' '.join(pos)}"
+            self._log(f"[WARN] SimTransport: {msg}")
+            return msg
+
+        assert self._config_proto is not None  # only reachable while connected
+        assert self._config_conn is not None
+        corr_id = self._config_proto.otos_config(**kwargs)
+
+        ack = self._config_conn.poll_ack(corr_id, timeout=500)
+        if ack is None:
+            msg = f"ERR timeout {verb}"
+            self._log(f"[WARN] SimTransport: {msg}")
+            return msg
+        if not ack.ok:
+            msg = f"ERR nak {verb} err_code={ack.err_code}"
+            self._log(f"[WARN] SimTransport: {msg}")
+            return msg
+
+        msg = f"OK {verb.lower()}"
+        self._log(f"< {msg}")
+        return msg
 
     def _sim_stop(self) -> None:
         """STOP/X: halt the sim immediately AND signal any in-flight
@@ -1238,32 +1491,47 @@ class SimTransport(Transport):
         ``SimLoop`` fault setter actually exists; log a clear "not
         supported in this sim" for every knob that has none.
 
-        108-007: ``sim_ctypes.cpp``'s new 19-symbol ABI backs FAR fewer
+        108-007: ``sim_ctypes.cpp``'s new 19-symbol ABI backed FAR fewer
         fault-condition knobs than the deleted ~40-symbol ``SimConnection``
-        one did -- ``SimLoop`` exposes exactly four fault setters:
+        one did -- ``SimLoop`` exposed exactly four fault setters:
         ``set_wheel_disconnected``/``set_wheel_freeze``/
         ``set_wheel_dropout_rate`` (none of which has a ``sim_prefs``
         profile-key equivalent yet -- no GUI control drives them this
         sprint) and ``set_otos_drift(x_drift, y_drift, heading_drift)``.
+        109-002 added a fifth: ``set_enc_scale_err(port, fraction)`` --
+        see below.
 
-        Only ONE ``DEFAULT_PROFILE`` pairing maps onto that surface:
+        ONE ``DEFAULT_PROFILE`` pairing maps onto the OTOS surface:
         ``otos_lin_drift``/``otos_yaw_drift`` -> a single
         ``loop.set_otos_drift(otos_lin_drift, 0.0, otos_yaw_drift)`` call
         (the old profile has no separate x/y drift terms -- ``otos_lin_drift``
         is applied to the x term, y left at its neutral 0.0). This is a
-        special case, like ``enc_scale_err_l/r`` was under the deleted ABI --
-        excluded from ``sim_prefs.PROFILE_TO_SIM_SETTER`` (now empty; see
-        that module's own docstring) and handled explicitly here instead.
+        special case -- excluded from ``sim_prefs.PROFILE_TO_SIM_SETTER``
+        (still empty; see that module's own docstring) and handled
+        explicitly here instead.
+
+        ``enc_scale_err_l``/``enc_scale_err_r`` (109-002): each maps 1:1 onto
+        ``loop.set_enc_scale_err(port, fraction)`` -- port 1=left, 2=right,
+        matching every other port-keyed knob's convention
+        (``set_wheel_disconnected``/``set_wheel_freeze``/
+        ``set_wheel_dropout_rate``). Unlike the OTOS pairing above, these are
+        two independent single-argument calls, not one combined call.
+
+        ``otos_lin_scale_err``/``otos_ang_scale_err`` (109-007): combined
+        into a single ``loop.set_otos_raw_scale_err(linear, angular)`` call
+        -- models a physically mis-calibrated OTOS chip (fractional
+        over/under-report, 0=perfect); a firmware-pushed OL/OA calibration
+        scalar corrects the effect back out (see ``sim_plant.h``'s own
+        ``SimPlant::setOtosRawScaleErr()``/``handleOtosWrite()`` comments).
 
         Every OTHER ``DEFAULT_PROFILE`` key (``encoder_noise``,
         ``slip_turn_extra``, ``otos_linear_noise``, ``otos_yaw_noise``,
-        ``enc_scale_err_l/r``, ``otos_lin_scale_err``, ``otos_ang_scale_err``,
         ``body_rot_scrub``, ``body_lin_scrub``, ``motor_offset_l/r``) has NO
         ``SimLoop`` setter at all -- applying is skipped outright, with a
         ``[WARN]`` logged if the profile value is away from that key's
         neutral default (mirrors the deleted implementation's own
         skip-and-warn treatment for its own three unsupported knobs, just
-        widened to cover this ABI's much narrower fault-knob surface).
+        widened to cover this ABI's narrower fault-knob surface).
         ``trackwidth`` is excluded from that warn loop -- it is applied at
         ``SimLoop`` CONSTRUCTION time (``connect()``'s own
         ``SimLoop(track_width=...)`` call), not live, so a live Apply with a
@@ -1287,6 +1555,33 @@ class SimTransport(Transport):
                 "via loop.set_otos_drift(): %s", exc,
             )
 
+        # -- enc_scale_err_l/r (109-002): 1:1 onto set_enc_scale_err(port, .) --
+        enc_scale_err_l = profile.get("enc_scale_err_l", defaults["enc_scale_err_l"])
+        enc_scale_err_r = profile.get("enc_scale_err_r", defaults["enc_scale_err_r"])
+        try:
+            loop.set_enc_scale_err(1, float(enc_scale_err_l))
+            loop.set_enc_scale_err(2, float(enc_scale_err_r))
+        except Exception as exc:
+            _log.warning(
+                "SimTransport: could not apply enc_scale_err_l/r "
+                "via loop.set_enc_scale_err(): %s", exc,
+            )
+
+        # -- otos_lin_scale_err/otos_ang_scale_err (109-007): combined onto
+        # set_otos_raw_scale_err(linear, angular) --
+        otos_lin_scale_err = profile.get(
+            "otos_lin_scale_err", defaults["otos_lin_scale_err"])
+        otos_ang_scale_err = profile.get(
+            "otos_ang_scale_err", defaults["otos_ang_scale_err"])
+        try:
+            loop.set_otos_raw_scale_err(
+                float(otos_lin_scale_err), float(otos_ang_scale_err))
+        except Exception as exc:
+            _log.warning(
+                "SimTransport: could not apply otos_lin_scale_err/"
+                "otos_ang_scale_err via loop.set_otos_raw_scale_err(): %s", exc,
+            )
+
         # -- trackwidth: construction-time only, not live --
         trackwidth = profile.get("trackwidth", defaults["trackwidth"])
         if trackwidth != defaults["trackwidth"]:
@@ -1301,7 +1596,9 @@ class SimTransport(Transport):
         # -- every other knob: no SimLoop ABI backing at all --
         _unsupported_keys = [
             key for key in defaults
-            if key not in ("otos_lin_drift", "otos_yaw_drift", "trackwidth")
+            if key not in ("otos_lin_drift", "otos_yaw_drift", "trackwidth",
+                           "enc_scale_err_l", "enc_scale_err_r",
+                           "otos_lin_scale_err", "otos_ang_scale_err")
         ]
         for key in _unsupported_keys:
             value = profile.get(key, defaults[key])
@@ -1319,7 +1616,8 @@ class SimTransport(Transport):
         self._error_profile = dict(profile)
         self._log(
             f"[INFO] Sim error profile applied "
-            f"(otos_lin_drift={lin_drift}, otos_yaw_drift={yaw_drift})"
+            f"(otos_lin_drift={lin_drift}, otos_yaw_drift={yaw_drift}, "
+            f"enc_scale_err_l={enc_scale_err_l}, enc_scale_err_r={enc_scale_err_r})"
         )
 
     def apply_error_profile(self, profile: dict) -> None:

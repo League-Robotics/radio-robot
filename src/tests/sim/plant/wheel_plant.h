@@ -223,6 +223,52 @@ class WheelPlant {
   void setEncoderJitter(bool enabled) { encoderJitter_ = enabled; }
   bool encoderJitter() const { return encoderJitter_; }
 
+  // Encoder scale error (109-002, SimTransport config path ticket): a
+  // fractional per-wheel over/under-*report* -- reportedPosition() returns
+  // whatever the existing fault-knob precedence above selected, scaled by
+  // (1 + fraction). 0.0 (the default) is a genuine no-op (reports position_
+  // verbatim, matching every pre-existing scenario's assumption). This is a
+  // pure reporting bias -- like the fault knobs above, it never touches
+  // step()'s own duty->velocity->position integration, so the PLANT's true
+  // motion is unaffected; only what the simulated encoder claims happened
+  // changes. Backs the TestGUI Sim Errors panel's `enc_scale_err_l`/
+  // `enc_scale_err_r` knobs (see sim_prefs.py's own docstring) and
+  // test_error_divergence.py's headline assertion.
+  void setScaleErr(float fraction) { scaleErr_ = fraction; }
+  float scaleErr() const { return scaleErr_; }
+
+  // Encoder tick quantization (109-007, sim-honors-otos-calibration.md's
+  // encoder-error-model half): rounds whatever reportedPosition() would
+  // otherwise report to the nearest multiple of `tickSize` [mm] -- models
+  // a real encoder's finite count resolution (a wheel only ever reports
+  // whole-tick multiples of travel, never a continuous float). Applied
+  // AFTER the scale-error multiply and the slip offset below (see
+  // reportedPosition()'s own ordering comment) -- quantization is the
+  // LAST thing a real chip's own finite-resolution counter would do to an
+  // otherwise-already-biased value. 0.0 (the default) is a genuine no-op --
+  // reportedPosition() then reports its full float precision, matching
+  // every pre-existing scenario's assumption.
+  void setTickQuantization(float tickSize) { tickSize_ = tickSize; }  // [mm]
+  float tickQuantization() const { return tickSize_; }
+
+  // Encoder slip events (109-007): a fixed fractional accumulator --
+  // mirrors setDropoutRate()'s own deterministic-accumulator design, no RNG
+  // anywhere in this plant (this file's own "seeded" doc) -- advances by
+  // `rate` every reportedPosition() call and fires a slip event every time
+  // it crosses 1.0, injecting a PERMANENT signed `magnitude` [mm] offset
+  // into every future reportedPosition() call from that point on. Models a
+  // wheel that slipped against the surface (the encoder keeps counting
+  // shaft rotation the ground never actually received, or vice versa) --
+  // a PERSISTENT divergence from true travel, unlike the transient held/
+  // stale readings the freeze/dropout knobs above produce. `rate`=0.0 (the
+  // default) never fires -- a genuine no-op. Resets the accumulator's
+  // phase (never the accumulated offset -- see resetPosition()'s own
+  // comment) on every call, mirroring setDropoutRate()'s identical
+  // "a rate change never inherits a stale phase" contract.
+  void setSlip(float rate, float magnitude);   // [0,1] [mm]
+  float slipRate() const { return slipRate_; }
+  float slipOffset() const { return slipOffset_; }   // [mm] accumulated so far
+
   // Plant teleport (sim command-surface fix, host TestGUI Sim "reset to
   // origin"/SI support): re-baselines this wheel to `pos` -- position_,
   // lastReportedPosition_, and frozenPosition_ all snap to it, velocity_
@@ -238,6 +284,12 @@ class WheelPlant {
     frozenPosition_ = pos;
     dropoutAccum_ = 0.0f;
     ditherCounter_ = 0;
+    // 109-007: a teleport re-baselines the accumulator phase exactly like
+    // dropoutAccum_ above, but the accumulated slip OFFSET itself also
+    // clears -- a teleport is a fresh physical placement, not a continued
+    // run the prior slip history should still apply to.
+    slipAccum_ = 0.0f;
+    slipOffset_ = 0.0f;
   }
 
  private:
@@ -254,6 +306,14 @@ class WheelPlant {
   float dropoutAccum_ = 0.0f;        // fractional accumulator, see setDropoutRate()
   float lastReportedPosition_ = 0.0f;  // [mm] the last value reportedPosition() actually returned
   bool encoderJitter_ = false;         // 108-011: opt-in, default OFF -- see setEncoderJitter()
+  float scaleErr_ = 0.0f;              // [fractional over/under-report, 0=perfect] see setScaleErr()
+
+  // ---- Encoder error-model knob state (109-007) ----
+  float tickSize_ = 0.0f;        // [mm] see setTickQuantization()
+  float slipRate_ = 0.0f;        // [0,1] see setSlip()
+  float slipMagnitude_ = 0.0f;   // [mm] per-event offset, see setSlip()
+  float slipAccum_ = 0.0f;       // fractional accumulator, see setSlip()
+  float slipOffset_ = 0.0f;      // [mm] permanent accumulated offset so far
 
   // Rest-dither phase (108-011): flips every kDitherPeriod dithered reads,
   // own per-instance state so left/right wheels dither independently. See

@@ -129,6 +129,17 @@ class Otos {
   // on a floating/NAK'd bus, some other value for a wrong device.
   uint8_t lastProbeId() const { return lastProbeId_; }
 
+  // lastReadUs -- the timestamp (Devices::Clock's own [us] epoch) of the
+  // most recent REAL bus read this leaf performed -- 0 before the first one
+  // (matches hasRead_'s own default). A cheap accessor, no bus traffic.
+  // 109-010: App::HeadingSource's own measurement-age projection (`theta_est
+  // = theta_meas + omega_meas * age`) needs exactly this -- "age" is `now -
+  // lastReadUs()`, NOT "cycles since sample() last ran" (a caller that only
+  // gets scheduled every other cycle, or a rate-limited-skip tick(), must
+  // still see the REAL elapsed time since the chip's own reading was
+  // actually taken).
+  uint64_t lastReadUs() const { return lastReadUs_; }
+
   // True if a real bus read is due: either no real read has ever happened
   // (hasRead_ false — before begin(), or on a chip begin() never detected,
   // in which case this stays true forever too — a caller must always check

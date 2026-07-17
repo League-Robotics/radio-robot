@@ -32,6 +32,8 @@
 // transform first.
 #pragma once
 
+#include <cstdint>
+
 namespace TestSim {
 
 class OtosPlant {
@@ -49,16 +51,33 @@ class OtosPlant {
   // function App::Odometry itself calls, over the SAME two absolute wheel
   // positions the caller's two WheelPlant instances just computed. Call
   // once per cycle, after both WheelPlant::step() calls for that cycle.
-  void step(float leftPosition, float rightPosition);   // [mm] [mm]
+  //
+  // dt (109-010): this cycle's own elapsed time ([s]) -- used ONLY to
+  // derive `omega()` below (`headingDelta / dt`, a plain finite-difference
+  // rate estimate of THIS cycle's own heading change, mirroring a real
+  // OTOS chip's own VELOCITY_XL register: an instantaneous angular-rate
+  // report alongside the position/heading burst). Defaulted to 0 so no
+  // pre-109-010 test caller needs to change -- `dt<=0` reports `omega()==0`
+  // (the pre-109-010 behavior: sim_plant.cpp's own handleOtosRead() zeroed
+  // the VELOCITY_XL bytes unconditionally, "no scenario asserts on OTOS's
+  // twist" -- ticket 010 is the first scenario that does, via App::
+  // HeadingSource's own measurement-age projection needing a real
+  // `omega_meas`).
+  void step(float leftPosition, float rightPosition, float dt = 0.0f);   // [mm] [mm] [s]
+
+  // omega -- this plant's own finite-difference angular-rate estimate from
+  // the MOST RECENT step() call (see that method's own `dt` doc comment).
+  // 0.0f before the first step() with a nonzero dt.
+  float omega() const { return omega_; }  // [rad/s]
 
   // Reported pose == the true accumulator (x_/y_/heading_) plus the
   // deterministic drift/bias knobs below. Kept separate from x()/y()/
   // heading() (the TRUE pose) so a future true-pose export (ticket 003's
   // SimHarness) can still see ground truth even while a fault scenario has
   // biased what the OTOS chip itself would report.
-  float reportedX() const { return x_ + driftX_; }              // [mm]
-  float reportedY() const { return y_ + driftY_; }              // [mm]
-  float reportedHeading() const { return heading_ + driftHeading_; }  // [rad]
+  float reportedX() const { return x_ * linearFactor() + driftX_; }              // [mm]
+  float reportedY() const { return y_ * linearFactor() + driftY_; }              // [mm]
+  float reportedHeading() const { return heading_ * angularFactor() + driftHeading_; }  // [rad]
 
   float x() const { return x_; }              // [mm]
   float y() const { return y_; }              // [mm]
@@ -74,6 +93,41 @@ class OtosPlant {
   // drift), not per-cycle random noise. 0/0/0 (the default) disables the
   // knob -- reportedX/Y/Heading() then equal x()/y()/heading() exactly.
   void setDrift(float xDrift, float yDrift, float headingDrift);  // [mm] [mm] [rad]
+
+  // Raw OTOS scale error (109-007, sim-honors-otos-calibration.md): models
+  // a physically MIS-CALIBRATED chip -- a fractional over/under-report on
+  // the true accumulated pose (0=perfect, mirrors WheelPlant::setScaleErr()'s
+  // own "fractional over/under-report" vocabulary), applied BEFORE the
+  // chip's own calibration-scalar register correction below. This is
+  // exactly the stakeholder's own framing (issue, 2026-07-16): "if you are
+  // simulating the OTOS / the I2C bus, you should be simulating
+  // calibrations" -- SimPlant's OTOS burst-read response becomes
+  // `truth * (1+linearFraction)` / `truth * (1+angularFraction)`. 0.0/0.0
+  // (the default) is a genuine no-op.
+  void setRawScaleErr(float linearFraction, float angularFraction);  // [fractional over/under-report, 0=perfect]
+  float rawScaleErrLinear() const { return rawErrorLinear_; }
+  float rawScaleErrAngular() const { return rawErrorAngular_; }
+
+  // Chip-internal calibration-scalar register honoring (109-007): mirrors
+  // the REAL SparkFun OTOS chip's own documented behavior -- its
+  // REG_SCALAR_LINEAR/REG_SCALAR_ANGULAR registers multiply the chip's raw
+  // measurement by (1 + reg*0.001) before it is ever reported on the wire
+  // (the exact inverse of Devices::Otos::scaleToRegister()'s own
+  // scale-to-register conversion). TestSim::SimPlant's handleOtosWrite()
+  // captures a firmware write to either register (via the REAL
+  // Devices::Otos::setLinearScalar()/setAngularScalar() -- the same OL/OA
+  // wire path a live OtosConfigPatch or the OL/OA text verb drives) and
+  // calls these setters -- see sim_plant.cpp's own comment. 0 (the
+  // default -- an un-calibrated/just-reset chip) is a genuine no-op
+  // (multiplier 1.0): net effect is `truth` exactly when
+  // rawScaleErr==0 AND the register is 0, `truth * rawError` when a scale
+  // error is injected but nothing has calibrated it out yet, and `truth`
+  // again once the correct compensating register value is written --
+  // SUC-005's "diverges, then converges" contract.
+  void setLinearScalarReg(int8_t reg) { linearScalarReg_ = reg; }
+  void setAngularScalarReg(int8_t reg) { angularScalarReg_ = reg; }
+  int8_t linearScalarReg() const { return linearScalarReg_; }
+  int8_t angularScalarReg() const { return angularScalarReg_; }
 
   // Plant teleport (sim command-surface fix, host TestGUI Sim "reset to
   // origin"/SI support): snaps the accumulator directly to (x, y, heading)
@@ -106,6 +160,18 @@ class OtosPlant {
   // knowledge belongs on this class (architecture-update.md Decision 3).
 
  private:
+  // linearFactor()/angularFactor() (109-007): the combined
+  // raw-scale-error * calibration-register multiplier reportedX/Y/Heading()
+  // apply. Default (rawErrorLinear_=0, linearScalarReg_=0) collapses to
+  // exactly 1.0 -- the pre-109-007 no-op behavior (reportedX()==x_+driftX_)
+  // is bit-for-bit preserved when neither knob is touched.
+  float linearFactor() const {
+    return (1.0f + rawErrorLinear_) * (1.0f + static_cast<float>(linearScalarReg_) * 0.001f);
+  }
+  float angularFactor() const {
+    return (1.0f + rawErrorAngular_) * (1.0f + static_cast<float>(angularScalarReg_) * 0.001f);
+  }
+
   float trackWidth_;         // [mm]
   float lastLeft_ = 0.0f;    // [mm]
   float lastRight_ = 0.0f;   // [mm]
@@ -113,11 +179,18 @@ class OtosPlant {
   float x_ = 0.0f;          // [mm]
   float y_ = 0.0f;          // [mm]
   float heading_ = 0.0f;    // [rad]
+  float omega_ = 0.0f;      // [rad/s] 109-010, see step()'s own `dt` doc comment
 
   // ---- Drift/bias knob state ----
   float driftX_ = 0.0f;        // [mm]
   float driftY_ = 0.0f;        // [mm]
   float driftHeading_ = 0.0f;  // [rad]
+
+  // ---- Raw scale error + calibration-register state (109-007) ----
+  float rawErrorLinear_ = 0.0f;    // [fractional over/under-report, 0=perfect]
+  float rawErrorAngular_ = 0.0f;   // [fractional over/under-report, 0=perfect]
+  int8_t linearScalarReg_ = 0;     // chip register raw value, see setLinearScalarReg()
+  int8_t angularScalarReg_ = 0;    // chip register raw value, see setAngularScalarReg()
 };
 
 }  // namespace TestSim

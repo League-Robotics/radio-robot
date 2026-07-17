@@ -14,6 +14,7 @@ enum class ConfigTarget : uint8_t {
     CONFIG_MOTOR_RIGHT = 2,
     CONFIG_PLANNER = 3,
     CONFIG_WATCHDOG = 4,
+    CONFIG_OTOS = 5,
 };
 
 enum class BoundMotorSide : uint8_t {
@@ -70,6 +71,18 @@ struct PlannerConfigPatch {
     Opt<float> handoff_tol_v = {};
     Opt<float> arrive_vel_tol = {};
     Opt<float> arrive_dwell = {};
+
+    // --- array / optional-string accessors ---
+};
+
+// OtosConfigPatch
+struct OtosConfigPatch {
+    Opt<float> linear_scale = {};
+    Opt<float> angular_scale = {};
+    Opt<float> offset_x = {};
+    Opt<float> offset_y = {};
+    Opt<float> offset_yaw = {};
+    bool init = false;
 
     // --- array / optional-string accessors ---
 };

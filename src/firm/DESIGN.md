@@ -9,12 +9,13 @@ subsystem-docs:
   - devices/DESIGN.md
   - kinematics/DESIGN.md
   - messages/DESIGN.md
+  - motion/DESIGN.md
   - types/DESIGN.md
 ---
 
 # Firmware (src/firm) — Root Design
 
-**Owner:** Eric Busboom · **Last reviewed:** 2026-07-16 · **Status:** in-flux
+**Owner:** Eric Busboom · **Last reviewed:** 2026-07-17 · **Status:** in-flux
 
 ---
 
@@ -47,7 +48,11 @@ Flow of one cycle, at orientation altitude:
    `msg::CommandEnvelope`.
 2. **Dispatch** — the loop's own switch acts on the command: a Twist stages a
    target on `App::Drive` and arms `App::Deadman`; config/queries reply via
-   `Comms::sendReply()`.
+   `Comms::sendReply()`; a Move (109-003) is normalized into a `Motion::Cmd`
+   and handed to `App::Pilot::enqueue()`, which sequences it through
+   `Motion::Executor` over subsequent cycles (see
+   [motion/DESIGN.md](motion/DESIGN.md) §2b, [app/DESIGN.md](app/DESIGN.md)
+   §2).
 3. **Motor service** — the loop runs each `Devices::NezhaMotor`'s split-phase
    encoder request → settle → collect → PID → duty-write sequence, with the
    settle/clearance gaps expressed as `runAndWait(gap, body)` blocks whose
@@ -66,12 +71,13 @@ The directory map:
 
 | Directory | Namespace | Role | Doc |
 |---|---|---|---|
-| `app/` | `App` | The loop and its passive app modules: RobotLoop, Comms, Telemetry, Drive, Odometry, Deadman, Preamble | [app/DESIGN.md](app/DESIGN.md) |
+| `app/` | `App` | The loop and its passive app modules: RobotLoop, Comms, Telemetry, Drive, Odometry, Deadman, Preamble, Pilot (109-003/109-005), HeadingSource (109-005) | [app/DESIGN.md](app/DESIGN.md) |
 | `devices/` | `Devices` | Device leaves (NezhaMotor, Otos, ColorSensorLeaf, LineSensorLeaf), the MotorArmor policy base, velocity PID, and the pure seam interfaces `I2CBus`/`Clock`/`Sleeper` plus their `MicroBit*` ARM impls | [devices/DESIGN.md](devices/DESIGN.md) |
 | `com/` | (global / `radiochan`) | Raw transports: `SerialPort` (USB CDC), `Radio` (micro:bit radio), persisted radio-channel storage | [com/DESIGN.md](com/DESIGN.md) |
 | `messages/` | `msg` | Wire schema: generated message structs, generated envelope codec (`wire.{h,cpp}`), hand-written byte-level runtime (`wire_runtime.{h,cpp}`), layout gates | [messages/DESIGN.md](messages/DESIGN.md) |
 | `config/` | `Config` | Generated boot configuration — per-robot calibration baked at build time from `data/robots/active_robot.json` | [config/DESIGN.md](config/DESIGN.md) |
 | `kinematics/` | `BodyKinematics` | Stateless differential-drive math: inverse/forward twist↔wheel maps, saturation | [kinematics/DESIGN.md](kinematics/DESIGN.md) |
+| `motion/` | `Motion` | Jerk-limited single-channel trajectory solving (`JerkTrajectory`, wrapping vendored Ruckig, `vendor/ruckig/`, restored 109-001) plus the ring-queue/state-machine sequencer (`Cmd`/`Executor`, 109-003 TIMED mode, 109-005 DISTANCE-mode arcs/pivots) that drives it; `App::Pilot` is its one consumer | [motion/DESIGN.md](motion/DESIGN.md) |
 | `types/` | (global) | Protocol v2 text-tag constants, protocol/firmware version, reply-context plumbing types | [types/DESIGN.md](types/DESIGN.md) |
 | `main.cpp` | — | ARM entry point: constructs the real hardware singletons and every module, wires them, hands off to `RobotLoop::run()` (never returns) | this doc, §4 |
 
@@ -80,14 +86,26 @@ Dependency direction (arrows = "includes/uses"):
 ```
 main.cpp ──► app ──► devices ──► (nothing project-local except itself)
    │          │  └─► messages, kinematics
+   │          │  └─► motion        (109-003: app -> motion edge, via
+   │          │                     App::Pilot -> Motion::Executor)
    │          └────► com (via ARM-only Transport adapters)
    ├────────► config ──► messages
    └────────► com, devices, config
+
+motion ──► messages   (Motion::Cmd/Executor reference msg::PlannerConfig
+                        and msg::Move; JerkTrajectory references only
+                        msg::PlannerConfig)
 ```
 
 `devices/` is the bottom of the stack and deliberately includes nothing from
 `messages/` or `config/` (see §3). `kinematics/` and `messages/` are leaf
-libraries with no project dependencies of their own.
+libraries with no project dependencies of their own; `motion/` is a leaf
+with exactly one project dependency (`messages/`, for `msg::PlannerConfig`/
+`msg::Move`'s field types — see [motion/DESIGN.md](motion/DESIGN.md)). As
+of 109-003, `App::Pilot` (`app/pilot.{h,cpp}`) is `motion/`'s one consumer,
+driven from `RobotLoop`'s own cycle — the `app -> motion` edge this ticket
+adds; nothing in `devices/`, `config/`, or anywhere else reaches into
+`motion/`.
 
 ## 3. Constraints and Invariants
 

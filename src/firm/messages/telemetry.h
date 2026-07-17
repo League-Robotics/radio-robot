@@ -12,6 +12,24 @@ namespace msg {
 enum class AckStatus : uint8_t {
     ACK_STATUS_OK = 0,
     ACK_STATUS_ERR = 1,
+    ACK_STATUS_DONE = 2,
+    ACK_STATUS_TRIVIAL = 3,
+    ACK_STATUS_SUPERSEDED = 4,
+    ACK_STATUS_FLUSHED = 5,
+    ACK_STATUS_TIMEOUT = 6,
+    ACK_STATUS_SOLVE_FAIL = 7,
+};
+
+enum class ExecutorState : uint8_t {
+    EXEC_IDLE = 0,
+    EXEC_RUNNING = 1,
+    EXEC_RAMP_TO_REST = 2,
+    EXEC_STOPPING = 3,
+};
+
+enum class HeadingSourceStatus : uint8_t {
+    HEADING_SOURCE_STATUS_OTOS = 0,
+    HEADING_SOURCE_STATUS_ENCODER = 1,
 };
 
 // AckEntry
@@ -48,6 +66,10 @@ struct Telemetry {
     bool conn_right = false;
     uint32_t fault_bits = 0;
     uint32_t event_bits = 0;
+    uint32_t queue_depth = 0;
+    uint32_t active_id = 0;
+    ExecutorState exec_state = static_cast<ExecutorState>(0);
+    HeadingSourceStatus heading_source = static_cast<HeadingSourceStatus>(0);
 
     // --- array / optional-string accessors ---
     const AckEntry* acks() const { return acks_; }

@@ -204,8 +204,10 @@ class _FakeTwistTransport:
 
     def __init__(self) -> None:
         self.twist_calls: list[tuple[float, float, float]] = []
+        self.move_calls: list[dict] = []
         self.stop_calls: int = 0
         self._corr_id = 0
+        self._pending_acks: list[int] = []  # 109-008: move ids awaiting delivery -- see move()
         self._x = 0.0    # [mm]
         self._y = 0.0    # [mm]
         self._heading = 0.0  # [rad]
@@ -228,19 +230,44 @@ class _FakeTwistTransport:
         self.stop_calls += 1
         return self._corr_id
 
+    def move(self, *, distance: float = 0.0, delta_heading: float = 0.0,
+             v_max: float = 0.0, omega: float = 0.0, time: float = 0.0,
+             replace: bool = False, id: "int | None" = None) -> int:  # [mm] [rad] [mm/s] [rad/s] [ms]
+        """109-008: MOVE-queue counterpart of ``twist()`` above -- this fake
+        has no real firmware queue/timing to model, so it integrates the
+        WHOLE commanded arc in one shot (open-loop unicycle, same shape
+        ``twist()`` uses per-tick) and immediately queues a `DONE`
+        completion ack for this id (mirrors ``planner.tour``'s own "anything
+        but OK is terminal" contract -- see that module's file header)."""
+        self._corr_id += 1
+        move_id = id if id is not None else self._corr_id
+        self.move_calls.append(dict(distance=distance, delta_heading=delta_heading,
+                                    v_max=v_max, omega=omega, time=time,
+                                    replace=replace, id=move_id))
+        self._heading += delta_heading
+        self._x += distance * math.cos(self._heading)
+        self._y += distance * math.sin(self._heading)
+        self._enc += distance
+        self._pending_acks.append(move_id)
+        return move_id
+
     def read_pending_binary_tlm_frames(self) -> list:
         return [self._make_frame()]
 
     def _make_frame(self):
-        from robot_radio.robot.protocol import TLMFrame
+        from robot_radio.robot.pb2 import telemetry_pb2
+        from robot_radio.robot.protocol import AckEntry, TLMFrame
 
         enc_i = int(self._enc)
         pose = (
             int(self._x), int(self._y),
             int(round(math.degrees(self._heading) * 100.0)),  # [cdeg]
         )
+        acks = tuple(
+            AckEntry(corr_id=move_id, ok=True, err_code=0, status=telemetry_pb2.ACK_STATUS_DONE)
+            for move_id in self._pending_acks)
         return TLMFrame(enc=(enc_i, enc_i), pose=pose, otos=pose,
-                        fault_bits=0, event_bits=0)
+                        fault_bits=0, event_bits=0, acks=acks)
 
 
 # ---------------------------------------------------------------------------

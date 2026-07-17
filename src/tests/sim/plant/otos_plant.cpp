@@ -8,7 +8,7 @@ namespace TestSim {
 
 OtosPlant::OtosPlant(float trackWidth) : trackWidth_(trackWidth) {}
 
-void OtosPlant::step(float leftPosition, float rightPosition) {
+void OtosPlant::step(float leftPosition, float rightPosition, float dt) {
   float deltaLeft = leftPosition - lastLeft_;
   float deltaRight = rightPosition - lastRight_;
   lastLeft_ = leftPosition;
@@ -26,12 +26,20 @@ void OtosPlant::step(float leftPosition, float rightPosition) {
   x_ += distance * std::cos(midHeading);
   y_ += distance * std::sin(midHeading);
   heading_ += headingDelta;
+
+  // 109-010: omega() -- see step()'s own `dt` doc comment (header).
+  omega_ = (dt > 0.0f) ? headingDelta / dt : 0.0f;
 }
 
 void OtosPlant::setDrift(float xDrift, float yDrift, float headingDrift) {
   driftX_ = xDrift;
   driftY_ = yDrift;
   driftHeading_ = headingDrift;
+}
+
+void OtosPlant::setRawScaleErr(float linearFraction, float angularFraction) {
+  rawErrorLinear_ = linearFraction;
+  rawErrorAngular_ = angularFraction;
 }
 
 void OtosPlant::reset(float x, float y, float heading,

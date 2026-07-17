@@ -24,6 +24,8 @@ void Odometry::integrate() {
   float distance = 0.0f;     // [mm] this cycle's body-frame forward travel
   float headingDelta = 0.0f; // [rad] this cycle's heading change
   BodyKinematics::forward(deltaLeft, deltaRight, trackWidth_, distance, headingDelta);
+  lastStepDistance_ = distance;
+  lastStepHeadingDelta_ = headingDelta;
 
   // Midpoint-arc integration: use the heading halfway through this cycle's
   // turn (not the heading at the START of the cycle) so a simultaneous

@@ -56,12 +56,19 @@ package robot;
 // (ticket 004), never `bb.configIn` -- see `config_commands.h`'s own
 // file-header note about `sTimeout` being "the one key that is NOT one of
 // the Configurator's four targets."
+// CONFIG_OTOS (109-004): OtosConfigPatch's own target -- mirrors the other
+// four entries' 1:1 Patch-kind correspondence. Added alongside
+// OtosConfigPatch below; no live GET/ConfigSnapshot arm reads it this
+// sprint (Architecture Revision 1's "host-side GET echo" decision covers
+// OL/OA -- see protocol.py), but the enum slot exists now so a later
+// ConfigSnapshot extension does not need a wire-schema change of its own.
 enum ConfigTarget {
   CONFIG_DRIVETRAIN  = 0;
   CONFIG_MOTOR_LEFT  = 1;
   CONFIG_MOTOR_RIGHT = 2;
   CONFIG_PLANNER     = 3;
   CONFIG_WATCHDOG    = 4;  // routes to bb.streamWatchdogWindowIn, not bb.configIn
+  CONFIG_OTOS        = 5;
 }
 
 // Which of the drivetrain's two bound motors `MotorConfigPatch.side`
@@ -157,4 +164,42 @@ message PlannerConfigPatch {
   optional float handoff_tol_v      = 18;  // [s]
   optional float arrive_vel_tol     = 19;  // [mm/s]
   optional float arrive_dwell       = 20;  // [s]
+}
+
+// Curated patch of OTOS runtime calibration -- mirrors
+// Config::OtosBootConfig's 5 fields (config/boot_config.h: offsetX/offsetY/
+// offsetYaw/linearScale/angularScale) exactly, PLUS a 6th field (`init`)
+// with no OtosBootConfig counterpart. 109-004 (issue
+// otos-calibration-config-message.md): restores a RUNTIME path to
+// Devices::Otos's existing setLinearScalar()/setAngularScalar()/setOffset()/
+// init() primitives, which before this ticket were only ever called once at
+// boot from baked boot_config -- see this sprint's Architecture Revision 1
+// for why the host side (`OL`/`OA`/`OI`) sends this patch directly
+// (NezhaProtocol.otos_config(), protocol.py) rather than through the dead
+// binary_bridge.translate_command() legacy-verb layer.
+//
+// `linear_scale`/`angular_scale` (Opt<float> presence) mirror OL/OA's own
+// wire contract: each maps 1:1 to Otos::setLinearScalar()/
+// setAngularScalar() -- the chip's raw int8 register scalar, NOT a
+// recomputation of OtosBootConfig's own multiplier (see otos.h's own OL/OA
+// doc comment). `offset_x`/`offset_y`/`offset_yaw` (Opt<float>) mirror
+// Otos::setOffset() -- the lever-arm mounting-offset register, written as a
+// merged triple (RobotLoop::handleConfig reads the CURRENT offset via
+// Otos::getOffset() first, then overwrites only the fields present here,
+// mirroring MotorConfigPatch's own gains-merge pattern) since setOffset()
+// itself always writes all three together.
+//
+// `init` is deliberately a PLAIN (non-optional) bool, not an Opt<float>-style
+// calibration value: OI is a fire-and-forget TRIGGER (Otos::init() --
+// enable signal processing, reset Kalman tracking, kick off IMU bias
+// calibration), not a value being SET. RobotLoop::handleConfig calls
+// Otos::init() whenever this field is true, independent of whether any
+// other field in the same patch is also present.
+message OtosConfigPatch {
+  optional float linear_scale  = 1;  // OL -- Otos::setLinearScalar()
+  optional float angular_scale = 2;  // OA -- Otos::setAngularScalar()
+  optional float offset_x      = 3;  // [mm] Otos::setOffset() x
+  optional float offset_y      = 4;  // [mm] Otos::setOffset() y
+  optional float offset_yaw    = 5;  // [rad] Otos::setOffset() heading
+  bool           init          = 6;  // OI -- Otos::init() trigger
 }

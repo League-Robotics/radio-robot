@@ -275,6 +275,20 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
     lib.sim_set_otos_drift.argtypes = [
         ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float]
     lib.sim_set_otos_drift.restype = None
+    lib.sim_set_enc_scale_err.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_float]
+    lib.sim_set_enc_scale_err.restype = None
+    lib.sim_set_otos_raw_scale_err.argtypes = [ctypes.c_void_p, ctypes.c_float, ctypes.c_float]
+    lib.sim_set_otos_raw_scale_err.restype = None
+    lib.sim_set_enc_tick_quant.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_float]
+    lib.sim_set_enc_tick_quant.restype = None
+    lib.sim_set_enc_slip.argtypes = [
+        ctypes.c_void_p, ctypes.c_int, ctypes.c_float, ctypes.c_float]
+    lib.sim_set_enc_slip.restype = None
+    lib.sim_set_lead_compensation.argtypes = [
+        ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float]
+    lib.sim_set_lead_compensation.restype = None
+    lib.sim_set_yaw_rate_max.argtypes = [ctypes.c_void_p, ctypes.c_float]
+    lib.sim_set_yaw_rate_max.restype = None
 
     lib.sim_set_read_hook.argtypes = [ctypes.c_void_p, _SimHookFn, ctypes.c_void_p]
     lib.sim_set_read_hook.restype = None
@@ -419,6 +433,44 @@ class SimLoop:
             lambda: self._lib.sim_inject_stop(self._handle, ctypes.c_uint32(corr_id)))
         return corr_id
 
+    def move(self, *, distance: float = 0.0, delta_heading: float = 0.0,
+             v_max: float = 0.0, omega: float = 0.0, time: float = 0.0,
+             replace: bool = False, id: "int | None" = None) -> int:
+        """MOVE-queue command (109-008 host adoption) -- builds and injects
+        ``CommandEnvelope{move: Move{...}}`` via ``inject_command()``'s
+        generic escape hatch (the SAME mechanism ``_SimConfigConn.
+        send_envelope_fast()`` uses for the config path, Architecture
+        Revision 1's "one mechanism, not a Sim-specific fork") rather than a
+        dedicated ``sim_inject_move`` ctypes symbol -- unlike
+        ``twist()``/``stop()`` (hot teleop-path calls with their own fast
+        ctypes entry points), Move is sent at most once per tour LEG, so the
+        extra Python-side envelope-build cost here is immaterial.
+
+        ``id`` doubles as both the envelope's own ``corr_id`` (the enqueue
+        ack's own correlation key) and ``Move.id`` (the LATER completion
+        event's key, per ``envelope.proto``'s own ``Move.id`` doc comment)
+        -- mirrors ``NezhaProtocol.move()``'s own convention exactly, so
+        ``planner.tour.run_tour()`` can treat a ``NezhaProtocol`` and a
+        ``SimLoop`` identically. Defaults to this instance's own
+        ``_next_corr_id()`` counter when omitted (matching ``twist()``/
+        ``stop()``'s own auto-assignment).
+
+        Returns the id used. Fire-and-poll, matching ``twist()``/``stop()``
+        -- this call never blocks on a reply; see ``planner.tour``'s own
+        completion-event polling for how a caller learns the outcome.
+        """
+        self._require_connected()
+        move_id = id if id is not None else self._next_corr_id()
+        pb2_mod = _get_envelope_pb2()
+        envelope = pb2_mod.CommandEnvelope(
+            corr_id=move_id,
+            move=pb2_mod.Move(distance=distance, delta_heading=delta_heading,
+                              v_max=v_max, omega=omega, time=time,
+                              replace=replace, id=move_id))
+        armored = base64.b64encode(envelope.SerializeToString()).decode("ascii")
+        self.inject_command(f"*B{armored}")
+        return move_id
+
     def read_pending_binary_tlm_frames(self) -> "list[TLMFrame]":
         """Non-blocking drain of every currently-queued ``TLMFrame`` --
         the sim-side counterpart of ``NezhaProtocol.
@@ -526,6 +578,83 @@ class SimLoop:
             lambda: self._lib.sim_set_otos_drift(
                 self._handle, ctypes.c_float(x_drift), ctypes.c_float(y_drift),
                 ctypes.c_float(heading_drift)))
+
+    def set_enc_scale_err(self, port: int, fraction: float) -> None:  # [fractional over/under-report]
+        """109-002: fractional per-side encoder over/under-report knob --
+        ``sim_ctypes.cpp``'s ``sim_set_enc_scale_err()``, added this ticket
+        alongside the other three fault-condition setters above (``sim_plant.h``'s
+        ``SimPlant::setEncScaleErr()`` -> ``WheelPlant::setScaleErr()``).
+        port: 1=left, 2=right, matching every other port-keyed knob here."""
+        self._require_connected()
+        self._call_on_tick_thread(
+            lambda: self._lib.sim_set_enc_scale_err(
+                self._handle, int(port), ctypes.c_float(fraction)))
+
+    def set_otos_raw_scale_err(self, linear_fraction: float,
+                               angular_fraction: float) -> None:  # [fractional over/under-report, 0=perfect]
+        """109-007: models a physically MIS-calibrated OTOS chip --
+        ``sim_ctypes.cpp``'s ``sim_set_otos_raw_scale_err()`` ->
+        ``SimPlant::setOtosRawScaleErr()`` -> ``OtosPlant::setRawScaleErr()``.
+        A firmware-pushed OTOS calibration scalar (``OL``/``OA``, or a live
+        ``OtosConfigPatch`` -- ticket 004's direct-patch-send mechanism)
+        multiplies back against this fault knob (captured by
+        ``SimPlant::handleOtosWrite()``'s new register-write path), so a
+        correctly calibrated chip reports the true pose again -- see
+        ``otos_plant.h``'s own header comment for the full net-effect
+        contract. 0.0/0.0 (the default) is a genuine no-op."""
+        self._require_connected()
+        self._call_on_tick_thread(
+            lambda: self._lib.sim_set_otos_raw_scale_err(
+                self._handle, ctypes.c_float(linear_fraction),
+                ctypes.c_float(angular_fraction)))
+
+    def set_enc_tick_quant(self, port: int, tick_size: float) -> None:  # [mm]
+        """109-007: per-wheel encoder tick-quantization knob -- rounds the
+        reported position to the nearest multiple of ``tick_size`` [mm],
+        modeling a real encoder's finite count resolution. 0.0 (the
+        default) is a genuine no-op. port: 1=left, 2=right, matching every
+        other port-keyed knob here."""
+        self._require_connected()
+        self._call_on_tick_thread(
+            lambda: self._lib.sim_set_enc_tick_quant(
+                self._handle, int(port), ctypes.c_float(tick_size)))
+
+    def set_enc_slip(self, port: int, rate: float, magnitude: float) -> None:  # [0,1] [mm]
+        """109-007: per-wheel encoder slip-event knob -- a deterministic
+        accumulator (mirrors ``set_wheel_dropout_rate()``'s own design, no
+        RNG) fires a slip event every time it crosses 1.0, injecting a
+        PERMANENT signed ``magnitude`` [mm] offset into every future
+        reported position -- models a wheel that slipped against the
+        surface. ``rate``=0.0 (the default) never fires. port: 1=left,
+        2=right."""
+        self._require_connected()
+        self._call_on_tick_thread(
+            lambda: self._lib.sim_set_enc_slip(
+                self._handle, int(port), ctypes.c_float(rate), ctypes.c_float(magnitude)))
+
+    def set_lead_compensation(self, heading_lead_bias: float, plan_lead: float,
+                              terminal_lead: float) -> None:  # [s] [s] [s]
+        """109-010: rate-sweep characterization harness hook -- sets the
+        three independently-tunable lead-compensation Δt's directly on the
+        sim's own ``msg::PlannerConfig`` (``SimHarness::
+        setLeadCompensation()``). No wire ``PlannerConfigPatch`` arm exists
+        for these fields (boot-baked-default-only per this ticket's own
+        scope) -- this sim-only ctypes path is how a test varies them
+        against the compiled sim without a reflash/rebuild."""
+        self._require_connected()
+        self._call_on_tick_thread(
+            lambda: self._lib.sim_set_lead_compensation(
+                self._handle, ctypes.c_float(heading_lead_bias),
+                ctypes.c_float(plan_lead), ctypes.c_float(terminal_lead)))
+
+    def set_yaw_rate_max(self, yaw_rate_max: float) -> None:  # [rad/s]
+        """109-010: rate-sweep characterization harness hook -- varies the
+        pivot cruise-rate ceiling (``PlannerConfig.yaw_rate_max``) against
+        the compiled sim without a reflash/rebuild (``SimHarness::
+        setYawRateMax()``)."""
+        self._require_connected()
+        self._call_on_tick_thread(
+            lambda: self._lib.sim_set_yaw_rate_max(self._handle, ctypes.c_float(yaw_rate_max)))
 
     # ------------------------------------------------------------------
     # Manual stepping (no tick thread required -- ticket 009's shape)

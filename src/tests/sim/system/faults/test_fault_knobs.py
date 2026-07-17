@@ -51,7 +51,9 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "deadman.cpp",
     _SOURCE_DIR / "app" / "drive.cpp",
     _SOURCE_DIR / "app" / "odometry.cpp",
+    _SOURCE_DIR / "app" / "heading_source.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
+    _SOURCE_DIR / "app" / "pilot.cpp",
 ]
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
@@ -67,6 +69,16 @@ _MESSAGE_SOURCES = [
 ]
 _KINEMATICS_SOURCES = [
     _SOURCE_DIR / "kinematics" / "body_kinematics.cpp",
+]
+# 109-003: robot_loop.h now includes app/pilot.h -> motion/executor.h ->
+# motion/jerk_trajectory.h -> vendor/ruckig -- every sim_harness.h-based
+# harness (RobotLoop's own full dependency graph) needs the restored
+# Motion sources + the vendored Ruckig sources/include path too.
+_RUCKIG_INCLUDE = _REPO_ROOT / "vendor" / "ruckig" / "include"
+_RUCKIG_SRC_DIR = _REPO_ROOT / "vendor" / "ruckig" / "src"
+_MOTION_SOURCES = [
+    _SOURCE_DIR / "motion" / "jerk_trajectory.cpp",
+    _SOURCE_DIR / "motion" / "executor.cpp",
 ]
 
 _CXX_STANDARD = "c++20"
@@ -91,6 +103,8 @@ def _all_sources():
         + _DEVICE_SOURCES
         + _MESSAGE_SOURCES
         + _KINEMATICS_SOURCES
+        + _MOTION_SOURCES
+        + sorted(_RUCKIG_SRC_DIR.glob("*.cpp"))
     )
 
 
@@ -120,6 +134,8 @@ def test_fault_knobs_harness_compiles_and_passes(tmp_path):
             str(_PLANT_DIR),
             "-I",
             str(_INFRA_SIM_DIR),
+            "-I",
+            str(_RUCKIG_INCLUDE),
             "-o",
             str(binary),
             *[str(src) for src in sources],

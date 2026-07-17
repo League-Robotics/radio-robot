@@ -1,5 +1,12 @@
 ---
-status: pending
+status: in-progress
+sprint: '109'
+tickets:
+- 109-003
+- 109-004
+- 109-005
+- 109-006
+- 109-009
 ---
 
 # Restore a runtime OTOS-calibration config message (protocol + firmware)

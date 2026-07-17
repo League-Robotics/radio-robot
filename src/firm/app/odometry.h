@@ -75,6 +75,18 @@ class Odometry {
   float y() const { return y_; }          // [mm]
   float theta() const { return theta_; }  // [rad]
 
+  // lastDistance/lastHeadingDelta -- the most recent integrate() call's own
+  // PER-CYCLE body-frame forward-travel/heading-change (the same
+  // BodyKinematics::forward() outputs integrate() accumulates into x_/y_/
+  // theta_, exposed here BEFORE accumulation -- 109-005: Motion::Executor's
+  // DISTANCE-mode completion criterion needs encoder-relative PROGRESS
+  // since a command's own activation, which App::Pilot accumulates itself
+  // call-by-call from this per-cycle delta; it is not something Odometry
+  // itself needs to track cumulatively for its own purposes). Both 0.0f
+  // before the first integrate() call.
+  float lastDistance() const { return lastStepDistance_; }        // [mm]
+  float lastHeadingDelta() const { return lastStepHeadingDelta_; }  // [rad]
+
   // Snap the dead-reckoned pose to (x, y, theta) and RE-ANCHOR the delta
   // baseline to each leaf's CURRENT position(), so the next integrate() sees
   // a zero delta rather than a phantom jump from the old baseline. This is
@@ -96,6 +108,9 @@ class Odometry {
   float x_ = 0.0f;      // [mm]
   float y_ = 0.0f;      // [mm]
   float theta_ = 0.0f;  // [rad]
+
+  float lastStepDistance_ = 0.0f;      // [mm] see lastDistance()'s own comment
+  float lastStepHeadingDelta_ = 0.0f;  // [rad] see lastHeadingDelta()'s own comment
 };
 
 // applyOtosSample() -- the minimal OTOS-only perception step (see file

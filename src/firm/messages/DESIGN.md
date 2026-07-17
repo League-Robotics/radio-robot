@@ -4,7 +4,7 @@ root: ../DESIGN.md
 
 # Messages (`src/firm/messages`)
 
-**Owner:** Eric Busboom · **Last reviewed:** 2026-07-16 · **Status:** in-flux
+**Owner:** Eric Busboom · **Last reviewed:** 2026-07-17 · **Status:** in-flux
 
 ---
 
@@ -127,7 +127,22 @@ firmware runtime; the device itself never sees protobuf. It also emits
   arms) — each checked at build time against a 186-byte envelope budget.
   A schema change that pushes an envelope over budget fails a
   `static_assert` at build time, not silently at runtime on a truncated wire
-  line.
+  line. As of 109-003: `ReplyEnvelope` is 178B (`Move` alone added `Move`
+  as a NEW `CommandEnvelope` oneof arm, `CommandEnvelope` now 115B).
+- **A `(max)`/`(abs_max)` bound now narrows a VARINT field's worst-case wire
+  width, not just a `float` field's semantic range** (109-003 —
+  `gen_messages.py`'s `_worst_case_scalar_size()`; previously this docstring
+  said "a future bounded VARINT field would need this revisited" — this
+  ticket is that future). `AckEntry.err_code`'s `(max) = 7` (its real
+  domain — `ErrCode`'s own highest enumerator) and `Telemetry.queue_depth`'s
+  `(max) = 8` (the ring's own real depth) are both ACCURATE bounds, not
+  artificial shrinks — narrowing them bought back the wire budget the
+  three new `Telemetry` fields (`queue_depth`/`active_id`/`exec_state`)
+  spent. This is a size-estimation optimization only: the runtime encoder
+  never clamps or rejects a value exceeding its declared bound, it just
+  costs more bytes than the worst-case table assumed for that one frame,
+  and `msg::wire::encode()`'s own capacity check means that rare case
+  safely skips sending the frame rather than corrupting a buffer.
 - **Bounds are stored as `float`, not `double`.** `FieldDesc.minVal`/
   `maxVal`/`absMaxVal` in the generated `wire.cpp` tables are `float` (4
   bytes) even though `protos/options.proto`'s `(min)`/`(max)`/`(abs_max)`
@@ -259,6 +274,17 @@ that conversion — it only defines the wire-side shape.
   left over from the pre-rebuild architecture; confirm before either wiring
   it to a live producer or deleting it. Not touched by this review beyond
   comment trimming (see report).
+  **Resolved for the 109-003 use case specifically** (sprint 109 `sprint.md`
+  Open Question 3: should `Motion::Executor`'s new per-command completion
+  events — `DONE`/`TRIVIAL`/`SUPERSEDED`/`FLUSHED`/`TIMEOUT`/`SOLVE_FAIL` —
+  ride `event.h`, or the existing reply/TLM path?) — **the existing ack ring
+  wins**: `telemetry.proto`'s `AckStatus` enum gained the six completion
+  values above, riding the SAME depth-3 `Telemetry.acks` ring every
+  `TWIST`/`CONFIG`/`STOP` ack already uses, rather than reviving a second,
+  parallel, hand-written notification channel with no other live consumer.
+  `event.h` itself remains untouched, unreferenced dead code — this
+  resolution does not un-orphan it, it just answers "where do 109-003's own
+  new events go" without reopening that separate question.
 - **`get_*` accessor removal issue may already be moot** — see §3's note;
   worth confirming against `clasi/issues/remove-generated-get-accessors.md`
   whether that issue is stale/already resolved or still pending against a

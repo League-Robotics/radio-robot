@@ -87,6 +87,7 @@ constexpr uint32_t kFaultCommsMalformed = 1u << 3;
 constexpr uint32_t kEventDeadmanExpired = 1u << 0;
 constexpr uint32_t kEventBootReady = 1u << 1;
 constexpr uint32_t kEventConfigApplied = 1u << 2;
+constexpr uint32_t kEventHeadingFallback = 1u << 3;  // App::HeadingSource transition (109-005)
 
 // Primary cadence target: ~25 Hz/40 ms. Callers pace against this and
 // measure their own real number; emit() does not need to hit it exactly.
@@ -122,6 +123,18 @@ class Telemetry {
     bool active = false;
     bool connLeft = false;
     bool connRight = false;
+
+    // Motion::Executor visibility (109-003) -- mirrors telemetry.proto's
+    // queue_depth/active_id/exec_state fields field-for-field. Populated
+    // by RobotLoop::updateTlm() from App::Pilot's own accessors.
+    uint8_t queueDepth = 0;
+    uint32_t activeId = 0;
+    msg::ExecutorState execState = msg::ExecutorState::EXEC_IDLE;
+
+    // App::HeadingSource visibility (109-005, SUC-004) -- mirrors
+    // telemetry.proto's heading_source field. Populated by RobotLoop::
+    // updateTlm() from App::Pilot::headingSourceIsOtos().
+    msg::HeadingSourceStatus headingSource = msg::HeadingSourceStatus::HEADING_SOURCE_STATUS_OTOS;
   };
 
   // Secondary-frame snapshot -- mirrors msg::TelemetrySecondary's own

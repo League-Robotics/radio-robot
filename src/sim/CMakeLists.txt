@@ -23,6 +23,7 @@ get_filename_component(REPO_ROOT "${CMAKE_SOURCE_DIR}/../.." ABSOLUTE)
 set(SOURCE_DIR "${REPO_ROOT}/src/firm")
 set(SUPPORT_DIR "${REPO_ROOT}/src/tests/sim/support")
 set(PLANT_DIR "${REPO_ROOT}/src/tests/sim/plant")
+set(RUCKIG_DIR "${REPO_ROOT}/vendor/ruckig")
 
 # ---------------------------------------------------------------------------
 # Explicit source list -- no glob-then-filter. Mirrors
@@ -46,6 +47,13 @@ set(PLANT_DIR "${REPO_ROOT}/src/tests/sim/plant")
 #                                 primitives
 #   kinematics/body_kinematics.cpp
 #                              -- pure math, no CODAL deps
+#   motion/jerk_trajectory.cpp -- Motion::JerkTrajectory (109-001), the
+#                                 restored Ruckig<1> wrapper; HOST_BUILD-pure,
+#                                 no CODAL deps
+#   vendor/ruckig/src/*.cpp -- the vendored Ruckig solver sources
+#                                 Motion::JerkTrajectory links against, listed
+#                                 explicitly (not globbed) matching this
+#                                 file's own convention
 #   sim_ctypes.cpp             -- this ticket's C ABI (108-005)
 #   sim_plant.cpp               -- ticket 108-002's SimPlant (tests/_infra/sim/)
 #   sim_clock.cpp                -- ticket 108-010's TestSim::SimClock/
@@ -79,7 +87,9 @@ set(APP_SOURCES
     "${SOURCE_DIR}/app/comms.cpp"
     "${SOURCE_DIR}/app/deadman.cpp"
     "${SOURCE_DIR}/app/drive.cpp"
+    "${SOURCE_DIR}/app/heading_source.cpp"
     "${SOURCE_DIR}/app/odometry.cpp"
+    "${SOURCE_DIR}/app/pilot.cpp"
     "${SOURCE_DIR}/app/preamble.cpp"
     "${SOURCE_DIR}/app/robot_loop.cpp"
     "${SOURCE_DIR}/app/telemetry.cpp"
@@ -98,6 +108,26 @@ set(MESSAGE_SOURCES
 set(KINEMATICS_SOURCES
     "${SOURCE_DIR}/kinematics/body_kinematics.cpp"
 )
+set(MOTION_SOURCES
+    "${SOURCE_DIR}/motion/jerk_trajectory.cpp"
+    "${SOURCE_DIR}/motion/executor.cpp"
+)
+# Explicit list (not a glob), matching this file's own house style --
+# mirrors the vendored library's 11 core state-to-state solver sources
+# (see vendor/ruckig/README.vendored.md's "What was vendored" list).
+set(RUCKIG_SOURCES
+    "${RUCKIG_DIR}/src/brake.cpp"
+    "${RUCKIG_DIR}/src/position_first_step1.cpp"
+    "${RUCKIG_DIR}/src/position_first_step2.cpp"
+    "${RUCKIG_DIR}/src/position_second_step1.cpp"
+    "${RUCKIG_DIR}/src/position_second_step2.cpp"
+    "${RUCKIG_DIR}/src/position_third_step1.cpp"
+    "${RUCKIG_DIR}/src/position_third_step2.cpp"
+    "${RUCKIG_DIR}/src/velocity_second_step1.cpp"
+    "${RUCKIG_DIR}/src/velocity_second_step2.cpp"
+    "${RUCKIG_DIR}/src/velocity_third_step1.cpp"
+    "${RUCKIG_DIR}/src/velocity_third_step2.cpp"
+)
 set(SIM_SOURCES
     "${CMAKE_SOURCE_DIR}/sim_ctypes.cpp"
     "${CMAKE_SOURCE_DIR}/sim_plant.cpp"
@@ -112,6 +142,8 @@ add_library(firmware_host SHARED
     ${DEVICE_SOURCES}
     ${MESSAGE_SOURCES}
     ${KINEMATICS_SOURCES}
+    ${MOTION_SOURCES}
+    ${RUCKIG_SOURCES}
     ${SIM_SOURCES}
 )
 
@@ -128,4 +160,5 @@ target_include_directories(firmware_host PRIVATE
     "${SUPPORT_DIR}"
     "${PLANT_DIR}"
     "${CMAKE_SOURCE_DIR}"
+    "${RUCKIG_DIR}/include"
 )

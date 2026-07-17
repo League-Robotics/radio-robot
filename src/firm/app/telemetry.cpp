@@ -136,6 +136,11 @@ void Telemetry::emitPrimary(uint32_t now) {
   tlm.fault_bits = faultBits_;
   tlm.event_bits = eventBits_;
 
+  tlm.queue_depth = frame_.queueDepth;
+  tlm.active_id = frame_.activeId;
+  tlm.exec_state = frame_.execState;
+  tlm.heading_source = frame_.headingSource;
+
   msg::ReplyEnvelope env;
   env.corr_id = 0;  // unsolicited push -- envelope.proto's own convention
   env.body_kind = msg::ReplyEnvelope::BodyKind::TLM;

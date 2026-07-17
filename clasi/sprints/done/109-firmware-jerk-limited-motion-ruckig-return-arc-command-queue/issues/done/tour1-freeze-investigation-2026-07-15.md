@@ -1,5 +1,8 @@
 ---
-status: pending
+status: done
+sprint: '109'
+tickets:
+- 109-008
 ---
 
 # Tour 1 "died/froze" after leg 1 — investigation record (2026-07-15 emergency fix)
@@ -65,6 +68,51 @@ Separately, a real log-flood bug was found and fixed this same dispatch
 `TelemetrySecondary` frame as `corr_id: N` at ~4 lines/s) — this would have made
 the message monitor feel sluggish/unresponsive around the same time, plausibly
 compounding the "froze" impression even though it is not a deadlock either.
+
+## Resolution (109-008, 2026-07-17): verified against the new MOVE-queue path
+
+This ticket's acceptance criterion #5 required confirming the specific
+failure mode above (`kFaultWedgeLatch` at a straight->turn boundary, plus the
+old `DEFAULT_INTER_LEG_SETTLE=0.3s` timing) cannot recur on the new
+`Motion::Executor`/`Move`-queue path (sprint 109 tickets 003-006), and
+closing this issue with that verdict.
+
+**Structural argument.** The freeze symptom traced above was never a real
+Qt deadlock — it was `run_tour()`'s OLD `StreamingExecutor.tick()` polling
+raw `Telemetry.fault_bits` every ~150ms cadence tick and stopping the WHOLE
+tour the instant ANY bit was nonzero, including a transient, self-recovered
+blip (`Devices::MotorArmor`'s own wedge-latch detector can assert briefly at
+a stop/reversal boundary and clear on its own without the drivetrain ever
+actually wedging). The new host-side `run_tour()` (`host/robot_radio/
+planner/tour.py`, this ticket) has NO raw fault-bit polling of any kind: a
+leg's own outcome is driven ENTIRELY by that leg's `Move` command reaching
+its own terminal `AckStatus` (`DONE`/`TRIVIAL`/`SUPERSEDED`/`FLUSHED`/
+`TIMEOUT`/`SOLVE_FAIL`, `Motion::Executor`'s own per-command taxonomy,
+telemetry.proto's ack ring) — a transient fault bit that firmware's own
+`MotorArmor` recovers from without aborting the active command has no wire
+path left to stop the tour at all. This eliminates the entire class of
+symptom the investigation above describes, by construction, independent of
+whether a wedge-latch condition happens to fire in any given run.
+
+**Empirical verification.** `src/tests/testgui/test_sim_transport_tour1.py`'s
+`test_tour_1_runs_to_completion_with_finite_small_closure` runs the REAL
+compiled firmware simulator (`libfirmware_host`) through the NEW
+`run_tour()` for the full 13-leg `TOUR_1` (6 straight->turn/turn->straight
+boundary crossings — the exact shape the original 2026-07-15 report
+described) end to end, asserting every leg reaches `RunOutcome.COMPLETED`
+(no `FAULT`, no timeout) and a finite closure. This test passed on its first
+attempt during this ticket's own verification run (no fault-triggered
+retries needed). `DEFAULT_INTER_LEG_SETTLE` (the other half of the original
+fix) is now vestigial (`tour.py`'s own file header): the MOVE-queue path has
+no host-timed gap between two QUEUED legs at all — firmware's own boundary-
+velocity carry (ticket 006) sequences the transition instead.
+
+**Verdict: RESOLVED.** The freeze symptom's own root cause (host-side
+"stop the tour on any fault bit" polling) does not exist on the new path,
+and the new path's own decisive test (TOUR_1 end to end, sim) demonstrates
+the straight->turn boundary crossings the original report named do not
+reproduce it. Closing this issue with this verdict per ticket 109-008's own
+acceptance criterion.
 
 ## If this verdict is wrong — what would pin it down
 

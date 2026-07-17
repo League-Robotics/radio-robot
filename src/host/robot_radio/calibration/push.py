@@ -97,6 +97,23 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
       6. ``OL <int8>``       — otos_linear_scale encoded
       7. ``OA <int8>``       — otos_angular_scale encoded
 
+    109-004 RESTORES steps 5-7 (dropped 2026-07-16, out-of-process, when
+    ``OI``/``OL``/``OA`` had no path over the current binary wire at all —
+    see this function's own git history / issue
+    ``otos-calibration-config-message.md``): ``binary_bridge.py``'s
+    ``translate_command()`` now intercepts these three verbs and constructs/
+    sends an ``OtosConfigPatch`` ``ConfigDelta`` directly
+    (``NezhaProtocol.otos_config()``), on both hardware and Sim transports
+    (``SimTransport._handle_otos_patch()``) — so the push below reaches a
+    real firmware consumer again (``RobotLoop::handleConfig``'s new OTOS
+    case) instead of producing "not supported"/"nodev" noise on every
+    connect. ``OL``/``OA`` still carry the chip's RAW int8 register scalar
+    (``scale_to_int8()``, NOT the raw ``otos_linear_scale``/
+    ``otos_angular_scale`` multiplier itself) — the exact same encoding the
+    pre-2026-07-16 text-plane push used, unchanged by this restoration
+    (``Otos::setLinearScalar()``/``setAngularScalar()`` still expect the raw
+    register value — see ``otos.h``'s own OL/OA doc comment).
+
     Does NOT push ``config.geometry.odometry_offset_mm`` (the OTOS
     mounting-offset/lever-arm): ``odomOffX``/``odomOffY``/``odomYaw`` are not
     in ``config_commands.cpp``'s registered `SET` key table
@@ -106,10 +123,12 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
     085-002/003's manual runs). This is not new drift 084 introduced: the
     OTOS lever-arm has no real hardware driver in this program at all, and
     OTOS pose is otherwise configured entirely via ``OI``/``OL``/``OA``/``OV``,
-    never `SET` — so dropping the dead push is the correct fix, not a
-    workaround. ``config.geometry.odometry_offset_mm`` itself (e.g.
+    never `SET` — so this function still does not push it (109-004's
+    ``OtosConfigPatch`` DOES carry offset_x/y/yaw wire capacity, but no host
+    verb sends them yet — a future ticket's scope, not this restoration's).
+    ``config.geometry.odometry_offset_mm`` itself (e.g.
     ``data/robots/tovez.json``'s non-zero ``x: -47.7``) is left as-is in the
-    schema — this function is simply no longer one of its consumers.
+    schema — this function is simply not (yet) one of its consumers.
     """
     cmds: list[tuple[str, int]] = []
 
@@ -139,18 +158,29 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
     rot_slip = float(rot_slip) if rot_slip is not None else 0.0
     cmds.append((f"SET rotSlip={rot_slip:g}", 200))
 
-    # ── OTOS init + scalars: DROPPED (2026-07-16, out-of-process) ─────────
-    # `OI`/`OL`/`OA` have NO path over the current binary wire on the real
-    # robot OR the sim: `envelope.proto`'s ConfigDelta carries only Drivetrain/
-    # Motor/Planner patches, `RobotLoop::handleConfig` applies only Motor, and
-    # the OTOS scalars are set once at boot from `boot_config`. Sending them
-    # only produced "not supported"/"nodev" noise on every connect. The robot's
-    # OTOS calibration is already baked in at build time, so this runtime push
-    # is redundant even when it works. Re-add these (in whatever binary form
-    # that ticket defines) once `clasi/issues/otos-calibration-config-message.md`
-    # restores a runtime OTOS-config path; the sim honors it per
-    # `clasi/issues/sim-honors-otos-calibration.md`.
-    #
+    # ── OTOS init + scalars: RESTORED (109-004) ───────────────────────────
+    # Dropped 2026-07-16 (out-of-process) because OI/OL/OA had no path over
+    # the binary wire at all; 109-004 gives them one (OtosConfigPatch,
+    # RobotLoop::handleConfig's new OTOS case, binary_bridge.py's/
+    # SimTransport's direct-patch-send interception of these three verbs) --
+    # see this function's own docstring for the restoration's full
+    # rationale. OI must precede OL/OA (chip init before the scale writes).
+    # ALWAYS pushed, same "uncalibrated -> neutral sentinel" discipline as
+    # rotSlip above: an uncalibrated config (otos_linear_scale/
+    # otos_angular_scale null/missing) pushes the 1.0 "no correction"
+    # default explicitly, overwriting whatever DefaultConfig.cpp baked in,
+    # rather than silently omitting the write.
+    from robot_radio.calibration.helpers import scale_to_int8
+
+    lin_scale = getattr(cal, "otos_linear_scale",  None) if cal else None
+    ang_scale = getattr(cal, "otos_angular_scale", None) if cal else None
+    lin_scale = float(lin_scale) if lin_scale is not None else 1.0
+    ang_scale = float(ang_scale) if ang_scale is not None else 1.0
+
+    cmds.append(("OI", 500))
+    cmds.append((f"OL {scale_to_int8(lin_scale)}", 200))
+    cmds.append((f"OA {scale_to_int8(ang_scale)}", 200))
+
     # (The NOTE about OTOS mounting-offset never being pushable — `odomOff*`
     # aren't registered SET keys — still holds; that stays out too.)
 
