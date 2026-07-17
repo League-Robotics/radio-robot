@@ -1,10 +1,16 @@
 ---
-id: '009'
-title: "Sim tour-closure gate (decisive acceptance) — iterate until Tour 1/2\
+id: 009
+title: "Sim tour-closure gate (decisive acceptance) \u2014 iterate until Tour 1/2\
   \ close within 1 degree or exact"
-status: open
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004, SUC-005]
-depends-on: ['008']
+status: in-progress
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+depends-on:
+- 008
 github-issue: ''
 issue: firmware-jerk-limited-motion-ruckig-return-arc-command-queue.md
 completes_issue: true
