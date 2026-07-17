@@ -2,12 +2,58 @@
 title: "TOUR_1 via SimTransport now faults reliably at leg 12 (STOP_TIME) after 109-009's completion-gate fixes"
 filed: 2026-07-17
 filed_by: programmer (sprint 109 ticket 009)
-status: open
+status: resolved
+resolved: 2026-07-17
+resolved_by: programmer (sprint 109 ticket 009, round 2)
 ---
 
 # TOUR_1 via SimTransport now faults reliably at leg 12 (STOP_TIME) after 109-009's completion-gate fixes
 
-## Summary
+## Resolution (2026-07-17, round 2)
+
+Root-caused and fixed. `Motion::Executor`'s dwell gate had two compounding
+problems, both in `src/firm/motion/executor.cpp`'s pivot-completion branch:
+
+1. **Hard reset-to-zero on any single tolerance/rate miss** — one bad
+   sample threw away the entire accumulated hold. Fixed with a leaky/
+   decaying counter: a miss now costs exactly one cycle (`dtMs`), the same
+   as a hit's own contribution, never the whole hold.
+2. **The rate test used a RAW one-sample finite-difference derivative**
+   (`thetaRate = (thetaMeasRel - prevThetaMeasRel_) / dtS`) — this is
+   extremely sensitive to per-cycle heading-measurement noise. Direct
+   instrumentation during this fix showed `thetaErr` settling cleanly
+   under `heading_dwell_tol` almost immediately, while the raw `thetaRate`
+   jittered ~1-9deg/s indefinitely under the sim's own realistic OTOS/
+   encoder error profile — never staying under `heading_dwell_rate`
+   (1deg/s) long enough to accumulate the hold, running out the
+   `stopTimeBackstopMs()` window every time. This was 100% reproducible
+   (not a scheduling-jitter artifact — the same leg faulted identically
+   whether or not the sim tick thread ran real-time). Fixed with a light
+   exponential low-pass filter (`dwellRateFilt_`, alpha=0.3) applied ONLY
+   to the dwell gate's own rate test.
+
+Both fixes are documented in `src/firm/motion/executor.cpp`'s own
+dwell-completion comment and `src/firm/motion/DESIGN.md`'s dwell-completion
+entry.
+
+**Verification**: `test_tour_1_runs_to_completion_with_finite_small_closure`
+(this issue's own regression test) now PASSES reliably — 3/3 repeated
+`pytest` invocations, each spinning up a fresh `SimTransport` connection
+(the exact path that reproduced the regression 100% of the time before this
+fix). The `xfail` marker on that test has been removed (not loosened).
+
+The original SimTransport-vs-raw-SimLoop discrepancy noted below (SimTransport
+reproducing the fault far more reliably than a raw `SimLoop`) is now
+understood as a real-time-vs-deterministic-timing artifact of the OLD bug,
+not a mechanism of its own: both paths hit the SAME underlying rate-test
+noise-sensitivity, but `SimTransport`'s own real tick-thread pacing simply
+sampled the noisy `thetaRate` in a way that crossed the (now-removed) hard-
+reset threshold more consistently than the ad hoc raw-`SimLoop` reproduction
+happened to. With the rate test now noise-tolerant (low-pass filtered) and
+the reset policy now leaky, this discrepancy no longer manifests on either
+path.
+
+## Summary (original filing, superseded by the resolution above)
 
 Sprint 109 ticket 009 (the sim tour-closure decisive-acceptance gate)
 found and fixed six real bugs in `Motion::Executor`'s completion criteria

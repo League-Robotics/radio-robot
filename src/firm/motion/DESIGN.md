@@ -322,6 +322,71 @@ the-gate-passes scope justifies. This is a real, open robustness question
 any-miss?) flagged in ticket 009's own completion notes, not fully closed
 here.
 
+**`dwellHeldMs_` reset-on-any-miss replaced with a leaky/decaying counter
+(109-009, stakeholder redirect 2026-07-17, round 2).** The open question
+directly above was the dominant remaining `STOP_TIME`-fault source: under
+the sim's own real (wall-clock) tick-thread scheduling, an isolated
+scheduling-jitter sample — one cycle briefly reading a stale/noisy
+`thetaErr`/`thetaRate` — could zero out several hundred ms of otherwise-
+good hold progress the instant before it would have completed, sending the
+command to the `stopTimeBackstopMs()` fault path instead of completing a
+cycle later. Fixed: a miss now subtracts exactly one cycle's own worth of
+progress (`dtMs`, the same unit a hit adds), floored at 0, rather than
+resetting to 0 outright:
+
+```cpp
+if (distanceDone && withinTol && withinRate) {
+  dwellHeldMs_ += dtMs;
+} else if (dwellHeldMs_ > dtMs) {
+  dwellHeldMs_ -= dtMs;
+} else {
+  dwellHeldMs_ = 0;
+}
+```
+
+This is a windowed/majority policy in effect: because a hit and a miss
+move the counter by the same one-cycle amount, reaching `holdNeededMs`
+still requires a net majority of the trailing cycles to be in-tolerance —
+a single transient miss costs one cycle of delay, not the whole
+accumulated hold, while a run that is genuinely still rotating or still far
+from target (sustained misses every cycle) still drains the counter to 0
+and cannot false-complete early. No allocation, one sample per `tick()`
+call, bounded — the "`tick()` never solves, samples only" invariant (§3)
+is unaffected. Measured effect: deterministic-stepped repeated-run
+reliability (see ticket 009's own completion notes for the exact numbers)
+went from intermittent faults to 15/15 clean completions for both TOUR_1
+and TOUR_2, under both the ideal and realistic sim error profiles.
+
+**The dwell gate's own rate test also gained a low-pass filter
+(`dwellRateFilt_`, 109-009 round 2) — a SEPARATE bug from the reset policy
+above, root-causing `clasi/issues/tour1-via-simtransport-leg12-stop-time-
+regression.md`.** The rate test compared a RAW one-sample finite-difference
+derivative (`thetaRate = (thetaMeasRel - prevThetaMeasRel_) / dtS`) against
+`headingDwellRate_`. Direct trace instrumentation showed this derivative is
+highly sensitive to per-cycle heading-measurement noise: under the sim's
+realistic OTOS/encoder error profile (109-007), `thetaErr` itself settled
+cleanly under `headingDwellTol_` almost immediately, but the raw `thetaRate`
+jittered ~1-9deg/s indefinitely — never staying under `headingDwellRate_`
+(1deg/s) long enough for the dwell hold to accumulate, so the command ran
+out `stopTimeBackstopMs()` and faulted. This was 100% reproducible (the
+identical leg faulted whether the sim tick thread ran real-time or not —
+not a scheduling-jitter artifact, a genuine noise-sensitivity bug). Fixed
+with a light exponential low-pass filter, alpha=0.3, applied ONLY to the
+dwell gate's own rate decision:
+
+```cpp
+dwellRateFilt_ += 0.3f * (thetaRate - dwellRateFilt_);
+bool withinRate = std::fabs(dwellRateFilt_) < headingDwellRate_;
+```
+
+`thetaRate` itself (used by `checkDivergence()` and elsewhere) is
+untouched — only the dwell gate's own decision uses the filtered value.
+O(1), no allocation, one IIR update per `tick()` call — the same "sample,
+don't solve" shape as the rest of this module (§3). Together with the
+leaky-counter fix above, this resolved the SimTransport leg-12 regression:
+the issue's own regression test now passes reliably (3/3 repeated
+invocations) and its `xfail` marker was removed.
+
 **`distanceDone` also accepts a small settle epsilon once the planned
 trajectory has fully elapsed (109-009 fix, `kDistanceSettleEpsilonMm =
 2mm`).** A DISTANCE-mode command's own jerk-limited profile can settle to

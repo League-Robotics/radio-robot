@@ -506,6 +506,12 @@ class Executor {
   float lastMeasuredHeadingAbs_ = 0.0f;  // [rad] previous tick()'s raw (wrapped) measuredHeadingAbs
   float prevThetaMeasRel_ = 0.0f;    // [rad] previous tick()'s thetaMeas -- this class's own dwell-rate estimate
   uint32_t dwellHeldMs_ = 0;         // [ms] how long the dwell gate has held continuously
+  float dwellRateFilt_ = 0.0f;       // [rad/s] 109-009 fix: exponentially-smoothed thetaRate used
+                                      // ONLY by the dwell gate's own rate test (headingDwellRate_) --
+                                      // see executor.cpp's own dwell-completion comment for why a raw
+                                      // one-sample finite-difference derivative is unusable under the
+                                      // realistic sim OTOS/encoder noise profile. The PD/completion's
+                                      // OTHER uses of the instantaneous thetaRate are unaffected.
 
   float headingDwellTol_ = 0.0f;   // [rad] msg::PlannerConfig.heading_dwell_tol
   float headingDwellRate_ = 0.0f;  // [rad/s] msg::PlannerConfig.heading_dwell_rate

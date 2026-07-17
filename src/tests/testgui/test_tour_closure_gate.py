@@ -120,13 +120,58 @@ def _normalize_deg(delta_deg: float) -> float:
     return delta_deg
 
 
-def _make_loop(*, realistic_errors: bool):
+class _SteppedClock:
+    """A fake clock in lockstep with `_make_stepper()`'s own step count.
+    `run_tour()`'s timeout/poll-interval math is written in real seconds --
+    this reports "seconds" too (one sim cycle == 0.05s, `SimLoop.step()`'s
+    own documented per-cycle virtual-time advance) even though no wall
+    clock is read at all, so `move_timeout`/`poll_interval`/`final_settle`
+    keep their existing meaning."""
+
+    def __init__(self) -> None:
+        self.now_s = 0.0
+
+    def now(self) -> float:
+        return self.now_s
+
+
+def _make_stepper(loop, clock: "_SteppedClock"):
+    """`run_tour()`'s own `sleep_fn` -- a deterministic stand-in for
+    `time.sleep()` when `loop` was connected with `start_tick_thread=False`
+    (see `SimLoop`'s own module docstring: "the caller owns pacing"). Steps
+    the sim exactly one cycle per call and pushes newly-produced telemetry
+    onto the SAME queue `run_tour()`'s own `read_pending_binary_tlm_frames()`
+    polls (`_drain_tlm_into_queue()` -- NOT the public `drain_pending_tlm()`,
+    which also CONSUMES the queue and would race `run_tour()`'s own reads
+    for the same frames).
+
+    109-009 (stakeholder direction, round 2): converts a full tour run from
+    several real wall-clock minutes (a real Python thread pacing to
+    `_SPEED_FACTOR`-scaled real time) to a few CPU-bound seconds, and -- as
+    a side effect -- removes real (non-deterministic) tick-thread
+    scheduling jitter as a variable in the turn-accuracy/reliability
+    assertions below entirely. One deliberately real-time-threaded smoke
+    test is kept (`test_two_compatible_distance_legs_carry_velocity_
+    through_the_boundary_at_tour_level`) as the TestGUI-fidelity check,
+    since a live TestGUI Sim-mode connection always drives a real tick
+    thread (`SimTransport.connect()`)."""
+
+    def _step(_requested_interval: float) -> None:
+        loop.step(1)
+        loop._drain_tlm_into_queue()  # noqa: SLF001 -- see docstring above
+        clock.now_s += 0.05  # [s] SimLoop.step()'s own per-cycle virtual-time advance
+
+    return _step
+
+
+def _make_loop(*, realistic_errors: bool, deterministic: bool = True):
     from robot_radio.io.sim_loop import SimLoop
 
     lib_path = _sim_lib_path()
     loop = SimLoop(track_width=_TRACK_WIDTH, lib_path=lib_path)
-    loop.connect()
-    loop.set_speed_factor(_SPEED_FACTOR)
+    loop.connect(start_tick_thread=not deterministic)
+    if not deterministic:
+        loop.set_speed_factor(_SPEED_FACTOR)
 
     if not realistic_errors:
         # Ideal chip: every knob explicit at its documented no-op default,
@@ -160,14 +205,22 @@ def _make_loop(*, realistic_errors: bool):
         linear_scale=_compensating_register(_OTOS_LINEAR_ERR),
         angular_scale=_compensating_register(_OTOS_ANGULAR_ERR),
     )
-    ack = _wait_for_ack(loop, corr_id)
+    ack = _wait_for_ack(loop, corr_id, deterministic=deterministic)
     assert ack is not None and ack.ok, (
         f"OtosConfigPatch calibration push failed to ack: {ack}"
     )
     return loop
 
 
-def _wait_for_ack(loop, corr_id: int, timeout: float = 3.0):
+def _wait_for_ack(loop, corr_id: int, timeout: float = 3.0, *, deterministic: bool = True):
+    if deterministic:
+        for _ in range(400):  # 400 cycles * 50ms = 20s virtual time -- generously bounded
+            loop.step(1)
+            for frame in loop.drain_pending_tlm():
+                for ack in frame.acks:
+                    if ack.corr_id == corr_id:
+                        return ack
+        return None
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         for frame in loop.read_pending_binary_tlm_frames():
@@ -197,7 +250,8 @@ class TourGateResult:
     heading_delta_deg: float | None = None
 
 
-def _run_tour_capture(loop, tour_wire, *, v_max: float = 150.0) -> TourGateResult:
+def _run_tour_capture(loop, tour_wire, *, v_max: float = 150.0,
+                      deterministic: bool = True) -> TourGateResult:
     from types import SimpleNamespace
 
     from robot_radio.planner.heading import HeadingCorrector
@@ -229,7 +283,13 @@ def _run_tour_capture(loop, tour_wire, *, v_max: float = 150.0) -> TourGateResul
                 error_deg=_normalize_deg(achieved - leg.value)))
         true_poses.append(pose)
 
-    result = run_tour(loop, params, heading, legs, v_max=v_max, on_leg=_on_leg)
+    run_tour_kwargs: dict = {}
+    if deterministic:
+        clock = _SteppedClock()
+        run_tour_kwargs.update(
+            clock_fn=clock.now, sleep_fn=_make_stepper(loop, clock), poll_interval=0.05)
+
+    result = run_tour(loop, params, heading, legs, v_max=v_max, on_leg=_on_leg, **run_tour_kwargs)
 
     completed = result.stopped_at is None
     stop_reason = "" if completed else (
@@ -286,38 +346,67 @@ def _assert_tour_gate(gate: TourGateResult, *, tolerance_deg: float, label: str)
 #
 # 109-009's own Iteration Log/Impossibility Argument (ticket 009 file,
 # clasi/sprints/109-.../tickets/009-...md): six real firmware bugs were
-# found and fixed while building this gate (TLM twist never populated,
-# chained-pivot dwell completion keyed on the wrong condition, heading
-# unwrap broken for |deltaHeading|>180deg, missing STOP_TIME backstop on
-# the terminal DISTANCE branch, no distance-completion settle epsilon,
-# STOP_TIME margin too tight for the sim's own real-time jitter) --
-# converting this gate from "hangs/truncates on the first leg" to
-# "completes most runs with turns within ~0.5-1.5deg of commanded". Two
-# gaps remain UNRESOLVED and are documented, not silently papered over,
-# in that same ticket file's own Impossibility Argument: (1) "exact
-# (negligible epsilon)" with an ideal/noiseless OTOS is not reached --
-# attributed to Devices::Otos's own kReadPeriod (20ms) read-rate limit
-# letting up to ~10-12deg of REAL rotation happen unsampled during a fast
-# pivot's cruise phase, a physical sampling-latency limit of the current
-# architecture, not a tuning gap; (2) tours do not complete 100% of runs
-# -- an occasional STOP_TIME fault tied to the sim's own real (wall-clock)
-# tick-thread scheduling interacting with the dwell hold's hard
-# reset-on-any-miss policy. xfail (not skip) so these stay VISIBLE and
-# would XPASS loudly the moment either gap actually closes.
+# found and fixed in round 1 (TLM twist never populated, chained-pivot
+# dwell completion keyed on the wrong condition, heading unwrap broken for
+# |deltaHeading|>180deg, missing STOP_TIME backstop on the terminal
+# DISTANCE branch, no distance-completion settle epsilon, STOP_TIME margin
+# too tight for the sim's own real-time jitter). Round 2 (stakeholder
+# redirect 2026-07-17) found and fixed TWO MORE: the dwell hold's own hard
+# reset-on-any-miss policy (replaced with a leaky/decaying counter) and a
+# raw one-sample rate-derivative noise-sensitivity bug (replaced with a
+# low-pass-filtered rate estimate for the dwell gate's own decision only)
+# -- see executor.cpp's own dwell-completion comment and motion/DESIGN.md.
+#
+# Net result after round 2: TOURS NOW COMPLETE RELIABLY -- 15/15 clean
+# completions (deterministic-stepped) for both TOUR_1 and TOUR_2, under
+# both the ideal and realistic error profiles, plus 4/4 real-time-threaded
+# and 3/3 SimTransport-path confirmations (see ticket 009's own completion
+# notes for the full numbers). These tests remain xfail ONLY for the two
+# accuracy gaps below, not for completion/reliability, which is resolved:
+#
+# (1) IDEAL-CHIP "exact (negligible epsilon)" is not reached (measures
+#     ~0.4-2.2deg, not <0.05deg) -- attributed to Devices::Otos's own
+#     kReadPeriod (20ms) read-rate limit letting real rotation happen
+#     unsampled during a pivot's cruise phase, a physical sampling-latency
+#     limit of the current architecture. DEFERRED to ticket 010 ("Turn-
+#     error characterization and prediction equation") by stakeholder
+#     decision (2026-07-17) -- this is expected, not a regression.
+# (2) REALISTIC-PROFILE turns are MOSTLY within 1deg but not uniformly --
+#     most turns land within ~0.5-1.6deg; TOUR_2's own final turn (leg 14,
+#     immediately preceding the tour's last leg) is a reproducible outlier
+#     at ~4.9deg, attributed to the SAME Otos read-latency mechanism as (1)
+#     compounding with cumulative drift late in a long tour. NOT closed by
+#     this ticket's own time budget -- left as an open, numbers-backed gap
+#     for ticket 010 rather than silently retuning the tolerance.
+#
+# xfail (not skip) so both gaps stay VISIBLE and would XPASS loudly the
+# moment either one actually closes.
 # ---------------------------------------------------------------------------
 
-_XFAIL_REASON = (
-    "109-009 Impossibility Argument (see ticket file): ideal-chip turns measure "
-    "~0.5-1.5deg (not <0.05deg) due to Otos::kReadPeriod's own read-rate limit at "
-    "high yaw rate; realistic-profile turns occasionally exceed 1deg on a single "
-    "leg; tours occasionally STOP_TIME-fault from real-time tick-thread jitter "
-    "interacting with the dwell hold's hard reset-on-any-miss policy. Six real "
-    "firmware bugs were found and fixed (see the ticket's own Iteration Log) -- "
-    "this xfail documents the remaining, escalated gap, not an unattempted test."
+_XFAIL_REASON_IDEAL = (
+    "109-009 Impossibility Argument (see ticket file), DEFERRED to ticket 010 by "
+    "stakeholder decision (2026-07-17): ideal-chip turns measure ~0.4-2.2deg (not "
+    "<0.05deg) due to Otos::kReadPeriod's own read-rate limit at high yaw rate -- a "
+    "physical sampling-latency limit of the current architecture, not a tuning gap. "
+    "Tours themselves now complete RELIABLY (round-2 dwell-completion fixes -- see "
+    "the ticket's own Iteration Log/completion notes); only this residual accuracy "
+    "gap remains, and it is explicitly out of this ticket's own scope."
+)
+
+_XFAIL_REASON_REALISTIC = (
+    "109-009 Impossibility Argument (see ticket file): realistic-profile turns are "
+    "MOSTLY within 1deg (typ. ~0.5-1.6deg) but not uniformly -- an outlier turn "
+    "(TOUR_2's own final turn, leg 14) reproducibly misses by ~4.9deg, attributed to "
+    "the same Otos read-latency mechanism as the deferred ideal-chip gap, "
+    "compounding with cumulative drift late in the tour. Tours themselves now "
+    "complete RELIABLY (round-2 dwell-completion fixes -- see the ticket's own "
+    "Iteration Log/completion notes); this residual per-turn accuracy gap is not "
+    "closed within this ticket's own time budget and is left open, numbers-backed, "
+    "for ticket 010 rather than silently retuning the tolerance."
 )
 
 
-@pytest.mark.xfail(reason=_XFAIL_REASON, strict=False)
+@pytest.mark.xfail(reason=_XFAIL_REASON_IDEAL, strict=False)
 def test_tour_1_ideal_chip_turns_are_exact():
     from robot_radio.planner.tour import TOUR_1
 
@@ -329,7 +418,7 @@ def test_tour_1_ideal_chip_turns_are_exact():
     _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_IDEAL_DEG, label="TOUR_1/ideal")
 
 
-@pytest.mark.xfail(reason=_XFAIL_REASON, strict=False)
+@pytest.mark.xfail(reason=_XFAIL_REASON_IDEAL, strict=False)
 def test_tour_2_ideal_chip_turns_are_exact():
     from robot_radio.planner.tour import TOUR_2
 
@@ -341,7 +430,7 @@ def test_tour_2_ideal_chip_turns_are_exact():
     _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_IDEAL_DEG, label="TOUR_2/ideal")
 
 
-@pytest.mark.xfail(reason=_XFAIL_REASON, strict=False)
+@pytest.mark.xfail(reason=_XFAIL_REASON_REALISTIC, strict=False)
 def test_tour_1_realistic_errors_turns_within_one_degree():
     from robot_radio.planner.tour import TOUR_1
 
@@ -353,7 +442,7 @@ def test_tour_1_realistic_errors_turns_within_one_degree():
     _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_REALISTIC_DEG, label="TOUR_1/realistic")
 
 
-@pytest.mark.xfail(reason=_XFAIL_REASON, strict=False)
+@pytest.mark.xfail(reason=_XFAIL_REASON_REALISTIC, strict=False)
 def test_tour_2_realistic_errors_turns_within_one_degree():
     from robot_radio.planner.tour import TOUR_2
 
@@ -388,7 +477,16 @@ def test_two_compatible_distance_legs_carry_velocity_through_the_boundary_at_tou
         TourLeg(kind="distance", value=300.0, speed=v_max),
     ]
 
-    loop = _make_loop(realistic_errors=False)
+    # Deliberately the ONE real-time-threaded (not deterministically-
+    # stepped) test in this file -- 109-009 (stakeholder direction, round
+    # 2): keep exactly one real-time run as the TestGUI-fidelity check,
+    # since that is the actual path a live TestGUI Sim-mode connection
+    # drives (`SimTransport`'s own `SimLoop` always runs a real tick
+    # thread -- see that class's own `connect()`). The turn-accuracy/
+    # reliability tests above use deterministic stepping instead
+    # specifically to remove real-time scheduling jitter as a confound and
+    # to make a full tour run in seconds, not minutes.
+    loop = _make_loop(realistic_errors=False, deterministic=False)
     try:
         params = PlannerParams()
         heading = HeadingCorrector(

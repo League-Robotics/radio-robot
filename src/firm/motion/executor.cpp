@@ -178,6 +178,7 @@ void Executor::activate(const Cmd& cmd, bool retarget) {
   lastMeasuredHeadingAbs_ = 0.0f;
   prevThetaMeasRel_ = 0.0f;
   dwellHeldMs_ = 0;
+  dwellRateFilt_ = 0.0f;
   headingRatioPerMm_ = 0.0f;
   effectiveDistance_ = cmd.distance;
 
@@ -797,7 +798,31 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
   float thetaErr = active_.deltaHeading - thetaMeasRel;
   float thetaRate = (dtS > 0.0f) ? (thetaMeasRel - prevThetaMeasRel_) / dtS : 0.0f;
   bool withinTol = std::fabs(thetaErr) < headingDwellTol_;
-  bool withinRate = std::fabs(thetaRate) < headingDwellRate_;
+
+  // 109-009 fix (dwell-reliability, realistic-profile hang): the dwell
+  // gate's own rate test used to compare the RAW one-sample finite-
+  // difference derivative (thetaRate above) against headingDwellRate_.
+  // Diagnosed directly (temporary trace instrumentation during this fix):
+  // with the sim's realistic OTOS/encoder error profile enabled (109-007's
+  // documented plausible levels), thetaErr itself settles cleanly inside
+  // headingDwellTol_ (0.5deg) almost immediately, but the raw per-sample
+  // thetaRate derivative amplifies the sensor noise on thetaMeasRel enough
+  // that it almost never stays under headingDwellRate_ (1deg/s) --
+  // measured jittering ~1-9deg/s indefinitely (never decaying), versus a
+  // clean sub-1deg/s settle within ~150ms under the SAME command with
+  // every error model zeroed. The dwell hold therefore never accumulates
+  // and the command runs out the full `stopTimeBackstopMs()` window and
+  // faults -- 100% reproducible (not a jitter/timing artifact; the same
+  // leg faults identically whether the sim tick thread runs real or not).
+  // Fixed with a light exponential low-pass filter (`dwellRateFilt_`,
+  // alpha=0.3) applied ONLY to the dwell gate's own rate test -- it does
+  // NOT touch thetaRate itself (which still feeds checkDivergence() and
+  // is logged/used elsewhere unfiltered). A one-line, O(1), no-allocation
+  // IIR filter is exactly the "sample, don't solve" shape tick() requires
+  // (DESIGN.md Sec3) -- this is a measurement-smoothing detail of the
+  // completion decision, not a new solve.
+  dwellRateFilt_ += 0.3f * (thetaRate - dwellRateFilt_);
+  bool withinRate = std::fabs(dwellRateFilt_) < headingDwellRate_;
 
   // 109-006 trigger (c): detect-only here (tick() never solves) -- sets
   // pendingLinear{Reanchor,Retarget}_/pendingRotationalReanchor_ for
@@ -855,8 +880,37 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
     if (!carryingRotationalVelocity) {
       // Terminal OR chained-but-not-carrying: both need the SAME full
       // dwell hold -- "chained" alone no longer buys an early completion.
+      //
+      // 109-009 fix (dwell-reliability): this used to be a HARD reset-to-
+      // zero on ANY single out-of-tolerance/out-of-rate sample. Under the
+      // sim's own real (wall-clock) tick-thread scheduling (not virtual/
+      // deterministic time -- see robot_radio/io/sim_loop.py's own tick-
+      // thread doc comment), an isolated scheduling-jitter sample (one
+      // cycle arriving late, briefly reading a stale/noisy thetaErr or
+      // thetaRate) could zero out several hundred ms of otherwise-good
+      // hold progress the INSTANT before it would have completed, driving
+      // the command all the way to the `stopTimeBackstopMs()` fault path
+      // instead of completing one cycle later. This was the dominant
+      // cause of the intermittent (~1-in-12 standalone runs) `STOP_TIME`
+      // fault this ticket's own Iteration Log recorded.
+      //
+      // Fixed with a leaky (decaying), not hard-reset, counter: a miss
+      // subtracts exactly one cycle's own worth of progress (`dtMs`, the
+      // same unit a hit adds), never more than that. This is a windowed/
+      // majority policy in effect: since a hit and a miss move the
+      // counter by the same one-cycle amount, completion still requires a
+      // NET MAJORITY of the trailing cycles (weighted by recency) to be
+      // in-tolerance -- a single transient miss costs one cycle of delay,
+      // not the whole accumulated hold, while a genuinely still-rotating
+      // or still-far-from-target run (sustained misses) still drains the
+      // counter to 0 and cannot false-complete early. Bounded, no
+      // allocation, one sample per tick() -- DESIGN.md Sec3's "tick()
+      // never solves, samples only" invariant is unaffected. See
+      // motion/DESIGN.md's own dwell-completion entry for the write-up.
       if (distanceDone && withinTol && withinRate) {
         dwellHeldMs_ += dtMs;
+      } else if (dwellHeldMs_ > dtMs) {
+        dwellHeldMs_ -= dtMs;
       } else {
         dwellHeldMs_ = 0;
       }
