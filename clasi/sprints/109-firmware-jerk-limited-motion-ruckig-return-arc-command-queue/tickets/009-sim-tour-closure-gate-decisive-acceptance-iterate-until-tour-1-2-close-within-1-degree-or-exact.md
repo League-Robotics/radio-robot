@@ -36,6 +36,25 @@ dominant-channel-with-slaved-PD model (sprint.md's Architecture Open
 Question #1), escalate to the team-lead/stakeholder with the written
 argument rather than silently redefining "closes" or "square."
 
+**Redirect note (Eric, 2026-07-17, live — this ticket's own agent had
+been cancelled mid-iteration):** the Impossibility Argument below
+correctly diagnosed the ideal-OTOS "exact" gap as a systematic,
+latency-shaped, deterministic effect (OTOS read-period staleness vs.
+cruise yaw rate) rather than an unfixed bug or a case for escalation as
+truly impossible. The stakeholder's decision is that this specific gap
+is **characterizable and invertible** — that work is scoped as its own
+follow-on ticket, **010** ("Turn-error characterization and prediction
+equation"), not as further iteration inside this ticket's own budget.
+**This ticket (009) now completes on**: both tours completing reliably
+(the dwell-robustness/`STOP_TIME`-jitter fix identified in the
+Impossibility Argument's gap 2 is still this ticket's own work — that is
+a robustness/servo-policy fix, not the latency-characterization work
+ticket 010 owns), correct/square shape, and turns landing ≤1° of
+commanded under the REALISTIC error profile (ticket 007's profile) —
+with actual per-turn numbers and closure results reported. The
+ideal-OTOS-exact criterion below is marked DEFERRED, not deleted and not
+silently weakened — ticket 010 (`depends-on: ['009']`) owns closing it.
+
 1. Run TestGUI → Sim → Tour 1. Verify: completes without a fault/freeze,
    returns to (near) start pose, and its trace is visibly square — no
    cockeyed corners, no drift-shaped arcs where straight legs should be.
@@ -81,9 +100,19 @@ argument rather than silently redefining "closes" or "square."
       tours is within 1° of commanded. **Not met** — measured errors up to
       ~2.5° with the fixes below (down from ~90°+/hangs before them); see
       Iteration Log for full per-turn numbers.
-- [ ] With sim OTOS error/noise disabled: turns are exact. **Not met** —
-      measured residual ~0.5–1.5° (down from the same ~90°+/hangs
-      failure mode before the fixes below); see Impossibility Argument.
+- [ ] With sim OTOS error/noise disabled: turns are exact. **DEFERRED to
+      ticket 010 by stakeholder decision (Eric, 2026-07-17, live).** Not
+      met by this ticket — measured residual ~0.5–1.5° (down from the
+      same ~90°+/hangs failure mode before the fixes below); see
+      Impossibility Argument. Root cause identified below (OTOS 20 ms
+      read-period staleness vs. cruise yaw rate) is a systematic,
+      latency-shaped, deterministic effect, not noise — the stakeholder's
+      own framing is that it is therefore characterizable and invertible
+      by a rate-sweep-and-compensate approach, which is out of THIS
+      ticket's iterate-until-done budget and is ticket 010's entire scope
+      ("Turn-error characterization and prediction equation"). This
+      criterion is intentionally left unchecked here (not deleted, not
+      silently weakened) as the explicit handoff to ticket 010.
 - [x] No velocity dip to zero at compatible same-`v_max` leg boundaries,
       observed at the full tour level (not just the ticket-006 synthetic
       test). **Met** —

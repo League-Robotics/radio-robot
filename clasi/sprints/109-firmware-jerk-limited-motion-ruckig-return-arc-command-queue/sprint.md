@@ -1,7 +1,7 @@
 ---
 id: '109'
 title: 'Firmware jerk-limited motion: Ruckig return + arc-command queue'
-status: ticketing
+status: executing
 branch: sprint/109-firmware-jerk-limited-motion-ruckig-return-arc-command-queue
 worktree: false
 use-cases: [SUC-001, SUC-002, SUC-003, SUC-004, SUC-005]
@@ -134,7 +134,13 @@ impossibility argument.
       to ~2.5° on individual turns after the fixes (down from ~90°+
       truncation/hangs before them); see ticket 009's own Iteration Log.**
 - [ ] With sim OTOS error/noise disabled (ideal chip), turns are exact
-      (bit-for-bit/negligible-epsilon, not "within 1°"). **Ticket 009: not
+      (bit-for-bit/negligible-epsilon, not "within 1°"). **Deferred to
+      ticket 010 by stakeholder decision (2026-07-17)** — ticket 009
+      identified the residual as a systematic, latency-shaped,
+      deterministic effect (OTOS read-period staleness vs. cruise yaw
+      rate), characterizable and invertible rather than a case for
+      escalation-as-impossible; ticket 010 owns closing it via a
+      rate-sweep characterization + lead-compensation equation. **Ticket 009: not
       met — measured residual ~0.5-1.5°, attributed to OTOS's own
       kReadPeriod read-rate limit at high yaw rate, not a fixable bug
       within this sprint's architecture; see ticket 009's own
@@ -735,6 +741,13 @@ files, listed in frontmatter `issues:`.)
 | 006 | Cross-boundary carry: boundary-velocity table + divergence replan triggers | 005 |
 | 007 | Sim fidelity: OTOS drift/raw-scale-error + calibration honoring + encoder error model | 002, 004, 006 |
 | 008 | Host adoption: MOVE-queue tours, config-patch live tuning, retire streaming path, tour1-freeze verification | 007 |
-| 009 | Sim tour-closure gate (decisive acceptance) — iterate until Tour 1/2 close within 1°/exact | 008 |
+| 009 | Sim tour-closure gate (decisive acceptance) — iterate until Tour 1/2 close within 1°/exact (realistic-profile bar; ideal-exact deferred to 010) | 008 |
+| 010 | Turn-error characterization and prediction equation — hit turns exactly by inverting deterministic latency | 009 |
 
-Tickets execute serially in the order listed.
+Tickets execute serially in the order listed. Ticket 010 was added
+2026-07-17 (stakeholder decision, live) after ticket 009's own
+Impossibility Argument diagnosed the ideal-OTOS "exact" gap as a
+systematic, latency-shaped, deterministic effect rather than a true
+impossibility — see Architecture Revision 1 note below (ticket 009's own
+acceptance criteria) and ticket 010's own Description for the full
+characterization-and-inversion plan.
