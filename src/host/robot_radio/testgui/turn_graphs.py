@@ -133,9 +133,17 @@ class TurnTraceRecorder:
     def add_tlm(self, now: float, frame: Any) -> bool:
         """Record one telemetry frame. Returns True if recorded (moving).
 
-        Recording auto-freezes after >1 s of no wheel motion (``_stopped``);
-        the next moving frame auto-clears and starts a FRESH trace, so each
-        turn is captured cleanly on its own axis.
+        Recording auto-freezes after >1 s of no wheel motion (``_stopped``):
+        idle frames are skipped rather than appended. The next moving frame
+        simply RESUMES appending to the same, still-intact series -- it must
+        never discard previously-recorded history (110-001: an earlier
+        "auto-clear and start a fresh trace on resume" behavior here silently
+        wiped every series' accumulated data whenever a new motion began
+        after an idle gap, which is what produced the reported "graph data
+        corrupted after switching tabs and back" symptom -- the wipe itself
+        was unrelated to which tab was selected, but only became visible
+        once the operator switched back to see it). Only the explicit
+        ``clear()`` (the "Clear traces" button) discards data.
         """
         f = tlm_fields(frame)
         vel = f["vel"] or (0.0, 0.0)
@@ -147,8 +155,9 @@ class TurnTraceRecorder:
                 self._stopped = True
             return False
         if self._stopped:
-            # New motion after a freeze -> start a fresh trace.
-            self.clear()
+            # New motion after a freeze -- resume appending to the SAME
+            # trace; do NOT clear (see docstring above).
+            self._stopped = False
         self._last_motion = now
         t = self._t(now)
         if f["cmd"]:
