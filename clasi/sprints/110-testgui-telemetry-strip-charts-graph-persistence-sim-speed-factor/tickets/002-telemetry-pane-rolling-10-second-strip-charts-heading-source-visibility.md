@@ -1,9 +1,11 @@
 ---
 id: '002'
 title: Telemetry-pane rolling 10-second strip charts + heading-source visibility
-status: open
-use-cases: [SUC-002]
-depends-on: ['001']
+status: in-progress
+use-cases:
+- SUC-002
+depends-on:
+- '001'
 github-issue: ''
 issue: testgui-telemetry-strip-charts.md
 completes_issue: true
