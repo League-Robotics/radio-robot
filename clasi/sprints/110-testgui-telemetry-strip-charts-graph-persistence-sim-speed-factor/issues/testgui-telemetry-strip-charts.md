@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '110'
+tickets:
+- 110-002
 ---
 
 # TestGUI: rolling 10-second strip charts in the telemetry section

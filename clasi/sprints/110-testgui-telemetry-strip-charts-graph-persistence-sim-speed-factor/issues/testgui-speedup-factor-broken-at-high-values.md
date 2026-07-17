@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '110'
+tickets:
+- 110-003
 ---
 
 # TestGUI: speed-up factor is herky-jerky / broken at higher multipliers

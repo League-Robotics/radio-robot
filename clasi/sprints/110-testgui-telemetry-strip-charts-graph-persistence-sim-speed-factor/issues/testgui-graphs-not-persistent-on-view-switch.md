@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '110'
+tickets:
+- 110-001
 ---
 
 # TestGUI telemetry graphs are not persistent across view switches
