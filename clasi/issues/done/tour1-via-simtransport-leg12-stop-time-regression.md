@@ -1,8 +1,9 @@
 ---
-title: "TOUR_1 via SimTransport now faults reliably at leg 12 (STOP_TIME) after 109-009's completion-gate fixes"
+title: TOUR_1 via SimTransport now faults reliably at leg 12 (STOP_TIME) after 109-009's
+  completion-gate fixes
 filed: 2026-07-17
 filed_by: programmer (sprint 109 ticket 009)
-status: resolved
+status: done
 resolved: 2026-07-17
 resolved_by: programmer (sprint 109 ticket 009, round 2)
 ---
