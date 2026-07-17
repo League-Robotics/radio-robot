@@ -277,6 +277,13 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
     lib.sim_set_otos_drift.restype = None
     lib.sim_set_enc_scale_err.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_float]
     lib.sim_set_enc_scale_err.restype = None
+    lib.sim_set_otos_raw_scale_err.argtypes = [ctypes.c_void_p, ctypes.c_float, ctypes.c_float]
+    lib.sim_set_otos_raw_scale_err.restype = None
+    lib.sim_set_enc_tick_quant.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_float]
+    lib.sim_set_enc_tick_quant.restype = None
+    lib.sim_set_enc_slip.argtypes = [
+        ctypes.c_void_p, ctypes.c_int, ctypes.c_float, ctypes.c_float]
+    lib.sim_set_enc_slip.restype = None
 
     lib.sim_set_read_hook.argtypes = [ctypes.c_void_p, _SimHookFn, ctypes.c_void_p]
     lib.sim_set_read_hook.restype = None
@@ -539,6 +546,48 @@ class SimLoop:
         self._call_on_tick_thread(
             lambda: self._lib.sim_set_enc_scale_err(
                 self._handle, int(port), ctypes.c_float(fraction)))
+
+    def set_otos_raw_scale_err(self, linear_fraction: float,
+                               angular_fraction: float) -> None:  # [fractional over/under-report, 0=perfect]
+        """109-007: models a physically MIS-calibrated OTOS chip --
+        ``sim_ctypes.cpp``'s ``sim_set_otos_raw_scale_err()`` ->
+        ``SimPlant::setOtosRawScaleErr()`` -> ``OtosPlant::setRawScaleErr()``.
+        A firmware-pushed OTOS calibration scalar (``OL``/``OA``, or a live
+        ``OtosConfigPatch`` -- ticket 004's direct-patch-send mechanism)
+        multiplies back against this fault knob (captured by
+        ``SimPlant::handleOtosWrite()``'s new register-write path), so a
+        correctly calibrated chip reports the true pose again -- see
+        ``otos_plant.h``'s own header comment for the full net-effect
+        contract. 0.0/0.0 (the default) is a genuine no-op."""
+        self._require_connected()
+        self._call_on_tick_thread(
+            lambda: self._lib.sim_set_otos_raw_scale_err(
+                self._handle, ctypes.c_float(linear_fraction),
+                ctypes.c_float(angular_fraction)))
+
+    def set_enc_tick_quant(self, port: int, tick_size: float) -> None:  # [mm]
+        """109-007: per-wheel encoder tick-quantization knob -- rounds the
+        reported position to the nearest multiple of ``tick_size`` [mm],
+        modeling a real encoder's finite count resolution. 0.0 (the
+        default) is a genuine no-op. port: 1=left, 2=right, matching every
+        other port-keyed knob here."""
+        self._require_connected()
+        self._call_on_tick_thread(
+            lambda: self._lib.sim_set_enc_tick_quant(
+                self._handle, int(port), ctypes.c_float(tick_size)))
+
+    def set_enc_slip(self, port: int, rate: float, magnitude: float) -> None:  # [0,1] [mm]
+        """109-007: per-wheel encoder slip-event knob -- a deterministic
+        accumulator (mirrors ``set_wheel_dropout_rate()``'s own design, no
+        RNG) fires a slip event every time it crosses 1.0, injecting a
+        PERMANENT signed ``magnitude`` [mm] offset into every future
+        reported position -- models a wheel that slipped against the
+        surface. ``rate``=0.0 (the default) never fires. port: 1=left,
+        2=right."""
+        self._require_connected()
+        self._call_on_tick_thread(
+            lambda: self._lib.sim_set_enc_slip(
+                self._handle, int(port), ctypes.c_float(rate), ctypes.c_float(magnitude)))
 
     # ------------------------------------------------------------------
     # Manual stepping (no tick thread required -- ticket 009's shape)

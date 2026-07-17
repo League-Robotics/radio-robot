@@ -1513,15 +1513,21 @@ class SimTransport(Transport):
         ``set_wheel_dropout_rate``). Unlike the OTOS pairing above, these are
         two independent single-argument calls, not one combined call.
 
+        ``otos_lin_scale_err``/``otos_ang_scale_err`` (109-007): combined
+        into a single ``loop.set_otos_raw_scale_err(linear, angular)`` call
+        -- models a physically mis-calibrated OTOS chip (fractional
+        over/under-report, 0=perfect); a firmware-pushed OL/OA calibration
+        scalar corrects the effect back out (see ``sim_plant.h``'s own
+        ``SimPlant::setOtosRawScaleErr()``/``handleOtosWrite()`` comments).
+
         Every OTHER ``DEFAULT_PROFILE`` key (``encoder_noise``,
         ``slip_turn_extra``, ``otos_linear_noise``, ``otos_yaw_noise``,
-        ``otos_lin_scale_err``, ``otos_ang_scale_err``, ``body_rot_scrub``,
-        ``body_lin_scrub``, ``motor_offset_l/r``) has NO ``SimLoop`` setter
-        at all -- applying is skipped outright, with a ``[WARN]`` logged if
-        the profile value is away from that key's neutral default (mirrors
-        the deleted implementation's own skip-and-warn treatment for its own
-        three unsupported knobs, just widened to cover this ABI's narrower
-        fault-knob surface).
+        ``body_rot_scrub``, ``body_lin_scrub``, ``motor_offset_l/r``) has NO
+        ``SimLoop`` setter at all -- applying is skipped outright, with a
+        ``[WARN]`` logged if the profile value is away from that key's
+        neutral default (mirrors the deleted implementation's own
+        skip-and-warn treatment for its own three unsupported knobs, just
+        widened to cover this ABI's narrower fault-knob surface).
         ``trackwidth`` is excluded from that warn loop -- it is applied at
         ``SimLoop`` CONSTRUCTION time (``connect()``'s own
         ``SimLoop(track_width=...)`` call), not live, so a live Apply with a
@@ -1557,6 +1563,21 @@ class SimTransport(Transport):
                 "via loop.set_enc_scale_err(): %s", exc,
             )
 
+        # -- otos_lin_scale_err/otos_ang_scale_err (109-007): combined onto
+        # set_otos_raw_scale_err(linear, angular) --
+        otos_lin_scale_err = profile.get(
+            "otos_lin_scale_err", defaults["otos_lin_scale_err"])
+        otos_ang_scale_err = profile.get(
+            "otos_ang_scale_err", defaults["otos_ang_scale_err"])
+        try:
+            loop.set_otos_raw_scale_err(
+                float(otos_lin_scale_err), float(otos_ang_scale_err))
+        except Exception as exc:
+            _log.warning(
+                "SimTransport: could not apply otos_lin_scale_err/"
+                "otos_ang_scale_err via loop.set_otos_raw_scale_err(): %s", exc,
+            )
+
         # -- trackwidth: construction-time only, not live --
         trackwidth = profile.get("trackwidth", defaults["trackwidth"])
         if trackwidth != defaults["trackwidth"]:
@@ -1572,7 +1593,8 @@ class SimTransport(Transport):
         _unsupported_keys = [
             key for key in defaults
             if key not in ("otos_lin_drift", "otos_yaw_drift", "trackwidth",
-                           "enc_scale_err_l", "enc_scale_err_r")
+                           "enc_scale_err_l", "enc_scale_err_r",
+                           "otos_lin_scale_err", "otos_ang_scale_err")
         ]
         for key in _unsupported_keys:
             value = profile.get(key, defaults[key])

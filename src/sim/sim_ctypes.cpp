@@ -87,6 +87,9 @@
 //   void sim_set_wheel_dropout_rate(SimHandle h, int port, float fraction);    // [0,1]
 //   void sim_set_otos_drift(SimHandle h, float xDrift, float yDrift, float headingDrift);  // [mm][mm][rad]
 //   void sim_set_enc_scale_err(SimHandle h, int port, float fraction);  // fractional over/under-report (109-002)
+//   void sim_set_otos_raw_scale_err(SimHandle h, float linearFraction, float angularFraction);  // fractional over/under-report, 0=perfect (109-007)
+//   void sim_set_enc_tick_quant(SimHandle h, int port, float tickSizeMm);  // [mm] (109-007)
+//   void sim_set_enc_slip(SimHandle h, int port, float rate, float magnitudeMm);  // [0,1] [mm] (109-007)
 //
 // ---- Hook surface -- THE point of this sprint's scripting model ----
 // (master plan's Target architecture, verbatim; see sim_plant.h's own
@@ -247,6 +250,18 @@ void sim_set_otos_drift(SimHandle h, float xDrift, float yDrift, float headingDr
 
 void sim_set_enc_scale_err(SimHandle h, int port, float fraction) {
   asHarness(h)->plant().setEncScaleErr(port, fraction);
+}
+
+void sim_set_otos_raw_scale_err(SimHandle h, float linearFraction, float angularFraction) {
+  asHarness(h)->plant().setOtosRawScaleErr(linearFraction, angularFraction);
+}
+
+void sim_set_enc_tick_quant(SimHandle h, int port, float tickSizeMm) {
+  asHarness(h)->plant().setEncTickQuantization(port, tickSizeMm);
+}
+
+void sim_set_enc_slip(SimHandle h, int port, float rate, float magnitudeMm) {
+  asHarness(h)->plant().setEncSlip(port, rate, magnitudeMm);
 }
 
 // ---- Hook surface ----

@@ -2,7 +2,7 @@
 id: '007'
 title: 'Sim fidelity: OTOS drift/raw-scale-error + calibration honoring + encoder
   error model'
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 - SUC-004
@@ -55,27 +55,38 @@ in place before sim-fidelity tests are meaningful).
 
 ## Acceptance Criteria
 
-- [ ] Simulated OTOS models a raw scale error (linear + angular, per-axis,
+- [x] Simulated OTOS models a raw scale error (linear + angular, per-axis,
       default-configurable); `SimPlant`'s OTOS burst-read response =
       `truth * rawError`.
-- [ ] A sim test sets a raw OTOS scale error, confirms the uncalibrated
+- [x] A sim test sets a raw OTOS scale error, confirms the uncalibrated
       pose diverges from truth, applies `OtosConfigPatch` (ticket 004),
       confirms pose converges to truth — this is SUC-005's second
       acceptance criterion, now testable end-to-end.
-- [ ] Raw-error factor exposed via the ctypes ABI as a new fault-condition
+- [x] Raw-error factor exposed via the ctypes ABI as a new fault-condition
       knob (parallel to the existing OTOS drift knob).
-- [ ] Encoder error model extended: per-wheel tick quantization + scale
+- [x] Encoder error model extended: per-wheel tick quantization + scale
       mismatch + slip events, alongside the existing rest-jitter hook.
-- [ ] All new fault knobs are settable via SIMSET, chunked to ≤8 kv pairs
-      per message if the total knob count exceeds 8.
-- [ ] This ticket does not touch `src/firm/` (sim-plant/Python-only
+- [x] All new fault knobs are settable via SIMSET, chunked to ≤8 kv pairs
+      per message if the total knob count exceeds 8. (No literal SIMSET
+      wire verb exists post-Architecture-Revision-1 — see ticket 002's own
+      history; these knobs are direct Python method calls on `SimLoop`,
+      like `enc_scale_err_l/r` before them, so the ≤8-kv/message
+      truncation gotcha — a property of the dead SIMSET/SET wire
+      encoding, not of a direct ctypes call — does not apply. Documented
+      in `sim_prefs.py`'s module docstring.)
+- [x] This ticket does not touch `src/firm/` (sim-plant/Python-only
       change) — no `DESIGN.md` update required under the sprint's
       standing rule; if `src/sim/`-side design docs exist, update them
       instead (check for a `src/sim/DESIGN.md` or equivalent before
-      concluding none exists).
-- [ ] `test_error_divergence.py`'s `enc_scale_err` test (un-skipped by
+      concluding none exists). Confirmed: no `src/sim/DESIGN.md` exists
+      and this ticket's diff touches no file under `src/firm/`.
+- [x] `test_error_divergence.py`'s `enc_scale_err` test (un-skipped by
       ticket 002) actually exercises the newly-added fidelity, not just
-      the ABI knob's existence.
+      the ABI knob's existence. (Confirmed: `WheelPlant::scaleErr_` is a
+      real multiplicative fault applied in `reportedPosition()`, and this
+      ticket's own `test_sim_fidelity.py` zero-error-exactness scenario
+      proves the default/no-op path stays exact, so a nonzero value is a
+      genuine, exercised divergence, not a dead knob.)
 
 ## Testing
 

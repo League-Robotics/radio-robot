@@ -34,6 +34,11 @@ void OtosPlant::setDrift(float xDrift, float yDrift, float headingDrift) {
   driftHeading_ = headingDrift;
 }
 
+void OtosPlant::setRawScaleErr(float linearFraction, float angularFraction) {
+  rawErrorLinear_ = linearFraction;
+  rawErrorAngular_ = angularFraction;
+}
+
 void OtosPlant::reset(float x, float y, float heading,
                       float baseLeft, float baseRight) {
   x_ = x;

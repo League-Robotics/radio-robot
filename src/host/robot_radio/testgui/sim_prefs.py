@@ -33,13 +33,21 @@ which only ``set_otos_drift`` mapped onto any key below (the
 109-002 added a FIFTH setter, ``set_enc_scale_err(port, fraction)``, giving
 ``enc_scale_err_l``/``enc_scale_err_r`` a real 1:1 mapping each (port
 1=left, 2=right) -- see ``transport.py``'s
-``SimTransport._apply_profile_to_sim()`` for the actual calls. Every OTHER
-key in this module still has NO ``SimLoop`` setter backing it -- applying
-is skipped outright and a ``[WARN]`` is logged if the profile carries a
-non-neutral value for it. ``PROFILE_TO_SIM_SETTER`` (below) stays EMPTY:
-even ``enc_scale_err_l/r``'s new mapping is a port-keyed call, not a bare
-1:1 (key -> single-arg setter) shape this table's own contract expects, so
-it (like ``otos_lin_drift``/``otos_yaw_drift`` before it) is handled as a
+``SimTransport._apply_profile_to_sim()`` for the actual calls.
+
+109-007 added a SIXTH, ``set_otos_raw_scale_err(linear, angular)``, giving
+``otos_lin_scale_err``/``otos_ang_scale_err`` a real, combined mapping
+(models a physically mis-calibrated OTOS chip; a firmware-pushed OL/OA
+calibration scalar corrects it back out).
+
+Every OTHER key in this module still has NO ``SimLoop`` setter backing it
+-- applying is skipped outright and a ``[WARN]`` is logged if the profile
+carries a non-neutral value for it. ``PROFILE_TO_SIM_SETTER`` (below) stays
+EMPTY: even ``enc_scale_err_l/r``'s mapping is a port-keyed call and
+``otos_lin_scale_err``/``otos_ang_scale_err``'s is a two-keys-combined
+call, neither a bare 1:1 (key -> single-arg setter) shape this table's own
+contract expects, so both (like ``otos_lin_drift``/``otos_yaw_drift``
+before them) are handled as a
 special case directly in ``SimTransport._apply_profile_to_sim()`` instead
 of through this table. See that method's own docstring for the
 authoritative, current mapping.
@@ -73,9 +81,12 @@ Additive/noise terms — ``0.0`` is a genuine no-op:
     (port 1=left, 2=right) -- see ``transport.py``'s
     ``SimTransport._apply_profile_to_sim()`` for the actual calls.
 ``otos_lin_scale_err`` / ``otos_ang_scale_err``
-    Fractional OTOS linear/angular scale error (0 = perfect). **No
-    ``SimLoop`` setter backs either knob** -- applying is skipped, with a
-    ``[WARN]`` logged if either is set away from its neutral ``0.0``.
+    Fractional OTOS linear/angular scale error (0 = perfect) -- models a
+    physically MIS-calibrated OTOS chip. 109-007: combined into a single
+    ``SimLoop.set_otos_raw_scale_err(linear, angular)`` call (see
+    ``transport.py``'s ``SimTransport._apply_profile_to_sim()``) -- a
+    firmware-pushed OL/OA calibration scalar corrects the injected error
+    back out (``SimPlant::handleOtosWrite()``'s new register-write path).
 ``otos_lin_drift`` / ``otos_yaw_drift``
     OTOS linear/yaw drift. THE ONE surviving mapping: combined into a
     single ``SimLoop.set_otos_drift(otos_lin_drift, 0.0, otos_yaw_drift)``

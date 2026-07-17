@@ -50,11 +50,35 @@ float WheelPlant::reportedPosition() {
     ditherCounter_ = 0;
     reportPosition = position_;
   }
-  // Scale error applies last, uniformly across every branch above (fresh,
+  // Scale error applies next, uniformly across every branch above (fresh,
   // held/dropout, frozen, or dithered) -- a fractional over/under-report
   // bias on whatever value was otherwise going to be reported, never
   // touching position_/velocity_ themselves. 0.0 is a genuine no-op.
   reportPosition *= (1.0f + scaleErr_);
+
+  // Slip events (109-007): the accumulator advances on EVERY call (mirrors
+  // dropoutAccum_'s own unconditional-advance design) and, once it crosses
+  // 1.0, injects a PERMANENT signed offset -- a real slip event, once it
+  // happens, never un-happens on its own. 0.0 rate is a genuine no-op
+  // (slipOffset_ stays 0 forever). Applied before quantization -- see
+  // setTickQuantization()'s own header comment for the ordering rationale.
+  if (slipRate_ > 0.0f) {
+    slipAccum_ += slipRate_;
+    if (slipAccum_ >= 1.0f) {
+      slipAccum_ -= 1.0f;
+      slipOffset_ += slipMagnitude_;
+    }
+  }
+  reportPosition += slipOffset_;
+
+  // Tick quantization (109-007) -- applied LAST: a real encoder's own
+  // finite count resolution is the final step between "whatever physical/
+  // fault-biased value the chip would otherwise report" and the actual
+  // wire reading. 0.0 is a genuine no-op.
+  if (tickSize_ > 0.0f) {
+    reportPosition = std::round(reportPosition / tickSize_) * tickSize_;
+  }
+
   lastReportedPosition_ = reportPosition;
   return reportPosition;
 }
@@ -69,6 +93,12 @@ void WheelPlant::freezePosition(bool freeze) {
 void WheelPlant::setDropoutRate(float fraction) {
   dropoutRate_ = fraction;
   dropoutAccum_ = 0.0f;   // fresh phase -- a rate change never inherits a stale one
+}
+
+void WheelPlant::setSlip(float rate, float magnitude) {
+  slipRate_ = rate;
+  slipMagnitude_ = magnitude;
+  slipAccum_ = 0.0f;   // fresh phase -- a rate/magnitude change never inherits a stale one
 }
 
 }  // namespace TestSim

@@ -98,7 +98,9 @@ def test_apply_error_profile_calls_setters_and_warns_no_op_fields(
     mapping (``otos_lin_drift``/``otos_yaw_drift`` -> a single
     ``set_otos_drift(x, y, heading)`` call). 109-002 added a second:
     ``enc_scale_err_l``/``enc_scale_err_r`` -> two ``set_enc_scale_err(port,
-    fraction)`` calls (port 1=left, 2=right). Every OTHER
+    fraction)`` calls (port 1=left, 2=right). 109-007 added a third:
+    ``otos_lin_scale_err``/``otos_ang_scale_err`` -> a single
+    ``set_otos_raw_scale_err(linear, angular)`` call. Every OTHER
     ``DEFAULT_PROFILE`` key still has no ``SimLoop`` setter at all and is
     skip-and-warn only when set away from its neutral default."""
     loop = transport.protocol
@@ -108,6 +110,8 @@ def test_apply_error_profile_calls_setters_and_warns_no_op_fields(
     loop.set_otos_drift = mocked
     mocked_enc_scale_err = MagicMock()
     loop.set_enc_scale_err = mocked_enc_scale_err
+    mocked_otos_raw_scale_err = MagicMock()
+    loop.set_otos_raw_scale_err = mocked_otos_raw_scale_err
 
     logs: list[str] = []
     transport.on_log = logs.append
@@ -119,8 +123,8 @@ def test_apply_error_profile_calls_setters_and_warns_no_op_fields(
         "otos_yaw_noise": 3.33,         # no SimLoop setter -> warn
         "enc_scale_err_l": 4.44,        # -> set_enc_scale_err(1, 4.44)
         "enc_scale_err_r": 5.55,        # -> set_enc_scale_err(2, 5.55)
-        "otos_lin_scale_err": 6.66,     # no SimLoop setter -> warn
-        "otos_ang_scale_err": 7.77,     # no SimLoop setter -> warn
+        "otos_lin_scale_err": 6.66,     # -> set_otos_raw_scale_err(6.66, 7.77)
+        "otos_ang_scale_err": 7.77,     # -> set_otos_raw_scale_err(6.66, 7.77)
         "otos_lin_drift": 8.88,         # -> set_otos_drift(8.88, 0.0, 9.99)
         "otos_yaw_drift": 9.99,         # -> set_otos_drift(8.88, 0.0, 9.99)
         "body_rot_scrub": 0.11,         # no SimLoop setter -> warn
@@ -134,18 +138,21 @@ def test_apply_error_profile_calls_setters_and_warns_no_op_fields(
     mocked.assert_called_once_with(8.88, 0.0, 9.99)
     mocked_enc_scale_err.assert_any_call(1, 4.44)
     mocked_enc_scale_err.assert_any_call(2, 5.55)
+    mocked_otos_raw_scale_err.assert_called_once_with(6.66, 7.77)
 
     warn_logs = [line for line in logs if "[WARN]" in line]
     for key in (
         "encoder_noise", "slip_turn_extra", "otos_linear_noise",
-        "otos_yaw_noise",
-        "otos_lin_scale_err", "otos_ang_scale_err", "body_rot_scrub",
+        "otos_yaw_noise", "body_rot_scrub",
         "body_lin_scrub", "motor_offset_l", "motor_offset_r",
     ):
         assert any(key in line for line in warn_logs), (key, warn_logs)
-    # enc_scale_err_l/r are now supported (109-002) -- must NOT warn.
+    # enc_scale_err_l/r (109-002) and otos_lin_scale_err/otos_ang_scale_err
+    # (109-007) are now supported -- must NOT warn.
     assert not any("enc_scale_err_l" in line for line in warn_logs)
     assert not any("enc_scale_err_r" in line for line in warn_logs)
+    assert not any("otos_lin_scale_err" in line for line in warn_logs)
+    assert not any("otos_ang_scale_err" in line for line in warn_logs)
 
     info_logs = [line for line in logs if "[INFO]" in line]
     assert any("trackwidth" in line and "NEXT Connect" in line for line in info_logs), info_logs

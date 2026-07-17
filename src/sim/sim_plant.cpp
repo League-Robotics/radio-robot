@@ -32,6 +32,8 @@ constexpr int kNezhaFrameLen = 8;
 constexpr uint8_t kOtosDeviceAddr = 0x17;                                  // 7-bit
 constexpr uint16_t kOtosWireAddr = static_cast<uint16_t>(kOtosDeviceAddr << 1);
 constexpr uint8_t kOtosRegProductId = 0x00;
+constexpr uint8_t kOtosRegLinearScalar = 0x04;   // 109-007 -- see handleOtosWrite()
+constexpr uint8_t kOtosRegAngularScalar = 0x05;  // 109-007 -- see handleOtosWrite()
 constexpr uint8_t kOtosRegPositionXl = 0x20;
 constexpr uint8_t kOtosExpectedProductId = 0x5F;
 constexpr float kPosMmPerLsb = 0.305f;                              // [mm/LSB]
@@ -157,6 +159,23 @@ int SimPlant::handleOtosWrite(uint8_t* data, int len) {
   // bytes (data[1..]) -- SimPlant's OtosPlant is driven purely from wheel
   // positions (architecture-update.md Decision 3), never from a write.
   otosRegPtr_ = data[0];
+  // 109-007: the ONE exception to "swallow every OTOS write payload" above
+  // -- a write to the chip's own linear/angular calibration-scalar
+  // registers (the REAL Devices::Otos::setLinearScalar()/setAngularScalar()
+  // wire path, driven by begin()'s boot-config push, a live OtosConfigPatch,
+  // or the OL/OA text verb) is captured and applied to this plant's
+  // OtosPlant, so a firmware-pushed calibration genuinely corrects the
+  // raw-scale-error fault knob's effect on subsequent reads (see
+  // otos_plant.h's own setLinearScalarReg()/setAngularScalarReg() comment).
+  // This is NOT a second, independent model of chip behavior -- it is the
+  // exact register the real chip documents multiplying its raw measurement
+  // by, ported here the same way handleOtosRead() already ports the
+  // POSITION_XL+VELOCITY_XL burst layout.
+  if (len >= 2 && otosRegPtr_ == kOtosRegLinearScalar) {
+    otos_.setLinearScalarReg(static_cast<int8_t>(data[1]));
+  } else if (len >= 2 && otosRegPtr_ == kOtosRegAngularScalar) {
+    otos_.setAngularScalarReg(static_cast<int8_t>(data[1]));
+  }
   return kOk;
 }
 
@@ -220,6 +239,14 @@ void SimPlant::setEncScaleErr(int port, float fraction) {
   mutableWheelPlant(port).setScaleErr(fraction);
 }
 
+void SimPlant::setEncTickQuantization(int port, float tickSizeMm) {
+  mutableWheelPlant(port).setTickQuantization(tickSizeMm);
+}
+
+void SimPlant::setEncSlip(int port, float rate, float magnitudeMm) {
+  mutableWheelPlant(port).setSlip(rate, magnitudeMm);
+}
+
 void SimPlant::setEncoderJitter(bool enabled) {
   left_.setEncoderJitter(enabled);
   right_.setEncoderJitter(enabled);
@@ -227,6 +254,10 @@ void SimPlant::setEncoderJitter(bool enabled) {
 
 void SimPlant::setOtosDrift(float xDrift, float yDrift, float headingDrift) {
   otos_.setDrift(xDrift, yDrift, headingDrift);
+}
+
+void SimPlant::setOtosRawScaleErr(float linearFraction, float angularFraction) {
+  otos_.setRawScaleErr(linearFraction, angularFraction);
 }
 
 void SimPlant::setTruePose(float x, float y, float heading) {
