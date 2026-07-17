@@ -51,7 +51,24 @@ class OtosPlant {
   // function App::Odometry itself calls, over the SAME two absolute wheel
   // positions the caller's two WheelPlant instances just computed. Call
   // once per cycle, after both WheelPlant::step() calls for that cycle.
-  void step(float leftPosition, float rightPosition);   // [mm] [mm]
+  //
+  // dt (109-010): this cycle's own elapsed time ([s]) -- used ONLY to
+  // derive `omega()` below (`headingDelta / dt`, a plain finite-difference
+  // rate estimate of THIS cycle's own heading change, mirroring a real
+  // OTOS chip's own VELOCITY_XL register: an instantaneous angular-rate
+  // report alongside the position/heading burst). Defaulted to 0 so no
+  // pre-109-010 test caller needs to change -- `dt<=0` reports `omega()==0`
+  // (the pre-109-010 behavior: sim_plant.cpp's own handleOtosRead() zeroed
+  // the VELOCITY_XL bytes unconditionally, "no scenario asserts on OTOS's
+  // twist" -- ticket 010 is the first scenario that does, via App::
+  // HeadingSource's own measurement-age projection needing a real
+  // `omega_meas`).
+  void step(float leftPosition, float rightPosition, float dt = 0.0f);   // [mm] [mm] [s]
+
+  // omega -- this plant's own finite-difference angular-rate estimate from
+  // the MOST RECENT step() call (see that method's own `dt` doc comment).
+  // 0.0f before the first step() with a nonzero dt.
+  float omega() const { return omega_; }  // [rad/s]
 
   // Reported pose == the true accumulator (x_/y_/heading_) plus the
   // deterministic drift/bias knobs below. Kept separate from x()/y()/
@@ -162,6 +179,7 @@ class OtosPlant {
   float x_ = 0.0f;          // [mm]
   float y_ = 0.0f;          // [mm]
   float heading_ = 0.0f;    // [rad]
+  float omega_ = 0.0f;      // [rad/s] 109-010, see step()'s own `dt` doc comment
 
   // ---- Drift/bias knob state ----
   float driftX_ = 0.0f;        // [mm]

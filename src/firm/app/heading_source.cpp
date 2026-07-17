@@ -10,6 +10,7 @@ HeadingSource::HeadingSource(Devices::Otos& otos, Devices::NezhaMotor& left,
 
 void HeadingSource::configure(const msg::PlannerConfig& config) {
   mode_ = config.heading_source;
+  headingLeadBias_ = config.heading_lead_bias;  // [s] 109-010 locus 1
   // A forced mode takes effect immediately (not just on the next sample())
   // so a caller that configure()s mid-session (a future live-tuning path)
   // doesn't leave the OLD source active for one extra cycle.
@@ -28,9 +29,23 @@ float HeadingSource::encoderHeading() const {
   return (right_.position() - left_.position()) / trackWidth_;
 }
 
-void HeadingSource::sample() {
+void HeadingSource::sample(uint64_t nowUs) {
   fellBackEdge_ = false;
   recoveredEdge_ = false;
+
+  // 109-010 measurement-age tracker: independent of the AUTO/FORCE policy
+  // below -- tracks "how stale is OTOS's own cached pose right now",
+  // regardless of whether this class is currently trusting it. See
+  // heading_source.h's own "measurement-age projection" doc comment for why
+  // this is `nowUs - otos_.lastReadUs()` (the REAL cycle-ordering gap), not
+  // a poseFresh()-gated cycle counter (that tracker measured zero effect --
+  // it only sees Otos's own internal read-skip, not the dominant cross-
+  // cycle "Pilot reads before this cycle's own OTOS refresh" ordering gap).
+  // Clamped to >= 0 -- a misused/defaulted nowUs (e.g. a pre-109-010 test
+  // caller that never passes one) must never produce a negative-wrapping
+  // uint64_t subtraction turned into a huge bogus lead.
+  uint64_t lastReadUs = otos_.lastReadUs();
+  ageS_ = (nowUs > lastReadUs) ? static_cast<float>(nowUs - lastReadUs) / 1.0e6f : 0.0f;
 
   if (mode_ == msg::HeadingSourceMode::HEADING_SOURCE_FORCE_OTOS) {
     usingOtos_ = true;
@@ -68,6 +83,14 @@ void HeadingSource::sample() {
 
 float HeadingSource::heading() const {
   return usingOtos_ ? otos_.pose().heading : encoderHeading();
+}
+
+float HeadingSource::headingLead() const {
+  // 109-010 locus 1: see heading_source.h's own "measurement-age
+  // projection" doc comment. Encoder fallback has no analogous cross-cycle
+  // read-then-consume ordering gap -- collapses to heading() unchanged.
+  if (!usingOtos_) return heading();
+  return otos_.pose().heading + otos_.pose().omega * (ageS_ + headingLeadBias_);
 }
 
 }  // namespace App

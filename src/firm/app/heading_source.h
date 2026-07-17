@@ -44,6 +44,54 @@
 // hardware bench session behind this specific number; it is a conservative
 // "a few tenths of a second at the 40ms cycle" guess, flagged for
 // bench revision like every other v1 constant this sprint adds.
+//
+// -- 109-010: measurement-age projection (locus 1 of the ticket's own three
+// lead-compensation loci) --
+// The dominant staleness mechanism is NOT (only) `Devices::Otos::
+// kReadPeriod`'s own internal 20ms read-rate limit -- it is App::RobotLoop's
+// own CYCLE ORDERING (src/firm/DESIGN.md Sec 3's timing schedule): the OTOS
+// burst read (`applyOtosSample()`) happens in the cycle's own LAST
+// (`kPace`) block, but App::Pilot::tick() (which reads this class's
+// heading()) runs EARLIER, in the motorR settle block -- so on every single
+// cycle, Pilot is reading the pose the OTOS chip reported at the END OF THE
+// PREVIOUS CYCLE, not "just now". At ~40ms/cycle this is a roughly CONSTANT
+// ~one-cycle staleness on every cycle (not merely an occasional skipped
+// read) -- during a cruise pivot at ~250-300deg/s, that is ~10-12deg of REAL
+// rotation the control loop has not yet been told about (109-009's own
+// Impossibility Argument, deferred to this ticket).
+//
+// `headingLead()` below inverts this: `theta_est = theta_meas + omega_meas *
+// age`, where `age` is the REAL elapsed time (Devices::Otos::lastReadUs()
+// vs. `nowUs`, the SAME timestamp App::RobotLoop's own clock_.nowMicros()
+// already reads every cycle) since the chip's own cached pose was actually
+// sampled -- NOT "cycles since sample() last ran" and NOT gated on
+// poseFresh() (an earlier draft of this projection tried resetting a
+// cycle-counted age to 0 whenever poseFresh() was true and measured NO
+// effect at all: applyOtosSample() runs every cycle and is always "due"
+// against the 20ms kReadPeriod at a ~40ms cycle rate, so poseFresh() is
+// ALWAYS true and that tracker never once saw staleness -- it was measuring
+// the wrong mechanism, Otos's own internal read-skip, not the cycle-
+// ordering lag that actually dominates). `sample()` therefore takes the
+// loop's own `nowUs` directly (a parameter, like App::Pilot::tick()'s
+// existing `now` -- no Devices::Clock dependency of this class's own).
+// `omega_meas` is OTOS's own angular rate (`otos_.pose().omega`) from the
+// SAME burst read `heading()` already consumes -- no new bus traffic.
+// `headingLeadBias` (msg::PlannerConfig's own `heading_lead_bias`, [s]) is
+// an ADDITIONAL, separately-fitted bias on top of the real measured age --
+// see src/firm/motion/DESIGN.md's own "Turn-error characterization" entry
+// for the fitted regression this was derived from. The projection is
+// deliberately gated on `usingOtos_` -- while on the encoder fallback,
+// App::Odometry samples the encoder differential every cycle with no
+// analogous cross-cycle read-then-consume ordering gap, so `headingLead()`
+// collapses to `heading()` unchanged in that case.
+//
+// This projected value feeds ONLY the heading-PD's own error term (App::
+// Pilot's arithmetic, via Motion::Executor::Twist::thetaMeasLead) -- it is
+// a SEPARATE quantity from the raw `heading()` this class already exposed,
+// which continues to feed Motion::Executor's own dwell/divergence
+// bookkeeping unchanged (this ticket's own "divergence checking stays
+// un-led" rule, and the dwell gate's own SEPARATE `terminal_lead`
+// locus -- see executor.h/.cpp).
 #pragma once
 
 #include <cstdint>
@@ -80,13 +128,30 @@ class HeadingSource {
   // MOST the one sample() call the transition actually happens on, false
   // every other call (mirrors Telemetry's own event_bits level-set, not
   // sticky-latch, convention -- see telemetry.proto's own doc comment).
-  void sample();
+  //
+  // nowUs -- 109-010: the loop's own current time ([us], the SAME
+  // Devices::Clock::nowMicros() reading App::RobotLoop already takes every
+  // cycle) -- used ONLY to compute `age = nowUs - otos_.lastReadUs()` for
+  // the measurement-age projection (file header's own comment); no bus
+  // traffic, no Devices::Clock dependency of this class's own (a parameter,
+  // like App::Pilot::tick()'s existing `now`). Defaulted to 0 so no
+  // existing test caller (pre-109-010) needs to change -- age() then reads
+  // as a (harmless, since headingLead() gates on usingOtos_/is otherwise
+  // unused by any pre-110-010 test) large or negative-wrapping value that
+  // no pre-existing test ever reads.
+  void sample(uint64_t nowUs = 0);  // [us]
 
   // heading -- the ACTIVE source's current heading estimate: OTOS's own
   // pose().heading when usingOtos(), else the encoder-differential formula
   // above. Cheap accessor, no bus traffic -- just reads whichever leaf's
   // already-cached state sample() last chose.
   float heading() const;  // [rad]
+
+  // headingLead -- 109-010, locus 1: `heading()` projected forward by the
+  // measurement-age term (file header's own comment). Equals `heading()`
+  // exactly while on the encoder fallback (no rate-limited bus read to be
+  // stale against) or immediately after a fresh OTOS read (age == 0).
+  float headingLead() const;  // [rad]
 
   // usingOtos -- true iff OTOS is the currently-active source (mirrors
   // telemetry.proto's HeadingSourceStatus: usingOtos() == true <->
@@ -118,6 +183,10 @@ class HeadingSource {
 
   bool fellBackEdge_ = false;
   bool recoveredEdge_ = false;
+
+  // -- 109-010: measurement-age projection (locus 1), see file header --
+  float headingLeadBias_ = 0.0f;  // [s] msg::PlannerConfig.heading_lead_bias
+  float ageS_ = 0.0f;              // [s] nowUs - otos_.lastReadUs(), clamped >= 0
 };
 
 }  // namespace App

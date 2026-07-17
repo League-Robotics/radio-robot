@@ -171,7 +171,14 @@ class Pilot {
   // between "when is this command done" and "what should the PD command
   // right now" so neither concern's own bookkeeping leaks into the other's
   // class.
-  void tick(uint32_t now);  // [ms]
+  // nowUs -- 109-010: the SAME instant as `now` ([ms]), expressed in [us]
+  // (App::RobotLoop's own clock_.nowMicros(), the same clock markTime()
+  // itself derives `now` from) -- forwarded to headingSource_.sample(nowUs)
+  // for its own measurement-age projection (App::HeadingSource's own doc
+  // comment). This does NOT give Pilot a Devices::Clock dependency of its
+  // own -- both `now` and `nowUs` are plain parameters the caller (already
+  // holding a Clock) supplies, the same shape as `now` already was.
+  void tick(uint32_t now, uint64_t nowUs);  // [ms] [us]
 
   // popEvent -- drains one pending completion event. RobotLoop drains all
   // pending events each cycle (bounded: the ring holds at most

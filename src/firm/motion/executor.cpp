@@ -140,6 +140,9 @@ void Executor::configure(const msg::PlannerConfig& config) {
   headingDwellTol_ = config.heading_dwell_tol;
   headingDwellRate_ = config.heading_dwell_rate;
   headingDwellHoldS_ = config.arrive_dwell;
+
+  planLeadS_ = config.plan_lead;          // [s] 109-010 locus 2
+  terminalLeadS_ = config.terminal_lead;  // [s] 109-010 locus 3
 }
 
 void Executor::pushEvent(uint32_t id, CompletionStatus status) {
@@ -664,7 +667,7 @@ void Executor::plan() {
 }
 
 Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
-                                float measuredHeadingAbs) {
+                                float measuredHeadingAbs, float measuredHeadingLeadAbs) {
   Twist out;
   if (state_ == State::kIdle) return out;
 
@@ -713,6 +716,16 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
   unwrappedThetaRel_ += wrapAngle(measuredHeadingAbs - lastMeasuredHeadingAbs_);
   lastMeasuredHeadingAbs_ = measuredHeadingAbs;
   float thetaMeasRel = unwrappedThetaRel_;
+
+  // 109-010 locus 1: thetaMeasLeadRel is thetaMeasRel plus the SAME small
+  // (measuredHeadingLeadAbs - measuredHeadingAbs) offset App::HeadingSource's
+  // own headingLead() vs. heading() difference represents THIS cycle --
+  // wrapAngle() is safe here (unlike the accumulator above) because this
+  // offset is bounded by one cycle's own worst-case rotation rate times a
+  // sub-second lead, never anywhere near +-180deg, so no separate unwrapped
+  // accumulation is needed for it the way unwrappedThetaRel_ needs one for
+  // the raw signal across a whole multi-turn command.
+  float thetaMeasLeadRel = thetaMeasRel + wrapAngle(measuredHeadingLeadAbs - measuredHeadingAbs);
 
   if (mode_ == Mode::kTimed) {
     JerkTrajectory::State linSample = linear_.sample(linearElapsedS_);
@@ -776,14 +789,30 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
       (mode_ == Mode::kArc) ? (linearFrameOffset_ + linSample.position)
                              : (rotationalFrameOffset_ + rotSample.position);
 
+  // 109-010 locus 2: the WHEEL-VELOCITY REFERENCE (out.v/omegaFf below,
+  // what App::Pilot ultimately hands Drive::setTwist()) is evaluated
+  // `planLeadS_` further into the SAME held trajectory via peek() -- a
+  // closed-form sample, never a second solve (JerkTrajectory::peek()'s own
+  // doc comment) -- so the commanded velocity already anticipates the
+  // actuation-transport delay between "Executor computed a reference" and
+  // "the wheel physically moves at it". This does NOT touch thetaRef/
+  // plannedPositionSinceActivation above (POSITION tracking, completion,
+  // and checkDivergence() all still compare against the CURRENT elapsed
+  // sample, unchanged) -- only the velocity handed downstream is led.
+  // planLeadS_ == 0.0f (the shipped default absent a fitted value) makes
+  // peek(elapsed + 0) read back exactly linSample/rotSample.velocity, a
+  // no-op.
+  JerkTrajectory::State linSampleLead = linear_.peek(linearElapsedS_ + planLeadS_);
+  JerkTrajectory::State rotSampleLead = rotational_.peek(rotationalElapsedS_ + planLeadS_);
+
   if (mode_ == Mode::kArc) {
-    out.v = linSample.velocity;
+    out.v = linSampleLead.velocity;
     thetaRef = headingRatioPerMm_ * plannedPositionSinceActivation;
-    omegaFf = headingRatioPerMm_ * linSample.velocity;
+    omegaFf = headingRatioPerMm_ * linSampleLead.velocity;
   } else {
     out.v = 0.0f;
     thetaRef = plannedPositionSinceActivation;
-    omegaFf = rotSample.velocity;
+    omegaFf = rotSampleLead.velocity;
   }
 
   // -- Completion + the terminal-decel PD gate (both need the SAME
@@ -797,7 +826,21 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
 
   float thetaErr = active_.deltaHeading - thetaMeasRel;
   float thetaRate = (dtS > 0.0f) ? (thetaMeasRel - prevThetaMeasRel_) / dtS : 0.0f;
-  bool withinTol = std::fabs(thetaErr) < headingDwellTol_;
+
+  // 109-010 locus 3: the dwell/terminal completion decision's own error
+  // test is evaluated against a PREDICTED heading (thetaMeasRel projected
+  // forward by terminalLeadS_ at the CURRENT measured rate) rather than the
+  // raw current sample -- a predicted-state stand-in for solving the exact
+  // tolerance-crossing time analytically (this file's own doc comment/the
+  // ticket's own "OR solve the crossing time analytically" alternative).
+  // Deliberately separate from thetaErr above, which stays UNLED and keeps
+  // feeding checkDivergence() (via thetaMeasRel directly, not thetaErr) and
+  // the crossedTarget sign-flip test below -- see this file's own "History
+  // note" (executor.h) for why divergence checking specifically stays
+  // un-led. terminalLeadS_ == 0.0f (the shipped default absent a fitted
+  // value) makes this identical to the raw thetaErr, a no-op.
+  float thetaErrLead = active_.deltaHeading - (thetaMeasRel + thetaRate * terminalLeadS_);
+  bool withinTol = std::fabs(thetaErrLead) < headingDwellTol_;
 
   // 109-009 fix (dwell-reliability, realistic-profile hang): the dwell
   // gate's own rate test used to compare the RAW one-sample finite-
@@ -848,6 +891,7 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
   out.omega = omegaFf;
   out.thetaRef = thetaRef;
   out.thetaMeas = thetaMeasRel;
+  out.thetaMeasLead = thetaMeasLeadRel;  // 109-010 locus 1, App::Pilot's PD error term
   out.headingActive = headingContent && !terminalDecel;
   out.omegaDes = out.headingActive ? omegaFf : 0.0f;
 

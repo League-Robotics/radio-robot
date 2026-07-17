@@ -193,15 +193,27 @@ int SimPlant::handleOtosRead(uint8_t* data, int len) {
     // here directly since there is no I2CBus FIFO left for a
     // scriptPoseResponse()-style helper to target. reportedX/Y/Heading()
     // (not the bare x()/y()/heading() ground truth) apply OtosPlant's own
-    // drift/bias fault knob. Velocity registers are always zero -- no
-    // scenario in this ticket asserts on OTOS's twist.
+    // drift/bias fault knob.
     int16_t rx = static_cast<int16_t>(std::lround(otos_.reportedX() / kPosMmPerLsb));
     int16_t ry = static_cast<int16_t>(std::lround(otos_.reportedY() / kPosMmPerLsb));
     int16_t rh = static_cast<int16_t>(std::lround(otos_.reportedHeading() / kHdgRadPerLsb));
     writeLeInt16(data + 0, rx);
     writeLeInt16(data + 2, ry);
     writeLeInt16(data + 4, rh);
-    for (int i = 6; i < 12; ++i) data[i] = 0;
+    // 109-010: VELOCITY_XL's own angular-rate word (rvh, decoded by
+    // Devices::Otos::readPositionVelocity() as `whF` -- see that method's
+    // own "reuses the SAME kPosMmPerLsb/kHdgRadPerLsb" comment for why the
+    // SAME kHdgRadPerLsb scale applies here too) is now OtosPlant::omega(),
+    // a real finite-difference rate estimate -- App::HeadingSource's own
+    // measurement-age projection (locus 1) needs a real omega_meas to
+    // characterize/validate at all; before this ticket this word was
+    // always zero ("no scenario asserts on OTOS's twist" -- ticket 010 is
+    // the first that does). Linear velocity (rvx/rvy) stays zero -- no
+    // consumer of this ticket's own three lead-compensation loci reads
+    // pose().v_x/v_y, only pose().omega.
+    int16_t rvh = static_cast<int16_t>(std::lround(otos_.omega() / kHdgRadPerLsb));
+    for (int i = 6; i < 10; ++i) data[i] = 0;  // rvx, rvy -- unmodeled, see above
+    writeLeInt16(data + 10, rvh);
     return kOk;
   }
   // Any other register pointer -- zeros, ACK.
@@ -216,7 +228,7 @@ int SimPlant::handleOtosRead(uint8_t* data, int len) {
 void SimPlant::tick(float dt) {
   left_.step(leftDuty_, dt);
   right_.step(rightDuty_, dt);
-  otos_.step(left_.position(), right_.position());
+  otos_.step(left_.position(), right_.position(), dt);  // 109-010: dt drives omega()
 }
 
 // ---------------------------------------------------------------------------

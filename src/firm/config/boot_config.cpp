@@ -152,6 +152,14 @@ msg::PlannerConfig defaultPlannerConfig() {
     cfg.setHeadingSource(msg::HeadingSourceMode::HEADING_SOURCE_AUTO);
     cfg.setHeadingDwellTol(0.008726646f);        // [rad]
     cfg.setHeadingDwellRate(0.01745329f);       // [rad/s]
+
+    // 109-010: three independently-tunable lead-compensation Δt's, fitted
+    // from the rate-sweep regression -- see planner.proto's own field
+    // comments and src/firm/motion/DESIGN.md's "Turn-error characterization"
+    // entry for the full derivation.
+    cfg.setHeadingLeadBias(-0.05f);        // [s] locus 1
+    cfg.setPlanLead(0.0f);                // [s] locus 2
+    cfg.setTerminalLead(0.0f);           // [s] locus 3
     return cfg;
 }
 

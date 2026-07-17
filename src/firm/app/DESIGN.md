@@ -110,6 +110,30 @@ source flips either direction — see `Pilot::headingSourceIsOtos()`/
 `headingSourceFellBack()`/`headingSourceRecovered()` and
 `RobotLoop::updateTlm()`.
 
+**`HeadingSource::headingLead()` — measurement-age projection (109-010,
+locus 1 of `motion/DESIGN.md` §2c's own three lead-compensation loci).**
+`sample(nowUs)` (`nowUs` — `App::RobotLoop`'s own `clock_.nowMicros()`,
+threaded through `Pilot::tick(now, nowUs)` as a plain parameter, NOT a new
+`Devices::Clock` dependency for either class) tracks `ageS_ = nowUs -
+Devices::Otos::lastReadUs()` every cycle — the REAL elapsed time since
+OTOS's own cached pose was actually sampled, which is a roughly constant
+one-`kCycle` (40ms) gap by construction (`applyOtosSample()` runs in the
+cycle's LAST block; `Pilot::tick()`, which calls `sample()`, runs EARLIER
+in the SAME cycle — see `robot_loop.cpp`'s own cycle-placement comments).
+`headingLead()` returns `heading() + otos_.pose().omega * (ageS_ +
+heading_lead_bias)` when `usingOtos_` (collapses to `heading()` unchanged
+on the encoder fallback, which has no analogous cross-cycle read-then-
+consume gap). This is a SEPARATE quantity from `heading()` — `Executor::
+tick()` takes BOTH (`measuredHeadingAbs`/`measuredHeadingLeadAbs`) and
+exposes a SEPARATE `Twist::thetaMeasLead` field alongside the existing
+`thetaMeas`; `Pilot`'s own heading-PD error term uses `thetaMeasLead`,
+while `Executor`'s own dwell/divergence bookkeeping keeps using the raw,
+unleaded `thetaMeas` throughout. See `motion/DESIGN.md` §2c for the full
+characterization writeup (the fitted equation, the sim-fidelity gap found
+and fixed alongside this work, and the honest post-compensation finding —
+the shipped `heading_lead_bias` default NEUTRALIZES this projection rather
+than improving turn accuracy, a disclosed outcome, not a silent one).
+
 ## 3. Constraints and Invariants
 
 - **Single-loop bus ownership:** every I2C transaction happens from

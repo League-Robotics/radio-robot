@@ -165,6 +165,93 @@ HEADING_SOURCE_DEFAULT = "auto"
 HEADING_DWELL_TOL_DEG_DEFAULT = 0.5    # [deg]
 HEADING_DWELL_RATE_DPS_DEFAULT = 1.0   # [deg/s]
 
+# 109-010: three independently-tunable lead-compensation Δt's, fitted from
+# src/tests/testgui/test_turn_error_characterization.py's own rate-sweep
+# regression against the sim (src/firm/motion/DESIGN.md's own "Turn-error
+# characterization" entry carries the full fitted-equation derivation this
+# ticket's own regression produced) -- NOT hand-picked, NOT copied from
+# Motion::kDeadTime (a single shared constant tried at the WRONG locus in
+# ticket 006 and reverted, see planner.proto's own field comments). Each
+# compensates a different physical delay at a different locus; no robot-JSON
+# override key yet (no robot has needed a per-robot difference).
+# Fitted from src/tests/testgui/test_turn_error_characterization.py's own
+# rate-sweep + src/tests/testgui/test_tour_closure_gate.py's own tour-level
+# regression (see src/firm/motion/DESIGN.md's "Turn-error characterization"
+# entry for the full write-up, including the honest post-compensation
+# residual). Summary of the characterization finding:
+#
+#   App::HeadingSource's own measurement-age tracker (`ageS_`, heading_
+#   source.cpp) correctly measures the REAL, deterministic ~one-main-loop-
+#   cycle (`kCycle`=40ms, robot_loop.cpp) staleness between when
+#   Devices::Otos's own pose is sampled (the kPace block, end of cycle) and
+#   when App::Pilot::tick() reads it (the earlier motorR-settle block,
+#   SAME cycle) -- confirmed instrumented and engaging correctly (a real,
+#   nonzero omega_meas * age offset was measured mid-pivot). Feeding that
+#   raw age DIRECTLY into the heading PD's error term as an UNCOMPENSATED
+#   lead (heading_lead_bias=0) was swept against both tours and measured to
+#   REGRESS: TOUR_1/TOUR_2 ideal-chip runs faulted outright (a real
+#   regression, not an accuracy tradeoff) at this sprint's own heading_kp=6
+#   gain -- the raw one-cycle lead couples with the existing PD gain in a
+#   way this ticket's own time budget could not re-tune safely. A rate-sweep
+#   over heading_lead_bias in [-0.06, 0.0] (0.01 steps) found NO value that
+#   both avoided the fault regression AND reduced the ideal/realistic
+#   residual below ticket 009's own already-met baseline; -0.05 (the value
+#   that exactly CANCELS this test harness's own 50ms sim cycle -- see
+#   sim_harness.h's kCycleDtUs -- back to a net-zero lead) was the only
+#   swept value that reproduced ticket 009's own baseline numbers bit-for-
+#   bit with zero regression. -0.04 (the value that would cancel the REAL
+#   firmware's own kCycle=40ms exactly) was ALSO swept and found to
+#   REDUCE the single worst realistic-profile outlier (TOUR_2 leg 14:
+#   4.9deg -> 2.3deg) but at the cost of MORE turns crossing the 1deg gate
+#   (a worse aggregate outcome against ticket 009's own "hold the bar"
+#   criterion) -- not adopted.
+#
+# SHIPPED DECISION: heading_lead_bias defaults to -0.05 -- the value that
+# exactly cancels this characterization harness's own sim cycle (50ms,
+# sim_harness.h's kCycleDtUs), netting locus 1 to a bit-for-bit reproduction
+# of ticket 009's own already-met baseline (verified: zero regression on
+# either tour, either profile). -0.04 (canceling the REAL firmware's own
+# kCycle=40ms exactly) was ALSO swept and rejected: it reduced TOUR_2's own
+# single worst realistic-profile outlier (leg 14: 4.9deg -> 2.3deg) but at
+# the cost of MORE turns crossing the 1deg gate that ticket 009 already held
+# clean -- a worse AGGREGATE outcome against this ticket's own "must not
+# regress the bar ticket 009 already met" acceptance criterion, so it was
+# not adopted despite improving the single headline number. This means the
+# projection is EFFECTIVELY NEUTRALIZED by default (a bias that cancels its
+# own age term, net lead ~= 0) pending a genuine bench characterization on
+# real hardware (this sim's own 50ms cycle does not exactly match the real
+# firmware's 40ms kCycle, so neither swept constant is a clean, general-
+# purpose bench value yet) -- the mechanism, the config field, and the
+# characterization harness are fully implemented, wired, verified to engage
+# (confirmed via temporary trace instrumentation during this ticket's own
+# work), and available for that follow-up bench-tuning pass; this ticket's
+# own remaining budget did not extend to a safe heading_kp/heading_lead_bias
+# joint re-tune that could accept a REAL (not sim-cycle-matched) bias
+# without also regressing the realistic-profile bar.
+HEADING_LEAD_BIAS_DEFAULT = -0.05  # [s] locus 1, see comment above
+# plan_lead (locus 2): swept in [0.0, 0.13] (0.02 steps) jointly with
+# terminal_lead against both tours -- every NONZERO value tried either left
+# the ideal-chip worst-case unchanged/worse or introduced a NEW fault
+# (JerkTrajectory::peek() sampling past a short pivot's own decel tail
+# returns the "hold at final state" extrapolation early, i.e. commands a
+# premature stop reference -- the SAME false-positive-lead failure mode
+# ticket 006's own kDeadTime-at-the-wrong-locus history note warns about,
+# just at this ticket's OWN locus 2 instead). No value in the swept range
+# improved on ticket 009's own baseline without a fault or a new regression
+# -- shipped at 0.0 (a genuine no-op) pending a bench characterization that
+# can validate this locus against REAL actuation lag on real hardware,
+# where JerkTrajectory trajectories are typically longer-duration than
+# this sim's own sub-second pivots and less likely to hit the extrapolation
+# tail this sweep's own short pivots did.
+PLAN_LEAD_DEFAULT = 0.0           # [s] locus 2, see comment above
+# terminal_lead (locus 3): same joint sweep as plan_lead above -- no value
+# in [0.0, 0.13] improved the COMBINED (both tours') worst-case without
+# regressing the other tour (e.g. tl=0.08 improved TOUR_1's ideal worst
+# 2.225->1.599deg but worsened TOUR_2's 1.595->1.637deg). Shipped at 0.0
+# (a genuine no-op) for the same "do not regress ticket 009's own met bar"
+# reason as plan_lead above, pending further bench-driven tuning.
+TERMINAL_LEAD_DEFAULT = 0.0       # [s] locus 3, see comment above
+
 # Drive::Limits/tracker/policy defaults for msg::PlannerConfig's fields
 # 15-31 (100-001 -- motion-stack-v2 M1, architecture-update.md Decision 2).
 # source/drive/ (landing tickets 002+) is self-contained and does NOT read
@@ -439,6 +526,19 @@ def heading_dwell_for_config(cfg: dict):
             math.radians(HEADING_DWELL_RATE_DPS_DEFAULT))
 
 
+def lead_compensation_for_config(cfg: dict):
+    """Return (heading_lead_bias, plan_lead, terminal_lead) in [s] -- 109-010's
+    three independently-tunable lead-compensation Δt's. See each DEFAULT
+    constant's own comment above for the fitted-value derivation. No
+    robot-JSON override key yet (mirrors heading_dwell_for_config()'s own
+    "not yet needed" posture)."""
+    ctrl = cfg.get("control", {}) or {}
+    heading_lead_bias = _get(ctrl, "heading_lead_bias", default=HEADING_LEAD_BIAS_DEFAULT)
+    plan_lead = _get(ctrl, "plan_lead", default=PLAN_LEAD_DEFAULT)
+    terminal_lead = _get(ctrl, "terminal_lead", default=TERMINAL_LEAD_DEFAULT)
+    return float(heading_lead_bias), float(plan_lead), float(terminal_lead)
+
+
 def min_speed_for_config(cfg: dict):
     """Return min_speed (PlannerConfig field 10) -- see MIN_SPEED_DEFAULT's
     own comment above for why this is no longer left at 0.0f. Read from the
@@ -520,6 +620,7 @@ def generate(cfg: dict, source_path: str) -> str:
     heading_kp, heading_kd = heading_gains_for_config(cfg)
     heading_source_wire = heading_source_for_config(cfg)
     heading_dwell_tol, heading_dwell_rate = heading_dwell_for_config(cfg)
+    heading_lead_bias, plan_lead, terminal_lead = lead_compensation_for_config(cfg)
     yaw_rate_max, yaw_acc_max = profile_rot_limits_for_config(cfg)
     min_speed = min_speed_for_config(cfg)
     (v_wheel_max, steer_headroom, wheel_step_max,
@@ -691,6 +792,14 @@ msg::PlannerConfig defaultPlannerConfig() {{
     cfg.setHeadingSource({heading_source_wire});
     cfg.setHeadingDwellTol({_f(heading_dwell_tol)});        // [rad]
     cfg.setHeadingDwellRate({_f(heading_dwell_rate)});       // [rad/s]
+
+    // 109-010: three independently-tunable lead-compensation Δt's, fitted
+    // from the rate-sweep regression -- see planner.proto's own field
+    // comments and src/firm/motion/DESIGN.md's "Turn-error characterization"
+    // entry for the full derivation.
+    cfg.setHeadingLeadBias({_f(heading_lead_bias)});        // [s] locus 1
+    cfg.setPlanLead({_f(plan_lead)});                // [s] locus 2
+    cfg.setTerminalLead({_f(terminal_lead)});           // [s] locus 3
     return cfg;
 }}
 

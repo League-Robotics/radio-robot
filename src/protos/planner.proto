@@ -347,4 +347,44 @@ message PlannerConfig {
   // |measured heading rate| must fall below this AND heading_dwell_tol
   // above before the hold timer starts counting. 1 deg/s default.
   float heading_dwell_rate = 34;
+
+  // --- 109-010: three independently-tunable lead-compensation Δt's,
+  // characterized-and-inverted per the ticket's own rate-sweep regression
+  // (src/firm/motion/DESIGN.md's own "Turn-error characterization" entry
+  // documents the fitted equation each of these three was derived from).
+  // Each compensates a DIFFERENT physical delay at a DIFFERENT locus -- they
+  // are not the same number and must not be collapsed into one shared
+  // constant (the ticket's own history note: `Motion::kDeadTime`, a SINGLE
+  // shared constant, was tried at the wrong locus -- the divergence check --
+  // in ticket 006 and produced false positives; divergence checking stays
+  // UN-led, still using kDeadTime==0 effectively, i.e. untouched by any of
+  // these three fields).
+
+  // [s] locus 1 -- App::HeadingSource's own measurement-age projection
+  // (`theta_est = theta_meas + omega_meas * age`): an ADDITIONAL bias added
+  // on top of the REAL, measured age (time since Devices::Otos's own last
+  // fresh burst read -- HeadingSource tracks that itself, not a config
+  // value) for whatever systematic residual the sweep's own regression
+  // still shows after the measured-age term alone. 0.0 is a valid default
+  // (the measured-age term is the dominant compensation; this is headroom
+  // for a further-fitted correction, not a required nonzero value).
+  float heading_lead_bias = 35;
+
+  // [s] locus 2 -- Motion::Executor's own plan-lead on the wheel-velocity
+  // reference: the dominant channel's own JerkTrajectory::peek() is
+  // evaluated at `elapsed + plan_lead` (a closed-form sample, NOT a second
+  // solve) rather than at `elapsed`, so the velocity Drive::setTwist()
+  // receives already anticipates the actuation-transport delay between
+  // "Executor computed a reference" and "the wheel actually moves at it".
+  float plan_lead = 36;
+
+  // [s] locus 3 -- Motion::Executor's own dwell/terminal completion
+  // decision: the heading-error test the dwell-hold gate uses is evaluated
+  // against a PREDICTED heading (`thetaMeasRel + thetaRate * terminal_lead`)
+  // instead of the raw current sample, so the completion decision is not
+  // itself lagging the same OTOS read-rate staleness the raw measurement
+  // carries. Deliberately NOT applied to `checkDivergence()`'s own
+  // comparison -- see this file's own comment above and executor.h/.cpp's
+  // "History note" doc comments.
+  float terminal_lead = 37;
 }

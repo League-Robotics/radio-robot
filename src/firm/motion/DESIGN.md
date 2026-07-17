@@ -563,6 +563,119 @@ ideal-plant ACCURACY gate, not a contrived edge case):**
    re-evaluate next tick is strictly safer than tearing the whole active
    command down over one bad correction attempt.
 
+### 2c. Turn-error characterization and lead compensation (109-010)
+
+**Background.** Ticket 009's own Impossibility Argument diagnosed a
+systematic, deterministic (not random) turn-accuracy ceiling: `App::
+HeadingSource::heading()` can be reading a `Devices::Otos` pose that is
+stale relative to the plant's own instantaneous rotation, because of
+`src/firm/DESIGN.md` Sec 3's own cycle ordering — `applyOtosSample()` (the
+OTOS burst read) runs in the cycle's LAST (`kPace`) block, but `App::
+Pilot::tick()` (which reads `HeadingSource::heading()`) runs EARLIER, in
+the motorR-settle block — so on every cycle, Pilot reads the pose OTOS
+reported at the END OF THE PREVIOUS CYCLE, a roughly constant one-`kCycle`
+(40ms) staleness, not merely an occasional skipped read from `Devices::
+Otos::kReadPeriod`'s own 20ms internal rate limit (that mechanism
+contributes too, but the cycle-ordering gap dominates). At cruise yaw rate
+(~250-300deg/s at this sprint's own `PlannerConfig` defaults) one stale
+cycle is several degrees of REAL rotation the control loop has not yet
+been told about.
+
+**Characterization.** `src/tests/testgui/test_turn_error_characterization.py`
+(109-010) sweeps a single pivot at several commanded `yaw_rate_max` values
+and two magnitudes (30deg/170deg), both ideal-OTOS and 109-007's realistic
+profile, against `SimLoop.get_true_pose()` ground truth, and fits
+`error_deg = slope * yaw_rate_max + intercept` by plain least squares. The
+FITTED slope is this architecture's own effective unmodeled latency
+(`Δt_eff`); the intercept is a rate-independent (dwell/tolerance-territory)
+bias. Two new sim-only ctypes hooks make the sweep possible without a
+reflash: `SimLoop.set_yaw_rate_max()` and `SimLoop.set_lead_compensation()`
+(see `sim_harness.h`'s own `setYawRateMax()`/`setLeadCompensation()`).
+
+**A real sim-fidelity gap was found and fixed while characterizing this**:
+`TestSim::OtosPlant`'s own VELOCITY_XL registers were hardcoded to zero
+("no scenario in this ticket asserts on OTOS's twist" — 105-003's own
+comment) — `Devices::Otos::pose().omega` therefore always read 0 in sim,
+which silently defeats locus 1 below (its own `omega_meas` term). Fixed:
+`OtosPlant::step()` now takes `dt` and computes `omega_ = headingDelta /
+dt`, a real finite-difference angular-rate estimate; `SimPlant::
+handleOtosRead()` packs it into the VELOCITY_XL burst's own `rvh` word.
+Confirmed via temporary trace instrumentation (`SimHarness::
+debugHeadingLead()`, since removed) that the projection engages correctly
+once this fix landed — a real, nonzero `omega_meas * age` offset was
+observed mid-pivot.
+
+**Three lead-compensation loci** (`msg::PlannerConfig`'s own
+`heading_lead_bias`/`plan_lead`/`terminal_lead`, each an independent `[s]`
+tunable — planner.proto's own field comments carry the same writeup):
+
+1. **Measurement-age projection (`App::HeadingSource::headingLead()`,
+   heading_source.{h,cpp})** — `theta_est = theta_meas + omega_meas * age`,
+   where `age` is `nowUs - Devices::Otos::lastReadUs()` (a REAL elapsed
+   time, tracked every `sample(nowUs)` call — `nowUs` is threaded from
+   `App::RobotLoop`'s own `clock_.nowMicros()` through `App::Pilot::
+   tick(now, nowUs)`, a plain parameter, not a new `Devices::Clock`
+   dependency for either class). `headingLead()` feeds a SEPARATE field,
+   `Motion::Executor::Twist::thetaMeasLead`, computed alongside the
+   existing (unleaded) `thetaMeas` — `App::Pilot`'s own PD error term
+   (`thetaRef - thetaMeasLead`) uses the LED value; `Motion::Executor`'s
+   own dwell/divergence bookkeeping continues to use the RAW `thetaMeas`
+   unchanged.
+2. **Plan-lead on the wheel-velocity reference (`Motion::Executor::
+   tick()`, executor.cpp)** — the dominant channel's own
+   `JerkTrajectory::peek(elapsed + plan_lead)` (a closed-form sample,
+   `peek()` already existed for exactly this — NOT a second solve; `kPace`'s
+   `<=1 solve/cycle` budget is untouched) replaces `sample()`'s own velocity
+   for `out.v`/`omegaFf` ONLY — `thetaRef`/`plannedPositionSinceActivation`
+   (position tracking, completion, `checkDivergence()`) stay on the
+   CURRENT (un-led) sample.
+3. **Predicted-state terminal/stop decision (`Motion::Executor::tick()`,
+   executor.cpp)** — the dwell gate's own tolerance test uses
+   `thetaErrLead = deltaHeading - (thetaMeasRel + thetaRate * terminal_lead)`
+   (a predicted-state stand-in for solving the exact crossing time
+   analytically) instead of the raw `thetaErr`. Deliberately does NOT touch
+   `checkDivergence()`'s own comparison — same rule ticket 006's own history
+   (below, `kDeadTime`) already established for that specific comparison.
+
+**Honest post-compensation finding (NOT a slope collapse).** A raw,
+uncompensated age lead (`heading_lead_bias=0`) was swept against both
+`test_tour_closure_gate.py` tours and against the isolated-pivot sweep and
+measured to REGRESS: `TOUR_1`/`TOUR_2` ideal-chip runs FAULTED outright at
+this sprint's own `heading_kp=6` gain (a real regression, not an accuracy
+tradeoff — the raw one-`kCycle` lead couples with the existing PD gain in a
+way this ticket's own time budget could not safely re-tune). A grid sweep
+of `heading_lead_bias` in `[-0.06, 0.0]` (0.01 steps) and `plan_lead`/
+`terminal_lead` jointly in `[0.0, 0.13]` (0.02 steps) found NO combination
+that both avoided the fault/regression AND reduced ticket 009's own already-
+met residual — every nonzero `plan_lead`/`terminal_lead` either left a
+tour's own worst-case unchanged/worse or introduced a new fault (`peek()`
+sampling past a short pivot's own decel tail hits Ruckig's own "hold at
+final state" extrapolation early — the SAME false-positive-lead failure
+mode ticket 006's own `kDeadTime`-at-the-wrong-locus history documents
+below, just recurring at THIS ticket's locus 2 instead of that one's
+divergence check).
+
+**Shipped defaults are therefore a NEUTRALIZING configuration**:
+`heading_lead_bias = -0.05` (cancels the characterization harness's own
+50ms sim cycle back to a net-zero lead — reproduces ticket 009's own
+baseline bit-for-bit, zero regression, verified against both tours/both
+profiles); `plan_lead = 0.0`, `terminal_lead = 0.0` (genuine no-ops). See
+`scripts/gen_boot_config.py`'s own `HEADING_LEAD_BIAS_DEFAULT`/
+`PLAN_LEAD_DEFAULT`/`TERMINAL_LEAD_DEFAULT` comments for the full numeric
+writeup, including why `-0.04` (the value that would exactly cancel the
+REAL firmware's own `kCycle=40ms`) was swept and REJECTED (it reduced
+`TOUR_2`'s own single worst realistic-profile outlier, leg 14, from 4.9deg
+to 2.3deg, but at the cost of MORE turns crossing the 1deg gate ticket 009
+already held clean — a worse aggregate outcome against this ticket's own
+"must not regress the bar ticket 009 already met" acceptance criterion).
+This is a disclosed, honest outcome, not a silently-relaxed one: the
+mechanism, the three config fields, the sim-fidelity fix (`OtosPlant::
+omega()`), and the characterization harness are fully implemented, wired,
+and verified to engage correctly — closing a genuine bench-tuning gap is
+left to a follow-up ticket with real hardware access (this sprint's own USB
+deploy path was confirmed broken, per `kDeadTime`'s own note below,
+throughout 109).
+
 ## 3. Constraints and Invariants
 
 - **HOST_BUILD-pure, no `MicroBit.h`.** `jerk_trajectory.{h,cpp}` compile

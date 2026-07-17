@@ -257,6 +257,9 @@ struct PlannerConfig {
     HeadingSourceMode heading_source = static_cast<HeadingSourceMode>(0);
     float heading_dwell_tol = 0.0f;
     float heading_dwell_rate = 0.0f;
+    float heading_lead_bias = 0.0f;
+    float plan_lead = 0.0f;
+    float terminal_lead = 0.0f;
 
     // --- array / optional-string accessors ---
 
@@ -293,6 +296,9 @@ struct PlannerConfig {
     PlannerConfig& setHeadingSource(HeadingSourceMode v) { heading_source = v; return *this; }
     PlannerConfig& setHeadingDwellTol(float v) { heading_dwell_tol = v; return *this; }
     PlannerConfig& setHeadingDwellRate(float v) { heading_dwell_rate = v; return *this; }
+    PlannerConfig& setHeadingLeadBias(float v) { heading_lead_bias = v; return *this; }
+    PlannerConfig& setPlanLead(float v) { plan_lead = v; return *this; }
+    PlannerConfig& setTerminalLead(float v) { terminal_lead = v; return *this; }
 };
 
 }  // namespace msg

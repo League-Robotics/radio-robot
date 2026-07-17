@@ -224,6 +224,17 @@ class Executor {
     float thetaRef = 0.0f;   // [rad]
     float thetaMeas = 0.0f;  // [rad]
 
+    // thetaMeasLead -- 109-010 locus 1: thetaMeas projected forward by
+    // App::HeadingSource's own measurement-age lead (HeadingSource::
+    // headingLead(), fed in via tick()'s own measuredHeadingLeadAbs
+    // parameter). App::Pilot's PD cascade uses THIS for its error term
+    // (thetaRef - thetaMeasLead), not the raw thetaMeas above -- thetaMeas
+    // itself stays exactly as it was (feeding this class's own dwell/
+    // divergence bookkeeping, unchanged, un-led). Meaningful only when
+    // headingActive (or, like thetaMeas, while a heading-bearing command is
+    // active at all) -- 0 otherwise.
+    float thetaMeasLead = 0.0f;  // [rad]
+
     // omegaDes -- the heading PD law's own "omega_des" term (see this
     // file's own header comment for the full formula) -- for a heading-
     // bearing command this equals omegaFf (the SAME feedforward rate
@@ -269,12 +280,16 @@ class Executor {
   // measuredPathSinceActivation_ for the DISTANCE-completion criterion.
   // measuredHeadingAbs -- App::HeadingSource::heading() THIS cycle ([rad],
   // absolute) -- rebaselined internally to this command's own activation
-  // instant to produce Twist::thetaMeas. Both are harmless to pass even
-  // when the active command doesn't use them (kTimed ignores both) --
-  // defaulted to 0 so 109-003's own kTimed-only test callers (which never
-  // needed either) keep compiling unchanged.
-  Twist tick(uint32_t dtMs, float measuredDistanceDelta = 0.0f,
-             float measuredHeadingAbs = 0.0f);  // [ms] [mm] [rad]
+  // instant to produce Twist::thetaMeas. measuredHeadingLeadAbs (109-010) --
+  // App::HeadingSource::headingLead() THIS cycle ([rad], absolute,
+  // measurement-age-projected) -- rebaselined the SAME way to produce
+  // Twist::thetaMeasLead, a SEPARATE quantity from thetaMeas (see that
+  // field's own doc comment). All three are harmless to pass even when the
+  // active command doesn't use them (kTimed ignores all three) -- defaulted
+  // so 109-003's own kTimed-only test callers (which never needed any of
+  // them) keep compiling unchanged.
+  Twist tick(uint32_t dtMs, float measuredDistanceDelta = 0.0f, float measuredHeadingAbs = 0.0f,
+             float measuredHeadingLeadAbs = 0.0f);  // [ms] [mm] [rad] [rad]
 
   // popEvent -- drains one pending completion event, oldest first. Returns
   // false (out untouched) when none pending.
@@ -516,6 +531,12 @@ class Executor {
   float headingDwellTol_ = 0.0f;   // [rad] msg::PlannerConfig.heading_dwell_tol
   float headingDwellRate_ = 0.0f;  // [rad/s] msg::PlannerConfig.heading_dwell_rate
   float headingDwellHoldS_ = 0.0f; // [s] msg::PlannerConfig.arrive_dwell (REUSED, see file header)
+
+  // -- 109-010: lead-compensation loci 2/3, see planner.proto's own
+  // plan_lead/terminal_lead doc comments and this file's tick()/plan()
+  // implementation comments for where each is applied. --
+  float planLeadS_ = 0.0f;      // [s] msg::PlannerConfig.plan_lead (locus 2)
+  float terminalLeadS_ = 0.0f;  // [s] msg::PlannerConfig.terminal_lead (locus 3)
 
   // -- 109-006: boundary-velocity carry + divergence replan --
 

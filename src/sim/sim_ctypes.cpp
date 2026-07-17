@@ -264,6 +264,29 @@ void sim_set_enc_slip(SimHandle h, int port, float rate, float magnitudeMm) {
   asHarness(h)->plant().setEncSlip(port, rate, magnitudeMm);
 }
 
+// 109-010: rate-sweep characterization harness hook -- see SimHarness::
+// setLeadCompensation()'s own doc comment (sim_harness.h) for why this is a
+// sim-only ctypes path (no wire PlannerConfigPatch arm for these three
+// fields; they are boot-baked-default-only).
+void sim_set_lead_compensation(SimHandle h, float headingLeadBias, float planLead,
+                                float terminalLead) {
+  asHarness(h)->setLeadCompensation(headingLeadBias, planLead, terminalLead);
+}
+
+// 109-010: rate-sweep characterization harness hook -- see SimHarness::
+// setYawRateMax()'s own doc comment.
+void sim_set_yaw_rate_max(SimHandle h, float yawRateMax) {
+  asHarness(h)->setYawRateMax(yawRateMax);
+}
+
+// 109-010 diagnostic-only export -- see SimHarness::debugHeadingLead()'s own
+// doc comment. TEMPORARY characterization instrumentation.
+void sim_debug_heading_lead(SimHandle h, int* usingOtos, float* heading, float* headingLead) {
+  bool u = false;
+  asHarness(h)->debugHeadingLead(&u, heading, headingLead);
+  *usingOtos = u ? 1 : 0;
+}
+
 // ---- Hook surface ----
 
 void sim_set_read_hook(SimHandle h, SimHookFn cb, void* ctx) {

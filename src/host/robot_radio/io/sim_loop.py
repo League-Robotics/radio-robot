@@ -284,6 +284,11 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
     lib.sim_set_enc_slip.argtypes = [
         ctypes.c_void_p, ctypes.c_int, ctypes.c_float, ctypes.c_float]
     lib.sim_set_enc_slip.restype = None
+    lib.sim_set_lead_compensation.argtypes = [
+        ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float]
+    lib.sim_set_lead_compensation.restype = None
+    lib.sim_set_yaw_rate_max.argtypes = [ctypes.c_void_p, ctypes.c_float]
+    lib.sim_set_yaw_rate_max.restype = None
 
     lib.sim_set_read_hook.argtypes = [ctypes.c_void_p, _SimHookFn, ctypes.c_void_p]
     lib.sim_set_read_hook.restype = None
@@ -626,6 +631,30 @@ class SimLoop:
         self._call_on_tick_thread(
             lambda: self._lib.sim_set_enc_slip(
                 self._handle, int(port), ctypes.c_float(rate), ctypes.c_float(magnitude)))
+
+    def set_lead_compensation(self, heading_lead_bias: float, plan_lead: float,
+                              terminal_lead: float) -> None:  # [s] [s] [s]
+        """109-010: rate-sweep characterization harness hook -- sets the
+        three independently-tunable lead-compensation Δt's directly on the
+        sim's own ``msg::PlannerConfig`` (``SimHarness::
+        setLeadCompensation()``). No wire ``PlannerConfigPatch`` arm exists
+        for these fields (boot-baked-default-only per this ticket's own
+        scope) -- this sim-only ctypes path is how a test varies them
+        against the compiled sim without a reflash/rebuild."""
+        self._require_connected()
+        self._call_on_tick_thread(
+            lambda: self._lib.sim_set_lead_compensation(
+                self._handle, ctypes.c_float(heading_lead_bias),
+                ctypes.c_float(plan_lead), ctypes.c_float(terminal_lead)))
+
+    def set_yaw_rate_max(self, yaw_rate_max: float) -> None:  # [rad/s]
+        """109-010: rate-sweep characterization harness hook -- varies the
+        pivot cruise-rate ceiling (``PlannerConfig.yaw_rate_max``) against
+        the compiled sim without a reflash/rebuild (``SimHarness::
+        setYawRateMax()``)."""
+        self._require_connected()
+        self._call_on_tick_thread(
+            lambda: self._lib.sim_set_yaw_rate_max(self._handle, ctypes.c_float(yaw_rate_max)))
 
     # ------------------------------------------------------------------
     # Manual stepping (no tick thread required -- ticket 009's shape)

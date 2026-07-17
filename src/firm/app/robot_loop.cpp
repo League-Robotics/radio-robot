@@ -456,7 +456,7 @@ void RobotLoop::cycle() {
     // enqueue/flush/expiry is reflected immediately) and BEFORE
     // drive_.tick() (so Drive consumes the freshest staged twist) --
     // sprint.md's own cycle-placement table.
-    pilot_.tick(cycleStart);
+    pilot_.tick(cycleStart, clock_.nowMicros());
     if (pilot_.state() != Motion::State::kIdle) {
       // Re-arm the ONE Deadman every non-IDLE cycle with the fixed lease
       // (src/firm/DESIGN.md Sec 3 -- no second staleness gate). This is
