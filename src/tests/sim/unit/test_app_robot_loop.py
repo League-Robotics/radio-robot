@@ -47,6 +47,13 @@ _TELEMETRY_SRC = _SOURCE_DIR / "app" / "telemetry.cpp"
 _DEADMAN_SRC = _SOURCE_DIR / "app" / "deadman.cpp"
 _DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
 _ODOMETRY_SRC = _SOURCE_DIR / "app" / "odometry.cpp"
+_PILOT_SRC = _SOURCE_DIR / "app" / "pilot.cpp"
+# 109-003: robot_loop.h now includes app/pilot.h -> motion/executor.h ->
+# motion/jerk_trajectory.h -> vendor/ruckig.
+_JERK_TRAJECTORY_SRC = _SOURCE_DIR / "motion" / "jerk_trajectory.cpp"
+_EXECUTOR_SRC = _SOURCE_DIR / "motion" / "executor.cpp"
+_RUCKIG_INCLUDE = _REPO_ROOT / "vendor" / "ruckig" / "include"
+_RUCKIG_SRC_DIR = _REPO_ROOT / "vendor" / "ruckig" / "src"
 
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "devices" / "nezha_motor.cpp"
 _VELOCITY_PID_SRC = _SOURCE_DIR / "devices" / "velocity_pid.cpp"
@@ -91,6 +98,10 @@ def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
         _DEADMAN_SRC,
         _DRIVE_SRC,
         _ODOMETRY_SRC,
+        _PILOT_SRC,
+        _JERK_TRAJECTORY_SRC,
+        _EXECUTOR_SRC,
+        *sorted(_RUCKIG_SRC_DIR.glob("*.cpp")),
         _NEZHA_MOTOR_SRC,
         _VELOCITY_PID_SRC,
         _OTOS_SRC,
@@ -126,6 +137,8 @@ def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
             str(_INFRA_SIM_DIR),
             "-I",
             str(_PLANT_DIR),
+            "-I",
+            str(_RUCKIG_INCLUDE),
             "-o",
             str(binary),
             *[str(src) for src in sources],

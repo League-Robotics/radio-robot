@@ -122,6 +122,13 @@ class Telemetry {
     bool active = false;
     bool connLeft = false;
     bool connRight = false;
+
+    // Motion::Executor visibility (109-003) -- mirrors telemetry.proto's
+    // queue_depth/active_id/exec_state fields field-for-field. Populated
+    // by RobotLoop::updateTlm() from App::Pilot's own accessors.
+    uint8_t queueDepth = 0;
+    uint32_t activeId = 0;
+    msg::ExecutorState execState = msg::ExecutorState::EXEC_IDLE;
   };
 
   // Secondary-frame snapshot -- mirrors msg::TelemetrySecondary's own

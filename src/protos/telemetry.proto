@@ -46,16 +46,60 @@ import "planner.proto";
 // envelope.proto's ErrCode enum here to avoid a telemetry.proto <->
 // envelope.proto import cycle (envelope.proto already imports
 // telemetry.proto for the `tlm` reply arm).
+// 109-003 adds the six Motion::Executor per-command completion outcomes
+// (DONE/TRIVIAL/SUPERSEDED/FLUSHED/TIMEOUT/SOLVE_FAIL) as MORE AckStatus
+// values, riding the SAME depth-3 ack ring every other command's outcome
+// already uses -- sprint.md's own Open Question 3 ("does event.h carry
+// these, or the existing reply/TLM path") resolved here: `messages/
+// event.h` is hand-written, ungenerated, and has no live consumer or
+// producer anywhere in this tree (messages/DESIGN.md Sec 6) -- reviving it
+// would be a second, parallel completion-notification channel for no
+// reason when the ack ring already IS the project's live, wire-budget-
+// checked per-command-outcome path (every TWIST/CONFIG/STOP ack already
+// rides it). A Move command's ENQUEUE outcome (OK/FULL/TRIVIAL/err) is
+// acked against the CommandEnvelope's own corr_id (matching TWIST/CONFIG/
+// STOP's existing convention); a queued command's later COMPLETION
+// (DONE/SUPERSEDED/FLUSHED/TIMEOUT/SOLVE_FAIL, which happens many cycles
+// after the enqueueing envelope is gone) is acked against the Move's OWN
+// `id` field instead (envelope.proto's own doc comment on Move.id).
 enum AckStatus {
-  ACK_STATUS_OK  = 0;
-  ACK_STATUS_ERR = 1;
+  ACK_STATUS_OK          = 0;
+  ACK_STATUS_ERR         = 1;
+  ACK_STATUS_DONE        = 2;  // Motion::Cmd ran to its own completion criterion
+  ACK_STATUS_TRIVIAL     = 3;  // degenerate Move (zero distance+heading, time<=0) -- never queued
+  ACK_STATUS_SUPERSEDED  = 4;  // evicted from the queue/active slot by a `replace`
+  ACK_STATUS_FLUSHED     = 5;  // dropped by a TWIST/STOP queue flush
+  ACK_STATUS_TIMEOUT     = 6;  // Motion::Executor's own internal deadline/stall guard fired
+  ACK_STATUS_SOLVE_FAIL  = 7;  // Motion::JerkTrajectory solve returned false
 }
 
 // One ack-ring entry: which command (corr_id), and whether it succeeded.
 message AckEntry {
   uint32    corr_id  = 1;
   AckStatus status   = 2;
-  uint32    err_code = 3;  // raw ErrCode value (envelope.proto) when status=ACK_STATUS_ERR
+
+  // raw ErrCode value (envelope.proto) when status=ACK_STATUS_ERR. Bound
+  // at ErrCode's own current highest enumerator (ERR_OVERSIZE=7) -- an
+  // ACCURATE bound (this field's whole domain is ErrCode's value set, kept
+  // as a raw uint32 rather than the enum itself only to avoid a
+  // telemetry.proto<->envelope.proto import cycle, per this field's
+  // pre-existing doc note above), not an artificial shrink -- narrows this
+  // repeated-3x field's own worst-case wire contribution from 6B/entry to
+  // 2B/entry (109-003's own `gen_messages.py` (max)-narrowing addition),
+  // which is what buys back the wire budget 109-003's own three new
+  // Telemetry fields below spend. Bump this bound if envelope.proto's
+  // ErrCode enum ever grows past 7.
+  uint32    err_code = 3 [(max) = 7];
+}
+
+// ExecutorState -- mirrors Motion::Executor::State verbatim (motion/
+// executor.h) -- the queue/state-machine status a TestGUI operator needs
+// to see (sprint.md's own TLM field list: queueDepth/activeId/state).
+enum ExecutorState {
+  EXEC_IDLE          = 0;
+  EXEC_RUNNING       = 1;
+  EXEC_RAMP_TO_REST  = 2;
+  EXEC_STOPPING      = 3;
 }
 
 message Telemetry {
@@ -152,6 +196,29 @@ message Telemetry {
   // responsibility).
   uint32 fault_bits = 21;  // bitmask -- see numbering above
   uint32 event_bits = 22;  // bitmask -- see numbering above
+
+  // Motion::Executor visibility (109-003, SUC-001/SUC-003) -- polled
+  // (level, not edge-latched) every primary frame, mirroring how
+  // fault_bits/event_bits are already reported.
+  //
+  // queue_depth: number of PENDING (not-yet-active) Motion::Cmd entries in
+  // the ring (0-8, the ring's own fixed depth) -- bound at the ring's own
+  // real capacity, not an artificial shrink.
+  uint32 queue_depth = 23 [(max) = 8];
+
+  // active_id: the currently-RUNNING command's own Move.id (0 when
+  // state==EXEC_IDLE). Bound at 65535 -- an accurate assumption for this
+  // project's host correlation-id convention (simple per-session counters,
+  // matching every other corr_id-style field's real-world usage), not a
+  // hard wire limit: an id that legitimately exceeds this bound still
+  // encodes correctly (a real varint has no ceiling), it only costs more
+  // than this worst-case table assumed for that one frame, and
+  // msg::wire::encode()'s own capacity check safely skips sending that one
+  // frame rather than corrupting the buffer (see AckEntry.err_code's own
+  // comment above for the same bound-is-a-size-hint-not-a-clamp point).
+  uint32 active_id = 24 [(max) = 65535];
+
+  ExecutorState exec_state = 25;
 }
 
 // TelemetrySecondary (NEW this ticket) -- the slower diagnostic frame:

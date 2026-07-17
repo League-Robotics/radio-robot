@@ -106,7 +106,7 @@ def test_field_numbers_match_pb2_descriptors():
     from. Cross-check pb2's own FieldDescriptors against the numbers this
     suite's env_*/encode_* helpers rely on -- catches a stale/out-of-sync
     regeneration on either side, not just an implicit round-trip mismatch."""
-    expected_cmd_numbers = {"config": 6, "stop": 13, "twist": 19}
+    expected_cmd_numbers = {"config": 6, "stop": 13, "twist": 19, "move": 20}  # 109-003
     actual_cmd_numbers = {
         f.name: f.number for f in pb_envelope.CommandEnvelope.DESCRIPTOR.oneofs_by_name["cmd"].fields
     }
@@ -151,6 +151,8 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
         "vel_left": 9, "vel_right": 10, "has_pose": 11, "pose": 12, "has_otos": 13, "otos": 14,
         "otos_connected": 15, "has_twist": 16, "twist": 17, "active": 18, "conn_left": 19, "conn_right": 20,
         "fault_bits": 21, "event_bits": 22,
+        # 109-003: Motion::Executor visibility.
+        "queue_depth": 23, "active_id": 24, "exec_state": 25,
     }
     actual_telemetry_numbers = {f.name: f.number for f in pb_telemetry.Telemetry.DESCRIPTOR.fields}
     assert actual_telemetry_numbers == expected_telemetry_numbers
@@ -159,7 +161,12 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
     actual_ack_entry_numbers = {f.name: f.number for f in pb_telemetry.AckEntry.DESCRIPTOR.fields}
     assert actual_ack_entry_numbers == expected_ack_entry_numbers
 
-    expected_ack_status = {"ACK_STATUS_OK": 0, "ACK_STATUS_ERR": 1}
+    expected_ack_status = {
+        "ACK_STATUS_OK": 0, "ACK_STATUS_ERR": 1,
+        # 109-003: Motion::Executor completion outcomes, riding the same ack ring.
+        "ACK_STATUS_DONE": 2, "ACK_STATUS_TRIVIAL": 3, "ACK_STATUS_SUPERSEDED": 4,
+        "ACK_STATUS_FLUSHED": 5, "ACK_STATUS_TIMEOUT": 6, "ACK_STATUS_SOLVE_FAIL": 7,
+    }
     actual_ack_status = {
         n: v.number for n, v in pb_telemetry.DESCRIPTOR.enum_types_by_name["AckStatus"].values_by_name.items()
     }

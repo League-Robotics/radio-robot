@@ -24,6 +24,7 @@
 #include "app/deadman.h"
 #include "app/drive.h"
 #include "app/odometry.h"
+#include "app/pilot.h"
 #include "app/preamble.h"
 #include "app/telemetry.h"
 #include "devices/clock.h"
@@ -44,7 +45,7 @@ class RobotLoop {
   RobotLoop(Devices::I2CBus& bus, Devices::NezhaMotor& motorL,
             Devices::NezhaMotor& motorR, Devices::Otos& otos, Comms& comms,
             Telemetry& tlm, Drive& drive, Odometry& odom, Deadman& deadman,
-            Preamble& preamble, const Devices::Clock& clock,
+            Preamble& preamble, Pilot& pilot, const Devices::Clock& clock,
             Devices::Sleeper& sleeper);
 
   // Runs boot() once, then cycle() forever. Never returns -- this is what
@@ -82,6 +83,13 @@ class RobotLoop {
   void handleTwist(const msg::CommandEnvelope& env);
   void handleConfig(const msg::CommandEnvelope& env);
   void handleStop(const msg::CommandEnvelope& env);
+  void handleMove(const msg::CommandEnvelope& env);
+
+  // Drains every pending Motion::Executor completion event (bounded --
+  // Motion::kEventRingDepth) into Telemetry's ack ring, keyed by each
+  // event's own command id (Move.id), not the enqueueing envelope's
+  // corr_id -- see pilot.h/executor.h's own doc comments.
+  void drainPilotEvents();
 
   Devices::I2CBus& bus_;
   Devices::NezhaMotor& motorL_;
@@ -93,6 +101,7 @@ class RobotLoop {
   Odometry& odom_;
   Deadman& deadman_;
   Preamble& preamble_;
+  Pilot& pilot_;
   const Devices::Clock& clock_;
   Devices::Sleeper& sleeper_;
 

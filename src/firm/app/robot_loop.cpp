@@ -43,13 +43,57 @@ constexpr uint32_t kPace = kCycle - kWindows;  // [ms] final block's own gap, ab
 
 constexpr uint32_t kPreamblePace = 10;  // [ms] boot-loop probe pacing
 
+// kPilotDeadmanLease -- the ~300ms lease App::Pilot re-arms Deadman with
+// every non-IDLE cycle (sprint.md's own "Deadman" section) -- deliberately
+// NOT derived from a Move's own `time` field: a TIMED command's deadline
+// is its own ramp-down/completion bound (Motion::Executor's
+// RAMP_TO_REST logic), independent of this lease. This lease is the
+// generic "host went silent" safety net every actuation source shares
+// (src/firm/DESIGN.md Sec 3 "Deadman is the only staleness gate") -- a
+// host streaming Move/replace commands (teleop) keeps re-arming it every
+// cycle for as long as it keeps talking; a host that goes silent mid-plan
+// still gets stopped within this lease, same as a stale Twist stream.
+constexpr float kPilotDeadmanLease = 300.0f;  // [ms]
+
+// toWireExecState -- Motion::State -> msg::ExecutorState. A plain 1:1
+// mapping (telemetry.proto's ExecutorState was declared to mirror
+// Motion::Executor::State verbatim, per its own doc comment) -- kept as an
+// explicit switch (not a static_cast) so a future Motion::State addition
+// fails to compile here instead of silently reinterpreting an unrelated
+// wire value.
+msg::ExecutorState toWireExecState(Motion::State state) {
+  switch (state) {
+    case Motion::State::kIdle: return msg::ExecutorState::EXEC_IDLE;
+    case Motion::State::kRunning: return msg::ExecutorState::EXEC_RUNNING;
+    case Motion::State::kRampToRest: return msg::ExecutorState::EXEC_RAMP_TO_REST;
+    case Motion::State::kStopping: return msg::ExecutorState::EXEC_STOPPING;
+  }
+  return msg::ExecutorState::EXEC_IDLE;
+}
+
+// toWireAckStatus -- Motion::CompletionStatus -> msg::AckStatus. See
+// telemetry.proto's own AckStatus doc comment for why completion events
+// ride the existing ack ring instead of a dedicated arm/message.
+msg::AckStatus toWireAckStatus(Motion::CompletionStatus status) {
+  switch (status) {
+    case Motion::CompletionStatus::kDone: return msg::AckStatus::ACK_STATUS_DONE;
+    case Motion::CompletionStatus::kTrivial: return msg::AckStatus::ACK_STATUS_TRIVIAL;
+    case Motion::CompletionStatus::kSuperseded: return msg::AckStatus::ACK_STATUS_SUPERSEDED;
+    case Motion::CompletionStatus::kFlushed: return msg::AckStatus::ACK_STATUS_FLUSHED;
+    case Motion::CompletionStatus::kTimeout: return msg::AckStatus::ACK_STATUS_TIMEOUT;
+    case Motion::CompletionStatus::kSolveFail: return msg::AckStatus::ACK_STATUS_SOLVE_FAIL;
+  }
+  return msg::AckStatus::ACK_STATUS_ERR;
+}
+
 }  // namespace
 
 RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::NezhaMotor& motorL,
                       Devices::NezhaMotor& motorR, Devices::Otos& otos,
                       Comms& comms, Telemetry& tlm, Drive& drive,
                       Odometry& odom, Deadman& deadman, Preamble& preamble,
-                      const Devices::Clock& clock, Devices::Sleeper& sleeper)
+                      Pilot& pilot, const Devices::Clock& clock,
+                      Devices::Sleeper& sleeper)
     : bus_(bus),
       motorL_(motorL),
       motorR_(motorR),
@@ -60,6 +104,7 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::NezhaMotor& motorL,
       odom_(odom),
       deadman_(deadman),
       preamble_(preamble),
+      pilot_(pilot),
       clock_(clock),
       sleeper_(sleeper) {}
 
@@ -102,6 +147,10 @@ void RobotLoop::updateTlm() {
   frame_.connLeft = motorL_.connected();
   frame_.connRight = motorR_.connected();
 
+  frame_.queueDepth = pilot_.queueDepth();
+  frame_.activeId = pilot_.activeId();
+  frame_.execState = toWireExecState(pilot_.state());
+
   tlm_.setFault(kFaultI2CSafetyNet, bus_.clearanceSafetyNetCount() > 0);
   tlm_.setFault(kFaultWedgeLatch, motorL_.wedged() || motorR_.wedged());
   tlm_.setFault(kFaultCommsMalformed, comms_.malformedCount() > 0);
@@ -109,6 +158,11 @@ void RobotLoop::updateTlm() {
 }
 
 void RobotLoop::handleTwist(const msg::CommandEnvelope& env) {
+  // TWIST preempts (flushes) the Motion::Executor queue -- sprint.md's own
+  // wire-compatibility note. flush() BEFORE setTwist() so this cycle's own
+  // pilot_.tick() call (later in this same settle block) observes
+  // state()==kIdle and does not restage a twist over this raw one.
+  pilot_.flush();
   drive_.setTwist(env.cmd.twist.v_x, env.cmd.twist.omega);
   deadman_.arm(env.cmd.twist.duration);
   driving_ = true;
@@ -160,10 +214,58 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
 }
 
 void RobotLoop::handleStop(const msg::CommandEnvelope& env) {
+  // STOP flushes the Motion::Executor queue too (sprint.md's own
+  // wire-compatibility note) -- the panic-stop path itself stays the
+  // existing immediate Drive::stop() (safety-critical, unchanged, per this
+  // ticket's own "existing TWIST/STOP behavior is not regressed"
+  // acceptance criterion); Executor's OWN internally-triggered stops
+  // (RAMP_TO_REST) are what actually use a graceful solveToVelocity(0)
+  // decel, not this wire command.
+  pilot_.flush();
   drive_.stop();
   deadman_.disarm();
   driving_ = false;
   tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
+}
+
+// handleMove -- decodes the Move oneof arm into a Motion::Cmd and forwards
+// it to App::Pilot::enqueue(). The ENQUEUE outcome (accepted/replaced/
+// full/trivial/unimplemented) is acked immediately against the
+// CommandEnvelope's own corr_id (matching TWIST/CONFIG/STOP's existing
+// convention) -- a LATER completion event (DONE/SUPERSEDED/FLUSHED/
+// TIMEOUT/SOLVE_FAIL) for this same command rides a separate ack keyed by
+// the Move's own `id` field instead (drainPilotEvents(), below).
+void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
+  Motion::Cmd cmd = Motion::fromMove(env.cmd.move);
+  Motion::EnqueueOutcome outcome = pilot_.enqueue(cmd);
+
+  switch (outcome) {
+    case Motion::EnqueueOutcome::kAccepted:
+    case Motion::EnqueueOutcome::kReplaced:
+      driving_ = true;
+      tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
+      break;
+    case Motion::EnqueueOutcome::kTrivial:
+      tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_TRIVIAL, 0);
+      break;
+    case Motion::EnqueueOutcome::kFull:
+      tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
+                static_cast<uint32_t>(msg::ErrCode::ERR_FULL));
+      break;
+    case Motion::EnqueueOutcome::kUnimplemented:
+      // DISTANCE mode -- not implemented until ticket 005 (see
+      // executor.h's own doc comment).
+      tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
+                static_cast<uint32_t>(msg::ErrCode::ERR_UNIMPLEMENTED));
+      break;
+  }
+}
+
+void RobotLoop::drainPilotEvents() {
+  Motion::CompletionEvent event;
+  while (pilot_.popEvent(&event)) {
+    tlm_.ack(event.id, toWireAckStatus(event.status), 0);
+  }
 }
 
 // Dispatches the <=1 decoded command in cmd to its own handler by
@@ -184,6 +286,9 @@ void RobotLoop::processMessage(const Cmd& cmd) {
       break;
     case msg::CommandEnvelope::CmdKind::STOP:
       handleStop(cmd.env);
+      break;
+    case msg::CommandEnvelope::CmdKind::MOVE:
+      handleMove(cmd.env);
       break;
     case msg::CommandEnvelope::CmdKind::NONE:
     default:
@@ -265,9 +370,26 @@ void RobotLoop::cycle() {
     bool expired = deadman_.expired();
     tlm_.setEvent(kEventDeadmanExpired, expired);
     if (expired) {
-      drive_.stop();     // host silent -> wheels stop. No exceptions, no
-      driving_ = false;  // other path to stop being gated by the deadman.
+      pilot_.flush();     // Executor's own queue is stale too -- flush it,
+      drive_.stop();      // host silent -> wheels stop. No exceptions, no
+      driving_ = false;   // other path to stop being gated by the deadman.
     }
+
+    // pilot_.tick() -- sample-only (Motion::Executor::tick(), see pilot.h):
+    // stages this cycle's twist onto Drive when the executor is running.
+    // Placed AFTER processMessage()/the deadman check (so a same-cycle
+    // enqueue/flush/expiry is reflected immediately) and BEFORE
+    // drive_.tick() (so Drive consumes the freshest staged twist) --
+    // sprint.md's own cycle-placement table.
+    pilot_.tick(cycleStart);
+    if (pilot_.state() != Motion::State::kIdle) {
+      // Re-arm the ONE Deadman every non-IDLE cycle with the fixed lease
+      // (src/firm/DESIGN.md Sec 3 -- no second staleness gate). This is
+      // independent of a TIMED command's own `time` deadline, which
+      // Executor's own RAMP_TO_REST logic already handles.
+      deadman_.arm(kPilotDeadmanLease);
+    }
+    drainPilotEvents();
 
     drive_.tick();  // twist -> wheel targets (R consumes them below)
   });
@@ -288,6 +410,12 @@ void RobotLoop::cycle() {
     applyOtosSample(otos_, clock_.nowMicros(), frame_);
     odom_.integrate();  // odometry from both fresh wheel samples
     frame_.pose = {odom_.x(), odom_.y(), odom_.theta()};
+
+    // pilot_.plan() -- at most ONE Ruckig solve this call (Motion::
+    // Executor::plan()'s own budget), placed in the kPace block per
+    // src/firm/DESIGN.md Sec 3/sprint.md's own cycle-placement table (every
+    // Ruckig solve happens here, never in a settle/clearance block).
+    pilot_.plan();
   });
 }
 

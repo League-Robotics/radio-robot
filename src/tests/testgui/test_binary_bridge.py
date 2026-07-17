@@ -170,7 +170,9 @@ def test_reply_oneof_no_longer_has_id_echo_helptext():
 
 def test_command_oneof_no_longer_has_drive_segment_replace():
     fields = envelope_pb2.CommandEnvelope.DESCRIPTOR.oneofs_by_name["cmd"].fields
-    assert {f.name for f in fields} == {"config", "stop", "twist"}
+    # 109-003 adds `move` (CmdKind::MOVE) -- a genuine new arm, not a
+    # revival of the removed drive/segment/replace arms this test pins.
+    assert {f.name for f in fields} == {"config", "stop", "twist", "move"}
 
 
 # ---------------------------------------------------------------------------

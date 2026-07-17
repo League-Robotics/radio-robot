@@ -4,7 +4,7 @@ root: ../DESIGN.md
 
 # App — Loop and Passive App Modules
 
-**Owner:** Eric Busboom · **Last reviewed:** 2026-07-16 · **Status:** in-flux
+**Owner:** Eric Busboom · **Last reviewed:** 2026-07-17 · **Status:** in-flux
 
 ---
 
@@ -17,8 +17,10 @@ the passive modules it drives:
 * `Telemetry` (outbound frames), 
 * `Drive` (twist → wheel targets), 
 * `Odometry` (dead reckoning),
-* `Deadman` (the one staleness gate), and 
-* `Preamble` (boot-time device detection). 
+* `Deadman` (the one staleness gate), 
+* `Preamble` (boot-time device detection), and
+* `Pilot` (109-003 — bridges `Motion::Executor` into the loop's cycle;
+  see §2's own subsection and `motion/DESIGN.md`).
 
 This is the seam that owns the robot's *timing* — every I2C
 transaction, every wait, every cadence decision lives here or is called from
@@ -44,6 +46,22 @@ frame, the secondary diagnostic frame, or (on a tie) alternate between them.
 `RobotLoop` calls at specific points in its own schedule; `Deadman` is
 polled once per cycle and gates `Drive::stop()`. See `robot_loop.cpp` for
 the exact call order — it is the schedule's single source of truth.
+
+**`Pilot` (109-003).** `Pilot::tick(now)` runs in the motorR settle block
+(after `processMessage()`/the deadman check, before `drive_.tick()`) and
+samples `Motion::Executor`, staging the result onto `Drive` via
+`setTwist()` whenever the executor is not `kIdle` — while `kIdle` it does
+nothing at all, so a same-cycle raw `TWIST` (which always calls
+`Pilot::flush()` first) is never immediately overwritten. `Pilot::plan()`
+runs in the trailing `kPace` block (after `odom_.integrate()`) and performs
+at most one `JerkTrajectory` solve per cycle (`Motion::Executor::plan()`'s
+own budget). `RobotLoop::handleMove()` decodes a `Move` command
+(`Comms::pump()`/`processMessage()`, same dispatch switch as
+`TWIST`/`CONFIG`/`STOP`) into a `Motion::Cmd` and calls
+`Pilot::enqueue()`; `RobotLoop::drainPilotEvents()` drains
+`Motion::Executor`'s completion-event FIFO into `Telemetry`'s ack ring
+every cycle. See `motion/DESIGN.md` §2b for the executor's own queue/state-
+machine contract.
 
 ## 3. Constraints and Invariants
 
@@ -71,8 +89,15 @@ the exact call order — it is the schedule's single source of truth.
   `readLine()` per transport, first transport to have something wins), so
   `processMessage()` needs no separate "already handled" flag.
 - **Deadman is the only staleness gate:** one `App::Deadman`, armed by
-  every actuation command, checked once per cycle, expiry → `Drive::stop()`.
-  Do not add a second ad hoc watchdog anywhere in `app/`.
+  every actuation command, checked once per cycle, expiry → `Drive::stop()`
+  (109-003: also `Pilot::flush()`, since a stale Executor plan is just as
+  wrong as a stale raw twist). Do not add a second ad hoc watchdog anywhere
+  in `app/`. `Pilot`/`Executor` re-arm `Deadman` every non-`kIdle` cycle
+  with a fixed ~300ms lease (`kPilotDeadmanLease`, `robot_loop.cpp`) —
+  deliberately NOT derived from a `Move`'s own `time` field: a TIMED
+  command's own deadline is its own ramp-down/completion bound
+  (`Motion::Executor`'s `RAMP_TO_REST` logic), independent of this generic
+  "host went silent" lease every actuation source shares.
 - **Telemetry always carries the last staged snapshot, not a diff:** a
   cycle that doesn't update a `Frame` field still sends whatever was last
   staged. Nothing here is "only send on change" — a dropped or unread frame
@@ -128,16 +153,27 @@ and the loop's own pace agree.
 
 **Command dispatch.** `processMessage` reads the `Cmd` populated (or not)
 by this cycle's single `Comms::pump()` call and switches on `cmd_kind`:
-`TWIST` stages a target on `Drive` and arms `Deadman`; `STOP` stops `Drive`
-and disarms `Deadman`; `CONFIG` merges present wire fields into each
-motor's *own* current gains (never blanket-copies one motor's gains onto
-the other — their calibration can legitimately differ) and applies
-`travel_calib` to whichever motor `side` names. Every path that applies a
-command acks through `Telemetry`'s ack ring; `Comms`'s dearmor path itself
-never replies synchronously — a malformed frame is silently counted
-(`Comms::malformedCount()`) and surfaced as a telemetry fault bit instead of
-answered inline. This keeps replies flowing through one channel (the ack
-ring) rather than two.
+`TWIST` calls `Pilot::flush()` (preempts/flushes the `Motion::Executor`
+queue) THEN stages a target on `Drive` and arms `Deadman` — flush first so
+this cycle's own later `Pilot::tick()` call sees `state()==kIdle` and does
+not restage a twist over the raw one; `STOP` likewise calls
+`Pilot::flush()`, then stops `Drive` (unchanged, immediate, safety-critical
+— see `motion/DESIGN.md` §2b's own note on why the wire `STOP` stays an
+instant stop rather than routing through `Executor`'s own graceful
+`solveToVelocity(0)` decel) and disarms `Deadman`; `CONFIG` merges present
+wire fields into each motor's *own* current gains (never blanket-copies one
+motor's gains onto the other — their calibration can legitimately differ)
+and applies `travel_calib` to whichever motor `side` names; `MOVE`
+(109-003) decodes into a `Motion::Cmd` and calls `Pilot::enqueue()`, acking
+the ENQUEUE outcome (accepted/replaced/full/trivial/unimplemented) against
+the envelope's own `corr_id` — a later completion event for the SAME
+command rides a separate ack keyed by the `Move`'s own `id` field instead
+(`RobotLoop::drainPilotEvents()`, called every cycle). Every path that
+applies a command acks through `Telemetry`'s ack ring; `Comms`'s dearmor
+path itself never replies synchronously — a malformed frame is silently
+counted (`Comms::malformedCount()`) and surfaced as a telemetry fault bit
+instead of answered inline. This keeps replies flowing through one channel
+(the ack ring) rather than two.
 
 **Telemetry's two send paths.** The primary frame (`msg::Telemetry`, ack
 ring + fault/event bits + pose/enc/vel) rides a `ReplyEnvelope` through
@@ -222,6 +258,12 @@ called with real elapsed time between calls).
 - **`Preamble::step()`/`done()`/per-device status accessors:** `step()`
   never blocks; `done()` is true once every device has reached a terminal
   state (present-and-ready or confirmed-absent).
+- **`Pilot::enqueue(cmd)`/`flush()`/`plan()`/`tick(now)`/`popEvent(out)`/
+  `queueDepth()`/`activeId()`/`state()`** (109-003): see this file's own
+  §2 "`Pilot` (109-003)" subsection for the cycle-placement contract.
+  `Telemetry`'s primary frame gains `queueDepth`/`activeId`/`execState`
+  (mirroring `telemetry.proto`'s `queue_depth`/`active_id`/`exec_state`),
+  populated by `RobotLoop::updateTlm()` from these same accessors.
 
 ### Consumes
 
@@ -237,6 +279,9 @@ called with real elapsed time between calls).
 - **`SerialPort`, `Radio` (ARM builds only):** the two real transports
   `SerialTransport`/`RadioTransport` adapt into `app::Transport` — see
   [com/DESIGN.md](../com/DESIGN.md).
+- **`Motion::Executor`, `Motion::Cmd`, `Motion::fromMove()`** (109-003) —
+  the queue/state-machine `Pilot` bridges into the loop's cycle; see
+  [motion/DESIGN.md](../motion/DESIGN.md) §2b.
 
 ## 6. Open Questions / Known Limitations
 

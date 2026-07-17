@@ -88,6 +88,7 @@ set(APP_SOURCES
     "${SOURCE_DIR}/app/deadman.cpp"
     "${SOURCE_DIR}/app/drive.cpp"
     "${SOURCE_DIR}/app/odometry.cpp"
+    "${SOURCE_DIR}/app/pilot.cpp"
     "${SOURCE_DIR}/app/preamble.cpp"
     "${SOURCE_DIR}/app/robot_loop.cpp"
     "${SOURCE_DIR}/app/telemetry.cpp"
@@ -108,6 +109,7 @@ set(KINEMATICS_SOURCES
 )
 set(MOTION_SOURCES
     "${SOURCE_DIR}/motion/jerk_trajectory.cpp"
+    "${SOURCE_DIR}/motion/executor.cpp"
 )
 # Explicit list (not a glob), matching this file's own house style --
 # mirrors the vendored library's 11 core state-to-state solver sources

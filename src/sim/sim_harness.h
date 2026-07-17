@@ -76,6 +76,7 @@
 #include "app/deadman.h"
 #include "app/drive.h"
 #include "app/odometry.h"
+#include "app/pilot.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
 #include "app/telemetry.h"
@@ -85,6 +86,7 @@
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "fake_transport.h"
+#include "motion/executor.h"
 #include "sim_clock.h"
 #include "sim_plant.h"
 #include "wire_test_codec.h"
@@ -114,8 +116,19 @@ class SimHarness {
         drive_(motorL_, motorR_, trackWidth),
         odom_(motorL_, motorR_, trackWidth),
         preamble_(motorL_, motorR_, otos_, color_, line_, clock_),
+        pilot_(executor_, drive_),
         robotLoop_(plant_, motorL_, motorR_, otos_, comms_, tlm_, drive_, odom_,
-                   deadman_, preamble_, clock_, sleeper_) {
+                   deadman_, preamble_, pilot_, clock_, sleeper_) {
+    // Motion::Executor (109-003) -- configured from the same default
+    // msg::PlannerConfig{} zero-value struct main.cpp's real
+    // Config::defaultPlannerConfig() would otherwise supply; the sim harness
+    // has no boot_config.cpp to read from, so tests that need real gains
+    // set them explicitly via a future accessor (none needed by this
+    // ticket's own tests, which only exercise TIMED-mode ramps against the
+    // vBodyMax/yawRateMax/aDecel/jMax that DO need non-zero defaults --
+    // see makeExecutorConfig() below).
+    executor_.configure(makeExecutorConfig());
+
     // "Pre-boot state": everything above is constructed and wired, but
     // App::Preamble::step() has not yet been called even once -- boot() is
     // the caller's job (the first call after construction), not the
@@ -165,6 +178,21 @@ class SimHarness {
   void injectStop(uint32_t corrId = 0) {
     injectCommand(TestSupport::armorStopCommand(corrId).c_str());
   }
+  // injectMove -- 109-003. See wire_test_codec.h's armorMoveCommand() for
+  // the field order (mirrors msg::Move field-for-field).
+  void injectMove(float distance, float deltaHeading, float vMax, float omega, float timeMs,
+                   bool replace, uint32_t id, uint32_t corrId = 0) {
+    injectCommand(TestSupport::armorMoveCommand(distance, deltaHeading, vMax, omega, timeMs,
+                                                 replace, id, corrId)
+                       .c_str());
+  }
+
+  // Motion::Executor visibility -- test-only accessors mirroring the new
+  // TLM fields (queueDepth/activeId/state), for tests that want to assert
+  // executor state directly rather than only via decoded telemetry.
+  uint8_t pilotQueueDepth() const { return pilot_.queueDepth(); }
+  uint32_t pilotActiveId() const { return pilot_.activeId(); }
+  Motion::State pilotState() const { return pilot_.state(); }
 
   // Decodes and returns every outbound line captured on the serial
   // FakeTransport since the last call (both FakeTransport instances receive
@@ -280,6 +308,27 @@ class SimHarness {
     return cfg;
   }
 
+  // makeExecutorConfig -- a non-zero msg::PlannerConfig for Motion::
+  // Executor's own configure() call (109-003). This harness has no
+  // boot_config.cpp to read a real per-robot value from (main.cpp's own
+  // Config::defaultPlannerConfig()); these are reasonable stand-in values
+  // (matching data/robots/tovez.json's own order of magnitude) sufficient
+  // for a TIMED-mode ramp/hold/ramp-down to exercise real jerk-limited
+  // motion in a sim test -- NOT bench-tuned, and not meant to be (no
+  // bench/sim test in this ticket asserts a SPECIFIC numeric gain, only
+  // jerk-boundedness/no-instant-step/queue-mechanics).
+  static msg::PlannerConfig makeExecutorConfig() {
+    msg::PlannerConfig cfg;
+    cfg.a_max = 800.0f;         // [mm/s^2]
+    cfg.a_decel = 1000.0f;      // [mm/s^2]
+    cfg.v_body_max = 600.0f;    // [mm/s]
+    cfg.yaw_rate_max = 4.0f;    // [rad/s]
+    cfg.yaw_acc_max = 20.0f;    // [rad/s^2]
+    cfg.j_max = 8000.0f;        // [mm/s^3]
+    cfg.yaw_jerk_max = 80.0f;   // [rad/s^3]
+    return cfg;
+  }
+
   // Drives App::Preamble to done() via preamble_.step() calls issued
   // OURSELVES, advancing the fake Clock between each one -- see this file's
   // own header comment for why (color_/line_'s own retry pacing needs real
@@ -327,6 +376,9 @@ class SimHarness {
   App::Drive drive_;
   App::Odometry odom_;
   App::Preamble preamble_;
+
+  Motion::Executor executor_;
+  App::Pilot pilot_;
 
   App::RobotLoop robotLoop_;
 

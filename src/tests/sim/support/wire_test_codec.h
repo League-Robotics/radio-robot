@@ -83,4 +83,10 @@ DecodedLine decodeOutboundLine(const std::string& line);
 std::string armorTwistCommand(float v_x, float omega, float duration, uint32_t corrId = 0);
 std::string armorStopCommand(uint32_t corrId = 0);
 
+// armorMoveCommand -- 109-003. Encodes CommandEnvelope{corr_id,
+// cmd=MOVE(distance, delta_heading, v_max, omega, time, replace, id)} --
+// field order mirrors msg::Move (envelope.proto) exactly.
+std::string armorMoveCommand(float distance, float deltaHeading, float vMax, float omega,
+                              float timeMs, bool replace, uint32_t id, uint32_t corrId = 0);
+
 }  // namespace TestSupport

@@ -1236,10 +1236,24 @@ def _tag_and_len_size(field, content_len: int, packed: bool = False) -> int:
 def _worst_case_scalar_size(field) -> int:
     """Worst-case ON-WIRE size (bytes) of ONE occurrence of this field's
     VALUE ONLY (excludes its tag) -- conservative protobuf wire-format
-    widths. Not narrowed by any (min)/(max)/(abs_max) bound: every bounded
-    field in this schema is a fixed-width `float`, and a bound never changes
-    a float's wire width; a future bounded VARINT field would need this
-    revisited.
+    widths.
+
+    109-003: a (min)/(max)/(abs_max) bound now DOES narrow a VARINT field's
+    (uint32/int32/uint64/int64) worst-case width -- the "future bounded
+    VARINT field would need this revisited" case this docstring used to
+    flag. `float`/`double`/`bool`/`enum` are unaffected (fixed width
+    regardless of any bound, same as before). Narrowing only ever
+    APPLIES when a genuine, accurate (max)/(abs_max) bound is declared on
+    the field (e.g. AckEntry.err_code's real range is ErrCode's own
+    enumerator span) -- it is not a general size-shrinking knob; the
+    runtime encoder does not clamp or reject a value that happens to
+    exceed the declared bound, it just costs more wire bytes than this
+    worst-case table assumed for that one frame, and
+    `msg::wire::encode()`'s own capacity check (never a partial/corrupt
+    write, messages/DESIGN.md Sec 3) means that rare case safely encodes
+    nothing that cycle rather than corrupting the buffer -- see
+    telemetry.proto's own field comments for the specific bounds chosen
+    and why they're accurate, not just convenient.
     """
     t = field.type
     if t == _TYPE_FLOAT:
@@ -1257,6 +1271,11 @@ def _worst_case_scalar_size(field) -> int:
         # forever.
         return 1
     if t == _TYPE_UINT32:
+        bound = _read_bound(field, _FIELD_OPT_MAX)
+        if bound is None:
+            bound = _read_bound(field, _FIELD_OPT_ABS_MAX)
+        if bound is not None and bound >= 0:
+            return _varint_len(int(bound))
         return 5  # ceil(32/7)
     if t == _TYPE_INT32:
         # protobuf's own well-known gotcha: a NEGATIVE int32 is sign-

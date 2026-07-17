@@ -50,6 +50,7 @@
 #include "app/deadman.h"
 #include "app/drive.h"
 #include "app/odometry.h"
+#include "app/pilot.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
 #include "app/telemetry.h"
@@ -60,6 +61,7 @@
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "messages/wire_runtime.h"
+#include "motion/executor.h"
 #include "scripted_i2c_hook.h"
 #include "sim_clock.h"
 #include "sim_plant.h"
@@ -377,8 +379,10 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   scriptColorBeginSuccess(bus);
   scriptLineBeginSuccess(bus);
 
+  Motion::Executor executor;
+  App::Pilot pilot(executor, drive);
   App::RobotLoop robotLoop(plant, motorL, motorR, otos, comms, tlm, drive, odom,
-                            deadman, preamble, clock, sleeper);
+                            deadman, preamble, pilot, clock, sleeper);
 
   int sleepsBeforeBoot = sleeper.sleepCount();
   robotLoop.boot();
@@ -493,8 +497,10 @@ void scenarioConfigMotorPatchAppliesWhileDrivetrainPlannerStayUnimplemented() {
   scriptColorBeginSuccess(bus);
   scriptLineBeginSuccess(bus);
 
+  Motion::Executor executor;
+  App::Pilot pilot(executor, drive);
   App::RobotLoop robotLoop(plant, motorL, motorR, otos, comms, tlm, drive, odom,
-                            deadman, preamble, clock, sleeper);
+                            deadman, preamble, pilot, clock, sleeper);
   robotLoop.boot();
   checkTrue(preamble.done(), "boot() completes against the FakeTransport-based fixture too");
 

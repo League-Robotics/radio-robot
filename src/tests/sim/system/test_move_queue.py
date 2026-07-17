@@ -1,27 +1,21 @@
-"""Off-hardware acceptance proof, migrated (ticket 108-004) from TestSim::
-WheelPlant's three fault-injection knobs (``setDisconnected()``/
-``freezePosition()``/``setDropoutRate()``, ``src/tests/sim/plant/wheel_plant.h``)
-driven through the deleted ``TestSim::SimApi`` (105-005, SUC-022) onto the
-same knobs now surfaced per-port on ``TestSim::SimPlant``
-(``src/sim/sim_plant.h``) via ``TestSim::SimHarness::plant()``, and
-asserted against the FIRMWARE's own observable reaction in decoded
-telemetry -- the retargeted ``sim-hardware-fault-injection.md`` issue's ask,
-delivered against this sprint's own plant/harness rather than the deleted
-SimMotor sim.
+"""src/tests/sim/system/test_move_queue.py -- sprint 109 ticket 003's own
+wire-level acceptance for the new ``Move`` command / ``Motion::Executor`` /
+``App::Pilot`` path: queue overflow -> ``ERR_FULL``, a degenerate ``Move``
+-> ``TRIVIAL``, a teleop replace stream (jerk-limited, no instantaneous
+twist step) followed by silence ramping back toward zero, and TWIST/STOP
+preemption unregressed.
 
-Compiles ``fault_knobs_harness.cpp`` together with ``sim_plant.cpp``
-(``src/sim/`` -- replacing the deleted ``sim_api.cpp``),
-``wire_test_codec.cpp``, the plant sources, and the same full HOST_BUILD
-Devices/App/messages/kinematics dependency graph ``test_sim_api.py`` already
-compiles, with ``-DHOST_BUILD``, against the SAME headers every ARM build
-compiles. Mirrors ``test_sim_api.py``'s exact shape: compile with the system
-C++ compiler, run the resulting binary, assert it exits 0.
+Compiles ``move_queue_harness.cpp`` together with ``sim_plant.cpp``
+(``src/sim/``), ``wire_test_codec.cpp``, the plant sources, and the same
+full HOST_BUILD Devices/App/messages/kinematics/motion dependency graph
+every sibling ``test_*.py`` in this directory already compiles (mirrors
+``test_sim_api.py``'s exact shape).
 
-Collected under ``src/tests/sim/system/faults/`` -- already within
-``pyproject.toml``'s ``testpaths = ["src/tests/sim"]``, no configuration change
-needed. Run just these scenarios with:
+Collected under ``src/tests/sim/system/`` -- already within
+``pyproject.toml``'s ``testpaths = ["src/tests/sim"]``, no configuration
+change needed:
 
-    uv run python -m pytest src/tests/sim/system/ -k fault -v
+    uv run python -m pytest src/tests/sim/system/test_move_queue.py -v -s
 """
 
 import pathlib
@@ -30,15 +24,15 @@ import sys
 
 import pytest
 
-# src/tests/sim/system/faults/test_fault_knobs.py -> faults -> system -> sim -> tests -> repo root
-_REPO_ROOT = pathlib.Path(__file__).resolve().parents[5]
+# src/tests/sim/system/test_move_queue.py -> system -> sim -> tests -> repo root
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
-_FAULTS_DIR = pathlib.Path(__file__).resolve().parent
-_SUPPORT_DIR = _FAULTS_DIR.parent.parent / "support"
-_PLANT_DIR = _FAULTS_DIR.parent.parent / "plant"
+_SYSTEM_DIR = pathlib.Path(__file__).resolve().parent
+_SUPPORT_DIR = _SYSTEM_DIR.parent / "support"
+_PLANT_DIR = _SYSTEM_DIR.parent / "plant"
 _INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
 
-_HARNESS_SRC = _FAULTS_DIR / "fault_knobs_harness.cpp"
+_HARNESS_SRC = _SYSTEM_DIR / "move_queue_harness.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WIRE_TEST_CODEC_SRC = _SUPPORT_DIR / "wire_test_codec.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
@@ -69,10 +63,6 @@ _MESSAGE_SOURCES = [
 _KINEMATICS_SOURCES = [
     _SOURCE_DIR / "kinematics" / "body_kinematics.cpp",
 ]
-# 109-003: robot_loop.h now includes app/pilot.h -> motion/executor.h ->
-# motion/jerk_trajectory.h -> vendor/ruckig -- every sim_harness.h-based
-# harness (RobotLoop's own full dependency graph) needs the restored
-# Motion sources + the vendored Ruckig sources/include path too.
 _RUCKIG_INCLUDE = _REPO_ROOT / "vendor" / "ruckig" / "include"
 _RUCKIG_SRC_DIR = _REPO_ROOT / "vendor" / "ruckig" / "src"
 _MOTION_SOURCES = [
@@ -107,8 +97,8 @@ def _all_sources():
     )
 
 
-def test_fault_knobs_harness_compiles_and_passes(tmp_path):
-    """Compile the fault-knob harness + its full dependency graph; assert
+def test_move_queue_harness_compiles_and_passes(tmp_path):
+    """Compile move_queue_harness.cpp + its full dependency graph; assert
     every scenario passes."""
     sources = _all_sources()
     for src in sources:
@@ -116,7 +106,7 @@ def test_fault_knobs_harness_compiles_and_passes(tmp_path):
     assert _SOURCE_DIR.is_dir(), f"src/firm/ tree missing: {_SOURCE_DIR}"
 
     cxx = _find_cxx_compiler()
-    binary = tmp_path / "fault_knobs_harness"
+    binary = tmp_path / "move_queue_harness"
 
     compile_result = subprocess.run(
         [
@@ -143,17 +133,17 @@ def test_fault_knobs_harness_compiles_and_passes(tmp_path):
         text=True,
     )
     assert compile_result.returncode == 0, (
-        "fault_knobs_harness.cpp / its dependencies failed to compile:\n"
+        "move_queue_harness.cpp / its dependencies failed to compile:\n"
         f"stdout:\n{compile_result.stdout}\nstderr:\n{compile_result.stderr}"
     )
 
     run_result = subprocess.run([str(binary)], capture_output=True, text=True)
+    print(run_result.stdout)
     assert run_result.returncode == 0, (
-        "fault_knobs_harness reported a scenario failure "
+        "move_queue_harness reported a scenario failure "
         f"(exit {run_result.returncode}):\n{run_result.stdout}\n{run_result.stderr}"
     )
-    print(run_result.stdout)
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    sys.exit(pytest.main([__file__, "-v", "-s"]))

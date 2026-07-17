@@ -92,6 +92,43 @@ message Twist {
 // Stop already used) -- a panic-stop must have zero ways to be malformed.
 message Stop {}
 
+// Move -- the sprint-109 arc-command primitive (109-003, SUC-001/SUC-003).
+// Every motion command is an arc: a signed linear distance coupled with a
+// signed heading delta over that same arc (distance==0 => pure pivot;
+// delta_heading==0 => straight leg) -- see this sprint's issue
+// (clasi/sprints/109-.../issues/firmware-jerk-limited-motion-ruckig-return-
+// arc-command-queue.md) "Command model (wire)" section for the full
+// semantics this message implements. `Motion::Executor` (motion/cmd.h)
+// normalizes a decoded Move into a Motion::Cmd; this message itself is pure
+// wire shape, no validation/defaulting logic.
+//
+// Two modes, discriminated by `time`:
+//   DISTANCE (time == 0) -- travel `distance` while heading changes by
+//     `delta_heading`; 109-003 declares this mode's wire shape but does NOT
+//     implement dominant-channel arc planning for it yet (ticket 005) --
+//     see cmd.h's own doc comment for exactly what 109-003 does with a
+//     DISTANCE-mode Move today.
+//   TIMED (time > 0) -- ramp up to v_max/omega, hold, ramp down to finish
+//     at rest at the deadline (`time` is the TOTAL duration from
+//     activation, ramps included) -- this is the teleop primitive 109-003
+//     implements end to end; the ramp-down tail is the deadman decay.
+//
+// A command with distance==0 AND delta_heading==0 AND time<=0 is
+// degenerate -- acked TRIVIAL, never queued (Motion::Executor's own
+// classification, not decoded here).
+message Move {
+  float  distance      = 1;  // [mm] signed arc length along the path
+  float  delta_heading = 2;  // [rad] signed heading change over the arc
+  float  v_max         = 3;  // [mm/s] linear ceiling (DISTANCE) / signed target (TIMED)
+  float  omega         = 4;  // [rad/s] signed target yaw rate (TIMED only)
+  float  time          = 5;  // [ms] 0 = distance-bounded; >0 = TIMED (total duration)
+  bool   replace       = 6;  // replace last queued (or the active cmd if queue empty)
+  uint32 id            = 7;  // host correlation id, echoed in the enqueue ack (corr_id)
+                              // AND in the command's own completion event (Telemetry's
+                              // ack ring, telemetry.proto -- 109-003's own resolution of
+                              // sprint.md Open Question 3)
+}
+
 // ConfigDelta -- unchanged from the pre-102 schema (096-001): still
 // references config.proto's three curated Patch types plus the watchdog
 // window escape hatch. Runtime application of a decoded `ConfigDelta` is a
@@ -124,10 +161,11 @@ message CommandEnvelope {
     // config/stop keep their pre-102 field numbers (6/13) -- they are KEPT
     // arms, not new ones. twist is genuinely new -- assigned a fresh,
     // never-before-used field number (19), never one of the reserved
-    // numbers above.
+    // numbers above. move (109-003) is the next fresh number (20).
     ConfigDelta config = 6;
     Stop        stop   = 13;
     Twist       twist  = 19;
+    Move        move   = 20;
   }
 }
 
