@@ -1,8 +1,9 @@
 ---
 id: '003'
 title: Fix Sim speed-up factor stutter/breakage at 10x/20x
-status: open
-use-cases: [SUC-003]
+status: in-progress
+use-cases:
+- SUC-003
 depends-on: []
 github-issue: ''
 issue: testgui-speedup-factor-broken-at-high-values.md
