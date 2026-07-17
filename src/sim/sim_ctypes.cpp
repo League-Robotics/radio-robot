@@ -151,6 +151,20 @@
 
 #include "sim_harness.h"
 
+// Firmware version compiled into THIS shared library -- exported so the host
+// (TestGUI) can display the version of the binary it actually LOADED, not the
+// version sitting in the source tree. A running process keeps the old dylib
+// mapped after a rebuild (dlopen caches by path), so "the sim is always built
+// from this tree" is not something the GUI can assume. version_generated.h is
+// emitted by gen_version.py and git-ignored, so guard the include and fall
+// back to a dev sentinel when it is absent.
+#if __has_include("types/version_generated.h")
+#include "types/version_generated.h"
+#endif
+#ifndef FIRMWARE_VERSION_STR
+#define FIRMWARE_VERSION_STR "0.0.0-dev"
+#endif
+
 namespace {
 
 TestSim::SimHarness* asHarness(void* h) { return static_cast<TestSim::SimHarness*>(h); }
@@ -188,6 +202,10 @@ void sim_destroy(SimHandle h) { delete asHarness(h); }
 int sim_booted(SimHandle h) { return asHarness(h)->booted() ? 1 : 0; }
 
 int sim_cycle_count(SimHandle h) { return asHarness(h)->cycleCount(); }
+
+// Version string compiled into this library (see the FIRMWARE_VERSION_STR note
+// near the includes). Stateless -- needs no SimHandle.
+const char* sim_firmware_version() { return FIRMWARE_VERSION_STR; }
 
 // ---- Stepping ----
 

@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: '112'
 ---
 
 # Ack-ring entries intermittently missing for individual commands (P4 single-loop firmware)

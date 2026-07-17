@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: '111'
 ---
 
 # `kFaultWedgeLatch` observed flickering DURING active motion, not just idle

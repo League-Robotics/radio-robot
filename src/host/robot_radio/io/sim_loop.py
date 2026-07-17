@@ -302,6 +302,9 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
         ctypes.c_void_p, ctypes.c_uint16, ctypes.POINTER(ctypes.c_uint8), ctypes.c_int]
     lib.sim_default_write.restype = ctypes.c_int
 
+    lib.sim_firmware_version.argtypes = []
+    lib.sim_firmware_version.restype = ctypes.c_char_p
+
 
 HookCallback = Callable[[int, "ctypes.Array[ctypes.c_uint8]"], int]
 
@@ -407,6 +410,13 @@ class SimLoop:
         self._lib = None
         self._read_hook_c = None
         self._write_hook_c = None
+
+    def firmware_version(self) -> str:
+        """Version string compiled into the LOADED sim library (not the source
+        tree) -- lets the GUI show which built binary is actually running."""
+        self._require_connected()
+        raw = self._lib.sim_firmware_version()
+        return raw.decode() if raw else "?"
 
     # ------------------------------------------------------------------
     # TwistTransport protocol (planner/executor.py) -- twist()/stop()/

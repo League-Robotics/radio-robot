@@ -2496,6 +2496,14 @@ def _build_main_window():  # type: ignore[return]
             # Warning was already shown by connect() / _show_build_warning().
             return
 
+        # Sim connected -- show the version compiled into the LOADED sim library
+        # so a stale, still-running GUI (which keeps the old dylib mapped after a
+        # rebuild) is obvious at a glance rather than looking like broken motion.
+        if isinstance(transport, SimTransport):
+            _sim_ver = transport.firmware_version()
+            if _sim_ver:
+                mode_label.setText(f"SIM MODE — v{_sim_ver}")
+
         # Start the always-on "latest" capture for this whole session. It
         # overwrites recordings/latest.jsonl each connect so there is always a
         # recording of the most recent session — even if the operator never

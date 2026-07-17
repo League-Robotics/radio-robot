@@ -1,5 +1,6 @@
 ---
 status: pending
+sprint: '112'
 ---
 
 # Relay connect handshake trips `kFaultCommsMalformed` before any application command

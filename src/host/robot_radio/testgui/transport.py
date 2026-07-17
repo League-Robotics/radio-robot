@@ -1043,6 +1043,17 @@ class SimTransport(Transport):
         """
         return self._loop
 
+    def firmware_version(self) -> "str | None":
+        """Version compiled into the loaded sim library, or None if not
+        connected -- surfaced in the GUI header so a stale still-running GUI
+        (old dylib still mapped after a rebuild) is obvious at a glance."""
+        if self._loop is None:
+            return None
+        try:
+            return self._loop.firmware_version()
+        except Exception:
+            return None
+
     @property
     def turn_scrub_factor(self) -> float:
         """The ``body_rot_scrub`` factor the sim currently injects.
