@@ -1,9 +1,13 @@
 ---
 id: '005'
 title: DISTANCE arcs + heading PD cascade + dwell completion + HeadingSource seam
-status: open
-use-cases: [SUC-001, SUC-002, SUC-004]
-depends-on: ['003']
+status: in-progress
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-004
+depends-on:
+- '003'
 github-issue: ''
 issue: firmware-jerk-limited-motion-ruckig-return-arc-command-queue.md
 completes_issue: false
