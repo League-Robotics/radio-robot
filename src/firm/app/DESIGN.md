@@ -295,6 +295,19 @@ called with real elapsed time between calls).
 
 ### Exposes
 
+- **`RobotLoop::updateTlm()` now populates `frame_.hasTwist`/`frame_.twist`
+  (109-009 fix).** Both fields were added to `Telemetry::Frame` by an
+  earlier ticket but never actually set anywhere — `hasTwist` defaulted
+  `false` permanently, so the wire's `twist=` field was silently absent on
+  every build. The sim tour-closure gate (109-009) needed a real velocity
+  trace to assert "no dip at a same-`v_max` boundary" against and was the
+  first consumer to notice. Fixed with `BodyKinematics::forward
+  (motorL_.velocity(), motorR_.velocity(), drive_.trackWidth(),
+  frame_.twist.v_x, frame_.twist.omega)` — the same linear/homogeneous
+  equations `Odometry::integrate()` already uses for position deltas,
+  fed velocities instead (mathematically valid without a separate `dt`,
+  per that method's own comment). `Drive` gained a `trackWidth()` read-only
+  accessor for this call.
 - **`RobotLoop::run()` / `boot()` / `cycle()`:** `run()` never returns —
   `boot()` once, then `cycle()` forever. `boot()`/`cycle()` are exposed
   separately so a host harness can step a bounded number of cycles and

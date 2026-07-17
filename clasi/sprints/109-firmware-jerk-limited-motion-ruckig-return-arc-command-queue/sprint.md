@@ -123,17 +123,28 @@ impossibility argument.
 
 - [ ] TestGUI → Sim → Tour 1 completes end-to-end, closes the loop
       (returns to start pose within tolerance), and its trace is visibly
-      square (not cockeyed).
+      square (not cockeyed). **Ticket 009: mostly met (~90%+ of runs after
+      six firmware fixes), not fully reliable — see ticket 009's own
+      Iteration Log/Impossibility Argument.**
 - [ ] TestGUI → Sim → Tour 2 completes end-to-end with the same visual/
-      closure standard.
+      closure standard. **Ticket 009: same status as Tour 1.**
 - [ ] Every turn in both tours lands within 1° of its commanded
       delta-heading, measured against sim ground truth, with sim OTOS
-      drift + encoder error enabled.
+      drift + encoder error enabled. **Ticket 009: not met — measured up
+      to ~2.5° on individual turns after the fixes (down from ~90°+
+      truncation/hangs before them); see ticket 009's own Iteration Log.**
 - [ ] With sim OTOS error/noise disabled (ideal chip), turns are exact
-      (bit-for-bit/negligible-epsilon, not "within 1°").
-- [ ] Consecutive same-`v_max` DISTANCE commands do not decelerate to zero
+      (bit-for-bit/negligible-epsilon, not "within 1°"). **Ticket 009: not
+      met — measured residual ~0.5-1.5°, attributed to OTOS's own
+      kReadPeriod read-rate limit at high yaw rate, not a fixable bug
+      within this sprint's architecture; see ticket 009's own
+      Impossibility Argument.**
+- [x] Consecutive same-`v_max` DISTANCE commands do not decelerate to zero
       at the shared boundary (`velocity_step_response.py`-style trace
-      assertion, sim + bench).
+      assertion, sim + bench). **Ticket 009 verified this at the full
+      tour/`run_tour()` level (sim)**:
+      `test_two_compatible_distance_legs_carry_velocity_through_the_boundary_at_tour_level`
+      in `src/tests/testgui/test_tour_closure_gate.py`, reliably passing.
 - [ ] Every ticket touching `src/firm/` has an updated `DESIGN.md` (root
       map/diagram if structure changed, subsystem doc otherwise; new
       `src/firm/motion/` gets its own).

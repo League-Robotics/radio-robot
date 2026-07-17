@@ -41,13 +41,31 @@ float estimateStopDuration(float velocity, float aDecel, float jerk) {  // -> [s
 constexpr float kLinearRestEpsilon = 2.0f;        // [mm/s]
 constexpr float kRotationalRestEpsilon = 0.05f;   // [rad/s] (~2.9 deg/s)
 
+// kDistanceSettleEpsilonMm (109-009 fix): a DISTANCE-mode command's planned
+// jerk-limited profile can settle to rest a FRACTION of a millimetre short
+// of `effectiveDistance_` (S-curve profile quantization against the
+// per-cycle sampled velocity/position, not a fault) -- the sim tour-closure
+// gate (109-009) hit exactly this on TOUR_2's own final leg: the plant
+// settled at ~344.3-344.9mm against a 345mm target and NEVER crossed the
+// raw `>=` threshold, hanging until this ticket's own added STOP_TIME
+// backstop (see the terminal `isTerminalCmd` branch below) turned an
+// indefinite hang into a bounded (but still failing) timeout. The genuine
+// fix is a small settle epsilon, exactly analogous to the heading dwell
+// gate's own `headingDwellTol_` tolerance (a real robot's own distance
+// completion is never judged by exact floating-point crossing either) --
+// completion also fires once the planned trajectory time has fully
+// elapsed (`linearElapsedS_ >= linear_.duration()`, i.e. the profile is not
+// still actively driving toward more distance) AND the shortfall is within
+// this epsilon.
+constexpr float kDistanceSettleEpsilonMm = 2.0f;  // [mm]
+
 // kStopTimeBackstopFactor/kStopTimeBackstopMarginS -- see executor.h's own
 // "Dwell completion" comment: stopTimeBackstopMs() = dominant channel's own
 // solved duration * kStopTimeBackstopFactor + kStopTimeBackstopMarginS. v1,
 // not bench-tuned -- generous on purpose (this is a last-resort backstop,
 // not the normal completion path).
 constexpr float kStopTimeBackstopFactor = 2.0f;
-constexpr float kStopTimeBackstopMarginS = 1.0f;  // [s]
+constexpr float kStopTimeBackstopMarginS = 6.0f;  // [s]
 
 // 109-006: exit-speed-change trigger (a)/(b)-tail thresholds -- verbatim
 // per the sprint issue's own "Replan triggers" section ("exit speed changes
@@ -156,7 +174,8 @@ void Executor::activate(const Cmd& cmd, bool retarget) {
 
   measuredPathSinceActivation_ = 0.0f;
   headingBaselineSet_ = false;
-  headingBaselineAbs_ = 0.0f;
+  unwrappedThetaRel_ = 0.0f;
+  lastMeasuredHeadingAbs_ = 0.0f;
   prevThetaMeasRel_ = 0.0f;
   dwellHeldMs_ = 0;
   headingRatioPerMm_ = 0.0f;
@@ -680,10 +699,19 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
   measuredPathSinceActivation_ += measuredDistanceDelta;
 
   if (!headingBaselineSet_) {
-    headingBaselineAbs_ = measuredHeadingAbs;
+    lastMeasuredHeadingAbs_ = measuredHeadingAbs;
+    unwrappedThetaRel_ = 0.0f;
     headingBaselineSet_ = true;
   }
-  float thetaMeasRel = wrapAngle(measuredHeadingAbs - headingBaselineAbs_);
+  // Continuous (unwrapped) relative heading since activation -- see
+  // `unwrappedThetaRel_`'s own doc comment (executor.h) for why a single
+  // wrapAngle(measuredHeadingAbs - headingBaselineAbs_) is wrong once the
+  // total rotation exceeds +-180deg. Each cycle's own step is always small
+  // (bounded by one tick's worst-case rotation rate), so wrapAngle() on
+  // JUST the step is safe even though the accumulated total is not.
+  unwrappedThetaRel_ += wrapAngle(measuredHeadingAbs - lastMeasuredHeadingAbs_);
+  lastMeasuredHeadingAbs_ = measuredHeadingAbs;
+  float thetaMeasRel = unwrappedThetaRel_;
 
   if (mode_ == Mode::kTimed) {
     JerkTrajectory::State linSample = linear_.sample(linearElapsedS_);
@@ -760,7 +788,10 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
   // -- Completion + the terminal-decel PD gate (both need the SAME
   // measured-error test, computed once here) --
   bool distanceDone = (mode_ == Mode::kPivot) ||
-                       (std::fabs(measuredPathSinceActivation_) >= std::fabs(effectiveDistance_));
+                       (std::fabs(measuredPathSinceActivation_) >= std::fabs(effectiveDistance_)) ||
+                       (linearElapsedS_ >= linear_.duration() &&
+                        std::fabs(std::fabs(measuredPathSinceActivation_) -
+                                  std::fabs(effectiveDistance_)) < kDistanceSettleEpsilonMm);
   bool isTerminalCmd = (queueCount_ == 0);
 
   float thetaErr = active_.deltaHeading - thetaMeasRel;
@@ -796,7 +827,34 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
   out.omegaDes = out.headingActive ? omegaFf : 0.0f;
 
   if (headingContent) {
-    if (isTerminalCmd) {
+    // carryingRotationalVelocity -- true iff THIS command's own planned exit
+    // speed (`exitVelocity_`, set by computeExitVelocity()/
+    // maybeRetargetActiveForSuccessorChange()) is nonzero, i.e. a genuine
+    // same-sign pivot->pivot chain that is DELIBERATELY still moving at
+    // handoff (the successor's own PD immediately takes over the still-
+    // rotating channel, per SUC-003's boundary-velocity carry). 109-009 fix:
+    // the dwell HOLD (below) is only skippable for THIS case -- the
+    // original code skipped it for every "chained, non-terminal" command
+    // (any command with ANY successor queued, `queueCount_ > 0`), which
+    // wrongly included a pivot chained into a plain DISTANCE leg (every
+    // TOUR_1/2 turn, via run_tour()'s one-leg lookahead) or an opposite-
+    // sign/incompatible pivot -- neither carries any velocity forward
+    // (`exitVelocity_` is exactly 0 for both, computeExitVelocity()'s own
+    // contract), so nothing downstream corrects the residual angular
+    // momentum a bare tolerance-crossing sample can still have. That bled
+    // into extra, uncorrected post-handoff rotation the sim tour-closure
+    // gate (109-009) measured directly against ground truth (observed up
+    // to ~3.5deg with an IDEAL/noiseless OTOS -- not sensor error, a real
+    // completion-gate bug). Requiring the FULL dwell hold whenever there is
+    // no velocity to carry -- exactly the terminal-command rule -- costs at
+    // most one `headingDwellHoldS_` window (150ms) per turn and guarantees
+    // the heading has actually stopped moving before handoff, the same way
+    // a real driver does not start driving straight while still spinning.
+    bool carryingRotationalVelocity = (exitVelocity_ != 0.0f);
+
+    if (!carryingRotationalVelocity) {
+      // Terminal OR chained-but-not-carrying: both need the SAME full
+      // dwell hold -- "chained" alone no longer buys an early completion.
       if (distanceDone && withinTol && withinRate) {
         dwellHeldMs_ += dtMs;
       } else {
@@ -809,14 +867,53 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
         completeActive(CompletionStatus::kTimeout);
       }
     } else {
-      // Chained, non-terminal: accurate handoff, no dwell hold required.
-      if (distanceDone && withinTol) completeActive(CompletionStatus::kDone);
+      // Carrying a rotational exit velocity into a compatible pivot
+      // successor: no HOLD needed (the successor's PD takes over the
+      // still-moving channel immediately), but a bare magnitude-band
+      // ("withinTol") test can straddle the entire tolerance window
+      // between two consecutive samples at cruise rate (e.g. 4rad/s *
+      // 40ms ~= 9deg, far larger than headingDwellTol_'s 0.5deg) and never
+      // land inside it -- not theoretical, this is exactly what
+      // motion_executor_harness.cpp's own Scenario 9 (chained pivot->pivot)
+      // hit once thetaMeasRel's own unwrap was fixed to be continuous
+      // (109-009's own wrap fix, see `unwrappedThetaRel_`'s doc comment)
+      // and could no longer rely on the OLD wrap bug's incidental (and
+      // semantically meaningless) second zero-crossing after a spurious
+      // 2*pi discontinuity. `crossedTarget` (thetaErr's sign flipping since
+      // last cycle) catches the case a sample stepped clean over the
+      // tolerance band -- there is no "settle" to wait for, since the
+      // whole point of carrying velocity is to keep moving into the
+      // successor.
+      float prevThetaErr = active_.deltaHeading - prevThetaMeasRel_;
+      bool crossedTarget = (thetaErr <= 0.0f) != (prevThetaErr <= 0.0f);
+      if (distanceDone && (withinTol || crossedTarget)) {
+        completeActive(CompletionStatus::kDone);
+      }
     }
   } else {
     // No heading content -- a plain kArc straight leg (deltaHeading == 0).
     bool trajDone = linearElapsedS_ >= linear_.duration();
     if (isTerminalCmd) {
-      if (distanceDone && trajDone) completeActive(CompletionStatus::kDone);
+      // 109-009 fix: this terminal (no-successor) branch had no STOP_TIME
+      // backstop at all -- unlike its headingContent sibling above, which
+      // has always had one. A terminal DISTANCE leg (the tour's own FINAL
+      // leg, e.g. every TOUR_1/2 run) with no successor queued relies
+      // entirely on `distanceDone && trajDone` to ever complete; the sim
+      // tour-closure gate (109-009) hit a genuine indefinite hang here (the
+      // HOST's own 15s `run_tour()` timeout fired with zero firmware
+      // response at all -- not a firmware-reported kTimeout ack, a total
+      // silence) once every earlier leg's own timing lined up to leave this
+      // one running past its own planned duration without either condition
+      // ever flipping true. Mirroring the headingContent branch's own
+      // backstop closes that gap the same documented way (SUC-002's own
+      // "STOP_TIME backstop... can never wedge the executor open forever"
+      // contract) -- this branch is exactly the kind of terminal command
+      // that contract was meant to cover.
+      if (distanceDone && trajDone) {
+        completeActive(CompletionStatus::kDone);
+      } else if (activeElapsedMs_ >= stopTimeBackstopMs()) {
+        completeActive(CompletionStatus::kTimeout);
+      }
     } else if (distanceDone) {
       completeActive(CompletionStatus::kDone);
     }

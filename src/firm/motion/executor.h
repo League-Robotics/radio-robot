@@ -215,9 +215,12 @@ class Executor {
     // sequence, not one that goes stale the instant headingActive flips
     // off). thetaRef is the arc/pivot's own progressive desired heading
     // (headingRatioPerMm_ * linear.position(t) for kArc, rotational.
-    // position(t) for kPivot); thetaMeas is `measuredHeadingAbs -
-    // headingBaselineAbs_` (wrapped), where measuredHeadingAbs is this
-    // tick()'s own caller-supplied App::HeadingSource reading.
+    // position(t) for kPivot); thetaMeas is the CONTINUOUS (unwrapped)
+    // relative heading accumulated since activation (109-009 fix -- see
+    // `unwrappedThetaRel_`'s own doc comment for why a single wrapAngle()
+    // diff against a fixed baseline is wrong for a |deltaHeading| > 180deg
+    // command), where measuredHeadingAbs is this tick()'s own
+    // caller-supplied App::HeadingSource reading.
     float thetaRef = 0.0f;   // [rad]
     float thetaMeas = 0.0f;  // [rad]
 
@@ -483,7 +486,24 @@ class Executor {
   float pendingOvershoot_ = 0.0f;   // [mm] signed carry -- see this file's own "Distance completion" comment
 
   bool headingBaselineSet_ = false;
-  float headingBaselineAbs_ = 0.0f;  // [rad] measuredHeadingAbs sampled on this command's own first tick()
+  // unwrappedThetaRel_/lastMeasuredHeadingAbs_ (109-009 fix): thetaMeasRel used to be a single
+  // wrapAngle(measuredHeadingAbs - headingBaselineAbs) against a fixed activation-time baseline --
+  // correct only while the total rotation since activation stays within (-pi, pi]. App::HeadingSource's
+  // OTOS reading itself wraps at
+  // +-180deg (the real chip's own convention), so a commanded |deltaHeading| > 180deg (TOUR_2's
+  // own "RT -21700"/"RT 21500" legs, -217deg/+215deg) crossed that wrap mid-turn: measuredHeadingAbs
+  // itself jumped by a full 2*pi right at the wrap boundary, and the single-formula diff aliased to
+  // the WRONG relative angle, corrupting thetaErr for the rest of the command (and, once handed off,
+  // left the executor in a state where the next queued command's own ack never arrived -- the sim
+  // tour-closure gate's leg-6 timeout). Fixed by accumulating the CONTINUOUS relative angle
+  // incrementally every tick() -- wrapAngle(thisReading - lastReading) is always small (bounded by
+  // one cycle's own worst-case rotation rate, nowhere near +-180deg) and is added onto a running
+  // unwrapped total, which can legitimately exceed +-180deg. lastMeasuredHeadingAbs_ is re-seeded
+  // (to measuredHeadingAbs, with unwrappedThetaRel_ zeroed) on the SAME first-tick condition
+  // headingBaselineSet_ already gated the old single-shot baseline on.
+  float unwrappedThetaRel_ = 0.0f;       // [rad] CONTINUOUS relative heading since activation -- this
+                                         // is the actual thetaMeasRel used everywhere below now.
+  float lastMeasuredHeadingAbs_ = 0.0f;  // [rad] previous tick()'s raw (wrapped) measuredHeadingAbs
   float prevThetaMeasRel_ = 0.0f;    // [rad] previous tick()'s thetaMeas -- this class's own dwell-rate estimate
   uint32_t dwellHeldMs_ = 0;         // [ms] how long the dwell gate has held continuously
 

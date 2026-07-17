@@ -51,6 +51,14 @@ class Drive {
   // setVelocity() calls, no I2C traffic, no sleeps.
   void tick();
 
+  // trackWidth -- read-only accessor onto the same `b` BodyKinematics::
+  // inverse() uses above (109-009: RobotLoop::updateTlm() needs it to fuse
+  // the two leaves' measured velocities into the primary frame's `twist`
+  // field via BodyKinematics::forward() -- see that method's own call
+  // site). No setter: trackWidth_ is fixed at construction, matching
+  // Drive's own "no live-reconfigure" contract.
+  float trackWidth() const { return trackWidth_; }  // [mm]
+
  private:
   Devices::NezhaMotor& left_;
   Devices::NezhaMotor& right_;

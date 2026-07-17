@@ -3,6 +3,7 @@
 // timing-schedule rationale.
 #include "app/robot_loop.h"
 
+#include "kinematics/body_kinematics.h"
 #include "messages/envelope.h"
 
 namespace App {
@@ -142,6 +143,21 @@ void RobotLoop::updateTlm() {
   frame_.hasVel = true;
   frame_.velLeft = motorL_.velocity();
   frame_.velRight = motorR_.velocity();
+
+  // Fused body-frame velocity (109-009 fix -- frame_.hasTwist/twist were
+  // added to Telemetry::Frame by an earlier ticket but never actually
+  // populated anywhere, so TLM's `twist=` field was permanently absent;
+  // this ticket's own tour-closure gate test is the first consumer that
+  // needed it, for a real velocity trace to assert "no dip at a same-v_max
+  // boundary" against). BodyKinematics::forward() is linear/homogeneous in
+  // its inputs (Odometry::integrate()'s own comment notes the same thing
+  // for position deltas) -- feeding it the two leaves' current velocities
+  // yields the fused body (v, omega) for THIS instant, the same equations
+  // Odometry uses for per-cycle distance/headingDelta.
+  frame_.hasTwist = true;
+  BodyKinematics::forward(motorL_.velocity(), motorR_.velocity(), drive_.trackWidth(),
+                           frame_.twist.v_x, frame_.twist.omega);
+
   frame_.hasPose = true;
   frame_.active = driving_;
   frame_.connLeft = motorL_.connected();

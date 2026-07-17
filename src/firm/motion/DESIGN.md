@@ -226,10 +226,8 @@ the carry. This is single-command bookkeeping only, NOT the full
 boundary-velocity carry (ticket 006's own scope, which is about NOT
 decelerating to rest at the shared boundary at all).
 
-**Dwell completion (heading-bearing commands).** A REST-TERMINATED
-heading-bearing command (`queueCount_==0` at the moment its own
-distance/pivot criterion is met) additionally holds
-`|deltaHeading-thetaMeas| < heading_dwell_tol` AND `|thetaRate| <
+**Dwell completion (heading-bearing commands).** A heading-bearing command
+holds `|deltaHeading-thetaMeas| < heading_dwell_tol` AND `|thetaRate| <
 heading_dwell_rate` (`msg::PlannerConfig`, both new fields) for
 `arrive_dwell` seconds (REUSED from the pre-existing terminal-completion
 dwell field — its 150ms default is also exactly ticket 005's own dwell-
@@ -237,10 +235,103 @@ hold spec) before completing `kDone`; a `STOP_TIME` backstop
 (`stopTimeBackstopMs()` — a generous multiple of the dominant channel's
 own solved duration, v1/not-bench-tuned) forces completion regardless, so
 a persistent oscillation or a stuck measurement can never wedge the
-executor open forever. A CHAINED (non-terminal) heading-bearing command
-skips the hold-timer/rate gate entirely and completes on the tolerance
-test alone ("accurate handoff... without a dwell", sprint.md's own
-semantics item 4).
+executor open forever.
+
+*109-009 revision — the dwell HOLD is skippable only when carrying a
+rotational exit velocity, not merely when "chained."* The ORIGINAL rule
+("a chained/non-terminal command skips the hold-timer/rate gate entirely
+and completes on the tolerance test alone") turned out to be keyed on the
+WRONG condition: `queueCount_ > 0` (any successor queued at all) rather
+than on whether THIS command is actually carrying a nonzero rotational
+exit velocity into that successor (`exitVelocity_ != 0.0f`,
+`computeExitVelocity()`'s own contract — see §2d). For a genuine
+same-sign pivot→pivot chain the two are the same thing (carrying IS why
+there's no settle to wait for). But `run_tour()`'s own one-leg lookahead
+(`planner/tour.py`) queues the very NEXT leg the instant the current one
+activates — for every TOUR_1/2 turn, that successor is a plain DISTANCE
+leg, which forces `exitVelocity_ == 0` (§2d's own table: "pivot on either
+side → 0"). Under the original rule this pivot was STILL treated as
+"chained, skip the hold" purely because `queueCount_ > 0`, so it completed
+the instant a single SAMPLE crossed `heading_dwell_tol`, without regard to
+`heading_dwell_rate` at all — while the plant could still be rotating at
+several hundred deg/s. Nothing downstream corrects that residual angular
+momentum (the successor has no heading content), so it bled into several
+degrees of real, uncorrected post-handoff rotation the sim tour-closure
+gate (109-009) measured directly against `SimPlant` ground truth (up to
+~3.5° with an IDEAL/noiseless OTOS — not sensor error, a completion-gate
+defect). The fix: `carryingRotationalVelocity = (exitVelocity_ != 0.0f)`
+now gates which rule applies —
+
+- **Not carrying** (terminal, OR chained into an incompatible/non-pivot
+  successor): the FULL dwell hold (tolerance AND rate, held
+  `arrive_dwell` seconds) is required, exactly like a terminal command —
+  "chained" alone no longer buys an early completion. Costs at most one
+  `arrive_dwell` window (150ms) per such handoff.
+- **Carrying** (`exitVelocity_ != 0`, a genuine same-sign pivot→pivot
+  chain): no hold needed (the successor's own PD takes over the still-
+  moving channel immediately) — but the completion test is `withinTol OR
+  crossedTarget` (a sign flip of `thetaErr` since the previous cycle), not
+  `withinTol` alone. A bare magnitude-band test can straddle the ENTIRE
+  tolerance window between two consecutive samples at cruise rate (e.g.
+  4 rad/s × 40ms ≈ 9°, far larger than a 0.5° `heading_dwell_tol`) and
+  never land inside it — `motion_executor_harness.cpp`'s own Scenario 9
+  hit exactly this once `thetaMeasRel`'s unwrap (below) stopped relying on
+  the old wrap bug's incidental second zero-crossing. `crossedTarget`
+  catches a sample that stepped clean over the band.
+
+**`thetaMeasRel` is a CONTINUOUS (unwrapped) relative heading, not a
+single `wrapAngle()` diff (109-009 fix).** The original formula,
+`wrapAngle(measuredHeadingAbs - headingBaselineAbs_)` against a baseline
+fixed once at activation, is only correct while the total rotation since
+activation stays within `(-π, π]` — `App::HeadingSource`'s OTOS reading
+itself wraps at ±180° (the real chip's own convention), so any command
+with `|deltaHeading| > 180°` (TOUR_2's own `RT -21700`/`RT 21500` legs,
+-217°/+215°) crossed that wrap mid-rotation: `measuredHeadingAbs` jumped by
+a full 2π right at the boundary, aliasing `thetaErr` to the WRONG value
+for the rest of the command and, once handed off, corrupting the next
+command badly enough to hang (the sim gate's own leg-6 host-side timeout).
+Fixed by accumulating the relative angle incrementally every `tick()` —
+`unwrappedThetaRel_ += wrapAngle(measuredHeadingAbs -
+lastMeasuredHeadingAbs_)` — since one cycle's own step is always small
+(bounded by the worst-case rotation rate) even though the accumulated
+total legitimately exceeds ±180°.
+
+**The plain (no-heading-content) terminal branch also gained a `STOP_TIME`
+backstop (109-009 fix).** Unlike its heading-bearing sibling above, this
+branch (a terminal `kArc` straight leg, `distanceDone && trajDone`) had NO
+backstop at all — the sim gate hit a genuine indefinite hang on a tour's
+own FINAL leg (the host's 15s `run_tour()` timeout fired with zero
+firmware response, not even a `kTimeout` ack) once the planned trajectory
+finished a fraction of a millimetre short of `effectiveDistance_` and
+`distanceDone` never went true. Mirrored from the heading branch's own
+`else if (activeElapsedMs_ >= stopTimeBackstopMs()) completeActive(kTimeout)`.
+
+**`kStopTimeBackstopMarginS` bumped 1.0s → 6.0s (109-009).** With the
+dwell HOLD now genuinely required for pivot→DISTANCE handoffs (above),
+the sim tour-closure gate exposed the ORIGINAL 1s margin as too tight
+under the sim's own real (wall-clock, non-deterministic) tick-thread
+timing: an occasional momentary tolerance/rate miss resets
+`dwellHeldMs_` to 0 (no partial credit), and under real-time scheduling
+jitter enough resets could exhaust the backstop before ever completing
+the hold, turning a command that WOULD have finished cleanly a few
+hundred ms later into a `kTimeout` fault. Bumped to 6.0s (v1, still not
+bench-tuned) rather than redesigning the hold-reset policy itself, which
+would be a larger behavioral change than this ticket's own iterate-until-
+the-gate-passes scope justifies. This is a real, open robustness question
+(does the dwell hold need graceful degradation instead of hard reset-on-
+any-miss?) flagged in ticket 009's own completion notes, not fully closed
+here.
+
+**`distanceDone` also accepts a small settle epsilon once the planned
+trajectory has fully elapsed (109-009 fix, `kDistanceSettleEpsilonMm =
+2mm`).** A DISTANCE-mode command's own jerk-limited profile can settle to
+rest a fraction of a millimetre short of `effectiveDistance_` (S-curve
+quantization against the per-cycle sampled position, not a fault) and
+never cross the raw `>=` threshold — exactly analogous to why the heading
+dwell gate has its own `heading_dwell_tol` rather than demanding exact
+crossing. `distanceDone` is now true if the raw threshold is crossed OR
+(`linearElapsedS_ >= linear_.duration()` AND the shortfall is within
+`kDistanceSettleEpsilonMm`).
 
 **`kDeadTime` (`Motion::kDeadTime`, `executor.h`) is declared, with its
 derivation preserved, but STILL has no live call site** — ticket 006's own
