@@ -1,5 +1,12 @@
 ---
-status: pending
+status: in-progress
+sprint: '109'
+tickets:
+- 109-003
+- 109-005
+- 109-006
+- 109-008
+- 109-009
 ---
 
 # Tour 1 "died/froze" after leg 1 — investigation record (2026-07-15 emergency fix)

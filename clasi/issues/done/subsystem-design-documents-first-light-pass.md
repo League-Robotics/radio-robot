@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 # Subsystem Design Documents — first light pass
