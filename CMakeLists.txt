@@ -180,10 +180,11 @@ endif()
 # -std=gnu++20 here overrides the c++11 in ${device.cpp_flags} above WITHOUT
 # editing the fetched/vendored libraries/codal-microbit-v2/target.json (which
 # codal re-fetches and would clobber). gnu++20 (not strict c++20): C++20 with
-# GNU extensions -- originally needed because vendored Ruckig's roots.hpp used
+# GNU extensions -- originally needed because vendored Ruckig's roots.hpp uses
 # M_PI, which newlib hides under strict -std=c++20 (__STRICT_ANSI__); Ruckig
-# was deleted (sprint 102 ticket 005) but the wider C++20-with-GNU-extensions
-# standard is kept as the project's general build target, not reverted.
+# was deleted (sprint 102 ticket 005) and is RESTORED (sprint 109 ticket 001,
+# src/vendor/ruckig/) -- this override remains load-bearing again, not just a
+# kept-wider-standard artifact.
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++20")
 
 # linker opts
@@ -223,9 +224,19 @@ include_directories(${PROJECT_SOURCE_DIR}/${LIB_DEST})
 # jerk-limited trajectory generator Sprint 089) were deleted wholesale by
 # sprint 102 ticket 005 alongside the Elite orchestration stack that was
 # their only consumer (source/hal/velocity_pid.*, source/estimation/,
-# source/drive/) -- nothing in the tree references any of the three any
-# more, so their include_directories()/GLOB lines are removed, not just
-# their vendored trees.
+# source/drive/) -- cmon-pid and tinyekf stay dead; ruckig is RESTORED below
+# (sprint 109 ticket 001) at its new tracked location, src/vendor/ruckig/
+# (NOT the gitignored libraries/ dependency-fetch destination), for the new
+# Motion::JerkTrajectory consumer (src/firm/motion/).
+#
+# src/vendor/ruckig: vendored jerk-limited trajectory generator, restored
+# from git history (c63ec6c) rather than re-vendored -- see
+# src/vendor/ruckig/README.vendored.md. Header-only include path, same
+# pattern the old cmon-pid/tinyekf include_directories() calls used; its 11
+# core .cpp sources are appended into SOURCE_FILES below (no build file was
+# vendored, so no add_subdirectory() -- same precedent as the original
+# vendoring).
+include_directories(${PROJECT_SOURCE_DIR}/src/vendor/ruckig/include)
 
 #add_subdirectory("${PROJECT_SOURCE_DIR}/${LIB_DEST}/${dep}")
 
@@ -273,6 +284,18 @@ RECURSIVE_FIND_FILE(CC_FILES "${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}" "*.
 list(APPEND SOURCE_FILES ${S_FILES})
 list(APPEND SOURCE_FILES ${C_FILES})
 list(APPEND SOURCE_FILES ${CC_FILES})
+
+# src/vendor/ruckig (sprint 109 ticket 001): the restored vendored solver's
+# 11 core .cpp sources are NOT under CODAL_APP_SOURCE_DIR (src/firm), so the
+# RECURSIVE_FIND_FILE calls above never reach them -- append them to the
+# flat source list directly, the same treatment every other src/firm
+# translation unit already gets. Motion::JerkTrajectory itself
+# (src/firm/motion/jerk_trajectory.{h,cpp}) IS under src/firm, so it is
+# already picked up by RECURSIVE_FIND_FILE/INCLUDE_DIRS above and needs no
+# separate line here. No add_subdirectory(): Ruckig's own upstream build
+# files were deliberately not vendored (src/vendor/ruckig/README.vendored.md).
+file(GLOB RUCKIG_SOURCES "${PROJECT_SOURCE_DIR}/src/vendor/ruckig/src/*.cpp")
+list(APPEND SOURCE_FILES ${RUCKIG_SOURCES})
 
 # ---------------------------------------------------------------------------
 # ROBOT_RUN_MODE (039-005): explicit build-target run mode. Retained as a

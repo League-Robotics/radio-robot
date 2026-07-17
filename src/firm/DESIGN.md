@@ -9,6 +9,7 @@ subsystem-docs:
   - devices/DESIGN.md
   - kinematics/DESIGN.md
   - messages/DESIGN.md
+  - motion/DESIGN.md
   - types/DESIGN.md
 ---
 
@@ -72,6 +73,7 @@ The directory map:
 | `messages/` | `msg` | Wire schema: generated message structs, generated envelope codec (`wire.{h,cpp}`), hand-written byte-level runtime (`wire_runtime.{h,cpp}`), layout gates | [messages/DESIGN.md](messages/DESIGN.md) |
 | `config/` | `Config` | Generated boot configuration — per-robot calibration baked at build time from `data/robots/active_robot.json` | [config/DESIGN.md](config/DESIGN.md) |
 | `kinematics/` | `BodyKinematics` | Stateless differential-drive math: inverse/forward twist↔wheel maps, saturation | [kinematics/DESIGN.md](kinematics/DESIGN.md) |
+| `motion/` | `Motion` | Jerk-limited single-channel trajectory solving (`JerkTrajectory`, wrapping vendored Ruckig, `src/vendor/ruckig/`); restored 109-001, a leaf like `kinematics/` — dormant until a future queue/executor calls it | [motion/DESIGN.md](motion/DESIGN.md) |
 | `types/` | (global) | Protocol v2 text-tag constants, protocol/firmware version, reply-context plumbing types | [types/DESIGN.md](types/DESIGN.md) |
 | `main.cpp` | — | ARM entry point: constructs the real hardware singletons and every module, wires them, hands off to `RobotLoop::run()` (never returns) | this doc, §4 |
 
@@ -83,11 +85,18 @@ main.cpp ──► app ──► devices ──► (nothing project-local except
    │          └────► com (via ARM-only Transport adapters)
    ├────────► config ──► messages
    └────────► com, devices, config
+
+motion ──► messages   (109-001: restored leaf, no incoming edge yet —
+                        ticket 003 adds the app ──► motion edge)
 ```
 
 `devices/` is the bottom of the stack and deliberately includes nothing from
-`messages/` or `config/` (see §3). `kinematics/` and `messages/` are leaf
-libraries with no project dependencies of their own.
+`messages/` or `config/` (see §3). `kinematics/`, `motion/`, and `messages/`
+are leaf libraries with no project dependencies of their own (`motion/`
+depends only on `messages/`, for `msg::PlannerConfig`'s field types — see
+[motion/DESIGN.md](motion/DESIGN.md)). As of 109-001 nothing in `app/` (or
+anywhere else) calls into `motion/` yet — it is a restored, dormant leaf,
+not yet wired into the loop.
 
 ## 3. Constraints and Invariants
 
