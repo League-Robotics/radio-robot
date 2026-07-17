@@ -1,9 +1,11 @@
 ---
 id: '006'
 title: 'Cross-boundary carry: boundary-velocity table + divergence replan triggers'
-status: open
-use-cases: [SUC-003]
-depends-on: ['005']
+status: in-progress
+use-cases:
+- SUC-003
+depends-on:
+- '005'
 github-issue: ''
 issue: firmware-jerk-limited-motion-ruckig-return-arc-command-queue.md
 completes_issue: false
