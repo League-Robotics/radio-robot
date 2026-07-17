@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Fix graph-tab data persistence across view switches
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 depends-on: []
