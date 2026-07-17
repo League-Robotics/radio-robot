@@ -279,7 +279,8 @@ def test_config_corr_id_round_trips_through_wait_for_ack():
     ack = proto.wait_for_ack(corr_id, timeout=200)
 
     assert ack == AckEntry(
-        corr_id=corr_id, ok=False, err_code=envelope_pb2.ERR_UNIMPLEMENTED)
+        corr_id=corr_id, ok=False, err_code=envelope_pb2.ERR_UNIMPLEMENTED,
+        status=telemetry_pb2.ACK_STATUS_ERR)
 
 
 def test_config_ack_returns_none_on_timeout_with_no_matching_corr_id():

@@ -232,7 +232,8 @@ def test_wait_for_ack_delegates_to_shared_matcher_and_adapts_err_result():
 
     ack = proto.wait_for_ack(9)
 
-    assert ack == AckEntry(corr_id=9, ok=False, err_code=envelope_pb2.ERR_BADARG)
+    assert ack == AckEntry(corr_id=9, ok=False, err_code=envelope_pb2.ERR_BADARG,
+                          status=telemetry_pb2.ACK_STATUS_ERR)
     assert conn.calls == [(9, 500)]  # default timeout forwarded unchanged
 
 

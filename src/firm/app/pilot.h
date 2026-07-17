@@ -50,6 +50,7 @@
 #include "app/drive.h"
 #include "app/heading_source.h"
 #include "app/odometry.h"
+#include "messages/config.h"
 #include "messages/planner.h"
 #include "motion/cmd.h"
 #include "motion/executor.h"
@@ -68,9 +69,65 @@ class Pilot {
   // first tick() that carries heading content to take effect (matches
   // Executor::configure()'s/HeadingSource::configure()'s own "call before
   // first use" contract).
+  //
+  // 109-008: ALSO stores the whole `config` as `plannerConfig_`, the live
+  // baseline `applyPlannerPatch()` merges future wire patches onto. main.cpp
+  // calls this once at boot with `Config::defaultPlannerConfig()` -- that
+  // boot call is what seeds `plannerConfig_` for the lifetime of the robot.
   void configureHeading(const msg::PlannerConfig& config) {
     headingKp_ = config.heading_kp;
     headingKd_ = config.heading_kd;
+    plannerConfig_ = config;
+  }
+
+  // applyPlannerPatch -- 109-008: un-stubs `RobotLoop::handleConfig`'s
+  // PLANNER arm. Merges `patch` onto `plannerConfig_` (the last config
+  // applied via `configureHeading()`, boot default or a previous live
+  // patch) -- only `Opt<T>` fields PRESENT in `patch` overwrite the
+  // baseline (the SAME merge-then-write shape `RobotLoop::handleConfig`
+  // already uses for `MotorConfigPatch` gains and `OtosConfigPatch`'s
+  // offset triple) -- then re-applies the merged config to every live
+  // consumer (`Executor::configure()`, `HeadingSource::configure()`, this
+  // class's own `configureHeading()`) so the change takes effect
+  // immediately, with no reflash. `Executor::configure()`/`HeadingSource::
+  // configure()` are both pure config-limit setters (no queue/state
+  // mutation -- see their own definitions), so calling them mid-motion is
+  // safe.
+  //
+  // Note: `PlannerConfigPatch` (config.proto) curates 20 of `msg::
+  // PlannerConfig`'s fields (`min_speed`/`heading_kp`/`heading_kd` plus the
+  // 17 tracking/replan fields from ticket 006) -- it does NOT declare
+  // `a_max`/`a_decel`/`v_body_max`/`yaw_rate_max`/`yaw_acc_max`/`j_max`/
+  // `yaw_jerk_max`/`arrive_tol`/`turn_in_place_gate`/`heading_source`/
+  // `heading_dwell_tol`/`heading_dwell_rate`, so those fields are never
+  // touched by this method and stay at whatever `plannerConfig_` already
+  // holds (the boot default, absent a future wire-schema addition).
+  void applyPlannerPatch(const msg::PlannerConfigPatch& patch) {
+    msg::PlannerConfig merged = plannerConfig_;
+    if (patch.min_speed.has) merged.min_speed = patch.min_speed.val;
+    if (patch.heading_kp.has) merged.heading_kp = patch.heading_kp.val;
+    if (patch.heading_kd.has) merged.heading_kd = patch.heading_kd.val;
+    if (patch.v_wheel_max.has) merged.v_wheel_max = patch.v_wheel_max.val;
+    if (patch.steer_headroom.has) merged.steer_headroom = patch.steer_headroom.val;
+    if (patch.wheel_step_max.has) merged.wheel_step_max = patch.wheel_step_max.val;
+    if (patch.track_k_s.has) merged.track_k_s = patch.track_k_s.val;
+    if (patch.track_k_theta.has) merged.track_k_theta = patch.track_k_theta.val;
+    if (patch.track_k_cross.has) merged.track_k_cross = patch.track_k_cross.val;
+    if (patch.trim_v_max.has) merged.trim_v_max = patch.trim_v_max.val;
+    if (patch.trim_omega_max.has) merged.trim_omega_max = patch.trim_omega_max.val;
+    if (patch.replan_err_pos.has) merged.replan_err_pos = patch.replan_err_pos.val;
+    if (patch.replan_err_theta.has) merged.replan_err_theta = patch.replan_err_theta.val;
+    if (patch.replan_hold.has) merged.replan_hold = patch.replan_hold.val;
+    if (patch.replan_min_period.has) merged.replan_min_period = patch.replan_min_period.val;
+    if (patch.replan_max.has) merged.replan_max = patch.replan_max.val;
+    if (patch.handoff_tol_pos.has) merged.handoff_tol_pos = patch.handoff_tol_pos.val;
+    if (patch.handoff_tol_v.has) merged.handoff_tol_v = patch.handoff_tol_v.val;
+    if (patch.arrive_vel_tol.has) merged.arrive_vel_tol = patch.arrive_vel_tol.val;
+    if (patch.arrive_dwell.has) merged.arrive_dwell = patch.arrive_dwell.val;
+
+    executor_.configure(merged);
+    headingSource_.configure(merged);
+    configureHeading(merged);  // stores merged as plannerConfig_ too
   }
 
   // enqueue -- forwards to Executor::enqueue(); see executor.h for the
@@ -121,6 +178,15 @@ class Pilot {
   // Motion::kEventRingDepth) into Telemetry's ack ring.
   bool popEvent(Motion::CompletionEvent* out) { return executor_.popEvent(out); }
 
+  // plannerConfig -- read-only access to the live PlannerConfig baseline
+  // (109-008): the last config `configureHeading()`/`applyPlannerPatch()`
+  // applied (boot default, then merged with every live PlannerConfigPatch
+  // since). Used by `RobotLoop::handleConfig` callers/tests that need to
+  // observe a live-patched value directly (Executor/HeadingSource keep no
+  // single queryable copy of their own -- see `applyPlannerPatch()`'s doc
+  // comment).
+  const msg::PlannerConfig& plannerConfig() const { return plannerConfig_; }
+
   uint8_t queueDepth() const { return executor_.queueDepth(); }
   uint32_t activeId() const { return executor_.activeId(); }
   Motion::State state() const { return executor_.state(); }
@@ -143,6 +209,10 @@ class Pilot {
 
   float headingKp_ = 0.0f;  // [1/s] msg::PlannerConfig.heading_kp
   float headingKd_ = 0.0f;  // dimensionless msg::PlannerConfig.heading_kd
+
+  // 109-008: the live PlannerConfig baseline applyPlannerPatch() merges
+  // future wire patches onto -- see configureHeading()'s own doc comment.
+  msg::PlannerConfig plannerConfig_ = {};
 
   // Finite-difference measured-heading-rate bookkeeping for the PD term's
   // own omegaMeas -- see tick()'s own doc comment for why this is separate

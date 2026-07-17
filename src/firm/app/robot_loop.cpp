@@ -179,10 +179,10 @@ void RobotLoop::handleTwist(const msg::CommandEnvelope& env) {
   tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
 }
 
-// ConfigDelta runtime application: MotorConfigPatch and OtosConfigPatch
-// (109-004) are live-applied below; every other patch kind (DRIVETRAIN/
-// PLANNER/WATCHDOG/NONE) stays ERR_UNIMPLEMENTED, deliberately out of scope
-// -- see DESIGN.md §3.
+// ConfigDelta runtime application: MotorConfigPatch, OtosConfigPatch
+// (109-004), and PlannerConfigPatch (109-008) are live-applied below; every
+// other patch kind (DRIVETRAIN/WATCHDOG/NONE) stays ERR_UNIMPLEMENTED,
+// deliberately out of scope -- see DESIGN.md §3.
 void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
   // OTOS (109-004, issue otos-calibration-config-message.md): restores a
   // runtime path to Otos::setLinearScalar()/setAngularScalar()/setOffset()/
@@ -219,6 +219,21 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
     // independent of whatever else this same patch carries.
     if (patch.init) otos_.init();
 
+    tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
+    return;
+  }
+
+  // PLANNER (109-008, un-stubs the scope boundary DESIGN.md previously
+  // documented -- "PlannerConfigPatch's heading gains target a segment
+  // executor that no longer exists in this tree" was true when that note
+  // was written, before Motion::Executor/App::Pilot (109-003/005) restored
+  // one): live-tunable heading_kp/heading_kd (098-era precedent) plus the
+  // 17 tracking/replan gains ticket 006 added, all merged onto Pilot's own
+  // live PlannerConfig baseline (Pilot::applyPlannerPatch()'s own doc
+  // comment covers the merge-then-write shape and which msg::PlannerConfig
+  // fields this patch kind cannot reach).
+  if (env.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::PLANNER) {
+    pilot_.applyPlannerPatch(env.cmd.config.patch.planner);
     tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
     return;
   }

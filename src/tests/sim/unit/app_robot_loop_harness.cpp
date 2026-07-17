@@ -434,21 +434,23 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
 }
 
 // ===========================================================================
-// 106-002/SUC-025: RobotLoop::cycle()'s CONFIG dispatch live-applies a
-// MotorConfigPatch (both bound motors, acks OK) while DrivetrainConfigPatch/
-// PlannerConfigPatch continue acking ERR_UNIMPLEMENTED, unchanged.
+// 106-002/SUC-025 (updated 109-008): RobotLoop::cycle()'s CONFIG dispatch
+// live-applies a MotorConfigPatch (both bound motors, acks OK) and a
+// PlannerConfigPatch (109-008 un-stub -- acks OK, merges onto Pilot's live
+// PlannerConfig baseline) while DrivetrainConfigPatch continues acking
+// ERR_UNIMPLEMENTED, unchanged.
 //
 // A "quiet" fixture (robot never twisted, stays at encoder position 0 the
 // whole run) so the ONLY thing that varies cycle to cycle is the ack ring --
-// the "applies" half is proven directly by reading motorL/motorR's own
+// the motor "applies" half is proven directly by reading motorL/motorR's own
 // gains() (owned by this test, passed into RobotLoop by reference, so no
-// wire decoding is needed for that half at all); the "still
-// ERR_UNIMPLEMENTED" half is proven by a raw-byte substring search for the
-// AckEntry{corr_id, ERR, ERR_UNIMPLEMENTED} fingerprint in a captured
-// outbound frame (no decode(ReplyEnvelope) codec exists -- see
-// rawBytesFromArmoredLine()'s own comment) -- deliberately NOT a full-frame
-// byte-equality check (app_telemetry_harness.cpp's own technique), since
-// this fixture makes no claim about the other frame fields' exact values.
+// wire decoding is needed for that half at all); the planner/drivetrain
+// halves are proven by a raw-byte substring search for the AckEntry{corr_id,
+// status, err_code} fingerprint in a captured outbound frame (no
+// decode(ReplyEnvelope) codec exists -- see rawBytesFromArmoredLine()'s own
+// comment) -- deliberately NOT a full-frame byte-equality check
+// (app_telemetry_harness.cpp's own technique), since this fixture makes no
+// claim about the other frame fields' exact values.
 //
 // Cycle bookkeeping (ring is FIFO depth 3, and an ack pushed during cycle
 // N's dispatch is not visible in ANY emitted frame until cycle N+1's own
@@ -466,9 +468,9 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
 //             depth 3, exactly 3 pushed).
 // ===========================================================================
 
-void scenarioConfigMotorPatchAppliesWhileDrivetrainPlannerStayUnimplemented() {
-  beginScenario("RobotLoop CONFIG: MotorConfigPatch live-applies + acks OK; "
-                "Drivetrain/PlannerConfigPatch stay ERR_UNIMPLEMENTED");
+void scenarioConfigMotorPlannerPatchApplyWhileDrivetrainStaysUnimplemented() {
+  beginScenario("RobotLoop CONFIG: Motor/PlannerConfigPatch live-apply + ack OK; "
+                "DrivetrainConfigPatch stays ERR_UNIMPLEMENTED");
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
@@ -613,17 +615,35 @@ void scenarioConfigMotorPatchAppliesWhileDrivetrainPlannerStayUnimplemented() {
 
   checkTrue(containsSubBytes(lastFrame, ackErrUnimplementedFingerprint(kDrivetrainCorrId)),
             "CONFIG{drivetrain} still acks ERR_UNIMPLEMENTED (fingerprint found in the ring)");
-  checkTrue(containsSubBytes(lastFrame, ackErrUnimplementedFingerprint(kPlannerCorrId)),
-            "CONFIG{planner} still acks ERR_UNIMPLEMENTED (fingerprint found in the ring)");
+  // 109-008 un-stub: CONFIG{planner} no longer acks ERR_UNIMPLEMENTED.
+  // (No positive "OK fingerprint" search here, matching CONFIG{motor}'s own
+  // existing absence-only check below: AckEntry.status/err_code are plain
+  // kScalar proto3 fields with no presence tracking, so an
+  // ACK_STATUS_OK/ERR_NONE (both 0) ack encodes as JUST corr_id -- there is
+  // no distinct "OK" byte run to search FOR, only the ERR_UNIMPLEMENTED
+  // byte run to search for the ABSENCE of.)
+  checkTrue(!containsSubBytes(lastFrame, ackErrUnimplementedFingerprint(kPlannerCorrId)),
+            "CONFIG{planner} does NOT ack ERR_UNIMPLEMENTED any more");
   checkTrue(!containsSubBytes(lastFrame, ackErrUnimplementedFingerprint(kMotorCorrId)),
             "CONFIG{motor} does NOT ack ERR_UNIMPLEMENTED (no ERR/UNIMPLEMENTED fingerprint for its corr_id)");
+
+  // --- planner "applies": the merged Pilot::plannerConfig_ baseline reflects
+  // min_speed=20 (this patch's own field) while a field the patch never
+  // touched (heading_kp) stays at this fixture's own baseline (this harness
+  // never calls configureHeading() before dispatch, so that baseline is
+  // Pilot's zero-init default) -- proves the merge-then-write path, the same
+  // shape the motor gains merge above proves. ---
+  checkFloatEq(pilot.plannerConfig().min_speed, 20.0f,
+               "Pilot's live PlannerConfig baseline reflects the applied min_speed patch");
+  checkFloatEq(pilot.plannerConfig().heading_kp, 0.0f,
+               "heading_kp (absent from this patch) stays at its prior (zero-init) value");
 }
 
 }  // namespace
 
 int main() {
   scenarioBootThenAFewCyclesRunToCompletion();
-  scenarioConfigMotorPatchAppliesWhileDrivetrainPlannerStayUnimplemented();
+  scenarioConfigMotorPlannerPatchApplyWhileDrivetrainStaysUnimplemented();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::RobotLoop scenarios passed\n");

@@ -428,6 +428,44 @@ class SimLoop:
             lambda: self._lib.sim_inject_stop(self._handle, ctypes.c_uint32(corr_id)))
         return corr_id
 
+    def move(self, *, distance: float = 0.0, delta_heading: float = 0.0,
+             v_max: float = 0.0, omega: float = 0.0, time: float = 0.0,
+             replace: bool = False, id: "int | None" = None) -> int:
+        """MOVE-queue command (109-008 host adoption) -- builds and injects
+        ``CommandEnvelope{move: Move{...}}`` via ``inject_command()``'s
+        generic escape hatch (the SAME mechanism ``_SimConfigConn.
+        send_envelope_fast()`` uses for the config path, Architecture
+        Revision 1's "one mechanism, not a Sim-specific fork") rather than a
+        dedicated ``sim_inject_move`` ctypes symbol -- unlike
+        ``twist()``/``stop()`` (hot teleop-path calls with their own fast
+        ctypes entry points), Move is sent at most once per tour LEG, so the
+        extra Python-side envelope-build cost here is immaterial.
+
+        ``id`` doubles as both the envelope's own ``corr_id`` (the enqueue
+        ack's own correlation key) and ``Move.id`` (the LATER completion
+        event's key, per ``envelope.proto``'s own ``Move.id`` doc comment)
+        -- mirrors ``NezhaProtocol.move()``'s own convention exactly, so
+        ``planner.tour.run_tour()`` can treat a ``NezhaProtocol`` and a
+        ``SimLoop`` identically. Defaults to this instance's own
+        ``_next_corr_id()`` counter when omitted (matching ``twist()``/
+        ``stop()``'s own auto-assignment).
+
+        Returns the id used. Fire-and-poll, matching ``twist()``/``stop()``
+        -- this call never blocks on a reply; see ``planner.tour``'s own
+        completion-event polling for how a caller learns the outcome.
+        """
+        self._require_connected()
+        move_id = id if id is not None else self._next_corr_id()
+        pb2_mod = _get_envelope_pb2()
+        envelope = pb2_mod.CommandEnvelope(
+            corr_id=move_id,
+            move=pb2_mod.Move(distance=distance, delta_heading=delta_heading,
+                              v_max=v_max, omega=omega, time=time,
+                              replace=replace, id=move_id))
+        armored = base64.b64encode(envelope.SerializeToString()).decode("ascii")
+        self.inject_command(f"*B{armored}")
+        return move_id
+
     def read_pending_binary_tlm_frames(self) -> "list[TLMFrame]":
         """Non-blocking drain of every currently-queued ``TLMFrame`` --
         the sim-side counterpart of ``NezhaProtocol.

@@ -162,24 +162,36 @@ source flips either direction — see `Pilot::headingSourceIsOtos()`/
   them — deliberately deferred (see §6). Do not "helpfully" wire a
   line/color read into the trailing block without also extending
   `Telemetry`'s wire schema; there is nowhere for the data to go yet.
-- **Config patches cover `MotorConfigPatch` and `OtosConfigPatch` (109-004).**
-  `RobotLoop::handleConfig` replies `ERR_UNIMPLEMENTED` for every other
-  `ConfigDelta` patch kind (`DRIVETRAIN`/`PLANNER`/`WATCHDOG`/`NONE`). This
-  is a scope boundary, not an oversight — `DrivetrainConfigPatch` has no
-  on-robot fusion consumer, and `PlannerConfigPatch`'s heading gains target
-  a segment executor that no longer exists in this tree. `OtosConfigPatch`
-  is the one addition since this note was first written (issue
-  `otos-calibration-config-message.md`): it restores a RUNTIME path to
-  `Devices::Otos::setLinearScalar()`/`setAngularScalar()`/`setOffset()`/
-  `init()` — previously only ever called once at boot from baked
-  `boot_config` — applied the same way `MotorConfigPatch` already is,
+- **Config patches cover `MotorConfigPatch`, `OtosConfigPatch` (109-004), and
+  `PlannerConfigPatch` (109-008).** `RobotLoop::handleConfig` still replies
+  `ERR_UNIMPLEMENTED` for `DRIVETRAIN`/`WATCHDOG`/`NONE`. `DrivetrainConfigPatch`
+  remains out of scope — it has no on-robot fusion consumer (unchanged from
+  when this note was first written). `PlannerConfigPatch` is NO LONGER a
+  scope boundary: the note's original reasoning ("targets a segment executor
+  that no longer exists in this tree") described the gap between the
+  pre-rebuild segment executor's deletion and Motion::Executor/App::Pilot's
+  restoration (109-003/005) — now that `Motion::Executor` and `App::Pilot`
+  own the heading PD cascade and per-command tracking/replan gains,
+  `handleConfig`'s `PLANNER` arm forwards the decoded patch to
+  `Pilot::applyPlannerPatch()` (merge-then-write onto Pilot's own live
+  `msg::PlannerConfig` baseline, then re-applied to `Executor::configure()`/
+  `HeadingSource::configure()`/`Pilot::configureHeading()` so it takes
+  effect immediately) — see `pilot.h`'s own doc comment for the merge
+  contract and which `msg::PlannerConfig` fields `PlannerConfigPatch` does
+  NOT cover (the schema curates 20 of the struct's fields; a_max/v_body_max/
+  yaw_rate_max/etc. are boot-config-only, unreachable from this arm).
+  `OtosConfigPatch` (issue `otos-calibration-config-message.md`) restores a
+  RUNTIME path to `Devices::Otos::setLinearScalar()`/`setAngularScalar()`/
+  `setOffset()`/`init()` — previously only ever called once at boot from
+  baked `boot_config` — applied the same way `MotorConfigPatch` already is,
   immediately and synchronously inside `handleConfig()` (still "the loop's
   own cycle" per the single-loop bus ownership invariant above: this is a
-  rare, command-triggered I2C transaction sandwiched into the existing
-  schedule, not a new per-cycle bus consumer, and `otos.h`'s own doc
-  comment already documents these four primitives as issuing their write
-  immediately rather than staging it, "matching the OI/OR/OL/OA
-  wire-command shape").
+  rare, command-triggered I2C/config transaction sandwiched into the
+  existing schedule, not a new per-cycle bus consumer, and `otos.h`'s own
+  doc comment already documents these four primitives as issuing their
+  write immediately rather than staging it, "matching the OI/OR/OL/OA
+  wire-command shape"; `Executor::configure()`/`HeadingSource::configure()`
+  touch no bus at all — pure in-memory limit setters).
 
 ## 4. Design
 
@@ -353,9 +365,11 @@ called with real elapsed time between calls).
   presence at boot; no cycle slot samples either sensor in steady state,
   and `Telemetry`'s wire schema carries no line/color fields yet. A full
   perception round-robin (otos|line|color) is deliberately deferred.
-- **Only `MotorConfigPatch` and `OtosConfigPatch` are live-appliable
-  (109-004).** Drivetrain and planner config patches reply
-  `ERR_UNIMPLEMENTED`; see §3.
+- **`MotorConfigPatch`, `OtosConfigPatch` (109-004), and `PlannerConfigPatch`
+  (109-008) are live-appliable.** Only `DrivetrainConfigPatch`/`WatchdogConfigPatch`
+  still reply `ERR_UNIMPLEMENTED` (no on-robot fusion consumer for the
+  former; the latter routes to `bb.streamWatchdogWindowIn` directly, not
+  `handleConfig`, per config.proto's own `CONFIG_WATCHDOG` comment); see §3.
 - **In-session pose reset has no wire verb yet.** `Odometry::reset()`
   exists and is exercised by the host simulator's teleport-to-origin, but
   no binary command arms it from the wire today.

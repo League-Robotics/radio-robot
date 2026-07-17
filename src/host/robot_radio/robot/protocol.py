@@ -103,6 +103,14 @@ class AckEntry:
     corr_id: int
     ok: bool
     err_code: int  # raw ErrCode (envelope.proto) value when ok is False, else 0 (ERR_NONE)
+    status: int = telemetry_pb2.ACK_STATUS_OK  # raw AckStatus (telemetry.proto) value (109-008)
+    # 109-008: `ok` alone collapses every non-OK status (ERR/DONE/TRIVIAL/SUPERSEDED/FLUSHED/
+    # TIMEOUT/SOLVE_FAIL) to False -- fine for TWIST/STOP/CONFIG (which only ever produce
+    # OK/ERR), but a `Move` command's own completion event (ACK_STATUS_DONE and friends,
+    # Motion::Executor's per-command taxonomy) needs the RAW status to tell "done successfully"
+    # apart from "errored" apart from "superseded by a later command" -- see `planner.tour`'s
+    # own move-completion polling. Defaults to ACK_STATUS_OK for any pre-109-008 caller that
+    # constructs an AckEntry positionally/by the first 3 fields only (source compatible).
 
     @classmethod
     def from_pb2(cls, entry: "telemetry_pb2.AckEntry") -> "AckEntry":
@@ -111,6 +119,7 @@ class AckEntry:
             corr_id=int(entry.corr_id),
             ok=(entry.status == telemetry_pb2.ACK_STATUS_OK),
             err_code=int(entry.err_code),
+            status=int(entry.status),
         )
 
 
@@ -513,6 +522,7 @@ class NezhaProtocol:
 
     def __init__(self, conn: SerialConnection) -> None:
         self._conn = conn
+        self._next_move_id = 0  # 109-008: move()'s own auto-assigned id counter
 
     # ------------------------------------------------------------------
     # Connection delegation
@@ -927,6 +937,100 @@ class NezhaProtocol:
             otos=config_pb2.OtosConfigPatch(**fields))
         envelope = envelope_pb2.CommandEnvelope(config=delta)
         return self._conn.send_envelope_fast(envelope)
+
+    # ------------------------------------------------------------------
+    # Move (109-008 host adoption of ticket 003's MOVE wire message)
+    # ------------------------------------------------------------------
+
+    def move(self, *, distance: float = 0.0, delta_heading: float = 0.0,  # [mm] [rad]
+             v_max: float = 0.0, omega: float = 0.0, time: float = 0.0,   # [mm/s] [rad/s] [ms]
+             replace: bool = False, id: int | None = None) -> int:
+        """Build and send a ``Move`` ``CommandEnvelope`` (``CommandEnvelope{
+        move: Move{...}}``, ``envelope.proto`` field 20) — the host's own
+        `MOVE`-queue sender (sprint 109's host-adoption ticket): the
+        arc-command primitive ``planner.tour.run_tour()`` sends per tour
+        leg instead of streaming plain trapezoid twists (the retired
+        host-planner streaming path this ticket replaces for TOURS
+        specifically — teleop's own `TIMED` `Twist` streaming, via
+        ``planner.executor.StreamingExecutor``, is UNCHANGED).
+
+        Two modes, discriminated by ``time`` (``Move``'s own doc comment,
+        ``envelope.proto``): ``time == 0`` is DISTANCE mode (``distance``/
+        ``delta_heading`` describe the coupled arc; ``v_max`` is the linear
+        ceiling); ``time > 0`` is TIMED mode (``v_max``/``omega`` are SIGNED
+        targets held for the total duration ``time``, teleop's own shape —
+        tours use DISTANCE mode exclusively).
+
+        ``id`` is BOTH the envelope's own ``corr_id`` (the immediate
+        enqueue ack's correlation key — accepted/replaced/trivial/full,
+        ``RobotLoop::handleMove()``'s own doc comment) AND ``Move.id``
+        (the SAME command's LATER completion event's key — DONE/superseded/
+        flushed/timeout/solve_fail, ``Motion::Executor``'s own per-command
+        taxonomy) — using the SAME value for both means a single id
+        uniquely names one enqueued command across its whole lifecycle;
+        see ``wait_for_move_terminal()`` below for how a caller polls
+        either outcome. Defaults to an auto-incrementing counter private to
+        this ``NezhaProtocol`` instance when omitted.
+
+        Fire-and-poll, the SAME shape as ``twist()``/``stop()``/``config()``
+        (103-009's "telemetry-only return path"): this call writes the
+        bytes and returns immediately.
+
+        Returns the id used (the caller's own, or the auto-assigned one).
+        Raises ``ConnectionError`` if not connected (``send_envelope_fast()``'s
+        own not-open contract).
+        """
+        if id is None:
+            self._next_move_id += 1
+            id = self._next_move_id
+        envelope = envelope_pb2.CommandEnvelope(
+            corr_id=id,
+            move=envelope_pb2.Move(distance=distance, delta_heading=delta_heading,
+                                   v_max=v_max, omega=omega, time=time,
+                                   replace=replace, id=id))
+        self._conn.send_envelope_fast(envelope)
+        return id
+
+    def wait_for_move_terminal(self, id: int, timeout: int = 5000) -> "AckEntry | None":  # [ms]
+        """Poll incoming ``Telemetry`` pushes for ``id``'s TERMINAL ack-ring
+        entry — the first one whose ``status`` is anything other than
+        ``ACK_STATUS_OK`` — up to ``timeout`` ms. Returns ``None`` if the
+        deadline passes with no terminal entry (the command never reached a
+        final state in time — a caller should treat this as a fault, the
+        same way a bench timeout would).
+
+        Why "anything but OK", not a specific status list: ``RobotLoop::
+        handleMove()``'s enqueue ack is one of ``{OK, TRIVIAL, ERR}`` (ERR
+        meaning ``ERR_FULL`` — queue full, command never entered it) and the
+        LATER completion event (``drainPilotEvents()``) is one of ``{DONE,
+        TRIVIAL, SUPERSEDED, FLUSHED, TIMEOUT, SOLVE_FAIL}`` — ``TRIVIAL`` is
+        the ONE status shared by both sets, and by construction (``Move``'s
+        own doc comment: "a degenerate Move... is acked TRIVIAL, never
+        queued") it is ALWAYS terminal wherever it appears, so a single
+        "skip OK, return the first non-OK entry" rule correctly resolves
+        every case: an accepted command's OK enqueue ack is skipped (it is
+        not yet finished), and whichever status arrives after it — whether
+        immediately (TRIVIAL/ERR, no separate completion event ever
+        follows) or later (DONE/SUPERSEDED/FLUSHED/TIMEOUT/SOLVE_FAIL) — is
+        this command's own one-and-only terminal outcome.
+
+        A caller (``planner.tour.run_tour()``) checks the returned
+        ``AckEntry.status`` against ``telemetry_pb2.ACK_STATUS_DONE`` for
+        "this leg completed normally"; every other terminal status is a
+        fault the tour stops on, matching ``run_tour()``'s existing
+        "stop immediately on anything but success" contract.
+        """
+        deadline = time.monotonic() + (timeout / 1000.0)
+        while True:
+            for frame in self.read_pending_binary_tlm_frames():
+                if not frame.acks:
+                    continue
+                for ack in frame.acks:
+                    if ack.corr_id == id and ack.status != telemetry_pb2.ACK_STATUS_OK:
+                        return ack
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.01)
 
     def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "AckEntry | None":  # [ms]
         """Poll incoming ``Telemetry`` pushes for an ack-ring entry matching

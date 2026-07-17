@@ -6,29 +6,65 @@ during that document's own self-review to keep the dependency direction
 in `testgui/commands.py` as raw firmware wire strings (`D`/`RT`) built for the
 now-deleted `Motion::SegmentExecutor` (sprint 102/103). The GEOMETRY those
 wire strings encode is still a real, tuned, reusable asset -- this module
-OWNS that data, parses it into typed legs, and chains each leg through a
-`planner.executor.StreamingExecutor` (ticket 001's fault-baseline-exclusion
-and heading-gain fixes already applied there), so the geometry is drivable
-again without resurrecting the deleted segment/replace envelope arms.
+OWNS that data and parses it into typed legs.
+
+109-008 (host adoption of sprint 109's `Move` wire message): `run_tour()` no
+longer builds a `profile.py` setpoint sequence and streams it through a
+`planner.executor.StreamingExecutor` -- DISTANCE/pivot trajectory planning
+(jerk-limited profile shape, heading PD closure) now lives ENTIRELY in
+firmware (`Motion::Executor`/`App::Pilot`, sprint 109 tickets 003-006).
+`run_tour()` instead sends ONE `Move` command per leg (`transport.move()`)
+and lets the firmware's own fixed-depth command queue and boundary-velocity
+carry (ticket 006) sequence them -- enqueueing the NEXT leg while the CURRENT
+one is still active (one-command lookahead) so two compatible same-`v_max`
+legs carry velocity through their shared boundary instead of decelerating to
+a stop, per sprint 109's SUC-003. Per-leg completion is driven by the
+command's own completion EVENT (`AckStatus` riding the ack ring --
+`wait_for_ack`-style polling, see `_poll_move()` below), not a host-timed
+settle delay or a host-computed profile exhaustion check -- this is also
+sprint 109 ticket 008's own resolution of `tour1-freeze-investigation-
+2026-07-15.md`: the old streaming path's `tick()` polled raw `fault_bits`
+every cadence tick and stopped the WHOLE tour the instant any bit was set
+(including a transient, firmware-self-recovered blip); the new path has no
+such polling at all -- the ONLY thing that ends a leg is that leg's OWN
+`Move` reaching a terminal `AckStatus` (`DONE`/`TRIVIAL`/`SUPERSEDED`/
+`FLUSHED`/`TIMEOUT`/`SOLVE_FAIL`), so a transient fault bit that firmware's
+own `MotorArmor` recovers from without aborting the active command no longer
+has any way to freeze/stop a tour that would otherwise complete.
+
+`planner.executor.StreamingExecutor`/`planner.profile` themselves are
+UNCHANGED and UNTOUCHED by this ticket -- only TOURS (this module) moved to
+the MOVE-queue path. No live gamepad/teleop UI is wired into this checkout
+today (nothing in `testgui/` currently constructs a `StreamingExecutor`
+outside this module and `tests/bench/`'s own bench scripts); this ticket's
+"demote the host planner to teleop input shaping only" description refers to
+ticket 003's `TIMED` `Move` wire primitive existing for a FUTURE gamepad/
+teleop consumer to use, not a live one being preserved here -- there is no
+DISTANCE/pivot planning logic left in `host/robot_radio/planner/` for THIS
+module to keep or remove either way (this module never built its own
+profile/queue logic beyond calling `profile.py`/`executor.py`, both of which
+stay exactly as they were).
 
 This is the single, shared per-leg execution loop both the TestGUI
 (`testgui/__main__.py`'s `_TourRunner`, ticket 003) and the bench script
 (`tests/bench/tour_bench_run.py`, ticket 005) call -- no duplicated per-leg
 execution/telemetry-capture logic between them.
 
-Boundary (architecture-update.md's own words): inside -- the geometry data
-itself, parsing it into typed leg specs, the per-leg run loop (build a
-`profile.py` sequence, run it through the caller-supplied executor, capture
-the measured pose before leg 1 and after the final leg), and closure-delta
-computation. Outside -- profile math (calls `profile.py`), pacing/safety/
-preemption (calls `executor.py`, never reimplements a binding requirement),
-heading correction (calls `heading.py` indirectly via the executor it is
-handed), the wire/transport itself (accepts a `TwistTransport`-compatible
-object from the caller, same as `executor.py` -- never imports
-`NezhaProtocol`/`SerialConnection`/`SimConnection` directly), and any GUI or
-trace-file-format concern (the optional `row_callback`/`on_leg` hooks are the
-only surface offered to a caller that wants a trace or narration -- this
-module itself writes nothing to disk and imports no Qt).
+Boundary (architecture-update.md's own words, updated 109-008): inside -- the
+geometry data itself, parsing it into typed leg specs, the per-leg run loop
+(build a `Move` per leg, enqueue one leg ahead, poll the ack ring for each
+leg's own completion event, capture the measured pose before leg 1 and after
+the final leg), and closure-delta computation. Outside -- the `Move`
+encoding/wire round trip itself (calls `transport.move()`/`transport.
+read_pending_binary_tlm_frames()`, never builds a `CommandEnvelope` itself),
+heading readback (calls `heading.py` indirectly, read-only -- there is no
+heading PD to run host-side any more, firmware owns that closed loop), the
+wire/transport itself (accepts a `MoveTransport`-compatible object from the
+caller -- never imports `NezhaProtocol`/`SerialConnection`/`SimConnection`
+directly), and any GUI or trace-file-format concern (the optional
+`row_callback`/`on_leg` hooks are the only surface offered to a caller that
+wants a trace or narration -- this module itself writes nothing to disk and
+imports no Qt).
 
 Usage
 -----
@@ -49,19 +85,45 @@ import logging
 import math
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Literal, Sequence
+from typing import TYPE_CHECKING, Callable, Literal, Protocol, Sequence
 
 from robot_radio.controllers.pid import normalize_angle
-from robot_radio.planner.executor import RunOutcome, RunState, StreamingExecutor
-from robot_radio.planner.profile import ProfileLimits, profile_for_distance, profile_for_turn
+from robot_radio.planner.executor import RunOutcome, RunState, TickResult
+from robot_radio.robot.pb2 import telemetry_pb2
 
 if TYPE_CHECKING:
-    from robot_radio.planner.executor import TickResult, TwistTransport
     from robot_radio.planner.heading import HeadingCorrector
     from robot_radio.planner.model import PlannerParams
-    from robot_radio.robot.protocol import TLMFrame
+    from robot_radio.robot.protocol import AckEntry, TLMFrame
 
 logger = logging.getLogger(__name__)
+
+
+class MoveTransport(Protocol):
+    """The exact slice of `NezhaProtocol`'s public surface `run_tour()`
+    depends on (109-008) -- a `Protocol` (structural, duck-typed), mirroring
+    `planner.executor.TwistTransport`'s own convention, so a unit test can
+    hand this module a lightweight fake with no real serial port / protobuf
+    codec behind it (see `tests/unit/test_planner_tour.py`'s `FakeTransport`).
+    Both a real `NezhaProtocol` and a `robot_radio.io.sim_loop.SimLoop`
+    already satisfy this Protocol as-is -- no adapter needed in production.
+    """
+
+    def move(self, *, distance: float = 0.0, delta_heading: float = 0.0,
+             v_max: float = 0.0, omega: float = 0.0, time: float = 0.0,
+             replace: bool = False, id: "int | None" = None) -> int: ...
+
+    def stop(self) -> int: ...
+
+    def read_pending_binary_tlm_frames(self) -> "list[TLMFrame]": ...
+
+
+# AckStatus values (telemetry.proto) that mean "this Move's own command
+# lifecycle is OVER" -- everything except ACK_STATUS_OK (the immediate
+# enqueue ack for an ACCEPTED/REPLACED command, which is NOT terminal: the
+# command is now queued/active, not yet finished). See `_poll_move()`'s own
+# doc comment for why "anything but OK" is the correct terminal test.
+_STATUS_DONE = frozenset({telemetry_pb2.ACK_STATUS_DONE, telemetry_pb2.ACK_STATUS_TRIVIAL})
 
 # TLMFrame.pose's heading is integer centidegrees (matches `heading.py`'s own
 # `_HEADING_SCALE` convention -- duplicated here, not imported, since that
@@ -122,31 +184,45 @@ TOUR_2: list[str] = [
 
 
 # ---------------------------------------------------------------------------
-# Bench-safe defaults for legs whose wire string carries no rate/accel field
-# -- matches tests/bench/profiled_motion_verify.py's own DEFAULT_* constants
-# (106-006), well under PlannerParams' own hard ceilings (v_max=200mm/s,
-# omega_max=2.0rad/s -- executor.py's own defense-in-depth ceiling clamp
-# caps anything unsafe regardless).
+# Defaults for MOVE-queue tour execution (109-008). `a_max`/`omega_max`/
+# `alpha_max`/`cadence` from the pre-109-008 profile-streaming path are GONE
+# -- DISTANCE/pivot accel/jerk/rate ceilings are entirely firmware's own
+# `PlannerConfig` now (`a_max`/`a_decel`/`j_max`/`yaw_rate_max`/
+# `yaw_acc_max`/`yaw_jerk_max`), not a per-command wire value or a host-
+# computed profile.py shape -- see `Motion::Executor::configure()`/
+# `pilot.h`'s own doc comments. `v_max` survives: it is still a real `Move`
+# wire field (the per-leg linear ceiling for a DISTANCE-mode arc/straight
+# leg -- ignored by firmware for a pure pivot, see `Motion::Executor::
+# computeExitVelocity()`'s own dominant-channel selection).
 # ---------------------------------------------------------------------------
 
-DEFAULT_V_MAX = 150.0  # [mm/s] straight-leg cruise velocity fallback (no per-leg speed on the D step)
-DEFAULT_A_MAX = 400.0  # [mm/s^2] straight-leg accel/decel
-DEFAULT_OMEGA_MAX = 1.0  # [rad/s] turn-leg cruise rate -- RT carries no rate field, always this default,
-# NOT PlannerParams' own more aggressive omega_max=2.0 hard ceiling.
-DEFAULT_ALPHA_MAX = 3.0  # [rad/s^2] turn-leg accel/decel, same rationale as DEFAULT_OMEGA_MAX.
+DEFAULT_V_MAX = 150.0  # [mm/s] straight-leg linear ceiling fallback (no per-leg speed on the D step)
 
-DEFAULT_INTER_LEG_SETTLE = 1.0  # [s] gap between two legs' own run loops, giving the plant real
-# time to decelerate before the NEXT leg's begin() re-baselines telemetry. Retuned from 0.3 ->
-# 1.0 by ticket 107-005's own bench session (Completion Notes, "Bench findings" #1): the 0.3s
-# value reproduced a kFaultWedgeLatch trip at the straight->turn boundary on the FIRST turn leg
-# (traces 20260715T201348Z/20260715T201419Z) -- 0/N repeats after widening to 1.0s. This is the
-# GUI-driven default too (testgui/__main__.py's `_TourRunner` calls `run_tour()` with no
-# `inter_leg_settle` override), so the production default must match the bench-proven value, not
-# just the bench script's own CLI override.
-DEFAULT_FINAL_SETTLE = 0.6  # [s] post-terminal-stop settle window before capturing the tour's own
-# closure end pose -- matches profiled_motion_verify.py's own settle-window convention (106-006):
-# the terminal tick() sends stop() and returns immediately, but the PLANT needs real time to
-# actually decelerate before its reported pose reflects where it actually stopped.
+DEFAULT_INTER_LEG_SETTLE = 1.0  # [s] UNUSED this ticket -- retained only for run_tour()'s own
+# call-signature back-compat with existing callers (tests/bench/tour_bench_run.py passes it as a
+# kwarg). Pre-109-008 this was a host-timed gap between two legs' own StreamingExecutor runs
+# (retuned 0.3 -> 1.0 by ticket 107-005's bench session after a kFaultWedgeLatch trip at the
+# straight->turn boundary -- see tour1-freeze-investigation-2026-07-15.md). The MOVE-queue path
+# has no equivalent host-timed gap between QUEUED legs at all: firmware's own boundary-velocity
+# carry (ticket 006) sequences the transition, and a transient fault bit no longer stops the tour
+# on its own (see this module's own file header) -- there is nothing left for a host-side sleep to
+# protect against between two enqueued legs.
+DEFAULT_FINAL_SETTLE = 0.6  # [s] post-terminal-DONE settle window before capturing the tour's own
+# closure end pose -- the final leg's own completion event fires the instant the ENCODER-relative
+# distance criterion is met, but the PLANT needs a little more real time to physically settle
+# (dwell) before its reported pose reflects where it actually stopped; matches the pre-109-008
+# path's own settle-window convention and value.
+DEFAULT_MOVE_TIMEOUT = 15.0  # [s] bound on how long run_tour() waits for one leg's own terminal
+# ack (DONE/TRIVIAL/SUPERSEDED/FLUSHED/TIMEOUT/SOLVE_FAIL/ERR) before giving up and reporting
+# RunOutcome.FAULT itself -- this wait is ALWAYS bounded, mirroring NezhaProtocol.wait_for_ack()'s
+# own "never infinite" contract; a real leg is expected to finish in well under this (TOUR_1's
+# longest leg is 850mm at a ~150mm/s ceiling, a few seconds).
+DEFAULT_POLL_INTERVAL = 0.05  # [s] sleep between two consecutive ack-ring polls while waiting for
+# a leg's own terminal status (mirrors the pre-109-008 path's own tick cadence order of magnitude).
+
+_BEGIN_DRAIN_RETRIES = 5  # mirrors executor.py's StreamingExecutor.begin() own bounded retry --
+_BEGIN_DRAIN_RETRY_INTERVAL = 0.05  # [s] same rationale: a single read_pending_binary_tlm_frames()
+# call can legitimately race an idle queue between two ~25Hz pushes and come back empty.
 
 
 # ---------------------------------------------------------------------------
@@ -215,33 +291,33 @@ def parse_tour(wire_steps: Sequence[str]) -> list[TourLeg]:
 
 @dataclass(frozen=True)
 class TourLegResult:
-    """What one leg's own run through the executor did."""
+    """What one leg's own run through the firmware `Move` queue did."""
 
     index: int
     leg: TourLeg
     outcome: RunOutcome
-    heading_before: float | None  # [rad] measured_heading() at this leg's own begin(), ABSOLUTE
+    heading_before: float | None  # [rad] measured_heading() at this leg's own enqueue, ABSOLUTE
     # since-boot (App::Odometry never resets across a boot session -- see run_tour()'s own docstring)
-    heading_after: float | None  # [rad] measured_heading() at this leg's own run end, same caveat
-    duration: float  # [s] wall/elapsed time this leg's own tick loop took (excludes inter-leg settle)
+    heading_after: float | None  # [rad] measured_heading() at this leg's own terminal ack, same caveat
+    duration: float  # [s] wall/elapsed time this leg's own wait-for-terminal loop took
     fault: bool  # True iff this leg's own outcome was RunOutcome.FAULT
-    tick_count: int  # number of tick() calls this leg's own run loop made
+    tick_count: int  # number of ack-ring polls this leg's own wait loop made
 
 
 @dataclass(frozen=True)
 class TourClosure:
     """Tour-wide pose closure: the measured pose immediately before leg 1's
-    `begin()` vs. the measured pose after the final leg's settle window.
-    Both poses are read from `TLMFrame.pose` specifically (AC3) -- the
-    encoder-derived dead-reckoned pose -- independent of whichever source
-    (`pose` or `otos`) the caller's `HeadingCorrector` is itself configured
-    to read for its own per-tick trim.
+    own `Move` is sent vs. the measured pose after the final leg's settle
+    window. Both poses are read from `TLMFrame.pose` specifically (AC3) --
+    the encoder-derived dead-reckoned pose -- independent of whichever
+    source (`pose` or `otos`) the caller's `HeadingCorrector` is itself
+    configured to read for its own heading_before/heading_after readback.
 
     `None` fields mean the tour never reached a state where that pose could
-    be captured (no telemetry ever arrived at leg 1's begin(), or the tour
-    stopped before its final leg completed -- see `run_tour()`'s own
-    docstring: closure is only computed for a tour that runs every leg to
-    `RunOutcome.COMPLETED`)."""
+    be captured (no telemetry ever arrived before leg 1's own `Move` was
+    sent, or the tour stopped before its final leg completed -- see
+    `run_tour()`'s own docstring: closure is only computed for a tour that
+    runs every leg to `RunOutcome.COMPLETED`)."""
 
     start_pose: tuple[float, float, float] | None  # (x, y, heading) [mm, mm, rad]
     end_pose: tuple[float, float, float] | None  # (x, y, heading) [mm, mm, rad]
@@ -266,9 +342,10 @@ class TourResult:
 # Per-tick trace hook -- ticket 005's bench script uses this to capture a
 # full commanded-vs-measured trace without tour.py itself knowing about
 # CSV/JSON file formats. Args: (tick_index [monotonically increasing across
-# the WHOLE tour, matching profiled_motion_verify.py's own CSV column
-# convention], leg_index, leg, this tick's TickResult, the latest drained
-# TLMFrame at this tick or None).
+# the WHOLE tour], leg_index, leg, this poll's own TickResult (109-008: no
+# per-tick v_x/omega any more -- see TickResult's own construction below --
+# `done`/`outcome` are still meaningful), the latest drained TLMFrame at
+# this poll or None).
 RowCallback = Callable[[int, int, "TourLeg", "TickResult", "TLMFrame | None"], None]
 
 # Per-leg narration hook -- ticket 003's TestGUI uses this instead of the
@@ -303,59 +380,159 @@ def _compute_closure(
         heading_delta=normalize_angle(end_pose[2] - start_pose[2]))
 
 
+def _move_kwargs_for_leg(leg: TourLeg, v_max: float) -> dict:
+    """Translate one parsed `TourLeg` into `MoveTransport.move()`'s own
+    kwargs -- a "distance" leg is a straight DISTANCE-mode arc (`delta_heading
+    =0`, honoring the leg's own wire-authored `speed` as `v_max` when present,
+    same fallback rule the pre-109-008 profile path used); a "turn" leg is a
+    pure pivot (`distance=0`) -- `v_max` is irrelevant for a pivot (`Motion::
+    Executor` plans the rotational channel off `PlannerConfig.yaw_rate_max`
+    for `distance==0`, never the wire `Move.v_max` -- see this module's own
+    file header), so it is passed as 0.0 rather than a made-up value."""
+    if leg.kind == "distance":
+        return dict(distance=leg.value, delta_heading=0.0,
+                    v_max=leg.speed if leg.speed else v_max)
+    return dict(distance=0.0, delta_heading=math.radians(leg.value), v_max=0.0)
+
+
+def _drain_and_poll(transport: "MoveTransport", move_id: int,
+                    latest_frame: list) -> "AckEntry | None":
+    """Non-blocking: drain every currently-pending `TLMFrame`, updating
+    `latest_frame[0]` to the last one drained (mirrors the pre-109-008
+    path's own `ex.latest_frame` bookkeeping), and return the FIRST
+    non-`ACK_STATUS_OK` ack-ring entry matching `move_id` found across the
+    drained batch, or `None` if none of them carry one yet.
+
+    "anything but OK" is the correct terminal test -- see `NezhaProtocol.
+    wait_for_move_terminal()`'s own doc comment for the full reasoning
+    (reproduced here since this module intentionally implements its own
+    small poll loop rather than depending on a `NezhaProtocol`-specific
+    method, so it works identically against a `SimLoop`/`FakeTransport`
+    too, per `MoveTransport`'s own doc comment)."""
+    terminal: "AckEntry | None" = None
+    for frame in transport.read_pending_binary_tlm_frames():
+        latest_frame[0] = frame
+        if terminal is not None or not frame.acks:
+            continue
+        for ack in frame.acks:
+            if ack.corr_id == move_id and ack.status != telemetry_pb2.ACK_STATUS_OK:
+                terminal = ack
+                break
+    return terminal
+
+
+def _wait_for_move_terminal(transport: "MoveTransport", move_id: int, latest_frame: list,
+                            *, timeout: float, poll_interval: float,
+                            clock_fn: Callable[[], float],
+                            sleep_fn: Callable[[float], None],
+                            should_stop: Callable[[], bool] | None,
+                            row_callback: RowCallback | None,
+                            global_tick_index_box: list, leg_index: int, leg: TourLeg,
+                            ) -> "tuple[AckEntry | None, int, bool]":
+    """Poll for `move_id`'s own terminal ack, up to `timeout` seconds,
+    sleeping `poll_interval` between polls. Also polls `should_stop()` once
+    per iteration (mirrors the pre-109-008 path's own "polled once per tick,
+    not just once per leg" contract) -- on a `True` result, stops polling
+    immediately and returns `(None, tick_count, True)` (the `True` flag
+    tells the caller to send `transport.stop()` and report `RunOutcome.
+    STOPPED`, matching the OLD path's `stop_now()` shape). `row_callback`, if
+    given, fires once per poll iteration.
+
+    Returns `(terminal_ack_or_None, tick_count, stop_requested)` --
+    `terminal_ack_or_None` is `None` on either a `should_stop()` interrupt or
+    a genuine timeout (the caller distinguishes the two via `stop_requested`).
+    """
+    deadline = clock_fn() + timeout
+    tick_count = 0
+    while True:
+        if should_stop is not None and should_stop():
+            return None, tick_count, True
+
+        terminal = _drain_and_poll(transport, move_id, latest_frame)
+        tick_count += 1
+        if row_callback is not None:
+            result = TickResult(v_x=0.0, omega=0.0, corr_id=move_id,
+                                done=(terminal is not None), outcome=None)
+            row_callback(global_tick_index_box[0], leg_index, leg, result, latest_frame[0])
+        global_tick_index_box[0] += 1
+
+        if terminal is not None:
+            return terminal, tick_count, False
+        if clock_fn() >= deadline:
+            return None, tick_count, False
+        sleep_fn(poll_interval)
+
+
+def _outcome_for_status(status: int) -> RunOutcome:
+    """Map one terminal `AckStatus` (telemetry.proto) onto a `RunOutcome` --
+    `DONE`/`TRIVIAL` (a degenerate Move, never queued, per `Move`'s own doc
+    comment -- inherently "already done") are the only successful terminal
+    statuses; everything else (`ERR`/`SUPERSEDED`/`FLUSHED`/`TIMEOUT`/
+    `SOLVE_FAIL`) is a fault -- a tour never expects its own legs to be
+    superseded/flushed by ANOTHER command (nothing else is driving the
+    queue during a tour), so those count as faults here too, matching the
+    "stop immediately on anything but success" contract `run_tour()` has
+    always had."""
+    return RunOutcome.COMPLETED if status in _STATUS_DONE else RunOutcome.FAULT
+
+
 # ---------------------------------------------------------------------------
-# run_tour() -- chains every leg through a StreamingExecutor
+# run_tour() -- 109-008: sends one Move per leg, one-leg lookahead so
+# firmware's own boundary-velocity carry (ticket 006) can sequence
+# compatible same-v_max legs without decelerating to a stop at the boundary.
 # ---------------------------------------------------------------------------
 
 
 def run_tour(
-    transport: "TwistTransport",
+    transport: "MoveTransport",
     params: "PlannerParams",
     heading: "HeadingCorrector",
     legs: Sequence[TourLeg],
     *,
     v_max: float = DEFAULT_V_MAX,
-    a_max: float = DEFAULT_A_MAX,
-    omega_max: float = DEFAULT_OMEGA_MAX,
-    alpha_max: float = DEFAULT_ALPHA_MAX,
-    cadence: float | None = None,
-    inter_leg_settle: float = DEFAULT_INTER_LEG_SETTLE,
+    a_max: float = 0.0,  # UNUSED (109-008) -- kept for call-signature back-compat, see file header
+    omega_max: float = 0.0,  # UNUSED (109-008), see file header
+    alpha_max: float = 0.0,  # UNUSED (109-008), see file header
+    cadence: float | None = None,  # UNUSED (109-008), see file header
+    inter_leg_settle: float = DEFAULT_INTER_LEG_SETTLE,  # UNUSED (109-008), see file header
     final_settle: float = DEFAULT_FINAL_SETTLE,
+    move_timeout: float = DEFAULT_MOVE_TIMEOUT,
+    poll_interval: float = DEFAULT_POLL_INTERVAL,
     row_callback: RowCallback | None = None,
     on_leg: OnLegCallback | None = None,
     should_stop: Callable[[], bool] | None = None,
     clock_fn: Callable[[], float] = time.monotonic,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> TourResult:
-    """Run every `TourLeg` in `legs`, in order, through one
-    `StreamingExecutor` built from `transport`/`params`/`heading`.
+    """Run every `TourLeg` in `legs`, in order, by sending one `Move` command
+    per leg to `transport` and waiting for each one's own terminal ack.
 
     Stops immediately -- no further legs attempted -- the instant any leg's
-    own outcome is anything other than `RunOutcome.COMPLETED` (a fault, a
-    bounded-overshoot trip, or an external `should_stop()` request); the
-    returned `TourResult.stopped_at`/`stopped_outcome` identify which leg and
-    why. `should_stop`, if given, is polled once per tick (not just once per
-    leg) so a caller (ticket 003's `_TourRunner.stop()`) can interrupt mid-leg,
-    not only at a leg boundary -- on a `True` result the current leg is
-    stopped via `StreamingExecutor.stop_now()` (an immediate stop, no
-    replan -- executor.py's own binding requirement #4) and reported with
-    `RunOutcome.STOPPED`.
+    own outcome is anything other than `RunOutcome.COMPLETED` (a fault or an
+    external `should_stop()` request); the returned `TourResult.stopped_at`/
+    `stopped_outcome` identify which leg and why. `should_stop`, if given, is
+    polled once per ack-ring poll (not just once per leg) so a caller
+    (ticket 003's `_TourRunner.stop()`) can interrupt mid-leg -- on a `True`
+    result `transport.stop()` is called (flushes the firmware queue and
+    stops immediately, same as the pre-109-008 path's `stop_now()`) and the
+    leg is reported `RunOutcome.STOPPED`.
 
-    Each leg's own profile is built via `profile_for_distance()`/
-    `profile_for_turn()`: a "distance" leg honors its own wire-authored
-    `TourLeg.speed` as `v_max` when present (falling back to this function's
-    own `v_max` argument otherwise) -- `executor.py`'s own defense-in-depth
-    ceiling clamp already caps anything unsafe, so faithfully preserving the
-    tour's authored speed intent costs nothing extra in safety; a "turn" leg
-    always uses `omega_max`/`alpha_max` (RT carries no rate field on the
-    wire) -- bench-safe defaults, NOT `PlannerParams`' own more aggressive
-    hard ceilings.
+    One-leg lookahead (SUC-003): leg N+1's own `Move` is sent immediately
+    after leg N's (while leg N is still active, not after it completes) --
+    the ONE piece of host-side sequencing this function still does -- so
+    firmware's own boundary-velocity table (ticket 006) can carry velocity
+    through a compatible same-`v_max` boundary instead of decelerating to a
+    stop. Everything past that is event-driven: this function does not
+    compute a profile, does not time a settle window between legs, and does
+    not poll raw fault bits -- see this module's own file header for why
+    that last point is also this ticket's own resolution of
+    `tour1-freeze-investigation-2026-07-15.md`.
 
     Tour closure: the measured pose (`TLMFrame.pose`, via `_frame_pose_rad()`)
-    is captured once, immediately after leg 1's own `begin()` call (before
-    that leg's tick loop runs -- effectively "immediately before leg 1's
-    begin()", and reuses `begin()`'s own bounded-retry telemetry drain rather
-    than duplicating it), and once more after the FINAL leg's settle window
+    is captured once, from whatever telemetry is already pending immediately
+    before leg 1's own `Move` is sent (retried a bounded few times if the
+    queue is momentarily empty -- mirrors the pre-109-008 path's own
+    `begin()` retry), and once more after the FINAL leg's settle window
     (only when every leg completes -- see `TourClosure`'s own docstring for
     why an early-stopped tour reports `None` closure fields). `App::Odometry`
     never resets across a boot session, so both readings -- and their delta
@@ -368,59 +545,61 @@ def run_tour(
     if not legs:
         raise ValueError("run_tour(): legs must be non-empty")
 
-    effective_cadence = cadence if cadence is not None else params.streaming_interval
-    ex = StreamingExecutor(transport, params, heading, clock_fn=clock_fn, sleep_fn=sleep_fn)
+    move_kwargs = [_move_kwargs_for_leg(leg, v_max) for leg in legs]
+    ids: list[int | None] = [None] * len(legs)
+    latest_frame: list = [None]
+    global_tick_index_box = [0]
+
+    def send_leg(i: int) -> None:
+        ids[i] = transport.move(**move_kwargs[i])
+
+    # Capture the start pose from whatever's already pending, bounded retry
+    # (mirrors StreamingExecutor.begin()'s own rationale: a single
+    # read_pending_binary_tlm_frames() call can race an idle ~25Hz queue).
+    start_pose: tuple[float, float, float] | None = None
+    for _ in range(_BEGIN_DRAIN_RETRIES):
+        for frame in transport.read_pending_binary_tlm_frames():
+            latest_frame[0] = frame
+        start_pose = _frame_pose_rad(latest_frame[0])
+        if start_pose is not None:
+            break
+        sleep_fn(_BEGIN_DRAIN_RETRY_INTERVAL)
+
+    send_leg(0)
+    if len(legs) > 1:
+        send_leg(1)  # one-leg lookahead -- see this function's own docstring
 
     leg_results: list[TourLegResult] = []
-    start_pose: tuple[float, float, float] | None = None
     end_pose: tuple[float, float, float] | None = None
     stopped_at: int | None = None
     stopped_outcome: RunOutcome | None = None
-    global_tick_index = 0
 
     for index, leg in enumerate(legs):
-        if leg.kind == "distance":
-            axis = "linear"
-            limits = ProfileLimits(v_max=leg.speed if leg.speed else v_max, a_max=a_max)
-            setpoints = profile_for_distance(leg.value, limits, cadence=effective_cadence)
-            target = leg.value
-        else:
-            axis = "angular"
-            limits = ProfileLimits(v_max=omega_max, a_max=alpha_max)
-            angle_rad = math.radians(leg.value)
-            setpoints = profile_for_turn(angle_rad, limits, cadence=effective_cadence)
-            target = angle_rad
-
-        ex.begin(setpoints, target=target, axis=axis)
-        if index == 0:
-            start_pose = _frame_pose_rad(ex.latest_frame)
-        heading_before = heading.measured_heading(ex.latest_frame)
+        heading_before = heading.measured_heading(latest_frame[0])
         leg_start = clock_fn()
 
-        logger.info("run_tour(): leg %d/%d (%s, value=%r) starting",
-                   index + 1, len(legs), leg.kind, leg.value)
+        logger.info("run_tour(): leg %d/%d (%s, value=%r) starting (Move id=%s)",
+                   index + 1, len(legs), leg.kind, leg.value, ids[index])
 
-        outcome: RunOutcome | None = None
-        tick_count = 0
-        while ex.state == RunState.RUNNING:
-            if should_stop is not None and should_stop():
-                logger.warning("run_tour(): should_stop() requested mid-leg %d/%d -- stopping now",
-                              index + 1, len(legs))
-                ex.stop_now()
-                outcome = RunOutcome.STOPPED
-                break
-            result = ex.tick()
-            if row_callback is not None:
-                row_callback(global_tick_index, index, leg, result, ex.latest_frame)
-            global_tick_index += 1
-            tick_count += 1
-            if result.done:
-                outcome = result.outcome
-                break
-            sleep_fn(params.streaming_interval)
-        assert outcome is not None  # the while loop always sets one before exiting
+        terminal, tick_count, stop_requested = _wait_for_move_terminal(
+            transport, ids[index], latest_frame, timeout=move_timeout,
+            poll_interval=poll_interval, clock_fn=clock_fn, sleep_fn=sleep_fn,
+            should_stop=should_stop, row_callback=row_callback,
+            global_tick_index_box=global_tick_index_box, leg_index=index, leg=leg)
 
-        heading_after = heading.measured_heading(ex.latest_frame)
+        if stop_requested:
+            logger.warning("run_tour(): should_stop() requested mid-leg %d/%d -- stopping now",
+                          index + 1, len(legs))
+            transport.stop()
+            outcome = RunOutcome.STOPPED
+        elif terminal is None:
+            logger.error("run_tour(): leg %d/%d timed out waiting for Move id=%s terminal ack",
+                        index + 1, len(legs), ids[index])
+            outcome = RunOutcome.FAULT
+        else:
+            outcome = _outcome_for_status(terminal.status)
+
+        heading_after = heading.measured_heading(latest_frame[0])
         duration = clock_fn() - leg_start
 
         leg_result = TourLegResult(
@@ -428,7 +607,7 @@ def run_tour(
             heading_after=heading_after, duration=duration,
             fault=(outcome == RunOutcome.FAULT), tick_count=tick_count)
         leg_results.append(leg_result)
-        logger.info("run_tour(): leg %d/%d outcome=%s ticks=%d duration=%.2fs",
+        logger.info("run_tour(): leg %d/%d outcome=%s polls=%d duration=%.2fs",
                    index + 1, len(legs), outcome.value, tick_count, duration)
 
         if on_leg is not None:
@@ -441,20 +620,21 @@ def run_tour(
                         "legs attempted", index + 1, len(legs), outcome.value)
             break
 
+        # Keep exactly one leg queued ahead of the active one (see this
+        # function's own docstring) -- send leg index+2 now that leg
+        # `index` (the one two ahead of the NEXT one to enqueue) has
+        # completed and leg `index+1` is the new active command.
+        if index + 2 < len(legs):
+            send_leg(index + 2)
+
         if index == len(legs) - 1:
             # Final leg -- settle window before capturing the tour's own
-            # closure end pose (AC3): the terminal tick() already sent
-            # stop(), but the plant needs real time to actually decelerate.
+            # closure end pose (AC3): the terminal ack already confirmed
+            # DONE, but the plant needs real time to physically settle.
             sleep_fn(final_settle)
-            settle_frames = transport.read_pending_binary_tlm_frames()
-            final_frame = settle_frames[-1] if settle_frames else ex.latest_frame
-            end_pose = _frame_pose_rad(final_frame)
-        else:
-            # Inter-leg settle -- let the plant physically decelerate before
-            # the NEXT leg's own begin() re-baselines telemetry; the drained
-            # batch is discarded (begin() re-drains fresh for itself).
-            sleep_fn(inter_leg_settle)
-            transport.read_pending_binary_tlm_frames()
+            for frame in transport.read_pending_binary_tlm_frames():
+                latest_frame[0] = frame
+            end_pose = _frame_pose_rad(latest_frame[0])
 
     closure = _compute_closure(start_pose, end_pose)
     return TourResult(legs=leg_results, closure=closure, stopped_at=stopped_at,

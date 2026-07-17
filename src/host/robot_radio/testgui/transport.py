@@ -883,19 +883,22 @@ _SIM_READY_TIMEOUT_S = 5.0
 # legacy_render/legacy_verbs were deleted, see Architecture Revision 1).
 # ---------------------------------------------------------------------------
 
-# The ONLY ConfigDelta patch kind RobotLoop::handleConfig() applies today
-# (src/firm/app/robot_loop.cpp's handleConfig(): every patch_kind other than
-# MOTOR replies ACK_STATUS_ERR/ERR_UNIMPLEMENTED unconditionally -- a
+# The ConfigDelta patch kinds RobotLoop::handleConfig() applies live
+# (src/firm/app/robot_loop.cpp's handleConfig(): MOTOR, OTOS, and, as of
+# 109-008, PLANNER -- every other patch_kind (DRIVETRAIN/WATCHDOG/NONE)
+# still replies ACK_STATUS_ERR/ERR_UNIMPLEMENTED unconditionally, a
 # documented scope boundary, not an oversight, per src/firm/app/DESIGN.md
-# §3). Keys landing on MotorConfigPatch (pid.*/ml/mr) have a real consumer;
-# every other key in NezhaProtocol._ALL_SET_KEYS (DrivetrainConfigPatch's
-# tw/rotSlip/ekfQ*/ekfR*, PlannerConfigPatch's minSpeed/headingKp/headingKd,
-# and the bare watchdog sTimeout arm) does not, on ANY transport, this
-# sprint. This table is reused (not re-derived) from protocol.py's own
-# key-vocabulary -- see that module's "Config key <-> binary target/field
-# mapping" header comment for the authoritative per-key target list.
+# §3). Keys landing on MotorConfigPatch (pid.*/ml/mr) or PlannerConfigPatch
+# (minSpeed/headingKp/headingKd) have a real consumer; DrivetrainConfigPatch's
+# tw/rotSlip/ekfQ*/ekfR* and the bare watchdog sTimeout arm do not, on ANY
+# transport, this sprint. This table is reused (not re-derived) from
+# protocol.py's own key-vocabulary -- see that module's "Config key <->
+# binary target/field mapping" header comment for the authoritative per-key
+# target list.
 _CONFIG_MOTOR_KEYS = frozenset(protocol._MOTOR_PID_KEYS) | {"ml", "mr"}
-_CONFIG_UNSUPPORTED_KEYS = frozenset(protocol._ALL_SET_KEYS) - _CONFIG_MOTOR_KEYS
+_CONFIG_PLANNER_KEYS = frozenset(protocol._PLANNER_KEYS)
+_CONFIG_SUPPORTED_KEYS = _CONFIG_MOTOR_KEYS | _CONFIG_PLANNER_KEYS
+_CONFIG_UNSUPPORTED_KEYS = frozenset(protocol._ALL_SET_KEYS) - _CONFIG_SUPPORTED_KEYS
 
 
 class _SimConfigConn:
@@ -1253,8 +1256,9 @@ class SimTransport(Transport):
         if key in _CONFIG_UNSUPPORTED_KEYS:
             msg = (
                 f"ERR unsupported {key} -- no live firmware consumer this "
-                f"sprint (RobotLoop::handleConfig only applies "
-                f"MotorConfigPatch; see sprint 109's Architecture Revision 1)"
+                f"sprint (RobotLoop::handleConfig applies MotorConfigPatch/"
+                f"OtosConfigPatch/PlannerConfigPatch only; see sprint 109's "
+                f"Architecture Revision 1)"
             )
             self._log(f"[WARN] SimTransport: {msg}")
             return msg

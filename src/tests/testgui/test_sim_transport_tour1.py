@@ -158,6 +158,20 @@ def test_tour_shaped_sequence_via_direct_twist_calls_drives_and_closes(sim_trans
 # seeded ±1 LSB dither in WheelPlant::reportedPosition()'s nominal branch --
 # see src/tests/sim/plant/wheel_plant.{h,cpp}). This test now runs for real, no
 # xfail.
+#
+# 109-008: `run_tour()` itself was rewired onto the MOVE-queue path this
+# ticket (one `Move` per leg, firmware-owned queue/boundary-carry/heading PD
+# -- see `planner/tour.py`'s own file header). This is also this ticket's
+# own verification of `tour1-freeze-investigation-2026-07-15.md`: that
+# investigation's verdict was a real `kFaultWedgeLatch` firmware fault
+# tripping the OLD path's own "stop the whole tour on any nonzero fault_bits"
+# polling -- the new path has no such polling at all (a leg's own outcome is
+# driven solely by that Move's own terminal ack-ring status), so a transient
+# fault bit can no longer freeze/stop a tour on its own. This test running
+# TOUR_1 to completion end to end over the real compiled firmware sim is the
+# concrete demonstration that the boundary crossings (13 legs, 6 straight-
+# >turn/turn->straight transitions) do not reproduce the freeze symptom on
+# this path.
 # ---------------------------------------------------------------------------
 
 _MAX_TOUR_ATTEMPTS = 5

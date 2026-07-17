@@ -2,7 +2,7 @@
 id: 008
 title: 'Host adoption: MOVE-queue tours, config-patch live tuning, retire streaming
   path, tour1-freeze verification'
-status: in-progress
+status: done
 use-cases:
 - SUC-003
 - SUC-005
@@ -60,19 +60,19 @@ DISTANCE/pivot planning now lives entirely in firmware (tickets 003-006).
 
 ## Acceptance Criteria
 
-- [ ] TestGUI/tour runner sends `MOVE` sequences for Tour 1 and Tour 2
+- [x] TestGUI/tour runner sends `MOVE` sequences for Tour 1 and Tour 2
       instead of streamed twists.
-- [ ] `host/robot_radio/planner/`'s DISTANCE/pivot planning logic is
+- [x] `host/robot_radio/planner/`'s DISTANCE/pivot planning logic is
       removed or clearly marked dead (superseded by firmware planning);
       teleop input-shaping role is retained and unchanged.
-- [ ] Dead host streaming path for tours is retired (not just
+- [x] Dead host streaming path for tours is retired (not just
       unreferenced — actually removed, per the project's greenfield-
       rebuild preference of parking/removing rather than leaving dead
       code live).
-- [ ] Live `PlannerConfig` gain patches (including `heading_kp`/
+- [x] Live `PlannerConfig` gain patches (including `heading_kp`/
       `heading_kd`) are un-stubbed and settable from the TestGUI without
       a reflash.
-- [ ] `tour1-freeze-investigation-2026-07-15.md`'s specific failure mode
+- [x] `tour1-freeze-investigation-2026-07-15.md`'s specific failure mode
       (`kFaultWedgeLatch` at a straight->turn boundary) is exercised
       against the new MOVE-queue path and does not reproduce; the issue
       is moved to done with this verdict recorded (or, if it DOES
@@ -81,7 +81,11 @@ DISTANCE/pivot planning now lives entirely in firmware (tickets 003-006).
       ticket 009 proceeds).
 - [ ] Bench: TestGUI → hardware → Tour 1 runs via the new MOVE-queue path
       without the wedge-latch/freeze symptom (stretch goal per sprint.md,
-      not a blocker — the decisive gate is Sim, ticket 009).
+      not a blocker — the decisive gate is Sim, ticket 009). NOT exercised
+      this ticket (no physical hardware access in this session); the Sim
+      gate above (`test_sim_transport_tour1.py`) is the decisive
+      verification per sprint.md's own framing. Left unchecked, not a
+      blocker.
 
 ## Testing
 
