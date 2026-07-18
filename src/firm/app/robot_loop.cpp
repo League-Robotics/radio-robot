@@ -414,6 +414,7 @@ void RobotLoop::cycle() {
 
   Cmd cmd;
 
+
   motorL_.requestSample();  // 0x46 write (brick holds ONE pending read)
 
   runAndWait(kSettle, [&] {           // >=4ms: L encoder settling, meanwhile --

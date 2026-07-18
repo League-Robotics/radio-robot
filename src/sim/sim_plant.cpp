@@ -145,11 +145,21 @@ int SimPlant::handleMotorWrite(uint8_t* data, int len) {
   return kOk;  // unrecognized command byte -- swallow, matching an ACK'd bus.
 }
 
+// The real Nezha 0x46 encoder register returns raw COUNTS (1 count == 1
+// motor-shaft degree, 360/rev), NOT millimetres -- the firmware multiplies by
+// wheelTravelCalib [mm/count] (~0.70486 for the tovez wheel) to recover mm.
+// WheelPlant integrates in mm, so convert mm -> counts here before packing, so
+// the firmware's real calibration round-trips to true mm exactly like hardware
+// (previously the plant packed mm, which only read true when travelCalib==1.0
+// and silently under-read by ~30% the moment the real ml/mr calibration was
+// pushed). counts = mm * 360/(pi*80.77) = mm * 1.4187 for the tovez wheel.
+constexpr float kEncoderCountsPerMm = 1.4187f;
+
 int SimPlant::handleMotorRead(uint8_t* data, int len) {
   if (len != 4) return kNakStatus;
   WheelPlant& plant = mutableWheelPlant(selectedPort_);
   if (plant.disconnected()) return kNakStatus;
-  writeLeInt32(data, lroundToTenthsMm(plant.reportedPosition()));
+  writeLeInt32(data, lroundToTenthsMm(plant.reportedPosition() * kEncoderCountsPerMm));
   return kOk;
 }
 

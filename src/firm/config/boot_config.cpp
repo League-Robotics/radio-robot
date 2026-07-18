@@ -17,11 +17,11 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
     // control._vel_gains_domain marker), falling back to bench-tuned firmware
     // defaults when absent. Live-correctable per motor via `DEV M <n> CFG`.
     msg::Gains velGains;
-    velGains.kp = 0.3f;
-    velGains.ki = 0.5f;
-    velGains.kff = 0.15f;
-    velGains.i_max = 20.0f;
-    velGains.kaw = 3.0f;   // anti-windup back-calculation (velocity_pid.cpp; 0 = off)
+    velGains.kp = 0.0022f;
+    velGains.ki = 0.0018f;
+    velGains.kff = 0.0038f;
+    velGains.i_max = 0.3f;
+    velGains.kaw = 0.0f;   // anti-windup back-calculation (velocity_pid.cpp; 0 = off)
 
     // reversal_dwell / output_deadband are left unset (.has == false) on
     // purpose — Hal::Motor::configure() applies the real ship defaults (100 ms
@@ -33,7 +33,7 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
         out[i].setVelGains(velGains);
         // EMA coeff — from control.vel_filt (fallback default); a=0 would pin
         // reported velocity at 0 forever regardless of real motion.
-        out[i].setVelFiltAlpha(0.15f);
+        out[i].setVelFiltAlpha(0.3f);
     }
 
     // Per-port forward-sign — baked from the robot JSON's calibration.

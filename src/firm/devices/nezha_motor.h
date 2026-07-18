@@ -114,6 +114,7 @@ class NezhaMotor : public MotorArmor {
   // --- Primitive getters (MotorArmor overrides) ---
   float position() const override;      // [mm]
   float velocity() const override;      // [mm/s] signed, filtered
+  float velocityTarget() const { return velocityTarget_; }  // [mm/s] signed -- commanded PID setpoint (last setVelocity())
   float appliedDuty() const override;   // [-1, 1]
 
   bool connected() const { return connected_; }

@@ -365,7 +365,11 @@ class SimHarness {
     Devices::MotorConfig cfg;
     cfg.port = port;
     cfg.fwdSign = 1;
-    cfg.wheelTravelCalib = 1.0f;
+    // mm per encoder count (== mm/motor-degree, 360/rev). Must be the RECIPROCAL
+    // of sim_plant.cpp's kEncoderCountsPerMm so counts*travelCalib round-trips
+    // to true mm (1.4187 * 0.704871 == 1.0). The GUI overrides this at connect
+    // with the geometry-derived ml/mr push (~0.70486), which agrees.
+    cfg.wheelTravelCalib = 0.704871f;
     cfg.velFiltAlpha = 1.0f;
     cfg.slewRate = 100.0f;
     // Velocity feedforward so the sim tracks the COMMANDED velocity (like the
@@ -374,7 +378,8 @@ class SimHarness {
     // duty = target/500 -> plant velocity = 500*duty = target (open-loop
     // exact), with kp trimming transients/disturbance.
     cfg.velGains.kff = 1.0f / TestSim::kDefaultDutyVelMax;  // 0.002 duty per mm/s
-    cfg.velGains.kp = 0.01f;
+    cfg.velGains.kp = 0.01f;   // feedback trim -- needed for turn accuracy
+                               // (kp=0 lands 90deg turns ~30deg off + faults)
     return cfg;
   }
 

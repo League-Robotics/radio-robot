@@ -64,15 +64,10 @@
   },
   "calibration": {
     "fwd_sign_left": 1,
-    "fwd_sign_right": -1
+    "fwd_sign_right": -1,
+    "rotational_slip": 1.0
   },
   "control": {
-    "vel_kp": 0.3,
-    "vel_ki": 0.5,
-    "vel_kff": 0.15,
-    "vel_imax": 20.0,
-    "vel_kaw": 3.0,
-    "vel_filt": 0.15,
     "sync": 1.0,
     "turn_gate": 35,
     "yaw_rate_max": 70,

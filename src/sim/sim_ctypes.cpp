@@ -207,6 +207,15 @@ int sim_cycle_count(SimHandle h) { return asHarness(h)->cycleCount(); }
 // near the includes). Stateless -- needs no SimHandle.
 const char* sim_firmware_version() { return FIRMWARE_VERSION_STR; }
 
+// Commanded per-wheel velocity (the velocity-PID SETPOINT) read DIRECTLY from
+// the firmware's live NezhaMotor -- Path B (2026-07-17). cmd_vel is NOT on the
+// wire (adding it to the primary Telemetry frame overflows the 186-byte
+// envelope budget; it lives on the slower TelemetrySecondary). The sim can see
+// this normally-invisible inner-loop command at full rate, which is exactly
+// what TestGUI's "commanded vs actual" wheel-speed graph plots. Signed [mm/s].
+float sim_cmd_vel_left(SimHandle h) { return asHarness(h)->motorLeft().velocityTarget(); }
+float sim_cmd_vel_right(SimHandle h) { return asHarness(h)->motorRight().velocityTarget(); }
+
 // ---- Stepping ----
 
 void sim_step(SimHandle h, int cycles) { asHarness(h)->step(cycles); }

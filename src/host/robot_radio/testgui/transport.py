@@ -833,13 +833,29 @@ def _sim_lib_name() -> str:
     return "libfirmware_host.dylib" if sys.platform == "darwin" else "libfirmware_host.so"
 
 
-def _sim_lib_path() -> pathlib.Path:
-    """Return the expected path for the firmware host simulation library.
+# Hot-reload override: the Test buttons rebuild the sim lib and load a FRESH
+# copy at a unique path (dlopen caches by path, so the canonical path would
+# return the stale already-mapped image). When set, connect() loads this
+# instead of the canonical build path. See __main__.py's _run_sim_test().
+_SIM_LIB_OVERRIDE: "pathlib.Path | None" = None
 
-    The library lives at src/sim/build/ relative to the repo root.
-    This function resolves the path regardless of the current working directory
-    by walking up from this file's location.
+
+def set_sim_lib_override(path: "pathlib.Path | None") -> None:
+    """Point the next SimTransport.connect() at `path` (a fresh dylib copy) for
+    hot-reload, or clear the override with None."""
+    global _SIM_LIB_OVERRIDE
+    _SIM_LIB_OVERRIDE = path
+
+
+def _sim_lib_path() -> pathlib.Path:
+    """Return the path for the firmware host simulation library.
+
+    Normally src/sim/build/ relative to the repo root, resolved from this
+    file's location regardless of cwd. If a hot-reload override is set
+    (set_sim_lib_override), that fresh-copy path is returned instead.
     """
+    if _SIM_LIB_OVERRIDE is not None:
+        return _SIM_LIB_OVERRIDE
     # transport.py is at src/host/robot_radio/testgui/transport.py
     # Repo root is four levels up.
     _here = pathlib.Path(__file__).parent   # testgui/
@@ -1186,6 +1202,12 @@ class SimTransport(Transport):
     # testgui/commands.py's COMMANDS schema.
     _MOTION_VERBS = ("D", "RT")
 
+    # Unmanaged (direct-twist) motion defaults -- the open-loop primitive path.
+    # Matched to the managed path's nominal cruise so the ONLY difference
+    # between the two GUI columns is planner-vs-no-planner, not speed.
+    _UNMANAGED_SPEED = 150.0      # [mm/s]
+    _UNMANAGED_YAW_RATE = 2.0     # [rad/s]
+
     def send(self, line: str) -> None:
         """Fire-and-forget: routes recognized verbs into the sim; anything
         else is accepted and logged (see class docstring)."""
@@ -1403,6 +1425,41 @@ class SimTransport(Transport):
             self._log(f"[WARN] SimTransport: malformed SI line: {' '.join(tokens)!r}")
             return
         self.set_true_pose(x_mm / 10.0, y_mm / 10.0, math.radians(h_cdeg / 100.0))
+
+    def run_unmanaged(self, *, distance_mm: float = 0.0, angle_deg: float = 0.0) -> None:
+        """UNMANAGED (open-loop) primitive motion: turn the motors on at a
+        fixed velocity for exactly the time to cover `distance_mm` OR
+        `angle_deg`, then let the firmware deadman stop them. Goes straight
+        through `twist` -> `Drive::setTwist` -- NO Motion::Executor / Ruckig
+        (the un-managed counterpart to `_run_motion_async`'s D/RT path). A
+        single `twist(v, omega, duration_ms)` whose deadman lease IS the motion
+        duration: `RobotLoop::handleTwist` arms the deadman for `duration_ms`
+        (no max clamp), the motors run that long, then neutralize -- a true
+        "motors on for a time, then off" with no host-side timing loop.
+
+        Exactly one of `distance_mm`/`angle_deg` is honored (distance wins if
+        both are nonzero)."""
+        if self._loop is None:
+            return
+        if distance_mm != 0.0:
+            v_x = math.copysign(self._UNMANAGED_SPEED, distance_mm)
+            omega = 0.0
+            duration_ms = abs(distance_mm) / self._UNMANAGED_SPEED * 1000.0
+            label = f"unmanaged drive {distance_mm:+.0f}mm @ {self._UNMANAGED_SPEED:.0f}mm/s"
+        elif angle_deg != 0.0:
+            v_x = 0.0
+            omega = math.copysign(self._UNMANAGED_YAW_RATE, angle_deg)
+            duration_ms = math.radians(abs(angle_deg)) / self._UNMANAGED_YAW_RATE * 1000.0
+            label = f"unmanaged turn {angle_deg:+.0f}deg @ {self._UNMANAGED_YAW_RATE:.1f}rad/s"
+        else:
+            return
+        self._motion_stop_event.clear()
+        try:
+            self._loop.twist(v_x, omega, duration_ms)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[ERROR] SimTransport: {label} failed: {exc}")
+            return
+        self._log(f"[INFO] SimTransport: {label} (twist v_x={v_x:.0f} omega={omega:.2f}, deadman {duration_ms:.0f}ms)")
 
     def _run_motion_async(self, wire_step: str) -> None:
         """Drive ``wire_step`` (a single "D .../"RT ..." tour-shaped leg)

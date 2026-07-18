@@ -314,12 +314,9 @@ class TLMFrame:
         if telemetry.has_vel:
             frame.vel = (int(telemetry.vel_left), int(telemetry.vel_right))
 
-        # cmd_vel: NOT read here (103-009) -- telemetry.proto no longer
-        # declares has_cmd_vel/cmd_vel_left/cmd_vel_right on the primary
-        # Telemetry message (moved to TelemetrySecondary); see this
-        # method's own docstring "Fields left at this dataclass's own
-        # default" list for the permanent-gap explanation. frame.cmd_vel
-        # stays at its dataclass default (None).
+        # cmd_vel: NOT on the primary Telemetry frame (103-009) -- it lives on
+        # TelemetrySecondary (adding it to the primary frame overflows the
+        # 186-byte ReplyEnvelope budget). frame.cmd_vel stays None here.
 
         if telemetry.has_pose:
             frame.pose = (

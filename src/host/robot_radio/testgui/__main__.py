@@ -256,6 +256,55 @@ def build_live_frame_bridge(canvas_ctrl) -> object:
     return _LiveFrameBridge(canvas_ctrl)
 
 
+# When True (set by main() for the real GUI), _build_main_window redirects the
+# process's C-level stdout/stderr (fd 1/2) into the console so the sim dylib's
+# own cout/cerr -- and the Test-button rebuild output -- appear in TestGUI.
+# Left False for headless tests so pytest's own capture is untouched.
+_ENABLE_STDOUT_CAPTURE = False
+
+
+def _install_stdout_capture(bridge) -> None:
+    """Redirect process fd 1 and 2 into a pipe; a daemon reader tees each line
+    back to the real terminal AND emits it to the GUI console via `bridge.line`
+    (a Qt signal marshalled to the main thread). Installs once.
+
+    NB: C++ ``std::cout`` to a pipe is fully buffered -- use ``std::endl`` (or
+    ``<< std::flush``) in the sim to see output promptly.
+    """
+    import os
+    import threading
+
+    if getattr(_install_stdout_capture, "_installed", False):
+        return
+    _install_stdout_capture._installed = True
+
+    saved_out = os.dup(1)   # keep the real terminal so output still shows there
+    read_fd, write_fd = os.pipe()
+    os.dup2(write_fd, 1)
+    os.dup2(write_fd, 2)
+    os.close(write_fd)
+
+    def _reader() -> None:
+        buf = b""
+        while True:
+            try:
+                chunk = os.read(read_fd, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            try:
+                os.write(saved_out, chunk)   # tee to the launching terminal
+            except OSError:
+                pass
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                bridge.line.emit(line.decode("utf-8", "replace"))
+
+    threading.Thread(target=_reader, name="sim-stdout-capture", daemon=True).start()
+
+
 def _build_main_window():  # type: ignore[return]
     """Build and return the main QMainWindow with transport wiring.
 
@@ -295,6 +344,7 @@ def _build_main_window():  # type: ignore[return]
         QSpinBox,
         QSplitter,
         QStyle,
+        QTabWidget,
         QVBoxLayout,
         QWidget,
     )
@@ -416,6 +466,7 @@ def _build_main_window():  # type: ignore[return]
     # rewrites active_robot.json and reloads that config (wired below, once
     # trace_model / _append_log are in scope).
     from robot_radio.config.robot_config import (
+        _reset_robot_config,
         get_robot_config,
         list_robots,
         set_active_robot,
@@ -669,9 +720,18 @@ def _build_main_window():  # type: ignore[return]
         btn = _send_buttons[-1]
         _row_send_getters.append((btn, cmd_spec, getters))
 
+    # Parameter-field command rows are no longer SHOWN -- the two-column
+    # Managed/Unmanaged preset-button panel below replaces them (stakeholder
+    # 2026-07-17: "I don't need full parameters, I just need buttons"). The
+    # widget must still be ADDED (parented, kept alive) and only HIDDEN: its
+    # Send buttons live in `_send_buttons`, and the connect-time enable loop
+    # (`for _sb in _send_buttons: _sb.setEnabled(True)`) raises "C++ object
+    # already deleted" -- aborting before it enables the tour/motion buttons --
+    # if the widget is orphaned and garbage-collected instead.
     left_layout.addWidget(cmd_rows_widget)
+    cmd_rows_widget.setVisible(False)
 
-    # Turn buttons — one-click in-place pivots through the motion-v2 stack.
+    # Two-column motion panel (Unmanaged direct-twist | Managed Ruckig).
     # Each sends the binary SEG primitive (arc_length=0 => pure pivot), CCW+,
     # delta_heading in centidegrees: "SEG 0 <cdeg>" (binary_bridge translates
     # to CommandEnvelope{segment}). Enabled on connect via _send_buttons.
@@ -691,22 +751,74 @@ def _build_main_window():  # type: ignore[return]
     def _make_turn_handler(deg_value: int):
         return lambda: _send_seg_turn(deg_value)
 
-    turn_row = QWidget()
-    turn_layout = QHBoxLayout(turn_row)
-    turn_layout.setContentsMargins(0, 0, 0, 0)
-    turn_layout.setSpacing(4)
-    turn_layout.addWidget(QLabel("Turn:"))
-    for _deg in (90, -90, 180, -180, 270, -270, 360, -360):
-        _tbtn = QPushButton(f"{_deg:+d}")
-        _tbtn.setObjectName(f"turn_btn_{_deg}")
-        _tbtn.setEnabled(False)
-        _tbtn.setFixedWidth(46)
-        _tbtn.setToolTip(f"Pivot in place {_deg:+d}° (SEG 0 {_deg * 100})")
-        _tbtn.clicked.connect(_make_turn_handler(_deg))
-        turn_layout.addWidget(_tbtn)
-        _send_buttons.append(_tbtn)
-    turn_layout.addStretch()
-    left_layout.addWidget(turn_row)
+    # --- Motion panel: two columns, SAME commands via DIFFERENT paths -------
+    # LEFT  = Unmanaged: direct twist/stop, NO trajectory planner
+    #         (SimTransport.run_unmanaged -> one twist, deadman-timed).
+    # RIGHT = Managed:   D/RT -> planner.tour.run_tour -> Ruckig.
+    # Same distance/angle presets on both sides so the ONLY variable is the
+    # path. Distance presets are [mm]; angle presets are [deg]; each fires
+    # forward (+) and back/CCW-vs-CW (-).
+    _DIST_PRESETS = (100, 500, 700)
+    _ANGLE_PRESETS = (90, 180, 270, 360)
+
+    def _unmanaged_dist(mm: float) -> None:
+        t = _state.get("transport")
+        if t is not None and hasattr(t, "run_unmanaged"):
+            t.run_unmanaged(distance_mm=float(mm))
+
+    def _unmanaged_ang(deg: float) -> None:
+        t = _state.get("transport")
+        if t is not None and hasattr(t, "run_unmanaged"):
+            t.run_unmanaged(angle_deg=float(deg))
+
+    def _managed_dist(mm: float) -> None:
+        t = _state.get("transport")
+        if t is not None:
+            t.command(f"D 150 150 {int(mm)}", read_timeout=500)
+
+    def _managed_ang(deg: float) -> None:
+        t = _state.get("transport")
+        if t is not None:
+            t.command(f"RT {int(round(deg * 100))}", read_timeout=500)
+
+    def _make_motion_column(title: str, dist_cb, ang_cb) -> QGroupBox:
+        box = QGroupBox(title)
+        col = QVBoxLayout(box)
+        col.setContentsMargins(6, 4, 6, 4)
+        col.setSpacing(3)
+        for group_label, presets, cb in (
+            ("Distance [mm]", _DIST_PRESETS, dist_cb),
+            ("Angles [deg]", _ANGLE_PRESETS, ang_cb),
+        ):
+            lbl = QLabel(group_label)
+            lbl.setStyleSheet("font-weight: bold;")
+            col.addWidget(lbl)
+            for mag in presets:
+                row = QWidget()
+                h = QHBoxLayout(row)
+                h.setContentsMargins(0, 0, 0, 0)
+                h.setSpacing(3)
+                for signed in (mag, -mag):
+                    b = QPushButton(f"{signed:+d}")
+                    b.setEnabled(False)
+                    b.setFixedWidth(64)
+                    b.clicked.connect(lambda _checked=False, s=signed, f=cb: f(s))
+                    h.addWidget(b)
+                    _send_buttons.append(b)
+                h.addStretch()
+                col.addWidget(row)
+        col.addStretch()
+        return box
+
+    motion_panel = QWidget()
+    motion_panel_layout = QHBoxLayout(motion_panel)
+    motion_panel_layout.setContentsMargins(0, 0, 0, 0)
+    motion_panel_layout.setSpacing(8)
+    motion_panel_layout.addWidget(
+        _make_motion_column("Unmanaged — direct twist", _unmanaged_dist, _unmanaged_ang))
+    motion_panel_layout.addWidget(
+        _make_motion_column("Managed — Ruckig", _managed_dist, _managed_ang))
+    left_layout.addWidget(motion_panel)
 
     # Tour buttons — run a pre-programmed motion sequence (one per named tour).
     # Each button resets the robot to the origin, then sends the tour's moves
@@ -776,6 +888,29 @@ def _build_main_window():  # type: ignore[return]
     tour_layout.addWidget(stop_tour_btn)
     tour_layout.addStretch()
     left_layout.addWidget(tour_row)
+
+    # Test buttons (stakeholder 2026-07-18) — an in-GUI edit->compile->reload->run
+    # loop. Each RECOMPILES the sim lib, HOT-RELOADS the fresh dylib (so a code
+    # or version edit takes effect without relaunching), updates the version
+    # stamp, resets the avatar/pose/traces, then runs a fixed motion:
+    #   Test S -> drive forward 700 mm    Test T -> turn 360 deg
+    # Always clickable (they connect themselves); wired to _run_sim_test() once
+    # that (and _on_connect/_set_origin) are defined below.
+    test_row = QWidget()
+    test_layout = QHBoxLayout(test_row)
+    test_layout.setContentsMargins(0, 0, 0, 0)
+    test_layout.setSpacing(4)
+    test_layout.addWidget(QLabel("Test:"))
+    test_s_btn = QPushButton("Test S — drive 700mm")
+    test_s_btn.setObjectName("test_s_btn")
+    test_s_btn.setToolTip("Rebuild + reload the sim, reset, then drive forward 700 mm.")
+    test_t_btn = QPushButton("Test T — turn 360°")
+    test_t_btn.setObjectName("test_t_btn")
+    test_t_btn.setToolTip("Rebuild + reload the sim, reset, then turn 360°.")
+    test_layout.addWidget(test_s_btn)
+    test_layout.addWidget(test_t_btn)
+    test_layout.addStretch()
+    left_layout.addWidget(test_row)
 
     # GOTO — synthetic camera-based go-to: drive to a world (x, y) point by
     # repeatedly correcting the robot's pose from the camera and re-issuing G.
@@ -1210,20 +1345,35 @@ def _build_main_window():  # type: ignore[return]
 
     # Log pane (QPlainTextEdit) — receives timestamped TX/RX lines, minus the
     # telemetry frames (those are broken out in the panel above).
+    # "Serial" tab — timestamped TX/RX wire lines (the existing serial log).
     log_pane = QPlainTextEdit()
     log_pane.setObjectName("log_pane")
     log_pane.setReadOnly(True)
-    log_pane.setPlaceholderText("(log output will appear here)")
-    log_pane.setMinimumHeight(160)
-    right_splitter.addWidget(log_pane)
+    log_pane.setPlaceholderText("(serial log will appear here)")
+
+    # "Console" tab — the simulation program's OWN stdout/stderr (cout/cerr) and
+    # the Test-button rebuild output, captured off fd 1/2 (_install_stdout_capture).
+    sim_console = QPlainTextEdit()
+    sim_console.setObjectName("sim_console")
+    sim_console.setReadOnly(True)
+    sim_console.setMaximumBlockCount(5000)
+    sim_console.setPlaceholderText("(simulation stdout/stderr will appear here)")
+
+    # Same spot as the old serial terminal, now a tab pair: Serial | Console
+    # (stakeholder 2026-07-18 -- one panel, a tab to pick which stream).
+    console_tabs = QTabWidget()
+    console_tabs.setObjectName("console_tabs")
+    console_tabs.addTab(log_pane, "Serial")
+    console_tabs.addTab(sim_console, "Console")
+    console_tabs.setMinimumHeight(160)
+    right_splitter.addWidget(console_tabs)
 
     # Vertical proportions: playfield gets the top third-plus, the telemetry
-    # panel takes its natural compact height, and the console gets a generous
-    # share (larger than the old fixed 200 px cap).  The canvas and console
-    # stretch on resize; the telemetry panel stays fixed.
+    # panel takes its natural compact height, and the console tabs get a
+    # generous share.  The canvas and console stretch on resize; telemetry fixed.
     right_splitter.setStretchFactor(0, 5)   # canvas
     right_splitter.setStretchFactor(1, 0)   # telemetry panel (fixed)
-    right_splitter.setStretchFactor(2, 4)   # console
+    right_splitter.setStretchFactor(2, 4)   # console tabs
     _tlm_h = telemetry_widget.sizeHint().height()
     _canvas_h = max(360, int((win_h - 60 - _tlm_h) * 0.58))
     _console_h = max(240, win_h - 60 - _tlm_h - _canvas_h)
@@ -1360,6 +1510,21 @@ def _build_main_window():  # type: ignore[return]
 
     _rx_bridge = _RXBridge()
     _rx_bridge.rx_line.connect(_rx_bridge.on_rx_line, Qt.ConnectionType.QueuedConnection)
+
+    # Bridge for captured sim stdout/stderr (fd 1/2). The reader thread in
+    # _install_stdout_capture emits `line`; the slot appends it to the console
+    # on the Qt main thread. Activated only for the real GUI (main()).
+    class _SimOutBridge(QObject):
+        line = Signal(str)
+
+        @Slot(str)
+        def on_line(self, text: str) -> None:
+            sim_console.appendPlainText(text)
+
+    _sim_out_bridge = _SimOutBridge()
+    _sim_out_bridge.line.connect(_sim_out_bridge.on_line, Qt.ConnectionType.QueuedConnection)
+    if _ENABLE_STDOUT_CAPTURE:
+        _install_stdout_capture(_sim_out_bridge)
 
     class _TelemetryBridge(QObject):
         """Bridges background-thread TLMFrame delivery to the Qt main thread.
@@ -2432,6 +2597,14 @@ def _build_main_window():  # type: ignore[return]
 
     def _on_connect() -> None:
         """Instantiate the selected Transport, call connect(), send STREAM 50."""
+        # Reload the active robot config from disk on every (re)connect so a
+        # live edit to data/robots/*.json (e.g. adding calibration.rotational_slip)
+        # is picked up without restarting the GUI. get_robot_config() caches a
+        # singleton; without this, a still-running GUI keeps the config it read
+        # at startup and reports stale "no calibration.*" fallbacks. The Test
+        # S/T buttons also reconnect, so their runs pick up config edits too.
+        _reset_robot_config()
+
         name = transport_combo.currentText()
         port = port_edit.text().strip()
 
@@ -2669,6 +2842,101 @@ def _build_main_window():  # type: ignore[return]
     connect_btn.clicked.connect(_on_connect)
     disconnect_btn.clicked.connect(_on_disconnect)
 
+    # ---- Test buttons: edit -> compile -> hot-reload -> reset -> run -------
+    import os as _os
+    import pathlib as _pathlib
+    import shutil as _shutil
+    import subprocess as _subprocess
+    import tempfile as _tempfile
+    import threading as _threading
+
+    from robot_radio.testgui.transport import set_sim_lib_override as _set_sim_lib_override
+
+    _repo_root = _pathlib.Path(__file__).resolve().parents[4]
+    _reload_counter = {"n": 0}
+
+    class _TestBridge(QObject):
+        rebuilt = Signal(str, bool)   # (kind, ok) -- emitted by the worker thread
+
+    _test_bridge = _TestBridge()
+
+    def _finish_test(kind: str, ok: bool) -> None:
+        """Main thread: after the rebuild, hot-reload the fresh dylib, reset the
+        display, refresh the version stamp (done by _on_connect), and run."""
+        try:
+            if not ok:
+                _append_log("[TEST] build FAILED — see console above; not reloading.")
+                return
+            fresh = _state.get("_fresh_sim_lib")
+            if fresh is None:
+                _append_log("[TEST] internal error: no fresh lib path")
+                return
+            if _state.get("transport") is not None:
+                _on_disconnect()
+            transport_combo.setCurrentText("Sim")
+            _set_sim_lib_override(fresh)          # next connect loads the fresh copy
+            try:
+                _on_connect()                     # loads fresh dylib + updates version stamp
+            finally:
+                _set_sim_lib_override(None)
+            if _state.get("transport") is None:
+                _append_log("[TEST] reconnect failed — see console.")
+                return
+            _set_origin()                         # reset avatar / pose / traces
+            wire = "D 150 150 700" if kind == "S" else "RT 36000"
+            _append_log(f"[TEST] Test {kind} -> {wire}")
+            _state["transport"].command(wire, read_timeout=500)
+        finally:
+            test_s_btn.setEnabled(True)
+            test_t_btn.setEnabled(True)
+
+    _test_bridge.rebuilt.connect(_finish_test, Qt.ConnectionType.QueuedConnection)
+
+    def _run_sim_test(kind: str) -> None:
+        test_s_btn.setEnabled(False)
+        test_t_btn.setEnabled(False)
+
+        def _worker() -> None:
+            ok = True
+            print(f"\n[TEST] ===== Test {kind}: rebuilding sim lib =====", flush=True)
+            # Regenerate version + message headers, then build the sim lib. The
+            # subprocesses inherit the redirected fd 1/2, so their output lands
+            # in the console automatically.
+            steps = [
+                [sys.executable, "src/scripts/gen_version.py"],
+                [sys.executable, "src/scripts/gen_messages.py"],
+                ["cmake", "--build", "src/sim/build", "--parallel", "--target", "firmware_host"],
+            ]
+            for cmd in steps:
+                try:
+                    rc = _subprocess.run(cmd, cwd=str(_repo_root)).returncode
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[TEST] step errored: {' '.join(cmd)}: {exc}", flush=True)
+                    ok = False
+                    break
+                if rc != 0:
+                    print(f"[TEST] step failed ({rc}): {' '.join(cmd)}", flush=True)
+                    ok = False
+                    break
+            if ok:
+                _reload_counter["n"] += 1
+                suffix = ".dylib" if sys.platform == "darwin" else ".so"
+                built = _repo_root / "src" / "sim" / "build" / f"libfirmware_host{suffix}"
+                fresh = _pathlib.Path(_tempfile.gettempdir()) / f"sim_reload_{_os.getpid()}_{_reload_counter['n']}{suffix}"
+                try:
+                    _shutil.copy2(built, fresh)
+                    _state["_fresh_sim_lib"] = fresh
+                    print(f"[TEST] built OK -> reloading {fresh.name}", flush=True)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[TEST] copy failed: {exc}", flush=True)
+                    ok = False
+            _test_bridge.rebuilt.emit(kind, ok)
+
+        _threading.Thread(target=_worker, name=f"sim-test-{kind}", daemon=True).start()
+
+    test_s_btn.clicked.connect(lambda: _run_sim_test("S"))
+    test_t_btn.clicked.connect(lambda: _run_sim_test("T"))
+
     # Stop the live-view worker and any running tour / GOTO on app quit.
     app.aboutToQuit.connect(_stop_live_worker)
     app.aboutToQuit.connect(_stop_tour)
@@ -2692,6 +2960,8 @@ def _build_main_window():  # type: ignore[return]
 
 def main() -> None:
     """Launch the Robot Test GUI and block until the window is closed."""
+    global _ENABLE_STDOUT_CAPTURE
+    _ENABLE_STDOUT_CAPTURE = True   # real GUI: capture sim cout/cerr to the console
     window, app = _build_main_window()
     window.show()
     sys.exit(app.exec())

@@ -305,6 +305,14 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
     lib.sim_firmware_version.argtypes = []
     lib.sim_firmware_version.restype = ctypes.c_char_p
 
+    # Commanded per-wheel velocity (velocity-PID setpoint) read live from the
+    # firmware -- Path B for the commanded-vs-actual graph (cmd_vel is not on
+    # the primary wire frame; see sim_ctypes.cpp's own note).
+    lib.sim_cmd_vel_left.argtypes = [ctypes.c_void_p]
+    lib.sim_cmd_vel_left.restype = ctypes.c_float
+    lib.sim_cmd_vel_right.argtypes = [ctypes.c_void_p]
+    lib.sim_cmd_vel_right.restype = ctypes.c_float
+
 
 HookCallback = Callable[[int, "ctypes.Array[ctypes.c_uint8]"], int]
 
@@ -1022,6 +1030,17 @@ class SimLoop:
             if reply is None or reply.WhichOneof("body") != "tlm":
                 continue
             frame = TLMFrame.from_pb2(reply.tlm)
+
+            # Path B (2026-07-17): commanded per-wheel velocity is NOT on the
+            # wire (186-byte primary-frame budget). In sim we read it straight
+            # from the firmware's live NezhaMotor::velocityTarget() via the
+            # ctypes hook and stamp it onto the frame at full telemetry rate,
+            # so TestGUI's commanded-vs-actual wheel-speed graph has data.
+            if self._lib is not None and self._handle is not None:
+                frame.cmd_vel = (
+                    int(round(self._lib.sim_cmd_vel_left(self._handle))),
+                    int(round(self._lib.sim_cmd_vel_right(self._handle))),
+                )
 
             if frame.active is not None:
                 self._active = bool(frame.active)
