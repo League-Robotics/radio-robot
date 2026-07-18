@@ -93,9 +93,25 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
          value is baked into the firmware's compiled-in DefaultConfig
          instead of silently inheriting it.  This is what makes "select
          tovez nocal → turns are geometry-pure" true in the sim.
-      5. ``OI``              — OTOS init (must precede OL/OA)
-      6. ``OL <int8>``       — otos_linear_scale encoded
-      7. ``OA <int8>``       — otos_angular_scale encoded
+      5. ``SET pid.kp/ki/kff/iMax/kaw=<float>`` and
+         ``SET headingKp/headingKd=<float>`` — the velocity-PID gains
+         (``control.vel_*`` → ``MotorConfigPatch`` Gains, applied to BOTH
+         motors by ``RobotLoop::handleConfig``) and the outer heading-loop
+         PD gains (``control.heading_*`` → ``PlannerConfigPatch`` →
+         ``Pilot::applyPlannerPatch``).  Stakeholder 2026-07-18: selecting
+         a robot must be authoritative for the CONTROL gains too — the sim
+         binary bakes its own harness gains (``SimHarness::
+         makeMotorConfig()``) and real firmware bakes whatever robot JSON
+         was active at build time (``gen_boot_config.py``), and neither
+         may silently leak into a session.  Each key is pushed only when
+         the config carries a value (``ControlConfig``'s own contract:
+         None → firmware boot default kept).  ``control.vel_filt`` has NO
+         live ``SET`` key and is deliberately not pushed — it reaches
+         firmware at build time only (``gen_boot_config.py`` →
+         ``MotorConfig.setVelFiltAlpha()``).
+      6. ``OI``              — OTOS init (must precede OL/OA)
+      7. ``OL <int8>``       — otos_linear_scale encoded
+      8. ``OA <int8>``       — otos_angular_scale encoded
 
     109-004 RESTORES steps 5-7 (dropped 2026-07-16, out-of-process, when
     ``OI``/``OL``/``OA`` had no path over the current binary wire at all —
@@ -157,6 +173,25 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
     rot_slip = getattr(cal, "rotational_slip", None) if cal else None
     rot_slip = float(rot_slip) if rot_slip is not None else 0.0
     cmds.append((f"SET rotSlip={rot_slip:g}", 200))
+
+    # ── Velocity-PID + heading-loop gains: pushed when present ────────────
+    # See this function's docstring, step 5.  Wire keys are protocol.py's
+    # own vocabulary (_MOTOR_PID_KEYS / _PLANNER_KEYS); both hardware
+    # (binary_bridge.translate_command → NezhaProtocol.set_config) and Sim
+    # (SimTransport._handle_config_set → NezhaProtocol.config) accept them.
+    ctrl = getattr(config, "control", None)
+    for wire_key, attr in (
+        ("pid.kp", "vel_kp"),
+        ("pid.ki", "vel_ki"),
+        ("pid.kff", "vel_kff"),
+        ("pid.iMax", "vel_imax"),
+        ("pid.kaw", "vel_kaw"),
+        ("headingKp", "heading_kp"),
+        ("headingKd", "heading_kd"),
+    ):
+        value = getattr(ctrl, attr, None) if ctrl is not None else None
+        if value is not None:
+            cmds.append((f"SET {wire_key}={float(value):g}", 200))
 
     # ── OTOS init + scalars: RESTORED (109-004) ───────────────────────────
     # Dropped 2026-07-16 (out-of-process) because OI/OL/OA had no path over

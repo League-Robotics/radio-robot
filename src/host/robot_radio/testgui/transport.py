@@ -1533,6 +1533,25 @@ class SimTransport(Transport):
             f"{math.degrees(yaw_rad):.1f}°)"
         )
 
+    def set_pid_enabled(self, enabled: bool) -> None:
+        """Enable/disable the firmware velocity PID on both sim motors
+        (TestGUI "PID" checkbox -- ``SimLoop.set_pid_enabled()`` ->
+        ``sim_set_pid_enabled()`` -> ``NezhaMotor::setPidEnabled()``, both
+        ports). Firmware default is enabled; a fresh connect (including the
+        Test buttons' rebuild+reconnect) starts back at enabled, so the GUI
+        re-applies its checkbox state after every connect. No-op (logged)
+        when not connected."""
+        if not self._connected or self._loop is None:
+            self._log("[WARN] SimTransport: PID toggle ignored -- not connected")
+            return
+        try:
+            self._loop.set_pid_enabled(bool(enabled))
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("SimTransport: set_pid_enabled() raised: %s", exc)
+            self._log(f"[ERROR] SimTransport: PID toggle failed: {exc}")
+            return
+        self._log(f"[INFO] SimTransport: velocity PID {'ENABLED' if enabled else 'DISABLED'}")
+
     def set_speed_factor(self, factor: int) -> None:
         """Set the sim fast-forward multiple (1 = real time).
 

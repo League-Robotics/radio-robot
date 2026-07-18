@@ -216,6 +216,19 @@ const char* sim_firmware_version() { return FIRMWARE_VERSION_STR; }
 float sim_cmd_vel_left(SimHandle h) { return asHarness(h)->motorLeft().velocityTarget(); }
 float sim_cmd_vel_right(SimHandle h) { return asHarness(h)->motorRight().velocityTarget(); }
 
+// Velocity-PID enable/disable on BOTH live NezhaMotors (stakeholder
+// 2026-07-18, TestGUI "PID" checkbox next to the Test buttons) -- thin
+// call-through to Devices::NezhaMotor::setPidEnabled(), the same sim-only
+// direct-firmware-object surface as sim_cmd_vel_left/right() above (no wire
+// arm exists for PID enable; DEV-family bench verbs are text-plane only).
+// With PID off, Mode::Active passes the raw dutyTarget_ through instead of
+// chasing velocityTarget_ (nezha_motor.cpp tick() step 4) -- so Drive-driven
+// motion (twist/Move), which only ever calls setVelocity(), writes duty 0.
+void sim_set_pid_enabled(SimHandle h, int enabled) {
+  asHarness(h)->motorLeft().setPidEnabled(enabled != 0);
+  asHarness(h)->motorRight().setPidEnabled(enabled != 0);
+}
+
 // ---- Stepping ----
 
 void sim_step(SimHandle h, int cycles) { asHarness(h)->step(cycles); }

@@ -147,6 +147,66 @@ def test_calibration_commands_pushes_oi_ol_oa_unconditionally() -> None:
     assert verbs.index("OI") < verbs.index("OL") < verbs.index("OA")
 
 
+def test_calibration_commands_pushes_pid_and_heading_gains_when_present() -> None:
+    """Stakeholder 2026-07-18: the control gains live in the robot JSON and
+    must ride the same connect-time push as the geometry calibration --
+    ``control.vel_*`` -> ``SET pid.*`` (MotorConfigPatch, both motors) and
+    ``control.heading_*`` -> ``SET headingKp/headingKd``
+    (PlannerConfigPatch). Values formatted ``:g`` like rotSlip."""
+    from robot_radio.calibration.push import calibration_commands
+
+    cfg = _cfg()
+    cfg.control = types.SimpleNamespace(
+        vel_kp=0.002, vel_ki=0.0, vel_kff=0.0, vel_imax=0.0, vel_kaw=0.0,
+        heading_kp=1.0, heading_kd=0.0)
+
+    cmds = calibration_commands(cfg)
+
+    for expected in (
+        "SET pid.kp=0.002", "SET pid.ki=0", "SET pid.kff=0",
+        "SET pid.iMax=0", "SET pid.kaw=0",
+        "SET headingKp=1", "SET headingKd=0",
+    ):
+        assert (expected, 200) in cmds, f"missing {expected!r} in {cmds}"
+
+
+def test_calibration_commands_omits_pid_gains_when_config_has_none() -> None:
+    """A config with no ``control`` section (or all-None fields) pushes no
+    gain keys at all -- ``ControlConfig``'s documented contract is
+    "None -> the firmware boot default is kept", NOT a zero-sentinel push
+    like rotSlip's."""
+    from robot_radio.calibration.push import calibration_commands
+
+    cmds = calibration_commands(_cfg())
+
+    joined = " ".join(c for c, _t in cmds)
+    assert "pid." not in joined and "headingK" not in joined, cmds
+
+
+def test_real_tovez_nocal_json_pushes_neutral_gains_via_real_model() -> None:
+    """End-to-end through the REAL pydantic model: data/robots/
+    tovez_nocal.json carries the neutral baseline (stakeholder 2026-07-18:
+    ki/kd = 0, vanilla kp) and ``load_robot_config()`` +
+    ``calibration_commands()`` actually read it from there. This is the
+    test that catches a JSON key the model silently drops (heading_kp/
+    heading_kd were not ControlConfig fields before this change)."""
+    from robot_radio.calibration.push import calibration_commands
+    from robot_radio.config.robot_config import load_robot_config
+
+    cfg_path = _REPO / "data" / "robots" / "tovez_nocal.json"
+    assert cfg_path.exists(), f"missing {cfg_path}"
+    cfg = load_robot_config(cfg_path)
+
+    cmds = calibration_commands(cfg)
+
+    for expected in (
+        "SET pid.kp=0.002", "SET pid.ki=0", "SET pid.kff=0",
+        "SET pid.iMax=0", "SET pid.kaw=0",
+        "SET headingKp=1", "SET headingKd=0",
+    ):
+        assert (expected, 200) in cmds, f"missing {expected!r} in {cmds}"
+
+
 def test_calibration_commands_pushes_encoded_otos_scale() -> None:
     """OL/OA carry the chip's RAW int8 register scalar (scale_to_int8()),
     not the raw multiplier -- e.g. otos_linear_scale=1.027 -> ``OL 27``."""

@@ -17,10 +17,10 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
     // control._vel_gains_domain marker), falling back to bench-tuned firmware
     // defaults when absent. Live-correctable per motor via `DEV M <n> CFG`.
     msg::Gains velGains;
-    velGains.kp = 0.0022f;
-    velGains.ki = 0.0018f;
-    velGains.kff = 0.0038f;
-    velGains.i_max = 0.3f;
+    velGains.kp = 0.002f;
+    velGains.ki = 0.0f;
+    velGains.kff = 0.0f;
+    velGains.i_max = 0.0f;
     velGains.kaw = 0.0f;   // anti-windup back-calculation (velocity_pid.cpp; 0 = off)
 
     // reversal_dwell / output_deadband are left unset (.has == false) on
@@ -33,7 +33,7 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
         out[i].setVelGains(velGains);
         // EMA coeff — from control.vel_filt (fallback default); a=0 would pin
         // reported velocity at 0 forever regardless of real motion.
-        out[i].setVelFiltAlpha(0.3f);
+        out[i].setVelFiltAlpha(1.0f);
     }
 
     // Per-port forward-sign — baked from the robot JSON's calibration.
@@ -123,7 +123,7 @@ msg::PlannerConfig defaultPlannerConfig() {
     cfg.setYawAccMax(10.47198f);          // [rad/s^2] (control.max_rot_accel_dps2 [deg/s^2])
     cfg.setJMax(5000.0f);                // [mm/s^3] ~6x a_max -- ~0.16s jerk-limited edges
     cfg.setYawJerkMax(100.0f);         // [rad/s^3] ~5x yaw_acc_max -- ~0.2s
-    cfg.setHeadingKp(3.0f);              // [1/s] outer heading-loop proportional gain
+    cfg.setHeadingKp(1.0f);              // [1/s] outer heading-loop proportional gain
     cfg.setHeadingKd(0.0f);              // dimensionless outer heading-loop derivative gain
     cfg.setMinSpeed(10.0f);               // [mm/s] Drive:: tracker pivot-mode threshold (100-007)
     cfg.setVWheelMax(350.0f);              // [mm/s]

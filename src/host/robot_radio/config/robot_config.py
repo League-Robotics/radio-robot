@@ -176,20 +176,26 @@ class CalibrationConfig(BaseModel):
 
 
 class ControlConfig(BaseModel):
-    """Velocity-loop PID + cross-wheel coupling tuning for this robot.
+    """Velocity-loop PID + heading-loop PD + cross-wheel tuning for this robot.
 
-    These are runtime-configurable firmware parameters (SET vel.kP / vel.kI /
-    vel.kFF / vel.iMax / vel.kAw / vel.filt / sync). They live in the robot
-    config (not hard-coded) and are pushed by _push_calibration; the firmware
-    holds them in RAM until a power-cycle, after which the open-robot freshness
-    check re-pushes them. When a field is None, the firmware default is kept.
+    These are firmware control parameters. They reach the firmware two ways:
+    (1) baked at build time by ``src/scripts/gen_boot_config.py`` into
+    ``src/firm/config/boot_config.cpp`` (generator fallback defaults when a
+    field is absent), and (2) pushed live at connect/robot-select by
+    ``calibration_commands()`` (``robot_radio.calibration.push``) via the
+    binary ``SET`` keys noted per-field below — so whatever the running
+    binary baked in never silently leaks into a session. When a field is
+    None, nothing is pushed and the firmware boot default is kept.
     """
-    vel_kp:        Optional[float] = None   # → SET vel.kP
-    vel_ki:        Optional[float] = None   # → SET vel.kI
-    vel_kff:       Optional[float] = None   # → SET vel.kFF
-    vel_imax:      Optional[float] = None   # → SET vel.iMax  (integrator clamp, PWM%)
-    vel_kaw:       Optional[float] = None   # → SET vel.kAw   (anti-windup gain, 1/s)
-    vel_filt:      Optional[float] = None   # → SET vel.filt  (velocity EMA weight)
+    vel_kp:        Optional[float] = None   # → SET pid.kp   (duty per mm/s error)
+    vel_ki:        Optional[float] = None   # → SET pid.ki
+    vel_kff:       Optional[float] = None   # → SET pid.kff  (duty per mm/s target)
+    vel_imax:      Optional[float] = None   # → SET pid.iMax (integrator clamp, duty)
+    vel_kaw:       Optional[float] = None   # → SET pid.kaw  (anti-windup gain, 1/s; 0 = off)
+    vel_filt:      Optional[float] = None   # velocity EMA weight — NO live SET key;
+    #   build-time bake only (gen_boot_config.py → MotorConfig.setVelFiltAlpha())
+    heading_kp:    Optional[float] = None   # → SET headingKp (outer heading-loop P gain, 1/s)
+    heading_kd:    Optional[float] = None   # → SET headingKd (outer heading-loop D gain)
     sync:          Optional[float] = None   # → SET sync      (cross-wheel coupling)
     min_wheel_mms: Optional[float] = None   # → SET minWheelMms (low-speed deadband)
     turn_gate:     Optional[float] = None   # → SET turnGate   (turn-in-place gate, deg)
