@@ -1,0 +1,1 @@
+/Volumes/Proj/proj/RobotProjects/radio-robot-elite/.agents/skills/bootstrap-design/SKILL.md

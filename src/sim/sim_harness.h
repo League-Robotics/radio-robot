@@ -84,6 +84,7 @@
 #include "devices/color_sensor.h"
 #include "devices/device_config.h"
 #include "devices/line_sensor.h"
+#include "devices/motor_armor.h"
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "fake_transport.h"
@@ -108,19 +109,28 @@ class SimHarness {
       : plant_(trackWidth),
         motorL_(plant_, makeMotorConfig(1)),
         motorR_(plant_, makeMotorConfig(2)),
+        // PARITY (stakeholder 2026-07-18: "I want them to be the same in
+        // both places"): the sim composes the motor stack EXACTLY as
+        // src/firm/main.cpp does -- bare NezhaMotor wrapped in the
+        // MotorArmor decorator, the ARMOR handed to the app graph. The only
+        // sim/production difference is what answers on the I2C bus.
+        armorL_(motorL_),
+        armorR_(motorR_),
         otos_(plant_, Devices::OtosConfig{}),
         color_(plant_, Devices::ColorConfig{}),
         line_(plant_, Devices::LineConfig{}),
         comms_(serialLink_, radioLink_, "DEVICE:NEZHA2:sim:sim_harness:1"),
         tlm_(comms_, serialLink_, radioLink_),
         deadman_(clock_),
-        drive_(motorL_, motorR_, trackWidth),
-        odom_(motorL_, motorR_, trackWidth),
-        preamble_(motorL_, motorR_, otos_, color_, line_, clock_),
-        headingSource_(otos_, motorL_, motorR_, trackWidth),
+        drive_(armorL_, armorR_, trackWidth),
+        odom_(armorL_, armorR_, trackWidth),
+        preamble_(armorL_, armorR_, otos_, color_, line_, clock_),
+        headingSource_(otos_, armorL_, armorR_, trackWidth),
         pilot_(executor_, drive_, headingSource_, odom_),
-        robotLoop_(plant_, motorL_, motorR_, otos_, comms_, tlm_, drive_, odom_,
+        robotLoop_(plant_, armorL_, armorR_, otos_, comms_, tlm_, drive_, odom_,
                    deadman_, preamble_, pilot_, clock_, sleeper_) {
+    armorL_.configure(makeMotorConfig(1));
+    armorR_.configure(makeMotorConfig(2));
     // Motion::Executor + App::HeadingSource + App::Pilot (109-003/109-005)
     // -- configured from the same default msg::PlannerConfig{} zero-value
     // struct main.cpp's real Config::defaultPlannerConfig() would otherwise
@@ -380,22 +390,14 @@ class SimHarness {
     cfg.velGains.kff = 1.0f / TestSim::kDefaultDutyVelMax;  // 0.002 duty per mm/s
     cfg.velGains.kp = 0.01f;   // feedback trim -- needed for turn accuracy
                                // (kp=0 lands 90deg turns ~30deg off + faults)
-    // Write shaping OFF in the sim (stakeholder 2026-07-18: "we're in sim,
-    // so we don't really need it -- get the sim path to just drive the
-    // motors correctly first"). Post-restructure these two knobs configure
-    // NezhaMotor's OWN writeShapedDuty() gate (the dwell/deadband moved
-    // there from the old MotorArmor base -- Nezha-brick wedge protection
-    // the SimPlant has no latch to need): reversalDwell=0 skips the
-    // zero-dwell reversal transition entirely, outputDeadband=0 disables
-    // the sub-deadband write clamp. Both are documented explicit
-    // off-configurations, not sentinels. The MotorArmor DECORATOR
-    // (observation/recovery) is simply not constructed in this harness at
-    // all -- the app graph gets the bare NezhaMotor leaves; the real ARM
-    // build wraps (src/firm/main.cpp).
-    cfg.reversalDwell.has = true;
-    cfg.reversalDwell.val = 0.0f;    // [ms] 0 = no reversal dwell
-    cfg.outputDeadband.has = true;
-    cfg.outputDeadband.val = 0.0f;   // duty fraction; 0 = no deadband clamp
+    // PARITY (stakeholder 2026-07-18): reversalDwell/outputDeadband are
+    // deliberately left UNSET -- exactly what the production boot config
+    // bakes (gen_boot_config.py leaves both .has == false on purpose), so
+    // NezhaMotor's ctor substitutes the SAME ship defaults (100ms / 0.03)
+    // in the sim as on the robot. The sim gets no special write-shaping
+    // configuration of its own -- the whole motor stack behaves
+    // identically in both places; only the far side of the I2C bus
+    // differs.
     return cfg;
   }
 
@@ -485,6 +487,11 @@ class SimHarness {
 
   Devices::NezhaMotor motorL_;
   Devices::NezhaMotor motorR_;
+  // PARITY: the armor wraps each bare motor exactly as main.cpp does; the
+  // app graph below takes the ARMOR, never the bare leaf. Declared after
+  // the motors (init order) and before every consumer.
+  Devices::MotorArmor armorL_;
+  Devices::MotorArmor armorR_;
   Devices::Otos otos_;
   Devices::ColorSensorLeaf color_;
   Devices::LineSensorLeaf line_;

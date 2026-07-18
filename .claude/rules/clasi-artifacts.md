@@ -1,6 +1,6 @@
 ---
 paths:
-  - .clasi/**
+  - clasi/**
 ---
 
 You are modifying CLASI planning artifacts. Before making changes:
@@ -14,4 +14,4 @@ You are modifying CLASI planning artifacts. Before making changes:
 4. Use CLASI MCP tools for all artifact operations — do not create
    sprint/ticket/TODO files manually.
 
-Direct edits to `.clasi/sprints/` are blocked for team-lead. Use MCP tools.
+Direct edits to `clasi/sprints/` are blocked for team-lead. Use MCP tools.

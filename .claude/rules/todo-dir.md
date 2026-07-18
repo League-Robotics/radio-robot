@@ -1,6 +1,6 @@
 ---
 paths:
-  - .clasi/issues/**
+  - clasi/issues/**
 ---
 
 Use the CLASI `issue` skill or `move_issue_to_done` MCP tool for issue
