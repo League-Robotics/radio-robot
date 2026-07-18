@@ -23,7 +23,7 @@
 // main.cpp's own construction-time wiring.
 #pragma once
 
-#include "devices/nezha_motor.h"
+#include "devices/motor.h"
 
 namespace App {
 
@@ -34,7 +34,7 @@ class Drive {
   // [mm], BodyKinematics::inverse()'s own `b` parameter; the loop's own
   // construction (ticket 008) passes
   // Config::defaultDrivetrainConfig().trackwidth.
-  Drive(Devices::NezhaMotor& left, Devices::NezhaMotor& right, float trackWidth);
+  Drive(Devices::Motor& left, Devices::Motor& right, float trackWidth);
 
   // Stages the next tick()'s body twist target. Does not itself reach into
   // the leaves -- tick() is the only method that ever calls setVelocity().
@@ -60,8 +60,8 @@ class Drive {
   float trackWidth() const { return trackWidth_; }  // [mm]
 
  private:
-  Devices::NezhaMotor& left_;
-  Devices::NezhaMotor& right_;
+  Devices::Motor& left_;
+  Devices::Motor& right_;
   float trackWidth_;  // [mm]
 
   float v_x_ = 0.0f;    // [mm/s]

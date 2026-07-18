@@ -4,8 +4,8 @@
 
 namespace App {
 
-HeadingSource::HeadingSource(Devices::Otos& otos, Devices::NezhaMotor& left,
-                             Devices::NezhaMotor& right, float trackWidth)
+HeadingSource::HeadingSource(Devices::Otos& otos, Devices::Motor& left,
+                             Devices::Motor& right, float trackWidth)
     : otos_(otos), left_(left), right_(right), trackWidth_(trackWidth) {}
 
 void HeadingSource::configure(const msg::PlannerConfig& config) {

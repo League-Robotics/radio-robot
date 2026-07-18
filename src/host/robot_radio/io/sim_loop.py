@@ -313,6 +313,11 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
     lib.sim_cmd_vel_right.argtypes = [ctypes.c_void_p]
     lib.sim_cmd_vel_right.restype = ctypes.c_float
 
+    # Velocity-PID enable/disable on both live NezhaMotors (TestGUI "PID"
+    # checkbox) -- same direct-firmware-object surface as sim_cmd_vel_*.
+    lib.sim_set_pid_enabled.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    lib.sim_set_pid_enabled.restype = None
+
 
 HookCallback = Callable[[int, "ctypes.Array[ctypes.c_uint8]"], int]
 
@@ -664,6 +669,21 @@ class SimLoop:
             lambda: self._lib.sim_set_lead_compensation(
                 self._handle, ctypes.c_float(heading_lead_bias),
                 ctypes.c_float(plan_lead), ctypes.c_float(terminal_lead)))
+
+    def set_pid_enabled(self, enabled: bool) -> None:
+        """Enable/disable the velocity PID on BOTH firmware motors
+        (``sim_set_pid_enabled()`` -> ``NezhaMotor::setPidEnabled()``, both
+        ports). Firmware default is enabled. With PID OFF, a velocity-staged
+        command drives OPEN-LOOP: duty = ``Gains::kff`` * target with every
+        feedback term bypassed -- twist/Move motion keeps moving at the
+        feedforward-nominal speed, uncorrected (so a fault knob like
+        ``set_enc_scale_err()`` visibly goes uncompensated). Synchronous
+        round-trip onto the tick thread (same rationale as the fault
+        setters above)."""
+        self._require_connected()
+        self._call_on_tick_thread(
+            lambda: self._lib.sim_set_pid_enabled(
+                self._handle, 1 if enabled else 0))
 
     def set_yaw_rate_max(self, yaw_rate_max: float) -> None:  # [rad/s]
         """109-010: rate-sweep characterization harness hook -- varies the

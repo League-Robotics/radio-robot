@@ -29,7 +29,7 @@
 #include "app/telemetry.h"
 #include "devices/clock.h"
 #include "devices/i2c_bus.h"
-#include "devices/nezha_motor.h"
+#include "devices/motor.h"
 #include "devices/otos.h"
 
 namespace App {
@@ -42,8 +42,8 @@ class RobotLoop {
   // body's own bus.clearanceSafetyNetCount() fault read; color/line leaves
   // are NOT referenced here -- Preamble already holds them and is called by
   // name, never reached into directly.
-  RobotLoop(Devices::I2CBus& bus, Devices::NezhaMotor& motorL,
-            Devices::NezhaMotor& motorR, Devices::Otos& otos, Comms& comms,
+  RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
+            Devices::Motor& motorR, Devices::Otos& otos, Comms& comms,
             Telemetry& tlm, Drive& drive, Odometry& odom, Deadman& deadman,
             Preamble& preamble, Pilot& pilot, const Devices::Clock& clock,
             Devices::Sleeper& sleeper);
@@ -92,8 +92,8 @@ class RobotLoop {
   void drainPilotEvents();
 
   Devices::I2CBus& bus_;
-  Devices::NezhaMotor& motorL_;
-  Devices::NezhaMotor& motorR_;
+  Devices::Motor& motorL_;
+  Devices::Motor& motorR_;
   Devices::Otos& otos_;
   Comms& comms_;
   Telemetry& tlm_;

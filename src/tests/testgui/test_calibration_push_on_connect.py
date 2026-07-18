@@ -186,10 +186,13 @@ def test_calibration_commands_omits_pid_gains_when_config_has_none() -> None:
 def test_real_tovez_nocal_json_pushes_neutral_gains_via_real_model() -> None:
     """End-to-end through the REAL pydantic model: data/robots/
     tovez_nocal.json carries the neutral baseline (stakeholder 2026-07-18:
-    ki/kd = 0, vanilla kp) and ``load_robot_config()`` +
-    ``calibration_commands()`` actually read it from there. This is the
-    test that catches a JSON key the model silently drops (heading_kp/
-    heading_kd were not ControlConfig fields before this change)."""
+    ki/kd = 0, vanilla kp; kff = 0.002 = 1/500 -- the vanilla inverse-plant
+    slope, kept non-zero because it IS the open-loop law the PID checkbox's
+    disabled state drives, see nezha_motor.h's dispatch bullet) and
+    ``load_robot_config()`` + ``calibration_commands()`` actually read it
+    from there. This is the test that catches a JSON key the model silently
+    drops (heading_kp/heading_kd were not ControlConfig fields before this
+    change)."""
     from robot_radio.calibration.push import calibration_commands
     from robot_radio.config.robot_config import load_robot_config
 
@@ -200,7 +203,7 @@ def test_real_tovez_nocal_json_pushes_neutral_gains_via_real_model() -> None:
     cmds = calibration_commands(cfg)
 
     for expected in (
-        "SET pid.kp=0.002", "SET pid.ki=0", "SET pid.kff=0",
+        "SET pid.kp=0.002", "SET pid.ki=0", "SET pid.kff=0.002",
         "SET pid.iMax=0", "SET pid.kaw=0",
         "SET headingKp=1", "SET headingKd=0",
     ):

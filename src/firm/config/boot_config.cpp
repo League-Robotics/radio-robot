@@ -19,7 +19,7 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
     msg::Gains velGains;
     velGains.kp = 0.002f;
     velGains.ki = 0.0f;
-    velGains.kff = 0.0f;
+    velGains.kff = 0.002f;
     velGains.i_max = 0.0f;
     velGains.kaw = 0.0f;   // anti-windup back-calculation (velocity_pid.cpp; 0 = off)
 

@@ -24,6 +24,7 @@
 #include "devices/microbit_clock.h"
 #include "devices/microbit_i2c_bus.h"
 #include "devices/line_sensor.h"
+#include "devices/motor_armor.h"
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "motion/executor.h"
@@ -91,10 +92,22 @@ int main() {
 
   // left_port/right_port are 1-based port labels (boot_config.h's
   // convention) -> 0-based index into the motorConfigs array.
-  static Devices::NezhaMotor motorL(
-      bus, toDeviceMotorConfig(motorConfigs[drivetrainConfig.left_port - 1]));
-  static Devices::NezhaMotor motorR(
-      bus, toDeviceMotorConfig(motorConfigs[drivetrainConfig.right_port - 1]));
+  //
+  // Composition (stakeholder 2026-07-18, motor.h): construct the bare
+  // NezhaMotor, wrap it in the MotorArmor decorator (wedge detection +
+  // standstill-guarded resets), and hand the ARMOR to the app graph — the
+  // ARM build always drives armored motors. The sim composes the bare
+  // leaves directly (src/sim/sim_harness.h) — no armor in that loop.
+  Devices::MotorConfig motorCfgL =
+      toDeviceMotorConfig(motorConfigs[drivetrainConfig.left_port - 1]);
+  Devices::MotorConfig motorCfgR =
+      toDeviceMotorConfig(motorConfigs[drivetrainConfig.right_port - 1]);
+  static Devices::NezhaMotor motorLBare(bus, motorCfgL);
+  static Devices::NezhaMotor motorRBare(bus, motorCfgR);
+  static Devices::MotorArmor motorL(motorLBare);
+  static Devices::MotorArmor motorR(motorRBare);
+  motorL.configure(motorCfgL);
+  motorR.configure(motorCfgR);
 
   Devices::OtosConfig otosConfig;
   otosConfig.offsetX = otosBootConfig.offsetX;

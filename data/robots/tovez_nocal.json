@@ -69,10 +69,10 @@
   },
   "control": {
     "_vel_gains_domain": "duty [-1,1] (NezhaMotor MotorVelocityPid); NOT the old PWM-percent scale",
-    "_neutral_note": "NEUTRAL baseline (stakeholder 2026-07-18): this is the no-calibration profile, so the gains are the most vanilla usable set, not a tuning. vel_kp = 0.002 = 1/500: full duty at the plant's ~500 mm/s full-scale speed (duty = error / v_max, the plainest proportional normalization; a pure-P loop droops by design). vel_ki/vel_kff = 0 (no integrator, no feedforward), vel_imax/vel_kaw = 0 (inert with ki=0; kaw=0 = anti-windup off). vel_filt = 1.0 (no EMA smoothing, raw measured velocity; NOTE: no live SET key -- build-time bake only). heading_kp = 1.0 [1/s] unit gain, heading_kd = 0. Tuned values live in tovez.json, never here.",
+    "_neutral_note": "NEUTRAL baseline (stakeholder 2026-07-18): this is the no-calibration profile, so the gains are the most vanilla usable set, not a tuning. vel_kp = 0.002 = 1/500: full duty at the plant's ~500 mm/s full-scale speed (duty = error / v_max, the plainest proportional normalization; a pure-P loop droops by design). vel_kff = 0.002 = 1/500 too -- the SAME vanilla inverse-plant slope, and the open-loop law itself: with the PID disabled (TestGUI PID checkbox) the motor drives duty = kff * velocityTarget, so kff=0 would make PID-off dead rather than open-loop. vel_ki = 0 (no integrator), vel_imax/vel_kaw = 0 (inert with ki=0; kaw=0 = anti-windup off). vel_filt = 1.0 (no EMA smoothing, raw measured velocity; NOTE: no live SET key -- build-time bake only). heading_kp = 1.0 [1/s] unit gain, heading_kd = 0. Tuned values live in tovez.json, never here.",
     "vel_kp": 0.002,
     "vel_ki": 0.0,
-    "vel_kff": 0.0,
+    "vel_kff": 0.002,
     "vel_imax": 0.0,
     "vel_kaw": 0.0,
     "vel_filt": 1.0,

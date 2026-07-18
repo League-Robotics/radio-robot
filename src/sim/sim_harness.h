@@ -380,6 +380,22 @@ class SimHarness {
     cfg.velGains.kff = 1.0f / TestSim::kDefaultDutyVelMax;  // 0.002 duty per mm/s
     cfg.velGains.kp = 0.01f;   // feedback trim -- needed for turn accuracy
                                // (kp=0 lands 90deg turns ~30deg off + faults)
+    // Write shaping OFF in the sim (stakeholder 2026-07-18: "we're in sim,
+    // so we don't really need it -- get the sim path to just drive the
+    // motors correctly first"). Post-restructure these two knobs configure
+    // NezhaMotor's OWN writeShapedDuty() gate (the dwell/deadband moved
+    // there from the old MotorArmor base -- Nezha-brick wedge protection
+    // the SimPlant has no latch to need): reversalDwell=0 skips the
+    // zero-dwell reversal transition entirely, outputDeadband=0 disables
+    // the sub-deadband write clamp. Both are documented explicit
+    // off-configurations, not sentinels. The MotorArmor DECORATOR
+    // (observation/recovery) is simply not constructed in this harness at
+    // all -- the app graph gets the bare NezhaMotor leaves; the real ARM
+    // build wraps (src/firm/main.cpp).
+    cfg.reversalDwell.has = true;
+    cfg.reversalDwell.val = 0.0f;    // [ms] 0 = no reversal dwell
+    cfg.outputDeadband.has = true;
+    cfg.outputDeadband.val = 0.0f;   // duty fraction; 0 = no deadband clamp
     return cfg;
   }
 

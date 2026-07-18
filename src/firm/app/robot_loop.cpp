@@ -20,9 +20,9 @@ namespace {
 // blocks, not just the trailing one) -- ~25 Hz/~40ms, matching
 // Devices::Telemetry's own kPrimaryPeriod=40ms (telemetry.h) so the
 // primary-frame throttle and the loop's own pace agree by construction.
-constexpr uint32_t kSettle = 4;  // [ms] encoder-settle window, both motors
-constexpr uint32_t kClear = 4;   // [ms] post-duty-write clearance window
-constexpr uint32_t kCycle = 40;  // [ms] whole-schedule pace target (~25 Hz)
+constexpr uint32_t kSettle = 0;  // [ms] encoder-settle window, both motors
+constexpr uint32_t kClear = 0;   // [ms] post-duty-write clearance window
+constexpr uint32_t kCycle = 20;  // [ms] whole-schedule pace target (~25 Hz)
 
 // kWindows is what the three settle/clearance blocks above already consume
 // before the final (perception+odometry+pace) block runs; kPace is that
@@ -89,8 +89,8 @@ msg::AckStatus toWireAckStatus(Motion::CompletionStatus status) {
 
 }  // namespace
 
-RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::NezhaMotor& motorL,
-                      Devices::NezhaMotor& motorR, Devices::Otos& otos,
+RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
+                      Devices::Motor& motorR, Devices::Otos& otos,
                       Comms& comms, Telemetry& tlm, Drive& drive,
                       Odometry& odom, Deadman& deadman, Preamble& preamble,
                       Pilot& pilot, const Devices::Clock& clock,
@@ -415,13 +415,23 @@ void RobotLoop::cycle() {
   Cmd cmd;
 
 
+  // Request/collect MUST interleave per port: the 0x46 encoder-select is a
+  // single latched state on the brick (one pending read; SimPlant models
+  // the same via selectedPort_) -- issuing both selects before either
+  // collect makes BOTH motors read the LAST-selected port's encoder
+  // (observed 2026-07-18: an unmanaged pivot showed actual L == actual R
+  // glued to the right wheel while cmd L/R were correctly mirrored).
   motorL_.requestSample();  // 0x46 write (brick holds ONE pending read)
+  motorL_.tick(clock_.nowMicros());   // collect L while port 1 is still selected
+
+  motorR_.requestSample();
+  motorR_.tick(clock_.nowMicros());
+
+  drive_.tick();  // twist -> wheel targets (consumed on the NEXT cycle's ticks)
 
   runAndWait(kSettle, [&] {           // >=4ms: L encoder settling, meanwhile --
     comms_.pump(cmd);                 //   drain RX, decode <=1 frame into cmd
   });
-
-  motorL_.tick(clock_.nowMicros());   // collect -> velocity PID -> armored duty write
 
   runAndWait(kClear, [&] {  // >=4ms: brick clears L's duty write, meanwhile --
     // Stage this cycle's encoder/velocity/connection fields onto the
@@ -433,7 +443,6 @@ void RobotLoop::cycle() {
     tlm_.emit(cycleStart);
   });
 
-  motorR_.requestSample();
 
   runAndWait(kSettle, [&] {  // >=4ms: R encoder settling, meanwhile --
     // Apply <=1 decoded command; every path that applies one acks via the
@@ -467,10 +476,10 @@ void RobotLoop::cycle() {
     }
     drainPilotEvents();
 
-    drive_.tick();  // twist -> wheel targets (R consumes them below)
+   
   });
   
-  motorR_.tick(clock_.nowMicros());
+  
 
   // Final (perception + odometry + pace) block -- the schedule's 4th
   // runAndWait, matching the same "own mark, own gap" shape as the three

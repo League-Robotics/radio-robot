@@ -4,7 +4,7 @@
 
 namespace App {
 
-Drive::Drive(Devices::NezhaMotor& left, Devices::NezhaMotor& right, float trackWidth)
+Drive::Drive(Devices::Motor& left, Devices::Motor& right, float trackWidth)
     : left_(left), right_(right), trackWidth_(trackWidth) {}
 
 void Drive::setTwist(float v_x, float omega) {

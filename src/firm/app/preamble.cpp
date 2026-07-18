@@ -4,7 +4,7 @@
 
 namespace App {
 
-Preamble::Preamble(Devices::NezhaMotor& left, Devices::NezhaMotor& right,
+Preamble::Preamble(Devices::Motor& left, Devices::Motor& right,
                     Devices::Otos& otos, Devices::ColorSensorLeaf& color,
                     Devices::LineSensorLeaf& line, const Devices::Clock& clock)
     : left_(left),

@@ -1,6 +1,13 @@
 #include "devices/nezha_motor.h"
 
 #include <cmath>
+// HOST_BUILD-only debug tracing: <iostream> must NEVER reach the ARM build --
+// newlib-nano has no wide-char stdio (undefined putwc/getwc/swprintf at link)
+// and iostream's locale machinery alone overflows FLASH by ~77KB (observed
+// 2026-07-18: 450KB into the 364KB region).
+#ifdef HOST_BUILD
+#include <iostream>
+#endif
 
 // ---------------------------------------------------------------------------
 // I2C wire protocol constants (verified against PlanetX pxt-nezha2/main.ts).
@@ -27,7 +34,7 @@ namespace {
 // Max physically-plausible wheel speed. An occasional corrupt encoder read
 // produces a huge bogus delta; reject any sample beyond this bound and hold
 // the previous filtered value.
-constexpr float kMaxPlausibleSpeed = 1000.0f;   // [mm/s]
+constexpr float kMaxPlausibleSpeed = 600.0f;   // [mm/s]
 
 // Position-step plausibility gate (source-side outlier rejection -- see
 // tick() step 2). Deliberately MORE generous than kMaxPlausibleSpeed (which
@@ -35,7 +42,7 @@ constexpr float kMaxPlausibleSpeed = 1000.0f;   // [mm/s]
 // right at that bound): a step implying twice any commandable speed is
 // always a corrupted read. A sample rejected here never reaches
 // lastPosition_/filteredVelocity_ at all.
-constexpr float kMaxPlausibleStepSpeed = 2000.0f;   // [mm/s]
+constexpr float kMaxPlausibleStepSpeed = 1200.0f;   // [mm/s]
 
 // After this many CONSECUTIVE step-gate rejections, accept the new position
 // as the new truth (re-anchor) instead of rejecting forever -- a persistent
@@ -74,19 +81,19 @@ constexpr int kOk = 0;
 NezhaMotor::NezhaMotor(I2CBus& bus, const MotorConfig& config)
     : bus_(bus)
 {
-    // configureArmor() (MotorArmor, base) caches the two armor fields
-    // (reversalDwell/outputDeadband, defaulting when unset); this
-    // constructor then caches the rest of config_ itself (no separate
-    // configureDevice() virtual dispatch step -- NezhaMotor is currently
-    // this subsystem's only motor leaf, so that extra indirection adds
-    // nothing here).
-    configureArmor(config);
     config_ = config;
     if (config_.slewRate <= 0.0f) {
         // MotorConfig.slewRate defaults to the existing kMaxDeltaPwmPerWrite
         // value (25) when unconfigured (zero-initialized).
         config_.slewRate = kDefaultSlewRate;
     }
+    // Write-shaping fields (folded from the old MotorArmor base): ship
+    // defaults when unset; an explicit 0 is a valid off-configuration for
+    // both (the sim's setting -- see nezha_motor.h's own field comment).
+    reversalDwell_ = config.reversalDwell.has ? config.reversalDwell.val
+                                               : kDefaultReversalDwell;
+    outputDeadband_ = config.outputDeadband.has ? config.outputDeadband.val
+                                                 : kDefaultOutputDeadband;
 }
 
 void NezhaMotor::begin()
@@ -96,6 +103,14 @@ void NezhaMotor::begin()
     hardReset();
 }
 
+// Bare-motor reset semantics (motor.h): resetPosition() acts IMMEDIATELY --
+// the caller (or a wrapping MotorArmor, which overrides resetPosition()
+// with the staged, standstill-guarded dispatch) owns any at-rest
+// discipline. rebaseline() is the software-only re-anchor.
+void NezhaMotor::resetPosition() { hardReset(); }
+
+void NezhaMotor::rebaseline() { softRebaseline(); }
+
 // ---------------------------------------------------------------------------
 // Primitive setters — stage the command; tick() executes it.
 // ---------------------------------------------------------------------------
@@ -104,12 +119,14 @@ void NezhaMotor::setVelocity(float velocity)
 {
     velocityTarget_ = velocity;
     mode_ = Mode::Active;
+    activeSource_ = ActiveSource::Velocity;
 }
 
 void NezhaMotor::setDuty(float duty)
 {
     dutyTarget_ = duty;
     mode_ = Mode::Active;
+    activeSource_ = ActiveSource::Duty;
 }
 
 void NezhaMotor::setNeutral(Neutral mode)
@@ -231,23 +248,26 @@ float NezhaMotor::appliedDuty() const
 }
 
 // ---------------------------------------------------------------------------
-// tick() — see nezha_motor.h's class-level comment for the 5-step
-// call-order contract.
+// tick() — see nezha_motor.h's class-level comment for the 2-step contract
+// (the old base-armor steps — reset dispatch, wedge detector, rest
+// tracking — now live in the MotorArmor DECORATOR's own tick()).
 // ---------------------------------------------------------------------------
 void NezhaMotor::tick(uint64_t nowUs)
 {
     uint32_t nowMs = static_cast<uint32_t>(nowUs / 1000);
 
-    // 1. Standstill-guarded reset dispatch.
-    processResetIfPending(nowMs);
-
-    // 2. Per-tick position sample -- collects a sample that was REQUESTED
+    // 1. Per-tick position sample -- collects a sample that was REQUESTED
     // in a previous slice (requestSample() -> requestEncoder()) by the
     // loop's own cycle. Non-blocking: no write here, no
     // spin, just the 4-byte read.
     int32_t raw = collectEncoder();
     float pos = (static_cast<float>(raw) / 10.0f)
               * config_.wheelTravelCalib * static_cast<float>(config_.fwdSign);
+#ifdef HOST_BUILD
+    // Sim-only encoder trace (see the guarded <iostream> include above).
+    std::cout << "nezha_motor[" << static_cast<int>(config_.port) << "]: enc " << raw
+              << " pos " << pos << "\n" << std::flush;
+#endif
 
     // Per-TICK elapsed time from this leaf's own us time seam (nowUs), NOT
     // the ms derivation above -- a ms-only clock's +/-1ms quantization
@@ -362,31 +382,28 @@ void NezhaMotor::tick(uint64_t nowUs)
     // plausibility gate against a same-value, near-zero-elapsed step here
     // is exactly the false-glitch bug this fix removes.
 
-    // 3. Wedge detector -- reads position() (== lastPosition_, just
-    // maintained above by the freshness gate) and appliedDuty() (last
-    // tick's write; this tick's mode dispatch has not run yet). A repeated
-    // raw sample between two brick refreshes now holds position() constant
-    // for only the handful of fiber cycles between refreshes (matching the
-    // brick's own refresh cadence), well under kWedgeThreshold's 10-
-    // consecutive-identical-reads bound -- normal driving no longer false-
-    // latches (the pre-fix false latch came from the OLD per-tick glitch
-    // path silently holding lastPosition_ across MULTIPLE refresh windows
-    // at a time, a much longer stall than one brick-refresh interval).
-    updateWedgeDetector();
-
-    // 4. Mode dispatch. Mode::Active covers both PID-on (chase
-    // velocityTarget_) and PID-off (raw dutyTarget_ passthrough) --
-    // armoredWrite() gates BOTH paths identically.
+    // 2. Mode dispatch (stakeholder 2026-07-18 -- see nezha_motor.h's
+    // file-header bullet). Mode::Active dispatches by which setter staged
+    // the command: setDuty() -> raw passthrough; setVelocity() -> PID chase
+    // while enabled, open-loop feedforward (kff [duty per mm/s] *
+    // velocityTarget_) while disabled -- "no PID" drives the nominal duty
+    // for the target, it does not go dead. writeShapedDuty() gates every
+    // path identically.
     switch (mode_) {
         case Mode::Active:
-            if (pidEnabled_) {
+            if (activeSource_ == ActiveSource::Duty) {
+                writeShapedDuty(dutyTarget_, nowMs);
+            } else if (pidEnabled_) {
                 float dt = haveElapsed ? elapsedTime : kNominalDt;
                 float duty = pid_.compute(velocityTarget_, filteredVelocity_, dt,
                                            config_.velGains, config_.velDeadband);
                 duty = averageDuty(duty);   // boxcar output smoothing (DUTYAVG; no-op at window 1)
-                armoredWrite(duty, nowMs);
+                writeShapedDuty(duty, nowMs);
             } else {
-                armoredWrite(dutyTarget_, nowMs);
+                // Open-loop: the same signed feedforward term the PID's own
+                // output starts from (kff * target), with every feedback
+                // term bypassed. writeRawDuty() clamps to [-1, 1].
+                writeShapedDuty(config_.velGains.kff * velocityTarget_, nowMs);
             }
             break;
         case Mode::Neutral:
@@ -395,15 +412,65 @@ void NezhaMotor::tick(uint64_t nowUs)
             // speed-0 coast path, the only safe stop the vendor register
             // map provides.
             (void)neutralTarget_;
-            armoredWrite(0.0f, nowMs);
+            writeShapedDuty(0.0f, nowMs);
             break;
         case Mode::None:
         default:
             break;
     }
+}
 
-    // 5. Rest tracking.
-    updateRestTracking();
+// ---------------------------------------------------------------------------
+// writeShapedDuty() — reversal dwell + output deadband, then writeRawDuty().
+// Folded from the old MotorArmor::armoredWrite() (2026-07-18 restructure)
+// because both policies are Nezha-brick wedge PROTECTION — an instantaneous
+// H-bridge sign flip written to 0x60 while the motor is under way latches
+// the 0x46 encoder readback (the reversal write train,
+// docs/knowledge/2026-07-04-encoder-wedge.md), and near-zero PID dither
+// would request such flips every tick without the deadband. Semantics
+// unchanged from armoredWrite(): stop (duty == 0) and sub-deadband duty are
+// always immediate and unclamped, even mid-dwell (they cancel any dwell in
+// progress); a commanded sign change (relative to lastRequestedDuty_)
+// writes 0 now, arms the dwell timer, suppresses every non-zero write until
+// the deadline, then forwards the new-direction duty as-is (the slew cap
+// ramps it from zero). reversalDwell_ == 0 skips the dwell transition
+// entirely — the sim's configuration (sim_harness.h's makeMotorConfig()).
+// ---------------------------------------------------------------------------
+void NezhaMotor::writeShapedDuty(float duty, uint32_t now)
+{
+    if (duty == 0.0f || fabsf(duty) < outputDeadband_) {
+        // Stop always wins: immediate, unclamped, cancels any dwell.
+        dwelling_ = false;
+        lastRequestedDuty_ = 0.0f;
+        writeRawDuty(0.0f);
+        return;
+    }
+
+    if (dwelling_) {
+        if (now < dwellDeadline_) {
+            // Still holding at commanded-zero through the dwell window.
+            lastRequestedDuty_ = 0.0f;
+            writeRawDuty(0.0f);
+            return;
+        }
+        // Dwell elapsed — proceed in the new direction below.
+        dwelling_ = false;
+    } else if (reversalDwell_ > 0.0f && lastRequestedDuty_ != 0.0f &&
+               ((duty > 0.0f) != (lastRequestedDuty_ > 0.0f))) {
+        // Commanded sign change relative to the last duty actually
+        // forwarded — write 0 now and arm the dwell; the new direction is
+        // withheld until the dwell deadline.
+        dwelling_ = true;
+        dwellDeadline_ = now + static_cast<uint32_t>(reversalDwell_);
+        lastRequestedDuty_ = 0.0f;
+        writeRawDuty(0.0f);
+        return;
+    }
+
+    // Same-sign duty (or no prior direction, or the dwell just elapsed):
+    // forward as-is.
+    lastRequestedDuty_ = duty;
+    writeRawDuty(duty);
 }
 
 // ---------------------------------------------------------------------------
@@ -591,9 +658,9 @@ int32_t NezhaMotor::collectEncoder()
 
 void NezhaMotor::hardReset()
 {
-    // Median-of-3 atomic-read snapshot + readback-verify + retry.
-    // processResetIfPending() (base) increments hardResetCount_ after
-    // calling this.
+    // Median-of-3 atomic-read snapshot + readback-verify + retry. Reset
+    // COUNTING lives in the MotorArmor decorator (its own
+    // hardResetCount()/softResetCount()) -- the bare leaf keeps none.
     static constexpr int kMaxRetries = 2;
     static constexpr int32_t kReadbackThreshold = 2;
 
@@ -673,11 +740,6 @@ void NezhaMotor::softRebaseline()
     lastFreshRawEnc_ = 0;
     lastFreshUs_ = 0;
     clearVelWindow();
-
-    // softResetCount_ is base-owned (MotorArmor); this leaf increments it
-    // directly (it is protected, inherited) rather than duplicating a
-    // counter here.
-    ++softResetCount_;
 }
 
 }  // namespace Devices

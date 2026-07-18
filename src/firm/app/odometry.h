@@ -27,7 +27,7 @@
 #include <cstdint>
 
 #include "app/telemetry.h"
-#include "devices/nezha_motor.h"
+#include "devices/motor.h"
 #include "devices/otos.h"
 
 namespace App {
@@ -53,7 +53,7 @@ class Odometry {
   // reboot (e.g. a telemetry sequence-number reset) and handling the
   // discontinuity itself -- this class does not add any reboot-detection
   // or cross-session pose-splicing logic.
-  Odometry(Devices::NezhaMotor& left, Devices::NezhaMotor& right, float trackWidth);
+  Odometry(Devices::Motor& left, Devices::Motor& right, float trackWidth);
 
   // Reads both leaves' position() (the leaf's OWN cached encoder position
   // -- no shadow copy kept here beyond the delta baseline below), computes
@@ -98,8 +98,8 @@ class Odometry {
   void reset(float x, float y, float theta);  // [mm] [mm] [rad]
 
  private:
-  Devices::NezhaMotor& left_;
-  Devices::NezhaMotor& right_;
+  Devices::Motor& left_;
+  Devices::Motor& right_;
   float trackWidth_;  // [mm]
 
   float lastLeft_ = 0.0f;   // [mm] delta baseline -- see constructor comment

@@ -6,7 +6,7 @@
 
 namespace App {
 
-Odometry::Odometry(Devices::NezhaMotor& left, Devices::NezhaMotor& right, float trackWidth)
+Odometry::Odometry(Devices::Motor& left, Devices::Motor& right, float trackWidth)
     : left_(left),
       right_(right),
       trackWidth_(trackWidth),

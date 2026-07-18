@@ -221,9 +221,10 @@ float sim_cmd_vel_right(SimHandle h) { return asHarness(h)->motorRight().velocit
 // call-through to Devices::NezhaMotor::setPidEnabled(), the same sim-only
 // direct-firmware-object surface as sim_cmd_vel_left/right() above (no wire
 // arm exists for PID enable; DEV-family bench verbs are text-plane only).
-// With PID off, Mode::Active passes the raw dutyTarget_ through instead of
-// chasing velocityTarget_ (nezha_motor.cpp tick() step 4) -- so Drive-driven
-// motion (twist/Move), which only ever calls setVelocity(), writes duty 0.
+// With PID off, a setVelocity()-staged command drives OPEN-LOOP: duty =
+// Gains::kff [duty per mm/s] * velocityTarget_ with every feedback term
+// bypassed (nezha_motor.cpp tick() step 4) -- Drive-driven motion
+// (twist/Move) keeps moving at the feedforward-nominal speed, uncorrected.
 void sim_set_pid_enabled(SimHandle h, int enabled) {
   asHarness(h)->motorLeft().setPidEnabled(enabled != 0);
   asHarness(h)->motorRight().setPidEnabled(enabled != 0);

@@ -96,7 +96,7 @@
 
 #include <cstdint>
 
-#include "devices/nezha_motor.h"
+#include "devices/motor.h"
 #include "devices/otos.h"
 #include "messages/planner.h"
 
@@ -108,7 +108,7 @@ constexpr uint8_t kFallbackStaleCycles = 5;
 
 class HeadingSource {
  public:
-  HeadingSource(Devices::Otos& otos, Devices::NezhaMotor& left, Devices::NezhaMotor& right,
+  HeadingSource(Devices::Otos& otos, Devices::Motor& left, Devices::Motor& right,
                 float trackWidth);
 
   // configure -- applies PlannerConfig.heading_source's per-robot override
@@ -172,8 +172,8 @@ class HeadingSource {
   float encoderHeading() const;  // [rad]
 
   Devices::Otos& otos_;
-  Devices::NezhaMotor& left_;
-  Devices::NezhaMotor& right_;
+  Devices::Motor& left_;
+  Devices::Motor& right_;
   float trackWidth_;  // [mm]
 
   msg::HeadingSourceMode mode_ = msg::HeadingSourceMode::HEADING_SOURCE_AUTO;

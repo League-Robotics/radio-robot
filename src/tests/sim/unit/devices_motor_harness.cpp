@@ -1,13 +1,13 @@
-// devices_motor_harness.cpp — off-hardware acceptance harness for ticket
-// DB-004 (device-bus-tickets.md): exercises Devices::MotorArmor's shared
-// armor policy (zero-dwell reversal, output deadband, standstill-guarded
-// resets, motion-qualified wedge reporting) through a dependency-free
-// MockDeviceMotor leaf, AND Devices::NezhaMotor's own request/collect
-// encoder pairing, embedded PID, and PID-on/off dispatch through the real
-// leaf against a TestSim::SimPlant (108-002), scripted deterministically via
-// TestSim::ScriptedI2CHook (108-009 -- see that header's own comment for why
-// a register-level scripting seam is still needed on top of SimPlant's own
-// live physics responses).
+// devices_motor_harness.cpp — off-hardware acceptance harness (originally
+// ticket DB-004; restructured 2026-07-18 with the Motor-interface split):
+// exercises Devices::NezhaMotor's OWN write shaping (reversal dwell +
+// output deadband, folded into the leaf's writeShapedDuty()), its
+// request/collect encoder pairing, embedded PID, and PID-on/off dispatch
+// through the real leaf against a TestSim::SimPlant (108-002), scripted
+// deterministically via TestSim::ScriptedI2CHook (108-009) — AND the
+// Devices::MotorArmor DECORATOR's observation/recovery policy
+// (standstill-guarded resets, motion-qualified wedge reporting) through a
+// dependency-free MockMotor inner double.
 //
 // Migrated by sprint 108 ticket 009
 // (clasi/sprints/108-pure-i2cbus-clock-interfaces-and-a-real-simplant-
@@ -103,225 +103,251 @@ void checkVecEq(const std::vector<float>& actual,
   }
 }
 
-// --- MockDeviceMotor --------------------------------------------------
+// --- MockMotor ---------------------------------------------------------
 //
-// Implements only the three device-specific protected virtuals
-// Devices::MotorArmor requires (writeRawDuty/hardReset/softRebaseline) plus
-// the three public leaf getters (position/velocity/appliedDuty) -- no I2C,
-// no CODAL, no dependency beyond devices/motor_armor.h and
-// devices/device_config.h. Every recorded call goes into a plain member
-// vector/counter the scenarios assert on directly. Mirrors
-// motor_policy_harness.cpp's MockMotor.
-class MockDeviceMotor : public Devices::MotorArmor {
+// A dependency-free Devices::Motor double for the MotorArmor DECORATOR
+// scenarios (2026-07-18 restructure: MotorArmor composes a Motor& instead
+// of being the leaf's base class). Test-settable position/velocity/
+// appliedDuty; counts the reset verbs the armor's standstill guard
+// dispatches. No I2C, no CODAL — devices/motor.h + device_config.h only.
+class MockMotor : public Devices::Motor {
  public:
-  // --- Test-driving surface (beyond the MotorArmor faceplate) ---
-
-  void setMockPosition(float position) { mockPosition_ = position; }
-  void setMockVelocity(float velocity) { mockVelocity_ = velocity; }
-
-  // Drives the write gate directly with an arbitrary (duty, now) pair, as
-  // if it were the output of any upstream control law.
-  void requestDuty(float duty, uint32_t now) { armoredWrite(duty, now); }
-
-  void stageDuty(float duty) { stagedDuty_ = duty; }
-
-  bool isDwelling() const { return dwelling_; }
-
-  // Drives the same 5-step call order NezhaMotor::tick() documents:
-  // standstill-guarded reset dispatch, wedge detector (reads last tick's
-  // appliedDuty()), a dispatch of whatever stageDuty() last staged, then
-  // rest tracking.
-  void tick(uint32_t now) {
-    processResetIfPending(now);
-    updateWedgeDetector();
-    armoredWrite(stagedDuty_, now);
-    updateRestTracking();
+  // --- Motor faceplate (trivial forwarding/recording) ---
+  void begin() override {}
+  void requestSample() override {}
+  void setVelocity(float velocity) override { lastVelocityCmd = velocity; }
+  void setDuty(float duty) override { lastDutyCmd = duty; }
+  void setNeutral(Devices::Neutral) override {}
+  void setPidEnabled(bool) override {}
+  void applyGains(const Devices::Gains& gains, Devices::Opt<float> = {}) override {
+    gains_ = gains;
   }
-
+  const Devices::Gains& gains() const override { return gains_; }
+  void tick(uint64_t) override { ++tickCalls; }
   float position() const override { return mockPosition_; }
   float velocity() const override { return mockVelocity_; }
-  float appliedDuty() const override { return lastWrittenDuty_; }
+  float velocityTarget() const override { return lastVelocityCmd; }
+  float appliedDuty() const override { return mockAppliedDuty_; }
+  bool connected() const override { return true; }
+  void resetPosition() override { ++resetPositionCalls; }   // bare = hard, immediate
+  void rebaseline() override { ++rebaselineCalls; }
+
+  // --- Test-driving surface ---
+  void setMockPosition(float position) { mockPosition_ = position; }
+  void setMockVelocity(float velocity) { mockVelocity_ = velocity; }
+  void setMockAppliedDuty(float duty) { mockAppliedDuty_ = duty; }
 
   // --- Call recording (scenarios assert on these directly) ---
-  std::vector<float> writeRawDutyCalls;
-  int hardResetCalls = 0;
-  int softRebaselineCalls = 0;
-
- protected:
-  void writeRawDuty(float duty) override {
-    writeRawDutyCalls.push_back(duty);
-    lastWrittenDuty_ = duty;
-  }
-  void hardReset() override { ++hardResetCalls; }
-  void softRebaseline() override {
-    ++softRebaselineCalls;
-    // Ported leaf contract (see nezha_motor.cpp's NezhaMotor::
-    // softRebaseline()): softResetCount_ is base-owned but the LEAF
-    // increments it at its own call site.
-    ++softResetCount_;
-  }
+  int resetPositionCalls = 0;
+  int rebaselineCalls = 0;
+  int tickCalls = 0;
+  float lastVelocityCmd = 0.0f;
+  float lastDutyCmd = 0.0f;
 
  private:
   float mockPosition_ = 0.0f;
   float mockVelocity_ = 0.0f;
-  float stagedDuty_ = 0.0f;
-  float lastWrittenDuty_ = 0.0f;
+  float mockAppliedDuty_ = 0.0f;
+  Devices::Gains gains_{};
 };
 
-// Ship-default config (both armor fields left unset — configureArmor()
-// substitutes kDefaultReversalDwell=100ms / kDefaultOutputDeadband=0.03).
+// Ship-default config (write-shaping/motion-gate fields left unset —
+// NezhaMotor's ctor and MotorArmor::configure() substitute
+// kDefaultReversalDwell=100ms / kDefaultOutputDeadband=0.03).
 Devices::MotorConfig defaultArmorConfig() { return Devices::MotorConfig{}; }
 
-// --- MotorArmor scenarios (via MockDeviceMotor) ------------------------
+// --- Write-shaping scenarios (real NezhaMotor — the dwell/deadband gate
+// moved INTO the leaf's own writeShapedDuty(), 2026-07-18 restructure) ----
 
-// 1. A commanded sign change writes 0 immediately, suppresses further
-//    non-zero writes until reversalDwell_ has elapsed, then forwards the new
-//    direction. Also proves a commanded stop (duty == 0) is immediate and
-//    cancels an in-progress dwell.
-void scenarioReversalDwellWritesZeroThenHoldsThroughDeadline() {
-  beginScenario("reversal dwell writes 0 then holds through the deadline");
-  MockDeviceMotor m;
-  m.configureArmor(defaultArmorConfig());   // reversalDwell_=100ms, outputDeadband_=0.03
+// Forward declarations — defined with the NezhaMotor scenario helpers below.
+void scriptEncoderRequestCollect(TestSim::ScriptedI2CHook& bus, uint16_t wireAddr,
+                                  float positionMm);
+Devices::MotorConfig baseNezhaConfig();
 
-  m.requestDuty(0.5f, 1000);    // no prior direction — forwarded immediately
-  m.requestDuty(-0.5f, 1010);   // sign flip — write 0, arm the 100ms dwell
-  m.requestDuty(-0.5f, 1050);   // still inside the dwell — suppressed to 0
-  m.requestDuty(-0.5f, 1109);   // still inside the dwell (1109 < 1110)
-  m.requestDuty(-0.5f, 1110);   // dwell elapsed — new direction forwarded
-
-  checkVecEq(m.writeRawDutyCalls, {0.5f, 0.0f, 0.0f, 0.0f, -0.5f},
-             "write-call sequence across the reversal");
-  checkTrue(!m.isDwelling(), "dwell cleared once the deadline elapses");
-
-  // A commanded stop mid-dwell is immediate and cancels the dwell.
-  MockDeviceMotor stopMotor;
-  stopMotor.configureArmor(defaultArmorConfig());
-  stopMotor.requestDuty(0.5f, 2000);    // establish a direction
-  stopMotor.requestDuty(-0.5f, 2010);   // sign flip — arms dwell, deadline=2110
-  stopMotor.requestDuty(0.0f, 2020);    // explicit stop mid-dwell — immediate, cancels
-  checkFloatEq(stopMotor.writeRawDutyCalls.back(), 0.0f, "stop wrote 0 immediately");
-  stopMotor.requestDuty(-0.5f, 2030);   // well before 2110 — forwarded immediately, dwell was cancelled
-  checkFloatEq(stopMotor.writeRawDutyCalls.back(), -0.5f,
-               "post-stop command forwarded immediately, dwell was cancelled");
+// Scripts one encoder request/collect cycle and drives one setDuty+tick
+// pass; returns nothing — callers assert on appliedDuty() transitions
+// (write-on-change/throttle make exact write-call sequences a raw-path
+// concern; appliedDuty() is the shaped outcome).
+void dutyTick(Devices::NezhaMotor& motor, TestSim::ScriptedI2CHook& bus,
+              uint16_t wireAddr, float duty, uint64_t nowUs) {
+  scriptEncoderRequestCollect(bus, wireAddr, 0.0f);   // stationary plant
+  motor.setDuty(duty);
+  motor.requestSample();
+  motor.tick(nowUs);
 }
 
-// 2. A sub-outputDeadband_ duty request writes 0, not a tiny signed value —
+// 1. A commanded sign change writes 0 immediately, suppresses further
+//    non-zero writes until reversalDwell has elapsed, then forwards the new
+//    direction. Also proves a commanded stop (duty == 0) is immediate and
+//    cancels an in-progress dwell. Times start at 50ms (not 0): the write
+//    throttle compares against lastWriteTimeUs_'s zero-init, and every
+//    non-stop step below leaves >=40ms since the last landed write.
+void scenarioReversalDwellWritesZeroThenHoldsThroughDeadline() {
+  beginScenario("reversal dwell writes 0 then holds through the deadline");
+  {
+    TestSim::SimPlant plant;
+    TestSim::ScriptedI2CHook bus(plant);
+    const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+    Devices::MotorConfig cfg = baseNezhaConfig();   // dwell/deadband unset -> ship 100ms/0.03
+    cfg.slewRate = 100.0f;                          // no slew clamping — isolates the dwell
+    Devices::NezhaMotor m(plant, cfg);
+
+    dutyTick(m, bus, wireAddr, 0.5f, 50000);     // no prior direction — forwarded
+    checkFloatEq(m.appliedDuty(), 0.5f, "initial direction forwarded immediately");
+    dutyTick(m, bus, wireAddr, -0.5f, 100000);   // sign flip — write 0, arm 100ms dwell
+    checkFloatEq(m.appliedDuty(), 0.0f, "sign flip wrote 0 immediately (dwell armed)");
+    dutyTick(m, bus, wireAddr, -0.5f, 140000);   // inside the dwell (140 < 200ms)
+    checkFloatEq(m.appliedDuty(), 0.0f, "held at 0 through the dwell window");
+    dutyTick(m, bus, wireAddr, -0.5f, 199000);   // still inside (199 < 200ms)
+    checkFloatEq(m.appliedDuty(), 0.0f, "still held at 0 just before the deadline");
+    dutyTick(m, bus, wireAddr, -0.5f, 240000);   // dwell elapsed — forwarded
+    checkFloatEq(m.appliedDuty(), -0.5f, "new direction forwarded once the dwell elapsed");
+  }
+
+  // A commanded stop mid-dwell is immediate and cancels the dwell.
+  {
+    TestSim::SimPlant plant;
+    TestSim::ScriptedI2CHook bus(plant);
+    const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+    Devices::MotorConfig cfg = baseNezhaConfig();
+    cfg.slewRate = 100.0f;
+    Devices::NezhaMotor m(plant, cfg);
+
+    dutyTick(m, bus, wireAddr, 0.5f, 50000);     // establish a direction
+    dutyTick(m, bus, wireAddr, -0.5f, 100000);   // sign flip — arms dwell, deadline 200ms
+    dutyTick(m, bus, wireAddr, 0.0f, 110000);    // explicit stop mid-dwell — immediate, cancels
+    checkFloatEq(m.appliedDuty(), 0.0f, "stop wrote 0 immediately");
+    // Before the ORIGINAL 200ms deadline (and >=40ms past the last landed
+    // write, for the throttle): forwarded immediately — dwell was cancelled.
+    dutyTick(m, bus, wireAddr, -0.5f, 150000);
+    checkFloatEq(m.appliedDuty(), -0.5f,
+                 "post-stop command forwarded immediately, dwell was cancelled");
+  }
+}
+
+// 2. A sub-outputDeadband duty request writes 0, not a tiny signed value —
 //    including rapid sub-threshold sign dithering around zero, which never
 //    arms a reversal dwell (proven by an immediate, unsuppressed write of a
 //    later legitimate command).
 void scenarioSubDeadbandDutyImmediateAndUnclamped() {
   beginScenario("sub-deadband duty is immediate/unclamped");
-  MockDeviceMotor m;
-  m.configureArmor(defaultArmorConfig());   // outputDeadband_=0.03
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  Devices::MotorConfig cfg = baseNezhaConfig();   // outputDeadband unset -> ship 0.03
+  cfg.slewRate = 100.0f;
+  Devices::NezhaMotor m(plant, cfg);
 
-  m.requestDuty(0.01f, 2000);    // below deadband — writes 0, not 0.01
-  m.requestDuty(-0.02f, 2001);   // below deadband, opposite sign — still 0
-  m.requestDuty(0.02f, 2002);    // dithering back — still 0
-
-  checkVecEq(m.writeRawDutyCalls, {0.0f, 0.0f, 0.0f},
-             "sub-deadband requests all wrote 0, immediately and unclamped");
+  dutyTick(m, bus, wireAddr, 0.01f, 50000);    // below deadband — writes 0, not 0.01
+  checkFloatEq(m.appliedDuty(), 0.0f, "sub-deadband request wrote 0");
+  dutyTick(m, bus, wireAddr, -0.02f, 60000);   // below deadband, opposite sign — still 0
+  checkFloatEq(m.appliedDuty(), 0.0f, "sub-deadband dither (opposite sign) still 0");
+  dutyTick(m, bus, wireAddr, 0.02f, 70000);    // dithering back — still 0
+  checkFloatEq(m.appliedDuty(), 0.0f, "sub-deadband dither back still 0");
 
   // If the dither above had incorrectly armed a reversal dwell, this next
-  // legitimate command would be suppressed to 0 instead of forwarded
-  // immediately.
-  m.requestDuty(0.5f, 2010);
-  checkFloatEq(m.writeRawDutyCalls.back(), 0.5f,
+  // legitimate command would be suppressed to 0 instead of forwarded.
+  dutyTick(m, bus, wireAddr, 0.5f, 110000);
+  checkFloatEq(m.appliedDuty(), 0.5f,
                "post-dither command forwarded immediately (no phantom dwell)");
 }
 
-// 3. resetPosition() while moving (lastRequestedDuty_ != 0, so restTicks_
-//    never accumulates to kRestTicksRequired) dispatches softRebaseline(),
-//    never hardReset(); at verified standstill it dispatches hardReset().
-//    Together: "standstill-guarded reset gates on rest ticks."
+// --- MotorArmor decorator scenarios (via MockMotor) ---------------------
+
+// 3. resetPosition() while moving (restTicks_ never accumulates to
+//    kRestTicksRequired) dispatches inner.rebaseline(), never
+//    inner.resetPosition(); at verified standstill it dispatches
+//    inner.resetPosition() (hard). "Standstill-guarded reset gates on rest
+//    ticks."
 void scenarioStandstillGuardedResetGatesOnRestTicks() {
   beginScenario("standstill-guarded reset gates on rest ticks");
 
-  // (a) Moving: two ticks of motion — restTicks_ stays 0 throughout.
+  // (a) Moving: velocity and applied duty both nonzero — restTicks_ stays 0.
   {
-    MockDeviceMotor m;
-    m.configureArmor(defaultArmorConfig());
-    m.setMockVelocity(80.0f);   // well above kRestVelocity — also moving
-    m.stageDuty(0.5f);          // above deadband — keeps lastRequestedDuty_ != 0
+    MockMotor inner;
+    Devices::MotorArmor armor(inner);
+    armor.configure(defaultArmorConfig());
+    inner.setMockVelocity(80.0f);      // well above kRestVelocity
+    inner.setMockAppliedDuty(0.5f);    // being driven
 
-    uint32_t now = 4000;
-    m.tick(now);
-    now += 20;
-    m.tick(now);
+    armor.tick(4000000);
+    armor.tick(4020000);
 
-    m.resetPosition();          // stages resetPending_ = true
-    now += 20;
-    m.tick(now);                 // processResetIfPending() dispatches here
+    armor.resetPosition();             // stages; next tick dispatches
+    armor.tick(4040000);
 
-    checkUintEq(static_cast<uint32_t>(m.softRebaselineCalls), 1,
-                "softRebaseline() called exactly once while moving");
-    checkUintEq(static_cast<uint32_t>(m.hardResetCalls), 0,
-                "hardReset() never called while moving");
-    checkUintEq(m.softResetCount(), 1, "base softResetCount() reflects the call");
-    checkUintEq(m.hardResetCount(), 0, "base hardResetCount() stays 0");
+    checkUintEq(static_cast<uint32_t>(inner.rebaselineCalls), 1,
+                "inner rebaseline() called exactly once while moving");
+    checkUintEq(static_cast<uint32_t>(inner.resetPositionCalls), 0,
+                "inner resetPosition() (hard) never called while moving");
+    checkUintEq(armor.softResetCount(), 1, "armor softResetCount() reflects the call");
+    checkUintEq(armor.hardResetCount(), 0, "armor hardResetCount() stays 0");
   }
 
-  // (b) Verified standstill: well past kRestTicksRequired (proposed: 5)
-  // ticks at rest.
+  // (b) Verified standstill: well past kRestTicksRequired (5) ticks at rest.
   {
-    MockDeviceMotor m;
-    m.configureArmor(defaultArmorConfig());
-    m.setMockVelocity(0.0f);   // below kRestVelocity throughout
-    // stagedDuty_ defaults to 0 — never commanded to move.
+    MockMotor inner;
+    Devices::MotorArmor armor(inner);
+    armor.configure(defaultArmorConfig());
+    inner.setMockVelocity(0.0f);       // below kRestVelocity throughout
+    // appliedDuty stays 0 — never commanded to move.
 
-    uint32_t now = 5000;
+    uint64_t now = 5000000;
     for (int i = 0; i < 8; ++i) {
-      m.tick(now);
-      now += 20;
+      armor.tick(now);
+      now += 20000;
     }
 
-    m.resetPosition();
-    m.tick(now);   // processResetIfPending() dispatches here
+    armor.resetPosition();
+    armor.tick(now);
 
-    checkUintEq(static_cast<uint32_t>(m.hardResetCalls), 1,
-                "hardReset() called exactly once at verified standstill");
-    checkUintEq(static_cast<uint32_t>(m.softRebaselineCalls), 0,
-                "softRebaseline() never called at verified standstill");
-    checkUintEq(m.hardResetCount(), 1, "base hardResetCount() reflects the call");
-    checkUintEq(m.softResetCount(), 0, "base softResetCount() stays 0");
+    checkUintEq(static_cast<uint32_t>(inner.resetPositionCalls), 1,
+                "inner resetPosition() (hard) called exactly once at verified standstill");
+    checkUintEq(static_cast<uint32_t>(inner.rebaselineCalls), 0,
+                "inner rebaseline() never called at verified standstill");
+    checkUintEq(armor.hardResetCount(), 1, "armor hardResetCount() reflects the call");
+    checkUintEq(armor.softResetCount(), 0, "armor softResetCount() stays 0");
   }
 }
 
 // 4. wedged() is the raw, unconditional stuck-encoder latch; wedgeSuspect()
-//    is the same test additionally gated on |appliedDuty()| > outputDeadband_
-//    — an idle parked motor with a frozen position never reports suspect.
+//    is the same test additionally gated on |appliedDuty()| above the motion
+//    threshold — an idle parked motor with a frozen position never reports
+//    suspect.
 void scenarioWedgeLatchAndSuspectDeriveAsBefore() {
   beginScenario("wedge latch + wedge-suspect derive as before");
 
   // (a) Idle parked motor: frozen position, zero applied duty throughout.
   {
-    MockDeviceMotor idle;
-    idle.configureArmor(defaultArmorConfig());
-    idle.setMockPosition(100.0f);   // never changes
-    idle.setMockVelocity(0.0f);
-    // stagedDuty_ stays 0 — appliedDuty() never exceeds the deadband.
-    uint32_t now = 6000;
+    MockMotor inner;
+    Devices::MotorArmor idle(inner);
+    idle.configure(defaultArmorConfig());
+    inner.setMockPosition(100.0f);   // never changes
+    inner.setMockVelocity(0.0f);
+    uint64_t now = 6000000;
     for (int i = 0; i < 15; ++i) {   // well past kWedgeThreshold (10)
       idle.tick(now);
-      now += 20;
+      now += 20000;
     }
     checkTrue(idle.wedged(), "idle parked motor: wedged() latches (unconditional)");
     checkTrue(!idle.wedgeSuspect(),
               "idle parked motor: wedgeSuspect() stays false (never moving)");
   }
 
-  // (b) Same frozen position, but commanded above the deadband — moving
-  //     (per appliedDuty()) every tick, so the motion-qualified counter runs
-  //     alongside the unconditional one.
+  // (b) Same frozen position, but driven above the motion threshold every
+  //     tick — the motion-qualified counter runs alongside the
+  //     unconditional one.
   {
-    MockDeviceMotor moving;
-    moving.configureArmor(defaultArmorConfig());
-    moving.setMockPosition(100.0f);   // still never changes — genuinely stuck
-    moving.setMockVelocity(0.0f);
-    moving.stageDuty(0.5f);           // above deadband every tick
-    uint32_t now = 7000;
+    MockMotor inner;
+    Devices::MotorArmor moving(inner);
+    moving.configure(defaultArmorConfig());
+    inner.setMockPosition(100.0f);   // still never changes — genuinely stuck
+    inner.setMockVelocity(0.0f);
+    inner.setMockAppliedDuty(0.5f);  // above the motion threshold every tick
+    uint64_t now = 7000000;
     for (int i = 0; i < 15; ++i) {
       moving.tick(now);
-      now += 20;
+      now += 20000;
     }
     checkTrue(moving.wedged(), "moving-but-stuck motor: wedged() latches");
     checkTrue(moving.wedgeSuspect(),
@@ -550,6 +576,12 @@ void scenarioFreshSampleGateSurvivesSlowBrickRefreshUnderFastFiberCycle() {
 
   Devices::MotorConfig cfg = baseNezhaConfig();   // velFiltAlpha=1.0 -- velocity() reflects each fresh sample's raw difference-quotient exactly
   Devices::NezhaMotor motor(plant, cfg);
+  // Wedge detection lives in the MotorArmor DECORATOR now (2026-07-18
+  // restructure) -- wrap the leaf and tick through the armor so the
+  // detector actually observes the run; the wedge assertions below read
+  // the armor's latches.
+  Devices::MotorArmor armored(motor);
+  armored.configure(cfg);
 
   // Drive a raw duty throughout (PID off, to keep the plant simple/
   // deterministic) so appliedDuty() is nonzero -- exercises the
@@ -569,7 +601,7 @@ void scenarioFreshSampleGateSurvivesSlowBrickRefreshUnderFastFiberCycle() {
   float position = 0.0f;
   scriptEncoderRequestCollect(bus, wireAddr, position);
   motor.requestSample();
-  motor.tick(nowUs);
+  armored.tick(nowUs);
   checkFloatEq(motor.position(), 0.0f, "primed position is 0");
   checkUintEq(motor.encGlitchCount(), 0, "boot anchor is not counted as a glitch");
 
@@ -579,7 +611,7 @@ void scenarioFreshSampleGateSurvivesSlowBrickRefreshUnderFastFiberCycle() {
       nowUs += kFiberCycleUs;
       scriptEncoderRequestCollect(bus, wireAddr, position);   // unchanged raw
       motor.requestSample();
-      motor.tick(nowUs);
+      armored.tick(nowUs);
     }
 
     // Fresh cycle: the brick has refreshed -- position jumps by a realistic
@@ -590,7 +622,7 @@ void scenarioFreshSampleGateSurvivesSlowBrickRefreshUnderFastFiberCycle() {
     nowUs += kFiberCycleUs;
     scriptEncoderRequestCollect(bus, wireAddr, position);
     motor.requestSample();
-    motor.tick(nowUs);
+    armored.tick(nowUs);
 
     const float freshElapsed = static_cast<float>(kFiberCycleUs) *
                                 static_cast<float>(kStaleCyclesPerRefresh + 1) / 1e6f;
@@ -605,9 +637,9 @@ void scenarioFreshSampleGateSurvivesSlowBrickRefreshUnderFastFiberCycle() {
 
   checkUintEq(motor.encGlitchCount(), 0,
               "no false glitches across repeated stale-then-fresh refresh windows");
-  checkTrue(!motor.wedged(),
+  checkTrue(!armored.wedged(),
             "raw wedge latch does not false-trigger across normal stale-then-fresh cycling");
-  checkTrue(!motor.wedgeSuspect(),
+  checkTrue(!armored.wedgeSuspect(),
             "motion-qualified wedge-suspect does not false-trigger while genuinely driving");
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the run");
 }
@@ -624,19 +656,24 @@ void scenarioBootAnchorAcceptsLargeInitialPositionWithoutGlitchOrWedge() {
   TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor motor(plant, baseNezhaConfig());
+  Devices::MotorConfig cfg = baseNezhaConfig();
+  Devices::NezhaMotor motor(plant, cfg);
+  // Wedge detection lives in the MotorArmor DECORATOR now (2026-07-18
+  // restructure) -- wrap and tick through the armor so the detector runs.
+  Devices::MotorArmor armored(motor);
+  armored.configure(cfg);
 
   const float kBootPosition = -33526.0f;   // [mm] hardware-observed lifetime-accumulated boot value
 
   scriptEncoderRequestCollect(bus, wireAddr, kBootPosition);
   motor.requestSample();
-  motor.tick(0);
+  armored.tick(0);
 
   checkFloatEq(motor.position(), kBootPosition,
                "boot anchor lands directly on the first sample, no diff-from-0 glitch");
   checkFloatEq(motor.velocity(), 0.0f, "no spurious velocity computed on the boot anchor itself");
   checkUintEq(motor.encGlitchCount(), 0, "boot anchor is never counted as a glitch");
-  checkTrue(!motor.wedged(), "boot anchor alone does not latch the wedge");
+  checkTrue(!armored.wedged(), "boot anchor alone does not latch the wedge");
 
   // A handful of stale cycles right after boot (brick hasn't refreshed
   // yet) must hold the anchor, not loop or re-glitch on it.
@@ -646,23 +683,27 @@ void scenarioBootAnchorAcceptsLargeInitialPositionWithoutGlitchOrWedge() {
     nowUs += 16000;
     scriptEncoderRequestCollect(bus, wireAddr, position);   // still stale
     motor.requestSample();
-    motor.tick(nowUs);
+    armored.tick(nowUs);
   }
   checkFloatEq(motor.position(), kBootPosition, "position holds through stale post-boot cycles");
   checkUintEq(motor.encGlitchCount(), 0, "stale post-boot cycles are not glitches (simply not fresh)");
-  checkTrue(!motor.wedged(), "stale post-boot cycles alone do not latch the wedge");
+  checkTrue(!armored.wedged(), "stale post-boot cycles alone do not latch the wedge");
 
   // First genuinely fresh post-boot sample: real, realistic motion off the
   // large boot anchor computes correctly and is not misclassified.
+  // +30mm over the 64ms since the anchor = ~469 mm/s -- deliberately below
+  // kMaxPlausibleSpeed (halved 1000 -> 600 in the 2026-07-18 tuning pass;
+  // the prior +40mm/625mm/s now trips the gate and holds velocity at 0,
+  // which is the gate working, not the boot-anchor behavior under test).
   nowUs += 16000;
-  position += 40.0f;
+  position += 30.0f;
   scriptEncoderRequestCollect(bus, wireAddr, position);
   motor.requestSample();
-  motor.tick(nowUs);
+  armored.tick(nowUs);
   checkFloatEq(motor.position(), position, "first post-boot fresh sample lands correctly");
   checkTrue(motor.velocity() > 100.0f, "first post-boot fresh sample yields a real (non-zero) velocity");
   checkUintEq(motor.encGlitchCount(), 0, "genuine post-boot motion off a large anchor is not a glitch");
-  checkTrue(!motor.wedged(), "no wedge latch through the boot+stale+fresh sequence");
+  checkTrue(!armored.wedged(), "no wedge latch through the boot+stale+fresh sequence");
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the boot sequence");
 }
 

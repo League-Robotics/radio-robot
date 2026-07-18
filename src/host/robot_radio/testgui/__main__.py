@@ -332,6 +332,7 @@ def _build_main_window():  # type: ignore[return]
     # PySide6 imports are intentionally deferred here.
     from PySide6.QtWidgets import (  # type: ignore[import-untyped]
         QApplication,
+        QCheckBox,
         QComboBox,
         QDoubleSpinBox,
         QGroupBox,
@@ -781,7 +782,84 @@ def _build_main_window():  # type: ignore[return]
         if t is not None:
             t.command(f"RT {int(round(deg * 100))}", read_timeout=500)
 
-    def _make_motion_column(title: str, dist_cb, ang_cb) -> QGroupBox:
+    # Test buttons (stakeholder 2026-07-18/19) — the in-GUI edit->compile->
+    # reload->run loop lives INSIDE each path column (not a separate row):
+    # each RECOMPILES the sim lib, HOT-RELOADS the fresh dylib, resets the
+    # avatar/pose/traces, then runs the column's own fixed motion —
+    # managed = D/RT through Motion::Executor/Pilot; unmanaged = one
+    # run_unmanaged() deadman-timed twist (no planner, no heading loop, no
+    # retargets). Always clickable (they connect themselves); wired to
+    # _run_sim_test() at the bottom of this function, once that (and
+    # _on_connect/_set_origin) are defined.
+    test_s_btn = QPushButton("S — drive 700mm")
+    test_s_btn.setObjectName("test_s_btn")
+    test_s_btn.setToolTip(
+        "Rebuild + reload the sim, reset, then drive 700 mm through the "
+        "managed path (Motion::Executor profile + Pilot heading loop)."
+    )
+    test_t_btn = QPushButton("T — turn 360°")
+    test_t_btn.setObjectName("test_t_btn")
+    test_t_btn.setToolTip(
+        "Rebuild + reload the sim, reset, then turn 360° through the "
+        "managed path (Motion::Executor profile + Pilot heading PD)."
+    )
+    test_us_btn = QPushButton("S — drive 700mm")
+    test_us_btn.setObjectName("test_us_btn")
+    test_us_btn.setToolTip(
+        "Rebuild + reload the sim, reset, then drive 700 mm UNMANAGED: one "
+        "direct twist at 150 mm/s, deadman-timed — no planner, no heading "
+        "loop, no retargets."
+    )
+    test_ut_btn = QPushButton("T — turn 360°")
+    test_ut_btn.setObjectName("test_ut_btn")
+    test_ut_btn.setToolTip(
+        "Rebuild + reload the sim, reset, then turn 360° UNMANAGED: one "
+        "direct twist at 2 rad/s, deadman-timed — no planner, no heading "
+        "loop, no retargets."
+    )
+
+    # Inner velocity-PID enable — ONE sim-wide state (NezhaMotor::
+    # setPidEnabled() on both motors via SimTransport.set_pid_enabled), with
+    # a checkbox in EACH column (stakeholder: "both of them should have a
+    # way to turn off the PID"); the two stay mirrored via _on_pid_toggled.
+    # Checked = PID on (firmware default). Unchecked, wheels run open-loop
+    # feedforward (duty = kff × velocity target). A MANAGED motion still
+    # closes the outer heading/executor loops either way — the unmanaged
+    # column is the fully open-loop path. Re-applied after every connect
+    # (incl. the Test buttons' rebuild+reconnect) in _on_connect(), since a
+    # fresh sim always boots with PID enabled.
+    pid_checkbox_u = QCheckBox("PID")
+    pid_checkbox_u.setObjectName("pid_checkbox_unmanaged")
+    pid_checkbox_m = QCheckBox("PID")
+    pid_checkbox_m.setObjectName("pid_checkbox_managed")
+    for _cb in (pid_checkbox_u, pid_checkbox_m):
+        _cb.setChecked(True)
+        _cb.setToolTip(
+            "Inner velocity PID on/off (Sim only, one state — the two "
+            "checkboxes mirror each other). Unchecked: wheels run open-loop "
+            "feedforward (duty = kff × velocity target)."
+        )
+
+    def _on_pid_toggled(checked: bool) -> None:
+        # Mirror the two column checkboxes (one sim, one inner-loop state)
+        # without re-entrant toggling, then apply live when a sim is
+        # connected; otherwise the state is picked up at the next Sim
+        # connect (_on_connect).
+        for _cb in (pid_checkbox_u, pid_checkbox_m):
+            if _cb.isChecked() != checked:
+                _cb.blockSignals(True)
+                _cb.setChecked(checked)
+                _cb.blockSignals(False)
+        transport = _state.get("transport")
+        if isinstance(transport, SimTransport):
+            transport.set_pid_enabled(bool(checked))
+
+    pid_checkbox_u.toggled.connect(_on_pid_toggled)
+    pid_checkbox_m.toggled.connect(_on_pid_toggled)
+
+    def _make_motion_column(title: str, dist_cb, ang_cb,
+                            test_s: QPushButton, test_t: QPushButton,
+                            pid_cb: QCheckBox) -> QGroupBox:
         box = QGroupBox(title)
         col = QVBoxLayout(box)
         col.setContentsMargins(6, 4, 6, 4)
@@ -807,6 +885,21 @@ def _build_main_window():  # type: ignore[return]
                     _send_buttons.append(b)
                 h.addStretch()
                 col.addWidget(row)
+        # This column's own Test section (rebuild+reload+run through THIS
+        # column's path) + its PID checkbox — see the widgets' own creation
+        # comments above.
+        lbl = QLabel("Test")
+        lbl.setStyleSheet("font-weight: bold;")
+        col.addWidget(lbl)
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(3)
+        h.addWidget(test_s)
+        h.addWidget(test_t)
+        h.addWidget(pid_cb)
+        h.addStretch()
+        col.addWidget(row)
         col.addStretch()
         return box
 
@@ -815,9 +908,11 @@ def _build_main_window():  # type: ignore[return]
     motion_panel_layout.setContentsMargins(0, 0, 0, 0)
     motion_panel_layout.setSpacing(8)
     motion_panel_layout.addWidget(
-        _make_motion_column("Unmanaged — direct twist", _unmanaged_dist, _unmanaged_ang))
+        _make_motion_column("Unmanaged — direct twist", _unmanaged_dist, _unmanaged_ang,
+                            test_us_btn, test_ut_btn, pid_checkbox_u))
     motion_panel_layout.addWidget(
-        _make_motion_column("Managed — Ruckig", _managed_dist, _managed_ang))
+        _make_motion_column("Managed — Ruckig", _managed_dist, _managed_ang,
+                            test_s_btn, test_t_btn, pid_checkbox_m))
     left_layout.addWidget(motion_panel)
 
     # Tour buttons — run a pre-programmed motion sequence (one per named tour).
@@ -888,29 +983,6 @@ def _build_main_window():  # type: ignore[return]
     tour_layout.addWidget(stop_tour_btn)
     tour_layout.addStretch()
     left_layout.addWidget(tour_row)
-
-    # Test buttons (stakeholder 2026-07-18) — an in-GUI edit->compile->reload->run
-    # loop. Each RECOMPILES the sim lib, HOT-RELOADS the fresh dylib (so a code
-    # or version edit takes effect without relaunching), updates the version
-    # stamp, resets the avatar/pose/traces, then runs a fixed motion:
-    #   Test S -> drive forward 700 mm    Test T -> turn 360 deg
-    # Always clickable (they connect themselves); wired to _run_sim_test() once
-    # that (and _on_connect/_set_origin) are defined below.
-    test_row = QWidget()
-    test_layout = QHBoxLayout(test_row)
-    test_layout.setContentsMargins(0, 0, 0, 0)
-    test_layout.setSpacing(4)
-    test_layout.addWidget(QLabel("Test:"))
-    test_s_btn = QPushButton("Test S — drive 700mm")
-    test_s_btn.setObjectName("test_s_btn")
-    test_s_btn.setToolTip("Rebuild + reload the sim, reset, then drive forward 700 mm.")
-    test_t_btn = QPushButton("Test T — turn 360°")
-    test_t_btn.setObjectName("test_t_btn")
-    test_t_btn.setToolTip("Rebuild + reload the sim, reset, then turn 360°.")
-    test_layout.addWidget(test_s_btn)
-    test_layout.addWidget(test_t_btn)
-    test_layout.addStretch()
-    left_layout.addWidget(test_row)
 
     # GOTO — synthetic camera-based go-to: drive to a world (x, y) point by
     # repeatedly correcting the robot's pose from the camera and re-issuing G.
@@ -2717,6 +2789,15 @@ def _build_main_window():  # type: ignore[return]
         # uncalibrated robot pushes neutral values (SET rotSlip=0 etc.).
         _push_robot_calibration()
 
+        # Re-apply the PID checkbox state (Sim only; the two column
+        # checkboxes are mirrored, so either one is authoritative): a fresh
+        # sim always boots with the velocity PID enabled, so only an
+        # UNCHECKED state needs pushing — this keeps the toggle sticky
+        # across the Test buttons' rebuild+reconnect cycle without log
+        # noise on the common (checked) path.
+        if isinstance(transport, SimTransport) and not pid_checkbox_u.isChecked():
+            transport.set_pid_enabled(False)
+
         # Serial = BENCH MODE: the robot is on the stand, where the real OTOS
         # optically tracks nothing yet often reads status-clean — the EKF then
         # fuses "stationary at the last anchor" and pins the fused pose while
@@ -2883,18 +2964,30 @@ def _build_main_window():  # type: ignore[return]
                 _append_log("[TEST] reconnect failed — see console.")
                 return
             _set_origin()                         # reset avatar / pose / traces
-            wire = "D 150 150 700" if kind == "S" else "RT 36000"
-            _append_log(f"[TEST] Test {kind} -> {wire}")
-            _state["transport"].command(wire, read_timeout=500)
+            transport = _state["transport"]
+            if kind == "S":
+                _append_log("[TEST] Test S (managed) -> D 150 150 700")
+                transport.command("D 150 150 700", read_timeout=500)
+            elif kind == "T":
+                _append_log("[TEST] Test T (managed) -> RT 36000")
+                transport.command("RT 36000", read_timeout=500)
+            elif kind == "US":
+                # Unmanaged: one direct twist, deadman-timed — no planner,
+                # no heading loop, no retargets (SimTransport.run_unmanaged).
+                _append_log("[TEST] Test S (unmanaged) -> direct twist, 700mm @ 150mm/s")
+                transport.run_unmanaged(distance_mm=700.0)
+            elif kind == "UT":
+                _append_log("[TEST] Test T (unmanaged) -> direct twist, 360° @ 2rad/s")
+                transport.run_unmanaged(angle_deg=360.0)
         finally:
-            test_s_btn.setEnabled(True)
-            test_t_btn.setEnabled(True)
+            for _b in (test_s_btn, test_t_btn, test_us_btn, test_ut_btn):
+                _b.setEnabled(True)
 
     _test_bridge.rebuilt.connect(_finish_test, Qt.ConnectionType.QueuedConnection)
 
     def _run_sim_test(kind: str) -> None:
-        test_s_btn.setEnabled(False)
-        test_t_btn.setEnabled(False)
+        for _b in (test_s_btn, test_t_btn, test_us_btn, test_ut_btn):
+            _b.setEnabled(False)
 
         def _worker() -> None:
             ok = True
@@ -2936,6 +3029,8 @@ def _build_main_window():  # type: ignore[return]
 
     test_s_btn.clicked.connect(lambda: _run_sim_test("S"))
     test_t_btn.clicked.connect(lambda: _run_sim_test("T"))
+    test_us_btn.clicked.connect(lambda: _run_sim_test("US"))
+    test_ut_btn.clicked.connect(lambda: _run_sim_test("UT"))
 
     # Stop the live-view worker and any running tour / GOTO on app quit.
     app.aboutToQuit.connect(_stop_live_worker)
