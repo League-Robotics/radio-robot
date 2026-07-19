@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Strip the 18 dead PlannerConfig/PlannerConfigPatch fields
-status: in-progress
+status: done
 use-cases:
 - SUC-003
 depends-on:
