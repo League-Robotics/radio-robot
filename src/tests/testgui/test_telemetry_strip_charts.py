@@ -148,7 +148,7 @@ class TestStripChartWindowing:
 
 
 class TestTelemetryPanelStripChartWiring:
-    def test_panel_has_four_strip_chart_tabs(self, qapp):
+    def test_panel_has_strip_chart_tabs(self, qapp):
         from PySide6.QtWidgets import QTabWidget
 
         from robot_radio.testgui.telemetry_panel import build_telemetry_panel
@@ -158,7 +158,8 @@ class TestTelemetryPanelStripChartWiring:
             tabs = widget.findChild(QTabWidget, "telemetry_strip_charts")
             assert tabs is not None
             names = {tabs.tabText(i) for i in range(tabs.count())}
-            assert names == {"Wheel speed", "Wheel position", "Heading", "Distance"}
+            # Twist added 2026-07-18 (commanded vs actual body v_x/omega).
+            assert names == {"Wheel speed", "Twist", "Wheel position", "Heading", "Distance"}
         finally:
             widget.deleteLater()
 

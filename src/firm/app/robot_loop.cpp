@@ -429,6 +429,10 @@ void RobotLoop::cycle() {
   // collect makes BOTH motors read the LAST-selected port's encoder
   // (observed 2026-07-18: an unmanaged pivot showed actual L == actual R
   // glued to the right wheel while cmd L/R were correctly mirrored).
+
+  // NOTE! These requests and collects have been reordered for testing and 
+  // development and will need to be reverted to their original positions
+  // before running on hardware. 
   motorL_.requestSample();  // 0x46 write (brick holds ONE pending read)
   motorL_.tick(clock_.nowMicros());   // collect L while port 1 is still selected
 

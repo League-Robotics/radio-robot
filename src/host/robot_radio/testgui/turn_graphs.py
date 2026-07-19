@@ -1,10 +1,11 @@
 """robot_radio.testgui.turn_graphs — live time-series graph tabs for turns/drives.
 
-Four matplotlib graph tabs that record while the robot is MOVING (idle frames
+Matplotlib graph tabs that record while the robot is MOVING (idle frames
 skipped) and plot every available estimate of each quantity over time, mirroring
 the way the playfield shows OTOS vs camera:
 
   - Wheel speed     — commanded vs actual per-wheel velocity        [mm/s]
+  - Twist           — commanded vs actual body v_x [mm/s] and ω [deg/s]
   - Wheel position  — per-wheel cumulative encoder distance         [mm]
   - Heading         — OTOS / fused / encoder / camera Δheading      [deg]
   - Distance        — OTOS / fused / encoder / camera displacement  [cm]
@@ -33,6 +34,13 @@ from .traces import EncoderDeadReckoner
 # --- series keys, grouped per graph -----------------------------------------
 WHEEL_SPEED = [("cmd_l", "cmd L"), ("cmd_r", "cmd R"), ("vel_l", "actual L"),
                ("vel_r", "actual R")]
+# Body twist -- commanded vs actual v_x [mm/s] and omega [deg/s]. Commanded
+# is the forward kinematics of the commanded wheel speeds (cmd_vel, sim Path
+# B); actual is the fused body velocity already on the wire (frame.twist).
+# omega is plotted in deg/s so it shares the axis with v_x [mm/s] at a
+# comparable magnitude (a 2 rad/s pivot == 115 deg/s ~ a 150 mm/s straight).
+TWIST = [("cmd_vx", "cmd v_x"), ("act_vx", "act v_x"),
+         ("cmd_omega", "cmd ω"), ("act_omega", "act ω")]
 WHEEL_POS = [("enc_l", "enc L"), ("enc_r", "enc R")]
 HEADING = [("head_otos", "OTOS"), ("head_fused", "fused"),
            ("head_enc", "encoder"), ("head_cam", "camera")]
@@ -88,6 +96,7 @@ def tlm_fields(frame: Any) -> dict:
         "enc": pair(getattr(frame, "enc", None)),
         "vel": pair(getattr(frame, "vel", None)),
         "cmd": pair(getattr(frame, "cmd_vel", None)),  # TLMFrame field is cmd_vel
+        "twist": pair(getattr(frame, "twist", None)),  # (v_x [mm/s], omega [mrad/s])
         "pose": triple(getattr(frame, "pose", None)),
         "otos": triple(getattr(frame, "otos", None)),
         "active": getattr(frame, "active", None),
@@ -173,6 +182,19 @@ class TurnTraceRecorder:
             self.series["cmd_r"].append((t, f["cmd"][1]))
         self.series["vel_l"].append((t, vel[0]))
         self.series["vel_r"].append((t, vel[1]))
+        # Body twist (commanded vs actual). Commanded = forward kinematics of
+        # the commanded wheel speeds: v_x = (vR+vL)/2 [mm/s], omega = (vR-vL)/b
+        # [rad/s] (BodyKinematics::forward's own convention), shown in deg/s.
+        # Actual = fused body velocity on the wire (twist = v_x [mm/s], omega
+        # [mrad/s]).
+        tw = self._trackwidth
+        if f["cmd"] and tw > 0.0:
+            self.series["cmd_vx"].append((t, (f["cmd"][1] + f["cmd"][0]) / 2.0))
+            self.series["cmd_omega"].append(
+                (t, math.degrees((f["cmd"][1] - f["cmd"][0]) / tw)))
+        if f["twist"]:
+            self.series["act_vx"].append((t, f["twist"][0]))
+            self.series["act_omega"].append((t, math.degrees(f["twist"][1] / 1000.0)))
         if f["enc"]:
             self.series["enc_l"].append((t, f["enc"][0]))
             self.series["enc_r"].append((t, f["enc"][1]))
@@ -233,6 +255,9 @@ _SRC_COLOR = {
     "cmd_l": "#1f77b4", "cmd_r": "#9467bd",
     "vel_l": "#2ca02c", "vel_r": "#ff7f0e",
     "enc_l": "#1f77b4", "enc_r": "#d62728",
+    # Twist: commanded (blue/purple) vs actual (green/orange), v_x then omega.
+    "cmd_vx": "#1f77b4", "act_vx": "#2ca02c",
+    "cmd_omega": "#9467bd", "act_omega": "#ff7f0e",
 }
 
 
@@ -364,10 +389,12 @@ class TurnGraphPanel(QWidget):
             self._tabs.addTab(playfield_widget, "Playfield")
 
         self._speed = _GraphCanvas("Wheel speed — commanded vs actual", "mm/s", WHEEL_SPEED)
+        self._twist = _GraphCanvas("Body twist — commanded vs actual", "mm/s · deg/s", TWIST)
         self._pos = _GraphCanvas("Wheel position (encoder)", "mm", WHEEL_POS)
         self._head = _GraphCanvas("Heading Δ — OTOS / fused / encoder / camera", "deg", HEADING)
         self._dist = _GraphCanvas("Distance (displacement) — all sources", "cm", DISTANCE)
-        for w, name in ((self._speed, "Wheel speed"), (self._pos, "Wheel position"),
+        for w, name in ((self._speed, "Wheel speed"), (self._twist, "Twist"),
+                        (self._pos, "Wheel position"),
                         (self._head, "Heading"), (self._dist, "Distance")):
             self._tabs.addTab(w, name)
 

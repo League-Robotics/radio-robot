@@ -248,6 +248,7 @@ def build_telemetry_panel(recorder: "Any" = None) -> "tuple[Any, Any]":
     from .turn_graphs import (  # lazy, same reason as the PySide6 imports above
         DISTANCE,
         HEADING,
+        TWIST,
         WHEEL_POS,
         WHEEL_SPEED,
         StripChartCanvas,
@@ -391,10 +392,12 @@ def build_telemetry_panel(recorder: "Any" = None) -> "tuple[Any, Any]":
     strip_tabs = QTabWidget()
     strip_tabs.setObjectName("telemetry_strip_charts")
     _strip_speed = StripChartCanvas("Wheel speed", "mm/s", WHEEL_SPEED)
+    _strip_twist = StripChartCanvas("Body twist — commanded vs actual", "mm/s · deg/s", TWIST)
     _strip_pos = StripChartCanvas("Wheel position", "mm", WHEEL_POS)
     _strip_head = StripChartCanvas("Heading Δ", "deg", HEADING)
     _strip_dist = StripChartCanvas("Distance", "cm", DISTANCE)
     for w, obj_name, name in ((_strip_speed, "strip_chart_wheel_speed", "Wheel speed"),
+                              (_strip_twist, "strip_chart_twist", "Twist"),
                               (_strip_pos, "strip_chart_wheel_position", "Wheel position"),
                               (_strip_head, "strip_chart_heading", "Heading"),
                               (_strip_dist, "strip_chart_distance", "Distance")):
