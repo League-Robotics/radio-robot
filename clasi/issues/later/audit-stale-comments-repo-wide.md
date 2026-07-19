@@ -1,6 +1,5 @@
 ---
 status: pending
-sprint: '114'
 ---
 
 # Audit all source comments repo-wide and validate they are still true

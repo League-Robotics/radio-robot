@@ -1,6 +1,5 @@
 ---
 status: pending
-sprint: '112'
 ---
 
 # Re-probe absent devices after boot (slow background re-detection)

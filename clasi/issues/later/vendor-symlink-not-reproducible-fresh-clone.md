@@ -7,7 +7,6 @@ filed-date: 2026-07-17
 updated: "2026-07-17 \u2014 ruckig relocated out of src/vendor, resolved for ruckig\
   \ specifically; the shared reference pool's remaining contents are the still-open\
   \ question."
-sprint: '114'
 ---
 
 # `src/vendor` is a symlink into an unrelated sibling repo's working tree

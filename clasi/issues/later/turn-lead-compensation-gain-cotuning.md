@@ -4,7 +4,6 @@ title: Turn lead compensation needs gain co-tuning to deliver exact turns (109-0
 filed: 2026-07-17
 filed_by: team-lead (sprint 109 close-out)
 status: pending
-sprint: '111'
 ---
 
 # Turn lead compensation needs gain co-tuning to deliver exact turns
