@@ -263,11 +263,7 @@ void NezhaMotor::tick(uint64_t nowUs)
     int32_t raw = collectEncoder();
     float pos = (static_cast<float>(raw) / 10.0f)
               * config_.wheelTravelCalib * static_cast<float>(config_.fwdSign);
-#ifdef HOST_BUILD
-    // Sim-only encoder trace (see the guarded <iostream> include above).
-    std::cout << "nezha_motor[" << static_cast<int>(config_.port) << "]: enc " << raw
-              << " pos " << pos << "\n" << std::flush;
-#endif
+
 
     // Per-TICK elapsed time from this leaf's own us time seam (nowUs), NOT
     // the ms derivation above -- a ms-only clock's +/-1ms quantization

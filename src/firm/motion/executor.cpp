@@ -4,6 +4,7 @@
 // terminal-decel PD gate, and the distance/dwell completion criteria.
 #include "motion/executor.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace Motion {
@@ -57,7 +58,17 @@ constexpr float kRotationalRestEpsilon = 0.05f;   // [rad/s] (~2.9 deg/s)
 // elapsed (`linearElapsedS_ >= linear_.duration()`, i.e. the profile is not
 // still actively driving toward more distance) AND the shortfall is within
 // this epsilon.
-constexpr float kDistanceSettleEpsilonMm = 2.0f;  // [mm]
+//
+// 3mm (was 2mm, widened 2026-07-18 with the terminal straight-lead): the
+// lead sizes the big trapezoid to rest ON target, but a small
+// distance-dependent tail leaves short legs resting up to ~2mm short (a
+// D200 leg rested 2.1mm short -- just over the old 2mm epsilon, which fired
+// one needless top-up "little hump"). Absorbing that fraction here
+// completes the leg cleanly at its own rest instead, which -- paired with
+// the lead -- is what removes the straight humps outright. 3mm on a
+// hundreds-of-mm leg is negligible and biases slightly UNDER (never an
+// overrun), matching the "stop at target, don't overshoot" intent.
+constexpr float kDistanceSettleEpsilonMm = 3.0f;  // [mm]
 
 // kStopTimeBackstopFactor/kStopTimeBackstopMarginS -- see executor.h's own
 // "Dwell completion" comment: stopTimeBackstopMs() = dominant channel's own
@@ -73,25 +84,58 @@ constexpr float kStopTimeBackstopMarginS = 6.0f;  // [s]
 constexpr float kExitVelocityLinearThreshold = 1.0f;      // [mm/s]
 constexpr float kExitVelocityRotationalThreshold = 0.02f; // [rad/s]
 
-// 109-006: divergence-trigger (c) thresholds -- verbatim per the sprint
-// issue's own "Replan triggers" section ("old thresholds... 5mm retarget /
-// 40mm reanchor linear, 0.3rad reanchor rotational, 60ms min interval").
-constexpr float kDivergenceRetargetLinearMm = 5.0f;         // [mm]
+// 109-006 divergence-trigger (c) thresholds, gross-fault tier ONLY as of
+// the 2026-07-18 "plan once, finish on the spot" restructure: the old 5mm
+// mid-flight linear RETARGET tier (and its 3-tick streak guard) is GONE --
+// see checkDivergence()'s own comment for the terminal-reversal ringing it
+// caused. What remains is the unambiguous reanchor tier: genuine
+// slip/stall, never ordinary tracking lag.
 constexpr float kDivergenceReanchorLinearMm = 40.0f;        // [mm]
-constexpr float kDivergenceReanchorRotationalRad = 0.3f;    // [rad]
 constexpr uint32_t kDivergenceReanchorMinIntervalMs = 60;   // [ms]
 
-// kDivergenceRetargetStreakTicks -- 109-006's own anti-transient guard for
-// the 5mm linear retarget tier (checkDivergence()'s own doc comment): the
-// number of CONSECUTIVE ticks the linear channel must stay past the 5mm
-// threshold before a retarget actually fires, distinguishing a momentary
-// velocity-PID ramp-lag blip (self-resolving within a tick or two) from a
-// genuinely sustained divergence. Not part of the sprint issue's own
-// verbatim threshold table -- added during this ticket's own
-// implementation after test_heading_source.py's ideal-plant coupled-arc
-// scenario caught a real accuracy regression from reacting to single-
-// sample transients (this file's own checkDivergence() doc comment).
-constexpr uint8_t kDivergenceRetargetStreakTicks = 3;
+// kTopUpMeasuredRestVelocity -- the terminal top-up's own measured-motion
+// rest gate (tick()'s kArc top-up comment): the plant must have genuinely
+// stopped coasting before a shortfall is corrected. Deliberately looser
+// than kLinearRestEpsilon (which tests the PLANNED sample) -- a measured
+// finite-difference velocity carries encoder quantization/dither noise a
+// planned sample does not.
+constexpr float kTopUpMeasuredRestVelocity = 5.0f;   // [mm/s]
+
+// Terminal straight-lead (2026-07-18 "no little humps on straights"): a
+// pure straight decelerating to REST lands SHORT of its planned distance by
+// a lag-induced undershoot that is distance-INDEPENDENT and linear in the
+// cruise speed -- measured in the full-compute sim as ~1.5 + 0.10*cruise
+// [mm] (a fixed ~0.10s of frozen-in position lag). Planning the profile
+// exactly that much longer makes the plant's OWN rest land on the true
+// target, so the distance-completion crossing fires there and the top-up
+// never has to crawl in. Calibration, not physics -- same per-robot nature
+// as plan_lead / rotation_gain; these are the sim fit, a hardware sweep
+// would replace them. kStraightLeadMargin over-leads slightly so the plant
+// reliably REACHES the target (crossing completion then stops it exactly
+// there) rather than resting a hair short into the settle epsilon.
+// The lead is the EXACT measured undershoot (no over-lead margin): sizing
+// the plant's rest to land ON target makes the distance crossing fire at
+// ~zero velocity, so there is no coast. A small over-lead instead leaves
+// the plant still moving when it crosses (a few mm of coast -- observed
+// +3.9mm at 200mm/s with a 2mm margin); a small under-lead leaves it a
+// fraction short, which the settle epsilon completes without a top-up.
+// Erring toward under is the better side.
+constexpr float kStraightLeadBias = 1.5f;      // [mm]
+constexpr float kStraightLeadSlope = 0.102f;   // [mm per mm/s] == [s]
+
+// Pivot overshoot-compensation lead (2026-07-18 "Option B" turn feedforward):
+// a pivot's big hump OVERSHOOTS the target -- the plant reaches it still
+// carrying angular velocity and coasts past (measured mean ~1.6deg per rad/s
+// of cruise rate at the shipped plan_lead). The velocity lead brakes the
+// turn earlier; scaling EXTRA lead with the cruise rate (rotationalCeiling_)
+// cancels the rate-dependent bulk of that overshoot as pure FEEDFORWARD --
+// it touches only the peek()'d velocity reference, never thetaRef or
+// completion (those stay on the true target), so it lands the big hump ~on
+// target WITHOUT the ring. The residual (the angle-dependent "wave" a single
+// slope can't hold) is left to the heading PD / dwell TRIM, which then does
+// far less work -- a small nudge instead of the full ~14deg ring. Sim-fit
+// slope; a hardware sweep would replace it (calibration, like plan_lead).
+constexpr float kPivotOvershootLeadSlope = 0.009f;   // [s per rad/s]
 
 constexpr float kPi = 3.14159265358979323846f;
 
@@ -191,8 +235,6 @@ void Executor::activate(const Cmd& cmd, bool retarget) {
   rotationalFrameOffset_ = 0.0f;
   pendingLinearReanchor_ = false;
   pendingLinearRetarget_ = false;
-  pendingRotationalReanchor_ = false;
-  linearRetargetStreak_ = 0;
   msSinceLastReanchor_ = kDivergenceReanchorMinIntervalMs;
   emergencyStopping_ = false;
 
@@ -316,8 +358,7 @@ void Executor::completeActive(CompletionStatus status) {
     state_ = State::kRampToRest;
     pendingLinearReanchor_ = false;
     pendingLinearRetarget_ = false;
-    pendingRotationalReanchor_ = false;
-    needLinearSolve_ = true;
+      needLinearSolve_ = true;
     needRotationalSolve_ = true;
     return;
   }
@@ -391,8 +432,7 @@ void Executor::checkDivergence(float dtS, float measuredDistanceDelta, float the
   if (mode_ != Mode::kArc && mode_ != Mode::kPivot) return;
 
   lastMeasuredVelocity_ = (dtS > 0.0f) ? measuredDistanceDelta / dtS : lastMeasuredVelocity_;
-  lastThetaMeasRel_ = thetaMeasRel;
-  lastThetaRate_ = thetaRate;
+  (void)thetaRate;
   msSinceLastReanchor_ += static_cast<uint32_t>(dtS * 1000.0f);
 
   // plannedPositionSinceActivation is the SAME frame-offset-adjusted
@@ -420,47 +460,43 @@ void Executor::checkDivergence(float dtS, float measuredDistanceDelta, float the
       // commanded profile by 4cm during ordinary tracking, so this tier
       // acts on the very first sample past threshold (still rate-limited
       // by msSinceLastReanchor_ itself).
-      linearRetargetStreak_ = 0;
       pendingLinearReanchor_ = true;
       pendingLinearRetarget_ = false;
       needLinearSolve_ = true;
       msSinceLastReanchor_ = 0;
-    } else if (absErr >= kDivergenceRetargetLinearMm) {
-      // 5mm is NOT unambiguous -- ordinary velocity-PID tracking lag during
-      // a command's own ramp-up/ramp-down routinely produces a brief few-mm
-      // gap between the encoder and the Ruckig-planned position that
-      // self-resolves within a tick or two as the wheel catches up to the
-      // commanded profile (expected, not a fault). Reacting to a single
-      // momentary sample here was this ticket's own first implementation
-      // and was caught by test_heading_source.py's own ideal-plant
-      // coupled-arc scenario: each transient ramp-lag blip "gave up
-      // ground" (rebased the frame down to the momentarily-lagging
-      // measured value) with nothing to claw it back, compounding into a
-      // multi-degree heading undershoot by completion. Requiring the
-      // divergence to PERSIST for kDivergenceRetargetStreakTicks
-      // consecutive ticks (~kDivergenceRetargetStreakTicks*40ms) before
-      // acting distinguishes a transient tracking lag (resolves within a
-      // tick or two, streak resets) from a genuine, sustained divergence
-      // (a real fault/slip) worth correcting.
-      ++linearRetargetStreak_;
-      if (linearRetargetStreak_ >= kDivergenceRetargetStreakTicks) {
-        pendingLinearRetarget_ = true;
-        needLinearSolve_ = true;
-      }
-    } else {
-      linearRetargetStreak_ = 0;
     }
+    // NO small-threshold mid-flight retarget tier (stakeholder 2026-07-18,
+    // "plan the motion over the whole distance and finish on the spot"):
+    // the old 5mm/3-tick streak tier re-solved the linear channel against
+    // ordinary velocity-loop tracking lag -- and a re-solve mid-DECEL, from
+    // nonzero velocity to a now-tiny-or-negative remaining distance, is
+    // time-optimally an overshoot-then-REVERSE, which then lagged and
+    // diverged again: the terminal +-100mm/s command ringing observed on
+    // the sim wheel-speed trace (2026-07-18), with every re-solve also
+    // resetting the trajectory clock so `trajDone` kept un-completing.
+    // The plan is now solved ONCE and trusted; measured distance decides
+    // COMPLETION (crossing / settle-epsilon) plus a forward-only top-up
+    // from rest when the plant lands short (tick()'s terminal logic), and
+    // the 40mm reanchor above stays as the gross-fault (genuine slip/
+    // stall) recovery -- ordinary tracking lag never reaches it.
     return;
   }
 
-  // kPivot -- reanchor-only, see this method's own executor.h doc comment.
-  float err = thetaMeasRel - plannedPositionSinceActivation;
-  if (std::fabs(err) >= kDivergenceReanchorRotationalRad &&
-      msSinceLastReanchor_ >= kDivergenceReanchorMinIntervalMs) {
-    pendingRotationalReanchor_ = true;
-    needRotationalSolve_ = true;
-    msSinceLastReanchor_ = 0;
-  }
+  // kPivot -- NO mid-flight divergence correction at all (stakeholder
+  // 2026-07-18, "plan once, finish on the spot", rotational half): the old
+  // 0.3rad reanchor tier sat BELOW ordinary tracking lag at cruise (a
+  // 4rad/s pivot with ~0.15s actuation lag runs ~0.6rad behind its plan),
+  // so it fired every 60ms through any fast pivot, each reanchor
+  // re-solving from measured state -- and a re-solve near the target from
+  // full rate is time-optimally overshoot-then-REVERSE. Confirmed by
+  // direct experiment (sim, 360deg pivot): above the threshold, a
+  // decaying full-amplitude sign-flip limit cycle ending in the STOP_TIME
+  // backstop (kTimeout); below it, a clean completion. The rotational
+  // channel needs no correction tier: the heading PD (App::Pilot) is its
+  // CONTINUOUS closer, the dwell gate completes on MEASURED heading, and
+  // the STOP_TIME backstop bounds everything else.
+  (void)thetaMeasRel;
+  (void)plannedPositionSinceActivation;
 }
 
 EnqueueOutcome Executor::enqueue(const Cmd& cmd) {
@@ -531,7 +567,6 @@ void Executor::flush() {
   rotationalFrameOffset_ = 0.0f;
   pendingLinearReanchor_ = false;
   pendingLinearRetarget_ = false;
-  pendingRotationalReanchor_ = false;
   emergencyStopping_ = false;
 }
 
@@ -602,6 +637,12 @@ void Executor::plan() {
       // retarget, undershooting the commanded heading by more than the
       // dwell tolerance.
       float newRemaining = effectiveDistance_ - measuredPathSinceActivation_;
+      // Cross-bias (2026-07-18 terminal top-up): aim one settle-epsilon
+      // PAST the target so the (lagging) plant still CROSSES it --
+      // completion is the crossing test, and a top-up that lands epsilon
+      // short of its own aim therefore still completes in ONE shot instead
+      // of asymptotically micro-crawling remaining-minus-lag each round.
+      newRemaining += std::copysign(kDistanceSettleEpsilonMm, newRemaining);
       if (linear_.retarget(newRemaining)) {
         linearFrameOffset_ = measuredPathSinceActivation_;
         linearElapsedS_ = 0.0f;
@@ -610,6 +651,8 @@ void Executor::plan() {
     }
 
     bool ok;
+    float linCeiling = linearCeiling_;
+    float linPosTarget = effectiveDistance_;
     if (mode_ == Mode::kTimed) {
       ok = linear_.solveToVelocity(pendingLinearTarget_, linearCeiling_);
     } else {
@@ -617,13 +660,35 @@ void Executor::plan() {
       // effective distance, ceilinged by the Cmd's own requested vMax,
       // carrying exitVelocity_ through the boundary (0 when there is no
       // compatible successor -- this file's own computeExitVelocity()).
-      float ceiling = (pendingLinearVMax_ != 0.0f)
-                          ? std::min(std::fabs(pendingLinearVMax_), linearCeiling_)
-                          : linearCeiling_;
-      ok = linear_.solveToState(effectiveDistance_, exitVelocity_, ceiling);
+      linCeiling = (pendingLinearVMax_ != 0.0f)
+                       ? std::min(std::fabs(pendingLinearVMax_), linearCeiling_)
+                       : linearCeiling_;
+      // Terminal straight-lead (see the kStraightLead* constants): plan a
+      // pure straight coming to REST that much LONGER so its lag-induced
+      // undershoot lands the plant's own rest on the TRUE target.
+      // Completion still tests effectiveDistance_ (distanceDone, in tick()),
+      // never this padded solve target. Excludes arcs (deltaHeading!=0 --
+      // lengthening would over-rotate via headingRatioPerMm_) and chained
+      // legs (exitVelocity_!=0 -- they never rest, so no undershoot).
+      // queueCount_ == 0 restricts the lead to the TRULY terminal command
+      // (nothing queued after it) -- the only one that comes to rest AND
+      // STAYS. A mid-chain command whose exitVelocity_ is 0 only because its
+      // successor forces a stop (opposite-sign reversal, arc->pivot mismatch)
+      // decelerates to rest at its TRUE boundary and the successor drives on
+      // from there; leading it would leave a signed velocity across a
+      // boundary the boundary-velocity contract requires to be ~zero (caught
+      // by boundary_velocity_harness.cpp scenario 2).
+      if (active_.deltaHeading == 0.0f && exitVelocity_ == 0.0f && queueCount_ == 0) {
+        float lead = kStraightLeadBias + kStraightLeadSlope * linCeiling;
+        linPosTarget += (effectiveDistance_ >= 0.0f) ? lead : -lead;
+      }
+      ok = linear_.solveToState(linPosTarget, exitVelocity_, linCeiling);
     }
     if (ok) {
       linearElapsedS_ = 0.0f;  // this channel's own clock restarts at its own solve
+    } else if (mode_ != Mode::kTimed &&
+               resolveFromRest(linear_, &linearElapsedS_, linPosTarget, linCeiling)) {
+      // recovered from a stale-carried-state infeasibility -- see resolveFromRest()
     } else {
       completeActive(CompletionStatus::kSolveFail);
     }
@@ -638,17 +703,6 @@ void Executor::plan() {
       return;
     }
 
-    // See the linear branch's own comment -- a failed divergence reanchor
-    // is not fatal.
-    if (pendingRotationalReanchor_) {
-      pendingRotationalReanchor_ = false;
-      // No small-threshold rotational retarget tier, hence no rotational
-      // frame-offset bump here -- see checkDivergence()'s own comment.
-      float internalPosition = lastThetaMeasRel_ - rotationalFrameOffset_;
-      if (rotational_.reanchor(internalPosition, lastThetaRate_)) rotationalElapsedS_ = 0.0f;
-      return;
-    }
-
     bool ok;
     if (mode_ == Mode::kTimed) {
       ok = rotational_.solveToVelocity(pendingRotationalTarget_, rotationalCeiling_);
@@ -660,10 +714,37 @@ void Executor::plan() {
     }
     if (ok) {
       rotationalElapsedS_ = 0.0f;
+    } else if (mode_ != Mode::kTimed &&
+               resolveFromRest(rotational_, &rotationalElapsedS_, active_.deltaHeading,
+                               rotationalCeiling_)) {
+      // recovered from a stale-carried-state infeasibility -- see resolveFromRest()
     } else {
       completeActive(CompletionStatus::kSolveFail);
     }
   }
+}
+
+// resolveFromRest -- recover a failed position-control solve by resetting
+// the channel to rest and re-solving to `posTarget` at rest (exit velocity
+// 0). Root cause it addresses (2026-07-18): a fresh command enqueued while
+// the executor is still RAMP_TO_REST activates with retarget=true and seeds
+// the solve from the channel's DECELERATING internal state; that carried
+// (position, velocity, acceleration) can momentarily be infeasible for the
+// new target, and Ruckig returns failure -- observed as a periodic
+// SOLVE_FAIL across back-to-back pivots (every ~6th, with the pre-fail
+// duration creeping up as the stale state accumulated). A reachable target
+// is ALWAYS solvable from rest, so a reset-and-retry turns that transient
+// infeasibility into a clean from-rest replan. kSolveFail (the caller's
+// final else) then means genuinely unreachable even from rest -- a
+// degenerate config, the only thing it should mean. The velocity
+// discontinuity the reset introduces happens ONLY on the rare failure, never
+// the nominal smooth-replan path (which keeps its carried velocity).
+bool Executor::resolveFromRest(JerkTrajectory& chan, float* elapsed, float posTarget,
+                               float ceiling) {
+  chan.reset();
+  if (!chan.solveToState(posTarget, 0.0f, ceiling)) return false;
+  *elapsed = 0.0f;
+  return true;
 }
 
 Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
@@ -802,8 +883,37 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
   // planLeadS_ == 0.0f (the shipped default absent a fitted value) makes
   // peek(elapsed + 0) read back exactly linSample/rotSample.velocity, a
   // no-op.
-  JerkTrajectory::State linSampleLead = linear_.peek(linearElapsedS_ + planLeadS_);
-  JerkTrajectory::State rotSampleLead = rotational_.peek(rotationalElapsedS_ + planLeadS_);
+  // Lead only profiles long enough to survive it (2026-07-18): peeking
+  // `planLeadS_` ahead in a profile SHORTER than ~2x the lead reads the
+  // profile's own end state (velocity ~0) for most/all of its life -- a
+  // terminal top-up's own ~0.25s mini-profile under a 0.2s lead commanded
+  // nothing at all, stalling the shortfall correction until the STOP_TIME
+  // backstop (observed: D700 TIMEOUT at 695mm). Short profiles run
+  // un-led; their absolute lag error is tiny by construction.
+  // ... and ramp the lead IN over the first planLeadS_ of a command
+  // (min(lead, elapsed)): a full lead at t=0 starts the commanded trace
+  // partway up the ramp -- an instantaneous velocity step (caught by the
+  // heading-source harness's jerk-bounded-trace assertion). Growing the
+  // lead 1:1 with elapsed keeps the command continuous from zero (the
+  // first phase runs at up to 2x the planned slope, a steeper ramp, not a
+  // step) and reaches full lag cancellation by mid-profile, where the
+  // terminal behavior actually needs it.
+  float linLead = (linear_.duration() > 2.0f * planLeadS_)
+                      ? std::min(planLeadS_, linearElapsedS_)
+                      : 0.0f;
+  // Pivot overshoot-compensation feedforward (see kPivotOvershootLeadSlope):
+  // a pivot gets EXTRA velocity-lead scaled to its cruise rate so the big
+  // hump lands ~on target on its own; the heading PD/dwell then only trims
+  // the small residual. Only pivots overshoot this way (rotational-dominant);
+  // a kArc's rotational channel is slaved to its linear profile, so it keeps
+  // the base lead.
+  float rotTargetLead = planLeadS_;
+  if (mode_ == Mode::kPivot) rotTargetLead += kPivotOvershootLeadSlope * rotationalCeiling_;
+  float rotLead = (rotational_.duration() > 2.0f * rotTargetLead)
+                      ? std::min(rotTargetLead, rotationalElapsedS_)
+                      : 0.0f;
+  JerkTrajectory::State linSampleLead = linear_.peek(linearElapsedS_ + linLead);
+  JerkTrajectory::State rotSampleLead = rotational_.peek(rotationalElapsedS_ + rotLead);
 
   if (mode_ == Mode::kArc) {
     out.v = linSampleLead.velocity;
@@ -823,6 +933,42 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
                         std::fabs(std::fabs(measuredPathSinceActivation_) -
                                   std::fabs(effectiveDistance_)) < kDistanceSettleEpsilonMm);
   bool isTerminalCmd = (queueCount_ == 0);
+
+  // Terminal top-up (2026-07-18 "plan once, finish on the spot"): the plan
+  // is solved ONCE and trusted -- measured distance decides COMPLETION,
+  // never a mid-flight re-solve. The one correction left: the profile has
+  // fully run out, the channel is at rest, and the measured distance
+  // landed SHORT of target beyond the settle epsilon -- solve the (small,
+  // always-forward) remainder from rest via plan()'s existing retarget
+  // path. A from-rest, forward-only solve cannot command a reversal --
+  // unlike the deleted 5mm mid-flight retarget tier this replaces (see
+  // checkDivergence()'s own comment for the terminal ringing it caused).
+  // Overshoot needs no correction arm at all: crossing the target IS
+  // completion (distanceDone above). Re-requesting while the solve is
+  // pending is idempotent; once the top-up commits, elapsed resets and
+  // this condition goes false until that mini-profile has run out too.
+  // duration() > 0 guards the pre-first-solve window: a freshly activated
+  // command's channel has no committed plan yet (duration 0), which would
+  // otherwise read as "profile ran out at rest" on the very first tick and
+  // hijack the solve budget away from the initial solve forever.
+  //
+  // The gate tests the MEASURED motion at rest, not just the planned
+  // sample: at planned-profile-end the plan is at rest by construction
+  // while the lagging plant is often STILL COASTING the last few mm in --
+  // a top-up fired during that coast plans a remainder the plant is
+  // already covering on its own momentum (observed 2026-07-18: an 8mm
+  // OVERSHOOT plus a double-bump tail, both caused by the eager top-up,
+  // on the neutral-gain profile). Waiting for the coast to genuinely end
+  // means: coast crosses the target -> distanceDone completes, NO top-up;
+  // coast stalls short -> one clean from-rest top-up.
+  float measuredVelocity = (dtS > 0.0f) ? (measuredDistanceDelta / dtS) : 0.0f;  // [mm/s]
+  if (mode_ == Mode::kArc && !distanceDone && linear_.duration() > 0.0f &&
+      linearElapsedS_ >= linear_.duration() &&
+      std::fabs(linSample.velocity) < kLinearRestEpsilon &&
+      std::fabs(measuredVelocity) < kTopUpMeasuredRestVelocity) {
+    pendingLinearRetarget_ = true;
+    needLinearSolve_ = true;
+  }
 
   float thetaErr = active_.deltaHeading - thetaMeasRel;
   float thetaRate = (dtS > 0.0f) ? (thetaMeasRel - prevThetaMeasRel_) / dtS : 0.0f;
@@ -893,6 +1039,7 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
   out.thetaMeas = thetaMeasRel;
   out.thetaMeasLead = thetaMeasLeadRel;  // 109-010 locus 1, App::Pilot's PD error term
   out.headingActive = headingContent && !terminalDecel;
+  out.withinTolerance = withinTol;       // Pilot's min-command floor gate (see Twist)
   out.omegaDes = out.headingActive ? omegaFf : 0.0f;
 
   if (headingContent) {

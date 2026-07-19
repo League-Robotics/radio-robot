@@ -206,6 +206,13 @@ class Executor {
     // NOT in its terminal-decel window). false for kTimed, for a non-
     // heading-bearing kArc leg, and during terminal decel.
     bool headingActive = false;
+    // withinTolerance -- this tick's own dwell-tolerance test result
+    // (|thetaErrLead| < heading_dwell_tol), exported for App::Pilot's
+    // minimum-command floor (2026-07-18): the floor drives the terminal
+    // approach only while OUTSIDE tolerance and disengages inside it, so
+    // the plant coasts to rest in the band instead of bang-banging
+    // through it. Meaningful only while headingActive.
+    bool withinTolerance = false;
 
     // thetaRef/thetaMeas -- both RELATIVE to this command's own activation
     // (its own theta==0 origin), same units/frame, meaningful only when
@@ -443,6 +450,12 @@ class Executor {
   void checkDivergence(float dtS, float measuredDistanceDelta, float thetaMeasRel, float thetaRate,
                         float plannedPositionSinceActivation);
 
+  // resolveFromRest -- plan()'s recovery for a position-solve that failed on
+  // a stale carried state (see its own definition comment, executor.cpp).
+  // Resets `chan` to rest and re-solves to `posTarget` at rest; returns true
+  // and zeroes *elapsed on success.
+  bool resolveFromRest(JerkTrajectory& chan, float* elapsed, float posTarget, float ceiling);
+
   // stopTimeBackstopMs -- 109-005's own STOP_TIME backstop for a dwell-
   // gated heading command: a generous multiple of the dominant channel's
   // own solved duration, so a persistent oscillation or a stuck measurement
@@ -564,15 +577,14 @@ class Executor {
   // itself never solves). No small-threshold rotational retarget tier --
   // see checkDivergence()'s own comment.
   bool pendingLinearReanchor_ = false;
+  // pendingLinearRetarget_ -- as of the 2026-07-18 "plan once, finish on
+  // the spot" restructure this is NO LONGER a mid-flight divergence
+  // correction (that 5mm tier caused terminal reversal ringing -- see
+  // checkDivergence()'s own comment). It is now set ONLY by tick()'s
+  // terminal top-up: the profile ran out, the channel is at rest, and the
+  // MEASURED distance landed short of target beyond the settle epsilon --
+  // plan() then solves the (always forward, from-rest) remainder.
   bool pendingLinearRetarget_ = false;
-  bool pendingRotationalReanchor_ = false;
-
-  // linearRetargetStreak_ -- consecutive-tick counter for the 5mm linear
-  // retarget tier's own anti-transient guard (checkDivergence()'s own doc
-  // comment, executor.cpp) -- counts ticks the divergence has stayed past
-  // the 5mm threshold WITHOUT dropping back under it; reset to 0 the
-  // moment it drops back under, and at activate().
-  uint8_t linearRetargetStreak_ = 0;
 
   // msSinceLastReanchor_ -- time since the last reanchor() on EITHER
   // channel (a single shared timer -- only one of linear_/rotational_ is
@@ -592,8 +604,6 @@ class Executor {
   // without plan() needing its own measured-signal parameters (plan()
   // takes none, matching its existing 109-003 signature).
   float lastMeasuredVelocity_ = 0.0f;  // [mm/s] measuredDistanceDelta/dt, this tick's own estimate
-  float lastThetaMeasRel_ = 0.0f;      // [rad] this tick's own thetaMeasRel
-  float lastThetaRate_ = 0.0f;         // [rad/s] this tick's own thetaRate
 
   // completionLinear{Velocity,Acceleration}_/completionRotational{Velocity,
   // Acceleration}_ -- this tick's own dominant-channel sample, refreshed

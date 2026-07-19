@@ -125,7 +125,7 @@ msg::PlannerConfig defaultPlannerConfig() {
     cfg.setYawJerkMax(100.0f);         // [rad/s^3] ~5x yaw_acc_max -- ~0.2s
     cfg.setHeadingKp(1.0f);              // [1/s] outer heading-loop proportional gain
     cfg.setHeadingKd(0.0f);              // dimensionless outer heading-loop derivative gain
-    cfg.setMinSpeed(10.0f);               // [mm/s] Drive:: tracker pivot-mode threshold (100-007)
+    cfg.setMinSpeed(16.0f);               // [mm/s] Drive:: tracker pivot-mode threshold (100-007)
     cfg.setVWheelMax(350.0f);              // [mm/s]
     cfg.setSteerHeadroom(20.0f);          // [mm/s]
     cfg.setWheelStepMax(150.0f);          // [mm/s]
@@ -150,7 +150,7 @@ msg::PlannerConfig defaultPlannerConfig() {
     // tolerance/rate are firmware defaults today (no robot-JSON key yet --
     // see heading_dwell_for_config()'s own comment).
     cfg.setHeadingSource(msg::HeadingSourceMode::HEADING_SOURCE_AUTO);
-    cfg.setHeadingDwellTol(0.008726646f);        // [rad]
+    cfg.setHeadingDwellTol(0.05235988f);        // [rad]
     cfg.setHeadingDwellRate(0.01745329f);       // [rad/s]
 
     // 109-010: three independently-tunable lead-compensation Δt's, fitted
@@ -158,7 +158,7 @@ msg::PlannerConfig defaultPlannerConfig() {
     // comments and src/firm/motion/DESIGN.md's "Turn-error characterization"
     // entry for the full derivation.
     cfg.setHeadingLeadBias(-0.05f);        // [s] locus 1
-    cfg.setPlanLead(0.0f);                // [s] locus 2
+    cfg.setPlanLead(0.2f);                // [s] locus 2
     cfg.setTerminalLead(0.0f);           // [s] locus 3
     return cfg;
 }

@@ -324,6 +324,14 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
     case Motion::EnqueueOutcome::kAccepted:
     case Motion::EnqueueOutcome::kReplaced:
       driving_ = true;
+      // Arm the lease AT accept (2026-07-18, mirrors handleTwist): the
+      // expiry check runs between this dispatch and the pilot tick that
+      // would otherwise be first to re-arm -- a stale lease from a PREVIOUS
+      // command expiring in exactly this cycle would flush the command the
+      // same cycle it was accepted (a ~1-in-6 race, observed directly in a
+      // back-to-back sim sweep). A freshly accepted command IS host
+      // activity; the lease starts now.
+      deadman_.arm(kPilotDeadmanLease);
       tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
       break;
     case Motion::EnqueueOutcome::kTrivial:
@@ -458,6 +466,14 @@ void RobotLoop::cycle() {
       pilot_.flush();     // Executor's own queue is stale too -- flush it,
       drive_.stop();      // host silent -> wheels stop. No exceptions, no
       driving_ = false;   // other path to stop being gated by the deadman.
+      // The lease is ONE-SHOT (2026-07-18 fix): expired() latches true
+      // until re-armed, and this branch runs AFTER processMessage() -- so
+      // without a disarm here, the FIRST command enqueued after >lease of
+      // idle was flushed the same cycle it was accepted (observed: a
+      // back-to-back sim sweep saw every run after the first come back
+      // ACK_STATUS_FLUSHED). The system is fully safed by the flush/stop
+      // above; disarm so the next command starts clean.
+      deadman_.disarm();
     }
 
     // pilot_.tick() -- sample-only (Motion::Executor::tick(), see pilot.h):

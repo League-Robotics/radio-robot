@@ -427,9 +427,18 @@ class SimHarness {
     // s/150ms).
     cfg.heading_kp = 6.0f;                     // [1/s]
     cfg.heading_kd = 0.0f;                     // dimensionless
-    cfg.heading_dwell_tol = 0.5f * 3.14159265f / 180.0f;   // [rad]
+    // Dwell tolerance 1.5deg (was 0.5deg) + min_speed 20mm/s (2026-07-18,
+    // terminal stiction/deadband floor): with the write shaping honestly ON
+    // (parity), the smallest wheel command that moves the plant is
+    // ~outputDeadband/kff ~= 15mm/s -- the PD stalls below that, so
+    // App::Pilot floors its terminal output at min_speed (pilot.cpp) and
+    // the dwell tolerance must sit ABOVE where a floored approach can stop
+    // (floor rate x plant decay ~= 1.3deg). Matches gen_boot_config.py's
+    // own updated defaults -- same values both places.
+    cfg.heading_dwell_tol = 3.0f * 3.14159265f / 180.0f;   // [rad]
     cfg.heading_dwell_rate = 1.0f * 3.14159265f / 180.0f;  // [rad/s]
     cfg.arrive_dwell = 0.15f;                  // [s]
+    cfg.min_speed = 16.0f;                     // [mm/s] Pilot heading-PD floor: just above the ~15mm/s deadband cut; coast quantum = floor x (tau 0.13s + a write cycle) ~= 2.6deg < the 3deg dwell tol
     // 109-010: lead-compensation defaults. heading_lead_bias defaults to
     // -0.05 -- NOT 0.0 -- matching gen_boot_config.py's own shipped
     // HEADING_LEAD_BIAS_DEFAULT (see that constant's own doc comment for
@@ -448,7 +457,7 @@ class SimHarness {
     // by the omega fix). setLeadCompensation() below overrides all three
     // for a test that wants to sweep them.
     cfg.heading_lead_bias = -0.05f;  // [s]
-    cfg.plan_lead = 0.0f;            // [s]
+    cfg.plan_lead = 0.20f;           // [s] ~2 staging cycles + plant tau -- eliminates the terminal PD reversal (2026-07-18 sweep; matches gen_boot_config.py PLAN_LEAD_DEFAULT)
     cfg.terminal_lead = 0.0f;        // [s]
     return cfg;
   }
@@ -526,7 +535,7 @@ class SimHarness {
   // clobbering it back to 0.
   float lastYawRateMax_ = 4.0f;  // [rad/s] matches makeExecutorConfig()'s own default
   float lastHeadingLeadBias_ = -0.05f;  // [s] matches makeExecutorConfig()'s own default
-  float lastPlanLead_ = 0.0f;          // [s]
+  float lastPlanLead_ = 0.20f;         // [s] matches makeExecutorConfig()s own default
   float lastTerminalLead_ = 0.0f;      // [s]
 };
 

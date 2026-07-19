@@ -77,6 +77,7 @@ class Pilot {
   void configureHeading(const msg::PlannerConfig& config) {
     headingKp_ = config.heading_kp;
     headingKd_ = config.heading_kd;
+    minSpeed_ = config.min_speed;   // [mm/s] heading-PD minimum-command floor (see tick())
     plannerConfig_ = config;
   }
 
@@ -216,6 +217,13 @@ class Pilot {
 
   float headingKp_ = 0.0f;  // [1/s] msg::PlannerConfig.heading_kp
   float headingKd_ = 0.0f;  // dimensionless msg::PlannerConfig.heading_kd
+  float minSpeed_ = 0.0f;   // [mm/s] msg::PlannerConfig.min_speed -- the heading
+  // PD's minimum-command floor (tick()): the smallest per-wheel speed that
+  // actually moves the plant (the write shaping's output deadband eats duty
+  // below ~0.03, and real motors have stiction besides). 0 disables the
+  // floor. Adopted for this purpose 2026-07-18 -- the field's previous
+  // consumer (the old Drive tracker's pivot-mode threshold) was deleted
+  // with source/drive/, leaving it consumer-less.
 
   // 109-008: the live PlannerConfig baseline applyPlannerPatch() merges
   // future wire patches onto -- see configureHeading()'s own doc comment.

@@ -162,7 +162,7 @@ HEADING_KD_DEFAULT = 0.0    # dimensionless
 # heading_dwell_rate_dps mapping here if one ever does, mirroring
 # heading_gains_for_config()'s own shape.
 HEADING_SOURCE_DEFAULT = "auto"
-HEADING_DWELL_TOL_DEG_DEFAULT = 0.5    # [deg]
+HEADING_DWELL_TOL_DEG_DEFAULT = 3.0    # [deg] (0.5 until 2026-07-18: must sit above where the min_speed-floored terminal PD can stop -- see pilot.cpp)
 HEADING_DWELL_RATE_DPS_DEFAULT = 1.0   # [deg/s]
 
 # 109-010: three independently-tunable lead-compensation Δt's, fitted from
@@ -243,7 +243,7 @@ HEADING_LEAD_BIAS_DEFAULT = -0.05  # [s] locus 1, see comment above
 # where JerkTrajectory trajectories are typically longer-duration than
 # this sim's own sub-second pivots and less likely to hit the extrapolation
 # tail this sweep's own short pivots did.
-PLAN_LEAD_DEFAULT = 0.0           # [s] locus 2, see comment above
+PLAN_LEAD_DEFAULT = 0.20          # [s] locus 2 (0.0 until 2026-07-18: re-swept against the plan-once executor -- 0.20 ~= 2 command-staging cycles + plant tau, eliminates the terminal PD reversal entirely; sim sweep 0/0.10/0.15/0.20 -> reverse-cmd peak 251/132/81/0 mm/s, completion 5.7->2.7s, err -0.8deg)
 # terminal_lead (locus 3): same joint sweep as plan_lead above -- no value
 # in [0.0, 0.13] improved the COMBINED (both tours') worst-case without
 # regressing the other tour (e.g. tl=0.08 improved TOUR_1's ideal worst
@@ -306,7 +306,7 @@ ARRIVE_DWELL_DEFAULT      = 0.15     # [s]
 # every other field 15-31 default above (M11 re-tunes against the real
 # plant); overridable via a future robot JSON `control.min_speed` key,
 # mirroring every other field's own override mechanism, once one exists.
-MIN_SPEED_DEFAULT         = 10.0     # [mm/s]
+MIN_SPEED_DEFAULT         = 16.0     # [mm/s] (10 until 2026-07-18: now ALSO App::Pilot::tick()s heading-PD minimum-command floor -- must exceed the write-shaping deadband floor ~outputDeadband/kff ~= 15-19mm/s)
 
 
 # ---------------------------------------------------------------------------
