@@ -294,6 +294,7 @@ class SimHarness {
     cfg.plan_lead = planLead;
     cfg.terminal_lead = terminalLead;
     cfg.yaw_rate_max = lastYawRateMax_;
+    cfg.distance_kp = lastDistanceKp_;  // 112-003: compose with setDistanceKp() regardless of call order
     executor_.configure(cfg);
     headingSource_.configure(cfg);
     drive_.configure(cfg);  // 112-002: reapply the same actuation_lag baseline
@@ -314,9 +315,32 @@ class SimHarness {
     cfg.heading_lead_bias = lastHeadingLeadBias_;
     cfg.plan_lead = lastPlanLead_;
     cfg.terminal_lead = lastTerminalLead_;
+    cfg.distance_kp = lastDistanceKp_;  // 112-003: compose with setDistanceKp() regardless of call order
     executor_.configure(cfg);
     headingSource_.configure(cfg);
     drive_.configure(cfg);  // 112-002: reapply the same actuation_lag baseline
+    pilot_.configureHeading(cfg);
+  }
+
+  // setDistanceKp -- 112-003 test-only hook, same shape as
+  // setYawRateMax()/setLeadCompensation() above: makeExecutorConfig()
+  // leaves PlannerConfig.distance_kp at its zero-value default (a genuine
+  // no-op -- see that function's own comment), so App::Pilot's new bounded
+  // linear position-feedback trim stays completely inert in every
+  // PRE-EXISTING sim scenario unless a test opts in via this hook. Used by
+  // pilot_distance_trim_harness.cpp's own 087-009 clamp-authority
+  // guardrail check.
+  void setDistanceKp(float distanceKp) {
+    lastDistanceKp_ = distanceKp;
+    msg::PlannerConfig cfg = makeExecutorConfig();
+    cfg.distance_kp = distanceKp;
+    cfg.heading_lead_bias = lastHeadingLeadBias_;
+    cfg.plan_lead = lastPlanLead_;
+    cfg.terminal_lead = lastTerminalLead_;
+    cfg.yaw_rate_max = lastYawRateMax_;
+    executor_.configure(cfg);
+    headingSource_.configure(cfg);
+    drive_.configure(cfg);
     pilot_.configureHeading(cfg);
   }
 
@@ -512,6 +536,12 @@ class SimHarness {
     // setYawRateMax()) actually exercises the feedforward path a real robot
     // boots with, not a silent 0.0f no-op.
     cfg.actuation_lag = 0.130f;      // [s]
+    // 112-003: App::Pilot's own bounded linear position-feedback trim gain.
+    // Left at its zero-value default (a genuine no-op -- Pilot::tick()'s
+    // trim collapses to distance_kp*(...)=0 unconditionally) so every
+    // PRE-EXISTING sim scenario is completely unaffected by this ticket's
+    // addition; setDistanceKp() below is the ONLY way a test opts in.
+    cfg.distance_kp = 0.0f;          // [1/s]
     return cfg;
   }
 
@@ -590,6 +620,7 @@ class SimHarness {
   float lastHeadingLeadBias_ = -0.05f;  // [s] matches makeExecutorConfig()'s own default
   float lastPlanLead_ = 0.20f;         // [s] matches makeExecutorConfig()s own default
   float lastTerminalLead_ = 0.0f;      // [s]
+  float lastDistanceKp_ = 0.0f;        // [1/s] 112-003, matches makeExecutorConfig()'s own default
 };
 
 }  // namespace TestSim

@@ -872,6 +872,13 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
     thetaRef = headingRatioPerMm_ * plannedPositionSinceActivation;
     omegaFf = headingRatioPerMm_ * linSample.velocity;
     out.alphaRef = headingRatioPerMm_ * linSample.acceleration;  // 112-002
+    // 112-003: the linear channel's own since-activation reference/
+    // measured pair, for App::Pilot's bounded position-feedback trim --
+    // see Twist::sRef/sMeas's own doc comment. Left at Twist{}'s 0/0
+    // default for kPivot/kTimed (the else branch below, and the kTimed
+    // early return above, neither touch these two fields).
+    out.sRef = plannedPositionSinceActivation;
+    out.sMeas = measuredPathSinceActivation_;
   } else {
     out.v = 0.0f;
     out.aRef = 0.0f;  // 112-002: kPivot has no linear channel

@@ -289,4 +289,44 @@ message PlannerConfig {
   // than a new App::Drive -> Motion:: dependency (sprint 112 Architecture
   // Design Rationale Decision 4).
   float actuation_lag = 38;
+
+  // [1/s] 112-003: App::Pilot's own bounded linear position-feedback
+  // trim's gain -- `v_cmd = twist.v + distance_kp*(twist.sRef -
+  // twist.sMeas)`, clamped to `App::kDistanceTrimCeiling` (a fixed
+  // Pilot-local C++ constant, deliberately NOT itself a wire field -- see
+  // pilot.h's own doc comment; only the GAIN is per-robot tunable). Named
+  // to mirror `heading_kp` (sprint 112 Architecture Design Rationale
+  // Decision 3 -- Executor exposes `sRef`/`sMeas`, Pilot owns the gain and
+  // the correction arithmetic, the SAME split the heading PD already
+  // uses). Default 15.0 -- chosen so `distance_kp * distance_tol`
+  // (45.0mm/s) clears the write-shaping deadband floor
+  // (`outputDeadband/kff`, `Devices::NezhaMotor`'s own duty cutoff),
+  // re-verified against the ACTUAL current source rather than trusting
+  // Decision 6's own cited "~15-19mm/s" range unchecked:
+  // `kDefaultOutputDeadband` = 0.03 (nezha_motor.h) over the currently-
+  // active boot config's own `vel_kff` (`data/robots/active_robot.json`
+  // -> `tovez_nocal.json`, 0.002) gives 15.0mm/s, and over the
+  // historically bench-tuned `tovez.json` profile's own `vel_kff`
+  // (0.0008, post sprint-106-002's kff detune -- see that file's own
+  // `_vel_gains_note`) gives 37.5mm/s -- HIGHER than Decision 6's cited
+  // range, because that range predates/doesn't reflect the detune; 45.0
+  // clears both with margin. See `gen_boot_config.py`'s
+  // `DISTANCE_KP_DEFAULT`/`DISTANCE_TOL_DEFAULT` comments for the full
+  // derivation. `PlannerConfigPatch` curates this field (config.proto)
+  // for live bench iteration, same as `heading_kp`.
+  float distance_kp = 39;
+
+  // [mm] 112-003: the linear completion tolerance, s_tol -- repurposes
+  // the role `Motion::kDistanceSettleEpsilonMm` (executor.cpp) currently
+  // plays as a hardcoded constant, mirroring `heading_dwell_tol`'s own
+  // role for the angular channel. This ticket ADDS the field (default
+  // 3.0, matching `kDistanceSettleEpsilonMm`'s own current value so a
+  // future rewire is a pure substitution, not a silent behavior change)
+  // but does NOT yet wire it into the completion decision -- that rewire
+  // is ticket 004's own scope (sprint Architecture "What Changed",
+  // unified completion rule). NOT curated by `PlannerConfigPatch` for
+  // this ticket -- boot-config-only, since there is no live consumer to
+  // tune yet (mirrors `heading_dwell_tol`'s own "not yet needed live"
+  // posture until a consumer exists).
+  float distance_tol = 40;
 }

@@ -8,6 +8,19 @@
 
 namespace App {
 
+namespace {
+// clampf -- this codebase's own per-file convention (nezha_motor.cpp,
+// velocity_pid.cpp, otos.cpp, jerk_trajectory.cpp all declare an
+// identically-shaped local copy rather than sharing one) -- see this
+// ticket's own completion notes for why a shared utility was not
+// introduced instead.
+float clampf(float v, float lo, float hi) {
+  if (v < lo) return lo;
+  if (v > hi) return hi;
+  return v;
+}
+}  // namespace
+
 void Pilot::tick(uint32_t now, uint64_t nowUs) {  // [ms] [us]
   uint32_t dt = hasLastTick_ ? (now - lastTick_) : 0;
   lastTick_ = now;
@@ -85,6 +98,27 @@ void Pilot::tick(uint32_t now, uint64_t nowUs) {  // [ms] [us]
   prevThetaMeas_ = twist.thetaMeas;
   hasPrevThetaMeas_ = true;
 
+  // 112-003: bounded linear position-feedback trim -- mirrors the heading
+  // PD's own gain/arithmetic split exactly (pilot.h's own kDistanceTrimCeiling
+  // doc comment / sprint 112 Architecture Design Rationale Decision 3):
+  // Executor exposes the linear channel's own since-activation reference/
+  // measured pair (Twist::sRef/sMeas), Pilot owns the gain and the
+  // correction arithmetic. `sRef`/`sMeas` are both 0 for kPivot/kTimed
+  // (Twist::sRef/sMeas's own doc comment, executor.h) -- `trim` is
+  // therefore a harmless 0 no-op in either case, with no mode branching
+  // needed here, the same way the deadband guard (`twist.sRef == twist.
+  // sMeas == 0`) never needs an explicit `if`. Downstream of Motion::
+  // Executor's own PLANNED reference (`twist.v`, already captured into
+  // `refLeft_`/`refRight_` above via BodyKinematics::inverse()) -- this
+  // trim perturbs only the SAMPLED velocity Drive::setTwist() receives; it
+  // never feeds back into a JerkTrajectory solve (no solveToRest/
+  // solveToState/solveToVelocity/retarget/reanchor call reads it), so the
+  // ramp/lobe/bounds checks that grade the planned reference are
+  // unaffected (this ticket claims no new harness xfail flip).
+  float trim = distanceKp_ * (twist.sRef - twist.sMeas);
+  trim = clampf(trim, -kDistanceTrimCeiling, kDistanceTrimCeiling);
+  float v = twist.v + trim;
+
   // 111-003 twist-staging decision (pilot.h's own tick() doc comment):
   //   - still running (or just started) -- stage the freshly-computed
   //     twist, unchanged existing behavior.
@@ -104,8 +138,9 @@ void Pilot::tick(uint32_t now, uint64_t nowUs) {  // [ms] [us]
     // 112-002: aRef/alphaRef forward the SAME sample() result already
     // computed for v/omega above (never a separate solve) -- Drive::tick()
     // folds them into a model feedforward term (actuation_lag * a) on top
-    // of the velocity target.
-    drive_.setTwist(twist.v, omega, twist.aRef, twist.alphaRef);
+    // of the velocity target. 112-003: `v` (not `twist.v`) carries the
+    // bounded linear trim computed above.
+    drive_.setTwist(v, omega, twist.aRef, twist.alphaRef);
   } else if (stateBefore != Motion::State::kIdle) {
     drive_.setTwist(0.0f, 0.0f);
   }

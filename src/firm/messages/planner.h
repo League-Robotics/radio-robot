@@ -243,6 +243,8 @@ struct PlannerConfig {
     float plan_lead = 0.0f;
     float terminal_lead = 0.0f;
     float actuation_lag = 0.0f;
+    float distance_kp = 0.0f;
+    float distance_tol = 0.0f;
 
     // --- array / optional-string accessors ---
 
@@ -265,6 +267,8 @@ struct PlannerConfig {
     PlannerConfig& setPlanLead(float v) { plan_lead = v; return *this; }
     PlannerConfig& setTerminalLead(float v) { terminal_lead = v; return *this; }
     PlannerConfig& setActuationLag(float v) { actuation_lag = v; return *this; }
+    PlannerConfig& setDistanceKp(float v) { distance_kp = v; return *this; }
+    PlannerConfig& setDistanceTol(float v) { distance_tol = v; return *this; }
 };
 
 }  // namespace msg

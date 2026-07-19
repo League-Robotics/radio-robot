@@ -71,6 +71,32 @@
 
 namespace App {
 
+// kDistanceTrimCeiling -- 112-003: the bounded linear position-feedback
+// trim's own clamp ceiling. A fixed, Pilot-local C++ constant, deliberately
+// NOT a wire field (only the GAIN, distance_kp, is per-robot tunable --
+// see planner.proto's own field comment and this ticket's completion
+// notes) -- declared at namespace scope (mirroring Motion::kDeadTime/
+// kQueueDepth's own "other code/tests can reference the SAME constant by
+// name" shape) so pilot.cpp's tick() and a test harness verifying the
+// 087-009 guardrail read one shared value, never a duplicated literal.
+//
+// 50.0mm/s: comfortably ABOVE the shipped distance_kp*distance_tol product
+// (15.0 * 3.0mm = 45.0mm/s, see planner.proto's own distance_kp field
+// comment for the full deadband-inequality derivation) -- an in-tolerance
+// residual error is NOT yet clipped, matching the heading PD's own
+// unclamped-near-target shape -- while staying far below any velocity that
+// could look like a solve-side reversal (typical cruise speeds run
+// 100-300mm/s; v_body_max defaults to 1000mm/s): a genuinely large
+// divergence (e.g. the 40mm gross-divergence reanchor threshold,
+// Motion::kDivergenceReanchorLinearMm) would demand distance_kp*40mm =
+// 600mm/s if unclamped -- this ceiling caps that to a 50mm/s nudge, never
+// a re-plan-scale correction (sprint 112 Architecture "Guardrails/SUC-007"
+// Main Flow step 3: "the new linear feedback trim's authority is bounded
+// (clamped) such that near the target its magnitude... stays below what a
+// full re-solve-style reversal would need -- a residual-error nudge,
+// never a re-plan").
+constexpr float kDistanceTrimCeiling = 50.0f;  // [mm/s]
+
 class Pilot {
  public:
   Pilot(Motion::Executor& executor, Drive& drive, HeadingSource& headingSource, Odometry& odom)
@@ -92,6 +118,7 @@ class Pilot {
     headingKp_ = config.heading_kp;
     headingKd_ = config.heading_kd;
     minSpeed_ = config.min_speed;   // [mm/s] heading-PD minimum-command floor (see tick())
+    distanceKp_ = config.distance_kp;  // [1/s] 112-003: linear position-feedback trim's own gain (see tick())
     plannerConfig_ = config;
   }
 
@@ -109,13 +136,20 @@ class Pilot {
   // mutation -- see their own definitions), so calling them mid-motion is
   // safe.
   //
-  // Note: `PlannerConfigPatch` (config.proto) curates 4 of `msg::
-  // PlannerConfig`'s fields: `min_speed`/`heading_kp`/`heading_kd` plus
-  // `arrive_dwell`. It does NOT declare `a_max`/`a_decel`/`v_body_max`/
-  // `yaw_rate_max`/`yaw_acc_max`/`j_max`/`yaw_jerk_max`/`heading_source`/
+  // Note: `PlannerConfigPatch` (config.proto) curates 5 of `msg::
+  // PlannerConfig`'s fields: `min_speed`/`heading_kp`/`heading_kd`/
+  // `arrive_dwell` plus (112-003) `distance_kp` -- added to this curated
+  // set (not left boot-only) so the linear trim's own gain can be bench-
+  // iterated live, the same reason `heading_kp` is curated; a STATED
+  // decision, not an oversight (this ticket's own completion notes). It
+  // does NOT declare `a_max`/`a_decel`/`v_body_max`/`yaw_rate_max`/
+  // `yaw_acc_max`/`j_max`/`yaw_jerk_max`/`heading_source`/
   // `heading_dwell_tol`/`heading_dwell_rate`/`heading_lead_bias`/
-  // `plan_lead`/`terminal_lead`, so those fields are never touched by this
-  // method and stay at whatever `plannerConfig_` already holds (the boot
+  // `plan_lead`/`terminal_lead`/`actuation_lag`, nor (112-003)
+  // `distance_tol` -- deliberately left boot-config-only for this ticket,
+  // no live consumer to tune yet (config.proto's own PlannerConfigPatch
+  // header comment) -- so those fields are never touched by this method
+  // and stay at whatever `plannerConfig_` already holds (the boot
   // default, absent a future wire-schema addition). `PlannerConfigPatch`
   // used to also curate 16 Drive::Limits/tracker/policy fields
   // (`v_wheel_max`..`arrive_vel_tol`, ticket 006) that were never wired to
@@ -128,6 +162,7 @@ class Pilot {
     if (patch.heading_kp.has) merged.heading_kp = patch.heading_kp.val;
     if (patch.heading_kd.has) merged.heading_kd = patch.heading_kd.val;
     if (patch.arrive_dwell.has) merged.arrive_dwell = patch.arrive_dwell.val;
+    if (patch.distance_kp.has) merged.distance_kp = patch.distance_kp.val;  // 112-003
 
     executor_.configure(merged);
     headingSource_.configure(merged);
@@ -248,6 +283,14 @@ class Pilot {
   // floor. Adopted for this purpose 2026-07-18 -- the field's previous
   // consumer (the old Drive tracker's pivot-mode threshold) was deleted
   // with source/drive/, leaving it consumer-less.
+
+  float distanceKp_ = 0.0f;  // [1/s] msg::PlannerConfig.distance_kp -- 112-003
+  // linear position-feedback trim's own gain (tick()): `distanceKp_ *
+  // (twist.sRef - twist.sMeas)`, clamped to kDistanceTrimCeiling, mirrors
+  // headingKp_ above exactly. 0 makes the trim a genuine no-op (matches
+  // this field's own zero-value default -- the sim harness/any caller
+  // that never configures this leaves the new mechanism completely
+  // inert, unchanged behavior).
 
   // 109-008: the live PlannerConfig baseline applyPlannerPatch() merges
   // future wire patches onto -- see configureHeading()'s own doc comment.

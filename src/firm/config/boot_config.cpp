@@ -152,6 +152,15 @@ msg::PlannerConfig defaultPlannerConfig() {
     // kDeadTime's own bench-derived value (120-140ms) by default -- see
     // ACTUATION_LAG_DEFAULT's own comment above.
     cfg.setActuationLag(0.13f);           // [s]
+
+    // 112-003: App::Pilot's own bounded linear position-feedback trim --
+    // distance_kp is the trim's gain, distance_tol repurposes the role
+    // Motion::kDistanceSettleEpsilonMm plays as a hardcoded constant
+    // (not yet wired into the completion decision -- ticket 004's scope).
+    // See DISTANCE_KP_DEFAULT/DISTANCE_TOL_DEFAULT's own comment above for
+    // the deadband-inequality derivation.
+    cfg.setDistanceKp(15.0f);              // [1/s]
+    cfg.setDistanceTol(3.0f);             // [mm]
     return cfg;
 }
 

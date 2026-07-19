@@ -268,6 +268,25 @@ class Executor {
     // else 0.
     float aRef = 0.0f;      // [mm/s^2]
     float alphaRef = 0.0f;  // [rad/s^2]
+
+    // sRef/sMeas -- 112-003: the LINEAR channel's own since-activation
+    // reference position and measured-path accumulator, exposed the SAME
+    // way thetaRef/thetaMeas already expose the rotational pair -- App::
+    // Pilot's own bounded position-feedback trim reads these (`distance_kp
+    // * (sRef - sMeas)`, clamped) and adds the result to `v` before
+    // calling Drive::setTwist(), mirroring the heading PD's gain/
+    // arithmetic split exactly (sprint 112 Architecture Design Rationale
+    // Decision 3). kArc only: sRef is `plannedPositionSinceActivation`
+    // (the SAME frame-offset-adjusted linear-channel sample already
+    // computed for thetaRef this cycle -- see tick()'s own comment), sMeas
+    // is `measuredPathSinceActivation_` (this file's own "Distance
+    // completion" comment). Both stay 0 for kPivot (the linear channel is
+    // never solved/tracked at all for a pure pivot -- this file's own mode
+    // doc comment) and kTimed (no position-control target exists) -- a
+    // pure, mode-agnostic no-op for Pilot's trim in either case, requiring
+    // no branching there (`sRef == sMeas == 0` => `trim == 0`).
+    float sRef = 0.0f;   // [mm]
+    float sMeas = 0.0f;  // [mm]
   };
 
   // configure -- stores both channels' own limits (forwarded to the two

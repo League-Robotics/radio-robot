@@ -95,6 +95,38 @@ cycle, Pilot::tick() computes omega_cmd = omega_ff + heading_kp*(...)") and
 keeps every sensor type and every gain out of `motion/` entirely — see
 `motion/DESIGN.md` §2c for the executor-side half.
 
+**The bounded linear position-feedback trim lives in `Pilot::tick()`, not
+`Executor` either (112-003) — the SAME gain/arithmetic split, one channel
+over.** `Motion::Executor::tick()` additionally exposes the LINEAR
+channel's own since-activation reference/measured pair on `Twist`
+(`sRef`/`sMeas` — `plannedPositionSinceActivation`/
+`measuredPathSinceActivation_`, kArc only, 0/0 for kPivot/kTimed — a pure
+straight/arc-leg mechanism that never touches the rotational channel).
+`Pilot::tick()` adds `distance_kp*(sRef - sMeas)`, clamped to
+`kDistanceTrimCeiling` (a fixed, Pilot-local C++ constant — only the GAIN
+is per-robot wire-tunable, not the ceiling), onto `twist.v` before staging
+the result on `Drive` — the identical gain-in-Pilot/reference-in-Executor
+boundary the heading PD paragraph above documents, chosen for the same
+reason: `motion/DESIGN.md` §2c's own "no gain, no sensor type" boundary
+for `Executor` stays true without a carve-out (sprint 112 Architecture
+Design Rationale Decision 3). Downstream of the PLANNED reference
+`refLeft()`/`refRight()` expose (112-002) — the trim perturbs only the
+SAMPLED velocity `Drive::setTwist()` receives, never the `JerkTrajectory`
+solve itself (no `solveToRest`/`solveToState`/`solveToVelocity`/
+`retarget`/`reanchor` call reads `sRef`/`sMeas`), so the ramp/lobe/bounds
+harness checks graded against the planned reference (112-002's own
+re-grade) are unaffected. The clamp ceiling is sized well below anything
+that could look like the solve-side reversal
+`.clasi/knowledge/d-drive-terminal-instability.md`/087-009 documents — see
+pilot.h's own `kDistanceTrimCeiling` doc comment for the full sizing
+derivation (the deadband inequality `distance_kp * distance_tol >=
+v_deadband`, re-verified against the actual current `Devices::NezhaMotor`
+write-shaping deadband rather than an unchecked architecture-doc figure).
+`distance_tol` (the new field alongside `distance_kp`) is NOT yet read by
+this trim, or by anything else — it repurposes the role
+`Motion::kDistanceSettleEpsilonMm` currently plays as a hardcoded
+constant, wired into the completion decision by a later ticket.
+
 **`HeadingSource` (109-005).** A passive reader, no bus traffic of its
 own — `sample()` reads `Devices::Otos::pose()`/`poseFresh()`/`connected()`/
 `present()` and `Devices::NezhaMotor::position()` (both leaves), all

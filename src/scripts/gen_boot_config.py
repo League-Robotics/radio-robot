@@ -265,6 +265,52 @@ TERMINAL_LEAD_DEFAULT = 0.0       # [s] locus 3, see comment above
 # "not yet needed" posture).
 ACTUATION_LAG_DEFAULT = 0.130     # [s]
 
+# distance_kp/distance_tol defaults for msg::PlannerConfig fields 39/40
+# (112-003): App::Pilot's own bounded linear position-feedback trim --
+# `v_cmd = twist.v + distance_kp*(twist.sRef - twist.sMeas)`, clamped to
+# App::kDistanceTrimCeiling (pilot.h, a fixed 50.0mm/s C++ constant, NOT
+# itself wire-tunable -- only the gain is). Named/shaped to mirror
+# HEADING_KP_DEFAULT/heading_dwell_for_config() above.
+#
+# DISTANCE_TOL_DEFAULT (3.0mm) matches Motion::kDistanceSettleEpsilonMm's
+# own CURRENT value (executor.cpp) exactly -- this field repurposes that
+# constant's role (planner.proto's own field comment) but is not yet wired
+# into the completion decision (ticket 004's scope); shipping the SAME
+# numeric default means that future rewire is a pure substitution, not a
+# silent behavior change.
+#
+# DISTANCE_KP_DEFAULT (15.0/s) is sized against the deadband inequality
+# `distance_kp * distance_tol >= v_deadband`, where v_deadband is the
+# write-shaping deadband floor `Devices::NezhaMotor` applies (duty below
+# `kDefaultOutputDeadband`=0.03, nezha_motor.h, is written as an outright
+# 0 -- `writeShapedDuty()`'s own `fabsf(duty) < outputDeadband_` check) --
+# below v_deadband, a commanded correction simply never reaches the plant.
+# Re-verified against the ACTUAL current source (not the architecture
+# doc's own cited "~15-19mm/s" range, taken unchecked) by computing
+# v_deadband = outputDeadband / vel_kff for the robot configs actually on
+# disk:
+#   - the CURRENTLY-ACTIVE boot config (data/robots/active_robot.json ->
+#     tovez_nocal.json, control.vel_kff=0.002): 0.03/0.002 = 15.0mm/s --
+#     matches the architecture doc's own cited lower bound exactly, and
+#     also matches this project's OWN sim harness comment
+#     (src/sim/sim_harness.h's makeExecutorConfig(): "the smallest wheel
+#     command that moves the plant is ~outputDeadband/kff ~= 15mm/s").
+#   - the historically bench-tuned tovez.json profile's own vel_kff
+#     (0.0008, post sprint-106-002's kff detune -- see that file's own
+#     _vel_gains_note: "vel_kff 0.00135->0.0008"): 0.03/0.0008 = 37.5mm/s
+#     -- MEANINGFULLY HIGHER than the architecture doc's cited range,
+#     because that range predates (or does not reflect) the 106-002
+#     detune. This is the concrete finding this ticket's own "re-verify
+#     against the actual current source" instruction turned up.
+# 15.0 * 3.0 = 45.0mm/s clears BOTH figures with margin (30.0mm/s over the
+# active-config floor, 7.5mm/s over the higher, currently-tuned-robot
+# floor) while staying below App::kDistanceTrimCeiling (50.0mm/s) -- an
+# in-tolerance error is not yet clamped, matching the heading PD's own
+# unclamped-near-target shape (pilot.h's own kDistanceTrimCeiling doc
+# comment has the full clamp-sizing rationale).
+DISTANCE_KP_DEFAULT  = 15.0   # [1/s]
+DISTANCE_TOL_DEFAULT = 3.0    # [mm]
+
 # arrive_dwell default for msg::PlannerConfig field 31 (100-001 -- motion-
 # stack-v2 M1). Originally baked alongside 16 sibling Drive::Limits/tracker/
 # policy fields (v_wheel_max..arrive_vel_tol) that were never wired to any
@@ -580,6 +626,19 @@ def actuation_lag_for_config(cfg: dict):
     return float(_get(ctrl, "actuation_lag", default=ACTUATION_LAG_DEFAULT))
 
 
+def distance_gains_for_config(cfg: dict):
+    """Return (distance_kp, distance_tol) for msg::PlannerConfig fields
+    39/40 (112-003) -- see DISTANCE_KP_DEFAULT/DISTANCE_TOL_DEFAULT's own
+    comment above for the full deadband-inequality derivation. Read from
+    the robot JSON's ``control.distance_kp``/``control.distance_tol`` when
+    present, falling back to the firmware defaults otherwise -- mirrors
+    arrive_dwell_for_config()'s exact shape."""
+    ctrl = cfg.get("control", {}) or {}
+    distance_kp = _get(ctrl, "distance_kp", default=DISTANCE_KP_DEFAULT)
+    distance_tol = _get(ctrl, "distance_tol", default=DISTANCE_TOL_DEFAULT)
+    return float(distance_kp), float(distance_tol)
+
+
 def generate(cfg: dict, source_path: str) -> str:
     trackwidth   = _get(cfg, "geometry", "trackwidth", default=TRACKWIDTH_DEFAULT)
     vel_kp, vel_ki, vel_kff, vel_imax, vel_kaw, vel_filt = vel_gains_for_config(cfg)
@@ -596,6 +655,7 @@ def generate(cfg: dict, source_path: str) -> str:
     min_speed = min_speed_for_config(cfg)
     arrive_dwell = arrive_dwell_for_config(cfg)
     actuation_lag = actuation_lag_for_config(cfg)
+    distance_kp, distance_tol = distance_gains_for_config(cfg)
 
     calib_lines = "\n".join(
         f"    out[{i}].setTravelCalib({_f(v)});   // [mm/deg] port {i + 1}"
@@ -758,6 +818,15 @@ msg::PlannerConfig defaultPlannerConfig() {{
     // kDeadTime's own bench-derived value (120-140ms) by default -- see
     // ACTUATION_LAG_DEFAULT's own comment above.
     cfg.setActuationLag({_f(actuation_lag)});           // [s]
+
+    // 112-003: App::Pilot's own bounded linear position-feedback trim --
+    // distance_kp is the trim's gain, distance_tol repurposes the role
+    // Motion::kDistanceSettleEpsilonMm plays as a hardcoded constant
+    // (not yet wired into the completion decision -- ticket 004's scope).
+    // See DISTANCE_KP_DEFAULT/DISTANCE_TOL_DEFAULT's own comment above for
+    // the deadband-inequality derivation.
+    cfg.setDistanceKp({_f(distance_kp)});              // [1/s]
+    cfg.setDistanceTol({_f(distance_tol)});             // [mm]
     return cfg;
 }}
 
