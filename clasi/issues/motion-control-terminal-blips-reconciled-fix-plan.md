@@ -8,12 +8,6 @@ supersedes: later/turn-lead-compensation-gain-cotuning.md
 sources:
 - docs/code_review/2026-07-18-motion-control/2026-07-18-motion-control-simplification-review.md
 - docs/code_review/2026-07-18-motion-control/motion-control-architecture-review.docx
-sprint: '111'
-tickets:
-- 111-001
-- 111-002
-- 111-003
-- 111-004
 ---
 
 # Motion-control terminal blips — reconciled fix plan
