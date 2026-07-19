@@ -216,6 +216,15 @@ class SimHarness {
   // telemetry.
   bool headingSourceIsOtos() const { return pilot_.headingSourceIsOtos(); }
 
+  // plannerConfig -- 111-001 test-only accessor exposing the live
+  // msg::PlannerConfig baseline this harness was configured with
+  // (Pilot::plannerConfig(), itself derived from this class's own
+  // makeExecutorConfig()). Lets a test read REAL configured limits
+  // (a_max/a_decel/v_body_max/j_max/yaw_acc_max/yaw_rate_max/yaw_jerk_max)
+  // instead of hand-duplicating numeric bounds that could silently drift
+  // from makeExecutorConfig()'s own values -- see behavior_lock_harness.cpp.
+  const msg::PlannerConfig& plannerConfig() const { return pilot_.plannerConfig(); }
+
   // debugHeadingLead -- 109-010 diagnostic-only accessor (temporary
   // instrumentation, mirrors this sprint's own precedent of ad hoc trace
   // instrumentation during characterization -- see ticket 009's own
