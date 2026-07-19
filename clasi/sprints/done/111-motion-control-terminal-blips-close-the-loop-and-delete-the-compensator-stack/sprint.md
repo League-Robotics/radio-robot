@@ -1,10 +1,14 @@
 ---
 id: '111'
 title: 'Motion-control terminal blips: close the loop and delete the compensator stack'
-status: planning-docs
+status: closed
 branch: sprint/111-motion-control-terminal-blips-close-the-loop-and-delete-the-compensator-stack
 worktree: false
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
 issues:
 - motion-control-terminal-blips-reconciled-fix-plan.md
 ---
