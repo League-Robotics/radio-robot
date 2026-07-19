@@ -1,13 +1,19 @@
 ---
-title: Motion-control terminal blips — reconciled fix plan (close the loop, delete
-  the patch stack)
+title: "Motion-control terminal blips \u2014 reconciled fix plan (close the loop,\
+  \ delete the patch stack)"
 filed: 2026-07-19
 filed_by: team-lead (reconciliation of two 2026-07-18 motion-control reviews)
-status: pending
+status: in-progress
 supersedes: later/turn-lead-compensation-gain-cotuning.md
 sources:
-  - docs/code_review/2026-07-18-motion-control/2026-07-18-motion-control-simplification-review.md
-  - docs/code_review/2026-07-18-motion-control/motion-control-architecture-review.docx
+- docs/code_review/2026-07-18-motion-control/2026-07-18-motion-control-simplification-review.md
+- docs/code_review/2026-07-18-motion-control/motion-control-architecture-review.docx
+sprint: '111'
+tickets:
+- 111-001
+- 111-002
+- 111-003
+- 111-004
 ---
 
 # Motion-control terminal blips — reconciled fix plan
