@@ -19,6 +19,13 @@ void Pilot::tick(uint32_t now, uint64_t nowUs) {  // [ms] [us]
   // needing a Devices::Clock dependency of its own.
   headingSource_.sample(nowUs);
 
+  // 111-003: captured BEFORE executor_.tick() so the twist-staging decision
+  // below can tell "already idle before AND after this tick() call" (a
+  // same-cycle flush -- see this method's own doc comment in pilot.h) apart
+  // from "just transitioned running->idle INSIDE this tick() call" (a
+  // natural completion, which must be zeroed exactly once).
+  Motion::State stateBefore = executor_.state();
+
   Motion::Executor::Twist twist = executor_.tick(dt, odom_.lastDistance(), headingSource_.heading(),
                                                   headingSource_.headingLead());
 
@@ -67,8 +74,25 @@ void Pilot::tick(uint32_t now, uint64_t nowUs) {  // [ms] [us]
   prevThetaMeas_ = twist.thetaMeas;
   hasPrevThetaMeas_ = true;
 
+  // 111-003 twist-staging decision (pilot.h's own tick() doc comment):
+  //   - still running (or just started) -- stage the freshly-computed
+  //     twist, unchanged existing behavior.
+  //   - a natural running->idle transition happened INSIDE this tick()
+  //     call (stateBefore was non-idle, executor_.state() is now kIdle) --
+  //     stage a zero twist exactly once, so Drive stops commanding the
+  //     PREVIOUS cycle's stale twist instead of creeping until the 300ms
+  //     deadman lease force-stops it (robot_loop.cpp's kPilotDeadmanLease).
+  //   - already idle BEFORE this tick() call (includes a same-cycle flush:
+  //     RobotLoop::handleTwist()/handleStop() call Pilot::flush() BEFORE
+  //     Pilot::tick() runs this same cycle, so stateBefore is already
+  //     kIdle by the time it's sampled above) -- do nothing, matching
+  //     today's "does nothing while kIdle" contract; a raw TWIST/STOP's
+  //     own Drive::setTwist() call (already staged earlier this cycle by
+  //     handleTwist()/handleStop()) must survive untouched.
   if (executor_.state() != Motion::State::kIdle) {
     drive_.setTwist(twist.v, omega);
+  } else if (stateBefore != Motion::State::kIdle) {
+    drive_.setTwist(0.0f, 0.0f);
   }
 }
 

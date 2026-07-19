@@ -371,6 +371,90 @@ ScenarioLobes runBehaviorLockScenario(TestSim::SimHarness& sim, const std::strin
   return ScenarioLobes{/*completed=*/true, lobesL, lobesR};
 }
 
+// measureShelfCycles -- 111-003 verification instrument. Ticket 001's own
+// "no nonzero command survives past the terminal zero" check
+// (checkNoCommandAfterTerminalZero(), above) is evaluated against the
+// DECODED, MEASURED wheel-velocity trace -- and both this file's
+// scenarios (D700 straight, 360deg pivot) already PASS that check even
+// with the pre-111-003 bug present, because the ideal sim's own terminal
+// decel already drives the MEASURED velocity under the 15mm/s near-zero
+// bar by the time completion fires (ticket 001's completion notes: "both
+// traces settle to <5mm/s within one cycle of the DONE ack"). Holding a
+// value that is ALREADY near zero stale for the ~300ms deadman-lease
+// window never crosses that bar again, so the measured trace cannot
+// distinguish the fixed and unfixed timing.
+//
+// This function instead measures the COMMANDED PID target
+// (SimHarness::driveTargetVelLeft/Right() -> Devices::Motor::
+// velocityTarget(), the value App::Drive::tick() last wrote via
+// setVelocity() -- see that accessor's own doc comment in sim_harness.h),
+// which has no such headroom: pre-fix, App::Pilot::tick() takes NEITHER
+// twist-staging branch on a natural running->idle transition, so
+// App::Drive keeps commanding whatever twist was staged the PREVIOUS
+// cycle until the ~300ms deadman lease force-stops it
+// (Drive::stop(), robot_loop.cpp); post-fix, Pilot::tick() stages
+// drive_.setTwist(0,0) on the SAME cycle the transition happens, so the
+// NEXT cycle's Drive::tick() already commands exactly 0. Counting cycles
+// from the completion ack to the first cycle the commanded target reads
+// EXACTLY 0.0f measures this timing directly, independent of how close
+// to zero the terminal twist already was.
+//
+// Returns the shelf length in cycles (0 = the cycle immediately at/after
+// completion already commands exactly 0; -1 = the command never reached
+// ACK_STATUS_DONE within maxCycles; -2 = it completed but the commanded
+// target never read exactly 0 within the captured tail).
+int measureShelfCycles(TestSim::SimHarness& sim, uint32_t watchId, int maxCycles, int tailCycles) {
+  int doneCycle = -1;
+  int zeroCycle = -1;
+  int cyclesSinceDone = -1;
+  for (int i = 0; i < maxCycles; ++i) {
+    sim.step(1);
+    for (const auto& line : sim.drainTelemetry()) {
+      if (line.kind != TestSupport::DecodedKind::kTelemetry) continue;
+      for (uint8_t a = 0; a < line.telemetry.acks_count; ++a) {
+        if (doneCycle < 0 && line.telemetry.acks_[a].corr_id == watchId &&
+            line.telemetry.acks_[a].status == msg::AckStatus::ACK_STATUS_DONE) {
+          doneCycle = i;
+        }
+      }
+    }
+    if (doneCycle >= 0 && zeroCycle < 0 && sim.driveTargetVelLeft() == 0.0f &&
+        sim.driveTargetVelRight() == 0.0f) {
+      zeroCycle = i;
+    }
+    if (doneCycle >= 0) {
+      ++cyclesSinceDone;
+      if (cyclesSinceDone >= tailCycles) break;
+    }
+  }
+  if (doneCycle < 0) return -1;
+  if (zeroCycle < 0) return -2;
+  return zeroCycle - doneCycle;
+}
+
+// runShelfScenario -- drives one fresh Move to completion on its own
+// SimHarness instance and reports measureShelfCycles()'s own named check.
+// A fresh instance per scenario (rather than reusing the trace-capture
+// SimHarness above) keeps this verification fully independent of the
+// hump/tail-shape assertions above -- this ticket's own fix has nothing
+// to do with the ramp/lobe-shape findings sprint 2 owns.
+void runShelfScenario(const std::string& prefix, float distance, float deltaHeading, float vMax,
+                       uint32_t id, uint32_t corrId) {
+  beginScenario(prefix + ": shelf length (commanded-target reaches exactly 0 after completion)");
+  TestSim::SimHarness sim;
+  sim.boot();
+  sim.step(3);
+  sim.injectMove(distance, deltaHeading, vMax, /*omega=*/0.0f, /*timeMs=*/0.0f, /*replace=*/false, id,
+                 corrId);
+  int shelf = measureShelfCycles(sim, /*watchId=*/id, /*maxCycles=*/400, /*tailCycles=*/30);
+  std::printf("  %s shelf length: %d cycle(s)\n", prefix.c_str(), shelf);
+  checkTrue(shelf != -1, prefix + ": command reached ACK_STATUS_DONE within budget (shelf measurement)");
+  report(prefix + "_shelf_collapsed", shelf >= 0 && shelf <= 2,
+         "shelf=" + std::to_string(shelf) +
+             " cycles (expected <=2; a large value here is the pre-111-003 deadman-lease shelf, "
+             "~300ms of stale commanded twist)");
+}
+
 // runSameBootScenario -- SUC-001 step 5: ONE SimHarness instance, booted
 // once, driving 30-50 consecutive alternating straight/pivot Move commands
 // with NO reboot between them (unlike turn_windage_sweep.py's own
@@ -506,6 +590,12 @@ int main() {
              "(see pivot_single_lobe_left/right above)");
     }
   }
+
+  // --- Shelf-length verification (111-003, own SimHarness instances) ---
+  runShelfScenario("straight", /*distance=*/700.0f, /*deltaHeading=*/0.0f, /*vMax=*/400.0f, /*id=*/11,
+                    /*corrId=*/1011);
+  runShelfScenario("pivot", /*distance=*/0.0f, /*deltaHeading=*/2.0f * kPi, /*vMax=*/0.0f, /*id=*/12,
+                    /*corrId=*/1012);
 
   runSameBootScenario();
 

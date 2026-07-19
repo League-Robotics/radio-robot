@@ -9,8 +9,18 @@ asserts each of the harness's own individually-named checks.
 This is Step 0 of
 ``clasi/issues/motion-control-terminal-blips-reconciled-fix-plan.md`` --
 "land a numeric jerk / single-lobe acceptance test first so every
-subsequent deletion is guarded." It is a PURE ADDITION: no production
-motion code (``pilot.cpp``/``executor.cpp``) is touched by this ticket.
+subsequent deletion is guarded." Ticket 001 (which created this file) was
+a PURE ADDITION: no production motion code (``pilot.cpp``/``executor.cpp``)
+was touched by that ticket.
+
+Ticket 003 (the ``App::Pilot::tick()`` stale-twist-on-idle fix) extends
+this SAME harness with two new checks -- ``test_straight_shelf_collapsed``/
+``test_pivot_shelf_collapsed``, below -- rather than adding its own
+verification instrument, per this ticket's own "shared verification
+instrument" convention. See those two tests' own docstrings for why they,
+not ``test_*_no_command_after_terminal_zero`` (ticket 001's original
+target for the xfail->pass flip), are what actually demonstrates ticket
+003's fix.
 
 Compiles ``behavior_lock_harness.cpp`` together with ``sim_plant.cpp``
 (``src/sim/``), ``wire_test_codec.cpp``, the plant sources, and the same
@@ -35,7 +45,7 @@ test-infrastructure bug, never an xfail candidate.
 
 The harness is compiled and run exactly ONCE per pytest session (a
 module-scoped fixture) -- compiling the full ~20-file HOST_BUILD graph
-once and sharing the captured RESULT lines across all ~13 test functions
+once and sharing the captured RESULT lines across all ~15 test functions
 below is far cheaper than recompiling per named check, and the ticket's own
 "independent visibility per named check" requirement (implementation plan
 point 6) never required a separate binary per check, only a separate
@@ -148,7 +158,7 @@ def harness_run(tmp_path_factory):
     """Compiles behavior_lock_harness.cpp + its full dependency graph ONCE
     for this whole module, runs it ONCE, and returns (run_result,
     parsed_results) for every test function below to share -- see this
-    file's own header for why one compile-and-run is shared across ~13
+    file's own header for why one compile-and-run is shared across ~15
     test functions instead of recompiling per named check."""
     sources = _all_sources()
     for src in sources:
@@ -252,18 +262,39 @@ def test_straight_single_lobe_right(harness_run):
 
 
 def test_straight_no_command_after_terminal_zero(harness_run):
-    """The ONE check ticket 003 (the App::Pilot::tick() stale-twist-on-idle
-    fix) targets (SUC-002's own acceptance criterion). Currently PASSES for
-    this D700-straight/deltaHeading=0 scenario in the ideal sim -- NOT
-    xfailed (an xfail on an already-passing check would XPASS, technically
-    tolerated under strict=False but misleading). See this ticket's own
-    completion notes for why the documented post-completion "shelf" does
-    not measurably reproduce here (deltaHeading=0 means the heading-lead
-    channel most patch-stack padding operates on is inert for a pure
-    straight). Kept as its own always-real assertion so a future
-    regression (the shelf reappearing) is caught immediately, and so
-    ticket 003 has a concrete, currently-green baseline to avoid breaking."""
+    """The check ticket 001 originally slated to flip xfail->passing for
+    ticket 003. Reconciled during ticket 003 (see its own completion
+    notes): this was ALREADY a plain, non-xfailed pass BEFORE ticket 003's
+    fix landed -- not because the "shelf" doesn't exist, but because this
+    check is evaluated against the DECODED, MEASURED wheel-velocity trace,
+    and the ideal sim's own terminal decel already drives that trace under
+    the 15mm/s near-zero bar by completion (both traces settle to <5mm/s
+    within one cycle of the DONE ack) -- holding an already-near-zero
+    MEASURED value stale for the ~300ms deadman-lease window never crosses
+    the bar again, so this particular check cannot see the fix either way.
+    test_straight_shelf_collapsed (below) is ticket 003's own real,
+    demonstrable regression fence -- it measures the COMMANDED target
+    directly and the shelf-length metric it reports goes from 5 cycles
+    (pre-fix) to 0 (post-fix). Kept as its own always-real assertion
+    regardless, so a future regression that DOES show up in the measured
+    trace is still caught immediately."""
     _assert_result(harness_run, "straight_no_command_after_terminal_zero")
+
+
+def test_straight_shelf_collapsed(harness_run):
+    """111-003's own real regression fence (see behavior_lock_harness.cpp's
+    measureShelfCycles()/runShelfScenario() for the full mechanism): counts
+    cycles from the D700 straight's own ACK_STATUS_DONE to the first cycle
+    the COMMANDED PID target (Devices::Motor::velocityTarget(), the value
+    App::Drive::tick() last wrote via setVelocity() -- NOT the measured/
+    decoded telemetry velocity test_straight_no_command_after_terminal_zero
+    checks above) reads EXACTLY 0.0f, and asserts it collapses to <=2
+    cycles. Measured directly (recompiling this same harness against the
+    pre-111-003 pilot.cpp): 5 cycles before the fix (the ~300ms deadman-
+    lease shelf), 0 cycles after -- this is the assertion that actually
+    demonstrates ticket 003's fix, since the measured-velocity check above
+    cannot (see its own docstring)."""
+    _assert_result(harness_run, "straight_shelf_collapsed")
 
 
 # --- 360deg pivot (kPivot, distance=0) ------------------------------------
@@ -320,8 +351,17 @@ def test_pivot_lobes_opposite_sign(harness_run):
 
 def test_pivot_no_command_after_terminal_zero(harness_run):
     """See test_straight_no_command_after_terminal_zero's own docstring --
-    same honest currently-passing status here too, not xfailed."""
+    same honest currently-passing-either-way status here too, not xfailed;
+    test_pivot_shelf_collapsed (below) is the check that actually
+    demonstrates ticket 003's fix for this scenario."""
     _assert_result(harness_run, "pivot_no_command_after_terminal_zero")
+
+
+def test_pivot_shelf_collapsed(harness_run):
+    """See test_straight_shelf_collapsed's own docstring -- same mechanism,
+    360deg pivot scenario. Measured directly: 5 cycles before the 111-003
+    fix, 0 cycles after."""
+    _assert_result(harness_run, "pivot_shelf_collapsed")
 
 
 # --- Same-boot reliability (SUC-001 step 5, targets the driving issue's own

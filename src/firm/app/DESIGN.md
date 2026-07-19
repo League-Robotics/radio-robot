@@ -57,6 +57,15 @@ and samples `HeadingSource` (see below) and `Motion::Executor`, staging the
 result onto `Drive` via `setTwist()` whenever the executor is not `kIdle` —
 while `kIdle` it does nothing at all, so a same-cycle raw `TWIST` (which
 always calls `Pilot::flush()` first) is never immediately overwritten.
+**111-003:** on a natural running→`kIdle` transition happening INSIDE a
+single `tick()` call (a command completing on its own, not a same-cycle
+flush — distinguished by sampling `executor_.state()` both before and
+after the internal `executor_.tick()` call), `Pilot::tick()` stages
+`Drive::setTwist(0, 0)` exactly once, rather than leaving `Drive` holding
+the previous cycle's stale twist until the ~300ms deadman lease force-
+stops it. A same-cycle flush is unaffected — `stateBefore` is already
+`kIdle` by the time it's sampled, so this branch is naturally never taken
+and the raw command's own twist survives untouched.
 `Pilot::plan()` runs in the trailing `kPace` block (after
 `odom_.integrate()`) and performs at most one `JerkTrajectory` solve per
 cycle (`Motion::Executor::plan()`'s own budget). `RobotLoop::handleMove()`
