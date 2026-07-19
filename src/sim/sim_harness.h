@@ -143,6 +143,12 @@ class SimHarness {
     msg::PlannerConfig cfg = makeExecutorConfig();
     executor_.configure(cfg);
     headingSource_.configure(cfg);
+    // 112-002: App::Drive::configure() (actuation_lag, the acceleration-
+    // feedforward gain) -- PARITY with main.cpp's own boot wiring (this
+    // class's own header comment: "modeled directly on how source/main.cpp
+    // constructs the same graph"), and with executor_.configure()/
+    // headingSource_.configure() immediately above.
+    drive_.configure(cfg);
     pilot_.configureHeading(cfg);
 
     // "Pre-boot state": everything above is constructed and wired, but
@@ -240,6 +246,20 @@ class SimHarness {
   float driveTargetVelLeft() const { return armorL_.velocityTarget(); }    // [mm/s] signed
   float driveTargetVelRight() const { return armorR_.velocityTarget(); }  // [mm/s] signed
 
+  // plannedRefLeft/plannedRefRight -- 112-002 test-only accessors exposing
+  // App::Pilot's own PLANNED per-wheel reference (Pilot::refLeft/refRight():
+  // Motion::Executor's jerk-limited trajectory mapped through
+  // BodyKinematics::inverse(), BEFORE the heading-PD correction and BEFORE
+  // App::Drive's actuation-lag feedforward) -- NOT driveTargetVelLeft/Right()
+  // above, which is the FINAL, FF-augmented command Devices::Motor actually
+  // chases. Used by behavior_lock_harness.cpp's ramp/terminal-bounds and
+  // single-lobe/lobes-opposite-sign checks (112-002 re-grade): those check
+  // the PLANNED trajectory's own jerk-boundedness, which the accel
+  // feedforward (112-002) deliberately perturbs on the commanded signal --
+  // see that file's own header comment for the full rationale.
+  float plannedRefLeft() const { return pilot_.refLeft(); }    // [mm/s] signed
+  float plannedRefRight() const { return pilot_.refRight(); }  // [mm/s] signed
+
   // debugHeadingLead -- 109-010 diagnostic-only accessor (temporary
   // instrumentation, mirrors this sprint's own precedent of ad hoc trace
   // instrumentation during characterization -- see ticket 009's own
@@ -276,6 +296,7 @@ class SimHarness {
     cfg.yaw_rate_max = lastYawRateMax_;
     executor_.configure(cfg);
     headingSource_.configure(cfg);
+    drive_.configure(cfg);  // 112-002: reapply the same actuation_lag baseline
     pilot_.configureHeading(cfg);
   }
 
@@ -295,6 +316,7 @@ class SimHarness {
     cfg.terminal_lead = lastTerminalLead_;
     executor_.configure(cfg);
     headingSource_.configure(cfg);
+    drive_.configure(cfg);  // 112-002: reapply the same actuation_lag baseline
     pilot_.configureHeading(cfg);
   }
 
@@ -483,6 +505,13 @@ class SimHarness {
     cfg.heading_lead_bias = -0.05f;  // [s]
     cfg.plan_lead = 0.20f;           // [s] ~2 staging cycles + plant tau -- eliminates the terminal PD reversal (2026-07-18 sweep; matches gen_boot_config.py PLAN_LEAD_DEFAULT)
     cfg.terminal_lead = 0.0f;        // [s]
+    // 112-002: App::Drive's own model feedforward gain -- matches
+    // gen_boot_config.py's shipped ACTUATION_LAG_DEFAULT/Motion::kDeadTime's
+    // own bench-derived value (120-140ms), so this harness's own
+    // drive_.configure(cfg) call (constructor, setLeadCompensation(),
+    // setYawRateMax()) actually exercises the feedforward path a real robot
+    // boots with, not a silent 0.0f no-op.
+    cfg.actuation_lag = 0.130f;      // [s]
     return cfg;
   }
 

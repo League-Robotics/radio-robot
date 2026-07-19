@@ -251,6 +251,23 @@ class Executor {
     // since it spans TWO ticks and Executor's own tick() call is stateless
     // from Pilot's point of view). 0 when !headingActive.
     float omegaDes = 0.0f;  // [rad/s]
+
+    // aRef/alphaRef -- 112-002: the dominant channel's own sampled
+    // acceleration, exposed so App::Drive can add a model feedforward term
+    // (actuation_lag * a) onto each wheel's velocity target. Read from the
+    // SAME sample() result already computed for `v`/`omegaFf` above -- never
+    // a separate solve, and never a peek() ahead of the current elapsed time
+    // (that peek-ahead shape is exactly what 112-001 deleted, this file's
+    // own "112-001" comment). aRef is the LINEAR channel's own acceleration
+    // for kArc (0 for kPivot/kTimed, matching the existing thetaRef/
+    // omegaDes 0-for-kTimed pattern); alphaRef is headingRatioPerMm_ times
+    // that SAME linear acceleration for a heading-bearing kArc leg (the
+    // identical arc-ratio slaving thetaRef/omegaFf already use -- 0 for a
+    // non-heading-bearing straight leg, since headingRatioPerMm_ is itself
+    // 0 there), or the ROTATIONAL channel's own acceleration for kPivot,
+    // else 0.
+    float aRef = 0.0f;      // [mm/s^2]
+    float alphaRef = 0.0f;  // [rad/s^2]
   };
 
   // configure -- stores both channels' own limits (forwarded to the two

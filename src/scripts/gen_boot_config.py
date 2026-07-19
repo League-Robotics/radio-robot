@@ -252,6 +252,19 @@ PLAN_LEAD_DEFAULT = 0.20          # [s] locus 2 (0.0 until 2026-07-18: re-swept 
 # reason as plan_lead above, pending further bench-driven tuning.
 TERMINAL_LEAD_DEFAULT = 0.0       # [s] locus 3, see comment above
 
+# actuation_lag default for msg::PlannerConfig field 38 (112-002): App::
+# Drive's own model feedforward gain -- Drive::tick() adds
+# actuation_lag * a onto each wheel's velocity target (see planner.proto's
+# own field comment for the full derivation). Motion::kDeadTime's OWN
+# bench-derived value (sprint 100's bench-measured motor_lag, 120-140ms) --
+# kDeadTime itself stays declared-but-unused (its own locus, the
+# divergence-replan check, is a DIFFERENT compensation); App::Drive gets
+# its own config-tunable field rather than a new App::Drive -> Motion::
+# dependency (sprint 112 Architecture Design Rationale Decision 4). No
+# robot-JSON override key yet (mirrors heading_dwell_for_config()'s own
+# "not yet needed" posture).
+ACTUATION_LAG_DEFAULT = 0.130     # [s]
+
 # arrive_dwell default for msg::PlannerConfig field 31 (100-001 -- motion-
 # stack-v2 M1). Originally baked alongside 16 sibling Drive::Limits/tracker/
 # policy fields (v_wheel_max..arrive_vel_tol) that were never wired to any
@@ -558,6 +571,15 @@ def arrive_dwell_for_config(cfg: dict):
     return float(_get(ctrl, "arrive_dwell", default=ARRIVE_DWELL_DEFAULT))
 
 
+def actuation_lag_for_config(cfg: dict):
+    """Return actuation_lag (msg::PlannerConfig field 38, 112-002) -- see
+    ACTUATION_LAG_DEFAULT's own comment above. Read from the robot JSON's
+    ``control.actuation_lag`` when present, else ACTUATION_LAG_DEFAULT
+    (mirrors arrive_dwell_for_config()'s exact shape)."""
+    ctrl = cfg.get("control", {}) or {}
+    return float(_get(ctrl, "actuation_lag", default=ACTUATION_LAG_DEFAULT))
+
+
 def generate(cfg: dict, source_path: str) -> str:
     trackwidth   = _get(cfg, "geometry", "trackwidth", default=TRACKWIDTH_DEFAULT)
     vel_kp, vel_ki, vel_kff, vel_imax, vel_kaw, vel_filt = vel_gains_for_config(cfg)
@@ -573,6 +595,7 @@ def generate(cfg: dict, source_path: str) -> str:
     yaw_rate_max, yaw_acc_max = profile_rot_limits_for_config(cfg)
     min_speed = min_speed_for_config(cfg)
     arrive_dwell = arrive_dwell_for_config(cfg)
+    actuation_lag = actuation_lag_for_config(cfg)
 
     calib_lines = "\n".join(
         f"    out[{i}].setTravelCalib({_f(v)});   // [mm/deg] port {i + 1}"
@@ -729,6 +752,12 @@ msg::PlannerConfig defaultPlannerConfig() {{
     cfg.setHeadingLeadBias({_f(heading_lead_bias)});        // [s] locus 1
     cfg.setPlanLead({_f(plan_lead)});                // [s] locus 2
     cfg.setTerminalLead({_f(terminal_lead)});           // [s] locus 3
+
+    // 112-002: App::Drive's own model feedforward gain (Drive::tick() adds
+    // actuation_lag * a onto each wheel's velocity target). Motion::
+    // kDeadTime's own bench-derived value (120-140ms) by default -- see
+    // ACTUATION_LAG_DEFAULT's own comment above.
+    cfg.setActuationLag({_f(actuation_lag)});           // [s]
     return cfg;
 }}
 

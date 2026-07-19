@@ -356,10 +356,22 @@ called with real elapsed time between calls).
   calls are cheap and can be called any number of times per cycle;
   `emit(now)` is the one call that actually sends, at most one frame type,
   bounded work, never sleeps, never touches the I2C bus.
-- **`Drive::setTwist`/`stop`/`tick()`:** `setTwist`/`stop` only stage a
-  target; `tick()` computes wheel velocities via `BodyKinematics::inverse()`
-  and stages them onto the two motor leaves via their own `setVelocity()` —
-  it never calls a motor's own `tick()`.
+- **`Drive::configure(config)`/`setTwist`/`stop`/`tick()`:** `configure()`
+  (112-002) reads `actuation_lag`, mirroring `Executor::configure()`/
+  `HeadingSource::configure()`'s own "call once, before first use"
+  convention — `main.cpp`'s boot wiring calls it once. `setTwist`/`stop`
+  only stage a target — `setTwist(v_x, omega, a_x=0, alpha=0)`, the last two
+  DEFAULTED (112-002: `Motion::Executor::Twist::aRef`/`alphaRef`, forwarded
+  through `Pilot::tick()`) so every pre-existing 2-arg call site (e.g.
+  `RobotLoop::handleTwist()`'s raw `TWIST` path) compiles and behaves
+  unchanged. `tick()` computes wheel velocities via `BodyKinematics::
+  inverse()` and stages them onto the two motor leaves via their own
+  `setVelocity()` — it never calls a motor's own `tick()` — PLUS (112-002) a
+  model feedforward term: the SAME `inverse()` map reused for the staged
+  acceleration (`aL = a_x - alpha*b/2`, `aR = a_x + alpha*b/2` — kinematics
+  is linear, so this is exact), added onto `vL`/`vR` as `actuation_lag * a`
+  before staging. A no-op whenever `a_x`/`alpha` are 0 (every call site that
+  never supplies them).
 - **`Odometry::integrate()`:** call once per cycle, after both motors' own
   `tick()` has run that cycle; reads each leaf's current `position()` and
   accumulates world pose via midpoint-arc integration over

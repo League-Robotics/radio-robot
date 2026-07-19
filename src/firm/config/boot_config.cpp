@@ -146,6 +146,12 @@ msg::PlannerConfig defaultPlannerConfig() {
     cfg.setHeadingLeadBias(-0.05f);        // [s] locus 1
     cfg.setPlanLead(0.2f);                // [s] locus 2
     cfg.setTerminalLead(0.0f);           // [s] locus 3
+
+    // 112-002: App::Drive's own model feedforward gain (Drive::tick() adds
+    // actuation_lag * a onto each wheel's velocity target). Motion::
+    // kDeadTime's own bench-derived value (120-140ms) by default -- see
+    // ACTUATION_LAG_DEFAULT's own comment above.
+    cfg.setActuationLag(0.13f);           // [s]
     return cfg;
 }
 

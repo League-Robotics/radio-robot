@@ -10,29 +10,52 @@
 //
 // 112-001 (stakeholder decision, reviews Sec5.3 "differentiate the emitted
 // setpoints"): the bounds/lobe checks (_ramp_bounds, _terminal_bounds,
-// _single_lobe_*, _lobes_opposite_sign) differentiate the COMMANDED
-// per-wheel setpoint -- `SimHarness::driveTargetVelLeft/Right()` ->
-// `Devices::Motor::velocityTarget()`, the value `App::Drive::tick()` last
-// wrote via `setVelocity()`, the SAME signal `measureShelfCycles()` below
-// already captures -- sampled once per Sample alongside the decoded
-// telemetry `now` this file already timestamps every sample with. This
-// grades what `Motion::Executor`/`App::Pilot`/`App::Drive` actually
-// COMMAND, i.e. the thing a control-law change (a peek-ahead deletion, a
-// feedforward addition, a completion-logic rewrite) can actually move.
-// Grading the DECODED, MEASURED wheel-velocity trace instead (the
-// pre-112-001 shape of this file) conflates the commanded trajectory's own
-// jerk-boundedness with the downstream velocity-PID/actuation-lag
-// tracking response to it (a ~130ms plant lag + write-shaping, unrelated
-// to and unfixable by any Motion::Executor/App::Pilot change) -- confirmed
-// directly: after 112-001's own plan_lead peek-deletion, the COMMANDED
-// ramp is a clean, smooth a_max-bounded ramp (verified by direct
-// instrumentation) while the MEASURED trace still spiked over bound,
-// because the spike was never in the reference to begin with.
-// checkNoCommandAfterTerminalZero() (this file's own ticket-003 check)
-// stays on the MEASURED, DECODED trace -- it exists specifically to catch
-// a stale MEASURED-visible command, not a commanded-reference shape
-// question, and is unaffected by this switch (see that function's own
-// doc comment).
+// _single_lobe_*, _lobes_opposite_sign) stopped grading the DECODED,
+// MEASURED wheel-velocity trace (this file's pre-112-001 shape) -- grading
+// it conflated the commanded trajectory's own jerk-boundedness with the
+// downstream velocity-PID/actuation-lag tracking response to it (a ~130ms
+// plant lag + write-shaping, unrelated to and unfixable by any Motion::
+// Executor/App::Pilot control-law change).
+//
+// 112-001 first re-pointed these checks at the COMMANDED per-wheel setpoint
+// (`SimHarness::driveTargetVelLeft/Right()` -> `Devices::Motor::
+// velocityTarget()`, the value `App::Drive::tick()` last wrote via
+// `setVelocity()`) and confirmed it was clean post-peek-deletion. 112-002
+// then added a DELIBERATE model feedforward (`actuation_lag * a`) into that
+// SAME commanded signal -- a real, intentional lag-compensation overshoot,
+// not a bug -- which reintroduced jerk-scale content into it (Ruckig's own
+// acceleration is only piecewise-LINEAR, so the feedforward's own time
+// derivative, `actuation_lag * jerk`, inherits the trajectory's jerk-segment
+// step discontinuities). Re-verified directly: with the feedforward genuinely
+// engaged, `driveTargetVelLeft/Right()` regressed `straight_ramp_bounds`/
+// `straight_terminal_bounds`/`straight_single_lobe_left/right` even though
+// nothing about the underlying PLANNED trajectory changed.
+//
+// Stakeholder resolution (112-002, reviews Sec5.3's OTHER clause -- "record
+// requested endpoint, PLANNED endpoint, measured endpoint... as separate
+// telemetry values"): keep the feedforward (correct engineering), and grade
+// these four checks against a THIRD, distinct signal -- the PLANNED
+// reference (`SimHarness::plannedRefLeft/Right()` -> `App::Pilot::
+// refLeft/right()`: `Motion::Executor`'s own jerk-limited trajectory,
+// `BodyKinematics::inverse(twist.v, twist.omega, ...)`, sampled BEFORE
+// `Pilot`'s heading-PD correction and BEFORE `Drive`'s accel feedforward).
+// This isolates "is the SOLVED trajectory itself jerk-bounded and
+// single-lobed" from both downstream stages (PD reaction to noisy measured
+// heading, and the feedforward's own deliberate lag anticipation) -- neither
+// of which any Motion::Executor solve can be blamed for.
+//
+// Three signals, three different jobs, sampled once per Sample alongside the
+// decoded telemetry `now` this file already timestamps every sample with:
+//   - PLANNED (`plannedRefLeft/Right()`) -- `_ramp_bounds`/`_terminal_bounds`/
+//     `_single_lobe_*`/`_lobes_opposite_sign`: is the SOLVED trajectory
+//     itself well-shaped.
+//   - COMMANDED (`driveTargetVelLeft/Right()`) -- `_shelf_collapsed`
+//     (measureShelfCycles(), below): does the FINAL command (PD + FF
+//     included) reach exactly zero promptly after completion.
+//   - MEASURED (decoded telemetry `vel_left`/`vel_right`) --
+//     `_no_command_after_terminal_zero`/`checkNoCommandAfterTerminalZero()`
+//     (ticket-003's own check): does the DECODED wire trace ever show a
+//     stale nonzero value after it first went quiet.
 //
 // This is Step 0 of clasi/issues/motion-control-terminal-blips-reconciled-
 // fix-plan.md -- "land a numeric jerk / single-lobe acceptance test first
@@ -132,15 +155,19 @@ constexpr float kBoundTolerance = 1.35f;
 // tie-alternation, telemetry.cpp's own emit(), means not every sim cycle
 // necessarily emits a primary frame), the two MEASURED (decoded, wire)
 // wheel velocities, the two COMMANDED (SimHarness::driveTargetVelLeft/
-// Right(), 112-001) wheel setpoints sampled at the SAME instant, plus
-// whether an ACK_STATUS_DONE for the command this scenario is watching
-// arrived bundled in this same frame.
+// Right(), 112-001) wheel setpoints, and the two PLANNED (SimHarness::
+// plannedRefLeft/Right(), 112-002) wheel references, all three sampled at
+// the SAME instant, plus whether an ACK_STATUS_DONE for the command this
+// scenario is watching arrived bundled in this same frame. See this file's
+// own header comment for which named check grades which of the three.
 struct Sample {
   uint32_t nowMs = 0;
   float velLeft = 0.0f;   // [mm/s] signed, MEASURED -- Telemetry::Frame.velLeft off the wire
   float velRight = 0.0f;  // [mm/s] signed, MEASURED -- Telemetry::Frame.velRight off the wire
   float cmdLeft = 0.0f;   // [mm/s] signed, COMMANDED -- SimHarness::driveTargetVelLeft() (112-001)
   float cmdRight = 0.0f;  // [mm/s] signed, COMMANDED -- SimHarness::driveTargetVelRight() (112-001)
+  float refLeft = 0.0f;   // [mm/s] signed, PLANNED -- SimHarness::plannedRefLeft() (112-002)
+  float refRight = 0.0f;  // [mm/s] signed, PLANNED -- SimHarness::plannedRefRight() (112-002)
   bool ackDone = false;
 };
 
@@ -179,12 +206,16 @@ std::vector<Sample> runToCompletion(TestSim::SimHarness& sim, uint32_t watchId, 
 
       Sample s;
       s.nowMs = line.telemetry.now;
-      // 112-001: the COMMANDED setpoint is read directly off the live
-      // SimHarness -- not wire-decoded, so it needs no has_vel/carry-
-      // forward handling of its own; it is simply whatever App::Drive::
-      // tick() last wrote via setVelocity() as of THIS sim cycle.
+      // 112-001/112-002: the COMMANDED and PLANNED signals are both read
+      // directly off the live SimHarness -- not wire-decoded, so neither
+      // needs has_vel/carry-forward handling of its own; each is simply
+      // whatever App::Drive::tick() last wrote via setVelocity() (COMMANDED)
+      // or App::Pilot's own last tick() computed (PLANNED) as of THIS sim
+      // cycle.
       s.cmdLeft = sim.driveTargetVelLeft();
       s.cmdRight = sim.driveTargetVelRight();
+      s.refLeft = sim.plannedRefLeft();
+      s.refRight = sim.plannedRefRight();
       if (line.telemetry.has_vel) {
         s.velLeft = line.telemetry.vel_left;
         s.velRight = line.telemetry.vel_right;
@@ -368,28 +399,31 @@ ScenarioLobes runBehaviorLockScenario(TestSim::SimHarness& sim, const std::strin
   if (doneIndex < 0) return ScenarioLobes{};  // nothing left to differentiate/report meaningfully
 
   std::vector<uint32_t> nowMs;
-  std::vector<float> cmdLeft, cmdRight;
+  std::vector<float> refLeft, refRight;
   nowMs.reserve(samples.size());
-  cmdLeft.reserve(samples.size());
-  cmdRight.reserve(samples.size());
+  refLeft.reserve(samples.size());
+  refRight.reserve(samples.size());
   for (const auto& s : samples) {
     nowMs.push_back(s.nowMs);
-    cmdLeft.push_back(s.cmdLeft);
-    cmdRight.push_back(s.cmdRight);
+    refLeft.push_back(s.refLeft);
+    refRight.push_back(s.refRight);
   }
-  // 112-001: the ramp/terminal bounds and single-lobe/lobe-sign checks
-  // below all grade the COMMANDED setpoint series (cmdLeft/cmdRight), not
-  // the measured one -- see this file's own header comment.
-  std::vector<float> accelL = differentiate(nowMs, cmdLeft);
-  std::vector<float> accelR = differentiate(nowMs, cmdRight);
+  // 112-002 (superseding 112-001's own choice here): the ramp/terminal
+  // bounds and single-lobe/lobe-sign checks below all grade the PLANNED
+  // reference series (refLeft/refRight) -- Motion::Executor's own
+  // jerk-limited trajectory, before Pilot's heading-PD and before Drive's
+  // accel feedforward -- not the commanded or measured signal. See this
+  // file's own header comment for the full three-signal rationale.
+  std::vector<float> accelL = differentiate(nowMs, refLeft);
+  std::vector<float> accelR = differentiate(nowMs, refRight);
   std::vector<float> jerkL = differentiate(nowMs, accelL);
   std::vector<float> jerkR = differentiate(nowMs, accelR);
 
-  // Activation index: first sample with either wheel's COMMANDED setpoint
+  // Activation index: first sample with either wheel's PLANNED reference
   // already nonzero.
   int activationIdx = -1;
   for (size_t i = 0; i < samples.size(); ++i) {
-    if (std::fabs(cmdLeft[i]) >= kNearZero || std::fabs(cmdRight[i]) >= kNearZero) {
+    if (std::fabs(refLeft[i]) >= kNearZero || std::fabs(refRight[i]) >= kNearZero) {
       activationIdx = static_cast<int>(i);
       break;
     }
@@ -399,17 +433,17 @@ ScenarioLobes runBehaviorLockScenario(TestSim::SimHarness& sim, const std::strin
   constexpr int kWindow = 5;  // "a few cycles" -- implementation plan point 4
   std::string detail;
 
-  bool rampOk = checkBoundsWindow(cmdLeft, cmdRight, accelL, accelR, jerkL, jerkR, activationIdx,
+  bool rampOk = checkBoundsWindow(refLeft, refRight, accelL, accelR, jerkL, jerkR, activationIdx,
                                    activationIdx + kWindow - 1, vBound, aBound, jBound, &detail);
   report(prefix + "_ramp_bounds", rampOk, detail);
 
-  bool terminalOk = checkBoundsWindow(cmdLeft, cmdRight, accelL, accelR, jerkL, jerkR,
+  bool terminalOk = checkBoundsWindow(refLeft, refRight, accelL, accelR, jerkL, jerkR,
                                        doneIndex - kWindow + 1, doneIndex, vBound, aBound, jBound,
                                        &detail);
   report(prefix + "_terminal_bounds", terminalOk, detail);
 
-  std::vector<Lobe> lobesL = findLobes(cmdLeft, kNearZero);
-  std::vector<Lobe> lobesR = findLobes(cmdRight, kNearZero);
+  std::vector<Lobe> lobesL = findLobes(refLeft, kNearZero);
+  std::vector<Lobe> lobesR = findLobes(refRight, kNearZero);
   report(prefix + "_single_lobe_left", lobesL.size() == 1,
          "left wheel: " + lobesToString(lobesL) + " (expected exactly 1)");
   report(prefix + "_single_lobe_right", lobesR.size() == 1,

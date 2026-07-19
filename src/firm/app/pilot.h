@@ -213,6 +213,23 @@ class Pilot {
   bool headingSourceFellBack() const { return headingSource_.fellBackThisSample(); }
   bool headingSourceRecovered() const { return headingSource_.recoveredThisSample(); }
 
+  // refLeft/refRight -- 112-002: the PLANNED per-wheel reference, i.e.
+  // Motion::Executor's own jerk-limited trajectory (`twist.v`/`twist.omega`
+  // BEFORE this method's heading-PD correction and BEFORE App::Drive's own
+  // actuation-lag feedforward are added on top), mapped through the SAME
+  // `BodyKinematics::inverse()` map `tick()` below and `Drive::tick()` both
+  // use. Recomputed every `tick()` call (0/0 while idle, since `twist` is
+  // `Twist{}` then). Exists purely as a diagnostic/verification seam (see
+  // this method's own `tick()` doc comment) -- no production consumer reads
+  // it; a genuine wire telemetry field would need `RobotLoop::updateTlm()`
+  // to populate it, and this sprint's own guardrail (SUC-007) keeps
+  // `robot_loop.cpp` untouched, so this stays a live accessor instead,
+  // mirroring `TestSim::SimHarness::driveTargetVelLeft/Right()`'s own
+  // established "test-only, non-wire" shape for the analogous COMMANDED
+  // signal.
+  float refLeft() const { return refLeft_; }    // [mm/s] signed
+  float refRight() const { return refRight_; }  // [mm/s] signed
+
  private:
   Motion::Executor& executor_;
   Drive& drive_;
@@ -241,6 +258,11 @@ class Pilot {
   // from Executor's own internal dwell-rate estimate.
   bool hasPrevThetaMeas_ = false;
   float prevThetaMeas_ = 0.0f;  // [rad]
+
+  // refLeft_/refRight_ -- 112-002: this tick()'s own PLANNED per-wheel
+  // reference. See refLeft()/refRight()'s own doc comment above.
+  float refLeft_ = 0.0f;   // [mm/s] signed
+  float refRight_ = 0.0f;  // [mm/s] signed
 };
 
 }  // namespace App

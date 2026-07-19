@@ -778,7 +778,17 @@ never a caller-supplied flag.
   measuredHeadingAbs)`, `popEvent()`, `queueDepth()`/`activeId()`/
   `state()`. See §2b/§2c/§2d above for the full contract; `Executor::Twist`'s
   `headingActive`/`thetaRef`/`thetaMeas`/`omegaDes` fields (109-005) are
-  what `App::Pilot`'s heading PD cascade consumes.
+  what `App::Pilot`'s heading PD cascade consumes. `Twist` also carries
+  `aRef`/`alphaRef` (112-002) — the dominant channel's own sampled
+  acceleration, read from the SAME `sample()` result already computed for
+  `v`/`omegaFf` (never a separate solve or peek): `aRef` is the linear
+  channel's own acceleration for `kArc` (0 for `kPivot`/`kTimed`);
+  `alphaRef` is `headingRatioPerMm_ * linSample.acceleration` for a
+  heading-bearing `kArc` leg, the rotational channel's own acceleration for
+  `kPivot`, else 0. `App::Pilot::tick()` forwards both, unmodified, straight
+  through to `Drive::setTwist()`'s two new defaulted parameters — `Pilot`
+  adds no arithmetic of its own to either field (unlike `omega`/`thetaRef`,
+  which the heading PD cascade combines with a correction term).
 - **`Motion::kDeadTime`** (`executor.h`, 109-005) — the divergence-replan
   dead-time constant; declared, derivation preserved, but STILL no live
   call site (§2d's own kDeadTime note — a naive projection regressed a

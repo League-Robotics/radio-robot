@@ -4,6 +4,8 @@
 
 #include <cmath>
 
+#include "kinematics/body_kinematics.h"
+
 namespace App {
 
 void Pilot::tick(uint32_t now, uint64_t nowUs) {  // [ms] [us]
@@ -28,6 +30,15 @@ void Pilot::tick(uint32_t now, uint64_t nowUs) {  // [ms] [us]
 
   Motion::Executor::Twist twist = executor_.tick(dt, odom_.lastDistance(), headingSource_.heading(),
                                                   headingSource_.headingLead());
+
+  // 112-002: the PLANNED per-wheel reference -- BodyKinematics::inverse()
+  // applied to twist.v/twist.omega EXACTLY as Executor emitted them, before
+  // the heading-PD correction below (which only ever modifies the LOCAL
+  // `omega` copy, never `twist.omega` itself) and before App::Drive's own
+  // actuation-lag feedforward (Drive::tick(), a later, separate stage). See
+  // refLeft()/refRight()'s own doc comment (pilot.h) for why this is a
+  // live accessor rather than a wire telemetry field.
+  BodyKinematics::inverse(twist.v, twist.omega, drive_.trackWidth(), refLeft_, refRight_);
 
   float omega = twist.omega;
   if (twist.headingActive) {
@@ -90,7 +101,11 @@ void Pilot::tick(uint32_t now, uint64_t nowUs) {  // [ms] [us]
   //     own Drive::setTwist() call (already staged earlier this cycle by
   //     handleTwist()/handleStop()) must survive untouched.
   if (executor_.state() != Motion::State::kIdle) {
-    drive_.setTwist(twist.v, omega);
+    // 112-002: aRef/alphaRef forward the SAME sample() result already
+    // computed for v/omega above (never a separate solve) -- Drive::tick()
+    // folds them into a model feedforward term (actuation_lag * a) on top
+    // of the velocity target.
+    drive_.setTwist(twist.v, omega, twist.aRef, twist.alphaRef);
   } else if (stateBefore != Motion::State::kIdle) {
     drive_.setTwist(0.0f, 0.0f);
   }

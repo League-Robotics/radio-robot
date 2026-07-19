@@ -868,12 +868,16 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
   // updated locus-2 write-up.
   if (mode_ == Mode::kArc) {
     out.v = linSample.velocity;
+    out.aRef = linSample.acceleration;  // 112-002
     thetaRef = headingRatioPerMm_ * plannedPositionSinceActivation;
     omegaFf = headingRatioPerMm_ * linSample.velocity;
+    out.alphaRef = headingRatioPerMm_ * linSample.acceleration;  // 112-002
   } else {
     out.v = 0.0f;
+    out.aRef = 0.0f;  // 112-002: kPivot has no linear channel
     thetaRef = plannedPositionSinceActivation;
     omegaFf = rotSample.velocity;
+    out.alphaRef = rotSample.acceleration;  // 112-002
   }
 
   // -- Completion + the terminal-decel PD gate (both need the SAME

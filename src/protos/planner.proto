@@ -273,4 +273,20 @@ message PlannerConfig {
   // comparison -- see this file's own comment above and executor.h/.cpp's
   // "History note" doc comments.
   float terminal_lead = 37;
+
+  // [s] 112-002: App::Drive's own model feedforward gain -- Drive::tick()
+  // adds actuation_lag * a onto each wheel's velocity target (a the
+  // wheel-space acceleration BodyKinematics::inverse() maps from
+  // Motion::Executor::Twist::aRef/alphaRef, forwarded through
+  // App::Pilot::tick()), anticipating where the velocity target will need
+  // to be actuation_lag seconds from now given the already-solved
+  // reference acceleration. Defaults to 0.130 -- Motion::kDeadTime's own
+  // bench-derived value (sprint 100's bench-measured motor_lag, 120-140ms;
+  // see kDeadTime's own doc comment, executor.h). kDeadTime itself stays
+  // declared-but-unused (its own locus, the divergence-replan check, is a
+  // DIFFERENT compensation from this field's locus, App::Drive's velocity-
+  // target staging) -- App::Drive gets its own config-tunable field rather
+  // than a new App::Drive -> Motion:: dependency (sprint 112 Architecture
+  // Design Rationale Decision 4).
+  float actuation_lag = 38;
 }

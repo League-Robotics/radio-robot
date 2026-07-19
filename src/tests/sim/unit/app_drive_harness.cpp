@@ -42,6 +42,7 @@
 #include "devices/device_types.h"
 #include "devices/nezha_motor.h"
 #include "kinematics/body_kinematics.h"
+#include "messages/planner.h"
 #include "scripted_i2c_hook.h"
 #include "sim_plant.h"
 
@@ -263,12 +264,119 @@ void scenarioStopZeroesBothTargetsWithinOneCycle() {
   checkFloatEq(right.appliedDuty(), 0.0f, "right appliedDuty() reaches 0 within one cycle of stop()");
 }
 
+// ===========================================================================
+// 4. 112-002: a raw 2-arg setTwist() call is byte-for-byte unaffected by the
+//    acceleration-feedforward addition, even with a NONZERO actuation_lag
+//    configured -- a_x/alpha default to 0, so the feedforward term
+//    (actuation_lag * a) is exactly 0 regardless of actuation_lag's own
+//    value. Proves RobotLoop::handleTwist()'s raw TWIST path (a 2-arg call)
+//    compiles and behaves unchanged (AC #2/#7).
+// ===========================================================================
+
+void scenarioRawTwoArgSetTwistUnaffectedByFeedforward() {
+  beginScenario("Drive::setTwist() 2-arg form: unaffected by a configured actuation_lag (a_x/alpha default 0)");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  primeAtZero(left, bus, wireAddr);
+  primeAtZero(right, bus, wireAddr);
+
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+
+  // A nonzero actuation_lag -- if the 2-arg setTwist() form leaked a
+  // nonzero a_x/alpha default, this would show up as a nonzero feedforward
+  // contribution below.
+  msg::PlannerConfig cfg;
+  cfg.actuation_lag = 0.130f;  // [s]
+  drive.configure(cfg);
+
+  const float v_x = 100.0f;  // [mm/s]
+  const float omega = 0.5f;  // [rad/s]
+  drive.setTwist(v_x, omega);  // 2-arg form -- a_x/alpha resolve to their 0.0f defaults
+  drive.tick();
+
+  runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
+  runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs);
+
+  float expectedVL = 0.0f, expectedVR = 0.0f;
+  BodyKinematics::inverse(v_x, omega, trackWidth, expectedVL, expectedVR);
+
+  const float kff = 0.002f;
+  checkFloatEq(left.appliedDuty(), kff * expectedVL,
+               "left appliedDuty() matches the plain inverse() target -- no feedforward leaked in");
+  checkFloatEq(right.appliedDuty(), kff * expectedVR,
+               "right appliedDuty() matches the plain inverse() target -- no feedforward leaked in");
+}
+
+// ===========================================================================
+// 5. 112-002: the acceleration-feedforward term. A straight twist (omega=0,
+//    alpha=0) with a nonzero a_x stages vL/vR = inverse(v_x, omega, ...) +
+//    actuation_lag * inverse(a_x, alpha, ...) -- the SAME inverse() map
+//    reused for acceleration, added onto each wheel's velocity target.
+// ===========================================================================
+
+void scenarioAccelerationFeedforwardAddsLagTimesAccelOntoWheelTargets() {
+  beginScenario("Drive::tick(): stages vL/vR + actuation_lag * inverse(a_x, alpha, ...) (112-002 feedforward)");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  primeAtZero(left, bus, wireAddr);
+  primeAtZero(right, bus, wireAddr);
+
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+
+  const float actuationLag = 0.130f;  // [s]
+  msg::PlannerConfig cfg;
+  cfg.actuation_lag = actuationLag;
+  drive.configure(cfg);
+
+  const float v_x = 100.0f;    // [mm/s]
+  const float omega = 0.0f;    // [rad/s]
+  const float a_x = 500.0f;    // [mm/s^2]
+  const float alpha = 0.0f;    // [rad/s^2]
+  drive.setTwist(v_x, omega, a_x, alpha);
+  drive.tick();
+
+  runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
+  runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs);
+
+  float baseVL = 0.0f, baseVR = 0.0f;
+  BodyKinematics::inverse(v_x, omega, trackWidth, baseVL, baseVR);
+  float aL = 0.0f, aR = 0.0f;
+  BodyKinematics::inverse(a_x, alpha, trackWidth, aL, aR);
+  float expectedVL = baseVL + actuationLag * aL;
+  float expectedVR = baseVR + actuationLag * aR;
+
+  const float kff = 0.002f;
+  checkFloatEq(left.appliedDuty(), kff * expectedVL,
+               "left appliedDuty() reflects vL + actuation_lag * aL");
+  checkFloatEq(right.appliedDuty(), kff * expectedVR,
+               "right appliedDuty() reflects vR + actuation_lag * aR");
+  // Sanity: with omega=alpha=0 the feedforward term is identical on both
+  // wheels (aL == aR == a_x), so the feedforward strictly increases both
+  // targets above the plain inverse() value here.
+  checkTrue(expectedVL > baseVL, "sanity: the feedforward term is nonzero and additive on the left wheel");
+  checkTrue(expectedVR > baseVR, "sanity: the feedforward term is nonzero and additive on the right wheel");
+}
+
 }  // namespace
 
 int main() {
   scenarioStraightLineStagesEqualSameSignTargets();
   scenarioPureRotationStagesOppositeSignTargets();
   scenarioStopZeroesBothTargetsWithinOneCycle();
+  scenarioRawTwoArgSetTwistUnaffectedByFeedforward();
+  scenarioAccelerationFeedforwardAddsLagTimesAccelOntoWheelTargets();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Drive scenarios passed\n");
