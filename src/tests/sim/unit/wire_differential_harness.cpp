@@ -198,6 +198,10 @@ int cmdDecode(const std::string& b64) {
           printOpt("min_speed", cfg.patch.planner.min_speed);
           printOpt("heading_kp", cfg.patch.planner.heading_kp);
           printOpt("heading_kd", cfg.patch.planner.heading_kd);
+          // arrive_dwell (111-004): the one field kept from the 16-field
+          // Drive::Limits/tracker/policy span removed as dead this ticket --
+          // see config.proto's own PlannerConfigPatch header comment.
+          printOpt("arrive_dwell", cfg.patch.planner.arrive_dwell);
           break;
         case msg::ConfigDelta::PatchKind::WATCHDOG:
           std::printf(" watchdog=%u", static_cast<unsigned>(cfg.patch.watchdog));

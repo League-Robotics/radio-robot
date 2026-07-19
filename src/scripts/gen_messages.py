@@ -339,8 +339,8 @@ _INVENTORY_MAP: dict = {
     ("PlannerConfig", "yaw_acc_max"):       "RobotConfig::yawAccMax",
     ("PlannerConfig", "j_max"):             "RobotConfig::jMax",
     ("PlannerConfig", "yaw_jerk_max"):      "RobotConfig::yawJerkMax",
-    ("PlannerConfig", "arrive_tol"):        "RobotConfig::arriveTolerance",
-    ("PlannerConfig", "turn_in_place_gate"):"RobotConfig::turnInPlaceGate",
+    # arrive_tol/turn_in_place_gate (fields 8/9) removed as dead wire fields
+    # in 111-004 -- their _INVENTORY_MAP entries removed alongside them.
     ("PlannerConfig", "min_speed"):         "RobotConfig::minSpeed",
 
     # -----------------------------------------------------------------------

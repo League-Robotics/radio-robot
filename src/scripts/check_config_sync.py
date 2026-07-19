@@ -219,29 +219,19 @@ PATCH_TO_PYDANTIC: dict[PatchKey, list[str]] = {
     # gen_boot_config.py build-time bake that was always there.
     ("PlannerConfigPatch", "heading_kp"): ["control.heading_kp"],
     ("PlannerConfigPatch", "heading_kd"): ["control.heading_kd"],
-    # v_wheel_max..arrive_dwell (100-001): Drive::Limits' wire/config
-    # tunables (PlannerConfig fields 15-31, architecture-update.md M1).
-    # No host-side pydantic field yet -- these are new this ticket, bench
-    # tuning lives in data/robots/tovez.json's control.* keys (baked into
-    # the firmware boot config by scripts/gen_boot_config.py), not in
-    # RobotConfig; same "no pydantic round trip yet" posture as
-    # heading_kp/heading_kd immediately above.
-    ("PlannerConfigPatch", "v_wheel_max"): [],
-    ("PlannerConfigPatch", "steer_headroom"): [],
-    ("PlannerConfigPatch", "wheel_step_max"): [],
-    ("PlannerConfigPatch", "track_k_s"): [],
-    ("PlannerConfigPatch", "track_k_theta"): [],
-    ("PlannerConfigPatch", "track_k_cross"): [],
-    ("PlannerConfigPatch", "trim_v_max"): [],
-    ("PlannerConfigPatch", "trim_omega_max"): [],
-    ("PlannerConfigPatch", "replan_err_pos"): [],
-    ("PlannerConfigPatch", "replan_err_theta"): [],
-    ("PlannerConfigPatch", "replan_hold"): [],
-    ("PlannerConfigPatch", "replan_min_period"): [],
-    ("PlannerConfigPatch", "replan_max"): [],
-    ("PlannerConfigPatch", "handoff_tol_pos"): [],
-    ("PlannerConfigPatch", "handoff_tol_v"): [],
-    ("PlannerConfigPatch", "arrive_vel_tol"): [],
+    # arrive_dwell (100-001): the one Drive::Limits/tracker/policy field
+    # (of the original PlannerConfig fields 15-31, architecture-update.md
+    # M1) that turned out to be live. No host-side pydantic field yet --
+    # bench tuning lives in data/robots/tovez.json's control.arrive_dwell
+    # key (baked into the firmware boot config by scripts/
+    # gen_boot_config.py), not in RobotConfig; same "no pydantic round trip
+    # yet" posture as heading_kp/heading_kd immediately above. Its 16 dead
+    # siblings (v_wheel_max..arrive_vel_tol) were removed as dead wire
+    # fields in 111-004 -- see config.proto's own PlannerConfigPatch header
+    # comment -- and their PATCH_TO_PYDANTIC entries removed alongside them
+    # (a removed wire field is not a `patch-field-no-pydantic` finding; it
+    # is simply absent from `patch_fields`, so this map's own consistency
+    # would tolerate a stale entry silently -- removed anyway for hygiene).
     ("PlannerConfigPatch", "arrive_dwell"): [],
 }
 

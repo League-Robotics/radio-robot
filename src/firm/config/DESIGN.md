@@ -179,10 +179,14 @@ constants block once, rather than re-deriving it per field.
 
 ## 6. Open Questions / Known Limitations
 
-- Several `PlannerConfig` fields (`arrive_tol`, `turn_in_place_gate`) are
-  left permanently unset (0.0f) because nothing reads them yet — carried
-  forward unchanged from the pre-generator `main.cpp` defaults. Revisit if a
-  consumer ever needs them.
+- (Resolved 111-004) `PlannerConfig` fields `arrive_tol`/`turn_in_place_gate`
+  used to be left permanently unset (0.0f) because nothing read them —
+  carried forward unchanged from the pre-generator `main.cpp` defaults.
+  Rather than "revisit if a consumer ever needs them," a re-grep at 111-004
+  planning time confirmed they (plus 16 sibling Drive::Limits/tracker/policy
+  fields, `v_wheel_max`..`arrive_vel_tol`) had zero consumers, so all 18
+  were removed as dead wire fields — see `planner.proto`'s own
+  `PlannerConfig` header comment and that ticket's completion notes.
 - `togov` (mecanum) currently inherits the same firmware-default
   `Drive::Limits` fields as an "uncharacterized robot" rather than having its
   own bench-measured values (see root `architecture-update.md` Open Question

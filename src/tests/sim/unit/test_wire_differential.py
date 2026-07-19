@@ -194,15 +194,13 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
     actual_motor_patch = {f.name: f.number for f in pb_config.MotorConfigPatch.DESCRIPTOR.fields}
     assert actual_motor_patch == expected_motor_patch
 
+    # 16 fields (v_wheel_max..arrive_vel_tol, numbers 4-19) were removed as
+    # dead wire fields in 111-004 (step 7 of the terminal-blips-close-the-
+    # loop fix plan) and reserved -- see config.proto's own
+    # PlannerConfigPatch header comment. arrive_dwell (20) is the one field
+    # from that original span that IS live and was kept.
     expected_planner_patch = {
-        "min_speed": 1, "heading_kp": 2, "heading_kd": 3,
-        "v_wheel_max": 4, "steer_headroom": 5, "wheel_step_max": 6,
-        "track_k_s": 7, "track_k_theta": 8, "track_k_cross": 9,
-        "trim_v_max": 10, "trim_omega_max": 11,
-        "replan_err_pos": 12, "replan_err_theta": 13,
-        "replan_hold": 14, "replan_min_period": 15, "replan_max": 16,
-        "handoff_tol_pos": 17, "handoff_tol_v": 18,
-        "arrive_vel_tol": 19, "arrive_dwell": 20,
+        "min_speed": 1, "heading_kp": 2, "heading_kd": 3, "arrive_dwell": 20,
     }
     actual_planner_patch = {f.name: f.number for f in pb_config.PlannerConfigPatch.DESCRIPTOR.fields}
     assert actual_planner_patch == expected_planner_patch
@@ -305,11 +303,14 @@ def test_direction_a_config_motor_only_travel_calib(harness):
 
 
 def test_direction_a_config_planner(harness):
-    raw = env_config_planner(24, min_speed=42.0, heading_kp=6.0, heading_kd=0.25)
+    """PlannerConfigPatch's all 4 remaining fields (111-004 removed the
+    other 16 as dead) round-trip host-encode -> firmware-decode."""
+    raw = env_config_planner(24, min_speed=42.0, heading_kp=6.0, heading_kd=0.25, arrive_dwell=0.2)
     fields = _assert_ok(harness, raw)
     assert fields["cmd_kind"] == "CONFIG"
     assert fields["patch_kind"] == "PLANNER"
-    for key, expected in [("min_speed", 42.0), ("heading_kp", 6.0), ("heading_kd", 0.25)]:
+    for key, expected in [("min_speed", 42.0), ("heading_kp", 6.0), ("heading_kd", 0.25),
+                           ("arrive_dwell", 0.2)]:
         assert fields[f"{key}_has"] == "1"
         assert float_eq(fields[key], expected)
 
