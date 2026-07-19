@@ -27,6 +27,15 @@ test_heading_gains_for_config_reads_tovez_json()/
 test_heading_gains_for_config_falls_back_to_firmware_defaults()'s exact
 shape.
 
+Reduced by ticket 111-004 (step 7 of the terminal-blips-close-the-loop fix
+plan): 16 of the 17 Drive::Limits fields (v_wheel_max..arrive_vel_tol) were
+never wired to any live consumer and were removed as dead wire fields --
+drive_limits_for_config() no longer exists, replaced by the much smaller
+arrive_dwell_for_config() (mirrors heading_dwell_for_config()'s shape). The
+tests below now cover arrive_dwell alone, the one field from that original
+span that IS live (Motion::Executor's dwell-completion gate). See
+planner.proto's own PlannerConfig header comment for the full accounting.
+
 Mirrors src/tests/sim/unit/test_gen_boot_config_fwd_sign.py's exact in-process
 pattern (invokes the generator module directly rather than shelling out) and
 is placed under src/tests/sim/unit/ for the same reason that file gives: this is
@@ -73,30 +82,11 @@ _EXPECTED_MOTION_LIMITS = {
 }
 
 
-# The 17 Drive::Limits tunables (100-001) -- field name -> (setter, tovez
-# value, firmware-default constant name). tovez.json's real values (see
-# data/robots/tovez.json's control block and its own _drive_limits_note)
-# EQUAL the firmware defaults for every field except v_wheel_max (the one
-# bench-MEASURED exception -- 620.0 vs the generic 350.0 fallback).
-_DRIVE_LIMIT_FIELDS = [
-    ("v_wheel_max",       "setVWheelMax",       620.0,  "V_WHEEL_MAX_DEFAULT"),
-    ("steer_headroom",    "setSteerHeadroom",   20.0,   "STEER_HEADROOM_DEFAULT"),
-    ("wheel_step_max",    "setWheelStepMax",    150.0,  "WHEEL_STEP_MAX_DEFAULT"),
-    ("track_k_s",         "setTrackKS",         2.0,    "TRACK_K_S_DEFAULT"),
-    ("track_k_theta",     "setTrackKTheta",     6.0,    "TRACK_K_THETA_DEFAULT"),
-    ("track_k_cross",     "setTrackKCross",     1.5e-5, "TRACK_K_CROSS_DEFAULT"),
-    ("trim_v_max",        "setTrimVMax",        120.0,  "TRIM_V_MAX_DEFAULT"),
-    ("trim_omega_max",    "setTrimOmegaMax",    2.0,    "TRIM_OMEGA_MAX_DEFAULT"),
-    ("replan_err_pos",    "setReplanErrPos",    40.0,   "REPLAN_ERR_POS_DEFAULT"),
-    ("replan_err_theta",  "setReplanErrTheta",  0.15,   "REPLAN_ERR_THETA_DEFAULT"),
-    ("replan_hold",       "setReplanHold",      0.2,    "REPLAN_HOLD_DEFAULT"),
-    ("replan_min_period", "setReplanMinPeriod", 0.3,    "REPLAN_MIN_PERIOD_DEFAULT"),
-    ("replan_max",        "setReplanMax",       3.0,    "REPLAN_MAX_DEFAULT"),
-    ("handoff_tol_pos",   "setHandoffTolPos",   40.0,   "HANDOFF_TOL_POS_DEFAULT"),
-    ("handoff_tol_v",     "setHandoffTolV",     0.14,   "HANDOFF_TOL_V_DEFAULT"),
-    ("arrive_vel_tol",    "setArriveVelTol",    15.0,   "ARRIVE_VEL_TOL_DEFAULT"),
-    ("arrive_dwell",      "setArriveDwell",     0.15,   "ARRIVE_DWELL_DEFAULT"),
-]
+# arrive_dwell (100-001) -- the sole survivor of the original 17-field
+# Drive::Limits span (see module docstring's 111-004 note above): field
+# name -> (setter, tovez value, firmware-default constant name). tovez.json's
+# real value EQUALS the firmware default (both 0.15).
+_ARRIVE_DWELL_FIELD = ("arrive_dwell", "setArriveDwell", 0.15, "ARRIVE_DWELL_DEFAULT")
 
 
 def _motion_limit_setter_lines() -> list[str]:
@@ -248,91 +238,67 @@ def test_profile_rot_limits_for_config_reads_arbitrary_json_values():
 
 
 # ---------------------------------------------------------------------------
-# 100-001 (motion-stack-v2 M1): drive_limits_for_config()'s 17-field mapping.
+# 100-001 (motion-stack-v2 M1), reduced by 111-004: arrive_dwell_for_config()
+# is the sole survivor of the original 17-field Drive::Limits mapping.
 # ---------------------------------------------------------------------------
 
-def test_drive_limits_for_config_reads_tovez_json():
-    """drive_limits_for_config() reads tovez.json's real control.* starting
-    values (see _DRIVE_LIMIT_FIELDS above) -- including v_wheel_max, the one
-    BENCH-MEASURED exception (620.0, not the generic 350.0 firmware
-    default)."""
+def test_arrive_dwell_for_config_reads_tovez_json():
+    """arrive_dwell_for_config() reads tovez.json's real control.arrive_dwell
+    starting value (0.15, which happens to equal the firmware default)."""
     cfg = json.loads(_TOVEZ_JSON.read_text())
 
-    values = gbc.drive_limits_for_config(cfg)
+    actual = gbc.arrive_dwell_for_config(cfg)
 
-    for (field, _setter, expected, _default_name), actual in zip(_DRIVE_LIMIT_FIELDS, values):
-        assert actual == expected, f"{field}: expected {expected}, got {actual}"
-
-
-def test_drive_limits_for_config_falls_back_to_firmware_defaults():
-    """With no control.* keys in the robot JSON (or no robot config at all),
-    every field falls back to its firmware default constant -- matching
-    every other mapping's fall-back-to-firmware-default behavior in this
-    generator."""
-    values = gbc.drive_limits_for_config({})
-
-    for (field, _setter, _tovez_value, default_name), actual in zip(_DRIVE_LIMIT_FIELDS, values):
-        expected_default = getattr(gbc, default_name)
-        assert actual == expected_default, f"{field}: expected default {expected_default}, got {actual}"
+    assert actual == _ARRIVE_DWELL_FIELD[2]
 
 
-def test_drive_limits_for_config_reads_arbitrary_json_values():
+def test_arrive_dwell_for_config_falls_back_to_firmware_default():
+    """With no control.arrive_dwell key in the robot JSON (or no robot
+    config at all), the field falls back to its firmware default constant --
+    matching every other mapping's fall-back-to-firmware-default behavior in
+    this generator."""
+    actual = gbc.arrive_dwell_for_config({})
+
+    expected_default = getattr(gbc, _ARRIVE_DWELL_FIELD[3])
+    assert actual == expected_default
+
+
+def test_arrive_dwell_for_config_reads_arbitrary_json_value():
     """Proves the mapping genuinely reads from the JSON (not merely always
     returning the default, which would be indistinguishable from the
-    fallback test above for the 16 fields whose tovez.json value happens to
-    equal the firmware default)."""
-    cfg = {
-        "control": {
-            "v_wheel_max": 555.0,
-            "steer_headroom": 33.0,
-            "wheel_step_max": 111.0,
-            "track_k_s": 1.1,
-            "track_k_theta": 5.5,
-            "track_k_cross": 2.5e-5,
-            "trim_v_max": 99.0,
-            "trim_omega_max": 1.5,
-            "replan_err_pos": 44.0,
-            "replan_err_theta": 0.22,
-            "replan_hold": 0.25,
-            "replan_min_period": 0.35,
-            "replan_max": 4.0,
-            "handoff_tol_pos": 33.0,
-            "handoff_tol_v": 0.2,
-            "arrive_vel_tol": 12.0,
-            "arrive_dwell": 0.1,
-        }
-    }
+    fallback test above since tovez.json's value happens to equal the
+    firmware default)."""
+    cfg = {"control": {"arrive_dwell": 0.33}}
 
-    values = gbc.drive_limits_for_config(cfg)
+    actual = gbc.arrive_dwell_for_config(cfg)
 
-    expected = tuple(cfg["control"][field] for field, *_rest in _DRIVE_LIMIT_FIELDS)
-    assert values == expected
+    assert actual == 0.33
 
 
-def test_generate_emits_default_planner_config_with_drive_limits():
-    """generate()'s output gains the 17 Drive::Limits setter calls (100-001)
-    inside defaultPlannerConfig(), resolving to tovez.json's real starting
-    values -- additive to the pre-existing motion-limit/heading-gain
-    setters (test_generate_emits_default_planner_config_with_unchanged_motion_limits
+def test_generate_emits_default_planner_config_with_arrive_dwell():
+    """generate()'s output gains the arrive_dwell setter call inside
+    defaultPlannerConfig(), resolving to tovez.json's real starting value --
+    additive to the pre-existing motion-limit/heading-gain setters
+    (test_generate_emits_default_planner_config_with_config_motion_limits
     above)."""
     cfg = json.loads(_TOVEZ_JSON.read_text())
     content = gbc.generate(cfg, "data/robots/tovez.json")
 
-    for field, setter, expected, _default_name in _DRIVE_LIMIT_FIELDS:
-        line = f"cfg.{setter}({gbc._f(expected)});"
-        assert line in content, f"missing/changed {field} setter: {line}"
+    _field, setter, expected, _default_name = _ARRIVE_DWELL_FIELD
+    line = f"cfg.{setter}({gbc._f(expected)});"
+    assert line in content, f"missing/changed arrive_dwell setter: {line}"
 
 
-def test_generate_drive_limits_fall_back_with_no_robot_config():
-    """With no robot config found, every Drive::Limits setter emits its
+def test_generate_arrive_dwell_falls_back_with_no_robot_config():
+    """With no robot config found, the arrive_dwell setter emits its
     firmware-default literal (mirrors
     test_generate_motion_limits_unchanged_with_no_robot_config's shape)."""
     content = gbc.generate({}, "(firmware defaults)")
 
-    for field, setter, _tovez_value, default_name in _DRIVE_LIMIT_FIELDS:
-        default_value = getattr(gbc, default_name)
-        line = f"cfg.{setter}({gbc._f(default_value)});"
-        assert line in content, f"missing/changed {field} default setter: {line}"
+    _field, setter, _tovez_value, default_name = _ARRIVE_DWELL_FIELD
+    default_value = getattr(gbc, default_name)
+    line = f"cfg.{setter}({gbc._f(default_value)});"
+    assert line in content, f"missing/changed arrive_dwell default setter: {line}"
 
 
 if __name__ == "__main__":

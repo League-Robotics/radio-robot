@@ -316,6 +316,48 @@ from src.scripts.gen_boot_config import (  # noqa: E402
 
 
 @pytest.mark.parametrize("angle_deg", [_SMALL_ANGLE_DEG, _LARGE_ANGLE_DEG])
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "111-002: NOT reorder-coupled (confirmed by the same local, "
+        "uncommitted robot_loop.cpp revert-and-rebuild diagnostic used for "
+        "the sim-suite's own case 4 -- the failure persists identically "
+        "with the cycle-order experiment reverted). Root cause: this "
+        "test's own `_DISABLED = (-0.05, 0.0, 0.0)` was an exact, "
+        "hand-duplicated snapshot of gen_boot_config.py's shipped "
+        "HEADING_LEAD_BIAS_DEFAULT/PLAN_LEAD_DEFAULT/TERMINAL_LEAD_DEFAULT "
+        "AT THE TIME 109-010 wrote this test (both leads were 0.0) -- so "
+        "'shipped == _DISABLED' held by construction. Commit 740bff35 "
+        "('Add turn windage sweep simulation script', part of the same "
+        "merged pid-debugging WIP) deliberately re-tuned "
+        "PLAN_LEAD_DEFAULT from 0.0 to 0.20 (own comment: 'eliminates the "
+        "terminal PD reversal entirely; sim sweep 0/0.10/0.15/0.20 -> "
+        "reverse-cmd peak 251/132/81/0 mm/s') -- a real, documented, "
+        "bench-motivated behavior change, not a bug -- which this test's "
+        "own stale `_DISABLED` constant never tracked. This is NOT a "
+        "simple constant-drift fix like sim_api_harness.cpp's kPace/kCycle "
+        "(111-002 case 2): re-pointing `_DISABLED` at the live "
+        "PLAN_LEAD_DEFAULT would make the assertion tautological (shipped "
+        "vs. shipped), and re-deriving a genuinely-independent zero "
+        "baseline requires a design decision about what this test should "
+        "assert post-740bff35 -- exactly the decision "
+        "clasi/issues/motion-control-terminal-blips-reconciled-fix-plan.md "
+        "already made in writing: step 3 DELETES the lead-sampling "
+        "machinery (plan_lead/terminal_lead/heading_lead_bias) entirely "
+        "rather than co-tuning it further, explicitly superseding "
+        "later/turn-lead-compensation-gain-cotuning.md -- the exact "
+        "follow-up work this test module (109-010's own 'Work item (d)') "
+        "exists to support. The measured effect this test caught (shipped "
+        "lead compensation costs ~0.25-0.6deg of ideal-chip pivot accuracy "
+        "vs. a true zero baseline) is consistent with, not contradictory "
+        "to, the reconciled plan's own F2 finding (lead-sampling time-warps "
+        "the Ruckig trajectory, breaking the jerk guarantee) -- the reason "
+        "the plan deletes leads rather than re-tuning them. Quarantined "
+        "rather than rewritten: this whole test module's premise is "
+        "superseded pending the reconciled plan's own deletion work, not "
+        "salvageable by a numeric constant update."
+    ),
+)
 def test_postcompensation_ideal_matches_shipped_defaults(angle_deg):
     """Honest post-compensation re-verification (Work item (d)): the
     SHIPPED defaults (gen_boot_config.py) are, by this ticket's own

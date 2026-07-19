@@ -135,35 +135,21 @@ message MotorConfigPatch {
 // reach Motion::SegmentExecutor's PD cascade (098-002) without a reflash,
 // per ticket 098-005's own stated purpose.
 //
-// Fields 4-20 (100-001, motion-stack-v2 M1): the live-tunable subset of
-// PlannerConfig's new fields 15-31 (planner.proto), covering ALL 17 of
-// them -- matching architecture-update.md's own classDiagram ("up to 17
-// new fields, split if budget busts (Decision 4)"). `scripts/
-// gen_messages.py`'s kMaxEncodedSize report (this ticket's completion
-// notes) confirmed the growth fits the 186-byte envelope budget WITHOUT a
-// split -- Decision 4's CONFIG_PLANNER_TRACK fallback was NOT needed.
+// Fields 4-19 (100-001, motion-stack-v2 M1) once mirrored 16 of
+// PlannerConfig's fields 15-30 -- a planned Drive::Limits/tracker/policy
+// wire-tunable surface that was never wired to any live consumer. Removed
+// as dead in 111-004 (step 7 of the terminal-blips-close-the-loop fix
+// plan) and reserved below, alongside planner.proto's matching PlannerConfig
+// field removal -- see that ticket's completion notes for the full
+// per-field accounting. arrive_dwell (field 20 here, PlannerConfig field
+// 31) is the one field from that original span that IS live and was kept.
 message PlannerConfigPatch {
+  reserved 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19;
   optional float min_speed  = 1;  // [mm/s] minSpeed
   optional float heading_kp = 2;  // [1/s] headingKp
   optional float heading_kd = 3;  // dimensionless headingKd
 
-  optional float v_wheel_max        = 4;   // [mm/s]
-  optional float steer_headroom     = 5;   // [mm/s]
-  optional float wheel_step_max     = 6;   // [mm/s]
-  optional float track_k_s          = 7;   // [1/s]
-  optional float track_k_theta      = 8;   // [1/s]
-  optional float track_k_cross      = 9;   // [rad/mm^2]
-  optional float trim_v_max         = 10;  // [mm/s]
-  optional float trim_omega_max     = 11;  // [rad/s]
-  optional float replan_err_pos     = 12;  // [mm]
-  optional float replan_err_theta   = 13;  // [rad]
-  optional float replan_hold        = 14;  // [s]
-  optional float replan_min_period  = 15;  // [s]
-  optional float replan_max         = 16;  // dimensionless
-  optional float handoff_tol_pos    = 17;  // [mm]
-  optional float handoff_tol_v      = 18;  // [s]
-  optional float arrive_vel_tol     = 19;  // [mm/s]
-  optional float arrive_dwell       = 20;  // [s]
+  optional float arrive_dwell = 20;  // [s]
 }
 
 // Curated patch of OTOS runtime calibration -- mirrors

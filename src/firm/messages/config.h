@@ -54,22 +54,6 @@ struct PlannerConfigPatch {
     Opt<float> min_speed = {};
     Opt<float> heading_kp = {};
     Opt<float> heading_kd = {};
-    Opt<float> v_wheel_max = {};
-    Opt<float> steer_headroom = {};
-    Opt<float> wheel_step_max = {};
-    Opt<float> track_k_s = {};
-    Opt<float> track_k_theta = {};
-    Opt<float> track_k_cross = {};
-    Opt<float> trim_v_max = {};
-    Opt<float> trim_omega_max = {};
-    Opt<float> replan_err_pos = {};
-    Opt<float> replan_err_theta = {};
-    Opt<float> replan_hold = {};
-    Opt<float> replan_min_period = {};
-    Opt<float> replan_max = {};
-    Opt<float> handoff_tol_pos = {};
-    Opt<float> handoff_tol_v = {};
-    Opt<float> arrive_vel_tol = {};
     Opt<float> arrive_dwell = {};
 
     // --- array / optional-string accessors ---

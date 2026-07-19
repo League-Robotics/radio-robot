@@ -32,11 +32,25 @@
 // deliberately, so a same-cycle raw TWIST (handleTwist()'s own
 // Drive::setTwist() call, which always also calls flush() first -- see
 // this file's own flush() doc comment) is never immediately clobbered by
-// a stale Executor sample. HeadingSource::sample() is called every
-// tick(), IDLE included -- App::HeadingSource is a passive reader with no
-// per-tick cost (no bus traffic of its own), and keeping its active-
-// source/fallback state current even while idle means a fallback that
-// happens between commands is still visible in telemetry.
+// a stale Executor sample. 111-003 extends this contract for the ONE case
+// still uncovered by it: a natural running->idle transition happening
+// INSIDE this tick() call (the command completes on this exact call, not
+// a same-cycle flush -- distinguished by sampling `state()` both before
+// and after the internal `executor_.tick()` call). On that transition
+// `tick()` stages `Drive::setTwist(0, 0)` exactly once, so Drive stops
+// commanding the PREVIOUS cycle's stale twist instead of creeping until
+// the deadman lease (robot_loop.cpp's `kPilotDeadmanLease`, ~300ms) force-
+// stops it. A same-cycle flush is unaffected: RobotLoop::handleTwist()/
+// handleStop() call Pilot::flush() BEFORE Pilot::tick() runs this same
+// cycle, so the "before" state sampled at the top of tick() is ALREADY
+// kIdle by the time this tick() call sees it -- the "just completed"
+// branch is naturally never taken, and the raw command's own twist
+// (already staged by handleTwist()/handleStop()) survives untouched.
+// HeadingSource::sample() is called every tick(), IDLE included --
+// App::HeadingSource is a passive reader with no per-tick cost (no bus
+// traffic of its own), and keeping its active-source/fallback state
+// current even while idle means a fallback that happens between commands
+// is still visible in telemetry.
 //
 // No bus traffic, no sleeps, no Clock/Sleeper dependency of its own --
 // `tick(now)` takes the loop's own `now` (matching Telemetry::emit(now)'s
@@ -95,35 +109,24 @@ class Pilot {
   // mutation -- see their own definitions), so calling them mid-motion is
   // safe.
   //
-  // Note: `PlannerConfigPatch` (config.proto) curates 20 of `msg::
-  // PlannerConfig`'s fields (`min_speed`/`heading_kp`/`heading_kd` plus the
-  // 17 tracking/replan fields from ticket 006) -- it does NOT declare
-  // `a_max`/`a_decel`/`v_body_max`/`yaw_rate_max`/`yaw_acc_max`/`j_max`/
-  // `yaw_jerk_max`/`arrive_tol`/`turn_in_place_gate`/`heading_source`/
-  // `heading_dwell_tol`/`heading_dwell_rate`, so those fields are never
-  // touched by this method and stay at whatever `plannerConfig_` already
-  // holds (the boot default, absent a future wire-schema addition).
+  // Note: `PlannerConfigPatch` (config.proto) curates 4 of `msg::
+  // PlannerConfig`'s fields: `min_speed`/`heading_kp`/`heading_kd` plus
+  // `arrive_dwell`. It does NOT declare `a_max`/`a_decel`/`v_body_max`/
+  // `yaw_rate_max`/`yaw_acc_max`/`j_max`/`yaw_jerk_max`/`heading_source`/
+  // `heading_dwell_tol`/`heading_dwell_rate`/`heading_lead_bias`/
+  // `plan_lead`/`terminal_lead`, so those fields are never touched by this
+  // method and stay at whatever `plannerConfig_` already holds (the boot
+  // default, absent a future wire-schema addition). `PlannerConfigPatch`
+  // used to also curate 16 Drive::Limits/tracker/policy fields
+  // (`v_wheel_max`..`arrive_vel_tol`, ticket 006) that were never wired to
+  // any live consumer -- removed as dead in 111-004 (step 7 of the
+  // terminal-blips-close-the-loop fix plan); see config.proto's own
+  // PlannerConfigPatch header comment for the full accounting.
   void applyPlannerPatch(const msg::PlannerConfigPatch& patch) {
     msg::PlannerConfig merged = plannerConfig_;
     if (patch.min_speed.has) merged.min_speed = patch.min_speed.val;
     if (patch.heading_kp.has) merged.heading_kp = patch.heading_kp.val;
     if (patch.heading_kd.has) merged.heading_kd = patch.heading_kd.val;
-    if (patch.v_wheel_max.has) merged.v_wheel_max = patch.v_wheel_max.val;
-    if (patch.steer_headroom.has) merged.steer_headroom = patch.steer_headroom.val;
-    if (patch.wheel_step_max.has) merged.wheel_step_max = patch.wheel_step_max.val;
-    if (patch.track_k_s.has) merged.track_k_s = patch.track_k_s.val;
-    if (patch.track_k_theta.has) merged.track_k_theta = patch.track_k_theta.val;
-    if (patch.track_k_cross.has) merged.track_k_cross = patch.track_k_cross.val;
-    if (patch.trim_v_max.has) merged.trim_v_max = patch.trim_v_max.val;
-    if (patch.trim_omega_max.has) merged.trim_omega_max = patch.trim_omega_max.val;
-    if (patch.replan_err_pos.has) merged.replan_err_pos = patch.replan_err_pos.val;
-    if (patch.replan_err_theta.has) merged.replan_err_theta = patch.replan_err_theta.val;
-    if (patch.replan_hold.has) merged.replan_hold = patch.replan_hold.val;
-    if (patch.replan_min_period.has) merged.replan_min_period = patch.replan_min_period.val;
-    if (patch.replan_max.has) merged.replan_max = patch.replan_max.val;
-    if (patch.handoff_tol_pos.has) merged.handoff_tol_pos = patch.handoff_tol_pos.val;
-    if (patch.handoff_tol_v.has) merged.handoff_tol_v = patch.handoff_tol_v.val;
-    if (patch.arrive_vel_tol.has) merged.arrive_vel_tol = patch.arrive_vel_tol.val;
     if (patch.arrive_dwell.has) merged.arrive_dwell = patch.arrive_dwell.val;
 
     executor_.configure(merged);
@@ -155,7 +158,11 @@ class Pilot {
   // values ([ms], the loop's own markTime()); the very first call after
   // construction has no prior `now` to diff against and contributes dt=0
   // (a single zero-length sample -- harmless, JerkTrajectory::sample(0)
-  // just returns the seed state).
+  // just returns the seed state). On a natural running->idle transition
+  // happening INSIDE this call, stages a zero twist exactly once instead
+  // of leaving Drive holding the previous cycle's stale twist -- see this
+  // file's own header comment for the full contract (111-003) and why a
+  // same-cycle flush is unaffected.
   //
   // The PD cascade itself: `omega = twist.omega [omega_ff] +
   // heading_kp*(twist.thetaRef - twist.thetaMeas) + heading_kd*(twist.

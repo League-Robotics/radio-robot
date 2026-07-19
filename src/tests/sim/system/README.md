@@ -56,6 +56,22 @@ notes.
   direct proof the divergence bug (left encoder freezes, right runs away
   under an arbitrary twist stream) that motivated this whole sprint is
   gone.
+- **`behavior_lock_harness.cpp` / `test_behavior_lock.py`** (111-001,
+  SUC-001) — the motion-control terminal-blips arc's own Step 0 numeric
+  behavior-lock acceptance instrument: drives a D700 `kArc` straight and a
+  360deg `kPivot` to completion, captures the decoded per-cycle
+  `Telemetry::Frame.velLeft`/`velRight` trace, numerically differentiates
+  it into accel/jerk, and asserts velocity/accel/jerk bounds (read live
+  from the harness's own `msg::PlannerConfig`, via the new
+  `SimHarness::plannerConfig()` accessor -- never a hand-duplicated
+  numeric limit), single-lobe shape, and a separately-named "no nonzero
+  command survives past the terminal zero" check. Every currently-failing
+  assertion is `xfail(strict=False)`, citing
+  `clasi/issues/motion-control-terminal-blips-reconciled-fix-plan.md` --
+  sprint 2 flips them to passing as it deletes the lead-sampling/terminal
+  patch stack. A same-boot scenario (ONE `SimHarness`, no reboot) drives 40
+  consecutive alternating straight/pivot moves, targeting the driving
+  issue's own Sec1.8/F7 stale-executor-state finding.
 
 ## Running
 

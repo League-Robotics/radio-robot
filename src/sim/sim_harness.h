@@ -216,6 +216,30 @@ class SimHarness {
   // telemetry.
   bool headingSourceIsOtos() const { return pilot_.headingSourceIsOtos(); }
 
+  // plannerConfig -- 111-001 test-only accessor exposing the live
+  // msg::PlannerConfig baseline this harness was configured with
+  // (Pilot::plannerConfig(), itself derived from this class's own
+  // makeExecutorConfig()). Lets a test read REAL configured limits
+  // (a_max/a_decel/v_body_max/j_max/yaw_acc_max/yaw_rate_max/yaw_jerk_max)
+  // instead of hand-duplicating numeric bounds that could silently drift
+  // from makeExecutorConfig()'s own values -- see behavior_lock_harness.cpp.
+  const msg::PlannerConfig& plannerConfig() const { return pilot_.plannerConfig(); }
+
+  // driveTargetVelLeft/driveTargetVelRight -- 111-003 test-only accessors
+  // exposing the STAGED PID-target velocity (Devices::Motor::
+  // velocityTarget(), the value last written by App::Drive::tick()'s own
+  // setVelocity() call), NOT the measured/decoded telemetry velocity. Used
+  // by behavior_lock_harness.cpp's measureShelfCycles() to measure the
+  // post-completion "shelf" directly: the ideal sim's terminal decel
+  // already drives the MEASURED wheel velocity near zero by the time a
+  // command completes, so a stale nonzero COMMAND held for the ~300ms
+  // deadman-lease window is invisible in the measured trace (see ticket
+  // 003's own completion notes); the commanded target only reads EXACTLY
+  // 0.0f once something explicitly stages a zero twist, which is exactly
+  // the behavior ticket 003's fix changes the TIMING of.
+  float driveTargetVelLeft() const { return armorL_.velocityTarget(); }    // [mm/s] signed
+  float driveTargetVelRight() const { return armorR_.velocityTarget(); }  // [mm/s] signed
+
   // debugHeadingLead -- 109-010 diagnostic-only accessor (temporary
   // instrumentation, mirrors this sprint's own precedent of ad hoc trace
   // instrumentation during characterization -- see ticket 009's own

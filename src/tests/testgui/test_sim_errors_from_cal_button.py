@@ -309,6 +309,20 @@ class TestSimErrorsFromCalSamePath:
             def apply_error_profile(self, profile: dict) -> None:
                 applied.append(profile)
 
+            def firmware_version(self) -> "str | None":
+                # 111-002: _on_connect() (__main__.py) unconditionally calls
+                # transport.firmware_version() on every isinstance(transport,
+                # SimTransport) connect (commit 67792cab, "add firmware
+                # version retrieval to SimTransport") to show the loaded sim
+                # lib's own version -- the real SimTransport.firmware_version()
+                # this fake stands in for. An AttributeError here (this
+                # method absent) aborted _on_connect() before it reached
+                # `_state["transport"] = transport`, so the Apply/From-Cal
+                # button handlers below found no connected transport and
+                # never called apply_error_profile() at all -- the actual
+                # prior failure mode, not a missing button wiring.
+                return "test-fake"
+
         FakeConnectedSimTransport.__name__ = "SimTransport"
         FakeConnectedSimTransport.__qualname__ = "SimTransport"
 
