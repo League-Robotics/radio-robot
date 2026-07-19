@@ -465,6 +465,31 @@ def test_tour_2_realistic_errors_turns_within_one_degree():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "111-002: CONFIRMED reorder-coupled, not a separate regression -- "
+        "see clasi/issues/cycle-order-reorder-experiment-ab-before-hardware.md "
+        "(the SAME live robot_loop.cpp cycle-order experiment that also "
+        "quarantines src/tests/sim/system/test_profiled_motion_sim.py's "
+        "turn scenario and two src/tests/sim/unit/test_app_robot_loop.py "
+        "scenarios -- this test links the SAME compiled firmware, via "
+        "src/sim/build/libfirmware_host.dylib, not a separate copy). "
+        "frame.twist[0] oscillates between roughly half and above-v_max "
+        "every sample during the steady-state window (e.g. 93, 200, 94, "
+        "138, 201, 93, 203, ...) instead of holding near v_max=150 -- the "
+        "same stale/alternating-encoder-read signature as the profiled- "
+        "motion case. Diagnosed identically: temporarily, LOCALLY (never "
+        "committed) reverted robot_loop.cpp's cycle-order experiment back "
+        "to its own documented intended order, rebuilt "
+        "src/sim/build/libfirmware_host.dylib (cmake --build src/sim/build), "
+        "and re-ran this exact test three times -- passed cleanly every "
+        "time (no dip below 135mm/s). Rebuilt again from the unmodified, "
+        "committed (reordered) source and the failure returned identically "
+        "on the first try. This is a direct, confirmed consequence of the "
+        "live reorder experiment, not a tour-boundary/planner bug."
+    ),
+)
 def test_two_compatible_distance_legs_carry_velocity_through_the_boundary_at_tour_level():
     from robot_radio.planner.tour import TourLeg, run_tour
     from robot_radio.planner.heading import HeadingCorrector

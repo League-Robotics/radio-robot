@@ -253,14 +253,28 @@ void scenarioDeadmanExpiryStopsPlant() {
 // 5. Virtual-cycle-timing diagnostic (105-004 AC #3) -- PROMOTED (106-001
 //    AC #2) from an observational report to a hard pass/fail regression
 //    assertion on the schedule's own NUMBERS: a future change that re-adds
-//    105-004's diagnosed defect (the three settle/clearance windows
-//    stacking additively under the final pace block instead of being
-//    absorbed into kCycle's stated total) fails this checkTrue -- and
-//    therefore fails `uv run python -m pytest` -- not just a future bench
-//    session. The expected numbers below are 106-001's retargeted ~25 Hz
-//    (~40ms) schedule (robot_loop.cpp's own kSettle/kClear/kCycle/kPace),
-//    not the pre-106-001 16ms-target/28ms-virtual figures this same
-//    assertion used to lock in.
+//    105-004's diagnosed defect (the settle/clearance windows stacking
+//    additively under the final pace block instead of being absorbed into
+//    kCycle's stated total) fails this checkTrue -- and therefore fails
+//    `uv run python -m pytest` -- not just a future bench session.
+//
+//    The expected numbers below mirror robot_loop.cpp's OWN current
+//    kSettle/kClear/kCycle/kPace (anonymous-namespace/internal-linkage, not
+//    importable -- duplicated here per this codebase's established
+//    per-file fixture-duplication convention; see the coding-standards
+//    rule's "grep-ability" rationale for why this file keeps its own
+//    copy rather than reaching into robot_loop.cpp's internals).
+//    111-002 (2026-07-19): retargeted from 106-001's kSettle=kClear=4/
+//    kCycle=40/kPace=28 to the CURRENT tree's kSettle=kClear=0/kCycle=20/
+//    kPace=20 -- these three numbers drifted out from under this
+//    hardcoded assertion sometime after 106-001 landed (kCycle's own
+//    robot_loop.cpp doc comment still claims "~40ms, matching
+//    Telemetry::kPrimaryPeriod=40ms", which is now FALSE -- kPrimaryPeriod
+//    is still 40 while kCycle is 20; see
+//    clasi/issues/kcycle-kprimaryperiod-mismatch.md, filed alongside this
+//    fix, not resolved by it). Whoever next changes robot_loop.cpp's
+//    timing constants must update these four to match, the same way any
+//    other duplicated-constant fixture in this codebase does.
 // ===========================================================================
 
 void scenarioVirtualCycleTimingDiagnostic() {
@@ -271,9 +285,10 @@ void scenarioVirtualCycleTimingDiagnostic() {
 
   // Reproduces the deleted SimApi::measureOneCycle()'s own deltas directly
   // off Devices::Sleeper (sim.sleeper(), added to SimHarness by this
-  // ticket) -- same formula as the original CycleTimingReport: 3 non-final
-  // 4ms settle/clear blocks (robot_loop.cpp's own kSettle/kClear) plus the
-  // observed final pace block equal the whole cycle's virtual schedule.
+  // ticket) -- same formula as the original CycleTimingReport: the three
+  // non-final settle/clear blocks (robot_loop.cpp's own kSettle/kClear,
+  // duplicated below) plus the observed final pace block equal the whole
+  // cycle's virtual schedule.
   TestSim::SimSleeper& sleeper = sim.sleeper();
   int sleepsBefore = sleeper.sleepCount();
   int yieldsBefore = sleeper.yieldCount();
@@ -283,26 +298,32 @@ void scenarioVirtualCycleTimingDiagnostic() {
   int sleepCount = sleeper.sleepCount() - sleepsBefore;
   uint32_t lastSleepMillis = sleeper.lastSleepMillis();
   int yieldCount = sleeper.yieldCount() - yieldsBefore;
-  constexpr uint32_t kNonFinalBlockMillis = 4;
-  uint32_t virtualCycleMillis = 3 * kNonFinalBlockMillis + lastSleepMillis;
+  // robot_loop.cpp's own current kSettle/kClear/kCycle/kPace (see this
+  // scenario's own file-header comment above for the duplication
+  // rationale and the 111-002 retarget note).
+  constexpr uint32_t kSettle = 0;  // [ms] mirrors robot_loop.cpp's own kSettle
+  constexpr uint32_t kClear = 0;   // [ms] mirrors robot_loop.cpp's own kClear
+  constexpr uint32_t kCycle = 20;  // [ms] mirrors robot_loop.cpp's own kCycle
+  constexpr uint32_t kWindows = 2 * kSettle + kClear;  // [ms] the 3 settle/clear blocks' own total
+  constexpr uint32_t kPace = kCycle - kWindows;        // [ms] mirrors robot_loop.cpp's own kPace
+  uint32_t virtualCycleMillis = kWindows + lastSleepMillis;
 
   checkTrue(sleepCount == 4,
             "exactly 4 Sleeper::sleepMillis() calls per cycle() (3 runAndWait blocks + final pace block)");
-  checkTrue(lastSleepMillis == 28,
-            "the final (perception+odometry+pace) block requests exactly kPace=28ms "
-            "(kCycle=40ms minus the 12ms already consumed by the 3 settle/clear windows -- "
-            "NOT a fresh, unabsorbed kCycle=40ms on top of them)");
+  checkTrue(lastSleepMillis == kPace,
+            "the final (perception+odometry+pace) block requests exactly kPace=20ms "
+            "(kCycle=20ms minus the 0ms already consumed by the 3 settle/clear windows -- "
+            "NOT a fresh, unabsorbed kCycle=20ms on top of them)");
   checkTrue(yieldCount == 0, "RobotLoop::cycle() never calls Sleeper::yield() directly");
-  checkTrue(virtualCycleMillis == 40,
-            "derived total virtual schedule == 3*4ms (settle/clear/settle) + 28ms (pace) == 40ms == kCycle -- "
-            "proves the three windows are absorbed into the retargeted 40ms budget, not additive on top of "
-            "it (106-001; pre-fix this was 28ms > the old kCycle=16ms target)");
+  checkTrue(virtualCycleMillis == kCycle,
+            "derived total virtual schedule == 0ms (settle/clear/settle) + 20ms (pace) == 20ms == kCycle -- "
+            "proves the three windows are absorbed into the retargeted 20ms budget, not additive on top of "
+            "it (106-001)");
 
   std::printf(
       "  TIMING: sleepCount=%d lastSleepMillis=%ums yieldCount=%d virtualCycleMillis=%ums "
-      "(== kCycle=40ms/~25Hz design target, retargeted 106-001 from the unachievable 16ms/28ms-virtual "
-      "pre-fix figures -- see this ticket's completion notes for the bench-measured real-hardware "
-      "reconciliation against sprint 104's ~36ms and the ack-ring issue's ~72ms/13.87Hz)\n",
+      "(== kCycle=20ms/~50Hz design target -- see this scenario's own file-header comment for the "
+      "111-002 retarget from 106-001's kCycle=40ms figures)\n",
       sleepCount, static_cast<unsigned>(lastSleepMillis), yieldCount, static_cast<unsigned>(virtualCycleMillis));
 }
 

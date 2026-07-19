@@ -90,11 +90,32 @@ void checkFloatEq(float actual, float expected, const std::string& what,
 
 // --- Devices::NezhaMotor / Devices::Otos fixture helpers --------------------
 
+// wheelTravelCalib [mm/deg]: the INVERSE of sim_plant.cpp's own
+// kEncoderCountsPerMm (1.4187f, "counts = mm * 360/(pi*80.77) for the tovez
+// wheel") -- duplicated here per this codebase's established per-file
+// fixture-duplication convention (kEncoderCountsPerMm has internal linkage,
+// not importable). sim_plant.cpp's handleMotorRead() now packs the
+// simulated 0x46 encoder register as raw motor-shaft-degree COUNTS (matching
+// the real Nezha register semantics), not bare millimetres -- NezhaMotor's
+// own tick() decodes counts back to mm via `wheelTravelCalib`, exactly like
+// a real robot's own per-wheel calibration. 1.0f (this fixture's own
+// original value, from before commit 172a429d fixed handleMotorRead() to
+// pack real counts instead of bare mm) was only lossless while the plant
+// still packed raw mm; leaving it at 1.0f after that fix makes every
+// position/velocity this harness reads through
+// NezhaMotor/Odometry over-report by 1.4187x relative to WheelPlant's own
+// ground truth (the scale mismatch that broke this file's own
+// "OtosPlant tracks Odometry closely" pivot assertion -- OtosPlant reads
+// WheelPlant's true position directly, bypassing this encoding entirely).
+// Matching it here restores the round-trip a properly calibrated real robot
+// gets for free.
+constexpr float kWheelTravelCalib = 1.0f / 1.4187f;  // [mm/deg]
+
 Devices::MotorConfig baseMotorConfig(uint32_t port) {
   Devices::MotorConfig cfg;
   cfg.port = port;
   cfg.fwdSign = 1;
-  cfg.wheelTravelCalib = 1.0f;
+  cfg.wheelTravelCalib = kWheelTravelCalib;
   cfg.velFiltAlpha = 1.0f;
   return cfg;
 }

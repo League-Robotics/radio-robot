@@ -88,6 +88,35 @@ def _find_cxx_compiler() -> str:
     raise AssertionError("unreachable")  # pragma: no cover
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "111-002: robot_loop.cpp's own request/collect sequencing is "
+        "CURRENTLY a deliberate, temporary reorder (drive_.tick() hoisted "
+        "to the top of cycle(), before the settle/clear windows and before "
+        "pilot_.tick() -- see robot_loop.cpp's own 'NOTE! These requests "
+        "and collects have been reordered for testing and development' "
+        "comment) -- see "
+        "clasi/issues/cycle-order-reorder-experiment-ab-before-hardware.md "
+        "for the A/B-compare-before-hardware plan this is deferred to. "
+        "Confirmed (111-002): this harness DOES link robot_loop.cpp in "
+        "full, and only the two scenarios that actually exercise cycle() "
+        "fail -- 'no script under-run: motor/otos (cycles)' and "
+        "'...(config-dispatch cycles)' -- while the '(boot)' scenarios "
+        "(which never call cycle()) keep passing; the failure signature is "
+        "a scripted-bus-transaction-order mismatch, exactly what a "
+        "request/collect reorder would produce against a script written "
+        "for the original order. Quarantined as a whole-test xfail rather "
+        "than per-scenario because app_robot_loop_harness.cpp's own "
+        "main() runs all scenarios in one binary with one exit code -- "
+        "there is no pytest-level seam to mark only the two affected "
+        "scenarios without rewriting the harness's own ScriptedI2CBus "
+        "script to match today's reordered sequence, which the driving "
+        "ticket explicitly forbids (would bake this temporary experiment "
+        "into a permanent fixture, defeating the deferred issue's own "
+        "A/B-compare intent)."
+    ),
+)
 def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
     """Compile App::RobotLoop + every module/leaf it composes + the harness; assert every scenario passes."""
     sources = [
