@@ -123,20 +123,6 @@ constexpr float kTopUpMeasuredRestVelocity = 5.0f;   // [mm/s]
 constexpr float kStraightLeadBias = 1.5f;      // [mm]
 constexpr float kStraightLeadSlope = 0.102f;   // [mm per mm/s] == [s]
 
-// Pivot overshoot-compensation lead (2026-07-18 "Option B" turn feedforward):
-// a pivot's big hump OVERSHOOTS the target -- the plant reaches it still
-// carrying angular velocity and coasts past (measured mean ~1.6deg per rad/s
-// of cruise rate at the shipped plan_lead). The velocity lead brakes the
-// turn earlier; scaling EXTRA lead with the cruise rate (rotationalCeiling_)
-// cancels the rate-dependent bulk of that overshoot as pure FEEDFORWARD --
-// it touches only the peek()'d velocity reference, never thetaRef or
-// completion (those stay on the true target), so it lands the big hump ~on
-// target WITHOUT the ring. The residual (the angle-dependent "wave" a single
-// slope can't hold) is left to the heading PD / dwell TRIM, which then does
-// far less work -- a small nudge instead of the full ~14deg ring. Sim-fit
-// slope; a hardware sweep would replace it (calibration, like plan_lead).
-constexpr float kPivotOvershootLeadSlope = 0.009f;   // [s per rad/s]
-
 constexpr float kPi = 3.14159265358979323846f;
 
 // wrapAngle -- normalize to (-pi, pi], the same convention Devices::Otos's
@@ -185,7 +171,6 @@ void Executor::configure(const msg::PlannerConfig& config) {
   headingDwellRate_ = config.heading_dwell_rate;
   headingDwellHoldS_ = config.arrive_dwell;
 
-  planLeadS_ = config.plan_lead;          // [s] 109-010 locus 2
   terminalLeadS_ = config.terminal_lead;  // [s] 109-010 locus 3
 }
 
@@ -870,59 +855,25 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
       (mode_ == Mode::kArc) ? (linearFrameOffset_ + linSample.position)
                              : (rotationalFrameOffset_ + rotSample.position);
 
-  // 109-010 locus 2: the WHEEL-VELOCITY REFERENCE (out.v/omegaFf below,
-  // what App::Pilot ultimately hands Drive::setTwist()) is evaluated
-  // `planLeadS_` further into the SAME held trajectory via peek() -- a
-  // closed-form sample, never a second solve (JerkTrajectory::peek()'s own
-  // doc comment) -- so the commanded velocity already anticipates the
-  // actuation-transport delay between "Executor computed a reference" and
-  // "the wheel physically moves at it". This does NOT touch thetaRef/
-  // plannedPositionSinceActivation above (POSITION tracking, completion,
-  // and checkDivergence() all still compare against the CURRENT elapsed
-  // sample, unchanged) -- only the velocity handed downstream is led.
-  // planLeadS_ == 0.0f (the shipped default absent a fitted value) makes
-  // peek(elapsed + 0) read back exactly linSample/rotSample.velocity, a
-  // no-op.
-  // Lead only profiles long enough to survive it (2026-07-18): peeking
-  // `planLeadS_` ahead in a profile SHORTER than ~2x the lead reads the
-  // profile's own end state (velocity ~0) for most/all of its life -- a
-  // terminal top-up's own ~0.25s mini-profile under a 0.2s lead commanded
-  // nothing at all, stalling the shortfall correction until the STOP_TIME
-  // backstop (observed: D700 TIMEOUT at 695mm). Short profiles run
-  // un-led; their absolute lag error is tiny by construction.
-  // ... and ramp the lead IN over the first planLeadS_ of a command
-  // (min(lead, elapsed)): a full lead at t=0 starts the commanded trace
-  // partway up the ramp -- an instantaneous velocity step (caught by the
-  // heading-source harness's jerk-bounded-trace assertion). Growing the
-  // lead 1:1 with elapsed keeps the command continuous from zero (the
-  // first phase runs at up to 2x the planned slope, a steeper ramp, not a
-  // step) and reaches full lag cancellation by mid-profile, where the
-  // terminal behavior actually needs it.
-  float linLead = (linear_.duration() > 2.0f * planLeadS_)
-                      ? std::min(planLeadS_, linearElapsedS_)
-                      : 0.0f;
-  // Pivot overshoot-compensation feedforward (see kPivotOvershootLeadSlope):
-  // a pivot gets EXTRA velocity-lead scaled to its cruise rate so the big
-  // hump lands ~on target on its own; the heading PD/dwell then only trims
-  // the small residual. Only pivots overshoot this way (rotational-dominant);
-  // a kArc's rotational channel is slaved to its linear profile, so it keeps
-  // the base lead.
-  float rotTargetLead = planLeadS_;
-  if (mode_ == Mode::kPivot) rotTargetLead += kPivotOvershootLeadSlope * rotationalCeiling_;
-  float rotLead = (rotational_.duration() > 2.0f * rotTargetLead)
-                      ? std::min(rotTargetLead, rotationalElapsedS_)
-                      : 0.0f;
-  JerkTrajectory::State linSampleLead = linear_.peek(linearElapsedS_ + linLead);
-  JerkTrajectory::State rotSampleLead = rotational_.peek(rotationalElapsedS_ + rotLead);
-
+  // 112-001: 109-010 locus 2 (the peek(elapsed + plan_lead) wheel-velocity
+  // reference, plus the pivot-only kPivotOvershootLeadSlope extra lead) is
+  // DELETED -- F2's jerk-warp bug: peeking at `elapsed + lead` evaluates
+  // the reference at `2t` during the ramp-in, doubling commanded
+  // acceleration and quadrupling commanded jerk right at Move activation.
+  // out.v/omegaFf are now the same-instant sample() result already
+  // computed above (linSample/rotSample) -- honest sampling, no peek()
+  // ahead. thetaRef/plannedPositionSinceActivation were never touched by
+  // the deleted lead (they always used the current elapsed sample) and are
+  // unaffected by this deletion. See motion/DESIGN.md sec 2c for the
+  // updated locus-2 write-up.
   if (mode_ == Mode::kArc) {
-    out.v = linSampleLead.velocity;
+    out.v = linSample.velocity;
     thetaRef = headingRatioPerMm_ * plannedPositionSinceActivation;
-    omegaFf = headingRatioPerMm_ * linSampleLead.velocity;
+    omegaFf = headingRatioPerMm_ * linSample.velocity;
   } else {
     out.v = 0.0f;
     thetaRef = plannedPositionSinceActivation;
-    omegaFf = rotSampleLead.velocity;
+    omegaFf = rotSample.velocity;
   }
 
   // -- Completion + the terminal-decel PD gate (both need the SAME

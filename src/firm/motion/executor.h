@@ -545,10 +545,14 @@ class Executor {
   float headingDwellRate_ = 0.0f;  // [rad/s] msg::PlannerConfig.heading_dwell_rate
   float headingDwellHoldS_ = 0.0f; // [s] msg::PlannerConfig.arrive_dwell (REUSED, see file header)
 
-  // -- 109-010: lead-compensation loci 2/3, see planner.proto's own
-  // plan_lead/terminal_lead doc comments and this file's tick()/plan()
-  // implementation comments for where each is applied. --
-  float planLeadS_ = 0.0f;      // [s] msg::PlannerConfig.plan_lead (locus 2)
+  // -- 109-010: lead-compensation locus 3 (locus 2, the plan_lead
+  // wheel-velocity-reference peek(), was DELETED by 112-001 -- F2's
+  // jerk-warp bug, sampling at `elapsed + lead` evaluating the reference
+  // at `2t`; `out.v`/`omegaFf` are now always the same-instant sample().
+  // `plan_lead` itself stays a DECLARED msg::PlannerConfig field -- schema
+  // cleanup is a future ticket, see motion/DESIGN.md sec 2c). See
+  // planner.proto's own terminal_lead doc comment and this file's tick()
+  // implementation comment for where locus 3 is applied. --
   float terminalLeadS_ = 0.0f;  // [s] msg::PlannerConfig.terminal_lead (locus 3)
 
   // -- 109-006: boundary-velocity carry + divergence replan --

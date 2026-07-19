@@ -607,7 +607,15 @@ observed mid-pivot.
 
 **Three lead-compensation loci** (`msg::PlannerConfig`'s own
 `heading_lead_bias`/`plan_lead`/`terminal_lead`, each an independent `[s]`
-tunable — planner.proto's own field comments carry the same writeup):
+tunable — planner.proto's own field comments carry the same writeup). Only
+locus 2 is 112-001's own scope: locus 1 (`heading_lead_bias`,
+`App::HeadingSource::headingLead()`) is out of scope for sprint 112 in its
+entirety — its shipped default already neutralizes the projection
+(zero regression, not a live contributor to either terminal blip; see
+sprint 112's own `sprint.md` Out of Scope) — and locus 3 (`terminal_lead`,
+the dwell gate's predicted-state stop decision) is ticket 004's scope, not
+this ticket's — both stay exactly as documented below, untouched by
+112-001:
 
 1. **Measurement-age projection (`App::HeadingSource::headingLead()`,
    heading_source.{h,cpp})** — `theta_est = theta_meas + omega_meas * age`,
@@ -621,14 +629,26 @@ tunable — planner.proto's own field comments carry the same writeup):
    (`thetaRef - thetaMeasLead`) uses the LED value; `Motion::Executor`'s
    own dwell/divergence bookkeeping continues to use the RAW `thetaMeas`
    unchanged.
-2. **Plan-lead on the wheel-velocity reference (`Motion::Executor::
-   tick()`, executor.cpp)** — the dominant channel's own
-   `JerkTrajectory::peek(elapsed + plan_lead)` (a closed-form sample,
-   `peek()` already existed for exactly this — NOT a second solve; `kPace`'s
-   `<=1 solve/cycle` budget is untouched) replaces `sample()`'s own velocity
-   for `out.v`/`omegaFf` ONLY — `thetaRef`/`plannedPositionSinceActivation`
-   (position tracking, completion, `checkDivergence()`) stay on the
-   CURRENT (un-led) sample.
+2. **DELETED (112-001) — plan-lead on the wheel-velocity reference.** This
+   locus used to replace `sample()`'s own velocity for `out.v`/`omegaFf`
+   with `JerkTrajectory::peek(elapsed + plan_lead)` (plus, pivot-only, an
+   extra `kPivotOvershootLeadSlope`-scaled lead) in `Motion::Executor::
+   tick()`. Sprint 112's reconciled fix plan (finding F2) diagnosed this as
+   a jerk-warp bug: peeking at `elapsed + lead` evaluates the reference at
+   `2t` during a command's ramp-in, doubling commanded acceleration and
+   quadrupling commanded jerk right at Move activation — measured directly
+   by `test_behavior_lock.py`'s `test_straight_ramp_bounds`/
+   `test_pivot_ramp_bounds`. 112-001 deleted the peek-ahead block, the
+   `kPivotOvershootLeadSlope` constant, and the `Executor::planLeadS_`
+   member/its `configure()` assignment — `out.v`/`omegaFf` are now always
+   the same-instant `sample()` result. `msg::PlannerConfig.plan_lead`
+   itself stays a DECLARED (not `reserved`) wire field — schema cleanup
+   (removing `plan_lead`/`terminal_lead`/`min_speed` from `planner.proto`)
+   is a deferred future ticket, not this one (sprint 112's own Design
+   Rationale Decision 7). `thetaRef`/`plannedPositionSinceActivation`
+   (position tracking, completion, `checkDivergence()`) were never on this
+   locus at all — they always used the current elapsed sample — and are
+   unaffected by this deletion.
 3. **Predicted-state terminal/stop decision (`Motion::Executor::tick()`,
    executor.cpp)** — the dwell gate's own tolerance test uses
    `thetaErrLead = deltaHeading - (thetaMeasRel + thetaRate * terminal_lead)`
