@@ -1,9 +1,13 @@
 ---
 id: '002'
 title: SimHarness additive config-load surface + sim_ctypes.cpp exports
-status: open
-use-cases: [SUC-001, SUC-002, SUC-005]
-depends-on: ['001']
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-005
+depends-on:
+- '001'
 github-issue: ''
 issue: config-as-truth-sim-configure-on-open.md
 completes_issue: false
@@ -47,7 +51,7 @@ after `sim_create()` returns, before injecting any twist/move.
 
 ## Acceptance Criteria
 
-- [ ] `SimHarness` gains a public `void configurePlanner(const
+- [x] `SimHarness` gains a public `void configurePlanner(const
       msg::PlannerConfig& cfg)` that calls `executor_.configure(cfg);
       headingSource_.configure(cfg); drive_.configure(cfg);
       pilot_.configureHeading(cfg);` — the identical 4-call fan-out the
@@ -64,19 +68,31 @@ after `sim_create()` returns, before injecting any twist/move.
       `configurePlanner()` set. Preserve each hook's existing public
       signature and behavior when `configurePlanner()` was never called
       (regression: existing callers of these three hooks must be unaffected).
-- [ ] `SimHarness` gains a public `void configureMotor(uint32_t port, const
+- [x] `SimHarness` gains a public `void configureMotor(uint32_t port, const
       Devices::MotorConfig& cfg)` that calls `armorL_.configure(cfg)` or
       `armorR_.configure(cfg)` depending on `port` (1=left, 2=right, matching
       every other port-keyed convention in this file — see
       `setEncScaleErr()`/`setEncTickQuant()` for the precedent).
-- [ ] A test-only readback is added for verification (ticket 007 needs this):
+- [x] A test-only readback is added for verification (ticket 007 needs this):
       either a `const msg::PlannerConfig& plannerConfig() const` accessor
       exposing what `configurePlanner()` last set (note: `SimHarness`
       already exposes this indirectly via `pilotQueueDepth()`-style
       forwarding to `pilot_.plannerConfig()` — reuse/extend that existing
       forwarding rather than adding a parallel copy) — or a small snapshot
       dump. Choose whichever is less code; document the choice.
-- [ ] `sim_ctypes.cpp` gains `sim_configure_planner(SimHandle h, <one float
+      **Implemented as:** reused the existing `plannerConfig()` forwarding
+      (zero new code) for the planner side, since `Pilot::configureHeading()`
+      already does a full-struct `plannerConfig_ = config;` copy — verified
+      by research that this reflects every field, not just the ones Pilot's
+      own arithmetic reads. Added a new, separate `motorConfig(uint32_t
+      port)` snapshot accessor for the motor side (backed by new
+      `lastMotorConfigL_`/`lastMotorConfigR_` members), because
+      `Devices::MotorArmor`/`NezhaMotor` store no full `MotorConfig` copy of
+      their own to forward to (`MotorArmor::configure()` only caches one
+      derived field, `motionThreshold_`, from `outputDeadband` — confirmed
+      by reading `motor_armor.h`/`nezha_motor.h`/`motor.h`) — a parallel
+      snapshot was the only option for that half.
+- [x] `sim_ctypes.cpp` gains `sim_configure_planner(SimHandle h, <one float
       arg per msg::PlannerConfig field this sprint's Tier 2 covers: a_max,
       a_decel, v_body_max, yaw_rate_max, yaw_acc_max, j_max, yaw_jerk_max,
       min_speed, heading_kp, heading_kd, arrive_dwell, heading_source (int),
@@ -89,7 +105,7 @@ after `sim_create()` returns, before injecting any twist/move.
       export and its doc comment enumerating the export list addition,
       matching `sim_ctypes.cpp`'s own header-comment convention of listing
       every export).
-- [ ] `sim_ctypes.cpp` gains `sim_configure_motor(SimHandle h, int port,
+- [x] `sim_ctypes.cpp` gains `sim_configure_motor(SimHandle h, int port,
       float velFiltAlpha, int fwdSign)` — the two `Devices::MotorConfig`
       fields with no live wire arm (`vel_filt`, `fwd_sign` — everything else
       motor-related, `travel_calib`/PID gains, stays on the existing Tier-1
@@ -99,7 +115,20 @@ after `sim_create()` returns, before injecting any twist/move.
       exists, so this call doesn't clobber values Tier 1 already pushed —
       mirrors `RobotLoop::handleConfig()`'s own "merge, don't clobber"
       convention for `MotorConfigPatch`) and calls `configureMotor()`.
-- [ ] A small new C++ test (new file under `src/tests/sim/unit/`, e.g.
+      **Implementation note:** research confirmed only `velGains` has a
+      live, existing accessor (`NezhaMotor::gains()`); `wheelTravelCalib`
+      and `slewRate` have no getter anywhere on `Motor`/`MotorArmor`/
+      `NezhaMotor` today. `sim_configure_motor()` merges `velGains` live
+      (read via `motorLeft()/motorRight().gains()`) and leaves
+      `wheelTravelCalib`/`slewRate` at `MotorConfig{}`'s zero defaults —
+      documented in the code as behaviorally inert either way, because
+      `MotorArmor::configure()` (the only consumer `configureMotor()`
+      calls) reads exclusively `outputDeadband` and ignores every other
+      `MotorConfig` field, including these two, regardless of what value
+      they carry. No new getters were added (out of this ticket's file
+      scope: `motor_armor.h`/`nezha_motor.h`/`motor.h` are not in "Files to
+      touch").
+- [x] A small new C++ test (new file under `src/tests/sim/unit/`, e.g.
       `sim_harness_configure_harness.cpp` + `test_sim_harness_configure.py`,
       matching the existing `_harness.cpp`/`test_*.py` pairing convention)
       constructs a default `SimHarness`, calls `configurePlanner()`/
@@ -107,7 +136,7 @@ after `sim_create()` returns, before injecting any twist/move.
       defaults, and asserts (via the new readback) that they took effect —
       proving the additive surface works in isolation, without touching any
       existing harness file.
-- [ ] None of the ~40 existing files under `src/tests/sim/unit/` or
+- [x] None of the ~40 existing files under `src/tests/sim/unit/` or
       `src/tests/sim/system/` are modified by this ticket.
 
 ## Testing
