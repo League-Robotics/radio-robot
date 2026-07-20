@@ -143,7 +143,7 @@ import pathlib
 import sys
 import threading
 import time
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from robot_radio.io.serial_conn import SerialConnection, list_serial_ports
 from robot_radio.io.sim_config import SimConfigConn as _SimConfigConn
@@ -152,6 +152,9 @@ from robot_radio.robot import protocol
 from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
 from robot_radio.testgui import binary_bridge
 from robot_radio.testgui import sim_prefs
+
+if TYPE_CHECKING:
+    from robot_radio.config.robot_config import RobotConfig
 
 _log = logging.getLogger(__name__)
 
@@ -389,11 +392,20 @@ class Transport(abc.ABC):
     # ------------------------------------------------------------------
 
     @abc.abstractmethod
-    def connect(self) -> None:
+    def connect(self, *, robot_config: "RobotConfig | None" = None) -> None:
         """Open connection and start background threads.
 
         Must be idempotent — calling connect() on an already-connected
         transport is a no-op.
+
+        ``robot_config`` (113-006): the active robot's config, for backends
+        that configure themselves from it as part of connecting (currently
+        only ``SimTransport`` — see that class's own ``connect()``
+        docstring). ``None`` (the default) lets the backend resolve its own
+        notion of "active" if it has one; hardware backends ignore this
+        parameter entirely (see ``_HardwareTransport.connect()``'s own
+        docstring) since a real robot's boot-time config comes from its own
+        reflash, not from a host-side push.
         """
 
     @abc.abstractmethod
@@ -519,8 +531,15 @@ class _HardwareTransport(Transport):
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def connect(self) -> None:
-        """Open serial connection and start reader + truth threads."""
+    def connect(self, *, robot_config: "RobotConfig | None" = None) -> None:
+        """Open serial connection and start reader + truth threads.
+
+        ``robot_config`` (113-006): accepted for ``Transport`` ABC
+        signature parity, but ignored here — a real robot's boot-time
+        config comes from its own compiled reflash (``gen_boot_config.py``),
+        not from a host-side push on connect. ``No behavior change for
+        hardware transports`` is this ticket's own explicit constraint.
+        """
         if self._conn is not None and self._conn.is_open:
             return
 
@@ -1031,12 +1050,30 @@ class SimTransport(Transport):
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def connect(self) -> None:
-        """Load the sim lib, construct/connect a ``SimLoop``, and apply the
-        persisted error profile.
+    def connect(self, *, robot_config: "RobotConfig | None" = None) -> None:
+        """Load the sim lib, construct/connect a ``SimLoop``, apply the
+        persisted error profile, and configure the sim from the active
+        robot's JSON (113-006).
 
         If the sim lib is missing, shows a warning and returns without
         connecting.  Idempotent — does nothing if already connected.
+
+        ``robot_config``: the ``RobotConfig`` to configure the freshly
+        connected sim from (both tiers -- see ``SimLoop.
+        configure_from_robot()``'s own docstring). When omitted (the
+        default -- every pre-existing caller, including every test that
+        constructs a bare ``SimTransport()`` and calls ``connect()`` with no
+        arguments), this resolves ``robot_radio.config.robot_config.
+        get_robot_config()`` itself, so the push happens either way -- a
+        caller that already has the config in hand (``__main__.py``'s
+        ``_on_connect()``) can pass it explicitly instead of relying on the
+        module-level singleton being current. This closes SUC-001 ("no
+        manual robot-select GUI click required for the push to occur — it
+        happens as part of connect()"). A failure here (bad/missing config,
+        a ctypes call raising) is logged and swallowed, not raised — the sim
+        itself is already successfully connected by this point, and a
+        config-push failure must not leave a live, un-torn-down ``SimLoop``
+        orphaned by an exception propagating out of ``connect()``.
         """
         if self._connected:
             return
@@ -1078,7 +1115,51 @@ class SimTransport(Transport):
         self._config_proto = NezhaProtocol(self._config_conn)  # type: ignore[arg-type]
         self._config_echo = {}
         self._apply_profile_to_sim(loop, profile)
+
+        cfg = robot_config
+        if cfg is None:
+            from robot_radio.config.robot_config import get_robot_config
+            cfg = get_robot_config()
+        if cfg is not None:
+            try:
+                self.configure_from_robot(cfg)
+            except Exception as exc:  # noqa: BLE001 -- see docstring above
+                _log.warning(
+                    "SimTransport: configure_from_robot() failed on connect: %s", exc)
+                self._log(f"[WARN] SimTransport: configure_from_robot failed: {exc}")
+            else:
+                self._log(
+                    f"[INFO] SimTransport: configured from robot '{cfg.robot_name}' "
+                    f"(Tier 1 + Tier 2)"
+                )
+        else:
+            self._log(
+                "[WARN] SimTransport: no active robot config -- "
+                "configure_from_robot skipped"
+            )
+
         self._log("[INFO] SimTransport connected")
+
+    def configure_from_robot(self, config: "RobotConfig") -> None:
+        """Push both config tiers to the connected sim from *config* (113-006).
+
+        Thin delegation to ``SimLoop.configure_from_robot()`` (113-005) --
+        guarded by ``self._loop is not None`` so a call before ``connect()``
+        or after ``disconnect()`` is a harmless no-op rather than an
+        ``AttributeError``. Raises whatever ``SimLoop.configure_from_robot()``
+        itself raises (unlike ``connect()``'s own call site above, this
+        method does NOT swallow exceptions -- a caller invoking it directly
+        (``__main__.py``'s robot-select handler, ``_push_robot_calibration()``)
+        wants to know if a push failed, and is better positioned to decide
+        how to report it than this method is).
+
+        Called automatically by ``connect()`` (SUC-001) and by
+        ``__main__.py``'s robot-select handler on every profile switch while
+        connected (SUC-003, via ``_push_robot_calibration()``).
+        """
+        if self._loop is None:
+            return
+        self._loop.configure_from_robot(config)
 
     def disconnect(self) -> None:
         """Tear down the connected ``SimLoop`` (joins its tick-thread)."""

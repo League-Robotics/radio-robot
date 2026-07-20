@@ -56,20 +56,41 @@ class SimConfigConn:
 
     def __init__(self, loop: "SimLoop") -> None:
         self._loop = loop
-        self._corr_counter = 0
 
     def send_envelope_fast(self, envelope: "envelope_pb2.CommandEnvelope") -> int:
-        """Assign a corr_id (own counter -- this adapter is the only sender
-        on this path, so no cross-source collision risk the way hardware's
-        shared ``_corr_counter`` guards against), armor, and inject via
-        ``SimLoop.inject_command()`` -- the exact ``*B<base64>`` shape
+        """Assign a corr_id, armor, and inject via ``SimLoop.
+        inject_command()`` -- the exact ``*B<base64>`` shape
         ``SerialConnection.send_envelope_fast()`` writes to a real serial
         port (see that method's own docstring), minus the trailing
         newline framing a live serial stream needs and a direct
         ``inject_command()`` call does not (``FakeTransport::
-        enqueueInbound()`` takes one already-delimited line per call)."""
-        self._corr_counter += 1
-        corr_id = self._corr_counter
+        enqueueInbound()`` takes one already-delimited line per call).
+
+        113-006 correction: corr_id comes from ``self._loop._next_corr_id()``
+        -- the SAME thread-safe, monotonic counter ``SimLoop.twist()``/
+        ``.stop()``/``.move()`` already share -- rather than a private
+        per-instance counter. The original "this adapter is the only sender
+        on this path, so no cross-source collision risk" assumption (this
+        docstring's own prior wording) held only as long as exactly one
+        ``SimConfigConn`` ever talked to a given ``SimLoop`` at a time. It
+        broke the moment a SECOND, independent ``SimConfigConn`` entered the
+        picture: ``SimTransport`` keeps its own long-lived one
+        (``self._config_conn``, backing ``GET``/``SET`` and its host-side
+        ack-echo cache) while ``SimLoop.configure_from_robot()`` constructs a
+        throwaway one on every call. Two private counters both starting at 1
+        assign the SAME corr_id to DIFFERENT wire commands; since neither
+        this method nor ``configure_from_robot()`` drains the ack this class
+        's own ``poll_ack()`` would eventually read, a later, unrelated
+        ``poll_ack(corr_id=1, ...)`` call (e.g. ``SimTransport.
+        _handle_config_set()``, triggered by ``_push_robot_calibration()``
+        moments after a Sim ``connect()``) can match a STALE ack left behind
+        by the other sender's corr_id=1 -- observed as a spurious ``ERR nak
+        <key> err_code=...`` on a command that was never actually rejected.
+        Routing every ``SimConfigConn`` instance through the ``SimLoop``'s
+        own counter makes corr_ids globally unique for that ``SimLoop``
+        regardless of how many ``SimConfigConn``/``NezhaProtocol`` pairs are
+        constructed over its lifetime, closing the collision structurally."""
+        corr_id = self._loop._next_corr_id()
         envelope.corr_id = corr_id
         armored = base64.b64encode(envelope.SerializeToString()).decode("ascii")
         self._loop.inject_command(f"*B{armored}")
