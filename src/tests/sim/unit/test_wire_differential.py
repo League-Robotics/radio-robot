@@ -198,9 +198,19 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
     # dead wire fields in 111-004 (step 7 of the terminal-blips-close-the-
     # loop fix plan) and reserved -- see config.proto's own
     # PlannerConfigPatch header comment. arrive_dwell (20) is the one field
-    # from that original span that IS live and was kept.
+    # from that original span that IS live and was kept. distance_kp (21,
+    # 112-003) mirrors heading_kp's own live-tunable shape -- this pin had
+    # gone stale (never updated when that field was added); re-synced here
+    # (113-007) against the CURRENT generated descriptor (config.proto's own
+    # PlannerConfigPatch message is the source of truth -- read directly, not
+    # guessed). Note: model_tau_lin/model_tau_ang (113-001) are NOT expected
+    # here -- sprint 113 Design Rationale Decision 4 deliberately keeps them
+    # OFF the live PlannerConfigPatch wire plane (boot-only/Tier-2 fields on
+    # msg::PlannerConfig itself, a different message); confirmed absent from
+    # PlannerConfigPatch's own descriptor.
     expected_planner_patch = {
         "min_speed": 1, "heading_kp": 2, "heading_kd": 3, "arrive_dwell": 20,
+        "distance_kp": 21,
     }
     actual_planner_patch = {f.name: f.number for f in pb_config.PlannerConfigPatch.DESCRIPTOR.fields}
     assert actual_planner_patch == expected_planner_patch

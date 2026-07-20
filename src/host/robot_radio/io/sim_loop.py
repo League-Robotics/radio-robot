@@ -187,6 +187,26 @@ _SimHookFn = ctypes.CFUNCTYPE(
     ctypes.c_int, ctypes.c_void_p, ctypes.c_uint16,
     ctypes.POINTER(ctypes.c_uint8), ctypes.c_int)
 
+# Tier-2 config-load readback (113-007) -- field order matches
+# sim_configure_planner()'s own 22-value-arg order exactly (sim_ctypes.cpp's
+# own header comment cross-references this ordering both ways). Used to build
+# sim_read_planner_config()'s out-pointer argtypes below AND
+# SimLoop.read_planner_config()'s returned dict keys, so the two can never
+# drift apart from each other.
+_PLANNER_CONFIG_FIELDS = (
+    "a_max", "a_decel", "v_body_max",
+    "yaw_rate_max", "yaw_acc_max",
+    "j_max", "yaw_jerk_max",
+    "min_speed", "heading_kp", "heading_kd",
+    "arrive_dwell",
+    "heading_source",  # int (msg::HeadingSourceMode) -- every other field is float
+    "heading_dwell_tol", "heading_dwell_rate",
+    "heading_lead_bias", "plan_lead", "terminal_lead",
+    "actuation_lag",
+    "distance_kp", "distance_tol",
+    "model_tau_lin", "model_tau_ang",
+)
+
 # Lazily-imported/cached pb2 module -- see sim_ctypes.cpp's own header and
 # the deleted predecessor's _get_envelope_pb2() docstring: no circular-
 # import hazard for this module specifically, but deferring keeps a bare
@@ -316,6 +336,22 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
     lib.sim_configure_motor.argtypes = [
         ctypes.c_void_p, ctypes.c_int, ctypes.c_float, ctypes.c_int]
     lib.sim_configure_motor.restype = None
+
+    # Tier-2 config-load readback (113-007) -- out-pointer argtypes, one per
+    # _PLANNER_CONFIG_FIELDS entry above (int for heading_source, float for
+    # every other field), matching sim_read_planner_config()'s own C
+    # signature (sim_ctypes.cpp) field-for-field and in the same order.
+    lib.sim_read_planner_config.argtypes = [ctypes.c_void_p] + [
+        ctypes.POINTER(ctypes.c_int) if name == "heading_source"
+        else ctypes.POINTER(ctypes.c_float)
+        for name in _PLANNER_CONFIG_FIELDS
+    ]
+    lib.sim_read_planner_config.restype = None
+
+    lib.sim_read_motor_config.argtypes = [
+        ctypes.c_void_p, ctypes.c_int,
+        ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_int)]
+    lib.sim_read_motor_config.restype = None
 
     lib.sim_set_read_hook.argtypes = [ctypes.c_void_p, _SimHookFn, ctypes.c_void_p]
     lib.sim_set_read_hook.restype = None
@@ -547,6 +583,65 @@ class SimLoop:
                 self._handle, ctypes.c_int(port),
                 ctypes.c_float(motor_cfg["vel_filt_alpha"]),
                 ctypes.c_int(motor_cfg["fwd_sign"]))
+
+    # ------------------------------------------------------------------
+    # Tier-2 config-load readback (113-007) -- test-only diagnostic proving
+    # what configure_from_robot() (or a direct sim_configure_planner()/
+    # sim_configure_motor() ctypes call) actually landed. No production
+    # caller needs this -- it exists for sprint 113's own golden-parity test
+    # (test_sim_boot_config_parity.py) to compare against gen_boot_config.py's
+    # independently-computed expected values, field-for-field.
+    # ------------------------------------------------------------------
+
+    def read_planner_config(self) -> "dict[str, float | int]":
+        """Return the live ``msg::PlannerConfig`` SimHarness::plannerConfig()
+        currently exposes -- every field ``_PLANNER_CONFIG_FIELDS`` names, in
+        the same dict shape ``sim_boot_config.planner_boot_config_for()``
+        returns (so a test can diff the two directly). Reflects whatever
+        ``configurePlanner()`` last received (via ``configure_from_robot()``
+        or a direct fault-knob call like ``set_yaw_rate_max()``), or the
+        sim's own hardcoded ``makeExecutorConfig()`` baseline if
+        ``configurePlanner()`` was never called. Synchronous round-trip onto
+        the tick thread when one is running (same rationale as
+        ``get_true_pose()``): a caller must see whatever was already applied,
+        not "eventually applied"."""
+        self._require_connected()
+        return self._call_on_tick_thread(self._read_planner_config)
+
+    def _read_planner_config(self) -> "dict[str, float | int]":
+        floats = {
+            name: ctypes.c_float() for name in _PLANNER_CONFIG_FIELDS
+            if name != "heading_source"
+        }
+        heading_source = ctypes.c_int()
+        args = [
+            heading_source if name == "heading_source" else floats[name]
+            for name in _PLANNER_CONFIG_FIELDS
+        ]
+        self._lib.sim_read_planner_config(
+            self._handle, *(ctypes.byref(a) for a in args))
+        return {
+            name: (heading_source.value if name == "heading_source"
+                   else floats[name].value)
+            for name in _PLANNER_CONFIG_FIELDS
+        }
+
+    def read_motor_config(self, port: int) -> "dict[str, float | int]":
+        """Return ``{"vel_filt_alpha": ..., "fwd_sign": ...}`` last pushed to
+        *port* (1=left, 2=right) via ``configureMotor()`` -- the same dict
+        shape ``sim_boot_config.motor_boot_config_for()`` returns. See
+        ``read_planner_config()``'s own docstring for the readback contract
+        and synchronous round-trip rationale."""
+        self._require_connected()
+        return self._call_on_tick_thread(lambda: self._read_motor_config(port))
+
+    def _read_motor_config(self, port: int) -> "dict[str, float | int]":
+        vel_filt_alpha = ctypes.c_float()
+        fwd_sign = ctypes.c_int()
+        self._lib.sim_read_motor_config(
+            self._handle, ctypes.c_int(port),
+            ctypes.byref(vel_filt_alpha), ctypes.byref(fwd_sign))
+        return {"vel_filt_alpha": vel_filt_alpha.value, "fwd_sign": fwd_sign.value}
 
     # ------------------------------------------------------------------
     # TwistTransport protocol (planner/executor.py) -- twist()/stop()/
