@@ -81,15 +81,18 @@ namespace App {
 // 087-009 guardrail read one shared value, never a duplicated literal.
 //
 // 50.0mm/s: comfortably ABOVE the shipped distance_kp*distance_tol product
-// (15.0 * 3.0mm = 45.0mm/s, see planner.proto's own distance_kp field
-// comment for the full deadband-inequality derivation) -- an in-tolerance
+// (8.0 * 3.0mm = 24.0mm/s as of 112-004's own kp retune -- was 15.0*3.0mm=
+// 45.0mm/s under 112-003's original 15.0 default; see planner.proto's own
+// distance_kp field comment for the full deadband-inequality derivation
+// AND 112-004's own closed-loop-convergence retune) -- an in-tolerance
 // residual error is NOT yet clipped, matching the heading PD's own
 // unclamped-near-target shape -- while staying far below any velocity that
 // could look like a solve-side reversal (typical cruise speeds run
 // 100-300mm/s; v_body_max defaults to 1000mm/s): a genuinely large
 // divergence (e.g. the 40mm gross-divergence reanchor threshold,
 // Motion::kDivergenceReanchorLinearMm) would demand distance_kp*40mm =
-// 600mm/s if unclamped -- this ceiling caps that to a 50mm/s nudge, never
+// 320mm/s if unclamped (600mm/s under 112-003's original 15.0 default) --
+// this ceiling caps that to a 50mm/s nudge, never
 // a re-plan-scale correction (sprint 112 Architecture "Guardrails/SUC-007"
 // Main Flow step 3: "the new linear feedback trim's authority is bounded
 // (clamped) such that near the target its magnitude... stays below what a
@@ -117,7 +120,6 @@ class Pilot {
   void configureHeading(const msg::PlannerConfig& config) {
     headingKp_ = config.heading_kp;
     headingKd_ = config.heading_kd;
-    minSpeed_ = config.min_speed;   // [mm/s] heading-PD minimum-command floor (see tick())
     distanceKp_ = config.distance_kp;  // [1/s] 112-003: linear position-feedback trim's own gain (see tick())
     plannerConfig_ = config;
   }
@@ -276,13 +278,14 @@ class Pilot {
 
   float headingKp_ = 0.0f;  // [1/s] msg::PlannerConfig.heading_kp
   float headingKd_ = 0.0f;  // dimensionless msg::PlannerConfig.heading_kd
-  float minSpeed_ = 0.0f;   // [mm/s] msg::PlannerConfig.min_speed -- the heading
-  // PD's minimum-command floor (tick()): the smallest per-wheel speed that
-  // actually moves the plant (the write shaping's output deadband eats duty
-  // below ~0.03, and real motors have stiction besides). 0 disables the
-  // floor. Adopted for this purpose 2026-07-18 -- the field's previous
-  // consumer (the old Drive tracker's pivot-mode threshold) was deleted
-  // with source/drive/, leaving it consumer-less.
+  // 112-004: the heading PD's minimum-command floor (msg::PlannerConfig.
+  // min_speed) that used to live here is DELETED -- see tick()'s own
+  // comment. `heading_kp` is bumped 3.0 -> 6.0 (gen_boot_config.py's own
+  // HEADING_KP_DEFAULT) so the deadband inequality (`heading_kp *
+  // heading_dwell_tol >= omega_deadband`) holds without it (sprint 112
+  // Architecture Design Rationale Decision 5). `min_speed` itself stays a
+  // DECLARED msg::PlannerConfig field -- schema cleanup is a future ticket
+  // (Decision 7).
 
   float distanceKp_ = 0.0f;  // [1/s] msg::PlannerConfig.distance_kp -- 112-003
   // linear position-feedback trim's own gain (tick()): `distanceKp_ *

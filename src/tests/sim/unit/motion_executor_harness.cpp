@@ -55,6 +55,14 @@ msg::PlannerConfig makeConfig() {
   cfg.heading_dwell_tol = 0.5f * kDegToRad;
   cfg.heading_dwell_rate = 1.0f * kDegToRad;
   cfg.arrive_dwell = 0.15f;
+  // 112-004: the unified completion rule's own linear tolerance -- see
+  // executor.h/planner.proto's own distance_tol doc comments. Left at the
+  // zero-value default, |sErr| < 0 is never satisfiable (the same reason
+  // heading_dwell_tol above is never left at 0), so every DISTANCE-mode
+  // scenario in this file needs a real value the same way it already needs
+  // a real heading_dwell_tol -- matches gen_boot_config.py's own
+  // DISTANCE_TOL_DEFAULT/Motion::kDistanceSettleEpsilonMm's old value.
+  cfg.distance_tol = 3.0f;  // [mm]
   return cfg;
 }
 
@@ -362,57 +370,20 @@ int main() {
     checkTrue(sawMidCruiseSample, "the arc reached a cruise sample worth checking the ratio at");
   }
 
-  // --- Scenario 11: same-sign distance overshoot carry -- a SCRIPTED
-  //     (not trajectory-derived) measured-distance signal drives completion
-  //     independent of the real Ruckig velocity trace, isolating the carry
-  //     bookkeeping itself. Both commands are made NON-terminal (a third
-  //     placeholder queued behind the second) so completion is judged on
-  //     the distance criterion alone, with no trajectory-duration gate to
-  //     synchronize against the scripted signal. ---
-  {
-    beginScenario("same-sign DISTANCE overshoot carries into the next same-sign successor");
-    Motion::Executor exec;
-    exec.configure(makeConfig());
-
-    constexpr float kIncrement = 70.0f;  // [mm] scripted per-tick "measured" distance
-
-    exec.enqueue(makeDistanceCmd(/*distance=*/500.0f, 0.0f, /*vMax=*/200.0f, /*id=*/1));
-    exec.enqueue(makeDistanceCmd(/*distance=*/300.0f, 0.0f, /*vMax=*/200.0f, /*id=*/2));
-    exec.enqueue(makeDistanceCmd(/*distance=*/1.0f, 0.0f, /*vMax=*/200.0f, /*id=*/3));  // keeps id=2 non-terminal
-
-    int cyclesForSecond = 0;
-    int ticksSinceSecondActive = 0;
-    for (int i = 0; i < 40 && cyclesForSecond == 0; ++i) {
-      // Snapshot BEFORE tick(): whether id=2 is the command THIS tick()
-      // call is about to advance -- id=1's own completion tick flips
-      // activeId() to 2 mid-call, so checking AFTER would wrongly count
-      // that same tick against id=2's own budget.
-      bool tickIsForSecond = (exec.activeId() == 2);
-
-      exec.plan();
-      exec.tick(kDtMs, kIncrement, 0.0f);
-      if (tickIsForSecond) ++ticksSinceSecondActive;
-
-      Motion::CompletionEvent event;
-      while (exec.popEvent(&event)) {
-        if (event.status == Motion::CompletionStatus::kDone && event.id == 1) {
-          checkTrue(exec.activeId() == 2, "command id=2 activates immediately after id=1's overshoot");
-        }
-        if (event.status == Motion::CompletionStatus::kDone && event.id == 2) {
-          cyclesForSecond = ticksSinceSecondActive;
-        }
-      }
-    }
-
-    // Without any carry, command id=2 (distance=300mm, 70mm/tick) needs
-    // ceil(300/70) = 5 ticks (350 >= 300). Command id=1 overshoots by 60mm
-    // (500mm at 70mm/tick completes at 560mm, tick 8) -- WITH that overshoot
-    // carried in, id=2's own effective target drops to 240mm, needing only
-    // ceil(240/70) = 4 ticks (280 >= 240). Observing 4 (not 5) proves the
-    // carry was actually applied, not just declared.
-    checkTrue(cyclesForSecond == 4,
-              "the overshoot-adjusted successor completed in 4 ticks, not the un-adjusted 5");
-  }
+  // Scenario 11 (same-sign DISTANCE overshoot carries into the next
+  // same-sign successor) is DELETED (112-004) -- the mechanism it tested,
+  // Motion::Executor's own pendingOvershoot_ same-sign carry, is deleted
+  // outright by this ticket (see executor.h's own "Distance completion"
+  // comment); there is no replacement code path left to unit-test. That
+  // scenario also relied on a purely SCRIPTED measured-distance signal
+  // decoupled from the real Ruckig-solved trajectory to isolate the carry
+  // bookkeeping -- a technique fundamentally incompatible with 112-004's
+  // own unified completion rule, which additionally requires the dominant
+  // channel's REAL solved trajectory to have elapsed its own duration
+  // (`profileElapsed`, executor.cpp's own tick() comment) before a
+  // "not carrying" command can complete, so a scripted signal alone can no
+  // longer race the real trajectory to an early completion the way this
+  // scenario depended on.
 
   std::printf("\n");
   if (g_failureCount == 0) {

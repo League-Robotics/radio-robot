@@ -123,10 +123,13 @@ def test_heading_gains_for_config_falls_back_to_firmware_defaults():
     defaults -- matching every other mapping's fall-back-to-firmware-default
     behavior in this generator (an unmigrated robot JSON simply inherits
     today's open-loop-equivalent Kp=Kd=0... except the firmware default here
-    is intentionally nonzero, Kp=3.0, per Decision 2's starting-gain policy)."""
+    is intentionally nonzero, Kp=6.0 (112-004: bumped from the original
+    3.0 starting value -- see HEADING_KP_DEFAULT's own comment for the
+    deadband-inequality derivation this bump satisfies once App::Pilot's
+    min-speed floor is deleted), per Decision 2's starting-gain policy)."""
     kp, kd = gbc.heading_gains_for_config({})
 
-    assert kp == gbc.HEADING_KP_DEFAULT == 3.0
+    assert kp == gbc.HEADING_KP_DEFAULT == 6.0
     assert kd == gbc.HEADING_KD_DEFAULT == 0.0
 
 
@@ -187,14 +190,15 @@ def test_generate_motion_limits_unchanged_with_no_robot_config():
     configurable as of ticket 100-014 (control.yaw_rate_max/max_rot_accel_dps2)
     but fall back to the 6.0 rad/s / 20.0 rad/s^2 firmware defaults when the
     keys are absent, exactly the same fall-back discipline as heading_kp/
-    heading_kd (which fall back to 3.0/0.0 here)."""
+    heading_kd (which fall back to 6.0/0.0 here -- 112-004 bumped
+    HEADING_KP_DEFAULT from 3.0)."""
     content = gbc.generate({}, "(firmware defaults)")
 
     assert "msg::PlannerConfig defaultPlannerConfig()" in content
     for line in _motion_limit_setter_lines():
         assert line in content, f"missing/changed motion-limit setter: {line}"
 
-    assert "cfg.setHeadingKp(3.0f);" in content
+    assert "cfg.setHeadingKp(6.0f);" in content
     assert "cfg.setHeadingKd(0.0f);" in content
 
 

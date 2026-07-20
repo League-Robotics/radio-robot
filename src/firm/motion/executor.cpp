@@ -42,34 +42,6 @@ float estimateStopDuration(float velocity, float aDecel, float jerk) {  // -> [s
 constexpr float kLinearRestEpsilon = 2.0f;        // [mm/s]
 constexpr float kRotationalRestEpsilon = 0.05f;   // [rad/s] (~2.9 deg/s)
 
-// kDistanceSettleEpsilonMm (109-009 fix): a DISTANCE-mode command's planned
-// jerk-limited profile can settle to rest a FRACTION of a millimetre short
-// of `effectiveDistance_` (S-curve profile quantization against the
-// per-cycle sampled velocity/position, not a fault) -- the sim tour-closure
-// gate (109-009) hit exactly this on TOUR_2's own final leg: the plant
-// settled at ~344.3-344.9mm against a 345mm target and NEVER crossed the
-// raw `>=` threshold, hanging until this ticket's own added STOP_TIME
-// backstop (see the terminal `isTerminalCmd` branch below) turned an
-// indefinite hang into a bounded (but still failing) timeout. The genuine
-// fix is a small settle epsilon, exactly analogous to the heading dwell
-// gate's own `headingDwellTol_` tolerance (a real robot's own distance
-// completion is never judged by exact floating-point crossing either) --
-// completion also fires once the planned trajectory time has fully
-// elapsed (`linearElapsedS_ >= linear_.duration()`, i.e. the profile is not
-// still actively driving toward more distance) AND the shortfall is within
-// this epsilon.
-//
-// 3mm (was 2mm, widened 2026-07-18 with the terminal straight-lead): the
-// lead sizes the big trapezoid to rest ON target, but a small
-// distance-dependent tail leaves short legs resting up to ~2mm short (a
-// D200 leg rested 2.1mm short -- just over the old 2mm epsilon, which fired
-// one needless top-up "little hump"). Absorbing that fraction here
-// completes the leg cleanly at its own rest instead, which -- paired with
-// the lead -- is what removes the straight humps outright. 3mm on a
-// hundreds-of-mm leg is negligible and biases slightly UNDER (never an
-// overrun), matching the "stop at target, don't overshoot" intent.
-constexpr float kDistanceSettleEpsilonMm = 3.0f;  // [mm]
-
 // kStopTimeBackstopFactor/kStopTimeBackstopMarginS -- see executor.h's own
 // "Dwell completion" comment: stopTimeBackstopMs() = dominant channel's own
 // solved duration * kStopTimeBackstopFactor + kStopTimeBackstopMarginS. v1,
@@ -92,36 +64,6 @@ constexpr float kExitVelocityRotationalThreshold = 0.02f; // [rad/s]
 // slip/stall, never ordinary tracking lag.
 constexpr float kDivergenceReanchorLinearMm = 40.0f;        // [mm]
 constexpr uint32_t kDivergenceReanchorMinIntervalMs = 60;   // [ms]
-
-// kTopUpMeasuredRestVelocity -- the terminal top-up's own measured-motion
-// rest gate (tick()'s kArc top-up comment): the plant must have genuinely
-// stopped coasting before a shortfall is corrected. Deliberately looser
-// than kLinearRestEpsilon (which tests the PLANNED sample) -- a measured
-// finite-difference velocity carries encoder quantization/dither noise a
-// planned sample does not.
-constexpr float kTopUpMeasuredRestVelocity = 5.0f;   // [mm/s]
-
-// Terminal straight-lead (2026-07-18 "no little humps on straights"): a
-// pure straight decelerating to REST lands SHORT of its planned distance by
-// a lag-induced undershoot that is distance-INDEPENDENT and linear in the
-// cruise speed -- measured in the full-compute sim as ~1.5 + 0.10*cruise
-// [mm] (a fixed ~0.10s of frozen-in position lag). Planning the profile
-// exactly that much longer makes the plant's OWN rest land on the true
-// target, so the distance-completion crossing fires there and the top-up
-// never has to crawl in. Calibration, not physics -- same per-robot nature
-// as plan_lead / rotation_gain; these are the sim fit, a hardware sweep
-// would replace them. kStraightLeadMargin over-leads slightly so the plant
-// reliably REACHES the target (crossing completion then stops it exactly
-// there) rather than resting a hair short into the settle epsilon.
-// The lead is the EXACT measured undershoot (no over-lead margin): sizing
-// the plant's rest to land ON target makes the distance crossing fire at
-// ~zero velocity, so there is no coast. A small over-lead instead leaves
-// the plant still moving when it crosses (a few mm of coast -- observed
-// +3.9mm at 200mm/s with a 2mm margin); a small under-lead leaves it a
-// fraction short, which the settle epsilon completes without a top-up.
-// Erring toward under is the better side.
-constexpr float kStraightLeadBias = 1.5f;      // [mm]
-constexpr float kStraightLeadSlope = 0.102f;   // [mm per mm/s] == [s]
 
 constexpr float kPi = 3.14159265358979323846f;
 
@@ -168,10 +110,8 @@ void Executor::configure(const msg::PlannerConfig& config) {
   rotationalCeiling_ = config.yaw_rate_max;
 
   headingDwellTol_ = config.heading_dwell_tol;
-  headingDwellRate_ = config.heading_dwell_rate;
   headingDwellHoldS_ = config.arrive_dwell;
-
-  terminalLeadS_ = config.terminal_lead;  // [s] 109-010 locus 3
+  distanceTol_ = config.distance_tol;  // [mm] 112-004: unified completion rule's own linear tolerance
 }
 
 void Executor::pushEvent(uint32_t id, CompletionStatus status) {
@@ -210,7 +150,6 @@ void Executor::activate(const Cmd& cmd, bool retarget) {
   lastMeasuredHeadingAbs_ = 0.0f;
   prevThetaMeasRel_ = 0.0f;
   dwellHeldMs_ = 0;
-  dwellRateFilt_ = 0.0f;
   headingRatioPerMm_ = 0.0f;
   effectiveDistance_ = cmd.distance;
 
@@ -219,7 +158,6 @@ void Executor::activate(const Cmd& cmd, bool retarget) {
   linearFrameOffset_ = 0.0f;
   rotationalFrameOffset_ = 0.0f;
   pendingLinearReanchor_ = false;
-  pendingLinearRetarget_ = false;
   msSinceLastReanchor_ = kDivergenceReanchorMinIntervalMs;
   emergencyStopping_ = false;
 
@@ -234,37 +172,16 @@ void Executor::activate(const Cmd& cmd, bool retarget) {
     pendingRotationalTarget_ = cmd.omega;
     needLinearSolve_ = true;
     needRotationalSolve_ = true;
-    // A TIMED command carries no linear-distance progress/overshoot
-    // semantics -- any carry from a PRECEDING kArc command is dropped here
-    // (see this file header's "Distance completion" comment: only the
-    // VERY NEXT activation can consume a pending carry, and only if it is
-    // itself a same-sign kArc command).
-    pendingOvershoot_ = 0.0f;
   } else if (cmd.isPivot()) {
     mode_ = Mode::kPivot;
-    pendingOvershoot_ = 0.0f;  // a pivot produces/consumes no linear overshoot
     needLinearSolve_ = false;
     needRotationalSolve_ = true;
   } else {
     // kArc: distance != 0, not timed. Dominant channel is linear.
+    // 112-004: effectiveDistance_ is already cmd.distance (set unconditionally
+    // above) -- there is no overshoot carry to adjust it with anymore.
     mode_ = Mode::kArc;
     headingRatioPerMm_ = cmd.deltaHeading / cmd.distance;
-
-    if (pendingOvershoot_ != 0.0f &&
-        ((pendingOvershoot_ > 0.0f) == (cmd.distance > 0.0f))) {
-      effectiveDistance_ = cmd.distance - pendingOvershoot_;
-      // Never flip the direction of travel because of a carried-in
-      // overshoot -- clamp to a small same-sign residual instead (a
-      // documented v1 edge case: an overshoot larger than the successor's
-      // own requested distance is rare and, when it happens, "drive a
-      // token amount further in the same direction" is a safer failure
-      // mode than silently reversing).
-      bool sameSign = (effectiveDistance_ > 0.0f) == (cmd.distance > 0.0f);
-      if (!sameSign || effectiveDistance_ == 0.0f) {
-        effectiveDistance_ = (cmd.distance > 0.0f) ? 1.0f : -1.0f;
-      }
-    }
-    pendingOvershoot_ = 0.0f;
 
     pendingLinearVMax_ = cmd.vMax;
     needLinearSolve_ = true;
@@ -311,15 +228,8 @@ void Executor::activateNextOrIdle() {
 }
 
 void Executor::completeActive(CompletionStatus status) {
-  if (mode_ == Mode::kArc) {
-    // Signed remainder carried into a same-sign successor -- see this
-    // file's own "Distance completion" comment. Only meaningful on a real
-    // DONE (a kTimeout/kSolveFail completion means the command never
-    // reached its own distance criterion in the first place).
-    pendingOvershoot_ = (status == CompletionStatus::kDone)
-                            ? (measuredPathSinceActivation_ - effectiveDistance_)
-                            : 0.0f;
-  }
+  // 112-004: no longer stages a same-sign overshoot carry here (deleted --
+  // see this file's own "Distance completion" comment).
   pushEvent(active_.id, status);
 
   if (status == CompletionStatus::kSolveFail) {
@@ -342,8 +252,7 @@ void Executor::completeActive(CompletionStatus status) {
     emergencyStopping_ = true;
     state_ = State::kRampToRest;
     pendingLinearReanchor_ = false;
-    pendingLinearRetarget_ = false;
-      needLinearSolve_ = true;
+    needLinearSolve_ = true;
     needRotationalSolve_ = true;
     return;
   }
@@ -446,7 +355,6 @@ void Executor::checkDivergence(float dtS, float measuredDistanceDelta, float the
       // acts on the very first sample past threshold (still rate-limited
       // by msSinceLastReanchor_ itself).
       pendingLinearReanchor_ = true;
-      pendingLinearRetarget_ = false;
       needLinearSolve_ = true;
       msSinceLastReanchor_ = 0;
     }
@@ -541,17 +449,14 @@ void Executor::flush() {
   state_ = State::kIdle;
   needLinearSolve_ = false;
   needRotationalSolve_ = false;
-  pendingOvershoot_ = 0.0f;  // a flush abandons any in-flight carry too
 
   // 109-006: a flush abandons any in-flight boundary-velocity/divergence
   // bookkeeping too -- nothing left to carry a velocity or a pending
-  // reanchor/retarget INTO once the ring and the active command are both
-  // gone.
+  // reanchor INTO once the ring and the active command are both gone.
   exitVelocity_ = 0.0f;
   linearFrameOffset_ = 0.0f;
   rotationalFrameOffset_ = 0.0f;
   pendingLinearReanchor_ = false;
-  pendingLinearRetarget_ = false;
   emergencyStopping_ = false;
 }
 
@@ -599,41 +504,6 @@ void Executor::plan() {
       if (linear_.reanchor(internalPosition, lastMeasuredVelocity_)) linearElapsedS_ = 0.0f;
       return;
     }
-    if (pendingLinearRetarget_) {
-      pendingLinearRetarget_ = false;
-      // newRemaining is computed relative to the MEASURED position (the
-      // whole point of a position-target correction) -- retarget() itself
-      // still seeds velocity/acceleration from the channel's OWN
-      // remembered state (its own contract, jerk_trajectory.h), never
-      // measured, so this stays within the "never seed a solve from a
-      // measured observation" invariant for velocity/acceleration while
-      // still correcting the POSITION target. Since newRemaining was
-      // computed against measuredPathSinceActivation_, the new frame's own
-      // origin (position 0, post-rebase) now REPRESENTS
-      // measuredPathSinceActivation_ in the command's own since-activation
-      // terms -- linearFrameOffset_ is therefore SET (not accumulated) to
-      // measuredPathSinceActivation_, not the channel's own pre-rebase
-      // position (which is exactly the divergent value this correction
-      // exists to stop trusting for position bookkeeping). Getting this
-      // backwards (bumping by the channel's own position instead) was
-      // this ticket's own first implementation and was caught by
-      // test_heading_source.py's own ideal-plant coupled-arc scenario:
-      // it silently reintroduced the SAME divergence into thetaRef every
-      // retarget, undershooting the commanded heading by more than the
-      // dwell tolerance.
-      float newRemaining = effectiveDistance_ - measuredPathSinceActivation_;
-      // Cross-bias (2026-07-18 terminal top-up): aim one settle-epsilon
-      // PAST the target so the (lagging) plant still CROSSES it --
-      // completion is the crossing test, and a top-up that lands epsilon
-      // short of its own aim therefore still completes in ONE shot instead
-      // of asymptotically micro-crawling remaining-minus-lag each round.
-      newRemaining += std::copysign(kDistanceSettleEpsilonMm, newRemaining);
-      if (linear_.retarget(newRemaining)) {
-        linearFrameOffset_ = measuredPathSinceActivation_;
-        linearElapsedS_ = 0.0f;
-      }
-      return;
-    }
 
     bool ok;
     float linCeiling = linearCeiling_;
@@ -641,32 +511,19 @@ void Executor::plan() {
     if (mode_ == Mode::kTimed) {
       ok = linear_.solveToVelocity(pendingLinearTarget_, linearCeiling_);
     } else {
-      // kArc -- position-control solve to the (possibly overshoot-adjusted)
-      // effective distance, ceilinged by the Cmd's own requested vMax,
-      // carrying exitVelocity_ through the boundary (0 when there is no
-      // compatible successor -- this file's own computeExitVelocity()).
+      // kArc -- position-control solve to the effective distance (112-004:
+      // always exactly cmd.distance, no overshoot adjustment -- see this
+      // file's own "Distance completion" comment), ceilinged by the Cmd's
+      // own requested vMax, carrying exitVelocity_ through the boundary (0
+      // when there is no compatible successor -- this file's own
+      // computeExitVelocity()). 112-004: the terminal straight-lead padding
+      // that used to lengthen this solve target is DELETED -- the unified
+      // completion rule's own |sErr| < distance_tol tolerance test replaces
+      // the lead-then-crossing mechanism the padding existed to set up (see
+      // this file's own "Unified completion" comment).
       linCeiling = (pendingLinearVMax_ != 0.0f)
                        ? std::min(std::fabs(pendingLinearVMax_), linearCeiling_)
                        : linearCeiling_;
-      // Terminal straight-lead (see the kStraightLead* constants): plan a
-      // pure straight coming to REST that much LONGER so its lag-induced
-      // undershoot lands the plant's own rest on the TRUE target.
-      // Completion still tests effectiveDistance_ (distanceDone, in tick()),
-      // never this padded solve target. Excludes arcs (deltaHeading!=0 --
-      // lengthening would over-rotate via headingRatioPerMm_) and chained
-      // legs (exitVelocity_!=0 -- they never rest, so no undershoot).
-      // queueCount_ == 0 restricts the lead to the TRULY terminal command
-      // (nothing queued after it) -- the only one that comes to rest AND
-      // STAYS. A mid-chain command whose exitVelocity_ is 0 only because its
-      // successor forces a stop (opposite-sign reversal, arc->pivot mismatch)
-      // decelerates to rest at its TRUE boundary and the successor drives on
-      // from there; leading it would leave a signed velocity across a
-      // boundary the boundary-velocity contract requires to be ~zero (caught
-      // by boundary_velocity_harness.cpp scenario 2).
-      if (active_.deltaHeading == 0.0f && exitVelocity_ == 0.0f && queueCount_ == 0) {
-        float lead = kStraightLeadBias + kStraightLeadSlope * linCeiling;
-        linPosTarget += (effectiveDistance_ >= 0.0f) ? lead : -lead;
-      }
       ok = linear_.solveToState(linPosTarget, exitVelocity_, linCeiling);
     }
     if (ok) {
@@ -887,97 +744,61 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
     out.alphaRef = rotSample.acceleration;  // 112-002
   }
 
-  // -- Completion + the terminal-decel PD gate (both need the SAME
-  // measured-error test, computed once here) --
-  bool distanceDone = (mode_ == Mode::kPivot) ||
-                       (std::fabs(measuredPathSinceActivation_) >= std::fabs(effectiveDistance_)) ||
-                       (linearElapsedS_ >= linear_.duration() &&
-                        std::fabs(std::fabs(measuredPathSinceActivation_) -
-                                  std::fabs(effectiveDistance_)) < kDistanceSettleEpsilonMm);
-  bool isTerminalCmd = (queueCount_ == 0);
+  // -- 112-004: unified completion rule (see this file's own "Unified
+  // completion" comment) -- replaces the old distanceDone/top-up/dwell-EMA
+  // patch stack entirely. sErr is the linear channel's own error against
+  // the TARGET (effectiveDistance_, now always == cmd.distance), mirroring
+  // thetaErr's own "target minus measured" shape one channel over -- 0 for
+  // kPivot (no linear channel, mode_ != kArc guards it out below, matching
+  // Twist::sRef/sMeas's own 0/0-for-kPivot pattern).
+  float sErr = (mode_ == Mode::kArc) ? (effectiveDistance_ - measuredPathSinceActivation_) : 0.0f;
 
-  // Terminal top-up (2026-07-18 "plan once, finish on the spot"): the plan
-  // is solved ONCE and trusted -- measured distance decides COMPLETION,
-  // never a mid-flight re-solve. The one correction left: the profile has
-  // fully run out, the channel is at rest, and the measured distance
-  // landed SHORT of target beyond the settle epsilon -- solve the (small,
-  // always-forward) remainder from rest via plan()'s existing retarget
-  // path. A from-rest, forward-only solve cannot command a reversal --
-  // unlike the deleted 5mm mid-flight retarget tier this replaces (see
-  // checkDivergence()'s own comment for the terminal ringing it caused).
-  // Overshoot needs no correction arm at all: crossing the target IS
-  // completion (distanceDone above). Re-requesting while the solve is
-  // pending is idempotent; once the top-up commits, elapsed resets and
-  // this condition goes false until that mini-profile has run out too.
-  // duration() > 0 guards the pre-first-solve window: a freshly activated
-  // command's channel has no committed plan yet (duration 0), which would
-  // otherwise read as "profile ran out at rest" on the very first tick and
-  // hijack the solve budget away from the initial solve forever.
-  //
-  // The gate tests the MEASURED motion at rest, not just the planned
-  // sample: at planned-profile-end the plan is at rest by construction
-  // while the lagging plant is often STILL COASTING the last few mm in --
-  // a top-up fired during that coast plans a remainder the plant is
-  // already covering on its own momentum (observed 2026-07-18: an 8mm
-  // OVERSHOOT plus a double-bump tail, both caused by the eager top-up,
-  // on the neutral-gain profile). Waiting for the coast to genuinely end
-  // means: coast crosses the target -> distanceDone completes, NO top-up;
-  // coast stalls short -> one clean from-rest top-up.
-  float measuredVelocity = (dtS > 0.0f) ? (measuredDistanceDelta / dtS) : 0.0f;  // [mm/s]
-  if (mode_ == Mode::kArc && !distanceDone && linear_.duration() > 0.0f &&
-      linearElapsedS_ >= linear_.duration() &&
-      std::fabs(linSample.velocity) < kLinearRestEpsilon &&
-      std::fabs(measuredVelocity) < kTopUpMeasuredRestVelocity) {
-    pendingLinearRetarget_ = true;
-    needLinearSolve_ = true;
-  }
+  // sOk -- the unified rule's own linear tolerance test, computed here
+  // (ahead of the out.* assignment block below) so it can double as
+  // Twist::withinDistanceTolerance -- App::Pilot's own terminal-decel gate
+  // for the linear trim, mirroring headingActive/withinTolerance's own
+  // shape exactly (see this file's own "Unified completion" comment and
+  // pilot.cpp's own trim-gating comment). Trivially true for kPivot (no
+  // linear channel, mirrors sErr's own 0-for-kPivot value).
+  bool sOk = (mode_ != Mode::kArc) || (std::fabs(sErr) < distanceTol_);
 
   float thetaErr = active_.deltaHeading - thetaMeasRel;
   float thetaRate = (dtS > 0.0f) ? (thetaMeasRel - prevThetaMeasRel_) / dtS : 0.0f;
 
-  // 109-010 locus 3: the dwell/terminal completion decision's own error
-  // test is evaluated against a PREDICTED heading (thetaMeasRel projected
-  // forward by terminalLeadS_ at the CURRENT measured rate) rather than the
-  // raw current sample -- a predicted-state stand-in for solving the exact
-  // tolerance-crossing time analytically (this file's own doc comment/the
-  // ticket's own "OR solve the crossing time analytically" alternative).
-  // Deliberately separate from thetaErr above, which stays UNLED and keeps
-  // feeding checkDivergence() (via thetaMeasRel directly, not thetaErr) and
-  // the crossedTarget sign-flip test below -- see this file's own "History
-  // note" (executor.h) for why divergence checking specifically stays
-  // un-led. terminalLeadS_ == 0.0f (the shipped default absent a fitted
-  // value) makes this identical to the raw thetaErr, a no-op.
-  float thetaErrLead = active_.deltaHeading - (thetaMeasRel + thetaRate * terminalLeadS_);
-  bool withinTol = std::fabs(thetaErrLead) < headingDwellTol_;
+  // 112-004: withinTol now reads the raw thetaErr -- the predicted-state
+  // `thetaErrLead`/`terminal_lead` (109-010 locus 3) stand-in this used to
+  // read is deleted (see this file's own "Unified completion" comment).
+  // thetaErr itself stays UNLED and keeps feeding checkDivergence() (via
+  // thetaMeasRel directly, not thetaErr) and the crossedTarget sign-flip
+  // test below -- unaffected by this deletion.
+  bool withinTol = std::fabs(thetaErr) < headingDwellTol_;
 
-  // 109-009 fix (dwell-reliability, realistic-profile hang): the dwell
-  // gate's own rate test used to compare the RAW one-sample finite-
-  // difference derivative (thetaRate above) against headingDwellRate_.
-  // Diagnosed directly (temporary trace instrumentation during this fix):
-  // with the sim's realistic OTOS/encoder error profile enabled (109-007's
-  // documented plausible levels), thetaErr itself settles cleanly inside
-  // headingDwellTol_ (0.5deg) almost immediately, but the raw per-sample
-  // thetaRate derivative amplifies the sensor noise on thetaMeasRel enough
-  // that it almost never stays under headingDwellRate_ (1deg/s) --
-  // measured jittering ~1-9deg/s indefinitely (never decaying), versus a
-  // clean sub-1deg/s settle within ~150ms under the SAME command with
-  // every error model zeroed. The dwell hold therefore never accumulates
-  // and the command runs out the full `stopTimeBackstopMs()` window and
-  // faults -- 100% reproducible (not a jitter/timing artifact; the same
-  // leg faults identically whether the sim tick thread runs real or not).
-  // Fixed with a light exponential low-pass filter (`dwellRateFilt_`,
-  // alpha=0.3) applied ONLY to the dwell gate's own rate test -- it does
-  // NOT touch thetaRate itself (which still feeds checkDivergence() and
-  // is logged/used elsewhere unfiltered). A one-line, O(1), no-allocation
-  // IIR filter is exactly the "sample, don't solve" shape tick() requires
-  // (DESIGN.md Sec3) -- this is a measurement-smoothing detail of the
-  // completion decision, not a new solve.
-  dwellRateFilt_ += 0.3f * (thetaRate - dwellRateFilt_);
-  bool withinRate = std::fabs(dwellRateFilt_) < headingDwellRate_;
+  // thetaOk -- the unified rule's own angular error test, trivially
+  // satisfied for a non-heading-bearing command (deltaHeading == 0) --
+  // SUC-005's own Main Flow states the straight's own completion rule as
+  // `|s_err| < distance_tol` alone, with no theta_err term at all.
+  bool thetaOk = !headingContent || withinTol;
+
+  // profileElapsed -- "t >= duration + margin" (sprint.md's own unified-rule
+  // wording), margin folded to 0: the AND'd sOk/thetaOk tolerance tests
+  // already prevent premature completion mid-cruise (a fast-moving channel
+  // essentially never re-enters a tight tolerance band around the target
+  // before its own profile ends), so a separate nonzero margin buys nothing
+  // this implementation's own testing found a need for -- see this ticket's
+  // completion notes. `dominantDurationS > 0.0f` guards the pre-first-solve
+  // window exactly the way the deleted top-up trigger used to (a freshly
+  // activated command's own channel has no committed plan yet, duration 0,
+  // which would otherwise read as "profile already elapsed" on the very
+  // first tick and short-circuit completion before any solve has run).
+  float dominantDurationS = (mode_ == Mode::kPivot) ? rotational_.duration() : linear_.duration();
+  float dominantElapsedS = (mode_ == Mode::kPivot) ? rotationalElapsedS_ : linearElapsedS_;
+  bool profileElapsed = dominantDurationS > 0.0f && dominantElapsedS >= dominantDurationS;
 
   // 109-006 trigger (c): detect-only here (tick() never solves) -- sets
-  // pendingLinear{Reanchor,Retarget}_/pendingRotationalReanchor_ for
-  // plan() to service next. See checkDivergence()'s own doc comment.
+  // pendingLinearReanchor_ for plan() to service next. See checkDivergence()'s
+  // own doc comment. UNTOUCHED by 112-004 -- the 40mm gross-divergence
+  // reanchor tier is a DIFFERENT mechanism from the deleted terminal patch
+  // stack (see this file's own "Distance completion" comment).
   checkDivergence(dtS, measuredDistanceDelta, thetaMeasRel, thetaRate, plannedPositionSinceActivation);
 
   // terminalDecel -- gate the heading PD off once the command has ALREADY
@@ -993,136 +814,96 @@ Executor::Twist Executor::tick(uint32_t dtMs, float measuredDistanceDelta,
   // only steps back once further correction would just be chasing noise
   // around an already-good landing -- exactly the "no commanded reversal
   // NEAR TARGET" intent, read as a distance-to-target condition rather
-  // than a time-to-planned-completion one.
-  bool terminalDecel = withinTol && withinRate;
+  // than a time-to-planned-completion one. 112-004: the gate's own RATE
+  // half is deleted along with dwellRateFilt_/headingDwellRate_ -- see this
+  // file's own "Unified completion" comment.
+  bool terminalDecel = withinTol;
 
   out.omega = omegaFf;
   out.thetaRef = thetaRef;
   out.thetaMeas = thetaMeasRel;
   out.thetaMeasLead = thetaMeasLeadRel;  // 109-010 locus 1, App::Pilot's PD error term
   out.headingActive = headingContent && !terminalDecel;
-  out.withinTolerance = withinTol;       // Pilot's min-command floor gate (see Twist)
+  out.withinTolerance = withinTol;       // diagnostic mirror -- see Twist::withinTolerance's own doc comment
+  out.withinDistanceTolerance = sOk;     // App::Pilot's own linear-trim terminal-decel gate (see Twist's own doc comment)
   out.omegaDes = out.headingActive ? omegaFf : 0.0f;
 
-  if (headingContent) {
-    // carryingRotationalVelocity -- true iff THIS command's own planned exit
-    // speed (`exitVelocity_`, set by computeExitVelocity()/
-    // maybeRetargetActiveForSuccessorChange()) is nonzero, i.e. a genuine
-    // same-sign pivot->pivot chain that is DELIBERATELY still moving at
-    // handoff (the successor's own PD immediately takes over the still-
-    // rotating channel, per SUC-003's boundary-velocity carry). 109-009 fix:
-    // the dwell HOLD (below) is only skippable for THIS case -- the
-    // original code skipped it for every "chained, non-terminal" command
-    // (any command with ANY successor queued, `queueCount_ > 0`), which
-    // wrongly included a pivot chained into a plain DISTANCE leg (every
-    // TOUR_1/2 turn, via run_tour()'s one-leg lookahead) or an opposite-
-    // sign/incompatible pivot -- neither carries any velocity forward
-    // (`exitVelocity_` is exactly 0 for both, computeExitVelocity()'s own
-    // contract), so nothing downstream corrects the residual angular
-    // momentum a bare tolerance-crossing sample can still have. That bled
-    // into extra, uncorrected post-handoff rotation the sim tour-closure
-    // gate (109-009) measured directly against ground truth (observed up
-    // to ~3.5deg with an IDEAL/noiseless OTOS -- not sensor error, a real
-    // completion-gate bug). Requiring the FULL dwell hold whenever there is
-    // no velocity to carry -- exactly the terminal-command rule -- costs at
-    // most one `headingDwellHoldS_` window (150ms) per turn and guarantees
-    // the heading has actually stopped moving before handoff, the same way
-    // a real driver does not start driving straight while still spinning.
-    bool carryingRotationalVelocity = (exitVelocity_ != 0.0f);
+  // carryingRotationalVelocity -- true iff THIS command's own planned exit
+  // speed (`exitVelocity_`, set by computeExitVelocity()/
+  // maybeRetargetActiveForSuccessorChange()) is nonzero, i.e. a genuine
+  // same-sign chain (pivot->pivot, or a heading-bearing arc->arc) that is
+  // DELIBERATELY still moving at handoff (the successor's own PD
+  // immediately takes over the still-rotating channel, per SUC-003's
+  // boundary-velocity carry). 109-009 fix, PRESERVED VERBATIM by 112-004
+  // (this ticket's own guardrail): the dwell HOLD (below) is only
+  // skippable for THIS case -- the original (pre-109-009) code skipped it
+  // for every "chained, non-terminal" command (any command with ANY
+  // successor queued, `queueCount_ > 0`), which wrongly included a pivot
+  // chained into a plain DISTANCE leg (every TOUR_1/2 turn, via
+  // run_tour()'s one-leg lookahead) or an opposite-sign/incompatible pivot
+  // -- neither carries any velocity forward (`exitVelocity_` is exactly 0
+  // for both, computeExitVelocity()'s own contract), so nothing downstream
+  // corrects the residual angular momentum a bare tolerance-crossing
+  // sample can still have. That bled into extra, uncorrected post-handoff
+  // rotation the sim tour-closure gate (109-009) measured directly against
+  // ground truth (observed up to ~3.5deg with an IDEAL/noiseless OTOS --
+  // not sensor error, a real completion-gate bug). Requiring the FULL
+  // dwell hold whenever there is no velocity to carry -- exactly the
+  // terminal-command rule -- costs at most one `headingDwellHoldS_` window
+  // (150ms) per turn and guarantees the heading has actually stopped
+  // moving before handoff, the same way a real driver does not start
+  // driving straight while still spinning. Gated on headingContent (a pure
+  // kArc straight leg, deltaHeading==0, is never in this branch -- it has
+  // no rotational channel to carry a velocity ON, even if its own LINEAR
+  // exitVelocity_ happens to be nonzero from a same-sign arc->arc chain).
+  bool carryingRotationalVelocity = headingContent && (exitVelocity_ != 0.0f);
 
-    if (!carryingRotationalVelocity) {
-      // Terminal OR chained-but-not-carrying: both need the SAME full
-      // dwell hold -- "chained" alone no longer buys an early completion.
-      //
-      // 109-009 fix (dwell-reliability): this used to be a HARD reset-to-
-      // zero on ANY single out-of-tolerance/out-of-rate sample. Under the
-      // sim's own real (wall-clock) tick-thread scheduling (not virtual/
-      // deterministic time -- see robot_radio/io/sim_loop.py's own tick-
-      // thread doc comment), an isolated scheduling-jitter sample (one
-      // cycle arriving late, briefly reading a stale/noisy thetaErr or
-      // thetaRate) could zero out several hundred ms of otherwise-good
-      // hold progress the INSTANT before it would have completed, driving
-      // the command all the way to the `stopTimeBackstopMs()` fault path
-      // instead of completing one cycle later. This was the dominant
-      // cause of the intermittent (~1-in-12 standalone runs) `STOP_TIME`
-      // fault this ticket's own Iteration Log recorded.
-      //
-      // Fixed with a leaky (decaying), not hard-reset, counter: a miss
-      // subtracts exactly one cycle's own worth of progress (`dtMs`, the
-      // same unit a hit adds), never more than that. This is a windowed/
-      // majority policy in effect: since a hit and a miss move the
-      // counter by the same one-cycle amount, completion still requires a
-      // NET MAJORITY of the trailing cycles (weighted by recency) to be
-      // in-tolerance -- a single transient miss costs one cycle of delay,
-      // not the whole accumulated hold, while a genuinely still-rotating
-      // or still-far-from-target run (sustained misses) still drains the
-      // counter to 0 and cannot false-complete early. Bounded, no
-      // allocation, one sample per tick() -- DESIGN.md Sec3's "tick()
-      // never solves, samples only" invariant is unaffected. See
-      // motion/DESIGN.md's own dwell-completion entry for the write-up.
-      if (distanceDone && withinTol && withinRate) {
-        dwellHeldMs_ += dtMs;
-      } else if (dwellHeldMs_ > dtMs) {
-        dwellHeldMs_ -= dtMs;
-      } else {
-        dwellHeldMs_ = 0;
-      }
-      uint32_t holdNeededMs = static_cast<uint32_t>(headingDwellHoldS_ * 1000.0f);
-      if (distanceDone && dwellHeldMs_ >= holdNeededMs) {
-        completeActive(CompletionStatus::kDone);
-      } else if (activeElapsedMs_ >= stopTimeBackstopMs()) {
-        completeActive(CompletionStatus::kTimeout);
-      }
-    } else {
-      // Carrying a rotational exit velocity into a compatible pivot
-      // successor: no HOLD needed (the successor's PD takes over the
-      // still-moving channel immediately), but a bare magnitude-band
-      // ("withinTol") test can straddle the entire tolerance window
-      // between two consecutive samples at cruise rate (e.g. 4rad/s *
-      // 40ms ~= 9deg, far larger than headingDwellTol_'s 0.5deg) and never
-      // land inside it -- not theoretical, this is exactly what
-      // motion_executor_harness.cpp's own Scenario 9 (chained pivot->pivot)
-      // hit once thetaMeasRel's own unwrap was fixed to be continuous
-      // (109-009's own wrap fix, see `unwrappedThetaRel_`'s doc comment)
-      // and could no longer rely on the OLD wrap bug's incidental (and
-      // semantically meaningless) second zero-crossing after a spurious
-      // 2*pi discontinuity. `crossedTarget` (thetaErr's sign flipping since
-      // last cycle) catches the case a sample stepped clean over the
-      // tolerance band -- there is no "settle" to wait for, since the
-      // whole point of carrying velocity is to keep moving into the
-      // successor.
-      float prevThetaErr = active_.deltaHeading - prevThetaMeasRel_;
-      bool crossedTarget = (thetaErr <= 0.0f) != (prevThetaErr <= 0.0f);
-      if (distanceDone && (withinTol || crossedTarget)) {
-        completeActive(CompletionStatus::kDone);
-      }
+  if (carryingRotationalVelocity) {
+    // Carrying a rotational exit velocity into a compatible successor: no
+    // HOLD needed (the successor's PD takes over the still-moving channel
+    // immediately), but a bare magnitude-band ("withinTol") test can
+    // straddle the entire tolerance window between two consecutive samples
+    // at cruise rate (e.g. 4rad/s * 40ms ~= 9deg, far larger than
+    // headingDwellTol_'s 0.5deg) and never land inside it -- not
+    // theoretical, this is exactly what motion_executor_harness.cpp's own
+    // Scenario 9 (chained pivot->pivot) hit once thetaMeasRel's own unwrap
+    // was fixed to be continuous (109-009's own wrap fix, see
+    // `unwrappedThetaRel_`'s doc comment) and could no longer rely on the
+    // OLD wrap bug's incidental (and semantically meaningless) second
+    // zero-crossing after a spurious 2*pi discontinuity. `crossedTarget`
+    // (thetaErr's sign flipping since last cycle) catches the case a
+    // sample stepped clean over the tolerance band -- there is no "settle"
+    // to wait for, since the whole point of carrying velocity is to keep
+    // moving into the successor. PRESERVED VERBATIM (112-004's own
+    // guardrail): no STOP_TIME backstop in this branch, exactly as before
+    // this ticket.
+    float prevThetaErr = active_.deltaHeading - prevThetaMeasRel_;
+    bool crossedTarget = (thetaErr <= 0.0f) != (prevThetaErr <= 0.0f);
+    if (sOk && (withinTol || crossedTarget)) {
+      completeActive(CompletionStatus::kDone);
     }
   } else {
-    // No heading content -- a plain kArc straight leg (deltaHeading == 0).
-    bool trajDone = linearElapsedS_ >= linear_.duration();
-    if (isTerminalCmd) {
-      // 109-009 fix: this terminal (no-successor) branch had no STOP_TIME
-      // backstop at all -- unlike its headingContent sibling above, which
-      // has always had one. A terminal DISTANCE leg (the tour's own FINAL
-      // leg, e.g. every TOUR_1/2 run) with no successor queued relies
-      // entirely on `distanceDone && trajDone` to ever complete; the sim
-      // tour-closure gate (109-009) hit a genuine indefinite hang here (the
-      // HOST's own 15s `run_tour()` timeout fired with zero firmware
-      // response at all -- not a firmware-reported kTimeout ack, a total
-      // silence) once every earlier leg's own timing lined up to leave this
-      // one running past its own planned duration without either condition
-      // ever flipping true. Mirroring the headingContent branch's own
-      // backstop closes that gap the same documented way (SUC-002's own
-      // "STOP_TIME backstop... can never wedge the executor open forever"
-      // contract) -- this branch is exactly the kind of terminal command
-      // that contract was meant to cover.
-      if (distanceDone && trajDone) {
-        completeActive(CompletionStatus::kDone);
-      } else if (activeElapsedMs_ >= stopTimeBackstopMs()) {
-        completeActive(CompletionStatus::kTimeout);
-      }
-    } else if (distanceDone) {
+    // Not carrying (terminal, or chained into a successor that does not
+    // carry a boundary velocity through): the unified rule -- `profileElapsed
+    // AND sOk AND thetaOk`, held continuously for headingDwellHoldS_
+    // (arrive_dwell) via a plain hard-reset-on-any-miss counter (NOT the
+    // deleted 109-009 leaky/decaying counter -- see executor.h's own
+    // "Unified completion" comment for why a hard reset is safe again now
+    // that the noisy RATE test that motivated the leaky counter is gone),
+    // plus the SAME stopTimeBackstopMs() timeout backstop this branch
+    // (both its former headingContent and non-heading incarnations) has
+    // always had, so a persistent oscillation or a stuck measurement can
+        // never wedge the executor open forever.
+    if (profileElapsed && sOk && thetaOk) {
+      dwellHeldMs_ += dtMs;
+    } else {
+      dwellHeldMs_ = 0;
+    }
+    uint32_t holdNeededMs = static_cast<uint32_t>(headingDwellHoldS_ * 1000.0f);
+    if (profileElapsed && sOk && thetaOk && dwellHeldMs_ >= holdNeededMs) {
       completeActive(CompletionStatus::kDone);
+    } else if (activeElapsedMs_ >= stopTimeBackstopMs()) {
+      completeActive(CompletionStatus::kTimeout);
     }
   }
 

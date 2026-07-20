@@ -57,27 +57,30 @@
 //
 // -- Terminal-decel PD gate --
 // `headingActive` is ALSO false once the command has ALREADY satisfied the
-// dwell gate's own tolerance/rate test (`headingDwellTol_`/
-// `headingDwellRate_` -- the SAME test `tick()`'s completion logic uses),
-// even for a heading-bearing command still technically "active" (not yet
-// dwell-held long enough to complete, or not terminal so no dwell needed at
-// all) -- "gated off during terminal decel" (sprint.md/ticket 005's own
-// semantics item 3), read as an ERROR-based condition ("already landed,
-// stop nudging it") rather than a fixed time-before-planned-completion
-// window. A time-based window was this ticket's OWN first implementation
-// and was caught by this ticket's own sim system test
-// (test_heading_source.py): it disabled the PD correction during the final
-// portion of the PLANNED trajectory's own duration regardless of the REAL
-// plant's measured error at that point, so a real (non-ideal, laggy) plant
-// that was still meaningfully off target when the window opened had its
-// correction authority pulled right when it was needed most, latching a
-// several-degree overshoot the PD was never given the chance to close. The
-// error-based gate closes exactly the failure mode
+// dwell gate's own tolerance test (`headingDwellTol_` -- the SAME test
+// `tick()`'s completion logic uses), even for a heading-bearing command
+// still technically "active" (not yet dwell-held long enough to complete,
+// or not terminal so no dwell needed at all) -- "gated off during terminal
+// decel" (sprint.md/ticket 005's own semantics item 3), read as an
+// ERROR-based condition ("already landed, stop nudging it") rather than a
+// fixed time-before-planned-completion window. A time-based window was this
+// ticket's OWN first implementation and was caught by this ticket's own sim
+// system test (test_heading_source.py): it disabled the PD correction
+// during the final portion of the PLANNED trajectory's own duration
+// regardless of the REAL plant's measured error at that point, so a real
+// (non-ideal, laggy) plant that was still meaningfully off target when the
+// window opened had its correction authority pulled right when it was
+// needed most, latching a several-degree overshoot the PD was never given
+// the chance to close. The error-based gate closes exactly the failure mode
 // `.clasi/knowledge/d-drive-terminal-instability.md` documents (a commanded
 // REVERSAL right at an ALREADY-GOOD landing) without also disabling
-// correction while genuinely still far from the target.
+// correction while genuinely still far from the target. 112-004: the gate
+// used to ALSO require a rate test (`headingDwellRate_`/`dwellRateFilt_`,
+// the EMA-filtered dwell-gate rate check) -- that half is DELETED along
+// with the rest of the terminal patch stack (see "Unified completion"
+// below); the gate is tolerance-only now.
 //
-// -- Distance completion + same-sign overshoot carry --
+// -- Distance completion (112-004: same-sign overshoot carry deleted) --
 // "Encoder-relative travel" (ticket 005's own wording) means App::Pilot
 // accumulates App::Odometry::lastDistance() every tick while a command is
 // active and passes the running total into THIS class's own tick() call
@@ -86,36 +89,42 @@
 // class's own decision, matching the file's boundary comment: "calls into
 // JerkTrajectory for the actual solve, never does the solve math itself" --
 // Executor still gets to decide WHEN a command is done, from measured
-// inputs Pilot merely samples and hands over). A kArc command (distance !=
-// 0) completes its DISTANCE half once `|measuredPathSinceActivation_| >=
-// |effectiveDistance_|`; the signed remainder (`measuredPathSinceActivation_
-// - effectiveDistance_`) becomes `pendingOvershoot_`, consumed (added into
-// `effectiveDistance_ = cmd.distance - pendingOvershoot_`) by the VERY NEXT
-// activation IFF that next command is itself a same-sign kArc command --
-// any other next command (kTimed, kPivot, opposite-sign kArc) silently
-// drops the pending carry rather than applying it somewhere it doesn't
-// belong. This is single-command bookkeeping only, NOT the full boundary-
-// velocity carry (ticket 006's own scope) -- there is no attempt here to
-// avoid decelerating to rest at the shared boundary, only to not silently
-// lose a few mm of over/under-travel at a queue boundary.
+// inputs Pilot merely samples and hands over). A kArc command's own linear
+// error, `sErr = effectiveDistance_ - measuredPathSinceActivation_`, feeds
+// the unified completion rule below exactly the way `thetaErr` already
+// feeds it for heading. `effectiveDistance_` is now always exactly
+// `cmd.distance` -- 112-004 deleted the same-sign `pendingOvershoot_` carry
+// this comment used to document (the signed remainder of a completed kArc
+// command, folded into the VERY NEXT same-sign kArc activation's own
+// target). That carry is NOT the same mechanism as the 40mm gross-
+// divergence reanchor (`checkDivergence()`'s `pendingLinearReanchor_`
+// tier, below) -- the reanchor is a mid-command recovery for a genuine
+// slip/stall, untouched by this deletion; the deleted carry was pure
+// between-command bookkeeping for a few mm of over/under-travel.
 //
-// -- Dwell completion (heading-bearing commands) --
-// A REST-TERMINATED heading-bearing command (this is the LAST command in
-// the queue -- `queueCount_ == 0` at the moment its own distance/pivot
-// criterion is met) must additionally hold `|deltaHeading - thetaMeas| <
-// heading_dwell_tol` AND `|thetaRate| < heading_dwell_rate`
-// (msg::PlannerConfig, ticket 005's own new fields) for `arrive_dwell`
-// seconds (REUSED from the existing terminal-completion dwell field --
-// ticket 005's own semantics item 4 numeric match: 150ms is both the
-// existing arrive_dwell default AND the ticket's own dwell-hold spec) before
-// completing DONE; a `STOP_TIME` backstop (`stopTimeBackstopMs()`, a
-// generous multiple of the dominant channel's own solved duration) forces
-// completion regardless, so a persistent oscillation or a measurement fault
-// can never wedge the executor open forever. A CHAINED (non-terminal --
-// `queueCount_ > 0`) heading-bearing command skips the hold-timer/rate gate
-// entirely and completes on the tolerance test alone (no dwell) --
-// "chained... use encoder/OTOS-accurate handoff without a dwell" (ticket
-// 005's own semantics item 4).
+// -- Unified completion (112-004) --
+// Replaces the old ad hoc patch stack (straight-lead padding, terminal
+// top-up + cross-bias, the same-sign overshoot carry above, the EMA/leaky-
+// counter dwell machinery, the predicted-state `terminal_lead`/
+// `thetaErrLead` stand-in) with one measured-state rule for the "not
+// carrying" case (a terminal command, or one chained into a successor that
+// does not carry a boundary velocity through): `done = (the dominant
+// channel's own elapsed time has reached its own solved duration) AND
+// |sErr| < distance_tol AND (this command has no heading content OR
+// |thetaErr| < heading_dwell_tol)`, held continuously for `arrive_dwell`
+// seconds via a plain hard-reset-on-any-miss hold counter (not the deleted
+// leaky one -- safe now because 109-009's own noise problem was
+// specifically in the RATE derivative the leaky counter was compensating
+// for, not in thetaErr/sErr themselves, which "settle cleanly... almost
+// immediately" per that ticket's own finding -- see executor.cpp's own
+// dwell-completion comment), plus the SAME `stopTimeBackstopMs()` timeout
+// backstop as before so a persistent oscillation or a stuck measurement can
+// never wedge the executor open forever. The 109-009 boundary-velocity-
+// carry exception is PRESERVED VERBATIM as a DISTINCT code path: a command
+// carrying a nonzero `exitVelocity_` into a compatible successor
+// (`carryingRotationalVelocity`) skips the hold entirely and completes on
+// `withinTol OR crossedTarget` alone -- see executor.cpp's own tick()
+// comment for the full carrying-vs-not-carrying dispatch.
 #pragma once
 
 #include <cstdint>
@@ -207,12 +216,34 @@ class Executor {
     // heading-bearing kArc leg, and during terminal decel.
     bool headingActive = false;
     // withinTolerance -- this tick's own dwell-tolerance test result
-    // (|thetaErrLead| < heading_dwell_tol), exported for App::Pilot's
-    // minimum-command floor (2026-07-18): the floor drives the terminal
-    // approach only while OUTSIDE tolerance and disengages inside it, so
-    // the plant coasts to rest in the band instead of bang-banging
-    // through it. Meaningful only while headingActive.
+    // (|thetaErr| < heading_dwell_tol -- 112-004: the predicted-state
+    // `thetaErrLead`/`terminal_lead` stand-in is deleted, this is now the
+    // raw error). Used internally by tick()'s own unified completion rule
+    // (see this file's own "Unified completion" comment); ALSO used to be
+    // read by App::Pilot's minimum-command floor (2026-07-18), which
+    // 112-004 deleted -- exported here still, as a diagnostic mirror of the
+    // completion decision (no live external consumer today). Meaningful
+    // only while headingActive.
     bool withinTolerance = false;
+    // withinDistanceTolerance -- 112-004: this tick's own linear-tolerance
+    // test result (|sErr| < distance_tol -- the SAME error the unified
+    // completion rule's own sOk test uses), mirroring withinTolerance one
+    // channel over. App::Pilot's own bounded linear position-feedback trim
+    // (112-003) reads this as its terminal-decel gate: the trim keeps
+    // correcting while OUTSIDE tolerance and disengages once inside it, so
+    // the plant coasts to rest in the band instead of continuing to chase
+    // an already-good landing. Gating alone was NOT enough to keep this
+    // stable at the trim's original 15.0/s gain (still rang for several
+    // seconds after gating engaged, particularly following a reversal-
+    // dwell-delayed start) -- 112-004 additionally lowers the shipped
+    // `distance_kp` default to 8.0 (gen_boot_config.py's own
+    // DISTANCE_KP_DEFAULT, empirically swept against this sprint's own
+    // same-boot harness scenario); see pilot.cpp's own trim-gating comment
+    // and this ticket's completion notes for the full finding. Trivially
+    // true for kPivot/kTimed (mirrors sErr's own 0-for-those-modes value),
+    // where the trim is already an unconditional no-op regardless of this
+    // gate.
+    bool withinDistanceTolerance = false;
 
     // thetaRef/thetaMeas -- both RELATIVE to this command's own activation
     // (its own theta==0 origin), same units/frame, meaningful only when
@@ -382,9 +413,10 @@ class Executor {
 
   // completeActive -- shared tail for every completion path (TIMED
   // deadline/RAMP_TO_REST rest, DISTANCE/dwell criteria, solve failure):
-  // stages pendingOvershoot_ (kArc only -- see this file's own "Distance
-  // completion" comment; a no-op for kTimed/kPivot), pushes the completion
-  // event, and calls activateNextOrIdle() -- EXCEPT for kSolveFail (109-006):
+  // pushes the completion event and calls activateNextOrIdle() -- 112-004:
+  // no longer stages an overshoot carry (the same-sign `pendingOvershoot_`
+  // bookkeeping this comment used to document here is deleted, see this
+  // file's own "Distance completion" comment) -- EXCEPT for kSolveFail (109-006):
   // a solve failure flushes the REST of the ring too (each own kFlushed --
   // continuing to the next queued command on the same, evidently broken,
   // channel configuration is not obviously safer than stopping outright)
@@ -454,11 +486,15 @@ class Executor {
   //     channel) -> pendingLinearReanchor_ (the ONE sanctioned measured-
   //     velocity seed, via a finite difference of this tick's own
   //     measuredDistanceDelta/dt -- reanchor()'s own documented exception,
-  //     acceleration forced to 0 by reanchor() itself); >= 5mm (below the
-  //     reanchor threshold) -> pendingLinearRetarget_ (a position-target
-  //     correction only -- still seeded from the channel's own remembered
-  //     velocity/acceleration, never measured, matching retarget()'s own
-  //     contract).
+  //     acceleration forced to 0 by reanchor() itself). This is the ONLY
+  //     tier -- there is no separate small-threshold mid-flight retarget
+  //     (a prior "plan once, finish on the spot" restructure removed a 5mm
+  //     tier that used to live here, see this method's own executor.cpp
+  //     comment for the terminal-reversal ringing it caused; 112-004
+  //     later deleted the unrelated `pendingLinearRetarget_` FIELD outright
+  //     once its own sole remaining consumer -- tick()'s terminal top-up,
+  //     not this method -- was itself deleted, see this file's own
+  //     "Unified completion" comment).
   //   - kPivot, rotational domain: >= 0.3rad -> pendingRotationalReanchor_
   //     only -- no separate small-threshold retarget tier for heading (the
   //     PD cascade in App::Pilot already continuously corrects small
@@ -545,9 +581,14 @@ class Executor {
 
   // -- 109-005: DISTANCE-mode (kArc/kPivot) bookkeeping --
   float headingRatioPerMm_ = 0.0f;  // [rad/mm] deltaHeading/distance, kArc only, set once at activate()
-  float effectiveDistance_ = 0.0f;  // [mm] cmd.distance adjusted by a carried-in same-sign overshoot
+  // effectiveDistance_ -- 112-004: always exactly cmd.distance now (the
+  // same-sign overshoot carry that used to adjust this away from cmd.distance
+  // -- pendingOvershoot_, below -- is deleted; see this file's own "Distance
+  // completion" comment). Kept as its own field (rather than reading
+  // active_.distance directly) since it is still the linear channel's own
+  // solveToState() position target in plan().
+  float effectiveDistance_ = 0.0f;  // [mm]
   float measuredPathSinceActivation_ = 0.0f;  // [mm] signed, App::Odometry::lastDistance() accumulated
-  float pendingOvershoot_ = 0.0f;   // [mm] signed carry -- see this file's own "Distance completion" comment
 
   bool headingBaselineSet_ = false;
   // unwrappedThetaRel_/lastMeasuredHeadingAbs_ (109-009 fix): thetaMeasRel used to be a single
@@ -569,27 +610,25 @@ class Executor {
                                          // is the actual thetaMeasRel used everywhere below now.
   float lastMeasuredHeadingAbs_ = 0.0f;  // [rad] previous tick()'s raw (wrapped) measuredHeadingAbs
   float prevThetaMeasRel_ = 0.0f;    // [rad] previous tick()'s thetaMeas -- this class's own dwell-rate estimate
+  // dwellHeldMs_ -- 112-004: how long the unified completion rule's own
+  // tolerance test has held continuously, TRUE (t >= duration) AND (|sErr| <
+  // distance_tol) AND (no heading content OR |thetaErr| < heading_dwell_tol).
+  // A plain hard-reset-on-any-miss counter (any cycle that fails the test
+  // resets this to 0), NOT the 109-009 leaky/decaying counter it replaces --
+  // safe now because 109-009's own noise problem was specifically in the
+  // RATE derivative (dwellRateFilt_, deleted below), not in thetaErr/sErr
+  // themselves (see this file's own "Unified completion" comment for the
+  // full reasoning). Held against headingDwellHoldS_ (arrive_dwell).
   uint32_t dwellHeldMs_ = 0;         // [ms] how long the dwell gate has held continuously
-  float dwellRateFilt_ = 0.0f;       // [rad/s] 109-009 fix: exponentially-smoothed thetaRate used
-                                      // ONLY by the dwell gate's own rate test (headingDwellRate_) --
-                                      // see executor.cpp's own dwell-completion comment for why a raw
-                                      // one-sample finite-difference derivative is unusable under the
-                                      // realistic sim OTOS/encoder noise profile. The PD/completion's
-                                      // OTHER uses of the instantaneous thetaRate are unaffected.
 
   float headingDwellTol_ = 0.0f;   // [rad] msg::PlannerConfig.heading_dwell_tol
-  float headingDwellRate_ = 0.0f;  // [rad/s] msg::PlannerConfig.heading_dwell_rate
   float headingDwellHoldS_ = 0.0f; // [s] msg::PlannerConfig.arrive_dwell (REUSED, see file header)
-
-  // -- 109-010: lead-compensation locus 3 (locus 2, the plan_lead
-  // wheel-velocity-reference peek(), was DELETED by 112-001 -- F2's
-  // jerk-warp bug, sampling at `elapsed + lead` evaluating the reference
-  // at `2t`; `out.v`/`omegaFf` are now always the same-instant sample().
-  // `plan_lead` itself stays a DECLARED msg::PlannerConfig field -- schema
-  // cleanup is a future ticket, see motion/DESIGN.md sec 2c). See
-  // planner.proto's own terminal_lead doc comment and this file's tick()
-  // implementation comment for where locus 3 is applied. --
-  float terminalLeadS_ = 0.0f;  // [s] msg::PlannerConfig.terminal_lead (locus 3)
+  // distanceTol_ -- 112-004: msg::PlannerConfig.distance_tol, the unified
+  // completion rule's own linear tolerance (|sErr| < distanceTol_) -- mirrors
+  // headingDwellTol_ one channel over. Replaces the old hardcoded
+  // kDistanceSettleEpsilonMm constant (executor.cpp), which this ticket
+  // deletes now that the field it was standing in for is live-wired.
+  float distanceTol_ = 0.0f;       // [mm] msg::PlannerConfig.distance_tol
 
   // -- 109-006: boundary-velocity carry + divergence replan --
 
@@ -611,20 +650,14 @@ class Executor {
   float linearFrameOffset_ = 0.0f;      // [mm]
   float rotationalFrameOffset_ = 0.0f;  // [rad]
 
-  // pendingLinearReanchor_/pendingLinearRetarget_/pendingRotationalReanchor_
-  // -- set by checkDivergence() (tick()), serviced by plan() (the ONLY
-  // place that ever calls JerkTrajectory::retarget()/reanchor() -- tick()
-  // itself never solves). No small-threshold rotational retarget tier --
-  // see checkDivergence()'s own comment.
+  // pendingLinearReanchor_ -- set by checkDivergence() (tick()), serviced
+  // by plan() (the ONLY place that ever calls JerkTrajectory::retarget()/
+  // reanchor() -- tick() itself never solves). The 40mm gross-divergence
+  // reanchor tier -- see checkDivergence()'s own comment. UNTOUCHED by
+  // 112-004 (a mid-command recovery mechanism, distinct from the deleted
+  // pendingLinearRetarget_/pendingOvershoot_ terminal-top-up/between-
+  // command bookkeeping this ticket removed).
   bool pendingLinearReanchor_ = false;
-  // pendingLinearRetarget_ -- as of the 2026-07-18 "plan once, finish on
-  // the spot" restructure this is NO LONGER a mid-flight divergence
-  // correction (that 5mm tier caused terminal reversal ringing -- see
-  // checkDivergence()'s own comment). It is now set ONLY by tick()'s
-  // terminal top-up: the profile ran out, the channel is at rest, and the
-  // MEASURED distance landed short of target beyond the settle epsilon --
-  // plan() then solves the (always forward, from-rest) remainder.
-  bool pendingLinearRetarget_ = false;
 
   // msSinceLastReanchor_ -- time since the last reanchor() on EITHER
   // channel (a single shared timer -- only one of linear_/rotational_ is

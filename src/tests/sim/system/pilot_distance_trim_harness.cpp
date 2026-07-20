@@ -86,10 +86,15 @@ int main() {
     sim.boot();
     sim.step(3);
 
-    // 15.0/s -- the SAME production default gen_boot_config.py bakes
-    // (DISTANCE_KP_DEFAULT) -- this scenario doubles as a regression pin
-    // for that real number, not just an arbitrary stress value.
-    constexpr float kDistanceKp = 15.0f;  // [1/s]
+    // 8.0/s -- the SAME production default gen_boot_config.py bakes
+    // (DISTANCE_KP_DEFAULT, 112-004's own closed-loop-convergence retune
+    // down from 112-003's original 15.0 -- see that constant's own
+    // comment) -- this scenario doubles as a regression pin for that real
+    // number, not just an arbitrary stress value. Explicit here even
+    // though it now also matches TestSim::SimHarness::makeExecutorConfig()'s
+    // own shipped default (112-004), since a test should never depend on
+    // an ambient default silently tracking a production one.
+    constexpr float kDistanceKp = 8.0f;  // [1/s]
     sim.setDistanceKp(kDistanceKp);
 
     // A long, plain straight leg -- no heading content (deltaHeading=0)
@@ -147,7 +152,7 @@ int main() {
                     std::to_string(App::kDistanceTrimCeiling) + "mm/s)");
 
       // The trim genuinely engaged (this is not a vacuous pass because the
-      // trim happened to stay at 0) -- at kDistanceKp=15.0/s, even a single
+      // trim happened to stay at 0) -- at kDistanceKp=8.0/s, even a single
       // frozen cycle's own small divergence produces a nonzero correction.
       if (std::fabs(devLeft) > 1.0f) sawNonTrivialDeviation = true;
 
@@ -169,16 +174,20 @@ int main() {
     sim.plant().freezePosition(/*port=*/2, false);
   }
 
-  // --- Scenario 2: with distance_kp left at its default (0, matching the
-  //     production sim-harness baseline every OTHER sim scenario runs
-  //     against), the trim is a genuine no-op even under the same frozen-
-  //     encoder divergence -- proves this ticket's addition does not
-  //     perturb any pre-existing, un-opted-in scenario. ---
+  // --- Scenario 2: with distance_kp explicitly set to 0 (112-004: no
+  //     longer the ambient sim-harness default -- see
+  //     TestSim::SimHarness::makeExecutorConfig()'s own comment, since the
+  //     unified completion rule now needs a live, nonzero distance_kp/tol
+  //     pair to ever reach kDone -- but still a legitimate opt-OUT any
+  //     test can request), the trim is a genuine no-op even under the same
+  //     frozen-encoder divergence -- proves this ticket's addition does
+  //     not FORCE itself onto a scenario that explicitly wants it off. ---
   {
-    beginScenario("distance_kp=0 (default): trim is a true no-op even with a frozen-encoder divergence");
+    beginScenario("distance_kp=0 (explicit opt-out): trim is a true no-op even with a frozen-encoder divergence");
     TestSim::SimHarness sim;
     sim.boot();
     sim.step(3);
+    sim.setDistanceKp(0.0f);
 
     constexpr float kVMax = 100.0f;  // [mm/s]
     sim.injectMove(/*distance=*/5000.0f, /*deltaHeading=*/0.0f, kVMax, /*omega=*/0.0f,
@@ -191,7 +200,7 @@ int main() {
 
     float dev = sim.driveTargetVelLeft() - sim.plannedRefLeft();
     checkTrue(std::fabs(dev) < 1.0f,
-              "with distance_kp at its default (0), commanded == planned (deviation " +
+              "with distance_kp explicitly set to 0, commanded == planned (deviation " +
                   std::to_string(dev) + "mm/s), even under the same divergence scenario 1 injects");
 
     sim.plant().freezePosition(/*port=*/1, false);

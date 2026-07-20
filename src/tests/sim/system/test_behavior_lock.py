@@ -455,5 +455,28 @@ def test_same_boot_all_moves_completed(harness_run):
     _assert_result(harness_run, "same_boot_all_moves_completed")
 
 
+# --- Chained pivot->pivot (112-004: 109-009 boundary-velocity-carry
+#     exception guardrail) ---------------------------------------------------
+
+
+def test_chained_pivot_no_decel_at_boundary(harness_run):
+    """112-004: two SAME-SIGN 180deg pivots injected back-to-back (the
+    second enqueued via injectMove(..., replace=false) while the first is
+    still running) must both complete, and the commanded per-wheel target
+    must NOT drop near zero within 2 cycles of the first pivot's own
+    completion -- proving Motion::Executor's own 109-009 boundary-velocity-
+    carry exception (the carryingRotationalVelocity branch, preserved
+    VERBATIM as a distinct code path by this ticket's own unified-
+    completion rewrite) still hands the still-rotating channel straight to
+    the successor instead of decelerating to rest at the boundary. Sprint
+    111's own same-boot scenario (above) alternates straight/pivot with no
+    chaining at all, so it never exercised this path; this is the first
+    harness coverage of it through the full App::RobotLoop/App::Pilot/
+    Motion::Executor graph (boundary_velocity_harness.cpp's own Scenario 4
+    already covers the same mechanism at the raw Motion::Executor level,
+    with no App::Pilot/App::RobotLoop in the loop)."""
+    _assert_result(harness_run, "chained_pivot_no_decel_at_boundary")
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v", "-s"]))

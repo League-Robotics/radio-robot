@@ -140,13 +140,56 @@ J_MAX_DEFAULT        = 5000.0   # [mm/s^3] ~6x a_max -- ~0.16s jerk-limited edge
 YAW_JERK_MAX_DEFAULT = 100.0    # [rad/s^3] ~5x yaw_acc_max -- ~0.2s
 
 # Outer heading-loop PD gain defaults (098-001 — sprint 098's new cascade,
-# architecture-update.md M1/M2, Decision 2). Conservative STARTING values,
-# not yet bench-tuned — heading_kp on the order of a few /s sits roughly a
-# decade below the inner wheel-velocity loop's ~1-4 Hz corner
-# (motion_control.ipynb); heading_kd starts at 0 (pure P, derivative off).
-# Ticket 003 iterates both against tests/bench/turn_sweep.py --relay --both
-# on the real plant.
-HEADING_KP_DEFAULT = 3.0    # [1/s]
+# architecture-update.md M1/M2, Decision 2). heading_kd starts at 0 (pure P,
+# derivative off).
+#
+# HEADING_KP_DEFAULT bumped 3.0 -> 6.0 (112-004, sprint 112 Architecture
+# Design Rationale Decision 5): required by the deadband inequality
+# (`heading_kp * heading_dwell_tol >= omega_deadband`) once App::Pilot's own
+# min-speed terminal-stiction floor is deleted (112-004's own main scope) --
+# without a floor OR a gain clearing this inequality, the heading PD can
+# stall with its output below what the write-shaping deadband/motor
+# stiction actually moves, exactly the failure pilot.cpp's own pre-112-004
+# comment documented ("kp=1 froze 5.7deg out, kp=6 froze ~1deg out"). 6.0 is
+# not a fresh guess — it is the same value sprint 098 already bench-
+# validated for turn accuracy (.clasi/knowledge/heading-loop-solves-turn-
+# accuracy.md: "kp=6 beats terminal stiction... 100% within +/-1 degree").
+#
+# Empirical re-verification against the ACTUAL current source (112-004's own
+# instruction — do not cite architecture-update.md's numbers unchecked):
+#   omega_deadband = 2 * v_deadband / trackWidth, where v_deadband =
+#   outputDeadband / vel_kff (Devices::NezhaMotor::kDefaultOutputDeadband =
+#   MotorArmor::kDefaultMotionThreshold = 0.03 duty; motor_armor.h/
+#   nezha_motor.h) — the SAME per-wheel deadband formula
+#   DISTANCE_KP_DEFAULT's own comment below already derives for the LINEAR
+#   channel, since a pivot drives the identical wheel PID/write-shaping
+#   stack. trackWidth = 128mm (data/robots/tovez.json AND tovez_nocal.json
+#   both, "trackwidth": 128). heading_dwell_tol = 3.0deg = 0.05236rad
+#   (HEADING_DWELL_TOL_DEG_DEFAULT below, current value, widened from 0.5deg
+#   2026-07-18). heading_kp * heading_dwell_tol = 6.0 * 0.05236 =
+#   0.3142rad/s (~18.0deg/s) at kp=6.0.
+#     - tovez_nocal.json (the CURRENTLY-ACTIVE boot config, vel_kff=0.002):
+#       v_deadband = 0.03/0.002 = 15.0mm/s -> omega_deadband = 2*15/128 =
+#       0.2344rad/s. 0.3142 >= 0.2344 -- HOLDS (~34% margin).
+#     - tovez.json (the historically bench-tuned profile, vel_kff=0.0008
+#       post-106-002 kff detune — see that file's own _vel_gains_note):
+#       v_deadband = 0.03/0.0008 = 37.5mm/s -> omega_deadband = 2*37.5/128 =
+#       0.5859rad/s. 0.3142 >= 0.5859 is FALSE -- the inequality does NOT
+#       hold against this config's own, currently-tuned, higher deadband.
+#   This is the SAME "architecture doc's cited range predates the 106-002
+#   detune" finding DISTANCE_KP_DEFAULT's own comment already turned up for
+#   the linear channel, now confirmed on the rotational side too: sprint
+#   098's own kp=6 bench validation predates that detune. tovez.json's OWN
+#   heading_kp is already 6.0 (set independently of this default, sprint
+#   098-003) — this default bump does not change tovez.json's own behavior
+#   either way (it already overrides), but the underlying deadband-clearing
+#   claim for kp=6.0 is HONESTLY only confirmed against the neutral/no-cal
+#   baseline, not the currently-tuned robot. Flagged here for a future
+#   bench-tuning pass (sim-only this sprint, per sprint 112's own Scope) --
+#   NOT silently fixed by picking a different default, since the ticket's
+#   own acceptance criterion is the specific value 6.0 (matching sprint
+#   098's bench-proven number), not whichever value clears this inequality.
+HEADING_KP_DEFAULT = 6.0    # [1/s]
 HEADING_KD_DEFAULT = 0.0    # dimensionless
 
 # 109-005: App::HeadingSource per-robot policy override + the heading-dwell
@@ -279,16 +322,16 @@ ACTUATION_LAG_DEFAULT = 0.130     # [s]
 # numeric default means that future rewire is a pure substitution, not a
 # silent behavior change.
 #
-# DISTANCE_KP_DEFAULT (15.0/s) is sized against the deadband inequality
-# `distance_kp * distance_tol >= v_deadband`, where v_deadband is the
-# write-shaping deadband floor `Devices::NezhaMotor` applies (duty below
-# `kDefaultOutputDeadband`=0.03, nezha_motor.h, is written as an outright
-# 0 -- `writeShapedDuty()`'s own `fabsf(duty) < outputDeadband_` check) --
-# below v_deadband, a commanded correction simply never reaches the plant.
-# Re-verified against the ACTUAL current source (not the architecture
-# doc's own cited "~15-19mm/s" range, taken unchecked) by computing
-# v_deadband = outputDeadband / vel_kff for the robot configs actually on
-# disk:
+# DISTANCE_KP_DEFAULT was originally sized (112-003) against ONLY the
+# deadband inequality `distance_kp * distance_tol >= v_deadband`, where
+# v_deadband is the write-shaping deadband floor `Devices::NezhaMotor`
+# applies (duty below `kDefaultOutputDeadband`=0.03, nezha_motor.h, is
+# written as an outright 0 -- `writeShapedDuty()`'s own `fabsf(duty) <
+# outputDeadband_` check) -- below v_deadband, a commanded correction
+# simply never reaches the plant. Re-verified against the ACTUAL current
+# source (not the architecture doc's own cited "~15-19mm/s" range, taken
+# unchecked) by computing v_deadband = outputDeadband / vel_kff for the
+# robot configs actually on disk:
 #   - the CURRENTLY-ACTIVE boot config (data/robots/active_robot.json ->
 #     tovez_nocal.json, control.vel_kff=0.002): 0.03/0.002 = 15.0mm/s --
 #     matches the architecture doc's own cited lower bound exactly, and
@@ -300,15 +343,46 @@ ACTUATION_LAG_DEFAULT = 0.130     # [s]
 #     _vel_gains_note: "vel_kff 0.00135->0.0008"): 0.03/0.0008 = 37.5mm/s
 #     -- MEANINGFULLY HIGHER than the architecture doc's cited range,
 #     because that range predates (or does not reflect) the 106-002
-#     detune. This is the concrete finding this ticket's own "re-verify
+#     detune. This is the concrete finding 112-003's own "re-verify
 #     against the actual current source" instruction turned up.
-# 15.0 * 3.0 = 45.0mm/s clears BOTH figures with margin (30.0mm/s over the
-# active-config floor, 7.5mm/s over the higher, currently-tuned-robot
-# floor) while staying below App::kDistanceTrimCeiling (50.0mm/s) -- an
-# in-tolerance error is not yet clamped, matching the heading PD's own
-# unclamped-near-target shape (pilot.h's own kDistanceTrimCeiling doc
-# comment has the full clamp-sizing rationale).
-DISTANCE_KP_DEFAULT  = 15.0   # [1/s]
+# 15.0 * 3.0 = 45.0mm/s cleared BOTH figures with margin against that
+# ALGEBRAIC inequality alone.
+#
+# DISTANCE_KP_DEFAULT bumped DOWN 15.0 -> 8.0 (112-004): the algebraic
+# deadband inequality above was never checked against actual CLOSED-LOOP
+# convergence (112-003's own harness graded only the PLANNED reference,
+# never completion, since nothing consumed distance_tol yet) -- 112-004 is
+# the ticket that wires distance_tol into Motion::Executor's own unified
+# completion rule for the first time, making the trim's own terminal
+# convergence load-bearing, and doing so exposed a real closed-loop
+# instability at kp=15.0: a sustained +-10mm oscillation around target that
+# App::Pilot's own new terminal-decel gate (pilot.cpp, mirroring the
+# heading PD's own gate) alone did not fully resolve, particularly for a
+# straight leg immediately following a pivot (both wheels reversing
+# direction into NezhaMotor's own 100ms reversal-dwell window, stacking
+# extra lag onto the trim's own reaction). Directly swept against this
+# sprint's own same-boot behavior-lock scenario (40 consecutive alternating
+# D700-straight/360deg-pivot moves, src/tests/sim/system/
+# behavior_lock_harness.cpp): kp in [1, 8] converges cleanly and
+# deterministically (100% completion across repeated runs); kp=10 fails
+# intermittently (1/40 moves); kp=12/kp=13 fail increasingly often (4/40,
+# 10/40) approaching the old 15.0 default. 8.0 is chosen with margin below
+# the kp=10 instability onset, not merely the largest passing value swept.
+#
+# Honest consequence, the SAME shape as HEADING_KP_DEFAULT's own Decision 5
+# finding above: 8.0 * 3.0 = 24.0mm/s clears the ACTIVE (nocal) config's
+# 15.0mm/s deadband floor (60% margin) but NOT the historically bench-tuned
+# tovez.json profile's own higher 37.5mm/s floor. Unlike heading_kp (whose
+# ticket-004 acceptance bar was a SPECIFIC, already bench-validated value,
+# 6.0, not chosen freely), distance_kp has no such prior bench validation
+# to defer to (Decision 6 explicitly left it for empirical determination
+# during implementation) -- so closed-loop STABILITY, verified directly
+# against this sprint's own harness, is the deciding constraint here, with
+# the deadband shortfall against the tuned config flagged (not silently
+# fixed) for a future bench-tuning pass, exactly like heading_kp's own
+# shortfall. See pilot.cpp's own trim-gating comment and this ticket's
+# completion notes for the full sweep table.
+DISTANCE_KP_DEFAULT  = 8.0    # [1/s]
 DISTANCE_TOL_DEFAULT = 3.0    # [mm]
 
 # arrive_dwell default for msg::PlannerConfig field 31 (100-001 -- motion-
@@ -820,11 +894,12 @@ msg::PlannerConfig defaultPlannerConfig() {{
     cfg.setActuationLag({_f(actuation_lag)});           // [s]
 
     // 112-003: App::Pilot's own bounded linear position-feedback trim --
-    // distance_kp is the trim's gain, distance_tol repurposes the role
-    // Motion::kDistanceSettleEpsilonMm plays as a hardcoded constant
-    // (not yet wired into the completion decision -- ticket 004's scope).
-    // See DISTANCE_KP_DEFAULT/DISTANCE_TOL_DEFAULT's own comment above for
-    // the deadband-inequality derivation.
+    // distance_kp is the trim's gain, distance_tol is Motion::Executor's
+    // own unified completion rule's linear tolerance (112-004 wired this
+    // live, replacing the hardcoded Motion::kDistanceSettleEpsilonMm
+    // constant it repurposes the role of). See DISTANCE_KP_DEFAULT/
+    // DISTANCE_TOL_DEFAULT's own comment above for the deadband-inequality
+    // derivation AND 112-004's own closed-loop-convergence retune.
     cfg.setDistanceKp({_f(distance_kp)});              // [1/s]
     cfg.setDistanceTol({_f(distance_tol)});             // [mm]
     return cfg;

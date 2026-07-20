@@ -323,13 +323,13 @@ class SimHarness {
   }
 
   // setDistanceKp -- 112-003 test-only hook, same shape as
-  // setYawRateMax()/setLeadCompensation() above: makeExecutorConfig()
-  // leaves PlannerConfig.distance_kp at its zero-value default (a genuine
-  // no-op -- see that function's own comment), so App::Pilot's new bounded
-  // linear position-feedback trim stays completely inert in every
-  // PRE-EXISTING sim scenario unless a test opts in via this hook. Used by
-  // pilot_distance_trim_harness.cpp's own 087-009 clamp-authority
-  // guardrail check.
+  // setYawRateMax()/setLeadCompensation() above: lets a test override
+  // PlannerConfig.distance_kp away from makeExecutorConfig()'s own shipped
+  // default (8.0 as of 112-004; see that function's own comment) --
+  // e.g. to 0.0 for a test that wants App::Pilot's bounded linear
+  // position-feedback trim completely inert, or to a specific value for a
+  // targeted gain/clamp check. Used by pilot_distance_trim_harness.cpp's
+  // own 087-009 clamp-authority guardrail check.
   void setDistanceKp(float distanceKp) {
     lastDistanceKp_ = distanceKp;
     msg::PlannerConfig cfg = makeExecutorConfig();
@@ -537,11 +537,33 @@ class SimHarness {
     // boots with, not a silent 0.0f no-op.
     cfg.actuation_lag = 0.130f;      // [s]
     // 112-003: App::Pilot's own bounded linear position-feedback trim gain.
-    // Left at its zero-value default (a genuine no-op -- Pilot::tick()'s
-    // trim collapses to distance_kp*(...)=0 unconditionally) so every
-    // PRE-EXISTING sim scenario is completely unaffected by this ticket's
-    // addition; setDistanceKp() below is the ONLY way a test opts in.
-    cfg.distance_kp = 0.0f;          // [1/s]
+    // 112-004 UPDATE: no longer left at 0.0 -- Motion::Executor's own
+    // unified completion rule reads `distance_tol` LIVE now (|sErr| <
+    // distance_tol, the linear half of `done = t >= duration+margin AND
+    // |sErr| < distance_tol AND |thetaErr| < heading_dwell_tol`), which
+    // makes the trim's own closed-loop convergence load-bearing for
+    // completion for the first time -- a plant with NO trim at all settles
+    // several mm short of target (a real, measured lag-induced undershoot,
+    // not a bug) and can never satisfy the completion rule's own tolerance
+    // test, timing out instead of completing. 8.0 matches
+    // gen_boot_config.py's own DISTANCE_KP_DEFAULT (112-004's own
+    // empirically-swept, closed-loop-stable value -- see that constant's
+    // own comment and pilot.cpp's own trim-gating comment for the full
+    // derivation); every PRE-EXISTING sim scenario that never queried
+    // completion timing precisely is unaffected either way, and
+    // setDistanceKp() below still lets a test override this per-scenario.
+    cfg.distance_kp = 8.0f;          // [1/s]
+    // 112-004: same load-bearing-for-completion reasoning as distance_kp
+    // above -- unlike distance_kp, 0.0 here is not even a directionally
+    // safe fallback: a strict `<` against a 0 tolerance can never be
+    // satisfied (the same reason heading_dwell_tol above is never left at
+    // 0 either), so every DISTANCE-mode (kArc) scenario through THIS
+    // harness needs a real value or its "not carrying" completion branch
+    // can only ever reach kTimeout, never kDone. 3.0mm matches
+    // gen_boot_config.py's own DISTANCE_TOL_DEFAULT and the value
+    // Motion::kDistanceSettleEpsilonMm used to hardcode before this ticket
+    // wired the live field in.
+    cfg.distance_tol = 3.0f;         // [mm]
     return cfg;
   }
 
@@ -620,7 +642,7 @@ class SimHarness {
   float lastHeadingLeadBias_ = -0.05f;  // [s] matches makeExecutorConfig()'s own default
   float lastPlanLead_ = 0.20f;         // [s] matches makeExecutorConfig()s own default
   float lastTerminalLead_ = 0.0f;      // [s]
-  float lastDistanceKp_ = 0.0f;        // [1/s] 112-003, matches makeExecutorConfig()'s own default
+  float lastDistanceKp_ = 8.0f;        // [1/s] 112-003/112-004, matches makeExecutorConfig()'s own default
 };
 
 }  // namespace TestSim

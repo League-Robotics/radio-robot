@@ -607,6 +607,101 @@ void runSameBootScenario() {
   report("same_boot_all_moves_completed", allDone, detail);
 }
 
+// runChainedPivotScenario -- 112-004: a targeted regression test for the
+// 109-009 boundary-velocity-carry chained-pivot dwell-skip exception
+// (Motion::Executor::tick()'s own carryingRotationalVelocity branch, kept
+// as a DISTINCT code path -- not folded into the unified completion rule
+// -- by this ticket's own guardrail). Sprint 111's own same-boot scenario
+// (above) alternates straight/pivot with NO chaining at all (see sprint
+// 112 Architecture Open Questions), so it cannot exercise this path; this
+// scenario closes that gap through the FULL App::RobotLoop/App::Pilot/
+// Motion::Executor graph (SimHarness), complementing
+// boundary_velocity_harness.cpp's own lower-level Scenario 4 (which
+// exercises Motion::Executor directly, with no App::Pilot/App::RobotLoop
+// in the loop).
+//
+// Two SAME-SIGN 180deg pivots, injected back-to-back via injectMove(...,
+// replace=false) while the first is still RUNNING (an append, not a
+// retarget) -- this makes the second the first's own immediate successor
+// (ring_[0]) at the moment computeExitVelocity() next runs, giving the
+// pair a matching sign/domain to carry a nonzero rotational exit velocity
+// through the boundary (executor.cpp's own computeExitVelocity()
+// comment). If the 109-009 exception did NOT survive 112-004's rewrite --
+// e.g. if the carrying branch were accidentally folded into the unified
+// "not carrying" rule's dwell hold -- the first pivot would decelerate to
+// rest at the boundary instead of handing off a still-rotating channel,
+// visible directly as both wheels' own COMMANDED target
+// (driveTargetVelLeft/Right(), the same signal test_*_shelf_collapsed
+// grades) dropping near zero right around the handoff.
+void runChainedPivotScenario() {
+  beginScenario("chained pivot->pivot: same-sign 180deg pivots carry rotational velocity through the boundary "
+                "(109-009 exception)");
+  TestSim::SimHarness sim;
+  sim.boot();
+  sim.step(3);
+
+  constexpr float kDeltaHeading = kPi;  // [rad] 180deg, SAME sign both legs
+  constexpr uint32_t kId1 = 501, kId2 = 502;
+  constexpr uint32_t kCorr1 = 9501, kCorr2 = 9502;
+  constexpr int kMaxCycles = 400;
+
+  sim.injectMove(0.0f, kDeltaHeading, 0.0f, 0.0f, 0.0f, /*replace=*/false, kId1, kCorr1);
+
+  // A few cycles to reach cruise, THEN enqueue the second pivot behind the
+  // still-running first one -- this is the "chained" half of the scenario;
+  // injecting both up front (before the first ever runs) would instead
+  // test activate()'s own append-to-empty-ring path, not a mid-flight
+  // successor-change (109-006 trigger (a), maybeRetargetActiveForSuccessorChange()).
+  sim.step(5);
+  checkTrue(sim.pilotState() == Motion::State::kRunning,
+            "the first pivot is still running when the second (chained) pivot is enqueued");
+  sim.injectMove(0.0f, kDeltaHeading, 0.0f, 0.0f, 0.0f, /*replace=*/false, kId2, kCorr2);
+
+  bool firstDone = false;
+  bool secondDone = false;
+  bool sawNearZeroAtBoundary = false;
+  int cyclesSinceFirstDone = -1;
+  for (int i = 0; i < kMaxCycles && !secondDone; ++i) {
+    sim.step(1);
+    for (const auto& line : sim.drainTelemetry()) {
+      if (line.kind != TestSupport::DecodedKind::kTelemetry) continue;
+      for (uint8_t a = 0; a < line.telemetry.acks_count; ++a) {
+        // Ack-ring RETRANSMISSION means a DONE ack for kId1 can appear in
+        // MULTIPLE subsequent frames, not just once -- guard with !firstDone
+        // so a later retransmission does not keep resetting
+        // cyclesSinceFirstDone back to 0 (which would starve the
+        // near-boundary detection window below of ever advancing past 0/1).
+        if (!firstDone && line.telemetry.acks_[a].corr_id == kId1 &&
+            line.telemetry.acks_[a].status == msg::AckStatus::ACK_STATUS_DONE) {
+          firstDone = true;
+          cyclesSinceFirstDone = 0;
+        }
+        if (line.telemetry.acks_[a].corr_id == kId2 &&
+            line.telemetry.acks_[a].status == msg::AckStatus::ACK_STATUS_DONE) {
+          secondDone = true;
+        }
+      }
+    }
+    if (firstDone && !secondDone) {
+      if (cyclesSinceFirstDone >= 0 && cyclesSinceFirstDone <= 2 &&
+          std::fabs(sim.driveTargetVelLeft()) < kNearZero &&
+          std::fabs(sim.driveTargetVelRight()) < kNearZero) {
+        sawNearZeroAtBoundary = true;
+      }
+      ++cyclesSinceFirstDone;
+    }
+  }
+
+  checkTrue(firstDone, "the first (chained) pivot reached ACK_STATUS_DONE within budget");
+  checkTrue(secondDone, "the second (chained) pivot reached ACK_STATUS_DONE within budget");
+  report("chained_pivot_no_decel_at_boundary", firstDone && secondDone && !sawNearZeroAtBoundary,
+         sawNearZeroAtBoundary
+             ? "both wheels' own commanded target read near-zero within 2 cycles of the first "
+               "pivot's own completion -- the 109-009 boundary-velocity carry did not survive (a "
+               "full decel-to-rest snuck back in at the chained-pivot boundary)"
+             : "");
+}
+
 }  // namespace
 
 int main() {
@@ -682,6 +777,7 @@ int main() {
                     /*corrId=*/1012);
 
   runSameBootScenario();
+  runChainedPivotScenario();
 
   std::printf("\n");
   if (g_failureCount == 0) {

@@ -418,6 +418,114 @@ attempt per `hardware-bench-testing.md`'s own escalation path). See
 `app/DESIGN.md`'s own "kDeadTime" Open-Questions entry for the full
 derivation and the flag for a real re-characterization later.
 
+**112-004 revision — the terminal patch stack (straight-lead padding,
+terminal top-up + cross-bias, same-sign overshoot carry, the EMA/leaky-
+counter dwell machinery, the predicted-state `terminal_lead`/`thetaErrLead`
+stand-in) is DELETED and completion is UNIFIED.** This is the sprint 112
+issue's own step 6, safe only once tickets 002/003 (accel feedforward
+through `App::Drive`, the bounded linear trim in `App::Pilot`) landed the
+principled replacements the deleted patches were compensating for the
+absence of. Every mechanism this entry's own earlier paragraphs (above)
+describe as live is now gone or superseded as follows:
+
+- **Straight-lead padding (`kStraightLeadBias`/`kStraightLeadSlope`,
+  `plan()`'s `kArc` branch)** — deleted outright. `plan()` now solves
+  directly to `effectiveDistance_`, no longer padded to pre-compensate for
+  a lag-induced undershoot.
+- **Terminal top-up (`pendingLinearRetarget_`, its trigger in `tick()`, its
+  cross-bias epsilon nudge in `plan()`) and `kTopUpMeasuredRestVelocity`**
+  — deleted. There is no more mid-flight-or-post-profile re-solve of the
+  linear channel at all outside the pre-existing 40mm gross-divergence
+  reanchor (untouched, see below).
+- **Same-sign overshoot carry (`pendingOvershoot_`, `activate()`/
+  `completeActive()`)** — deleted. `effectiveDistance_` is now always
+  exactly `cmd.distance`; a completed `kArc` command's own signed overshoot
+  is simply dropped, not folded into the next same-sign activation's own
+  target.
+- **The dwell gate's EMA rate filter (`dwellRateFilt_`) and its raw
+  `headingDwellRate_` config copy** — deleted. The unified rule (below) has
+  no rate test at all.
+- **The leaky/decaying hold counter (`dwellHeldMs_`'s own reset-by-`dtMs`
+  logic, 109-009 round 2)** — replaced by a plain hard-reset-on-any-miss
+  counter. Safe now because 109-009's own noise problem was specifically in
+  the RATE derivative the leaky counter was compensating for (see this
+  entry's own "rate test also gained a low-pass filter" paragraph above);
+  with no rate test left to be noisy, a hard reset no longer risks the same
+  intermittent `STOP_TIME` fault that motivated the leaky counter.
+- **The predicted-state terminal decision (`thetaErrLead`,
+  `terminalLeadS_`)** — deleted. The dwell gate's own tolerance test now
+  reads the raw `thetaErr` directly (locus 3 of 109-010's own three-locus
+  lead-compensation scheme, this entry's own "Turn-error characterization"
+  subsection below — locus 3 is now a genuine no-op by deletion, not merely
+  a zeroed default). `msg::PlannerConfig.terminal_lead` itself stays a
+  DECLARED wire field (sprint 112 Architecture Design Rationale Decision 7
+  — schema cleanup is a future, separate mechanical ticket).
+- **`kDistanceSettleEpsilonMm`** — deleted. `msg::PlannerConfig.distance_tol`
+  (112-003's own field, previously unconsumed — see "`distanceDone` also
+  accepts a small settle epsilon" paragraph above) is now the live,
+  wire-tunable replacement.
+
+**The unified completion rule** replaces the entire `headingContent`/
+non-heading two-branch dispatch this entry's own "Dwell completion" and
+"plain (no-heading-content) terminal branch" paragraphs above described,
+with ONE rule for the "not carrying" case (terminal, or chained into a
+successor that does not carry a boundary velocity through — see the
+109-009 exception below for the one still-distinct branch):
+
+```
+done = profileElapsed AND |sErr| < distance_tol AND thetaOk
+```
+
+— held continuously for `arrive_dwell` (`headingDwellHoldS_`) via the
+hard-reset counter above, plus the SAME `stopTimeBackstopMs()` timeout
+backstop this branch has always had (both its former headingContent and
+non-heading incarnations). `profileElapsed` is "the dominant channel's own
+solved duration has elapsed" (`dominantDurationS > 0.0f &&
+dominantElapsedS >= dominantDurationS`) — the sprint's own `t >= duration +
+margin` wording, with margin folded to 0 (the AND'd tolerance tests already
+prevent premature completion mid-cruise; ticket 112-004's own completion
+notes record why a nonzero margin was not found necessary). `sErr` is
+`effectiveDistance_ - measuredPathSinceActivation_` (the linear channel's
+own error against the TARGET, mirroring `thetaErr`'s "target minus
+measured" shape) — trivially 0 for `kPivot` (no linear channel). `thetaOk`
+is `!headingContent || |thetaErr| < heading_dwell_tol` — trivially true for
+a non-heading-bearing `kArc` straight leg (SUC-005's own Main Flow states
+that command's completion rule as `|s_err| < distance_tol` alone, no
+`theta_err` term at all).
+
+**The 109-009 boundary-velocity-carry chained-pivot dwell-skip exception is
+PRESERVED VERBATIM as a DISTINCT code path** (112-004's own explicit
+guardrail) — `carryingRotationalVelocity = headingContent &&
+(exitVelocity_ != 0.0f)` still gates a completely separate branch:
+`sOk && (withinTol || crossedTarget)`, no hold, exactly as this entry's own
+"109-009 revision" paragraphs above describe, unchanged in shape or
+condition. The unified rule above applies ONLY to the "not carrying" case.
+
+**The 40mm gross-divergence reanchor tier is UNTOUCHED.** `checkDivergence()`
+itself (§2d, `pendingLinearReanchor_`) is a mid-command RECOVERY mechanism
+for a genuine slip/stall — a completely different mechanism from the
+between-command `pendingOvershoot_` bookkeeping 112-004 deletes. Diff-
+verified byte-for-byte identical except for the mechanical removal of a
+dangling `pendingLinearRetarget_ = false;` reset line inside the reanchor
+branch (a forced consequence of that field's own deletion elsewhere, not a
+change to the reanchor's own threshold/condition/logic).
+
+**`HEADING_KP_DEFAULT` bumped 3.0 → 6.0** (`gen_boot_config.py`) so the
+deadband inequality (`heading_kp * heading_dwell_tol >= omega_deadband`)
+holds without `App::Pilot`'s own deleted min-speed floor — see that
+constant's own comment for the full re-derivation against the ACTUAL
+current `vel_kff`/`trackwidth`/`heading_dwell_tol` values (not the
+architecture doc's own cited range, taken unchecked) and the honest finding
+that 6.0 clears the inequality against the active/no-cal boot config but
+not the historically bench-tuned `tovez.json` profile's own higher
+deadband. `App::Pilot`'s own min-speed floor deletion, and its linear-trim
+terminal-decel gate/`distance_kp` retune (a related, empirically-driven
+fix this same ticket needed once the trim's own convergence became
+load-bearing for completion), are documented in `app/DESIGN.md`'s own
+112-004 update, not here — this file's own boundary keeps every gain/gate
+out of `motion/` (this entry's own "heading PD cascade lives in
+`App::Pilot`, not here" paragraph, above).
+
 ### 2d. Boundary-velocity carry + replan triggers (109-006)
 
 **`exitSpeed(active, next)` — the "no decel between same-vmax commands"
@@ -649,13 +757,18 @@ this ticket's — both stay exactly as documented below, untouched by
    (position tracking, completion, `checkDivergence()`) were never on this
    locus at all — they always used the current elapsed sample — and are
    unaffected by this deletion.
-3. **Predicted-state terminal/stop decision (`Motion::Executor::tick()`,
-   executor.cpp)** — the dwell gate's own tolerance test uses
+3. **DELETED (112-004) — predicted-state terminal/stop decision
+   (`Motion::Executor::tick()`, executor.cpp).** This locus used to compute
    `thetaErrLead = deltaHeading - (thetaMeasRel + thetaRate * terminal_lead)`
    (a predicted-state stand-in for solving the exact crossing time
-   analytically) instead of the raw `thetaErr`. Deliberately does NOT touch
-   `checkDivergence()`'s own comparison — same rule ticket 006's own history
-   (below, `kDeadTime`) already established for that specific comparison.
+   analytically) and feed it to the dwell gate's own tolerance test instead
+   of the raw `thetaErr`. 112-004 deleted `thetaErrLead` and its own
+   `terminalLeadS_` field/`configure()` assignment outright — the unified
+   completion rule's own tolerance test now reads the raw, un-led `thetaErr`
+   directly (this file's own "112-004 revision" entry, above).
+   `msg::PlannerConfig.terminal_lead` itself stays a DECLARED wire field
+   (sprint 112 Architecture Design Rationale Decision 7 — schema cleanup is
+   a future ticket).
 
 **Honest post-compensation finding (NOT a slope collapse).** A raw,
 uncompensated age lead (`heading_lead_bias=0`) was swept against both

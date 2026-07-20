@@ -298,22 +298,27 @@ message PlannerConfig {
   // to mirror `heading_kp` (sprint 112 Architecture Design Rationale
   // Decision 3 -- Executor exposes `sRef`/`sMeas`, Pilot owns the gain and
   // the correction arithmetic, the SAME split the heading PD already
-  // uses). Default 15.0 -- chosen so `distance_kp * distance_tol`
-  // (45.0mm/s) clears the write-shaping deadband floor
-  // (`outputDeadband/kff`, `Devices::NezhaMotor`'s own duty cutoff),
-  // re-verified against the ACTUAL current source rather than trusting
-  // Decision 6's own cited "~15-19mm/s" range unchecked:
-  // `kDefaultOutputDeadband` = 0.03 (nezha_motor.h) over the currently-
-  // active boot config's own `vel_kff` (`data/robots/active_robot.json`
-  // -> `tovez_nocal.json`, 0.002) gives 15.0mm/s, and over the
-  // historically bench-tuned `tovez.json` profile's own `vel_kff`
-  // (0.0008, post sprint-106-002's kff detune -- see that file's own
-  // `_vel_gains_note`) gives 37.5mm/s -- HIGHER than Decision 6's cited
-  // range, because that range predates/doesn't reflect the detune; 45.0
-  // clears both with margin. See `gen_boot_config.py`'s
-  // `DISTANCE_KP_DEFAULT`/`DISTANCE_TOL_DEFAULT` comments for the full
-  // derivation. `PlannerConfigPatch` curates this field (config.proto)
-  // for live bench iteration, same as `heading_kp`.
+  // uses). Default 8.0 (112-004; was 15.0 as originally shipped by
+  // 112-003) -- 112-003's own 15.0 cleared the algebraic deadband
+  // inequality (`distance_kp * distance_tol >= v_deadband`,
+  // `v_deadband = outputDeadband/vel_kff` -- 15.0mm/s for the active
+  // no-cal boot config, 37.5mm/s for the historically bench-tuned
+  // tovez.json profile post its own 106-002 kff detune) with margin, but
+  // 112-004 -- the ticket that first wires `distance_tol` into
+  // `Motion::Executor`'s own completion decision, making this trim's own
+  // CLOSED-LOOP convergence load-bearing for the first time -- found kp=15
+  // rings (a sustained +-10mm oscillation) rather than settles, swept
+  // directly against the sim behavior-lock same-boot scenario (kp<=8
+  // converges cleanly and deterministically; kp=10 fails intermittently;
+  // kp>=12 fails increasingly often). 8.0 clears the active/no-cal
+  // config's own 15.0mm/s deadband floor (24.0mm/s, 60% margin) but NOT
+  // the tuned tovez.json profile's own higher 37.5mm/s floor -- flagged
+  // for a future bench pass, the same shape as `heading_kp`'s own
+  // Decision 5 shortfall. See `gen_boot_config.py`'s
+  // `DISTANCE_KP_DEFAULT`/`DISTANCE_TOL_DEFAULT` comments and pilot.cpp's
+  // own trim-gating comment for the full derivation/sweep.
+  // `PlannerConfigPatch` curates this field (config.proto) for live bench
+  // iteration, same as `heading_kp`.
   float distance_kp = 39;
 
   // [mm] 112-003: the linear completion tolerance, s_tol -- repurposes

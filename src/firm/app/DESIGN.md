@@ -122,10 +122,28 @@ pilot.h's own `kDistanceTrimCeiling` doc comment for the full sizing
 derivation (the deadband inequality `distance_kp * distance_tol >=
 v_deadband`, re-verified against the actual current `Devices::NezhaMotor`
 write-shaping deadband rather than an unchecked architecture-doc figure).
-`distance_tol` (the new field alongside `distance_kp`) is NOT yet read by
-this trim, or by anything else — it repurposes the role
-`Motion::kDistanceSettleEpsilonMm` currently plays as a hardcoded
-constant, wired into the completion decision by a later ticket.
+**112-004 update.** `distance_tol` is now read — by `Motion::Executor`'s own
+unified completion rule (`motion/DESIGN.md` §2c's own "Unified completion"
+entry), not by this trim — replacing the hardcoded
+`Motion::kDistanceSettleEpsilonMm` constant it used to repurpose the role
+of (now deleted). Once the trim's own convergence became load-bearing for
+completion this way, two further 112-004 changes landed here:
+`Pilot::tick()` now gates the trim off once `Twist::withinDistanceTolerance`
+(`|sErr| < distance_tol`) is true — mirroring the heading PD's own
+terminal-decel gate (`Twist::headingActive`) exactly, for the identical
+reason: an ungated P-only trim has no error left to asymptotically decay
+once the plant is genuinely at rest, so it otherwise bang-bangs a small
+residual back and forth around target rather than converging. Gating alone
+was not sufficient at the trim's original 15.0/s gain (still rang for
+several seconds, particularly after a reversal-dwell-delayed start), so
+`distance_kp`'s own shipped default also drops to 8.0 — an empirical,
+closed-loop-convergence finding (swept against the sim behavior-lock
+same-boot scenario), not a re-derivation of the deadband-inequality
+arithmetic above, which the new 8.0 default still satisfies against the
+active/no-cal boot config (though not the higher-tuned tovez.json profile
+— see pilot.cpp's own trim-gating comment and 112-004's own completion
+notes for the full sweep and the honest deadband-shortfall accounting,
+the same shape as `heading_kp`'s own Decision 5 finding).
 
 **`HeadingSource` (109-005).** A passive reader, no bus traffic of its
 own — `sample()` reads `Devices::Otos::pose()`/`poseFresh()`/`connected()`/
