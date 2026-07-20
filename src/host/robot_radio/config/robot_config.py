@@ -149,6 +149,17 @@ class CalibrationConfig(BaseModel):
     # _sync_calibration derives from wheels.wheel_diameter_mm as before.
     mm_per_wheel_deg_left:  Optional[float] = None
     mm_per_wheel_deg_right: Optional[float] = None
+    # 113-004: the drive pair's per-port forward-sign (mirror-mounted, so
+    # left/right are EXPECTED to differ in sign -- 088-002,
+    # clasi/issues/tovez-drive-motor-reversed-fwd-sign.md). Baked at build
+    # time by gen_boot_config.py's fwd_sign_for_ports() into MotorConfig; no
+    # live SET key. Added here so the host's own Tier-2 sim boot-config
+    # mapping helper (calibration/sim_boot_config.py) can read the SAME
+    # value gen_boot_config.py reads from the robot JSON, rather than
+    # silently falling back to the +1 placeholder for a config that DOES
+    # set it (pydantic drops undeclared JSON keys at parse time).
+    fwd_sign_left:  Optional[int] = None
+    fwd_sign_right: Optional[int] = None
     # Body-rotation efficiency: actual_body_rotation_rad / no_slip_estimate_rad
     # where no_slip_estimate = 2 * arc_per_wheel / trackwidth.
     # 1.0 = no slip. 0.75 = robot only rotates 75% of what wheel arc predicts
@@ -200,11 +211,44 @@ class ControlConfig(BaseModel):
     min_wheel_mms: Optional[float] = None   # → SET minWheelMms (low-speed deadband)
     turn_gate:     Optional[float] = None   # → SET turnGate   (turn-in-place gate, deg)
     yaw_rate_max:  Optional[float] = None   # → SET yawRateMax (yaw rate ceiling, deg/s)
+    # 113-003: min_speed/distance_kp/arrive_dwell were already curated as
+    # live-tunable PlannerConfigPatch fields (config.proto) with a real
+    # firmware consumer, but had no field on this model at all -- so
+    # calibration_kwargs() had nothing to read and these three fields
+    # silently never reached the wire. Field names mirror the robot JSON's
+    # own control.* keys 1:1 (coding-standards.md's wire-key exclusion).
+    min_speed:     Optional[float] = None   # → SET minSpeed  (Drive:: pivot-mode threshold, mm/s)
+    distance_kp:   Optional[float] = None   # → SET distanceKp (distance-loop P gain)
+    arrive_dwell:  Optional[float] = None   # → SET arriveDwell (arrival dwell time, s)
 
     # Host-side motion limit (NOT pushed to firmware): the maximum rotational
     # acceleration, deg/s^2, that the turn / turn2 trapezoidal velocity profile
     # ramps to and from. Default 300. Override per-call with --accel if needed.
     max_rot_accel_dps2: Optional[float] = 300.0
+
+    # 113-004: the remaining Tier-2 (boot-only) PlannerConfig fields --
+    # gen_boot_config.py already reads every one of these from the robot
+    # JSON's control.* keys (heading_source_for_config(),
+    # lead_compensation_for_config(), actuation_lag_for_config(),
+    # distance_gains_for_config(), model_tau_for_config()), but none had a
+    # field on this model -- so a config carrying a real value (e.g.
+    # tovez_nocal.json's distance_tol=6.0/actuation_lag=0.0) would silently
+    # be dropped by pydantic at parse time and the host's own Tier-2 sim
+    # boot-config mapping helper (calibration/sim_boot_config.py) would see
+    # only the firmware fallback default -- NOT the field-for-field parity
+    # with gen_boot_config.py's own output this sprint requires. None of
+    # these have a live SET key (boot-only, config.proto's own
+    # PlannerConfigPatch header comment); added here purely so the mapping
+    # helper's RobotConfig->dict conversion is lossless, mirroring the three
+    # fields 113-003 already added to this model for the identical reason.
+    heading_source:    Optional[str] = None    # control.heading_source ("auto"/"otos"/"encoder")
+    heading_lead_bias: Optional[float] = None  # [s] control.heading_lead_bias
+    plan_lead:         Optional[float] = None  # [s] control.plan_lead
+    terminal_lead:     Optional[float] = None  # [s] control.terminal_lead
+    actuation_lag:     Optional[float] = None  # [s] control.actuation_lag
+    distance_tol:      Optional[float] = None  # [mm] control.distance_tol
+    model_tau_lin:     Optional[float] = None  # [s] control.model_tau_lin
+    model_tau_ang:     Optional[float] = None  # [s] control.model_tau_ang
 
 
 # ---------------------------------------------------------------------------

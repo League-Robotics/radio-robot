@@ -305,6 +305,77 @@ def test_generate_arrive_dwell_falls_back_with_no_robot_config():
     assert line in content, f"missing/changed arrive_dwell default setter: {line}"
 
 
+# ---------------------------------------------------------------------------
+# 113-001: model_tau_for_config() -- App::Pilot's own two-stage model-
+# reference feedback plant-lag time constants (msg::PlannerConfig fields
+# 41/42), previously plain hardcoded pilot.h member initializers with no
+# config path at all. Mirrors distance_gains_for_config()'s present/absent
+# coverage style above.
+# ---------------------------------------------------------------------------
+
+def test_model_tau_for_config_reads_tovez_nocal_json():
+    """model_tau_for_config() reads tovez_nocal.json's real
+    control.model_tau_lin/control.model_tau_ang (0.1/0.08, added the same
+    session that validated these SIM-VALIDATED motion values) -- which
+    happen to equal the firmware defaults, so this alone doesn't prove the
+    JSON path is read (see the arbitrary-value test below for that)."""
+    nocal_json = _REPO_ROOT / "data" / "robots" / "tovez_nocal.json"
+    cfg = json.loads(nocal_json.read_text())
+
+    model_tau_lin, model_tau_ang = gbc.model_tau_for_config(cfg)
+
+    assert model_tau_lin == 0.1
+    assert model_tau_ang == 0.08
+
+
+def test_model_tau_for_config_falls_back_to_firmware_defaults():
+    """With no control.model_tau_lin/control.model_tau_ang in the robot JSON
+    (or no robot config at all), both time constants fall back to the
+    firmware defaults -- matching pilot.h's own prior hardcoded values
+    exactly, so an unmigrated robot JSON boots byte-identical to before this
+    ticket."""
+    model_tau_lin, model_tau_ang = gbc.model_tau_for_config({})
+
+    assert model_tau_lin == gbc.MODEL_TAU_LIN_DEFAULT == 0.10
+    assert model_tau_ang == gbc.MODEL_TAU_ANG_DEFAULT == 0.08
+
+
+def test_model_tau_for_config_reads_arbitrary_json_values():
+    """Proves the mapping genuinely reads from the JSON (not merely always
+    returning the default, which would be indistinguishable from the
+    tovez_nocal.json test above since that file's committed values happen to
+    equal the firmware defaults)."""
+    cfg = {"control": {"model_tau_lin": 0.25, "model_tau_ang": 0.19}}
+
+    model_tau_lin, model_tau_ang = gbc.model_tau_for_config(cfg)
+
+    assert model_tau_lin == 0.25
+    assert model_tau_ang == 0.19
+
+
+def test_generate_emits_default_planner_config_with_model_tau():
+    """generate()'s output gains the setModelTauLin()/setModelTauAng() setter
+    calls inside defaultPlannerConfig(), resolving to tovez_nocal.json's real
+    starting values -- additive to the pre-existing motion-limit/heading-
+    gain/distance-gain setters covered above."""
+    nocal_json = _REPO_ROOT / "data" / "robots" / "tovez_nocal.json"
+    cfg = json.loads(nocal_json.read_text())
+    content = gbc.generate(cfg, "data/robots/tovez_nocal.json")
+
+    assert f"cfg.setModelTauLin({gbc._f(0.1)});" in content
+    assert f"cfg.setModelTauAng({gbc._f(0.08)});" in content
+
+
+def test_generate_model_tau_falls_back_with_no_robot_config():
+    """With no robot config found, the model_tau setters emit their
+    firmware-default literals (mirrors
+    test_generate_arrive_dwell_falls_back_with_no_robot_config's shape)."""
+    content = gbc.generate({}, "(firmware defaults)")
+
+    assert f"cfg.setModelTauLin({gbc._f(gbc.MODEL_TAU_LIN_DEFAULT)});" in content
+    assert f"cfg.setModelTauAng({gbc._f(gbc.MODEL_TAU_ANG_DEFAULT)});" in content
+
+
 if __name__ == "__main__":
     import pytest
 

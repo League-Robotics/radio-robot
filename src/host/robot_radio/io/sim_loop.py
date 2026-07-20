@@ -121,6 +121,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 if TYPE_CHECKING:
+    from robot_radio.config.robot_config import RobotConfig
     from robot_radio.robot.pb2 import envelope_pb2
     from robot_radio.robot.protocol import TLMFrame
 
@@ -185,6 +186,26 @@ _TLM_DRAIN_BUFFER = 16384
 _SimHookFn = ctypes.CFUNCTYPE(
     ctypes.c_int, ctypes.c_void_p, ctypes.c_uint16,
     ctypes.POINTER(ctypes.c_uint8), ctypes.c_int)
+
+# Tier-2 config-load readback (113-007) -- field order matches
+# sim_configure_planner()'s own 22-value-arg order exactly (sim_ctypes.cpp's
+# own header comment cross-references this ordering both ways). Used to build
+# sim_read_planner_config()'s out-pointer argtypes below AND
+# SimLoop.read_planner_config()'s returned dict keys, so the two can never
+# drift apart from each other.
+_PLANNER_CONFIG_FIELDS = (
+    "a_max", "a_decel", "v_body_max",
+    "yaw_rate_max", "yaw_acc_max",
+    "j_max", "yaw_jerk_max",
+    "min_speed", "heading_kp", "heading_kd",
+    "arrive_dwell",
+    "heading_source",  # int (msg::HeadingSourceMode) -- every other field is float
+    "heading_dwell_tol", "heading_dwell_rate",
+    "heading_lead_bias", "plan_lead", "terminal_lead",
+    "actuation_lag",
+    "distance_kp", "distance_tol",
+    "model_tau_lin", "model_tau_ang",
+)
 
 # Lazily-imported/cached pb2 module -- see sim_ctypes.cpp's own header and
 # the deleted predecessor's _get_envelope_pb2() docstring: no circular-
@@ -289,6 +310,48 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
     lib.sim_set_lead_compensation.restype = None
     lib.sim_set_yaw_rate_max.argtypes = [ctypes.c_void_p, ctypes.c_float]
     lib.sim_set_yaw_rate_max.restype = None
+
+    # Tier-2 config-load surface (113-002/113-005): SimHarness::
+    # configurePlanner()/configureMotor()'s one-shot runtime load, for the
+    # msg::PlannerConfig fields (and per-motor vel_filt/fwd_sign) with no
+    # live Tier-1 wire arm -- see sim_ctypes.cpp's own header comment (Tier-2
+    # config-load surface section) for the full field list/order and
+    # SimLoop.configure_from_robot()'s own docstring for how this is called.
+    lib.sim_configure_planner.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_float, ctypes.c_float, ctypes.c_float,  # a_max, a_decel, v_body_max
+        ctypes.c_float, ctypes.c_float,                  # yaw_rate_max, yaw_acc_max
+        ctypes.c_float, ctypes.c_float,                  # j_max, yaw_jerk_max
+        ctypes.c_float, ctypes.c_float, ctypes.c_float,  # min_speed, heading_kp, heading_kd
+        ctypes.c_float,                                  # arrive_dwell
+        ctypes.c_int,                                    # heading_source (msg::HeadingSourceMode)
+        ctypes.c_float, ctypes.c_float,                  # heading_dwell_tol, heading_dwell_rate
+        ctypes.c_float, ctypes.c_float, ctypes.c_float,  # heading_lead_bias, plan_lead, terminal_lead
+        ctypes.c_float,                                  # actuation_lag
+        ctypes.c_float, ctypes.c_float,                  # distance_kp, distance_tol
+        ctypes.c_float, ctypes.c_float,                  # model_tau_lin, model_tau_ang
+    ]
+    lib.sim_configure_planner.restype = None
+
+    lib.sim_configure_motor.argtypes = [
+        ctypes.c_void_p, ctypes.c_int, ctypes.c_float, ctypes.c_int]
+    lib.sim_configure_motor.restype = None
+
+    # Tier-2 config-load readback (113-007) -- out-pointer argtypes, one per
+    # _PLANNER_CONFIG_FIELDS entry above (int for heading_source, float for
+    # every other field), matching sim_read_planner_config()'s own C
+    # signature (sim_ctypes.cpp) field-for-field and in the same order.
+    lib.sim_read_planner_config.argtypes = [ctypes.c_void_p] + [
+        ctypes.POINTER(ctypes.c_int) if name == "heading_source"
+        else ctypes.POINTER(ctypes.c_float)
+        for name in _PLANNER_CONFIG_FIELDS
+    ]
+    lib.sim_read_planner_config.restype = None
+
+    lib.sim_read_motor_config.argtypes = [
+        ctypes.c_void_p, ctypes.c_int,
+        ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_int)]
+    lib.sim_read_motor_config.restype = None
 
     lib.sim_set_read_hook.argtypes = [ctypes.c_void_p, _SimHookFn, ctypes.c_void_p]
     lib.sim_set_read_hook.restype = None
@@ -430,6 +493,155 @@ class SimLoop:
         self._require_connected()
         raw = self._lib.sim_firmware_version()
         return raw.decode() if raw else "?"
+
+    # ------------------------------------------------------------------
+    # Configure from robot (113-005) -- "the sim configures on open"
+    # ------------------------------------------------------------------
+
+    def configure_from_robot(self, config: "RobotConfig") -> None:
+        """Configure the running sim from *config* (a
+        ``robot_radio.config.robot_config.RobotConfig``, or any duck-typed
+        object with the same attribute structure) -- BOTH tiers sprint 113
+        exists to close the gap between:
+
+        - **Tier 1** (the live ``ConfigDelta``/SET wire plane -- fields
+          BOTH real hardware and this sim already apply identically via
+          ``RobotLoop::handleConfig()``): builds a ``NezhaProtocol``
+          wrapping a ``SimConfigConn`` over this ``SimLoop`` and calls
+          ``set_config(**calibration_kwargs(config))`` -- ticket 003's
+          extracted field-selection function. Reuses the EXACT
+          envelope-building/wire-key vocabulary hardware transports use
+          (109-002 Architecture Revision 1's "one mechanism, not a
+          Sim-specific fork") -- no Tier-1 field selection is
+          reimplemented here.
+        - **Tier 2** (the boot-only fields with no live wire arm, including
+          ``model_tau_lin``/``model_tau_ang``): calls
+          ``planner_boot_config_for(config)``/``motor_boot_config_for(config,
+          port)`` (ticket 004's reuse of ``gen_boot_config.py``'s own
+          mapping functions) and passes the results to the
+          ``sim_configure_planner()``/``sim_configure_motor()`` ctypes
+          exports (ticket 002) -- ``SimHarness::configurePlanner()``/
+          ``configureMotor()``'s one-shot runtime-load surface.
+
+        Tier 1 runs first (the smaller, already-proven mechanism); Tier 2
+        second. Neither tier's outcome depends on the other's.
+
+        Requires an active connection (``_require_connected()``, matching
+        every other ``SimLoop`` method's precondition style). Every import
+        this method needs is deferred to inside this method body (matching
+        this module's own existing convention for ``envelope_pb2``/
+        ``TLMFrame`` -- see the module docstring's "Lazily-imported/cached
+        pb2 module" note) -- deliberately, so this method has NO import-time
+        OR call-time dependency on ``robot_radio.testgui`` (or Qt): a
+        headless caller (pytest fixture, diagnostic script) can call this
+        without pulling in Qt at all (sprint 113's SUC-002).
+        """
+        self._require_connected()
+
+        # ---- Tier 1: live ConfigDelta/SET wire plane -----------------------
+        from robot_radio.calibration.push import calibration_kwargs
+        from robot_radio.io.sim_config import SimConfigConn
+        from robot_radio.robot.protocol import NezhaProtocol
+
+        config_proto = NezhaProtocol(SimConfigConn(self))  # type: ignore[arg-type]
+        config_proto.set_config(**calibration_kwargs(config))
+
+        # ---- Tier 2: one-shot boot-config load surface ---------------------
+        from robot_radio.calibration.sim_boot_config import (
+            motor_boot_config_for, planner_boot_config_for)
+
+        planner_cfg = planner_boot_config_for(config)
+        self._lib.sim_configure_planner(
+            self._handle,
+            ctypes.c_float(planner_cfg["a_max"]),
+            ctypes.c_float(planner_cfg["a_decel"]),
+            ctypes.c_float(planner_cfg["v_body_max"]),
+            ctypes.c_float(planner_cfg["yaw_rate_max"]),
+            ctypes.c_float(planner_cfg["yaw_acc_max"]),
+            ctypes.c_float(planner_cfg["j_max"]),
+            ctypes.c_float(planner_cfg["yaw_jerk_max"]),
+            ctypes.c_float(planner_cfg["min_speed"]),
+            ctypes.c_float(planner_cfg["heading_kp"]),
+            ctypes.c_float(planner_cfg["heading_kd"]),
+            ctypes.c_float(planner_cfg["arrive_dwell"]),
+            ctypes.c_int(planner_cfg["heading_source"]),
+            ctypes.c_float(planner_cfg["heading_dwell_tol"]),
+            ctypes.c_float(planner_cfg["heading_dwell_rate"]),
+            ctypes.c_float(planner_cfg["heading_lead_bias"]),
+            ctypes.c_float(planner_cfg["plan_lead"]),
+            ctypes.c_float(planner_cfg["terminal_lead"]),
+            ctypes.c_float(planner_cfg["actuation_lag"]),
+            ctypes.c_float(planner_cfg["distance_kp"]),
+            ctypes.c_float(planner_cfg["distance_tol"]),
+            ctypes.c_float(planner_cfg["model_tau_lin"]),
+            ctypes.c_float(planner_cfg["model_tau_ang"]),
+        )
+
+        for port in (1, 2):  # 1=left, 2=right -- same convention as every other port-keyed call
+            motor_cfg = motor_boot_config_for(config, port)
+            self._lib.sim_configure_motor(
+                self._handle, ctypes.c_int(port),
+                ctypes.c_float(motor_cfg["vel_filt_alpha"]),
+                ctypes.c_int(motor_cfg["fwd_sign"]))
+
+    # ------------------------------------------------------------------
+    # Tier-2 config-load readback (113-007) -- test-only diagnostic proving
+    # what configure_from_robot() (or a direct sim_configure_planner()/
+    # sim_configure_motor() ctypes call) actually landed. No production
+    # caller needs this -- it exists for sprint 113's own golden-parity test
+    # (test_sim_boot_config_parity.py) to compare against gen_boot_config.py's
+    # independently-computed expected values, field-for-field.
+    # ------------------------------------------------------------------
+
+    def read_planner_config(self) -> "dict[str, float | int]":
+        """Return the live ``msg::PlannerConfig`` SimHarness::plannerConfig()
+        currently exposes -- every field ``_PLANNER_CONFIG_FIELDS`` names, in
+        the same dict shape ``sim_boot_config.planner_boot_config_for()``
+        returns (so a test can diff the two directly). Reflects whatever
+        ``configurePlanner()`` last received (via ``configure_from_robot()``
+        or a direct fault-knob call like ``set_yaw_rate_max()``), or the
+        sim's own hardcoded ``makeExecutorConfig()`` baseline if
+        ``configurePlanner()`` was never called. Synchronous round-trip onto
+        the tick thread when one is running (same rationale as
+        ``get_true_pose()``): a caller must see whatever was already applied,
+        not "eventually applied"."""
+        self._require_connected()
+        return self._call_on_tick_thread(self._read_planner_config)
+
+    def _read_planner_config(self) -> "dict[str, float | int]":
+        floats = {
+            name: ctypes.c_float() for name in _PLANNER_CONFIG_FIELDS
+            if name != "heading_source"
+        }
+        heading_source = ctypes.c_int()
+        args = [
+            heading_source if name == "heading_source" else floats[name]
+            for name in _PLANNER_CONFIG_FIELDS
+        ]
+        self._lib.sim_read_planner_config(
+            self._handle, *(ctypes.byref(a) for a in args))
+        return {
+            name: (heading_source.value if name == "heading_source"
+                   else floats[name].value)
+            for name in _PLANNER_CONFIG_FIELDS
+        }
+
+    def read_motor_config(self, port: int) -> "dict[str, float | int]":
+        """Return ``{"vel_filt_alpha": ..., "fwd_sign": ...}`` last pushed to
+        *port* (1=left, 2=right) via ``configureMotor()`` -- the same dict
+        shape ``sim_boot_config.motor_boot_config_for()`` returns. See
+        ``read_planner_config()``'s own docstring for the readback contract
+        and synchronous round-trip rationale."""
+        self._require_connected()
+        return self._call_on_tick_thread(lambda: self._read_motor_config(port))
+
+    def _read_motor_config(self, port: int) -> "dict[str, float | int]":
+        vel_filt_alpha = ctypes.c_float()
+        fwd_sign = ctypes.c_int()
+        self._lib.sim_read_motor_config(
+            self._handle, ctypes.c_int(port),
+            ctypes.byref(vel_filt_alpha), ctypes.byref(fwd_sign))
+        return {"vel_filt_alpha": vel_filt_alpha.value, "fwd_sign": fwd_sign.value}
 
     # ------------------------------------------------------------------
     # TwistTransport protocol (planner/executor.py) -- twist()/stop()/

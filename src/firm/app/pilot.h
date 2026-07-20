@@ -121,6 +121,8 @@ class Pilot {
     headingKp_ = config.heading_kp;
     headingKd_ = config.heading_kd;
     distanceKp_ = config.distance_kp;  // [1/s] 112-003: linear position-feedback trim's own gain (see tick())
+    modelTauLin_ = config.model_tau_lin;  // [s] 113-001: was a plain hardcoded member initializer
+    modelTauAng_ = config.model_tau_ang;  // [s] 113-001: was a plain hardcoded member initializer
     plannerConfig_ = config;
   }
 

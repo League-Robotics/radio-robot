@@ -91,6 +91,22 @@
 //   void sim_set_enc_tick_quant(SimHandle h, int port, float tickSizeMm);  // [mm] (109-007)
 //   void sim_set_enc_slip(SimHandle h, int port, float rate, float magnitudeMm);  // [0,1] [mm] (109-007)
 //
+// ---- Tier-2 config-load surface (113-002) ----
+// Thin call-throughs to SimHarness::configurePlanner()/configureMotor() --
+// the additive, one-shot "load a full boot config at runtime" surface for
+// the msg::PlannerConfig fields (and per-motor vel_filt/fwd_sign) that have
+// no live Tier-1 wire arm. See these exports' own doc comments (below, next
+// to their definitions) for the full field list and the port/merge
+// conventions.
+//   void sim_configure_planner(SimHandle h, float a_max, float a_decel, float v_body_max,
+//       float yaw_rate_max, float yaw_acc_max, float j_max, float yaw_jerk_max,
+//       float min_speed, float heading_kp, float heading_kd, float arrive_dwell,
+//       int heading_source, float heading_dwell_tol, float heading_dwell_rate,
+//       float heading_lead_bias, float plan_lead, float terminal_lead,
+//       float actuation_lag, float distance_kp, float distance_tol,
+//       float model_tau_lin, float model_tau_ang);
+//   void sim_configure_motor(SimHandle h, int port, float velFiltAlpha, int fwdSign);
+//
 // ---- Hook surface -- THE point of this sprint's scripting model ----
 // (master plan's Target architecture, verbatim; see sim_plant.h's own
 // "Intended ctypes bridge" comment, which this file implements exactly as
@@ -326,6 +342,154 @@ void sim_debug_heading_lead(SimHandle h, int* usingOtos, float* heading, float* 
   bool u = false;
   asHarness(h)->debugHeadingLead(&u, heading, headingLead);
   *usingOtos = u ? 1 : 0;
+}
+
+// ---- Tier-2 config-load surface (113-002) ----
+//
+// Thin call-throughs to SimHarness::configurePlanner()/configureMotor() --
+// see sim_harness.h's own doc comments on those methods for the ADDITIVE
+// contract (existing default-constructed SimHarness callers are unaffected;
+// these exports are the ONLY way a ctypes caller reaches them). Safe to call
+// either before or after boot() (sim_create() already calls boot()
+// unconditionally before returning a handle to the caller -- see this
+// file's own header) since neither method touches Preamble's own boot
+// sequencing.
+//
+//   void sim_configure_planner(SimHandle h, <22 args -- one per
+//     msg::PlannerConfig field this sprint's Tier 2 covers, in field-
+//     declaration order; heading_source is an int, cast to
+//     msg::HeadingSourceMode at this boundary>);
+//   void sim_configure_motor(SimHandle h, int port, float velFiltAlpha,
+//     int fwdSign);
+//     port: 1 = left, 2 = right (same convention as every other per-port
+//     export above). Merges velFiltAlpha/fwdSign (the two MotorConfig
+//     fields with no live Tier-1 wire arm) onto the target motor's CURRENT
+//     velGains (read live via NezhaMotor::gains(), the only one of
+//     wheelTravelCalib/velGains/slewRate with an existing accessor -- see
+//     this function's own comment below) rather than a blank MotorConfig{},
+//     so this call cannot clobber what Tier 1's own MotorConfigPatch wire
+//     path already pushed.
+//
+// ---- Tier-2 config-load readback (113-007 test-only diagnostic) ----
+// Thin call-throughs to SimHarness::plannerConfig()/motorConfig() -- the
+// SAME test-only C++ accessors ticket 002's own harness test
+// (sim_harness_configure_harness.cpp) already exercises at the C++ level.
+// Sprint 113's own "golden-parity" test (SUC-001/SUC-002, ticket 007) needs
+// to read back what actually landed in the sim AFTER going through the
+// FULL Python pipeline (SimLoop.configure_from_robot() -> sim_boot_config.py
+// -> sim_configure_planner()/sim_configure_motor() above -> SimHarness), not
+// just at the C++ call site -- no ctypes export existed for that read
+// direction until this ticket added these two. Out-pointer style, mirroring
+// sim_debug_heading_lead()'s existing convention above -- thin call-throughs,
+// no logic of their own.
+//   void sim_read_planner_config(SimHandle h, <22 out-pointers, SAME field
+//     order as sim_configure_planner()'s own 22 value args above>);
+//   void sim_read_motor_config(SimHandle h, int port, float* velFiltAlpha,
+//     int* fwdSign);
+//     port: 1 = left, 2 = right. Returns whatever configureMotor() was last
+//     called with for that port (SimHarness::motorConfig()'s own contract --
+//     a default-constructed Devices::MotorConfig{} if configureMotor() was
+//     never called for that port).
+
+void sim_configure_planner(SimHandle h, float a_max, float a_decel, float v_body_max,
+                            float yaw_rate_max, float yaw_acc_max, float j_max,
+                            float yaw_jerk_max, float min_speed, float heading_kp,
+                            float heading_kd, float arrive_dwell, int heading_source,
+                            float heading_dwell_tol, float heading_dwell_rate,
+                            float heading_lead_bias, float plan_lead, float terminal_lead,
+                            float actuation_lag, float distance_kp, float distance_tol,
+                            float model_tau_lin, float model_tau_ang) {
+  msg::PlannerConfig cfg;
+  cfg.a_max = a_max;
+  cfg.a_decel = a_decel;
+  cfg.v_body_max = v_body_max;
+  cfg.yaw_rate_max = yaw_rate_max;
+  cfg.yaw_acc_max = yaw_acc_max;
+  cfg.j_max = j_max;
+  cfg.yaw_jerk_max = yaw_jerk_max;
+  cfg.min_speed = min_speed;
+  cfg.heading_kp = heading_kp;
+  cfg.heading_kd = heading_kd;
+  cfg.arrive_dwell = arrive_dwell;
+  cfg.heading_source = static_cast<msg::HeadingSourceMode>(heading_source);
+  cfg.heading_dwell_tol = heading_dwell_tol;
+  cfg.heading_dwell_rate = heading_dwell_rate;
+  cfg.heading_lead_bias = heading_lead_bias;
+  cfg.plan_lead = plan_lead;
+  cfg.terminal_lead = terminal_lead;
+  cfg.actuation_lag = actuation_lag;
+  cfg.distance_kp = distance_kp;
+  cfg.distance_tol = distance_tol;
+  cfg.model_tau_lin = model_tau_lin;
+  cfg.model_tau_ang = model_tau_ang;
+  asHarness(h)->configurePlanner(cfg);
+}
+
+// port: 1 = left, 2 = right. wheelTravelCalib/slewRate have no existing
+// Devices::Motor/NezhaMotor accessor (only velGains does, via gains()) --
+// see sim_harness.h's own configureMotor() comment: MotorArmor::configure()
+// does not consume any of those three fields today regardless, so leaving
+// them at MotorConfig{}'s zero defaults here has no live behavioral effect
+// through this call. velGains IS merged live so a future MotorArmor::
+// configure() that starts consuming it (or a direct NezhaMotor consumer)
+// does not get clobbered by this Tier-2 push.
+void sim_configure_motor(SimHandle h, int port, float velFiltAlpha, int fwdSign) {
+  TestSim::SimHarness* harness = asHarness(h);
+  Devices::NezhaMotor& motor = (port == 2) ? harness->motorRight() : harness->motorLeft();
+  Devices::MotorConfig cfg;
+  cfg.port = static_cast<uint32_t>(port);
+  cfg.velGains = motor.gains();  // merge, don't clobber -- see this function's own comment
+  cfg.velFiltAlpha = velFiltAlpha;
+  cfg.fwdSign = fwdSign;
+  harness->configureMotor(static_cast<uint32_t>(port), cfg);
+}
+
+// ---- Tier-2 config-load readback (113-007) ----
+//
+// Thin call-throughs to SimHarness::plannerConfig()/motorConfig() -- see
+// this file's own header comment for why this ticket added a Python-
+// reachable read direction (proving the FULL configure_from_robot()
+// pipeline landed the right values, not just the C++ call site ticket 002's
+// own harness test already covered).
+
+void sim_read_planner_config(SimHandle h, float* a_max, float* a_decel, float* v_body_max,
+                              float* yaw_rate_max, float* yaw_acc_max, float* j_max,
+                              float* yaw_jerk_max, float* min_speed, float* heading_kp,
+                              float* heading_kd, float* arrive_dwell, int* heading_source,
+                              float* heading_dwell_tol, float* heading_dwell_rate,
+                              float* heading_lead_bias, float* plan_lead, float* terminal_lead,
+                              float* actuation_lag, float* distance_kp, float* distance_tol,
+                              float* model_tau_lin, float* model_tau_ang) {
+  const msg::PlannerConfig& cfg = asHarness(h)->plannerConfig();
+  *a_max = cfg.a_max;
+  *a_decel = cfg.a_decel;
+  *v_body_max = cfg.v_body_max;
+  *yaw_rate_max = cfg.yaw_rate_max;
+  *yaw_acc_max = cfg.yaw_acc_max;
+  *j_max = cfg.j_max;
+  *yaw_jerk_max = cfg.yaw_jerk_max;
+  *min_speed = cfg.min_speed;
+  *heading_kp = cfg.heading_kp;
+  *heading_kd = cfg.heading_kd;
+  *arrive_dwell = cfg.arrive_dwell;
+  *heading_source = static_cast<int>(cfg.heading_source);
+  *heading_dwell_tol = cfg.heading_dwell_tol;
+  *heading_dwell_rate = cfg.heading_dwell_rate;
+  *heading_lead_bias = cfg.heading_lead_bias;
+  *plan_lead = cfg.plan_lead;
+  *terminal_lead = cfg.terminal_lead;
+  *actuation_lag = cfg.actuation_lag;
+  *distance_kp = cfg.distance_kp;
+  *distance_tol = cfg.distance_tol;
+  *model_tau_lin = cfg.model_tau_lin;
+  *model_tau_ang = cfg.model_tau_ang;
+}
+
+// port: 1 = left, 2 = right (same convention as sim_configure_motor() above).
+void sim_read_motor_config(SimHandle h, int port, float* velFiltAlpha, int* fwdSign) {
+  const Devices::MotorConfig& cfg = asHarness(h)->motorConfig(static_cast<uint32_t>(port));
+  *velFiltAlpha = cfg.velFiltAlpha;
+  *fwdSign = cfg.fwdSign;
 }
 
 // ---- Hook surface ----

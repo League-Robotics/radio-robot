@@ -2128,6 +2128,31 @@ def _build_main_window():  # type: ignore[return]
 
         No-op when not connected; the push re-runs on the next Connect (and
         on every robot change while connected).
+
+        113-006 (SUC-003): for a connected ``SimTransport``, this ALSO
+        triggers the Tier-2 (boot-only fields, incl. ``model_tau_lin``/
+        ``model_tau_ang``) push via ``transport.configure_from_robot(cfg)``
+        after the per-command loop below completes. The per-command loop
+        itself stays -- it is NOT redundant with ``configure_from_robot()``:
+        it is what pushes the OTOS ``OI``/``OL``/``OA`` sequence (which
+        neither Tier 1 nor Tier 2 of ``configure_from_robot()`` covers --
+        109-004's OTOS calibration path is a separate mechanism, out of
+        this ticket's scope, see sprint 113's own Out of Scope) and what
+        populates the host-side ``GET`` echo cache
+        (``SimTransport._config_echo``, read by ``_handle_config_get()``) --
+        ``configure_from_robot()``'s own Tier-1 route goes straight through
+        ``NezhaProtocol.set_config()``/``SimConfigConn``, bypassing
+        ``SimTransport._handle_config_set()`` entirely, so it never touches
+        that cache. The net effect is Tier 1 gets pushed twice for a Sim
+        transport (once per-command here, once again inside
+        ``configure_from_robot()``) -- harmless, repushing the same values
+        (see this ticket's own Idempotency note), and the only way to add
+        Tier 2 coverage without touching ``SimLoop``'s Tier-1/Tier-2-combined
+        ``configure_from_robot()`` (out of this ticket's file scope).
+        Hardware transports have no Tier 2/``configure_from_robot``
+        equivalent (their boot config comes from their own compiled
+        reflash) -- the extra call below is skipped for them, so this
+        function's behavior for hardware is unchanged.
         """
         transport = _state.get("transport")
         if transport is None:
@@ -2162,6 +2187,14 @@ def _build_main_window():  # type: ignore[return]
             + (f" ({n_nodev} device cmds skipped: no device)" if n_nodev else "")
             + (f" ({n_bad} REJECTED)" if n_bad else "")
         )
+
+        if isinstance(transport, SimTransport):
+            try:
+                transport.configure_from_robot(cfg)
+            except Exception as exc:  # noqa: BLE001 — log, don't kill the GUI
+                _append_log(f"[CAL] configure_from_robot (Tier 2) failed: {exc}")
+                return
+            _append_log(f"[CAL] configured sim Tier 2 from robot '{cfg.robot_name}'")
 
     def _check_firmware_version(transport: "Transport") -> None:
         """Compare the robot's `VER` firmware version against the host package.
@@ -2729,6 +2762,18 @@ def _build_main_window():  # type: ignore[return]
         # Clear any stale trace data from a previous session.
         trace_model.clear()
 
+        # 113-006: no explicit robot_config passed here -- SimTransport.
+        # connect() resolves get_robot_config() itself when the (keyword-
+        # only, optional) parameter is omitted, so a plain no-arg connect()
+        # call still configures the sim from the just-reset-and-reloaded
+        # active robot config (SUC-001), and this call site stays exactly
+        # what it was for every OTHER caller: real hardware transports
+        # (which ignore the parameter regardless), AND every existing
+        # lightweight ``Transport`` test double across this test suite
+        # (several fixtures define their own narrow ``connect(self) ->
+        # None`` override with no ``robot_config`` parameter at all --
+        # calling with a keyword argument here would raise ``TypeError`` on
+        # those, silently short-circuiting the whole Connect flow for them).
         try:
             transport.connect()
         except Exception as exc:
@@ -2787,6 +2832,15 @@ def _build_main_window():  # type: ignore[return]
         # Push the active robot's calibration to the firmware so the selected
         # robot's values override whatever DefaultConfig.cpp baked in — an
         # uncalibrated robot pushes neutral values (SET rotSlip=0 etc.).
+        # 113-006: for Sim, SimTransport.connect() (just above) already
+        # configured the sim from this same active robot config (Tier 1 +
+        # Tier 2), so this repeats the Tier-1 push -- a deliberate,
+        # documented no-op-ish redundancy (see _push_robot_calibration()'s
+        # own docstring): it is what populates the host-side GET echo cache
+        # and pushes the OTOS OI/OL/OA sequence, neither of which
+        # connect()'s own configure_from_robot() call touches. Skipping this
+        # call for Sim would leave GET <key> answering "nodata" and OTOS
+        # unconfigured after a bare Connect (no manual robot-select click).
         _push_robot_calibration()
 
         # Re-apply the PID checkbox state (Sim only; the two column

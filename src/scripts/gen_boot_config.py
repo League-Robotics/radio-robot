@@ -385,6 +385,18 @@ ACTUATION_LAG_DEFAULT = 0.130     # [s]
 DISTANCE_KP_DEFAULT  = 8.0    # [1/s]
 DISTANCE_TOL_DEFAULT = 3.0    # [mm]
 
+# model_tau_lin/model_tau_ang defaults for msg::PlannerConfig fields 41/42
+# (113-001): App::Pilot's own two-stage model-reference feedback plant-lag
+# time constants (pilot.h's modelTauLin_/modelTauAng_) -- previously plain
+# hardcoded member initializers with NO config path of any kind. These two
+# constants match pilot.h's own prior hardcoded values EXACTLY, so a robot
+# JSON without control.model_tau_lin/control.model_tau_ang produces
+# byte-identical boot behavior to before this ticket (data/robots/
+# tovez_nocal.json's control section already carries 0.1/0.08 -- a no-op in
+# practice, see sprint 113's own Open Question 2).
+MODEL_TAU_LIN_DEFAULT = 0.10  # [s]
+MODEL_TAU_ANG_DEFAULT = 0.08  # [s]
+
 # arrive_dwell default for msg::PlannerConfig field 31 (100-001 -- motion-
 # stack-v2 M1). Originally baked alongside 16 sibling Drive::Limits/tracker/
 # policy fields (v_wheel_max..arrive_vel_tol) that were never wired to any
@@ -713,6 +725,20 @@ def distance_gains_for_config(cfg: dict):
     return float(distance_kp), float(distance_tol)
 
 
+def model_tau_for_config(cfg: dict):
+    """Return (model_tau_lin, model_tau_ang) for msg::PlannerConfig fields
+    41/42 (113-001) -- App::Pilot's own two-stage model-reference feedback
+    plant-lag time constants (pilot.h's modelTauLin_/modelTauAng_). Read
+    from the robot JSON's ``control.model_tau_lin``/``control.model_tau_ang``
+    when present, falling back to MODEL_TAU_LIN_DEFAULT/MODEL_TAU_ANG_DEFAULT
+    otherwise -- mirrors distance_gains_for_config()'s exact shape (and, per
+    field, actuation_lag_for_config()'s)."""
+    ctrl = cfg.get("control", {}) or {}
+    model_tau_lin = _get(ctrl, "model_tau_lin", default=MODEL_TAU_LIN_DEFAULT)
+    model_tau_ang = _get(ctrl, "model_tau_ang", default=MODEL_TAU_ANG_DEFAULT)
+    return float(model_tau_lin), float(model_tau_ang)
+
+
 def generate(cfg: dict, source_path: str) -> str:
     trackwidth   = _get(cfg, "geometry", "trackwidth", default=TRACKWIDTH_DEFAULT)
     vel_kp, vel_ki, vel_kff, vel_imax, vel_kaw, vel_filt = vel_gains_for_config(cfg)
@@ -730,6 +756,7 @@ def generate(cfg: dict, source_path: str) -> str:
     arrive_dwell = arrive_dwell_for_config(cfg)
     actuation_lag = actuation_lag_for_config(cfg)
     distance_kp, distance_tol = distance_gains_for_config(cfg)
+    model_tau_lin, model_tau_ang = model_tau_for_config(cfg)
 
     calib_lines = "\n".join(
         f"    out[{i}].setTravelCalib({_f(v)});   // [mm/deg] port {i + 1}"
@@ -902,6 +929,13 @@ msg::PlannerConfig defaultPlannerConfig() {{
     // derivation AND 112-004's own closed-loop-convergence retune.
     cfg.setDistanceKp({_f(distance_kp)});              // [1/s]
     cfg.setDistanceTol({_f(distance_tol)});             // [mm]
+
+    // 113-001: App::Pilot's own two-stage model-reference feedback plant-lag
+    // time constants (pilot.h's modelTauLin_/modelTauAng_) -- previously
+    // hardcoded with no config path at all. See MODEL_TAU_LIN_DEFAULT/
+    // MODEL_TAU_ANG_DEFAULT's own comment above.
+    cfg.setModelTauLin({_f(model_tau_lin)});            // [s]
+    cfg.setModelTauAng({_f(model_tau_ang)});            // [s]
     return cfg;
 }}
 

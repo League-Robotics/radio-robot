@@ -229,7 +229,85 @@ class SimHarness {
   // (a_max/a_decel/v_body_max/j_max/yaw_acc_max/yaw_rate_max/yaw_jerk_max)
   // instead of hand-duplicating numeric bounds that could silently drift
   // from makeExecutorConfig()'s own values -- see behavior_lock_harness.cpp.
+  //
+  // 113-002: this is ALSO the test-only readback for configurePlanner()
+  // below -- pilot_.configureHeading(cfg) (the last of configurePlanner()'s
+  // four fan-out calls) does `plannerConfig_ = config;`, a full-struct copy,
+  // so this accessor reflects EVERY field of whatever msg::PlannerConfig was
+  // last pushed through configurePlanner(), not just the fields Pilot's own
+  // arithmetic reads. Reused here rather than adding a parallel readback
+  // (this ticket's own "choose whichever is less code" acceptance
+  // criterion) -- see configurePlanner()'s own comment.
   const msg::PlannerConfig& plannerConfig() const { return pilot_.plannerConfig(); }
+
+  // configurePlanner -- 113-002: ADDITIVE public config-load surface,
+  // generalizing the identical 4-call fan-out the constructor above and the
+  // three sim-only test hooks below (setYawRateMax()/setLeadCompensation()/
+  // setDistanceKp()) already use piecemeal. Lets a caller (the host, via
+  // ticket 005's ctypes surface) push a COMPLETE, JSON-derived
+  // msg::PlannerConfig in one call instead of only ever getting
+  // makeExecutorConfig()'s hardcoded stand-in values.
+  //
+  // Also becomes the new "last known config" baseline the three hooks below
+  // build their own override on top of (lastPlannerConfig_/
+  // hasConfiguredPlanner_) -- so a caller who calls configurePlanner() with
+  // real robot values and THEN calls e.g. setYawRateMax() does not silently
+  // lose every other field configurePlanner() set (the bug this ticket's own
+  // acceptance criteria call out).
+  //
+  // Purely ADDITIVE (SUC-005): the ~40 existing test harnesses under
+  // src/tests/sim/ never call this method, so hasConfiguredPlanner_ stays
+  // false and every existing setYawRateMax()/setLeadCompensation()/
+  // setDistanceKp() call keeps rebuilding its base config from
+  // makeExecutorConfig() exactly as before -- byte-for-byte unchanged
+  // behavior for every pre-existing caller.
+  void configurePlanner(const msg::PlannerConfig& cfg) {
+    lastPlannerConfig_ = cfg;
+    hasConfiguredPlanner_ = true;
+    executor_.configure(cfg);
+    headingSource_.configure(cfg);
+    drive_.configure(cfg);
+    pilot_.configureHeading(cfg);
+  }
+
+  // motorConfig -- 113-002 test-only readback exposing the Devices::
+  // MotorConfig last passed to configureMotor() below for the given port
+  // (1=left, 2=right -- same convention as configureMotor() itself). This is
+  // SimHarness's OWN record of the request, not a live re-read off
+  // Devices::MotorArmor/NezhaMotor -- neither stores/exposes a full
+  // MotorConfig copy of its own (MotorArmor::configure() only caches one
+  // derived field, motionThreshold_, from config.outputDeadband; see
+  // configureMotor()'s own comment) -- so this is the only way a caller can
+  // read back what configureMotor() was actually called with. Defaults to a
+  // default-constructed Devices::MotorConfig{} if configureMotor() was never
+  // called for that port.
+  const Devices::MotorConfig& motorConfig(uint32_t port) const {
+    return (port == 2) ? lastMotorConfigR_ : lastMotorConfigL_;
+  }
+
+  // configureMotor -- 113-002: ADDITIVE public config-load surface for one
+  // motor channel, mirroring the constructor's own
+  // armorL_.configure(makeMotorConfig(1))/armorR_.configure(makeMotorConfig(2))
+  // calls above. port: 1 = left, 2 = right, matching every other port-keyed
+  // convention in this file (see SimPlant::setEncScaleErr()/
+  // setEncTickQuantization()'s own "1=left, 2=right" precedent).
+  //
+  // NOTE: Devices::MotorArmor::configure() (motor_armor.h) today only reads
+  // one field of the passed MotorConfig -- outputDeadband, cached into its
+  // own private motionThreshold_ -- so wheelTravelCalib/velGains/velFiltAlpha/
+  // slewRate/fwdSign in `cfg` have no live behavioral effect through THIS
+  // call today; that is a pre-existing property of MotorArmor::configure()
+  // itself (unchanged by this ticket), not a limitation of configureMotor().
+  // Purely ADDITIVE (SUC-005): no existing test calls this method.
+  void configureMotor(uint32_t port, const Devices::MotorConfig& cfg) {
+    if (port == 2) {
+      lastMotorConfigR_ = cfg;
+      armorR_.configure(cfg);
+    } else {
+      lastMotorConfigL_ = cfg;
+      armorL_.configure(cfg);
+    }
+  }
 
   // driveTargetVelLeft/driveTargetVelRight -- 111-003 test-only accessors
   // exposing the STAGED PID-target velocity (Devices::Motor::
@@ -285,20 +363,26 @@ class SimHarness {
   // HeadingSource::configure()/Pilot::configureHeading()), the same
   // re-apply-to-every-consumer shape Pilot::applyPlannerPatch() already
   // uses for a live wire patch.
+  //
+  // 113-002: rebuilds its base config from lastPlannerConfig_ (whatever
+  // configurePlanner() last received) instead of ALWAYS restarting from
+  // makeExecutorConfig() -- falls back to makeExecutorConfig() only when
+  // configurePlanner() was never called, so this hook's behavior is
+  // byte-for-byte unchanged for every existing caller (SUC-005: none of them
+  // call configurePlanner()). Delegates the actual fan-out to
+  // configurePlanner() itself (the same 4 calls, same order, this method
+  // used to make inline) so the two surfaces share one bookkeeping path.
   void setLeadCompensation(float headingLeadBias, float planLead, float terminalLead) {
     lastHeadingLeadBias_ = headingLeadBias;
     lastPlanLead_ = planLead;
     lastTerminalLead_ = terminalLead;
-    msg::PlannerConfig cfg = makeExecutorConfig();
+    msg::PlannerConfig cfg = hasConfiguredPlanner_ ? lastPlannerConfig_ : makeExecutorConfig();
     cfg.heading_lead_bias = headingLeadBias;
     cfg.plan_lead = planLead;
     cfg.terminal_lead = terminalLead;
     cfg.yaw_rate_max = lastYawRateMax_;
     cfg.distance_kp = lastDistanceKp_;  // 112-003: compose with setDistanceKp() regardless of call order
-    executor_.configure(cfg);
-    headingSource_.configure(cfg);
-    drive_.configure(cfg);  // 112-002: reapply the same actuation_lag baseline
-    pilot_.configureHeading(cfg);
+    configurePlanner(cfg);
   }
 
   // setYawRateMax -- 109-010 rate-sweep characterization harness hook: vary
@@ -308,18 +392,19 @@ class SimHarness {
   // shape as setLeadCompensation() above (and re-applying whatever lead
   // compensation was last set, so the two hooks compose regardless of call
   // order).
+  //
+  // 113-002: same lastPlannerConfig_-or-makeExecutorConfig() base + delegate-
+  // to-configurePlanner() refactor as setLeadCompensation() above -- see
+  // that method's own comment.
   void setYawRateMax(float yawRateMax) {
     lastYawRateMax_ = yawRateMax;
-    msg::PlannerConfig cfg = makeExecutorConfig();
+    msg::PlannerConfig cfg = hasConfiguredPlanner_ ? lastPlannerConfig_ : makeExecutorConfig();
     cfg.yaw_rate_max = yawRateMax;
     cfg.heading_lead_bias = lastHeadingLeadBias_;
     cfg.plan_lead = lastPlanLead_;
     cfg.terminal_lead = lastTerminalLead_;
     cfg.distance_kp = lastDistanceKp_;  // 112-003: compose with setDistanceKp() regardless of call order
-    executor_.configure(cfg);
-    headingSource_.configure(cfg);
-    drive_.configure(cfg);  // 112-002: reapply the same actuation_lag baseline
-    pilot_.configureHeading(cfg);
+    configurePlanner(cfg);
   }
 
   // setDistanceKp -- 112-003 test-only hook, same shape as
@@ -330,18 +415,19 @@ class SimHarness {
   // position-feedback trim completely inert, or to a specific value for a
   // targeted gain/clamp check. Used by pilot_distance_trim_harness.cpp's
   // own 087-009 clamp-authority guardrail check.
+  //
+  // 113-002: same lastPlannerConfig_-or-makeExecutorConfig() base + delegate-
+  // to-configurePlanner() refactor as setLeadCompensation()/setYawRateMax()
+  // above -- see setLeadCompensation()'s own comment.
   void setDistanceKp(float distanceKp) {
     lastDistanceKp_ = distanceKp;
-    msg::PlannerConfig cfg = makeExecutorConfig();
+    msg::PlannerConfig cfg = hasConfiguredPlanner_ ? lastPlannerConfig_ : makeExecutorConfig();
     cfg.distance_kp = distanceKp;
     cfg.heading_lead_bias = lastHeadingLeadBias_;
     cfg.plan_lead = lastPlanLead_;
     cfg.terminal_lead = lastTerminalLead_;
     cfg.yaw_rate_max = lastYawRateMax_;
-    executor_.configure(cfg);
-    headingSource_.configure(cfg);
-    drive_.configure(cfg);
-    pilot_.configureHeading(cfg);
+    configurePlanner(cfg);
   }
 
   // Decodes and returns every outbound line captured on the serial
@@ -564,6 +650,19 @@ class SimHarness {
     // Motion::kDistanceSettleEpsilonMm used to hardcode before this ticket
     // wired the live field in.
     cfg.distance_tol = 6.0f;         // [mm]
+    // 113-001: App::Pilot's own two-stage model-reference feedback plant-lag
+    // time constants (pilot.h's modelTauLin_/modelTauAng_) -- explicit here
+    // so this harness's default construction path observes byte-for-byte
+    // identical Pilot behavior to before this ticket. A msg::PlannerConfig{}
+    // with these fields left at their zero-value default would silently
+    // change modelTauLin_/modelTauAng_ to 0.0, turning tick()'s alphaLin/
+    // alphaAng first-order-lag-toward-the-reference into an instant,
+    // unfiltered reference -- a real behavior change for every existing sim
+    // scenario/characterization test, not a no-op (SUC-005). Matches
+    // pilot.h's own prior hardcoded member initializers and
+    // gen_boot_config.py's MODEL_TAU_LIN_DEFAULT/MODEL_TAU_ANG_DEFAULT.
+    cfg.model_tau_lin = 0.10f;       // [s]
+    cfg.model_tau_ang = 0.08f;       // [s]
     return cfg;
   }
 
@@ -632,17 +731,34 @@ class SimHarness {
   size_t telemetryDrainIndex_ = 0;  // index into serialLink_.sent() already returned by drainTelemetry()
   size_t rawTelemetryDrainIndex_ = 0;  // index into serialLink_.sent() already returned by drainRawTelemetry()
 
-  // 109-010: setLeadCompensation()/setYawRateMax() each re-derive a fresh
-  // msg::PlannerConfig from makeExecutorConfig() (there is no single
-  // persisted PlannerConfig instance this harness keeps outside that
-  // factory function) -- these remember whichever of the two was last set
-  // by EITHER hook so the other can re-apply it instead of silently
-  // clobbering it back to 0.
+  // 109-010: setLeadCompensation()/setYawRateMax()/setDistanceKp() each
+  // rebuild a fresh msg::PlannerConfig from their own base (lastPlannerConfig_
+  // if configurePlanner() was ever called, else makeExecutorConfig() --
+  // 113-002) -- these remember whichever of the three was last set by ANY of
+  // the three hooks so the others can re-apply it instead of silently
+  // clobbering it back to a default.
   float lastYawRateMax_ = 4.0f;  // [rad/s] matches makeExecutorConfig()'s own default
   float lastHeadingLeadBias_ = -0.05f;  // [s] matches makeExecutorConfig()'s own default
   float lastPlanLead_ = 0.20f;         // [s] matches makeExecutorConfig()s own default
   float lastTerminalLead_ = 0.0f;      // [s]
   float lastDistanceKp_ = 2.5f;        // [1/s] 112-003/112-004, matches makeExecutorConfig()'s own default
+
+  // 113-002: configurePlanner()'s own "last known config" bookkeeping --
+  // see that method's own comment. hasConfiguredPlanner_ stays false for
+  // every one of the ~40 existing test harnesses (none of which call
+  // configurePlanner()), so setLeadCompensation()/setYawRateMax()/
+  // setDistanceKp() keep rebuilding from makeExecutorConfig() exactly as
+  // before for those callers (SUC-005).
+  bool hasConfiguredPlanner_ = false;
+  msg::PlannerConfig lastPlannerConfig_ = {};
+
+  // 113-002: configureMotor()'s own test-only readback state -- see
+  // motorConfig()'s own comment for why SimHarness keeps this copy itself
+  // rather than reading it back off Devices::MotorArmor/NezhaMotor (neither
+  // stores one). Defaults to Devices::MotorConfig{} (all-zero) until
+  // configureMotor() is called for that port.
+  Devices::MotorConfig lastMotorConfigL_ = {};
+  Devices::MotorConfig lastMotorConfigR_ = {};
 };
 
 }  // namespace TestSim
