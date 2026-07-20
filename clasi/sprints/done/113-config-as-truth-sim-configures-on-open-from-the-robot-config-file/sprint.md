@@ -1,7 +1,7 @@
 ---
 id: '113'
 title: 'Config-as-truth: sim configures-on-open from the robot config file'
-status: planning-docs
+status: closed
 branch: sprint/113-config-as-truth-sim-configures-on-open-from-the-robot-config-file
 worktree: false
 use-cases: []
