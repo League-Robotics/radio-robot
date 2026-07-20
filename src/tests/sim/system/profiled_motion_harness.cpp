@@ -61,6 +61,7 @@
 #include <string>
 #include <vector>
 
+#include "bench_test_config.h"
 #include "messages/envelope.h"
 #include "messages/planner.h"
 #include "sim_harness.h"
@@ -184,6 +185,7 @@ int main(int argc, char** argv) {
               mode.c_str(), static_cast<double>(target), rows.size());
 
   TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
   bool anyWatchedFaultEver = false;
   bool connHealthyThroughout = true;
   bool deadmanTrippedMidProfile = false;

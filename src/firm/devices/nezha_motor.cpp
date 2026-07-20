@@ -78,9 +78,34 @@ int8_t clampStep(int8_t lastWritten, int8_t target, uint8_t maxDelta) {
 constexpr int kOk = 0;
 }  // namespace
 
+// REVISION 1 (114-001, motor.h): the constructor now delegates entirely to
+// reconfigure() -- mode_'s own member initializer (Mode::None) applies
+// before this constructor body runs, so the guard below always succeeds at
+// construction time. Do not keep a duplicate copy of the substitution logic
+// here; reconfigure() is the one place it lives.
 NezhaMotor::NezhaMotor(I2CBus& bus, const MotorConfig& config)
     : bus_(bus)
 {
+    // Always succeeds here (mode_'s member initializer is Mode::None before
+    // this body runs) -- discard the [[nodiscard]] result explicitly.
+    (void)reconfigure(config);
+}
+
+// reconfigure -- REVISION 1 (114-001, motor.h): guarded, post-construction,
+// whole-config replacement. Refuses (returns false, leaves config_
+// unchanged) unless this motor has never yet been commanded (mode_ ==
+// Mode::None) or is independently verified at rest (measured velocity below
+// kReconfigureRestVelocity AND nothing currently applied to the bus). On
+// success, reassigns config_ wholesale and re-derives the same slew-rate/
+// write-shaping substitution the constructor used to compute inline.
+bool NezhaMotor::reconfigure(const MotorConfig& config)
+{
+    bool atRest = std::fabs(filteredVelocity_) < kReconfigureRestVelocity &&
+                  appliedDuty() == 0.0f;
+    if (mode_ != Mode::None && !atRest) {
+        return false;
+    }
+
     config_ = config;
     if (config_.slewRate <= 0.0f) {
         // MotorConfig.slewRate defaults to the existing kMaxDeltaPwmPerWrite
@@ -94,6 +119,7 @@ NezhaMotor::NezhaMotor(I2CBus& bus, const MotorConfig& config)
                                                : kDefaultReversalDwell;
     outputDeadband_ = config.outputDeadband.has ? config.outputDeadband.val
                                                  : kDefaultOutputDeadband;
+    return true;
 }
 
 void NezhaMotor::begin()

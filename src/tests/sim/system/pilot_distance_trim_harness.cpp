@@ -45,6 +45,7 @@
 #include <cstdio>
 #include <string>
 
+#include "bench_test_config.h"
 #include "sim_harness.h"
 
 namespace {
@@ -83,6 +84,7 @@ int main() {
   {
     beginScenario("frozen encoders during cruise: commanded correction stays within kDistanceTrimCeiling");
     TestSim::SimHarness sim;
+    TestSupport::configureSimForBenchTest(sim);
     sim.boot();
     sim.step(3);
 
@@ -185,6 +187,7 @@ int main() {
   {
     beginScenario("distance_kp=0 (explicit opt-out): trim is a true no-op even with a frozen-encoder divergence");
     TestSim::SimHarness sim;
+    TestSupport::configureSimForBenchTest(sim);
     sim.boot();
     sim.step(3);
     sim.setDistanceKp(0.0f);

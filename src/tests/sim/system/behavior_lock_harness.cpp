@@ -92,6 +92,7 @@
 #include <string>
 #include <vector>
 
+#include "bench_test_config.h"
 #include "sim_harness.h"
 
 namespace {
@@ -526,6 +527,7 @@ void runShelfScenario(const std::string& prefix, float distance, float deltaHead
                        uint32_t id, uint32_t corrId) {
   beginScenario(prefix + ": shelf length (commanded-target reaches exactly 0 after completion)");
   TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
   sim.boot();
   sim.step(3);
   sim.injectMove(distance, deltaHeading, vMax, /*omega=*/0.0f, /*timeMs=*/0.0f, /*replace=*/false, id,
@@ -548,6 +550,7 @@ void runShelfScenario(const std::string& prefix, float distance, float deltaHead
 void runSameBootScenario() {
   beginScenario("same-boot: 40 consecutive alternating D700 straight / 360deg pivot moves");
   TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
   sim.boot();
   sim.step(3);
 
@@ -637,6 +640,7 @@ void runChainedPivotScenario() {
   beginScenario("chained pivot->pivot: same-sign 180deg pivots carry rotational velocity through the boundary "
                 "(109-009 exception)");
   TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
   sim.boot();
   sim.step(3);
 
@@ -711,6 +715,7 @@ int main() {
   {
     beginScenario("D700 straight (kArc): capture, differentiate, assert bounds/shape");
     TestSim::SimHarness sim;
+    TestSupport::configureSimForBenchTest(sim);
     sim.boot();
     sim.step(3);
 
@@ -731,6 +736,7 @@ int main() {
   {
     beginScenario("360deg pivot (kPivot): capture, differentiate, assert bounds/shape");
     TestSim::SimHarness sim;
+    TestSupport::configureSimForBenchTest(sim);
     sim.boot();
     sim.step(3);
 

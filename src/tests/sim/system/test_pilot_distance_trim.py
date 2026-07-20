@@ -26,6 +26,7 @@ _INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
 _HARNESS_SRC = _SYSTEM_DIR / "pilot_distance_trim_harness.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WIRE_TEST_CODEC_SRC = _SUPPORT_DIR / "wire_test_codec.cpp"
+_BENCH_TEST_CONFIG_SRC = _SUPPORT_DIR / "bench_test_config.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 
@@ -79,7 +80,8 @@ def _find_cxx_compiler() -> str:
 
 def _all_sources():
     return (
-        [_HARNESS_SRC, _SIM_PLANT_SRC, _WIRE_TEST_CODEC_SRC, _WHEEL_PLANT_SRC, _OTOS_PLANT_SRC]
+        [_HARNESS_SRC, _SIM_PLANT_SRC, _WIRE_TEST_CODEC_SRC, _BENCH_TEST_CONFIG_SRC,
+         _WHEEL_PLANT_SRC, _OTOS_PLANT_SRC]
         + _APP_SOURCES
         + _DEVICE_SOURCES
         + _MESSAGE_SOURCES

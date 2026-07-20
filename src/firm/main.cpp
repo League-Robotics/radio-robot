@@ -106,8 +106,13 @@ int main() {
   static Devices::NezhaMotor motorRBare(bus, motorCfgR);
   static Devices::MotorArmor motorL(motorLBare);
   static Devices::MotorArmor motorR(motorRBare);
-  motorL.configure(motorCfgL);
-  motorR.configure(motorCfgR);
+  // REVISION 1 (114-001): configure() -> reconfigure() rename, discarding
+  // the now-[[nodiscard]] bool. Always succeeds here (motorL/motorR are
+  // freshly constructed, mode_ == Mode::None) -- pure rename, no
+  // real-hardware behavior change (Decision 2's "always-immediate"
+  // precedent).
+  (void)motorL.reconfigure(motorCfgL);
+  (void)motorR.reconfigure(motorCfgR);
 
   Devices::OtosConfig otosConfig;
   otosConfig.offsetX = otosBootConfig.offsetX;
@@ -155,5 +160,11 @@ int main() {
   static App::RobotLoop robotLoop(bus, motorL, motorR, otos, comms, tlm,
                                    drive, odom, deadman, preamble, pilot,
                                    clock, sleeper);
+  // Configuration-completeness gate (114-001): the boot-configure sequence
+  // above (Config::default*() + every .configure() call, ending with
+  // pilot.configureHeading(plannerConfig)) is atomic and always complete by
+  // this point on real firmware -- this call is unconditional and always
+  // immediate, no observable startup delay (Decision 2, sprint.md).
+  robotLoop.markConfigured();
   robotLoop.run();
 }

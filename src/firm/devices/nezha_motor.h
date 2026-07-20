@@ -105,6 +105,16 @@ class NezhaMotor : public Motor {
   // absent field back to some default.
   const Gains& gains() const override { return config_.velGains; }
 
+  // reconfigure — REVISION 1 (114-001, motor.h): whole-config replacement,
+  // guarded. Refuses (returns false, leaves config_ unchanged) unless
+  // mode_ == Mode::None (never yet commanded) or the motor is
+  // independently at rest (|filteredVelocity_| < kReconfigureRestVelocity
+  // AND appliedDuty() == 0.0f). On success, reassigns config_ wholesale and
+  // re-derives the slew-rate/write-shaping substitution fields exactly as
+  // the constructor does, then returns true. See motor.h's own doc comment
+  // for why this is a separate, narrower surface from applyGains().
+  [[nodiscard]] bool reconfigure(const MotorConfig& config) override;
+
   // Velocity-estimator selection (bench A/B). mode 0 = EMA
   // (velFiltAlpha — the shipped/default behavior); mode 1 = least-squares
   // line-fit slope over the last `window` FRESH position samples
@@ -265,6 +275,12 @@ class NezhaMotor : public Motor {
   static constexpr uint8_t kDirCw = 1;      // positive speed from chip perspective
   static constexpr uint8_t kDirCcw = 2;     // negative speed from chip perspective
   static constexpr float kDefaultSlewRate = 25.0f;   // default max |delta PWM| per write
+
+  // reconfigure()'s own at-rest guard threshold — REVISION 1 (114-001).
+  // Mirrors MotorArmor's own kRestVelocity at-rest threshold (motor_armor.h)
+  // conceptually, but is NOT shared across the class boundary: this is a
+  // leaf-local constant for a leaf-local guard.
+  static constexpr float kReconfigureRestVelocity = 5.0f;  // [mm/s] mirrors MotorArmor's own kRestVelocity at-rest threshold
 
   // ---- Private helpers: write path ----
   // Returns the CODAL status from bus_.write() (0/kOk == success):

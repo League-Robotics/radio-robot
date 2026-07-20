@@ -2,7 +2,7 @@
 id: '001'
 title: 'Config-completeness gate: fail-closed motion refusal + delete SimHarness''s
   hardcoded planner/motor defaults'
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-004
@@ -396,16 +396,16 @@ and is preserved, not redone.
 
 ## Acceptance Criteria
 
-- [ ] `ErrCode::ERR_NOT_CONFIGURED` exists in the regenerated `envelope.h`.
-- [ ] A freshly-constructed `SimHarness`, before any `configurePlanner()`/
+- [x] `ErrCode::ERR_NOT_CONFIGURED` exists in the regenerated `envelope.h`.
+- [x] A freshly-constructed `SimHarness`, before any `configurePlanner()`/
       `configureMotor()` call, has `isConfigured() == false`.
-- [ ] Injecting a TWIST or MOVE against an unconfigured `SimHarness` yields
+- [x] Injecting a TWIST or MOVE against an unconfigured `SimHarness` yields
       `ACK_STATUS_ERR` / `ERR_NOT_CONFIGURED`; `drive_`/`pilot_`/`deadman_`
       state is unchanged (zero motor writes — assert via the plant's own
       write-count/duty-history hook).
-- [ ] Injecting STOP or a CONFIG patch against an unconfigured `SimHarness`
+- [x] Injecting STOP or a CONFIG patch against an unconfigured `SimHarness`
       still acks `ACK_STATUS_OK`.
-- [ ] After `configurePlanner()` + both `configureMotor()` calls,
+- [x] After `configurePlanner()` + both `configureMotor()` calls,
       `isConfigured() == true` and a subsequent TWIST/MOVE is accepted
       normally **and produces real, nonzero measured wheel motion** — not
       merely an `ACK_STATUS_OK` (this is the acceptance criterion the
@@ -413,25 +413,25 @@ and is preserved, not redone.
       `motorLeft().velocity()`/`motorRight().velocity()` become nonzero
       within a few ticks of an injected TWIST, and each port drives its own
       distinct simulated wheel (no port aliasing).
-- [ ] `grep -n "makeExecutorConfig\|makeMotorConfig" src/sim/sim_harness.h`
+- [x] `grep -n "makeExecutorConfig\|makeMotorConfig" src/sim/sim_harness.h`
       finds nothing.
-- [ ] Every one of the 9 pre-existing `src/tests/sim/**` harnesses (26
+- [x] Every one of the 9 pre-existing `src/tests/sim/**` harnesses (26
       construction sites) compiles and passes unchanged (behaviorally)
       after adding its one `configureSimForBenchTest()` line, and
       `test_motor_primitive.py` passes after its `configure_from_robot()`
       addition — verified by a full targeted re-run, not a sample.
-- [ ] `main.cpp`'s new `markConfigured()` call does not change any observable
+- [x] `main.cpp`'s new `markConfigured()` call does not change any observable
       real-firmware behavior (it was always immediately true in practice).
-- [ ] `NezhaMotor::reconfigure()` returns `true` and applies the new config
+- [x] `NezhaMotor::reconfigure()` returns `true` and applies the new config
       when called on a never-yet-commanded (`mode_ == Mode::None`) or
       genuinely at-rest motor; returns `false` and leaves `config_`
       unchanged when called on a motor that is actively commanded and not
       at rest (unit-testable directly: `setDuty()`/`setVelocity()` then
       `tick()` to leave `Mode::None`, then attempt a `reconfigure()` with a
       differing `fwdSign` and assert it did NOT take effect).
-- [ ] `MotorArmor::reconfigure()` only updates its own `motionThreshold_`
+- [x] `MotorArmor::reconfigure()` only updates its own `motionThreshold_`
       when the inner motor's `reconfigure()` returned `true`.
-- [ ] `devices_motor_harness.cpp` and every other file constructing a
+- [x] `devices_motor_harness.cpp` and every other file constructing a
       `Devices::Motor`-implementing type still compiles (the new pure
       virtual is implemented everywhere `: public Devices::Motor` appears —
       `NezhaMotor`, `MotorArmor`, `MockMotor`; confirmed exhaustively via

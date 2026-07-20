@@ -184,6 +184,17 @@ void RobotLoop::updateTlm() {
 }
 
 void RobotLoop::handleTwist(const msg::CommandEnvelope& env) {
+  // Configuration-completeness gate (114-001, SUC-001) -- FIRST statement,
+  // before touching drive_/pilot_/deadman_ at all. Real firmware satisfies
+  // this immediately at boot (Decision 2, sprint.md) -- this branch is only
+  // ever live for a composition root (SimHarness) that has not yet been
+  // configured.
+  if (!configured_) {
+    tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
+              static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
+    return;
+  }
+
   // TWIST preempts (flushes) the Motion::Executor queue -- sprint.md's own
   // wire-compatibility note. flush() BEFORE setTwist() so this cycle's own
   // pilot_.tick() call (later in this same settle block) observes
@@ -317,6 +328,15 @@ void RobotLoop::handleStop(const msg::CommandEnvelope& env) {
 // TIMEOUT/SOLVE_FAIL) for this same command rides a separate ack keyed by
 // the Move's own `id` field instead (drainPilotEvents(), below).
 void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
+  // Configuration-completeness gate (114-001, SUC-001) -- see
+  // handleTwist()'s own comment for the full rationale; same FIRST-statement
+  // placement, before touching pilot_/deadman_.
+  if (!configured_) {
+    tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
+              static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
+    return;
+  }
+
   Motion::Cmd cmd = Motion::fromMove(env.cmd.move);
   Motion::EnqueueOutcome outcome = pilot_.enqueue(cmd);
 

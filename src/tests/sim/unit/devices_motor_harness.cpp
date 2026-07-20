@@ -123,6 +123,14 @@ class MockMotor : public Devices::Motor {
     gains_ = gains;
   }
   const Devices::Gains& gains() const override { return gains_; }
+  // REVISION 1 (114-001, motor.h): trivial always-succeeds stand-in --
+  // MockMotor has no boot-identity config of its own to actually reassign,
+  // it only needs to satisfy the new pure virtual and let scenarios assert
+  // it was called.
+  bool reconfigure(const Devices::MotorConfig&) override {
+    ++reconfigureCalls;
+    return true;
+  }
   void tick(uint64_t) override { ++tickCalls; }
   float position() const override { return mockPosition_; }
   float velocity() const override { return mockVelocity_; }
@@ -141,6 +149,7 @@ class MockMotor : public Devices::Motor {
   int resetPositionCalls = 0;
   int rebaselineCalls = 0;
   int tickCalls = 0;
+  int reconfigureCalls = 0;
   float lastVelocityCmd = 0.0f;
   float lastDutyCmd = 0.0f;
 
@@ -266,7 +275,7 @@ void scenarioStandstillGuardedResetGatesOnRestTicks() {
   {
     MockMotor inner;
     Devices::MotorArmor armor(inner);
-    armor.configure(defaultArmorConfig());
+    (void)armor.reconfigure(defaultArmorConfig());
     inner.setMockVelocity(80.0f);      // well above kRestVelocity
     inner.setMockAppliedDuty(0.5f);    // being driven
 
@@ -288,7 +297,7 @@ void scenarioStandstillGuardedResetGatesOnRestTicks() {
   {
     MockMotor inner;
     Devices::MotorArmor armor(inner);
-    armor.configure(defaultArmorConfig());
+    (void)armor.reconfigure(defaultArmorConfig());
     inner.setMockVelocity(0.0f);       // below kRestVelocity throughout
     // appliedDuty stays 0 — never commanded to move.
 
@@ -321,7 +330,7 @@ void scenarioWedgeLatchAndSuspectDeriveAsBefore() {
   {
     MockMotor inner;
     Devices::MotorArmor idle(inner);
-    idle.configure(defaultArmorConfig());
+    (void)idle.reconfigure(defaultArmorConfig());
     inner.setMockPosition(100.0f);   // never changes
     inner.setMockVelocity(0.0f);
     uint64_t now = 6000000;
@@ -340,7 +349,7 @@ void scenarioWedgeLatchAndSuspectDeriveAsBefore() {
   {
     MockMotor inner;
     Devices::MotorArmor moving(inner);
-    moving.configure(defaultArmorConfig());
+    (void)moving.reconfigure(defaultArmorConfig());
     inner.setMockPosition(100.0f);   // still never changes — genuinely stuck
     inner.setMockVelocity(0.0f);
     inner.setMockAppliedDuty(0.5f);  // above the motion threshold every tick
@@ -581,7 +590,10 @@ void scenarioFreshSampleGateSurvivesSlowBrickRefreshUnderFastFiberCycle() {
   // detector actually observes the run; the wedge assertions below read
   // the armor's latches.
   Devices::MotorArmor armored(motor);
-  armored.configure(cfg);
+  // Byte-for-byte-behavior-preserving rename (114-001 Revision 1): SAME cfg
+  // the wrapped motor was constructed with -- motor is fresh (mode_ ==
+  // Mode::None), so reconfigure() always succeeds here.
+  (void)armored.reconfigure(cfg);
 
   // Drive a raw duty throughout (PID off, to keep the plant simple/
   // deterministic) so appliedDuty() is nonzero -- exercises the
@@ -661,7 +673,10 @@ void scenarioBootAnchorAcceptsLargeInitialPositionWithoutGlitchOrWedge() {
   // Wedge detection lives in the MotorArmor DECORATOR now (2026-07-18
   // restructure) -- wrap and tick through the armor so the detector runs.
   Devices::MotorArmor armored(motor);
-  armored.configure(cfg);
+  // Byte-for-byte-behavior-preserving rename (114-001 Revision 1): SAME cfg
+  // the wrapped motor was constructed with -- motor is fresh (mode_ ==
+  // Mode::None), so reconfigure() always succeeds here.
+  (void)armored.reconfigure(cfg);
 
   const float kBootPosition = -33526.0f;   // [mm] hardware-observed lifetime-accumulated boot value
 
@@ -894,6 +909,104 @@ void scenarioApplyGainsTravelCalibAppliesWhenPresentOtherwiseUnchanged() {
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the travelCalib sequence");
 }
 
+// 13. reconfigure() -- REVISION 1 (114-001, motor.h): guarded, whole-config
+//     replacement. Succeeds and fully replaces config_ (fwdSign/
+//     wheelTravelCalib/velGains -- NOT just the narrow applyGains() surface)
+//     when the motor has never been commanded (mode_ == Mode::None); fails
+//     and leaves config_ UNCHANGED when the motor is actively driving and
+//     not at rest; succeeds again once the motor returns to rest. This is
+//     the exact mechanism that resolves ticket 001's own thrown exception
+//     (SimHarness::configureMotor() previously reached only MotorArmor's
+//     own cached motionThreshold_, never the wrapped NezhaMotor's config_ --
+//     see sprint.md's Architecture Revision 1 / Decision 6).
+void scenarioReconfigureGuardedWholeConfigReplacement() {
+  beginScenario("reconfigure(): succeeds pre-command (whole config_ replace), fails while driving "
+                "and not at rest, succeeds again once at rest");
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::MotorConfig cfg = baseNezhaConfig();   // port=1, fwdSign=1, wheelTravelCalib=1.0
+  Devices::NezhaMotor motor(plant, cfg);
+
+  // --- Step 1: never commanded (mode_ == Mode::None) -- reconfigure()
+  //     succeeds and replaces config_ WHOLESALE, not just the narrow
+  //     applyGains() surface (fwdSign/wheelTravelCalib have no other
+  //     runtime setter -- this is the ONLY path that can change them
+  //     post-construction). ---
+  Devices::MotorConfig cfgA = baseNezhaConfig();
+  cfgA.fwdSign = -1;
+  cfgA.wheelTravelCalib = 2.0f;
+  cfgA.velGains.kp = 0.77f;
+  bool ok1 = motor.reconfigure(cfgA);
+  checkTrue(ok1, "reconfigure() succeeds on a never-yet-commanded motor (mode_ == Mode::None)");
+  checkFloatEq(motor.gains().kp, 0.77f, "kp took effect -- config_ was replaced, not just cached");
+
+  // raw = positionMm*10 (the helper's own convention, see scriptEncoderRequestCollect()'s
+  // header) -- at fwdSign=-1/wheelTravelCalib=2.0, positionMm=10.0 (raw=100) decodes to
+  // (100/10)*2.0*(-1) = -20.0mm, distinct from what the OLD config (fwdSign=1/calib=1.0)
+  // would have produced (10.0mm) -- an unambiguous proof both fields actually landed.
+  scriptEncoderRequestCollect(bus, wireAddr, 10.0f);
+  motor.requestSample();
+  motor.tick(0);
+  checkFloatEq(motor.position(), -20.0f,
+               "fwdSign=-1 AND wheelTravelCalib=2.0 both took effect (whole-config replace, "
+               "not a partial merge)");
+
+  // --- Step 2: drive the motor (setDuty() + a real landed write) --
+  //     mode_ != Mode::None and appliedDuty() != 0 -- NOT at rest.
+  //     reconfigure() must now refuse and leave config_ untouched.
+  //
+  //     Every scripted sample from here on repeats the SAME raw position
+  //     (10.0mm, matching step 1's own boot-anchor raw) -- an unchanged raw
+  //     count is a STALE sample (NezhaMotor's own freshness gate, see
+  //     nezha_motor.cpp's tick() step 2), so filteredVelocity_ never moves
+  //     off its 0.0f default. This deliberately keeps the "at rest" checks
+  //     below hinging ONLY on appliedDuty() -- exactly what setDuty(0.0f)
+  //     controls -- rather than on an incidental velocity spike from a
+  //     verification-only encoder jump. ---
+  motor.setDuty(0.5f);
+  scriptEncoderRequestCollect(bus, wireAddr, 10.0f);   // stationary (stale raw) -- unchanged raw
+  motor.requestSample();
+  motor.tick(50000);   // first write is slew-exempt -- lands immediately, nonzero
+  checkTrue(motor.appliedDuty() != 0.0f, "setup: a real nonzero duty actually landed -- not at rest");
+
+  Devices::MotorConfig cfgB = baseNezhaConfig();
+  cfgB.fwdSign = 1;
+  cfgB.wheelTravelCalib = 1.0f;
+  cfgB.velGains.kp = 0.99f;
+  bool ok2 = motor.reconfigure(cfgB);
+  checkTrue(!ok2, "reconfigure() refuses while the motor is actively driving and not at rest");
+  checkFloatEq(motor.gains().kp, 0.77f, "kp UNCHANGED after the refused reconfigure() -- still cfgA's value");
+
+  // --- Step 3: return to rest (a commanded stop is immediate/unclamped,
+  //     exempt from both the slew cap and the write-rate throttle) --
+  //     reconfigure() succeeds again. ---
+  motor.setDuty(0.0f);
+  scriptEncoderRequestCollect(bus, wireAddr, 10.0f);   // still stationary (stale raw)
+  motor.requestSample();
+  motor.tick(100000);   // stop is immediate -- no 40ms spacing needed
+  checkFloatEq(motor.appliedDuty(), 0.0f, "setup: the motor is genuinely at rest again (stop landed)");
+
+  bool ok3 = motor.reconfigure(cfgB);
+  checkTrue(ok3, "reconfigure() succeeds again once the motor has returned to rest");
+  checkFloatEq(motor.gains().kp, 0.99f, "kp now reflects cfgB -- reconfigure() took effect this time");
+
+  // A FRESH scripted sample (a genuinely new raw value) now decodes under
+  // cfgB's fwdSign=1/wheelTravelCalib=1.0, not cfgA's (-1/2.0) -- the
+  // recovery reconfigure() genuinely took effect. This is the last tick in
+  // the sequence, so the resulting velocity spike (from the stale-anchored
+  // boot position) has no further "at rest" check downstream to disturb.
+  scriptEncoderRequestCollect(bus, wireAddr, 15.0f);   // raw=150
+  motor.requestSample();
+  motor.tick(150000);
+  checkFloatEq(motor.position(), 15.0f,
+               "position now decodes under cfgB's fwdSign=1/wheelTravelCalib=1.0 -- the recovery "
+               "reconfigure() genuinely took effect");
+
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the reconfigure() sequence");
+}
+
 }  // namespace
 
 int main() {
@@ -909,6 +1022,7 @@ int main() {
   scenarioNakedStopWriteIsRetriedNextTickNotLatched();
   scenarioApplyGainsTakesEffectSameBootNoReflash();
   scenarioApplyGainsTravelCalibAppliesWhenPresentOtherwiseUnchanged();
+  scenarioReconfigureGuardedWholeConfigReplacement();
 
   if (g_failureCount == 0) {
     std::printf("OK: all devices motor scenarios passed\n");

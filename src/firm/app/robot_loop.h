@@ -64,6 +64,19 @@ class RobotLoop {
   // happen below this line.
   void cycle();
 
+  // Configuration-completeness gate (114-001, SUC-001). markConfigured()
+  // is called EXACTLY ONCE by whichever atomic boot path configured the
+  // whole graph -- main.cpp's own Config::default*() sequence (real
+  // firmware; always immediate, since the boot bake completes before
+  // run() starts), or TestSim::SimHarness's configurePlanner()+
+  // configureMotor() pair (sim/test composition roots). Idempotent: a
+  // second call is a harmless no-op, so a caller that fans out over
+  // multiple config calls (SimHarness) may call it from whichever call
+  // completes the set. handleTwist()/handleMove() refuse (ERR_NOT_CONFIGURED)
+  // until this has fired; handleStop()/handleConfig() stay unconditional.
+  void markConfigured() { configured_ = true; }
+  bool isConfigured() const { return configured_; }
+
  private:
   uint32_t markTime() const;                    // [ms]
   void sleepUntil(uint32_t mark, uint32_t gap);  // [ms] [ms]
@@ -114,6 +127,12 @@ class RobotLoop {
   // wire, never lost.
   bool driving_ = false;  // true once a Twist is applied, cleared on Stop/deadman
   Telemetry::Frame frame_;
+
+  // Configuration-completeness gate (114-001) -- see markConfigured()/
+  // isConfigured() above for the contract. false until markConfigured()
+  // fires; never reset back to false afterward (a composition root is
+  // configured for its whole lifetime once it is configured at all).
+  bool configured_ = false;
 };
 
 }  // namespace App

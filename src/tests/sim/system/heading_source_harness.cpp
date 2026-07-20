@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <string>
 
+#include "bench_test_config.h"
 #include "devices/otos.h"
 #include "sim_harness.h"
 
@@ -81,6 +82,7 @@ int main() {
   {
     beginScenario("pure pivot (ideal sim OTOS): true heading matches commanded deltaHeading exactly");
     TestSim::SimHarness sim;
+    TestSupport::configureSimForBenchTest(sim);
     sim.boot();
     sim.step(3);
 
@@ -122,6 +124,7 @@ int main() {
   {
     beginScenario("coupled arc (ideal sim OTOS): jerk-bounded trace, exact heading change");
     TestSim::SimHarness sim;
+    TestSupport::configureSimForBenchTest(sim);
     sim.boot();
     sim.step(3);
 
@@ -169,6 +172,7 @@ int main() {
   {
     beginScenario("OTOS staleness -> encoder fallback -> re-promotion, both visible in TLM");
     TestSim::SimHarness sim;
+    TestSupport::configureSimForBenchTest(sim);
     sim.boot();
     sim.step(3);
     sim.drainTelemetry();  // clear anything queued during boot/settle
@@ -219,6 +223,7 @@ int main() {
   {
     beginScenario("DISTANCE command completes -> kIdle, zero residual twist");
     TestSim::SimHarness sim;
+    TestSupport::configureSimForBenchTest(sim);
     sim.boot();
     sim.step(3);
 
