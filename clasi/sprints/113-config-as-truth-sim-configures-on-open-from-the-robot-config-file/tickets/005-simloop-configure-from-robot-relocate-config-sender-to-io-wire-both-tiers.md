@@ -1,9 +1,15 @@
 ---
 id: '005'
 title: 'SimLoop.configure_from_robot(): relocate config-sender to io/, wire both tiers'
-status: open
-use-cases: [SUC-001, SUC-002, SUC-003]
-depends-on: ['002', '003', '004']
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+depends-on:
+- '002'
+- '003'
+- '004'
 github-issue: ''
 issue: config-as-truth-sim-configure-on-open.md
 completes_issue: false
@@ -60,11 +66,11 @@ explicit acceptance criterion).
 
 ## Acceptance Criteria
 
-- [ ] `_SimConfigConn` (or equivalent) is relocated to `io/` (either
+- [x] `_SimConfigConn` (or equivalent) is relocated to `io/` (either
       `sim_loop.py` or a new `io/sim_config.py`); `testgui/transport.py`
       imports it from the new location — no duplicate class definition
       exists anywhere in the tree after this ticket.
-- [ ] `SimLoop.configure_from_robot(self, config: RobotConfig) -> None` is
+- [x] `SimLoop.configure_from_robot(self, config: RobotConfig) -> None` is
       added, requiring an active connection (`self._require_connected()`,
       matching every other `SimLoop` method's precondition style). Pushes
       Tier 1 via `NezhaProtocol(...).set_config(**calibration_kwargs(config))`
@@ -72,17 +78,17 @@ explicit acceptance criterion).
       it's the smaller, already-proven mechanism; Tier 2 second, since
       nothing depends on ordering between the two but this keeps the method
       readable top-to-bottom).
-- [ ] `_bind_ctypes()` gains `argtypes`/`restype` bindings for
+- [x] `_bind_ctypes()` gains `argtypes`/`restype` bindings for
       `sim_configure_planner`/`sim_configure_motor` (ticket 002's exports),
       following the file's existing exhaustive-transcription convention —
       no `ctypes.c_int` default-assumption bugs (the file's own header
       comment explains why this matters: silent float/pointer corruption on
       64-bit platforms).
-- [ ] `configure_from_robot()` has no top-level or function-local `import`
+- [x] `configure_from_robot()` has no top-level or function-local `import`
       of anything under `robot_radio.testgui` — verified by grep, not just
       by inspection (a stray import would silently reintroduce the
       dependency this ticket exists to remove).
-- [ ] A minimal manual/smoke check: constructing a bare `SimLoop` (no
+- [x] A minimal manual/smoke check: constructing a bare `SimLoop` (no
       `SimTransport`, no Qt, e.g. `QT_QPA_PLATFORM` unset) and calling
       `configure_from_robot()` succeeds — proves SUC-002's "no dependency on
       TestGUI/Qt code path" criterion concretely, not just by import-grep.

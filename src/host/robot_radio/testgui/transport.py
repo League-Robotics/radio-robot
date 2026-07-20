@@ -137,7 +137,6 @@ Helpers:
 from __future__ import annotations
 
 import abc
-import base64
 import logging
 import math
 import pathlib
@@ -147,6 +146,7 @@ import time
 from typing import Any, Callable
 
 from robot_radio.io.serial_conn import SerialConnection, list_serial_ports
+from robot_radio.io.sim_config import SimConfigConn as _SimConfigConn
 from robot_radio.io.sim_loop import SimLoop
 from robot_radio.robot import protocol
 from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
@@ -917,71 +917,14 @@ _CONFIG_SUPPORTED_KEYS = _CONFIG_MOTOR_KEYS | _CONFIG_PLANNER_KEYS
 _CONFIG_UNSUPPORTED_KEYS = frozenset(protocol._ALL_SET_KEYS) - _CONFIG_SUPPORTED_KEYS
 
 
-class _SimConfigConn:
-    """Duck-typed ``SerialConnection`` substitute so ``NezhaProtocol.
-    config()`` can be reused VERBATIM against a ``SimLoop`` -- Architecture
-    Revision 1's "one mechanism, not a Sim-specific fork": the exact same
-    envelope-building/key-vocabulary code hardware transports use, just
-    injected via ``SimLoop.inject_command()`` instead of a live serial
-    write.
-
-    Implements only ``send_envelope_fast()`` -- the one method
-    ``NezhaProtocol.config()`` calls on ``self._conn`` (duck-typed, no
-    ``isinstance`` check inside it). Deliberately does NOT implement
-    ``wait_for_ack()``: ``NezhaProtocol.wait_for_ack()`` unconditionally
-    re-wraps whatever ``self._conn.wait_for_ack()`` returns via
-    ``AckEntry.from_pb2()``, which expects a RAW ``telemetry_pb2.AckEntry``
-    (``.status``/``.corr_id``/``.err_code``) -- but ``SimLoop.
-    read_pending_binary_tlm_frames()`` already returns adapted ``TLMFrame``/
-    ``AckEntry`` dataclasses, one layer past that raw shape. Correlating the
-    ack ring is this class's OWN job instead (``poll_ack()`` below), called
-    directly by ``SimTransport`` rather than through
-    ``NezhaProtocol.wait_for_ack()``.
-    """
-
-    def __init__(self, loop: SimLoop) -> None:
-        self._loop = loop
-        self._corr_counter = 0
-
-    def send_envelope_fast(self, envelope: "envelope_pb2.CommandEnvelope") -> int:
-        """Assign a corr_id (own counter -- this adapter is the only sender
-        on this path, so no cross-source collision risk the way hardware's
-        shared ``_corr_counter`` guards against), armor, and inject via
-        ``SimLoop.inject_command()`` -- the exact ``*B<base64>`` shape
-        ``SerialConnection.send_envelope_fast()`` writes to a real serial
-        port (see that method's own docstring), minus the trailing
-        newline framing a live serial stream needs and a direct
-        ``inject_command()`` call does not (``FakeTransport::
-        enqueueInbound()`` takes one already-delimited line per call)."""
-        self._corr_counter += 1
-        corr_id = self._corr_counter
-        envelope.corr_id = corr_id
-        armored = base64.b64encode(envelope.SerializeToString()).decode("ascii")
-        self._loop.inject_command(f"*B{armored}")
-        return corr_id
-
-    def poll_ack(self, corr_id: int, timeout: int = 500,  # [ms]
-                ) -> "protocol.AckEntry | None":
-        """Poll ``SimLoop.read_pending_binary_tlm_frames()``'s ack ring for
-        ``corr_id``, mirroring ``SerialConnection.wait_for_ack()``'s own
-        re-delivery-tolerant matching (returns on the FIRST frame carrying a
-        match) -- a small, Sim-local reimplementation rather than an import
-        of that method's private ``_match_ack_in_frames()`` helper, since
-        that helper matches against raw ``pb2.ReplyEnvelope`` objects
-        (``reply.tlm.acks``) off ``drain_binary_tlm()``, not the already-
-        adapted ``TLMFrame``/``AckEntry`` dataclasses ``SimLoop.
-        read_pending_binary_tlm_frames()`` returns."""
-        deadline = time.monotonic() + (timeout / 1000.0)
-        while True:
-            for frame in self._loop.read_pending_binary_tlm_frames():
-                if not frame.acks:
-                    continue
-                for ack in frame.acks:
-                    if ack.corr_id == corr_id:
-                        return ack
-            if time.monotonic() >= deadline:
-                return None
-            time.sleep(0.01)
+# _SimConfigConn (113-005): relocated to io/sim_config.py -- see this
+# module's own top-of-file import (`from robot_radio.io.sim_config import
+# SimConfigConn as _SimConfigConn`) and that module's docstring for the full
+# rationale (Design Rationale Decision 3: io/ is lower-level than testgui/,
+# so this module imports the class under its old private name rather than
+# defining its own copy -- every existing `from robot_radio.testgui.
+# transport import _SimConfigConn` caller, including the regression tests
+# this relocation must not break, needs no change).
 
 
 class SimTransport(Transport):
