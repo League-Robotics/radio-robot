@@ -1,5 +1,9 @@
 ---
-status: pending
+status: in-progress
+sprint: '114'
+tickets:
+- 114-005
+- 114-006
 ---
 
 # Deadband compensation: a small command must produce real motion, so terminal corrections can finish the move
