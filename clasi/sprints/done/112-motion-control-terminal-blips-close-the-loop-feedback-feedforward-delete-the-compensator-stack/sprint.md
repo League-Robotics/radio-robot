@@ -2,7 +2,7 @@
 id: '112'
 title: 'Motion-control terminal blips: close the loop (feedback + feedforward), delete
   the compensator stack'
-status: planning-docs
+status: closed
 branch: sprint/112-motion-control-terminal-blips-close-the-loop-feedback-feedforward-delete-the-compensator-stack
 worktree: false
 use-cases:
