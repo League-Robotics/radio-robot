@@ -2,8 +2,11 @@
 id: '003'
 title: 'Host: calibration_kwargs() extraction + minSpeed/distanceKp/arriveDwell wire-key
   coverage'
-status: open
-use-cases: [SUC-001, SUC-002, SUC-003]
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
 depends-on: []
 github-issue: ''
 issue: config-as-truth-sim-configure-on-open.md
@@ -51,12 +54,12 @@ present" pattern the existing `headingKp`/`headingKd` entries use).
 
 ## Acceptance Criteria
 
-- [ ] `src/host/robot_radio/robot/protocol.py`'s `_PLANNER_KEYS` gains
+- [x] `src/host/robot_radio/robot/protocol.py`'s `_PLANNER_KEYS` gains
       `"distanceKp": "distance_kp"` and `"arriveDwell": "arrive_dwell"`
       (mirrors the existing `"minSpeed": "min_speed"` entry's shape exactly).
       `_ALL_SET_KEYS` picks these up automatically (it's derived from
       `_PLANNER_KEYS`).
-- [ ] `src/host/robot_radio/calibration/push.py` gains
+- [x] `src/host/robot_radio/calibration/push.py` gains
       `calibration_kwargs(config) -> dict[str, float]`, covering exactly the
       same field set `calibration_commands()` currently builds (`ml`, `mr`,
       `tw`, `rotSlip`, `pid.kp/ki/kff/iMax/kaw`, `headingKp`, `headingKd`)
@@ -68,14 +71,14 @@ present" pattern the existing `headingKp`/`headingKd` entries use).
       (see `calibration_commands()`'s own docstring on `otos_config()`
       being a separate mechanism) and have no place in a flat kwargs dict;
       `calibration_commands()` keeps building them directly, unchanged.
-- [ ] `calibration_commands(config)` is rewritten to call
+- [x] `calibration_commands(config)` is rewritten to call
       `calibration_kwargs(config)` and format each item into the existing
       `(command, read_timeout)` tuple list, THEN append the unchanged
       `OI`/`OL`/`OA` sequence — producing an **identical** list to today's
       output for every existing test fixture (verified by the regression
       test below). Per-key `read_timeout` values are preserved exactly
       (200ms for `SET` keys, 500/200 for `OI`/`OL`/`OA` as today).
-- [ ] No change to `calibration_commands()`'s public signature or return
+- [x] No change to `calibration_commands()`'s public signature or return
       shape.
 
 ## Testing

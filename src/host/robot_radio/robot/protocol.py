@@ -499,10 +499,17 @@ _MOTOR_PID_KEYS = {
 # these two; added directly here so set_config(headingKp=...) reaches the
 # SAME PlannerConfigPatch.heading_kp field binary_channel.cpp's
 # handleConfigPlanner() decodes (src/firm/commands/binary_channel.cpp).
+# distanceKp/arriveDwell (113-003): PlannerConfigPatch.distance_kp/
+# arrive_dwell were already curated as live-tunable fields (config.proto)
+# and already applied by handleConfigPlanner() -- these two entries were
+# simply missing from this table, so the two fields had no host-side wire
+# key at all and could never be pushed. Mirrors minSpeed's own shape.
 _PLANNER_KEYS = {
     "minSpeed": "min_speed",
     "headingKp": "heading_kp",
     "headingKd": "heading_kd",
+    "distanceKp": "distance_kp",
+    "arriveDwell": "arrive_dwell",
 }
 
 # ml/mr and sTimeout are handled specially, not via a plain field-name map:

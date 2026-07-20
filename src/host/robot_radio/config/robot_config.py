@@ -200,6 +200,15 @@ class ControlConfig(BaseModel):
     min_wheel_mms: Optional[float] = None   # → SET minWheelMms (low-speed deadband)
     turn_gate:     Optional[float] = None   # → SET turnGate   (turn-in-place gate, deg)
     yaw_rate_max:  Optional[float] = None   # → SET yawRateMax (yaw rate ceiling, deg/s)
+    # 113-003: min_speed/distance_kp/arrive_dwell were already curated as
+    # live-tunable PlannerConfigPatch fields (config.proto) with a real
+    # firmware consumer, but had no field on this model at all -- so
+    # calibration_kwargs() had nothing to read and these three fields
+    # silently never reached the wire. Field names mirror the robot JSON's
+    # own control.* keys 1:1 (coding-standards.md's wire-key exclusion).
+    min_speed:     Optional[float] = None   # → SET minSpeed  (Drive:: pivot-mode threshold, mm/s)
+    distance_kp:   Optional[float] = None   # → SET distanceKp (distance-loop P gain)
+    arrive_dwell:  Optional[float] = None   # → SET arriveDwell (arrival dwell time, s)
 
     # Host-side motion limit (NOT pushed to firmware): the maximum rotational
     # acceleration, deg/s^2, that the turn / turn2 trapezoidal velocity profile

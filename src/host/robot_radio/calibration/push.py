@@ -73,6 +73,121 @@ def push_calibration(conn_or_proto: Any, config: Any) -> dict[str, Any]:
     return _push_via_conn(conn, config)
 
 
+def calibration_kwargs(config: Any) -> dict[str, float | int]:
+    """Select the Tier-1 (already-wire-covered) calibration field set from
+    *config*, as a flat wire-key kwargs dict (``{"ml": ..., "pid.kp": ...,
+    "headingKp": ..., ...}``) — the SAME wire-key vocabulary ``protocol.py``'s
+    ``_MOTOR_PID_KEYS``/``_PLANNER_KEYS``/``_DRIVETRAIN_KEYS`` curate.
+
+    Pure, side-effect-free field SELECTION only — no text formatting, no
+    transport. This is what ``calibration_commands()`` (below) formats into
+    ``SET key=value`` strings for the hardware/CLI path; ticket 113-005's
+    ``SimLoop`` calls this directly and passes the dict straight to
+    ``NezhaProtocol.set_config(**kwargs)``, skipping the text round trip
+    entirely.
+
+    Covers, in order:
+      - ``ml``/``mr`` — mm_per_wheel_deg_left/right (wheel-diameter-derived
+        default when uncalibrated).
+      - ``tw`` — trackwidth mm.
+      - ``rotSlip`` — calibration.rotational_slip.  ALWAYS present: an
+        uncalibrated config (rotational_slip null/missing) resolves to the
+        documented "no correction" sentinel ``0`` (``effectiveSlip()`` maps
+        0 -> 1.0), so a no-calibration robot NEUTRALIZES whatever value is
+        baked into the firmware's compiled-in DefaultConfig instead of
+        silently inheriting it.  This is what makes "select tovez nocal →
+        turns are geometry-pure" true in the sim.
+      - ``pid.kp/ki/kff/iMax/kaw``, ``headingKp/headingKd``,
+        ``minSpeed``/``distanceKp``/``arriveDwell`` — the velocity-PID gains
+        (``control.vel_*`` → ``MotorConfigPatch`` Gains, applied to BOTH
+        motors by ``RobotLoop::handleConfig``) and the outer heading-loop /
+        distance-loop PlannerConfigPatch fields (``control.heading_*``/
+        ``distance_kp``/``arrive_dwell`` → ``Pilot::applyPlannerPatch``).
+        Stakeholder 2026-07-18: selecting a robot must be authoritative for
+        the CONTROL gains too — the sim binary bakes its own harness gains
+        (``SimHarness::makeMotorConfig()``) and real firmware bakes whatever
+        robot JSON was active at build time (``gen_boot_config.py``), and
+        neither may silently leak into a session.  Each key is present only
+        when the config carries a value (``ControlConfig``'s own contract:
+        None → firmware boot default kept).  113-003 adds
+        ``minSpeed``/``distanceKp``/``arriveDwell`` — three
+        ``PlannerConfigPatch`` fields already curated as live-tunable
+        (``config.proto``) and already applied by ``handleConfigPlanner()``,
+        but previously never pushed at all (``minSpeed`` had a wire key with
+        nothing reading it; ``distanceKp``/``arriveDwell`` had no wire key).
+        ``control.vel_filt`` has NO live ``SET`` key and is deliberately not
+        pushed — it reaches firmware at build time only
+        (``gen_boot_config.py`` → ``MotorConfig.setVelFiltAlpha()``).
+
+    ``OI``/``OL``/``OA`` (OTOS) are deliberately OUT of this dict — they are
+    not ``SET key=value`` verbs at all (see ``calibration_commands()``'s own
+    docstring on ``otos_config()`` being a separate mechanism), so they have
+    no place in a flat kwargs dict.  ``calibration_commands()`` builds them
+    directly, unchanged.
+
+    Does NOT select ``config.geometry.odometry_offset_mm`` (the OTOS
+    mounting-offset/lever-arm) — see ``calibration_commands()``'s own
+    docstring for the full rationale (unregistered `SET` keys, ``ERR
+    badkey``).
+    """
+    kwargs: dict[str, float | int] = {}
+
+    # ── Wheel encoder calibration and trackwidth ──────────────────────────
+    cal = getattr(config, "calibration", None)
+
+    wd = getattr(getattr(config, "wheels", None), "wheel_diameter_mm", None)
+    default_wheel_travel_calib = (math.pi * wd / 360.0) if wd is not None else None  # [mm/deg]
+
+    wheel_travel_calib_left  = getattr(cal, "mm_per_wheel_deg_left",  None) if cal else None
+    wheel_travel_calib_right = getattr(cal, "mm_per_wheel_deg_right", None) if cal else None
+    wheel_travel_calib_left  = wheel_travel_calib_left  if wheel_travel_calib_left  is not None else default_wheel_travel_calib
+    wheel_travel_calib_right = wheel_travel_calib_right if wheel_travel_calib_right is not None else default_wheel_travel_calib
+
+    if wheel_travel_calib_left is not None:
+        kwargs["ml"] = float(wheel_travel_calib_left)
+    if wheel_travel_calib_right is not None:
+        kwargs["mr"] = float(wheel_travel_calib_right)
+
+    geom = getattr(config, "geometry", None)
+    tw = getattr(geom, "trackwidth", None) if geom else None
+    if tw is not None:
+        kwargs["tw"] = int(round(float(tw)))
+
+    # ── Rotational slip: always present, uncalibrated -> sentinel 0 ───────
+    rot_slip = getattr(cal, "rotational_slip", None) if cal else None
+    kwargs["rotSlip"] = float(rot_slip) if rot_slip is not None else 0.0
+
+    # ── Velocity-PID + heading/distance-loop gains: present when set ──────
+    # See this function's docstring.  Wire keys are protocol.py's own
+    # vocabulary (_MOTOR_PID_KEYS / _PLANNER_KEYS); both hardware
+    # (binary_bridge.translate_command → NezhaProtocol.set_config) and Sim
+    # (SimTransport._handle_config_set → NezhaProtocol.config) accept them.
+    ctrl = getattr(config, "control", None)
+    for wire_key, attr in (
+        ("pid.kp", "vel_kp"),
+        ("pid.ki", "vel_ki"),
+        ("pid.kff", "vel_kff"),
+        ("pid.iMax", "vel_imax"),
+        ("pid.kaw", "vel_kaw"),
+        ("headingKp", "heading_kp"),
+        ("headingKd", "heading_kd"),
+        ("minSpeed", "min_speed"),
+        ("distanceKp", "distance_kp"),
+        ("arriveDwell", "arrive_dwell"),
+    ):
+        value = getattr(ctrl, attr, None) if ctrl is not None else None
+        if value is not None:
+            kwargs[wire_key] = float(value)
+
+    return kwargs
+
+
+# Wire keys formatted with a plain "%.6f" (matches the pre-113-003 text
+# implementation's own ml/mr formatting exactly) rather than the "%g" every
+# other SET key below uses.
+_SIX_DECIMAL_KEYS = frozenset({"ml", "mr"})
+
+
 def calibration_commands(config: Any) -> list[tuple[str, int]]:
     """Build the v2 calibration wire-command sequence for *config*.
 
@@ -81,6 +196,17 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
     Transport) can push the same sequence.  Mirrors the logic in
     ``robot_radio.io.cli._push_calibration``; changes there should be
     ported here.
+
+    113-003: a thin formatting wrapper over ``calibration_kwargs()`` (above)
+    — that function SELECTS which fields to push; this one FORMATS each
+    selected item into a ``SET key=value`` text command (``tw`` as a plain
+    int, ``ml``/``mr`` to 6 decimal places, everything else via ``%g``,
+    matching the pre-113-003 text implementation's own per-key formatting
+    exactly), then appends the OTOS ``OI``/``OL``/``OA`` sequence, which
+    ``calibration_kwargs()`` deliberately does not cover. Behavior-preserving
+    for every existing caller (``cli.py``, ``turn_shape.py``, ``__main__.py``'s
+    manual robot-select): byte-identical output to the pre-113-003
+    implementation for every existing config shape.
 
     The sequence:
       1. ``SET ml=<float>``  — mm_per_wheel_deg_left
@@ -93,22 +219,15 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
          value is baked into the firmware's compiled-in DefaultConfig
          instead of silently inheriting it.  This is what makes "select
          tovez nocal → turns are geometry-pure" true in the sim.
-      5. ``SET pid.kp/ki/kff/iMax/kaw=<float>`` and
-         ``SET headingKp/headingKd=<float>`` — the velocity-PID gains
-         (``control.vel_*`` → ``MotorConfigPatch`` Gains, applied to BOTH
-         motors by ``RobotLoop::handleConfig``) and the outer heading-loop
-         PD gains (``control.heading_*`` → ``PlannerConfigPatch`` →
-         ``Pilot::applyPlannerPatch``).  Stakeholder 2026-07-18: selecting
-         a robot must be authoritative for the CONTROL gains too — the sim
-         binary bakes its own harness gains (``SimHarness::
-         makeMotorConfig()``) and real firmware bakes whatever robot JSON
-         was active at build time (``gen_boot_config.py``), and neither
-         may silently leak into a session.  Each key is pushed only when
-         the config carries a value (``ControlConfig``'s own contract:
-         None → firmware boot default kept).  ``control.vel_filt`` has NO
-         live ``SET`` key and is deliberately not pushed — it reaches
-         firmware at build time only (``gen_boot_config.py`` →
-         ``MotorConfig.setVelFiltAlpha()``).
+      5. ``SET pid.kp/ki/kff/iMax/kaw=<float>``,
+         ``SET headingKp/headingKd=<float>``, and (113-003)
+         ``SET minSpeed/distanceKp/arriveDwell=<float>`` — the velocity-PID
+         gains (``control.vel_*`` → ``MotorConfigPatch`` Gains, applied to
+         BOTH motors by ``RobotLoop::handleConfig``) and the outer
+         heading-loop / distance-loop ``PlannerConfigPatch`` fields
+         (``control.heading_*``/``distance_kp``/``arrive_dwell`` →
+         ``Pilot::applyPlannerPatch``).  See ``calibration_kwargs()``'s own
+         docstring for the full field-selection rationale.
       6. ``OI``              — OTOS init (must precede OL/OA)
       7. ``OL <int8>``       — otos_linear_scale encoded
       8. ``OA <int8>``       — otos_angular_scale encoded
@@ -148,50 +267,13 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
     """
     cmds: list[tuple[str, int]] = []
 
-    # ── Wheel encoder calibration and trackwidth ──────────────────────────
-    cal = getattr(config, "calibration", None)
-
-    wd = getattr(getattr(config, "wheels", None), "wheel_diameter_mm", None)
-    default_wheel_travel_calib = (math.pi * wd / 360.0) if wd is not None else None  # [mm/deg]
-
-    wheel_travel_calib_left  = getattr(cal, "mm_per_wheel_deg_left",  None) if cal else None
-    wheel_travel_calib_right = getattr(cal, "mm_per_wheel_deg_right", None) if cal else None
-    wheel_travel_calib_left  = wheel_travel_calib_left  if wheel_travel_calib_left  is not None else default_wheel_travel_calib
-    wheel_travel_calib_right = wheel_travel_calib_right if wheel_travel_calib_right is not None else default_wheel_travel_calib
-
-    if wheel_travel_calib_left is not None:
-        cmds.append((f"SET ml={wheel_travel_calib_left:.6f}", 200))
-    if wheel_travel_calib_right is not None:
-        cmds.append((f"SET mr={wheel_travel_calib_right:.6f}", 200))
-
-    geom = getattr(config, "geometry", None)
-    tw = getattr(geom, "trackwidth", None) if geom else None
-    if tw is not None:
-        cmds.append((f"SET tw={int(round(float(tw)))}", 200))
-
-    # ── Rotational slip: always pushed, uncalibrated -> sentinel 0 ────────
-    rot_slip = getattr(cal, "rotational_slip", None) if cal else None
-    rot_slip = float(rot_slip) if rot_slip is not None else 0.0
-    cmds.append((f"SET rotSlip={rot_slip:g}", 200))
-
-    # ── Velocity-PID + heading-loop gains: pushed when present ────────────
-    # See this function's docstring, step 5.  Wire keys are protocol.py's
-    # own vocabulary (_MOTOR_PID_KEYS / _PLANNER_KEYS); both hardware
-    # (binary_bridge.translate_command → NezhaProtocol.set_config) and Sim
-    # (SimTransport._handle_config_set → NezhaProtocol.config) accept them.
-    ctrl = getattr(config, "control", None)
-    for wire_key, attr in (
-        ("pid.kp", "vel_kp"),
-        ("pid.ki", "vel_ki"),
-        ("pid.kff", "vel_kff"),
-        ("pid.iMax", "vel_imax"),
-        ("pid.kaw", "vel_kaw"),
-        ("headingKp", "heading_kp"),
-        ("headingKd", "heading_kd"),
-    ):
-        value = getattr(ctrl, attr, None) if ctrl is not None else None
-        if value is not None:
-            cmds.append((f"SET {wire_key}={float(value):g}", 200))
+    for key, value in calibration_kwargs(config).items():
+        if key == "tw":
+            cmds.append((f"SET tw={value}", 200))
+        elif key in _SIX_DECIMAL_KEYS:
+            cmds.append((f"SET {key}={value:.6f}", 200))
+        else:
+            cmds.append((f"SET {key}={value:g}", 200))
 
     # ── OTOS init + scalars: RESTORED (109-004) ───────────────────────────
     # Dropped 2026-07-16 (out-of-process) because OI/OL/OA had no path over
@@ -207,6 +289,7 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
     # rather than silently omitting the write.
     from robot_radio.calibration.helpers import scale_to_int8
 
+    cal = getattr(config, "calibration", None)
     lin_scale = getattr(cal, "otos_linear_scale",  None) if cal else None
     ang_scale = getattr(cal, "otos_angular_scale", None) if cal else None
     lin_scale = float(lin_scale) if lin_scale is not None else 1.0
