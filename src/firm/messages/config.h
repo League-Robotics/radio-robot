@@ -55,6 +55,7 @@ struct PlannerConfigPatch {
     Opt<float> heading_kp = {};
     Opt<float> heading_kd = {};
     Opt<float> arrive_dwell = {};
+    Opt<float> distance_kp = {};
 
     // --- array / optional-string accessors ---
 };

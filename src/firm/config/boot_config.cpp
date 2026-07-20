@@ -146,6 +146,22 @@ msg::PlannerConfig defaultPlannerConfig() {
     cfg.setHeadingLeadBias(-0.05f);        // [s] locus 1
     cfg.setPlanLead(0.2f);                // [s] locus 2
     cfg.setTerminalLead(0.0f);           // [s] locus 3
+
+    // 112-002: App::Drive's own model feedforward gain (Drive::tick() adds
+    // actuation_lag * a onto each wheel's velocity target). Motion::
+    // kDeadTime's own bench-derived value (120-140ms) by default -- see
+    // ACTUATION_LAG_DEFAULT's own comment above.
+    cfg.setActuationLag(0.13f);           // [s]
+
+    // 112-003: App::Pilot's own bounded linear position-feedback trim --
+    // distance_kp is the trim's gain, distance_tol is Motion::Executor's
+    // own unified completion rule's linear tolerance (112-004 wired this
+    // live, replacing the hardcoded Motion::kDistanceSettleEpsilonMm
+    // constant it repurposes the role of). See DISTANCE_KP_DEFAULT/
+    // DISTANCE_TOL_DEFAULT's own comment above for the deadband-inequality
+    // derivation AND 112-004's own closed-loop-convergence retune.
+    cfg.setDistanceKp(8.0f);              // [1/s]
+    cfg.setDistanceTol(3.0f);             // [mm]
     return cfg;
 }
 

@@ -95,6 +95,56 @@ cycle, Pilot::tick() computes omega_cmd = omega_ff + heading_kp*(...)") and
 keeps every sensor type and every gain out of `motion/` entirely — see
 `motion/DESIGN.md` §2c for the executor-side half.
 
+**The bounded linear position-feedback trim lives in `Pilot::tick()`, not
+`Executor` either (112-003) — the SAME gain/arithmetic split, one channel
+over.** `Motion::Executor::tick()` additionally exposes the LINEAR
+channel's own since-activation reference/measured pair on `Twist`
+(`sRef`/`sMeas` — `plannedPositionSinceActivation`/
+`measuredPathSinceActivation_`, kArc only, 0/0 for kPivot/kTimed — a pure
+straight/arc-leg mechanism that never touches the rotational channel).
+`Pilot::tick()` adds `distance_kp*(sRef - sMeas)`, clamped to
+`kDistanceTrimCeiling` (a fixed, Pilot-local C++ constant — only the GAIN
+is per-robot wire-tunable, not the ceiling), onto `twist.v` before staging
+the result on `Drive` — the identical gain-in-Pilot/reference-in-Executor
+boundary the heading PD paragraph above documents, chosen for the same
+reason: `motion/DESIGN.md` §2c's own "no gain, no sensor type" boundary
+for `Executor` stays true without a carve-out (sprint 112 Architecture
+Design Rationale Decision 3). Downstream of the PLANNED reference
+`refLeft()`/`refRight()` expose (112-002) — the trim perturbs only the
+SAMPLED velocity `Drive::setTwist()` receives, never the `JerkTrajectory`
+solve itself (no `solveToRest`/`solveToState`/`solveToVelocity`/
+`retarget`/`reanchor` call reads `sRef`/`sMeas`), so the ramp/lobe/bounds
+harness checks graded against the planned reference (112-002's own
+re-grade) are unaffected. The clamp ceiling is sized well below anything
+that could look like the solve-side reversal
+`.clasi/knowledge/d-drive-terminal-instability.md`/087-009 documents — see
+pilot.h's own `kDistanceTrimCeiling` doc comment for the full sizing
+derivation (the deadband inequality `distance_kp * distance_tol >=
+v_deadband`, re-verified against the actual current `Devices::NezhaMotor`
+write-shaping deadband rather than an unchecked architecture-doc figure).
+**112-004 update.** `distance_tol` is now read — by `Motion::Executor`'s own
+unified completion rule (`motion/DESIGN.md` §2c's own "Unified completion"
+entry), not by this trim — replacing the hardcoded
+`Motion::kDistanceSettleEpsilonMm` constant it used to repurpose the role
+of (now deleted). Once the trim's own convergence became load-bearing for
+completion this way, two further 112-004 changes landed here:
+`Pilot::tick()` now gates the trim off once `Twist::withinDistanceTolerance`
+(`|sErr| < distance_tol`) is true — mirroring the heading PD's own
+terminal-decel gate (`Twist::headingActive`) exactly, for the identical
+reason: an ungated P-only trim has no error left to asymptotically decay
+once the plant is genuinely at rest, so it otherwise bang-bangs a small
+residual back and forth around target rather than converging. Gating alone
+was not sufficient at the trim's original 15.0/s gain (still rang for
+several seconds, particularly after a reversal-dwell-delayed start), so
+`distance_kp`'s own shipped default also drops to 8.0 — an empirical,
+closed-loop-convergence finding (swept against the sim behavior-lock
+same-boot scenario), not a re-derivation of the deadband-inequality
+arithmetic above, which the new 8.0 default still satisfies against the
+active/no-cal boot config (though not the higher-tuned tovez.json profile
+— see pilot.cpp's own trim-gating comment and 112-004's own completion
+notes for the full sweep and the honest deadband-shortfall accounting,
+the same shape as `heading_kp`'s own Decision 5 finding).
+
 **`HeadingSource` (109-005).** A passive reader, no bus traffic of its
 own — `sample()` reads `Devices::Otos::pose()`/`poseFresh()`/`connected()`/
 `present()` and `Devices::NezhaMotor::position()` (both leaves), all
@@ -356,10 +406,22 @@ called with real elapsed time between calls).
   calls are cheap and can be called any number of times per cycle;
   `emit(now)` is the one call that actually sends, at most one frame type,
   bounded work, never sleeps, never touches the I2C bus.
-- **`Drive::setTwist`/`stop`/`tick()`:** `setTwist`/`stop` only stage a
-  target; `tick()` computes wheel velocities via `BodyKinematics::inverse()`
-  and stages them onto the two motor leaves via their own `setVelocity()` —
-  it never calls a motor's own `tick()`.
+- **`Drive::configure(config)`/`setTwist`/`stop`/`tick()`:** `configure()`
+  (112-002) reads `actuation_lag`, mirroring `Executor::configure()`/
+  `HeadingSource::configure()`'s own "call once, before first use"
+  convention — `main.cpp`'s boot wiring calls it once. `setTwist`/`stop`
+  only stage a target — `setTwist(v_x, omega, a_x=0, alpha=0)`, the last two
+  DEFAULTED (112-002: `Motion::Executor::Twist::aRef`/`alphaRef`, forwarded
+  through `Pilot::tick()`) so every pre-existing 2-arg call site (e.g.
+  `RobotLoop::handleTwist()`'s raw `TWIST` path) compiles and behaves
+  unchanged. `tick()` computes wheel velocities via `BodyKinematics::
+  inverse()` and stages them onto the two motor leaves via their own
+  `setVelocity()` — it never calls a motor's own `tick()` — PLUS (112-002) a
+  model feedforward term: the SAME `inverse()` map reused for the staged
+  acceleration (`aL = a_x - alpha*b/2`, `aR = a_x + alpha*b/2` — kinematics
+  is linear, so this is exact), added onto `vL`/`vR` as `actuation_lag * a`
+  before staging. A no-op whenever `a_x`/`alpha` are 0 (every call site that
+  never supplies them).
 - **`Odometry::integrate()`:** call once per cycle, after both motors' own
   `tick()` has run that cycle; reads each leaf's current `position()` and
   accumulates world pose via midpoint-arc integration over

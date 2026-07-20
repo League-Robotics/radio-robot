@@ -2,9 +2,22 @@
 // the module's boundary and cycle-placement contract.
 #include "app/pilot.h"
 
-#include <cmath>
+#include "kinematics/body_kinematics.h"
 
 namespace App {
+
+namespace {
+// clampf -- this codebase's own per-file convention (nezha_motor.cpp,
+// velocity_pid.cpp, otos.cpp, jerk_trajectory.cpp all declare an
+// identically-shaped local copy rather than sharing one) -- see this
+// ticket's own completion notes for why a shared utility was not
+// introduced instead.
+float clampf(float v, float lo, float hi) {
+  if (v < lo) return lo;
+  if (v > hi) return hi;
+  return v;
+}
+}  // namespace
 
 void Pilot::tick(uint32_t now, uint64_t nowUs) {  // [ms] [us]
   uint32_t dt = hasLastTick_ ? (now - lastTick_) : 0;
@@ -29,6 +42,15 @@ void Pilot::tick(uint32_t now, uint64_t nowUs) {  // [ms] [us]
   Motion::Executor::Twist twist = executor_.tick(dt, odom_.lastDistance(), headingSource_.heading(),
                                                   headingSource_.headingLead());
 
+  // 112-002: the PLANNED per-wheel reference -- BodyKinematics::inverse()
+  // applied to twist.v/twist.omega EXACTLY as Executor emitted them, before
+  // the heading-PD correction below (which only ever modifies the LOCAL
+  // `omega` copy, never `twist.omega` itself) and before App::Drive's own
+  // actuation-lag feedforward (Drive::tick(), a later, separate stage). See
+  // refLeft()/refRight()'s own doc comment (pilot.h) for why this is a
+  // live accessor rather than a wire telemetry field.
+  BodyKinematics::inverse(twist.v, twist.omega, drive_.trackWidth(), refLeft_, refRight_);
+
   float omega = twist.omega;
   if (twist.headingActive) {
     // 109-010 locus 1: the PD's own error term uses thetaMeasLead (the
@@ -44,35 +66,80 @@ void Pilot::tick(uint32_t now, uint64_t nowUs) {  // [ms] [us]
         (hasPrevThetaMeas_ && dtS > 0.0f) ? (twist.thetaMeas - prevThetaMeas_) / dtS : 0.0f;
     omega += headingKp_ * thetaErr + headingKd_ * (twist.omegaDes - omegaMeasEst);
 
-    // Minimum-command floor (2026-07-18, terminal stiction/deadband): once
-    // the planned profile has ended (omegaDes ~ 0 -- pure PD phase), a
-    // small residual error times kp can command a per-wheel speed BELOW
-    // what actually moves the plant (the write shaping's output deadband
-    // clamps sub-0.03 duty to zero; real motors add stiction) -- the PD
-    // then stalls with the error frozen ABOVE the dwell tolerance and the
-    // command runs to the STOP_TIME backstop instead of completing
-    // (observed directly in sim: kp=1 froze 5.7deg out, kp=6 froze ~1deg
-    // out). Floor the PD's output at the omega whose wheel speed is
-    // PlannerConfig.min_speed (sign preserved) so it always closes into
-    // tolerance; once within tolerance the terminal-decel gate turns
-    // headingActive off and the floor with it. Gated on omegaDes ~ 0 so a
-    // live profile's own smooth jerk-limited ramp is never floored.
-    // Gated OFF inside the dwell tolerance band (twist.withinTolerance):
-    // the floor drives the approach, then disengages so the plant coasts
-    // to rest IN the band -- flooring inside the band bang-bangs straight
-    // through it (floor speed x plant decay exceeds the band width) and
-    // the dwell never settles (observed: 15+ sign flips, then timeout).
-    if (minSpeed_ > 0.0f && std::fabs(twist.omegaDes) < 1e-3f &&
-        !twist.withinTolerance && omega != 0.0f) {
-      float trackWidth = drive_.trackWidth();
-      if (trackWidth > 0.0f) {
-        float minOmega = 2.0f * minSpeed_ / trackWidth;   // [rad/s]
-        if (std::fabs(omega) < minOmega) omega = std::copysign(minOmega, omega);
-      }
-    }
+    // 112-004: the minimum-command floor (2026-07-18, terminal stiction/
+    // deadband) that used to live here is DELETED -- it existed because a
+    // small residual error times heading_kp could command a per-wheel
+    // speed BELOW what actually moves the plant (the write shaping's
+    // output deadband clamps sub-0.03 duty to zero), stalling the PD with
+    // the error frozen above tolerance (observed: kp=1 froze 5.7deg out,
+    // kp=6 froze ~1deg out). Deleting it is safe now that heading_kp is
+    // bumped 3.0 -> 6.0 (gen_boot_config.py's own HEADING_KP_DEFAULT) so
+    // the deadband inequality (`heading_kp * heading_dwell_tol >=
+    // omega_deadband`) holds without a floor -- see this file's own
+    // completion notes for the re-derivation against the actual current
+    // deadband/track-width/tolerance values (sprint 112 Architecture
+    // Design Rationale Decision 5).
   }
   prevThetaMeas_ = twist.thetaMeas;
   hasPrevThetaMeas_ = true;
+
+  // 112-003: bounded linear position-feedback trim -- mirrors the heading
+  // PD's own gain/arithmetic split exactly (pilot.h's own kDistanceTrimCeiling
+  // doc comment / sprint 112 Architecture Design Rationale Decision 3):
+  // Executor exposes the linear channel's own since-activation reference/
+  // measured pair (Twist::sRef/sMeas), Pilot owns the gain and the
+  // correction arithmetic. `sRef`/`sMeas` are both 0 for kPivot/kTimed
+  // (Twist::sRef/sMeas's own doc comment, executor.h) -- `trim` is
+  // therefore a harmless 0 no-op in either case, with no mode branching
+  // needed here, the same way the deadband guard (`twist.sRef == twist.
+  // sMeas == 0`) never needs an explicit `if`. Downstream of Motion::
+  // Executor's own PLANNED reference (`twist.v`, already captured into
+  // `refLeft_`/`refRight_` above via BodyKinematics::inverse()) -- this
+  // trim perturbs only the SAMPLED velocity Drive::setTwist() receives; it
+  // never feeds back into a JerkTrajectory solve (no solveToRest/
+  // solveToState/solveToVelocity/retarget/reanchor call reads it), so the
+  // ramp/lobe/bounds checks that grade the planned reference are
+  // unaffected (this ticket claims no new harness xfail flip).
+  //
+  // 112-004, two changes, both empirically driven (see this ticket's own
+  // completion notes for the full sweep/evidence):
+  //   1. Gated off once within distance_tol (`twist.withinDistanceTolerance`),
+  //      mirroring the heading PD's own terminal-decel gate (`twist.
+  //      headingActive`) exactly -- see Twist::withinDistanceTolerance's own
+  //      doc comment (executor.h) for why: once the planned trajectory has
+  //      settled at rest, the trim's own error term no longer decays (a
+  //      stationary plant does not asymptotically approach zero error the
+  //      way a still-moving one does), so an UNGATED P-only trim bang-bangs
+  //      a small residual back and forth around target forever instead of
+  //      converging -- a failure mode the deleted terminal patch stack's own
+  //      crossing-based distanceDone test never exposed (it needed the trim
+  //      to cross the target once, never to SETTLE there), but 112-004's own
+  //      unified completion rule (which requires a sustained, held tolerance
+  //      window) does.
+  //   2. `distance_kp`'s own shipped default drops 15.0 -> 8.0
+  //      (gen_boot_config.py's own DISTANCE_KP_DEFAULT) -- gating alone was
+  //      NOT sufficient: at kp=15.0 the trim's own reaction to ordinary
+  //      cruise-phase tracking lag is aggressive enough (repeatedly
+  //      saturating the +-kDistanceTrimCeiling clamp) to still ring for
+  //      several seconds after the gate first engages, particularly right
+  //      after a same-sign reversal-dwell-delayed start (e.g. a straight
+  //      leg immediately following a pivot, both wheels needing to reverse
+  //      direction into NezhaMotor's own 100ms reversal-dwell window) --
+  //      confirmed by direct sweep against this sprint's own same-boot
+  //      harness scenario: kp in [1, 8] converges cleanly and
+  //      deterministically (100% across repeated runs), kp=10 fails
+  //      intermittently (1/40), kp>=12 fails increasingly often (4/40,
+  //      10/40) as gain rises toward the old 15.0 default. This narrows the
+  //      deadband-clearing margin (see pilot.h's own kDistanceTrimCeiling
+  //      doc comment and gen_boot_config.py's own DISTANCE_KP_DEFAULT
+  //      comment for the honest, un-cleared-against-the-tuned-config
+  //      accounting -- the SAME shape as heading_kp's own Decision 5
+  //      shortfall, gen_boot_config.py's own HEADING_KP_DEFAULT comment).
+  float trim = twist.withinDistanceTolerance
+                   ? 0.0f
+                   : clampf(distanceKp_ * (twist.sRef - twist.sMeas), -kDistanceTrimCeiling,
+                            kDistanceTrimCeiling);
+  float v = twist.v + trim;
 
   // 111-003 twist-staging decision (pilot.h's own tick() doc comment):
   //   - still running (or just started) -- stage the freshly-computed
@@ -90,7 +157,12 @@ void Pilot::tick(uint32_t now, uint64_t nowUs) {  // [ms] [us]
   //     own Drive::setTwist() call (already staged earlier this cycle by
   //     handleTwist()/handleStop()) must survive untouched.
   if (executor_.state() != Motion::State::kIdle) {
-    drive_.setTwist(twist.v, omega);
+    // 112-002: aRef/alphaRef forward the SAME sample() result already
+    // computed for v/omega above (never a separate solve) -- Drive::tick()
+    // folds them into a model feedforward term (actuation_lag * a) on top
+    // of the velocity target. 112-003: `v` (not `twist.v`) carries the
+    // bounded linear trim computed above.
+    drive_.setTwist(v, omega, twist.aRef, twist.alphaRef);
   } else if (stateBefore != Motion::State::kIdle) {
     drive_.setTwist(0.0f, 0.0f);
   }

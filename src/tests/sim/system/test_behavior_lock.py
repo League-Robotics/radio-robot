@@ -9,9 +9,47 @@ asserts each of the harness's own individually-named checks.
 This is Step 0 of
 ``clasi/issues/motion-control-terminal-blips-reconciled-fix-plan.md`` --
 "land a numeric jerk / single-lobe acceptance test first so every
-subsequent deletion is guarded." Ticket 001 (which created this file) was
-a PURE ADDITION: no production motion code (``pilot.cpp``/``executor.cpp``)
-was touched by that ticket.
+subsequent deletion is guarded." Sprint 111 ticket 001 (which created this
+file) was a PURE ADDITION: no production motion code
+(``pilot.cpp``/``executor.cpp``) was touched by that ticket.
+
+Sprint 112 ticket 001 (stakeholder decision, reviews Sec5.3 "differentiate
+the emitted setpoints") is the one exception to "never touch production
+code from this file": it deleted ``Motion::Executor::tick()``'s
+``plan_lead`` peek-ahead sampling (F2's jerk-warp bug) AND switched
+``behavior_lock_harness.cpp``'s ramp/terminal-bounds and single-lobe/
+lobe-sign checks to grade the COMMANDED per-wheel setpoint
+(``SimHarness::driveTargetVelLeft/Right()``) instead of the decoded/
+measured wire trace -- grading the measured trace conflated the commanded
+trajectory's own jerk-boundedness with the downstream velocity-PID/
+actuation-lag tracking response to it, which no ``Motion::Executor``/
+``App::Pilot`` control-law change can move. ``test_*_no_command_after_
+terminal_zero`` (ticket-003's own check, below) intentionally stays on the
+measured/decoded signal -- see that pair's own docstrings.
+
+Sprint 112 ticket 002 (acceleration feedforward through the ``Drive``
+mapping layer) re-pointed these SAME checks a second time, at a THIRD
+signal: the PLANNED reference (``SimHarness::plannedRefLeft/Right()`` ->
+``App::Pilot::refLeft/right()``, ``Motion::Executor``'s own jerk-limited
+trajectory sampled before the heading-PD correction and before ``Drive``'s
+own accel feedforward). Ticket 002's model feedforward
+(``actuation_lag * a``, a deliberate, KEPT lag-compensation term) writes
+into the COMMANDED signal ticket 001 had just cleaned -- Ruckig's own
+acceleration is only piecewise-linear, so the feedforward's own time
+derivative inherits the trajectory's jerk-segment step discontinuities,
+regressing the COMMANDED signal's jerk-boundedness even though nothing
+about the underlying SOLVED trajectory changed. Grading the PLANNED
+reference instead (reviews Sec5.3's other clause: "record requested
+endpoint, planned endpoint, measured endpoint... as separate telemetry
+values") isolates "is the solved trajectory itself well-shaped" from both
+downstream stages (the heading PD's reaction to noisy measured heading,
+and the feedforward's own deliberate anticipation) -- see
+``behavior_lock_harness.cpp``'s own header comment for the full
+three-signal (PLANNED/COMMANDED/MEASURED) accounting.
+``test_*_shelf_collapsed`` stays on the COMMANDED signal (it is about the
+FINAL command reaching zero, FF included) and ``test_*_no_command_after_
+terminal_zero`` stays on the MEASURED signal, both unchanged by this
+ticket.
 
 Ticket 003 (the ``App::Pilot::tick()`` stale-twist-on-idle fix) extends
 this SAME harness with two new checks -- ``test_straight_shelf_collapsed``/
@@ -109,8 +147,6 @@ _MOTION_SOURCES = [
 ]
 
 _CXX_STANDARD = "c++20"
-
-_ISSUE = "motion-control-terminal-blips-reconciled-fix-plan.md"
 
 
 def _find_cxx_compiler() -> str:
@@ -228,36 +264,62 @@ def _assert_result(harness_run_result, name: str):
 # --- D700 straight (kArc, deltaHeading=0) ---------------------------------
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        f"{_ISSUE}: the current patch stack produces an activation-region accel spike on the "
-        "straight (measured wheel accel ~4000mm/s^2 within the first cycle of Move activation, "
-        "vs the configured a_max/a_decel-derived bound) -- fixed by sprint 2's deletion of the "
-        "lead-sampling/padding machinery, not this ticket."
-    ),
-)
 def test_straight_ramp_bounds(harness_run):
+    """112-001: flipped from xfail to passing, grading the COMMANDED
+    per-wheel setpoint at the time (two things landed together: the
+    Motion::Executor::tick() plan_lead peek-ahead deletion, F2's jerk-warp
+    bug, plus this harness re-pointed at SimHarness::driveTargetVelLeft/
+    Right() instead of the decoded/measured wire trace).
+
+    112-002 (acceleration feedforward through the Drive mapping layer)
+    then wrote a DELIBERATE, KEPT model feedforward (actuation_lag * a)
+    into that SAME commanded signal -- real lag-compensation overshoot,
+    not a bug -- which reintroduced jerk-scale content into it (Ruckig's
+    acceleration is only piecewise-linear, so the feedforward's own time
+    derivative, actuation_lag * jerk, inherits the trajectory's jerk-
+    segment step discontinuities). Measured directly with the feedforward
+    genuinely engaged: sample 4 jerk 24800mm/s^3 vs bound 10800mm/s^3 on
+    the commanded signal -- a real regression of 112-001's own flip.
+
+    Stakeholder resolution (112-002, reviews Sec5.3's OTHER clause --
+    "record requested endpoint, PLANNED endpoint, measured endpoint... as
+    separate telemetry values"): keep the feedforward, and re-point this
+    check a SECOND time at a third, distinct signal -- the PLANNED
+    reference (SimHarness::plannedRefLeft/Right() -> App::Pilot::
+    refLeft/right(): Motion::Executor's own jerk-limited trajectory,
+    sampled before Pilot's heading-PD and before Drive's accel
+    feedforward). Verified clean on this signal with the feedforward live.
+    See behavior_lock_harness.cpp's own header comment for the full
+    three-signal (PLANNED/COMMANDED/MEASURED) writeup."""
     _assert_result(harness_run, "straight_ramp_bounds")
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        f"{_ISSUE}: the current patch stack's terminal top-up produces a jerk spike right at "
-        "Move completion on the straight, exceeding the configured j_max-derived bound -- fixed "
-        "by sprint 2's deletion of the terminal patch stack, not this ticket."
-    ),
-)
 def test_straight_terminal_bounds(harness_run):
+    """112-001: flipped to passing as a side effect of the SAME two
+    changes test_straight_ramp_bounds documents; 112-002 then regressed it
+    on the COMMANDED signal the same way (feedforward-induced jerk at the
+    terminal top-up transition: sample 41 jerk 13499.7mm/s^3 vs bound
+    10800mm/s^3) and re-fixed it the same way -- grading the PLANNED
+    reference instead. See test_straight_ramp_bounds's own docstring for
+    the full history."""
     _assert_result(harness_run, "straight_terminal_bounds")
 
 
 def test_straight_single_lobe_left(harness_run):
+    """112-002: grades the PLANNED reference (SimHarness::plannedRefLeft())
+    like test_straight_ramp_bounds above -- see that test's own docstring
+    for the full history. The commanded signal's own feedforward-induced
+    reshaping was severe enough here to also change the LOBE COUNT (2
+    lobes instead of 1, not just an accel/jerk bound violation) when
+    graded on SimHarness::driveTargetVelLeft() -- confirmed regressed with
+    the feedforward genuinely engaged, and clean again once re-pointed at
+    the PLANNED reference."""
     _assert_result(harness_run, "straight_single_lobe_left")
 
 
 def test_straight_single_lobe_right(harness_run):
+    """See test_straight_single_lobe_left's own docstring -- same grading,
+    mirrored on the right wheel."""
     _assert_result(harness_run, "straight_single_lobe_right")
 
 
@@ -300,14 +362,30 @@ def test_straight_shelf_collapsed(harness_run):
 # --- 360deg pivot (kPivot, distance=0) ------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        f"{_ISSUE}: same activation-region accel-spike signature as straight_ramp_bounds, in "
-        "the rotational domain -- fixed by sprint 2, not this ticket."
-    ),
-)
 def test_pivot_ramp_bounds(harness_run):
+    """112-001 confirmed Motion::Executor's own omegaFf contribution was
+    already clean (the same same-instant sample() fix that cleared
+    test_straight_ramp_bounds), but the pivot's COMMANDED per-wheel
+    setpoint is not omegaFf alone: App::Pilot::tick() adds the heading PD
+    correction term (heading_kp * (thetaRef - thetaMeasLead)) on top,
+    reacting every cycle to the OTOS-measured heading -- not a smooth
+    reference the way Executor's own sample() output is. Graded on the
+    COMMANDED signal (SimHarness::driveTargetVelLeft/Right()), this check
+    stayed xfail through 112-001 (an accel-bound violation, ~3722mm/s^2 vs
+    bound 1728mm/s^2, pre-112-001) and would have stayed xfail under
+    112-002's own accel feedforward too (which adds yet more jerk-scale
+    content on top of the PD's own reaction).
+
+    112-002 (stakeholder decision, reviews Sec5.3's "planned endpoint...
+    as a separate telemetry value" clause) re-points this check at the
+    PLANNED reference instead (SimHarness::plannedRefLeft/Right() ->
+    App::Pilot::refLeft/right(): Motion::Executor's own omegaFf, sampled
+    BEFORE the heading-PD correction and BEFORE the accel feedforward are
+    added). The pivot's planned rotational channel carries neither the PD
+    reaction nor the feedforward -- verified clean (PASS, not xfail) on
+    this signal: the pivot's own SOLVED trajectory was never the problem,
+    only what App::Pilot/App::Drive layer on top of it downstream, which
+    this check no longer conflates in."""
     _assert_result(harness_run, "pivot_ramp_bounds")
 
 
@@ -315,37 +393,35 @@ def test_pivot_terminal_bounds(harness_run):
     _assert_result(harness_run, "pivot_terminal_bounds")
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        f"{_ISSUE}: the pivot's own documented sign-changing terminal tail (+-15mm/s) splits "
-        "the left wheel's trace into 3 lobes instead of 1 -- fixed by sprint 2's deletion of "
-        "the pivot overshoot-lead/overshoot-carry machinery, not this ticket."
-    ),
-)
 def test_pivot_single_lobe_left(harness_run):
+    """112-001 (stakeholder decision, reviews Sec5.3) switched this check
+    to grade the COMMANDED per-wheel setpoint -- on that signal the
+    pivot's own sign-changing tail was real (5 lobes across the trace, not
+    1), attributable to the terminal patch stack still live in the
+    commanded trajectory (the same-sign overshoot carry, the min-speed
+    floor) and the heading-PD-on-measured-heading dynamic
+    test_pivot_ramp_bounds documents -- this check stayed xfail through
+    112-001.
+
+    112-002 re-points this check at the PLANNED reference instead (see
+    test_pivot_ramp_bounds's own docstring for the full three-signal
+    history) -- App::Pilot's downstream patch stack and PD reaction never
+    touch the planned trajectory, so this is a clean single lobe there.
+    Verified PASS with 112-002's own accel feedforward genuinely engaged."""
     _assert_result(harness_run, "pivot_single_lobe_left")
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        f"{_ISSUE}: same sign-changing terminal-tail signature as pivot_single_lobe_left, "
-        "mirrored on the right wheel -- fixed by sprint 2, not this ticket."
-    ),
-)
 def test_pivot_single_lobe_right(harness_run):
+    """See test_pivot_single_lobe_left's own docstring -- same grading and
+    history, mirrored on the right wheel."""
     _assert_result(harness_run, "pivot_single_lobe_right")
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        f"{_ISSUE}: depends on pivot_single_lobe_left/right both being exactly 1 lobe each, "
-        "which today's patch stack does not produce -- see those two checks' own reasons."
-    ),
-)
 def test_pivot_lobes_opposite_sign(harness_run):
+    """Depends on pivot_single_lobe_left/right both being exactly 1 lobe
+    each on whichever signal they grade -- see those two checks' own
+    docstrings for the PLANNED-reference re-grade (112-002) that makes
+    this true."""
     _assert_result(harness_run, "pivot_lobes_opposite_sign")
 
 
@@ -377,6 +453,29 @@ def test_same_boot_all_moves_completed(harness_run):
     same-boot scenario. See this ticket's own completion notes for the
     full writeup."""
     _assert_result(harness_run, "same_boot_all_moves_completed")
+
+
+# --- Chained pivot->pivot (112-004: 109-009 boundary-velocity-carry
+#     exception guardrail) ---------------------------------------------------
+
+
+def test_chained_pivot_no_decel_at_boundary(harness_run):
+    """112-004: two SAME-SIGN 180deg pivots injected back-to-back (the
+    second enqueued via injectMove(..., replace=false) while the first is
+    still running) must both complete, and the commanded per-wheel target
+    must NOT drop near zero within 2 cycles of the first pivot's own
+    completion -- proving Motion::Executor's own 109-009 boundary-velocity-
+    carry exception (the carryingRotationalVelocity branch, preserved
+    VERBATIM as a distinct code path by this ticket's own unified-
+    completion rewrite) still hands the still-rotating channel straight to
+    the successor instead of decelerating to rest at the boundary. Sprint
+    111's own same-boot scenario (above) alternates straight/pivot with no
+    chaining at all, so it never exercised this path; this is the first
+    harness coverage of it through the full App::RobotLoop/App::Pilot/
+    Motion::Executor graph (boundary_velocity_harness.cpp's own Scenario 4
+    already covers the same mechanism at the raw Motion::Executor level,
+    with no App::Pilot/App::RobotLoop in the loop)."""
+    _assert_result(harness_run, "chained_pivot_no_decel_at_boundary")
 
 
 if __name__ == "__main__":

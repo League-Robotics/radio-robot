@@ -143,6 +143,12 @@ class SimHarness {
     msg::PlannerConfig cfg = makeExecutorConfig();
     executor_.configure(cfg);
     headingSource_.configure(cfg);
+    // 112-002: App::Drive::configure() (actuation_lag, the acceleration-
+    // feedforward gain) -- PARITY with main.cpp's own boot wiring (this
+    // class's own header comment: "modeled directly on how source/main.cpp
+    // constructs the same graph"), and with executor_.configure()/
+    // headingSource_.configure() immediately above.
+    drive_.configure(cfg);
     pilot_.configureHeading(cfg);
 
     // "Pre-boot state": everything above is constructed and wired, but
@@ -240,6 +246,20 @@ class SimHarness {
   float driveTargetVelLeft() const { return armorL_.velocityTarget(); }    // [mm/s] signed
   float driveTargetVelRight() const { return armorR_.velocityTarget(); }  // [mm/s] signed
 
+  // plannedRefLeft/plannedRefRight -- 112-002 test-only accessors exposing
+  // App::Pilot's own PLANNED per-wheel reference (Pilot::refLeft/refRight():
+  // Motion::Executor's jerk-limited trajectory mapped through
+  // BodyKinematics::inverse(), BEFORE the heading-PD correction and BEFORE
+  // App::Drive's actuation-lag feedforward) -- NOT driveTargetVelLeft/Right()
+  // above, which is the FINAL, FF-augmented command Devices::Motor actually
+  // chases. Used by behavior_lock_harness.cpp's ramp/terminal-bounds and
+  // single-lobe/lobes-opposite-sign checks (112-002 re-grade): those check
+  // the PLANNED trajectory's own jerk-boundedness, which the accel
+  // feedforward (112-002) deliberately perturbs on the commanded signal --
+  // see that file's own header comment for the full rationale.
+  float plannedRefLeft() const { return pilot_.refLeft(); }    // [mm/s] signed
+  float plannedRefRight() const { return pilot_.refRight(); }  // [mm/s] signed
+
   // debugHeadingLead -- 109-010 diagnostic-only accessor (temporary
   // instrumentation, mirrors this sprint's own precedent of ad hoc trace
   // instrumentation during characterization -- see ticket 009's own
@@ -274,8 +294,10 @@ class SimHarness {
     cfg.plan_lead = planLead;
     cfg.terminal_lead = terminalLead;
     cfg.yaw_rate_max = lastYawRateMax_;
+    cfg.distance_kp = lastDistanceKp_;  // 112-003: compose with setDistanceKp() regardless of call order
     executor_.configure(cfg);
     headingSource_.configure(cfg);
+    drive_.configure(cfg);  // 112-002: reapply the same actuation_lag baseline
     pilot_.configureHeading(cfg);
   }
 
@@ -293,8 +315,32 @@ class SimHarness {
     cfg.heading_lead_bias = lastHeadingLeadBias_;
     cfg.plan_lead = lastPlanLead_;
     cfg.terminal_lead = lastTerminalLead_;
+    cfg.distance_kp = lastDistanceKp_;  // 112-003: compose with setDistanceKp() regardless of call order
     executor_.configure(cfg);
     headingSource_.configure(cfg);
+    drive_.configure(cfg);  // 112-002: reapply the same actuation_lag baseline
+    pilot_.configureHeading(cfg);
+  }
+
+  // setDistanceKp -- 112-003 test-only hook, same shape as
+  // setYawRateMax()/setLeadCompensation() above: lets a test override
+  // PlannerConfig.distance_kp away from makeExecutorConfig()'s own shipped
+  // default (8.0 as of 112-004; see that function's own comment) --
+  // e.g. to 0.0 for a test that wants App::Pilot's bounded linear
+  // position-feedback trim completely inert, or to a specific value for a
+  // targeted gain/clamp check. Used by pilot_distance_trim_harness.cpp's
+  // own 087-009 clamp-authority guardrail check.
+  void setDistanceKp(float distanceKp) {
+    lastDistanceKp_ = distanceKp;
+    msg::PlannerConfig cfg = makeExecutorConfig();
+    cfg.distance_kp = distanceKp;
+    cfg.heading_lead_bias = lastHeadingLeadBias_;
+    cfg.plan_lead = lastPlanLead_;
+    cfg.terminal_lead = lastTerminalLead_;
+    cfg.yaw_rate_max = lastYawRateMax_;
+    executor_.configure(cfg);
+    headingSource_.configure(cfg);
+    drive_.configure(cfg);
     pilot_.configureHeading(cfg);
   }
 
@@ -483,6 +529,41 @@ class SimHarness {
     cfg.heading_lead_bias = -0.05f;  // [s]
     cfg.plan_lead = 0.20f;           // [s] ~2 staging cycles + plant tau -- eliminates the terminal PD reversal (2026-07-18 sweep; matches gen_boot_config.py PLAN_LEAD_DEFAULT)
     cfg.terminal_lead = 0.0f;        // [s]
+    // 112-002: App::Drive's own model feedforward gain -- matches
+    // gen_boot_config.py's shipped ACTUATION_LAG_DEFAULT/Motion::kDeadTime's
+    // own bench-derived value (120-140ms), so this harness's own
+    // drive_.configure(cfg) call (constructor, setLeadCompensation(),
+    // setYawRateMax()) actually exercises the feedforward path a real robot
+    // boots with, not a silent 0.0f no-op.
+    cfg.actuation_lag = 0.130f;      // [s]
+    // 112-003: App::Pilot's own bounded linear position-feedback trim gain.
+    // 112-004 UPDATE: no longer left at 0.0 -- Motion::Executor's own
+    // unified completion rule reads `distance_tol` LIVE now (|sErr| <
+    // distance_tol, the linear half of `done = t >= duration+margin AND
+    // |sErr| < distance_tol AND |thetaErr| < heading_dwell_tol`), which
+    // makes the trim's own closed-loop convergence load-bearing for
+    // completion for the first time -- a plant with NO trim at all settles
+    // several mm short of target (a real, measured lag-induced undershoot,
+    // not a bug) and can never satisfy the completion rule's own tolerance
+    // test, timing out instead of completing. 8.0 matches
+    // gen_boot_config.py's own DISTANCE_KP_DEFAULT (112-004's own
+    // empirically-swept, closed-loop-stable value -- see that constant's
+    // own comment and pilot.cpp's own trim-gating comment for the full
+    // derivation); every PRE-EXISTING sim scenario that never queried
+    // completion timing precisely is unaffected either way, and
+    // setDistanceKp() below still lets a test override this per-scenario.
+    cfg.distance_kp = 8.0f;          // [1/s]
+    // 112-004: same load-bearing-for-completion reasoning as distance_kp
+    // above -- unlike distance_kp, 0.0 here is not even a directionally
+    // safe fallback: a strict `<` against a 0 tolerance can never be
+    // satisfied (the same reason heading_dwell_tol above is never left at
+    // 0 either), so every DISTANCE-mode (kArc) scenario through THIS
+    // harness needs a real value or its "not carrying" completion branch
+    // can only ever reach kTimeout, never kDone. 3.0mm matches
+    // gen_boot_config.py's own DISTANCE_TOL_DEFAULT and the value
+    // Motion::kDistanceSettleEpsilonMm used to hardcode before this ticket
+    // wired the live field in.
+    cfg.distance_tol = 3.0f;         // [mm]
     return cfg;
   }
 
@@ -561,6 +642,7 @@ class SimHarness {
   float lastHeadingLeadBias_ = -0.05f;  // [s] matches makeExecutorConfig()'s own default
   float lastPlanLead_ = 0.20f;         // [s] matches makeExecutorConfig()s own default
   float lastTerminalLead_ = 0.0f;      // [s]
+  float lastDistanceKp_ = 8.0f;        // [1/s] 112-003/112-004, matches makeExecutorConfig()'s own default
 };
 
 }  // namespace TestSim

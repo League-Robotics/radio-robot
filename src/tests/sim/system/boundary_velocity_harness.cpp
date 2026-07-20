@@ -52,6 +52,11 @@ msg::PlannerConfig makeConfig() {
   cfg.heading_dwell_tol = 0.5f * kDegToRad;
   cfg.heading_dwell_rate = 1.0f * kDegToRad;
   cfg.arrive_dwell = 0.15f;
+  // 112-004: unified completion rule's own linear tolerance -- needs a real
+  // (nonzero) value for the same reason heading_dwell_tol above does; see
+  // motion_executor_harness.cpp's own makeConfig() comment for the full
+  // reasoning.
+  cfg.distance_tol = 3.0f;  // [mm]
   return cfg;
 }
 
@@ -225,10 +230,29 @@ int main() {
   //     ideal-tracking twist implies -- NOT the single-tick transient this
   //     ticket's own anti-transient guard filters, and nowhere near the
   //     scripted-signal magnitude an isolated bookkeeping unit test uses)
-  //     still completes cleanly -- no SOLVE_FAIL, no wedge -- proving the
-  //     divergence-replan triggers stay safe under real disturbance. ---
+  //     stays SAFE -- no SOLVE_FAIL, no unbounded hang -- proving the
+  //     divergence-replan triggers (and, since 112-004, the STOP_TIME
+  //     backstop) hold under real disturbance even with NO closed-loop
+  //     correction available. This harness drives Motion::Executor
+  //     directly, with no App::Pilot in the loop -- the bounded linear
+  //     position-feedback trim that would normally correct a sustained
+  //     bias like this lives in Pilot, not here (sprint 112 Architecture
+  //     Design Rationale Decision 3), so it never engages in this scenario.
+  //
+  //     112-004: a 3% sustained bias over a 600mm move settles ~18mm off
+  //     target by the time the plant is at rest -- comfortably under the
+  //     40mm reanchor threshold (so the reanchor safety net correctly
+  //     stays silent, this scenario's own original point) but OUTSIDE the
+  //     unified completion rule's own distance_tol (3mm, makeConfig()
+  //     above). The command therefore now safely TIMES OUT
+  //     (stopTimeBackstopMs()) rather than the OLD crossing-only test
+  //     silently declaring DONE while resting an UNBOUNDED distance past
+  //     target -- a strictly safer property (Motion::Executor no longer
+  //     ever claims completion while genuinely outside its own tolerance
+  //     band). DONE is no longer the expected outcome absent a trim to
+  //     close the gap; a bounded DONE-or-TIMEOUT with no SOLVE_FAIL is. ---
   {
-    beginScenario("divergence: a persistent moderate plant disturbance still completes safely");
+    beginScenario("divergence: a persistent moderate plant disturbance stays safe (no SOLVE_FAIL, no wedge)");
     Motion::Executor exec;
     exec.configure(makeConfig());
 
@@ -238,8 +262,9 @@ int main() {
     float measuredDistance = 0.0f;
     bool sawSolveFail = false;
     bool done = false;
-    uint32_t doneId = 0;
-    for (int i = 0; i < 400 && !done; ++i) {
+    bool timedOut = false;
+    uint32_t terminalId = 0;
+    for (int i = 0; i < 400 && !done && !timedOut; ++i) {
       exec.plan();
       Motion::Executor::Twist twist = exec.tick(kDtMs, measuredDistance, 0.0f);
       // A persistent, plausible disturbance: the plant always reports
@@ -254,13 +279,20 @@ int main() {
         if (event.status == Motion::CompletionStatus::kSolveFail) sawSolveFail = true;
         if (event.id == 1 && event.status == Motion::CompletionStatus::kDone) {
           done = true;
-          doneId = event.id;
+          terminalId = event.id;
+        }
+        if (event.id == 1 && event.status == Motion::CompletionStatus::kTimeout) {
+          timedOut = true;
+          terminalId = event.id;
         }
       }
     }
     checkTrue(!sawSolveFail, "no SOLVE_FAIL fired under a sustained 3% travel-calibration disturbance");
-    checkTrue(done, "the command still completed DONE");
-    checkTrue(doneId == 1, "the kDone event echoes the command's own id");
+    checkTrue(done || timedOut,
+              "the command reached a bounded terminal outcome (DONE, or -- with no closed-loop trim "
+              "in this Executor-only harness -- a safe STOP_TIME timeout) within budget, never an "
+              "unbounded hang");
+    checkTrue(terminalId == 1, "the terminal event echoes the command's own id");
   }
 
   std::printf("\n");

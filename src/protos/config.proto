@@ -143,6 +143,15 @@ message MotorConfigPatch {
 // field removal -- see that ticket's completion notes for the full
 // per-field accounting. arrive_dwell (field 20 here, PlannerConfig field
 // 31) is the one field from that original span that IS live and was kept.
+//
+// distance_kp (field 21, 112-003) is the linear position-feedback trim's
+// own gain (planner.proto's matching PlannerConfig field 39) -- curated
+// here for the SAME reason heading_kp is: a live bench-iteration knob for
+// a per-robot control-law gain, no reflash needed. distance_tol
+// (PlannerConfig field 40) is deliberately NOT curated here -- this
+// ticket adds it as a boot-config-only field (see planner.proto's own
+// field comment); it has no live consumer yet to justify a wire-tunable
+// arm (ticket 004 may revisit once the unified completion rule reads it).
 message PlannerConfigPatch {
   reserved 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19;
   optional float min_speed  = 1;  // [mm/s] minSpeed
@@ -150,6 +159,7 @@ message PlannerConfigPatch {
   optional float heading_kd = 3;  // dimensionless headingKd
 
   optional float arrive_dwell = 20;  // [s]
+  optional float distance_kp  = 21;  // [1/s] distanceKp -- 112-003, mirrors heading_kp's own live-tunable shape
 }
 
 // Curated patch of OTOS runtime calibration -- mirrors

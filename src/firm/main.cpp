@@ -143,6 +143,10 @@ int main() {
   executor.configure(plannerConfig);
   static App::HeadingSource headingSource(otos, motorL, motorR, drivetrainConfig.trackwidth);
   headingSource.configure(plannerConfig);
+  // 112-002: actuation_lag (App::Drive's own model feedforward gain) --
+  // mirrors Executor::configure()/HeadingSource::configure()'s own boot
+  // call pattern.
+  drive.configure(plannerConfig);
   static App::Pilot pilot(executor, drive, headingSource, odom);
   pilot.configureHeading(plannerConfig);
 
