@@ -33,6 +33,25 @@ have removed every hardcoded fallback and the sim genuinely runs
 against reality — a threshold that happened to pass against `0.003`'s
 dynamics is not evidence it holds against `0.002`'s.
 
+**Revision 2 note**: this ticket's own premise — "against the configured
+plant" — was at risk during planning. Ticket 001's Revision 1 fix made
+`tovez_nocal.json`'s real, asymmetric `fwd_sign` (+1 left / -1 right, issue
+088-002) reach the simulated motor for the first time, which exposed a
+pre-existing `TestSim::WheelPlant`/`SimPlant` gap: no per-port
+mount-orientation model, so the sim's ground-truth pose spun instead of
+translated. Because this sprint's App::HeadingSource/heading-hold PD reads
+that (corrupted) ground truth as its own feedback signal, the contamination
+was not confined to XY pose — it could reach this ticket's own wheel-speed
+shape checks (oscillation/asymmetry from the PD fighting a false "we're
+spinning" signal). New ticket **007** fixes this at its actual source
+(`SimPlant` learns each port's `fwd_sign`, applied only where it feeds
+`OtosPlant`) and un-xfails the two tests that caught it
+(`test_distance_encoder_and_otos_match_truth`/
+`test_heading_encoder_and_otos_match_truth`). This ticket now runs after
+007 (see the sprint's updated Tickets table) — its "against the actually
+configured plant" claim is trustworthy only because of that ordering; do
+not run this ticket's validation ahead of 007 landing.
+
 Separately, no agent in this sprint has hardware access.
 `.claude/rules/hardware-bench-testing.md` requires a stand exercise for any
 firmware sprint touching the HAL, motor control, sensing, or the command

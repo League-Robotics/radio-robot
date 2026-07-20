@@ -288,6 +288,93 @@ construction sites** under `src/tests/sim/**`, plus **one Python file**
 harness via the ctypes `SimLoop` path and needs the equivalent fix on that
 side (see ticket 001).
 
+### Revision 2 (2026-07-20 — plant mount-orientation gap found while
+verifying ticket 001's completion, threatening ticket 006)
+
+**Finding.** With ticket 001 done and committed (`1ca177fb`), its own
+Revision 1 fix (`Devices::Motor::reconfigure()`) means
+`tovez_nocal.json`'s real, hardware-verified asymmetric `fwd_sign` (+1 left
+/ -1 right, issue 088-002) now reaches the simulated motor for the first
+time — sprint 113's `sim_configure_motor()` push had been silently inert
+until this sprint's own ticket 001 fixed it. Consequence: `TestSim::
+WheelPlant`/`SimPlant` have no model of per-port motor mount orientation, so
+they interpret the right motor's negated commanded duty as "physically
+backwards" rather than "correctly mirrored," and the simulated robot spins
+in place instead of translating on a straight command. Firmware itself
+stays self-consistent throughout — it applies `fwd_sign` symmetrically on
+encode (write) and decode (encoder read), so it *believes* it drove
+straight; only the test-only ground-truth pose (`OtosPlant`, fed by
+`SimPlant`) is wrong. Ticket 001's programmer parked this by xfailing
+`test_distance_encoder_and_otos_match_truth`/
+`test_heading_encoder_and_otos_match_truth` in
+`src/tests/sim/test_motor_primitive.py`, with a full root-cause writeup
+in that file.
+
+**Why this cannot be scoped out.** Ticket 006's entire job is "re-validate
+the motion-shape acceptance bar against the *actually configured* plant."
+Root-cause tracing (this revision) shows the contamination is not confined
+to XY ground truth: `App::HeadingSource`'s heading-hold PD reads OTOS
+ground truth as its own feedback signal, so a spinning ground truth would
+feed a false "we're spinning" error back into the closed loop, which could
+itself produce the asymmetric/oscillatory *wheel-speed* behavior ticket
+006's own acceptance bar (clean trapezoid, no oscillation) exists to catch
+— indistinguishable, without the fix, from a genuine regression. A
+"scope out and rewrite ticket 006 to be honest about what it can verify"
+resolution (option B) would either (a) fall back to a symmetric-`fwd_sign`
+profile, defeating the sprint's own stated purpose of validating against
+the *actually configured* (asymmetric) robot, or (b) validate against a
+plant that is known to produce spurious closed-loop artifacts, which is not
+"honest," it's just a documented false negative/positive risk. Ticket 006
+cannot produce a trustworthy result without this fix landing first.
+**Decision: (A)** — add a ticket, sequenced before 006, that teaches the
+plant per-port mount orientation and un-xfails the two parked tests.
+
+**Ticket 004 (persisted tuning) is unaffected**, confirmed by inspection:
+`Config::PersistedTuning` is pure serialize/deserialize/version-compare
+logic plus a thin `MicroBitStorage` I/O wrapper — no sim motion, no
+`WheelPlant`/`SimPlant`/`OtosPlant` involvement anywhere in its scope. Its
+own tests are host-build pure-function tests with zero plant dependency.
+
+**Ticket 005 (deadband compensation) is unaffected in its own production
+code** — `writeShapedDuty()` is a pure scalar-duty function with no
+pose/kinematics involvement, provably orthogonal to a mount-orientation
+bug that lives entirely in how two wheels' positions get combined into a
+vehicle-frame pose. Its *test* methodology could in principle be
+contaminated if its sim system test happens to route through a full
+heading-hold move whose terminal correction depends on OTOS ground truth
+(exactly the mechanism identified above) — rather than constrain that
+test's design pre-emptively, ticket 005 now **also depends on ticket 007**
+(added below), so the plant is provably fixed before ticket 005's own sim
+tests ever run, eliminating the question rather than merely arguing around
+it.
+
+**New ticket 007** — "Teach SimPlant per-port motor mount orientation
+(fwd_sign) so sim ground-truth pose matches a mirrored-motor robot
+config" (`depends-on: ['001']`, sequenced immediately before ticket 005).
+Sizing: **compact** — one changed component (the test-only sim plant's
+`OtosPlant`-feeding boundary inside `SimPlant`), no new cross-module
+dependency (`SimHarness` already owns and calls into `SimPlant`; `SimPlant`
+already owns and calls into `OtosPlant`), no dependency-direction change,
+and the data change is a single per-port `int` defaulting to `+1` (a
+genuine no-op for every existing symmetric-`fwd_sign` harness) — not a
+wire/message data-model change. No diagram: the fix is one new setter
+(`SimPlant::setFwdSign()`) threaded through one already-existing call site
+(`SimHarness::configureMotor()`) into one already-existing consumption
+point (`OtosPlant::step()`/`reset()`); the existing component diagram's
+`SIM -->|composes| LOOP` edge already covers where `SimHarness` sits, and
+no new module or cross-module edge exists to draw. See Design Rationale
+Decision 7 below and ticket 007 itself for the full fix locus (`SimPlant`
+learns each port's `fwd_sign` and applies it only where it feeds
+`OtosPlant` — never touching `WheelPlant`'s own physics or the wire-level
+encoder-read path, both of which already correctly reproduce real hardware
+and must not change).
+
+No ticket's Files-to-Touch outside 005/006/007 changes as a result of this
+revision. Ticket 006's dependency stays `['005']` — 007 now runs before
+005, so by the time 006 runs it is transitively already fixed; 006's own
+files are unchanged, only its Context gains a pointer to this revision (see
+ticket 006's own "Revision 2 note").
+
 ### Architecture Overview
 
 **Step 1/2 — the problem and its responsibilities.** Two previously-separate
@@ -315,6 +402,7 @@ concerns turn out to share one root cause and therefore one fix locus each:
 | `TestSim::SimHarness` (relocated defaults) | Composes the real `App::RobotLoop` graph against a simulated bus, starting unconfigured. | Inside: construction/wiring, `configurePlanner()`/`configureMotor()` as the *only* way values enter. Outside: what those values are for a given test (that's the new test-support bench-config helper's job, or a real robot-JSON push via `configure_from_robot()`). | SUC-001, SUC-004 |
 | `Config::PersistedTuning` (new) | Keeps a live-tuned config patch across a power cycle, honestly, or not at all. | Inside: serializing/deserializing the currently-live-tunable patch fields, the version stamp, the wipe-on-mismatch decision. Outside: the flash I/O primitive itself (a thin `MicroBitStorage&` seam, mirroring `radiochan::load()/save()`) and the wire dispatch that produces the patch in the first place (`RobotLoop::handleConfig()`, unchanged). | SUC-003 |
 | `NezhaMotor::writeShapedDuty()` (compensated) | Turns a requested duty into the duty actually written to the bus. | Inside: the exact-zero/sub-deadband-boost/reversal-dwell decision tree. Outside: how the requested duty was computed (PID, open-loop kff, or raw passthrough — all three already funnel through this one function, unchanged) and the deadband *value* itself (config-sourced, ticket 003's concern, not this ticket's). | SUC-005 |
+| `TestSim::SimPlant` (Revision 2: mount-orientation correction) | Converts each port's own physical (wire-frame) wheel position into the shared vehicle-forward convention `OtosPlant` requires, before combining them. | Inside: `setFwdSign(port, sign)` and the multiply applied only at the two call sites that feed `OtosPlant` (`tick()`'s `otos_.step()`, `setTruePose()`'s `otos_.reset()`). Outside: `WheelPlant`'s own physics (`step()`/`position()`/`velocity()`, unchanged) and the wire-level encoder-read path (`handleMotorRead()`, unchanged — both already correctly reproduce real hardware). | SUC-007 |
 
 **Boundary list — behavioral (config-sourced, no source fallback) vs.
 structural (compile-time, exempt).** This is the crux of "no defaults":
@@ -576,6 +664,40 @@ would reproduce exactly the "fails quiet" pattern this sprint exists to
 eliminate; every call site must observe it, even where (per this ticket's own
 scope) the only required handling on `false` is to not claim success.
 
+**Decision 7 (Revision 2) — The mount-orientation correction lives in
+`SimPlant`, at the point it feeds `OtosPlant`, not in `WheelPlant` itself
+and not in firmware.** *Context* (found verifying ticket 001's completion,
+not anticipated at planning time): `tovez_nocal.json`'s real `fwd_sign`
+(+1 left / -1 right) reaching the simulated motor for the first time
+exposed that `TestSim::WheelPlant`/`SimPlant` have no model of per-port
+mount orientation — a straight command spins the simulated robot instead of
+translating it, even though firmware's own encoder decode is self-consistent
+and correct. *Alternatives*: (a) fix it in firmware (e.g., change how
+`NezhaMotor` encodes/decodes `fwd_sign`) — rejected outright: firmware's
+round trip was never broken (traced in full above), and touching it would
+risk breaking the real, hardware-verified behavior issue 088-002 already
+established; (b) fix it inside `WheelPlant` itself, changing what
+`position()`/`reportedPosition()` return — rejected: `WheelPlant`'s
+physical-frame output is exactly what feeds the wire-level encoder
+simulation (`SimPlant::handleMotorRead()`), which must keep reproducing
+what a real chip's raw encoder reports for a mirrored motor; correcting it
+inside `WheelPlant` would flip the sign *again* on the wire-read path,
+re-introducing the same class of bug one layer over (firmware would then
+decode a `fwd_sign`-corrected "raw" reading through its own `*fwdSign` step
+a second time); (c) this ticket's choice: correct only at `SimPlant`'s two
+`OtosPlant`-feeding call sites (`tick()`, `setTruePose()`), leaving
+`WheelPlant` and the wire-level read path untouched. *Why*: (c) is the only
+option that fixes the actual mismatch (two wheel positions in different
+implicit sign conventions being combined by kinematics that assume one
+shared convention) without touching either of the two paths that are
+already correct (firmware's decode, `WheelPlant`'s wire-frame physics).
+*Consequences*: the fix is a single per-port `int` defaulting to `+1`
+(a no-op for the 9 existing symmetric-`fwd_sign` harnesses) threaded
+through one already-existing call site
+(`SimHarness::configureMotor()` → `SimPlant::setFwdSign()`); no `src/firm/`
+file changes; the two previously-xfailed `test_motor_primitive.py` cases
+become the fix's own regression coverage once un-xfailed.
+
 ### Migration Concerns
 
 - **9 existing sim test harnesses (26 construction sites), plus one Python
@@ -605,6 +727,13 @@ scope) the only required handling on `false` is to not claim success.
 - **No data migration** for existing persisted state — `Config::PersistedTuning`
   is new; there is no prior on-device store to migrate away from
   (`radio_channel.h`'s own persisted key is untouched, a separate concern).
+- **(Revision 2) Two previously-xfailed tests become load-bearing.**
+  `test_distance_encoder_and_otos_match_truth`/
+  `test_heading_encoder_and_otos_match_truth` (`test_motor_primitive.py`)
+  were marked `xfail(strict=False)` by ticket 001 pending ticket 007. Ticket
+  007 must remove both markers as part of its own acceptance — a leftover
+  `xfail` after the fix lands would silently mask a regression instead of
+  catching one.
 
 ### Open Questions
 
@@ -809,6 +938,42 @@ Parent: (deadband-compensation-small-commands-must-produce-real-motion.md)
         (not agent-executed) covering the hardware-bench-testing.md standing
         gate for this sprint's HAL/motor-control/protocol-adjacent changes.
 
+### SUC-007: Sim ground-truth pose reflects the configured robot's motor mount orientation
+Parent: (Revision 2 — discovered verifying ticket 001's completion; no
+source issue file, see sprint.md's own Revision 2 note and Design
+Rationale Decision 7 for full provenance)
+
+- **Actor**: Any sim-based test or tool driving `TestSim::SimHarness`
+  against a real, asymmetric-`fwd_sign` robot config (e.g.,
+  `tovez_nocal.json`, +1 left / -1 right).
+- **Preconditions**: `SimHarness::configureMotor()` has pushed a
+  `Devices::MotorConfig` whose `fwd_sign` differs between the left and
+  right ports.
+- **Main Flow**:
+  1. A straight twist (`v_x` nonzero, `omega=0`) is commanded.
+  2. Each `NezhaMotor` computes and writes its own physically-correct duty
+     (`effective = fwd_sign * written`), exactly as on real hardware —
+     unchanged by this use case.
+  3. `SimPlant` steps each `WheelPlant` from the wire-level (physical)
+     duty — unchanged.
+  4. `SimPlant` converts each wheel's physical position into the shared
+     vehicle-forward convention (multiplying by that port's `fwd_sign`)
+     before feeding `OtosPlant::step()`/`reset()`.
+  5. `OtosPlant`'s ground-truth pose translates forward, matching what
+     firmware itself already (correctly, self-consistently) believes
+     happened.
+- **Postconditions**: Ground-truth sim pose and firmware's own
+  encoder/OTOS-reported pose agree, for any `fwd_sign` configuration —
+  symmetric (every pre-existing harness) or asymmetric (the real robot).
+- **Acceptance Criteria**:
+  - [ ] A straight twist against `tovez_nocal.json`'s real `fwd_sign`
+        (+1/-1) produces ground-truth translation, not a spin.
+  - [ ] `test_distance_encoder_and_otos_match_truth`/
+        `test_heading_encoder_and_otos_match_truth` pass with their
+        `xfail` markers removed.
+  - [ ] Every existing symmetric-`fwd_sign` sim harness is unaffected — the
+        correction is a genuine no-op for them.
+
 ## GitHub Issues
 
 None.
@@ -831,7 +996,12 @@ Before tickets can be created, all of the following must be true:
 | 002 | Eliminate gen_boot_config.py behavioral fallback defaults: extend robot JSON schema/profiles, hard-fail build on missing required key | — |
 | 003 | Eliminate nezha_motor.h's write-shaping ship defaults: reversalDwell/outputDeadband become required config | 002 |
 | 004 | Version-stamped persisted live-tuning store (Config::PersistedTuning, MicroBitStorage-backed) | 001 |
-| 005 | Deadband compensation at motor write-shaping: boost sub-deadband nonzero commands, settle not hunt | 003 |
+| 007 | Teach SimPlant per-port motor mount orientation (fwd_sign) so sim ground-truth pose matches a mirrored-motor robot config (Revision 2) | 001 |
+| 005 | Deadband compensation at motor write-shaping: boost sub-deadband nonzero commands, settle not hunt | 003, 007 |
 | 006 | Re-validate motion-shape acceptance bar against the configured plant + stakeholder bench checklist | 005 |
 
-Tickets execute serially in the order listed.
+Tickets execute serially in the order listed. Ticket 007 (Revision 2) is
+inserted between 004 and 005 — it only functionally needs ticket 001, but
+must land before both 005 and 006 so their sim-motion validation runs
+against a ground truth that actually matches the configured (asymmetric
+`fwd_sign`) robot; see sprint.md's Revision 2 note above.

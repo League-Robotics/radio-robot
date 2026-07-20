@@ -4,7 +4,7 @@ title: 'Deadband compensation at motor write-shaping: boost sub-deadband nonzero
   settle not hunt'
 status: open
 use-cases: [SUC-005]
-depends-on: ['003']
+depends-on: ['003', '007']
 github-issue: ''
 issue: deadband-compensation-small-commands-must-produce-real-motion.md
 completes_issue: true
@@ -22,6 +22,23 @@ immediate, unclamped hard stop. Depends on ticket 003 because the fix boosts
 *to* `outputDeadband_`, which must be a real, config-sourced value (not a
 private implementation constant) for "boost to the configured deadband" to
 be a meaningful, correct statement.
+
+**Depends on ticket 007 too (Revision 2)**: ticket 007 fixes a pre-existing
+`TestSim::WheelPlant`/`SimPlant` gap (no per-port motor mount-orientation
+model) that makes the sim's ground-truth pose spin instead of translate
+under `tovez_nocal.json`'s real asymmetric `fwd_sign`. This ticket's own
+production change (`writeShapedDuty()`) is a pure scalar-duty function with
+no pose/kinematics involvement — provably orthogonal to that bug. But this
+ticket's own **sim system test** (the ~11 mm/s-terminal-correction scenario
+and the settle-not-hunt sweep) runs in the same sim; sequencing ticket 007
+first removes any need to reason about whether that test's own scenario
+construction happens to route through OTOS ground truth (a heading-hold
+move's terminal correction, for instance, would) — it simply cannot be
+contaminated by a bug that no longer exists by the time this ticket's tests
+run. Write this ticket's test scenario however is clearest/most direct
+(a full heading-hold move terminal correction is fine now); do not add
+special-case scaffolding to avoid ground truth — that scaffolding is no
+longer necessary once ticket 007 has landed.
 
 ## Context
 
