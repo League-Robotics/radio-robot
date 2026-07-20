@@ -430,16 +430,20 @@ void RobotLoop::cycle() {
   // (observed 2026-07-18: an unmanaged pivot showed actual L == actual R
   // glued to the right wheel while cmd L/R were correctly mirrored).
 
-  // NOTE! These requests and collects have been reordered for testing and 
-  // development and will need to be reverted to their original positions
-  // before running on hardware. 
+  // 112-005 cycle-order fix (cut the trim/PD-loop dead time that caused the
+  // terminal jitter): stage this cycle's wheel targets BEFORE the motor
+  // ticks, so the target pilot staged last cycle is WRITTEN this cycle
+  // instead of next (-1 cycle).
+  drive_.tick();  // twist -> wheel targets, written by THIS cycle's motor ticks
+
+  // Request/collect MUST interleave per port: the 0x46 encoder-select is a
+  // single latched state on the brick (one pending read) -- issuing both
+  // selects before either collect makes BOTH motors read the last-selected
+  // port's encoder.
   motorL_.requestSample();  // 0x46 write (brick holds ONE pending read)
-  motorL_.tick(clock_.nowMicros());   // collect L while port 1 is still selected
-
+  motorL_.tick(clock_.nowMicros());   // write L duty (fresh target) + collect L
   motorR_.requestSample();
-  motorR_.tick(clock_.nowMicros());
-
-  drive_.tick();  // twist -> wheel targets (consumed on the NEXT cycle's ticks)
+  motorR_.tick(clock_.nowMicros());   // write R duty + collect R
 
   runAndWait(kSettle, [&] {           // >=4ms: L encoder settling, meanwhile --
     comms_.pump(cmd);                 //   drain RX, decode <=1 frame into cmd

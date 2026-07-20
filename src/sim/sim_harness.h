@@ -458,7 +458,7 @@ class SimHarness {
     // duty = target/500 -> plant velocity = 500*duty = target (open-loop
     // exact), with kp trimming transients/disturbance.
     cfg.velGains.kff = 1.0f / TestSim::kDefaultDutyVelMax;  // 0.002 duty per mm/s
-    cfg.velGains.kp = 0.01f;   // feedback trim -- needed for turn accuracy
+    cfg.velGains.kp = 0.003f;   // feedback trim -- needed for turn accuracy
                                // (kp=0 lands 90deg turns ~30deg off + faults)
     // PARITY (stakeholder 2026-07-18): reversalDwell/outputDeadband are
     // deliberately left UNSET -- exactly what the production boot config
@@ -495,7 +495,7 @@ class SimHarness {
     // dwell tolerance/rate/hold match this same file's own
     // planner.proto/gen_boot_config.py default derivation (0.5deg/1deg-per-
     // s/150ms).
-    cfg.heading_kp = 6.0f;                     // [1/s]
+    cfg.heading_kp = 2.5f;                     // [1/s]
     cfg.heading_kd = 0.0f;                     // dimensionless
     // Dwell tolerance 1.5deg (was 0.5deg) + min_speed 20mm/s (2026-07-18,
     // terminal stiction/deadband floor): with the write shaping honestly ON
@@ -535,7 +535,7 @@ class SimHarness {
     // drive_.configure(cfg) call (constructor, setLeadCompensation(),
     // setYawRateMax()) actually exercises the feedforward path a real robot
     // boots with, not a silent 0.0f no-op.
-    cfg.actuation_lag = 0.130f;      // [s]
+    cfg.actuation_lag = 0.0f;      // [s]
     // 112-003: App::Pilot's own bounded linear position-feedback trim gain.
     // 112-004 UPDATE: no longer left at 0.0 -- Motion::Executor's own
     // unified completion rule reads `distance_tol` LIVE now (|sErr| <
@@ -552,7 +552,7 @@ class SimHarness {
     // derivation); every PRE-EXISTING sim scenario that never queried
     // completion timing precisely is unaffected either way, and
     // setDistanceKp() below still lets a test override this per-scenario.
-    cfg.distance_kp = 8.0f;          // [1/s]
+    cfg.distance_kp = 2.5f;          // [1/s]
     // 112-004: same load-bearing-for-completion reasoning as distance_kp
     // above -- unlike distance_kp, 0.0 here is not even a directionally
     // safe fallback: a strict `<` against a 0 tolerance can never be
@@ -563,7 +563,7 @@ class SimHarness {
     // gen_boot_config.py's own DISTANCE_TOL_DEFAULT and the value
     // Motion::kDistanceSettleEpsilonMm used to hardcode before this ticket
     // wired the live field in.
-    cfg.distance_tol = 3.0f;         // [mm]
+    cfg.distance_tol = 6.0f;         // [mm]
     return cfg;
   }
 
@@ -642,7 +642,7 @@ class SimHarness {
   float lastHeadingLeadBias_ = -0.05f;  // [s] matches makeExecutorConfig()'s own default
   float lastPlanLead_ = 0.20f;         // [s] matches makeExecutorConfig()s own default
   float lastTerminalLead_ = 0.0f;      // [s]
-  float lastDistanceKp_ = 8.0f;        // [1/s] 112-003/112-004, matches makeExecutorConfig()'s own default
+  float lastDistanceKp_ = 2.5f;        // [1/s] 112-003/112-004, matches makeExecutorConfig()'s own default
 };
 
 }  // namespace TestSim

@@ -2,6 +2,8 @@
 // the module's boundary and cycle-placement contract.
 #include "app/pilot.h"
 
+#include <cmath>
+
 #include "kinematics/body_kinematics.h"
 
 namespace App {
@@ -42,6 +44,27 @@ void Pilot::tick(uint32_t now, uint64_t nowUs) {  // [ms] [us]
   Motion::Executor::Twist twist = executor_.tick(dt, odom_.lastDistance(), headingSource_.heading(),
                                                   headingSource_.headingLead());
 
+  // 112-006 model-reference: advance a first-order model of the plant's own
+  // tracking lag (modelTau_) toward this tick's raw reference. The feedback
+  // below (linear trim + heading PD) is measured against THIS lagged model,
+  // not the raw reference, so it does not fight the plant's natural,
+  // self-correcting transient lag -- only real disturbances. In a clean run
+  // the measurement tracks the model, the error is ~0, and the pure planned
+  // profile reaches the wheels (which alone lands on target -- verified with
+  // all feedback off). See pilot.h's own model-reference doc comment for the
+  // root-cause finding this replaces the 112-005 no-reversal clamp with.
+  // modelAlpha is the EXACT first-order-hold coefficient 1 - e^(-dt/tau), not
+  // the Euler dt/tau (which overshoots for dt/tau ~ 0.5 and makes the model
+  // lead the plant -> a start-of-ramp kick).
+  float alphaLin = (modelTauLin_ > 0.0f && dtS > 0.0f) ? (1.0f - expf(-dtS / modelTauLin_)) : 1.0f;
+  float alphaAng = (modelTauAng_ > 0.0f && dtS > 0.0f) ? (1.0f - expf(-dtS / modelTauAng_)) : 1.0f;
+  sRefStage_ += alphaLin * (twist.sRef - sRefStage_);
+  sRefModel_ += alphaLin * (sRefStage_ - sRefModel_);
+  thetaRefStage_ += alphaAng * (twist.thetaRef - thetaRefStage_);
+  float newThetaRefModel = thetaRefModel_ + alphaAng * (thetaRefStage_ - thetaRefModel_);
+  float omegaRefModel = (dtS > 0.0f) ? (newThetaRefModel - thetaRefModel_) / dtS : 0.0f;  // [rad/s]
+  thetaRefModel_ = newThetaRefModel;
+
   // 112-002: the PLANNED per-wheel reference -- BodyKinematics::inverse()
   // applied to twist.v/twist.omega EXACTLY as Executor emitted them, before
   // the heading-PD correction below (which only ever modifies the LOCAL
@@ -61,10 +84,15 @@ void Pilot::tick(uint32_t now, uint64_t nowUs) {  // [ms] [us]
     // offset resets to 0 on every fresh OTOS sample (App::HeadingSource's
     // own ageMs_ bookkeeping), which would inject a sawtooth into a
     // finite-difference derivative computed across it.
-    float thetaErr = twist.thetaRef - twist.thetaMeasLead;
+    // 112-006: error is against the plant-lag model of the reference
+    // (thetaRefModel_/omegaRefModel), not the raw thetaRef/omegaDes -- so the
+    // PD stays ~0 through the natural accel/decel lag and only reacts to real
+    // heading disturbances (thetaMeasLead is still the age-compensated
+    // measurement; the two adjustments cancel in a clean run).
+    float thetaErr = thetaRefModel_ - twist.thetaMeasLead;
     float omegaMeasEst =
         (hasPrevThetaMeas_ && dtS > 0.0f) ? (twist.thetaMeas - prevThetaMeas_) / dtS : 0.0f;
-    omega += headingKp_ * thetaErr + headingKd_ * (twist.omegaDes - omegaMeasEst);
+    omega += headingKp_ * thetaErr + headingKd_ * (omegaRefModel - omegaMeasEst);
 
     // 112-004: the minimum-command floor (2026-07-18, terminal stiction/
     // deadband) that used to live here is DELETED -- it existed because a
@@ -137,9 +165,17 @@ void Pilot::tick(uint32_t now, uint64_t nowUs) {  // [ms] [us]
   //      shortfall, gen_boot_config.py's own HEADING_KP_DEFAULT comment).
   float trim = twist.withinDistanceTolerance
                    ? 0.0f
-                   : clampf(distanceKp_ * (twist.sRef - twist.sMeas), -kDistanceTrimCeiling,
+                   : clampf(distanceKp_ * (sRefModel_ - twist.sMeas), -kDistanceTrimCeiling,
                             kDistanceTrimCeiling);
   float v = twist.v + trim;
+
+  // 112-006: the 112-005 no-reversal clamp is REMOVED. It masked the terminal
+  // overshoot by force-clamping any command that crossed zero -- but the
+  // overshoot was the outer feedback fighting the plant's natural tracking lag
+  // (see the model-reference doc comment above and in pilot.h). With the
+  // feedback measured against the plant-lag model, a clean run produces no
+  // reversal to clamp in the first place, and clamping would now only BLOCK a
+  // legitimate disturbance correction. The command is `v`/`omega` as computed.
 
   // 111-003 twist-staging decision (pilot.h's own tick() doc comment):
   //   - still running (or just started) -- stage the freshly-computed
@@ -165,6 +201,16 @@ void Pilot::tick(uint32_t now, uint64_t nowUs) {  // [ms] [us]
     drive_.setTwist(v, omega, twist.aRef, twist.alphaRef);
   } else if (stateBefore != Motion::State::kIdle) {
     drive_.setTwist(0.0f, 0.0f);
+  }
+
+  // 112-006: once idle, reset the reference model so the next move starts it
+  // matched at 0 (sRef/thetaRef are both command-relative -- executor.h's own
+  // Twist doc comment), and no stale lag carries across moves.
+  if (executor_.state() == Motion::State::kIdle) {
+    sRefStage_ = 0.0f;
+    sRefModel_ = 0.0f;
+    thetaRefStage_ = 0.0f;
+    thetaRefModel_ = 0.0f;
   }
 }
 

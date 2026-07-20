@@ -309,6 +309,38 @@ class Pilot {
   // reference. See refLeft()/refRight()'s own doc comment above.
   float refLeft_ = 0.0f;   // [mm/s] signed
   float refRight_ = 0.0f;  // [mm/s] signed
+
+  // 112-006 model-reference feedback: the linear trim and heading PD track the
+  // reference passed through a first-order model of the plant's OWN tracking
+  // lag (modelTau_), NOT the raw reference. Root cause of the terminal
+  // overshoot/dip and the never-completing arrive-timeout: the feedback was
+  // differencing the measurement against the instantaneous reference, so it
+  // read the plant's natural, self-correcting accel/decel lag as an "error"
+  // and over-drove to close it -- pushing past the target, then reversing to
+  // come back (that reverse WAS the terminal dip; the over-drive WAS the
+  // overshoot). With all feedback off the pure profile already lands on target
+  // (straight +3mm, 360deg turn -0.3deg), proving the profile is right and the
+  // feedback was the defect. Differencing against the lagged model instead
+  // makes the error ~0 through a clean run (the pure profile reaches the
+  // wheels) and nonzero only for a REAL disturbance (slip, bump, model error),
+  // which the feedback then corrects. Replaces the 112-005 no-reversal clamp,
+  // which only masked the symptom. sRef/thetaRef are command-relative, so both
+  // models reset to 0 per move (tick()).
+  // Two cascaded first-order stages per channel -> a SECOND-order model whose
+  // step response has a delayed, S-shaped onset (near-zero initial slope). A
+  // single first-order lag starts moving immediately and so LEADS the plant at
+  // the ramp start (a residual command kick); the real plant has a delayed
+  // onset (motor loop + cycle dead time), which the cascade matches. Stage_ is
+  // the intermediate; Model_ is what the feedback differences against.
+  float sRefStage_ = 0.0f;      // [mm]
+  float sRefModel_ = 0.0f;      // [mm]
+  float thetaRefStage_ = 0.0f;  // [rad]
+  float thetaRefModel_ = 0.0f;  // [rad]
+  // Per-stage plant-lag time constants, separate for the linear and angular
+  // channels because they are physically different plants (wheel-translation
+  // vs body-rotation inertia/loop dynamics), so their tracking lags differ.
+  float modelTauLin_ = 0.10f;   // [s]
+  float modelTauAng_ = 0.08f;   // [s]
 };
 
 }  // namespace App
