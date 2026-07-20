@@ -245,6 +245,8 @@ struct PlannerConfig {
     float actuation_lag = 0.0f;
     float distance_kp = 0.0f;
     float distance_tol = 0.0f;
+    float model_tau_lin = 0.0f;
+    float model_tau_ang = 0.0f;
 
     // --- array / optional-string accessors ---
 
@@ -269,6 +271,8 @@ struct PlannerConfig {
     PlannerConfig& setActuationLag(float v) { actuation_lag = v; return *this; }
     PlannerConfig& setDistanceKp(float v) { distance_kp = v; return *this; }
     PlannerConfig& setDistanceTol(float v) { distance_tol = v; return *this; }
+    PlannerConfig& setModelTauLin(float v) { model_tau_lin = v; return *this; }
+    PlannerConfig& setModelTauAng(float v) { model_tau_ang = v; return *this; }
 };
 
 }  // namespace msg

@@ -564,6 +564,19 @@ class SimHarness {
     // Motion::kDistanceSettleEpsilonMm used to hardcode before this ticket
     // wired the live field in.
     cfg.distance_tol = 6.0f;         // [mm]
+    // 113-001: App::Pilot's own two-stage model-reference feedback plant-lag
+    // time constants (pilot.h's modelTauLin_/modelTauAng_) -- explicit here
+    // so this harness's default construction path observes byte-for-byte
+    // identical Pilot behavior to before this ticket. A msg::PlannerConfig{}
+    // with these fields left at their zero-value default would silently
+    // change modelTauLin_/modelTauAng_ to 0.0, turning tick()'s alphaLin/
+    // alphaAng first-order-lag-toward-the-reference into an instant,
+    // unfiltered reference -- a real behavior change for every existing sim
+    // scenario/characterization test, not a no-op (SUC-005). Matches
+    // pilot.h's own prior hardcoded member initializers and
+    // gen_boot_config.py's MODEL_TAU_LIN_DEFAULT/MODEL_TAU_ANG_DEFAULT.
+    cfg.model_tau_lin = 0.10f;       // [s]
+    cfg.model_tau_ang = 0.08f;       // [s]
     return cfg;
   }
 

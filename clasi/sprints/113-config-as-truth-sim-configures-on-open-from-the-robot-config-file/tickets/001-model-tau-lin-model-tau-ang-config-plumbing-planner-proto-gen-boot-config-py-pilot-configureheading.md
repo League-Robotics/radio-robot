@@ -2,8 +2,9 @@
 id: '001'
 title: 'model_tau_lin/model_tau_ang config plumbing: planner.proto, gen_boot_config.py,
   Pilot::configureHeading()'
-status: open
-use-cases: [SUC-004]
+status: done
+use-cases:
+- SUC-004
 depends-on: []
 github-issue: ''
 issue: config-as-truth-sim-configure-on-open.md
@@ -43,19 +44,19 @@ of boot-only, no live wire-tuning arm.
 
 ## Acceptance Criteria
 
-- [ ] `src/protos/planner.proto`'s `PlannerConfig` message gains
+- [x] `src/protos/planner.proto`'s `PlannerConfig` message gains
       `float model_tau_lin = 41;` and `float model_tau_ang = 42;` (next
       available field numbers after `distance_tol = 40`), each with a doc
       comment naming the field's purpose (mirrors `App::Pilot`'s reference-
       model lag) and unit tag `[s]`.
-- [ ] Generated message code (`src/firm/messages/`, per the project's
+- [x] Generated message code (`src/firm/messages/`, per the project's
       codegen — see `scripts/gen_messages.py` if regeneration is required)
       is regenerated/updated so `msg::PlannerConfig` exposes
       `model_tau_lin`/`model_tau_ang` with `setModelTauLin()`/
       `setModelTauAng()` accessors matching the existing field style (no
       hand-edits to generated headers — fix the generator input, i.e. the
       `.proto` file, and regenerate).
-- [ ] `src/scripts/gen_boot_config.py` gains a `model_tau_for_config(cfg)`
+- [x] `src/scripts/gen_boot_config.py` gains a `model_tau_for_config(cfg)`
       function (mirrors `actuation_lag_for_config()`'s exact shape: read
       `control.model_tau_lin`/`control.model_tau_ang` from the JSON dict,
       falling back to new `MODEL_TAU_LIN_DEFAULT = 0.10` /
@@ -64,13 +65,13 @@ of boot-only, no live wire-tuning arm.
       produces byte-identical boot behavior to today) and wires it into
       `generate()`'s `Config::defaultPlannerConfig()` output
       (`cfg.setModelTauLin(...)` / `cfg.setModelTauAng(...)`).
-- [ ] `src/firm/app/pilot.h`'s `configureHeading(const msg::PlannerConfig&
+- [x] `src/firm/app/pilot.h`'s `configureHeading(const msg::PlannerConfig&
       config)` copies `config.model_tau_lin`/`config.model_tau_ang` into
       `modelTauLin_`/`modelTauAng_` (same style as the existing
       `headingKp_`/`headingKd_`/`distanceKp_` assignments in that method).
       The in-class initializers (`= 0.10f` / `= 0.08f`) stay as-is — they
       remain the harmless pre-`configureHeading()`-call default.
-- [ ] `src/sim/sim_harness.h`'s private `makeExecutorConfig()` explicitly
+- [x] `src/sim/sim_harness.h`'s private `makeExecutorConfig()` explicitly
       sets `cfg.model_tau_lin = 0.10f;` / `cfg.model_tau_ang = 0.08f;`
       alongside its other hardcoded literals, so every existing C++ test
       harness that default-constructs `SimHarness` observes byte-for-byte
@@ -82,7 +83,7 @@ of boot-only, no live wire-tuning arm.
       toward the reference" to "instant, unfiltered reference" — a real
       behavior change for every existing sim scenario/characterization test,
       not a no-op).
-- [ ] `Pilot`'s model-lag arithmetic itself (`pilot.cpp` lines ~59-60) is
+- [x] `Pilot`'s model-lag arithmetic itself (`pilot.cpp` lines ~59-60) is
       untouched — this ticket only threads the two values through config,
       it does not change how they're used.
 

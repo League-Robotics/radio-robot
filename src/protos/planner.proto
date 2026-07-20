@@ -334,4 +334,24 @@ message PlannerConfig {
   // tune yet (mirrors `heading_dwell_tol`'s own "not yet needed live"
   // posture until a consumer exists).
   float distance_tol = 40;
+
+  // [s] 113-001: App::Pilot's own two-stage model-reference feedback plant-
+  // lag time constants (pilot.h's modelTauLin_/modelTauAng_,
+  // configureHeading()) -- the linear channel's first-order-lag stage,
+  // separate from model_tau_ang because the linear (wheel-translation) and
+  // angular (body-rotation) plants have physically different tracking lags
+  // (see pilot.h's own modelTauLin_/modelTauAng_ doc comment). Previously a
+  // plain hardcoded member initializer (0.10f) with no config path at all;
+  // gen_boot_config.py's MODEL_TAU_LIN_DEFAULT matches that same value
+  // exactly, so an unmigrated robot JSON boots byte-identical to before
+  // this ticket. Boot-config-only (mirrors distance_tol's own posture) --
+  // NOT curated by PlannerConfigPatch, see sprint.md's Design Rationale
+  // Decision 4.
+  float model_tau_lin = 41;
+
+  // [s] 113-001: same as model_tau_lin above, but the angular channel's own
+  // first-order-lag stage (pilot.h's modelTauAng_). gen_boot_config.py's
+  // MODEL_TAU_ANG_DEFAULT matches the prior hardcoded value (0.08f)
+  // exactly.
+  float model_tau_ang = 42;
 }
