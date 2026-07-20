@@ -208,10 +208,11 @@ PATCH_TO_PYDANTIC: dict[PatchKey, list[str]] = {
     ("MotorConfigPatch", "i_max"): ["control.vel_imax"],
     ("MotorConfigPatch", "kaw"): ["control.vel_kaw"],
     # -- PlannerConfigPatch -----------------------------------------------------
-    # No host-side pydantic field. DriveConfig.min_drive_mm_s is a DIFFERENT
-    # quantity (rogo's host-only crawl-mode fallback floor), not the
-    # firmware planner's trapezoidal-profile min_speed — do not conflate them.
-    ("PlannerConfigPatch", "min_speed"): [],
+    # ControlConfig.min_speed (113-003; pre-existing stale [] entry fixed by
+    # 113-004 while satisfying its own "src/tests/unit passes" gate). NOTE:
+    # DriveConfig.min_drive_mm_s remains a DIFFERENT quantity entirely
+    # (rogo's host-only crawl-mode fallback floor) — do not conflate them.
+    ("PlannerConfigPatch", "min_speed"): ["control.min_speed"],
     # heading_kp/heading_kd (098-005; pydantic fields added 2026-07-18): the
     # two outer heading-loop PD gains. ControlConfig.heading_kp/heading_kd
     # now exist and ride the connect-time calibration push
@@ -219,20 +220,27 @@ PATCH_TO_PYDANTIC: dict[PatchKey, list[str]] = {
     # gen_boot_config.py build-time bake that was always there.
     ("PlannerConfigPatch", "heading_kp"): ["control.heading_kp"],
     ("PlannerConfigPatch", "heading_kd"): ["control.heading_kd"],
+    # distance_kp (112-003): the linear position-feedback trim's own live-
+    # tunable gain, mirrors heading_kp's own shape exactly. Pre-existing gap
+    # (this map entry was never added when the proto field landed in
+    # sprint 112) discovered and fixed incidentally by 113-004 while
+    # satisfying its own "src/tests/unit passes" gate -- ControlConfig.
+    # distance_kp itself was added by 113-003.
+    ("PlannerConfigPatch", "distance_kp"): ["control.distance_kp"],
     # arrive_dwell (100-001): the one Drive::Limits/tracker/policy field
     # (of the original PlannerConfig fields 15-31, architecture-update.md
-    # M1) that turned out to be live. No host-side pydantic field yet --
-    # bench tuning lives in data/robots/tovez.json's control.arrive_dwell
-    # key (baked into the firmware boot config by scripts/
-    # gen_boot_config.py), not in RobotConfig; same "no pydantic round trip
-    # yet" posture as heading_kp/heading_kd immediately above. Its 16 dead
-    # siblings (v_wheel_max..arrive_vel_tol) were removed as dead wire
-    # fields in 111-004 -- see config.proto's own PlannerConfigPatch header
-    # comment -- and their PATCH_TO_PYDANTIC entries removed alongside them
-    # (a removed wire field is not a `patch-field-no-pydantic` finding; it
-    # is simply absent from `patch_fields`, so this map's own consistency
-    # would tolerate a stale entry silently -- removed anyway for hygiene).
-    ("PlannerConfigPatch", "arrive_dwell"): [],
+    # M1) that turned out to be live. ControlConfig.arrive_dwell (113-003;
+    # pre-existing stale [] entry fixed by 113-004) now carries the
+    # round trip, in addition to the build-time bake in data/robots/
+    # tovez.json's control.arrive_dwell key (scripts/gen_boot_config.py).
+    # Its 16 dead siblings (v_wheel_max..arrive_vel_tol) were removed as
+    # dead wire fields in 111-004 -- see config.proto's own
+    # PlannerConfigPatch header comment -- and their PATCH_TO_PYDANTIC
+    # entries removed alongside them (a removed wire field is not a
+    # `patch-field-no-pydantic` finding; it is simply absent from
+    # `patch_fields`, so this map's own consistency would tolerate a stale
+    # entry silently -- removed anyway for hygiene).
+    ("PlannerConfigPatch", "arrive_dwell"): ["control.arrive_dwell"],
 }
 
 # proto3 scalar cpp_type -> the Python type a pydantic leaf representing it

@@ -1,9 +1,13 @@
 ---
 id: '004'
 title: 'Host: sim_boot_config mapping helper (reuses gen_boot_config.py for Tier 2)'
-status: open
-use-cases: [SUC-001, SUC-002, SUC-004]
-depends-on: ['001']
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-004
+depends-on:
+- '001'
 github-issue: ''
 issue: config-as-truth-sim-configure-on-open.md
 completes_issue: false
@@ -43,13 +47,13 @@ gen_boot_config as gbc`. Use the identical pattern.
 
 ## Acceptance Criteria
 
-- [ ] A new module, e.g. `src/host/robot_radio/calibration/sim_boot_config.py`,
+- [x] A new module, e.g. `src/host/robot_radio/calibration/sim_boot_config.py`,
       imports `gen_boot_config` via the established `sys.path` pattern
       (comment at the import site: this module takes a runtime dependency on
       `src/scripts/gen_boot_config.py` staying import-safe — pure functions,
       no argv/stdout side effects at import time — matching what's already
       true today).
-- [ ] A function `planner_boot_config_for(config) -> dict[str, float | int]`
+- [x] A function `planner_boot_config_for(config) -> dict[str, float | int]`
       takes a `RobotConfig` (or the raw JSON dict `gen_boot_config.py`'s own
       functions expect — resolve the exact shape by checking how
       `RobotConfig` differs from the raw dict `cfg` these functions take;
@@ -64,15 +68,15 @@ gen_boot_config as gbc`. Use the identical pattern.
       `distance_kp`, `distance_tol`, `model_tau_lin`, `model_tau_ang` — by
       calling `gen_boot_config`'s existing functions, not reimplementing any
       of them.
-- [ ] A function `motor_boot_config_for(config, port) -> dict[str, float |
+- [x] A function `motor_boot_config_for(config, port) -> dict[str, float |
       int]` returns `{"vel_filt_alpha": ..., "fwd_sign": ...}` for the given
       port (1=left, 2=right), via `vel_gains_for_config()` (take just the
       `filt` element) and `fwd_sign_for_ports()` (index by port).
-- [ ] Every value returned matches, field-for-field, what `gen_boot_config.py`
+- [x] Every value returned matches, field-for-field, what `gen_boot_config.py`
       would bake into `Config::defaultPlannerConfig()`/`defaultMotorConfigs()`
       for the identical input JSON — this is the crux of the sprint's parity
       goal and is directly asserted by ticket 007's tests.
-- [ ] No JSON-to-value mapping logic is duplicated in the new module — every
+- [x] No JSON-to-value mapping logic is duplicated in the new module — every
       mapping decision (including fallback-to-default behavior) lives in
       `gen_boot_config.py` and is only *called*, never *re-expressed*, here.
 

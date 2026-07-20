@@ -26,7 +26,17 @@
     "control.min_wheel_mms": "stale pre-096 wire key (`minWheelMms`) \u2014 not present in config_commands.cpp's current 15-key kAllKeys table; pre-existing drift in host/robot_radio/io/cli.py's push_calibration(), tracked separately from this ticket",
     "control.turn_gate": "stale pre-096 wire key (`turnGate`) \u2014 not present in config_commands.cpp's current 15-key kAllKeys table; pre-existing drift in host/robot_radio/io/cli.py's push_calibration(), tracked separately from this ticket",
     "control.yaw_rate_max": "stale pre-096 wire key (`yawRateMax`) \u2014 not present in config_commands.cpp's current 15-key kAllKeys table; pre-existing drift in host/robot_radio/io/cli.py's push_calibration(), tracked separately from this ticket",
-    "control.max_rot_accel_dps2": "explicitly documented in its own field comment as host-only, NOT pushed to firmware"
+    "control.max_rot_accel_dps2": "explicitly documented in its own field comment as host-only, NOT pushed to firmware",
+    "calibration.fwd_sign_left": "113-004: Tier-2 boot-only (gen_boot_config.py's fwd_sign_for_ports()); no live SET key, baked at build/sim-open time only",
+    "calibration.fwd_sign_right": "113-004: Tier-2 boot-only (gen_boot_config.py's fwd_sign_for_ports()); no live SET key, baked at build/sim-open time only",
+    "control.heading_source": "113-004: Tier-2 boot-only (gen_boot_config.py's heading_source_for_config()); no live SET key (109-005's own per-robot policy override is boot-time only)",
+    "control.heading_lead_bias": "113-004: Tier-2 boot-only (gen_boot_config.py's lead_compensation_for_config()); no live SET key (109-010)",
+    "control.plan_lead": "113-004: Tier-2 boot-only (gen_boot_config.py's lead_compensation_for_config()); no live SET key (109-010)",
+    "control.terminal_lead": "113-004: Tier-2 boot-only (gen_boot_config.py's lead_compensation_for_config()); no live SET key (109-010)",
+    "control.actuation_lag": "113-004: Tier-2 boot-only (gen_boot_config.py's actuation_lag_for_config()); no live SET key (112-002)",
+    "control.distance_tol": "113-004: Tier-2 boot-only (gen_boot_config.py's distance_gains_for_config()); no live SET key (112-003) -- distance_kp is the live sibling, mapped to PlannerConfigPatch.distance_kp",
+    "control.model_tau_lin": "113-004: Tier-2 boot-only (gen_boot_config.py's model_tau_for_config()); no live SET key (sprint 113 Design Rationale Decision 4)",
+    "control.model_tau_ang": "113-004: Tier-2 boot-only (gen_boot_config.py's model_tau_for_config()); no live SET key (sprint 113 Design Rationale Decision 4)"
   },
   "patch-field-no-pydantic": {
     "DrivetrainConfigPatch.ekf_q_xy": "no host-side pydantic field yet; carried over from the pre-096 Config.h-era allowlist's ekfQxy entry ('register as tunable in a future sprint')",
@@ -35,9 +45,7 @@
     "DrivetrainConfigPatch.ekf_r_otos_theta": "no host-side pydantic field yet; carried over from the pre-096 Config.h-era allowlist's ekfROtosTheta entry ('register as tunable in a future sprint')",
     "DrivetrainConfigPatch.ekf_r_fix_xy": "no host-side pydantic field yet; mirrors ekf_r_otos_xy's own allowlist entry exactly (099-008: register as tunable in a future sprint)",
     "DrivetrainConfigPatch.ekf_r_fix_theta": "no host-side pydantic field yet; mirrors ekf_r_otos_theta's own allowlist entry exactly (099-008: register as tunable in a future sprint)",
-    "MotorConfigPatch.side": "enum selector for travel_calib's target only, not itself a settable config value",
-    "PlannerConfigPatch.min_speed": "no host-side pydantic field yet; DriveConfig.min_drive_mm_s is a distinct host-only crawl-mode floor, not the firmware planner's trapezoidal-profile min_speed",
-    "PlannerConfigPatch.arrive_dwell": "no host-side pydantic field yet (100-001); bench tuning lives in data/robots/tovez.json's control.arrive_dwell, live tuning goes through set_config(arriveDwell=...) directly"
+    "MotorConfigPatch.side": "enum selector for travel_calib's target only, not itself a settable config value"
   },
   "type-mismatch": {}
 }
