@@ -78,7 +78,10 @@ substitute a placeholder, when a required behavioral key is missing from the
 active robot JSON) — no behavior change for a robot that ships today. The sim
 composition root (`TestSim::SimHarness`) no longer self-configures at all; its
 former hardcoded stand-in values move to an explicit, test-tree-only bench-config
-helper the ~40 existing sim test harnesses opt into with one added line each.
+helper the 9 existing sim test harnesses (26 construction sites) opt into
+with one added line each — plus one Python file (`test_motor_primitive.py`)
+that reaches an unconfigured harness via the ctypes `SimLoop` path and needs
+the equivalent fix on that side (Revision 1).
 `nezha_motor.h`'s own hardcoded write-shaping substitution is deleted the same
 way, once `gen_boot_config.py` can guarantee `output_deadband`/`reversal_dwell_ms`
 are always present. A new `Config::PersistedTuning` module (mirroring the
@@ -221,10 +224,12 @@ access).
   `behavior_lock_harness.cpp`, `test_turn_error_characterization.py`) against
   the *configured* `vel_kp=0.002` plant — these were last validated against the
   hardcoded `0.003` sim-only value; re-baseline any threshold that assumed it.
-- **Migration verification**: every one of the ~40 existing
-  `src/tests/sim/**` C++ harnesses that constructs a bare `SimHarness` still
-  compiles and passes after opting into the new bench-config helper (batch
-  sweep, verified by a full targeted re-run, not spot-checked).
+- **Migration verification**: every one of the 9 existing `src/tests/sim/**`
+  C++ harnesses (26 construction sites) that constructs a bare `SimHarness`
+  still compiles and passes after opting into the new bench-config helper,
+  plus the one Python file (`test_motor_primitive.py`) that reaches an
+  unconfigured harness via the ctypes `SimLoop` path (batch sweep, verified
+  by a full targeted re-run, not spot-checked).
 - Full suite: `uv run python -m pytest` (~7-13 min gate) before considering any
   ticket done; use targeted per-file runs (`uv run python -m pytest
   src/tests/sim/unit/test_X.py -v -s`) during ticket work per project convention.
@@ -239,6 +244,49 @@ dependency (`App::RobotLoop` → new `Config::PersistedTuning` →
 `MicroBitStorage`) and a data-model change (`Devices::MotorConfig`'s
 `reversalDwell`/`outputDeadband` collapse from `Opt<float>` to required `float`;
 a new `ErrCode` enumerator). Full 7-step methodology, with a component diagram.
+
+### Revision 1 (2026-07-20 — ticket 001 internal exception)
+
+Ticket 001 threw an internal/structural exception during execution: its own
+Approach step 4 ("construct `motorL_`/`motorR_` with a default-constructed
+`Devices::MotorConfig{}`, configure later via `configureMotor()`") is
+structurally impossible as originally scoped. `Devices::MotorArmor::
+configure()` forwarded only `outputDeadband` (into its own cached
+`motionThreshold_`); `Devices::NezhaMotor::config_` (port/fwdSign/velGains/
+velFiltAlpha/slewRate/wheelTravelCalib) was assigned exactly once, in the
+constructor, with no runtime setter beyond the already-narrow `applyGains()`
+(velGains/wheelTravelCalib only). A motor built from `MotorConfig{}` and
+never otherwise touched therefore can never become real: `fwdSign=0` zeros
+every duty write (`nezha_motor.cpp`'s `effective = fwdSign * written`),
+`wheelTravelCalib=0` zeros `position()` regardless of encoder ticks
+(`pos = (raw/10) * wheelTravelCalib * fwdSign`, also zero), and both ports
+constructed with the same all-zero config alias onto the same simulated
+wheel (`port=0` for both, never matching `SimPlant::wheelPlant()`'s
+`port==2` routing test). Empirically confirmed by the programmer:
+`straight_twist_harness.cpp` (migrated as ticket 001's own pilot file)
+reported `velL=velR=0.00` for its entire run even after
+`configureSimForBenchTest()` completed and `isConfigured()==true`.
+
+**Resolution** (see Decision 6 below): `Devices::Motor` gains a new
+`reconfigure()` virtual — a guarded, post-construction, whole-config
+replacement — implemented by `NezhaMotor` and forwarded by `MotorArmor`.
+`SimHarness::configureMotor()` now reaches a genuinely working motor, not
+just a cached wedge-detection threshold. Ticket 001's Files-to-Touch,
+Approach, and Acceptance Criteria are revised accordingly. Ticket 003 gains
+`src/firm/devices/motor_armor.h` on its own Files-to-Touch list, for the same
+`Opt<float>`→`float` simplification it already performs elsewhere, now also
+touching `MotorArmor::reconfigure()`'s own copy of that substitution. Ticket
+005 is unaffected (it touches only `writeShapedDuty()`, a disjoint section of
+`nezha_motor.cpp`). No ticket dependency order changes — the fix lands
+entirely inside ticket 001, which already has no dependencies and is
+sequenced first.
+
+Also corrected here: every "~40 existing sim test harnesses" estimate below
+is replaced with the actual, exhaustively-grepped count — **9 files / 26
+construction sites** under `src/tests/sim/**`, plus **one Python file**
+(`src/tests/sim/test_motor_primitive.py`) that reaches an unconfigured
+harness via the ctypes `SimLoop` path and needs the equivalent fix on that
+side (see ticket 001).
 
 ### Architecture Overview
 
@@ -263,6 +311,7 @@ concerns turn out to share one root cause and therefore one fix locus each:
 | `App::RobotLoop` (config gate) | Decides whether this composition root is allowed to drive motors yet. | Inside: the `configured_`/`markConfigured()`/`isConfigured()` state and the refusal branch in `handleTwist()`/`handleMove()`. Outside: *how* a caller becomes configured (that's `main.cpp`'s boot sequence or `SimHarness`'s explicit `configurePlanner()`/`configureMotor()` calls) and the config-patch application logic itself (already `handleConfig()`'s job, unchanged). | SUC-001 |
 | `gen_boot_config.py` (tightened) | Turns a robot's JSON into the compiled boot defaults, or refuses to build. | Inside: reading `data/robots/*.json`, resolving every mapped key, failing loudly on an absent required one. Outside: what the values mean at runtime (that's `devices/`/`app/`'s job) and anything not sourced from JSON (the documented structural-invariant list). | SUC-002, SUC-004 |
 | `Devices::MotorConfig`/`NezhaMotor` ctor (tightened) | Carries write-shaping calibration that must always be real. | Inside: the two fields becoming plain `float` (no substitution branch). Outside: the actual boosted-write behavior (that's `writeShapedDuty()`, a separate responsibility below). | SUC-002, SUC-004 |
+| `Devices::Motor` interface + `NezhaMotor`/`MotorArmor` (new, Revision 1: `reconfigure()`) | Replaces a motor's entire boot-identity config after construction, exactly once, before it has ever been commanded. | Inside: the `reconfigure()` virtual itself; `NezhaMotor`'s guarded implementation (refuses, returns `false`, while the motor is genuinely in motion); `MotorArmor`'s forwarding override (also refreshes its own derived `motionThreshold_` cache, only when the inner motor actually accepted the new config). Outside: the live per-field wire `CFG` patch surface (`applyGains()`, unchanged — still the only thing `RobotLoop::handleConfig()` calls) and *when*/*whether* to invoke it (that's `SimHarness::configureMotor()`'s and `main.cpp`'s own job, both structurally unchanged — `main.cpp` already constructs-then-configures today; this fix just makes the second call actually do something). | SUC-001, SUC-004 |
 | `TestSim::SimHarness` (relocated defaults) | Composes the real `App::RobotLoop` graph against a simulated bus, starting unconfigured. | Inside: construction/wiring, `configurePlanner()`/`configureMotor()` as the *only* way values enter. Outside: what those values are for a given test (that's the new test-support bench-config helper's job, or a real robot-JSON push via `configure_from_robot()`). | SUC-001, SUC-004 |
 | `Config::PersistedTuning` (new) | Keeps a live-tuned config patch across a power cycle, honestly, or not at all. | Inside: serializing/deserializing the currently-live-tunable patch fields, the version stamp, the wipe-on-mismatch decision. Outside: the flash I/O primitive itself (a thin `MicroBitStorage&` seam, mirroring `radiochan::load()/save()`) and the wire dispatch that produces the patch in the first place (`RobotLoop::handleConfig()`, unchanged). | SUC-003 |
 | `NezhaMotor::writeShapedDuty()` (compensated) | Turns a requested duty into the duty actually written to the bus. | Inside: the exact-zero/sub-deadband-boost/reversal-dwell decision tree. Outside: how the requested duty was computed (PID, open-loop kff, or raw passthrough — all three already funnel through this one function, unchanged) and the deadband *value* itself (config-sourced, ticket 003's concern, not this ticket's). | SUC-005 |
@@ -345,10 +394,11 @@ true "at any gain," exactly the issue's own acceptance bar.
 them, in `NezhaMotor`; they never see or reason about the boosted duty, only
 its resulting measured velocity next tick. `main.cpp`'s boot sequence gains one
 new call (`markConfigured()`) but its existing `Config::default*()` sequence is
-otherwise untouched. The ~40 existing `src/tests/sim/**` harnesses are the
-largest blast radius — each needs exactly one new line (the bench-config
-opt-in) to keep passing; this is mechanical, not a redesign, and ticket 001
-scopes it as a batch sweep, not per-file bespoke work.
+otherwise untouched. The 9 existing `src/tests/sim/**` harnesses (26
+construction sites), plus the one Python `test_motor_primitive.py` file, are
+the largest blast radius — each needs exactly one new line/call (the
+bench-config opt-in) to keep passing; this is mechanical, not a redesign, and
+ticket 001 scopes it as a batch sweep, not per-file bespoke work.
 
 *Migration concerns*: see the dedicated section below.
 
@@ -393,8 +443,9 @@ effect on real hardware is that `main.cpp` now makes one additional, always-
 successful call.
 
 **Decision 3 — Relocate the sim's hardcoded config to a test-tree bench-config
-helper; do not delete it outright.** *Context*: ~40 existing
-`src/tests/sim/**` harnesses depend on `SimHarness` self-configuring with
+helper; do not delete it outright.** *Context*: 9 existing
+`src/tests/sim/**` harnesses (26 construction sites), plus one Python
+ctypes-path file, depend on `SimHarness` self-configuring with
 *some* reasonable stand-in values to exercise real jerk-limited motion; the
 issue demands `SimHarness` itself stop hardcoding them. *Alternatives*: (a)
 delete the values outright and let every affected test fail until someone
@@ -403,9 +454,10 @@ values, but move them out of `SimHarness` (production/shared composition-root
 code, also reachable from the real ctypes/TestGUI path) into an explicit,
 visibly-test-only header the affected harnesses opt into with one line each.
 *Why*: (b) satisfies the issue's literal bar — grepping `src/sim/sim_harness.h`
-for a hardcoded gain now finds nothing — while turning "~40 tests silently
-break" into a single, mechanical, scriptable sweep (batch-add one call per
-file), consistent with this project's established practice for renames/sweeps
+for a hardcoded gain now finds nothing — while turning "9 files (26 sites)
+silently break" into a single, mechanical, scriptable sweep (batch-add one
+call per file), consistent with this project's established practice for
+renames/sweeps
 of this shape. *Consequences*: the stand-in values still exist, now
 unambiguously labeled as test fixtures rather than production fallbacks — a
 future reader can no longer mistake them for what a real robot would run.
@@ -459,10 +511,76 @@ human-readable cross-check (and a natural value for a future host-side
 diagnostic to assert against), but is not read by any firmware code path this
 sprint adds.
 
+**Decision 6 (Revision 1) — A motor's post-construction config replacement is
+a new `Motor::reconfigure()` virtual, forwarded by `MotorArmor`, not a
+deferred-construction redesign.** *Context* (found during ticket 001
+execution, not anticipated at planning time): the original plan assumed
+`SimHarness::configureMotor()` could make an already-`MotorConfig{}`-
+constructed motor real merely by calling `MotorArmor::configure()` — but that
+method only ever derived its own `motionThreshold_` cache; it never forwarded
+anything to the wrapped `NezhaMotor`, whose own `config_` was otherwise
+constructor-only. *Alternatives*: (a) defer construction of the two motors
+(and therefore everything downstream that holds a `Motor&` to them —
+`App::Drive`, `App::Odometry`, `App::Preamble`, `App::HeadingSource`, and
+`App::RobotLoop` itself — the entire composition graph `SimHarness`'s
+constructor wires in one initializer list) until config is known, making
+"unconfigured" structurally mean "not yet constructed"; (b) give `NezhaMotor`
+a real runtime `reconfigure()` that reassigns its whole `config_` (not just
+gains), have `MotorArmor` forward to it, and keep construction-time injection
+as the unchanged, always-sufficient path for real firmware. *Why*: (a) is
+real firmware's existing pattern already — `main.cpp` reads
+`Config::default*()` and THEN constructs `NezhaMotor` with the real values,
+precisely because real firmware never needs a live reconfigure — but forcing
+the SAME pattern onto the sim would require rebuilding `SimHarness`'s entire
+composition graph (not just the two motors) on every config load, which
+conflicts with an already-shipped capability: `configure_from_robot()`'s
+Tier-2 push (`sim_ctypes.cpp`'s `sim_configure_motor()`) already lets a
+running TestGUI session reconfigure a live sim on robot-select/reconnect
+without tearing down the session (telemetry drain indices, plant state, boot
+status) — that capability predates this sprint, and (a) would either break it
+or require re-deriving it against a rebuilt graph: a far larger and riskier
+change than this ticket's own scope, and disproportionate to a defect found
+mid-execution of a single ticket. (b) is surgical: one new interface method,
+three implementations to update (`NezhaMotor` does the real work,
+`MotorArmor` forwards and refreshes its own derived cache, the test-only
+`MockMotor` gets a trivial always-succeeds stand-in), zero change to
+`main.cpp`'s construction *order* (it already constructs-then-configures
+today — see `main.cpp`'s existing, pre-this-sprint
+`motorL.configure(motorCfgL)` call, renamed to `reconfigure()` by this fix
+but otherwise a no-op on real hardware, matching Decision 2's own
+"always-immediate, no observable behavior change" precedent). (b) also, as a
+side effect, fixes a latent production bug this exception surfaced:
+`sim_configure_motor()`'s own `fwdSign` push — already wired, already called
+by every TestGUI robot-select — has never actually reached the motor,
+because `MotorArmor::configure()` silently dropped it; exactly the class of
+quiet drift this sprint exists to close (SUC-004), now closed as a byproduct
+rather than left as a second, undiscovered gap. *Consequences*:
+`reconfigure()` is a SEPARATE, narrower surface from `applyGains()` —
+`RobotLoop::handleConfig()`'s live wire `CFG` patch path is UNCHANGED, still
+`applyGains()`-only (velGains/wheelTravelCalib), because those two fields are
+safe to change at any time (bounded PID retuning) while `fwdSign`/`port` are
+not (a live direction-sign flip mid-drive is a runaway-direction hazard, not
+a tuning adjustment). `reconfigure()` is therefore guarded: `NezhaMotor::
+reconfigure()` refuses (returns `false`, leaves `config_` unchanged) unless
+the motor has never yet been commanded (`mode_ == Mode::None`) or is
+independently verified at rest (`|velocity()| <` a small threshold `&&
+appliedDuty() == 0.0f`, mirroring `MotorArmor`'s own existing at-rest test).
+For ticket 001's own gate scenario this guard is always trivially satisfied
+— the `RobotLoop` gate this same ticket adds refuses all motion until
+`configureMotor()` has been called for both ports, so `mode_` cannot yet be
+anything but `None` the first time `reconfigure()` runs; the guard exists to
+protect the independent, already-shipped mid-session robot-select path this
+fix also happens to repair, not to complicate ticket 001's own scenario. The
+return value is `[[nodiscard]] bool`, not `void` — silently discarding it
+would reproduce exactly the "fails quiet" pattern this sprint exists to
+eliminate; every call site must observe it, even where (per this ticket's own
+scope) the only required handling on `false` is to not claim success.
+
 ### Migration Concerns
 
-- **~40 existing sim test harnesses**: mechanical, one-line-per-file migration
-  to the new bench-config helper (ticket 001) — a full targeted re-run is the
+- **9 existing sim test harnesses (26 construction sites), plus one Python
+  ctypes-path file**: mechanical, one-line/one-call-per-file migration to the
+  new bench-config helper (ticket 001) — a full targeted re-run is the
   verification, not a sample.
 - **`data/robots/robot_config.schema.json` is already stale** relative to the
   binary-tree `control.*` fields in active use since sprint ~098

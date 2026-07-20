@@ -24,7 +24,23 @@ today it deliberately leaves them unset (`.has == false`) on every build.
 
 ## Context
 
-`nezha_motor.cpp`'s constructor currently does:
+**Note (sprint-planner, 2026-07-20, ticket 001 exception Revision 1)**:
+ticket 001 gave `NezhaMotor` a new `reconfigure()` method and changed the
+constructor to delegate to it — the two `.has ? .val : kDefault*`
+substitution lines below now live inside `NezhaMotor::reconfigure()`, not
+directly in the constructor body (the constructor is now just
+`{ reconfigure(config); }`). Apply step 3 below wherever those two lines
+actually ended up after ticket 001 landed — same edit, relocated. Also,
+`Devices::MotorArmor::reconfigure()` (ticket 001's rename of the old
+`configure()`) gained its own copy of the same substitution, for
+`motionThreshold_`:
+`config.outputDeadband.has ? config.outputDeadband.val :
+kDefaultMotionThreshold`, in `motor_armor.h`. Simplify that one too, to
+`config.outputDeadband` — see this ticket's own Approach step 1 for the
+`Opt<float>` → `float` collapse this line depends on.
+
+`nezha_motor.cpp`'s constructor **used to** do (post-114-001, this logic
+lives in `NezhaMotor::reconfigure()` instead — see the note above):
 
 ```cpp
 reversalDwell_ = config.reversalDwell.has ? config.reversalDwell.val : kDefaultReversalDwell;
@@ -52,9 +68,29 @@ number rather than a private implementation constant, since the fix boosts
    kDefaultReversalDwell = 100.0f;` and `static constexpr float
    kDefaultOutputDeadband = 0.03f;`.
 
-3. **`src/firm/devices/nezha_motor.cpp`** constructor: replace the two
+3. **`src/firm/devices/nezha_motor.cpp`**: replace the two
    `.has ? .val : kDefault*` lines with plain `reversalDwell_ =
-   config.reversalDwell; outputDeadband_ = config.outputDeadband;`.
+   config.reversalDwell; outputDeadband_ = config.outputDeadband;`. Per the
+   Context note above, these two lines live inside `NezhaMotor::
+   reconfigure()` (post-114-001), not the constructor directly — edit them
+   there; the constructor itself (`{ reconfigure(config); }`) needs no
+   change.
+
+3b. **`src/firm/devices/motor_armor.h`** (new step, 114-001 Revision 1):
+   `MotorArmor::reconfigure()`'s own line — `motionThreshold_ =
+   config.outputDeadband.has ? config.outputDeadband.val :
+   kDefaultMotionThreshold;` — simplifies the same way, to
+   `motionThreshold_ = config.outputDeadband;`, once step 1 above collapses
+   `outputDeadband` to a plain `float`. `kDefaultMotionThreshold` itself
+   stays declared — check before deleting it: it is ALSO `motionThreshold_`'s
+   own member-initializer (`float motionThreshold_ = kDefaultMotionThreshold;`),
+   the field's pre-`reconfigure()`-call starting value for a `MotorArmor`
+   that hasn't been reconfigured yet, a separate use from the ternary this
+   step removes. Only the `.has ? .val :` substitution pattern at the
+   `reconfigure()` call site goes away, matching every other simplified call
+   site in this ticket — `kDefaultMotionThreshold` is not one of the two
+   fields (`reversalDwell`/`outputDeadband`) this ticket eliminates from
+   `MotorConfig`, and remains genuinely load-bearing at line 166.
 
 4. **Add the two new JSON keys**: `control.output_deadband` (duty fraction,
    e.g. `0.03`) and `control.reversal_dwell_ms` (ms, e.g. `100.0`) to
@@ -94,7 +130,12 @@ number rather than a private implementation constant, since the fix boosts
 ## Files to Touch
 
 - `src/firm/devices/device_config.h`
-- `src/firm/devices/nezha_motor.h`, `.cpp`
+- `src/firm/devices/nezha_motor.h`, `.cpp` (the `.has ? .val : kDefault*`
+  lines now live inside `NezhaMotor::reconfigure()`, post-114-001 — see the
+  Context note above)
+- `src/firm/devices/motor_armor.h` (new, 114-001 Revision 1: simplify
+  `MotorArmor::reconfigure()`'s own `outputDeadband.has ? ... :
+  kDefaultMotionThreshold` line the same way — see Approach step 3b)
 - `src/firm/main.cpp` (`toDeviceMotorConfig()`)
 - `data/robots/robot_config.schema.json`, `tovez_nocal.json`, `tovez.json`,
   `togov.json`
@@ -106,6 +147,11 @@ number rather than a private implementation constant, since the fix boosts
 
 - [ ] `Devices::MotorConfig::reversalDwell`/`outputDeadband` are plain
       `float`, not `Opt<float>`.
+- [ ] `MotorArmor::reconfigure()`'s own `outputDeadband` read is a plain
+      field access, not a `.has ? .val :` ternary (its
+      `kDefaultMotionThreshold` constant stays — it remains
+      `motionThreshold_`'s own pre-`reconfigure()` member-initializer, a
+      separate use).
 - [ ] `grep -n "kDefaultReversalDwell\|kDefaultOutputDeadband"
       src/firm/devices/nezha_motor.h src/firm/devices/nezha_motor.cpp` finds
       nothing.
@@ -117,9 +163,9 @@ number rather than a private implementation constant, since the fix boosts
       `writeShapedDuty()` behavior to pre-ticket (100ms dwell, 0.03
       deadband) — regression, not yet a behavior change (ticket 005 changes
       behavior).
-- [ ] The ~40 migrated sim test harnesses (ticket 001) still pass —
-      `benchTestMotorConfig()` explicitly sets both fields to the historical
-      values.
+- [ ] The 9 migrated sim test harnesses (26 construction sites, ticket 001)
+      still pass — `benchTestMotorConfig()` explicitly sets both fields to
+      the historical values.
 
 ## Testing
 
