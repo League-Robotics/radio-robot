@@ -9,12 +9,13 @@
 // method -- it lives in this same file pair as a bounded perception step,
 // not a separate module.
 //
-// Minimal-OTOS-only-perception: a full 3-way Perception round-robin
-// (otos|line|color) is deliberately NOT built -- Telemetry carries no
-// line=/color= fields yet, so there is nothing for those two slots to
-// feed. `Preamble` still detects line/color PRESENCE at boot; only their
-// steady-state sampling is absent (see DESIGN.md §6). applyOtosSample()
-// samples the Otos leaf and copies the result straight into a
+// Minimal-OTOS-only-perception: this file only ever samples OTOS -- line/
+// color sampling (115-005, gut S1) is wired directly into
+// App::RobotLoop::updateLineColor(), not through a shared perception class
+// here or a round-robin scheduler; each sensor is its own bounded, rate-
+// limited step, not a unified abstraction. applyOtosSample() samples the
+// Otos leaf and copies the full reading (position, heading, AND the
+// measured velocities, per telemetry.proto's OtosReading) straight into a
 // Telemetry::Frame -- no perception class, no round-robin scheduler.
 // Otos::tick()'s OWN internal rate limiting (kReadPeriod, otos.h) is left
 // completely unchanged; applyOtosSample() is safe to call every cycle
@@ -75,18 +76,6 @@ class Odometry {
   float y() const { return y_; }          // [mm]
   float theta() const { return theta_; }  // [rad]
 
-  // lastDistance/lastHeadingDelta -- the most recent integrate() call's own
-  // PER-CYCLE body-frame forward-travel/heading-change (the same
-  // BodyKinematics::forward() outputs integrate() accumulates into x_/y_/
-  // theta_, exposed here BEFORE accumulation -- 109-005: Motion::Executor's
-  // DISTANCE-mode completion criterion needs encoder-relative PROGRESS
-  // since a command's own activation, which App::Pilot accumulates itself
-  // call-by-call from this per-cycle delta; it is not something Odometry
-  // itself needs to track cumulatively for its own purposes). Both 0.0f
-  // before the first integrate() call.
-  float lastDistance() const { return lastStepDistance_; }        // [mm]
-  float lastHeadingDelta() const { return lastStepHeadingDelta_; }  // [rad]
-
   // Snap the dead-reckoned pose to (x, y, theta) and RE-ANCHOR the delta
   // baseline to each leaf's CURRENT position(), so the next integrate() sees
   // a zero delta rather than a phantom jump from the old baseline. This is
@@ -108,26 +97,31 @@ class Odometry {
   float x_ = 0.0f;      // [mm]
   float y_ = 0.0f;      // [mm]
   float theta_ = 0.0f;  // [rad]
-
-  float lastStepDistance_ = 0.0f;      // [mm] see lastDistance()'s own comment
-  float lastStepHeadingDelta_ = 0.0f;  // [rad] see lastHeadingDelta()'s own comment
 };
 
 // applyOtosSample() -- the minimal OTOS-only perception step (see file
 // header). Samples `otos` (rate-limited internally by its own
-// readDue()/kReadPeriod, unchanged) and copies the result into `frame`'s
-// otos/otosConnected/hasOtos fields; call this BEFORE the caller's next
+// readDue()/kReadPeriod, unchanged) and copies the full reading (x, y,
+// heading, v_x, v_y, omega) plus the burst's own read time into `frame`'s
+// `otos` field; call this BEFORE the caller's next
 // Telemetry::setFrame(frame)/emit() -- it must reach Telemetry before that
-// cycle's frame is built. `hasOtos` mirrors otos.present() (a chip was
-// ever detected at boot) rather than a per-tick freshness bit, because
-// Telemetry always carries the LAST staged snapshot -- a rate-limit-skipped
-// cycle should still report the most recent real reading, not flip
-// has_otos off. `otosConnected` mirrors the leaf's own live, per-tick
-// connected(). No pose fusion happens here -- the robot does not fuse; the
-// raw OTOS pose rides to the host verbatim for host-side fusion. A chip
-// that was never detected (present() false) is a total no-op beyond
-// setting the two bools false -- `frame.otos` is left exactly as the
-// caller staged it.
+// cycle's frame is built.
+//
+// `frame.otosPresent` -- 115-005: the new telemetry.proto flags bit 0
+// (otos_present) is documented as "OtosReading fresh THIS frame", a
+// tighter contract than the old (pre-115) hasOtos, which mirrored
+// otos.present() (a chip was EVER detected at boot) so a rate-limit-skipped
+// cycle wouldn't flip it off. Now that OtosReading carries its own `time`
+// field, freshness itself is the signal a caller needs -- frame.otosPresent
+// is therefore `otos.present() && otos.poseFresh()`: true only on a cycle
+// this function's own otos.tick() call actually refreshed the cached pose.
+// `frame.otosConnected` mirrors the leaf's own live, per-tick connected(),
+// unchanged from before. No pose fusion happens here -- the robot does not
+// fuse; the raw OTOS pose rides to the host verbatim for host-side fusion.
+// `frame.otos` itself is only overwritten when otosPresent is true --
+// otherwise it is left exactly as the caller last staged it (Telemetry's
+// own "last staged snapshot" contract), even though the flags bit that
+// gates its validity will correctly read false that frame.
 void applyOtosSample(Devices::Otos& otos, uint64_t now, Telemetry::Frame& frame);  // [us]
 
 }  // namespace App

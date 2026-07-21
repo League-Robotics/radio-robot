@@ -40,6 +40,18 @@
 //
 // Mirrors app_preamble_harness.cpp's exact scripting/assertion-plumbing
 // conventions (this codebase's established per-harness-file style).
+//
+// 115-005 (gut S1) update: App::Pilot/Motion::Executor/App::HeadingSource
+// are deleted along with the rest of the motion stack -- RobotLoop's
+// constructor drops the Pilot& parameter and gains
+// Devices::ColorSensorLeaf&/Devices::LineSensorLeaf& (already-constructed
+// leaves this harness's fixtures already build for Preamble, now ALSO
+// wired directly into RobotLoop for its own rate-limited line/color
+// polling). The CONFIG-dispatch scenario's PlannerConfigPatch injection is
+// deleted (msg::PlannerConfigPatch no longer exists); its ack-content
+// checks are rewritten against the new flat ack_corr/ack_err fields
+// (single ack slot replaces the old depth-3 AckEntry ring -- see
+// ackFingerprint()'s own updated comment below).
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -49,9 +61,7 @@
 #include "app/comms.h"
 #include "app/deadman.h"
 #include "app/drive.h"
-#include "app/heading_source.h"
 #include "app/odometry.h"
-#include "app/pilot.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
 #include "app/telemetry.h"
@@ -63,7 +73,6 @@
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "messages/wire_runtime.h"
-#include "motion/executor.h"
 #include "scripted_i2c_hook.h"
 #include "sim_clock.h"
 #include "sim_plant.h"
@@ -337,18 +346,20 @@ bool containsSubBytes(const std::string& haystack, const Buf& needle) {
   return haystack.find(std::string(reinterpret_cast<const char*>(needle.data), needle.len)) != std::string::npos;
 }
 
-// The AckEntry{corr_id, status=ACK_STATUS_ERR(1), err_code=ERR_UNIMPLEMENTED(6)}
-// sub-message's own 3 fields, concatenated -- AckEntry's fields (envelope.proto)
-// are corr_id=1/status=2/err_code=3 (src/firm/messages/wire.cpp's
-// kFields_AckEntry), encoded in that fixed order with no other field
-// interleaving inside one ring entry, so this exact byte run is a reliable,
-// low-false-positive fingerprint of "this corr_id was acked ERR_UNIMPLEMENTED"
-// wherever it appears in a raw decoded Telemetry frame.
-Buf ackErrUnimplementedFingerprint(uint32_t corrId) {
+// 115-005: the depth-3 AckEntry ring is gone -- Telemetry's single ack slot
+// rides directly as msg::Telemetry's own ack_corr (field 5)/ack_err (field
+// 6) scalars, adjacent in field-number order with nothing else able to
+// land between them (both are always-present, non-Opt<T> fields --
+// telemetry.proto's own field list), so their two encoded tag+varint pairs,
+// concatenated in that fixed order, are still a reliable, low-false-
+// positive fingerprint of "ack_corr/ack_err currently hold this exact
+// pair" wherever it appears in a raw decoded Telemetry frame -- the same
+// technique the old AckEntry-submessage fingerprint used, just against two
+// top-level scalars instead of one ring entry's three.
+Buf ackFingerprint(uint32_t corrId, uint32_t errCode) {
   Buf b;
-  putVarintField(b, 1, corrId);  // AckEntry.corr_id
-  putVarintField(b, 2, 1);       // AckEntry.status = ACK_STATUS_ERR
-  putVarintField(b, 3, 6);       // AckEntry.err_code = ERR_UNIMPLEMENTED
+  putVarintField(b, 5, corrId);   // Telemetry.ack_corr
+  putVarintField(b, 6, errCode);  // Telemetry.ack_err
   return b;
 }
 
@@ -409,11 +420,8 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   scriptColorBeginSuccess(bus);
   scriptLineBeginSuccess(bus);
 
-  Motion::Executor executor;
-  App::HeadingSource headingSource(otos, motorL, motorR, /*trackWidth=*/120.0f);
-  App::Pilot pilot(executor, drive, headingSource, odom);
-  App::RobotLoop robotLoop(plant, motorL, motorR, otos, comms, tlm, drive, odom,
-                            deadman, preamble, pilot, clock, sleeper);
+  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
+                            drive, odom, deadman, preamble, clock, sleeper);
 
   int sleepsBeforeBoot = sleeper.sleepCount();
   robotLoop.boot();
@@ -463,42 +471,42 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
 }
 
 // ===========================================================================
-// 106-002/SUC-025 (updated 109-008): RobotLoop::cycle()'s CONFIG dispatch
-// live-applies a MotorConfigPatch (both bound motors, acks OK) and a
-// PlannerConfigPatch (109-008 un-stub -- acks OK, merges onto Pilot's live
-// PlannerConfig baseline) while DrivetrainConfigPatch continues acking
-// ERR_UNIMPLEMENTED, unchanged.
+// 106-002/SUC-025 (115-005 rewrite): RobotLoop::cycle()'s CONFIG dispatch
+// live-applies a MotorConfigPatch (both bound motors, acks OK) while
+// DrivetrainConfigPatch continues acking ERR_UNIMPLEMENTED, unchanged.
+// PlannerConfigPatch (109-008's un-stub) is GONE -- 115-005 (gut S1)
+// deleted msg::PlannerConfigPatch and ConfigDelta's own PLANNER arm along
+// with the rest of the motion stack; this scenario no longer injects one.
 //
 // A "quiet" fixture (robot never twisted, stays at encoder position 0 the
-// whole run) so the ONLY thing that varies cycle to cycle is the ack ring --
+// whole run) so the ONLY thing that varies cycle to cycle is the ack slot --
 // the motor "applies" half is proven directly by reading motorL/motorR's own
 // gains() (owned by this test, passed into RobotLoop by reference, so no
-// wire decoding is needed for that half at all); the planner/drivetrain
-// halves are proven by a raw-byte substring search for the AckEntry{corr_id,
-// status, err_code} fingerprint in a captured outbound frame (no
-// decode(ReplyEnvelope) codec exists -- see rawBytesFromArmoredLine()'s own
-// comment) -- deliberately NOT a full-frame byte-equality check
-// (app_telemetry_harness.cpp's own technique), since this fixture makes no
-// claim about the other frame fields' exact values.
+// wire decoding is needed for that half at all); the drivetrain half is
+// proven by a raw-byte substring search for the ack_corr/ack_err fingerprint
+// in a captured outbound frame (no decode(ReplyEnvelope) codec exists --
+// see rawBytesFromArmoredLine()'s own comment) -- deliberately NOT a
+// full-frame byte-equality check (app_telemetry_harness.cpp's own
+// technique), since this fixture makes no claim about the other frame
+// fields' exact values.
 //
-// Cycle bookkeeping (ring is FIFO depth 3, and an ack pushed during cycle
-// N's dispatch is not visible in ANY emitted frame until cycle N+1's own
-// emit, which runs BEFORE that cycle's own dispatch -- robot_loop.cpp's
-// own cycle() ordering):
-//   i=0,1  -- quiet warm-up (absorbs the documented one-time first-duty-
-//             write quirk for both L (cycle 1) and R (cycle 0), matching
-//             scenarioBootThenAFewCyclesRunToCompletion's own derivation)
-//   i=2    -- inject CONFIG{motor}      -- dispatched+acked this cycle
-//   i=3    -- inject CONFIG{drivetrain} -- dispatched+acked this cycle
-//   i=4    -- inject CONFIG{planner}    -- dispatched+acked this cycle
-//   i=5    -- no injection -- this cycle's own emit (block 2, before this
-//             cycle's own dispatch) reflects the ring exactly as it stood
-//             after i=4's dispatch: all three acks, none evicted (ring
-//             depth 3, exactly 3 pushed).
+// Single ack slot (115-005: replaces the old depth-3 AckEntry ring --
+// ack-depth-1 is a stakeholder-accepted tradeoff): an ack pushed during
+// cycle N's dispatch OVERWRITES whatever the slot held before, and is not
+// visible in ANY emitted frame until cycle N+1's own emit (which runs
+// BEFORE that cycle's own dispatch -- robot_loop.cpp's own cycle()
+// ordering). Motor is dispatched FIRST and its own ack captured BEFORE
+// drivetrain's dispatch overwrites the slot -- captureNextPrimaryLine()
+// below runs a small BOUNDED number of extra quiet cycles if needed
+// (106-002's own tie-break can occasionally divert a single call's emit()
+// to the secondary frame instead -- telemetry.h's own emit() comment: "at
+// most one primary frame delayed by one loop cycle roughly once per
+// kSecondaryPeriod"), so this is deterministic regardless of exactly which
+// cycle a tie lands on.
 // ===========================================================================
 
-void scenarioConfigMotorPlannerPatchApplyWhileDrivetrainStaysUnimplemented() {
-  beginScenario("RobotLoop CONFIG: Motor/PlannerConfigPatch live-apply + ack OK; "
+void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
+  beginScenario("RobotLoop CONFIG: MotorConfigPatch live-applies + acks OK; "
                 "DrivetrainConfigPatch stays ERR_UNIMPLEMENTED");
 
   TestSim::SimPlant plant;
@@ -530,11 +538,8 @@ void scenarioConfigMotorPlannerPatchApplyWhileDrivetrainStaysUnimplemented() {
   scriptColorBeginSuccess(bus);
   scriptLineBeginSuccess(bus);
 
-  Motion::Executor executor;
-  App::HeadingSource headingSource(otos, motorL, motorR, /*trackWidth=*/120.0f);
-  App::Pilot pilot(executor, drive, headingSource, odom);
-  App::RobotLoop robotLoop(plant, motorL, motorR, otos, comms, tlm, drive, odom,
-                            deadman, preamble, pilot, clock, sleeper);
+  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
+                            drive, odom, deadman, preamble, clock, sleeper);
   robotLoop.boot();
   checkTrue(preamble.done(), "boot() completes against the FakeTransport-based fixture too");
 
@@ -545,7 +550,7 @@ void scenarioConfigMotorPlannerPatchApplyWhileDrivetrainStaysUnimplemented() {
 
   const uint32_t kMotorCorrId = 87654;
   const uint32_t kDrivetrainCorrId = 87655;
-  const uint32_t kPlannerCorrId = 87656;
+  const uint32_t kErrUnimplemented = static_cast<uint32_t>(msg::ErrCode::ERR_UNIMPLEMENTED);
 
   // CONFIG{motor: side=LEFT, kp=0.02, ki=0.01} -- kff/i_max/kaw/travel_calib
   // deliberately absent, proving the merge-against-current-value path.
@@ -574,53 +579,53 @@ void scenarioConfigMotorPlannerPatchApplyWhileDrivetrainStaysUnimplemented() {
   std::string drivetrainLine = armorLine(drivetrainEnv.data, drivetrainEnv.len);
   checkTrue(!drivetrainLine.empty(), "armor() of the CONFIG{drivetrain} envelope succeeds");
 
-  // CONFIG{planner: min_speed=20} -- same rationale as drivetrain above.
-  Buf plannerPatch;
-  putFloatField(plannerPatch, 1, 20.0f);  // PlannerConfigPatch.min_speed
-  Buf plannerDelta;
-  putMessageField(plannerDelta, 3, plannerPatch);  // ConfigDelta.planner, field 3
-  Buf plannerEnv;
-  putVarintField(plannerEnv, 1, kPlannerCorrId);
-  putMessageField(plannerEnv, 6, plannerDelta);
-  std::string plannerLine = armorLine(plannerEnv.data, plannerEnv.len);
-  checkTrue(!plannerLine.empty(), "armor() of the CONFIG{planner} envelope succeeds");
-
-  // The clock must ADVANCE past kPrimaryPeriod (40ms) each cycle so every
+  // The clock must ADVANCE past kPrimaryPeriod (20ms) each cycle so every
   // cycle()'s own emit() call actually sends a FRESH primary frame
-  // reflecting that cycle's own ring state (a frozen clock, as
+  // reflecting that cycle's own ack-slot state (a frozen clock, as
   // scenarioBootThenAFewCyclesRunToCompletion above relies on, would let
   // Telemetry::emit() send its primary frame ONCE ever and never again --
-  // fine for that scenario, which never inspects ring content, but wrong
-  // here). Advancing past kPrimaryPeriod (40ms) also crosses Otos::
-  // kReadPeriod (20ms), so every cycle needs a scripted OTOS burst too.
-  //
-  // 106-002's own tie-break fix means NOT every cycle's emit() is
-  // necessarily the primary frame (a tie can resolve to secondary) -- track
-  // tlm.primaryEmitCount() across each cycle() call and remember the line
-  // for the LAST cycle it actually rose, rather than assuming
-  // serialFake.sent().back() is always primary. A few extra "quiet" cycles
-  // past the last dispatch (i=4) give the alternation room to land on
-  // primary again after any tie.
-  std::string lastPrimaryLine;
-  uint32_t primaryCountSoFar = tlm.primaryEmitCount();
+  // fine for that scenario, which never inspects the ack slot's content,
+  // but wrong here). Advancing past kPrimaryPeriod (20ms) also crosses
+  // Otos::kReadPeriod (20ms), so every cycle needs a scripted OTOS burst
+  // too. cycleIndex is a single running counter across the WHOLE scenario
+  // (warm-up + dispatch + verification cycles) -- scriptMotorCycle()'s own
+  // one-time first-duty-write quirk (R at global cycle 0, L at global cycle
+  // 1) is keyed to it, matching scenarioBootThenAFewCyclesRunToCompletion's
+  // own derivation; duty stays exactly 0 forever after that regardless of
+  // the motor patch's own gain values, since target velocity is always 0
+  // and encoder position never moves in this fixture (error is always 0).
+  int cycleIndex = 0;
   uint64_t nowUs = 50000;
-  for (int i = 0; i < 9; ++i) {
+  auto runOneCycle = [&](const char* inject) {
     clock.setMicros(nowUs);
-    scriptMotorCycle(bus, /*positionMm=*/0.0f, /*extraDutyWrites=*/(i == 1) ? 1 : 0);  // Left
-    scriptMotorCycle(bus, /*positionMm=*/0.0f, /*extraDutyWrites=*/(i == 0) ? 1 : 0);  // Right
+    scriptMotorCycle(bus, /*positionMm=*/0.0f, /*extraDutyWrites=*/(cycleIndex == 1) ? 1 : 0);  // Left
+    scriptMotorCycle(bus, /*positionMm=*/0.0f, /*extraDutyWrites=*/(cycleIndex == 0) ? 1 : 0);  // Right
     scriptOtosReadZeroPose(bus);
-
-    if (i == 2) serialFake.enqueueInbound(motorLine.c_str());
-    if (i == 3) serialFake.enqueueInbound(drivetrainLine.c_str());
-    if (i == 4) serialFake.enqueueInbound(plannerLine.c_str());
-
+    if (inject != nullptr) serialFake.enqueueInbound(inject);
     robotLoop.cycle();
-    if (tlm.primaryEmitCount() > primaryCountSoFar) {
-      lastPrimaryLine = serialFake.sent().back();
-      primaryCountSoFar = tlm.primaryEmitCount();
-    }
     nowUs += 41000;  // > kPrimaryPeriod -- guarantees the NEXT cycle's primaryDue() is true
-  }
+    ++cycleIndex;
+  };
+  // Runs quiet (no-injection) cycles, bounded, until a NEW primary frame is
+  // observed -- absorbs 106-002's own occasional tie-break diversion to
+  // secondary (see this scenario's own header comment).
+  auto captureNextPrimaryLine = [&]() -> std::string {
+    uint32_t before = tlm.primaryEmitCount();
+    for (int attempt = 0; attempt < 5; ++attempt) {
+      runOneCycle(nullptr);
+      if (tlm.primaryEmitCount() > before) return serialFake.sent().back();
+    }
+    return std::string();
+  };
+
+  runOneCycle(nullptr);  // warm-up, cycleIndex 0 -- absorbs R's own one-time first duty write
+  runOneCycle(nullptr);  // warm-up, cycleIndex 1 -- absorbs L's own one-time first duty write
+
+  runOneCycle(motorLine.c_str());
+  std::string afterMotorLine = captureNextPrimaryLine();
+
+  runOneCycle(drivetrainLine.c_str());
+  std::string afterDrivetrainLine = captureNextPrimaryLine();
 
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run: motor (config-dispatch cycles)");
   checkUintEq(bus.errCount(Devices::kOtosDeviceAddr), 0, "no script under-run: otos (config-dispatch cycles)");
@@ -635,37 +640,22 @@ void scenarioConfigMotorPlannerPatchApplyWhileDrivetrainStaysUnimplemented() {
                "right motor kp ALSO reflects the applied patch -- kp/ki/kff/iMax/kaw apply to BOTH bound motors");
   checkFloatEq(motorR.gains().ki, 0.01f, "right motor ki also reflects the applied patch");
 
-  // --- ack content, via raw-byte fingerprint search on the LAST primary
-  // frame emitted (reflects the ring as it stood after all three dispatches
-  // -- ring depth 3, exactly 3 pushed, none evicted). ---
-  checkTrue(!lastPrimaryLine.empty(), "at least one primary frame was captured after the three dispatches");
-  std::string lastFrame = rawBytesFromArmoredLine(lastPrimaryLine);
-  checkTrue(!lastFrame.empty(), "the captured frame de-armors to non-empty raw bytes");
+  // --- ack content, via raw-byte ack_corr/ack_err fingerprint search on
+  // the two captured frames (single ack slot -- see this scenario's own
+  // header comment). ---
+  checkTrue(!afterMotorLine.empty(), "a primary frame was captured after the motor dispatch");
+  std::string motorFrame = rawBytesFromArmoredLine(afterMotorLine);
+  checkTrue(!motorFrame.empty(), "the captured frame de-armors to non-empty raw bytes");
+  checkTrue(containsSubBytes(motorFrame, ackFingerprint(kMotorCorrId, 0)),
+            "CONFIG{motor} acks OK -- ack_corr/ack_err == (motor's corr_id, 0)");
 
-  checkTrue(containsSubBytes(lastFrame, ackErrUnimplementedFingerprint(kDrivetrainCorrId)),
-            "CONFIG{drivetrain} still acks ERR_UNIMPLEMENTED (fingerprint found in the ring)");
-  // 109-008 un-stub: CONFIG{planner} no longer acks ERR_UNIMPLEMENTED.
-  // (No positive "OK fingerprint" search here, matching CONFIG{motor}'s own
-  // existing absence-only check below: AckEntry.status/err_code are plain
-  // kScalar proto3 fields with no presence tracking, so an
-  // ACK_STATUS_OK/ERR_NONE (both 0) ack encodes as JUST corr_id -- there is
-  // no distinct "OK" byte run to search FOR, only the ERR_UNIMPLEMENTED
-  // byte run to search for the ABSENCE of.)
-  checkTrue(!containsSubBytes(lastFrame, ackErrUnimplementedFingerprint(kPlannerCorrId)),
-            "CONFIG{planner} does NOT ack ERR_UNIMPLEMENTED any more");
-  checkTrue(!containsSubBytes(lastFrame, ackErrUnimplementedFingerprint(kMotorCorrId)),
-            "CONFIG{motor} does NOT ack ERR_UNIMPLEMENTED (no ERR/UNIMPLEMENTED fingerprint for its corr_id)");
-
-  // --- planner "applies": the merged Pilot::plannerConfig_ baseline reflects
-  // min_speed=20 (this patch's own field) while a field the patch never
-  // touched (heading_kp) stays at this fixture's own baseline (this harness
-  // never calls configureHeading() before dispatch, so that baseline is
-  // Pilot's zero-init default) -- proves the merge-then-write path, the same
-  // shape the motor gains merge above proves. ---
-  checkFloatEq(pilot.plannerConfig().min_speed, 20.0f,
-               "Pilot's live PlannerConfig baseline reflects the applied min_speed patch");
-  checkFloatEq(pilot.plannerConfig().heading_kp, 0.0f,
-               "heading_kp (absent from this patch) stays at its prior (zero-init) value");
+  checkTrue(!afterDrivetrainLine.empty(), "a primary frame was captured after the drivetrain dispatch");
+  std::string drivetrainFrame = rawBytesFromArmoredLine(afterDrivetrainLine);
+  checkTrue(!drivetrainFrame.empty(), "the captured frame de-armors to non-empty raw bytes");
+  checkTrue(containsSubBytes(drivetrainFrame, ackFingerprint(kDrivetrainCorrId, kErrUnimplemented)),
+            "CONFIG{drivetrain} still acks ERR_UNIMPLEMENTED");
+  checkTrue(!containsSubBytes(drivetrainFrame, ackFingerprint(kMotorCorrId, 0)),
+            "single ack slot: motor's own OK ack no longer appears once drivetrain's dispatch overwrote the slot");
 }
 
 // ===========================================================================
@@ -710,12 +700,9 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
   scriptColorBeginSuccess(bus);
   scriptLineBeginSuccess(bus);
 
-  Motion::Executor executor;
-  App::HeadingSource headingSource(otos, motorL, motorR, /*trackWidth=*/120.0f);
-  App::Pilot pilot(executor, drive, headingSource, odom);
   MockTuningStore mockStore;
-  App::RobotLoop robotLoop(plant, motorL, motorR, otos, comms, tlm, drive, odom,
-                            deadman, preamble, pilot, clock, sleeper, &mockStore);
+  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
+                            drive, odom, deadman, preamble, clock, sleeper, &mockStore);
   robotLoop.boot();
   checkTrue(preamble.done(), "boot() completes against the MockTuningStore-equipped fixture too");
 
@@ -735,7 +722,7 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
   checkTrue(!motorLine.empty(), "armor() of the CONFIG{motor} envelope succeeds");
 
   // Same cycle-index/extraDutyWrites schedule as
-  // scenarioConfigMotorPlannerPatchApplyWhileDrivetrainStaysUnimplemented()
+  // scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented()
   // above (see that scenario's own scriptMotorCycle() derivation comment) --
   // this fixture never issues a TWIST/MOVE either, so drive_.tick()'s
   // one-time each-leaf "first write" lands on the identical cycles 0
@@ -770,7 +757,7 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
 
 int main() {
   scenarioBootThenAFewCyclesRunToCompletion();
-  scenarioConfigMotorPlannerPatchApplyWhileDrivetrainStaysUnimplemented();
+  scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented();
   scenarioConfigPersistWritePolicySkipsRedundantSave();
 
   if (g_failureCount == 0) {

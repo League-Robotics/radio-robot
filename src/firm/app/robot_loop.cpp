@@ -17,12 +17,14 @@ namespace {
 // post-duty-write clearance window.
 //
 // kCycle is the STATED TOTAL for the whole schedule (all four pacing
-// blocks, not just the trailing one) -- ~25 Hz/~40ms, matching
-// Devices::Telemetry's own kPrimaryPeriod=40ms (telemetry.h) so the
-// primary-frame throttle and the loop's own pace agree by construction.
+// blocks, not just the trailing one) -- ~50 Hz/20ms (115-005, gut S1:
+// primary telemetry emission now happens every cycle, matching
+// App::Telemetry's own kPrimaryPeriod=20ms (telemetry.h) so the
+// primary-frame throttle and the loop's own pace agree by construction --
+// closes kcycle-kprimaryperiod-mismatch.md).
 constexpr uint32_t kSettle = 0;  // [ms] encoder-settle window, both motors
 constexpr uint32_t kClear = 0;   // [ms] post-duty-write clearance window
-constexpr uint32_t kCycle = 20;  // [ms] whole-schedule pace target (~25 Hz)
+constexpr uint32_t kCycle = 20;  // [ms] whole-schedule pace target (~50 Hz)
 
 // kWindows is what the three settle/clearance blocks above already consume
 // before the final (perception+odometry+pace) block runs; kPace is that
@@ -44,52 +46,9 @@ constexpr uint32_t kPace = kCycle - kWindows;  // [ms] final block's own gap, ab
 
 constexpr uint32_t kPreamblePace = 10;  // [ms] boot-loop probe pacing
 
-// kPilotDeadmanLease -- the ~300ms lease App::Pilot re-arms Deadman with
-// every non-IDLE cycle (sprint.md's own "Deadman" section) -- deliberately
-// NOT derived from a Move's own `time` field: a TIMED command's deadline
-// is its own ramp-down/completion bound (Motion::Executor's
-// RAMP_TO_REST logic), independent of this lease. This lease is the
-// generic "host went silent" safety net every actuation source shares
-// (src/firm/DESIGN.md Sec 3 "Deadman is the only staleness gate") -- a
-// host streaming Move/replace commands (teleop) keeps re-arming it every
-// cycle for as long as it keeps talking; a host that goes silent mid-plan
-// still gets stopped within this lease, same as a stale Twist stream.
-constexpr float kPilotDeadmanLease = 300.0f;  // [ms]
-
-// toWireExecState -- Motion::State -> msg::ExecutorState. A plain 1:1
-// mapping (telemetry.proto's ExecutorState was declared to mirror
-// Motion::Executor::State verbatim, per its own doc comment) -- kept as an
-// explicit switch (not a static_cast) so a future Motion::State addition
-// fails to compile here instead of silently reinterpreting an unrelated
-// wire value.
-msg::ExecutorState toWireExecState(Motion::State state) {
-  switch (state) {
-    case Motion::State::kIdle: return msg::ExecutorState::EXEC_IDLE;
-    case Motion::State::kRunning: return msg::ExecutorState::EXEC_RUNNING;
-    case Motion::State::kRampToRest: return msg::ExecutorState::EXEC_RAMP_TO_REST;
-    case Motion::State::kStopping: return msg::ExecutorState::EXEC_STOPPING;
-  }
-  return msg::ExecutorState::EXEC_IDLE;
-}
-
-// toWireAckStatus -- Motion::CompletionStatus -> msg::AckStatus. See
-// telemetry.proto's own AckStatus doc comment for why completion events
-// ride the existing ack ring instead of a dedicated arm/message.
-msg::AckStatus toWireAckStatus(Motion::CompletionStatus status) {
-  switch (status) {
-    case Motion::CompletionStatus::kDone: return msg::AckStatus::ACK_STATUS_DONE;
-    case Motion::CompletionStatus::kTrivial: return msg::AckStatus::ACK_STATUS_TRIVIAL;
-    case Motion::CompletionStatus::kSuperseded: return msg::AckStatus::ACK_STATUS_SUPERSEDED;
-    case Motion::CompletionStatus::kFlushed: return msg::AckStatus::ACK_STATUS_FLUSHED;
-    case Motion::CompletionStatus::kTimeout: return msg::AckStatus::ACK_STATUS_TIMEOUT;
-    case Motion::CompletionStatus::kSolveFail: return msg::AckStatus::ACK_STATUS_SOLVE_FAIL;
-  }
-  return msg::AckStatus::ACK_STATUS_ERR;
-}
-
 // --- 114-004 (SUC-003) persisted-tuning merge helpers -- pure struct
-// merges, no RobotLoop state needed, so these stay free functions (mirrors
-// toWireExecState()/toWireAckStatus() above) rather than private methods. ---
+// merges, no RobotLoop state needed, so these stay free functions rather
+// than private methods. ---
 
 // mergeMotorGainsPatch -- folds `incoming`'s PRESENT gain fields onto
 // `slot` (a running per-side TuningSnapshot merge target). Gains mirror
@@ -106,14 +65,6 @@ void mergeMotorGainsPatch(msg::MotorConfigPatch& slot, const msg::MotorConfigPat
   if (incoming.kaw.has) slot.kaw = incoming.kaw;
 }
 
-void mergePlannerPatch(msg::PlannerConfigPatch& slot, const msg::PlannerConfigPatch& incoming) {
-  if (incoming.min_speed.has) slot.min_speed = incoming.min_speed;
-  if (incoming.heading_kp.has) slot.heading_kp = incoming.heading_kp;
-  if (incoming.heading_kd.has) slot.heading_kd = incoming.heading_kd;
-  if (incoming.arrive_dwell.has) slot.arrive_dwell = incoming.arrive_dwell;
-  if (incoming.distance_kp.has) slot.distance_kp = incoming.distance_kp;
-}
-
 // mergeOtosPatch -- `init` is deliberately excluded: a one-shot trigger,
 // not a persisted value (persisted_tuning.h's own TuningSnapshot doc
 // comment explains why).
@@ -125,26 +76,43 @@ void mergeOtosPatch(msg::OtosConfigPatch& slot, const msg::OtosConfigPatch& inco
   if (incoming.offset_yaw.has) slot.offset_yaw = incoming.offset_yaw;
 }
 
+// packLine -- 4 raw grayscale channels (each already a single-byte I2C
+// read, line_sensor.cpp's own readRaw()) into one uint32, ch1 in the low
+// byte -- telemetry.proto's own `line` field layout.
+uint32_t packLine(const Devices::LineReading& reading) {
+  return (reading.raw[0] & 0xFFu) | ((reading.raw[1] & 0xFFu) << 8) |
+         ((reading.raw[2] & 0xFFu) << 16) | ((reading.raw[3] & 0xFFu) << 24);
+}
+
+// packColor -- RGBC, each scaled from the chip's native 16-bit register
+// down to 8 bits (top byte) into one uint32, R in the low byte --
+// telemetry.proto's own `color` field layout.
+uint32_t packColor(const Devices::ColorReading& reading) {
+  return ((reading.r >> 8) & 0xFFu) | (((reading.g >> 8) & 0xFFu) << 8) |
+         (((reading.b >> 8) & 0xFFu) << 16) | (((reading.c >> 8) & 0xFFu) << 24);
+}
+
 }  // namespace
 
 RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
                       Devices::Motor& motorR, Devices::Otos& otos,
+                      Devices::ColorSensorLeaf& color, Devices::LineSensorLeaf& line,
                       Comms& comms, Telemetry& tlm, Drive& drive,
                       Odometry& odom, Deadman& deadman, Preamble& preamble,
-                      Pilot& pilot, const Devices::Clock& clock,
-                      Devices::Sleeper& sleeper,
+                      const Devices::Clock& clock, Devices::Sleeper& sleeper,
                       Config::TuningStore* tuningStore)
     : bus_(bus),
       motorL_(motorL),
       motorR_(motorR),
       otos_(otos),
+      color_(color),
+      line_(line),
       comms_(comms),
       tlm_(tlm),
       drive_(drive),
       odom_(odom),
       deadman_(deadman),
       preamble_(preamble),
-      pilot_(pilot),
       clock_(clock),
       sleeper_(sleeper),
       tuningStore_(tuningStore) {}
@@ -173,90 +141,84 @@ void RobotLoop::runAndWait(uint32_t gap, Body body) {  // [ms]
   sleepUntil(mark, gap);
 }
 
-
-void RobotLoop::updateTlm() {
-
+void RobotLoop::updateTlm(uint32_t now) {  // [ms]
   frame_.mode = driving_ ? msg::DriveMode::VELOCITY : msg::DriveMode::IDLE;
-  frame_.hasEnc = true;
-  frame_.encLeft = motorL_.position();
-  frame_.encRight = motorR_.position();
-  frame_.hasVel = true;
-  frame_.velLeft = motorL_.velocity();
-  frame_.velRight = motorR_.velocity();
 
-  // Fused body-frame velocity (109-009 fix -- frame_.hasTwist/twist were
-  // added to Telemetry::Frame by an earlier ticket but never actually
-  // populated anywhere, so TLM's `twist=` field was permanently absent;
-  // this ticket's own tour-closure gate test is the first consumer that
-  // needed it, for a real velocity trace to assert "no dip at a same-v_max
-  // boundary" against). BodyKinematics::forward() is linear/homogeneous in
-  // its inputs (Odometry::integrate()'s own comment notes the same thing
-  // for position deltas) -- feeding it the two leaves' current velocities
-  // yields the fused body (v, omega) for THIS instant, the same equations
-  // Odometry uses for per-cycle distance/headingDelta.
-  frame_.hasTwist = true;
+  frame_.encLeft.position = motorL_.position();
+  frame_.encLeft.velocity = motorL_.velocity();
+  frame_.encLeft.time = now;
+  frame_.encRight.position = motorR_.position();
+  frame_.encRight.velocity = motorR_.velocity();
+  frame_.encRight.time = now;
+
+  // Fused body-frame velocity (109-009 fix, carried forward): the two
+  // leaves' current velocities through BodyKinematics::forward() yield the
+  // fused body (v, omega) for THIS instant, the same equations Odometry
+  // uses for per-cycle distance/headingDelta.
   BodyKinematics::forward(motorL_.velocity(), motorR_.velocity(), drive_.trackWidth(),
                            frame_.twist.v_x, frame_.twist.omega);
 
-  frame_.hasPose = true;
-  frame_.active = driving_;
-  frame_.connLeft = motorL_.connected();
-  frame_.connRight = motorR_.connected();
+  tlm_.setFlag(kFlagActive, driving_);
+  tlm_.setFlag(kFlagConnLeft, motorL_.connected());
+  tlm_.setFlag(kFlagConnRight, motorR_.connected());
 
-  frame_.queueDepth = pilot_.queueDepth();
-  frame_.activeId = pilot_.activeId();
-  frame_.execState = toWireExecState(pilot_.state());
+  tlm_.setFlag(kFlagFaultI2CSafetyNet, bus_.clearanceSafetyNetCount() > 0);
+  tlm_.setFlag(kFlagFaultWedgeLatch, motorL_.wedged() || motorR_.wedged());
+  tlm_.setFlag(kFlagFaultCommsMalformed, comms_.malformedCount() > 0);
 
-  // App::HeadingSource visibility (109-005, SUC-004) -- polled every
-  // primary frame like exec_state above; event_bits bit 3 fires the ONE
-  // cycle the active source actually flips (level-set, not sticky --
-  // telemetry.proto's own doc comment).
-  frame_.headingSource = pilot_.headingSourceIsOtos()
-                             ? msg::HeadingSourceStatus::HEADING_SOURCE_STATUS_OTOS
-                             : msg::HeadingSourceStatus::HEADING_SOURCE_STATUS_ENCODER;
-  tlm_.setEvent(kEventHeadingFallback,
-                pilot_.headingSourceFellBack() || pilot_.headingSourceRecovered());
-
-  tlm_.setFault(kFaultI2CSafetyNet, bus_.clearanceSafetyNetCount() > 0);
-  tlm_.setFault(kFaultWedgeLatch, motorL_.wedged() || motorR_.wedged());
-  tlm_.setFault(kFaultCommsMalformed, comms_.malformedCount() > 0);
   tlm_.setFrame(frame_);
+}
+
+void RobotLoop::updateLineColor(uint64_t nowUs) {  // [us]
+  bool lineFresh = false;
+  bool colorFresh = false;
+
+  if (lineTurnNext_) {
+    line_.tick(nowUs);
+    lineFresh = line_.readingFresh();
+    if (lineFresh) frame_.line = packLine(line_.reading());
+  } else {
+    color_.tick(nowUs);
+    colorFresh = color_.readingFresh();
+    if (colorFresh) frame_.color = packColor(color_.reading());
+  }
+  lineTurnNext_ = !lineTurnNext_;
+
+  tlm_.setFlag(kFlagLinePresent, lineFresh);
+  tlm_.setFlag(kFlagColorPresent, colorFresh);
 }
 
 void RobotLoop::handleTwist(const msg::CommandEnvelope& env) {
   // Configuration-completeness gate (114-001, SUC-001) -- FIRST statement,
-  // before touching drive_/pilot_/deadman_ at all. Real firmware satisfies
-  // this immediately at boot (Decision 2, sprint.md) -- this branch is only
+  // before touching drive_/deadman_ at all. Real firmware satisfies this
+  // immediately at boot (Decision 2, sprint.md) -- this branch is only
   // ever live for a composition root (SimHarness) that has not yet been
   // configured.
   if (!configured_) {
-    tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
-              static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
+    tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
     return;
   }
 
-  // TWIST preempts (flushes) the Motion::Executor queue -- sprint.md's own
-  // wire-compatibility note. flush() BEFORE setTwist() so this cycle's own
-  // pilot_.tick() call (later in this same settle block) observes
-  // state()==kIdle and does not restage a twist over this raw one.
-  pilot_.flush();
-  drive_.setTwist(env.cmd.twist.v_x, env.cmd.twist.omega);
+  drive_.setTwist(env.cmd.twist.v_x, 0.0f, env.cmd.twist.omega);
   deadman_.arm(env.cmd.twist.duration);
   driving_ = true;
-  tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
+  tlm_.ack(env.corr_id, 0);
 }
 
-// ConfigDelta runtime application: MotorConfigPatch, OtosConfigPatch
-// (109-004), and PlannerConfigPatch (109-008) are live-applied below; every
-// other patch kind (DRIVETRAIN/WATCHDOG/NONE) stays ERR_UNIMPLEMENTED,
-// deliberately out of scope -- see DESIGN.md §3.
+// ConfigDelta runtime application: MotorConfigPatch and OtosConfigPatch
+// (109-004) are live-applied below; every other patch kind (DRIVETRAIN/
+// WATCHDOG/NONE) stays ERR_UNIMPLEMENTED, deliberately out of scope -- see
+// DESIGN.md §3. PlannerConfigPatch (109-008's un-stub) is GONE -- 115-005
+// (gut S1) deleted msg::PlannerConfigPatch and ConfigDelta's own PLANNER
+// arm along with the rest of the motion stack; there is no third live
+// branch here any more.
 //
 // 114-004 (SUC-003): each live branch below now ALSO merges the incoming
 // patch's PRESENT fields into persistedTuning_ (the running cumulative
 // live-tuning snapshot) and calls persistTuningIfChanged() -- the actual
-// apply-to-RAM behavior on motorL_/motorR_/pilot_/otos_ is UNCHANGED from
-// before this ticket (applyMotorConfigPatch()/applyOtosPatch() below are
-// verbatim extractions of what used to be inline here).
+// apply-to-RAM behavior on motorL_/motorR_/otos_ is UNCHANGED from before
+// this ticket (applyMotorConfigPatch()/applyOtosPatch() below are verbatim
+// extractions of what used to be inline here).
 void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
   // OTOS (109-004, issue otos-calibration-config-message.md): restores a
   // runtime path to Otos::setLinearScalar()/setAngularScalar()/setOffset()/
@@ -277,31 +239,12 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
     mergeOtosPatch(persistedTuning_.otos, patch);
     persistTuningIfChanged();
 
-    tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
-    return;
-  }
-
-  // PLANNER (109-008, un-stubs the scope boundary DESIGN.md previously
-  // documented -- "PlannerConfigPatch's heading gains target a segment
-  // executor that no longer exists in this tree" was true when that note
-  // was written, before Motion::Executor/App::Pilot (109-003/005) restored
-  // one): live-tunable heading_kp/heading_kd (098-era precedent) plus the
-  // 17 tracking/replan gains ticket 006 added, all merged onto Pilot's own
-  // live PlannerConfig baseline (Pilot::applyPlannerPatch()'s own doc
-  // comment covers the merge-then-write shape and which msg::PlannerConfig
-  // fields this patch kind cannot reach).
-  if (env.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::PLANNER) {
-    pilot_.applyPlannerPatch(env.cmd.config.patch.planner);
-    mergePlannerPatch(persistedTuning_.planner, env.cmd.config.patch.planner);
-    persistTuningIfChanged();
-
-    tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
+    tlm_.ack(env.corr_id, 0);
     return;
   }
 
   if (env.cmd.config.patch_kind != msg::ConfigDelta::PatchKind::MOTOR) {
-    tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
-              static_cast<uint32_t>(msg::ErrCode::ERR_UNIMPLEMENTED));
+    tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_UNIMPLEMENTED));
     return;
   }
 
@@ -328,7 +271,7 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
   applyMotorConfigPatch(persistedTuning_.motorR);
   persistTuningIfChanged();
 
-  tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
+  tlm_.ack(env.corr_id, 0);
 }
 
 // applyMotorConfigPatch -- UNCHANGED extraction of what used to be
@@ -414,7 +357,6 @@ void RobotLoop::persistTuningIfChanged() {
 void RobotLoop::reapplyPersistedTuning(const Config::TuningSnapshot& snapshot) {
   applyMotorConfigPatch(snapshot.motorL);
   applyMotorConfigPatch(snapshot.motorR);
-  pilot_.applyPlannerPatch(snapshot.planner);
   applyOtosPatch(snapshot.otos);
 
   persistedTuning_ = snapshot;
@@ -422,69 +364,10 @@ void RobotLoop::reapplyPersistedTuning(const Config::TuningSnapshot& snapshot) {
 }
 
 void RobotLoop::handleStop(const msg::CommandEnvelope& env) {
-  // STOP flushes the Motion::Executor queue too (sprint.md's own
-  // wire-compatibility note) -- the panic-stop path itself stays the
-  // existing immediate Drive::stop() (safety-critical, unchanged, per this
-  // ticket's own "existing TWIST/STOP behavior is not regressed"
-  // acceptance criterion); Executor's OWN internally-triggered stops
-  // (RAMP_TO_REST) are what actually use a graceful solveToVelocity(0)
-  // decel, not this wire command.
-  pilot_.flush();
   drive_.stop();
   deadman_.disarm();
   driving_ = false;
-  tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
-}
-
-// handleMove -- decodes the Move oneof arm into a Motion::Cmd and forwards
-// it to App::Pilot::enqueue(). The ENQUEUE outcome (accepted/replaced/
-// full/trivial/unimplemented) is acked immediately against the
-// CommandEnvelope's own corr_id (matching TWIST/CONFIG/STOP's existing
-// convention) -- a LATER completion event (DONE/SUPERSEDED/FLUSHED/
-// TIMEOUT/SOLVE_FAIL) for this same command rides a separate ack keyed by
-// the Move's own `id` field instead (drainPilotEvents(), below).
-void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
-  // Configuration-completeness gate (114-001, SUC-001) -- see
-  // handleTwist()'s own comment for the full rationale; same FIRST-statement
-  // placement, before touching pilot_/deadman_.
-  if (!configured_) {
-    tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
-              static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
-    return;
-  }
-
-  Motion::Cmd cmd = Motion::fromMove(env.cmd.move);
-  Motion::EnqueueOutcome outcome = pilot_.enqueue(cmd);
-
-  switch (outcome) {
-    case Motion::EnqueueOutcome::kAccepted:
-    case Motion::EnqueueOutcome::kReplaced:
-      driving_ = true;
-      // Arm the lease AT accept (2026-07-18, mirrors handleTwist): the
-      // expiry check runs between this dispatch and the pilot tick that
-      // would otherwise be first to re-arm -- a stale lease from a PREVIOUS
-      // command expiring in exactly this cycle would flush the command the
-      // same cycle it was accepted (a ~1-in-6 race, observed directly in a
-      // back-to-back sim sweep). A freshly accepted command IS host
-      // activity; the lease starts now.
-      deadman_.arm(kPilotDeadmanLease);
-      tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
-      break;
-    case Motion::EnqueueOutcome::kTrivial:
-      tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_TRIVIAL, 0);
-      break;
-    case Motion::EnqueueOutcome::kFull:
-      tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
-                static_cast<uint32_t>(msg::ErrCode::ERR_FULL));
-      break;
-  }
-}
-
-void RobotLoop::drainPilotEvents() {
-  Motion::CompletionEvent event;
-  while (pilot_.popEvent(&event)) {
-    tlm_.ack(event.id, toWireAckStatus(event.status), 0);
-  }
+  tlm_.ack(env.corr_id, 0);
 }
 
 // Dispatches the <=1 decoded command in cmd to its own handler by
@@ -505,9 +388,6 @@ void RobotLoop::processMessage(const Cmd& cmd) {
       break;
     case msg::CommandEnvelope::CmdKind::STOP:
       handleStop(cmd.env);
-      break;
-    case msg::CommandEnvelope::CmdKind::MOVE:
-      handleMove(cmd.env);
       break;
     case msg::CommandEnvelope::CmdKind::NONE:
     default:
@@ -531,15 +411,15 @@ void RobotLoop::boot() {
     preamble_.step();  // one bounded probe action per pass
 
     Telemetry::Frame bootFrame;
-    bootFrame.connLeft = preamble_.leftConnected();
-    bootFrame.connRight = preamble_.rightConnected();
-    bootFrame.otosConnected = preamble_.otosConnected();
     tlm_.setFrame(bootFrame);
+    tlm_.setFlag(kFlagConnLeft, preamble_.leftConnected());
+    tlm_.setFlag(kFlagConnRight, preamble_.rightConnected());
+    tlm_.setFlag(kFlagOtosConnected, preamble_.otosConnected());
     tlm_.emit(markTime());  // boot frames: device detection status, faults
 
     sleeper_.sleepMillis(kPreamblePace);  // paces probes AND yields (radio RX)
   }
-  tlm_.setEvent(kEventBootReady, true);  // Preamble::done() first-true transition
+  tlm_.setFlag(kFlagEventBootReady, true);  // Preamble::done() first-true transition
 }
 
 // ---- Main cycle: devices resolved, no readiness checks below this line.
@@ -558,7 +438,6 @@ void RobotLoop::cycle() {
 
   Cmd cmd;
 
-
   // Request/collect MUST interleave per port: the 0x46 encoder-select is a
   // single latched state on the brick (one pending read; SimPlant models
   // the same via selectedPort_) -- issuing both selects before either
@@ -568,8 +447,8 @@ void RobotLoop::cycle() {
 
   // 112-005 cycle-order fix (cut the trim/PD-loop dead time that caused the
   // terminal jitter): stage this cycle's wheel targets BEFORE the motor
-  // ticks, so the target pilot staged last cycle is WRITTEN this cycle
-  // instead of next (-1 cycle).
+  // ticks, so the target staged last cycle is WRITTEN this cycle instead of
+  // next (-1 cycle).
   drive_.tick();  // twist -> wheel targets, written by THIS cycle's motor ticks
 
   // Request/collect MUST interleave per port: the 0x46 encoder-select is a
@@ -587,80 +466,59 @@ void RobotLoop::cycle() {
 
   runAndWait(kClear, [&] {  // >=4ms: brick clears L's duty write, meanwhile --
     // Stage this cycle's encoder/velocity/connection fields onto the
-    // persistent `frame_` (pose/otos were last updated at the END of the
-    // PREVIOUS cycle, below -- still the frame's own "last staged
-    // snapshot" contract) and emit.
+    // persistent `frame_` (pose/otos/line/color were last updated at the
+    // END of the PREVIOUS cycle, below -- still the frame's own "last
+    // staged snapshot" contract) and emit.
 
-    updateTlm();
+    updateTlm(cycleStart);
     tlm_.emit(cycleStart);
   });
 
-
   runAndWait(kSettle, [&] {  // >=4ms: R encoder settling, meanwhile --
-    // Apply <=1 decoded command; every path that applies one acks via the
-    // telemetry ack ring. `cmd` is a fresh, cycle-local variable (declared
-    // above, populated by at most one comms_.pump() call this cycle), so
-    // reading it here bounds dispatch to at most once per cycle by
-    // construction -- no separate "take" flag is needed.
+    // Apply <=1 decoded command; every path that applies one acks via
+    // tlm_.ack(). `cmd` is a fresh, cycle-local variable (declared above,
+    // populated by at most one comms_.pump() call this cycle), so reading
+    // it here bounds dispatch to at most once per cycle by construction --
+    // no separate "take" flag is needed.
     processMessage(cmd);
 
     bool expired = deadman_.expired();
-    tlm_.setEvent(kEventDeadmanExpired, expired);
+    tlm_.setFlag(kFlagEventDeadmanExpired, expired);
     if (expired) {
-      pilot_.flush();     // Executor's own queue is stale too -- flush it,
       drive_.stop();      // host silent -> wheels stop. No exceptions, no
       driving_ = false;   // other path to stop being gated by the deadman.
       // The lease is ONE-SHOT (2026-07-18 fix): expired() latches true
       // until re-armed, and this branch runs AFTER processMessage() -- so
       // without a disarm here, the FIRST command enqueued after >lease of
-      // idle was flushed the same cycle it was accepted (observed: a
-      // back-to-back sim sweep saw every run after the first come back
-      // ACK_STATUS_FLUSHED). The system is fully safed by the flush/stop
-      // above; disarm so the next command starts clean.
+      // idle was flushed the same cycle it was accepted. The system is
+      // fully safed by the stop above; disarm so the next command starts
+      // clean.
       deadman_.disarm();
     }
-
-    // pilot_.tick() -- sample-only (Motion::Executor::tick(), see pilot.h):
-    // stages this cycle's twist onto Drive when the executor is running.
-    // Placed AFTER processMessage()/the deadman check (so a same-cycle
-    // enqueue/flush/expiry is reflected immediately) and BEFORE
-    // drive_.tick() (so Drive consumes the freshest staged twist) --
-    // sprint.md's own cycle-placement table.
-    pilot_.tick(cycleStart, clock_.nowMicros());
-    if (pilot_.state() != Motion::State::kIdle) {
-      // Re-arm the ONE Deadman every non-IDLE cycle with the fixed lease
-      // (src/firm/DESIGN.md Sec 3 -- no second staleness gate). This is
-      // independent of a TIMED command's own `time` deadline, which
-      // Executor's own RAMP_TO_REST logic already handles.
-      deadman_.arm(kPilotDeadmanLease);
-    }
-    drainPilotEvents();
-
-   
   });
-  
-  
 
   // Final (perception + odometry + pace) block -- the schedule's 4th
   // runAndWait, matching the same "own mark, own gap" shape as the three
   // settle/clearance blocks above (see kPace's own comment for why the gap
   // must be derived, not a bare kCycle anchored to the cycle start). Body:
-  // OTOS + odometry, outside any motor request/collect window (this
-  // class's own bus-discipline responsibility) -- both stage into `frame_`
-  // for the NEXT cycle's tlm_.setFrame()/emit() call. Unlike the other
-  // three blocks, this one DOES touch the bus (the OTOS read) -- it is the
+  // OTOS + odometry + rate-limited alternating line/color, outside any
+  // motor request/collect window (this class's own bus-discipline
+  // responsibility) -- all stage into `frame_` for the NEXT cycle's
+  // tlm_.setFrame()/emit() call. Unlike the other three blocks, this one
+  // DOES touch the bus (OTOS, and at most one of line/color) -- it is the
   // schedule's pace block, not a settle/clearance window, so that
   // constraint doesn't apply to it.
   runAndWait(kPace, [&] {
-    applyOtosSample(otos_, clock_.nowMicros(), frame_);
+    uint64_t nowUs = clock_.nowMicros();
+
+    applyOtosSample(otos_, nowUs, frame_);
+    tlm_.setFlag(kFlagOtosPresent, frame_.otosPresent);
+    tlm_.setFlag(kFlagOtosConnected, frame_.otosConnected);
+
     odom_.integrate();  // odometry from both fresh wheel samples
     frame_.pose = {odom_.x(), odom_.y(), odom_.theta()};
 
-    // pilot_.plan() -- at most ONE Ruckig solve this call (Motion::
-    // Executor::plan()'s own budget), placed in the kPace block per
-    // src/firm/DESIGN.md Sec 3/sprint.md's own cycle-placement table (every
-    // Ruckig solve happens here, never in a settle/clearance block).
-    pilot_.plan();
+    updateLineColor(nowUs);
   });
 }
 

@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Firmware app-layer reshape + line/color telemetry wiring
-status: in-progress
+status: done
 use-cases:
 - SUC-045
 - SUC-046
@@ -30,12 +30,12 @@ new-frame-shaped world tickets 002/003 established).
 
 ## Acceptance Criteria
 
-- [ ] `main.cpp` (:147-161 verified): drops the
+- [x] `main.cpp` (:147-161 verified): drops the
       `Motion::Executor`/`App::HeadingSource`/`App::Pilot` construction
       block and `plannerConfig`/`.configure()`/`.configureHeading()`
       calls entirely; `App::RobotLoop`'s constructor call drops the
       `pilot` argument.
-- [ ] `robot_loop.{h,cpp}`: `Pilot&` constructor parameter,
+- [x] `robot_loop.{h,cpp}`: `Pilot&` constructor parameter,
       `drainPilotEvents()`, the MOVE dispatch case, and all `pilot_.*`
       call sites removed. The motor request/tick interleave
       (verified unchanged at :579-582 — the 0x46 encoder-select latch
@@ -50,7 +50,7 @@ new-frame-shaped world tickets 002/003 established).
       alternating line/color reads added at the kPace block (at most
       one of {line, color} per cycle — never both, per the 098-004
       per-pass-read regression precedent).
-- [ ] `drive.{h,cpp}`: `configure(const msg::PlannerConfig&)`,
+- [x] `drive.{h,cpp}`: `configure(const msg::PlannerConfig&)`,
       `actuationLag_`, `a_x`/`alpha` acceleration-feedforward staging
       removed (verified present today at drive.h:41-101). `setTwist()`
       gains a `v_y` parameter that is accepted and ignored (wire-forward
@@ -58,10 +58,10 @@ new-frame-shaped world tickets 002/003 established).
       existing call site (`RobotLoop`'s `Twist`-arm handler) passes 0
       for it. `tick()` becomes a pure `BodyKinematics::inverse()` →
       `setVelocity()` follower, no feedforward term.
-- [ ] `odometry.{h,cpp}`: `lastDistance()`/`lastHeadingDelta()` accessors
+- [x] `odometry.{h,cpp}`: `lastDistance()`/`lastHeadingDelta()` accessors
       removed (verified at odometry.h:78-88); `integrate()`,
       `applyOtosSample()`, `reset()` untouched.
-- [ ] `telemetry.{h,cpp}`: `Frame` reshaped to two `EncoderReading`-
+- [x] `telemetry.{h,cpp}`: `Frame` reshaped to two `EncoderReading`-
       shaped members, one `OtosReading` member, single
       `ackCorr`/`ackErr`/`ackFresh`, one `flags` assembly point, packed
       `line`/`color` staging fields (verified today's `Frame` at
@@ -70,11 +70,11 @@ new-frame-shaped world tickets 002/003 established).
       (`kPrimaryPeriod`) to 20 ms, matching `kCycle` — closes
       `kcycle-kprimaryperiod-mismatch.md`; both constants' stale
       "~25 Hz" doc-comment labels fixed in the same edit.
-- [ ] `App::Drive` has zero remaining reference to `msg::PlannerConfig`
+- [x] `App::Drive` has zero remaining reference to `msg::PlannerConfig`
       or any `Motion::*` symbol (grep-verifiable).
-- [ ] `python build.py` builds the ARM firmware target clean (this is
+- [x] `python build.py` builds the ARM firmware target clean (this is
       the ticket where that first becomes true again after ticket 002).
-- [ ] `app_robot_loop_harness.cpp`/`test_app_robot_loop.py`,
+- [x] `app_robot_loop_harness.cpp`/`test_app_robot_loop.py`,
       `app_drive_harness.cpp`/`test_app_drive.py`,
       `app_telemetry_harness.cpp`/`test_app_telemetry.py` updated for
       the new signatures/frame shape (full green-suite confirmation is
