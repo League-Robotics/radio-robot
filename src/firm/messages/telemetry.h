@@ -4,76 +4,58 @@
 #pragma once
 
 #include "messages/common.h"
-#include "messages/planner.h"
 
 
 namespace msg {
 
-enum class AckStatus : uint8_t {
-    ACK_STATUS_OK = 0,
-    ACK_STATUS_ERR = 1,
-    ACK_STATUS_DONE = 2,
-    ACK_STATUS_TRIVIAL = 3,
-    ACK_STATUS_SUPERSEDED = 4,
-    ACK_STATUS_FLUSHED = 5,
-    ACK_STATUS_TIMEOUT = 6,
-    ACK_STATUS_SOLVE_FAIL = 7,
+enum class DriveMode : uint8_t {
+    IDLE = 0,
+    STREAMING = 1,
+    TIMED = 2,
+    DISTANCE = 3,
+    GO_TO = 4,
+    VELOCITY = 5,
 };
 
-enum class ExecutorState : uint8_t {
-    EXEC_IDLE = 0,
-    EXEC_RUNNING = 1,
-    EXEC_RAMP_TO_REST = 2,
-    EXEC_STOPPING = 3,
+// EncoderReading
+struct EncoderReading {
+    float position = 0.0f;
+    float velocity = 0.0f;
+    uint32_t time = 0;
+
+    // --- array / optional-string accessors ---
 };
 
-enum class HeadingSourceStatus : uint8_t {
-    HEADING_SOURCE_STATUS_OTOS = 0,
-    HEADING_SOURCE_STATUS_ENCODER = 1,
-};
-
-// AckEntry
-struct AckEntry {
-    uint32_t corr_id = 0;
-    AckStatus status = static_cast<AckStatus>(0);
-    uint32_t err_code = 0;
+// OtosReading
+struct OtosReading {
+    float x = 0.0f;
+    float y = 0.0f;
+    float heading = 0.0f;
+    float v_x = 0.0f;
+    float v_y = 0.0f;
+    float omega = 0.0f;
+    uint32_t time = 0;
 
     // --- array / optional-string accessors ---
 };
 
 // Telemetry
 struct Telemetry {
-    AckEntry acks_[3] = {};
-    uint8_t acks_count = 0;
     uint32_t now = 0;
-    DriveMode mode = static_cast<DriveMode>(0);
     uint32_t seq = 0;
-    bool has_enc = false;
-    float enc_left = 0.0f;
-    float enc_right = 0.0f;
-    bool has_vel = false;
-    float vel_left = 0.0f;
-    float vel_right = 0.0f;
-    bool has_pose = false;
+    DriveMode mode = static_cast<DriveMode>(0);
+    uint32_t flags = 0;
+    uint32_t ack_corr = 0;
+    uint32_t ack_err = 0;
+    EncoderReading enc_left = {};
+    EncoderReading enc_right = {};
+    OtosReading otos = {};
     Pose2D pose = {};
-    bool has_otos = false;
-    Pose2D otos = {};
-    bool otos_connected = false;
-    bool has_twist = false;
     BodyTwist3 twist = {};
-    bool active = false;
-    bool conn_left = false;
-    bool conn_right = false;
-    uint32_t fault_bits = 0;
-    uint32_t event_bits = 0;
-    uint32_t queue_depth = 0;
-    uint32_t active_id = 0;
-    ExecutorState exec_state = static_cast<ExecutorState>(0);
-    HeadingSourceStatus heading_source = static_cast<HeadingSourceStatus>(0);
+    uint32_t line = 0;
+    uint32_t color = 0;
 
     // --- array / optional-string accessors ---
-    const AckEntry* acks() const { return acks_; }
-    uint8_t acks_count_val() const { return acks_count; }
 };
 
 // TelemetrySecondary

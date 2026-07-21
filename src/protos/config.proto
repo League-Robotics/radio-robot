@@ -126,41 +126,15 @@ message MotorConfigPatch {
   optional float kaw   = 7;  // pid.kaw  -- applied to BOTH bound motors
 }
 
-// Curated patch of PlannerConfig's 1 registered key (config_commands.cpp
-// kAllKeys: minSpeed), PLUS heading_kp/heading_kd (098-005): the two outer
-// heading-loop PD gains added to msg::PlannerConfig by ticket 098-001, after
-// config_commands.cpp (and its kAllKeys curation list) had already been
-// deleted (097-007) -- there is no legacy text key to mirror for these two;
-// they are added directly here so a live `SET`/binary `config` command can
-// reach Motion::SegmentExecutor's PD cascade (098-002) without a reflash,
-// per ticket 098-005's own stated purpose.
-//
-// Fields 4-19 (100-001, motion-stack-v2 M1) once mirrored 16 of
-// PlannerConfig's fields 15-30 -- a planned Drive::Limits/tracker/policy
-// wire-tunable surface that was never wired to any live consumer. Removed
-// as dead in 111-004 (step 7 of the terminal-blips-close-the-loop fix
-// plan) and reserved below, alongside planner.proto's matching PlannerConfig
-// field removal -- see that ticket's completion notes for the full
-// per-field accounting. arrive_dwell (field 20 here, PlannerConfig field
-// 31) is the one field from that original span that IS live and was kept.
-//
-// distance_kp (field 21, 112-003) is the linear position-feedback trim's
-// own gain (planner.proto's matching PlannerConfig field 39) -- curated
-// here for the SAME reason heading_kp is: a live bench-iteration knob for
-// a per-robot control-law gain, no reflash needed. distance_tol
-// (PlannerConfig field 40) is deliberately NOT curated here -- this
-// ticket adds it as a boot-config-only field (see planner.proto's own
-// field comment); it has no live consumer yet to justify a wire-tunable
-// arm (ticket 004 may revisit once the unified completion rule reads it).
-message PlannerConfigPatch {
-  reserved 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19;
-  optional float min_speed  = 1;  // [mm/s] minSpeed
-  optional float heading_kp = 2;  // [1/s] headingKp
-  optional float heading_kd = 3;  // dimensionless headingKd
-
-  optional float arrive_dwell = 20;  // [s]
-  optional float distance_kp  = 21;  // [1/s] distanceKp -- 112-003, mirrors heading_kp's own live-tunable shape
-}
+// PlannerConfigPatch -- DELETED wholesale (115-003, gut-to-minimal-firmware
+// S1 motion-stack excision). Curated planner-config live-tuning (min_speed/
+// heading_kp/heading_kd/arrive_dwell/distance_kp) served Motion::Executor's
+// PD cascade and completion gates, all deleted with the motion stack --
+// nothing in the S1 minimal firmware reads a planner config patch.
+// `ConfigTarget.CONFIG_PLANNER` (above) is left declared, unused -- an enum
+// value, not a type, costs nothing to leave and needs no `reserved`.
+// `PlannerConfig` itself (the full generated message this patch curated
+// from) went with planner.proto's wholesale deletion in the same ticket.
 
 // Curated patch of OTOS runtime calibration -- mirrors
 // Config::OtosBootConfig's 5 fields (config/boot_config.h: offsetX/offsetY/

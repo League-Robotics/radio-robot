@@ -47,24 +47,24 @@ keys via `_require()`:
     and calibration.otos_linear_scale/otos_angular_scale (086-005) ->
     OtosBootConfig; boot-time-baked only, never a live SET/wire surface (see
     OtosBootConfig's own doc comment, src/firm/config/boot_config.h).
-  * `heading_gains_for_config()` / `heading_source_for_config()` /
-    `heading_dwell_for_config()` / `lead_compensation_for_config()` —
-    control.heading_kp/heading_kd (098-001), control.heading_source
-    ("auto"/"otos"/"encoder", 109-005), control.heading_dwell_tol_deg/
-    heading_dwell_rate_dps, control.heading_lead_bias/plan_lead/
-    terminal_lead (109-010).
-  * `profile_rot_limits_for_config()` — control.yaw_rate_max [deg/s] /
-    max_rot_accel_dps2 [deg/s^2] (100-014, converted to rad here).
-  * `min_speed_for_config()` / `arrive_dwell_for_config()` /
-    `actuation_lag_for_config()` / `distance_gains_for_config()` /
-    `model_tau_for_config()` — control.min_speed (100-007), control.
-    arrive_dwell (100-001), control.actuation_lag (112-002), control.
-    distance_kp/distance_tol (112-003), control.model_tau_lin/model_tau_ang
-    (113-001).
-  * `motion_limits_for_config()` — control.a_max/a_decel/v_body_max/j_max/
-    yaw_jerk_max (098-001's other five motion-limit fields; before sprint
-    114 these had NO per-robot JSON mapping at all — generate() referenced
-    the module DEFAULT constants directly).
+
+115-003 (gut-to-minimal-firmware S1, motion-stack excision) removed
+`defaultPlannerConfig()` and its planner-field helper functions
+(`heading_gains_for_config()`, `heading_source_for_config()`,
+`heading_dwell_for_config()`, `lead_compensation_for_config()`,
+`profile_rot_limits_for_config()`, `min_speed_for_config()`,
+`arrive_dwell_for_config()`, `actuation_lag_for_config()`,
+`distance_gains_for_config()`, `model_tau_for_config()`,
+`motion_limits_for_config()`) wholesale, alongside `msg::PlannerConfig`
+itself (planner.proto, deleted in the same ticket) -- nothing in the S1
+minimal firmware boots a planner config. The robot JSON's `control.*` keys
+those functions read (heading_kp/heading_kd/heading_source/
+heading_dwell_tol_deg/heading_dwell_rate_dps/heading_lead_bias/plan_lead/
+terminal_lead/yaw_rate_max/max_rot_accel_dps2/min_speed/arrive_dwell/
+actuation_lag/distance_kp/distance_tol/model_tau_lin/model_tau_ang/a_max/
+a_decel/v_body_max/j_max/yaw_jerk_max) are unread by this generator as of
+that ticket; existing robot JSON files may still carry them harmlessly
+(dead data, not a build error).
 
 Structural, compile-time, exempt (NOT behavioral tunables, NOT migrated —
 see sprint 114's Architecture Boundary list): `K_MOTOR_COUNT` (array sizing,
@@ -83,7 +83,6 @@ Approach step 1).
 """
 
 import json
-import math
 import os
 import sys
 from pathlib import Path
@@ -193,7 +192,7 @@ class MissingRobotConfigKeyError(RuntimeError):
 
     Carries just the dotted key path at the point it is first raised, so a
     bare unit test calling a ``*_for_config()`` function directly (e.g.
-    ``heading_gains_for_config({})``) gets a self-contained message with no
+    ``vel_gains_for_config({})``) gets a self-contained message with no
     source-path context needed. ``generate()`` catches this and calls
     ``with_source()`` to attach the resolved JSON path once one is known, so
     the end-to-end generator run (``main()``) reports both the key and the
@@ -369,139 +368,6 @@ def reversal_dwell_for_config(cfg: dict):
     return float(_require(cfg, "control", "reversal_dwell_ms"))
 
 
-def heading_gains_for_config(cfg: dict):
-    """Return (heading_kp, heading_kd) for the outer heading-loop PD
-    (098-001, architecture-update.md M1/M2). Both keys REQUIRED as of
-    sprint 114 (config-as-truth completion) -- previously fell back to a
-    conservative firmware default (Kp=6.0/Kd=0.0, 112-004) when absent.
-    """
-    kp = _require(cfg, "control", "heading_kp")
-    kd = _require(cfg, "control", "heading_kd")
-    return float(kp), float(kd)
-
-
-_HEADING_SOURCE_WIRE_NAMES = {
-    "auto": "msg::HeadingSourceMode::HEADING_SOURCE_AUTO",
-    "otos": "msg::HeadingSourceMode::HEADING_SOURCE_FORCE_OTOS",
-    "encoder": "msg::HeadingSourceMode::HEADING_SOURCE_FORCE_ENCODER",
-}
-
-
-def heading_source_for_config(cfg: dict) -> str:
-    """Return the C++ msg::HeadingSourceMode enumerator literal for the robot
-    JSON's control.heading_source key (case-insensitive "auto"/"otos"/
-    "encoder", 109-005). REQUIRED as of sprint 114 (config-as-truth
-    completion) -- previously fell back to "auto" when absent. An
-    unrecognized-but-PRESENT string still resolves to AUTO -- that is a
-    value-validation question, not a missing-key one, and stays out of this
-    ticket's scope."""
-    raw = str(_require(cfg, "control", "heading_source")).strip().lower()
-    return _HEADING_SOURCE_WIRE_NAMES.get(raw, _HEADING_SOURCE_WIRE_NAMES["auto"])
-
-
-def heading_dwell_for_config(cfg: dict):
-    """Return (heading_dwell_tol, heading_dwell_rate) in [rad]/[rad/s].
-
-    Sprint 114 (config-as-truth completion): NEWLY wired to the robot JSON's
-    ``control.heading_dwell_tol_deg``/``control.heading_dwell_rate_dps``
-    (both required) -- before this ticket these two were hardcoded and never
-    read from cfg at all, the one field pair in this generator with no JSON
-    path whatsoever."""
-    tol_deg  = _require(cfg, "control", "heading_dwell_tol_deg")
-    rate_dps = _require(cfg, "control", "heading_dwell_rate_dps")
-    return math.radians(float(tol_deg)), math.radians(float(rate_dps))
-
-
-def lead_compensation_for_config(cfg: dict):
-    """Return (heading_lead_bias, plan_lead, terminal_lead) in [s] --
-    109-010's three independently-tunable lead-compensation Δt's. All three
-    REQUIRED as of sprint 114 (config-as-truth completion); see
-    data/robots/tovez_nocal.json's control block (or git blame on this
-    function's pre-sprint-114 fallback constants) for the fitted-value
-    derivation."""
-    heading_lead_bias = _require(cfg, "control", "heading_lead_bias")
-    plan_lead = _require(cfg, "control", "plan_lead")
-    terminal_lead = _require(cfg, "control", "terminal_lead")
-    return float(heading_lead_bias), float(plan_lead), float(terminal_lead)
-
-
-def min_speed_for_config(cfg: dict):
-    """Return min_speed (PlannerConfig field 10, 100-007) -- Drive::
-    tracker's own pivot-mode gate (`fabsf(ref.v) < limits.minSpeed`) needs a
-    small positive threshold, never left unset. REQUIRED as of sprint 114
-    (config-as-truth completion)."""
-    return float(_require(cfg, "control", "min_speed"))
-
-
-def profile_rot_limits_for_config(cfg: dict):
-    """Return (yaw_rate_max, yaw_acc_max) in [rad/s] / [rad/s^2] for the
-    rotational master-profile ceiling (PlannerConfig fields 4-5, 100-014).
-    Reads ``control.yaw_rate_max`` [deg/s] and ``control.max_rot_accel_dps2``
-    [deg/s^2], converted to radians -- BOTH REQUIRED as of sprint 114
-    (config-as-truth completion; previously each independently fell back to
-    a firmware default when absent)."""
-    yr = _require(cfg, "control", "yaw_rate_max")        # [deg/s]
-    ya = _require(cfg, "control", "max_rot_accel_dps2")  # [deg/s^2]
-    return math.radians(float(yr)), math.radians(float(ya))
-
-
-def arrive_dwell_for_config(cfg: dict):
-    """Return arrive_dwell (msg::PlannerConfig field 31, 100-001 -- the sole
-    survivor of the original 17-field Drive::Limits/tracker/policy span, see
-    planner.proto's own header comment for the 111-004 field accounting).
-    REQUIRED as of sprint 114 (config-as-truth completion)."""
-    return float(_require(cfg, "control", "arrive_dwell"))
-
-
-def actuation_lag_for_config(cfg: dict):
-    """Return actuation_lag (msg::PlannerConfig field 38, 112-002) -- App::
-    Drive's own model feedforward gain (Drive::tick() adds
-    actuation_lag * a onto each wheel's velocity target). REQUIRED as of
-    sprint 114 (config-as-truth completion)."""
-    return float(_require(cfg, "control", "actuation_lag"))
-
-
-def distance_gains_for_config(cfg: dict):
-    """Return (distance_kp, distance_tol) for msg::PlannerConfig fields
-    39/40 (112-003) -- App::Pilot's own bounded linear position-feedback
-    trim and Motion::Executor's own linear completion tolerance. Both
-    REQUIRED as of sprint 114 (config-as-truth completion)."""
-    distance_kp = _require(cfg, "control", "distance_kp")
-    distance_tol = _require(cfg, "control", "distance_tol")
-    return float(distance_kp), float(distance_tol)
-
-
-def model_tau_for_config(cfg: dict):
-    """Return (model_tau_lin, model_tau_ang) for msg::PlannerConfig fields
-    41/42 (113-001) -- App::Pilot's own two-stage model-reference feedback
-    plant-lag time constants (pilot.h's modelTauLin_/modelTauAng_). Both
-    REQUIRED as of sprint 114 (config-as-truth completion)."""
-    model_tau_lin = _require(cfg, "control", "model_tau_lin")
-    model_tau_ang = _require(cfg, "control", "model_tau_ang")
-    return float(model_tau_lin), float(model_tau_ang)
-
-
-def motion_limits_for_config(cfg: dict):
-    """Return (a_max, a_decel, v_body_max, j_max, yaw_jerk_max) for
-    msg::PlannerConfig's five non-rotational motion-limit fields (098-001 --
-    moved verbatim from main.cpp's old hand-written defaultMotionConfig()).
-
-    ALL FIVE are REQUIRED as of sprint 114 (config-as-truth completion) --
-    previously these were the only PlannerConfig fields with NO per-robot
-    JSON mapping at all (generate() referenced the module-level DEFAULT
-    constants directly, unconditionally). Every shipped robot JSON now
-    carries control.a_max/a_decel/v_body_max/j_max/yaw_jerk_max seeded with
-    the same numeric values main.cpp used to hardcode (value-preserving
-    migration)."""
-    a_max        = _require(cfg, "control", "a_max")         # [mm/s^2]
-    a_decel      = _require(cfg, "control", "a_decel")       # [mm/s^2]
-    v_body_max   = _require(cfg, "control", "v_body_max")    # [mm/s]
-    j_max        = _require(cfg, "control", "j_max")         # [mm/s^3]
-    yaw_jerk_max = _require(cfg, "control", "yaw_jerk_max")  # [rad/s^3]
-    return (float(a_max), float(a_decel), float(v_body_max),
-            float(j_max), float(yaw_jerk_max))
-
-
 def trackwidth_for_config(cfg: dict) -> float:
     """Return geometry.trackwidth [mm] -> DrivetrainConfig.trackwidth.
     REQUIRED as of sprint 114 (config-as-truth completion) -- previously
@@ -520,17 +386,6 @@ def generate(cfg: dict, source_path: str) -> str:
         polled       = polled_for_ports()
         (otos_offset_x, otos_offset_y, otos_offset_yaw,
          otos_linear_scale, otos_angular_scale) = otos_boot_config_values(cfg)
-        heading_kp, heading_kd = heading_gains_for_config(cfg)
-        heading_source_wire = heading_source_for_config(cfg)
-        heading_dwell_tol, heading_dwell_rate = heading_dwell_for_config(cfg)
-        heading_lead_bias, plan_lead, terminal_lead = lead_compensation_for_config(cfg)
-        yaw_rate_max, yaw_acc_max = profile_rot_limits_for_config(cfg)
-        min_speed = min_speed_for_config(cfg)
-        arrive_dwell = arrive_dwell_for_config(cfg)
-        actuation_lag = actuation_lag_for_config(cfg)
-        distance_kp, distance_tol = distance_gains_for_config(cfg)
-        model_tau_lin, model_tau_ang = model_tau_for_config(cfg)
-        a_max, a_decel, v_body_max, j_max, yaw_jerk_max = motion_limits_for_config(cfg)
     except MissingRobotConfigKeyError as e:
         raise e.with_source(source_path) from e
 
@@ -636,85 +491,6 @@ OtosBootConfig defaultOtosBootConfig() {{
     cfg.offsetYaw = {_f(otos_offset_yaw)};    // [rad]
     cfg.linearScale = {_f(otos_linear_scale)};
     cfg.angularScale = {_f(otos_angular_scale)};
-    return cfg;
-}}
-
-msg::PlannerConfig defaultPlannerConfig() {{
-    // 098-001 — the motion-limit fields below are moved verbatim from
-    // main.cpp's hand-written defaultMotionConfig() (same numeric values,
-    // same units — not renumbered or retuned by this move), the one
-    // PlannerConfig boot path that lived OUTSIDE this generator until now.
-    // heading_kp/heading_kd are the new outer heading-loop PD gains
-    // (architecture-update.md M1/M2), baked from the robot JSON's
-    // control.heading_kp/heading_kd, falling back to conservative firmware
-    // starting defaults when absent. min_speed is NO LONGER left unset
-    // (100-007, THE CUTOVER) -- see MIN_SPEED_DEFAULT's own comment above
-    // for why 0.0f silently broke pivot-mode detection the moment
-    // source/drive/tracker.cpp became this field's first live reader.
-    // arrive_tol/turn_in_place_gate, which used to be left unset here, were
-    // removed as dead wire fields in 111-004 -- they no longer exist to be
-    // set at all.
-    //
-    // arrive_dwell (100-001 — Drive::Limits' wire/config source,
-    // architecture-update.md M1/Decision 2) is the sole survivor of the
-    // original fields-15-31 span; baked from the robot JSON's control.*
-    // keys via arrive_dwell_for_config(), falling back to
-    // ARRIVE_DWELL_DEFAULT when absent. Its 16 dead siblings
-    // (v_wheel_max..arrive_vel_tol) were removed in 111-004 -- see this
-    // message's own header comment in planner.proto for the full
-    // per-field accounting.
-    msg::PlannerConfig cfg;
-    cfg.setAMax({_f(a_max)});               // [mm/s^2]
-    cfg.setADecel({_f(a_decel)});             // [mm/s^2]
-    cfg.setVBodyMax({_f(v_body_max)});           // [mm/s]
-    cfg.setYawRateMax({_f(yaw_rate_max)});         // [rad/s] (control.yaw_rate_max [deg/s])
-    cfg.setYawAccMax({_f(yaw_acc_max)});          // [rad/s^2] (control.max_rot_accel_dps2 [deg/s^2])
-    cfg.setJMax({_f(j_max)});                // [mm/s^3] ~6x a_max -- ~0.16s jerk-limited edges
-    cfg.setYawJerkMax({_f(yaw_jerk_max)});         // [rad/s^3] ~5x yaw_acc_max -- ~0.2s
-    cfg.setHeadingKp({_f(heading_kp)});              // [1/s] outer heading-loop proportional gain
-    cfg.setHeadingKd({_f(heading_kd)});              // dimensionless outer heading-loop derivative gain
-    cfg.setMinSpeed({_f(min_speed)});               // [mm/s] Drive:: tracker pivot-mode threshold (100-007)
-    cfg.setArriveDwell({_f(arrive_dwell)});             // [s]
-
-    // 109-005: App::HeadingSource per-robot policy override + the heading-
-    // dwell completion gate. heading_source baked from the robot JSON's
-    // control.heading_source ("auto"/"otos"/"encoder"); the dwell
-    // tolerance/rate are firmware defaults today (no robot-JSON key yet --
-    // see heading_dwell_for_config()'s own comment).
-    cfg.setHeadingSource({heading_source_wire});
-    cfg.setHeadingDwellTol({_f(heading_dwell_tol)});        // [rad]
-    cfg.setHeadingDwellRate({_f(heading_dwell_rate)});       // [rad/s]
-
-    // 109-010: three independently-tunable lead-compensation Δt's, fitted
-    // from the rate-sweep regression -- see planner.proto's own field
-    // comments and src/firm/motion/DESIGN.md's "Turn-error characterization"
-    // entry for the full derivation.
-    cfg.setHeadingLeadBias({_f(heading_lead_bias)});        // [s] locus 1
-    cfg.setPlanLead({_f(plan_lead)});                // [s] locus 2
-    cfg.setTerminalLead({_f(terminal_lead)});           // [s] locus 3
-
-    // 112-002: App::Drive's own model feedforward gain (Drive::tick() adds
-    // actuation_lag * a onto each wheel's velocity target). Motion::
-    // kDeadTime's own bench-derived value (120-140ms) by default -- see
-    // ACTUATION_LAG_DEFAULT's own comment above.
-    cfg.setActuationLag({_f(actuation_lag)});           // [s]
-
-    // 112-003: App::Pilot's own bounded linear position-feedback trim --
-    // distance_kp is the trim's gain, distance_tol is Motion::Executor's
-    // own unified completion rule's linear tolerance (112-004 wired this
-    // live, replacing the hardcoded Motion::kDistanceSettleEpsilonMm
-    // constant it repurposes the role of). See DISTANCE_KP_DEFAULT/
-    // DISTANCE_TOL_DEFAULT's own comment above for the deadband-inequality
-    // derivation AND 112-004's own closed-loop-convergence retune.
-    cfg.setDistanceKp({_f(distance_kp)});              // [1/s]
-    cfg.setDistanceTol({_f(distance_tol)});             // [mm]
-
-    // 113-001: App::Pilot's own two-stage model-reference feedback plant-lag
-    // time constants (pilot.h's modelTauLin_/modelTauAng_) -- previously
-    // hardcoded with no config path at all. See MODEL_TAU_LIN_DEFAULT/
-    // MODEL_TAU_ANG_DEFAULT's own comment above.
-    cfg.setModelTauLin({_f(model_tau_lin)});            // [s]
-    cfg.setModelTauAng({_f(model_tau_ang)});            // [s]
     return cfg;
 }}
 

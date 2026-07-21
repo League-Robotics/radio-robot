@@ -44,8 +44,6 @@ static_assert(std::is_standard_layout<Stop>::value,
               "msg::Stop must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Twist>::value,
               "msg::Twist must be standard-layout for offsetof-based field tables");
-static_assert(std::is_standard_layout<Move>::value,
-              "msg::Move must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Ack>::value,
               "msg::Ack must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Error>::value,
@@ -56,12 +54,12 @@ static_assert(std::is_standard_layout<DrivetrainConfigPatch>::value,
               "msg::DrivetrainConfigPatch must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<MotorConfigPatch>::value,
               "msg::MotorConfigPatch must be standard-layout for offsetof-based field tables");
-static_assert(std::is_standard_layout<PlannerConfigPatch>::value,
-              "msg::PlannerConfigPatch must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<OtosConfigPatch>::value,
               "msg::OtosConfigPatch must be standard-layout for offsetof-based field tables");
-static_assert(std::is_standard_layout<AckEntry>::value,
-              "msg::AckEntry must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<EncoderReading>::value,
+              "msg::EncoderReading must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<OtosReading>::value,
+              "msg::OtosReading must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Pose2D>::value,
               "msg::Pose2D must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<BodyTwist3>::value,

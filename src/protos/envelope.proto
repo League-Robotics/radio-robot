@@ -12,8 +12,10 @@ import "telemetry.proto";
 // carries exactly THREE command arms -- `twist`/`config`/`stop` -- every
 // command still carries `corr_id`, but the per-command REPLY path is gone
 // (Decision 2's "telemetry-only return path"): a command's outcome is
-// reported via the ack ring riding inside every `Telemetry` push
-// (telemetry.proto), not a dedicated `ReplyEnvelope` for that command.
+// reported via the single ack slot (`Telemetry.ack_corr`/`ack_err`, valid
+// iff `flags` bit 5 -- 115-003's frame-v2 rewrite replaced the pre-115
+// depth-3 ack ring with this one slot) riding inside every `Telemetry`
+// push (telemetry.proto), not a dedicated `ReplyEnvelope` for that command.
 // `ReplyEnvelope` itself survives, narrowed to `ok`/`err`/`tlm` -- see its
 // own doc comment below for why `ok`/`err` are kept even though the ack
 // ring is now the primary ack path.
@@ -38,8 +40,8 @@ import "telemetry.proto";
 
 // Binary reply/error taxonomy -- unchanged shape from the pre-102 schema;
 // still needed for whichever of ERR_BADARG/RANGE/DECODE/etc. the pruned
-// twist/config/stop arms (or the ack ring's own err_code, telemetry.proto)
-// can still produce.
+// twist/config/stop arms (or the single ack slot's own `ack_err`,
+// telemetry.proto) can still produce.
 enum ErrCode {
   ERR_NONE          = 0;
   ERR_UNKNOWN        = 1;  // no such oneof arm / unknown target
@@ -53,9 +55,9 @@ enum ErrCode {
 }
 
 // Flow-control ack -- unchanged shape (q/rem/t) from the pre-102 schema.
-// Kept as `ReplyEnvelope.ok`'s payload even though the ack ring
-// (telemetry.proto's `Telemetry.acks`) is now the PRIMARY per-command ack
-// path (Decision 2): `ok`/`err` stay declared because `ReplyEnvelope`
+// Kept as `ReplyEnvelope.ok`'s payload even though the single ack slot
+// (telemetry.proto's `Telemetry.ack_corr`/`ack_err`) is now the PRIMARY
+// per-command ack path (Decision 2): `ok`/`err` stay declared because `ReplyEnvelope`
 // itself is kept as a distinct top-level type (this ticket's own
 // re-measurement confirmed dropping it entirely bought nothing -- see
 // completion notes), and a future ticket may still want a synchronous
@@ -93,42 +95,16 @@ message Twist {
 // Stop already used) -- a panic-stop must have zero ways to be malformed.
 message Stop {}
 
-// Move -- the sprint-109 arc-command primitive (109-003, SUC-001/SUC-003).
-// Every motion command is an arc: a signed linear distance coupled with a
-// signed heading delta over that same arc (distance==0 => pure pivot;
-// delta_heading==0 => straight leg) -- see this sprint's issue
-// (clasi/sprints/109-.../issues/firmware-jerk-limited-motion-ruckig-return-
-// arc-command-queue.md) "Command model (wire)" section for the full
-// semantics this message implements. `Motion::Executor` (motion/cmd.h)
-// normalizes a decoded Move into a Motion::Cmd; this message itself is pure
-// wire shape, no validation/defaulting logic.
-//
-// Two modes, discriminated by `time`:
-//   DISTANCE (time == 0) -- travel `distance` while heading changes by
-//     `delta_heading`; 109-003 declares this mode's wire shape but does NOT
-//     implement dominant-channel arc planning for it yet (ticket 005) --
-//     see cmd.h's own doc comment for exactly what 109-003 does with a
-//     DISTANCE-mode Move today.
-//   TIMED (time > 0) -- ramp up to v_max/omega, hold, ramp down to finish
-//     at rest at the deadline (`time` is the TOTAL duration from
-//     activation, ramps included) -- this is the teleop primitive 109-003
-//     implements end to end; the ramp-down tail is the deadman decay.
-//
-// A command with distance==0 AND delta_heading==0 AND time<=0 is
-// degenerate -- acked TRIVIAL, never queued (Motion::Executor's own
-// classification, not decoded here).
-message Move {
-  float  distance      = 1;  // [mm] signed arc length along the path
-  float  delta_heading = 2;  // [rad] signed heading change over the arc
-  float  v_max         = 3;  // [mm/s] linear ceiling (DISTANCE) / signed target (TIMED)
-  float  omega         = 4;  // [rad/s] signed target yaw rate (TIMED only)
-  float  time          = 5;  // [ms] 0 = distance-bounded; >0 = TIMED (total duration)
-  bool   replace       = 6;  // replace last queued (or the active cmd if queue empty)
-  uint32 id            = 7;  // host correlation id, echoed in the enqueue ack (corr_id)
-                              // AND in the command's own completion event (Telemetry's
-                              // ack ring, telemetry.proto -- 109-003's own resolution of
-                              // sprint.md Open Question 3)
-}
+// Move -- DELETED (115-003, gut-to-minimal-firmware S1 motion-stack
+// excision). The sprint-109 arc-command primitive (distance/delta_heading/
+// v_max/omega/time/replace/id) went with the deleted Motion::Executor it
+// was decoded into -- nothing in the S1 minimal firmware queues or plans an
+// arc. Field 20 is reserved below, not reused: S2 (the MOVE-protocol
+// cutover, `protocol-set-point-the-minimal-firmware-s-complete-command-
+// surface.md`) reintroduces a wire arm named `Move` with a DIFFERENT shape
+// (MoveTwist|MoveWheels velocity oneof + time|distance|angle stop oneof +
+// timeout + replace + id) at a FRESH arm number (21), never at 20 -- see
+// that spec and `gut-to-minimal-firmware-...md`'s S2 section.
 
 // ConfigDelta -- unchanged from the pre-102 schema (096-001) except for the
 // `otos` arm (109-004): still references config.proto's curated Patch types
@@ -143,18 +119,24 @@ message Move {
 // that method's own comment) -- restoring the runtime OTOS-calibration path
 // `clasi/sprints/109-.../issues/otos-calibration-config-message.md`
 // describes.
+//
+// `planner` (field 3, PlannerConfigPatch) DELETED (115-003, gut S1): the
+// planner-config patch type it referenced (config.proto) is deleted
+// wholesale alongside planner.proto -- nothing in the S1 minimal firmware
+// persists or live-patches planner config. Field 3 is reserved below, not
+// reused.
 message ConfigDelta {
+  reserved 3;
   oneof patch {
     DrivetrainConfigPatch drivetrain = 1;
     MotorConfigPatch      motor      = 2;
-    PlannerConfigPatch    planner    = 3;
     uint32                watchdog   = 4;  // [ms] sTimeout -- StreamingDriveWatchdog window
     OtosConfigPatch       otos       = 5;
   }
 }
 
-// One command in. corr_id is echoed back via the ack ring riding in every
-// Telemetry push (telemetry.proto), NOT a per-command ReplyEnvelope --
+// One command in. corr_id is echoed back via the single ack slot riding in
+// every Telemetry push (telemetry.proto), NOT a per-command ReplyEnvelope --
 // Decision 2's "telemetry-only return path".
 message CommandEnvelope {
   // Every pre-102 arm this ticket removes -- drive(2)/segment(3)/
@@ -163,17 +145,21 @@ message CommandEnvelope {
   // plan_dump(18) -- reserved, not reused (see this file's own header
   // comment). A future sprint that re-adds any of these functionality
   // never reassigns one of these numbers to a different field.
-  reserved 2, 3, 4, 5, 7 to 12, 14 to 18;
+  //
+  // move(20) added to this list by 115-003 (gut S1 motion-stack excision):
+  // the sprint-109 Move message this arm carried is deleted (see its own
+  // now-removed doc comment above); S2's MOVE-protocol cutover reintroduces
+  // a `Move`-named arm at a FRESH number (21), never 20.
+  reserved 2, 3, 4, 5, 7 to 12, 14 to 18, 20;
   uint32 corr_id = 1;
   oneof cmd {
     // config/stop keep their pre-102 field numbers (6/13) -- they are KEPT
     // arms, not new ones. twist is genuinely new -- assigned a fresh,
     // never-before-used field number (19), never one of the reserved
-    // numbers above. move (109-003) is the next fresh number (20).
+    // numbers above.
     ConfigDelta config = 6;
     Stop        stop   = 13;
     Twist       twist  = 19;
-    Move        move   = 20;
   }
 }
 

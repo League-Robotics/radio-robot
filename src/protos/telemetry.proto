@@ -4,264 +4,177 @@ package robot;
 
 import "options.proto";
 import "common.proto";
-import "planner.proto";
 
 // ---------------------------------------------------------------------------
-// Telemetry -- PRUNED and extended to the P4 "telemetry-only return path"
-// (103-001, SUC-001/SUC-005, architecture-update.md (103) Decisions 2/3).
-// `Telemetry` gains an ACK RING (`repeated AckEntry acks`, depth 3 --
-// Decision 2) and two fault/event bitmasks, replacing envelope.proto's
-// removed per-command `ReplyEnvelope` arms and `EventNotify` reply as the
-// primary way a client learns a command's outcome or an unsolicited
-// condition. The one-shot bench-diagnostic fields the pre-103 schema
-// carried at the primary cadence (`acc_*`/`glitch_*`/`ts_*`/`cmd_vel_*`)
-// move OUT to a new, slower `TelemetrySecondary` message (below) -- they
-// are not needed every cycle, and the primary frame's byte budget is
-// tight (7B margin at ring depth 3, spike-003's number; this ticket's own
-// completion notes record the re-measured real number).
+// Telemetry -- FRAME v2 (115-003, gut-to-minimal-firmware S1: motion-stack
+// excision + minimal per-cycle telemetry, implementing
+// `telemetry-frame-tightening-amendment-to-gut-s1.md`). This is a CLEAN,
+// INCOMPATIBLE rewrite of the ack-ring/bool-flag frame the 103-era schema
+// shipped -- COMPAT BREAK: no wire compatibility with any pre-115 client.
+// Every field is renumbered from a blank slate (Telemetry has still never
+// shipped to a real robot -- declared-only until ticket 005 wires a live
+// emitter -- so there is no deployed client to preserve numbers for; see
+// this message's renumbering rule below).
 //
-// This is a RE-DERIVATION of sprint 102's unmerged spike-003 dry run
-// (`scratch/102-003-frame-budget`), not a straight cherry-pick -- every
-// judgment call spike-003 flagged as "P4's to confirm or revise" (keeping
-// `active`/`conn_left`/`conn_right` in the primary frame; ring depth 3, not
-// 4-8; `fault_bits`/`event_bits`' bit layout) is confirmed or decided here,
-// not inherited silently. See this ticket's own completion notes for the
-// real `gen_messages.py`-measured worst-case sizes.
+// What changed from the 103-era frame:
+//   - Per-source reading objects, TIMESTAMPED. `EncoderReading` replaces the
+//     flat `enc_left/enc_right/vel_left/vel_right` floats -- position AND
+//     velocity now ride together with the sample's own collect time.
+//     `OtosReading` replaces the bare `Pose2D otos` -- it now also carries
+//     the OTOS-measured velocities (v_x/v_y/omega), which the driver always
+//     read and previously dropped on the floor, plus the burst's own
+//     read time.
+//   - ONE flags bit-string. The depth-3 ack ring (`repeated AckEntry`) and
+//     nine standalone status bools plus two `fault_bits`/`event_bits`
+//     bitmasks all fold into a single `flags` field -- status, fault, AND
+//     event bits share one 16-bit-documented space (bits 16+ reserved).
+//   - Single ack slot. `ack_corr`/`ack_err` replace the depth-3 `AckEntry`
+//     ring -- a command acked within the same primary period as another
+//     overwrites (stakeholder-accepted tradeoff: rare at bench rates,
+//     `wait_for_ack` timeout+retry already covers it).
+//   - Packed `line`/`color` sensor words -- new live consumers for the
+//     line/color drivers the gut keeps, read at a rate-limited, bus-safe
+//     cadence (never a naive per-pass read -- the 098-004 regression is the
+//     standing precedent).
+//   - `DriveMode` relocated in from the now-deleted planner.proto (its own
+//     enum, unchanged shape).
+//   - Deleted entirely: `AckEntry` + `AckStatus` (the ack ring and its
+//     six Motion::Executor completion-outcome enumerators -- the executor
+//     that produced them is gone); `ExecutorState` (queue/state-machine
+//     visibility -- no queue exists in S1); `HeadingSourceStatus`
+//     (App::HeadingSource is deleted -- no reported heading-source sensor
+//     to expose); `queue_depth`/`active_id`/`exec_state`/`heading_source`
+//     fields (executor-era reporting, already gone per the gut issue);
+//     every `has_*` presence bool (folded into `flags`' presence bits).
+//   - Every-cycle emission: primary period == cycle period (20 ms, not the
+//     stale 40 ms this frame's old doc comment claimed matched already --
+//     see `kcycle-kprimaryperiod-mismatch.md`, resolved by this rewrite).
+//     "The frame is the dataset": with a timestamped frame every loop
+//     iteration, the host log reconstructs any window -- no on-chip
+//     measurement ring, no dump command (both deleted by the same gut
+//     ticket that lands this rewrite).
 //
-// `Telemetry` has NEVER shipped to a real robot (declared-only until
-// ticket 005 wires a live emitter) -- like the pre-103 schema's own
-// encpose-gap precedent (see the now-superseded field-number comment this
-// replaces), this prune freely renumbers every field rather than
-// `reserved`-ing the old numbers: there is no deployed client depending on
-// a specific field number for a message that has never been on the wire.
+// Renumbering (decided, `telemetry-frame-tightening-amendment-to-gut-s1.md`):
+// clean renumber, every field <= 15 so every tag is 1 byte; NO `reserved`
+// list -- the only consumer is this repo's own host, whose `pb2` bindings
+// regenerate from the identical protos firmware co-deploys from at the
+// bench, so there is no external client's field-number expectation to
+// preserve (contrast envelope.proto's `CommandEnvelope`/`ConfigDelta`,
+// which reserve removed numbers because THEY shipped on real hardware).
 //
-// Presence: `has_*` fields mirror the pre-103 schema's own convention
-// (explicit bool flags alongside plain value fields), unchanged by this
-// prune.
+// Worst-case size (gen_messages.py-measured, sprint 115 ticket 003 --
+// replaces `telemetry-frame-tightening-amendment-to-gut-s1.md`'s ~137 B
+// estimate with the real number):
+//   Telemetry, standalone (no enclosing tag/length prefix): 144 B.
+//   Wrapped as ReplyEnvelope.body's `tlm` arm (how a primary frame actually
+//   goes on the wire -- envelope.proto's "telemetry-only return path"):
+//   147 B arm contribution (144 B payload + 1 B tag + 2 B length, since
+//   144 >= 128 needs a 2-byte length varint); ReplyEnvelope total (corr_id
+//   + this arm) = 153 B, 33 B margin under the 186-byte envelope budget.
+// Pre-rewrite (103-era ack-ring/bool-flag frame), same ReplyEnvelope-total
+// convention: 179 B, 7 B margin (spike-003's own measurement) -- this
+// rewrite is smaller by 26 B while carrying strictly more signal
+// (per-sample timestamps, OTOS velocities, packed line/color words).
 // ---------------------------------------------------------------------------
 
-// AckStatus -- coarse pass/fail for one ack-ring entry. `err_code` (below)
-// carries the specific ErrCode (envelope.proto) value when status is
-// ACK_STATUS_ERR; kept as a separate raw uint32 rather than importing
-// envelope.proto's ErrCode enum here to avoid a telemetry.proto <->
-// envelope.proto import cycle (envelope.proto already imports
-// telemetry.proto for the `tlm` reply arm).
-// 109-003 adds the six Motion::Executor per-command completion outcomes
-// (DONE/TRIVIAL/SUPERSEDED/FLUSHED/TIMEOUT/SOLVE_FAIL) as MORE AckStatus
-// values, riding the SAME depth-3 ack ring every other command's outcome
-// already uses -- sprint.md's own Open Question 3 ("does event.h carry
-// these, or the existing reply/TLM path") resolved here: `messages/
-// event.h` is hand-written, ungenerated, and has no live consumer or
-// producer anywhere in this tree (messages/DESIGN.md Sec 6) -- reviving it
-// would be a second, parallel completion-notification channel for no
-// reason when the ack ring already IS the project's live, wire-budget-
-// checked per-command-outcome path (every TWIST/CONFIG/STOP ack already
-// rides it). A Move command's ENQUEUE outcome (OK/FULL/TRIVIAL/err) is
-// acked against the CommandEnvelope's own corr_id (matching TWIST/CONFIG/
-// STOP's existing convention); a queued command's later COMPLETION
-// (DONE/SUPERSEDED/FLUSHED/TIMEOUT/SOLVE_FAIL, which happens many cycles
-// after the enqueueing envelope is gone) is acked against the Move's OWN
-// `id` field instead (envelope.proto's own doc comment on Move.id).
-enum AckStatus {
-  ACK_STATUS_OK          = 0;
-  ACK_STATUS_ERR         = 1;
-  ACK_STATUS_DONE        = 2;  // Motion::Cmd ran to its own completion criterion
-  ACK_STATUS_TRIVIAL     = 3;  // degenerate Move (zero distance+heading, time<=0) -- never queued
-  ACK_STATUS_SUPERSEDED  = 4;  // evicted from the queue/active slot by a `replace`
-  ACK_STATUS_FLUSHED     = 5;  // dropped by a TWIST/STOP queue flush
-  ACK_STATUS_TIMEOUT     = 6;  // Motion::Executor's own internal deadline/stall guard fired
-  ACK_STATUS_SOLVE_FAIL  = 7;  // Motion::JerkTrajectory solve returned false
+// Current drive mode -- relocated here from the deleted planner.proto
+// (115-003, gut S1); unchanged shape.
+enum DriveMode {
+  IDLE      = 0;
+  STREAMING = 1;
+  TIMED     = 2;
+  DISTANCE  = 3;
+  GO_TO     = 4;
+  VELOCITY  = 5;
 }
 
-// One ack-ring entry: which command (corr_id), and whether it succeeded.
-message AckEntry {
-  uint32    corr_id  = 1;
-  AckStatus status   = 2;
-
-  // raw ErrCode value (envelope.proto) when status=ACK_STATUS_ERR. Bound
-  // at ErrCode's own current highest enumerator (ERR_OVERSIZE=7) -- an
-  // ACCURATE bound (this field's whole domain is ErrCode's value set, kept
-  // as a raw uint32 rather than the enum itself only to avoid a
-  // telemetry.proto<->envelope.proto import cycle, per this field's
-  // pre-existing doc note above), not an artificial shrink -- narrows this
-  // repeated-3x field's own worst-case wire contribution from 6B/entry to
-  // 2B/entry (109-003's own `gen_messages.py` (max)-narrowing addition),
-  // which is what buys back the wire budget 109-003's own three new
-  // Telemetry fields below spend. Bump this bound if envelope.proto's
-  // ErrCode enum ever grows past 7.
-  uint32    err_code = 3 [(max) = 7];
+// One wheel's encoder sample -- position AND velocity together, stamped
+// with the sample's own collect time (robot clock, same domain as
+// Telemetry.now).
+message EncoderReading {
+  float  position = 1;  // [mm] accumulated
+  float  velocity = 2;  // [mm/s] signed, measured
+  uint32 time     = 3;  // [ms] robot clock at sample collect
 }
 
-// ExecutorState -- mirrors Motion::Executor::State verbatim (motion/
-// executor.h) -- the queue/state-machine status a TestGUI operator needs
-// to see (sprint.md's own TLM field list: queueDepth/activeId/state).
-enum ExecutorState {
-  EXEC_IDLE          = 0;
-  EXEC_RUNNING       = 1;
-  EXEC_RAMP_TO_REST  = 2;
-  EXEC_STOPPING      = 3;
-}
-
-// HeadingSourceStatus -- 109-005, SUC-004: App::HeadingSource's REPORTED,
-// currently-active sensor for heading -- distinct from
-// PlannerConfig.HeadingSourceMode (planner.proto), which is the per-robot
-// POLICY override, not a live status. TestGUI's own non-gyro indicator is
-// driven directly off this field: HEADING_SOURCE_STATUS_ENCODER means OTOS
-// is NOT currently trusted for heading, regardless of why.
-enum HeadingSourceStatus {
-  HEADING_SOURCE_STATUS_OTOS     = 0;
-  HEADING_SOURCE_STATUS_ENCODER  = 1;
+// Everything the OTOS supplies in one burst read: position, heading, AND
+// the measured velocities (previously read by the driver and dropped),
+// stamped with the burst's own read time.
+message OtosReading {
+  float  x       = 1;  // [mm]
+  float  y       = 2;  // [mm]
+  float  heading = 3;  // [rad]
+  float  v_x     = 4;  // [mm/s]
+  float  v_y     = 5;  // [mm/s]
+  float  omega   = 6;  // [rad/s]
+  uint32 time    = 7;  // [ms] robot clock at burst read
 }
 
 message Telemetry {
-  // Ack ring FIRST (field 1): a repeated MESSAGE field is never packed --
-  // each of the (max_count) ring entries costs its own tag+len, so this is
-  // the single most expensive field in the frame. Field number 1 keeps its
-  // tag at the cheapest 1-byte width (every field number 1-15 fits a
-  // 1-byte tag; 16+ needs 2) -- multiplied by (max_count), a 2-byte tag
-  // here would cost (max_count) extra bytes, not 1.
-  //
-  // Depth 3 (architecture-update.md (103) Decision 2): spike-003 measured
-  // depth 3 (179B) as the maximum that fits the 186B envelope with this
-  // frame's field set (margin 7B); depth 4 needs a real trim elsewhere in
-  // this message and was rejected (Decision 2) as fragile (zero margin).
-  // This ticket re-measured the real number for this exact field set --
-  // see completion notes.
-  repeated AckEntry acks = 1 [(max_count) = 3];
+  uint32    now  = 1;  // [ms] robot clock at frame assembly -- always present
+  uint32    seq  = 2;  // always present
+  DriveMode mode = 3;  // always present
 
-  uint32    now  = 2;   // [ms] t= -- always present
-  DriveMode mode = 3;   // mode= -- always present
-  uint32    seq  = 4;   // seq= -- always present
+  // flags -- THE bit string: status + faults + events, one field. Every
+  // bool/bitmask the 103-era frame carried separately (has_*/active/
+  // conn_left/conn_right/otos_connected/fault_bits/event_bits) lives here.
+  //   bit 0  -- otos_present    (OtosReading fresh this frame)
+  //   bit 1  -- otos_connected
+  //   bit 2  -- active          (motion in progress)
+  //   bit 3  -- conn_left       (left motor bus connectivity)
+  //   bit 4  -- conn_right      (right motor bus connectivity)
+  //   bit 5  -- ack_fresh       (ack_corr/ack_err are a new ack this frame)
+  //   bit 6  -- fault: I2C clearance safety-net trip (known benign boot
+  //             one-shot -- see the pre-rewrite frame's own bit-0 comment
+  //             history for the full characterization; a healthy robot can
+  //             show this bit permanently set after boot with no ongoing
+  //             problem -- only a bit that flips DURING driving, not just
+  //             at boot, is actionable)
+  //   bit 7  -- fault: wedge latch detected
+  //   bit 8  -- fault: I2C NAK/timeout
+  //   bit 9  -- fault: malformed inbound frame seen
+  //   bit 10 -- event: deadman expired (transition cycle)
+  //   bit 11 -- event: boot ready (transition cycle)
+  //   bit 12 -- event: config delta applied (transition cycle)
+  //   bit 13 -- line_present    (line word fresh)
+  //   bit 14 -- color_present   (color word fresh)
+  //   bit 15 -- fault: MOVE timeout backstop fired (declared now, wired by
+  //             sprint 116's protocol-set-point issue -- S1 does not flip
+  //             this bit, S1 has no MOVE command to time out)
+  //   bits 16+ reserved
+  uint32 flags = 4 [(max) = 65535];
 
-  // enc=<l>,<r> -- per-wheel accumulated encoder distance.
-  bool  has_enc   = 5;
-  float enc_left  = 6;   // [mm]
-  float enc_right = 7;   // [mm]
+  // Single ack slot (was: repeated AckEntry x3, depth 3). ack_err == 0
+  // means OK; nonzero is the ErrCode (envelope.proto) value. Valid iff
+  // flags bit 5 (ack_fresh) -- a command acked within the same primary
+  // period as another overwrites (stakeholder-accepted tradeoff;
+  // `wait_for_ack` timeout+retry covers the rare bench-rate collision).
+  uint32 ack_corr = 5 [(max) = 65535];
+  uint32 ack_err  = 6 [(max) = 7];
 
-  // vel=<l>,<r> -- per-wheel MEASURED velocity.
-  bool  has_vel   = 8;
-  float vel_left  = 9;   // [mm/s] signed
-  float vel_right = 10;  // [mm/s] signed
+  // Sensors and encoders.
+  EncoderReading enc_left  = 7;
+  EncoderReading enc_right = 8;
+  OtosReading    otos      = 9;   // valid iff flags bit 0 (otos_present)
+  Pose2D         pose      = 10;  // encoder-odometry integrated pose, always present
+  BodyTwist3     twist     = 11;  // body twist from measured wheel velocities, always present
 
-  // pose=<x>,<y>,<h> -- fused world pose.
-  bool   has_pose = 11;
-  Pose2D pose     = 12;
-
-  // otos=<x>,<y>,<h> -- raw sampled odometer pose, conditionally present.
-  bool   has_otos       = 13;
-  Pose2D otos           = 14;
-  bool   otos_connected = 15;
-
-  // twist=<v>,<omega> -- directly-measured/derived body twist.
-  bool       has_twist = 16;
-  BodyTwist3 twist     = 17;
-
-  // active/conn_* -- kept at the primary cadence (NOT trimmed out with
-  // acc_*/glitch_*/ts_*/cmd_vel_* below): motion-in-progress and per-motor
-  // bus connectivity are cheap (1 byte each) and load-bearing for the
-  // hardware-bench-testing.md "sensors alive"/"wheels drive" gate at full
-  // rate (architecture-update.md (103) Decision 2's own reasoning).
-  bool active     = 18;  // motion in progress
-  bool conn_left  = 19;  // left motor bus connectivity
-  bool conn_right = 20;  // right motor bus connectivity
-
-  // Fault/event bitmasks (NEW this ticket) -- replace envelope.proto's
-  // removed EventNotify/`evt` reply arm as the wire's unsolicited-condition
-  // channel. Bit layout (this ticket's own decision -- spike-003 left it
-  // undefined):
-  //
-  // fault_bits:
-  //   bit 0 -- I2CBus `readyAt` clearance safety-net trip (source/devices/
-  //            i2c_bus.*; wired live by ticket 002/005). CHARACTERIZED by
-  //            103-010's bench session: a boot-time ONE-SHOT latch -- it
-  //            fires once, coincident with `Preamble::done()`'s
-  //            first-true transition (plausibly preamble's own
-  //            `hardReset()`-driven back-to-back device-detection writes),
-  //            and then never re-fires; observed pegged at exactly 1
-  //            across sustained driving in every re-run capture in that
-  //            session, with no behavioral signal correlated with driving
-  //            activity. A healthy robot can show `fault_bits` bit 0 set
-  //            permanently after boot with no ongoing problem -- do not
-  //            chase a steady `fault=1` as live evidence of a defect; only
-  //            a bit that flips DURING driving (not just at boot) is
-  //            actionable.
-  //   bit 1 -- NezhaMotor/I2CBus wedge-latch detected
-  //   bit 2 -- I2C bus NAK/timeout error
-  //   bit 3 -- malformed/undecodable inbound frame (App::Comms::
-  //            malformedCount() > 0 -- source/app/comms.*; malformed armor
-  //            prefix, malformed base64, malformed protobuf decode, or an
-  //            unrecognized text-plane line all count. Wired live by
-  //            ticket 104-004.)
-  //   bits 4-31 -- reserved for future faults
-  //
-  // event_bits:
-  //   bit 0 -- Deadman staleness timer expired (source/app/deadman.*;
-  //            wired live by ticket 004/005)
-  //   bit 1 -- boot-ready transition (Preamble::done() first true)
-  //   bit 2 -- a ConfigDelta was applied
-  //   bit 3 -- App::HeadingSource fallback/re-promotion TRANSITION this
-  //            cycle (109-005, SUC-004) -- fires the SAME cycle
-  //            heading_source below flips either direction (OTOS->encoder
-  //            OR encoder->OTOS); level-set like every other event bit here
-  //            (true only on the transition cycle itself, false otherwise),
-  //            not a sticky latch.
-  //   bits 4-31 -- reserved for future events
-  //
-  // This ticket declares the fields and the bit NUMBERING only -- actually
-  // flipping a given bit at its real call site is ticket 005's own
-  // acceptance criterion (architecture-update.md (103) Step 3 "Telemetry"
-  // responsibility).
-  uint32 fault_bits = 21;  // bitmask -- see numbering above
-  uint32 event_bits = 22;  // bitmask -- see numbering above
-
-  // Motion::Executor visibility (109-003, SUC-001/SUC-003) -- polled
-  // (level, not edge-latched) every primary frame, mirroring how
-  // fault_bits/event_bits are already reported.
-  //
-  // queue_depth: number of PENDING (not-yet-active) Motion::Cmd entries in
-  // the ring (0-8, the ring's own fixed depth) -- bound at the ring's own
-  // real capacity, not an artificial shrink.
-  uint32 queue_depth = 23 [(max) = 8];
-
-  // active_id: the currently-RUNNING command's own Move.id (0 when
-  // state==EXEC_IDLE). Bound at 65535 -- an accurate assumption for this
-  // project's host correlation-id convention (simple per-session counters,
-  // matching every other corr_id-style field's real-world usage), not a
-  // hard wire limit: an id that legitimately exceeds this bound still
-  // encodes correctly (a real varint has no ceiling), it only costs more
-  // than this worst-case table assumed for that one frame, and
-  // msg::wire::encode()'s own capacity check safely skips sending that one
-  // frame rather than corrupting the buffer (see AckEntry.err_code's own
-  // comment above for the same bound-is-a-size-hint-not-a-clamp point).
-  uint32 active_id = 24 [(max) = 65535];
-
-  ExecutorState exec_state = 25;
-
-  // heading_source -- App::HeadingSource's currently-active sensor (109-005,
-  // SUC-004), polled every primary frame like exec_state above. TestGUI's
-  // non-gyro indicator reads this directly; event_bits bit 3 fires the one
-  // cycle this value actually changes.
-  HeadingSourceStatus heading_source = 26;
+  // Packed sensor words. Valid iff flags bits 13/14 respectively.
+  uint32 line  = 12;  // 4 line channels, one byte each (ch1 in the low byte)
+  uint32 color = 13;  // color sensor RGBC, 8 bits per channel (R in the low byte)
 }
 
-// TelemetrySecondary (NEW this ticket) -- the slower diagnostic frame:
-// acc_*/glitch_*/ts_*/cmd_vel_* moved OUT of the always-on primary
-// Telemetry frame above (one-shot bench-diagnostic fields, not needed at
-// the primary cadence) and INTO this message.
+// TelemetrySecondary -- the slower diagnostic frame (unchanged by 115-003;
+// `telemetry-frame-tightening-amendment-to-gut-s1.md` explicitly leaves
+// this message untouched -- sprint.md Open Questions #3). Rides as a
+// second, independently-armored `*B`-armored line, own (slower) emission
+// cadence, own top-level `msg::wire::encode()` overload.
 //
-// Wire framing (architecture-update.md (103) Decision 3, resolved by this
-// ticket): TelemetrySecondary rides as a SECOND, independently-armored
-// `*B`-armored line, NOT a `ReplyEnvelope.body` oneof arm. This is not just
-// a preference -- `ReplyEnvelope.body` is fixed at exactly `ok`/`err`/`tlm`
-// by this ticket's own acceptance criteria (envelope.proto), so a fourth
-// `tlm2`-style arm is not an available option regardless of preference.
-// `source/app/telemetry.{h,cpp}` (ticket 005) emits it as its own top-level
-// armored payload, own cadence (a P4 implementation decision ticket 005
-// still owns -- see architecture-update.md Step 7 Open Question 4), using
-// the `msg::wire::encode(const TelemetrySecondary&, ...)` codec this
-// ticket's generator change adds (mirroring `ReplyEnvelope`'s own
-// encode-only treatment -- TelemetrySecondary is firmware-emitted only,
-// never host-decoded on the robot side).
+// NOTE: with EncoderReading.velocity now carrying velocity inside the
+// PRIMARY frame's per-wheel readings, this message's own ts_left/ts_right
+// sample-timestamp fields are redundant with EncoderReading.time --
+// candidates for pruning if this message is next touched, per the
+// amendment's own note. Not pruned here (out of this ticket's scope).
 message TelemetrySecondary {
   uint32 now = 1;  // [ms] t= -- same clock as Telemetry.now, sampled at this frame's own
                     // (slower) emission cadence
