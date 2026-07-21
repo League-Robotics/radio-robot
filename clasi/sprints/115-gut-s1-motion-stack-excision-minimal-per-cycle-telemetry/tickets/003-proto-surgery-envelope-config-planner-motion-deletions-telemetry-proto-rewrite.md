@@ -2,9 +2,14 @@
 id: '003'
 title: 'Proto surgery: envelope/config/planner/motion deletions + telemetry.proto
   rewrite'
-status: open
-use-cases: [SUC-045, SUC-047, SUC-048, SUC-049]
-depends-on: ["002"]
+status: in-progress
+use-cases:
+- SUC-045
+- SUC-047
+- SUC-048
+- SUC-049
+depends-on:
+- '002'
 github-issue: ''
 issue: telemetry-frame-tightening-amendment-to-gut-s1.md
 completes_issue: true
