@@ -4,8 +4,11 @@
 // 0x46 encoder sequencing, the velocity PID, and ALL of the brick's own
 // write shaping — slew limiting, write throttle, write-on-change, reversal
 // dwell, and output deadband (see writeShapedDuty()/writeRawDuty() in
-// nezha_motor.cpp). Wedge OBSERVATION/RECOVERY policy lives in the
-// Devices::MotorArmor decorator (motor_armor.h), which a caller may wrap
+// nezha_motor.cpp). Sprint 114 ticket 005: the output deadband BOOSTS a
+// genuine nonzero sub-deadband duty to the deadband floor instead of
+// zeroing it (an exact zero still stays an immediate hard stop) -- see
+// writeShapedDuty()'s own doc comment. Wedge OBSERVATION/RECOVERY policy
+// lives in the Devices::MotorArmor decorator (motor_armor.h), which a caller may wrap
 // this leaf in — or not (the sim composes the bare leaf directly).
 // Restructured 2026-07-18 (stakeholder): MotorArmor used to be this class's
 // base; it is now a composing decorator, and the dwell/deadband write gate
@@ -163,7 +166,7 @@ class NezhaMotor : public Motor {
  private:
   // --- Device write path + resets (leaf internals — no longer virtuals;
   // the old MotorArmor base-class seam is gone) ---
-  void writeShapedDuty(float duty, uint32_t now);   // [-1,1] [ms] reversal dwell + output deadband, then writeRawDuty()
+  void writeShapedDuty(float duty, uint32_t now);   // [-1,1] [ms] output-deadband boost (sub-deadband nonzero -> deadband floor; exact zero stays zero), then reversal dwell, then writeRawDuty() -- see nezha_motor.cpp's own doc comment (114-005)
   void writeRawDuty(float duty);    // clamp + write-on-change + throttle + slew + fwdSign + bus write
   void hardReset();                 // median-of-3 + readback-verify + retry
   void softRebaseline();            // software-only rebaseline
@@ -252,7 +255,10 @@ class NezhaMotor : public Motor {
   // fields in reconfigure() (sprint 114 ticket 003 — no more code-side ship
   // default substitution; gen_boot_config.py always emits real values, see
   // data/robots/*.json's control.reversal_dwell_ms/output_deadband). An
-  // explicit 0/0 makes writeShapedDuty() a pure pass-through. ----
+  // explicit 0/0 makes writeShapedDuty() a pure pass-through. Sprint 114
+  // ticket 005: outputDeadband_ BOOSTS a genuine nonzero sub-deadband duty
+  // up to itself (sign-preserving) rather than zeroing it -- an explicit 0
+  // here still means "never boost," i.e. still a pure pass-through. ----
   float reversalDwell_ = 0.0f;          // [ms] cached from MotorConfig
   float outputDeadband_ = 0.0f;         // [-1,1] fraction, cached from MotorConfig
   bool dwelling_ = false;

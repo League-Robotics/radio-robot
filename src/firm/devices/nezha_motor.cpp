@@ -443,30 +443,59 @@ void NezhaMotor::tick(uint64_t nowUs)
 }
 
 // ---------------------------------------------------------------------------
-// writeShapedDuty() — reversal dwell + output deadband, then writeRawDuty().
-// Folded from the old MotorArmor::armoredWrite() (2026-07-18 restructure)
-// because both policies are Nezha-brick wedge PROTECTION — an instantaneous
-// H-bridge sign flip written to 0x60 while the motor is under way latches
-// the 0x46 encoder readback (the reversal write train,
+// writeShapedDuty() — output-deadband boost, then reversal dwell, then
+// writeRawDuty(). Folded from the old MotorArmor::armoredWrite() (2026-07-18
+// restructure) because both policies are Nezha-brick wedge PROTECTION — an
+// instantaneous H-bridge sign flip written to 0x60 while the motor is under
+// way latches the 0x46 encoder readback (the reversal write train,
 // docs/knowledge/2026-07-04-encoder-wedge.md), and near-zero PID dither
-// would request such flips every tick without the deadband. Semantics
-// unchanged from armoredWrite(): stop (duty == 0) and sub-deadband duty are
-// always immediate and unclamped, even mid-dwell (they cancel any dwell in
-// progress); a commanded sign change (relative to lastRequestedDuty_)
-// writes 0 now, arms the dwell timer, suppresses every non-zero write until
-// the deadline, then forwards the new-direction duty as-is (the slew cap
-// ramps it from zero). reversalDwell_ == 0 skips the dwell transition
-// entirely -- a valid, explicit off-configuration (config.reversalDwell ==
-// 0.0f), not a default.
+// would request such flips every tick without the deadband.
+//
+// TWO distinct cases where armoredWrite() used to have one (sprint 114
+// ticket 005, deadband-compensation-small-commands-must-produce-real-motion.md):
+//   - duty == 0.0f EXACTLY: a genuine "stop"/"on target" command (STOP,
+//     Mode::Neutral, or App::Pilot's own exact-zero twist on completion).
+//     Immediate, unclamped, cancels any dwell in progress, even mid-dwell.
+//     NOT boosted -- boosting an intentional zero would make the robot buzz
+//     at rest.
+//   - 0 < |duty| < outputDeadband_: a genuine NONZERO command, but smaller
+//     than the plant can actually produce. Boosted (sign-preserving,
+//     std::copysign) up to outputDeadband_ instead of being zeroed, so a
+//     real, wanted correction (e.g. a terminal heading/distance trim) still
+//     moves the wheel instead of stalling the outer loop until it gives up
+//     on an arrive-timeout. The boosted duty then falls through into the
+//     SAME reversal-dwell/same-sign logic below as any other nonzero duty —
+//     no special-casing there, so a boosted duty that also happens to be a
+//     sign reversal still arms/holds/releases through the dwell exactly as
+//     an unboosted duty of the same magnitude would (wedge protection is
+//     never bypassed by a small command). See sprint 114's own Design
+//     Rationale Decision 4 (sprint.md) for why this sits INSIDE NezhaMotor's
+//     velocity-PID closed loop (real measured velocity feeds back every
+//     tick) rather than at the planner layer (the shape of floor 112-004
+//     deleted for hunting) — and is one-sided (only ever lifts a nonzero
+//     command toward the threshold, never floors a genuine zero), so it
+//     cannot manufacture a new zero-crossing the way a symmetric minimum-
+//     speed clamp can.
+//
+// |duty| >= outputDeadband_ is unaffected either way — passes straight into
+// the dwell/same-sign logic below, exactly as before this ticket.
 // ---------------------------------------------------------------------------
 void NezhaMotor::writeShapedDuty(float duty, uint32_t now)
 {
-    if (duty == 0.0f || fabsf(duty) < outputDeadband_) {
-        // Stop always wins: immediate, unclamped, cancels any dwell.
+    if (duty == 0.0f) {
+        // Exact zero always wins: immediate, unclamped, cancels any dwell.
         dwelling_ = false;
         lastRequestedDuty_ = 0.0f;
         writeRawDuty(0.0f);
         return;
+    }
+
+    if (fabsf(duty) < outputDeadband_) {
+        // Genuine nonzero command, smaller than the plant can actually
+        // produce -- boost to the deadband floor (sign-preserving) instead
+        // of zeroing it, then fall through into the same dwell/same-sign
+        // logic below as any other nonzero duty.
+        duty = std::copysign(outputDeadband_, duty);
     }
 
     if (dwelling_) {

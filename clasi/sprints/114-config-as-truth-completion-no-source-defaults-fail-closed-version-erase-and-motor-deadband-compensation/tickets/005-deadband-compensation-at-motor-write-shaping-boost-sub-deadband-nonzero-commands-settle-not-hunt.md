@@ -2,9 +2,12 @@
 id: '005'
 title: 'Deadband compensation at motor write-shaping: boost sub-deadband nonzero commands,
   settle not hunt'
-status: open
-use-cases: [SUC-005]
-depends-on: ['003', '007']
+status: done
+use-cases:
+- SUC-005
+depends-on:
+- '003'
+- '007'
 github-issue: ''
 issue: deadband-compensation-small-commands-must-produce-real-motion.md
 completes_issue: true
@@ -135,28 +138,28 @@ algebraic argument.
 
 ## Acceptance Criteria
 
-- [ ] Exact `duty == 0.0f` still writes 0 immediately, unclamped, cancelling
+- [x] Exact `duty == 0.0f` still writes 0 immediately, unclamped, cancelling
       any dwell — byte-for-byte unchanged from today.
-- [ ] `0 < |duty| < outputDeadband_` writes `std::copysign(outputDeadband_,
+- [x] `0 < |duty| < outputDeadband_` writes `std::copysign(outputDeadband_,
       duty)` (i.e. the wheel actually moves) instead of 0.
-- [ ] `|duty| >= outputDeadband_` is unaffected (passes through to the
+- [x] `|duty| >= outputDeadband_` is unaffected (passes through to the
       existing logic unchanged).
-- [ ] Reversal-dwell interaction is unchanged for both the exact-zero and
+- [x] Reversal-dwell interaction is unchanged for both the exact-zero and
       the boosted-nonzero case (a boosted duty that also happens to be a
       sign reversal still triggers the dwell exactly as an unboosted
       same-magnitude duty would).
-- [ ] **Sim system test**: injecting an ~11 mm/s-equivalent terminal heading
+- [x] **Sim system test**: injecting an ~11 mm/s-equivalent terminal heading
       correction (against the shipped ~15 mm/s deadband) produces nonzero
       *measured* wheel velocity within one tick, and the move completes
       inside a bounded time window — not the ~8s arrive-timeout.
-- [ ] **Settle-not-hunt sweep** (empirical, not just algebraic): sweep a
+- [x] **Settle-not-hunt sweep** (empirical, not just algebraic): sweep a
       range of small residual errors near the dwell-tolerance boundary
       (e.g. across the model-reference feedback's current gain) and assert
       monotonic convergence into the dwell tolerance with a bounded
       overshoot count (e.g. at most one sign reversal before settling) — a
       sustained oscillation anywhere in the sweep is a failing result, not a
       tuning note.
-- [ ] The stakeholder's motion-shape bar (clean trapezoid, no oscillation,
+- [x] The stakeholder's motion-shape bar (clean trapezoid, no oscillation,
       no end bumps) holds on at least the straight and turn scenarios
       already exercised by the existing tour-closure/behavior-lock suites,
       run against this fix.

@@ -34,6 +34,7 @@
 // -DHOST_BUILD, then runs the resulting binary via subprocess and asserts
 // exit code 0.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -243,31 +244,107 @@ void scenarioReversalDwellWritesZeroThenHoldsThroughDeadline() {
   }
 }
 
-// 2. A sub-outputDeadband duty request writes 0, not a tiny signed value —
-//    including rapid sub-threshold sign dithering around zero, which never
-//    arms a reversal dwell (proven by an immediate, unsuppressed write of a
-//    later legitimate command).
-void scenarioSubDeadbandDutyImmediateAndUnclamped() {
-  beginScenario("sub-deadband duty is immediate/unclamped");
-  TestSim::SimPlant plant;
-  TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-  Devices::MotorConfig cfg = baseNezhaConfig();   // outputDeadband = 0.03 (baseNezhaConfig()'s own explicit set)
-  cfg.slewRate = 100.0f;
-  Devices::NezhaMotor m(plant, cfg);
+// 2. writeShapedDuty()'s two-case deadband boost (sprint 114 ticket 005,
+//    deadband-compensation-small-commands-must-produce-real-motion.md):
+//    exact duty==0.0f stays an immediate hard zero; a genuine nonzero
+//    sub-deadband duty is boosted (sign-preserving) to outputDeadband_
+//    instead of being zeroed; a duty already at/above the deadband passes
+//    through unmodified (never floored DOWN); and a boosted duty that also
+//    represents a sign reversal (relative to lastRequestedDuty_) still
+//    arms/holds/releases through the SAME reversal-dwell mechanism as any
+//    other nonzero-duty reversal would -- the boost happens BEFORE the
+//    dwell/sign-change check and falls straight into it unchanged, so a
+//    tiny reversal is never a backdoor around wedge protection. Replaces
+//    the pre-114-005 "sub-deadband duty is immediate/unclamped" scenario,
+//    whose own premise (every sub-deadband duty, any sign, always writes 0)
+//    is exactly the defect this ticket fixes.
+void scenarioOutputDeadbandBoostsSubDeadbandNonzeroDutyExactZeroStaysZero() {
+  beginScenario("output deadband boosts sub-deadband nonzero duty; exact zero stays zero");
 
-  dutyTick(m, bus, wireAddr, 0.01f, 50000);    // below deadband — writes 0, not 0.01
-  checkFloatEq(m.appliedDuty(), 0.0f, "sub-deadband request wrote 0");
-  dutyTick(m, bus, wireAddr, -0.02f, 60000);   // below deadband, opposite sign — still 0
-  checkFloatEq(m.appliedDuty(), 0.0f, "sub-deadband dither (opposite sign) still 0");
-  dutyTick(m, bus, wireAddr, 0.02f, 70000);    // dithering back — still 0
-  checkFloatEq(m.appliedDuty(), 0.0f, "sub-deadband dither back still 0");
+  // (a) Exact zero, as the very first command: immediate hard zero.
+  {
+    TestSim::SimPlant plant;
+    TestSim::ScriptedI2CHook bus(plant);
+    const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+    Devices::MotorConfig cfg = baseNezhaConfig();
+    cfg.slewRate = 100.0f;
+    Devices::NezhaMotor m(plant, cfg);
+    dutyTick(m, bus, wireAddr, 0.0f, 50000);
+    checkFloatEq(m.appliedDuty(), 0.0f, "exact duty==0.0f writes 0 immediately");
+  }
 
-  // If the dither above had incorrectly armed a reversal dwell, this next
-  // legitimate command would be suppressed to 0 instead of forwarded.
-  dutyTick(m, bus, wireAddr, 0.5f, 110000);
-  checkFloatEq(m.appliedDuty(), 0.5f,
-               "post-dither command forwarded immediately (no phantom dwell)");
+  // (b) Sub-deadband nonzero, positive: boosted to +outputDeadband_ (0.03),
+  //     not zeroed.
+  {
+    TestSim::SimPlant plant;
+    TestSim::ScriptedI2CHook bus(plant);
+    const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+    Devices::MotorConfig cfg = baseNezhaConfig();   // outputDeadband = 0.03
+    cfg.slewRate = 100.0f;
+    Devices::NezhaMotor m(plant, cfg);
+    dutyTick(m, bus, wireAddr, 0.01f, 50000);   // 0 < 0.01 < 0.03 -- genuine nonzero, sub-deadband
+    checkFloatEq(m.appliedDuty(), 0.03f,
+                 "sub-deadband positive duty boosted to +outputDeadband_, not zeroed");
+  }
+
+  // (c) Sub-deadband nonzero, negative: boosted to -outputDeadband_
+  //     (sign-preserving).
+  {
+    TestSim::SimPlant plant;
+    TestSim::ScriptedI2CHook bus(plant);
+    const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+    Devices::MotorConfig cfg = baseNezhaConfig();
+    cfg.slewRate = 100.0f;
+    Devices::NezhaMotor m(plant, cfg);
+    dutyTick(m, bus, wireAddr, -0.02f, 50000);   // 0 < 0.02 < 0.03
+    checkFloatEq(m.appliedDuty(), -0.03f,
+                 "sub-deadband negative duty boosted to -outputDeadband_ (sign preserved)");
+  }
+
+  // (d) At/above deadband: unaffected, passes through unmodified (never
+  //     floored down to outputDeadband_, and the boundary value itself
+  //     takes the passthrough branch, not the boost branch, since
+  //     `fabsf(duty) < outputDeadband_` is false when they are equal).
+  {
+    TestSim::SimPlant plant;
+    TestSim::ScriptedI2CHook bus(plant);
+    const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+    Devices::MotorConfig cfg = baseNezhaConfig();
+    cfg.slewRate = 100.0f;
+    Devices::NezhaMotor m(plant, cfg);
+    dutyTick(m, bus, wireAddr, 0.5f, 50000);
+    checkFloatEq(m.appliedDuty(), 0.5f, "above-deadband duty passes through unmodified");
+    dutyTick(m, bus, wireAddr, 0.03f, 110000);   // exactly AT the deadband boundary
+    checkFloatEq(m.appliedDuty(), 0.03f,
+                 "duty exactly at outputDeadband_ passes through (not re-boosted/altered)");
+  }
+
+  // (e) Reversal-dwell interaction: a boosted duty that is ALSO a sign
+  //     reversal (relative to lastRequestedDuty_) arms/holds/releases
+  //     through the SAME dwell mechanism scenario 1 above already proves
+  //     for an unboosted reversal.
+  {
+    TestSim::SimPlant plant;
+    TestSim::ScriptedI2CHook bus(plant);
+    const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+    Devices::MotorConfig cfg = baseNezhaConfig();   // reversalDwell = 100ms, outputDeadband = 0.03
+    cfg.slewRate = 100.0f;
+    Devices::NezhaMotor m(plant, cfg);
+
+    dutyTick(m, bus, wireAddr, 0.5f, 50000);      // establish a direction
+    checkFloatEq(m.appliedDuty(), 0.5f, "initial direction forwarded");
+
+    dutyTick(m, bus, wireAddr, -0.01f, 100000);   // sub-deadband, OPPOSITE sign -- boosts to -0.03, which IS a reversal
+    checkFloatEq(m.appliedDuty(), 0.0f,
+                 "boosted-duty reversal writes 0 immediately (dwell armed), exactly like an unboosted reversal");
+
+    dutyTick(m, bus, wireAddr, -0.01f, 150000);   // still inside the 100ms dwell (150 < 200ms deadline)
+    checkFloatEq(m.appliedDuty(), 0.0f, "held at 0 through the dwell window");
+
+    dutyTick(m, bus, wireAddr, -0.01f, 240000);   // dwell elapsed -- forwards the boosted duty
+    checkFloatEq(m.appliedDuty(), -0.03f,
+                 "dwell elapsed -- forwards the boosted new-direction duty (-outputDeadband_)");
+  }
 }
 
 // --- MotorArmor decorator scenarios (via MockMotor) ---------------------
@@ -1056,11 +1133,150 @@ void scenarioExplicitZeroWriteShapingIsPassThrough() {
                "sign flip forwarded immediately at reversalDwell=0 -- no dwell armed");
 }
 
+// 14. Settle-not-hunt sweep (sprint 114 ticket 005 -- Design Rationale
+//     Decision 4's own explicit "prove it empirically, don't just assert
+//     it" requirement, sprint.md). Decision 4's structural argument for why
+//     this boost is safe where the deleted App::Pilot min-speed floor
+//     (112-004) was not: the boost sits INSIDE NezhaMotor's own velocity-PID
+//     closed loop, so real measured velocity feeds back every tick, AND
+//     (the load-bearing half of the argument, re-derived here) the OUTER
+//     loop's own commanded target is itself proportional to a residual
+//     ERROR that shrinks as real motion closes it (App::Pilot's
+//     `omega += headingKp_ * thetaErr` / `distanceKp_ * (sRef - sMeas)`) --
+//     a boosted write is never invisible, so the very next tick's target is
+//     already smaller. This is NOT the same claim as "NezhaMotor's own
+//     velocity PID can smoothly HOLD an arbitrary constant velocity below
+//     the deadband floor forever" -- it structurally cannot (the plant's
+//     achievable-velocity set excludes the open interval (0,
+//     outputDeadband_/kff), so a controller asked to hold a FIXED point
+//     inside that gap has no choice but to dither between 0 and the floor).
+//     An earlier version of this sweep drove NezhaMotor with a fixed
+//     constant target and found exactly that dither (up to ~190 sign
+//     reversals per case) -- a REAL finding, but about a scenario the
+//     production system never actually poses: App::Pilot never asks for a
+//     constant sub-floor velocity forever, it asks for a velocity
+//     proportional to a shrinking residual. This sweep instead drives an
+//     explicit OUTER P loop (`target = kpOuter * residual`, `residual -=
+//     measuredVel * dt`) around the REAL NezhaMotor + writeShapedDuty()
+//     fix, mirroring App::Pilot's own error-driven-target shape (the same
+//     shape, not the full Pilot/Executor/HeadingSource graph, which the sim
+//     SYSTEM test in deadband_terminal_correction_harness.cpp exercises
+//     end-to-end) -- the actual claim under test.
+//
+//     Sweeps small initial residuals near a real dwell-tolerance
+//     neighborhood (bench_test_config.cpp's own heading_dwell_tol=3deg at
+//     trackWidth/2=64mm ~= 3.3mm; distance_tol=6mm) AND the outer loop's own
+//     gain (the sweep axis the ticket's own acceptance criteria call out:
+//     "across the model-reference feedback's current gain"), matching the
+//     order of magnitude of bench_test_config.cpp's own
+//     distance_kp=2.5/heading_kp=2.5. Every swept case must settle --
+//     converge the residual into a small tolerance band and STAY there --
+//     with AT MOST ONE sign reversal (one overshoot past the target, then
+//     settle), never a sustained oscillation.
+void scenarioDeadbandBoostSettlesNotHuntsAcrossResidualSweep() {
+  beginScenario("deadband boost settles (not hunts) across a residual-error/outer-gain sweep");
+
+  const float kResiduals[] = {3.0f, 5.0f, 8.0f, 12.0f, 20.0f};   // [mm] initial residual error
+  const float kOuterKps[] = {1.5f, 2.5f, 4.0f};                  // [1/s] outer P loop gain
+
+  constexpr float kKff = 0.002f;       // [duty per mm/s] matches bench_test_config.cpp's own convention
+  constexpr float kMotorKp = 0.01f;    // NezhaMotor's own embedded velocity-PID proportional gain
+  constexpr float kSettleTol = 1.5f;   // [mm] small tolerance band around a fully-closed residual
+  constexpr int kTicks = 300;          // 6s of virtual time at dtMs=20 -- generous convergence budget
+  constexpr int kTailTicks = 50;       // last 1s of the run -- "settled and STAYS settled"
+  constexpr uint32_t dtMs = 20;
+  constexpr float dtS = 0.02f;
+
+  for (float kpOuter : kOuterKps) {
+    for (float e0 : kResiduals) {
+      TestSim::SimPlant plant;
+      TestSim::ScriptedI2CHook bus(plant);
+      const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+      Devices::MotorConfig cfg = baseNezhaConfig();   // outputDeadband=0.03, reversalDwell=100ms
+      cfg.velGains = Devices::Gains{/*kp=*/kMotorKp, /*ki=*/0.0f, /*kff=*/kKff, /*iMax=*/1.0f, /*kaw=*/2.0f};
+      cfg.velDeadband = 0.5f;   // [mm/s] small -- keeps the PID's P+FF terms engaged for every swept target
+
+      Devices::NezhaMotor motor(plant, cfg);
+
+      float residual = e0;   // [mm] the outer loop's own error -- shrinks with real measured motion
+      float position = 0.0f;
+      float measuredVel = 0.0f;
+      uint64_t nowUs = 0;
+
+      // Prime cycle -- establishes lastPosition_/lastTickUs_, no velocity yet.
+      scriptEncoderRequestCollect(bus, wireAddr, position);
+      motor.requestSample();
+      motor.tick(nowUs);
+
+      std::vector<float> residuals;
+      residuals.reserve(kTicks + 1);
+      residuals.push_back(residual);
+
+      for (int i = 0; i < kTicks; ++i) {
+        // Outer P loop -- App::Pilot's own error-driven-target shape,
+        // applied directly to the residual (NezhaMotor has no heading/
+        // distance concept of its own; the sim SYSTEM test exercises the
+        // REAL App::Pilot graph end to end).
+        float target = kpOuter * residual;
+        motor.setVelocity(target);
+
+        // Plant responds to whatever ACTUALLY landed on the wire last cycle
+        // (appliedDuty() -- the real, shaped write, reversal-dwell/write-
+        // throttle/slew all included, exactly as scenarioPidOnChasesVelocityTarget
+        // above does), same simple first-order stand-in.
+        float duty = motor.appliedDuty();
+        measuredVel += (duty * 500.0f - measuredVel) * 0.1f;
+        position += measuredVel * dtS;
+        residual -= measuredVel * dtS;   // the outer error closes with REAL motion, not the target
+
+        nowUs += static_cast<uint64_t>(dtMs) * 1000;
+        scriptEncoderRequestCollect(bus, wireAddr, position);
+        motor.requestSample();
+        motor.tick(nowUs);
+
+        residuals.push_back(residual);
+      }
+
+      char label[128];
+      std::snprintf(label, sizeof(label), "e0=%.1fmm kpOuter=%.2f/s", static_cast<double>(e0),
+                    static_cast<double>(kpOuter));
+
+      // Overshoot count: a genuine sign reversal of the residual, gated on
+      // the PRIOR residual being outside the settle band -- a sample
+      // hovering near 0 and dithering sign trivially is exactly what
+      // settled-and-holding looks like, not a hunt.
+      int reversals = 0;
+      for (size_t i = 1; i < residuals.size(); ++i) {
+        bool prevOutside = std::fabs(residuals[i - 1]) > kSettleTol;
+        bool signFlip = (residuals[i] > 0.0f) != (residuals[i - 1] > 0.0f);
+        if (prevOutside && signFlip) ++reversals;
+      }
+      checkTrue(reversals <= 1, std::string("bounded overshoot (<=1 sign reversal) -- ") + label +
+                                     ": saw " + std::to_string(reversals) + " reversal(s)");
+
+      // Settled and STAYS settled -- the tail of the run holds inside the
+      // tolerance band, proving convergence rather than one lucky crossing.
+      bool tailSettled = true;
+      float worstTailResidual = 0.0f;
+      for (size_t i = residuals.size() - kTailTicks; i < residuals.size(); ++i) {
+        worstTailResidual = std::max(worstTailResidual, std::fabs(residuals[i]));
+        if (std::fabs(residuals[i]) > kSettleTol) tailSettled = false;
+      }
+      char tailMsg[192];
+      std::snprintf(tailMsg, sizeof(tailMsg),
+                    "settles and stays within +/-%.1fmm -- %s (worst tail residual %.2fmm)",
+                    static_cast<double>(kSettleTol), label, static_cast<double>(worstTailResidual));
+      checkTrue(tailSettled, tailMsg);
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
   scenarioReversalDwellWritesZeroThenHoldsThroughDeadline();
-  scenarioSubDeadbandDutyImmediateAndUnclamped();
+  scenarioOutputDeadbandBoostsSubDeadbandNonzeroDutyExactZeroStaysZero();
   scenarioStandstillGuardedResetGatesOnRestTicks();
   scenarioWedgeLatchAndSuspectDeriveAsBefore();
   scenarioRequestCollectPairingYieldsExpectedPositionVelocity();
@@ -1073,6 +1289,7 @@ int main() {
   scenarioApplyGainsTravelCalibAppliesWhenPresentOtherwiseUnchanged();
   scenarioReconfigureGuardedWholeConfigReplacement();
   scenarioExplicitZeroWriteShapingIsPassThrough();
+  scenarioDeadbandBoostSettlesNotHuntsAcrossResidualSweep();
 
   if (g_failureCount == 0) {
     std::printf("OK: all devices motor scenarios passed\n");
