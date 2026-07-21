@@ -322,6 +322,14 @@ class SimHarness {
       (void)applied;
       hasConfiguredMotorL_ = true;
     }
+    // 114-007 (Decision 7): teach the plant this port's own mount
+    // orientation so its OtosPlant-feeding boundary can correct for a
+    // mirror-mounted motor -- see SimPlant::setFwdSign()'s own comment.
+    // Routes through this SAME call site sim_ctypes.cpp's
+    // sim_configure_motor() already uses (harness->configureMotor()), so
+    // both the C++ direct-harness path and the ctypes/TestGUI robot-select
+    // path pick this up with this one change.
+    plant_.setFwdSign(static_cast<int>(port), cfg.fwdSign);
     maybeMarkConfigured();
   }
 

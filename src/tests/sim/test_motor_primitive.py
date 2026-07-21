@@ -27,8 +27,6 @@ import argparse
 import math
 import pathlib
 
-import pytest
-
 from robot_radio.io.sim_loop import SimLoop
 from robot_radio.testgui.transport import _sim_lib_path
 
@@ -188,53 +186,26 @@ def main() -> None:
 
 # --- pytest entry points (tight tolerances -- zero-error sim) --------------
 #
-# 114-001 diagnostic finding: since ideal_loop() now pushes tovez_nocal.json's
-# REAL fwd_sign (+1 left / -1 right -- issue 088-002's own documented,
-# hardware-verified mirror-mount correction) all the way to the motor for the
-# first time (Revision 1's NezhaMotor::reconfigure() is what finally makes
-# Devices::MotorArmor::reconfigure()/configureMotor() reach the real motor
-# config at all -- previously a no-op), a PRE-EXISTING, orthogonal gap
-# surfaced: TestSim::WheelPlant/SimPlant have no notion of a mirror-mounted
-# motor -- they interpret the written CW/CCW+speed byte pair the SAME way on
-# every port, with no per-port "this motor is physically mounted backwards"
-# correction the way a REAL Nezha chip's physical wheel does. Under a
-# same-sign fwd_sign config (every OTHER sim test in this tree, via
-# bench_test_config.cpp's fwdSign=+1/+1 stand-in), this never mattered. Under
-# tovez_nocal.json's real asymmetric fwd_sign, a commanded straight twist
-# (v_x-only, omega=0) drives the two WheelPlants in OPPOSITE physical
-# directions -- the simulated robot spins in place instead of translating,
-# even though the FIRMWARE's own encoder readback (which applies the SAME
-# fwd_sign when DECODING) self-consistently believes it drove straight. This
-# is a genuine simulator-model gap, not a regression in this ticket's own
-# config-completeness-gate/reconfigure() work -- fixing it means teaching
-# WheelPlant/SimPlant about per-port mount orientation, which touches files
-# outside this ticket's scope and is a real architecture decision on its own.
-# xfail(strict=False) here, matching this codebase's own established pattern
-# (behavior_lock_harness.cpp/test_behavior_lock.py) for "today's patch stack
-# cannot yet satisfy this," rather than silently widening the tolerance to
-# hide a real (if pre-existing and out-of-scope) discrepancy.
+# 114-001 diagnostic finding, fixed by 114-007: since ideal_loop() pushes
+# tovez_nocal.json's REAL fwd_sign (+1 left / -1 right -- issue 088-002's own
+# documented, hardware-verified mirror-mount correction) all the way to the
+# motor, a pre-existing, orthogonal gap surfaced -- TestSim::WheelPlant/
+# SimPlant had no notion of a mirror-mounted motor, so a commanded straight
+# twist drove the two WheelPlants in opposite physical directions and the
+# simulated robot spun in place instead of translating, even though
+# firmware's own encoder decode (which applies the same fwd_sign) stayed
+# self-consistent. Sprint 114 ticket 007 (sprint.md Revision 2, Decision 7)
+# taught TestSim::SimPlant each port's fwd_sign and applies it only at the
+# two call sites that feed OtosPlant ground truth (tick()/setTruePose()),
+# leaving WheelPlant's own physics and the wire-level encoder-read path
+# unchanged -- see sim_plant.h's setFwdSign() comment for the full fix.
 
-@pytest.mark.xfail(
-    reason="TestSim::WheelPlant/SimPlant does not model per-port motor mount "
-           "orientation -- tovez_nocal.json's real, hardware-verified asymmetric "
-           "fwd_sign (issue 088-002) makes the sim plant spin in place instead of "
-           "translating straight, now that reconfigure() (114-001 Revision 1) "
-           "actually reaches the real motor for the first time. Pre-existing, "
-           "orthogonal gap, not a 114-001 regression -- see this file's own "
-           "'pytest entry points' section comment.",
-    strict=False,
-)
 def test_distance_encoder_and_otos_match_truth():
     d = distance_probe(150.0, 2.0)
     assert abs(d["enc"] - d["true_x"]) < 2.0, d
     assert abs(d["otos_x"] - d["true_x"]) < 2.0, d
 
 
-@pytest.mark.xfail(
-    reason="Same root cause as test_distance_encoder_and_otos_match_truth above -- "
-           "see this file's own 'pytest entry points' section comment.",
-    strict=False,
-)
 def test_heading_encoder_and_otos_match_truth():
     h = heading_probe(1.0, 2.0)
     assert abs(h["pose_h"] - h["true_h"]) < 1.0, h

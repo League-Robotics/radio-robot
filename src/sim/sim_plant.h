@@ -156,6 +156,27 @@ class SimPlant : public Devices::I2CBus {
   // own setLinearScalarReg()/setAngularScalarReg() comment.
   void setOtosRawScaleErr(float linearFraction, float angularFraction);  // [fractional over/under-report, 0=perfect]
 
+  // Motor mount orientation (114-007, Decision 7 -- NOT a fault-injection
+  // knob like the ones above; a configuration fact, mirroring firmware's own
+  // Devices::MotorConfig::fwdSign). A mirror-mounted motor pair's two wheel
+  // shafts turn in OPPOSITE physical directions for one straight command --
+  // firmware's own fwdSign already accounts for this symmetrically on both
+  // the write-encode and encoder-decode sides (nezha_motor.cpp), but nothing
+  // downstream of the wire previously corrected for it before combining the
+  // two wheels' positions into a vehicle-frame pose. This setter records
+  // that same per-port sign so tick()/setTruePose() below can apply it ONLY
+  // at the boundary that feeds OtosPlant -- see those methods' own comments.
+  // port: 1 = left, 2 = right (same convention as every other per-port knob
+  // above). sign: +1 or -1. Defaults to +1 for both ports -- a genuine no-op
+  // for every existing symmetric-fwd_sign harness that never calls this.
+  void setFwdSign(int port, int sign);
+
+  // WheelPlant's own physics (step()/position()/velocity()) and the
+  // wire-level encoder-read path (handleMotorRead() above) are NEVER
+  // touched by fwdSign -- both already correctly reproduce what a real
+  // chip's raw encoder reports for a physically-mirrored motor. Only the
+  // two call sites below, which feed OtosPlant, apply the correction.
+
   // Plant teleport (sim command-surface fix): snaps the OtosPlant's ground-
   // truth pose to (x, y, heading) AND resets both WheelPlants' positions to
   // 0 in the same call -- see OtosPlant::reset()'s own comment for why the
@@ -189,6 +210,12 @@ class SimPlant : public Devices::I2CBus {
   // this ticket's own acceptance criteria).
   float leftDuty_ = 0.0f;   // [-1,1]
   float rightDuty_ = 0.0f;  // [-1,1]
+
+  // Per-port mount-orientation sign (114-007, setFwdSign() above) -- applied
+  // ONLY where tick()/setTruePose() feed OtosPlant, never to leftDuty_/
+  // rightDuty_ or either WheelPlant. +1 (mount-neutral) is a genuine no-op.
+  int leftFwdSign_ = 1;
+  int rightFwdSign_ = 1;
 
   // The port most recently selected by a 0x46 encoder-select write --
   // defaultRead()'s motor branch reports THIS port's encoder. Nezha

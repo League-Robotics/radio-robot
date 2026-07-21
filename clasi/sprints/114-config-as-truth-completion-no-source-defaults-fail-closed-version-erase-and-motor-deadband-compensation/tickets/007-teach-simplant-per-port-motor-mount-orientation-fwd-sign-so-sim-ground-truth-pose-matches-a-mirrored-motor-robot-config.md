@@ -1,11 +1,14 @@
 ---
-id: "007"
-title: "Teach SimPlant per-port motor mount orientation (fwd_sign) so sim ground-truth pose matches a mirrored-motor robot config"
-status: open
-use-cases: [SUC-007]
-depends-on: ["001"]
-github-issue: ""
-issue: ""
+id: '007'
+title: Teach SimPlant per-port motor mount orientation (fwd_sign) so sim ground-truth
+  pose matches a mirrored-motor robot config
+status: done
+use-cases:
+- SUC-007
+depends-on:
+- '001'
+github-issue: ''
+issue: ''
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
@@ -144,25 +147,25 @@ bug at the wire-decode step instead of fixing it.
 
 ## Acceptance Criteria
 
-- [ ] `SimPlant::setFwdSign()` exists, defaults to `+1` per port, and is a
+- [x] `SimPlant::setFwdSign()` exists, defaults to `+1` per port, and is a
       genuine no-op for any caller that never invokes it — every existing
       symmetric-`fwd_sign` harness (all 9 via `bench_test_config.cpp`'s
       `fwdSign=+1/+1`) produces byte-for-byte unchanged ground truth.
-- [ ] `SimHarness::configureMotor()` (and therefore `sim_ctypes.cpp`'s
+- [x] `SimHarness::configureMotor()` (and therefore `sim_ctypes.cpp`'s
       `sim_configure_motor()`) propagates `cfg.fwdSign` to
       `SimPlant::setFwdSign()`.
-- [ ] A straight twist (`v_x` nonzero, `omega=0`) against
+- [x] A straight twist (`v_x` nonzero, `omega=0`) against
       `tovez_nocal.json`'s real `fwd_sign` (+1 left / -1 right) produces
       ground-truth OTOS translation (nonzero displacement, heading change
       near zero) — not a spin.
-- [ ] `test_distance_encoder_and_otos_match_truth` and
+- [x] `test_distance_encoder_and_otos_match_truth` and
       `test_heading_encoder_and_otos_match_truth` pass with their `xfail`
       markers removed.
-- [ ] `WheelPlant::position()`/`velocity()`/`reportedPosition()` and every
+- [x] `WheelPlant::position()`/`velocity()`/`reportedPosition()` and every
       existing fault-injection-knob behavior are byte-for-byte unchanged —
       this fix touches only the `OtosPlant`-feeding boundary in `SimPlant`,
       never `WheelPlant`'s own physics or the wire-level encoder path.
-- [ ] No `src/firm/` file is touched — this is a test/sim-infrastructure
+- [x] No `src/firm/` file is touched — this is a test/sim-infrastructure
       fix; firmware's own `fwd_sign` encode/decode round trip was already
       correct (see Context above).
 
