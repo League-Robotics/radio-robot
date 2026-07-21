@@ -7,6 +7,7 @@ status: in-progress
 related: []
 tickets:
 - 115-001
+sprint: '115'
 ---
 
 # SimLoop hook registration races the tick thread

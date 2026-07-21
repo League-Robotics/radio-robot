@@ -1,8 +1,11 @@
 ---
 status: pending
+sprint: '117'
 ---
 
 # Predict-to-now odometry: estimator + ring capture/dump + validation + trajectory controller
+
+> **Re-scope note (2026-07-21, post-gut planning):** this issue's MECHANISM sections are partially superseded by the minimal-firmware gut. The on-chip measurement rings, ring-dump commands, capture builds, and clock-sync-stamped ring analysis are replaced by the simpler dataset path: the tightened telemetry frame (timestamped per-source readings) emitted every loop iteration, logged host-side (`telemetry-frame-tightening-amendment-to-gut-s1.md`). What STANDS from this issue: the predict-to-now estimator core (`whereAmI()` / `stateAt(t)`, wheel + body peer estimates, ZOH v1 then fit-based), the leave-one-out one-step-ahead RMS validation methodology (now run over the host TLM log instead of dumped rings), the fake OTOS, the external/camera pose source + time sync (clock_sync revival still applies — `PING t=` lands in the gut), and the remaining-distance trajectory controller as the end goal. Detail planning re-derives from the post-gut minimal base.
 
 ## Description
 
