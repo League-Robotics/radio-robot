@@ -7,7 +7,6 @@ filed_by: programmer (111-002, discovered while fixing sim_api_harness.cpp's sta
 status: in-progress
 related:
 - motion-control-terminal-blips-reconciled-fix-plan.md
-sprint: '115'
 tickets:
 - 115-002
 ---

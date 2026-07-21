@@ -1,6 +1,5 @@
 ---
 status: pending
-sprint: '119'
 ---
 
 # Bench: 90° turns spin forever (turn non-termination) — the hard blocker to a completing tour

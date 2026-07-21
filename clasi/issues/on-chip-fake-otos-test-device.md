@@ -1,6 +1,5 @@
 ---
 status: pending
-sprint: '117'
 ---
 
 # On-chip fake/simulated OTOS test device for the bench (synthetic OTOS pose, heading from encoders)

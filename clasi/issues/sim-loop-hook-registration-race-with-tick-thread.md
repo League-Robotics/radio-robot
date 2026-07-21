@@ -5,7 +5,6 @@ filed: 2026-07-19
 filed_by: programmer (111-002, baseline sim-suite triage)
 status: in-progress
 related: []
-sprint: '115'
 tickets:
 - 115-001
 ---

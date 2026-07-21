@@ -1,6 +1,5 @@
 ---
 status: pending
-sprint: '119'
 ---
 
 # nocal straight-leg terminal wedge is a pure-P velocity droop — needs a velocity integrator (vel_ki)

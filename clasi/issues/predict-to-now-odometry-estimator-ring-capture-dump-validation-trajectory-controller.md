@@ -1,6 +1,5 @@
 ---
 status: pending
-sprint: '119'
 ---
 
 # Predict-to-now odometry: estimator + ring capture/dump + validation + trajectory controller

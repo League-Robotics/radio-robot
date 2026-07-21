@@ -1,6 +1,5 @@
 ---
 status: in-progress
-sprint: '115'
 tickets:
 - 115-003
 ---

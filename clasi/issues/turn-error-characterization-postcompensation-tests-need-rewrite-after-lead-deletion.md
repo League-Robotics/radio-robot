@@ -6,7 +6,6 @@ filed_by: programmer (111-002, baseline sim-suite triage)
 status: pending
 related:
 - motion-control-terminal-blips-reconciled-fix-plan.md
-sprint: '119'
 ---
 
 # test_turn_error_characterization.py postcompensation tests need attention

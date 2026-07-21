@@ -7,7 +7,6 @@ status: pending
 related:
 - motion-control-terminal-blips-reconciled-fix-plan.md
 - later/turn-lead-compensation-gain-cotuning.md
-sprint: '115'
 tickets:
 - 115-003
 ---
