@@ -60,10 +60,14 @@ Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
   cfg.velDeadband = src.min_duty;
   cfg.slewRate = src.slew_rate;
   cfg.port = src.port;
-  cfg.reversalDwell.has = src.reversal_dwell.has;
-  cfg.reversalDwell.val = src.reversal_dwell.val;
-  cfg.outputDeadband.has = src.output_deadband.has;
-  cfg.outputDeadband.val = src.output_deadband.val;
+  // Devices::MotorConfig's reversalDwell/outputDeadband are plain required
+  // floats (sprint 114 ticket 003) -- gen_boot_config.py + ticket 002's
+  // required-key gate guarantee src.reversal_dwell/src.output_deadband are
+  // always set (.has == true) here, so read .val directly rather than
+  // changing the wire msg::MotorConfig itself (still Opt<float> -- the wire
+  // schema is out of scope, see the ticket's own Approach step 6).
+  cfg.reversalDwell = src.reversal_dwell.val;
+  cfg.outputDeadband = src.output_deadband.val;
   cfg.polled = src.polled;
   return cfg;
 }

@@ -36,6 +36,12 @@ keys via `_require()`:
     vel_kaw/vel_filt (the velocity PID, in the NezhaMotor duty [-1,1] plant
     scale — control._vel_gains_domain documents this; NOT the old
     RobotConfig PWM-percent scale, kp ~ 0.3).
+  * `output_deadband_for_config()` / `reversal_dwell_for_config()` —
+    control.output_deadband [-1,1] / control.reversal_dwell_ms [ms] (sprint
+    114 ticket 003) — Devices::NezhaMotor::writeShapedDuty()'s output-
+    deadband floor and reversal-dwell hold; previously left unset (.has ==
+    false) on purpose, ship-defaulted (0.03 / 100.0) inside NezhaMotor's own
+    constructor.
   * `trackwidth_for_config()` — geometry.trackwidth -> DrivetrainConfig.trackwidth.
   * `otos_boot_config_values()` — geometry.odometry_offset_mm.{x,y,yaw_rad}
     and calibration.otos_linear_scale/otos_angular_scale (086-005) ->
@@ -340,6 +346,29 @@ def vel_gains_for_config(cfg: dict):
     return float(kp), float(ki), float(kff), float(imax), float(kaw), float(filt)
 
 
+def output_deadband_for_config(cfg: dict):
+    """Return control.output_deadband (duty fraction [-1,1]) -- Devices::
+    NezhaMotor::writeShapedDuty()'s output-deadband floor (folded from the
+    old MotorArmor base) and MotorArmor's own wedge-suspect motion-gate
+    threshold. REQUIRED as of sprint 114 ticket 003 (config-as-truth
+    completion) -- previously left unset (.has == false) on purpose, with
+    NezhaMotor's own kDefaultOutputDeadband (0.03) substituted in the
+    constructor whenever a config arrived unset; that substitution is gone,
+    so every robot JSON must now carry a real value."""
+    return float(_require(cfg, "control", "output_deadband"))
+
+
+def reversal_dwell_for_config(cfg: dict):
+    """Return control.reversal_dwell_ms [ms] -- Devices::NezhaMotor::
+    writeShapedDuty()'s reversal-dwell hold time (folded from the old
+    MotorArmor base). REQUIRED as of sprint 114 ticket 003 (config-as-truth
+    completion) -- previously left unset (.has == false) on purpose, with
+    NezhaMotor's own kDefaultReversalDwell (100.0) substituted in the
+    constructor whenever a config arrived unset; that substitution is gone,
+    so every robot JSON must now carry a real value."""
+    return float(_require(cfg, "control", "reversal_dwell_ms"))
+
+
 def heading_gains_for_config(cfg: dict):
     """Return (heading_kp, heading_kd) for the outer heading-loop PD
     (098-001, architecture-update.md M1/M2). Both keys REQUIRED as of
@@ -484,6 +513,8 @@ def generate(cfg: dict, source_path: str) -> str:
     try:
         trackwidth   = trackwidth_for_config(cfg)
         vel_kp, vel_ki, vel_kff, vel_imax, vel_kaw, vel_filt = vel_gains_for_config(cfg)
+        output_deadband = output_deadband_for_config(cfg)
+        reversal_dwell = reversal_dwell_for_config(cfg)
         travel_calib = travel_calib_for_ports(cfg)
         fwd_sign     = fwd_sign_for_ports(cfg)
         polled       = polled_for_ports()
@@ -544,10 +575,6 @@ void defaultMotorConfigs(msg::MotorConfig* out) {{
     velGains.i_max = {_f(vel_imax)};
     velGains.kaw = {_f(vel_kaw)};   // anti-windup back-calculation (velocity_pid.cpp; 0 = off)
 
-    // reversal_dwell / output_deadband are left unset (.has == false) on
-    // purpose — Hal::Motor::configure() applies the real ship defaults (100 ms
-    // / 0.03) whenever a config arrives unset; that is the one place those
-    // defaults live.
     for (uint32_t i = 0; i < kMotorConfigCount; ++i) {{
         out[i] = msg::MotorConfig();
         out[i].setPort(i + 1);
@@ -555,6 +582,13 @@ void defaultMotorConfigs(msg::MotorConfig* out) {{
         // EMA coeff — from control.vel_filt (fallback default); a=0 would pin
         // reported velocity at 0 forever regardless of real motion.
         out[i].setVelFiltAlpha({_f(vel_filt)});
+        // Write-shaping floor/hold — baked from the robot JSON's
+        // control.output_deadband/control.reversal_dwell_ms (sprint 114
+        // ticket 003, config-as-truth completion). REQUIRED as of this
+        // ticket: Devices::NezhaMotor no longer substitutes a ship default
+        // when these arrive unset, so every build must emit a real value.
+        out[i].setOutputDeadband({_f(output_deadband)});   // [-1,1] fraction
+        out[i].setReversalDwell({_f(reversal_dwell)});   // [ms]
     }}
 
     // Per-port forward-sign — baked from the robot JSON's calibration.

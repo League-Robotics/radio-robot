@@ -56,19 +56,17 @@ class MotorArmor : public Motor {
   // — port/fwdSign/velGains/etc, previously never reached through this
   // decorator at all), then, only if the inner motor actually accepted it,
   // refreshes this armor's own derived motionThreshold_ cache from the
-  // SAME config's outputDeadband field (ship default when unset) — the SAME
-  // value the inner NezhaMotor's write shaping uses for its deadband, read
-  // here for the independent "was the motor actually being asked to move"
-  // gate. Only updating motionThreshold_ when applied is true means an
-  // armor whose inner motor refused the new config never silently drifts
-  // its own wedge-detection threshold away from what the motor actually
-  // uses.
+  // SAME config's required outputDeadband field (sprint 114 ticket 003 — no
+  // more ship-default substitution here either) — the SAME value the inner
+  // NezhaMotor's write shaping uses for its deadband, read here for the
+  // independent "was the motor actually being asked to move" gate. Only
+  // updating motionThreshold_ when applied is true means an armor whose
+  // inner motor refused the new config never silently drifts its own
+  // wedge-detection threshold away from what the motor actually uses.
   bool reconfigure(const MotorConfig& config) override {
     bool applied = inner_.reconfigure(config);
     if (applied) {
-      motionThreshold_ = config.outputDeadband.has
-                              ? config.outputDeadband.val
-                              : kDefaultMotionThreshold;
+      motionThreshold_ = config.outputDeadband;
     }
     return applied;
   }

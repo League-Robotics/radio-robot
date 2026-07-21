@@ -94,6 +94,8 @@
     "vel_imax": 20.0,
     "vel_kaw": 3.0,
     "vel_filt": 0.15,
+    "output_deadband": 0.03,
+    "reversal_dwell_ms": 100.0,
     "sync": 0.0,
     "yaw_rate_max": 60,
     "max_rot_accel_dps2": 1145.9155902616465,

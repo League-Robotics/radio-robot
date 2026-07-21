@@ -160,10 +160,19 @@ class MockMotor : public Devices::Motor {
   Devices::Gains gains_{};
 };
 
-// Ship-default config (write-shaping/motion-gate fields left unset —
-// NezhaMotor's ctor and MotorArmor::configure() substitute
-// kDefaultReversalDwell=100ms / kDefaultOutputDeadband=0.03).
-Devices::MotorConfig defaultArmorConfig() { return Devices::MotorConfig{}; }
+// Config for the MotorArmor decorator scenarios below (MockMotor inner --
+// only outputDeadband is functionally relevant here, MotorArmor::
+// reconfigure() reads it straight into its own motionThreshold_ motion-gate
+// cache; MockMotor ignores config entirely, so reversalDwell is moot).
+// Sprint 114 ticket 003: MotorConfig's write-shaping fields are now plain
+// required floats -- no more ctor/reconfigure() ship-default substitution --
+// so this sets the historical ship-default value (0.03) explicitly, matching
+// what a real robot's config always carries.
+Devices::MotorConfig defaultArmorConfig() {
+  Devices::MotorConfig cfg;
+  cfg.outputDeadband = 0.03f;   // [-1,1] fraction
+  return cfg;
+}
 
 // --- Write-shaping scenarios (real NezhaMotor — the dwell/deadband gate
 // moved INTO the leaf's own writeShapedDuty(), 2026-07-18 restructure) ----
@@ -197,7 +206,7 @@ void scenarioReversalDwellWritesZeroThenHoldsThroughDeadline() {
     TestSim::SimPlant plant;
     TestSim::ScriptedI2CHook bus(plant);
     const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-    Devices::MotorConfig cfg = baseNezhaConfig();   // dwell/deadband unset -> ship 100ms/0.03
+    Devices::MotorConfig cfg = baseNezhaConfig();   // dwell/deadband = 100ms/0.03 (baseNezhaConfig()'s own explicit set)
     cfg.slewRate = 100.0f;                          // no slew clamping — isolates the dwell
     Devices::NezhaMotor m(plant, cfg);
 
@@ -243,7 +252,7 @@ void scenarioSubDeadbandDutyImmediateAndUnclamped() {
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-  Devices::MotorConfig cfg = baseNezhaConfig();   // outputDeadband unset -> ship 0.03
+  Devices::MotorConfig cfg = baseNezhaConfig();   // outputDeadband = 0.03 (baseNezhaConfig()'s own explicit set)
   cfg.slewRate = 100.0f;
   Devices::NezhaMotor m(plant, cfg);
 
@@ -406,6 +415,13 @@ Devices::MotorConfig baseNezhaConfig() {
   cfg.fwdSign = 1;
   cfg.wheelTravelCalib = 1.0f;
   cfg.velFiltAlpha = 1.0f;   // no smoothing — velocity() reflects each tick's raw difference-quotient exactly
+  // Write-shaping — sprint 114 ticket 003: reversalDwell/outputDeadband are
+  // now plain required floats (no more NezhaMotor ctor ship-default
+  // substitution), so this harness sets the historical ship-default values
+  // (100ms/0.03) explicitly, matching exactly what every scenario below got
+  // implicitly before this ticket.
+  cfg.reversalDwell = 100.0f;    // [ms]
+  cfg.outputDeadband = 0.03f;    // [-1,1] fraction
   return cfg;
 }
 
@@ -1007,6 +1023,39 @@ void scenarioReconfigureGuardedWholeConfigReplacement() {
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the reconfigure() sequence");
 }
 
+// 13. Explicit all-zero write shaping (reversalDwell=0/outputDeadband=0) is
+//     a pure pass-through -- proves the Opt<float> -> float collapse
+//     (sprint 114 ticket 003) did not silently change the MEANING of an
+//     explicit zero. A duty that would have been zeroed under the old ship
+//     default (0.03) lands unmodified, and a sign flip forwards immediately
+//     with no intermediate zero write -- matching writeShapedDuty()'s own
+//     documented "reversalDwell_ == 0 skips the dwell transition entirely"
+//     contract (nezha_motor.cpp).
+void scenarioExplicitZeroWriteShapingIsPassThrough() {
+  beginScenario("explicit reversalDwell=0/outputDeadband=0 is a pure pass-through");
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::MotorConfig cfg = baseNezhaConfig();
+  cfg.reversalDwell = 0.0f;    // [ms] explicit off, distinct from "unset"
+  cfg.outputDeadband = 0.0f;   // [-1,1] explicit off, distinct from "unset"
+  cfg.slewRate = 100.0f;       // no slew clamping -- isolates write shaping
+  Devices::NezhaMotor m(plant, cfg);
+
+  // A tiny duty that would have been zeroed under the 0.03 ship default
+  // lands unmodified -- outputDeadband_ == 0 never suppresses a nonzero duty.
+  dutyTick(m, bus, wireAddr, 0.01f, 50000);
+  checkFloatEq(m.appliedDuty(), 0.01f,
+               "sub-old-deadband duty passes through unmodified at outputDeadband=0");
+
+  // A commanded sign change forwards IMMEDIATELY -- reversalDwell_ == 0
+  // skips the dwell transition entirely (no intermediate zero write).
+  dutyTick(m, bus, wireAddr, -0.5f, 100000);
+  checkFloatEq(m.appliedDuty(), -0.5f,
+               "sign flip forwarded immediately at reversalDwell=0 -- no dwell armed");
+}
+
 }  // namespace
 
 int main() {
@@ -1023,6 +1072,7 @@ int main() {
   scenarioApplyGainsTakesEffectSameBootNoReflash();
   scenarioApplyGainsTravelCalibAppliesWhenPresentOtherwiseUnchanged();
   scenarioReconfigureGuardedWholeConfigReplacement();
+  scenarioExplicitZeroWriteShapingIsPassThrough();
 
   if (g_failureCount == 0) {
     std::printf("OK: all devices motor scenarios passed\n");

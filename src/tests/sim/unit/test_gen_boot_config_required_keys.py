@@ -29,6 +29,18 @@ pattern (invokes the generator module directly rather than shelling out)
 and this project's placement convention: a pure-Python, generator-only test
 belongs under src/tests/sim/unit/ (pyproject.toml's testpaths), not
 gated on the compiled sim lib.
+
+UPDATE (sprint 114 ticket 003, "eliminate nezha_motor.h's write-shaping ship
+defaults"): ``control.output_deadband``/``control.reversal_dwell_ms`` joined
+``_REQUIRED_KEY_PATHS`` below the same way -- Devices::NezhaMotor's own
+kDefaultOutputDeadband/kDefaultReversalDwell ship-default substitution is
+gone (folded into ``NezhaMotor::reconfigure()``, sprint 114 ticket 001's own
+Revision 1), so these two fields now fail the build exactly like every
+other required key here. The golden fixtures
+(``fixtures/boot_config_golden_*.cpp``) were regenerated to include the new
+``setOutputDeadband()``/``setReversalDwell()`` calls this ticket added to
+``defaultMotorConfigs()`` -- still value-preserving (0.03 / 100.0, the same
+numbers the deleted ship defaults used).
 """
 
 import copy
@@ -84,6 +96,8 @@ _REQUIRED_KEY_PATHS = [
     ("control", "vel_imax"),
     ("control", "vel_kaw"),
     ("control", "vel_filt"),
+    ("control", "output_deadband"),
+    ("control", "reversal_dwell_ms"),
     ("geometry", "odometry_offset_mm", "x"),
     ("geometry", "odometry_offset_mm", "y"),
     ("geometry", "odometry_offset_mm", "yaw_rad"),

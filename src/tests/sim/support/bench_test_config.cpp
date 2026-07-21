@@ -31,14 +31,18 @@ Devices::MotorConfig benchTestMotorConfig(uint32_t port) {
   cfg.velGains.kff = 1.0f / TestSim::kDefaultDutyVelMax;  // 0.002 duty per mm/s
   cfg.velGains.kp = 0.003f;   // feedback trim -- needed for turn accuracy
                              // (kp=0 lands 90deg turns ~30deg off + faults)
-  // PARITY (stakeholder 2026-07-18): reversalDwell/outputDeadband are
-  // deliberately left UNSET -- exactly what the production boot config
-  // bakes (gen_boot_config.py leaves both .has == false on purpose), so
-  // NezhaMotor's ctor substitutes the SAME ship defaults (100ms / 0.03)
-  // in the sim as on the robot. The sim gets no special write-shaping
-  // configuration of its own -- the whole motor stack behaves
-  // identically in both places; only the far side of the I2C bus
-  // differs.
+  // PARITY (stakeholder 2026-07-18; UPDATED sprint 114 ticket 003):
+  // reversalDwell/outputDeadband are now REQUIRED plain floats -- Devices::
+  // MotorConfig no longer has an Opt<float> "unset -> ship default"
+  // substitution at all (gen_boot_config.py always emits real values now,
+  // baked from data/robots/*.json's control.reversal_dwell_ms/
+  // output_deadband). Set explicitly here to the historical ship-default
+  // values (100ms / 0.03) so this test harness keeps byte-identical
+  // write-shaping behavior to before this ticket -- the sim gets no special
+  // write-shaping configuration of its own; the whole motor stack behaves
+  // identically in both places, only the far side of the I2C bus differs.
+  cfg.reversalDwell = 100.0f;    // [ms]
+  cfg.outputDeadband = 0.03f;    // [-1,1] fraction
   return cfg;
 }
 

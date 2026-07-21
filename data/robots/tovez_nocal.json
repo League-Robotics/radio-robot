@@ -80,6 +80,8 @@
     "vel_imax": 0.0,
     "vel_kaw": 0.0,
     "vel_filt": 1.0,
+    "output_deadband": 0.03,
+    "reversal_dwell_ms": 100.0,
     "heading_kp": 2.5,
     "heading_kd": 0.0,
     "heading_source": "auto",

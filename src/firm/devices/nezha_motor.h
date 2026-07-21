@@ -248,20 +248,16 @@ class NezhaMotor : public Motor {
   // instantaneous H-bridge sign flip under way latches the 0x46 readback;
   // near-zero PID dither would request such flips every tick — see
   // docs/knowledge/2026-07-04-encoder-wedge.md). Config-driven: cached
-  // from MotorConfig's reversalDwell/outputDeadband in the ctor, ship
-  // defaults when unset; an explicit 0/0 (the sim's configuration) makes
-  // writeShapedDuty() a pure pass-through. ----
+  // straight from MotorConfig's required reversalDwell/outputDeadband
+  // fields in reconfigure() (sprint 114 ticket 003 — no more code-side ship
+  // default substitution; gen_boot_config.py always emits real values, see
+  // data/robots/*.json's control.reversal_dwell_ms/output_deadband). An
+  // explicit 0/0 makes writeShapedDuty() a pure pass-through. ----
   float reversalDwell_ = 0.0f;          // [ms] cached from MotorConfig
   float outputDeadband_ = 0.0f;         // [-1,1] fraction, cached from MotorConfig
   bool dwelling_ = false;
   uint32_t dwellDeadline_ = 0;          // [ms]
   float lastRequestedDuty_ = 0.0f;      // [-1,1] last duty actually forwarded to writeRawDuty()
-
-  // Ship defaults substituted when MotorConfig's two write-shaping fields
-  // are unset. Optional, not a zero-sentinel — an explicit 0 is a valid,
-  // distinct, meaningful configuration for both.
-  static constexpr float kDefaultReversalDwell = 100.0f;    // [ms]
-  static constexpr float kDefaultOutputDeadband = 0.03f;    // [-1,1] fraction
 
   // ---- Embedded velocity PID ----
   MotorVelocityPid pid_;

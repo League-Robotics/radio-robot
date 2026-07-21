@@ -17,9 +17,13 @@ namespace Devices {
 // shape, so it stays trivially copyable, but declared here instead of
 // included from messages/common.h (isolation invariant). Needed wherever an
 // explicit value (including an explicit 0) must stay distinguishable from
-// "not configured, substitute the ship default" — see MotorConfig::
-// reversalDwell/outputDeadband below; a zero-sentinel cannot serve the same
-// purpose because an explicit 0 must remain valid and distinct.
+// "field not present in this partial update, leave the current value alone"
+// — see Motor::applyGains()'s own `Opt<float> travelCalib` parameter below;
+// a zero-sentinel cannot serve the same purpose because an explicit 0 must
+// remain valid and distinct. (MotorConfig::reversalDwell/outputDeadband used
+// to need this same distinction for a ship-default substitution — sprint 114
+// made both required, plain `float` fields; see device_config.h's own
+// MotorConfig doc.)
 template <typename T>
 struct Opt {
   bool has = false;
@@ -71,8 +75,8 @@ struct MotorConfig {
   // 1-based port label (wire/config convention) — dimensionless.
   uint32_t port = 0;
 
-  Opt<float> reversalDwell = {};   // [ms]
-  Opt<float> outputDeadband = {};  // [-1, 1] fraction
+  float reversalDwell = 0.0f;    // [ms]
+  float outputDeadband = 0.0f;   // [-1, 1] fraction
 
   bool polled = false;
 };

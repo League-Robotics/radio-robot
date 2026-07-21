@@ -23,10 +23,6 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
     velGains.i_max = 0.3f;
     velGains.kaw = 20.0f;   // anti-windup back-calculation (velocity_pid.cpp; 0 = off)
 
-    // reversal_dwell / output_deadband are left unset (.has == false) on
-    // purpose — Hal::Motor::configure() applies the real ship defaults (100 ms
-    // / 0.03) whenever a config arrives unset; that is the one place those
-    // defaults live.
     for (uint32_t i = 0; i < kMotorConfigCount; ++i) {
         out[i] = msg::MotorConfig();
         out[i].setPort(i + 1);
@@ -34,6 +30,13 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
         // EMA coeff — from control.vel_filt (fallback default); a=0 would pin
         // reported velocity at 0 forever regardless of real motion.
         out[i].setVelFiltAlpha(0.3f);
+        // Write-shaping floor/hold — baked from the robot JSON's
+        // control.output_deadband/control.reversal_dwell_ms (sprint 114
+        // ticket 003, config-as-truth completion). REQUIRED as of this
+        // ticket: Devices::NezhaMotor no longer substitutes a ship default
+        // when these arrive unset, so every build must emit a real value.
+        out[i].setOutputDeadband(0.03f);   // [-1,1] fraction
+        out[i].setReversalDwell(100.0f);   // [ms]
     }
 
     // Per-port forward-sign — baked from the robot JSON's calibration.

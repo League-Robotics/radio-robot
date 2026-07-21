@@ -112,13 +112,13 @@ bool NezhaMotor::reconfigure(const MotorConfig& config)
         // value (25) when unconfigured (zero-initialized).
         config_.slewRate = kDefaultSlewRate;
     }
-    // Write-shaping fields (folded from the old MotorArmor base): ship
-    // defaults when unset; an explicit 0 is a valid off-configuration for
-    // both (the sim's setting -- see nezha_motor.h's own field comment).
-    reversalDwell_ = config.reversalDwell.has ? config.reversalDwell.val
-                                               : kDefaultReversalDwell;
-    outputDeadband_ = config.outputDeadband.has ? config.outputDeadband.val
-                                                 : kDefaultOutputDeadband;
+    // Write-shaping fields (folded from the old MotorArmor base): required,
+    // config-as-truth as of sprint 114 ticket 003 -- no more code-side ship-
+    // default substitution here. gen_boot_config.py always emits real values
+    // (data/robots/*.json's control.reversal_dwell_ms/output_deadband); an
+    // explicit 0 is still a valid off-configuration for both.
+    reversalDwell_ = config.reversalDwell;
+    outputDeadband_ = config.outputDeadband;
     return true;
 }
 
@@ -456,7 +456,8 @@ void NezhaMotor::tick(uint64_t nowUs)
 // writes 0 now, arms the dwell timer, suppresses every non-zero write until
 // the deadline, then forwards the new-direction duty as-is (the slew cap
 // ramps it from zero). reversalDwell_ == 0 skips the dwell transition
-// entirely — the sim's configuration (sim_harness.h's makeMotorConfig()).
+// entirely -- a valid, explicit off-configuration (config.reversalDwell ==
+// 0.0f), not a default.
 // ---------------------------------------------------------------------------
 void NezhaMotor::writeShapedDuty(float duty, uint32_t now)
 {

@@ -2,9 +2,12 @@
 id: '003'
 title: 'Eliminate nezha_motor.h''s write-shaping ship defaults: reversalDwell/outputDeadband
   become required config'
-status: open
-use-cases: [SUC-002, SUC-004]
-depends-on: ['002']
+status: done
+use-cases:
+- SUC-002
+- SUC-004
+depends-on:
+- '002'
 github-issue: ''
 issue: config-as-truth-completion-no-defaults-fail-closed-version-erase.md
 completes_issue: true
@@ -145,25 +148,25 @@ number rather than a private implementation constant, since the fix boosts
 
 ## Acceptance Criteria
 
-- [ ] `Devices::MotorConfig::reversalDwell`/`outputDeadband` are plain
+- [x] `Devices::MotorConfig::reversalDwell`/`outputDeadband` are plain
       `float`, not `Opt<float>`.
-- [ ] `MotorArmor::reconfigure()`'s own `outputDeadband` read is a plain
+- [x] `MotorArmor::reconfigure()`'s own `outputDeadband` read is a plain
       field access, not a `.has ? .val :` ternary (its
       `kDefaultMotionThreshold` constant stays — it remains
       `motionThreshold_`'s own pre-`reconfigure()` member-initializer, a
       separate use).
-- [ ] `grep -n "kDefaultReversalDwell\|kDefaultOutputDeadband"
+- [x] `grep -n "kDefaultReversalDwell\|kDefaultOutputDeadband"
       src/firm/devices/nezha_motor.h src/firm/devices/nezha_motor.cpp` finds
       nothing.
-- [ ] `gen_boot_config.py` always emits explicit `setReversalDwell()`/
+- [x] `gen_boot_config.py` always emits explicit `setReversalDwell()`/
       `setOutputDeadband()` calls with real, JSON-sourced values; omitting
       `control.output_deadband`/`control.reversal_dwell_ms` from any robot
       JSON fails the build (per ticket 002's established convention).
-- [ ] A rebuild against the currently-active profile produces byte-identical
+- [x] A rebuild against the currently-active profile produces byte-identical
       `writeShapedDuty()` behavior to pre-ticket (100ms dwell, 0.03
       deadband) — regression, not yet a behavior change (ticket 005 changes
       behavior).
-- [ ] The 9 migrated sim test harnesses (26 construction sites, ticket 001)
+- [x] The 9 migrated sim test harnesses (26 construction sites, ticket 001)
       still pass — `benchTestMotorConfig()` explicitly sets both fields to
       the historical values.
 
