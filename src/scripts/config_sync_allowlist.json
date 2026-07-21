@@ -36,7 +36,14 @@
     "control.actuation_lag": "113-004: Tier-2 boot-only (gen_boot_config.py's actuation_lag_for_config()); no live SET key (112-002)",
     "control.distance_tol": "113-004: Tier-2 boot-only (gen_boot_config.py's distance_gains_for_config()); no live SET key (112-003) -- distance_kp is the live sibling, mapped to PlannerConfigPatch.distance_kp",
     "control.model_tau_lin": "113-004: Tier-2 boot-only (gen_boot_config.py's model_tau_for_config()); no live SET key (sprint 113 Design Rationale Decision 4)",
-    "control.model_tau_ang": "113-004: Tier-2 boot-only (gen_boot_config.py's model_tau_for_config()); no live SET key (sprint 113 Design Rationale Decision 4)"
+    "control.model_tau_ang": "113-004: Tier-2 boot-only (gen_boot_config.py's model_tau_for_config()); no live SET key (sprint 113 Design Rationale Decision 4)",
+    "control.heading_dwell_tol_deg": "114-002: Tier-2 boot-only (gen_boot_config.py's heading_dwell_for_config()); no live SET key -- added to ControlConfig so calibration/sim_boot_config.py's RobotConfig->dict conversion stays lossless, mirrors control.heading_lead_bias's own reasoning",
+    "control.heading_dwell_rate_dps": "114-002: Tier-2 boot-only (gen_boot_config.py's heading_dwell_for_config()); no live SET key -- same reasoning as control.heading_dwell_tol_deg above",
+    "control.a_max": "114-002: Tier-2 boot-only (gen_boot_config.py's motion_limits_for_config(), sprint 114 -- previously the module DEFAULT constant with no JSON mapping at all); no live SET key",
+    "control.a_decel": "114-002: Tier-2 boot-only (gen_boot_config.py's motion_limits_for_config()); no live SET key -- same reasoning as control.a_max above",
+    "control.v_body_max": "114-002: Tier-2 boot-only (gen_boot_config.py's motion_limits_for_config()); no live SET key -- same reasoning as control.a_max above",
+    "control.j_max": "114-002: Tier-2 boot-only (gen_boot_config.py's motion_limits_for_config()); no live SET key -- same reasoning as control.a_max above",
+    "control.yaw_jerk_max": "114-002: Tier-2 boot-only (gen_boot_config.py's motion_limits_for_config()); no live SET key -- same reasoning as control.a_max above"
   },
   "patch-field-no-pydantic": {
     "DrivetrainConfigPatch.ekf_q_xy": "no host-side pydantic field yet; carried over from the pre-096 Config.h-era allowlist's ekfQxy entry ('register as tunable in a future sprint')",

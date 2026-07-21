@@ -59,6 +59,8 @@ import math
 import sys
 from pathlib import Path
 
+import pytest
+
 # src/tests/sim/unit/test_gen_boot_config_planner.py -> unit -> sim -> tests -> repo root
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _SCRIPTS_DIR = _REPO_ROOT / "src" / "scripts"
@@ -86,22 +88,7 @@ _EXPECTED_MOTION_LIMITS = {
 # Drive::Limits span (see module docstring's 111-004 note above): field
 # name -> (setter, tovez value, firmware-default constant name). tovez.json's
 # real value EQUALS the firmware default (both 0.15).
-_ARRIVE_DWELL_FIELD = ("arrive_dwell", "setArriveDwell", 0.15, "ARRIVE_DWELL_DEFAULT")
-
-
-def _motion_limit_setter_lines() -> list[str]:
-    """The exact `cfg.set<Field>(<value>f);` lines defaultPlannerConfig()
-    must emit for every motion-limit field, matching gen_messages.py's
-    chainable-setter naming (setAMax, setADecel, ...)."""
-    return [
-        f"cfg.setAMax({gbc._f(_EXPECTED_MOTION_LIMITS['a_max'])});",
-        f"cfg.setADecel({gbc._f(_EXPECTED_MOTION_LIMITS['a_decel'])});",
-        f"cfg.setVBodyMax({gbc._f(_EXPECTED_MOTION_LIMITS['v_body_max'])});",
-        f"cfg.setYawRateMax({gbc._f(_EXPECTED_MOTION_LIMITS['yaw_rate_max'])});",
-        f"cfg.setYawAccMax({gbc._f(_EXPECTED_MOTION_LIMITS['yaw_acc_max'])});",
-        f"cfg.setJMax({gbc._f(_EXPECTED_MOTION_LIMITS['j_max'])});",
-        f"cfg.setYawJerkMax({gbc._f(_EXPECTED_MOTION_LIMITS['yaw_jerk_max'])});",
-    ]
+_ARRIVE_DWELL_FIELD = ("arrive_dwell", "setArriveDwell", 0.15)
 
 
 def test_heading_gains_for_config_reads_tovez_json():
@@ -117,20 +104,13 @@ def test_heading_gains_for_config_reads_tovez_json():
     assert kd == 0.0
 
 
-def test_heading_gains_for_config_falls_back_to_firmware_defaults():
-    """With no control.heading_kp/heading_kd in the robot JSON (or no robot
-    config at all), both gains fall back to the conservative firmware
-    defaults -- matching every other mapping's fall-back-to-firmware-default
-    behavior in this generator (an unmigrated robot JSON simply inherits
-    today's open-loop-equivalent Kp=Kd=0... except the firmware default here
-    is intentionally nonzero, Kp=6.0 (112-004: bumped from the original
-    3.0 starting value -- see HEADING_KP_DEFAULT's own comment for the
-    deadband-inequality derivation this bump satisfies once App::Pilot's
-    min-speed floor is deleted), per Decision 2's starting-gain policy)."""
-    kp, kd = gbc.heading_gains_for_config({})
-
-    assert kp == gbc.HEADING_KP_DEFAULT == 6.0
-    assert kd == gbc.HEADING_KD_DEFAULT == 0.0
+def test_heading_gains_for_config_raises_with_no_control_section():
+    """Sprint 114 (config-as-truth completion): with no control.heading_kp/
+    heading_kd in the robot JSON (or no robot config at all), the generator
+    hard-fails -- gen_boot_config.py no longer carries a source-side
+    HEADING_KP_DEFAULT/HEADING_KD_DEFAULT fallback for a missing key."""
+    with pytest.raises(gbc.MissingRobotConfigKeyError, match="control.heading_kp"):
+        gbc.heading_gains_for_config({})
 
 
 def test_heading_gains_for_config_reads_arbitrary_json_values():
@@ -184,22 +164,16 @@ def test_generate_emits_default_planner_config_with_config_motion_limits():
     assert "cfg.setHeadingKd(0.0f);" in content
 
 
-def test_generate_motion_limits_unchanged_with_no_robot_config():
-    """With NO robot config, all seven motion-limit fields take their firmware
-    defaults -- including yaw_rate_max/yaw_acc_max, which ARE robot-JSON-
-    configurable as of ticket 100-014 (control.yaw_rate_max/max_rot_accel_dps2)
-    but fall back to the 6.0 rad/s / 20.0 rad/s^2 firmware defaults when the
-    keys are absent, exactly the same fall-back discipline as heading_kp/
-    heading_kd (which fall back to 6.0/0.0 here -- 112-004 bumped
-    HEADING_KP_DEFAULT from 3.0)."""
-    content = gbc.generate({}, "(firmware defaults)")
+def test_generate_raises_with_no_robot_config():
+    """Sprint 114 (config-as-truth completion): with NO robot config, none
+    of the seven motion-limit fields (nor anything else generate() resolves)
+    has a source-side fallback anymore -- the generator hard-fails on the
+    first required key (control.a_max, motion_limits_for_config()'s first
+    lookup) instead of silently emitting the old firmware-default literals."""
+    with pytest.raises(gbc.MissingRobotConfigKeyError) as exc_info:
+        gbc.generate({}, "(firmware defaults)")
 
-    assert "msg::PlannerConfig defaultPlannerConfig()" in content
-    for line in _motion_limit_setter_lines():
-        assert line in content, f"missing/changed motion-limit setter: {line}"
-
-    assert "cfg.setHeadingKp(6.0f);" in content
-    assert "cfg.setHeadingKd(0.0f);" in content
+    assert exc_info.value.source_path == "(firmware defaults)"
 
 
 # ---------------------------------------------------------------------------
@@ -221,13 +195,12 @@ def test_profile_rot_limits_for_config_reads_tovez_json():
     assert yaw_acc_max == math.radians(600.0)     # control.max_rot_accel_dps2 [deg/s^2]
 
 
-def test_profile_rot_limits_for_config_falls_back_to_firmware_defaults():
-    """With no control.yaw_rate_max/max_rot_accel_dps2 (or no robot config),
-    both fall back to the rad-valued firmware defaults."""
-    yaw_rate_max, yaw_acc_max = gbc.profile_rot_limits_for_config({})
-
-    assert yaw_rate_max == gbc.YAW_RATE_MAX_DEFAULT == 6.0
-    assert yaw_acc_max == gbc.YAW_ACC_MAX_DEFAULT == 20.0
+def test_profile_rot_limits_for_config_raises_with_no_control_section():
+    """Sprint 114 (config-as-truth completion): with no control.yaw_rate_max/
+    max_rot_accel_dps2 (or no robot config at all), the generator hard-fails
+    -- both keys are now required, no rad-valued firmware-default fallback."""
+    with pytest.raises(gbc.MissingRobotConfigKeyError, match="control.yaw_rate_max"):
+        gbc.profile_rot_limits_for_config({})
 
 
 def test_profile_rot_limits_for_config_reads_arbitrary_json_values():
@@ -256,15 +229,12 @@ def test_arrive_dwell_for_config_reads_tovez_json():
     assert actual == _ARRIVE_DWELL_FIELD[2]
 
 
-def test_arrive_dwell_for_config_falls_back_to_firmware_default():
-    """With no control.arrive_dwell key in the robot JSON (or no robot
-    config at all), the field falls back to its firmware default constant --
-    matching every other mapping's fall-back-to-firmware-default behavior in
-    this generator."""
-    actual = gbc.arrive_dwell_for_config({})
-
-    expected_default = getattr(gbc, _ARRIVE_DWELL_FIELD[3])
-    assert actual == expected_default
+def test_arrive_dwell_for_config_raises_with_no_control_section():
+    """Sprint 114 (config-as-truth completion): with no control.arrive_dwell
+    key in the robot JSON (or no robot config at all), the generator
+    hard-fails -- no more ARRIVE_DWELL_DEFAULT source-side fallback."""
+    with pytest.raises(gbc.MissingRobotConfigKeyError, match="control.arrive_dwell"):
+        gbc.arrive_dwell_for_config({})
 
 
 def test_arrive_dwell_for_config_reads_arbitrary_json_value():
@@ -288,21 +258,24 @@ def test_generate_emits_default_planner_config_with_arrive_dwell():
     cfg = json.loads(_TOVEZ_JSON.read_text())
     content = gbc.generate(cfg, "data/robots/tovez.json")
 
-    _field, setter, expected, _default_name = _ARRIVE_DWELL_FIELD
+    _field, setter, expected = _ARRIVE_DWELL_FIELD
     line = f"cfg.{setter}({gbc._f(expected)});"
     assert line in content, f"missing/changed arrive_dwell setter: {line}"
 
 
-def test_generate_arrive_dwell_falls_back_with_no_robot_config():
-    """With no robot config found, the arrive_dwell setter emits its
-    firmware-default literal (mirrors
-    test_generate_motion_limits_unchanged_with_no_robot_config's shape)."""
-    content = gbc.generate({}, "(firmware defaults)")
+def test_generate_raises_with_no_robot_config_names_missing_key_and_path():
+    """Sprint 114 (config-as-truth completion): with no robot config found,
+    generate() raises MissingRobotConfigKeyError naming BOTH the first
+    missing key (geometry.trackwidth -- trackwidth_for_config() is
+    generate()'s first resolution call) and the source path passed in, per
+    this ticket's own acceptance criterion."""
+    with pytest.raises(gbc.MissingRobotConfigKeyError) as exc_info:
+        gbc.generate({}, "(firmware defaults)")
 
-    _field, setter, _tovez_value, default_name = _ARRIVE_DWELL_FIELD
-    default_value = getattr(gbc, default_name)
-    line = f"cfg.{setter}({gbc._f(default_value)});"
-    assert line in content, f"missing/changed arrive_dwell default setter: {line}"
+    assert exc_info.value.key_path == "geometry.trackwidth"
+    assert exc_info.value.source_path == "(firmware defaults)"
+    assert "geometry.trackwidth" in str(exc_info.value)
+    assert "(firmware defaults)" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -328,16 +301,13 @@ def test_model_tau_for_config_reads_tovez_nocal_json():
     assert model_tau_ang == 0.08
 
 
-def test_model_tau_for_config_falls_back_to_firmware_defaults():
-    """With no control.model_tau_lin/control.model_tau_ang in the robot JSON
-    (or no robot config at all), both time constants fall back to the
-    firmware defaults -- matching pilot.h's own prior hardcoded values
-    exactly, so an unmigrated robot JSON boots byte-identical to before this
-    ticket."""
-    model_tau_lin, model_tau_ang = gbc.model_tau_for_config({})
-
-    assert model_tau_lin == gbc.MODEL_TAU_LIN_DEFAULT == 0.10
-    assert model_tau_ang == gbc.MODEL_TAU_ANG_DEFAULT == 0.08
+def test_model_tau_for_config_raises_with_no_control_section():
+    """Sprint 114 (config-as-truth completion): with no control.model_tau_lin/
+    control.model_tau_ang in the robot JSON (or no robot config at all), the
+    generator hard-fails -- no more MODEL_TAU_LIN_DEFAULT/MODEL_TAU_ANG_DEFAULT
+    source-side fallback."""
+    with pytest.raises(gbc.MissingRobotConfigKeyError, match="control.model_tau_lin"):
+        gbc.model_tau_for_config({})
 
 
 def test_model_tau_for_config_reads_arbitrary_json_values():
@@ -366,14 +336,6 @@ def test_generate_emits_default_planner_config_with_model_tau():
     assert f"cfg.setModelTauAng({gbc._f(0.08)});" in content
 
 
-def test_generate_model_tau_falls_back_with_no_robot_config():
-    """With no robot config found, the model_tau setters emit their
-    firmware-default literals (mirrors
-    test_generate_arrive_dwell_falls_back_with_no_robot_config's shape)."""
-    content = gbc.generate({}, "(firmware defaults)")
-
-    assert f"cfg.setModelTauLin({gbc._f(gbc.MODEL_TAU_LIN_DEFAULT)});" in content
-    assert f"cfg.setModelTauAng({gbc._f(gbc.MODEL_TAU_ANG_DEFAULT)});" in content
 
 
 if __name__ == "__main__":

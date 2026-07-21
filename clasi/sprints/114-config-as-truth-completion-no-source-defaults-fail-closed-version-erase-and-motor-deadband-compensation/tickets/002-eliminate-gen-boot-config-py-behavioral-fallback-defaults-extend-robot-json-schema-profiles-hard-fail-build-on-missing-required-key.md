@@ -2,8 +2,9 @@
 id: '002'
 title: 'Eliminate gen_boot_config.py behavioral fallback defaults: extend robot JSON
   schema/profiles, hard-fail build on missing required key'
-status: open
-use-cases: [SUC-002]
+status: done
+use-cases:
+- SUC-002
 depends-on: []
 github-issue: ''
 issue: config-as-truth-completion-no-defaults-fail-closed-version-erase.md
@@ -107,25 +108,85 @@ new required keys, not leave a still-incomplete schema behind.
 
 ## Acceptance Criteria
 
-- [ ] Every field listed in Approach step 1 has no remaining `*_DEFAULT`
+- [x] Every field listed in Approach step 1 has no remaining `*_DEFAULT`
       Python constant in `gen_boot_config.py`.
-- [ ] Each of the three shipped robot JSONs is independently sufficient to
+- [x] Each of the three shipped robot JSONs is independently sufficient to
       generate `boot_config.cpp` (no `ROBOT_CONFIG` fallback needed).
-- [ ] Deleting any one required key from any one of the three JSONs (tested
+- [x] Deleting any one required key from any one of the three JSONs (tested
       independently, one at a time) causes `gen_boot_config.py` to exit
       non-zero with a message naming the missing key and the JSON path —
       not a silently-generated placeholder file.
-- [ ] `boot_config.cpp` generated from each of the three JSONs post-ticket is
+- [x] `boot_config.cpp` generated from each of the three JSONs post-ticket is
       byte-identical to the pre-ticket generated output for that same JSON
       (value-preserving migration, verified by diff, not assumed).
-- [ ] `data/robots/robot_config.schema.json`'s `control` object declares
+- [x] `data/robots/robot_config.schema.json`'s `control` object declares
       every field this ticket adds, plus the pre-existing-but-previously-
       undeclared binary-tree fields found stale during sprint 114 planning
       (`heading_kp`, `heading_kd`, `distance_kp`, `distance_tol`,
       `actuation_lag`, `model_tau_lin`, `model_tau_ang`, `min_speed`,
       `arrive_dwell`).
-- [ ] `K_MOTOR_COUNT`/`LEFT_PORT`/`RIGHT_PORT`/`TRAVEL_CALIB_PLACEHOLDER`/
+- [x] `K_MOTOR_COUNT`/`LEFT_PORT`/`RIGHT_PORT`/`TRAVEL_CALIB_PLACEHOLDER`/
       `FWD_SIGN` are untouched (structural, out of scope).
+
+## Completion Notes (2026-07-20)
+
+- 33 `*_DEFAULT` module constants deleted (5 stayed: `K_MOTOR_COUNT`,
+  `LEFT_PORT`, `RIGHT_PORT`, `TRAVEL_CALIB_PLACEHOLDER`, `FWD_SIGN` --
+  structural, byte-identical values confirmed unchanged).
+- New `MissingRobotConfigKeyError`/`_require()` in `gen_boot_config.py`;
+  every `*_for_config()` helper rewritten to hard-fail; two brand-new
+  mapping functions added (`motion_limits_for_config()` for
+  a_max/a_decel/v_body_max/j_max/yaw_jerk_max -- previously not wired to
+  JSON AT ALL; `trackwidth_for_config()`). `heading_dwell_for_config()`
+  rewired to actually read `control.heading_dwell_tol_deg`/
+  `heading_dwell_rate_dps` for the first time (previously hardcoded,
+  ignored `cfg` entirely).
+- Value-preserving migration verified two ways: (1) a byte-identical-output
+  regression pin (`test_gen_boot_config_required_keys.py`) diffing fresh
+  `generate()` output for all three profiles against golden snapshots
+  captured from the pre-ticket generator/JSON, committed as
+  `src/tests/sim/unit/fixtures/boot_config_golden_*.cpp`; (2) a manual
+  before/after `diff` during implementation, also byte-identical.
+- Downstream blast radius beyond the ticket's own Files-to-Touch, required
+  to avoid breaking existing behavior/tests (not scope creep -- mechanical
+  consequences of deleting module-level constants other code imported):
+  `src/host/robot_radio/calibration/sim_boot_config.py` (now calls
+  `motion_limits_for_config()` instead of reading the deleted constants
+  directly); `src/host/robot_radio/config/robot_config.py`'s
+  `ControlConfig` gained 7 new `Optional[float]` fields
+  (`heading_dwell_tol_deg`/`heading_dwell_rate_dps`/`a_max`/`a_decel`/
+  `v_body_max`/`j_max`/`yaw_jerk_max`) -- without these the pydantic model
+  would silently drop the newly-required JSON keys at parse time, hard-
+  failing `configure_from_robot()` (the real TestGUI sim-configure path)
+  for every robot; `src/scripts/config_sync_allowlist.json` gained 7
+  matching `pydantic-field-no-patch` entries (Tier-2 boot-only, no live SET
+  key, mirroring the existing `control.actuation_lag`-style entries).
+  Several existing tests asserting the OLD fallback-to-default behavior
+  were rewritten to assert the NEW hard-fail behavior instead (their
+  premise was the exact thing this ticket reverses):
+  `test_gen_boot_config_planner.py`, `test_gen_boot_config_otos.py`,
+  `test_gen_boot_config_fwd_sign.py`, `test_sim_boot_config.py`,
+  `test_sim_boot_config_parity.py`. `test_calibration_kwargs.py`'s
+  tovez.json snapshot gained two new live `SET minSpeed=16`/
+  `SET distanceKp=8` entries (tovez.json previously omitted these two
+  Tier-2 fields entirely; both now equal the exact value the firmware
+  already boots with, so this is a no-op push, not a behavior change).
+  `test_turn_error_characterization.py`'s import of the three deleted
+  `HEADING_LEAD_BIAS_DEFAULT`/`PLAN_LEAD_DEFAULT`/`TERMINAL_LEAD_DEFAULT`
+  constants was replaced with a call to `lead_compensation_for_config()`
+  against `tovez_nocal.json` (the currently-active profile) -- same
+  numeric values, now sourced from JSON instead of an importable constant.
+  `src/firm/config/boot_config.cpp` regenerated against the active robot
+  (`tovez_nocal.json`); this also happened to correct a PRE-EXISTING
+  staleness unrelated to this ticket (the committed file predated several
+  `tovez_nocal.json` control-value edits from earlier sprint 114 work --
+  confirmed via `git diff`, not introduced by this ticket's own migration).
+- 3 pre-existing failures in `test_turn_error_characterization.py`
+  (`test_postcompensation_realistic_holds_ticket_009_bar[30.0/170.0]`,
+  `test_at_rest_residual_is_not_rate_dependent`) confirmed via `git stash`
+  to fail identically before and after this ticket's changes -- unrelated
+  sim/firmware state on this `pid-debugging` branch, not caused by or
+  fixable within this ticket's scope.
 
 ## Testing
 

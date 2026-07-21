@@ -250,6 +250,29 @@ class ControlConfig(BaseModel):
     model_tau_lin:     Optional[float] = None  # [s] control.model_tau_lin
     model_tau_ang:     Optional[float] = None  # [s] control.model_tau_ang
 
+    # Sprint 114 (config-as-truth completion, ticket 002): these seven were
+    # the LAST gen_boot_config.py control.* keys with no field on this model
+    # at all -- heading_dwell_tol_deg/heading_dwell_rate_dps had no JSON path
+    # anywhere before this sprint; a_max/a_decel/v_body_max/j_max/
+    # yaw_jerk_max had a JSON-key mapping in gen_boot_config.py for the
+    # first time this sprint (motion_limits_for_config()). All seven are now
+    # REQUIRED in gen_boot_config.py (no source-side fallback) -- without a
+    # field here, pydantic would silently DROP them from a real robot JSON
+    # at parse time (the same landmine the 113-003/113-004 comment above
+    # already flags), and calibration/sim_boot_config.py's
+    # planner_boot_config_for() would then hard-fail on every RobotConfig
+    # (not raw-dict) caller, including the real TestGUI sim-configure path
+    # (io/sim_loop.py's configure_from_robot()) -- even for a fully-
+    # populated robot JSON. Added here purely so the RobotConfig->dict
+    # conversion stays lossless, mirroring the exact reasoning above.
+    heading_dwell_tol_deg:  Optional[float] = None  # [deg] control.heading_dwell_tol_deg
+    heading_dwell_rate_dps: Optional[float] = None  # [deg/s] control.heading_dwell_rate_dps
+    a_max:        Optional[float] = None  # [mm/s^2] control.a_max
+    a_decel:      Optional[float] = None  # [mm/s^2] control.a_decel
+    v_body_max:   Optional[float] = None  # [mm/s] control.v_body_max
+    j_max:        Optional[float] = None  # [mm/s^3] control.j_max
+    yaw_jerk_max: Optional[float] = None  # [rad/s^3] control.yaw_jerk_max
+
 
 # ---------------------------------------------------------------------------
 # Root config model

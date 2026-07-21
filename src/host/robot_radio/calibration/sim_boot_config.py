@@ -111,22 +111,20 @@ def planner_boot_config_for(config: Any) -> "dict[str, float | int]":
     JSON dict) by calling ``gen_boot_config.py``'s existing mapping
     functions -- never by re-deriving any of them.
 
-    Five fields (``a_max``/``a_decel``/``v_body_max``/``j_max``/
-    ``yaw_jerk_max``) have no per-robot JSON override mapping function at
-    all in ``gen_boot_config.py`` today (its own ``generate()`` uses the
-    module constants directly) -- this mirrors that exactly, reading the
-    same module constants directly rather than inventing a mapping
-    ``gen_boot_config.py`` itself doesn't have.
+    Sprint 114 (config-as-truth completion): ``a_max``/``a_decel``/
+    ``v_body_max``/``j_max``/``yaw_jerk_max`` gained a real per-robot JSON
+    mapping function (``motion_limits_for_config()``) -- before this ticket
+    ``gen_boot_config.py`` had none at all for these five (its own
+    ``generate()`` referenced its module DEFAULT constants directly), so
+    this module mirrored that by reading the same constants directly. Now
+    it calls the real mapping like every other field here, never re-deriving
+    it.
     """
     cfg = _as_cfg_dict(config)
 
-    out: "dict[str, float | int]" = {
-        "a_max": gbc.A_MAX_DEFAULT,
-        "a_decel": gbc.A_DECEL_DEFAULT,
-        "v_body_max": gbc.V_BODY_MAX_DEFAULT,
-        "j_max": gbc.J_MAX_DEFAULT,
-        "yaw_jerk_max": gbc.YAW_JERK_MAX_DEFAULT,
-    }
+    out: "dict[str, float | int]" = {}
+    (out["a_max"], out["a_decel"], out["v_body_max"], out["j_max"],
+     out["yaw_jerk_max"]) = gbc.motion_limits_for_config(cfg)
 
     out["yaw_rate_max"], out["yaw_acc_max"] = gbc.profile_rot_limits_for_config(cfg)
     out["min_speed"] = gbc.min_speed_for_config(cfg)

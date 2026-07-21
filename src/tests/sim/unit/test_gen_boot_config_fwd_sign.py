@@ -37,6 +37,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 # src/tests/sim/unit/test_gen_boot_config_fwd_sign.py -> unit -> sim -> tests -> repo root
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _SCRIPTS_DIR = _REPO_ROOT / "src" / "scripts"
@@ -100,16 +102,18 @@ def test_generate_emits_per_port_fwd_sign_mirror_mounted_drive_pair():
     assert "out[3].setFwdSign(1);" in content
 
 
-def test_generate_falls_back_to_uniform_fwd_sign_with_no_robot_config():
-    """The identity-default fallback (no robot config found) reproduces the
-    firmware-default uniform +1 on every port -- the build must still
-    succeed and boot sanely with no robot JSON present."""
-    content = gbc.generate({}, "(firmware defaults)")
-
-    assert "out[0].setFwdSign(1);" in content
-    assert "out[1].setFwdSign(1);" in content
-    assert "out[2].setFwdSign(1);" in content
-    assert "out[3].setFwdSign(1);" in content
+def test_generate_raises_with_no_robot_config():
+    """Sprint 114 (config-as-truth completion): generate() with no robot
+    config found now hard-fails on the first required BEHAVIORAL key
+    (geometry.trackwidth) before it ever reaches fwd_sign_for_ports() --
+    "the build must still succeed with no robot JSON present" was this
+    ticket's own explicit reversal (see gen_boot_config.py's module
+    docstring); fwd_sign_for_ports() ITSELF is unaffected (a structural
+    placeholder, out of this ticket's scope -- see
+    test_fwd_sign_for_ports_falls_back_to_placeholder_for_every_port above,
+    which still passes unchanged)."""
+    with pytest.raises(gbc.MissingRobotConfigKeyError):
+        gbc.generate({}, "(firmware defaults)")
 
 
 if __name__ == "__main__":

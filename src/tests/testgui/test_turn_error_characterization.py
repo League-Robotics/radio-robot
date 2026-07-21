@@ -316,12 +316,25 @@ def test_precompensation_ideal_error_scales_with_commanded_rate():
 # PLAN_LEAD_DEFAULT/TERMINAL_LEAD_DEFAULT) collapse the slope.
 # ---------------------------------------------------------------------------
 
-# Mirrors gen_boot_config.py's own shipped defaults -- see that file's own
-# comment for the fitted-value derivation this module's own sweep produced.
-from src.scripts.gen_boot_config import (  # noqa: E402
-    HEADING_LEAD_BIAS_DEFAULT,
-    PLAN_LEAD_DEFAULT,
-    TERMINAL_LEAD_DEFAULT,
+# Mirrors gen_boot_config.py's own shipped values for the currently-active
+# robot config (data/robots/tovez_nocal.json) -- see that file's own
+# lead_compensation_for_config() for the fitted-value derivation this
+# module's own sweep produced. Sprint 114 (config-as-truth completion):
+# gen_boot_config.py no longer carries HEADING_LEAD_BIAS_DEFAULT/
+# PLAN_LEAD_DEFAULT/TERMINAL_LEAD_DEFAULT as Python-side fallback constants
+# -- the "shipped" values now live only in the robot JSON, so this reads
+# them the same way gen_boot_config.py itself would (via
+# lead_compensation_for_config()), rather than importing deleted constants.
+import json as _json  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+from src.scripts import gen_boot_config as _gbc  # noqa: E402
+
+# src/tests/testgui/test_turn_error_characterization.py -> testgui -> tests -> src -> repo root
+_ACTIVE_ROBOT_JSON = _Path(__file__).resolve().parents[3] / "data" / "robots" / "tovez_nocal.json"
+_ACTIVE_CONTROL_CFG = _json.loads(_ACTIVE_ROBOT_JSON.read_text())
+HEADING_LEAD_BIAS_DEFAULT, PLAN_LEAD_DEFAULT, TERMINAL_LEAD_DEFAULT = (
+    _gbc.lead_compensation_for_config(_ACTIVE_CONTROL_CFG)
 )
 
 
