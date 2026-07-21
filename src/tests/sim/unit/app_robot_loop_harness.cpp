@@ -55,6 +55,7 @@
 #include "app/preamble.h"
 #include "app/robot_loop.h"
 #include "app/telemetry.h"
+#include "config/persisted_tuning.h"
 #include "devices/color_sensor.h"
 #include "devices/device_config.h"
 #include "devices/device_types.h"
@@ -119,6 +120,34 @@ class NullTransport : public App::Transport {
   void sendReliable(const char*) override { ++sendCount; }
 
   int sendCount = 0;
+};
+
+// --- MockTuningStore (114-004) -- a trivial, no-flash Config::TuningStore
+// double: records every save() call (count + last blob/version) without
+// touching any hardware. Proves handleConfig()'s write-policy
+// (persistTuningIfChanged()'s change-detection debounce) via a call-count
+// assertion on this seam, per the ticket's own Testing section ("mock or
+// count-based assertion on the persistence seam, not real flash") --
+// Config::TuningStore is a plain C++ virtual base with zero hardware
+// dependency (unlike Config::MicroBitTuningStore, its one real
+// implementation), so it is directly mockable under HOST_BUILD even
+// though the real ARM adapter is not exercised by any agent-run test. ---
+class MockTuningStore : public Config::TuningStore {
+ public:
+  bool load(uint32_t*, Config::Blob*) override { return false; }  // "never written" -- not this test's concern
+
+  void save(uint32_t version, const Config::Blob& blob) override {
+    ++saveCount;
+    lastVersion = version;
+    lastBlob = blob;
+  }
+
+  void wipe() override { ++wipeCount; }
+
+  int saveCount = 0;
+  int wipeCount = 0;
+  uint32_t lastVersion = 0;
+  Config::Blob lastBlob{};
 };
 
 // --- Fixture helpers (mirrors app_preamble_harness.cpp) --------------------
@@ -639,11 +668,110 @@ void scenarioConfigMotorPlannerPatchApplyWhileDrivetrainStaysUnimplemented() {
                "heading_kp (absent from this patch) stays at its prior (zero-init) value");
 }
 
+// ===========================================================================
+// 114-004 (SUC-003): the persisted-tuning write policy. persistTuningIfChanged()
+// must NOT write on every patch unconditionally (sprint.md Open Question 3) --
+// it skips a save() call when the freshly-serialized snapshot is IDENTICAL to
+// the last one actually written. Dispatches the SAME MotorConfigPatch bytes
+// TWICE, through two separate cycle() calls, against a MockTuningStore, and
+// asserts saveCount()==1 (mock/count-based assertion on the persistence seam,
+// per this ticket's own Testing section -- not real flash).
+// ===========================================================================
+
+void scenarioConfigPersistWritePolicySkipsRedundantSave() {
+  beginScenario("RobotLoop CONFIG: persisted-tuning write policy skips a redundant identical save()");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  TestSim::SimClock clock;
+  TestSim::SimSleeper sleeper;
+
+  Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
+  Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
+  Devices::Otos otos(plant, Devices::OtosConfig{});
+  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
+  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+
+  TestSupport::FakeTransport serialFake;
+  TestSupport::FakeTransport radioFake;
+  App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
+  App::Telemetry tlm(comms, serialFake, radioFake);
+  App::Deadman deadman(clock);
+  App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
+  App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+
+  clock.setMicros(0);
+  preamble.step();
+  clock.setMicros(50000);
+  scriptMotorBeginSuccess(bus);  // Left
+  scriptMotorBeginSuccess(bus);  // Right
+  scriptOtosBeginSuccess(bus);
+  scriptColorBeginSuccess(bus);
+  scriptLineBeginSuccess(bus);
+
+  Motion::Executor executor;
+  App::HeadingSource headingSource(otos, motorL, motorR, /*trackWidth=*/120.0f);
+  App::Pilot pilot(executor, drive, headingSource, odom);
+  MockTuningStore mockStore;
+  App::RobotLoop robotLoop(plant, motorL, motorR, otos, comms, tlm, drive, odom,
+                            deadman, preamble, pilot, clock, sleeper, &mockStore);
+  robotLoop.boot();
+  checkTrue(preamble.done(), "boot() completes against the MockTuningStore-equipped fixture too");
+
+  // The SAME patch bytes, encoded once and dispatched TWICE (below) -- only
+  // the patch CONTENT (side=LEFT, kp=0.02, ki=0.01) matters for the write
+  // policy's own blob comparison, so both dispatches reuse one envelope.
+  Buf motorPatch;
+  putVarintField(motorPatch, 1, 0);      // MotorConfigPatch.side = LEFT (0)
+  putFloatField(motorPatch, 3, 0.02f);   // kp
+  putFloatField(motorPatch, 4, 0.01f);   // ki
+  Buf motorDelta;
+  putMessageField(motorDelta, 2, motorPatch);  // ConfigDelta.motor, field 2
+  Buf motorEnv;
+  putVarintField(motorEnv, 1, /*corr_id=*/91234);
+  putMessageField(motorEnv, 6, motorDelta);    // CommandEnvelope.config, field 6
+  std::string motorLine = armorLine(motorEnv.data, motorEnv.len);
+  checkTrue(!motorLine.empty(), "armor() of the CONFIG{motor} envelope succeeds");
+
+  // Same cycle-index/extraDutyWrites schedule as
+  // scenarioConfigMotorPlannerPatchApplyWhileDrivetrainStaysUnimplemented()
+  // above (see that scenario's own scriptMotorCycle() derivation comment) --
+  // this fixture never issues a TWIST/MOVE either, so drive_.tick()'s
+  // one-time each-leaf "first write" lands on the identical cycles 0
+  // (right)/1 (left), independent of which cycles inject a CONFIG line.
+  uint64_t nowUs = 50000;
+  for (int i = 0; i < 4; ++i) {
+    clock.setMicros(nowUs);
+    scriptMotorCycle(bus, /*positionMm=*/0.0f, /*extraDutyWrites=*/(i == 1) ? 1 : 0);  // Left
+    scriptMotorCycle(bus, /*positionMm=*/0.0f, /*extraDutyWrites=*/(i == 0) ? 1 : 0);  // Right
+    scriptOtosReadZeroPose(bus);
+
+    if (i == 1 || i == 2) serialFake.enqueueInbound(motorLine.c_str());  // dispatch the SAME patch twice
+
+    robotLoop.cycle();
+    nowUs += 41000;
+  }
+
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run: motor (persist-policy cycles)");
+  checkUintEq(bus.errCount(Devices::kOtosDeviceAddr), 0, "no script under-run: otos (persist-policy cycles)");
+
+  checkFloatEq(motorL.gains().kp, 0.02f, "left motor kp reflects the (twice-dispatched) patch");
+  checkFloatEq(motorL.gains().ki, 0.01f, "left motor ki reflects the (twice-dispatched) patch");
+  checkUintEq(static_cast<uint32_t>(mockStore.saveCount), 1,
+              "persistTuningIfChanged() saves ONCE for the first patch, skips the byte-identical second one");
+  checkUintEq(mockStore.lastVersion, Config::kConfigSchemaVersion,
+              "the one save() call stamps the current schema version");
+  checkUintEq(static_cast<uint32_t>(mockStore.wipeCount), 0,
+              "a live CFG patch never calls wipe() -- that is boot-sequence-only (main.cpp)");
+}
+
 }  // namespace
 
 int main() {
   scenarioBootThenAFewCyclesRunToCompletion();
   scenarioConfigMotorPlannerPatchApplyWhileDrivetrainStaysUnimplemented();
+  scenarioConfigPersistWritePolicySkipsRedundantSave();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::RobotLoop scenarios passed\n");

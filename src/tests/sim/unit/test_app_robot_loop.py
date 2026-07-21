@@ -63,6 +63,10 @@ _COLOR_SENSOR_SRC = _SOURCE_DIR / "devices" / "color_sensor.cpp"
 _LINE_SENSOR_SRC = _SOURCE_DIR / "devices" / "line_sensor.cpp"
 _CLOCK_HOST_FAKE_SRC = _INFRA_SIM_DIR / "sim_clock.cpp"
 
+# 114-004: robot_loop.cpp now #includes config/persisted_tuning.h and calls
+# its pure serializeSnapshot()/Config::TuningStore seam directly.
+_PERSISTED_TUNING_SRC = _SOURCE_DIR / "config" / "persisted_tuning.cpp"
+
 _BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
 
 _WIRE_SRC = _SOURCE_DIR / "messages" / "wire.cpp"
@@ -139,6 +143,7 @@ def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
         _COLOR_SENSOR_SRC,
         _LINE_SENSOR_SRC,
         _CLOCK_HOST_FAKE_SRC,
+        _PERSISTED_TUNING_SRC,
         _BODY_KINEMATICS_SRC,
         _WIRE_SRC,
         _WIRE_RUNTIME_SRC,

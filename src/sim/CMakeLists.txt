@@ -101,6 +101,19 @@ set(DEVICE_SOURCES
     "${SOURCE_DIR}/devices/color_sensor.cpp"
     "${SOURCE_DIR}/devices/line_sensor.cpp"
 )
+# config/persisted_tuning.cpp (114-004) -- App::RobotLoop (APP_SOURCES,
+# above) now #includes config/persisted_tuning.h and calls its pure
+# serializeSnapshot()/Config::TuningStore seam directly, so this TU must
+# link into the host lib too -- UNLIKE config/boot_config.cpp (still
+# absent, see this file's own "Absent" note below: that one bakes in the
+# active robot JSON at ARM build time and has no sim role at all).
+# persisted_tuning.cpp's own #ifndef HOST_BUILD block (the ARM-only
+# MicroBitStorage adapter) compiles out entirely under this file's
+# -DHOST_BUILD=1, mirroring app/comms.cpp's identical SerialTransport/
+# RadioTransport guard.
+set(CONFIG_SOURCES
+    "${SOURCE_DIR}/config/persisted_tuning.cpp"
+)
 set(MESSAGE_SOURCES
     "${SOURCE_DIR}/messages/wire.cpp"
     "${SOURCE_DIR}/messages/wire_runtime.cpp"
@@ -140,6 +153,7 @@ set(SIM_SOURCES
 add_library(firmware_host SHARED
     ${APP_SOURCES}
     ${DEVICE_SOURCES}
+    ${CONFIG_SOURCES}
     ${MESSAGE_SOURCES}
     ${KINEMATICS_SOURCES}
     ${MOTION_SOURCES}
