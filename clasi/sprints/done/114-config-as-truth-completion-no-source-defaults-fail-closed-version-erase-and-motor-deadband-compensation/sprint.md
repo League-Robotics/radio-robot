@@ -2,7 +2,7 @@
 id: '114'
 title: Config-as-truth completion (no source defaults, fail-closed, version-erase)
   and motor deadband compensation
-status: planning-docs
+status: closed
 branch: sprint/114-config-as-truth-completion-no-source-defaults-fail-closed-version-erase-and-motor-deadband-compensation
 worktree: false
 use-cases: []
