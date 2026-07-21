@@ -1,6 +1,12 @@
 ---
-status: pending
+status: in-progress
 sprint: '115'
+tickets:
+- 115-003
+- 115-005
+- 115-007
+- 115-009
+- 115-010
 ---
 
 # Telemetry frame tightening (amendment to the gut's S1 stage)
