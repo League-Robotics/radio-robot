@@ -1,9 +1,14 @@
 ---
 id: '005'
 title: Firmware app-layer reshape + line/color telemetry wiring
-status: open
-use-cases: [SUC-045, SUC-046, SUC-047, SUC-048]
-depends-on: ["003"]
+status: in-progress
+use-cases:
+- SUC-045
+- SUC-046
+- SUC-047
+- SUC-048
+depends-on:
+- '003'
 github-issue: ''
 issue: telemetry-frame-tightening-amendment-to-gut-s1.md
 completes_issue: true
