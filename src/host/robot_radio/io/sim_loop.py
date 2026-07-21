@@ -54,10 +54,17 @@ tick thread is running:
     contract ``NezhaProtocol.twist()``/``.stop()`` document (this module's
     own outcome, if any, rides the next drained telemetry frame's ack
     ring, exactly like the real wire).
-  - Fault-condition setters and ``get_true_pose()`` are round-tripped
-    SYNCHRONOUSLY onto the tick thread (``_call_on_tick_thread()``) --
-    unlike twist/stop, a caller reading these values needs them to reflect
-    a specific, already-applied state, not "eventually applied".
+  - Fault-condition setters, ``get_true_pose()``, and hook registration
+    (``set_read_hook()``/``set_write_hook()``, including the
+    ``read_hook()``/``write_hook()`` context managers' clear-on-exit) are
+    round-tripped SYNCHRONOUSLY onto the tick thread
+    (``_call_on_tick_thread()``) -- unlike twist/stop, a caller reading
+    these values needs them to reflect a specific, already-applied state,
+    not "eventually applied", and hook registration additionally must
+    never reassign ``SimPlant::readHook_``/``writeHook_`` concurrently with
+    the tick thread's own ``sim_step()`` mid-invocation of the previous
+    hook (the raw ctypes handle is NOT thread-safe -- see this section's
+    opening sentence -- so registration is no exception to it).
   - Every tick, the tick thread drains ``sim_drain_tlm()`` into
     ``TLMFrame`` objects (dearmoring/parsing the raw ``*B<base64>`` wire
     text with the exact same ``pb2`` codec a real robot's replies go
@@ -105,7 +112,8 @@ reference of its own, and a garbage-collected trampoline crashes the
 process the next time the firmware touches that wire address.
 ``read_hook()``/``write_hook()`` context managers register on ``__enter__``
 and clear (``cb=None``) on ``__exit__``, for a caller that wants scoped
-registration without a manual try/finally.
+registration without a manual try/finally. The actual registration/clear
+call is round-tripped onto the tick thread -- see "Threading model" above.
 """
 
 from __future__ import annotations
@@ -1013,37 +1021,45 @@ class SimLoop:
         return int(self._lib.sim_default_read(self._handle, addr, ptr, length))
 
     def _set_hook(self, is_write: bool, cb: "HookCallback | None") -> None:
+        """Register (``cb`` given) or clear (``cb=None``) the read/write
+        hook. Builds the ``ctypes.CFUNCTYPE`` trampoline (if any) on the
+        CALLING thread -- that step never touches the sim handle, only
+        Python/ctypes bookkeeping -- but the actual
+        ``sim_set_read_hook()``/``sim_set_write_hook()`` call, which
+        reassigns ``SimPlant::readHook_``/``writeHook_`` on the live handle,
+        is round-tripped through ``_call_on_tick_thread()`` like every other
+        mutator (module docstring's "Threading model" section) so it never
+        races a concurrent ``sim_step()``. Symmetric for register AND clear
+        -- the race is the same in both directions."""
         self._require_connected()
-        register = self._lib.sim_set_write_hook if is_write else self._lib.sim_set_read_hook
 
         if cb is None:
-            register(self._handle, ctypes.cast(None, _SimHookFn), None)
-            if is_write:
-                self._write_hook_c = None
-                self._write_hook_py = None
-            else:
-                self._read_hook_c = None
-                self._read_hook_py = None
-            return
+            c_cb = ctypes.cast(None, _SimHookFn)
+        else:
+            def _trampoline(_ctx, addr, data, length):
+                try:
+                    arr_type = ctypes.c_uint8 * length if length > 0 else ctypes.c_uint8 * 0
+                    arr = (ctypes.cast(data, ctypes.POINTER(arr_type)).contents
+                           if length > 0 else arr_type())
+                    return int(cb(int(addr), arr))
+                except Exception:
+                    # A raising Python hook must never crash the sim -- PASS
+                    # (0) so the default handler still answers the transaction.
+                    return 0
 
-        def _trampoline(_ctx, addr, data, length):
-            try:
-                arr_type = ctypes.c_uint8 * length if length > 0 else ctypes.c_uint8 * 0
-                arr = (ctypes.cast(data, ctypes.POINTER(arr_type)).contents
-                       if length > 0 else arr_type())
-                return int(cb(int(addr), arr))
-            except Exception:
-                # A raising Python hook must never crash the sim -- PASS
-                # (0) so the default handler still answers the transaction.
-                return 0
+            c_cb = _SimHookFn(_trampoline)
 
-        c_cb = _SimHookFn(_trampoline)
-        register(self._handle, c_cb, None)
+        def _register() -> None:
+            register = self._lib.sim_set_write_hook if is_write else self._lib.sim_set_read_hook
+            register(self._handle, c_cb, None)
+
+        self._call_on_tick_thread(_register)
+
         if is_write:
-            self._write_hook_c = c_cb
+            self._write_hook_c = c_cb if cb is not None else None
             self._write_hook_py = cb
         else:
-            self._read_hook_c = c_cb
+            self._read_hook_c = c_cb if cb is not None else None
             self._read_hook_py = cb
 
     # ------------------------------------------------------------------

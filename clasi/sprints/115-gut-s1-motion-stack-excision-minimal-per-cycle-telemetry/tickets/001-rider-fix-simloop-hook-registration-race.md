@@ -1,8 +1,9 @@
 ---
 id: '001'
 title: 'Rider: fix SimLoop hook-registration race'
-status: open
-use-cases: [SUC-045]
+status: done
+use-cases:
+- SUC-045
 depends-on: []
 github-issue: ''
 issue: sim-loop-hook-registration-race-with-tick-thread.md
@@ -41,18 +42,18 @@ pattern for the same class of problem this file already solves one way).
 
 ## Acceptance Criteria
 
-- [ ] `SimLoop._set_hook()` (backing `set_read_hook()`/`set_write_hook()`)
+- [x] `SimLoop._set_hook()` (backing `set_read_hook()`/`set_write_hook()`)
       routes through `_call_on_tick_thread()`, matching `twist()`/
       `stop()`/`set_pid_enabled()`'s existing pattern — no direct
       cross-thread call into `sim_set_read_hook()`/`sim_set_write_hook()`
       remains.
-- [ ] The module's own "Threading model" docstring (which already states
+- [x] The module's own "Threading model" docstring (which already states
       the invariant this fix restores) is updated if its wording implied
       an exception for hook registration.
-- [ ] `src/tests/testgui/test_sim_loop.py`'s
+- [x] `src/tests/testgui/test_sim_loop.py`'s
       `test_read_hook_fires_and_pass_through_returns_bytes` and
       `test_write_hook_can_swallow_a_command` still pass.
-- [ ] No new repro was required to land this fix (none exists — see
+- [x] No new repro was required to land this fix (none exists — see
       sprint.md Open Questions #5); the fix is justified by matching the
       documented invariant, not by a reproduced crash.
 
