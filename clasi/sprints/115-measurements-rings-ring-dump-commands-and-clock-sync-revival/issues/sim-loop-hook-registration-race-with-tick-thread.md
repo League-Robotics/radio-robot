@@ -1,9 +1,13 @@
 ---
-title: "SimLoop.set_read_hook()/set_write_hook() race the background tick thread -- observed one segfault under heavy concurrent load"
+title: SimLoop.set_read_hook()/set_write_hook() race the background tick thread --
+  observed one segfault under heavy concurrent load
 filed: 2026-07-19
 filed_by: programmer (111-002, baseline sim-suite triage)
-status: pending
+status: in-progress
 related: []
+sprint: '115'
+tickets:
+- 115-001
 ---
 
 # SimLoop hook registration races the tick thread

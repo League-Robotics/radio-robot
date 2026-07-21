@@ -1,10 +1,15 @@
 ---
-title: "kCycle=20 vs Telemetry::kPrimaryPeriod=40 mismatch -- robot_loop.cpp's own doc comment is now false"
+title: kCycle=20 vs Telemetry::kPrimaryPeriod=40 mismatch -- robot_loop.cpp's own
+  doc comment is now false
 filed: 2026-07-19
-filed_by: programmer (111-002, discovered while fixing sim_api_harness.cpp's stale timing expectations)
-status: pending
+filed_by: programmer (111-002, discovered while fixing sim_api_harness.cpp's stale
+  timing expectations)
+status: in-progress
 related:
-  - motion-control-terminal-blips-reconciled-fix-plan.md
+- motion-control-terminal-blips-reconciled-fix-plan.md
+sprint: '115'
+tickets:
+- 115-002
 ---
 
 # kCycle/kPrimaryPeriod mismatch

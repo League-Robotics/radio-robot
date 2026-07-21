@@ -1,12 +1,15 @@
 ---
-title: Cycle-order experiment — keep reordered loop through motion work, A/B
-  revert-and-compare just before hardware
+title: "Cycle-order experiment \u2014 keep reordered loop through motion work, A/B\
+  \ revert-and-compare just before hardware"
 filed: 2026-07-19
 filed_by: team-lead (Eric's live cycle-order experiment on pid-debugging)
 status: pending
 related:
-  - motion-control-terminal-blips-reconciled-fix-plan.md
-  - later/turn-lead-compensation-gain-cotuning.md
+- motion-control-terminal-blips-reconciled-fix-plan.md
+- later/turn-lead-compensation-gain-cotuning.md
+sprint: '115'
+tickets:
+- 115-003
 ---
 
 # Cycle-order experiment — A/B revert-and-compare before hardware
