@@ -49,6 +49,11 @@ _DEVICE_SOURCES = [
     _SOURCE_DIR / "devices" / "color_sensor.cpp",
     _SOURCE_DIR / "devices" / "line_sensor.cpp",
 ]
+# 114-004: robot_loop.cpp now #includes config/persisted_tuning.h and calls
+# its pure serializeSnapshot()/Config::TuningStore seam directly.
+_CONFIG_SOURCES = [
+    _SOURCE_DIR / "config" / "persisted_tuning.cpp",
+]
 _MESSAGE_SOURCES = [
     _SOURCE_DIR / "messages" / "wire.cpp",
     _SOURCE_DIR / "messages" / "wire_runtime.cpp",
@@ -83,6 +88,7 @@ def _all_sources():
         [_HARNESS_SRC, _SIM_PLANT_SRC, _WIRE_TEST_CODEC_SRC, _WHEEL_PLANT_SRC, _OTOS_PLANT_SRC]
         + _APP_SOURCES
         + _DEVICE_SOURCES
+        + _CONFIG_SOURCES
         + _MESSAGE_SOURCES
         + _KINEMATICS_SOURCES
         + _MOTION_SOURCES

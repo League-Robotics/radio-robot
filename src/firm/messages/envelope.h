@@ -19,6 +19,7 @@ enum class ErrCode : uint8_t {
     ERR_DECODE = 5,
     ERR_UNIMPLEMENTED = 6,
     ERR_OVERSIZE = 7,
+    ERR_NOT_CONFIGURED = 8,
 };
 
 // Ack

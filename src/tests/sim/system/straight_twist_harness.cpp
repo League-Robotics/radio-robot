@@ -79,6 +79,7 @@
 #include <cstdio>
 #include <string>
 
+#include "bench_test_config.h"
 #include "sim_harness.h"
 
 namespace {
@@ -145,6 +146,7 @@ int main() {
   constexpr float kMinTrackingVelocity = 20.0f;  // [mm/s]
 
   TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
   sim.boot();
   sim.step(3);  // settle: both leaves' own one-time zero-duty activation writes land
 

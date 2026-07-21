@@ -92,6 +92,7 @@
 #include <string>
 #include <vector>
 
+#include "bench_test_config.h"
 #include "sim_harness.h"
 
 namespace {
@@ -383,11 +384,17 @@ struct ScenarioLobes {
 // check with `prefix`-qualified names. vBound/aBound/jBound are the
 // WHEEL-space bounds (already includes kBoundTolerance) the caller derives
 // from the harness's own live msg::PlannerConfig -- never hand-duplicated
-// here.
+// here. `expectedCruise` (114-006) is the WHEEL-space cruise magnitude THIS
+// SPECIFIC move should actually reach (straight: the move's own `vMax`
+// argument, which can be lower than the planner's overall `v_body_max`
+// ceiling -- pivot: `yaw_rate_max * halfTrack`, the same value vBound's own
+// pre-tolerance base already uses) -- deliberately NOT derived from
+// vBound/kBoundTolerance, which reflects the planner's CEILING, not
+// necessarily what a particular capped-vMax move actually cruises at.
 ScenarioLobes runBehaviorLockScenario(TestSim::SimHarness& sim, const std::string& prefix,
                                        float distance, float deltaHeading, float vMax, uint32_t id,
                                        uint32_t corrId, int maxCycles, int tailCycles, float vBound,
-                                       float aBound, float jBound) {
+                                       float aBound, float jBound, float expectedCruise) {
   sim.injectMove(distance, deltaHeading, vMax, /*omega=*/0.0f, /*timeMs=*/0.0f, /*replace=*/false, id,
                  corrId);
 
@@ -451,6 +458,25 @@ ScenarioLobes runBehaviorLockScenario(TestSim::SimHarness& sim, const std::strin
 
   bool terminalZeroOk = checkNoCommandAfterTerminalZero(samples, doneIndex, kNearZero, &detail);
   report(prefix + "_no_command_after_terminal_zero", terminalZeroOk, detail);
+
+  // 114-006 (SUC-006 AC1/AC2, "clean trapezoid: smooth ramp-up, HOLD at
+  // max, smooth ramp-to-zero"): ramp_bounds/terminal_bounds above only
+  // check the FIRST/LAST kWindow cycles stay within bound -- neither
+  // confirms the trajectory actually REACHES cruise in between (a triangle
+  // profile that peaks early and decelerates immediately would pass both
+  // without ever holding). Require the trace's own peak to come within a
+  // reasonable margin of `expectedCruise` (the move's own actual cruise
+  // target, see this function's own header comment for why that is NOT
+  // simply vBound/kBoundTolerance) -- proof a genuine hold segment exists,
+  // not just a monotonic ramp up and back down.
+  float peakLeft = 0.0f, peakRight = 0.0f;
+  for (float v : refLeft) peakLeft = std::max(peakLeft, std::fabs(v));
+  for (float v : refRight) peakRight = std::max(peakRight, std::fabs(v));
+  bool reachedCruise = peakLeft >= 0.8f * expectedCruise && peakRight >= 0.8f * expectedCruise;
+  report(prefix + "_reaches_cruise_hold", reachedCruise,
+         "peak left=" + std::to_string(peakLeft) + " right=" + std::to_string(peakRight) +
+             " (expected >=80% of this move's own cruise target " + std::to_string(expectedCruise) +
+             " -- a genuine trapezoid must actually hold near cruise)");
 
   return ScenarioLobes{/*completed=*/true, lobesL, lobesR};
 }
@@ -526,6 +552,7 @@ void runShelfScenario(const std::string& prefix, float distance, float deltaHead
                        uint32_t id, uint32_t corrId) {
   beginScenario(prefix + ": shelf length (commanded-target reaches exactly 0 after completion)");
   TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
   sim.boot();
   sim.step(3);
   sim.injectMove(distance, deltaHeading, vMax, /*omega=*/0.0f, /*timeMs=*/0.0f, /*replace=*/false, id,
@@ -548,6 +575,7 @@ void runShelfScenario(const std::string& prefix, float distance, float deltaHead
 void runSameBootScenario() {
   beginScenario("same-boot: 40 consecutive alternating D700 straight / 360deg pivot moves");
   TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
   sim.boot();
   sim.step(3);
 
@@ -637,6 +665,7 @@ void runChainedPivotScenario() {
   beginScenario("chained pivot->pivot: same-sign 180deg pivots carry rotational velocity through the boundary "
                 "(109-009 exception)");
   TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
   sim.boot();
   sim.step(3);
 
@@ -711,6 +740,7 @@ int main() {
   {
     beginScenario("D700 straight (kArc): capture, differentiate, assert bounds/shape");
     TestSim::SimHarness sim;
+    TestSupport::configureSimForBenchTest(sim);
     sim.boot();
     sim.step(3);
 
@@ -722,15 +752,38 @@ int main() {
                 "family)\n",
                 cfg.v_body_max, cfg.a_max, cfg.a_decel, cfg.j_max);
 
-    runBehaviorLockScenario(sim, "straight", /*distance=*/700.0f, /*deltaHeading=*/0.0f,
-                             /*vMax=*/400.0f, /*id=*/1, /*corrId=*/1001, /*maxCycles=*/400,
-                             /*tailCycles=*/30, vBound, aBound, jBound);
+    ScenarioLobes straightLobes = runBehaviorLockScenario(
+        sim, "straight", /*distance=*/700.0f, /*deltaHeading=*/0.0f,
+        /*vMax=*/400.0f, /*id=*/1, /*corrId=*/1001, /*maxCycles=*/400,
+        /*tailCycles=*/30, vBound, aBound, jBound, /*expectedCruise=*/400.0f);
+
+    // 114-006 (SUC-006 AC1, "a straight's trace never goes below zero"):
+    // straight_single_lobe_left/right (above, inside runBehaviorLockScenario)
+    // only assert exactly ONE contiguous non-near-zero run per wheel --
+    // that alone does not rule out a single NEGATIVE lobe (i.e. driving
+    // backward the whole time on a commanded-forward distance=+700 move,
+    // clearly wrong but not caught by a lobe-COUNT-only check). Mirrors
+    // pivot_lobes_opposite_sign's own "count check above, sign check here,
+    // as its own named result" structure below.
+    if (straightLobes.completed && straightLobes.left.size() == 1 &&
+        straightLobes.right.size() == 1) {
+      bool bothPositive = straightLobes.left[0].sign > 0 && straightLobes.right[0].sign > 0;
+      report("straight_never_below_zero", bothPositive,
+             "left lobe sign=" + std::to_string(straightLobes.left[0].sign) +
+                 ", right lobe sign=" + std::to_string(straightLobes.right[0].sign) +
+                 " (expected both positive -- commanded distance is +700)");
+    } else {
+      report("straight_never_below_zero", false,
+             "cannot evaluate sign -- left/right did not each show exactly one lobe "
+             "(see straight_single_lobe_left/right above)");
+    }
   }
 
   // --- 360deg pivot (kPivot, distance=0) ---
   {
     beginScenario("360deg pivot (kPivot): capture, differentiate, assert bounds/shape");
     TestSim::SimHarness sim;
+    TestSupport::configureSimForBenchTest(sim);
     sim.boot();
     sim.step(3);
 
@@ -743,10 +796,10 @@ int main() {
                 "halfTrack=%.1fmm\n",
                 cfg.yaw_rate_max, cfg.yaw_acc_max, cfg.yaw_jerk_max, halfTrack);
 
-    ScenarioLobes lobes = runBehaviorLockScenario(sim, "pivot", /*distance=*/0.0f,
-                                                   /*deltaHeading=*/2.0f * kPi, /*vMax=*/0.0f, /*id=*/2,
-                                                   /*corrId=*/2001, /*maxCycles=*/400,
-                                                   /*tailCycles=*/30, vBound, aBound, jBound);
+    ScenarioLobes lobes = runBehaviorLockScenario(
+        sim, "pivot", /*distance=*/0.0f, /*deltaHeading=*/2.0f * kPi, /*vMax=*/0.0f, /*id=*/2,
+        /*corrId=*/2001, /*maxCycles=*/400, /*tailCycles=*/30, vBound, aBound, jBound,
+        /*expectedCruise=*/cfg.yaw_rate_max * halfTrack);
 
     // "one +lobe and one -lobe instead of a single lobe" (SUC-001 step 4,
     // Architecture "What Changed"): a pure pivot spins the two wheels in

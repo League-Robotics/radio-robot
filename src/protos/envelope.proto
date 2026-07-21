@@ -49,6 +49,7 @@ enum ErrCode {
   ERR_DECODE         = 5;  // malformed wire bytes (protobuf decode failure)
   ERR_UNIMPLEMENTED  = 6;  // declared-only arm, no live consumer this sprint
   ERR_OVERSIZE       = 7;  // encoded reply would exceed the envelope cap
+  ERR_NOT_CONFIGURED = 8;  // composition root refused MOVE/TWIST -- config-completeness gate not yet satisfied (114-001)
 }
 
 // Flow-control ack -- unchanged shape (q/rem/t) from the pre-102 schema.

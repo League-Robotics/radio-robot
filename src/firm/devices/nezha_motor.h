@@ -4,8 +4,11 @@
 // 0x46 encoder sequencing, the velocity PID, and ALL of the brick's own
 // write shaping — slew limiting, write throttle, write-on-change, reversal
 // dwell, and output deadband (see writeShapedDuty()/writeRawDuty() in
-// nezha_motor.cpp). Wedge OBSERVATION/RECOVERY policy lives in the
-// Devices::MotorArmor decorator (motor_armor.h), which a caller may wrap
+// nezha_motor.cpp). Sprint 114 ticket 005: the output deadband BOOSTS a
+// genuine nonzero sub-deadband duty to the deadband floor instead of
+// zeroing it (an exact zero still stays an immediate hard stop) -- see
+// writeShapedDuty()'s own doc comment. Wedge OBSERVATION/RECOVERY policy
+// lives in the Devices::MotorArmor decorator (motor_armor.h), which a caller may wrap
 // this leaf in — or not (the sim composes the bare leaf directly).
 // Restructured 2026-07-18 (stakeholder): MotorArmor used to be this class's
 // base; it is now a composing decorator, and the dwell/deadband write gate
@@ -105,6 +108,16 @@ class NezhaMotor : public Motor {
   // absent field back to some default.
   const Gains& gains() const override { return config_.velGains; }
 
+  // reconfigure — REVISION 1 (114-001, motor.h): whole-config replacement,
+  // guarded. Refuses (returns false, leaves config_ unchanged) unless
+  // mode_ == Mode::None (never yet commanded) or the motor is
+  // independently at rest (|filteredVelocity_| < kReconfigureRestVelocity
+  // AND appliedDuty() == 0.0f). On success, reassigns config_ wholesale and
+  // re-derives the slew-rate/write-shaping substitution fields exactly as
+  // the constructor does, then returns true. See motor.h's own doc comment
+  // for why this is a separate, narrower surface from applyGains().
+  [[nodiscard]] bool reconfigure(const MotorConfig& config) override;
+
   // Velocity-estimator selection (bench A/B). mode 0 = EMA
   // (velFiltAlpha — the shipped/default behavior); mode 1 = least-squares
   // line-fit slope over the last `window` FRESH position samples
@@ -153,7 +166,7 @@ class NezhaMotor : public Motor {
  private:
   // --- Device write path + resets (leaf internals — no longer virtuals;
   // the old MotorArmor base-class seam is gone) ---
-  void writeShapedDuty(float duty, uint32_t now);   // [-1,1] [ms] reversal dwell + output deadband, then writeRawDuty()
+  void writeShapedDuty(float duty, uint32_t now);   // [-1,1] [ms] output-deadband boost (sub-deadband nonzero -> deadband floor; exact zero stays zero), then reversal dwell, then writeRawDuty() -- see nezha_motor.cpp's own doc comment (114-005)
   void writeRawDuty(float duty);    // clamp + write-on-change + throttle + slew + fwdSign + bus write
   void hardReset();                 // median-of-3 + readback-verify + retry
   void softRebaseline();            // software-only rebaseline
@@ -238,20 +251,19 @@ class NezhaMotor : public Motor {
   // instantaneous H-bridge sign flip under way latches the 0x46 readback;
   // near-zero PID dither would request such flips every tick — see
   // docs/knowledge/2026-07-04-encoder-wedge.md). Config-driven: cached
-  // from MotorConfig's reversalDwell/outputDeadband in the ctor, ship
-  // defaults when unset; an explicit 0/0 (the sim's configuration) makes
-  // writeShapedDuty() a pure pass-through. ----
+  // straight from MotorConfig's required reversalDwell/outputDeadband
+  // fields in reconfigure() (sprint 114 ticket 003 — no more code-side ship
+  // default substitution; gen_boot_config.py always emits real values, see
+  // data/robots/*.json's control.reversal_dwell_ms/output_deadband). An
+  // explicit 0/0 makes writeShapedDuty() a pure pass-through. Sprint 114
+  // ticket 005: outputDeadband_ BOOSTS a genuine nonzero sub-deadband duty
+  // up to itself (sign-preserving) rather than zeroing it -- an explicit 0
+  // here still means "never boost," i.e. still a pure pass-through. ----
   float reversalDwell_ = 0.0f;          // [ms] cached from MotorConfig
   float outputDeadband_ = 0.0f;         // [-1,1] fraction, cached from MotorConfig
   bool dwelling_ = false;
   uint32_t dwellDeadline_ = 0;          // [ms]
   float lastRequestedDuty_ = 0.0f;      // [-1,1] last duty actually forwarded to writeRawDuty()
-
-  // Ship defaults substituted when MotorConfig's two write-shaping fields
-  // are unset. Optional, not a zero-sentinel — an explicit 0 is a valid,
-  // distinct, meaningful configuration for both.
-  static constexpr float kDefaultReversalDwell = 100.0f;    // [ms]
-  static constexpr float kDefaultOutputDeadband = 0.03f;    // [-1,1] fraction
 
   // ---- Embedded velocity PID ----
   MotorVelocityPid pid_;
@@ -265,6 +277,12 @@ class NezhaMotor : public Motor {
   static constexpr uint8_t kDirCw = 1;      // positive speed from chip perspective
   static constexpr uint8_t kDirCcw = 2;     // negative speed from chip perspective
   static constexpr float kDefaultSlewRate = 25.0f;   // default max |delta PWM| per write
+
+  // reconfigure()'s own at-rest guard threshold — REVISION 1 (114-001).
+  // Mirrors MotorArmor's own kRestVelocity at-rest threshold (motor_armor.h)
+  // conceptually, but is NOT shared across the class boundary: this is a
+  // leaf-local constant for a leaf-local guard.
+  static constexpr float kReconfigureRestVelocity = 5.0f;  // [mm/s] mirrors MotorArmor's own kRestVelocity at-rest threshold
 
   // ---- Private helpers: write path ----
   // Returns the CODAL status from bus_.write() (0/kOk == success):

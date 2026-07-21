@@ -87,6 +87,44 @@ msg::AckStatus toWireAckStatus(Motion::CompletionStatus status) {
   return msg::AckStatus::ACK_STATUS_ERR;
 }
 
+// --- 114-004 (SUC-003) persisted-tuning merge helpers -- pure struct
+// merges, no RobotLoop state needed, so these stay free functions (mirrors
+// toWireExecState()/toWireAckStatus() above) rather than private methods. ---
+
+// mergeMotorGainsPatch -- folds `incoming`'s PRESENT gain fields onto
+// `slot` (a running per-side TuningSnapshot merge target). Gains mirror
+// onto BOTH bound motors regardless of `incoming.side` (matching
+// applyMotorConfigPatch()'s own existing mirror below), so handleConfig()
+// calls this once per side with the SAME incoming patch. travel_calib is
+// intentionally excluded here -- it is side-selected, merged separately by
+// handleConfig() itself, only into the ADDRESSED side's own slot.
+void mergeMotorGainsPatch(msg::MotorConfigPatch& slot, const msg::MotorConfigPatch& incoming) {
+  if (incoming.kp.has) slot.kp = incoming.kp;
+  if (incoming.ki.has) slot.ki = incoming.ki;
+  if (incoming.kff.has) slot.kff = incoming.kff;
+  if (incoming.i_max.has) slot.i_max = incoming.i_max;
+  if (incoming.kaw.has) slot.kaw = incoming.kaw;
+}
+
+void mergePlannerPatch(msg::PlannerConfigPatch& slot, const msg::PlannerConfigPatch& incoming) {
+  if (incoming.min_speed.has) slot.min_speed = incoming.min_speed;
+  if (incoming.heading_kp.has) slot.heading_kp = incoming.heading_kp;
+  if (incoming.heading_kd.has) slot.heading_kd = incoming.heading_kd;
+  if (incoming.arrive_dwell.has) slot.arrive_dwell = incoming.arrive_dwell;
+  if (incoming.distance_kp.has) slot.distance_kp = incoming.distance_kp;
+}
+
+// mergeOtosPatch -- `init` is deliberately excluded: a one-shot trigger,
+// not a persisted value (persisted_tuning.h's own TuningSnapshot doc
+// comment explains why).
+void mergeOtosPatch(msg::OtosConfigPatch& slot, const msg::OtosConfigPatch& incoming) {
+  if (incoming.linear_scale.has) slot.linear_scale = incoming.linear_scale;
+  if (incoming.angular_scale.has) slot.angular_scale = incoming.angular_scale;
+  if (incoming.offset_x.has) slot.offset_x = incoming.offset_x;
+  if (incoming.offset_y.has) slot.offset_y = incoming.offset_y;
+  if (incoming.offset_yaw.has) slot.offset_yaw = incoming.offset_yaw;
+}
+
 }  // namespace
 
 RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
@@ -94,7 +132,8 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
                       Comms& comms, Telemetry& tlm, Drive& drive,
                       Odometry& odom, Deadman& deadman, Preamble& preamble,
                       Pilot& pilot, const Devices::Clock& clock,
-                      Devices::Sleeper& sleeper)
+                      Devices::Sleeper& sleeper,
+                      Config::TuningStore* tuningStore)
     : bus_(bus),
       motorL_(motorL),
       motorR_(motorR),
@@ -107,7 +146,8 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
       preamble_(preamble),
       pilot_(pilot),
       clock_(clock),
-      sleeper_(sleeper) {}
+      sleeper_(sleeper),
+      tuningStore_(tuningStore) {}
 
 // --- Timing primitives -- see robot_loop.h's header. markTime() reads
 // clock_.nowMicros() ([us]) and converts to [ms], the unit every other
@@ -184,6 +224,17 @@ void RobotLoop::updateTlm() {
 }
 
 void RobotLoop::handleTwist(const msg::CommandEnvelope& env) {
+  // Configuration-completeness gate (114-001, SUC-001) -- FIRST statement,
+  // before touching drive_/pilot_/deadman_ at all. Real firmware satisfies
+  // this immediately at boot (Decision 2, sprint.md) -- this branch is only
+  // ever live for a composition root (SimHarness) that has not yet been
+  // configured.
+  if (!configured_) {
+    tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
+              static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
+    return;
+  }
+
   // TWIST preempts (flushes) the Motion::Executor queue -- sprint.md's own
   // wire-compatibility note. flush() BEFORE setTwist() so this cycle's own
   // pilot_.tick() call (later in this same settle block) observes
@@ -199,6 +250,13 @@ void RobotLoop::handleTwist(const msg::CommandEnvelope& env) {
 // (109-004), and PlannerConfigPatch (109-008) are live-applied below; every
 // other patch kind (DRIVETRAIN/WATCHDOG/NONE) stays ERR_UNIMPLEMENTED,
 // deliberately out of scope -- see DESIGN.md §3.
+//
+// 114-004 (SUC-003): each live branch below now ALSO merges the incoming
+// patch's PRESENT fields into persistedTuning_ (the running cumulative
+// live-tuning snapshot) and calls persistTuningIfChanged() -- the actual
+// apply-to-RAM behavior on motorL_/motorR_/pilot_/otos_ is UNCHANGED from
+// before this ticket (applyMotorConfigPatch()/applyOtosPatch() below are
+// verbatim extractions of what used to be inline here).
 void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
   // OTOS (109-004, issue otos-calibration-config-message.md): restores a
   // runtime path to Otos::setLinearScalar()/setAngularScalar()/setOffset()/
@@ -215,25 +273,9 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
   if (env.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::OTOS) {
     const msg::OtosConfigPatch& patch = env.cmd.config.patch.otos;
 
-    if (patch.linear_scale.has) otos_.setLinearScalar(patch.linear_scale.val);
-    if (patch.angular_scale.has) otos_.setAngularScalar(patch.angular_scale.val);
-
-    // Offset triple is merge-then-write (mirrors the MOTOR patch's gains
-    // merge below): setOffset() always writes x/y/heading together, so any
-    // field NOT present in this patch must carry the chip's own current
-    // value, read via getOffset() first, rather than clobbering it with 0.
-    if (patch.offset_x.has || patch.offset_y.has || patch.offset_yaw.has) {
-      float x = 0.0f, y = 0.0f, heading = 0.0f;
-      otos_.getOffset(x, y, heading);
-      if (patch.offset_x.has) x = patch.offset_x.val;
-      if (patch.offset_y.has) y = patch.offset_y.val;
-      if (patch.offset_yaw.has) heading = patch.offset_yaw.val;
-      otos_.setOffset(x, y, heading);
-    }
-
-    // init is a plain trigger (not Opt<T>-wrapped) -- fire whenever true,
-    // independent of whatever else this same patch carries.
-    if (patch.init) otos_.init();
+    applyOtosPatch(patch);
+    mergeOtosPatch(persistedTuning_.otos, patch);
+    persistTuningIfChanged();
 
     tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
     return;
@@ -250,6 +292,9 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
   // fields this patch kind cannot reach).
   if (env.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::PLANNER) {
     pilot_.applyPlannerPatch(env.cmd.config.patch.planner);
+    mergePlannerPatch(persistedTuning_.planner, env.cmd.config.patch.planner);
+    persistTuningIfChanged();
+
     tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
     return;
   }
@@ -262,10 +307,40 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
 
   const msg::MotorConfigPatch& patch = env.cmd.config.patch.motor;
 
-  // Merge each motor's OWN current gains against whatever wire fields are
-  // PRESENT (config.proto's Opt<T>-presence convention) -- NOT a blanket
-  // mirror of one motor's gains onto the other, since the two leaves'
-  // calibration can legitimately differ.
+  // Merge into BOTH sides' persisted slots (gains mirror onto both bound
+  // motors, matching applyMotorConfigPatch()'s own mirror below); merge
+  // travel_calib into ONLY the addressed side's own slot (side-selected,
+  // like the apply itself). `side` is re-stamped every call so a slot that
+  // has never seen its own side-matching patch yet still deserializes with
+  // the correct side (harmless if already correct).
+  mergeMotorGainsPatch(persistedTuning_.motorL, patch);
+  mergeMotorGainsPatch(persistedTuning_.motorR, patch);
+  if (patch.travel_calib.has) {
+    msg::MotorConfigPatch& target = (patch.side == msg::BoundMotorSide::LEFT)
+                                         ? persistedTuning_.motorL
+                                         : persistedTuning_.motorR;
+    target.travel_calib = patch.travel_calib;
+  }
+  persistedTuning_.motorL.side = msg::BoundMotorSide::LEFT;
+  persistedTuning_.motorR.side = msg::BoundMotorSide::RIGHT;
+
+  applyMotorConfigPatch(persistedTuning_.motorL);
+  applyMotorConfigPatch(persistedTuning_.motorR);
+  persistTuningIfChanged();
+
+  tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
+}
+
+// applyMotorConfigPatch -- UNCHANGED extraction of what used to be
+// handleConfig()'s own inline MOTOR-branch logic (114-004's own Approach
+// step 4: reapplyPersistedTuning(), below, shares this exact applier
+// instead of duplicating it). Merges each motor's OWN current gains
+// against whatever wire fields are PRESENT (config.proto's Opt<T>-presence
+// convention) -- NOT a blanket mirror of one motor's gains onto the other,
+// since the two leaves' calibration can legitimately differ. travel_calib
+// is side-selected (config.proto's own MotorConfigPatch.side comment) --
+// applies to exactly one leaf.
+void RobotLoop::applyMotorConfigPatch(const msg::MotorConfigPatch& patch) {
   Devices::Gains gainsL = motorL_.gains();
   Devices::Gains gainsR = motorR_.gains();
   if (patch.kp.has) { gainsL.kp = patch.kp.val; gainsR.kp = patch.kp.val; }
@@ -274,8 +349,6 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
   if (patch.i_max.has) { gainsL.iMax = patch.i_max.val; gainsR.iMax = patch.i_max.val; }
   if (patch.kaw.has) { gainsL.kaw = patch.kaw.val; gainsR.kaw = patch.kaw.val; }
 
-  // travel_calib is side-selected (config.proto's own MotorConfigPatch.side
-  // comment) -- applies to exactly one leaf.
   Devices::Opt<float> travelCalibL;
   Devices::Opt<float> travelCalibR;
   if (patch.travel_calib.has) {
@@ -290,8 +363,62 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
 
   motorL_.applyGains(gainsL, travelCalibL);
   motorR_.applyGains(gainsR, travelCalibR);
+}
 
-  tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);
+// applyOtosPatch -- UNCHANGED extraction of what used to be
+// handleConfig()'s own inline OTOS-branch logic. Offset triple is
+// merge-then-write: setOffset() always writes x/y/heading together, so any
+// field NOT present in this patch must carry the chip's own current value,
+// read via getOffset() first, rather than clobbering it with 0. init is a
+// plain trigger (not Opt<T>-wrapped) -- fire whenever true.
+void RobotLoop::applyOtosPatch(const msg::OtosConfigPatch& patch) {
+  if (patch.linear_scale.has) otos_.setLinearScalar(patch.linear_scale.val);
+  if (patch.angular_scale.has) otos_.setAngularScalar(patch.angular_scale.val);
+
+  if (patch.offset_x.has || patch.offset_y.has || patch.offset_yaw.has) {
+    float x = 0.0f, y = 0.0f, heading = 0.0f;
+    otos_.getOffset(x, y, heading);
+    if (patch.offset_x.has) x = patch.offset_x.val;
+    if (patch.offset_y.has) y = patch.offset_y.val;
+    if (patch.offset_yaw.has) heading = patch.offset_yaw.val;
+    otos_.setOffset(x, y, heading);
+  }
+
+  if (patch.init) otos_.init();
+}
+
+// persistTuningIfChanged -- 114-004 write policy (sprint.md Open Question
+// 3: flash-write frequency/wear risk). CHANGE-DETECTION debounce: only
+// calls tuningStore_->save() when this call's freshly-serialized
+// persistedTuning_ blob differs from the last one actually written. A
+// bench-tuning session streaming CFG patches rapidly (e.g. a TestGUI
+// slider) would otherwise write flash on every single patch -- both a
+// per-write latency risk inside a live control session and, over many
+// sessions, page wear on a finite-endurance flash region shared with
+// com/radio_channel.h's own persisted key (a real, not hypothetical,
+// constraint -- see persisted_tuning.cpp's own kNumChunks budget). A
+// patch that sets a field to the value it already holds, or that touches
+// no persisted field at all, costs zero flash writes under this policy.
+// Skipped entirely (no flash access, no serialize call) when tuningStore_
+// is null -- every sim/test composition root's own case.
+void RobotLoop::persistTuningIfChanged() {
+  if (tuningStore_ == nullptr) return;
+
+  Config::Blob blob = Config::serializeSnapshot(persistedTuning_);
+  if (blob == lastPersistedBlob_) return;
+
+  tuningStore_->save(Config::kConfigSchemaVersion, blob);
+  lastPersistedBlob_ = blob;
+}
+
+void RobotLoop::reapplyPersistedTuning(const Config::TuningSnapshot& snapshot) {
+  applyMotorConfigPatch(snapshot.motorL);
+  applyMotorConfigPatch(snapshot.motorR);
+  pilot_.applyPlannerPatch(snapshot.planner);
+  applyOtosPatch(snapshot.otos);
+
+  persistedTuning_ = snapshot;
+  lastPersistedBlob_ = Config::serializeSnapshot(persistedTuning_);
 }
 
 void RobotLoop::handleStop(const msg::CommandEnvelope& env) {
@@ -317,6 +444,15 @@ void RobotLoop::handleStop(const msg::CommandEnvelope& env) {
 // TIMEOUT/SOLVE_FAIL) for this same command rides a separate ack keyed by
 // the Move's own `id` field instead (drainPilotEvents(), below).
 void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
+  // Configuration-completeness gate (114-001, SUC-001) -- see
+  // handleTwist()'s own comment for the full rationale; same FIRST-statement
+  // placement, before touching pilot_/deadman_.
+  if (!configured_) {
+    tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_ERR,
+              static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
+    return;
+  }
+
   Motion::Cmd cmd = Motion::fromMove(env.cmd.move);
   Motion::EnqueueOutcome outcome = pilot_.enqueue(cmd);
 

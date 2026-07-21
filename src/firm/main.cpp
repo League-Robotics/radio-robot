@@ -18,6 +18,7 @@
 #include "com/radio.h"
 #include "com/serial_port.h"
 #include "config/boot_config.h"
+#include "config/persisted_tuning.h"
 #include "devices/color_sensor.h"
 #include "devices/device_config.h"
 #include "devices/i2c_bus.h"
@@ -60,10 +61,14 @@ Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
   cfg.velDeadband = src.min_duty;
   cfg.slewRate = src.slew_rate;
   cfg.port = src.port;
-  cfg.reversalDwell.has = src.reversal_dwell.has;
-  cfg.reversalDwell.val = src.reversal_dwell.val;
-  cfg.outputDeadband.has = src.output_deadband.has;
-  cfg.outputDeadband.val = src.output_deadband.val;
+  // Devices::MotorConfig's reversalDwell/outputDeadband are plain required
+  // floats (sprint 114 ticket 003) -- gen_boot_config.py + ticket 002's
+  // required-key gate guarantee src.reversal_dwell/src.output_deadband are
+  // always set (.has == true) here, so read .val directly rather than
+  // changing the wire msg::MotorConfig itself (still Opt<float> -- the wire
+  // schema is out of scope, see the ticket's own Approach step 6).
+  cfg.reversalDwell = src.reversal_dwell.val;
+  cfg.outputDeadband = src.output_deadband.val;
   cfg.polled = src.polled;
   return cfg;
 }
@@ -106,8 +111,13 @@ int main() {
   static Devices::NezhaMotor motorRBare(bus, motorCfgR);
   static Devices::MotorArmor motorL(motorLBare);
   static Devices::MotorArmor motorR(motorRBare);
-  motorL.configure(motorCfgL);
-  motorR.configure(motorCfgR);
+  // REVISION 1 (114-001): configure() -> reconfigure() rename, discarding
+  // the now-[[nodiscard]] bool. Always succeeds here (motorL/motorR are
+  // freshly constructed, mode_ == Mode::None) -- pure rename, no
+  // real-hardware behavior change (Decision 2's "always-immediate"
+  // precedent).
+  (void)motorL.reconfigure(motorCfgL);
+  (void)motorR.reconfigure(motorCfgR);
 
   Devices::OtosConfig otosConfig;
   otosConfig.offsetX = otosBootConfig.offsetX;
@@ -150,10 +160,46 @@ int main() {
   static App::Pilot pilot(executor, drive, headingSource, odom);
   pilot.configureHeading(plannerConfig);
 
+  // 114-004 (SUC-003): the real ARM-only MicroBitStorage-backed persistence
+  // adapter. Declared BEFORE robotLoop below -- RobotLoop only ever holds a
+  // pointer to it, never owns it, so it must outlive robotLoop (both are
+  // `static`, i.e. the whole program's lifetime, so this is really just
+  // declaration-order bookkeeping, not a real lifetime risk).
+  static Config::MicroBitTuningStore tuningStore(uBit.storage);
+
   // Boot loop + main cycle -- takes every leaf/app module above by
-  // reference plus the Clock/Sleeper time seam. run() never returns.
+  // reference plus the Clock/Sleeper time seam, and (114-004) the
+  // persisted-tuning store. run() never returns.
   static App::RobotLoop robotLoop(bus, motorL, motorR, otos, comms, tlm,
                                    drive, odom, deadman, preamble, pilot,
-                                   clock, sleeper);
+                                   clock, sleeper, &tuningStore);
+  // Configuration-completeness gate (114-001): the boot-configure sequence
+  // above (Config::default*() + every .configure() call, ending with
+  // pilot.configureHeading(plannerConfig)) is atomic and always complete by
+  // this point on real firmware -- this call is unconditional and always
+  // immediate, no observable startup delay (Decision 2, sprint.md).
+
+  // 114-004 (SUC-003): persisted live-tuning read/wipe/reapply -- AFTER the
+  // Tier-1 boot bake above (every Config::default*() call plus every
+  // .configure() call has already completed) and BEFORE markConfigured()
+  // below, matching this ticket's own Approach step 4 sequencing. A
+  // version match reapplies whatever was live-tuned in a previous session,
+  // through the SAME applier handleConfig() itself uses (no
+  // partially-applied or misinterpreted stale patch); a version mismatch
+  // wipes the ENTIRE store (SUC-003 -- not a partial/best-effort reapply of
+  // a patch whose field meanings may have changed since the version that
+  // wrote it). A store that was never written (first-ever boot) is left
+  // alone -- nothing to wipe, nothing to reapply, proceeds on the boot-bake
+  // values alone either way.
+  uint32_t storedVersion = 0;
+  Config::Blob storedBlob{};
+  bool storeHadData = tuningStore.load(&storedVersion, &storedBlob);
+  if (storeHadData && !Config::shouldWipe(storedVersion, Config::kConfigSchemaVersion)) {
+    robotLoop.reapplyPersistedTuning(Config::deserializeSnapshot(storedBlob));
+  } else if (storeHadData) {
+    tuningStore.wipe();
+  }
+
+  robotLoop.markConfigured();
   robotLoop.run();
 }

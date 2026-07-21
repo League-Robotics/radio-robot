@@ -33,6 +33,7 @@
 #include <string>
 #include <vector>
 
+#include "bench_test_config.h"
 #include "messages/envelope.h"
 #include "messages/planner.h"
 #include "sim_harness.h"
@@ -95,6 +96,7 @@ void scenarioMotorDisconnectFlipsConnLeftAndRecovers() {
   beginScenario("motor disconnect: connLeft flips false while active, recovers once cleared");
 
   TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
   sim.boot();
   sim.step(3);  // settle: both leaves' own one-time activation writes land
   (void)sim.drainTelemetry();
@@ -150,6 +152,7 @@ void scenarioEncoderWedgeSetsFaultBitAndClearsOnRelease() {
   beginScenario("encoder wedge: kFaultWedgeLatch sets while frozen, clears once released");
 
   TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
   sim.boot();
   sim.step(3);  // settle
   (void)sim.drainTelemetry();
@@ -199,6 +202,7 @@ void scenarioEncoderDropoutStaysSaneUnderModerateLoss() {
   beginScenario("encoder dropout: telemetry stays sane under moderate (25%) sample loss");
 
   TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
   sim.boot();
   sim.step(3);  // settle
   (void)sim.drainTelemetry();

@@ -89,11 +89,14 @@ def test_planner_boot_config_for_matches_gen_boot_config_from_robot_config(name)
 
     result = planner_boot_config_for(robot_config)
 
-    assert result["a_max"] == gbc.A_MAX_DEFAULT
-    assert result["a_decel"] == gbc.A_DECEL_DEFAULT
-    assert result["v_body_max"] == gbc.V_BODY_MAX_DEFAULT
-    assert result["j_max"] == gbc.J_MAX_DEFAULT
-    assert result["yaw_jerk_max"] == gbc.YAW_JERK_MAX_DEFAULT
+    expected_a_max, expected_a_decel, expected_v_body_max, expected_j_max, expected_yaw_jerk_max = (
+        gbc.motion_limits_for_config(raw)
+    )
+    assert result["a_max"] == expected_a_max
+    assert result["a_decel"] == expected_a_decel
+    assert result["v_body_max"] == expected_v_body_max
+    assert result["j_max"] == expected_j_max
+    assert result["yaw_jerk_max"] == expected_yaw_jerk_max
 
     yaw_rate_max, yaw_acc_max = gbc.profile_rot_limits_for_config(raw)
     assert result["yaw_rate_max"] == yaw_rate_max
@@ -153,63 +156,32 @@ def test_planner_boot_config_for_matches_gen_boot_config_from_raw_dict(name):
 
 
 # ---------------------------------------------------------------------------
-# 3. Fallback: missing "control" section entirely -> every field resolves to
-#    gen_boot_config.py's own documented default.
+# 3. Config-as-truth (sprint 114): missing "control" section entirely ->
+#    hard-fail, not a silent fallback to gen_boot_config.py's old defaults
+#    (those *_DEFAULT constants no longer exist).
 # ---------------------------------------------------------------------------
 
 
-def test_planner_boot_config_for_falls_back_to_defaults_with_no_control_section():
-    result = planner_boot_config_for({})
-
-    assert result["a_max"] == gbc.A_MAX_DEFAULT
-    assert result["a_decel"] == gbc.A_DECEL_DEFAULT
-    assert result["v_body_max"] == gbc.V_BODY_MAX_DEFAULT
-    assert result["j_max"] == gbc.J_MAX_DEFAULT
-    assert result["yaw_jerk_max"] == gbc.YAW_JERK_MAX_DEFAULT
-    assert result["yaw_rate_max"] == gbc.YAW_RATE_MAX_DEFAULT
-    assert result["yaw_acc_max"] == gbc.YAW_ACC_MAX_DEFAULT
-    assert result["min_speed"] == gbc.MIN_SPEED_DEFAULT
-    assert result["heading_kp"] == gbc.HEADING_KP_DEFAULT
-    assert result["heading_kd"] == gbc.HEADING_KD_DEFAULT
-    assert result["arrive_dwell"] == gbc.ARRIVE_DWELL_DEFAULT
-    assert result["actuation_lag"] == gbc.ACTUATION_LAG_DEFAULT
-    assert result["distance_kp"] == gbc.DISTANCE_KP_DEFAULT
-    assert result["distance_tol"] == gbc.DISTANCE_TOL_DEFAULT
-    assert result["model_tau_lin"] == gbc.MODEL_TAU_LIN_DEFAULT
-    assert result["model_tau_ang"] == gbc.MODEL_TAU_ANG_DEFAULT
-    assert result["heading_source"] == planner_pb2.HEADING_SOURCE_AUTO
+def test_planner_boot_config_for_raises_with_no_control_section():
+    """planner_boot_config_for({}) has nowhere to read a_max (the first
+    required key motion_limits_for_config() resolves) from -- it must raise
+    the same MissingRobotConfigKeyError gen_boot_config.py itself raises,
+    not silently substitute a firmware default (sprint 114 config-as-truth
+    completion; before this ticket every field here had a *_DEFAULT
+    fallback)."""
+    with pytest.raises(gbc.MissingRobotConfigKeyError):
+        planner_boot_config_for({})
 
 
-def test_planner_boot_config_for_falls_back_with_empty_robot_config():
-    """The SAME fallback, but sourced from a default-constructed
+def test_planner_boot_config_for_raises_with_empty_robot_config():
+    """The SAME hard-fail, but sourced from a default-constructed
     RobotConfig (control section present, every field None) -- proving the
-    RobotConfig code path hits the identical fallback as the raw-dict path
-    above, not a different one.
-
-    EXCEPTION: yaw_acc_max is excluded from the direct comparison.
-    ControlConfig.max_rot_accel_dps2 is a PRE-EXISTING field (predates
-    113-004) with its own non-None host-side default (300.0, documented on
-    the field itself as the turn/turn2 CLI's fallback, "NOT pushed to
-    firmware") -- but gen_boot_config.py's profile_rot_limits_for_config()
-    (100-014) ALSO reads this identical control.max_rot_accel_dps2 JSON key
-    for the firmware boot bake, whose own fallback (YAW_ACC_MAX_DEFAULT =
-    20.0 rad/s^2, ~1145.9 deg/s^2) is a different number. Every REAL shipped
-    robot JSON sets this key explicitly (tovez.json=600, tovez_nocal.json=
-    1145.92 deg/s^2 -- see the parity tests above, which pass), so this
-    divergence never surfaces in practice; it is flagged here, not silently
-    asserted around, as a pre-existing dual-purpose-default landmine for a
-    hypothetical future robot JSON that omits the key entirely -- out of
-    113-004's own scope (this ticket reuses gen_boot_config.py's mapping
-    unmodified; ControlConfig.max_rot_accel_dps2's host-side default is a
-    different field's pre-existing concern)."""
+    RobotConfig code path hits the identical MissingRobotConfigKeyError as
+    the raw-dict path above, not a different (silently-successful) one."""
     empty = RobotConfig(identity=IdentityConfig(robot_name="r", uid="0"))
 
-    result = planner_boot_config_for(empty)
-    expected = planner_boot_config_for({})
-
-    result.pop("yaw_acc_max")
-    expected.pop("yaw_acc_max")
-    assert result == expected
+    with pytest.raises(gbc.MissingRobotConfigKeyError):
+        planner_boot_config_for(empty)
 
 
 # ---------------------------------------------------------------------------
@@ -232,11 +204,23 @@ def test_motor_boot_config_for_matches_gen_boot_config(name, port):
     assert result["fwd_sign"] == expected_fwd_signs[port - 1]
 
 
-def test_motor_boot_config_for_falls_back_with_no_calibration_section():
-    result = motor_boot_config_for({}, port=1)
+def test_motor_boot_config_for_raises_with_no_calibration_or_control_section():
+    """motor_boot_config_for() unconditionally resolves vel_gains_for_config()
+    first (for vel_filt_alpha) -- with no control.vel_* keys at all, it must
+    raise the same MissingRobotConfigKeyError gen_boot_config.py itself
+    raises (sprint 114 config-as-truth completion), not silently return the
+    old VEL_FILT_ALPHA/FWD_SIGN placeholder pair."""
+    with pytest.raises(gbc.MissingRobotConfigKeyError):
+        motor_boot_config_for({}, port=1)
 
-    assert result["vel_filt_alpha"] == gbc.VEL_FILT_ALPHA
-    assert result["fwd_sign"] == gbc.FWD_SIGN
+
+# A fully-populated control block (sprint 114: vel_gains_for_config() has no
+# fallback, so any motor_boot_config_for() call needs one) -- values are
+# arbitrary/don't-care except where a specific test overrides fwd_sign via
+# calibration below.
+_FULL_CONTROL_FOR_MOTOR_TESTS = ControlConfig(
+    vel_kp=0.002, vel_ki=0.0, vel_kff=0.002, vel_imax=0.0, vel_kaw=0.0, vel_filt=1.0,
+)
 
 
 def test_motor_boot_config_for_reads_fwd_sign_from_robot_config():
@@ -247,6 +231,7 @@ def test_motor_boot_config_for_reads_fwd_sign_from_robot_config():
     cfg = RobotConfig(
         identity=IdentityConfig(robot_name="r", uid="0"),
         calibration=CalibrationConfig(fwd_sign_left=-1, fwd_sign_right=1),
+        control=_FULL_CONTROL_FOR_MOTOR_TESTS,
     )
 
     left = motor_boot_config_for(cfg, port=1)
@@ -270,10 +255,17 @@ _ARBITRARY_CONTROL = {
     "heading_kp": 5.5, "heading_kd": 1.25,
     "arrive_dwell": 0.33,
     "heading_source": "encoder",
+    "heading_dwell_tol_deg": 4.5, "heading_dwell_rate_dps": 2.0,
     "heading_lead_bias": -0.02, "plan_lead": 0.05, "terminal_lead": 0.06,
     "actuation_lag": 0.2,
     "distance_kp": 3.3, "distance_tol": 4.4,
     "model_tau_lin": 0.25, "model_tau_ang": 0.19,
+    # Sprint 114: now required (motion_limits_for_config()) -- arbitrary
+    # values distinct from every shipped profile's own a_max/a_decel/
+    # v_body_max/j_max/yaw_jerk_max (800/800/1000/5000/100), so a test
+    # asserting against these can't coincidentally pass against a default.
+    "a_max": 111.0, "a_decel": 222.0, "v_body_max": 333.0,
+    "j_max": 444.0, "yaw_jerk_max": 55.0,
 }
 
 
@@ -284,8 +276,8 @@ def _assert_arbitrary_values(result: "dict[str, float | int]") -> None:
     assert result["heading_kp"] == 5.5
     assert result["heading_kd"] == 1.25
     assert result["arrive_dwell"] == 0.33
-    assert result["heading_dwell_tol"] == math.radians(gbc.HEADING_DWELL_TOL_DEG_DEFAULT)
-    assert result["heading_dwell_rate"] == math.radians(gbc.HEADING_DWELL_RATE_DPS_DEFAULT)
+    assert result["heading_dwell_tol"] == math.radians(4.5)
+    assert result["heading_dwell_rate"] == math.radians(2.0)
     assert result["heading_lead_bias"] == -0.02
     assert result["plan_lead"] == 0.05
     assert result["terminal_lead"] == 0.06
@@ -295,6 +287,11 @@ def _assert_arbitrary_values(result: "dict[str, float | int]") -> None:
     assert result["model_tau_lin"] == 0.25
     assert result["model_tau_ang"] == 0.19
     assert result["heading_source"] == planner_pb2.HEADING_SOURCE_FORCE_ENCODER
+    assert result["a_max"] == 111.0
+    assert result["a_decel"] == 222.0
+    assert result["v_body_max"] == 333.0
+    assert result["j_max"] == 444.0
+    assert result["yaw_jerk_max"] == 55.0
 
 
 def test_planner_boot_config_for_reads_arbitrary_control_values_from_raw_dict():
@@ -331,7 +328,10 @@ def test_planner_boot_config_for_reads_arbitrary_control_values_from_robot_confi
     ("OTOS", "HEADING_SOURCE_FORCE_OTOS"),  # case-insensitive, matches gen_boot_config.py
 ])
 def test_heading_source_resolves_to_wire_int_for_all_values(value, expected_name):
-    cfg = {"control": {"heading_source": value}}
+    # Sprint 114: planner_boot_config_for() resolves every required field
+    # (not just heading_source) -- start from a fully-populated control
+    # block (_ARBITRARY_CONTROL) and vary only heading_source.
+    cfg = {"control": {**_ARBITRARY_CONTROL, "heading_source": value}}
 
     result = planner_boot_config_for(cfg)
 

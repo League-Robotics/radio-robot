@@ -15,49 +15,71 @@ the OLD source/robot/RobotConfig struct). It is deliberately separate: the two
 target different C++ types and the new NezhaMotor velocity PID operates on a
 different plant scale than the old RobotConfig velocity loop.
 
-What is baked from the robot JSON vs. held as a firmware default
-----------------------------------------------------------------
-Baked from JSON when present (matching semantics, so no behaviour surprise):
-  * geometry.trackwidth               -> DrivetrainConfig.trackwidth
-  * calibration.mm_per_wheel_deg_left  -> the left-port motor's travel_calib
-  * calibration.mm_per_wheel_deg_right -> the right-port motor's travel_calib
-  * calibration.fwd_sign_left  -> the left-port motor's fwd_sign
-  * calibration.fwd_sign_right -> the right-port motor's fwd_sign
-    (088-002 — the drive pair is mirror-mounted, so these are EXPECTED to
-    differ in sign between the two ports, unlike travel_calib; see
-    fwd_sign_for_ports() and clasi/issues/tovez-drive-motor-reversed-fwd-sign.md)
-  * geometry.odometry_offset_mm (x/y/yaw_rad)         -> OtosBootConfig.offsetX/offsetY/offsetYaw
-  * calibration.otos_linear_scale/otos_angular_scale  -> OtosBootConfig.linearScale/angularScale
-    (086-005 — additive to the mappings above; see otos_boot_config_values()
-    and OtosBootConfig's own doc comment in src/firm/config/boot_config.h for why
-    this is boot-time-baked only, never a live SET/wire surface)
-  * control.heading_kp/control.heading_kd  -> PlannerConfig.heading_kp/heading_kd
-  * control.heading_source ("auto"/"otos"/"encoder", 109-005) -> PlannerConfig.
-    heading_source (App::HeadingSource's per-robot policy override)
-    (098-001 — the outer heading-loop PD gains, per-robot tunable; see
-    heading_gains_for_config() and architecture-update.md M1/M2. Also new
-    this ticket: PlannerConfig's seven motion-limit fields (a_max/a_decel/
-    v_body_max/yaw_rate_max/yaw_acc_max/j_max/yaw_jerk_max) are now baked
-    HERE via defaultPlannerConfig(), moved verbatim off main.cpp's old
-    hand-written defaultMotionConfig() — same bench-tuned firmware-default
-    values as before, just no longer outside this generator's governance;
-    they are not yet a robot-JSON-configurable mapping)
+Config-as-truth (sprint 114) — no source-side behavioral defaults
+-------------------------------------------------------------------
+Every BEHAVIORAL value this generator bakes now comes from the active robot
+JSON's `control`/`calibration`/`geometry` blocks, with NO Python-side
+fallback: a robot JSON missing a required key fails the build loudly
+(`MissingRobotConfigKeyError`, caught by `main()` as a `sys.exit(1)` naming
+the key and the JSON path) instead of silently substituting a bench
+placeholder. Before this ticket, ~29 module-level `*_DEFAULT` constants
+supplied that placeholder whenever a key was absent — a deliberate design
+choice documented in `src/firm/config/DESIGN.md` §3 ("missing/bad robot
+JSON degrades to bench defaults, not a build failure"), reversed here per
+the stakeholder's own instruction (2026-07-20): a build must refuse to
+produce a firmware image with an incomplete calibration, not guess one.
 
-Held as bench-tuned firmware DEFAULTS below and NOT read from the old-tree JSON
-`control.*` keys — those describe the old RobotConfig velocity loop and are in a
-different unit/plant scale (kp ~ 0.3, not ~ 0.002); mapping them onto the new
-MotorConfig would silently break the velocity loop:
-  * the velocity PID gains (kp/ki/kff/i_max)
-  * vel_filt_alpha (the EMA coefficient — a value of 0 pins reported velocity at
-    0 forever regardless of real motion; sprint 077-007 bench story)
-  * the drive-pair port binding, the FWD_SIGN=1 placeholder for any port the
-    JSON doesn't cover, and the mm/deg PLACEHOLDER
-  * the per-port `polled` I2C flip-flop poll-schedule membership (091-002):
-    true for the drive-pair ports, false otherwise -- a firmware-scheduling
-    fact, never robot-JSON-configurable; see polled_for_ports()
+Every field mapping below is a `*_for_config(cfg)` function reading one or
+more `cfg["control"][...]`/`cfg["calibration"][...]`/`cfg["geometry"][...]`
+keys via `_require()`:
+  * `vel_gains_for_config()` — control.vel_kp/vel_ki/vel_kff/vel_imax/
+    vel_kaw/vel_filt (the velocity PID, in the NezhaMotor duty [-1,1] plant
+    scale — control._vel_gains_domain documents this; NOT the old
+    RobotConfig PWM-percent scale, kp ~ 0.3).
+  * `output_deadband_for_config()` / `reversal_dwell_for_config()` —
+    control.output_deadband [-1,1] / control.reversal_dwell_ms [ms] (sprint
+    114 ticket 003) — Devices::NezhaMotor::writeShapedDuty()'s output-
+    deadband floor and reversal-dwell hold; previously left unset (.has ==
+    false) on purpose, ship-defaulted (0.03 / 100.0) inside NezhaMotor's own
+    constructor.
+  * `trackwidth_for_config()` — geometry.trackwidth -> DrivetrainConfig.trackwidth.
+  * `otos_boot_config_values()` — geometry.odometry_offset_mm.{x,y,yaw_rad}
+    and calibration.otos_linear_scale/otos_angular_scale (086-005) ->
+    OtosBootConfig; boot-time-baked only, never a live SET/wire surface (see
+    OtosBootConfig's own doc comment, src/firm/config/boot_config.h).
+  * `heading_gains_for_config()` / `heading_source_for_config()` /
+    `heading_dwell_for_config()` / `lead_compensation_for_config()` —
+    control.heading_kp/heading_kd (098-001), control.heading_source
+    ("auto"/"otos"/"encoder", 109-005), control.heading_dwell_tol_deg/
+    heading_dwell_rate_dps, control.heading_lead_bias/plan_lead/
+    terminal_lead (109-010).
+  * `profile_rot_limits_for_config()` — control.yaw_rate_max [deg/s] /
+    max_rot_accel_dps2 [deg/s^2] (100-014, converted to rad here).
+  * `min_speed_for_config()` / `arrive_dwell_for_config()` /
+    `actuation_lag_for_config()` / `distance_gains_for_config()` /
+    `model_tau_for_config()` — control.min_speed (100-007), control.
+    arrive_dwell (100-001), control.actuation_lag (112-002), control.
+    distance_kp/distance_tol (112-003), control.model_tau_lin/model_tau_ang
+    (113-001).
+  * `motion_limits_for_config()` — control.a_max/a_decel/v_body_max/j_max/
+    yaw_jerk_max (098-001's other five motion-limit fields; before sprint
+    114 these had NO per-robot JSON mapping at all — generate() referenced
+    the module DEFAULT constants directly).
 
-When no robot config is found, everything falls back to these same firmware
-defaults so the build always succeeds.
+Structural, compile-time, exempt (NOT behavioral tunables, NOT migrated —
+see sprint 114's Architecture Boundary list): `K_MOTOR_COUNT` (array sizing,
+tracks main.cpp's static_assert), `LEFT_PORT`/`RIGHT_PORT` (the drive-pair
+wiring fact) and `polled_for_ports()` (the I2C flip-flop poll-schedule
+membership — a firmware-scheduling fact, never per-robot calibration), and
+`TRAVEL_CALIB_PLACEHOLDER`/`FWD_SIGN` — the documented placeholder for the
+two motor ports the shipped drivetrain does not actually drive (ports 3/4 on
+a 2-wheel differential robot; provably inert, excluded from
+`polled_for_ports()`'s schedule). `travel_calib_for_ports()`/
+`fwd_sign_for_ports()` still fall back to these placeholders when the robot
+JSON omits `calibration.mm_per_wheel_deg_left/right` /
+`calibration.fwd_sign_left/right` for the DRIVE-PAIR ports too — unchanged
+by this ticket (out of its explicit scope; see sprint 114 ticket 002's own
+Approach step 1).
 """
 
 import json
@@ -69,37 +91,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 OUT_FILE  = REPO_ROOT / "src" / "firm" / "config" / "boot_config.cpp"
 
-# --- Bench-tuned firmware defaults (NOT from the robot JSON) ----------------
+# --- Structural constants (compile-time, exempt from config-as-truth) ------
+# See this module's own docstring "Structural, compile-time, exempt" section
+# and sprint 114's Architecture Boundary list for why these five stay Python
+# constants instead of required robot-JSON keys.
+
 # Ports 1..kMotorCount; matches Subsystems::NezhaHardware::kMotorCount, asserted
 # in main.cpp. Keep in sync if the port count ever changes.
 K_MOTOR_COUNT = 4
-
-# Velocity PID gains, bench-tuned on the stand (Tovez, ports 1/3, targets
-# 120/150/-100 mm/s): converges within ~1.5 s, small (~10%) overshoot, holds
-# within the dev_exercise.py / pid_hold_speed.py tolerance bands (sprint
-# 077-007). Live-correctable per motor via `DEV M <n> CFG`.
-VEL_KP    = 0.0022
-VEL_KI    = 0.0018
-VEL_KFF   = 0.0038
-VEL_IMAX  = 0.3
-VEL_KAW   = 0.0   # anti-windup back-calculation gain (0 = off)
-
-# EMA coefficient in NezhaMotor::tick()'s
-# `filteredVelocity_ = a*rawVel + (1-a)*filteredVelocity_`. a=0 pins reported
-# velocity at 0 forever regardless of real motion (077-007 silent-failure gap);
-# 0.3 was bench-confirmed to produce real, converging vel= readings.
-VEL_FILT_ALPHA = 0.3
-
-# fwd_sign multiplies BOTH the drive command and the encoder reading. +1 is the
-# bench placeholder for any port the robot JSON doesn't cover (calibration.
-# fwd_sign_left/fwd_sign_right, 088-002); a specific motor's real sense can
-# still be corrected live via `DEV M <n> CFG`.
-FWD_SIGN = 1
-
-# mm/deg placeholder used for any motor whose travel calibration is not supplied
-# by the robot JSON (the legacy firmware's ml/mr default; docs/protocol-v2.md's
-# Named Key Table). Live-correctable via `DEV M <n> CFG`.
-TRAVEL_CALIB_PLACEHOLDER = 0.487
 
 # The drive-pair port binding (the robot's normal drive pair). The coupled bench
 # rig re-binds at runtime via `DEV DT PORTS 3 4`. An unseeded (zero) port would
@@ -108,327 +107,19 @@ TRAVEL_CALIB_PLACEHOLDER = 0.487
 LEFT_PORT  = 1
 RIGHT_PORT = 2
 
-# Trackwidth placeholder [mm] when the robot JSON does not supply geometry.
-TRACKWIDTH_DEFAULT = 128.0
+# fwd_sign placeholder for any port OTHER than LEFT_PORT/RIGHT_PORT (088-002)
+# -- the two motor ports the shipped 2-wheel differential drivetrain does not
+# actually drive. Provably inert: polled_for_ports() excludes them from the
+# I2C flip-flop schedule, so no live control path ever reads them. The
+# DRIVE-PAIR ports' own fwd_sign comes from calibration.fwd_sign_left/right
+# when the robot JSON supplies it (fwd_sign_for_ports() below) -- this
+# placeholder is also its own fallback when the JSON omits the drive pair's
+# values too, unchanged by sprint 114 (out of ticket 002's explicit scope).
+FWD_SIGN = 1
 
-# OTOS lever-arm mounting offset defaults (086-005) — zero offset is the
-# identity case (LeverArm::sensorToCentre()/centreToSensor() are no-ops when
-# offsetX == offsetY == 0, source/hal/lever_arm.h), i.e. "no config = no
-# correction", matching every other placeholder default in this file.
-OTOS_OFFSET_X_DEFAULT   = 0.0   # [mm]
-OTOS_OFFSET_Y_DEFAULT   = 0.0   # [mm]
-OTOS_OFFSET_YAW_DEFAULT = 0.0   # [rad]
-
-# OTOS linear/angular scale multiplier defaults (086-005). 1.0 == no
-# correction (the OTOS chip's own scaleToInt8()-style conversion, applied
-# once at Hal::OtosOdometer::begin() — ticket 086-006 — maps a 1.0 multiplier
-# to register scalar 0, i.e. an unmodified chip reading).
-OTOS_LINEAR_SCALE_DEFAULT  = 1.0
-OTOS_ANGULAR_SCALE_DEFAULT = 1.0
-
-# Motion-limit defaults for msg::PlannerConfig (098-001 — moved verbatim from
-# main.cpp's hand-written defaultMotionConfig(), the one PlannerConfig boot
-# path that lived OUTSIDE this generator until now; see architecture-
-# update.md M2). Same numeric values, same units — not renumbered or
-# retuned by this move.
-A_MAX_DEFAULT        = 800.0    # [mm/s^2]
-A_DECEL_DEFAULT      = 800.0    # [mm/s^2]
-V_BODY_MAX_DEFAULT   = 1000.0   # [mm/s]
-YAW_RATE_MAX_DEFAULT = 6.0      # [rad/s]
-YAW_ACC_MAX_DEFAULT  = 20.0     # [rad/s^2]
-J_MAX_DEFAULT        = 5000.0   # [mm/s^3] ~6x a_max -- ~0.16s jerk-limited edges
-YAW_JERK_MAX_DEFAULT = 100.0    # [rad/s^3] ~5x yaw_acc_max -- ~0.2s
-
-# Outer heading-loop PD gain defaults (098-001 — sprint 098's new cascade,
-# architecture-update.md M1/M2, Decision 2). heading_kd starts at 0 (pure P,
-# derivative off).
-#
-# HEADING_KP_DEFAULT bumped 3.0 -> 6.0 (112-004, sprint 112 Architecture
-# Design Rationale Decision 5): required by the deadband inequality
-# (`heading_kp * heading_dwell_tol >= omega_deadband`) once App::Pilot's own
-# min-speed terminal-stiction floor is deleted (112-004's own main scope) --
-# without a floor OR a gain clearing this inequality, the heading PD can
-# stall with its output below what the write-shaping deadband/motor
-# stiction actually moves, exactly the failure pilot.cpp's own pre-112-004
-# comment documented ("kp=1 froze 5.7deg out, kp=6 froze ~1deg out"). 6.0 is
-# not a fresh guess — it is the same value sprint 098 already bench-
-# validated for turn accuracy (.clasi/knowledge/heading-loop-solves-turn-
-# accuracy.md: "kp=6 beats terminal stiction... 100% within +/-1 degree").
-#
-# Empirical re-verification against the ACTUAL current source (112-004's own
-# instruction — do not cite architecture-update.md's numbers unchecked):
-#   omega_deadband = 2 * v_deadband / trackWidth, where v_deadband =
-#   outputDeadband / vel_kff (Devices::NezhaMotor::kDefaultOutputDeadband =
-#   MotorArmor::kDefaultMotionThreshold = 0.03 duty; motor_armor.h/
-#   nezha_motor.h) — the SAME per-wheel deadband formula
-#   DISTANCE_KP_DEFAULT's own comment below already derives for the LINEAR
-#   channel, since a pivot drives the identical wheel PID/write-shaping
-#   stack. trackWidth = 128mm (data/robots/tovez.json AND tovez_nocal.json
-#   both, "trackwidth": 128). heading_dwell_tol = 3.0deg = 0.05236rad
-#   (HEADING_DWELL_TOL_DEG_DEFAULT below, current value, widened from 0.5deg
-#   2026-07-18). heading_kp * heading_dwell_tol = 6.0 * 0.05236 =
-#   0.3142rad/s (~18.0deg/s) at kp=6.0.
-#     - tovez_nocal.json (the CURRENTLY-ACTIVE boot config, vel_kff=0.002):
-#       v_deadband = 0.03/0.002 = 15.0mm/s -> omega_deadband = 2*15/128 =
-#       0.2344rad/s. 0.3142 >= 0.2344 -- HOLDS (~34% margin).
-#     - tovez.json (the historically bench-tuned profile, vel_kff=0.0008
-#       post-106-002 kff detune — see that file's own _vel_gains_note):
-#       v_deadband = 0.03/0.0008 = 37.5mm/s -> omega_deadband = 2*37.5/128 =
-#       0.5859rad/s. 0.3142 >= 0.5859 is FALSE -- the inequality does NOT
-#       hold against this config's own, currently-tuned, higher deadband.
-#   This is the SAME "architecture doc's cited range predates the 106-002
-#   detune" finding DISTANCE_KP_DEFAULT's own comment already turned up for
-#   the linear channel, now confirmed on the rotational side too: sprint
-#   098's own kp=6 bench validation predates that detune. tovez.json's OWN
-#   heading_kp is already 6.0 (set independently of this default, sprint
-#   098-003) — this default bump does not change tovez.json's own behavior
-#   either way (it already overrides), but the underlying deadband-clearing
-#   claim for kp=6.0 is HONESTLY only confirmed against the neutral/no-cal
-#   baseline, not the currently-tuned robot. Flagged here for a future
-#   bench-tuning pass (sim-only this sprint, per sprint 112's own Scope) --
-#   NOT silently fixed by picking a different default, since the ticket's
-#   own acceptance criterion is the specific value 6.0 (matching sprint
-#   098's bench-proven number), not whichever value clears this inequality.
-HEADING_KP_DEFAULT = 6.0    # [1/s]
-HEADING_KD_DEFAULT = 0.0    # dimensionless
-
-# 109-005: App::HeadingSource per-robot policy override + the heading-dwell
-# completion gate. HEADING_SOURCE_DEFAULT is the string form read from the
-# robot JSON's control.heading_source key ("auto"/"otos"/"encoder" ->
-# msg::HeadingSourceMode); AUTO is the normal OTOS-first/encoder-fallback
-# policy (App::HeadingSource's own file header) -- a robot with a known-bad
-# OTOS mount, or a bench rig with none wired at all, overrides to "encoder".
-# The dwell tolerance/rate match sprint-098's own proven turn-accuracy bar
-# (0.5deg/1deg-per-s -- see .clasi/knowledge/heading-loop-solves-turn-
-# accuracy.md); not yet exposed as a robot-JSON key (no robot has needed a
-# different value yet) -- add a control.heading_dwell_tol_deg/
-# heading_dwell_rate_dps mapping here if one ever does, mirroring
-# heading_gains_for_config()'s own shape.
-HEADING_SOURCE_DEFAULT = "auto"
-HEADING_DWELL_TOL_DEG_DEFAULT = 3.0    # [deg] (0.5 until 2026-07-18: must sit above where the min_speed-floored terminal PD can stop -- see pilot.cpp)
-HEADING_DWELL_RATE_DPS_DEFAULT = 1.0   # [deg/s]
-
-# 109-010: three independently-tunable lead-compensation Δt's, fitted from
-# src/tests/testgui/test_turn_error_characterization.py's own rate-sweep
-# regression against the sim (src/firm/motion/DESIGN.md's own "Turn-error
-# characterization" entry carries the full fitted-equation derivation this
-# ticket's own regression produced) -- NOT hand-picked, NOT copied from
-# Motion::kDeadTime (a single shared constant tried at the WRONG locus in
-# ticket 006 and reverted, see planner.proto's own field comments). Each
-# compensates a different physical delay at a different locus; no robot-JSON
-# override key yet (no robot has needed a per-robot difference).
-# Fitted from src/tests/testgui/test_turn_error_characterization.py's own
-# rate-sweep + src/tests/testgui/test_tour_closure_gate.py's own tour-level
-# regression (see src/firm/motion/DESIGN.md's "Turn-error characterization"
-# entry for the full write-up, including the honest post-compensation
-# residual). Summary of the characterization finding:
-#
-#   App::HeadingSource's own measurement-age tracker (`ageS_`, heading_
-#   source.cpp) correctly measures the REAL, deterministic ~one-main-loop-
-#   cycle (`kCycle`=40ms, robot_loop.cpp) staleness between when
-#   Devices::Otos's own pose is sampled (the kPace block, end of cycle) and
-#   when App::Pilot::tick() reads it (the earlier motorR-settle block,
-#   SAME cycle) -- confirmed instrumented and engaging correctly (a real,
-#   nonzero omega_meas * age offset was measured mid-pivot). Feeding that
-#   raw age DIRECTLY into the heading PD's error term as an UNCOMPENSATED
-#   lead (heading_lead_bias=0) was swept against both tours and measured to
-#   REGRESS: TOUR_1/TOUR_2 ideal-chip runs faulted outright (a real
-#   regression, not an accuracy tradeoff) at this sprint's own heading_kp=6
-#   gain -- the raw one-cycle lead couples with the existing PD gain in a
-#   way this ticket's own time budget could not re-tune safely. A rate-sweep
-#   over heading_lead_bias in [-0.06, 0.0] (0.01 steps) found NO value that
-#   both avoided the fault regression AND reduced the ideal/realistic
-#   residual below ticket 009's own already-met baseline; -0.05 (the value
-#   that exactly CANCELS this test harness's own 50ms sim cycle -- see
-#   sim_harness.h's kCycleDtUs -- back to a net-zero lead) was the only
-#   swept value that reproduced ticket 009's own baseline numbers bit-for-
-#   bit with zero regression. -0.04 (the value that would cancel the REAL
-#   firmware's own kCycle=40ms exactly) was ALSO swept and found to
-#   REDUCE the single worst realistic-profile outlier (TOUR_2 leg 14:
-#   4.9deg -> 2.3deg) but at the cost of MORE turns crossing the 1deg gate
-#   (a worse aggregate outcome against ticket 009's own "hold the bar"
-#   criterion) -- not adopted.
-#
-# SHIPPED DECISION: heading_lead_bias defaults to -0.05 -- the value that
-# exactly cancels this characterization harness's own sim cycle (50ms,
-# sim_harness.h's kCycleDtUs), netting locus 1 to a bit-for-bit reproduction
-# of ticket 009's own already-met baseline (verified: zero regression on
-# either tour, either profile). -0.04 (canceling the REAL firmware's own
-# kCycle=40ms exactly) was ALSO swept and rejected: it reduced TOUR_2's own
-# single worst realistic-profile outlier (leg 14: 4.9deg -> 2.3deg) but at
-# the cost of MORE turns crossing the 1deg gate that ticket 009 already held
-# clean -- a worse AGGREGATE outcome against this ticket's own "must not
-# regress the bar ticket 009 already met" acceptance criterion, so it was
-# not adopted despite improving the single headline number. This means the
-# projection is EFFECTIVELY NEUTRALIZED by default (a bias that cancels its
-# own age term, net lead ~= 0) pending a genuine bench characterization on
-# real hardware (this sim's own 50ms cycle does not exactly match the real
-# firmware's 40ms kCycle, so neither swept constant is a clean, general-
-# purpose bench value yet) -- the mechanism, the config field, and the
-# characterization harness are fully implemented, wired, verified to engage
-# (confirmed via temporary trace instrumentation during this ticket's own
-# work), and available for that follow-up bench-tuning pass; this ticket's
-# own remaining budget did not extend to a safe heading_kp/heading_lead_bias
-# joint re-tune that could accept a REAL (not sim-cycle-matched) bias
-# without also regressing the realistic-profile bar.
-HEADING_LEAD_BIAS_DEFAULT = -0.05  # [s] locus 1, see comment above
-# plan_lead (locus 2): swept in [0.0, 0.13] (0.02 steps) jointly with
-# terminal_lead against both tours -- every NONZERO value tried either left
-# the ideal-chip worst-case unchanged/worse or introduced a NEW fault
-# (JerkTrajectory::peek() sampling past a short pivot's own decel tail
-# returns the "hold at final state" extrapolation early, i.e. commands a
-# premature stop reference -- the SAME false-positive-lead failure mode
-# ticket 006's own kDeadTime-at-the-wrong-locus history note warns about,
-# just at this ticket's OWN locus 2 instead). No value in the swept range
-# improved on ticket 009's own baseline without a fault or a new regression
-# -- shipped at 0.0 (a genuine no-op) pending a bench characterization that
-# can validate this locus against REAL actuation lag on real hardware,
-# where JerkTrajectory trajectories are typically longer-duration than
-# this sim's own sub-second pivots and less likely to hit the extrapolation
-# tail this sweep's own short pivots did.
-PLAN_LEAD_DEFAULT = 0.20          # [s] locus 2 (0.0 until 2026-07-18: re-swept against the plan-once executor -- 0.20 ~= 2 command-staging cycles + plant tau, eliminates the terminal PD reversal entirely; sim sweep 0/0.10/0.15/0.20 -> reverse-cmd peak 251/132/81/0 mm/s, completion 5.7->2.7s, err -0.8deg)
-# terminal_lead (locus 3): same joint sweep as plan_lead above -- no value
-# in [0.0, 0.13] improved the COMBINED (both tours') worst-case without
-# regressing the other tour (e.g. tl=0.08 improved TOUR_1's ideal worst
-# 2.225->1.599deg but worsened TOUR_2's 1.595->1.637deg). Shipped at 0.0
-# (a genuine no-op) for the same "do not regress ticket 009's own met bar"
-# reason as plan_lead above, pending further bench-driven tuning.
-TERMINAL_LEAD_DEFAULT = 0.0       # [s] locus 3, see comment above
-
-# actuation_lag default for msg::PlannerConfig field 38 (112-002): App::
-# Drive's own model feedforward gain -- Drive::tick() adds
-# actuation_lag * a onto each wheel's velocity target (see planner.proto's
-# own field comment for the full derivation). Motion::kDeadTime's OWN
-# bench-derived value (sprint 100's bench-measured motor_lag, 120-140ms) --
-# kDeadTime itself stays declared-but-unused (its own locus, the
-# divergence-replan check, is a DIFFERENT compensation); App::Drive gets
-# its own config-tunable field rather than a new App::Drive -> Motion::
-# dependency (sprint 112 Architecture Design Rationale Decision 4). No
-# robot-JSON override key yet (mirrors heading_dwell_for_config()'s own
-# "not yet needed" posture).
-ACTUATION_LAG_DEFAULT = 0.130     # [s]
-
-# distance_kp/distance_tol defaults for msg::PlannerConfig fields 39/40
-# (112-003): App::Pilot's own bounded linear position-feedback trim --
-# `v_cmd = twist.v + distance_kp*(twist.sRef - twist.sMeas)`, clamped to
-# App::kDistanceTrimCeiling (pilot.h, a fixed 50.0mm/s C++ constant, NOT
-# itself wire-tunable -- only the gain is). Named/shaped to mirror
-# HEADING_KP_DEFAULT/heading_dwell_for_config() above.
-#
-# DISTANCE_TOL_DEFAULT (3.0mm) matches Motion::kDistanceSettleEpsilonMm's
-# own CURRENT value (executor.cpp) exactly -- this field repurposes that
-# constant's role (planner.proto's own field comment) but is not yet wired
-# into the completion decision (ticket 004's scope); shipping the SAME
-# numeric default means that future rewire is a pure substitution, not a
-# silent behavior change.
-#
-# DISTANCE_KP_DEFAULT was originally sized (112-003) against ONLY the
-# deadband inequality `distance_kp * distance_tol >= v_deadband`, where
-# v_deadband is the write-shaping deadband floor `Devices::NezhaMotor`
-# applies (duty below `kDefaultOutputDeadband`=0.03, nezha_motor.h, is
-# written as an outright 0 -- `writeShapedDuty()`'s own `fabsf(duty) <
-# outputDeadband_` check) -- below v_deadband, a commanded correction
-# simply never reaches the plant. Re-verified against the ACTUAL current
-# source (not the architecture doc's own cited "~15-19mm/s" range, taken
-# unchecked) by computing v_deadband = outputDeadband / vel_kff for the
-# robot configs actually on disk:
-#   - the CURRENTLY-ACTIVE boot config (data/robots/active_robot.json ->
-#     tovez_nocal.json, control.vel_kff=0.002): 0.03/0.002 = 15.0mm/s --
-#     matches the architecture doc's own cited lower bound exactly, and
-#     also matches this project's OWN sim harness comment
-#     (src/sim/sim_harness.h's makeExecutorConfig(): "the smallest wheel
-#     command that moves the plant is ~outputDeadband/kff ~= 15mm/s").
-#   - the historically bench-tuned tovez.json profile's own vel_kff
-#     (0.0008, post sprint-106-002's kff detune -- see that file's own
-#     _vel_gains_note: "vel_kff 0.00135->0.0008"): 0.03/0.0008 = 37.5mm/s
-#     -- MEANINGFULLY HIGHER than the architecture doc's cited range,
-#     because that range predates (or does not reflect) the 106-002
-#     detune. This is the concrete finding 112-003's own "re-verify
-#     against the actual current source" instruction turned up.
-# 15.0 * 3.0 = 45.0mm/s cleared BOTH figures with margin against that
-# ALGEBRAIC inequality alone.
-#
-# DISTANCE_KP_DEFAULT bumped DOWN 15.0 -> 8.0 (112-004): the algebraic
-# deadband inequality above was never checked against actual CLOSED-LOOP
-# convergence (112-003's own harness graded only the PLANNED reference,
-# never completion, since nothing consumed distance_tol yet) -- 112-004 is
-# the ticket that wires distance_tol into Motion::Executor's own unified
-# completion rule for the first time, making the trim's own terminal
-# convergence load-bearing, and doing so exposed a real closed-loop
-# instability at kp=15.0: a sustained +-10mm oscillation around target that
-# App::Pilot's own new terminal-decel gate (pilot.cpp, mirroring the
-# heading PD's own gate) alone did not fully resolve, particularly for a
-# straight leg immediately following a pivot (both wheels reversing
-# direction into NezhaMotor's own 100ms reversal-dwell window, stacking
-# extra lag onto the trim's own reaction). Directly swept against this
-# sprint's own same-boot behavior-lock scenario (40 consecutive alternating
-# D700-straight/360deg-pivot moves, src/tests/sim/system/
-# behavior_lock_harness.cpp): kp in [1, 8] converges cleanly and
-# deterministically (100% completion across repeated runs); kp=10 fails
-# intermittently (1/40 moves); kp=12/kp=13 fail increasingly often (4/40,
-# 10/40) approaching the old 15.0 default. 8.0 is chosen with margin below
-# the kp=10 instability onset, not merely the largest passing value swept.
-#
-# Honest consequence, the SAME shape as HEADING_KP_DEFAULT's own Decision 5
-# finding above: 8.0 * 3.0 = 24.0mm/s clears the ACTIVE (nocal) config's
-# 15.0mm/s deadband floor (60% margin) but NOT the historically bench-tuned
-# tovez.json profile's own higher 37.5mm/s floor. Unlike heading_kp (whose
-# ticket-004 acceptance bar was a SPECIFIC, already bench-validated value,
-# 6.0, not chosen freely), distance_kp has no such prior bench validation
-# to defer to (Decision 6 explicitly left it for empirical determination
-# during implementation) -- so closed-loop STABILITY, verified directly
-# against this sprint's own harness, is the deciding constraint here, with
-# the deadband shortfall against the tuned config flagged (not silently
-# fixed) for a future bench-tuning pass, exactly like heading_kp's own
-# shortfall. See pilot.cpp's own trim-gating comment and this ticket's
-# completion notes for the full sweep table.
-DISTANCE_KP_DEFAULT  = 8.0    # [1/s]
-DISTANCE_TOL_DEFAULT = 3.0    # [mm]
-
-# model_tau_lin/model_tau_ang defaults for msg::PlannerConfig fields 41/42
-# (113-001): App::Pilot's own two-stage model-reference feedback plant-lag
-# time constants (pilot.h's modelTauLin_/modelTauAng_) -- previously plain
-# hardcoded member initializers with NO config path of any kind. These two
-# constants match pilot.h's own prior hardcoded values EXACTLY, so a robot
-# JSON without control.model_tau_lin/control.model_tau_ang produces
-# byte-identical boot behavior to before this ticket (data/robots/
-# tovez_nocal.json's control section already carries 0.1/0.08 -- a no-op in
-# practice, see sprint 113's own Open Question 2).
-MODEL_TAU_LIN_DEFAULT = 0.10  # [s]
-MODEL_TAU_ANG_DEFAULT = 0.08  # [s]
-
-# arrive_dwell default for msg::PlannerConfig field 31 (100-001 -- motion-
-# stack-v2 M1). Originally baked alongside 16 sibling Drive::Limits/tracker/
-# policy fields (v_wheel_max..arrive_vel_tol) that were never wired to any
-# live consumer -- those 16 (and their DEFAULT constants and the old
-# drive_limits_for_config() helper) were removed in 111-004 (step 7 of the
-# terminal-blips-close-the-loop fix plan; see planner.proto's own
-# PlannerConfig header comment). arrive_dwell is the one field from that
-# original span that IS live (Motion::Executor's dwell-completion gate) and
-# was kept -- see arrive_dwell_for_config() below.
-ARRIVE_DWELL_DEFAULT      = 0.15     # [s]
-
-# MIN_SPEED_DEFAULT (100-007, THE CUTOVER): min_speed (PlannerConfig field
-# 10) predates this sprint and was NEVER populated by this generator --
-# "left unset (0.0f default)... main.cpp's old function never set them
-# either" (see defaultPlannerConfig()'s own comment, below). arrive_tol/
-# turn_in_place_gate, the two fields that sentence originally also named,
-# were themselves removed as dead wire fields in 111-004 -- they no longer
-# exist to be left unset. That was harmless while nothing read min_speed;
-# ticket 100-007 makes it load-bearing for the first time --
-# source/drive/tracker.cpp's own pivot-mode gate is
-# `fabsf(ref.v) < limits.minSpeed`, so a min_speed of EXACTLY 0.0 can never
-# be true even for a genuine pivot (whose ref.v is the LITERAL 0.0f
-# motion_plan.cpp's own isPivot_ branch sets), silently routing every pivot
-# through the arc-mode trim law instead of the pivot-mode one. A small,
-# conservative positive threshold (order of magnitude below any real
-# cruise speed, matching policy.cpp's own kArriveTolVel=15.0f terminal
-# velocity-tolerance scale) fixes this without narrowing arc-mode's own
-# operating range. Starting value, not yet bench-tuned -- same posture as
-# every other field 15-31 default above (M11 re-tunes against the real
-# plant); overridable via a future robot JSON `control.min_speed` key,
-# mirroring every other field's own override mechanism, once one exists.
-MIN_SPEED_DEFAULT         = 16.0     # [mm/s] (10 until 2026-07-18: now ALSO App::Pilot::tick()s heading-PD minimum-command floor -- must exceed the write-shaping deadband floor ~outputDeadband/kff ~= 15-19mm/s)
+# mm/deg placeholder, same shape/scope as FWD_SIGN above (the legacy
+# firmware's ml/mr default; docs/protocol-v2.md's Named Key Table).
+TRAVEL_CALIB_PLACEHOLDER = 0.487
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +161,9 @@ def load_robot_config():
             except Exception as e:
                 print(f"gen_boot_config: {target} unreadable: {e}", file=sys.stderr)
 
-    print("gen_boot_config: no robot config found — using firmware defaults", file=sys.stderr)
+    print("gen_boot_config: no robot config found -- every behavioral key is "
+          "required (sprint 114 config-as-truth); the build will fail on the "
+          "first missing key", file=sys.stderr)
     return {}, "(firmware defaults)"
 
 
@@ -486,6 +179,57 @@ def _get(d, *keys, default=None):
             return default
         cur = cur[k]
     return default if cur is None else cur
+
+
+class MissingRobotConfigKeyError(RuntimeError):
+    """Raised by a ``*_for_config()`` mapping when a required robot-JSON key
+    is absent (or explicitly null). Sprint 114 (config-as-truth completion):
+    every BEHAVIORAL field this generator bakes must come from the active
+    robot JSON -- there is no longer a source-side Python fallback for any
+    of them (see this module's own docstring and sprint 114's Architecture
+    Boundary list). Structural/placeholder fields (K_MOTOR_COUNT, LEFT_PORT/
+    RIGHT_PORT, TRAVEL_CALIB_PLACEHOLDER, FWD_SIGN, polled_for_ports()) are
+    NOT affected -- they stay compile-time constants, per that same list.
+
+    Carries just the dotted key path at the point it is first raised, so a
+    bare unit test calling a ``*_for_config()`` function directly (e.g.
+    ``heading_gains_for_config({})``) gets a self-contained message with no
+    source-path context needed. ``generate()`` catches this and calls
+    ``with_source()`` to attach the resolved JSON path once one is known, so
+    the end-to-end generator run (``main()``) reports both the key and the
+    file -- this ticket's own acceptance criterion.
+    """
+
+    def __init__(self, key_path: str, source_path: str | None = None):
+        self.key_path = key_path
+        self.source_path = source_path
+        super().__init__(self._message())
+
+    def _message(self) -> str:
+        where = self.source_path if self.source_path is not None else "the active robot config"
+        return (
+            f"gen_boot_config: required key '{self.key_path}' missing from {where} "
+            "-- config-as-truth (sprint 114): this field has no source-side "
+            "default; add it to the robot JSON."
+        )
+
+    def with_source(self, source_path: str) -> "MissingRobotConfigKeyError":
+        """Return a copy of this error with the JSON source path attached."""
+        return MissingRobotConfigKeyError(self.key_path, source_path)
+
+
+def _require(cfg: dict, *keys):
+    """Traverse a chain of dict keys; raise MissingRobotConfigKeyError if any
+    is missing or explicitly null. Mirrors _get()'s traversal shape, but
+    with no ``default`` -- every caller of this helper is a field sprint 114
+    made required; a robot JSON that omits it is an incomplete build, not a
+    silently-degraded one."""
+    cur = cfg
+    for k in keys:
+        if not isinstance(cur, dict) or k not in cur or cur[k] is None:
+            raise MissingRobotConfigKeyError(".".join(str(k) for k in keys))
+        cur = cur[k]
+    return cur
 
 
 def _f(v) -> str:
@@ -567,58 +311,72 @@ def fwd_sign_for_ports(cfg: dict):
 def otos_boot_config_values(cfg: dict):
     """Return (offsetX, offsetY, offsetYaw, linearScale, angularScale) for the
     OtosBootConfig struct (086-005), reading geometry.odometry_offset_mm's
-    x/y/yaw_rad and calibration.otos_linear_scale/otos_angular_scale, falling
-    back to the identity defaults above when either is absent from the robot
-    JSON (matching every other mapping's fall-back-to-firmware-default
-    behavior in this file).
+    x/y/yaw_rad and calibration.otos_linear_scale/otos_angular_scale.
+
+    All five are REQUIRED as of sprint 114 (config-as-truth completion) --
+    a robot JSON missing any of them fails the generator loudly rather than
+    silently substituting the old identity defaults (zero offset, 1.0 scale).
     """
-    offset_x   = _get(cfg, "geometry", "odometry_offset_mm", "x",
-                       default=OTOS_OFFSET_X_DEFAULT)
-    offset_y   = _get(cfg, "geometry", "odometry_offset_mm", "y",
-                       default=OTOS_OFFSET_Y_DEFAULT)
-    offset_yaw = _get(cfg, "geometry", "odometry_offset_mm", "yaw_rad",
-                       default=OTOS_OFFSET_YAW_DEFAULT)
-    linear_scale  = _get(cfg, "calibration", "otos_linear_scale",
-                         default=OTOS_LINEAR_SCALE_DEFAULT)
-    angular_scale = _get(cfg, "calibration", "otos_angular_scale",
-                         default=OTOS_ANGULAR_SCALE_DEFAULT)
+    offset_x   = _require(cfg, "geometry", "odometry_offset_mm", "x")
+    offset_y   = _require(cfg, "geometry", "odometry_offset_mm", "y")
+    offset_yaw = _require(cfg, "geometry", "odometry_offset_mm", "yaw_rad")
+    linear_scale  = _require(cfg, "calibration", "otos_linear_scale")
+    angular_scale = _require(cfg, "calibration", "otos_angular_scale")
     return (float(offset_x), float(offset_y), float(offset_yaw),
             float(linear_scale), float(angular_scale))
 
 
 def vel_gains_for_config(cfg: dict):
-    """Return (kp, ki, kff, i_max, filt_alpha) for the velocity PID.
+    """Return (kp, ki, kff, i_max, kaw, filt_alpha) for the velocity PID.
 
-    Read from the robot JSON's ``control`` block when present, falling back to
-    the bench-tuned firmware defaults above. NOTE: these keys must be expressed
-    in the NEW NezhaMotor duty [-1,1] plant scale (kp ~ 0.002, kff ~ 0.0015),
-    NOT the old RobotConfig PWM-percent scale (kp ~ 0.3) — the robot JSON's
-    ``control._vel_gains_domain`` marker documents this. A JSON still carrying
-    old-scale values would silently break the loop, so a robot config that has
-    not been migrated should simply omit these keys and inherit the defaults.
+    Read from the robot JSON's ``control`` block -- ALL SIX keys are
+    REQUIRED as of sprint 114 (config-as-truth completion; previously fell
+    back to bench-tuned firmware defaults when absent). NOTE: these keys
+    must be expressed in the NEW NezhaMotor duty [-1,1] plant scale
+    (kp ~ 0.002, kff ~ 0.0015), NOT the old RobotConfig PWM-percent scale
+    (kp ~ 0.3) — the robot JSON's ``control._vel_gains_domain`` marker
+    documents this.
     """
-    ctrl = cfg.get("control", {}) or {}
-    kp   = _get(ctrl, "vel_kp",   default=VEL_KP)
-    ki   = _get(ctrl, "vel_ki",   default=VEL_KI)
-    kff  = _get(ctrl, "vel_kff",  default=VEL_KFF)
-    imax = _get(ctrl, "vel_imax", default=VEL_IMAX)
-    kaw  = _get(ctrl, "vel_kaw",  default=VEL_KAW)
-    filt = _get(ctrl, "vel_filt", default=VEL_FILT_ALPHA)
+    kp   = _require(cfg, "control", "vel_kp")
+    ki   = _require(cfg, "control", "vel_ki")
+    kff  = _require(cfg, "control", "vel_kff")
+    imax = _require(cfg, "control", "vel_imax")
+    kaw  = _require(cfg, "control", "vel_kaw")
+    filt = _require(cfg, "control", "vel_filt")
     return float(kp), float(ki), float(kff), float(imax), float(kaw), float(filt)
 
 
-def heading_gains_for_config(cfg: dict):
-    """Return (heading_kp, heading_kd) for the outer heading-loop PD.
+def output_deadband_for_config(cfg: dict):
+    """Return control.output_deadband (duty fraction [-1,1]) -- Devices::
+    NezhaMotor::writeShapedDuty()'s output-deadband floor (folded from the
+    old MotorArmor base) and MotorArmor's own wedge-suspect motion-gate
+    threshold. REQUIRED as of sprint 114 ticket 003 (config-as-truth
+    completion) -- previously left unset (.has == false) on purpose, with
+    NezhaMotor's own kDefaultOutputDeadband (0.03) substituted in the
+    constructor whenever a config arrived unset; that substitution is gone,
+    so every robot JSON must now carry a real value."""
+    return float(_require(cfg, "control", "output_deadband"))
 
-    Mirrors vel_gains_for_config()'s exact shape: read from the robot JSON's
-    ``control`` block when present, falling back to the conservative firmware
-    defaults above when either key is absent — an unmigrated robot JSON
-    simply inherits Kp=3.0/Kd=0.0 (today's fallback discipline, same as every
-    other mapping in this file).
+
+def reversal_dwell_for_config(cfg: dict):
+    """Return control.reversal_dwell_ms [ms] -- Devices::NezhaMotor::
+    writeShapedDuty()'s reversal-dwell hold time (folded from the old
+    MotorArmor base). REQUIRED as of sprint 114 ticket 003 (config-as-truth
+    completion) -- previously left unset (.has == false) on purpose, with
+    NezhaMotor's own kDefaultReversalDwell (100.0) substituted in the
+    constructor whenever a config arrived unset; that substitution is gone,
+    so every robot JSON must now carry a real value."""
+    return float(_require(cfg, "control", "reversal_dwell_ms"))
+
+
+def heading_gains_for_config(cfg: dict):
+    """Return (heading_kp, heading_kd) for the outer heading-loop PD
+    (098-001, architecture-update.md M1/M2). Both keys REQUIRED as of
+    sprint 114 (config-as-truth completion) -- previously fell back to a
+    conservative firmware default (Kp=6.0/Kd=0.0, 112-004) when absent.
     """
-    ctrl = cfg.get("control", {}) or {}
-    kp = _get(ctrl, "heading_kp", default=HEADING_KP_DEFAULT)
-    kd = _get(ctrl, "heading_kd", default=HEADING_KD_DEFAULT)
+    kp = _require(cfg, "control", "heading_kp")
+    kd = _require(cfg, "control", "heading_kd")
     return float(kp), float(kd)
 
 
@@ -632,131 +390,149 @@ _HEADING_SOURCE_WIRE_NAMES = {
 def heading_source_for_config(cfg: dict) -> str:
     """Return the C++ msg::HeadingSourceMode enumerator literal for the robot
     JSON's control.heading_source key (case-insensitive "auto"/"otos"/
-    "encoder"), falling back to HEADING_SOURCE_DEFAULT ("auto") when absent
-    or unrecognized -- mirrors heading_gains_for_config()'s own fall-back
-    discipline."""
-    ctrl = cfg.get("control", {}) or {}
-    raw = str(_get(ctrl, "heading_source", default=HEADING_SOURCE_DEFAULT)).strip().lower()
+    "encoder", 109-005). REQUIRED as of sprint 114 (config-as-truth
+    completion) -- previously fell back to "auto" when absent. An
+    unrecognized-but-PRESENT string still resolves to AUTO -- that is a
+    value-validation question, not a missing-key one, and stays out of this
+    ticket's scope."""
+    raw = str(_require(cfg, "control", "heading_source")).strip().lower()
     return _HEADING_SOURCE_WIRE_NAMES.get(raw, _HEADING_SOURCE_WIRE_NAMES["auto"])
 
 
 def heading_dwell_for_config(cfg: dict):
-    """Return (heading_dwell_tol, heading_dwell_rate) in [rad]/[rad/s] --
-    see HEADING_DWELL_TOL_DEG_DEFAULT/HEADING_DWELL_RATE_DPS_DEFAULT's own
-    comment. No robot-JSON override key yet (not yet needed by any robot)."""
-    return (math.radians(HEADING_DWELL_TOL_DEG_DEFAULT),
-            math.radians(HEADING_DWELL_RATE_DPS_DEFAULT))
+    """Return (heading_dwell_tol, heading_dwell_rate) in [rad]/[rad/s].
+
+    Sprint 114 (config-as-truth completion): NEWLY wired to the robot JSON's
+    ``control.heading_dwell_tol_deg``/``control.heading_dwell_rate_dps``
+    (both required) -- before this ticket these two were hardcoded and never
+    read from cfg at all, the one field pair in this generator with no JSON
+    path whatsoever."""
+    tol_deg  = _require(cfg, "control", "heading_dwell_tol_deg")
+    rate_dps = _require(cfg, "control", "heading_dwell_rate_dps")
+    return math.radians(float(tol_deg)), math.radians(float(rate_dps))
 
 
 def lead_compensation_for_config(cfg: dict):
-    """Return (heading_lead_bias, plan_lead, terminal_lead) in [s] -- 109-010's
-    three independently-tunable lead-compensation Δt's. See each DEFAULT
-    constant's own comment above for the fitted-value derivation. No
-    robot-JSON override key yet (mirrors heading_dwell_for_config()'s own
-    "not yet needed" posture)."""
-    ctrl = cfg.get("control", {}) or {}
-    heading_lead_bias = _get(ctrl, "heading_lead_bias", default=HEADING_LEAD_BIAS_DEFAULT)
-    plan_lead = _get(ctrl, "plan_lead", default=PLAN_LEAD_DEFAULT)
-    terminal_lead = _get(ctrl, "terminal_lead", default=TERMINAL_LEAD_DEFAULT)
+    """Return (heading_lead_bias, plan_lead, terminal_lead) in [s] --
+    109-010's three independently-tunable lead-compensation Δt's. All three
+    REQUIRED as of sprint 114 (config-as-truth completion); see
+    data/robots/tovez_nocal.json's control block (or git blame on this
+    function's pre-sprint-114 fallback constants) for the fitted-value
+    derivation."""
+    heading_lead_bias = _require(cfg, "control", "heading_lead_bias")
+    plan_lead = _require(cfg, "control", "plan_lead")
+    terminal_lead = _require(cfg, "control", "terminal_lead")
     return float(heading_lead_bias), float(plan_lead), float(terminal_lead)
 
 
 def min_speed_for_config(cfg: dict):
-    """Return min_speed (PlannerConfig field 10) -- see MIN_SPEED_DEFAULT's
-    own comment above for why this is no longer left at 0.0f. Read from the
-    robot JSON's ``control.min_speed`` when present (mirroring every other
-    mapping's fall-back discipline), else MIN_SPEED_DEFAULT."""
-    ctrl = cfg.get("control", {}) or {}
-    return float(_get(ctrl, "min_speed", default=MIN_SPEED_DEFAULT))
+    """Return min_speed (PlannerConfig field 10, 100-007) -- Drive::
+    tracker's own pivot-mode gate (`fabsf(ref.v) < limits.minSpeed`) needs a
+    small positive threshold, never left unset. REQUIRED as of sprint 114
+    (config-as-truth completion)."""
+    return float(_require(cfg, "control", "min_speed"))
 
 
 def profile_rot_limits_for_config(cfg: dict):
     """Return (yaw_rate_max, yaw_acc_max) in [rad/s] / [rad/s^2] for the
-    rotational master-profile ceiling (PlannerConfig fields 4-5).
-
-    Mirrors heading_gains_for_config()'s exact shape: read from the robot
-    JSON's ``control`` block when present — ``control.yaw_rate_max`` [deg/s]
-    and ``control.max_rot_accel_dps2`` [deg/s^2], converted to radians here —
-    falling back to the rad-valued firmware defaults above when absent. Before
-    this mapping (ticket 100-014) the generator emitted the hardcoded 6.0
-    rad/s / 20.0 rad/s^2 defaults unconditionally, silently ignoring the
-    robot JSON's own (much lower) pivot-speed intent and driving pivots at
-    ~500 mm/s at the wheels -- unstable overshoot on the latent real plant.
-    """
-    ctrl = cfg.get("control", {}) or {}
-    yr = _get(ctrl, "yaw_rate_max", default=None)        # [deg/s]
-    ya = _get(ctrl, "max_rot_accel_dps2", default=None)  # [deg/s^2]
-    yaw_rate_max = math.radians(float(yr)) if yr is not None else YAW_RATE_MAX_DEFAULT
-    yaw_acc_max = math.radians(float(ya)) if ya is not None else YAW_ACC_MAX_DEFAULT
-    return yaw_rate_max, yaw_acc_max
+    rotational master-profile ceiling (PlannerConfig fields 4-5, 100-014).
+    Reads ``control.yaw_rate_max`` [deg/s] and ``control.max_rot_accel_dps2``
+    [deg/s^2], converted to radians -- BOTH REQUIRED as of sprint 114
+    (config-as-truth completion; previously each independently fell back to
+    a firmware default when absent)."""
+    yr = _require(cfg, "control", "yaw_rate_max")        # [deg/s]
+    ya = _require(cfg, "control", "max_rot_accel_dps2")  # [deg/s^2]
+    return math.radians(float(yr)), math.radians(float(ya))
 
 
 def arrive_dwell_for_config(cfg: dict):
-    """Return arrive_dwell (msg::PlannerConfig field 31) -- see
-    ARRIVE_DWELL_DEFAULT's own comment above for why this is the sole
-    survivor of the original 17-field Drive::Limits/tracker/policy span.
-    Mirrors heading_dwell_for_config()'s exact shape: read from the robot
-    JSON's ``control`` block when present, falling back to
-    ARRIVE_DWELL_DEFAULT when absent (no robot has needed a different value
-    yet)."""
-    ctrl = cfg.get("control", {}) or {}
-    return float(_get(ctrl, "arrive_dwell", default=ARRIVE_DWELL_DEFAULT))
+    """Return arrive_dwell (msg::PlannerConfig field 31, 100-001 -- the sole
+    survivor of the original 17-field Drive::Limits/tracker/policy span, see
+    planner.proto's own header comment for the 111-004 field accounting).
+    REQUIRED as of sprint 114 (config-as-truth completion)."""
+    return float(_require(cfg, "control", "arrive_dwell"))
 
 
 def actuation_lag_for_config(cfg: dict):
-    """Return actuation_lag (msg::PlannerConfig field 38, 112-002) -- see
-    ACTUATION_LAG_DEFAULT's own comment above. Read from the robot JSON's
-    ``control.actuation_lag`` when present, else ACTUATION_LAG_DEFAULT
-    (mirrors arrive_dwell_for_config()'s exact shape)."""
-    ctrl = cfg.get("control", {}) or {}
-    return float(_get(ctrl, "actuation_lag", default=ACTUATION_LAG_DEFAULT))
+    """Return actuation_lag (msg::PlannerConfig field 38, 112-002) -- App::
+    Drive's own model feedforward gain (Drive::tick() adds
+    actuation_lag * a onto each wheel's velocity target). REQUIRED as of
+    sprint 114 (config-as-truth completion)."""
+    return float(_require(cfg, "control", "actuation_lag"))
 
 
 def distance_gains_for_config(cfg: dict):
     """Return (distance_kp, distance_tol) for msg::PlannerConfig fields
-    39/40 (112-003) -- see DISTANCE_KP_DEFAULT/DISTANCE_TOL_DEFAULT's own
-    comment above for the full deadband-inequality derivation. Read from
-    the robot JSON's ``control.distance_kp``/``control.distance_tol`` when
-    present, falling back to the firmware defaults otherwise -- mirrors
-    arrive_dwell_for_config()'s exact shape."""
-    ctrl = cfg.get("control", {}) or {}
-    distance_kp = _get(ctrl, "distance_kp", default=DISTANCE_KP_DEFAULT)
-    distance_tol = _get(ctrl, "distance_tol", default=DISTANCE_TOL_DEFAULT)
+    39/40 (112-003) -- App::Pilot's own bounded linear position-feedback
+    trim and Motion::Executor's own linear completion tolerance. Both
+    REQUIRED as of sprint 114 (config-as-truth completion)."""
+    distance_kp = _require(cfg, "control", "distance_kp")
+    distance_tol = _require(cfg, "control", "distance_tol")
     return float(distance_kp), float(distance_tol)
 
 
 def model_tau_for_config(cfg: dict):
     """Return (model_tau_lin, model_tau_ang) for msg::PlannerConfig fields
     41/42 (113-001) -- App::Pilot's own two-stage model-reference feedback
-    plant-lag time constants (pilot.h's modelTauLin_/modelTauAng_). Read
-    from the robot JSON's ``control.model_tau_lin``/``control.model_tau_ang``
-    when present, falling back to MODEL_TAU_LIN_DEFAULT/MODEL_TAU_ANG_DEFAULT
-    otherwise -- mirrors distance_gains_for_config()'s exact shape (and, per
-    field, actuation_lag_for_config()'s)."""
-    ctrl = cfg.get("control", {}) or {}
-    model_tau_lin = _get(ctrl, "model_tau_lin", default=MODEL_TAU_LIN_DEFAULT)
-    model_tau_ang = _get(ctrl, "model_tau_ang", default=MODEL_TAU_ANG_DEFAULT)
+    plant-lag time constants (pilot.h's modelTauLin_/modelTauAng_). Both
+    REQUIRED as of sprint 114 (config-as-truth completion)."""
+    model_tau_lin = _require(cfg, "control", "model_tau_lin")
+    model_tau_ang = _require(cfg, "control", "model_tau_ang")
     return float(model_tau_lin), float(model_tau_ang)
 
 
+def motion_limits_for_config(cfg: dict):
+    """Return (a_max, a_decel, v_body_max, j_max, yaw_jerk_max) for
+    msg::PlannerConfig's five non-rotational motion-limit fields (098-001 --
+    moved verbatim from main.cpp's old hand-written defaultMotionConfig()).
+
+    ALL FIVE are REQUIRED as of sprint 114 (config-as-truth completion) --
+    previously these were the only PlannerConfig fields with NO per-robot
+    JSON mapping at all (generate() referenced the module-level DEFAULT
+    constants directly, unconditionally). Every shipped robot JSON now
+    carries control.a_max/a_decel/v_body_max/j_max/yaw_jerk_max seeded with
+    the same numeric values main.cpp used to hardcode (value-preserving
+    migration)."""
+    a_max        = _require(cfg, "control", "a_max")         # [mm/s^2]
+    a_decel      = _require(cfg, "control", "a_decel")       # [mm/s^2]
+    v_body_max   = _require(cfg, "control", "v_body_max")    # [mm/s]
+    j_max        = _require(cfg, "control", "j_max")         # [mm/s^3]
+    yaw_jerk_max = _require(cfg, "control", "yaw_jerk_max")  # [rad/s^3]
+    return (float(a_max), float(a_decel), float(v_body_max),
+            float(j_max), float(yaw_jerk_max))
+
+
+def trackwidth_for_config(cfg: dict) -> float:
+    """Return geometry.trackwidth [mm] -> DrivetrainConfig.trackwidth.
+    REQUIRED as of sprint 114 (config-as-truth completion) -- previously
+    fell back to a 128.0mm placeholder when absent."""
+    return float(_require(cfg, "geometry", "trackwidth"))
+
+
 def generate(cfg: dict, source_path: str) -> str:
-    trackwidth   = _get(cfg, "geometry", "trackwidth", default=TRACKWIDTH_DEFAULT)
-    vel_kp, vel_ki, vel_kff, vel_imax, vel_kaw, vel_filt = vel_gains_for_config(cfg)
-    travel_calib = travel_calib_for_ports(cfg)
-    fwd_sign     = fwd_sign_for_ports(cfg)
-    polled       = polled_for_ports()
-    (otos_offset_x, otos_offset_y, otos_offset_yaw,
-     otos_linear_scale, otos_angular_scale) = otos_boot_config_values(cfg)
-    heading_kp, heading_kd = heading_gains_for_config(cfg)
-    heading_source_wire = heading_source_for_config(cfg)
-    heading_dwell_tol, heading_dwell_rate = heading_dwell_for_config(cfg)
-    heading_lead_bias, plan_lead, terminal_lead = lead_compensation_for_config(cfg)
-    yaw_rate_max, yaw_acc_max = profile_rot_limits_for_config(cfg)
-    min_speed = min_speed_for_config(cfg)
-    arrive_dwell = arrive_dwell_for_config(cfg)
-    actuation_lag = actuation_lag_for_config(cfg)
-    distance_kp, distance_tol = distance_gains_for_config(cfg)
-    model_tau_lin, model_tau_ang = model_tau_for_config(cfg)
+    try:
+        trackwidth   = trackwidth_for_config(cfg)
+        vel_kp, vel_ki, vel_kff, vel_imax, vel_kaw, vel_filt = vel_gains_for_config(cfg)
+        output_deadband = output_deadband_for_config(cfg)
+        reversal_dwell = reversal_dwell_for_config(cfg)
+        travel_calib = travel_calib_for_ports(cfg)
+        fwd_sign     = fwd_sign_for_ports(cfg)
+        polled       = polled_for_ports()
+        (otos_offset_x, otos_offset_y, otos_offset_yaw,
+         otos_linear_scale, otos_angular_scale) = otos_boot_config_values(cfg)
+        heading_kp, heading_kd = heading_gains_for_config(cfg)
+        heading_source_wire = heading_source_for_config(cfg)
+        heading_dwell_tol, heading_dwell_rate = heading_dwell_for_config(cfg)
+        heading_lead_bias, plan_lead, terminal_lead = lead_compensation_for_config(cfg)
+        yaw_rate_max, yaw_acc_max = profile_rot_limits_for_config(cfg)
+        min_speed = min_speed_for_config(cfg)
+        arrive_dwell = arrive_dwell_for_config(cfg)
+        actuation_lag = actuation_lag_for_config(cfg)
+        distance_kp, distance_tol = distance_gains_for_config(cfg)
+        model_tau_lin, model_tau_ang = model_tau_for_config(cfg)
+        a_max, a_decel, v_body_max, j_max, yaw_jerk_max = motion_limits_for_config(cfg)
+    except MissingRobotConfigKeyError as e:
+        raise e.with_source(source_path) from e
 
     calib_lines = "\n".join(
         f"    out[{i}].setTravelCalib({_f(v)});   // [mm/deg] port {i + 1}"
@@ -799,10 +575,6 @@ void defaultMotorConfigs(msg::MotorConfig* out) {{
     velGains.i_max = {_f(vel_imax)};
     velGains.kaw = {_f(vel_kaw)};   // anti-windup back-calculation (velocity_pid.cpp; 0 = off)
 
-    // reversal_dwell / output_deadband are left unset (.has == false) on
-    // purpose — Hal::Motor::configure() applies the real ship defaults (100 ms
-    // / 0.03) whenever a config arrives unset; that is the one place those
-    // defaults live.
     for (uint32_t i = 0; i < kMotorConfigCount; ++i) {{
         out[i] = msg::MotorConfig();
         out[i].setPort(i + 1);
@@ -810,6 +582,13 @@ void defaultMotorConfigs(msg::MotorConfig* out) {{
         // EMA coeff — from control.vel_filt (fallback default); a=0 would pin
         // reported velocity at 0 forever regardless of real motion.
         out[i].setVelFiltAlpha({_f(vel_filt)});
+        // Write-shaping floor/hold — baked from the robot JSON's
+        // control.output_deadband/control.reversal_dwell_ms (sprint 114
+        // ticket 003, config-as-truth completion). REQUIRED as of this
+        // ticket: Devices::NezhaMotor no longer substitutes a ship default
+        // when these arrive unset, so every build must emit a real value.
+        out[i].setOutputDeadband({_f(output_deadband)});   // [-1,1] fraction
+        out[i].setReversalDwell({_f(reversal_dwell)});   // [ms]
     }}
 
     // Per-port forward-sign — baked from the robot JSON's calibration.
@@ -885,13 +664,13 @@ msg::PlannerConfig defaultPlannerConfig() {{
     // message's own header comment in planner.proto for the full
     // per-field accounting.
     msg::PlannerConfig cfg;
-    cfg.setAMax({_f(A_MAX_DEFAULT)});               // [mm/s^2]
-    cfg.setADecel({_f(A_DECEL_DEFAULT)});             // [mm/s^2]
-    cfg.setVBodyMax({_f(V_BODY_MAX_DEFAULT)});           // [mm/s]
+    cfg.setAMax({_f(a_max)});               // [mm/s^2]
+    cfg.setADecel({_f(a_decel)});             // [mm/s^2]
+    cfg.setVBodyMax({_f(v_body_max)});           // [mm/s]
     cfg.setYawRateMax({_f(yaw_rate_max)});         // [rad/s] (control.yaw_rate_max [deg/s])
     cfg.setYawAccMax({_f(yaw_acc_max)});          // [rad/s^2] (control.max_rot_accel_dps2 [deg/s^2])
-    cfg.setJMax({_f(J_MAX_DEFAULT)});                // [mm/s^3] ~6x a_max -- ~0.16s jerk-limited edges
-    cfg.setYawJerkMax({_f(YAW_JERK_MAX_DEFAULT)});         // [rad/s^3] ~5x yaw_acc_max -- ~0.2s
+    cfg.setJMax({_f(j_max)});                // [mm/s^3] ~6x a_max -- ~0.16s jerk-limited edges
+    cfg.setYawJerkMax({_f(yaw_jerk_max)});         // [rad/s^3] ~5x yaw_acc_max -- ~0.2s
     cfg.setHeadingKp({_f(heading_kp)});              // [1/s] outer heading-loop proportional gain
     cfg.setHeadingKd({_f(heading_kd)});              // dimensionless outer heading-loop derivative gain
     cfg.setMinSpeed({_f(min_speed)});               // [mm/s] Drive:: tracker pivot-mode threshold (100-007)
@@ -953,7 +732,14 @@ def _display_path(source_path: str) -> str:
 
 def main():
     cfg, source_path = load_robot_config()
-    content = generate(cfg, _display_path(source_path))
+    display_path = _display_path(source_path)
+    try:
+        content = generate(cfg, display_path)
+    except MissingRobotConfigKeyError as e:
+        # Config-as-truth (sprint 114): fail the build loudly, naming the
+        # missing key and the JSON path -- never emit a placeholder file.
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
     OUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     OUT_FILE.write_text(content)
     print(f"gen_boot_config: wrote {OUT_FILE.relative_to(REPO_ROOT)}", file=sys.stderr)

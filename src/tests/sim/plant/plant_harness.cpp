@@ -405,12 +405,78 @@ void scenarioDeterminismAcrossTwoRuns() {
   checkTrue(identical, "every recorded field, every cycle, is bit-identical across both runs");
 }
 
+// ===========================================================================
+// 4. Mount-orientation correction (114-007, sprint.md Revision 2 Decision 7):
+//    a mirror-mounted motor pair's real fwd_sign (+1 left / -1 right,
+//    tovez_nocal.json, issue 088-002) means firmware's own straight-forward
+//    write drives the two wheel shafts in OPPOSITE physical (wire-frame)
+//    directions -- exactly what a real mirrored pair's shafts do. This
+//    scenario drives the wire-level Nezha 0x60 frame DIRECTLY via
+//    SimPlant::write() (bypassing Devices::NezhaMotor entirely, so this is a
+//    test of SimPlant alone, independent of firmware's own fwdSign encode
+//    logic) with the SAME duty magnitude, OPPOSITE wire-level sign on the
+//    two ports -- exactly what handleMotorWrite() (sim_plant.cpp) decodes
+//    off a real firmware write for a straight command under this fwd_sign
+//    profile (nezha_motor.cpp's own writeRawDuty() "Apply fwdSign" comment:
+//    effective = fwdSign * written). Without SimPlant::setFwdSign()
+//    correcting the OtosPlant-feeding boundary, the plant naively combines
+//    the two raw wheel positions and reports a SPIN (nonzero heading, ~zero
+//    x); with it, ground truth TRANSLATES (nonzero x, ~zero heading),
+//    matching what the real robot does.
+// ===========================================================================
+
+// Writes one wire-level Nezha 0x60 RUN frame directly to `bus` -- the exact
+// 8-byte layout nezha_motor.cpp's writeMotorRun() sends
+// ([0xFF, 0xF9, motorId, direction, 0x60, speed, 0xF5, 0x00]) -- bypassing
+// Devices::NezhaMotor so this scenario exercises SimPlant's own wire
+// protocol handling directly, per this ticket's Approach step 6.
+void writeStraightDutyFrame(TestSim::SimPlant& bus, uint8_t port, uint8_t dir, uint8_t speedPct) {
+  const uint16_t motorWireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr) << 1;
+  uint8_t frame[8] = {0xFF, 0xF9, port, dir, 0x60, speedPct, 0xF5, 0x00};
+  int status = bus.write(motorWireAddr, frame, 8);
+  checkTrue(status == 0, "wire-level motor-run write ACKed");
+}
+
+void scenarioMountOrientationCorrectionTranslatesNotSpins() {
+  beginScenario("mount orientation: mirrored fwd_sign straight command translates ground truth, not spins it");
+
+  constexpr uint8_t kDirCw = 1;    // matches sim_plant.cpp's own kNezhaDirCw
+  constexpr uint8_t kDirCcw = 2;   // matches sim_plant.cpp's own kNezhaDirCcw
+  constexpr uint8_t kSpeedPct = 60;
+
+  TestSim::SimPlant bus(kTrackWidth);
+  bus.setFwdSign(1, 1);    // left: mount-neutral
+  bus.setFwdSign(2, -1);   // right: mirror-mounted (tovez_nocal.json's real 088-002 fwd_sign)
+
+  // A real firmware straight command under this fwd_sign profile writes CW
+  // to the left port (effective = +1 * written) and CCW to the right port
+  // (effective = -1 * written) for the SAME logical-forward duty -- same
+  // magnitude, opposite wire-level sign.
+  writeStraightDutyFrame(bus, /*port=*/1, kDirCw, kSpeedPct);
+  writeStraightDutyFrame(bus, /*port=*/2, kDirCcw, kSpeedPct);
+
+  const float dtS = 0.02f;   // [s]
+  const int kCycles = 100;   // 2.0s of virtual time -- >>10*tau, fully converges
+  for (int i = 0; i < kCycles; ++i) {
+    bus.tick(dtS);
+  }
+
+  const TestSim::OtosPlant& otos = bus.otosPlant();
+  checkTrue(otos.x() > 400.0f,
+            "ground truth shows meaningful forward TRANSLATION (nonzero x()), not a spin");
+  checkFloatEq(otos.heading(), 0.0f,
+               "ground truth heading stays near zero -- a straight command must not turn the robot",
+               0.02f);
+  checkFloatEq(otos.y(), 0.0f, "no lateral drift for a straight command", 1e-2f);
+}
+
 }  // namespace
 
 int main() {
   scenarioVelocityStepShowsRampWithTauInRange();
   scenarioPivotHeadingSaneViaOdometry();
   scenarioDeterminismAcrossTwoRuns();
+  scenarioMountOrientationCorrectionTranslatesNotSpins();
 
   if (g_failureCount == 0) {
     std::printf("OK: all plant scenarios passed\n");

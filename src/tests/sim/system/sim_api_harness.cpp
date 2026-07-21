@@ -34,6 +34,7 @@
 #include <string>
 #include <vector>
 
+#include "bench_test_config.h"
 #include "messages/envelope.h"
 #include "messages/planner.h"
 #include "sim_harness.h"
@@ -114,6 +115,7 @@ void scenarioBootCompletesThroughRealRobotLoop() {
   beginScenario("boot: SimHarness drives the REAL RobotLoop::boot(), motors+OTOS connect, kEventBootReady visible");
 
   TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
   checkTrue(!sim.booted(), "not booted before boot() is called");
 
   sim.boot();  // SimHarness's own dedicated boot() entry point -- see sim_harness.h's file header
@@ -148,6 +150,7 @@ void scenarioTwistDrivesRealPlantRamp() {
   beginScenario("twist: injected command drives REAL plant velocity ramp, visible in decoded TLM");
 
   TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
   sim.boot();
   sim.step(3);  // settle: both leaves' own one-time zero-duty activation writes land (cycles 0, 1)
   (void)sim.drainTelemetry();  // discard boot/settle frames -- this scenario only cares about the ramp
@@ -192,6 +195,7 @@ void scenarioStopAcksAndClearsActive() {
   beginScenario("stop: explicit STOP command acks OK, decoded telemetry active clears");
 
   TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
   sim.boot();
   sim.injectTwist(1000.0f, 0.0f, 100000.0f, /*corrId=*/7);
   sim.step(5);  // ramp a bit so there is real motion to stop
@@ -228,6 +232,7 @@ void scenarioDeadmanExpiryStopsPlant() {
   beginScenario("deadman: expiry (no STOP ever sent) sets kEventDeadmanExpired, clears active");
 
   TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
   sim.boot();
   sim.injectTwist(1000.0f, 0.0f, /*duration=*/120.0f, /*corrId=*/5);  // [ms] -- expires in 3 cycles
   sim.step(2);  // cycles 0, 1 -- twist's own R/L activation writes land, not yet expired
@@ -281,6 +286,7 @@ void scenarioVirtualCycleTimingDiagnostic() {
   beginScenario("timing: virtual-cycle schedule is exactly kSettle+kClear+kSettle+kPace == kCycle (106-001)");
 
   TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
   sim.boot();
 
   // Reproduces the deleted SimApi::measureOneCycle()'s own deltas directly

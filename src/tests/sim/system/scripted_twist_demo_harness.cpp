@@ -96,6 +96,7 @@
 #include <string>
 #include <vector>
 
+#include "bench_test_config.h"
 #include "messages/envelope.h"
 #include "messages/planner.h"
 #include "sim_harness.h"
@@ -196,6 +197,7 @@ int main() {
   std::printf("first-order velocity ramp -> stop -> velocity reverses the ramp and heads back to zero.\n\n");
 
   TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
   bool anyWatchedFaultEver = false;
   bool connHealthyThroughout = true;
   // 106-002 own "sim-assert both cadences" requirement (drive-by fix for

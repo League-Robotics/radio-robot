@@ -18,14 +18,21 @@ Covers:
    ring after ``configure_from_robot()`` and observing at least one OK ack,
    not merely that the host-side call returned without raising.
 3. ``configure_from_robot()`` measurably changes the sim's own plant
-   response to an identical twist: ``tovez_nocal.json``'s
-   ``control.vel_kp`` (0.002) differs from ``SimHarness::makeMotorConfig()``'s
-   own hardcoded stand-in gain (0.003, ``sim_harness.h``) -- a direct,
-   deterministic before/after comparison of two freshly-connected
-   ``SimLoop``s (one left at the sim's own defaults, one configured from
-   ``tovez_nocal.json``) driven with the SAME twist for the SAME number of
-   cycles must diverge, or ``configure_from_robot()`` is not actually
-   reaching the firmware's own gains.
+   response to an identical twist: an UNCONFIGURED ``SimLoop`` (114-001's
+   config-completeness gate: ``TestSim::SimHarness`` no longer
+   self-configures at all -- ``ERR_NOT_CONFIGURED`` refuses every
+   TWIST/MOVE, so the plant NEVER moves off the origin) versus a
+   ``configure_from_robot()``-configured one (accepted, genuinely drives) --
+   a direct, deterministic before/after comparison of two freshly-connected
+   ``SimLoop``s driven with the SAME twist for the SAME number of cycles.
+   UPDATED by 114-001: this used to compare ``tovez_nocal.json``'s
+   ``control.vel_kp`` (0.002) against ``SimHarness::makeMotorConfig()``'s own
+   hardcoded stand-in gain (0.003) -- that stand-in baseline no longer
+   exists (``SimHarness`` no longer self-configures, Decision 3,
+   sprint.md), so this now compares "refused" against "accepted and
+   driving" instead -- a more direct proof that ``configure_from_robot()``
+   is what makes the difference between a plant that stays put and one
+   that moves.
 
 Run with::
 
@@ -133,15 +140,20 @@ def test_configure_from_robot_tier1_push_is_acked_by_firmware():
 
 
 def test_configure_from_robot_tovez_nocal_changes_measurable_drive_behavior():
-    """tovez_nocal.json's control.vel_kp (0.002) differs from SimHarness's
-    own hardcoded stand-in motor gain (0.003, sim_harness.h's
-    makeMotorConfig()) -- a Tier-1 MotorConfigPatch field with a real,
-    already-proven firmware consumer. Driving the SAME twist for the SAME
-    number of cycles on two freshly-connected SimLoops -- one left at the
-    sim's own hardcoded defaults, one configured via
-    configure_from_robot(tovez_nocal_config) -- must produce a DIFFERENT
-    plant response; identical responses would mean configure_from_robot()
-    is not actually reaching the firmware's own velocity-PID gains."""
+    """114-001 UPDATE: ``TestSim::SimHarness`` no longer self-configures at
+    all (Decision 3, sprint.md) -- there is no more "the sim's own hardcoded
+    defaults" for an unconfigured ``SimLoop`` to fall back to. An
+    unconfigured loop's every TWIST/MOVE is refused (``ACK_STATUS_ERR`` /
+    ``ERR_NOT_CONFIGURED`` -- App::RobotLoop's new config-completeness
+    gate), so its plant NEVER moves off the origin. This test now proves the
+    more direct, and more load-bearing, half of that same claim:
+    ``configure_from_robot()`` is what actually flips a ``SimLoop`` from
+    "refused, stays at the origin" to "accepted, genuinely drives" -- driving
+    the SAME twist for the SAME number of cycles on two freshly-connected
+    ``SimLoop``s, one left unconfigured, one configured via
+    ``configure_from_robot(tovez_nocal_config)``, must produce a materially
+    DIFFERENT plant response (the unconfigured one stays exactly at the
+    origin; the configured one measurably moves)."""
     from robot_radio.config.robot_config import load_robot_config
 
     config = load_robot_config(_ROBOTS_DIR / "tovez_nocal.json")
@@ -154,7 +166,9 @@ def test_configure_from_robot_tovez_nocal_changes_measurable_drive_behavior():
         configured.configure_from_robot(config)
         # Let RobotLoop actually consume+apply the injected ConfigDelta(s)
         # before commanding a twist -- the config command sits in
-        # FakeTransport's inbound queue until the next sim_step().
+        # FakeTransport's inbound queue until the next sim_step(). baseline
+        # is deliberately never configured -- its every TWIST below is
+        # refused by the 114-001 config-completeness gate.
         baseline.step(1)
         configured.step(1)
 
@@ -165,10 +179,36 @@ def test_configure_from_robot_tovez_nocal_changes_measurable_drive_behavior():
         pose_baseline = baseline.get_true_pose()
         pose_configured = configured.get_true_pose()
 
-        assert pose_baseline["x"] != pytest.approx(pose_configured["x"], abs=1e-4), (
-            "configure_from_robot()'s Tier-1 push (vel_kp=0.002 vs the sim's own "
-            "hardcoded 0.003) produced no observable difference in plant response "
-            f"after 10 cycles: baseline={pose_baseline!r} configured={pose_configured!r}"
+        assert pose_baseline["x"] == pytest.approx(0.0, abs=1e-4), (
+            "the UNCONFIGURED loop's plant moved off the origin -- its twist should have "
+            f"been refused (ERR_NOT_CONFIGURED): pose_baseline={pose_baseline!r}"
+        )
+        assert (
+            abs(pose_configured["x"]) > 1e-3 or abs(pose_configured["y"]) > 1e-3
+            or abs(pose_configured["h"]) > 1e-3
+        ), (
+            "the CONFIGURED loop's plant never moved at all -- configure_from_robot() is not "
+            f"actually reaching the firmware (twist was accepted but produced no motion): "
+            f"pose_configured={pose_configured!r}"
+        )
+        # Compare the FULL pose (x, y, AND h), not just x alone: the
+        # unrelated, pre-existing WheelPlant/SimPlant mirror-mount gap this
+        # ticket's own diagnostic surfaced (see test_motor_primitive.py's
+        # "pytest entry points" section comment) makes tovez_nocal.json's
+        # real, asymmetric fwd_sign spin the configured plant in place
+        # rather than translate it -- x/y can coincidentally stay near the
+        # unconfigured baseline's own (0, 0) even though the twist WAS
+        # genuinely accepted and driving (h moves substantially). Any ONE of
+        # the three components differing is sufficient proof
+        # configure_from_robot() made the difference.
+        pose_differs = any(
+            pose_baseline[axis] != pytest.approx(pose_configured[axis], abs=1e-4)
+            for axis in ("x", "y", "h")
+        )
+        assert pose_differs, (
+            "configure_from_robot() produced no observable difference between the "
+            "unconfigured (refused) and configured (accepted) loops after 10 cycles: "
+            f"baseline={pose_baseline!r} configured={pose_configured!r}"
         )
     finally:
         baseline.disconnect()

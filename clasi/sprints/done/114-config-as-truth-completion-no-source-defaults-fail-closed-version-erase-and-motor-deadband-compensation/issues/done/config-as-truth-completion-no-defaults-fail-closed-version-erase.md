@@ -1,5 +1,11 @@
 ---
-status: pending
+status: done
+sprint: '114'
+tickets:
+- 114-001
+- 114-002
+- 114-003
+- 114-004
 ---
 
 # Config-as-truth completion: no behavioral defaults in source, fail-closed when unconfigured, version-erased persisted config

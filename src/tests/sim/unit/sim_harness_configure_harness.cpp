@@ -10,13 +10,17 @@
 // for, not by anything here). What THIS file proves, specifically:
 //
 //   1. A default-constructed SimHarness (configurePlanner()/configureMotor()
-//      NEVER called) observes literally makeExecutorConfig()'s own baseline
-//      values -- the regression pin for "the additive surface starts from
-//      an unmodified default."
-//   2. configurePlanner() with values that differ from that baseline takes
-//      effect and is readable back via plannerConfig() (Pilot::
-//      plannerConfig()'s full-struct copy -- see sim_harness.h's own
-//      comment on why that accessor is a reliable readback for every
+//      NEVER called) observes msg::PlannerConfig{}'s own all-zero default --
+//      the regression pin for "the additive surface starts from an
+//      unmodified default." UPDATED by 114-001: this used to pin against
+//      makeExecutorConfig()'s own hardcoded stand-in baseline values, which
+//      that ticket deleted (SimHarness no longer self-configures at all --
+//      see sim_harness.h's own header); the pin now reads correctly as
+//      msg::PlannerConfig{}'s all-zero default instead.
+//   2. configurePlanner() with values that differ from that (all-zero)
+//      default takes effect and is readable back via plannerConfig()
+//      (Pilot::plannerConfig()'s full-struct copy -- see sim_harness.h's
+//      own comment on why that accessor is a reliable readback for every
 //      PlannerConfig field, not just the ones Pilot's own arithmetic
 //      reads).
 //   3. configureMotor() with values that differ from Devices::MotorConfig{}'s
@@ -27,9 +31,9 @@
 //      name: a caller that calls configurePlanner() with a full config and
 //      THEN calls setYawRateMax() (one of the three pre-existing sim-only
 //      hooks) does NOT silently lose every other field configurePlanner()
-//      set back to makeExecutorConfig()'s stand-in defaults -- only
-//      yaw_rate_max (and setYawRateMax()'s own remembered
-//      lead-compensation/distance_kp overrides) actually change.
+//      set back to the fallback default -- only yaw_rate_max (and
+//      setYawRateMax()'s own remembered lead-compensation/distance_kp
+//      overrides) actually change.
 //
 // Compiled by test_sim_harness_configure.py against the same full
 // HOST_BUILD dependency graph test_pilot_distance_trim.py/
@@ -70,15 +74,16 @@ void checkFloatEq(float actual, float expected, const std::string& what, float t
   }
 }
 
-// makeExecutorConfig()'s own literal baseline values (sim_harness.h) --
-// duplicated here deliberately (a test should never depend on an ambient
-// default silently tracking a production one -- same posture
-// pilot_distance_trim_harness.cpp's own kDistanceKp comment takes) so
-// scenario 1 below is a genuine regression pin, not a tautology.
-constexpr float kBaselineAMax = 800.0f;          // [mm/s^2]
-constexpr float kBaselineHeadingKp = 2.5f;       // [1/s]
-constexpr float kBaselineModelTauLin = 0.10f;    // [s]
-constexpr float kBaselineModelTauAng = 0.08f;    // [s]
+// 114-001: SimHarness no longer self-configures -- makeExecutorConfig()
+// (the hardcoded planner stand-in this scenario used to pin against) was
+// DELETED by that ticket (Decision 3, sprint.md), moved unchanged to
+// src/tests/sim/support/bench_test_config.h as an explicitly test-tree-only,
+// opt-in helper. A freshly-constructed (or booted) SimHarness now observes
+// msg::PlannerConfig{}'s own all-zero default until configurePlanner() is
+// explicitly called -- see this file's own module docstring point 1, now
+// updated to match. kBaselineYawRateMax below is UNCHANGED -- it is not a
+// "what SimHarness starts at" pin (scenario 4/5 below still use it as a
+// scenario-local distinguishing value, unrelated to the deleted baseline).
 constexpr float kBaselineYawRateMax = 4.0f;      // [rad/s]
 
 }  // namespace
@@ -87,21 +92,23 @@ int main() {
   std::printf("=== TestSim::SimHarness::configurePlanner()/configureMotor() (113-002) ===\n\n");
 
   // --- Scenario 1: default construction, never configured -- observes
-  //     makeExecutorConfig()'s own baseline (additive-surface regression
-  //     pin) ---
+  //     msg::PlannerConfig{}'s own all-zero default (114-001: SimHarness no
+  //     longer self-bakes a hardcoded stand-in baseline -- see this file's
+  //     own updated header). ---
   {
-    beginScenario("default-constructed SimHarness observes makeExecutorConfig()'s own baseline");
+    beginScenario("default-constructed SimHarness observes msg::PlannerConfig{}'s own all-zero default "
+                  "(114-001: no self-configuration baseline anymore)");
     TestSim::SimHarness sim;
     sim.boot();
 
-    checkFloatEq(sim.plannerConfig().a_max, kBaselineAMax,
-                 "a_max matches makeExecutorConfig()'s baseline before any configurePlanner() call");
-    checkFloatEq(sim.plannerConfig().heading_kp, kBaselineHeadingKp,
-                 "heading_kp matches makeExecutorConfig()'s baseline before any configurePlanner() call");
-    checkFloatEq(sim.plannerConfig().model_tau_lin, kBaselineModelTauLin,
-                 "model_tau_lin matches makeExecutorConfig()'s baseline before any configurePlanner() call");
-    checkFloatEq(sim.plannerConfig().model_tau_ang, kBaselineModelTauAng,
-                 "model_tau_ang matches makeExecutorConfig()'s baseline before any configurePlanner() call");
+    checkFloatEq(sim.plannerConfig().a_max, 0.0f,
+                 "a_max is msg::PlannerConfig{}'s own zero default -- configurePlanner() was never called");
+    checkFloatEq(sim.plannerConfig().heading_kp, 0.0f,
+                 "heading_kp is msg::PlannerConfig{}'s own zero default -- configurePlanner() was never called");
+    checkFloatEq(sim.plannerConfig().model_tau_lin, 0.0f,
+                 "model_tau_lin is msg::PlannerConfig{}'s own zero default -- configurePlanner() was never called");
+    checkFloatEq(sim.plannerConfig().model_tau_ang, 0.0f,
+                 "model_tau_ang is msg::PlannerConfig{}'s own zero default -- configurePlanner() was never called");
   }
 
   // --- Scenario 2: configurePlanner() with values differing from the
@@ -208,11 +215,11 @@ int main() {
     sim.boot();
 
     msg::PlannerConfig cfg;
-    cfg.a_max = 4242.0f;             // [mm/s^2] -- distinctive, NOT makeExecutorConfig()'s 800
-    cfg.heading_kp = 11.0f;          // [1/s] -- distinctive, NOT makeExecutorConfig()'s 2.5
-    cfg.model_tau_lin = 0.55f;       // [s] -- distinctive, NOT makeExecutorConfig()'s 0.10
-    cfg.model_tau_ang = 0.66f;       // [s] -- distinctive, NOT makeExecutorConfig()'s 0.08
-    cfg.yaw_rate_max = kBaselineYawRateMax;  // unchanged from baseline for this scenario
+    cfg.a_max = 4242.0f;             // [mm/s^2] -- distinctive, NOT msg::PlannerConfig{}'s 0 default
+    cfg.heading_kp = 11.0f;          // [1/s] -- distinctive, NOT msg::PlannerConfig{}'s 0 default
+    cfg.model_tau_lin = 0.55f;       // [s] -- distinctive, NOT msg::PlannerConfig{}'s 0 default
+    cfg.model_tau_ang = 0.66f;       // [s] -- distinctive, NOT msg::PlannerConfig{}'s 0 default
+    cfg.yaw_rate_max = kBaselineYawRateMax;  // scenario-local distinguishing value, overridden below
     sim.configurePlanner(cfg);
 
     checkFloatEq(sim.plannerConfig().a_max, 4242.0f, "setup: a_max holds configurePlanner()'s value before setYawRateMax()");
@@ -221,31 +228,37 @@ int main() {
 
     checkFloatEq(sim.plannerConfig().yaw_rate_max, 1.5f, "setYawRateMax() itself took effect");
     checkFloatEq(sim.plannerConfig().a_max, 4242.0f,
-                 "a_max SURVIVES setYawRateMax() -- not silently reset to makeExecutorConfig()'s 800");
+                 "a_max SURVIVES setYawRateMax() -- not silently reset to msg::PlannerConfig{}'s 0 default");
     checkFloatEq(sim.plannerConfig().heading_kp, 11.0f,
-                 "heading_kp SURVIVES setYawRateMax() -- not silently reset to makeExecutorConfig()'s 2.5");
+                 "heading_kp SURVIVES setYawRateMax() -- not silently reset to msg::PlannerConfig{}'s 0 default");
     checkFloatEq(sim.plannerConfig().model_tau_lin, 0.55f,
-                 "model_tau_lin SURVIVES setYawRateMax() -- not silently reset to makeExecutorConfig()'s 0.10");
+                 "model_tau_lin SURVIVES setYawRateMax() -- not silently reset to msg::PlannerConfig{}'s 0 default");
     checkFloatEq(sim.plannerConfig().model_tau_ang, 0.66f,
-                 "model_tau_ang SURVIVES setYawRateMax() -- not silently reset to makeExecutorConfig()'s 0.08");
+                 "model_tau_ang SURVIVES setYawRateMax() -- not silently reset to msg::PlannerConfig{}'s 0 default");
   }
 
   // --- Scenario 5: setYawRateMax() alone (configurePlanner() NEVER called)
-  //     keeps its PRE-EXISTING behavior -- rebuilds from
-  //     makeExecutorConfig(), exactly as before this ticket. ---
+  //     -- 114-001: SimHarness no longer carries a hardcoded baseline to
+  //     rebuild from, so this hook's own fallback (sim_harness.h's
+  //     `hasConfiguredPlanner_ ? lastPlannerConfig_ : msg::PlannerConfig{}`)
+  //     now rebuilds from msg::PlannerConfig{}'s all-zero default instead of
+  //     the deleted makeExecutorConfig(). Still byte-for-byte the SAME
+  //     rebuild-from-fallback SHAPE this hook always had -- only what the
+  //     fallback itself now resolves to changed. ---
   {
-    beginScenario("setYawRateMax() alone (no configurePlanner() call): unchanged pre-existing behavior");
+    beginScenario("setYawRateMax() alone (no configurePlanner() call): rebuilds from "
+                  "msg::PlannerConfig{}'s all-zero default (114-001: no self-configuration baseline anymore)");
     TestSim::SimHarness sim;
     sim.boot();
 
     sim.setYawRateMax(7.0f);
 
     checkFloatEq(sim.plannerConfig().yaw_rate_max, 7.0f, "setYawRateMax() itself took effect");
-    checkFloatEq(sim.plannerConfig().a_max, kBaselineAMax,
-                 "a_max still makeExecutorConfig()'s baseline -- setYawRateMax() rebuilt from it, "
+    checkFloatEq(sim.plannerConfig().a_max, 0.0f,
+                 "a_max is msg::PlannerConfig{}'s own zero default -- setYawRateMax() rebuilt from it, "
                  "not from any configurePlanner() call (there was none)");
-    checkFloatEq(sim.plannerConfig().heading_kp, kBaselineHeadingKp,
-                 "heading_kp still makeExecutorConfig()'s baseline for the same reason");
+    checkFloatEq(sim.plannerConfig().heading_kp, 0.0f,
+                 "heading_kp is msg::PlannerConfig{}'s own zero default for the same reason");
   }
 
   std::printf("\n");

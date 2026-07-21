@@ -21,6 +21,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 # src/tests/unit/test_gen_boot_config_otos.py -> unit -> tests -> repo root
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCRIPTS_DIR = _REPO_ROOT / "src" / "scripts"
@@ -47,19 +49,14 @@ def test_otos_boot_config_values_reads_tovez_json():
     assert angular_scale == 0.987
 
 
-def test_otos_boot_config_values_falls_back_to_identity_defaults():
-    """With no robot config at all, every field falls back to its identity default
-    (zero offset, 1.0 scale = no correction) -- matching every other mapping's
-    fall-back-to-firmware-default behavior in this generator."""
-    offset_x, offset_y, offset_yaw, linear_scale, angular_scale = (
+def test_otos_boot_config_values_raises_with_no_robot_config():
+    """Sprint 114 (config-as-truth completion): with no robot config at all,
+    the generator hard-fails on the first required key
+    (geometry.odometry_offset_mm.x) -- no more identity-default (zero
+    offset, 1.0 scale) source-side fallback."""
+    with pytest.raises(gbc.MissingRobotConfigKeyError,
+                        match="geometry.odometry_offset_mm.x"):
         gbc.otos_boot_config_values({})
-    )
-
-    assert offset_x == gbc.OTOS_OFFSET_X_DEFAULT == 0.0
-    assert offset_y == gbc.OTOS_OFFSET_Y_DEFAULT == 0.0
-    assert offset_yaw == gbc.OTOS_OFFSET_YAW_DEFAULT == 0.0
-    assert linear_scale == gbc.OTOS_LINEAR_SCALE_DEFAULT == 1.0
-    assert angular_scale == gbc.OTOS_ANGULAR_SCALE_DEFAULT == 1.0
 
 
 def test_generate_emits_default_otos_boot_config_additively():

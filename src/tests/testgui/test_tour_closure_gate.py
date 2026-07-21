@@ -48,6 +48,7 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
@@ -62,6 +63,15 @@ _TRACK_WIDTH = 128.0  # [mm] matches TestGUI's own default trackwidth
 _SPEED_FACTOR = 1     # sim fast-forward multiple; see this file's own diagnostic history --
                       # higher factors were tried first and caused spurious ack-timeout faults
                       # (see git history / ticket 009 notes), not a real Executor/Pilot defect.
+
+# 114-006: the active robot config _make_loop() configures every fresh SimLoop
+# from -- the sim now fail-closed refuses MOTION until it has received a
+# complete configuration (114-001/002/003), so a bare SimLoop.connect() with
+# no configure_from_robot() call faults immediately instead of running with a
+# hardcoded fallback. Same path test_turn_error_characterization.py's own
+# _ACTIVE_ROBOT_JSON/_make_sweep_loop() use.
+# test_tour_closure_gate.py -> testgui -> tests -> src -> repo root
+_ACTIVE_ROBOT_JSON = Path(__file__).resolve().parents[3] / "data" / "robots" / "tovez_nocal.json"
 
 # ---------------------------------------------------------------------------
 # "Realistic" sim error profile -- documented, plausible values, not tuned to
@@ -165,6 +175,7 @@ def _make_stepper(loop, clock: "_SteppedClock"):
 
 
 def _make_loop(*, realistic_errors: bool, deterministic: bool = True):
+    from robot_radio.config.robot_config import load_robot_config
     from robot_radio.io.sim_loop import SimLoop
 
     lib_path = _sim_lib_path()
@@ -172,6 +183,9 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True):
     loop.connect(start_tick_thread=not deterministic)
     if not deterministic:
         loop.set_speed_factor(_SPEED_FACTOR)
+    # 114-006: configure BEFORE the ideal/realistic fidelity knobs below --
+    # see _ACTIVE_ROBOT_JSON's own comment for why this call is now required.
+    loop.configure_from_robot(load_robot_config(_ACTIVE_ROBOT_JSON))
 
     if not realistic_errors:
         # Ideal chip: every knob explicit at its documented no-op default,
@@ -379,6 +393,24 @@ def _assert_tour_gate(gate: TourGateResult, *, tolerance_deg: float, label: str)
 #     this ticket's own time budget -- left as an open, numbers-backed gap
 #     for ticket 010 rather than silently retuning the tolerance.
 #
+# 114-006 re-baseline: _make_loop() now calls configure_from_robot() against
+# data/robots/tovez_nocal.json (vel_kp=0.002) BEFORE the ideal/realistic
+# fidelity knobs above -- these numbers above were originally measured
+# against the pre-113 hardcoded vel_kp=0.003 fallback the sim used to run
+# silently. Re-measured against the actually-configured 0.002 plant: worst
+# ideal-chip miss is now ~1.11deg (TOUR_1/TOUR_2 turn 2, both +1.09deg,
+# still well inside the ~0.4-2.2deg range above -- same mechanism, no
+# regression); worst realistic-profile miss is now TOUR_1 turn 8 at
+# +1.46deg (TOUR_2's own leg 14, the PREVIOUS outlier, now measures a
+# non-outlier -1.22deg -- the specific worst-turn identity shifted with the
+# configured plant's dynamics, but stayed in the same ~1-1.5deg band, still
+# the same Otos read-latency mechanism, not a new regression). Both xfail
+# reason strings below get a trailing sentence recording this so the
+# specific numbers stay accurate to what the CONFIGURED plant measures, per
+# this ticket's "document old value, new value, why" rule -- the tolerances
+# themselves (0.05deg/1.0deg, the stakeholder's own stated bar) are
+# unchanged.
+#
 # xfail (not skip) so both gaps stay VISIBLE and would XPASS loudly the
 # moment either one actually closes.
 # ---------------------------------------------------------------------------
@@ -390,7 +422,12 @@ _XFAIL_REASON_IDEAL = (
     "physical sampling-latency limit of the current architecture, not a tuning gap. "
     "Tours themselves now complete RELIABLY (round-2 dwell-completion fixes -- see "
     "the ticket's own Iteration Log/completion notes); only this residual accuracy "
-    "gap remains, and it is explicitly out of this ticket's own scope."
+    "gap remains, and it is explicitly out of this ticket's own scope. 114-006 "
+    "re-baseline (old vel_kp=0.003 hardcoded fallback -> new vel_kp=0.002 via "
+    "configure_from_robot() against tovez_nocal.json, why: config-as-truth "
+    "completion, ticket 001-003 removed the fallback): re-measured worst miss "
+    "~1.09deg (TOUR_1/TOUR_2 turn 2), still inside the range above -- same gap, "
+    "confirmed to persist under the actually-configured plant, not caused by it."
 )
 
 _XFAIL_REASON_REALISTIC = (
@@ -402,7 +439,12 @@ _XFAIL_REASON_REALISTIC = (
     "complete RELIABLY (round-2 dwell-completion fixes -- see the ticket's own "
     "Iteration Log/completion notes); this residual per-turn accuracy gap is not "
     "closed within this ticket's own time budget and is left open, numbers-backed, "
-    "for ticket 010 rather than silently retuning the tolerance."
+    "for ticket 010 rather than silently retuning the tolerance. 114-006 re-baseline "
+    "(same old/new vel_kp/why as the ideal-chip xfail above): re-measured worst miss "
+    "~1.46deg (TOUR_1 turn 8); TOUR_2's own leg 14 is no longer the outlier "
+    "(now -1.22deg) -- the worst-turn identity shifted with the configured plant's "
+    "dynamics but stayed in the same ~1-1.5deg band, same mechanism, not a new "
+    "regression."
 )
 
 
@@ -487,7 +529,20 @@ def test_tour_2_realistic_errors_turns_within_one_degree():
         "time (no dip below 135mm/s). Rebuilt again from the unmodified, "
         "committed (reordered) source and the failure returned identically "
         "on the first try. This is a direct, confirmed consequence of the "
-        "live reorder experiment, not a tour-boundary/planner bug."
+        "live reorder experiment, not a tour-boundary/planner bug. "
+        "114-006: _make_loop() now calls configure_from_robot() (required -- "
+        "the sim fail-closed refuses MOTION with no configuration at all "
+        "since 114-001/002/003); under the actually-configured plant this "
+        "test now runs ~208 ticks (~11s wall-clock, reproducible across "
+        "repeat runs) before RunOutcome.FAULT, rather than completing and "
+        "only dipping below the velocity floor -- it no longer even reaches "
+        "the min_v assertion this reason was originally written against. "
+        "Consistent with, not contradictory to, the diagnosis above (the "
+        "SAME real-time-threaded stale/alternating-encoder-read mechanism "
+        "escalating to an outright fault rather than a milder dip is not a "
+        "new failure mode); left un-re-diagnosed here per the reorder "
+        "experiment's own standing instruction (kept live and A/B-compared "
+        "just before hardware, not to be revert-tested piecemeal mid-sprint)."
     ),
 )
 def test_two_compatible_distance_legs_carry_velocity_through_the_boundary_at_tour_level():

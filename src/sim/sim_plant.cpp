@@ -238,7 +238,16 @@ int SimPlant::handleOtosRead(uint8_t* data, int len) {
 void SimPlant::tick(float dt) {
   left_.step(leftDuty_, dt);
   right_.step(rightDuty_, dt);
-  otos_.step(left_.position(), right_.position(), dt);  // 109-010: dt drives omega()
+  // 114-007 (Decision 7): correct each wheel's own physical (wire-frame)
+  // position into the shared vehicle-forward convention OtosPlant requires
+  // ONLY here, at the OtosPlant-feeding boundary -- left_.position()/
+  // right_.position() themselves stay untouched, so handleMotorRead()'s
+  // wire-level encoder simulation still reports exactly what a real chip's
+  // raw encoder would for a mirror-mounted motor. See setFwdSign()'s own
+  // comment (sim_plant.h).
+  otos_.step(static_cast<float>(leftFwdSign_) * left_.position(),
+             static_cast<float>(rightFwdSign_) * right_.position(),
+             dt);  // 109-010: dt drives omega()
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +299,22 @@ void SimPlant::setTruePose(float x, float y, float heading) {
   // stale motor offset and jump. Re-anchor the OTOS truth to (x,y,heading)
   // with its wheel-delta baseline at the wheels' CURRENT positions so its next
   // step() integrates a zero delta, not a phantom jump.
-  otos_.reset(x, y, heading, left_.position(), right_.position());
+  //
+  // 114-007: the baseline passed here MUST be in the SAME corrected
+  // (fwdSign-applied) frame tick()'s own otos_.step() call uses above --
+  // otherwise the very next tick() would compute its delta against an
+  // uncorrected baseline and inject a phantom one-cycle jump, exactly the
+  // failure mode this method's own comment above already warns about.
+  otos_.reset(x, y, heading, static_cast<float>(leftFwdSign_) * left_.position(),
+              static_cast<float>(rightFwdSign_) * right_.position());
+}
+
+void SimPlant::setFwdSign(int port, int sign) {
+  if (port == 2) {
+    rightFwdSign_ = sign;
+  } else {
+    leftFwdSign_ = sign;
+  }
 }
 
 const WheelPlant& SimPlant::wheelPlant(int port) const {

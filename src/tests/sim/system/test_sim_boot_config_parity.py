@@ -131,13 +131,9 @@ def _expected_planner_config(cfg: dict) -> "dict[str, float | int]":
     planner_boot_config_for() wrapper. Field set and shape mirror that
     wrapper's own (ticket 004's acceptance criteria enumerate the same 21
     fields) but this is an independent call site."""
-    out: "dict[str, float | int]" = {
-        "a_max": gbc.A_MAX_DEFAULT,
-        "a_decel": gbc.A_DECEL_DEFAULT,
-        "v_body_max": gbc.V_BODY_MAX_DEFAULT,
-        "j_max": gbc.J_MAX_DEFAULT,
-        "yaw_jerk_max": gbc.YAW_JERK_MAX_DEFAULT,
-    }
+    out: "dict[str, float | int]" = {}
+    (out["a_max"], out["a_decel"], out["v_body_max"], out["j_max"],
+     out["yaw_jerk_max"]) = gbc.motion_limits_for_config(cfg)
     out["yaw_rate_max"], out["yaw_acc_max"] = gbc.profile_rot_limits_for_config(cfg)
     out["min_speed"] = gbc.min_speed_for_config(cfg)
     out["heading_kp"], out["heading_kd"] = gbc.heading_gains_for_config(cfg)

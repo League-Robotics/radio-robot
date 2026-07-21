@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <string>
 
+#include "bench_test_config.h"
 #include "sim_harness.h"
 
 namespace {
@@ -65,6 +66,7 @@ int main() {
   {
     beginScenario("degenerate MOVE (all zero) -> ACK_STATUS_TRIVIAL, never queued");
     TestSim::SimHarness sim;
+    TestSupport::configureSimForBenchTest(sim);
     sim.boot();
     sim.step(3);
 
@@ -83,6 +85,7 @@ int main() {
   {
     beginScenario("9th queued MOVE -> ACK_STATUS_ERR/ERR_FULL, ring stays at depth 8");
     TestSim::SimHarness sim;
+    TestSupport::configureSimForBenchTest(sim);
     sim.boot();
     sim.step(3);
 
@@ -110,6 +113,7 @@ int main() {
   {
     beginScenario("teleop replace stream (jerk-limited, no instant step) then silence -> ramps down");
     TestSim::SimHarness sim;
+    TestSupport::configureSimForBenchTest(sim);
     sim.boot();
     sim.step(3);
 
@@ -154,6 +158,7 @@ int main() {
   {
     beginScenario("TWIST preempts the Move queue; STOP still stops immediately");
     TestSim::SimHarness sim;
+    TestSupport::configureSimForBenchTest(sim);
     sim.boot();
     sim.step(3);
 

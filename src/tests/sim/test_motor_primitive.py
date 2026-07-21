@@ -25,9 +25,17 @@ from __future__ import annotations
 
 import argparse
 import math
+import pathlib
 
 from robot_radio.io.sim_loop import SimLoop
 from robot_radio.testgui.transport import _sim_lib_path
+
+# src/tests/sim/test_motor_primitive.py -> sim -> tests -> src -> repo root =
+# THREE hops from __file__ (matches test_sim_configure_from_robot.py's own
+# established _REPO_ROOT/_ROBOTS_DIR pattern, adjusted for this file's own
+# shallower position -- src/tests/sim/, not src/tests/sim/system/).
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+_ROBOTS_DIR = _REPO_ROOT / "data" / "robots"
 
 TRACK_WIDTH = 128.0    # [mm]
 TICKS_PER_MM = 1.4187  # tovez wheels.ticks_per_mm
@@ -35,9 +43,27 @@ DEADMAN_MS = 300.0     # twist lease, re-armed every cycle to keep motors on
 
 
 def ideal_loop() -> SimLoop:
-    """A SimLoop with EVERY simulated error source explicitly zeroed."""
+    """A SimLoop with EVERY simulated error source explicitly zeroed.
+
+    114-001: SimHarness no longer self-configures (the config-completeness
+    gate makes "unconfigured" a real, refusable state) -- push a real,
+    JSON-derived configuration via configure_from_robot() immediately after
+    connect(), before the fault-knob-zeroing calls below, so the harness
+    this loop wraps is isConfigured()==true before any twist()/stop() call.
+    Uses the REAL tovez_nocal.json config (not the C++ bench-config's own
+    stand-in values) -- deliberate: this file's own TRACK_WIDTH/
+    TICKS_PER_MM module constants already assume real tovez_nocal.json
+    geometry, and this is a from-scratch, zero-simulated-error accuracy
+    check with generous tolerances, not a shape/oscillation check.
+    """
     loop = SimLoop(track_width=TRACK_WIDTH, lib_path=_sim_lib_path())
     loop.connect(start_tick_thread=False)
+
+    from robot_radio.config.robot_config import load_robot_config
+
+    config = load_robot_config(_ROBOTS_DIR / "tovez_nocal.json")
+    loop.configure_from_robot(config)
+
     loop.set_otos_raw_scale_err(0.0, 0.0)
     loop.set_enc_scale_err(1, 0.0)
     loop.set_enc_scale_err(2, 0.0)
@@ -159,6 +185,20 @@ def main() -> None:
 
 
 # --- pytest entry points (tight tolerances -- zero-error sim) --------------
+#
+# 114-001 diagnostic finding, fixed by 114-007: since ideal_loop() pushes
+# tovez_nocal.json's REAL fwd_sign (+1 left / -1 right -- issue 088-002's own
+# documented, hardware-verified mirror-mount correction) all the way to the
+# motor, a pre-existing, orthogonal gap surfaced -- TestSim::WheelPlant/
+# SimPlant had no notion of a mirror-mounted motor, so a commanded straight
+# twist drove the two WheelPlants in opposite physical directions and the
+# simulated robot spun in place instead of translating, even though
+# firmware's own encoder decode (which applies the same fwd_sign) stayed
+# self-consistent. Sprint 114 ticket 007 (sprint.md Revision 2, Decision 7)
+# taught TestSim::SimPlant each port's fwd_sign and applies it only at the
+# two call sites that feed OtosPlant ground truth (tick()/setTruePose()),
+# leaving WheelPlant's own physics and the wire-level encoder-read path
+# unchanged -- see sim_plant.h's setFwdSign() comment for the full fix.
 
 def test_distance_encoder_and_otos_match_truth():
     d = distance_probe(150.0, 2.0)

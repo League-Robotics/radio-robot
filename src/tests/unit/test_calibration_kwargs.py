@@ -32,7 +32,12 @@ import types
 from pathlib import Path
 
 from robot_radio.calibration.push import calibration_commands, calibration_kwargs
-from robot_radio.config.robot_config import load_robot_config
+from robot_radio.config.robot_config import (
+    ControlConfig,
+    IdentityConfig,
+    RobotConfig,
+    load_robot_config,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _ROBOTS_DIR = _REPO_ROOT / "data" / "robots"
@@ -129,13 +134,25 @@ def test_tovez_nocal_json_carries_all_three_new_planner_keys() -> None:
     assert kwargs["arriveDwell"] == 0.15
 
 
-def test_tovez_json_omits_min_speed_and_distance_kp_but_keeps_arrive_dwell() -> None:
-    """tovez.json's control section has no min_speed/distance_kp override
-    at all (absent -> None -> omitted, ControlConfig's "push only when
-    present" contract) but DOES carry arrive_dwell -- proving the "absent
-    when not set" half of 113-003's acceptance criteria against a real
-    fixture, not just a synthetic one."""
-    cfg = load_robot_config(_ROBOTS_DIR / "tovez.json")
+def test_synthetic_config_omits_min_speed_and_distance_kp_when_unset() -> None:
+    """A control section with min_speed/distance_kp left None (absent ->
+    omitted, ControlConfig's "push only when present" contract) but
+    arrive_dwell set DOES push arriveDwell alone -- proving the "absent when
+    not set" half of 113-003's acceptance criteria.
+
+    Sprint 114 (config-as-truth completion, ticket 002): every SHIPPED
+    robot JSON (tovez.json included) now carries control.min_speed/
+    control.distance_kp explicitly (gen_boot_config.py's build-time bake no
+    longer has a source-side fallback for them) -- so there is no longer a
+    REAL fixture that omits these two fields; a synthetic ControlConfig
+    replaces the tovez.json-based fixture this test used before this
+    ticket. See test_calibration_commands_tovez_json_snapshot below for the
+    now-updated live-push snapshot proving tovez.json's own minSpeed/
+    distanceKp ARE pushed."""
+    cfg = RobotConfig(
+        identity=IdentityConfig(robot_name="r", uid="0"),
+        control=ControlConfig(arrive_dwell=0.15),
+    )
 
     kwargs = calibration_kwargs(cfg)
 
@@ -152,6 +169,14 @@ def test_tovez_json_omits_min_speed_and_distance_kp_but_keeps_arrive_dwell() -> 
 
 
 def test_calibration_commands_tovez_json_snapshot() -> None:
+    """Sprint 114 (config-as-truth completion, ticket 002): tovez.json now
+    carries control.min_speed=16.0/control.distance_kp=8.0 explicitly
+    (previously absent -> None -> omitted from this push) -- both are the
+    SAME numeric values gen_boot_config.py's own now-deleted MIN_SPEED_
+    DEFAULT/DISTANCE_KP_DEFAULT constants used to bake into tovez.json's
+    boot config, so the real robot's boot-time behavior is unchanged; the
+    live push (this snapshot) now ALSO sends them, which is a no-op against
+    an already-matching boot default, not a behavior change."""
     cfg = load_robot_config(_ROBOTS_DIR / "tovez.json")
 
     cmds = calibration_commands(cfg)
@@ -168,6 +193,8 @@ def test_calibration_commands_tovez_json_snapshot() -> None:
         ("SET pid.kaw=20", 200),
         ("SET headingKp=6", 200),
         ("SET headingKd=0", 200),
+        ("SET minSpeed=16", 200),
+        ("SET distanceKp=8", 200),
         ("SET arriveDwell=0.15", 200),
         ("OI", 500),
         ("OL 67", 200),

@@ -1,5 +1,30 @@
 # Protocol v3 Wire Specification
 
+> **⚠️ STATUS — superseded snapshot (frozen at sprint 097; banner added 2026-07-20, out of process).**
+> This document describes the wire *as it existed after sprint 097*. The entire
+> command architecture below — the multi-arm `CommandEnvelope`/`ReplyEnvelope`, the
+> `source/commands/binary_channel.cpp` + `text_channel.cpp` split, per-command
+> replies, and the `rogo` translator proxy — was **rebuilt and replaced** by the
+> single-loop firmware in sprints **102–107**. `source/` is now `src/`;
+> `binary_channel.cpp` no longer exists (dearmoring now lives in
+> [`src/firm/app/comms.cpp`](../src/firm/app/comms.cpp)).
+>
+> **Current wire truth is [`src/protos/envelope.proto`](../src/protos/envelope.proto):**
+> `CommandEnvelope` now carries just **four** command arms — `twist`, `config`,
+> `stop`, `move` — and per-command replies are gone (a command's outcome rides the
+> ack ring inside every `Telemetry` push, not a `ReplyEnvelope`).
+>
+> In particular, the **`pose`/`otos` "reserved for sprint 098" arms below (§3, §8)
+> were pruned, not delivered.** Sprint 098 became heading-loop cascade control; the
+> arms were re-planned into sprint 099, then dropped entirely by the 102–107 rebuild
+> (`envelope.proto`'s `reserved 7 to 12`). By design the single-loop robot is a
+> *velocity/yaw follower, not a planner* — the host owns world-frame pose and
+> trajectory — so there is **no set-pose or odometer command on the wire**. The
+> firmware still has the plumbing (`Odometry::reset()`, `Otos::setPose()`) if a
+> corrective pose-fix arm is ever restored; only OTOS *calibration* survives on the
+> wire today, as `ConfigDelta.otos`. Treat everything below as historical until this
+> doc is reconciled to the post-102 surface.
+
 Version 3 of the Nezha firmware command/telemetry protocol: a
 schema-driven **binary envelope command plane** (`*B<base64(protobuf)>`),
 a deliberately tiny **hand-typeable text safety rump** (`HELP`/`HELLO`/
@@ -130,8 +155,8 @@ not obvious from the field list alone.
 | `replace` (4) | `MotionSegment` | `b.replaceIn.post(...)` — a `Mailbox`, latest-wins, cannot fail | The MOVER-equivalent (streaming/deadman teleop primitive) |
 | *(reserved 5)* | — | — | `PlannerCommand` (`motion`, the R/TURN/G-equivalent) is **reserved, not declared** — its 327B worst case alone exceeds the 186B cap; a future sprint declares it with a new, deliberately-bounded payload type once `Subsystems::Planner` un-parks |
 | `config` (6) | `ConfigDelta` (`envelope.proto`/`config.proto`), `oneof patch`: `drivetrain`/`motor`/`planner`/`watchdog` | `drivetrain`/`motor`/`planner` patches → one field-masked `Rt::ConfigDelta` posted to `b.configIn` (the Configurator folds + applies it); `watchdog` (`sTimeout`) posts its `uint32` window **directly to `b.streamWatchdogWindowIn`**, bypassing the Configurator entirely — it is not one of the Configurator's four fold targets | `MotorConfigPatch.side` disambiguates `travel_calib` only; any present `kp`/`ki`/`kff`/`i_max`/`kaw` applies to **both** bound motors unconditionally (two separate `ConfigDelta` posts) |
-| `pose` (7) | `SetPose` (`drivetrain.proto`) | **declared only** — `BinaryChannel` replies `Error{ERR_UNIMPLEMENTED, field=7}` | Reserved for sprint 098; see §8 |
-| `otos` (8) | `OdometerCommand` (`odometer.proto`) | **declared only** — `Error{ERR_UNIMPLEMENTED, field=8}` | Reserved for sprint 098; see §8 |
+| `pose` (7) | `SetPose` (`drivetrain.proto`) | 097-era: **declared only** — `Error{ERR_UNIMPLEMENTED, field=7}` | **PRUNED in the 102–107 rebuild** — field 7 is now `reserved` in `envelope.proto`; never delivered as a command arm. See top banner + §8. |
+| `otos` (8) | `OdometerCommand` (`odometer.proto`) | 097-era: **declared only** — `Error{ERR_UNIMPLEMENTED, field=8}` | **PRUNED in the 102–107 rebuild** — field 8 now `reserved`; only OTOS *calibration* survives, as `ConfigDelta.otos`. See top banner + §8. |
 | `ping` (9) | `Ping{}` (zero fields) | none | Reply `Ack{t=Types::systemClockNow()}` — the one `Ack` producer that ever sets `t`, for clock-sync parity with text `PING`'s `OK pong t=<ms>` |
 | `echo` (10) | `Echo{payload}` (≤64 bytes) | none | Reply `body.echo` mirrors the payload verbatim |
 | `get` (11) | `ConfigGet{target}` | Reads `bb.drivetrainConfig` / `bb.motorConfig[]` / `bb.plannerConfig` / `bb.streamWatchdogWindow` directly — a snapshot read, no queue | `target` is `optional` + `(req)=true`; a missing `target` is rejected by the generated decoder before dispatch ever reaches the handler (`ERR_BADARG`, field=1) |
@@ -481,7 +506,14 @@ from the source tree too. This is a **firmware-side** statement, distinct
 from the proxy-side "no binary arm exists" statement §7.6 makes about the
 same verbs.
 
-- **Pose/OTOS** (`SI`/`ZERO`/`OI`/`OZ`/`OR`/`OP`/`OV`/`OL`/`OA`) — a real
+- **Pose/OTOS** (`SI`/`ZERO`/`OI`/`OZ`/`OR`/`OP`/`OV`/`OL`/`OA`) —
+  **UPDATE (2026-07-20): the plan in this bullet did NOT happen.** Sprint 098
+  became heading-loop cascade control; the pose/otos binary arms were re-planned
+  into sprint 099 and then **pruned entirely** by the 102–107 single-loop rebuild
+  (`envelope.proto`'s `reserved 7 to 12`). The robot is now a velocity follower
+  with no set-pose/odometer command on the wire; `Odometry::reset()` /
+  `Otos::setPose()` exist in `src/firm/` but are unwired to any arm. The original
+  097-era plan, preserved for the record: a real
   binary counterpart is planned: the `pose` (field 7) / `otos` (field 8)
   `CommandEnvelope` arms already exist in the schema, declared-only today
   (`Error{ERR_UNIMPLEMENTED}`, §3) — **sprint 098 lands their live

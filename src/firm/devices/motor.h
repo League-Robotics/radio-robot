@@ -61,6 +61,24 @@ class Motor {
   virtual void applyGains(const Gains& gains, Opt<float> travelCalib = {}) = 0;
   virtual const Gains& gains() const = 0;
 
+  // reconfigure — REVISION 1 (114-001): a guarded, post-construction,
+  // WHOLE-config replacement (port/fwdSign/velGains/velFiltAlpha/slewRate/
+  // wheelTravelCalib/reversalDwell/outputDeadband — every MotorConfig
+  // field). This is NOT applyGains()'s live wire CFG-patch surface above —
+  // applyGains() is the always-safe, narrow, bounded-retuning path
+  // RobotLoop::handleConfig() uses at any time; reconfigure() replaces
+  // fields (fwdSign, port) that are a runaway-direction hazard if flipped
+  // mid-drive, so it is guarded: an implementation must refuse (return
+  // false, leave its config unchanged) unless the motor has never yet been
+  // commanded or is independently verified at rest, and must succeed
+  // otherwise. Exists so a composition root that constructs a motor before
+  // its real configuration is known (TestSim::SimHarness, whose bare
+  // NezhaMotor starts at Devices::MotorConfig{}'s all-zero default) can
+  // still reach a genuinely working motor once configuration arrives — see
+  // sprint 114's sprint.md Architecture Revision 1 / Decision 6 for the
+  // full rationale.
+  [[nodiscard]] virtual bool reconfigure(const MotorConfig& config) = 0;
+
   virtual void tick(uint64_t nowUs) = 0;   // [us]
 
   // --- Getters ---
