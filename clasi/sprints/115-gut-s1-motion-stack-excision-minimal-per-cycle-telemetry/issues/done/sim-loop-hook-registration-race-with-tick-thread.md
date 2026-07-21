@@ -3,7 +3,7 @@ title: SimLoop.set_read_hook()/set_write_hook() race the background tick thread 
   observed one segfault under heavy concurrent load
 filed: 2026-07-19
 filed_by: programmer (111-002, baseline sim-suite triage)
-status: in-progress
+status: done
 related: []
 tickets:
 - 115-001
