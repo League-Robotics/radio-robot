@@ -90,12 +90,6 @@ Blob serializeSnapshot(const TuningSnapshot& snapshot) {
   putMotorPatch(blob, offset, snapshot.motorL);
   putMotorPatch(blob, offset, snapshot.motorR);
 
-  putOptFloat(blob, offset, snapshot.planner.min_speed);
-  putOptFloat(blob, offset, snapshot.planner.heading_kp);
-  putOptFloat(blob, offset, snapshot.planner.heading_kd);
-  putOptFloat(blob, offset, snapshot.planner.arrive_dwell);
-  putOptFloat(blob, offset, snapshot.planner.distance_kp);
-
   putOptFloat(blob, offset, snapshot.otos.linear_scale);
   putOptFloat(blob, offset, snapshot.otos.angular_scale);
   putOptFloat(blob, offset, snapshot.otos.offset_x);
@@ -113,12 +107,6 @@ TuningSnapshot deserializeSnapshot(const Blob& blob) {
   snapshot.motorL.side = msg::BoundMotorSide::LEFT;
   snapshot.motorR = takeMotorPatch(blob, offset);
   snapshot.motorR.side = msg::BoundMotorSide::RIGHT;
-
-  snapshot.planner.min_speed = takeOptFloat(blob, offset);
-  snapshot.planner.heading_kp = takeOptFloat(blob, offset);
-  snapshot.planner.heading_kd = takeOptFloat(blob, offset);
-  snapshot.planner.arrive_dwell = takeOptFloat(blob, offset);
-  snapshot.planner.distance_kp = takeOptFloat(blob, offset);
 
   snapshot.otos.linear_scale = takeOptFloat(blob, offset);
   snapshot.otos.angular_scale = takeOptFloat(blob, offset);

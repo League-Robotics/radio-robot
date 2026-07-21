@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Persisted-tuning schema bump (v1 to v2, 85-byte blob)
-status: in-progress
+status: done
 use-cases:
 - SUC-049
 depends-on:
@@ -46,27 +46,27 @@ checklist (ticket 010), not treated as a regression if observed.
 
 ## Acceptance Criteria
 
-- [ ] `TuningSnapshot` (persisted_tuning.h) no longer has a `planner`
+- [x] `TuningSnapshot` (persisted_tuning.h) no longer has a `planner`
       member.
-- [ ] `kMotorPatchFields`/`kOtosPatchFields` constants unchanged;
+- [x] `kMotorPatchFields`/`kOtosPatchFields` constants unchanged;
       `kPlannerPatchFields` constant and its use in `kBlobSize`'s
       computation removed (not just zeroed — the term itself is
       deleted, so `kBlobSize` computes to 85 from the remaining terms,
       not from a magic 85).
-  - [ ] `kConfigSchemaVersion` changed from `1` to `2` in the SAME
+  - [x] `kConfigSchemaVersion` changed from `1` to `2` in the SAME
       commit as the `TuningSnapshot` field removal — never split across
       two commits (Decision 3's own hard requirement).
-- [ ] `serializeSnapshot()`/`deserializeSnapshot()` updated to match the
+- [x] `serializeSnapshot()`/`deserializeSnapshot()` updated to match the
       new field set; round-trip property preserved
       (`deserializeSnapshot(serializeSnapshot(s))` reproduces `s`'s
       field values) for the 85-byte layout.
-- [ ] `persisted_tuning_harness.cpp` / `test_persisted_tuning.py`
+- [x] `persisted_tuning_harness.cpp` / `test_persisted_tuning.py`
       updated: assertions on the old 110-byte/4-chunk layout replaced
       with 85-byte/3-chunk assertions; a `shouldWipe(1, 2) == true` test
       case added (or confirmed already covers the general
       version-mismatch case, in which case no new case is needed —
       verify rather than assume).
-- [ ] `static_assert(kNumChunks <= 4, ...)` (persisted_tuning.cpp:160)
+- [x] `static_assert(kNumChunks <= 4, ...)` (persisted_tuning.cpp:160)
       still compiles (3 ≤ 4 — this should be a non-event, included here
       only so the ticket doesn't silently skip checking it).
 
