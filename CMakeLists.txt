@@ -219,30 +219,15 @@ set(LIB_FOLDERS "")
 # Add the root of the libraries folder as a search path. Useful for disambiguating header files with duplicated names.
 MESSAGE (STATUS "Adding library path: (${PROJECT_SOURCE_DIR}/${LIB_DEST})")
 include_directories(${PROJECT_SOURCE_DIR}/${LIB_DEST})
-# libraries/{cmon-pid,tinyekf,ruckig} (previously vendored here: cmon-pid PID
-# header Sprint 049, tinyekf header-only EKF backend Sprint 050, ruckig
-# jerk-limited trajectory generator Sprint 089) were deleted wholesale by
-# sprint 102 ticket 005 alongside the Elite orchestration stack that was
-# their only consumer (source/hal/velocity_pid.*, source/estimation/,
-# source/drive/) -- cmon-pid and tinyekf stay dead; ruckig is RESTORED below
-# (sprint 109 ticket 001) at its new tracked location, repo-root vendor/
-# ruckig/ -- a REAL, git-tracked directory in THIS repo, deliberately NOT
-# under src/vendor/ (that path is a symlink to a shared reference pool in
-# an unrelated sibling checkout -- see clasi/issues/
-# vendor-symlink-not-reproducible-fresh-clone.md -- unsuitable for a
-# compiled-in firmware dependency the build must reproduce from this
-# repo's own git history alone) and NOT the gitignored libraries/
-# dependency-fetch destination, for the new Motion::JerkTrajectory
-# consumer (src/firm/motion/).
-#
-# vendor/ruckig: vendored jerk-limited trajectory generator, restored
-# from git history (c63ec6c) rather than re-vendored -- see
-# vendor/ruckig/README.vendored.md. Header-only include path, same
-# pattern the old cmon-pid/tinyekf include_directories() calls used; its 11
-# core .cpp sources are appended into SOURCE_FILES below (no build file was
-# vendored, so no add_subdirectory() -- same precedent as the original
-# vendoring).
-include_directories(${PROJECT_SOURCE_DIR}/vendor/ruckig/include)
+# libraries/{cmon-pid,tinyekf} (previously vendored here: cmon-pid PID
+# header Sprint 049, tinyekf header-only EKF backend Sprint 050) were deleted
+# wholesale by sprint 102 ticket 005 alongside the Elite orchestration stack
+# that was their only consumer (source/hal/velocity_pid.*, source/
+# estimation/, source/drive/) -- both stay dead. vendor/ruckig/ (restored
+# sprint 109 ticket 001 for Motion::JerkTrajectory) was itself deleted
+# wholesale by sprint 115 ticket 002 (the motion-stack excision) -- no
+# include_directories() call remains for it; recoverable from git tag
+# pre-gut-motion-stack if ever needed again.
 
 #add_subdirectory("${PROJECT_SOURCE_DIR}/${LIB_DEST}/${dep}")
 
@@ -291,17 +276,10 @@ list(APPEND SOURCE_FILES ${S_FILES})
 list(APPEND SOURCE_FILES ${C_FILES})
 list(APPEND SOURCE_FILES ${CC_FILES})
 
-# vendor/ruckig (sprint 109 ticket 001): the restored vendored solver's
-# 11 core .cpp sources are NOT under CODAL_APP_SOURCE_DIR (src/firm), so the
-# RECURSIVE_FIND_FILE calls above never reach them -- append them to the
-# flat source list directly, the same treatment every other src/firm
-# translation unit already gets. Motion::JerkTrajectory itself
-# (src/firm/motion/jerk_trajectory.{h,cpp}) IS under src/firm, so it is
-# already picked up by RECURSIVE_FIND_FILE/INCLUDE_DIRS above and needs no
-# separate line here. No add_subdirectory(): Ruckig's own upstream build
-# files were deliberately not vendored (vendor/ruckig/README.vendored.md).
-file(GLOB RUCKIG_SOURCES "${PROJECT_SOURCE_DIR}/vendor/ruckig/src/*.cpp")
-list(APPEND SOURCE_FILES ${RUCKIG_SOURCES})
+# vendor/ruckig's GLOB+append (sprint 109 ticket 001) was removed by
+# sprint 115 ticket 002 (the motion-stack excision) along with vendor/ruckig/
+# itself -- RECURSIVE_FIND_FILE above already covers everything remaining
+# under CODAL_APP_SOURCE_DIR (src/firm).
 
 # ---------------------------------------------------------------------------
 # ROBOT_RUN_MODE (039-005): explicit build-target run mode. Retained as a

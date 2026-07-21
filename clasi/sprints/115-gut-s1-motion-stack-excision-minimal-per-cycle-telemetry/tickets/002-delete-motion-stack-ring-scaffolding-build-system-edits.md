@@ -1,25 +1,13 @@
 ---
-id: "002"
-title: "Delete motion stack + ring scaffolding; build-system edits"
-status: open
-use-cases: [SUC-045]
+id: '002'
+title: Delete motion stack + ring scaffolding; build-system edits
+status: done
+use-cases:
+- SUC-045
 depends-on: []
-github-issue: ""
-issue: ""
-# completes_issue: Controls whether linked issues are archived when this ticket
-# is moved to done. Default: true (archive when all referencing tickets are done).
-# Set to false (scalar) to suppress archival for ALL linked issues on this ticket.
-# Set to a mapping {filename.md: false} to suppress archival per issue filename.
-# Use false for tickets that partially address a multi-sprint umbrella issue.
+github-issue: ''
+issue: ''
 completes_issue: true
-# exception: Written by a lower agent when it cannot proceed (see architecture §exception-protocol).
-# exception:
-#   thrown_by: "programmer"          # "programmer" | "sprint-planner"
-#   thrown_at: "2026-05-07T14:23:00Z"
-#   attempted: |
-#     Description of what was attempted before giving up.
-#   conflict: "architecture-update.md §3 — reason the agent is blocked"
-#   surface: "internal"              # "user-visible" | "internal"
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -47,14 +35,14 @@ recoverable.
 
 ## Acceptance Criteria
 
-- [ ] `src/firm/motion/` (executor.{h,cpp}, jerk_trajectory.{h,cpp}),
+- [x] `src/firm/motion/` (executor.{h,cpp}, jerk_trajectory.{h,cpp}),
       `src/firm/app/pilot.{h,cpp}`, `src/firm/app/heading_source.{h,cpp}`,
       `vendor/ruckig/`, `src/firm/devices/measurement_ring.h`,
       `src/firm/devices/interpolation.h` are deleted.
-- [ ] Root `CMakeLists.txt`: the `vendor/ruckig` `include_directories`
+- [x] Root `CMakeLists.txt`: the `vendor/ruckig` `include_directories`
       call (verified at :245) and the `RUCKIG_SOURCES` glob+append
       (verified at :303-304) are removed.
-- [ ] `src/sim/CMakeLists.txt`: `RUCKIG_DIR` (verified :26),
+- [x] `src/sim/CMakeLists.txt`: `RUCKIG_DIR` (verified :26),
       `heading_source.cpp`/`pilot.cpp` out of `APP_SOURCES` (verified
       :90/:92), `MOTION_SOURCES` (verified :124-127), `RUCKIG_SOURCES`
       (verified spans :131-143 — one line past the gut issue's own cited
@@ -62,7 +50,7 @@ recoverable.
       `set(...)` open/close lines) are all removed, along with
       `RUCKIG_SOURCES`'s/`MOTION_SOURCES`'s references inside
       `add_library(firmware_host SHARED ...)`.
-- [ ] Test harnesses deleted (verified present today): 
+- [x] Test harnesses deleted (verified present today): 
       `src/tests/sim/unit/jerk_trajectory_harness.cpp` +
       `test_jerk_trajectory.py`;
       `src/tests/sim/unit/motion_executor_harness.cpp` +
@@ -84,7 +72,7 @@ recoverable.
       `src/tests/sim/system/boundary_velocity_harness.cpp` +
       `test_boundary_velocity.py`;
       `src/tests/sim/parked-094/` (whole directory).
-- [ ] `src/tests/bench/` scripts confirmed executor/Ruckig/segment/tour-only
+- [x] `src/tests/bench/` scripts confirmed executor/Ruckig/segment/tour-only
       and deleted: at minimum `bench_ruckig_motion_verify.py`,
       `motion_command_verify.py`, `profiled_motion_verify.py`,
       `random_segment_demo.py`, `solve_time_characterize.py`,
@@ -95,8 +83,17 @@ recoverable.
       it**; do not delete a script solely by filename resemblance, and
       do not keep one with an undetected dependency (`twist_drive.py`,
       `rig_soak.py`, `pid_hold_speed.py` are confirmed survivors per the
-      gut issue's own Verification section — leave those alone).
-- [ ] No remaining `#include` of any deleted header anywhere in `src/`
+      gut issue's own Verification section — leave those alone). Grep
+      sweep additionally surfaced two undetected dependents not on the
+      floor list — `dtr_drive_demo.py` (docstring: "Motion correctness
+      only", exercises D/T/RT/MOVE segment verbs) and `gamepad_teleop.py`
+      (its entire flow-control mechanism keys off `MOVE`'s
+      executor-queue-depth ack, `q=<depth>`) — both deleted too, per the
+      criterion's own "do not keep one with an undetected dependency"
+      clause. `otos_drift.py`/`rig_drive.py`/`rig_stress.py` had a single
+      grep hit each but on inspection were plain-English "move"/"servo
+      move" prose, no API dependency — kept.
+- [x] No remaining `#include` of any deleted header anywhere in `src/`
       (a broken build is expected at THIS ticket's boundary from
       call-site references in `main.cpp`/`robot_loop.cpp`/`sim_harness.h`
       — those are ticket 005/006's job — but a stray `#include` of a
