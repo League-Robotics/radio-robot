@@ -10,13 +10,19 @@
 // already configured. Ticket 114-001 built a configuration-completeness gate
 // (App::RobotLoop::isConfigured()/markConfigured()) that makes "unconfigured"
 // a real, refusable state -- SimHarness itself must not carry a hardcoded
-// behavioral default anymore (the config-as-truth ethic: a value like
-// vel_kp=0.003 baked here, silently diverging from data/robots/*.json's own
-// vel_kp=0.002, is exactly the class of bug this sprint exists to close).
-// These values move here, UNCHANGED (byte-for-byte, including every
-// explanatory comment), so every pre-existing sim test harness that relied
-// on them keeps its exact prior behavior via one added line:
+// behavioral default anymore. These values move here (114-006 aligned the
+// one field that had drifted -- velGains.kp -- to data/robots/*.json's own
+// shipped value; see bench_test_config.cpp's own comment at that field),
+// so every pre-existing sim test harness that relied on them keeps its
+// exact prior behavior via one added line:
 // `TestSupport::configureSimForBenchTest(sim);` right after construction.
+// The config-as-truth ethic this guards against: a bench-test-only value
+// baked here that silently diverges from data/robots/*.json's own shipped
+// value for the SAME field is exactly the class of bug this sprint exists
+// to close -- keep this file's values aligned with the robot JSON's own
+// numbers for any field the JSON also carries (fields with no JSON
+// equivalent, e.g. slewRate/wheelTravelCalib's sim-specific derivation,
+// are unaffected and stay bench-tuned).
 //
 // This header is explicitly TEST-TREE-ONLY -- it lives under
 // src/tests/sim/support/, never under src/sim/ or src/firm/, so it can never

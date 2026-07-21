@@ -15,6 +15,7 @@ Run with::
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import pytest
 
@@ -24,6 +25,16 @@ pytestmark = pytest.mark.skipif(
     not _DEFAULT_LIB_PATH.exists(),
     reason="sim lib not built -- cmake --build src/sim/build",
 )
+
+# 114-006: the sim now fail-closed refuses MOTION (twist/move) until it has
+# received a complete configuration (114-001/002/003) -- a bare SimLoop.
+# connect() with no configure_from_robot() call used to work only because
+# the sim baked its own hardcoded behavioral defaults (the exact class of
+# bug sprint 114 exists to close). Same path test_turn_error_characterization
+# .py's own _ACTIVE_ROBOT_JSON/_make_sweep_loop() and test_tour_closure_gate
+# .py's own _make_loop() use.
+# test_sim_loop.py -> testgui -> tests -> src -> repo root
+_ACTIVE_ROBOT_JSON = Path(__file__).resolve().parents[3] / "data" / "robots" / "tovez_nocal.json"
 
 # Bounded wait budgets -- generous relative to every observed run (the tick
 # thread advances one 50ms sim cycle roughly every 50ms wall-clock), so a
@@ -44,8 +55,11 @@ def _wait_until(predicate, timeout_s: float = _WAIT_TIMEOUT_S) -> bool:
 
 @pytest.fixture
 def loop():
+    from robot_radio.config.robot_config import load_robot_config
+
     sim = SimLoop()
     sim.connect()
+    sim.configure_from_robot(load_robot_config(_ACTIVE_ROBOT_JSON))
     try:
         yield sim
     finally:

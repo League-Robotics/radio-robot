@@ -331,6 +331,30 @@ def test_straight_single_lobe_right(harness_run):
     _assert_result(harness_run, "straight_single_lobe_right")
 
 
+def test_straight_never_below_zero(harness_run):
+    """114-006 (SUC-006 AC1): test_straight_single_lobe_left/right above only
+    assert exactly ONE contiguous non-near-zero run per wheel -- that alone
+    does not rule out a single NEGATIVE lobe (driving backward the whole
+    time on a commanded-forward distance=+700 move). This check asserts
+    BOTH wheels' one lobe is positive-signed -- the stakeholder's own "a
+    straight's trace never goes below zero" shape-bar clause, genuinely
+    gated rather than merely implied by the lobe-count checks."""
+    _assert_result(harness_run, "straight_never_below_zero")
+
+
+def test_straight_reaches_cruise_hold(harness_run):
+    """114-006 (SUC-006 AC1, "clean trapezoid: smooth ramp-up, HOLD at max,
+    smooth ramp-to-zero"): straight_ramp_bounds/straight_terminal_bounds
+    above only check the first/last few cycles stay within bound -- neither
+    confirms the trajectory actually reaches cruise in between (a triangle
+    profile that peaks early and decelerates immediately would pass both
+    checks without ever holding). This asserts the trace's own peak comes
+    within 80% of the nominal v_body_max -- proof a genuine hold segment
+    exists for this 700mm move at vMax=400mm/s, not just a ramp up and
+    back down."""
+    _assert_result(harness_run, "straight_reaches_cruise_hold")
+
+
 def test_straight_no_command_after_terminal_zero(harness_run):
     """The check ticket 001 originally slated to flip xfail->passing for
     ticket 003. Reconciled during ticket 003 (see its own completion
@@ -399,6 +423,14 @@ def test_pivot_ramp_bounds(harness_run):
 
 def test_pivot_terminal_bounds(harness_run):
     _assert_result(harness_run, "pivot_terminal_bounds")
+
+
+def test_pivot_reaches_cruise_hold(harness_run):
+    """114-006 (SUC-006 AC2, "clean trapezoid... HOLD at max..."): see
+    test_straight_reaches_cruise_hold's own docstring for the full
+    rationale -- same check, 360deg pivot scenario (yaw_rate_max cruise
+    instead of v_body_max)."""
+    _assert_result(harness_run, "pivot_reaches_cruise_hold")
 
 
 def test_pivot_single_lobe_left(harness_run):
