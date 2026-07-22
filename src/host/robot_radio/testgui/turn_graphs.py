@@ -1,8 +1,16 @@
 """robot_radio.testgui.turn_graphs — live time-series graph tabs for turns/drives.
 
-Matplotlib graph tabs that record while the robot is MOVING (idle frames
-skipped) and plot every available estimate of each quantity over time, mirroring
-the way the playfield shows OTOS vs camera:
+Matplotlib graph tabs that record while the robot is MOVING and FREEZE the
+instant it stops (2026-07-22 GUI stakeholder directive: "stop the charts
+... do not run the charts when the robot is stopped") — see
+``TurnTraceRecorder.add_tlm()``'s own docstring for the exact freeze
+condition and how it coexists with the gap-break fix (``_append_series()``,
+below) that makes skipping idle frames here SAFE: an earlier version of
+this file also skipped idle frames, with no gap-break mechanism backing it
+up, and THAT combination was a separate, confirmed defect of its own — a
+straight interpolating line drawn across the un-recorded idle span. Plots
+every available estimate of each quantity over time, mirroring the way the
+playfield shows OTOS vs camera:
 
   - Wheel speed     — commanded vs actual per-wheel velocity        [mm/s]
   - Twist           — commanded vs actual body v_x [mm/s] and ω [deg/s]
@@ -47,9 +55,26 @@ HEADING = [("head_otos", "OTOS"), ("head_fused", "fused"),
 DISTANCE = [("dist_otos", "OTOS"), ("dist_fused", "fused"),
             ("dist_enc", "encoder"), ("dist_cam", "camera")]
 
-# Motion gate: record a TLM frame only when the robot is actually moving.
+# Motion gate (2026-07-22 GUI stakeholder directive): recording -- and by
+# extension the strip charts' visible axis, which only advances when a new
+# point lands -- freezes the instant the wheels are genuinely idle. See
+# ``TurnTraceRecorder.add_tlm()``'s own docstring for the exact condition
+# and why skipping idle frames here does not reopen the older gap defect.
 _MOVING_SPEED = 5.0  # [mm/s] any wheel faster than this counts as motion
-_IDLE_STOP = 1.0     # [s] freeze recording after this long with no motion
+
+# Gap-break display honesty (2026-07-22 GUI stakeholder fix, defect 2b): a
+# real, un-recorded gap between two consecutive points in the SAME series
+# must break the plotted line, never draw a straight interpolating segment
+# across it -- the stakeholder's own rule: "if the motor stopped, record
+# the time at which it stopped as the time at which you break that line."
+# _NOMINAL_TLM_PERIOD is the conservative (slow-end) telemetry cadence
+# (~15-19 Hz observed -- see this module's own header); GAP_BREAK_FACTOR is
+# how many nominal periods must elapse, with no point recorded in a given
+# series, before that gap is treated as real (a stall/disconnect/idle span)
+# rather than ordinary sample-to-sample jitter -- see
+# ``TurnTraceRecorder._append_series()``.
+_NOMINAL_TLM_PERIOD = 1.0 / 15.0   # [s]
+GAP_BREAK_FACTOR = 5
 
 
 class _Unwrapper:
@@ -106,10 +131,18 @@ def tlm_fields(frame: Any) -> dict:
 class TurnTraceRecorder:
     """Qt-free accumulator of per-series (t, value) points.
 
-    ``add_tlm``/``add_camera`` append points; idle TLM frames (no wheel motion)
-    are skipped. ``clear`` restarts. Distances are displacement magnitude from
-    the first recorded pose per source; headings are unwrapped Δ from the first
-    recorded heading per source.
+    ``add_tlm`` appends points only while the wheels are genuinely moving —
+    frozen (no append at all) the instant the robot is idle, see its own
+    docstring for the exact condition and the 2026-07-22 stakeholder
+    directive behind it. ``add_camera`` appends unconditionally (once
+    telemetry has anchored ``t0``). ``clear`` restarts. Distances are
+    displacement magnitude from the first recorded pose per source;
+    headings are unwrapped Δ from the first recorded heading per source.
+    Every append goes through ``_append_series()``, which inserts a NaN
+    break beforehand when the gap since that SAME series' last point is
+    unusually large — see that method's own docstring (defect 2b, display
+    honesty across real gaps, including the idle spans ``add_tlm`` now
+    skips).
     """
 
     def __init__(self, trackwidth: float = 128.0) -> None:  # [mm]
@@ -123,12 +156,36 @@ class TurnTraceRecorder:
         self._unwrap = {k: _Unwrapper() for k, _ in HEADING}
         self._h0: dict[str, float] = {}
         self._p0: dict[str, tuple[float, float]] = {}
-        self._last_motion: float | None = None  # [s] wall time of last moving frame
-        self._stopped = False                    # recording frozen after >1s idle
 
     def set_trackwidth(self, trackwidth: float) -> None:  # [mm]
         self._trackwidth = trackwidth
         self._enc_dr.set_trackwidth(trackwidth)
+
+    def _append_series(self, key: str, t: float, value: float) -> None:
+        """Append ``(t, value)`` to ``series[key]``, breaking the line first
+        if the gap since this series' own last point is a real stall.
+
+        If more than ``GAP_BREAK_FACTOR * _NOMINAL_TLM_PERIOD`` has elapsed
+        since the last point recorded in THIS series (each series is gated
+        independently — e.g. ``cmd_l`` only appends on frames that carry a
+        commanded velocity, so it naturally has a different cadence than
+        ``vel_l``), a NaN sentinel is inserted first, timestamped at that
+        PRIOR point's own time (nudged forward by a negligible epsilon to
+        keep timestamps strictly increasing) — matching the stakeholder's
+        own rule verbatim: "if the motor stopped, record the time at which
+        it stopped as the time at which you break that line," not the time
+        the next sample happens to arrive. matplotlib does not draw a line
+        segment across a NaN y-value, so this alone is enough to break the
+        plotted line at both this canvas's full-history view and the
+        trailing-window ``StripChartCanvas`` view (both simply read
+        ``series[key]`` — no redraw-side change needed).
+        """
+        pts = self.series[key]
+        if pts:
+            last_t = pts[-1][0]
+            if t - last_t > GAP_BREAK_FACTOR * _NOMINAL_TLM_PERIOD:
+                pts.append((last_t + 1e-6, math.nan))
+        pts.append((t, value))
 
     def _t(self, now: float) -> float:
         if self._t0 is None:
@@ -139,49 +196,58 @@ class TurnTraceRecorder:
         cont = self._unwrap[key].push(deg)
         if key not in self._h0:
             self._h0[key] = cont
-        self.series[key].append((self._t(now), cont - self._h0[key]))
+        self._append_series(key, self._t(now), cont - self._h0[key])
 
     def _distance(self, key: str, now: float, x_cm: float, y_cm: float) -> None:
         if key not in self._p0:
             self._p0[key] = (x_cm, y_cm)
         x0, y0 = self._p0[key]
-        self.series[key].append((self._t(now), math.hypot(x_cm - x0, y_cm - y0)))
+        self._append_series(key, self._t(now), math.hypot(x_cm - x0, y_cm - y0))
 
     def add_tlm(self, now: float, frame: Any) -> bool:
-        """Record one telemetry frame. Returns True if recorded (moving).
+        """Record one telemetry frame. Returns True iff it was recorded.
 
-        Recording auto-freezes after >1 s of no wheel motion (``_stopped``):
-        idle frames are skipped rather than appended. The next moving frame
-        simply RESUMES appending to the same, still-intact series -- it must
-        never discard previously-recorded history (110-001: an earlier
-        "auto-clear and start a fresh trace on resume" behavior here silently
-        wiped every series' accumulated data whenever a new motion began
-        after an idle gap, which is what produced the reported "graph data
-        corrupted after switching tabs and back" symptom -- the wipe itself
-        was unrelated to which tab was selected, but only became visible
-        once the operator switched back to see it). Only the explicit
-        ``clear()`` (the "Clear traces" button) discards data.
+        Frozen-while-stopped (2026-07-22 GUI stakeholder directive,
+        stated twice, verbatim the second time: "You have to stop the
+        charts. Do not run the charts when the robot is stopped."):
+        while the wheels are genuinely idle -- no active move AND every
+        wheel's measured velocity under ``_MOVING_SPEED`` -- this method
+        appends NOTHING to any series and returns False. No new point
+        means no axis advance and no redraw-worthy change (``TurnGraphPanel.
+        add_tlm()`` only flags dirty on a True return): the chart is
+        literally frozen, full stop, the instant real motion ends. The
+        very next moving frame resumes appending immediately -- no
+        debounce, no latched "stopped" state to clear, this check is
+        purely a function of the CURRENT frame, stateless from one call to
+        the next.
+        Interaction with the gap-break fix (defect 2b, ``_append_series()``):
+        an idle span skipped here is EXACTLY the kind of real, un-recorded
+        gap that mechanism exists for. When motion resumes, the elapsed
+        time since each series' last (pre-idle) point is large, so a NaN
+        sentinel is woven in first -- the resumed line breaks instead of
+        interpolating across the frozen span. That is what makes it safe
+        to skip idle frames here at all: an EARLIER version of this method
+        also skipped idle frames (with no gap-break to back it up) and
+        that combination was itself a confirmed defect -- a straight
+        interpolated line drawn across the un-recorded gap. Gap-break
+        closes that hole, so the freeze-while-stopped behavior the
+        stakeholder wants can be implemented the direct, literal way
+        (skip appending) without reopening it.
+        Never auto-clears on any transition (110-001's own fix, preserved
+        unchanged): only the explicit ``clear()`` (the "Clear traces"
+        button) discards data.
         """
         f = tlm_fields(frame)
         vel = f["vel"] or (0.0, 0.0)
         moving = (f["active"] is True) or (max(abs(vel[0]), abs(vel[1])) > _MOVING_SPEED)
         if not moving:
-            # Freeze the trace once the wheels have been idle for > 1 s.
-            if (not self._stopped and self._last_motion is not None
-                    and now - self._last_motion > _IDLE_STOP):
-                self._stopped = True
             return False
-        if self._stopped:
-            # New motion after a freeze -- resume appending to the SAME
-            # trace; do NOT clear (see docstring above).
-            self._stopped = False
-        self._last_motion = now
         t = self._t(now)
         if f["cmd"]:
-            self.series["cmd_l"].append((t, f["cmd"][0]))
-            self.series["cmd_r"].append((t, f["cmd"][1]))
-        self.series["vel_l"].append((t, vel[0]))
-        self.series["vel_r"].append((t, vel[1]))
+            self._append_series("cmd_l", t, f["cmd"][0])
+            self._append_series("cmd_r", t, f["cmd"][1])
+        self._append_series("vel_l", t, vel[0])
+        self._append_series("vel_r", t, vel[1])
         # Body twist (commanded vs actual). Commanded = forward kinematics of
         # the commanded wheel speeds: v_x = (vR+vL)/2 [mm/s], omega = (vR-vL)/b
         # [rad/s] (BodyKinematics::forward's own convention), shown in deg/s.
@@ -189,15 +255,14 @@ class TurnTraceRecorder:
         # [mrad/s]).
         tw = self._trackwidth
         if f["cmd"] and tw > 0.0:
-            self.series["cmd_vx"].append((t, (f["cmd"][1] + f["cmd"][0]) / 2.0))
-            self.series["cmd_omega"].append(
-                (t, math.degrees((f["cmd"][1] - f["cmd"][0]) / tw)))
+            self._append_series("cmd_vx", t, (f["cmd"][1] + f["cmd"][0]) / 2.0)
+            self._append_series("cmd_omega", t, math.degrees((f["cmd"][1] - f["cmd"][0]) / tw))
         if f["twist"]:
-            self.series["act_vx"].append((t, f["twist"][0]))
-            self.series["act_omega"].append((t, math.degrees(f["twist"][1] / 1000.0)))
+            self._append_series("act_vx", t, f["twist"][0])
+            self._append_series("act_omega", t, math.degrees(f["twist"][1] / 1000.0))
         if f["enc"]:
-            self.series["enc_l"].append((t, f["enc"][0]))
-            self.series["enc_r"].append((t, f["enc"][1]))
+            self._append_series("enc_l", t, f["enc"][0])
+            self._append_series("enc_r", t, f["enc"][1])
             ex, ey, eh = self._enc_dr.update(f["enc"][0], f["enc"][1])  # mm,mm,cdeg
             self._heading("head_enc", now, eh / 100.0)
             self._distance("dist_enc", now, ex / 10.0, ey / 10.0)  # mm->cm
@@ -211,9 +276,14 @@ class TurnTraceRecorder:
 
     def add_camera(self, now: float, x_cm: float, y_cm: float, heading_deg: float) -> None:
         """Record one camera ground-truth sample (world cm + heading deg)."""
-        # Only record between the first moving frame and the idle-freeze, so
-        # idle camera frames don't stretch the axis or bleed past a turn.
-        if self._t0 is None or self._stopped:
+        # Only record once telemetry has anchored t0 -- a camera sample
+        # before the first TLM frame has no elapsed-time reference yet.
+        # (The prior ALSO-idle-freeze-gated behavior here was removed
+        # alongside add_tlm()'s own motion gate -- see that method's
+        # docstring; camera samples now record continuously too, same as
+        # every other series, with the same per-series NaN gap-break
+        # covering any real stall.)
+        if self._t0 is None:
             return
         self._heading("head_cam", now, heading_deg)
         self._distance("dist_cam", now, x_cm, y_cm)
@@ -414,6 +484,11 @@ class TurnGraphPanel(QWidget):
 
     # feed hooks (call from the GUI thread) --------------------------------
     def add_tlm(self, now: float, frame: Any) -> None:
+        # recorder.add_tlm() returns False while frozen (robot genuinely
+        # idle -- see its own docstring): skip the dirty flag too, so a
+        # frozen chart doesn't even attempt a redraw while nothing in its
+        # data changed -- "no axis advance, nothing moves" all the way
+        # through, not just at the data layer.
         if self.recorder.add_tlm(now, frame):
             self._dirty = True
 
