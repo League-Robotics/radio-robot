@@ -1,7 +1,7 @@
 ---
-id: '008'
-title: "Bench gate — real-or-sim capture, RMS run, stakeholder ratification checklist"
-status: open
+id: 008
+title: "Bench gate \u2014 real-or-sim capture, RMS run, stakeholder ratification checklist"
+status: in-progress
 use-cases:
 - SUC-062
 depends-on:
