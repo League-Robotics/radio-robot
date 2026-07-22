@@ -1,7 +1,7 @@
 ---
 id: '007'
-title: "Leave-one-out RMS validation notebook — estimator_validation.ipynb"
-status: open
+title: "Leave-one-out RMS validation notebook \u2014 estimator_validation.ipynb"
+status: in-progress
 use-cases:
 - SUC-061
 depends-on:
