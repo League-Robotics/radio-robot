@@ -1,8 +1,9 @@
 ---
 id: '003'
 title: App::Odometry pathLength accessor
-status: open
-use-cases: [SUC-051]
+status: in-progress
+use-cases:
+- SUC-051
 depends-on: []
 github-issue: ''
 issue: protocol-set-point-the-minimal-firmware-s-complete-command-surface.md
