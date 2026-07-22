@@ -1,0 +1,74 @@
+[
+  {
+    "kind": "turn",
+    "label": "turn_ccw_0",
+    "move_id": 8001,
+    "omega": 2.0,
+    "target_rad": 1.5707963267948966,
+    "issue_now_ms": 2500
+  },
+  {
+    "kind": "turn",
+    "label": "turn_cw_0",
+    "move_id": 8002,
+    "omega": -2.0,
+    "target_rad": 1.5707963267948966,
+    "issue_now_ms": 3900
+  },
+  {
+    "kind": "turn",
+    "label": "turn_ccw_1",
+    "move_id": 8003,
+    "omega": 2.0,
+    "target_rad": 1.5707963267948966,
+    "issue_now_ms": 5300
+  },
+  {
+    "kind": "turn",
+    "label": "turn_cw_1",
+    "move_id": 8004,
+    "omega": -2.0,
+    "target_rad": 1.5707963267948966,
+    "issue_now_ms": 6700
+  },
+  {
+    "kind": "turn",
+    "label": "turn_ccw_2",
+    "move_id": 8005,
+    "omega": 2.0,
+    "target_rad": 1.5707963267948966,
+    "issue_now_ms": 8050
+  },
+  {
+    "kind": "turn",
+    "label": "turn_cw_2",
+    "move_id": 8006,
+    "omega": -2.0,
+    "target_rad": 1.5707963267948966,
+    "issue_now_ms": 9500
+  },
+  {
+    "kind": "turn",
+    "label": "turn_ccw_3",
+    "move_id": 8007,
+    "omega": 2.0,
+    "target_rad": 1.5707963267948966,
+    "issue_now_ms": 10900
+  },
+  {
+    "kind": "turn",
+    "label": "turn_cw_3",
+    "move_id": 8008,
+    "omega": -2.0,
+    "target_rad": 1.5707963267948966,
+    "issue_now_ms": 12300
+  },
+  {
+    "kind": "tour_summary",
+    "tour": "TOUR_1",
+    "leg_count": 13,
+    "completed": true,
+    "stopped_at": null,
+    "stopped_outcome": null
+  }
+]

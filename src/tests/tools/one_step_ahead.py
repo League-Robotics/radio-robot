@@ -45,6 +45,7 @@ over silently.
 """
 from __future__ import annotations
 
+import bisect
 import math
 from dataclasses import dataclass
 from typing import Sequence
@@ -105,6 +106,95 @@ def one_step_ahead_walk(times: "Sequence[float]", positions: "Sequence[float]",
         walk.append(Residual(time=times[k], predicted=predicted, actual=actual,
                              residual=actual - predicted))
     return walk
+
+
+# ---------------------------------------------------------------------------
+# Shifted (lead-swept) ZOH prediction -- turn-prediction campaign, Phase A:
+# "prediction made at t-shift evaluated at t, for a sweep of leads" (the
+# stakeholder's own framing). This generalizes one_step_ahead_walk() above,
+# which always predicts sample k from EXACTLY the immediately preceding
+# sample (a variable, per-sample "shift" equal to whatever gap the capture
+# happened to have between k-1 and k) -- shifted_prediction_walk() instead
+# takes an EXPLICIT, fixed shift [ms] and asks: "if a predictor had made its
+# call `shift` ms before this sample's own instant, using whatever basis was
+# current AT that earlier instant (never a basis from AFTER it -- no
+# look-ahead), how far off would it have been by the time this sample's own
+# instant arrived?" This is exactly the question App::StateEstimator::
+# bodyAt(now + stopLead)/wheelAt(..., now + stopLead) answers for
+# App::MoveQueue's own anticipation-lead stop-condition evaluation (Phase B)
+# -- the RMS of this walk's residuals, swept over shift, is the curve that
+# says how far ahead the SAME ZOH math can be trusted.
+# ---------------------------------------------------------------------------
+
+def shifted_prediction_walk(times: "Sequence[float]", positions: "Sequence[float]",
+                            velocities: "Sequence[float]", shift: float) -> "list[Residual]":
+    """For each sample k (own instant ``times[k]``), find the LAST sample j
+    with ``times[j] <= times[k] - shift`` (the basis that was current
+    ``shift`` ms before k's own instant -- never a later one, matching
+    ``StateEstimator::bodyAt()``'s own "t is at or after the queried peer's
+    own basisTime" precondition, generalized here to "the basis is at or
+    before its OWN query instant, t-shift") and ZOH-extrapolates it forward
+    by ``age = (times[k] - times[j]) / 1000`` -- the SAME formula
+    ``one_step_ahead_walk()`` uses, just with an explicit fixed ``shift``
+    instead of always taking j = k-1.
+
+    A sample k with no such j (``times[k] - shift < times[0]``, e.g. every
+    k near the START of a stream once ``shift`` exceeds the elapsed time
+    since ``times[0]``) produces no residual -- there is no basis old
+    enough to predict from yet, the SAME "nothing to leave out" contract
+    ``one_step_ahead_walk()`` documents for its own empty/single-sample
+    case, generalized to a shift that can exceed one sample gap. ``shift ==
+    0`` degenerates to predicting each sample from the most recent basis at
+    or before its own instant (typically itself, age ~= 0, near-zero
+    residual by construction) -- the sweep's natural left-hand anchor
+    point. A negative ``shift`` is rejected (``ValueError``): this function
+    answers a forward-looking ("how far ahead can we trust this") question
+    only, never a backward-looking one.
+
+    Raises ``ValueError`` for the same length-mismatch/non-monotonic-time
+    preconditions ``one_step_ahead_walk()`` enforces (this function shares
+    that precondition, not just the formula)."""
+    n = len(times)
+    if len(positions) != n or len(velocities) != n:
+        raise ValueError(
+            f"shifted_prediction_walk(): times/positions/velocities must have equal length, "
+            f"got {n}/{len(positions)}/{len(velocities)}")
+    if shift < 0:
+        raise ValueError(f"shifted_prediction_walk(): shift must be >= 0, got {shift!r}")
+
+    for k in range(1, n):
+        if times[k] < times[k - 1]:
+            raise ValueError(
+                f"shifted_prediction_walk(): non-monotonic timestamps at index {k} "
+                f"(times[{k - 1}]={times[k - 1]!r} > times[{k}]={times[k]!r}) -- a captured "
+                f"stream must never go backward in time")
+
+    walk: "list[Residual]" = []
+    times_list = list(times)  # bisect needs a concrete sequence it can re-index cheaply
+    for k in range(n):
+        target = times[k] - shift
+        j = bisect.bisect_right(times_list, target) - 1
+        if j < 0:
+            continue  # no basis old enough yet -- see this function's own doc comment
+        age = (times[k] - times[j]) / 1000.0  # [ms] -> [s], matches one_step_ahead_walk()'s own age math
+        predicted = positions[j] + velocities[j] * age
+        actual = positions[k]
+        walk.append(Residual(time=times[k], predicted=predicted, actual=actual,
+                             residual=actual - predicted))
+    return walk
+
+
+def rms_vs_shift(times: "Sequence[float]", positions: "Sequence[float]",
+                 velocities: "Sequence[float]", shifts: "Sequence[float]") -> "dict[float, float]":
+    """Sweep ``shifted_prediction_walk()`` over every value in ``shifts``
+    ([ms] each), returning ``{shift: rms(residuals)}`` -- the RMS-vs-shift
+    curve the stakeholder asked to see: "how far ahead we can trust the
+    prediction". Monotonically non-decreasing in ``shift`` is the EXPECTED
+    (not enforced) shape -- predicting further ahead should never get more
+    accurate on average -- a caller plotting this dict's values against its
+    keys is the notebook's own job, not this function's."""
+    return {shift: rms([r.residual for r in shifted_prediction_walk(times, positions, velocities, shift)])
+            for shift in shifts}
 
 
 # ---------------------------------------------------------------------------
