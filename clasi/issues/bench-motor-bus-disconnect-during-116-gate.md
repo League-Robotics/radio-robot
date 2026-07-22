@@ -20,10 +20,11 @@ successfully minutes earlier.
 
 ## Cause
 
-Physical/electrical, on the bench: brick power or I2C cabling to the
-Nezha brick + OTOS (they share the bus). Needs stakeholder eyes/hands on
-the stand. (Per project rule: this is a bus-connectivity observation, not
-a power/battery attribution.)
+**RESOLVED (Eric, 2026-07-22): the robot was not on the stand during the
+overnight gates — the first drive command drove it off the table.** The
+fall/landing is what knocked the motor bus out (conn flags False from
+then on). Not a cabling defect at rest, not firmware. Eric has reset the
+robot; bus health to be re-verified before the checklist re-runs.
 
 ## Proposed fix
 
