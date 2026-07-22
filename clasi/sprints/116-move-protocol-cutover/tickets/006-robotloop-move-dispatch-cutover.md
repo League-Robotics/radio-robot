@@ -1,9 +1,20 @@
 ---
 id: '006'
 title: RobotLoop MOVE dispatch cutover
-status: open
-use-cases: [SUC-050, SUC-051, SUC-052, SUC-053, SUC-054, SUC-055]
-depends-on: ['001', '002', '003', '004', '005']
+status: in-progress
+use-cases:
+- SUC-050
+- SUC-051
+- SUC-052
+- SUC-053
+- SUC-054
+- SUC-055
+depends-on:
+- '001'
+- '002'
+- '003'
+- '004'
+- '005'
 github-issue: ''
 issue:
 - protocol-set-point-the-minimal-firmware-s-complete-command-surface.md
