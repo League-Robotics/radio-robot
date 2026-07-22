@@ -131,17 +131,31 @@ def tlm_fields(frame: Any) -> dict:
 class TurnTraceRecorder:
     """Qt-free accumulator of per-series (t, value) points.
 
-    ``add_tlm`` appends points only while the wheels are genuinely moving —
-    frozen (no append at all) the instant the robot is idle, see its own
-    docstring for the exact condition and the 2026-07-22 stakeholder
-    directive behind it. ``add_camera`` appends unconditionally (once
-    telemetry has anchored ``t0``). ``clear`` restarts. Distances are
-    displacement magnitude from the first recorded pose per source;
+    ONE shared freeze predicate governs EVERY append entry point (2026-07-22
+    stakeholder follow-up: the first cut of the freeze only gated
+    ``add_tlm()``'s own wheel-telemetry series; ``add_camera()`` kept
+    appending unconditionally, so ``latest_t()`` — read by ``StripChartCanvas``
+    for its trailing-window anchor — kept climbing off camera updates alone,
+    and the telemetry-panel's rolling strip charts kept visibly scrolling
+    even while every wheel series was correctly frozen and the TOP,
+    full-history graphs looked stopped. ``self._robot_moving`` is the single
+    owner of "is the robot moving right now" -- set by ``add_tlm()`` from
+    its own frame's ``active``/velocity signal on EVERY call (moving or
+    not), and consulted by BOTH ``add_tlm()`` and ``add_camera()`` before
+    appending anything. No other state -- and no future caller of either
+    method, or any future plotting widget reading ``series``/``latest_t()``
+    -- needs its own copy of this logic to stay correct.
+
+    ``add_tlm``/``add_camera`` both append points only while
+    ``self._robot_moving`` is True — frozen (no append at all, from ANY
+    source) the instant the robot is idle; see ``add_tlm()``'s own
+    docstring for the exact moving condition. ``clear`` restarts. Distances
+    are displacement magnitude from the first recorded pose per source;
     headings are unwrapped Δ from the first recorded heading per source.
     Every append goes through ``_append_series()``, which inserts a NaN
     break beforehand when the gap since that SAME series' last point is
     unusually large — see that method's own docstring (defect 2b, display
-    honesty across real gaps, including the idle spans ``add_tlm`` now
+    honesty across real gaps, including the idle spans the freeze now
     skips).
     """
 
@@ -156,6 +170,10 @@ class TurnTraceRecorder:
         self._unwrap = {k: _Unwrapper() for k, _ in HEADING}
         self._h0: dict[str, float] = {}
         self._p0: dict[str, tuple[float, float]] = {}
+        # Single shared freeze predicate -- see class docstring. False until
+        # the first moving TLM frame arrives, so a camera sample that
+        # somehow precedes any telemetry is not recorded either.
+        self._robot_moving: bool = False
 
     def set_trackwidth(self, trackwidth: float) -> None:  # [mm]
         self._trackwidth = trackwidth
@@ -236,10 +254,16 @@ class TurnTraceRecorder:
         Never auto-clears on any transition (110-001's own fix, preserved
         unchanged): only the explicit ``clear()`` (the "Clear traces"
         button) discards data.
+
+        Updates ``self._robot_moving`` -- the single shared freeze
+        predicate ``add_camera()`` also consults (see class docstring) --
+        on EVERY call, moving or not, so it never lags behind the most
+        recent telemetry frame.
         """
         f = tlm_fields(frame)
         vel = f["vel"] or (0.0, 0.0)
         moving = (f["active"] is True) or (max(abs(vel[0]), abs(vel[1])) > _MOVING_SPEED)
+        self._robot_moving = moving
         if not moving:
             return False
         t = self._t(now)
@@ -275,15 +299,22 @@ class TurnTraceRecorder:
         return True
 
     def add_camera(self, now: float, x_cm: float, y_cm: float, heading_deg: float) -> None:
-        """Record one camera ground-truth sample (world cm + heading deg)."""
-        # Only record once telemetry has anchored t0 -- a camera sample
-        # before the first TLM frame has no elapsed-time reference yet.
-        # (The prior ALSO-idle-freeze-gated behavior here was removed
-        # alongside add_tlm()'s own motion gate -- see that method's
-        # docstring; camera samples now record continuously too, same as
-        # every other series, with the same per-series NaN gap-break
-        # covering any real stall.)
-        if self._t0 is None:
+        """Record one camera ground-truth sample (world cm + heading deg).
+
+        Gated on the SAME ``self._robot_moving`` predicate ``add_tlm()``
+        maintains (2026-07-22 stakeholder follow-up -- see class
+        docstring): camera ground-truth arrives on its own, independent
+        polling cadence, so if this kept appending while the wheels were
+        idle, ``head_cam``/``dist_cam`` would keep growing on their own --
+        and because ``StripChartCanvas`` anchors its trailing window on
+        ``recorder.latest_t()`` (the max across EVERY series, not just the
+        currently-displayed one), that alone was enough to keep the
+        telemetry-panel's rolling strip charts visibly scrolling even
+        while every wheel series was correctly frozen. Also requires
+        ``t0`` to already be anchored -- a camera sample before the first
+        TLM frame has no elapsed-time reference yet.
+        """
+        if self._t0 is None or not self._robot_moving:
             return
         self._heading("head_cam", now, heading_deg)
         self._distance("dist_cam", now, x_cm, y_cm)

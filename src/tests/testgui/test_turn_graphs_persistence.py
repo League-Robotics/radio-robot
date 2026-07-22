@@ -28,9 +28,18 @@ checked and confirmed to hold the playfield/avatar canvas
 implementation exists.
 
 Fix: ``add_tlm()`` no longer clears the recorder on resume-from-idle; it
-just un-freezes (``self._stopped = False``) and keeps appending to the same
-series. Only the explicit "Clear traces" button (``TurnGraphPanel.clear()``)
+just skips appending while idle (the motion gate — reinstated 2026-07-22
+per a later stakeholder directive, see ``turn_graphs.py``'s own header) and
+resumes appending, to the SAME series, the instant real motion is observed
+again. Only the explicit "Clear traces" button (``TurnGraphPanel.clear()``)
 discards data now.
+
+Gap-break note (2026-07-22, added the same session as the motion-gate
+reinstatement): resuming after a skipped idle span now also weaves in a
+NaN gap-break sentinel ahead of the first post-idle point (``_append_series()``,
+defect 2b) — display honesty, not a data-loss regression. The counts below
+account for that one extra NaN entry per resume; see the assertions'
+own comments.
 
 Run with::
 
@@ -67,6 +76,8 @@ def test_tab_switch_during_idle_resume_preserves_wheel_speed_history(qapp):
     DIFFERENT tab is showing), switch back -- the wheel-speed series must
     contain every point recorded while both active and inactive, in order,
     with none lost or corrupted."""
+    import math
+
     from robot_radio.testgui.turn_graphs import TurnGraphPanel
 
     panel = TurnGraphPanel()
@@ -109,15 +120,19 @@ def test_tab_switch_during_idle_resume_preserves_wheel_speed_history(qapp):
         tabs.setCurrentIndex(wheel_speed_index)
 
         vel_l = panel.recorder.series["vel_l"]
-        assert len(vel_l) == 15, (
-            f"expected all 10 pre-switch + 5 post-idle-resume points to survive, "
-            f"got {len(vel_l)}: {vel_l}"
+        # 10 pre-switch + 1 gap-break NaN (the idle frame itself was
+        # skipped entirely by the freeze -- see this module's own header
+        # note) + 5 post-idle-resume = 16.
+        assert len(vel_l) == 16, (
+            f"expected 10 pre-switch + 1 gap-break NaN + 5 post-idle-resume "
+            f"points to survive, got {len(vel_l)}: {vel_l}"
         )
         # First burst must be intact and unmutated, in original order.
         assert [v for _, v in vel_l[:10]] == [100.0 + i for i in range(10)]
+        assert math.isnan(vel_l[10][1]), f"expected a gap-break NaN sentinel at index 10: {vel_l[10]}"
         # Second burst (recorded entirely while the tab was NOT active)
         # must also be present, appended after the first, not replacing it.
-        assert [v for _, v in vel_l[10:]] == [200.0 + i for i in range(5)]
+        assert [v for _, v in vel_l[11:]] == [200.0 + i for i in range(5)]
         # Timestamps must be strictly increasing throughout -- no reset.
         times = [t_ for t_, _ in vel_l]
         assert times == sorted(times) and len(set(times)) == len(times)
@@ -129,6 +144,8 @@ def test_recorder_add_tlm_resumes_without_clearing_after_idle_freeze():
     """Qt-free unit test of the actual root cause: ``TurnTraceRecorder``
     must not wipe accumulated series when motion resumes after an idle
     gap -- it must only ever be cleared by an explicit ``clear()`` call."""
+    import math
+
     from robot_radio.testgui.turn_graphs import TurnTraceRecorder
     from robot_radio.robot.protocol import TLMFrame
 
@@ -139,18 +156,25 @@ def test_recorder_add_tlm_resumes_without_clearing_after_idle_freeze():
         rec.add_tlm(t, TLMFrame(active=True, vel=(50.0, 50.0), enc=(i * 2.0, i * 2.0)))
     assert len(rec.series["vel_l"]) == 4
 
-    # Idle for over the freeze threshold.
+    # Idle for over the freeze threshold -- this frame is skipped entirely
+    # (the freeze), not recorded as a zero.
     t += 1.5
-    rec.add_tlm(t, TLMFrame(active=False, vel=(0.0, 0.0), enc=(8.0, 8.0)))
+    assert rec.add_tlm(t, TLMFrame(active=False, vel=(0.0, 0.0), enc=(8.0, 8.0))) is False
+    assert len(rec.series["vel_l"]) == 4, "an idle frame must not append anything"
 
-    # Motion resumes -- must NOT clear previously-recorded points.
+    # Motion resumes -- must NOT clear previously-recorded points. The
+    # large gap since the last (pre-idle) point weaves in a gap-break NaN
+    # sentinel first (defect 2b) -- display honesty, not data loss.
     t += 0.05
-    rec.add_tlm(t, TLMFrame(active=True, vel=(75.0, 75.0), enc=(10.0, 10.0)))
+    assert rec.add_tlm(t, TLMFrame(active=True, vel=(75.0, 75.0), enc=(10.0, 10.0))) is True
 
-    assert len(rec.series["vel_l"]) == 5, (
-        "resuming motion after an idle freeze must APPEND, not clear, "
-        f"the recorder's series; got {rec.series['vel_l']}"
+    assert len(rec.series["vel_l"]) == 6, (
+        "resuming motion after an idle freeze must APPEND (a gap-break NaN "
+        "plus the new real point), not clear, the recorder's series; "
+        f"got {rec.series['vel_l']}"
     )
+    assert math.isnan(rec.series["vel_l"][4][1])
+    assert rec.series["vel_l"][5][1] == 75.0
 
     # Explicit clear() is still the only thing that discards data.
     rec.clear()
