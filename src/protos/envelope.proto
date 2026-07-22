@@ -183,12 +183,21 @@ message Move {
 // 4 is reserved below, not reused. `ConfigTarget.CONFIG_WATCHDOG`
 // (config.proto) stays declared, unused -- same precedent `CONFIG_PLANNER`
 // already set after 115.
+//
+// `estimator` (field 6, EstimatorConfigPatch -- 117): App::StateEstimator's
+// own live fusion-weight tuning arm, the next free number after `reserved
+// 3, 4` and `otos = 5`. RobotLoop::handleConfig DOES apply it live (ticket
+// 003), the same way `otos` already is -- merging present fields onto
+// stateEstimator_.weights() and calling setWeights() -- but, unlike `otos`,
+// NEVER writes it into persistedTuning_/flash (see config.proto's own
+// EstimatorConfigPatch doc comment for why).
 message ConfigDelta {
   reserved 3, 4;
   oneof patch {
     DrivetrainConfigPatch drivetrain = 1;
     MotorConfigPatch      motor      = 2;
     OtosConfigPatch       otos       = 5;
+    EstimatorConfigPatch  estimator  = 6;
   }
 }
 

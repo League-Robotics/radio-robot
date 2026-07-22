@@ -1196,6 +1196,60 @@ class NezhaProtocol:
         envelope = envelope_pb2.CommandEnvelope(config=delta)
         return self._conn.send_envelope_fast(envelope)
 
+    def estimator_config(self, *, weight_heading_otos: float | None = None,
+                          weight_omega_otos: float | None = None,
+                          staleness_ms: float | None = None) -> int:
+        """Build and send an ``EstimatorConfigPatch`` ``ConfigDelta`` envelope
+        (``CommandEnvelope{config: ConfigDelta{estimator: ...}}``, 117 ticket
+        003) — the live-tuning surface for ``App::StateEstimator``'s v1
+        complementary-blend fusion weights, mirroring ``otos_config()``'s own
+        "build exactly ONE envelope carrying exactly ONE patch" shape
+        exactly.
+
+        ``weight_heading_otos``/``weight_omega_otos`` map 1:1 to
+        ``App::StateEstimator::FusionWeights::headingOtos``/``omegaOtos``
+        (dimensionless ``[0..1]`` complementary-blend weights, baked
+        fail-closed to ``0.0`` by ``Config::defaultEstimatorConfig()`` this
+        sprint — encoder-only v1, per stakeholder decision);
+        ``staleness_ms`` maps to ``FusionWeights::staleness`` (the max age,
+        ms, a fresh OTOS reading may carry and still be eligible to blend).
+
+        UNLIKE ``otos_config()``, a patch sent through this method is NEVER
+        persisted on the robot side — ``RobotLoop::handleConfig()``'s
+        ``ESTIMATOR`` branch applies it live but never writes it into
+        ``persistedTuning_``/flash (Design Rationale Decision 4, sprint
+        117's overlay ``design/design.md``): a reboot always reverts to the
+        baked JSON default, never this method's last-sent value.
+
+        Fire-and-poll, the SAME shape as ``move_twist()``/``move_wheels()``/
+        ``stop()``/``config()``/``otos_config()`` (103-009's "telemetry-only
+        return path"): this call writes the bytes and returns immediately;
+        its outcome rides the ack slot (``wait_for_ack()``).
+
+        Returns the corr_id assigned to this command. Raises
+        ``ConnectionError`` if not connected; raises ``ValueError`` if no
+        field is set at all (every kwarg ``None`` — an empty patch is a
+        caller error, mirroring ``otos_config()``'s own empty-patch
+        rejection).
+        """
+        fields: dict[str, Any] = {}
+        if weight_heading_otos is not None:
+            fields["weight_heading_otos"] = float(weight_heading_otos)
+        if weight_omega_otos is not None:
+            fields["weight_omega_otos"] = float(weight_omega_otos)
+        if staleness_ms is not None:
+            fields["staleness_ms"] = float(staleness_ms)
+
+        if not fields:
+            raise ValueError(
+                "estimator_config() requires at least one field "
+                "(weight_heading_otos/weight_omega_otos/staleness_ms)")
+
+        delta = envelope_pb2.ConfigDelta(
+            estimator=config_pb2.EstimatorConfigPatch(**fields))
+        envelope = envelope_pb2.CommandEnvelope(config=delta)
+        return self._conn.send_envelope_fast(envelope)
+
     def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "AckEntry | None":  # [ms]
         """Poll incoming ``Telemetry`` pushes for the single ack slot
         matching ``corr_id``, for up to ``timeout`` ms. Returns the matched

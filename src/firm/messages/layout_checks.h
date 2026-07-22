@@ -56,6 +56,8 @@ static_assert(std::is_standard_layout<MotorConfigPatch>::value,
               "msg::MotorConfigPatch must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<OtosConfigPatch>::value,
               "msg::OtosConfigPatch must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<EstimatorConfigPatch>::value,
+              "msg::EstimatorConfigPatch must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<MoveTwist>::value,
               "msg::MoveTwist must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<MoveWheels>::value,

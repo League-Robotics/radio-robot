@@ -62,6 +62,10 @@ package robot;
 // sprint (Architecture Revision 1's "host-side GET echo" decision covers
 // OL/OA -- see protocol.py), but the enum slot exists now so a later
 // ConfigSnapshot extension does not need a wire-schema change of its own.
+// CONFIG_ESTIMATOR (117): EstimatorConfigPatch's own target -- mirrors
+// CONFIG_OTOS's own 1:1 Patch-kind correspondence exactly. Added alongside
+// EstimatorConfigPatch below; same "no live GET/ConfigSnapshot arm this
+// sprint" posture as CONFIG_OTOS.
 enum ConfigTarget {
   CONFIG_DRIVETRAIN  = 0;
   CONFIG_MOTOR_LEFT  = 1;
@@ -69,6 +73,7 @@ enum ConfigTarget {
   CONFIG_PLANNER     = 3;
   CONFIG_WATCHDOG    = 4;  // routes to bb.streamWatchdogWindowIn, not bb.configIn
   CONFIG_OTOS        = 5;
+  CONFIG_ESTIMATOR   = 6;
 }
 
 // Which of the drivetrain's two bound motors `MotorConfigPatch.side`
@@ -172,4 +177,32 @@ message OtosConfigPatch {
   optional float offset_y      = 4;  // [mm] Otos::setOffset() y
   optional float offset_yaw    = 5;  // [rad] Otos::setOffset() heading
   bool           init          = 6;  // OI -- Otos::init() trigger
+}
+
+// EstimatorConfigPatch (117, issue predict-to-now-odometry-estimator-ring-
+// capture-dump-validation-trajectory-controller.md): App::StateEstimator's
+// live v1 complementary-blend fusion-weight tuning. Mirrors OtosConfigPatch's
+// own shape exactly -- a small, optional-field patch, live-applied inside
+// RobotLoop::handleConfig() (ticket 003) -- with one deliberate difference:
+// UNLIKE OtosConfigPatch (109-004), this patch is NEVER persisted into
+// persistedTuning_/flash (Design Rationale Decision 4, this sprint's overlay
+// design/design.md) -- a reboot always reverts to the baked JSON default
+// (Config::defaultEstimatorConfig(), config/boot_config.h), never the
+// last-live-tuned value.
+//
+// weight_heading_otos/weight_omega_otos map 1:1 onto App::StateEstimator::
+// FusionWeights::headingOtos/omegaOtos (state_estimator.h) -- dimensionless
+// [0..1] complementary-blend weights, committed 0.0 in every robot JSON this
+// sprint (stakeholder's encoder-only-v1 decision). staleness_ms maps onto
+// FusionWeights::staleness -- the max age (ms) a fresh OTOS reading may carry
+// and still be eligible to blend. Opt<float> presence is this patch's own
+// "field is being set" signal, the same convention every other *ConfigPatch
+// message in this file already uses; RobotLoop::handleConfig()'s ESTIMATOR
+// branch merges only the PRESENT fields onto a snapshot of
+// stateEstimator_.weights() before calling setWeights() (present-field
+// merge, matching applyMotorConfigPatch()/applyOtosPatch()'s own shape).
+message EstimatorConfigPatch {
+  optional float weight_heading_otos = 1;  // [0..1] FusionWeights::headingOtos
+  optional float weight_omega_otos   = 2;  // [0..1] FusionWeights::omegaOtos
+  optional float staleness_ms        = 3;  // [ms] FusionWeights::staleness
 }

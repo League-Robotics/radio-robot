@@ -433,3 +433,128 @@ def test_otos_config_ack_returns_none_on_timeout_with_no_matching_corr_id():
     ack = proto.wait_for_ack(corr_id, timeout=50)
 
     assert ack is None
+
+
+# ---------------------------------------------------------------------------
+# 5. estimator_config() (117 ticket 003) -- App::StateEstimator's live
+#    fusion-weight-tuning builder. Mirrors otos_config()'s own "one
+#    envelope, one patch, fire-and-poll" shape (section 4 above), for
+#    EstimatorConfigPatch/ConfigDelta.estimator (field 6).
+# ---------------------------------------------------------------------------
+
+
+def test_estimator_config_weight_heading_otos_builds_correct_envelope():
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+
+    corr_id = proto.estimator_config(weight_heading_otos=0.4)
+
+    assert corr_id == 1
+    sent = conn.sent[0]
+    expected = envelope_pb2.CommandEnvelope(
+        corr_id=1,
+        config=envelope_pb2.ConfigDelta(
+            estimator=config_pb2.EstimatorConfigPatch(weight_heading_otos=0.4)))
+    assert sent.SerializeToString() == expected.SerializeToString()
+    assert sent.config.WhichOneof("patch") == "estimator"
+
+
+def test_estimator_config_weight_omega_otos_builds_correct_envelope():
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+
+    proto.estimator_config(weight_omega_otos=0.25)
+
+    sent = conn.sent[0]
+    expected = envelope_pb2.CommandEnvelope(
+        corr_id=1,
+        config=envelope_pb2.ConfigDelta(
+            estimator=config_pb2.EstimatorConfigPatch(weight_omega_otos=0.25)))
+    assert sent.SerializeToString() == expected.SerializeToString()
+
+
+def test_estimator_config_staleness_ms_builds_correct_envelope():
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+
+    proto.estimator_config(staleness_ms=80.0)
+
+    sent = conn.sent[0]
+    expected = envelope_pb2.CommandEnvelope(
+        corr_id=1,
+        config=envelope_pb2.ConfigDelta(
+            estimator=config_pb2.EstimatorConfigPatch(staleness_ms=80.0)))
+    assert sent.SerializeToString() == expected.SerializeToString()
+
+
+def test_estimator_config_fields_can_combine_on_one_patch():
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+
+    proto.estimator_config(weight_heading_otos=0.4, weight_omega_otos=0.25, staleness_ms=80.0)
+
+    sent = conn.sent[0]
+    expected = envelope_pb2.CommandEnvelope(
+        corr_id=1,
+        config=envelope_pb2.ConfigDelta(
+            estimator=config_pb2.EstimatorConfigPatch(
+                weight_heading_otos=0.4, weight_omega_otos=0.25, staleness_ms=80.0)))
+    assert sent.SerializeToString() == expected.SerializeToString()
+
+
+def test_estimator_config_with_no_fields_raises_value_error():
+    proto = NezhaProtocol(_FakeFastConn())
+
+    with pytest.raises(ValueError):
+        proto.estimator_config()
+
+
+def test_estimator_config_invalid_call_sends_nothing():
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+
+    with pytest.raises(ValueError):
+        proto.estimator_config()
+
+    assert conn.sent == []
+
+
+def test_estimator_config_each_call_gets_a_fresh_corr_id():
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+
+    c1 = proto.estimator_config(weight_heading_otos=0.4)
+    c2 = proto.estimator_config(weight_omega_otos=0.25)
+    c3 = proto.estimator_config(staleness_ms=80.0)
+
+    assert [c1, c2, c3] == [1, 2, 3]
+    assert len(conn.sent) == 3
+
+
+def test_estimator_config_corr_id_round_trips_through_wait_for_ack():
+    """End-to-end shape of an estimator_config() call: send, then confirm
+    receipt via the SAME ack matcher config()/otos_config() already use.
+    Like otos_config() (and unlike config()'s ERR_UNIMPLEMENTED-for-
+    everything-but-MOTOR scripting), RobotLoop::handleConfig DOES apply
+    ESTIMATOR live (see that method's own comment) -- scripts a real
+    ack_err=0 (OK)."""
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+    corr_id = proto.estimator_config(weight_heading_otos=0.4)
+
+    conn.ack_result = telemetry_pb2.Telemetry(
+        flags=1 << 5, ack_corr=corr_id, ack_err=0)
+
+    ack = proto.wait_for_ack(corr_id, timeout=200)
+
+    assert ack == AckEntry(corr_id=corr_id, ok=True, err_code=0)
+
+
+def test_estimator_config_ack_returns_none_on_timeout_with_no_matching_corr_id():
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+    corr_id = proto.estimator_config(staleness_ms=80.0)
+
+    ack = proto.wait_for_ack(corr_id, timeout=50)
+
+    assert ack is None

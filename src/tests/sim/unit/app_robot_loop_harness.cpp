@@ -65,6 +65,7 @@
 #include "app/odometry.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
+#include "app/state_estimator.h"
 #include "app/telemetry.h"
 #include "config/persisted_tuning.h"
 #include "devices/color_sensor.h"
@@ -396,6 +397,7 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
   App::MoveQueue moveQueue(drive, odom, clock);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  App::StateEstimator stateEstimator;  // 117 ticket 003: default weights (0/0/200ms)
 
   // --- Drive Preamble to done() BEFORE constructing/calling RobotLoop's
   // own boot() -- see this file's own derivation (robot_loop.cpp's boot()
@@ -423,7 +425,7 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   scriptLineBeginSuccess(bus);
 
   App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
-                            drive, odom, moveQueue, preamble, clock, sleeper);
+                            drive, odom, moveQueue, preamble, stateEstimator, clock, sleeper);
 
   int sleepsBeforeBoot = sleeper.sleepCount();
   robotLoop.boot();
@@ -530,6 +532,7 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
   App::MoveQueue moveQueue(drive, odom, clock);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  App::StateEstimator stateEstimator;  // 117 ticket 003: default weights (0/0/200ms)
 
   clock.setMicros(0);
   preamble.step();
@@ -541,7 +544,7 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
   scriptLineBeginSuccess(bus);
 
   App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
-                            drive, odom, moveQueue, preamble, clock, sleeper);
+                            drive, odom, moveQueue, preamble, stateEstimator, clock, sleeper);
   robotLoop.boot();
   checkTrue(preamble.done(), "boot() completes against the FakeTransport-based fixture too");
 
@@ -692,6 +695,7 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
   App::MoveQueue moveQueue(drive, odom, clock);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  App::StateEstimator stateEstimator;  // 117 ticket 003: default weights (0/0/200ms)
 
   clock.setMicros(0);
   preamble.step();
@@ -704,7 +708,8 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
 
   MockTuningStore mockStore;
   App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
-                            drive, odom, moveQueue, preamble, clock, sleeper, &mockStore);
+                            drive, odom, moveQueue, preamble, stateEstimator, clock, sleeper,
+                            &mockStore);
   robotLoop.boot();
   checkTrue(preamble.done(), "boot() completes against the MockTuningStore-equipped fixture too");
 
@@ -814,6 +819,11 @@ struct LiveFixture {
   App::Odometry odom;
   App::MoveQueue moveQueue;
   App::Preamble preamble;
+  // 117 ticket 003: default-constructed (encoder-only-v1 FusionWeights{}
+  // default) -- directly reachable by every LiveFixture-based scenario
+  // (unlike RobotLoop's own persistedTuning_/tuningStore_, which stay
+  // private).
+  App::StateEstimator stateEstimator;
   App::RobotLoop robotLoop;
 
   LiveFixture()
@@ -829,7 +839,7 @@ struct LiveFixture {
         moveQueue(drive, odom, clock),
         preamble(motorL, motorR, otos, color, line, clock),
         robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm, drive, odom, moveQueue,
-                  preamble, clock, sleeper) {
+                  preamble, stateEstimator, clock, sleeper) {
     driveLivePlantBootToDone(preamble, clock);
     robotLoop.boot();
   }
@@ -1220,6 +1230,106 @@ void scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome() {
               "the SAME cycle count as the config-free baseline");
 }
 
+// ===========================================================================
+// 117 ticket 003: RobotLoop::handleConfig()'s new ESTIMATOR branch --
+// CONFIG{estimator} merges PRESENT fields onto stateEstimator_.weights()
+// (partial-patch semantics, matching MotorConfigPatch/OtosConfigPatch),
+// acks OK, and -- UNLIKE the MOTOR/OTOS branches -- NEVER touches
+// persistedTuning_/calls tuningStore_->save() (Design Rationale Decision 4,
+// this sprint's overlay design/design.md: a reboot always reverts to the
+// baked Config::defaultEstimatorConfig() default, never a live-tuned
+// value). Hand-composed against a LIVE (unscripted) SimPlant -- mirrors
+// LiveFixture's own construction shape, plus a MockTuningStore (114-004's
+// own no-flash Config::TuningStore double) so the "never persisted" half
+// of this scenario's claim is a real save()-call-count assertion, not just
+// an absence of an accessor (persistedTuning_ itself stays private).
+// ===========================================================================
+
+void scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists() {
+  beginScenario("RobotLoop CONFIG: EstimatorConfigPatch present-field merge, acks OK, "
+                "NEVER persisted (117 ticket 003)");
+
+  TestSim::SimPlant plant;
+  TestSim::SimClock clock;
+  TestSim::SimSleeper sleeper;
+
+  Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
+  Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
+  Devices::Otos otos(plant, Devices::OtosConfig{});
+  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
+  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+
+  TestSupport::FakeTransport serialFake;
+  TestSupport::FakeTransport radioFake;
+  App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
+  App::Telemetry tlm(comms, serialFake, radioFake);
+  App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
+  App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  App::MoveQueue moveQueue(drive, odom, clock);
+  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  App::StateEstimator stateEstimator;  // default weights (0.0/0.0/200ms)
+
+  MockTuningStore mockStore;
+  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
+                            drive, odom, moveQueue, preamble, stateEstimator, clock,
+                            sleeper, &mockStore);
+  driveLivePlantBootToDone(preamble, clock);
+  robotLoop.boot();
+
+  checkFloatEq(stateEstimator.weights().headingOtos, 0.0f,
+               "estimator starts at the constructed (default) headingOtos");
+  checkFloatEq(stateEstimator.weights().omegaOtos, 0.0f,
+               "estimator starts at the constructed (default) omegaOtos");
+  checkUintEq(stateEstimator.weights().staleness, 200u,
+              "estimator starts at the constructed (default) staleness");
+
+  // CONFIG{estimator: weight_heading_otos=0.4, staleness_ms=80} --
+  // weight_omega_otos deliberately absent, proving the merge-against-
+  // current-value path (mirrors scenarioConfigMotorAppliesWhileDrivetrain
+  // StaysUnimplemented()'s own kff-absent proof above).
+  const uint32_t kCorrId = 96001;
+  Buf estimatorPatch;
+  putFloatField(estimatorPatch, 1, 0.4f);   // weight_heading_otos, field 1
+  putFloatField(estimatorPatch, 3, 80.0f);  // staleness_ms, field 3
+  Buf estimatorDelta;
+  putMessageField(estimatorDelta, 6, estimatorPatch);  // ConfigDelta.estimator, field 6
+  Buf estimatorEnv;
+  putVarintField(estimatorEnv, 1, kCorrId);           // CommandEnvelope.corr_id
+  putMessageField(estimatorEnv, 6, estimatorDelta);   // CommandEnvelope.config, field 6
+  std::string estimatorLine = armorLine(estimatorEnv.data, estimatorEnv.len);
+  checkTrue(!estimatorLine.empty(), "armor() of the CONFIG{estimator} envelope succeeds");
+
+  serialFake.enqueueInbound(estimatorLine.c_str());
+
+  // Steps a bounded number of live cycles until the ack (fresh, matching
+  // corr_id) appears -- mirrors stepUntilAckSeen()'s own shape (that
+  // helper takes a LiveFixture&, not this hand-composed fixture's own
+  // objects, so this is a small local equivalent rather than a reuse).
+  bool acked = false;
+  uint32_t ackErr = 1;  // any nonzero sentinel -- overwritten by findAck() on a match
+  for (int i = 0; i < 10 && !acked; ++i) {
+    plant.tick(0.05f);  // [s] 50ms/cycle, matching LiveFixture::step()'s own kCycleDtUs
+    clock.advanceMicros(50000);
+    robotLoop.cycle();
+    acked = findAck(serialFake.sent(), kCorrId, &ackErr);
+  }
+  checkTrue(acked, "CONFIG{estimator}'s ack (fresh, matching corr_id) appears within a bounded "
+                    "number of cycles");
+  checkUintEq(ackErr, 0, "CONFIG{estimator} acks OK (0)");
+
+  checkFloatEq(stateEstimator.weights().headingOtos, 0.4f,
+               "headingOtos reflects the applied patch");
+  checkFloatEq(stateEstimator.weights().omegaOtos, 0.0f,
+               "omegaOtos (absent from the patch) stays at its prior (default) value -- proves "
+               "the merge, not a blanket overwrite");
+  checkUintEq(stateEstimator.weights().staleness, 80u, "staleness reflects the applied patch");
+
+  checkUintEq(static_cast<uint32_t>(mockStore.saveCount), 0,
+              "EstimatorConfigPatch NEVER calls tuningStore_->save() -- deliberately not "
+              "persisted (Design Rationale Decision 4, overlay design/design.md): a reboot "
+              "always reverts to the baked Config::defaultEstimatorConfig() default");
+}
+
 }  // namespace
 
 int main() {
@@ -1233,6 +1343,8 @@ int main() {
   scenarioMoveEndDrainsWithNoFurtherHostTraffic();
   scenarioMoveTimeoutSetsFaultFlagOnEndingCycle();
   scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome();
+
+  scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::RobotLoop scenarios passed\n");

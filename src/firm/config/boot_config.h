@@ -57,4 +57,31 @@ struct OtosBootConfig {
 // 1.0 scale = no correction) otherwise.
 OtosBootConfig defaultOtosBootConfig();
 
+// EstimatorBootConfig (117) — App::StateEstimator's fail-closed boot-time
+// fusion-weight defaults, baked from the robot JSON's `estimator` section
+// (data/robots/robot_config.schema.json). Field-for-field mirror of
+// App::StateEstimator::FusionWeights (app/state_estimator.h), but declared
+// independently here rather than reusing that type directly: config/ may
+// only depend on messages/ (docs/design/design.md §5's dependency
+// diagram), never on app/. main.cpp (ticket 004) converts this into an
+// App::FusionWeights at the one place both types are visible, the same
+// pattern toDeviceMotorConfig() already uses for msg::MotorConfig ->
+// Devices::MotorConfig.
+//
+// headingOtos/omegaOtos are committed 0.0 in every robot JSON this sprint
+// (stakeholder's encoder-only-v1 decision) — dimensionless [0..1] blend
+// weights, no unit tag (coding-standards.md). staleness carries a reasoned
+// per-robot placeholder (each robot JSON's own inline comment documents
+// the derivation).
+struct EstimatorBootConfig {
+  float headingOtos = 0.0f;  // [0..1] blend weight: body heading vs OTOS heading
+  float omegaOtos = 0.0f;    // [0..1] blend weight: body omega vs OTOS omega
+  uint32_t staleness = 200;  // [ms] max OTOS reading age still eligible to blend
+};
+
+// The boot EstimatorBootConfig default — fail-closed baked fusion weights,
+// see EstimatorBootConfig's own doc comment above and
+// gen_boot_config.py's estimator_config_for_config().
+EstimatorBootConfig defaultEstimatorConfig();
+
 }  // namespace Config

@@ -25,6 +25,7 @@
 #include "app/move_queue.h"
 #include "app/odometry.h"
 #include "app/preamble.h"
+#include "app/state_estimator.h"
 #include "app/telemetry.h"
 #include "config/persisted_tuning.h"
 #include "devices/clock.h"
@@ -47,6 +48,17 @@ class RobotLoop {
   // but this class's own kPace block now calls each leaf's own
   // readDue()/tick()/reading() directly for rate-limited, alternating
   // steady-state sampling (see updateLineColor()'s own doc comment below).
+  // stateEstimator (117) -- App::StateEstimator&, threaded through exactly
+  // like MoveQueue&/Preamble& above (an already-constructed passive module
+  // the cycle body touches by name; the composition root -- main.cpp on
+  // ARM, src/sim/sim_harness.h, or a host harness -- owns construction and
+  // wiring order). handleConfig()'s own ESTIMATOR branch (ticket 003)
+  // merges a live EstimatorConfigPatch's present fields onto
+  // stateEstimator_.weights() and calls setWeights(); RobotLoop::cycle()'s
+  // trailing kPace block (ticket 004) calls stateEstimator_.update(frame_,
+  // nowUs) once per cycle, immediately after frame_.pose is staged -- see
+  // DESIGN.md's "Predict-to-now estimation" note.
+  //
   // tuningStore (114-004, SUC-003) -- the persisted-live-tuning seam;
   // trailing and defaulted to nullptr so every EXISTING call site (main.cpp,
   // and every one of TestSim::SimHarness's construction sites) keeps
@@ -61,8 +73,8 @@ class RobotLoop {
             Devices::Motor& motorR, Devices::Otos& otos,
             Devices::ColorSensorLeaf& color, Devices::LineSensorLeaf& line,
             Comms& comms, Telemetry& tlm, Drive& drive, Odometry& odom,
-            MoveQueue& moveQueue, Preamble& preamble, const Devices::Clock& clock,
-            Devices::Sleeper& sleeper,
+            MoveQueue& moveQueue, Preamble& preamble, StateEstimator& stateEstimator,
+            const Devices::Clock& clock, Devices::Sleeper& sleeper,
             Config::TuningStore* tuningStore = nullptr);
 
   // Runs boot() once, then cycle() forever. Never returns -- this is what
@@ -178,6 +190,7 @@ class RobotLoop {
   Odometry& odom_;
   MoveQueue& moveQueue_;
   Preamble& preamble_;
+  StateEstimator& stateEstimator_;
   const Devices::Clock& clock_;
   Devices::Sleeper& sleeper_;
 

@@ -87,6 +87,7 @@ set(APP_SOURCES
     "${SOURCE_DIR}/app/odometry.cpp"
     "${SOURCE_DIR}/app/preamble.cpp"
     "${SOURCE_DIR}/app/robot_loop.cpp"
+    "${SOURCE_DIR}/app/state_estimator.cpp"
     "${SOURCE_DIR}/app/telemetry.cpp"
 )
 # motion/stop_condition.cpp (116-002) -- App::MoveQueue (APP_SOURCES, above)

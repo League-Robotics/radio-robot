@@ -95,6 +95,7 @@
 #include "app/odometry.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
+#include "app/state_estimator.h"
 #include "app/telemetry.h"
 #include "devices/color_sensor.h"
 #include "devices/device_config.h"
@@ -139,8 +140,13 @@ class SimHarness {
         odom_(armorL_, armorR_, trackWidth),
         moveQueue_(drive_, odom_, clock_),
         preamble_(armorL_, armorR_, otos_, color_, line_, clock_),
+        // 117 ticket 003: App::StateEstimator&, threaded through exactly
+        // like moveQueue_/preamble_ above -- default-constructed
+        // (encoder-only-v1 FusionWeights{} default) for now; ticket 004
+        // wires this to the same real boot-config weights main.cpp bakes.
         robotLoop_(plant_, armorL_, armorR_, otos_, color_, line_, comms_, tlm_,
-                   drive_, odom_, moveQueue_, preamble_, clock_, sleeper_) {
+                   drive_, odom_, moveQueue_, preamble_, stateEstimator_, clock_,
+                   sleeper_) {
     // 115-006 (gut S1 sim lockstep): no self-configuration here -- motorL_/
     // motorR_ are left at their own default-constructed Devices::MotorConfig{}
     // all-zero fields, exactly matching a real, not-yet-booted composition
@@ -483,6 +489,9 @@ class SimHarness {
   // constructor holds references to both).
   App::MoveQueue moveQueue_;
   App::Preamble preamble_;
+  // 117 ticket 003: default-constructed (encoder-only-v1 FusionWeights{}
+  // default) -- see the constructor initializer list's own comment above.
+  App::StateEstimator stateEstimator_;
 
   // Motion::Executor executor_/App::HeadingSource headingSource_/App::Pilot
   // pilot_ -- DELETED (115-006, gut S1): 115-002's motion-stack excision

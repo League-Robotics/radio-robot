@@ -239,6 +239,13 @@ def _f(v) -> str:
     return s + "f"
 
 
+def _u32(v) -> str:
+    """Format a Python number as a C++ uint32_t literal (rounded to the
+    nearest integer -- staleness_ms's own JSON value is a plain number,
+    e.g. 60.0, that EstimatorBootConfig::staleness stores as uint32_t)."""
+    return f"{int(round(float(v)))}u"
+
+
 # ---------------------------------------------------------------------------
 # Code generation
 # ---------------------------------------------------------------------------
@@ -375,6 +382,27 @@ def trackwidth_for_config(cfg: dict) -> float:
     return float(_require(cfg, "geometry", "trackwidth"))
 
 
+def estimator_config_for_config(cfg: dict):
+    """Return (heading_otos, omega_otos, staleness) for the
+    EstimatorBootConfig struct (117, predict-to-now estimator v1) --
+    App::StateEstimator's fail-closed boot-time fusion-weight defaults.
+
+    REQUIRED as of this ticket (sprint 117 ticket 003) -- the SAME
+    fail-closed discipline sprint 114 established for
+    output_deadband_for_config()/reversal_dwell_for_config() above: a
+    robot JSON missing any of the three ``estimator.*`` keys fails codegen
+    loudly rather than silently defaulting to encoder-only. Per the
+    stakeholder's encoder-only-v1 decision, weight_heading_otos/
+    weight_omega_otos are committed 0.0 in every robot JSON this sprint;
+    staleness_ms carries a reasoned per-robot placeholder (see each robot
+    JSON's own inline comment).
+    """
+    heading_otos = _require(cfg, "estimator", "weight_heading_otos")
+    omega_otos = _require(cfg, "estimator", "weight_omega_otos")
+    staleness = _require(cfg, "estimator", "staleness_ms")
+    return float(heading_otos), float(omega_otos), float(staleness)
+
+
 def generate(cfg: dict, source_path: str) -> str:
     try:
         trackwidth   = trackwidth_for_config(cfg)
@@ -386,6 +414,8 @@ def generate(cfg: dict, source_path: str) -> str:
         polled       = polled_for_ports()
         (otos_offset_x, otos_offset_y, otos_offset_yaw,
          otos_linear_scale, otos_angular_scale) = otos_boot_config_values(cfg)
+        (estimator_heading_otos, estimator_omega_otos,
+         estimator_staleness) = estimator_config_for_config(cfg)
     except MissingRobotConfigKeyError as e:
         raise e.with_source(source_path) from e
 
@@ -491,6 +521,22 @@ OtosBootConfig defaultOtosBootConfig() {{
     cfg.offsetYaw = {_f(otos_offset_yaw)};    // [rad]
     cfg.linearScale = {_f(otos_linear_scale)};
     cfg.angularScale = {_f(otos_angular_scale)};
+    return cfg;
+}}
+
+EstimatorBootConfig defaultEstimatorConfig() {{
+    // 117 (predict-to-now estimator v1) — fail-closed baked from the robot
+    // JSON's estimator.weight_heading_otos/weight_omega_otos/staleness_ms
+    // (data/robots/robot_config.schema.json). Encoder-only v1 (stakeholder
+    // decision): both blend weights are committed 0.0 in every robot JSON
+    // this sprint -- see that JSON's own inline comment for the
+    // staleness_ms reasoning. NOT a live SET/wire surface itself -- see
+    // EstimatorBootConfig's own doc comment (src/firm/config/boot_config.h)
+    // for the separate, volatile EstimatorConfigPatch live-tuning path.
+    EstimatorBootConfig cfg;
+    cfg.headingOtos = {_f(estimator_heading_otos)};
+    cfg.omegaOtos = {_f(estimator_omega_otos)};
+    cfg.staleness = {_u32(estimator_staleness)};   // [ms]
     return cfg;
 }}
 

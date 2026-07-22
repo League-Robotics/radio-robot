@@ -12,6 +12,7 @@
 #include "app/odometry.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
+#include "app/state_estimator.h"
 #include "app/telemetry.h"
 #include "com/radio.h"
 #include "com/serial_port.h"
@@ -143,6 +144,13 @@ int main() {
   // move_queue.h's own boundary comment: "no new dependency direction").
   static App::MoveQueue moveQueue(drive, odom, clock);
   static App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  // 117 ticket 003: RobotLoop's own StateEstimator& is threaded through
+  // here (mirrors moveQueue/preamble above); default-constructed for now
+  // (encoder-only-v1 FusionWeights{} default, identical to what
+  // Config::defaultEstimatorConfig() bakes this sprint) -- ticket 004 wires
+  // this construction to the real baked boot config and adds the
+  // RobotLoop::cycle() call site that actually ticks it.
+  static App::StateEstimator stateEstimator;
 
   // 114-004 (SUC-003): the real ARM-only MicroBitStorage-backed persistence
   // adapter. Declared BEFORE robotLoop below -- RobotLoop only ever holds a
@@ -156,7 +164,7 @@ int main() {
   // persisted-tuning store. run() never returns.
   static App::RobotLoop robotLoop(bus, motorL, motorR, otos, color, line,
                                    comms, tlm, drive, odom, moveQueue, preamble,
-                                   clock, sleeper, &tuningStore);
+                                   stateEstimator, clock, sleeper, &tuningStore);
   // Configuration-completeness gate (114-001): the boot-configure sequence
   // above (every Config::default*() call) is atomic and always complete by
   // this point on real firmware -- this call is unconditional and always

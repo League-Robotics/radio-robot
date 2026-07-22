@@ -172,9 +172,11 @@ def test_field_numbers_match_pb2_descriptors():
     # `reserved`, not an active oneof arm. "watchdog" (field 4) DELETED
     # (116-001, MOVE protocol cutover) -- field 4 is `reserved`, not an
     # active oneof arm any more (`ConfigTarget.CONFIG_WATCHDOG` stays
-    # declared-unused). "otos" (109-004) is unaffected.
+    # declared-unused). "otos" (109-004) is unaffected. "estimator" (117
+    # ticket 003, EstimatorConfigPatch) is a fresh arm at field 6, the next
+    # free number after `reserved 3, 4` and `otos = 5`.
     expected_config_delta_patch = {
-        "drivetrain": 1, "motor": 2, "otos": 5,
+        "drivetrain": 1, "motor": 2, "otos": 5, "estimator": 6,
     }
     actual_config_delta_patch = {
         f.name: f.number for f in pb_envelope.ConfigDelta.DESCRIPTOR.oneofs_by_name["patch"].fields

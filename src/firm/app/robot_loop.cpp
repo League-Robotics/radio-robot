@@ -76,6 +76,20 @@ void mergeOtosPatch(msg::OtosConfigPatch& slot, const msg::OtosConfigPatch& inco
   if (incoming.offset_yaw.has) slot.offset_yaw = incoming.offset_yaw;
 }
 
+// mergeEstimatorPatch (117, ticket 003) -- folds `patch`'s PRESENT fields
+// onto `weights` (a snapshot of stateEstimator_.weights(), taken by
+// handleConfig()'s own ESTIMATOR branch before calling setWeights()).
+// UNLIKE mergeMotorGainsPatch()/mergeOtosPatch() above, this merges
+// directly onto the live App::FusionWeights value itself, not a
+// persistedTuning_ slot -- EstimatorConfigPatch is never persisted (Design
+// Rationale Decision 4, this sprint's overlay design/design.md): a reboot
+// always reverts to the baked Config::defaultEstimatorConfig() default.
+void mergeEstimatorPatch(App::FusionWeights& weights, const msg::EstimatorConfigPatch& patch) {
+  if (patch.weight_heading_otos.has) weights.headingOtos = patch.weight_heading_otos.val;
+  if (patch.weight_omega_otos.has) weights.omegaOtos = patch.weight_omega_otos.val;
+  if (patch.staleness_ms.has) weights.staleness = static_cast<uint32_t>(patch.staleness_ms.val);
+}
+
 // packLine -- 4 raw grayscale channels (each already a single-byte I2C
 // read, line_sensor.cpp's own readRaw()) into one uint32, ch1 in the low
 // byte -- telemetry.proto's own `line` field layout.
@@ -99,8 +113,8 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
                       Devices::ColorSensorLeaf& color, Devices::LineSensorLeaf& line,
                       Comms& comms, Telemetry& tlm, Drive& drive,
                       Odometry& odom, MoveQueue& moveQueue, Preamble& preamble,
-                      const Devices::Clock& clock, Devices::Sleeper& sleeper,
-                      Config::TuningStore* tuningStore)
+                      StateEstimator& stateEstimator, const Devices::Clock& clock,
+                      Devices::Sleeper& sleeper, Config::TuningStore* tuningStore)
     : bus_(bus),
       motorL_(motorL),
       motorR_(motorR),
@@ -113,6 +127,7 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
       odom_(odom),
       moveQueue_(moveQueue),
       preamble_(preamble),
+      stateEstimator_(stateEstimator),
       clock_(clock),
       sleeper_(sleeper),
       tuningStore_(tuningStore) {}
@@ -250,6 +265,26 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
     applyOtosPatch(patch);
     mergeOtosPatch(persistedTuning_.otos, patch);
     persistTuningIfChanged();
+
+    tlm_.ack(env.corr_id, 0);
+    return;
+  }
+
+  // ESTIMATOR (117, ticket 003): App::StateEstimator's own live fusion-
+  // weight tuning arm. A pure in-memory update -- no I2C bus access, unlike
+  // the OTOS branch above -- so it needs neither a bus-ownership comment nor
+  // a persistTuningIfChanged() call: EstimatorConfigPatch is DELIBERATELY
+  // never persisted into persistedTuning_/flash (Design Rationale Decision
+  // 4, this sprint's overlay design/design.md) -- a reboot always reverts
+  // to the baked Config::defaultEstimatorConfig() default. Present-field
+  // merge onto a snapshot of the CURRENT live weights, mirroring
+  // applyMotorConfigPatch()/applyOtosPatch()'s own merge-then-apply shape.
+  if (env.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::ESTIMATOR) {
+    const msg::EstimatorConfigPatch& patch = env.cmd.config.patch.estimator;
+
+    FusionWeights weights = stateEstimator_.weights();
+    mergeEstimatorPatch(weights, patch);
+    stateEstimator_.setWeights(weights);
 
     tlm_.ack(env.corr_id, 0);
     return;
