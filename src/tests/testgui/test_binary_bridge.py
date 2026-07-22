@@ -31,8 +31,11 @@ independent, later changes it never saw:
    exactly ``{ok, err, tlm}`` (``id``/``echo``/``helptext`` no longer
    exist as fields at all — constructing ``reply.id``/``reply.echo`` now
    raises ``AttributeError``), and ``CommandEnvelope``'s ``cmd`` oneof is
-   down to ``{config, stop, twist}`` (``drive``/``segment``/``replace`` are
-   gone). ``render_log_line()``'s ``id``/``echo``/``helptext`` branches were
+   down to ``{config, stop, move}`` (``drive``/``segment``/``replace`` are
+   gone; 116-001's MOVE protocol cutover later swapped the interim
+   ``twist`` arm this note originally described for ``move`` — see
+   ``test_command_oneof_no_longer_has_drive_segment_replace``).
+   ``render_log_line()``'s ``id``/``echo``/``helptext`` branches were
    already unreachable for a second, independent reason even before
    accounting for (1) above (``render`` being ``None``): those oneof arms
    cannot be constructed any more, so nothing can ever set ``which`` to
@@ -90,8 +93,8 @@ class _FakeConn:
         self._reply_queue: list["envelope_pb2.ReplyEnvelope | None"] = []
         self._next_corr_id = 0
         # otos_config() uses send_envelope_fast() + wait_for_ack() (the
-        # SAME fire-and-poll shape twist()/stop()/config() use), NOT
-        # send_envelope() -- see NezhaProtocol.otos_config()'s own
+        # SAME fire-and-poll shape move_twist()/move_wheels()/stop()/
+        # config() use), NOT send_envelope() -- see NezhaProtocol.otos_config()'s own
         # docstring. ack_result scripts wait_for_ack()'s return value,
         # mirroring test_protocol_config.py's _FakeFastConn.
         self.ack_result: "object | None" = None
@@ -302,9 +305,11 @@ def test_command_oneof_no_longer_has_drive_segment_replace():
     # 109-003's `move` (CmdKind::MOVE) was itself DELETED (115-003, gut S1
     # motion-stack excision) -- field 20 is `reserved`, not an active oneof
     # arm any more (see envelope.proto's own CommandEnvelope header
-    # comment). S2's MOVE-protocol cutover reintroduces a `Move`-named arm
-    # at a FRESH number (21), never 20.
-    assert {f.name for f in fields} == {"config", "stop", "twist"}
+    # comment). 116-001's MOVE-protocol cutover reintroduced a `Move`-named
+    # arm at a FRESH number (21), never 20 -- and 116-001 also deleted the
+    # interim `twist` arm (field 19, 103-001) it supersedes, so the live
+    # `cmd` oneof is now `config`/`stop`/`move`.
+    assert {f.name for f in fields} == {"config", "stop", "move"}
 
 
 # ---------------------------------------------------------------------------
@@ -351,13 +356,14 @@ def test_ok_reply_renders_readable_text_not_raw_armor():
 def test_outbound_command_renders_readable_text_not_raw_armor():
     """``CommandEnvelope`` never had a ``legacy_render`` equivalent at all
     (that module renders replies, not requests) — always ``text_format``,
-    launch-unblock or not. Built from the ``twist`` oneof arm (``drive`` no
-    longer exists — see ``test_command_oneof_no_longer_has_drive_segment_
-    replace``)."""
+    launch-unblock or not. Built from the ``move`` oneof arm's ``twist``
+    velocity variant (``drive`` no longer exists, and the interim bare
+    ``twist`` arm is itself gone since 116-001 — see
+    ``test_command_oneof_no_longer_has_drive_segment_replace``)."""
     cmd = envelope_pb2.CommandEnvelope()
     cmd.corr_id = 9
-    cmd.twist.v_x = 200
-    cmd.twist.omega = -1.5
+    cmd.move.twist.v_x = 200
+    cmd.move.twist.omega = -1.5
     rendered = binary_bridge.render_log_line(_armor(cmd), outbound=True)
     assert rendered is not None
     assert not rendered.startswith("*B")

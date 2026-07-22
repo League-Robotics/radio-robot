@@ -36,17 +36,19 @@ directory is safe to call into just because it is not `planner/`,
 ## 2. Orientation
 
 One row per top-level directory. **Live** = calls only
-`twist`/`stop`/`config` (the current `CommandEnvelope` oneof —
-[`../../firm/DESIGN.md`](../../firm/DESIGN.md) §4) or has no firmware
+`move`/`stop`/`config` (the current `CommandEnvelope` oneof —
+[`../../firm/DESIGN.md`](../../firm/DESIGN.md) §4; `move_twist()`/
+`move_wheels()` are the host builders for the `move` arm, replacing the
+116-001-deleted `twist()` — see §5's `Exposes` bullet) or has no firmware
 wire dependency at all. **Dormant** = calls a firmware verb or message
-that no longer exists (a pre-102 text verb, a pre-115 `Move`/G-command/
-`SI`/`O*`-family binary or text verb) and would raise/return an error
-against the real robot today. **Mixed** = the directory contains both,
-file-by-file or even function-by-function.
+that no longer exists (a pre-102 text verb, a pre-116 bare `twist`/
+G-command/`SI`/`O*`-family binary or text verb) and would raise/return an
+error against the real robot today. **Mixed** = the directory contains
+both, file-by-file or even function-by-function.
 
 | Directory | Status | Notes |
 |---|---|---|
-| `robot/` | **Mixed** | `protocol.py`'s `NezhaProtocol` (the actual wire adapter) is live and current — its own docstring states the firmware "has no text-plane command parser at all." `connection.py` (port resolution, session cache) is live. `nezha.py`'s `Nezha` wrapper — what every entry point actually constructs — is mostly dead: only `stop()`/`set_config()`/`set_config_binary()` map onto surviving `NezhaProtocol` methods; `go_to()`, `turn()`, `speed*()`, `zero_encoders()`, `ping()`, `get_id()`, `get_config()`, `grip()`, `vw()`, `stream_tlm()`, `snap()`, OTOS scalar accessors, and `port_read/write*()` all call methods `NezhaProtocol` no longer has. `sync_pose.py` (builds a pruned `SI` text arm), `clock_sync.py` (`ping()`-based), and `_legacy_tlm_text.py` (an explicitly self-described frozen legacy parser) are dormant. `cutebot.py` is a separate hardware family (a different robot, different protocol), unaffected by the gut either way. |
+| `robot/` | **Mixed** | `protocol.py`'s `NezhaProtocol` (the actual wire adapter) is live and current — its own docstring states the firmware "has no text-plane command parser at all." 116-007 (MOVE protocol cutover): `move_twist()`/`move_wheels()` replace `twist()` (deleted — its wire arm, `Twist`, is `reserved`, not reused) as the live motion-command builders, alongside `stop()`/`config()`/`otos_config()`/`set_config()`/`set_config_binary()`. `connection.py` (port resolution, session cache) is live. `nezha.py`'s `Nezha` wrapper — what every entry point actually constructs — is mostly dead: only `stop()`/`set_config()`/`set_config_binary()` map onto surviving `NezhaProtocol` methods; `go_to()`, `turn()`, `speed*()`, `zero_encoders()`, `ping()`, `get_id()`, `get_config()`, `grip()`, `vw()`, `stream_tlm()`, `snap()`, OTOS scalar accessors, and `port_read/write*()` all call methods `NezhaProtocol` no longer has. `sync_pose.py` (builds a pruned `SI` text arm), `clock_sync.py` (`ping()`-based), and `_legacy_tlm_text.py` (an explicitly self-described frozen legacy parser) are dormant. `cutebot.py` is a separate hardware family (a different robot, different protocol), unaffected by the gut either way. |
 | `io/` | **Mixed** | `serial_conn.py` (transport), `repl.py`, `sim_config.py`, `sim_loop.py` are live and current — `repl.py`'s own docstring is explicitly post-gut-aware ("exactly three CommandEnvelope arms... every verb here maps onto one of those three"). `cli.py` (the `rogo` entry point) is split: `repl`/`stop`/`binary stop` subcommands are live; its legacy subcommands (`drive`, `turn`, `turnto`, `go`, `goto`, `rot`, `ang`, `port`, `pwm`, `grip`, `enc`, `opos`, `ez`, `line`, `color`, `pose`) route through the dead half of `nezha.py` and are broken today. `calibrate.py` drives raw text commands (`TN...`, `OA...`) — dormant. `robot_mcp.py` registers ~30 MCP tools; the majority (`go`, `goto`, `navigate_to`, `visit_tags`, `approach`, `follow_path`, `grab_at`, `release_at`, `plan_path`, `preview_path`, `otos_*`, `read_pose_fused`, `tune`, `reload_nav`, `reset_camera`) are built on the dormant `nav`/`path`/`sensors.otos` machinery; `connect`/`disconnect`/`status`/`stop`/`list_serial_ports`/`probe_devices` and the pure-camera tools are live — but `connect` unconditionally calls the dead `push_calibration()` text path on every connect (see `calibration/` row). `preview.py` is an explicit stub (unimplemented, not dormant). |
 | `config/` | **Live** | `robot_config.py` — pydantic loader for `data/robots/*.json`. Pure Python, no wire dependency, no imports from elsewhere in this package. |
 | `calibration/` | **Mixed** | `helpers.py` (pure scale-encoding math) is live as a library. `angular.py`/`linear.py` (extracted from the now-archived `host_scripts/calibrate_*.py`) use a raw-pyserial text handshake — dormant. `push.py`'s `push_calibration()` default code path sends literal `SET`/`OI`/`OL`/`OA` text lines — dead — but the SAME calibration data has a second, live route: its `calibration_kwargs()` helper feeds `NezhaProtocol.set_config()`/`otos_config()` (binary) directly, used by `io/sim_loop.py` and `testgui/binary_bridge.py`. `sim_boot_config.py`'s own docstring confirms 115-003 deleted its `PlannerConfig` half; `motor_boot_config_for()` is "the sole survivor." `fit_sim_error_model.py` is sim-only bench tooling reading the legacy text TLM parser through an explicitly-flagged exception path. |
@@ -138,8 +140,11 @@ live one first, not just deleting the dead function.
 ### Exposes
 
 - **`robot.protocol.NezhaProtocol`** — the live wire adapter:
-  `twist()`/`stop()`/`config()`/`otos_config()`/`set_config()`/
-  `set_config_binary()`, plus `send()`/`send_fast()`/`read_lines()`/
+  `move_twist()`/`move_wheels()`/`stop()`/`config()`/`otos_config()`/
+  `set_config()`/`set_config_binary()` (116-007: `move_twist()`/
+  `move_wheels()` replace the deleted `twist()` as the live motion-command
+  builders — the bounded `Move` arm's twist/wheels velocity variants),
+  plus `send()`/`send_fast()`/`read_lines()`/
   `wait_for_ack()`/`read_binary_tlm_frames()`/
   `read_pending_binary_tlm_frames()`. This is the authoritative host-side
   surface for the current firmware's `CommandEnvelope`/`ReplyEnvelope`

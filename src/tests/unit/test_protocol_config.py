@@ -22,6 +22,17 @@ application (a future ticket's scope) — so the ack-round-trip tests below
 script an ``ERR_UNIMPLEMENTED`` ack, matching today's real firmware
 behavior, not a hypothetical live-apply Ack.
 
+116-007 (MOVE protocol cutover): ``ConfigDelta.watchdog``/``sTimeout`` is
+DELETED (`App::Deadman` and the separate deadman-watchdog window it
+patched no longer exist — every ``Move`` is now self-bounding). The two
+watchdog-specific tests this file previously carried
+(``test_config_watchdog_key_builds_correct_envelope``,
+``test_config_spanning_drivetrain_and_watchdog_raises_value_error``) are
+DELETED; the two collateral tests that merely used ``sTimeout=`` as one of
+several kwargs (``test_config_each_call_gets_a_fresh_corr_id``,
+``test_config_invalid_call_sends_nothing``) are rewritten onto a
+still-valid key.
+
 Collected under ``src/tests/unit/`` — ``pyproject.toml``'s ``testpaths``
 includes ``tests/unit``, so ``uv run python -m pytest`` collects it by
 default.
@@ -183,25 +194,12 @@ def test_config_planner_key_is_now_unknown():
     assert conn.sent == []
 
 
-def test_config_watchdog_key_builds_correct_envelope():
-    conn = _FakeFastConn()
-    proto = NezhaProtocol(conn)
-
-    proto.config(sTimeout=1000)
-
-    sent = conn.sent[0]
-    expected = envelope_pb2.CommandEnvelope(
-        corr_id=1, config=envelope_pb2.ConfigDelta(watchdog=1000))
-    assert sent.SerializeToString() == expected.SerializeToString()
-    assert sent.config.WhichOneof("patch") == "watchdog"
-
-
 def test_config_each_call_gets_a_fresh_corr_id():
     conn = _FakeFastConn()
     proto = NezhaProtocol(conn)
 
     c1 = proto.config(tw=128.0)
-    c2 = proto.config(sTimeout=1000)
+    c2 = proto.config(ml=0.487)
     c3 = proto.config(rotSlip=0.5)
 
     assert [c1, c2, c3] == [1, 2, 3]
@@ -236,13 +234,6 @@ def test_config_spanning_two_targets_raises_value_error():
         proto.config(tw=128.0, **{"pid.kp": 1.5})
 
 
-def test_config_spanning_drivetrain_and_watchdog_raises_value_error():
-    proto = NezhaProtocol(_FakeFastConn())
-
-    with pytest.raises(ValueError):
-        proto.config(tw=128.0, sTimeout=1000)
-
-
 def test_config_invalid_call_sends_nothing():
     conn = _FakeFastConn()
     proto = NezhaProtocol(conn)
@@ -252,7 +243,7 @@ def test_config_invalid_call_sends_nothing():
     with pytest.raises(ValueError):
         proto.config(badkey=1)
     with pytest.raises(ValueError):
-        proto.config(tw=1.0, sTimeout=1)
+        proto.config(tw=1.0, **{"pid.kp": 1.0})
 
     assert conn.sent == []
 

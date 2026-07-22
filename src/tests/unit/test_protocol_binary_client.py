@@ -39,6 +39,22 @@ exercised EXCEPT ``config``/``stop``/``twist`` (cmd) and ``ok``/``err``/
   ``stream_drive()`` were deleted from ``protocol.py``; this whole section
   is DELETED along with them.
 
+116-007 (MOVE protocol cutover) disposition: ``twist`` (field 19) and
+``ConfigDelta.watchdog`` (field 4) are `reserved`, not reused — the
+schema-level ``move``/``config``/``stop`` oneof coverage this file's
+section 2 exercised for ``config``/``watchdog`` no longer applies to
+``watchdog`` at all (``ConfigDelta(watchdog=...)`` now raises
+``ValueError`` at the pb2 level, since the field is gone) —
+``test_set_config_binary_watchdog_arm``/``test_set_config_watchdog_key_
+sends_binary_and_returns_applied`` are DELETED, and the two collateral
+watchdog-adjacent tests (``test_set_config_binary_not_connected_returns_
+none``, ``test_set_config_spans_multiple_targets_sends_one_envelope_per_
+target``) are rewritten onto a non-watchdog ``ConfigDelta``/kwarg pair.
+``test_from_pb2_mode_mapping_matches_modechar``'s ``VELOCITY`` case
+(section 1) is updated: ``_DRIVE_MODE_CHAR`` now maps it to its own ``"V"``
+character instead of falling back to ``"I"`` (the 115-gate-noted decode
+gap, ``docs/bench-checklists/sprint-115-gut-s1.md``).
+
 Collected under ``src/tests/unit/`` (host-side unit/tooling check, not
 sim/bench/playfield-scoped — see ``tests/CLAUDE.md``); ``pyproject.toml``'s
 ``testpaths`` includes ``tests/unit`` so ``uv run python -m pytest`` collects
@@ -182,7 +198,7 @@ def test_from_pb2_bare_frame_decodes_zero_values_not_none():
         (telemetry_pb2.TIMED, "T"),
         (telemetry_pb2.DISTANCE, "D"),
         (telemetry_pb2.GO_TO, "G"),
-        (telemetry_pb2.VELOCITY, "I"),  # modeChar()'s own `default: return 'I';` case
+        (telemetry_pb2.VELOCITY, "V"),  # 116-007: own dedicated char, no longer falls back to "I"
     ],
 )
 def test_from_pb2_mode_mapping_matches_modechar(mode_value, expected_char):
@@ -341,25 +357,6 @@ def test_set_config_binary_round_trips_ack_and_builds_correct_envelope():
     assert sent.SerializeToString() == reference.SerializeToString()
 
 
-def test_set_config_binary_watchdog_arm():
-    """ConfigDelta's bare-uint32 `watchdog` oneof arm (sTimeout) -- a
-    different shape than the three message-typed Patch arms above."""
-    fake = _ConfigLoopbackSerial()
-    conn = SerialConnection()
-    conn._ser = fake
-    conn._start_reader()
-    try:
-        proto = NezhaProtocol(conn)
-        ack = proto.set_config_binary(envelope_pb2.ConfigDelta(watchdog=5000))
-    finally:
-        conn._stop_reader()
-
-    assert ack is not None
-    sent = fake.sent_envelopes[0]
-    assert sent.config.WhichOneof("patch") == "watchdog"
-    assert sent.config.watchdog == 5000
-
-
 def test_set_config_binary_returns_none_on_timeout():
     conn = SerialConnection()
     conn._ser = _NoReplySerial()
@@ -380,7 +377,9 @@ def test_set_config_binary_not_connected_returns_none():
     conn = SerialConnection()  # _ser stays None -- never connected
     proto = NezhaProtocol(conn)
 
-    ack = proto.set_config_binary(envelope_pb2.ConfigDelta(watchdog=1000), read_timeout=50)
+    ack = proto.set_config_binary(
+        envelope_pb2.ConfigDelta(drivetrain=config_pb2.DrivetrainConfigPatch(trackwidth=128.0)),
+        read_timeout=50)
 
     assert ack is None
 
@@ -425,17 +424,6 @@ def test_set_config_single_drivetrain_key_sends_binary_and_returns_applied():
     assert sent.SerializeToString() == reference.SerializeToString()
 
 
-def test_set_config_watchdog_key_sends_binary_and_returns_applied():
-    fake = _ConfigLoopbackSerial()
-    with _connected_proto(fake) as proto:
-        result = proto.set_config(sTimeout=500)
-
-    assert result == {"sTimeout": "500"}
-    sent = fake.sent_envelopes[0]
-    assert sent.config.WhichOneof("patch") == "watchdog"
-    assert sent.config.watchdog == 500
-
-
 def test_set_config_motor_pid_key_applies_once_on_left_envelope():
     """pid.* is applied to BOTH bound motors server-side from ONE patch
     (handleConfigMotor(), binary_channel.cpp) -- set_config() must send only
@@ -470,14 +458,17 @@ def test_set_config_ml_and_mr_together_sends_two_motor_envelopes():
 
 
 def test_set_config_spans_multiple_targets_sends_one_envelope_per_target():
+    """tw= (drivetrain) and pid.kp= (motor) are DIFFERENT ConfigDelta.patch
+    targets -- set_config() must fan them out into two round trips, one per
+    target (unlike config()'s stricter single-target-per-call contract)."""
     fake = _ConfigLoopbackSerial()
     with _connected_proto(fake) as proto:
-        result = proto.set_config(tw=128, sTimeout=500)
+        result = proto.set_config(tw=128, **{"pid.kp": 1.5})
 
-    assert result == {"tw": "128", "sTimeout": "500"}
+    assert result == {"tw": "128", "pid.kp": "1.5"}
     assert len(fake.sent_envelopes) == 2
     patches = {e.config.WhichOneof("patch") for e in fake.sent_envelopes}
-    assert patches == {"drivetrain", "watchdog"}
+    assert patches == {"drivetrain", "motor"}
 
 
 def test_set_config_unknown_key_returns_none_with_no_wire_traffic():
