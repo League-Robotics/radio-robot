@@ -1,7 +1,7 @@
 ---
 id: '116'
 title: MOVE protocol cutover
-status: planning-docs
+status: closed
 branch: sprint/116-move-protocol-cutover
 worktree: false
 use-cases: []
