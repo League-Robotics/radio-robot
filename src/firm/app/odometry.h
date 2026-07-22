@@ -68,13 +68,35 @@ class Odometry {
   // Accumulates x_/y_/theta_ via midpoint-arc integration (heading at
   // theta_ + headingDelta/2 -- the standard differential-drive
   // dead-reckoning update, needed because forward() itself only returns
-  // BODY-frame deltas, not a world-frame pose). Call once per loop cycle,
-  // after both leaves' own tick() has run that cycle.
+  // BODY-frame deltas, not a world-frame pose). Also accumulates
+  // fabsf(distance) into pathLength_ unconditionally, every call -- see
+  // pathLength()'s own doc comment. Call once per loop cycle, after both
+  // leaves' own tick() has run that cycle.
   void integrate();
 
   float x() const { return x_; }          // [mm]
   float y() const { return y_; }          // [mm]
   float theta() const { return theta_; }  // [rad]
+
+  // Cumulative |distance| accumulated across every integrate() call since
+  // construction -- an odometer, not a net-displacement value: forward
+  // travel and reverse travel over the same ground both add (116-003,
+  // Motion::StopCondition's DISTANCE kind baselines against a snapshot of
+  // this value at MOVE activation and diffs it against the current reading,
+  // so it must monotonically grow with path length regardless of direction
+  // reversals mid-move).
+  //
+  // reset()'s interaction: pathLength() is NOT zeroed by reset(). reset()
+  // re-anchors x_/y_/theta_ (and the delta baseline) to a caller-supplied
+  // pose snapshot -- a teleport, not a "trip odometer" request. Zeroing
+  // pathLength() on every reset() would be a surprising, undocumented side
+  // effect for a caller that never asked for it (e.g. the host simulator's
+  // teleport-to-origin), and StopCondition baselines against a pathLength()
+  // snapshot taken at MOVE activation regardless of when the odometer
+  // itself last reset -- it only ever needs the DELTA since that snapshot,
+  // never an absolute zero. If a future caller needs a zeroed trip odometer,
+  // that is a distinct method, not an implicit reset() side effect.
+  float pathLength() const { return pathLength_; }  // [mm]
 
   // Snap the dead-reckoned pose to (x, y, theta) and RE-ANCHOR the delta
   // baseline to each leaf's CURRENT position(), so the next integrate() sees
@@ -83,7 +105,8 @@ class Odometry {
   // exists yet -- see DESIGN.md §6); it is exercised today by the host
   // simulator's teleport-to-origin (tests/_infra/sim/sim_harness.h
   // SimHarness::setTruePose()). Additive: no existing caller's behaviour
-  // changes unless it calls reset().
+  // changes unless it calls reset(). Does NOT touch pathLength() -- see
+  // that accessor's own doc comment above.
   void reset(float x, float y, float theta);  // [mm] [mm] [rad]
 
  private:
@@ -97,6 +120,8 @@ class Odometry {
   float x_ = 0.0f;      // [mm]
   float y_ = 0.0f;      // [mm]
   float theta_ = 0.0f;  // [rad]
+
+  float pathLength_ = 0.0f;  // [mm] cumulative |distance| -- see pathLength()
 };
 
 // applyOtosSample() -- the minimal OTOS-only perception step (see file
