@@ -1,9 +1,13 @@
 ---
 id: '007'
 title: Host protocol.py + state adapter rework for the new telemetry frame
-status: open
-use-cases: [SUC-047, SUC-048, SUC-049]
-depends-on: ["006"]
+status: in-progress
+use-cases:
+- SUC-047
+- SUC-048
+- SUC-049
+depends-on:
+- '006'
 github-issue: ''
 issue: telemetry-frame-tightening-amendment-to-gut-s1.md
 completes_issue: true
