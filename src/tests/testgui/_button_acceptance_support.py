@@ -36,6 +36,27 @@ that fixed lag makes the SHORTEST preset (100mm / 90deg) look like a wild
 percentage. The abs_margin term absorbs the fixed lag; rel_tol absorbs the
 residual proportional error. See ``test_gui_button_acceptance.py``'s own
 module-level tolerance constants for the concrete numbers per path.
+
+Turn-prediction campaign (2026-07-22, ``App::MoveQueue``'s new stop-
+condition anticipation lead, ``move_queue.h``): ``MANAGED_ANGLE_ABS_MARGIN_DEG``/
+``MANAGED_DIST_ABS_MARGIN_MM`` below are DELIBERATELY left UNCHANGED by
+this campaign, even though ``test_tour_closure_gate.py``'s own sweep
+(against the SAME managed Move-queue path, with the fix pushed live via
+``EstimatorConfigPatch``) shows the fixed lag above shrinking from
+~13-23deg to ~4-7deg at ``stop_lead_ms=90``. The GUI's own connect-time
+calibration push (``__main__.py``'s ``_push_robot_calibration()``) does
+NOT yet source ``estimator.stop_lead_ms`` from the robot JSON --
+``robot_radio.config.robot_config.RobotConfig`` has no ``estimator`` field
+at all today (nothing host-side reads that JSON section; only
+``gen_boot_config.py`` does, at ARM build time) -- so a live TestGUI Sim
+session (this suite's own connect path) still runs with
+``App::MoveQueue::stopLead_ == 0`` (anticipation OFF), identically to
+before this campaign. Tightening these two constants without ALSO wiring
+that push would silently claim an accuracy improvement this suite does not
+actually exercise. Wiring the GUI's own live push is tracked as a
+follow-up (see ``clasi/issues/`` for this campaign's own tracking entry) --
+out of this campaign's own scope (real hardware needs no such wiring at
+all: it gets the fix from boot config, unconditionally, on every reboot).
 """
 from __future__ import annotations
 

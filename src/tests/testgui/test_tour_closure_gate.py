@@ -110,6 +110,19 @@ _CLOSURE_POSITION_MAX_MM = 600.0     # matches test_sim_transport_tour1.py's own
 _BOUNDARY_MIN_FRACTION = 0.9          # matches boundary_velocity_harness.cpp's own
                                       # "vMax*0.9" no-dip bound (SUC-003's own acceptance wording)
 
+# turn-prediction campaign: App::MoveQueue's own stop-condition anticipation
+# lead, pushed live via EstimatorConfigPatch (_make_loop() below) -- matches
+# data/robots/tovez_nocal.json's own EMPIRICALLY-TUNED stop_lead_ms default
+# (see that JSON's own inline note for the full derivation: a first-pass
+# RMS-based heuristic in turn_prediction.ipynb suggested ~200ms, but a
+# closed-loop sweep against the real firmware -- run directly in THIS file,
+# see the git history around this constant -- found 200ms overcorrects
+# (undershoots); 75-110ms measures a flat, near-zero-error plateau, 90.0
+# picked mid-plateau). SimHarness itself leaves stopLead at 0 (anticipation
+# OFF) unless explicitly pushed -- see move_queue.h's own "sim/production
+# boundary" precedent for FusionWeights, extended here.
+_STOP_LEAD_MS = 90.0
+
 
 def _compensating_register(raw_error: float) -> float:
     """Same conversion ``push.py``'s ``scale_to_int8()``/``Devices::Otos::
@@ -174,9 +187,10 @@ def _make_stepper(loop, clock: "_SteppedClock"):
     return _step
 
 
-def _make_loop(*, realistic_errors: bool, deterministic: bool = True):
+def _make_loop(*, realistic_errors: bool, deterministic: bool = True, stop_lead_ms: "float | None" = _STOP_LEAD_MS):
     from robot_radio.config.robot_config import load_robot_config
     from robot_radio.io.sim_loop import SimLoop
+    from robot_radio.robot.protocol import NezhaProtocol
 
     lib_path = _sim_lib_path()
     loop = SimLoop(track_width=_TRACK_WIDTH, lib_path=lib_path)
@@ -186,6 +200,23 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True):
     # 114-006: configure BEFORE the ideal/realistic fidelity knobs below --
     # see _ACTIVE_ROBOT_JSON's own comment for why this call is now required.
     loop.configure_from_robot(load_robot_config(_ACTIVE_ROBOT_JSON))
+
+    # turn-prediction campaign: push App::MoveQueue's own live stop_lead
+    # via the SAME EstimatorConfigPatch wire path OtosConfigPatch already
+    # uses below -- SimHarness itself deliberately leaves stopLead at its
+    # own constructor default (0, anticipation OFF; see sim_harness.h's own
+    # "sim/production boundary" comment), so a Sim-backed test that wants
+    # the fix active must push it explicitly, exactly like the OTOS
+    # calibration push a few lines down. `stop_lead_ms=None` skips this
+    # (pre-fix baseline measurement).
+    if stop_lead_ms is not None:
+        conn = _SimConfigConn(loop)
+        proto = NezhaProtocol(conn)  # type: ignore[arg-type]
+        corr_id = proto.estimator_config(stop_lead_ms=stop_lead_ms)
+        ack = _wait_for_ack(loop, corr_id, deterministic=deterministic)
+        assert ack is not None and ack.ok, (
+            f"EstimatorConfigPatch stop_lead_ms push failed to ack: {ack}"
+        )
 
     if not realistic_errors:
         # Ideal chip: every knob explicit at its documented no-op default,
@@ -211,8 +242,6 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True):
     # Calibrate OUT the raw OTOS scale error via the real OtosConfigPatch
     # wire path -- see this file's own module docstring for why an
     # uncalibrated OTOS is out of scope for this gate.
-    from robot_radio.robot.protocol import NezhaProtocol
-
     conn = _SimConfigConn(loop)
     proto = NezhaProtocol(conn)  # type: ignore[arg-type]
     corr_id = proto.otos_config(
@@ -227,20 +256,31 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True):
 
 
 def _wait_for_ack(loop, corr_id: int, timeout: float = 3.0, *, deterministic: bool = True):
+    """Poll for a fresh ack matching `corr_id`.
+
+    BUGFIX (turn-prediction campaign): both branches used to read
+    `frame.acks` (plural) -- the pre-115-003 depth-3 ack ring, which
+    `TLMFrame` no longer has (`AttributeError`, discovered when this
+    function became load-bearing for this campaign's own EstimatorConfigPatch
+    push below -- previously the ONLY caller was the realistic-errors
+    branch's OTOS push, and every test reaching it is `xfail(strict=False)`,
+    which silently swallows ANY exception, not just AssertionError, masking
+    this outright). `TLMFrame` carries a SINGLE ack slot instead
+    (`frame.ack`, an `AckEntry | None`, populated only when `ack_fresh` was
+    set that frame) -- see `protocol.py`'s own `TLMFrame` doc comment.
+    """
     if deterministic:
         for _ in range(400):  # 400 cycles * 50ms = 20s virtual time -- generously bounded
             loop.step(1)
             for frame in loop.drain_pending_tlm():
-                for ack in frame.acks:
-                    if ack.corr_id == corr_id:
-                        return ack
+                if frame.ack is not None and frame.ack.corr_id == corr_id:
+                    return frame.ack
         return None
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         for frame in loop.read_pending_binary_tlm_frames():
-            for ack in frame.acks:
-                if ack.corr_id == corr_id:
-                    return ack
+            if frame.ack is not None and frame.ack.corr_id == corr_id:
+                return frame.ack
         time.sleep(0.02)
     return None
 
@@ -427,7 +467,41 @@ _XFAIL_REASON_IDEAL = (
     "configure_from_robot() against tovez_nocal.json, why: config-as-truth "
     "completion, ticket 001-003 removed the fallback): re-measured worst miss "
     "~1.09deg (TOUR_1/TOUR_2 turn 2), still inside the range above -- same gap, "
-    "confirmed to persist under the actually-configured plant, not caused by it."
+    "confirmed to persist under the actually-configured plant, not caused by it.\n"
+    "\n"
+    "turn-prediction campaign re-baseline (this ticket 010's own actual "
+    "arrival): _make_loop() now ALSO pushes App::MoveQueue's own new "
+    "stop-condition anticipation lead (EstimatorConfigPatch stop_lead_ms, "
+    "see _STOP_LEAD_MS's own comment for the empirical derivation) via a "
+    "real firmware CONFIG push -- this is that predicted-forward-stop "
+    "mechanism state_estimator.h's own file header always named as "
+    "'a later, out-of-this-sprint trajectory controller'. Two findings: "
+    "(1) WITH stop_lead_ms=0/unset (anticipation off), worst ideal-chip "
+    "miss now measures ~21.3deg (TOUR_1)/~13.6deg (TOUR_2), mean "
+    "~+17.5deg -- MUCH larger than the ~0.4-2.2deg this xfail reason "
+    "previously recorded, and consistent instead with the established, "
+    "independently-derived diagnosis this whole campaign is built on "
+    "(~+20.6deg overshoot at omega=2rad/s, "
+    "clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md). This "
+    "campaign's own sim_loop.py fix (SimLoop.move()'s corr_id/move_id "
+    "aliasing -- see that method's own doc comment) closed a bug where a "
+    "leg's own completion wait (_wait_for_move_terminal(), planner.tour) "
+    "could match that SAME leg's own near-instant ENQUEUE ack instead of "
+    "its real completion; this file's OWN _wait_for_ack() had an "
+    "independent instance of a related bug (frame.acks -- plural, the "
+    "deleted depth-3 ack ring -- vs the current single frame.ack), also "
+    "fixed this campaign. Not re-proven further here (out of this "
+    "campaign's own time budget), but flagged plainly: the PREVIOUS "
+    "~0.4-2.2deg number should not be trusted as this gate's true prior "
+    "baseline -- (2) WITH the anticipation lead ON (stop_lead_ms=90.0), "
+    "worst ideal-chip miss drops to ~4.68deg (TOUR_2)/~4.20deg (TOUR_1), "
+    "mean ~+0.7 to +2.0deg -- a large, real improvement over the "
+    "anticipation-off baseline in EITHER reading of it, still well short "
+    "of the stakeholder's own stated <0.05deg 'exact' bar, so this xfail "
+    "stays open. Residual mechanism unchanged from the original argument "
+    "(Otos::kReadPeriod's own read-rate limit) plus whatever the "
+    "anticipation lead's own first-order (held-omega ZOH) approximation "
+    "still misses -- not further decomposed this campaign."
 )
 
 _XFAIL_REASON_REALISTIC = (
@@ -444,7 +518,21 @@ _XFAIL_REASON_REALISTIC = (
     "~1.46deg (TOUR_1 turn 8); TOUR_2's own leg 14 is no longer the outlier "
     "(now -1.22deg) -- the worst-turn identity shifted with the configured plant's "
     "dynamics but stayed in the same ~1-1.5deg band, same mechanism, not a new "
-    "regression."
+    "regression.\n"
+    "\n"
+    "turn-prediction campaign re-baseline: see the ideal-chip xfail's own "
+    "matching paragraph for the full mechanism (SimLoop.move() corr_id/"
+    "move_id-aliasing fix + this file's own frame.acks->frame.ack bugfix "
+    "likely corrupted the PREVIOUS ~1-1.5deg baseline; flagged, not "
+    "further re-proven). WITH the anticipation lead ON (stop_lead_ms=90.0, "
+    "same value/derivation as the ideal-chip gate): worst realistic-"
+    "profile miss now measures ~5.46deg (TOUR_1)/~6.90deg (TOUR_2), mean "
+    "~+0.5 to +0.7deg -- still short of the stakeholder's own stated "
+    "1.0deg bar, so this xfail stays open; sensor-error-injection noise "
+    "(OTOS/encoder scale/tick-quant/slip, this file's own _OTOS_*/_ENC_* "
+    "constants) compounds with the anticipation lead's own residual "
+    "(ideal-chip xfail's own ~4.2-4.7deg) roughly additively, consistent "
+    "with two independent error sources rather than a new one."
 )
 
 
