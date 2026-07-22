@@ -15,6 +15,7 @@ enum class ConfigTarget : uint8_t {
     CONFIG_PLANNER = 3,
     CONFIG_WATCHDOG = 4,
     CONFIG_OTOS = 5,
+    CONFIG_ESTIMATOR = 6,
 };
 
 enum class BoundMotorSide : uint8_t {
@@ -57,6 +58,15 @@ struct OtosConfigPatch {
     Opt<float> offset_y = {};
     Opt<float> offset_yaw = {};
     bool init = false;
+
+    // --- array / optional-string accessors ---
+};
+
+// EstimatorConfigPatch
+struct EstimatorConfigPatch {
+    Opt<float> weight_heading_otos = {};
+    Opt<float> weight_omega_otos = {};
+    Opt<float> staleness_ms = {};
 
     // --- array / optional-string accessors ---
 };

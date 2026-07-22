@@ -96,4 +96,20 @@ OtosBootConfig defaultOtosBootConfig() {
     return cfg;
 }
 
+EstimatorBootConfig defaultEstimatorConfig() {
+    // 117 (predict-to-now estimator v1) — fail-closed baked from the robot
+    // JSON's estimator.weight_heading_otos/weight_omega_otos/staleness_ms
+    // (data/robots/robot_config.schema.json). Encoder-only v1 (stakeholder
+    // decision): both blend weights are committed 0.0 in every robot JSON
+    // this sprint -- see that JSON's own inline comment for the
+    // staleness_ms reasoning. NOT a live SET/wire surface itself -- see
+    // EstimatorBootConfig's own doc comment (src/firm/config/boot_config.h)
+    // for the separate, volatile EstimatorConfigPatch live-tuning path.
+    EstimatorBootConfig cfg;
+    cfg.headingOtos = 0.0f;
+    cfg.omegaOtos = 0.0f;
+    cfg.staleness = 60u;   // [ms]
+    return cfg;
+}
+
 }  // namespace Config

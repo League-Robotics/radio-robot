@@ -58,6 +58,9 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "drive.cpp",
     _SOURCE_DIR / "app" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
+    # 117 ticket 003: App::StateEstimator, threaded through RobotLoop's/
+    # SimHarness's own constructors alongside moveQueue/preamble.
+    _SOURCE_DIR / "app" / "state_estimator.cpp",
 ]
 _MOTION_SOURCES = [
     _SOURCE_DIR / "motion" / "stop_condition.cpp",

@@ -107,5 +107,11 @@
     "v_body_max": 1000.0,
     "j_max": 5000.0,
     "yaw_jerk_max": 100.0
+  },
+  "estimator": {
+    "_estimator_note": "117 (predict-to-now estimator v1): weight_heading_otos/weight_omega_otos committed 0.0 -- stakeholder's encoder-only-v1 decision, OTOS fusion is wired but not yet trusted with any nonzero weight. staleness_ms=60.0 is 3x Devices::Otos::kReadPeriod (20ms): generous headroom over the OTOS chip's own read cadence, small enough to exclude a genuinely stale reading before the next cycle's fresh one arrives.",
+    "weight_heading_otos": 0.0,
+    "weight_omega_otos": 0.0,
+    "staleness_ms": 60.0
   }
 }

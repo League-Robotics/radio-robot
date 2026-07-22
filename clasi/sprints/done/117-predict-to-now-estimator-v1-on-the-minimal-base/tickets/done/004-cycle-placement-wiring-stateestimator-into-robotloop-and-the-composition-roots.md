@@ -1,7 +1,8 @@
 ---
 id: '004'
-title: "Cycle placement wiring — StateEstimator into RobotLoop and the composition roots"
-status: open
+title: "Cycle placement wiring \u2014 StateEstimator into RobotLoop and the composition\
+  \ roots"
+status: done
 use-cases:
 - SUC-059
 depends-on:
@@ -36,28 +37,51 @@ new bus transaction, no new `runAndWait`/`sleepUntil`.
 
 ## Acceptance Criteria
 
-- [ ] `RobotLoop`'s constructor gains a `StateEstimator&` parameter
+- [x] `RobotLoop`'s constructor gains a `StateEstimator&` parameter
       (mirrors how `MoveQueue&`/`Preamble&` etc. are already threaded
       through); `main.cpp` and `src/sim/sim_harness.h` each construct one
       `StateEstimator` instance from `Config::defaultEstimatorConfig()`
       and pass it in.
-- [ ] `RobotLoop::cycle()`'s trailing `kPace` block calls
+      **Implementation note (deliberate, narrow deviation from the literal
+      text above):** `main.cpp` does exactly this (`toFusionWeights(Config::
+      defaultEstimatorConfig())`). `src/sim/sim_harness.h` does NOT call
+      `Config::defaultEstimatorConfig()` — doing so would require linking
+      the GENERATED `config/boot_config.cpp` into the sim graph, which
+      `src/sim/CMakeLists.txt`'s own "Absent (deliberately)" note excludes
+      on purpose ("bakes in the ACTIVE ROBOT JSON at ARM build time; not
+      part of the sim graph") — confirmed by trial: adding the call broke
+      `just build-sim`'s real `libfirmware_host.dylib` link
+      (`Config::defaultEstimatorConfig()` unresolved) until reverted.
+      `SimHarness` instead default-constructs its `StateEstimator`
+      (`FusionWeights{}`), which is behaviorally IDENTICAL to every robot
+      JSON's committed `estimator.weight_heading_otos`/
+      `weight_omega_otos` (both `0.0`) this sprint — only `staleness`
+      differs (200ms default vs. each JSON's 60ms), and `staleness` is
+      inert while both blend weights are zero. A new `SimHarness::
+      stateEstimator()` accessor lets a test override this directly
+      (`setWeights(...)`) the same way `configureMotor()` already
+      overrides the default motor config, rather than reading boot config.
+      Verified: `just build-sim` (the real CMake shared library) links
+      cleanly with this shape; reverted once, confirmed broken, reverted
+      back. See `src/sim/sim_harness.h`'s own constructor-initializer-list
+      comment for the full reasoning.
+- [x] `RobotLoop::cycle()`'s trailing `kPace` block calls
       `stateEstimator_.update(frame_, nowUs)` immediately after
       `frame_.pose = {odom_.x(), odom_.y(), odom_.theta()};` and before
       `updateLineColor(nowUs)`.
-- [ ] `grep 'runAndWait\|sleepUntil' src/firm/app/robot_loop.cpp` is
+- [x] `grep 'runAndWait\|sleepUntil' src/firm/app/robot_loop.cpp` is
       byte-for-byte unchanged by this ticket — confirms no new wait was
       introduced.
-- [ ] A sim/unit test on `App::RobotLoop` (extending
+- [x] A sim/unit test on `App::RobotLoop` (extending
       `app_robot_loop_harness.cpp`/`test_app_robot_loop.py`) asserts that
       after several cycles of motion, `stateEstimator_`'s wheel and body
       estimates are `valid = true` and track the commanded motion in the
       expected direction/magnitude.
-- [ ] A bench-comparable timing check (measured the same way existing
+- [x] A bench-comparable timing check (measured the same way existing
       cycle-timing assertions in this test suite are measured) shows no
       regression in encoder-tracking-vs-commanded-speed accuracy
       attributable to the estimator's addition to the schedule.
-- [ ] `RobotLoop::handleConfig()`'s `PatchKind::ESTIMATOR` branch (ticket
+- [x] `RobotLoop::handleConfig()`'s `PatchKind::ESTIMATOR` branch (ticket
       003) is confirmed to reach the SAME `stateEstimator_` instance this
       ticket wires in (i.e. ticket 003's branch and this ticket's
       construction/wiring agree on one shared instance, not two).

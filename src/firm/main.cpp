@@ -12,6 +12,7 @@
 #include "app/odometry.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
+#include "app/state_estimator.h"
 #include "app/telemetry.h"
 #include "com/radio.h"
 #include "com/serial_port.h"
@@ -68,6 +69,22 @@ Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
   cfg.outputDeadband = src.output_deadband.val;
   cfg.polled = src.polled;
   return cfg;
+}
+
+// toFusionWeights (117 ticket 004) -- converts the boot config's
+// Config::EstimatorBootConfig into the app-local App::FusionWeights
+// StateEstimator's constructor needs. Lives here for the SAME reason
+// toDeviceMotorConfig() above does: main.cpp is the one place both types
+// are reachable -- config/ may depend only on messages/ (docs/design/
+// design.md §5's dependency diagram), never on app/, so
+// EstimatorBootConfig and FusionWeights stay independently declared and
+// meet only at this composition root.
+App::FusionWeights toFusionWeights(const Config::EstimatorBootConfig& src) {
+  App::FusionWeights weights;
+  weights.headingOtos = src.headingOtos;
+  weights.omegaOtos = src.omegaOtos;
+  weights.staleness = src.staleness;
+  return weights;
 }
 
 }  // namespace
@@ -143,6 +160,11 @@ int main() {
   // move_queue.h's own boundary comment: "no new dependency direction").
   static App::MoveQueue moveQueue(drive, odom, clock);
   static App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  // 117 ticket 004: RobotLoop's own StateEstimator& is threaded through
+  // here (mirrors moveQueue/preamble above), constructed from the same
+  // fail-closed baked boot config every other Config::default*() call
+  // above uses -- Config::defaultEstimatorConfig() (ticket 003).
+  static App::StateEstimator stateEstimator(toFusionWeights(Config::defaultEstimatorConfig()));
 
   // 114-004 (SUC-003): the real ARM-only MicroBitStorage-backed persistence
   // adapter. Declared BEFORE robotLoop below -- RobotLoop only ever holds a
@@ -156,7 +178,7 @@ int main() {
   // persisted-tuning store. run() never returns.
   static App::RobotLoop robotLoop(bus, motorL, motorR, otos, color, line,
                                    comms, tlm, drive, odom, moveQueue, preamble,
-                                   clock, sleeper, &tuningStore);
+                                   stateEstimator, clock, sleeper, &tuningStore);
   // Configuration-completeness gate (114-001): the boot-configure sequence
   // above (every Config::default*() call) is atomic and always complete by
   // this point on real firmware -- this call is unconditional and always

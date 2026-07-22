@@ -150,7 +150,15 @@ firmware runtime; the device itself never sees protobuf. It also emits
   frame despite carrying strictly more signal; untouched by this ticket,
   which only edits `CommandEnvelope`'s `cmd` oneof and `ConfigDelta`'s
   `patch` oneof — see `wire.h`'s own generated size-report comment), and
-  `TelemetrySecondary` is 52B (also untouched).
+  `TelemetrySecondary` is 52B (also untouched). **117 ticket 003** added
+  `ConfigDelta.estimator` (`EstimatorConfigPatch estimator = 6`, the next
+  free number after `reserved 3, 4` and `otos = 5`) plus
+  `ConfigTarget.CONFIG_ESTIMATOR = 6` (`config.proto`) — `EstimatorConfigPatch`
+  carries 3 optional floats (`weight_heading_otos`/`weight_omega_otos`/
+  `staleness_ms`), smaller than `DrivetrainConfigPatch`'s 8, so `ConfigDelta`'s
+  own worst-case arm (and therefore `CommandEnvelope`'s `config`=44B and its
+  50B total) is **unchanged** — re-measured against the regenerated
+  `wire.h`'s size-report comment, not assumed.
 - **A `(max)`/`(abs_max)` bound now narrows a VARINT field's worst-case wire
   width, not just a `float` field's semantic range** (109-003 —
   `gen_messages.py`'s `_worst_case_scalar_size()`; previously this docstring

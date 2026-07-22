@@ -1,7 +1,8 @@
 ---
 id: '005'
-title: "Sim system scenario — StateEstimator tracks SimPlant truth across varied MOVE patterns"
-status: open
+title: "Sim system scenario \u2014 StateEstimator tracks SimPlant truth across varied\
+  \ MOVE patterns"
+status: done
 use-cases:
 - SUC-060
 depends-on:
@@ -38,25 +39,64 @@ so in this ticket's own completion notes rather than forcing it.
 
 ## Acceptance Criteria
 
-- [ ] `src/tests/sim/system/test_state_estimator_tracking.py` (+ a new
+- [x] `src/tests/sim/system/test_state_estimator_tracking.py` (+ a new
       `*_harness.cpp` if the existing `SimApi`/`sim_api_harness.cpp`
       surface doesn't already expose what's needed) drives the full
       pattern set (steady, ramp, reversal, pivot; both directions;
       straights and turns) through `SimApi`/`SimPlant`.
-- [ ] At each step (or a documented sampling cadence), `StateEstimator::
+- [x] At each step (or a documented sampling cadence), `StateEstimator::
       whereAmI()`/`wheelNow()`/`wheelAt()`/`bodyAt()` predictions are
       compared against `SimPlant`'s own ground-truth wheel/body state;
       error stays within a documented, justified tolerance for every
       pattern phase.
-- [ ] The test explicitly reports (not silently passes/fails) which
+- [x] The test explicitly reports (not silently passes/fails) which
       pattern phases showed the largest tracking error, as input to
       ticket 007's RMS notebook's own phase breakdown.
-- [ ] (Stretch — optional) a throwaway host-build replay harness
+- [x] (Stretch — optional) a throwaway host-build replay harness
       cross-checks the firmware estimator's own output against ticket
       006's Python `one_step_ahead.py` reference on the same input
       sequence, to float noise. If skipped, this ticket's completion
       notes state why (e.g. "would require a new `sim_ctypes.cpp` export,
       not cheap — deferred").
+
+## Completion Notes (2026-07-22)
+
+- `src/tests/sim/system/state_estimator_tracking_harness.cpp` +
+  `test_state_estimator_tracking.py` (mirrors `move_protocol_harness.cpp`'s
+  own shape) drive `TestSim::SimHarness` (the REAL `App::RobotLoop` +
+  wired-in `App::StateEstimator`, ticket 004) through 7 pattern phases:
+  `forward_ramp`/`forward_steady`, `reversal_transient`/`steady_reverse`,
+  `pivot_ramp`/`pivot_steady`, and `chained_steps` (4 chained moves, both
+  directions, straight + turn).
+- Every cycle of every phase, the harness makes a genuine one-cycle-ahead
+  (`SimHarness::kCycleDtUs` = 50ms) `StateEstimator::wheelAt()`/`bodyAt()`
+  prediction (exercising the actual ZOH extrapolation math, not just
+  `wheelNow()`/`whereAmI()` at age zero), then checks it against
+  `TestSim::SimPlant`'s own ground truth (`WheelPlant::position()`/
+  `velocity()`, `SimHarness::trueX()`/`trueY()`/`trueHeading()`) once that
+  next cycle has actually run. Per-phase tolerances were derived
+  empirically (see the harness's own per-`runPhase()` comments) and keep
+  >2x margin over the observed worst case in every phase.
+- AC #3: the harness prints a `REPORT:` section ranking phases by max
+  one-cycle-ahead wheel-distance error and by max body-position error.
+  Observed worst phase (this run): `reversal_transient` (~7.0mm), closely
+  followed by `forward_ramp` (~6.8mm) — both still-transient (inside
+  `TestSim::kDefaultTau`'s ~130ms settle window) phases, as expected for a
+  held-constant-velocity ZOH assumption. Steady-state phases all measured
+  well under 0.2mm / 0.002rad.
+- AC #4 (stretch replay harness): SKIPPED. See the harness's own file
+  header for the full rationale — cross-checking the wired-in estimator's
+  C++ output against ticket 006's Python `one_step_ahead.py` reference
+  would need a new `sim_ctypes.cpp` export (or an ad hoc bridge invented
+  from scratch) to hand a Python process this binary's own in-process
+  per-cycle Frame stream; not "cheap" per the ticket's own qualifier.
+  Ticket 006's `test_one_step_ahead.py` already unit-tests the Python
+  reference against the same documented ZOH formula (matching ticket 002's
+  C++ source on hand-computed fixtures), covering the "same math" concern
+  this stretch item was after; this ticket's own job (proving the WIRING)
+  is a different, already-covered concern.
+- No production/`src/firm/` code changed — test-only ticket, per the
+  ticket's own Implementation Plan.
 
 ## Implementation Plan
 

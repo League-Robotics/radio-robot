@@ -44,6 +44,15 @@ directly against that file -- ``otos_boot_config_values()``,
 ``vel_gains_for_config()``, ``output_deadband_for_config()``,
 ``reversal_dwell_for_config()``, ``trackwidth_for_config()``).
 
+ADDED (sprint 117 ticket 003, "fail-closed estimator fusion-weight
+config"): ``estimator.weight_heading_otos``/``weight_omega_otos``/
+``staleness_ms`` join ``_REQUIRED_KEY_PATHS`` below the same way
+``control.output_deadband``/``control.reversal_dwell_ms`` did in sprint
+114 ticket 003 -- ``gen_boot_config.py``'s new
+``estimator_config_for_config()`` reads all three via ``_require()``, no
+source-side fallback, mirroring `App::StateEstimator`'s own fail-closed
+boot-config precedent.
+
 The "value-preserving migration, verified by diff against a pre-ticket
 golden snapshot" section this file used to carry (``fixtures/
 boot_config_golden_*.cpp`` + ``test_boot_config_cpp_byte_identical_to_pre_
@@ -118,6 +127,9 @@ _REQUIRED_KEY_PATHS = [
     ("geometry", "odometry_offset_mm", "yaw_rad"),
     ("calibration", "otos_linear_scale"),
     ("calibration", "otos_angular_scale"),
+    ("estimator", "weight_heading_otos"),
+    ("estimator", "weight_omega_otos"),
+    ("estimator", "staleness_ms"),
 ]
 
 

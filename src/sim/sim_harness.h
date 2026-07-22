@@ -95,6 +95,7 @@
 #include "app/odometry.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
+#include "app/state_estimator.h"
 #include "app/telemetry.h"
 #include "devices/color_sensor.h"
 #include "devices/device_config.h"
@@ -139,8 +140,31 @@ class SimHarness {
         odom_(armorL_, armorR_, trackWidth),
         moveQueue_(drive_, odom_, clock_),
         preamble_(armorL_, armorR_, otos_, color_, line_, clock_),
+        // 117 ticket 004: App::StateEstimator, threaded through exactly
+        // like moveQueue_/preamble_ above -- deliberately DEFAULT-
+        // constructed rather than sourced from Config::
+        // defaultEstimatorConfig() the way main.cpp's own construction is
+        // (see that function's own header comment). Config::
+        // defaultEstimatorConfig() lives in the GENERATED config/
+        // boot_config.cpp, which src/sim/CMakeLists.txt's own "Absent
+        // (deliberately)" note excludes from the sim graph on purpose
+        // ("bakes in the ACTIVE ROBOT JSON at ARM build time; not part of
+        // the sim graph") -- pulling it in here would reintroduce that
+        // dependency for every SimHarness-based test/TestGUI session,
+        // coupling sim behavior to whichever robot happens to be
+        // data/robots/active_robot.json on a given checkout. Behaviorally
+        // equivalent this sprint regardless: FusionWeights{}'s own default
+        // (headingOtos=omegaOtos=0.0) matches every robot JSON's committed
+        // estimator.weight_heading_otos/weight_omega_otos value exactly
+        // (encoder-only v1); only `staleness` differs (200ms default vs.
+        // each JSON's 60ms), and staleness is inert while both blend
+        // weights are zero. A SimHarness-based test that specifically
+        // needs non-default weights calls stateEstimator().setWeights()
+        // directly, the same way a test needing non-default motor gains
+        // already calls configureMotor() rather than reading boot config.
         robotLoop_(plant_, armorL_, armorR_, otos_, color_, line_, comms_, tlm_,
-                   drive_, odom_, moveQueue_, preamble_, clock_, sleeper_) {
+                   drive_, odom_, moveQueue_, preamble_, stateEstimator_, clock_,
+                   sleeper_) {
     // 115-006 (gut S1 sim lockstep): no self-configuration here -- motorL_/
     // motorR_ are left at their own default-constructed Devices::MotorConfig{}
     // all-zero fields, exactly matching a real, not-yet-booted composition
@@ -395,6 +419,15 @@ class SimHarness {
   Devices::NezhaMotor& motorLeft() { return motorL_; }
   Devices::NezhaMotor& motorRight() { return motorR_; }
 
+  // stateEstimator -- 117 ticket 004: exposes the owned App::StateEstimator
+  // (default-constructed, see the constructor's own comment for why),
+  // mirroring this class's existing "expose the owned device, let the
+  // caller read/configure it" pattern (motorLeft()/motorRight()/clock()
+  // above). A test needing non-default fusion weights calls
+  // stateEstimator().setWeights(...) directly instead of relying on
+  // Config::defaultEstimatorConfig() sourcing.
+  App::StateEstimator& stateEstimator() { return stateEstimator_; }
+
   // Concrete TestSim::SimClock&, not Devices::Clock& -- callers (this
   // class's own driveBootToDone(), sim_api_harness.cpp) need the
   // setMicros()/advanceMicros() stepping surface, which only the concrete
@@ -483,6 +516,12 @@ class SimHarness {
   // constructor holds references to both).
   App::MoveQueue moveQueue_;
   App::Preamble preamble_;
+  // 117 ticket 004: default-constructed, deliberately not sourced from
+  // Config::defaultEstimatorConfig() -- see the constructor initializer
+  // list's own comment above for why (preserves the sim/production
+  // boundary src/sim/CMakeLists.txt documents; behaviorally equivalent
+  // this sprint).
+  App::StateEstimator stateEstimator_;
 
   // Motion::Executor executor_/App::HeadingSource headingSource_/App::Pilot
   // pilot_ -- DELETED (115-006, gut S1): 115-002's motion-stack excision

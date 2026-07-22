@@ -240,6 +240,17 @@
       }
     },
 
+    "estimator": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "App::StateEstimator's (117) fail-closed boot-time fusion-weight defaults -- Config::defaultEstimatorConfig() (config/boot_config.h), baked via gen_boot_config.py's estimator_config_for_config(). REQUIRED as of this ticket, same fail-closed discipline sprint 114 established for output_deadband/reversal_dwell_ms above: a robot JSON missing any of the three keys fails codegen loudly. Live-tunable post-boot via a separate wire surface (EstimatorConfigPatch, config.proto/envelope.proto -- RobotLoop::handleConfig()'s ESTIMATOR branch, NezhaProtocol.estimator_config()) that is NEVER persisted back into this JSON or into flash -- a reboot always reverts to the value baked here.",
+      "properties": {
+        "weight_heading_otos": { "type": "number", "description": "App::StateEstimator::FusionWeights::headingOtos [0..1] -- v1 complementary-blend weight, body (encoder-derived) heading vs OTOS heading. Committed 0.0 in every robot JSON this sprint (stakeholder's encoder-only-v1 decision) -- OTOS fusion is wired but deliberately not yet trusted with any nonzero weight.", "firmware": { "field": "headingOtos", "kind": "float" } },
+        "weight_omega_otos": { "type": "number", "description": "App::StateEstimator::FusionWeights::omegaOtos [0..1] -- v1 complementary-blend weight, body (encoder-derived) omega vs OTOS omega. Committed 0.0 in every robot JSON this sprint, same reasoning as weight_heading_otos above.", "firmware": { "field": "omegaOtos", "kind": "float" } },
+        "staleness_ms": { "type": "number", "description": "App::StateEstimator::FusionWeights::staleness [ms] -- max age a fresh OTOS reading may carry and still be eligible to blend. 60.0 (3x Devices::Otos::kReadPeriod, 20ms) in every robot JSON this sprint: generous headroom over the OTOS chip's own internal read cadence, while still excluding a genuinely stale reading well before the next cycle's fresh one would arrive.", "firmware": { "field": "staleness", "kind": "float" } }
+      }
+    },
+
     "mecanum_geometry": {
       "type": "object",
       "additionalProperties": false,

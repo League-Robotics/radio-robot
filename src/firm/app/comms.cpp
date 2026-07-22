@@ -2,6 +2,7 @@
 // the module's boundary.
 #include "app/comms.h"
 
+#include <cstdio>
 #include <cstring>
 
 #include "messages/wire_runtime.h"
@@ -46,13 +47,13 @@ void RadioTransport::sendReliable(const char* msg) {
 Comms::Comms(Transport& serialLink, Transport& radioLink, const char* banner)
     : serialLink_(serialLink), radioLink_(radioLink), banner_(banner) {}
 
-void Comms::pump(Cmd& out) {
+void Comms::pump(Cmd& out, uint32_t now) {
   out.status = CmdStatus::kNone;
-  if (pumpTransport(serialLink_, out)) return;
-  pumpTransport(radioLink_, out);
+  if (pumpTransport(serialLink_, out, now)) return;
+  pumpTransport(radioLink_, out, now);
 }
 
-bool Comms::pumpTransport(Transport& t, Cmd& out) {
+bool Comms::pumpTransport(Transport& t, Cmd& out, uint32_t now) {
   char line[kArmoredBufSize];
   if (!t.readLine(line, sizeof(line))) return false;
 
@@ -62,7 +63,15 @@ bool Comms::pumpTransport(Transport& t, Cmd& out) {
     return true;
   }
   if (std::strcmp(line, "PING") == 0) {
-    t.sendReliable("OK pong");
+    // t=<ms> is the robot's own clock at reply-formatting time (117,
+    // SUC-056) -- activates the host's ClockSync (min-RTT offset + skew
+    // fit). Integer formatting only: newlib-nano has no printf float
+    // support, but `now` is already an integer, so this is a non-issue,
+    // not a workaround. Buffer sized generously for "OK pong t=" (10) +
+    // a uint32_t's worst case (10 digits) + NUL.
+    char pong[32];
+    std::snprintf(pong, sizeof(pong), "OK pong t=%lu", static_cast<unsigned long>(now));
+    t.sendReliable(pong);
     return true;
   }
   if (line[0] != '*') {

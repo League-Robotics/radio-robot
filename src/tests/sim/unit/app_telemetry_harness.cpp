@@ -572,7 +572,7 @@ void scenarioMalformedFrameSetsCommsMalformedFlagBit() {
   App::Telemetry telemetry(comms, serialFake, radioFake);
 
   App::Cmd cmd;
-  comms.pump(cmd);
+  comms.pump(cmd, /*now=*/0);
   checkU64Eq(comms.malformedCount(), 1, "malformedCount() incremented by the malformed line");
 
   // Mirrors RobotLoop::updateTlm()'s own call site (src/firm/app/robot_loop.cpp):

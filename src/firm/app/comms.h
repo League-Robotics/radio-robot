@@ -114,7 +114,13 @@ class Comms {
   // out.status = kNone at entry; on decode success, decodes into a LOCAL
   // temporary and only assigns it into out on success, so a failed/partial
   // msg::wire::decode() can never leave partial state visible in out.
-  void pump(Cmd& out);
+  //
+  // now -- [ms], the caller's own current clock reading (RobotLoop::cycle()
+  // passes its already-computed cycleStart) -- formats the PING reply's
+  // `t=<ms>` field (117, SUC-056). Comms holds no Devices::Clock&/timing
+  // collaborator of its own; every value it ever stamps onto a reply is
+  // handed in, not read from an owned clock.
+  void pump(Cmd& out, uint32_t now);  // [ms]
 
   // Encode (msg::wire::encode) + armor ("*B" + base64) + send ONCE on BOTH
   // transports via Transport::send() (async/drop-on-full -- telemetry is
@@ -134,8 +140,9 @@ class Comms {
  private:
   // true if a line was consumed (decoded, malformed, or text-plane) --
   // caller stops regardless (bounds pump() to at most one transport
-  // acted on per call).
-  bool pumpTransport(Transport& t, Cmd& out);
+  // acted on per call). now -- [ms], threaded straight from pump()'s own
+  // argument -- see pump()'s doc comment above.
+  bool pumpTransport(Transport& t, Cmd& out, uint32_t now);  // [ms]
 
   // NEVER replies -- acks ride Telemetry's ack ring, not per-command; see
   // comms.cpp for the discipline note.

@@ -102,12 +102,14 @@ struct ConfigDelta {
         DRIVETRAIN = 1,
         MOTOR = 2,
         OTOS = 3,
+        ESTIMATOR = 4,
     };
     PatchKind patch_kind = PatchKind::NONE;
     union {
         DrivetrainConfigPatch drivetrain;
         MotorConfigPatch motor;
         OtosConfigPatch otos;
+        EstimatorConfigPatch estimator;
     } patch = {};
 
 

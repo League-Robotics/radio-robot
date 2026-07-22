@@ -39,7 +39,12 @@ Three never-combined domains, plus two flat "kept categories":
   real robot on the bench/stand over USB or the radio relay, with a
   human present to hand-load wheels and watch for runaways. Drives the
   robot via the `DEV` command family
-  ([`docs/protocol-v2.md`](../../docs/protocol-v2.md) §16).
+  ([`docs/protocol-v2.md`](../../docs/protocol-v2.md) §16). Includes
+  `tlm_log.py` (TLM-stream-to-CSV capture, sprint 115) and
+  `estimator_capture.py` (sprint 117: drives a scripted, varied MOVE
+  pattern — steps both directions, a reversal, pivots, chained legs —
+  while capturing via `tlm_log.py`'s own `stream_to_csv()`; works against
+  a real `NezhaProtocol` connection or a `SimLoop` instance).
 - **`playfield/`** — Python CLI tools (not pytest-collected) that drive a
   real robot on the camera-covered playfield (never "the floor" — see
   `.clasi/knowledge/playfield-not-floor.md`). **Currently parked**: both
@@ -56,11 +61,29 @@ Three never-combined domains, plus two flat "kept categories":
   `test_planner_profile.py`) exercise the DORMANT
   `src/host/robot_radio/planner/` package — confirm current pass/fail
   status before trusting them as a live regression gate; see that
-  subsystem's own doc for the live/dormant split.
-- **`tools/`** — test tooling/helpers shared across domains.
+  subsystem's own doc for the live/dormant split. `test_one_step_ahead.py`
+  (sprint 117) unit-tests `tools/one_step_ahead.py`'s pure ZOH prediction
+  math, imported via the same cross-directory flat-import `sys.path` shim
+  `test_gen_boot_config_otos.py`/`test_pose_fix_convergence_pure.py`
+  already use.
+- **`tools/`** — test tooling/helpers shared across domains. Includes
+  `one_step_ahead.py` (sprint 117: a pure-Python, dependency-free
+  reference implementation of `App::StateEstimator`'s zero-order-hold
+  one-step-ahead prediction math — a genuinely separate reimplementation
+  of ticket 002's C++ formula, not a wrapper around it — plus a
+  leave-one-out walk and RMS-by-pattern-phase grouping helpers).
 - **`notebooks/`** — Jupyter notebooks for interactive analysis (drive
   planning, drivetrain stress, sensor characterization, turn-accuracy
-  results) — exploratory artifacts, not a pytest-collected suite.
+  results) — exploratory artifacts, not a pytest-collected suite. Includes
+  `estimator_validation.ipynb` (sprint 117 ticket 007): the stakeholder's
+  own leave-one-out one-step-ahead validation methodology run against an
+  `estimator_capture.py`-shaped CSV (a fresh sim capture by default, a
+  bench capture once ticket 008 lands) — per-stream/per-phase RMS tables,
+  the ZOH lag-signature check on ramp phases, residual plots, and a
+  leg-level error projection, ending in a PROPOSED (not self-ratified)
+  accept-threshold table. All prediction/RMS math is delegated to
+  `tools/one_step_ahead.py`; this notebook is presentation/orchestration
+  only.
 - **`testgui/`** — pytest tests for the `src/host/robot_radio/testgui/`
   Qt application itself (widget behavior, command dispatch, calibration
   push-on-connect), distinct from `sim/system/`'s firmware-level

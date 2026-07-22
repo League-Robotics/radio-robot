@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Fail-closed estimator fusion-weight config + live-tunable EstimatorConfigPatch
-status: open
+status: done
 use-cases:
 - SUC-058
 depends-on:
@@ -50,49 +50,49 @@ Overlay section for the full ownership mapping.
 
 ## Acceptance Criteria
 
-- [ ] `data/robots/robot_config.schema.json` gains an `estimator` object
+- [x] `data/robots/robot_config.schema.json` gains an `estimator` object
       (`weight_heading_otos`, `weight_omega_otos`, `staleness_ms`) with
       `firmware.field`/`kind` mappings, matching the existing
       `output_deadband`-style entries' shape.
-- [ ] `tovez.json`, `togov.json`, `tovez_nocal.json` all gain a committed
+- [x] `tovez.json`, `togov.json`, `tovez_nocal.json` all gain a committed
       `estimator` section (`weight_heading_otos: 0.0`, `weight_omega_otos:
       0.0`, a documented `staleness_ms`) — no robot JSON is left without
       one.
-- [ ] `gen_boot_config.py` reads the new keys via `_require()` (hard
+- [x] `gen_boot_config.py` reads the new keys via `_require()` (hard
       codegen failure on a missing key, mirroring
       `output_deadband_for_config()`'s existing shape) and bakes
       `Config::defaultEstimatorConfig()` into `boot_config.cpp`.
-- [ ] A test mirroring `test_gen_boot_config_required_keys.py`'s existing
+- [x] A test mirroring `test_gen_boot_config_required_keys.py`'s existing
       pattern confirms a robot JSON missing the `estimator` section fails
       codegen loudly.
-- [ ] `config.proto`: new `EstimatorConfigPatch` message (`optional float
+- [x] `config.proto`: new `EstimatorConfigPatch` message (`optional float
       weight_heading_otos`, `weight_omega_otos`, `staleness_ms`) and
       `ConfigTarget.CONFIG_ESTIMATOR = 6`.
-- [ ] `envelope.proto`: `ConfigDelta.oneof patch` gains `EstimatorConfigPatch
+- [x] `envelope.proto`: `ConfigDelta.oneof patch` gains `EstimatorConfigPatch
       estimator = 6;` (verified against the current file: existing arms are
       `drivetrain=1`, `motor=2`, `otos=5`, with `3, 4` already `reserved`
       — `6` is confirmed free).
-- [ ] `python build.py` (or equivalent) regenerates `msg::EstimatorConfigPatch`
+- [x] `python build.py` (or equivalent) regenerates `msg::EstimatorConfigPatch`
       and the `ConfigDelta` codec cleanly; `kMaxEnvelopeBytes`/
       `kCommandEnvelopeMaxEncodedSize` re-measured and confirmed to still
       fit `kArmoredBufSize` (same discipline sprint 116 ticket 001
       established for `Move`'s own size growth).
-- [ ] `RobotLoop::handleConfig()` gains a `PatchKind::ESTIMATOR` branch:
+- [x] `RobotLoop::handleConfig()` gains a `PatchKind::ESTIMATOR` branch:
       present fields merge onto `stateEstimator_.setWeights()`'s current
       values (absent fields leave the current value untouched — partial-
       patch semantics matching `MotorConfigPatch`/`OtosConfigPatch`); acks
       OK; does NOT touch `persistedTuning_`.
-- [ ] `NezhaProtocol.estimator_config(*, weight_heading_otos=None,
+- [x] `NezhaProtocol.estimator_config(*, weight_heading_otos=None,
       weight_omega_otos=None, staleness_ms=None)` added host-side, mirroring
       `otos_config()`'s builder shape.
-- [ ] `src/firm/messages/DESIGN.md` updated in place: the envelope-arms
+- [x] `src/firm/messages/DESIGN.md` updated in place: the envelope-arms
       table gains `ConfigDelta.estimator` (field 6) and the new
       `EstimatorConfigPatch`/`ConfigTarget.CONFIG_ESTIMATOR` entries, plus
       updated size figures if `kMaxEnvelopeBytes` changed.
-- [ ] `src/firm/config/DESIGN.md` updated in place: the fail-closed
+- [x] `src/firm/config/DESIGN.md` updated in place: the fail-closed
       config-key documentation gains the new `estimator` section, matching
       the existing `output_deadband` precedent's write-up shape.
-- [ ] `src/host/robot_radio/DESIGN.md` updated in place: a note that
+- [x] `src/host/robot_radio/DESIGN.md` updated in place: a note that
       `NezhaProtocol.estimator_config(...)` is a new live-tuning surface,
       mirroring the existing `otos_config()` entry.
 

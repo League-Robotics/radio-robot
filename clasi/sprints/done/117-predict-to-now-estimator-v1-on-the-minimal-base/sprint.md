@@ -1,7 +1,7 @@
 ---
 id: '117'
 title: Predict-to-now estimator v1 on the minimal base
-status: planning-docs
+status: closed
 branch: sprint/117-predict-to-now-estimator-v1-on-the-minimal-base
 worktree: false
 use-cases: []
