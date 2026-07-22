@@ -1,6 +1,20 @@
 # Sprint 116 Bench Checklist — MOVE Protocol Cutover: RESULTS
 
+> # UPDATE 2026-07-22 (post-close verification for 115/116/117): motor bus
+> # RECOVERED. Root cause per `clasi/issues/bench-motor-bus-disconnect-
+> # during-116-gate.md`: the robot drove off the table overnight during the
+> # 117-008 gate (not on the stand) — Eric reset/remounted it. A passive
+> # bus-health read (zero drive commands first) showed `conn_left`/
+> # `conn_right` both `True`; all four previously-BLOCKED items below were
+> # re-run against real hardware (two full passes of
+> # `move_protocol_bench.py`, plus `twist_drive.py` forward/reverse) — see
+> # "## Post-close hardware re-verification (2026-07-22)" near the end of
+> # this document for the real numbers, including a reproducible angle-stop
+> # overshoot finding. `otos_present` is still `False` (pre-existing,
+> # separately tracked, does not block anything in this document).
+>
 > # AGENT-EXECUTED, 2026-07-22 — real hardware, one significant blocker found
+> # (ORIGINAL SESSION RECORD BELOW, kept as-written for history)
 >
 > Unlike sprints 114/115's own bench checklists (both stakeholder-run —
 > no agent in those sprints had hardware access), this run WAS executed by
@@ -304,3 +318,138 @@ reversal-latch flavor) before the next hardware session, then re-run items
 1-6 above (`twist_drive.py` + `move_protocol_bench.py`'s
 `scenario_distance_stop`/`scenario_angle_stop`/`scenario_wheels_variant_signs`
 + Sec 3's behavioral persistence check) to close this gap.
+
+---
+
+## Post-close hardware re-verification (2026-07-22)
+
+Executed as post-close checklist verification (not sprint work) against
+`tovez`, UID `9906360200052820a8fdb5e413abb276000000006e052820`,
+`/dev/cu.usbmodem2121102`, on the stand, wheels clear. No reflash was
+needed — `git diff --stat 828291ce..HEAD -- src/ data/` (the commit that
+built the currently-flashed `v0.20260722.1` image) shows zero functional
+source diff, only a design doc and the version-bump commit's own
+`pyproject.toml`/docs changes; the robot already runs the current master's
+firmware.
+
+**Bus-health gate (passive, zero drive commands first)**: 10 frames read
+immediately after connect — `conn_left=True`, `conn_right=True` on all 10,
+`otos_present=False` on all 10, `flags=0x8d8` (bits 3/4 conn, bit 6
+`kFlagFaultI2CSafetyNet` boot-time one-shot, bit 7 `kFlagFaultWedgeLatch` —
+a benign side effect of sitting idle 10+ ticks per the same explanation
+this document already gives, confirmed to clear once real motion resumed
+below — bit 11 `kFlagEventBootReady` sticky). **Verdict: motor bus healthy,
+safe to drive.**
+
+`move_protocol_bench.py` was run TWICE (two independent hardware passes)
+to get a second data point on the previously-blocked scenarios:
+
+| Scenario | Run 1 | Run 2 |
+|---|---|---|
+| Distance-stop: commanded 200mm, ±20% tolerance (160-240mm) | [x] PASS — before=(0,0) after=(225,-24), traveled=226.3mm | [x] PASS — before=(0,0) after=(231,-16), traveled=231.6mm |
+| Angle-stop: commanded 0.5rad, ±25% tolerance (0.375-0.625rad) | [ ] **FAIL** — before_theta=-1251cdeg after=3367cdeg, dtheta=**0.806rad** (61% over) | [ ] **FAIL** — before_theta=-745cdeg after=4224cdeg, dtheta=**0.867rad** (73% over) |
+| MoveWheels sign check (opposite-direction encoder deltas) | [ ] FAIL — enqueue ack=None (no ack observed within 500ms), zero encoder delta | [x] PASS — before=(179,273) after=(260,189), d_left=+81 d_right=-84 (opposite signs confirmed) |
+| Overall scenario count | 37/43 checks passed | 40/43 checks passed |
+
+Non-blocking-item failures across the two runs (ack losses on individual
+enqueue/completion acks — `scenario_replace_preempts` Move A run 1,
+`scenario_timeout_fault`'s fault-bit run 1, `scenario_config_mid_move`'s
+restore-ack run 1, `scenario_stop_mid_motion`'s STOP ack run 2) did not
+reproduce on the other run, consistent with the sporadic ack loss already
+documented as informational/non-gating in this doc's own §4 soak result
+(1.79% ack loss over 3684 commands) — not re-litigated as new findings.
+
+**Distance-stop and MoveWheels-sign are now fully confirmed** (SUC-050's
+distance half, SUC-050's wheels-variant-pivot half). **Angle-stop is a
+real, reproducible divergence, unchecked below — flagging as a finding,
+not marking pass:**
+
+- [ ] **FINDING, not closed**: ANGLE-stop MOVE (`move_wheels(v_left=-120,
+  v_right=120, stop_angle=0.5)`) consistently overshoots its commanded
+  `stop_angle` by 61-73% (0.806rad and 0.867rad measured vs. 0.5rad
+  commanded), reproducible across two independent runs, both ending via
+  the stop condition itself (not the timeout backstop —
+  `fault_move_timeout` was never seen in either run's angle-stop
+  scenario). `docs/protocol-v4.md` does not specify a numeric accuracy
+  bound for `stop_angle` (it defines the stop CONDITION, not a tolerance),
+  so this is not a strict wire-contract violation, but it is well outside
+  the bench script's own ±25% pass band and is large enough to be an
+  operationally real overshoot. Plausibly related to already-tracked
+  actuation-latency/turn-overrotation issues (`.clasi/knowledge/
+  actuation-latency-delay-in-plan.md`, `.clasi/knowledge/
+  turn-overrotation-at-90deg.md`) but not confirmed as the same root
+  cause — reported as telemetry evidence for the stakeholder/next sprint,
+  not diagnosed further here (out of this checklist's scope).
+
+**Forward/reverse encoder tracking** (`twist_drive.py`, the remaining
+"what could not be verified" item not covered by `move_protocol_bench.py`
+directly): forward `--v-x 150` PASS 6/6 (encoders (0,0)->(82,75) over
+800ms); first reverse attempt FAIL (immediately following the forward
+script's own disconnect with only 1s settle — ack=None, zero movement,
+most likely a serial-reconnect race between two independently-connecting
+script processes, not a bus/firmware issue — see the single-serial-
+consumer note below); reverse retried after a longer settle: PASS 6/6
+(encoders (-334,-309)->(-406,-372), both wheels decreasing, ~72-73 count
+magnitude over 800ms, consistent with the forward run's own magnitude).
+**Sign and magnitude both confirmed correct in both directions.**
+
+**A process note for future bench sessions**: the sprint 115 checklist's
+own §8.1 snippet (`tlm_log.py` backgrounded via `&`/`wait` concurrently
+with `twist_drive.py` in the foreground, both against the SAME serial
+port) was attempted here and produced port contention — the backgrounded
+capture stalled at 7 rows once the foreground script's own
+`SerialConnection` opened the same port. Two independent `SerialConnection`
+opens on the same `/dev/cu.usbmodem*` port are NOT safe concurrently on
+this bench setup, matching this project's own "one serial consumer at a
+time" rule — that snippet pattern should not be reused as-is. The
+persisted-tuning behavioral check below was redone instead using
+`twist_drive.py`'s own single-connection before/after encoder delta as the
+comparison signal.
+
+**Persisted-tuning behavioral check, via soft reset (not physical
+unplug)**: `pyocd commander -t nrf52833 -u <UID> -c "reset"` (SWD-level
+reset, distinct from a USB power-cycle) — confirmed a genuine reboot via
+the robot clock resetting to a small value (`t=7016` on the post-reset
+`PING`) and an unchanged boot banner. `config(pid.kp=0.0005, ki=0.0,
+kff=0.002)` acked OK; `config(pid.kp=0.002, ...)` (restore) acked OK
+both before and, redundantly, was re-sent after the reset to leave the
+robot at its default. **Inconclusive on the "visibly slower" signal
+specifically**: a fixed-window (`--duration 2000 --watch 1.5`) forward-
+drive encoder delta was nearly identical across baseline (233,215),
+weakened-kp (228,200), and post-reset (234,209) — i.e. a 4x weaker `kp`
+barely changed the measured response. This is plausibly explained by
+`tovez_nocal.json`'s own documented control-domain note that `vel_kff`
+(held constant at 0.002 in all three pushes, matching the sprint-115
+checklist's own prescribed CONFIG values) already drives most of the duty
+open-loop, leaving `kp` to correct only the residual — not a live-apply
+regression (both CONFIG pushes acked OK, matching `scenario_config_mid_move`'s
+own clean OK-ack result in both `move_protocol_bench.py` runs above), just
+a metric that doesn't discriminate well for this specific gain pair on
+this robot. **Live CONFIG apply is confirmed working pre- and post-reset;
+persistence ACROSS the reset specifically could not be distinguished from
+"no change occurred" using this behavioral method** — a future session
+wanting a clean persistence signal should either use a gain difference
+large enough to move the FF-dominated response, or read back state via a
+lower-level channel if one exists.
+
+**TLM-as-dataset sanity** (remaining sprint 115 pending item):
+`tlm_log.py --duration 20` -> 308 rows, avg inter-frame delta 65.0ms ->
+**15.4 Hz** measured (consistent with this document's own §5 finding of a
+~19 Hz actual delivery rate against the 50 Hz nominal primary period —
+bandwidth-limited, not new; this capture ran idle/undriven so its
+inter-frame spacing skews slightly lower than a driving capture would).
+`enc_left_time`/`enc_right_time` populated and monotonic.
+`flag_otos_present`/`flag_line_present`/`flag_color_present` all `False`
+throughout this idle capture — OTOS per the tracked, pre-existing gap
+above; line/color are plausibly simply not physically mounted on this
+robot chassis (`tovez_nocal.json` has no line/color config section, and
+`.clasi/knowledge/bench-test-rig-layout.md` describes line/color as
+belonging to the SEPARATE stationary test rig, not necessarily this
+chassis) — not confirmed either way, flagged rather than asserted.
+
+## Related (post-close addendum)
+
+- `clasi/issues/bench-motor-bus-disconnect-during-116-gate.md` — the tracked
+  physical issue, now RESOLVED per this session (bus confirmed live again).
+- `docs/bench-checklists/sprint-117-estimator-v1.md` — real (non-sim) bench
+  capture + RMS validation now recorded there too, same session.

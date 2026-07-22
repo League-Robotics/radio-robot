@@ -17,6 +17,22 @@
 > see ticket 010's completion notes for that sim dry-run's results — but
 > **no claim below has been confirmed on real hardware**. Treat every `[ ]`
 > as genuinely open.
+>
+> **UPDATE 2026-07-22 (post-close verification for 115/116/117, agent-
+> executed against real hardware)**: three of this document's own
+> explicitly-still-pending items — per-cycle TLM rate measurement (§6),
+> `tlm_log.py` capture sanity (§6), and config patch persistence (§8) —
+> were run against the real robot this session and are filled in below
+> with real numbers (marked "2026-07-22 agent run"). Sections 0/2-5/7 of
+> this document were NOT re-run in this document's own prescribed form
+> this session (out of this session's assigned scope) — their
+> equivalents were separately, independently confirmed via
+> `docs/bench-checklists/sprint-116-move-protocol.md`'s own post-close
+> re-verification the same session (forward/reverse/pivot drive, encoder
+> movement, STOP behavior, CONFIG live-apply), using the current
+> move-protocol bench tools rather than this document's own `twist()`-era
+> snippets — see that document for those results. This document's own
+> §0/§2-5/§7 boxes are left as originally written (`[ ]`, stakeholder-run).
 
 ## What sprint 115 changed, and why this checklist exists
 
@@ -368,7 +384,7 @@ few times) so the CSV actually captures motion, not just idle.
 
 | Step | Check | Expect | Done |
 |---|---|---|---|
-| 6a | `wrote <N> rows` | N > 0 | [ ] |
+| 6a | `wrote <N> rows` | N > 0 | [x] **2026-07-22 agent run** — `tlm_log.py --duration 20 --csv src/tests/bench/out/tlm_log_post_close_115_116_117.csv` -> `wrote 308 rows` (20s window, not the full 60s prescribed here — time-boxed for this session; N > 0 satisfied) |
 
 Check frame rate (target ≈ 50 Hz, every 20 ms cycle):
 
@@ -386,15 +402,23 @@ print(f'{len(rows)} rows, avg inter-frame delta {avg:.1f} ms -> {1000.0/avg:.1f}
 
 | Step | Check | Expect | Done |
 |---|---|---|---|
-| 6b | Printed rate | ≈ 50 Hz (every cycle) — a much higher rate than the pre-115 40ms/25Hz primary period | [ ] |
-| 6c | `enc_left_time`/`enc_right_time`/`otos_time` columns | populated, monotonic, roughly consistent with each row's own `now` | [ ] |
-| 6d | `line_ch1..4` columns (during a window with `flag_line_present=True`) | 4 plausible, CHANGING values, not constant/all-zero/all-saturated | [ ] |
-| 6e | `color_r/g/b/c` columns (during a window with `flag_color_present=True`) | plausible RGBC values | [ ] |
-| 6f | `otos_v_x`/`otos_v_y`/`otos_omega` columns (when `flag_otos_present=True`) | nonzero while driving (these are NEW this sprint — previously OTOS velocities were silently dropped) | [ ] |
+| 6b | Printed rate | ≈ 50 Hz (every cycle) — a much higher rate than the pre-115 40ms/25Hz primary period | [ ] **MEASURED, NOT AS EXPECTED — 2026-07-22 agent run**: 308 rows / 20s, avg inter-frame delta 65.0ms -> **15.4 Hz**, well under the ~50Hz nominal primary period. This is NOT a new finding — it matches `sprint-116-move-protocol.md`'s own independently-measured ~18.9-19 Hz (that document's own read: bandwidth-limited at 115200 baud against the armored/base64 frame size, not frame loss — drop rate stayed low in that soak). Recorded here as this document's own first hardware measurement of the same phenomenon, not a regression. |
+| 6c | `enc_left_time`/`enc_right_time`/`otos_time` columns | populated, monotonic, roughly consistent with each row's own `now` | [x] **2026-07-22 agent run** — `enc_left_time`/`enc_right_time` populated and monotonic in the captured CSV; `otos_time` blank throughout (see 6f) |
+| 6d | `line_ch1..4` columns (during a window with `flag_line_present=True`) | 4 plausible, CHANGING values, not constant/all-zero/all-saturated | [ ] **NOT CONFIRMED — 2026-07-22 agent run**: `flag_line_present` was `False` on every one of the 308 captured rows (idle + driving mixed across the session). Not diagnosed further this session; plausibly this specific robot chassis has no line sensor physically mounted (`data/robots/tovez_nocal.json` has no line-sensor config section; `.clasi/knowledge/bench-test-rig-layout.md` describes line sensing as belonging to the separate stationary test rig) — flagged as unconfirmed either way, not asserted as a defect. |
+| 6e | `color_r/g/b/c` columns (during a window with `flag_color_present=True`) | plausible RGBC values | [ ] **NOT CONFIRMED — 2026-07-22 agent run**: same as 6d, `flag_color_present` was `False` throughout; same caveat about whether this chassis has a color sensor mounted. |
+| 6f | `otos_v_x`/`otos_v_y`/`otos_omega` columns (when `flag_otos_present=True`) | nonzero while driving (these are NEW this sprint — previously OTOS velocities were silently dropped) | [ ] **NOT CONFIRMED — 2026-07-22 agent run**: `flag_otos_present=False` throughout this session (motor bus recovered, OTOS did not — see `clasi/issues/bench-motor-bus-disconnect-during-116-gate.md`'s resolution note; pre-existing, independently tracked, not new). |
 
 **Fail (file an issue):** frame rate well below ~50 Hz, `line`/`color`
 never present or never change, or OTOS velocities stay flat zero while
 genuinely driving with OTOS connected.
+
+**2026-07-22 addendum**: the frame-rate shortfall (6b) is not re-filed as a
+new issue — it is the same phenomenon `sprint-116-move-protocol.md`
+already attributes to serial bandwidth, not frame loss or a regression.
+6d/6e/6f remain genuinely open per this document's own fail criteria;
+6d/6e in particular may simply be hardware-absent on this chassis rather
+than failing — worth a stakeholder confirmation of what sensors are
+physically mounted on `tovez` before treating them as bugs.
 
 ---
 
@@ -449,7 +473,7 @@ that's also fine, just note it.
 
 | Step | Check | Expect | Done |
 |---|---|---|---|
-| 8a | If driving over the radio relay: did you have to re-pick/re-pair the radio channel after Section 2's flash? | Either "yes, once" (expected) or "n/a — direct USB only, not observable on this transport, or nothing to wipe" | [ ] |
+| 8a | If driving over the radio relay: did you have to re-pick/re-pair the radio channel after Section 2's flash? | Either "yes, once" (expected) or "n/a — direct USB only, not observable on this transport, or nothing to wipe" | [x] **2026-07-22 agent run** — n/a: direct USB only this session, no reflash performed at all (robot already ran current master's firmware — see the doc-level 2026-07-22 UPDATE note and `sprint-116-move-protocol.md`'s own `git diff --stat` check), so no schema wipe was possible or expected, matching `sprint-116-move-protocol.md`'s own identical finding ("no persisted-tuning schema wipe...was observed or expected"). |
 
 There is **no live config read-back** on this wire (the `get` arm is
 reserved/pruned) — verify the persisted patch **behaviorally**, the same
@@ -470,6 +494,20 @@ wait
 Eyeball `/tmp/pid_baseline.csv`'s `enc_left_velocity` ramp-up shape/speed to
 the 150 mm/s target — this is your "before" reference.
 
+**2026-07-22 agent run — process note**: the `&`/`wait` backgrounded-
+`tlm_log.py`-concurrent-with-foreground-`twist_drive.py` pattern above was
+tried as literally written and produced serial port contention (two
+independent `SerialConnection` opens on the same port — the background
+capture stalled after ~1s once the foreground script opened the same
+port). This is NOT safe on this bench setup and contradicts this
+project's own "one serial consumer at a time" rule. **Substituted
+instead**: `twist_drive.py`'s own single-connection before/after encoder
+position delta over the same fixed window (`--duration 2000 --watch 1.5`)
+as the comparison signal, single serial consumer throughout. Baseline
+(default `pid.kp=0.002`): before=(0,0) after=(233,215) [encoder mm].
+See `sprint-116-move-protocol.md`'s own post-close section for the full
+narrative; recorded here against this document's own §8 structure.
+
 ### 8.2 Push a weaker `pid.kp`, confirm it changes behavior
 
 ```bash
@@ -487,15 +525,15 @@ conn.disconnect()
 
 | Step | Command | Expect | Done |
 |---|---|---|---|
-| 8.2a | Run the snippet above | `AckEntry(..., ok=True, ...)` (not `ERR_UNIMPLEMENTED` — a live-config-apply regression if seen) | [ ] |
-| 8.2b | Repeat 8.1's capture+drive | Visibly SLOWER/weaker velocity ramp toward 150 mm/s than the 8.1 baseline (a 4x weaker `kp`) | [ ] |
+| 8.2a | Run the snippet above | `AckEntry(..., ok=True, ...)` (not `ERR_UNIMPLEMENTED` — a live-config-apply regression if seen) | [x] **2026-07-22 agent run** — `AckEntry(corr_id=1, ok=True, err_code=0)` |
+| 8.2b | Repeat 8.1's capture+drive | Visibly SLOWER/weaker velocity ramp toward 150 mm/s than the 8.1 baseline (a 4x weaker `kp`) | [ ] **INCONCLUSIVE — 2026-07-22 agent run**: after=(228,200) vs. baseline after=(233,215) over the identical window — barely different, NOT a visibly slower response despite the 4x weaker `kp`. Plausible explanation (not confirmed): `tovez_nocal.json`'s own control-domain note that `vel_kff` (held at 0.002, unchanged in this push) already drives most of the duty open-loop, so `kp` alone corrects only the residual and a 4x change there doesn't move this fixed-window metric much. CONFIG still acked OK (8.2a) — this is a metric-sensitivity gap, not an apply-path failure. |
 
 ### 8.3 Power-cycle: confirm the tune survives
 
 | Step | Action | Expect | Done |
 |---|---|---|---|
-| 8.3a | Power-cycle the robot (unplug USB / toggle its power switch), wait 5s, reconnect | Robot re-boots | [ ] |
-| 8.3b | Repeat 8.1's capture+drive | STILL the weakened `pid.kp=0.0005` response from 8.2b, NOT the 8.1 baseline — `Config::PersistedTuning` reapplying the stored patch at boot, at the new 85-byte layout | [ ] |
+| 8.3a | Power-cycle the robot (unplug USB / toggle its power switch), wait 5s, reconnect | Robot re-boots | [x] **2026-07-22 agent run, SUBSTITUTED METHOD** — used a soft SWD reset (`pyocd commander -t nrf52833 -u <UID> -c "reset"`) instead of a physical USB unplug, per this session's own instruction to use a serial-reconnectable method and skip physical replug. Confirmed a genuine reboot: post-reset `PING` returned a small robot-clock value (`t=7016`, vs. thousands of ms pre-reset) and the boot banner (`DEVICE:NEZHA2:robot:tovez:2314287040`) was unchanged. Note this is a narrower reset than a full USB power-cycle (per `docs/knowledge/2026-07-04-encoder-wedge.md`'s own distinction between an SWD `reset` and a power-rail cycle) — sufficient to exercise `Config::PersistedTuning`'s boot-time reapply path, not a full power-rail test. |
+| 8.3b | Repeat 8.1's capture+drive | STILL the weakened `pid.kp=0.0005` response from 8.2b, NOT the 8.1 baseline — `Config::PersistedTuning` reapplying the stored patch at boot, at the new 85-byte layout | [ ] **INCONCLUSIVE, same root cause as 8.2b** — post-reset after=(234,209), statistically indistinguishable from both the 8.1 baseline (233,215) and the pre-reset weakened reading (228,200) via this metric. Cannot confirm OR refute persistence-across-reset from this specific measurement; CONFIG's live-apply path itself IS confirmed working both before and after the reset (acks OK both times — see 8.4). A future run wanting a clean persistence signal should use a `kp`/`kff` pair large enough to move this fixed-window metric, or find a lower-level read-back path. |
 
 ### 8.4 Restore the default before continuing to use the robot
 
@@ -514,13 +552,23 @@ conn.disconnect()
 
 | Step | Action | Expect | Done |
 |---|---|---|---|
-| 8.4a | Run the restore snippet | `AckEntry(..., ok=True, ...)` | [ ] |
+| 8.4a | Run the restore snippet | `AckEntry(..., ok=True, ...)` | [x] **2026-07-22 agent run** — `AckEntry(corr_id=1, ok=True, err_code=0)`; robot left at default `pid.kp=0.002` |
 
 **Pass:** 8.2b and 8.3b show the SAME weakened behavior; 8.2a/8.3-implied
 apply are OK-acked, not `ERR_UNIMPLEMENTED`.
 **Fail (file an issue):** `config()` acks `ERR_UNIMPLEMENTED` (live apply
 regression), or 8.3b reverts to the 8.1 baseline (persistence broken at
 the new layout).
+
+**2026-07-22 summary for §8**: CONFIG live-apply is confirmed working
+(8.2a/8.4a both OK-acked) both before and after a soft reset — no
+`ERR_UNIMPLEMENTED` regression observed. The specific "visibly weaker"
+behavioral signal (8.2b/8.3b) did not discriminate for this `kp`/`kff`
+pair on this robot (see the inconclusive notes above) — this document's
+own §8 Pass/Fail criteria cannot be fully evaluated from this session's
+data; persistence-across-reset is UNCONFIRMED, not failed. Left open,
+not checked off as passing, pending either a more sensitive gain choice
+or a lower-level read-back path.
 
 ---
 
@@ -544,3 +592,14 @@ the new layout).
   actually gone AND the robot drives cleanly without it (Sections 3-5
   above), close or re-scope both — do not close them before running this
   checklist for real.
+
+**2026-07-22 status**: this session did NOT run Sections 3-5 in this
+document's own prescribed form (out of this session's assigned scope —
+see the doc-level UPDATE note at the top), so those two issues are
+deliberately left untouched here, not closed. Equivalent forward/reverse/
+pivot/STOP behavior WAS observed cleanly via `sprint-116-move-protocol.md`'s
+own post-close section using the current move-protocol tools, which is
+suggestive but not a literal run of this document's own Sections 3-5 — a
+future session should either run this document's own Section 3-5 form
+directly or make an explicit judgment call that the 116-doc equivalent
+is sufficient before closing/re-scoping those two issues.
