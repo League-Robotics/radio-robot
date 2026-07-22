@@ -1,8 +1,10 @@
 ---
 id: '004'
 title: App::Drive setWheels staging path
-status: open
-use-cases: [SUC-050, SUC-051]
+status: done
+use-cases:
+- SUC-050
+- SUC-051
 depends-on: []
 github-issue: ''
 issue: protocol-set-point-the-minimal-firmware-s-complete-command-surface.md
@@ -38,14 +40,14 @@ Independent of tickets 001/002/003 — no wire or queue dependency, purely a
 
 ## Acceptance Criteria
 
-- [ ] `setWheels(v_left, v_right)` added; stages the two values directly
+- [x] `setWheels(v_left, v_right)` added; stages the two values directly
       onto the left/right leaves' targets with no `BodyKinematics::inverse()`
       call in between.
-- [ ] Last-wins: whichever of `setTwist()`/`setWheels()` was called most
+- [x] Last-wins: whichever of `setTwist()`/`setWheels()` was called most
       recently determines what the next `tick()` call computes/stages.
-- [ ] `stop()` clears both staging paths to zero, regardless of which was
+- [x] `stop()` clears both staging paths to zero, regardless of which was
       last active.
-- [ ] `setTwist()`'s existing behavior (stages through
+- [x] `setTwist()`'s existing behavior (stages through
       `BodyKinematics::inverse()`, `v_y` accepted-and-ignored) is
       unchanged for every existing caller.
 

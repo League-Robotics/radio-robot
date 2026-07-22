@@ -315,6 +315,170 @@ void scenarioVyAcceptedAndIgnored() {
                "right appliedDuty() matches inverse(v_x, omega, ...) exactly -- v_y contributed nothing");
 }
 
+// ===========================================================================
+// 5. 116-004: setWheels() stages the raw v_left/v_right values directly,
+//    with NO BodyKinematics::inverse() call in between. Chosen values (90,
+//    30) are deliberately such that IF a bug mistakenly re-interpreted them
+//    as a (v_x, omega) pair and ran them through inverse() (v_x=90,
+//    omega=30, trackWidth=200 -> vL=90-3000=-2910, vR=90+3000=3090), the
+//    result would be wildly different from the raw values themselves -- so
+//    this scenario can actually distinguish "staged raw" from "accidentally
+//    re-inverted" (AC #1).
+// ===========================================================================
+
+void scenarioSetWheelsStagesRawValuesNoInverseInvolved() {
+  beginScenario("Drive::setWheels(): stages raw v_left/v_right with no inverse() involvement");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  primeAtZero(left, bus, wireAddr);
+  primeAtZero(right, bus, wireAddr);
+
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+
+  const float vLeft = 90.0f;   // [mm/s]
+  const float vRight = 30.0f;  // [mm/s]
+  drive.setWheels(vLeft, vRight);
+  drive.tick();
+
+  runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
+  runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs);
+
+  // Sanity: confirm inverse() applied to these same two numbers (as if they
+  // were mistakenly treated as a (v_x, omega) pair) would NOT match the raw
+  // values -- proves this scenario can catch a "setWheels() secretly calls
+  // inverse()" regression, not just a "setWheels() does nothing" one.
+  float misappliedVL = 0.0f, misappliedVR = 0.0f;
+  BodyKinematics::inverse(vLeft, vRight, trackWidth, misappliedVL, misappliedVR);
+  checkTrue(std::fabs(misappliedVL - vLeft) > 1.0f,
+            "sanity: inverse()-misapplied vL would differ substantially from the raw vLeft");
+
+  const float kff = 0.002f;
+  checkFloatEq(left.appliedDuty(), kff * vLeft, "left appliedDuty() reflects the RAW staged v_left, not an inverse()-derived value");
+  checkFloatEq(right.appliedDuty(), kff * vRight, "right appliedDuty() reflects the RAW staged v_right, not an inverse()-derived value");
+}
+
+// ===========================================================================
+// 6. Last-wins: setTwist() called after setWheels() overrides to the
+//    twist-derived values on the next tick() (AC #2).
+// ===========================================================================
+
+void scenarioSetTwistAfterSetWheelsOverridesToTwistDerivedValues() {
+  beginScenario("Drive::setTwist() after setWheels(): last-wins -- next tick() computes the twist-derived targets");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  primeAtZero(left, bus, wireAddr);
+  primeAtZero(right, bus, wireAddr);
+
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+
+  // Stage wheels first (equal targets -- would be indistinguishable from a
+  // straight twist's equal vL/vR, so the asserted values below can only be
+  // explained by the LATER setTwist() call actually taking over).
+  drive.setWheels(40.0f, 40.0f);
+
+  const float v_x = 0.0f;      // [mm/s]
+  const float omega = 0.5f;    // [rad/s] -- pure rotation: unequal, opposite-sign vL/vR
+  drive.setTwist(v_x, 0.0f, omega);
+  drive.tick();
+
+  runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
+  runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs);
+
+  float expectedVL = 0.0f, expectedVR = 0.0f;
+  BodyKinematics::inverse(v_x, omega, trackWidth, expectedVL, expectedVR);
+
+  const float kff = 0.002f;
+  checkFloatEq(left.appliedDuty(), kff * expectedVL, "left appliedDuty() reflects the LATER setTwist()'s inverse()-derived vL, not setWheels()'s 40");
+  checkFloatEq(right.appliedDuty(), kff * expectedVR, "right appliedDuty() reflects the LATER setTwist()'s inverse()-derived vR, not setWheels()'s 40");
+}
+
+// ===========================================================================
+// 7. Last-wins: setWheels() called after setTwist() overrides to the raw
+//    wheel values (AC #2, the reverse direction).
+// ===========================================================================
+
+void scenarioSetWheelsAfterSetTwistOverridesToRawWheelValues() {
+  beginScenario("Drive::setWheels() after setTwist(): last-wins -- next tick() stages the raw wheel targets");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  primeAtZero(left, bus, wireAddr);
+  primeAtZero(right, bus, wireAddr);
+
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+
+  // Stage a pure-rotation twist first (unequal, opposite-sign vL/vR) -- would
+  // be clearly distinguishable from setWheels()'s equal targets below.
+  drive.setTwist(0.0f, 0.0f, 0.5f);
+
+  const float vLeft = 75.0f;   // [mm/s]
+  const float vRight = 75.0f;  // [mm/s]
+  drive.setWheels(vLeft, vRight);
+  drive.tick();
+
+  runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
+  runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs);
+
+  const float kff = 0.002f;
+  checkFloatEq(left.appliedDuty(), kff * vLeft, "left appliedDuty() reflects the LATER setWheels()'s raw v_left, not setTwist()'s inverse()-derived value");
+  checkFloatEq(right.appliedDuty(), kff * vRight, "right appliedDuty() reflects the LATER setWheels()'s raw v_right, not setTwist()'s inverse()-derived value");
+}
+
+// ===========================================================================
+// 8. stop() zeroes both leaves' targets regardless of which staging path
+//    (wheels, this time) was active beforehand (AC #3 -- scenario 3 above
+//    already covers the twist-path case; this covers the wheels-path case).
+// ===========================================================================
+
+void scenarioStopZeroesBothLeavesWhenWheelsPathWasActive() {
+  beginScenario("Drive::stop(): zeroes both leaves' targets when setWheels() (not setTwist()) staged the last target");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  primeAtZero(left, bus, wireAddr);
+  primeAtZero(right, bus, wireAddr);
+
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+
+  drive.setWheels(60.0f, 45.0f);
+  drive.tick();
+  runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
+  runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs);
+  checkTrue(left.appliedDuty() != 0.0f, "setup: left duty is nonzero before stop() (setWheels() was the active path)");
+  checkTrue(right.appliedDuty() != 0.0f, "setup: right duty is nonzero before stop()");
+
+  drive.stop();
+  drive.tick();
+
+  runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs + 20000);
+  runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs + 20000);
+
+  checkFloatEq(left.appliedDuty(), 0.0f, "left appliedDuty() reaches 0 within one cycle of stop() -- wheels path was active beforehand");
+  checkFloatEq(right.appliedDuty(), 0.0f, "right appliedDuty() reaches 0 within one cycle of stop() -- wheels path was active beforehand");
+}
+
 }  // namespace
 
 int main() {
@@ -322,6 +486,10 @@ int main() {
   scenarioPureRotationStagesOppositeSignTargets();
   scenarioStopZeroesBothTargetsWithinOneCycle();
   scenarioVyAcceptedAndIgnored();
+  scenarioSetWheelsStagesRawValuesNoInverseInvolved();
+  scenarioSetTwistAfterSetWheelsOverridesToTwistDerivedValues();
+  scenarioSetWheelsAfterSetTwistOverridesToRawWheelValues();
+  scenarioStopZeroesBothLeavesWhenWheelsPathWasActive();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Drive scenarios passed\n");
