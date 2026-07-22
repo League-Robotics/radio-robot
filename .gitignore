@@ -1,5 +1,14 @@
 build
-libraries
+# Ignore vendored-library CONTENTS at any depth (src/libraries/, plus
+# src/archive/wedgelab/libraries/), but not a co-located design-doc-set
+# DESIGN.md that documents the directory itself -- the bare "libraries"
+# form used before this carve-out ignores the directory ENTRY too, which
+# makes a file inside it un-negatable (git: "It is not possible to
+# re-include a file if a parent directory of that file is excluded").
+# "**/libraries/**" ignores contents only, so the DESIGN.md negation
+# below actually takes effect.
+**/libraries/**
+!**/libraries/DESIGN.md
 .yotta.json
 yotta_modules
 yotta_targets
@@ -27,7 +36,10 @@ build_*/
 cmake-build-*/
 
 # --- Test GUI session recordings (generated output, not source) ---
-recordings/
+# Same directory-vs-contents carve-out as the libraries/ block above, so
+# src/recordings/DESIGN.md can be tracked while latest.jsonl stays ignored.
+**/recordings/**
+!**/recordings/DESIGN.md
 
 # --- aprilcam server data (we are a CLIENT; aprilcam owns this) ---
 # aprilcam's data_dir is relative ("data/aprilcam"), so running its daemon or

@@ -1,5 +1,5 @@
 ---
-root: ../DESIGN.md
+root: ../../../docs/design/design.md
 ---
 
 # App — Loop and Passive App Modules
@@ -86,7 +86,8 @@ some point") semantics.
 - **Single-loop bus ownership:** every I2C transaction happens from
   `RobotLoop::cycle()`'s own call sequence. No app module ever initiates bus
   traffic from its own `tick()`/staging methods on its own timing — see the
-  root doc's "single-loop bus ownership" invariant. `Odometry::integrate()`,
+  system doc's "single-loop bus ownership" invariant (`docs/design/design.md`
+  §5). `Odometry::integrate()`,
   `applyOtosSample()`, and `updateLineColor()` are called only from the
   loop's trailing block, never from inside a motor request→collect window.
 - **The timing schedule is exactly `robot_loop.cpp`'s `runAndWait` calls:**

@@ -1,5 +1,5 @@
 ---
-root: ../DESIGN.md
+root: ../../../docs/design/design.md
 ---
 
 # Devices
@@ -86,7 +86,7 @@ state out → pace) and the schedule these leaves are ticked from, see root
   "now" as a `uint64_t` [us] parameter and returns having done at most one
   bounded unit of bus work. A leaf that calls `fiber_sleep()` or spins on
   a chip's own ready bit reintroduces exactly the loop-timing collapse the
-  single-loop rebuild (root `DESIGN.md` §3) exists to prevent — the
+  single-loop rebuild (`docs/design/design.md` §5) exists to prevent — the
   color/line sensors' non-blocking `beginStep()` retry state machines are
   the direct fix for detection loops that used to do this.
 - **`present()` and `connected()` are different questions — never
@@ -315,7 +315,7 @@ needs this; every other interpolated field uses plain `lerp()`.
   every leaf and the two seam singletons and wires them together; the
   loop (`app/robot_loop.cpp`) is the sole caller of every leaf's
   `tick()`/`beginStep()` and the sole reader of `clearanceSafetyNetCount()`.
-  See root `DESIGN.md` §2/§4 for the loop's own schedule and the
+  See `docs/design/design.md` §5 for the loop's own schedule and the
   `runAndWait` primitive that provides the timing gaps this subsystem's
   clearance windows and rate limits assume.
 
@@ -332,8 +332,11 @@ needs this; every other interpolated field uses plain `lerp()`.
   out-of-scope-for-this-doc discrepancy carried forward unchanged from
   the pre-rebuild driver. A live twist-scaling correction needs its own
   bench-verifiable change, not a doc-only note.
-- **Steady-state line/color sampling is not yet wired into the loop's
-  cycle** (root `DESIGN.md` §6 notes the same gap from the loop's side):
-  the leaves themselves are complete and tested, but no cycle slot calls
-  their `tick()` in the current schedule, and the telemetry schema
-  carries no line/color fields yet.
+- **(Resolved 115-005) Steady-state line/color sampling.** This used to
+  read "not yet wired into the loop's cycle" — that gap is closed:
+  `RobotLoop::updateLineColor()` now ticks one of the two leaves per
+  cycle, alternating, from the trailing pace block (see
+  [`../app/DESIGN.md`](../app/DESIGN.md) §2), and `Telemetry`'s packed
+  `line`/`color` words carry the result. Left as a dated note rather
+  than deleted outright, so a reader who only remembers the old gap can
+  see it was closed and when.

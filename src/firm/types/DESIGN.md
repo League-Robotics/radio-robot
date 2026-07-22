@@ -1,5 +1,5 @@
 ---
-root: ../DESIGN.md
+root: ../../../docs/design/design.md
 ---
 
 # types/ — Protocol Constants and Version Plumbing
@@ -15,7 +15,7 @@ never got a real home: text-protocol tag constants left over from the
 pre-binary-cutover command set, and the firmware-version generation seam
 (`FIRMWARE_VERSION` / `PROTO_VERSION`, fed by `version_generated.h`). It is
 not a subsystem in the sense the rest of `src/firm` uses the word — it is a
-leftover grab-bag flagged in the root doc's §3/§6 as needing an audit. This
+leftover grab-bag flagged in the system doc's §5 as needing an audit. This
 doc records that audit's findings.
 
 ## 2. Orientation
@@ -27,8 +27,9 @@ git-ignored `version_generated.h`, falling back to `"0.0.0-dev"` when that
 file is absent), the `ReplyFn`/`ReplyCtx` reply-sink types, and the `KVPair`
 key=value token struct. `version_generated.h` is emitted by
 `scripts/gen_version.py` (run from `build.py`'s codegen step, alongside
-`gen_messages.py`) and is never hand-edited — see the root doc's
-"generated files are never hand-edited" invariant.
+`gen_messages.py`) and is never hand-edited — see the system doc's
+"generated files are never hand-edited" convention
+(`docs/design/design.md` §3).
 
 ## 3. Constraints and Invariants
 
@@ -73,7 +74,7 @@ control flow to describe.
 
 ### Consumes
 - **`pyproject.toml` (via `scripts/gen_version.py`):** canonical version
-  string, at build time — see root doc's "Build-time generators".
+  string, at build time — see [`../../scripts/DESIGN.md`](../../scripts/DESIGN.md).
 
 ## 6. Open Questions / Known Limitations
 
@@ -92,8 +93,9 @@ control flow to describe.
 - **`PROTO_TAG_*` predate the binary cutover.** They belong to the old
   text-tag reply format (`OK`/`ERR`/`EVT`/`TLM`/`CFG`/`ID` as a leading
   token). The current wire protocol is the binary-armored envelope codec
-  (`msg::ReplyEnvelope` with an ok/err/tlm discriminant) — see root doc §4,
-  "Command plane." These constants have no counterpart need in that scheme.
+  (`msg::ReplyEnvelope` with an ok/err/tlm discriminant) — see
+  `docs/design/design.md` §5, "Command plane." These constants have no
+  counterpart need in that scheme.
 - **`ReplyFn`/`ReplyCtx`/`KVPair` are artifacts of the deleted
   dispatch-table architecture** (per-command handlers taking a reply
   sink + parsed kv-pairs), not the current single-loop design where

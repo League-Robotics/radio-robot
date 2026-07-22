@@ -1,5 +1,5 @@
 ---
-root: ../DESIGN.md
+root: ../../../docs/design/design.md
 ---
 
 # Kinematics (`src/firm/kinematics`, namespace `BodyKinematics`)
@@ -74,8 +74,9 @@ independent array-form implementation to keep in sync with the scalar one.
 ### Exposes
 - **`inverse(v, omega, b, vL_out, vR_out)`** / **`inverse(msg::BodyTwist3, b,
   wheels[2])`** — body twist to wheel speeds. Pure, no failure mode; `b` is
-  the caller's calibrated track width (see root DESIGN.md /
-  `config/DESIGN.md` for where that calibration comes from).
+  the caller's calibrated track width (see `docs/design/design.md` §5 /
+  [`../config/DESIGN.md`](../config/DESIGN.md) for where that calibration
+  comes from).
 - **`forward(vL, vR, b, v_out, omega_out)`** / array form — wheel speeds to
   body twist. Used by `app/Odometry` each cycle to fold encoder deltas into
   the twist it integrates.

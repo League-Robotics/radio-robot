@@ -1,5 +1,5 @@
 ---
-root: ../DESIGN.md
+root: ../../../docs/design/design.md
 ---
 
 # Com (src/firm/com)
@@ -18,8 +18,8 @@ nothing else. It does not know what a line means; that is `app/Comms`'s job
 (see [../app/DESIGN.md](../app/DESIGN.md)). The seam exists because these two
 transports are the only code in the firmware that must touch `MicroBit.h`
 directly outside `devices/microbit_*` and `main.cpp` — isolating them here is
-what keeps the rest of the tree `HOST_BUILD`-clean (root doc §3, HOST_BUILD
-purity).
+what keeps the rest of the tree `HOST_BUILD`-clean (the system doc's
+firmware-tree overview, `docs/design/design.md` §5, "HOST_BUILD purity").
 
 ## 2. Orientation
 
@@ -48,12 +48,13 @@ time, in both directions.
   is a correctness bug. Routing a reply through `send()` reintroduces silent
   reply loss under buffer pressure; routing telemetry through
   `sendReliable()` reintroduces the stalled-loop failure mode the split
-  exists to prevent (root doc §3, "App modules are passive and bounded").
+  exists to prevent (`docs/design/design.md` §5, "App modules are passive
+  and bounded").
 - **Neither transport ever blocks unboundedly or sleeps.** `readLine()`/
   `poll()` are non-blocking; `sendReliable()`'s wait is capped (5 ms serial,
   effectively bounded on radio by fragment count). A transport that blocks
   the calling cycle destroys the loop's timing budget exactly as an
-  in-loop sleep would (root doc §3).
+  in-loop sleep would (`docs/design/design.md` §5).
 - **Radio group is fixed at 10; only the channel (frequency band, 0–35) is
   configurable**, persisted in flash via `uBit.storage` (`radio_channel.h`).
   Group must match the RadioRelay's fixed group or the link never forms
@@ -154,8 +155,10 @@ hardware to catch up, not a scheduling primitive).
 
 - **CODAL / codal-microbit-v2 vendor SDK:** `NRF52Serial`, `MicroBitRadio`,
   `PacketBuffer`, `MicroBitStorage`, `MessageBus`,
-  `system_timer_current_time_us()`. See root doc §5 — vendor names are
-  exempt from project naming rules.
+  `system_timer_current_time_us()`. See
+  `.claude/rules/coding-standards.md`'s "external/vendor function names
+  are excluded" clause — vendor names are exempt from project naming
+  rules.
 - **`App::Transport` (from `app/`):** `com/` is consumed BY `app/comms.h`'s
   `SerialTransport`/`RadioTransport` adapters, not the other way around;
   `com/` has no include on `app/`. See [../app/DESIGN.md](../app/DESIGN.md).

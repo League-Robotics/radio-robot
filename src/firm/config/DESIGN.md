@@ -1,6 +1,6 @@
 ---
 template: /Volumes/Proj/proj/ai-projects/clasi/docs/design/SUBSYSTEM_DESIGN_TEMPLATE.md
-root: ../DESIGN.md
+root: ../../../docs/design/design.md
 ---
 
 # Config (src/firm/config)
@@ -21,7 +21,8 @@ turning "which physical robot is this" into boot-time constants, once,
 before `RobotLoop::run()` starts. It owns nothing about how those values are
 used afterward (that's `devices/` and `app/`) or how they can be changed
 live post-boot (that's the `DEV M <n> CFG` / `DEV DT CFG` wire surface — see
-root `DESIGN.md` §4 and `docs/protocol-v2.md`).
+the system doc's firmware-tree overview, `docs/design/design.md` §5, and
+`docs/protocol-v2.md`).
 
 **115-003 (gut-to-minimal-firmware S1 motion-stack excision):**
 `Config::defaultPlannerConfig() -> msg::PlannerConfig` is DELETED, not
@@ -58,7 +59,7 @@ robot if a JSON author fat-fingered a stale scale into them (see
 table). `main.cpp` calls the four `Config::default*()` functions once at
 boot, converts the wire-plane `msg::MotorConfig`/`msg::DrivetrainConfig`
 results into `Devices::MotorConfig` (the one place both types are visible —
-see root `DESIGN.md` §3, devices isolation invariant), and never touches
+see `docs/design/design.md` §5, devices isolation invariant), and never touches
 `data/robots/*.json` or `gen_boot_config.py` itself again.
 
 ## 3. Constraints and Invariants
@@ -119,8 +120,9 @@ to persist a JSON blob or a key/value store across power cycles. The only
 two places calibration can live are "compiled into the image" or "pushed
 over the wire after boot and held in RAM until the next reset." This
 subsystem owns the first; the second is the existing `DEV M <n> CFG` /
-`DEV DT CFG` live-correction surface described in the root architecture
-doc. Baking at build time means a single source tree can produce correctly
+`DEV DT CFG` live-correction surface described in the system doc's
+firmware-tree overview (`docs/design/design.md` §5). Baking at build
+time means a single source tree can produce correctly
 calibrated images for multiple physical robots (`tovez`, `tovez_nocal`,
 `togov`, …) just by pointing `active_robot.json` (or `ROBOT_CONFIG`) at a
 different file — no runtime robot-identity handshake, no on-device storage

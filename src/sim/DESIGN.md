@@ -1,80 +1,105 @@
-# src/sim — Simulator Design & End-to-End Data Flow
+# Sim (`src/sim`) — Host-Build Firmware Simulator
 
-This directory holds the **host-build firmware simulator**: the real
-`src/firm/` control loop compiled into a shared library
-(`build/libfirmware_host.dylib`) and driven from Python over a small
-`extern "C"` ABI. There is **one** sim object shared by tests and the
-TestGUI — the exact same command-in / telemetry-out path a serial or radio
-robot presents, so a test drives precisely what the GUI drives.
+**Owner:** Eric Busboom · **Last reviewed:** 2026-07-21 · **Status:** in-flux
 
-> **STALE (115-002/115-003/115-006, gut-to-minimal-firmware S1
-> motion-stack excision), not yet rewritten.** The worked example below
-> ("Test S — drive 700mm") and §§4/5/8 walk through the pre-gut MOVE
-> command path — `handleMove()`, `Motion::Cmd`/`Motion::fromMove()`,
-> `Pilot::enqueue()`/`Pilot::tick()`, `Motion::Executor` — all DELETED
-> wholesale this sprint, along with `App::Pilot`/`App::HeadingSource`/
-> `vendor/ruckig`. S1's minimal firmware has no MOVE command at all: the
-> command surface is TWIST+STOP+CONFIG{motor,otos}+deadman only (see
-> `src/firm/app/DESIGN.md`'s own 115-005 deletion note for the current,
-> accurate picture). `sim_harness.h`'s own composition root was updated for
-> this (ticket 115-006, "sim lockstep"); this walkthrough doc was not — the
-> STRUCTURAL flow it describes (TestGUI → SimTransport → SimLoop →
-> `sim_inject_command()` → `SimHarness::step()` → `App::RobotLoop::cycle()`
-> → `Comms::sendReply()` → `sim_drain_tlm()` → TestGUI) is still
-> essentially correct for a TWIST; only the MOVE-specific middle (dispatch
-> case, `Pilot`/`Motion::Executor` staging, completion-event draining) is
-> gone. Full rewrite tracked as a follow-up, not done as part of 115-009
-> (which named `src/firm/*/DESIGN.md` specifically, not this file).
+---
+
+## 1. Purpose
+
+`src/sim/` compiles the real `src/firm/` control loop into a host shared
+library (`build/libfirmware_host.dylib`) and drives it from Python over a
+small `extern "C"` ABI. It exists so that "does the firmware behave
+correctly" can be answered on a developer laptop, with no hardware and no
+serial/radio link — by running the identical `App::RobotLoop` code that
+ships to the robot against a simulated I2C bus instead of a real one.
+There is **one** sim object shared by both `src/tests/sim/`'s pytest
+suite and the TestGUI's Sim transport: the exact same command-in/
+telemetry-out path a serial or radio robot presents, so a test drives
+precisely what a developer watching the GUI drives — never two divergent
+sim implementations that could silently diverge from each other.
+
+## 2. Orientation
 
 | File | Role |
 |---|---|
-| `sim_plant.h` / `sim_plant.cpp` | `TestSim::SimPlant` — the one honest simulated I2C bus. Owns the wire *protocol* (Nezha `0x60`/`0x46` frames, OTOS register map); physics is delegated to `WheelPlant`×2 + `OtosPlant` (`src/tests/sim/plant/`). |
-| `sim_harness.h` | `TestSim::SimHarness` — composition root: wires the **real** `App::RobotLoop` firmware graph against `SimPlant`, a fake clock, and two `TestSupport::FakeTransport` links. |
-| `sim_ctypes.cpp` | `extern "C"` ABI over `SimHarness`/`SimPlant` — every export is a thin call-through so `ctypes` can drive the sim without a binding generator. |
-| `sim_clock.h` / `sim_clock.cpp` | `TestSim::SimClock`/`SimSleeper` — steppable virtual time (`Devices::Clock`/`Sleeper` impls). |
-| `CMakeLists.txt` | Builds `firmware_host` from these files + `src/firm/` + `src/tests/sim/{plant,support}`. |
+| `sim_plant.h` / `sim_plant.cpp` | `SimPlant` — the one honest simulated I2C bus. Owns the wire *protocol* (Nezha `0x60` duty write / `0x46` encoder select+read, OTOS register map); physics is delegated to `WheelPlant`×2 + `OtosPlant` (`src/tests/sim/plant/`). |
+| `sim_harness.h` | `SimHarness` — composition root: wires the **real** `App::RobotLoop` firmware graph (the same modules `src/firm/main.cpp` constructs — two `Devices::NezhaMotor`/`MotorArmor` pairs, `Devices::Otos`/`ColorSensorLeaf`/`LineSensorLeaf`, `App::Comms`/`Telemetry`/`Deadman`/`Drive`/`Odometry`/`Preamble`) against `SimPlant`, a fake clock, and two `TestSupport::FakeTransport` links (serial + radio). |
+| `sim_ctypes.cpp` | `extern "C"` ABI over `SimHarness`/`SimPlant` — every export is a thin call-through so Python's `ctypes` can drive the sim with no binding generator. |
+| `sim_clock.h` / `sim_clock.cpp` | `SimClock`/`SimSleeper` — steppable virtual time (`Devices::Clock`/`Sleeper` implementations); nothing advances the clock except an explicit `advanceMicros()` call from `SimHarness::step()`. |
+| `CMakeLists.txt` | Builds `firmware_host` from these files + `src/firm/` (HOST_BUILD) + `src/tests/sim/{plant,support}`. |
 
 The Python side lives in `src/host/robot_radio/`:
 
 - `io/sim_loop.py` — `SimLoop`: loads the dylib, owns the tick thread,
-  implements the `TwistTransport`/`MoveTransport` protocol
-  (`twist()`/`stop()`/`move()`/`read_pending_binary_tlm_frames()`).
+  implements `planner/executor.py`'s `TwistTransport` protocol
+  (`twist()`/`stop()`/`read_pending_binary_tlm_frames()`) directly
+  against the current minimal firmware's command surface.
 - `testgui/transport.py` — `SimTransport`: the TestGUI transport backend
   that wraps a `SimLoop`.
 
-Everything below traces one concrete round trip, with file/line
-references (line numbers as of 2026-07-18; function names are the durable
+**115-002/115-003/115-006 (gut-to-minimal-firmware S1 motion-stack
+excision) rewired the composition root, not just the walkthrough.**
+`SimHarness` no longer constructs or references `App::Pilot`/
+`Motion::Executor`/`App::HeadingSource` — every accessor that only
+existed to reach into them (`configurePlanner()`/`plannerConfig()`,
+`pilotQueueDepth()`/`pilotActiveId()`/`pilotState()`,
+`headingSourceIsOtos()`, `debugHeadingLead()`,
+`setLeadCompensation()`/`setYawRateMax()`/`setDistanceKp()`,
+`plannedRefLeft()`/`plannedRefRight()`) is gone, and the matching
+`sim_ctypes.cpp` exports (`sim_configure_planner`,
+`sim_read_planner_config`, `sim_set_lead_compensation`,
+`sim_set_yaw_rate_max`, `sim_debug_heading_lead`) were deleted with them
+— their old symbol names survive only as tombstone comments in
+`sim_ctypes.cpp`, not as callable exports. `SimHarness::injectMove()` and
+a dedicated `sim_inject_move` ctypes export do not exist either: sprint
+109's `Move` message was deleted (`envelope.proto`'s `CommandEnvelope`
+field 20 is `reserved`, not reused — sprint 116's planned MOVE protocol
+reintroduces a `Move`-shaped arm at a fresh number, never 20). The
+current command surface this simulator drives is **TWIST + STOP +
+CONFIG{motor,otos} + deadman only** — see
+[`../firm/DESIGN.md`](../firm/DESIGN.md) and
+[`../firm/app/DESIGN.md`](../firm/app/DESIGN.md) for the firmware side of
+the same statement.
+
+Everything below traces one concrete TWIST round trip, with file/line
+references current as of 2026-07-21 (function names are the durable
 anchor if lines drift):
 
-> **You click "Test S — drive 700mm" in the TestGUI. The robot drives
-> forward 700 mm in the sim. The encoder velocities appear back in the
-> TestGUI's telemetry panel.**
+> **The TestGUI's "Test S — drive 700mm (unmanaged)" button sends a
+> TWIST command. The robot drives forward in the sim. The encoder
+> velocities appear back in the TestGUI's telemetry panel.**
+
+There are, as of this review, **two visually similar "Test S" paths in
+the TestGUI with opposite functional status** — see §6. This walkthrough
+follows the one that actually works against the current firmware.
 
 ---
 
 ## 0. The big picture
 
 ```
- TestGUI (Qt main thread)                         Python                          C++ (one dylib)
-┌───────────────────────────┐   ┌────────────────────────────────┐   ┌─────────────────────────────────────┐
-│ Test S button             │   │ SimTransport._dispatch("D…")   │   │ sim_inject_command()                │
-│  └─ command("D 150 150    │──▶│  └─ _run_motion_async (thread) │──▶│  └─ SimHarness::injectCommand()     │
-│      700")                │   │      └─ parse_tour / run_tour  │   │      └─ FakeTransport inbound FIFO  │
-│                           │   │          └─ SimLoop.move()     │   │                                     │
-│                           │   │              *B<base64 Move>   │   │ SimLoop tick thread: sim_step(n)    │
-│                           │   │                                │   │  └─ SimHarness::step():             │
-│                           │   │                                │   │      SimPlant::tick(dt)   (physics) │
-│                           │   │                                │   │      SimClock advance               │
-│                           │   │                                │   │      App::RobotLoop::cycle():       │
-│                           │   │                                │   │        Comms::pump → handleMove     │
-│                           │   │                                │   │        Pilot/Executor → Drive       │
-│                           │   │                                │   │        NezhaMotor PID → 0x60 write ─┼─▶ SimPlant duty
-│                           │   │                                │   │        0x46 read ◀──────────────────┼── WheelPlant pos
-│                           │   │                                │   │        updateTlm → Telemetry::emit  │
-│ telemetry panel           │   │ SimLoop._drain_tlm_into_queue  │   │        → Comms::sendReply           │
-│  vel: L +150 R +150 mm/s  │◀──│  └─ TLMFrame.from_pb2 (vel=)   │◀──│        → FakeTransport sent_ FIFO   │
-│  (Qt bridge, main thread) │   │      on_telemetry callback     │   │ sim_drain_tlm() drains sent_        │
-└───────────────────────────┘   └────────────────────────────────┘   └─────────────────────────────────────┘
+ TestGUI (Qt main thread)                 Python                              C++ (one dylib)
+┌──────────────────────────┐  ┌────────────────────────────────┐  ┌─────────────────────────────────────┐
+│ "Test S (unmanaged)"      │  │ SimTransport.run_unmanaged()    │  │ sim_inject_twist(v_x, omega,         │
+│  button                   │─▶│  └─ SimLoop.twist(v_x, omega,   │─▶│                  duration, corr_id)  │
+│                           │  │      duration_ms)                │  │  └─ SimHarness::injectTwist()       │
+│                           │  │                                  │  │      └─ FakeTransport inbound FIFO  │
+│                           │  │                                  │  │                                     │
+│                           │  │                                  │  │ SimLoop tick thread: sim_step(n)    │
+│                           │  │                                  │  │  └─ SimHarness::step():             │
+│                           │  │                                  │  │      SimPlant::tick(dt)   (physics) │
+│                           │  │                                  │  │      SimClock advance               │
+│                           │  │                                  │  │      App::RobotLoop::cycle():       │
+│                           │  │                                  │  │        comms_.pump → handleTwist    │
+│                           │  │                                  │  │        Drive::setTwist + Deadman    │
+│                           │  │                                  │  │        drive_.tick → NezhaMotor PID │
+│                           │  │                                  │  │        → 0x60 write ────────────────┼─▶ SimPlant duty
+│                           │  │                                  │  │        0x46 read ◀───────────────────┼── WheelPlant pos
+│                           │  │                                  │  │        updateTlm → Telemetry::emit  │
+│ telemetry panel           │  │ SimLoop._drain_tlm_into_queue    │  │        → Comms::sendReply           │
+│  vel: L +150 R +150 mm/s  │◀─│  └─ TLMFrame.from_pb2 (vel=)     │◀─│        → FakeTransport sent_ FIFO   │
+│  (Qt bridge, main thread) │  │      on_telemetry callback       │  │ sim_drain_tlm() drains sent_        │
+└──────────────────────────┘  └────────────────────────────────┘  └─────────────────────────────────────┘
 ```
 
 Two FIFOs inside `TestSupport::FakeTransport`
@@ -84,449 +109,241 @@ directions, byte-identical to what a serial port would carry.
 
 ---
 
-## 1. Button click → wire command string
-
-**File: `src/host/robot_radio/testgui/__main__.py`**
-
-1. The button is built at line **903** (`test_s_btn = QPushButton("Test S —
-   drive 700mm")`) and wired at line **2928**
-   (`test_s_btn.clicked.connect(lambda: _run_sim_test("S"))`).
-2. `_run_sim_test("S")` (**2886-2926**) runs a worker thread that
-   rebuilds the sim dylib (`gen_version.py`, `gen_messages.py`,
-   `cmake --build src/sim/build --target firmware_host`, **2896-2900**),
-   copies it to a unique temp path for hot-reload (**2914-2919**, dlopen
-   caches by path), then emits `_test_bridge.rebuilt`.
-3. `_finish_test` (**2854-2882**, queued back onto the Qt main thread at
-   **2884**) disconnects any old transport, selects the Sim transport,
-   points the next connect at the fresh dylib
-   (`_set_sim_lib_override(fresh)`, **2868**; defined in
-   `transport.py:843-847`), reconnects (`_on_connect()`, **2870**),
-   resets pose/avatar (`_set_origin()`, **2876**), and finally sends the
-   command:
-
-   ```python
-   wire = "D 150 150 700" if kind == "S" else "RT 36000"   # __main__.py:2877
-   _state["transport"].command(wire, read_timeout=500)      # __main__.py:2879
-   ```
-
-   `"D 150 150 700"` = drive, left wheel 150 mm/s, right wheel 150 mm/s,
-   distance 700 mm.
-
----
-
-## 2. SimTransport routes the verb into a planner run
+## 1. Button click → transport call
 
 **File: `src/host/robot_radio/testgui/transport.py`**
 
-1. `SimTransport.command()` (**1219-1230**) logs the line and calls
-   `_dispatch(line)`.
-2. `_dispatch()` (**1232-1272**) tokenizes; verb `"D"` is in
-   `_MOTION_VERBS = ("D", "RT")` (**1203**), so it calls
-   `_run_motion_async("D 150 150 700")` (**1252-1253**).
-3. `_run_motion_async()` (**1464-1511**) spawns the `sim-direct-motion`
-   thread. Its `_worker` (**1482-1507**):
-   - `legs = parse_tour(["D 150 150 700"])` (**1489**)
-   - `run_tour(loop, params, heading, legs, should_stop=…)` (**1498-1501**)
-     where `loop` is the connected `SimLoop` (`self._loop`).
+`SimTransport.run_unmanaged(distance_mm)` (transport.py, class
+`SimTransport`) goes "straight through `twist` → `Drive::setTwist` — NO
+Motion::Executor/Ruckig" (its own docstring) — this is the deliberately
+minimal path that matches what the current firmware actually understands:
 
-**File: `src/host/robot_radio/planner/tour.py`**
+```python
+duration_ms = distance_mm / _UNMANAGED_SPEED * 1000   # 700 / 150 * 1000 ≈ 4667 ms
+self._loop.twist(v_x, omega, duration_ms)
+```
 
-4. `parse_tour()` (**247-284**) turns the string into a typed leg
-   (**269-274**):
-
-   ```python
-   TourLeg(kind="distance", value=700.0, speed=150.0)   # (|150|+|150|)/2
-   ```
-
-5. `run_tour()` (**486-641**) is the shared per-leg loop (same code a
-   hardware tour uses). `_move_kwargs_for_leg()` (**383-395**) converts
-   the leg into `Move` kwargs:
-
-   ```python
-   dict(distance=700.0, delta_heading=0.0, v_max=150.0)
-   ```
-
-   `send_leg(0)` (**553-554, 568**) calls `transport.move(**kwargs)` —
-   which is `SimLoop.move()` because `SimLoop` structurally satisfies
-   `MoveTransport` (**102-118**). The tour then polls
-   `_wait_for_move_terminal()` (**424-463**) → `_drain_and_poll()`
-   (**398-421**) on `transport.read_pending_binary_tlm_frames()` until an
-   ack with `corr_id == move_id` and `status != ACK_STATUS_OK` appears —
-   the leg's own completion event (see §8).
+Contrast this with `_dispatch()`'s `_MOTION_VERBS = ("D", "RT")` branch
+(the "managed" Test S/T path), which calls `_run_motion_async()` →
+`planner.tour.parse_tour()`/`run_tour()` → `SimLoop.move()` — see §6,
+this path is currently non-functional against the present wire schema
+and must not be used as a reference for how a TWIST-based test should
+work.
 
 ---
 
-## 3. SimLoop builds the binary envelope and injects it
+## 2. SimLoop injects the twist
 
 **File: `src/host/robot_radio/io/sim_loop.py`**
 
-1. `SimLoop.move()` (**454-490**) builds the protobuf envelope with the
-   same `pb2` codec real hardware uses (**482-488**):
+```python
+def twist(self, v_x: float, omega: float, duration: float) -> int:
+    corr_id = self._next_corr_id()
+    self._run_or_enqueue(lambda: self._lib.sim_inject_twist(
+        self._handle, ctypes.c_float(v_x), ctypes.c_float(omega),
+        ctypes.c_float(duration), ctypes.c_uint32(corr_id)))
+    return corr_id
+```
 
-   ```python
-   envelope = pb2.CommandEnvelope(
-       corr_id=move_id,
-       move=pb2.Move(distance=700.0, delta_heading=0.0,
-                     v_max=150.0, omega=0.0, time=0.0,
-                     replace=False, id=move_id))
-   armored = base64.b64encode(envelope.SerializeToString())
-   self.inject_command(f"*B{armored}")                     # sim_loop.py:489
-   ```
-
-   `move_id` doubles as the enqueue ack's `corr_id` **and** `Move.id`,
-   the key of the later completion event.
-2. `inject_command()` (**524-531**) enqueues
-   `lambda: self._lib.sim_inject_command(self._handle, encoded)` onto
-   `self._cmd_queue` via `_run_or_enqueue()` (**834-840**) — the tick
-   thread is the only thread that ever touches the ctypes handle.
-3. The tick thread `_tick_loop()` (**872-974**) executes it on its next
-   iteration via `_drain_cmd_queue()` (**918**, body **976-993**).
+`_run_or_enqueue()` marshals the ctypes call onto the sim tick thread —
+the only thread that ever touches the ctypes handle.
 
 **File: `src/sim/sim_ctypes.cpp` → `src/sim/sim_harness.h`**
 
-4. `sim_inject_command()` (`sim_ctypes.cpp:231-233`) →
-   `SimHarness::injectCommand()` (`sim_harness.h:175`) →
-   `serialLink_.enqueueInbound(armoredLine)` — the inbound FIFO of the
-   serial-side `FakeTransport` (`fake_transport.h:46`).
+`sim_inject_twist()` → `SimHarness::injectTwist()` → a convenience
+wrapper over `TestSupport::armorTwistCommand()` that armors a
+`msg::CommandEnvelope{cmd_kind: TWIST}` and calls the same
+`injectCommand()` → `serialLink_.enqueueInbound(armoredLine)` path as
+every other inbound command — the inbound FIFO of the serial-side
+`FakeTransport`.
 
 The command is now sitting "on the wire", exactly as if a serial port had
 received the line.
 
 ---
 
-## 4. The tick thread steps the sim; the firmware loop consumes the command
+## 3. The tick thread steps the sim; the firmware loop consumes the command
 
 **File: `src/host/robot_radio/io/sim_loop.py`**
 
-Every tick-thread iteration calls
-`self._lib.sim_step(self._handle, cycles)` (**936**), paced to one 50 ms
-sim cycle per 50 ms of wall clock at 1× (`_CYCLE_DURATION_S`, **140**;
-speed factor scales `cycles`, **933**; an idle plant drops to a 2 s
-heartbeat, **922-931**).
+Every tick-thread iteration calls `self._lib.sim_step(self._handle,
+cycles)`, paced to one 20 ms sim cycle (`kCycleDtUs = 50000` — wait, see
+note below) per wall-clock interval at 1× speed factor.
+
+> Note: `SimHarness`'s own `kCycleDtUs` constant is 50000 (50 ms), one
+> full order of magnitude coarser than the firmware's own `kCycle` = 20
+> ms pacing constant (`src/firm/app/robot_loop.cpp`). The simulator
+> steps the plant and virtual clock forward in 50 ms increments and then
+> calls `RobotLoop::cycle()` once per step — this does not desynchronize
+> firmware *logic* (the loop has no dependency on wall-clock cadence,
+> only on `Devices::Clock::nowMicros()`, which `SimClock` reports
+> correctly for whatever step size was actually taken), but a reader
+> should not assume `sim_step(1)` corresponds to one 20 ms firmware
+> cycle — it corresponds to one `SimHarness::step()` call, currently 50
+> ms of advanced virtual time per call.
 
 **File: `src/sim/sim_harness.h`**
 
-`sim_step()` (`sim_ctypes.cpp:221`) → `SimHarness::step()` (**162-169**),
-whose ordering is the harness's one invariant — plant physics **before**
-the loop reads it:
+`sim_step()` → `SimHarness::step()`, whose ordering is the harness's one
+invariant — plant physics **before** the loop reads it:
 
 ```cpp
-plant_.tick(kCycleDtUs / 1e6f);   // physics first          sim_harness.h:164
-clock_.advanceMicros(kCycleDtUs); // then virtual time (50ms) :165
-robotLoop_.cycle();               // then the real firmware   :166
+void step(int cycles = 1) {
+  for (int i = 0; i < cycles; ++i) {
+    plant_.tick(static_cast<float>(kCycleDtUs) / 1e6f);  // physics first
+    clock_.advanceMicros(kCycleDtUs);                     // then virtual time
+    robotLoop_.cycle();                                   // then the real firmware
+    ++cycleCount_;
+  }
+}
 ```
 
-**File: `src/firm/app/robot_loop.cpp` — one `cycle()` (412-495)**
+**File: `src/firm/app/robot_loop.cpp` — one `cycle()`**
 
-The cycle is four `runAndWait` pacing blocks (~40 ms budget, `kCycle`,
-**25**):
+The cycle is the same schedule described in
+[`../firm/app/DESIGN.md`](../firm/app/DESIGN.md) §2/§4 — left-motor
+request/settle/collect/PID, comms pump + command dispatch, telemetry
+emit, right-motor request/settle/collect/PID, deadman check, trailing
+perception+odometry+pace block. The command-relevant slice:
 
-1. `motorL_.requestSample()` (**417**) — 0x46 encoder-select write for
-   the left motor (see §6).
-2. Settle block (**419-421**): `comms_.pump(cmd)` — **this is where our
-   command comes off the wire**. `Comms::pump()`
-   (`src/firm/app/comms.cpp:49-53`) → `pumpTransport()` (**55-76**) reads
-   one line from the `FakeTransport`, sees `*B`, and
-   `decodeArmoredLine()` (**78-115**) base64-decodes and
-   `msg::wire::decode()`s it into a `msg::CommandEnvelope`.
-3. `motorL_.tick(...)` (**423**) — left collect + PID + duty write (§5/§6).
-4. Clear block (**425-433**): `updateTlm(); tlm_.emit(cycleStart)` —
-   telemetry out (§7).
-5. `motorR_.requestSample()` (**435**).
-6. Settle block (**437-470**): `processMessage(cmd)` (**443**) dispatches
-   by `cmd_kind` (**351-372**); `MOVE` → `handleMove()` (**319-337**):
-
+1. A `runAndWait` settle block calls `comms_.pump(cmd)` — decodes at
+   most one frame off the wire into the cycle-local `cmd`.
+2. A second `runAndWait` settle block calls `processMessage(cmd)`, which
+   switches on `cmd.env.cmd_kind`:
    ```cpp
-   Motion::Cmd cmd = Motion::fromMove(env.cmd.move);   // robot_loop.cpp:320
-   Motion::EnqueueOutcome outcome = pilot_.enqueue(cmd);          // :321
-   ...
-   tlm_.ack(env.corr_id, msg::AckStatus::ACK_STATUS_OK, 0);       // :327
+   case msg::CommandEnvelope::CmdKind::TWIST:  handleTwist(cmd.env);  break;
+   case msg::CommandEnvelope::CmdKind::CONFIG: handleConfig(cmd.env); break;
+   case msg::CommandEnvelope::CmdKind::STOP:   handleStop(cmd.env);   break;
    ```
-
-   `Motion::fromMove()` is a field-for-field copy
-   (`src/firm/motion/cmd.h:50`); `Pilot::enqueue()` forwards to
-   `Motion::Executor::enqueue()` (`src/firm/app/pilot.h:136` →
-   `src/firm/motion/executor.cpp:466`). The immediate `ACK_STATUS_OK`
-   rides the next telemetry frame's ack ring — that is `run_tour()`'s
-   enqueue acknowledgment.
-
-   Then `pilot_.tick(cycleStart, nowUs)` (**459**) and `drive_.tick()`
-   (**469**) stage this cycle's motion (§5), and `drainPilotEvents()`
-   (**467**, body **339-344**) forwards any completion events to the ack
-   ring (§8).
-7. `motorR_.tick(...)` (**472**).
-8. Pace block (**484-494**): OTOS read, `odom_.integrate()`,
-   `frame_.pose = {...}` (**487**), and `pilot_.plan()` (**493**) — at
-   most one jerk-limited trajectory solve per cycle
-   (`Motion::Executor::plan()`, `executor.cpp:538`).
+3. `handleTwist()`:
+   ```cpp
+   void RobotLoop::handleTwist(const msg::CommandEnvelope& env) {
+     if (!configured_) { tlm_.ack(env.corr_id, ERR_NOT_CONFIGURED); return; }
+     drive_.setTwist(env.cmd.twist.v_x, 0.0f, env.cmd.twist.omega);
+     deadman_.arm(env.cmd.twist.duration);
+     driving_ = true;
+     tlm_.ack(env.corr_id, 0);
+   }
+   ```
+   The immediate `ack(env.corr_id, 0)` rides the next telemetry frame's
+   single ack slot (`flags` bit 5, `ack_corr`/`ack_err`) — see
+   [`../firm/messages/DESIGN.md`](../firm/messages/DESIGN.md) and
+   [`../firm/app/DESIGN.md`](../firm/app/DESIGN.md) §4.
+4. The deadman check runs in the same settle block right after
+   `processMessage()`: `deadman_.expired()` forces `drive_.stop()` and
+   `driving_ = false` if the armed duration has elapsed with no
+   refreshing command.
 
 ---
 
-## 5. Move → twist → per-wheel velocity targets
+## 4. Twist → per-wheel velocity targets → duty write
 
-Each cycle while the executor is running:
-
-- `Pilot::tick()` (`src/firm/app/pilot.cpp:7-44`) samples the heading
-  source, gets this cycle's setpoint from
-  `Motion::Executor::tick(dt, odom_.lastDistance(), heading, headingLead)`
-  (**20-21**; `executor.cpp:669`), adds the heading-PD correction to
-  `omega` (**33-36**), and stages it:
-
-  ```cpp
-  drive_.setTwist(twist.v, omega);        // pilot.cpp:42
-  ```
-
-- `Drive::setTwist()` stores `v_x_`/`omega_`
-  (`src/firm/app/drive.cpp:10-13`); `Drive::tick()` (**20-26**) splits
-  the twist into wheel velocities via `BodyKinematics::inverse()` and
-  calls `left_.setVelocity(vL); right_.setVelocity(vR)` — for a straight
-  700 mm leg both targets ramp to ±150 mm/s.
-
-- `NezhaMotor::setVelocity()` stores `velocityTarget_`
-  (`src/firm/devices/nezha_motor.cpp:103-107`). In
-  `NezhaMotor::tick()` step 4 (**380-391**) the velocity PID computes a
-  duty from target vs. measured:
-
-  ```cpp
-  float duty = pid_.compute(velocityTarget_, filteredVelocity_, dt,
-                            config_.velGains, config_.velDeadband);  // nezha_motor.cpp:384
-  armoredWrite(duty, nowMs);                                        // :387
-  ```
-
-  (`VelocityPid::compute` lives in `src/firm/devices/velocity_pid.cpp`;
-  `armoredWrite` is the `MotorArmor` policy gate,
-  `src/firm/devices/motor_armor.h`.)
-
-- `writeRawDuty()` (**423-489**) clamps/slews and issues the vendor duty
-  frame; `writeMotorRun()` (**491-508**) puts the actual 8 bytes on the
-  bus:
-
+- `Drive::setTwist(v_x, 0, omega)` stores the staged target;
+  `Drive::tick()` (called every cycle, from the top of `cycle()`) splits
+  it into wheel velocities via `BodyKinematics::inverse()` and calls
+  `left_.setVelocity(vL)`/`right_.setVelocity(vR)` on the two
+  `MotorArmor`-wrapped `NezhaMotor` leaves. For a straight 700 mm leg at
+  150 mm/s, both targets ramp to ±150 mm/s.
+- Each `NezhaMotor::tick()`'s velocity PID computes a duty from target vs.
+  measured velocity, and `armoredWrite()` (the `MotorArmor` policy gate)
+  issues the vendor duty frame:
   ```cpp
   uint8_t buf[8] = { 0xFF, 0xF9, port, direction, 0x60, speed, 0xF5, 0x00 };
-  bus_.write(0x10 << 1, buf, 8, ...);                    // nezha_motor.cpp:493-507
+  bus_.write(0x10 << 1, buf, 8, ...);
   ```
 
 **The sim boundary:** `bus_` here **is** the `SimPlant` (constructor
-injection, `sim_harness.h:109-110`). `SimPlant::write()`
-(`src/sim/sim_plant.cpp:83-86`) dispatches to `handleMotorWrite()`
-(**113-146**), which parses the same frame the real brick would:
-`cmd==0x60` → `duty = ±speed/100` stored into `leftDuty_`/`rightDuty_` by
-`port` (**121-139**). No prediction, no back-channel — the plant reacts
-only to bytes actually written.
+injection into `Devices::NezhaMotor`, mirroring the real ARM build's
+`Devices::MicroBitI2CBus`). `SimPlant::write()` dispatches to
+`handleMotorWrite()`, which parses the same 8-byte frame the real Nezha
+brick would: `cmd == 0x60` → `duty = ±speed/100` stored into
+`leftDuty_`/`rightDuty_` by `port`. **No prediction, no back-channel** —
+the plant reacts only to bytes actually written.
 
-On the next `SimHarness::step()`, `SimPlant::tick(dt)`
-(`sim_plant.cpp:238-242`) integrates the physics:
+On the next `SimHarness::step()`, `SimPlant::tick(dt)` integrates the
+physics — delegated to `src/tests/sim/plant/`'s `WheelPlant`/`OtosPlant`,
+never reimplemented here:
 
 ```cpp
-left_.step(leftDuty_, dt);      // duty -> velocity -> position (WheelPlant)
-right_.step(rightDuty_, dt);
-otos_.step(left_.position(), right_.position(), dt);
+void SimPlant::tick(float dt) {
+  left_.step(leftDuty_, dt);
+  right_.step(rightDuty_, dt);
+  otos_.step(fwdSignL * left_.position(), fwdSignR * right_.position(), dt);
+}
 ```
 
-(`WheelPlant`/`OtosPlant` are in `src/tests/sim/plant/` — a first-order
-duty→velocity model with fault knobs and, on this ctypes path, rest-encoder
-jitter enabled at `sim_ctypes.cpp:195`.)
+`WheelPlant`/`OtosPlant` are a first-order duty→velocity→position model
+with fault-injection knobs (motor disconnect, encoder wedge/dropout,
+encoder scale/slip/tick-quantization error, OTOS drift/raw-scale error)
+that `SimPlant`'s own `set*` methods (and the matching
+`sim_set_wheel_*`/`sim_set_enc_*`/`sim_set_otos_*` ctypes exports)
+expose to Python test code — see
+[`../tests/DESIGN.md`](../tests/DESIGN.md) §2.
 
 ---
 
-## 6. Encoder read-back: where "encoder velocity" is measured
+## 5. Encoder read-back
 
-The firmware reads encoders split-phase, exactly as on hardware:
+Split-phase, exactly as on hardware (see
+[`../firm/devices/DESIGN.md`](../firm/devices/DESIGN.md) §4):
 
-1. **Request** — `NezhaMotor::requestSample()`
-   (`nezha_motor.cpp:543-549`) → `requestEncoder()` (**551-564**) writes
-   the encoder-select frame `{0xFF,0xF9,port,0x00,0x46,0x00,0xF5,0x00}`.
-   In the sim, `SimPlant::handleMotorWrite()` records
-   `selectedPort_ = port` (`sim_plant.cpp:141-144`).
-2. **Collect** — `NezhaMotor::collectEncoder()` (**566-590**) issues a
-   4-byte read. `SimPlant::handleMotorRead()` (`sim_plant.cpp:158-164`)
-   answers with the selected wheel's position, converted mm → raw counts
-   (`kEncoderCountsPerMm = 1.4187`, **156**) and packed little-endian in
-   tenths — the same wire format the real brick uses.
-3. **Convert** — back in `NezhaMotor::tick()` step 2
-   (`nezha_motor.cpp:248-250`):
-
-   ```cpp
-   int32_t raw = collectEncoder();
-   float pos = (raw / 10.0f) * config_.wheelTravelCalib * fwdSign;  // counts -> mm
-   ```
-
-4. **Velocity estimate** — the freshness gate (**286**) only computes on
-   a genuinely new raw count; then either the EMA path (**335-338**,
-   `rawVel = (pos - lastPosition_) / freshElapsed` smoothed by
-   `velFiltAlpha`) or the line-fit estimator (`lineFitVelocity()`,
-   **199-218**) updates `filteredVelocity_`.
-5. **Getters** — `position()` / `velocity()` (**224-225**) expose
-   `lastPosition_` / `filteredVelocity_`. **`velocity()` is the "encoder
-   velocity" the GUI will display.**
+1. **Request** — `NezhaMotor::requestSample()` writes the encoder-select
+   frame `{0xFF,0xF9,port,0x00,0x46,0x00,0xF5,0x00}`. `SimPlant`'s
+   `handleMotorWrite()` records `selectedPort_ = port` for the same
+   address, since the encoder-select opcode (`0x46`) and the duty-write
+   opcode (`0x60`) share the motor's wire address.
+2. **Collect** — `NezhaMotor::collectEncoder()` issues a 4-byte read.
+   `SimPlant::handleMotorRead()` answers with the selected wheel's
+   position, converted mm → raw counts (`kEncoderCountsPerMm = 1.4187`)
+   and packed little-endian in tenths — the same wire format the real
+   brick uses.
+3. **Convert + estimate velocity** — `NezhaMotor::tick()` converts the
+   raw count to mm and updates `filteredVelocity_` via the freshness-gated
+   EMA/line-fit estimator (see
+   [`../firm/devices/DESIGN.md`](../firm/devices/DESIGN.md) §4).
+   `velocity()` is the "encoder velocity" the GUI displays.
 
 ---
 
-## 7. Telemetry out: velocities onto the wire
+## 6. Telemetry out and back into Python
 
-**File: `src/firm/app/robot_loop.cpp`**
-
-`updateTlm()` (**137-184**) stages the per-cycle frame — the two lines
-that matter for this trace:
-
-```cpp
-frame_.velLeft  = motorL_.velocity();    // robot_loop.cpp:144
-frame_.velRight = motorR_.velocity();    // robot_loop.cpp:145
-```
-
-plus `encLeft/encRight` (**141-142**), the fused body twist (**157-159**),
-`pose` (staged in the pace block, **487**), `active = driving_` (**162**),
-and executor visibility (**166-168**). `tlm_.setFrame(frame_)` (**183**),
-then `tlm_.emit(cycleStart)` (**432**).
-
-**File: `src/firm/app/telemetry.cpp`**
-
-`Telemetry::emit()` (**62-103**) paces primary (~25 Hz, every sim cycle
-since `kCycleDtUs`=50 ms ≥ `kPrimaryPeriod`=40 ms) vs. secondary frames.
-`emitPrimary()` (**105-154**) copies the staged frame into the protobuf:
-
-```cpp
-tlm.vel_left  = frame_.velLeft;     // telemetry.cpp:119
-tlm.vel_right = frame_.velRight;    // telemetry.cpp:120
-```
-
-with the ack ring riding the same frame (**107-108**), wraps it in
-`ReplyEnvelope{body: TLM}` (**144-147**), and calls
-`comms_.sendReply(env)` (**149**).
-
-**File: `src/firm/app/comms.cpp`**
-
-`sendReply()` (**117-142**) encodes and armors — `'*' 'B' + base64` —
-and broadcasts on both transports (**140-141**). In the sim those are
-the two `FakeTransport`s; `FakeTransport::send()` appends the armored
-line to its `sent_` capture (`fake_transport.h:60`).
-
----
-
-## 8. Completion event (how the tour learns the 700 mm is done)
-
-When `Motion::Executor` finishes the DISTANCE profile it emits a
-`CompletionEvent{id, kDone}` (ring at `executor.cpp:149`, popped at
-**163**). Each cycle `RobotLoop::drainPilotEvents()`
-(`robot_loop.cpp:339-344`) converts it:
-
-```cpp
-tlm_.ack(event.id, toWireAckStatus(event.status), 0);   // ACK_STATUS_DONE
-```
-
-`Telemetry::ack()` (`telemetry.cpp:34-50`) pushes it into the 3-deep ack
-ring, so it rides the next primary frame. Host-side,
-`run_tour()`'s `_drain_and_poll()` (`tour.py:413-421`) matches
-`ack.corr_id == move_id && status != ACK_STATUS_OK` → terminal →
-`RunOutcome.COMPLETED` (`_outcome_for_status`, **466-476**), and
-`SimTransport._run_motion_async`'s worker logs
-`"'D 150 150 700' -> completed"` (`transport.py:1506-1507`).
-
----
-
-## 9. Telemetry back into Python
+`RobotLoop`'s `updateTlm()`/`Telemetry::emit()` stage and send the
+primary frame exactly as described in
+[`../firm/app/DESIGN.md`](../firm/app/DESIGN.md) §4 — `EncoderReading`
+per wheel (position + velocity + sample time), `OtosReading` (position +
+heading + v_x/v_y/omega + burst time), the single `flags` word, the
+single ack slot, packed line/color words — every 20 ms firmware cycle
+(not every `sim_step()` call — see §3's note on the two different step
+sizes). `Comms::sendReply()` armors and broadcasts on both
+`FakeTransport`s; `FakeTransport::send()` appends to its `sent_` capture.
 
 **File: `src/sim/sim_harness.h` / `src/sim/sim_ctypes.cpp`**
 
-- `SimHarness::drainRawTelemetry()` (`sim_harness.h:289-296`) returns
-  every not-yet-drained line from `serialLink_.sent()` (its own drain
-  index, **496**).
-- `sim_drain_tlm()` (`sim_ctypes.cpp:237-248`) newline-joins them into
-  the caller's buffer (snprintf-style return so Python can detect
-  truncation).
+`SimHarness::drainRawTelemetry()` returns every not-yet-drained armored
+line from `serialLink_.sent()` (its own drain index, separate from the
+higher-level `drainTelemetry()`'s index). `sim_drain_tlm()` newline-joins
+them for the caller's buffer.
 
 **File: `src/host/robot_radio/io/sim_loop.py`**
 
 Every tick-thread iteration, right after `sim_step()`,
-`_drain_tlm_into_queue()` (**940**, body **995-1063**):
+`_drain_tlm_into_queue()`: calls `sim_drain_tlm()`, dearmors + decodes
+each line with the same `pb2` codec a real robot's replies go through,
+builds a `TLMFrame` via `TLMFrame.from_pb2()`
+(`src/host/robot_radio/robot/protocol.py`), pushes it onto the bounded
+`_tlm_queue` (what `read_pending_binary_tlm_frames()` polls) and delivers
+it to `self.on_telemetry(frame)` — the push path the TestGUI's telemetry
+panel renders from (thread-hopped onto the Qt main thread via a queued
+signal).
 
-1. `self._lib.sim_drain_tlm(self._handle, buf, 16384)` (**1011**, retry
-   sized-exactly on truncation **1012-1019**).
-2. Per line: `_dearmor_reply()` (**206-218**) strips `*B`, base64-decodes,
-   parses `pb2.ReplyEnvelope`; non-TLM bodies are skipped (**1030**).
-3. `frame = TLMFrame.from_pb2(reply.tlm)` (**1032**) — the **same**
-   decoder a real robot's replies go through
-   (`src/host/robot_radio/robot/protocol.py:216-341`); the velocities
-   land at:
-
-   ```python
-   if telemetry.has_vel:
-       frame.vel = (int(telemetry.vel_left), int(telemetry.vel_right))  # protocol.py:314-315
-   ```
-
-   (`TLMFrame.vel` declared at `protocol.py:196` — differential
-   `(vL, vR)` in mm/s.)
-4. Sim-only extra ("Path B"): the **commanded** per-wheel velocity is not
-   on the primary wire frame (186-byte envelope budget) — it is read
-   straight off the live firmware objects and stamped onto the frame
-   (**1039-1043**) via `sim_cmd_vel_left/right()`
-   (`sim_ctypes.cpp:216-217` → `NezhaMotor::velocityTarget()`), feeding
-   the commanded-vs-actual wheel-speed graph.
-5. The frame goes onto the bounded `_tlm_queue` (**1048-1056**, feeding
-   `read_pending_binary_tlm_frames()` — what `run_tour()` polls) **and**
-   is delivered to `self.on_telemetry(frame)` (**1058-1062**) — the push
-   path to the GUI.
-
----
-
-## 10. GUI display: the encoder velocities you see
-
-**Wiring (at connect time):**
-
-- `SimTransport.connect()` sets `loop.on_telemetry = self._deliver_tlm`
-  (`transport.py:1120`); `Transport._deliver_tlm` (**466-472**) forwards
-  to `self.on_telemetry`.
-- The GUI set that to `_on_telemetry_thread_v2`
-  (`__main__.py:2645`).
-
-**Thread hop (tick thread → Qt main thread):**
-
-- `_on_telemetry_thread_v2()` (`__main__.py:1952-1965`) — runs on the
-  SimLoop tick thread — caches `_state["last_tlm"]`, puts the frame on
-  `_pending_frames` (declared **1485**), and emits
-  `_bridge.frame_ready` (`_TelemetryBridge`, **1529-1535**), connected
-  with `Qt.QueuedConnection` to a bound-method slot (**1642**) so the
-  slot runs on the Qt main thread.
-
-**Main-thread render:**
-
-- `on_frame_ready()` (**1592-1624**) drains `_pending_frames`, feeds each
-  frame to the trace model and graph panel
-  (`graph_panel.add_tlm(...)`, **1603** —
-  `TurnTraceRecorder.add_tlm` records `vel_l`/`vel_r`/`cmd_l`/`cmd_r`,
-  `turn_graphs.py:141`; the "Wheel speed — commanded vs actual" graph is
-  `turn_graphs.py:366`), refreshes the canvas avatar once per burst, and
-  updates the breakout panel with the freshest frame:
-  `telemetry_ctrl.update_frame(last_frame)` (**1624**).
-
-**File: `src/host/robot_radio/testgui/telemetry_panel.py`**
-
-- The `vel` row is declared at **359**
-  (`("vel", "tlm_val_vel", True, "tlm_arrow_vel")`).
-- `update_frame()` (**431-460**) renders it:
-
-  ```python
-  self._values["tlm_val_vel"].setText(fmt_vel(getattr(frame, "vel", None)))  # :436
-  wheel = wheel_velocity(getattr(frame, "vel", None))                        # :456
-  self._arrows["tlm_arrow_vel"].set_vector(*(wheel or (0.0, 0.0)))           # :457
-  ```
-
-- `fmt_vel()` (**162-168**) produces the text you read:
-
-  ```
-  vel   L +150   R +150   mm/s
-  ```
-
-- The rolling 10-second "Wheel speed" strip chart next to the readouts is
-  `StripChartCanvas("Wheel speed", "mm/s", WHEEL_SPEED)`
-  (**393**, series schema `turn_graphs.py:34`), redrawn on a 200 ms timer
-  (**410-412**) from the shared `TurnTraceRecorder`.
-
-That closes the loop: button → wire text → planner leg → binary `Move`
-envelope → FakeTransport → real firmware loop → PID → 0x60 duty writes →
-WheelPlant physics → 0x46 encoder reads → `filteredVelocity_` →
-`Telemetry` frame → armored reply → drain → `TLMFrame.vel` → Qt bridge →
-`vel` row + wheel-speed chart.
+`sim_cmd_vel_left()`/`sim_cmd_vel_right()` (reading
+`NezhaMotor::velocityTarget()` directly, not via the wire) are a
+sim-only diagnostic extra ("Path B") — the *commanded* per-wheel
+velocity is not on the primary wire frame (envelope budget), so it is
+stamped onto the Python-side frame separately, feeding the
+commanded-vs-actual wheel-speed graph. It is read-only diagnostic
+telemetry, never plant input (see the "No back-channel" invariant
+below).
 
 ---
 
@@ -534,26 +351,22 @@ WheelPlant physics → 0x46 encoder reads → `filteredVelocity_` →
 
 | Thread | Created by | Runs |
 |---|---|---|
-| Qt main thread | `__main__.py` | Button handlers, `_dispatch()`, all widget updates (`on_frame_ready`, `update_frame`) |
-| `sim-test-S` worker | `_run_sim_test` (`__main__.py:2926`) | dylib rebuild/copy only |
-| `sim-direct-motion` | `SimTransport._run_motion_async` (`transport.py:1509`) | `parse_tour`/`run_tour` — sends `move()`, polls acks |
-| `sim-loop-tick-thread` | `SimLoop.connect()` (`sim_loop.py:399`) | **Sole owner of the ctypes handle**: `sim_step`, command-queue drain, `sim_drain_tlm`, `on_telemetry`/`on_truth` callbacks |
+| Qt main thread | TestGUI `__main__.py` | Button handlers, `_dispatch()`, all widget updates |
+| `sim-direct-motion` | `SimTransport._run_motion_async` | The MANAGED path's `parse_tour`/`run_tour` (currently broken — §6) |
+| sim tick thread | `SimLoop.connect()` | **Sole owner of the ctypes handle**: `sim_step`, command-queue drain, `sim_drain_tlm`, `on_telemetry`/`on_truth` callbacks |
 
-The ctypes handle (`TestSim::SimHarness*`) is not thread-safe; every
-call is either executed by the tick thread (fire-and-forget via
-`_run_or_enqueue`, `sim_loop.py:834`) or synchronously round-tripped onto
-it (`_call_on_tick_thread`, **842-866**).
+The ctypes handle (`SimHarness*`) is not thread-safe; every call is
+either executed by the tick thread (fire-and-forget via
+`_run_or_enqueue`) or synchronously round-tripped onto it.
 
 ## Invariants worth keeping
 
-1. **Plant ticks before the loop reads it** — `SimHarness::step()` order
-   (`sim_harness.h:162-169`); reversing it makes every sensor read one
-   cycle stale.
-2. **No back-channel** — `SimPlant` learns duty only from parsed 0x60
-   frames (`sim_plant.h:188-191`), never from
-   `NezhaMotor::appliedDuty()`. The one sanctioned exception is the
-   read-only `cmd_vel` stamp (Path B, §9.4), which is diagnostic
-   telemetry, not plant input.
+1. **Plant ticks before the loop reads it** — `SimHarness::step()`'s
+   fixed order; reversing it makes every sensor read one cycle stale.
+2. **No back-channel** — `SimPlant` learns duty only from parsed `0x60`
+   frames, never from `NezhaMotor::appliedDuty()` directly. The one
+   sanctioned exception is the read-only `cmd_vel` stamp (§6's "Path B"),
+   which is diagnostic telemetry, not plant input.
 3. **One decode path** — sim telemetry is dearmored/parsed by the same
    `pb2` codec and `TLMFrame.from_pb2()` a real robot's replies use;
    tests and the TestGUI therefore exercise the identical wire format.
@@ -561,3 +374,73 @@ it (`_call_on_tick_thread`, **842-866**).
    unmodified into the dylib; the sim substitutes only the `I2CBus`
    (`SimPlant`), `Clock`/`Sleeper` (`SimClock`), and `Transport`
    (`FakeTransport`) seams.
+
+## 7. Interfaces
+
+### Exposes
+
+- **`extern "C"` ABI (`sim_ctypes.cpp`):** lifecycle
+  (`sim_create`/`sim_destroy`/`sim_booted`/`sim_cycle_count`/
+  `sim_firmware_version`), stepping (`sim_step`), command injection
+  (`sim_inject_twist`/`sim_inject_stop`/`sim_inject_command`), telemetry
+  (`sim_drain_tlm`), true-pose readback (`sim_true_x/y/h`,
+  `sim_set_true_pose`), fault-injection knobs
+  (`sim_set_wheel_disconnected/freeze/dropout_rate`,
+  `sim_set_otos_drift`, `sim_set_enc_scale_err/tick_quant/slip`,
+  `sim_set_otos_raw_scale_err`), config load
+  (`sim_configure_motor`/`sim_read_motor_config`), read/write hooks
+  (`sim_set_read_hook`/`sim_set_write_hook`/`sim_default_read`/
+  `sim_default_write`), and diagnostic commanded-velocity readback
+  (`sim_cmd_vel_left/right`, `sim_set_pid_enabled`). `sim_inject_move`
+  and every planner/pilot/heading-source accessor are gone (see §2).
+- **`libfirmware_host.dylib`** itself — the build artifact `SimLoop`
+  loads; see [`../tests/DESIGN.md`](../tests/DESIGN.md) for the CMake
+  target that produces it.
+
+### Consumes
+
+- **`src/firm/` (compiled `-DHOST_BUILD`)** — the real firmware graph;
+  see [`../firm/DESIGN.md`](../firm/DESIGN.md) §4 "Two build targets, one
+  tree."
+- **`src/tests/sim/plant/`'s `WheelPlant`/`OtosPlant`** and
+  **`src/tests/sim/support/`'s `FakeTransport`/`wire_test_codec.h`** —
+  physics and transport doubles this directory's own code never
+  reimplements; see [`../tests/DESIGN.md`](../tests/DESIGN.md) §2.
+
+## 8. Open Questions / Known Limitations
+
+- **Two "Test S"-shaped TestGUI paths currently have opposite functional
+  status**, and this is easy to trip over: `SimTransport.run_unmanaged()`
+  (straight `twist()`, no planner) works against the current firmware;
+  the `_MOTION_VERBS`/`_run_motion_async()` → `planner.tour.run_tour()`
+  → `SimLoop.move()` path is code-reachable from the GUI but throws at
+  runtime, because it builds an `envelope_pb2.Move` message that no
+  longer exists in the current `protos/envelope.proto` schema (deleted
+  115-003; sprint 116 reintroduces a differently-shaped `Move` arm at a
+  fresh field number). `SimLoop.move()` itself is not deleted — it is
+  dead-but-reachable code, left in place because the host-side
+  planner/tour machinery it serves is DORMANT-by-stakeholder-decision
+  (see [`../host/robot_radio/DESIGN.md`](../host/robot_radio/DESIGN.md)),
+  not because it still works. Do not use the managed Test S/T path as a
+  reference for "how TWIST works" — use `run_unmanaged()`.
+- **`SimHarness::kCycleDtUs` (50 ms) does not match the firmware's own
+  `kCycle` (20 ms).** This is not a correctness bug (the firmware logic
+  has no wall-clock dependency, only a `Devices::Clock` dependency the
+  sim correctly advances by whatever step size it takes), but it does
+  mean sim-measured timing (e.g. "how many `sim_step()` calls until a
+  deadman expiry") is not directly comparable to a real-hardware cycle
+  count without accounting for the 2.5× step-size difference. Whether to
+  shrink `kCycleDtUs` to 20 ms to match is an open call, not decided
+  here.
+- **`src/tests/sim/plant/wheel_plant.h`'s own header comment describes a
+  stale "leaf-getter-driven" design** (reading
+  `Devices::NezhaMotor::appliedDuty()` directly) that predates and no
+  longer matches how `SimPlant` actually drives it today (explicit
+  wire-parsed duty passed into `step()`) — a doc-only staleness item in
+  that file, not fixed as part of this review (out of this doc's own
+  directory scope).
+- **`sim_ctypes.cpp`'s own top-of-file comment undercounts its current
+  export list** (says "19 exports"; the actual list is longer — includes
+  `sim_cmd_vel_left/right`, `sim_set_pid_enabled`,
+  `sim_firmware_version`) — a doc-only staleness item in that file, not
+  fixed as part of this review.

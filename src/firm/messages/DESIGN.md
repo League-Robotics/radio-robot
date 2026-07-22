@@ -1,10 +1,10 @@
 ---
-root: ../DESIGN.md
+root: ../../../docs/design/design.md
 ---
 
 # Messages (`src/firm/messages`)
 
-**Owner:** Eric Busboom · **Last reviewed:** 2026-07-17 · **Status:** in-flux
+**Owner:** Eric Busboom · **Last reviewed:** 2026-07-21 · **Status:** in-flux
 
 ---
 
@@ -14,10 +14,11 @@ root: ../DESIGN.md
 that crosses the host/robot boundary, plus the codec that turns those shapes
 into and out of bytes on the armored serial/radio link. It exists as its own
 directory because it is a **leaf library with no project dependencies of its
-own** (see root [DESIGN.md](../DESIGN.md) §2 dependency diagram) — `app/`
-depends on it to talk to the host, `config/` depends on it for boot-config
-shapes, but it depends on neither, and it must never depend on `devices/`
-(the isolation invariant, root doc §3). No other directory owns "what a
+own** (see the system doc's dependency diagram, `docs/design/design.md`
+§5) — `app/` depends on it to talk to the host, `config/` depends on it
+for boot-config shapes, but it depends on neither, and it must never
+depend on `devices/` (the isolation invariant, `docs/design/design.md`
+§5). No other directory owns "what a
 `msg::Twist` looks like on the wire" or "how a `CommandEnvelope` is
 decoded" — that ownership lives here alone.
 
@@ -26,9 +27,12 @@ decoded" — that ownership lives here alone.
 Three layers, in dependency order:
 
 1. **Generated message structs** — one header per `protos/*.proto` file
-   (`common.h`, `motion.h`, `motor.h`, `drivetrain.h`, `planner.h`,
-   `gripper.h`, `sensors.h`, `ports.h`, `communicator.h`, `config.h`,
-   `telemetry.h`, `envelope.h`, `odometer.h`). Each declares plain
+   (`common.h`, `motor.h`, `drivetrain.h`, `gripper.h`, `sensors.h`,
+   `ports.h`, `communicator.h`, `config.h`, `telemetry.h`, `envelope.h`,
+   `odometer.h`). `motion.proto`/`motion.h` and `planner.proto`/`planner.h`
+   no longer exist (115-002/115-003, gut-to-minimal-firmware S1
+   motion-stack excision deleted their only consumers — the motion stack
+   and `App::Pilot`'s `PlannerConfig`). Each remaining header declares plain
    standard-layout `msg::*` structs with default member initializers — no
    heap, no STL containers, no virtual functions. `envelope.h` is the root:
    it declares `CommandEnvelope`/`ReplyEnvelope`, the two message types
@@ -127,8 +131,16 @@ firmware runtime; the device itself never sees protobuf. It also emits
   arms) — each checked at build time against a 186-byte envelope budget.
   A schema change that pushes an envelope over budget fails a
   `static_assert` at build time, not silently at runtime on a truncated wire
-  line. As of 109-003: `ReplyEnvelope` is 178B (`Move` alone added `Move`
-  as a NEW `CommandEnvelope` oneof arm, `CommandEnvelope` now 115B).
+  line. As of 115-003 (Telemetry FRAME v2 — see
+  [telemetry.proto](../../protos/telemetry.proto)'s own header comment):
+  `CommandEnvelope` is 50B (`cmd` oneof = `{config, stop, twist}` only —
+  the `Move` arm sprint 109 added is deleted, its field number `20`
+  reserved, not reused; sprint 116 reintroduces a MOVE-shaped arm at a
+  fresh number, never 20), `ReplyEnvelope` is 153B (dominated by the `tlm`
+  arm's `EncoderReading`×2/`OtosReading`/packed line+color payload — 33B
+  margin under budget, 26B *smaller* than the pre-115 178B ack-ring/
+  bool-flag frame despite carrying strictly more signal), and
+  `TelemetrySecondary` is 52B.
 - **A `(max)`/`(abs_max)` bound now narrows a VARINT field's worst-case wire
   width, not just a `float` field's semantic range** (109-003 —
   `gen_messages.py`'s `_worst_case_scalar_size()`; previously this docstring
@@ -164,17 +176,18 @@ firmware runtime; the device itself never sees protobuf. It also emits
   malformed or maliciously over-nested input.
 - **Generated `get_*` accessors are non-conforming and slated for
   generator-side removal**, per stakeholder decision
-  (`clasi/issues/remove-generated-get-accessors.md`, referenced from root
-  [DESIGN.md](../DESIGN.md) §6) — the trivial protobuf-style `get_kind()`/
+  (`clasi/issues/remove-generated-get-accessors.md`) — the trivial protobuf-style `get_kind()`/
   `get_ax()` style accessors are unused and violate the no-uppercase-start,
   lowerCamelCase function naming rule as `get_`-prefixed snake_case. As of
   this review, no such `get_*`-prefixed accessor appears in the currently
-  generated headers in this directory (the "array / optional-string
-  accessors" section instead emits bare-name accessors like
-  `stops()`/`stops_count_val()` in `planner.h`) — either this was already
-  addressed in the generator, or the issue predates the current schema. Any
-  future generator change reintroducing `get_`-prefixed accessors must not
-  ship; fixes go in `scripts/gen_messages.py`, never in a generated header.
+  generated headers in this directory — either this was already addressed
+  in the generator, or the issue predates the current schema (the
+  "array / optional-string accessors" bare-name-accessor example this
+  bullet used to cite, `stops()`/`stops_count_val()` in `planner.h`, no
+  longer applies: `planner.proto`/`planner.h` were deleted by 115-002/
+  115-003's motion-stack excision). Any future generator change
+  reintroducing `get_`-prefixed accessors must not ship; fixes go in
+  `scripts/gen_messages.py`, never in a generated header.
 
 ## 4. Design
 
@@ -203,8 +216,8 @@ differential fuzz suite).
 oneof arms, `TelemetrySecondary` is encode-only and never a `ReplyEnvelope`
 oneof arm — it is the slower diagnostic frame, firmware-emitted only, never
 host-decoded on the robot side, framed as its own independently-armored `*B`
-line (see `telemetry.h`'s own doc comment and root
-[DESIGN.md](../DESIGN.md) §4 "Command plane").
+line (see `telemetry.h`'s own doc comment and `docs/design/design.md`
+§5 "Command plane").
 
 **Unknown fields are forward-compatible by design.** `skipField()`
 advances past an unrecognized field number's value without interpreting it,
@@ -215,7 +228,7 @@ cannot trip the nesting-depth guard regardless of how deep the caller
 already is.
 
 **`main.cpp` is the one place `msg::*` types meet `Devices::*` types.** Per
-the devices-isolation invariant (root doc §3), `messages/` types never reach
+the devices-isolation invariant (`docs/design/design.md` §5), `messages/` types never reach
 `devices/`; `main.cpp` converts wire-plane `msg::MotorConfig` to
 `Devices::MotorConfig` at construction time. This directory has no part in
 that conversion — it only defines the wire-side shape.
@@ -249,7 +262,9 @@ that conversion — it only defines the wire-side shape.
 
 - **`protos/*.proto` and `protos/options.proto`** (via `scripts/
   gen_messages.py`, host-only, `grpcio-tools`) — the schema source of
-  truth; see root [DESIGN.md](../DESIGN.md) §5 "Build-time generators."
+  truth; see [`../../protos/DESIGN.md`](../../protos/DESIGN.md) and
+  [`../../scripts/DESIGN.md`](../../scripts/DESIGN.md) "Build-time
+  generators."
 - **`app/` (via `App::Comms`/`App::Telemetry`):** the only consumer of the
   decode/encode entry points at runtime — see
   [app/DESIGN.md](../app/DESIGN.md) for how a decoded `CommandEnvelope`
@@ -263,14 +278,16 @@ that conversion — it only defines the wire-side shape.
 
 - **`event.h` (`msg::Event`) is hand-written but not generated, and is not
   referenced anywhere in the live `src/firm` tree** — the only other
-  references found are in `protos/planner.proto`/`planner.h` (a distinct,
-  generated type, not `msg::Event`) and in archived/parked source
+  references found (at the time of the original review) were in the
+  now-deleted `protos/planner.proto`/`planner.h` (a distinct, generated
+  type, not `msg::Event` — removed entirely by 115-002/115-003's
+  motion-stack excision) and in archived/parked source
   (`src/archive/source_parked/094/subsystems/planner.cpp`,
   `src/tests/sim/parked-094/...`). Its header comment describes a role
   ("lets both a subsystem producer and `CommandProcessor` depend on the same
   type") that predates the single-loop rebuild — `CommandProcessor` and
   `Subsystems::Planner` no longer exist in this tree (deleted sprints
-  102-107, root [DESIGN.md](../DESIGN.md) §2). This looks like dead code
+  102-107, `docs/design/design.md` §5). This looks like dead code
   left over from the pre-rebuild architecture; confirm before either wiring
   it to a live producer or deleting it. Not touched by this review beyond
   comment trimming (see report).
