@@ -48,27 +48,28 @@ from _wire_diff_driver import (  # noqa: E402
     encode_telemetry,
     encode_telemetry_secondary,
     env_config_drivetrain,
+    env_move_twist,
     env_stop,
-    env_twist,
     parse_decode_line,
     unknown_varint_field,
 )
 
 # ---------------------------------------------------------------------------
 # Representative valid CommandEnvelope encodings the truncated/oversized/
-# salted categories are built from -- span all three live arms (twist,
-# config, stop), so the corpus isn't skewed toward a single arm's byte
-# shape.
+# salted categories are built from -- span all three live arms (move,
+# config, stop -- `move` replaced `twist` as the sole motion arm, 116-001),
+# so the corpus isn't skewed toward a single arm's byte shape.
 # ---------------------------------------------------------------------------
 
-_VALID_TWIST = env_twist(100, 500.0, 3.0, 700.0)
+_VALID_MOVE = env_move_twist(100, 500.0, 0.0, 3.0, stop_field="time", stop_value=700.0, timeout=5000.0,
+                              replace=True, move_id=1)
 _VALID_CONFIG_DRIVETRAIN = env_config_drivetrain(
     104, trackwidth=321.0, rotational_slip=0.75, ekf_q_xy=1.5, ekf_q_theta=2.5, ekf_r_otos_xy=3.5,
     ekf_r_otos_theta=4.5)
 _VALID_STOP = env_stop(105)
 
 _VALID_MESSAGES = {
-    "twist": (_VALID_TWIST, 100, "TWIST"),
+    "move": (_VALID_MOVE, 100, "MOVE"),
     "config_drivetrain": (_VALID_CONFIG_DRIVETRAIN, 104, "CONFIG"),
     "stop": (_VALID_STOP, 105, "STOP"),
 }
@@ -88,7 +89,7 @@ def _build_corpus() -> list[tuple[str, bytes, str, int | None, str | None]]:
 
     # 1. Random bytes -- fixed seed for a reproducible, non-flaky corpus.
     # 150 (raised from the pre-103 suite's 60): the pruned P4 schema's 3
-    # live arms (twist/config/stop) are much shorter on average than the
+    # live arms (move/config/stop) are much shorter on average than the
     # pre-103 schema's ~9, so the truncated category (one case per byte
     # boundary per valid message, this corpus's dominant contributor before)
     # shrank a lot -- widen the random category to keep the corpus above the
@@ -128,7 +129,7 @@ _CORPUS = _build_corpus()
 def test_corpus_size_at_least_200():
     """Acceptance criterion: the fuzz corpus is >= 200 cases.
 
-    NOTE: the pruned P4 schema has only 3 live arms (twist/config/stop)
+    NOTE: the pruned P4 schema has only 3 live arms (move/config/stop)
     against the pre-103 schema's ~9 -- the truncated category (the corpus's
     dominant contributor, one case per byte boundary per valid message) is
     correspondingly smaller (60 cases vs. the pre-103 suite's much larger

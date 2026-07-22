@@ -19,7 +19,7 @@ own** (see the system doc's dependency diagram, `docs/design/design.md`
 for boot-config shapes, but it depends on neither, and it must never
 depend on `devices/` (the isolation invariant, `docs/design/design.md`
 §5). No other directory owns "what a
-`msg::Twist` looks like on the wire" or "how a `CommandEnvelope` is
+`msg::Move` looks like on the wire" or "how a `CommandEnvelope` is
 decoded" — that ownership lives here alone.
 
 ## 2. Orientation
@@ -131,16 +131,26 @@ firmware runtime; the device itself never sees protobuf. It also emits
   arms) — each checked at build time against a 186-byte envelope budget.
   A schema change that pushes an envelope over budget fails a
   `static_assert` at build time, not silently at runtime on a truncated wire
-  line. As of 115-003 (Telemetry FRAME v2 — see
-  [telemetry.proto](../../protos/telemetry.proto)'s own header comment):
-  `CommandEnvelope` is 50B (`cmd` oneof = `{config, stop, twist}` only —
-  the `Move` arm sprint 109 added is deleted, its field number `20`
-  reserved, not reused; sprint 116 reintroduces a MOVE-shaped arm at a
-  fresh number, never 20), `ReplyEnvelope` is 153B (dominated by the `tlm`
-  arm's `EncoderReading`×2/`OtosReading`/packed line+color payload — 33B
-  margin under budget, 26B *smaller* than the pre-115 178B ack-ring/
-  bool-flag frame despite carrying strictly more signal), and
-  `TelemetrySecondary` is 52B.
+  line. As of 116-001 (MOVE protocol cutover — see
+  [envelope.proto](../../protos/envelope.proto)'s own header comment):
+  `CommandEnvelope` is still 50B (`cmd` oneof = `{config, stop, move}` —
+  `twist` (arm 19, the bare v_x/omega/duration shape 103-001 added) is
+  DELETED and reserved this ticket, superseded by `move` (a fresh arm 21:
+  `MoveTwist|MoveWheels` velocity oneof + `time|distance|angle` stop oneof +
+  `timeout`/`replace`/`id` — see that message's own doc comment); the old
+  arc-command `Move` sprint 109 added stays deleted, its field number `20`
+  reserved, never reused, never the same shape as this `move`). Per-arm
+  worst case: `config`=44B, `stop`=2B, `move`=38B — `config` (dominated by
+  `DrivetrainConfigPatch`) stays the largest arm even though `move` is a
+  structurally bigger message (two nested oneofs + `id`) than the `twist`
+  it replaced, so the envelope's own total is UNCHANGED at 50B despite the
+  schema growing. `ReplyEnvelope` is 153B (dominated by the `tlm` arm's
+  `EncoderReading`×2/`OtosReading`/packed line+color payload — 33B margin
+  under budget, 26B *smaller* than the pre-115 178B ack-ring/bool-flag
+  frame despite carrying strictly more signal; untouched by this ticket,
+  which only edits `CommandEnvelope`'s `cmd` oneof and `ConfigDelta`'s
+  `patch` oneof — see `wire.h`'s own generated size-report comment), and
+  `TelemetrySecondary` is 52B (also untouched).
 - **A `(max)`/`(abs_max)` bound now narrows a VARINT field's worst-case wire
   width, not just a `float` field's semantic range** (109-003 —
   `gen_messages.py`'s `_worst_case_scalar_size()`; previously this docstring

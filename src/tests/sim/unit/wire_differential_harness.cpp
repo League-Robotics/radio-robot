@@ -5,15 +5,19 @@
 // Off-hardware CLI harness for the differential/fuzz/range suite against
 // `google.protobuf` (the host's `pb2/` bindings). Rewritten 115-009 (gut
 // S1's own test-sweep/green-bar ticket) against the frame-v2 schema
-// (115-003, `telemetry-frame-tightening-amendment-to-gut-s1.md`):
-// CommandEnvelope.cmd is exactly {twist, config, stop}; ReplyEnvelope.body
-// is exactly {ok, err, tlm}; Telemetry carries a single `flags` bit-string
-// (status+fault+event) plus a single `ack_corr`/`ack_err` slot (the
-// depth-3 ack ring is gone) and per-source timestamped `EncoderReading`/
-// `OtosReading` objects; ConfigDelta's `patch` oneof is DRIVETRAIN/MOTOR/
-// WATCHDOG/OTOS (PLANNER deleted wholesale, 115-003); TelemetrySecondary is
-// unchanged, a standalone top-level wire message (its own
-// `msg::wire::encode()` overload, not a ReplyEnvelope oneof arm).
+// (115-003, `telemetry-frame-tightening-amendment-to-gut-s1.md`);
+// CommandEnvelope.cmd is now exactly {move, config, stop} (116-001, MOVE
+// protocol cutover -- `twist`, arm 19, is deleted/reserved, superseded by
+// `move`, a fresh arm 21: `MoveTwist|MoveWheels` velocity oneof +
+// `time|distance|angle` stop oneof + `timeout`/`replace`/`id`);
+// ReplyEnvelope.body is exactly {ok, err, tlm}; Telemetry carries a single
+// `flags` bit-string (status+fault+event) plus a single `ack_corr`/
+// `ack_err` slot (the depth-3 ack ring is gone) and per-source timestamped
+// `EncoderReading`/`OtosReading` objects; ConfigDelta's `patch` oneof is
+// DRIVETRAIN/MOTOR/OTOS (PLANNER deleted wholesale, 115-003; WATCHDOG
+// deleted, 116-001 -- `ConfigTarget.CONFIG_WATCHDOG` stays declared-unused);
+// TelemetrySecondary is unchanged, a standalone top-level wire message (its
+// own `msg::wire::encode()` overload, not a ReplyEnvelope oneof arm).
 //
 // Unlike wire_runtime_harness.cpp/wire_codec_harness.cpp (fixed scenario
 // lists baked into the C++ binary itself), THIS harness is a thin one-shot
@@ -121,7 +125,7 @@ const char* cmdKindName(msg::CommandEnvelope::CmdKind k) {
     case msg::CommandEnvelope::CmdKind::NONE: return "NONE";
     case msg::CommandEnvelope::CmdKind::CONFIG: return "CONFIG";
     case msg::CommandEnvelope::CmdKind::STOP: return "STOP";
-    case msg::CommandEnvelope::CmdKind::TWIST: return "TWIST";
+    case msg::CommandEnvelope::CmdKind::MOVE: return "MOVE";
   }
   return "UNKNOWN";
 }
@@ -133,8 +137,29 @@ const char* configDeltaPatchKindName(msg::ConfigDelta::PatchKind k) {
     case msg::ConfigDelta::PatchKind::NONE: return "NONE";
     case msg::ConfigDelta::PatchKind::DRIVETRAIN: return "DRIVETRAIN";
     case msg::ConfigDelta::PatchKind::MOTOR: return "MOTOR";
-    case msg::ConfigDelta::PatchKind::WATCHDOG: return "WATCHDOG";
     case msg::ConfigDelta::PatchKind::OTOS: return "OTOS";
+  }
+  return "UNKNOWN";
+}
+
+// moveVelocityKindName/moveStopKindName -- print Move's own two oneof
+// discriminants (116-001) the same way cmdKindName()/configDeltaPatchKindName()
+// print theirs.
+const char* moveVelocityKindName(msg::Move::VelocityKind k) {
+  switch (k) {
+    case msg::Move::VelocityKind::NONE: return "NONE";
+    case msg::Move::VelocityKind::TWIST: return "TWIST";
+    case msg::Move::VelocityKind::WHEELS: return "WHEELS";
+  }
+  return "UNKNOWN";
+}
+
+const char* moveStopKindName(msg::Move::StopKind k) {
+  switch (k) {
+    case msg::Move::StopKind::NONE: return "NONE";
+    case msg::Move::StopKind::TIME: return "TIME";
+    case msg::Move::StopKind::DISTANCE: return "DISTANCE";
+    case msg::Move::StopKind::ANGLE: return "ANGLE";
   }
   return "UNKNOWN";
 }
@@ -165,10 +190,41 @@ int cmdDecode(const std::string& b64) {
 
   std::printf("OK corr_id=%u cmd_kind=%s", static_cast<unsigned>(out.corr_id), cmdKindName(out.cmd_kind));
   switch (out.cmd_kind) {
-    case msg::CommandEnvelope::CmdKind::TWIST:
-      std::printf(" v_x=%s omega=%s duration=%s", fmtFloat(out.cmd.twist.v_x).c_str(),
-                  fmtFloat(out.cmd.twist.omega).c_str(), fmtFloat(out.cmd.twist.duration).c_str());
+    case msg::CommandEnvelope::CmdKind::MOVE: {
+      const msg::Move& mv = out.cmd.move;
+      std::printf(" velocity_kind=%s", moveVelocityKindName(mv.velocity_kind));
+      switch (mv.velocity_kind) {
+        case msg::Move::VelocityKind::TWIST:
+          std::printf(" v_x=%s v_y=%s omega=%s", fmtFloat(mv.velocity.twist.v_x).c_str(),
+                      fmtFloat(mv.velocity.twist.v_y).c_str(), fmtFloat(mv.velocity.twist.omega).c_str());
+          break;
+        case msg::Move::VelocityKind::WHEELS:
+          std::printf(" v_left=%s v_right=%s", fmtFloat(mv.velocity.wheels.v_left).c_str(),
+                      fmtFloat(mv.velocity.wheels.v_right).c_str());
+          break;
+        case msg::Move::VelocityKind::NONE:
+        default:
+          break;
+      }
+      std::printf(" stop_kind=%s", moveStopKindName(mv.stop_kind));
+      switch (mv.stop_kind) {
+        case msg::Move::StopKind::TIME:
+          std::printf(" time=%s", fmtFloat(mv.stop.time).c_str());
+          break;
+        case msg::Move::StopKind::DISTANCE:
+          std::printf(" distance=%s", fmtFloat(mv.stop.distance).c_str());
+          break;
+        case msg::Move::StopKind::ANGLE:
+          std::printf(" angle=%s", fmtFloat(mv.stop.angle).c_str());
+          break;
+        case msg::Move::StopKind::NONE:
+        default:
+          break;
+      }
+      std::printf(" timeout=%s replace=%d id=%u", fmtFloat(mv.timeout).c_str(), mv.replace ? 1 : 0,
+                  static_cast<unsigned>(mv.id));
       break;
+    }
     case msg::CommandEnvelope::CmdKind::CONFIG: {
       const msg::ConfigDelta& cfg = out.cmd.config;
       std::printf(" patch_kind=%s", configDeltaPatchKindName(cfg.patch_kind));
@@ -196,9 +252,6 @@ int cmdDecode(const std::string& b64) {
           printOpt("kaw", p.kaw);
           break;
         }
-        case msg::ConfigDelta::PatchKind::WATCHDOG:
-          std::printf(" watchdog=%u", static_cast<unsigned>(cfg.patch.watchdog));
-          break;
         case msg::ConfigDelta::PatchKind::OTOS: {
           const msg::OtosConfigPatch& p = cfg.patch.otos;
           printOpt("linear_scale", p.linear_scale);

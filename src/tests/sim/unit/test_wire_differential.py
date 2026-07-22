@@ -1,5 +1,5 @@
-"""Differential round-trip + boundary/range suite for the P4-pruned wire
-protocol (103-001, SUC-001, architecture-update.md (103) Decisions 2/3).
+"""Differential round-trip + boundary/range suite for the wire protocol
+(103-001, SUC-001, architecture-update.md (103) Decisions 2/3).
 
 ***THIS IS THE CORRECTNESS GATE the `src/firm/app/` tickets (004+) are built
 on top of.*** It proves the self-written firmware codec (``src/firm/messages/
@@ -12,15 +12,17 @@ do not xfail/skip a real disagreement with `google.protobuf`.**
 
 Rewritten 115-009 (gut S1's own test-sweep/green-bar ticket) against the
 frame-v2 Telemetry schema (115-003, `telemetry-frame-tightening-amendment-
-to-gut-s1.md`) and the PLANNER-arm-deleted ConfigDelta (also 115-003) --
-CommandEnvelope's three live arms (twist/config/stop) are unchanged; this
-suite covers:
+to-gut-s1.md`) and the PLANNER-arm-deleted ConfigDelta (also 115-003);
+updated 116-001 (MOVE protocol cutover) -- CommandEnvelope's three live
+arms are now move/config/stop (`twist`, arm 19, deleted/reserved,
+superseded by `move`, a fresh arm 21). This suite covers:
 
   A. host-encode (`pb2`) -> firmware-decode (``wire_differential_harness``,
      via `msg::wire::decode(CommandEnvelope&, ...)`) -> assert decoded
      fields match the original input. Exercised for CommandEnvelope's three
-     live arms: twist, config (DRIVETRAIN/MOTOR/WATCHDOG/OTOS -- PLANNER
-     deleted wholesale, 115-003), stop.
+     live arms: move (MoveTwist|MoveWheels velocity x time|distance|angle
+     stop), config (DRIVETRAIN/MOTOR/OTOS -- PLANNER deleted wholesale,
+     115-003; WATCHDOG deleted, 116-001), stop.
   B. firmware-encode (harness, via `msg::wire::encode(const ReplyEnvelope&,
      ...)` / `msg::wire::encode(const TelemetrySecondary&, ...)`) ->
      host-decode (`pb2.ParseFromString`) -> assert decoded fields match.
@@ -35,15 +37,15 @@ suite's byte-construction helpers use (which match wire.cpp's generated
 `kFields_*[]` tables) -- catches a stale/out-of-sync regeneration on either
 side, not just implicitly via a round-trip mismatch.
 
-Boundary/range corpus: NONE of the arms reachable from this pruned schema
-carry a `(min)`/`(max)`/`(abs_max)` proto option any more -- `MotionSegment`
-(the pre-103 schema's only `(min)`/`(max)`/`(abs_max)`-validated fields) and
+Boundary/range corpus: NONE of the arms reachable from this schema carry a
+`(min)`/`(max)`/`(abs_max)` proto option any more -- `MotionSegment` (the
+pre-103 schema's only `(min)`/`(max)`/`(abs_max)`-validated fields) and
 `ConfigGet.target` (the only `(req)`-validated field) both left with their
 owning arms. The "REALITY CHECK" corpus below still documents that
-`DrivetrainConfigPatch`/`MotorConfigPatch`/`OtosConfigPatch`/
-`ConfigDelta.watchdog` carry no wire-level bound at all (`PlannerConfigPatch`
-went with 115-003's deletion -- there is no boundary corpus left to run for
-it).
+`DrivetrainConfigPatch`/`MotorConfigPatch`/`OtosConfigPatch` carry no
+wire-level bound at all (`PlannerConfigPatch` went with 115-003's deletion,
+`ConfigDelta.watchdog` with 116-001's -- there is no boundary corpus left to
+run for either).
 """
 from __future__ import annotations
 
@@ -61,9 +63,9 @@ from _wire_diff_driver import (  # noqa: E402
     env_config_drivetrain,
     env_config_motor,
     env_config_otos,
-    env_config_watchdog,
+    env_move_twist,
+    env_move_wheels,
     env_stop,
-    env_twist,
     f32,
     float_eq,
     parse_decode_line,
@@ -109,10 +111,14 @@ def test_field_numbers_match_pb2_descriptors():
     from. Cross-check pb2's own FieldDescriptors against the numbers this
     suite's env_*/encode_* helpers rely on -- catches a stale/out-of-sync
     regeneration on either side, not just an implicit round-trip mismatch."""
-    # "move" (109-003) is DELETED (115-003, gut S1 motion-stack excision) --
-    # field 20 is `reserved`, not an active oneof arm any more (see
-    # envelope.proto's own CommandEnvelope header comment).
-    expected_cmd_numbers = {"config": 6, "stop": 13, "twist": 19}
+    # "move" (109-003, the arc-command shape) is DELETED (115-003, gut S1
+    # motion-stack excision) -- field 20 is `reserved`, not an active oneof
+    # arm any more. "twist" (103-001) is DELETED (116-001, MOVE protocol
+    # cutover) -- field 19 is `reserved`, not an active oneof arm any more.
+    # `move` (116-001) is a FRESH arm at 21, a different shape from the
+    # deleted 109-003 arc-command `Move` (see envelope.proto's own
+    # CommandEnvelope header comment).
+    expected_cmd_numbers = {"config": 6, "stop": 13, "move": 21}
     actual_cmd_numbers = {
         f.name: f.number for f in pb_envelope.CommandEnvelope.DESCRIPTOR.oneofs_by_name["cmd"].fields
     }
@@ -124,11 +130,34 @@ def test_field_numbers_match_pb2_descriptors():
     }
     assert actual_body_numbers == expected_body_numbers
 
-    expected_twist_numbers = {"v_x": 1, "omega": 2, "duration": 3}
-    actual_twist_numbers = {f.name: f.number for f in pb_envelope.Twist.DESCRIPTOR.fields}
-    assert actual_twist_numbers == expected_twist_numbers
+    expected_move_twist_numbers = {"v_x": 1, "v_y": 2, "omega": 3}
+    actual_move_twist_numbers = {f.name: f.number for f in pb_envelope.MoveTwist.DESCRIPTOR.fields}
+    assert actual_move_twist_numbers == expected_move_twist_numbers
 
-    # ERR_NOT_CONFIGURED (8, 114-001): composition root refused MOVE/TWIST --
+    expected_move_wheels_numbers = {"v_left": 1, "v_right": 2}
+    actual_move_wheels_numbers = {f.name: f.number for f in pb_envelope.MoveWheels.DESCRIPTOR.fields}
+    assert actual_move_wheels_numbers == expected_move_wheels_numbers
+
+    expected_move_velocity_numbers = {"twist": 1, "wheels": 2}
+    actual_move_velocity_numbers = {
+        f.name: f.number for f in pb_envelope.Move.DESCRIPTOR.oneofs_by_name["velocity"].fields
+    }
+    assert actual_move_velocity_numbers == expected_move_velocity_numbers
+
+    expected_move_stop_numbers = {"time": 3, "distance": 4, "angle": 5}
+    actual_move_stop_numbers = {
+        f.name: f.number for f in pb_envelope.Move.DESCRIPTOR.oneofs_by_name["stop"].fields
+    }
+    assert actual_move_stop_numbers == expected_move_stop_numbers
+
+    expected_move_plain_numbers = {"timeout": 6, "replace": 7, "id": 8}
+    actual_move_plain_numbers = {
+        f.name: f.number for f in pb_envelope.Move.DESCRIPTOR.fields
+        if f.name not in expected_move_velocity_numbers and f.name not in expected_move_stop_numbers
+    }
+    assert actual_move_plain_numbers == expected_move_plain_numbers
+
+    # ERR_NOT_CONFIGURED (8, 114-001): composition root refused MOVE --
     # config-completeness gate not yet satisfied.
     expected_err_codes = {
         "ERR_NONE": 0, "ERR_UNKNOWN": 1, "ERR_BADARG": 2, "ERR_RANGE": 3, "ERR_FULL": 4, "ERR_DECODE": 5,
@@ -140,9 +169,12 @@ def test_field_numbers_match_pb2_descriptors():
     assert actual_err_codes == expected_err_codes
 
     # "planner" (field 3, PlannerConfigPatch) DELETED (115-003) -- field 3 is
-    # `reserved`, not an active oneof arm; "otos" (109-004) is unaffected.
+    # `reserved`, not an active oneof arm. "watchdog" (field 4) DELETED
+    # (116-001, MOVE protocol cutover) -- field 4 is `reserved`, not an
+    # active oneof arm any more (`ConfigTarget.CONFIG_WATCHDOG` stays
+    # declared-unused). "otos" (109-004) is unaffected.
     expected_config_delta_patch = {
-        "drivetrain": 1, "motor": 2, "watchdog": 4, "otos": 5,
+        "drivetrain": 1, "motor": 2, "otos": 5,
     }
     actual_config_delta_patch = {
         f.name: f.number for f in pb_envelope.ConfigDelta.DESCRIPTOR.oneofs_by_name["patch"].fields
@@ -223,17 +255,70 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
 # ===========================================================================
 
 
-@pytest.mark.parametrize("v_x,omega,duration", [
-    (0.0, 0.0, 0.0), (150.0, -0.75, 250.0), (-3000.0, 12.566, 4294967295.0),
+@pytest.mark.parametrize("v_x,v_y,omega,stop_field,stop_value", [
+    (0.0, 0.0, 0.0, "time", 0.0),
+    (150.0, -25.0, -0.75, "time", 2000.0),
+    (-3000.0, 0.0, 12.566, "distance", 300.0),
+    (80.0, 0.0, 0.0, "angle", 1.5708),
 ])
-def test_direction_a_twist(harness, v_x, omega, duration):
-    raw = env_twist(7, v_x, omega, duration)
+def test_direction_a_move_twist(harness, v_x, v_y, omega, stop_field, stop_value):
+    """MoveTwist velocity variant x every stop kind (116-001, MOVE protocol
+    cutover) -- host-encode (pb2) -> firmware-decode round-trip."""
+    raw = env_move_twist(7, v_x, v_y, omega, stop_field=stop_field, stop_value=stop_value, timeout=5000.0,
+                          replace=True, move_id=42)
     fields = _assert_ok(harness, raw)
     assert fields["corr_id"] == "7"
-    assert fields["cmd_kind"] == "TWIST"
+    assert fields["cmd_kind"] == "MOVE"
+    assert fields["velocity_kind"] == "TWIST"
     assert float_eq(fields["v_x"], v_x)
+    assert float_eq(fields["v_y"], v_y)
     assert float_eq(fields["omega"], omega)
-    assert float_eq(fields["duration"], duration)
+    assert fields["stop_kind"] == stop_field.upper()
+    assert float_eq(fields[stop_field], stop_value)
+    assert float_eq(fields["timeout"], 5000.0)
+    assert fields["replace"] == "1"
+    assert fields["id"] == "42"
+
+
+@pytest.mark.parametrize("v_left,v_right,stop_field,stop_value", [
+    (0.0, 0.0, "time", 0.0),
+    (120.0, 100.0, "time", 1500.0),
+    (-60.0, -60.0, "distance", 500.0),
+    (90.0, -90.0, "angle", 3.14159),
+])
+def test_direction_a_move_wheels(harness, v_left, v_right, stop_field, stop_value):
+    """MoveWheels velocity variant x every stop kind (116-001, MOVE protocol
+    cutover) -- host-encode (pb2) -> firmware-decode round-trip."""
+    raw = env_move_wheels(8, v_left, v_right, stop_field=stop_field, stop_value=stop_value, timeout=6000.0,
+                           replace=False, move_id=21)
+    fields = _assert_ok(harness, raw)
+    assert fields["corr_id"] == "8"
+    assert fields["cmd_kind"] == "MOVE"
+    assert fields["velocity_kind"] == "WHEELS"
+    assert float_eq(fields["v_left"], v_left)
+    assert float_eq(fields["v_right"], v_right)
+    assert fields["stop_kind"] == stop_field.upper()
+    assert float_eq(fields[stop_field], stop_value)
+    assert float_eq(fields["timeout"], 6000.0)
+    assert fields["replace"] == "0"
+    assert fields["id"] == "21"
+
+
+def test_direction_a_move_reserved_twist_arm_ignored(harness):
+    """The DELETED twist arm's old field number (19) round-trips as an
+    unrecognized field -- skipped, never decoded into a live oneof arm
+    (116-001; see envelope.proto's own reserved-list comment). Hand-spliced
+    raw bytes, since pb2 no longer has a `Twist` message to construct."""
+    from _wire_diff_driver import unknown_varint_field
+
+    # A minimal length-delimited "field 19" wrapping a single float, spliced
+    # after a normal corr_id field -- mirrors the raw-byte-splicing approach
+    # the fuzz suite already uses for unknown-field coverage.
+    raw = pb_envelope.CommandEnvelope(corr_id=7, stop=pb_envelope.Stop()).SerializeToString()
+    raw += unknown_varint_field(19, 1)  # not a well-formed Twist, but any bytes at tag 19 must be skipped
+    fields = _assert_ok(harness, raw)
+    assert fields["corr_id"] == "7"
+    assert fields["cmd_kind"] == "STOP"
 
 
 def test_direction_a_stop(harness):
@@ -329,13 +414,23 @@ def test_direction_a_config_otos_init_false_and_no_optional_fields(harness):
         assert fields[f"{key}_has"] == "0"
 
 
-@pytest.mark.parametrize("watchdog", [0, 1, 4242, 4294967295])
-def test_direction_a_config_watchdog(harness, watchdog):
-    raw = env_config_watchdog(25, watchdog)
+def test_direction_a_config_reserved_watchdog_field_ignored(harness):
+    """The DELETED ConfigDelta.watchdog arm's old field number (4) round-trips
+    as an unrecognized field within the nested ConfigDelta message -- skipped,
+    never decoded into a live oneof arm (116-001; see envelope.proto's own
+    reserved-list comment). Hand-spliced raw bytes, since pb2 no longer has a
+    `watchdog` field to construct."""
+    from _wire_diff_driver import _tag, _varint
+
+    # ConfigDelta{} with a spliced-in field 4 (varint) -- mirrors the same
+    # raw-byte-splicing approach the fuzz suite uses for unknown-field
+    # coverage, at the NESTED-message level this time.
+    config_bytes = _tag(4, 0) + _varint(5000)
+    config_field = _tag(6, 2) + _varint(len(config_bytes)) + config_bytes  # CommandEnvelope.cmd.config, field 6
+    raw = pb_envelope.CommandEnvelope(corr_id=25).SerializeToString() + config_field
     fields = _assert_ok(harness, raw)
     assert fields["cmd_kind"] == "CONFIG"
-    assert fields["patch_kind"] == "WATCHDOG"
-    assert fields["watchdog"] == str(watchdog)
+    assert fields["patch_kind"] == "NONE"
 
 
 def test_direction_a_config_empty_patch(harness):
@@ -666,12 +761,13 @@ def test_direction_b_telemetry_secondary_all_other_fields_zero_default(harness):
 # `kFields_OtosConfigPatch[]`/`kFields_ConfigDelta[]` tables, every one of
 # which has `flags = 0` (no kHasMin/kHasMax/kHasAbsMax bit set) for these
 # fields -- THE WIRE CODEC ACCEPTS ANY float/uint32 value for tw/rotSlip/
-# ekf*/linear_scale/angular_scale/sTimeout over the binary plane. This is a
+# ekf*/linear_scale/angular_scale over the binary plane. This is a
 # pre-existing, already-flagged gap (config.proto's own comment), not
 # something this ticket's prune changed -- verified again here since this
 # file's schema assumptions were re-derived from scratch this ticket.
 # `PlannerConfigPatch` (min_speed's own former owner) is DELETED wholesale
-# (115-003) -- there is no boundary corpus left to run for it.
+# (115-003); `ConfigDelta.watchdog` (the pre-116 sTimeout field) is DELETED
+# (116-001) -- there is no boundary corpus left to run for either.
 # ===========================================================================
 
 _CONFIG_INVARIANT_BOUNDARY_CASES = [
@@ -707,14 +803,6 @@ def test_boundary_config_otos_linear_scale_no_wire_level_enforcement(harness, li
     fields = _assert_ok(harness, raw)
     assert fields["patch_kind"] == "OTOS"
     assert float_eq(fields["linear_scale"], linear_scale)
-
-
-@pytest.mark.parametrize("watchdog", [0, 1])
-def test_boundary_config_watchdog_no_wire_level_enforcement(harness, watchdog):
-    raw = env_config_watchdog(52, watchdog)
-    fields = _assert_ok(harness, raw)
-    assert fields["patch_kind"] == "WATCHDOG"
-    assert fields["watchdog"] == str(watchdog)
 
 
 if __name__ == "__main__":

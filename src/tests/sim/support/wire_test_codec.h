@@ -24,11 +24,11 @@
 // scenario needs to READ a value out of a live telemetry stream (this
 // ticket's own twist-ramp scenario: velLeft/velRight are not known in
 // advance, they come from the plant). This file is the read side of that
-// gap, plus the encode side sim_api's own injectTwist()/injectStop() need
+// gap, plus the encode side sim_api's own inject*()/injectStop() need
 // (there is no encode(CommandEnvelope) to call).
 //
 // Scope: exactly the message shapes actually exchanged over sim_api's own
-// two directions -- CommandEnvelope{corr_id, cmd=TWIST|STOP} outbound (host
+// two directions -- CommandEnvelope{corr_id, cmd=MOVE|STOP} outbound (host
 // -> firmware) and ReplyEnvelope{corr_id, body=TLM(Telemetry)} /
 // TelemetrySecondary inbound (firmware -> host, the only two shapes
 // App::Telemetry::emit() ever actually sends -- see telemetry.cpp's
@@ -43,12 +43,21 @@
 // (115-003) -- decodeTelemetryMessage() now decodes the nested
 // EncoderReading/OtosReading messages and the single flags/ack_corr/ack_err
 // fields instead of the deleted depth-3 AckEntry ring and the pre-115 flat
-// bool/float spread. armorMoveCommand()/encodeMoveEnvelope() are DELETED --
-// envelope.proto's Move message and CommandEnvelope's move(20) arm are gone
-// (115-003 reserved field 20, not reused; see envelope.proto's own header).
-// Twist/Stop encode and the Telemetry/TelemetrySecondary decode entry point
-// keep their same field numbers/shapes on the CommandEnvelope side (config=6,
-// stop=13, twist=19 are unchanged pre-102 KEPT arms).
+// bool/float spread. The THEN-current armorMoveCommand()/encodeMoveEnvelope()
+// (the sprint-109 arc-command shape) were deleted at that point -- 115-003
+// reserved field 20, not reused (see envelope.proto's own header).
+//
+// 116-001 (MOVE protocol cutover): `Twist` (arm 19, encodeTwistEnvelope()/
+// armorTwistCommand()) is DELETED -- reserved, not reused -- superseded by
+// a NEW `Move` message at a FRESH arm number (21, never 20 -- a different
+// shape from the deleted 115-003 arc-command `Move` above): a bounded
+// motion command (`MoveTwist|MoveWheels` velocity oneof + `time|distance|
+// angle` stop oneof + `timeout`/`replace`/`id`). `armorMoveCommand()` is
+// REINTRODUCED below under the same name for an unrelated, textually-fresh
+// shape -- see its own doc comment. `Stop` encode and the Telemetry/
+// TelemetrySecondary decode entry point keep their same field
+// numbers/shapes on the CommandEnvelope side (config=6, stop=13 are
+// unchanged pre-102 KEPT arms; move=21 is 116-001's own fresh arm).
 #pragma once
 
 #include <cstdint>
@@ -91,11 +100,37 @@ DecodedLine decodeOutboundLine(const std::string& line);
 // exercise the single-ack-slot/correlation-id path (Telemetry.ack_corr,
 // valid iff flags bit 5).
 //
-// armorMoveCommand() -- DELETED (115-006, gut S1): CommandEnvelope's move(20)
-// arm and envelope.proto's Move message were deleted by 115-003 alongside
-// the Motion::Executor arc-command queue that consumed it; field 20 is
-// reserved on the wire, not reused.
-std::string armorTwistCommand(float v_x, float omega, float duration, uint32_t corrId = 0);
+// armorTwistCommand() -- DELETED (116-001, MOVE protocol cutover):
+// CommandEnvelope's twist(19) arm and envelope.proto's Twist message are
+// deleted, superseded by move(21)/Move below; field 19 is reserved on the
+// wire, not reused.
 std::string armorStopCommand(uint32_t corrId = 0);
+
+// MOVE stop-condition kind selector for armorMoveCommand() below -- mirrors
+// Move's own `stop` oneof arms (time=3/distance=4/angle=5 on the wire).
+enum class MoveStopKind : uint8_t { kTime = 0, kDistance = 1, kAngle = 2 };
+
+// armorMoveCommand() -- builds a complete armored CommandEnvelope{move:
+// Move{...}} line (116-001, MOVE protocol cutover), byte-for-byte what a
+// real host would send, the reverse of App::Comms::decodeArmoredLine() --
+// same convention armorTwistCommand()/armorStopCommand() established.
+// Two overloads cover Move's two velocity variants (MoveTwist/MoveWheels);
+// they never collide under overload resolution because `stopKind`
+// (MoveStopKind, a scoped enum with no implicit conversion to/from float)
+// sits at a different, type-incompatible parameter position in each
+// signature. `stopKind`/`stopValue` select which of Move's three `stop`
+// oneof arms is encoded, so these two overloads together cover every
+// velocity-variant x stop-kind combination the protocol defines.
+// `timeout`/`replace`/`id` are Move's own required/plain fields; `corrId
+// == 0` is proto3's own implicit-presence default (omitted from the wire,
+// same convention every other builder in this file uses).
+std::string armorMoveCommand(float v_x, float v_y, float omega,
+                              MoveStopKind stopKind, float stopValue,
+                              float timeout, bool replace, uint32_t id,
+                              uint32_t corrId = 0);
+std::string armorMoveCommand(float v_left, float v_right,
+                              MoveStopKind stopKind, float stopValue,
+                              float timeout, bool replace, uint32_t id,
+                              uint32_t corrId = 0);
 
 }  // namespace TestSupport

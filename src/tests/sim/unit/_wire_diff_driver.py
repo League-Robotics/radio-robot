@@ -5,13 +5,17 @@ does not collect it); imported by ``test_wire_differential.py`` and
 
 Rewritten 115-009 (gut S1's own test-sweep/green-bar ticket) against the
 frame-v2 schema (115-003, `telemetry-frame-tightening-amendment-to-gut-
-s1.md`) -- ``CommandEnvelope.cmd`` is still exactly ``{twist, config,
-stop}``; ``ReplyEnvelope.body`` is still exactly ``{ok, err, tlm}``;
-``Telemetry`` now carries a single ``flags`` bit-string (status+fault+event)
-plus a single ``ack_corr``/``ack_err`` slot (the depth-3 ack ring is gone)
-and per-source timestamped ``EncoderReading``/``OtosReading`` objects;
-``ConfigDelta.patch`` is DRIVETRAIN/MOTOR/WATCHDOG/OTOS (PLANNER deleted
-wholesale alongside ``Motion::Executor``/``App::Pilot``);
+s1.md`); updated 116-001 (MOVE protocol cutover) -- ``CommandEnvelope.cmd``
+is now exactly ``{move, config, stop}`` (``twist``, arm 19, deleted/reserved,
+superseded by ``move``, a fresh arm 21: ``MoveTwist|MoveWheels`` velocity
+oneof + ``time|distance|angle`` stop oneof + ``timeout``/``replace``/``id``);
+``ReplyEnvelope.body`` is still exactly ``{ok, err, tlm}``; ``Telemetry`` now
+carries a single ``flags`` bit-string (status+fault+event) plus a single
+``ack_corr``/``ack_err`` slot (the depth-3 ack ring is gone) and per-source
+timestamped ``EncoderReading``/``OtosReading`` objects; ``ConfigDelta.patch``
+is DRIVETRAIN/MOTOR/OTOS (PLANNER deleted wholesale alongside
+``Motion::Executor``/``App::Pilot``, 115-003; WATCHDOG deleted, 116-001 --
+``ConfigTarget.CONFIG_WATCHDOG`` stays declared-unused);
 ``TelemetrySecondary`` is unchanged, a standalone top-level message with its
 own ``msg::wire::encode()`` overload.
 
@@ -298,15 +302,35 @@ def unknown_varint_field(field_num: int, value: int) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# pb2 CommandEnvelope builders for the pruned P4 arm set (twist/config/stop)
-# -- shared by both the differential and fuzz/boundary suites so every
-# corpus is built from the SAME reference construction helpers.
+# pb2 CommandEnvelope builders for the live arm set (move/config/stop,
+# 116-001 MOVE protocol cutover) -- shared by both the differential and
+# fuzz/boundary suites so every corpus is built from the SAME reference
+# construction helpers.
 # ---------------------------------------------------------------------------
 
 
-def env_twist(corr_id: int, v_x: float, omega: float, duration: float) -> bytes:
-    twist = pb_envelope.Twist(v_x=v_x, omega=omega, duration=duration)
-    return pb_envelope.CommandEnvelope(corr_id=corr_id, twist=twist).SerializeToString()
+def env_move_twist(corr_id: int, v_x: float, v_y: float, omega: float, *, stop_field: str, stop_value: float,
+                    timeout: float, replace: bool, move_id: int) -> bytes:
+    """Builds ``CommandEnvelope{move: Move{velocity: MoveTwist{v_x, v_y,
+    omega}, <stop_field>: stop_value, timeout, replace, id}}``. `stop_field`
+    is one of Move's own `stop` oneof field names (``"time"``/``"distance"``/
+    ``"angle"``) -- passed as a kwarg name so this one helper covers all
+    three stop kinds without three near-identical copies."""
+    twist = pb_envelope.MoveTwist(v_x=v_x, v_y=v_y, omega=omega)
+    move = pb_envelope.Move(twist=twist, timeout=timeout, replace=replace, id=move_id,
+                             **{stop_field: stop_value})
+    return pb_envelope.CommandEnvelope(corr_id=corr_id, move=move).SerializeToString()
+
+
+def env_move_wheels(corr_id: int, v_left: float, v_right: float, *, stop_field: str, stop_value: float,
+                     timeout: float, replace: bool, move_id: int) -> bytes:
+    """Builds ``CommandEnvelope{move: Move{velocity: MoveWheels{v_left,
+    v_right}, <stop_field>: stop_value, timeout, replace, id}}`` -- see
+    ``env_move_twist()`` for the `stop_field` convention."""
+    wheels = pb_envelope.MoveWheels(v_left=v_left, v_right=v_right)
+    move = pb_envelope.Move(wheels=wheels, timeout=timeout, replace=replace, id=move_id,
+                             **{stop_field: stop_value})
+    return pb_envelope.CommandEnvelope(corr_id=corr_id, move=move).SerializeToString()
 
 
 def env_stop(corr_id: int) -> bytes:
@@ -347,16 +371,11 @@ def env_config_otos(corr_id: int, **fields) -> bytes:
         corr_id=corr_id, config=pb_envelope.ConfigDelta(otos=patch)).SerializeToString()
 
 
-def env_config_watchdog(corr_id: int, watchdog: int) -> bytes:
-    return pb_envelope.CommandEnvelope(
-        corr_id=corr_id, config=pb_envelope.ConfigDelta(watchdog=watchdog)).SerializeToString()
-
-
 __all__ = [
     "pb_common", "pb_config", "pb_envelope", "pb_telemetry",
     "compile_harness", "run_harness", "decode", "parse_decode_line",
     "encode_ok", "encode_err", "encode_telemetry", "encode_telemetry_secondary", "f32", "float_eq",
     "unknown_varint_field",
-    "env_twist", "env_stop",
-    "env_config_drivetrain", "env_config_motor", "env_config_otos", "env_config_watchdog",
+    "env_move_twist", "env_move_wheels", "env_stop",
+    "env_config_drivetrain", "env_config_motor", "env_config_otos",
 ]
