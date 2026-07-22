@@ -1,9 +1,14 @@
 ---
 id: 009
 title: Test-suite sweep + green bar (build.py clean, pytest green)
-status: open
-use-cases: [SUC-045, SUC-047, SUC-048, SUC-049]
-depends-on: ["008"]
+status: in-progress
+use-cases:
+- SUC-045
+- SUC-047
+- SUC-048
+- SUC-049
+depends-on:
+- 008
 github-issue: ''
 issue: telemetry-frame-tightening-amendment-to-gut-s1.md
 completes_issue: true
