@@ -89,6 +89,13 @@ _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 # correctly).
 _WIRE_TEST_CODEC_SRC = _SUPPORT_DIR / "wire_test_codec.cpp"
 
+# 117 ticket 004: scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression()
+# needs REAL, nonzero velocity gains (unlike this harness's own zero-gain
+# baseMotorConfig() default) so the plant actually moves -- pulls in the
+# same TestSupport::benchTestMotorConfig() sim_api_harness.cpp's own
+# scenarioTwistDrivesRealPlantRamp() uses.
+_BENCH_TEST_CONFIG_SRC = _SUPPORT_DIR / "bench_test_config.cpp"
+
 # Matches every other src/tests/sim/unit harness's own compiled standard.
 _CXX_STANDARD = "c++20"
 
@@ -161,6 +168,7 @@ def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
         _WHEEL_PLANT_SRC,
         _OTOS_PLANT_SRC,
         _WIRE_TEST_CODEC_SRC,
+        _BENCH_TEST_CONFIG_SRC,
     ]
     for src in sources:
         assert src.is_file(), f"required source missing: {src}"

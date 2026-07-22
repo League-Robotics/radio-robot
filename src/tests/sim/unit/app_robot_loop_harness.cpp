@@ -78,6 +78,7 @@
 #include "scripted_i2c_hook.h"
 #include "sim_clock.h"
 #include "sim_plant.h"
+#include "support/bench_test_config.h"
 #include "support/fake_transport.h"
 #include "wire_test_codec.h"
 
@@ -1330,6 +1331,158 @@ void scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists() {
               "always reverts to the baked Config::defaultEstimatorConfig() default");
 }
 
+// ===========================================================================
+// 117 ticket 004: RobotLoop::cycle()'s trailing kPace block now calls
+// stateEstimator_.update(frame_, nowUs) once per cycle, immediately after
+// frame_.pose is staged. This scenario runs against a LIVE (unscripted)
+// SimPlant with REAL, nonzero velocity gains
+// (TestSupport::benchTestMotorConfig() -- the SAME realistic gains
+// sim_api_harness.cpp's own scenarioTwistDrivesRealPlantRamp() uses; unlike
+// this file's own baseMotorConfig() default, whose deliberately-zero gains
+// never actually move the plant) and proves:
+//   (1) after several cycles of commanded motion, StateEstimator's wheel
+//       AND body peer estimates reach valid=true and track the commanded
+//       twist in the expected direction/magnitude (AC #2's own call site,
+//       exercised end to end);
+//   (2) no regression in encoder-tracking-vs-commanded-speed accuracy
+//       attributable to the estimator's addition to the schedule -- the
+//       REAL motor's own encoder-derived velocity (Devices::Motor::
+//       velocity(), independent of the estimator's own copy) still ramps
+//       toward the commanded speed. Complements
+//       scenarioVirtualCycleTimingDiagnostic() (sim_api_harness.cpp), which
+//       proves the SAME "no regression" bar at the schedule-BUDGET level
+//       (sleepCount/lastSleepMillis unchanged -- update() is pure
+//       computation over already-staged data, no new I2C transaction, no
+//       new sleep, see robot_loop.cpp's own kPace-block comment) -- this
+//       scenario proves it at the PLANT-RESPONSE level instead;
+//   (3) AC #6: ticket 003's handleConfig() ESTIMATOR branch and this
+//       ticket's cycle()-call-site wiring reach the SAME stateEstimator
+//       instance, not two -- a live EstimatorConfigPatch dispatched here
+//       visibly mutates the SAME object update() has been refreshing every
+//       cycle above.
+// ===========================================================================
+
+void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
+  beginScenario("117 ticket 004: StateEstimator tracks commanded motion after warm-up; real "
+                "motor velocity still ramps toward commanded speed (no regression from the "
+                "estimator's own addition to the schedule); ESTIMATOR branch reaches the same "
+                "instance");
+
+  TestSim::SimPlant plant;
+  TestSim::SimClock clock;
+  TestSim::SimSleeper sleeper;
+
+  // Real, nonzero gains -- see this scenario's own header comment for why
+  // baseMotorConfig() (this file's own zero-gain default, used by every
+  // scenario above) will not do here.
+  Devices::NezhaMotor motorL(plant, TestSupport::benchTestMotorConfig(1));
+  Devices::NezhaMotor motorR(plant, TestSupport::benchTestMotorConfig(2));
+  Devices::Otos otos(plant, Devices::OtosConfig{});
+  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
+  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+
+  TestSupport::FakeTransport serialFake;
+  TestSupport::FakeTransport radioFake;
+  App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
+  App::Telemetry tlm(comms, serialFake, radioFake);
+  App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
+  App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  App::MoveQueue moveQueue(drive, odom, clock);
+  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  // Default weights -- sourcing from Config::defaultEstimatorConfig() is
+  // main.cpp's/sim_harness.h's own job (AC #1), not this unit test's
+  // concern; this scenario only cares about update()'s own call site and
+  // its effect on wheel/body validity/tracking.
+  App::StateEstimator stateEstimator;
+
+  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
+                            drive, odom, moveQueue, preamble, stateEstimator, clock,
+                            sleeper);
+  driveLivePlantBootToDone(preamble, clock);
+  robotLoop.boot();
+  robotLoop.markConfigured();
+
+  checkTrue(!stateEstimator.wheelNow(App::Wheel::Left).valid,
+            "left wheel peer starts invalid -- update() has not run yet (boot() never calls "
+            "cycle())");
+  checkTrue(!stateEstimator.whereAmI(0).valid,
+            "body peer starts invalid -- update() has not run yet");
+
+  constexpr float kCommandedVx = 300.0f;  // [mm/s]
+  const uint32_t kMoveCorrId = 98001;
+  const uint32_t kMoveId = 92;
+  std::string moveLine = armorMoveTimeTwistCommand(
+      /*includeVelocity=*/true, kCommandedVx, /*omega=*/0.0f, /*includeStop=*/true,
+      /*stopTimeMs=*/5000.0f, /*timeoutMs=*/5000.0f, /*replace=*/true, kMoveId, kMoveCorrId);
+  checkTrue(!moveLine.empty(), "armor() of the MOVE envelope succeeds");
+  serialFake.enqueueInbound(moveLine.c_str());
+
+  // ~1s of virtual ramp time -- comfortably >> the plant's default tau
+  // (TestSim::kDefaultTau, 130ms, per sim_api_harness.cpp's own
+  // scenarioTwistDrivesRealPlantRamp() derivation).
+  constexpr int kCycles = 20;
+  for (int i = 0; i < kCycles; ++i) {
+    plant.tick(0.05f);  // [s] 50ms/cycle
+    clock.advanceMicros(50000);
+    robotLoop.cycle();
+  }
+
+  uint32_t nowMs = static_cast<uint32_t>(clock.nowMicros() / 1000);
+
+  App::WheelEstimate wheelL = stateEstimator.wheelNow(App::Wheel::Left);
+  App::WheelEstimate wheelR = stateEstimator.wheelNow(App::Wheel::Right);
+  checkTrue(wheelL.valid, "left wheel peer is valid after several cycles of motion");
+  checkTrue(wheelR.valid, "right wheel peer is valid after several cycles of motion");
+  checkTrue(wheelL.velocity > 100.0f,
+            "left wheel peer's own velocity tracks the commanded forward motion (positive, "
+            "well above zero)");
+  checkTrue(wheelR.velocity > 100.0f,
+            "right wheel peer's own velocity tracks the commanded forward motion (positive, "
+            "well above zero)");
+
+  App::BodyEstimate body = stateEstimator.whereAmI(nowMs);
+  checkTrue(body.valid, "body peer is valid after several cycles of motion");
+  checkTrue(body.v_x > 100.0f,
+            "body peer's own v_x tracks the commanded forward twist (positive, well above "
+            "zero)");
+  checkFloatEq(body.v_y, 0.0f,
+               "body peer's own v_y stays zero -- a straight twist commands no lateral motion",
+               /*tol=*/1.0f);
+
+  // (2) No tracking regression: the REAL encoder-derived velocity (not the
+  // estimator's own copy of it) still ramps toward the commanded speed.
+  checkTrue(motorL.velocity() > 100.0f,
+            "left motor's REAL encoder-derived velocity ramped toward the commanded speed -- "
+            "no regression from the estimator's own addition to the schedule");
+  checkTrue(motorR.velocity() > 100.0f,
+            "right motor's REAL encoder-derived velocity ramped toward the commanded speed -- "
+            "no regression from the estimator's own addition to the schedule");
+
+  // (3) AC #6: dispatch a live EstimatorConfigPatch and confirm THIS SAME
+  // `stateEstimator` object -- the one update() has been refreshing every
+  // cycle above -- picks it up, not a second, disconnected instance.
+  const uint32_t kEstimatorCorrId = 98002;
+  Buf estimatorPatch;
+  putFloatField(estimatorPatch, 1, 0.4f);  // weight_heading_otos, field 1
+  Buf estimatorDelta;
+  putMessageField(estimatorDelta, 6, estimatorPatch);  // ConfigDelta.estimator, field 6
+  Buf estimatorEnv;
+  putVarintField(estimatorEnv, 1, kEstimatorCorrId);  // CommandEnvelope.corr_id
+  putMessageField(estimatorEnv, 6, estimatorDelta);   // CommandEnvelope.config, field 6
+  std::string estimatorLine = armorLine(estimatorEnv.data, estimatorEnv.len);
+  checkTrue(!estimatorLine.empty(), "armor() of the CONFIG{estimator} envelope succeeds");
+  serialFake.enqueueInbound(estimatorLine.c_str());
+
+  plant.tick(0.05f);
+  clock.advanceMicros(50000);
+  robotLoop.cycle();
+
+  checkFloatEq(stateEstimator.weights().headingOtos, 0.4f,
+               "AC #6: handleConfig()'s ESTIMATOR branch (ticket 003) mutated the SAME "
+               "stateEstimator instance this ticket's cycle()-call-site update() has been "
+               "refreshing every cycle -- not a second, disconnected instance");
+}
+
 }  // namespace
 
 int main() {
@@ -1345,6 +1498,7 @@ int main() {
   scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome();
 
   scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists();
+  scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::RobotLoop scenarios passed\n");

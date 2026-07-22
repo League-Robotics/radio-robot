@@ -71,6 +71,22 @@ Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
   return cfg;
 }
 
+// toFusionWeights (117 ticket 004) -- converts the boot config's
+// Config::EstimatorBootConfig into the app-local App::FusionWeights
+// StateEstimator's constructor needs. Lives here for the SAME reason
+// toDeviceMotorConfig() above does: main.cpp is the one place both types
+// are reachable -- config/ may depend only on messages/ (docs/design/
+// design.md §5's dependency diagram), never on app/, so
+// EstimatorBootConfig and FusionWeights stay independently declared and
+// meet only at this composition root.
+App::FusionWeights toFusionWeights(const Config::EstimatorBootConfig& src) {
+  App::FusionWeights weights;
+  weights.headingOtos = src.headingOtos;
+  weights.omegaOtos = src.omegaOtos;
+  weights.staleness = src.staleness;
+  return weights;
+}
+
 }  // namespace
 
 int main() {
@@ -144,13 +160,11 @@ int main() {
   // move_queue.h's own boundary comment: "no new dependency direction").
   static App::MoveQueue moveQueue(drive, odom, clock);
   static App::Preamble preamble(motorL, motorR, otos, color, line, clock);
-  // 117 ticket 003: RobotLoop's own StateEstimator& is threaded through
-  // here (mirrors moveQueue/preamble above); default-constructed for now
-  // (encoder-only-v1 FusionWeights{} default, identical to what
-  // Config::defaultEstimatorConfig() bakes this sprint) -- ticket 004 wires
-  // this construction to the real baked boot config and adds the
-  // RobotLoop::cycle() call site that actually ticks it.
-  static App::StateEstimator stateEstimator;
+  // 117 ticket 004: RobotLoop's own StateEstimator& is threaded through
+  // here (mirrors moveQueue/preamble above), constructed from the same
+  // fail-closed baked boot config every other Config::default*() call
+  // above uses -- Config::defaultEstimatorConfig() (ticket 003).
+  static App::StateEstimator stateEstimator(toFusionWeights(Config::defaultEstimatorConfig()));
 
   // 114-004 (SUC-003): the real ARM-only MicroBitStorage-backed persistence
   // adapter. Declared BEFORE robotLoop below -- RobotLoop only ever holds a

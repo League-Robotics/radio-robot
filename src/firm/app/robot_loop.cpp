@@ -575,6 +575,15 @@ void RobotLoop::cycle() {
     odom_.integrate();  // odometry from both fresh wheel samples
     frame_.pose = {odom_.x(), odom_.y(), odom_.theta()};
 
+    // Predict-to-now estimation (117 ticket 004): refreshes StateEstimator's
+    // wheel/body peer bases from THIS cycle's already-staged frame_ data --
+    // immediately after frame_.pose is staged (i.e. after applyOtosSample()/
+    // odom_.integrate() above), before updateLineColor() below, matching
+    // this sprint's overlay DESIGN.md §2 exactly. Pure computation over
+    // already-staged data -- no I2C access, no sleep, bounded work, the same
+    // posture odom_.integrate()/applyOtosSample() already keep in this block.
+    stateEstimator_.update(frame_, static_cast<uint32_t>(nowUs / 1000));  // [us] -> [ms]
+
     updateLineColor(nowUs);
   });
 }
