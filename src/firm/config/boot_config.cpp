@@ -105,10 +105,14 @@ EstimatorBootConfig defaultEstimatorConfig() {
     // staleness_ms reasoning. NOT a live SET/wire surface itself -- see
     // EstimatorBootConfig's own doc comment (src/firm/config/boot_config.h)
     // for the separate, volatile EstimatorConfigPatch live-tuning path.
+    // stop_lead_ms (turn-prediction campaign) -- App::MoveQueue's own
+    // fail-closed boot-time anticipation lead; see that JSON's own inline
+    // comment for the derivation.
     EstimatorBootConfig cfg;
     cfg.headingOtos = 0.0f;
     cfg.omegaOtos = 0.0f;
     cfg.staleness = 60u;   // [ms]
+    cfg.stopLead = 90u;    // [ms]
     return cfg;
 }
 

@@ -279,12 +279,25 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
   // to the baked Config::defaultEstimatorConfig() default. Present-field
   // merge onto a snapshot of the CURRENT live weights, mirroring
   // applyMotorConfigPatch()/applyOtosPatch()'s own merge-then-apply shape.
+  //
+  // stop_lead_ms (turn-prediction campaign) rides the SAME wire arm/branch
+  // (config.proto's own EstimatorConfigPatch doc comment explains why) but
+  // targets moveQueue_ directly -- App::MoveQueue::setStopLead(), not the
+  // FusionWeights merge above (a different App:: object; stopLead_ is
+  // MoveQueue's own field, not StateEstimator's). Applied independently of
+  // whether any of the three weight fields are present -- an
+  // EstimatorConfigPatch carrying ONLY stop_lead_ms is a valid, complete
+  // patch. Same never-persisted contract as the weights above.
   if (env.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::ESTIMATOR) {
     const msg::EstimatorConfigPatch& patch = env.cmd.config.patch.estimator;
 
     FusionWeights weights = stateEstimator_.weights();
     mergeEstimatorPatch(weights, patch);
     stateEstimator_.setWeights(weights);
+
+    if (patch.stop_lead_ms.has) {
+      moveQueue_.setStopLead(static_cast<uint32_t>(patch.stop_lead_ms.val));
+    }
 
     tlm_.ack(env.corr_id, 0);
     return;

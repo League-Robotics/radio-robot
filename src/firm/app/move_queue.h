@@ -11,11 +11,20 @@
 // is already permitted), how a velocity variant becomes wheel duty
 // (Drive's job), what "traveled far enough" means numerically
 // (Motion::StopCondition + App::Odometry's job). Constructor dependencies:
-// Drive&, Odometry&, const Devices::Clock& -- the same three collaborators
-// the deleted App::Deadman (clock only) and App::RobotLoop (drive+odom,
-// already) depended on today; no new dependency direction. Fan-out stays
-// at exactly these 3 injected collaborators plus the owned (not injected)
-// Motion::StopCondition.
+// Drive&, Odometry&, const Devices::Clock&, const StateEstimator& -- the
+// StateEstimator& is a turn-prediction-campaign addition (see tick()'s own
+// doc comment below); the other three are the same collaborators the
+// deleted App::Deadman (clock only) and App::RobotLoop (drive+odom,
+// already) depended on before.
+//
+// StateEstimator& dependency (turn-prediction campaign): this is a
+// DELIBERATE new dependency edge (MoveQueue -> StateEstimator), superseding
+// this file's own prior "no new dependency direction" claim -- state_
+// estimator.h's own file header always named this as the eventual consumer
+// ("consuming whereAmI()/wheelAt() to drive motion... a later, out-of-this-
+// sprint trajectory controller"); this IS that later consumer. No cycle:
+// StateEstimator depends on nothing in app/ beyond app/telemetry.h, and
+// never reads MoveQueue.
 //
 // StopCondition storage: Motion::StopCondition has no default constructor
 // (every baseline is captured at construction -- see stop_condition.h's
@@ -48,6 +57,7 @@
 
 #include "app/drive.h"
 #include "app/odometry.h"
+#include "app/state_estimator.h"
 #include "devices/clock.h"
 #include "messages/envelope.h"
 #include "motion/stop_condition.h"
@@ -85,7 +95,15 @@ class MoveQueue {
     Completion completion{};  // valid iff completed
   };
 
-  MoveQueue(Drive& drive, Odometry& odom, const Devices::Clock& clock);
+  // stopLead -- [ms] initial anticipation lead (see tick()'s own doc
+  // comment); defaults to 0 (anticipation OFF, IDENTICAL to this class's
+  // pre-turn-prediction-campaign behavior) for a caller that doesn't source
+  // one from boot config (e.g. src/sim/sim_harness.h's own documented
+  // sim/production boundary, or a unit-test harness that doesn't care).
+  // Live-retunable afterward via setStopLead() -- see that method's own
+  // doc comment.
+  MoveQueue(Drive& drive, Odometry& odom, const Devices::Clock& clock,
+            const StateEstimator& stateEstimator, uint32_t stopLead = 0);
 
   // Enqueues/replaces `move` (already shape-validated by the caller -- see
   // this file's own header comment).
@@ -118,7 +136,41 @@ class MoveQueue {
   // stages a zero/stopped target) or, if the queue is now empty, calls
   // Drive::stop(). A no-op (Continue, TickResult::completed == false) if
   // no Move is active.
+  //
+  // Anticipation lead (turn-prediction campaign, StateEstimator&
+  // consumption): the kind-specific Distance/Angle comparison (never the
+  // Time kind or the timeout backstop, both genuine elapsed-wall-clock
+  // deadlines) is evaluated against `stateEstimator_.bodyAt(now + stopLead)`
+  // instead of the caller's raw CURRENT `odom` reading, whenever stopLead_
+  // > 0 AND the estimator's own body peer is valid (has seen at least one
+  // update() call) -- falls back to the raw `odom` reading otherwise
+  // (stopLead_ == 0, or too early after boot for the estimator to have a
+  // basis yet). This closes two measured error sources at once: the
+  // one-cycle basis staleness `odom` itself already carries at this call
+  // site (robot_loop.cpp's own kPace-block ordering ticks MoveQueue BEFORE
+  // stateEstimator_.update() runs each cycle) and the actuation/momentum-
+  // tail overshoot a stop condition fired exactly AT threshold-crossing
+  // still incurs (turn-prediction-campaign notebook,
+  // src/tests/notebooks/turn_prediction.ipynb -- measured ~150-250ms lag,
+  // ~18deg overshoot at omega=2rad/s in sim). Distance predicts pathLength
+  // forward using the predicted body-frame speed (|v_x, v_y|) held
+  // constant across the SAME age the heading prediction uses -- mirrors
+  // pathLength()'s own "accumulate |distance| every cycle" contract
+  // (odometry.h), extrapolated rather than measured. Activation baselines
+  // (activationPathLength_/activationTheta_) are UNCHANGED by this --
+  // still captured from the raw `odom` reading at activation time, exactly
+  // as before; only the CURRENT-reading side of the comparison anticipates.
   TickResult tick(uint64_t now, const Odometry& odom);  // [us]
+
+  // setStopLead/stopLead -- the live-tuning entry point (RobotLoop::
+  // handleConfig()'s own ESTIMATOR branch, turn-prediction campaign) mirrors
+  // StateEstimator::setWeights()'s own shape: a plain in-memory write, no
+  // I2C access, no bus transaction. A reboot always reverts to the boot
+  // config's own stop_lead_ms bake (Config::EstimatorBootConfig::stopLead)
+  // -- this class never persists it, matching EstimatorConfigPatch's own
+  // "never persisted" contract for the fusion weights it already carries.
+  void setStopLead(uint32_t stopLead) { stopLead_ = stopLead; }  // [ms]
+  uint32_t stopLead() const { return stopLead_; }                // [ms]
 
   // Drains every pending slot and ends the active Move (if any) with NO
   // completion ack for any of them -- used by STOP (ticket 006), which
@@ -166,10 +218,12 @@ class MoveQueue {
   Drive& drive_;
   Odometry& odom_;
   const Devices::Clock& clock_;
+  const StateEstimator& stateEstimator_;
 
   ActiveMove active_;
   msg::Move pending_[kMaxPending];
   int pendingCount_ = 0;
+  uint32_t stopLead_ = 0;  // [ms] see tick()'s own doc comment
 };
 
 }  // namespace App

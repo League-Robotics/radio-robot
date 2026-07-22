@@ -53,6 +53,12 @@ config"): ``estimator.weight_heading_otos``/``weight_omega_otos``/
 source-side fallback, mirroring `App::StateEstimator`'s own fail-closed
 boot-config precedent.
 
+ADDED (turn-prediction campaign): ``estimator.stop_lead_ms`` joins the
+same list -- ``App::MoveQueue``'s own fail-closed boot-time anticipation
+lead (``Config::EstimatorBootConfig::stopLead``), read by the SAME
+``estimator_config_for_config()`` via the SAME ``_require()`` discipline
+as its three siblings above.
+
 The "value-preserving migration, verified by diff against a pre-ticket
 golden snapshot" section this file used to carry (``fixtures/
 boot_config_golden_*.cpp`` + ``test_boot_config_cpp_byte_identical_to_pre_
@@ -130,6 +136,7 @@ _REQUIRED_KEY_PATHS = [
     ("estimator", "weight_heading_otos"),
     ("estimator", "weight_omega_otos"),
     ("estimator", "staleness_ms"),
+    ("estimator", "stop_lead_ms"),
 ]
 
 

@@ -73,10 +73,25 @@ OtosBootConfig defaultOtosBootConfig();
 // weights, no unit tag (coding-standards.md). staleness carries a reasoned
 // per-robot placeholder (each robot JSON's own inline comment documents
 // the derivation).
+//
+// stopLead (turn-prediction campaign): App::MoveQueue's own fail-closed
+// boot-time anticipation lead -- see move_queue.h's tick() doc comment for
+// what it does (StateEstimator::bodyAt(now + stopLead)-based Distance/
+// Angle stop-condition evaluation). Lives in EstimatorBootConfig/
+// EstimatorConfigPatch (not its own patch arm) as the "smallest coherent
+// path": it is consumed by MoveQueue, not StateEstimator, but the
+// prediction it anticipates INTO is StateEstimator's own, and every other
+// piece of estimator-adjacent boot/live-tune plumbing (this struct,
+// EstimatorConfigPatch, the CONFIG_ESTIMATOR wire target) already exists
+// for exactly this shape of value -- a small, required, robot-JSON-baked
+// float with a live-tunable wire override. Required (like every other
+// field in this struct) -- gen_boot_config.py's own estimator_config_for_
+// config() fails codegen if a robot JSON is missing estimator.stop_lead_ms.
 struct EstimatorBootConfig {
   float headingOtos = 0.0f;  // [0..1] blend weight: body heading vs OTOS heading
   float omegaOtos = 0.0f;    // [0..1] blend weight: body omega vs OTOS omega
   uint32_t staleness = 200;  // [ms] max OTOS reading age still eligible to blend
+  uint32_t stopLead = 0;     // [ms] App::MoveQueue stop-condition anticipation lead
 };
 
 // The boot EstimatorBootConfig default — fail-closed baked fusion weights,

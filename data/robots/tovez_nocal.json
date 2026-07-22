@@ -109,9 +109,10 @@
     "yaw_jerk_max": 100.0
   },
   "estimator": {
-    "_estimator_note": "117 (predict-to-now estimator v1): weight_heading_otos/weight_omega_otos committed 0.0 -- stakeholder's encoder-only-v1 decision, OTOS fusion is wired but not yet trusted with any nonzero weight. staleness_ms=60.0 is 3x Devices::Otos::kReadPeriod (20ms): generous headroom over the OTOS chip's own read cadence, small enough to exclude a genuinely stale reading before the next cycle's fresh one arrives.",
+    "_estimator_note": "117 (predict-to-now estimator v1): weight_heading_otos/weight_omega_otos committed 0.0 -- stakeholder's encoder-only-v1 decision, OTOS fusion is wired but not yet trusted with any nonzero weight. staleness_ms=60.0 is 3x Devices::Otos::kReadPeriod (20ms): generous headroom over the OTOS chip's own read cadence, small enough to exclude a genuinely stale reading before the next cycle's fresh one arrives. stop_lead_ms=90.0 (turn-prediction campaign) is EMPIRICALLY TUNED against the real firmware (src/tests/testgui/test_tour_closure_gate.py's own EstimatorConfigPatch push + TOUR_1/TOUR_2 sweep), not a naive lag=lead estimate -- src/tests/notebooks/turn_prediction.ipynb's own first-pass heuristic (RMS-of-ZOH-prediction-vs-shift) suggested ~200ms (treating the measured ~206ms stop-detection LAG as if it were directly the correct anticipation LEAD), but a closed-loop sweep against the actual firmware showed 200ms badly OVERSHOOTS the correction (undershoots the target by ~13deg): the naive heuristic wrongly assumes omega stays at its cruise value for the WHOLE lag window, when in fact the coast-down decelerates (measured overshoot, 18.2deg, is LESS than omega_cruise*lag=23.6deg would predict), so anticipating by the full lag over-corrects. The CORRECT relationship (re-derived from this sweep) is lead ~= overshoot_uncorrected / omega_cruise, not lead ~= lag; 75-110ms measured a broad, flat, near-zero-error plateau (TOUR_1/TOUR_2 worst |error| 4.2-4.7deg ideal-chip, 5.5-6.9deg realistic-profile, vs ~13-23deg uncorrected) -- 90.0 (mid-plateau) is this robot's own sim fixture value. This SAME value also turned out to bench-validate on real tovez hardware (~5-6deg residual, 2026-07-22 bench session) -- see tovez.json's own note for the hardware numbers; tovez.json now carries 90.0 too, not a distinct hardware-derived value.",
     "weight_heading_otos": 0.0,
     "weight_omega_otos": 0.0,
-    "staleness_ms": 60.0
+    "staleness_ms": 60.0,
+    "stop_lead_ms": 90.0
   }
 }

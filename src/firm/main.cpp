@@ -155,16 +155,25 @@ int main() {
   static App::Telemetry tlm(comms, serialLink, radioLink);
   static App::Drive drive(motorL, motorR, drivetrainConfig.trackwidth);
   static App::Odometry odom(motorL, motorR, drivetrainConfig.trackwidth);
+
+  // 117 ticket 004 / turn-prediction campaign: StateEstimator is now
+  // constructed BEFORE MoveQueue -- MoveQueue's own constructor holds a
+  // const StateEstimator& (its own anticipation-lead stop-condition
+  // evaluation, move_queue.h's own doc comment), so the referent must
+  // already exist. Sourced from the SAME fail-closed baked boot config
+  // every other Config::default*() call above uses --
+  // Config::defaultEstimatorConfig() (ticket 003), read ONCE here so both
+  // the fusion weights AND stopLead below come from the identical bake.
+  Config::EstimatorBootConfig estimatorBootConfig = Config::defaultEstimatorConfig();
+  static App::StateEstimator stateEstimator(toFusionWeights(estimatorBootConfig));
   // 116 (protocol-set-point issue): App::MoveQueue replaces App::Deadman --
-  // constructed after drive/odom (it holds references to both, see
-  // move_queue.h's own boundary comment: "no new dependency direction").
-  static App::MoveQueue moveQueue(drive, odom, clock);
+  // constructed after drive/odom/stateEstimator (it holds references to
+  // all three). stopLead is the turn-prediction campaign's own boot-config
+  // bake (Config::EstimatorBootConfig::stopLead, data/robots/*.json's
+  // estimator.stop_lead_ms) -- see move_queue.h's tick() doc comment for
+  // what it does.
+  static App::MoveQueue moveQueue(drive, odom, clock, stateEstimator, estimatorBootConfig.stopLead);
   static App::Preamble preamble(motorL, motorR, otos, color, line, clock);
-  // 117 ticket 004: RobotLoop's own StateEstimator& is threaded through
-  // here (mirrors moveQueue/preamble above), constructed from the same
-  // fail-closed baked boot config every other Config::default*() call
-  // above uses -- Config::defaultEstimatorConfig() (ticket 003).
-  static App::StateEstimator stateEstimator(toFusionWeights(Config::defaultEstimatorConfig()));
 
   // 114-004 (SUC-003): the real ARM-only MicroBitStorage-backed persistence
   // adapter. Declared BEFORE robotLoop below -- RobotLoop only ever holds a

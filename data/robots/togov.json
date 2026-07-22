@@ -122,9 +122,10 @@
     "yaw_jerk_max": 100.0
   },
   "estimator": {
-    "_estimator_note": "117 (predict-to-now estimator v1): weight_heading_otos/weight_omega_otos committed 0.0 -- stakeholder's encoder-only-v1 decision, OTOS fusion is wired but not yet trusted with any nonzero weight. staleness_ms=60.0 is 3x Devices::Otos::kReadPeriod (20ms): generous headroom over the OTOS chip's own read cadence, small enough to exclude a genuinely stale reading before the next cycle's fresh one arrives. togov is touched only to stay schema-complete, matching this file's own control._sprint_114_note precedent.",
+    "_estimator_note": "117 (predict-to-now estimator v1): weight_heading_otos/weight_omega_otos committed 0.0 -- stakeholder's encoder-only-v1 decision, OTOS fusion is wired but not yet trusted with any nonzero weight. staleness_ms=60.0 is 3x Devices::Otos::kReadPeriod (20ms): generous headroom over the OTOS chip's own read cadence, small enough to exclude a genuinely stale reading before the next cycle's fresh one arrives. togov is touched only to stay schema-complete, matching this file's own control._sprint_114_note precedent. stop_lead_ms=90.0 (turn-prediction campaign) mirrors tovez.json's own value, which IS now bench-validated on real tovez hardware (2026-07-22: ~5-6deg residual turn error at 90ms, down from the established ~61-73%/+20.6deg-class overshoot -- see tovez.json's own note for the full numbers) -- but UNVALIDATED for togov's own mecanum drivetrain specifically (no togov bench data this campaign, and a mecanum platform's own coast-down dynamics could differ from tovez's differential drivetrain), touched only to stay schema-complete; a stakeholder bench session on togov itself should re-derive this independently before trusting it.",
     "weight_heading_otos": 0.0,
     "weight_omega_otos": 0.0,
-    "staleness_ms": 60.0
+    "staleness_ms": 60.0,
+    "stop_lead_ms": 90.0
   }
 }

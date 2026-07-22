@@ -396,9 +396,15 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   App::Telemetry tlm(comms, serialLink, radioLink);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
-  App::MoveQueue moveQueue(drive, odom, clock);
+  // Turn-prediction campaign: App::StateEstimator declared/constructed
+  // BEFORE App::MoveQueue -- MoveQueue's own constructor now holds a
+  // const StateEstimator& (bodyAt()-driven stop-condition anticipation),
+  // so the referent must already exist. Default-constructed (0/0/200ms
+  // weights, stopLead defaults to 0 -- anticipation OFF unless a scenario
+  // explicitly calls moveQueue.setStopLead()).
+  App::StateEstimator stateEstimator;
+  App::MoveQueue moveQueue(drive, odom, clock, stateEstimator);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
-  App::StateEstimator stateEstimator;  // 117 ticket 003: default weights (0/0/200ms)
 
   // --- Drive Preamble to done() BEFORE constructing/calling RobotLoop's
   // own boot() -- see this file's own derivation (robot_loop.cpp's boot()
@@ -531,9 +537,15 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
-  App::MoveQueue moveQueue(drive, odom, clock);
+  // Turn-prediction campaign: App::StateEstimator declared/constructed
+  // BEFORE App::MoveQueue -- MoveQueue's own constructor now holds a
+  // const StateEstimator& (bodyAt()-driven stop-condition anticipation),
+  // so the referent must already exist. Default-constructed (0/0/200ms
+  // weights, stopLead defaults to 0 -- anticipation OFF unless a scenario
+  // explicitly calls moveQueue.setStopLead()).
+  App::StateEstimator stateEstimator;
+  App::MoveQueue moveQueue(drive, odom, clock, stateEstimator);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
-  App::StateEstimator stateEstimator;  // 117 ticket 003: default weights (0/0/200ms)
 
   clock.setMicros(0);
   preamble.step();
@@ -694,9 +706,15 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
-  App::MoveQueue moveQueue(drive, odom, clock);
+  // Turn-prediction campaign: App::StateEstimator declared/constructed
+  // BEFORE App::MoveQueue -- MoveQueue's own constructor now holds a
+  // const StateEstimator& (bodyAt()-driven stop-condition anticipation),
+  // so the referent must already exist. Default-constructed (0/0/200ms
+  // weights, stopLead defaults to 0 -- anticipation OFF unless a scenario
+  // explicitly calls moveQueue.setStopLead()).
+  App::StateEstimator stateEstimator;
+  App::MoveQueue moveQueue(drive, odom, clock, stateEstimator);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
-  App::StateEstimator stateEstimator;  // 117 ticket 003: default weights (0/0/200ms)
 
   clock.setMicros(0);
   preamble.step();
@@ -818,13 +836,16 @@ struct LiveFixture {
   App::Telemetry tlm;
   App::Drive drive;
   App::Odometry odom;
-  App::MoveQueue moveQueue;
-  App::Preamble preamble;
   // 117 ticket 003: default-constructed (encoder-only-v1 FusionWeights{}
   // default) -- directly reachable by every LiveFixture-based scenario
   // (unlike RobotLoop's own persistedTuning_/tuningStore_, which stay
-  // private).
+  // private). Declared BEFORE moveQueue (turn-prediction campaign):
+  // MoveQueue's own constructor holds a const StateEstimator&, so member
+  // initialization order (DECLARATION order, not initializer-list order)
+  // requires this member to exist first.
   App::StateEstimator stateEstimator;
+  App::MoveQueue moveQueue;
+  App::Preamble preamble;
   App::RobotLoop robotLoop;
 
   LiveFixture()
@@ -837,7 +858,7 @@ struct LiveFixture {
         tlm(comms, serialFake, radioFake),
         drive(motorL, motorR, /*trackWidth=*/120.0f),
         odom(motorL, motorR, /*trackWidth=*/120.0f),
-        moveQueue(drive, odom, clock),
+        moveQueue(drive, odom, clock, stateEstimator),
         preamble(motorL, motorR, otos, color, line, clock),
         robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm, drive, odom, moveQueue,
                   preamble, stateEstimator, clock, sleeper) {
@@ -1266,9 +1287,11 @@ void scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists() {
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
-  App::MoveQueue moveQueue(drive, odom, clock);
-  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  // Turn-prediction campaign: stateEstimator constructed before moveQueue
+  // -- see the earlier scenarios' own comment for why.
   App::StateEstimator stateEstimator;  // default weights (0.0/0.0/200ms)
+  App::MoveQueue moveQueue(drive, odom, clock, stateEstimator);
+  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   MockTuningStore mockStore;
   App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
@@ -1387,13 +1410,15 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
-  App::MoveQueue moveQueue(drive, odom, clock);
-  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
   // Default weights -- sourcing from Config::defaultEstimatorConfig() is
   // main.cpp's/sim_harness.h's own job (AC #1), not this unit test's
   // concern; this scenario only cares about update()'s own call site and
-  // its effect on wheel/body validity/tracking.
+  // its effect on wheel/body validity/tracking. Constructed before
+  // moveQueue (turn-prediction campaign) -- see the earlier scenarios'
+  // own comment for why.
   App::StateEstimator stateEstimator;
+  App::MoveQueue moveQueue(drive, odom, clock, stateEstimator);
+  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
                             drive, odom, moveQueue, preamble, stateEstimator, clock,

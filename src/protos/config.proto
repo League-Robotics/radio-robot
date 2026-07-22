@@ -201,8 +201,23 @@ message OtosConfigPatch {
 // branch merges only the PRESENT fields onto a snapshot of
 // stateEstimator_.weights() before calling setWeights() (present-field
 // merge, matching applyMotorConfigPatch()/applyOtosPatch()'s own shape).
+//
+// stop_lead_ms (turn-prediction campaign) -- App::MoveQueue's own live-
+// tunable anticipation lead (App::MoveQueue::setStopLead(), move_queue.h's
+// own tick() doc comment for what it does). Lives on THIS patch (not its
+// own patch arm) as the smallest coherent path: it targets the same
+// CONFIG_ESTIMATOR wire arm/RobotLoop::handleConfig() branch as its three
+// siblings above, even though the field it mutates (MoveQueue::stopLead_)
+// is a DIFFERENT App:: object than the other three (StateEstimator::
+// weights_) -- handleConfig()'s own ESTIMATOR branch applies this field to
+// moveQueue_ directly, alongside (not merged into) the FusionWeights merge
+// the other three fields drive. Same "never persisted" contract as its
+// siblings (Design Rationale Decision 4, sprint 117's overlay design.md) --
+// a reboot always reverts to the baked Config::EstimatorBootConfig::
+// stopLead default.
 message EstimatorConfigPatch {
   optional float weight_heading_otos = 1;  // [0..1] FusionWeights::headingOtos
   optional float weight_omega_otos   = 2;  // [0..1] FusionWeights::omegaOtos
   optional float staleness_ms        = 3;  // [ms] FusionWeights::staleness
+  optional float stop_lead_ms        = 4;  // [ms] App::MoveQueue::stopLead_
 }

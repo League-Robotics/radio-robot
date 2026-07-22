@@ -31,6 +31,7 @@
 #include "app/drive.h"
 #include "app/move_queue.h"
 #include "app/odometry.h"
+#include "app/state_estimator.h"
 #include "devices/device_config.h"
 #include "devices/device_types.h"
 #include "devices/nezha_motor.h"
@@ -257,7 +258,15 @@ void scenarioEnqueueOnEmptyQueueActivatesTwistImmediately() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
+  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
+  // (body peer stays valid=false, never updated by this harness) and
+  // stopLead left at its own constructor default (0, anticipation OFF),
+  // so every scenario below is unaffected: the anticipation branch in
+  // tick() is gated on stopLead_ > 0, matching this file's own pre-
+  // existing raw-Odometry-baseline assertions unchanged.
+  App::StateEstimator estimator;
+  App::MoveQueue queue(drive, odom, clock, estimator);
 
   msg::Move move = makeTwistMove(/*id=*/7, /*v_x=*/100.0f, /*v_y=*/0.0f, /*omega=*/0.0f,
                                   msg::Move::StopKind::TIME, /*stopValue=*/500.0f,
@@ -301,7 +310,15 @@ void scenarioWheelsDistanceMoveUsesRealOdometryBaseline() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
+  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
+  // (body peer stays valid=false, never updated by this harness) and
+  // stopLead left at its own constructor default (0, anticipation OFF),
+  // so every scenario below is unaffected: the anticipation branch in
+  // tick() is gated on stopLead_ > 0, matching this file's own pre-
+  // existing raw-Odometry-baseline assertions unchanged.
+  App::StateEstimator estimator;
+  App::MoveQueue queue(drive, odom, clock, estimator);
 
   msg::Move move = makeWheelsMove(/*id=*/9, /*vLeft=*/90.0f, /*vRight=*/30.0f,
                                    msg::Move::StopKind::DISTANCE, /*stopValue=*/80.0f /*[mm]*/,
@@ -365,7 +382,15 @@ void scenarioAngleMoveUsesRealOdometryHeadingBaseline() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
+  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
+  // (body peer stays valid=false, never updated by this harness) and
+  // stopLead left at its own constructor default (0, anticipation OFF),
+  // so every scenario below is unaffected: the anticipation branch in
+  // tick() is gated on stopLead_ > 0, matching this file's own pre-
+  // existing raw-Odometry-baseline assertions unchanged.
+  App::StateEstimator estimator;
+  App::MoveQueue queue(drive, odom, clock, estimator);
 
   msg::Move move = makeTwistMove(/*id=*/11, /*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/0.5f,
                                   msg::Move::StopKind::ANGLE, /*stopValue=*/0.5f /*[rad]*/,
@@ -411,7 +436,15 @@ void scenarioTimeMoveContinuesThenCompletesAndDrainsEmptyToStop() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
+  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
+  // (body peer stays valid=false, never updated by this harness) and
+  // stopLead left at its own constructor default (0, anticipation OFF),
+  // so every scenario below is unaffected: the anticipation branch in
+  // tick() is gated on stopLead_ > 0, matching this file's own pre-
+  // existing raw-Odometry-baseline assertions unchanged.
+  App::StateEstimator estimator;
+  App::MoveQueue queue(drive, odom, clock, estimator);
 
   clock.setMicros(0);
   msg::Move move = makeTwistMove(/*id=*/5, /*v_x=*/120.0f, /*v_y=*/0.0f, /*omega=*/0.0f,
@@ -461,7 +494,15 @@ void scenarioChainedMoveActivatesSameCycleNoInterveningStop() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
+  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
+  // (body peer stays valid=false, never updated by this harness) and
+  // stopLead left at its own constructor default (0, anticipation OFF),
+  // so every scenario below is unaffected: the anticipation branch in
+  // tick() is gated on stopLead_ > 0, matching this file's own pre-
+  // existing raw-Odometry-baseline assertions unchanged.
+  App::StateEstimator estimator;
+  App::MoveQueue queue(drive, odom, clock, estimator);
 
   clock.setMicros(0);
   msg::Move moveA = makeWheelsMove(21, 60.0f, 60.0f, msg::Move::StopKind::TIME, 100.0f, 5000.0f, false);
@@ -509,7 +550,15 @@ void scenarioReplaceTruePreemptsActiveAndFlushesPending() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
+  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
+  // (body peer stays valid=false, never updated by this harness) and
+  // stopLead left at its own constructor default (0, anticipation OFF),
+  // so every scenario below is unaffected: the anticipation branch in
+  // tick() is gated on stopLead_ > 0, matching this file's own pre-
+  // existing raw-Odometry-baseline assertions unchanged.
+  App::StateEstimator estimator;
+  App::MoveQueue queue(drive, odom, clock, estimator);
 
   clock.setMicros(0);
   msg::Move moveA = makeWheelsMove(31, 50.0f, 50.0f, msg::Move::StopKind::TIME, 1000.0f, 5000.0f, false);
@@ -557,7 +606,15 @@ void scenarioOverflowRejectedErrFullQueueByteForByteUnchanged() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
+  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
+  // (body peer stays valid=false, never updated by this harness) and
+  // stopLead left at its own constructor default (0, anticipation OFF),
+  // so every scenario below is unaffected: the anticipation branch in
+  // tick() is gated on stopLead_ > 0, matching this file's own pre-
+  // existing raw-Odometry-baseline assertions unchanged.
+  App::StateEstimator estimator;
+  App::MoveQueue queue(drive, odom, clock, estimator);
 
   msg::Move moveA = makeTwistMove(41, 10.0f, 0.0f, 0.0f, msg::Move::StopKind::TIME, 1000.0f, 5000.0f, false);
   queue.enqueue(moveA, 100);
@@ -603,7 +660,15 @@ void scenarioFlushDrainsAllPendingAndActiveWithNoCompletionAckAndStopsDrive() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
+  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
+  // (body peer stays valid=false, never updated by this harness) and
+  // stopLead left at its own constructor default (0, anticipation OFF),
+  // so every scenario below is unaffected: the anticipation branch in
+  // tick() is gated on stopLead_ > 0, matching this file's own pre-
+  // existing raw-Odometry-baseline assertions unchanged.
+  App::StateEstimator estimator;
+  App::MoveQueue queue(drive, odom, clock, estimator);
 
   msg::Move moveA = makeWheelsMove(51, 60.0f, 60.0f, msg::Move::StopKind::TIME, 5000.0f, 10000.0f, false);
   queue.enqueue(moveA, 1);
@@ -657,7 +722,15 @@ void scenarioTimeoutEndsStalledDistanceMoveWithTimedOutTrue() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);  // pathLength() stays 0 -- wheels never move in this scenario
-  App::MoveQueue queue(drive, odom, clock);
+  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
+  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
+  // (body peer stays valid=false, never updated by this harness) and
+  // stopLead left at its own constructor default (0, anticipation OFF),
+  // so every scenario below is unaffected: the anticipation branch in
+  // tick() is gated on stopLead_ > 0, matching this file's own pre-
+  // existing raw-Odometry-baseline assertions unchanged.
+  App::StateEstimator estimator;
+  App::MoveQueue queue(drive, odom, clock, estimator);
 
   clock.setMicros(0);
   msg::Move move = makeWheelsMove(/*id=*/61, 40.0f, 40.0f, msg::Move::StopKind::DISTANCE,
@@ -691,12 +764,123 @@ void scenarioTickWithNoActiveMoveIsANoOp() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
+  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
+  // (body peer stays valid=false, never updated by this harness) and
+  // stopLead left at its own constructor default (0, anticipation OFF),
+  // so every scenario below is unaffected: the anticipation branch in
+  // tick() is gated on stopLead_ > 0, matching this file's own pre-
+  // existing raw-Odometry-baseline assertions unchanged.
+  App::StateEstimator estimator;
+  App::MoveQueue queue(drive, odom, clock, estimator);
 
   checkFalse(queue.active(), "fresh MoveQueue starts with no active Move");
   App::MoveQueue::TickResult result = queue.tick(clock.nowMicros(), odom);
   checkFalse(result.completed, "tick() on an empty queue reports no completion");
   checkFalse(queue.active(), "still not active after a no-op tick()");
+}
+
+// ===========================================================================
+// 11. Turn-prediction campaign: a positive `stopLead` evaluates an ANGLE
+//    stop condition against StateEstimator::bodyAt(now + stopLead), not raw
+//    Odometry::theta() -- proven by making the RAW odom reading stay well
+//    under threshold (theta() untouched at 0.0) while the estimator's own
+//    predicted heading alone crosses it. If MoveQueue fell back to reading
+//    odom directly here, this Move would never complete.
+// ===========================================================================
+
+void scenarioAngleMoveAnticipatesViaStateEstimatorPredictedHeading() {
+  beginScenario("MoveQueue: positive stopLead evaluates ANGLE stop against "
+               "StateEstimator::bodyAt(now+stopLead), not raw Odometry::theta()");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  primeAtZero(left, bus, kWireAddr);
+  primeAtZero(right, bus, kWireAddr);
+
+  TestSim::SimClock clock;
+  App::Drive drive(left, right, kTrackWidth);
+  App::Odometry odom(left, right, kTrackWidth);  // theta() stays 0.0 -- wheels never move this scenario
+  App::StateEstimator estimator;
+  App::MoveQueue queue(drive, odom, clock, estimator, /*stopLead=*/200);
+
+  clock.setMicros(10000000);  // 10s -- arbitrary nonzero base, matches update()'s own [ms] domain below
+  msg::Move move = makeTwistMove(/*id=*/71, /*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/0.5f,
+                                  msg::Move::StopKind::ANGLE, /*stopValue=*/0.5f /*[rad]*/,
+                                  /*timeout=*/60000.0f, /*replace=*/false);
+  queue.enqueue(move, /*corrId=*/7);
+
+  // Feed the estimator a body basis: heading=0.42rad, omega=0.5rad/s, basis
+  // time == this tick's own `now` (so bodyAt(now+200ms)'s own age is
+  // EXACTLY stopLead -- see state_estimator.h's own age math). frame.pose.h
+  // is DELIBERATELY 0.42, NOT odom.theta() (0.0) -- this scenario's whole
+  // point is that MoveQueue reads the ESTIMATOR's prediction, never odom,
+  // once stopLead_ > 0.
+  App::Telemetry::Frame frame;
+  frame.pose = msg::Pose2D{0.0f, 0.0f, 0.42f};
+  frame.twist = msg::BodyTwist3{0.0f, 0.0f, 0.5f};
+  uint32_t nowMs = static_cast<uint32_t>(clock.nowMicros() / 1000);
+  estimator.update(frame, nowMs);
+
+  // Predicted heading at now+200ms = 0.42 + 0.5*0.2 = 0.52rad -- OVER the
+  // 0.5rad threshold, despite odom.theta() reading exactly 0.0.
+  checkFloatEq(odom.theta(), 0.0f, "sanity: raw odom.theta() is untouched (0.0) -- wheels never moved");
+  App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+  checkTrue(tick.completed, "ANGLE Move completes via the PREDICTED heading (0.52rad >= 0.5rad threshold), "
+                            "even though raw odom.theta() (0.0rad) never came close");
+  checkUintEq(tick.completion.moveId, 71, "completion reports the ended Move's id");
+  checkFalse(tick.completion.timedOut, "ended via the (anticipated) ANGLE condition, not the timeout backstop");
+}
+
+// ===========================================================================
+// 12. Turn-prediction campaign: the SAME anticipation, DISTANCE kind -- a
+//    positive `stopLead` predicts pathLength forward using the estimator's
+//    own held body-frame speed (StateEstimator::bodyAt()'s v_x/v_y), added
+//    to the CURRENT odom.pathLength() baseline. Raw odom.pathLength() stays
+//    at 0 (wheels never move) -- only the predicted increment crosses the
+//    threshold.
+// ===========================================================================
+
+void scenarioDistanceMoveAnticipatesViaStateEstimatorPredictedSpeed() {
+  beginScenario("MoveQueue: positive stopLead evaluates DISTANCE stop against a StateEstimator-"
+               "predicted pathLength, not raw Odometry::pathLength() alone");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  primeAtZero(left, bus, kWireAddr);
+  primeAtZero(right, bus, kWireAddr);
+
+  TestSim::SimClock clock;
+  App::Drive drive(left, right, kTrackWidth);
+  App::Odometry odom(left, right, kTrackWidth);  // pathLength() stays 0 -- wheels never move this scenario
+  App::StateEstimator estimator;
+  App::MoveQueue queue(drive, odom, clock, estimator, /*stopLead=*/200);
+
+  clock.setMicros(10000000);
+  msg::Move move = makeTwistMove(/*id=*/72, /*v_x=*/200.0f, /*v_y=*/0.0f, /*omega=*/0.0f,
+                                  msg::Move::StopKind::DISTANCE, /*stopValue=*/80.0f /*[mm]*/,
+                                  /*timeout=*/60000.0f, /*replace=*/false);
+  queue.enqueue(move, /*corrId=*/8);
+
+  // v_x=500mm/s held basis -> predicted increment over 200ms = 100mm, added
+  // to odom.pathLength() (0) = 100mm -- OVER the 80mm threshold, despite
+  // odom.pathLength() itself never moving.
+  App::Telemetry::Frame frame;
+  frame.pose = msg::Pose2D{0.0f, 0.0f, 0.0f};
+  frame.twist = msg::BodyTwist3{500.0f, 0.0f, 0.0f};
+  uint32_t nowMs = static_cast<uint32_t>(clock.nowMicros() / 1000);
+  estimator.update(frame, nowMs);
+
+  checkFloatEq(odom.pathLength(), 0.0f, "sanity: raw odom.pathLength() is untouched (0.0) -- wheels never moved");
+  App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+  checkTrue(tick.completed, "DISTANCE Move completes via the PREDICTED pathLength (100mm >= 80mm threshold), "
+                            "even though raw odom.pathLength() (0mm) never came close");
+  checkUintEq(tick.completion.moveId, 72, "completion reports the ended Move's id");
+  checkFalse(tick.completion.timedOut, "ended via the (anticipated) DISTANCE condition, not the timeout backstop");
 }
 
 }  // namespace
@@ -712,6 +896,8 @@ int main() {
   scenarioFlushDrainsAllPendingAndActiveWithNoCompletionAckAndStopsDrive();
   scenarioTimeoutEndsStalledDistanceMoveWithTimedOutTrue();
   scenarioTickWithNoActiveMoveIsANoOp();
+  scenarioAngleMoveAnticipatesViaStateEstimatorPredictedHeading();
+  scenarioDistanceMoveAnticipatesViaStateEstimatorPredictedSpeed();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::MoveQueue scenarios passed\n");

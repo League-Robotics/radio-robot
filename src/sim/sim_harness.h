@@ -138,10 +138,8 @@ class SimHarness {
         tlm_(comms_, serialLink_, radioLink_),
         drive_(armorL_, armorR_, trackWidth),
         odom_(armorL_, armorR_, trackWidth),
-        moveQueue_(drive_, odom_, clock_),
-        preamble_(armorL_, armorR_, otos_, color_, line_, clock_),
         // 117 ticket 004: App::StateEstimator, threaded through exactly
-        // like moveQueue_/preamble_ above -- deliberately DEFAULT-
+        // like moveQueue_/preamble_ below -- deliberately DEFAULT-
         // constructed rather than sourced from Config::
         // defaultEstimatorConfig() the way main.cpp's own construction is
         // (see that function's own header comment). Config::
@@ -162,6 +160,21 @@ class SimHarness {
         // needs non-default weights calls stateEstimator().setWeights()
         // directly, the same way a test needing non-default motor gains
         // already calls configureMotor() rather than reading boot config.
+        //
+        // Constructed BEFORE moveQueue_ (turn-prediction campaign):
+        // App::MoveQueue's own constructor now holds a const
+        // StateEstimator& (see its own tick() doc comment), so member
+        // initialization order (DECLARATION order, this file's own private
+        // section below) requires stateEstimator_ to be declared first.
+        stateEstimator_(),
+        // moveQueue_'s own stopLead SAME sim/production-boundary reasoning
+        // as stateEstimator_'s weights above -- left at its constructor
+        // default (0, anticipation OFF) rather than sourced from
+        // Config::defaultEstimatorConfig()::stopLead. A SimHarness-based
+        // test that specifically needs anticipation calls
+        // moveQueue().setStopLead() directly.
+        moveQueue_(drive_, odom_, clock_, stateEstimator_),
+        preamble_(armorL_, armorR_, otos_, color_, line_, clock_),
         robotLoop_(plant_, armorL_, armorR_, otos_, color_, line_, comms_, tlm_,
                    drive_, odom_, moveQueue_, preamble_, stateEstimator_, clock_,
                    sleeper_) {
@@ -510,18 +523,20 @@ class SimHarness {
   App::Telemetry tlm_;
   App::Drive drive_;
   App::Odometry odom_;
-  // 116 (protocol-set-point issue): App::MoveQueue replaces App::Deadman --
-  // declared AFTER drive_/odom_ (member init order follows DECLARATION
-  // order, not the constructor initializer list's own order -- MoveQueue's
-  // constructor holds references to both).
-  App::MoveQueue moveQueue_;
-  App::Preamble preamble_;
   // 117 ticket 004: default-constructed, deliberately not sourced from
   // Config::defaultEstimatorConfig() -- see the constructor initializer
   // list's own comment above for why (preserves the sim/production
   // boundary src/sim/CMakeLists.txt documents; behaviorally equivalent
-  // this sprint).
+  // this sprint). Declared BEFORE moveQueue_ (turn-prediction campaign):
+  // App::MoveQueue's own constructor holds a const StateEstimator&, so
+  // member initialization order (DECLARATION order, not the constructor
+  // initializer list's own order) requires this member to exist first.
   App::StateEstimator stateEstimator_;
+  // 116 (protocol-set-point issue): App::MoveQueue replaces App::Deadman --
+  // declared AFTER drive_/odom_/stateEstimator_ (MoveQueue's constructor
+  // holds references to all three).
+  App::MoveQueue moveQueue_;
+  App::Preamble preamble_;
 
   // Motion::Executor executor_/App::HeadingSource headingSource_/App::Pilot
   // pilot_ -- DELETED (115-006, gut S1): 115-002's motion-stack excision

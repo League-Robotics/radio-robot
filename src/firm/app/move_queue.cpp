@@ -2,10 +2,14 @@
 // header for the module's boundary and storage rationale.
 #include "app/move_queue.h"
 
+#include <cmath>
+
 namespace App {
 
-MoveQueue::MoveQueue(Drive& drive, Odometry& odom, const Devices::Clock& clock)
-    : drive_(drive), odom_(odom), clock_(clock) {}
+MoveQueue::MoveQueue(Drive& drive, Odometry& odom, const Devices::Clock& clock,
+                      const StateEstimator& stateEstimator, uint32_t stopLead)
+    : drive_(drive), odom_(odom), clock_(clock), stateEstimator_(stateEstimator),
+      stopLead_(stopLead) {}
 
 void MoveQueue::activate(const msg::Move& move, uint64_t now, float pathLength, float theta) {
   if (move.velocity_kind == msg::Move::VelocityKind::WHEELS) {
@@ -84,7 +88,27 @@ MoveQueue::TickResult MoveQueue::tick(uint64_t now, const Odometry& odom) {
   Motion::StopCondition sc(active_.kind, active_.threshold, active_.timeout,
                             active_.activationNow, active_.activationPathLength,
                             active_.activationTheta);
-  Motion::StopCondition::Outcome outcome = sc.tick(now, odom.pathLength(), odom.theta());
+
+  // Anticipation lead (turn-prediction campaign) -- see tick()'s own doc
+  // comment (move_queue.h) for the full rationale. Defaults to the raw
+  // current reading; only overridden below when both stopLead_ > 0 and the
+  // estimator's own body peer is warmed up.
+  float pathLength = odom.pathLength();
+  float theta = odom.theta();
+
+  if (stopLead_ > 0 && (active_.kind == Motion::StopCondition::Kind::Angle ||
+                        active_.kind == Motion::StopCondition::Kind::Distance)) {
+    uint32_t nowMs = static_cast<uint32_t>(now / 1000);
+    BodyEstimate predicted = stateEstimator_.bodyAt(nowMs + stopLead_);
+    if (predicted.valid) {
+      theta = predicted.heading;
+      float age = static_cast<float>((nowMs + stopLead_) - predicted.basisTime) / 1000.0f;  // [s]
+      float speed = std::sqrt(predicted.v_x * predicted.v_x + predicted.v_y * predicted.v_y);
+      pathLength = odom.pathLength() + speed * age;
+    }
+  }
+
+  Motion::StopCondition::Outcome outcome = sc.tick(now, pathLength, theta);
   if (outcome == Motion::StopCondition::Outcome::Continue) return result;
 
   result.completed = true;
