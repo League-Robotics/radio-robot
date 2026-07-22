@@ -26,11 +26,12 @@ Run with::
 from __future__ import annotations
 
 import math
+import time
 
 import pytest
 
 from robot_radio.robot.pb2 import envelope_pb2, telemetry_pb2
-from robot_radio.robot.protocol import NezhaProtocol
+from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
 from robot_radio.testgui import binary_bridge
 from robot_radio.testgui.transport import SerialTransport, _UNMANAGED_YAW_RATE
 
@@ -39,6 +40,8 @@ from robot_radio.testgui.transport import SerialTransport, _UNMANAGED_YAW_RATE
 # method's own docstring) -- set here only for realism/parity with
 # test_binary_bridge.py's own _ACK_FRESH_BIT usage.
 _ACK_FRESH_BIT = 1 << 5
+# flags bit 15 (kFlagFaultMoveTimeout) -- docs/protocol-v4.md sec 7.3.
+_FAULT_MOVE_TIMEOUT_BIT = 1 << 15
 
 
 class _FakeHardwareConn:
@@ -47,13 +50,21 @@ class _FakeHardwareConn:
     plus ``send_envelope_fast()``/``wait_for_ack()`` -- the exact two
     methods ``NezhaProtocol.move_twist()``/``move_wheels()``/
     ``wait_for_ack()`` call on ``self._conn``. Mirrors
-    ``test_protocol_config.py``'s own ``_FakeFastConn``."""
+    ``test_protocol_config.py``'s own ``_FakeFastConn``.
+
+    ``drain_binary_tlm()`` (stakeholder bench fix, 2026-07-22) backs
+    ``_await_move_completion()``'s polling loop -- ``tlm_script`` is a list
+    of "what the next call returns" entries (each a list of raw
+    ``ReplyEnvelope``-shaped objects exposing ``.tlm``), consumed one call
+    at a time; an exhausted script returns ``[]`` forever (no more frames
+    arriving), matching a real connection's non-blocking drain."""
 
     def __init__(self) -> None:
         self.is_open = True
         self.sent: list["envelope_pb2.CommandEnvelope"] = []
         self._next_corr_id = 0
         self.ack_result: "telemetry_pb2.Telemetry | None" = None
+        self.tlm_script: list[list[object]] = []
 
     def send_envelope_fast(self, envelope: "envelope_pb2.CommandEnvelope") -> int:
         self._next_corr_id += 1
@@ -63,6 +74,21 @@ class _FakeHardwareConn:
 
     def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.Telemetry | None":
         return self.ack_result
+
+    def drain_binary_tlm(self) -> list:
+        if self.tlm_script:
+            return self.tlm_script.pop(0)
+        return []
+
+
+class _FakeTlmReply:
+    """A ``ReplyEnvelope``-shaped object exposing exactly what
+    ``TLMFrame.from_pb2()`` needs off ``.tlm`` -- a real
+    ``telemetry_pb2.Telemetry``, so ``from_pb2()`` runs completely
+    unmocked."""
+
+    def __init__(self, tlm: "telemetry_pb2.Telemetry") -> None:
+        self.tlm = tlm
 
 
 @pytest.fixture
@@ -249,6 +275,144 @@ def test_send_does_not_wait_for_ack(transport):
     transport.send("D 150 150 300")  # must not raise/hang despite no ack
 
     assert len(transport._conn.sent) == 1
+
+
+# ---------------------------------------------------------------------------
+# Move completion feedback (stakeholder bench fix, 2026-07-22) --
+# "verify that you say 'drive 500mm' and it drives for 500mm ... You did
+# not test this. It never finishes." command()/send()/run_unmanaged() all
+# now start a bounded background poller (_await_move_completion()) that
+# watches telemetry for the Move's own completion ack (ack_corr ==
+# Move.id, distinct from the enqueue ack) and logs ONE outcome line.
+# ---------------------------------------------------------------------------
+
+
+def _wait_for_log(transport, substr: str, timeout_s: float = 3.0) -> str:
+    """Poll ``transport.logs`` for a line containing ``substr``, bounded by
+    ``timeout_s`` -- the completion poller runs on a background daemon
+    thread, so tests must wait for it rather than assert immediately after
+    the dispatching call returns. Fails the test (via assert) if the bound
+    is exceeded."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        for line in transport.logs:
+            if substr in line:
+                return line
+        time.sleep(0.02)
+    raise AssertionError(
+        f"no log line containing {substr!r} within {timeout_s}s; got: {transport.logs}")
+
+
+def _completion_tlm(move_id: int, *, left: float, right: float,
+                    timeout_fault: bool = False) -> "telemetry_pb2.Telemetry":
+    flags = _ACK_FRESH_BIT | (_FAULT_MOVE_TIMEOUT_BIT if timeout_fault else 0)
+    return telemetry_pb2.Telemetry(
+        flags=flags, ack_corr=move_id, ack_err=0,
+        enc_left=telemetry_pb2.EncoderReading(position=left),
+        enc_right=telemetry_pb2.EncoderReading(position=right))
+
+
+def test_completion_poll_logs_done_line_with_encoder_delta(transport):
+    _ok_ack(transport._conn)
+    transport._last_tlm = TLMFrame(enc=(1000, 1000))
+
+    reply = transport.command("D 150 150 300", read_timeout=500)
+    assert reply == "OK move", reply
+
+    move_id = transport._conn.sent[0].move.id
+    assert move_id != 0  # a real, distinct Move.id was assigned
+    transport._conn.tlm_script.append(
+        [_FakeTlmReply(_completion_tlm(move_id, left=1300.0, right=1298.0))])
+
+    done_line = _wait_for_log(transport, "[DONE]")
+    assert "completed" in done_line
+    assert "L=+300mm" in done_line
+    assert "R=+298mm" in done_line
+    assert "|L-R|=2mm" in done_line
+
+
+def test_completion_poll_timeout_fault_outcome(transport):
+    _ok_ack(transport._conn)
+    transport._last_tlm = TLMFrame(enc=(0, 0))
+
+    transport.command("D 150 150 300", read_timeout=500)
+    move_id = transport._conn.sent[0].move.id
+    transport._conn.tlm_script.append(
+        [_FakeTlmReply(_completion_tlm(move_id, left=200.0, right=200.0, timeout_fault=True))])
+
+    done_line = _wait_for_log(transport, "[DONE]")
+    assert "timeout-fault" in done_line
+
+
+def test_completion_poll_no_ack_within_bound_logs_warn(transport):
+    """A short RT (Move.timeout floors at _MOVE_MIN_TIMEOUT=2000ms) whose
+    completion ack never arrives -- e.g. a later Move preempted it before
+    it ever activated-and-ended (docs/protocol-v4.md sec 5.3) -- logs a
+    WARN, not a hang, once the bound (timeout + margin) elapses."""
+    _ok_ack(transport._conn)
+
+    transport.command("RT 100", read_timeout=500)  # never scripts a matching ack
+
+    warn_line = _wait_for_log(transport, "no completion ack observed", timeout_s=4.0)
+    assert "WARN" in warn_line
+
+
+def test_completion_poll_missing_baseline_reports_unavailable(transport):
+    """No baseline telemetry captured yet (``_last_tlm`` still ``None``, a
+    connection that has not received any frame at all) -- the completion
+    line still fires, with an honest "unavailable" instead of a bogus
+    delta computed against ``None``."""
+    _ok_ack(transport._conn)
+    assert transport._last_tlm is None
+
+    transport.command("D 150 150 300", read_timeout=500)
+    move_id = transport._conn.sent[0].move.id
+    transport._conn.tlm_script.append(
+        [_FakeTlmReply(_completion_tlm(move_id, left=300.0, right=300.0))])
+
+    done_line = _wait_for_log(transport, "[DONE]")
+    assert "encoder delta unavailable" in done_line
+
+
+def test_second_dispatch_while_poll_in_flight_skips_new_poller(transport):
+    _ok_ack(transport._conn)
+
+    transport.command("RT 100", read_timeout=500)  # starts a poll that will run to its bound
+    transport.command("RT 100", read_timeout=500)  # second dispatch -- poll already active
+
+    skip_line = _wait_for_log(transport, "completion poll skipped", timeout_s=1.0)
+    assert "INFO" in skip_line
+
+
+def test_run_unmanaged_starts_completion_poll(transport):
+    transport._last_tlm = TLMFrame(enc=(0, 0))
+
+    transport.run_unmanaged(distance_mm=200.0)
+
+    move_id = transport._conn.sent[0].move.id
+    transport._conn.tlm_script.append(
+        [_FakeTlmReply(_completion_tlm(move_id, left=200.0, right=199.0))])
+
+    done_line = _wait_for_log(transport, "[DONE]")
+    assert "unmanaged drive" in done_line
+    assert "completed" in done_line
+
+
+def test_send_starts_completion_poll_without_waiting_for_enqueue_ack(transport):
+    """``send()`` is fire-and-forget on the ENQUEUE ack (no
+    ``wait_for_ack()`` call -- see ``test_send_does_not_wait_for_ack()``
+    above) but still starts the completion poller right after dispatch."""
+    transport._conn.ack_result = None  # would make command() time out
+    transport._last_tlm = TLMFrame(enc=(0, 0))
+
+    transport.send("D 150 150 300")
+
+    move_id = transport._conn.sent[0].move.id
+    transport._conn.tlm_script.append(
+        [_FakeTlmReply(_completion_tlm(move_id, left=300.0, right=300.0))])
+
+    done_line = _wait_for_log(transport, "[DONE]")
+    assert "completed" in done_line
 
 
 # ---------------------------------------------------------------------------

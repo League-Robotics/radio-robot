@@ -262,15 +262,26 @@ def test_from_pb2_conn_left_right_derived_from_flags(raw_left, raw_right):
 # deleted by 104-002, see this file's own header note).
 # ---------------------------------------------------------------------------
 
+# flags bit 5 (kFlagAckFresh) -- telemetry.proto Telemetry.flags, 115-003
+# frame v2. Matches protocol.py's own module-private _FLAG_ACK_FRESH.
+_ACK_FRESH_BIT = 1 << 5
+
 
 class _ConfigLoopbackSerial:
     """Mock transport for the binary config set round-trip tests.
 
     On write() of a `*B<base64>` CommandEnvelope, decodes it, records it
-    (``sent_envelopes``), and synthesizes an Ack reply -- mirroring
-    BinaryChannel's CONFIG arm (src/firm/commands/binary_channel.cpp) closely
-    enough to exercise NezhaProtocol's full envelope round trip with no
-    real serial port.
+    (``sent_envelopes``), and synthesizes an ack -- mirroring the CURRENT
+    single-loop firmware's fire-and-poll contract (bench fix, 2026-07-22):
+    ``config`` gets NO synchronous ``ReplyEnvelope`` of its own
+    (``docs/protocol-v4.md`` sec 7.1 -- ``Comms::sendReply()`` is called
+    from exactly one site, ``Telemetry::emitPrimary()``, always with
+    ``body_kind = TLM``); its outcome rides the single ack slot
+    (``ack_corr``/``ack_err``, valid iff ``flags`` bit 5) inside the NEXT
+    unsolicited ``ReplyEnvelope{tlm: Telemetry}`` push instead -- exactly
+    what ``move``/``stop`` already do, and what ``set_config_binary()``
+    now polls for via ``wait_for_ack()``/``_match_ack_in_frames()``
+    (``io/serial_conn.py``), not a synchronous ``ok`` oneof.
     """
 
     is_open = True
@@ -290,10 +301,12 @@ class _ConfigLoopbackSerial:
             cmd = envelope_pb2.CommandEnvelope.FromString(raw)
             self.sent_envelopes.append(cmd)
 
-            reply = envelope_pb2.ReplyEnvelope(corr_id=cmd.corr_id)
-            reply.ok.q = 1
-            reply.ok.rem = 0.0
-            reply.ok.t = 999
+            # Unsolicited tlm push carrying the ack slot -- corr_id=0 on the
+            # ENVELOPE itself (matches real firmware: primary frames always
+            # carry corr_id=0), ack_corr=cmd.corr_id INSIDE the telemetry
+            # payload is what wait_for_ack() actually matches on.
+            tlm = telemetry_pb2.Telemetry(flags=_ACK_FRESH_BIT, ack_corr=cmd.corr_id, ack_err=0)
+            reply = envelope_pb2.ReplyEnvelope(corr_id=0, tlm=tlm)
             armored = "*B" + base64.b64encode(reply.SerializeToString()).decode("ascii")
             self._pending.put((armored + "\n").encode("ascii"))
         return len(data)
@@ -337,8 +350,8 @@ def test_set_config_binary_round_trips_ack_and_builds_correct_envelope():
         conn._stop_reader()
 
     assert ack is not None
-    assert ack.q == 1
-    assert ack.t == 999
+    assert ack.ok is True
+    assert ack.err_code == 0
 
     assert len(fake.sent_envelopes) == 1
     sent = fake.sent_envelopes[0]
@@ -373,15 +386,23 @@ def test_set_config_binary_returns_none_on_timeout():
     assert ack is None
 
 
-def test_set_config_binary_not_connected_returns_none():
+def test_set_config_binary_not_connected_raises_connection_error():
+    """Bench fix (2026-07-22): set_config_binary() now sends via
+    send_envelope_fast() (fire-and-poll, matching move_twist()/stop()/
+    config()), which raises ConnectionError when not connected -- see that
+    method's own docstring. Before this fix, the OLD blocking
+    send_envelope() swallowed "not connected" into a plain None return;
+    the new behavior is consistent with every sibling fire-and-poll method
+    on this class (move_twist()/move_wheels()/stop()/config()/
+    otos_config() all document "raises ConnectionError if not connected"),
+    not a regression."""
     conn = SerialConnection()  # _ser stays None -- never connected
     proto = NezhaProtocol(conn)
 
-    ack = proto.set_config_binary(
-        envelope_pb2.ConfigDelta(drivetrain=config_pb2.DrivetrainConfigPatch(trackwidth=128.0)),
-        read_timeout=50)
-
-    assert ack is None
+    with pytest.raises(ConnectionError):
+        proto.set_config_binary(
+            envelope_pb2.ConfigDelta(drivetrain=config_pb2.DrivetrainConfigPatch(trackwidth=128.0)),
+            read_timeout=50)
 
 
 # ---------------------------------------------------------------------------

@@ -888,9 +888,9 @@ class NezhaProtocol:
     # ------------------------------------------------------------------
 
     def set_config_binary(self, delta: "envelope_pb2.ConfigDelta",
-                          read_timeout: int = 500) -> "envelope_pb2.Ack | None":  # [ms]
-        """Send CommandEnvelope{config: delta}; return the Ack reply, or
-        None (timeout, not connected, or an Error reply).
+                          read_timeout: int = 500) -> "AckEntry | None":  # [ms]
+        """Send CommandEnvelope{config: delta}; return the matched AckEntry,
+        or None (timeout, not connected, or a NAK reply).
 
         ``delta`` is a fully-built ``pb2.ConfigDelta`` — its own oneof
         (``drivetrain``/``motor``/``watchdog``/``otos``) selects which
@@ -899,12 +899,50 @@ class NezhaProtocol:
         ``envelope_pb2.ConfigDelta(drivetrain=config_pb2.
         DrivetrainConfigPatch(trackwidth=128.0))``) — this method's only
         job is the envelope round trip.
+
+        Bench fix (2026-07-22, stakeholder finding): this method used to
+        send via the BLOCKING ``_send_envelope()``/``send_envelope()`` (a
+        synchronous request/reply, matched by ``envelope.corr_id`` in
+        ``SerialConnection._reply_queues``) and look for a synchronous
+        ``ReplyEnvelope{ok: ...}``. The current single-loop firmware never
+        sends one for ANY command — ``config``'s outcome, like
+        ``move``/``stop``, rides the single ack slot inside the NEXT
+        ``Telemetry`` push instead (``docs/protocol-v4.md`` sec 7.1: "a
+        wire sniffer will never observe a ``ReplyEnvelope{ok:...}``... only
+        ``ReplyEnvelope{tlm: Telemetry}``"), so this method's old
+        implementation timed out on EVERY call against real hardware —
+        confirmed on the bench: a robot-select calibration push logged 9/12
+        ``SET`` keys "ERR badarg set failed" (all 9 routed through this
+        method; the other 3, ``OI``/``OL``/``OA``, use the ALREADY fire-
+        and-poll ``otos_config()`` and worked). This predates the 103-009
+        fire-and-poll migration ``move_twist()``/``move_wheels()``/
+        ``stop()`` went through, and was never carried forward when
+        ``config()`` (104-001, written AFTER 103-009) got it from day one
+        — see that method's own docstring. Fixed the same way: send via
+        ``send_envelope_fast()``, then poll for the completion via the ack
+        ring.
+
+        Duck-typed ack lookup, not a hardcoded ``self.wait_for_ack()``
+        call: ``self._conn`` may be a ``_SimConfigConn`` (``io/
+        sim_config.py``, backing ``SimLoop.configure_from_robot()``'s own
+        Tier-1 push), which deliberately has NO ``wait_for_ack()`` of its
+        own (its own docstring: ``NezhaProtocol.wait_for_ack()`` expects a
+        RAW ``telemetry_pb2.Telemetry`` off ``self._conn.wait_for_ack()``,
+        but ``SimLoop`` only ever hands back already-adapted ``TLMFrame``/
+        ``AckEntry`` dataclasses) — it exposes the SAME ack-ring lookup as
+        its own ``poll_ack(corr_id, timeout)``, already returning an
+        ``AckEntry``. A connection exposing ``poll_ack`` (Sim) is polled
+        that way; anything else (a real ``SerialConnection``) goes through
+        ``self.wait_for_ack()`` as usual.
         """
         envelope = envelope_pb2.CommandEnvelope(config=delta)
-        reply = self._send_envelope(envelope, read_timeout=read_timeout)
-        if reply is not None and reply.WhichOneof("body") == "ok":
-            return reply.ok
-        return None
+        corr_id = self._conn.send_envelope_fast(envelope)
+        poll_ack = getattr(self._conn, "poll_ack", None)
+        ack = poll_ack(corr_id, timeout=read_timeout) if poll_ack is not None \
+            else self.wait_for_ack(corr_id, timeout=read_timeout)
+        if ack is None or not ack.ok:
+            return None
+        return ack
 
     # ------------------------------------------------------------------
     # Drive commands

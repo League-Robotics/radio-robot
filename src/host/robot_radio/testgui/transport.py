@@ -201,6 +201,45 @@ _UNMANAGED_YAW_RATE = 2.0     # [rad/s]
 _MOVE_TIMEOUT_FACTOR = 3.0    # [multiple of expected duration]
 _MOVE_MIN_TIMEOUT = 2000.0    # [ms]
 
+# Move.id space for completion-ack correlation (stakeholder bench fix,
+# 2026-07-22: "verify that you say 'drive 500mm' and it drives for 500mm
+# ... You did not test this" -- the unmanaged/managed GUI sends were
+# fire-and-poll on the ENQUEUE ack only, never reporting the Move's own
+# completion). docs/protocol-v4.md sec 7.2: the completion ack echoes
+# `Move.id`, NOT the envelope's own `corr_id` -- a SEPARATE key riding the
+# SAME single ack slot. `SerialConnection._corr_counter` (io/serial_conn.py)
+# assigns small sequential envelope corr_ids (starts at 0, +1 per envelope
+# sent this connection) -- picking Move.id values from a disjoint, far
+# higher range means a completion ack (`ack_corr == move_id`) can never be
+# confused with an unrelated enqueue ack that happens to share the same
+# small integer. No real session sends anywhere near 2**30 envelopes.
+_MOVE_ID_BASE = 1 << 30
+_move_id_counter = _MOVE_ID_BASE
+_move_id_lock = threading.Lock()
+
+
+def _next_move_id() -> int:
+    """Return a fresh ``Move.id`` for completion-ack correlation -- see
+    ``_MOVE_ID_BASE``'s own comment for why the value space is disjoint
+    from envelope corr_ids. Module-level (not per-instance): uniqueness,
+    not per-transport scoping, is all correctness needs, and the GUI only
+    ever has one transport connected at a time anyway."""
+    global _move_id_counter
+    with _move_id_lock:
+        _move_id_counter += 1
+        return _move_id_counter
+
+
+# Completion-poll worker sizing (_HardwareTransport._await_move_completion()):
+# poll interval while waiting for the Move's own completion ack, and a fixed
+# margin added on top of the Move's own `timeout` backstop -- the firmware
+# guarantees the Move ends by `timeout` one way or another
+# (docs/protocol-v4.md sec 4.1), so the margin only has to cover one more
+# telemetry period for the completion-ack frame to arrive, not the Move's
+# own duration again.
+_COMPLETION_POLL_INTERVAL_S = 0.05    # [s]
+_COMPLETION_POLL_MARGIN_S = 0.75      # [s]
+
 
 def _parse_d_step(tokens: "list[str]") -> "tuple[float, float, float]":
     """Parse a ``D <left> <right> <mm>`` wire step's own 3 numeric args
@@ -635,6 +674,18 @@ class _HardwareTransport(Transport):
         # StreamingExecutor of fresh telemetry.
         self._reader_suspended = threading.Event()
 
+        # Most-recently-delivered telemetry frame -- read (not written) by
+        # _await_move_completion() as the encoder-position BASELINE for its
+        # completion-line delta, snapshotted right when a Move is dispatched
+        # (stakeholder bench fix, 2026-07-22). A single-reference attribute
+        # set is atomic under the GIL; no lock needed for this read/write
+        # pattern (mirrors SimTransport._speed_factor's own comment).
+        self._last_tlm: "TLMFrame | None" = None
+        # Guards against two completion-poll workers draining the shared
+        # binary TLM queue concurrently (see _await_move_completion()'s own
+        # docstring) -- only one poll runs at a time per transport.
+        self._completion_poll_active = threading.Event()
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -781,6 +832,130 @@ class _HardwareTransport(Transport):
         self._reader_suspended.clear()
 
     # ------------------------------------------------------------------
+    # Move completion feedback (stakeholder bench fix, 2026-07-22)
+    # ------------------------------------------------------------------
+    #
+    # run_unmanaged() and the managed D/RT/SEG dispatch (_dispatch_managed_
+    # move(), send()/command() below) were fire-and-poll on the Move's
+    # ENQUEUE ack only ("the command was accepted") -- the stakeholder's own
+    # words: "verify that you say 'drive 500mm' and it drives for 500mm ...
+    # You did not test this. It never finishes." This section is that
+    # missing "it finished" signal: a bounded background worker that polls
+    # telemetry for the Move's own COMPLETION ack (docs/protocol-v4.md sec
+    # 7.2 -- `ack_corr == Move.id`, a DIFFERENT key riding the same ack slot
+    # than the enqueue ack's `ack_corr == corr_id`) and logs one outcome
+    # line: completed/timeout-fault (flags bit 15,
+    # `TLMFrame.fault_move_timeout`), elapsed time, and the measured
+    # encoder delta.
+
+    def _await_move_completion(self, move_id: int, label: str,
+                               move_timeout: float) -> "threading.Thread | None":
+        """Bounded background worker: poll telemetry for this Move's own
+        completion ack and log ONE outcome line. Returns the started
+        ``Thread`` (``None`` if a poll was already in flight and this call
+        skipped spawning a new one) -- every production caller ignores the
+        return value (fire-and-forget); it exists so a test can
+        deterministically ``.join()`` the worker instead of racing it.
+
+        Becomes the shared binary TLM queue's SOLE consumer for the poll's
+        duration -- the SAME ``suspend_telemetry_reader()``/
+        ``resume_telemetry_reader()`` mechanism ``_TourRunner`` uses (see
+        those methods' own docstrings) -- and forwards every frame it
+        drains back through ``on_telemetry`` itself, so the canvas/log pane
+        keep tracking live telemetry exactly as if ``_reader_loop()`` had
+        drained it instead.
+
+        Bounded by ``move_timeout`` (the Move's own required safety
+        backstop) plus ``_COMPLETION_POLL_MARGIN_S`` -- the firmware
+        guarantees the Move ends by then, one way or another
+        (docs/protocol-v4.md sec 4.1), so a completion ack that still
+        hasn't arrived by the bound means this Move was preempted/flushed
+        before it ever activated-and-ended (sec 5.3: "no completion ack for
+        a flushed-while-pending Move") or a later Move preempted the
+        active one (sec 5.2/5.3 -- preemption is not itself a
+        ``StopConditionMet``/``TimedOut`` ending) -- not a hung poll. Logged
+        as a WARN in that case, not an ERROR: a deliberately superseded
+        Move (the operator issuing a new command before the old one
+        finished) is normal GUI usage, not a fault.
+
+        Only one poll runs at a time per transport -- a second dispatch
+        while one is in flight skips spawning a new poller (one log line
+        explaining why) rather than racing two threads over the same
+        queue; the in-flight poll still completes/times out normally and
+        logs its own line. Runs as a daemon thread; never blocks the GUI.
+        """
+        if self._completion_poll_active.is_set():
+            self._log(
+                f"[INFO] {label}: completion poll skipped "
+                f"(previous poll still in flight)")
+            return None
+        self._completion_poll_active.set()
+
+        def _worker() -> None:
+            baseline = self._last_tlm
+            baseline_enc = baseline.enc if baseline is not None else None
+            start = time.monotonic()
+            bound = start + (move_timeout / 1000.0) + _COMPLETION_POLL_MARGIN_S
+            self.suspend_telemetry_reader()
+            try:
+                while time.monotonic() < bound:
+                    if self._conn is None or not self._conn.is_open:
+                        self._log(f"[WARN] {label}: disconnected mid-poll")
+                        return
+                    try:
+                        replies = self._conn.drain_binary_tlm()
+                    except Exception:
+                        self._log(f"[WARN] {label}: telemetry drain failed mid-poll")
+                        return
+                    matched = None
+                    for reply in replies:
+                        frame = TLMFrame.from_pb2(reply.tlm)
+                        self._last_tlm = frame
+                        self._deliver_tlm(frame)
+                        if frame.ack_fresh and frame.ack_corr == move_id:
+                            matched = frame
+                    if matched is not None:
+                        elapsed = time.monotonic() - start
+                        outcome = ("timeout-fault" if matched.fault_move_timeout
+                                   else "completed")
+                        self._log_move_completion(
+                            label, outcome, elapsed, baseline_enc, matched.enc)
+                        return
+                    time.sleep(_COMPLETION_POLL_INTERVAL_S)
+                elapsed = time.monotonic() - start
+                self._log(
+                    f"[WARN] {label}: no completion ack observed within "
+                    f"{elapsed * 1000.0:.0f}ms (move_id={move_id}) -- "
+                    f"preempted/flushed before ending, or a link drop")
+            finally:
+                self.resume_telemetry_reader()
+                self._completion_poll_active.clear()
+
+        worker_thread = threading.Thread(
+            target=_worker, name="transport-move-completion", daemon=True)
+        worker_thread.start()
+        return worker_thread
+
+    def _log_move_completion(self, label: str, outcome: str, elapsed_s: float,
+                             baseline_enc: "tuple[int, int] | None",
+                             final_enc: "tuple[int, int] | None") -> None:
+        """Format and emit the ONE completion-line ``_await_move_completion()``
+        logs on a matched completion ack -- outcome, elapsed time, and the
+        measured encoder delta (mean and per-wheel, the curve metric
+        ``|L-R|`` the stakeholder's bench report flagged)."""
+        if baseline_enc is not None and final_enc is not None:
+            d_left = final_enc[0] - baseline_enc[0]
+            d_right = final_enc[1] - baseline_enc[1]
+            mean = (d_left + d_right) / 2.0
+            split = abs(d_left - d_right)
+            enc_text = (f"encoder delta mean={mean:+.0f}mm "
+                        f"(L={d_left:+.0f}mm R={d_right:+.0f}mm |L-R|={split:.0f}mm)")
+        else:
+            enc_text = "encoder delta unavailable (no baseline telemetry)"
+        self._log(
+            f"[DONE] {label}: {outcome} in {elapsed_s * 1000.0:.0f}ms, {enc_text}")
+
+    # ------------------------------------------------------------------
     # Commands
     # ------------------------------------------------------------------
 
@@ -804,6 +979,13 @@ class _HardwareTransport(Transport):
         including ``NezhaProtocol.move_twist()``/``move_wheels()``'s own
         ``send_envelope_fast()`` calls, not just ``translate_command()``'s),
         the same way ``command()`` does.
+
+        A matched D/RT/SEG line starts the completion-poll worker
+        (``_await_move_completion()``) right after sending -- unlike
+        ``command()`` below, this never waits for the enqueue ack first
+        (fire-and-forget contract), so the completion line may itself
+        report "no completion ack observed" if the enqueue was ultimately
+        rejected.
         """
         if self._conn is None or not self._conn.is_open or self._proto is None:
             raise ConnectionError("Transport is not connected")
@@ -813,6 +995,8 @@ class _HardwareTransport(Transport):
             self._log(f"[ERROR] {line!r}: {exc}")
             return
         if dispatched is not None:
+            _corr_id, move_id, label, timeout = dispatched
+            self._await_move_completion(move_id, label, timeout)
             return
         binary_bridge.translate_command(self._proto, line)
 
@@ -828,6 +1012,13 @@ class _HardwareTransport(Transport):
         ``NezhaProtocol.wait_for_ack()`` and returns ``"OK move"``/
         ``"ERR nak move ..."``/``"ERR unknown move-timeout"``. Every other
         line still falls through to ``translate_command()`` unchanged.
+
+        Once the enqueue ack confirms the Move was accepted, this also
+        starts the completion-poll worker (``_await_move_completion()``,
+        stakeholder bench fix 2026-07-22) -- the ``"OK move"`` return here
+        only ever meant "the firmware accepted the command", never "the
+        robot finished driving"; the completion line logged later is that
+        missing signal.
         """
         if self._conn is None or not self._conn.is_open or self._proto is None:
             return ""
@@ -836,13 +1027,14 @@ class _HardwareTransport(Transport):
         except ValueError as exc:
             return f"ERR badarg {exc}"
         if dispatched is not None:
-            corr_id, label = dispatched
+            corr_id, move_id, label, timeout = dispatched
             self._log(f"[INFO] {label}")
             ack = self._proto.wait_for_ack(corr_id, timeout=read_timeout)
             if ack is None:
                 return "ERR unknown move-timeout"
             if not ack.ok:
                 return f"ERR nak move err_code={ack.err_code}"
+            self._await_move_completion(move_id, label, timeout)
             return "OK move"
         return binary_bridge.translate_command(self._proto, line)
 
@@ -851,15 +1043,21 @@ class _HardwareTransport(Transport):
     # (testgui-motion-paths-dead-after-move-cutover fix)
     # ------------------------------------------------------------------
 
-    def _dispatch_managed_move(self, line: str) -> "tuple[int, str] | None":
+    def _dispatch_managed_move(self, line: str) -> "tuple[int, int, str, float] | None":
         """Recognize ``D <left> <right> <mm>``/``RT <cdeg>``/
         ``SEG 0 <cdeg>`` and, if matched, send it as ONE ``Move`` via
         ``NezhaProtocol.move_twist()``/``move_wheels()``, returning
-        ``(corr_id, label)``. Returns ``None`` for any other line (falls
-        through to ``binary_bridge.translate_command()``'s legacy stub in
-        ``send()``/``command()`` above, unchanged). Raises ``ValueError``
-        for a recognized-but-malformed ``D``/``RT`` line -- caught by both
-        callers, never left to propagate to the GUI thread uncaught.
+        ``(corr_id, move_id, label, timeout)``. ``move_id`` (stakeholder
+        bench fix, 2026-07-22 -- ``_next_move_id()``, a fresh value every
+        call) is what a caller polls for via ``_await_move_completion()``
+        to observe this specific Move's own completion, distinct from
+        ``corr_id`` (the enqueue ack's own key -- see
+        ``docs/protocol-v4.md`` sec 7.2). Returns ``None`` for any other
+        line (falls through to ``binary_bridge.translate_command()``'s
+        legacy stub in ``send()``/``command()`` above, unchanged). Raises
+        ``ValueError`` for a recognized-but-malformed ``D``/``RT`` line --
+        caught by both callers, never left to propagate to the GUI thread
+        uncaught.
 
         ``D``: ``left == right`` (the only shape the GUI itself ever sends
         -- ``__main__.py``'s ``_managed_dist()`` always sends
@@ -890,31 +1088,37 @@ class _HardwareTransport(Transport):
                     raise ValueError("D requires nonzero left/right speed")
                 v_x = math.copysign(speed, mm)
                 timeout = _move_timeout_for(abs(mm) / speed)
+                move_id = _next_move_id()
                 corr_id = self._proto.move_twist(
-                    v_x, 0.0, 0.0, stop_distance=abs(mm), timeout=timeout, replace=True)
-                return corr_id, (
+                    v_x, 0.0, 0.0, stop_distance=abs(mm), timeout=timeout,
+                    replace=True, move_id=move_id)
+                return corr_id, move_id, (
                     f"move twist v_x={v_x:+.0f}mm/s stop_distance={abs(mm):.0f}mm "
-                    f"timeout={timeout:.0f}ms")
+                    f"timeout={timeout:.0f}ms"), timeout
             speed = (abs(left) + abs(right)) / 2.0
             if speed <= 0.0:
                 raise ValueError("D requires nonzero left/right speed")
             timeout = _move_timeout_for(abs(mm) / speed)
+            move_id = _next_move_id()
             corr_id = self._proto.move_wheels(
-                left, right, stop_distance=abs(mm), timeout=timeout, replace=True)
-            return corr_id, (
+                left, right, stop_distance=abs(mm), timeout=timeout,
+                replace=True, move_id=move_id)
+            return corr_id, move_id, (
                 f"move wheels v_left={left:+.0f}mm/s v_right={right:+.0f}mm/s "
-                f"stop_distance={abs(mm):.0f}mm timeout={timeout:.0f}ms")
+                f"stop_distance={abs(mm):.0f}mm timeout={timeout:.0f}ms"), timeout
 
         if verb == "RT":
             deg = _parse_rt_step(tokens)
             omega = math.copysign(_UNMANAGED_YAW_RATE, deg)
             angle = math.radians(abs(deg))
             timeout = _move_timeout_for(angle / _UNMANAGED_YAW_RATE)
+            move_id = _next_move_id()
             corr_id = self._proto.move_twist(
-                0.0, 0.0, omega, stop_angle=angle, timeout=timeout, replace=True)
-            return corr_id, (
+                0.0, 0.0, omega, stop_angle=angle, timeout=timeout,
+                replace=True, move_id=move_id)
+            return corr_id, move_id, (
                 f"move twist omega={omega:+.2f}rad/s stop_angle={angle:.3f}rad "
-                f"timeout={timeout:.0f}ms")
+                f"timeout={timeout:.0f}ms"), timeout
 
         if verb == "SEG" and len(tokens) == 3 and tokens[1] == "0":
             return self._dispatch_managed_move(f"RT {tokens[2]}")
@@ -942,6 +1146,12 @@ class _HardwareTransport(Transport):
         section 5.4). Logged, never raised -- a caller that wants to know
         whether the Move was actually accepted should use the managed
         ``command()`` path instead, which waits for the ack.
+
+        Starts the completion-poll worker (``_await_move_completion()``,
+        stakeholder bench fix 2026-07-22) right after the enqueue send --
+        the "it never finishes" gap the stakeholder's bench report flagged:
+        this method previously discarded ``move_twist()``'s own return
+        value entirely and logged nothing once the Move activated.
         """
         if self._conn is None or not self._conn.is_open or self._proto is None:
             self._log("[WARN] run_unmanaged: not connected")
@@ -960,12 +1170,15 @@ class _HardwareTransport(Transport):
             kwargs = dict(stop_angle=math.radians(abs(angle_deg)))
         else:
             return
+        move_id = _next_move_id()
         try:
-            self._proto.move_twist(v_x, v_y, omega, timeout=timeout, replace=True, **kwargs)
+            self._proto.move_twist(
+                v_x, v_y, omega, timeout=timeout, replace=True, move_id=move_id, **kwargs)
         except Exception as exc:  # noqa: BLE001
             self._log(f"[ERROR] {label} failed: {exc}")
             return
         self._log(f"[INFO] {label} (move_twist, timeout {timeout:.0f}ms)")
+        self._await_move_completion(move_id, label, timeout)
 
     # ------------------------------------------------------------------
     # Keepalive arm/disarm
@@ -1014,7 +1227,9 @@ class _HardwareTransport(Transport):
                 break
 
             for reply in replies:
-                self._deliver_tlm(TLMFrame.from_pb2(reply.tlm))
+                frame = TLMFrame.from_pb2(reply.tlm)
+                self._last_tlm = frame
+                self._deliver_tlm(frame)
 
             # Wait a short interval before draining again.
             self._stop_event.wait(timeout=_TLM_DRAIN_INTERVAL_S)

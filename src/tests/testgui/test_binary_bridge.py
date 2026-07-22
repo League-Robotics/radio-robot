@@ -67,7 +67,7 @@ import base64
 
 import pytest
 
-from robot_radio.robot.pb2 import envelope_pb2, telemetry_pb2
+from robot_radio.robot.pb2 import config_pb2, envelope_pb2, telemetry_pb2
 from robot_radio.robot.protocol import NezhaProtocol
 from robot_radio.testgui import binary_bridge
 
@@ -149,7 +149,6 @@ def test_legacy_translation_is_unavailable():
     "R 200 500",
     "TURN 9000 eps=300",
     "G 300 400 150",
-    "SET rotSlip=0",
     "GET rotSlip",
     "STREAM 50",
     "SNAP",
@@ -184,8 +183,13 @@ def test_empty_line_returns_empty_string_no_wire_call(proto):
 
 # ---------------------------------------------------------------------------
 # 109-004: OL/OA/OI direct-patch-send -- intercepted BEFORE the launch-
-# unblock short-circuit above, so these three verbs are the ONLY ones that
-# still build and send a real envelope through translate_command().
+# unblock short-circuit above. Stakeholder bench fix (2026-07-22) adds SET
+# to this same intercept (_handle_set_patch(), calling NezhaProtocol.
+# set_config() directly) -- SET was found rejecting every push against real
+# hardware (calibration push logged "'SET pid.kaw=0' rejected: ERR
+# unavailable legacy verb translation removed", 1/12 values applied). These
+# four verbs (OL/OA/OI/SET) are now the ONLY ones that still build and send
+# a real envelope through translate_command().
 # ---------------------------------------------------------------------------
 
 
@@ -286,6 +290,125 @@ def test_ov_op_or_still_render_unavailable_reply_unchanged(proto):
         assert reply == binary_bridge._LEGACY_UNAVAILABLE_REPLY
 
     assert conn.envelope_calls == []
+
+
+# ---------------------------------------------------------------------------
+# SET direct-patch-send (stakeholder bench fix, 2026-07-22) -- calls
+# NezhaProtocol.set_config(), which itself calls set_config_binary().
+#
+# set_config_binary() itself was ALSO fixed this session (protocol.py):
+# it used to send via the BLOCKING _send_envelope()/conn.send_envelope()
+# and look for a synchronous ReplyEnvelope{ok:...} -- which the current
+# single-loop firmware never sends for ANY command (docs/protocol-v4.md
+# sec 7.1). Confirmed on the real bench: with only binary_bridge.py's SET
+# routing fixed (this file's own first round of tests), calibration push
+# against real hardware still showed 9/12 keys "ERR badarg set failed" --
+# set_config_binary() itself was timing out on every call. Fixed to send
+# via send_envelope_fast() + wait_for_ack() (the ack-ring poll), matching
+# move_twist()/stop()/config()/otos_config() -- so these tests now script
+# conn.ack_result (the wait_for_ack() return value), the SAME pattern the
+# OI/OL/OA tests above use, not conn.queue_reply() (send_envelope()'s own
+# synchronous reply queue, no longer read by this call path at all).
+# ---------------------------------------------------------------------------
+
+
+def test_set_motor_pid_keys_send_one_left_side_motor_patch(proto):
+    nezha, conn = proto
+    conn.ack_result = telemetry_pb2.Telemetry(flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=0)
+
+    reply = binary_bridge.translate_command(nezha, "SET pid.kp=1.5 pid.kaw=20")
+
+    assert reply == "OK set pid.kp=1.5 pid.kaw=20"
+    assert len(conn.envelope_calls) == 1
+    sent = conn.envelope_calls[0]
+    assert sent.WhichOneof("cmd") == "config"
+    assert sent.config.WhichOneof("patch") == "motor"
+    assert sent.config.motor.side == 0  # LEFT -- both PID keys land on ONE envelope
+    assert sent.config.motor.kp == pytest.approx(1.5)
+    assert sent.config.motor.kaw == pytest.approx(20)
+
+
+def test_set_drivetrain_keys_send_drivetrain_patch(proto):
+    nezha, conn = proto
+    conn.ack_result = telemetry_pb2.Telemetry(flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=0)
+
+    reply = binary_bridge.translate_command(nezha, "SET tw=128 rotSlip=0.92")
+
+    assert reply == "OK set tw=128 rotSlip=0.92"
+    assert len(conn.envelope_calls) == 1
+    sent = conn.envelope_calls[0]
+    assert sent.config.WhichOneof("patch") == "drivetrain"
+    assert sent.config.drivetrain.trackwidth == pytest.approx(128)
+    assert sent.config.drivetrain.rotational_slip == pytest.approx(0.92)
+
+
+def test_set_ml_mr_send_two_separate_motor_side_patches(proto):
+    nezha, conn = proto
+    conn.ack_result = telemetry_pb2.Telemetry(flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=0)
+
+    reply = binary_bridge.translate_command(nezha, "SET ml=0.523599 mr=0.523599")
+
+    assert reply.startswith("OK set")
+    assert len(conn.envelope_calls) == 2
+    sides = {env.config.motor.side for env in conn.envelope_calls}
+    assert sides == {config_pb2.LEFT, config_pb2.RIGHT}
+
+
+def test_set_unknown_key_is_badkey_no_wire_call(proto):
+    nezha, conn = proto
+
+    reply = binary_bridge.translate_command(nezha, "SET bogusKey=1")
+
+    assert reply == "ERR badkey bogusKey"
+    assert conn.envelope_calls == []
+
+
+def test_set_malformed_token_is_badarg_no_wire_call(proto):
+    nezha, conn = proto
+
+    reply = binary_bridge.translate_command(nezha, "SET notkeyvalue")
+
+    assert reply.startswith("ERR badarg")
+    assert conn.envelope_calls == []
+
+
+def test_set_non_numeric_value_is_badarg_no_wire_call(proto):
+    nezha, conn = proto
+
+    reply = binary_bridge.translate_command(nezha, "SET tw=notanumber")
+
+    assert reply.startswith("ERR badarg")
+    assert conn.envelope_calls == []
+
+
+def test_set_with_no_kv_pairs_is_badarg_no_wire_call(proto):
+    nezha, conn = proto
+
+    reply = binary_bridge.translate_command(nezha, "SET")
+
+    assert reply == "ERR badarg no key=value pairs"
+    assert conn.envelope_calls == []
+
+
+def test_set_nak_ack_renders_set_failed(proto):
+    nezha, conn = proto
+    conn.ack_result = telemetry_pb2.Telemetry(
+        flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=envelope_pb2.ERR_BADARG)
+
+    reply = binary_bridge.translate_command(nezha, "SET tw=128")
+
+    assert reply == "ERR badarg set failed"
+    assert len(conn.envelope_calls) == 1  # the envelope was still sent
+
+
+def test_set_ack_timeout_renders_set_failed(proto):
+    nezha, conn = proto
+    conn.ack_result = None  # no matching completion ack ever arrives
+
+    reply = binary_bridge.translate_command(nezha, "SET tw=128")
+
+    assert reply == "ERR badarg set failed"
+    assert len(conn.envelope_calls) == 1  # the envelope was still sent
 
 
 # ---------------------------------------------------------------------------

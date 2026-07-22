@@ -48,6 +48,32 @@ transport (``SerialTransport``/``RelayTransport`` via this function;
 reusing ``NezhaProtocol.otos_config()`` for envelope construction the exact
 same way ``_handle_config_set()``/``config()`` already do for SET/GET).
 
+Stakeholder bench finding 2026-07-22 (curve on an unmanaged straight drive,
+GUI log showing ``'SET pid.kaw=0' rejected: ERR unavailable legacy verb
+translation removed`` and only 1/12 calibration values applied): ``SET``
+is fixed the SAME way — ``_handle_set_patch()`` below intercepts ``SET
+key=value ...`` at the very top of ``translate_command()``, alongside
+OI/OL/OA, and calls ``NezhaProtocol.set_config()`` directly. Before this
+fix, ``SET`` fell through to the ``_LEGACY_TRANSLATION_AVAILABLE`` guard
+below and got ``_LEGACY_UNAVAILABLE_REPLY`` unconditionally on every
+hardware transport — even though ``set_config()`` (protocol.py) is fully
+live and is exactly what ``SimTransport._handle_config_set()`` already
+calls for Sim. This was the root cause of ``__main__.py``'s
+``_push_robot_calibration()`` (the robot-select calibration push, which
+sends its ``SET``/``OI``/``OL``/``OA`` sequence via
+``calibration.push.calibration_commands()``) reporting nearly every
+pushed value REJECTED against real hardware, silently leaving the
+firmware on its compiled-in gains (curve = uncorrected wheel travel
+calib / trackwidth / rotational-slip, sluggish PID = uncalibrated
+velocity gains) — and also broke the Configurator panel's live gain
+``SET`` on hardware for the same reason. ``GET`` is NOT restored here:
+the binary ``get`` arm was pruned by 103-001 and
+``NezhaProtocol.get_config_binary()``/``get_config()`` no longer exist at
+all (see the "Config: SET" section header below) — there is no live
+binary consumer to route a `GET` to, unlike `SET`, so `GET` keeps
+returning the launch-unblock reply, which is the honest answer for a
+verb with no wire arm.
+
 R/TURN/G (097, this ticket): UN-GATED — each now translates to an
 open-loop ``segment``/``replace`` envelope via ``legacy_translate.
 segment_for_arc()``/``segment_for_turn()``/``segment_for_goto_relative()``
@@ -188,6 +214,64 @@ def _handle_otos_patch(proto: NezhaProtocol, verb: str, pos: list[str]) -> str:
     return f"OK {verb.lower()}"
 
 
+def _parse_set_kv(tokens: list[str]) -> dict[str, str]:
+    """Parse ``SET``'s own ``key=value key2=value2 ...`` positional tokens
+    into a kv dict. Raises ``ValueError`` on a malformed token (no ``=``) --
+    the same tolerance ``legacy_verbs.tokenize_send_line()`` gave this verb
+    before it was deleted, reimplemented minimally here (this module must
+    not depend on that module -- see ``_handle_set_patch()``'s own
+    docstring)."""
+    kv: dict[str, str] = {}
+    for tok in tokens:
+        if "=" not in tok:
+            raise ValueError(f"malformed SET arg (expected key=value): {tok!r}")
+        key, _, value = tok.partition("=")
+        kv[key] = value
+    return kv
+
+
+def _handle_set_patch(proto: NezhaProtocol, tokens: list[str]) -> str:
+    """``SET key=value ...`` -> direct ``NezhaProtocol.set_config()`` binary
+    round trip -- the SAME direct-patch-send mechanism ``_handle_otos_patch()``
+    uses for ``OI``/``OL``/``OA`` above, and the SAME method
+    ``SimTransport._handle_config_set()`` (``transport.py``) already calls for
+    Sim. Intercepted at the very top of ``translate_command()``, BEFORE the
+    ``_LEGACY_TRANSLATION_AVAILABLE`` short-circuit -- ``SET`` used to fall
+    through to that dead ``legacy_verbs``/``legacy_render`` dispatch (deleted
+    by 104-002, see this module's own docstring) and so got
+    ``_LEGACY_UNAVAILABLE_REPLY`` unconditionally on every hardware
+    transport, even though ``set_config()`` (protocol.py) is fully live.
+    This was the root cause of the robot-select calibration push
+    (``__main__.py``'s ``_push_robot_calibration()`` /
+    ``calibration.push.calibration_commands()``) reporting nearly every
+    pushed value REJECTED against real hardware (stakeholder bench finding
+    2026-07-22) -- see this module's own docstring for the full incident.
+
+    Returns a plain, hand-rolled ``OK set ...``/``ERR ...`` reply line (not
+    built via ``render.render_ok``/``render_err`` -- those may be
+    unavailable, and this path, like ``_handle_otos_patch()``, must not
+    depend on them).
+    """
+    try:
+        kv = _parse_set_kv(tokens)
+    except ValueError as exc:
+        return f"ERR badarg {exc}"
+    if not kv:
+        return "ERR badarg no key=value pairs"
+    bad = [k for k in kv if k not in protocol._ALL_SET_KEYS]
+    if bad:
+        return f"ERR badkey {bad[0]}"
+    try:
+        kwargs = {k: float(v) for k, v in kv.items()}
+    except ValueError:
+        return "ERR badarg bad value"
+    applied = proto.set_config(**kwargs)
+    if applied is None:
+        return "ERR badarg set failed"
+    body = " ".join(f"{k}={v}" for k, v in applied.items())
+    return f"OK set {body}"
+
+
 def translate_command(proto: NezhaProtocol, raw_line: str) -> str:
     """Translate one text-v2 line to binary, send it, and return the
     rendered text-v2 reply line.
@@ -203,6 +287,12 @@ def translate_command(proto: NezhaProtocol, raw_line: str) -> str:
     never touch ``legacy_verbs``/``legacy_render`` at all, so they work even
     though that layer stays permanently unavailable (107-003).
 
+    Stakeholder bench fix (2026-07-22): ``SET`` is intercepted the same way,
+    BEFORE the short-circuit below -- ``_handle_set_patch()`` sends a real
+    ``NezhaProtocol.set_config()`` round trip. ``GET`` is NOT restored (no
+    live binary read-back arm exists at all -- see ``_handle_set_patch()``'s
+    own docstring and this module's top-of-file incident note).
+
     107-003 launch-unblock: if ``legacy_render``/``legacy_verbs`` are not
     importable (see this module's own docstring), every OTHER non-empty
     line short-circuits to ``_LEGACY_UNAVAILABLE_REPLY`` instead of
@@ -211,10 +301,13 @@ def translate_command(proto: NezhaProtocol, raw_line: str) -> str:
     """
     stripped_for_otos = raw_line.strip()
     if stripped_for_otos:
-        first_verb = stripped_for_otos.split()[0].upper()
+        tokens_for_early_dispatch = stripped_for_otos.split()
+        first_verb = tokens_for_early_dispatch[0].upper()
         if first_verb in _OTOS_PATCH_VERBS:
             return _handle_otos_patch(
-                proto, first_verb, stripped_for_otos.split()[1:])
+                proto, first_verb, tokens_for_early_dispatch[1:])
+        if first_verb == "SET":
+            return _handle_set_patch(proto, tokens_for_early_dispatch[1:])
 
     if not _LEGACY_TRANSLATION_AVAILABLE:
         return _LEGACY_UNAVAILABLE_REPLY if raw_line.strip() else ""
