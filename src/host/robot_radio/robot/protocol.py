@@ -1293,7 +1293,8 @@ class NezhaProtocol:
 
     def estimator_config(self, *, weight_heading_otos: float | None = None,
                           weight_omega_otos: float | None = None,
-                          staleness_ms: float | None = None) -> int:
+                          staleness_ms: float | None = None,
+                          stop_lead_ms: float | None = None) -> int:
         """Build and send an ``EstimatorConfigPatch`` ``ConfigDelta`` envelope
         (``CommandEnvelope{config: ConfigDelta{estimator: ...}}``, 117 ticket
         003) — the live-tuning surface for ``App::StateEstimator``'s v1
@@ -1308,6 +1309,12 @@ class NezhaProtocol:
         sprint — encoder-only v1, per stakeholder decision);
         ``staleness_ms`` maps to ``FusionWeights::staleness`` (the max age,
         ms, a fresh OTOS reading may carry and still be eligible to blend).
+        ``stop_lead_ms`` (turn-prediction campaign) maps to
+        ``App::MoveQueue::stopLead_`` (``App::MoveQueue::setStopLead()``) —
+        a DIFFERENT App:: object than the three fields above, riding the
+        SAME wire arm as the smallest coherent path (see
+        ``EstimatorConfigPatch``'s own doc comment, ``config.proto``); may
+        be set alone (no weight field required in the same call).
 
         UNLIKE ``otos_config()``, a patch sent through this method is NEVER
         persisted on the robot side — ``RobotLoop::handleConfig()``'s
@@ -1334,11 +1341,13 @@ class NezhaProtocol:
             fields["weight_omega_otos"] = float(weight_omega_otos)
         if staleness_ms is not None:
             fields["staleness_ms"] = float(staleness_ms)
+        if stop_lead_ms is not None:
+            fields["stop_lead_ms"] = float(stop_lead_ms)
 
         if not fields:
             raise ValueError(
                 "estimator_config() requires at least one field "
-                "(weight_heading_otos/weight_omega_otos/staleness_ms)")
+                "(weight_heading_otos/weight_omega_otos/staleness_ms/stop_lead_ms)")
 
         delta = envelope_pb2.ConfigDelta(
             estimator=config_pb2.EstimatorConfigPatch(**fields))

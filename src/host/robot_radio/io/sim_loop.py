@@ -606,20 +606,44 @@ class SimLoop:
         place) plus a REQUIRED ``timeout`` safety backstop (``ValueError``
         if not ``> 0``, mirroring ``move_twist()``'s own host-side check).
 
-        ``id`` doubles as both the envelope's own ``corr_id`` (the enqueue
-        ack's own correlation key) and ``Move.id`` (the LATER completion
-        event's key, per ``envelope.proto``'s own ``Move.id`` doc comment)
-        -- mirrors ``NezhaProtocol.move_twist()``/``move_wheels()``'s own
-        ``move_id`` convention (spelled ``id`` here since every existing Sim
-        caller already does). Defaults to this instance's own
-        ``_next_corr_id()`` counter when omitted (matching ``twist()``/
-        ``stop()``'s own auto-assignment) -- every Move sent through this
-        method therefore gets a distinct, incrementing id unless the caller
-        overrides it.
+        ``id`` becomes ``Move.id`` -- the key THIS Move's own LATER
+        completion event echoes (``docs/protocol-v4.md`` section 7.2).
+        Defaults to this instance's own ``_next_corr_id()`` counter when
+        omitted (matching ``twist()``/``stop()``'s own auto-assignment) --
+        every Move sent through this method therefore gets a distinct,
+        incrementing id unless the caller overrides it.
 
-        Returns the id used. Fire-and-poll, matching ``twist()``/``stop()``
-        -- this call never blocks on a reply; a caller learns the outcome
-        from telemetry's ack slot, same as a real robot (see
+        The envelope's own ``corr_id`` (the EARLIER enqueue ack's
+        correlation key) is now assigned INDEPENDENTLY from ``id``/
+        ``Move.id`` -- ``self._next_corr_id()`` again, a SEPARATE draw from
+        the SAME counter ``id`` itself defaults from, so the two never
+        collide within one session. This mirrors
+        ``NezhaProtocol.move_twist()``/``move_wheels()``, whose envelope
+        ``corr_id`` is auto-assigned by ``send_envelope_fast()``'s own
+        connection-scoped counter, genuinely distinct from the caller's
+        ``move_id`` (see that method's own docstring). Before this fix, this
+        method set ``corr_id=move_id`` -- CommandEnvelope 116-001 cutover
+        anomaly, `turn-prediction-campaign` diagnosis: RobotLoop::handleMove()
+        acks the ENQUEUE outcome against the envelope's own ``corr_id``
+        (``tlm_.ack(result.corrId, ...)``, ``move_queue.h``) SEPARATELY from
+        the COMPLETION ack against ``Move.id`` (``tlm_.ack(moveResult.
+        completion.moveId, 0)``) -- both ride the SAME single ack slot
+        (``Telemetry.ack_corr``/``ack_err``). With ``corr_id == move_id``,
+        the FIRST (enqueue) ack a poller drains already satisfies a
+        ``frame.ack.corr_id == move_id`` match (``planner.tour``'s
+        ``_drain_and_poll()``), so a caller waiting for the Move's own
+        COMPLETION mistakenly accepts the near-instant enqueue ack instead
+        -- and, since an ``ERR_FULL`` rejection is ALSO acked against the
+        SAME (aliased) corr_id, a rejected Move reads as completed too. Real
+        hardware never hit this (its own envelope ``corr_id`` was already
+        independent) -- only the Sim path aliased the two.
+
+        Returns the id used (``Move.id`` -- NOT the envelope's own
+        ``corr_id``, which is fire-and-forgotten here exactly as
+        ``NezhaProtocol.move()`` already documents its own equivalent
+        return value asymmetry). Fire-and-poll, matching ``twist()``/
+        ``stop()`` -- this call never blocks on a reply; a caller learns
+        the outcome from telemetry's ack slot, same as a real robot (see
         ``docs/protocol-v4.md`` section 7).
         """
         self._require_connected()
@@ -631,6 +655,7 @@ class SimLoop:
             stop_time=stop_time, stop_distance=stop_distance, stop_angle=stop_angle)
 
         move_id = id if id is not None else self._next_corr_id()
+        corr_id = self._next_corr_id()  # independent draw -- see this method's own doc comment
         pb2_mod = _get_envelope_pb2()
 
         if v_left is not None or v_right is not None:
@@ -643,7 +668,7 @@ class SimLoop:
             velocity_kwargs = {"twist": pb2_mod.MoveTwist(v_x=v_x, v_y=v_y, omega=omega)}
 
         envelope = pb2_mod.CommandEnvelope(
-            corr_id=move_id,
+            corr_id=corr_id,
             move=pb2_mod.Move(
                 timeout=timeout, replace=replace, id=move_id,
                 **velocity_kwargs, **stop_kwargs))

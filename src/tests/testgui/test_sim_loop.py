@@ -234,11 +234,19 @@ def test_move_ids_are_distinct_and_incrementing_when_omitted(loop):
 
 
 def test_move_honors_an_explicit_id(loop):
-    """``id`` doubles as both the envelope's own ``corr_id`` (the enqueue
-    ack's own correlation key) and ``Move.id`` (the completion event's
-    key) -- verified by capturing the envelope ``move(id=...)`` actually
-    injects (same "capture, don't send" pattern as the wheels-variant test
-    above) and decoding both fields back."""
+    """``id`` becomes ``Move.id`` (the completion event's own key) --
+    verified by capturing the envelope ``move(id=...)`` actually injects
+    (same "capture, don't send" pattern as the wheels-variant test above)
+    and decoding it back.
+
+    UPDATED (turn-prediction campaign, ``SimLoop.move()``'s own corr_id/
+    move_id-aliasing fix): the envelope's own ``corr_id`` is now a
+    SEPARATE, independently-assigned value (mirrors ``NezhaProtocol.
+    move_twist()``'s own auto-assigned envelope ``corr_id``, always
+    distinct from the caller's ``move_id``) -- it is NO LONGER equal to
+    ``id``. See ``sim_loop.py``'s ``move()`` doc comment for the full
+    aliasing bug this closed (an enqueue ack could be mistaken for a
+    Move's own completion ack when the two shared one number)."""
     import base64
 
     from robot_radio.robot.pb2 import envelope_pb2 as pb2_mod
@@ -250,7 +258,9 @@ def test_move_honors_an_explicit_id(loop):
 
     assert returned_id == 42
     decoded = pb2_mod.CommandEnvelope.FromString(base64.b64decode(captured[0][2:]))
-    assert decoded.corr_id == 42
+    assert decoded.corr_id != 42, (
+        "corr_id must NOT alias move_id/id -- that was the bug (see this test's own docstring)"
+    )
     assert decoded.move.id == 42
 
 

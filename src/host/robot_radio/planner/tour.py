@@ -134,16 +134,23 @@ class MoveTransport(Protocol):
     (`v_x`/`v_y`/`omega` for a `MoveTwist`, OR `v_left`/`v_right` BOTH given
     for a `MoveWheels`) plus exactly one stop condition
     (`stop_time`/`stop_distance`/`stop_angle`) plus a required `timeout`
-    safety backstop. `id` doubles as the envelope's own `corr_id` (the
-    ENQUEUE ack's correlation key) and `Move.id` (the later COMPLETION
-    ack's key, per `docs/protocol-v4.md` section 7.2) for `SimLoop`; a real
-    `NezhaProtocol.move()` keeps the two independent (its own envelope
-    `corr_id` is auto-assigned by the connection, distinct from `id`/
-    `Move.id`) -- either way, THIS module only ever polls for `id`'s own
-    COMPLETION ack (see `_drain_and_poll()`), never the enqueue ack, so the
-    distinction is transparent to `run_tour()`. Both a real `NezhaProtocol`
-    (`.move()` added by this same fix) and a `robot_radio.io.sim_loop.SimLoop`
-    satisfy this Protocol as-is -- no adapter needed in production.
+    safety backstop. `id` becomes `Move.id` (the later COMPLETION ack's
+    key, per `docs/protocol-v4.md` section 7.2) -- the envelope's own
+    `corr_id` (the EARLIER enqueue ack's key) is a SEPARATE, independently
+    assigned value on BOTH transports: a real `NezhaProtocol.move()`'s own
+    envelope `corr_id` is auto-assigned by the connection, distinct from
+    `id`/`Move.id`; `SimLoop.move()` draws its own envelope `corr_id` from
+    the SAME per-instance counter `id` itself defaults from, but as a
+    SEPARATE draw, so the two are independent there too (turn-prediction
+    -campaign fix -- `SimLoop.move()` used to set `corr_id == id`, which
+    aliased the enqueue ack onto the exact key `_drain_and_poll()` polls
+    for; see that method's own doc comment for the full failure mode this
+    closed). THIS module only ever polls for `id`'s own COMPLETION ack (see
+    `_drain_and_poll()`), never the enqueue ack, so the distinction is
+    transparent to `run_tour()` -- now genuinely, not just by construction
+    on one of the two transports. Both a real `NezhaProtocol` (`.move()`
+    added by this same fix) and a `robot_radio.io.sim_loop.SimLoop` satisfy
+    this Protocol as-is -- no adapter needed in production.
     """
 
     def move(self, *, v_x: float = 0.0, v_y: float = 0.0, omega: float = 0.0,
@@ -560,17 +567,30 @@ def _outcome_for_terminal_frame(frame: "TLMFrame") -> RunOutcome:
     """Map one leg's own terminal frame (the frame `_drain_and_poll()`
     matched on this leg's `Move.id`) onto a `RunOutcome`.
 
-    `docs/protocol-v4.md` section 7.3 (AS-BUILT): the completion ack's own
-    `ack_err` is UNCONDITIONALLY 0, regardless of whether the `Move` ended
-    via its own stop condition or via its `timeout` backstop -- the two
-    outcomes are distinguished ONLY by `flags` bit 15
+    `docs/protocol-v4.md` section 7.3 (AS-BUILT): a GENUINE completion
+    ack's own `ack_err` is UNCONDITIONALLY 0, regardless of whether the
+    `Move` ended via its own stop condition or via its `timeout` backstop
+    -- the two outcomes are distinguished ONLY by `flags` bit 15
     (`TLMFrame.fault_move_timeout`) on the SAME frame, never by a nonzero
     `ack_err`. A timed-out `Move` is reported as a tour fault, matching the
     "stop immediately on anything but success" contract `run_tour()` has
     always had -- a tour never expects one of its own legs to hit its
     safety-backstop timeout; that only happens if the stop condition (a
     reachable distance/angle) was never met, a real problem worth stopping
-    the tour for."""
+    the tour for.
+
+    Defense in depth (turn-prediction-campaign fix): a nonzero `ack_err` on
+    the matched frame is ALSO treated as a fault, never `COMPLETED` --
+    covers an `ERR_FULL` enqueue-rejection ack that reaches this function
+    despite `SimLoop.move()`'s own corr_id/move_id aliasing fix (see that
+    method's doc comment), e.g. a future caller that reintroduces the
+    aliasing, or a genuinely-colliding `Move.id`/envelope `corr_id` pair.
+    `ack_err` is unconditionally 0 on every REAL completion ack (the
+    comment above), so this check is a no-op on the happy path and only
+    ever fires on a frame that was never a real completion in the first
+    place."""
+    if frame.ack is not None and not frame.ack.ok:
+        return RunOutcome.FAULT
     return RunOutcome.FAULT if frame.fault_move_timeout else RunOutcome.COMPLETED
 
 
