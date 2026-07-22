@@ -1,7 +1,7 @@
 ---
 id: '115'
 title: 'Gut S1: motion-stack excision + minimal per-cycle telemetry'
-status: planning-docs
+status: closed
 branch: sprint/115-gut-s1-motion-stack-excision-minimal-per-cycle-telemetry
 worktree: false
 use-cases: []
