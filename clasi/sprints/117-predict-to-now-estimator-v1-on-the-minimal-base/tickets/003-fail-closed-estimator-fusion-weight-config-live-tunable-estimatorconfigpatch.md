@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Fail-closed estimator fusion-weight config + live-tunable EstimatorConfigPatch
-status: open
+status: in-progress
 use-cases:
 - SUC-058
 depends-on:
