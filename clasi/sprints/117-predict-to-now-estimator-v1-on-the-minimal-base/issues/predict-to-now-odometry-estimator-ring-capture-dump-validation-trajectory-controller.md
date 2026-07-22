@@ -1,6 +1,15 @@
 ---
-status: pending
+status: in-progress
 sprint: '117'
+tickets:
+- 117-001
+- 117-002
+- 117-003
+- 117-004
+- 117-005
+- 117-006
+- 117-007
+- 117-008
 ---
 
 # Predict-to-now odometry: estimator + ring capture/dump + validation + trajectory controller
