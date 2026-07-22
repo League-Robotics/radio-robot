@@ -3,13 +3,17 @@
 // never an xfail/skip.
 //
 // Off-hardware CLI harness for the differential/fuzz/range suite against
-// `google.protobuf` (the host's `pb2/` bindings). Rewritten this ticket
-// (103-001, SUC-001, architecture-update.md (103) Decisions 2/3) against
-// the P4-pruned schema: CommandEnvelope.cmd is exactly {twist, config,
-// stop}; ReplyEnvelope.body is exactly {ok, err, tlm}; Telemetry carries
-// the depth-3 ack ring + fault_bits/event_bits; TelemetrySecondary is a
-// NEW standalone top-level wire message (its own `msg::wire::encode()`
-// overload, not a ReplyEnvelope oneof arm).
+// `google.protobuf` (the host's `pb2/` bindings). Rewritten 115-009 (gut
+// S1's own test-sweep/green-bar ticket) against the frame-v2 schema
+// (115-003, `telemetry-frame-tightening-amendment-to-gut-s1.md`):
+// CommandEnvelope.cmd is exactly {twist, config, stop}; ReplyEnvelope.body
+// is exactly {ok, err, tlm}; Telemetry carries a single `flags` bit-string
+// (status+fault+event) plus a single `ack_corr`/`ack_err` slot (the
+// depth-3 ack ring is gone) and per-source timestamped `EncoderReading`/
+// `OtosReading` objects; ConfigDelta's `patch` oneof is DRIVETRAIN/MOTOR/
+// WATCHDOG/OTOS (PLANNER deleted wholesale, 115-003); TelemetrySecondary is
+// unchanged, a standalone top-level wire message (its own
+// `msg::wire::encode()` overload, not a ReplyEnvelope oneof arm).
 //
 // Unlike wire_runtime_harness.cpp/wire_codec_harness.cpp (fixed scenario
 // lists baked into the C++ binary itself), THIS harness is a thin one-shot
@@ -40,20 +44,16 @@
 //     Builds ReplyEnvelope{err=Error{code,field}}.
 //     -> "B64 <base64 bytes>" or "ZERO".
 //
-//   encode_telemetry <corr_id>
-//     <ack0_corr_id> <ack0_status> <ack0_err_code>
-//     <ack1_corr_id> <ack1_status> <ack1_err_code>
-//     <ack2_corr_id> <ack2_status> <ack2_err_code>
-//     <now> <mode> <seq> <has_enc> <enc_left> <enc_right> <has_vel>
-//     <vel_left> <vel_right> <has_pose> <pose_x> <pose_y> <pose_h>
-//     <has_otos> <otos_x> <otos_y> <otos_h> <otos_connected> <has_twist>
-//     <twist_vx> <twist_vy> <twist_omega> <active> <conn_left> <conn_right>
-//     <fault_bits> <event_bits>
-//     Builds ReplyEnvelope{tlm=Telemetry{...}} with the ack ring ALWAYS
-//     populated at its full depth-3 (mirrors app/Telemetry's own designed
-//     invariant, ticket 005 -- the wire codec's encode() trusts the
-//     caller-supplied count with no re-clamp, so this harness never
-//     exercises a malformed count > 3).
+//   encode_telemetry <corr_id> <now> <mode> <seq> <flags> <ack_corr>
+//     <ack_err> <enc_left_position> <enc_left_velocity> <enc_left_time>
+//     <enc_right_position> <enc_right_velocity> <enc_right_time> <otos_x>
+//     <otos_y> <otos_heading> <otos_v_x> <otos_v_y> <otos_omega>
+//     <otos_time> <pose_x> <pose_y> <pose_h> <twist_v_x> <twist_v_y>
+//     <twist_omega> <line> <color>
+//     Builds ReplyEnvelope{tlm=Telemetry{...}} per the frame-v2 shape
+//     (telemetry.proto, 115-003) -- one `flags` bit-string, one ack slot,
+//     two EncoderReadings, one OtosReading, always-present pose/twist, and
+//     the packed line/color words.
 //     -> "B64 <base64 bytes>" or "ZERO".
 //
 //   encode_telemetry_secondary <now> <has_cmd_vel> <cmd_vel_left>
@@ -61,7 +61,7 @@
 //     <ts_left> <ts_right>
 //     Builds a STANDALONE TelemetrySecondary (Decision 3 -- its own
 //     independently-armored line, not wrapped in ReplyEnvelope, so no
-//     corr_id argument).
+//     corr_id argument). Unchanged by 115-003.
 //     -> "B64 <base64 bytes>" or "ZERO".
 //
 // Float formatting: `%.9g` on both the encode-input parse (strtof) and the
@@ -98,6 +98,7 @@ const char* errCodeName(msg::ErrCode c) {
     case msg::ErrCode::ERR_DECODE: return "ERR_DECODE";
     case msg::ErrCode::ERR_UNIMPLEMENTED: return "ERR_UNIMPLEMENTED";
     case msg::ErrCode::ERR_OVERSIZE: return "ERR_OVERSIZE";
+    case msg::ErrCode::ERR_NOT_CONFIGURED: return "ERR_NOT_CONFIGURED";
   }
   return "ERR_UNKNOWN_ENUM_VALUE";
 }
@@ -111,6 +112,7 @@ msg::ErrCode parseErrCode(const std::string& s) {
   if (s == "ERR_DECODE") return msg::ErrCode::ERR_DECODE;
   if (s == "ERR_UNIMPLEMENTED") return msg::ErrCode::ERR_UNIMPLEMENTED;
   if (s == "ERR_OVERSIZE") return msg::ErrCode::ERR_OVERSIZE;
+  if (s == "ERR_NOT_CONFIGURED") return msg::ErrCode::ERR_NOT_CONFIGURED;
   return msg::ErrCode::ERR_NONE;
 }
 
@@ -131,8 +133,8 @@ const char* configDeltaPatchKindName(msg::ConfigDelta::PatchKind k) {
     case msg::ConfigDelta::PatchKind::NONE: return "NONE";
     case msg::ConfigDelta::PatchKind::DRIVETRAIN: return "DRIVETRAIN";
     case msg::ConfigDelta::PatchKind::MOTOR: return "MOTOR";
-    case msg::ConfigDelta::PatchKind::PLANNER: return "PLANNER";
     case msg::ConfigDelta::PatchKind::WATCHDOG: return "WATCHDOG";
+    case msg::ConfigDelta::PatchKind::OTOS: return "OTOS";
   }
   return "UNKNOWN";
 }
@@ -194,18 +196,19 @@ int cmdDecode(const std::string& b64) {
           printOpt("kaw", p.kaw);
           break;
         }
-        case msg::ConfigDelta::PatchKind::PLANNER:
-          printOpt("min_speed", cfg.patch.planner.min_speed);
-          printOpt("heading_kp", cfg.patch.planner.heading_kp);
-          printOpt("heading_kd", cfg.patch.planner.heading_kd);
-          // arrive_dwell (111-004): the one field kept from the 16-field
-          // Drive::Limits/tracker/policy span removed as dead this ticket --
-          // see config.proto's own PlannerConfigPatch header comment.
-          printOpt("arrive_dwell", cfg.patch.planner.arrive_dwell);
-          break;
         case msg::ConfigDelta::PatchKind::WATCHDOG:
           std::printf(" watchdog=%u", static_cast<unsigned>(cfg.patch.watchdog));
           break;
+        case msg::ConfigDelta::PatchKind::OTOS: {
+          const msg::OtosConfigPatch& p = cfg.patch.otos;
+          printOpt("linear_scale", p.linear_scale);
+          printOpt("angular_scale", p.angular_scale);
+          printOpt("offset_x", p.offset_x);
+          printOpt("offset_y", p.offset_y);
+          printOpt("offset_yaw", p.offset_yaw);
+          std::printf(" init=%d", p.init ? 1 : 0);
+          break;
+        }
         case msg::ConfigDelta::PatchKind::NONE:
         default:
           break;
@@ -274,12 +277,11 @@ int cmdEncodeErr(int argc, char** argv) {
   return 0;
 }
 
-// encode_telemetry -- ReplyEnvelope{tlm=Telemetry{...}}: 3 ack-ring entries
-// (9 positional args) followed by every other field positional in
-// telemetry.proto's own field-number order (see this file's header comment
-// for the full argv list).
+// encode_telemetry -- ReplyEnvelope{tlm=Telemetry{...}}: every field
+// positional in telemetry.proto's OWN field-number order (frame v2,
+// 115-003 -- see this file's header comment for the full argv list).
 int cmdEncodeTelemetry(int argc, char** argv) {
-  if (argc < 32) {
+  if (argc < 30) {
     std::printf("USAGE_ERROR\n");
     return 1;
   }
@@ -289,40 +291,38 @@ int cmdEncodeTelemetry(int argc, char** argv) {
   reply.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
   msg::Telemetry& t = reply.body.tlm;
 
-  t.acks_count = 3;
-  for (int e = 0; e < 3; ++e) {
-    t.acks_[e].corr_id = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-    t.acks_[e].status = static_cast<msg::AckStatus>(std::strtoul(argv[i++], nullptr, 10));
-    t.acks_[e].err_code = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-  }
-
   t.now = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
   t.mode = static_cast<msg::DriveMode>(std::strtoul(argv[i++], nullptr, 10));
   t.seq = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-  t.has_enc = std::strtoul(argv[i++], nullptr, 10) != 0;
-  t.enc_left = std::strtof(argv[i++], nullptr);
-  t.enc_right = std::strtof(argv[i++], nullptr);
-  t.has_vel = std::strtoul(argv[i++], nullptr, 10) != 0;
-  t.vel_left = std::strtof(argv[i++], nullptr);
-  t.vel_right = std::strtof(argv[i++], nullptr);
-  t.has_pose = std::strtoul(argv[i++], nullptr, 10) != 0;
+  t.flags = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  t.ack_corr = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  t.ack_err = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+
+  t.enc_left.position = std::strtof(argv[i++], nullptr);
+  t.enc_left.velocity = std::strtof(argv[i++], nullptr);
+  t.enc_left.time = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  t.enc_right.position = std::strtof(argv[i++], nullptr);
+  t.enc_right.velocity = std::strtof(argv[i++], nullptr);
+  t.enc_right.time = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+
+  t.otos.x = std::strtof(argv[i++], nullptr);
+  t.otos.y = std::strtof(argv[i++], nullptr);
+  t.otos.heading = std::strtof(argv[i++], nullptr);
+  t.otos.v_x = std::strtof(argv[i++], nullptr);
+  t.otos.v_y = std::strtof(argv[i++], nullptr);
+  t.otos.omega = std::strtof(argv[i++], nullptr);
+  t.otos.time = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+
   t.pose.x = std::strtof(argv[i++], nullptr);
   t.pose.y = std::strtof(argv[i++], nullptr);
   t.pose.h = std::strtof(argv[i++], nullptr);
-  t.has_otos = std::strtoul(argv[i++], nullptr, 10) != 0;
-  t.otos.x = std::strtof(argv[i++], nullptr);
-  t.otos.y = std::strtof(argv[i++], nullptr);
-  t.otos.h = std::strtof(argv[i++], nullptr);
-  t.otos_connected = std::strtoul(argv[i++], nullptr, 10) != 0;
-  t.has_twist = std::strtoul(argv[i++], nullptr, 10) != 0;
+
   t.twist.v_x = std::strtof(argv[i++], nullptr);
   t.twist.v_y = std::strtof(argv[i++], nullptr);
   t.twist.omega = std::strtof(argv[i++], nullptr);
-  t.active = std::strtoul(argv[i++], nullptr, 10) != 0;
-  t.conn_left = std::strtoul(argv[i++], nullptr, 10) != 0;
-  t.conn_right = std::strtoul(argv[i++], nullptr, 10) != 0;
-  t.fault_bits = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-  t.event_bits = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+
+  t.line = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  t.color = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
 
   printEncodedOrZero(reply);
   return 0;

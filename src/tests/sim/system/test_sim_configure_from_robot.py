@@ -14,9 +14,9 @@ Covers:
    side effect of the call (a dynamic, not just import-grep, proof of
    SUC-002's "no dependency on TestGUI/Qt code path" acceptance criterion).
 2. The Tier-1 push actually reaches and is APPLIED by
-   ``RobotLoop::handleConfig()`` -- proven by draining the sim's own ack
-   ring after ``configure_from_robot()`` and observing at least one OK ack,
-   not merely that the host-side call returned without raising.
+   ``RobotLoop::handleConfig()`` -- proven by draining the sim's own single
+   ack slot after ``configure_from_robot()`` and observing at least one OK
+   ack, not merely that the host-side call returned without raising.
 3. ``configure_from_robot()`` measurably changes the sim's own plant
    response to an identical twist: an UNCONFIGURED ``SimLoop`` (114-001's
    config-completeness gate: ``TestSim::SimHarness`` no longer
@@ -127,7 +127,8 @@ def test_configure_from_robot_tier1_push_is_acked_by_firmware():
         for _ in range(5):
             loop.step(1)
             for frame in loop.drain_pending_tlm():
-                acks.extend(frame.acks or [])
+                if frame.ack is not None:
+                    acks.append(frame.ack)
             if any(ack.ok for ack in acks):
                 break
 

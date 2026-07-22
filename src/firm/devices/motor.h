@@ -22,12 +22,14 @@
 // MotorArmor (src/firm/main.cpp) before handing it to the app graph.
 //
 // Surface: exactly the union of what the app graph calls today —
-// App::Drive (setVelocity), App::Odometry/HeadingSource (position/
-// velocity), App::Preamble (begin), App::RobotLoop (requestSample/tick/
+// App::Drive (setVelocity), App::Odometry (position/velocity),
+// App::Preamble (begin), App::RobotLoop (requestSample/tick/
 // position/velocity/connected/wedged/gains/applyGains) — plus the raw-duty
 // and reset verbs the bench/test surface uses. wedged()/wedgeSuspect()
 // default to false so a bare (armor-less) motor is honest: nothing is
-// watching for a wedge.
+// watching for a wedge. (App::HeadingSource, a former position/velocity
+// consumer, is DELETED -- 115-002, gut-to-minimal-firmware S1 motion-stack
+// excision.)
 #pragma once
 
 #include <cstdint>

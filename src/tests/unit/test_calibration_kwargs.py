@@ -32,12 +32,7 @@ import types
 from pathlib import Path
 
 from robot_radio.calibration.push import calibration_commands, calibration_kwargs
-from robot_radio.config.robot_config import (
-    ControlConfig,
-    IdentityConfig,
-    RobotConfig,
-    load_robot_config,
-)
+from robot_radio.config.robot_config import load_robot_config
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _ROBOTS_DIR = _REPO_ROOT / "data" / "robots"
@@ -61,8 +56,18 @@ def _cfg(*, calibration=None, trackwidth=128, control=None, robot_name="r"):
 def test_calibration_kwargs_covers_the_pre_refactor_field_set() -> None:
     """A fully-populated config yields exactly the field set the
     pre-113-003 calibration_commands() text list implied: ml, mr, tw,
-    rotSlip, pid.kp/ki/kff/iMax/kaw, headingKp, headingKd -- plus the three
-    113-003 additions (minSpeed, distanceKp, arriveDwell)."""
+    rotSlip, pid.kp/ki/kff/iMax/kaw.
+
+    115-003 (gut-to-minimal-firmware S1 motion-stack excision): the
+    113-003 additions this test used to also cover (headingKp/headingKd/
+    minSpeed/distanceKp/arriveDwell, all PlannerConfigPatch wire keys) are
+    DELETED, not ported -- PlannerConfigPatch itself, and the App::Pilot
+    that applied it, are gone; none of these five keys are valid
+    set_config() wire keys any more (see calibration_kwargs()'s own
+    docstring). heading_kp/heading_kd/min_speed/distance_kp/arrive_dwell
+    are still present on the config object here (a config that carries
+    them is realistic -- boot-config JSON keeps the fields for the Tier-2
+    bake) but must NOT appear in kwargs."""
     cfg = _cfg(
         calibration=types.SimpleNamespace(
             mm_per_wheel_deg_left=0.5, mm_per_wheel_deg_right=0.51,
@@ -80,23 +85,18 @@ def test_calibration_kwargs_covers_the_pre_refactor_field_set() -> None:
     assert set(kwargs) == {
         "ml", "mr", "tw", "rotSlip",
         "pid.kp", "pid.ki", "pid.kff", "pid.iMax", "pid.kaw",
-        "headingKp", "headingKd",
-        "minSpeed", "distanceKp", "arriveDwell",
     }
     assert kwargs["ml"] == 0.5
     assert kwargs["mr"] == 0.51
     assert kwargs["tw"] == 128
     assert kwargs["rotSlip"] == 0.85
-    assert kwargs["minSpeed"] == 16.0
-    assert kwargs["distanceKp"] == 2.5
-    assert kwargs["arriveDwell"] == 0.15
 
 
 def test_calibration_kwargs_omits_control_keys_when_control_is_none() -> None:
-    """No control section at all -> none of the pid.*/headingK*/minSpeed/
-    distanceKp/arriveDwell keys are present (ControlConfig's documented
-    contract: None -> firmware boot default kept), but ml/mr/tw/rotSlip
-    (which don't depend on control) still are."""
+    """No control section at all -> none of the pid.* keys are present
+    (ControlConfig's documented contract: None -> firmware boot default
+    kept), but ml/mr/tw/rotSlip (which don't depend on control) still
+    are."""
     cfg = _cfg()
 
     kwargs = calibration_kwargs(cfg)
@@ -118,65 +118,38 @@ def test_calibration_kwargs_never_includes_otos_keys() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. minSpeed/distanceKp/arriveDwell presence -- real shipped profiles.
+# 2. minSpeed/distanceKp/arriveDwell presence -- DELETED, not ported
+#    (115-003, gut-to-minimal-firmware S1 motion-stack excision).
+#
+# This section used to cover 113-003's own "push only when present" rule
+# for minSpeed/distanceKp/arriveDwell (PlannerConfigPatch wire keys). All
+# three are gone wholesale alongside PlannerConfigPatch/App::Pilot -- there
+# is no wire target left for calibration_kwargs() to conditionally push
+# them onto, so the "present when set, absent when unset" property this
+# section proved no longer has anything to prove. Not ported as
+# always-fail assertions or reduced to no-ops; simply removed, matching
+# ticket 009's residual-reference sweep policy for other PlannerConfig-only
+# test files.
 # ---------------------------------------------------------------------------
-
-
-def test_tovez_nocal_json_carries_all_three_new_planner_keys() -> None:
-    """tovez_nocal.json's control section sets min_speed/distance_kp/
-    arrive_dwell explicitly -- all three must be pushed."""
-    cfg = load_robot_config(_ROBOTS_DIR / "tovez_nocal.json")
-
-    kwargs = calibration_kwargs(cfg)
-
-    assert kwargs["minSpeed"] == 16.0
-    assert kwargs["distanceKp"] == 2.5
-    assert kwargs["arriveDwell"] == 0.15
-
-
-def test_synthetic_config_omits_min_speed_and_distance_kp_when_unset() -> None:
-    """A control section with min_speed/distance_kp left None (absent ->
-    omitted, ControlConfig's "push only when present" contract) but
-    arrive_dwell set DOES push arriveDwell alone -- proving the "absent when
-    not set" half of 113-003's acceptance criteria.
-
-    Sprint 114 (config-as-truth completion, ticket 002): every SHIPPED
-    robot JSON (tovez.json included) now carries control.min_speed/
-    control.distance_kp explicitly (gen_boot_config.py's build-time bake no
-    longer has a source-side fallback for them) -- so there is no longer a
-    REAL fixture that omits these two fields; a synthetic ControlConfig
-    replaces the tovez.json-based fixture this test used before this
-    ticket. See test_calibration_commands_tovez_json_snapshot below for the
-    now-updated live-push snapshot proving tovez.json's own minSpeed/
-    distanceKp ARE pushed."""
-    cfg = RobotConfig(
-        identity=IdentityConfig(robot_name="r", uid="0"),
-        control=ControlConfig(arrive_dwell=0.15),
-    )
-
-    kwargs = calibration_kwargs(cfg)
-
-    assert "minSpeed" not in kwargs
-    assert "distanceKp" not in kwargs
-    assert kwargs["arriveDwell"] == 0.15
 
 
 # ---------------------------------------------------------------------------
 # 3. calibration_commands() output is unchanged by the refactor -- snapshot
 #    pins against both real shipped profiles (verified against the real
 #    pre-113-003 implementation's own output before the refactor landed).
+#    115-003 REDUCED the snapshot: headingKp/headingKd/minSpeed/distanceKp/
+#    arriveDwell no longer appear (PlannerConfigPatch deleted wholesale --
+#    see section 2's own note above).
 # ---------------------------------------------------------------------------
 
 
 def test_calibration_commands_tovez_json_snapshot() -> None:
-    """Sprint 114 (config-as-truth completion, ticket 002): tovez.json now
-    carries control.min_speed=16.0/control.distance_kp=8.0 explicitly
-    (previously absent -> None -> omitted from this push) -- both are the
-    SAME numeric values gen_boot_config.py's own now-deleted MIN_SPEED_
-    DEFAULT/DISTANCE_KP_DEFAULT constants used to bake into tovez.json's
-    boot config, so the real robot's boot-time behavior is unchanged; the
-    live push (this snapshot) now ALSO sends them, which is a no-op against
-    an already-matching boot default, not a behavior change."""
+    """115-003 (gut-to-minimal-firmware S1 motion-stack excision): the
+    headingKp/headingKd/minSpeed/distanceKp/arriveDwell lines this snapshot
+    used to carry (PlannerConfigPatch wire keys, sprint 114's config-as-
+    truth completion) are gone -- PlannerConfigPatch itself, and the
+    App::Pilot that applied it, are deleted wholesale; only the vel_*/PID
+    group still reaches the wire from this JSON."""
     cfg = load_robot_config(_ROBOTS_DIR / "tovez.json")
 
     cmds = calibration_commands(cfg)
@@ -191,11 +164,6 @@ def test_calibration_commands_tovez_json_snapshot() -> None:
         ("SET pid.kff=0.0008", 200),
         ("SET pid.iMax=0.3", 200),
         ("SET pid.kaw=20", 200),
-        ("SET headingKp=6", 200),
-        ("SET headingKd=0", 200),
-        ("SET minSpeed=16", 200),
-        ("SET distanceKp=8", 200),
-        ("SET arriveDwell=0.15", 200),
         ("OI", 500),
         ("OL 67", 200),
         ("OA -13", 200),
@@ -203,6 +171,9 @@ def test_calibration_commands_tovez_json_snapshot() -> None:
 
 
 def test_calibration_commands_tovez_nocal_json_snapshot() -> None:
+    """115-003: see test_calibration_commands_tovez_json_snapshot's own
+    docstring -- the same headingKp/headingKd/minSpeed/distanceKp/
+    arriveDwell lines are gone from this profile's snapshot too."""
     cfg = load_robot_config(_ROBOTS_DIR / "tovez_nocal.json")
 
     cmds = calibration_commands(cfg)
@@ -217,11 +188,6 @@ def test_calibration_commands_tovez_nocal_json_snapshot() -> None:
         ("SET pid.kff=0.002", 200),
         ("SET pid.iMax=0", 200),
         ("SET pid.kaw=0", 200),
-        ("SET headingKp=2.5", 200),
-        ("SET headingKd=0", 200),
-        ("SET minSpeed=16", 200),
-        ("SET distanceKp=2.5", 200),
-        ("SET arriveDwell=0.15", 200),
         ("OI", 500),
         ("OL 0", 200),
         ("OA 0", 200),

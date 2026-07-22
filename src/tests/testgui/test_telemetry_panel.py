@@ -213,6 +213,17 @@ class TestPanelWiring:
         finally:
             widget.deleteLater()
 
+    @pytest.mark.skip(
+        reason="115-003 (gut-to-minimal-firmware S1 motion-stack excision) "
+        "deletes msg::HeadingSourceStatus/the heading_source telemetry field "
+        "wholesale, alongside the App::HeadingSource that reported it -- "
+        "TLMFrame no longer accepts a heading_source constructor kwarg at "
+        "all (protocol.py's own frame-v2 rework). telemetry_panel.py's "
+        "getattr(frame, 'heading_source', None) already degrades to a "
+        "permanent '-' display with no crash, matching Decision 6's "
+        "bench-toolchain-forced-minimum host-edit scope; there is no live "
+        "signal left for this test to construct/exercise."
+    )
     def test_heading_source_indicator_updates_on_otos_to_encoder_transition(self, qapp):
         from PySide6.QtWidgets import QLabel
 

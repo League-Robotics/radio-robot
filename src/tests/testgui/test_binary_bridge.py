@@ -68,6 +68,14 @@ from robot_radio.robot.pb2 import envelope_pb2, telemetry_pb2
 from robot_radio.robot.protocol import NezhaProtocol
 from robot_radio.testgui import binary_bridge
 
+# flags bit 5 -- telemetry.proto Telemetry.flags (ack_fresh, 115-003 frame
+# v2). _FakeConn.wait_for_ack() (below) returns a raw telemetry_pb2.Telemetry
+# directly (NOT the deleted AckEntry pb2 message -- the depth-3 ack ring/
+# AckEntry/AckStatus wire types are gone) -- NezhaProtocol.wait_for_ack()
+# adapts it via AckEntry.from_telemetry(), which reads ack_corr/ack_err
+# gated on this bit.
+_ACK_FRESH_BIT = 1 << 5
+
 
 # ---------------------------------------------------------------------------
 # Fake connection double — SimConnection-shaped send_envelope() (returns the
@@ -180,8 +188,8 @@ def test_empty_line_returns_empty_string_no_wire_call(proto):
 
 def test_ol_sends_otos_config_patch_with_linear_scale(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.AckEntry(
-        corr_id=1, status=telemetry_pb2.ACK_STATUS_OK)
+    conn.ack_result = telemetry_pb2.Telemetry(
+        flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=0)
 
     reply = binary_bridge.translate_command(nezha, "OL 1.05")
 
@@ -195,8 +203,8 @@ def test_ol_sends_otos_config_patch_with_linear_scale(proto):
 
 def test_oa_sends_otos_config_patch_with_angular_scale(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.AckEntry(
-        corr_id=1, status=telemetry_pb2.ACK_STATUS_OK)
+    conn.ack_result = telemetry_pb2.Telemetry(
+        flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=0)
 
     reply = binary_bridge.translate_command(nezha, "OA -0.98")
 
@@ -207,8 +215,8 @@ def test_oa_sends_otos_config_patch_with_angular_scale(proto):
 
 def test_oi_sends_otos_config_patch_with_init_trigger(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.AckEntry(
-        corr_id=1, status=telemetry_pb2.ACK_STATUS_OK)
+    conn.ack_result = telemetry_pb2.Telemetry(
+        flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=0)
 
     reply = binary_bridge.translate_command(nezha, "OI")
 
@@ -256,9 +264,8 @@ def test_ol_ack_timeout_renders_err(proto):
 
 def test_ol_nak_ack_renders_err(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.AckEntry(
-        corr_id=1, status=telemetry_pb2.ACK_STATUS_ERR,
-        err_code=envelope_pb2.ERR_UNIMPLEMENTED)
+    conn.ack_result = telemetry_pb2.Telemetry(
+        flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=envelope_pb2.ERR_UNIMPLEMENTED)
 
     reply = binary_bridge.translate_command(nezha, "OL 1.05")
 
@@ -292,9 +299,12 @@ def test_reply_oneof_no_longer_has_id_echo_helptext():
 
 def test_command_oneof_no_longer_has_drive_segment_replace():
     fields = envelope_pb2.CommandEnvelope.DESCRIPTOR.oneofs_by_name["cmd"].fields
-    # 109-003 adds `move` (CmdKind::MOVE) -- a genuine new arm, not a
-    # revival of the removed drive/segment/replace arms this test pins.
-    assert {f.name for f in fields} == {"config", "stop", "twist", "move"}
+    # 109-003's `move` (CmdKind::MOVE) was itself DELETED (115-003, gut S1
+    # motion-stack excision) -- field 20 is `reserved`, not an active oneof
+    # arm any more (see envelope.proto's own CommandEnvelope header
+    # comment). S2's MOVE-protocol cutover reintroduces a `Move`-named arm
+    # at a FRESH number (21), never 20.
+    assert {f.name for f in fields} == {"config", "stop", "twist"}
 
 
 # ---------------------------------------------------------------------------

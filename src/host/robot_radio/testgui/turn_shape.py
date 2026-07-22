@@ -61,7 +61,7 @@ def _frame_to_sample(f, true_h: float) -> Sample:
     return Sample(f.t, vL, vR, omega, pose_h, otos_h, true_h)
 
 
-def capture_turn_live(angle_deg: float, *, yaw_rate_max: float | None = None,
+def capture_turn_live(angle_deg: float, *,
                       realistic: bool = False, speed_factor: int = 4,
                       timeout_s: float = 30.0) -> TurnCapture:
     """GUI-FAITHFUL capture: real tick thread (like TestGUI Sim mode), frames
@@ -96,8 +96,6 @@ def capture_turn_live(angle_deg: float, *, yaw_rate_max: float | None = None,
             loop.set_enc_tick_quant(2, 0.0)
             loop.set_enc_slip(1, 0.0, 0.0)
             loop.set_enc_slip(2, 0.0, 0.0)
-        if yaw_rate_max is not None:
-            loop.set_yaw_rate_max(yaw_rate_max)
         loop.set_speed_factor(speed_factor)
         loop.set_true_pose(0.0, 0.0, 0.0)
         time.sleep(0.2)
@@ -127,7 +125,7 @@ def capture_turn_live(angle_deg: float, *, yaw_rate_max: float | None = None,
         loop.disconnect()
 
 
-def capture_turn_gui(angle_deg: float, *, yaw_rate_max: float | None = None,
+def capture_turn_gui(angle_deg: float, *,
                      timeout_s: float = 30.0) -> TurnCapture:
     """MOST GUI-FAITHFUL capture: drives through the real ``SimTransport`` and
     pushes the active robot's calibration on connect exactly as TestGUI's
@@ -165,8 +163,6 @@ def capture_turn_gui(angle_deg: float, *, yaw_rate_max: float | None = None,
         cap.notes = f"robot={robot}; pushed: " + "; ".join(f"{c}->{r}" for c, r in pushed)
 
         loop = t.protocol
-        if yaw_rate_max is not None:
-            loop.set_yaw_rate_max(yaw_rate_max)
         loop.set_true_pose(0.0, 0.0, 0.0)
         time.sleep(0.3)
         with lock:
@@ -195,7 +191,7 @@ def capture_turn_gui(angle_deg: float, *, yaw_rate_max: float | None = None,
         t.disconnect()
 
 
-def capture_turn(angle_deg: float, *, yaw_rate_max: float | None = None,
+def capture_turn(angle_deg: float, *,
                  realistic: bool = False, max_cycles: int = 1000) -> TurnCapture:
     """Command ONE in-place turn of `angle_deg` and record the full per-cycle
     trace, deterministically stepped (no tick thread -> no scheduling jitter).
@@ -211,8 +207,6 @@ def capture_turn(angle_deg: float, *, yaw_rate_max: float | None = None,
             loop.set_enc_tick_quant(2, 0.0)
             loop.set_enc_slip(1, 0.0, 0.0)
             loop.set_enc_slip(2, 0.0, 0.0)
-        if yaw_rate_max is not None:
-            loop.set_yaw_rate_max(yaw_rate_max)
 
         loop.set_true_pose(0.0, 0.0, 0.0)
         # flush boot frames
@@ -339,7 +333,6 @@ def print_report(cap: TurnCapture, a: Analysis) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description="Diagnose/validate a single turn's wheel-speed shape.")
     p.add_argument("--angle", type=float, default=360.0, help="turn angle [deg]")
-    p.add_argument("--rate", type=float, default=None, help="yaw_rate_max override [rad/s]")
     p.add_argument("--realistic", action="store_true", help="use realistic error profile")
     p.add_argument("--csv", type=str, default=None, help="write full per-cycle trace to CSV")
     p.add_argument("--live", action="store_true",
@@ -349,11 +342,11 @@ def main() -> None:
     args = p.parse_args()
 
     if args.gui:
-        cap = capture_turn_gui(args.angle, yaw_rate_max=args.rate)
+        cap = capture_turn_gui(args.angle)
     elif args.live:
-        cap = capture_turn_live(args.angle, yaw_rate_max=args.rate, realistic=args.realistic)
+        cap = capture_turn_live(args.angle, realistic=args.realistic)
     else:
-        cap = capture_turn(args.angle, yaw_rate_max=args.rate, realistic=args.realistic)
+        cap = capture_turn(args.angle, realistic=args.realistic)
     if cap.notes:
         print(f"\n[setup] {cap.notes}")
     a = analyze(cap)

@@ -499,11 +499,12 @@ def test_tour_2_realistic_errors_turns_within_one_degree():
 # ---------------------------------------------------------------------------
 # SUC-003's "no dip to zero at a compatible same-v_max boundary", verified at
 # the FULL tour-execution level (real run_tour() against the real compiled
-# firmware sim), not just boundary_velocity_harness.cpp's synthetic
-# Motion::Executor-only harness (ticket 006's own test, still the more
-# precise "within 2 cycles" check -- this test is the integration-level
-# confirmation the same behavior survives the whole run_tour()/Move/queue/
-# telemetry round trip, per this ticket's own acceptance criterion 5).
+# firmware sim). boundary_velocity_harness.cpp -- the synthetic
+# Motion::Executor-only unit harness this integration-level test used to sit
+# alongside (ticket 006's own "within 2 cycles" check) -- is DELETED (115-002,
+# gut-to-minimal-firmware S1 motion-stack excision) along with the rest of
+# the motion stack; this test is now the only surviving coverage of this
+# property, whole-run_tour()-level only.
 # ---------------------------------------------------------------------------
 
 

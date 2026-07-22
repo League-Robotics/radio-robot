@@ -34,7 +34,7 @@
     "control.plan_lead": "113-004: Tier-2 boot-only (gen_boot_config.py's lead_compensation_for_config()); no live SET key (109-010)",
     "control.terminal_lead": "113-004: Tier-2 boot-only (gen_boot_config.py's lead_compensation_for_config()); no live SET key (109-010)",
     "control.actuation_lag": "113-004: Tier-2 boot-only (gen_boot_config.py's actuation_lag_for_config()); no live SET key (112-002)",
-    "control.distance_tol": "113-004: Tier-2 boot-only (gen_boot_config.py's distance_gains_for_config()); no live SET key (112-003) -- distance_kp is the live sibling, mapped to PlannerConfigPatch.distance_kp",
+    "control.distance_tol": "113-004: Tier-2 boot-only (gen_boot_config.py's distance_gains_for_config()); no live SET key (112-003) -- distance_kp used to be the live sibling (PlannerConfigPatch.distance_kp) until 115-003 deleted PlannerConfigPatch wholesale; see control.distance_kp's own entry below",
     "control.model_tau_lin": "113-004: Tier-2 boot-only (gen_boot_config.py's model_tau_for_config()); no live SET key (sprint 113 Design Rationale Decision 4)",
     "control.model_tau_ang": "113-004: Tier-2 boot-only (gen_boot_config.py's model_tau_for_config()); no live SET key (sprint 113 Design Rationale Decision 4)",
     "control.heading_dwell_tol_deg": "114-002: Tier-2 boot-only (gen_boot_config.py's heading_dwell_for_config()); no live SET key -- added to ControlConfig so calibration/sim_boot_config.py's RobotConfig->dict conversion stays lossless, mirrors control.heading_lead_bias's own reasoning",
@@ -43,7 +43,12 @@
     "control.a_decel": "114-002: Tier-2 boot-only (gen_boot_config.py's motion_limits_for_config()); no live SET key -- same reasoning as control.a_max above",
     "control.v_body_max": "114-002: Tier-2 boot-only (gen_boot_config.py's motion_limits_for_config()); no live SET key -- same reasoning as control.a_max above",
     "control.j_max": "114-002: Tier-2 boot-only (gen_boot_config.py's motion_limits_for_config()); no live SET key -- same reasoning as control.a_max above",
-    "control.yaw_jerk_max": "114-002: Tier-2 boot-only (gen_boot_config.py's motion_limits_for_config()); no live SET key -- same reasoning as control.a_max above"
+    "control.yaw_jerk_max": "114-002: Tier-2 boot-only (gen_boot_config.py's motion_limits_for_config()); no live SET key -- same reasoning as control.a_max above",
+    "control.min_speed": "115-003: was PlannerConfigPatch.min_speed (113-003), a live SET key, until gut-to-minimal-firmware S1 motion-stack excision deleted PlannerConfigPatch wholesale (App::Pilot, its own consumer, is gone too); no wire Patch field left to map to at all",
+    "control.heading_kp": "115-003: was PlannerConfigPatch.heading_kp (098-005), a live SET key, until gut-to-minimal-firmware S1 motion-stack excision deleted PlannerConfigPatch wholesale; no wire Patch field left to map to at all",
+    "control.heading_kd": "115-003: was PlannerConfigPatch.heading_kd (098-005), a live SET key, until gut-to-minimal-firmware S1 motion-stack excision deleted PlannerConfigPatch wholesale; no wire Patch field left to map to at all",
+    "control.distance_kp": "115-003: was PlannerConfigPatch.distance_kp (112-003), a live SET key, until gut-to-minimal-firmware S1 motion-stack excision deleted PlannerConfigPatch wholesale; no wire Patch field left to map to at all",
+    "control.arrive_dwell": "115-003: was PlannerConfigPatch.arrive_dwell (100-001), a live SET key, until gut-to-minimal-firmware S1 motion-stack excision deleted PlannerConfigPatch wholesale; no wire Patch field left to map to at all"
   },
   "patch-field-no-pydantic": {
     "DrivetrainConfigPatch.ekf_q_xy": "no host-side pydantic field yet; carried over from the pre-096 Config.h-era allowlist's ekfQxy entry ('register as tunable in a future sprint')",

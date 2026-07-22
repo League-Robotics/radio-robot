@@ -95,11 +95,8 @@ def _latest_otos_reading(loop) -> tuple[int, int, int] | None:
 
 def _find_ack(frames: list, corr_id: int):
     for frame in frames:
-        if not frame.acks:
-            continue
-        for ack in frame.acks:
-            if ack.corr_id == corr_id:
-                return ack
+        if frame.ack is not None and frame.ack.corr_id == corr_id:
+            return frame.ack
     return None
 
 

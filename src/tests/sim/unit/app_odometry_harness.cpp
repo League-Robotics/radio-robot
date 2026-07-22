@@ -266,7 +266,7 @@ void scenarioBaselineSeededFromLeafPositionAtConstruction() {
 // ===========================================================================
 
 void scenarioApplyOtosSamplePresentAndConnectedCopiesPose() {
-  beginScenario("applyOtosSample(): present+connected -- frame carries hasOtos/otosConnected/otos pose");
+  beginScenario("applyOtosSample(): present+connected -- frame carries otosPresent/otosConnected/otos pose");
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
@@ -283,11 +283,11 @@ void scenarioApplyOtosSamplePresentAndConnectedCopiesPose() {
   App::Telemetry::Frame frame;
   App::applyOtosSample(otos, /*now=*/20000, frame);
 
-  checkTrue(frame.hasOtos, "hasOtos mirrors present()");
+  checkTrue(frame.otosPresent, "otosPresent mirrors present()");
   checkTrue(frame.otosConnected, "otosConnected mirrors this tick's connected()");
   checkNear(frame.otos.x, 100.0f * kPosMmPerLsb, 1e-3f, "otos.x matches the scripted burst read, scaled");
   checkNear(frame.otos.y, 50.0f * kPosMmPerLsb, 1e-3f, "otos.y matches the scripted burst read, scaled");
-  checkNear(frame.otos.h, 1000.0f * kHdgRadPerLsb, 1e-4f, "otos.h matches the scripted burst read, scaled");
+  checkNear(frame.otos.heading, 1000.0f * kHdgRadPerLsb, 1e-4f, "otos.heading matches the scripted burst read, scaled");
 }
 
 void scenarioApplyOtosSampleBurstFailureHoldsStalePoseReportsDisconnected() {
@@ -313,7 +313,14 @@ void scenarioApplyOtosSampleBurstFailureHoldsStalePoseReportsDisconnected() {
   scriptPosVel(bus, 0, 0, 0, 0, 0, 0, /*status=*/-5);
   App::applyOtosSample(otos, /*now=*/20000, frame);
 
-  checkTrue(frame.hasOtos, "hasOtos stays true -- the chip is still detected");
+  // 115-005: otosPresent is now "OtosReading fresh THIS frame" (tighter than
+  // the old pre-115 hasOtos, which mirrored present() -- see
+  // applyOtosSample()'s own doc comment in odometry.h). A failed burst read
+  // means no fresh pose this frame, so otosPresent is false here even
+  // though the chip is still detected (present() stays true, unchecked by
+  // this scenario -- otosConnected below is the live per-tick signal that
+  // actually reflects this cycle's I2C failure).
+  checkFalse(frame.otosPresent, "otosPresent reflects THIS cycle's failed read -- no fresh pose this frame");
   checkFalse(frame.otosConnected, "otosConnected reflects THIS cycle's failed read");
   checkNear(frame.otos.x, expectedX, 1e-3f, "the stale pose is held, not clobbered by the failed read");
 }
@@ -336,11 +343,11 @@ void scenarioApplyOtosSampleNeverDetectedLeavesFrameUntouched() {
 
   App::applyOtosSample(otos, /*now=*/1000, frame);
 
-  checkFalse(frame.hasOtos, "hasOtos reflects present() == false");
+  checkFalse(frame.otosPresent, "otosPresent reflects present() == false");
   checkFalse(frame.otosConnected, "otosConnected reflects connected() == false");
   checkNear(frame.otos.x, 7.0f, 1e-6f, "otos.x left untouched when the chip was never detected");
   checkNear(frame.otos.y, 8.0f, 1e-6f, "otos.y left untouched");
-  checkNear(frame.otos.h, 9.0f, 1e-6f, "otos.h left untouched");
+  checkNear(frame.otos.heading, 9.0f, 1e-6f, "otos.heading left untouched");
   checkUintEq(bus.txnCount(kOtosAddr7), 2, "applyOtosSample() adds zero bus traffic -- Otos::tick() itself no-ops");
 }
 
@@ -376,7 +383,11 @@ void scenarioApplyOtosSampleRateLimitSkipStillReachesFrame() {
   checkUintEq(bus.txnCount(kOtosAddr7), txnAfterFirst,
               "a too-soon call issues zero additional bus traffic");
   checkUintEq(bus.errCount(kOtosAddr7), 0, "no script-mismatch error -- confirms no unexpected bus call was attempted");
-  checkTrue(frame.hasOtos, "hasOtos still true on a rate-limited cycle");
+  // 115-005: otosPresent is "fresh THIS frame" (see the burst-failure
+  // scenario's own comment above) -- a rate-limited (too-soon) call means
+  // no read happened THIS call, so no fresh pose this frame either, even
+  // though frame.otos still carries the last real reading below.
+  checkFalse(frame.otosPresent, "otosPresent is false on a rate-limited cycle -- no fresh pose read this call");
   checkTrue(frame.otosConnected, "otosConnected still reflects the last REAL read's health, not falsely cleared");
   checkNear(frame.otos.x, 100.0f * kPosMmPerLsb, 1e-3f, "otos pose still carries the last real reading on a rate-limited cycle");
 }

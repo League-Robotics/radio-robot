@@ -1,9 +1,12 @@
 """src/tests/sim/test_motor_primitive.py -- most-primitive open-loop motor check.
 
-Bypasses the Move/Ruckig trajectory planner entirely: uses ONLY the direct
-`twist` (turn the motors on at a velocity) and `stop` (turn them off) wire
-primitives -- `RobotLoop::handleTwist` calls `Drive::setTwist()` directly and
-flushes the Motion::Executor queue, so no trajectory planning is involved.
+Uses ONLY the direct `twist` (turn the motors on at a velocity) and `stop`
+(turn them off) wire primitives -- `RobotLoop::handleTwist` calls
+`Drive::setTwist()` directly, so no trajectory planning is involved. (115-002,
+gut-to-minimal-firmware S1 motion-stack excision: the Move/Ruckig trajectory
+planner and `Motion::Executor` this docstring used to describe bypassing are
+DELETED wholesale -- there is no MOVE command or executor queue left in S1's
+minimal firmware to bypass; TWIST is now the ONLY motion primitive.)
 
 Every simulated error source is explicitly ZEROED, so the OTOS is a perfect
 sensor. The test then verifies the foundation everything else stands on:

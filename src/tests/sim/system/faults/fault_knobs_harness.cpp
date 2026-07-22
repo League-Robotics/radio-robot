@@ -33,9 +33,9 @@
 #include <string>
 #include <vector>
 
+#include "app/telemetry.h"
 #include "bench_test_config.h"
 #include "messages/envelope.h"
-#include "messages/planner.h"
 #include "sim_harness.h"
 #include "wire_test_codec.h"
 
@@ -110,12 +110,12 @@ void scenarioMotorDisconnectFlipsConnLeftAndRecovers() {
   bool sawDisconnected = false;
   bool rightStayedConnectedThroughout = true;
   for (const auto& f : disconnectedFrames) {
-    if (!f.telemetry.conn_left) sawDisconnected = true;
-    if (!f.telemetry.conn_right) rightStayedConnectedThroughout = false;
+    if (!(f.telemetry.flags & App::kFlagConnLeft)) sawDisconnected = true;
+    if (!(f.telemetry.flags & App::kFlagConnRight)) rightStayedConnectedThroughout = false;
   }
-  checkTrue(sawDisconnected, "decoded telemetry shows conn_left=false while the knob is active");
+  checkTrue(sawDisconnected, "decoded telemetry shows kFlagConnLeft clear while the knob is active");
   checkTrue(rightStayedConnectedThroughout,
-            "conn_right stays true throughout -- the fault is per-motor, not bus-wide");
+            "kFlagConnRight stays set throughout -- the fault is per-motor, not bus-wide");
 
   sim.plant().setDisconnected(/*port=*/1, false);
   sim.step(5);  // recovery window
@@ -125,9 +125,9 @@ void scenarioMotorDisconnectFlipsConnLeftAndRecovers() {
 
   bool sawRecovered = false;
   for (const auto& f : recoveredFrames) {
-    if (f.telemetry.conn_left) sawRecovered = true;
+    if (f.telemetry.flags & App::kFlagConnLeft) sawRecovered = true;
   }
-  checkTrue(sawRecovered, "decoded telemetry shows conn_left=true again once the knob is cleared "
+  checkTrue(sawRecovered, "decoded telemetry shows kFlagConnLeft set again once the knob is cleared "
                           "(connected() is recomputed fresh every collectEncoder() call, never latched)");
 }
 
@@ -139,17 +139,17 @@ void scenarioMotorDisconnectFlipsConnLeftAndRecovers() {
 //    the plant's own internal velocity/position state keeps advancing
 //    underneath (WheelPlant::step(), called every SimHarness::step() cycle
 //    via SimPlant::tick(), runs regardless of the knob -- see
-//    wheel_plant.h/.cpp). Asserts kFaultWedgeLatch sets
+//    wheel_plant.h/.cpp). Asserts kFlagFaultWedgeLatch sets
 //    in decoded telemetry within kWedgeThreshold cycles, and -- the set/
 //    clear semantics robot_loop.cpp's own live
-//    `tlm_.setFault(kFaultWedgeLatch, motorL_.wedged() || motorR_.wedged())`
+//    `tlm_.setFault(kFlagFaultWedgeLatch, motorL_.wedged() || motorR_.wedged())`
 //    call re-evaluates fresh every cycle, never a one-shot latch at the wire
 //    level -- clears again once the knob is released and the reported
 //    position resumes advancing.
 // ===========================================================================
 
 void scenarioEncoderWedgeSetsFaultBitAndClearsOnRelease() {
-  beginScenario("encoder wedge: kFaultWedgeLatch sets while frozen, clears once released");
+  beginScenario("encoder wedge: kFlagFaultWedgeLatch sets while frozen, clears once released");
 
   TestSim::SimHarness sim;
   TestSupport::configureSimForBenchTest(sim);
@@ -169,9 +169,9 @@ void scenarioEncoderWedgeSetsFaultBitAndClearsOnRelease() {
 
   bool sawWedgeLatch = false;
   for (const auto& f : frozenFrames) {
-    if (f.telemetry.fault_bits & App::kFaultWedgeLatch) sawWedgeLatch = true;
+    if (f.telemetry.flags & App::kFlagFaultWedgeLatch) sawWedgeLatch = true;
   }
-  checkTrue(sawWedgeLatch, "kFaultWedgeLatch sets in decoded telemetry within the wedge threshold");
+  checkTrue(sawWedgeLatch, "kFlagFaultWedgeLatch sets in decoded telemetry within the wedge threshold");
 
   sim.plant().freezePosition(/*port=*/1, false);
   sim.step(kWedgeThreshold + 5);  // enough cycles for the changed reading to clear the latch
@@ -181,10 +181,10 @@ void scenarioEncoderWedgeSetsFaultBitAndClearsOnRelease() {
 
   bool sawClear = false;
   for (const auto& f : releasedFrames) {
-    if (!(f.telemetry.fault_bits & App::kFaultWedgeLatch)) sawClear = true;
+    if (!(f.telemetry.flags & App::kFlagFaultWedgeLatch)) sawClear = true;
   }
   checkTrue(sawClear,
-            "kFaultWedgeLatch clears again once the frozen reading resumes advancing "
+            "kFlagFaultWedgeLatch clears again once the frozen reading resumes advancing "
             "(robot_loop.cpp's own live, never-sticky re-evaluation)");
 }
 
@@ -222,12 +222,14 @@ void scenarioEncoderDropoutStaysSaneUnderModerateLoss() {
   bool sawStarvedVelocity = false;
   bool sawHealthyVelocity = false;
   for (const auto& f : frames) {
-    if (f.telemetry.fault_bits & App::kFaultWedgeLatch) sawWedgeLatch = true;
-    if (!f.telemetry.has_vel) continue;
-    if (std::fabs(f.telemetry.vel_left) < 50.0f) sawStarvedVelocity = true;
-    if (f.telemetry.vel_left > 300.0f) sawHealthyVelocity = true;
+    if (f.telemetry.flags & App::kFlagFaultWedgeLatch) sawWedgeLatch = true;
+    // EncoderReading is unconditionally present every frame (115-005 frame
+    // v2 -- no has_vel presence flag any more), so every frame's
+    // enc_left.velocity is real data, not a filtered subset.
+    if (std::fabs(f.telemetry.enc_left.velocity) < 50.0f) sawStarvedVelocity = true;
+    if (f.telemetry.enc_left.velocity > 300.0f) sawHealthyVelocity = true;
   }
-  checkTrue(!sawWedgeLatch, "no false kFaultWedgeLatch across sustained moderate dropout");
+  checkTrue(!sawWedgeLatch, "no false kFlagFaultWedgeLatch across sustained moderate dropout");
   checkTrue(!sawStarvedVelocity, "velLeft never starved to ~0 by the held/stale reads");
   checkTrue(sawHealthyVelocity, "velLeft still reaches/holds a healthy value despite the dropout");
 }

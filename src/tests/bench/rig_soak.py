@@ -14,10 +14,11 @@ encoder-wedge trigger, `.clasi/knowledge/encoder-wedge-boundary-latch.md`).
 Logs, over the run:
   - TLM drop rate (`protocol.tlm_drop_rate()`, uint16-wrap-safe `seq` gap
     accounting — same statistic `relay_telemetry_rate.py` reports).
-  - fault_bits/event_bits observed (`Telemetry.fault_bits`/`event_bits`) —
-    only a bit that turns on DURING the run (not already set in the very
-    first frame, e.g. the boot-time-one-shot `kFaultI2CSafetyNet`) counts as
-    a NEW fault and fails the run.
+  - fault/event bits observed (re-based from `Telemetry.flags`, 115-003
+    frame v2 — the pre-115 separate `fault_bits`/`event_bits` fields folded
+    into this one bit-string) — only a bit that turns on DURING the run (not
+    already set in the very first frame, e.g. the boot-time-one-shot
+    `kFlagFaultI2CSafetyNet`) counts as a NEW fault and fails the run.
   - encoder motion per commanded twist: at each reissue, checks whether the
     PRECEDING command (if it commanded non-trivial `v_x`/`omega`) produced a
     non-trivial encoder delta over the interval it was active — sanity-
@@ -83,16 +84,37 @@ MAX_DROP_RATE = 0.02          # 2% max TLM frame drop
 MIN_RESPONSIVE_RATE = 0.8      # 80% of commanded intervals must show encoder response
 
 _FAULT_BIT_NAMES = {
-    0: "kFaultI2CSafetyNet (boot-time one-shot)",
-    1: "kFaultWedgeLatch",
-    2: "kFaultI2CNak",
-    3: "kFaultCommsMalformed",
+    0: "kFlagFaultI2CSafetyNet (boot-time one-shot)",
+    1: "kFlagFaultWedgeLatch",
+    2: "kFlagFaultI2CNak",
+    3: "kFlagFaultCommsMalformed",
 }
 _EVENT_BIT_NAMES = {
     0: "deadman staleness expired",
     1: "boot-ready transition",
     2: "ConfigDelta applied",
 }
+
+# 115-003 (gut-to-minimal-firmware S1 motion-stack excision, frame v2):
+# Telemetry.fault_bits/event_bits (separate, self-indexed uint32 fields)
+# folded into the single Telemetry.flags bit-string -- TLMFrame.flags is now
+# the ONLY carrier (see protocol.py's own flags bit-layout comment). These
+# two tuples are the fault/event sub-bit POSITIONS within flags, in the SAME
+# order _FAULT_BIT_NAMES/_EVENT_BIT_NAMES above already index locally (0 =
+# kFlagFaultI2CSafetyNet, ...) -- re-basing flags onto a local 0-indexed int
+# keeps this file's own report format (and the two NAME tables above)
+# unchanged. kFlagFaultMoveTimeout (flags bit 15) is declared but unwired
+# this sprint (no MOVE command exists to time out) -- omitted here, not a
+# gap in this script.
+_FAULT_FLAG_BIT_POSITIONS = (6, 7, 8, 9)   # kFlagFaultI2CSafetyNet/WedgeLatch/I2CNak/CommsMalformed
+_EVENT_FLAG_BIT_POSITIONS = (10, 11, 12)   # kFlagEventDeadmanExpired/BootReady/ConfigApplied
+
+
+def _extract_local_bits(flags: int, flag_bit_positions: tuple[int, ...]) -> int:
+    """Re-base the sub-bits at `flag_bit_positions` within `flags` onto a
+    local, densely-packed 0-indexed int -- bit i of the result mirrors
+    `flags` bit `flag_bit_positions[i]`."""
+    return sum((1 << i) for i, bit in enumerate(flag_bit_positions) if flags & (1 << bit))
 
 
 def _decode_bits(bits: int, names: dict[int, str]) -> list[str]:
@@ -153,14 +175,14 @@ def soak(port: str, mode: str | None, duration: float) -> SoakResult:  # [s]
         for f in frames:
             if f.enc is not None:
                 last_enc = f.enc
-            if f.fault_bits is not None:
+            if f.flags is not None:
+                frame_fault_bits = _extract_local_bits(f.flags, _FAULT_FLAG_BIT_POSITIONS)
                 if baseline_fault_bits is None:
-                    baseline_fault_bits = f.fault_bits
-                fault_bits_ever |= f.fault_bits
-            if f.event_bits is not None:
-                event_bits_ever |= f.event_bits
-            for ack in (f.acks or ()):
-                pending_acks.pop(ack.corr_id, None)
+                    baseline_fault_bits = frame_fault_bits
+                fault_bits_ever |= frame_fault_bits
+                event_bits_ever |= _extract_local_bits(f.flags, _EVENT_FLAG_BIT_POSITIONS)
+            if f.ack is not None:
+                pending_acks.pop(f.ack.corr_id, None)
         secondary_samples += len(rig.read_secondary_tlm())
 
     try:

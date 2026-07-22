@@ -10,21 +10,24 @@ byte-for-byte, in both directions, for every oneof arm this schema declares.
 that breaks a test in this file is a BLOCKING regression -- fix the codec,
 do not xfail/skip a real disagreement with `google.protobuf`.**
 
-Rewritten this ticket against the pruned arm set -- every pre-103 arm
-(drive/segment/replace/pose_fix/otos/ping/echo/get/stream/id/hello/ver/
-help/plan_dump) is gone from the schema; this suite covers exactly what
-remains:
+Rewritten 115-009 (gut S1's own test-sweep/green-bar ticket) against the
+frame-v2 Telemetry schema (115-003, `telemetry-frame-tightening-amendment-
+to-gut-s1.md`) and the PLANNER-arm-deleted ConfigDelta (also 115-003) --
+CommandEnvelope's three live arms (twist/config/stop) are unchanged; this
+suite covers:
 
   A. host-encode (`pb2`) -> firmware-decode (``wire_differential_harness``,
      via `msg::wire::decode(CommandEnvelope&, ...)`) -> assert decoded
      fields match the original input. Exercised for CommandEnvelope's three
-     live arms: twist, config (all four ConfigDelta.patch oneof arms), stop.
+     live arms: twist, config (DRIVETRAIN/MOTOR/WATCHDOG/OTOS -- PLANNER
+     deleted wholesale, 115-003), stop.
   B. firmware-encode (harness, via `msg::wire::encode(const ReplyEnvelope&,
      ...)` / `msg::wire::encode(const TelemetrySecondary&, ...)`) ->
      host-decode (`pb2.ParseFromString`) -> assert decoded fields match.
-     Exercised for ReplyEnvelope's three live arms (ok, err, tlm -- the
-     depth-3 ack ring + fault_bits/event_bits included) and the NEW
-     standalone TelemetrySecondary codec (Decision 3).
+     Exercised for ReplyEnvelope's three live arms (ok, err, tlm -- now one
+     `flags` bit-string + a single ack slot + per-source timestamped
+     `EncoderReading`/`OtosReading` objects) and the standalone
+     TelemetrySecondary codec (Decision 3, unchanged by 115-003).
 
 A dedicated field-number-correspondence test additionally cross-checks the
 host `pb2` descriptors' field numbers against the exact numbers this
@@ -36,10 +39,11 @@ Boundary/range corpus: NONE of the arms reachable from this pruned schema
 carry a `(min)`/`(max)`/`(abs_max)` proto option any more -- `MotionSegment`
 (the pre-103 schema's only `(min)`/`(max)`/`(abs_max)`-validated fields) and
 `ConfigGet.target` (the only `(req)`-validated field) both left with their
-owning arms. The "REALITY CHECK" corpus below (unchanged from the pre-103
-schema -- `ConfigDelta`/config.proto are untouched by this ticket) still
-documents that `DrivetrainConfigPatch`/`PlannerConfigPatch`/
-`MotorConfigPatch`/`ConfigDelta.watchdog` carry no wire-level bound at all.
+owning arms. The "REALITY CHECK" corpus below still documents that
+`DrivetrainConfigPatch`/`MotorConfigPatch`/`OtosConfigPatch`/
+`ConfigDelta.watchdog` carry no wire-level bound at all (`PlannerConfigPatch`
+went with 115-003's deletion -- there is no boundary corpus left to run for
+it).
 """
 from __future__ import annotations
 
@@ -56,7 +60,7 @@ from _wire_diff_driver import (  # noqa: E402
     encode_telemetry_secondary,
     env_config_drivetrain,
     env_config_motor,
-    env_config_planner,
+    env_config_otos,
     env_config_watchdog,
     env_stop,
     env_twist,
@@ -65,7 +69,6 @@ from _wire_diff_driver import (  # noqa: E402
     parse_decode_line,
     pb_config,
     pb_envelope,
-    pb_planner,
     pb_telemetry,
 )
 
@@ -106,7 +109,10 @@ def test_field_numbers_match_pb2_descriptors():
     from. Cross-check pb2's own FieldDescriptors against the numbers this
     suite's env_*/encode_* helpers rely on -- catches a stale/out-of-sync
     regeneration on either side, not just an implicit round-trip mismatch."""
-    expected_cmd_numbers = {"config": 6, "stop": 13, "twist": 19, "move": 20}  # 109-003
+    # "move" (109-003) is DELETED (115-003, gut S1 motion-stack excision) --
+    # field 20 is `reserved`, not an active oneof arm any more (see
+    # envelope.proto's own CommandEnvelope header comment).
+    expected_cmd_numbers = {"config": 6, "stop": 13, "twist": 19}
     actual_cmd_numbers = {
         f.name: f.number for f in pb_envelope.CommandEnvelope.DESCRIPTOR.oneofs_by_name["cmd"].fields
     }
@@ -122,17 +128,21 @@ def test_field_numbers_match_pb2_descriptors():
     actual_twist_numbers = {f.name: f.number for f in pb_envelope.Twist.DESCRIPTOR.fields}
     assert actual_twist_numbers == expected_twist_numbers
 
+    # ERR_NOT_CONFIGURED (8, 114-001): composition root refused MOVE/TWIST --
+    # config-completeness gate not yet satisfied.
     expected_err_codes = {
         "ERR_NONE": 0, "ERR_UNKNOWN": 1, "ERR_BADARG": 2, "ERR_RANGE": 3, "ERR_FULL": 4, "ERR_DECODE": 5,
-        "ERR_UNIMPLEMENTED": 6, "ERR_OVERSIZE": 7,
+        "ERR_UNIMPLEMENTED": 6, "ERR_OVERSIZE": 7, "ERR_NOT_CONFIGURED": 8,
     }
     actual_err_codes = {
         name: v.number for name, v in pb_envelope.DESCRIPTOR.enum_types_by_name["ErrCode"].values_by_name.items()
     }
     assert actual_err_codes == expected_err_codes
 
+    # "planner" (field 3, PlannerConfigPatch) DELETED (115-003) -- field 3 is
+    # `reserved`, not an active oneof arm; "otos" (109-004) is unaffected.
     expected_config_delta_patch = {
-        "drivetrain": 1, "motor": 2, "planner": 3, "watchdog": 4, "otos": 5,  # 109-004
+        "drivetrain": 1, "motor": 2, "watchdog": 4, "otos": 5,
     }
     actual_config_delta_patch = {
         f.name: f.number for f in pb_envelope.ConfigDelta.DESCRIPTOR.oneofs_by_name["patch"].fields
@@ -141,40 +151,29 @@ def test_field_numbers_match_pb2_descriptors():
 
 
 def test_field_numbers_match_pb2_descriptors_telemetry():
-    """103-001's own extension of the field-number-correspondence gate
-    above, for Telemetry's pruned/renumbered field set (ack ring + fault/
-    event bits, acc_*/glitch_*/ts_*/cmd_vel_* moved out to
-    TelemetrySecondary) plus the config Patch types (unchanged) -- every
-    number transcribed by hand into wire_differential_harness.cpp's
+    """115-009's own extension of the field-number-correspondence gate
+    above, for Telemetry's frame-v2 field set (115-003: one `flags`
+    bit-string, one ack slot, per-source timestamped `EncoderReading`/
+    `OtosReading` objects) plus the config Patch types -- every number
+    transcribed by hand into wire_differential_harness.cpp's
     encode_telemetry/encode_telemetry_secondary/decode-CONFIG-case, cross-
     checked here against the SAME protos/*.proto-generated pb2 descriptors."""
     expected_telemetry_numbers = {
-        "acks": 1, "now": 2, "mode": 3, "seq": 4, "has_enc": 5, "enc_left": 6, "enc_right": 7, "has_vel": 8,
-        "vel_left": 9, "vel_right": 10, "has_pose": 11, "pose": 12, "has_otos": 13, "otos": 14,
-        "otos_connected": 15, "has_twist": 16, "twist": 17, "active": 18, "conn_left": 19, "conn_right": 20,
-        "fault_bits": 21, "event_bits": 22,
-        # 109-003: Motion::Executor visibility.
-        "queue_depth": 23, "active_id": 24, "exec_state": 25,
-        # 109-005: App::HeadingSource visibility.
-        "heading_source": 26,
+        "now": 1, "seq": 2, "mode": 3, "flags": 4, "ack_corr": 5, "ack_err": 6,
+        "enc_left": 7, "enc_right": 8, "otos": 9, "pose": 10, "twist": 11, "line": 12, "color": 13,
     }
     actual_telemetry_numbers = {f.name: f.number for f in pb_telemetry.Telemetry.DESCRIPTOR.fields}
     assert actual_telemetry_numbers == expected_telemetry_numbers
 
-    expected_ack_entry_numbers = {"corr_id": 1, "status": 2, "err_code": 3}
-    actual_ack_entry_numbers = {f.name: f.number for f in pb_telemetry.AckEntry.DESCRIPTOR.fields}
-    assert actual_ack_entry_numbers == expected_ack_entry_numbers
+    expected_encoder_reading_numbers = {"position": 1, "velocity": 2, "time": 3}
+    actual_encoder_reading_numbers = {f.name: f.number for f in pb_telemetry.EncoderReading.DESCRIPTOR.fields}
+    assert actual_encoder_reading_numbers == expected_encoder_reading_numbers
 
-    expected_ack_status = {
-        "ACK_STATUS_OK": 0, "ACK_STATUS_ERR": 1,
-        # 109-003: Motion::Executor completion outcomes, riding the same ack ring.
-        "ACK_STATUS_DONE": 2, "ACK_STATUS_TRIVIAL": 3, "ACK_STATUS_SUPERSEDED": 4,
-        "ACK_STATUS_FLUSHED": 5, "ACK_STATUS_TIMEOUT": 6, "ACK_STATUS_SOLVE_FAIL": 7,
+    expected_otos_reading_numbers = {
+        "x": 1, "y": 2, "heading": 3, "v_x": 4, "v_y": 5, "omega": 6, "time": 7,
     }
-    actual_ack_status = {
-        n: v.number for n, v in pb_telemetry.DESCRIPTOR.enum_types_by_name["AckStatus"].values_by_name.items()
-    }
-    assert actual_ack_status == expected_ack_status
+    actual_otos_reading_numbers = {f.name: f.number for f in pb_telemetry.OtosReading.DESCRIPTOR.fields}
+    assert actual_otos_reading_numbers == expected_otos_reading_numbers
 
     expected_telemetry_secondary_numbers = {
         "now": 1, "has_cmd_vel": 2, "cmd_vel_left": 3, "cmd_vel_right": 4, "acc_left": 5, "acc_right": 6,
@@ -194,26 +193,14 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
     actual_motor_patch = {f.name: f.number for f in pb_config.MotorConfigPatch.DESCRIPTOR.fields}
     assert actual_motor_patch == expected_motor_patch
 
-    # 16 fields (v_wheel_max..arrive_vel_tol, numbers 4-19) were removed as
-    # dead wire fields in 111-004 (step 7 of the terminal-blips-close-the-
-    # loop fix plan) and reserved -- see config.proto's own
-    # PlannerConfigPatch header comment. arrive_dwell (20) is the one field
-    # from that original span that IS live and was kept. distance_kp (21,
-    # 112-003) mirrors heading_kp's own live-tunable shape -- this pin had
-    # gone stale (never updated when that field was added); re-synced here
-    # (113-007) against the CURRENT generated descriptor (config.proto's own
-    # PlannerConfigPatch message is the source of truth -- read directly, not
-    # guessed). Note: model_tau_lin/model_tau_ang (113-001) are NOT expected
-    # here -- sprint 113 Design Rationale Decision 4 deliberately keeps them
-    # OFF the live PlannerConfigPatch wire plane (boot-only/Tier-2 fields on
-    # msg::PlannerConfig itself, a different message); confirmed absent from
-    # PlannerConfigPatch's own descriptor.
-    expected_planner_patch = {
-        "min_speed": 1, "heading_kp": 2, "heading_kd": 3, "arrive_dwell": 20,
-        "distance_kp": 21,
+    # PlannerConfigPatch DELETED wholesale (115-003, gut S1 motion-stack
+    # excision) -- there is no descriptor left to pin. OtosConfigPatch
+    # (109-004) is unaffected.
+    expected_otos_patch = {
+        "linear_scale": 1, "angular_scale": 2, "offset_x": 3, "offset_y": 4, "offset_yaw": 5, "init": 6,
     }
-    actual_planner_patch = {f.name: f.number for f in pb_config.PlannerConfigPatch.DESCRIPTOR.fields}
-    assert actual_planner_patch == expected_planner_patch
+    actual_otos_patch = {f.name: f.number for f in pb_config.OtosConfigPatch.DESCRIPTOR.fields}
+    assert actual_otos_patch == expected_otos_patch
 
     expected_bound_motor_side = {"LEFT": 0, "RIGHT": 1}
     actual_bound_motor_side = {
@@ -221,9 +208,12 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
     }
     assert actual_bound_motor_side == expected_bound_motor_side
 
+    # DriveMode relocated INTO telemetry.proto from the deleted planner.proto
+    # (115-003 Decision 4) -- read from pb_telemetry now, not pb_planner
+    # (which no longer exists).
     expected_drive_mode = {"IDLE": 0, "STREAMING": 1, "TIMED": 2, "DISTANCE": 3, "GO_TO": 4, "VELOCITY": 5}
     actual_drive_mode = {
-        n: v.number for n, v in pb_planner.DESCRIPTOR.enum_types_by_name["DriveMode"].values_by_name.items()
+        n: v.number for n, v in pb_telemetry.DESCRIPTOR.enum_types_by_name["DriveMode"].values_by_name.items()
     }
     assert actual_drive_mode == expected_drive_mode
 
@@ -312,17 +302,31 @@ def test_direction_a_config_motor_only_travel_calib(harness):
         assert fields[f"{key}_has"] == "0"
 
 
-def test_direction_a_config_planner(harness):
-    """PlannerConfigPatch's all 4 remaining fields (111-004 removed the
-    other 16 as dead) round-trip host-encode -> firmware-decode."""
-    raw = env_config_planner(24, min_speed=42.0, heading_kp=6.0, heading_kd=0.25, arrive_dwell=0.2)
+def test_direction_a_config_otos(harness):
+    """OtosConfigPatch's 5 Opt<float> fields (linear_scale/angular_scale/
+    offset_x/offset_y/offset_yaw) round-trip host-encode -> firmware-decode,
+    plus the plain (non-optional) `init` trigger bool."""
+    raw = env_config_otos(24, linear_scale=1.01, angular_scale=0.99, offset_x=12.5, offset_y=-3.5,
+                           offset_yaw=0.125, init=True)
     fields = _assert_ok(harness, raw)
     assert fields["cmd_kind"] == "CONFIG"
-    assert fields["patch_kind"] == "PLANNER"
-    for key, expected in [("min_speed", 42.0), ("heading_kp", 6.0), ("heading_kd", 0.25),
-                           ("arrive_dwell", 0.2)]:
+    assert fields["patch_kind"] == "OTOS"
+    for key, expected in [("linear_scale", 1.01), ("angular_scale", 0.99), ("offset_x", 12.5),
+                           ("offset_y", -3.5), ("offset_yaw", 0.125)]:
         assert fields[f"{key}_has"] == "1"
         assert float_eq(fields[key], expected)
+    assert fields["init"] == "1"
+
+
+def test_direction_a_config_otos_init_false_and_no_optional_fields(harness):
+    """`init` is a PLAIN bool (proto3 implicit presence, not Opt<float>) --
+    it round-trips even when every optional calibration field is absent."""
+    raw = env_config_otos(29, init=False)
+    fields = _assert_ok(harness, raw)
+    assert fields["patch_kind"] == "OTOS"
+    assert fields["init"] == "0"
+    for key in ("linear_scale", "angular_scale", "offset_x", "offset_y", "offset_yaw"):
+        assert fields[f"{key}_has"] == "0"
 
 
 @pytest.mark.parametrize("watchdog", [0, 1, 4242, 4294967295])
@@ -380,22 +384,47 @@ def test_direction_b_error(harness, code_name, field_num):
 
 # ---------------------------------------------------------------------------
 # Telemetry -- REPLY-only (never appears in CommandEnvelope.cmd): Direction B
-# ONLY. Now carries the depth-3 ack ring + fault_bits/event_bits; the pre-103
-# bench-diagnostic fields (acc_*/glitch_*/ts_*/cmd_vel_*) moved OUT to
-# TelemetrySecondary (covered separately below).
+# ONLY. Frame v2 (115-003): one `flags` bit-string (status+fault+event), a
+# single `ack_corr`/`ack_err` slot (the depth-3 ack ring is gone), two
+# per-source-timestamped `EncoderReading`s, one `OtosReading`, and the
+# packed `line`/`color` words. Pre-103 bench-diagnostic fields (acc_*/
+# glitch_*/ts_*/cmd_vel_*) stay OUT, in TelemetrySecondary (covered
+# separately below).
 # ---------------------------------------------------------------------------
 
-_TELEMETRY_FULL_SHAPE = dict(
-    now=123456, mode=2, seq=99, has_enc=True, enc_left=100.5, enc_right=-200.25, has_vel=True, vel_left=-50.0,
-    vel_right=60.5, has_pose=True, pose_x=1.5, pose_y=-2.5, pose_h=3.25, has_otos=True, otos_x=4.5, otos_y=5.5,
-    otos_h=6.5, otos_connected=True, has_twist=True, twist_vx=-100.5, twist_vy=0.5, twist_omega=1.75, active=True,
-    conn_left=True, conn_right=False, fault_bits=0xDEADBEEF, event_bits=12345,
-)
+# flags bit positions -- mirrors telemetry.proto's own Telemetry.flags
+# comment table exactly (bits 16+ reserved). Grouped by the amendment
+# issue's own three-group taxonomy (status / fault / event) so
+# test_direction_b_telemetry_flags_* below can exercise at least one bit
+# from each group individually, plus a combined value spanning all three.
+_FLAG_OTOS_PRESENT = 1 << 0        # status
+_FLAG_OTOS_CONNECTED = 1 << 1      # status
+_FLAG_ACTIVE = 1 << 2              # status
+_FLAG_CONN_LEFT = 1 << 3           # status
+_FLAG_CONN_RIGHT = 1 << 4          # status
+_FLAG_ACK_FRESH = 1 << 5           # status
+_FLAG_FAULT_I2C_CLEARANCE = 1 << 6   # fault
+_FLAG_FAULT_WEDGE_LATCH = 1 << 7     # fault
+_FLAG_FAULT_I2C_NAK_TIMEOUT = 1 << 8  # fault
+_FLAG_FAULT_MALFORMED_FRAME = 1 << 9  # fault
+_FLAG_EVENT_DEADMAN_EXPIRED = 1 << 10  # event
+_FLAG_EVENT_BOOT_READY = 1 << 11       # event
+_FLAG_EVENT_CONFIG_APPLIED = 1 << 12   # event
+_FLAG_LINE_PRESENT = 1 << 13       # status
+_FLAG_COLOR_PRESENT = 1 << 14      # status
+_FLAG_FAULT_MOVE_TIMEOUT = 1 << 15   # fault
 
-_TELEMETRY_FULL_ACKS = (
-    (101, pb_telemetry.ACK_STATUS_OK, 0),
-    (102, pb_telemetry.ACK_STATUS_ERR, 3),
-    (103, pb_telemetry.ACK_STATUS_OK, 0),
+_TELEMETRY_FULL_SHAPE = dict(
+    now=123456, mode=2, seq=99,
+    flags=(_FLAG_OTOS_PRESENT | _FLAG_ACTIVE | _FLAG_CONN_LEFT | _FLAG_ACK_FRESH | _FLAG_FAULT_WEDGE_LATCH
+           | _FLAG_EVENT_BOOT_READY | _FLAG_LINE_PRESENT | _FLAG_COLOR_PRESENT),
+    ack_corr=101, ack_err=0,
+    enc_left_position=100.5, enc_left_velocity=-50.0, enc_left_time=123440,
+    enc_right_position=-200.25, enc_right_velocity=60.5, enc_right_time=123440,
+    otos_x=4.5, otos_y=5.5, otos_heading=6.5, otos_v_x=-100.5, otos_v_y=0.5, otos_omega=1.75, otos_time=123400,
+    pose_x=1.5, pose_y=-2.5, pose_h=3.25,
+    twist_v_x=-100.5, twist_v_y=0.5, twist_omega=1.75,
+    line=0x04030201, color=0x0A0B0C0D,
 )
 
 
@@ -403,61 +432,44 @@ def _assert_telemetry_matches_shape(tlm, shape: dict) -> None:
     assert tlm.now == shape["now"]
     assert tlm.mode == shape["mode"]
     assert tlm.seq == shape["seq"]
-    assert tlm.has_enc == shape["has_enc"]
-    assert tlm.enc_left == f32(shape["enc_left"])
-    assert tlm.enc_right == f32(shape["enc_right"])
-    assert tlm.has_vel == shape["has_vel"]
-    assert tlm.vel_left == f32(shape["vel_left"])
-    assert tlm.vel_right == f32(shape["vel_right"])
-    assert tlm.has_pose == shape["has_pose"]
+    assert tlm.flags == shape["flags"]
+    assert tlm.ack_corr == shape["ack_corr"]
+    assert tlm.ack_err == shape["ack_err"]
+    assert tlm.enc_left.position == f32(shape["enc_left_position"])
+    assert tlm.enc_left.velocity == f32(shape["enc_left_velocity"])
+    assert tlm.enc_left.time == shape["enc_left_time"]
+    assert tlm.enc_right.position == f32(shape["enc_right_position"])
+    assert tlm.enc_right.velocity == f32(shape["enc_right_velocity"])
+    assert tlm.enc_right.time == shape["enc_right_time"]
+    assert tlm.otos.x == f32(shape["otos_x"])
+    assert tlm.otos.y == f32(shape["otos_y"])
+    assert tlm.otos.heading == f32(shape["otos_heading"])
+    assert tlm.otos.v_x == f32(shape["otos_v_x"])
+    assert tlm.otos.v_y == f32(shape["otos_v_y"])
+    assert tlm.otos.omega == f32(shape["otos_omega"])
+    assert tlm.otos.time == shape["otos_time"]
     assert tlm.pose.x == f32(shape["pose_x"])
     assert tlm.pose.y == f32(shape["pose_y"])
     assert tlm.pose.h == f32(shape["pose_h"])
-    assert tlm.has_otos == shape["has_otos"]
-    assert tlm.otos.x == f32(shape["otos_x"])
-    assert tlm.otos.y == f32(shape["otos_y"])
-    assert tlm.otos.h == f32(shape["otos_h"])
-    assert tlm.otos_connected == shape["otos_connected"]
-    assert tlm.has_twist == shape["has_twist"]
-    assert tlm.twist.v_x == f32(shape["twist_vx"])
-    assert tlm.twist.v_y == f32(shape["twist_vy"])
+    assert tlm.twist.v_x == f32(shape["twist_v_x"])
+    assert tlm.twist.v_y == f32(shape["twist_v_y"])
     assert tlm.twist.omega == f32(shape["twist_omega"])
-    assert tlm.active == shape["active"]
-    assert tlm.conn_left == shape["conn_left"]
-    assert tlm.conn_right == shape["conn_right"]
-    assert tlm.fault_bits == shape["fault_bits"]
-    assert tlm.event_bits == shape["event_bits"]
+    assert tlm.line == shape["line"]
+    assert tlm.color == shape["color"]
 
 
 def test_direction_b_telemetry_full_shape(harness):
-    """Every core Telemetry field, all `has_*` flags true, plus a fully
-    populated depth-3 ack ring and nonzero fault/event bits."""
-    raw = encode_telemetry(harness, 30, acks=_TELEMETRY_FULL_ACKS, **_TELEMETRY_FULL_SHAPE)
+    """Every core Telemetry field, INCLUDING the two `EncoderReading`s and
+    the `OtosReading` (each carrying its own sample/burst `time`, per the
+    amendment issue's "per-source reading objects, timestamped" directive)
+    and a `flags` value spanning all three bit groups (status/fault/event --
+    see `_TELEMETRY_FULL_SHAPE`'s own construction above)."""
+    raw = encode_telemetry(harness, 30, **_TELEMETRY_FULL_SHAPE)
     assert raw is not None, "encode_telemetry returned ZERO for a well-under-budget Telemetry reply"
     reply = pb_envelope.ReplyEnvelope.FromString(raw)
     assert reply.corr_id == 30
     assert reply.WhichOneof("body") == "tlm"
     _assert_telemetry_matches_shape(reply.tlm, _TELEMETRY_FULL_SHAPE)
-    assert len(reply.tlm.acks) == 3
-    for i, (corr_id, status, err_code) in enumerate(_TELEMETRY_FULL_ACKS):
-        assert reply.tlm.acks[i].corr_id == corr_id
-        assert reply.tlm.acks[i].status == status
-        assert reply.tlm.acks[i].err_code == err_code
-
-
-def test_direction_b_telemetry_all_has_flags_false(harness):
-    """Every has_* flag at once, proving `has_*=0` is encoded/decoded
-    faithfully too, not just the all-present shape above -- values behind a
-    false has_* flag still round-trip (proto3 has no way to omit a nested
-    message's own zero-valued scalar sub-fields once the message itself is
-    present on the wire; `has_*` is this schema's OWN presence signal, not
-    proto3 implicit presence)."""
-    shape = dict(_TELEMETRY_FULL_SHAPE)
-    for key in ("has_enc", "has_vel", "has_pose", "has_otos", "has_twist"):
-        shape[key] = False
-    raw = encode_telemetry(harness, 31, acks=_TELEMETRY_FULL_ACKS, **shape)
-    reply = pb_envelope.ReplyEnvelope.FromString(raw)
-    _assert_telemetry_matches_shape(reply.tlm, shape)
 
 
 @pytest.mark.parametrize("mode_value,mode_name", [(0, "IDLE"), (1, "STREAMING"), (2, "TIMED"), (3, "DISTANCE"),
@@ -465,7 +477,8 @@ def test_direction_b_telemetry_all_has_flags_false(harness):
 def test_direction_b_telemetry_every_drive_mode(harness, mode_value, mode_name):
     raw = encode_telemetry(harness, 32, mode=mode_value)
     reply = pb_envelope.ReplyEnvelope.FromString(raw)
-    assert reply.tlm.mode == pb_planner.DESCRIPTOR.enum_types_by_name["DriveMode"].values_by_name[mode_name].number
+    # DriveMode relocated into telemetry.proto (115-003 Decision 4).
+    assert reply.tlm.mode == pb_telemetry.DESCRIPTOR.enum_types_by_name["DriveMode"].values_by_name[mode_name].number
 
 
 def test_direction_b_telemetry_all_zero_defaults(harness):
@@ -473,15 +486,15 @@ def test_direction_b_telemetry_all_zero_defaults(harness):
     zero value.
 
     FINDING (not a bug -- documented here so it isn't re-discovered as one):
-    `pose`/`otos`/`twist` are plain (non-oneof, non-`optional`) EMBEDDED
-    MESSAGE fields (`FieldKind::kMessage` in wire.cpp's generated table) --
-    `encodeInto()`'s `kMessage` case emits them UNCONDITIONALLY, with no
-    zero-value skip, unlike every SCALAR field. So a from-scratch
-    `pb_telemetry.Telemetry()` (which never touches `.pose`/`.otos`/
-    `.twist` and so never marks them present) is NOT byte-identical to this
-    round-trip -- the firmware always sends `pose {}`/`otos {}`/`twist {}`
-    as PRESENT (possibly all-zero) submessages, regardless of `has_pose`/
-    `has_otos`/`has_twist`. Compared field-by-field via
+    `enc_left`/`enc_right`/`otos`/`pose`/`twist` are plain (non-oneof,
+    non-`optional`) EMBEDDED MESSAGE fields (`FieldKind::kMessage` in
+    wire.cpp's generated table) -- `encodeInto()`'s `kMessage` case emits
+    them UNCONDITIONALLY, with no zero-value skip, unlike every SCALAR
+    field. So a from-scratch `pb_telemetry.Telemetry()` (which never
+    touches `.otos`/`.pose`/`.twist` and so never marks them present) is
+    NOT byte-identical to this round-trip -- the firmware always sends
+    `enc_left {}`/`otos {}`/`pose {}`/`twist {}` as PRESENT (possibly
+    all-zero) submessages. Compared field-by-field via
     `_assert_telemetry_matches_shape()` (which does not care about
     presence, only value) rather than whole-message `==` against a
     from-scratch default, which WOULD fail on this presence difference
@@ -490,15 +503,102 @@ def test_direction_b_telemetry_all_zero_defaults(harness):
     reply = pb_envelope.ReplyEnvelope.FromString(raw)
     assert reply.corr_id == 33
     assert reply.WhichOneof("body") == "tlm"
-    zero_shape = {key: (False if key.startswith("has_") or key in ("active", "conn_left", "conn_right",
-                                                                     "otos_connected") else 0)
-                  for key in _TELEMETRY_FULL_SHAPE}
+    zero_shape = {key: 0 for key in _TELEMETRY_FULL_SHAPE}
     _assert_telemetry_matches_shape(reply.tlm, zero_shape)
-    assert len(reply.tlm.acks) == 3
-    for entry in reply.tlm.acks:
-        assert entry.corr_id == 0
-        assert entry.status == pb_telemetry.ACK_STATUS_OK
-        assert entry.err_code == 0
+
+
+# ---------------------------------------------------------------------------
+# flags semantics -- one bit from EACH of the three groups (status/fault/
+# event) the amendment issue's own bit-table taxonomy declares, exercised
+# individually (proves no cross-bit corruption/aliasing in the codec's
+# uint32 handling) plus the full 16-bit span combined.
+# ---------------------------------------------------------------------------
+
+
+_FLAG_SINGLE_BIT_CASES = [
+    (_FLAG_OTOS_PRESENT, "status:otos_present"),
+    (_FLAG_ACTIVE, "status:active"),
+    (_FLAG_CONN_RIGHT, "status:conn_right"),
+    (_FLAG_ACK_FRESH, "status:ack_fresh"),
+    (_FLAG_LINE_PRESENT, "status:line_present"),
+    (_FLAG_FAULT_I2C_CLEARANCE, "fault:i2c_clearance"),
+    (_FLAG_FAULT_WEDGE_LATCH, "fault:wedge_latch"),
+    (_FLAG_FAULT_I2C_NAK_TIMEOUT, "fault:i2c_nak_timeout"),
+    (_FLAG_FAULT_MOVE_TIMEOUT, "fault:move_timeout"),
+    (_FLAG_EVENT_DEADMAN_EXPIRED, "event:deadman_expired"),
+    (_FLAG_EVENT_BOOT_READY, "event:boot_ready"),
+    (_FLAG_EVENT_CONFIG_APPLIED, "event:config_applied"),
+]
+
+
+@pytest.mark.parametrize("bit,name", _FLAG_SINGLE_BIT_CASES, ids=[c[1] for c in _FLAG_SINGLE_BIT_CASES])
+def test_direction_b_telemetry_flags_single_bit_round_trips(harness, bit, name):
+    """Each individual status/fault/event bit round-trips in isolation --
+    no other bit in the 16-bit documented span flips."""
+    raw = encode_telemetry(harness, 40, flags=bit)
+    reply = pb_envelope.ReplyEnvelope.FromString(raw)
+    assert reply.tlm.flags == bit, f"{name}: expected ONLY bit {bit:#06x} set, got {reply.tlm.flags:#06x}"
+
+
+def test_direction_b_telemetry_flags_all_groups_combined_round_trip(harness):
+    """All 16 documented bits set at once -- status, fault, AND event groups
+    share one uint32 with no aliasing between them."""
+    all_bits = (
+        _FLAG_OTOS_PRESENT | _FLAG_OTOS_CONNECTED | _FLAG_ACTIVE | _FLAG_CONN_LEFT | _FLAG_CONN_RIGHT
+        | _FLAG_ACK_FRESH | _FLAG_FAULT_I2C_CLEARANCE | _FLAG_FAULT_WEDGE_LATCH | _FLAG_FAULT_I2C_NAK_TIMEOUT
+        | _FLAG_FAULT_MALFORMED_FRAME | _FLAG_EVENT_DEADMAN_EXPIRED | _FLAG_EVENT_BOOT_READY
+        | _FLAG_EVENT_CONFIG_APPLIED | _FLAG_LINE_PRESENT | _FLAG_COLOR_PRESENT | _FLAG_FAULT_MOVE_TIMEOUT
+    )
+    assert all_bits == 0xFFFF, "the 16 named bits above must cover exactly bits 0-15"
+    raw = encode_telemetry(harness, 41, flags=all_bits)
+    reply = pb_envelope.ReplyEnvelope.FromString(raw)
+    assert reply.tlm.flags == all_bits
+
+
+# ---------------------------------------------------------------------------
+# Reading `time` stamps -- monotonic across frames, and consistent with the
+# frame's own `now` (readings are always sampled at-or-before the frame that
+# reports them; the amendment issue's own Verification requirement).
+# ---------------------------------------------------------------------------
+
+
+def test_direction_b_telemetry_reading_times_consistent_with_frame_now(harness):
+    """Every per-source reading's `time` is <= the frame's own `now` (a
+    reading is always collected at-or-before the frame that carries it is
+    assembled) and round-trips exactly -- no truncation/rounding through
+    the wire for a `now`-adjacent uint32 timestamp."""
+    now = 500_000
+    raw = encode_telemetry(
+        harness, 42, now=now,
+        enc_left_time=now - 20, enc_right_time=now - 20, otos_time=now - 5,
+    )
+    reply = pb_envelope.ReplyEnvelope.FromString(raw)
+    assert reply.tlm.now == now
+    assert reply.tlm.enc_left.time == now - 20 <= reply.tlm.now
+    assert reply.tlm.enc_right.time == now - 20 <= reply.tlm.now
+    assert reply.tlm.otos.time == now - 5 <= reply.tlm.now
+
+
+def test_direction_b_telemetry_reading_times_monotonic_across_frames(harness):
+    """A sequence of frames with strictly increasing `now`/reading times
+    round-trips in the SAME strictly-increasing order -- the wire codec
+    introduces no reordering or clamping of consecutive timestamps."""
+    base = 1_000_000
+    frames = []
+    for i in range(5):
+        now = base + i * 20
+        raw = encode_telemetry(
+            harness, 43 + i, now=now,
+            enc_left_time=now, enc_right_time=now, otos_time=now,
+        )
+        frames.append(pb_envelope.ReplyEnvelope.FromString(raw).tlm)
+
+    nows = [f.now for f in frames]
+    enc_left_times = [f.enc_left.time for f in frames]
+    otos_times = [f.otos.time for f in frames]
+    assert nows == sorted(nows) and len(set(nows)) == len(nows)
+    assert enc_left_times == nows
+    assert otos_times == nows
 
 
 # ---------------------------------------------------------------------------
@@ -563,13 +663,15 @@ def test_direction_b_telemetry_secondary_all_other_fields_zero_default(harness):
 # REALITY CHECK (documented, not silently patched -- config.proto's own file
 # header, "Validation note" section): confirmed directly against wire.cpp's
 # generated `kFields_DrivetrainConfigPatch[]`/`kFields_MotorConfigPatch[]`/
-# `kFields_PlannerConfigPatch[]`/`kFields_ConfigDelta[]` tables, every one of
+# `kFields_OtosConfigPatch[]`/`kFields_ConfigDelta[]` tables, every one of
 # which has `flags = 0` (no kHasMin/kHasMax/kHasAbsMax bit set) for these
 # fields -- THE WIRE CODEC ACCEPTS ANY float/uint32 value for tw/rotSlip/
-# ekf*/minSpeed/sTimeout over the binary plane. This is a pre-existing,
-# already-flagged gap (config.proto's own comment), not something this
-# ticket's prune changed -- verified again here since this file's schema
-# assumptions were re-derived from scratch this ticket.
+# ekf*/linear_scale/angular_scale/sTimeout over the binary plane. This is a
+# pre-existing, already-flagged gap (config.proto's own comment), not
+# something this ticket's prune changed -- verified again here since this
+# file's schema assumptions were re-derived from scratch this ticket.
+# `PlannerConfigPatch` (min_speed's own former owner) is DELETED wholesale
+# (115-003) -- there is no boundary corpus left to run for it.
 # ===========================================================================
 
 _CONFIG_INVARIANT_BOUNDARY_CASES = [
@@ -599,12 +701,12 @@ def test_boundary_config_drivetrain_no_wire_level_enforcement(harness, case_id, 
         assert float_eq(fields[key], expected)
 
 
-@pytest.mark.parametrize("min_speed", [-1.0e9, -1.0, 0.0, 1.0])
-def test_boundary_config_planner_min_speed_no_wire_level_enforcement(harness, min_speed):
-    raw = env_config_planner(51, min_speed=min_speed)
+@pytest.mark.parametrize("linear_scale", [-1.0e9, -1.0, 0.0, 1.0])
+def test_boundary_config_otos_linear_scale_no_wire_level_enforcement(harness, linear_scale):
+    raw = env_config_otos(51, linear_scale=linear_scale)
     fields = _assert_ok(harness, raw)
-    assert fields["patch_kind"] == "PLANNER"
-    assert float_eq(fields["min_speed"], min_speed)
+    assert fields["patch_kind"] == "OTOS"
+    assert float_eq(fields["linear_scale"], linear_scale)
 
 
 @pytest.mark.parametrize("watchdog", [0, 1])

@@ -157,10 +157,11 @@ def _one_twist_capture(proto: NezhaProtocol, target: float, step_duration: float
     vel_l: list[float] = []
     vel_r: list[float] = []
     for f in frames:
-        if f.acks:
-            for entry in f.acks:
-                if entry.corr_id == corr_id and entry.ok:
-                    acked = True
+        # 115-003 (frame v2): the depth-3 ack ring (TLMFrame.acks) folded
+        # into a single ack slot (TLMFrame.ack, populated only when the
+        # frame's own ack_fresh bit is set).
+        if f.ack is not None and f.ack.corr_id == corr_id and f.ack.ok:
+            acked = True
         if f.active:
             moved = True
         if f.vel is None or f.t is None:

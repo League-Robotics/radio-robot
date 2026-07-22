@@ -14,23 +14,30 @@
 //
 // Scenarios:
 //   1. A freshly-constructed (and booted) SimHarness starts unconfigured.
-//   2. TWIST against an unconfigured harness: ACK_STATUS_ERR/
-//      ERR_NOT_CONFIGURED; App::Drive's own staged twist is never touched
+//   2. TWIST against an unconfigured harness: ack_err == ERR_NOT_CONFIGURED
+//      (flags bit 5 fresh); App::Drive's own staged twist is never touched
 //      (driveTargetVelLeft/Right() stay 0) and no real (nonzero-speed) duty
 //      byte ever reaches the simulated bus (write-hook duty-history check).
-//   3. MOVE against an unconfigured harness: ACK_STATUS_ERR/
-//      ERR_NOT_CONFIGURED; the command is never enqueued (pilotQueueDepth()
-//      stays 0, pilotState() stays kIdle).
-//   4. STOP against an unconfigured harness: still ACK_STATUS_OK
+//   3. STOP against an unconfigured harness: still ack_err == 0/OK
 //      (handleStop() is unconditional, unaffected by the gate).
-//   5. CONFIG{motor} against an unconfigured harness: still ACK_STATUS_OK
+//   4. CONFIG{motor} against an unconfigured harness: still ack_err == 0/OK
 //      (handleConfig() is unconditional, unaffected by the gate).
-//   6. configurePlanner() + both configureMotor() calls flip isConfigured()
-//      to true, and a subsequent TWIST is accepted AND produces real,
-//      nonzero measured wheel motion on BOTH motors, with each port driving
-//      its OWN distinct simulated wheel (a pure-rotation twist drives the
-//      two WheelPlants to OPPOSITE-sign velocities -- impossible if both
-//      ports were aliased onto the same simulated wheel).
+//   5. Both configureMotor() calls flip isConfigured() to true, and a
+//      subsequent TWIST is accepted AND produces real, nonzero measured
+//      wheel motion on BOTH motors, with each port driving its OWN distinct
+//      simulated wheel (a pure-rotation twist drives the two WheelPlants to
+//      OPPOSITE-sign velocities -- impossible if both ports were aliased
+//      onto the same simulated wheel).
+//
+// 115-009 (gut S1's own test-sweep/green-bar ticket): a former Scenario 3
+// ("MOVE against an unconfigured harness") is DELETED, not ported --
+// `injectMove()`/`pilotQueueDepth()`/`pilotState()`/`Motion::State` are all
+// Motion::Executor/App::Pilot-era `TestSim::SimHarness` API deleted
+// wholesale by 115-002/115-006 (gut S1 motion-stack excision); there is no
+// MOVE command in the S1 minimal firmware to refuse. `findAck()` below is
+// also rewritten for the single ack slot (`Telemetry.ack_corr`/`ack_err`,
+// valid iff `flags` bit 5) that replaced the deleted depth-3 `AckEntry`
+// ring/`AckStatus` enum (115-003 frame v2).
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -72,19 +79,19 @@ void checkFloatEq(float actual, float expected, const std::string& what, float t
   }
 }
 
-// Finds the ack (msg::AckEntry) for `corrId` across every decoded telemetry
-// frame in `lines`. Returns true and fills *status/*errCode if found
-// (mirrors move_queue_harness.cpp's own findAck()).
-bool findAck(const std::vector<TestSupport::DecodedLine>& lines, uint32_t corrId,
-             msg::AckStatus* status, uint32_t* errCode) {
+// Finds the single ack slot for `corrId` across every decoded telemetry
+// frame in `lines` -- the single Telemetry.ack_corr/ack_err slot (valid
+// iff flags bit 5, ack_fresh) that replaced the pre-115 depth-3 AckEntry
+// ring (115-003 frame v2). Returns true and fills *errCode if found
+// (0 == OK, nonzero == the msg::ErrCode value).
+bool findAck(const std::vector<TestSupport::DecodedLine>& lines, uint32_t corrId, uint32_t* errCode) {
+  constexpr uint32_t kAckFreshBit = 1u << 5;
   for (const auto& line : lines) {
     if (line.kind != TestSupport::DecodedKind::kTelemetry) continue;
-    for (uint8_t i = 0; i < line.telemetry.acks_count; ++i) {
-      if (line.telemetry.acks_[i].corr_id == corrId) {
-        *status = line.telemetry.acks_[i].status;
-        *errCode = line.telemetry.acks_[i].err_code;
-        return true;
-      }
+    if ((line.telemetry.flags & kAckFreshBit) == 0) continue;
+    if (line.telemetry.ack_corr == corrId) {
+      *errCode = line.telemetry.ack_err;
+      return true;
     }
   }
   return false;
@@ -193,10 +200,8 @@ int main() {
     sim.plant().clearWriteHook();
 
     std::vector<TestSupport::DecodedLine> lines = sim.drainTelemetry();
-    msg::AckStatus status = msg::AckStatus::ACK_STATUS_OK;
     uint32_t errCode = 0;
-    checkTrue(findAck(lines, 501, &status, &errCode), "an ack for corrId=501 was seen");
-    checkTrue(status == msg::AckStatus::ACK_STATUS_ERR, "the twist was acked ACK_STATUS_ERR");
+    checkTrue(findAck(lines, 501, &errCode), "an ack for corrId=501 was seen");
     checkTrue(errCode == static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED),
               "the err_code is ERR_NOT_CONFIGURED");
 
@@ -209,34 +214,9 @@ int main() {
               "(plant write-hook duty-history check)");
   }
 
-  // --- Scenario 3: MOVE refused while unconfigured -------------------------
+  // --- Scenario 3: STOP still works while unconfigured ---------------------
   {
-    beginScenario("MOVE against an unconfigured harness: ERR_NOT_CONFIGURED, never enqueued");
-    TestSim::SimHarness sim;
-    sim.boot();
-    sim.step(3);
-    (void)sim.drainTelemetry();
-
-    checkTrue(!sim.isConfigured(), "setup: still unconfigured before the move");
-    sim.injectMove(/*distance=*/500.0f, /*deltaHeading=*/0.0f, /*vMax=*/200.0f, /*omega=*/0.0f,
-                   /*timeMs=*/0.0f, /*replace=*/false, /*id=*/1, /*corrId=*/502);
-    sim.step(5);
-
-    std::vector<TestSupport::DecodedLine> lines = sim.drainTelemetry();
-    msg::AckStatus status = msg::AckStatus::ACK_STATUS_OK;
-    uint32_t errCode = 0;
-    checkTrue(findAck(lines, 502, &status, &errCode), "an ack for corrId=502 was seen");
-    checkTrue(status == msg::AckStatus::ACK_STATUS_ERR, "the move was acked ACK_STATUS_ERR");
-    checkTrue(errCode == static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED),
-              "the err_code is ERR_NOT_CONFIGURED");
-
-    checkTrue(sim.pilotQueueDepth() == 0, "the move was never enqueued (pilotQueueDepth() stays 0)");
-    checkTrue(sim.pilotState() == Motion::State::kIdle, "the executor never activated (pilotState() stays kIdle)");
-  }
-
-  // --- Scenario 4: STOP still works while unconfigured ---------------------
-  {
-    beginScenario("STOP against an unconfigured harness: still ACK_STATUS_OK (unconditional, unaffected by the gate)");
+    beginScenario("STOP against an unconfigured harness: still ack_err==0/OK (unconditional, unaffected by the gate)");
     TestSim::SimHarness sim;
     sim.boot();
     sim.step(3);
@@ -247,16 +227,15 @@ int main() {
     sim.step(3);
 
     std::vector<TestSupport::DecodedLine> lines = sim.drainTelemetry();
-    msg::AckStatus status = msg::AckStatus::ACK_STATUS_ERR;
-    uint32_t errCode = 0;
-    checkTrue(findAck(lines, 503, &status, &errCode), "an ack for corrId=503 was seen");
-    checkTrue(status == msg::AckStatus::ACK_STATUS_OK,
-              "STOP still acks ACK_STATUS_OK even though the harness is unconfigured");
+    uint32_t errCode = 1;  // any nonzero sentinel -- overwritten by findAck() on a match
+    checkTrue(findAck(lines, 503, &errCode), "an ack for corrId=503 was seen");
+    checkTrue(errCode == 0,
+              "STOP still acks ack_err==0/OK even though the harness is unconfigured");
   }
 
-  // --- Scenario 5: CONFIG still works while unconfigured -------------------
+  // --- Scenario 4: CONFIG still works while unconfigured -------------------
   {
-    beginScenario("CONFIG{motor} against an unconfigured harness: still ACK_STATUS_OK "
+    beginScenario("CONFIG{motor} against an unconfigured harness: still ack_err==0/OK "
                   "(unconditional, unaffected by the gate)");
     TestSim::SimHarness sim;
     sim.boot();
@@ -270,20 +249,19 @@ int main() {
     sim.step(3);
 
     std::vector<TestSupport::DecodedLine> lines = sim.drainTelemetry();
-    msg::AckStatus status = msg::AckStatus::ACK_STATUS_ERR;
-    uint32_t errCode = 0;
-    checkTrue(findAck(lines, 504, &status, &errCode), "an ack for corrId=504 was seen");
-    checkTrue(status == msg::AckStatus::ACK_STATUS_OK,
-              "CONFIG{motor} still acks ACK_STATUS_OK even though the harness is unconfigured");
+    uint32_t errCode = 1;  // any nonzero sentinel -- overwritten by findAck() on a match
+    checkTrue(findAck(lines, 504, &errCode), "an ack for corrId=504 was seen");
+    checkTrue(errCode == 0,
+              "CONFIG{motor} still acks ack_err==0/OK even though the harness is unconfigured");
     checkFloatEq(sim.motorLeft().gains().kp, 0.05f,
                  "the motor patch's kp actually landed live -- handleConfig() ran, unaffected by the gate");
   }
 
-  // --- Scenario 6: configured-then-accepted -- real motion, no port
+  // --- Scenario 5: configured-then-accepted -- real motion, no port
   //     aliasing (the exact gap this ticket's own thrown exception found:
   //     a "configured" motor that was still functionally dead) ------------
   {
-    beginScenario("configurePlanner() + both configureMotor(): isConfigured() becomes true, a subsequent "
+    beginScenario("both configureMotor() calls: isConfigured() becomes true, a subsequent "
                   "TWIST is accepted and produces real, nonzero measured wheel motion on BOTH motors, "
                   "each port driving its own distinct simulated wheel");
     TestSim::SimHarness sim;
@@ -293,7 +271,7 @@ int main() {
 
     TestSupport::configureSimForBenchTest(sim);
     checkTrue(sim.isConfigured(),
-              "isConfigured() == true once configurePlanner() + both configureMotor() calls have landed");
+              "isConfigured() == true once both configureMotor() calls have landed");
 
     (void)sim.drainTelemetry();
 
@@ -307,17 +285,16 @@ int main() {
     // motion on BOTH plants simultaneously.
     sim.injectTwist(/*v_x=*/0.0f, /*omega=*/1.5f, /*duration=*/100000.0f, /*corrId=*/505);
 
-    std::vector<TestSupport::DecodedLine> lines = sim.drainTelemetry();
-    msg::AckStatus status = msg::AckStatus::ACK_STATUS_ERR;
-    uint32_t errCode = 0;
+    std::vector<TestSupport::DecodedLine> lines;
+    uint32_t errCode = 1;  // any nonzero sentinel -- overwritten by findAck() on a match
     // The ack for this injection may not land until the NEXT drain -- step a
     // little first, matching every other scenario in this codebase's own
     // "ack rides the next emitted frame" convention.
     sim.step(5);
     lines = sim.drainTelemetry();
-    checkTrue(findAck(lines, 505, &status, &errCode), "an ack for corrId=505 was seen");
-    checkTrue(status == msg::AckStatus::ACK_STATUS_OK,
-              "the twist is accepted (ACK_STATUS_OK) now that the harness is configured");
+    checkTrue(findAck(lines, 505, &errCode), "an ack for corrId=505 was seen");
+    checkTrue(errCode == 0,
+              "the twist is accepted (ack_err==0/OK) now that the harness is configured");
 
     // Give the PID a few more cycles to actually ramp real duty onto the bus
     // and for the plant's own first-order response to become measurable --

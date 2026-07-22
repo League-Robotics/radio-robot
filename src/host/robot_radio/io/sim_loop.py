@@ -195,26 +195,6 @@ _SimHookFn = ctypes.CFUNCTYPE(
     ctypes.c_int, ctypes.c_void_p, ctypes.c_uint16,
     ctypes.POINTER(ctypes.c_uint8), ctypes.c_int)
 
-# Tier-2 config-load readback (113-007) -- field order matches
-# sim_configure_planner()'s own 22-value-arg order exactly (sim_ctypes.cpp's
-# own header comment cross-references this ordering both ways). Used to build
-# sim_read_planner_config()'s out-pointer argtypes below AND
-# SimLoop.read_planner_config()'s returned dict keys, so the two can never
-# drift apart from each other.
-_PLANNER_CONFIG_FIELDS = (
-    "a_max", "a_decel", "v_body_max",
-    "yaw_rate_max", "yaw_acc_max",
-    "j_max", "yaw_jerk_max",
-    "min_speed", "heading_kp", "heading_kd",
-    "arrive_dwell",
-    "heading_source",  # int (msg::HeadingSourceMode) -- every other field is float
-    "heading_dwell_tol", "heading_dwell_rate",
-    "heading_lead_bias", "plan_lead", "terminal_lead",
-    "actuation_lag",
-    "distance_kp", "distance_tol",
-    "model_tau_lin", "model_tau_ang",
-)
-
 # Lazily-imported/cached pb2 module -- see sim_ctypes.cpp's own header and
 # the deleted predecessor's _get_envelope_pb2() docstring: no circular-
 # import hazard for this module specifically, but deferring keeps a bare
@@ -313,48 +293,19 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
     lib.sim_set_enc_slip.argtypes = [
         ctypes.c_void_p, ctypes.c_int, ctypes.c_float, ctypes.c_float]
     lib.sim_set_enc_slip.restype = None
-    lib.sim_set_lead_compensation.argtypes = [
-        ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float]
-    lib.sim_set_lead_compensation.restype = None
-    lib.sim_set_yaw_rate_max.argtypes = [ctypes.c_void_p, ctypes.c_float]
-    lib.sim_set_yaw_rate_max.restype = None
 
     # Tier-2 config-load surface (113-002/113-005): SimHarness::
-    # configurePlanner()/configureMotor()'s one-shot runtime load, for the
-    # msg::PlannerConfig fields (and per-motor vel_filt/fwd_sign) with no
-    # live Tier-1 wire arm -- see sim_ctypes.cpp's own header comment (Tier-2
-    # config-load surface section) for the full field list/order and
-    # SimLoop.configure_from_robot()'s own docstring for how this is called.
-    lib.sim_configure_planner.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_float, ctypes.c_float, ctypes.c_float,  # a_max, a_decel, v_body_max
-        ctypes.c_float, ctypes.c_float,                  # yaw_rate_max, yaw_acc_max
-        ctypes.c_float, ctypes.c_float,                  # j_max, yaw_jerk_max
-        ctypes.c_float, ctypes.c_float, ctypes.c_float,  # min_speed, heading_kp, heading_kd
-        ctypes.c_float,                                  # arrive_dwell
-        ctypes.c_int,                                    # heading_source (msg::HeadingSourceMode)
-        ctypes.c_float, ctypes.c_float,                  # heading_dwell_tol, heading_dwell_rate
-        ctypes.c_float, ctypes.c_float, ctypes.c_float,  # heading_lead_bias, plan_lead, terminal_lead
-        ctypes.c_float,                                  # actuation_lag
-        ctypes.c_float, ctypes.c_float,                  # distance_kp, distance_tol
-        ctypes.c_float, ctypes.c_float,                  # model_tau_lin, model_tau_ang
-    ]
-    lib.sim_configure_planner.restype = None
-
+    # configureMotor()'s one-shot runtime load, for per-motor vel_filt/
+    # fwd_sign with no live Tier-1 wire arm -- see sim_ctypes.cpp's own
+    # header comment (Tier-2 config-load surface section) for the full
+    # field list/order and SimLoop.configure_from_robot()'s own docstring
+    # for how this is called. `sim_configure_planner()`/
+    # `sim_read_planner_config()` -- DELETED (115-003, gut S1 motion-stack
+    # excision): `msg::PlannerConfig` and its `SimHarness::configurePlanner()`
+    # one-shot loader went with `Motion::Executor`/`App::Pilot`.
     lib.sim_configure_motor.argtypes = [
         ctypes.c_void_p, ctypes.c_int, ctypes.c_float, ctypes.c_int]
     lib.sim_configure_motor.restype = None
-
-    # Tier-2 config-load readback (113-007) -- out-pointer argtypes, one per
-    # _PLANNER_CONFIG_FIELDS entry above (int for heading_source, float for
-    # every other field), matching sim_read_planner_config()'s own C
-    # signature (sim_ctypes.cpp) field-for-field and in the same order.
-    lib.sim_read_planner_config.argtypes = [ctypes.c_void_p] + [
-        ctypes.POINTER(ctypes.c_int) if name == "heading_source"
-        else ctypes.POINTER(ctypes.c_float)
-        for name in _PLANNER_CONFIG_FIELDS
-    ]
-    lib.sim_read_planner_config.restype = None
 
     lib.sim_read_motor_config.argtypes = [
         ctypes.c_void_p, ctypes.c_int,
@@ -522,14 +473,16 @@ class SimLoop:
           (109-002 Architecture Revision 1's "one mechanism, not a
           Sim-specific fork") -- no Tier-1 field selection is
           reimplemented here.
-        - **Tier 2** (the boot-only fields with no live wire arm, including
-          ``model_tau_lin``/``model_tau_ang``): calls
-          ``planner_boot_config_for(config)``/``motor_boot_config_for(config,
-          port)`` (ticket 004's reuse of ``gen_boot_config.py``'s own
-          mapping functions) and passes the results to the
-          ``sim_configure_planner()``/``sim_configure_motor()`` ctypes
-          exports (ticket 002) -- ``SimHarness::configurePlanner()``/
-          ``configureMotor()``'s one-shot runtime-load surface.
+        - **Tier 2** (the boot-only motor fields with no live wire arm):
+          calls ``motor_boot_config_for(config, port)`` (ticket 004's reuse
+          of ``gen_boot_config.py``'s own mapping functions) and passes the
+          result to the ``sim_configure_motor()`` ctypes export (ticket
+          002) -- ``SimHarness::configureMotor()``'s one-shot runtime-load
+          surface. (The planner half of this tier --
+          ``planner_boot_config_for()``/``sim_configure_planner()`` --
+          was DELETED, 115-003, gut S1 motion-stack excision: nothing in
+          the S1 minimal firmware reads a boot-loaded ``msg::PlannerConfig``
+          any more.)
 
         Tier 1 runs first (the smaller, already-proven mechanism); Tier 2
         second. Neither tier's outcome depends on the other's.
@@ -554,36 +507,10 @@ class SimLoop:
         config_proto = NezhaProtocol(SimConfigConn(self))  # type: ignore[arg-type]
         config_proto.set_config(**calibration_kwargs(config))
 
-        # ---- Tier 2: one-shot boot-config load surface ---------------------
-        from robot_radio.calibration.sim_boot_config import (
-            motor_boot_config_for, planner_boot_config_for)
-
-        planner_cfg = planner_boot_config_for(config)
-        self._lib.sim_configure_planner(
-            self._handle,
-            ctypes.c_float(planner_cfg["a_max"]),
-            ctypes.c_float(planner_cfg["a_decel"]),
-            ctypes.c_float(planner_cfg["v_body_max"]),
-            ctypes.c_float(planner_cfg["yaw_rate_max"]),
-            ctypes.c_float(planner_cfg["yaw_acc_max"]),
-            ctypes.c_float(planner_cfg["j_max"]),
-            ctypes.c_float(planner_cfg["yaw_jerk_max"]),
-            ctypes.c_float(planner_cfg["min_speed"]),
-            ctypes.c_float(planner_cfg["heading_kp"]),
-            ctypes.c_float(planner_cfg["heading_kd"]),
-            ctypes.c_float(planner_cfg["arrive_dwell"]),
-            ctypes.c_int(planner_cfg["heading_source"]),
-            ctypes.c_float(planner_cfg["heading_dwell_tol"]),
-            ctypes.c_float(planner_cfg["heading_dwell_rate"]),
-            ctypes.c_float(planner_cfg["heading_lead_bias"]),
-            ctypes.c_float(planner_cfg["plan_lead"]),
-            ctypes.c_float(planner_cfg["terminal_lead"]),
-            ctypes.c_float(planner_cfg["actuation_lag"]),
-            ctypes.c_float(planner_cfg["distance_kp"]),
-            ctypes.c_float(planner_cfg["distance_tol"]),
-            ctypes.c_float(planner_cfg["model_tau_lin"]),
-            ctypes.c_float(planner_cfg["model_tau_ang"]),
-        )
+        # ---- Tier 2: one-shot boot-config load surface (motor only --
+        # the planner half was DELETED, 115-003, gut S1 motion-stack
+        # excision) ---------------------------------------------------------
+        from robot_radio.calibration.sim_boot_config import motor_boot_config_for
 
         for port in (1, 2):  # 1=left, 2=right -- same convention as every other port-keyed call
             motor_cfg = motor_boot_config_for(config, port)
@@ -594,52 +521,23 @@ class SimLoop:
 
     # ------------------------------------------------------------------
     # Tier-2 config-load readback (113-007) -- test-only diagnostic proving
-    # what configure_from_robot() (or a direct sim_configure_planner()/
-    # sim_configure_motor() ctypes call) actually landed. No production
-    # caller needs this -- it exists for sprint 113's own golden-parity test
-    # (test_sim_boot_config_parity.py) to compare against gen_boot_config.py's
-    # independently-computed expected values, field-for-field.
+    # what configure_from_robot() (or a direct sim_configure_motor() ctypes
+    # call) actually landed. No production caller needs this -- it exists
+    # for sprint 113's own golden-parity test (test_sim_boot_config_parity.py)
+    # to compare against gen_boot_config.py's independently-computed
+    # expected values, field-for-field. `read_planner_config()` -- DELETED
+    # (115-003, gut S1 motion-stack excision): `msg::PlannerConfig` and its
+    # `sim_read_planner_config()` ctypes export went with `Motion::Executor`/
+    # `App::Pilot`.
     # ------------------------------------------------------------------
-
-    def read_planner_config(self) -> "dict[str, float | int]":
-        """Return the live ``msg::PlannerConfig`` SimHarness::plannerConfig()
-        currently exposes -- every field ``_PLANNER_CONFIG_FIELDS`` names, in
-        the same dict shape ``sim_boot_config.planner_boot_config_for()``
-        returns (so a test can diff the two directly). Reflects whatever
-        ``configurePlanner()`` last received (via ``configure_from_robot()``
-        or a direct fault-knob call like ``set_yaw_rate_max()``), or the
-        sim's own hardcoded ``makeExecutorConfig()`` baseline if
-        ``configurePlanner()`` was never called. Synchronous round-trip onto
-        the tick thread when one is running (same rationale as
-        ``get_true_pose()``): a caller must see whatever was already applied,
-        not "eventually applied"."""
-        self._require_connected()
-        return self._call_on_tick_thread(self._read_planner_config)
-
-    def _read_planner_config(self) -> "dict[str, float | int]":
-        floats = {
-            name: ctypes.c_float() for name in _PLANNER_CONFIG_FIELDS
-            if name != "heading_source"
-        }
-        heading_source = ctypes.c_int()
-        args = [
-            heading_source if name == "heading_source" else floats[name]
-            for name in _PLANNER_CONFIG_FIELDS
-        ]
-        self._lib.sim_read_planner_config(
-            self._handle, *(ctypes.byref(a) for a in args))
-        return {
-            name: (heading_source.value if name == "heading_source"
-                   else floats[name].value)
-            for name in _PLANNER_CONFIG_FIELDS
-        }
 
     def read_motor_config(self, port: int) -> "dict[str, float | int]":
         """Return ``{"vel_filt_alpha": ..., "fwd_sign": ...}`` last pushed to
         *port* (1=left, 2=right) via ``configureMotor()`` -- the same dict
-        shape ``sim_boot_config.motor_boot_config_for()`` returns. See
-        ``read_planner_config()``'s own docstring for the readback contract
-        and synchronous round-trip rationale."""
+        shape ``sim_boot_config.motor_boot_config_for()`` returns.
+        Synchronous round-trip onto the tick thread when one is running
+        (same rationale as ``get_true_pose()``): a caller must see whatever
+        was already applied, not "eventually applied"."""
         self._require_connected()
         return self._call_on_tick_thread(lambda: self._read_motor_config(port))
 
@@ -875,20 +773,10 @@ class SimLoop:
             lambda: self._lib.sim_set_enc_slip(
                 self._handle, int(port), ctypes.c_float(rate), ctypes.c_float(magnitude)))
 
-    def set_lead_compensation(self, heading_lead_bias: float, plan_lead: float,
-                              terminal_lead: float) -> None:  # [s] [s] [s]
-        """109-010: rate-sweep characterization harness hook -- sets the
-        three independently-tunable lead-compensation Δt's directly on the
-        sim's own ``msg::PlannerConfig`` (``SimHarness::
-        setLeadCompensation()``). No wire ``PlannerConfigPatch`` arm exists
-        for these fields (boot-baked-default-only per this ticket's own
-        scope) -- this sim-only ctypes path is how a test varies them
-        against the compiled sim without a reflash/rebuild."""
-        self._require_connected()
-        self._call_on_tick_thread(
-            lambda: self._lib.sim_set_lead_compensation(
-                self._handle, ctypes.c_float(heading_lead_bias),
-                ctypes.c_float(plan_lead), ctypes.c_float(terminal_lead)))
+    # set_lead_compensation() -- DELETED (115-003, gut S1 motion-stack
+    # excision): `msg::PlannerConfig`'s lead-compensation fields and
+    # `SimHarness::setLeadCompensation()`/`sim_set_lead_compensation()` went
+    # with `Motion::Executor`/`App::Pilot`.
 
     def set_pid_enabled(self, enabled: bool) -> None:
         """Enable/disable the velocity PID on BOTH firmware motors
@@ -905,14 +793,9 @@ class SimLoop:
             lambda: self._lib.sim_set_pid_enabled(
                 self._handle, 1 if enabled else 0))
 
-    def set_yaw_rate_max(self, yaw_rate_max: float) -> None:  # [rad/s]
-        """109-010: rate-sweep characterization harness hook -- varies the
-        pivot cruise-rate ceiling (``PlannerConfig.yaw_rate_max``) against
-        the compiled sim without a reflash/rebuild (``SimHarness::
-        setYawRateMax()``)."""
-        self._require_connected()
-        self._call_on_tick_thread(
-            lambda: self._lib.sim_set_yaw_rate_max(self._handle, ctypes.c_float(yaw_rate_max)))
+    # set_yaw_rate_max() -- DELETED (115-003, gut S1 motion-stack excision):
+    # `PlannerConfig.yaw_rate_max` and `SimHarness::setYawRateMax()`/
+    # `sim_set_yaw_rate_max()` went with `Motion::Executor`/`App::Pilot`.
 
     # ------------------------------------------------------------------
     # Manual stepping (no tick thread required -- ticket 009's shape)

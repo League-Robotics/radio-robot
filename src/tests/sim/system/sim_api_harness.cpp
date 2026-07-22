@@ -34,9 +34,9 @@
 #include <string>
 #include <vector>
 
+#include "app/telemetry.h"
 #include "bench_test_config.h"
 #include "messages/envelope.h"
-#include "messages/planner.h"
 #include "sim_harness.h"
 #include "wire_test_codec.h"
 
@@ -86,17 +86,21 @@ std::vector<DecodedLine> onlyTelemetry(const std::vector<DecodedLine>& lines) {
 
 bool anyEventSet(const std::vector<DecodedLine>& frames, uint32_t bit) {
   for (const auto& f : frames) {
-    if (f.telemetry.event_bits & bit) return true;
+    if (f.telemetry.flags & bit) return true;
   }
   return false;
 }
 
-bool anyAckMatches(const std::vector<DecodedLine>& frames, uint32_t corrId, msg::AckStatus status) {
+// Matches against the single ack slot (Telemetry.ack_corr/ack_err, valid
+// iff flags bit 5/kFlagAckFresh) that replaced the pre-115 depth-3 AckEntry
+// ring (115-003 frame v2). `okOnly=true` (every existing caller) matches
+// only a fresh ack for corrId whose ack_err == 0 (OK).
+bool anyAckMatches(const std::vector<DecodedLine>& frames, uint32_t corrId, bool okOnly = true) {
   for (const auto& f : frames) {
-    for (uint8_t i = 0; i < f.telemetry.acks_count; ++i) {
-      const msg::AckEntry& e = f.telemetry.acks_[i];
-      if (e.corr_id == corrId && e.status == status) return true;
-    }
+    if (!(f.telemetry.flags & App::kFlagAckFresh)) continue;
+    if (f.telemetry.ack_corr != corrId) continue;
+    if (okOnly && f.telemetry.ack_err != 0) continue;
+    return true;
   }
   return false;
 }
@@ -128,13 +132,13 @@ void scenarioBootCompletesThroughRealRobotLoop() {
   sim.step(1);  // one main cycle -- this is what actually EMITS the boot-ready bit
   std::vector<DecodedLine> frames = onlyTelemetry(sim.drainTelemetry());
   checkTrue(!frames.empty(), "at least one telemetry frame decoded after boot + one cycle");
-  checkTrue(anyEventSet(frames, App::kEventBootReady), "kEventBootReady visible in decoded telemetry");
+  checkTrue(anyEventSet(frames, App::kFlagEventBootReady), "kFlagEventBootReady visible in decoded telemetry");
 
   bool sawConnected = false;
   for (const auto& f : frames) {
-    if (f.telemetry.conn_left && f.telemetry.conn_right) sawConnected = true;
+    if ((f.telemetry.flags & App::kFlagConnLeft) && (f.telemetry.flags & App::kFlagConnRight)) sawConnected = true;
   }
-  checkTrue(sawConnected, "decoded telemetry reports conn_left/conn_right true");
+  checkTrue(sawConnected, "decoded telemetry reports kFlagConnLeft/kFlagConnRight true");
 }
 
 // ===========================================================================
@@ -160,25 +164,28 @@ void scenarioTwistDrivesRealPlantRamp() {
 
   std::vector<DecodedLine> frames = onlyTelemetry(sim.drainTelemetry());
   checkTrue(!frames.empty(), "telemetry decoded during the ramp");
-  checkTrue(anyAckMatches(frames, 42, msg::AckStatus::ACK_STATUS_OK), "the twist's corrId=42 was acked OK");
+  checkTrue(anyAckMatches(frames, 42), "the twist's corrId=42 was acked OK");
 
+  // EncoderReading (enc_left/enc_right) is unconditionally present every
+  // frame (115-005 frame v2 -- no has_vel/has_enc presence flag any more;
+  // see telemetry.proto's own EncoderReading doc comment), so every decoded
+  // frame carries real position/velocity data, not just a filtered subset.
   float firstVelLeft = 0.0f, lastVelLeft = 0.0f;
   float firstEncLeft = 0.0f, lastEncLeft = 0.0f;
   float lastVelRight = 0.0f;
   bool first = true;
   for (const auto& f : frames) {
-    if (!f.telemetry.has_vel || !f.telemetry.has_enc) continue;
     if (first) {
-      firstVelLeft = f.telemetry.vel_left;
-      firstEncLeft = f.telemetry.enc_left;
+      firstVelLeft = f.telemetry.enc_left.velocity;
+      firstEncLeft = f.telemetry.enc_left.position;
       first = false;
     }
-    lastVelLeft = f.telemetry.vel_left;
-    lastVelRight = f.telemetry.vel_right;
-    lastEncLeft = f.telemetry.enc_left;
+    lastVelLeft = f.telemetry.enc_left.velocity;
+    lastVelRight = f.telemetry.enc_right.velocity;
+    lastEncLeft = f.telemetry.enc_left.position;
   }
 
-  checkTrue(!first, "at least one frame carried has_vel/has_enc data");
+  checkTrue(!first, "at least one frame carried encoder data");
   checkFloatGe(lastVelLeft, 300.0f, "velLeft ramped well above its starting value toward the plant's ceiling");
   checkFloatGe(lastVelRight, 300.0f, "velRight ramped well above its starting value toward the plant's ceiling");
   checkTrue(lastVelLeft > firstVelLeft, "velLeft increased over the ramp (moving in the commanded direction)");
@@ -206,12 +213,12 @@ void scenarioStopAcksAndClearsActive() {
 
   std::vector<DecodedLine> frames = onlyTelemetry(sim.drainTelemetry());
   checkTrue(!frames.empty(), "telemetry decoded after STOP");
-  checkTrue(anyAckMatches(frames, 99, msg::AckStatus::ACK_STATUS_OK), "the stop's corrId=99 was acked OK");
+  checkTrue(anyAckMatches(frames, 99), "the stop's corrId=99 was acked OK");
 
   bool sawInactive = false;
   bool sawIdleMode = false;
   for (const auto& f : frames) {
-    if (!f.telemetry.active) sawInactive = true;
+    if (!(f.telemetry.flags & App::kFlagActive)) sawInactive = true;
     if (f.telemetry.mode == msg::DriveMode::IDLE) sawIdleMode = true;
   }
   checkTrue(sawInactive, "decoded telemetry shows active=false after STOP");
@@ -245,11 +252,11 @@ void scenarioDeadmanExpiryStopsPlant() {
 
   std::vector<DecodedLine> frames = onlyTelemetry(sim.drainTelemetry());
   checkTrue(!frames.empty(), "telemetry decoded across the deadman window");
-  checkTrue(anyEventSet(frames, App::kEventDeadmanExpired), "kEventDeadmanExpired visible in decoded telemetry");
+  checkTrue(anyEventSet(frames, App::kFlagEventDeadmanExpired), "kFlagEventDeadmanExpired visible in decoded telemetry");
 
   bool sawInactive = false;
   for (const auto& f : frames) {
-    if (!f.telemetry.active) sawInactive = true;
+    if (!(f.telemetry.flags & App::kFlagActive)) sawInactive = true;
   }
   checkTrue(sawInactive, "decoded telemetry shows active=false once the deadman expires (no STOP was ever sent)");
 }

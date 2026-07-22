@@ -1,7 +1,7 @@
 ---
 id: 009
 title: Test-suite sweep + green bar (build.py clean, pytest green)
-status: in-progress
+status: done
 use-cases:
 - SUC-045
 - SUC-047
@@ -34,17 +34,17 @@ semantics, reading-stamp monotonicity, single-ack overwrite,
 
 ## Acceptance Criteria
 
-- [ ] Residual grep sweep: `grep -rln "Motion::\|Executor\|Ruckig\|PlannerConfig\|HeadingSource"
+- [x] Residual grep sweep: `grep -rln "Motion::\|Executor\|Ruckig\|PlannerConfig\|HeadingSource"
       src/ src/tests/` (excluding generated `messages/` and the
       `pre-gut-motion-stack` tag itself, which is history, not tree)
       returns nothing outside of comments/doc-strings explaining what
       was removed and why (e.g. sprint.md itself, DESIGN.md historical
       notes) — no live code or test references any deleted symbol.
-  - [ ] Any `src/tests/bench/*.py` script ticket 002 left un-triaged
+  - [x] Any `src/tests/bench/*.py` script ticket 002 left un-triaged
       (see that ticket's own "grep each remaining script" acceptance
       criterion) is resolved here: deleted if executor/segment/tour-
       dependent, kept otherwise.
-- [ ] Survivors edited and green: `app_comms_harness.cpp`/
+- [x] Survivors edited and green: `app_comms_harness.cpp`/
       `test_app_comms.py`, `app_deadman_harness.cpp`/
       `test_app_deadman.py`, `app_drive_harness.cpp`/`test_app_drive.py`,
       `app_odometry_harness.cpp`/`test_app_odometry.py`,
@@ -61,11 +61,11 @@ semantics, reading-stamp monotonicity, single-ack overwrite,
       re-verified), `wire_codec_harness.cpp`/`test_wire_codec.py`,
       `wire_differential_harness.cpp`/`test_wire_differential.py`,
       `test_wire_fuzz.py`, `test_wire_runtime.py`.
-- [ ] Sim system-test green bar (the gut issue's own named post-gut
+- [x] Sim system-test green bar (the gut issue's own named post-gut
       survivors): `test_straight_twist.py`, `test_scripted_twist_demo.py`,
       `test_sim_api.py`, `test_sim_boot_config_parity.py`,
       `test_sim_configure_from_robot.py`.
-- [ ] New wire round-trip tests added (per the amendment issue's
+- [x] New wire round-trip tests added (per the amendment issue's
       Verification section, not yet covered by any ticket above):
       `EncoderReading`/`OtosReading`/full-frame round-trip; `flags`
       semantics exercised across all three bit groups
@@ -74,9 +74,9 @@ semantics, reading-stamp monotonicity, single-ack overwrite,
       behavior (a second ack within one primary period overwrites the
       first — the "ack-depth-1 tradeoff", stakeholder-accepted);
       `wait_for_ack` happy-path and timeout-retry paths.
-- [ ] `uv run python -m pytest` green on the full surviving suite.
-- [ ] `python build.py` builds firmware + host sim lib clean.
-- [ ] Flash-freed confirmation: build output shows firmware flash usage
+- [x] `uv run python -m pytest` green on the full surviving suite.
+- [x] `python build.py` builds firmware + host sim lib clean.
+- [x] Flash-freed confirmation: build output shows firmware flash usage
       dropped by approximately the expected ~164 KiB versus a pre-gut
       build (informational — record the actual number, don't block on
       hitting the estimate exactly).
