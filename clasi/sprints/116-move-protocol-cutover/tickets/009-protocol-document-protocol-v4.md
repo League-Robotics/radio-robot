@@ -1,9 +1,12 @@
 ---
 id: 009
 title: Protocol document (protocol-v4)
-status: open
-use-cases: [SUC-050]
-depends-on: ['006', '007']
+status: in-progress
+use-cases:
+- SUC-050
+depends-on:
+- '006'
+- '007'
 github-issue: ''
 issue:
 - gut-to-minimal-firmware-motion-stack-excision-move-protocol-minimal-telemetry.md
