@@ -31,9 +31,21 @@ notes.
 ## Contents
 
 - **`sim_api_harness.cpp` / `test_sim_api.py`** (originally 105-004,
-  SUC-021) — the off-hardware acceptance proof for the SimHarness/SimPlant
-  composition itself: boot, a twist-driven ramp, an explicit STOP, deadman
-  expiry, and the virtual-cycle-timing diagnostic.
+  SUC-021; MOVE protocol cutover 116-006/116-008) — the off-hardware
+  acceptance proof for the SimHarness/SimPlant composition itself: boot, a
+  MOVE-driven ramp, an explicit STOP, a MOVE's own TIME stop condition
+  ending it with no STOP ever sent (replaces the deleted App::Deadman's own
+  expiry scenario), and the virtual-cycle-timing diagnostic.
+- **`move_protocol_harness.cpp` / `test_move_protocol.py`** (116-008) —
+  the sim-executable half of the protocol set-point issue's own
+  Verification section: TIME/DISTANCE/ANGLE stop conditions, both velocity
+  variants (TWIST/WHEELS) driving the correct wheel signs, a stalled-wheel
+  (SimPlant fault knobs) DISTANCE timeout setting the move-timeout fault
+  flag, chaining (replace=false hands off seamlessly at the active Move's
+  own expiry), replace=true preemption mid-motion, a 5th pending MOVE
+  rejected ERR_FULL with the existing queue unchanged, an empty-queue MOVE
+  expiry stopping motors with zero further host traffic, and a CONFIG patch
+  injected mid-MOVE not perturbing the active Move's own completion timing.
 - **`faults/fault_knobs_harness.cpp` / `faults/test_fault_knobs.py`**
   (originally 105-005, SUC-022) — the three plant-level fault-injection
   knobs (motor disconnect, encoder wedge, encoder dropout), now surfaced

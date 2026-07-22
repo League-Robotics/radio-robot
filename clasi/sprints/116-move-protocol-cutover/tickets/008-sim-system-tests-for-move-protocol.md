@@ -1,7 +1,7 @@
 ---
 id: 008
 title: Sim system tests for MOVE protocol
-status: in-progress
+status: done
 use-cases:
 - SUC-050
 - SUC-051
@@ -37,25 +37,25 @@ presence").
 
 ## Acceptance Criteria
 
-- [ ] TIME/DISTANCE/ANGLE stop conditions each reach completion within
+- [x] TIME/DISTANCE/ANGLE stop conditions each reach completion within
       tolerance, driven through `SimHarness::injectMove()` and stepped via
       `SimHarness::step()` (SUC-050).
-- [ ] A DISTANCE/ANGLE MOVE whose target the sim plant cannot reach within
+- [x] A DISTANCE/ANGLE MOVE whose target the sim plant cannot reach within
       `timeout` ends at `timeout` with `kFlagFaultMoveTimeout` set
       (SUC-054).
-- [ ] Chaining: MOVE B (`replace=false`) sent while A runs hands off
+- [x] Chaining: MOVE B (`replace=false`) sent while A runs hands off
       seamlessly at A's expiry — no cycle with zero commanded velocity in
       between (SUC-051).
-- [ ] `replace=true` preempts mid-motion on the same cycle it arrives
+- [x] `replace=true` preempts mid-motion on the same cycle it arrives
       (SUC-051).
-- [ ] A 5th pending MOVE is rejected `ERR_FULL`; the existing active + 4
+- [x] A 5th pending MOVE is rejected `ERR_FULL`; the existing active + 4
       pending contents are unchanged (SUC-052).
-- [ ] An empty-queue MOVE expiry stops motors within one cycle, with zero
+- [x] An empty-queue MOVE expiry stops motors within one cycle, with zero
       further commands injected by the test after the expiring MOVE
       (SUC-053).
-- [ ] A CONFIG patch injected mid-MOVE does not change the active MOVE's
+- [x] A CONFIG patch injected mid-MOVE does not change the active MOVE's
       completion outcome (SUC-055).
-- [ ] All scenarios run against the real firmware (`RobotLoop`/`MoveQueue`/
+- [x] All scenarios run against the real firmware (`RobotLoop`/`MoveQueue`/
       `StopCondition`/`Drive`/`Odometry`), not a test double.
 
 ## Testing

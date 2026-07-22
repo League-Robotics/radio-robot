@@ -1,24 +1,22 @@
-"""Off-hardware acceptance proof, migrated (ticket 108-004) from TestSim::
-SimApi (``src/tests/sim/support/sim_api.{h,cpp}``, deleted ticket 108-003) onto
-TestSim::SimHarness/TestSim::SimPlant (``src/sim/``), the composed,
-steppable harness wiring the REAL ``App::RobotLoop`` against the REAL plant
-(``src/tests/sim/plant/``) and a REAL, wire-protocol-parsing ``Devices::I2CBus``
-implementation.
+"""src/tests/sim/system/test_move_protocol.py -- ticket 116-008's own
+acceptance proof: the sim-executable half of the protocol set-point issue's
+own Verification section (clasi/sprints/116-move-protocol-cutover/issues/
+protocol-set-point-the-minimal-firmware-s-complete-command-surface.md) --
+TIME/DISTANCE/ANGLE stop conditions, chaining, replace preemption,
+ERR_FULL, the no-deadman empty-queue drain, and a CONFIG patch's
+non-interference with an in-flight MOVE.
 
-Compiles ``sim_api_harness.cpp`` together with ``sim_plant.cpp``,
-``wire_test_codec.cpp``, the plant sources, and every HOST_BUILD Devices/App
-source the graph needs, with ``-DHOST_BUILD``, against the SAME headers
-every ARM build compiles. Mirrors ``test_plant.py``'s/``test_app_robot_loop.
-py``'s exact shape: compile with the system C++ compiler, run the resulting
-binary, assert it exits 0.
-
-Also asserts (originally 105-004 AC #4) that no MicroBit.h dependency crept
-into the compiled translation units -- the same "no MicroBit.h in the
-compiled translation units" check ticket 001 established, re-run here since
-this harness composes ticket 001's own RobotLoop plus several more modules.
+Compiles ``move_protocol_harness.cpp`` together with ``sim_plant.cpp``
+(``src/sim/``), ``wire_test_codec.cpp``, the plant sources, and the same full
+HOST_BUILD Devices/App/messages/kinematics dependency graph every sibling
+``test_*.py`` in this directory already compiles, runs the resulting binary,
+and asserts it exits 0 -- printing its own human-readable per-scenario
+trace.
 
 Collected under ``src/tests/sim/system/`` -- already within ``pyproject.toml``'s
-``testpaths = ["src/tests/sim"]``, no configuration change needed.
+``testpaths = ["src/tests/sim"]``, no configuration change needed:
+
+    uv run python -m pytest src/tests/sim/system/test_move_protocol.py -v -s
 """
 
 import pathlib
@@ -27,7 +25,7 @@ import sys
 
 import pytest
 
-# src/tests/sim/system/test_sim_api.py -> system -> sim -> tests -> repo root
+# src/tests/sim/system/test_move_protocol.py -> system -> sim -> tests -> repo root
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _SYSTEM_DIR = pathlib.Path(__file__).resolve().parent
@@ -35,7 +33,7 @@ _SUPPORT_DIR = _SYSTEM_DIR.parent / "support"
 _PLANT_DIR = _SYSTEM_DIR.parent / "plant"
 _INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
 
-_HARNESS_SRC = _SYSTEM_DIR / "sim_api_harness.cpp"
+_HARNESS_SRC = _SYSTEM_DIR / "move_protocol_harness.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WIRE_TEST_CODEC_SRC = _SUPPORT_DIR / "wire_test_codec.cpp"
 _BENCH_TEST_CONFIG_SRC = _SUPPORT_DIR / "bench_test_config.cpp"
@@ -46,14 +44,14 @@ _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 # motion/jerk_trajectory.cpp/vendor/ruckig are all DELETED along with the
 # rest of the motion stack -- sim_harness.h no longer includes app/pilot.h
 # (or transitively motion/executor.h -> vendor/ruckig) at all, so none of
-# those sources are compiled into this harness any more (mirrors
-# test_sim_harness_configure.py's own identical note).
+# those sources are compiled into this harness (mirrors every sibling
+# sim/system harness's own identical note).
 _APP_SOURCES = [
     _SOURCE_DIR / "app" / "robot_loop.cpp",
     _SOURCE_DIR / "app" / "comms.cpp",
     _SOURCE_DIR / "app" / "telemetry.cpp",
     # 116-006 (MOVE protocol cutover): App::MoveQueue replaces the deleted
-    # App::Deadman.
+    # App::Deadman -- this harness's own subject under test.
     _SOURCE_DIR / "app" / "move_queue.cpp",
     _SOURCE_DIR / "app" / "drive.cpp",
     _SOURCE_DIR / "app" / "odometry.cpp",
@@ -111,16 +109,16 @@ def _all_sources():
     )
 
 
-def test_sim_api_harness_compiles_and_passes(tmp_path):
-    """Compile SimPlant + its full dependency graph + the harness; assert
-    every scenario passes."""
+def test_move_protocol_scenarios_pass(tmp_path):
+    """Compile move_protocol_harness.cpp + its full dependency graph;
+    assert every MOVE-protocol scenario passes, and print its own trace."""
     sources = _all_sources()
     for src in sources:
         assert src.is_file(), f"required source missing: {src}"
     assert _SOURCE_DIR.is_dir(), f"src/firm/ tree missing: {_SOURCE_DIR}"
 
     cxx = _find_cxx_compiler()
-    binary = tmp_path / "sim_api_harness"
+    binary = tmp_path / "move_protocol_harness"
 
     compile_result = subprocess.run(
         [
@@ -145,33 +143,19 @@ def test_sim_api_harness_compiles_and_passes(tmp_path):
         text=True,
     )
     assert compile_result.returncode == 0, (
-        "sim_api_harness.cpp / its dependencies failed to compile:\n"
+        "move_protocol_harness.cpp / its dependencies failed to compile:\n"
         f"stdout:\n{compile_result.stdout}\nstderr:\n{compile_result.stderr}"
     )
 
     run_result = subprocess.run([str(binary)], capture_output=True, text=True)
+    print(run_result.stdout)
     assert run_result.returncode == 0, (
-        "sim_api_harness reported a scenario failure "
+        "move_protocol_harness reported a scenario failure "
         f"(exit {run_result.returncode}):\n{run_result.stdout}\n{run_result.stderr}"
     )
-    print(run_result.stdout)
-
-
-def test_sim_api_no_microbit_dependency():
-    """No dependency on MicroBit.h or any ARM-only header -- grep
-    sim_harness.h/sim_plant.{h,cpp} directly (the compile step above already
-    proves the whole graph builds HOST_BUILD-clean; this is the same static
-    "no MicroBit.h in the compiled translation units" check ticket 001
-    established, re-applied to this harness's own composition-root files,
-    now that they replace the deleted sim_api.{h,cpp})."""
-    for path in (
-        _INFRA_SIM_DIR / "sim_harness.h",
-        _INFRA_SIM_DIR / "sim_plant.h",
-        _INFRA_SIM_DIR / "sim_plant.cpp",
-    ):
-        text = path.read_text()
-        assert "MicroBit.h" not in text, f"{path} must not depend on MicroBit.h"
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))
+    # -s: don't capture stdout -- see this file's own docstring for the
+    # standalone invocation.
+    sys.exit(pytest.main([__file__, "-v", "-s"]))
