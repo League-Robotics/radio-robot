@@ -24,8 +24,6 @@ void Odometry::integrate() {
   float distance = 0.0f;     // [mm] this cycle's body-frame forward travel
   float headingDelta = 0.0f; // [rad] this cycle's heading change
   BodyKinematics::forward(deltaLeft, deltaRight, trackWidth_, distance, headingDelta);
-  lastStepDistance_ = distance;
-  lastStepHeadingDelta_ = headingDelta;
 
   // Midpoint-arc integration: use the heading halfway through this cycle's
   // turn (not the heading at the START of the cycle) so a simultaneous
@@ -50,11 +48,17 @@ void Odometry::reset(float x, float y, float theta) {
 
 void applyOtosSample(Devices::Otos& otos, uint64_t now, Telemetry::Frame& frame) {
   otos.tick(now);
-  frame.hasOtos = otos.present();
   frame.otosConnected = otos.connected();
-  if (otos.present()) {
+  frame.otosPresent = otos.present() && otos.poseFresh();
+  if (frame.otosPresent) {
     Devices::PoseReading reading = otos.pose();
-    frame.otos = {reading.x, reading.y, reading.heading};
+    frame.otos.x = reading.x;
+    frame.otos.y = reading.y;
+    frame.otos.heading = reading.heading;
+    frame.otos.v_x = reading.v_x;
+    frame.otos.v_y = reading.v_y;
+    frame.otos.omega = reading.omega;
+    frame.otos.time = static_cast<uint32_t>(now / 1000);  // [us] -> [ms]
   }
 }
 

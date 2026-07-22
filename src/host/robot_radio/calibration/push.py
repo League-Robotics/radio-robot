@@ -76,8 +76,8 @@ def push_calibration(conn_or_proto: Any, config: Any) -> dict[str, Any]:
 def calibration_kwargs(config: Any) -> dict[str, float | int]:
     """Select the Tier-1 (already-wire-covered) calibration field set from
     *config*, as a flat wire-key kwargs dict (``{"ml": ..., "pid.kp": ...,
-    "headingKp": ..., ...}``) — the SAME wire-key vocabulary ``protocol.py``'s
-    ``_MOTOR_PID_KEYS``/``_PLANNER_KEYS``/``_DRIVETRAIN_KEYS`` curate.
+    ...}``) — the SAME wire-key vocabulary ``protocol.py``'s
+    ``_MOTOR_PID_KEYS``/``_DRIVETRAIN_KEYS`` curate.
 
     Pure, side-effect-free field SELECTION only — no text formatting, no
     transport. This is what ``calibration_commands()`` (below) formats into
@@ -97,27 +97,28 @@ def calibration_kwargs(config: Any) -> dict[str, float | int]:
         baked into the firmware's compiled-in DefaultConfig instead of
         silently inheriting it.  This is what makes "select tovez nocal →
         turns are geometry-pure" true in the sim.
-      - ``pid.kp/ki/kff/iMax/kaw``, ``headingKp/headingKd``,
-        ``minSpeed``/``distanceKp``/``arriveDwell`` — the velocity-PID gains
-        (``control.vel_*`` → ``MotorConfigPatch`` Gains, applied to BOTH
-        motors by ``RobotLoop::handleConfig``) and the outer heading-loop /
-        distance-loop PlannerConfigPatch fields (``control.heading_*``/
-        ``distance_kp``/``arrive_dwell`` → ``Pilot::applyPlannerPatch``).
-        Stakeholder 2026-07-18: selecting a robot must be authoritative for
-        the CONTROL gains too — the sim binary bakes its own harness gains
-        (``SimHarness::makeMotorConfig()``) and real firmware bakes whatever
-        robot JSON was active at build time (``gen_boot_config.py``), and
-        neither may silently leak into a session.  Each key is present only
-        when the config carries a value (``ControlConfig``'s own contract:
-        None → firmware boot default kept).  113-003 adds
-        ``minSpeed``/``distanceKp``/``arriveDwell`` — three
-        ``PlannerConfigPatch`` fields already curated as live-tunable
-        (``config.proto``) and already applied by ``handleConfigPlanner()``,
-        but previously never pushed at all (``minSpeed`` had a wire key with
-        nothing reading it; ``distanceKp``/``arriveDwell`` had no wire key).
-        ``control.vel_filt`` has NO live ``SET`` key and is deliberately not
-        pushed — it reaches firmware at build time only
+      - ``pid.kp/ki/kff/iMax/kaw`` — the velocity-PID gains (``control.vel_*``
+        → ``MotorConfigPatch`` Gains, applied to BOTH motors by
+        ``RobotLoop::handleConfig``). Stakeholder 2026-07-18: selecting a
+        robot must be authoritative for the CONTROL gains too — the sim
+        binary bakes its own harness gains (``SimHarness::makeMotorConfig()``)
+        and real firmware bakes whatever robot JSON was active at build time
+        (``gen_boot_config.py``), and neither may silently leak into a
+        session. Each key is present only when the config carries a value
+        (``ControlConfig``'s own contract: None → firmware boot default
+        kept). ``control.vel_filt`` has NO live ``SET`` key and is
+        deliberately not pushed — it reaches firmware at build time only
         (``gen_boot_config.py`` → ``MotorConfig.setVelFiltAlpha()``).
+        ``headingKp``/``headingKd``/``minSpeed``/``distanceKp``/
+        ``arriveDwell`` (113-003's own ``PlannerConfigPatch`` additions) —
+        DELETED (115-003, gut-to-minimal-firmware S1 motion-stack excision):
+        `PlannerConfigPatch`/`ConfigDelta.planner` and the `App::Pilot` that
+        applied them are gone; none of these five keys are valid
+        `set_config()` wire keys any more (see `protocol.py`'s own
+        `_ALL_SET_KEYS`, which no longer contains them) — pushing any of
+        them fails the WHOLE `set_config()` call (returns `None`, no wire
+        transmission at all), which is exactly why this function must NOT
+        still select them.
 
     ``OI``/``OL``/``OA`` (OTOS) are deliberately OUT of this dict — they are
     not ``SET key=value`` verbs at all (see ``calibration_commands()``'s own
@@ -157,11 +158,14 @@ def calibration_kwargs(config: Any) -> dict[str, float | int]:
     rot_slip = getattr(cal, "rotational_slip", None) if cal else None
     kwargs["rotSlip"] = float(rot_slip) if rot_slip is not None else 0.0
 
-    # ── Velocity-PID + heading/distance-loop gains: present when set ──────
+    # ── Velocity-PID gains: present when set ───────────────────────────────
     # See this function's docstring.  Wire keys are protocol.py's own
-    # vocabulary (_MOTOR_PID_KEYS / _PLANNER_KEYS); both hardware
+    # vocabulary (_MOTOR_PID_KEYS); both hardware
     # (binary_bridge.translate_command → NezhaProtocol.set_config) and Sim
     # (SimTransport._handle_config_set → NezhaProtocol.config) accept them.
+    # headingKp/headingKd/minSpeed/distanceKp/arriveDwell -- DELETED
+    # (115-003, gut S1 motion-stack excision): see this function's own
+    # docstring.
     ctrl = getattr(config, "control", None)
     for wire_key, attr in (
         ("pid.kp", "vel_kp"),
@@ -169,11 +173,6 @@ def calibration_kwargs(config: Any) -> dict[str, float | int]:
         ("pid.kff", "vel_kff"),
         ("pid.iMax", "vel_imax"),
         ("pid.kaw", "vel_kaw"),
-        ("headingKp", "heading_kp"),
-        ("headingKd", "heading_kd"),
-        ("minSpeed", "min_speed"),
-        ("distanceKp", "distance_kp"),
-        ("arriveDwell", "arrive_dwell"),
     ):
         value = getattr(ctrl, attr, None) if ctrl is not None else None
         if value is not None:
@@ -219,15 +218,13 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
          value is baked into the firmware's compiled-in DefaultConfig
          instead of silently inheriting it.  This is what makes "select
          tovez nocal → turns are geometry-pure" true in the sim.
-      5. ``SET pid.kp/ki/kff/iMax/kaw=<float>``,
-         ``SET headingKp/headingKd=<float>``, and (113-003)
-         ``SET minSpeed/distanceKp/arriveDwell=<float>`` — the velocity-PID
-         gains (``control.vel_*`` → ``MotorConfigPatch`` Gains, applied to
-         BOTH motors by ``RobotLoop::handleConfig``) and the outer
-         heading-loop / distance-loop ``PlannerConfigPatch`` fields
-         (``control.heading_*``/``distance_kp``/``arrive_dwell`` →
-         ``Pilot::applyPlannerPatch``).  See ``calibration_kwargs()``'s own
-         docstring for the full field-selection rationale.
+      5. ``SET pid.kp/ki/kff/iMax/kaw=<float>`` — the velocity-PID gains
+         (``control.vel_*`` → ``MotorConfigPatch`` Gains, applied to BOTH
+         motors by ``RobotLoop::handleConfig``). See ``calibration_kwargs()``'s
+         own docstring for the full field-selection rationale (including why
+         the former ``headingKp``/``headingKd``/``minSpeed``/``distanceKp``/
+         ``arriveDwell`` steps are gone -- 115-003 deleted
+         ``PlannerConfigPatch`` wholesale).
       6. ``OI``              — OTOS init (must precede OL/OA)
       7. ``OL <int8>``       — otos_linear_scale encoded
       8. ``OA <int8>``       — otos_angular_scale encoded

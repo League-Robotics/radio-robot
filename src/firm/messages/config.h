@@ -49,17 +49,6 @@ struct MotorConfigPatch {
     // --- array / optional-string accessors ---
 };
 
-// PlannerConfigPatch
-struct PlannerConfigPatch {
-    Opt<float> min_speed = {};
-    Opt<float> heading_kp = {};
-    Opt<float> heading_kd = {};
-    Opt<float> arrive_dwell = {};
-    Opt<float> distance_kp = {};
-
-    // --- array / optional-string accessors ---
-};
-
 // OtosConfigPatch
 struct OtosConfigPatch {
     Opt<float> linear_scale = {};

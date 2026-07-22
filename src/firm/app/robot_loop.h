@@ -24,12 +24,13 @@
 #include "app/deadman.h"
 #include "app/drive.h"
 #include "app/odometry.h"
-#include "app/pilot.h"
 #include "app/preamble.h"
 #include "app/telemetry.h"
 #include "config/persisted_tuning.h"
 #include "devices/clock.h"
+#include "devices/color_sensor.h"
 #include "devices/i2c_bus.h"
+#include "devices/line_sensor.h"
 #include "devices/motor.h"
 #include "devices/otos.h"
 
@@ -40,9 +41,12 @@ class RobotLoop {
   // Every reference below is an already-constructed leaf/app module the
   // cycle body touches by name (main.cpp on ARM, or a host harness, owns
   // construction and wiring order). bus is needed directly for the cycle
-  // body's own bus.clearanceSafetyNetCount() fault read; color/line leaves
-  // are NOT referenced here -- Preamble already holds them and is called by
-  // name, never reached into directly.
+  // body's own bus.clearanceSafetyNetCount() fault read. color/line
+  // (115-005, gut S1) ARE referenced here directly -- Preamble still owns
+  // detecting their PRESENCE at boot (called by name, never reached into),
+  // but this class's own kPace block now calls each leaf's own
+  // readDue()/tick()/reading() directly for rate-limited, alternating
+  // steady-state sampling (see updateLineColor()'s own doc comment below).
   // tuningStore (114-004, SUC-003) -- the persisted-live-tuning seam;
   // trailing and defaulted to nullptr so every EXISTING call site (main.cpp,
   // and every one of TestSim::SimHarness's construction sites) keeps
@@ -54,9 +58,10 @@ class RobotLoop {
   // no-ops entirely when this is null, doing zero extra work per CONFIG
   // dispatch on a composition root that never configured one.
   RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
-            Devices::Motor& motorR, Devices::Otos& otos, Comms& comms,
-            Telemetry& tlm, Drive& drive, Odometry& odom, Deadman& deadman,
-            Preamble& preamble, Pilot& pilot, const Devices::Clock& clock,
+            Devices::Motor& motorR, Devices::Otos& otos,
+            Devices::ColorSensorLeaf& color, Devices::LineSensorLeaf& line,
+            Comms& comms, Telemetry& tlm, Drive& drive, Odometry& odom,
+            Deadman& deadman, Preamble& preamble, const Devices::Clock& clock,
             Devices::Sleeper& sleeper,
             Config::TuningStore* tuningStore = nullptr);
 
@@ -66,7 +71,7 @@ class RobotLoop {
 
   // Boot loop: `preamble.step()` until `preamble.done()`, staging/emitting
   // a boot telemetry frame each pass and pacing via
-  // sleeper_.sleepMillis(kPreamblePace). Sets kEventBootReady on the
+  // sleeper_.sleepMillis(kPreamblePace). Sets kFlagEventBootReady on the
   // done() first-true transition, then returns.
   void boot();
 
@@ -80,12 +85,12 @@ class RobotLoop {
   // is called EXACTLY ONCE by whichever atomic boot path configured the
   // whole graph -- main.cpp's own Config::default*() sequence (real
   // firmware; always immediate, since the boot bake completes before
-  // run() starts), or TestSim::SimHarness's configurePlanner()+
-  // configureMotor() pair (sim/test composition roots). Idempotent: a
-  // second call is a harmless no-op, so a caller that fans out over
-  // multiple config calls (SimHarness) may call it from whichever call
-  // completes the set. handleTwist()/handleMove() refuse (ERR_NOT_CONFIGURED)
-  // until this has fired; handleStop()/handleConfig() stay unconditional.
+  // run() starts), or TestSim::SimHarness's own composition-time config
+  // calls (sim/test composition roots). Idempotent: a second call is a
+  // harmless no-op, so a caller that fans out over multiple config calls
+  // (SimHarness) may call it from whichever call completes the set.
+  // handleTwist() refuses (ERR_NOT_CONFIGURED) until this has fired;
+  // handleStop()/handleConfig() stay unconditional.
   void markConfigured() { configured_ = true; }
   bool isConfigured() const { return configured_; }
 
@@ -109,26 +114,41 @@ class RobotLoop {
   template <typename Body>
   void runAndWait(uint32_t gap, Body body);  // [ms]
 
+  // Update tlm_ from bus_/motorL_/motorR_/comms_ -- everything knowable
+  // synchronously at this point in the cycle. `now` -- [ms], this cycle's
+  // own cycleStart mark, used both as the encoder readings' own
+  // collect-time stamp and (by the caller) as tlm_.emit()'s own `now`
+  // argument, keeping the two in the same time domain.
+  void updateTlm(uint32_t now);  // [ms]
 
-
-  // Update tlm_ from bus_/motorL_/motorR_/ comms_.
-  void updateTlm();
+  // updateLineColor -- rate-limited, ALTERNATING line/color steady-state
+  // sampling (115-005, gut S1's own line/color wiring). Called once per
+  // cycle from the kPace block. Ticks EXACTLY ONE of {line_, color_} this
+  // call (never both -- the 098-004 per-pass-read regression precedent:
+  // never let a per-cycle sensor read disrupt the motor request/collect
+  // cadence) and alternates which one on the NEXT call. Each leaf's own
+  // tick()/readDue() rate-limits the actual bus transaction further (the
+  // same Otos::readDue() pattern) -- this alternation only bounds how
+  // often either leaf is even OFFERED a cycle to check its own due-ness.
+  // A fresh reading packs into frame_.line/frame_.color and sets the
+  // corresponding flags bit (13/14) for THIS cycle only -- the OTHER
+  // leaf's own bit is explicitly cleared this same cycle (it was not even
+  // touched), matching the wire spec's "line/color word fresh" (i.e. fresh
+  // THIS frame, not merely "known at some point") semantics.
+  void updateLineColor(uint64_t nowUs);  // [us]
 
   // Dispatches the <=1 decoded command in cmd to its own handler by
   // cmd_kind (NONE is a no-op). Each handler applies its command and acks
-  // via the telemetry ack ring.
+  // via tlm_.ack().
   void processMessage(const Cmd& cmd);
   void handleTwist(const msg::CommandEnvelope& env);
   void handleConfig(const msg::CommandEnvelope& env);
   void handleStop(const msg::CommandEnvelope& env);
-  void handleMove(const msg::CommandEnvelope& env);
 
   // --- CONFIG appliers (114-004) -- the merge-then-apply logic
   // handleConfig()'s own MOTOR/OTOS branches use, factored out so
   // reapplyPersistedTuning() (boot-triggered) and handleConfig()
-  // (wire-triggered) share exactly one applier per patch kind. PLANNER's
-  // own applier already existed (pilot_.applyPlannerPatch()) -- reused
-  // directly, not duplicated here. ---
+  // (wire-triggered) share exactly one applier per patch kind. ---
 
   // applyMotorConfigPatch -- UNCHANGED extraction of handleConfig()'s own
   // prior MOTOR-branch logic: kp/ki/kff/i_max/kaw mirror onto BOTH
@@ -146,35 +166,35 @@ class RobotLoop {
   // change-detection rationale.
   void persistTuningIfChanged();
 
-  // Drains every pending Motion::Executor completion event (bounded --
-  // Motion::kEventRingDepth) into Telemetry's ack ring, keyed by each
-  // event's own command id (Move.id), not the enqueueing envelope's
-  // corr_id -- see pilot.h/executor.h's own doc comments.
-  void drainPilotEvents();
-
   Devices::I2CBus& bus_;
   Devices::Motor& motorL_;
   Devices::Motor& motorR_;
   Devices::Otos& otos_;
+  Devices::ColorSensorLeaf& color_;
+  Devices::LineSensorLeaf& line_;
   Comms& comms_;
   Telemetry& tlm_;
   Drive& drive_;
   Odometry& odom_;
   Deadman& deadman_;
   Preamble& preamble_;
-  Pilot& pilot_;
   const Devices::Clock& clock_;
   Devices::Sleeper& sleeper_;
 
   // Persists across cycle() calls. Each field is written by the part of
   // the cycle that owns it (encoder/vel/conn after motorL_/motorR_'s own
-  // tick(); pose after odom_.integrate(); otos via applyOtosSample()) and
-  // read back whole by the NEXT cycle's tlm_.setFrame()/emit() call --
-  // Telemetry always carries the last staged snapshot, so a field updated
-  // late in one cycle is simply one cycle "stale" when it reaches the
-  // wire, never lost.
+  // tick(); pose after odom_.integrate(); otos via applyOtosSample();
+  // line/color via updateLineColor()) and read back whole by the NEXT
+  // cycle's tlm_.setFrame()/emit() call -- Telemetry always carries the
+  // last staged snapshot, so a field updated late in one cycle is simply
+  // one cycle "stale" when it reaches the wire, never lost.
   bool driving_ = false;  // true once a Twist is applied, cleared on Stop/deadman
   Telemetry::Frame frame_;
+
+  // updateLineColor()'s own alternation cursor -- true means the NEXT
+  // updateLineColor() call ticks line_, false means it ticks color_. See
+  // that method's own doc comment.
+  bool lineTurnNext_ = true;
 
   // Configuration-completeness gate (114-001) -- see markConfigured()/
   // isConfigured() above for the contract. false until markConfigured()

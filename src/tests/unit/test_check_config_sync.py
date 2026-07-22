@@ -2,8 +2,10 @@
 
 Covers `scripts/check_config_sync.py`'s new comparison model: pydantic
 `RobotConfig` fields (flattened to dotted paths) vs. the generated `pb2`
-descriptors for the three curated Patch messages (`DrivetrainConfigPatch`/
-`MotorConfigPatch`/`PlannerConfigPatch`).
+descriptors for the two curated Patch messages this script tracks
+(`DrivetrainConfigPatch`/`MotorConfigPatch` -- `PlannerConfigPatch` was
+tracked here through sprint 114, DELETED 115-003, gut-to-minimal-firmware
+S1 motion-stack excision).
 
 Two kinds of coverage:
 

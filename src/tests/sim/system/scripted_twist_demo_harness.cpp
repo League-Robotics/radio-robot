@@ -88,7 +88,7 @@
 // own actions provoke -- so this demo asserts the narratively-honest
 // claim: no OTHER fault bit (kFaultWedgeLatch/kFaultI2CNak/
 // kFaultCommsMalformed) ever sets, i.e. nothing THIS demo does introduces
-// a new fault, rather than the false claim that fault_bits stays 0
+// a new fault, rather than the false claim that flags stays 0
 // throughout.
 #include <cmath>
 #include <cstdint>
@@ -96,9 +96,9 @@
 #include <string>
 #include <vector>
 
+#include "app/telemetry.h"
 #include "bench_test_config.h"
 #include "messages/envelope.h"
-#include "messages/planner.h"
 #include "sim_harness.h"
 #include "wire_test_codec.h"
 
@@ -163,21 +163,23 @@ int countSecondary(const std::vector<DecodedLine>& lines) {
   return n;
 }
 
-bool anyAckMatches(const std::vector<DecodedLine>& frames, uint32_t corrId, msg::AckStatus status) {
+// Matches against the single ack slot (Telemetry.ack_corr/ack_err, valid
+// iff flags bit 5/kFlagAckFresh) that replaced the pre-115 depth-3 AckEntry
+// ring (115-003 frame v2). Every existing caller wants an OK (ack_err==0)
+// match.
+bool anyAckMatches(const std::vector<DecodedLine>& frames, uint32_t corrId) {
   for (const auto& f : frames) {
-    for (uint8_t i = 0; i < f.telemetry.acks_count; ++i) {
-      const msg::AckEntry& e = f.telemetry.acks_[i];
-      if (e.corr_id == corrId && e.status == status) return true;
-    }
+    if (!(f.telemetry.flags & App::kFlagAckFresh)) continue;
+    if (f.telemetry.ack_corr == corrId && f.telemetry.ack_err == 0) return true;
   }
   return false;
 }
 
-// bit 0 (kFaultI2CSafetyNet) is a known, pre-existing SimApi boot artifact
+// bit 6 (kFlagFaultI2CSafetyNet) is a known, pre-existing SimApi boot artifact
 // -- see this file's own header comment. Every OTHER declared fault bit is
 // something this demo's own actions should never provoke.
 constexpr uint32_t kWatchedFaultMask =
-    App::kFaultWedgeLatch | App::kFaultI2CNak | App::kFaultCommsMalformed;
+    App::kFlagFaultWedgeLatch | App::kFlagFaultI2CNak | App::kFlagFaultCommsMalformed;
 
 void printTraceHeader() {
   std::printf("%6s  %8s %8s  %8s %8s  %8s %8s\n", "cycle", "cmd_v_x", "cmd_om", "encL", "encR", "velL", "velR");
@@ -185,8 +187,9 @@ void printTraceHeader() {
 
 void printTraceRow(int cycle, float cmdVx, float cmdOmega, const msg::Telemetry& t) {
   std::printf("%6d  %8.1f %8.1f  %8.1f %8.1f  %8.1f %8.1f\n", cycle, static_cast<double>(cmdVx),
-              static_cast<double>(cmdOmega), static_cast<double>(t.enc_left), static_cast<double>(t.enc_right),
-              static_cast<double>(t.vel_left), static_cast<double>(t.vel_right));
+              static_cast<double>(cmdOmega), static_cast<double>(t.enc_left.position),
+              static_cast<double>(t.enc_right.position),
+              static_cast<double>(t.enc_left.velocity), static_cast<double>(t.enc_right.velocity));
 }
 
 }  // namespace
@@ -210,16 +213,16 @@ int main() {
 
   // ===========================================================================
   // Phase 1: BOOT -- drives the REAL App::RobotLoop::boot(), motors + OTOS
-  // connect, kEventBootReady becomes visible in decoded telemetry.
+  // connect, kFlagEventBootReady becomes visible in decoded telemetry.
   // ===========================================================================
-  beginScenario("boot: motors + OTOS connect, kEventBootReady observed");
+  beginScenario("boot: motors + OTOS connect, kFlagEventBootReady observed");
 
   sim.boot();
   checkTrue(sim.booted(), "booted() true after boot()");
   checkTrue(sim.motorLeft().connected(), "left motor connected after boot");
   checkTrue(sim.motorRight().connected(), "right motor connected after boot");
 
-  sim.step(3);  // settle: emits kEventBootReady + both leaves' own activation writes land
+  sim.step(3);  // settle: emits kFlagEventBootReady + both leaves' own activation writes land
   {
     std::vector<DecodedLine> bootLines = sim.drainTelemetry();
     secondaryFrameCount += countSecondary(bootLines);
@@ -227,12 +230,13 @@ int main() {
     checkTrue(!bootFrames.empty(), "telemetry decoded during boot settle");
     bool sawBootReady = false;
     for (const auto& f : bootFrames) {
-      if (f.telemetry.event_bits & App::kEventBootReady) sawBootReady = true;
-      if (f.telemetry.fault_bits & kWatchedFaultMask) anyWatchedFaultEver = true;
-      if (!f.telemetry.conn_left || !f.telemetry.conn_right) connHealthyThroughout = false;
+      if (f.telemetry.flags & App::kFlagEventBootReady) sawBootReady = true;
+      if (f.telemetry.flags & kWatchedFaultMask) anyWatchedFaultEver = true;
+      if (!(f.telemetry.flags & App::kFlagConnLeft) || !(f.telemetry.flags & App::kFlagConnRight))
+        connHealthyThroughout = false;
     }
-    checkTrue(sawBootReady, "kEventBootReady observed in decoded telemetry");
-    std::printf("  BOOT OK: motors + OTOS connected, kEventBootReady observed\n\n");
+    checkTrue(sawBootReady, "kFlagEventBootReady observed in decoded telemetry");
+    std::printf("  BOOT OK: motors + OTOS connected, kFlagEventBootReady observed\n\n");
   }
 
   // ===========================================================================
@@ -263,19 +267,22 @@ int main() {
     std::vector<DecodedLine> rampLines = sim.drainTelemetry();
     secondaryFrameCount += countSecondary(rampLines);
     std::vector<DecodedLine> frames = onlyTelemetry(rampLines);
-    if (anyAckMatches(frames, kTwistCorrId, msg::AckStatus::ACK_STATUS_OK)) twistAcked = true;
+    if (anyAckMatches(frames, kTwistCorrId)) twistAcked = true;
     for (const auto& f : frames) {
-      if (f.telemetry.fault_bits & kWatchedFaultMask) anyWatchedFaultEver = true;
-      if (!f.telemetry.conn_left || !f.telemetry.conn_right) connHealthyThroughout = false;
-      if (!f.telemetry.has_vel || !f.telemetry.has_enc) continue;
+      if (f.telemetry.flags & kWatchedFaultMask) anyWatchedFaultEver = true;
+      if (!(f.telemetry.flags & App::kFlagConnLeft) || !(f.telemetry.flags & App::kFlagConnRight))
+        connHealthyThroughout = false;
+      // EncoderReading is unconditionally present every frame (115-005
+      // frame v2 -- no has_vel/has_enc presence flag any more), so every
+      // frame carries real data, not just a filtered subset.
       if (!sawRampData) {
-        firstVelLeft = f.telemetry.vel_left;
-        firstEncLeft = f.telemetry.enc_left;
+        firstVelLeft = f.telemetry.enc_left.velocity;
+        firstEncLeft = f.telemetry.enc_left.position;
         sawRampData = true;
       }
-      peakVelLeft = f.telemetry.vel_left;
-      peakVelRight = f.telemetry.vel_right;
-      lastEncLeft = f.telemetry.enc_left;
+      peakVelLeft = f.telemetry.enc_left.velocity;
+      peakVelRight = f.telemetry.enc_right.velocity;
+      lastEncLeft = f.telemetry.enc_left.position;
       printTraceRow(sim.cycleCount(), kCmdVx, kCmdOmega, f.telemetry);
     }
   }
@@ -317,16 +324,17 @@ int main() {
     std::vector<DecodedLine> stopLines = sim.drainTelemetry();
     secondaryFrameCount += countSecondary(stopLines);
     std::vector<DecodedLine> frames = onlyTelemetry(stopLines);
-    if (anyAckMatches(frames, kStopCorrId, msg::AckStatus::ACK_STATUS_OK)) stopAcked = true;
+    if (anyAckMatches(frames, kStopCorrId)) stopAcked = true;
     for (const auto& f : frames) {
-      if (f.telemetry.fault_bits & kWatchedFaultMask) anyWatchedFaultEver = true;
-      if (!f.telemetry.conn_left || !f.telemetry.conn_right) connHealthyThroughout = false;
-      if (!f.telemetry.active) sawInactive = true;
+      if (f.telemetry.flags & kWatchedFaultMask) anyWatchedFaultEver = true;
+      if (!(f.telemetry.flags & App::kFlagConnLeft) || !(f.telemetry.flags & App::kFlagConnRight))
+        connHealthyThroughout = false;
+      if (!(f.telemetry.flags & App::kFlagActive)) sawInactive = true;
       if (f.telemetry.mode == msg::DriveMode::IDLE) sawIdleMode = true;
-      if (f.telemetry.has_vel) {
-        lastVelLeft = f.telemetry.vel_left;
-        lastVelRight = f.telemetry.vel_right;
-      }
+      // EncoderReading is unconditionally present every frame (115-005
+      // frame v2) -- no has_vel presence flag to gate on any more.
+      lastVelLeft = f.telemetry.enc_left.velocity;
+      lastVelRight = f.telemetry.enc_right.velocity;
       printTraceRow(sim.cycleCount(), 0.0f, 0.0f, f.telemetry);
     }
   }
@@ -354,10 +362,11 @@ int main() {
   // scope), so the firmware's own health signals should stay clean save
   // for the pre-existing boot-time kFaultI2CSafetyNet artifact.
   // ===========================================================================
-  beginScenario("health: no new fault bit set, conn_left/conn_right healthy throughout");
+  beginScenario("health: no new fault bit set, kFlagConnLeft/kFlagConnRight healthy throughout");
   checkTrue(!anyWatchedFaultEver,
-            "no kFaultWedgeLatch/kFaultI2CNak/kFaultCommsMalformed ever set (no fault knob used in this demo)");
-  checkTrue(connHealthyThroughout, "conn_left/conn_right stayed true across the whole run");
+            "no kFlagFaultWedgeLatch/kFlagFaultI2CNak/kFlagFaultCommsMalformed ever set "
+            "(no fault knob used in this demo)");
+  checkTrue(connHealthyThroughout, "kFlagConnLeft/kFlagConnRight stayed set across the whole run");
   std::printf("  HEALTH OK: no new fault bit set, connections healthy throughout\n\n");
 
   // ===========================================================================

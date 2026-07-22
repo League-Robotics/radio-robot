@@ -29,6 +29,11 @@ void OtosPlant::step(float leftPosition, float rightPosition, float dt) {
 
   // 109-010: omega() -- see step()'s own `dt` doc comment (header).
   omega_ = (dt > 0.0f) ? headingDelta / dt : 0.0f;
+  // 115-006: v_x() -- the SAME `distance` this step() call just used for
+  // the midpoint-arc position update, expressed as a rate -- see v_x()'s
+  // own doc comment (header) for why this is body-frame forward velocity,
+  // not world-frame. v_y() stays 0.0f (no lateral-slip model).
+  v_x_ = (dt > 0.0f) ? distance / dt : 0.0f;
 }
 
 void OtosPlant::setDrift(float xDrift, float yDrift, float headingDrift) {

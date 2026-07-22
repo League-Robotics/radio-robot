@@ -1,5 +1,6 @@
 """Fuzz corpus for the P4-pruned wire protocol (103-001, SUC-001,
-architecture-update.md (103) Decisions 2/3).
+architecture-update.md (103) Decisions 2/3). Telemetry encode-side fuzz
+cases rewritten 115-009 for the frame-v2 shape (115-003).
 
 ***Part of the correctness gate the `src/firm/app/` tickets (004+) are built
 on top of -- see test_wire_differential.py's module docstring for the full
@@ -209,13 +210,17 @@ _FLOAT_EXTREMES = [3.4028235e38, -3.4028235e38, 1.1754944e-38, 0.0, float("nan")
 
 @pytest.mark.parametrize("value", _FLOAT_EXTREMES, ids=[f"f{i}" for i in range(len(_FLOAT_EXTREMES))])
 def test_fuzz_encode_telemetry_float_extremes(asan_harness, value):
-    acks = ((_UINT32_MAX, 1, _UINT32_MAX), (_UINT32_MAX, 1, _UINT32_MAX), (_UINT32_MAX, 1, _UINT32_MAX))
-    r = encode_telemetry(asan_harness, 1, acks=acks, now=_UINT32_MAX, mode=255, seq=_UINT32_MAX, has_enc=True,
-                          enc_left=value, enc_right=value, has_vel=True, vel_left=value, vel_right=value,
-                          has_pose=True, pose_x=value, pose_y=value, pose_h=value, has_otos=True, otos_x=value,
-                          otos_y=value, otos_h=value, otos_connected=True, has_twist=True, twist_vx=value,
-                          twist_vy=value, twist_omega=value, active=True, conn_left=True, conn_right=True,
-                          fault_bits=_UINT32_MAX, event_bits=_UINT32_MAX)
+    r = encode_telemetry(
+        asan_harness, 1, now=_UINT32_MAX, mode=255, seq=_UINT32_MAX, flags=_UINT32_MAX,
+        ack_corr=_UINT32_MAX, ack_err=_UINT32_MAX,
+        enc_left_position=value, enc_left_velocity=value, enc_left_time=_UINT32_MAX,
+        enc_right_position=value, enc_right_velocity=value, enc_right_time=_UINT32_MAX,
+        otos_x=value, otos_y=value, otos_heading=value, otos_v_x=value, otos_v_y=value, otos_omega=value,
+        otos_time=_UINT32_MAX,
+        pose_x=value, pose_y=value, pose_h=value,
+        twist_v_x=value, twist_v_y=value, twist_omega=value,
+        line=_UINT32_MAX, color=_UINT32_MAX,
+    )
     # No ASan/UBSan finding is the only bar here (encode_telemetry() itself
     # already asserts !crashed and a well-formed "B64 .../ZERO" line via
     # run_harness()'s own crashed-detection -- calling it at all under the

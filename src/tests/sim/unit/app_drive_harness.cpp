@@ -17,6 +17,16 @@
 // value inverse() computed" from the PID's own convergence behavior
 // (already proved by devices_motor_harness.cpp's scenarioPidOnChasesVelocityTarget).
 //
+// 115-005 (gut S1) update: Drive is now a PURE velocity follower --
+// configure()/actuationLag_/the a_x/alpha acceleration-feedforward staging
+// (112-002) were deleted along with the rest of the motion stack, and
+// setTwist() gained an accepted-and-ignored v_y parameter (wire-forward for
+// sprint 116's MoveTwist, sprint.md Decision 5). The two former feedforward
+// scenarios (raw-2-arg-unaffected, acceleration-feedforward-adds-lag-times-
+// accel) tested functionality that no longer exists and are deleted, not
+// adapted; a new scenario proves v_y is accepted and has no effect on the
+// staged wheel targets.
+//
 // Mirrors devices_motor_harness.cpp's own NezhaMotor-scripting helpers
 // (scriptEncoderRequestCollect/baseNezhaConfig) -- duplicated here per this
 // codebase's established per-harness-file fixture convention (see that
@@ -42,7 +52,6 @@
 #include "devices/device_types.h"
 #include "devices/nezha_motor.h"
 #include "kinematics/body_kinematics.h"
-#include "messages/planner.h"
 #include "scripted_i2c_hook.h"
 #include "sim_plant.h"
 
@@ -165,7 +174,7 @@ void scenarioStraightLineStagesEqualSameSignTargets() {
 
   const float v_x = 100.0f;    // [mm/s]
   const float omega = 0.0f;    // [rad/s]
-  drive.setTwist(v_x, omega);
+  drive.setTwist(v_x, 0.0f, omega);
   drive.tick();
 
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
@@ -205,7 +214,7 @@ void scenarioPureRotationStagesOppositeSignTargets() {
 
   const float v_x = 0.0f;      // [mm/s]
   const float omega = 0.5f;    // [rad/s] CCW-positive
-  drive.setTwist(v_x, omega);
+  drive.setTwist(v_x, 0.0f, omega);
   drive.tick();
 
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
@@ -247,7 +256,7 @@ void scenarioStopZeroesBothTargetsWithinOneCycle() {
   // Stage a nonzero twist and actually execute it once, so appliedDuty() is
   // demonstrably nonzero before stop() -- proves the transition, not just
   // "duty was never nonzero to begin with."
-  drive.setTwist(100.0f, 0.0f);
+  drive.setTwist(100.0f, 0.0f, 0.0f);
   drive.tick();
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
   runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs);
@@ -265,16 +274,15 @@ void scenarioStopZeroesBothTargetsWithinOneCycle() {
 }
 
 // ===========================================================================
-// 4. 112-002: a raw 2-arg setTwist() call is byte-for-byte unaffected by the
-//    acceleration-feedforward addition, even with a NONZERO actuation_lag
-//    configured -- a_x/alpha default to 0, so the feedforward term
-//    (actuation_lag * a) is exactly 0 regardless of actuation_lag's own
-//    value. Proves RobotLoop::handleTwist()'s raw TWIST path (a 2-arg call)
-//    compiles and behaves unchanged (AC #2/#7).
+// 4. 115-005 (gut S1): setTwist()'s v_y parameter is accepted and IGNORED --
+//    a straight twist with a large nonzero v_y stages the EXACT SAME vL/vR
+//    as v_y == 0, proving Drive::tick() never reads it (wire-forward for
+//    sprint 116's MoveTwist, sprint.md Decision 5 -- v_y becomes live only
+//    once a real wire value supplies it).
 // ===========================================================================
 
-void scenarioRawTwoArgSetTwistUnaffectedByFeedforward() {
-  beginScenario("Drive::setTwist() 2-arg form: unaffected by a configured actuation_lag (a_x/alpha default 0)");
+void scenarioVyAcceptedAndIgnored() {
+  beginScenario("Drive::setTwist(): v_y is accepted and has no effect on the staged wheel targets");
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
@@ -288,16 +296,10 @@ void scenarioRawTwoArgSetTwistUnaffectedByFeedforward() {
   const float trackWidth = 200.0f;  // [mm]
   App::Drive drive(left, right, trackWidth);
 
-  // A nonzero actuation_lag -- if the 2-arg setTwist() form leaked a
-  // nonzero a_x/alpha default, this would show up as a nonzero feedforward
-  // contribution below.
-  msg::PlannerConfig cfg;
-  cfg.actuation_lag = 0.130f;  // [s]
-  drive.configure(cfg);
-
-  const float v_x = 100.0f;  // [mm/s]
-  const float omega = 0.5f;  // [rad/s]
-  drive.setTwist(v_x, omega);  // 2-arg form -- a_x/alpha resolve to their 0.0f defaults
+  const float v_x = 100.0f;    // [mm/s]
+  const float v_y = 250.0f;    // [mm/s] -- large, nonzero; must have zero effect
+  const float omega = 0.5f;    // [rad/s]
+  drive.setTwist(v_x, v_y, omega);
   drive.tick();
 
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
@@ -308,65 +310,9 @@ void scenarioRawTwoArgSetTwistUnaffectedByFeedforward() {
 
   const float kff = 0.002f;
   checkFloatEq(left.appliedDuty(), kff * expectedVL,
-               "left appliedDuty() matches the plain inverse() target -- no feedforward leaked in");
+               "left appliedDuty() matches inverse(v_x, omega, ...) exactly -- v_y contributed nothing");
   checkFloatEq(right.appliedDuty(), kff * expectedVR,
-               "right appliedDuty() matches the plain inverse() target -- no feedforward leaked in");
-}
-
-// ===========================================================================
-// 5. 112-002: the acceleration-feedforward term. A straight twist (omega=0,
-//    alpha=0) with a nonzero a_x stages vL/vR = inverse(v_x, omega, ...) +
-//    actuation_lag * inverse(a_x, alpha, ...) -- the SAME inverse() map
-//    reused for acceleration, added onto each wheel's velocity target.
-// ===========================================================================
-
-void scenarioAccelerationFeedforwardAddsLagTimesAccelOntoWheelTargets() {
-  beginScenario("Drive::tick(): stages vL/vR + actuation_lag * inverse(a_x, alpha, ...) (112-002 feedforward)");
-
-  TestSim::SimPlant plant;
-  TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-
-  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
-  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
-  primeAtZero(left, bus, wireAddr);
-  primeAtZero(right, bus, wireAddr);
-
-  const float trackWidth = 200.0f;  // [mm]
-  App::Drive drive(left, right, trackWidth);
-
-  const float actuationLag = 0.130f;  // [s]
-  msg::PlannerConfig cfg;
-  cfg.actuation_lag = actuationLag;
-  drive.configure(cfg);
-
-  const float v_x = 100.0f;    // [mm/s]
-  const float omega = 0.0f;    // [rad/s]
-  const float a_x = 500.0f;    // [mm/s^2]
-  const float alpha = 0.0f;    // [rad/s^2]
-  drive.setTwist(v_x, omega, a_x, alpha);
-  drive.tick();
-
-  runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
-  runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs);
-
-  float baseVL = 0.0f, baseVR = 0.0f;
-  BodyKinematics::inverse(v_x, omega, trackWidth, baseVL, baseVR);
-  float aL = 0.0f, aR = 0.0f;
-  BodyKinematics::inverse(a_x, alpha, trackWidth, aL, aR);
-  float expectedVL = baseVL + actuationLag * aL;
-  float expectedVR = baseVR + actuationLag * aR;
-
-  const float kff = 0.002f;
-  checkFloatEq(left.appliedDuty(), kff * expectedVL,
-               "left appliedDuty() reflects vL + actuation_lag * aL");
-  checkFloatEq(right.appliedDuty(), kff * expectedVR,
-               "right appliedDuty() reflects vR + actuation_lag * aR");
-  // Sanity: with omega=alpha=0 the feedforward term is identical on both
-  // wheels (aL == aR == a_x), so the feedforward strictly increases both
-  // targets above the plain inverse() value here.
-  checkTrue(expectedVL > baseVL, "sanity: the feedforward term is nonzero and additive on the left wheel");
-  checkTrue(expectedVR > baseVR, "sanity: the feedforward term is nonzero and additive on the right wheel");
+               "right appliedDuty() matches inverse(v_x, omega, ...) exactly -- v_y contributed nothing");
 }
 
 }  // namespace
@@ -375,8 +321,7 @@ int main() {
   scenarioStraightLineStagesEqualSameSignTargets();
   scenarioPureRotationStagesOppositeSignTargets();
   scenarioStopZeroesBothTargetsWithinOneCycle();
-  scenarioRawTwoArgSetTwistUnaffectedByFeedforward();
-  scenarioAccelerationFeedforwardAddsLagTimesAccelOntoWheelTargets();
+  scenarioVyAcceptedAndIgnored();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Drive scenarios passed\n");

@@ -1,7 +1,7 @@
-// persisted_tuning.h -- Config::PersistedTuning (114-004, SUC-003): a
-// version-stamped store for the live-pushed CFG patch fields that already
-// survive a wire CFG call -- MotorConfigPatch's gains/travel_calib,
-// PlannerConfigPatch's 5 curated fields, OtosConfigPatch's scale/offset
+// persisted_tuning.h -- Config::PersistedTuning (114-004, SUC-003;
+// planner slot removed 115-004, gut S1): a version-stamped store for the
+// live-pushed CFG patch fields that already survive a wire CFG call --
+// MotorConfigPatch's gains/travel_calib, OtosConfigPatch's scale/offset
 // fields -- persisted across a POWER CYCLE, WIPED across a FIRMWARE
 // VERSION bump. Does not widen the live-tunable set (sprint.md Open
 // Question 1; sprint 113's own Decision 1 already rejected that) -- this
@@ -58,7 +58,15 @@ namespace Config {
 // whose fields may mean something different now (SUC-003). Bump
 // discipline itself (WHEN a future change must bump this) is sprint.md's
 // own Open Question 2 -- a documentation follow-up, not resolved here.
-constexpr uint32_t kConfigSchemaVersion = 1;
+//
+// Bumped 1 -> 2 by 115-004 (gut S1): the planner slot was dropped from
+// TuningSnapshot below, shrinking kBlobSize (110 -> 85 bytes). Without
+// this bump, deserializeSnapshot() would read an old 110-byte blob's
+// now-shifted trailing bytes into the new 85-byte layout, silently
+// corrupting the OTOS-calibration fields with what used to be the
+// planner term's floats -- memory-safe but behaviorally wrong. The bump
+// instead triggers shouldWipe()'s clean wipe path at boot.
+constexpr uint32_t kConfigSchemaVersion = 2;
 
 // TuningSnapshot -- exactly the fields a live CFG patch can already
 // change. One MotorConfigPatch slot per side: travel_calib is
@@ -83,7 +91,6 @@ constexpr uint32_t kConfigSchemaVersion = 1;
 struct TuningSnapshot {
   msg::MotorConfigPatch motorL = {};  // side stays LEFT
   msg::MotorConfigPatch motorR = {};  // side stays RIGHT
-  msg::PlannerConfigPatch planner = {};
   msg::OtosConfigPatch otos = {};     // .init never persisted -- see above
 };
 
@@ -97,14 +104,16 @@ struct TuningSnapshot {
 // covers layout but not padding-byte content).
 constexpr size_t kOptFloatBytes = 5;      // 1 (has) + 4 (float)
 constexpr size_t kMotorPatchFields = 6;   // travel_calib, kp, ki, kff, i_max, kaw
-constexpr size_t kPlannerPatchFields = 5; // min_speed, heading_kp, heading_kd, arrive_dwell, distance_kp
 constexpr size_t kOtosPatchFields = 5;    // linear_scale, angular_scale, offset_x, offset_y, offset_yaw
 
 // kBlobSize -- computed from the field-count constants above (not a magic
 // number) so a future curated-field-set change (sprint.md Open Question 2)
-// updates this automatically instead of silently truncating.
+// updates this automatically instead of silently truncating. The planner
+// term (kPlannerPatchFields * kOptFloatBytes) was DELETED, not zeroed, by
+// 115-004 -- msg::PlannerConfigPatch no longer exists after 115-003's proto
+// surgery -- so this now computes to 85 (was 110) from the remaining two
+// terms.
 constexpr size_t kBlobSize = (2 * kMotorPatchFields * kOptFloatBytes) +
-                              (kPlannerPatchFields * kOptFloatBytes) +
                               (kOtosPatchFields * kOptFloatBytes);
 
 using Blob = std::array<uint8_t, kBlobSize>;

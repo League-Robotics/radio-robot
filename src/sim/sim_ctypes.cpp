@@ -92,19 +92,17 @@
 //   void sim_set_enc_slip(SimHandle h, int port, float rate, float magnitudeMm);  // [0,1] [mm] (109-007)
 //
 // ---- Tier-2 config-load surface (113-002) ----
-// Thin call-throughs to SimHarness::configurePlanner()/configureMotor() --
-// the additive, one-shot "load a full boot config at runtime" surface for
-// the msg::PlannerConfig fields (and per-motor vel_filt/fwd_sign) that have
-// no live Tier-1 wire arm. See these exports' own doc comments (below, next
-// to their definitions) for the full field list and the port/merge
-// conventions.
-//   void sim_configure_planner(SimHandle h, float a_max, float a_decel, float v_body_max,
-//       float yaw_rate_max, float yaw_acc_max, float j_max, float yaw_jerk_max,
-//       float min_speed, float heading_kp, float heading_kd, float arrive_dwell,
-//       int heading_source, float heading_dwell_tol, float heading_dwell_rate,
-//       float heading_lead_bias, float plan_lead, float terminal_lead,
-//       float actuation_lag, float distance_kp, float distance_tol,
-//       float model_tau_lin, float model_tau_ang);
+// Thin call-through to SimHarness::configureMotor() -- the additive,
+// one-shot "load a full boot config at runtime" surface for the per-motor
+// vel_filt/fwd_sign fields that have no live Tier-1 wire arm.
+//
+// sim_configure_planner()/sim_read_planner_config()/
+// sim_set_lead_compensation()/sim_set_yaw_rate_max()/sim_debug_heading_lead()
+// -- DELETED (115-006, gut S1): msg::PlannerConfig and
+// SimHarness::configurePlanner()/plannerConfig() no longer exist
+// (Motion::Executor/App::Pilot/App::HeadingSource were deleted by 115-002's
+// motion-stack excision) -- there is nothing left for any of these
+// call-throughs to reach.
 //   void sim_configure_motor(SimHandle h, int port, float velFiltAlpha, int fwdSign);
 //
 // ---- Hook surface -- THE point of this sprint's scripting model ----
@@ -321,44 +319,21 @@ void sim_set_enc_slip(SimHandle h, int port, float rate, float magnitudeMm) {
   asHarness(h)->plant().setEncSlip(port, rate, magnitudeMm);
 }
 
-// 109-010: rate-sweep characterization harness hook -- see SimHarness::
-// setLeadCompensation()'s own doc comment (sim_harness.h) for why this is a
-// sim-only ctypes path (no wire PlannerConfigPatch arm for these three
-// fields; they are boot-baked-default-only).
-void sim_set_lead_compensation(SimHandle h, float headingLeadBias, float planLead,
-                                float terminalLead) {
-  asHarness(h)->setLeadCompensation(headingLeadBias, planLead, terminalLead);
-}
-
-// 109-010: rate-sweep characterization harness hook -- see SimHarness::
-// setYawRateMax()'s own doc comment.
-void sim_set_yaw_rate_max(SimHandle h, float yawRateMax) {
-  asHarness(h)->setYawRateMax(yawRateMax);
-}
-
-// 109-010 diagnostic-only export -- see SimHarness::debugHeadingLead()'s own
-// doc comment. TEMPORARY characterization instrumentation.
-void sim_debug_heading_lead(SimHandle h, int* usingOtos, float* heading, float* headingLead) {
-  bool u = false;
-  asHarness(h)->debugHeadingLead(&u, heading, headingLead);
-  *usingOtos = u ? 1 : 0;
-}
+// sim_set_lead_compensation()/sim_set_yaw_rate_max()/sim_debug_heading_lead()
+// -- DELETED (115-006, gut S1): SimHarness::setLeadCompensation()/
+// setYawRateMax()/debugHeadingLead() no longer exist -- Motion::Executor/
+// App::Pilot/App::HeadingSource were deleted by 115-002's motion-stack
+// excision. See sim_harness.h's own header.
 
 // ---- Tier-2 config-load surface (113-002) ----
 //
-// Thin call-throughs to SimHarness::configurePlanner()/configureMotor() --
-// see sim_harness.h's own doc comments on those methods for the ADDITIVE
-// contract (existing default-constructed SimHarness callers are unaffected;
-// these exports are the ONLY way a ctypes caller reaches them). Safe to call
-// either before or after boot() (sim_create() already calls boot()
-// unconditionally before returning a handle to the caller -- see this
-// file's own header) since neither method touches Preamble's own boot
-// sequencing.
-//
-//   void sim_configure_planner(SimHandle h, <22 args -- one per
-//     msg::PlannerConfig field this sprint's Tier 2 covers, in field-
-//     declaration order; heading_source is an int, cast to
-//     msg::HeadingSourceMode at this boundary>);
+// Thin call-through to SimHarness::configureMotor() -- see sim_harness.h's
+// own doc comment on that method for the ADDITIVE contract (existing
+// default-constructed SimHarness callers are unaffected; this export is the
+// ONLY way a ctypes caller reaches it). Safe to call either before or after
+// boot() (sim_create() already calls boot() unconditionally before
+// returning a handle to the caller -- see this file's own header) since it
+// does not touch Preamble's own boot sequencing.
 //   void sim_configure_motor(SimHandle h, int port, float velFiltAlpha,
 //     int fwdSign);
 //     port: 1 = left, 2 = right (same convention as every other per-port
@@ -371,19 +346,14 @@ void sim_debug_heading_lead(SimHandle h, int* usingOtos, float* heading, float* 
 //     path already pushed.
 //
 // ---- Tier-2 config-load readback (113-007 test-only diagnostic) ----
-// Thin call-throughs to SimHarness::plannerConfig()/motorConfig() -- the
-// SAME test-only C++ accessors ticket 002's own harness test
-// (sim_harness_configure_harness.cpp) already exercises at the C++ level.
-// Sprint 113's own "golden-parity" test (SUC-001/SUC-002, ticket 007) needs
-// to read back what actually landed in the sim AFTER going through the
-// FULL Python pipeline (SimLoop.configure_from_robot() -> sim_boot_config.py
-// -> sim_configure_planner()/sim_configure_motor() above -> SimHarness), not
-// just at the C++ call site -- no ctypes export existed for that read
-// direction until this ticket added these two. Out-pointer style, mirroring
-// sim_debug_heading_lead()'s existing convention above -- thin call-throughs,
-// no logic of their own.
-//   void sim_read_planner_config(SimHandle h, <22 out-pointers, SAME field
-//     order as sim_configure_planner()'s own 22 value args above>);
+// Thin call-through to SimHarness::motorConfig() -- the SAME test-only C++
+// accessor ticket 002's own harness test (sim_harness_configure_harness.cpp)
+// already exercises at the C++ level.
+//
+// sim_read_planner_config() -- DELETED (115-006, gut S1): SimHarness::
+// plannerConfig() no longer exists (see this file's own header). Out-pointer
+// style, mirroring the surviving hook surface's convention -- thin
+// call-throughs, no logic of their own.
 //   void sim_read_motor_config(SimHandle h, int port, float* velFiltAlpha,
 //     int* fwdSign);
 //     port: 1 = left, 2 = right. Returns whatever configureMotor() was last
@@ -391,39 +361,9 @@ void sim_debug_heading_lead(SimHandle h, int* usingOtos, float* heading, float* 
 //     a default-constructed Devices::MotorConfig{} if configureMotor() was
 //     never called for that port).
 
-void sim_configure_planner(SimHandle h, float a_max, float a_decel, float v_body_max,
-                            float yaw_rate_max, float yaw_acc_max, float j_max,
-                            float yaw_jerk_max, float min_speed, float heading_kp,
-                            float heading_kd, float arrive_dwell, int heading_source,
-                            float heading_dwell_tol, float heading_dwell_rate,
-                            float heading_lead_bias, float plan_lead, float terminal_lead,
-                            float actuation_lag, float distance_kp, float distance_tol,
-                            float model_tau_lin, float model_tau_ang) {
-  msg::PlannerConfig cfg;
-  cfg.a_max = a_max;
-  cfg.a_decel = a_decel;
-  cfg.v_body_max = v_body_max;
-  cfg.yaw_rate_max = yaw_rate_max;
-  cfg.yaw_acc_max = yaw_acc_max;
-  cfg.j_max = j_max;
-  cfg.yaw_jerk_max = yaw_jerk_max;
-  cfg.min_speed = min_speed;
-  cfg.heading_kp = heading_kp;
-  cfg.heading_kd = heading_kd;
-  cfg.arrive_dwell = arrive_dwell;
-  cfg.heading_source = static_cast<msg::HeadingSourceMode>(heading_source);
-  cfg.heading_dwell_tol = heading_dwell_tol;
-  cfg.heading_dwell_rate = heading_dwell_rate;
-  cfg.heading_lead_bias = heading_lead_bias;
-  cfg.plan_lead = plan_lead;
-  cfg.terminal_lead = terminal_lead;
-  cfg.actuation_lag = actuation_lag;
-  cfg.distance_kp = distance_kp;
-  cfg.distance_tol = distance_tol;
-  cfg.model_tau_lin = model_tau_lin;
-  cfg.model_tau_ang = model_tau_ang;
-  asHarness(h)->configurePlanner(cfg);
-}
+// sim_configure_planner() -- DELETED (115-006, gut S1): msg::PlannerConfig
+// and SimHarness::configurePlanner() no longer exist. See this file's own
+// header.
 
 // port: 1 = left, 2 = right. wheelTravelCalib/slewRate have no existing
 // Devices::Motor/NezhaMotor accessor (only velGains does, via gains()) --
@@ -446,44 +386,14 @@ void sim_configure_motor(SimHandle h, int port, float velFiltAlpha, int fwdSign)
 
 // ---- Tier-2 config-load readback (113-007) ----
 //
-// Thin call-throughs to SimHarness::plannerConfig()/motorConfig() -- see
-// this file's own header comment for why this ticket added a Python-
-// reachable read direction (proving the FULL configure_from_robot()
-// pipeline landed the right values, not just the C++ call site ticket 002's
-// own harness test already covered).
-
-void sim_read_planner_config(SimHandle h, float* a_max, float* a_decel, float* v_body_max,
-                              float* yaw_rate_max, float* yaw_acc_max, float* j_max,
-                              float* yaw_jerk_max, float* min_speed, float* heading_kp,
-                              float* heading_kd, float* arrive_dwell, int* heading_source,
-                              float* heading_dwell_tol, float* heading_dwell_rate,
-                              float* heading_lead_bias, float* plan_lead, float* terminal_lead,
-                              float* actuation_lag, float* distance_kp, float* distance_tol,
-                              float* model_tau_lin, float* model_tau_ang) {
-  const msg::PlannerConfig& cfg = asHarness(h)->plannerConfig();
-  *a_max = cfg.a_max;
-  *a_decel = cfg.a_decel;
-  *v_body_max = cfg.v_body_max;
-  *yaw_rate_max = cfg.yaw_rate_max;
-  *yaw_acc_max = cfg.yaw_acc_max;
-  *j_max = cfg.j_max;
-  *yaw_jerk_max = cfg.yaw_jerk_max;
-  *min_speed = cfg.min_speed;
-  *heading_kp = cfg.heading_kp;
-  *heading_kd = cfg.heading_kd;
-  *arrive_dwell = cfg.arrive_dwell;
-  *heading_source = static_cast<int>(cfg.heading_source);
-  *heading_dwell_tol = cfg.heading_dwell_tol;
-  *heading_dwell_rate = cfg.heading_dwell_rate;
-  *heading_lead_bias = cfg.heading_lead_bias;
-  *plan_lead = cfg.plan_lead;
-  *terminal_lead = cfg.terminal_lead;
-  *actuation_lag = cfg.actuation_lag;
-  *distance_kp = cfg.distance_kp;
-  *distance_tol = cfg.distance_tol;
-  *model_tau_lin = cfg.model_tau_lin;
-  *model_tau_ang = cfg.model_tau_ang;
-}
+// Thin call-through to SimHarness::motorConfig() -- see this file's own
+// header comment for why this ticket added a Python-reachable read
+// direction (proving the FULL configure_from_robot() pipeline landed the
+// right values, not just the C++ call site ticket 002's own harness test
+// already covered).
+//
+// sim_read_planner_config() -- DELETED (115-006, gut S1): SimHarness::
+// plannerConfig() no longer exists.
 
 // port: 1 = left, 2 = right (same convention as sim_configure_motor() above).
 void sim_read_motor_config(SimHandle h, int port, float* velFiltAlpha, int* fwdSign) {

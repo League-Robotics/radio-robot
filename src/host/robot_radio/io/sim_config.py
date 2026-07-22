@@ -123,23 +123,23 @@ class SimConfigConn:
 
     def poll_ack(self, corr_id: int, timeout: int = 500,  # [ms]
                 ) -> "protocol.AckEntry | None":
-        """Poll ``SimLoop.read_pending_binary_tlm_frames()``'s ack ring for
-        ``corr_id``, mirroring ``SerialConnection.wait_for_ack()``'s own
-        re-delivery-tolerant matching (returns on the FIRST frame carrying a
-        match) -- a small, Sim-local reimplementation rather than an import
-        of that method's private ``_match_ack_in_frames()`` helper, since
-        that helper matches against raw ``pb2.ReplyEnvelope`` objects
-        (``reply.tlm.acks``) off ``drain_binary_tlm()``, not the already-
+        """Poll ``SimLoop.read_pending_binary_tlm_frames()``'s single ack
+        slot for ``corr_id``, mirroring ``SerialConnection.wait_for_ack()``'s
+        own re-delivery-tolerant matching (returns on the FIRST frame
+        carrying a match) -- a small, Sim-local reimplementation rather than
+        an import of that method's private ``_match_ack_in_frames()``
+        helper, since that helper matches against raw ``pb2.ReplyEnvelope``
+        objects (``reply.tlm.ack_corr``/``ack_err``, gated on ``flags`` bit 5
+        -- 115-003's frame-v2 rewrite replaced the pre-115 depth-3 ack ring
+        with this one slot) off ``drain_binary_tlm()``, not the already-
         adapted ``TLMFrame``/``AckEntry`` dataclasses ``SimLoop.
-        read_pending_binary_tlm_frames()`` returns."""
+        read_pending_binary_tlm_frames()`` returns (``TLMFrame.ack`` -- non-
+        ``None`` only on the frame where ``ack_fresh`` was set)."""
         deadline = time.monotonic() + (timeout / 1000.0)
         while True:
             for frame in self._loop.read_pending_binary_tlm_frames():
-                if not frame.acks:
-                    continue
-                for ack in frame.acks:
-                    if ack.corr_id == corr_id:
-                        return ack
+                if frame.ack is not None and frame.ack.corr_id == corr_id:
+                    return frame.ack
             if time.monotonic() >= deadline:
                 return None
             time.sleep(0.01)

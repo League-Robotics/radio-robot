@@ -9,9 +9,7 @@
 #include "app/comms.h"
 #include "app/deadman.h"
 #include "app/drive.h"
-#include "app/heading_source.h"
 #include "app/odometry.h"
-#include "app/pilot.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
 #include "app/telemetry.h"
@@ -28,7 +26,6 @@
 #include "devices/motor_armor.h"
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
-#include "motion/executor.h"
 
 static MicroBit uBit;
 
@@ -144,22 +141,6 @@ int main() {
   static App::Odometry odom(motorL, motorR, drivetrainConfig.trackwidth);
   static App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
-  // Motion::Executor + App::HeadingSource + App::Pilot (109-003/109-005) --
-  // configured from the same boot PlannerConfig defaults the pre-rebuild
-  // segment executor used (Config::defaultPlannerConfig(),
-  // config/boot_config.h).
-  msg::PlannerConfig plannerConfig = Config::defaultPlannerConfig();
-  static Motion::Executor executor;
-  executor.configure(plannerConfig);
-  static App::HeadingSource headingSource(otos, motorL, motorR, drivetrainConfig.trackwidth);
-  headingSource.configure(plannerConfig);
-  // 112-002: actuation_lag (App::Drive's own model feedforward gain) --
-  // mirrors Executor::configure()/HeadingSource::configure()'s own boot
-  // call pattern.
-  drive.configure(plannerConfig);
-  static App::Pilot pilot(executor, drive, headingSource, odom);
-  pilot.configureHeading(plannerConfig);
-
   // 114-004 (SUC-003): the real ARM-only MicroBitStorage-backed persistence
   // adapter. Declared BEFORE robotLoop below -- RobotLoop only ever holds a
   // pointer to it, never owns it, so it must outlive robotLoop (both are
@@ -170,19 +151,18 @@ int main() {
   // Boot loop + main cycle -- takes every leaf/app module above by
   // reference plus the Clock/Sleeper time seam, and (114-004) the
   // persisted-tuning store. run() never returns.
-  static App::RobotLoop robotLoop(bus, motorL, motorR, otos, comms, tlm,
-                                   drive, odom, deadman, preamble, pilot,
+  static App::RobotLoop robotLoop(bus, motorL, motorR, otos, color, line,
+                                   comms, tlm, drive, odom, deadman, preamble,
                                    clock, sleeper, &tuningStore);
   // Configuration-completeness gate (114-001): the boot-configure sequence
-  // above (Config::default*() + every .configure() call, ending with
-  // pilot.configureHeading(plannerConfig)) is atomic and always complete by
+  // above (every Config::default*() call) is atomic and always complete by
   // this point on real firmware -- this call is unconditional and always
   // immediate, no observable startup delay (Decision 2, sprint.md).
 
   // 114-004 (SUC-003): persisted live-tuning read/wipe/reapply -- AFTER the
-  // Tier-1 boot bake above (every Config::default*() call plus every
-  // .configure() call has already completed) and BEFORE markConfigured()
-  // below, matching this ticket's own Approach step 4 sequencing. A
+  // Tier-1 boot bake above (every Config::default*() call has already
+  // completed) and BEFORE markConfigured() below, matching this ticket's
+  // own Approach step 4 sequencing. A
   // version match reapplies whatever was live-tuned in a previous session,
   // through the SAME applier handleConfig() itself uses (no
   // partially-applied or misinterpreted stale patch); a version mismatch

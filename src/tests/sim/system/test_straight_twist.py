@@ -38,6 +38,12 @@ _BENCH_TEST_CONFIG_SRC = _SUPPORT_DIR / "bench_test_config.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 
+# 115-006 (gut S1): heading_source.cpp/pilot.cpp/motion/executor.cpp/
+# motion/jerk_trajectory.cpp/vendor/ruckig are all DELETED along with the
+# rest of the motion stack -- sim_harness.h no longer includes app/pilot.h
+# (or transitively motion/executor.h -> vendor/ruckig) at all, so none of
+# those sources are compiled into this harness any more (mirrors
+# test_app_robot_loop.py's own identical note).
 _APP_SOURCES = [
     _SOURCE_DIR / "app" / "robot_loop.cpp",
     _SOURCE_DIR / "app" / "comms.cpp",
@@ -45,9 +51,7 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "deadman.cpp",
     _SOURCE_DIR / "app" / "drive.cpp",
     _SOURCE_DIR / "app" / "odometry.cpp",
-    _SOURCE_DIR / "app" / "heading_source.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
-    _SOURCE_DIR / "app" / "pilot.cpp",
 ]
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
@@ -68,14 +72,6 @@ _MESSAGE_SOURCES = [
 ]
 _KINEMATICS_SOURCES = [
     _SOURCE_DIR / "kinematics" / "body_kinematics.cpp",
-]
-# 109-003: robot_loop.h now includes app/pilot.h -> motion/executor.h ->
-# motion/jerk_trajectory.h -> vendor/ruckig.
-_RUCKIG_INCLUDE = _REPO_ROOT / "vendor" / "ruckig" / "include"
-_RUCKIG_SRC_DIR = _REPO_ROOT / "vendor" / "ruckig" / "src"
-_MOTION_SOURCES = [
-    _SOURCE_DIR / "motion" / "jerk_trajectory.cpp",
-    _SOURCE_DIR / "motion" / "executor.cpp",
 ]
 
 _CXX_STANDARD = "c++20"
@@ -102,8 +98,6 @@ def _all_sources():
         + _CONFIG_SOURCES
         + _MESSAGE_SOURCES
         + _KINEMATICS_SOURCES
-        + _MOTION_SOURCES
-        + sorted(_RUCKIG_SRC_DIR.glob("*.cpp"))
     )
 
 
@@ -133,8 +127,6 @@ def test_straight_twist_stays_straight(tmp_path):
             str(_PLANT_DIR),
             "-I",
             str(_INFRA_SIM_DIR),
-            "-I",
-            str(_RUCKIG_INCLUDE),
             "-o",
             str(binary),
             *[str(src) for src in sources],

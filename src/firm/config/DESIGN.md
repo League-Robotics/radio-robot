@@ -13,15 +13,21 @@ root: ../DESIGN.md
 
 `Config` is the firmware's boot-configuration seam: a small set of
 `default*Config()` functions that hand `main.cpp` the per-motor, drivetrain,
-OTOS, and planner defaults to construct the robot's hardware objects with.
-The seam exists so that per-robot calibration — trackwidth, per-port forward
-sign, encoder travel calibration, OTOS lever-arm offset, velocity-loop and
-heading-loop gains — never gets typed into `main.cpp` by hand. It owns
-exactly one problem: turning "which physical robot is this" into boot-time
-constants, once, before `RobotLoop::run()` starts. It owns nothing about how
-those values are used afterward (that's `devices/` and `app/`) or how they
-can be changed live post-boot (that's the `DEV M <n> CFG` / `DEV DT CFG` wire
-surface — see root `DESIGN.md` §4 and `docs/protocol-v2.md`).
+and OTOS defaults to construct the robot's hardware objects with. The seam
+exists so that per-robot calibration — trackwidth, per-port forward sign,
+encoder travel calibration, OTOS lever-arm offset, velocity-loop gains —
+never gets typed into `main.cpp` by hand. It owns exactly one problem:
+turning "which physical robot is this" into boot-time constants, once,
+before `RobotLoop::run()` starts. It owns nothing about how those values are
+used afterward (that's `devices/` and `app/`) or how they can be changed
+live post-boot (that's the `DEV M <n> CFG` / `DEV DT CFG` wire surface — see
+root `DESIGN.md` §4 and `docs/protocol-v2.md`).
+
+**115-003 (gut-to-minimal-firmware S1 motion-stack excision):**
+`Config::defaultPlannerConfig() -> msg::PlannerConfig` is DELETED, not
+ported — `msg::PlannerConfig` itself, and the `App::Pilot`/
+`Motion::Executor` that consumed it, are gone wholesale (`planner.proto`
+deleted). `Config` now hands `main.cpp` motor/drivetrain/OTOS defaults only.
 
 ## 2. Orientation
 
@@ -162,15 +168,10 @@ constants block once, rather than re-deriving it per field.
   lever-arm mounting offset (x/y/yaw) and linear/angular scale multipliers.
   Consumed directly by `main.cpp`'s `Hal::OtosOdometer` construction — never
   a wire surface (§3).
-- **`Config::defaultPlannerConfig() -> msg::PlannerConfig`:** the full
-  motion-limit/tracker/policy field set (acceleration/velocity/jerk
-  ceilings, outer heading-loop PD gains, `Drive::Limits` fields) baked from
-  the robot JSON's `control.*` keys where present.
-
 ### Consumes
-- **`msg::MotorConfig`/`msg::DrivetrainConfig`/`msg::PlannerConfig`** (from
-  `messages/`) — the wire-plane structs this subsystem's functions return;
-  see [messages/DESIGN.md](../messages/DESIGN.md).
+- **`msg::MotorConfig`/`msg::DrivetrainConfig`** (from `messages/`) — the
+  wire-plane structs this subsystem's functions return; see
+  [messages/DESIGN.md](../messages/DESIGN.md).
 - **`data/robots/*.json`** (build-time only, via the generator, not at
   runtime) — the per-robot calibration source; schema at
   `data/robots/robot_config.schema.json`.

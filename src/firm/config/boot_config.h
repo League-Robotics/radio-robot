@@ -8,7 +8,6 @@
 
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
-#include "messages/planner.h"
 
 namespace Config {
 
@@ -57,15 +56,5 @@ struct OtosBootConfig {
 // baked from the robot JSON where present; identity defaults (zero offset,
 // 1.0 scale = no correction) otherwise.
 OtosBootConfig defaultOtosBootConfig();
-
-// The boot PlannerConfig default — motion-limit fields (a_max/a_decel/
-// v_body_max/yaw_rate_max/yaw_acc_max/j_max/yaw_jerk_max), the outer
-// heading-loop PD gains (heading_kp/heading_kd), and arrive_dwell, each
-// baked from the robot JSON's control.* keys where present, else a
-// firmware default (see gen_boot_config.py). arrive_tol/turn_in_place_gate
-// (PlannerConfig-only) and 16 Drive::Limits/tracker/policy fields
-// (v_wheel_max..arrive_vel_tol) were removed as dead wire fields in
-// 111-004 — they no longer exist on the wire to be left unset.
-msg::PlannerConfig defaultPlannerConfig();
 
 }  // namespace Config

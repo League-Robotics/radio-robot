@@ -6,15 +6,16 @@ Sprint 103 shipped ``twist()``/``stop()`` host builders for the pruned P4
 schema-defined oneof arm since 103-001 — without a host-side builder
 (103 Step 7 Open Question 3). This ticket adds ``NezhaProtocol.config()``,
 mirroring ``twist()``/``stop()``'s fire-and-poll construction style
-(``send_envelope_fast()`` + the existing 103-009 ack-ring matcher,
+(``send_envelope_fast()`` + the existing 103-009 ack matcher,
 ``wait_for_ack()`` — no new matching logic here, per this ticket's own
-acceptance criteria).
+acceptance criteria; 115-003 later narrowed that matcher from a depth-3
+ack ring to a single ack slot, see ``protocol.py``'s own docstring).
 
 Firmware dispatch behavior (confirmed directly against the merged 103
 tree's ``src/firm/main.cpp``, resolving 103's Step 7 Open Question 3): the
 ``CmdKind::CONFIG`` case in the main-loop dispatch switch decodes the
 envelope successfully but does NOT apply it — it always acks
-``ACK_STATUS_ERR``/``ERR_UNIMPLEMENTED`` ("ConfigDelta runtime application
+``ack_err=ERR_UNIMPLEMENTED`` ("ConfigDelta runtime application
 deferred this sprint"). Per this ticket's acceptance criteria, that means
 test coverage here asserts the envelope/ack ROUND TRIP only — never config
 application (a future ticket's scope) — so the ack-round-trip tests below
@@ -43,12 +44,17 @@ class _FakeFastConn:
     wait_for_ack()`` delegates to ``self._conn.wait_for_ack()``; this fake's
     own ``wait_for_ack()`` just returns whatever ``ack_result`` a test
     scripts, defaulting to ``None`` -- a bounded-timeout-with-no-match).
-    ``config()`` calls nothing else on ``self._conn``."""
+    ``config()`` calls nothing else on ``self._conn``.
+
+    115-003 frame v2: ``wait_for_ack()`` now returns the matching raw
+    ``telemetry_pb2.Telemetry`` frame (its ``ack_corr``/``ack_err`` are the
+    single ack slot), not a ``telemetry_pb2.AckEntry`` -- that message type
+    no longer exists (the depth-3 ack ring is deleted)."""
 
     def __init__(self) -> None:
         self.sent: list["envelope_pb2.CommandEnvelope"] = []
         self._next_corr_id = 0
-        self.ack_result: "telemetry_pb2.AckEntry | None" = None
+        self.ack_result: "telemetry_pb2.Telemetry | None" = None
 
     def send_envelope_fast(self, envelope: "envelope_pb2.CommandEnvelope") -> int:
         self._next_corr_id += 1
@@ -56,7 +62,7 @@ class _FakeFastConn:
         self.sent.append(envelope)
         return self._next_corr_id
 
-    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.AckEntry | None":
+    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.Telemetry | None":
         return self.ack_result
 
 
@@ -161,19 +167,20 @@ def test_config_ml_and_pid_keys_combine_on_one_motor_patch():
     assert sent.SerializeToString() == expected.SerializeToString()
 
 
-def test_config_planner_key_builds_correct_envelope():
+def test_config_planner_key_is_now_unknown():
+    """headingKp/headingKd/minSpeed/distanceKp/arriveDwell all patched
+    PlannerConfigPatch (config.proto) -- deleted wholesale by 115-003
+    (gut-to-minimal-firmware S1 motion-stack excision) alongside
+    Motion::Executor/App::Pilot, the subsystems that read it. There is no
+    live config target left for any of the five -- they now behave exactly
+    like any other bogus key (ValueError, no wire traffic)."""
     conn = _FakeFastConn()
     proto = NezhaProtocol(conn)
 
-    proto.config(headingKp=6.0)
+    with pytest.raises(ValueError):
+        proto.config(headingKp=6.0)
 
-    sent = conn.sent[0]
-    expected = envelope_pb2.CommandEnvelope(
-        corr_id=1,
-        config=envelope_pb2.ConfigDelta(
-            planner=config_pb2.PlannerConfigPatch(heading_kp=6.0)))
-    assert sent.SerializeToString() == expected.SerializeToString()
-    assert sent.config.WhichOneof("patch") == "planner"
+    assert conn.sent == []
 
 
 def test_config_watchdog_key_builds_correct_envelope():
@@ -195,7 +202,7 @@ def test_config_each_call_gets_a_fresh_corr_id():
 
     c1 = proto.config(tw=128.0)
     c2 = proto.config(sTimeout=1000)
-    c3 = proto.config(headingKp=6.0)
+    c3 = proto.config(rotSlip=0.5)
 
     assert [c1, c2, c3] == [1, 2, 3]
     assert len(conn.sent) == 3
@@ -251,20 +258,23 @@ def test_config_invalid_call_sends_nothing():
 
 
 # ---------------------------------------------------------------------------
-# 3. config() -> wait_for_ack() round trip (103-009's existing ack-ring
-#    matcher; no new matching logic added by this ticket). 104-003 promoted
-#    the actual match/timeout algorithm out of NezhaProtocol into
+# 3. config() -> wait_for_ack() round trip (103-009's existing single-ack-
+#    slot matcher; no new matching logic added by this ticket). 104-003
+#    promoted the actual match/timeout algorithm out of NezhaProtocol into
 #    SerialConnection.wait_for_ack() -- these tests now script the fake
-#    connection's own wait_for_ack() (a raw telemetry_pb2.AckEntry or None)
-#    rather than a batch of TLMFrame polls. The algorithm's own scenario
-#    coverage (exact match, ring re-delivery tolerance, ring-wrap, bounded
-#    timeout) lives in src/tests/unit/test_serial_conn_ack_ring.py.
+#    connection's own wait_for_ack() (a raw telemetry_pb2.Telemetry frame or
+#    None) rather than a batch of TLMFrame polls. 115-003 frame v2 replaced
+#    the depth-3 AckEntry ring with a single ack_corr/ack_err slot -- the
+#    fake now scripts a Telemetry frame carrying that slot, not a
+#    telemetry_pb2.AckEntry (that message type no longer exists). The
+#    algorithm's own scenario coverage (exact match, slot-overwrite,
+#    bounded timeout) lives in src/tests/unit/test_serial_conn_ack_ring.py.
 # ---------------------------------------------------------------------------
 
 
 def test_config_corr_id_round_trips_through_wait_for_ack():
     """End-to-end shape of a config() call: send, then confirm receipt via
-    the SAME ack-ring matcher twist()/stop() already use. Scripts an
+    the SAME ack matcher twist()/stop() already use. Scripts an
     ERR_UNIMPLEMENTED ack -- the confirmed (main.cpp, merged 103 tree)
     real firmware outcome for CONFIG today (runtime apply is deferred,
     not this ticket's scope)."""
@@ -272,21 +282,20 @@ def test_config_corr_id_round_trips_through_wait_for_ack():
     proto = NezhaProtocol(conn)
     corr_id = proto.config(tw=128.0)
 
-    conn.ack_result = telemetry_pb2.AckEntry(
-        corr_id=corr_id, status=telemetry_pb2.ACK_STATUS_ERR,
-        err_code=envelope_pb2.ERR_UNIMPLEMENTED)
+    conn.ack_result = telemetry_pb2.Telemetry(
+        flags=1 << 5,  # ack_fresh
+        ack_corr=corr_id, ack_err=envelope_pb2.ERR_UNIMPLEMENTED)
 
     ack = proto.wait_for_ack(corr_id, timeout=200)
 
     assert ack == AckEntry(
-        corr_id=corr_id, ok=False, err_code=envelope_pb2.ERR_UNIMPLEMENTED,
-        status=telemetry_pb2.ACK_STATUS_ERR)
+        corr_id=corr_id, ok=False, err_code=envelope_pb2.ERR_UNIMPLEMENTED)
 
 
 def test_config_ack_returns_none_on_timeout_with_no_matching_corr_id():
     conn = _FakeFastConn()
     proto = NezhaProtocol(conn)
-    corr_id = proto.config(headingKp=6.0)
+    corr_id = proto.config(rotSlip=0.5)
     # conn.ack_result stays at its default None -- the shared matcher timed
     # out with no matching corr_id (see SerialConnection.wait_for_ack()).
 
@@ -409,16 +418,16 @@ def test_otos_config_each_call_gets_a_fresh_corr_id():
 
 def test_otos_config_corr_id_round_trips_through_wait_for_ack():
     """End-to-end shape of an otos_config() call: send, then confirm
-    receipt via the SAME ack-ring matcher config()/twist()/stop() already
-    use. Unlike config()'s ERR_UNIMPLEMENTED-for-everything-but-MOTOR
-    scripting, RobotLoop::handleConfig DOES apply OTOS live (see that
-    method's own comment) -- scripts a real ACK_STATUS_OK."""
+    receipt via the SAME ack matcher config()/twist()/stop() already use.
+    Unlike config()'s ERR_UNIMPLEMENTED-for-everything-but-MOTOR scripting,
+    RobotLoop::handleConfig DOES apply OTOS live (see that method's own
+    comment) -- scripts a real ack_err=0 (OK)."""
     conn = _FakeFastConn()
     proto = NezhaProtocol(conn)
     corr_id = proto.otos_config(linear_scale=1.05)
 
-    conn.ack_result = telemetry_pb2.AckEntry(
-        corr_id=corr_id, status=telemetry_pb2.ACK_STATUS_OK)
+    conn.ack_result = telemetry_pb2.Telemetry(
+        flags=1 << 5, ack_corr=corr_id, ack_err=0)
 
     ack = proto.wait_for_ack(corr_id, timeout=200)
 

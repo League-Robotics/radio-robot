@@ -1,8 +1,14 @@
-// bench_test_config.h -- TestSupport: test-tree-only stand-in
-// PlannerConfig/MotorConfig values for src/tests/sim/** harnesses that need
-// SOME reasonable, real (nonzero) configuration to exercise jerk-limited
-// motion, wheel PID tracking, etc. against TestSim::SimHarness (114-001,
-// Decision 3, sprint.md).
+// bench_test_config.h -- TestSupport: test-tree-only stand-in MotorConfig
+// values for src/tests/sim/** harnesses that need SOME reasonable, real
+// (nonzero) configuration to exercise wheel PID tracking etc. against
+// TestSim::SimHarness (114-001, Decision 3, sprint.md).
+//
+// 115-006 (gut S1 sim lockstep): benchTestPlannerConfig() DELETED --
+// msg::PlannerConfig and SimHarness::configurePlanner() no longer exist
+// (Motion::Executor/App::Pilot/App::HeadingSource were deleted by 115-002's
+// motion-stack excision). configureSimForBenchTest() below now pushes only
+// the two benchTestMotorConfig() calls -- there is no planner half left to
+// push.
 //
 // Origin: TestSim::SimHarness used to bake these SAME values in unconditionally
 // (its own now-deleted private makeExecutorConfig()/makeMotorConfig() --
@@ -36,26 +42,12 @@
 #include <cstdint>
 
 #include "devices/device_config.h"
-#include "messages/planner.h"
 
 namespace TestSim {
 class SimHarness;
 }  // namespace TestSim
 
 namespace TestSupport {
-
-// benchTestPlannerConfig -- byte-for-byte the deleted
-// TestSim::SimHarness::makeExecutorConfig() body (see that function's own
-// former doc comment, preserved verbatim below): a non-zero msg::PlannerConfig
-// for Motion::Executor's own configure() call (109-003). This harness has no
-// boot_config.cpp to read a real per-robot value from (main.cpp's own
-// Config::defaultPlannerConfig()); these are reasonable stand-in values
-// (matching data/robots/tovez.json's own order of magnitude) sufficient for a
-// TIMED-mode ramp/hold/ramp-down to exercise real jerk-limited motion in a
-// sim test -- NOT bench-tuned, and not meant to be (no bench/sim test in this
-// ticket asserts a SPECIFIC numeric gain, only jerk-boundedness/no-instant-
-// step/queue-mechanics).
-msg::PlannerConfig benchTestPlannerConfig();
 
 // benchTestMotorConfig -- byte-for-byte the deleted
 // TestSim::SimHarness::makeMotorConfig(uint32_t port) body (see that
@@ -71,14 +63,14 @@ msg::PlannerConfig benchTestPlannerConfig();
 Devices::MotorConfig benchTestMotorConfig(uint32_t port);
 
 // configureSimForBenchTest -- convenience wrapper: pushes
-// benchTestPlannerConfig() via sim.configurePlanner(), then
 // benchTestMotorConfig(1)/benchTestMotorConfig(2) via sim.configureMotor()
-// for both ports. This is the ONE call every pre-existing (and any new)
-// src/tests/sim/** harness adds right after constructing a bare
-// TestSim::SimHarness and before its first injectTwist()/injectMove()/
-// step()/boot() call, to restore byte-for-byte the same "always already
-// configured" behavior SimHarness's own constructor used to provide
-// unconditionally -- now explicit, test-tree-only, and opt-in.
+// for both ports (115-006: the benchTestPlannerConfig()/configurePlanner()
+// half is gone -- see this file's own header). This is the ONE call every
+// pre-existing (and any new) src/tests/sim/** harness adds right after
+// constructing a bare TestSim::SimHarness and before its first
+// injectTwist()/step()/boot() call, to restore byte-for-byte the same
+// "always already configured" behavior SimHarness's own constructor used to
+// provide unconditionally -- now explicit, test-tree-only, and opt-in.
 void configureSimForBenchTest(TestSim::SimHarness& sim);
 
 }  // namespace TestSupport

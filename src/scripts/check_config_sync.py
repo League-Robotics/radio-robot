@@ -11,18 +11,23 @@ moment anyone ran it) since the greenfield rebuild; see
 
 New comparison model
 ---------------------
-Protocol v3's binary config plane (096) exposes exactly three curated
-"Patch" messages on the wire — `DrivetrainConfigPatch`, `MotorConfigPatch`,
-`PlannerConfigPatch` (`protos/config.proto`, generated to
+Protocol v3's binary config plane (096) exposes exactly two curated
+"Patch" messages this script tracks — `DrivetrainConfigPatch`,
+`MotorConfigPatch` (`protos/config.proto`, generated to
 `src/host/robot_radio/robot/pb2/config_pb2.py` by ticket 096-001). Each `Patch`
 field is a `proto3 optional` scalar; presence signals "this field is being
-set/was populated". These three messages are a CURATED SUBSET of a much
+set/was populated". These messages are a CURATED SUBSET of a much
 larger config surface — they mirror only the ~15 keys
 `src/firm/commands/config_commands.cpp`'s `kAllKeys` registers for the
 text SET/GET verb (config.proto's own file header explains why: the full
 generated `DrivetrainConfig`/`MotorConfig`/`PlannerConfig` messages don't
 fit the envelope budget and most of their fields have no wire-config verb
-at all).
+at all). `PlannerConfigPatch` was tracked here through sprint 114 -- DELETED
+(115-003, gut-to-minimal-firmware S1 motion-stack excision): the patch type
+itself, and every `App::Pilot`/`Motion::Executor` consumer that applied it,
+is gone wholesale. `OtosConfigPatch` (109-004) is a real, currently-untracked
+curated Patch message -- a pre-existing gap in this script predating both
+109-004 and this sprint, not introduced or closed here.
 
 `src/host/robot_radio/config/robot_config.py`'s `RobotConfig` pydantic model is
 the host's per-robot JSON config — identity, connection, vision, geometry,
@@ -207,40 +212,14 @@ PATCH_TO_PYDANTIC: dict[PatchKey, list[str]] = {
     ("MotorConfigPatch", "kff"): ["control.vel_kff"],
     ("MotorConfigPatch", "i_max"): ["control.vel_imax"],
     ("MotorConfigPatch", "kaw"): ["control.vel_kaw"],
-    # -- PlannerConfigPatch -----------------------------------------------------
-    # ControlConfig.min_speed (113-003; pre-existing stale [] entry fixed by
-    # 113-004 while satisfying its own "src/tests/unit passes" gate). NOTE:
-    # DriveConfig.min_drive_mm_s remains a DIFFERENT quantity entirely
-    # (rogo's host-only crawl-mode fallback floor) — do not conflate them.
-    ("PlannerConfigPatch", "min_speed"): ["control.min_speed"],
-    # heading_kp/heading_kd (098-005; pydantic fields added 2026-07-18): the
-    # two outer heading-loop PD gains. ControlConfig.heading_kp/heading_kd
-    # now exist and ride the connect-time calibration push
-    # (calibration_commands() -> `SET headingKp/headingKd`), alongside the
-    # gen_boot_config.py build-time bake that was always there.
-    ("PlannerConfigPatch", "heading_kp"): ["control.heading_kp"],
-    ("PlannerConfigPatch", "heading_kd"): ["control.heading_kd"],
-    # distance_kp (112-003): the linear position-feedback trim's own live-
-    # tunable gain, mirrors heading_kp's own shape exactly. Pre-existing gap
-    # (this map entry was never added when the proto field landed in
-    # sprint 112) discovered and fixed incidentally by 113-004 while
-    # satisfying its own "src/tests/unit passes" gate -- ControlConfig.
-    # distance_kp itself was added by 113-003.
-    ("PlannerConfigPatch", "distance_kp"): ["control.distance_kp"],
-    # arrive_dwell (100-001): the one Drive::Limits/tracker/policy field
-    # (of the original PlannerConfig fields 15-31, architecture-update.md
-    # M1) that turned out to be live. ControlConfig.arrive_dwell (113-003;
-    # pre-existing stale [] entry fixed by 113-004) now carries the
-    # round trip, in addition to the build-time bake in data/robots/
-    # tovez.json's control.arrive_dwell key (scripts/gen_boot_config.py).
-    # Its 16 dead siblings (v_wheel_max..arrive_vel_tol) were removed as
-    # dead wire fields in 111-004 -- see config.proto's own
-    # PlannerConfigPatch header comment -- and their PATCH_TO_PYDANTIC
-    # entries removed alongside them (a removed wire field is not a
-    # `patch-field-no-pydantic` finding; it is simply absent from
-    # `patch_fields`, so this map's own consistency would tolerate a stale
-    # entry silently -- removed anyway for hygiene).
-    ("PlannerConfigPatch", "arrive_dwell"): ["control.arrive_dwell"],
+    # PlannerConfigPatch (min_speed/heading_kp/heading_kd/distance_kp/
+    # arrive_dwell) -- DELETED wholesale (115-003, gut-to-minimal-firmware
+    # S1 motion-stack excision): the patch type itself, and every
+    # App::Pilot/Motion::Executor consumer that applied it, is gone. Every
+    # entry this map used to carry for it is removed, not stubbed to `[]`
+    # -- a deleted wire message has no descriptor fields left for
+    # collect_patch_fields() to enumerate at all, so there is nothing left
+    # to map.
 }
 
 # proto3 scalar cpp_type -> the Python type a pydantic leaf representing it
@@ -258,7 +237,7 @@ CPP_TYPE_TO_PY: dict[int, type] = {
     FieldDescriptor.CPPTYPE_STRING: str,
 }
 
-PATCH_MESSAGE_NAMES = ("DrivetrainConfigPatch", "MotorConfigPatch", "PlannerConfigPatch")
+PATCH_MESSAGE_NAMES = ("DrivetrainConfigPatch", "MotorConfigPatch")
 
 ALLOWLIST_CATEGORIES = ("pydantic-field-no-patch", "patch-field-no-pydantic", "type-mismatch")
 FORCED_FAIL_CATEGORIES = ("unmapped-patch-field", "stale-map-target")

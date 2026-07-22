@@ -1,6 +1,6 @@
 // telemetry.cpp -- App::Telemetry implementation. See telemetry.h's file
-// header for the module's boundary, its two send paths, and the
-// fault_bits/event_bits layout.
+// header for the module's boundary, its two send paths, and the flags-bit
+// layout.
 #include "app/telemetry.h"
 
 #include "messages/wire.h"
@@ -15,38 +15,18 @@ void Telemetry::setFrame(const Frame& frame) { frame_ = frame; }
 
 void Telemetry::setSecondaryFrame(const SecondaryFrame& frame) { secondaryFrame_ = frame; }
 
-void Telemetry::setFault(uint32_t bit, bool active) {
+void Telemetry::setFlag(uint32_t bit, bool active) {
   if (active) {
-    faultBits_ |= bit;
+    flags_ |= bit;
   } else {
-    faultBits_ &= ~bit;
+    flags_ &= ~bit;
   }
 }
 
-void Telemetry::setEvent(uint32_t bit, bool active) {
-  if (active) {
-    eventBits_ |= bit;
-  } else {
-    eventBits_ &= ~bit;
-  }
-}
-
-void Telemetry::ack(uint32_t corrId, msg::AckStatus status, uint32_t errCode) {
-  msg::AckEntry entry;
-  entry.corr_id = corrId;
-  entry.status = status;
-  entry.err_code = errCode;
-
-  if (ringCount_ < 3) {
-    ring_[ringCount_++] = entry;
-    return;
-  }
-  // Ring full -- evict the oldest (index 0), shift the remaining two down,
-  // append the new entry at the end. ring_[] stays chronological
-  // (oldest-first, newest-last) at all times.
-  ring_[0] = ring_[1];
-  ring_[1] = ring_[2];
-  ring_[2] = entry;
+void Telemetry::ack(uint32_t corrId, uint32_t errCode) {
+  ackCorr_ = corrId;
+  ackErr_ = errCode;
+  ackPending_ = true;
 }
 
 bool Telemetry::primaryDue(uint32_t now) const {
@@ -104,42 +84,31 @@ void Telemetry::emit(uint32_t now) {
 
 void Telemetry::emitPrimary(uint32_t now) {
   msg::Telemetry tlm;
-  for (uint8_t i = 0; i < ringCount_; ++i) tlm.acks_[i] = ring_[i];
-  tlm.acks_count = ringCount_;
 
   tlm.now = now;
-  tlm.mode = frame_.mode;
   tlm.seq = seq_++;
+  tlm.mode = frame_.mode;
 
-  tlm.has_enc = frame_.hasEnc;
+  // flags -- the single assembly point: OR the caller-staged bits (every
+  // status/fault/event/presence bit RobotLoop already computed into
+  // flags_ via setFlag()) with Telemetry's OWN internally-tracked
+  // ack_fresh bit (kFlagAckFresh, bit 5) -- the one bit no caller ever
+  // sets directly (see kFlagAckFresh's own doc comment in telemetry.h).
+  uint32_t flags = flags_;
+  if (ackPending_) flags |= kFlagAckFresh;
+  tlm.flags = flags;
+  ackPending_ = false;
+
+  tlm.ack_corr = ackCorr_;
+  tlm.ack_err = ackErr_;
+
   tlm.enc_left = frame_.encLeft;
   tlm.enc_right = frame_.encRight;
-
-  tlm.has_vel = frame_.hasVel;
-  tlm.vel_left = frame_.velLeft;
-  tlm.vel_right = frame_.velRight;
-
-  tlm.has_pose = frame_.hasPose;
-  tlm.pose = frame_.pose;
-
-  tlm.has_otos = frame_.hasOtos;
   tlm.otos = frame_.otos;
-  tlm.otos_connected = frame_.otosConnected;
-
-  tlm.has_twist = frame_.hasTwist;
+  tlm.pose = frame_.pose;
   tlm.twist = frame_.twist;
-
-  tlm.active = frame_.active;
-  tlm.conn_left = frame_.connLeft;
-  tlm.conn_right = frame_.connRight;
-
-  tlm.fault_bits = faultBits_;
-  tlm.event_bits = eventBits_;
-
-  tlm.queue_depth = frame_.queueDepth;
-  tlm.active_id = frame_.activeId;
-  tlm.exec_state = frame_.execState;
-  tlm.heading_source = frame_.headingSource;
+  tlm.line = frame_.line;
+  tlm.color = frame_.color;
 
   msg::ReplyEnvelope env;
   env.corr_id = 0;  // unsolicited push -- envelope.proto's own convention

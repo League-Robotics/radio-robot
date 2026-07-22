@@ -7,6 +7,25 @@ This directory holds the **host-build firmware simulator**: the real
 TestGUI — the exact same command-in / telemetry-out path a serial or radio
 robot presents, so a test drives precisely what the GUI drives.
 
+> **STALE (115-002/115-003/115-006, gut-to-minimal-firmware S1
+> motion-stack excision), not yet rewritten.** The worked example below
+> ("Test S — drive 700mm") and §§4/5/8 walk through the pre-gut MOVE
+> command path — `handleMove()`, `Motion::Cmd`/`Motion::fromMove()`,
+> `Pilot::enqueue()`/`Pilot::tick()`, `Motion::Executor` — all DELETED
+> wholesale this sprint, along with `App::Pilot`/`App::HeadingSource`/
+> `vendor/ruckig`. S1's minimal firmware has no MOVE command at all: the
+> command surface is TWIST+STOP+CONFIG{motor,otos}+deadman only (see
+> `src/firm/app/DESIGN.md`'s own 115-005 deletion note for the current,
+> accurate picture). `sim_harness.h`'s own composition root was updated for
+> this (ticket 115-006, "sim lockstep"); this walkthrough doc was not — the
+> STRUCTURAL flow it describes (TestGUI → SimTransport → SimLoop →
+> `sim_inject_command()` → `SimHarness::step()` → `App::RobotLoop::cycle()`
+> → `Comms::sendReply()` → `sim_drain_tlm()` → TestGUI) is still
+> essentially correct for a TWIST; only the MOVE-specific middle (dispatch
+> case, `Pilot`/`Motion::Executor` staging, completion-event draining) is
+> gone. Full rewrite tracked as a follow-up, not done as part of 115-009
+> (which named `src/firm/*/DESIGN.md` specifically, not this file).
+
 | File | Role |
 |---|---|
 | `sim_plant.h` / `sim_plant.cpp` | `TestSim::SimPlant` — the one honest simulated I2C bus. Owns the wire *protocol* (Nezha `0x60`/`0x46` frames, OTOS register map); physics is delegated to `WheelPlant`×2 + `OtosPlant` (`src/tests/sim/plant/`). |

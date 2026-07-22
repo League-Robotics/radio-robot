@@ -1,6 +1,17 @@
 // sim_harness_configure_harness.cpp -- ticket 113-002's own acceptance
-// proof: TestSim::SimHarness::configurePlanner()/configureMotor() are a
-// purely ADDITIVE config-load surface (SUC-001/SUC-002/SUC-005).
+// proof: TestSim::SimHarness::configureMotor() is a purely ADDITIVE
+// config-load surface (SUC-001/SUC-002/SUC-005), plus the configuration-
+// completeness gate (isConfigured()) it drives.
+//
+// REWRITTEN by 115-006 (gut S1 sim lockstep): the original file (113-002)
+// also covered SimHarness::configurePlanner()/plannerConfig() and the
+// setYawRateMax() sim-only hook -- all deleted by this ticket, since
+// Motion::Executor/App::Pilot/App::HeadingSource (115-002's motion-stack
+// excision) no longer exist for any of them to configure. What survives:
+// configureMotor()'s own per-port additive contract (readable back via
+// motorConfig()) and the motor-only configuration-completeness gate
+// (isConfigured(), now gated on BOTH configureMotor() calls alone -- see
+// sim_harness.h's own maybeMarkConfigured() comment).
 //
 // Every scenario below constructs its OWN fresh TestSim::SimHarness -- this
 // file never touches any of the ~40 pre-existing sim harness files, and
@@ -9,41 +20,26 @@
 // `uv run python -m pytest` run this ticket's own Testing section calls
 // for, not by anything here). What THIS file proves, specifically:
 //
-//   1. A default-constructed SimHarness (configurePlanner()/configureMotor()
-//      NEVER called) observes msg::PlannerConfig{}'s own all-zero default --
-//      the regression pin for "the additive surface starts from an
-//      unmodified default." UPDATED by 114-001: this used to pin against
-//      makeExecutorConfig()'s own hardcoded stand-in baseline values, which
-//      that ticket deleted (SimHarness no longer self-configures at all --
-//      see sim_harness.h's own header); the pin now reads correctly as
-//      msg::PlannerConfig{}'s all-zero default instead.
-//   2. configurePlanner() with values that differ from that (all-zero)
-//      default takes effect and is readable back via plannerConfig()
-//      (Pilot::plannerConfig()'s full-struct copy -- see sim_harness.h's
-//      own comment on why that accessor is a reliable readback for every
-//      PlannerConfig field, not just the ones Pilot's own arithmetic
-//      reads).
-//   3. configureMotor() with values that differ from Devices::MotorConfig{}'s
-//      zero defaults takes effect per PORT and is readable back via
+//   1. A default-constructed SimHarness (configureMotor() NEVER called)
+//      observes Devices::MotorConfig{}'s own all-zero default for both
+//      ports, and isConfigured() is false.
+//   2. configureMotor() with values that differ from that (all-zero)
+//      default takes effect per PORT and is readable back via
 //      motorConfig(port) -- and configuring one port never touches the
-//      other port's own last-configured record.
-//   4. The regression this ticket's own acceptance criteria call out by
-//      name: a caller that calls configurePlanner() with a full config and
-//      THEN calls setYawRateMax() (one of the three pre-existing sim-only
-//      hooks) does NOT silently lose every other field configurePlanner()
-//      set back to the fallback default -- only yaw_rate_max (and
-//      setYawRateMax()'s own remembered lead-compensation/distance_kp
-//      overrides) actually change.
+//      other port's own record.
+//   3. isConfigured() flips true only once BOTH ports have been configured
+//      -- false after just one, true after both (the motor-only
+//      configuration-completeness gate this ticket's own maybeMarkConfigured()
+//      comment documents).
 //
 // Compiled by test_sim_harness_configure.py against the same full
-// HOST_BUILD dependency graph test_pilot_distance_trim.py/
-// test_heading_source.py already compile (SimHarness composes the real
-// App::RobotLoop graph -- see sim_harness.h's own header).
+// HOST_BUILD dependency graph the other post-gut sim/unit harnesses (e.g.
+// test_app_robot_loop.py) compile -- SimHarness composes the real
+// App::RobotLoop graph -- see sim_harness.h's own header.
 #include <cmath>
 #include <cstdio>
 #include <string>
 
-#include "messages/planner.h"
 #include "sim_harness.h"
 
 namespace {
@@ -65,6 +61,10 @@ void checkTrue(bool condition, const std::string& what) {
   if (!condition) fail(what + " -- expected true, got false");
 }
 
+void checkFalse(bool condition, const std::string& what) {
+  if (condition) fail(what + " -- expected false, got true");
+}
+
 void checkFloatEq(float actual, float expected, const std::string& what, float tol = 1e-4f) {
   if (std::fabs(actual - expected) > tol) {
     char buf[256];
@@ -74,107 +74,17 @@ void checkFloatEq(float actual, float expected, const std::string& what, float t
   }
 }
 
-// 114-001: SimHarness no longer self-configures -- makeExecutorConfig()
-// (the hardcoded planner stand-in this scenario used to pin against) was
-// DELETED by that ticket (Decision 3, sprint.md), moved unchanged to
-// src/tests/sim/support/bench_test_config.h as an explicitly test-tree-only,
-// opt-in helper. A freshly-constructed (or booted) SimHarness now observes
-// msg::PlannerConfig{}'s own all-zero default until configurePlanner() is
-// explicitly called -- see this file's own module docstring point 1, now
-// updated to match. kBaselineYawRateMax below is UNCHANGED -- it is not a
-// "what SimHarness starts at" pin (scenario 4/5 below still use it as a
-// scenario-local distinguishing value, unrelated to the deleted baseline).
-constexpr float kBaselineYawRateMax = 4.0f;      // [rad/s]
-
 }  // namespace
 
 int main() {
-  std::printf("=== TestSim::SimHarness::configurePlanner()/configureMotor() (113-002) ===\n\n");
+  std::printf("=== TestSim::SimHarness::configureMotor() / isConfigured() (113-002, 115-006) ===\n\n");
 
   // --- Scenario 1: default construction, never configured -- observes
-  //     msg::PlannerConfig{}'s own all-zero default (114-001: SimHarness no
-  //     longer self-bakes a hardcoded stand-in baseline -- see this file's
-  //     own updated header). ---
+  //     Devices::MotorConfig{}'s own all-zero default for BOTH ports, and
+  //     isConfigured() is false. ---
   {
-    beginScenario("default-constructed SimHarness observes msg::PlannerConfig{}'s own all-zero default "
-                  "(114-001: no self-configuration baseline anymore)");
-    TestSim::SimHarness sim;
-    sim.boot();
-
-    checkFloatEq(sim.plannerConfig().a_max, 0.0f,
-                 "a_max is msg::PlannerConfig{}'s own zero default -- configurePlanner() was never called");
-    checkFloatEq(sim.plannerConfig().heading_kp, 0.0f,
-                 "heading_kp is msg::PlannerConfig{}'s own zero default -- configurePlanner() was never called");
-    checkFloatEq(sim.plannerConfig().model_tau_lin, 0.0f,
-                 "model_tau_lin is msg::PlannerConfig{}'s own zero default -- configurePlanner() was never called");
-    checkFloatEq(sim.plannerConfig().model_tau_ang, 0.0f,
-                 "model_tau_ang is msg::PlannerConfig{}'s own zero default -- configurePlanner() was never called");
-  }
-
-  // --- Scenario 2: configurePlanner() with values differing from the
-  //     baseline takes effect, readable via plannerConfig() ---
-  {
-    beginScenario("configurePlanner() with non-baseline values takes effect, readable via plannerConfig()");
-    TestSim::SimHarness sim;
-    sim.boot();
-
-    msg::PlannerConfig cfg;
-    cfg.a_max = 1234.0f;                                            // [mm/s^2]
-    cfg.a_decel = 999.0f;                                           // [mm/s^2]
-    cfg.v_body_max = 777.0f;                                        // [mm/s]
-    cfg.yaw_rate_max = 6.5f;                                        // [rad/s]
-    cfg.yaw_acc_max = 33.0f;                                        // [rad/s^2]
-    cfg.j_max = 5000.0f;                                            // [mm/s^3]
-    cfg.yaw_jerk_max = 40.0f;                                       // [rad/s^3]
-    cfg.min_speed = 25.0f;                                          // [mm/s]
-    cfg.heading_kp = 7.25f;                                         // [1/s]
-    cfg.heading_kd = 0.15f;                                         // dimensionless
-    cfg.arrive_dwell = 0.30f;                                       // [s]
-    cfg.heading_source = msg::HeadingSourceMode::HEADING_SOURCE_FORCE_ENCODER;
-    cfg.heading_dwell_tol = 0.05f;                                  // [rad]
-    cfg.heading_dwell_rate = 0.02f;                                 // [rad/s]
-    cfg.heading_lead_bias = -0.11f;                                 // [s]
-    cfg.plan_lead = 0.33f;                                          // [s]
-    cfg.terminal_lead = 0.07f;                                      // [s]
-    cfg.actuation_lag = 0.125f;                                     // [s]
-    cfg.distance_kp = 9.5f;                                         // [1/s]
-    cfg.distance_tol = 4.0f;                                        // [mm]
-    cfg.model_tau_lin = 0.33f;                                      // [s]
-    cfg.model_tau_ang = 0.44f;                                      // [s]
-
-    sim.configurePlanner(cfg);
-
-    const msg::PlannerConfig& got = sim.plannerConfig();
-    checkFloatEq(got.a_max, 1234.0f, "a_max took effect");
-    checkFloatEq(got.a_decel, 999.0f, "a_decel took effect");
-    checkFloatEq(got.v_body_max, 777.0f, "v_body_max took effect");
-    checkFloatEq(got.yaw_rate_max, 6.5f, "yaw_rate_max took effect");
-    checkFloatEq(got.yaw_acc_max, 33.0f, "yaw_acc_max took effect");
-    checkFloatEq(got.j_max, 5000.0f, "j_max took effect");
-    checkFloatEq(got.yaw_jerk_max, 40.0f, "yaw_jerk_max took effect");
-    checkFloatEq(got.min_speed, 25.0f, "min_speed took effect");
-    checkFloatEq(got.heading_kp, 7.25f, "heading_kp took effect");
-    checkFloatEq(got.heading_kd, 0.15f, "heading_kd took effect");
-    checkFloatEq(got.arrive_dwell, 0.30f, "arrive_dwell took effect");
-    checkTrue(got.heading_source == msg::HeadingSourceMode::HEADING_SOURCE_FORCE_ENCODER,
-              "heading_source took effect");
-    checkFloatEq(got.heading_dwell_tol, 0.05f, "heading_dwell_tol took effect");
-    checkFloatEq(got.heading_dwell_rate, 0.02f, "heading_dwell_rate took effect");
-    checkFloatEq(got.heading_lead_bias, -0.11f, "heading_lead_bias took effect");
-    checkFloatEq(got.plan_lead, 0.33f, "plan_lead took effect");
-    checkFloatEq(got.terminal_lead, 0.07f, "terminal_lead took effect");
-    checkFloatEq(got.actuation_lag, 0.125f, "actuation_lag took effect");
-    checkFloatEq(got.distance_kp, 9.5f, "distance_kp took effect");
-    checkFloatEq(got.distance_tol, 4.0f, "distance_tol took effect");
-    checkFloatEq(got.model_tau_lin, 0.33f, "model_tau_lin took effect (113-001 field)");
-    checkFloatEq(got.model_tau_ang, 0.44f, "model_tau_ang took effect (113-001 field)");
-  }
-
-  // --- Scenario 3: configureMotor() with non-default values takes effect
-  //     per port, readable via motorConfig(port); configuring one port
-  //     never touches the other port's own record ---
-  {
-    beginScenario("configureMotor() takes effect per port, readable via motorConfig(port)");
+    beginScenario("default-constructed SimHarness observes Devices::MotorConfig{}'s own "
+                  "all-zero default (114-001: no self-configuration baseline anymore)");
     TestSim::SimHarness sim;
     sim.boot();
 
@@ -182,6 +92,16 @@ int main() {
                  "left motorConfig starts at Devices::MotorConfig{}'s zero default");
     checkFloatEq(sim.motorConfig(2).velFiltAlpha, 0.0f,
                  "right motorConfig starts at Devices::MotorConfig{}'s zero default");
+    checkFalse(sim.isConfigured(), "isConfigured() is false before any configureMotor() call");
+  }
+
+  // --- Scenario 2: configureMotor() with non-default values takes effect
+  //     per port, readable via motorConfig(port); configuring one port
+  //     never touches the other port's own record. ---
+  {
+    beginScenario("configureMotor() takes effect per port, readable via motorConfig(port)");
+    TestSim::SimHarness sim;
+    sim.boot();
 
     Devices::MotorConfig cfgL;
     cfgL.port = 1;
@@ -206,64 +126,30 @@ int main() {
                  "left motorConfig unaffected by configureMotor(2, ...)");
   }
 
-  // --- Scenario 4: the regression this ticket's own acceptance criteria
-  //     name explicitly -- configurePlanner() THEN setYawRateMax() must not
-  //     lose every other field configurePlanner() set. ---
+  // --- Scenario 3: isConfigured() flips true only once BOTH ports have
+  //     landed a configureMotor() call -- the motor-only configuration-
+  //     completeness gate (115-006: no planner half left to wait on). ---
   {
-    beginScenario("configurePlanner() then setYawRateMax(): other fields survive (no silent reset)");
+    beginScenario("isConfigured() gates on BOTH configureMotor() calls, not just one");
     TestSim::SimHarness sim;
     sim.boot();
 
-    msg::PlannerConfig cfg;
-    cfg.a_max = 4242.0f;             // [mm/s^2] -- distinctive, NOT msg::PlannerConfig{}'s 0 default
-    cfg.heading_kp = 11.0f;          // [1/s] -- distinctive, NOT msg::PlannerConfig{}'s 0 default
-    cfg.model_tau_lin = 0.55f;       // [s] -- distinctive, NOT msg::PlannerConfig{}'s 0 default
-    cfg.model_tau_ang = 0.66f;       // [s] -- distinctive, NOT msg::PlannerConfig{}'s 0 default
-    cfg.yaw_rate_max = kBaselineYawRateMax;  // scenario-local distinguishing value, overridden below
-    sim.configurePlanner(cfg);
+    checkFalse(sim.isConfigured(), "isConfigured() false immediately after construction");
 
-    checkFloatEq(sim.plannerConfig().a_max, 4242.0f, "setup: a_max holds configurePlanner()'s value before setYawRateMax()");
+    Devices::MotorConfig cfgL;
+    cfgL.port = 1;
+    sim.configureMotor(1, cfgL);
+    checkFalse(sim.isConfigured(), "isConfigured() still false after ONLY the left port is configured");
 
-    sim.setYawRateMax(1.5f);  // only yaw_rate_max is meant to change
-
-    checkFloatEq(sim.plannerConfig().yaw_rate_max, 1.5f, "setYawRateMax() itself took effect");
-    checkFloatEq(sim.plannerConfig().a_max, 4242.0f,
-                 "a_max SURVIVES setYawRateMax() -- not silently reset to msg::PlannerConfig{}'s 0 default");
-    checkFloatEq(sim.plannerConfig().heading_kp, 11.0f,
-                 "heading_kp SURVIVES setYawRateMax() -- not silently reset to msg::PlannerConfig{}'s 0 default");
-    checkFloatEq(sim.plannerConfig().model_tau_lin, 0.55f,
-                 "model_tau_lin SURVIVES setYawRateMax() -- not silently reset to msg::PlannerConfig{}'s 0 default");
-    checkFloatEq(sim.plannerConfig().model_tau_ang, 0.66f,
-                 "model_tau_ang SURVIVES setYawRateMax() -- not silently reset to msg::PlannerConfig{}'s 0 default");
-  }
-
-  // --- Scenario 5: setYawRateMax() alone (configurePlanner() NEVER called)
-  //     -- 114-001: SimHarness no longer carries a hardcoded baseline to
-  //     rebuild from, so this hook's own fallback (sim_harness.h's
-  //     `hasConfiguredPlanner_ ? lastPlannerConfig_ : msg::PlannerConfig{}`)
-  //     now rebuilds from msg::PlannerConfig{}'s all-zero default instead of
-  //     the deleted makeExecutorConfig(). Still byte-for-byte the SAME
-  //     rebuild-from-fallback SHAPE this hook always had -- only what the
-  //     fallback itself now resolves to changed. ---
-  {
-    beginScenario("setYawRateMax() alone (no configurePlanner() call): rebuilds from "
-                  "msg::PlannerConfig{}'s all-zero default (114-001: no self-configuration baseline anymore)");
-    TestSim::SimHarness sim;
-    sim.boot();
-
-    sim.setYawRateMax(7.0f);
-
-    checkFloatEq(sim.plannerConfig().yaw_rate_max, 7.0f, "setYawRateMax() itself took effect");
-    checkFloatEq(sim.plannerConfig().a_max, 0.0f,
-                 "a_max is msg::PlannerConfig{}'s own zero default -- setYawRateMax() rebuilt from it, "
-                 "not from any configurePlanner() call (there was none)");
-    checkFloatEq(sim.plannerConfig().heading_kp, 0.0f,
-                 "heading_kp is msg::PlannerConfig{}'s own zero default for the same reason");
+    Devices::MotorConfig cfgR;
+    cfgR.port = 2;
+    sim.configureMotor(2, cfgR);
+    checkTrue(sim.isConfigured(), "isConfigured() true once BOTH ports are configured");
   }
 
   std::printf("\n");
   if (g_failureCount == 0) {
-    std::printf("OK: all SimHarness::configurePlanner()/configureMotor() scenarios passed\n");
+    std::printf("OK: all SimHarness::configureMotor()/isConfigured() scenarios passed\n");
     return 0;
   }
   std::printf("FAILED: %d assertion(s) across the SimHarness configure() scenarios\n", g_failureCount);

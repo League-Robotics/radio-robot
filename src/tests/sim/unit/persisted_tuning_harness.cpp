@@ -96,15 +96,6 @@ void checkMotorPatchEq(const msg::MotorConfigPatch& actual, const msg::MotorConf
   checkOptFloatEq(actual.kaw, expected.kaw, what + ".kaw");
 }
 
-void checkPlannerPatchEq(const msg::PlannerConfigPatch& actual, const msg::PlannerConfigPatch& expected,
-                          const std::string& what) {
-  checkOptFloatEq(actual.min_speed, expected.min_speed, what + ".min_speed");
-  checkOptFloatEq(actual.heading_kp, expected.heading_kp, what + ".heading_kp");
-  checkOptFloatEq(actual.heading_kd, expected.heading_kd, what + ".heading_kd");
-  checkOptFloatEq(actual.arrive_dwell, expected.arrive_dwell, what + ".arrive_dwell");
-  checkOptFloatEq(actual.distance_kp, expected.distance_kp, what + ".distance_kp");
-}
-
 void checkOtosPatchEq(const msg::OtosConfigPatch& actual, const msg::OtosConfigPatch& expected,
                        const std::string& what) {
   checkOptFloatEq(actual.linear_scale, expected.linear_scale, what + ".linear_scale");
@@ -149,12 +140,6 @@ void scenarioRoundTripFullySetSnapshot() {
   original.motorR.i_max = opt(10.0f);
   original.motorR.kaw = opt(0.1f);
 
-  original.planner.min_speed = opt(20.0f);
-  original.planner.heading_kp = opt(6.0f);
-  original.planner.heading_kd = opt(0.25f);
-  original.planner.arrive_dwell = opt(150.0f);
-  original.planner.distance_kp = opt(1.5f);
-
   original.otos.linear_scale = opt(1.067f);
   original.otos.angular_scale = opt(0.987f);
   original.otos.offset_x = opt(-51.5f);
@@ -168,7 +153,6 @@ void scenarioRoundTripFullySetSnapshot() {
 
   checkMotorPatchEq(roundTripped.motorL, original.motorL, "motorL");
   checkMotorPatchEq(roundTripped.motorR, original.motorR, "motorR");
-  checkPlannerPatchEq(roundTripped.planner, original.planner, "planner");
   checkOtosPatchEq(roundTripped.otos, original.otos, "otos");
 
   checkTrue(roundTripped.motorL.side == msg::BoundMotorSide::LEFT, "deserializeSnapshot() stamps motorL.side == LEFT");
@@ -188,7 +172,6 @@ void scenarioRoundTripFreshEmptySnapshot() {
 
   checkMotorPatchEq(roundTripped.motorL, original.motorL, "motorL");
   checkMotorPatchEq(roundTripped.motorR, original.motorR, "motorR");
-  checkPlannerPatchEq(roundTripped.planner, original.planner, "planner");
   checkOtosPatchEq(roundTripped.otos, original.otos, "otos");
 
   // A fresh snapshot's own blob is the all-zero baseline
@@ -205,7 +188,7 @@ void scenarioRoundTripPartiallySetSnapshotPreservesAbsentFields() {
 
   Config::TuningSnapshot original;
   original.motorL.kp = opt(0.02f);  // ONLY kp set on motorL; everything else stays has=false
-  original.planner.heading_kp = opt(2.5f);  // ONLY heading_kp set
+  original.otos.angular_scale = opt(0.987f);  // ONLY angular_scale set
 
   Config::Blob blob = Config::serializeSnapshot(original);
   Config::TuningSnapshot roundTripped = Config::deserializeSnapshot(blob);
@@ -216,9 +199,9 @@ void scenarioRoundTripPartiallySetSnapshotPreservesAbsentFields() {
   checkFalse(roundTripped.motorL.travel_calib.has, "motorL.travel_calib (never set) stays has=false");
   checkFalse(roundTripped.motorR.kp.has, "motorR.kp (never touched by this snapshot) stays has=false");
 
-  checkTrue(roundTripped.planner.heading_kp.has, "planner.heading_kp.has survives the round trip");
-  checkFloatEq(roundTripped.planner.heading_kp.val, 2.5f, "planner.heading_kp.val survives the round trip");
-  checkFalse(roundTripped.planner.min_speed.has, "planner.min_speed (never set) stays has=false");
+  checkTrue(roundTripped.otos.angular_scale.has, "otos.angular_scale.has survives the round trip");
+  checkFloatEq(roundTripped.otos.angular_scale.val, 0.987f, "otos.angular_scale.val survives the round trip");
+  checkFalse(roundTripped.otos.linear_scale.has, "otos.linear_scale (never set) stays has=false");
 }
 
 // ===========================================================================
@@ -256,16 +239,15 @@ void scenarioShouldWipeMismatchedVersionsReturnTrue() {
 void scenarioBlobSizeMatchesFieldBudget() {
   beginScenario("Config::kBlobSize matches the field-count budget persisted_tuning.h itself documents");
 
-  // 2 motor patches * 6 fields + 1 planner patch * 5 fields + 1 otos patch
-  // * 5 fields, each field 5 bytes (1 has + 4 float) -- see
-  // persisted_tuning.h's own kOptFloatBytes/kMotorPatchFields/
-  // kPlannerPatchFields/kOtosPatchFields constants, which this expression
-  // mirrors exactly (not a re-derived magic number).
+  // 2 motor patches * 6 fields + 1 otos patch * 5 fields, each field 5
+  // bytes (1 has + 4 float) -- see persisted_tuning.h's own
+  // kOptFloatBytes/kMotorPatchFields/kOtosPatchFields constants, which
+  // this expression mirrors exactly (not a re-derived magic number). The
+  // planner term is GONE (115-004, gut S1) -- kBlobSize is 85, not 110.
   constexpr size_t expected = (2 * Config::kMotorPatchFields * Config::kOptFloatBytes) +
-                               (Config::kPlannerPatchFields * Config::kOptFloatBytes) +
                                (Config::kOtosPatchFields * Config::kOptFloatBytes);
   checkUintEq(static_cast<uint32_t>(Config::kBlobSize), static_cast<uint32_t>(expected),
-              "kBlobSize == 2*motorFields*5 + plannerFields*5 + otosFields*5");
+              "kBlobSize == 2*motorFields*5 + otosFields*5");
 }
 
 }  // namespace

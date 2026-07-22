@@ -24,34 +24,29 @@ _sym_db = _symbol_database.Default()
 
 import options_pb2 as options__pb2
 import common_pb2 as common__pb2
-import planner_pb2 as planner__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0ftelemetry.proto\x12\x05robot\x1a\roptions.proto\x1a\x0c\x63ommon.proto\x1a\rplanner.proto\"\\\n\x08\x41\x63kEntry\x12\x0f\n\x07\x63orr_id\x18\x01 \x01(\r\x12 \n\x06status\x18\x02 \x01(\x0e\x32\x10.robot.AckStatus\x12\x1d\n\x08\x65rr_code\x18\x03 \x01(\rB\x0b\x99\xb5\x18\x00\x00\x00\x00\x00\x00\x1c@\"\x80\x05\n\tTelemetry\x12#\n\x04\x61\x63ks\x18\x01 \x03(\x0b\x32\x0f.robot.AckEntryB\x04\x88\xb5\x18\x03\x12\x0b\n\x03now\x18\x02 \x01(\r\x12\x1e\n\x04mode\x18\x03 \x01(\x0e\x32\x10.robot.DriveMode\x12\x0b\n\x03seq\x18\x04 \x01(\r\x12\x0f\n\x07has_enc\x18\x05 \x01(\x08\x12\x10\n\x08\x65nc_left\x18\x06 \x01(\x02\x12\x11\n\tenc_right\x18\x07 \x01(\x02\x12\x0f\n\x07has_vel\x18\x08 \x01(\x08\x12\x10\n\x08vel_left\x18\t \x01(\x02\x12\x11\n\tvel_right\x18\n \x01(\x02\x12\x10\n\x08has_pose\x18\x0b \x01(\x08\x12\x1b\n\x04pose\x18\x0c \x01(\x0b\x32\r.robot.Pose2D\x12\x10\n\x08has_otos\x18\r \x01(\x08\x12\x1b\n\x04otos\x18\x0e \x01(\x0b\x32\r.robot.Pose2D\x12\x16\n\x0eotos_connected\x18\x0f \x01(\x08\x12\x11\n\thas_twist\x18\x10 \x01(\x08\x12 \n\x05twist\x18\x11 \x01(\x0b\x32\x11.robot.BodyTwist3\x12\x0e\n\x06\x61\x63tive\x18\x12 \x01(\x08\x12\x11\n\tconn_left\x18\x13 \x01(\x08\x12\x12\n\nconn_right\x18\x14 \x01(\x08\x12\x12\n\nfault_bits\x18\x15 \x01(\r\x12\x12\n\nevent_bits\x18\x16 \x01(\r\x12 \n\x0bqueue_depth\x18\x17 \x01(\rB\x0b\x99\xb5\x18\x00\x00\x00\x00\x00\x00 @\x12\x1e\n\tactive_id\x18\x18 \x01(\rB\x0b\x99\xb5\x18\x00\x00\x00\x00\xe0\xff\xef@\x12(\n\nexec_state\x18\x19 \x01(\x0e\x32\x14.robot.ExecutorState\x12\x32\n\x0eheading_source\x18\x1a \x01(\x0e\x32\x1a.robot.HeadingSourceStatus\"\xd6\x01\n\x12TelemetrySecondary\x12\x0b\n\x03now\x18\x01 \x01(\r\x12\x13\n\x0bhas_cmd_vel\x18\x02 \x01(\x08\x12\x14\n\x0c\x63md_vel_left\x18\x03 \x01(\x02\x12\x15\n\rcmd_vel_right\x18\x04 \x01(\x02\x12\x10\n\x08\x61\x63\x63_left\x18\x05 \x01(\x02\x12\x11\n\tacc_right\x18\x06 \x01(\x02\x12\x13\n\x0bglitch_left\x18\x07 \x01(\r\x12\x14\n\x0cglitch_right\x18\x08 \x01(\r\x12\x0f\n\x07ts_left\x18\t \x01(\r\x12\x10\n\x08ts_right\x18\n \x01(\r*\xc5\x01\n\tAckStatus\x12\x11\n\rACK_STATUS_OK\x10\x00\x12\x12\n\x0e\x41\x43K_STATUS_ERR\x10\x01\x12\x13\n\x0f\x41\x43K_STATUS_DONE\x10\x02\x12\x16\n\x12\x41\x43K_STATUS_TRIVIAL\x10\x03\x12\x19\n\x15\x41\x43K_STATUS_SUPERSEDED\x10\x04\x12\x16\n\x12\x41\x43K_STATUS_FLUSHED\x10\x05\x12\x16\n\x12\x41\x43K_STATUS_TIMEOUT\x10\x06\x12\x19\n\x15\x41\x43K_STATUS_SOLVE_FAIL\x10\x07*Z\n\rExecutorState\x12\r\n\tEXEC_IDLE\x10\x00\x12\x10\n\x0c\x45XEC_RUNNING\x10\x01\x12\x15\n\x11\x45XEC_RAMP_TO_REST\x10\x02\x12\x11\n\rEXEC_STOPPING\x10\x03*X\n\x13HeadingSourceStatus\x12\x1e\n\x1aHEADING_SOURCE_STATUS_OTOS\x10\x00\x12!\n\x1dHEADING_SOURCE_STATUS_ENCODER\x10\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0ftelemetry.proto\x12\x05robot\x1a\roptions.proto\x1a\x0c\x63ommon.proto\"B\n\x0e\x45ncoderReading\x12\x10\n\x08position\x18\x01 \x01(\x02\x12\x10\n\x08velocity\x18\x02 \x01(\x02\x12\x0c\n\x04time\x18\x03 \x01(\r\"k\n\x0bOtosReading\x12\t\n\x01x\x18\x01 \x01(\x02\x12\t\n\x01y\x18\x02 \x01(\x02\x12\x0f\n\x07heading\x18\x03 \x01(\x02\x12\x0b\n\x03v_x\x18\x04 \x01(\x02\x12\x0b\n\x03v_y\x18\x05 \x01(\x02\x12\r\n\x05omega\x18\x06 \x01(\x02\x12\x0c\n\x04time\x18\x07 \x01(\r\"\xef\x02\n\tTelemetry\x12\x0b\n\x03now\x18\x01 \x01(\r\x12\x0b\n\x03seq\x18\x02 \x01(\r\x12\x1e\n\x04mode\x18\x03 \x01(\x0e\x32\x10.robot.DriveMode\x12\x1a\n\x05\x66lags\x18\x04 \x01(\rB\x0b\x99\xb5\x18\x00\x00\x00\x00\xe0\xff\xef@\x12\x1d\n\x08\x61\x63k_corr\x18\x05 \x01(\rB\x0b\x99\xb5\x18\x00\x00\x00\x00\xe0\xff\xef@\x12\x1c\n\x07\x61\x63k_err\x18\x06 \x01(\rB\x0b\x99\xb5\x18\x00\x00\x00\x00\x00\x00\x1c@\x12\'\n\x08\x65nc_left\x18\x07 \x01(\x0b\x32\x15.robot.EncoderReading\x12(\n\tenc_right\x18\x08 \x01(\x0b\x32\x15.robot.EncoderReading\x12 \n\x04otos\x18\t \x01(\x0b\x32\x12.robot.OtosReading\x12\x1b\n\x04pose\x18\n \x01(\x0b\x32\r.robot.Pose2D\x12 \n\x05twist\x18\x0b \x01(\x0b\x32\x11.robot.BodyTwist3\x12\x0c\n\x04line\x18\x0c \x01(\r\x12\r\n\x05\x63olor\x18\r \x01(\r\"\xd6\x01\n\x12TelemetrySecondary\x12\x0b\n\x03now\x18\x01 \x01(\r\x12\x13\n\x0bhas_cmd_vel\x18\x02 \x01(\x08\x12\x14\n\x0c\x63md_vel_left\x18\x03 \x01(\x02\x12\x15\n\rcmd_vel_right\x18\x04 \x01(\x02\x12\x10\n\x08\x61\x63\x63_left\x18\x05 \x01(\x02\x12\x11\n\tacc_right\x18\x06 \x01(\x02\x12\x13\n\x0bglitch_left\x18\x07 \x01(\r\x12\x14\n\x0cglitch_right\x18\x08 \x01(\r\x12\x0f\n\x07ts_left\x18\t \x01(\r\x12\x10\n\x08ts_right\x18\n \x01(\r*V\n\tDriveMode\x12\x08\n\x04IDLE\x10\x00\x12\r\n\tSTREAMING\x10\x01\x12\t\n\x05TIMED\x10\x02\x12\x0c\n\x08\x44ISTANCE\x10\x03\x12\t\n\x05GO_TO\x10\x04\x12\x0c\n\x08VELOCITY\x10\x05\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'telemetry_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_ACKENTRY'].fields_by_name['err_code']._loaded_options = None
-  _globals['_ACKENTRY'].fields_by_name['err_code']._serialized_options = b'\231\265\030\000\000\000\000\000\000\034@'
-  _globals['_TELEMETRY'].fields_by_name['acks']._loaded_options = None
-  _globals['_TELEMETRY'].fields_by_name['acks']._serialized_options = b'\210\265\030\003'
-  _globals['_TELEMETRY'].fields_by_name['queue_depth']._loaded_options = None
-  _globals['_TELEMETRY'].fields_by_name['queue_depth']._serialized_options = b'\231\265\030\000\000\000\000\000\000 @'
-  _globals['_TELEMETRY'].fields_by_name['active_id']._loaded_options = None
-  _globals['_TELEMETRY'].fields_by_name['active_id']._serialized_options = b'\231\265\030\000\000\000\000\340\377\357@'
-  _globals['_ACKSTATUS']._serialized_start=1025
-  _globals['_ACKSTATUS']._serialized_end=1222
-  _globals['_EXECUTORSTATE']._serialized_start=1224
-  _globals['_EXECUTORSTATE']._serialized_end=1314
-  _globals['_HEADINGSOURCESTATUS']._serialized_start=1316
-  _globals['_HEADINGSOURCESTATUS']._serialized_end=1404
-  _globals['_ACKENTRY']._serialized_start=70
-  _globals['_ACKENTRY']._serialized_end=162
-  _globals['_TELEMETRY']._serialized_start=165
-  _globals['_TELEMETRY']._serialized_end=805
-  _globals['_TELEMETRYSECONDARY']._serialized_start=808
-  _globals['_TELEMETRYSECONDARY']._serialized_end=1022
+  _globals['_TELEMETRY'].fields_by_name['flags']._loaded_options = None
+  _globals['_TELEMETRY'].fields_by_name['flags']._serialized_options = b'\231\265\030\000\000\000\000\340\377\357@'
+  _globals['_TELEMETRY'].fields_by_name['ack_corr']._loaded_options = None
+  _globals['_TELEMETRY'].fields_by_name['ack_corr']._serialized_options = b'\231\265\030\000\000\000\000\340\377\357@'
+  _globals['_TELEMETRY'].fields_by_name['ack_err']._loaded_options = None
+  _globals['_TELEMETRY'].fields_by_name['ack_err']._serialized_options = b'\231\265\030\000\000\000\000\000\000\034@'
+  _globals['_DRIVEMODE']._serialized_start=819
+  _globals['_DRIVEMODE']._serialized_end=905
+  _globals['_ENCODERREADING']._serialized_start=55
+  _globals['_ENCODERREADING']._serialized_end=121
+  _globals['_OTOSREADING']._serialized_start=123
+  _globals['_OTOSREADING']._serialized_end=230
+  _globals['_TELEMETRY']._serialized_start=233
+  _globals['_TELEMETRY']._serialized_end=600
+  _globals['_TELEMETRYSECONDARY']._serialized_start=603
+  _globals['_TELEMETRYSECONDARY']._serialized_end=817
 # @@protoc_insertion_point(module_scope)

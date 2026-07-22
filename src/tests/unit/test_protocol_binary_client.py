@@ -8,10 +8,13 @@ exercised EXCEPT ``config``/``stop``/``twist`` (cmd) and ``ok``/``err``/
 ``tlm`` (body). Concretely:
 
 - ``TLMFrame.from_pb2()`` tests (section 1) — KEPT, fixed: ``has_cmd_vel``/
-  ``acc_left``/``acc_right``/``conn_left``/``conn_right``/``glitch_*``/
-  ``ts_*`` moved off the primary ``Telemetry`` message to
-  ``TelemetrySecondary`` (103-001) — those kwargs/assertions are removed;
-  the primary-frame decode itself is still live and still worth covering.
+  ``acc_left``/``acc_right``/``glitch_*``/``ts_*`` moved off the primary
+  ``Telemetry`` message to ``TelemetrySecondary`` (103-001) — those
+  kwargs/assertions are removed; the primary-frame decode itself is still
+  live and still worth covering. 115-003 frame v2 folded ``conn_left``/
+  ``conn_right`` (which DID stay on the primary message) into the new
+  ``flags`` bit-string as NEW ``TLMFrame`` properties — see this file's
+  ``test_from_pb2_conn_left_right_derived_from_flags``.
 - ``set_config_binary()``/``get_config_binary()`` tests (section 2) —
   ``set_config_binary()`` targets the live ``config`` arm (KEPT unchanged).
   ``get_config_binary()`` targeted the now-reserved ``get`` arm — DELETED
@@ -51,33 +54,48 @@ import queue
 import pytest
 
 from robot_radio.io.serial_conn import SerialConnection
-from robot_radio.robot.pb2 import common_pb2, config_pb2, envelope_pb2, planner_pb2, telemetry_pb2
+from robot_radio.robot.pb2 import common_pb2, config_pb2, envelope_pb2, telemetry_pb2
 from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
 from robot_radio.robot._legacy_tlm_text import parse_historical_tlm_line
 
 # ---------------------------------------------------------------------------
-# 1. TLMFrame.from_pb2()
+# 1. TLMFrame.from_pb2() -- frame v2 (115-003): nested EncoderReading/
+# OtosReading readings, one `flags` bit-string, single ack_corr/ack_err
+# slot. See protocol.py's own TLMFrame docstring for the full field-by-field
+# rationale; this section covers the SAME primary-frame decode coverage
+# 104-002 established, updated for the new wire shape.
 # ---------------------------------------------------------------------------
 
 # Fields both wire formats carry -- compared directly, field-for-field,
 # between from_pb2(telemetry) and parse_historical_tlm_line(<the matching
-# text line>). 104-002: `cmd_vel` removed -- 103-001 moved
+# text line>). `cmd_vel` stays excluded -- 103-001 moved
 # has_cmd_vel/cmd_vel_left/cmd_vel_right off the primary Telemetry message
 # onto TelemetrySecondary, so it is no longer a field the two formats share
 # at this decode layer (see TLMFrame.from_pb2()'s own docstring).
 _SHARED_FIELDS = ("t", "mode", "seq", "enc", "vel", "pose", "otos", "twist")
 
+# flags bits used directly by this test file (mirrors protocol.py's own
+# module-private _FLAG_* constants -- duplicated here rather than imported
+# since they are private; see telemetry.proto's own bit-table comment for
+# the authoritative numbering).
+_FLAG_OTOS_PRESENT = 1 << 0
+_FLAG_OTOS_CONNECTED = 1 << 1
+_FLAG_ACTIVE = 1 << 2
+_FLAG_CONN_LEFT = 1 << 3
+_FLAG_CONN_RIGHT = 1 << 4
+
 
 def test_from_pb2_matches_text_parse_for_every_shared_field():
     telemetry = telemetry_pb2.Telemetry(
         now=12345,
-        mode=planner_pb2.DISTANCE,
+        mode=telemetry_pb2.DISTANCE,
         seq=7,
-        has_enc=True, enc_left=100.0, enc_right=-50.0,
-        has_vel=True, vel_left=200.0, vel_right=-199.0,
-        has_pose=True, pose=common_pb2.Pose2D(x=350.0, y=-12.0, h=1.0),
-        has_otos=True, otos=common_pb2.Pose2D(x=1.0, y=2.0, h=0.5), otos_connected=True,
-        has_twist=True, twist=common_pb2.BodyTwist3(v_x=150.0, v_y=0.0, omega=0.3),
+        flags=_FLAG_OTOS_PRESENT | _FLAG_OTOS_CONNECTED,
+        enc_left=telemetry_pb2.EncoderReading(position=100.0, velocity=200.0, time=12000),
+        enc_right=telemetry_pb2.EncoderReading(position=-50.0, velocity=-199.0, time=12000),
+        pose=common_pb2.Pose2D(x=350.0, y=-12.0, h=1.0),
+        otos=telemetry_pb2.OtosReading(x=1.0, y=2.0, heading=0.5, time=12000),
+        twist=common_pb2.BodyTwist3(v_x=150.0, v_y=0.0, omega=0.3),
     )
 
     from_pb2_frame = TLMFrame.from_pb2(telemetry)
@@ -104,44 +122,67 @@ def test_from_pb2_matches_text_parse_for_every_shared_field():
 
     # Fields telemetry.proto/TLMFrame do NOT share stay at this dataclass's
     # own default -- see from_pb2()'s own doc comment for why each is
-    # unshared.
+    # unshared. line/color additionally stay None here because their flags
+    # bits (13/14) were never set on this synthetic frame.
     for name in ("wedge", "encpose", "otos_health", "ekf_rej", "line", "color", "cmd_vel"):
         assert getattr(from_pb2_frame, name) is None, name
 
+    # otos_reading (new, richer than the legacy `otos` 3-tuple) carries the
+    # SAME burst, with its own time stamp.
+    assert from_pb2_frame.otos_reading is not None
+    assert from_pb2_frame.otos_reading.x == pytest.approx(1.0)
+    assert from_pb2_frame.otos_reading.time == 12000
+    assert from_pb2_frame.otos_connected is True
 
-def test_from_pb2_absent_optional_fields_stay_none():
-    """No has_* flag set (beyond the always-present now/mode/seq) -> every
-    gated field stays None, matching parse_historical_tlm_line() on a line with no
-    matching key=value token."""
-    telemetry = telemetry_pb2.Telemetry(now=1, mode=planner_pb2.IDLE, seq=0)
+
+def test_from_pb2_bare_frame_decodes_zero_values_not_none():
+    """A bare ``Telemetry(now=1, mode=IDLE, seq=0)`` (no ``flags`` bits set)
+    -- frame v2's ``enc_left``/``enc_right``/``pose``/``twist`` are ALWAYS
+    present on the wire (no presence gate any more), so they decode to
+    their proto3 zero values, NOT ``None``. Only ``otos``/``otos_reading``/
+    ``line``/``color`` (flags-gated) and the permanent-gap fields
+    (``cmd_vel``/``wedge``/``encpose``/``otos_health``/``ekf_rej``) stay
+    ``None`` -- the same "no matching key=value token" shape
+    ``parse_historical_tlm_line()`` produces for a line with none of those
+    tokens."""
+    telemetry = telemetry_pb2.Telemetry(now=1, mode=telemetry_pb2.IDLE, seq=0)
 
     frame = TLMFrame.from_pb2(telemetry)
 
     assert frame.t == 1
     assert frame.mode == "I"
     assert frame.seq == 0
-    assert frame.enc is None
-    assert frame.vel is None
+    assert frame.enc == (0, 0)
+    assert frame.vel == (0, 0)
+    assert frame.pose == (0, 0, 0)
+    assert frame.twist == (0, 0)
     assert frame.cmd_vel is None
-    assert frame.pose is None
     assert frame.otos is None
-    assert frame.twist is None
+    assert frame.otos_reading is None
+    assert frame.line is None
+    assert frame.color is None
 
     text_frame = parse_historical_tlm_line("TLM t=1 mode=I seq=0")
     assert text_frame is not None
-    for name in _SHARED_FIELDS:
+    # The text plane's absent enc=/vel=/pose=/twist= tokens stay None on
+    # ITS side (parse_historical_tlm_line is a frozen, unmodified reference
+    # copy) -- the two formats deliberately diverge here (always-present vs
+    # gated-by-token), so this is a value comparison for t/mode/seq only,
+    # not the full _SHARED_FIELDS sweep test_from_pb2_matches_text_parse_
+    # for_every_shared_field() above performs against a fully-populated line.
+    for name in ("t", "mode", "seq"):
         assert getattr(frame, name) == getattr(text_frame, name), name
 
 
 @pytest.mark.parametrize(
     ("mode_value", "expected_char"),
     [
-        (planner_pb2.IDLE, "I"),
-        (planner_pb2.STREAMING, "S"),
-        (planner_pb2.TIMED, "T"),
-        (planner_pb2.DISTANCE, "D"),
-        (planner_pb2.GO_TO, "G"),
-        (planner_pb2.VELOCITY, "I"),  # modeChar()'s own `default: return 'I';` case
+        (telemetry_pb2.IDLE, "I"),
+        (telemetry_pb2.STREAMING, "S"),
+        (telemetry_pb2.TIMED, "T"),
+        (telemetry_pb2.DISTANCE, "D"),
+        (telemetry_pb2.GO_TO, "G"),
+        (telemetry_pb2.VELOCITY, "I"),  # modeChar()'s own `default: return 'I';` case
     ],
 )
 def test_from_pb2_mode_mapping_matches_modechar(mode_value, expected_char):
@@ -151,92 +192,52 @@ def test_from_pb2_mode_mapping_matches_modechar(mode_value, expected_char):
 
 
 def test_from_pb2_drops_bench_diagnostic_fields_with_no_tlmframe_slot():
-    """104-002: acc_/glitch_/ts_ moved off the primary ``Telemetry`` message
-    entirely (103-001, to ``TelemetrySecondary``) -- the primary message no
-    longer even declares these fields, so there is nothing left to
-    construct here; this test now only proves ``conn_left``/``conn_right``
-    (which DID stay on the primary message, telemetry.proto fields 19/20)
-    still have no ``TLMFrame`` slot -- ``from_pb2()`` must not invent one.
-
-    ``active`` is the ONE exception (097) -- see
-    ``test_from_pb2_populates_active_for_segment_completion_detection``
-    below and ``TLMFrame.from_pb2()``'s own docstring for why."""
-    telemetry = telemetry_pb2.Telemetry(
-        now=1, mode=planner_pb2.IDLE, seq=0,
-        active=True, conn_left=True, conn_right=False,
-    )
+    """``acc_``/``glitch_``/``ts_`` moved off the primary ``Telemetry``
+    message entirely (103-001, to ``TelemetrySecondary``) -- the primary
+    message no longer even declares these fields, so there is nothing left
+    to construct here; this test proves they still have no ``TLMFrame``
+    slot -- ``from_pb2()`` must not invent one."""
+    telemetry = telemetry_pb2.Telemetry(now=1, mode=telemetry_pb2.IDLE, seq=0)
 
     frame = TLMFrame.from_pb2(telemetry)
 
-    for attr in ("acc_left", "acc_right", "conn_left", "conn_right",
-                 "glitch_left", "glitch_right", "ts_left", "ts_right"):
+    for attr in ("acc_left", "acc_right", "glitch_left", "glitch_right",
+                 "ts_left", "ts_right"):
         assert not hasattr(frame, attr), attr
 
 
 @pytest.mark.parametrize(("raw_active",), [(True,), (False,)])
 def test_from_pb2_populates_active_for_segment_completion_detection(raw_active):
-    """097: unlike every other bench-diagnostic field, ``active``
-    (``bb.drivetrain.busy``) IS populated -- it is the reliable
-    motion-complete signal (``TLMFrame.from_pb2()``'s own docstring).
-    ``__main__.py``'s ``_TourRunner._wait_for_idle`` polls this field."""
+    """097: unlike most other status signals, ``active``
+    (``bb.drivetrain.busy``, flags bit 2 -- folded into ``flags`` by
+    115-003, previously a standalone bool field) IS populated -- it is the
+    reliable motion-complete signal (``TLMFrame.from_pb2()``'s own
+    docstring). ``__main__.py``'s ``_TourRunner._wait_for_idle`` polls this
+    field."""
     telemetry = telemetry_pb2.Telemetry(
-        now=1, mode=planner_pb2.IDLE, seq=0, active=raw_active,
+        now=1, mode=telemetry_pb2.IDLE, seq=0,
+        flags=_FLAG_ACTIVE if raw_active else 0,
     )
     frame = TLMFrame.from_pb2(telemetry)
     assert frame.active is raw_active
 
 
-# ---------------------------------------------------------------------------
-# 1b. queue_depth/active_id/exec_state/heading_source (109-003/109-005,
-# decoded by 110-002) -- plain proto3 scalars on the primary Telemetry
-# message with no has_* gate, so from_pb2() populates them unconditionally,
-# the same "always present" treatment as active/acks/fault_bits/event_bits.
-# ---------------------------------------------------------------------------
-
-
-def test_from_pb2_decodes_executor_and_heading_source_fields():
-    telemetry = telemetry_pb2.Telemetry(
-        now=1, mode=planner_pb2.IDLE, seq=0,
-        queue_depth=3, active_id=42,
-        exec_state=telemetry_pb2.EXEC_RUNNING,
-        heading_source=telemetry_pb2.HEADING_SOURCE_STATUS_ENCODER,
-    )
+@pytest.mark.parametrize(("raw_left", "raw_right"), [(True, False), (False, True)])
+def test_from_pb2_conn_left_right_derived_from_flags(raw_left, raw_right):
+    """115-003: ``conn_left``/``conn_right`` (per-motor bus connectivity,
+    flags bits 3/4) are NEW ``TLMFrame`` properties derived from ``flags``
+    -- unlike the pre-115 wire, which carried them as standalone bool
+    fields with no ``TLMFrame`` slot at all (the property that predates
+    this ticket asserted the OPPOSITE -- see this test's git history /
+    ``test_from_pb2_drops_bench_diagnostic_fields_with_no_tlmframe_slot``
+    above for the fields that are STILL absent)."""
+    flags = (_FLAG_CONN_LEFT if raw_left else 0) | (_FLAG_CONN_RIGHT if raw_right else 0)
+    telemetry = telemetry_pb2.Telemetry(now=1, mode=telemetry_pb2.IDLE, seq=0, flags=flags)
 
     frame = TLMFrame.from_pb2(telemetry)
 
-    assert frame.queue_depth == 3
-    assert frame.active_id == 42
-    assert frame.exec_state == telemetry_pb2.EXEC_RUNNING
-    assert frame.heading_source == telemetry_pb2.HEADING_SOURCE_STATUS_ENCODER
-
-
-def test_from_pb2_executor_and_heading_source_default_when_unset():
-    """A bare Telemetry() (older firmware construction path / no explicit
-    value) has no has_* gate for these fields -- proto3 zero-value defaults
-    apply: queue_depth=0, active_id=0, exec_state=EXEC_IDLE (0),
-    heading_source=HEADING_SOURCE_STATUS_OTOS (0). This is the SAME
-    "documented default, no crash" degrade-gracefully behavior `active`
-    already has for older firmware that never sets it."""
-    telemetry = telemetry_pb2.Telemetry(now=1, mode=planner_pb2.IDLE, seq=0)
-
-    frame = TLMFrame.from_pb2(telemetry)
-
-    assert frame.queue_depth == 0
-    assert frame.active_id == 0
-    assert frame.exec_state == telemetry_pb2.EXEC_IDLE
-    assert frame.heading_source == telemetry_pb2.HEADING_SOURCE_STATUS_OTOS
-
-
-def test_tlmframe_dataclass_defaults_to_none_for_new_fields():
-    """A plain TLMFrame() built WITHOUT going through from_pb2() (e.g. a
-    test double, or a legacy construction path) leaves these four fields at
-    the dataclass's own None default -- distinguishing "never decoded" from
-    "decoded as the proto3 zero value" for any caller that cares."""
-    frame = TLMFrame()
-    assert frame.queue_depth is None
-    assert frame.active_id is None
-    assert frame.exec_state is None
-    assert frame.heading_source is None
+    assert frame.conn_left is raw_left
+    assert frame.conn_right is raw_right
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +367,8 @@ def test_set_config_binary_returns_none_on_timeout():
     try:
         proto = NezhaProtocol(conn)
         ack = proto.set_config_binary(
-            envelope_pb2.ConfigDelta(planner=config_pb2.PlannerConfigPatch(min_speed=50.0)),
+            envelope_pb2.ConfigDelta(
+                drivetrain=config_pb2.DrivetrainConfigPatch(trackwidth=128.0)),
             read_timeout=50)
     finally:
         conn._stop_reader()

@@ -3,12 +3,17 @@
 does not collect it); imported by ``test_wire_differential.py`` and
 ``test_wire_fuzz.py``.
 
-Rewritten 103-001 (SUC-001, architecture-update.md (103) Decisions 2/3)
-against the P4-pruned schema -- ``CommandEnvelope.cmd`` is exactly
-``{twist, config, stop}``; ``ReplyEnvelope.body`` is exactly
-``{ok, err, tlm}``; ``Telemetry`` carries the depth-3 ack ring +
-``fault_bits``/``event_bits``; ``TelemetrySecondary`` is a new standalone
-top-level message with its own ``msg::wire::encode()`` overload.
+Rewritten 115-009 (gut S1's own test-sweep/green-bar ticket) against the
+frame-v2 schema (115-003, `telemetry-frame-tightening-amendment-to-gut-
+s1.md`) -- ``CommandEnvelope.cmd`` is still exactly ``{twist, config,
+stop}``; ``ReplyEnvelope.body`` is still exactly ``{ok, err, tlm}``;
+``Telemetry`` now carries a single ``flags`` bit-string (status+fault+event)
+plus a single ``ack_corr``/``ack_err`` slot (the depth-3 ack ring is gone)
+and per-source timestamped ``EncoderReading``/``OtosReading`` objects;
+``ConfigDelta.patch`` is DRIVETRAIN/MOTOR/WATCHDOG/OTOS (PLANNER deleted
+wholesale alongside ``Motion::Executor``/``App::Pilot``);
+``TelemetrySecondary`` is unchanged, a standalone top-level message with its
+own ``msg::wire::encode()`` overload.
 
 Compiles ``wire_differential_harness.cpp`` (src/firm/messages/wire.cpp +
 wire_runtime.cpp linked in) with the system C++ compiler and drives it
@@ -52,7 +57,6 @@ if str(_HOST_PB2_DIR) not in sys.path:
 from robot_radio.robot.pb2 import common_pb2 as pb_common  # noqa: E402
 from robot_radio.robot.pb2 import config_pb2 as pb_config  # noqa: E402
 from robot_radio.robot.pb2 import envelope_pb2 as pb_envelope  # noqa: E402
-from robot_radio.robot.pb2 import planner_pb2 as pb_planner  # noqa: E402
 from robot_radio.robot.pb2 import telemetry_pb2 as pb_telemetry  # noqa: E402
 
 
@@ -172,39 +176,32 @@ def encode_err(binary: pathlib.Path, corr_id: int, code_name: str, field_num: in
     return base64.b64decode(line[len("B64 "):])
 
 
-# Default ack ring (used by callers that don't care about ack-ring content
-# for a given test case) -- 3 entries, all ACK_STATUS_OK/err_code=0.
-_DEFAULT_ACKS = ((0, 0, 0), (0, 0, 0), (0, 0, 0))
-
-
-def encode_telemetry(binary: pathlib.Path, corr_id: int, acks: tuple = _DEFAULT_ACKS, **fields) -> bytes | None:
+def encode_telemetry(binary: pathlib.Path, corr_id: int, **fields) -> bytes | None:
     """Builds ReplyEnvelope{tlm=Telemetry{...}} via the `encode_telemetry`
     argv verb (see wire_differential_harness.cpp's file header for the full
-    positional list). `acks` is a 3-tuple of (corr_id, status, err_code)
-    triples -- the ring is ALWAYS encoded at its full depth-3 (the wire
-    codec's encode() trusts the caller-supplied count with no re-clamp, so
-    this driver never exercises a malformed count > 3, matching
-    app/Telemetry's own designed invariant, ticket 005). `fields` keys are
-    telemetry.proto's OWN field names (excluding `acks`); every field not
-    passed defaults to its proto zero value (0 / 0.0 / False)."""
+    positional list) -- frame v2 shape (115-003): one `flags` bit-string,
+    one `ack_corr`/`ack_err` slot (the depth-3 ack ring is gone), two
+    `EncoderReading`s (`enc_left_*`/`enc_right_*`), one `OtosReading`
+    (`otos_*`), always-present `pose_*`/`twist_*`, and the packed `line`/
+    `color` words. `fields` keys are the flattened per-field names below;
+    every field not passed defaults to its proto zero value (0 / 0.0)."""
     order = (
-        "now", "mode", "seq", "has_enc", "enc_left", "enc_right", "has_vel", "vel_left", "vel_right",
-        "has_pose", "pose_x", "pose_y", "pose_h", "has_otos", "otos_x", "otos_y", "otos_h", "otos_connected",
-        "has_twist", "twist_vx", "twist_vy", "twist_omega", "active", "conn_left", "conn_right",
-        "fault_bits", "event_bits",
+        "now", "mode", "seq", "flags", "ack_corr", "ack_err",
+        "enc_left_position", "enc_left_velocity", "enc_left_time",
+        "enc_right_position", "enc_right_velocity", "enc_right_time",
+        "otos_x", "otos_y", "otos_heading", "otos_v_x", "otos_v_y", "otos_omega", "otos_time",
+        "pose_x", "pose_y", "pose_h",
+        "twist_v_x", "twist_v_y", "twist_omega",
+        "line", "color",
     )
     unknown = set(fields) - set(order)
     assert not unknown, f"unknown Telemetry field(s): {unknown}"
-    assert len(acks) == 3, f"acks must be a 3-tuple (ring depth 3), got {len(acks)}"
     args = [str(corr_id)]
-    for ack_corr_id, status, err_code in acks:
-        args.extend([str(ack_corr_id), str(status), str(err_code)])
     for key in order:
         value = fields.get(key, 0)
         # bool -> "0"/"1", NOT Python's own str(True) == "True" -- the
         # harness parses every non-float positional arg with strtoul(), which
-        # silently reads "True"/"False" as 0 (no leading digit), corrupting
-        # every has_*/active/conn_*/otos_connected flag.
+        # silently reads "True"/"False" as 0 (no leading digit).
         args.append(str(int(value)) if isinstance(value, bool) else str(value))
     r = run_harness(binary, "encode_telemetry", *args)
     assert not r.crashed, f"encode_telemetry crashed: {r.stdout}\n{r.stderr}"
@@ -342,11 +339,12 @@ def env_config_motor(corr_id: int, side: int = pb_config.LEFT, **fields) -> byte
         corr_id=corr_id, config=pb_envelope.ConfigDelta(motor=patch)).SerializeToString()
 
 
-def env_config_planner(corr_id: int, **fields) -> bytes:
-    """`fields` keys are PlannerConfigPatch's own proto field names."""
-    patch = pb_config.PlannerConfigPatch(**fields)
+def env_config_otos(corr_id: int, **fields) -> bytes:
+    """`fields` keys are OtosConfigPatch's own proto field names
+    (linear_scale/angular_scale/offset_x/offset_y/offset_yaw/init)."""
+    patch = pb_config.OtosConfigPatch(**fields)
     return pb_envelope.CommandEnvelope(
-        corr_id=corr_id, config=pb_envelope.ConfigDelta(planner=patch)).SerializeToString()
+        corr_id=corr_id, config=pb_envelope.ConfigDelta(otos=patch)).SerializeToString()
 
 
 def env_config_watchdog(corr_id: int, watchdog: int) -> bytes:
@@ -355,10 +353,10 @@ def env_config_watchdog(corr_id: int, watchdog: int) -> bytes:
 
 
 __all__ = [
-    "pb_common", "pb_config", "pb_envelope", "pb_planner", "pb_telemetry",
+    "pb_common", "pb_config", "pb_envelope", "pb_telemetry",
     "compile_harness", "run_harness", "decode", "parse_decode_line",
     "encode_ok", "encode_err", "encode_telemetry", "encode_telemetry_secondary", "f32", "float_eq",
     "unknown_varint_field",
     "env_twist", "env_stop",
-    "env_config_drivetrain", "env_config_motor", "env_config_planner", "env_config_watchdog",
+    "env_config_drivetrain", "env_config_motor", "env_config_otos", "env_config_watchdog",
 ]

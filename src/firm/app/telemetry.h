@@ -1,12 +1,14 @@
 // telemetry.h -- App::Telemetry: the always-on outbound frame. Builds and
-// emits the primary msg::Telemetry frame (ack ring + fault/event bits) at a
-// fixed cadence, and the slower msg::TelemetrySecondary diagnostic frame on
-// other cycles, never both in the same emit() call.
+// emits the primary msg::Telemetry frame (single ack slot + a unified
+// flags bit-string) at a fixed cadence, and the slower msg::TelemetrySecondary
+// diagnostic frame on other cycles, never both in the same emit() call.
 //
-// Boundary: inside -- primary/secondary frame assembly, the depth-3 ack
-// ring, fault/event bit encoding, cadence pacing; outside -- deciding WHEN
-// a fault occurred (callers -- I2CBus's safety net, Deadman's trip -- set
-// the bit; Telemetry only carries it).
+// Boundary: inside -- primary/secondary frame assembly, the single ack
+// slot, flags-bit encoding, cadence pacing; outside -- deciding WHEN a
+// fault/event/presence condition occurred (callers -- I2CBus's safety net,
+// Deadman's trip, RobotLoop's own updateTlm()/line-color polling -- set the
+// bit; Telemetry only carries it and folds in its own ack_fresh bit at
+// encode time).
 //
 // Two send paths: the PRIMARY frame rides a
 // msg::ReplyEnvelope{corr_id=0, body_kind=TLM} through Comms::sendReply()
@@ -22,78 +24,103 @@
 // Telemetry is a standalone, testable class: it never holds a pointer to a
 // leaf, I2CBus, or Deadman instance (that wiring is RobotLoop's job).
 // Callers stage the next frame's data via setFrame()/setSecondaryFrame()
-// and report fault/event conditions via setFault()/setEvent() using the
-// bit constants below -- Telemetry only carries whatever the caller last
-// told it. Design/rationale: DESIGN.md.
+// and report status/fault/event conditions via setFlag() using the bit
+// constants below -- Telemetry only carries whatever the caller last told
+// it, plus its own internally-tracked ack_fresh bit. Design/rationale:
+// DESIGN.md.
 #pragma once
 
 #include <cstdint>
 
 #include "app/comms.h"
-#include "messages/envelope.h"
 #include "messages/telemetry.h"
 
 namespace App {
 
-// --- fault_bits / event_bits layout -----------------------------------
+// --- flags bit layout (115-005, gut S1 -- telemetry-frame-tightening-
+// amendment-to-gut-s1.md) ------------------------------------------------
 // The single place a reader decodes a bit against. Callers pass the
-// current boolean state to setFault()/setEvent(); Telemetry only carries
-// it (see this file's boundary comment above).
+// current boolean state to setFlag(); Telemetry only carries it (see this
+// file's boundary comment above), except bit 5 (ack_fresh), which Telemetry
+// tracks itself from ack() call timing and ORs in at encode time -- a
+// caller never calls setFlag(kFlagAckFresh, ...) directly.
 //
-// fault_bits:
-//   bit 0 (kFaultI2CSafetyNet) -- I2CBus `readyAt` clearance safety-net
-//                                  trip (Devices::I2CBus::
-//                                  clearanceSafetyNetCount() > 0). Bench-
-//                                  characterized as a boot-time ONE-SHOT
-//                                  latch, not a continuous/live indicator:
-//                                  it fires once, coincident with
-//                                  event_bits first showing
-//                                  kEventBootReady, and never re-fires
-//                                  (matches clearanceSafetyNetCount()'s own
-//                                  monotonic, never-cleared counter
-//                                  semantics). A healthy robot can show
-//                                  fault_bits bit 0 set permanently after
-//                                  boot with no ongoing problem -- do NOT
-//                                  read a steady fault=1 as live evidence
-//                                  of a defect; only a bit that flips
-//                                  DURING driving (not just once at boot)
-//                                  is actionable.
-//   bit 1 (kFaultWedgeLatch)   -- NezhaMotor/I2CBus wedge-latch detected
-//                                  (Devices::MotorArmor::wedged()).
-//   bit 2 (kFaultI2CNak)       -- I2C bus NAK/timeout error. Declared, not
-//                                  yet wired live (no per-transaction NAK
-//                                  aggregate exists yet).
-//   bit 3 (kFaultCommsMalformed) -- malformed/undecodable inbound frame
-//                                  (App::Comms::malformedCount() > 0 --
-//                                  malformed armor prefix, malformed
-//                                  base64, malformed protobuf decode, or an
-//                                  unrecognized text-plane line all
-//                                  increment it).
-//   bits 4-31 -- reserved for future faults.
-//
-// event_bits:
-//   bit 0 (kEventDeadmanExpired) -- Deadman staleness timer expired
-//                                    (App::Deadman::expired()).
-//   bit 1 (kEventBootReady)      -- boot-ready transition
+//   bit 0  (kFlagOtosPresent)    -- OtosReading fresh THIS frame (chip
+//                                    detected AND this cycle's burst read
+//                                    actually refreshed the cached pose --
+//                                    see odometry.h's applyOtosSample()
+//                                    doc comment). Frame.otos is valid iff
+//                                    this bit is set.
+//   bit 1  (kFlagOtosConnected)  -- live OTOS bus health.
+//   bit 2  (kFlagActive)         -- motion in progress.
+//   bit 3  (kFlagConnLeft)       -- left motor bus connectivity.
+//   bit 4  (kFlagConnRight)      -- right motor bus connectivity.
+//   bit 5  (kFlagAckFresh)       -- ack_corr/ack_err are a NEW ack this
+//                                    frame (Telemetry-internal -- see
+//                                    above).
+//   bit 6  (kFlagFaultI2CSafetyNet) -- I2CBus `readyAt` clearance
+//                                    safety-net trip
+//                                    (Devices::I2CBus::
+//                                    clearanceSafetyNetCount() > 0).
+//                                    Bench-characterized as a boot-time
+//                                    ONE-SHOT latch, not a continuous/live
+//                                    indicator: it fires once, coincident
+//                                    with bit 11 (kFlagEventBootReady)
+//                                    first setting, and never re-fires. A
+//                                    healthy robot can show this bit set
+//                                    permanently after boot with no
+//                                    ongoing problem -- do NOT read a
+//                                    steady 1 as live evidence of a
+//                                    defect; only a bit that flips DURING
+//                                    driving (not just once at boot) is
+//                                    actionable.
+//   bit 7  (kFlagFaultWedgeLatch)   -- NezhaMotor/I2CBus wedge-latch
+//                                    detected (Devices::MotorArmor::
+//                                    wedged()).
+//   bit 8  (kFlagFaultI2CNak)       -- I2C NAK/timeout. Declared, not yet
+//                                    wired live (no per-transaction NAK
+//                                    aggregate exists yet).
+//   bit 9  (kFlagFaultCommsMalformed) -- malformed/undecodable inbound
+//                                    frame (App::Comms::malformedCount() >
+//                                    0).
+//   bit 10 (kFlagEventDeadmanExpired) -- Deadman staleness timer expired
+//                                    (App::Deadman::expired()), the
+//                                    transition cycle only.
+//   bit 11 (kFlagEventBootReady)    -- boot-ready transition
 //                                    (Preamble::done() first true).
-//   bit 2 (kEventConfigApplied)  -- a ConfigDelta was applied. Declared,
-//                                    not yet wired.
-//   bits 3-31 -- reserved for future events.
-constexpr uint32_t kFaultI2CSafetyNet = 1u << 0;
-constexpr uint32_t kFaultWedgeLatch = 1u << 1;
-constexpr uint32_t kFaultI2CNak = 1u << 2;
-constexpr uint32_t kFaultCommsMalformed = 1u << 3;
+//   bit 12 (kFlagEventConfigApplied) -- a ConfigDelta was applied.
+//                                    Declared, not yet wired.
+//   bit 13 (kFlagLinePresent)       -- line word fresh THIS frame.
+//   bit 14 (kFlagColorPresent)      -- color word fresh THIS frame.
+//   bit 15 (kFlagFaultMoveTimeout)  -- MOVE timeout backstop fired.
+//                                    Declared now, wired by sprint 116's
+//                                    protocol-set-point issue -- S1 has no
+//                                    MOVE command to time out.
+//   bits 16-31 -- reserved for future use.
+constexpr uint32_t kFlagOtosPresent = 1u << 0;
+constexpr uint32_t kFlagOtosConnected = 1u << 1;
+constexpr uint32_t kFlagActive = 1u << 2;
+constexpr uint32_t kFlagConnLeft = 1u << 3;
+constexpr uint32_t kFlagConnRight = 1u << 4;
+constexpr uint32_t kFlagAckFresh = 1u << 5;  // Telemetry-internal -- see above
+constexpr uint32_t kFlagFaultI2CSafetyNet = 1u << 6;
+constexpr uint32_t kFlagFaultWedgeLatch = 1u << 7;
+constexpr uint32_t kFlagFaultI2CNak = 1u << 8;
+constexpr uint32_t kFlagFaultCommsMalformed = 1u << 9;
+constexpr uint32_t kFlagEventDeadmanExpired = 1u << 10;
+constexpr uint32_t kFlagEventBootReady = 1u << 11;
+constexpr uint32_t kFlagEventConfigApplied = 1u << 12;
+constexpr uint32_t kFlagLinePresent = 1u << 13;
+constexpr uint32_t kFlagColorPresent = 1u << 14;
+constexpr uint32_t kFlagFaultMoveTimeout = 1u << 15;
 
-constexpr uint32_t kEventDeadmanExpired = 1u << 0;
-constexpr uint32_t kEventBootReady = 1u << 1;
-constexpr uint32_t kEventConfigApplied = 1u << 2;
-constexpr uint32_t kEventHeadingFallback = 1u << 3;  // App::HeadingSource transition (109-005)
+// Primary cadence target: primary period == cycle period (115-005, closes
+// kcycle-kprimaryperiod-mismatch.md -- the frame is emitted every loop
+// iteration, ~50 Hz/20 ms). Callers pace against this and measure their
+// own real number; emit() does not need to hit it exactly.
+constexpr uint32_t kPrimaryPeriod = 20;  // [ms] ~50 Hz, matches robot_loop.cpp's kCycle
 
-// Primary cadence target: ~25 Hz/40 ms. Callers pace against this and
-// measure their own real number; emit() does not need to hit it exactly.
-constexpr uint32_t kPrimaryPeriod = 40;  // [ms] ~25 Hz
-
-// Secondary cadence: 5x the primary period (~5 Hz) keeps the diagnostic
+// Secondary cadence: 10x the primary period (~5 Hz) keeps the diagnostic
 // frame far enough from the primary's own deadline that the two
 // essentially never contend for the same emit() call, while still
 // refreshing at a useful bench-diagnostic rate.
@@ -101,40 +128,28 @@ constexpr uint32_t kSecondaryPeriod = 200;  // [ms] ~5 Hz
 
 class Telemetry {
  public:
-  // Primary-frame snapshot -- mirrors msg::Telemetry's own has_*/value
-  // pairs (envelope-independent: no acks/now/seq/fault_bits/event_bits
-  // here -- those are owned by the ack ring, emit()'s own `now` argument,
-  // an internal sequence counter, and setFault()/setEvent() respectively).
+  // Primary-frame snapshot -- staged by RobotLoop's updateTlm()/kPace block
+  // and consumed whole by emitPrimary() (envelope-independent: no
+  // acks/now/seq/flags here -- those are owned by the ack slot, emit()'s
+  // own `now` argument, an internal sequence counter, and setFlag()
+  // respectively).
   struct Frame {
     msg::DriveMode mode = msg::DriveMode::IDLE;
-    bool hasEnc = false;
-    float encLeft = 0.0f;   // [mm]
-    float encRight = 0.0f;  // [mm]
-    bool hasVel = false;
-    float velLeft = 0.0f;   // [mm/s] signed
-    float velRight = 0.0f;  // [mm/s] signed
-    bool hasPose = false;
+
+    msg::EncoderReading encLeft{};
+    msg::EncoderReading encRight{};
+
+    msg::OtosReading otos{};
+    bool otosPresent = false;    // staging only (not wire) -- flags bit 0 source
+    bool otosConnected = false;  // staging only (not wire) -- flags bit 1 source
+
     msg::Pose2D pose{};
-    bool hasOtos = false;
-    msg::Pose2D otos{};
-    bool otosConnected = false;
-    bool hasTwist = false;
     msg::BodyTwist3 twist{};
-    bool active = false;
-    bool connLeft = false;
-    bool connRight = false;
 
-    // Motion::Executor visibility (109-003) -- mirrors telemetry.proto's
-    // queue_depth/active_id/exec_state fields field-for-field. Populated
-    // by RobotLoop::updateTlm() from App::Pilot's own accessors.
-    uint8_t queueDepth = 0;
-    uint32_t activeId = 0;
-    msg::ExecutorState execState = msg::ExecutorState::EXEC_IDLE;
-
-    // App::HeadingSource visibility (109-005, SUC-004) -- mirrors
-    // telemetry.proto's heading_source field. Populated by RobotLoop::
-    // updateTlm() from App::Pilot::headingSourceIsOtos().
-    msg::HeadingSourceStatus headingSource = msg::HeadingSourceStatus::HEADING_SOURCE_STATUS_OTOS;
+    uint32_t line = 0;
+    bool linePresent = false;   // staging only (not wire) -- flags bit 13 source
+    uint32_t color = 0;
+    bool colorPresent = false;  // staging only (not wire) -- flags bit 14 source
   };
 
   // Secondary-frame snapshot -- mirrors msg::TelemetrySecondary's own
@@ -162,24 +177,24 @@ class Telemetry {
   void setFrame(const Frame& frame);
   void setSecondaryFrame(const SecondaryFrame& frame);
 
-  // Generic bit set/clear -- `bit` is one of the k*/kEvent* constants
-  // above (or a future one this ticket declares but doesn't wire). Level-
-  // set, not edge-latched: the caller mirrors whatever it currently
-  // observes (e.g. `setFault(kFaultI2CSafetyNet,
-  // i2cBus.clearanceSafetyNetCount() > 0)`), so a bit clears the cycle its
-  // condition clears -- Telemetry invents no sticky-latch semantics on top
-  // of what the real call site already reports.
-  void setFault(uint32_t bit, bool active);
-  void setEvent(uint32_t bit, bool active);
-  uint32_t faultBits() const { return faultBits_; }
-  uint32_t eventBits() const { return eventBits_; }
+  // Generic flags-bit set/clear -- `bit` is one of the kFlag* constants
+  // above EXCEPT kFlagAckFresh (Telemetry-internal, driven by ack() calls
+  // only -- see that constant's own comment). Level-set, not edge-latched:
+  // the caller mirrors whatever it currently observes (e.g.
+  // `setFlag(kFlagFaultI2CSafetyNet, i2cBus.clearanceSafetyNetCount() >
+  // 0)`), so a bit clears the cycle its condition clears -- Telemetry
+  // invents no sticky-latch semantics on top of what the real call site
+  // already reports.
+  void setFlag(uint32_t bit, bool active);
+  uint32_t flags() const { return flags_; }
 
-  // Ack ring: pushes one entry; the ring holds exactly the last 3 (oldest
-  // evicted first). Every PRIMARY emit() call carries the ring's current,
-  // full contents (not just entries pushed since the last send) -- a
-  // single dropped/unread frame can never lose an ack, because the very
-  // next primary frame repeats it.
-  void ack(uint32_t corrId, msg::AckStatus status, uint32_t errCode);
+  // ack -- pushes the single ack slot (115-005: replaces the old depth-3
+  // ack ring -- ack-depth-1 is a stakeholder-accepted tradeoff, rare at
+  // bench rates, wait_for_ack timeout+retry covers it). errCode == 0 means
+  // OK; nonzero is the msg::ErrCode value. Marks the ack "fresh" so the
+  // VERY NEXT emitPrimary() call sets flags bit 5 (kFlagAckFresh) and then
+  // clears the fresh marker -- a one-shot pulse, not a level condition.
+  void ack(uint32_t corrId, uint32_t errCode);
 
   // Cadence-gated: call once per loop cycle with the current time [ms]
   // (also the wire `now` field's value for whichever frame this call
@@ -190,7 +205,7 @@ class Telemetry {
   // that very first call always resolves to primary -- see the tie-break
   // note below).
   //
-  // Tie-break: at a real loop period at or above kPrimaryPeriod (40ms),
+  // Tie-break: at a real loop period at or above kPrimaryPeriod (20ms),
   // primaryDue() can be true on EVERY call -- an unconditional "primary
   // always wins a tie" rule then starves secondary to 0 Hz forever. The
   // fix: when BOTH frames are genuinely due in the same call, ALTERNATE
@@ -233,11 +248,11 @@ class Telemetry {
   Frame frame_;
   SecondaryFrame secondaryFrame_;
 
-  msg::AckEntry ring_[3]{};
-  uint8_t ringCount_ = 0;  // number of valid entries in ring_[0..ringCount_)
+  uint32_t flags_ = 0;  // every bit EXCEPT kFlagAckFresh -- see setFlag()
 
-  uint32_t faultBits_ = 0;
-  uint32_t eventBits_ = 0;
+  uint32_t ackCorr_ = 0;
+  uint32_t ackErr_ = 0;
+  bool ackPending_ = false;  // true iff ack() was called since the last emitPrimary()
 
   uint32_t seq_ = 0;  // increments once per SENT primary frame
 

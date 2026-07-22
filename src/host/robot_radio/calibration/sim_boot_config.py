@@ -1,11 +1,19 @@
 """src/host/robot_radio/calibration/sim_boot_config.py -- ticket 113-004.
 
-Tier-2 (boot-only) ``msg::PlannerConfig`` / ``Devices::MotorConfig`` scalar
-mapping helper: computes the SAME field values ``gen_boot_config.py`` bakes
-into a real robot's ``boot_config.cpp`` at build time, but from an
-already-loaded host ``RobotConfig`` (or a raw robot-JSON dict) at
-*sim-open* time -- see sprint 113's own Design Rationale Decision 2 ("Reuse
-gen_boot_config.py's functions, don't re-derive the mapping").
+Tier-2 (boot-only) ``Devices::MotorConfig`` scalar mapping helper: computes
+the SAME field values ``gen_boot_config.py`` bakes into a real robot's
+``boot_config.cpp`` at build time, but from an already-loaded host
+``RobotConfig`` (or a raw robot-JSON dict) at *sim-open* time -- see sprint
+113's own Design Rationale Decision 2 ("Reuse gen_boot_config.py's
+functions, don't re-derive the mapping").
+
+115-003 (gut-to-minimal-firmware S1 motion-stack excision) deleted this
+module's ``msg::PlannerConfig`` half (``planner_boot_config_for()`` /
+``_heading_source_wire_value()``) wholesale -- ``msg::PlannerConfig``
+itself, and every ``gen_boot_config.py`` mapping function it called, went
+with the deleted ``App::Pilot``/``Motion::Executor`` subsystems (ticket
+003's proto surgery). ``motor_boot_config_for()`` below is the sole
+survivor.
 
 Runtime dependency: this module imports ``src/scripts/gen_boot_config.py``'s
 pure ``cfg: dict -> value`` mapping functions directly, via the exact
@@ -80,65 +88,25 @@ def _as_cfg_dict(config: Any) -> dict:
     }
 
 
-def _heading_source_wire_value(cfg: dict) -> int:
-    """Return ``heading_source`` as its wire int enum value
-    (``msg::HeadingSourceMode`` / ``planner_pb2.HeadingSourceMode``).
-
-    ``gen_boot_config.py``'s own ``heading_source_for_config()`` returns the
-    C++ enumerator LITERAL STRING it bakes into generated source (e.g.
-    ``"msg::HeadingSourceMode::HEADING_SOURCE_AUTO"``) -- exactly right for
-    a ``.cpp`` file, not for a wire/ctypes int. Rather than hand-copying a
-    second name->int table (the AUTO=0/FORCE_OTOS=1/FORCE_ENCODER=2
-    assignment gen_boot_config.py's own ``_HEADING_SOURCE_WIRE_NAMES``
-    dict implicitly encodes via string selection), this resolves the
-    literal's trailing enumerator name through the SAME generated protobuf
-    enum descriptor the real wire/ctypes path already uses
-    (``planner_pb2.HeadingSourceMode``, generated from
-    ``src/protos/planner.proto``) -- one source of truth for the
-    name<->int mapping, `gen_boot_config.py`'s own function for the
-    string selection.
-    """
-    from robot_radio.robot.pb2 import planner_pb2
-
-    literal = gbc.heading_source_for_config(cfg)  # e.g. "msg::HeadingSourceMode::HEADING_SOURCE_AUTO"
-    member_name = literal.rsplit("::", 1)[-1]  # "HEADING_SOURCE_AUTO"
-    return planner_pb2.HeadingSourceMode.Value(member_name)
-
-
-def planner_boot_config_for(config: Any) -> "dict[str, float | int]":
-    """Return every Tier-2 (boot-only) ``msg::PlannerConfig`` scalar this
-    sprint covers, computed from *config* (a ``RobotConfig`` or a raw robot
-    JSON dict) by calling ``gen_boot_config.py``'s existing mapping
-    functions -- never by re-deriving any of them.
-
-    Sprint 114 (config-as-truth completion): ``a_max``/``a_decel``/
-    ``v_body_max``/``j_max``/``yaw_jerk_max`` gained a real per-robot JSON
-    mapping function (``motion_limits_for_config()``) -- before this ticket
-    ``gen_boot_config.py`` had none at all for these five (its own
-    ``generate()`` referenced its module DEFAULT constants directly), so
-    this module mirrored that by reading the same constants directly. Now
-    it calls the real mapping like every other field here, never re-deriving
-    it.
-    """
-    cfg = _as_cfg_dict(config)
-
-    out: "dict[str, float | int]" = {}
-    (out["a_max"], out["a_decel"], out["v_body_max"], out["j_max"],
-     out["yaw_jerk_max"]) = gbc.motion_limits_for_config(cfg)
-
-    out["yaw_rate_max"], out["yaw_acc_max"] = gbc.profile_rot_limits_for_config(cfg)
-    out["min_speed"] = gbc.min_speed_for_config(cfg)
-    out["heading_kp"], out["heading_kd"] = gbc.heading_gains_for_config(cfg)
-    out["arrive_dwell"] = gbc.arrive_dwell_for_config(cfg)
-    out["heading_source"] = _heading_source_wire_value(cfg)
-    out["heading_dwell_tol"], out["heading_dwell_rate"] = gbc.heading_dwell_for_config(cfg)
-    (out["heading_lead_bias"], out["plan_lead"],
-     out["terminal_lead"]) = gbc.lead_compensation_for_config(cfg)
-    out["actuation_lag"] = gbc.actuation_lag_for_config(cfg)
-    out["distance_kp"], out["distance_tol"] = gbc.distance_gains_for_config(cfg)
-    out["model_tau_lin"], out["model_tau_ang"] = gbc.model_tau_for_config(cfg)
-
-    return out
+# planner_boot_config_for() / _heading_source_wire_value() -- DELETED
+# (115-003, gut-to-minimal-firmware S1 motion-stack excision). Both mapped
+# host RobotConfig/JSON onto Tier-2 msg::PlannerConfig boot scalars (motion
+# limits, heading/distance PD gains, heading_source, lead compensation,
+# model tau) by calling gen_boot_config.py's own mapping functions -- EVERY
+# one of which (motion_limits_for_config/profile_rot_limits_for_config/
+# min_speed_for_config/heading_gains_for_config/arrive_dwell_for_config/
+# heading_source_for_config/heading_dwell_for_config/
+# lead_compensation_for_config/actuation_lag_for_config/
+# distance_gains_for_config/model_tau_for_config) was deleted wholesale by
+# ticket 003 alongside msg::PlannerConfig itself (planner.proto, deleted in
+# the same ticket) and the App::Pilot/Motion::Executor subsystems that read
+# it. There is no msg::PlannerConfig left to boot-initialize in the S1
+# minimal firmware and no telemetry_pb2 (or other) type that now serves
+# this role -- confirmed per this ticket's own acceptance criterion; the
+# dead code path is removed rather than left calling ten now-nonexistent
+# gen_boot_config.py functions. motor_boot_config_for() below is
+# UNCHANGED -- it depends only on vel_gains_for_config()/
+# fwd_sign_for_ports(), both still live.
 
 
 def motor_boot_config_for(config: Any, port: int) -> "dict[str, float | int]":

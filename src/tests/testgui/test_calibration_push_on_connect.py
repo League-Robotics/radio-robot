@@ -147,12 +147,21 @@ def test_calibration_commands_pushes_oi_ol_oa_unconditionally() -> None:
     assert verbs.index("OI") < verbs.index("OL") < verbs.index("OA")
 
 
-def test_calibration_commands_pushes_pid_and_heading_gains_when_present() -> None:
+def test_calibration_commands_pushes_pid_gains_when_present() -> None:
     """Stakeholder 2026-07-18: the control gains live in the robot JSON and
     must ride the same connect-time push as the geometry calibration --
-    ``control.vel_*`` -> ``SET pid.*`` (MotorConfigPatch, both motors) and
-    ``control.heading_*`` -> ``SET headingKp/headingKd``
-    (PlannerConfigPatch). Values formatted ``:g`` like rotSlip."""
+    ``control.vel_*`` -> ``SET pid.*`` (MotorConfigPatch, both motors).
+    Values formatted ``:g`` like rotSlip.
+
+    115-003 (gut-to-minimal-firmware S1 motion-stack excision): the former
+    ``control.heading_*`` -> ``SET headingKp/headingKd`` push
+    (``PlannerConfigPatch``) is DELETED, not ported -- ``PlannerConfigPatch``
+    itself, and the ``App::Pilot`` that applied it, are gone; ``headingKp``/
+    ``headingKd`` are no longer valid ``set_config()`` wire keys at all (see
+    ``calibration_kwargs()``'s own docstring). ``heading_kp``/``heading_kd``
+    are still present on the config object here (a config that carries them
+    is realistic -- boot-config JSON keeps the fields for the Tier-2 bake)
+    but must NOT appear in the pushed command sequence."""
     from robot_radio.calibration.push import calibration_commands
 
     cfg = _cfg()
@@ -165,9 +174,14 @@ def test_calibration_commands_pushes_pid_and_heading_gains_when_present() -> Non
     for expected in (
         "SET pid.kp=0.002", "SET pid.ki=0", "SET pid.kff=0",
         "SET pid.iMax=0", "SET pid.kaw=0",
-        "SET headingKp=1", "SET headingKd=0",
     ):
         assert (expected, 200) in cmds, f"missing {expected!r} in {cmds}"
+
+    joined = " ".join(c for c, _t in cmds)
+    assert "headingK" not in joined, (
+        f"headingKp/headingKd must NOT be pushed -- PlannerConfigPatch was "
+        f"deleted wholesale (115-003): {cmds}"
+    )
 
 
 def test_calibration_commands_omits_pid_gains_when_config_has_none() -> None:
@@ -203,11 +217,15 @@ def test_real_tovez_nocal_json_pushes_neutral_gains_via_real_model() -> None:
     test's name is now a slight misnomer for the heading/distance gains
     (only the ``vel_*``/PID group is still "neutral") -- it asserts
     whatever the JSON's ``control`` section currently holds, which is the
-    whole point: the JSON, not this test, is the source of truth. 113-003
-    also adds ``minSpeed``/``distanceKp``/``arriveDwell`` to the pushed set
-    (three already-curated ``PlannerConfigPatch`` wire keys that previously
-    reached neither the sim nor real hardware -- see
-    ``calibration_kwargs()``'s own docstring)."""
+    whole point: the JSON, not this test, is the source of truth.
+
+    UPDATE (115-003, gut-to-minimal-firmware S1 motion-stack excision):
+    113-003's own ``minSpeed``/``distanceKp``/``arriveDwell``/``headingKp``/
+    ``headingKd`` pushes (``PlannerConfigPatch`` wire keys) are DELETED, not
+    ported -- ``PlannerConfigPatch`` itself, and the ``App::Pilot`` that
+    applied it, are gone; none of these five keys are valid ``set_config()``
+    wire keys any more (see ``calibration_kwargs()``'s own docstring). Only
+    the ``vel_*``/PID group still reaches the wire from this JSON."""
     from robot_radio.calibration.push import calibration_commands
     from robot_radio.config.robot_config import load_robot_config
 
@@ -220,10 +238,15 @@ def test_real_tovez_nocal_json_pushes_neutral_gains_via_real_model() -> None:
     for expected in (
         "SET pid.kp=0.002", "SET pid.ki=0", "SET pid.kff=0.002",
         "SET pid.iMax=0", "SET pid.kaw=0",
-        "SET headingKp=2.5", "SET headingKd=0",
-        "SET minSpeed=16", "SET distanceKp=2.5", "SET arriveDwell=0.15",
     ):
         assert (expected, 200) in cmds, f"missing {expected!r} in {cmds}"
+
+    joined = " ".join(c for c, _t in cmds)
+    for deleted_key in ("headingKp", "headingKd", "minSpeed", "distanceKp", "arriveDwell"):
+        assert deleted_key not in joined, (
+            f"{deleted_key} must NOT be pushed -- PlannerConfigPatch was "
+            f"deleted wholesale (115-003): {cmds}"
+        )
 
 
 def test_calibration_commands_pushes_encoded_otos_scale() -> None:
