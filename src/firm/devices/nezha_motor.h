@@ -108,6 +108,18 @@ class NezhaMotor : public Motor {
   // absent field back to some default.
   const Gains& gains() const override { return config_.velGains; }
 
+  // Full live config readback -- the whole-config counterpart of gains(),
+  // for a caller that must MERGE a partial update onto everything this
+  // motor is actually running (sim_ctypes.cpp's sim_configure_motor():
+  // its Tier-2 velFiltAlpha/fwdSign push round-trips through
+  // reconfigure()'s whole-config replacement, so building the replacement
+  // from anything less than this live config clobbers every other field
+  // -- wheelTravelCalib/slewRate/outputDeadband/... -- back to zero; see
+  // that function's own comment). Kept non-virtual/NezhaMotor-local: the
+  // one caller holds a concrete NezhaMotor&, and the Motor interface
+  // deliberately exposes only the narrower gains() merge surface.
+  const MotorConfig& config() const { return config_; }
+
   // reconfigure — REVISION 1 (114-001, motor.h): whole-config replacement,
   // guarded. Refuses (returns false, leaves config_ unchanged) unless
   // mode_ == Mode::None (never yet commanded) or the motor is

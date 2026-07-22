@@ -355,12 +355,12 @@ void sim_set_enc_slip(SimHandle h, int port, float rate, float magnitudeMm) {
 //     int fwdSign);
 //     port: 1 = left, 2 = right (same convention as every other per-port
 //     export above). Merges velFiltAlpha/fwdSign (the two MotorConfig
-//     fields with no live Tier-1 wire arm) onto the target motor's CURRENT
-//     velGains (read live via NezhaMotor::gains(), the only one of
-//     wheelTravelCalib/velGains/slewRate with an existing accessor -- see
-//     this function's own comment below) rather than a blank MotorConfig{},
-//     so this call cannot clobber what Tier 1's own MotorConfigPatch wire
-//     path already pushed.
+//     fields with no live Tier-1 wire arm) onto the target motor's FULL
+//     current config (read live via NezhaMotor::config() -- every field,
+//     not just velGains; see this function's own comment below for the
+//     2026-07-22 regression the earlier gains-only merge caused) rather
+//     than a blank MotorConfig{}, so this call cannot clobber what Tier
+//     1's own MotorConfigPatch wire path already pushed.
 //
 // ---- Tier-2 config-load readback (113-007 test-only diagnostic) ----
 // Thin call-through to SimHarness::motorConfig() -- the SAME test-only C++
@@ -382,20 +382,27 @@ void sim_set_enc_slip(SimHandle h, int port, float rate, float magnitudeMm) {
 // and SimHarness::configurePlanner() no longer exist. See this file's own
 // header.
 
-// port: 1 = left, 2 = right. wheelTravelCalib/slewRate have no existing
-// Devices::Motor/NezhaMotor accessor (only velGains does, via gains()) --
-// see sim_harness.h's own configureMotor() comment: MotorArmor::configure()
-// does not consume any of those three fields today regardless, so leaving
-// them at MotorConfig{}'s zero defaults here has no live behavioral effect
-// through this call. velGains IS merged live so a future MotorArmor::
-// configure() that starts consuming it (or a direct NezhaMotor consumer)
-// does not get clobbered by this Tier-2 push.
+// port: 1 = left, 2 = right. Starts from the motor's FULL live config
+// (NezhaMotor::config()) and overwrites ONLY port/velFiltAlpha/fwdSign --
+// the fields this Tier-2 surface owns -- before the configureMotor()
+// round trip. This function's original velGains-only merge (built on a
+// blank MotorConfig{}) predates 114-001 Revision 1, which made
+// MotorArmor::reconfigure() forward the WHOLE config to the wrapped
+// NezhaMotor: from that revision on, every un-merged field
+// (wheelTravelCalib/slewRate/outputDeadband/velDeadband/reversalDwell)
+// was silently zeroed by this call, killing the encoder mm decode
+// (nezha_motor.cpp gates position on wheelTravelCalib != 0) whenever
+// Tier 2 landed AFTER a Tier-1 ConfigDelta push -- the exact 2026-07-22
+// TestGUI-Sim wheels-never-move regression (exposed, not caused, by the
+// same-day set_config fire-and-poll fix that made Tier 1 complete BEFORE
+// Tier 2 for the first time). Full-config merge restores this function's
+// own documented "cannot clobber what Tier 1 already pushed" contract for
+// EVERY field, not just velGains.
 void sim_configure_motor(SimHandle h, int port, float velFiltAlpha, int fwdSign) {
   TestSim::SimHarness* harness = asHarness(h);
   Devices::NezhaMotor& motor = (port == 2) ? harness->motorRight() : harness->motorLeft();
-  Devices::MotorConfig cfg;
+  Devices::MotorConfig cfg = motor.config();  // full live config -- merge, don't clobber
   cfg.port = static_cast<uint32_t>(port);
-  cfg.velGains = motor.gains();  // merge, don't clobber -- see this function's own comment
   cfg.velFiltAlpha = velFiltAlpha;
   cfg.fwdSign = fwdSign;
   harness->configureMotor(static_cast<uint32_t>(port), cfg);
