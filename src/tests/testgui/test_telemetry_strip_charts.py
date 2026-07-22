@@ -93,12 +93,16 @@ class TestStripChartWindowing:
         )
 
         rec = TurnTraceRecorder()
-        # 30 frames, 0.5s apart -> 15s of history, well past the 10s window.
-        _feed_moving_frames(rec, count=30, dt=0.5)
+        # 80 frames, 0.2s apart -> 16s of history, well past the 10s window.
+        # 0.2s stays under the recorder's own GAP_BREAK_FACTOR * nominal-TLM-
+        # period gap-break threshold (~0.33s, defect 2b) so this remains a
+        # pure windowing test -- no NaN gap-break entries get woven in to
+        # confound the exact point counts below.
+        _feed_moving_frames(rec, count=80, dt=0.2)
 
         # The (Qt-free) recorder itself has EVERY point -- the unaffected
         # top-graph view's own data source.
-        assert len(rec.series["vel_l"]) == 30
+        assert len(rec.series["vel_l"]) == 80
 
         canvas = StripChartCanvas("Wheel speed", "mm/s", WHEEL_SPEED, window=10.0)
         try:
@@ -118,7 +122,7 @@ class TestStripChartWindowing:
                 # the full recorder series is strictly longer than what's
                 # plotted for the same key.
             plotted_lens = [len(line.get_xdata()) for line in canvas._ax.lines]
-            assert max(plotted_lens) < 30, (
+            assert max(plotted_lens) < 80, (
                 "strip chart should have windowed out older points, but "
                 f"plotted as many as the full recorder history: {plotted_lens}")
         finally:

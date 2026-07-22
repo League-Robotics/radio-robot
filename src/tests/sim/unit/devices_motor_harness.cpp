@@ -1468,6 +1468,218 @@ void scenarioExactZeroTargetStillBrakesWhileMeasuredIsLarge() {
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the stop-from-speed tick");
 }
 
+// 17. Defect-1 fix (2026-07-22 GUI stakeholder report, strip-chart wheel-
+//     speed trace): the rest gate (velocity_pid.cpp's `target == 0.0f &&
+//     fabsf(measured) <= restThreshold` early-return, c98be2e9) hard-zeros
+//     DUTY the instant it engages, but -- before THIS fix -- did nothing to
+//     the SEPARATE velocity ESTIMATOR (filteredVelocity_/the line-fit
+//     ring): its own EMA/line-fit tail kept reporting a lingering, slowly-
+//     decaying nonzero velocity() for seconds after the wheel had actually
+//     stopped, even though physical motion (and the commanded duty) had
+//     already stopped. Reported bench symptom: velocity() lingering near
+//     +/-12mm/s and decaying over seconds after a MOVE completed, with
+//     position flat.
+//
+//     Drives the motor to a realistic near-rest residual (matching
+//     scenario 15's own <15mm/s noise band -- and the stakeholder's own
+//     reported ~12mm/s lingering value) with target already at the exact
+//     0.0f Drive::stop()/a completed Move produces, then asserts:
+//       (a) velocity() reads EXACTLY 0.0f every tick the gate is engaged --
+//           not the noisy ~12mm/s residual the pre-fix EMA/line-fit tail
+//           would have reported.
+//       (b) once physical motion genuinely stops (position held flat), the
+//           reported position holds too -- the estimator reset never
+//           touches lastPosition_/the freshness anchor, only the velocity
+//           estimate.
+//       (c) appliedDuty() stays hard-zeroed throughout (c98be2e9's
+//           pre-existing behavior, unchanged by this fix).
+//     Companion/regression guard: scenario 16 above already proves the
+//     complementary case (measured genuinely large, gate NOT engaged) still
+//     actively brakes -- i.e. this reset is gate-engaged-only, never a
+//     mid-motion reset of a real, in-flight velocity estimate.
+void scenarioRestGateResetsVelocityEstimatorPositionHolds() {
+  beginScenario("rest gate resets the velocity estimator to 0.0 (position holds)");
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::MotorConfig cfg = baseNezhaConfig();   // velFiltAlpha=1.0f -- exercises the EMA path on each fresh sample directly (no cross-tick smoothing to confound the assertion)
+  cfg.velGains = Devices::Gains{/*kp=*/0.01f, /*ki=*/0.05f, /*kff=*/0.002f,
+                                 /*iMax=*/1.0f, /*kaw=*/2.0f};
+
+  Devices::NezhaMotor motor(plant, cfg);
+  motor.setVelocity(0.0f);   // the exact command Drive::stop()/a completed Move produces
+
+  float position = 0.0f;
+  uint64_t nowUs = 0;
+  const uint32_t dtMs = 20;
+  const float dtS = 0.02f;
+
+  // Prime cycle -- establishes lastPosition_/lastTickUs_, no velocity yet.
+  scriptEncoderRequestCollect(bus, wireAddr, position);
+  motor.requestSample();
+  motor.tick(nowUs);
+
+  // A handful of ticks with a small residual position drift -- well under
+  // the 15mm/s rest-noise floor (comfortable margin, not the stakeholder's
+  // own reported ~12mm/s edge value: 12mm/s * dtS=0.02s = 0.24mm/tick does
+  // NOT divide evenly into the encoder's 0.1mm (tenths-of-degree) wire
+  // quantization grid, so consecutive quantized samples alias between
+  // ~10mm/s and ~15.000001mm/s -- the latter, after float rounding, lands a
+  // hair ABOVE the exact 15.0f threshold and would flakily fail to engage
+  // the gate on some ticks, which is a test-quantization artifact, not a
+  // fix defect. 5mm/s * 0.02s = 0.1mm/tick is an exact single wire-count
+  // step, so every computed velocity lands cleanly on 5.0f, well clear of
+  // the boundary), so the gate is engaged on every one of these ticks
+  // (target is 0.0f throughout). Before this fix, the EMA path would have
+  // reported this residual back out through velocity() unfiltered
+  // (velFiltAlpha=1.0f); after the fix, the gate-engaged reset overwrites
+  // it to exactly 0.0f the SAME tick it is computed.
+  const float kResidual = 5.0f;   // [mm/s]
+  for (int i = 0; i < 5; ++i) {
+    position += kResidual * dtS;
+    nowUs += static_cast<uint64_t>(dtMs) * 1000;
+    scriptEncoderRequestCollect(bus, wireAddr, position);
+    motor.requestSample();
+    motor.tick(nowUs);
+
+    checkFloatEq(motor.velocity(), 0.0f,
+                 "reported velocity is exactly 0.0 while the rest gate is engaged, "
+                 "not the ~5mm/s residual (no lingering EMA/line-fit tail)");
+    checkFloatEq(motor.appliedDuty(), 0.0f, "duty stays hard-zeroed throughout (unchanged c98be2e9 behavior)");
+  }
+
+  float positionAtRest = motor.position();
+
+  // A further tick with position held EXACTLY flat (genuinely no more
+  // physical motion) must keep reporting 0.0 and hold position -- the
+  // estimator reset never touches lastPosition_/the freshness anchor.
+  nowUs += static_cast<uint64_t>(dtMs) * 1000;
+  scriptEncoderRequestCollect(bus, wireAddr, position);   // unchanged
+  motor.requestSample();
+  motor.tick(nowUs);
+
+  checkFloatEq(motor.velocity(), 0.0f, "velocity stays 0.0 once physical motion has actually stopped");
+  checkFloatEq(motor.position(), positionAtRest, "position holds flat once physical motion has actually stopped");
+
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the rest-gate sequence");
+}
+
+// 18. Stale-encoder rest snap (2026-07-22 bench fix, hardware-confirmed the
+//     SAME day as scenario 17 above): scenario 17 covers the case where
+//     `measured` is ALREADY within the rest-noise floor on every tick.
+//     Real bench hardware exposed a DIFFERENT, worse case scenario 17 does
+//     not reach: the LAST fresh sample computed before the wheel went
+//     fully still can land ABOVE the 15mm/s floor purely by bad luck of
+//     encoder quantization -- and once the encoder stops producing fresh
+//     samples entirely (tick()'s own freshness gate then HOLDS
+//     filteredVelocity_ unchanged forever, per its own "hold on no new
+//     information" comment), c98be2e9's own gate (`target==0 &&
+//     measured<=floor`) never re-fires, because `measured` is never
+//     recomputed down through the floor -- it just sits there. Confirmed
+//     on the real robot: one wheel's reported velocity froze at a
+//     constant, never-decaying 36mm/s for 12+ consecutive ticks after
+//     both wheels' encoder positions had gone flat.
+//
+//     Drives to a real cruise speed, commands a stop, feeds exactly ONE
+//     more fresh sample landing above the floor (simulating "the last real
+//     sample before the wheel went still"), then holds the SAME raw
+//     encoder value (genuinely stale) for a run of ticks spanning past
+//     kStaleRestTimeoutUs (150ms, nezha_motor.cpp). Asserts: (a) shortly
+//     after that last fresh sample (well under the timeout), velocity()
+//     STILL reports the frozen above-floor value -- the fix must not fire
+//     the instant a fresh sample lands, only once genuine staleness is
+//     confirmed; (b) once the timeout has elapsed, velocity() reads
+//     EXACTLY 0.0f and appliedDuty() is hard-zeroed; (c) position never
+//     moves across the whole stale window (nothing here should ever touch
+//     lastPosition_/the freshness anchor).
+void scenarioStaleEncoderRestSnapForcesVelocityToZeroWhenFreshSamplesStop() {
+  beginScenario("stale-encoder rest snap forces velocity to 0 once fresh samples stop");
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::MotorConfig cfg = baseNezhaConfig();   // velFiltAlpha=1.0f
+  cfg.velGains = Devices::Gains{/*kp=*/0.01f, /*ki=*/0.05f, /*kff=*/0.002f,
+                                 /*iMax=*/1.0f, /*kaw=*/2.0f};
+
+  Devices::NezhaMotor motor(plant, cfg);
+
+  float position = 0.0f;
+  uint64_t nowUs = 0;
+  const uint32_t dtMs = 20;
+  const float dtS = 0.02f;
+
+  // Prime cycle.
+  scriptEncoderRequestCollect(bus, wireAddr, position);
+  motor.requestSample();
+  motor.tick(nowUs);
+
+  // Cruise at a real speed for a few ticks (fresh sample every tick).
+  motor.setVelocity(140.0f);
+  for (int i = 0; i < 5; ++i) {
+    position += 140.0f * dtS;   // 2.8mm/tick -- clean multiple of the 0.1mm quantization grid
+    nowUs += static_cast<uint64_t>(dtMs) * 1000;
+    scriptEncoderRequestCollect(bus, wireAddr, position);
+    motor.requestSample();
+    motor.tick(nowUs);
+  }
+  checkTrue(motor.velocity() > 100.0f, "cruise established a real, non-noise velocity estimate");
+
+  // Stop commanded -- ONE more fresh sample lands above the 15mm/s floor
+  // (the "last real sample before the wheel went still"), then the
+  // encoder goes genuinely silent (same raw value every subsequent tick).
+  motor.setVelocity(0.0f);
+  position += 0.7f;   // 35mm/s over this 20ms tick -- above the rest floor
+  nowUs += static_cast<uint64_t>(dtMs) * 1000;
+  scriptEncoderRequestCollect(bus, wireAddr, position);
+  motor.requestSample();
+  motor.tick(nowUs);
+
+  float staleVel = motor.velocity();
+  char primeMsg[160];
+  std::snprintf(primeMsg, sizeof(primeMsg),
+                "the last-fresh-sample velocity lands above the 15mm/s rest floor (got %.2f)",
+                static_cast<double>(staleVel));
+  checkTrue(staleVel > 15.0f, primeMsg);
+  float positionAtStale = motor.position();
+  uint64_t lastFreshNowUs = nowUs;
+
+  // Shortly after (well under the stale timeout): the frozen value must
+  // NOT have been reset yet -- proves this isn't an instant/eager reset
+  // that could clobber a still-in-flight deceleration (scenario 16's own
+  // concern).
+  nowUs += static_cast<uint64_t>(dtMs) * 1000;   // +20ms since the last fresh sample
+  scriptEncoderRequestCollect(bus, wireAddr, position);   // unchanged raw -- genuinely stale
+  motor.requestSample();
+  motor.tick(nowUs);
+  checkFloatEq(motor.velocity(), staleVel,
+               "shortly after the last fresh sample, the frozen value is NOT yet reset "
+               "(the stale-timeout has not elapsed)");
+
+  // Keep holding the SAME raw value until well past kStaleRestTimeoutUs
+  // (150ms) since lastFreshNowUs.
+  bool sawZero = false;
+  while (nowUs - lastFreshNowUs <= 300000) {   // run out to 300ms -- 2x the 150ms timeout
+    nowUs += static_cast<uint64_t>(dtMs) * 1000;
+    scriptEncoderRequestCollect(bus, wireAddr, position);   // still unchanged
+    motor.requestSample();
+    motor.tick(nowUs);
+    if (motor.velocity() == 0.0f) {
+      sawZero = true;
+      break;
+    }
+  }
+  checkTrue(sawZero,
+            "velocity() eventually snaps to EXACTLY 0.0 once the encoder has stayed "
+            "stale past kStaleRestTimeoutUs -- not stuck at the frozen above-floor value");
+  checkFloatEq(motor.appliedDuty(), 0.0f, "duty is hard-zeroed once the stale-rest snap fires");
+  checkFloatEq(motor.position(), positionAtStale,
+               "position never moved across the whole stale window (only the estimator was reset)");
+
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the stale-rest sequence");
+}
+
 }  // namespace
 
 int main() {
@@ -1488,6 +1700,8 @@ int main() {
   scenarioDeadbandBoostSettlesNotHuntsAcrossResidualSweep();
   scenarioExactZeroTargetIgnoresResidualMeasuredVelocityNoise();
   scenarioExactZeroTargetStillBrakesWhileMeasuredIsLarge();
+  scenarioRestGateResetsVelocityEstimatorPositionHolds();
+  scenarioStaleEncoderRestSnapForcesVelocityToZeroWhenFreshSamplesStop();
 
   if (g_failureCount == 0) {
     std::printf("OK: all devices motor scenarios passed\n");

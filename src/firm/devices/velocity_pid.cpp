@@ -133,7 +133,8 @@ float MotorVelocityPid::compute(float target, float measured, float dt,
     // 0.0f, never for a small-but-nonzero commanded velocity.
     float restThreshold = (velDeadband > kZeroTargetRestNoiseFloor)
                                ? velDeadband : kZeroTargetRestNoiseFloor;
-    if (target == 0.0f && fabsf(measured) <= restThreshold) {
+    restGateEngaged_ = (target == 0.0f && fabsf(measured) <= restThreshold);
+    if (restGateEngaged_) {
         return 0.0f;
     }
 

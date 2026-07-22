@@ -52,6 +52,33 @@ constexpr uint8_t kGlitchStreakAccept = 3;
 // Nominal loop period used before the first real dt measurement exists.
 constexpr float kNominalDt = 0.024f;   // [s]
 
+// Stale-encoder rest-snap timeout (2026-07-22 bench fix, hardware-confirmed
+// same day as c98be2e9): how long since the LAST fresh sample, with the
+// commanded target held at exact 0.0f, before a still-elevated
+// filteredVelocity_ is forced to 0 regardless of the c98be2e9 rest-noise
+// floor. c98be2e9's own gate (velocity_pid.cpp) only resets when the
+// CURRENT filteredVelocity_ already reads <= the noise floor -- but once
+// the encoder stops producing fresh samples at all (tick()'s own freshness
+// gate then holds filteredVelocity_ at whatever it last computed, forever,
+// per its own "hold on no new information" comment), a frozen estimate
+// that happened to land ABOVE the floor on the last fresh sample before
+// the wheel actually went still never gets another chance to be
+// recomputed down through it -- confirmed on the bench (2026-07-22): one
+// wheel's reported velocity froze at a constant, never-decaying 36mm/s for
+// 12+ consecutive ticks after its own encoder position (and the other
+// wheel's already-zeroed velocity) had gone flat. This is the literal
+// "keeps its filtered tail when encoder deltas go to zero" case the
+// defect's own report named. kStaleRestTimeoutUs is set well above the
+// brick's own ~80ms 0x46 refresh cadence (see tick()'s own freshness-gate
+// comment) -- at ANY real commanded speed the encoder produces a fresh
+// sample well inside 80ms (quantization is 0.1mm; even a slow crawl clears
+// that within one refresh), so this many consecutive stale ticks with
+// target==0.0f is unambiguous evidence of genuine rest, never a
+// still-in-flight deceleration (which keeps producing fresh samples every
+// refresh and so never reaches this timeout -- scenario 16's own active-
+// braking-from-speed case is unaffected).
+constexpr uint64_t kStaleRestTimeoutUs = 150000;   // [us]
+
 float clampf(float v, float lo, float hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -417,8 +444,47 @@ void NezhaMotor::tick(uint64_t nowUs)
                 writeShapedDuty(dutyTarget_, nowMs);
             } else if (pidEnabled_) {
                 float dt = haveElapsed ? elapsedTime : kNominalDt;
-                float duty = pid_.compute(velocityTarget_, filteredVelocity_, dt,
+                float measured = filteredVelocity_;
+                // Stale-encoder rest snap -- see kStaleRestTimeoutUs's own
+                // comment. Feeding a synthetic 0.0f into compute() (rather
+                // than writing filteredVelocity_ directly here) means the
+                // SAME restGateEngaged()-driven reset block below fires
+                // naturally, so this is one mechanism producing a
+                // consistent duty AND reported velocity, not two.
+                if (velocityTarget_ == 0.0f && hasFreshSample_ &&
+                    (nowUs - lastFreshUs_) > kStaleRestTimeoutUs) {
+                    measured = 0.0f;
+                }
+                float duty = pid_.compute(velocityTarget_, measured, dt,
                                            config_.velGains, config_.velDeadband);
+                if (pid_.restGateEngaged()) {
+                    // c98be2e9's rest gate just hard-zeroed duty -- either
+                    // because the REAL measured velocity was already within
+                    // the rest-noise floor, or because the stale-encoder
+                    // check just above substituted a synthetic 0.0f for it
+                    // (the encoder itself has gone quiet for well over one
+                    // brick-refresh interval with target held at exact
+                    // zero). Either way this is a genuine "settled at a
+                    // stop" state, not a still-decelerating one (see that
+                    // gate's own comment in velocity_pid.cpp). Physical
+                    // motion has already stopped, but filteredVelocity_ is the
+                    // EMA/line-fit's own filtered TAIL of the noisy readings
+                    // that led up to this point -- nothing upstream of this
+                    // clears it, so it lingers and visibly decays over
+                    // several seconds instead of reporting the wheel's
+                    // actual (stopped) state immediately. Snap the reported
+                    // velocity to 0.0f and drop the line-fit ring (so the
+                    // NEXT fresh sample can't re-derive a nonzero slope from
+                    // this now-stale, at-rest window) every tick the gate
+                    // stays engaged -- idempotent once already zeroed, and
+                    // scoped to gate-engaged ticks only, so real in-motion
+                    // estimates (gate never engages while target != 0.0f or
+                    // measured is still outside the rest floor) are
+                    // untouched. lastPosition_/the freshness anchor are
+                    // deliberately left alone -- position must keep holding.
+                    filteredVelocity_ = 0.0f;
+                    clearVelWindow();
+                }
                 duty = averageDuty(duty);   // boxcar output smoothing (DUTYAVG; no-op at window 1)
                 writeShapedDuty(duty, nowMs);
             } else {

@@ -32,6 +32,18 @@ class MotorVelocityPid {
   float compute(float target, float measured, float dt, const Gains& gains,
                 float velDeadband);   // [mm/s] [mm/s] [s] [-1,1] -> duty [-1,1]
 
+  // True iff the most recent compute() call hit the exact-zero-target /
+  // near-rest-measured exemption (c98be2e9's `target == 0.0f && fabsf(
+  // measured) <= restThreshold` early-return, which hard-zeros the
+  // returned duty). The caller (NezhaMotor::tick()) uses this to also snap
+  // its own reported velocity() to 0.0f the same tick — see that call
+  // site's own comment for why the estimator needs a second, explicit
+  // reset rather than just letting its EMA/line-fit tail decay on its own.
+  // Reflects ONLY the last compute() call; a caller that skips compute()
+  // entirely (Duty-mode passthrough, PID disabled) must not consult this —
+  // it is not re-derived independently of that call.
+  bool restGateEngaged() const { return restGateEngaged_; }
+
  private:
   // Nominal loop period used before the first real dt measurement exists.
   static constexpr float kNominalDt = 0.024f;   // [s]
@@ -45,6 +57,11 @@ class MotorVelocityPid {
   // compute() can tell a fresh entry (reset the integrator) apart from
   // continuing to sit in it (stay frozen, as before).
   bool wasInDeadband_ = false;
+
+  // Set every compute() call — true iff THIS call's exact-zero-target/
+  // near-rest exemption fired. See the public restGateEngaged() getter's
+  // own comment.
+  bool restGateEngaged_ = false;
 };
 
 }  // namespace Devices
