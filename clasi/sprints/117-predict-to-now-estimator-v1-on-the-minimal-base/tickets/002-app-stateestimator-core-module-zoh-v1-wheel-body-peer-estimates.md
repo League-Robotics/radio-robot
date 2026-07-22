@@ -1,7 +1,7 @@
 ---
 id: '002'
-title: "App::StateEstimator core module — ZOH v1 wheel/body peer estimates"
-status: open
+title: "App::StateEstimator core module \u2014 ZOH v1 wheel/body peer estimates"
+status: done
 use-cases:
 - SUC-057
 depends-on: []
@@ -43,39 +43,39 @@ and weight=1, proving pure-OTOS passthrough when fresh).
 
 ## Acceptance Criteria
 
-- [ ] `WheelEstimate{distance, velocity, basisTime, valid}` (`// [mm]
+- [x] `WheelEstimate{distance, velocity, basisTime, valid}` (`// [mm]
       [mm/s] [ms]`) and `BodyEstimate{x, y, heading, v_x, v_y, omega,
       basisTime, valid}` (`// [mm] [mm] [rad] [mm/s] [mm/s] [rad/s]
       [ms]`) structs defined per `.claude/rules/coding-standards.md` (no
       units in field names; bracketed unit tags).
-- [ ] `update(frame, now)` refreshes both wheel peers from `frame.
+- [x] `update(frame, now)` refreshes both wheel peers from `frame.
       encLeft`/`frame.encRight` (position, velocity, `time`) and the body
       peer from `frame.pose`/`frame.twist` (always) blended with `frame.
       otos`/`frame.otosPresent` (when fresh) via the v1 complementary
       weight.
-- [ ] `wheelAt(wheel, t)` / `bodyAt(t)` reproduce the constant-velocity
+- [x] `wheelAt(wheel, t)` / `bodyAt(t)` reproduce the constant-velocity
       ZOH formula exactly: `distance = basis.position + basis.velocity ×
       (t − basis.basisTime)`; body pose extrapolates x/y along the
       basis-time world-frame velocity and heading via `heading =
       basis.heading + basis.omega × (t − basis.basisTime)` (the
       `HeadingSource::headingLead()` equation, generalized).
-- [ ] `whereAmI(now)` is exactly `bodyAt(now)`. `wheelNow(wheel)` returns
+- [x] `whereAmI(now)` is exactly `bodyAt(now)`. `wheelNow(wheel)` returns
       the wheel's raw basis reading with zero extrapolation.
-- [ ] `reset(x, y, heading)` re-anchors ONLY the body peer's world pose
+- [x] `reset(x, y, heading)` re-anchors ONLY the body peer's world pose
       (mirrors `Odometry::reset()`); wheel-peer state is untouched.
-- [ ] `valid` is `false` for a peer before its first `update()` call
+- [x] `valid` is `false` for a peer before its first `update()` call
       contributes a reading, `true` after — verified independently for
       each wheel and for the body peer.
-- [ ] `innovations()` returns the most recent OTOS-vs-predicted heading/
+- [x] `innovations()` returns the most recent OTOS-vs-predicted heading/
       omega residual, computed whenever a fresh OTOS reading is blended
       — even at weight 0 (diagnostic only at that weight, never fed back
       into the estimate).
-- [ ] `setWeights(FusionWeights)` updates the live blend weights in
+- [x] `setWeights(FusionWeights)` updates the live blend weights in
       memory; a unit test proves weight=0.0 yields pure-encoder-derived
       body output and weight=1.0 (with a fresh OTOS reading) yields
       pure-OTOS heading/omega output, with intermediate weights blending
       proportionally.
-- [ ] No `#include` of any `messages/` or `config/` header — mirrors the
+- [x] No `#include` of any `messages/` or `config/` header — mirrors the
       `devices/` isolation invariant by analogy (this module is pure
       `app/`-internal computation, never touches `msg::*` types
       directly; wire-plane conversion, when it exists, stays at
