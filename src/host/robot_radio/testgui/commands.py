@@ -45,17 +45,19 @@ from __future__ import annotations
 import re
 from typing import Any, TypedDict
 
-# 115-009 (gut S1's own test-sweep/green-bar ticket): `robot_radio.planner`
-# is a dormant, NOT-deleted package (sprint 115 Design Rationale Decision
-# 6 -- host planner/tour/path/nav code stays in the tree, expected to go
-# dormant/broken this sprint, a separate future follow-up, not a defect).
-# `planner.tour` itself raises AttributeError at import time now (it
-# references `telemetry_pb2.ACK_STATUS_DONE`, part of the depth-3 ack ring
-# 115-003's frame-v2 rewrite deleted). This module is NOT itself a tour/turn
-# module -- COMMANDS/build_wire_string/goto_distance/goto_reached below are
-# plain, unrelated command-schema/geometry helpers -- so a broken
-# `planner.tour` import must not take the whole module down; only `TOURS`
-# (below) degrades to empty.
+# 115-009 (gut S1's own test-sweep/green-bar ticket) / testgui-motion-paths-
+# dead-after-move-cutover (2026-07-22 revival): `robot_radio.planner.tour`
+# went dormant for a while (its own module body raised AttributeError at
+# import time, referencing `telemetry_pb2.ACK_STATUS_DONE`, part of the
+# depth-3 ack ring 115-003's frame-v2 rewrite deleted) and has since been
+# ported onto protocol v4's Move/single-ack-slot shape (see that module's
+# own file header) -- it imports cleanly again, so `TOUR_1`/`TOUR_2` below
+# resolve to the real 13/15-leg geometry, not the empty-list fallback. This
+# module is NOT itself a tour/turn module -- COMMANDS/build_wire_string/
+# goto_distance/goto_reached below are plain, unrelated command-schema/
+# geometry helpers -- so the guard stays regardless (defense against a
+# FUTURE `planner.tour` breakage taking the whole module down); only
+# `TOURS` (below) would degrade to empty if it ever fired again.
 try:
     from robot_radio.planner.tour import TOUR_1, TOUR_2
 except (ImportError, AttributeError):

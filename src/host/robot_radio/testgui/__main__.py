@@ -1824,24 +1824,26 @@ def _build_main_window():  # type: ignore[return]
             import math as _math
 
             try:
-                # testgui-motion-paths-dead-after-move-cutover fix:
-                # planner.tour is dormant this sprint -- its own module body
-                # raises AttributeError at import time (references
-                # telemetry_pb2.ACK_STATUS_DONE, deleted by 115-003's
-                # frame-v2 rewrite; see commands.py's own TOUR_1/TOUR_2
-                # import-guard comment for the same fact). This import used
-                # to sit ABOVE this try block, so the AttributeError
-                # propagated out of run() uncaught -- finished() never
-                # emitted, the tour button never re-enabled, and nothing
-                # was logged: a silent worker-thread death. Guarded here so
-                # a tour press fails VISIBLY instead.
+                # testgui-motion-paths-dead-after-move-cutover fix (2026-07-22
+                # revival): planner.tour was dormant for a while -- its module
+                # body used to raise AttributeError at import time
+                # (referencing telemetry_pb2.ACK_STATUS_DONE, deleted by
+                # 115-003's frame-v2 rewrite) -- now ported onto protocol
+                # v4's Move/single-ack-slot shape (see that module's own file
+                # header) and imports cleanly again. This import previously
+                # sat ABOVE this try block, so the AttributeError propagated
+                # out of run() uncaught -- finished() never emitted, the tour
+                # button never re-enabled, and nothing was logged: a silent
+                # worker-thread death. The guard stays (any FUTURE import
+                # failure -- e.g. a broken checkout -- still fails a tour
+                # press VISIBLY instead of silently, same as before) even
+                # though the happy path now runs through it every time.
                 try:
                     from robot_radio.planner.tour import parse_tour, run_tour
                 except Exception as exc:  # noqa: BLE001 -- see comment above
                     self.log_line.emit(
                         f"[TOUR] {self._name}: tour geometry unavailable "
-                        f"({exc}) -- planner.tour is dormant this sprint, "
-                        "see clasi/issues/"
+                        f"({exc}) -- see clasi/issues/"
                         "testgui-motion-paths-dead-after-move-cutover.md",
                         "")
                     return

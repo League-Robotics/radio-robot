@@ -98,22 +98,21 @@ import pytest
 pytest.importorskip("PySide6")
 
 # 115-009 (gut S1's own test-sweep/green-bar ticket): TestGUI tour/turn
-# modules are DORMANT this sprint (sprint 115 Design Rationale Decision 6,
+# modules went DORMANT for a while (sprint 115 Design Rationale Decision 6,
 # `gut-to-minimal-firmware-...md`'s own explicit Out-of-Scope framing --
 # "Host motion/tour code deletion ... stays in place, dormant, as a
-# separate future follow-up"). Every test below drives `planner.tour.
-# TOUR_1`/`TOUR_2`/`run_tour()`, which now raises AttributeError at import
-# time (`telemetry_pb2.ACK_STATUS_DONE`, part of the depth-3 ack ring
-# 115-003's frame-v2 rewrite deleted) -- an accepted, deferred state, not a
-# defect of this sprint. Quarantined here (not deleted -- the GUI wiring
-# this file proves is still real code, just untestable against a broken
-# dependency) pending the separate host planner/tour cleanup follow-up.
-pytestmark = pytest.mark.skip(
-    reason="TestGUI tour buttons are dormant this sprint (115 Decision 6) -- "
-    "planner.tour raises AttributeError at import (ACK_STATUS_DONE deleted "
-    "by 115-003's frame-v2 rewrite); deferred host planner/tour cleanup, "
-    "not a defect of this sprint."
-)
+# separate future follow-up"): every test below drives `planner.tour.
+# TOUR_1`/`TOUR_2`/`run_tour()`, which used to raise AttributeError at
+# import time (`telemetry_pb2.ACK_STATUS_DONE`, part of the depth-3 ack
+# ring 115-003's frame-v2 rewrite deleted).
+#
+# 2026-07-22 (testgui-motion-paths-dead-after-move-cutover revival):
+# `planner.tour` was ported onto protocol v4's `Move`/single-ack-slot wire
+# shape (see that module's own file header) and imports cleanly again --
+# un-quarantined. `_FakeTwistTransport.move()`/`_make_frame()` below were
+# updated to the current `MoveTransport.move()` kwargs and `TLMFrame`/
+# `AckEntry` shapes (no more `acks`/`fault_bits`/`event_bits` -- a single
+# `ack_corr`/`ack_err` slot, gated by `flags` bit 5) to match.
 
 # _FakeTwistTransport's own nominal tick interval -- read off PlannerParams'
 # own default rather than duplicated as a hand-picked literal (0.15) that
@@ -225,7 +224,11 @@ class _FakeTwistTransport:
         self.move_calls: list[dict] = []
         self.stop_calls: int = 0
         self._corr_id = 0
-        self._pending_acks: list[int] = []  # 109-008: move ids awaiting delivery -- see move()
+        # Protocol v4 (2026-07-22 revival): a single ack SLOT per frame (no
+        # more depth-3 ring), so a backlog of pending completions is modeled
+        # as one (move_id, err_code) tuple per synthesized frame -- see
+        # read_pending_binary_tlm_frames()/move()'s own docstring below.
+        self._pending_acks: list[tuple[int, int]] = []
         self._x = 0.0    # [mm]
         self._y = 0.0    # [mm]
         self._heading = 0.0  # [rad]
@@ -248,32 +251,64 @@ class _FakeTwistTransport:
         self.stop_calls += 1
         return self._corr_id
 
-    def move(self, *, distance: float = 0.0, delta_heading: float = 0.0,
-             v_max: float = 0.0, omega: float = 0.0, time: float = 0.0,
-             replace: bool = False, id: "int | None" = None) -> int:  # [mm] [rad] [mm/s] [rad/s] [ms]
-        """109-008: MOVE-queue counterpart of ``twist()`` above -- this fake
-        has no real firmware queue/timing to model, so it integrates the
-        WHOLE commanded arc in one shot (open-loop unicycle, same shape
-        ``twist()`` uses per-tick) and immediately queues a `DONE`
-        completion ack for this id (mirrors ``planner.tour``'s own "anything
-        but OK is terminal" contract -- see that module's file header)."""
+    def move(self, *, v_x: float = 0.0, v_y: float = 0.0, omega: float = 0.0,
+             v_left: "float | None" = None, v_right: "float | None" = None,
+             stop_time: "float | None" = None, stop_distance: "float | None" = None,
+             stop_angle: "float | None" = None, timeout: float,
+             replace: bool = True, id: "int | None" = None) -> int:
+        """Protocol v4 (2026-07-22 revival): MOVE-queue counterpart of
+        ``twist()`` above, mirroring ``SimLoop.move()``'s own kwargs -- this
+        fake has no real firmware queue/timing to model, so it integrates
+        the WHOLE commanded leg in one shot (open-loop unicycle, same shape
+        ``twist()`` uses per-tick) and immediately queues a completion ack
+        (``ack_err=0``) for this id -- ``planner.tour`` only ever polls for
+        ITS OWN ``move_id``'s completion (see that module's own
+        ``_drain_and_poll()``), never a status taxonomy, so "queue one
+        completion ack per move()" is the whole contract this fake needs to
+        satisfy. Only a ``stop_distance`` (straight leg, sign from ``v_x``)
+        or a ``stop_angle`` (turn leg, sign from ``omega``) leg shape is
+        modeled -- the only two shapes ``planner.tour`` ever builds."""
         self._corr_id += 1
         move_id = id if id is not None else self._corr_id
-        self.move_calls.append(dict(distance=distance, delta_heading=delta_heading,
-                                    v_max=v_max, omega=omega, time=time,
-                                    replace=replace, id=move_id))
-        self._heading += delta_heading
-        self._x += distance * math.cos(self._heading)
-        self._y += distance * math.sin(self._heading)
-        self._enc += distance
-        self._pending_acks.append(move_id)
+        self.move_calls.append(dict(v_x=v_x, v_y=v_y, omega=omega, v_left=v_left,
+                                    v_right=v_right, stop_time=stop_time,
+                                    stop_distance=stop_distance, stop_angle=stop_angle,
+                                    timeout=timeout, replace=replace, id=move_id))
+        if stop_distance is not None:
+            signed_distance = math.copysign(stop_distance, v_x) if v_x else stop_distance
+            self._x += signed_distance * math.cos(self._heading)
+            self._y += signed_distance * math.sin(self._heading)
+            self._enc += signed_distance
+        elif stop_angle is not None:
+            signed_angle = math.copysign(stop_angle, omega) if omega else stop_angle
+            self._heading += signed_angle
+        self._pending_acks.append((move_id, 0))
         return move_id
 
     def read_pending_binary_tlm_frames(self) -> list:
-        return [self._make_frame()]
+        """One frame per completion ack sent so far (a real wire's single
+        ack slot can carry at most one per primary frame; this fake models
+        that as one synthesized frame per entry -- see ``move()``'s own
+        docstring), or a single current-state frame with no fresh ack if
+        none have been sent yet (mirrors this class's own pre-existing
+        "always returns at least one frame" convention -- see the class
+        docstring). Deliberately NEVER discards an entry once queued
+        (mirrors the pre-existing depth-3-ring-era fake's own "list only
+        grows" behavior, carried forward unchanged by the protocol-v4
+        rewrite of this method's OWN per-frame shape): ``run_tour()``'s
+        one-leg lookahead sends leg N+1's own ``move()`` (queuing ITS
+        completion ack too) before leg N's completion has even been
+        polled for, so leg N+1's ack must still be visible on a LATER poll
+        that is looking for it specifically -- discarding it as a
+        byproduct of leg N's own earlier poll (which only ever matches on
+        leg N's own move_id and ignores the rest of the batch) would starve
+        leg N+1's own wait loop forever."""
+        if not self._pending_acks:
+            return [self._make_frame()]
+        return [self._make_frame(ack_corr=move_id, ack_err=err_code)
+               for move_id, err_code in self._pending_acks]
 
-    def _make_frame(self):
-        from robot_radio.robot.pb2 import telemetry_pb2
+    def _make_frame(self, ack_corr: "int | None" = None, ack_err: "int | None" = None):
         from robot_radio.robot.protocol import AckEntry, TLMFrame
 
         enc_i = int(self._enc)
@@ -281,11 +316,13 @@ class _FakeTwistTransport:
             int(self._x), int(self._y),
             int(round(math.degrees(self._heading) * 100.0)),  # [cdeg]
         )
-        acks = tuple(
-            AckEntry(corr_id=move_id, ok=True, err_code=0, status=telemetry_pb2.ACK_STATUS_DONE)
-            for move_id in self._pending_acks)
-        return TLMFrame(enc=(enc_i, enc_i), pose=pose, otos=pose,
-                        fault_bits=0, event_bits=0, acks=acks)
+        flags = 0
+        ack = None
+        if ack_corr is not None:
+            flags |= 1 << 5  # kFlagAckFresh (telemetry.proto Telemetry.flags bit 5)
+            ack = AckEntry(corr_id=ack_corr, ok=(not ack_err), err_code=ack_err or 0)
+        return TLMFrame(enc=(enc_i, enc_i), pose=pose, otos=pose, flags=flags,
+                        ack_corr=ack_corr, ack_err=ack_err, ack=ack)
 
 
 # ---------------------------------------------------------------------------

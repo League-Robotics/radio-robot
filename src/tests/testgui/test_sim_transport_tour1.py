@@ -56,12 +56,6 @@ def test_sim_transport_connects_and_exposes_a_live_protocol(sim_transport):
     assert protocol.is_connected
 
 
-@pytest.mark.skip(
-    reason="TestGUI/host tour geometry is dormant this sprint (115 Design "
-    "Rationale Decision 6) -- robot_radio.planner.tour raises AttributeError "
-    "at import (ACK_STATUS_DONE deleted by 115-003's frame-v2 rewrite); "
-    "deferred host planner/tour cleanup, not a defect of this sprint."
-)
 def test_tour_shaped_sequence_via_direct_twist_calls_drives_and_closes(sim_transport):
     """Drives TOUR_1's own leg geometry directly against ``.protocol``
     (``twist()``/``stop()``, no ``run_tour()``/``StreamingExecutor`` in the
@@ -172,12 +166,19 @@ def test_tour_shaped_sequence_via_direct_twist_calls_drives_and_closes(sim_trans
 # investigation's verdict was a real `kFaultWedgeLatch` firmware fault
 # tripping the OLD path's own "stop the whole tour on any nonzero fault_bits"
 # polling -- the new path has no such polling at all (a leg's own outcome is
-# driven solely by that Move's own terminal ack-ring status), so a transient
-# fault bit can no longer freeze/stop a tour on its own. This test running
-# TOUR_1 to completion end to end over the real compiled firmware sim is the
-# concrete demonstration that the boundary crossings (13 legs, 6 straight-
-# >turn/turn->straight transitions) do not reproduce the freeze symptom on
-# this path.
+# driven solely by that Move's own terminal state, read off its completion
+# ack + fault_move_timeout flag -- see `planner/tour.py`'s own
+# `_outcome_for_terminal_frame()`), so a transient fault bit can no longer
+# freeze/stop a tour on its own. This test running TOUR_1 to completion end
+# to end over the real compiled firmware sim is the concrete demonstration
+# that the boundary crossings (13 legs, 6 straight->turn/turn->straight
+# transitions) do not reproduce the freeze symptom on this path.
+#
+# 2026-07-22 (testgui-motion-paths-dead-after-move-cutover revival):
+# `planner.tour` was ported onto protocol v4's `Move`/single-ack-slot wire
+# shape (the depth-3 `AckEntry` ring + `AckStatus` taxonomy this test's own
+# history above refers to no longer exist) -- un-skipped; the "one Move per
+# leg, event-driven completion" behavior this test verifies is unchanged.
 # ---------------------------------------------------------------------------
 
 _MAX_TOUR_ATTEMPTS = 5
@@ -201,12 +202,6 @@ _MAX_CLOSURE_POSITION_MM = 600.0  # [mm] -- see the direct-twist test's own
 # DESIGN.md`'s dwell-completion entry). Verified: this test now passes
 # reliably (3/3 repeated pytest invocations, each with its own fresh
 # SimTransport connection) -- see the issue file's own resolution note.
-@pytest.mark.skip(
-    reason="TestGUI/host tour geometry is dormant this sprint (115 Design "
-    "Rationale Decision 6) -- robot_radio.planner.tour raises AttributeError "
-    "at import (ACK_STATUS_DONE deleted by 115-003's frame-v2 rewrite); "
-    "deferred host planner/tour cleanup, not a defect of this sprint."
-)
 def test_tour_1_runs_to_completion_with_finite_small_closure(sim_transport):
     """The programmatic equivalent of "press Tour 1 and watch the trace
     draw": every leg of TOUR_1 runs to completion (RunOutcome.COMPLETED)

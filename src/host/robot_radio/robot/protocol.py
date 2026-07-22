@@ -1017,6 +1017,63 @@ class NezhaProtocol:
         envelope = envelope_pb2.CommandEnvelope(move=move)
         return self._conn.send_envelope_fast(envelope)
 
+    def move(self, *, v_x: float = 0.0, v_y: float = 0.0, omega: float = 0.0,
+             v_left: float | None = None, v_right: float | None = None,
+             stop_time: float | None = None,       # [ms]
+             stop_distance: float | None = None,   # [mm]
+             stop_angle: float | None = None,       # [rad]
+             timeout: float,                        # [ms]
+             replace: bool = True, id: int | None = None) -> int:
+        """Single-entry-point ``Move`` builder mirroring
+        ``robot_radio.io.sim_loop.SimLoop.move()``'s own kwargs exactly
+        (testgui-motion-paths-dead-after-move-cutover fix, planner.tour
+        revival) -- ``planner.tour``'s ``MoveTransport`` Protocol calls
+        `.move(**kwargs)` on whatever `.protocol` a transport exposes;
+        ``_HardwareTransport.protocol`` returns THIS class, so without this
+        method a live hardware connection could not run a tour (only
+        ``SimTransport.protocol`` -- a ``SimLoop``, which already had
+        ``.move()`` -- could). A thin dispatcher over the two methods this
+        class already has: a velocity variant of ``v_left``/``v_right``
+        (BOTH given) calls ``move_wheels()``; the default (``v_x``/``v_y``/
+        ``omega``, ``v_left``/``v_right`` both ``None``) calls
+        ``move_twist()``. Raises ``ValueError`` if only one of
+        ``v_left``/``v_right`` is given -- mirrors ``SimLoop.move()``'s own
+        guard.
+
+        ``id`` maps to ``move_twist()``/``move_wheels()``'s own
+        ``move_id`` parameter (``Move.id`` -- the key THIS Move's own
+        COMPLETION ack echoes, per ``docs/protocol-v4.md`` section 7.2);
+        defaults to ``0`` (their own default) when omitted. UNLIKE
+        ``SimLoop.move()``, this does NOT also become the envelope's own
+        ``corr_id`` -- ``move_twist()``/``move_wheels()`` auto-assign that
+        separately (``send_envelope_fast()``'s own connection-scoped
+        counter), so the RETURNED value here is that auto-assigned
+        envelope ``corr_id`` (the ENQUEUE ack's own key), not ``id``. A
+        caller polling for a Move's own completion (e.g. ``planner.tour``)
+        must poll on ``id`` itself, never this return value -- see
+        ``MoveTransport``'s own docstring (``planner/tour.py``) for why
+        that distinction is transparent to a tour.
+
+        ``stop_time``/``stop_distance``/``stop_angle``/``timeout``/
+        ``replace`` share the SAME contract as ``move_twist()``'s own --
+        see that method's docstring. Raises ``ConnectionError`` if not
+        connected; raises ``ValueError`` for a missing/ambiguous stop
+        condition, a non-positive ``timeout``, or a lone
+        ``v_left``/``v_right``.
+        """
+        move_id = id if id is not None else 0
+        if v_left is not None or v_right is not None:
+            if v_left is None or v_right is None:
+                raise ValueError(
+                    "move(): v_left and v_right must both be given for a "
+                    "wheels Move (got only one)")
+            return self.move_wheels(
+                v_left, v_right, stop_time=stop_time, stop_distance=stop_distance,
+                stop_angle=stop_angle, timeout=timeout, replace=replace, move_id=move_id)
+        return self.move_twist(
+            v_x, v_y, omega, stop_time=stop_time, stop_distance=stop_distance,
+            stop_angle=stop_angle, timeout=timeout, replace=replace, move_id=move_id)
+
     def stop(self) -> int:
         """Panic-stop the drivetrain (``CommandEnvelope{stop: Stop{}}``) — a
         zero-field oneof arm that "cannot be malformed" (envelope.proto

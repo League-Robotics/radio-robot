@@ -531,14 +531,6 @@ class TestBuildWireStringDefaults:
 #
 
 
-@pytest.mark.skip(
-    reason="TestGUI tour data is dormant this sprint (115 Design Rationale "
-    "Decision 6) -- robot_radio.planner.tour raises AttributeError at "
-    "import (ACK_STATUS_DONE deleted by 115-003's frame-v2 rewrite), so "
-    "commands.py's TOUR_1/TOUR_2 module attrs degrade to empty placeholder "
-    "lists (see commands.py's own try/except guard); deferred host "
-    "planner/tour cleanup, not a defect of this sprint."
-)
 class TestTours:
     """TOUR_1 / TOUR_2 / TOURS content and shape (pure data, no Qt)."""
 
