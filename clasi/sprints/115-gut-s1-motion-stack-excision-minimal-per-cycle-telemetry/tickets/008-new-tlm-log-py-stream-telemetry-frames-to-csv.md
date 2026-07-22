@@ -1,7 +1,7 @@
 ---
 id: 008
 title: 'New tlm_log.py: stream telemetry frames to CSV'
-status: in-progress
+status: done
 use-cases:
 - SUC-047
 depends-on:
@@ -29,11 +29,11 @@ this file).
 
 ## Acceptance Criteria
 
-- [ ] `src/tests/bench/tlm_log.py` connects to a robot (serial, matching
+- [x] `src/tests/bench/tlm_log.py` connects to a robot (serial, matching
       this repo's existing bench-script connection pattern — see
       `twist_drive.py`/`rig_soak.py` for the established convention) and
       streams `Telemetry` frames via `protocol.py` (ticket 007).
-- [ ] One CSV row per frame; columns cover every field: `now`, `seq`,
+- [x] One CSV row per frame; columns cover every field: `now`, `seq`,
       `mode`, `flags` (raw, plus decoded convenience columns for at
       least the presence/fault/event bits used in the hardware gate),
       `ack_corr`/`ack_err`, both `EncoderReading`s' `position`/
@@ -42,11 +42,11 @@ this file).
       `pose` (x/y/theta), `twist` (v_x/omega — differential drive, no
       `v_y` component on the wire twist), unpacked `line`/`color`
       per-channel values.
-- [ ] Command-line invocable for a bench session (matches the existing
+- [x] Command-line invocable for a bench session (matches the existing
       `src/tests/bench/` scripts' own CLI convention — check
       `twist_drive.py`/`rig_soak.py` for the pattern already
       established, don't invent a new one).
-- [ ] A short synthetic/sim-backed test confirms the CSV row shape and
+- [x] A short synthetic/sim-backed test confirms the CSV row shape and
       column count are stable (e.g., feed it a few `SimHarness`-emitted
       frames and check the written CSV's header + row count) — full
       hardware-session capture is ticket 010's own acceptance criterion,
