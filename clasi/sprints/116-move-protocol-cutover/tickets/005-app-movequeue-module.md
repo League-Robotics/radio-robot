@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: App::MoveQueue module
-status: in-progress
+status: done
 use-cases:
 - SUC-050
 - SUC-051
@@ -48,34 +48,34 @@ this into the live composition roots; this ticket's own tests exercise
 
 ## Acceptance Criteria
 
-- [ ] `enqueue(Move, corrId)`: `replace=true` flushes every pending slot
+- [x] `enqueue(Move, corrId)`: `replace=true` flushes every pending slot
       and preempts the active `Move` immediately, the new `Move` activates
       the same call; `replace=false` appends behind the active `Move`,
       returning `ERR_FULL` if 4 are already pending — and on that
       rejection, the existing active + 4 pending contents are provably
       unchanged (byte-for-byte, not just "still 4 pending" — sprint.md
       SUC-052).
-- [ ] Activation (on `enqueue()` when the queue was empty/`replace`, or on
+- [x] Activation (on `enqueue()` when the queue was empty/`replace`, or on
       the queue auto-advancing) stages the `Move`'s velocity variant
       through `Drive` (`setTwist`/`setWheels`) and constructs a
       `Motion::StopCondition` with a baseline captured from `Odometry` at
       that exact moment.
-- [ ] `tick(now, odom)`: ticks the active `StopCondition`; on stop-met or
+- [x] `tick(now, odom)`: ticks the active `StopCondition`; on stop-met or
       timeout, ends the active `Move` — emits a completion ack against
       `Move.id` (outcome distinguishes stop-met from timeout, so the
       caller can set `kFlagFaultMoveTimeout` correctly) — and activates
       the next pending `Move` the SAME cycle (seamless hand-off, no
       intervening zero-velocity cycle — SUC-051) or leaves the queue
       empty for the caller to observe via `active()`.
-- [ ] `flush()` (used by STOP, ticket 006): drains every pending slot and
+- [x] `flush()` (used by STOP, ticket 006): drains every pending slot and
       ends the active one with no completion ack for the flushed
       pending entries (sprint.md Architecture Open Question 2's resolved
       convention — only an activated-then-ended `Move` ever gets a
       completion ack) — implemented and tested explicitly, not left
       implicit.
-- [ ] `active()` bool accessor for the caller's `frame_.mode`/`driving_`
+- [x] `active()` bool accessor for the caller's `frame_.mode`/`driving_`
       derivation.
-- [ ] Fan-out stays at 3 injected collaborators (`Drive`, `Odometry`,
+- [x] Fan-out stays at 3 injected collaborators (`Drive`, `Odometry`,
       `Devices::Clock`) plus the owned (not injected) `StopCondition` —
       no additional dependency added beyond what the architecture doc
       specifies.
