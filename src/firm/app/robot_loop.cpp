@@ -472,7 +472,7 @@ void RobotLoop::cycle() {
   motorR_.tick(clock_.nowMicros());   // write R duty + collect R
 
   runAndWait(kSettle, [&] {           // >=4ms: L encoder settling, meanwhile --
-    comms_.pump(cmd);                 //   drain RX, decode <=1 frame into cmd
+    comms_.pump(cmd, cycleStart);     //   drain RX, decode <=1 frame into cmd
   });
 
   runAndWait(kClear, [&] {  // >=4ms: brick clears L's duty write, meanwhile --

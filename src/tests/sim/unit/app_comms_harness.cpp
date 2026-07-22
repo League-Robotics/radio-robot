@@ -168,7 +168,7 @@ void scenarioMoveRoundTrip() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd);
+  comms.pump(cmd, /*now=*/0);
 
   checkTrue(cmd.status == App::CmdStatus::kDecoded, "cmd.status == kDecoded");
   checkU64Eq(cmd.env.corr_id, 7, "corr_id round-trips");
@@ -202,7 +202,7 @@ void scenarioMalformedArmorPrefixRejected() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd);
+  comms.pump(cmd, /*now=*/0);
 
   checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone");
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once");
@@ -219,7 +219,7 @@ void scenarioMalformedTruncatedBase64Rejected() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd);
+  comms.pump(cmd, /*now=*/0);
 
   checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone");
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once");
@@ -248,7 +248,7 @@ void scenarioMalformedCorruptProtobufRejected() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd);
+  comms.pump(cmd, /*now=*/0);
 
   checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone");
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once");
@@ -270,7 +270,7 @@ void scenarioHelloRepliesWithBannerViaSendReliable() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd);
+  comms.pump(cmd, /*now=*/0);
 
   checkTrue(cmd.status == App::CmdStatus::kNone, "HELLO never decodes a Cmd");
   checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
@@ -282,7 +282,7 @@ void scenarioHelloRepliesWithBannerViaSendReliable() {
 }
 
 void scenarioPingRepliesOkPongViaSendReliable() {
-  beginScenario("pump(): PING replies \"OK pong\" via sendReliable()");
+  beginScenario("pump(): PING replies \"OK pong t=<now>\" via sendReliable() (117, SUC-056)");
 
   FakeTransport serialFake;
   FakeTransport radioFake;
@@ -291,12 +291,17 @@ void scenarioPingRepliesOkPongViaSendReliable() {
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
 
+  // A specific, nonzero `now` -- proves the reply carries THIS call's own
+  // argument, not a hardcoded/zero placeholder (117 ticket 001's own AC:
+  // "t= followed by the now value passed into Comms::pump()/
+  // pumpTransport() for that call").
   App::Cmd cmd;
-  comms.pump(cmd);
+  comms.pump(cmd, /*now=*/123456);
 
   checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
   if (!serialFake.sentReliable().empty()) {
-    checkStrEq(serialFake.sentReliable()[0], "OK pong", "sendReliable() carried \"OK pong\"");
+    checkStrEq(serialFake.sentReliable()[0], "OK pong t=123456",
+               "sendReliable() carried \"OK pong t=<now>\", now == pump()'s own argument");
   }
 }
 
@@ -317,18 +322,29 @@ void scenarioPumpBoundedToOneTransportPerCall() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd);
+  comms.pump(cmd, /*now=*/1000);
 
   checkU64Eq(serialFake.inboundSize(), 0, "serial's queued line was drained this call");
   checkU64Eq(radioFake.inboundSize(), 1, "radio's queued line was NOT touched this call (serial had one)");
   checkU64Eq(serialFake.sentReliable().size(), 1, "serial received the PING reply");
   checkU64Eq(radioFake.sentReliable().size(), 0, "radio received no reply (never polled this call)");
+  if (!serialFake.sentReliable().empty()) {
+    checkStrEq(serialFake.sentReliable()[0], "OK pong t=1000",
+               "serial transport's PING reply also carries t=<now> (117, SUC-056)");
+  }
 
-  // A second pump() call now drains radio's queued line.
+  // A second pump() call now drains radio's queued line -- proves the SAME
+  // t=<ms> reply shape on the OTHER transport, not just serial (117 ticket
+  // 001's own AC: "Verified on both the serial and radio-relay
+  // transports").
   App::Cmd cmd2;
-  comms.pump(cmd2);
+  comms.pump(cmd2, /*now=*/2000);
   checkU64Eq(radioFake.inboundSize(), 0, "radio's queued line is drained on the NEXT call");
   checkU64Eq(radioFake.sentReliable().size(), 1, "radio received the PING reply on the second call");
+  if (!radioFake.sentReliable().empty()) {
+    checkStrEq(radioFake.sentReliable()[0], "OK pong t=2000",
+               "radio transport's PING reply also carries t=<now> (117, SUC-056)");
+  }
 }
 
 // ===========================================================================

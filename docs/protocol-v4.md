@@ -114,27 +114,28 @@ stays the larger arm either way
 
 ### 2.4 Text safety rump — `HELLO` / `PING`
 
-`Comms::pumpTransport()` (`comms.cpp:55-76`) checks these two literal
+`Comms::pumpTransport()` (`comms.cpp:56-85`) checks these two literal
 strings **before** the `*B` armor check:
 
 | Verb | Reply | Notes |
 |---|---|---|
 | `HELLO` | `DEVICE:NEZHA2:robot:<name>:<serial>` | `formatBanner()`, `main.cpp:36-41` — byte-frozen, host banner parsers depend on it. `<name>` = `microbit_friendly_name()`, `<serial>` = `microbit_serial_number()`. |
-| `PING` | `OK pong` | Liveness probe. |
+| `PING` | `OK pong t=<ms>` | Liveness probe + clock-sync activation (117, SUC-056). |
 
-**AS-BUILT divergence from the set-point issue**: the issue's own
-Transport & Framing section (and this project's `clock_sync.py`
-docstring) describe `PING` replying `OK pong t=<ms>` — a robot-clock
-timestamp intended to activate the host's existing NTP-style
-`clock_sync.py`. The shipped handler
-(`t.sendReliable("OK pong");`, `comms.cpp:65`, unchanged by sprint 116 —
-no ticket in 001-008 touched this line) sends **no `t=` field at all**.
-`clock_sync.py`'s `_parse_pong_t()` (and the calibration scripts that
-call `PING`) already tolerate a bare `"OK pong"` (returns `None`), so
-this is a silent capability gap, not a wire break — but a caller
-expecting clock-sync data from text `PING` gets none today. Anything
-else sent as plain text (not `*B`-prefixed, not `HELLO`/`PING`)
-increments `malformedCount_` (§7.4) with no reply.
+**117 (predict-to-now estimator v1, SUC-056) — landed; closes the prior
+AS-BUILT divergence this section used to document here.** `PING`'s reply
+now carries `t=<ms>` — the firmware's own current clock time —
+appended via `std::snprintf(pong, sizeof(pong), "OK pong t=%lu",
+static_cast<unsigned long>(now))` (`Comms::pumpTransport()`,
+`comms.cpp`). `now` is `RobotLoop::cycle()`'s already-computed
+`cycleStart`, threaded through the new `Comms::pump(Cmd&, uint32_t now)`
+parameter — `Comms` itself still owns no `Devices::Clock&` collaborator
+of its own. This activates the host's existing NTP-style `clock_sync.py`
+(min-RTT offset + skew fit, `ClockSync.ping_burst()`), whose
+`_parse_pong_t()` already parsed this exact shape and tolerated its
+prior absence (returning `None`). Anything else sent as plain text (not
+`*B`-prefixed, not `HELLO`/`PING`) increments `malformedCount_` (§7.4)
+with no reply.
 
 Any other pre-097/pre-102 text verb (`ID`, `VER`, `HELP`, `STOP`,
 `SET`/`GET`, `S`/`D`/`T`/`R`/`TURN`/`RT`/`G`/`MOVE`/`MOVER`, etc.) is

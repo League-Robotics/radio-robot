@@ -1,7 +1,7 @@
 ---
 id: '001'
-title: 'PING reply timestamp (t=ms) + protocol-v4.md update + host clock-sync activation'
-status: open
+title: PING reply timestamp (t=ms) + protocol-v4.md update + host clock-sync activation
+status: done
 use-cases:
 - SUC-056
 depends-on: []
@@ -38,24 +38,24 @@ one `DESIGN.md` slot, already claimed by `src/firm/app/DESIGN.md` — see
 
 ## Acceptance Criteria
 
-- [ ] `Comms::pumpTransport()`'s `PING` handler replies `OK pong t=<ms>`,
+- [x] `Comms::pumpTransport()`'s `PING` handler replies `OK pong t=<ms>`,
       where `<ms>` is the firmware's own current clock time (integer
       formatting only — `newlib-nano` has no `printf` float support, but
       this is not a float field, so this is a non-issue, not a workaround).
       Verified on both the serial and radio-relay transports.
-- [ ] `docs/protocol-v4.md` §2.4's "AS-BUILT divergence from the set-point
+- [x] `docs/protocol-v4.md` §2.4's "AS-BUILT divergence from the set-point
       issue" callout is removed/updated: the documented `PING` reply now
       matches the shipped reply exactly.
-- [ ] A host-side activation test (sim-first; bench if a live robot is
+- [x] A host-side activation test (sim-first; bench if a live robot is
       reachable) drives a real `ClockSync` instance's `ping_burst()` against
       the firmware's new reply and asserts `best_offset()` is non-`None`
       after one burst — i.e. `ClockSync` is proven to actually activate
       against this firmware, not just parse a hand-written fixture string.
-- [ ] A sim/unit test (extending the existing `app_comms_harness.cpp`/
+- [x] A sim/unit test (extending the existing `app_comms_harness.cpp`/
       `test_app_comms.py` pair) asserts the text-plane `PING` reply contains
       `t=` followed by the `now` value passed into `Comms::pump()`/
       `pumpTransport()` for that call.
-- [ ] `src/host/robot_radio/DESIGN.md` updated in place with a short note
+- [x] `src/host/robot_radio/DESIGN.md` updated in place with a short note
       that `PING` now carries `t=<ms>` and that `ClockSync` is therefore
       live-activatable (this doc does not ride the sprint's design
       overlay — same co-located-`DESIGN.md`-slot collision noted in

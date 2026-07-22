@@ -48,7 +48,7 @@ both, file-by-file or even function-by-function.
 
 | Directory | Status | Notes |
 |---|---|---|
-| `robot/` | **Mixed** | `protocol.py`'s `NezhaProtocol` (the actual wire adapter) is live and current — its own docstring states the firmware "has no text-plane command parser at all." 116-007 (MOVE protocol cutover): `move_twist()`/`move_wheels()` replace `twist()` (deleted — its wire arm, `Twist`, is `reserved`, not reused) as the live motion-command builders, alongside `stop()`/`config()`/`otos_config()`/`set_config()`/`set_config_binary()`. `connection.py` (port resolution, session cache) is live. `nezha.py`'s `Nezha` wrapper — what every entry point actually constructs — is mostly dead: only `stop()`/`set_config()`/`set_config_binary()` map onto surviving `NezhaProtocol` methods; `go_to()`, `turn()`, `speed*()`, `zero_encoders()`, `ping()`, `get_id()`, `get_config()`, `grip()`, `vw()`, `stream_tlm()`, `snap()`, OTOS scalar accessors, and `port_read/write*()` all call methods `NezhaProtocol` no longer has. `sync_pose.py` (builds a pruned `SI` text arm), `clock_sync.py` (`ping()`-based), and `_legacy_tlm_text.py` (an explicitly self-described frozen legacy parser) are dormant. `cutebot.py` is a separate hardware family (a different robot, different protocol), unaffected by the gut either way. |
+| `robot/` | **Mixed** | `protocol.py`'s `NezhaProtocol` (the actual wire adapter) is live and current — its own docstring states the firmware "has no text-plane command parser at all." 116-007 (MOVE protocol cutover): `move_twist()`/`move_wheels()` replace `twist()` (deleted — its wire arm, `Twist`, is `reserved`, not reused) as the live motion-command builders, alongside `stop()`/`config()`/`otos_config()`/`set_config()`/`set_config_binary()`. `connection.py` (port resolution, session cache) is live. `nezha.py`'s `Nezha` wrapper — what every entry point actually constructs — is mostly dead: only `stop()`/`set_config()`/`set_config_binary()` map onto surviving `NezhaProtocol` methods; `go_to()`, `turn()`, `speed*()`, `zero_encoders()`, `ping()`, `get_id()`, `get_config()`, `grip()`, `vw()`, `stream_tlm()`, `snap()`, OTOS scalar accessors, and `port_read/write*()` all call methods `NezhaProtocol` no longer has. `sync_pose.py` (builds a pruned `SI` text arm) and `_legacy_tlm_text.py` (an explicitly self-described frozen legacy parser) are dormant. `clock_sync.py`'s `ClockSync` class itself has no live caller wired up today (its own usage example and `testkit/safety.py`'s `SafeRun` preflight both drive it through the dead `Nezha.ping()` wrapper); 117 (SUC-056) made the firmware's `PING` reply carry `t=<ms>`, closing the WIRE half of `ClockSync`'s activation gap (proven at the sim level), but a live round trip through `NezhaProtocol.send()` hits a separate, pre-existing host-side gap — see §6. `cutebot.py` is a separate hardware family (a different robot, different protocol), unaffected by the gut either way. |
 | `io/` | **Mixed** | `serial_conn.py` (transport), `repl.py`, `sim_config.py`, `sim_loop.py` are live and current — `repl.py`'s own docstring is explicitly post-gut-aware ("exactly three CommandEnvelope arms... every verb here maps onto one of those three"). `cli.py` (the `rogo` entry point) is split: `repl`/`stop`/`binary stop` subcommands are live; its legacy subcommands (`drive`, `turn`, `turnto`, `go`, `goto`, `rot`, `ang`, `port`, `pwm`, `grip`, `enc`, `opos`, `ez`, `line`, `color`, `pose`) route through the dead half of `nezha.py` and are broken today. `calibrate.py` drives raw text commands (`TN...`, `OA...`) — dormant. `robot_mcp.py` registers ~30 MCP tools; the majority (`go`, `goto`, `navigate_to`, `visit_tags`, `approach`, `follow_path`, `grab_at`, `release_at`, `plan_path`, `preview_path`, `otos_*`, `read_pose_fused`, `tune`, `reload_nav`, `reset_camera`) are built on the dormant `nav`/`path`/`sensors.otos` machinery; `connect`/`disconnect`/`status`/`stop`/`list_serial_ports`/`probe_devices` and the pure-camera tools are live — but `connect` unconditionally calls the dead `push_calibration()` text path on every connect (see `calibration/` row). `preview.py` is an explicit stub (unimplemented, not dormant). |
 | `config/` | **Live** | `robot_config.py` — pydantic loader for `data/robots/*.json`. Pure Python, no wire dependency, no imports from elsewhere in this package. |
 | `calibration/` | **Mixed** | `helpers.py` (pure scale-encoding math) is live as a library. `angular.py`/`linear.py` (extracted from the now-archived `host_scripts/calibrate_*.py`) use a raw-pyserial text handshake — dormant. `push.py`'s `push_calibration()` default code path sends literal `SET`/`OI`/`OL`/`OA` text lines — dead — but the SAME calibration data has a second, live route: its `calibration_kwargs()` helper feeds `NezhaProtocol.set_config()`/`otos_config()` (binary) directly, used by `io/sim_loop.py` and `testgui/binary_bridge.py`. `sim_boot_config.py`'s own docstring confirms 115-003 deleted its `PlannerConfig` half; `motor_boot_config_for()` is "the sole survivor." `fit_sim_error_model.py` is sim-only bench tooling reading the legacy text TLM parser through an explicitly-flagged exception path. |
@@ -183,6 +183,39 @@ live one first, not just deleting the dead function.
 
 ## 6. Open Questions / Known Limitations
 
+- **117 (SUC-056): `PING`'s reply now carries `t=<ms>`, closing the wire
+  side of `ClockSync`'s activation gap — but the host's own
+  `SerialConnection.send()` has a SEPARATE, pre-existing gap that still
+  blocks a live round trip through it.** The firmware's text-plane
+  `PING` handler (`Comms::pumpTransport()`, `src/firm/app/comms.cpp`)
+  now replies `OK pong t=<ms>` — the robot's own clock at reply time —
+  closing `docs/protocol-v4.md` §2.4's former AS-BUILT divergence.
+  `robot/clock_sync.py`'s `ClockSync.ping_burst(send_fn)` already
+  tolerated and parsed this exact shape (`_parse_pong_t()`). It is
+  proven to activate against the firmware's actual (compiled, not
+  hand-typed) reply format at the sim/unit level
+  (`src/tests/sim/unit/test_clock_sync_activation.py`, 117 ticket 001).
+  **Found while verifying this, flagged rather than silently worked
+  around:** `io/serial_conn.py`'s `SerialConnection.send()` appends a
+  `" #<corr_id>"` suffix to EVERY command it sends (`corr_suffix =
+  f" #{corr_id}"`, `cmd = f"{message}{corr_suffix}\n"`) — so
+  `NezhaProtocol.send("PING")` actually puts `"PING #7"` on the wire, not
+  `"PING"`. `Comms::pumpTransport()`'s text-plane check is an EXACT
+  `std::strcmp(line, "PING")` (no trimming beyond `SerialPort::
+  readLine()`'s own trailing-newline strip) — a corr-id-suffixed line
+  does not match, falls through to the `*B`-armor check, fails that too,
+  and increments `malformedCount_` with **no reply at all** (not even a
+  bare `OK pong`). This is not new or caused by 117 — `send()`'s own
+  docstring already warned "a text line sent through it reaches no live
+  firmware handler," and grepping the tree turns up no existing caller
+  of `NezhaProtocol.send("PING", ...)`/`send("HELLO", ...)` against a
+  real connection today. A live/bench `ClockSync.ping_burst()` round
+  trip therefore needs a corr-id-suffix-free send path (e.g. a small
+  `send_fast()` + `read_lines()` pairing, or a `SerialConnection.send()`
+  fix) before it can work off the sim harness — flagged here as a real,
+  separate gap, not fixed as part of this ticket (out of its scope: the
+  firmware-side wire contract and the sim-level proof are what SUC-056
+  asks for).
 - **Sprint 116's MOVE protocol is the expected path back to life for
   most of `planner/`/`path/`/`nav/`** — but it has not been executed
   yet (as of this review). Until it lands, treat every dormant entry in
