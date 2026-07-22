@@ -250,8 +250,25 @@ void sim_step(SimHandle h, int cycles) { asHarness(h)->step(cycles); }
 
 // ---- Command injection ----
 
+// sim_inject_twist -- BEHAVIOR-PRESERVING TRANSLATION (116-006, MOVE
+// protocol cutover): App::Deadman and SimHarness::injectTwist() are both
+// deleted -- every motion is now a bounded MOVE (arm 21), no separate
+// deadman lease (protocol-set-point issue). This C ABI export's NAME and
+// SIGNATURE stay unchanged (sim_loop.py's own ctypes binding needs no
+// change) but its body now injects a MOVE that reproduces the deleted
+// Twist+Deadman contract as closely as a bounded command can: a TWIST
+// velocity variant, a TIME stop condition at `duration` (the deadman's own
+// rearm window), `timeout` == `duration` too (nothing else can legitimately
+// end a TIME-stop MOVE early), and `replace=true` (a fresh call always
+// preempts/restarts the timer -- the deadman's own "every call sets a
+// FRESH deadline ... re-arming, not stacking" contract, the deleted
+// deadman.h's own arm() doc comment). `corr` doubles as both the
+// enqueue-ack corr_id and the MOVE's own completion id -- this call site
+// never distinguished the two.
 void sim_inject_twist(SimHandle h, float v_x, float omega, float duration, uint32_t corr) {
-  asHarness(h)->injectTwist(v_x, omega, duration, corr);
+  asHarness(h)->injectMove(v_x, /*v_y=*/0.0f, omega, TestSupport::MoveStopKind::kTime,
+                            /*stopValue=*/duration, /*timeout=*/duration, /*replace=*/true,
+                            /*id=*/corr, corr);
 }
 
 void sim_inject_stop(SimHandle h, uint32_t corr) { asHarness(h)->injectStop(corr); }

@@ -1,15 +1,23 @@
 """src/tests/unit/test_twist_stop_ack_matcher.py — 103-009 (P3 minimal host
-slice: NezhaProtocol.twist()/stop() + the ack matcher), sections 2/3
-rewritten for the single-ack-slot design (115-003 frame v2).
+slice: NezhaProtocol.twist()/stop() + the ack matcher); section 1 rewritten
+for 116-007 (MOVE protocol cutover); sections 2/3 previously rewritten for
+the single-ack-slot design (115-003 frame v2).
 
 Covers this ticket's additions to `src/host/robot_radio/robot/protocol.py`,
 none of which need live hardware or even a real `SerialConnection`:
 
-1. `NezhaProtocol.twist()`/`stop()` — schema-level envelope-building tests
-   against a minimal fake connection (a bare `send_envelope_fast()` stub,
-   no reader thread/reply-queue machinery): assert the built
-   `CommandEnvelope` carries the correct oneof arm and field values, and
-   that each call returns the corr_id the fake assigned.
+1. `NezhaProtocol.move_twist()`/`move_wheels()`/`stop()` — schema-level
+   envelope-building tests against a minimal fake connection (a bare
+   `send_envelope_fast()` stub, no reader thread/reply-queue machinery):
+   assert the built `CommandEnvelope` carries the correct oneof arm and
+   field values, and that each call returns the corr_id the fake assigned.
+   116-007: the bare `twist` arm (103-era `v_x`/`omega`/`duration` +
+   deadman-arming) is deleted along with `NezhaProtocol.twist()` — every
+   motion is now a bounded `Move` (velocity variant + stop condition +
+   required `timeout` backstop + `replace`/`id`), built by `move_twist()`/
+   `move_wheels()`. This file's own filename predates that rename (kept
+   as-is — the ticket's own acceptance criteria list this file by name)
+   but its content no longer tests a `twist()` method.
 
 2. `TLMFrame.from_pb2()`'s `flags`-derived fields — built from synthetic
    `telemetry_pb2.Telemetry` messages with scripted `flags`, confirming the
@@ -44,16 +52,18 @@ from robot_radio.robot.pb2 import envelope_pb2, telemetry_pb2
 from robot_radio.robot.protocol import AckEntry, NezhaProtocol, TLMFrame
 
 # ---------------------------------------------------------------------------
-# 1. twist() / stop() — schema-level envelope construction
+# 1. move_twist() / move_wheels() / stop() — schema-level envelope
+#    construction (116-007, MOVE protocol cutover; supersedes the deleted
+#    twist()'s own coverage — see this file's own module docstring).
 # ---------------------------------------------------------------------------
 
 
 class _FakeFastConn:
     """Minimal fake connection: implements ONLY `send_envelope_fast()` --
-    twist()/stop() call nothing else on `self._conn`. Assigns corr_ids the
-    same way `SerialConnection._corr_counter` does (1, 2, 3, ...) and
-    records every envelope handed to it, with no serial port, no reader
-    thread, no reply-queue machinery at all."""
+    move_twist()/move_wheels()/stop() call nothing else on `self._conn`.
+    Assigns corr_ids the same way `SerialConnection._corr_counter` does
+    (1, 2, 3, ...) and records every envelope handed to it, with no serial
+    port, no reader thread, no reply-queue machinery at all."""
 
     def __init__(self) -> None:
         self.sent: list["envelope_pb2.CommandEnvelope"] = []
@@ -66,19 +76,75 @@ class _FakeFastConn:
         return self._next_corr_id
 
 
-def test_twist_builds_correct_envelope_and_returns_corr_id():
+def test_move_twist_builds_correct_envelope_and_returns_corr_id():
     conn = _FakeFastConn()
     proto = NezhaProtocol(conn)
 
-    corr_id = proto.twist(v_x=150.0, omega=0.25, duration=300.0)
+    corr_id = proto.move_twist(v_x=150.0, v_y=0.0, omega=0.25,
+                               stop_time=300.0, timeout=500.0)
 
     assert corr_id == 1
     sent = conn.sent[0]
     assert sent.corr_id == 1
-    assert sent.WhichOneof("cmd") == "twist"
-    assert sent.twist.v_x == pytest.approx(150.0)
-    assert sent.twist.omega == pytest.approx(0.25)
-    assert sent.twist.duration == pytest.approx(300.0)
+    assert sent.WhichOneof("cmd") == "move"
+    assert sent.move.WhichOneof("velocity") == "twist"
+    assert sent.move.twist.v_x == pytest.approx(150.0)
+    assert sent.move.twist.v_y == pytest.approx(0.0)
+    assert sent.move.twist.omega == pytest.approx(0.25)
+    assert sent.move.WhichOneof("stop") == "time"
+    assert sent.move.time == pytest.approx(300.0)
+    assert sent.move.timeout == pytest.approx(500.0)
+    assert sent.move.replace is True  # default: preempt-and-start now
+    assert sent.move.id == 0
+
+
+def test_move_wheels_builds_correct_envelope_and_returns_corr_id():
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+
+    corr_id = proto.move_wheels(v_left=100.0, v_right=-50.0,
+                                stop_distance=250.0, timeout=800.0,
+                                replace=False, move_id=7)
+
+    assert corr_id == 1
+    sent = conn.sent[0]
+    assert sent.WhichOneof("cmd") == "move"
+    assert sent.move.WhichOneof("velocity") == "wheels"
+    assert sent.move.wheels.v_left == pytest.approx(100.0)
+    assert sent.move.wheels.v_right == pytest.approx(-50.0)
+    assert sent.move.WhichOneof("stop") == "distance"
+    assert sent.move.distance == pytest.approx(250.0)
+    assert sent.move.timeout == pytest.approx(800.0)
+    assert sent.move.replace is False
+    assert sent.move.id == 7
+
+
+def test_move_twist_stop_angle_variant_builds_correct_envelope():
+    conn = _FakeFastConn()
+    proto = NezhaProtocol(conn)
+
+    proto.move_twist(v_x=0.0, v_y=0.0, omega=0.8, stop_angle=1.57, timeout=1000.0)
+
+    sent = conn.sent[0]
+    assert sent.move.WhichOneof("stop") == "angle"
+    assert sent.move.angle == pytest.approx(1.57)
+
+
+def test_move_twist_requires_exactly_one_stop_condition():
+    proto = NezhaProtocol(_FakeFastConn())
+
+    with pytest.raises(ValueError):
+        proto.move_twist(v_x=100.0, v_y=0.0, omega=0.0, timeout=500.0)
+    with pytest.raises(ValueError):
+        proto.move_twist(v_x=100.0, v_y=0.0, omega=0.0,
+                         stop_time=100.0, stop_distance=50.0, timeout=500.0)
+
+
+def test_move_twist_requires_positive_timeout():
+    proto = NezhaProtocol(_FakeFastConn())
+
+    with pytest.raises(ValueError):
+        proto.move_twist(v_x=100.0, v_y=0.0, omega=0.0, stop_time=300.0, timeout=0.0)
 
 
 def test_stop_builds_correct_envelope_and_returns_corr_id():
@@ -95,13 +161,13 @@ def test_stop_builds_correct_envelope_and_returns_corr_id():
     # its payload beyond "the oneof arm is stop".
 
 
-def test_twist_and_stop_each_get_a_fresh_corr_id():
+def test_move_and_stop_each_get_a_fresh_corr_id():
     conn = _FakeFastConn()
     proto = NezhaProtocol(conn)
 
-    c1 = proto.twist(v_x=100.0, omega=0.0, duration=100.0)
+    c1 = proto.move_twist(v_x=100.0, v_y=0.0, omega=0.0, stop_time=100.0, timeout=500.0)
     c2 = proto.stop()
-    c3 = proto.twist(v_x=-100.0, omega=0.1, duration=100.0)
+    c3 = proto.move_wheels(v_left=-100.0, v_right=-100.0, stop_time=100.0, timeout=500.0)
 
     assert [c1, c2, c3] == [1, 2, 3]
     assert len(conn.sent) == 3

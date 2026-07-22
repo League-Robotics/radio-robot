@@ -21,8 +21,8 @@
 #include <cstdint>
 
 #include "app/comms.h"
-#include "app/deadman.h"
 #include "app/drive.h"
+#include "app/move_queue.h"
 #include "app/odometry.h"
 #include "app/preamble.h"
 #include "app/telemetry.h"
@@ -61,7 +61,7 @@ class RobotLoop {
             Devices::Motor& motorR, Devices::Otos& otos,
             Devices::ColorSensorLeaf& color, Devices::LineSensorLeaf& line,
             Comms& comms, Telemetry& tlm, Drive& drive, Odometry& odom,
-            Deadman& deadman, Preamble& preamble, const Devices::Clock& clock,
+            MoveQueue& moveQueue, Preamble& preamble, const Devices::Clock& clock,
             Devices::Sleeper& sleeper,
             Config::TuningStore* tuningStore = nullptr);
 
@@ -89,7 +89,7 @@ class RobotLoop {
   // calls (sim/test composition roots). Idempotent: a second call is a
   // harmless no-op, so a caller that fans out over multiple config calls
   // (SimHarness) may call it from whichever call completes the set.
-  // handleTwist() refuses (ERR_NOT_CONFIGURED) until this has fired;
+  // handleMove() refuses (ERR_NOT_CONFIGURED) until this has fired;
   // handleStop()/handleConfig() stay unconditional.
   void markConfigured() { configured_ = true; }
   bool isConfigured() const { return configured_; }
@@ -141,7 +141,7 @@ class RobotLoop {
   // cmd_kind (NONE is a no-op). Each handler applies its command and acks
   // via tlm_.ack().
   void processMessage(const Cmd& cmd);
-  void handleTwist(const msg::CommandEnvelope& env);
+  void handleMove(const msg::CommandEnvelope& env);
   void handleConfig(const msg::CommandEnvelope& env);
   void handleStop(const msg::CommandEnvelope& env);
 
@@ -176,7 +176,7 @@ class RobotLoop {
   Telemetry& tlm_;
   Drive& drive_;
   Odometry& odom_;
-  Deadman& deadman_;
+  MoveQueue& moveQueue_;
   Preamble& preamble_;
   const Devices::Clock& clock_;
   Devices::Sleeper& sleeper_;
@@ -188,7 +188,12 @@ class RobotLoop {
   // cycle's tlm_.setFrame()/emit() call -- Telemetry always carries the
   // last staged snapshot, so a field updated late in one cycle is simply
   // one cycle "stale" when it reaches the wire, never lost.
-  bool driving_ = false;  // true once a Twist is applied, cleared on Stop/deadman
+  //
+  // No `driving_` hand-toggled bool (116, protocol-set-point issue):
+  // frame_.mode/kFlagActive derive from moveQueue_.active() directly
+  // (updateTlm()) -- MoveQueue is the single source of truth for whether
+  // motion is in progress, matching the deleted Deadman-era bool's own
+  // set/clear call sites one-for-one (activate/flush/timeout-drain).
   Telemetry::Frame frame_;
 
   // updateLineColor()'s own alternation cursor -- true means the NEXT

@@ -1,8 +1,9 @@
 ---
 id: '001'
 title: envelope.proto MOVE arm cutover
-status: open
-use-cases: [SUC-050]
+status: done
+use-cases:
+- SUC-050
 depends-on: []
 github-issue: ''
 issue:
@@ -40,30 +41,50 @@ suppression.
 
 ## Acceptance Criteria
 
-- [ ] `Move`/`MoveTwist`/`MoveWheels` messages added to `envelope.proto`,
+- [x] `Move`/`MoveTwist`/`MoveWheels` messages added to `envelope.proto`,
       matching the protocol-set-point issue's shape exactly (field names,
       numbers, oneof groupings).
-- [ ] `Twist` message body deleted; `CommandEnvelope`'s `reserved` list
+- [x] `Twist` message body deleted; `CommandEnvelope`'s `reserved` list
       gains `19`.
-- [ ] `ConfigDelta.watchdog` (field 4) deleted; `ConfigDelta`'s `reserved`
+- [x] `ConfigDelta.watchdog` (field 4) deleted; `ConfigDelta`'s `reserved`
       list gains `4`. `ConfigTarget.CONFIG_WATCHDOG` enum value left
       declared, unused — not removed.
-- [ ] `python build.py` regenerates `msg::Move`/`MoveTwist`/`MoveWheels`
+- [x] `python build.py` regenerates `msg::Move`/`MoveTwist`/`MoveWheels`
       and the `Comms`/`wire.h` codec cleanly (no hand-edits to generated
       output — fixes go in the generator/protos only, per the project's
-      generated-code convention).
-- [ ] The regenerated `kCommandEnvelopeMaxEncodedSize` (`comms.h`) is
+      generated-code convention). (`scripts/gen_messages.py`/`scripts/
+      gen_pb2.py` regen is clean; `build.py`'s own tree-wide ARM compile
+      fails at `src/firm/app/robot_loop.cpp` exactly as expected — it still
+      calls `handleTwist()`/decodes `Twist`, and is ticket 006's cutover to
+      fix, not this ticket's.)
+- [x] The regenerated `kCommandEnvelopeMaxEncodedSize` (`comms.h`) is
       re-measured and recorded; `kArmoredBufSize` (256 B) is confirmed to
-      still have headroom over the new worst-case encoded size.
-- [ ] `wire_test_codec.h` gains `armorMoveCommand()` helper(s) covering
+      still have headroom over the new worst-case encoded size. (Measured:
+      `kCommandEnvelopeMaxEncodedSize` stays 50 B — `config`=44B/`stop`=2B/
+      `move`=38B, `config` remains the dominant arm despite `move` being a
+      structurally bigger message than the `twist` it replaced;
+      `kReplyEnvelopeMaxEncodedSize` stays 153B, `kMaxEnvelopeBytes`=153B,
+      armored line ≈207B, well under the 256B `kArmoredBufSize`.)
+- [x] `wire_test_codec.h` gains `armorMoveCommand()` helper(s) covering
       both velocity variants × all three stop kinds; `armorTwistCommand()`
-      is deleted.
-- [ ] A repo-wide grep for the deleted wire arms (`Twist` as a wire type,
+      is deleted. (Two overloads, disambiguated by `MoveStopKind`'s
+      type-incompatible parameter position; `stopKind`/`stopValue` cover
+      all three stop kinds through each.)
+- [x] A repo-wide grep for the deleted wire arms (`Twist` as a wire type,
       `watchdog`/`sTimeout` as `ConfigDelta` fields) outside `src/archive/`
       turns up only call sites this sprint's later tickets are already
       scheduled to fix (ticket 007 for host `protocol.py`, ticket 006 for
-      firmware) — not a surprise this ticket needs to also fix.
-- [ ] `src/firm/messages/DESIGN.md` updated in place: §3's envelope-size
+      firmware) — not a surprise this ticket needs to also fix. (Confirmed:
+      `src/firm/app/robot_loop.cpp` + `src/tests/sim/unit/
+      app_comms_harness.cpp` + `src/sim/sim_harness.h`/`sim_ctypes.cpp` —
+      ticket 006; `protocol.py`/`nezha.py`/`cli.py`/`repl.py` + their tests
+      — ticket 007. The codec-layer test harnesses this ticket's own
+      Testing section requires green — `wire_codec_harness.cpp`,
+      `wire_differential_harness.cpp`, `_wire_diff_driver.py`,
+      `test_wire_differential.py`, `test_wire_fuzz.py` — were updated in
+      this ticket, since they are this ticket's own codec-level acceptance
+      surface, not later-ticket territory.)
+- [x] `src/firm/messages/DESIGN.md` updated in place: §3's envelope-size
       note (`Move` at arm 21, `Twist`/`ConfigDelta.watchdog` reserved, and
       the `CommandEnvelope`/`ReplyEnvelope` size figures) reflects the
       regenerated `kCommandEnvelopeMaxEncodedSize`/`kReplyEnvelopeMaxEncodedSize`

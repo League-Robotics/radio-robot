@@ -1,8 +1,9 @@
 ---
 id: '003'
 title: App::Odometry pathLength accessor
-status: open
-use-cases: [SUC-051]
+status: done
+use-cases:
+- SUC-051
 depends-on: []
 github-issue: ''
 issue: protocol-set-point-the-minimal-firmware-s-complete-command-surface.md
@@ -28,12 +29,12 @@ Independent of tickets 001/002/004 — no wire or queue dependency, purely an
 
 ## Acceptance Criteria
 
-- [ ] `pathLength()` accessor added, returning the cumulative `|distance|`
+- [x] `pathLength()` accessor added, returning the cumulative `|distance|`
       accumulated across every `integrate()` call since construction (or
       since whatever `reset()` behavior this ticket decides — see below).
-- [ ] `integrate()` accumulates `|distance|` (the value already computed
+- [x] `integrate()` accumulates `|distance|` (the value already computed
       internally) into the new running total on every call, unconditionally.
-- [ ] `reset(x, y, theta)`'s interaction with `pathLength()` is decided and
+- [x] `reset(x, y, theta)`'s interaction with `pathLength()` is decided and
       documented explicitly in the header comment: recommend `pathLength()`
       is NOT zeroed by `reset()` (it's a cumulative odometer-style value,
       and `StopCondition` baselines against a snapshot at MOVE activation
@@ -41,7 +42,7 @@ Independent of tickets 001/002/004 — no wire or queue dependency, purely an
       `reset()` would be a surprising, undocumented side effect for a
       caller that never asked for it) — pick one, write the rationale in
       the doc comment, and add a test asserting the chosen behavior.
-- [ ] Existing `x()`/`y()`/`theta()` outputs and every existing test that
+- [x] Existing `x()`/`y()`/`theta()` outputs and every existing test that
       exercises `integrate()`/`reset()` are unaffected.
 
 ## Testing

@@ -157,7 +157,12 @@ void scenarioEncoderWedgeSetsFaultBitAndClearsOnRelease() {
   sim.step(3);  // settle
   (void)sim.drainTelemetry();
 
-  sim.injectTwist(/*v_x=*/1000.0f, /*omega=*/0.0f, /*duration=*/100000.0f, /*corrId=*/11);
+  // 116-006 (MOVE protocol cutover): bare TWIST/injectTwist() is gone --
+  // a TIME-stop MOVE with a stop value/timeout far longer than this run
+  // is the equivalent "hold this twist indefinitely" injection.
+  sim.injectMove(/*v_x=*/1000.0f, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime,
+                 /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/11,
+                 /*corrId=*/11);
   sim.step(5);  // ramp a bit -- appliedDuty() is genuinely nonzero once frozen
   (void)sim.drainTelemetry();
 
@@ -207,7 +212,12 @@ void scenarioEncoderDropoutStaysSaneUnderModerateLoss() {
   sim.step(3);  // settle
   (void)sim.drainTelemetry();
 
-  sim.injectTwist(/*v_x=*/1000.0f, /*omega=*/0.0f, /*duration=*/100000.0f, /*corrId=*/22);
+  // 116-006 (MOVE protocol cutover): bare TWIST/injectTwist() is gone --
+  // a TIME-stop MOVE with a stop value/timeout far longer than this run
+  // is the equivalent "hold this twist indefinitely" injection.
+  sim.injectMove(/*v_x=*/1000.0f, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime,
+                 /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/22,
+                 /*corrId=*/22);
   sim.step(15);  // ramp to steady state BEFORE dropout starts -- matches sim_api_harness.cpp's
                  // own scenarioTwistDrivesRealPlantRamp() timing (>=300mm/s within 15 cycles)
   (void)sim.drainTelemetry();

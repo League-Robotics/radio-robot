@@ -9,7 +9,8 @@ import "telemetry.proto";
 // Binary command-plane envelope -- PRUNED to the P4 wire surface (103-001,
 // SUC-001, architecture-update.md (103) Decision 2/3). The single-loop
 // firmware is a velocity/yaw follower, not a planner: `CommandEnvelope`
-// carries exactly THREE command arms -- `twist`/`config`/`stop` -- every
+// carries exactly THREE command arms -- `move`/`config`/`stop` (`twist`
+// deleted 116-001, see its own now-removed doc comment below) -- every
 // command still carries `corr_id`, but the per-command REPLY path is gone
 // (Decision 2's "telemetry-only return path"): a command's outcome is
 // reported via the single ack slot (`Telemetry.ack_corr`/`ack_err`, valid
@@ -34,8 +35,9 @@ import "telemetry.proto";
 // existing "reserved, not reused" wire-stability discipline (already used
 // for `motion`'s field 5, below) applies to every arm this ticket removes
 // too. `config`/`stop` are KEPT (not removed) and keep their pre-102 field
-// numbers (6/13) unchanged -- only genuinely NEW arms (`twist`) get a fresh,
-// previously-unused field number (19).
+// numbers (6/13) unchanged -- only genuinely NEW arms get a fresh,
+// previously-unused field number (`twist` got 19 at 103-001, since deleted
+// 116-001; `move` gets 21 at 116-001, see its own doc comment below).
 // ---------------------------------------------------------------------------
 
 // Binary reply/error taxonomy -- unchanged shape from the pre-102 schema;
@@ -51,7 +53,7 @@ enum ErrCode {
   ERR_DECODE         = 5;  // malformed wire bytes (protobuf decode failure)
   ERR_UNIMPLEMENTED  = 6;  // declared-only arm, no live consumer this sprint
   ERR_OVERSIZE       = 7;  // encoded reply would exceed the envelope cap
-  ERR_NOT_CONFIGURED = 8;  // composition root refused MOVE/TWIST -- config-completeness gate not yet satisfied (114-001)
+  ERR_NOT_CONFIGURED = 8;  // composition root refused MOVE -- config-completeness gate not yet satisfied (114-001)
 }
 
 // Flow-control ack -- unchanged shape (q/rem/t) from the pre-102 schema.
@@ -80,16 +82,14 @@ message Error {
   uint32  field = 2;
 }
 
-// Twist -- the P4 command shape's ONLY motion command (NEW this ticket).
-// Replaces drive/segment/replace/pose_fix/otos entirely: the host computes
-// the whole trajectory and streams twist setpoints; the robot only servos
-// to them (`Drive::setTwist`, source/app/drive.*, ticket 006) and arms the
-// unified `Deadman` (ticket 004) for `duration`.
-message Twist {
-  float v_x      = 1;  // [mm/s] body-frame forward velocity
-  float omega    = 2;  // [rad/s] body-frame yaw rate
-  float duration = 3;  // [ms] deadman arm window
-}
+// Twist -- DELETED (116-001, MOVE protocol cutover). Its bare v_x/omega +
+// deadman-arming `duration` shape is superseded by `Move` (below, fresh arm
+// 21): a single bounded motion command whose own stop condition (time/
+// distance/angle) or required `timeout` backstop makes it self-bounding,
+// removing the need for a separate `App::Deadman` watchdog entirely
+// (`app/deadman.*` is deleted this sprint too -- see
+// `protocol-set-point-the-minimal-firmware-s-complete-command-surface.md`).
+// Field 19 is reserved below, not reused.
 
 // Zero-field oneof arm (same "cannot be malformed" shape the pre-102 schema's
 // Stop already used) -- a panic-stop must have zero ways to be malformed.
@@ -106,17 +106,66 @@ message Stop {}
 // timeout + replace + id) at a FRESH arm number (21), never at 20 -- see
 // that spec and `gut-to-minimal-firmware-...md`'s S2 section.
 
+// MoveTwist -- one of Move's two velocity variants (116-001). Body-frame
+// twist setpoint the active Move stages through `Drive::setTwist()`.
+message MoveTwist {
+  float v_x   = 1;  // [mm/s] body forward
+  float v_y   = 2;  // [mm/s] accepted-and-ignored on differential (wire-forward)
+  float omega = 3;  // [rad/s]
+}
+
+// MoveWheels -- Move's other velocity variant (116-001). Per-wheel speed
+// setpoint the active Move stages through `Drive::setWheels()` -- a second,
+// independent staging path alongside `setTwist()`, never translated through
+// a twist round trip (sprint 116's architecture-update.md Decision 3).
+message MoveWheels {
+  float v_left  = 1;  // [mm/s]
+  float v_right = 2;  // [mm/s]
+}
+
+// Move -- the sole motion command (116-001, MOVE protocol cutover; NOT the
+// same shape as the deleted arc-command `Move` documented above -- a fresh
+// arm number, see CommandEnvelope's own comment). One bounded motion: a
+// velocity variant (twist or wheels) plus a stop condition (time/distance/
+// angle, ticked on-chip by `Motion::StopCondition` against odometry
+// baselined at activation) plus a required `timeout` safety backstop,
+// queued against `App::MoveQueue` (1 active + 4 pending). Every Move is
+// self-bounding by construction -- host silence always ends in stopped
+// motors once the active Move's stop condition or timeout fires, which is
+// what lets this sprint delete `App::Deadman` outright rather than run a
+// second, independent watchdog alongside the queue. See
+// `protocol-set-point-the-minimal-firmware-s-complete-command-surface.md`
+// for the full contract (queue semantics, ack policy, error taxonomy).
+message Move {
+  oneof velocity {              // the two velocity variations
+    MoveTwist  twist  = 1;
+    MoveWheels wheels = 2;
+  }
+  oneof stop {                  // every motion has a stop condition
+    float time     = 3;  // [ms] elapsed since activation
+    float distance = 4;  // [mm] |path arc length| since activation (encoder odometry)
+    float angle    = 5;  // [rad] |heading change| since activation (encoder odometry)
+  }
+  float  timeout = 6;  // [ms] REQUIRED safety backstop; <=0 -> ERR_BADARG.
+                        // Fires when a distance/angle condition can't be reached
+                        // (stalled wheels); stops motors + sets the timeout fault flag.
+  bool   replace = 7;  // true: flush pending + preempt active, this MOVE starts now.
+                        // false: enqueue behind the active command (ERR_FULL if 4 pending).
+  uint32 id      = 8;  // echoed in this command's COMPLETION ack (enqueue ack echoes corr_id)
+}
+
 // ConfigDelta -- unchanged from the pre-102 schema (096-001) except for the
-// `otos` arm (109-004): still references config.proto's curated Patch types
-// plus the watchdog window escape hatch. Runtime application of a decoded
-// `ConfigDelta` is a ticket-008-time decision (architecture-update.md (103)
-// Step 7 Open Question 3, not pre-decided by this ticket) -- the schema
-// exists so `Comms`/`main.cpp`'s dispatch switch can decode it now, whether
-// or not it is wired to `bb`-equivalent state this sprint. `otos` (field 5,
-// a fresh never-before-used number, same convention CommandEnvelope's own
-// `twist`/`move` additions follow) is the one exception: `RobotLoop::
-// handleConfig` DOES apply it live, the same way `motor` already is (see
-// that method's own comment) -- restoring the runtime OTOS-calibration path
+// `otos` arm (109-004): still references config.proto's curated Patch
+// types. Runtime application of a decoded `ConfigDelta` is a ticket-008-time
+// decision (architecture-update.md (103) Step 7 Open Question 3, not
+// pre-decided by this ticket) -- the schema exists so `Comms`/`main.cpp`'s
+// dispatch switch can decode it now, whether or not it is wired to
+// `bb`-equivalent state this sprint. `otos` (field 5, a fresh
+// never-before-used number, same convention CommandEnvelope's own new arms
+// follow -- `twist` at 103-001, since deleted 116-001; `move` at 116-001)
+// is the one exception: `RobotLoop::handleConfig` DOES apply it live, the
+// same way `motor` already is (see that method's own comment) -- restoring
+// the runtime OTOS-calibration path
 // `clasi/sprints/109-.../issues/otos-calibration-config-message.md`
 // describes.
 //
@@ -125,12 +174,20 @@ message Stop {}
 // wholesale alongside planner.proto -- nothing in the S1 minimal firmware
 // persists or live-patches planner config. Field 3 is reserved below, not
 // reused.
+//
+// `watchdog` (field 4, uint32 sTimeout -- the pre-116 StreamingDriveWatchdog
+// window) DELETED (116-001, MOVE protocol cutover): every `Move` is now
+// self-bounding (its own stop condition or required `timeout`), so the
+// separate deadman/watchdog window this arm patched is gone along with
+// `App::Deadman` itself -- there is nothing left for it to configure. Field
+// 4 is reserved below, not reused. `ConfigTarget.CONFIG_WATCHDOG`
+// (config.proto) stays declared, unused -- same precedent `CONFIG_PLANNER`
+// already set after 115.
 message ConfigDelta {
-  reserved 3;
+  reserved 3, 4;
   oneof patch {
     DrivetrainConfigPatch drivetrain = 1;
     MotorConfigPatch      motor      = 2;
-    uint32                watchdog   = 4;  // [ms] sTimeout -- StreamingDriveWatchdog window
     OtosConfigPatch       otos       = 5;
   }
 }
@@ -148,18 +205,22 @@ message CommandEnvelope {
   //
   // move(20) added to this list by 115-003 (gut S1 motion-stack excision):
   // the sprint-109 Move message this arm carried is deleted (see its own
-  // now-removed doc comment above); S2's MOVE-protocol cutover reintroduces
-  // a `Move`-named arm at a FRESH number (21), never 20.
-  reserved 2, 3, 4, 5, 7 to 12, 14 to 18, 20;
+  // now-removed doc comment above); 116-001's MOVE-protocol cutover
+  // reintroduces a `Move`-named arm at a FRESH number (21), never 20.
+  //
+  // twist(19) added to this list by 116-001 (MOVE protocol cutover): the
+  // 103-era bare-twist-plus-deadman shape it carried (see its own
+  // now-removed doc comment above) is superseded by `move` (21) below.
+  reserved 2, 3, 4, 5, 7 to 12, 14 to 18, 19, 20;
   uint32 corr_id = 1;
   oneof cmd {
     // config/stop keep their pre-102 field numbers (6/13) -- they are KEPT
-    // arms, not new ones. twist is genuinely new -- assigned a fresh,
-    // never-before-used field number (19), never one of the reserved
-    // numbers above.
+    // arms, not new ones. move is genuinely new -- assigned a fresh,
+    // never-before-used field number (21, never 20 -- see the reserved
+    // list's own comment above), never one of the reserved numbers above.
     ConfigDelta config = 6;
     Stop        stop   = 13;
-    Twist       twist  = 19;
+    Move        move   = 21;
   }
 }
 

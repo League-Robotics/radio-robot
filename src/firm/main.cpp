@@ -7,8 +7,8 @@
 #include "MicroBit.h"
 
 #include "app/comms.h"
-#include "app/deadman.h"
 #include "app/drive.h"
+#include "app/move_queue.h"
 #include "app/odometry.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
@@ -136,9 +136,12 @@ int main() {
   static App::RadioTransport radioLink(radio);
   static App::Comms comms(serialLink, radioLink, banner);
   static App::Telemetry tlm(comms, serialLink, radioLink);
-  static App::Deadman deadman(clock);
   static App::Drive drive(motorL, motorR, drivetrainConfig.trackwidth);
   static App::Odometry odom(motorL, motorR, drivetrainConfig.trackwidth);
+  // 116 (protocol-set-point issue): App::MoveQueue replaces App::Deadman --
+  // constructed after drive/odom (it holds references to both, see
+  // move_queue.h's own boundary comment: "no new dependency direction").
+  static App::MoveQueue moveQueue(drive, odom, clock);
   static App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   // 114-004 (SUC-003): the real ARM-only MicroBitStorage-backed persistence
@@ -152,7 +155,7 @@ int main() {
   // reference plus the Clock/Sleeper time seam, and (114-004) the
   // persisted-tuning store. run() never returns.
   static App::RobotLoop robotLoop(bus, motorL, motorR, otos, color, line,
-                                   comms, tlm, drive, odom, deadman, preamble,
+                                   comms, tlm, drive, odom, moveQueue, preamble,
                                    clock, sleeper, &tuningStore);
   // Configuration-completeness gate (114-001): the boot-configure sequence
   // above (every Config::default*() call) is atomic and always complete by

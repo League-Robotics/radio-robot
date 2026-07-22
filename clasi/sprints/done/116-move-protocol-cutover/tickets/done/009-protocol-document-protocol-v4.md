@@ -1,9 +1,12 @@
 ---
 id: 009
 title: Protocol document (protocol-v4)
-status: open
-use-cases: [SUC-050]
-depends-on: ['006', '007']
+status: done
+use-cases:
+- SUC-050
+depends-on:
+- '006'
+- '007'
 github-issue: ''
 issue:
 - gut-to-minimal-firmware-motion-stack-excision-move-protocol-minimal-telemetry.md
@@ -41,18 +44,18 @@ otherwise there's no "as shipped" contract yet to document.
 
 ## Acceptance Criteria
 
-- [ ] `docs/protocol-v4.md` written: transport/framing (unchanged from
+- [x] `docs/protocol-v4.md` written: transport/framing (unchanged from
       v2/v3 — line-based, `*B`-armored binary plane, two-verb text plane),
       full command table (`HELLO`/`PING`/`config`/`stop`/`move`), the
       `Move` message shape, response semantics (single ack slot,
       completion ack, fault flag), and the complete `ErrCode` taxonomy.
-- [ ] Every documented behavior is verified against the actually-shipped
+- [x] Every documented behavior is verified against the actually-shipped
       code (tickets 001-007), not just restated from the protocol
       set-point issue's proposal — in particular, wherever an Open
       Question from sprint.md's Architecture section required a runtime
       decision (zero-threshold handling, flushed-pending-Move ack
       policy), the doc states the decision that was actually implemented.
-- [ ] `docs/protocol-v2.md` and `docs/protocol-v3.md` each gain a
+- [x] `docs/protocol-v2.md` and `docs/protocol-v3.md` each gain a
       superseded banner pointing at `protocol-v4.md`; neither file is
       deleted.
 

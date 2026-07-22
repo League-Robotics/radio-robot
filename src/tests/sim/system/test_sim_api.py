@@ -52,10 +52,15 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "robot_loop.cpp",
     _SOURCE_DIR / "app" / "comms.cpp",
     _SOURCE_DIR / "app" / "telemetry.cpp",
-    _SOURCE_DIR / "app" / "deadman.cpp",
+    # 116-006 (MOVE protocol cutover): App::MoveQueue replaces the deleted
+    # App::Deadman.
+    _SOURCE_DIR / "app" / "move_queue.cpp",
     _SOURCE_DIR / "app" / "drive.cpp",
     _SOURCE_DIR / "app" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
+]
+_MOTION_SOURCES = [
+    _SOURCE_DIR / "motion" / "stop_condition.cpp",
 ]
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
@@ -98,6 +103,7 @@ def _all_sources():
         [_HARNESS_SRC, _SIM_PLANT_SRC, _WIRE_TEST_CODEC_SRC, _BENCH_TEST_CONFIG_SRC,
          _WHEEL_PLANT_SRC, _OTOS_PLANT_SRC]
         + _APP_SOURCES
+        + _MOTION_SOURCES
         + _DEVICE_SOURCES
         + _CONFIG_SOURCES
         + _MESSAGE_SOURCES

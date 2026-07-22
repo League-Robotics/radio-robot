@@ -255,7 +255,12 @@ int main() {
   beginScenario("twist: injected command drives the REAL plant's velocity ramp");
   std::printf("  TWIST commanded: v_x=%.1f mm/s omega=%.1f rad/s (corrId=%u)\n", static_cast<double>(kCmdVx),
               static_cast<double>(kCmdOmega), kTwistCorrId);
-  sim.injectTwist(kCmdVx, kCmdOmega, /*duration=*/100000.0f, kTwistCorrId);
+  // 116-006 (MOVE protocol cutover): bare TWIST/injectTwist() is gone --
+  // a TIME-stop MOVE with a stop value/timeout far longer than this run
+  // is the equivalent "hold this twist indefinitely" injection.
+  sim.injectMove(kCmdVx, /*v_y=*/0.0f, kCmdOmega, TestSupport::MoveStopKind::kTime,
+                 /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/kTwistCorrId,
+                 kTwistCorrId);
 
   printTraceHeader();
   bool twistAcked = false;

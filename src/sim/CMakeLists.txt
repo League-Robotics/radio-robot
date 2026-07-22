@@ -34,9 +34,14 @@ set(PLANT_DIR "${REPO_ROOT}/src/tests/sim/plant")
 # surfaces as a link error (an unresolved symbol), not a silent omission.
 #
 # Present:
-#   app/*.cpp                 -- Comms/Deadman/Drive/Odometry/Preamble/
+#   app/*.cpp                 -- Comms/Drive/MoveQueue/Odometry/Preamble/
 #                                 RobotLoop/Telemetry (the single-loop
-#                                 rebuild's whole App:: graph)
+#                                 rebuild's whole App:: graph; 116-006:
+#                                 App::MoveQueue replaces the deleted
+#                                 App::Deadman)
+#   motion/stop_condition.cpp -- Motion::StopCondition (116-002), the
+#                                 per-Move stop-condition object MoveQueue
+#                                 owns and drives
 #   devices/velocity_pid.cpp, devices/nezha_motor.cpp, devices/otos.cpp,
 #   devices/color_sensor.cpp, devices/line_sensor.cpp
 #                              -- the device leaves SimPlant answers wire
@@ -77,12 +82,18 @@ set(PLANT_DIR "${REPO_ROOT}/src/tests/sim/plant")
 # ---------------------------------------------------------------------------
 set(APP_SOURCES
     "${SOURCE_DIR}/app/comms.cpp"
-    "${SOURCE_DIR}/app/deadman.cpp"
     "${SOURCE_DIR}/app/drive.cpp"
+    "${SOURCE_DIR}/app/move_queue.cpp"
     "${SOURCE_DIR}/app/odometry.cpp"
     "${SOURCE_DIR}/app/preamble.cpp"
     "${SOURCE_DIR}/app/robot_loop.cpp"
     "${SOURCE_DIR}/app/telemetry.cpp"
+)
+# motion/stop_condition.cpp (116-002) -- App::MoveQueue (APP_SOURCES, above)
+# owns and drives one Motion::StopCondition per active Move; this TU must
+# link into the host lib too.
+set(MOTION_SOURCES
+    "${SOURCE_DIR}/motion/stop_condition.cpp"
 )
 set(DEVICE_SOURCES
     "${SOURCE_DIR}/devices/velocity_pid.cpp"
@@ -122,6 +133,7 @@ set(SIM_SOURCES
 
 add_library(firmware_host SHARED
     ${APP_SOURCES}
+    ${MOTION_SOURCES}
     ${DEVICE_SOURCES}
     ${CONFIG_SOURCES}
     ${MESSAGE_SOURCES}

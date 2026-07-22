@@ -151,7 +151,12 @@ int main() {
   sim.step(3);  // settle: both leaves' own one-time zero-duty activation writes land
 
   beginScenario("straight twist: v_x=150mm/s, omega=0, held for a tour-leg-scale run");
-  sim.injectTwist(kCruiseVx, kOmega, /*duration=*/100000.0f, /*corrId=*/1);
+  // 116-006 (MOVE protocol cutover): bare TWIST/injectTwist() is gone --
+  // a TIME-stop MOVE with a stop value/timeout far longer than this run
+  // is the equivalent "hold this twist indefinitely" injection.
+  sim.injectMove(kCruiseVx, /*v_y=*/0.0f, kOmega, TestSupport::MoveStopKind::kTime,
+                 /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/1,
+                 /*corrId=*/1);
 
   float maxAbsHeadingDeg = 0.0f;
   bool everFrozenOrDiverged = false;

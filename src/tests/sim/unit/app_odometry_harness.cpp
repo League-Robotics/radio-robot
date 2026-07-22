@@ -259,6 +259,132 @@ void scenarioBaselineSeededFromLeafPositionAtConstruction() {
 }
 
 // ===========================================================================
+// 3b. 116-003: pathLength() accumulates fabsf(distance) across every
+//     integrate() call -- straight-line travel accumulates approximately the
+//     true distance traveled; an in-place turn (zero net forward travel)
+//     contributes approximately 0; reverse travel over the same ground still
+//     accumulates positively (uses |distance|, so forward-then-reverse ADDS,
+//     it doesn't cancel back toward 0 the way x()/y()/theta() would); and
+//     reset() does NOT zero pathLength() (the chosen reset() interaction --
+//     see odometry.h's pathLength() doc comment for the rationale).
+// ===========================================================================
+
+void scenarioPathLengthAccumulatesStraightLineTravel() {
+  beginScenario("Odometry::pathLength(): straight-line travel accumulates approximately the true distance");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+
+  const float trackWidth = 200.0f;  // [mm]
+  App::Odometry odom(left, right, trackWidth);
+
+  checkNear(odom.pathLength(), 0.0f, 1e-6f, "pathLength() starts at 0 before any integrate() call");
+
+  // Both wheels advance the same 50mm, in two integrate() calls of 25mm
+  // each, to also prove accumulation ACROSS calls (not just within one).
+  // The second call's timestamp is spaced far enough past the first
+  // (40000us, well under kMaxPlausibleStepSpeed's 1200mm/s implied-speed
+  // gate for a 25mm step -- nezha_motor.cpp) that it registers as a fresh
+  // sample rather than being rejected as an implausible glitch.
+  driveToPosition(left, bus, wireAddr, 25.0f, 20000);
+  driveToPosition(right, bus, wireAddr, 25.0f, 20000);
+  odom.integrate();
+  driveToPosition(left, bus, wireAddr, 50.0f, 60000);
+  driveToPosition(right, bus, wireAddr, 50.0f, 60000);
+  odom.integrate();
+
+  checkNear(odom.pathLength(), 50.0f, 1e-3f, "pathLength() accumulates the true straight-line distance across two integrate() calls");
+}
+
+void scenarioPathLengthInPlaceTurnContributesApproximatelyZero() {
+  beginScenario("Odometry::pathLength(): an in-place turn (zero net forward travel) contributes approximately 0");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+
+  const float trackWidth = 200.0f;  // [mm]
+  App::Odometry odom(left, right, trackWidth);
+
+  // Left goes -d, right goes +d -- vL == -vR analog, same as the
+  // pure-rotation scenario above: forward()'s distance output is exactly 0
+  // for equal-and-opposite deltas, so pathLength_ accumulates fabsf(0) == 0.
+  const float d = 31.4f;  // [mm]
+  driveToPosition(left, bus, wireAddr, -d, 20000);
+  driveToPosition(right, bus, wireAddr, d, 20000);
+  odom.integrate();
+
+  checkNear(odom.pathLength(), 0.0f, 1e-3f, "an in-place turn contributes ~0 to pathLength() -- zero net forward travel");
+}
+
+void scenarioPathLengthReverseTravelAccumulatesNotCancels() {
+  beginScenario("Odometry::pathLength(): forward then reverse over the same ground ADDS, doesn't cancel");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+
+  const float trackWidth = 200.0f;  // [mm]
+  App::Odometry odom(left, right, trackWidth);
+
+  // Forward 40mm, then back to 0 -- net displacement is 0 (x() returns to
+  // ~0), but pathLength() must read ~80mm (40 out + 40 back), not ~0. The
+  // second call's timestamp is spaced far enough past the first (60000us)
+  // to clear kMaxPlausibleStepSpeed's implied-speed gate for a 40mm step
+  // (nezha_motor.cpp) -- see the straight-line scenario's comment above.
+  driveToPosition(left, bus, wireAddr, 40.0f, 20000);
+  driveToPosition(right, bus, wireAddr, 40.0f, 20000);
+  odom.integrate();
+  driveToPosition(left, bus, wireAddr, 0.0f, 60000);
+  driveToPosition(right, bus, wireAddr, 0.0f, 60000);
+  odom.integrate();
+
+  checkNear(odom.x(), 0.0f, 1e-3f, "sanity: net x() returns to ~0 after forward-then-reverse over the same ground");
+  checkNear(odom.pathLength(), 80.0f, 1e-3f, "pathLength() accumulates |distance| -- forward+reverse ADDS to ~80mm, doesn't cancel to 0");
+}
+
+void scenarioPathLengthNotZeroedByReset() {
+  beginScenario("Odometry::pathLength(): reset() does NOT zero pathLength() -- the chosen reset() interaction");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+
+  const float trackWidth = 200.0f;  // [mm]
+  App::Odometry odom(left, right, trackWidth);
+
+  driveToPosition(left, bus, wireAddr, 60.0f, 20000);
+  driveToPosition(right, bus, wireAddr, 60.0f, 20000);
+  odom.integrate();
+  checkNear(odom.pathLength(), 60.0f, 1e-3f, "setup: pathLength() accumulated 60mm before reset()");
+
+  odom.reset(0.0f, 0.0f, 0.0f);
+
+  checkNear(odom.x(), 0.0f, 1e-6f, "sanity: reset() snaps x() to the given pose");
+  checkNear(odom.pathLength(), 60.0f, 1e-3f, "reset() leaves pathLength() untouched -- it is NOT zeroed by reset()");
+
+  // reset() also re-anchors the delta baseline -- confirm pathLength() keeps
+  // accumulating correctly (no phantom jump) for motion AFTER the reset().
+  driveToPosition(left, bus, wireAddr, 90.0f, 60000);
+  driveToPosition(right, bus, wireAddr, 90.0f, 60000);
+  odom.integrate();
+  checkNear(odom.pathLength(), 90.0f, 1e-3f, "pathLength() continues accumulating correctly after reset() re-anchors the delta baseline");
+}
+
+// ===========================================================================
 // 4. applyOtosSample(): a present+connected chip copies its pose into the
 //    frame; a burst-read failure holds the stale pose but reports
 //    disconnected; a never-detected chip leaves the frame's otos field
@@ -398,6 +524,10 @@ int main() {
   scenarioStraightLineAccumulatesDistanceNoHeadingChange();
   scenarioPureRotationAccumulatesHeadingNoTranslation();
   scenarioBaselineSeededFromLeafPositionAtConstruction();
+  scenarioPathLengthAccumulatesStraightLineTravel();
+  scenarioPathLengthInPlaceTurnContributesApproximatelyZero();
+  scenarioPathLengthReverseTravelAccumulatesNotCancels();
+  scenarioPathLengthNotZeroedByReset();
   scenarioApplyOtosSamplePresentAndConnectedCopiesPose();
   scenarioApplyOtosSampleBurstFailureHoldsStalePoseReportsDisconnected();
   scenarioApplyOtosSampleNeverDetectedLeavesFrameUntouched();

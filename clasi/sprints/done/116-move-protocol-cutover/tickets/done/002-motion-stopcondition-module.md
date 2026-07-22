@@ -1,9 +1,14 @@
 ---
 id: '002'
 title: Motion::StopCondition module
-status: open
-use-cases: [SUC-050, SUC-051, SUC-052, SUC-054]
-depends-on: ['001']
+status: done
+use-cases:
+- SUC-050
+- SUC-051
+- SUC-052
+- SUC-054
+depends-on:
+- '001'
 github-issue: ''
 issue: protocol-set-point-the-minimal-firmware-s-complete-command-surface.md
 completes_issue: true
@@ -39,26 +44,26 @@ itself happens in ticket 006's `handleMove()`.
 
 ## Acceptance Criteria
 
-- [ ] `Motion::StopCondition` constructed with a kind, threshold, and
+- [x] `Motion::StopCondition` constructed with a kind, threshold, and
       `timeout`; captures activation baselines (now, `pathLength()`,
       `theta()`) at construction/activation.
-- [ ] `tick(now, pathLength, theta)` reports the kind-specific
+- [x] `tick(now, pathLength, theta)` reports the kind-specific
       stop-condition-met outcome and the timeout-met outcome as two
       distinguishable results (the caller needs to tell them apart to set
       `kFlagFaultMoveTimeout` correctly) — not a single collapsed bool.
-- [ ] TIME kind fires at/after the commanded elapsed time.
-- [ ] DISTANCE kind fires when `|pathLength() - baseline| >= threshold`.
-- [ ] ANGLE kind fires when `|theta() - baseline| >= threshold`, no modulo/
+- [x] TIME kind fires at/after the commanded elapsed time.
+- [x] DISTANCE kind fires when `|pathLength() - baseline| >= threshold`.
+- [x] ANGLE kind fires when `|theta() - baseline| >= threshold`, no modulo/
       wrap applied.
-- [ ] TIMEOUT fires independent of kind whenever elapsed time reaches
+- [x] TIMEOUT fires independent of kind whenever elapsed time reaches
       `timeout`, whether or not the kind-specific condition has also fired
       that same cycle (kind-specific takes precedence if both are true the
       same cycle — document and test the tie-break explicitly).
-- [ ] Zero/negative stop-value threshold behavior is decided and tested
+- [x] Zero/negative stop-value threshold behavior is decided and tested
       (Open Question 1) — not left as untested, implicit behavior.
-- [ ] Module has zero dependency on `MoveQueue`, `Drive`, or `msg::*` wire
+- [x] Module has zero dependency on `MoveQueue`, `Drive`, or `msg::*` wire
       types — constructible and testable with hand-fed numbers alone.
-- [ ] `src/firm/motion/DESIGN.md` written, matching the boundary
+- [x] `src/firm/motion/DESIGN.md` written, matching the boundary
       description above.
 
 ## Testing

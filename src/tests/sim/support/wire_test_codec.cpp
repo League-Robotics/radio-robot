@@ -317,7 +317,7 @@ bool decodeTelemetrySecondaryMessage(const uint8_t* buf, size_t len, msg::Teleme
   return true;
 }
 
-// --- Encode helpers (CommandEnvelope{TWIST|STOP}, host -> firmware) -------
+// --- Encode helpers (CommandEnvelope{MOVE|STOP}, host -> firmware) --------
 
 bool encodeVarintField(uint32_t fieldNumber, uint32_t value, uint8_t* buf, size_t cap, size_t* pos) {
   if (value == 0) return true;  // proto3 implicit presence -- matches encodeInto()'s own convention
@@ -331,25 +331,32 @@ bool encodeFloatField(uint32_t fieldNumber, float value, uint8_t* buf, size_t ca
   return WireRuntime::encodeFloat(value, buf, cap, pos);
 }
 
-// Encodes {v_x, omega, duration} into `scratch`, wraps it as CommandEnvelope
-// field 19 (twist, length-delimited oneof arm -- kFields_CommandEnvelope),
-// then field 1 (corr_id) if nonzero.
-size_t encodeTwistEnvelope(float v_x, float omega, float duration, uint32_t corrId, uint8_t* buf, size_t cap) {
-  size_t pos = 0;
-  if (!encodeVarintField(1, corrId, buf, cap, &pos)) return 0;
+// Encodes a real-oneof SCALAR arm unconditionally -- mirrors wire.cpp's own
+// generated kOneofScalar encode rule (encodeInto()'s FieldKind::kOneofScalar
+// case): a oneof arm's presence is decided by the caller SELECTING it, never
+// by implicit-presence value-skipping, so this writes the tag+value even
+// when `value == 0.0f` (unlike encodeFloatField() above, which is only
+// correct for a PLAIN scalar field). Used for Move's `stop` oneof
+// (time=3/distance=4/angle=5).
+bool encodeOneofFloatField(uint32_t fieldNumber, float value, uint8_t* buf, size_t cap, size_t* pos) {
+  if (!WireRuntime::encodeTag(fieldNumber, WireType::kFixed32, buf, cap, pos)) return false;
+  return WireRuntime::encodeFloat(value, buf, cap, pos);
+}
 
-  uint8_t scratch[32];
-  size_t scratchPos = 0;
-  if (!encodeFloatField(1, v_x, scratch, sizeof(scratch), &scratchPos)) return 0;
-  if (!encodeFloatField(2, omega, scratch, sizeof(scratch), &scratchPos)) return 0;
-  if (!encodeFloatField(3, duration, scratch, sizeof(scratch), &scratchPos)) return 0;
-
-  if (!WireRuntime::encodeTag(19, WireType::kLengthDelimited, buf, cap, &pos)) return 0;
-  if (!WireRuntime::encodeVarint(scratchPos, buf, cap, &pos)) return 0;
-  if (cap - pos < scratchPos) return 0;
-  std::memcpy(buf + pos, scratch, scratchPos);
-  pos += scratchPos;
-  return pos;
+// Encodes a length-delimited field's already-encoded `payload` bytes behind
+// its own tag -- used to wrap Move's `velocity` oneof arm (a NESTED MESSAGE
+// oneof arm, MoveTwist=1/MoveWheels=2), which per encodeNestedMessage()'s own
+// convention is wrapped unconditionally once the caller selects a variant
+// (even if every payload float happens to be 0.0 and its own encode left
+// `payload` empty).
+bool encodeNestedField(uint32_t fieldNumber, const uint8_t* payload, size_t payloadLen,
+                        uint8_t* buf, size_t cap, size_t* pos) {
+  if (!WireRuntime::encodeTag(fieldNumber, WireType::kLengthDelimited, buf, cap, pos)) return false;
+  if (!WireRuntime::encodeVarint(payloadLen, buf, cap, pos)) return false;
+  if (cap - *pos < payloadLen) return false;
+  std::memcpy(buf + *pos, payload, payloadLen);
+  *pos += payloadLen;
+  return true;
 }
 
 // Encodes CommandEnvelope field 13 (stop, length-delimited oneof arm, empty
@@ -362,11 +369,47 @@ size_t encodeStopEnvelope(uint32_t corrId, uint8_t* buf, size_t cap) {
   return pos;
 }
 
-// 115-006 (gut S1): encodeBoolField()/encodeMoveEnvelope() DELETED --
-// envelope.proto's Move message and CommandEnvelope's move(20) arm were
-// deleted by 115-003 (the arc-command primitive queued into the now-deleted
-// Motion::Executor); field 20 is reserved on the wire, not reused.
-// encodeBoolField() had no other caller, so it goes with it.
+// Encodes Move's own body (velocity oneof arm already wrapped by the
+// caller as `velocityFieldNumber`/`velocityPayload`, the `stop` oneof arm
+// selected by `stopKind`/`stopValue`, then the three plain fields
+// timeout=6/replace=7/id=8) into `scratch`, wraps it as CommandEnvelope
+// field 21 (move, length-delimited oneof arm -- kFields_CommandEnvelope),
+// then field 1 (corr_id) if nonzero. Shared by both armorMoveCommand()
+// overloads below -- the only difference between a MoveTwist and a
+// MoveWheels command is which velocity payload/field number the caller
+// already built.
+size_t encodeMoveEnvelope(uint32_t velocityFieldNumber, const uint8_t* velocityPayload, size_t velocityPayloadLen,
+                           MoveStopKind stopKind, float stopValue, float timeout, bool replace, uint32_t id,
+                           uint32_t corrId, uint8_t* buf, size_t cap) {
+  size_t pos = 0;
+  if (!encodeVarintField(1, corrId, buf, cap, &pos)) return 0;
+
+  uint8_t scratch[64];
+  size_t scratchPos = 0;
+  if (!encodeNestedField(velocityFieldNumber, velocityPayload, velocityPayloadLen, scratch, sizeof(scratch),
+                          &scratchPos)) {
+    return 0;
+  }
+
+  uint32_t stopFieldNumber = 0;
+  switch (stopKind) {
+    case MoveStopKind::kTime:     stopFieldNumber = 3; break;
+    case MoveStopKind::kDistance: stopFieldNumber = 4; break;
+    case MoveStopKind::kAngle:    stopFieldNumber = 5; break;
+  }
+  if (!encodeOneofFloatField(stopFieldNumber, stopValue, scratch, sizeof(scratch), &scratchPos)) return 0;
+
+  if (!encodeFloatField(6, timeout, scratch, sizeof(scratch), &scratchPos)) return 0;
+  if (!encodeVarintField(7, replace ? 1u : 0u, scratch, sizeof(scratch), &scratchPos)) return 0;
+  if (!encodeVarintField(8, id, scratch, sizeof(scratch), &scratchPos)) return 0;
+
+  if (!WireRuntime::encodeTag(21, WireType::kLengthDelimited, buf, cap, &pos)) return 0;
+  if (!WireRuntime::encodeVarint(scratchPos, buf, cap, &pos)) return 0;
+  if (cap - pos < scratchPos) return 0;
+  std::memcpy(buf + pos, scratch, scratchPos);
+  pos += scratchPos;
+  return pos;
+}
 
 std::string armor(const uint8_t* raw, size_t rawLen) {
   char b64[512] = {};
@@ -413,9 +456,31 @@ DecodedLine decodeOutboundLine(const std::string& line) {
   return result;  // kUnknown
 }
 
-std::string armorTwistCommand(float v_x, float omega, float duration, uint32_t corrId) {
+std::string armorMoveCommand(float v_x, float v_y, float omega, MoveStopKind stopKind, float stopValue,
+                              float timeout, bool replace, uint32_t id, uint32_t corrId) {
+  uint8_t velocityScratch[32];
+  size_t velocityLen = 0;
+  if (!encodeFloatField(1, v_x, velocityScratch, sizeof(velocityScratch), &velocityLen)) return std::string();
+  if (!encodeFloatField(2, v_y, velocityScratch, sizeof(velocityScratch), &velocityLen)) return std::string();
+  if (!encodeFloatField(3, omega, velocityScratch, sizeof(velocityScratch), &velocityLen)) return std::string();
+
   uint8_t rawBuf[128];
-  size_t n = encodeTwistEnvelope(v_x, omega, duration, corrId, rawBuf, sizeof(rawBuf));
+  size_t n = encodeMoveEnvelope(/* velocity field = twist */ 1, velocityScratch, velocityLen, stopKind, stopValue,
+                                 timeout, replace, id, corrId, rawBuf, sizeof(rawBuf));
+  if (n == 0) return std::string();
+  return armor(rawBuf, n);
+}
+
+std::string armorMoveCommand(float v_left, float v_right, MoveStopKind stopKind, float stopValue, float timeout,
+                              bool replace, uint32_t id, uint32_t corrId) {
+  uint8_t velocityScratch[32];
+  size_t velocityLen = 0;
+  if (!encodeFloatField(1, v_left, velocityScratch, sizeof(velocityScratch), &velocityLen)) return std::string();
+  if (!encodeFloatField(2, v_right, velocityScratch, sizeof(velocityScratch), &velocityLen)) return std::string();
+
+  uint8_t rawBuf[128];
+  size_t n = encodeMoveEnvelope(/* velocity field = wheels */ 2, velocityScratch, velocityLen, stopKind, stopValue,
+                                 timeout, replace, id, corrId, rawBuf, sizeof(rawBuf));
   if (n == 0) return std::string();
   return armor(rawBuf, n);
 }

@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
-"""twist_drive.py — bench verification of the P4 minimal host slice
-(103-009): `NezhaProtocol.twist()`/`stop()` + the ack-ring matcher
+"""twist_drive.py — bench verification of the P4 MOVE protocol (116-007):
+`NezhaProtocol.move_twist()`/`stop()` + the ack-ring matcher
 (`wait_for_ack()`), against the real single-loop firmware.
+
+116-007 (MOVE protocol cutover): ported from the deleted, interim
+`NezhaProtocol.twist()` (103-009) onto `move_twist()` — every motion is now
+a bounded `Move` (a velocity variant + a stop condition + a required
+`timeout` safety backstop), not a bare `v_x`/`omega`/`duration` twist that
+armed a separate deadman watchdog (`App::Deadman` no longer exists). This
+script keeps the same single-shot "drive for a while, then stop" shape by
+using a TIME stop condition (`stop_time=args.duration`) plus `replace=True`
+(preempt-and-start-now, matching the old `twist()` call's own "just drive
+this" semantics) and a separate `--timeout` backstop.
 
 Robot is mounted on a stand with the wheels off the ground (see
 `.claude/rules/hardware-bench-testing.md`), so it is safe to spin the wheels
@@ -10,13 +20,14 @@ freely.
 What this script proves, in order:
   1. `connect()` — the real serial/relay link comes up (HELLO/PING banner
      classification, still text-plane, unaffected by the P4 binary prune).
-  2. `twist()` sends a `CommandEnvelope{twist: Twist{v_x, omega, duration}}`
-     and gets its outcome confirmed via `wait_for_ack()` — the ack rides
-     the next `Telemetry` push's ack ring, NOT a synchronous per-command
-     reply (Decision 2's "telemetry-only return path"; see `protocol.py`'s
-     `NezhaProtocol.twist()`/`wait_for_ack()` docstrings for why).
-  3. Telemetry pushes show the encoders actually moving while the twist's
-     `duration` window is armed — the real point of a bench gate: not just
+  2. `move_twist()` sends a `CommandEnvelope{move: Move{twist: MoveTwist{
+     v_x, v_y, omega}, time: stop_time, timeout, replace}}` and gets its
+     ENQUEUE outcome confirmed via `wait_for_ack()` — the ack rides the
+     next `Telemetry` push's ack ring, NOT a synchronous per-command reply
+     (Decision 2's "telemetry-only return path"; see `protocol.py`'s
+     `NezhaProtocol.move_twist()`/`wait_for_ack()` docstrings for why).
+  3. Telemetry pushes show the encoders actually moving while the Move's
+     `stop_time` window runs — the real point of a bench gate: not just
      "the ack came back", but "the wheels actually turned".
   4. `stop()` halts the drivetrain and its own ack is confirmed the same
      way.
@@ -54,7 +65,10 @@ def _args() -> argparse.Namespace:
     p.add_argument("--omega", type=float, default=0.0,  # [rad/s]
                    help="body-frame yaw rate")
     p.add_argument("--duration", type=float, default=800.0,  # [ms]
-                   help="deadman arm window for the twist command")
+                   help="Move's time stop-condition window")
+    p.add_argument("--timeout", type=float, default=None,  # [ms]
+                   help="Move's required timeout backstop (default: "
+                        "--duration + 500ms margin)")
     p.add_argument("--watch", type=float, default=0.6,  # [s]
                    help="how long to watch telemetry for encoder movement "
                         "after the twist's ack lands")
@@ -78,6 +92,7 @@ class Result:
 def main() -> int:
     args = _args()
     result = Result()
+    timeout = args.timeout if args.timeout is not None else args.duration + 500.0  # [ms]
 
     conn = SerialConnection(port=args.port)   # mode=None -> auto-detect direct vs relay
     info = conn.connect()
@@ -104,12 +119,13 @@ def main() -> int:
                 if frame.enc is not None:
                     enc_before = frame.enc
 
-        # --- twist() -----------------------------------------------------
-        corr_id = proto.twist(v_x=args.v_x, omega=args.omega, duration=args.duration)
-        result.record("twist() returns a corr_id", corr_id != 0, f"corr_id={corr_id}")
+        # --- move_twist() --------------------------------------------------
+        corr_id = proto.move_twist(v_x=args.v_x, v_y=0.0, omega=args.omega,
+                                   stop_time=args.duration, timeout=timeout, replace=True)
+        result.record("move_twist() returns a corr_id", corr_id != 0, f"corr_id={corr_id}")
 
         ack = proto.wait_for_ack(corr_id, timeout=ACK_TIMEOUT)
-        result.record("twist() ack confirmed via ack ring", ack is not None and ack.ok,
+        result.record("move_twist() ack confirmed via ack ring", ack is not None and ack.ok,
                        f"ack={ack}")
 
         # --- watch telemetry for encoder movement -------------------------
@@ -123,7 +139,7 @@ def main() -> int:
                     if enc_before is not None and enc_after != enc_before:
                         moved = True
             time.sleep(0.02)
-        result.record("encoders moving during twist()", moved,
+        result.record("encoders moving during move_twist()", moved,
                        f"before={enc_before} after={enc_after}")
 
         # --- stop() --------------------------------------------------------

@@ -1,9 +1,20 @@
 ---
 id: '006'
 title: RobotLoop MOVE dispatch cutover
-status: open
-use-cases: [SUC-050, SUC-051, SUC-052, SUC-053, SUC-054, SUC-055]
-depends-on: ['001', '002', '003', '004', '005']
+status: done
+use-cases:
+- SUC-050
+- SUC-051
+- SUC-052
+- SUC-053
+- SUC-054
+- SUC-055
+depends-on:
+- '001'
+- '002'
+- '003'
+- '004'
+- '005'
 github-issue: ''
 issue:
 - protocol-set-point-the-minimal-firmware-s-complete-command-surface.md
@@ -44,37 +55,37 @@ constructor call — `Deadman&` param removed, `MoveQueue&` added) and
 
 ## Acceptance Criteria
 
-- [ ] `app/deadman.{h,cpp}` deleted; `app_deadman_harness.cpp` and
+- [x] `app/deadman.{h,cpp}` deleted; `app_deadman_harness.cpp` and
       `test_app_deadman.py` deleted; no `App::Deadman` symbol remains
       anywhere in `src/` outside `src/archive/` (SUC-053).
-- [ ] `RobotLoop`'s constructor signature: `Deadman&` parameter removed,
+- [x] `RobotLoop`'s constructor signature: `Deadman&` parameter removed,
       `MoveQueue&` parameter added.
-- [ ] `handleMove()` replaces `handleTwist()`: config-completeness gate
+- [x] `handleMove()` replaces `handleTwist()`: config-completeness gate
       first (unconfigured → `ERR_NOT_CONFIGURED`, unchanged position/
       semantics from `handleTwist()`); shape validation (missing velocity
       variant / missing stop variant / non-positive `timeout` →
       `ERR_BADARG`); delegates to `moveQueue_.enqueue()`.
-- [ ] `handleStop()` calls `moveQueue_.flush()` in addition to its
+- [x] `handleStop()` calls `moveQueue_.flush()` in addition to its
       existing `drive_.stop()`/ack behavior.
-- [ ] `cycle()`'s dispatch block calls `moveQueue_.tick(now, odom_)`
+- [x] `cycle()`'s dispatch block calls `moveQueue_.tick(now, odom_)`
       unconditionally, every cycle, at the schedule position the deleted
       `deadman_.expired()` branch occupied — verified by a test that
       sends zero commands after a `Move` ends and confirms motors reach
       and stay at zero with no further host traffic (SUC-053).
-- [ ] `kFlagFaultMoveTimeout` is set live on a timeout-ended `Move`'s
+- [x] `kFlagFaultMoveTimeout` is set live on a timeout-ended `Move`'s
       ending cycle (SUC-054).
-- [ ] `frame_.mode`/`driving_` derive from `moveQueue_.active()`.
-- [ ] `main.cpp` and `src/sim/sim_harness.h` both construct
+- [x] `frame_.mode`/`driving_` derive from `moveQueue_.active()`.
+- [x] `main.cpp` and `src/sim/sim_harness.h` both construct
       `App::MoveQueue` and pass it into `RobotLoop`'s constructor; neither
       constructs `App::Deadman` anymore.
-- [ ] `sim_harness.h` gains `injectMove()` (built on ticket 001's
+- [x] `sim_harness.h` gains `injectMove()` (built on ticket 001's
       `armorMoveCommand()`); `injectTwist()` is deleted.
-- [ ] `app_robot_loop` test sweep (`app_robot_loop_harness.cpp`/
+- [x] `app_robot_loop` test sweep (`app_robot_loop_harness.cpp`/
       `test_app_robot_loop.py`) updated: TWIST-dispatch tests replaced by
       MOVE-dispatch tests, plus a new explicit test for SUC-055 (a CONFIG
       patch applied mid-`Move` does not change the `Move`'s completion
       time/distance/angle outcome).
-- [ ] Repo-wide grep confirms no remaining `handleTwist`/`Deadman`/
+- [x] Repo-wide grep confirms no remaining `handleTwist`/`Deadman`/
       `deadman_` references outside `src/archive/`.
 
 ## Testing

@@ -42,17 +42,33 @@ class Drive {
   // sprint.md Decision 5 -- the legacy Twist wire message carries no v_y
   // yet, so every call site through S1 passes 0 here). Does not itself
   // reach into the leaves -- tick() is the only method that ever calls
-  // setVelocity().
+  // setVelocity(). Last-wins: makes the twist path the one tick() computes
+  // from, superseding whatever setWheels() staged before it.
   void setTwist(float v_x, float v_y, float omega);  // [mm/s] [mm/s] [rad/s]
 
-  // Stages a zero twist -- the next tick() call computes inverse(0, 0, ...)
-  // (both outputs exactly 0) and stages it onto both leaves.
+  // 116-004: a SECOND, independent staging path alongside setTwist() --
+  // stages v_left/v_right directly, bypassing BodyKinematics::inverse()
+  // entirely (see this file's own header comment for the rationale: a
+  // MoveWheels command tells the robot exactly what wheel speeds it wants,
+  // and a forward/inverse round trip buys nothing on today's differential
+  // base). Does not itself reach into the leaves -- tick() is the only
+  // method that ever calls setVelocity(). Last-wins: makes the wheels path
+  // the one tick() computes from, superseding whatever setTwist() staged
+  // before it.
+  void setWheels(float v_left, float v_right);  // [mm/s] [mm/s]
+
+  // Stages a zero target on BOTH staging paths -- the next tick() call
+  // stages exactly 0 onto both leaves regardless of which path (twist or
+  // wheels) was last active.
   void stop();
 
-  // Computes vL/vR via BodyKinematics::inverse(v_x, omega, trackWidth, vL,
-  // vR) from the last staged twist and stages them onto the two leaves via
-  // their own setVelocity() -- no additional scaling/sign logic here beyond
-  // what inverse() already computes, and no feedforward term. Bounded: one
+  // Computes the two leaves' targets from whichever of setTwist()/
+  // setWheels() was called most recently (last-wins) and stages them onto
+  // the two leaves via their own setVelocity(). The twist path computes vL/
+  // vR via BodyKinematics::inverse(v_x, omega, trackWidth, vL, vR) -- no
+  // additional scaling/sign logic beyond what inverse() already computes,
+  // and no feedforward term; the wheels path stages v_left/v_right
+  // unchanged, with no inverse() call at all. Bounded: at most one
   // inverse() call, two setVelocity() calls, no I2C traffic, no sleeps.
   void tick();
 
@@ -65,12 +81,24 @@ class Drive {
   float trackWidth() const { return trackWidth_; }  // [mm]
 
  private:
+  // Which staging path tick() computes from next -- last-wins between
+  // setTwist() and setWheels(). stop() zeroes both underlying targets but
+  // leaves this mode untouched: with both paths at zero, either mode stages
+  // (0, 0) onto the leaves, so which mode is "active" post-stop() has no
+  // observable effect.
+  enum class TargetKind { kTwist, kWheels };
+
   Devices::Motor& left_;
   Devices::Motor& right_;
   float trackWidth_;  // [mm]
 
-  float v_x_ = 0.0f;    // [mm/s]
-  float omega_ = 0.0f;  // [rad/s]
+  TargetKind targetKind_ = TargetKind::kTwist;
+
+  float v_x_ = 0.0f;    // [mm/s] twist path
+  float omega_ = 0.0f;  // [rad/s] twist path
+
+  float vLeft_ = 0.0f;   // [mm/s] wheels path
+  float vRight_ = 0.0f;  // [mm/s] wheels path
 };
 
 }  // namespace App

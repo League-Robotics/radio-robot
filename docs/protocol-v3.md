@@ -1,5 +1,16 @@
 # Protocol v3 Wire Specification
 
+> **SUPERSEDED by [`docs/protocol-v4.md`](protocol-v4.md).** Sprint 116
+> ("MOVE protocol cutover") replaced the `Twist`+`App::Deadman` command
+> surface this file still describes with one bounded `MOVE` command
+> (velocity variant + stop condition + required `timeout` backstop +
+> a small on-chip queue), and deleted `App::Deadman` outright —
+> `protocol-v4.md` is the current wire reference. This file is kept for
+> history, not deleted; the banner immediately below (unedited, already
+> noting this file was stale against the 102-107 rebuild even before
+> sprint 116) still accurately describes this file's own status as of
+> sprint 097.
+
 > **⚠️ STATUS — superseded snapshot (frozen at sprint 097; banner added 2026-07-20, out of process).**
 > This document describes the wire *as it existed after sprint 097*. The entire
 > command architecture below — the multi-arm `CommandEnvelope`/`ReplyEnvelope`, the

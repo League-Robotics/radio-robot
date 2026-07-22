@@ -56,11 +56,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <string>
 
 #include "app/comms.h"
-#include "app/deadman.h"
 #include "app/drive.h"
+#include "app/move_queue.h"
 #include "app/odometry.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
@@ -77,6 +78,7 @@
 #include "sim_clock.h"
 #include "sim_plant.h"
 #include "support/fake_transport.h"
+#include "wire_test_codec.h"
 
 namespace {
 
@@ -390,9 +392,9 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   NullTransport radioLink;
   App::Comms comms(serialLink, radioLink, "DEVICE:NEZHA2:robot:test:0");
   App::Telemetry tlm(comms, serialLink, radioLink);
-  App::Deadman deadman(clock);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  App::MoveQueue moveQueue(drive, odom, clock);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   // --- Drive Preamble to done() BEFORE constructing/calling RobotLoop's
@@ -421,7 +423,7 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   scriptLineBeginSuccess(bus);
 
   App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
-                            drive, odom, deadman, preamble, clock, sleeper);
+                            drive, odom, moveQueue, preamble, clock, sleeper);
 
   int sleepsBeforeBoot = sleeper.sleepCount();
   robotLoop.boot();
@@ -524,9 +526,9 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
   TestSupport::FakeTransport radioFake;
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
   App::Telemetry tlm(comms, serialFake, radioFake);
-  App::Deadman deadman(clock);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  App::MoveQueue moveQueue(drive, odom, clock);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   clock.setMicros(0);
@@ -539,7 +541,7 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
   scriptLineBeginSuccess(bus);
 
   App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
-                            drive, odom, deadman, preamble, clock, sleeper);
+                            drive, odom, moveQueue, preamble, clock, sleeper);
   robotLoop.boot();
   checkTrue(preamble.done(), "boot() completes against the FakeTransport-based fixture too");
 
@@ -686,9 +688,9 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
   TestSupport::FakeTransport radioFake;
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
   App::Telemetry tlm(comms, serialFake, radioFake);
-  App::Deadman deadman(clock);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  App::MoveQueue moveQueue(drive, odom, clock);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   clock.setMicros(0);
@@ -702,7 +704,7 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
 
   MockTuningStore mockStore;
   App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
-                            drive, odom, deadman, preamble, clock, sleeper, &mockStore);
+                            drive, odom, moveQueue, preamble, clock, sleeper, &mockStore);
   robotLoop.boot();
   checkTrue(preamble.done(), "boot() completes against the MockTuningStore-equipped fixture too");
 
@@ -753,12 +755,484 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
               "a live CFG patch never calls wipe() -- that is boot-sequence-only (main.cpp)");
 }
 
+// ===========================================================================
+// 116-006 (MOVE dispatch cutover, SUC-050/SUC-053/SUC-054/SUC-055) -- the
+// new scenarios below exercise App::RobotLoop's MOVE dispatch/MoveQueue
+// integration. Unlike the three scenarios above (which need a
+// ScriptedI2CHook's EXACT bus-transaction budget), these run against a
+// LIVE, UNSCRIPTED TestSim::SimPlant -- the same "always answers correctly,
+// no pre-loaded script" property src/sim/sim_harness.h's own header
+// documents (motorL_/motorR_'s baseMotorConfig() leaves velGains at
+// Devices::Gains{}'s all-zero default, so commanded duty is always 0 and
+// the plant's wheels never actually move -- exactly what a Kind::Distance
+// stop condition that must NOT be satisfiable needs, and exactly what a
+// Kind::Time stop condition does not care about). LiveFixture below
+// mirrors sim_harness.h's own construction order/driveBootToDone() shape,
+// hand-composed (not TestSim::SimHarness itself) so every module --
+// including moveQueue_ and tlm_ -- stays directly reachable by the
+// scenario, the same "own every collaborator, no wrapper" convention the
+// three ScriptedI2CHook scenarios above already use.
+// ===========================================================================
+
+// driveLivePlantBootToDone -- mirrors sim_harness.h's own
+// driveBootToDone() exactly: a live SimPlant resolves every device on its
+// own first real transaction (no scripted budget to exhaust), so only
+// color_/line_'s own retry-until-exhausted pacing governs how long this
+// loop actually needs to run.
+void driveLivePlantBootToDone(App::Preamble& preamble, TestSim::SimClock& clock) {
+  clock.setMicros(0);
+  preamble.step();
+  clock.setMicros(50000);
+  for (int i = 0; i < 200 && !preamble.done(); ++i) {
+    preamble.step();
+    clock.advanceMicros(50000);
+  }
+}
+
+// LiveFixture -- the whole App:: graph, hand-composed against a live
+// (unscripted) SimPlant, boot()ed by construction. `step(cycles)` mirrors
+// sim_harness.h's own step(): tick the plant BEFORE the loop reads it,
+// every cycle (that file's own header explains why this order is the one
+// invariant that matters).
+struct LiveFixture {
+  TestSim::SimPlant plant;
+  TestSim::SimClock clock;
+  TestSim::SimSleeper sleeper;
+
+  Devices::NezhaMotor motorL;
+  Devices::NezhaMotor motorR;
+  Devices::Otos otos;
+  Devices::ColorSensorLeaf color;
+  Devices::LineSensorLeaf line;
+
+  TestSupport::FakeTransport serialFake;
+  TestSupport::FakeTransport radioFake;
+
+  App::Comms comms;
+  App::Telemetry tlm;
+  App::Drive drive;
+  App::Odometry odom;
+  App::MoveQueue moveQueue;
+  App::Preamble preamble;
+  App::RobotLoop robotLoop;
+
+  LiveFixture()
+      : motorL(plant, baseMotorConfig(1)),
+        motorR(plant, baseMotorConfig(2)),
+        otos(plant, Devices::OtosConfig{}),
+        color(plant, Devices::ColorConfig{}),
+        line(plant, Devices::LineConfig{}),
+        comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0"),
+        tlm(comms, serialFake, radioFake),
+        drive(motorL, motorR, /*trackWidth=*/120.0f),
+        odom(motorL, motorR, /*trackWidth=*/120.0f),
+        moveQueue(drive, odom, clock),
+        preamble(motorL, motorR, otos, color, line, clock),
+        robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm, drive, odom, moveQueue,
+                  preamble, clock, sleeper) {
+    driveLivePlantBootToDone(preamble, clock);
+    robotLoop.boot();
+  }
+
+  void step(int cycles = 1) {
+    constexpr uint32_t kCycleDtUs = 50000;  // [us] 50ms/cycle
+    for (int i = 0; i < cycles; ++i) {
+      plant.tick(static_cast<float>(kCycleDtUs) / 1e6f);  // [s]
+      clock.advanceMicros(kCycleDtUs);
+      robotLoop.cycle();
+    }
+  }
+};
+
+// --- Hand-rolled CommandEnvelope{move: Move{...}} encoders (mirror this
+// file's own Buf/putVarintField/putFloatField/putMessageField/armorLine
+// helpers above -- no encode(CommandEnvelope) codec exists). Field numbers
+// per envelope.proto (116-001): Move.velocity oneof (twist=1 ->
+// MoveTwist{v_x=1, omega=3}), Move.stop oneof (time=3, distance=4),
+// Move.timeout=6, Move.replace=7, Move.id=8; CommandEnvelope.move=21. ---
+
+// includeVelocity/includeStop -- false OMITS the corresponding oneof field
+// entirely (a genuinely malformed wire Move -- proto3 field ABSENCE, not a
+// zero value, is what leaves velocity_kind/stop_kind at their NONE
+// default), for the ERR_BADARG shape-validation scenario below.
+std::string armorMoveTimeTwistCommand(bool includeVelocity, float v_x, float omega,
+                                       bool includeStop, float stopTimeMs, float timeoutMs,
+                                       bool replace, uint32_t id, uint32_t corrId) {
+  Buf move;
+  if (includeVelocity) {
+    Buf moveTwist;
+    putFloatField(moveTwist, 1, v_x);   // MoveTwist.v_x
+    putFloatField(moveTwist, 3, omega); // MoveTwist.omega
+    putMessageField(move, 1, moveTwist);  // Move.velocity.twist, field 1
+  }
+  if (includeStop) {
+    putFloatField(move, 3, stopTimeMs);  // Move.stop.time, field 3
+  }
+  putFloatField(move, 6, timeoutMs);         // Move.timeout, field 6
+  putVarintField(move, 7, replace ? 1 : 0);  // Move.replace, field 7
+  putVarintField(move, 8, id);               // Move.id, field 8
+  Buf env;
+  putVarintField(env, 1, corrId);  // CommandEnvelope.corr_id
+  putMessageField(env, 21, move);  // CommandEnvelope.cmd.move, field 21
+  return armorLine(env.data, env.len);
+}
+
+// A DISTANCE-stop variant (SUC-054's own timeout scenario needs a stop
+// condition the zero-gain motors below can never satisfy on their own).
+std::string armorMoveDistanceTwistCommand(float v_x, float omega, float stopDistanceMm,
+                                           float timeoutMs, bool replace, uint32_t id,
+                                           uint32_t corrId) {
+  Buf moveTwist;
+  putFloatField(moveTwist, 1, v_x);
+  putFloatField(moveTwist, 3, omega);
+  Buf move;
+  putMessageField(move, 1, moveTwist);       // Move.velocity.twist, field 1
+  putFloatField(move, 4, stopDistanceMm);    // Move.stop.distance, field 4
+  putFloatField(move, 6, timeoutMs);         // Move.timeout, field 6
+  putVarintField(move, 7, replace ? 1 : 0);  // Move.replace, field 7
+  putVarintField(move, 8, id);               // Move.id, field 8
+  Buf env;
+  putVarintField(env, 1, corrId);
+  putMessageField(env, 21, move);
+  return armorLine(env.data, env.len);
+}
+
+// CommandEnvelope{corr_id, config: ConfigDelta{motor: MotorConfigPatch{
+// side=LEFT, kp}}} -- mirrors scenarioConfigMotorAppliesWhileDrivetrainStays
+// Unimplemented()'s own inline construction above, factored into a
+// standalone helper for SUC-055's reuse below.
+std::string armorMotorConfigPatchCommand(float kp, uint32_t corrId) {
+  Buf motorPatch;
+  putVarintField(motorPatch, 1, 0);  // MotorConfigPatch.side = LEFT (0)
+  putFloatField(motorPatch, 3, kp);  // kp
+  Buf motorDelta;
+  putMessageField(motorDelta, 2, motorPatch);  // ConfigDelta.motor, field 2
+  Buf motorEnv;
+  putVarintField(motorEnv, 1, corrId);
+  putMessageField(motorEnv, 6, motorDelta);  // CommandEnvelope.config, field 6
+  return armorLine(motorEnv.data, motorEnv.len);
+}
+
+// findAck -- mirrors config_gate_harness.cpp's own findAck() exactly:
+// decodes every captured outbound line via TestSupport::decodeOutboundLine()
+// (the REAL generated codec, not a hand-synthesized byte fingerprint) and
+// looks for a Telemetry frame whose ack_corr matches `corrId` with the
+// ack-fresh bit (flags bit 5) set. Deliberately NOT a raw-byte fingerprint
+// search (this file's own ackFingerprint()/containsSubBytes() helpers,
+// above, used only by the pre-existing CONFIG scenarios' OWN nonzero-err
+// checks): a genuine err==0 (success) ack has its ack_err field OMITTED
+// from the wire entirely (proto3 implicit presence -- wire.cpp's own
+// encodeInto() skips a plain scalar field holding its zero/default value),
+// so a synthesized ack_err==0 byte pair can never match real wire bytes --
+// only the real decoder correctly reconstructs "absent means 0".
+bool findAck(const std::deque<std::string>& lines, uint32_t corrId, uint32_t* errCode) {
+  constexpr uint32_t kAckFreshBit = 1u << 5;  // App::kFlagAckFresh
+  for (const auto& line : lines) {
+    TestSupport::DecodedLine decoded = TestSupport::decodeOutboundLine(line);
+    if (decoded.kind != TestSupport::DecodedKind::kTelemetry) continue;
+    if ((decoded.telemetry.flags & kAckFreshBit) == 0) continue;
+    if (decoded.telemetry.ack_corr == corrId) {
+      *errCode = decoded.telemetry.ack_err;
+      return true;
+    }
+  }
+  return false;
+}
+
+// Steps fx one cycle at a time, up to maxCycles, checking after EACH step
+// whether corrId's ack has appeared (fresh) -- absorbs BOTH "an ack pushed
+// during cycle N's dispatch is not visible until cycle N+1's own emit()"
+// (this file's own scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented()
+// header comment above) AND the primary/secondary tie-break's own
+// occasional one-cycle emit slip (telemetry.h's emit() doc comment: "at
+// most one primary frame delayed by one loop cycle roughly once per
+// kSecondaryPeriod") without hand-deriving exact cycle parity for either.
+// Returns true iff the ack was seen AND its err matched expectedErrCode.
+bool stepUntilAckSeen(LiveFixture& fx, uint32_t corrId, uint32_t expectedErrCode, int maxCycles) {
+  for (int i = 0; i < maxCycles; ++i) {
+    fx.step(1);
+    uint32_t errCode = 0;
+    if (findAck(fx.serialFake.sent(), corrId, &errCode)) return errCode == expectedErrCode;
+  }
+  return false;
+}
+
+// ===========================================================================
+// MOVE dispatch: config-gate refusal, ERR_BADARG shape validation,
+// successful enqueue+ack (SUC-050).
+// ===========================================================================
+
+void scenarioMoveConfigGateRefusesWhenUnconfigured() {
+  beginScenario("MOVE against an unconfigured RobotLoop: ERR_NOT_CONFIGURED, MoveQueue untouched "
+                "(116-006)");
+
+  LiveFixture fx;
+  checkTrue(!fx.robotLoop.isConfigured(), "setup: RobotLoop starts unconfigured "
+                                           "(markConfigured() never called)");
+
+  const uint32_t kCorrId = 901;
+  std::string moveLine = armorMoveTimeTwistCommand(/*includeVelocity=*/true, /*v_x=*/500.0f,
+                                                     /*omega=*/0.0f, /*includeStop=*/true,
+                                                     /*stopTimeMs=*/200.0f, /*timeoutMs=*/5000.0f,
+                                                     /*replace=*/true, /*id=*/1, kCorrId);
+  checkTrue(!moveLine.empty(), "armor() of the MOVE envelope succeeds");
+  fx.serialFake.enqueueInbound(moveLine.c_str());
+
+  checkTrue(stepUntilAckSeen(fx, kCorrId, static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED), 10),
+            "the MOVE's ack is ERR_NOT_CONFIGURED");
+  checkTrue(!fx.moveQueue.active(), "MoveQueue stays empty -- handleMove() never reached enqueue()");
+}
+
+void scenarioMoveBadArgShapeValidation() {
+  beginScenario("MOVE shape validation: missing velocity / missing stop / non-positive timeout "
+                "all ack ERR_BADARG (116-006)");
+
+  LiveFixture fx;
+  fx.robotLoop.markConfigured();
+  checkTrue(fx.robotLoop.isConfigured(), "setup: RobotLoop is configured for this scenario");
+
+  const uint32_t kMissingVelocityCorrId = 911;
+  const uint32_t kMissingStopCorrId = 912;
+  const uint32_t kNonPositiveTimeoutCorrId = 913;
+  const uint32_t kErrBadArg = static_cast<uint32_t>(msg::ErrCode::ERR_BADARG);
+
+  fx.serialFake.enqueueInbound(
+      armorMoveTimeTwistCommand(/*includeVelocity=*/false, 0.0f, 0.0f, /*includeStop=*/true, 200.0f,
+                                 5000.0f, true, 1, kMissingVelocityCorrId)
+          .c_str());
+  checkTrue(stepUntilAckSeen(fx, kMissingVelocityCorrId, kErrBadArg, 10),
+            "missing velocity variant acks ERR_BADARG");
+
+  fx.serialFake.enqueueInbound(
+      armorMoveTimeTwistCommand(/*includeVelocity=*/true, 500.0f, 0.0f, /*includeStop=*/false, 0.0f,
+                                 5000.0f, true, 2, kMissingStopCorrId)
+          .c_str());
+  checkTrue(stepUntilAckSeen(fx, kMissingStopCorrId, kErrBadArg, 10),
+            "missing stop variant acks ERR_BADARG");
+
+  fx.serialFake.enqueueInbound(
+      armorMoveTimeTwistCommand(/*includeVelocity=*/true, 500.0f, 0.0f, /*includeStop=*/true, 200.0f,
+                                 /*timeoutMs=*/0.0f, true, 3, kNonPositiveTimeoutCorrId)
+          .c_str());
+  checkTrue(stepUntilAckSeen(fx, kNonPositiveTimeoutCorrId, kErrBadArg, 10),
+            "non-positive timeout acks ERR_BADARG");
+
+  checkTrue(!fx.moveQueue.active(), "MoveQueue stays empty across all three malformed Moves");
+}
+
+void scenarioMoveSuccessfulEnqueueAcksAndActivates() {
+  beginScenario("well-formed MOVE: acks ERR_NONE, MoveQueue activates with matching moveId "
+                "(116-006)");
+
+  LiveFixture fx;
+  fx.robotLoop.markConfigured();
+
+  const uint32_t kCorrId = 921;
+  const uint32_t kMoveId = 55;
+  fx.serialFake.enqueueInbound(
+      armorMoveTimeTwistCommand(true, 500.0f, 0.0f, true, 300.0f, 5000.0f, true, kMoveId, kCorrId)
+          .c_str());
+  fx.step(1);
+
+  checkTrue(fx.moveQueue.active(), "MoveQueue activates immediately (queue was empty)");
+  checkUintEq(fx.moveQueue.activeMoveId(), kMoveId, "activeMoveId() matches the injected Move.id");
+
+  checkTrue(stepUntilAckSeen(fx, kCorrId, 0, 10), "the MOVE's enqueue ack is ERR_NONE (0)");
+}
+
+// ===========================================================================
+// SUC-053: a Move that ends drains to stopped motors with zero further
+// host traffic -- MoveQueue::tick() replaces the deleted deadman_.expired()
+// branch at the exact same per-cycle, unconditional schedule position.
+// ===========================================================================
+
+void scenarioMoveEndDrainsWithNoFurtherHostTraffic() {
+  beginScenario("SUC-053: a Move that ends via its own stop condition drains to stopped motors "
+                "with zero further host traffic (no deadman to re-arm) (116-006)");
+
+  LiveFixture fx;
+  fx.robotLoop.markConfigured();
+
+  const uint32_t kCorrId = 931;
+  const uint32_t kMoveId = 61;
+  // TIME stop at 150ms, generous 5s timeout -- ends via its OWN stop
+  // condition, not the timeout backstop.
+  fx.serialFake.enqueueInbound(
+      armorMoveTimeTwistCommand(true, /*v_x=*/500.0f, /*omega=*/0.0f, true, /*stopTimeMs=*/150.0f,
+                                 /*timeoutMs=*/5000.0f, true, kMoveId, kCorrId)
+          .c_str());
+  fx.step(1);
+  checkTrue(fx.moveQueue.active(), "the Move activates immediately");
+
+  bool ended = false;
+  constexpr int kMaxCycles = 40;  // 40 * 50ms == 2s, comfortably past the 150ms stop threshold
+  for (int i = 0; i < kMaxCycles && !ended; ++i) {
+    fx.step(1);
+    if (!fx.moveQueue.active()) ended = true;
+  }
+  checkTrue(ended, "the Move ends within a bounded number of cycles");
+
+  // MoveQueue::tick() (this cycle's OWN 3rd runAndWait block) calls
+  // Drive::stop(), which only STAGES a zero target on Drive itself --
+  // Drive::tick() is the only method that ever calls
+  // Devices::Motor::setVelocity() (drive.h's own doc comment), and it runs
+  // at the TOP of cycle() (112-005's own reorder), BEFORE this same
+  // cycle's dispatch block. So the actual zero duty write reaches the
+  // motor leaves one cycle LATER -- exactly the same one-cycle lag the
+  // deleted deadman-driven stop had, at this same schedule position; not
+  // a regression here. One more cycle before checking velocityTarget().
+  fx.step(1);
+  checkFloatEq(fx.motorL.velocityTarget(), 0.0f, "left target velocity is zero once the Move ends");
+  checkFloatEq(fx.motorR.velocityTarget(), 0.0f, "right target velocity is zero once the Move ends");
+
+  // SUC-053's own rigor bar: zero FURTHER host traffic after the Move ends
+  // -- no STOP, no new MOVE -- yet the motors stay at zero, cycle after
+  // cycle, because moveQueue_.tick() runs unconditionally every cycle.
+  for (int i = 0; i < 20; ++i) {
+    fx.step(1);
+    checkTrue(!fx.moveQueue.active(), "MoveQueue stays inactive with no further host traffic");
+    checkFloatEq(fx.motorL.velocityTarget(), 0.0f,
+                 "left target velocity stays zero, no host traffic needed");
+    checkFloatEq(fx.motorR.velocityTarget(), 0.0f,
+                 "right target velocity stays zero, no host traffic needed");
+  }
+}
+
+// ===========================================================================
+// SUC-054: a Move whose stop condition can never be reached ends via the
+// required timeout backstop; kFlagFaultMoveTimeout is set live on that
+// exact ending cycle.
+// ===========================================================================
+
+void scenarioMoveTimeoutSetsFaultFlagOnEndingCycle() {
+  beginScenario("SUC-054: a Move whose stop condition can never be reached ends via timeout, "
+                "kFlagFaultMoveTimeout set live on that exact ending cycle (116-006)");
+
+  LiveFixture fx;
+  fx.robotLoop.markConfigured();
+
+  // baseMotorConfig() leaves velGains at Devices::Gains{}'s all-zero
+  // default -- commanded duty is 0 regardless of target velocity, so the
+  // plant's wheels never actually move and odom_.pathLength() stays 0
+  // forever: a DISTANCE stop condition can never be satisfied on its own,
+  // only the timeout backstop can end this Move.
+  const uint32_t kCorrId = 941;
+  const uint32_t kMoveId = 71;
+  fx.serialFake.enqueueInbound(armorMoveDistanceTwistCommand(/*v_x=*/500.0f, /*omega=*/0.0f,
+                                                              /*stopDistanceMm=*/50.0f,
+                                                              /*timeoutMs=*/120.0f, /*replace=*/true,
+                                                              kMoveId, kCorrId)
+                                    .c_str());
+  fx.step(1);
+  checkTrue(fx.moveQueue.active(), "the Move activates immediately");
+
+  bool ended = false;
+  bool flagSetOnEndingCycle = false;
+  constexpr int kMaxCycles = 40;  // 40 * 50ms == 2s, comfortably past the 120ms timeout
+  for (int i = 0; i < kMaxCycles && !ended; ++i) {
+    fx.step(1);
+    if (!fx.moveQueue.active()) {
+      ended = true;
+      flagSetOnEndingCycle = (fx.tlm.flags() & App::kFlagFaultMoveTimeout) != 0;
+    }
+  }
+  checkTrue(ended, "the Move ends within a bounded number of cycles (via timeout -- DISTANCE can "
+                    "never be satisfied with zero-gain motors)");
+  checkTrue(flagSetOnEndingCycle, "kFlagFaultMoveTimeout is set on the exact ending cycle");
+
+  // Level-set (telemetry.h's own setFlag() contract): the flag clears
+  // again the very next cycle, and the completion ack pushed during the
+  // ending cycle's own dispatch is not visible on the wire until THIS
+  // next cycle's own emit() call (cycle N+1's 2nd runAndWait block runs
+  // BEFORE its own 3rd block, matching the CONFIG-dispatch scenario's own
+  // "ack rides the next emitted frame" convention documented above).
+  fx.step(1);
+  checkTrue((fx.tlm.flags() & App::kFlagFaultMoveTimeout) == 0,
+            "kFlagFaultMoveTimeout clears again the very next cycle");
+  {
+    uint32_t errCode = 1;  // any nonzero sentinel -- overwritten by findAck() on a match
+    checkTrue(findAck(fx.serialFake.sent(), kMoveId, &errCode) && errCode == 0,
+              "the Move's completion ack (ack_corr==Move.id, ack_err==0) reached the wire -- a "
+              "timeout is signalled via the flags bit, not ack_err");
+  }
+}
+
+// ===========================================================================
+// SUC-055: a CONFIG patch injected mid-MOVE does not change the active
+// Move's completion outcome. A/B comparison against a config-free
+// baseline -- more robust than hand-deriving the exact expected cycle
+// count, and directly proves "shifts nothing".
+// ===========================================================================
+
+void scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome() {
+  beginScenario("SUC-055: a CONFIG patch injected mid-MOVE does not change the active Move's "
+                "completion outcome (116-006)");
+
+  constexpr float kStopTimeMs = 250.0f;
+  constexpr float kTimeoutMs = 5000.0f;
+  constexpr int kMaxCycles = 40;
+  const uint32_t kMoveId = 81;
+
+  LiveFixture baseline;
+  baseline.robotLoop.markConfigured();
+  baseline.serialFake.enqueueInbound(
+      armorMoveTimeTwistCommand(true, 0.0f, 0.0f, true, kStopTimeMs, kTimeoutMs, true, kMoveId, 951)
+          .c_str());
+  baseline.step(1);
+  checkTrue(baseline.moveQueue.active(), "baseline: the Move activates immediately");
+  int baselineCyclesToEnd = 1;
+  for (int i = 0; i < kMaxCycles && baseline.moveQueue.active(); ++i) {
+    baseline.step(1);
+    ++baselineCyclesToEnd;
+  }
+  checkTrue(!baseline.moveQueue.active(), "baseline: the Move ends within a bounded number of cycles");
+
+  LiveFixture interfered;
+  interfered.robotLoop.markConfigured();
+  interfered.serialFake.enqueueInbound(
+      armorMoveTimeTwistCommand(true, 0.0f, 0.0f, true, kStopTimeMs, kTimeoutMs, true, kMoveId, 953)
+          .c_str());
+  interfered.step(1);
+  checkTrue(interfered.moveQueue.active(), "interfered: the Move activates immediately");
+  checkFloatEq(interfered.motorL.gains().kp, 0.0f,
+               "interfered: left motor starts at the constructed (zero) kp");
+
+  // Mid-flight (well before the stop threshold): a CONFIG{motor} patch --
+  // MoveQueue's own tick() has nothing to do with CONFIG dispatch
+  // (handleConfig() is a fully separate branch of processMessage()'s own
+  // switch), so this must not perturb the Move's own timing at all.
+  interfered.serialFake.enqueueInbound(armorMotorConfigPatchCommand(/*kp=*/0.02f, /*corrId=*/954).c_str());
+  interfered.step(1);
+  checkFloatEq(interfered.motorL.gains().kp, 0.02f,
+               "interfered: the CONFIG patch's own kp landed live, unaffected by the concurrently-"
+               "active Move");
+
+  int interferedCyclesToEnd = 2;
+  for (int i = 0; i < kMaxCycles && interfered.moveQueue.active(); ++i) {
+    interfered.step(1);
+    ++interferedCyclesToEnd;
+  }
+  checkTrue(!interfered.moveQueue.active(),
+            "interfered: the Move ends within a bounded number of cycles");
+
+  checkUintEq(static_cast<uint32_t>(interferedCyclesToEnd), static_cast<uint32_t>(baselineCyclesToEnd),
+              "SUC-055: the CONFIG patch injected mid-flight shifts nothing -- the Move ends at "
+              "the SAME cycle count as the config-free baseline");
+}
+
 }  // namespace
 
 int main() {
   scenarioBootThenAFewCyclesRunToCompletion();
   scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented();
   scenarioConfigPersistWritePolicySkipsRedundantSave();
+
+  scenarioMoveConfigGateRefusesWhenUnconfigured();
+  scenarioMoveBadArgShapeValidation();
+  scenarioMoveSuccessfulEnqueueAcksAndActivates();
+  scenarioMoveEndDrainsWithNoFurtherHostTraffic();
+  scenarioMoveTimeoutSetsFaultFlagOnEndingCycle();
+  scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::RobotLoop scenarios passed\n");

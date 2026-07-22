@@ -39,17 +39,58 @@ struct Error {
     // --- array / optional-string accessors ---
 };
 
-// Twist
-struct Twist {
-    float v_x = 0.0f;
-    float omega = 0.0f;
-    float duration = 0.0f;
+// Stop
+struct Stop {
 
     // --- array / optional-string accessors ---
 };
 
-// Stop
-struct Stop {
+// MoveTwist
+struct MoveTwist {
+    float v_x = 0.0f;
+    float v_y = 0.0f;
+    float omega = 0.0f;
+
+    // --- array / optional-string accessors ---
+};
+
+// MoveWheels
+struct MoveWheels {
+    float v_left = 0.0f;
+    float v_right = 0.0f;
+
+    // --- array / optional-string accessors ---
+};
+
+// Move
+struct Move {
+    enum class VelocityKind : uint8_t {
+        NONE = 0,
+        TWIST = 1,
+        WHEELS = 2,
+    };
+    VelocityKind velocity_kind = VelocityKind::NONE;
+    union {
+        MoveTwist twist;
+        MoveWheels wheels;
+    } velocity = {};
+
+    enum class StopKind : uint8_t {
+        NONE = 0,
+        TIME = 1,
+        DISTANCE = 2,
+        ANGLE = 3,
+    };
+    StopKind stop_kind = StopKind::NONE;
+    union {
+        float time;
+        float distance;
+        float angle;
+    } stop = {};
+
+    float timeout = 0.0f;
+    bool replace = false;
+    uint32_t id = 0;
 
     // --- array / optional-string accessors ---
 };
@@ -60,14 +101,12 @@ struct ConfigDelta {
         NONE = 0,
         DRIVETRAIN = 1,
         MOTOR = 2,
-        WATCHDOG = 3,
-        OTOS = 4,
+        OTOS = 3,
     };
     PatchKind patch_kind = PatchKind::NONE;
     union {
         DrivetrainConfigPatch drivetrain;
         MotorConfigPatch motor;
-        uint32_t watchdog;
         OtosConfigPatch otos;
     } patch = {};
 
@@ -81,13 +120,13 @@ struct CommandEnvelope {
         NONE = 0,
         CONFIG = 1,
         STOP = 2,
-        TWIST = 3,
+        MOVE = 3,
     };
     CmdKind cmd_kind = CmdKind::NONE;
     union {
         ConfigDelta config;
         Stop stop;
-        Twist twist;
+        Move move;
     } cmd = {};
 
     uint32_t corr_id = 0;

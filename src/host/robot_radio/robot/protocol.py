@@ -10,12 +10,17 @@ Wire format — P4 (single-loop firmware, 103-001)
 The command plane is binary-only: one ``CommandEnvelope`` (protobuf,
 ``protos/envelope.proto``) per outbound command, armored as a `*B<base64>`
 line. ``CommandEnvelope``'s ``cmd`` oneof carries exactly THREE arms —
-``twist``/``config``/``stop`` — every earlier arm (ping/echo/id/hello/ver/
+``move``/``config``/``stop`` — every earlier arm (ping/echo/id/hello/ver/
 help/get/drive/segment/replace/motion/pose_fix/otos/stream/plan_dump) was
 pruned by 103-001's schema prune and is `reserved`, not reused (see
-``envelope.proto``'s own header comment). There is no per-command
-synchronous reply for ``twist``/``config``/``stop`` — a command's outcome
-rides the ack ring inside the next ``Telemetry`` push (``wait_for_ack()``).
+``envelope.proto``'s own header comment). 116-001 (MOVE protocol cutover)
+replaced the interim ``twist`` arm (103-001) with ``move`` — a single
+bounded motion command (velocity variant + stop condition + required
+``timeout`` backstop + a ``replace`` flag against a small on-chip queue);
+``twist`` (field 19) is `reserved`, not reused — see ``move_twist()``/
+``move_wheels()`` below. There is no per-command synchronous reply for
+``move``/``config``/``stop`` — a command's outcome rides the ack ring
+inside the next ``Telemetry`` push (``wait_for_ack()``).
 
 Telemetry is always-on (no STREAM arm to arm first): the firmware pushes a
 ``ReplyEnvelope{tlm: Telemetry}`` frame unconditionally every loop iteration
@@ -76,19 +81,27 @@ _ANGLE_SCALE = 5729.5779513  # [cdeg/rad]
 
 # modeChar() mirror (source/telemetry/tlm_frame.cpp): maps msg::DriveMode
 # (telemetry.mode, telemetry.proto -- DriveMode relocated in from the deleted
-# planner.proto by 115-003, unchanged shape) to the SAME single-character
-# mode= wire value the historical text-plane TLM parser read off a text
-# STREAM/SNAP frame's "mode=" token. VELOCITY has no dedicated character
-# (modeChar()'s own `default: return 'I';` case) -- mirrored here via .get()'s
-# fallback in from_pb2(), not a dict entry, so a future DriveMode value added
-# to telemetry.proto without a matching modeChar() case falls back the same
-# way on both sides.
+# planner.proto by 115-003, unchanged shape) to a single-character mode= wire
+# value the historical text-plane TLM parser read off a text STREAM/SNAP
+# frame's "mode=" token. Any DriveMode value with no entry here falls back to
+# "I" via .get()'s own default in from_pb2(), so a future DriveMode value
+# added to telemetry.proto without a matching entry here falls back safely
+# instead of raising.
+#
+# 116-007: VELOCITY (set by RobotLoop while a MOVE is actively driving,
+# `driving_ ? VELOCITY : IDLE`) previously had no entry and silently fell
+# back to "I" -- the SAME character IDLE produces -- so a host-side reader
+# (e.g. tlm_log.py's `mode` column) could never distinguish "driving" from
+# "idle" by this column alone (confirmed on the sim dry-run, see
+# docs/bench-checklists/sprint-115-gut-s1.md). "V" is unused by every other
+# entry below (I/S/T/D/G) and is now VELOCITY's own dedicated character.
 _DRIVE_MODE_CHAR = {
     telemetry_pb2.IDLE: "I",
     telemetry_pb2.STREAMING: "S",
     telemetry_pb2.TIMED: "T",
     telemetry_pb2.DISTANCE: "D",
     telemetry_pb2.GO_TO: "G",
+    telemetry_pb2.VELOCITY: "V",
 }
 
 
@@ -102,7 +115,7 @@ class AckEntry:
     ``corr_id``) via the single ack slot riding inside every ``Telemetry``
     frame (103-009 Decision 2's "telemetry-only return path", narrowed from
     a depth-3 ring to one slot by 115-003) — the P4 wire has no per-command
-    synchronous ``ReplyEnvelope`` for ``twist``/``stop``/``config``, so this
+    synchronous ``ReplyEnvelope`` for ``move``/``stop``/``config``, so this
     is the ONLY place their outcome is reported.
 
     115-003 frame v2: the depth-3 ``AckEntry`` ring (and the ``AckStatus``
@@ -641,14 +654,21 @@ _MOTOR_PID_KEYS = {
 # -- they are simply no longer valid set_config()/config() keys (both
 # raise/return the same "unknown key" outcome as any other bogus key).
 
-# ml/mr and sTimeout are handled specially, not via a plain field-name map:
-#   - ml/mr both patch MotorConfigPatch.travel_calib, disambiguated by
-#     `side` (Decision 5, config.proto) -- ml=LEFT, mr=RIGHT.
-#   - sTimeout is ConfigDelta's bare `watchdog` oneof arm (uint32, NOT a
-#     message-typed Patch -- Open Question 4, config.proto), routed
-#     straight to bb.streamWatchdogWindowIn, never bb.configIn.
+# ml/mr are handled specially, not via a plain field-name map: both patch
+# MotorConfigPatch.travel_calib, disambiguated by `side` (Decision 5,
+# config.proto) -- ml=LEFT, mr=RIGHT.
+#
+# sTimeout -- DELETED (116-001, MOVE protocol cutover): patched ConfigDelta's
+# bare `watchdog` oneof arm (uint32 sTimeout, the pre-116 StreamingDrive
+# Watchdog window), which is itself deleted -- every Move is now
+# self-bounding (its own stop condition or required `timeout`), so the
+# separate deadman/watchdog window this key configured is gone along with
+# `App::Deadman` (see envelope.proto's own `ConfigDelta.watchdog` doc
+# comment). `sTimeout` is simply no longer a valid set_config()/config() key
+# -- both now raise/return the same "unknown key" outcome any other bogus
+# key already produced.
 _ALL_SET_KEYS = frozenset(
-    set(_DRIVETRAIN_KEYS) | set(_MOTOR_PID_KEYS) | {"ml", "mr", "sTimeout"})
+    set(_DRIVETRAIN_KEYS) | set(_MOTOR_PID_KEYS) | {"ml", "mr"})
 
 
 def _format_config_value(value: Any) -> str:
@@ -662,6 +682,38 @@ def _format_config_value(value: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Move builder support (116-001, MOVE protocol cutover) -- shared by
+# NezhaProtocol.move_twist()/move_wheels(), which differ only in which
+# Move.velocity oneof arm (twist/wheels) they build. Move.stop is itself a
+# oneof (time/distance/angle, envelope.proto) -- both host builders expose it
+# as three separate, mutually-exclusive keyword-only args (stop_time/
+# stop_distance/stop_angle) rather than a single generic "kind+value" arg, so
+# each carries its own unit as a `# [unit]` tag on its own parameter (project
+# naming convention, .claude/rules/coding-standards.md) instead of one
+# ambiguous-unit parameter whose meaning depends on a second value.
+# ---------------------------------------------------------------------------
+
+def _build_move_stop_kwargs(*, stop_time: float | None, stop_distance: float | None,
+                            stop_angle: float | None) -> dict[str, float]:
+    """Validate and translate a move_twist()/move_wheels() caller's
+    stop_time/stop_distance/stop_angle kwargs into the single
+    ``{"time"|"distance"|"angle": value}`` kwarg ``envelope_pb2.Move()``'s
+    own ``stop`` oneof constructor expects.
+
+    Raises ``ValueError`` (no wire traffic) unless EXACTLY ONE of the three
+    is given -- ``Move.stop`` is a oneof, so zero is an underspecified Move
+    and more than one is unrepresentable on the wire."""
+    candidates = {"time": stop_time, "distance": stop_distance, "angle": stop_angle}
+    given = {k: v for k, v in candidates.items() if v is not None}
+    if len(given) != 1:
+        raise ValueError(
+            "move requires exactly one stop condition (stop_time/"
+            f"stop_distance/stop_angle), got {sorted(given)!r}")
+    (key, value), = given.items()
+    return {key: float(value)}
+
+
+# ---------------------------------------------------------------------------
 # NezhaProtocol
 # ---------------------------------------------------------------------------
 
@@ -669,9 +721,10 @@ class NezhaProtocol:
     """Binary wire-protocol adapter for the P4 single-loop Nezha firmware.
 
     Owns a SerialConnection and exposes one method per firmware command group
-    (``twist``/``stop``/``config``) plus telemetry read accessors. All
-    response parsing delegates to module-level parse_* functions so callers
-    can reuse them on lines received through other paths (streaming
+    (``move``/``stop``/``config`` — ``move_twist()``/``move_wheels()`` build
+    the ``move`` arm's two velocity variants) plus telemetry read accessors.
+    All response parsing delegates to module-level parse_* functions so
+    callers can reuse them on lines received through other paths (streaming
     generators).
     """
 
@@ -767,7 +820,7 @@ class NezhaProtocol:
         Binary implementation (097-002): thin wrapper over set_config_binary()
         (096-007). Unlike the (retired) text plane's single atomic SET line, a
         ConfigDelta's oneof carries only ONE Patch at a time (config.proto),
-        so kwargs spanning multiple targets (e.g. tw= + sTimeout=) become
+        so kwargs spanning multiple targets (e.g. tw= + pid.kp=) become
         MULTIPLE set_config_binary() round trips, one per touched target --
         NOT atomic across targets (flagged, not silently reconciled, per this
         project's "transcribe, never re-derive; flag genuine gaps"
@@ -795,7 +848,6 @@ class NezhaProtocol:
         drivetrain_patch: dict[str, float] = {}
         motor_left_patch: dict[str, float] = {}
         motor_right_patch: dict[str, float] = {}
-        watchdog_value: int | None = None
 
         for key, value in kwargs.items():
             if key in _DRIVETRAIN_KEYS:
@@ -809,8 +861,6 @@ class NezhaProtocol:
                 # (handleConfigMotor(), binary_channel.cpp) -- carried on the
                 # LEFT envelope only; see _MOTOR_PID_KEYS' own comment.
                 motor_left_patch[_MOTOR_PID_KEYS[key]] = float(value)
-            elif key == "sTimeout":
-                watchdog_value = int(value)
 
         ok = True
         if drivetrain_patch:
@@ -826,10 +876,6 @@ class NezhaProtocol:
         if motor_right_patch:
             delta = envelope_pb2.ConfigDelta(motor=config_pb2.MotorConfigPatch(
                 side=config_pb2.RIGHT, **motor_right_patch))
-            if self.set_config_binary(delta) is None:
-                ok = False
-        if watchdog_value is not None:
-            delta = envelope_pb2.ConfigDelta(watchdog=watchdog_value)
             if self.set_config_binary(delta) is None:
                 ok = False
 
@@ -864,29 +910,111 @@ class NezhaProtocol:
     # Drive commands
     # ------------------------------------------------------------------
 
-    def twist(self, v_x: float, omega: float, duration: float) -> int:  # [mm/s] [rad/s] [ms]
-        """Command a body-frame twist setpoint for ``duration`` ms — the P4
-        wire's ONLY motion command (``CommandEnvelope{twist: Twist{v_x,
-        omega, duration}}``, envelope.proto). The host computes the whole
-        trajectory and streams twist setpoints; the robot only servos to
-        them and arms the unified Deadman for ``duration`` (envelope.proto's
-        own ``Twist`` doc comment).
+    def move_twist(self, v_x: float, v_y: float, omega: float, *,
+                   stop_time: float | None = None,       # [ms]
+                   stop_distance: float | None = None,   # [mm]
+                   stop_angle: float | None = None,       # [rad]
+                   timeout: float,                        # [ms]
+                   replace: bool = True,
+                   move_id: int = 0) -> int:
+        """Enqueue (or preempt-and-start) a bounded body-frame twist MOVE —
+        one of the P4 wire's two ``Move`` velocity variants
+        (``CommandEnvelope{move: Move{twist: MoveTwist{v_x, v_y, omega},
+        ...}}}``, envelope.proto arm 21, 116-001 MOVE protocol cutover).
+        Supersedes the deleted 103-era ``twist()`` (bare ``v_x``/``omega`` +
+        deadman-arming ``duration``): every ``Move`` is now bounded by its
+        own stop condition and a required ``timeout`` backstop instead of a
+        separate watchdog module (``App::Deadman`` no longer exists).
+
+        ``v_y`` is accepted and wire-forwarded but ignored server-side on
+        this differential build (``MoveTwist.v_y``'s own doc comment) —
+        pass ``0.0`` unless a future holonomic drivetrain needs it.
+
+        Exactly ONE of ``stop_time``/``stop_distance``/``stop_angle`` selects
+        this Move's stop condition (``Move``'s ``stop`` oneof) — elapsed
+        time since activation, |path arc length| since activation (encoder
+        odometry), or |heading change| since activation (encoder odometry),
+        respectively. Passing zero or more than one raises ``ValueError``,
+        no wire traffic sent — the oneof can carry only one.
+
+        ``timeout`` is the REQUIRED safety backstop (envelope.proto: "<=0 ->
+        ERR_BADARG") that fires the Move even if the stop condition can
+        never be reached (e.g. stalled wheels) — validated host-side
+        (``ValueError`` for a non-positive value) to avoid a wasted wire
+        round trip for a command the firmware would reject anyway.
+
+        ``replace`` selects queue semantics against ``App::MoveQueue`` (1
+        active + 4 pending): ``True`` (the default — matches every existing
+        caller's own pre-Move "just drive this now" usage) flushes pending
+        and preempts the active Move, starting this one immediately;
+        ``False`` enqueues behind the active Move (``ERR_FULL`` if 4 already
+        pending). ``move_id`` is echoed back in this Move's own COMPLETION
+        ack (``Move.id`` — distinct from the enqueue ack, which echoes this
+        envelope's ``corr_id`` as usual); the default ``0`` is fine for a
+        caller that does not need to distinguish completion acks.
 
         Fire-and-poll, NOT fire-and-wait (103-009, Decision 2's
-        "telemetry-only return path"): the P4 wire has no per-command
-        synchronous ``ReplyEnvelope`` for ``twist`` — this call's own outcome
-        arrives later, riding the ack ring inside a subsequent ``Telemetry``
-        push (see ``wait_for_ack()``). This method returns as soon as the
-        bytes reach the wire; it never blocks waiting for a reply that will
-        not come.
+        "telemetry-only return path", unchanged by the Move cutover): the
+        P4 wire has no per-command synchronous ``ReplyEnvelope`` for
+        ``move`` — this call's own ENQUEUE outcome arrives later, riding the
+        ack ring inside a subsequent ``Telemetry`` push (see
+        ``wait_for_ack()``). This method returns as soon as the bytes reach
+        the wire; it never blocks waiting for a reply that will not come.
 
         Returns the corr_id assigned to this command — pass it to
         ``wait_for_ack()`` to confirm the firmware accepted it. Raises
         ``ConnectionError`` if not connected (``send_envelope_fast()``'s own
         not-open contract).
         """
-        envelope = envelope_pb2.CommandEnvelope(
-            twist=envelope_pb2.Twist(v_x=v_x, omega=omega, duration=duration))
+        stop_kwargs = _build_move_stop_kwargs(
+            stop_time=stop_time, stop_distance=stop_distance, stop_angle=stop_angle)
+        if timeout <= 0:
+            raise ValueError(f"move_twist(): timeout must be > 0, got {timeout!r}")
+        move = envelope_pb2.Move(
+            twist=envelope_pb2.MoveTwist(v_x=v_x, v_y=v_y, omega=omega),
+            timeout=timeout, replace=replace, id=move_id, **stop_kwargs)
+        envelope = envelope_pb2.CommandEnvelope(move=move)
+        return self._conn.send_envelope_fast(envelope)
+
+    def move_wheels(self, v_left: float, v_right: float, *,
+                    stop_time: float | None = None,       # [ms]
+                    stop_distance: float | None = None,   # [mm]
+                    stop_angle: float | None = None,       # [rad]
+                    timeout: float,                        # [ms]
+                    replace: bool = True,
+                    move_id: int = 0) -> int:
+        """Enqueue (or preempt-and-start) a bounded per-wheel-speed MOVE —
+        the ``Move`` velocity variant's OTHER branch alongside
+        ``move_twist()`` (``CommandEnvelope{move: Move{wheels: MoveWheels{
+        v_left, v_right}, ...}}}``, envelope.proto arm 21). Stages directly
+        through ``Drive::setWheels()`` firmware-side — never translated
+        through a twist round trip (sprint 116's architecture-update.md
+        Decision 3) — the bench rig's own per-motor-pair driving idiom
+        (``.clasi/knowledge/bench-test-rig-layout.md``).
+
+        ``stop_time``/``stop_distance``/``stop_angle``/``timeout``/
+        ``replace``/``move_id`` share the SAME contract as ``move_twist()``'s
+        own (exactly one stop condition; ``timeout`` required and validated
+        > 0 host-side; ``replace`` defaults ``True``) — see that method's
+        docstring for the full rationale; not re-derived here.
+
+        Fire-and-poll, the SAME shape as ``move_twist()``/``stop()`` (103-009
+        Decision 2's "telemetry-only return path"): this call writes the
+        bytes and returns immediately; its ENQUEUE outcome rides the ack
+        ring (``wait_for_ack()``).
+
+        Returns the corr_id assigned to this command. Raises
+        ``ConnectionError`` if not connected; raises ``ValueError`` for a
+        missing/ambiguous stop condition or a non-positive ``timeout``.
+        """
+        stop_kwargs = _build_move_stop_kwargs(
+            stop_time=stop_time, stop_distance=stop_distance, stop_angle=stop_angle)
+        if timeout <= 0:
+            raise ValueError(f"move_wheels(): timeout must be > 0, got {timeout!r}")
+        move = envelope_pb2.Move(
+            wheels=envelope_pb2.MoveWheels(v_left=v_left, v_right=v_right),
+            timeout=timeout, replace=replace, id=move_id, **stop_kwargs)
+        envelope = envelope_pb2.CommandEnvelope(move=move)
         return self._conn.send_envelope_fast(envelope)
 
     def stop(self) -> int:
@@ -894,11 +1022,11 @@ class NezhaProtocol:
         zero-field oneof arm that "cannot be malformed" (envelope.proto
         Decision 3).
 
-        Fire-and-poll, the SAME shape as ``twist()`` (103-009, see its
-        docstring for why): the P4 firmware reports ``stop``'s outcome via
-        the ack ring (``wait_for_ack()``), not a synchronous reply, so this
-        call writes the STOP bytes and returns immediately rather than
-        blocking on a reply that will not come.
+        Fire-and-poll, the SAME shape as ``move_twist()``/``move_wheels()``
+        (103-009, see their docstrings for why): the P4 firmware reports
+        ``stop``'s outcome via the ack ring (``wait_for_ack()``), not a
+        synchronous reply, so this call writes the STOP bytes and returns
+        immediately rather than blocking on a reply that will not come.
 
         Returns the corr_id assigned to this command — pass it to
         ``wait_for_ack()`` to confirm the firmware accepted it. Raises
@@ -911,44 +1039,45 @@ class NezhaProtocol:
 
     def config(self, **deltas: Any) -> int:
         """Build and send a ``ConfigDelta`` envelope (``CommandEnvelope{
-        config: delta}``, ``envelope.proto`` field 6) — the P4 wire's THIRD
-        and last ``cmd`` oneof arm, alongside ``twist()``/``stop()``
-        (``envelope.proto``'s own oneof comment: "config/stop keep their
-        pre-102 field numbers... twist is genuinely new"). 104-001 is what
-        gives ``config`` a host-side builder — before it, every OTHER
-        oneof arm (``twist``/``stop``) had one but ``config`` did not,
-        despite being schema-defined since 103-001.
+        config: delta}``, ``envelope.proto`` field 6) — one of the P4 wire's
+        three ``cmd`` oneof arms, alongside ``move_twist()``/``move_wheels()``/
+        ``stop()`` (``envelope.proto``'s own oneof comment: "config/stop keep
+        their pre-102 field numbers... move is genuinely new"). 104-001 is
+        what gives ``config`` a host-side builder — before it, every OTHER
+        oneof arm had one but ``config`` did not, despite being schema-defined
+        since 103-001.
 
-        Fire-and-poll, the SAME shape as ``twist()``/``stop()`` (103-009,
-        Decision 2's "telemetry-only return path"): a ``config`` command's
-        outcome rides the ack ring inside a subsequent ``Telemetry`` push,
-        never a synchronous ``ReplyEnvelope`` — see ``wait_for_ack()``. This
-        method writes the bytes and returns immediately.
+        Fire-and-poll, the SAME shape as ``move_twist()``/``move_wheels()``/
+        ``stop()`` (103-009, Decision 2's "telemetry-only return path"): a
+        ``config`` command's outcome rides the ack ring inside a subsequent
+        ``Telemetry`` push, never a synchronous ``ReplyEnvelope`` — see
+        ``wait_for_ack()``. This method writes the bytes and returns
+        immediately.
 
         ``deltas`` reuses the SAME flat wire-key vocabulary ``set_config()``
         curates (module-level ``_DRIVETRAIN_KEYS``/``_MOTOR_PID_KEYS``/
-        ``ml``/``mr``/``sTimeout`` — together ``_ALL_SET_KEYS``), so a key
-        added to one map is automatically
-        available to the other; nothing here re-derives that vocabulary.
-        UNLIKE ``set_config()``, which fans a multi-target kwargs dict out
-        into MULTIPLE round trips (one per touched ``ConfigDelta.patch``
-        oneof arm, since a single ``ConfigDelta`` carries only one patch at
-        a time), ``config()`` builds and sends exactly ONE
-        ``CommandEnvelope`` carrying exactly ONE ``ConfigDelta`` — matching
-        ``twist()``/``stop()``'s own "one call, one envelope, one corr_id"
-        shape. Passing kwargs that span more than one ``ConfigDelta.patch``
-        target (e.g. ``tw=`` and ``pid.kp=`` together — drivetrain vs. motor)
-        is a caller error: raises ``ValueError``, since no single
-        ``ConfigDelta`` could carry both. Same for empty ``deltas`` or a key
-        outside the known vocabulary. ``pid.*`` keys and ``ml``/``mr`` may be
-        mixed freely in one call — both target the SAME ``MotorConfigPatch``
-        oneof arm (mirroring ``set_config()``'s own ``motor_left_patch``/
-        ``motor_right_patch`` grouping); ``side`` selects ``travel_calib``'s
-        target only and is meaningless for the ``pid.*`` fields
-        (``config.proto``'s own ``MotorConfigPatch.side`` comment), so a
-        pure-``pid.*`` call (no ``ml``/``mr``) still needs SOME side value on
-        the wire — it defaults to ``LEFT``, the same default
-        ``set_config()``'s own ``motor_left_patch`` branch always used.
+        ``ml``/``mr`` — together ``_ALL_SET_KEYS``), so a key added to one map
+        is automatically available to the other; nothing here re-derives that
+        vocabulary. UNLIKE ``set_config()``, which fans a multi-target kwargs
+        dict out into MULTIPLE round trips (one per touched
+        ``ConfigDelta.patch`` oneof arm, since a single ``ConfigDelta``
+        carries only one patch at a time), ``config()`` builds and sends
+        exactly ONE ``CommandEnvelope`` carrying exactly ONE ``ConfigDelta``
+        — matching ``move_twist()``/``move_wheels()``/``stop()``'s own "one
+        call, one envelope, one corr_id" shape. Passing kwargs that span more
+        than one ``ConfigDelta.patch`` target (e.g. ``tw=`` and ``pid.kp=``
+        together — drivetrain vs. motor) is a caller error: raises
+        ``ValueError``, since no single ``ConfigDelta`` could carry both.
+        Same for empty ``deltas`` or a key outside the known vocabulary.
+        ``pid.*`` keys and ``ml``/``mr`` may be mixed freely in one call —
+        both target the SAME ``MotorConfigPatch`` oneof arm (mirroring
+        ``set_config()``'s own ``motor_left_patch``/``motor_right_patch``
+        grouping); ``side`` selects ``travel_calib``'s target only and is
+        meaningless for the ``pid.*`` fields (``config.proto``'s own
+        ``MotorConfigPatch.side`` comment), so a pure-``pid.*`` call (no
+        ``ml``/``mr``) still needs SOME side value on the wire — it defaults
+        to ``LEFT``, the same default ``set_config()``'s own
+        ``motor_left_patch`` branch always used.
 
         Historically (sprint 103, resolving 103's Step 7 Open Question 3):
         the firmware's dispatch switch decoded ``CONFIG`` successfully but
@@ -973,7 +1102,6 @@ class NezhaProtocol:
         drivetrain_patch: dict[str, float] = {}
         motor_patch: dict[str, float] = {}
         motor_side = config_pb2.LEFT
-        watchdog_value: int | None = None
 
         for key, value in deltas.items():
             if key in _DRIVETRAIN_KEYS:
@@ -986,12 +1114,8 @@ class NezhaProtocol:
                 motor_side = config_pb2.RIGHT
             elif key in _MOTOR_PID_KEYS:
                 motor_patch[_MOTOR_PID_KEYS[key]] = float(value)
-            elif key == "sTimeout":
-                watchdog_value = int(value)
 
-        targets_touched = sum([
-            bool(drivetrain_patch), bool(motor_patch), watchdog_value is not None,
-        ])
+        targets_touched = sum([bool(drivetrain_patch), bool(motor_patch)])
         if targets_touched > 1:
             raise ValueError(
                 "config(): kwargs span more than one ConfigDelta.patch "
@@ -1001,11 +1125,9 @@ class NezhaProtocol:
         if drivetrain_patch:
             delta = envelope_pb2.ConfigDelta(
                 drivetrain=config_pb2.DrivetrainConfigPatch(**drivetrain_patch))
-        elif motor_patch:
+        else:
             delta = envelope_pb2.ConfigDelta(motor=config_pb2.MotorConfigPatch(
                 side=motor_side, **motor_patch))
-        else:
-            delta = envelope_pb2.ConfigDelta(watchdog=watchdog_value)
 
         envelope = envelope_pb2.CommandEnvelope(config=delta)
         return self._conn.send_envelope_fast(envelope)
@@ -1039,10 +1161,10 @@ class NezhaProtocol:
         ``Otos::init()`` (OI) — a plain trigger flag, not a value, so it has
         no corresponding keyword default other than ``False``.
 
-        Fire-and-poll, the SAME shape as ``twist()``/``stop()``/``config()``
-        (103-009's "telemetry-only return path"): this call writes the bytes
-        and returns immediately; its outcome rides the ack ring
-        (``wait_for_ack()``).
+        Fire-and-poll, the SAME shape as ``move_twist()``/``move_wheels()``/
+        ``stop()``/``config()`` (103-009's "telemetry-only return path"):
+        this call writes the bytes and returns immediately; its outcome
+        rides the ack ring (``wait_for_ack()``).
 
         Returns the corr_id assigned to this command. Raises
         ``ConnectionError`` if not connected; raises ``ValueError`` if no
@@ -1074,19 +1196,6 @@ class NezhaProtocol:
         envelope = envelope_pb2.CommandEnvelope(config=delta)
         return self._conn.send_envelope_fast(envelope)
 
-    # ------------------------------------------------------------------
-    # Move -- DELETED (115-003, gut-to-minimal-firmware S1 motion-stack
-    # excision). The sprint-109 host-adoption ticket's move()/
-    # wait_for_move_terminal() sent envelope_pb2.Move (CommandEnvelope's
-    # move oneof arm) and polled AckEntry.status against telemetry_pb2.
-    # ACK_STATUS_DONE/friends -- both the Move message and the AckStatus
-    # completion-status taxonomy are deleted along with Motion::Executor
-    # (envelope.proto/telemetry.proto's own now-removed-message doc
-    # comments). S1 has no MOVE command and no completion-event taxonomy to
-    # poll; sprint 116's MOVE-protocol cutover reintroduces a `Move`-shaped
-    # arm at a FRESH field number (21, never 20) with its own host builder.
-    # ------------------------------------------------------------------
-
     def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "AckEntry | None":  # [ms]
         """Poll incoming ``Telemetry`` pushes for the single ack slot
         matching ``corr_id``, for up to ``timeout`` ms. Returns the matched
@@ -1095,8 +1204,9 @@ class NezhaProtocol:
 
         The single-ack-slot matcher for the P4 "telemetry-only return path"
         (103-009 Decision 2, narrowed from a depth-3 ring to one slot by
-        115-003 frame v2): ``twist()``/``stop()``/``config()`` get no
-        synchronous ``ReplyEnvelope`` of their own — their outcome rides
+        115-003 frame v2): ``move_twist()``/``move_wheels()``/``stop()``/
+        ``config()`` get no synchronous ``ReplyEnvelope`` of their own —
+        their outcome rides
         ``Telemetry.ack_corr``/``ack_err`` (valid iff ``flags`` bit 5,
         ``ack_fresh``) inside a subsequent ``Telemetry`` push. Because a
         command acked within the same primary period as another OVERWRITES

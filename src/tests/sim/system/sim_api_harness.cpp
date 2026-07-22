@@ -3,24 +3,31 @@
 // ticket 108-003) onto TestSim::SimHarness/TestSim::SimPlant
 // (tests/_infra/sim/{sim_harness.h,sim_plant.h}). Proves: boot completes
 // through the REAL App::RobotLoop (kEventBootReady visible in decoded
-// telemetry), an injected twist drives REAL plant velocity ramping (visible
+// telemetry), an injected MOVE drives REAL plant velocity ramping (visible
 // as encLeft/encRight/velLeft/velRight in decoded telemetry), an explicit
-// STOP command acks and clears `active`, a deadman expiry (no STOP ever
-// sent) independently sets kEventDeadmanExpired and clears `active`, and
+// STOP command acks and clears `active`, a MOVE's own TIME stop condition
+// (no STOP ever sent) independently ends the Move and clears `active`, and
 // the virtual-cycle-timing diagnostic (originally 105-004 AC #3) still
 // holds against the real RobotLoop schedule.
 //
 // The SCENARIO logic is unchanged from the pre-migration SimApi version --
 // only the simulator/harness plumbing changed: TestSim::SimHarness replaces
-// TestSim::SimApi, and the deadman-expiry scenario's old
-// `sim.notePendingActuationChange(3)` call (a SimApi::DutyPredictor-only
-// hint for its now-deleted scripted-FIFO bus) is simply gone -- SimPlant
-// responds live to whatever firmware actually writes, so there is nothing
-// left to hint. The timing scenario now reads Devices::Sleeper deltas
-// directly off `sim.sleeper()` (SimHarness's own accessor) instead of a
-// bespoke SimApi::CycleTimingReport/measureOneCycle() wrapper -- same
-// formula (105-004's own derivation: 3 non-final 4ms settle/clear blocks +
-// the observed final pace block == the whole cycle's virtual schedule).
+// TestSim::SimApi, and the old scenario's `sim.notePendingActuationChange(3)`
+// call (a SimApi::DutyPredictor-only hint for its now-deleted scripted-FIFO
+// bus) is simply gone -- SimPlant responds live to whatever firmware
+// actually writes, so there is nothing left to hint. The timing scenario
+// now reads Devices::Sleeper deltas directly off `sim.sleeper()`
+// (SimHarness's own accessor) instead of a bespoke SimApi::
+// CycleTimingReport/measureOneCycle() wrapper -- same formula (105-004's
+// own derivation: 3 non-final 4ms settle/clear blocks + the observed final
+// pace block == the whole cycle's virtual schedule).
+//
+// 116-006 (MOVE protocol cutover): bare TWIST (injectTwist()) and
+// App::Deadman are both gone -- every injection below is a TIME-stop MOVE
+// (injectMove()) instead, and scenario 4 (originally "deadman expiry") is
+// rewritten as scenarioMoveExpiryStopsPlantWithNoFurtherHostTraffic() --
+// see that scenario's own comment for why kFlagEventDeadmanExpired is no
+// longer the right signal to assert on.
 //
 // Hand-rolled assertions, PASS/FAIL per scenario, nonzero exit on any
 // failure -- mirrors every other src/tests/sim/{unit,plant} harness's own shape
@@ -159,7 +166,12 @@ void scenarioTwistDrivesRealPlantRamp() {
   sim.step(3);  // settle: both leaves' own one-time zero-duty activation writes land (cycles 0, 1)
   (void)sim.drainTelemetry();  // discard boot/settle frames -- this scenario only cares about the ramp
 
-  sim.injectTwist(/*v_x=*/1000.0f, /*omega=*/0.0f, /*duration=*/100000.0f, /*corrId=*/42);
+  // 116-006 (MOVE protocol cutover): bare TWIST/injectTwist() is gone --
+  // a TIME-stop MOVE with a stop value/timeout far longer than this run
+  // is the equivalent "hold this twist indefinitely" injection.
+  sim.injectMove(/*v_x=*/1000.0f, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime,
+                 /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/42,
+                 /*corrId=*/42);
   sim.step(15);  // ~750ms of virtual ramp time -- comfortably >> TestSim::kDefaultTau (130ms)
 
   std::vector<DecodedLine> frames = onlyTelemetry(sim.drainTelemetry());
@@ -204,7 +216,12 @@ void scenarioStopAcksAndClearsActive() {
   TestSim::SimHarness sim;
   TestSupport::configureSimForBenchTest(sim);
   sim.boot();
-  sim.injectTwist(1000.0f, 0.0f, 100000.0f, /*corrId=*/7);
+  // 116-006 (MOVE protocol cutover): bare TWIST/injectTwist() is gone --
+  // a TIME-stop MOVE with a stop value/timeout far longer than this run
+  // is the equivalent "hold this twist indefinitely" injection.
+  sim.injectMove(1000.0f, /*v_y=*/0.0f, 0.0f, TestSupport::MoveStopKind::kTime,
+                 /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/7,
+                 /*corrId=*/7);
   sim.step(5);  // ramp a bit so there is real motion to stop
   (void)sim.drainTelemetry();
 
@@ -226,39 +243,51 @@ void scenarioStopAcksAndClearsActive() {
 }
 
 // ===========================================================================
-// 4. Deadman expiry stops the plant: NO STOP is ever sent -- a short-
-//    duration twist's own deadman window lapses, and RobotLoop::cycle()'s
-//    own "host silent -> wheels stop" path (robot_loop.cpp) fires on its
-//    own. duration=120ms with SimApi::kCycleDtUs=50ms expires exactly 3
-//    cycles after the twist is dispatched -- see sim_api.cpp's own
-//    scriptCycleBusResponses() comment for the derivation
-//    notePendingActuationChange(3) below depends on.
+// 4. MOVE expiry stops the plant (116-006, MOVE protocol cutover -- REPLACES
+//    the deleted App::Deadman's own expiry scenario): NO STOP is ever sent
+//    -- a short TIME-stop MOVE's own stop condition is met on its own, and
+//    MoveQueue::tick()'s own "queue now empty -> Drive::stop()" path
+//    (move_queue.cpp) fires unconditionally, every cycle, with no lease to
+//    re-arm and no second command required. kFlagEventDeadmanExpired
+//    (telemetry.h bit 10) is DEAD CODE post-cutover -- nothing in
+//    robot_loop.cpp ever sets it any more -- so this scenario now asserts
+//    the actual MOVE-protocol signal instead: the completion ack
+//    (ack_corr == Move.id, ack_err == 0) and active clearing, matching
+//    move_queue.h's own documented completion contract. stopValue=120ms
+//    with SimHarness::kCycleDtUs=50ms meets the stop condition ~3 cycles
+//    after activation.
 // ===========================================================================
 
-void scenarioDeadmanExpiryStopsPlant() {
-  beginScenario("deadman: expiry (no STOP ever sent) sets kEventDeadmanExpired, clears active");
+void scenarioMoveExpiryStopsPlantWithNoFurtherHostTraffic() {
+  beginScenario("MOVE expiry: no STOP ever sent, TIME stop condition ends the Move on its own, "
+                "active clears (116-006)");
 
   TestSim::SimHarness sim;
   TestSupport::configureSimForBenchTest(sim);
   sim.boot();
-  sim.injectTwist(1000.0f, 0.0f, /*duration=*/120.0f, /*corrId=*/5);  // [ms] -- expires in 3 cycles
-  sim.step(2);  // cycles 0, 1 -- twist's own R/L activation writes land, not yet expired
-  // No SimApi::notePendingActuationChange() hint needed here -- that call
-  // primed the deleted scripted-FIFO bus for the expiry-triggered duty
-  // write it could not otherwise predict; SimPlant just responds live to
-  // whatever RobotLoop actually writes when the deadman trips.
-  sim.step(3);  // cycles 2 (quiet), 3 (expiry fires, R writes), 4 (L writes)
+  const uint32_t kMoveId = 5;
+  sim.injectMove(1000.0f, /*v_y=*/0.0f, 0.0f, TestSupport::MoveStopKind::kTime,
+                 /*stopValue=*/120.0f, /*timeout=*/100000.0f, /*replace=*/true, kMoveId,
+                 /*corrId=*/kMoveId);  // [ms] -- stop condition met ~3 cycles after activation
+  sim.step(2);  // cycles 0, 1 -- the Move's own R/L activation writes land, not yet met
+  // No further command is ever injected below -- the whole point of this
+  // scenario (matching the deleted deadman's own "host silence -> stop"
+  // guarantee) is that MoveQueue::tick() ends the Move and stops the
+  // plant on its own, with zero additional host traffic.
+  sim.step(3);  // cycles 2 (quiet), 3 (stop condition met, chain-empty -> Drive::stop()), 4
   sim.step(1);  // emit-lag buffer cycle
 
   std::vector<DecodedLine> frames = onlyTelemetry(sim.drainTelemetry());
-  checkTrue(!frames.empty(), "telemetry decoded across the deadman window");
-  checkTrue(anyEventSet(frames, App::kFlagEventDeadmanExpired), "kFlagEventDeadmanExpired visible in decoded telemetry");
+  checkTrue(!frames.empty(), "telemetry decoded across the MOVE's own window");
+  checkTrue(anyAckMatches(frames, kMoveId), "the Move's completion ack (ack_corr==Move.id, ack_err==0) "
+                                            "reached the wire with no STOP ever sent");
 
   bool sawInactive = false;
   for (const auto& f : frames) {
     if (!(f.telemetry.flags & App::kFlagActive)) sawInactive = true;
   }
-  checkTrue(sawInactive, "decoded telemetry shows active=false once the deadman expires (no STOP was ever sent)");
+  checkTrue(sawInactive, "decoded telemetry shows active=false once the Move's own TIME stop "
+                         "condition is met (no STOP was ever sent, no deadman lease involved)");
 }
 
 // ===========================================================================
@@ -355,7 +384,7 @@ int main() {
   scenarioBootCompletesThroughRealRobotLoop();
   scenarioTwistDrivesRealPlantRamp();
   scenarioStopAcksAndClearsActive();
-  scenarioDeadmanExpiryStopsPlant();
+  scenarioMoveExpiryStopsPlantWithNoFurtherHostTraffic();
   scenarioVirtualCycleTimingDiagnostic();
 
   if (g_failureCount == 0) {

@@ -33,6 +33,8 @@ void Odometry::integrate() {
   x_ += distance * cosf(midTheta);
   y_ += distance * sinf(midTheta);
   theta_ += headingDelta;
+
+  pathLength_ += fabsf(distance);
 }
 
 void Odometry::reset(float x, float y, float theta) {
