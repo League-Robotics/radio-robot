@@ -250,6 +250,46 @@ newly-commanded stop as an oversized, wrong-signed correction. A
 continuing low/zero target after that first tick keeps freezing exactly
 as before; only the *entry* transition resets.
 
+**Exact-zero target AND near-rest measured velocity bypasses the P-term
+too, not just the integrator (2026-07-22 bench fix, refined same day).**
+The deadband freeze above only ever silenced the *integral* term —
+`compute()` still computed and returned `kp * err` for an in-deadband
+target, including the literal `target == 0.0f` case `Drive::stop()`/an
+emptied `MoveQueue` produce at rest. Since `err = target - measured`, an
+exact-zero target's own "error" is just whatever residual/noisy
+`measured` velocity the plant happens to report that tick, and
+`writeShapedDuty()` (`nezha_motor.cpp`) boosts that noise-driven nonzero
+P output up to the full `outputDeadband_` magnitude, in whatever sign the
+noise landed on, every tick it flips ("clicking" at rest). Confirmed on
+the bench: 20s of idle telemetry showed one wheel's encoder position
+drifting ~12mm while its reported velocity alternated sign at roughly the
+deadband-boost magnitude the entire time.
+
+The first cut made `compute()` return a hard `0.0f` whenever `target ==
+0.0f` alone, before ever computing `err`/`kp * err`. A same-day
+stakeholder live report caught this cut's own regression: the P4 `Move`
+model is bang-bang (full commanded velocity until the stop condition
+fires, then `target` snaps directly to `0.0f` — no deceleration ramp of
+its own), so gating on `target == 0.0f` alone ALSO killed the P-term's
+active braking the instant a Move ended while the wheel was still
+genuinely moving fast — confirmed by two sim regressions (STOP
+convergence from ~500mm/s measurably slower to cross a 5mm/s tolerance;
+`SUC-050`'s own angle-stop tolerance missed by 0.4%). Fixed by ALSO
+requiring `fabsf(measured)` to already be within a rest-noise floor
+(`kZeroTargetRestNoiseFloor = 15mm/s`, `velocity_pid.cpp`, matching the
+bench's own observed at-rest noise envelope and the pre-existing —
+though not yet wired to a live `velDeadband` boot value —
+`tovez_nocal.json` `drive.motor_deadband=15.0`; `velDeadband` itself
+still wins if a future boot-config fix ever makes it live and larger)
+before the exemption fires: real deceleration from speed keeps its full
+active braking all the way down to the noise floor, and only the last,
+noise-dominated tail below it gets hard-zeroed instead of dithered. Both
+gates are narrower than the deadband-freeze branch above (which still
+applies to a small-but-*nonzero* target, e.g. sprint 114 ticket 005's own
+sub-deadband-boost terminal-trim scenario, `scenario
+DeadbandBoostSettlesNotHuntsAcrossResidualSweep`) and only ever silence
+the literal "settled at a complete stop" state.
+
 **Measurement rings: 6 physical slots, 5 published.** `MeasurementRing<T>`
 keeps one slot permanently as an unpublished write gap so `publish()` can
 write a full `Sample<T>` into it and then make it visible with a single

@@ -1272,6 +1272,202 @@ void scenarioDeadbandBoostSettlesNotHuntsAcrossResidualSweep() {
   }
 }
 
+// 15. Exact-zero target ignores residual measured-velocity noise (2026-07-22
+//     bench fix -- stakeholder bench finding: idle telemetry over 20s showed
+//     one wheel's encoder position drifting ~12mm while its reported
+//     velocity alternated sign (roughly +/-10mm/s) the ENTIRE time -- i.e.
+//     after a Move completes and Drive::stop()/an emptied MoveQueue set the
+//     commanded target to EXACT 0.0f, propagating straight to
+//     NezhaMotor::setVelocity(0.0f). Root cause: MotorVelocityPid::compute()
+//     froze the INTEGRAL for an in-deadband target but still computed and
+//     returned an active kp*err PROPORTIONAL term against whatever
+//     `measured` the plant happened to report -- pure noise, at an exact-
+//     zero target -- which writeShapedDuty() (nezha_motor.cpp) then boosted
+//     up to the full outputDeadband_ magnitude, in whatever sign the noise
+//     landed on, every tick it flipped.
+//
+//     Distinct from scenario 14 above (scenarioDeadbandBoostSettlesNotHunts
+//     AcrossResidualSweep): that sweep drives an OUTER-LOOP-DRIVEN shrinking
+//     NONZERO target (App::Pilot's own old error-driven-target shape,
+//     deleted 115-003) and asserts it settles rather than hunts -- a
+//     different regime from THIS scenario's literal "target is already
+//     exactly zero, forever, until the next Move" case, which is what the
+//     current MoveQueue-driven architecture actually produces at rest and
+//     which that sweep never exercises (its target is never exactly 0.0f).
+//
+//     This scenario feeds alternating-sign residual "noise" as the
+//     MEASURED velocity (a plausible encoder-jitter/coast-down signature),
+//     small enough to stay under the rest-noise floor
+//     (kZeroTargetRestNoiseFloor, velocity_pid.cpp), across many ticks
+//     while the commanded target stays exactly 0.0f the whole time, and
+//     asserts appliedDuty() never leaves 0.0f -- proving the fix
+//     (velocity_pid.cpp's `if (target == 0.0f && fabsf(measured) <=
+//     restThreshold) return 0.0f;` early-return, added ahead of the
+//     err/kp*err computation) actually reaches writeShapedDuty() and
+//     prevents the boosted dither. Scenario 16 below is this scenario's
+//     own companion/regression-guard: the SAME exact-zero target, but
+//     `measured` starts well ABOVE the rest-noise floor (a real
+//     deceleration-from-speed case), asserting the P-term's active
+//     braking is NOT suppressed in that regime -- the stakeholder live
+//     report this refinement responds to.
+void scenarioExactZeroTargetIgnoresResidualMeasuredVelocityNoise() {
+  beginScenario("exact-zero target ignores residual measured-velocity noise (no boosted dither)");
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::MotorConfig cfg = baseNezhaConfig();   // outputDeadband=0.03, reversalDwell=100ms
+  cfg.velGains = Devices::Gains{/*kp=*/0.01f, /*ki=*/0.05f, /*kff=*/0.002f,
+                                 /*iMax=*/1.0f, /*kaw=*/2.0f};
+  // velDeadband left at baseNezhaConfig()'s own default (0.0f, unconfigured)
+  // -- the rest-noise floor is velocity_pid.cpp's own
+  // kZeroTargetRestNoiseFloor (15mm/s) in that case, not velDeadband (see
+  // that constant's own comment on why velDeadband alone is not it on
+  // real hardware).
+
+  Devices::NezhaMotor motor(plant, cfg);
+  motor.setVelocity(0.0f);   // the exact command Drive::stop() produces
+
+  float position = 0.0f;
+  uint64_t nowUs = 0;
+
+  // Prime cycle -- establishes lastPosition_/lastTickUs_, no velocity yet.
+  scriptEncoderRequestCollect(bus, wireAddr, position);
+  motor.requestSample();
+  motor.tick(nowUs);
+
+  const int kTicks = 200;
+  const uint32_t dtMs = 20;
+  const float dtS = 0.02f;
+  bool everNonzero = false;
+  float worstNonzero = 0.0f;
+
+  for (int i = 0; i < kTicks; ++i) {
+    // Alternating-sign residual velocity noise, well above float epsilon
+    // but well BELOW the 15mm/s rest-noise floor (4mm/s -- comparable in
+    // magnitude to the bench's own observed at-rest alternation) -- fed as
+    // a real position delta so NezhaMotor's OWN velocity estimation
+    // (velFiltAlpha=1.0f, no smoothing -- baseNezhaConfig()'s own comment)
+    // reports it back through the exact same pipeline production code
+    // uses, not injected directly into the PID.
+    float noise = (i % 2 == 0) ? 4.0f : -4.0f;   // [mm/s]
+    position += noise * dtS;
+
+    nowUs += static_cast<uint64_t>(dtMs) * 1000;
+    scriptEncoderRequestCollect(bus, wireAddr, position);
+    motor.requestSample();
+    motor.tick(nowUs);
+
+    float duty = motor.appliedDuty();
+    if (duty != 0.0f) {
+      everNonzero = true;
+      worstNonzero = std::max(worstNonzero, std::fabs(duty));
+    }
+  }
+
+  char msg[160];
+  std::snprintf(msg, sizeof(msg),
+                "appliedDuty stays exactly 0.0f for every tick despite alternating "
+                "residual noise (worst nonzero seen: %.4f)",
+                static_cast<double>(worstNonzero));
+  checkTrue(!everNonzero, msg);
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the noise sweep");
+}
+
+// 16. Exact-zero target STILL actively brakes while measured velocity is
+//     genuinely large (2026-07-22 refinement -- companion/regression guard
+//     for scenario 15 above). The P4 Move model is bang-bang: a Move runs
+//     at its own full commanded velocity until its stop condition fires,
+//     then Drive::stop()/an emptied MoveQueue snap the target directly to
+//     0.0f -- no deceleration ramp of their own. A same-day stakeholder
+//     live report caught the FIRST cut of the rest-hunt fix (gating on
+//     `target == 0.0f` alone) ALSO suppressing this loop's own active
+//     P-term braking the instant that happens, discovered via two sim
+//     regressions: STOP-convergence from ~500mm/s taking measurably
+//     longer to cross a 5mm/s tolerance, and SUC-050's own angle-stop
+//     tolerance missed by 0.4%. This scenario proves the refined gate
+//     (requiring `fabsf(measured)` to ALSO already be within the
+//     rest-noise floor) does NOT reproduce that regression: starting well
+//     above the floor (300mm/s, a plausible mid-deceleration reading) with
+//     target snapped to 0.0f, appliedDuty() must be a real, actively-
+//     braking NEGATIVE duty on the very first tick (not 0.0f), and the
+//     measured velocity must monotonically decrease tick over tick as
+//     that braking takes effect.
+void scenarioExactZeroTargetStillBrakesWhileMeasuredIsLarge() {
+  beginScenario("exact-zero target still actively brakes while measured velocity is large");
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::MotorConfig cfg = baseNezhaConfig();
+  cfg.velGains = Devices::Gains{/*kp=*/0.01f, /*ki=*/0.05f, /*kff=*/0.002f,
+                                 /*iMax=*/1.0f, /*kaw=*/2.0f};
+  // Isolates the PID's own output from TWO SEPARATE writeShapedDuty()
+  // shaping stages this scenario is not about (both real, independent
+  // Nezha-brick protections that would otherwise blunt/delay the very
+  // duty this scenario checks, exactly like they would in production --
+  // see scenarioReversalDwellWritesZeroThenHoldsThroughDeadline and any
+  // "no slew clamping" scenario above for their own, separate coverage):
+  // reversalDwell (a full-scale reversal -- positive cruise duty ->
+  // negative braking duty -- would otherwise write 0 and arm a 100ms
+  // dwell), and slewRate (NezhaMotor::tick() substitutes a nonzero
+  // kDefaultSlewRate when left at its 0.0f "unset" default, capping how
+  // far a single write can step toward the target duty).
+  cfg.reversalDwell = 0.0f;
+  cfg.slewRate = 100.0f;
+
+  Devices::NezhaMotor motor(plant, cfg);
+
+  // Prime the motor's velocity ESTIMATE at ~300mm/s (well above the
+  // 15mm/s rest-noise floor) by scripting a real, fast-moving position
+  // trace for a few ticks BEFORE the stop -- mirrors "a Move was cruising,
+  // then its stop condition fired."
+  float position = 0.0f;
+  uint64_t nowUs = 0;
+  const uint32_t dtMs = 20;
+  const float dtS = 0.02f;
+  const float kCruiseVelocity = 300.0f;   // [mm/s]
+
+  scriptEncoderRequestCollect(bus, wireAddr, position);
+  motor.requestSample();
+  motor.tick(nowUs);
+  motor.setVelocity(kCruiseVelocity);
+  for (int i = 0; i < 5; ++i) {
+    position += kCruiseVelocity * dtS;
+    nowUs += static_cast<uint64_t>(dtMs) * 1000;
+    scriptEncoderRequestCollect(bus, wireAddr, position);
+    motor.requestSample();
+    motor.tick(nowUs);
+  }
+  float measuredBeforeStop = motor.velocity();
+  checkTrue(measuredBeforeStop > 15.0f,
+            "primed measured velocity is above the rest-noise floor before the stop");
+
+  // Now the Move's stop condition fires -- target snaps directly to 0.0f,
+  // matching Drive::stop()'s own bang-bang contract. Position stays FROZEN
+  // this tick (no further real motion scripted) so the plant's next
+  // reported measured velocity still reflects the cruise, not a fresh
+  // zero -- isolating what compute() does with a still-large `measured`
+  // the instant target goes to zero.
+  motor.setVelocity(0.0f);
+  nowUs += static_cast<uint64_t>(dtMs) * 1000;
+  scriptEncoderRequestCollect(bus, wireAddr, position);   // unchanged position
+  motor.requestSample();
+  motor.tick(nowUs);
+
+  float dutyAtStop = motor.appliedDuty();
+  char msg[160];
+  std::snprintf(msg, sizeof(msg),
+                "appliedDuty is a real active-braking duty on the stop tick, not 0.0f "
+                "(measured was %.1fmm/s, duty=%.4f)",
+                static_cast<double>(measuredBeforeStop), static_cast<double>(dutyAtStop));
+  checkTrue(dutyAtStop != 0.0f, msg);
+  checkTrue(dutyAtStop < 0.0f,
+            "active-braking duty opposes the still-forward measured velocity (negative)");
+
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the stop-from-speed tick");
+}
+
 }  // namespace
 
 int main() {
@@ -1290,6 +1486,8 @@ int main() {
   scenarioReconfigureGuardedWholeConfigReplacement();
   scenarioExplicitZeroWriteShapingIsPassThrough();
   scenarioDeadbandBoostSettlesNotHuntsAcrossResidualSweep();
+  scenarioExactZeroTargetIgnoresResidualMeasuredVelocityNoise();
+  scenarioExactZeroTargetStillBrakesWhileMeasuredIsLarge();
 
   if (g_failureCount == 0) {
     std::printf("OK: all devices motor scenarios passed\n");
