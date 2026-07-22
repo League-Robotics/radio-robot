@@ -213,16 +213,26 @@ int SimPlant::handleOtosRead(uint8_t* data, int len) {
     // 109-010: VELOCITY_XL's own angular-rate word (rvh, decoded by
     // Devices::Otos::readPositionVelocity() as `whF` -- see that method's
     // own "reuses the SAME kPosMmPerLsb/kHdgRadPerLsb" comment for why the
-    // SAME kHdgRadPerLsb scale applies here too) is now OtosPlant::omega(),
-    // a real finite-difference rate estimate -- App::HeadingSource's own
-    // measurement-age projection (locus 1) needs a real omega_meas to
-    // characterize/validate at all; before this ticket this word was
-    // always zero ("no scenario asserts on OTOS's twist" -- ticket 010 is
-    // the first that does). Linear velocity (rvx/rvy) stays zero -- no
-    // consumer of this ticket's own three lead-compensation loci reads
-    // pose().v_x/v_y, only pose().omega.
+    // SAME kHdgRadPerLsb scale applies here too) is OtosPlant::omega(), a
+    // real finite-difference rate estimate -- App::HeadingSource's own
+    // measurement-age projection (locus 1) needed a real omega_meas to
+    // characterize/validate at all; before ticket 109-010 this word was
+    // always zero ("no scenario asserts on OTOS's twist").
+    //
+    // 115-006 (gut S1 optional stretch): the linear-velocity words (rvx,
+    // rvy) are likewise now OtosPlant::v_x()/v_y() -- the SAME
+    // kPosMmPerLsb scale Devices::Otos::readPositionVelocity() decodes
+    // vxF/vyF with (otos.cpp) -- instead of the hard-zero this word used to
+    // carry ("no consumer reads pose().v_x/v_y, only pose().omega" was true
+    // until this ticket; OtosReading.v_x/v_y now ride the primary telemetry
+    // frame -- telemetry.proto's OtosReading message). v_y() is always 0
+    // (no lateral-slip model, see OtosPlant::v_y()'s own comment), so ry's
+    // encoded word is always exactly 0 regardless.
+    int16_t rvx = static_cast<int16_t>(std::lround(otos_.v_x() / kPosMmPerLsb));
+    int16_t rvy = static_cast<int16_t>(std::lround(otos_.v_y() / kPosMmPerLsb));
     int16_t rvh = static_cast<int16_t>(std::lround(otos_.omega() / kHdgRadPerLsb));
-    for (int i = 6; i < 10; ++i) data[i] = 0;  // rvx, rvy -- unmodeled, see above
+    writeLeInt16(data + 6, rvx);
+    writeLeInt16(data + 8, rvy);
     writeLeInt16(data + 10, rvh);
     return kOk;
   }

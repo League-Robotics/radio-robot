@@ -1,7 +1,7 @@
 ---
 id: '006'
 title: 'Sim lockstep: strip pilot/executor/heading-source from sim_harness'
-status: in-progress
+status: done
 use-cases:
 - SUC-045
 - SUC-047
@@ -31,30 +31,38 @@ frames).
 
 ## Acceptance Criteria
 
-- [ ] `src/sim/sim_harness.h`: `Motion::Executor`/`App::Pilot`/
+- [x] `src/sim/sim_harness.h`: `Motion::Executor`/`App::Pilot`/
       `App::HeadingSource` includes, members, `configurePlanner()`, and
       their accessors removed. `SimHarness`'s remaining construction
       (real `App::RobotLoop` graph against a `SimPlant` in the
       `I2CBus&` slot) matches ticket 005's updated `RobotLoop`
       constructor signature (no `pilot` argument).
-- [ ] `src/tests/_infra/sim/support/wire_test_codec.*`: MOVE
-      encode/decode helpers removed; `EncoderReading`/`OtosReading`/
-      `flags` decode helpers added, matching ticket 003's rewritten
-      `telemetry.proto`. `Twist`/`Config`/`Stop` encode/decode
-      untouched.
-- [ ] `python build.py`'s host sim library (`build_host_sim()`) builds
+- [x] `src/tests/sim/support/wire_test_codec.*` (ticket text says
+      `src/tests/_infra/sim/support/` — that path is stale; the file
+      actually lives at `src/tests/sim/support/`, matching
+      `src/sim/CMakeLists.txt`'s own `SUPPORT_DIR`): MOVE encode/decode
+      helpers removed; `EncoderReading`/`OtosReading`/`flags` decode
+      helpers added, matching ticket 003's rewritten `telemetry.proto`.
+      `Twist`/`Stop` encode/decode untouched (no `Config` encode existed
+      before or after — nothing to touch there).
+- [x] `python build.py`'s host sim library (`build_host_sim()`) builds
       clean.
-- [ ] `src/tests/sim/unit/sim_harness_configure_harness.cpp` /
+- [x] `src/tests/sim/unit/sim_harness_configure_harness.cpp` /
       `test_sim_harness_configure.py` updated to compile and pass
       against the reshaped `SimHarness`.
-- [ ] **Optional stretch** (sprint.md Open Questions #4 — not required
+- [x] **Optional stretch** (sprint.md Open Questions #4 — not required
       for this ticket's completion): `src/sim/sim_plant.cpp`'s
       `OtosPlant` models real `v_x`/`v_y` instead of hard-zeroing them
       (verified today at sim_plant.cpp:220-226 — the comment block
       starts at :220, the hard-zero loop itself at :225). If attempted
       and it doesn't land cleanly, defer it rather than let it block
       this ticket — `OtosReading.v_x`/`v_y` already ride the wire
-      correctly either way (0 in sim, real on hardware).
+      correctly either way (0 in sim, real on hardware). LANDED:
+      `TestSim::OtosPlant::v_x()`/`v_y()` (finite-difference forward
+      velocity from the same `distance`/`dt` `step()` already computes;
+      `v_y()` stays 0 — no lateral-slip model) and
+      `sim_plant.cpp::handleOtosRead()` now encodes real `rvx`/`rvy`
+      instead of hard-zeroing bytes 6-9.
 
 ## Implementation Plan
 

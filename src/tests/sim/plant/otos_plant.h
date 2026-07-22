@@ -52,23 +52,41 @@ class OtosPlant {
   // positions the caller's two WheelPlant instances just computed. Call
   // once per cycle, after both WheelPlant::step() calls for that cycle.
   //
-  // dt (109-010): this cycle's own elapsed time ([s]) -- used ONLY to
-  // derive `omega()` below (`headingDelta / dt`, a plain finite-difference
-  // rate estimate of THIS cycle's own heading change, mirroring a real
-  // OTOS chip's own VELOCITY_XL register: an instantaneous angular-rate
-  // report alongside the position/heading burst). Defaulted to 0 so no
-  // pre-109-010 test caller needs to change -- `dt<=0` reports `omega()==0`
-  // (the pre-109-010 behavior: sim_plant.cpp's own handleOtosRead() zeroed
-  // the VELOCITY_XL bytes unconditionally, "no scenario asserts on OTOS's
-  // twist" -- ticket 010 is the first scenario that does, via App::
-  // HeadingSource's own measurement-age projection needing a real
-  // `omega_meas`).
+  // dt (109-010): this cycle's own elapsed time ([s]) -- used to derive
+  // `omega()`/`v_x()`/`v_y()` below, each a plain finite-difference rate
+  // estimate of THIS cycle's own motion, mirroring a real OTOS chip's own
+  // VELOCITY_XL register: an instantaneous linear+angular-rate report
+  // alongside the position/heading burst. Defaulted to 0 so no
+  // pre-109-010 test caller needs to change -- `dt<=0` reports
+  // `omega()==0`/`v_x()==0`/`v_y()==0` (the pre-109-010 behavior:
+  // sim_plant.cpp's own handleOtosRead() zeroed the VELOCITY_XL bytes
+  // unconditionally, "no scenario asserts on OTOS's twist" -- ticket 010
+  // is the first scenario that does, via App::HeadingSource's own
+  // measurement-age projection needing a real `omega_meas`).
   void step(float leftPosition, float rightPosition, float dt = 0.0f);   // [mm] [mm] [s]
 
   // omega -- this plant's own finite-difference angular-rate estimate from
   // the MOST RECENT step() call (see that method's own `dt` doc comment).
   // 0.0f before the first step() with a nonzero dt.
   float omega() const { return omega_; }  // [rad/s]
+
+  // v_x/v_y -- this plant's own finite-difference LINEAR-velocity estimate
+  // from the MOST RECENT step() call (115-006, gut S1 optional stretch:
+  // Otos::pose()'s v_x/v_y previously always rode the wire as 0 -- see
+  // sim_plant.cpp's own handleOtosRead() comment history). v_x is this
+  // cycle's own `distance / dt` (the SAME body-forward `distance`
+  // BodyKinematics::forward() already computed inside step(), before it was
+  // consumed by the midpoint-arc position update) -- a body-FRAME forward
+  // velocity, matching the real chip's own linear-velocity report
+  // convention (mounting-yaw-corrected only, not heading-rotated -- see
+  // Devices::Otos::tick()'s own rotVx/rotVy comment). v_y is always 0.0f:
+  // this plant, like the firmware's own encoder-only Odometry, has no
+  // lateral-slip model for a differential-drive robot -- there is no
+  // sideways component to report, matching the primary telemetry frame's
+  // own twist.v_y (BodyKinematics::forward() never produces one either).
+  // 0.0f before the first step() with a nonzero dt.
+  float v_x() const { return v_x_; }  // [mm/s]
+  float v_y() const { return v_y_; }  // [mm/s]
 
   // Reported pose == the true accumulator (x_/y_/heading_) plus the
   // deterministic drift/bias knobs below. Kept separate from x()/y()/
@@ -180,6 +198,8 @@ class OtosPlant {
   float y_ = 0.0f;          // [mm]
   float heading_ = 0.0f;    // [rad]
   float omega_ = 0.0f;      // [rad/s] 109-010, see step()'s own `dt` doc comment
+  float v_x_ = 0.0f;        // [mm/s] 115-006, see v_x()'s own doc comment
+  float v_y_ = 0.0f;        // [mm/s] 115-006, see v_y()'s own doc comment -- always 0.0f
 
   // ---- Drift/bias knob state ----
   float driftX_ = 0.0f;        // [mm]

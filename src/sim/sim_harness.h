@@ -66,6 +66,23 @@
 // integrated pose (which a test would otherwise have no way to read without
 // adding accessors to Odometry itself). These are ground truth, bypassing
 // any sensor noise, for test assertions.
+//
+// --- 115-006 (gut S1 sim lockstep) ---
+// Motion::Executor/App::Pilot/App::HeadingSource are DELETED (115-002's
+// motion-stack excision) -- this class no longer constructs or references
+// any of the three, and every accessor/config-load hook that only ever
+// existed to reach INTO one of them (configurePlanner()/plannerConfig(),
+// pilotQueueDepth()/pilotActiveId()/pilotState(), headingSourceIsOtos(),
+// debugHeadingLead(), setLeadCompensation()/setYawRateMax()/setDistanceKp(),
+// plannedRefLeft()/plannedRefRight()) is deleted with them -- there is
+// nothing left to configure or read back. robotLoop_'s own construction now
+// matches ticket 005's reshaped App::RobotLoop constructor exactly (see
+// robot_loop.h): color_/line_ leaves passed directly, no pilot argument, an
+// optional trailing Config::TuningStore* this class never passes (every
+// sim/test composition root runs with persistence disabled -- see
+// robot_loop.h's own constructor doc comment). The configuration-
+// completeness gate (maybeMarkConfigured() below) now depends on the motor
+// half ALONE -- there is no planner half left to wait on.
 #pragma once
 
 #include <cassert>
@@ -76,9 +93,7 @@
 #include "app/comms.h"
 #include "app/deadman.h"
 #include "app/drive.h"
-#include "app/heading_source.h"
 #include "app/odometry.h"
-#include "app/pilot.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
 #include "app/telemetry.h"
@@ -89,7 +104,6 @@
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "fake_transport.h"
-#include "motion/executor.h"
 #include "sim_clock.h"
 #include "sim_plant.h"
 #include "wire_test_codec.h"
@@ -126,21 +140,17 @@ class SimHarness {
         drive_(armorL_, armorR_, trackWidth),
         odom_(armorL_, armorR_, trackWidth),
         preamble_(armorL_, armorR_, otos_, color_, line_, clock_),
-        headingSource_(otos_, armorL_, armorR_, trackWidth),
-        pilot_(executor_, drive_, headingSource_, odom_),
-        robotLoop_(plant_, armorL_, armorR_, otos_, comms_, tlm_, drive_, odom_,
-                   deadman_, preamble_, pilot_, clock_, sleeper_) {
-    // 114-001: no self-configuration here anymore -- executor_/
-    // headingSource_/drive_/pilot_ are left at their own default-constructed
-    // state (msg::PlannerConfig{}'s all-zero fields) and motorL_/motorR_ at
-    // Devices::MotorConfig{}'s all-zero fields, exactly matching a real,
-    // not-yet-booted composition root. robotLoop_.isConfigured() is false
-    // here (App::RobotLoop's own configured_ default). A caller MUST call
-    // configurePlanner() and both configureMotor() calls (or, for a test,
-    // TestSupport::configureSimForBenchTest()) before commanding a TWIST/
-    // MOVE -- see this file's own header and configurePlanner()'s/
-    // configureMotor()'s own comments for the load-bearing-for-the-first-
-    // time contract this ticket adds.
+        robotLoop_(plant_, armorL_, armorR_, otos_, color_, line_, comms_, tlm_,
+                   drive_, odom_, deadman_, preamble_, clock_, sleeper_) {
+    // 115-006 (gut S1 sim lockstep): no self-configuration here -- motorL_/
+    // motorR_ are left at their own default-constructed Devices::MotorConfig{}
+    // all-zero fields, exactly matching a real, not-yet-booted composition
+    // root. robotLoop_.isConfigured() is false here (App::RobotLoop's own
+    // configured_ default). A caller MUST call configureMotor() for BOTH
+    // ports (or, for a test, TestSupport::configureSimForBenchTest()) before
+    // commanding a TWIST -- see maybeMarkConfigured()'s own comment below.
+    // Pilot/Executor/HeadingSource are gone (115-002) -- there is no planner
+    // half of this gate anymore, only the motor half.
     //
     // "Pre-boot state": everything above is constructed and wired, but
     // App::Preamble::step() has not yet been called even once -- boot() is
@@ -191,82 +201,20 @@ class SimHarness {
   void injectStop(uint32_t corrId = 0) {
     injectCommand(TestSupport::armorStopCommand(corrId).c_str());
   }
-  // injectMove -- 109-003. See wire_test_codec.h's armorMoveCommand() for
-  // the field order (mirrors msg::Move field-for-field).
-  void injectMove(float distance, float deltaHeading, float vMax, float omega, float timeMs,
-                   bool replace, uint32_t id, uint32_t corrId = 0) {
-    injectCommand(TestSupport::armorMoveCommand(distance, deltaHeading, vMax, omega, timeMs,
-                                                 replace, id, corrId)
-                       .c_str());
-  }
-
-  // Motion::Executor visibility -- test-only accessors mirroring the new
-  // TLM fields (queueDepth/activeId/state), for tests that want to assert
-  // executor state directly rather than only via decoded telemetry.
-  uint8_t pilotQueueDepth() const { return pilot_.queueDepth(); }
-  uint32_t pilotActiveId() const { return pilot_.activeId(); }
-  Motion::State pilotState() const { return pilot_.state(); }
-
-  // App::HeadingSource visibility (109-005) -- test-only accessors mirroring
-  // the new TLM heading_source field/event bit, for tests that want to
-  // assert the active source directly rather than only via decoded
-  // telemetry.
-  bool headingSourceIsOtos() const { return pilot_.headingSourceIsOtos(); }
-
-  // plannerConfig -- 111-001 test-only accessor exposing the live
-  // msg::PlannerConfig baseline this harness was configured with
-  // (Pilot::plannerConfig(), itself derived from whatever configurePlanner()
-  // was last called with -- 114-001: TestSupport::configureSimForBenchTest(),
-  // for every test that wants the sim's own test-only stand-in values). Lets
-  // a test read REAL configured limits
-  // (a_max/a_decel/v_body_max/j_max/yaw_acc_max/yaw_rate_max/yaw_jerk_max)
-  // instead of hand-duplicating numeric bounds that could silently drift
-  // from that configured baseline -- see behavior_lock_harness.cpp.
+  // injectMove -- DELETED (115-006, gut S1): CommandEnvelope's move(20) arm
+  // and envelope.proto's Move message are gone (115-003) along with the
+  // Motion::Executor arc-command queue that consumed it; wire_test_codec.h's
+  // armorMoveCommand() is deleted with it. Sprint 116's own MOVE-protocol
+  // cutover reintroduces a wire arm named Move with a DIFFERENT shape at a
+  // FRESH field number (21) -- see envelope.proto's own header.
   //
-  // 113-002: this is ALSO the test-only readback for configurePlanner()
-  // below -- pilot_.configureHeading(cfg) (the last of configurePlanner()'s
-  // four fan-out calls) does `plannerConfig_ = config;`, a full-struct copy,
-  // so this accessor reflects EVERY field of whatever msg::PlannerConfig was
-  // last pushed through configurePlanner(), not just the fields Pilot's own
-  // arithmetic reads. Reused here rather than adding a parallel readback
-  // (this ticket's own "choose whichever is less code" acceptance
-  // criterion) -- see configurePlanner()'s own comment.
-  const msg::PlannerConfig& plannerConfig() const { return pilot_.plannerConfig(); }
-
-  // configurePlanner -- 113-002: ADDITIVE public config-load surface,
-  // generalizing the identical 4-call fan-out the constructor above and the
-  // three sim-only test hooks below (setYawRateMax()/setLeadCompensation()/
-  // setDistanceKp()) already use piecemeal. Lets a caller (the host, via
-  // ticket 005's ctypes surface) push a COMPLETE, JSON-derived
-  // msg::PlannerConfig in one call instead of only ever getting a
-  // hardcoded stand-in baseline (114-001: SimHarness itself carries none
-  // anymore -- see this file's own header).
-  //
-  // Also becomes the new "last known config" baseline the three hooks below
-  // build their own override on top of (lastPlannerConfig_/
-  // hasConfiguredPlanner_) -- so a caller who calls configurePlanner() with
-  // real robot values and THEN calls e.g. setYawRateMax() does not silently
-  // lose every other field configurePlanner() set (the bug this ticket's own
-  // acceptance criteria call out).
-  //
-  // Purely ADDITIVE (SUC-005): every pre-existing caller that already calls
-  // configurePlanner() (or, since 114-001, TestSupport::
-  // configureSimForBenchTest()) keeps rebuilding setYawRateMax()/
-  // setLeadCompensation()/setDistanceKp()'s own base config from
-  // lastPlannerConfig_ exactly as before -- byte-for-byte unchanged
-  // behavior for every pre-existing caller.
-  //
-  // 114-001: ALSO now load-bearing for App::RobotLoop's configuration-
-  // completeness gate -- see maybeMarkConfigured()'s own comment below.
-  void configurePlanner(const msg::PlannerConfig& cfg) {
-    lastPlannerConfig_ = cfg;
-    hasConfiguredPlanner_ = true;
-    executor_.configure(cfg);
-    headingSource_.configure(cfg);
-    drive_.configure(cfg);
-    pilot_.configureHeading(cfg);
-    maybeMarkConfigured();
-  }
+  // Motion::Executor/App::Pilot/App::HeadingSource visibility, plannerConfig()/
+  // configurePlanner(), and the setLeadCompensation()/setYawRateMax()/
+  // setDistanceKp() sim-only characterization hooks -- ALL DELETED (115-006):
+  // executor_/headingSource_/pilot_ no longer exist (115-002's motion-stack
+  // excision), so there is nothing left for any of these to read or
+  // configure. See this file's own header for the full list of what was
+  // removed.
 
   // motorConfig -- 113-002 test-only readback exposing the Devices::
   // MotorConfig last passed to configureMotor() below for the given port
@@ -348,114 +296,11 @@ class SimHarness {
   float driveTargetVelLeft() const { return armorL_.velocityTarget(); }    // [mm/s] signed
   float driveTargetVelRight() const { return armorR_.velocityTarget(); }  // [mm/s] signed
 
-  // plannedRefLeft/plannedRefRight -- 112-002 test-only accessors exposing
-  // App::Pilot's own PLANNED per-wheel reference (Pilot::refLeft/refRight():
-  // Motion::Executor's jerk-limited trajectory mapped through
-  // BodyKinematics::inverse(), BEFORE the heading-PD correction and BEFORE
-  // App::Drive's actuation-lag feedforward) -- NOT driveTargetVelLeft/Right()
-  // above, which is the FINAL, FF-augmented command Devices::Motor actually
-  // chases. Used by behavior_lock_harness.cpp's ramp/terminal-bounds and
-  // single-lobe/lobes-opposite-sign checks (112-002 re-grade): those check
-  // the PLANNED trajectory's own jerk-boundedness, which the accel
-  // feedforward (112-002) deliberately perturbs on the commanded signal --
-  // see that file's own header comment for the full rationale.
-  float plannedRefLeft() const { return pilot_.refLeft(); }    // [mm/s] signed
-  float plannedRefRight() const { return pilot_.refRight(); }  // [mm/s] signed
-
-  // debugHeadingLead -- 109-010 diagnostic-only accessor (temporary
-  // instrumentation, mirrors this sprint's own precedent of ad hoc trace
-  // instrumentation during characterization -- see ticket 009's own
-  // Iteration Log): exposes heading()/headingLead() and usingOtos() so the
-  // characterization work can directly confirm the projection is actually
-  // engaged before trusting a sweep's own numbers.
-  void debugHeadingLead(bool* usingOtos, float* heading, float* headingLead) const {
-    *usingOtos = headingSource_.usingOtos();
-    *heading = headingSource_.heading();
-    *headingLead = headingSource_.headingLead();
-  }
-
-  // setLeadCompensation -- 109-010: test-only hook for the rate-sweep
-  // characterization harness to try different lead-compensation Δt's
-  // WITHOUT a reflash/rebuild -- these three fields have no wire
-  // PlannerConfigPatch arm (they are boot-baked-default-only per this
-  // ticket's own scope, see planner.proto's own field comments), so this
-  // sim-only C++/ctypes path (mirrored by sim_ctypes.cpp's
-  // sim_set_lead_compensation() and SimLoop.set_lead_compensation() on the
-  // Python side) is the ONLY way a test can vary them against the compiled
-  // sim. Re-applies the full current configured baseline plus the three
-  // overrides to every consumer (Executor::configure()/
-  // HeadingSource::configure()/Pilot::configureHeading()), the same
-  // re-apply-to-every-consumer shape Pilot::applyPlannerPatch() already
-  // uses for a live wire patch.
-  //
-  // 113-002: rebuilds its base config from lastPlannerConfig_ (whatever
-  // configurePlanner() last received) instead of ALWAYS restarting from a
-  // hardcoded baseline -- falls back to msg::PlannerConfig{}'s own all-zero
-  // default (114-001: SimHarness itself carries no hardcoded stand-in
-  // anymore -- see this file's own header) only when configurePlanner() was
-  // never called, so this hook's behavior is byte-for-byte unchanged for
-  // every existing caller (SUC-005: none of them call configurePlanner()).
-  // Delegates the actual fan-out to configurePlanner() itself (the same 4
-  // calls, same order, this method used to make inline) so the two surfaces
-  // share one bookkeeping path.
-  void setLeadCompensation(float headingLeadBias, float planLead, float terminalLead) {
-    lastHeadingLeadBias_ = headingLeadBias;
-    lastPlanLead_ = planLead;
-    lastTerminalLead_ = terminalLead;
-    msg::PlannerConfig cfg = hasConfiguredPlanner_ ? lastPlannerConfig_ : msg::PlannerConfig{};
-    cfg.heading_lead_bias = headingLeadBias;
-    cfg.plan_lead = planLead;
-    cfg.terminal_lead = terminalLead;
-    cfg.yaw_rate_max = lastYawRateMax_;
-    cfg.distance_kp = lastDistanceKp_;  // 112-003: compose with setDistanceKp() regardless of call order
-    configurePlanner(cfg);
-  }
-
-  // setYawRateMax -- 109-010 rate-sweep characterization harness hook: vary
-  // the pivot cruise-rate ceiling (Motion::JerkTrajectory's own rotational
-  // channel ceiling, `PlannerConfig.yaw_rate_max`) across a test's own sweep
-  // of commanded rates WITHOUT a reflash/rebuild, the same sim-only-hook
-  // shape as setLeadCompensation() above (and re-applying whatever lead
-  // compensation was last set, so the two hooks compose regardless of call
-  // order).
-  //
-  // 113-002: same lastPlannerConfig_-or-msg::PlannerConfig{} base + delegate-
-  // to-configurePlanner() refactor as setLeadCompensation() above -- see
-  // that method's own comment.
-  void setYawRateMax(float yawRateMax) {
-    lastYawRateMax_ = yawRateMax;
-    msg::PlannerConfig cfg = hasConfiguredPlanner_ ? lastPlannerConfig_ : msg::PlannerConfig{};
-    cfg.yaw_rate_max = yawRateMax;
-    cfg.heading_lead_bias = lastHeadingLeadBias_;
-    cfg.plan_lead = lastPlanLead_;
-    cfg.terminal_lead = lastTerminalLead_;
-    cfg.distance_kp = lastDistanceKp_;  // 112-003: compose with setDistanceKp() regardless of call order
-    configurePlanner(cfg);
-  }
-
-  // setDistanceKp -- 112-003 test-only hook, same shape as
-  // setYawRateMax()/setLeadCompensation() above: lets a test override
-  // PlannerConfig.distance_kp away from bench_test_config.cpp's own
-  // benchTestPlannerConfig() shipped default (8.0 as of 112-004; see that
-  // function's own comment) -- e.g. to 0.0 for a test that wants
-  // App::Pilot's bounded linear position-feedback trim completely inert, or
-  // to a specific value for a targeted gain/clamp check. Used by
-  // pilot_distance_trim_harness.cpp's own 087-009 clamp-authority guardrail
-  // check.
-  //
-  // 113-002: same lastPlannerConfig_-or-msg::PlannerConfig{} base + delegate-
-  // to-configurePlanner() refactor as setLeadCompensation()/setYawRateMax()
-  // above -- see setLeadCompensation()'s own comment.
-  void setDistanceKp(float distanceKp) {
-    lastDistanceKp_ = distanceKp;
-    msg::PlannerConfig cfg = hasConfiguredPlanner_ ? lastPlannerConfig_ : msg::PlannerConfig{};
-    cfg.distance_kp = distanceKp;
-    cfg.heading_lead_bias = lastHeadingLeadBias_;
-    cfg.plan_lead = lastPlanLead_;
-    cfg.terminal_lead = lastTerminalLead_;
-    cfg.yaw_rate_max = lastYawRateMax_;
-    configurePlanner(cfg);
-  }
+  // plannedRefLeft/plannedRefRight, debugHeadingLead, setLeadCompensation,
+  // setYawRateMax, setDistanceKp -- ALL DELETED (115-006, gut S1):
+  // Motion::Executor/App::Pilot/App::HeadingSource are gone (115-002), so
+  // there is no planned-reference/heading-lead/planner-config state left for
+  // any of these to read or write. See this file's own header.
 
   // Decodes and returns every outbound line captured on the serial
   // FakeTransport since the last call (both FakeTransport instances receive
@@ -494,8 +339,8 @@ class SimHarness {
   // isConfigured -- 114-001 thin passthrough to App::RobotLoop's own
   // configuration-completeness gate (robot_loop.h). false immediately after
   // construction (SimHarness no longer self-configures); true only once
-  // configurePlanner() AND both configureMotor() calls have landed (see
-  // maybeMarkConfigured()'s own comment below).
+  // both configureMotor() calls have landed (115-006: the planner half of
+  // this gate is gone -- see maybeMarkConfigured()'s own comment below).
   bool isConfigured() const { return robotLoop_.isConfigured(); }
 
   // The composed SimPlant -- exposes fault knobs (setDisconnected()/
@@ -554,13 +399,15 @@ class SimHarness {
   static constexpr uint32_t kCycleDtUs = 50000;  // [us]
 
  private:
-  // 114-001: the two private static methods that used to live here (the
+  // 114-001: the private static methods that used to live here (the
   // hardcoded planner/motor stand-in values) are DELETED -- SimHarness
-  // itself no longer carries a behavioral default. The SAME values,
+  // itself no longer carries a behavioral default. The motor values,
   // byte-for-byte, now live at src/tests/sim/support/bench_test_config.h
-  // (TestSupport::benchTestPlannerConfig()/benchTestMotorConfig()), an
-  // explicitly test-tree-only header the existing sim harnesses opt into
-  // via TestSupport::configureSimForBenchTest() (Decision 3, sprint.md).
+  // (TestSupport::benchTestMotorConfig() -- the planner counterpart,
+  // benchTestPlannerConfig(), was itself deleted by 115-006 alongside
+  // configurePlanner() -- see that file's own header), an explicitly
+  // test-tree-only header the existing sim harnesses opt into via
+  // TestSupport::configureSimForBenchTest() (Decision 3, sprint.md).
 
   // Drives App::Preamble to done() via preamble_.step() calls issued
   // OURSELVES, advancing the fake Clock between each one -- see this file's
@@ -615,10 +462,10 @@ class SimHarness {
   App::Odometry odom_;
   App::Preamble preamble_;
 
-  Motion::Executor executor_;
-  App::HeadingSource headingSource_;
-  App::Pilot pilot_;
-
+  // Motion::Executor executor_/App::HeadingSource headingSource_/App::Pilot
+  // pilot_ -- DELETED (115-006, gut S1): 115-002's motion-stack excision
+  // removed all three classes. robotLoop_ below no longer takes a pilot
+  // argument -- see this file's own header.
   App::RobotLoop robotLoop_;
 
   bool booted_ = false;
@@ -626,27 +473,6 @@ class SimHarness {
 
   size_t telemetryDrainIndex_ = 0;  // index into serialLink_.sent() already returned by drainTelemetry()
   size_t rawTelemetryDrainIndex_ = 0;  // index into serialLink_.sent() already returned by drainRawTelemetry()
-
-  // 109-010: setLeadCompensation()/setYawRateMax()/setDistanceKp() each
-  // rebuild a fresh msg::PlannerConfig from their own base (lastPlannerConfig_
-  // if configurePlanner() was ever called, else an all-zero
-  // msg::PlannerConfig{} -- 114-001, since SimHarness no longer carries a
-  // hardcoded fallback baseline) -- these remember whichever of the three
-  // was last set by ANY of the three hooks so the others can re-apply it
-  // instead of silently clobbering it back to a default.
-  float lastYawRateMax_ = 4.0f;  // [rad/s] matches TestSupport::benchTestPlannerConfig()'s own default
-  float lastHeadingLeadBias_ = -0.05f;  // [s] matches TestSupport::benchTestPlannerConfig()'s own default
-  float lastPlanLead_ = 0.20f;         // [s] matches TestSupport::benchTestPlannerConfig()'s own default
-  float lastTerminalLead_ = 0.0f;      // [s]
-  float lastDistanceKp_ = 2.5f;        // [1/s] 112-003/112-004, matches TestSupport::benchTestPlannerConfig()'s own default
-
-  // 113-002: configurePlanner()'s own "last known config" bookkeeping --
-  // see that method's own comment. 114-001: ALSO the planner half of the
-  // configuration-completeness gate's completion tracking (the motor half
-  // is hasConfiguredMotorL_/hasConfiguredMotorR_ below) -- see
-  // maybeMarkConfigured()'s own comment.
-  bool hasConfiguredPlanner_ = false;
-  msg::PlannerConfig lastPlannerConfig_ = {};
 
   // 113-002: configureMotor()'s own test-only readback state -- see
   // motorConfig()'s own comment for why SimHarness keeps this copy itself
@@ -661,17 +487,21 @@ class SimHarness {
   bool hasConfiguredMotorL_ = false;
   bool hasConfiguredMotorR_ = false;
 
-  // maybeMarkConfigured -- Decision 1, sprint.md: the whole graph is
-  // considered configured once ALL THREE of the atomic fan-out calls that
-  // together constitute "the sim's own boot bake" have landed
-  // (configurePlanner() once, configureMotor() for BOTH ports) --
-  // mirroring how main.cpp's real boot-configure sequence is one atomic
-  // whole before markConfigured() fires. Called from the tail of
-  // configurePlanner()/configureMotor(); markConfigured() itself is
-  // idempotent (a plain configured_ = true;), so calling this once too
-  // often (e.g. a caller that configures the same port twice) is harmless.
+  // maybeMarkConfigured -- Decision 1, sprint.md (114-001); REVISED 115-006
+  // (gut S1): the whole graph is considered configured once BOTH of the
+  // atomic fan-out calls that together constitute "the sim's own boot bake"
+  // have landed -- configureMotor() for BOTH ports. There is no third,
+  // planner half of this gate anymore (configurePlanner() and
+  // hasConfiguredPlanner_ are deleted along with Pilot/Executor/
+  // HeadingSource -- see this file's own header): the motor half alone is
+  // now the whole gate, mirroring how main.cpp's real boot-configure
+  // sequence (motor reconfigure() calls only, no planner step) is one
+  // atomic whole before markConfigured() fires. Called from the tail of
+  // configureMotor(); markConfigured() itself is idempotent (a plain
+  // configured_ = true;), so calling this once too often (e.g. a caller
+  // that configures the same port twice) is harmless.
   void maybeMarkConfigured() {
-    if (hasConfiguredPlanner_ && hasConfiguredMotorL_ && hasConfiguredMotorR_) {
+    if (hasConfiguredMotorL_ && hasConfiguredMotorR_) {
       robotLoop_.markConfigured();
     }
   }

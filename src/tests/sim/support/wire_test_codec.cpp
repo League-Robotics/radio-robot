@@ -61,22 +61,68 @@ bool decodeThreeFloats(const uint8_t* buf, size_t len, float* a, float* b, float
   return true;
 }
 
-bool decodeAckEntry(const uint8_t* buf, size_t len, msg::AckEntry* out) {
+// Decodes a msg::EncoderReading payload (Telemetry.enc_left/enc_right's own
+// nested bytes) -- field numbers/wire types mirror src/firm/messages/wire.cpp
+// kFields_EncoderReading exactly. Recognized-field/wrong-wire-type is a hard
+// failure (same policy as decodeThreeFloats()); unrecognized fields skipped.
+bool decodeEncoderReading(const uint8_t* buf, size_t len, msg::EncoderReading* out) {
   size_t pos = 0;
   while (pos < len) {
     uint32_t fieldNumber = 0;
     WireType wireType = WireType::kVarint;
     if (!WireRuntime::decodeTag(buf, len, &pos, &fieldNumber, &wireType)) return false;
-    if (fieldNumber == 1 && wireType == WireType::kVarint) {
-      if (!readVarintU32(buf, len, &pos, &out->corr_id)) return false;
-    } else if (fieldNumber == 2 && wireType == WireType::kVarint) {
-      uint32_t v = 0;
-      if (!readVarintU32(buf, len, &pos, &v)) return false;
-      out->status = static_cast<msg::AckStatus>(v);
-    } else if (fieldNumber == 3 && wireType == WireType::kVarint) {
-      if (!readVarintU32(buf, len, &pos, &out->err_code)) return false;
-    } else if (!WireRuntime::skipField(buf, len, &pos, wireType)) {
-      return false;
+    switch (fieldNumber) {
+      case 1:
+        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->position)) return false;
+        break;
+      case 2:
+        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->velocity)) return false;
+        break;
+      case 3:
+        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->time)) return false;
+        break;
+      default:
+        if (!WireRuntime::skipField(buf, len, &pos, wireType)) return false;
+        break;
+    }
+  }
+  return true;
+}
+
+// Decodes a msg::OtosReading payload (Telemetry.otos's own nested bytes) --
+// field numbers/wire types mirror src/firm/messages/wire.cpp
+// kFields_OtosReading exactly.
+bool decodeOtosReading(const uint8_t* buf, size_t len, msg::OtosReading* out) {
+  size_t pos = 0;
+  while (pos < len) {
+    uint32_t fieldNumber = 0;
+    WireType wireType = WireType::kVarint;
+    if (!WireRuntime::decodeTag(buf, len, &pos, &fieldNumber, &wireType)) return false;
+    switch (fieldNumber) {
+      case 1:
+        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->x)) return false;
+        break;
+      case 2:
+        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->y)) return false;
+        break;
+      case 3:
+        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->heading)) return false;
+        break;
+      case 4:
+        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->v_x)) return false;
+        break;
+      case 5:
+        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->v_y)) return false;
+        break;
+      case 6:
+        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->omega)) return false;
+        break;
+      case 7:
+        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->time)) return false;
+        break;
+      default:
+        if (!WireRuntime::skipField(buf, len, &pos, wireType)) return false;
+        break;
     }
   }
   return true;
@@ -84,10 +130,11 @@ bool decodeAckEntry(const uint8_t* buf, size_t len, msg::AckEntry* out) {
 
 // Decodes a msg::Telemetry payload (the ReplyEnvelope{tlm} oneof arm's own
 // nested bytes) -- field numbers/wire types mirror src/firm/messages/wire.cpp
-// kFields_Telemetry exactly (095-005 generated table, transcribed by hand
-// per this file's own header). Recognized-field/wrong-wire-type is a hard
-// failure (same policy as decodeThreeFloats()); unrecognized field numbers
-// are skipped.
+// kFields_Telemetry exactly (FRAME v2, 115-003: telemetry.proto's clean,
+// incompatible rewrite -- see that proto's own header for the full "what
+// changed from the 103-era frame" list). Recognized-field/wrong-wire-type is
+// a hard failure (same policy as decodeThreeFloats()); unrecognized field
+// numbers are skipped.
 bool decodeTelemetryMessage(const uint8_t* buf, size_t len, msg::Telemetry* out) {
   size_t pos = 0;
   while (pos < len) {
@@ -96,19 +143,11 @@ bool decodeTelemetryMessage(const uint8_t* buf, size_t len, msg::Telemetry* out)
     if (!WireRuntime::decodeTag(buf, len, &pos, &fieldNumber, &wireType)) return false;
 
     switch (fieldNumber) {
-      case 1: {  // acks (repeated AckEntry, cap 3)
-        if (wireType != WireType::kLengthDelimited) return false;
-        size_t payloadLen = 0;
-        if (!WireRuntime::beginLengthDelimited(buf, len, &pos, 0, &payloadLen)) return false;
-        if (out->acks_count < 3) {
-          if (!decodeAckEntry(buf + pos, payloadLen, &out->acks_[out->acks_count])) return false;
-          ++out->acks_count;
-        }
-        pos += payloadLen;
-        break;
-      }
-      case 2:
+      case 1:
         if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->now)) return false;
+        break;
+      case 2:
+        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->seq)) return false;
         break;
       case 3: {
         if (wireType != WireType::kVarint) return false;
@@ -118,30 +157,39 @@ bool decodeTelemetryMessage(const uint8_t* buf, size_t len, msg::Telemetry* out)
         break;
       }
       case 4:
-        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->seq)) return false;
+        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->flags)) return false;
         break;
       case 5:
-        if (wireType != WireType::kVarint || !readBool(buf, len, &pos, &out->has_enc)) return false;
+        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->ack_corr)) return false;
         break;
       case 6:
-        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->enc_left)) return false;
+        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->ack_err)) return false;
         break;
-      case 7:
-        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->enc_right)) return false;
+      case 7: {  // enc_left (EncoderReading)
+        if (wireType != WireType::kLengthDelimited) return false;
+        size_t payloadLen = 0;
+        if (!WireRuntime::beginLengthDelimited(buf, len, &pos, 0, &payloadLen)) return false;
+        if (!decodeEncoderReading(buf + pos, payloadLen, &out->enc_left)) return false;
+        pos += payloadLen;
         break;
-      case 8:
-        if (wireType != WireType::kVarint || !readBool(buf, len, &pos, &out->has_vel)) return false;
+      }
+      case 8: {  // enc_right (EncoderReading)
+        if (wireType != WireType::kLengthDelimited) return false;
+        size_t payloadLen = 0;
+        if (!WireRuntime::beginLengthDelimited(buf, len, &pos, 0, &payloadLen)) return false;
+        if (!decodeEncoderReading(buf + pos, payloadLen, &out->enc_right)) return false;
+        pos += payloadLen;
         break;
-      case 9:
-        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->vel_left)) return false;
+      }
+      case 9: {  // otos (OtosReading)
+        if (wireType != WireType::kLengthDelimited) return false;
+        size_t payloadLen = 0;
+        if (!WireRuntime::beginLengthDelimited(buf, len, &pos, 0, &payloadLen)) return false;
+        if (!decodeOtosReading(buf + pos, payloadLen, &out->otos)) return false;
+        pos += payloadLen;
         break;
-      case 10:
-        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->vel_right)) return false;
-        break;
-      case 11:
-        if (wireType != WireType::kVarint || !readBool(buf, len, &pos, &out->has_pose)) return false;
-        break;
-      case 12: {
+      }
+      case 10: {  // pose (Pose2D)
         if (wireType != WireType::kLengthDelimited) return false;
         size_t payloadLen = 0;
         if (!WireRuntime::beginLengthDelimited(buf, len, &pos, 0, &payloadLen)) return false;
@@ -149,24 +197,7 @@ bool decodeTelemetryMessage(const uint8_t* buf, size_t len, msg::Telemetry* out)
         pos += payloadLen;
         break;
       }
-      case 13:
-        if (wireType != WireType::kVarint || !readBool(buf, len, &pos, &out->has_otos)) return false;
-        break;
-      case 14: {
-        if (wireType != WireType::kLengthDelimited) return false;
-        size_t payloadLen = 0;
-        if (!WireRuntime::beginLengthDelimited(buf, len, &pos, 0, &payloadLen)) return false;
-        if (!decodeThreeFloats(buf + pos, payloadLen, &out->otos.x, &out->otos.y, &out->otos.h)) return false;
-        pos += payloadLen;
-        break;
-      }
-      case 15:
-        if (wireType != WireType::kVarint || !readBool(buf, len, &pos, &out->otos_connected)) return false;
-        break;
-      case 16:
-        if (wireType != WireType::kVarint || !readBool(buf, len, &pos, &out->has_twist)) return false;
-        break;
-      case 17: {
+      case 11: {  // twist (BodyTwist3)
         if (wireType != WireType::kLengthDelimited) return false;
         size_t payloadLen = 0;
         if (!WireRuntime::beginLengthDelimited(buf, len, &pos, 0, &payloadLen)) return false;
@@ -176,42 +207,12 @@ bool decodeTelemetryMessage(const uint8_t* buf, size_t len, msg::Telemetry* out)
         pos += payloadLen;
         break;
       }
-      case 18:
-        if (wireType != WireType::kVarint || !readBool(buf, len, &pos, &out->active)) return false;
+      case 12:
+        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->line)) return false;
         break;
-      case 19:
-        if (wireType != WireType::kVarint || !readBool(buf, len, &pos, &out->conn_left)) return false;
+      case 13:
+        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->color)) return false;
         break;
-      case 20:
-        if (wireType != WireType::kVarint || !readBool(buf, len, &pos, &out->conn_right)) return false;
-        break;
-      case 21:
-        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->fault_bits)) return false;
-        break;
-      case 22:
-        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->event_bits)) return false;
-        break;
-      case 23:
-        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->queue_depth)) return false;
-        break;
-      case 24:
-        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->active_id)) return false;
-        break;
-      case 25: {
-        if (wireType != WireType::kVarint) return false;
-        uint32_t v = 0;
-        if (!readVarintU32(buf, len, &pos, &v)) return false;
-        out->exec_state = static_cast<msg::ExecutorState>(v);
-        break;
-      }
-      case 26: {
-        // heading_source (109-005, SUC-004).
-        if (wireType != WireType::kVarint) return false;
-        uint32_t v = 0;
-        if (!readVarintU32(buf, len, &pos, &v)) return false;
-        out->heading_source = static_cast<msg::HeadingSourceStatus>(v);
-        break;
-      }
       default:
         if (!WireRuntime::skipField(buf, len, &pos, wireType)) return false;
         break;
@@ -361,39 +362,11 @@ size_t encodeStopEnvelope(uint32_t corrId, uint8_t* buf, size_t cap) {
   return pos;
 }
 
-bool encodeBoolField(uint32_t fieldNumber, bool value, uint8_t* buf, size_t cap, size_t* pos) {
-  if (!value) return true;  // proto3 implicit presence
-  if (!WireRuntime::encodeTag(fieldNumber, WireType::kVarint, buf, cap, pos)) return false;
-  return WireRuntime::encodeVarint(1, buf, cap, pos);
-}
-
-// Encodes {distance, delta_heading, v_max, omega, time, replace, id} into
-// `scratch` (msg::Move's own field order, envelope.proto), wraps it as
-// CommandEnvelope field 20 (move, length-delimited oneof arm), then field 1
-// (corr_id) if nonzero.
-size_t encodeMoveEnvelope(float distance, float deltaHeading, float vMax, float omega,
-                          float timeMs, bool replace, uint32_t id, uint32_t corrId, uint8_t* buf,
-                          size_t cap) {
-  size_t pos = 0;
-  if (!encodeVarintField(1, corrId, buf, cap, &pos)) return 0;
-
-  uint8_t scratch[48];
-  size_t scratchPos = 0;
-  if (!encodeFloatField(1, distance, scratch, sizeof(scratch), &scratchPos)) return 0;
-  if (!encodeFloatField(2, deltaHeading, scratch, sizeof(scratch), &scratchPos)) return 0;
-  if (!encodeFloatField(3, vMax, scratch, sizeof(scratch), &scratchPos)) return 0;
-  if (!encodeFloatField(4, omega, scratch, sizeof(scratch), &scratchPos)) return 0;
-  if (!encodeFloatField(5, timeMs, scratch, sizeof(scratch), &scratchPos)) return 0;
-  if (!encodeBoolField(6, replace, scratch, sizeof(scratch), &scratchPos)) return 0;
-  if (!encodeVarintField(7, id, scratch, sizeof(scratch), &scratchPos)) return 0;
-
-  if (!WireRuntime::encodeTag(20, WireType::kLengthDelimited, buf, cap, &pos)) return 0;
-  if (!WireRuntime::encodeVarint(scratchPos, buf, cap, &pos)) return 0;
-  if (cap - pos < scratchPos) return 0;
-  std::memcpy(buf + pos, scratch, scratchPos);
-  pos += scratchPos;
-  return pos;
-}
+// 115-006 (gut S1): encodeBoolField()/encodeMoveEnvelope() DELETED --
+// envelope.proto's Move message and CommandEnvelope's move(20) arm were
+// deleted by 115-003 (the arc-command primitive queued into the now-deleted
+// Motion::Executor); field 20 is reserved on the wire, not reused.
+// encodeBoolField() had no other caller, so it goes with it.
 
 std::string armor(const uint8_t* raw, size_t rawLen) {
   char b64[512] = {};
@@ -450,15 +423,6 @@ std::string armorTwistCommand(float v_x, float omega, float duration, uint32_t c
 std::string armorStopCommand(uint32_t corrId) {
   uint8_t rawBuf[32];
   size_t n = encodeStopEnvelope(corrId, rawBuf, sizeof(rawBuf));
-  if (n == 0) return std::string();
-  return armor(rawBuf, n);
-}
-
-std::string armorMoveCommand(float distance, float deltaHeading, float vMax, float omega,
-                              float timeMs, bool replace, uint32_t id, uint32_t corrId) {
-  uint8_t rawBuf[128];
-  size_t n = encodeMoveEnvelope(distance, deltaHeading, vMax, omega, timeMs, replace, id, corrId,
-                                 rawBuf, sizeof(rawBuf));
   if (n == 0) return std::string();
   return armor(rawBuf, n);
 }

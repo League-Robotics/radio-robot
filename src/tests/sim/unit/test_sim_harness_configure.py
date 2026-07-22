@@ -1,11 +1,21 @@
 """src/tests/sim/unit/test_sim_harness_configure.py -- ticket 113-002's own
-acceptance proof: TestSim::SimHarness::configurePlanner()/configureMotor()
-are a purely ADDITIVE config-load surface (SUC-001/SUC-002/SUC-005).
+acceptance proof: TestSim::SimHarness::configureMotor() is a purely ADDITIVE
+config-load surface (SUC-001/SUC-002/SUC-005), plus the motor-only
+configuration-completeness gate (isConfigured()) it drives.
+
+REWRITTEN by 115-006 (gut S1 sim lockstep): configurePlanner()/
+plannerConfig() and the setYawRateMax() sim-only hook are gone --
+Motion::Executor/App::Pilot/App::HeadingSource (115-002's motion-stack
+excision) no longer exist for any of them to configure -- so this file's own
+compile source list drops every motion-stack dependency (app/heading_source.cpp,
+app/pilot.cpp, motion/jerk_trajectory.cpp, motion/executor.cpp, vendor/ruckig)
+the pre-gut version needed, mirroring test_app_robot_loop.py's own post-gut
+source list.
 
 Compiles ``sim_harness_configure_harness.cpp`` together with the same full
-HOST_BUILD dependency graph ``test_pilot_distance_trim.py``/
-``test_heading_source.py`` already compile (SimHarness composes the real
-App::RobotLoop graph -- mirrors their exact shape).
+HOST_BUILD dependency graph every other post-gut sim/unit harness compiles
+(SimHarness composes the real App::RobotLoop graph -- see sim_harness.h's
+own header).
 
     uv run python -m pytest src/tests/sim/unit/test_sim_harness_configure.py -v -s
 """
@@ -30,6 +40,12 @@ _WIRE_TEST_CODEC_SRC = _SUPPORT_DIR / "wire_test_codec.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 
+# 115-006 (gut S1): heading_source.cpp/pilot.cpp/motion/executor.cpp/
+# motion/jerk_trajectory.cpp/vendor/ruckig are all DELETED along with the
+# rest of the motion stack -- sim_harness.h no longer includes app/pilot.h
+# (or transitively motion/executor.h -> vendor/ruckig) at all, so none of
+# those sources are compiled into this harness any more (mirrors
+# test_app_robot_loop.py's own identical note).
 _APP_SOURCES = [
     _SOURCE_DIR / "app" / "robot_loop.cpp",
     _SOURCE_DIR / "app" / "comms.cpp",
@@ -37,9 +53,7 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "deadman.cpp",
     _SOURCE_DIR / "app" / "drive.cpp",
     _SOURCE_DIR / "app" / "odometry.cpp",
-    _SOURCE_DIR / "app" / "heading_source.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
-    _SOURCE_DIR / "app" / "pilot.cpp",
 ]
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
@@ -60,12 +74,6 @@ _MESSAGE_SOURCES = [
 ]
 _KINEMATICS_SOURCES = [
     _SOURCE_DIR / "kinematics" / "body_kinematics.cpp",
-]
-_RUCKIG_INCLUDE = _REPO_ROOT / "vendor" / "ruckig" / "include"
-_RUCKIG_SRC_DIR = _REPO_ROOT / "vendor" / "ruckig" / "src"
-_MOTION_SOURCES = [
-    _SOURCE_DIR / "motion" / "jerk_trajectory.cpp",
-    _SOURCE_DIR / "motion" / "executor.cpp",
 ]
 
 _CXX_STANDARD = "c++20"
@@ -91,8 +99,6 @@ def _all_sources():
         + _CONFIG_SOURCES
         + _MESSAGE_SOURCES
         + _KINEMATICS_SOURCES
-        + _MOTION_SOURCES
-        + sorted(_RUCKIG_SRC_DIR.glob("*.cpp"))
     )
 
 
@@ -122,8 +128,6 @@ def test_sim_harness_configure_harness_compiles_and_passes(tmp_path):
             str(_PLANT_DIR),
             "-I",
             str(_INFRA_SIM_DIR),
-            "-I",
-            str(_RUCKIG_INCLUDE),
             "-o",
             str(binary),
             *[str(src) for src in sources],
