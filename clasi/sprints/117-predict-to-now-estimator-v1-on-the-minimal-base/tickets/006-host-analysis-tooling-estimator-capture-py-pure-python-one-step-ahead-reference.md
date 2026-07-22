@@ -1,7 +1,8 @@
 ---
 id: '006'
-title: "Host analysis tooling — estimator_capture.py + pure-Python one_step_ahead reference"
-status: open
+title: "Host analysis tooling \u2014 estimator_capture.py + pure-Python one_step_ahead\
+  \ reference"
+status: in-progress
 use-cases:
 - SUC-061
 depends-on:

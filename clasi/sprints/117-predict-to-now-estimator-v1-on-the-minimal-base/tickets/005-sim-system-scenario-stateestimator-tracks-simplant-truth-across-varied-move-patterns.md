@@ -1,7 +1,8 @@
 ---
 id: '005'
-title: "Sim system scenario — StateEstimator tracks SimPlant truth across varied MOVE patterns"
-status: open
+title: "Sim system scenario \u2014 StateEstimator tracks SimPlant truth across varied\
+  \ MOVE patterns"
+status: in-progress
 use-cases:
 - SUC-060
 depends-on:
