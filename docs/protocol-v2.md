@@ -1,5 +1,14 @@
 # Protocol v2 Wire Specification
 
+> **SUPERSEDED by [`docs/protocol-v4.md`](protocol-v4.md).** Sprint 116
+> ("MOVE protocol cutover") converged the command surface onto one
+> bounded `MOVE` command (velocity variant + stop condition + required
+> `timeout` backstop + a small on-chip queue) and is the current wire
+> reference — `protocol-v4.md` is the document to read for today's
+> protocol. This file is kept for history, not deleted. The v3 banner
+> immediately below (unedited) still accurately describes this file's
+> own relationship to v3.
+
 > **SUPERSEDED by [`docs/protocol-v3.md`](protocol-v3.md).** Sprint 097
 > ("Protocol v3 Sprint 3: host completion and text retirement") replaced
 > the firmware's text command plane described below with a schema-driven
