@@ -1,6 +1,13 @@
 ---
-status: pending
+status: in-progress
 sprint: '116'
+tickets:
+- 116-001
+- 116-005
+- 116-006
+- 116-007
+- 116-009
+- 116-010
 ---
 
 # Gut to minimal firmware: tagged baseline, motion-stack excision, MOVE protocol, minimal per-cycle telemetry
