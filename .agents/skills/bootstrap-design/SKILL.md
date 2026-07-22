@@ -50,14 +50,23 @@ versus that one.
 
 ## Process
 
-### 1. Identify Subsystems
+### 1. Identify Roots and Subsystems
 
-For each root in `Project.sources`, enumerate its top-level
+**Each declared root itself gets a required root-level `DESIGN.md`.** A
+source root owes its own overview doc at `<root>/DESIGN.md` — a map of
+that whole tree (what the root is, its subsystem list with one line each,
+and any conventions every subsystem doc under it may assume). The
+validator requires this doc for every declared root; omitting it fails
+`clasi design validate` (and therefore `close_sprint`). Write one per
+root, in addition to the per-subsystem docs below.
+
+Then, for each root in `Project.sources`, enumerate its top-level
 directories as candidate subsystems — the same "one level down, no
 deeper" rule `clasi.design.store._subsystem_dirs` applies
 mechanically (hidden directories and `__pycache__` excluded). A nested
 directory belongs to the subsystem that contains it; it does not get
-its own doc.
+its own doc. A `DESIGN.md` nested deeper than one level below a root is
+flagged as an orphan.
 
 Not every top-level directory is automatically a subsystem worth its
 own document, though — use judgment here the same way
@@ -125,6 +134,11 @@ Concretely:
   content)` to write the subsystem doc. No frontmatter is written by
   default; do not pass `extra_frontmatter` unless there is a specific
   reason to attach optional metadata.
+- Call `clasi.design.store.write_design_doc(project, root, content)` once
+  per declared root to write its required root-level `DESIGN.md` overview
+  — the same function and same `<path>/DESIGN.md` derivation, just with
+  the root path itself rather than a subsystem path. Content is the
+  root-tree map described in Step 1.
 - Call `clasi.design.store.write_system_doc(project, content)` once,
   for `docs/design/design.md`, covering system-wide context: what the
   project is, the subsystem map (one line per subsystem, linking to
@@ -181,6 +195,7 @@ document model.
 ## Output
 
 - `docs/design/design.md` (system-level document)
+- One `<root>/DESIGN.md` root-overview doc per declared source root
 - One `<subsystem>/DESIGN.md` per identified subsystem, co-located in
   the subsystem's own source directory, at the path produced by
   `clasi.design.paths.design_doc_path_for`

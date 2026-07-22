@@ -21,8 +21,9 @@ the first architecture document following steps 1-7 below.
 This mode is superseded, for a project that has opted into the persistent
 per-subsystem design-doc set (`Project.design_docs_opt_in` is `True`), by
 the `bootstrap-design` skill, which produces `docs/design/design.md` plus
-one doc per subsystem instead of a single architecture document. Use
-Mode 1 only for a project that has not opted in.
+a root-level `DESIGN.md` per declared source root plus one doc per
+subsystem, instead of a single architecture document. Use Mode 1 only for
+a project that has not opted in.
 
 ### Mode 2: Sprint Architecture Update
 

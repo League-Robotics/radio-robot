@@ -6,8 +6,10 @@ exclusion lives here in prose instead of in `paths:`).
 
 Before writing code:
 
-1. If `.clasi/oop` exists, the stakeholder has opted out of CLASI
-   for this session. Skip these gates entirely and proceed.
+1. If the OOP bypass is active (`clasi oop status`; enabled via
+   `clasi oop on --reason '...'`, or the emergency file `.clasi/oop`),
+   the stakeholder has opted out of CLASI for this session. Skip these
+   gates entirely and proceed.
 2. You must have a ticket in `in-progress` status, or the stakeholder
    said "out of process".
 3. If you have a ticket, follow the execute-ticket skill — call

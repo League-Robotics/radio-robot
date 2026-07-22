@@ -97,22 +97,9 @@ import pytest
 # import line).
 pytest.importorskip("PySide6")
 
-# 115-009 (gut S1's own test-sweep/green-bar ticket): TestGUI tour/turn
-# modules went DORMANT for a while (sprint 115 Design Rationale Decision 6,
-# `gut-to-minimal-firmware-...md`'s own explicit Out-of-Scope framing --
-# "Host motion/tour code deletion ... stays in place, dormant, as a
-# separate future follow-up"): every test below drives `planner.tour.
-# TOUR_1`/`TOUR_2`/`run_tour()`, which used to raise AttributeError at
-# import time (`telemetry_pb2.ACK_STATUS_DONE`, part of the depth-3 ack
-# ring 115-003's frame-v2 rewrite deleted).
-#
-# 2026-07-22 (testgui-motion-paths-dead-after-move-cutover revival):
-# `planner.tour` was ported onto protocol v4's `Move`/single-ack-slot wire
-# shape (see that module's own file header) and imports cleanly again --
-# un-quarantined. `_FakeTwistTransport.move()`/`_make_frame()` below were
-# updated to the current `MoveTransport.move()` kwargs and `TLMFrame`/
-# `AckEntry` shapes (no more `acks`/`fault_bits`/`event_bits` -- a single
-# `ack_corr`/`ack_err` slot, gated by `flags` bit 5) to match.
+
+
+
 
 # _FakeTwistTransport's own nominal tick interval -- read off PlannerParams'
 # own default rather than duplicated as a hand-picked literal (0.15) that

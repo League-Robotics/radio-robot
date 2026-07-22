@@ -1,3 +1,4 @@
+design_docs: enabled
 paths:
   architecture: docs/architecture
   db: .clasi/.clasi.db
@@ -7,44 +8,6 @@ paths:
   reflections: clasi/reflections
   sprints: clasi/sprints
 process: se
-design_docs: enabled
-# sources: EXACTLY two roots -- src/firm and src/host -- never bare
-# `src`. The design-doc-set model is "one DESIGN.md per one-level-down
-# child of a declared root," with no exclusion mechanism (clasi
-# 0.20260720.1 has no `excluded_paths` wiring into
-# clasi.design.store._subsystem_dirs -- confirmed by reading that
-# module; the key exists in Project.excluded_paths but is consumed only
-# by role-guard's protected_paths carve-out, not by the design
-# validator). A bare `src` would make `src/vendor` -- a symlink
-# resolving OUTSIDE this repository, to another, unrelated,
-# actively-developed git checkout at
-# /Volumes/Proj/proj/league-projects/scratch/radio-robot -- a
-# "required" one-level-down subsystem: `validate_design` would demand
-# src/vendor/DESIGN.md forever, and the only way to satisfy that demand
-# is a file write into someone else's live project tree, which was
-# deliberately never done. A permanently-failing validate_design is not
-# a cosmetic gap here: close_sprint's overlay-apply step runs full
-# canonical validation and fails closed, so bare `src` would silently
-# block every future sprint close. Declaring src/firm and src/host as
-# their OWN roots (instead of bare `src`) sidesteps this entirely:
-# their real children (app/com/config/devices/kinematics/messages/types
-# under src/firm; robot_radio under src/host) become the one-level-down
-# subsystems, matching the actual doc placement, while src/vendor,
-# src/archive, src/libraries, src/protos, src/recordings, src/scripts,
-# src/sim, src/tests, and src/utils never enter the enumeration at all
-# -- not even as a required stub. Those root-level trees still carry
-# real, current DESIGN.md files (src/sim, src/protos, src/scripts,
-# src/tests, src/utils, src/archive, src/libraries, src/recordings) --
-# they are simply unvalidated-but-real documentation living outside the
-# declared roots, linked from docs/design/design.md's subsystem map.
-#
-# src/firm/DESIGN.md (the firmware-tree overview) is NOT part of this
-# doc set for the same structural reason: src/firm is itself a declared
-# root, so a DESIGN.md sitting directly inside it (rather than inside
-# one of ITS children) is swept by the orphan check with no home to
-# validate against. Its content was folded into docs/design/design.md;
-# a one-paragraph pointer stub lives at src/firm/README-DESIGN.md so
-# the file is not simply gone with no trace.
 sources:
-  - src/firm
-  - src/host
+- src/firm
+- src/host
