@@ -1,7 +1,7 @@
 ---
 id: '007'
 title: "Leave-one-out RMS validation notebook \u2014 estimator_validation.ipynb"
-status: in-progress
+status: done
 use-cases:
 - SUC-061
 depends-on:
@@ -35,25 +35,25 @@ that decision from real, or sim-substitute, data).
 
 ## Acceptance Criteria
 
-- [ ] The notebook loads a TLM-log CSV (sprint 115 `tlm_log.py` / ticket
+- [x] The notebook loads a TLM-log CSV (sprint 115 `tlm_log.py` / ticket
       006 `estimator_capture.py` output format) and runs the leave-one-out
       one-step-ahead walk per stream via `one_step_ahead.py` (ticket 006)
       — no duplicated prediction math inside the notebook itself.
-- [ ] Pattern-phase segmentation (steady/ramp/reversal/pivot) is derived
+- [x] Pattern-phase segmentation (steady/ramp/reversal/pivot) is derived
       from the captured command sequence or from the telemetered
       velocity/mode signal — documented which, in the notebook itself.
-- [ ] Per-stream, per-phase RMS tables are produced (each wheel's
+- [x] Per-stream, per-phase RMS tables are produced (each wheel's
       position/velocity error; body heading error).
-- [ ] The ZOH lag-signature check (`a·k` velocity, `½a·k²` distance during
+- [x] The ZOH lag-signature check (`a·k` velocity, `½a·k²` distance during
       ramps) is computed and compared against the theoretical prediction,
       with a clear pass/fail-style verdict on whether the lag signature
       matches theory.
-- [ ] Per-step error is propagated through position integration to
+- [x] Per-step error is propagated through position integration to
       produce a leg-level accumulated position/heading error projection.
-- [ ] The notebook's final cell(s) clearly state the proposed accept
+- [x] The notebook's final cell(s) clearly state the proposed accept
       thresholds as PROPOSED, not ratified — no code path in this
       notebook writes a "thresholds accepted" artifact on its own.
-- [ ] The notebook runs end-to-end against at least a sim-captured CSV
+- [x] The notebook runs end-to-end against at least a sim-captured CSV
       (bench CSV substituted when available, ticket 008).
 
 ## Implementation Plan

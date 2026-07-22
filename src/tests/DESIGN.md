@@ -74,7 +74,16 @@ Three never-combined domains, plus two flat "kept categories":
   leave-one-out walk and RMS-by-pattern-phase grouping helpers).
 - **`notebooks/`** — Jupyter notebooks for interactive analysis (drive
   planning, drivetrain stress, sensor characterization, turn-accuracy
-  results) — exploratory artifacts, not a pytest-collected suite.
+  results) — exploratory artifacts, not a pytest-collected suite. Includes
+  `estimator_validation.ipynb` (sprint 117 ticket 007): the stakeholder's
+  own leave-one-out one-step-ahead validation methodology run against an
+  `estimator_capture.py`-shaped CSV (a fresh sim capture by default, a
+  bench capture once ticket 008 lands) — per-stream/per-phase RMS tables,
+  the ZOH lag-signature check on ramp phases, residual plots, and a
+  leg-level error projection, ending in a PROPOSED (not self-ratified)
+  accept-threshold table. All prediction/RMS math is delegated to
+  `tools/one_step_ahead.py`; this notebook is presentation/orchestration
+  only.
 - **`testgui/`** — pytest tests for the `src/host/robot_radio/testgui/`
   Qt application itself (widget behavior, command dispatch, calibration
   push-on-connect), distinct from `sim/system/`'s firmware-level
