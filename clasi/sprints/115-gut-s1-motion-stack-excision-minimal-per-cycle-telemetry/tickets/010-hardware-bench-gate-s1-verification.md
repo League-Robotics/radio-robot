@@ -1,9 +1,15 @@
 ---
 id: '010'
 title: Hardware bench gate (S1 verification)
-status: open
-use-cases: [SUC-045, SUC-046, SUC-047, SUC-048, SUC-049]
-depends-on: ["009"]
+status: in-progress
+use-cases:
+- SUC-045
+- SUC-046
+- SUC-047
+- SUC-048
+- SUC-049
+depends-on:
+- 009
 github-issue: ''
 issue: telemetry-frame-tightening-amendment-to-gut-s1.md
 completes_issue: true

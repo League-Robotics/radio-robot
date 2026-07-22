@@ -73,36 +73,46 @@ the shaper brakes against that **same remaining** so the velocity reaches zero
 namespace App {
 
 // VelocityShaper -- acceleration-limited velocity command with goal-aware
-// braking (docs/design/simple-velocity-control-guide.md). Move the commanded
-// velocity toward the target by no more than the accel/brake limit permits over
-// the MEASURED elapsed time; never overshoot; for a spatial stop condition,
-// brake early enough to reach zero on the goal.
+// braking to a (possibly nonzero) EXIT velocity
+// (docs/design/simple-velocity-control-guide.md). Move the commanded velocity
+// toward the target by no more than the accel/brake limit permits over the
+// MEASURED elapsed time; never overshoot; for a spatial stop condition, brake
+// early enough to reach `vExit` ON the goal. vExit is the next queued move's
+// cruise velocity on this axis (0 when the queue is empty -> stop on the goal),
+// which is what makes a chained handoff seamless at the velocity level.
 struct VelocityShaper {
   float accel = 0.0f;     // [mm/s^2] max increase in |command| toward target
   float brake = 0.0f;     // [mm/s^2] max decrease in |command| toward target
   float maxSpeed = 0.0f;  // [mm/s] ceiling on |command|; 0 = unbounded
 
-  // Returns the next command velocity.
-  //   v_allowed   = sqrt(2*brake*|remaining|)   // room left to stop on the goal
-  //   v_effective = clamp(target, -v_allowed, +v_allowed), then clamp to maxSpeed
+  // Returns the next command velocity. `command` is the carried state -- the
+  // CURRENT velocity you ramp FROM; it is never reset between chained moves
+  // (that continuity is the whole seam of a seamless handoff).
+  //   v_cap       = sqrt(vExit*vExit + 2*brake*|remaining|)  // stop-at-vExit envelope
+  //   v_effective = clamp(target, -v_cap, +v_cap), then clamp to maxSpeed
   //   dv          = clamp(v_effective - command, -brake*dt, +accel*dt)
   //   return        command + dv
   // `remaining` -- signed distance to the active move's stop point, from its
   // StopCondition (distance move: commanded - |path|; angle move, on the omega
-  // axis: commanded - |dHeading|).
-  float update(float command, float target, float remaining, float dt) const;
-  //           [mm/s]         [mm/s]         [mm] signed      [s] -> [mm/s]
+  // axis: commanded - |dHeading|). `vExit` -- signed exit velocity at the goal:
+  // next move's cruise on this axis, or 0 if the queue is empty OR the next
+  // move reverses this axis' sign (can't carry speed through a reversal).
+  float update(float command, float target, float remaining,
+               float vExit, float dt) const;
+  // command,target,vExit [mm/s]; remaining [mm] signed; dt [s] -> [mm/s]
 };
 
 }  // namespace App
 ```
 
 - **Spatial stop condition (distance / angle):** the guide's stopping-distance
-  logic (§"Position moves: brake before the goal") caps the target to
-  `sqrt(2*brake*|remaining|)`, then slews (§"The core velocity shaper"):
-  `dv = clamp(v_effective - command, -brake*dt, +accel*dt)`. Ramps up under
-  `accel`, ramps down under `brake`, reaches zero on the goal; handles
-  forward/reverse and asymmetric accel vs brake; cannot overshoot.
+  logic (§"Position moves: brake before the goal"), generalized to a nonzero
+  exit velocity, caps the target to `sqrt(vExit² + 2*brake*|remaining|)`, then
+  slews (§"The core velocity shaper"):
+  `dv = clamp(v_effective - command, -brake*dt, +accel*dt)`. Ramps up from the
+  carried `command` under `accel`, ramps down under `brake`, reaches `vExit` on
+  the goal (zero for the last move); handles forward/reverse and asymmetric
+  accel vs brake; cannot overshoot.
 - **Temporal stop condition (time):** there is no spatial distance to brake
   against, so the shaper accel-limits the ramp-up only and holds the commanded
   velocity; the `StopCondition` ends the move at the deadline. (Whether a time
@@ -113,13 +123,31 @@ struct VelocityShaper {
 - **Use measured `dt`**, not an assumed 20 ms — the guide is explicit, and the
   loop's cycle time is not exactly constant. `RobotLoop` already tracks cycle
   timing to source it.
-- **Seamless chaining (spec) is a known boundary:** ramping to zero on every
-  spatial goal is single-move point-to-point; when a next MOVE is queued the
-  spec wants a seamless handoff, not a stop. Blending the shaper across chained
-  moves is the guide's deferred "full trajectory generator" territory — out of
-  scope here. A chained move simply re-targets and the shaper ramps from the
-  current velocity: safe and correct, just not time-optimal. Flag for the
-  planner.
+- **Chained-move velocity blending (IN SCOPE):** the spec's "seamless chain"
+  becomes seamless at the *velocity* level, not just at activation timing, via
+  two cheap moves — no trajectory generator:
+  - **Carry the state.** `command` is never reset to zero at a handoff; the
+    current velocity you're already going *is* the next move's initial ramp
+    velocity. `Drive` only zeroes the command on empty-queue expiry or STOP.
+  - **Exit into the next move's cruise.** `vExit` for the active move is the
+    *immediately next* queued move's cruise velocity on this axis (single-move
+    lookahead, O(1) — read one field of `MoveQueue`'s next slot). Two
+    same-direction, same-speed moves then cruise straight through the boundary
+    (`sqrt(target² + 2·brake·rem) > target` ⇒ no dip); the last move exits at 0
+    and stops on its goal.
+  - **Per-axis, so turns fall out for free.** Run the shaper independently on
+    `v_x` and `omega`. A straight→turn chain has the turn commanding `v_x=0`, so
+    `vExit_x=0` and forward motion brakes to zero while `omega` ramps up — no
+    special case. A direction reversal clamps `vExit` to 0 (can't carry speed
+    through a reversal).
+  - **Time stops blend for free** — no spatial `remaining`, so the accel limiter
+    already ramps `command` from A's velocity into B's across the boundary.
+
+  What stays **out of scope** is the genuinely harder blend: *coordinated
+  multi-axis / time-optimal / jerk-limited* trajectories — geometric arcs where
+  `v_x` and `omega` must co-vary on a schedule, exact arrival-time/velocity
+  guarantees, C1 (acceleration-continuous) profiles. That is the Ruckig
+  territory the gut deleted; per-axis velocity-continuous handoff is not.
 - One scalar shaper is the primitive; the body twist composes it per axis
   (one instance/state for `v_x`, one for `omega`, and a future one for `v_y`
   once the base is holonomic — differential ignores `v_y`, per the 115
@@ -136,20 +164,26 @@ struct VelocityShaper {
 - **Off:** command = target (identity) — byte-for-byte today's follower: the
   velocity lurches to the target and the move's stop condition hard-zeros it at
   expiry (overshooting a spatial goal).
-- **On:** command = `shaper.update(command, target, remaining, dt)` per axis,
-  then `BodyKinematics::inverse(vxCommand_, omegaCommand_, ...)` as now — the
-  velocity ramps and, for a spatial stop condition, reaches zero on the goal.
+- **On:** command = `shaper.update(command, target, remaining, vExit, dt)` per
+  axis, then `BodyKinematics::inverse(vxCommand_, omegaCommand_, ...)` as now —
+  the velocity ramps from the carried command and, for a spatial stop condition,
+  reaches `vExit` on the goal.
+- **Carry, don't reset.** `Drive` keeps `vxCommand_`/`omegaCommand_` across a
+  chained handoff — a new active move ramps from them, never from zero. `stop()`
+  (empty-queue expiry, STOP) is the only zeroing.
 - Selected by a config flag (recommended) so it flips at runtime with no
   recompile — off restores the exact current lurch-to-speed behavior for A/B.
 
 `remaining` comes from the **active move's `StopCondition`** — the same
 `App::Odometry::pathLength()` baseline the distance/angle conditions measure
-against (per the set-point issue's execution model). Because stop conditions
-only exist once the **MOVE protocol** lands (sprint-115 S2 /
-`protocol-set-point-...`), this shaper naturally sequences **with or after** that
-work — it has nothing to shape toward before then. It is not a separate motion
-stack; it is one small class `Drive` consults between the active move's velocity
-and the kinematics.
+against (per the set-point issue's execution model). `vExit` comes from the
+**next queued move** in `App::MoveQueue` (its cruise velocity on this axis,
+sign-agreeing; 0 if the queue is empty) — a one-field, single-move lookahead the
+queue already has in hand. Because both inputs only exist once the **MOVE
+protocol** lands (sprint-115 S2 / `protocol-set-point-...`), this shaper
+naturally sequences **with or after** that work — it has nothing to shape toward
+before then. It is not a separate motion stack; it is one small class `Drive`
+consults between the active move's velocity and the kinematics.
 
 ### 3. Derived acceleration limits in configuration
 
@@ -195,7 +229,9 @@ the body-twist level. No change to the PI loop is required for the shaper itself
 Explicitly **out of scope** (guide's "optional" / "when justified" sections):
 jerk limiting and a full trajectory generator (Ruckig) — the guide recommends
 adding jerk limiting only if testing exposes a real need, and the S-curve/Ruckig
-path is what 115 just removed.
+path is what 115 just removed. Note the boundary set in §1: per-axis
+*velocity-continuous* handoff blending **is** in scope; what stays out is
+*coordinated multi-axis / time-optimal / jerk-limited* trajectory generation.
 
 ## Verification
 
@@ -203,9 +239,9 @@ Per `.claude/rules/hardware-bench-testing.md` (robot on the stand, wheels free):
 
 1. **Unit tests** against the guide's worked examples: 0.5 m/s at 1.0 m/s² takes
    ~12.5 updates at 40 ms; asymmetric accel/brake; forward↔reverse; a spatial
-   goal caps the target to `sqrt(2*brake*remaining)` and reaches zero within
-   `remaining` with margin (no overshoot); a distant goal leaves the ramp
-   unclamped until braking range.
+   goal caps the target to `sqrt(vExit² + 2*brake*remaining)` and reaches `vExit`
+   within `remaining` with margin (no overshoot); a distant goal leaves the ramp
+   unclamped until braking range; `vExit=0` reduces to the guide's stop-on-goal.
 2. **Sim:** a step twist command ramps under the limits instead of stepping;
    toggling the shaper off reproduces the immediate-lurch follower exactly.
 3. **Bench (shaper off):** confirm current behavior is byte-for-byte unchanged
@@ -217,7 +253,13 @@ Per `.claude/rules/hardware-bench-testing.md` (robot on the stand, wheels free):
 5. **Goal-aware (once distance-MOVE exists):** a distance-bounded move
    decelerates before the goal and stops on it without the terminal
    step-then-brake, in both directions, short and long moves.
-6. **Config-as-truth:** the derived limits come from the active robot JSON; a
+6. **Chained-move blending:** two same-direction distance moves at the same
+   cruise speed produce *no* velocity dip at the boundary (telemetry shows
+   continuous cruise, `command` carried, not re-zeroed); a slower→faster chain
+   accelerates through the handoff; a straight→turn chain brakes `v_x` to zero
+   while `omega` ramps; a forward→reverse chain brakes to zero at the boundary;
+   the final move stops on its goal.
+7. **Config-as-truth:** the derived limits come from the active robot JSON; a
    live config patch changes the ramp rate without reflash; unconfigured →
    fail-closed (no silent source default).
 
@@ -230,7 +272,9 @@ Per `.claude/rules/hardware-bench-testing.md` (robot on the stand, wheels free):
   couples to that issue's S2 MOVE distance stop condition. Schedule after the
   gut lands.
 - `protocol-set-point-the-minimal-firmware-s-complete-command-surface` — the
-  MOVE contract whose `distance` stop condition feeds `stepToGoal()`.
+  MOVE contract: its `StopCondition` feeds the shaper's `remaining`, and
+  `App::MoveQueue`'s next-slot cruise velocity feeds `vExit` (single-move
+  lookahead) for chained-move blending.
 - `sprint-114-config-as-truth-and-deadband` (memory) — the config-as-truth
   constraints the new limit carrier must satisfy (no source defaults, version
   erase, fail-closed).
