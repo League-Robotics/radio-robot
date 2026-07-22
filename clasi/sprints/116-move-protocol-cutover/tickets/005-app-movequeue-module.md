@@ -1,9 +1,19 @@
 ---
 id: '005'
 title: App::MoveQueue module
-status: open
-use-cases: [SUC-050, SUC-051, SUC-052, SUC-053, SUC-054, SUC-055]
-depends-on: ['001', '002', '003', '004']
+status: in-progress
+use-cases:
+- SUC-050
+- SUC-051
+- SUC-052
+- SUC-053
+- SUC-054
+- SUC-055
+depends-on:
+- '001'
+- '002'
+- '003'
+- '004'
 github-issue: ''
 issue:
 - protocol-set-point-the-minimal-firmware-s-complete-command-surface.md
