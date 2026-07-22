@@ -1821,10 +1821,31 @@ def _build_main_window():  # type: ignore[return]
             from robot_radio.config.robot_config import get_robot_config
             from robot_radio.planner.heading import HeadingCorrector
             from robot_radio.planner.model import PlannerParams
-            from robot_radio.planner.tour import parse_tour, run_tour
             import math as _math
 
             try:
+                # testgui-motion-paths-dead-after-move-cutover fix:
+                # planner.tour is dormant this sprint -- its own module body
+                # raises AttributeError at import time (references
+                # telemetry_pb2.ACK_STATUS_DONE, deleted by 115-003's
+                # frame-v2 rewrite; see commands.py's own TOUR_1/TOUR_2
+                # import-guard comment for the same fact). This import used
+                # to sit ABOVE this try block, so the AttributeError
+                # propagated out of run() uncaught -- finished() never
+                # emitted, the tour button never re-enabled, and nothing
+                # was logged: a silent worker-thread death. Guarded here so
+                # a tour press fails VISIBLY instead.
+                try:
+                    from robot_radio.planner.tour import parse_tour, run_tour
+                except Exception as exc:  # noqa: BLE001 -- see comment above
+                    self.log_line.emit(
+                        f"[TOUR] {self._name}: tour geometry unavailable "
+                        f"({exc}) -- planner.tour is dormant this sprint, "
+                        "see clasi/issues/"
+                        "testgui-motion-paths-dead-after-move-cutover.md",
+                        "")
+                    return
+
                 protocol = getattr(self._transport, "protocol", None)
                 if protocol is None:
                     self.log_line.emit(

@@ -14,6 +14,7 @@ Run with::
 """
 from __future__ import annotations
 
+import math
 import time
 from pathlib import Path
 
@@ -133,6 +134,124 @@ def test_suspend_and_resume_telemetry_reader_toggle_on_telemetry(loop):
     delivered.clear()
     loop.twist(150.0, 0.0, 300.0)
     assert _wait_until(lambda: len(delivered) > 0)
+
+
+# ---------------------------------------------------------------------------
+# move() -- MOVE-queue command, rebuilt against the current Move schema
+# (testgui-motion-paths-dead-after-move-cutover fix). The PRE-fix move()
+# built the deleted sprint-109 arc-command Move shape (bare distance=/
+# delta_heading=/v_max=/omega=/time= fields) against the CURRENT pb2.Move
+# (velocity oneof {twist|wheels} + stop oneof {time|distance|angle} +
+# required timeout) -- every one of those old kwargs raised at construction
+# (Move has no such field any more), so move() crashed on every call before
+# this fix (see estimator_capture.py's own "calling SimLoop.move() today
+# crashes immediately" comment, predating this fix).
+# ---------------------------------------------------------------------------
+
+
+def test_move_twist_distance_leg_advances_true_pose_and_encoders(loop):
+    """A straight MoveTwist(v_x)+distance-stop Move drives the plant
+    forward -- true pose x advances and encoder telemetry keeps flowing,
+    the same real-hardware-shaped assertion test_true_pose_advances_after_
+    forward_twist() makes for twist()."""
+    pose0 = loop.get_true_pose()
+    move_id = loop.move(v_x=200.0, stop_distance=300.0, timeout=5000.0)
+    assert isinstance(move_id, int) and move_id > 0
+
+    assert _wait_until(lambda: loop.get_true_pose()["x"] > pose0["x"] + 1.0, timeout_s=4.0), (
+        "expected forward true-pose x to advance after a distance Move")
+
+    frames = loop.read_pending_binary_tlm_frames()
+    assert any(f.enc is not None for f in frames), (
+        "expected at least one TLMFrame with encoder data during the Move")
+
+
+def test_move_twist_angle_leg_advances_true_heading(loop):
+    """A pure-rotation MoveTwist(omega)+angle-stop Move turns the plant --
+    true heading advances."""
+    pose0 = loop.get_true_pose()
+    loop.move(omega=1.5, stop_angle=math.radians(90.0), timeout=5000.0)
+
+    assert _wait_until(
+        lambda: abs(loop.get_true_pose()["h"] - pose0["h"]) > math.radians(5.0),
+        timeout_s=4.0), "expected true heading to advance after an angle Move"
+
+
+def test_move_wheels_variant_builds_wheels_arm_not_twist(loop):
+    """``v_left``/``v_right`` build a ``MoveWheels`` arm, not a
+    ``MoveTwist`` -- verified by capturing the envelope ``move()`` actually
+    injects (``loop.inject_command()`` monkey-patched to record instead of
+    send, mirroring ``test_transport.py``'s own
+    ``test_config_unsupported_key_gets_no_wire_round_trip`` "capture, don't
+    send" pattern) and decoding it back, rather than driving the real
+    plant -- ``MoveWheels`` stages directly through ``Drive::setWheels()``,
+    independent of ``BodyKinematics``, so there is no twist-shaped pose
+    assertion to make here the way the two tests above make for
+    ``MoveTwist``."""
+    import base64
+
+    from robot_radio.robot.pb2 import envelope_pb2 as pb2_mod
+
+    captured: list[str] = []
+    loop.inject_command = captured.append  # type: ignore[method-assign]
+
+    loop.move(v_left=100.0, v_right=200.0, stop_distance=300.0, timeout=1000.0)
+
+    assert len(captured) == 1
+    armored = captured[0]
+    assert armored.startswith("*B")
+    decoded = pb2_mod.CommandEnvelope.FromString(base64.b64decode(armored[2:]))
+    assert decoded.move.WhichOneof("velocity") == "wheels"
+    assert decoded.move.wheels.v_left == pytest.approx(100.0)
+    assert decoded.move.wheels.v_right == pytest.approx(200.0)
+    assert decoded.move.WhichOneof("stop") == "distance"
+    assert decoded.move.distance == pytest.approx(300.0)
+
+
+def test_move_requires_positive_timeout(loop):
+    with pytest.raises(ValueError):
+        loop.move(v_x=100.0, stop_distance=100.0, timeout=0.0)
+    with pytest.raises(ValueError):
+        loop.move(v_x=100.0, stop_distance=100.0, timeout=-1.0)
+
+
+def test_move_requires_exactly_one_stop_condition(loop):
+    with pytest.raises(ValueError):
+        loop.move(v_x=100.0, timeout=1000.0)  # no stop condition at all
+    with pytest.raises(ValueError):
+        loop.move(v_x=100.0, stop_distance=100.0, stop_angle=1.0, timeout=1000.0)  # two
+
+
+def test_move_wheels_requires_both_v_left_and_v_right(loop):
+    with pytest.raises(ValueError):
+        loop.move(v_left=100.0, stop_distance=100.0, timeout=1000.0)  # v_right missing
+
+
+def test_move_ids_are_distinct_and_incrementing_when_omitted(loop):
+    id1 = loop.move(v_x=0.0, stop_time=1.0, timeout=1000.0)
+    id2 = loop.move(v_x=0.0, stop_time=1.0, timeout=1000.0)
+    assert id2 > id1
+
+
+def test_move_honors_an_explicit_id(loop):
+    """``id`` doubles as both the envelope's own ``corr_id`` (the enqueue
+    ack's own correlation key) and ``Move.id`` (the completion event's
+    key) -- verified by capturing the envelope ``move(id=...)`` actually
+    injects (same "capture, don't send" pattern as the wheels-variant test
+    above) and decoding both fields back."""
+    import base64
+
+    from robot_radio.robot.pb2 import envelope_pb2 as pb2_mod
+
+    captured: list[str] = []
+    loop.inject_command = captured.append  # type: ignore[method-assign]
+
+    returned_id = loop.move(v_x=100.0, stop_distance=50.0, timeout=1000.0, id=42)
+
+    assert returned_id == 42
+    decoded = pb2_mod.CommandEnvelope.FromString(base64.b64decode(captured[0][2:]))
+    assert decoded.corr_id == 42
+    assert decoded.move.id == 42
 
 
 # ---------------------------------------------------------------------------

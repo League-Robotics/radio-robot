@@ -574,40 +574,79 @@ class SimLoop:
             lambda: self._lib.sim_inject_stop(self._handle, ctypes.c_uint32(corr_id)))
         return corr_id
 
-    def move(self, *, distance: float = 0.0, delta_heading: float = 0.0,
-             v_max: float = 0.0, omega: float = 0.0, time: float = 0.0,
-             replace: bool = False, id: "int | None" = None) -> int:
-        """MOVE-queue command (109-008 host adoption) -- builds and injects
+    def move(self, *, v_x: float = 0.0, v_y: float = 0.0, omega: float = 0.0,
+             v_left: "float | None" = None, v_right: "float | None" = None,
+             stop_time: "float | None" = None, stop_distance: "float | None" = None,
+             stop_angle: "float | None" = None, timeout: float,
+             replace: bool = True, id: "int | None" = None) -> int:
+        """MOVE-queue command -- builds and injects
         ``CommandEnvelope{move: Move{...}}`` via ``inject_command()``'s
         generic escape hatch (the SAME mechanism ``_SimConfigConn.
         send_envelope_fast()`` uses for the config path, Architecture
         Revision 1's "one mechanism, not a Sim-specific fork") rather than a
         dedicated ``sim_inject_move`` ctypes symbol -- unlike
         ``twist()``/``stop()`` (hot teleop-path calls with their own fast
-        ctypes entry points), Move is sent at most once per tour LEG, so the
+        ctypes entry points), Move is sent at most once per leg, so the
         extra Python-side envelope-build cost here is immaterial.
+
+        Rebuilt (116-001 MOVE-protocol cutover;
+        ``clasi/issues/testgui-motion-paths-dead-after-move-cutover.md``)
+        against the CURRENT ``Move`` schema (``envelope.proto``) -- this is
+        NOT the same shape the pre-115 sprint-109 arc-command ``Move`` used
+        (bare top-level ``distance``/``delta_heading``/``v_max``/``omega``/
+        ``time`` fields); that message was deleted wholesale (115-003, gut
+        S1 motion-stack excision). A velocity variant -- ``MoveTwist{v_x,
+        v_y, omega}`` (the default; leave ``v_left``/``v_right`` both
+        ``None``) OR ``MoveWheels{v_left, v_right}`` (pass BOTH -- raises
+        ``ValueError`` if only one is given) -- plus exactly ONE stop
+        condition (``stop_time``/``stop_distance``/``stop_angle``, built via
+        ``protocol._build_move_stop_kwargs()`` -- the SAME helper
+        ``NezhaProtocol.move_twist()``/``move_wheels()`` use, reused rather
+        than reimplemented so the "exactly one" validation lives in ONE
+        place) plus a REQUIRED ``timeout`` safety backstop (``ValueError``
+        if not ``> 0``, mirroring ``move_twist()``'s own host-side check).
 
         ``id`` doubles as both the envelope's own ``corr_id`` (the enqueue
         ack's own correlation key) and ``Move.id`` (the LATER completion
         event's key, per ``envelope.proto``'s own ``Move.id`` doc comment)
-        -- mirrors ``NezhaProtocol.move()``'s own convention exactly, so
-        ``planner.tour.run_tour()`` can treat a ``NezhaProtocol`` and a
-        ``SimLoop`` identically. Defaults to this instance's own
+        -- mirrors ``NezhaProtocol.move_twist()``/``move_wheels()``'s own
+        ``move_id`` convention (spelled ``id`` here since every existing Sim
+        caller already does). Defaults to this instance's own
         ``_next_corr_id()`` counter when omitted (matching ``twist()``/
-        ``stop()``'s own auto-assignment).
+        ``stop()``'s own auto-assignment) -- every Move sent through this
+        method therefore gets a distinct, incrementing id unless the caller
+        overrides it.
 
         Returns the id used. Fire-and-poll, matching ``twist()``/``stop()``
-        -- this call never blocks on a reply; see ``planner.tour``'s own
-        completion-event polling for how a caller learns the outcome.
+        -- this call never blocks on a reply; a caller learns the outcome
+        from telemetry's ack slot, same as a real robot (see
+        ``docs/protocol-v4.md`` section 7).
         """
         self._require_connected()
+        from robot_radio.robot.protocol import _build_move_stop_kwargs
+
+        if timeout <= 0:
+            raise ValueError(f"move(): timeout must be > 0, got {timeout!r}")
+        stop_kwargs = _build_move_stop_kwargs(
+            stop_time=stop_time, stop_distance=stop_distance, stop_angle=stop_angle)
+
         move_id = id if id is not None else self._next_corr_id()
         pb2_mod = _get_envelope_pb2()
+
+        if v_left is not None or v_right is not None:
+            if v_left is None or v_right is None:
+                raise ValueError(
+                    "move(): v_left and v_right must both be given for a "
+                    "wheels Move (got only one)")
+            velocity_kwargs = {"wheels": pb2_mod.MoveWheels(v_left=v_left, v_right=v_right)}
+        else:
+            velocity_kwargs = {"twist": pb2_mod.MoveTwist(v_x=v_x, v_y=v_y, omega=omega)}
+
         envelope = pb2_mod.CommandEnvelope(
             corr_id=move_id,
-            move=pb2_mod.Move(distance=distance, delta_heading=delta_heading,
-                              v_max=v_max, omega=omega, time=time,
-                              replace=replace, id=move_id))
+            move=pb2_mod.Move(
+                timeout=timeout, replace=replace, id=move_id,
+                **velocity_kwargs, **stop_kwargs))
         armored = base64.b64encode(envelope.SerializeToString()).decode("ascii")
         self.inject_command(f"*B{armored}")
         return move_id

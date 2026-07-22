@@ -13,6 +13,8 @@ is not present.
 """
 from __future__ import annotations
 
+import math
+import threading
 import time
 from unittest.mock import MagicMock
 
@@ -83,6 +85,122 @@ def test_drive_produces_moving_telemetry(transport: SimTransport) -> None:
         f"no moving TLMFrame observed via on_telemetry within "
         f"{_WAIT_TIMEOUT_S}s; frames received: {frames!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# (a2) D/RT/SEG managed-motion dispatch -> SimLoop.move() directly, no
+# planner.tour (testgui-motion-paths-dead-after-move-cutover fix). Before
+# this fix, _run_motion_async() imported planner.tour, whose own module
+# body raises AttributeError at import time (references the deleted
+# telemetry_pb2.ACK_STATUS_DONE) -- silently killing the background worker
+# thread: command()/send() still returned normally (fire-and-forget), but
+# the robot never actually moved and nothing was logged. These tests drive
+# the exact wire strings __main__.py's own buttons send
+# (_managed_dist()/_managed_ang()/_send_seg_turn()) and confirm the plant
+# actually moves.
+# ---------------------------------------------------------------------------
+
+
+def test_managed_d_drives_the_plant_forward(transport: SimTransport) -> None:
+    """``command("D 150 150 <mm>")`` -- the exact wire string
+    ``__main__.py``'s ``_managed_dist()`` sends -- must drive
+    ``SimLoop.move()`` on a background thread and advance the plant's true
+    pose, with no exception along the way (proving no ``planner.tour``
+    import happens)."""
+    protocol = transport.protocol
+    assert protocol is not None
+    pose0 = protocol.get_true_pose()
+
+    reply = transport.command("D 150 150 300", read_timeout=500)
+    assert reply == ""  # fire-and-forget -- SimTransport has no synchronous reply for D
+
+    assert _wait_until(lambda: protocol.get_true_pose()["x"] > pose0["x"] + 1.0, timeout_s=4.0), (
+        "expected forward true-pose x to advance after a managed D command")
+
+
+def test_managed_rt_turns_the_plant(transport: SimTransport) -> None:
+    """``command("RT <cdeg>")`` -- ``__main__.py``'s ``_managed_ang()`` wire
+    shape -- must turn the plant."""
+    protocol = transport.protocol
+    assert protocol is not None
+    pose0 = protocol.get_true_pose()
+
+    transport.command("RT 9000", read_timeout=500)
+
+    assert _wait_until(
+        lambda: abs(protocol.get_true_pose()["h"] - pose0["h"]) > math.radians(5.0),
+        timeout_s=4.0), "expected true heading to advance after a managed RT command"
+
+
+def test_managed_seg_0_pivot_turns_the_plant(transport: SimTransport) -> None:
+    """``SEG 0 <cdeg>`` (the Turn buttons'/turn-control socket's own wire
+    shape, ``__main__.py``'s ``_send_seg_turn()``) is translated onto the
+    same RT-shaped Move ``test_managed_rt_turns_the_plant`` exercises
+    directly."""
+    protocol = transport.protocol
+    assert protocol is not None
+    pose0 = protocol.get_true_pose()
+
+    transport.command("SEG 0 9000", read_timeout=500)
+
+    assert _wait_until(
+        lambda: abs(protocol.get_true_pose()["h"] - pose0["h"]) > math.radians(5.0),
+        timeout_s=4.0), "expected true heading to advance after SEG 0 <cdeg>"
+
+
+def test_managed_motion_second_request_while_in_flight_is_rejected_and_logged(
+    transport: SimTransport,
+) -> None:
+    """A second D/RT/SEG request while one is already running is rejected
+    (logged), not queued or interleaved -- see ``_run_motion_async()``'s own
+    docstring.
+
+    A ``Move`` is now a single fire-and-poll wire send (``SimLoop.move()``
+    enqueues and returns immediately -- unlike the pre-fix ``run_tour()``
+    call, which blocked the worker thread for the WHOLE physical motion),
+    so the worker thread's real in-flight window is well under a
+    millisecond -- too small to reliably race from this test's own thread.
+    ``protocol.move`` is monkey-patched to block on an ``Event`` so the
+    worker thread is deterministically still alive when the second request
+    arrives.
+    """
+    logs: list[str] = []
+    transport.on_log = logs.append
+
+    protocol = transport.protocol
+    assert protocol is not None
+    release = threading.Event()
+    real_move = protocol.move
+
+    def _blocking_move(*args, **kwargs):
+        release.wait(timeout=2.0)
+        return real_move(*args, **kwargs)
+
+    protocol.move = _blocking_move  # type: ignore[method-assign]
+    try:
+        transport.command("D 150 150 700", read_timeout=500)
+        assert _wait_until(
+            lambda: transport._motion_thread is not None and transport._motion_thread.is_alive()
+        ), "expected the first managed-motion worker thread to still be in flight"
+        transport.command("D 150 150 700", read_timeout=500)
+    finally:
+        release.set()
+
+    assert any("already in progress" in line for line in logs), logs
+
+
+def test_managed_d_malformed_line_logs_error_instead_of_dying_silently(
+    transport: SimTransport,
+) -> None:
+    """A malformed D line (missing ``<mm>``) must be caught inside the
+    worker thread and logged -- never left to kill the thread the way the
+    pre-fix ``planner.tour`` ``AttributeError`` did."""
+    logs: list[str] = []
+    transport.on_log = logs.append
+
+    transport.command("D 150 150", read_timeout=500)  # missing <mm>
+
+    assert _wait_until(lambda: any("ERROR" in line for line in logs)), logs
 
 
 # ---------------------------------------------------------------------------

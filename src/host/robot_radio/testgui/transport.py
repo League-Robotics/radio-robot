@@ -169,6 +169,114 @@ _TRUTH_POLL_INTERVAL_S = 0.2   # target pose rate ~5 Hz
 _TLM_DRAIN_INTERVAL_S = 0.04   # drain TLM queue every 40 ms (~25 Hz ceiling)
 _CAMERA_TAG_ID = 100
 
+# ---------------------------------------------------------------------------
+# Shared Move/move_twist() building blocks (testgui-motion-paths-dead-after-
+# move-cutover fix) -- used by BOTH _HardwareTransport (run_unmanaged() +
+# its own D/RT/SEG -> move_twist()/move_wheels() dispatch) and SimTransport
+# (its own D/RT/SEG -> SimLoop.move() dispatch), so the two backends parse
+# the SAME wire shapes and size Move.timeout the SAME way. Module-level
+# (not class attributes) so both classes -- _HardwareTransport is defined
+# BEFORE SimTransport in this file -- share exactly one definition.
+# ---------------------------------------------------------------------------
+
+# Unmanaged (direct-twist/move_twist) cruise values -- also the rate used
+# whenever a managed D/RT/SEG wire line carries no rate of its own (RT/SEG
+# carry only an angle; D's own left/right speed is used directly instead).
+# Matched so a straight/turn's cruise speed is identical across BOTH GUI
+# columns (Managed/Unmanaged) and BOTH backends (Sim/hardware) -- the only
+# real difference between the columns is planner-vs-none, and between the
+# backends is transport-vs-none.
+_UNMANAGED_SPEED = 150.0      # [mm/s]
+_UNMANAGED_YAW_RATE = 2.0     # [rad/s]
+
+# Move.timeout safety-backstop sizing for every Move/move_twist()/
+# move_wheels() built from an expected duration (the managed D/RT/SEG
+# dispatch on both backends, and _HardwareTransport.run_unmanaged()):
+# expected duration x this factor, floored so a very short leg still gets a
+# sane backstop rather than a near-zero timeout that could fire before the
+# stop condition is ever reached (docs/protocol-v4.md sec 4.2: a
+# non-positive/near-zero timeout clamps to 0 and reports TimedOut on the
+# very first tick -- a too-tight timeout here is a real, not theoretical,
+# hazard).
+_MOVE_TIMEOUT_FACTOR = 3.0    # [multiple of expected duration]
+_MOVE_MIN_TIMEOUT = 2000.0    # [ms]
+
+
+def _parse_d_step(tokens: "list[str]") -> "tuple[float, float, float]":
+    """Parse a ``D <left> <right> <mm>`` wire step's own 3 numeric args
+    (``tokens`` already split, ``tokens[0] == "D"``). Returns
+    ``(left, right, mm)``. Raises ``ValueError`` on a malformed step --
+    the SAME shape ``planner.tour.parse_tour()`` used to recognize (see
+    that module's own ``parse_tour()`` docstring), reimplemented here so
+    neither transport needs to import the dormant ``planner.tour`` module
+    just to parse a wire string (see ``clasi/issues/
+    testgui-motion-paths-dead-after-move-cutover.md``)."""
+    if len(tokens) != 4:
+        raise ValueError(
+            f"malformed D step (expected 'D <left> <right> <mm>'): {' '.join(tokens)!r}")
+    try:
+        left, right, mm = (float(t) for t in tokens[1:])
+    except ValueError:
+        raise ValueError(f"malformed D step (non-numeric argument): {' '.join(tokens)!r}") from None
+    return left, right, mm
+
+
+def _parse_rt_step(tokens: "list[str]") -> float:
+    """Parse a ``RT <cdeg>`` wire step's own signed centidegree argument
+    (``tokens`` already split, ``tokens[0] == "RT"``) into signed degrees.
+    Raises ``ValueError`` on a malformed step -- see ``_parse_d_step()``'s
+    own docstring for why this is reimplemented rather than imported from
+    ``planner.tour``."""
+    if len(tokens) != 2:
+        raise ValueError(f"malformed RT step (expected 'RT <cdeg>'): {' '.join(tokens)!r}")
+    try:
+        cdeg = float(tokens[1])
+    except ValueError:
+        raise ValueError(f"malformed RT step (non-numeric argument): {' '.join(tokens)!r}") from None
+    return cdeg / 100.0
+
+
+def _move_timeout_for(duration_s: float) -> float:  # [ms]
+    """Expected-duration-based ``Move.timeout`` safety backstop -- see
+    ``_MOVE_TIMEOUT_FACTOR``/``_MOVE_MIN_TIMEOUT``'s own module-level
+    comment."""
+    return max(_MOVE_MIN_TIMEOUT, duration_s * 1000.0 * _MOVE_TIMEOUT_FACTOR)
+
+
+def _build_sim_move(wire_step: str) -> "tuple[dict, str]":
+    """Parse a ``D <left> <right> <mm>``/``RT <cdeg>`` wire step into
+    ``SimLoop.move()`` kwargs plus a human-readable label -- the Sim
+    counterpart of ``_HardwareTransport._dispatch_managed_move()`` (see
+    that method's own docstring for the shared parsing/timeout-sizing
+    rationale). Sim only ever builds a ``MoveTwist`` (the GUI's own D rows
+    always send ``left == right`` -- see ``__main__.py``'s
+    ``_managed_dist()``), unlike the hardware dispatch's ``left != right``
+    -> ``MoveWheels`` branch. Raises ``ValueError`` for a malformed step or
+    an unrecognized verb -- the caller (``SimTransport._run_motion_async()``'s
+    worker) catches it and logs one line rather than crashing the thread."""
+    tokens = wire_step.split()
+    verb = tokens[0] if tokens else ""
+
+    if verb == "D":
+        left, right, mm = _parse_d_step(tokens)
+        speed = (abs(left) + abs(right)) / 2.0
+        if speed <= 0.0:
+            raise ValueError(f"D step has zero speed: {wire_step!r}")
+        v_x = math.copysign(speed, mm)
+        timeout = _move_timeout_for(abs(mm) / speed)
+        label = f"managed drive {mm:+.0f}mm @ {speed:.0f}mm/s (timeout {timeout:.0f}ms)"
+        return {"v_x": v_x, "stop_distance": abs(mm), "timeout": timeout}, label
+
+    if verb == "RT":
+        deg = _parse_rt_step(tokens)
+        omega = math.copysign(_UNMANAGED_YAW_RATE, deg)
+        angle = math.radians(abs(deg))
+        timeout = _move_timeout_for(angle / _UNMANAGED_YAW_RATE)
+        label = f"managed turn {deg:+.0f}deg @ {_UNMANAGED_YAW_RATE:.1f}rad/s (timeout {timeout:.0f}ms)"
+        return {"omega": omega, "stop_angle": angle, "timeout": timeout}, label
+
+    raise ValueError(f"unsupported managed-motion step verb {verb!r}: {wire_step!r}")
+
 
 def list_ports() -> list[str]:
     """Return a sorted list of USB modem serial ports."""
@@ -679,29 +787,185 @@ class _HardwareTransport(Transport):
     def send(self, line: str) -> None:
         """Fire-and-forget: translate ``line`` to binary and dispatch it.
 
-        097: the firmware's text plane is a 6-verb rump now -- every
-        motion/config line is translated to a binary ``CommandEnvelope``
-        via ``binary_bridge.translate_command()`` (which performs its own
-        request/reply round trip for a supported verb, or sends nothing at
-        all for a verb with no binary arm yet). The reply string is
-        discarded here (fire-and-forget contract), matching the
-        ``send_fast()`` pre-migration behavior's "no reply read" shape --
-        it is still logged, via ``translate_command``'s own
-        ``send_envelope()``/``NezhaProtocol`` calls invoking
-        ``SerialConnection``'s ``on_send``/``on_recv`` hooks the same way
-        ``command()`` does.
+        testgui-motion-paths-dead-after-move-cutover fix: ``D``/``RT``/
+        ``SEG 0 <cdeg>`` are intercepted by ``_dispatch_managed_move()``
+        BEFORE ``binary_bridge.translate_command()`` ever sees them -- that
+        module's own dispatch is a permanent dead stub (``legacy_render``/
+        ``legacy_verbs`` were deleted wholesale, see its own module
+        docstring) that sends nothing for ANY verb, including these. Every
+        other line still routes through ``translate_command()`` unchanged
+        (kept as the fallback for genuinely legacy verbs -- it now just
+        never actually translates any of them).
+
+        The reply string is discarded here (fire-and-forget contract),
+        matching the ``send_fast()`` pre-migration behavior's "no reply
+        read" shape -- it is still logged, via ``SerialConnection``'s
+        ``on_send``/``on_recv`` hooks (wired to every envelope send,
+        including ``NezhaProtocol.move_twist()``/``move_wheels()``'s own
+        ``send_envelope_fast()`` calls, not just ``translate_command()``'s),
+        the same way ``command()`` does.
         """
         if self._conn is None or not self._conn.is_open or self._proto is None:
             raise ConnectionError("Transport is not connected")
+        try:
+            dispatched = self._dispatch_managed_move(line)
+        except ValueError as exc:
+            self._log(f"[ERROR] {line!r}: {exc}")
+            return
+        if dispatched is not None:
+            return
         binary_bridge.translate_command(self._proto, line)
 
     def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
         """Translate ``line`` to binary, send it, and return the rendered
-        text-v2 reply line (097: see ``binary_bridge.translate_command()``).
+        text-v2 reply line.
+
+        testgui-motion-paths-dead-after-move-cutover fix: ``D``/``RT``/
+        ``SEG 0 <cdeg>`` are intercepted by ``_dispatch_managed_move()``
+        BEFORE ``binary_bridge.translate_command()``'s own dead stub (see
+        ``send()``'s docstring) -- a matched line waits (bounded by
+        ``read_timeout``) for the Move's enqueue ack via
+        ``NezhaProtocol.wait_for_ack()`` and returns ``"OK move"``/
+        ``"ERR nak move ..."``/``"ERR unknown move-timeout"``. Every other
+        line still falls through to ``translate_command()`` unchanged.
         """
         if self._conn is None or not self._conn.is_open or self._proto is None:
             return ""
+        try:
+            dispatched = self._dispatch_managed_move(line)
+        except ValueError as exc:
+            return f"ERR badarg {exc}"
+        if dispatched is not None:
+            corr_id, label = dispatched
+            self._log(f"[INFO] {label}")
+            ack = self._proto.wait_for_ack(corr_id, timeout=read_timeout)
+            if ack is None:
+                return "ERR unknown move-timeout"
+            if not ack.ok:
+                return f"ERR nak move err_code={ack.err_code}"
+            return "OK move"
         return binary_bridge.translate_command(self._proto, line)
+
+    # ------------------------------------------------------------------
+    # Managed D/RT/SEG -> move_twist()/move_wheels() dispatch
+    # (testgui-motion-paths-dead-after-move-cutover fix)
+    # ------------------------------------------------------------------
+
+    def _dispatch_managed_move(self, line: str) -> "tuple[int, str] | None":
+        """Recognize ``D <left> <right> <mm>``/``RT <cdeg>``/
+        ``SEG 0 <cdeg>`` and, if matched, send it as ONE ``Move`` via
+        ``NezhaProtocol.move_twist()``/``move_wheels()``, returning
+        ``(corr_id, label)``. Returns ``None`` for any other line (falls
+        through to ``binary_bridge.translate_command()``'s legacy stub in
+        ``send()``/``command()`` above, unchanged). Raises ``ValueError``
+        for a recognized-but-malformed ``D``/``RT`` line -- caught by both
+        callers, never left to propagate to the GUI thread uncaught.
+
+        ``D``: ``left == right`` (the only shape the GUI itself ever sends
+        -- ``__main__.py``'s ``_managed_dist()`` always sends
+        ``"D 150 150 <mm>"``) becomes a straight ``MoveTwist(v_x=speed)``;
+        ``left != right`` becomes a ``MoveWheels(v_left, v_right)`` instead
+        (staged directly, never round-tripped through a twist -- sprint
+        116 architecture-update.md Decision 3), both with a ``distance``
+        stop of ``abs(mm)``. ``RT``/``SEG 0 <cdeg>`` (SEG's own
+        arc_length=0 in-place-pivot shape) become
+        ``MoveTwist(omega=+-_UNMANAGED_YAW_RATE)`` with an ``angle`` stop
+        -- RT/SEG carry no rate of their own on the wire, so this reuses
+        the SAME yaw rate ``run_unmanaged()`` uses, matching the GUI panel's
+        own "same speed, only the path differs" design intent. Every Move
+        is sent ``replace=True`` (start now), matching every pre-existing
+        D/RT/SEG caller's own "just drive this" usage.
+        """
+        tokens = line.split()
+        if not tokens:
+            return None
+        verb = tokens[0].upper()
+        assert self._proto is not None  # only reachable while connected (callers check first)
+
+        if verb == "D":
+            left, right, mm = _parse_d_step(tokens)
+            if left == right:
+                speed = abs(left)
+                if speed <= 0.0:
+                    raise ValueError("D requires nonzero left/right speed")
+                v_x = math.copysign(speed, mm)
+                timeout = _move_timeout_for(abs(mm) / speed)
+                corr_id = self._proto.move_twist(
+                    v_x, 0.0, 0.0, stop_distance=abs(mm), timeout=timeout, replace=True)
+                return corr_id, (
+                    f"move twist v_x={v_x:+.0f}mm/s stop_distance={abs(mm):.0f}mm "
+                    f"timeout={timeout:.0f}ms")
+            speed = (abs(left) + abs(right)) / 2.0
+            if speed <= 0.0:
+                raise ValueError("D requires nonzero left/right speed")
+            timeout = _move_timeout_for(abs(mm) / speed)
+            corr_id = self._proto.move_wheels(
+                left, right, stop_distance=abs(mm), timeout=timeout, replace=True)
+            return corr_id, (
+                f"move wheels v_left={left:+.0f}mm/s v_right={right:+.0f}mm/s "
+                f"stop_distance={abs(mm):.0f}mm timeout={timeout:.0f}ms")
+
+        if verb == "RT":
+            deg = _parse_rt_step(tokens)
+            omega = math.copysign(_UNMANAGED_YAW_RATE, deg)
+            angle = math.radians(abs(deg))
+            timeout = _move_timeout_for(angle / _UNMANAGED_YAW_RATE)
+            corr_id = self._proto.move_twist(
+                0.0, 0.0, omega, stop_angle=angle, timeout=timeout, replace=True)
+            return corr_id, (
+                f"move twist omega={omega:+.2f}rad/s stop_angle={angle:.3f}rad "
+                f"timeout={timeout:.0f}ms")
+
+        if verb == "SEG" and len(tokens) == 3 and tokens[1] == "0":
+            return self._dispatch_managed_move(f"RT {tokens[2]}")
+
+        return None
+
+    def run_unmanaged(self, *, distance_mm: float = 0.0, angle_deg: float = 0.0) -> None:
+        """UNMANAGED (open-loop) primitive motion on real hardware: one
+        bounded body-frame twist ``Move`` at a fixed velocity for exactly
+        ``distance_mm``/``angle_deg``, via ``NezhaProtocol.move_twist()`` --
+        the hardware counterpart of ``SimTransport.run_unmanaged()`` (same
+        ``_UNMANAGED_SPEED``/``_UNMANAGED_YAW_RATE`` cruise values, same
+        "distance wins if both given" rule). Added because
+        ``_HardwareTransport`` previously had no ``run_unmanaged()`` at all
+        -- the GUI's own ``hasattr(transport, "run_unmanaged")`` guard
+        silently no-op'd every Unmanaged-column button on a real robot (see
+        ``clasi/issues/testgui-motion-paths-dead-after-move-cutover.md``).
+
+        Exactly one of ``distance_mm``/``angle_deg`` is honored (distance
+        wins if both nonzero); zero/zero is a silent no-op, matching
+        ``SimTransport.run_unmanaged()``'s own contract. Fire-and-poll --
+        this call returns as soon as the Move enqueues; the robot itself
+        stops once the Move's own stop condition or timeout backstop fires
+        (no host-side timing loop, no deadman -- see ``docs/protocol-v4.md``
+        section 5.4). Logged, never raised -- a caller that wants to know
+        whether the Move was actually accepted should use the managed
+        ``command()`` path instead, which waits for the ack.
+        """
+        if self._conn is None or not self._conn.is_open or self._proto is None:
+            self._log("[WARN] run_unmanaged: not connected")
+            return
+        if distance_mm != 0.0:
+            v_x = math.copysign(_UNMANAGED_SPEED, distance_mm)
+            timeout = _move_timeout_for(abs(distance_mm) / _UNMANAGED_SPEED)
+            label = f"unmanaged drive {distance_mm:+.0f}mm @ {_UNMANAGED_SPEED:.0f}mm/s"
+            kwargs: dict[str, Any] = dict(stop_distance=abs(distance_mm))
+            v_y, omega = 0.0, 0.0
+        elif angle_deg != 0.0:
+            v_x, v_y = 0.0, 0.0
+            omega = math.copysign(_UNMANAGED_YAW_RATE, angle_deg)
+            timeout = _move_timeout_for(math.radians(abs(angle_deg)) / _UNMANAGED_YAW_RATE)
+            label = f"unmanaged turn {angle_deg:+.0f}deg @ {_UNMANAGED_YAW_RATE:.1f}rad/s"
+            kwargs = dict(stop_angle=math.radians(abs(angle_deg)))
+        else:
+            return
+        try:
+            self._proto.move_twist(v_x, v_y, omega, timeout=timeout, replace=True, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[ERROR] {label} failed: {exc}")
+            return
+        self._log(f"[INFO] {label} (move_twist, timeout {timeout:.0f}ms)")
 
     # ------------------------------------------------------------------
     # Keepalive arm/disarm
@@ -984,12 +1248,14 @@ class SimTransport(Transport):
         # under the GIL, no lock needed) and re-applied on every connect().
         self._speed_factor: int = 1
         # Background thread driving a direct-motion command (SEG/D/RT --
-        # see command()'s own routing) through planner.tour, so command()
-        # itself returns promptly instead of blocking the GUI thread for the
-        # whole motion. One at a time -- a second direct-motion request
-        # while one is in flight is rejected (logged), not queued or
-        # interleaved, since two StreamingExecutors driving the same
-        # SimLoop concurrently would race its single-consumer command queue.
+        # see command()'s own routing) through _run_motion_async()'s single
+        # SimLoop.move() call (NOT planner.tour, dormant this sprint -- see
+        # that method's own docstring), so command() itself returns promptly
+        # instead of blocking the GUI thread for the whole motion. One at a
+        # time -- a second direct-motion request while one is in flight is
+        # rejected (logged), not queued or interleaved, since a second
+        # thread driving the same SimLoop concurrently would race its
+        # single-consumer command queue.
         self._motion_thread: threading.Thread | None = None
         self._motion_stop_event = threading.Event()
         # 109-002: config path -- constructed in connect(), torn down in
@@ -1219,17 +1485,17 @@ class SimTransport(Transport):
     # backing -- accepted-and-logged, just with a short message instead of
     # the old multi-line essay.
 
-    # Verbs recognized by parse_tour() as-is: "D <l> <r> <mm>" (a straight
-    # leg) and "RT <cdeg>" (a relative in-place turn) -- see
-    # planner/tour.py's own parse_tour() docstring. Both are direct rows in
-    # testgui/commands.py's COMMANDS schema.
+    # Verbs recognized by _build_sim_move() as-is: "D <l> <r> <mm>" (a
+    # straight leg) and "RT <cdeg>" (a relative in-place turn) -- the SAME
+    # two shapes planner.tour.parse_tour() used to recognize (that module is
+    # dormant this sprint -- see _run_motion_async()'s own docstring). Both
+    # are direct rows in testgui/commands.py's COMMANDS schema.
     _MOTION_VERBS = ("D", "RT")
 
-    # Unmanaged (direct-twist) motion defaults -- the open-loop primitive path.
-    # Matched to the managed path's nominal cruise so the ONLY difference
-    # between the two GUI columns is planner-vs-no-planner, not speed.
-    _UNMANAGED_SPEED = 150.0      # [mm/s]
-    _UNMANAGED_YAW_RATE = 2.0     # [rad/s]
+    # _UNMANAGED_SPEED/_UNMANAGED_YAW_RATE moved to module level
+    # (testgui-motion-paths-dead-after-move-cutover fix) so
+    # _HardwareTransport's own run_unmanaged()/managed-move dispatch shares
+    # the exact same cruise values -- see that module-level comment.
 
     def send(self, line: str) -> None:
         """Fire-and-forget: routes recognized verbs into the sim; anything
@@ -1465,15 +1731,15 @@ class SimTransport(Transport):
         if self._loop is None:
             return
         if distance_mm != 0.0:
-            v_x = math.copysign(self._UNMANAGED_SPEED, distance_mm)
+            v_x = math.copysign(_UNMANAGED_SPEED, distance_mm)
             omega = 0.0
-            duration_ms = abs(distance_mm) / self._UNMANAGED_SPEED * 1000.0
-            label = f"unmanaged drive {distance_mm:+.0f}mm @ {self._UNMANAGED_SPEED:.0f}mm/s"
+            duration_ms = abs(distance_mm) / _UNMANAGED_SPEED * 1000.0
+            label = f"unmanaged drive {distance_mm:+.0f}mm @ {_UNMANAGED_SPEED:.0f}mm/s"
         elif angle_deg != 0.0:
             v_x = 0.0
-            omega = math.copysign(self._UNMANAGED_YAW_RATE, angle_deg)
-            duration_ms = math.radians(abs(angle_deg)) / self._UNMANAGED_YAW_RATE * 1000.0
-            label = f"unmanaged turn {angle_deg:+.0f}deg @ {self._UNMANAGED_YAW_RATE:.1f}rad/s"
+            omega = math.copysign(_UNMANAGED_YAW_RATE, angle_deg)
+            duration_ms = math.radians(abs(angle_deg)) / _UNMANAGED_YAW_RATE * 1000.0
+            label = f"unmanaged turn {angle_deg:+.0f}deg @ {_UNMANAGED_YAW_RATE:.1f}rad/s"
         else:
             return
         self._motion_stop_event.clear()
@@ -1485,13 +1751,32 @@ class SimTransport(Transport):
         self._log(f"[INFO] SimTransport: {label} (twist v_x={v_x:.0f} omega={omega:.2f}, deadman {duration_ms:.0f}ms)")
 
     def _run_motion_async(self, wire_step: str) -> None:
-        """Drive ``wire_step`` (a single "D .../"RT ..." tour-shaped leg)
-        through ``planner.tour.parse_tour()``/``run_tour()`` against
-        ``self._loop`` on a background thread, mirroring ``__main__.py``'s
-        own ``_TourRunner.run()`` construction (same ``PlannerParams``/
-        ``HeadingCorrector`` recipe) -- so a Turn/Drive button press is a
-        real profiled motion in Sim, not a silent no-op, without blocking
-        the calling (GUI) thread for the motion's whole duration."""
+        """Drive one D/RT leg (SEG's own ``SEG 0 <cdeg>`` pivot is
+        translated to ``RT <cdeg>`` by ``_dispatch()`` before this is
+        called) as a single ``SimLoop.move()`` call on a background thread.
+
+        testgui-motion-paths-dead-after-move-cutover fix: this NO LONGER
+        imports ``planner.tour`` -- that module's own body raises
+        ``AttributeError`` at import time (it references
+        ``telemetry_pb2.ACK_STATUS_DONE``, deleted by 115-003's frame-v2
+        rewrite), which used to kill this method's worker thread silently
+        (see ``testgui/commands.py``'s own ``TOUR_1``/``TOUR_2``
+        import-guard comment for the same dormant-planner fact, and
+        ``clasi/issues/testgui-motion-paths-dead-after-move-cutover.md``
+        for the bug this fixes). ``wire_step`` is parsed directly
+        (``_build_sim_move()`` -- the SAME ``"D <left> <right> <mm>"``/
+        ``"RT <cdeg>"`` shapes ``parse_tour()`` used to recognize) into a
+        single ``self._loop.move(...)`` call: a straight leg becomes
+        ``MoveTwist(v_x=speed)`` + a distance stop; a turn leg becomes
+        ``MoveTwist(omega=+-_UNMANAGED_YAW_RATE)`` + an angle stop -- the
+        SAME yaw rate ``run_unmanaged()`` uses, so a managed and unmanaged
+        turn share a cruise rate and only the path (planner vs none)
+        differs.
+
+        Runs on a background thread so a Drive/Turn button press returns
+        immediately; any failure (malformed ``wire_step``, ``SimLoop.
+        move()`` raising) is caught and logged, never left to kill the
+        worker thread silently."""
         if self._loop is None:
             return
         if self._motion_thread is not None and self._motion_thread.is_alive():
@@ -1503,31 +1788,13 @@ class SimTransport(Transport):
         loop = self._loop
 
         def _worker() -> None:
-            from robot_radio.config.robot_config import get_robot_config
-            from robot_radio.planner.heading import HeadingCorrector
-            from robot_radio.planner.model import PlannerParams
-            from robot_radio.planner.tour import parse_tour, run_tour
-
             try:
-                legs = parse_tour([wire_step])
-            except ValueError as exc:
-                self._log(f"[ERROR] SimTransport: {exc}")
-                return
-
-            params = PlannerParams()
-            heading = HeadingCorrector(params, robot_config=get_robot_config())
-
-            try:
-                result = run_tour(
-                    loop, params, heading, legs,
-                    should_stop=self._motion_stop_event.is_set,
-                )
-            except Exception as exc:  # noqa: BLE001
+                move_kwargs, label = _build_sim_move(wire_step)
+                loop.move(**move_kwargs)
+            except Exception as exc:  # noqa: BLE001 -- surfaced to the GUI log, never a silent worker death
                 self._log(f"[ERROR] SimTransport: {wire_step!r} failed: {exc}")
                 return
-
-            outcome = result.legs[0].outcome.value if result.legs else "unknown"
-            self._log(f"[INFO] SimTransport: {wire_step!r} -> {outcome}")
+            self._log(f"[INFO] SimTransport: {wire_step!r} -> {label}")
 
         self._motion_thread = threading.Thread(
             target=_worker, name="sim-direct-motion", daemon=True)

@@ -96,8 +96,18 @@ except ImportError:
 # (see this module's own docstring, "107-003 launch-unblock"). Deliberately
 # NOT built via `render.render_err()` -- render itself may be the thing
 # that's unavailable.
+#
+# testgui-motion-paths-dead-after-move-cutover fix: D/RT/SEG (managed
+# straight-drive/turn) are no longer routed here at all -- transport.py's
+# `_HardwareTransport._dispatch_managed_move()` intercepts them in
+# `send()`/`command()` BEFORE `translate_command()` is ever called, sending
+# a real `Move` via `NezhaProtocol.move_twist()`/`move_wheels()` against
+# the current protocol-v4 wire (`docs/protocol-v4.md`). This stub remains
+# the fallback for every OTHER legacy verb this wire's text plane no
+# longer has any translation for at all.
 _LEGACY_UNAVAILABLE_REPLY = (
-    "ERR unavailable legacy verb translation removed -- see "
+    "ERR unavailable legacy verb translation removed -- protocol-v4 "
+    "(docs/protocol-v4.md) has no binary arm for this verb -- see "
     "clasi/issues/binary-bridge-segment-replace-arms-deleted.md"
 )
 
