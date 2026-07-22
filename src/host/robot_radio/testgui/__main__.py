@@ -857,16 +857,26 @@ def _build_main_window():  # type: ignore[return]
     pid_checkbox_u.toggled.connect(_on_pid_toggled)
     pid_checkbox_m.toggled.connect(_on_pid_toggled)
 
-    def _make_motion_column(title: str, dist_cb, ang_cb,
+    def _make_motion_column(title: str, key: str, dist_cb, ang_cb,
                             test_s: QPushButton, test_t: QPushButton,
                             pid_cb: QCheckBox) -> QGroupBox:
+        """``key`` ("unmanaged"/"managed", stakeholder headless-button-
+        acceptance-suite fix, 2026-07-22): object-names each preset button
+        ``{key}_dist_btn_{signed:+d}``/``{key}_ang_btn_{signed:+d}`` so a
+        headless test can ``findChild()`` and ``.click()`` the EXACT preset
+        button an operator presses, instead of only calling the underlying
+        callback. Mirrors the GOTO spinboxes' own object-name precedent
+        (see their own creation comment above) — before this, these preset
+        buttons were the one remaining gap in the button surface with no
+        findChild()-able identity at all.
+        """
         box = QGroupBox(title)
         col = QVBoxLayout(box)
         col.setContentsMargins(6, 4, 6, 4)
         col.setSpacing(3)
-        for group_label, presets, cb in (
-            ("Distance [mm]", _DIST_PRESETS, dist_cb),
-            ("Angles [deg]", _ANGLE_PRESETS, ang_cb),
+        for group_label, presets, cb, kind in (
+            ("Distance [mm]", _DIST_PRESETS, dist_cb, "dist"),
+            ("Angles [deg]", _ANGLE_PRESETS, ang_cb, "ang"),
         ):
             lbl = QLabel(group_label)
             lbl.setStyleSheet("font-weight: bold;")
@@ -878,6 +888,7 @@ def _build_main_window():  # type: ignore[return]
                 h.setSpacing(3)
                 for signed in (mag, -mag):
                     b = QPushButton(f"{signed:+d}")
+                    b.setObjectName(f"{key}_{kind}_btn_{signed:+d}")
                     b.setEnabled(False)
                     b.setFixedWidth(64)
                     b.clicked.connect(lambda _checked=False, s=signed, f=cb: f(s))
@@ -908,10 +919,10 @@ def _build_main_window():  # type: ignore[return]
     motion_panel_layout.setContentsMargins(0, 0, 0, 0)
     motion_panel_layout.setSpacing(8)
     motion_panel_layout.addWidget(
-        _make_motion_column("Unmanaged — direct twist", _unmanaged_dist, _unmanaged_ang,
+        _make_motion_column("Unmanaged — direct twist", "unmanaged", _unmanaged_dist, _unmanaged_ang,
                             test_us_btn, test_ut_btn, pid_checkbox_u))
     motion_panel_layout.addWidget(
-        _make_motion_column("Managed — Ruckig", _managed_dist, _managed_ang,
+        _make_motion_column("Managed — Ruckig", "managed", _managed_dist, _managed_ang,
                             test_s_btn, test_t_btn, pid_checkbox_m))
     left_layout.addWidget(motion_panel)
 

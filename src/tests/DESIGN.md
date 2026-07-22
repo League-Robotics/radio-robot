@@ -1,6 +1,6 @@
 # Tests (`src/tests`)
 
-**Owner:** Eric Busboom · **Last reviewed:** 2026-07-21 · **Status:** in-flux
+**Owner:** Eric Busboom · **Last reviewed:** 2026-07-22 · **Status:** in-flux
 
 ---
 
@@ -87,7 +87,22 @@ Three never-combined domains, plus two flat "kept categories":
 - **`testgui/`** — pytest tests for the `src/host/robot_radio/testgui/`
   Qt application itself (widget behavior, command dispatch, calibration
   push-on-connect), distinct from `sim/system/`'s firmware-level
-  scenario tests.
+  scenario tests. **`test_gui_button_acceptance.py`** (stakeholder
+  directive, 2026-07-22) is this directory's standing acceptance gate for
+  the GUI's own motion-button surface: it builds the real window headless,
+  clicks (or, for the one entry point with no widget — `SEG 0 <cdeg>` —
+  calls directly) every distance/angle preset in both the Unmanaged and
+  Managed columns, the four Test buttons (rebuild+hot-reload+drive), Tour 1
+  and Tour 2 end to end, STOP mid-tour, and the (currently dormant) GOTO
+  button, against the REAL Sim stack (`SimTransport` → `SimLoop` → the
+  compiled firmware simulator) — including the connect-time
+  calibration/config push exactly as an operator's Connect click performs
+  it. Every button asserts ground-truth pose lands within a stated
+  tolerance, an encoder excursion actually occurred, and the move completes
+  (no hang) — printing a per-button trace table and writing it to a CSV
+  under pytest's own tmp dir. **GUI motion work is not considered done
+  until this suite passes** — see this directory's own Constraints section
+  below.
 
 ## 3. Constraints and Invariants
 
@@ -116,6 +131,17 @@ Three never-combined domains, plus two flat "kept categories":
   `tests/_infra/sim`). Every harness compiles its own throwaway binary
   ad hoc via `subprocess`; do not reintroduce a shared Python-level
   fixture without re-justifying it against that removal's reasoning.
+- **GUI work is not done until `testgui/test_gui_button_acceptance.py`
+  passes.** A ticket that adds, rewires, or retunes a TestGUI motion
+  button (a preset, a Test button, a tour, STOP, GOTO) is not complete on
+  unit tests alone — this suite is the standing proof that the button was
+  actually clicked (or its exact entry point exercised) against the real
+  Sim stack and the robot moved where it was supposed to, within its
+  stated tolerance, without hanging. A button whose semantics are
+  known-broken/dormant still gets a row here (`xfail`/`skip`, reason
+  stated) rather than being silently dropped from the suite — the button
+  surface must stay fully enumerated so a future change can't quietly
+  regress an untested control.
 
 ## 4. Design
 
