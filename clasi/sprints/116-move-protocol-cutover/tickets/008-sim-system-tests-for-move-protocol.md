@@ -1,9 +1,16 @@
 ---
 id: 008
 title: Sim system tests for MOVE protocol
-status: open
-use-cases: [SUC-050, SUC-051, SUC-052, SUC-053, SUC-054, SUC-055]
-depends-on: ['006']
+status: in-progress
+use-cases:
+- SUC-050
+- SUC-051
+- SUC-052
+- SUC-053
+- SUC-054
+- SUC-055
+depends-on:
+- '006'
 github-issue: ''
 issue: protocol-set-point-the-minimal-firmware-s-complete-command-surface.md
 completes_issue: true
