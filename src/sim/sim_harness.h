@@ -53,10 +53,9 @@
 //
 // --- Command injection / telemetry drain ---
 // Reuses tests/sim/support/fake_transport.h (TestSupport::FakeTransport) and
-// tests/sim/support/wire_test_codec.{h,cpp} (TestSupport::armorTwistCommand/
-// armorStopCommand/decodeOutboundLine) UNMODIFIED -- this class does not
-// reinvent wire injection or telemetry decoding, exactly as this ticket's
-// implementation plan requires.
+// tests/sim/support/wire_test_codec.{h,cpp} (TestSupport::armorMoveCommand/
+// armorStopCommand/decodeOutboundLine) -- this class does not reinvent wire
+// injection or telemetry decoding.
 //
 // --- True pose ---
 // trueX()/trueY()/trueHeading() read SimPlant's owned OtosPlant ground
@@ -91,8 +90,8 @@
 #include <vector>
 
 #include "app/comms.h"
-#include "app/deadman.h"
 #include "app/drive.h"
+#include "app/move_queue.h"
 #include "app/odometry.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
@@ -136,12 +135,12 @@ class SimHarness {
         line_(plant_, Devices::LineConfig{}),
         comms_(serialLink_, radioLink_, "DEVICE:NEZHA2:sim:sim_harness:1"),
         tlm_(comms_, serialLink_, radioLink_),
-        deadman_(clock_),
         drive_(armorL_, armorR_, trackWidth),
         odom_(armorL_, armorR_, trackWidth),
+        moveQueue_(drive_, odom_, clock_),
         preamble_(armorL_, armorR_, otos_, color_, line_, clock_),
         robotLoop_(plant_, armorL_, armorR_, otos_, color_, line_, comms_, tlm_,
-                   drive_, odom_, deadman_, preamble_, clock_, sleeper_) {
+                   drive_, odom_, moveQueue_, preamble_, clock_, sleeper_) {
     // 115-006 (gut S1 sim lockstep): no self-configuration here -- motorL_/
     // motorR_ are left at their own default-constructed Devices::MotorConfig{}
     // all-zero fields, exactly matching a real, not-yet-booted composition
@@ -194,20 +193,39 @@ class SimHarness {
   // Convenience wrappers over injectCommand() + TestSupport::armor*Command()
   // -- there is no encode(CommandEnvelope) in the generated codec (only a
   // host builds commands), so these are the only way a caller injects a
-  // Twist/Stop.
-  void injectTwist(float v_x, float omega, float duration, uint32_t corrId = 0) {
-    injectCommand(TestSupport::armorTwistCommand(v_x, omega, duration, corrId).c_str());
+  // Move/Stop.
+  //
+  // injectTwist -- DELETED (116-006, MOVE protocol cutover): bare TWIST
+  // (arm 19) leaves the wire along with App::Deadman -- every motion is now
+  // a bounded MOVE (arm 21, injectMove() below). wire_test_codec.h's
+  // armorTwistCommand() is deleted with it.
+  //
+  // injectMove -- REINTRODUCED (116-006) against ticket 001's own
+  // armorMoveCommand() (a fresh, textually-unrelated `Move` shape at a
+  // fresh field number 21 -- see wire_test_codec.h's own header for the
+  // full history of this wire arm's number reuse). Two overloads mirror
+  // armorMoveCommand()'s own two velocity-variant overloads (twist vs
+  // wheels), disambiguated the same way: `stopKind`
+  // (TestSupport::MoveStopKind) sits at a different, type-incompatible
+  // parameter position in each signature.
+  void injectMove(float v_x, float v_y, float omega, TestSupport::MoveStopKind stopKind,
+                   float stopValue, float timeout, bool replace, uint32_t id,
+                   uint32_t corrId = 0) {
+    injectCommand(TestSupport::armorMoveCommand(v_x, v_y, omega, stopKind, stopValue, timeout,
+                                                 replace, id, corrId)
+                      .c_str());
+  }
+  void injectMove(float v_left, float v_right, TestSupport::MoveStopKind stopKind,
+                   float stopValue, float timeout, bool replace, uint32_t id,
+                   uint32_t corrId = 0) {
+    injectCommand(TestSupport::armorMoveCommand(v_left, v_right, stopKind, stopValue, timeout,
+                                                 replace, id, corrId)
+                      .c_str());
   }
   void injectStop(uint32_t corrId = 0) {
     injectCommand(TestSupport::armorStopCommand(corrId).c_str());
   }
-  // injectMove -- DELETED (115-006, gut S1): CommandEnvelope's move(20) arm
-  // and envelope.proto's Move message are gone (115-003) along with the
-  // Motion::Executor arc-command queue that consumed it; wire_test_codec.h's
-  // armorMoveCommand() is deleted with it. Sprint 116's own MOVE-protocol
-  // cutover reintroduces a wire arm named Move with a DIFFERENT shape at a
-  // FRESH field number (21) -- see envelope.proto's own header.
-  //
+
   // Motion::Executor/App::Pilot/App::HeadingSource visibility, plannerConfig()/
   // configurePlanner(), and the setLeadCompensation()/setYawRateMax()/
   // setDistanceKp() sim-only characterization hooks -- ALL DELETED (115-006):
@@ -457,9 +475,13 @@ class SimHarness {
 
   App::Comms comms_;
   App::Telemetry tlm_;
-  App::Deadman deadman_;
   App::Drive drive_;
   App::Odometry odom_;
+  // 116 (protocol-set-point issue): App::MoveQueue replaces App::Deadman --
+  // declared AFTER drive_/odom_ (member init order follows DECLARATION
+  // order, not the constructor initializer list's own order -- MoveQueue's
+  // constructor holds references to both).
+  App::MoveQueue moveQueue_;
   App::Preamble preamble_;
 
   // Motion::Executor executor_/App::HeadingSource headingSource_/App::Pilot

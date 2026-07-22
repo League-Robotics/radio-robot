@@ -14,7 +14,7 @@
 //
 // Scenarios:
 //   1. A freshly-constructed (and booted) SimHarness starts unconfigured.
-//   2. TWIST against an unconfigured harness: ack_err == ERR_NOT_CONFIGURED
+//   2. MOVE against an unconfigured harness: ack_err == ERR_NOT_CONFIGURED
 //      (flags bit 5 fresh); App::Drive's own staged twist is never touched
 //      (driveTargetVelLeft/Right() stay 0) and no real (nonzero-speed) duty
 //      byte ever reaches the simulated bus (write-hook duty-history check).
@@ -23,9 +23,9 @@
 //   4. CONFIG{motor} against an unconfigured harness: still ack_err == 0/OK
 //      (handleConfig() is unconditional, unaffected by the gate).
 //   5. Both configureMotor() calls flip isConfigured() to true, and a
-//      subsequent TWIST is accepted AND produces real, nonzero measured
+//      subsequent MOVE is accepted AND produces real, nonzero measured
 //      wheel motion on BOTH motors, with each port driving its OWN distinct
-//      simulated wheel (a pure-rotation twist drives the two WheelPlants to
+//      simulated wheel (a pure-rotation move drives the two WheelPlants to
 //      OPPOSITE-sign velocities -- impossible if both ports were aliased
 //      onto the same simulated wheel).
 //
@@ -177,9 +177,9 @@ int main() {
     checkTrue(!sim.isConfigured(), "isConfigured() stays false after boot() + a few cycles (boot never configures)");
   }
 
-  // --- Scenario 2: TWIST refused while unconfigured -----------------------
+  // --- Scenario 2: MOVE refused while unconfigured -------------------------
   {
-    beginScenario("TWIST against an unconfigured harness: ERR_NOT_CONFIGURED, drive_ untouched, no real duty write");
+    beginScenario("MOVE against an unconfigured harness: ERR_NOT_CONFIGURED, drive_ untouched, no real duty write");
     TestSim::SimHarness sim;
     sim.boot();
     sim.step(3);
@@ -193,8 +193,10 @@ int main() {
       return sim.plant().defaultWrite(address, data, len);
     });
 
-    checkTrue(!sim.isConfigured(), "setup: still unconfigured before the twist");
-    sim.injectTwist(/*v_x=*/1000.0f, /*omega=*/0.0f, /*duration=*/100000.0f, /*corrId=*/501);
+    checkTrue(!sim.isConfigured(), "setup: still unconfigured before the move");
+    sim.injectMove(/*v_x=*/1000.0f, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime,
+                    /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/501,
+                    /*corrId=*/501);
     sim.step(10);
 
     sim.plant().clearWriteHook();
@@ -206,11 +208,11 @@ int main() {
               "the err_code is ERR_NOT_CONFIGURED");
 
     checkFloatEq(sim.driveTargetVelLeft(), 0.0f,
-                 "drive_'s own staged left target stays 0 -- handleTwist() never called drive_.setTwist()");
+                 "drive_'s own staged left target stays 0 -- handleMove() never called drive_.setTwist()");
     checkFloatEq(sim.driveTargetVelRight(), 0.0f,
-                 "drive_'s own staged right target stays 0 -- handleTwist() never called drive_.setTwist()");
+                 "drive_'s own staged right target stays 0 -- handleMove() never called drive_.setTwist()");
     checkTrue(maxSpeedSeen == 0,
-              "no nonzero-speed 0x60 duty byte ever reached the bus during the refused twist's window "
+              "no nonzero-speed 0x60 duty byte ever reached the bus during the refused move's window "
               "(plant write-hook duty-history check)");
   }
 
@@ -262,7 +264,7 @@ int main() {
   //     a "configured" motor that was still functionally dead) ------------
   {
     beginScenario("both configureMotor() calls: isConfigured() becomes true, a subsequent "
-                  "TWIST is accepted and produces real, nonzero measured wheel motion on BOTH motors, "
+                  "MOVE is accepted and produces real, nonzero measured wheel motion on BOTH motors, "
                   "each port driving its own distinct simulated wheel");
     TestSim::SimHarness sim;
     sim.boot();
@@ -283,7 +285,9 @@ int main() {
     // SAME WheelPlant and the other port's own plant would stay stone dead
     // at velocity 0 for the whole run -- impossible to produce opposite-sign
     // motion on BOTH plants simultaneously.
-    sim.injectTwist(/*v_x=*/0.0f, /*omega=*/1.5f, /*duration=*/100000.0f, /*corrId=*/505);
+    sim.injectMove(/*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/1.5f, TestSupport::MoveStopKind::kTime,
+                    /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/505,
+                    /*corrId=*/505);
 
     std::vector<TestSupport::DecodedLine> lines;
     uint32_t errCode = 1;  // any nonzero sentinel -- overwritten by findAck() on a match
@@ -294,7 +298,7 @@ int main() {
     lines = sim.drainTelemetry();
     checkTrue(findAck(lines, 505, &errCode), "an ack for corrId=505 was seen");
     checkTrue(errCode == 0,
-              "the twist is accepted (ack_err==0/OK) now that the harness is configured");
+              "the move is accepted (ack_err==0/OK) now that the harness is configured");
 
     // Give the PID a few more cycles to actually ramp real duty onto the bus
     // and for the plant's own first-order response to become measurable --

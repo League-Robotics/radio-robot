@@ -98,7 +98,7 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
                       Devices::Motor& motorR, Devices::Otos& otos,
                       Devices::ColorSensorLeaf& color, Devices::LineSensorLeaf& line,
                       Comms& comms, Telemetry& tlm, Drive& drive,
-                      Odometry& odom, Deadman& deadman, Preamble& preamble,
+                      Odometry& odom, MoveQueue& moveQueue, Preamble& preamble,
                       const Devices::Clock& clock, Devices::Sleeper& sleeper,
                       Config::TuningStore* tuningStore)
     : bus_(bus),
@@ -111,7 +111,7 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
       tlm_(tlm),
       drive_(drive),
       odom_(odom),
-      deadman_(deadman),
+      moveQueue_(moveQueue),
       preamble_(preamble),
       clock_(clock),
       sleeper_(sleeper),
@@ -142,7 +142,7 @@ void RobotLoop::runAndWait(uint32_t gap, Body body) {  // [ms]
 }
 
 void RobotLoop::updateTlm(uint32_t now) {  // [ms]
-  frame_.mode = driving_ ? msg::DriveMode::VELOCITY : msg::DriveMode::IDLE;
+  frame_.mode = moveQueue_.active() ? msg::DriveMode::VELOCITY : msg::DriveMode::IDLE;
 
   frame_.encLeft.position = motorL_.position();
   frame_.encLeft.velocity = motorL_.velocity();
@@ -158,7 +158,7 @@ void RobotLoop::updateTlm(uint32_t now) {  // [ms]
   BodyKinematics::forward(motorL_.velocity(), motorR_.velocity(), drive_.trackWidth(),
                            frame_.twist.v_x, frame_.twist.omega);
 
-  tlm_.setFlag(kFlagActive, driving_);
+  tlm_.setFlag(kFlagActive, moveQueue_.active());
   tlm_.setFlag(kFlagConnLeft, motorL_.connected());
   tlm_.setFlag(kFlagConnRight, motorR_.connected());
 
@@ -188,9 +188,16 @@ void RobotLoop::updateLineColor(uint64_t nowUs) {  // [us]
   tlm_.setFlag(kFlagColorPresent, colorFresh);
 }
 
-void RobotLoop::handleTwist(const msg::CommandEnvelope& env) {
+// handleMove -- replaces the deleted handleTwist() (116, protocol-set-point
+// issue). Configuration-completeness gate FIRST (unchanged position/
+// semantics from handleTwist()), then shape validation (a well-formed Move
+// per the wire contract: a velocity variant present, a stop variant
+// present, timeout > 0), then delegates to moveQueue_.enqueue() --
+// move_queue.h's own boundary comment: "every Move this class's enqueue()
+// ever sees is already permitted" is exactly this validation.
+void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
   // Configuration-completeness gate (114-001, SUC-001) -- FIRST statement,
-  // before touching drive_/deadman_ at all. Real firmware satisfies this
+  // before touching drive_/moveQueue_ at all. Real firmware satisfies this
   // immediately at boot (Decision 2, sprint.md) -- this branch is only
   // ever live for a composition root (SimHarness) that has not yet been
   // configured.
@@ -199,10 +206,15 @@ void RobotLoop::handleTwist(const msg::CommandEnvelope& env) {
     return;
   }
 
-  drive_.setTwist(env.cmd.twist.v_x, 0.0f, env.cmd.twist.omega);
-  deadman_.arm(env.cmd.twist.duration);
-  driving_ = true;
-  tlm_.ack(env.corr_id, 0);
+  const msg::Move& move = env.cmd.move;
+  if (move.velocity_kind == msg::Move::VelocityKind::NONE ||
+      move.stop_kind == msg::Move::StopKind::NONE || move.timeout <= 0.0f) {
+    tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_BADARG));
+    return;
+  }
+
+  MoveQueue::EnqueueResult result = moveQueue_.enqueue(move, env.corr_id);
+  tlm_.ack(result.corrId, static_cast<uint32_t>(result.err));
 }
 
 // ConfigDelta runtime application: MotorConfigPatch and OtosConfigPatch
@@ -365,8 +377,7 @@ void RobotLoop::reapplyPersistedTuning(const Config::TuningSnapshot& snapshot) {
 
 void RobotLoop::handleStop(const msg::CommandEnvelope& env) {
   drive_.stop();
-  deadman_.disarm();
-  driving_ = false;
+  moveQueue_.flush();
   tlm_.ack(env.corr_id, 0);
 }
 
@@ -380,8 +391,8 @@ void RobotLoop::processMessage(const Cmd& cmd) {
       ? cmd.env.cmd_kind
       : msg::CommandEnvelope::CmdKind::NONE;
   switch (kind) {
-    case msg::CommandEnvelope::CmdKind::TWIST:
-      handleTwist(cmd.env);
+    case msg::CommandEnvelope::CmdKind::MOVE:
+      handleMove(cmd.env);
       break;
     case msg::CommandEnvelope::CmdKind::CONFIG:
       handleConfig(cmd.env);
@@ -482,18 +493,29 @@ void RobotLoop::cycle() {
     // no separate "take" flag is needed.
     processMessage(cmd);
 
-    bool expired = deadman_.expired();
-    tlm_.setFlag(kFlagEventDeadmanExpired, expired);
-    if (expired) {
-      drive_.stop();      // host silent -> wheels stop. No exceptions, no
-      driving_ = false;   // other path to stop being gated by the deadman.
-      // The lease is ONE-SHOT (2026-07-18 fix): expired() latches true
-      // until re-armed, and this branch runs AFTER processMessage() -- so
-      // without a disarm here, the FIRST command enqueued after >lease of
-      // idle was flushed the same cycle it was accepted. The system is
-      // fully safed by the stop above; disarm so the next command starts
-      // clean.
-      deadman_.disarm();
+    // MoveQueue's per-cycle tick (116, protocol-set-point issue) --
+    // replaces the deleted deadman_.expired() branch at this EXACT
+    // schedule position. This is the load-bearing safety property
+    // (SUC-053): it runs unconditionally, every cycle, regardless of
+    // whether a command arrived this cycle -- the same way
+    // deadman_.expired() did. Ends the active Move on StopConditionMet or
+    // TimedOut, either chain-advancing the next pending Move THIS SAME
+    // cycle (seamless hand-off, SUC-051) or calling Drive::stop() with an
+    // empty queue (MoveQueue::tick()'s own contract) -- so host silence
+    // always ends in motors stopped, with zero further host traffic
+    // needed (no deadman lease to re-arm).
+    MoveQueue::TickResult moveResult = moveQueue_.tick(clock_.nowMicros(), odom_);
+    bool moveTimedOut = moveResult.completed && moveResult.completion.timedOut;
+    // Level-set every cycle (telemetry.h's own setFlag() contract) -- true
+    // only on the exact cycle a timed-out completion is reported this
+    // call, false every other cycle (SUC-054).
+    tlm_.setFlag(kFlagFaultMoveTimeout, moveTimedOut);
+    if (moveResult.completed) {
+      // MOVE completion ack (protocol-set-point issue, Responses section):
+      // a SECOND ack on the cycle the command ends -- ack_corr ==
+      // Move.id, ack_err == 0 regardless of outcome; a timeout ending is
+      // distinguished by the flags bit set just above, not by ack_err.
+      tlm_.ack(moveResult.completion.moveId, 0);
     }
   });
 

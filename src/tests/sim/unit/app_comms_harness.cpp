@@ -134,20 +134,28 @@ std::string armor(const uint8_t* raw, size_t rawLen) {
 using TestSupport::FakeTransport;
 
 // ===========================================================================
-// 1. Twist round-trip: hand-build a CommandEnvelope, armor it, feed it
-//    through a FakeTransport's queued line, confirm pump() decodes it.
+// 1. Move round-trip (116-006, MOVE protocol cutover): hand-build a
+//    CommandEnvelope{move: Move{twist, stop=time, timeout, replace, id}},
+//    armor it, feed it through a FakeTransport's queued line, confirm
+//    pump() decodes it. Supersedes the deleted scenarioTwistRoundTrip()
+//    (arm 19, Twist, is reserved -- 116-001).
 // ===========================================================================
 
-void scenarioTwistRoundTrip() {
-  beginScenario("pump(): armored twist CommandEnvelope decodes correctly");
+void scenarioMoveRoundTrip() {
+  beginScenario("pump(): armored MOVE CommandEnvelope decodes correctly");
 
-  Buf twist;
-  putFloatField(twist, 1, 150.0f);  // v_x
-  putFloatField(twist, 2, -0.75f);  // omega
-  putFloatField(twist, 3, 250.0f);  // duration
+  Buf moveTwist;
+  putFloatField(moveTwist, 1, 150.0f);  // MoveTwist.v_x
+  putFloatField(moveTwist, 3, -0.75f);  // MoveTwist.omega
+  Buf move;
+  putMessageField(move, 1, moveTwist);  // Move.velocity.twist, field 1
+  putFloatField(move, 3, 250.0f);       // Move.stop.time, field 3
+  putFloatField(move, 6, 5000.0f);      // Move.timeout, field 6
+  putVarintField(move, 7, 1);           // Move.replace = true, field 7
+  putVarintField(move, 8, 42);          // Move.id, field 8
   Buf env;
-  putVarintField(env, 1, 7);        // corr_id
-  putMessageField(env, 19, twist);  // CommandEnvelope.cmd.twist, field 19
+  putVarintField(env, 1, 7);       // corr_id
+  putMessageField(env, 21, move);  // CommandEnvelope.cmd.move, field 21
 
   std::string line = armor(env.data, env.len);
   checkTrue(!line.empty(), "armor() produced a non-empty line");
@@ -164,10 +172,16 @@ void scenarioTwistRoundTrip() {
 
   checkTrue(cmd.status == App::CmdStatus::kDecoded, "cmd.status == kDecoded");
   checkU64Eq(cmd.env.corr_id, 7, "corr_id round-trips");
-  checkTrue(cmd.env.cmd_kind == msg::CommandEnvelope::CmdKind::TWIST, "cmd_kind == TWIST");
-  checkFloatEq(cmd.env.cmd.twist.v_x, 150.0f, "twist.v_x round-trips");
-  checkFloatEq(cmd.env.cmd.twist.omega, -0.75f, "twist.omega round-trips");
-  checkFloatEq(cmd.env.cmd.twist.duration, 250.0f, "twist.duration round-trips");
+  checkTrue(cmd.env.cmd_kind == msg::CommandEnvelope::CmdKind::MOVE, "cmd_kind == MOVE");
+  checkTrue(cmd.env.cmd.move.velocity_kind == msg::Move::VelocityKind::TWIST,
+            "move.velocity_kind == TWIST");
+  checkFloatEq(cmd.env.cmd.move.velocity.twist.v_x, 150.0f, "move.twist.v_x round-trips");
+  checkFloatEq(cmd.env.cmd.move.velocity.twist.omega, -0.75f, "move.twist.omega round-trips");
+  checkTrue(cmd.env.cmd.move.stop_kind == msg::Move::StopKind::TIME, "move.stop_kind == TIME");
+  checkFloatEq(cmd.env.cmd.move.stop.time, 250.0f, "move.stop.time round-trips");
+  checkFloatEq(cmd.env.cmd.move.timeout, 5000.0f, "move.timeout round-trips");
+  checkTrue(cmd.env.cmd.move.replace, "move.replace round-trips true");
+  checkU64Eq(cmd.env.cmd.move.id, 42, "move.id round-trips");
   checkU64Eq(comms.malformedCount(), 0, "malformedCount stays 0 for a well-formed frame");
 }
 
@@ -368,7 +382,7 @@ void scenarioSendReplyBroadcastsIdenticalLineOnBothTransports() {
 }  // namespace
 
 int main() {
-  scenarioTwistRoundTrip();
+  scenarioMoveRoundTrip();
   scenarioMalformedArmorPrefixRejected();
   scenarioMalformedTruncatedBase64Rejected();
   scenarioMalformedCorruptProtobufRejected();

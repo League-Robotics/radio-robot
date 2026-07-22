@@ -38,13 +38,17 @@ _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _TESTS_SIM_DIR = _REPO_ROOT / "src" / "tests" / "sim"
 _INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
 _PLANT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "plant"
+_SUPPORT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "support"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_robot_loop_harness.cpp"
 
 _ROBOT_LOOP_SRC = _SOURCE_DIR / "app" / "robot_loop.cpp"
 _PREAMBLE_SRC = _SOURCE_DIR / "app" / "preamble.cpp"
 _COMMS_SRC = _SOURCE_DIR / "app" / "comms.cpp"
 _TELEMETRY_SRC = _SOURCE_DIR / "app" / "telemetry.cpp"
-_DEADMAN_SRC = _SOURCE_DIR / "app" / "deadman.cpp"
+# 116-006 (MOVE protocol cutover): App::MoveQueue + Motion::StopCondition
+# replace the deleted App::Deadman.
+_MOVE_QUEUE_SRC = _SOURCE_DIR / "app" / "move_queue.cpp"
+_STOP_CONDITION_SRC = _SOURCE_DIR / "motion" / "stop_condition.cpp"
 _DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
 _ODOMETRY_SRC = _SOURCE_DIR / "app" / "odometry.cpp"
 # 115-005 (gut S1): heading_source.cpp/pilot.cpp/motion/executor.cpp/
@@ -72,6 +76,15 @@ _WIRE_RUNTIME_SRC = _SOURCE_DIR / "messages" / "wire_runtime.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
+
+# 116-006: the new MOVE-dispatch scenarios (LiveFixture, a live/unscripted
+# SimPlant) decode outbound telemetry via TestSupport::decodeOutboundLine()
+# (wire_test_codec.h/.cpp) rather than a hand-synthesized byte fingerprint --
+# see app_robot_loop_harness.cpp's own findAck() doc comment for why (a
+# genuine err==0 ack has its ack_err field OMITTED from the wire entirely,
+# proto3 implicit presence, which only the real decoder reconstructs
+# correctly).
+_WIRE_TEST_CODEC_SRC = _SUPPORT_DIR / "wire_test_codec.cpp"
 
 # Matches every other src/tests/sim/unit harness's own compiled standard.
 _CXX_STANDARD = "c++20"
@@ -126,7 +139,8 @@ def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
         _PREAMBLE_SRC,
         _COMMS_SRC,
         _TELEMETRY_SRC,
-        _DEADMAN_SRC,
+        _MOVE_QUEUE_SRC,
+        _STOP_CONDITION_SRC,
         _DRIVE_SRC,
         _ODOMETRY_SRC,
         _NEZHA_MOTOR_SRC,
@@ -142,6 +156,7 @@ def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
         _SIM_PLANT_SRC,
         _WHEEL_PLANT_SRC,
         _OTOS_PLANT_SRC,
+        _WIRE_TEST_CODEC_SRC,
     ]
     for src in sources:
         assert src.is_file(), f"required source missing: {src}"
@@ -165,6 +180,8 @@ def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
             str(_INFRA_SIM_DIR),
             "-I",
             str(_PLANT_DIR),
+            "-I",
+            str(_SUPPORT_DIR),
             "-o",
             str(binary),
             *[str(src) for src in sources],
