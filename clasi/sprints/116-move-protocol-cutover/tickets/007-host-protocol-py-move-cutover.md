@@ -1,9 +1,12 @@
 ---
 id: '007'
 title: Host protocol.py MOVE cutover
-status: open
-use-cases: [SUC-050, SUC-051]
-depends-on: ['001']
+status: in-progress
+use-cases:
+- SUC-050
+- SUC-051
+depends-on:
+- '001'
 github-issue: ''
 issue:
 - protocol-set-point-the-minimal-firmware-s-complete-command-surface.md
