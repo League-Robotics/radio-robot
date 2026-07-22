@@ -63,6 +63,16 @@ suppression.
       turns up only call sites this sprint's later tickets are already
       scheduled to fix (ticket 007 for host `protocol.py`, ticket 006 for
       firmware) — not a surprise this ticket needs to also fix.
+- [ ] `src/firm/messages/DESIGN.md` updated in place: §3's envelope-size
+      note (`Move` at arm 21, `Twist`/`ConfigDelta.watchdog` reserved, and
+      the `CommandEnvelope`/`ReplyEnvelope` size figures) reflects the
+      regenerated `kCommandEnvelopeMaxEncodedSize`/`kReplyEnvelopeMaxEncodedSize`
+      measured above. This doc does not ride the sprint's design overlay —
+      the sprint's one co-located-`DESIGN.md` overlay slot is already used
+      by `app/DESIGN.md` (the overlay mechanism cannot host two files both
+      named `DESIGN.md` in one flat overlay directory) — so it is edited
+      directly on the canonical doc here; see sprint.md's Design overlay
+      note.
 
 ## Testing
 

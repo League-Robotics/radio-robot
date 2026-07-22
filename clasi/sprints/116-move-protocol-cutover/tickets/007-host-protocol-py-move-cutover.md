@@ -76,6 +76,14 @@ not silently left broken without a record.
       caller) is explicitly listed in this ticket's completion notes as
       left dormant/broken, per the parent gut issue's scope — not
       silently discovered later.
+- [ ] `src/host/robot_radio/DESIGN.md` updated in place: §2's `robot/`
+      orientation-table row and §5's `Exposes` bullet for
+      `robot.protocol.NezhaProtocol` reflect `move_twist()`/`move_wheels()`
+      replacing `twist()` as the live wire-adapter surface. This doc does
+      not ride the sprint's design overlay — same co-located-`DESIGN.md`
+      collision noted on ticket 001's `messages/DESIGN.md` bullet — so it
+      is edited directly on the canonical doc here; see sprint.md's Design
+      overlay note.
 
 ## Testing
 

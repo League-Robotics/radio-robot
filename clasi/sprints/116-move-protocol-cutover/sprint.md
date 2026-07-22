@@ -619,6 +619,56 @@ Before tickets can be created, all of the following must be true:
       architectural impact)
 - [ ] Stakeholder has approved the sprint plan
 
+## Design Overlay
+
+This sprint opted into the persistent per-subsystem design-doc set
+(bootstrapped 2026-07-21, commit `3428fdd1`) after this sprint's detail
+planning and ticketing were already complete. The overlay was seeded and
+edited on `master` — before `acquire_execution_lock` branches the sprint
+off it, per `seed_sprint_design_overlay`'s own "runs on main" contract —
+in `clasi/sprints/116-move-protocol-cutover/design/`.
+
+**Overlaid** (seeded pristine, edited in place to describe the post-116
+design, diffed, and committed on `master`):
+- `docs/design/design.md` (system doc) — command-surface description
+  (MOVE/CONFIG/STOP replacing TWIST/CONFIG/STOP+deadman), subsystem map
+  (new `motion/` row), dispatch flow, the deadman-removal invariant, the
+  wire-boundary oneof.
+- `src/firm/app/DESIGN.md` (co-located) — `MoveQueue`/`StopCondition`
+  ownership, `App::Deadman` deletion, command dispatch,
+  `Drive::setWheels`/`Odometry::pathLength`, `kFlagFaultMoveTimeout`
+  wiring, and `kFlagEventDeadmanExpired` (bit 10)'s orphaning now that its
+  producer is deleted.
+
+**Not overlaid — edited directly on the canonical doc during execution,
+by the ticket that owns the change.** The overlay mechanism seeds and
+diffs a *flat* `design/` directory keyed only by filename, and every
+co-located subsystem doc is named `DESIGN.md` — so at most one
+subsystem-level `DESIGN.md` can occupy a sprint's overlay directory
+without a silent copy-over collision (confirmed by reading
+`clasi.design.overlay.seed_and_commit`: it writes each seeded file to
+`design/<canonical_path.name>`, and every subsystem doc's `.name` is the
+same string). `app/DESIGN.md` above is this sprint's one such slot;
+`src/firm/messages/DESIGN.md` and `src/host/robot_radio/DESIGN.md` also
+change this sprint but cannot share that slot, so they are edited
+directly at their canonical path instead, same as any other source
+change on the sprint branch:
+- `src/firm/messages/DESIGN.md` — envelope arms table (`Move` at 21,
+  `Twist`/`ConfigDelta.watchdog` reserved) and size figures. Owner:
+  ticket 001 (own acceptance criterion added).
+- `src/host/robot_radio/DESIGN.md` — live-surface flip (`twist()` →
+  `move_twist()`/`move_wheels()`). Owner: ticket 007 (own acceptance
+  criterion added).
+- `src/firm/motion/DESIGN.md` (**new** — no canonical doc exists yet to
+  seed an overlay from; `motion/` was deleted by sprint 115 and is
+  recreated fresh by this sprint). Owner: ticket 002, which already
+  carries "`src/firm/motion/DESIGN.md` written, matching the boundary
+  description above" as an acceptance criterion.
+
+At sprint close, `overlay.apply()` copies the two overlaid files above
+onto their canonical targets; the three directly-edited docs are already
+at their canonical location by then and need no apply step.
+
 ## Tickets
 
 | # | Title | Depends On | Issue(s) |
