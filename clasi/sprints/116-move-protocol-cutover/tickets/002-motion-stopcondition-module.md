@@ -1,9 +1,14 @@
 ---
 id: '002'
 title: Motion::StopCondition module
-status: open
-use-cases: [SUC-050, SUC-051, SUC-052, SUC-054]
-depends-on: ['001']
+status: in-progress
+use-cases:
+- SUC-050
+- SUC-051
+- SUC-052
+- SUC-054
+depends-on:
+- '001'
 github-issue: ''
 issue: protocol-set-point-the-minimal-firmware-s-complete-command-surface.md
 completes_issue: true
