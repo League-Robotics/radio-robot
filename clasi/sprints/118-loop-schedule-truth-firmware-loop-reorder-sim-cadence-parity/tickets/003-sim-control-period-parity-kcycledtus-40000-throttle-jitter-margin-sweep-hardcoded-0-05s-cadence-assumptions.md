@@ -3,8 +3,12 @@ id: '003'
 title: 'Sim control period parity: kCycleDtUs=40000, throttle jitter margin, sweep
   hardcoded 0.05s cadence assumptions'
 status: open
-use-cases: [SUC-065]
-depends-on: ['001', '002']
+use-cases:
+- SUC-065
+depends-on:
+- '001'
+- '002'
+- '004'
 github-issue: ''
 issue: sim-cycle-must-match-firmware-period.md
 completes_issue: true
@@ -51,12 +55,28 @@ fits without materially growing this ticket's scope — either approach
 satisfies the acceptance criteria below (see sprint.md's Architecture
 Open Questions for this call).
 
+**Sequencing amendment (2026-07-23, mid-execution):** this ticket now
+depends on 004 as well as 001/002 and runs LAST. Ticket 004
+("Land at zero...") was pulled forward from sprint 119 into this sprint
+and deletes `stop_lead_ms` entirely — ticket 002's own closure-gate run
+went red at the unchanged 45ms lead once odometry freshness landed (see
+ticket 002's report and the dated addendum in
+`land-at-zero-completion-delete-stop-lead.md`; a 0-120ms sweep found no
+value with real margin, so retuning was rejected in favor of deletion
+per the turn-execution review's own R6 rule). By the time this ticket
+runs, `stop_lead_ms` no longer exists anywhere in the tree — there is
+nothing left for this ticket to re-baseline or record a new value for on
+that front. This ticket's re-baseline is therefore a SINGLE-PASS
+re-verification of the final regime (40ms cycle + land-at-zero
+completion), not two successive re-baselines against a moving target.
+
 Re-baseline every cadence-sensitive gate at the new period: sim
 tour-closure gate, button-acceptance suite, estimator tracking harness.
-If `stop_lead_ms` (currently 45ms, untouched by this sprint per its Out
-of Scope) needs re-baselining for the closure gate to hold at 40ms,
-record the new value and the reason in this ticket rather than silently
-widening a band — do not delete the field (that is sprint 119's job).
+The GUI-path tour band (currently ≤5°, per this sprint's Out-of-Scope
+framing before the amendment) MAY TIGHTEN if the final-regime data
+supports it — record the measured numbers and, if they clear a tighter
+band with real margin, tighten it here; never widen any band without
+stakeholder sign-off.
 
 ## Acceptance Criteria
 
@@ -77,11 +97,16 @@ widening a band — do not delete the field (that is sprint 119's job).
 - [ ] Grep gate: no surviving hardcoded 0.05/50ms cycle assumption
       anywhere in the tree.
 - [ ] Sim tour-closure gate, button-acceptance suite, and estimator
-      tracking harness re-run and green at 40ms; per-leg bands unchanged
-      or tightened — never silently widened. If `stop_lead_ms` needed a
-      value change for bands to hold, the new value and reason are
-      recorded here (field itself untouched otherwise, per sprint
-      Out-of-Scope).
+      tracking harness re-run and green at 40ms + land-at-zero (the
+      final regime — `stop_lead_ms` is already deleted by ticket 004 by
+      the time this ticket runs); per-leg bands unchanged or tightened —
+      never silently widened. The GUI-path tour band (≤5°) may tighten
+      if the final-regime data supports it; record the measured numbers
+      here either way.
+- [ ] No re-verification step in this ticket depends on `stop_lead_ms`
+      existing — confirm the grep gate from ticket 004
+      (`grep -rn "stop_lead" src/ data/`) still returns nothing after
+      this ticket's own changes (this ticket must not reintroduce it).
 - [ ] `src/sim/DESIGN.md`'s own kCycleDtUs-mismatch Open Question (§8)
       updated to a resolved-parity statement — this is the ONE subsystem
       DESIGN.md this sprint edits directly on its canonical path (not

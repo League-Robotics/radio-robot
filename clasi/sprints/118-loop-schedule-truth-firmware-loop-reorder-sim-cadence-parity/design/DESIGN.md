@@ -108,8 +108,33 @@ than before them, so a MOVE's completion decision reads odometry
 integrated in the SAME cycle, not the previous one (closes a full cycle
 of avoidable heading/distance staleness the `stop_lead_ms` anticipation
 constant had been partly compensating for — see the turn-execution review
-`docs/code_review/2026-07-22-turn-execution-review.md` D2/F3; deleting
-`stop_lead_ms` itself is a later sprint's job, sequenced after this one).
+`docs/code_review/2026-07-22-turn-execution-review.md` D2/F3).
+
+**118 ticket 004 (land-at-zero, pulled forward from sprint 119,
+2026-07-23) — landed.** Once the stop decision reads this-cycle odometry
+(above), the unchanged `stop_lead_ms=45` lead OVERcompensates — a 0-120ms
+sweep against the closure gate found no value with real margin (fresh
+data confirming the constant's own multi-retune history: no single value
+exists). Per the turn-execution review's own R6 rule, `stop_lead_ms` and
+the anticipation block are DELETED rather than re-tuned. `MoveQueue::tick()`
+gains a land-at-zero completion predicate instead: with shaping enabled,
+a MOVE completes when `remaining ≤ ε AND |ω_cmd| ≤ ε_ω` — the velocity
+shaper's own decel taper (`ω = √(2·α_decel·(remaining − jerkMargin))`)
+already drives the robot to ~zero speed at the goal, so there is no tail
+left to predict once the stop decision itself is fresh. The
+`StopCondition` threshold/timeout comparison remains the always-armed
+backstop (unchanged, and the ONLY completion path when shaping is off —
+an all-zero `ShaperLimits` makes `shapeAndStage()` early-return, so
+`ω_cmd` never bleeds and the land-at-zero gate never fires). `ε_ω` is set
+just above the ~15mm/s deadband-equivalent floor (`nezha_motor.cpp`'s
+sub-deadband boost), budgeting a ~1.7° worst-case coast from that floor.
+Scope is TWIST Angle/Distance stops only; TIME/WHEELS moves are
+unaffected. `App::StateEstimator`'s `bodyAt()` — the anticipation block's
+one call site — now has no firmware production consumer: the module,
+`update()`, and its tests are QUARANTINED (kept, not deleted) as the
+planned consumer for future fake-OTOS/fusion bench work, per the same
+"greenfield, not yet wired to motion" posture the 117 note above already
+established for the estimator as a whole.
 
 ## 2. Orientation
 

@@ -4,11 +4,17 @@ title: 'Loop schedule truth: firmware loop reorder + sim cadence parity'
 status: planning-docs
 branch: sprint/118-loop-schedule-truth-firmware-loop-reorder-sim-cadence-parity
 worktree: false
-use-cases: ['SUC-063', 'SUC-064', 'SUC-065']
+use-cases:
+- SUC-063
+- SUC-064
+- SUC-065
+- SUC-066
 issues:
 - restore-the-interleaved-request-settle-tick-loop-schedule.md
 - stop-decision-must-see-this-cycles-odometry.md
 - sim-cycle-must-match-firmware-period.md
+- land-at-zero-completion-delete-stop-lead.md
+- turn-error-characterization-postcompensation-tests-need-rewrite-after-lead-deletion.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -93,17 +99,59 @@ issue file): re-point the two dangling xfail citations of the deleted
 at this sprint's own `restore-the-interleaved-...` issue, its live
 successor.
 
+4. **`land-at-zero-completion-delete-stop-lead.md`** (pulled forward from
+   sprint 119, see Decision Record below) — declare MOVE completion when
+   `remaining ≤ ε AND |ω_cmd| ≤ ε_ω` in `MoveQueue::tick()`, keep the
+   `StopCondition` threshold/timeout as the always-armed backstop, and
+   DELETE `stop_lead_ms` + the anticipation block (schema, all three
+   robot JSONs, `gen_boot_config.py`, `config_sync_allowlist.json`) rather
+   than re-tuning it. `StateEstimator`/`bodyAt()` is QUARANTINED (kept,
+   consumer removed), not deleted.
+   `turn-error-characterization-postcompensation-tests-need-rewrite-after-lead-deletion.md`
+   folds into the same ticket (its own disposition note: the postcompensation
+   tests characterize an approach this change retires).
+
+## Decision Record: R6 applied (2026-07-23, mid-execution amendment)
+
+Ticket 002 landed the odometry-freshness fix, and its closure-gate run
+went RED at the unchanged `stop_lead_ms=45` — not because the fix was
+wrong, but because fresh same-cycle odometry removed exactly the
+staleness `stop_lead_ms` had been partly compensating for, exposing the
+lead as an overcorrection once that staleness was gone (full data: a
+0-120ms sweep against the closure gate's own path found no value with
+real margin — see ticket 002's report and the dated addendum in
+`land-at-zero-completion-delete-stop-lead.md`). Per the turn-execution
+review's own R6 rule — "a change that adds or retunes a numeric constant
+must name the physical quantity it models and derive it from named
+constants; if adding a stage forces retuning an existing constant, the
+default action is to delete the constant, not retune it" — and this
+project's sprint-end-must-be-testable convention, the team-lead decision
+is: **002's fresh data invalidated the stale-tuned lead; it is deleted
+rather than retuned; land-at-zero (`land-at-zero-completion-delete-stop-lead.md`
++ `turn-error-characterization-postcompensation-tests-need-rewrite-after-lead-deletion.md`)
+is pulled forward from sprint 119 into 118, as ticket 004, so this sprint
+ends on a green, testable closure gate instead of handing a known-red
+gate to a not-yet-detailed sprint 119.** Ticket 003 (sim cadence parity)
+is resequenced to depend on 004 and run last, so its own gate re-baseline
+reflects the FINAL regime (40ms cycle + land-at-zero) in one pass. Sprint
+119's scope shrinks accordingly (see its own sprint.md) to the four
+remaining issues: silent-off config-boundary kill, leg hand-off contract,
+config-attic deletion, and narrative/doc relocation.
+
 ## Success Criteria
 
 - Firmware and sim build green.
 - Full `uv run python -m pytest` suite green.
 - Sim tour-closure gate and button-acceptance suite green at the 40ms
-  period, per-leg bands unchanged or tightened (never silently widened).
+  period WITH `stop_lead_ms` DELETED (amended — see Decision Record),
+  per-leg bands unchanged or tightened (never silently widened).
 - `grep 'runAndWait\|sleepUntil' src/firm/app/robot_loop.cpp` still the
   complete list of the firmware's waits (existing invariant, re-verified
   post-reorder).
 - No surviving hardcoded 0.05s/50ms cycle assumption anywhere in the tree
   (grep gate, per the sim-cycle issue's own acceptance criteria).
+- No `stop_lead` string survives anywhere in `src/` or `data/` (grep
+  gate, per the land-at-zero issue's own acceptance criteria).
 - **Bench gate is explicitly DEFERRED** to the phase-B bench session that
   immediately follows this sprint (stakeholder mandate, overnight
   sim-only run) — see Scope/Migration Concerns below. The sim/pytest bar
@@ -129,20 +177,27 @@ successor.
   mismatch note becomes a resolved-parity note), `docs/design/design.md`
   cadence line.
 - Two dangling xfail citation re-points (see Solution above).
+- **(Amended, ticket 004)** `App::MoveQueue`'s completion predicate
+  (`move_queue.{h,cpp}`) — land-at-zero gate, deletion of `stopLead_` +
+  the anticipation block; `App::StateEstimator` — QUARANTINE (its
+  `MoveQueue` consumer removed; module/`update()`/tests kept); the
+  `EstimatorConfigPatch` wire arm's `stop_lead_ms` field, the
+  `estimator_kwargs()` push, the pydantic estimator schema, all three
+  `data/robots/*.json` (`stop_lead_ms` + `_estimator_note` blocks),
+  `gen_boot_config.py`'s bake, and the `config_sync_allowlist.json` entry
+  if present; `test_turn_error_characterization.py`'s postcompensation
+  tests.
 
 ### Out of Scope
 
-- Anticipation-lead removal / land-at-zero completion semantics — this
-  sprint deliberately leaves `stop_lead_ms`/anticipation AS-IS (45ms);
-  deleting it is sprint 119's job (`land-at-zero-completion-delete-stop-lead.md`),
-  which explicitly sequences itself after this sprint's odometry-freshness
-  fix. If the new 40ms cycle shifts closure-gate numbers enough to demand
-  it, `stop_lead_ms` may be re-baselined (not deleted) this sprint, and
-  the reason recorded in the owning ticket.
-- The silent-off shaping/anticipation config boundary
+- **(Amended)** Anticipation-lead removal / land-at-zero completion
+  semantics is NO LONGER out of scope — see Decision Record above; it is
+  ticket 004 of this sprint. What remains out of scope from sprint 119:
+  the silent-off shaping/anticipation config boundary
   (`kill-the-silent-off-shaping-config-boundary.md`), the leg hand-off
-  contract, the config-attic deletion, and the doc-relocation sweep — all
-  sprint 119.
+  contract, the (non-`stop_lead_ms`) config-attic deletion, and the
+  doc-relocation sweep — all still sprint 119, now a 4-ticket sprint (see
+  its own sprint.md).
 - Hardware bench verification — deferred to phase-B (see Migration
   Concerns).
 
@@ -173,6 +228,16 @@ included — the sprint 020 precedent applies: this is a resequencing and
 constant-synchronization change across relationships that already exist,
 not a new composition.
 
+**Amendment (2026-07-23, mid-execution — see Decision Record above):**
+ticket 004 (land-at-zero, pulled forward from sprint 119) adds a fourth
+responsibility, touches `App::MoveQueue`'s completion predicate and
+`App::StateEstimator`'s consumer count, and deletes a config-schema field
+across `data/robots/*.json`/the pydantic model/`gen_boot_config.py` — a
+genuine data-model change. Sizing stays Substantial (it already was); the
+"no diagram" call is revisited below (Step 4) rather than reversed, since
+the amendment removes a dependency edge rather than adding a new
+composition.
+
 ### Step 1 — Understand the problem
 
 Covered above (Problem/Solution). The defect is scheduling, not control
@@ -201,6 +266,16 @@ Three responsibility groups, coupled in the order they must land:
   matching step size; independent of the second group module-wise
   (`Sim`/`Devices` vs. `App`), but re-baselining its cadence-sensitive
   gates is only meaningful once both loop-schedule changes are in.
+- **Completion semantics (land-at-zero, amendment)** — `MoveQueue::tick()`'s
+  completion PREDICATE (as opposed to the second group's completion
+  DATA-FRESHNESS, already landed): declare done on
+  `remaining≈0 AND ω_cmd≈0` instead of a predicted-heading lead. Depends
+  on the second group (freshness) being in place — `remaining` must be
+  computed from this-cycle odometry for the predicate to be meaningful —
+  and, having landed, changes what the third group's gate re-baseline
+  re-baselines AGAINST (the final regime, not an intermediate one).
+  Config-schema deletion (`stop_lead_ms` across JSON/pydantic/
+  `gen_boot_config.py`) rides this group, not a separate one.
 
 ### Step 3 — Subsystems and modules
 
@@ -230,6 +305,27 @@ Three responsibility groups, coupled in the order they must land:
   — not a module for cohesion purposes; each file's own cadence-sensitive
   expectations are re-baselined to the new constants as a consequence of
   the three modules above changing, not an independent design decision.
+- **(Amended) `App::MoveQueue`'s completion predicate** (part of
+  `App::RobotLoop`'s own subsystem, `src/firm/app/move_queue.{h,cpp}`) —
+  purpose: decide when an active `Move` is done. Boundary: the predicate
+  itself (threshold/timeout backstop vs. land-at-zero gate); does not own
+  the velocity shaper's taper math (`Motion::VelocityShaper`, unchanged)
+  or `StopCondition`'s own comparison (unchanged, still the backstop).
+  Use case: SUC-066.
+- **(Amended) `App::StateEstimator`** (`src/firm/app/state_estimator.{h,cpp}`)
+  — purpose unchanged (predict-to-now peer estimates); boundary change:
+  loses its one firmware production consumer (`MoveQueue`'s anticipation
+  block) and is explicitly QUARANTINED — module, `update()`, and tests
+  remain for the planned fake-OTOS/fusion bench work, but nothing in the
+  production call graph reads `bodyAt()` after this sprint. Use case:
+  SUC-066 (the removal is part of the same predicate change).
+- **(Amended) Config/schema layer** (`data/robots/*.json`, the pydantic
+  estimator-config model, `gen_boot_config.py`, `config_sync_allowlist.json`)
+  — purpose: persisted/generated robot configuration. Boundary: only the
+  `stop_lead_ms` field and its `_estimator_note` archaeology are removed;
+  every other field is untouched. This is the sprint's one genuine
+  data-model change (a schema field deletion, not just a constant value
+  change). Use case: SUC-066.
 
 ### Step 4 — Diagrams
 
@@ -240,9 +336,33 @@ constants (`kCycle`, `kPrimaryPeriod`, `kCycleDtUs`) across modules that
 already depended on each other in exactly this call shape before this
 sprint. No new module, no new edge, no dependency-direction change (same
 justification pattern as sprint 020's architecture doc: a diagram would
-show the identical graph before and after). No ERD — no data-model
-change. No dependency graph — no module dependency changes, only the
-cadence at which existing dependencies fire.
+show the identical graph before and after).
+
+**(Amended) Dependency graph — one edge REMOVED, stated in prose rather
+than diagrammed.** Ticket 004 removes the `App::MoveQueue` →
+`App::StateEstimator::bodyAt()` production dependency (the anticipation
+block was the one call site); `StateEstimator` is quarantined, not
+deleted, so the module itself and its `update()` producer side survive
+with zero consumers in the production graph. A one-edge removal from an
+already-small, already-documented dependency set (§5 of
+`src/firm/app/DESIGN.md` already narrates every consumer of `bodyAt()`)
+is fully captured by that prose; a graph diagram would show one edge
+disappearing from an otherwise-unchanged five-node graph, which does not
+clarify anything a sentence doesn't already say — the sprint 020
+"nothing new is being composed" escape applies symmetrically to a single
+subtraction as it does to zero change.
+
+**(Amended) ERD — no diagram, but this IS a real data-model change.**
+`stop_lead_ms` is deleted from the pydantic estimator-config model and
+all three `data/robots/*.json` files (plus `gen_boot_config.py`'s bake
+and the `config_sync_allowlist.json` entry). This is a single scalar
+field's removal from an existing schema, not a new entity or
+relationship — one field, one meaning, deleted everywhere it's declared
+in the same commit (ticket 004's own delete-list discipline). A full ERD
+would be disproportionate to a one-field deletion with no surviving
+relationship to depict; the delete list in ticket 004 and this section's
+own enumeration serve the same purpose an ERD would for a change this
+small.
 
 ### Step 5 — What Changed / Why / Impact / Migration Concerns
 
@@ -263,6 +383,14 @@ cadence at which existing dependencies fire.
 - `src/firm/app/DESIGN.md` §4, `src/sim/DESIGN.md` (its own "does not
   match" Open Question becomes a resolved-parity note), and
   `docs/design/design.md`'s cadence line updated to 40ms/~25Hz.
+- **(Amended, ticket 004)** `move_queue.{h,cpp}`: land-at-zero completion
+  predicate added to `MoveQueue::tick()`; `stopLead_` member/ctor param
+  and the anticipation block deleted. `stop_lead_ms` deleted from the
+  `EstimatorConfigPatch` wire arm, `estimator_kwargs()`, the pydantic
+  estimator schema, all three `data/robots/*.json` (+ `_estimator_note`
+  blocks), `gen_boot_config.py`, and `config_sync_allowlist.json`.
+  `test_turn_error_characterization.py`'s postcompensation tests
+  rewritten/removed per that module's own disposition note.
 
 **Why:** Per Problem above — restores the schedule to what its own design
 doc already claims it is, removes a full cycle of avoidable stop-decision
@@ -271,26 +399,44 @@ staleness, and makes sim-measured timing transferable to hardware.
 **Impact on Existing Components:** `App::MoveQueue`'s completion latency
 changes shape (decision now same-cycle-fresh; decision-to-duty write is
 still ~1 cycle, now 40ms not 20ms — the review's own §7-R1 calls this
-acceptable once 119's land-at-zero taper lands). `App::Telemetry`'s frame
-rate halves (50Hz nominal → 25Hz) — a real, visible change to anyone
-polling telemetry at the old assumed rate; `tlm-rate-15-19hz-vs-50hz-nominal-serial.md`
+acceptable once the land-at-zero taper lands, which it now does THIS
+sprint via ticket 004, not 119). `App::Telemetry`'s frame rate halves
+(50Hz nominal → 25Hz) — a real, visible change to anyone polling
+telemetry at the old assumed rate; `tlm-rate-15-19hz-vs-50hz-nominal-serial.md`
 (existing, unrelated issue) will need its own nominal re-measured, noted
 there per the sim-cycle issue's own acceptance criteria, not fixed here.
 `Sim::SimHarness` step semantics: one `step()` call now advances exactly
 one firmware cycle's worth of virtual time at the SAME period firmware
 runs at (previously 2.5× coarser) — any caller reasoning about
 "N sim_step() calls ≈ N firmware cycles" becomes literally true instead
-of approximately true modulo a translation factor.
+of approximately true modulo a translation factor. **(Amended)**
+`App::StateEstimator`'s production role changes from "consumed by
+MoveQueue's anticipation block" to "no production consumer, quarantined
+for future fusion work" — any code or doc that assumed `bodyAt()` feeds
+completion timing is now wrong and must be corrected (the design overlay
+edit for this amendment does this for `src/firm/app/DESIGN.md`).
 
-**Migration Concerns:** No data/schema migration (numeric timing
-constants only, no wire-format or persisted-config change). Deployment
-sequencing: this sprint's own bench gate (each issue's "Bench gate
-(required)" section) is explicitly deferred to the phase-B bench session
-that follows both 118 and 119, per stakeholder mandate — record this
-deferral here rather than block sprint close on hardware. The firmware
-telemetry rate halving (50Hz→25Hz nominal) is a real behavior change any
-bench-side host tooling assuming the old rate will need to tolerate when
-phase-B runs; flagged here so phase-B isn't surprised by it.
+**Migration Concerns:** **(Amended)** This sprint now includes a real
+config-schema migration: `stop_lead_ms` is deleted from the pydantic
+estimator model, all three `data/robots/*.json` files, and the
+`EstimatorConfigPatch` wire arm's field list, in the same commit as the
+`gen_boot_config.py`/`config_sync_allowlist.json` updates (ticket 004's
+own delete-list discipline — schema and every consumer together, not
+staggered). A robot JSON or a running firmware image from BEFORE this
+sprint that still carries/expects `stop_lead_ms` is not wire-compatible
+with the post-ticket-004 `EstimatorConfigPatch` shape; this is a
+same-repo, same-deploy-cycle change (no robots are running old firmware
+against new configs or vice versa in this project's workflow), so no
+migration script or versioned rollout is needed — flagged here only so
+phase-B doesn't reflash a JSON from before this sprint against a new
+binary or vice versa. Deployment sequencing: this sprint's own bench
+gate (each issue's "Bench gate (required)" section) is explicitly
+deferred to the phase-B bench session that follows both 118 and 119, per
+stakeholder mandate — record this deferral here rather than block sprint
+close on hardware. The firmware telemetry rate halving (50Hz→25Hz
+nominal) is a real behavior change any bench-side host tooling assuming
+the old rate will need to tolerate when phase-B runs; flagged here so
+phase-B isn't surprised by it.
 
 ### Step 6 — Design Rationale
 
@@ -314,18 +460,52 @@ control period becomes 40ms/~25Hz; every downstream cadence constant
 `stop_lead_ms`.** *Context:* the review's own R1/R2 frame this as two
 separable fixes — remove the avoidable staleness (R1, this sprint) vs.
 replace the tuned lead with a derived one or remove the need for it (R2,
-119's job). *Alternatives considered:* (a) leave `moveQueue_.tick()` where
-it is and re-tune `stop_lead_ms` to compensate for the now-different
-40ms cycle's staleness — rejected, this is exactly the retune-instead-of-
-remove pattern the review's R6 condemns, and it would be the FIFTH
+originally planned for 119, pulled into this sprint — see Decision 4).
+*Alternatives considered:* (a) leave `moveQueue_.tick()` where it is and
+re-tune `stop_lead_ms` to compensate for the now-different 40ms cycle's
+staleness — rejected, this is exactly the retune-instead-of-remove
+pattern the review's R6 condemns, and it would be the FIFTH
 `stop_lead_ms` retune in the same number of weeks; (b) move
 `moveQueue_.tick()` into the pace block after integration, so the
-decision itself is no longer stale, leaving `stop_lead_ms` at its current
-45ms value for THIS sprint (119 deletes it) — chosen, per the issue's own
-explicit "Sequencing: implement AFTER the loop reorder" and "all three
-relocated pieces are pure compute" analysis. *Consequence:* decision-to-
-duty latency (the OTHER cycle of latency, judged unavoidable by the
-review) is unchanged at ~1 cycle, now measured in 40ms cycles.
+decision itself is no longer stale — chosen, per the issue's own explicit
+"Sequencing: implement AFTER the loop reorder" and "all three relocated
+pieces are pure compute" analysis. *Consequence (revised at Decision 4):*
+this decision was ORIGINALLY paired with "leave `stop_lead_ms` at 45ms
+for this sprint, 119 deletes it later" — that pairing did not survive
+contact with real data (Decision 4 below); decision-to-duty latency (the
+OTHER cycle of latency, judged unavoidable by the review) is unchanged at
+~1 cycle, now measured in 40ms cycles, regardless of Decision 4's outcome.
+
+**Decision 4 (added 2026-07-23, mid-execution amendment): delete
+`stop_lead_ms` this sprint rather than defer to 119.** *Context:* Decision
+2 above was made with the expectation that `stop_lead_ms=45` would hold
+through this sprint's closure gate at the new 40ms cycle, with any
+needed adjustment recorded (not a deletion) per the original Out-of-Scope
+framing. Ticket 002's actual closure-gate run falsified that expectation:
+fresh same-cycle odometry made the unchanged 45ms lead OVERcompensate
+(TOUR_1 worst 4.39°, ±90° presets ~93.7°, previously-clean tests now
+failing). A 0-120ms sweep against the closure gate's own exact path
+(recorded in ticket 002's report and the dated addendum in
+`land-at-zero-completion-delete-stop-lead.md`) found only a ~1ms-wide
+passing window at ~62ms with no real margin — confirming, with fresh
+post-fix data, the same "no single value exists" finding the original
+issue's Description already argued from the value's four-retune history.
+*Alternatives considered:* (a) record a same-sprint re-baseline (e.g.
+62ms) per the ORIGINAL Out-of-Scope allowance — rejected: the sweep found
+no value with real margin, so any recorded value would be shipping a
+fifth fragile retune, precisely what R6 says not to do when a stage
+change forces a retune; (b) leave the closure gate red and hand the fix
+to sprint 119 — rejected under the project's sprint-end-must-be-testable
+convention (a sprint does not close on a known-red system-level gate);
+(c) pull `land-at-zero-completion-delete-stop-lead.md` forward into 118
+as ticket 004, deleting `stop_lead_ms` and landing the taper-to-zero
+predicate instead of any tuned value — chosen. *Consequence:* ticket 003
+(cadence-gate re-baseline) is resequenced to depend on ticket 004 and run
+last, so it re-baselines the FINAL regime once instead of the pre-118
+regime now and the post-119 regime later; sprint 119 loses its
+`land-at-zero-completion-delete-stop-lead.md` and
+`turn-error-characterization-postcompensation-tests-need-rewrite-after-lead-deletion.md`
+issues (already delivered here) and shrinks to four tickets.
 
 **Decision 3: Sim follows firmware's cadence, not the reverse.**
 *Context:* the review's D4 established the 50ms sim value was never a
@@ -353,13 +533,12 @@ hardware in phase-B.
   from both C++ and Python, e.g. a ctypes export). Not blocking — either
   satisfies the acceptance criteria; the fuller derivation is preferred
   if it fits the ticket's scope without materially growing it.
-- **Whether `stop_lead_ms` needs a same-sprint re-baseline.** Out of
-  Scope states it stays at 45ms unless the 40ms cycle shift demands
-  otherwise for the closure gate to hold. This is a real possibility (the
-  review's own timeline data assumed a 50ms sim cycle) — ticket 3's
-  closure-gate re-run will surface whether this is needed; if so, the
-  ticket records the new value and why, without deleting the field
-  (119's job).
+- **RESOLVED (2026-07-23): whether `stop_lead_ms` needs a same-sprint
+  re-baseline.** This question was open when the sprint was first
+  planned. Ticket 002's actual run answered it: the closure gate went
+  red at the unchanged 45ms value, and a 0-120ms sweep found no value
+  with real margin. Resolution is DELETION, not a re-baseline — see
+  Decision 4 above and ticket 004.
 - **`tlm-rate-15-19hz-vs-50hz-nominal-serial.md`'s nominal.** This
   existing, unrelated issue currently assumes a 50Hz nominal; once this
   sprint ships, the nominal is 25Hz. Not fixed here (out of scope, no
@@ -386,7 +565,16 @@ describe the post-118 schedule, diffed, and committed on `master` before
   (`~50Hz/20ms` → `~25Hz/40ms`), the `cycle()` call-order description in
   §2 (moveQueue_.tick() moves from the R-settle description to the
   trailing pace-block description), retiring the 112-005
-  `drive_.tick()`-hoist note.
+  `drive_.tick()`-hoist note. **(Amended, ticket 004)** the same overlay
+  file's §1 "118 (loop schedule truth) — landed" note (added for the
+  original scope) is updated in place to describe land-at-zero completion
+  semantics (taper-to-zero + threshold/timeout backstop) instead of the
+  "anticipation lead, `stop_lead_ms` deleted later" framing it was
+  originally written with — since `stop_lead_ms` deletion now happens in
+  THIS sprint, not 119. `StateEstimator`'s consumer-count-to-zero
+  (quarantine) is also reflected here. Owner: ticket 004 (own acceptance
+  criterion), same overlay slot as the rest of §1/§2/§4 above — no new
+  slot conflict since it's the same file already in the overlay.
 
 **Not overlaid — edited directly on the canonical doc during execution,
 by the ticket that owns the change** (same convention as 116/117's
@@ -406,13 +594,15 @@ canonical location by then and needs no apply step.
 
 ## Use Cases
 
-Sized to the change: three sprint-level use cases, one per issue, tracing
-the schedule/data-freshness/cadence-parity correctness properties this
-sprint restores. None of these are new user-visible behavior — they are
-internal correctness properties that make the existing MOVE-completion
-use cases (SUC-051 chain-advance, the sim-tour-closure system tests)
-actually hold at the accuracy the turn-execution review measured they
-should.
+Sized to the change: originally three sprint-level use cases, one per
+issue, tracing the schedule/data-freshness/cadence-parity correctness
+properties this sprint restores; **amended (2026-07-23) to four** with
+SUC-066 (land-at-zero completion, ticket 004, pulled forward from
+sprint 119 — see Decision Record). None of these are new user-visible
+behavior — they are internal correctness properties that make the
+existing MOVE-completion use cases (SUC-051 chain-advance, the
+sim-tour-closure system tests) actually hold at the accuracy the
+turn-execution review measured they should.
 
 ### SUC-063: Stop decision consumes this-cycle odometry
 Parent: SUC-053 (MoveQueue's unconditional per-cycle tick, sprint 116)
@@ -535,6 +725,61 @@ call, not decided here")
         drops while driving) is DEFERRED to phase-B — not required for
         this use case's sim-level acceptance.
 
+### SUC-066: Land-at-zero MOVE completion; stop_lead_ms deleted
+Parent: SUC-063 (this use case supersedes SUC-063's remaining tail —
+SUC-063 removed the odometry staleness `stop_lead_ms` was partly
+compensating for; this one removes the need for `stop_lead_ms` at all).
+Added 2026-07-23, pulled forward from sprint 119 — see the sprint's
+Decision Record.
+
+- **Actor**: `App::MoveQueue` (internal — no host-visible actor; observed
+  via closure-gate and isolated-turn accuracy, same as SUC-063/064).
+- **Preconditions**: An active MOVE with an Angle or Distance stop
+  condition and non-zero `ShaperLimits` (shaping enabled) is in progress;
+  `remaining` is computed from this-cycle odometry (SUC-063, already
+  landed).
+- **Main Flow**:
+  1. Each cycle, `VelocityShaper` computes `ω_cmd = √(2·α_decel·(remaining
+     − jerkMargin))` — the taper already designed to bring the robot to
+     rest AT the target.
+  2. `MoveQueue::tick()` evaluates `remaining ≤ ε AND |ω_cmd| ≤ ε_ω`
+     (`ε_ω` set just above the ~15mm/s deadband-equivalent floor) as an
+     ADDITIONAL completion path alongside the existing `StopCondition`
+     threshold/timeout backstop (always evaluated, unchanged).
+  3. On land-at-zero completion, `Drive::stop()` stages exact zero
+     (bypassing the deadband boost, engaging the rest gate) — no
+     predicted-heading lead is computed; there is no tail to predict.
+  4. With shaping OFF (all-zero `ShaperLimits`), `shapeAndStage()`
+     early-returns, `ω_cmd` never bleeds, and the threshold/timeout
+     backstop is the ONLY completion path — byte-identical to
+     pre-this-ticket behavior in that regime.
+- **Postconditions**: Turn/distance completion is an emergent property of
+  the shaper's own taper, not a tuned time-lead guess; `stop_lead_ms`
+  does not exist anywhere in `src/` or `data/`; `StateEstimator::bodyAt()`
+  has no firmware production consumer (quarantined, module/tests kept).
+- **Acceptance Criteria**:
+  - [ ] Land-at-zero predicate lives in `MoveQueue::tick()`, not a new
+        `StopCondition` Kind.
+  - [ ] Shaping-off regime unchanged (threshold/timeout only).
+  - [ ] TWIST Angle/Distance only; TIME/WHEELS byte-identical
+        (regression-tested).
+  - [ ] `ε_ω` set above the deadband-equivalent floor; ~1.7° worst-case
+        coast budgeted in the acceptance band.
+  - [ ] Full delete list executed in one commit (member/ctor param,
+        anticipation block, wire arm field, pydantic model, all three
+        robot JSONs + `_estimator_note` blocks, `gen_boot_config.py`,
+        `config_sync_allowlist.json` entry).
+  - [ ] `StateEstimator`/`bodyAt()` quarantined, not deleted.
+  - [ ] `test_turn_error_characterization.py` disposition resolved (not a
+        bare xfail flip).
+  - [ ] No `stop_lead` string survives in `src/` or `data/` (grep gate).
+  - [ ] Sim tour-closure gate green at current bands with `stop_lead_ms`
+        deleted (TOUR_1/TOUR_2, ideal/realistic); the two preset tests
+        that regressed in ticket 002's addendum pass within their
+        existing bands; isolated 90° within ±2° sim-deterministic.
+  - [ ] Bench verification DEFERRED to phase-B — not required for this
+        use case's sim-level acceptance.
+
 ## GitHub Issues
 
 (GitHub issues linked to this sprint's tickets. Format: `owner/repo#N`.)
@@ -555,9 +800,15 @@ Before tickets can be created, all of the following must be true:
 |---|-------|------------|----------|
 | 001 | Restore the interleaved request-settle-tick loop schedule | — | restore-the-interleaved-request-settle-tick-loop-schedule.md |
 | 002 | Stop decision consumes this-cycle odometry (relocate `MoveQueue::tick` into the pace block) | 001 | stop-decision-must-see-this-cycles-odometry.md |
-| 003 | Sim control period parity: `kCycleDtUs=40000`, throttle jitter margin, sweep hardcoded 0.05s cadence assumptions | 001, 002 | sim-cycle-must-match-firmware-period.md |
+| 004 | Land at zero: complete on remaining≈0 AND ω_cmd≈0; delete stop_lead_ms | 002 | land-at-zero-completion-delete-stop-lead.md, turn-error-characterization-postcompensation-tests-need-rewrite-after-lead-deletion.md |
+| 003 | Sim control period parity: `kCycleDtUs=40000`, throttle jitter margin, sweep hardcoded 0.05s cadence assumptions | 001, 002, 004 | sim-cycle-must-match-firmware-period.md |
 
-Tickets execute serially in the order listed (`worktree: false`) — 001
-and 002 edit the exact same function (`RobotLoop::cycle()`) and must not
-race each other; 003 re-baselines gates that are only meaningful once
-both loop-schedule changes are in.
+**Amended (2026-07-23, mid-execution):** ticket 004 (land-at-zero,
+pulled forward from sprint 119 — see Decision Record above) inserted
+between 002 and 003, and ticket 003's dependency updated to include 004.
+Tickets execute serially in the EXECUTION order 001 → 002 → 004 → 003
+(not numeric order) — 001 and 002 edit the exact same function
+(`RobotLoop::cycle()`) and must not race each other; 004 depends on 002's
+odometry freshness and must land before 003's gate re-baseline is
+meaningful (003 now re-baselines the FINAL regime — 40ms cycle +
+land-at-zero — in one pass instead of two).

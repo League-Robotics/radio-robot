@@ -1,12 +1,14 @@
 ---
-status: pending
+status: in-progress
 filed: 2026-07-22
 filed_by: team-lead (turn-execution review R2b/D3, claims verified against code)
 related:
 - stop-decision-must-see-this-cycles-odometry.md
 - simple-velocity-control-acceleration-limited-shaper.md
 - turn-error-characterization-postcompensation-tests-need-rewrite-after-lead-deletion.md
-sprint: '119'
+sprint: '118'
+tickets:
+- 118-004
 ---
 
 # Land at zero: complete on (remaining≈0 AND ω_cmd≈0); delete stop_lead_ms
