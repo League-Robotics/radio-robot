@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 filed: 2026-07-22
 filed_by: team-lead (turn-execution review R2b/D3, claims verified against code)
 related:

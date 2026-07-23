@@ -3,7 +3,7 @@ title: test_turn_error_characterization.py's postcompensation tests need rewrite
   once lead-compensation fields are removed
 filed: 2026-07-19
 filed_by: programmer (111-002, baseline sim-suite triage)
-status: in-progress
+status: done
 related:
 - motion-control-terminal-blips-reconciled-fix-plan.md
 sprint: '118'

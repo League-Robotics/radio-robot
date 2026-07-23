@@ -2,7 +2,7 @@
 id: '003'
 title: 'Sim control period parity: kCycleDtUs=40000, throttle jitter margin, sweep
   hardcoded 0.05s cadence assumptions'
-status: open
+status: in-progress
 use-cases:
 - SUC-065
 depends-on:
