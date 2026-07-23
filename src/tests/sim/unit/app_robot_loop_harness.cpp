@@ -1278,6 +1278,154 @@ void scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome() {
 }
 
 // ===========================================================================
+// SUC-063 (118 ticket 002): the MOVE stop decision must read odometry
+// integrated THIS cycle, not the previous cycle's. Uses a ScriptedI2CHook
+// bus (not LiveFixture's live SimPlant) so wheel encoder positions -- and
+// therefore odom_.pathLength()'s cycle-by-cycle growth -- are EXACTLY
+// known, letting this scenario place a DISTANCE stop threshold exactly on
+// the boundary a specific cycle's own odom_.integrate() call crosses.
+// Velocity gains stay at baseMotorConfig()'s all-zero default (the same
+// "duty stays exactly 0 regardless of target" posture every other
+// ScriptedI2CHook scenario in this file relies on -- see
+// scriptMotorCycle()'s own header comment), so the Move's own commanded
+// v_x has zero effect on the scripted encoder schedule below; only the
+// DISTANCE stop condition's own pathLength() comparison is under test.
+//
+// Before 118 ticket 002, MoveQueue::tick() ran from the R-settle block,
+// BEFORE odom_.integrate() (trailing pace block) in the SAME cycle -- so a
+// stop condition crossed by cycle N's own integrate() call would not be
+// OBSERVED by tick() until cycle N+1's (then R-settle-positioned) call,
+// one cycle late. After the relocation, tick() runs in the SAME pace
+// block, immediately after integrate(), so the crossing is observed on
+// cycle N itself. This scenario scripts a straight-line (equal L/R,
+// headingDelta always 0) encoder ramp that lands the 30mm DISTANCE
+// threshold exactly on cycle 3's own integrate() call, and asserts
+// completion is visible by the END of cycle 3 -- not cycle 4, which is
+// what the pre-relocation ordering would have needed.
+// ===========================================================================
+
+void scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles() {
+  beginScenario("SUC-063: MOVE DISTANCE stop decision reads odometry integrated THIS cycle, "
+                "not the previous cycle's (118 ticket 002)");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  TestSim::SimClock clock;
+  TestSim::SimSleeper sleeper;
+
+  Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
+  Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
+  Devices::Otos otos(plant, Devices::OtosConfig{});
+  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
+  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+
+  TestSupport::FakeTransport serialFake;
+  TestSupport::FakeTransport radioFake;
+  App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
+  App::Telemetry tlm(comms, serialFake, radioFake);
+  App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
+  App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  // Turn-prediction campaign: default-constructed StateEstimator (0/0/200ms
+  // weights, stopLead defaults to 0 -- anticipation OFF), same posture
+  // every other MoveQueue-owning scenario in this file uses unless it
+  // explicitly opts in.
+  App::StateEstimator stateEstimator;
+  App::MoveQueue moveQueue(drive, odom, clock, stateEstimator);
+  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+
+  clock.setMicros(0);
+  preamble.step();
+  clock.setMicros(50000);
+  scriptMotorBeginSuccess(bus);  // Left
+  scriptMotorBeginSuccess(bus);  // Right
+  scriptOtosBeginSuccess(bus);
+  scriptColorBeginSuccess(bus);
+  scriptLineBeginSuccess(bus);
+
+  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
+                            drive, odom, moveQueue, preamble, stateEstimator, clock, sleeper);
+  robotLoop.boot();
+  checkTrue(preamble.done(), "boot() completes against the ScriptedI2CHook-based fixture too");
+  robotLoop.markConfigured();
+
+  const uint32_t kCorrId = 971;
+  const uint32_t kMoveId = 91;
+  // 30mm DISTANCE stop, generous 5s timeout (never the actual trigger --
+  // this scenario ends via its own stop condition, not the backstop).
+  // Injected before cycle 0 runs -- decoded via comms_.pump() (L-settle)
+  // and activated via processMessage()/handleMove() (R-settle) that SAME
+  // cycle, capturing activationPathLength=0 (nothing integrated yet).
+  serialFake.enqueueInbound(
+      armorMoveDistanceTwistCommand(/*v_x=*/500.0f, /*omega=*/0.0f, /*stopDistanceMm=*/30.0f,
+                                     /*timeoutMs=*/5000.0f, /*replace=*/true, kMoveId, kCorrId)
+          .c_str());
+
+  // Straight-line schedule: both wheels advance identically (headingDelta
+  // stays 0 -- pure DISTANCE growth, no ANGLE interaction), 10mm/cycle:
+  // POS(i) = i * 10mm for cycles 0..3, then flat while the ack propagates.
+  // pathLength() growth per cycle (odom_.integrate()'s own delta =
+  // POS(i) - POS(i-1)):
+  //   cycle 0: 0 -> 0    (pathLength 0)
+  //   cycle 1: 0 -> 10   (pathLength 10)
+  //   cycle 2: 10 -> 20  (pathLength 20)
+  //   cycle 3: 20 -> 30  (pathLength 30 -- the 30mm threshold is crossed
+  //                       EXACTLY by cycle 3's own odom_.integrate() call)
+  // Duty stays 0 every cycle regardless of the Move's own v_x (velGains
+  // all-zero, same posture as every other ScriptedI2CHook scenario in this
+  // file) -- extraDutyWrites follows the SAME global-cycle-indexed
+  // first-write schedule scriptMotorCycle()'s own header comment derives
+  // (R at cycle 0, L at cycle 1), independent of the Move injected above.
+  uint64_t nowUs = 50000;
+  for (int i = 0; i <= 3; ++i) {
+    clock.setMicros(nowUs);
+    float positionMm = static_cast<float>(i) * 10.0f;
+    scriptMotorCycle(bus, positionMm, /*extraDutyWrites=*/(i == 1) ? 1 : 0);  // Left
+    scriptMotorCycle(bus, positionMm, /*extraDutyWrites=*/(i == 0) ? 1 : 0);  // Right
+    scriptOtosReadZeroPose(bus);
+    robotLoop.cycle();
+    nowUs += 41000;
+
+    if (i == 2) {
+      checkTrue(moveQueue.active(), "sanity: still active right after cycle 2 -- pathLength is "
+                                     "20mm, below the 30mm threshold");
+    }
+  }
+
+  checkTrue(!moveQueue.active(),
+            "SUC-063: the Move has ended by the END of cycle 3 -- the SAME cycle "
+            "odom_.integrate() first raises pathLength() to the 30mm threshold, not cycle 4 "
+            "(one cycle later, the pre-118-ticket-002 R-settle-positioned tick() would have "
+            "needed)");
+
+  // Completion ack visibility: staged during cycle 3's OWN pace block,
+  // which runs AFTER that cycle's own tlm_.emit() call (kClear block,
+  // earlier in the same cycle) -- so it is not visible on the wire until
+  // a LATER cycle's own emit(). A few bounded flat (no further motion)
+  // cycles absorb both that one-cycle lag and the primary/secondary
+  // tie-break's own occasional one-cycle slip (telemetry.h's emit() doc
+  // comment) -- mirrors stepUntilAckSeen()'s own bounded-retry shape,
+  // hand-rolled here since that helper is LiveFixture-specific.
+  bool ackSeen = false;
+  uint32_t errCode = 1;  // any nonzero sentinel -- overwritten by findAck() on a match
+  for (int i = 0; i < 5 && !ackSeen; ++i) {
+    clock.setMicros(nowUs);
+    scriptMotorCycle(bus, /*positionMm=*/30.0f, /*extraDutyWrites=*/0);  // Left
+    scriptMotorCycle(bus, /*positionMm=*/30.0f, /*extraDutyWrites=*/0);  // Right
+    scriptOtosReadZeroPose(bus);
+    robotLoop.cycle();
+    nowUs += 41000;
+    ackSeen = findAck(serialFake.sent(), kMoveId, &errCode);
+  }
+  checkTrue(ackSeen && errCode == 0,
+            "the Move's completion ack (ack_corr==Move.id, ack_err==0) reaches the wire on a "
+            "cycle AFTER the one it completed on -- 'ack rides the next frame', unchanged by "
+            "this ticket");
+
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run: motor (ordering cycles)");
+  checkUintEq(bus.errCount(Devices::kOtosDeviceAddr), 0, "no script under-run: otos (ordering cycles)");
+}
+
+// ===========================================================================
 // 117 ticket 003: RobotLoop::handleConfig()'s new ESTIMATOR branch --
 // CONFIG{estimator} merges PRESENT fields onto stateEstimator_.weights()
 // (partial-patch semantics, matching MotorConfigPatch/OtosConfigPatch),
@@ -1546,6 +1694,7 @@ int main() {
   scenarioMoveEndDrainsWithNoFurtherHostTraffic();
   scenarioMoveTimeoutSetsFaultFlagOnEndingCycle();
   scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome();
+  scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles();
 
   scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists();
   scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression();
