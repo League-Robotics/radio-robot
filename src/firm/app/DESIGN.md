@@ -110,6 +110,84 @@ of avoidable heading/distance staleness the `stop_lead_ms` anticipation
 constant had been partly compensating for — see the turn-execution review
 `docs/code_review/2026-07-22-turn-execution-review.md` D2/F3).
 
+**119 ticket 005 (straight-leg crab fix — corrects 118's own restore) —
+landed.** 118's restore above threw out the good half of the 112-005
+hoist along with the bad: `drive_.tick()` sitting BETWEEN `motorL_.tick()`
+and `motorR_.tick()` made L always write duty from a target staged ONE
+CYCLE OLDER than R's — a genuine per-cycle L/R actuation skew during
+every commanded ramp (measured +2.685° cruise yaw on a straight leg,
+exact match to the predicted `v_cruise·kCycle/trackWidth` transient;
+decel canceled it, so the net signature was lateral crab with ZERO final
+heading error — +32.5mm over a 700mm straight, endpoint-only heading
+checks provably blind to it). A second, independent defect compounded
+it: `updateTlm()`/`tlm_.emit()` ran in the kClear block (between L's
+collect and R's), pairing THIS cycle's fresh L against LAST cycle's stale
+R in every outbound frame — a pairing skew that numerically CANCELED the
+physical skew above, so every host-visible encoder view (`dL−dR`,
+`encpose`, `frame.twist`) reported a perfectly straight leg while the
+robot's true path crabbed. See
+`clasi/issues/straight-leg-crab-118-001-actuation-and-telemetry-pairing-skew.md`
+and `docs/code_review/2026-07-22-turn-execution-review.md` §9 for the
+full derivation and measured numbers.
+
+Both fixed together (fixing one without the other either leaves the crab
+in place while making it visible, or removes it while still hiding a real
+defect for any OTHER per-frame L/R consumer): `drive_.tick()` now runs at
+the very TOP of `cycle()`, before EITHER motor's own select — restoring
+the 112-005 hoist's one genuinely good half (same-generation actuation
+staging) WITHOUT reintroducing the select-ordering bug 118's restore was
+actually about (moving `drive_.tick()`'s position never touches select
+ordering — the two are orthogonal, see §2's own interleave description
+below). `updateTlm()`/`tlm_.emit()` moved to the START of the trailing
+pace block, immediately after `motorR_.tick()`'s own collect — every
+emitted frame now pairs same-generation L/R encoder samples. Measured
+post-fix (`straight_drift_repro.py`'s own scenario, isolated 700mm
+straight at 150mm/s, ideal chip): cruise heading 0.000° (was +2.685°),
+final y +0.0mm (was +32.5mm) — an exact zero, not merely "reduced."
+
+**Ack-latency consequence of the telemetry-emit move (documented, not
+accidental).** `updateTlm()`/`emit()` now runs AFTER `processMessage()`'s
+own command-dispatch call (R-settle block, still unchanged position) in
+the SAME cycle, where 118's kClear placement ran BEFORE it. An
+enqueue/command ack (CONFIG/MOVE-enqueue/STOP, staged via `tlm_.ack()`
+inside `processMessage()`'s own handlers) therefore now typically rides
+THIS SAME cycle's emitted frame instead of the next one — see §7.2 of
+`docs/protocol-v4.md` for the wire-level statement. The MOVE COMPLETION
+ack is UNAFFECTED: `moveQueue_.tick()` (the stop decision) still runs
+AFTER `updateTlm()`/`emit()`, later in the SAME pace block, so a
+completion ack staged there is still not visible until the NEXT cycle's
+own `emit()` call — "ack rides the next frame," unchanged from before
+this ticket.
+
+**Both `MoveQueue::landAtZero()` completion-margin constants re-swept
+(`move_queue.cpp`) — the actuation-staging fix shifts BOTH regimes, not
+just the already-known-narrow chain-advance one.** `drive_.tick()`'s new
+top-of-cycle position changes the plant's exact per-cycle response and
+the average commanded-to-duty latency (both leaves now lag their own
+freshly-staged target by 1 cycle, symmetric — was 0/1 split, averaging
+0.5), which shifts both of `landAtZero()`'s own margin factors:
+
+- `kStoppingMarginFactorChain` (`pendingCount() > 0`, 118 ticket 003's own
+  narrow-pocket constant) — the shipped 0.60 value re-measured 3.457°
+  worst-case at this schedule (TOUR_2/ideal turn 10,
+  `test_tour_closure_gate.py`), over its own 2.5° gate. A fresh 1-D sweep
+  at THIS schedule found a genuinely broad plateau (unlike 118-003's own
+  narrow-pocket finding) at `[0.40, 0.50]` — 0.48 ships as the new default
+  (worst=2.218°, 0.282° of margin).
+- `kStoppingMarginFactorFinal` (`pendingCount() == 0`) — NOT anticipated
+  by this ticket's own plan (118-003 had found this regime cadence-robust
+  and left it untouched at 1.00); only surfaced by re-running the FULL
+  gate set this ticket's own acceptance criteria require.
+  `test_gui_button_acceptance.py`'s own isolated ±90° managed-turn presets
+  (`test_managed_angle_preset`/`test_managed_seg_0_cdeg_turn`) went RED at
+  the old 1.00 value — a genuine 3.267°/3.178° UNDERSHOOT (settle-based),
+  over their own 3.0° gate. A fresh sweep found a broad plateau at
+  `[0.88, 0.96]` (worst=0.316° throughout, identical at every sampled
+  point in that range) — 0.92 ships as the new default, replacing 1.00.
+
+Full sweep data for both in `move_queue.cpp`'s own updated
+anonymous-namespace comments and ticket 119-005's own file.
+
 **118 ticket 004 (land-at-zero, pulled forward from sprint 119,
 2026-07-23) — landed.** Once the stop decision reads this-cycle odometry
 (above), the unchanged `stop_lead_ms=45` lead OVERcompensates — a 0-120ms
@@ -159,28 +237,44 @@ established for the estimator as a whole.
 `RobotLoop` has two phases. `boot()` steps `Preamble` until every device
 leaf reaches a terminal state (present-and-ready or confirmed-absent),
 emitting a boot telemetry frame each pass; commands are not consumed during
-boot. `cycle()` is the steady-state loop body, interleaved per port (118 —
-select L → collect L → select R → collect R, restoring the schedule this
-section always claimed): request/settle(borrow: `Comms::pump`)/collect/PID
-for the left motor, a post-duty clearance window (borrow: telemetry
-assembly + emit), request/settle(borrow: `processMessage` +
-`Drive::tick()`)/collect/PID for the right motor, then a trailing pace
-block that samples OTOS, integrates odometry (`Odometry::integrate`),
+boot. `cycle()` is the steady-state loop body. It opens with `Drive::tick()`
+(119 ticket 005 — pure computation, before either motor's own select, so
+both leaves apply the SAME staged target this cycle — see §4's own
+"same-generation actuation staging" note), then interleaves per port (118 —
+select L → collect L → select R → collect R, the schedule this section
+always claimed for the request/collect halves): request/settle(borrow:
+`Comms::pump`)/collect/PID for the left motor, a post-duty clearance window
+(119 ticket 005: no borrowed work left here — see below), request/
+settle(borrow: `processMessage`)/collect/PID for the right motor, then a
+trailing pace block that FIRST stages and emits telemetry (119 ticket 005 —
+see below), then samples OTOS, integrates odometry (`Odometry::integrate`),
 refreshes `App::StateEstimator`'s predict-to-now estimates from that same
 cycle's staged `Frame` (117), evaluates the `MoveQueue`'s unconditional
 per-cycle stop decision (`moveQueue_.tick(now, odom_)` — 118: relocated
 here, AFTER odometry/estimator refresh, so the decision reads THIS
 cycle's data, not last cycle's), polls line/color at a rate-limited,
 alternating cadence (`updateLineColor()` — see below), and paces the
-whole cycle. `Telemetry::emit()` is called once per cycle and decides for
-itself whether to send the primary frame, the secondary diagnostic
-frame, or (on a tie) alternate between them. `Drive`, `Odometry`, and
-`MoveQueue` are pure, bounded, non-bus-touching helpers that `RobotLoop`
-calls at specific points in its own schedule; `MoveQueue::tick()` is
-called unconditionally once per cycle and drains to `Drive::stop()` once
-its queue empties.
+whole cycle. `Drive`, `Odometry`, and `MoveQueue` are pure, bounded,
+non-bus-touching helpers that `RobotLoop` calls at specific points in its
+own schedule; `MoveQueue::tick()` is called unconditionally once per cycle
+and drains to `Drive::stop()` once its queue empties.
 See `robot_loop.cpp` for the exact call order — it is the schedule's single
 source of truth.
+
+**Telemetry stage+emit (`updateTlm()`/`Telemetry::emit()`, 119 ticket
+005).** Runs FIRST in the trailing pace block, immediately after
+`motorR_.tick()`'s own collect — both `frame_.encLeft` and
+`frame_.encRight` are therefore fresh THIS cycle (same generation).
+Previously (118) this ran in the post-L-duty-write clearance window,
+BETWEEN L's collect and R's — pairing THIS cycle's fresh L against LAST
+cycle's stale R in every frame, a defect fixed alongside the
+same-generation actuation staging above (both required together — see
+§1's own "119 ticket 005" note). `frame_.pose`/`otos`/`line`/`color` are
+unaffected by the move: they are still whatever the PREVIOUS cycle's own
+pace block last staged (unchanged one-cycle-staleness contract — §3's own
+"Frame fields written late in a cycle" invariant). `Telemetry::emit()`
+decides for itself whether to send the primary frame, the secondary
+diagnostic frame, or (on a tie) alternate between them.
 
 **Line/color polling (`RobotLoop::updateLineColor()`, 115-005).** Runs once
 per cycle from the trailing `kPace` block. Ticks EXACTLY ONE of

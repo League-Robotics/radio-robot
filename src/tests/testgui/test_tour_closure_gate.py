@@ -102,6 +102,43 @@ _TURN_TOLERANCE_IDEAL_DEG = 0.05      # "EXACT" -- negligible-epsilon, not "with
                                       # 0.05deg is ~3 orders of magnitude tighter than the
                                       # realistic-profile gate and well inside float32 pose
                                       # accumulation noise over a 13-15 leg tour.
+
+# 119 ticket 005 (straight-leg-crab fix): per-straight-leg TRUTH heading
+# stability gate -- see StraightLegCruiseCheck's own doc comment and
+# _assert_tour_gate()'s own cruise_heading_tolerance_deg parameter.
+#
+# IMPORTANT: this is a TOUR-embedded measurement, not the isolated
+# accel/cruise/decel-only signature the straight-leg-crab issue's own repro
+# script (straight_drift_repro.py) measures. In a tour, EVERY straight leg
+# but the very first is chain-advanced immediately behind a TURN leg
+# (SUC-051 seamless hand-off) -- and 119-002's own "axis-drop coast at
+# chain boundaries" contract (motion/DESIGN.md §4) documents a REAL,
+# already-accepted, SEPARATE physical effect: the turn's own omega axis is
+# commanded to 0 at the exact hand-off instant, but the plant's own
+# residual angular velocity keeps physically coasting for a few more
+# cycles the reset does not (and structurally cannot) erase -- a
+# permanent, non-transient heading offset for the REST of that leg, not a
+# 118-001-style transient that cancels by the leg's own end. Empirically
+# confirmed here: this file's own leg-1 measurement (the tour's OWN first
+# leg, never chain-advanced from a turn) reads EXACTLY 0.0000deg under the
+# ideal-chip profile -- proving the actuation-skew fix itself is clean
+# (matches straight_drift_repro.py's own isolated 0.000deg finding
+# exactly) -- while every LATER, turn-chained leg carries a real,
+# nonzero, ticket-119-002-attributed baseline on top. These tolerances
+# therefore bound "actuation-skew fix regression + axis-drop coast," not
+# "actuation-skew fix regression" alone -- a REGRESSION of the 118-001 bug
+# would add roughly +2.7deg more (this file's own isolated pre-fix
+# measurement) on top of whatever coast baseline a given leg already
+# carries, which these margins still have comfortable room to catch.
+# Realistic profile additionally carries a REAL, non-sensing heading cost
+# from _ENC_SCALE_ERR_L/_ENC_SCALE_ERR_R (a genuine per-wheel effective-
+# diameter mismatch the velocity PID closes on, not measurement noise) --
+# confirmed present even on leg 1 (2.36deg, no preceding turn at all).
+_CRUISE_HEADING_TOLERANCE_IDEAL_DEG = 5.5        # margin over measured worst 4.2538deg
+                                                  # (TOUR_1/ideal leg 7, chain-advance-adjacent)
+_CRUISE_HEADING_TOLERANCE_REALISTIC_DEG = 10.5   # margin over measured worst 9.3066deg
+                                                  # (TOUR_1/realistic leg 5, chain-advance-adjacent
+                                                  # + real encoder-scale-mismatch heading cost)
 _CLOSURE_POSITION_MAX_MM = 600.0     # matches test_sim_transport_tour1.py's own bench-observed
                                       # bound (real TOUR_1 closures ranged up to ~500mm even when
                                       # COMPLETED cleanly) -- TOUR_1/2 are not tightly-closed loops
@@ -370,10 +407,32 @@ class TurnCheck:
 
 
 @dataclass
+class StraightLegCruiseCheck:
+    """119 ticket 005 (straight-leg-crab actuation/telemetry pairing skew --
+    clasi/issues/straight-leg-crab-118-001-actuation-and-telemetry-pairing-skew.md):
+    per-STRAIGHT-leg (``leg.kind == "distance"``) TRUTH heading stability,
+    sampled every sim cycle for the leg's FULL duration (a superset of its
+    cruise phase -- the accel/decel transients are the exact place 118-001's
+    bug lived, so this check does not skip them the way the turn-accuracy
+    checks skip a settle window). ``max_abs_delta_deg`` is the largest
+    |truth heading - truth heading at the leg's own start| observed at any
+    sampled cycle -- an endpoint-only check (compare only the leg's final
+    heading to its start) is PROVABLY BLIND to this failure shape: 118-001's
+    own bug held a nonzero heading offset throughout accel+cruise+decel and
+    canceled it exactly by the end (measured final error 0.00deg while the
+    leg crabbed sideways the whole time) -- see the issue's own derivation.
+    """
+    index: int
+    distance_mm: float
+    max_abs_delta_deg: float
+
+
+@dataclass
 class TourGateResult:
     completed: bool
     stop_reason: str
     turns: list = field(default_factory=list)
+    straight_leg_cruise_headings: list = field(default_factory=list)
     start_true: dict | None = None
     end_true: dict | None = None
     position_delta: float | None = None
@@ -401,6 +460,11 @@ def _run_tour_capture(loop, tour_wire, *, v_max: float = 150.0,
 
     true_poses: list[dict] = [loop.get_true_pose()]
     turns: list[TurnCheck] = []
+    # 119 ticket 005: max |truth heading - truth heading at leg start|
+    # observed at any SAMPLED cycle of a "distance" (straight) leg, keyed by
+    # leg index -- see StraightLegCruiseCheck's own doc comment for why this
+    # is a per-cycle, whole-leg-duration check, not an endpoint comparison.
+    straight_leg_max_delta: dict[int, float] = {}
 
     def _on_leg(index, total, leg, leg_result) -> None:
         pose = loop.get_true_pose()
@@ -413,6 +477,27 @@ def _run_tour_capture(loop, tour_wire, *, v_max: float = 150.0,
                 error_deg=_normalize_deg(achieved - leg.value)))
         true_poses.append(pose)
 
+    def _on_row(_tick_index, row_leg_index, row_leg, _tick_result, _frame) -> None:
+        # RowCallback's own args (tour.py): (tick_index [GLOBAL across the
+        # WHOLE tour], leg_index, leg, TickResult, latest TLMFrame|None) --
+        # fires once per poll iteration (one sim cycle each, in this
+        # deterministic-stepper path) WHILE a leg is in flight. run_tour()
+        # calls this BEFORE on_leg() ever fires for the SAME leg index, so
+        # true_poses[-1] here is still that leg's own START pose (the
+        # previous leg's end pose, or true_poses[0] for leg 0) -- see
+        # StraightLegCruiseCheck's own doc comment.
+        if row_leg.kind != "distance":
+            return
+        start_h_deg = math.degrees(true_poses[-1]["h"])
+        current_h_deg = math.degrees(loop.get_true_pose()["h"])
+        delta = abs(_normalize_deg(current_h_deg - start_h_deg))
+        # -1.0 sentinel (never a real |delta|) so a leg whose TRUE max delta
+        # is exactly 0.0 (e.g. the tour's own first leg, with no preceding
+        # chain-advance to inherit any residual) still gets an entry instead
+        # of silently never appearing in straight_leg_max_delta at all.
+        if delta > straight_leg_max_delta.get(row_leg_index, -1.0):
+            straight_leg_max_delta[row_leg_index] = delta
+
     run_tour_kwargs: dict = {}
     if deterministic:
         clock = _SteppedClock()
@@ -424,13 +509,20 @@ def _run_tour_capture(loop, tour_wire, *, v_max: float = 150.0,
             # reads it as a real pacing duration in this deterministic path.
             clock_fn=clock.now, sleep_fn=_make_stepper(loop, clock), poll_interval=0.04)
 
-    result = run_tour(loop, params, heading, legs, v_max=v_max, on_leg=_on_leg, **run_tour_kwargs)
+    result = run_tour(loop, params, heading, legs, v_max=v_max, on_leg=_on_leg,
+                       row_callback=_on_row, **run_tour_kwargs)
 
     completed = result.stopped_at is None
     stop_reason = "" if completed else (
         f"leg {result.stopped_at + 1}/{len(legs)} ({result.stopped_outcome})")
 
+    straight_leg_cruise_headings = [
+        StraightLegCruiseCheck(index=i, distance_mm=legs[i].value, max_abs_delta_deg=d)
+        for i, d in sorted(straight_leg_max_delta.items())
+    ]
+
     gate = TourGateResult(completed=completed, stop_reason=stop_reason, turns=turns,
+                          straight_leg_cruise_headings=straight_leg_cruise_headings,
                           start_true=true_poses[0] if true_poses else None,
                           end_true=true_poses[-1] if completed and true_poses else None)
 
@@ -444,7 +536,8 @@ def _run_tour_capture(loop, tour_wire, *, v_max: float = 150.0,
     return gate
 
 
-def _assert_tour_gate(gate: TourGateResult, *, tolerance_deg: float, label: str) -> None:
+def _assert_tour_gate(gate: TourGateResult, *, tolerance_deg: float, label: str,
+                       cruise_heading_tolerance_deg: float) -> None:
     assert gate.completed, f"{label}: tour did not complete -- stopped at {gate.stop_reason}"
     assert gate.turns, f"{label}: no turn legs captured (parse_tour() regression?)"
 
@@ -463,6 +556,34 @@ def _assert_tour_gate(gate: TourGateResult, *, tolerance_deg: float, label: str)
             f"{t.error_deg:+.3f}deg (tolerance {tolerance_deg}deg)\n{report}"
         )
 
+    # 119 ticket 005: cruise-heading gate on every straight ("distance") leg
+    # -- endpoint-only checks (position_delta/heading_delta_deg below) are
+    # PROVABLY BLIND to the straight-leg-crab failure shape (118-001's own
+    # bug held a nonzero TRUE heading throughout accel+cruise+decel and
+    # canceled it exactly by the leg's own end -- see
+    # StraightLegCruiseCheck's own doc comment). This is a NEW assertion,
+    # not a replacement for the position/heading closure checks below.
+    assert gate.straight_leg_cruise_headings, (
+        f"{label}: no straight (distance) legs captured (parse_tour() regression, or a "
+        f"tour with no D steps?)"
+    )
+    cruise_report_lines = [f"{label}: per-straight-leg max |truth heading delta| during the leg:"]
+    cruise_worst = 0.0
+    for c in gate.straight_leg_cruise_headings:
+        cruise_report_lines.append(
+            f"  leg {c.index + 1} (distance={c.distance_mm:+.0f}mm): "
+            f"max|delta|={c.max_abs_delta_deg:.4f}deg")
+        cruise_worst = max(cruise_worst, c.max_abs_delta_deg)
+    cruise_report = "\n".join(cruise_report_lines)
+
+    for c in gate.straight_leg_cruise_headings:
+        assert c.max_abs_delta_deg < cruise_heading_tolerance_deg, (
+            f"{label}: straight leg {c.index + 1} (distance={c.distance_mm:+.0f}mm) truth "
+            f"heading drifted {c.max_abs_delta_deg:.4f}deg during the leg (tolerance "
+            f"{cruise_heading_tolerance_deg}deg) -- endpoint checks would have missed this if "
+            f"decel canceled it (see straight-leg-crab-118-001 issue)\n{cruise_report}"
+        )
+
     assert gate.position_delta is not None and gate.heading_delta_deg is not None
     assert gate.position_delta < _CLOSURE_POSITION_MAX_MM, (
         f"{label}: closure position delta implausibly large: {gate.position_delta:.1f}mm "
@@ -473,7 +594,9 @@ def _assert_tour_gate(gate: TourGateResult, *, tolerance_deg: float, label: str)
     # numbers the stakeholder asked to read, not adjectives.
     print(f"\n{report}\n{label}: worst |error|={worst:.3f}deg, "
           f"closure position_delta={gate.position_delta:.1f}mm, "
-          f"heading_delta={gate.heading_delta_deg:+.2f}deg")
+          f"heading_delta={gate.heading_delta_deg:+.2f}deg\n"
+          f"{cruise_report}\n{label}: worst straight-leg cruise |delta|={cruise_worst:.4f}deg "
+          f"(tolerance {cruise_heading_tolerance_deg}deg)")
 
 
 # ---------------------------------------------------------------------------
@@ -615,8 +738,11 @@ def test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band():
             finally:
                 loop.disconnect()
             profile = "realistic" if realistic else "ideal"
+            cruise_tol = (_CRUISE_HEADING_TOLERANCE_REALISTIC_DEG if realistic
+                          else _CRUISE_HEADING_TOLERANCE_IDEAL_DEG)
             _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_SHAPED_DEG,
-                               label=f"{label}/{profile}/shaped-band")
+                               label=f"{label}/{profile}/shaped-band",
+                               cruise_heading_tolerance_deg=cruise_tol)
 
 
 @pytest.mark.xfail(reason=_XFAIL_REASON_IDEAL, strict=False)
@@ -628,7 +754,8 @@ def test_tour_1_ideal_chip_turns_are_exact():
         gate = _run_tour_capture(loop, TOUR_1)
     finally:
         loop.disconnect()
-    _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_IDEAL_DEG, label="TOUR_1/ideal")
+    _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_IDEAL_DEG, label="TOUR_1/ideal",
+                       cruise_heading_tolerance_deg=_CRUISE_HEADING_TOLERANCE_IDEAL_DEG)
 
 
 @pytest.mark.xfail(reason=_XFAIL_REASON_IDEAL, strict=False)
@@ -640,7 +767,8 @@ def test_tour_2_ideal_chip_turns_are_exact():
         gate = _run_tour_capture(loop, TOUR_2)
     finally:
         loop.disconnect()
-    _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_IDEAL_DEG, label="TOUR_2/ideal")
+    _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_IDEAL_DEG, label="TOUR_2/ideal",
+                       cruise_heading_tolerance_deg=_CRUISE_HEADING_TOLERANCE_IDEAL_DEG)
 
 
 @pytest.mark.xfail(reason=_XFAIL_REASON_REALISTIC, strict=False)
@@ -652,7 +780,8 @@ def test_tour_1_realistic_errors_turns_within_one_degree():
         gate = _run_tour_capture(loop, TOUR_1)
     finally:
         loop.disconnect()
-    _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_REALISTIC_DEG, label="TOUR_1/realistic")
+    _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_REALISTIC_DEG, label="TOUR_1/realistic",
+                       cruise_heading_tolerance_deg=_CRUISE_HEADING_TOLERANCE_REALISTIC_DEG)
 
 
 @pytest.mark.xfail(reason=_XFAIL_REASON_REALISTIC, strict=False)
@@ -664,7 +793,8 @@ def test_tour_2_realistic_errors_turns_within_one_degree():
         gate = _run_tour_capture(loop, TOUR_2)
     finally:
         loop.disconnect()
-    _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_REALISTIC_DEG, label="TOUR_2/realistic")
+    _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_REALISTIC_DEG, label="TOUR_2/realistic",
+                       cruise_heading_tolerance_deg=_CRUISE_HEADING_TOLERANCE_REALISTIC_DEG)
 
 
 # ---------------------------------------------------------------------------

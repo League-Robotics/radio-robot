@@ -2,7 +2,7 @@
 id: '005'
 title: 'Fix 118-001 straight-leg crab: same-generation actuation staging + same-generation
   telemetry pairs'
-status: open
+status: done
 use-cases: []
 depends-on: []
 github-issue: ''
@@ -135,37 +135,100 @@ pre-fix schedule as current.
 
 ## Acceptance Criteria
 
-- [ ] Fix A shipped: wheel-target staging point relocated so both
+- [x] Fix A shipped: wheel-target staging point relocated so both
       `motorL_.tick()` and `motorR_.tick()` write the SAME generation's
       target (symmetrically one cycle old, or better — not the current
-      asymmetric −1/−0 split).
-- [ ] Fix B shipped: `updateTlm()`/`emit` relocated so every frame pairs
+      asymmetric −1/−0 split). `drive_.tick()` now runs at the very top of
+      `cycle()`, before `motorL_.requestSample()`.
+- [x] Fix B shipped: `updateTlm()`/`emit` relocated so every frame pairs
       same-generation L/R encoder samples. If placed later than "start of
       pace block," the ack-latency consequence is documented in the
-      harness AND `docs/protocol-v4.md`.
-- [ ] Per-port select→settle→collect interleave (118-001's own fix for
-      the actual 2026-07-18 glued-encoder bug) is UNCHANGED — verify the
-      0x46 single-latched-select invariant still holds
-      (`grep 'runAndWait\|sleepUntil' robot_loop.cpp` still the complete
-      wait list; no select-ordering regression).
-- [ ] Straight closure-gate legs assert truth heading DURING CRUISE
+      harness AND `docs/protocol-v4.md`. Placed at the START of the pace
+      block (the issue's own suggested default) — MOVE-completion ack
+      latency is UNCHANGED ("rides the next frame"); enqueue/command acks
+      (CONFIG/MOVE-enqueue/STOP) now typically ride the SAME cycle instead
+      of the next — documented in `docs/protocol-v4.md` §7.2 and
+      `app_robot_loop_harness.cpp`'s updated scenario comments.
+- [x] Per-port select→settle→collect interleave (118-001's own fix for
+      the actual 2026-07-18 glued-encoder bug) is UNCHANGED — verified:
+      `grep 'runAndWait\|sleepUntil' robot_loop.cpp` still shows the same
+      4-block wait list (kSettle/kClear/kSettle/kPace) with L
+      select→settle→collect strictly before R select→settle→collect; no
+      select-ordering regression.
+- [x] Straight closure-gate legs assert truth heading DURING CRUISE
       within a few tenths of a degree — new assertion, not just an
-      endpoint check.
-- [ ] `straight_drift_repro.py`'s scenario added as a permanent
-      regression test; y displacement over 700mm straight ≤ a few mm.
-- [ ] Full closure-gate + button-acceptance gate set re-run and green
+      endpoint check. Added `StraightLegCruiseCheck`/
+      `_assert_tour_gate(cruise_heading_tolerance_deg=...)` to
+      `test_tour_closure_gate.py`, sampling truth heading every cycle for
+      each straight (distance) leg's own full duration.
+- [x] `straight_drift_repro.py`'s scenario added as a permanent
+      regression test; y displacement over 700mm straight ≤ a few mm. New
+      file `src/tests/sim/system/test_straight_leg_crab_regression.py` —
+      measured final y=+0.0mm (tolerance 3mm), cruise heading 0.0000deg
+      (tolerance 0.3deg).
+- [x] Full closure-gate + button-acceptance gate set re-run and green
       (turn legs included — this defect is not straight-leg-specific).
-- [ ] Full `uv run python -m pytest` suite green.
-- [ ] `src/firm/app/DESIGN.md` updated (direct edit, not the overlay) to
+      Required an UNPLANNED re-sweep of BOTH `MoveQueue::landAtZero()`
+      margin constants (not just the chain one anticipated in the plan) —
+      see "Re-sweep record" below.
+- [x] Full `uv run python -m pytest` suite green: 1387 passed, 2 skipped,
+      9 xfailed, 2 xpassed, 0 failed.
+- [x] `src/firm/app/DESIGN.md` updated (direct edit, not the overlay) to
       describe the corrected staging/emit placement and the
       restored-symmetric-staging-without-reintroducing-select-ordering-bug
-      note.
-- [ ] Sequenced before ticket 004 (docs relocation) — this ticket's own
-      `src/firm/app/DESIGN.md` edit must land before ticket 004 touches
-      that file, so ticket 004 doesn't relocate/describe stale narrative.
-- [ ] Bench verification is DEFERRED to the phase-B bench session per
+      note, plus the margin re-sweeps.
+- [x] Sequenced before ticket 004 (docs relocation) — this ticket's own
+      `src/firm/app/DESIGN.md` edit lands in this same commit, before
+      ticket 004 runs.
+- [x] Bench verification is DEFERRED to the phase-B bench session per
       this sprint's stated mandate — not required to close this ticket
       (same posture as every other ticket in 118/119).
+
+## Re-sweep record (unplanned — discovered re-running the full gate set)
+
+The plan anticipated only `kStoppingMarginFactorChain` might need
+re-deriving (the already-known-narrow chain-advance pocket). Re-running
+the FULL gate set (this ticket's own acceptance criterion) surfaced a
+SECOND, unanticipated regression: Fix A's symmetric actuation staging
+also shifts the AVERAGE commanded-to-duty latency (both leaves now lag
+their own freshly-staged target by 1 cycle; previously R lagged 0, L
+lagged 1, averaging 0.5) — this shifts BOTH of `MoveQueue::landAtZero()`'s
+margin factors, not just the chain one.
+
+**`kStoppingMarginFactorChain`** (`pendingCount() > 0`, `move_queue.cpp`):
+old 0.60 re-measured 3.457° worst-case (TOUR_2/ideal turn 10,
+`test_tour_closure_gate.py`), over its 2.5° gate. Fresh 1-D sweep at this
+schedule:
+
+    0.20: 4.111  0.30: 2.852  0.38: 2.852  0.40: 2.357  0.42: 2.357
+    0.45: 2.481  0.48: 2.218  0.50: 2.342  0.52: 2.521  0.55: 2.748
+    0.60: 3.457  0.65: 6.660  0.70: 7.266  0.80: 10.294 0.90: 12.378
+    1.00: 14.255 1.10: 15.066                              [deg, worst-case]
+
+Genuinely broad plateau `[0.40, 0.50]` (unlike 118-003's own narrow-pocket
+finding). **Shipped: 0.48** (worst=2.218°, 0.282° margin under 2.5°).
+
+**`kStoppingMarginFactorFinal`** (`pendingCount() == 0`, `move_queue.cpp`)
+— NOT in the original plan; 118-003 found this regime cadence-robust and
+never touched it. Old 1.00 re-measured a genuine 3.267°/3.178° UNDERSHOOT
+on isolated ±90° managed turns (settle-based —
+`test_gui_button_acceptance.py`'s `test_managed_angle_preset[±90]`/
+`test_managed_seg_0_cdeg_turn[±90]`, caught by the full-suite run, not
+anticipated). Fresh sweep (fast standalone `SimLoop`-based measurement,
+same settle-based convention):
+
+    0.50-0.65: 4.248  0.70-0.85: 2.998  0.87: 2.909 (asymmetric)
+    0.88-0.96: 0.316  0.97-1.00: 3.267                     [deg, worst |error|]
+
+Genuinely broad plateau `[0.88, 0.96]`. **Shipped: 0.92** (worst=0.316°,
+2.68° margin under button-acceptance's 3.0° gate).
+
+Both re-sweeps documented in full in `move_queue.cpp`'s own
+anonymous-namespace comments and `src/firm/app/DESIGN.md` §1. Verified
+green after both changes: closure gate (worst 2.218°), full
+`test_gui_button_acceptance.py` (45 passed, 1 skipped — the skip is
+pre-existing, unrelated), straight-leg-crab regression test, full
+`uv run python -m pytest` suite (1387 passed / 0 failed).
 
 ## Testing
 

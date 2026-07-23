@@ -505,6 +505,27 @@ landing in the same primary period overwrite each other
 v2 rewrite — `wait_for_ack()`'s timeout+retry covers the rare
 collision).
 
+**Wire-visible latency (119 ticket 005 — `robot_loop.cpp`'s telemetry-emit
+placement changed alongside the straight-leg-crab actuation fix, see
+`src/firm/app/DESIGN.md` §1's own "119 ticket 005" note).** `RobotLoop::
+cycle()`'s telemetry stage+emit call now runs AFTER `processMessage()`'s
+own command-dispatch call, in the SAME cycle (it used to run BEFORE it,
+in a different runAndWait block). Concretely:
+
+- **Enqueue/command ack** — since `processMessage()` runs strictly before
+  the now-relocated emit call within the same cycle, a `move`/`config`/
+  `stop` command decoded and dispatched on cycle N typically has its own
+  ack visible on cycle N's own emitted frame (0-cycle latency), where it
+  previously rode cycle N+1's frame (~1 cycle / `kCycle`=40ms latency).
+  This is a latency IMPROVEMENT, not a regression — no host caller
+  depends on the OLD ~1-cycle delay (`wait_for_ack()`-style callers poll
+  for a matching `corr_id` and tolerate either latency by construction).
+- **MOVE completion ack** — UNAFFECTED. `moveQueue_.tick()` (the stop
+  decision that stages this ack) still runs AFTER the telemetry emit
+  call, later in the SAME trailing pace block, so a completion ack staged
+  there is still not visible until the NEXT cycle's own emit — unchanged
+  "ack rides the next frame" behavior, both before and after this ticket.
+
 ### 7.3 AS-BUILT: the completion ack's `ack_err` is always 0 — timeout is signaled by the flags bit, not `ack_err`
 
 The set-point issue's Responses section reads (arguably ambiguously):

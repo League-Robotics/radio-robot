@@ -78,16 +78,43 @@ namespace {
 //
 // kStoppingMarginFactorFinal (pendingCount() == 0) was swept ONCE, at
 // sim's original 50ms cycle (118 ticket 004), and re-verified UNCHANGED
-// here after sim/firmware cadence parity landed at 40ms (118 ticket 003 --
-// SimHarness::kCycleDtUs now equals App::RobotLoop::kCycle exactly, see
-// sim_harness.h's own file header): 0.90-1.10 remains a broad, flat
-// plateau (worst=0.844deg settle-based at 40ms, against the button-
-// acceptance suite's own 3.0deg tolerance -- BETTER than the 50ms
-// measurement, not worse). 1.00 (mid-plateau) ships as the default. This
-// confirms Drive::stop()'s own real coast is genuinely cadence-independent
-// (governed by the motor's own velocity-PID time constants, not by how
-// often MoveQueue samples it) -- see kDiscretizationCyclesChain's own
-// comment below for the CONTRASTING chain-advance case, which is NOT
+// after sim/firmware cadence parity landed at 40ms (118 ticket 003 --
+// SimHarness::kCycleDtUs equals App::RobotLoop::kCycle exactly, see
+// sim_harness.h's own file header): 0.90-1.10 was a broad, flat plateau
+// (worst=0.844deg settle-based at 40ms, against the button-acceptance
+// suite's own 3.0deg tolerance), AT THAT SCHEDULE (118's asymmetric
+// drive_.tick() staging). 1.00 (mid-plateau) shipped as the default.
+//
+// RE-SWEPT (119 ticket 005, straight-leg-crab actuation-staging fix): the
+// SAME drive_.tick() hoist that fixed the actuation skew (see
+// robot_loop.cpp's own comment) also shifts the average commanded-to-duty
+// latency -- previously R's own duty write lagged its own freshly-staged
+// target by 0 cycles and L's lagged by 1 (asymmetric, averaging 0.5); now
+// BOTH lag by 1 (symmetric, but averaging a FULL cycle more than before).
+// This is a real, measured, systematic effect on the land-at-zero
+// predicate's own timing, independent of the actuation-skew fix's own
+// accuracy benefit: the OLD 1.00 value re-measured a genuine -3.267deg/
+// +3.178deg UNDERSHOOT on an isolated +/-90deg managed turn (settle-based,
+// pendingCount()==0 -- test_gui_button_acceptance.py's own
+// test_managed_angle_preset[+-90]/test_managed_seg_0_cdeg_turn[+-90]),
+// over their own 3.0deg gate -- caught by re-running the FULL gate set
+// this ticket's own acceptance criteria require, not anticipated in the
+// original plan. A fresh sweep over kStoppingMarginFactorFinal in
+// [0.50, 1.00] (settle-based +/-90deg turn, matching the failing tests'
+// own measurement convention) found a genuinely broad plateau at
+// [0.88, 0.96] -- worst=0.316deg throughout (identical at every 0.01-0.02
+// sample in that range: 0.88/0.89/0.90/0.92/0.93/0.96 all measure the
+// SAME 0.316deg, a real plateau, not sampling noise) -- with sharp cliffs
+// on both sides (0.87 asymmetric at 2.909deg; 0.97 back to the old
+// 3.267deg undershoot). 0.92 (mid-plateau, matching this file's own
+// mid-plateau convention for kStoppingMarginFactorChain above) ships as
+// the new default, replacing 1.00 -- 2.68deg of margin under the
+// button-acceptance suite's own 3.0deg gate. Full sweep data and the
+// standalone measurement script referenced in ticket 119-005's own file.
+// This confirms Drive::stop()'s own real coast is still governed by the
+// motor's own velocity-PID time constants (not a NEW cadence sensitivity
+// this ticket introduced) -- see kDiscretizationCyclesChain's own comment
+// below for the CONTRASTING chain-advance case, which is NOT
 // cadence-independent.
 //
 // kStoppingMarginFactorChain (pendingCount() > 0) is NOT cadence-
@@ -119,25 +146,46 @@ namespace {
 // see kDiscretizationCyclesChain below, over a 2-D grid; and a structural
 // variant that made the reset-on-completion conditional on pendingCount()
 // -- see tick()'s own comment for why that variant was NOT kept) found NO
-// genuinely broad plateau under the tour-closure gate's 2.5deg band: the
-// achievable worst-case error jumps discontinuously (e.g. 2.596deg at
-// chain=0.80 vs 4.474deg at chain=0.81) because different turns' own
-// error-vs-coefficient curves cross zero at slightly different points
-// (TOUR_1/TOUR_2 command a genuine variety of angles -- 90/124/146/
-// 215/217 degrees, both directions), so ANY single global coefficient's
-// own "worst across all turns" envelope is a max over several offset
-// curves, not one smooth curve. The values shipped here (0.60 chain
-// factor + a 0.53-cycle discretization term, see below) are the BEST
-// point found in that search -- worst=2.323deg at 40ms, verified passing
-// -- but this is honestly reported as a narrow pocket (neighbors 0.02-0.03
-// away measure 3.7-4.5deg), not the broad plateau this project's own
-// convention otherwise requires. Escalated to the team-lead alongside
-// this commit (118 ticket 003's own exception resolution) with the full
-// sweep data; revisit if a genuinely robust fix (e.g. sub-tick crossing
-// interpolation, rather than a per-cycle-sampled threshold) is ever
-// invested in.
-constexpr float kStoppingMarginFactorChain = 0.60f;  // dimensionless
-constexpr float kStoppingMarginFactorFinal = 1.00f;  // dimensionless
+// genuinely broad plateau under the tour-closure gate's 2.5deg band, AT
+// THAT SCHEDULE (118's asymmetric drive_.tick() staging -- see robot_loop.cpp's
+// own history): the achievable worst-case error jumped discontinuously
+// (e.g. 2.596deg at chain=0.80 vs 4.474deg at chain=0.81) because different
+// turns' own error-vs-coefficient curves crossed zero at slightly different
+// points (TOUR_1/TOUR_2 command a genuine variety of angles -- 90/124/146/
+// 215/217 degrees, both directions), so ANY single global coefficient's own
+// "worst across all turns" envelope was a max over several offset curves,
+// not one smooth curve. 0.60 (a narrow pocket, neighbors 0.02-0.03 away
+// measuring 3.7-4.5deg) shipped from that search -- escalated to the
+// team-lead alongside that commit (118 ticket 003's own exception
+// resolution) with the full sweep data.
+//
+// RE-SWEPT (119 ticket 005, straight-leg-crab actuation-staging fix):
+// hoisting drive_.tick() to the top of cycle() (same-generation L/R
+// actuation, see robot_loop.cpp's own comment) changes the plant's exact
+// per-cycle response, which shifted this narrow pocket -- the OLD 0.60
+// value re-measured 3.457deg worst-case at the new schedule (TOUR_2/ideal
+// turn 10), over the 2.5deg gate. A fresh 1-D sweep over
+// kStoppingMarginFactorChain in [0.20, 1.10] against the SAME tour-closure
+// gate (TOUR_1/TOUR_2 x ideal/realistic, worst |turn error| across all 4)
+// at THIS schedule:
+//   0.20: 4.111deg   0.30: 2.852deg   0.35: 2.852deg   0.38: 2.852deg
+//   0.40: 2.357deg   0.42: 2.357deg   0.45: 2.481deg   0.48: 2.218deg
+//   0.50: 2.342deg   0.52: 2.521deg   0.55: 2.748deg   0.60: 3.457deg
+//   0.65: 6.660deg   0.70: 7.266deg   0.80: 10.294deg  0.90: 12.378deg
+//   1.00: 14.255deg  1.10: 15.066deg
+// UNLIKE 118-003's own finding, this IS a genuinely broad plateau --
+// [0.40, 0.50] holds comfortably under the 2.5deg gate (worst 2.481deg at
+// the 0.45 sample; both edges just outside, 0.38 at 2.852deg and 0.52 at
+// 2.521deg, are smooth degradation, not a discontinuous cliff). 0.48
+// (worst=2.218deg, 0.282deg of margin) ships as the new default, replacing
+// 0.60 -- broad-plateau-or-escalate per this project's own convention, and
+// this time a genuine plateau, not another narrow-pocket escalation.
+// kDiscretizationCyclesChain (below) was NOT re-swept -- the 1-D
+// chain-factor sweep alone already found an adequate broad plateau, so the
+// 2-D joint sweep 118-003 needed was not necessary here. Full sweep data
+// and per-tour/per-profile breakdown recorded in ticket 119-005's own file.
+constexpr float kStoppingMarginFactorChain = 0.48f;  // dimensionless
+constexpr float kStoppingMarginFactorFinal = 0.92f;  // dimensionless
 
 // kDiscretizationCyclesChain -- CHAIN-ONLY (see landAtZero()'s own use:
 // gated on pendingCount() > 0, matching kStoppingMarginFactorChain).
