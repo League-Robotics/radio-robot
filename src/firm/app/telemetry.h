@@ -62,18 +62,49 @@ namespace App {
 //                                    safety-net trip
 //                                    (Devices::I2CBus::
 //                                    clearanceSafetyNetCount() > 0).
-//                                    Bench-characterized as a boot-time
-//                                    ONE-SHOT latch, not a continuous/live
-//                                    indicator: it fires once, coincident
-//                                    with bit 11 (kFlagEventBootReady)
-//                                    first setting, and never re-fires. A
-//                                    healthy robot can show this bit set
-//                                    permanently after boot with no
-//                                    ongoing problem -- do NOT read a
-//                                    steady 1 as live evidence of a
-//                                    defect; only a bit that flips DURING
-//                                    driving (not just once at boot) is
-//                                    actionable.
+//                                    Bench-characterized (120-003,
+//                                    pyOCD/DBG trace against real
+//                                    hardware, 2026-07-23) as a
+//                                    CONTINUOUSLY LIVE, monotonically
+//                                    growing counter, NOT a boot-time
+//                                    one-shot latch (a prior claim here
+//                                    was wrong -- falsified by direct
+//                                    on-chip measurement: the raw count
+//                                    keeps climbing for as long as the
+//                                    robot runs, idle or driving, at a
+//                                    rate matching Devices::Otos's own
+//                                    ~20ms read cadence 1:1). Root cause:
+//                                    Devices::Otos::readPositionVelocity()
+//                                    (and its sibling register helpers)
+//                                    issue a register-select write()
+//                                    immediately followed by a read() on
+//                                    the SAME device with no intervening
+//                                    loop-scheduled gap, so
+//                                    waitForClearance() trips on every
+//                                    single Otos burst read,
+//                                    unconditionally -- this has nothing
+//                                    to do with the loop schedule or
+//                                    118-001's kSettle/kClear restore
+//                                    (confirmed on hardware: the motor's
+//                                    own split-phase request/collect,
+//                                    which DOES cross a real scheduled
+//                                    gap, contributes ZERO trips in
+//                                    either an idle or a driving window).
+//                                    A healthy robot with the real OTOS
+//                                    present therefore shows this bit set
+//                                    on nearly every frame, idle AND
+//                                    driving, by design -- do NOT read a
+//                                    steady 1 as evidence of a motor/
+//                                    loop-timing defect. The bit's CURRENT
+//                                    derivation (never reset) also cannot
+//                                    surface a genuine FUTURE motor-side
+//                                    regression, since it saturates to 1
+//                                    within about a second of boot and
+//                                    stays there -- see
+//                                    clasi/issues/i2c-safety-net-bit-conflates-otos-settle-wait-with-loop-schedule-health.md
+//                                    for the follow-up fix options (a
+//                                    stakeholder-level design choice, not
+//                                    guessed here).
 //   bit 7  (kFlagFaultWedgeLatch)   -- NezhaMotor/I2CBus wedge-latch
 //                                    detected (Devices::MotorArmor::
 //                                    wedged()).

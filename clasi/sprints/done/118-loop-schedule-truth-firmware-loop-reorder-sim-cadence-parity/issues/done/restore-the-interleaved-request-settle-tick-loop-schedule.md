@@ -139,6 +139,15 @@ and `app_telemetry_harness`.
 4. Before/after signal: confirm the I2C clearance safety-net fault bit
    (telemetry fault bit 0) is now clear while driving — it was tripped every
    cycle by the blocking in-`tick()` settle.
+   **CORRECTION (120-003, 2026-07-23, pyOCD/DBG trace against real
+   hardware):** this did not hold — the bit measured set on every idle
+   AND driving frame post-restore. Root-caused to `Devices::Otos`'s own
+   self-contained register-read settle wait (unrelated to this issue's
+   loop-schedule fix, which is confirmed fully effective for the motor
+   path it actually protects — zero measured safety-net trips from
+   either motor in any window). See 120-003's ticket record and
+   `src/firm/app/DESIGN.md`'s `kFlagFaultI2CSafetyNet` entry for the
+   full trace and root-cause evidence.
 5. Measure the real cycle period from TLM timestamps (~40ms / ~25Hz expected)
    and confirm comms/radio stay responsive (comms pump now runs in the borrowed
    settle window).

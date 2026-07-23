@@ -233,11 +233,12 @@ planned consumer for future fake-OTOS/fusion bench work, per the same
 established for the estimator as a whole.
 
 **120 (bench tour bring-up: ack ring + build-selectable fake OTOS + I2C
-safety-net diagnosis, DRAFT — verify/refine against shipped code at
-execution time).** Three independent, phase-B bench-observability fixes.
-See "Telemetry's ack ring" (§4) for the ack-slot→ack-ring change and the
-`kFlagFaultI2CSafetyNet` paragraph (§4) for the bit-6 diagnosis. The
-third change (ticket 2, LANDED): `Devices::Otos` gains a new
+safety-net diagnosis — all three tickets LANDED).** Three independent,
+phase-B bench-observability fixes. See "Telemetry's ack ring" (§4) for
+the ack-slot→ack-ring change and the `kFlagFaultI2CSafetyNet` paragraph
+(§4) for the bit-6 diagnosis (ticket 3, LANDED: diagnosis-only, no code
+fix — see that paragraph for the confirmed root cause and why no fix
+ships). The third change (ticket 2, LANDED): `Devices::Otos` gains a new
 synthetic-sample method, `feedSyntheticSample(x, y, heading, v_x, v_y,
 omega, nowUs)` (see [`devices/DESIGN.md`](../devices/DESIGN.md), edited
 directly by ticket 2, not overlaid here, for the leaf's own full
@@ -621,27 +622,42 @@ refreshed the cached pose, NOT the old pre-115 "chip ever detected"
 semantic), bit 1 `kFlagOtosConnected` (live bus health), bit 2 `kFlagActive`
 (motion in progress), bits 3/4 `kFlagConnLeft`/`kFlagConnRight` (motor bus
 connectivity), bit 5 `kFlagAckFresh` (Telemetry-internal, see above), bit 6
-`kFlagFaultI2CSafetyNet` (`I2CBus::clearanceSafetyNetCount() > 0` — on real
-hardware this has been observed as a one-shot latch coincident with
-`Preamble::done()`'s transition, not a live/continuous indicator; a steady
-1 after boot with no in-flight anomaly is not itself evidence of a defect,
-only a bit that flips *during* driving is actionable. **120, DRAFT —
-diagnosis in progress, verify/refine against ticket 3's actual on-chip
-trace at execution time:** bench evidence (120's own source issue,
-`bench-i2c-safety-net-fault-asserts-every-cycle.md`) shows this bit set
-100% of frames, idle AND driving, contradicting 118-001's own prediction
-that the loop-schedule restore would clear it while driving. The leading
-candidate is that `>0` against a monotonically non-decreasing counter
-latches permanently after a single early (boot/`Preamble`) trip —
-`MicroBitI2CBus::resetStats()` exists and zeroes the counter, but is
-never called anywhere in production firmware. Ticket 3 traces the raw
-counter (not just this derived bit) idle vs. driving to confirm whether
-that theory holds, or whether a real ongoing bus-timing defect remains;
-this paragraph is updated to state the confirmed conclusion once ticket
-3 lands — if a fix ships, this note is replaced by a plain description
-of when the bit sets; if the count is confirmed a boot-time latch, this
-note is replaced by a statement to that effect and 118-001's own
-acceptance claim is corrected in its record.), bit 7
+`kFlagFaultI2CSafetyNet` (`I2CBus::clearanceSafetyNetCount() > 0` —
+**120-003, CONFIRMED via pyOCD/DBG trace against real hardware,
+2026-07-23** (robot "tovez", `/dev/cu.usbmodem2121102`): this is a
+CONTINUOUSLY LIVE, monotonically
+growing counter, NOT a boot-time one-shot latch — the prior DRAFT text
+here (and 118-001's own acceptance claim) was wrong, falsified by direct
+measurement. Raw `clearanceSafetyNetCount_` was sampled via a halted
+SWD read at multiple points: ~4.6s post-flash (already 97, not 1), ~8s
+post an SWD-triggered reset (167), and across two independent idle-window
+brackets (Δ243 over ~14s; Δ148 over ~8.6s) — in BOTH brackets the delta
+matches, EXACTLY, half of `Devices::Otos`'s own per-device `txnCount`
+delta (Δ486→243 bursts; Δ296→148 bursts), i.e. one trip per Otos burst
+read, 1:1, with zero residual attributable to either motor. Root cause:
+`Devices::Otos::readPositionVelocity()` (and its sibling register
+helpers, `readReg8()`/`readXYH()`) issue a register-select `write()`
+immediately followed by a `read()` on the SAME device with NO
+intervening loop-scheduled gap (unlike `NezhaMotor`'s split-phase
+`requestEncoder()`/`collectEncoder()`, which DOES cross a real
+`kSettle`-scheduled gap) — so `waitForClearance()` trips on every single
+Otos burst read, unconditionally, at Otos's own ~20ms read cadence,
+regardless of `moveQueue_.active()` (`Otos::tick()` runs every cycle
+either way). This is entirely unrelated to 118-001's loop-schedule
+restore, which is confirmed FULLY EFFECTIVE for its actual target: the
+motor's own split-phase path contributes ZERO measured trips in either
+an idle or a driving window. No code fix ships this ticket — making the
+bit literally clear during driving would require either redesigning
+`Otos`'s own I2C register-read pattern (a real hardware-timing change to
+a currently-working, bench-proven sensor path, out of this ticket's
+authorized file scope) or introducing a caller-intent exemption into the
+safety-net counting logic (a stakeholder-level policy decision about
+what counts as a "fault," not something to guess after 118-001 already
+guessed wrong once) — see
+`clasi/issues/i2c-safety-net-bit-conflates-otos-settle-wait-with-loop-schedule-health.md`
+for the candidate fix options filed for a future sprint. 118-001's own
+acceptance record (`clasi/sprints/done/118-loop-schedule-truth-firmware-loop-reorder-sim-cadence-parity/`)
+is corrected to cite this trace.), bit 7
 `kFlagFaultWedgeLatch` (`motorL_.wedged() || motorR_.wedged()`), bit 8
 `kFlagFaultI2CNak` (declared, not yet wired — no per-transaction NAK
 aggregate exists yet), bit 9 `kFlagFaultCommsMalformed`
