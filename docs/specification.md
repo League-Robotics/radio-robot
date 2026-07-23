@@ -1,5 +1,15 @@
 # radio-robot-c: Feature Specification
 
+> **Superseded.** This document describes the pre-077 `source/` tree
+> wholesale (the ASCII `CommandProcessor`, `DriveController`,
+> `PathFollower`/`PurePursuit`/`Stanley` navigation layer) — architecture
+> that no longer exists after the sprint 077 greenfield rebuild and the
+> subsequent gut-to-minimal-firmware/MOVE-protocol sprints. For the
+> current architecture, see [`docs/design/design.md`](design/design.md)
+> and its per-subsystem `DESIGN.md` files; for the current wire protocol,
+> see [`docs/protocol-v4.md`](protocol-v4.md). Kept as the historical
+> record of the pre-rebuild design, not rewritten line-by-line.
+
 ## Hardware
 
 - **Robot**: DFRobot QBot Pro

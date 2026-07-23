@@ -737,7 +737,7 @@ def _build_main_window():  # type: ignore[return]
     left_layout.addWidget(cmd_rows_widget)
     cmd_rows_widget.setVisible(False)
 
-    # Two-column motion panel (Unmanaged direct-twist | Managed Ruckig).
+    # Two-column motion panel (Unmanaged direct-twist | Managed MOVE-queue).
     # Each sends the binary SEG primitive (arc_length=0 => pure pivot), CCW+,
     # delta_heading in centidegrees: "SEG 0 <cdeg>" (binary_bridge translates
     # to CommandEnvelope{segment}). Enabled on connect via _send_buttons.
@@ -760,7 +760,7 @@ def _build_main_window():  # type: ignore[return]
     # --- Motion panel: two columns, SAME commands via DIFFERENT paths -------
     # LEFT  = Unmanaged: direct twist/stop, NO trajectory planner
     #         (SimTransport.run_unmanaged -> one twist, deadman-timed).
-    # RIGHT = Managed:   D/RT -> planner.tour.run_tour -> Ruckig.
+    # RIGHT = Managed:   D/RT -> planner.tour.run_tour -> MOVE queue.
     # Same distance/angle presets on both sides so the ONLY variable is the
     # path. Distance presets are [mm]; angle presets are [deg]; each fires
     # forward (+) and back/CCW-vs-CW (-).
@@ -927,7 +927,7 @@ def _build_main_window():  # type: ignore[return]
         _make_motion_column("Unmanaged — direct twist", "unmanaged", _unmanaged_dist, _unmanaged_ang,
                             test_us_btn, test_ut_btn, pid_checkbox_u))
     motion_panel_layout.addWidget(
-        _make_motion_column("Managed — Ruckig", "managed", _managed_dist, _managed_ang,
+        _make_motion_column("Managed — MOVE", "managed", _managed_dist, _managed_ang,
                             test_s_btn, test_t_btn, pid_checkbox_m))
     left_layout.addWidget(motion_panel)
 

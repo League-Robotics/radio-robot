@@ -287,7 +287,7 @@ and captures the `Motion::StopCondition` baseline (activation clock time,
 ### 5.2 Per-cycle tick (`MoveQueue::tick()`, `move_queue.cpp:80-106`)
 
 Called unconditionally, every loop cycle (`robot_loop.cpp:507`,
-`~50 Hz` / 20 ms — the same schedule position the deleted
+`~25 Hz` / 40 ms, sprint 118 — the same schedule position the deleted
 `deadman_.expired()` check used to occupy). A no-op if no `Move` is
 active. Otherwise reconstructs a fresh `Motion::StopCondition` from the
 active slot's stored baseline+kind+threshold+timeout and calls its
@@ -588,8 +588,11 @@ column is preserved for the schema's own future use.
 
 Rides `ReplyEnvelope{corr_id=0, tlm: Telemetry}` (unsolicited, `corr_id`
 always 0 for this arm), emitted **every loop cycle** — primary period ==
-cycle period, ~50 Hz / 20 ms
-(`App::Telemetry::kPrimaryPeriod`, unchanged by sprint 116). "The frame
+cycle period, ~25 Hz / 40 ms
+(`App::Telemetry::kPrimaryPeriod`, unchanged by sprint 116; restored to
+its genuine 40ms/~25Hz value by sprint 118 — see
+[`src/firm/app/DESIGN.md`](../src/firm/app/DESIGN.md) §1's "118 (loop
+schedule truth)" note). "The frame
 is the dataset": with no on-chip measurement ring and no dump command,
 a timestamped frame every iteration is the entire dataset-construction
 path — the host's log of this stream (`tlm_log.py`, §9) reconstructs

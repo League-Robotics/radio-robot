@@ -600,116 +600,29 @@ def _assert_tour_gate(gate: TourGateResult, *, tolerance_deg: float, label: str,
 
 
 # ---------------------------------------------------------------------------
-# The gate itself
-#
-# 109-009's own Iteration Log/Impossibility Argument (ticket 009 file,
-# clasi/sprints/109-.../tickets/009-...md): six real firmware bugs were
-# found and fixed in round 1 (TLM twist never populated, chained-pivot
-# dwell completion keyed on the wrong condition, heading unwrap broken for
-# |deltaHeading|>180deg, missing STOP_TIME backstop on the terminal
-# DISTANCE branch, no distance-completion settle epsilon, STOP_TIME margin
-# too tight for the sim's own real-time jitter). Round 2 (stakeholder
-# redirect 2026-07-17) found and fixed TWO MORE: the dwell hold's own hard
-# reset-on-any-miss policy (replaced with a leaky/decaying counter) and a
-# raw one-sample rate-derivative noise-sensitivity bug (replaced with a
-# low-pass-filtered rate estimate for the dwell gate's own decision only)
-# -- see executor.cpp's own dwell-completion comment and motion/DESIGN.md.
-#
-# Net result after round 2: TOURS NOW COMPLETE RELIABLY -- 15/15 clean
-# completions (deterministic-stepped) for both TOUR_1 and TOUR_2, under
-# both the ideal and realistic error profiles, plus 4/4 real-time-threaded
-# and 3/3 SimTransport-path confirmations (see ticket 009's own completion
-# notes for the full numbers). These tests remain xfail ONLY for the two
-# accuracy gaps below, not for completion/reliability, which is resolved:
-#
-# (1) IDEAL-CHIP "exact (negligible epsilon)" is not reached (measures
-#     ~0.4-2.2deg, not <0.05deg) -- attributed to Devices::Otos's own
-#     kReadPeriod (20ms) read-rate limit letting real rotation happen
-#     unsampled during a pivot's cruise phase, a physical sampling-latency
-#     limit of the current architecture. DEFERRED to ticket 010 ("Turn-
-#     error characterization and prediction equation") by stakeholder
-#     decision (2026-07-17) -- this is expected, not a regression.
-# (2) REALISTIC-PROFILE turns are MOSTLY within 1deg but not uniformly --
-#     most turns land within ~0.5-1.6deg; TOUR_2's own final turn (leg 14,
-#     immediately preceding the tour's last leg) is a reproducible outlier
-#     at ~4.9deg, attributed to the SAME Otos read-latency mechanism as (1)
-#     compounding with cumulative drift late in a long tour. NOT closed by
-#     this ticket's own time budget -- left as an open, numbers-backed gap
-#     for ticket 010 rather than silently retuning the tolerance.
-#
-# 114-006 re-baseline: _make_loop() now calls configure_from_robot() against
-# data/robots/tovez_nocal.json (vel_kp=0.002) BEFORE the ideal/realistic
-# fidelity knobs above -- these numbers above were originally measured
-# against the pre-113 hardcoded vel_kp=0.003 fallback the sim used to run
-# silently. Re-measured against the actually-configured 0.002 plant: worst
-# ideal-chip miss is now ~1.11deg (TOUR_1/TOUR_2 turn 2, both +1.09deg,
-# still well inside the ~0.4-2.2deg range above -- same mechanism, no
-# regression); worst realistic-profile miss is now TOUR_1 turn 8 at
-# +1.46deg (TOUR_2's own leg 14, the PREVIOUS outlier, now measures a
-# non-outlier -1.22deg -- the specific worst-turn identity shifted with the
-# configured plant's dynamics, but stayed in the same ~1-1.5deg band, still
-# the same Otos read-latency mechanism, not a new regression). Both xfail
-# reason strings below get a trailing sentence recording this so the
-# specific numbers stay accurate to what the CONFIGURED plant measures, per
-# this ticket's "document old value, new value, why" rule -- the tolerances
-# themselves (0.05deg/1.0deg, the stakeholder's own stated bar) are
-# unchanged.
-#
-# xfail (not skip) so both gaps stay VISIBLE and would XPASS loudly the
-# moment either one actually closes.
+# The gate itself. 109-009's Impossibility Argument (ticket file) fixed
+# eight real firmware bugs across two rounds; tours now complete RELIABLY
+# (15/15 clean completions, both tours, both error profiles -- see that
+# ticket's own completion notes). These tests stay xfail ONLY for the two
+# residual per-turn ACCURACY gaps below, not for completion/reliability,
+# which is resolved. xfail (not skip) so both gaps stay VISIBLE and would
+# XPASS loudly the moment either one actually closes.
 # ---------------------------------------------------------------------------
 
 _XFAIL_REASON_IDEAL = (
-    "109-009 Impossibility Argument (see ticket file), DEFERRED to ticket 010 by "
-    "stakeholder decision (2026-07-17): ideal-chip turns do not reach the "
-    "stakeholder's own stated <0.05deg 'exact' bar -- attributed to Devices::Otos's "
-    "own kReadPeriod (20ms) read-rate limit letting real rotation happen unsampled "
-    "during a pivot's cruise phase, a physical sampling-latency limit of the current "
-    "architecture, not a tuning gap. Tours themselves complete RELIABLY (round-2 "
-    "dwell-completion fixes -- see the ticket's own Iteration Log/completion notes); "
-    "only this residual accuracy gap remains, explicitly out of that ticket's own "
-    "scope.\n"
-    "\n"
-    "This xfail reason's own numeric history (114-006 re-baseline, the "
-    "turn-prediction campaign's time-lead anticipation stage, the decel-into-the-goal "
-    "taper's own accel-only then jerk-limited stages) is NOT reproduced here -- every "
-    "one of those stages measured against a completion mechanism 118 ticket 004 "
-    "(land-at-zero-completion-delete-stop-lead.md) deletes outright (a hand-tuned "
-    "time-lead constant with a four-retune history and no stable value), so the "
-    "numbers would describe a regime that no longer exists. See this file's own git "
-    "history for the full chronology if it is ever needed.\n"
-    "\n"
-    "118 ticket 004 (land-at-zero completion): MoveQueue::tick() now declares a "
-    "Move done when `remaining` and the taper's own commanded speed have BOTH "
-    "converged near zero (move_queue.h's own doc comment) -- an emergent property "
-    "of the taper already designed to arrive at ~zero speed, not a tuned guess. See "
+    "109-009 Impossibility Argument: ideal-chip tour turns still don't reach the "
+    "stakeholder's <0.05deg 'exact' bar (current per-turn errors ~0.2-2.2deg; see "
     "test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band()'s own "
-    "printed report for this file's current ideal-chip measurements under the "
-    "land-at-zero regime -- still short of the stakeholder's own stated <0.05deg "
-    "'exact' bar (same Otos::kReadPeriod mechanism as ever), so this xfail stays "
-    "open."
+    "printed report) -- see clasi/issues/land-at-zero-at-orthogonal-chain-boundaries.md "
+    "for the live investigation into the dominant remaining error source."
 )
 
 _XFAIL_REASON_REALISTIC = (
-    "109-009 Impossibility Argument (see ticket file): realistic-profile turns do "
-    "not uniformly land within the stakeholder's own stated 1.0deg bar, attributed "
-    "to the same Otos read-latency mechanism as the deferred ideal-chip gap, "
-    "compounding with cumulative drift late in a tour and sensor-error-injection "
-    "noise (OTOS/encoder scale/tick-quant/slip, this file's own _OTOS_*/_ENC_* "
-    "constants). Tours themselves complete RELIABLY (round-2 dwell-completion "
-    "fixes); this residual per-turn accuracy gap is left open, numbers-backed, "
-    "rather than silently retuning the tolerance.\n"
-    "\n"
-    "This xfail reason's own numeric history is NOT reproduced here for the SAME "
-    "reason the ideal-chip xfail's own matching paragraph gives -- see that "
-    "paragraph and this file's own git history.\n"
-    "\n"
-    "118 ticket 004 (land-at-zero completion): see the ideal-chip xfail's own "
-    "matching paragraph for the mechanism. See "
-    "test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band()'s own "
-    "printed report for this file's current realistic-profile measurements under "
-    "the land-at-zero regime -- still short of the stakeholder's own stated 1.0deg "
-    "bar, so this xfail stays open."
+    "109-009 Impossibility Argument: realistic-profile tour turns still don't "
+    "uniformly land within the stakeholder's 1.0deg bar (same dominant error source "
+    "as the ideal-chip xfail, plus sensor-error-injection noise) -- see "
+    "clasi/issues/land-at-zero-at-orthogonal-chain-boundaries.md for the live "
+    "investigation."
 )
 
 

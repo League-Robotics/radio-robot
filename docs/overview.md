@@ -1,5 +1,15 @@
 # radio-robot-c: Project Overview
 
+> **Superseded.** Most of this document (the pluggable `PathFollower`/
+> `PoseProvider` architecture, ratio PID, the `G` command, protocol v2)
+> describes the pre-077 `source/` tree wholesale — architecture that no
+> longer exists after the sprint 077 greenfield rebuild and the
+> subsequent gut-to-minimal-firmware/MOVE-protocol sprints. For the
+> current architecture, see [`docs/design/design.md`](design/design.md);
+> for the current wire protocol, see
+> [`docs/protocol-v4.md`](protocol-v4.md). Kept as the historical record
+> of the pre-rebuild design, not rewritten line-by-line.
+
 ## What It Is
 
 radio-robot-c is a C++ firmware port of the radio-robot TypeScript/micro:bit firmware. It runs on a DFRobot QBot Pro — a micro:bit V2 paired with a Nezha V2 motor board — using the CODAL framework. The firmware receives movement and sensor commands from a Python host over serial and micro:bit radio, executes them on the robot hardware, and returns telemetry.
@@ -36,6 +46,7 @@ The original TypeScript firmware was developed as a functional prototype. This p
 Process and conventions agents must follow — coding standards, naming, on-chip
 debugging workflow, hardware bench testing, git, CLASI — are **rules** and live in
 [.claude/rules/](../.claude/rules/). `docs/` holds project knowledge: the
-architecture, the protocol spec (`protocol-v2.md`), design notes, decisions, and
+architecture, the protocol spec (`protocol-v4.md`, current — `protocol-v2.md`/
+`protocol-v3.md` are kept as the superseded historical record), design notes, decisions, and
 post-mortems. Former docs pages that became rules (`coding-standards.md`,
 `debugging.md`, `hardware-bench-testing.md`) leave pointer stubs here.

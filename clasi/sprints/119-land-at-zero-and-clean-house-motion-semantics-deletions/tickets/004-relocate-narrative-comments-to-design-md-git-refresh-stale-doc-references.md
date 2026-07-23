@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Relocate narrative comments to DESIGN.md/git; refresh stale doc references
-status: in-progress
+status: done
 use-cases: []
 depends-on:
 - '001'
@@ -138,41 +138,65 @@ what SURVIVES 118, not the original issue's pre-118 list verbatim:**
 
 ## Acceptance Criteria
 
-- [ ] `move_queue.h`/`sim_harness.h`/`tour.py` headers reduced to
+- [x] `move_queue.h`/`sim_harness.h`/`tour.py` headers reduced to
       contract-only (target: comment ratio < 40% in the headers — both
       currently well above that; re-measure after edits); relocated
       history lands in the owning `DESIGN.md` (`src/firm/app/DESIGN.md`
       for `move_queue.h`, `src/sim/DESIGN.md` for `sim_harness.h`,
       `src/host/robot_radio/DESIGN.md` for `tour.py`); no sprint numbers
       outside DESIGN.md/git references in the headers themselves.
-- [ ] `test_tour_closure_gate.py`'s xfail reasons shrunk to one sentence
+      **Measured: `move_queue.h` 73.4% (292/398) → 39.8% (68/171);
+      `sim_harness.h` 63.0% (383/608) → 37.4% (132/353); `tour.py`
+      772 → 673 lines. Code-line counts verified unchanged by diff
+      (78 and 185 respectively) — no behavior touched.**
+- [x] `test_tour_closure_gate.py`'s xfail reasons shrunk to one sentence
       + a live issue link (both `_XFAIL_REASON_IDEAL` and
       `_XFAIL_REASON_REALISTIC`, currently ~30 and ~21 lines
-      respectively).
-- [ ] `.claude/rules/hardware-bench-testing.md` rewritten against
+      respectively). **Shrunk to 6 and 5 lines; both link
+      `clasi/issues/land-at-zero-at-orthogonal-chain-boundaries.md`
+      (verified exists, live/pending, and matches the currently
+      measured 0.2-2.2deg residual magnitude).**
+- [x] `.claude/rules/hardware-bench-testing.md` rewritten against
       `docs/protocol-v4.md` + MOVE-era bench scripts; no
       `docs/protocol-v2.md`/`source/commands/` reference survives there.
-- [ ] `.claude/rules/coding-standards.md:170`'s `SystemCommands.cpp`
+- [x] `.claude/rules/coding-standards.md:170`'s `SystemCommands.cpp`
       reference re-pointed or marked historical.
-- [ ] TestGUI "Managed — Ruckig" label renamed; the two stale comments
-      (`:735`, `:758`) corrected.
-- [ ] `docs/specification.md` and `docs/architecture.md` each carry a
+- [x] TestGUI "Managed — Ruckig" label renamed; the two stale comments
+      (`:735`, `:758`) corrected. **(actual current line numbers `:740`,
+      `:763`, `:930` — content matched, line numbers had drifted since
+      the issue was filed.)**
+- [x] `docs/specification.md` and `docs/architecture.md` each carry a
       clear superseded-by banner pointing to `docs/design/design.md`.
-- [ ] `docs/protocol-v4.md` established as the pointed-to protocol doc
+      **`docs/overview.md` also banner'd — same pre-077-wholesale
+      failure mode, found while verifying doc entry points for the
+      protocol-v4 pointer criterion below.**
+- [x] `docs/protocol-v4.md` established as the pointed-to protocol doc
       wherever `.claude/rules/` or doc entry points currently point at
       v2; §8's own stale cadence line corrected to 40ms/~25Hz.
-- [ ] `src/host/robot_radio/DESIGN.md`'s `planner/` row corrected to its
+      **§5.2's own matching stale `~50Hz/20ms` line (same class of
+      staleness, found in the same document) fixed alongside it.**
+- [x] `src/host/robot_radio/DESIGN.md`'s `planner/` row corrected to its
       actual live/mixed status, verified via the exact import command
-      above (or an equivalent re-check at execution time).
-- [ ] Grep gate: no reference to `source/commands/`, `protocol-v2.md`
+      above (or an equivalent re-check at execution time). **Re-verified
+      2026-07-23: import succeeds; `run_tour()` confirmed called
+      directly by `test_tour_closure_gate.py` and
+      `test_gui_button_acceptance.py`.**
+- [x] Grep gate: no reference to `source/commands/`, `protocol-v2.md`
       (outside `docs/protocol-v2.md` itself and archives), `Ruckig`
       (outside historical DESIGN.md/architecture-update/code_review/
       design-guide notes), or the deleted
       `cycle-order-reorder-experiment-ab-before-hardware.md` filename.
-- [ ] Full `uv run python -m pytest` suite green; no behavior diffs
+      **Full accounting in the closing report below — one out-of-scope
+      finding flagged (CMakeLists.txt's own stale Ruckig-restored
+      comment), not fixed here per the issue's own "ALL legitimate"
+      scope check; left for a follow-up.**
+- [x] Full `uv run python -m pytest` suite green; no behavior diffs
       (comment/docs/label changes only, except the one GUI label
-      string).
-- [ ] Bench verification is DEFERRED to the phase-B bench session — not
+      string). **1387 passed, 2 skipped, 9 xfailed, 2 xpassed
+      (non-strict, both pre-existing/unrelated to this ticket's files),
+      exit 0. `python build.py` also green (ARM hex + HOST_BUILD sim
+      dylib both compiled clean).**
+- [x] Bench verification is DEFERRED to the phase-B bench session — not
       required to close this ticket.
 
 ## Testing
