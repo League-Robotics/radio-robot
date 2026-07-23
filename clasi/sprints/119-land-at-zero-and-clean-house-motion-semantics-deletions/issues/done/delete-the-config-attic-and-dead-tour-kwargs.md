@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 filed: 2026-07-22
 filed_by: "team-lead (turn-execution review \xA76-3/\xA76-4/\xA76-7, consumer audit\
   \ verified 2026-07-22)"

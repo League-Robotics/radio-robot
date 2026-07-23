@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: Relocate narrative comments to DESIGN.md/git; refresh stale doc references
-status: open
+status: in-progress
 use-cases: []
 depends-on:
 - '001'
