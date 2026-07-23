@@ -237,23 +237,56 @@ safety-net diagnosis, DRAFT — verify/refine against shipped code at
 execution time).** Three independent, phase-B bench-observability fixes.
 See "Telemetry's ack ring" (§4) for the ack-slot→ack-ring change and the
 `kFlagFaultI2CSafetyNet` paragraph (§4) for the bit-6 diagnosis. The
-third change: `Devices::Otos` gains a new synthetic-sample method (see
-[`devices/DESIGN.md`](../devices/DESIGN.md), edited directly by ticket 2,
-not overlaid here) that reports a pose+twist `RobotLoop` feeds it from
-that SAME cycle's `Odometry` output, instead of a real I2C burst read —
-selected by a compile-time build option (`FAKE_OTOS`), never a runtime
-toggle. This is the first FIRMWARE PRODUCTION CONSUMER of the "OTOS is
-present and reads a meaningful pose on a stand" property the previous
-paragraph's quarantine note anticipated — NOT yet a consumer of
+third change (ticket 2, LANDED): `Devices::Otos` gains a new
+synthetic-sample method, `feedSyntheticSample(x, y, heading, v_x, v_y,
+omega, nowUs)` (see [`devices/DESIGN.md`](../devices/DESIGN.md), edited
+directly by ticket 2, not overlaid here, for the leaf's own full
+contract) that publishes a pose+twist `RobotLoop` feeds it from that SAME
+cycle's `Odometry` output, instead of a real I2C burst read — selected by
+a compile-time build option (`FAKE_OTOS`, a new root `CMakeLists.txt`
+option; select via `cmake .. -DFAKE_OTOS=ON` or `build.py --fake-otos`),
+never a runtime toggle. This is the first FIRMWARE PRODUCTION CONSUMER of
+the "OTOS is present and reads a meaningful pose on a stand" property the
+previous paragraph's quarantine note anticipated — NOT yet a consumer of
 `StateEstimator::bodyAt()` itself (that stays quarantined; the fake feeds
 `Devices::Otos`/`frame.otos` directly, one layer below the estimator, and
-`StateEstimator`'s own OTOS-fusion weights stay 0.0, unchanged). The one
-new call site lives in `RobotLoop::cycle()` (§2), not in `Devices::Otos`'s
-own construction (`main.cpp`) — see this sprint's own Architecture Design
-Rationale (Decision 3) for why the branch sits at the per-cycle call
-site rather than at composition time; `main.cpp`'s `Devices::Otos
-otos(bus, otosConfig)` construction line is unchanged between the real
-and bench builds.
+`StateEstimator`'s own OTOS-fusion weights stay 0.0, unchanged — confirmed
+still 0.0/0.0 in `config/boot_config.cpp`'s `defaultEstimatorConfig()`,
+untouched by this ticket). The one new call site lives in
+`RobotLoop::cycle()` (§2), not in `Devices::Otos`'s own construction
+(`main.cpp`) — see this sprint's own Architecture Design Rationale
+(Decision 3) for why the branch sits at the per-cycle call site rather
+than at composition time; `main.cpp`'s `Devices::Otos otos(bus,
+otosConfig)` construction line is unchanged (byte-identical text) between
+the real and bench builds. `odom_.integrate()`/`frame_.pose` staging was
+hoisted to run immediately BEFORE this call site (previously ran after)
+so the `FAKE_OTOS` branch feeds THIS cycle's genuinely fresh pose, not the
+previous cycle's — see §2's own "Otos call site" paragraph for the full
+before/after and why this reorder is side-effect-free for the real build.
+
+**Hardware verification (2026-07-23, robot "tovez",
+`/dev/cu.usbmodem2121102`).** Flashed via `mbdeploy deploy <uid> --hex
+MICROBIT.hex` (built with `uv run python3 build.py --fw-only --fake-otos
+--clean`). Confirmed `frame.otos` tracks commanded motion exactly:
+forward drive (300mm/s, 2s) took `pose`/`otos` from `(0,0,0)` to
+`(555,-119,-22.9deg)` on BOTH fields identically; a 90° turn continued to
+`(548,-123,+67.2deg)` on both, again identically. A bench tour
+(`src/tests/bench/fake_otos_tour_bench.py`, TOUR_1, 13 legs, driven with
+bounded enqueue-ack retry over the known lossy link —
+`bench-move-commands-intermittently-never-reach-firmware.md` —
+independently confirmed still ~8-12% one-way loss even with ticket 1's
+ack ring proven solid) closed twice in a row (13/13 legs completed each
+run); `frame.otos` matched `frame.pose` on every one of 435-436 polled
+frames per run, 0.00mm/0.00deg deviation, `otos_present` true on 100% of
+frames. The real (table) build's own physical symptom is confirmed
+UNCHANGED (not just via code diff): the identical forward-drive command
+against the real build gave `pose=(569,-58,-12.3deg)` (encoders counting)
+against a near-static `otos=(47,-3,0.0deg)` — the exact "useless on a
+stand" behavior the source issue describes, proving the real
+`Devices::Otos::tick()`/`begin()` path is genuinely untouched, not merely
+textually unchanged. Full per-leg numbers and the retry mechanism's own
+design (including a real single-consumer-queue bug the bench script's
+first draft hit and fixed) are recorded in ticket 002's own file.
 
 ## 2. Orientation
 
@@ -270,8 +303,10 @@ always claimed for the request/collect halves): request/settle(borrow:
 (119 ticket 005: no borrowed work left here — see below), request/
 settle(borrow: `processMessage`)/collect/PID for the right motor, then a
 trailing pace block that FIRST stages and emits telemetry (119 ticket 005 —
-see below), then samples OTOS, integrates odometry (`Odometry::integrate`),
-refreshes `App::StateEstimator`'s predict-to-now estimates from that same
+see below), then integrates odometry (`Odometry::integrate`) and samples
+OTOS (real build) or feeds Otos a synthetic sample from that SAME
+odometry (`FAKE_OTOS` build — 120 ticket 002, see below), refreshes
+`App::StateEstimator`'s predict-to-now estimates from that same
 cycle's staged `Frame` (117), evaluates the `MoveQueue`'s unconditional
 per-cycle stop decision (`moveQueue_.tick(now, odom_)` — 118: relocated
 here, AFTER odometry/estimator refresh, so the decision reads THIS
@@ -315,13 +350,36 @@ explicitly cleared the same cycle (it was not even touched), matching the
 wire spec's "line/color word fresh" (fresh THIS frame, not merely "known at
 some point") semantics.
 
+**Otos call site / `FAKE_OTOS` build seam (120 ticket 002).** Runs once
+per cycle from the trailing `kPace` block, immediately after
+`odom_.integrate()`/`frame_.pose` staging (120 ticket 002 hoisted this
+pair to run BEFORE the Otos call site — previously it ran after; a
+side-effect-free reorder for the real build, since `Odometry::
+integrate()` reads neither `otos_` nor any `frame_.otos*` field and vice
+versa). Exactly ONE macro-gated branch (`#ifdef FAKE_OTOS`) lives here:
+the real build calls `applyOtosSample(otos_, nowUs, frame_)` — unchanged,
+issues a real I2C burst read via `otos_.tick(nowUs)` — while a `FAKE_OTOS`
+build instead calls `otos_.feedSyntheticSample(odom_.x(), odom_.y(),
+odom_.theta(), frame_.twist.v_x, frame_.twist.v_y, frame_.twist.omega,
+nowUs)`, publishing THIS cycle's already-integrated `Odometry` pose and
+the `BodyKinematics`-fused body twist directly as `Otos`'s current
+reading — no bus traffic at all. Either way, `frame_.otosConnected`/
+`frame_.otosPresent`/`frame_.otos` are staged from `otos_.connected()`/
+`otos_.present()`/`otos_.poseFresh()`/`otos_.pose()` immediately
+afterward, unconditionally, exactly the same shape `applyOtosSample()`
+itself already used. See [`devices/DESIGN.md`](../devices/DESIGN.md) for
+`Devices::Otos::feedSyntheticSample()`'s own full contract and the
+`FAKE_OTOS` CMake build seam; `main.cpp`'s `Devices::Otos` construction is
+textually identical between the two builds (sprint 120's own Architecture
+Design Rationale Decision 3 — the branch lives at this per-cycle call
+site, not at composition time).
+
 **Predict-to-now estimation (`RobotLoop`'s `StateEstimator::update()`
 call, 117).** Runs once per cycle from the trailing `kPace` block,
-immediately after `frame_.pose` is staged (i.e. after
-`applyOtosSample()` and `odom_.integrate()` — the same position this
-sprint's source issue specified as "after applyOtosSample()/
-odom_.integrate(), before pilot_.plan()"; `Pilot` no longer exists, so
-this is simply the end of that block). `update(frame, now)` reads
+immediately after `frame_.pose` is staged and the Otos call site above has
+run (120 ticket 002 reordered which of the two stages first — see that
+paragraph above — `update()`'s own position in the schedule, relative to
+BOTH being done, is unchanged). `update(frame, now)` reads
 `frame.encLeft`/`frame.encRight` (position, velocity, their own collect
 `time`) to refresh each wheel's peer `WheelEstimate` basis, and
 `frame.pose`/`frame.twist` (already fused by `Odometry`/

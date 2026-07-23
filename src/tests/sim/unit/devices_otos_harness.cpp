@@ -615,6 +615,58 @@ void scenarioSecondaryPrimitivesRoundTrip() {
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
 }
 
+// 9. feedSyntheticSample() -- FAKE_OTOS build seam (120-002). Publishes a
+//    pose+twist DIRECTLY as this leaf's current reading, with ZERO bus
+//    traffic, and marks present()/connected() true even though begin() was
+//    NEVER called -- the "zero real-chip dependency" contract this method's
+//    own doc comment (otos.h) describes. A second call with different
+//    values proves every call republishes fresh (poseFresh() stays true,
+//    values update), not a one-shot latch.
+void scenarioFeedSyntheticSamplePublishesDirectlyNoBusTraffic() {
+  beginScenario("feedSyntheticSample(): publishes pose+twist directly, zero bus traffic, no begin() needed");
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);   // no scripts queued -- any real traffic surfaces as an error
+
+  Devices::Otos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+
+  // Never begin()'d -- present()/connected() start false, matching every
+  // other never-begun scenario above.
+  checkFalse(odom.present(), "before any feed: present() false (begin() never called)");
+  checkFalse(odom.connected(), "before any feed: connected() false");
+  checkFalse(odom.poseFresh(), "before any feed: poseFresh() false");
+
+  odom.feedSyntheticSample(100.0f, -50.0f, 0.25f, 30.0f, 0.0f, 0.1f, 1000000);
+
+  checkTrue(odom.present(), "after feed: present() true -- zero real-chip dependency");
+  checkTrue(odom.connected(), "after feed: connected() true");
+  checkTrue(odom.poseFresh(), "after feed: poseFresh() true -- fresh immediately, no staging/drain");
+  checkUintEq(bus.txnCount(kAddr7), 0, "feedSyntheticSample() issues ZERO bus traffic");
+  checkUintEq(bus.errCount(kAddr7), 0, "zero bus traffic means zero script-mismatch errors");
+
+  Devices::PoseReading first = odom.pose();
+  checkNear(first.x, 100.0f, 1e-4f, "pose().x matches the fed value");
+  checkNear(first.y, -50.0f, 1e-4f, "pose().y matches the fed value");
+  checkNear(first.heading, 0.25f, 1e-4f, "pose().heading matches the fed value");
+  checkNear(first.v_x, 30.0f, 1e-4f, "pose().v_x matches the fed value");
+  checkNear(first.v_y, 0.0f, 1e-4f, "pose().v_y matches the fed value");
+  checkNear(first.omega, 0.1f, 1e-4f, "pose().omega matches the fed value");
+  checkUintEq(static_cast<uint32_t>(odom.lastReadUs()), 1000000u,
+              "lastReadUs() advances from the synthetic feed's own nowUs");
+
+  // A second feed with different values republishes fresh -- proves every
+  // call is a live sample, not a one-shot latch.
+  odom.feedSyntheticSample(200.0f, 75.0f, -0.5f, -10.0f, 5.0f, -0.2f, 1020000);
+  checkTrue(odom.poseFresh(), "after second feed: poseFresh() still true");
+  Devices::PoseReading second = odom.pose();
+  checkNear(second.x, 200.0f, 1e-4f, "second feed: pose().x updates to the new value");
+  checkNear(second.y, 75.0f, 1e-4f, "second feed: pose().y updates to the new value");
+  checkNear(second.heading, -0.5f, 1e-4f, "second feed: pose().heading updates to the new value");
+  checkNear(second.omega, -0.2f, 1e-4f, "second feed: pose().omega updates to the new value");
+  checkUintEq(static_cast<uint32_t>(odom.lastReadUs()), 1020000u,
+              "lastReadUs() advances again on the second feed");
+  checkUintEq(bus.txnCount(kAddr7), 0, "still ZERO bus traffic after a second feed");
+}
+
 }  // namespace
 
 int main() {
@@ -627,6 +679,7 @@ int main() {
   scenarioPresentTracksDetectionOnlyIndependentOfConnected();
   scenarioSetPoseStagedReanchorAppliesAtNextTick();
   scenarioSecondaryPrimitivesRoundTrip();
+  scenarioFeedSyntheticSamplePublishesDirectlyNoBusTraffic();
 
   if (g_failureCount == 0) {
     std::printf("OK: all Devices::Otos scenarios passed\n");

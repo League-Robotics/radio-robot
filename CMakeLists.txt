@@ -145,6 +145,26 @@ if("${device.definitions}" STRGREATER "")
     add_definitions("${device.definitions}")
 endif()
 
+# FAKE_OTOS (120-002, sprint 120 "bench tour bring-up with fake OTOS"):
+# opt-in, compile-time-only bench build variant. When ON, App::RobotLoop::
+# cycle() feeds Devices::Otos a synthetic pose+twist derived from THIS
+# cycle's own encoder-kinematics Odometry output instead of issuing a real
+# I2C burst read to the OTOS chip -- see src/firm/devices/otos.h's
+# feedSyntheticSample() doc comment and src/firm/app/DESIGN.md's "120" note.
+# OFF (default) is the real, table build -- byte-for-byte unchanged from
+# before this option existed (Devices::Otos::tick()/begin() are never
+# touched by this flag; main.cpp's Devices::Otos construction line is
+# identical either way). Select via `cmake .. -DFAKE_OTOS=ON`, or
+# build.py's own --fake-otos flag (which always passes an explicit
+# ON/OFF so a stale CMakeCache.txt from a prior invocation can never leave
+# this flag silently stuck) -- never a runtime/wire toggle (sprint 120's
+# own Scope, Out of Scope).
+option(FAKE_OTOS "Bench variant: synthesize frame.otos from encoder kinematics instead of reading the real OTOS chip" OFF)
+if(FAKE_OTOS)
+    add_definitions(-DFAKE_OTOS)
+    message("${BoldMagenta}FAKE_OTOS bench variant ENABLED -- frame.otos will be synthesized from encoder kinematics, not read from the real chip.${ColourReset}")
+endif()
+
 ####################
 # optional JSON flags for compilation + assembly
 ###################

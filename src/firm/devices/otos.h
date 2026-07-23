@@ -41,6 +41,17 @@
 // tick(), so "drained at a safe slot" falls directly out of tick()'s own
 // call order.
 //
+// FAKE_OTOS build seam (120-002, on-chip-fake-otos-test-device.md):
+// feedSyntheticSample() below publishes a synthetic pose+twist as this
+// leaf's current reading DIRECTLY — unlike setPose() above, no staging/
+// drain; the sample is fresh immediately. App::RobotLoop::cycle() is the
+// ONLY caller (a single macro-gated branch, app/robot_loop.cpp), fed from
+// that same cycle's own Odometry pose + BodyKinematics twist — never
+// called from this leaf's own tick()/begin(), which stay byte-for-byte
+// unchanged for the real (non-FAKE_OTOS) build. See
+// feedSyntheticSample()'s own declaration comment below for the full
+// contract.
+//
 // Scope changes from a full odometer abstraction (isolation-invariant
 // driven, mirrors nezha_motor.h's own precedent):
 //   - No msg::Pose2D-typed parameters (setPose()/setOffset()/getOffset()) —
@@ -140,6 +151,13 @@ class Otos {
   // DELETED (115-002, gut-to-minimal-firmware S1 motion-stack excision);
   // no live App:: consumer remains, but the accessor stays (exercised by
   // app_robot_loop_harness.cpp and useful for future bench diagnostics).
+  // 120-002: feedSyntheticSample() below ALSO advances this timestamp (a
+  // FAKE_OTOS build never calls tick(), so this is the only source of
+  // freshness-age information in that build) -- "most recent REAL bus
+  // read" widens, for that build only, to "most recent published sample,
+  // real or synthetic"; readDue()'s own rate-limit meaning is unaffected
+  // since a FAKE_OTOS build never consults it (tick() is never called
+  // there either).
   uint64_t lastReadUs() const { return lastReadUs_; }
 
   // True if a real bus read is due: either no real read has ever happened
@@ -184,6 +202,36 @@ class Otos {
   // present() — the drain in tick() is itself a no-op on an uninitialized
   // chip, exactly like every other primitive below.
   void setPose(float x, float y, float heading);  // [mm] [mm] [rad]
+
+  // feedSyntheticSample() -- FAKE_OTOS build seam (120-002,
+  // on-chip-fake-otos-test-device.md). Publishes (x, y, heading, v_x, v_y,
+  // omega) as this leaf's current reading DIRECTLY: no bus traffic
+  // whatsoever (never attempts a real burst read, per the source issue's
+  // own "instead of reading the I2C chip" framing), no staging/drain --
+  // unlike setPose() immediately above, the sample is fresh the instant
+  // this call returns. Marks the leaf itself present()/connected() from
+  // this call on, REGARDLESS of whether begin()'s own real product-ID
+  // probe ever ran or succeeded -- a FAKE_OTOS build has zero real-chip
+  // dependency once its own RobotLoop::cycle() starts calling this every
+  // cycle (sprint 120 Design Rationale; Preamble's boot-time begin() probe
+  // still runs unchanged in a FAKE_OTOS build -- harmless real I2C traffic
+  // this call site does not depend on either way). Does not touch
+  // tick()/begin() or any of their private state beyond the SAME
+  // initialized_/connected_/cachedPose_/poseFresh_ fields a real read
+  // already writes -- present()/pose()/poseFresh()/connected() read this
+  // call's result exactly as they would a real tick()'s.
+  //
+  // The ONLY caller is App::RobotLoop::cycle()'s FAKE_OTOS-gated branch
+  // (app/robot_loop.cpp), fed from that SAME cycle's already-integrated
+  // App::Odometry pose (x, y, theta) and the BodyKinematics-fused body
+  // twist (v_x, v_y, omega) -- never called from a real (non-FAKE_OTOS)
+  // build, and never called by this leaf itself. Devices::Otos gains no
+  // dependency on App::Odometry or any other app/ type by adding this
+  // method -- it is a plain 7-float/uint64_t primitive, same as every
+  // other setter on this leaf (devices isolation invariant, devices/
+  // DESIGN.md).
+  void feedSyntheticSample(float x, float y, float heading, float v_x, float v_y, float omega,
+                            uint64_t nowUs);  // [mm] [mm] [rad] [mm/s] [mm/s] [rad/s] [us]
 
   // --- Remaining primitive setters/getters — each a no-op (zero return
   // where applicable) if begin() never detected the chip, mirroring every

@@ -83,6 +83,39 @@ void Otos::setPose(float x, float y, float heading)
 }
 
 // ---------------------------------------------------------------------------
+// feedSyntheticSample() -- FAKE_OTOS build seam (120-002). Publishes the
+// given pose+twist as this leaf's current reading DIRECTLY -- no bus
+// traffic, no staging/drain (unlike setPose() above). See otos.h's
+// declaration comment for the full contract.
+// ---------------------------------------------------------------------------
+
+void Otos::feedSyntheticSample(float x, float y, float heading, float v_x, float v_y,
+                                float omega, uint64_t nowUs)
+{
+    // Marks this leaf present()/connected() from this call on, independent
+    // of whether begin()'s own real product-ID probe ever ran -- see this
+    // method's own declaration comment (otos.h) for why that is the
+    // intended, "zero real-chip dependency" posture for a FAKE_OTOS build.
+    initialized_ = true;
+    connected_ = true;
+
+    cachedPose_.x = x;
+    cachedPose_.y = y;
+    cachedPose_.heading = heading;
+    cachedPose_.v_x = v_x;
+    cachedPose_.v_y = v_y;
+    cachedPose_.omega = omega;
+    poseFresh_ = true;
+
+    // lastReadUs_/hasRead_ -- the SAME bookkeeping a real tick() read
+    // updates (see lastReadUs()'s own widened doc comment, otos.h): a
+    // FAKE_OTOS build never calls tick(), so this is the only source of
+    // freshness-age information in that build.
+    lastReadUs_ = nowUs;
+    hasRead_ = true;
+}
+
+// ---------------------------------------------------------------------------
 // tick() -- drain a staged setPose(), else rate-limited burst-read +
 // transform + cache. See otos.h's declaration comment for the full contract.
 // ---------------------------------------------------------------------------
