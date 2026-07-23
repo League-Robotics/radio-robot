@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Specify and assert the chain-advance leg hand-off contract
-status: open
+status: in-progress
 use-cases:
 - SUC-068
 depends-on: []
