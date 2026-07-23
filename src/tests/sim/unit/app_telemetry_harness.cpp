@@ -515,12 +515,15 @@ void scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase() {
 
 // ===========================================================================
 // 6. Measured cadence report -- this ticket's own acceptance criterion:
-//    report the REAL realized cadence (not assumed) against the new 50
-//    Hz/20 ms target (115-005: primary period == cycle period).
+//    report the REAL realized cadence (not assumed) against the ~25 Hz/40 ms
+//    target (118: kPrimaryPeriod follows robot_loop.cpp's kCycle back to
+//    40ms/~25Hz, restored from the fictional 20ms/50Hz a zeroed
+//    kSettle/kClear had been faking -- see
+//    clasi/issues/restore-the-interleaved-request-settle-tick-loop-schedule.md).
 // ===========================================================================
 
 void scenarioMeasuredCadenceReport() {
-  beginScenario("measured emission cadence (both frame types) vs. the 50 Hz/20 ms target");
+  beginScenario("measured emission cadence (both frame types) vs. the ~25 Hz/40 ms target");
 
   FakeTransport serialFake;
   FakeTransport radioFake;
@@ -528,7 +531,7 @@ void scenarioMeasuredCadenceReport() {
   App::Comms comms(serialFake, radioFake, banner);
   App::Telemetry telemetry(comms, serialFake, radioFake);
 
-  const uint32_t kStep = 3;  // [ms] fine-grained relative to kPrimaryPeriod=20/kSecondaryPeriod=200
+  const uint32_t kStep = 3;  // [ms] fine-grained relative to kPrimaryPeriod=40/kSecondaryPeriod=200
   const uint32_t kEndTime = 10000;
   for (uint32_t now = 0; now <= kEndTime; now += kStep) {
     telemetry.emit(now);
@@ -536,13 +539,14 @@ void scenarioMeasuredCadenceReport() {
 
   double primaryHz = static_cast<double>(telemetry.primaryEmitCount()) / (static_cast<double>(kEndTime) / 1000.0);
   double secondaryHz = static_cast<double>(telemetry.secondaryEmitCount()) / (static_cast<double>(kEndTime) / 1000.0);
-  std::printf("  measured: primary %.2f Hz (target 50 Hz/20 ms), secondary %.2f Hz (target ~5 Hz/200 ms) over %u ms\n",
+  std::printf("  measured: primary %.2f Hz (target ~25 Hz/40 ms), secondary %.2f Hz (target ~5 Hz/200 ms) over %u ms\n",
               primaryHz, secondaryHz, static_cast<unsigned>(kEndTime));
 
-  // Not required to HIT 50 Hz exactly (ticket's own acceptance criterion)
+  // Not required to HIT 25 Hz exactly (ticket's own acceptance criterion)
   // -- only sane and in the right neighborhood for a deterministic
-  // scripted-clock host test.
-  checkTrue(primaryHz > 30.0 && primaryHz < 70.0, "measured primary Hz is in a sane neighborhood of the 50 Hz target");
+  // scripted-clock host test. Same proportional margin the pre-118 50 Hz
+  // target used (+/-40%), rescaled to the new 25 Hz target.
+  checkTrue(primaryHz > 15.0 && primaryHz < 35.0, "measured primary Hz is in a sane neighborhood of the 25 Hz target");
   checkTrue(secondaryHz > 2.0 && secondaryHz < 8.0, "measured secondary Hz is in a sane neighborhood of the ~5 Hz target");
 }
 
@@ -625,15 +629,17 @@ void scenarioMalformedFrameSetsCommsMalformedFlagBit() {
 //    ACTUAL bug (`clasi/issues/secondary-telemetry-starved-by-106-001-
 //    cadence-retarget.md`): a real loop period ABOVE kPrimaryPeriod makes
 //    primaryDue() true on EVERY call, and the pre-106-002 "primary always
-//    wins a same-call tie" rule left secondary starved forever. With
-//    115-005's own kPrimaryPeriod now 20ms (was 40ms), a 52ms call period
-//    is an even LARGER multiple above it than when this scenario was
-//    written -- the same regression shape, reproduced at a wider margin.
+//    wins a same-call tie" rule left secondary starved forever. 118 restores
+//    kPrimaryPeriod to its genuine 40ms (was fictionally 20ms under the
+//    5f5a2ba7 regression -- see
+//    clasi/issues/restore-the-interleaved-request-settle-tick-loop-schedule.md)
+//    -- a 52ms call period is still above it, just by a narrower margin than
+//    the regressed 20ms case gave; the same regression shape still applies.
 // ===========================================================================
 
 void scenarioSecondaryNotStarvedWhenCallPeriodExceedsPrimaryPeriod() {
   beginScenario("emit(): secondary is not starved to 0 Hz when called at a fixed period > kPrimaryPeriod "
-                "(52ms call period, well above the 20ms primary target)");
+                "(52ms call period, above the 40ms primary target)");
 
   FakeTransport serialFake;
   FakeTransport radioFake;
@@ -641,8 +647,8 @@ void scenarioSecondaryNotStarvedWhenCallPeriodExceedsPrimaryPeriod() {
   App::Comms comms(serialFake, radioFake, banner);
   App::Telemetry telemetry(comms, serialFake, radioFake);
 
-  // emit() called once per "cycle" at a fixed 52ms period (well ABOVE
-  // kPrimaryPeriod=20ms), so primaryDue() is true on EVERY call -- exactly
+  // emit() called once per "cycle" at a fixed 52ms period (ABOVE
+  // kPrimaryPeriod=40ms), so primaryDue() is true on EVERY call -- exactly
   // the condition that starved secondary to 0 Hz pre-106-002.
   const uint32_t kCallPeriod = 52;  // [ms]
   const int kCalls = 100;           // ~5.2s of simulated loop time

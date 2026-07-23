@@ -616,12 +616,12 @@ void scenarioPidOffRoutesRawDutyThroughArmorUnchanged() {
   uint64_t nowUs = 0;
   const float stationaryPosition = 0.0f;   // stationary plant — isolates the write-path behavior
 
-  // Several well-spaced (>40ms apart) cycles so slew/throttle both allow
+  // Several well-spaced (>35ms apart) cycles so slew/throttle both allow
   // the raw duty to fully land.
   for (int i = 0; i < 5; ++i) {
     scriptEncoderRequestCollect(bus, wireAddr, stationaryPosition);
     motor.requestSample();
-    nowUs += 50000;   // 50ms — clears the 40ms write-rate throttle every cycle
+    nowUs += 50000;   // 50ms — clears the 35ms write-rate throttle every cycle (118 ticket 003)
     motor.tick(nowUs);
   }
 
@@ -853,7 +853,7 @@ void scenarioNakedStopWriteIsRetriedNextTickNotLatched() {
   // requestEncoder()'s own 0x46 write and collectEncoder()'s read both
   // succeed -- only the duty write NAKs.
   motor.setDuty(0.0f);
-  nowUs += 50000;   // clears the 40ms write-rate throttle (stop is exempt anyway)
+  nowUs += 50000;   // clears the 35ms write-rate throttle (stop is exempt anyway; 118 ticket 003)
   bus.queueWrite(wireAddr, /*status=*/0);    // requestEncoder()'s 0x46 write
   uint8_t data[4] = {0, 0, 0, 0};              // unchanged raw count -- stale sample, irrelevant here
   bus.queueRead(wireAddr, data, 4, /*status=*/0);   // collectEncoder()

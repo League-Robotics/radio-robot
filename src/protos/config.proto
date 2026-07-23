@@ -202,37 +202,42 @@ message OtosConfigPatch {
 // stateEstimator_.weights() before calling setWeights() (present-field
 // merge, matching applyMotorConfigPatch()/applyOtosPatch()'s own shape).
 //
-// stop_lead_ms (turn-prediction campaign) -- App::MoveQueue's own live-
-// tunable anticipation lead (App::MoveQueue::setStopLead(), move_queue.h's
-// own tick() doc comment for what it does). Lives on THIS patch (not its
-// own patch arm) as the smallest coherent path: it targets the same
-// CONFIG_ESTIMATOR wire arm/RobotLoop::handleConfig() branch as its three
-// siblings above, even though the field it mutates (MoveQueue::stopLead_)
-// is a DIFFERENT App:: object than the other three (StateEstimator::
-// weights_) -- handleConfig()'s own ESTIMATOR branch applies this field to
-// moveQueue_ directly, alongside (not merged into) the FusionWeights merge
-// the other three fields drive. Same "never persisted" contract as its
-// siblings (Design Rationale Decision 4, sprint 117's overlay design.md) --
-// a reboot always reverts to the baked Config::EstimatorBootConfig::
-// stopLead default.
+// Field 4 (formerly App::MoveQueue's own live-tunable time-lead
+// anticipation constant, the turn-prediction campaign's own field) --
+// DELETED (118 ticket 004, land-at-zero-completion-delete-stop-lead.md). A
+// hand-tuned scalar with a four-retune history and no stable value (see
+// that issue's own Description). Per the turn-execution review's own R6
+// rule ("if adding a stage forces retuning an existing constant, the
+// default action is to delete the constant, not retune it"), the
+// anticipation mechanism and the constant that drove it are both deleted
+// outright in favor of a land-at-zero completion predicate
+// (MoveQueue::tick()'s own doc comment) computed entirely from state
+// already local to MoveQueue -- there is no lead value left to configure.
+// Field 4 is `reserved`, not reused (this project's standing "reserved,
+// not reused" wire-stability discipline, already applied to
+// ConfigDelta/CommandEnvelope/ReplyEnvelope's own retired arms in
+// envelope.proto) -- see EstimatorConfigPatch's own `reserved 4;` below. A
+// legacy client still sending field 4 decodes fine (WireRuntime's
+// unknown-field skip, wire_runtime.h) and is silently ignored server-side;
+// this is an append-only-safe removal, not a wire-format break.
 //
 // a_max/a_decel/alpha_max/alpha_decel (decel-into-the-goal campaign) --
 // App::MoveQueue's own live-tunable Motion::VelocityShaper ceilings
 // (App::MoveQueue::setShaperLimits(), App::ShaperLimits, move_queue.h).
-// Ride the SAME wire arm as stop_lead_ms immediately above, for the
-// identical "smallest coherent path" reason stop_lead_ms's own paragraph
-// gives -- CONFIG_ESTIMATOR is already the live-tune arm for
-// MoveQueue-owned, non-FusionWeights state, and inventing a fifth
-// ConfigTarget/Patch-message pair for one more MoveQueue-owned quartet
-// would duplicate that plumbing (a fresh ConfigTarget enum value, a fresh
-// message, a fresh RobotLoop::handleConfig() branch, a fresh host
-// NezhaProtocol method) for no behavioral gain over widening the arm this
-// class already rides. handleConfig()'s own ESTIMATOR branch applies these
-// four directly to moveQueue_'s ShaperLimits, alongside (not merged into)
-// the FusionWeights merge/stop_lead_ms apply above -- independent of
-// whether any other field in the same patch is present. Same
-// "never persisted" contract as every sibling on this message -- a reboot
-// always reverts to the baked Config::ShaperBootConfig default.
+// Ride the SAME wire arm the deleted field 4 above used to, for the
+// identical "smallest coherent path" reasoning -- CONFIG_ESTIMATOR is
+// already the live-tune arm for MoveQueue-owned, non-FusionWeights state,
+// and inventing a fifth ConfigTarget/Patch-message pair for one more
+// MoveQueue-owned quartet would duplicate that plumbing (a fresh
+// ConfigTarget enum value, a fresh message, a fresh
+// RobotLoop::handleConfig() branch, a fresh host NezhaProtocol method) for
+// no behavioral gain over widening the arm this class already rides.
+// handleConfig()'s own ESTIMATOR branch applies these four directly to
+// moveQueue_'s ShaperLimits, alongside (not merged into) the FusionWeights
+// merge above -- independent of whether any other field in the same patch
+// is present. Same "never persisted" contract as every sibling on this
+// message -- a reboot always reverts to the baked Config::ShaperBootConfig
+// default.
 //
 // j_max/yaw_jerk_max (jerk-limited S-curve stage, 2026-07-22 stakeholder
 // correction on top of a_max/a_decel/alpha_max/alpha_decel immediately
@@ -240,10 +245,10 @@ message OtosConfigPatch {
 // own jerk magnitude ceilings, the SAME "smallest coherent path" as their
 // four siblings, riding this same arm/branch/never-persisted contract.
 message EstimatorConfigPatch {
+  reserved 4;  // formerly the anticipation-lead field -- deleted 118 ticket 004, see this message's own doc comment
   optional float weight_heading_otos = 1;  // [0..1] FusionWeights::headingOtos
   optional float weight_omega_otos   = 2;  // [0..1] FusionWeights::omegaOtos
   optional float staleness_ms        = 3;  // [ms] FusionWeights::staleness
-  optional float stop_lead_ms        = 4;  // [ms] App::MoveQueue::stopLead_
   optional float a_max               = 5;  // [mm/s^2] App::ShaperLimits::aMax
   optional float a_decel             = 6;  // [mm/s^2] App::ShaperLimits::aDecel
   optional float alpha_max           = 7;  // [rad/s^2] App::ShaperLimits::alphaMax

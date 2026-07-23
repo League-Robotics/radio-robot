@@ -502,26 +502,6 @@ def test_estimator_config_fields_can_combine_on_one_patch():
     assert sent.SerializeToString() == expected.SerializeToString()
 
 
-def test_estimator_config_stop_lead_ms_builds_correct_envelope():
-    """turn-prediction campaign: stop_lead_ms targets App::MoveQueue
-    directly (a different App:: object than the three FusionWeights fields
-    above) but rides the SAME EstimatorConfigPatch/wire arm -- see that
-    method's own docstring. May be set ALONE, no weight field required."""
-    conn = _FakeFastConn()
-    proto = NezhaProtocol(conn)
-
-    corr_id = proto.estimator_config(stop_lead_ms=200.0)
-
-    assert corr_id == 1
-    sent = conn.sent[0]
-    expected = envelope_pb2.CommandEnvelope(
-        corr_id=1,
-        config=envelope_pb2.ConfigDelta(
-            estimator=config_pb2.EstimatorConfigPatch(stop_lead_ms=200.0)))
-    assert sent.SerializeToString() == expected.SerializeToString()
-    assert sent.config.WhichOneof("patch") == "estimator"
-
-
 def test_estimator_config_with_no_fields_raises_value_error():
     proto = NezhaProtocol(_FakeFastConn())
 

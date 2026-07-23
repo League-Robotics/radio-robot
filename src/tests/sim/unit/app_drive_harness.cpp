@@ -105,11 +105,12 @@ void scriptEncoderRequestCollect(TestSim::ScriptedI2CHook& bus, uint16_t wireAdd
 }
 
 // writeRawDuty()'s own write-rate limiter (nezha_motor.cpp) throttles any
-// NON-stop write to at most one per 40000us since the leaf's last actual
-// bus write (lastWriteTimeUs_ starts at 0) -- every scenario's single
-// post-prime verification cycle below therefore runs at nowUs >= 50000 (a
-// safe margin past that threshold) so the write under test is not silently
-// dropped by the throttle. A stop write (pct == 0) is explicitly exempt
+// NON-stop write to at most one per 35000us (118 ticket 003's jitter
+// margin, kMinWriteIntervalUs) since the leaf's last actual bus write
+// (lastWriteTimeUs_ starts at 0) -- every scenario's single post-prime
+// verification cycle below therefore runs at nowUs >= 50000 (a safe margin
+// past that threshold) so the write under test is not silently dropped by
+// the throttle. A stop write (pct == 0) is explicitly exempt
 // (writeRawDuty()'s own `stopping` branch), so scenario 3's post-stop cycle
 // does not need the same margin.
 constexpr uint64_t kPastWriteThrottleUs = 50000;

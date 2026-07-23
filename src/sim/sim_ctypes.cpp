@@ -221,6 +221,15 @@ int sim_cycle_count(SimHandle h) { return asHarness(h)->cycleCount(); }
 // near the includes). Stateless -- needs no SimHandle.
 const char* sim_firmware_version() { return FIRMWARE_VERSION_STR; }
 
+// sim_cycle_dt_us -- 118 ticket 003 (sim-cycle-must-match-firmware-period.md):
+// exposes TestSim::SimHarness::kCycleDtUs (itself derived from firmware's own
+// App::RobotLoop::kCycle, robot_loop.h) to Python so a ctypes caller can
+// derive its OWN cadence constants from this one compiled-in value instead of
+// an independently-hardcoded matching literal that can drift apart silently.
+// Stateless -- needs no SimHandle (kCycleDtUs is a compile-time constant, not
+// per-instance state).
+int sim_cycle_dt_us() { return static_cast<int>(TestSim::SimHarness::kCycleDtUs); }
+
 // Commanded per-wheel velocity (the velocity-PID SETPOINT) read DIRECTLY from
 // the firmware's live NezhaMotor -- Path B (2026-07-17). cmd_vel is NOT on the
 // wire (adding it to the primary Telemetry frame overflows the 186-byte

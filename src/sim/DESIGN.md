@@ -167,20 +167,26 @@ received the line.
 **File: `src/host/robot_radio/io/sim_loop.py`**
 
 Every tick-thread iteration calls `self._lib.sim_step(self._handle,
-cycles)`, paced to one 20 ms sim cycle (`kCycleDtUs = 50000` — wait, see
-note below) per wall-clock interval at 1× speed factor.
+cycles)`, paced to one 40 ms sim cycle (`kCycleDtUs = 40000`) per
+wall-clock interval at 1× speed factor.
 
-> Note: `SimHarness`'s own `kCycleDtUs` constant is 50000 (50 ms), one
-> full order of magnitude coarser than the firmware's own `kCycle` = 20
-> ms pacing constant (`src/firm/app/robot_loop.cpp`). The simulator
-> steps the plant and virtual clock forward in 50 ms increments and then
-> calls `RobotLoop::cycle()` once per step — this does not desynchronize
-> firmware *logic* (the loop has no dependency on wall-clock cadence,
-> only on `Devices::Clock::nowMicros()`, which `SimClock` reports
-> correctly for whatever step size was actually taken), but a reader
-> should not assume `sim_step(1)` corresponds to one 20 ms firmware
-> cycle — it corresponds to one `SimHarness::step()` call, currently 50
-> ms of advanced virtual time per call.
+> Note (118 ticket 003, resolved — see §8's own former Open Question):
+> `SimHarness::kCycleDtUs` is **derived from firmware's own
+> `App::RobotLoop::kCycle`** (`kCycleDtUs = App::RobotLoop::kCycle *
+> 1000`, `src/sim/sim_harness.h`, with a `static_assert` pinning the two
+> together so they cannot drift apart independently again), not an
+> independently-hardcoded literal. Both are 40 ms/~25 Hz. `sim_step(1)`
+> now corresponds to EXACTLY one 40 ms firmware cycle — "N `sim_step()`
+> calls == N firmware cycles" is literally true, not approximately true
+> modulo a translation factor. Before this ticket, `kCycleDtUs` sat at a
+> hand-picked 50 ms (2.5× the firmware's then-regressed `kCycle=20ms`),
+> chosen only to dodge `Devices::NezhaMotor`'s write-rate throttle at
+> that shorter cycle — never a deliberate simulation-fidelity choice; see
+> `clasi/issues/sim-cycle-must-match-firmware-period.md` for the full
+> history. The throttle itself now carries its own jitter margin
+> (`nezha_motor.cpp`'s `kMinWriteIntervalUs`) so an on-schedule write at
+> exactly the (now-equal) cycle/throttle period does not need a coarser
+> sim step to avoid it.
 
 **File: `src/sim/sim_harness.h`**
 
@@ -312,9 +318,11 @@ primary frame exactly as described in
 [`../firm/app/DESIGN.md`](../firm/app/DESIGN.md) §4 — `EncoderReading`
 per wheel (position + velocity + sample time), `OtosReading` (position +
 heading + v_x/v_y/omega + burst time), the single `flags` word, the
-single ack slot, packed line/color words — every 20 ms firmware cycle
-(not every `sim_step()` call — see §3's note on the two different step
-sizes). `Comms::sendReply()` armors and broadcasts on both
+single ack slot, packed line/color words — every 40 ms firmware cycle,
+which (118 ticket 003) is now also exactly every `sim_step()` call — see
+§3's note on how `kCycleDtUs` is derived from firmware's own `kCycle` so
+the two are no longer two different step sizes. `Comms::sendReply()`
+armors and broadcasts on both
 `FakeTransport`s; `FakeTransport::send()` appends to its `sent_` capture.
 
 **File: `src/sim/sim_harness.h` / `src/sim/sim_ctypes.cpp`**
@@ -423,15 +431,6 @@ either executed by the tick thread (fire-and-forget via
   (see [`../host/robot_radio/DESIGN.md`](../host/robot_radio/DESIGN.md)),
   not because it still works. Do not use the managed Test S/T path as a
   reference for "how TWIST works" — use `run_unmanaged()`.
-- **`SimHarness::kCycleDtUs` (50 ms) does not match the firmware's own
-  `kCycle` (20 ms).** This is not a correctness bug (the firmware logic
-  has no wall-clock dependency, only a `Devices::Clock` dependency the
-  sim correctly advances by whatever step size it takes), but it does
-  mean sim-measured timing (e.g. "how many `sim_step()` calls until a
-  deadman expiry") is not directly comparable to a real-hardware cycle
-  count without accounting for the 2.5× step-size difference. Whether to
-  shrink `kCycleDtUs` to 20 ms to match is an open call, not decided
-  here.
 - **`src/tests/sim/plant/wheel_plant.h`'s own header comment describes a
   stale "leaf-getter-driven" design** (reading
   `Devices::NezhaMotor::appliedDuty()` directly) that predates and no

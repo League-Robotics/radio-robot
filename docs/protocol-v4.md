@@ -302,6 +302,39 @@ active slot's stored baseline+kind+threshold+timeout and calls its
   `Drive::stop()` is called (§5.5) — both wheel velocity targets go to
   zero.
 
+**Land-at-zero completion (118 ticket 004,
+`land-at-zero-completion-delete-stop-lead.md`).** On a cycle the
+threshold/timeout backstop above does NOT already end the `Move`
+(`Continue`), a TWIST `Move` whose stop kind is `ANGLE` (omega axis) or
+`DISTANCE` (v_x axis), with that axis's `ShaperLimits` enabled, gets one
+more chance to end this SAME cycle: `MoveQueue::landAtZero()`
+(`move_queue.cpp`) declares the `Move` done once `remaining` has shrunk
+into the taper's own braking envelope for its most-recently-commanded
+speed on that axis — `remaining <= (commandedSpeed^2 / (2*decelCeiling))
+* marginFactor`, the same closed-form stopping-distance formula the
+taper's own decel ceiling already uses (§5.2's shaping paragraph below),
+self-consistent by construction. `marginFactor` takes one of two
+empirically-swept values depending on `pendingCount() > 0` (a
+chain-advance is queued — Drive::stop() never runs this cycle, only the
+ack-instant reading matters) vs. `pendingCount() == 0` (the queue drains
+to a genuine `Drive::stop()`, so the real post-stop coast reaches the
+plant before it settles) — see `move_queue.cpp`'s own anonymous-namespace
+comment for the full derivation and the two acceptance suites (sim
+tour-closure gate, ack-instant; `test_gui_button_acceptance.py`,
+settle-based) this split reconciles. This closes the case the raw
+threshold's own exact `remaining <= 0` crossing can otherwise stall short
+of indefinitely, since a sub-floor nonzero command gets boosted back UP
+to the output-deadband floor rather than allowed to taper to true zero
+(`nezha_motor.cpp`'s own `writeShapedDuty()`). WHEELS `Move`s and
+`Kind::Time` never qualify; with the matching `ShaperLimits` axis
+disabled (the default), this path never fires and the threshold/timeout
+backstop is the only completion path, byte-identical to this class's
+behavior before this feature existed. Supersedes a deleted
+anticipation-lead mechanism (`stop_lead_ms`, a hand-tuned time-lead
+constant with no stable value across four retunes) that used to occupy
+this section — see the ticket's own issue file for the removed
+mechanism's history.
+
 **Approach shaping (decel-into-the-goal campaign, `Motion::VelocityShaper`,
 `src/firm/motion/velocity_shaper.{h,cpp}`) — velocity- and accel-slew
 rate limiting, chained.** On a `Continue` outcome, `tick()` additionally
@@ -329,10 +362,10 @@ shaper only shapes the approach, never decides when a `Move` ends).
 Opt-in per axis (linear `v_x`/wheels vs. angular `omega`) via
 `ShaperLimits` (six fields: `a_max`/`a_decel`/`alpha_max`/`alpha_decel`/
 `j_max`/`yaw_jerk_max`), live-tunable through the `ConfigDelta`
-`estimator` arm alongside `stop_lead_ms` (§6) — zero-valued limits on an
-axis (any of that axis's three ceilings <= 0, the default for a
-composition root that never configures them) reproduce this class's exact
-pre-shaping behavior on that axis. **What it is not**: a full time-optimal
+`estimator` arm (§6) — zero-valued limits on an axis (any of that axis's
+three ceilings <= 0, the default for a composition root that never
+configures them) reproduce this class's exact pre-shaping behavior on
+that axis. **What it is not**: a full time-optimal
 trajectory planner (Ruckig-style seven-segment profile) planned ahead of
 time with a known arrival time — deliberately so (stakeholder directive:
 "I literally just wanted acceleration slew rate limiting and velocity

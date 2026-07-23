@@ -125,10 +125,9 @@
     "yaw_jerk_max": 100.0
   },
   "estimator": {
-    "_estimator_note": "117 (predict-to-now estimator v1): weight_heading_otos/weight_omega_otos committed 0.0 -- stakeholder's encoder-only-v1 decision, OTOS fusion is wired but not yet trusted with any nonzero weight. staleness_ms=60.0 is 3x Devices::Otos::kReadPeriod (20ms): generous headroom over the OTOS chip's own read cadence, small enough to exclude a genuinely stale reading before the next cycle's fresh one arrives. togov is touched only to stay schema-complete, matching this file's own control._sprint_114_note precedent. stop_lead_ms=45.0 (decel-into-the-goal campaign, 2026-07-22, jerk-limited S-curve stage) mirrors tovez.json's own re-swept value (once Motion::VelocityShaper's jerk-limited decel taper -- control.a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max below -- is live, the accel-only stage's own 60.0 undershoots at TOUR level and 45.0 is the new sim optimum; see tovez.json's own note for the full sweep, both the accel-only 90.0->60.0 revision and the jerk-limited 60.0->45.0 revision) -- UNVALIDATED for togov's own mecanum drivetrain specifically (no togov bench data this campaign), touched only to stay schema-complete; a stakeholder bench session on togov itself should re-derive this independently before trusting it.",
+    "_estimator_note": "117 (predict-to-now estimator v1): weight_heading_otos/weight_omega_otos committed 0.0 -- stakeholder's encoder-only-v1 decision, OTOS fusion is wired but not yet trusted with any nonzero weight. staleness_ms=60.0 is 3x Devices::Otos::kReadPeriod (20ms): generous headroom over the OTOS chip's own read cadence, small enough to exclude a genuinely stale reading before the next cycle's fresh one arrives. togov is touched only to stay schema-complete, matching this file's own control._sprint_114_note precedent. (118 ticket 004, land-at-zero-completion-delete-stop-lead.md: this section's own former fourth key -- a boot-time anticipation-lead constant -- is DELETED; the mechanism it fed no longer exists, see App::MoveQueue::tick()'s own doc comment for the land-at-zero completion predicate that replaces it.)",
     "weight_heading_otos": 0.0,
     "weight_omega_otos": 0.0,
-    "staleness_ms": 60.0,
-    "stop_lead_ms": 45.0
+    "staleness_ms": 60.0
   }
 }

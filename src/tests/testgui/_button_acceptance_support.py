@@ -37,37 +37,44 @@ percentage. The abs_margin term absorbs the fixed lag; rel_tol absorbs the
 residual proportional error. See ``test_gui_button_acceptance.py``'s own
 module-level tolerance constants for the concrete numbers per path.
 
-Turn-prediction campaign (2026-07-22, ``App::MoveQueue``'s stop-condition
-anticipation lead, ``move_queue.h``) / wire-testgui-live-push-of-
-estimator-stop-lead fix (same day, follow-up): ``MANAGED_ANGLE_ABS_MARGIN_DEG``/
-``MANAGED_DIST_ABS_MARGIN_MM`` below were ORIGINALLY left deliberately
-UNCHANGED by the turn-prediction campaign, even though
-``test_tour_closure_gate.py``'s own sweep (against the SAME managed
-Move-queue path, with the fix pushed live via ``EstimatorConfigPatch``)
-showed the fixed lag shrinking from ~13-23deg to ~4-7deg at
-``stop_lead_ms=90`` -- because the GUI's own connect-time push
-(``__main__.py``'s ``_push_robot_calibration()``) did not yet source
-``estimator.stop_lead_ms``/the shaper limits from the robot JSON at all:
-``robot_radio.config.robot_config.RobotConfig`` had no ``estimator`` field,
-and ``EstimatorConfigPatch`` has no ``SET key=value`` text form
+Turn-prediction campaign (2026-07-22, ``App::MoveQueue``'s former stop-
+condition time-lead anticipation constant, since DELETED -- see below) /
+wire-testgui-live-push-of-estimator-stop-lead fix (same day, follow-up):
+``MANAGED_ANGLE_ABS_MARGIN_DEG``/``MANAGED_DIST_ABS_MARGIN_MM`` below were
+ORIGINALLY left deliberately UNCHANGED by the turn-prediction campaign,
+even though ``test_tour_closure_gate.py``'s own sweep (against the SAME
+managed Move-queue path, with the lead pushed live via
+``EstimatorConfigPatch``) showed the fixed lag shrinking measurably --
+because the GUI's own connect-time push (``__main__.py``'s
+``_push_robot_calibration()``) did not yet source the estimator fields/
+shaper limits from the robot JSON at all: ``robot_radio.config.
+robot_config.RobotConfig`` had no ``estimator`` field, and
+``EstimatorConfigPatch`` has no ``SET key=value`` text form
 (``calibration_commands()`` never covered it), so a live TestGUI Sim
 session ran with anticipation/shaping OFF regardless of what the robot
-JSON said. THIS FIX closes that gap: ``RobotConfig.estimator`` (new
+JSON said. THAT FIX closed the gap: ``RobotConfig.estimator`` (new
 ``EstimatorConfig`` model) + ``__main__.py``'s ``_push_estimator_config()``
-push ``estimator.stop_lead_ms``/``control.a_max``/``a_decel``/
-``alpha_max``/``alpha_decel``/``j_max``/``yaw_jerk_max`` via
+push ``estimator.weight_heading_otos``/``weight_omega_otos``/
+``staleness_ms``/``control.a_max``/``a_decel``/``alpha_max``/
+``alpha_decel``/``j_max``/``yaw_jerk_max`` via
 ``NezhaProtocol.estimator_config()`` on every Connect/robot-select, both
 transports -- see ``clasi/issues/wire-testgui-live-push-of-estimator-stop-lead.md``
 (now resolved) for the full history.
+
+118 ticket 004 (land-at-zero-completion-delete-stop-lead.md): the time-
+lead anticipation constant itself is DELETED -- the completion mechanism
+it drove no longer exists (see ``App::MoveQueue::tick()``'s own doc
+comment for the land-at-zero predicate that replaces it), so the connect-
+time push above now carries nine fields, not ten.
 
 ``MANAGED_ANGLE_ABS_MARGIN_DEG``/``MANAGED_DIST_ABS_MARGIN_MM`` above are
 STILL left unchanged (they cover 180/270/360-degree and all distance
 presets, not re-measured/re-tuned by this fix) -- this fix instead adds a
 NEW, tight ``MANAGED_ANGLE_90_*`` band (test_gui_button_acceptance.py) for
-exactly the +/-90deg magnitude this campaign's own stop_lead_ms/shaper
-tuning targets, and a ``TOUR_TURN_ERROR_MAX_DEG`` per-leg bound for Tour 1/
-Tour 2, both measured through the REAL GUI Connect -> click flow (not a
-direct SimLoop push) -- see those constants' own module-level comments in
+exactly the +/-90deg magnitude this campaign's own shaper tuning targets,
+and a ``TOUR_TURN_ERROR_MAX_DEG`` per-leg bound for Tour 1/Tour 2, both
+measured through the REAL GUI Connect -> click flow (not a direct SimLoop
+push) -- see those constants' own module-level comments in
 test_gui_button_acceptance.py for the concrete numbers and the "stakeholder
 sign-off to widen" contract.
 """

@@ -196,12 +196,17 @@ def estimator_kwargs(config: Any) -> dict[str, float]:
     ``NezhaProtocol.estimator_config()``):
 
       - ``config.estimator.*`` -- ``App::StateEstimator``'s fusion weights
-        (``weight_heading_otos``/``weight_omega_otos``/``staleness_ms``)
-        and ``App::MoveQueue``'s stop-condition anticipation lead
-        (``stop_lead_ms``).
+        (``weight_heading_otos``/``weight_omega_otos``/``staleness_ms``).
       - ``config.control.*`` -- ``Motion::VelocityShaper``'s accel/jerk
         ceilings (``a_max``/``a_decel``/``alpha_max``/``alpha_decel``/
         ``j_max``/``yaw_jerk_max``, decel-into-the-goal campaign).
+
+      A former ``config.estimator.*`` field (a boot-time/live-tunable
+      time-lead anticipation constant) was DELETED (118 ticket 004,
+      land-at-zero-completion-delete-stop-lead.md) -- the completion
+      mechanism it drove no longer exists (see
+      ``App::MoveQueue::tick()``'s own doc comment for the land-at-zero
+      predicate that replaces it).
 
     Each key is present only when *config* carries a non-``None`` value
     (``EstimatorConfig``/``ControlConfig``'s own "None -> nothing pushed,
@@ -209,13 +214,13 @@ def estimator_kwargs(config: Any) -> dict[str, float]:
     ``calibration_kwargs()``, there is no "uncalibrated -> neutral
     sentinel" discipline here: an absent estimator/shaper field simply
     is not part of this push, exactly like the velocity-PID gains above).
-    Returns ``{}`` if *config* carries none of the ten fields at all --
+    Returns ``{}`` if *config* carries none of the nine fields at all --
     the caller must treat that as "nothing to push", not send an empty
     ``estimator_config()`` call (which raises ``ValueError``).
 
     See ``clasi/issues/wire-testgui-live-push-of-estimator-stop-lead.md``
     for why this selection previously had no push path at all: a GUI Sim
-    session ran with ``stop_lead_ms``/shaper limits OFF even after 117/
+    session ran with the estimator/shaper fields OFF even after 117/
     b0f329a9 made them live-tunable, because Sim's compiled graph does not
     link ``boot_config.cpp`` (117-004's documented deviation) and nothing
     host-side pushed the live patch on connect.
@@ -223,7 +228,7 @@ def estimator_kwargs(config: Any) -> dict[str, float]:
     kwargs: dict[str, float] = {}
 
     est = getattr(config, "estimator", None)
-    for attr in ("weight_heading_otos", "weight_omega_otos", "staleness_ms", "stop_lead_ms"):
+    for attr in ("weight_heading_otos", "weight_omega_otos", "staleness_ms"):
         value = getattr(est, attr, None) if est is not None else None
         if value is not None:
             kwargs[attr] = float(value)

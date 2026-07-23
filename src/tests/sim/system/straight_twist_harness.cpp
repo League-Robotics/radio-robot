@@ -9,7 +9,8 @@
 // kCruiseVx=150mm/s -- this sprint's own SUC-042 tour cruise speed
 // (host/robot_radio/planner/tour.py's own DEFAULT_V_MAX), NOT a saturating
 // speed -- run it for kRunCycles cycles (kRunCycles*SimHarness::kCycleDtUs
-// == a tour-leg-scale duration, several seconds of virtual time), and at
+// == a tour-leg-scale duration, several seconds of virtual time -- 4.8s at
+// the current 40ms cycle, 118 ticket 003), and at
 // EVERY sampled cycle (not just the final one) assert:
 //   (a) both wheels are tracking together -- neither motor's velocity()
 //       is frozen (pinned at exactly the same value for the whole run,
@@ -114,9 +115,10 @@ int main() {
   constexpr float kCruiseVx = 150.0f;  // [mm/s]
   constexpr float kOmega = 0.0f;       // [rad/s]
 
-  // kRunCycles*SimHarness::kCycleDtUs(50ms) == 6s -- order of magnitude of
-  // a tour leg's own duration at this cruise speed (e.g. a 600-900mm leg,
-  // this sprint's own SUC-042 profiled-leg scale, tests 4-6s of travel).
+  // kRunCycles*SimHarness::kCycleDtUs(40ms, 118 ticket 003) == 4.8s -- order
+  // of magnitude of a tour leg's own duration at this cruise speed (e.g. a
+  // 600-900mm leg, this sprint's own SUC-042 profiled-leg scale, tests
+  // 4-6s of travel).
   constexpr int kRunCycles = 120;
 
   // See this file's own header for the full derivation: an 8deg bound sits

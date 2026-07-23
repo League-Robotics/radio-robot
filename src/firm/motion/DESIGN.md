@@ -295,9 +295,12 @@ instance per axis and supplying `aMax`/`aDecel`/`jMax` (or their angular
 siblings `alphaMax`/`alphaDecel`/`yawJerkMax`) from its own live-tunable
 `ShaperLimits` (`move_queue.h`, sourced fail-closed from
 `Config::ShaperBootConfig` at boot, `config/boot_config.h`) and
-`remaining`/`dt` computed from the SAME predicted pose `MoveQueue`'s own
-stop-condition anticipation already reads — never a second, independent
-prediction.
+`remaining`/`dt` computed from the SAME this-cycle `pathLength`/`theta`
+`MoveQueue`'s own stop-condition comparison already reads — never a
+second, independent computation (118 ticket 004: the former predicted-
+pose anticipation this comment used to describe is deleted; see
+`move_queue.h`'s own tick() doc comment for the land-at-zero completion
+predicate that replaced it).
 
 ## 6. Open Questions / Known Limitations
 
@@ -311,10 +314,14 @@ prediction.
 - **Tour-embedded turns don't reach the isolated-turn sweep's own
   optimum.** A `Move` chained via SUC-051's seamless hand-off starts its
   own ramp from whatever the PRECEDING `Move` left the shaper state at,
-  not a clean from-rest start. `stop_lead_ms=45` (`data/robots/*.json`)
-  was verified against the TOUR-level metric directly (not just an
-  isolated single turn) — see `test_tour_closure_gate.py`'s own sweep and
-  `src/tests/notebooks/turn_prediction.ipynb` Section 10.
+  not a clean from-rest start (118 ticket 004: `MoveQueue::tick()` now
+  resets the just-completed Move's own shaped axis on every completion,
+  not just the empty-queue drain, specifically to bound this — see
+  `move_queue.cpp`'s own comment at that reset call site for why). The
+  land-at-zero completion predicate's own margin constant
+  (`kStoppingMarginFactor`, `move_queue.cpp`) was verified against the
+  TOUR-level metric directly (not just an isolated single turn) — see
+  `test_tour_closure_gate.py`'s own sweep.
 - **Hardware residual.** A 2026-07-22 hardware bench session (tovez on the
   stand) measured a turn residual in roughly the same `0-8deg` band the
   earlier accel-only stage measured — the real plant's own coast-down

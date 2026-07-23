@@ -2223,12 +2223,13 @@ def _build_main_window():  # type: ignore[return]
         )
 
         # wire-testgui-live-push-of-estimator-stop-lead: EstimatorConfigPatch
-        # (estimator.stop_lead_ms + control.a_max/a_decel/alpha_max/
-        # alpha_decel/j_max/yaw_jerk_max) is a SEPARATE binary-only
-        # ConfigDelta arm with no SET key=value text form -- calibration_
-        # commands()/calibration_kwargs() above never covered it, so
-        # neither of these two SET-key mechanisms would ever push it.
-        # Unconditional, same as the Tier-2 push below (both transports).
+        # (estimator.weight_heading_otos/weight_omega_otos/staleness_ms +
+        # control.a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max) is
+        # a SEPARATE binary-only ConfigDelta arm with no SET key=value text
+        # form -- calibration_commands()/calibration_kwargs() above never
+        # covered it, so neither of these two SET-key mechanisms would ever
+        # push it. Unconditional, same as the Tier-2 push below (both
+        # transports).
         _push_estimator_config(transport, cfg)
 
         if isinstance(transport, SimTransport):
@@ -2248,9 +2249,10 @@ def _build_main_window():  # type: ignore[return]
         this arm is binary-only (``config.proto``'s own ``EstimatorConfigPatch``)
         -- it has NO ``SET key=value`` text form, so it was never reachable
         through ``calibration_commands()``'s text-plane vocabulary. Without
-        this push, a live GUI Sim session ran with ``stop_lead_ms`` and the
-        ``Motion::VelocityShaper`` accel/jerk ceilings all OFF/neutral even
-        after 117/b0f329a9 made them live-tunable — Sim's compiled graph
+        this push, a live GUI Sim session ran with the estimator fusion
+        weights and the ``Motion::VelocityShaper`` accel/jerk ceilings all
+        OFF/neutral even after 117/b0f329a9 made them live-tunable — Sim's
+        compiled graph
         deliberately does not link ``boot_config.cpp`` (117-004's documented
         deviation), so nothing baked them in the way a real robot's own
         reflash does, and nothing host-side pushed the live patch either.
@@ -2274,8 +2276,8 @@ def _build_main_window():  # type: ignore[return]
           wrapping a live ``SerialConnection`` -- ``proto.wait_for_ack()``
           is used directly.
 
-        No-op (logged) when *cfg* carries none of the ten estimator/shaper
-        fields (defensive -- every current robot JSON populates all ten),
+        No-op (logged) when *cfg* carries none of the nine estimator/shaper
+        fields (defensive -- every current robot JSON populates all nine),
         when the config channel is not ready, or when the push itself
         raises. Every push result -- applied or rejected -- is logged, per
         this fix's own acceptance: silent success/failure here is exactly
@@ -2346,8 +2348,7 @@ def _build_main_window():  # type: ignore[return]
         else:
             _append_log(
                 f"[CAL] pushed {len(kwargs)}/{len(kwargs)} estimator/shaper "
-                f"fields from robot '{cfg.robot_name}' "
-                f"(stop_lead_ms={kwargs.get('stop_lead_ms', 'n/a')})"
+                f"fields from robot '{cfg.robot_name}' ({sorted(kwargs)})"
             )
 
     def _check_firmware_version(transport: "Transport") -> None:

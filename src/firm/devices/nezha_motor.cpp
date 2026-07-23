@@ -619,7 +619,29 @@ void NezhaMotor::writeRawDuty(float duty)
 
     // Write-rate limit -- bus hygiene only. Stop is the only throttle
     // exemption.
-    static constexpr uint64_t kMinWriteIntervalUs = 40000;   // [us] 40 ms ~= 25 Hz max
+    //
+    // 118 ticket 003 (sim-cycle-must-match-firmware-period.md): this bound
+    // used to sit at a bare 40000 (exactly App::RobotLoop::kCycle, 40ms,
+    // converted to [us]) -- comfortable back when firmware's own cycle
+    // period was 20ms (2x this interval, plenty of slack), but now that
+    // App::RobotLoop::kCycle is ALSO 40ms (118 tickets 001/002; robot_loop.h
+    // -- Devices cannot include App:: headers to reference it directly,
+    // this project's layering runs App -> Devices, never the reverse, so
+    // the two constants are coupled only by this comment, not the
+    // compiler), an on-schedule write landing at EXACTLY the throttle
+    // interval is no longer comfortably inside it: real-hardware timing
+    // jitter (e.g. a 39.x ms cycle, `now` sampled a hair early) makes the
+    // `<` comparison below drop that write, every such cycle, forever (the
+    // comparison never catches up -- a dropped write does not advance
+    // lastWriteTimeUs_). 5ms is a jitter margin, not a second cycle
+    // period's worth of headroom -- generous against plausible microbit
+    // timer/scheduling jitter (single-digit ms) while still comfortably
+    // above the vendor's own duty-write turnaround. Sim's exact virtual
+    // steps cannot exercise this hazard (every sim cycle lands at EXACTLY
+    // kCycleDtUs, never early) -- reasoned through here in code review,
+    // verified on the bench in phase-B (fault/skip counter or encoder
+    // smoothness while driving; see this ticket's own Testing section).
+    static constexpr uint64_t kMinWriteIntervalUs = 35000;   // [us] kCycle(40ms) - 5ms jitter margin
     bool stopping = (pct == 0);
     uint64_t now = lastTickUs_;   // [us] this tick's timestamp (see file-header note)
     if (!stopping && (now - lastWriteTimeUs_) < kMinWriteIntervalUs) {

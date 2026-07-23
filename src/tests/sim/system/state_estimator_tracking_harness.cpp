@@ -13,8 +13,9 @@
 // as a genuine PREDICT-TO-NOW instrument, not merely a pass-through of
 // already-known Frame data. At the end of every cycle it asks
 // StateEstimator::wheelAt()/bodyAt() to extrapolate ONE FULL CYCLE (SimHarness
-// ::kCycleDtUs, 50ms) past the CURRENT basis -- the same "predict past the
-// last collect" query a live host would make between two telemetry frames --
+// ::kCycleDtUs, 40ms -- 118 ticket 003) past the CURRENT basis -- the same
+// "predict past the last collect" query a live host would make between two
+// telemetry frames --
 // then, once that next cycle has actually run, compares the STORED
 // prediction against SimPlant's own live ground truth at that exact instant
 // (TestSim::WheelPlant::position()/velocity() for each wheel via
@@ -229,17 +230,28 @@ void scenarioTrackingAcrossVariedMovePatterns() {
   // "forward_ramp": still inside kDefaultTau's own ~130ms settle window (6
   // cycles * 50ms = 300ms spans it) -- velocity is genuinely changing across
   // the one-cycle prediction horizon here, so the ZOH "hold velocity
-  // constant" assumption has real, expected error. Empirically ~6.8mm wheel/
-  // body, 0.0rad heading (straight travel) at worst (the very first cycle,
-  // largest duty-step acceleration); tolerances below keep >2x margin over
-  // that without papering over a real regression.
-  runPhase(sim, "forward_ramp", /*cycles=*/6, /*wheelDistTolMm=*/15.0f, /*bodyPosTolMm=*/15.0f,
-           /*bodyHeadingTolRad=*/0.02f);
+  // constant" assumption has real, expected error. Empirically ~14.1mm
+  // wheel / ~6.6mm body / ~0.037rad heading at worst (118: re-baselined --
+  // restoring the interleaved schedule moved updateTlm()'s own staging
+  // point to BEFORE motorR_.requestSample()/tick(), so frame_.encRight is
+  // now genuinely one cycle stale relative to frame_.encLeft every cycle,
+  // exactly the R "-1 cycle" telemetry-staleness the last-known-good
+  // 39c084c1 skeleton always had -- see
+  // clasi/issues/restore-the-interleaved-request-settle-tick-loop-schedule.md);
+  // tolerances below keep >1.25x margin over that without papering over a
+  // real regression.
+  runPhase(sim, "forward_ramp", /*cycles=*/6, /*wheelDistTolMm=*/18.0f, /*bodyPosTolMm=*/15.0f,
+           /*bodyHeadingTolRad=*/0.05f);
   // "forward_steady": velocity has settled (>300ms into a held command) --
-  // a one-cycle ZOH extrapolation should be near-exact. Empirically
-  // ~0.07mm/0.0rad; tolerances keep a generous margin without papering
-  // over a real regression.
-  runPhase(sim, "forward_steady", /*cycles=*/20, /*wheelDistTolMm=*/1.0f, /*bodyPosTolMm=*/1.0f,
+  // a one-cycle ZOH extrapolation should be near-exact IN VELOCITY, but the
+  // STEADY-STATE wheel-distance error no longer converges to ~0 (118: the
+  // same persistent one-cycle encoder-telemetry staleness noted above --
+  // ~150mm/s * 50ms one-cycle horizon = ~7.5mm, matching the empirically
+  // observed ~7.58mm exactly). bodyPos/heading stay tight (~0.06mm/
+  // ~0.0009rad) since the body fuses both wheels and OTOS, diluting the
+  // one-wheel staleness; tolerances below keep >1.3x margin on wheel
+  // distance, a generous margin on body pos/heading.
+  runPhase(sim, "forward_steady", /*cycles=*/20, /*wheelDistTolMm=*/10.0f, /*bodyPosTolMm=*/1.0f,
            /*bodyHeadingTolRad=*/0.01f);
 
   // --- Phase 2: reversal ---------------------------------------------------
@@ -248,12 +260,18 @@ void scenarioTrackingAcrossVariedMovePatterns() {
   // across TestSim::kDefaultDutyVelMax, not just a step from rest).
   sim.injectMove(-150.0f, /*v_y=*/0.0f, /*omega=*/0.0f, MoveStopKind::kTime, 100000.0f, 100000.0f,
                  /*replace=*/true, /*id=*/2, /*corrId=*/102);
-  // Empirically ~7.0mm wheel/body, 0.0rad heading (straight travel) at
-  // worst -- tolerances keep >2x margin.
-  runPhase(sim, "reversal_transient", /*cycles=*/8, /*wheelDistTolMm=*/15.0f, /*bodyPosTolMm=*/15.0f,
-           /*bodyHeadingTolRad=*/0.02f);
-  // Empirically ~0.11mm/0.0rad once velocity has settled negative.
-  runPhase(sim, "steady_reverse", /*cycles=*/20, /*wheelDistTolMm=*/1.0f, /*bodyPosTolMm=*/1.0f,
+  // Empirically ~13.0mm wheel / ~8.2mm body / ~0.055rad heading at worst
+  // (118: heading re-baselined -- same one-cycle-stale-encoder-telemetry
+  // mechanism as forward_ramp above, sharper here since this transient
+  // reverses sign rather than ramping from rest) -- tolerances below keep
+  // >1.25x margin.
+  runPhase(sim, "reversal_transient", /*cycles=*/8, /*wheelDistTolMm=*/18.0f, /*bodyPosTolMm=*/15.0f,
+           /*bodyHeadingTolRad=*/0.07f);
+  // Empirically ~0.09mm body / ~0.0005rad heading once velocity has settled
+  // negative; wheel distance no longer converges to ~0 (118: same
+  // persistent one-cycle encoder-telemetry staleness as forward_steady
+  // above -- ~150mm/s * 50ms = ~7.5mm, matching the observed ~7.59mm).
+  runPhase(sim, "steady_reverse", /*cycles=*/20, /*wheelDistTolMm=*/10.0f, /*bodyPosTolMm=*/1.0f,
            /*bodyHeadingTolRad=*/0.01f);
 
   // --- Phase 3: pivot -- turn in place (v_x=0, omega=1.0rad/s) ------------
@@ -265,9 +283,13 @@ void scenarioTrackingAcrossVariedMovePatterns() {
   // ground truth at all, only the differential wheel spin).
   runPhase(sim, "pivot_ramp", /*cycles=*/6, /*wheelDistTolMm=*/10.0f, /*bodyPosTolMm=*/6.0f,
            /*bodyHeadingTolRad=*/0.06f);
-  // Empirically ~0.18mm wheel / ~0.11mm body / ~0.0017rad heading once
-  // angular rate has settled.
-  runPhase(sim, "pivot_steady", /*cycles=*/20, /*wheelDistTolMm=*/1.0f, /*bodyPosTolMm=*/1.0f,
+  // Wheel distance no longer converges to ~0 once angular rate has settled
+  // (118: same persistent one-cycle encoder-telemetry staleness as the
+  // straight-line steady phases above -- omega=1.0rad/s at this fixture's
+  // trackWidth gives a per-wheel speed of ~60mm/s, so ~60mm/s * 50ms =
+  // ~3.0mm, matching the observed ~3.35mm); body pos/heading stay tight
+  // (~0.11mm / ~0.0019rad, fused across both wheels + OTOS).
+  runPhase(sim, "pivot_steady", /*cycles=*/20, /*wheelDistTolMm=*/5.0f, /*bodyPosTolMm=*/1.0f,
            /*bodyHeadingTolRad=*/0.01f);
 
   // --- Phase 4: chained steps -- both directions, straights and turns -----
@@ -280,13 +302,17 @@ void scenarioTrackingAcrossVariedMovePatterns() {
   sim.injectMove(-100.0f, 0.0f, 0.0f, MoveStopKind::kTime, 200.0f, 100000.0f, /*replace=*/false, 5, 105);
   sim.injectMove(0.0f, 0.0f, -1.0f, MoveStopKind::kTime, 200.0f, 100000.0f, /*replace=*/false, 6, 106);
   sim.injectMove(200.0f, 0.0f, 0.0f, MoveStopKind::kTime, 200.0f, 100000.0f, /*replace=*/false, 7, 107);
-  // Empirically ~0.18mm wheel / ~0.13mm body / ~0.0012rad heading at
-  // worst -- each leg's own commanded speed is modest (<=200mm/s) and each
-  // 200ms/4-cycle leg still settles most of the way before the next
-  // hand-off, so this phase's own worst case turns out smaller than the
-  // ramp phases above; tolerances below are still kept a full order of
-  // magnitude above the observed worst case for margin.
-  runPhase(sim, "chained_steps", /*cycles=*/40, /*wheelDistTolMm=*/3.0f, /*bodyPosTolMm=*/3.0f,
+  // Empirically ~3.3mm wheel (118: the same persistent one-cycle
+  // encoder-telemetry staleness the steady phases above show, bounded here
+  // by this phase's own <=200mm/s per-leg commanded speed -- 200mm/s * 50ms
+  // = 10mm ceiling, but most legs run slower or don't hold long enough to
+  // reach that ceiling) / ~0.12mm body / ~0.0012rad heading at worst -- each
+  // leg's own commanded speed is modest and each 200ms/4-cycle leg still
+  // settles most of the way before the next hand-off, so this phase's own
+  // worst case turns out smaller than the ramp phases above; tolerances
+  // below keep >1.5x margin on wheel distance, a full order of magnitude
+  // above the observed worst case on body pos/heading.
+  runPhase(sim, "chained_steps", /*cycles=*/40, /*wheelDistTolMm=*/5.0f, /*bodyPosTolMm=*/3.0f,
            /*bodyHeadingTolRad=*/0.02f);
 
   sim.injectStop(/*corrId=*/199);

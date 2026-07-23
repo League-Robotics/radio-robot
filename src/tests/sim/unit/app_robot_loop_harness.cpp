@@ -121,6 +121,17 @@ void checkUintEq(uint32_t actual, uint32_t expected, const std::string& what) {
   }
 }
 
+// kCycleDtUs -- 118 ticket 003 (sim-cycle-must-match-firmware-period.md):
+// single source of truth for every hand-rolled "tick the plant, advance the
+// clock, cycle() the loop" step loop in this file (LiveFixture::step() below
+// plus the standalone scenario functions that build their own local
+// plant/clock/robotLoop instead of using LiveFixture). Derived from
+// App::RobotLoop::kCycle (robot_loop.h), NOT an independently-hardcoded
+// matching literal -- exactly the class of drift this ticket exists to
+// close off (matches TestSim::SimHarness::kCycleDtUs's own derivation,
+// sim_harness.h).
+constexpr uint32_t kCycleDtUs = App::RobotLoop::kCycle * 1000;  // [us]
+
 // --- Minimal App::Transport stub -- no real serial/radio, ever. readLine()
 // always reports "nothing ready" (this harness does not need to inject
 // commands to prove the extraction runs); send()/sendReliable() just record
@@ -396,14 +407,13 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   App::Telemetry tlm(comms, serialLink, radioLink);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
-  // Turn-prediction campaign: App::StateEstimator declared/constructed
-  // BEFORE App::MoveQueue -- MoveQueue's own constructor now holds a
-  // const StateEstimator& (bodyAt()-driven stop-condition anticipation),
-  // so the referent must already exist. Default-constructed (0/0/200ms
-  // weights, stopLead defaults to 0 -- anticipation OFF unless a scenario
-  // explicitly calls moveQueue.setStopLead()).
+  // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
+  // ticket 004: QUARANTINED -- App::MoveQueue no longer depends on this
+  // member (its own former anticipation-lead completion path is deleted,
+  // move_queue.h's own file header); kept solely for robotLoop's own
+  // consumption below.
   App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock, stateEstimator);
+  App::MoveQueue moveQueue(drive, odom, clock);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   // --- Drive Preamble to done() BEFORE constructing/calling RobotLoop's
@@ -537,14 +547,13 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
-  // Turn-prediction campaign: App::StateEstimator declared/constructed
-  // BEFORE App::MoveQueue -- MoveQueue's own constructor now holds a
-  // const StateEstimator& (bodyAt()-driven stop-condition anticipation),
-  // so the referent must already exist. Default-constructed (0/0/200ms
-  // weights, stopLead defaults to 0 -- anticipation OFF unless a scenario
-  // explicitly calls moveQueue.setStopLead()).
+  // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
+  // ticket 004: QUARANTINED -- App::MoveQueue no longer depends on this
+  // member (its own former anticipation-lead completion path is deleted,
+  // move_queue.h's own file header); kept solely for robotLoop's own
+  // consumption below.
   App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock, stateEstimator);
+  App::MoveQueue moveQueue(drive, odom, clock);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   clock.setMicros(0);
@@ -658,22 +667,47 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
                "right motor kp ALSO reflects the applied patch -- kp/ki/kff/iMax/kaw apply to BOTH bound motors");
   checkFloatEq(motorR.gains().ki, 0.01f, "right motor ki also reflects the applied patch");
 
-  // --- ack content, via raw-byte ack_corr/ack_err fingerprint search on
-  // the two captured frames (single ack slot -- see this scenario's own
-  // header comment). ---
+  // --- ack content. The motor patch's ack is a SUCCESS (err==0) ack --
+  // proto3 implicit presence means encodeInto() OMITS a scalar field
+  // holding its zero/default value entirely (findAck()'s own doc comment,
+  // below, explains this in full), so ackFingerprint()/containsSubBytes()'s
+  // raw-byte substring technique -- which synthesizes a literal "field
+  // 6 (ack_err) == 0" byte pair that can never appear on the wire for a
+  // genuine success ack -- is only valid for a NONZERO err (the drivetrain
+  // check just below). The motor check instead decodes via the real
+  // generated codec (TestSupport::decodeOutboundLine(), the same technique
+  // findAck() uses) and compares the reconstructed scalar fields directly.
+  // ---
   checkTrue(!afterMotorLine.empty(), "a primary frame was captured after the motor dispatch");
-  std::string motorFrame = rawBytesFromArmoredLine(afterMotorLine);
-  checkTrue(!motorFrame.empty(), "the captured frame de-armors to non-empty raw bytes");
-  checkTrue(containsSubBytes(motorFrame, ackFingerprint(kMotorCorrId, 0)),
-            "CONFIG{motor} acks OK -- ack_corr/ack_err == (motor's corr_id, 0)");
+  TestSupport::DecodedLine motorDecoded = TestSupport::decodeOutboundLine(afterMotorLine);
+  checkTrue(motorDecoded.kind == TestSupport::DecodedKind::kTelemetry,
+            "the captured frame after the motor dispatch decodes as a Telemetry frame");
+  checkUintEq(motorDecoded.telemetry.ack_corr, kMotorCorrId,
+              "CONFIG{motor} acks against the motor patch's own corr_id");
+  checkUintEq(motorDecoded.telemetry.ack_err, 0,
+              "CONFIG{motor} acks OK (ack_err == 0, omitted from the wire by proto3 implicit presence)");
 
   checkTrue(!afterDrivetrainLine.empty(), "a primary frame was captured after the drivetrain dispatch");
   std::string drivetrainFrame = rawBytesFromArmoredLine(afterDrivetrainLine);
   checkTrue(!drivetrainFrame.empty(), "the captured frame de-armors to non-empty raw bytes");
   checkTrue(containsSubBytes(drivetrainFrame, ackFingerprint(kDrivetrainCorrId, kErrUnimplemented)),
             "CONFIG{drivetrain} still acks ERR_UNIMPLEMENTED");
-  checkTrue(!containsSubBytes(drivetrainFrame, ackFingerprint(kMotorCorrId, 0)),
-            "single ack slot: motor's own OK ack no longer appears once drivetrain's dispatch overwrote the slot");
+  // Single ack slot: the drivetrain dispatch's own ack() call OVERWRITES
+  // the shared corr/err pair outright (not just the freshness bit) -- so
+  // the motor's own corr_id must no longer be the frame's ack_corr. Decoded
+  // (not a byte-fingerprint absence check): a fingerprint search for the
+  // motor's OWN success pair would trivially "pass" regardless of overwrite
+  // state, since that exact byte pair never appears on the wire either way
+  // (same proto3 implicit-presence reason as the motor check above) -- it
+  // would not actually be testing the overwrite.
+  TestSupport::DecodedLine drivetrainDecoded = TestSupport::decodeOutboundLine(afterDrivetrainLine);
+  checkTrue(drivetrainDecoded.kind == TestSupport::DecodedKind::kTelemetry,
+            "the captured frame after the drivetrain dispatch decodes as a Telemetry frame");
+  checkTrue(drivetrainDecoded.telemetry.ack_corr != kMotorCorrId,
+            "single ack slot: motor's own ack_corr no longer appears once drivetrain's dispatch overwrote "
+            "the slot");
+  checkUintEq(drivetrainDecoded.telemetry.ack_corr, kDrivetrainCorrId,
+              "the slot now holds the drivetrain patch's own corr_id");
 }
 
 // ===========================================================================
@@ -706,14 +740,13 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
-  // Turn-prediction campaign: App::StateEstimator declared/constructed
-  // BEFORE App::MoveQueue -- MoveQueue's own constructor now holds a
-  // const StateEstimator& (bodyAt()-driven stop-condition anticipation),
-  // so the referent must already exist. Default-constructed (0/0/200ms
-  // weights, stopLead defaults to 0 -- anticipation OFF unless a scenario
-  // explicitly calls moveQueue.setStopLead()).
+  // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
+  // ticket 004: QUARANTINED -- App::MoveQueue no longer depends on this
+  // member (its own former anticipation-lead completion path is deleted,
+  // move_queue.h's own file header); kept solely for robotLoop's own
+  // consumption below.
   App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock, stateEstimator);
+  App::MoveQueue moveQueue(drive, odom, clock);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   clock.setMicros(0);
@@ -839,10 +872,10 @@ struct LiveFixture {
   // 117 ticket 003: default-constructed (encoder-only-v1 FusionWeights{}
   // default) -- directly reachable by every LiveFixture-based scenario
   // (unlike RobotLoop's own persistedTuning_/tuningStore_, which stay
-  // private). Declared BEFORE moveQueue (turn-prediction campaign):
-  // MoveQueue's own constructor holds a const StateEstimator&, so member
-  // initialization order (DECLARATION order, not initializer-list order)
-  // requires this member to exist first.
+  // private). 118 ticket 004: QUARANTINED -- App::MoveQueue no longer
+  // depends on this member (its own former anticipation-lead completion
+  // path is deleted, move_queue.h's own file header); kept solely for
+  // robotLoop's own consumption below.
   App::StateEstimator stateEstimator;
   App::MoveQueue moveQueue;
   App::Preamble preamble;
@@ -858,7 +891,7 @@ struct LiveFixture {
         tlm(comms, serialFake, radioFake),
         drive(motorL, motorR, /*trackWidth=*/120.0f),
         odom(motorL, motorR, /*trackWidth=*/120.0f),
-        moveQueue(drive, odom, clock, stateEstimator),
+        moveQueue(drive, odom, clock),
         preamble(motorL, motorR, otos, color, line, clock),
         robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm, drive, odom, moveQueue,
                   preamble, stateEstimator, clock, sleeper) {
@@ -867,7 +900,6 @@ struct LiveFixture {
   }
 
   void step(int cycles = 1) {
-    constexpr uint32_t kCycleDtUs = 50000;  // [us] 50ms/cycle
     for (int i = 0; i < cycles; ++i) {
       plant.tick(static_cast<float>(kCycleDtUs) / 1e6f);  // [s]
       clock.advanceMicros(kCycleDtUs);
@@ -1253,6 +1285,154 @@ void scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome() {
 }
 
 // ===========================================================================
+// SUC-063 (118 ticket 002): the MOVE stop decision must read odometry
+// integrated THIS cycle, not the previous cycle's. Uses a ScriptedI2CHook
+// bus (not LiveFixture's live SimPlant) so wheel encoder positions -- and
+// therefore odom_.pathLength()'s cycle-by-cycle growth -- are EXACTLY
+// known, letting this scenario place a DISTANCE stop threshold exactly on
+// the boundary a specific cycle's own odom_.integrate() call crosses.
+// Velocity gains stay at baseMotorConfig()'s all-zero default (the same
+// "duty stays exactly 0 regardless of target" posture every other
+// ScriptedI2CHook scenario in this file relies on -- see
+// scriptMotorCycle()'s own header comment), so the Move's own commanded
+// v_x has zero effect on the scripted encoder schedule below; only the
+// DISTANCE stop condition's own pathLength() comparison is under test.
+//
+// Before 118 ticket 002, MoveQueue::tick() ran from the R-settle block,
+// BEFORE odom_.integrate() (trailing pace block) in the SAME cycle -- so a
+// stop condition crossed by cycle N's own integrate() call would not be
+// OBSERVED by tick() until cycle N+1's (then R-settle-positioned) call,
+// one cycle late. After the relocation, tick() runs in the SAME pace
+// block, immediately after integrate(), so the crossing is observed on
+// cycle N itself. This scenario scripts a straight-line (equal L/R,
+// headingDelta always 0) encoder ramp that lands the 30mm DISTANCE
+// threshold exactly on cycle 3's own integrate() call, and asserts
+// completion is visible by the END of cycle 3 -- not cycle 4, which is
+// what the pre-relocation ordering would have needed.
+// ===========================================================================
+
+void scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles() {
+  beginScenario("SUC-063: MOVE DISTANCE stop decision reads odometry integrated THIS cycle, "
+                "not the previous cycle's (118 ticket 002)");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  TestSim::SimClock clock;
+  TestSim::SimSleeper sleeper;
+
+  Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
+  Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
+  Devices::Otos otos(plant, Devices::OtosConfig{});
+  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
+  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+
+  TestSupport::FakeTransport serialFake;
+  TestSupport::FakeTransport radioFake;
+  App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
+  App::Telemetry tlm(comms, serialFake, radioFake);
+  App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
+  App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  // Default-constructed StateEstimator (0/0/200ms weights) -- quarantined,
+  // App::MoveQueue no longer depends on it (see the other constructions in
+  // this file for the full note); kept solely for robotLoop's own
+  // consumption below.
+  App::StateEstimator stateEstimator;
+  App::MoveQueue moveQueue(drive, odom, clock);
+  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+
+  clock.setMicros(0);
+  preamble.step();
+  clock.setMicros(50000);
+  scriptMotorBeginSuccess(bus);  // Left
+  scriptMotorBeginSuccess(bus);  // Right
+  scriptOtosBeginSuccess(bus);
+  scriptColorBeginSuccess(bus);
+  scriptLineBeginSuccess(bus);
+
+  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
+                            drive, odom, moveQueue, preamble, stateEstimator, clock, sleeper);
+  robotLoop.boot();
+  checkTrue(preamble.done(), "boot() completes against the ScriptedI2CHook-based fixture too");
+  robotLoop.markConfigured();
+
+  const uint32_t kCorrId = 971;
+  const uint32_t kMoveId = 91;
+  // 30mm DISTANCE stop, generous 5s timeout (never the actual trigger --
+  // this scenario ends via its own stop condition, not the backstop).
+  // Injected before cycle 0 runs -- decoded via comms_.pump() (L-settle)
+  // and activated via processMessage()/handleMove() (R-settle) that SAME
+  // cycle, capturing activationPathLength=0 (nothing integrated yet).
+  serialFake.enqueueInbound(
+      armorMoveDistanceTwistCommand(/*v_x=*/500.0f, /*omega=*/0.0f, /*stopDistanceMm=*/30.0f,
+                                     /*timeoutMs=*/5000.0f, /*replace=*/true, kMoveId, kCorrId)
+          .c_str());
+
+  // Straight-line schedule: both wheels advance identically (headingDelta
+  // stays 0 -- pure DISTANCE growth, no ANGLE interaction), 10mm/cycle:
+  // POS(i) = i * 10mm for cycles 0..3, then flat while the ack propagates.
+  // pathLength() growth per cycle (odom_.integrate()'s own delta =
+  // POS(i) - POS(i-1)):
+  //   cycle 0: 0 -> 0    (pathLength 0)
+  //   cycle 1: 0 -> 10   (pathLength 10)
+  //   cycle 2: 10 -> 20  (pathLength 20)
+  //   cycle 3: 20 -> 30  (pathLength 30 -- the 30mm threshold is crossed
+  //                       EXACTLY by cycle 3's own odom_.integrate() call)
+  // Duty stays 0 every cycle regardless of the Move's own v_x (velGains
+  // all-zero, same posture as every other ScriptedI2CHook scenario in this
+  // file) -- extraDutyWrites follows the SAME global-cycle-indexed
+  // first-write schedule scriptMotorCycle()'s own header comment derives
+  // (R at cycle 0, L at cycle 1), independent of the Move injected above.
+  uint64_t nowUs = 50000;
+  for (int i = 0; i <= 3; ++i) {
+    clock.setMicros(nowUs);
+    float positionMm = static_cast<float>(i) * 10.0f;
+    scriptMotorCycle(bus, positionMm, /*extraDutyWrites=*/(i == 1) ? 1 : 0);  // Left
+    scriptMotorCycle(bus, positionMm, /*extraDutyWrites=*/(i == 0) ? 1 : 0);  // Right
+    scriptOtosReadZeroPose(bus);
+    robotLoop.cycle();
+    nowUs += 41000;
+
+    if (i == 2) {
+      checkTrue(moveQueue.active(), "sanity: still active right after cycle 2 -- pathLength is "
+                                     "20mm, below the 30mm threshold");
+    }
+  }
+
+  checkTrue(!moveQueue.active(),
+            "SUC-063: the Move has ended by the END of cycle 3 -- the SAME cycle "
+            "odom_.integrate() first raises pathLength() to the 30mm threshold, not cycle 4 "
+            "(one cycle later, the pre-118-ticket-002 R-settle-positioned tick() would have "
+            "needed)");
+
+  // Completion ack visibility: staged during cycle 3's OWN pace block,
+  // which runs AFTER that cycle's own tlm_.emit() call (kClear block,
+  // earlier in the same cycle) -- so it is not visible on the wire until
+  // a LATER cycle's own emit(). A few bounded flat (no further motion)
+  // cycles absorb both that one-cycle lag and the primary/secondary
+  // tie-break's own occasional one-cycle slip (telemetry.h's emit() doc
+  // comment) -- mirrors stepUntilAckSeen()'s own bounded-retry shape,
+  // hand-rolled here since that helper is LiveFixture-specific.
+  bool ackSeen = false;
+  uint32_t errCode = 1;  // any nonzero sentinel -- overwritten by findAck() on a match
+  for (int i = 0; i < 5 && !ackSeen; ++i) {
+    clock.setMicros(nowUs);
+    scriptMotorCycle(bus, /*positionMm=*/30.0f, /*extraDutyWrites=*/0);  // Left
+    scriptMotorCycle(bus, /*positionMm=*/30.0f, /*extraDutyWrites=*/0);  // Right
+    scriptOtosReadZeroPose(bus);
+    robotLoop.cycle();
+    nowUs += 41000;
+    ackSeen = findAck(serialFake.sent(), kMoveId, &errCode);
+  }
+  checkTrue(ackSeen && errCode == 0,
+            "the Move's completion ack (ack_corr==Move.id, ack_err==0) reaches the wire on a "
+            "cycle AFTER the one it completed on -- 'ack rides the next frame', unchanged by "
+            "this ticket");
+
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run: motor (ordering cycles)");
+  checkUintEq(bus.errCount(Devices::kOtosDeviceAddr), 0, "no script under-run: otos (ordering cycles)");
+}
+
+// ===========================================================================
 // 117 ticket 003: RobotLoop::handleConfig()'s new ESTIMATOR branch --
 // CONFIG{estimator} merges PRESENT fields onto stateEstimator_.weights()
 // (partial-patch semantics, matching MotorConfigPatch/OtosConfigPatch),
@@ -1290,7 +1470,7 @@ void scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists() {
   // Turn-prediction campaign: stateEstimator constructed before moveQueue
   // -- see the earlier scenarios' own comment for why.
   App::StateEstimator stateEstimator;  // default weights (0.0/0.0/200ms)
-  App::MoveQueue moveQueue(drive, odom, clock, stateEstimator);
+  App::MoveQueue moveQueue(drive, odom, clock);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   MockTuningStore mockStore;
@@ -1332,8 +1512,8 @@ void scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists() {
   bool acked = false;
   uint32_t ackErr = 1;  // any nonzero sentinel -- overwritten by findAck() on a match
   for (int i = 0; i < 10 && !acked; ++i) {
-    plant.tick(0.05f);  // [s] 50ms/cycle, matching LiveFixture::step()'s own kCycleDtUs
-    clock.advanceMicros(50000);
+    plant.tick(static_cast<float>(kCycleDtUs) / 1e6f);  // [s] matches LiveFixture::step()'s own kCycleDtUs
+    clock.advanceMicros(kCycleDtUs);
     robotLoop.cycle();
     acked = findAck(serialFake.sent(), kCorrId, &ackErr);
   }
@@ -1417,7 +1597,7 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   // moveQueue (turn-prediction campaign) -- see the earlier scenarios'
   // own comment for why.
   App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock, stateEstimator);
+  App::MoveQueue moveQueue(drive, odom, clock);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
@@ -1447,8 +1627,8 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   // scenarioTwistDrivesRealPlantRamp() derivation).
   constexpr int kCycles = 20;
   for (int i = 0; i < kCycles; ++i) {
-    plant.tick(0.05f);  // [s] 50ms/cycle
-    clock.advanceMicros(50000);
+    plant.tick(static_cast<float>(kCycleDtUs) / 1e6f);  // [s]
+    clock.advanceMicros(kCycleDtUs);
     robotLoop.cycle();
   }
 
@@ -1498,8 +1678,8 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   checkTrue(!estimatorLine.empty(), "armor() of the CONFIG{estimator} envelope succeeds");
   serialFake.enqueueInbound(estimatorLine.c_str());
 
-  plant.tick(0.05f);
-  clock.advanceMicros(50000);
+  plant.tick(static_cast<float>(kCycleDtUs) / 1e6f);  // [s]
+  clock.advanceMicros(kCycleDtUs);
   robotLoop.cycle();
 
   checkFloatEq(stateEstimator.weights().headingOtos, 0.4f,
@@ -1521,6 +1701,7 @@ int main() {
   scenarioMoveEndDrainsWithNoFurtherHostTraffic();
   scenarioMoveTimeoutSetsFaultFlagOnEndingCycle();
   scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome();
+  scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles();
 
   scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists();
   scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression();

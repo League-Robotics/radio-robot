@@ -16,15 +16,20 @@ namespace {
 // bus_.write()/bus_.read() postClear/preClear pair, applied here as the
 // post-duty-write clearance window.
 //
-// kCycle is the STATED TOTAL for the whole schedule (all four pacing
-// blocks, not just the trailing one) -- ~50 Hz/20ms (115-005, gut S1:
-// primary telemetry emission now happens every cycle, matching
-// App::Telemetry's own kPrimaryPeriod=20ms (telemetry.h) so the
-// primary-frame throttle and the loop's own pace agree by construction --
-// closes kcycle-kprimaryperiod-mismatch.md).
-constexpr uint32_t kSettle = 0;  // [ms] encoder-settle window, both motors
-constexpr uint32_t kClear = 0;   // [ms] post-duty-write clearance window
-constexpr uint32_t kCycle = 20;  // [ms] whole-schedule pace target (~50 Hz)
+// kCycle itself now lives on RobotLoop::kCycle (robot_loop.h, public) --
+// 118 ticket 003 promoted it out of this anonymous namespace so external
+// composition roots (TestSim::SimHarness's own kCycleDtUs) can derive from
+// the SAME declaration instead of an independently-hardcoded matching
+// literal. It is the STATED TOTAL for the whole schedule (all four pacing
+// blocks, not just the trailing one) -- ~25 Hz/40ms (106-001; restored by
+// 118 after commit 5f5a2ba7 zeroed kSettle/kClear and halved kCycle to 20,
+// which only made the vendor's still-mandatory 4ms settle happen as a
+// blocking sleep hidden inside motorL_.tick()/motorR_.tick() instead --
+// see clasi/issues/restore-the-interleaved-request-settle-tick-loop-schedule.md),
+// matching App::Telemetry's own kPrimaryPeriod=40ms (telemetry.h) so the
+// primary-frame throttle and the loop's own pace agree by construction.
+constexpr uint32_t kSettle = 4;  // [ms] encoder-settle window, both motors
+constexpr uint32_t kClear = 4;   // [ms] post-duty-write clearance window
 
 // kWindows is what the three settle/clearance blocks above already consume
 // before the final (perception+odometry+pace) block runs; kPace is that
@@ -40,9 +45,9 @@ constexpr uint32_t kCycle = 20;  // [ms] whole-schedule pace target (~50 Hz)
 // have individually.
 constexpr uint32_t kWindows = 2 * kSettle + kClear;  // [ms] time the 3 settle/clear
                                                       // blocks consume before the pace block
-static_assert(kWindows <= kCycle,
+static_assert(kWindows <= RobotLoop::kCycle,
               "kSettle+kClear+kSettle must fit inside the kCycle budget");
-constexpr uint32_t kPace = kCycle - kWindows;  // [ms] final block's own gap, absorbing kWindows
+constexpr uint32_t kPace = RobotLoop::kCycle - kWindows;  // [ms] final block's own gap, absorbing kWindows
 
 constexpr uint32_t kPreamblePace = 10;  // [ms] boot-loop probe pacing
 
@@ -299,32 +304,32 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
   // merge onto a snapshot of the CURRENT live weights, mirroring
   // applyMotorConfigPatch()/applyOtosPatch()'s own merge-then-apply shape.
   //
-  // stop_lead_ms (turn-prediction campaign) rides the SAME wire arm/branch
-  // (config.proto's own EstimatorConfigPatch doc comment explains why) but
-  // targets moveQueue_ directly -- App::MoveQueue::setStopLead(), not the
-  // FusionWeights merge above (a different App:: object; stopLead_ is
-  // MoveQueue's own field, not StateEstimator's). Applied independently of
-  // whether any of the three weight fields are present -- an
-  // EstimatorConfigPatch carrying ONLY stop_lead_ms is a valid, complete
-  // patch. Same never-persisted contract as the weights above.
+  // a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max (decel-into-the-
+  // goal campaign) ride this SAME arm, targeting moveQueue_'s ShaperLimits
+  // directly -- the "smallest coherent path" reasoning config.proto's own
+  // EstimatorConfigPatch doc comment gives (CONFIG_ESTIMATOR is already the
+  // live-tune arm for MoveQueue-owned, non-FusionWeights state, so a fresh
+  // ConfigTarget/Patch-message pair for one more MoveQueue-owned field
+  // group would duplicate plumbing for no behavioral gain). Present-field
+  // merge onto a snapshot of the CURRENT live ShaperLimits, mirroring the
+  // FusionWeights merge above; applied independently of every other field
+  // on this patch.
   //
-  // a_max/a_decel/alpha_max/alpha_decel (decel-into-the-goal campaign)
-  // ALSO ride this same arm, targeting moveQueue_'s ShaperLimits directly
-  // -- the SAME "smallest coherent path" reasoning as stop_lead_ms
-  // immediately above (config.proto's own EstimatorConfigPatch doc comment
-  // has the full rationale). Present-field merge onto a snapshot of the
-  // CURRENT live ShaperLimits, mirroring the FusionWeights merge above;
-  // applied independently of every other field on this patch.
+  // The turn-prediction campaign's own time-lead anticipation constant
+  // (formerly EstimatorConfigPatch field 4) -- DELETED (118 ticket 004,
+  // land-at-zero-completion-delete-stop-lead.md): App::MoveQueue no longer
+  // has a field to apply it to (the anticipation-lead completion mechanism
+  // it drove is deleted -- see move_queue.h's own tick() doc comment for
+  // the land-at-zero replacement). The wire field itself is `reserved` in
+  // config.proto, not reused or removed from the wire -- a legacy client
+  // still sending it is silently ignored (parses fine, has no effect),
+  // never a decode error.
   if (env.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::ESTIMATOR) {
     const msg::EstimatorConfigPatch& patch = env.cmd.config.patch.estimator;
 
     FusionWeights weights = stateEstimator_.weights();
     mergeEstimatorPatch(weights, patch);
     stateEstimator_.setWeights(weights);
-
-    if (patch.stop_lead_ms.has) {
-      moveQueue_.setStopLead(static_cast<uint32_t>(patch.stop_lead_ms.val));
-    }
 
     ShaperLimits shaperLimits = moveQueue_.shaperLimits();
     mergeShaperPatch(shaperLimits, patch);
@@ -528,31 +533,23 @@ void RobotLoop::cycle() {
 
   Cmd cmd;
 
-  // Request/collect MUST interleave per port: the 0x46 encoder-select is a
+  // Request/collect MUST interleave per port (118 -- restores the
+  // interleaved schedule this file's own DESIGN.md §2/§3 already claims:
+  // select L -> settle(borrow) -> collect L -> clear(borrow) -> select R
+  // -> settle(borrow) -> collect R -> pace): the 0x46 encoder-select is a
   // single latched state on the brick (one pending read; SimPlant models
   // the same via selectedPort_) -- issuing both selects before either
   // collect makes BOTH motors read the LAST-selected port's encoder
   // (observed 2026-07-18: an unmanaged pivot showed actual L == actual R
   // glued to the right wheel while cmd L/R were correctly mirrored).
 
-  // 112-005 cycle-order fix (cut the trim/PD-loop dead time that caused the
-  // terminal jitter): stage this cycle's wheel targets BEFORE the motor
-  // ticks, so the target staged last cycle is WRITTEN this cycle instead of
-  // next (-1 cycle).
-  drive_.tick();  // twist -> wheel targets, written by THIS cycle's motor ticks
-
-  // Request/collect MUST interleave per port: the 0x46 encoder-select is a
-  // single latched state on the brick (one pending read) -- issuing both
-  // selects before either collect makes BOTH motors read the last-selected
-  // port's encoder.
   motorL_.requestSample();  // 0x46 write (brick holds ONE pending read)
-  motorL_.tick(clock_.nowMicros());   // write L duty (fresh target) + collect L
-  motorR_.requestSample();
-  motorR_.tick(clock_.nowMicros());   // write R duty + collect R
 
   runAndWait(kSettle, [&] {           // >=4ms: L encoder settling, meanwhile --
     comms_.pump(cmd, cycleStart);     //   drain RX, decode <=1 frame into cmd
   });
+
+  motorL_.tick(clock_.nowMicros());   // collect L -> velocity PID -> duty write
 
   runAndWait(kClear, [&] {  // >=4ms: brick clears L's duty write, meanwhile --
     // Stage this cycle's encoder/velocity/connection fields onto the
@@ -564,6 +561,8 @@ void RobotLoop::cycle() {
     tlm_.emit(cycleStart);
   });
 
+  motorR_.requestSample();  // 0x46 write (brick holds ONE pending read)
+
   runAndWait(kSettle, [&] {  // >=4ms: R encoder settling, meanwhile --
     // Apply <=1 decoded command; every path that applies one acks via
     // tlm_.ack(). `cmd` is a fresh, cycle-local variable (declared above,
@@ -572,43 +571,42 @@ void RobotLoop::cycle() {
     // no separate "take" flag is needed.
     processMessage(cmd);
 
-    // MoveQueue's per-cycle tick (116, protocol-set-point issue) --
-    // replaces the deleted deadman_.expired() branch at this EXACT
-    // schedule position. This is the load-bearing safety property
-    // (SUC-053): it runs unconditionally, every cycle, regardless of
-    // whether a command arrived this cycle -- the same way
-    // deadman_.expired() did. Ends the active Move on StopConditionMet or
-    // TimedOut, either chain-advancing the next pending Move THIS SAME
-    // cycle (seamless hand-off, SUC-051) or calling Drive::stop() with an
-    // empty queue (MoveQueue::tick()'s own contract) -- so host silence
-    // always ends in motors stopped, with zero further host traffic
-    // needed (no deadman lease to re-arm).
-    MoveQueue::TickResult moveResult = moveQueue_.tick(clock_.nowMicros(), odom_);
-    bool moveTimedOut = moveResult.completed && moveResult.completion.timedOut;
-    // Level-set every cycle (telemetry.h's own setFlag() contract) -- true
-    // only on the exact cycle a timed-out completion is reported this
-    // call, false every other cycle (SUC-054).
-    tlm_.setFlag(kFlagFaultMoveTimeout, moveTimedOut);
-    if (moveResult.completed) {
-      // MOVE completion ack (protocol-set-point issue, Responses section):
-      // a SECOND ack on the cycle the command ends -- ack_corr ==
-      // Move.id, ack_err == 0 regardless of outcome; a timeout ending is
-      // distinguished by the flags bit set just above, not by ack_err.
-      tlm_.ack(moveResult.completion.moveId, 0);
-    }
+    // 118 (retires the 112-005 "hoist drive_.tick() above both motor
+    // ticks" experiment, tracked only in project memory, not an issue):
+    // drive_.tick() moves back to its last-known-good position (commit
+    // 39c084c1) inside the R-settle block, pure computation (no bus), so
+    // it is legal borrowed work here. Staged targets are written by
+    // motorL_.tick()/motorR_.tick() -- L already collected THIS cycle
+    // (above) against LAST cycle's staged target (-1 cycle); R collects
+    // immediately below, against THIS cycle's freshly-staged target.
+    //
+    // 118 ticket 002: moveQueue_.tick() -- the MOVE stop decision -- no
+    // longer runs from this block. It moved to the trailing pace block,
+    // AFTER odom_.integrate()/stateEstimator_.update(), so the decision
+    // reads THIS cycle's odometry/estimator state instead of the
+    // previous cycle's (see that block's own comment below and
+    // clasi/issues/stop-decision-must-see-this-cycles-odometry.md). This
+    // R-settle block now holds only command dispatch and drive_.tick(),
+    // both pure compute.
+    drive_.tick();  // twist -> wheel targets, R writes them below
   });
 
-  // Final (perception + odometry + pace) block -- the schedule's 4th
-  // runAndWait, matching the same "own mark, own gap" shape as the three
-  // settle/clearance blocks above (see kPace's own comment for why the gap
-  // must be derived, not a bare kCycle anchored to the cycle start). Body:
-  // OTOS + odometry + rate-limited alternating line/color, outside any
-  // motor request/collect window (this class's own bus-discipline
-  // responsibility) -- all stage into `frame_` for the NEXT cycle's
-  // tlm_.setFrame()/emit() call. Unlike the other three blocks, this one
-  // DOES touch the bus (OTOS, and at most one of line/color) -- it is the
-  // schedule's pace block, not a settle/clearance window, so that
-  // constraint doesn't apply to it.
+  motorR_.tick(clock_.nowMicros());   // collect R -> velocity PID -> duty write
+
+  // Final (perception + odometry + MoveQueue stop-decision + pace) block --
+  // the schedule's 4th runAndWait, matching the same "own mark, own gap"
+  // shape as the three settle/clearance blocks above (see kPace's own
+  // comment for why the gap must be derived, not a bare kCycle anchored to
+  // the cycle start). Body: OTOS + odometry + StateEstimator refresh + the
+  // MoveQueue stop decision (118 ticket 002 -- relocated here so it reads
+  // THIS cycle's odometry/estimator state) + rate-limited alternating
+  // line/color, outside any motor request/collect window (this class's own
+  // bus-discipline responsibility) -- perception/odometry/estimator fields
+  // stage into `frame_` for the NEXT cycle's tlm_.setFrame()/emit() call;
+  // MoveQueue's own completion ack stages into tlm_'s ack slot the same
+  // way. Unlike the other three blocks, this one DOES touch the bus (OTOS,
+  // and at most one of line/color) -- it is the schedule's pace block, not
+  // a settle/clearance window, so that constraint doesn't apply to it.
   runAndWait(kPace, [&] {
     uint64_t nowUs = clock_.nowMicros();
 
@@ -627,6 +625,46 @@ void RobotLoop::cycle() {
     // already-staged data -- no I2C access, no sleep, bounded work, the same
     // posture odom_.integrate()/applyOtosSample() already keep in this block.
     stateEstimator_.update(frame_, static_cast<uint32_t>(nowUs / 1000));  // [us] -> [ms]
+
+    // MoveQueue's per-cycle tick (116, protocol-set-point issue; 118
+    // ticket 002 relocates it HERE -- after odom_.integrate()/
+    // stateEstimator_.update() immediately above -- so the stop decision
+    // reads odometry/estimator state staged THIS cycle, not the previous
+    // one. It reuses `nowUs`, this block's own already-captured "current
+    // reading" (mirrors move_queue.h's own "never re-read a current
+    // value mid-tick" convention), rather than issuing a second
+    // clock_.nowMicros() call. Replaces the deleted deadman_.expired()
+    // branch's schedule role: this is the load-bearing safety property
+    // (SUC-053) -- it runs unconditionally, every cycle, regardless of
+    // whether a command arrived this cycle -- the same way
+    // deadman_.expired() did. Ends the active Move on StopConditionMet or
+    // TimedOut, either chain-advancing the next pending Move THIS SAME
+    // cycle (seamless hand-off, SUC-051) or calling Drive::stop() with an
+    // empty queue (MoveQueue::tick()'s own contract) -- so host silence
+    // always ends in motors stopped, with zero further host traffic
+    // needed (no deadman lease to re-arm). The staged stop/twist reaches
+    // motor duty at the NEXT cycle's own drive_.tick() call (R-settle,
+    // above) -- one cycle of decision-to-duty latency, unchanged in shape
+    // from before this ticket (only the stop DECISION moved, not
+    // drive_.tick()'s own position).
+    MoveQueue::TickResult moveResult = moveQueue_.tick(nowUs, odom_);
+    bool moveTimedOut = moveResult.completed && moveResult.completion.timedOut;
+    // Level-set every cycle (telemetry.h's own setFlag() contract) -- true
+    // only on the exact cycle a timed-out completion is reported this
+    // call, false every other cycle (SUC-054).
+    tlm_.setFlag(kFlagFaultMoveTimeout, moveTimedOut);
+    if (moveResult.completed) {
+      // MOVE completion ack (protocol-set-point issue, Responses section):
+      // a SECOND ack on the cycle the command ends -- ack_corr ==
+      // Move.id, ack_err == 0 regardless of outcome; a timeout ending is
+      // distinguished by the flags bit set just above, not by ack_err.
+      // Staged here, in this cycle's OWN pace block (its last write to
+      // tlm_'s ack slot this cycle) -- not visible on the wire until the
+      // NEXT cycle's own tlm_.emit() call, which runs in that cycle's
+      // kClear block, BEFORE this pace block runs again. Same "ack rides
+      // the next frame" contract as before this ticket.
+      tlm_.ack(moveResult.completion.moveId, 0);
+    }
 
     updateLineColor(nowUs);
   });
