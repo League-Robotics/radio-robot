@@ -2,9 +2,11 @@
 id: '002'
 title: 'Build-selectable fake OTOS: synthesize frame.otos from encoder kinematics
   on the stand'
-status: open
-use-cases: [SUC-070]
-depends-on: ['001']
+status: in-progress
+use-cases:
+- SUC-070
+depends-on:
+- '001'
 github-issue: ''
 issue: on-chip-fake-otos-test-device.md
 completes_issue: true
