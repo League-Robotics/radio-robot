@@ -1,7 +1,7 @@
 ---
 id: '118'
 title: 'Loop schedule truth: firmware loop reorder + sim cadence parity'
-status: planning-docs
+status: closed
 branch: sprint/118-loop-schedule-truth-firmware-loop-reorder-sim-cadence-parity
 worktree: false
 use-cases:
