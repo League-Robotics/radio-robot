@@ -8,6 +8,17 @@
 
 namespace App {
 
+// kAckRingDepth (telemetry.h) must match the generated msg::Telemetry::
+// acks_[] array width (telemetry.proto's Telemetry.acks max_count) exactly
+// -- a mismatch here would silently truncate (kAckRingDepth too big) or
+// under-fill (too small) the wire array in emitPrimary() below. sizeof on
+// a temporary's member is a valid, never-evaluated sizeof operand (the
+// object is never constructed at runtime) -- the same "prove a size fact
+// at compile time with no runtime cost" idiom this file's own generated
+// siblings (layout_checks.h) already use for standard-layout checks.
+static_assert(sizeof(msg::Telemetry{}.acks_) == static_cast<size_t>(kAckRingDepth) * sizeof(msg::AckEntry),
+              "App::kAckRingDepth (telemetry.h) must match telemetry.proto's Telemetry.acks (max_count)");
+
 Telemetry::Telemetry(Comms& comms, Transport& serialLink, Transport& radioLink)
     : comms_(comms), serialLink_(serialLink), radioLink_(radioLink) {}
 
@@ -27,6 +38,28 @@ void Telemetry::ack(uint32_t corrId, uint32_t errCode) {
   ackCorr_ = corrId;
   ackErr_ = errCode;
   ackPending_ = true;
+  pushAckRing(corrId, errCode);
+}
+
+void Telemetry::pushAckRing(uint32_t corrId, uint32_t errCode) {
+  // Classic bounded circular buffer: the tail (next-write) slot is always
+  // (ackRingHead_ + ackRingCount_) % kAckRingDepth. While there's spare
+  // capacity, that slot is unused -- write it and grow the count. Once
+  // full (count == depth), that SAME formula reduces to ackRingHead_
+  // itself (the oldest entry's own slot) -- write the new value there,
+  // evicting the oldest, then advance ackRingHead_ by one so the
+  // just-written slot becomes the newest and the next slot over becomes
+  // the new oldest.
+  uint8_t tail;
+  if (ackRingCount_ < kAckRingDepth) {
+    tail = static_cast<uint8_t>((ackRingHead_ + ackRingCount_) % kAckRingDepth);
+    ++ackRingCount_;
+  } else {
+    tail = ackRingHead_;
+    ackRingHead_ = static_cast<uint8_t>((ackRingHead_ + 1) % kAckRingDepth);
+  }
+  ackRing_[tail].corr_id = corrId;
+  ackRing_[tail].err = errCode;
 }
 
 bool Telemetry::primaryDue(uint32_t now) const {
@@ -101,6 +134,21 @@ void Telemetry::emitPrimary(uint32_t now) {
 
   tlm.ack_corr = ackCorr_;
   tlm.ack_err = ackErr_;
+
+  // Ack ring (120, ADDITIVE) -- serialize the ring's CURRENT contents,
+  // oldest-to-newest (ackRingHead_'s own push/evict order), every
+  // emitPrimary() call, exactly like every other Frame field: the last
+  // staged snapshot, not a diff since the last send (app/DESIGN.md Sec 3).
+  // A frame this call sends carries whatever the ring holds RIGHT NOW,
+  // regardless of whether a new ack() landed since the last emit -- unlike
+  // ack_fresh above, there is no separate "is this new" bit for the ring
+  // (see telemetry.proto's own Telemetry.acks doc comment for why one
+  // isn't needed).
+  tlm.acks_count = ackRingCount_;
+  for (uint8_t i = 0; i < ackRingCount_; ++i) {
+    const uint8_t idx = static_cast<uint8_t>((ackRingHead_ + i) % kAckRingDepth);
+    tlm.acks_[i] = ackRing_[idx];
+  }
 
   tlm.enc_left = frame_.encLeft;
   tlm.enc_right = frame_.encRight;

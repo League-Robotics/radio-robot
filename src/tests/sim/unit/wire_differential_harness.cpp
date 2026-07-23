@@ -53,11 +53,17 @@
 //     <enc_right_position> <enc_right_velocity> <enc_right_time> <otos_x>
 //     <otos_y> <otos_heading> <otos_v_x> <otos_v_y> <otos_omega>
 //     <otos_time> <pose_x> <pose_y> <pose_h> <twist_v_x> <twist_v_y>
-//     <twist_omega> <line> <color>
+//     <twist_omega> <line> <color> <acks_count> <acks_0_corr> <acks_0_err>
+//     <acks_1_corr> <acks_1_err> <acks_2_corr> <acks_2_err> <acks_3_corr>
+//     <acks_3_err>
 //     Builds ReplyEnvelope{tlm=Telemetry{...}} per the frame-v2 shape
 //     (telemetry.proto, 115-003) -- one `flags` bit-string, one ack slot,
 //     two EncoderReadings, one OtosReading, always-present pose/twist, and
-//     the packed line/color words.
+//     the packed line/color words. The trailing 9 args (120, ADDITIVE) are
+//     the bounded ack ring: `acks_count` (0..App::kAckRingDepth=4) then
+//     exactly kAckRingDepth (corr_id, err) pairs -- slots at or past
+//     `acks_count` are still parsed (keeps this verb's own argv shape
+//     fixed) but never copied into `t.acks_`/`t.acks_count`.
 //     -> "B64 <base64 bytes>" or "ZERO".
 //
 //   encode_telemetry_secondary <now> <has_cmd_vel> <cmd_vel_left>
@@ -332,9 +338,10 @@ int cmdEncodeErr(int argc, char** argv) {
 
 // encode_telemetry -- ReplyEnvelope{tlm=Telemetry{...}}: every field
 // positional in telemetry.proto's OWN field-number order (frame v2,
-// 115-003 -- see this file's header comment for the full argv list).
+// 115-003; the ack ring's 9 trailing args added by 120 -- see this file's
+// header comment for the full argv list).
 int cmdEncodeTelemetry(int argc, char** argv) {
-  if (argc < 30) {
+  if (argc < 39) {
     std::printf("USAGE_ERROR\n");
     return 1;
   }
@@ -376,6 +383,27 @@ int cmdEncodeTelemetry(int argc, char** argv) {
 
   t.line = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
   t.color = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+
+  // Bounded ack ring (120, ADDITIVE -- telemetry.proto's Telemetry.acks doc
+  // comment). kRingDepth mirrors App::kAckRingDepth (app/telemetry.h) --
+  // duplicated as a local literal rather than an #include of app/
+  // telemetry.h, which would pull in app/comms.h's Transport interfaces
+  // this standalone wire-only harness (wire.cpp + wire_runtime.cpp, no
+  // app/ linkage) has no other reason to need. Always exactly
+  // kRingDepth (corr_id, err) pairs on argv (unused slots past acksCount
+  // are still parsed, keeping this verb's own argv shape fixed, but never
+  // copied into t.acks_/t.acks_count).
+  constexpr uint8_t kRingDepth = 4;
+  const uint32_t acksCount = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  for (uint8_t e = 0; e < kRingDepth; ++e) {
+    const uint32_t corr = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+    const uint32_t err = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+    if (e < acksCount) {
+      t.acks_[e].corr_id = corr;
+      t.acks_[e].err = err;
+    }
+  }
+  t.acks_count = static_cast<uint8_t>(acksCount < kRingDepth ? acksCount : kRingDepth);
 
   printEncodedOrZero(reply);
   return 0;

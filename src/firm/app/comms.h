@@ -77,21 +77,27 @@ class RadioTransport : public Transport {
 #endif  // HOST_BUILD
 
 // kMaxEnvelopeBytes -- the larger of the two generated per-direction
-// budgets (msg::wire::kCommandEnvelopeMaxEncodedSize (115) /
-// kReplyEnvelopeMaxEncodedSize (179)) -- one raw-byte scratch buffer,
-// reused sequentially for an incoming decode or an outgoing encode (never
-// overlapping within a single call). Computed by the constexpr expression
-// itself so a future schema regeneration that changes either constant
-// updates this one automatically.
+// budgets (msg::wire::kCommandEnvelopeMaxEncodedSize (55) /
+// kReplyEnvelopeMaxEncodedSize (185, 120's ack-ring addition -- was 153
+// pre-120)) -- one raw-byte scratch buffer, reused sequentially for an
+// incoming decode or an outgoing encode (never overlapping within a
+// single call). Computed by the constexpr expression itself so a future
+// schema regeneration that changes either constant updates this one
+// automatically.
 constexpr uint16_t kMaxEnvelopeBytes =
     (msg::wire::kCommandEnvelopeMaxEncodedSize > msg::wire::kReplyEnvelopeMaxEncodedSize)
         ? msg::wire::kCommandEnvelopeMaxEncodedSize
-        : msg::wire::kReplyEnvelopeMaxEncodedSize;  // == 179
+        : msg::wire::kReplyEnvelopeMaxEncodedSize;  // == 185
 
-// kArmoredBufSize -- "*B" (2) + base64(kMaxEnvelopeBytes=179) (ceil(179/3)*4
-// = 240) + NUL (1) = 243, rounded up to 256 with headroom -- matches
-// SerialPort's own 256-byte _rxBuf and stays under the ~250B outbound-line
-// guidance (243 < 250).
+// kArmoredBufSize -- "*B" (2) + base64(kMaxEnvelopeBytes=185) (ceil(185/3)*4
+// = 248) + NUL (1) = 251, rounded up to 256 (5 B headroom). 120's ack-ring
+// addition pushes this past the previous "~250B outbound-line guidance"
+// (243 B pre-120) -- still safe: `Radio::send()` (com/radio.h) already
+// fragments any message over its own 247-byte MTU across multiple RAW250
+// frames (a pre-existing capability, not new here), and `SerialPort`'s own
+// `_rxBuf[256]` still has headroom (251 < 256). Revisit kArmoredBufSize
+// itself only if a future schema change pushes kMaxEnvelopeBytes high
+// enough to threaten this 5-byte margin.
 constexpr uint16_t kArmoredBufSize = 256;
 
 enum class CmdStatus : uint8_t { kNone = 0, kDecoded = 1 };

@@ -153,17 +153,19 @@ a whole tour on a transient, firmware-self-recovered blip. That "one Move
 per leg, one-leg lookahead, event-driven completion" SHAPE survived
 unchanged through the 2026-07-22 port (`testgui-motion-paths-dead-after-
 move-cutover.md`) that brought the module back to life onto protocol v4's
-`Move`/single-ack-slot shape (see the `planner/` row above) — only the WIRE
-mechanics changed: `MoveTransport.move()`'s kwargs became the current
-`Move` schema (`v_x`/`omega`/`stop_distance`/`stop_angle`/`timeout`/
-`replace`/`id`, not the deleted sprint-109 arc shape), and the old
-`AckStatus` taxonomy (`DONE`/`TRIVIAL`/`SUPERSEDED`/`FLUSHED`/`TIMEOUT`/
-`SOLVE_FAIL`) plus depth-3 ack ring were replaced by `Telemetry`'s single
-ack slot (`ack_corr`/`ack_err`), which now carries EITHER a command's
-enqueue ack OR a `Move`'s own completion ack (`docs/protocol-v4.md` §7.2)
-— `tour.py`'s own `_drain_and_poll()`/`_outcome_for_terminal_frame()` poll
-and read that slot keyed on `Move.id`, never the enqueue envelope's
-`corr_id`. `planner.executor.StreamingExecutor`/`planner.profile`
+`Move` shape (see the `planner/` row above) — only the WIRE mechanics
+changed: `MoveTransport.move()`'s kwargs became the current `Move` schema
+(`v_x`/`omega`/`stop_distance`/`stop_angle`/`timeout`/`replace`/`id`, not
+the deleted sprint-109 arc shape), and the old `AckStatus` taxonomy
+(`DONE`/`TRIVIAL`/`SUPERSEDED`/`FLUSHED`/`TIMEOUT`/`SOLVE_FAIL`) plus
+depth-3 ack ring were replaced by `Telemetry`'s single ack slot
+(`ack_corr`/`ack_err`) — since 120, additionally backed by a bounded
+ack RING (`acks`, depth 4; see §5's own `wait_for_ack()` note below) —
+which carries EITHER a command's enqueue ack OR a `Move`'s own completion
+ack (`docs/protocol-v4.md` §7.2) — `tour.py`'s own
+`_drain_and_poll()`/`_outcome_for_terminal_frame()` poll and read that
+slot keyed on `Move.id`, never the enqueue envelope's `corr_id`.
+`planner.executor.StreamingExecutor`/`planner.profile`
 themselves were untouched by either move — only TOURS (this module)
 changed path; they remain the dormant half of `planner/` (see the
 `planner/` row above).
@@ -183,7 +185,46 @@ changed path; they remain the dormant half of `planner/` (see the
   `read_pending_binary_tlm_frames()`. This is the authoritative host-side
   surface for the current firmware's `CommandEnvelope`/`ReplyEnvelope`
   round trip — see [`../../firm/messages/DESIGN.md`](../../firm/messages/DESIGN.md)
-  for the wire shape it encodes/decodes. **`estimator_config()`** (117
+  for the wire shape it encodes/decodes.
+
+  **`wait_for_ack()` is ring-aware since 120
+  (bench-single-ack-slot-observability-collapses-at-40ms.md).**
+  `NezhaProtocol.wait_for_ack(corr_id, timeout)` delegates to
+  `SerialConnection.wait_for_ack()` (`io/serial_conn.py`), which polls
+  `drain_binary_tlm()` and scans each drained `ReplyEnvelope{tlm:
+  Telemetry}` frame's bounded `acks` ring (`telemetry.proto`, depth 4) —
+  not the single scalar `ack_corr`/`ack_err`/`flags`-bit-5 slot the pre-120
+  implementation scanned — via the module-private
+  `_match_ack_in_frames()`. Matching policy (the one genuinely open
+  question this sprint's Architecture Step 7 left to this ticket):
+  returns on the FIRST `(frame, ring-entry)` pair whose `corr_id` matches,
+  scanning frames in arrival order and, within one frame, ring entries in
+  wire order (oldest-pushed first) — chosen because a match is an exact
+  `corr_id` equality check, not a "freshest wins" precedence judgment, so
+  entry order only matters in the (unexpected, not observed in practice)
+  case of the same `corr_id` appearing twice. No freshness bit gates a
+  ring match — unlike the scalar pair (whose value persists, stale or
+  not, until the next `ack()` call, needing `ack_fresh` to disambiguate),
+  a `corr_id` present in the ring was genuinely pushed by
+  `App::Telemetry::ack()` at some point; there is nothing to
+  disambiguate. Returns the matched raw `telemetry_pb2.AckEntry` ring
+  entry (`SerialConnection.wait_for_ack()`) or this module's own
+  `AckEntry` dataclass via `AckEntry.from_ring_entry()`
+  (`NezhaProtocol.wait_for_ack()`) — reading the enclosing FRAME's own
+  scalar `ack_corr`/`ack_err` instead would be wrong whenever a different,
+  later command's ack has since become that frame's own "freshest ack".
+  `TLMFrame.acks` (`robot/protocol.py`) exposes the full decoded ring,
+  always populated (independent of `ack_fresh`), for a caller that wants
+  to inspect it directly rather than go through `wait_for_ack()`'s own
+  single-`corr_id` search — see `src/tests/bench/
+  ack_ring_rapid_fire_bench.py` for the hardware-verified N=5 rapid-fire
+  proof this ticket's own acceptance criteria required. The scalar
+  `ack_corr`/`ack_err`/`flags` bit 5 and `TLMFrame.ack`/`ack_fresh` keep
+  their exact pre-120 meaning, read by `AckEntry.from_telemetry()`
+  (unchanged, still used by `TLMFrame.from_pb2()`) — this is an additive
+  capability, not a replacement.
+
+  **`estimator_config()`** (117
   ticket 003) is a new live-tuning surface, mirroring `otos_config()`'s own
   "one envelope, one patch, fire-and-poll" builder shape exactly
   (`weight_heading_otos`/`weight_omega_otos`/`staleness_ms` →

@@ -71,13 +71,11 @@ from robot_radio.robot.pb2 import config_pb2, envelope_pb2, telemetry_pb2
 from robot_radio.robot.protocol import NezhaProtocol
 from robot_radio.testgui import binary_bridge
 
-# flags bit 5 -- telemetry.proto Telemetry.flags (ack_fresh, 115-003 frame
-# v2). _FakeConn.wait_for_ack() (below) returns a raw telemetry_pb2.Telemetry
-# directly (NOT the deleted AckEntry pb2 message -- the depth-3 ack ring/
-# AckEntry/AckStatus wire types are gone) -- NezhaProtocol.wait_for_ack()
-# adapts it via AckEntry.from_telemetry(), which reads ack_corr/ack_err
-# gated on this bit.
-_ACK_FRESH_BIT = 1 << 5
+# _FakeConn.wait_for_ack() (below) returns a raw telemetry_pb2.AckEntry ring
+# entry directly (120: the bounded ack ring's own wire message -- NOT the
+# whole Telemetry frame it rode in on) -- NezhaProtocol.wait_for_ack()
+# adapts it via AckEntry.from_ring_entry(), which reads corr_id/err off it
+# with no freshness gate needed (see that method's own docstring).
 
 
 # ---------------------------------------------------------------------------
@@ -195,8 +193,7 @@ def test_empty_line_returns_empty_string_no_wire_call(proto):
 
 def test_ol_sends_otos_config_patch_with_linear_scale(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.Telemetry(
-        flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=0)
+    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=0)
 
     reply = binary_bridge.translate_command(nezha, "OL 1.05")
 
@@ -210,8 +207,7 @@ def test_ol_sends_otos_config_patch_with_linear_scale(proto):
 
 def test_oa_sends_otos_config_patch_with_angular_scale(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.Telemetry(
-        flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=0)
+    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=0)
 
     reply = binary_bridge.translate_command(nezha, "OA -0.98")
 
@@ -222,8 +218,7 @@ def test_oa_sends_otos_config_patch_with_angular_scale(proto):
 
 def test_oi_sends_otos_config_patch_with_init_trigger(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.Telemetry(
-        flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=0)
+    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=0)
 
     reply = binary_bridge.translate_command(nezha, "OI")
 
@@ -271,8 +266,7 @@ def test_ol_ack_timeout_renders_err(proto):
 
 def test_ol_nak_ack_renders_err(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.Telemetry(
-        flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=envelope_pb2.ERR_UNIMPLEMENTED)
+    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=envelope_pb2.ERR_UNIMPLEMENTED)
 
     reply = binary_bridge.translate_command(nezha, "OL 1.05")
 
@@ -314,7 +308,7 @@ def test_ov_op_or_still_render_unavailable_reply_unchanged(proto):
 
 def test_set_motor_pid_keys_send_one_left_side_motor_patch(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.Telemetry(flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=0)
+    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=0)
 
     reply = binary_bridge.translate_command(nezha, "SET pid.kp=1.5 pid.kaw=20")
 
@@ -330,7 +324,7 @@ def test_set_motor_pid_keys_send_one_left_side_motor_patch(proto):
 
 def test_set_drivetrain_keys_send_drivetrain_patch(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.Telemetry(flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=0)
+    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=0)
 
     reply = binary_bridge.translate_command(nezha, "SET tw=128 rotSlip=0.92")
 
@@ -344,7 +338,7 @@ def test_set_drivetrain_keys_send_drivetrain_patch(proto):
 
 def test_set_ml_mr_send_two_separate_motor_side_patches(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.Telemetry(flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=0)
+    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=0)
 
     reply = binary_bridge.translate_command(nezha, "SET ml=0.523599 mr=0.523599")
 
@@ -392,8 +386,7 @@ def test_set_with_no_kv_pairs_is_badarg_no_wire_call(proto):
 
 def test_set_nak_ack_renders_set_failed(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.Telemetry(
-        flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=envelope_pb2.ERR_BADARG)
+    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=envelope_pb2.ERR_BADARG)
 
     reply = binary_bridge.translate_command(nezha, "SET tw=128")
 

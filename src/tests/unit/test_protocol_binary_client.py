@@ -276,12 +276,14 @@ class _ConfigLoopbackSerial:
     ``config`` gets NO synchronous ``ReplyEnvelope`` of its own
     (``docs/protocol-v4.md`` sec 7.1 -- ``Comms::sendReply()`` is called
     from exactly one site, ``Telemetry::emitPrimary()``, always with
-    ``body_kind = TLM``); its outcome rides the single ack slot
-    (``ack_corr``/``ack_err``, valid iff ``flags`` bit 5) inside the NEXT
-    unsolicited ``ReplyEnvelope{tlm: Telemetry}`` push instead -- exactly
-    what ``move``/``stop`` already do, and what ``set_config_binary()``
-    now polls for via ``wait_for_ack()``/``_match_ack_in_frames()``
-    (``io/serial_conn.py``), not a synchronous ``ok`` oneof.
+    ``body_kind = TLM``); its outcome rides the bounded ack ring
+    (``acks``, 120) -- and, unchanged, the single "freshest ack" scalar
+    slot (``ack_corr``/``ack_err``, valid iff ``flags`` bit 5) -- inside
+    the NEXT unsolicited ``ReplyEnvelope{tlm: Telemetry}`` push instead --
+    exactly what ``move``/``stop`` already do, and what
+    ``set_config_binary()`` now polls for via
+    ``wait_for_ack()``/``_match_ack_in_frames()`` (``io/serial_conn.py``),
+    not a synchronous ``ok`` oneof.
     """
 
     is_open = True
@@ -301,11 +303,15 @@ class _ConfigLoopbackSerial:
             cmd = envelope_pb2.CommandEnvelope.FromString(raw)
             self.sent_envelopes.append(cmd)
 
-            # Unsolicited tlm push carrying the ack slot -- corr_id=0 on the
+            # Unsolicited tlm push carrying the ack -- corr_id=0 on the
             # ENVELOPE itself (matches real firmware: primary frames always
-            # carry corr_id=0), ack_corr=cmd.corr_id INSIDE the telemetry
-            # payload is what wait_for_ack() actually matches on.
+            # carry corr_id=0). wait_for_ack() (120: ring-based) actually
+            # matches on the `acks` ring entry; the scalar ack_corr/ack_err/
+            # flags bit 5 are populated too, mirroring how real firmware's
+            # Telemetry::ack() pushes both simultaneously, for any OTHER
+            # reader that still wants the single freshest-ack slot.
             tlm = telemetry_pb2.Telemetry(flags=_ACK_FRESH_BIT, ack_corr=cmd.corr_id, ack_err=0)
+            tlm.acks.add(corr_id=cmd.corr_id, err=0)
             reply = envelope_pb2.ReplyEnvelope(corr_id=0, tlm=tlm)
             armored = "*B" + base64.b64encode(reply.SerializeToString()).decode("ascii")
             self._pending.put((armored + "\n").encode("ascii"))

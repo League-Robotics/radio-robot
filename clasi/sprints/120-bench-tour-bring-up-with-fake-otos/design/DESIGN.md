@@ -475,30 +475,85 @@ unconditional "primary wins ties" rule starves secondary to 0Hz. The
 alternation costs at most one primary frame delayed by one cycle roughly
 once per secondary period; a non-tied call is unaffected.
 
-**Telemetry's ack ring (120, DRAFT — verify/refine against shipped
-`telemetry.{h,cpp}` at execution time, same convention 118/119 used for
-this overlay) — replaces the 115-005 single-slot design, which itself
-had replaced the original depth-3 `AckEntry` ring.** Bench measurement
-at the real 40ms cycle / ~15Hz host read rate
-(`bench-single-ack-slot-observability-collapses-at-40ms.md`) showed the
-115-005 single-slot design's own "rare at bench rates" assumption no
-longer holds: `move_protocol_bench.py` lost 12/43 checks, every miss a
-transient enqueue/STOP/CONFIG ack overwritten before the host's next
-read. `Telemetry::ack(corrId, errCode)` now pushes onto a small, bounded
-ring (depth 4) instead of overwriting a single pair; `emit()` serializes
-the ring's current contents into a new, additive wire field. `ack_corr`/
-`ack_err` (the pre-120 scalar pair) and `flags` bit 5 (`kFlagAckFresh`)
-keep their EXACT prior meaning — "the freshest ack" — for any reader
-that never looked past them; the ring is purely additive, so no existing
-host consumer needs to change to keep working. A command acked within
-the same primary period as 4 OTHER commands still overwrites the ring's
-oldest entry (a saturated-ring tradeoff, not the old single-slot
-tradeoff) — the rapid-fire acceptance test this ticket adds is designed
-to confirm 4 is enough for the queue's own 5-deep `ERR_FULL` ceiling in
-practice; revisit the depth constant if it isn't. `flags` bit 5 remains a
-ONE-SHOT pulse Telemetry tracks internally: true on the very next
-`emitPrimary()` call after ANY `ack()` push since the last emit, then
-cleared.
+**Telemetry's ack ring (120 ticket 001, LANDED — replaces the 115-005
+single-slot design, which itself had replaced the original depth-3
+`AckEntry` ring).** Bench measurement at the real 40ms cycle / ~15Hz host
+read rate (`bench-single-ack-slot-observability-collapses-at-40ms.md`)
+showed the 115-005 single-slot design's own "rare at bench rates"
+assumption no longer holds: `move_protocol_bench.py` lost 12/43 checks,
+every miss a transient enqueue/STOP/CONFIG ack overwritten before the
+host's next read. `Telemetry::ack(corrId, errCode)` now pushes onto BOTH
+the pre-120 scalar pair (`ackCorr_`/`ackErr_`, UNCHANGED behavior — see
+below) AND a small, bounded ring (`ackRing_[kAckRingDepth]`, depth 4,
+`telemetry.h`) — a plain circular buffer (`pushAckRing()`,
+`telemetry.cpp`): while the ring has spare capacity the new entry lands
+in the next free slot; once full, the new entry overwrites the OLDEST
+slot and the head pointer advances, so only the single oldest entry is
+ever evicted, never a mid-ring one. `emitPrimary()` serializes the ring's
+CURRENT contents (oldest-to-newest) into the new, additive wire field
+(`telemetry.proto` field 14, `repeated AckEntry acks`) every call — the
+same "last staged snapshot, not a diff" contract every other `Frame`
+field already has (§3's own invariant, extended here): a ring entry
+persists across emits with no new `ack()` call, it is not cleared after
+being sent once.
+
+`ack_corr`/`ack_err` (the pre-120 scalar pair) and `flags` bit 5
+(`kFlagAckFresh`) keep their EXACT prior meaning — "the freshest ack" —
+for any reader that never looked past them; the ring is purely additive,
+so no existing host consumer needs to change to keep working. A command
+acked within the same primary period as 4 OTHER commands still overwrites
+the ring's oldest entry (a saturated-ring tradeoff, not the old
+single-slot tradeoff). `flags` bit 5 remains a ONE-SHOT pulse Telemetry
+tracks internally: true on the very next `emitPrimary()` call after ANY
+`ack()` push since the last emit, then cleared — this pulse governs ONLY
+the scalar pair; no equivalent freshness bit exists (or is needed) for
+the ring, since a ring entry is either genuinely present (a real,
+once-pushed ack) or not there at all — there is no "stale leftover value"
+ambiguity for a repeated field the way there is for a persisting scalar
+pair.
+
+Wire-size consequence: `Telemetry` standalone grows from 144 B to a
+worst-case 179 B (a full 4-entry ring, each entry at its own declared
+bound — `corr_id` up to 65535, `err` up to 7); wrapped as
+`ReplyEnvelope.body`'s `tlm` arm, the whole envelope's worst case grows
+from 153 B to **185 B**, exactly 1 B under the 186-byte envelope budget
+(`wire.h`'s own regenerated `kReplyEnvelopeMaxEncodedSize` constant and
+static_assert) — the tightest margin in the schema; a future field added
+to `Telemetry` will need either this ring's own depth/bound choices
+revisited or the 186-byte budget itself raised. See
+`docs/protocol-v4.md` §8.3 for the full breakdown.
+
+Host-side matcher (Architecture Step 7's open question, resolved):
+`SerialConnection.wait_for_ack()`/`NezhaProtocol.wait_for_ack()`
+(`src/host/robot_radio/io/serial_conn.py`,
+`src/host/robot_radio/robot/protocol.py`) now scan the ring (via
+`_match_ack_in_frames()`), not the scalar slot — returning on the FIRST
+(frame, ring-entry) match found, scanning frames in arrival order and,
+within a frame, ring entries in wire order (oldest first). No freshness
+check applies to a ring scan (see above). `TLMFrame.acks` (a new,
+ADDITIVE field, always populated, independent of `ack_fresh`) exposes the
+full decoded ring to any caller that wants to inspect it directly
+(bench scripts, `tlm_log.py`), alongside the unchanged
+`TLMFrame.ack`/`ack_corr`/`ack_err`/`ack_fresh`.
+
+**Hardware verification (2026-07-23, robot "tovez",
+`/dev/cu.usbmodem2121102`).** The ring itself is proven solid on real
+hardware: a dedicated rapid-fire N=5 back-to-back `move_twist()` enqueue
+test (`src/tests/bench/ack_ring_rapid_fire_bench.py`) passed all 5/5
+ack-observability checks on 3 separate runs (15/15 total), and
+`twist_drive.py`'s previously-always-missed `stop()` ack landed cleanly
+whenever the command itself reached the firmware. `move_protocol_bench.py`
+did NOT reach a clean 43/43 in this session (repeated runs: 38, 34, 33,
+30, 35 out of 43) — root-cause isolated via an A/B test against the
+UNMODIFIED pre-120 firmware+host code (commit `047555a5`, built in a
+throwaway `git worktree`), which showed the IDENTICAL failure signature
+(ack=None AND zero encoder movement — the envelope itself never reaching
+`RobotLoop::processMessage()`, not an ack-ring miss) at a similar rate.
+This is a pre-existing, out-of-scope bench-link reliability gap, filed as
+`bench-move-commands-intermittently-never-reach-firmware.md` — NOT a
+defect in the ack ring, which the isolated rapid-fire/twist_drive
+evidence above shows working exactly as designed whenever the underlying
+command actually arrives.
 
 **The `flags` bit-string (115-005 — replaces the old separate
 `fault_bits`/`event_bits`/nine-bool frame).** ONE `uint32` carries every

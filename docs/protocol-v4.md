@@ -95,15 +95,17 @@ either total over the 186-byte envelope budget fails a build-time
 | Envelope | Worst-case arm | Total (worst arm + non-oneof bytes) |
 |---|---|---|
 | `CommandEnvelope` | `config`=44B, `stop`=2B, **`move`=38B** (worst=`config`) | **50 B** |
-| `ReplyEnvelope` | `ok`=19B, `err`=10B, **`tlm`=147B** (worst=`tlm`) | **153 B** |
+| `ReplyEnvelope` | `ok`=19B, `err`=10B, **`tlm`=179B** (worst=`tlm`, 120: a full 4-entry `acks` ring, was 147B pre-120) | **185 B** |
 | `TelemetrySecondary` | (own armored line, not a `ReplyEnvelope` arm) | **52 B** |
 
-Both `CommandEnvelope` and `ReplyEnvelope` sit comfortably under the
-186-byte cap (136 B and 33 B of margin respectively). Note `move` (38 B,
-two nested oneofs + `id`) is a structurally bigger message than the
-`Twist` arm it replaced, yet `CommandEnvelope`'s own worst-case total is
-unchanged at 50 B — `config` (dominated by `DrivetrainConfigPatch`)
-stays the larger arm either way
+`CommandEnvelope` sits comfortably under the 186-byte cap (136 B
+margin). `ReplyEnvelope` (120: the ack ring, §7.1/§8.1/§8.3) now sits
+just **1 B** under it — the tightest margin in the schema; see §8.3 for
+the full breakdown and what a future field addition here would need to
+account for. Note `move` (38 B, two nested oneofs + `id`) is a
+structurally bigger message than the `Twist` arm it replaced, yet
+`CommandEnvelope`'s own worst-case total is unchanged at 50 B — `config`
+(dominated by `DrivetrainConfigPatch`) stays the larger arm either way
 (`src/firm/messages/DESIGN.md` §3, "Envelope size is bounded...").
 
 - **Armored buffer**: 256 bytes (`kArmoredBufSize`, `comms.h:95`) — "*B"
@@ -158,8 +160,8 @@ documents; only the two verbs above remain.
 | `move` | **21** | `Move` (§4) | `RobotLoop::handleMove()` |
 
 `corr_id` (field 1) is present on every `CommandEnvelope` and is echoed
-back via the single ack slot (§7.1), never a per-command
-`ReplyEnvelope`.
+back via the ack ring / single "freshest ack" slot (§7.1), never a
+per-command `ReplyEnvelope`.
 
 **Reserved, not reused** (`envelope.proto`'s own `reserved` list,
 `CommandEnvelope`): 2, 3, 4, 5, 7-12, 14-18, 19, 20. Field 19 (`Twist`,
@@ -470,13 +472,35 @@ at all (verified by `app_robot_loop_harness.cpp`'s SUC-055 scenario,
 
 ## 7. Responses
 
-### 7.1 The single ack slot — the ONLY per-command outcome path
+### 7.1 The ack ring and the single "freshest ack" slot — the ONLY per-command outcome path
 
 There is no per-command `ReplyEnvelope`. Every command's outcome rides
-`Telemetry.ack_corr`/`ack_err` (telemetry.proto, §8) inside the next
-`Telemetry` push — `App::Telemetry::ack(corrId, errCode)` marks the ack
-"fresh" so the very next primary-frame emission sets `flags` bit 5
-(`ack_fresh`) and carries it.
+`Telemetry` (telemetry.proto, §8) inside the next push —
+`App::Telemetry::ack(corrId, errCode)` pushes onto BOTH of the following,
+every call:
+
+- **`acks`** (§8.1 field 14, 120) — a bounded ring, depth 4
+  (`kAckRingDepth`), of `AckEntry{corr_id, err}` values, oldest evicted
+  first. This is the field `wait_for_ack()` (§9) actually scans. Because
+  it holds up to 4 recent acks rather than 1, a host reading telemetry at
+  ~15 Hz against the firmware's ~25 Hz (40 ms) emit rate still observes a
+  transient enqueue/STOP/CONFIG ack that would otherwise be overwritten
+  before the next read (`bench-single-ack-slot-observability-collapses-
+  at-40ms.md` — measured 12/43 `move_protocol_bench.py` checks lost to
+  this before 120). No freshness bit applies to ring entries — a corr_id
+  present in the ring was genuinely pushed at some point; there is
+  nothing "stale" about it the way a leftover scalar value can be.
+- **`ack_corr`/`ack_err`** (fields 5/6, UNCHANGED since before 120) — the
+  single "freshest ack" scalar pair. `ack()` also marks the ack "fresh" so
+  the very next primary-frame emission sets `flags` bit 5 (`ack_fresh`)
+  and carries it. A command acked within the same primary period as
+  another still overwrites this pair — it was never the reliable-delivery
+  path; it is kept, unchanged, for any existing reader that only ever
+  wanted "whatever the newest ack was."
+
+The wire change is purely additive: `ack_corr`/`ack_err`/`flags` bit 5
+keep their exact pre-120 meaning for a reader that ignores `acks`
+entirely.
 
 **AS-BUILT**: `ReplyEnvelope`'s `ok` (`Ack`) and `err` (`Error`) oneof
 arms are declared in the schema but have **zero live producers** in the
@@ -489,21 +513,24 @@ declared-only schema (same posture `envelope.proto`'s own doc comment
 states), available to a future ticket that wants a synchronous same-line
 ack for a command whose result cannot wait a telemetry cycle.
 
-### 7.2 Two kinds of ack ride the same slot
+### 7.2 Two kinds of ack ride the same push
 
-1. **Enqueue/command ack** — `ack_corr = CommandEnvelope.corr_id`,
-   `ack_err` = the `ErrCode` from dispatch (§7.3). Sent for every `move`/
+1. **Enqueue/command ack** — `corr_id = CommandEnvelope.corr_id`,
+   `err` = the `ErrCode` from dispatch (§7.3). Sent for every `move`/
    `config`/`stop` that reaches a handler (i.e. every command that was
    successfully decoded — §7.4 covers what happens to one that wasn't).
-2. **MOVE completion ack** — `ack_corr = Move.id` (NOT the enqueue
+2. **MOVE completion ack** — `corr_id = Move.id` (NOT the enqueue
    envelope's `corr_id`), sent on the exact cycle the active `Move` ends
    (§5.2).
 
-Because it is the same single slot, an enqueue ack and a completion ack
-landing in the same primary period overwrite each other
-(stakeholder-accepted "ack-depth-1" tradeoff, unchanged from the frame
-v2 rewrite — `wait_for_ack()`'s timeout+retry covers the rare
-collision).
+Both push onto the SAME ring (`acks`) and the SAME scalar pair
+(`ack_corr`/`ack_err`) — `App::Telemetry::ack()` doesn't distinguish which
+kind of ack it's given. Landing in the same primary period as another ack:
+the ring (depth 4) keeps BOTH (evicting only the OLDEST entry once full);
+the scalar pair still overwrites (unchanged "freshest ack" semantics,
+§7.1) — `wait_for_ack()` (§9) scans the ring, so this overwrite no longer
+affects it (120: replaces the pre-120 "ack-depth-1" tradeoff, where the
+single slot WAS what every caller matched against).
 
 **Wire-visible latency (119 ticket 005 — `robot_loop.cpp`'s telemetry-emit
 placement changed alongside the straight-leg-crab actuation fix, see
@@ -614,6 +641,12 @@ any time window.
 | `twist` | 11 | `BodyTwist3{v_x[mm/s], v_y, omega[rad/s]}` — fused from both wheels' measured velocities | always (`v_y` always 0 on this differential build) |
 | `line` | 12 | `uint32`, 4 packed 1-byte channels (ch1 low byte) | valid iff `flags` bit 13 |
 | `color` | 13 | `uint32`, packed RGBC (R low byte) | valid iff `flags` bit 14 |
+| `acks` | 14 | `repeated AckEntry{corr_id, err}`, up to 4 (120, ADDITIVE) | always present (may be an empty list); each entry unconditionally valid, no freshness gate |
+
+Field 14 (`acks`) is additive — sprint 120's ack ring
+(`bench-single-ack-slot-observability-collapses-at-40ms.md`). Nothing
+above it is renumbered or removed. See §7.1/§7.2 for the ack semantics;
+§8.3 for the size-budget consequence.
 
 ### 8.2 `flags` bit table
 
@@ -641,15 +674,26 @@ any time window.
 ### 8.3 Measured sizes
 
 `gen_messages.py`-measured (`src/protos/telemetry.proto`'s own header
-comment, unchanged by sprint 116 — this sprint only touched
-`envelope.proto`'s `CommandEnvelope`/`ConfigDelta` oneofs):
+comment; `wire.h`'s own `kReplyEnvelopeMaxEncodedSize` comment is the
+generator's own regenerated ground truth, re-measured on every build —
+these numbers are transcribed from it, not hand-computed):
 
-- **`Telemetry`, standalone** (no enclosing tag/length prefix): **144 B**.
+- **`Telemetry`, standalone** (no enclosing tag/length prefix), pre-120
+  (before the ack ring): 144 B.
+- **`Telemetry`, standalone, AS OF 120** (a FULL 4-entry `acks` ring, each
+  entry at its own declared worst case — `corr_id` up to 65535, `err` up
+  to 7): **179 B** (+35 B over pre-120 — each `AckEntry` costs 8 B tag/
+  length/payload overhead on top of its own 6 B content, times 4).
 - **Wrapped as `ReplyEnvelope.body`'s `tlm` arm** (how a primary frame
-  actually goes on the wire): 147 B arm contribution (144 B payload +
-  1 B tag + 2 B length varint, since 144 ≥ 128 needs a 2-byte length) +
-  6 B non-oneof `ReplyEnvelope` overhead = **153 B total**, 33 B margin
-  under the 186-byte envelope budget (matches §2.3's table).
+  actually goes on the wire): 179 B payload + 1 B tag + 2 B length varint
+  (179 ≥ 128 needs a 2-byte length) = 182 B arm contribution + 6 B
+  non-oneof `ReplyEnvelope` overhead = **185 B total**, exactly **1 B
+  margin** under the 186-byte envelope budget (matches §2.3's table,
+  `wire.h`'s `kReplyEnvelopeMaxEncodedSize` static_assert). This is now
+  the tightest margin in the schema — a future field added to `Telemetry`
+  (or a wider bound on an existing field) will need either the ack ring's
+  own depth/bound choices revisited or the 186-byte budget itself raised.
+  Pre-120, this arm was 147 B / 153 B total (33 B margin).
 
 ### 8.4 `TelemetrySecondary` — unchanged, out of this sprint's scope
 
@@ -702,7 +746,9 @@ proto.otos_config(offset_x=-51.5, offset_y=0.0)
 frames = proto.read_pending_binary_tlm_frames()
 for f in frames:
     if f.ack_fresh and f.ack is not None:
-        print(f.ack.corr_id, f.ack.ok, f.ack.err_code)
+        print(f.ack.corr_id, f.ack.ok, f.ack.err_code)  # the single "freshest ack" slot, unchanged
+    for entry in f.acks:  # the bounded ack ring (120) -- every ack this frame's ring still carries
+        print(entry.corr_id, entry.ok, entry.err_code)
     if f.fault_move_timeout:
         print("a MOVE just timed out")
 ```
@@ -711,6 +757,18 @@ for f in frames:
 keyword-only args on both `move_twist()`/`move_wheels()` — exactly one
 must be given (`ValueError`, no wire traffic, otherwise), mirroring
 `Move.stop`'s own oneof.
+
+**`wait_for_ack(corr_id, timeout)`** (120) scans `acks` — not the single
+scalar slot — across however many `Telemetry` pushes arrive within
+`timeout`, returning the FIRST matching entry (or `None`). Because the
+ring holds up to `kAckRingDepth` (4) recent acks, a caller firing several
+commands in quick succession (an `ERR_FULL` probe, a multi-leg tour, a
+rapid-fire enqueue burst) can call `wait_for_ack()` once per corr_id
+afterward and still find each one, as long as no more than 4 OTHER acks
+landed before that particular read — a bench measurement, not a
+theoretical guarantee; see `src/tests/bench/move_protocol_bench.py`'s own
+rapid-fire N-enqueue scenario for the number this depth was validated
+against on real hardware.
 
 **`tlm_log.py`** (`src/tests/bench/tlm_log.py`) is the bench dataset
 logger — drains `read_pending_binary_tlm_frames()` to a flat CSV, one

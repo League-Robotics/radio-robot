@@ -180,15 +180,23 @@ def encode_err(binary: pathlib.Path, corr_id: int, code_name: str, field_num: in
     return base64.b64decode(line[len("B64 "):])
 
 
-def encode_telemetry(binary: pathlib.Path, corr_id: int, **fields) -> bytes | None:
+_ACK_RING_DEPTH = 4  # mirrors App::kAckRingDepth (app/telemetry.h) / telemetry.proto's Telemetry.acks max_count
+
+
+def encode_telemetry(binary: pathlib.Path, corr_id: int,
+                      acks: "list[tuple[int, int]] | None" = None,
+                      **fields) -> bytes | None:
     """Builds ReplyEnvelope{tlm=Telemetry{...}} via the `encode_telemetry`
     argv verb (see wire_differential_harness.cpp's file header for the full
     positional list) -- frame v2 shape (115-003): one `flags` bit-string,
-    one `ack_corr`/`ack_err` slot (the depth-3 ack ring is gone), two
-    `EncoderReading`s (`enc_left_*`/`enc_right_*`), one `OtosReading`
-    (`otos_*`), always-present `pose_*`/`twist_*`, and the packed `line`/
-    `color` words. `fields` keys are the flattened per-field names below;
-    every field not passed defaults to its proto zero value (0 / 0.0)."""
+    one `ack_corr`/`ack_err` slot, two `EncoderReading`s
+    (`enc_left_*`/`enc_right_*`), one `OtosReading` (`otos_*`),
+    always-present `pose_*`/`twist_*`, the packed `line`/`color` words, and
+    (120, ADDITIVE) the bounded `acks` ring. `fields` keys are the
+    flattened per-field names below; every field not passed defaults to
+    its proto zero value (0 / 0.0). `acks` is a list of up to
+    `_ACK_RING_DEPTH` (corr_id, err) pairs, oldest-first, matching
+    `Telemetry.acks`'s own wire order -- defaults to an empty ring."""
     order = (
         "now", "mode", "seq", "flags", "ack_corr", "ack_err",
         "enc_left_position", "enc_left_velocity", "enc_left_time",
@@ -207,6 +215,16 @@ def encode_telemetry(binary: pathlib.Path, corr_id: int, **fields) -> bytes | No
         # harness parses every non-float positional arg with strtoul(), which
         # silently reads "True"/"False" as 0 (no leading digit).
         args.append(str(int(value)) if isinstance(value, bool) else str(value))
+
+    acks = acks or []
+    assert len(acks) <= _ACK_RING_DEPTH, (
+        f"ack ring depth is {_ACK_RING_DEPTH} (telemetry.proto Telemetry.acks max_count)")
+    args.append(str(len(acks)))
+    for idx in range(_ACK_RING_DEPTH):
+        entry_corr, entry_err = acks[idx] if idx < len(acks) else (0, 0)
+        args.append(str(entry_corr))
+        args.append(str(entry_err))
+
     r = run_harness(binary, "encode_telemetry", *args)
     assert not r.crashed, f"encode_telemetry crashed: {r.stdout}\n{r.stderr}"
     line = r.stdout.strip()
