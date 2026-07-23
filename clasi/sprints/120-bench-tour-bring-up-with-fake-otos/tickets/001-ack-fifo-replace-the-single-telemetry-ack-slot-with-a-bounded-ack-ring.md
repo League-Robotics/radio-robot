@@ -1,8 +1,9 @@
 ---
 id: '001'
 title: 'Ack FIFO: replace the single telemetry ack slot with a bounded ack ring'
-status: open
-use-cases: [SUC-069]
+status: in-progress
+use-cases:
+- SUC-069
 depends-on: []
 github-issue: ''
 issue: bench-single-ack-slot-observability-collapses-at-40ms.md
