@@ -1294,7 +1294,6 @@ class NezhaProtocol:
     def estimator_config(self, *, weight_heading_otos: float | None = None,
                           weight_omega_otos: float | None = None,
                           staleness_ms: float | None = None,
-                          stop_lead_ms: float | None = None,
                           a_max: float | None = None,
                           a_decel: float | None = None,
                           alpha_max: float | None = None,
@@ -1315,25 +1314,28 @@ class NezhaProtocol:
         sprint — encoder-only v1, per stakeholder decision);
         ``staleness_ms`` maps to ``FusionWeights::staleness`` (the max age,
         ms, a fresh OTOS reading may carry and still be eligible to blend).
-        ``stop_lead_ms`` (turn-prediction campaign) maps to
-        ``App::MoveQueue::stopLead_`` (``App::MoveQueue::setStopLead()``) —
-        a DIFFERENT App:: object than the three fields above, riding the
-        SAME wire arm as the smallest coherent path (see
-        ``EstimatorConfigPatch``'s own doc comment, ``config.proto``); may
-        be set alone (no weight field required in the same call).
 
         ``a_max``/``a_decel``/``alpha_max``/``alpha_decel``/``j_max``/
         ``yaw_jerk_max`` (decel-into-the-goal campaign, jerk-limited
         S-curve stage) map to ``App::MoveQueue::shaperLimits_``
         (``App::MoveQueue::setShaperLimits()``, ``App::ShaperLimits``) —
-        riding the SAME arm as ``stop_lead_ms`` for the identical
-        "smallest coherent path" reason; ``a_max``/``a_decel`` are
+        riding the SAME ``CONFIG_ESTIMATOR`` wire arm as the three fields
+        above, the "smallest coherent path" ``EstimatorConfigPatch``'s own
+        doc comment (``config.proto``) gives; ``a_max``/``a_decel`` are
         ``[mm/s^2]`` linear accel-ramp/decel-taper ceilings, ``alpha_max``/
         ``alpha_decel`` are ``[rad/s^2]`` angular ones, ``j_max``/
         ``yaw_jerk_max`` are ``[mm/s^3]``/``[rad/s^3]`` jerk ceilings —
         how fast the commanded ACCELERATION itself may change
         (``Motion::VelocityShaper``'s own limits). Any subset may be set
         alone.
+
+        A former field targeting ``App::MoveQueue``'s own time-lead
+        anticipation constant was DELETED (118 ticket 004,
+        land-at-zero-completion-delete-stop-lead.md) — the completion
+        mechanism it drove no longer exists (see
+        ``App::MoveQueue::tick()``'s own doc comment for the land-at-zero
+        predicate that replaces it); the wire field is ``reserved`` in
+        ``config.proto``, not reused.
 
         UNLIKE ``otos_config()``, a patch sent through this method is NEVER
         persisted on the robot side — ``RobotLoop::handleConfig()``'s
@@ -1360,8 +1362,6 @@ class NezhaProtocol:
             fields["weight_omega_otos"] = float(weight_omega_otos)
         if staleness_ms is not None:
             fields["staleness_ms"] = float(staleness_ms)
-        if stop_lead_ms is not None:
-            fields["stop_lead_ms"] = float(stop_lead_ms)
         if a_max is not None:
             fields["a_max"] = float(a_max)
         if a_decel is not None:
@@ -1378,7 +1378,7 @@ class NezhaProtocol:
         if not fields:
             raise ValueError(
                 "estimator_config() requires at least one field "
-                "(weight_heading_otos/weight_omega_otos/staleness_ms/stop_lead_ms/"
+                "(weight_heading_otos/weight_omega_otos/staleness_ms/"
                 "a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max)")
 
         delta = envelope_pb2.ConfigDelta(

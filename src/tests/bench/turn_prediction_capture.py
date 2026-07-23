@@ -2,9 +2,14 @@
 """src/tests/bench/turn_prediction_capture.py -- turn-prediction campaign,
 Phase A: capture a turn-heavy sim session (several 90-degree turns, both
 directions, plus a Tour 1 run) to a tlm_log CSV -- the raw material
-``src/tests/notebooks/turn_prediction.ipynb`` analyzes (ZOH prediction
+``docs/archive/turn_prediction.ipynb`` analyzes (ZOH prediction
 quality vs anticipation lead, and measured stop-detection lag/overshoot per
-turn).
+turn). That notebook was relocated out of ``src/tests/notebooks/`` (118
+ticket 004): it is a superseded historical record of the deleted
+anticipation-lead campaign (see the notebook's own first cell), and this
+project's grep gate for the deleted field's own wire-key name requires no
+matching string survive anywhere under `src/` or `data/`, which its own
+extensive historical narrative cannot honor while staying legible.
 
 Reuses ``tlm_log.py``'s own ``CSV_FIELDNAMES``/``frame_to_row()`` row shape
 (the SAME shape ``estimator_capture.py``, sprint 117 ticket 006, already

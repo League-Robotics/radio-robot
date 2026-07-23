@@ -110,72 +110,35 @@ _CLOSURE_POSITION_MAX_MM = 600.0     # matches test_sim_transport_tour1.py's own
 _BOUNDARY_MIN_FRACTION = 0.9          # matches boundary_velocity_harness.cpp's own
                                       # "vMax*0.9" no-dip bound (SUC-003's own acceptance wording)
 
-# decel-into-the-goal campaign: the NEW, tightened tolerance that IS
-# actually met with taper+re-tuned lead active (unlike
-# _TURN_TOLERANCE_IDEAL_DEG/_TURN_TOLERANCE_REALISTIC_DEG above, the
-# ORIGINAL 109-009 stakeholder bars, which stay their own untouched,
-# still-xfailed aspirational gate below) -- ticket's own "90 turns land
-# 90+-2 target band (state achieved band honestly)". Measured worst
-# |error| across TOUR_1 (all-90-degree legs) and TOUR_2 (mixed angles) at
-# stop_lead_ms=60/taper ON: TOUR_1 ideal 2.025deg / realistic 1.932deg,
-# TOUR_2 ideal 2.235deg / realistic 2.405deg -- honestly closer to +-2.4deg
-# than a hard +-2.0deg, so this constant is 2.5deg (real headroom over the
-# worst measured point), not a bare "2.0" that would flake on ordinary
-# run-to-run float noise. See turn_prediction.ipynb Section 8's own
-# addendum for the full lead sweep this default is drawn from.
+# decel-into-the-goal campaign: the NEW, tightened tolerance actually met
+# with the taper active (unlike _TURN_TOLERANCE_IDEAL_DEG/
+# _TURN_TOLERANCE_REALISTIC_DEG above, the ORIGINAL 109-009 stakeholder
+# bars, which stay their own untouched, still-xfailed aspirational gate
+# below) -- ticket's own "90 turns land 90+-2 target band (state achieved
+# band honestly)". 2.5deg keeps real headroom over the worst measured
+# point (not a bare "2.0" that would flake on ordinary run-to-run float
+# noise) -- see test_tour_1_and_tour_2_ninety_degree_turns_land_within_
+# the_shaped_band()'s own printed report for this file's current measured
+# numbers.
+#
+# 118 ticket 004 (land-at-zero-completion-delete-stop-lead.md): the
+# turn-prediction campaign's own live time-lead anticipation constant
+# (formerly pushed here alongside the taper fields below, re-swept twice
+# as the taper's own stages landed) is DELETED -- the completion mechanism
+# it drove no longer exists (App::MoveQueue::tick()'s own doc comment has
+# the land-at-zero predicate that replaces it: completion emerges from the
+# taper's own remaining/commanded-speed convergence, not a tuned guess).
+# This gate is re-measured against the land-at-zero regime with NO lead
+# constant pushed at all -- see this file's own git history for the full
+# multi-retune chronology of the deleted constant if it is ever needed.
 _TURN_TOLERANCE_SHAPED_DEG = 2.5
 
-# turn-prediction campaign: App::MoveQueue's own stop-condition anticipation
-# lead, pushed live via EstimatorConfigPatch (_make_loop() below) -- matches
-# data/robots/tovez_nocal.json's own EMPIRICALLY-TUNED stop_lead_ms default
-# (see that JSON's own inline note for the full derivation: a first-pass
-# RMS-based heuristic in turn_prediction.ipynb suggested ~200ms, but a
-# closed-loop sweep against the real firmware -- run directly in THIS file,
-# see the git history around this constant -- found 200ms overcorrects
-# (undershoots); 75-110ms measures a flat, near-zero-error plateau, 90.0
-# picked mid-plateau). SimHarness itself leaves stopLead at 0 (anticipation
-# OFF) unless explicitly pushed -- see move_queue.h's own "sim/production
-# boundary" precedent for FusionWeights, extended here.
-#
-# decel-into-the-goal campaign RE-SWEEP (2026-07-22): with Motion::
-# VelocityShaper's taper ALSO active (a_max/a_decel/alpha_max/alpha_decel
-# below, pushed by _make_loop() alongside stop_lead_ms), the OLD 90.0ms
-# lead now OVERCORRECTS (undershoots) -- exactly the risk this campaign's
-# own ticket flagged going in ("the 90 ms stop_lead may now overcorrect").
-# A single-90-degree-turn sweep (both directions, ideal chip, sim ground
-# truth -- turn_prediction.ipynb Section 8's own addendum has the full
-# table) found: lead=0ms/taper=OFF worst=20.3deg (today's un-shaped
-# baseline); lead=90ms/taper=OFF worst=3.1deg (the OLD tuned default,
-# unchanged); lead=60ms/taper=ON (accel-limited stage) worst=0.3deg -- a
-# materially better result than either taper-off point, achieved by
-# RE-TUNING the lead downward once the taper is doing part of the
-# deceleration work the lead used to have to anticipate alone.
-#
-# jerk-limited S-curve RE-SWEEP (2026-07-22, same day, stakeholder
-# jerk-limiting directive): the S-curve's own accel ramp-up/roll-off adds
-# a SECOND source of lag on top of the anticipation lead's own -- the
-# accel-only stage's 60ms lead now produces a SYSTEMATIC ~-3.3deg
-# undershoot at TOUR level (all 6 TOUR_1 turns landing short, not
-# scattered noise) once jerk is live. Re-swept directly against the TOUR_1
-# metric itself (not the isolated single-turn sweep, which does not
-# reproduce tour-embedded dynamics -- see the ideal-chip xfail's own
-# paragraph below for why): a BROAD, flat plateau at worst=1.378deg,
-# mean~=-0.02deg (extremely well-centered) spans lead=30-54ms; 45.0 (mid-
-# plateau) replaces 60.0 as this file's own default for a jerk-limited
-# taper-ON run -- measured worst 1.97deg (TOUR_2 ideal) across all four
-# TOUR_1/TOUR_2 x ideal/realistic combinations, comfortably inside
-# _TURN_TOLERANCE_SHAPED_DEG (2.5deg) with NO tolerance loosening needed.
-_STOP_LEAD_MS = 45.0
-
 # decel-into-the-goal campaign: Motion::VelocityShaper's own accel/decel/
-# jerk ceilings, pushed alongside stop_lead_ms above -- the SAME values
-# baked into data/robots/tovez.json's own control.a_max/a_decel/alpha_max/
-# alpha_decel/j_max/yaw_jerk_max (control._shaper_note has the full
-# derivation), not synthetic test-only numbers, so this file's own sweep
-# result is directly actionable for the shipped default. j_max/
-# yaw_jerk_max (jerk-limited S-curve stage, 2026-07-22) re-swept
-# _STOP_LEAD_MS against the SAME 60.0 optimum the accel-only stage already
-# found -- see that constant's own comment for the re-sweep result.
+# jerk ceilings -- the SAME values baked into data/robots/tovez.json's own
+# control.a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max
+# (control._shaper_note has the full derivation), not synthetic test-only
+# numbers, so this file's own measurements are directly actionable for the
+# shipped default.
 _A_MAX = 800.0          # [mm/s^2]
 _A_DECEL = 800.0        # [mm/s^2]
 _ALPHA_MAX = 7.0        # [rad/s^2]
@@ -248,7 +211,6 @@ def _make_stepper(loop, clock: "_SteppedClock"):
 
 
 def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
-                stop_lead_ms: "float | None" = _STOP_LEAD_MS,
                 a_max: "float | None" = _A_MAX, a_decel: "float | None" = _A_DECEL,
                 alpha_max: "float | None" = _ALPHA_MAX, alpha_decel: "float | None" = _ALPHA_DECEL,
                 j_max: "float | None" = _J_MAX, yaw_jerk_max: "float | None" = _YAW_JERK_MAX):
@@ -265,24 +227,23 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
     # see _ACTIVE_ROBOT_JSON's own comment for why this call is now required.
     loop.configure_from_robot(load_robot_config(_ACTIVE_ROBOT_JSON))
 
-    # turn-prediction campaign: push App::MoveQueue's own live stop_lead
-    # via the SAME EstimatorConfigPatch wire path OtosConfigPatch already
-    # uses below -- SimHarness itself deliberately leaves stopLead at its
-    # own constructor default (0, anticipation OFF; see sim_harness.h's own
-    # "sim/production boundary" comment), so a Sim-backed test that wants
-    # the fix active must push it explicitly, exactly like the OTOS
-    # calibration push a few lines down. `stop_lead_ms=None` skips this
-    # (pre-fix baseline measurement).
-    #
     # decel-into-the-goal campaign: a_max/a_decel/alpha_max/alpha_decel/
-    # j_max/yaw_jerk_max ride the SAME EstimatorConfigPatch/estimator_
-    # config() call (config.proto's own "smallest coherent path" doc
-    # comment) -- App::MoveQueue also leaves ShaperLimits at its own
-    # constructor default (every field 0, shaping OFF; see App::
-    # ShaperLimits's own doc comment) unless pushed. All six None (the
-    # default) skips the push entirely (taper OFF, matching this file's
-    # own pre-campaign baseline); the caller passes all six together to
-    # turn the (jerk-limited) taper on.
+    # j_max/yaw_jerk_max ride the EstimatorConfigPatch/estimator_config()
+    # call (config.proto's own "smallest coherent path" doc comment) --
+    # App::MoveQueue leaves ShaperLimits at its own constructor default
+    # (every field 0, shaping OFF; see App::ShaperLimits's own doc comment)
+    # unless pushed -- SimHarness itself deliberately does not source it
+    # from boot config (sim_harness.h's own "sim/production boundary"
+    # comment), so a Sim-backed test that wants the taper active must push
+    # it explicitly, exactly like the OTOS calibration push a few lines
+    # down. All six None (the default) skips the push entirely (taper OFF);
+    # the caller passes all six together to turn the (jerk-limited) taper
+    # on. 118 ticket 004 (land-at-zero-completion-delete-stop-lead.md):
+    # this used to also push a live time-lead anticipation constant
+    # alongside the taper fields -- DELETED, the completion mechanism it
+    # drove no longer exists (App::MoveQueue::tick()'s own doc comment has
+    # the land-at-zero predicate that replaces it), so there is nothing
+    # left to push for it.
     shaper_fields = {}
     if a_max is not None:
         shaper_fields["a_max"] = a_max
@@ -297,16 +258,13 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
     if yaw_jerk_max is not None:
         shaper_fields["yaw_jerk_max"] = yaw_jerk_max
 
-    if stop_lead_ms is not None or shaper_fields:
+    if shaper_fields:
         conn = _SimConfigConn(loop)
         proto = NezhaProtocol(conn)  # type: ignore[arg-type]
-        kwargs = dict(shaper_fields)
-        if stop_lead_ms is not None:
-            kwargs["stop_lead_ms"] = stop_lead_ms
-        corr_id = proto.estimator_config(**kwargs)
+        corr_id = proto.estimator_config(**shaper_fields)
         ack = _wait_for_ack(loop, corr_id, deterministic=deterministic)
         assert ack is not None and ack.ok, (
-            f"EstimatorConfigPatch stop_lead_ms/shaper push failed to ack: {ack}"
+            f"EstimatorConfigPatch shaper push failed to ack: {ack}"
         )
 
     if not realistic_errors:
@@ -548,185 +506,55 @@ def _assert_tour_gate(gate: TourGateResult, *, tolerance_deg: float, label: str)
 
 _XFAIL_REASON_IDEAL = (
     "109-009 Impossibility Argument (see ticket file), DEFERRED to ticket 010 by "
-    "stakeholder decision (2026-07-17): ideal-chip turns measure ~0.4-2.2deg (not "
-    "<0.05deg) due to Otos::kReadPeriod's own read-rate limit at high yaw rate -- a "
-    "physical sampling-latency limit of the current architecture, not a tuning gap. "
-    "Tours themselves now complete RELIABLY (round-2 dwell-completion fixes -- see "
-    "the ticket's own Iteration Log/completion notes); only this residual accuracy "
-    "gap remains, and it is explicitly out of this ticket's own scope. 114-006 "
-    "re-baseline (old vel_kp=0.003 hardcoded fallback -> new vel_kp=0.002 via "
-    "configure_from_robot() against tovez_nocal.json, why: config-as-truth "
-    "completion, ticket 001-003 removed the fallback): re-measured worst miss "
-    "~1.09deg (TOUR_1/TOUR_2 turn 2), still inside the range above -- same gap, "
-    "confirmed to persist under the actually-configured plant, not caused by it.\n"
+    "stakeholder decision (2026-07-17): ideal-chip turns do not reach the "
+    "stakeholder's own stated <0.05deg 'exact' bar -- attributed to Devices::Otos's "
+    "own kReadPeriod (20ms) read-rate limit letting real rotation happen unsampled "
+    "during a pivot's cruise phase, a physical sampling-latency limit of the current "
+    "architecture, not a tuning gap. Tours themselves complete RELIABLY (round-2 "
+    "dwell-completion fixes -- see the ticket's own Iteration Log/completion notes); "
+    "only this residual accuracy gap remains, explicitly out of that ticket's own "
+    "scope.\n"
     "\n"
-    "turn-prediction campaign re-baseline (this ticket 010's own actual "
-    "arrival): _make_loop() now ALSO pushes App::MoveQueue's own new "
-    "stop-condition anticipation lead (EstimatorConfigPatch stop_lead_ms, "
-    "see _STOP_LEAD_MS's own comment for the empirical derivation) via a "
-    "real firmware CONFIG push -- this is that predicted-forward-stop "
-    "mechanism state_estimator.h's own file header always named as "
-    "'a later, out-of-this-sprint trajectory controller'. Two findings: "
-    "(1) WITH stop_lead_ms=0/unset (anticipation off), worst ideal-chip "
-    "miss now measures ~21.3deg (TOUR_1)/~13.6deg (TOUR_2), mean "
-    "~+17.5deg -- MUCH larger than the ~0.4-2.2deg this xfail reason "
-    "previously recorded, and consistent instead with the established, "
-    "independently-derived diagnosis this whole campaign is built on "
-    "(~+20.6deg overshoot at omega=2rad/s, "
-    "clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md). This "
-    "campaign's own sim_loop.py fix (SimLoop.move()'s corr_id/move_id "
-    "aliasing -- see that method's own doc comment) closed a bug where a "
-    "leg's own completion wait (_wait_for_move_terminal(), planner.tour) "
-    "could match that SAME leg's own near-instant ENQUEUE ack instead of "
-    "its real completion; this file's OWN _wait_for_ack() had an "
-    "independent instance of a related bug (frame.acks -- plural, the "
-    "deleted depth-3 ack ring -- vs the current single frame.ack), also "
-    "fixed this campaign. Not re-proven further here (out of this "
-    "campaign's own time budget), but flagged plainly: the PREVIOUS "
-    "~0.4-2.2deg number should not be trusted as this gate's true prior "
-    "baseline -- (2) WITH the anticipation lead ON (stop_lead_ms=90.0), "
-    "worst ideal-chip miss drops to ~4.68deg (TOUR_2)/~4.20deg (TOUR_1), "
-    "mean ~+0.7 to +2.0deg -- a large, real improvement over the "
-    "anticipation-off baseline in EITHER reading of it, still well short "
-    "of the stakeholder's own stated <0.05deg 'exact' bar, so this xfail "
-    "stays open. Residual mechanism unchanged from the original argument "
-    "(Otos::kReadPeriod's own read-rate limit) plus whatever the "
-    "anticipation lead's own first-order (held-omega ZOH) approximation "
-    "still misses -- not further decomposed this campaign.\n"
+    "This xfail reason's own numeric history (114-006 re-baseline, the "
+    "turn-prediction campaign's time-lead anticipation stage, the decel-into-the-goal "
+    "taper's own accel-only then jerk-limited stages) is NOT reproduced here -- every "
+    "one of those stages measured against a completion mechanism 118 ticket 004 "
+    "(land-at-zero-completion-delete-stop-lead.md) deletes outright (a hand-tuned "
+    "time-lead constant with a four-retune history and no stable value), so the "
+    "numbers would describe a regime that no longer exists. See this file's own git "
+    "history for the full chronology if it is ever needed.\n"
     "\n"
-    "decel-into-the-goal campaign re-baseline (2026-07-22): _make_loop() "
-    "now ALSO pushes Motion::VelocityShaper's own accel/decel taper "
-    "(a_max/a_decel/alpha_max/alpha_decel, config.proto's EstimatorConfigPatch "
-    "extension) alongside stop_lead_ms -- and the OPTIMAL lead shifted with "
-    "it (a single-90-degree-turn sweep found the OLD 90ms lead now "
-    "OVERCORRECTS with the taper active, worst -3.5deg undershoot; 60ms is "
-    "the new sweep optimum, worst 0.3deg in isolation -- see _STOP_LEAD_MS's "
-    "own comment and turn_prediction.ipynb Section 8's addendum). Re-measured "
-    "AT TOUR level (not the isolated single-turn sweep) with lead=60ms/taper "
-    "ON: worst ideal-chip miss now measures 2.025deg (TOUR_1)/2.235deg "
-    "(TOUR_2) -- roughly HALVED from the 4.20/4.68deg anticipation-lead-only "
-    "baseline immediately above, a real further improvement from the taper, "
-    "but still short of the stakeholder's own stated <0.05deg 'exact' bar, "
-    "so this xfail stays open. The isolated-single-turn sweep's own 0.3deg "
-    "optimum does NOT reproduce at tour level (2.0-2.2deg instead) -- a "
-    "tour-embedded turn starts from whatever the PRECEDING leg's own "
-    "seamless hand-off (SUC-051) left the shaped state at, not a clean "
-    "from-rest start the isolated sweep measures; not further decomposed "
-    "this campaign. See test_tour_1_and_tour_2_ninety_degree_turns_land_"
-    "within_the_shaped_band() below for the NEW, tightened, ACTUALLY-MET "
-    "tolerance (2.5deg) this campaign ships as its own real acceptance gate, "
-    "distinct from this xfail's original <0.05deg aspirational bar.\n"
-    "\n"
-    "jerk-limited S-curve re-baseline (2026-07-22, same day, stakeholder "
-    "jerk-limiting directive on top of the accel-limited stage above): "
-    "Motion::VelocityShaper now slews a COMMANDED ACCEL (not just commanded "
-    "speed) toward a bang-bang target at <= j_max/yaw_jerk_max per second "
-    "(velocity_shaper.h's own file header) -- j_max/yaw_jerk_max were "
-    "orphaned, unread control.* keys since 115-003, this campaign's second "
-    "consumer after a_max/a_decel/alpha_max/alpha_decel. The extra S-curve "
-    "lag pushed the accel-only stage's own 60ms lead into a SYSTEMATIC "
-    "~-3.3deg undershoot at TOUR level (all 6 TOUR_1 turns landing short, "
-    "worst 3.387deg) -- re-swept directly against TOUR_1 itself (the "
-    "isolated single-turn sweep does not reproduce tour-embedded dynamics, "
-    "same finding as the accel-only stage's own paragraph above): a broad, "
-    "flat plateau (worst=1.378deg, mean~=-0.02deg) spans lead=30-54ms; "
-    "45.0ms (mid-plateau) replaces 60.0ms as the shipped default. "
-    "Re-measured with lead=45ms/jerk ON: worst ideal-chip miss now measures "
-    "1.378deg (TOUR_1)/1.970deg (TOUR_2) -- BETTER than the accel-only "
-    "stage's own 2.025/2.235deg, despite the added jerk-limiting lag, "
-    "because the re-swept lead is a tighter fit than simply reusing the "
-    "prior stage's own optimum -- still short of the stakeholder's own "
-    "stated <0.05deg 'exact' bar, so this xfail stays open. The 2.5deg "
-    "_TURN_TOLERANCE_SHAPED_DEG gate needed NO loosening -- the jerk-"
-    "limited, re-tuned result is a genuine improvement, not a regression.\n"
-    "\n"
-    "jerk-limited stage, SIMPLIFIED (2026-07-22, same day, second "
-    "stakeholder correction): 'You're not trying to implement your own "
-    "version of Ruckig, right? I literally just wanted acceleration slew "
-    "rate limiting and velocity slew rate limiting.' The roll-off-based "
-    "design immediately above (chooseAccelTarget()'s own branching "
-    "roll-off predicate) was rewritten to EXACTLY two chained rate clamps "
-    "and an integrator -- velocity clamp (Stage 1's own sqrt(2*a_decel*"
-    "remaining) formula, byte-for-byte unchanged), then an accel clamp "
-    "(the velocity clamp's own result implies an accel; slew "
-    "commandedAccel toward it at <= j_max/yaw_jerk_max) -- plus two "
-    "one-line algebraic margin terms (not a branch, not a phase) folded "
-    "into each clamp's own input, required because a margin-free version "
-    "of the two clamps measurably overshoots/reverses sign (verified "
-    "in-tree). velocity_shaper.cpp is 94 lines (was 160 for the roll-off "
-    "attempt). Re-measured at the SAME lead=45ms (no new sweep -- still "
-    "clears the gate): worst ideal-chip miss now measures 1.651deg "
-    "(TOUR_1)/1.487deg (TOUR_2) -- same ballpark as the roll-off design's "
-    "own 1.378/1.970deg, not a regression from simplifying. See "
-    "clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md's own "
-    "'Follow-on fix, jerk-limited stage, simplified' section for the "
-    "hardware numbers."
+    "118 ticket 004 (land-at-zero completion): MoveQueue::tick() now declares a "
+    "Move done when `remaining` and the taper's own commanded speed have BOTH "
+    "converged near zero (move_queue.h's own doc comment) -- an emergent property "
+    "of the taper already designed to arrive at ~zero speed, not a tuned guess. See "
+    "test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band()'s own "
+    "printed report for this file's current ideal-chip measurements under the "
+    "land-at-zero regime -- still short of the stakeholder's own stated <0.05deg "
+    "'exact' bar (same Otos::kReadPeriod mechanism as ever), so this xfail stays "
+    "open."
 )
 
 _XFAIL_REASON_REALISTIC = (
-    "109-009 Impossibility Argument (see ticket file): realistic-profile turns are "
-    "MOSTLY within 1deg (typ. ~0.5-1.6deg) but not uniformly -- an outlier turn "
-    "(TOUR_2's own final turn, leg 14) reproducibly misses by ~4.9deg, attributed to "
-    "the same Otos read-latency mechanism as the deferred ideal-chip gap, "
-    "compounding with cumulative drift late in the tour. Tours themselves now "
-    "complete RELIABLY (round-2 dwell-completion fixes -- see the ticket's own "
-    "Iteration Log/completion notes); this residual per-turn accuracy gap is not "
-    "closed within this ticket's own time budget and is left open, numbers-backed, "
-    "for ticket 010 rather than silently retuning the tolerance. 114-006 re-baseline "
-    "(same old/new vel_kp/why as the ideal-chip xfail above): re-measured worst miss "
-    "~1.46deg (TOUR_1 turn 8); TOUR_2's own leg 14 is no longer the outlier "
-    "(now -1.22deg) -- the worst-turn identity shifted with the configured plant's "
-    "dynamics but stayed in the same ~1-1.5deg band, same mechanism, not a new "
-    "regression.\n"
+    "109-009 Impossibility Argument (see ticket file): realistic-profile turns do "
+    "not uniformly land within the stakeholder's own stated 1.0deg bar, attributed "
+    "to the same Otos read-latency mechanism as the deferred ideal-chip gap, "
+    "compounding with cumulative drift late in a tour and sensor-error-injection "
+    "noise (OTOS/encoder scale/tick-quant/slip, this file's own _OTOS_*/_ENC_* "
+    "constants). Tours themselves complete RELIABLY (round-2 dwell-completion "
+    "fixes); this residual per-turn accuracy gap is left open, numbers-backed, "
+    "rather than silently retuning the tolerance.\n"
     "\n"
-    "turn-prediction campaign re-baseline: see the ideal-chip xfail's own "
-    "matching paragraph for the full mechanism (SimLoop.move() corr_id/"
-    "move_id-aliasing fix + this file's own frame.acks->frame.ack bugfix "
-    "likely corrupted the PREVIOUS ~1-1.5deg baseline; flagged, not "
-    "further re-proven). WITH the anticipation lead ON (stop_lead_ms=90.0, "
-    "same value/derivation as the ideal-chip gate): worst realistic-"
-    "profile miss now measures ~5.46deg (TOUR_1)/~6.90deg (TOUR_2), mean "
-    "~+0.5 to +0.7deg -- still short of the stakeholder's own stated "
-    "1.0deg bar, so this xfail stays open; sensor-error-injection noise "
-    "(OTOS/encoder scale/tick-quant/slip, this file's own _OTOS_*/_ENC_* "
-    "constants) compounds with the anticipation lead's own residual "
-    "(ideal-chip xfail's own ~4.2-4.7deg) roughly additively, consistent "
-    "with two independent error sources rather than a new one.\n"
+    "This xfail reason's own numeric history is NOT reproduced here for the SAME "
+    "reason the ideal-chip xfail's own matching paragraph gives -- see that "
+    "paragraph and this file's own git history.\n"
     "\n"
-    "decel-into-the-goal campaign re-baseline (2026-07-22): see the "
-    "ideal-chip xfail's own matching paragraph for the full lead re-sweep "
-    "(60ms replaces 90ms once the taper is active). Re-measured with "
-    "lead=60ms/taper ON: worst realistic-profile miss now measures "
-    "1.932deg (TOUR_1)/2.405deg (TOUR_2) -- close to a 3x improvement over "
-    "the 5.46/6.90deg anticipation-lead-only baseline immediately above, "
-    "but still short of the stakeholder's own stated 1.0deg bar, so this "
-    "xfail stays open. See "
-    "test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band() "
-    "below for the NEW, tightened, ACTUALLY-MET tolerance (2.5deg) this "
-    "campaign ships as its own real acceptance gate.\n"
-    "\n"
-    "jerk-limited S-curve re-baseline (2026-07-22, same day, stakeholder "
-    "jerk-limiting directive): see the ideal-chip xfail's own matching "
-    "paragraph for the mechanism and the lead re-sweep (45ms replaces "
-    "60ms once jerk-limiting is active). Re-measured with lead=45ms/jerk "
-    "ON: worst realistic-profile miss now measures 1.503deg (TOUR_1)/"
-    "1.668deg (TOUR_2) -- comparable to the accel-only stage's own "
-    "1.932/2.405deg immediately above, still short of the stakeholder's "
-    "own stated 1.0deg bar.\n"
-    "\n"
-    "jerk-limited stage, SIMPLIFIED (2026-07-22, same day, second "
-    "stakeholder correction -- see the ideal-chip xfail's own matching "
-    "paragraph for the full rewrite description: exactly two chained rate "
-    "clamps and an integrator, no roll-off predicate, no phase state). "
-    "Re-measured at the SAME lead=45ms (no new sweep): worst realistic-"
-    "profile miss now measures 0.934deg (TOUR_1)/2.138deg (TOUR_2) -- "
-    "TOUR_1's own worst-turn identity improved into the stakeholder's own "
-    "1.0deg bar; TOUR_2 stays just outside it -- both within the same "
-    "general band as the roll-off design's own numbers immediately above, "
-    "not a regression from simplifying. See "
-    "clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md's own "
-    "'Follow-on fix, jerk-limited stage, simplified' section for the "
-    "hardware numbers."
+    "118 ticket 004 (land-at-zero completion): see the ideal-chip xfail's own "
+    "matching paragraph for the mechanism. See "
+    "test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band()'s own "
+    "printed report for this file's current realistic-profile measurements under "
+    "the land-at-zero regime -- still short of the stakeholder's own stated 1.0deg "
+    "bar, so this xfail stays open."
 )
 
 

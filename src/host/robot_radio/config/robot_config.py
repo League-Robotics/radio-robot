@@ -285,31 +285,37 @@ class ControlConfig(BaseModel):
 
 
 class EstimatorConfig(BaseModel):
-    """``App::StateEstimator``'s fusion weights + ``App::MoveQueue``'s own
-    stop-condition anticipation lead (117 / turn-prediction campaign) --
-    mirrors the robot JSON's top-level ``estimator`` object 1:1
-    (``robot_config.schema.json``'s own ``estimator`` block; see that
-    file's description for the full field-by-field rationale). Baked at
-    build time by ``gen_boot_config.py``'s ``estimator_config_for_config()``
-    into ``Config::defaultEstimatorConfig()`` for real hardware; live-
-    tunable post-boot via the SAME ``EstimatorConfigPatch`` wire arm
+    """``App::StateEstimator``'s fusion weights -- mirrors the robot JSON's
+    top-level ``estimator`` object 1:1 (``robot_config.schema.json``'s own
+    ``estimator`` block; see that file's description for the full
+    field-by-field rationale). Baked at build time by
+    ``gen_boot_config.py``'s ``estimator_config_for_config()`` into
+    ``Config::defaultEstimatorConfig()`` for real hardware; live-tunable
+    post-boot via the SAME ``EstimatorConfigPatch`` wire arm
     (``config.proto``, ``NezhaProtocol.estimator_config()``) this model's
     fields are added here to reach -- see
     ``clasi/issues/wire-testgui-live-push-of-estimator-stop-lead.md``
     (this fix's own tracked gap): Sim mode's compiled graph deliberately
     does not link ``boot_config.cpp`` (117-004's documented deviation), so
-    without a LIVE push these four fields default OFF/neutral in every GUI
-    Sim session even though a real robot always boots with them baked in.
+    without a LIVE push these fields default OFF/neutral in every GUI Sim
+    session even though a real robot always boots with them baked in.
 
-    All four Optional, same "None -> nothing pushed, firmware boot default
+    All Optional, same "None -> nothing pushed, firmware boot default
     kept" contract ``ControlConfig`` already established -- a robot JSON
     missing this section entirely (should not occur post-117, but
     defensively) still loads.
+
+    A fourth field -- a boot-time/live-tunable anticipation-lead constant
+    -- was DELETED (118 ticket 004, land-at-zero-completion-delete-stop-
+    lead.md): the mechanism it fed (App::MoveQueue's own former time-lead
+    completion path) no longer exists, replaced by a land-at-zero
+    completion predicate computed entirely on-robot from state already
+    local to MoveQueue -- there is no lead value left to configure from
+    the host side.
     """
     weight_heading_otos: Optional[float] = None  # [0..1] estimator.weight_heading_otos
     weight_omega_otos:   Optional[float] = None  # [0..1] estimator.weight_omega_otos
     staleness_ms:        Optional[float] = None  # [ms] estimator.staleness_ms
-    stop_lead_ms:        Optional[float] = None  # [ms] estimator.stop_lead_ms
 
 
 # ---------------------------------------------------------------------------

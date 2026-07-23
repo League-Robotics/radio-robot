@@ -3,17 +3,21 @@ SUC-052), ``App::MoveQueue`` (``src/firm/app/move_queue.{h,cpp}``).
 
 Compiles ``app_move_queue_harness.cpp`` together with the HOST_BUILD
 implementations it needs -- ``src/firm/app/move_queue.cpp``,
-``src/firm/motion/stop_condition.cpp`` (116-002), ``src/firm/app/drive.cpp``
-(116-004's ``setWheels()``), ``src/firm/app/odometry.cpp`` (116-003's
-``pathLength()`` -- odometry.cpp also defines ``applyOtosSample()``, which
-pulls in ``src/firm/devices/otos.cpp`` even though this harness never calls
-it), ``src/firm/app/state_estimator.cpp`` (turn-prediction campaign:
-``App::MoveQueue`` now holds a ``const StateEstimator&`` for its own
-anticipation-lead stop-condition evaluation), ``src/sim/sim_plant.cpp`` +
-its ``src/tests/sim/plant/{wheel,otos}_plant.cpp`` physics dependencies,
+``src/firm/motion/stop_condition.cpp`` (116-002), ``src/firm/motion/
+velocity_shaper.cpp`` (decel-into-the-goal campaign; 118 ticket 004's own
+land-at-zero completion predicate reads its ``commandedSpeed()``),
+``src/firm/app/drive.cpp`` (116-004's ``setWheels()``), ``src/firm/app/
+odometry.cpp`` (116-003's ``pathLength()`` -- odometry.cpp also defines
+``applyOtosSample()``, which pulls in ``src/firm/devices/otos.cpp`` even
+though this harness never calls it), ``src/sim/sim_plant.cpp`` + its
+``src/tests/sim/plant/{wheel,otos}_plant.cpp`` physics dependencies,
 ``src/firm/devices/velocity_pid.cpp``, ``src/firm/devices/nezha_motor.cpp``,
 ``src/firm/kinematics/body_kinematics.cpp``, and ``src/sim/sim_clock.cpp``
 -- with ``-DHOST_BUILD``, against the SAME headers every ARM build compiles.
+``App::StateEstimator`` is NOT compiled into this binary (118 ticket 004:
+``App::MoveQueue`` no longer holds a ``const StateEstimator&`` -- see
+move_queue.h's own file header for the quarantine rationale; StateEstimator
+itself keeps its own dedicated coverage, ``test_app_state_estimator.py``).
 Mirrors ``test_app_drive.py``/``test_app_odometry.py``'s exact shape:
 compile with the system C++ compiler, run the resulting binary, assert it
 exits 0.
@@ -39,7 +43,6 @@ _STOP_CONDITION_SRC = _SOURCE_DIR / "motion" / "stop_condition.cpp"
 _VELOCITY_SHAPER_SRC = _SOURCE_DIR / "motion" / "velocity_shaper.cpp"
 _DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
 _ODOMETRY_SRC = _SOURCE_DIR / "app" / "odometry.cpp"
-_STATE_ESTIMATOR_SRC = _SOURCE_DIR / "app" / "state_estimator.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _SIM_CLOCK_SRC = _INFRA_SIM_DIR / "sim_clock.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
@@ -76,7 +79,6 @@ def test_app_move_queue_harness_compiles_and_passes(tmp_path):
         _VELOCITY_SHAPER_SRC,
         _DRIVE_SRC,
         _ODOMETRY_SRC,
-        _STATE_ESTIMATOR_SRC,
         _SIM_PLANT_SRC,
         _SIM_CLOCK_SRC,
         _WHEEL_PLANT_SRC,

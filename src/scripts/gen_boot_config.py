@@ -395,28 +395,30 @@ def trackwidth_for_config(cfg: dict) -> float:
 
 
 def estimator_config_for_config(cfg: dict):
-    """Return (heading_otos, omega_otos, staleness, stop_lead) for the
-    EstimatorBootConfig struct (117, predict-to-now estimator v1;
-    stop_lead added by the turn-prediction campaign) --
-    App::StateEstimator's fail-closed boot-time fusion-weight defaults plus
-    App::MoveQueue's own fail-closed boot-time anticipation lead.
+    """Return (heading_otos, omega_otos, staleness) for the
+    EstimatorBootConfig struct (117, predict-to-now estimator v1) --
+    App::StateEstimator's fail-closed boot-time fusion-weight defaults.
 
-    REQUIRED as of ticket 003 (heading_otos/omega_otos/staleness) and the
-    turn-prediction campaign (stop_lead) -- the SAME fail-closed discipline
-    sprint 114 established for output_deadband_for_config()/
-    reversal_dwell_for_config() above: a robot JSON missing any of the four
-    ``estimator.*`` keys fails codegen loudly rather than silently
-    defaulting to encoder-only/no-anticipation. Per the stakeholder's
-    encoder-only-v1 decision, weight_heading_otos/weight_omega_otos are
-    committed 0.0 in every robot JSON this sprint; staleness_ms/
-    stop_lead_ms each carry a reasoned per-robot placeholder (see each
-    robot JSON's own inline comment).
+    REQUIRED as of ticket 003 -- the SAME fail-closed discipline sprint 114
+    established for output_deadband_for_config()/reversal_dwell_for_config()
+    above: a robot JSON missing any of the three ``estimator.*`` keys fails
+    codegen loudly rather than silently defaulting to encoder-only. Per the
+    stakeholder's encoder-only-v1 decision, weight_heading_otos/
+    weight_omega_otos are committed 0.0 in every robot JSON this sprint;
+    staleness_ms carries a reasoned per-robot placeholder (see each robot
+    JSON's own inline comment).
+
+    The turn-prediction campaign's own former fourth field (a boot-time
+    anticipation-lead constant) is DELETED (118 ticket 004,
+    land-at-zero-completion-delete-stop-lead.md) -- the anticipation
+    mechanism it fed no longer exists (see App::MoveQueue::tick()'s own
+    doc comment for the land-at-zero completion predicate that replaces
+    it), so this generator no longer reads (or requires) that key.
     """
     heading_otos = _require(cfg, "estimator", "weight_heading_otos")
     omega_otos = _require(cfg, "estimator", "weight_omega_otos")
     staleness = _require(cfg, "estimator", "staleness_ms")
-    stop_lead = _require(cfg, "estimator", "stop_lead_ms")
-    return float(heading_otos), float(omega_otos), float(staleness), float(stop_lead)
+    return float(heading_otos), float(omega_otos), float(staleness)
 
 
 def shaper_config_for_config(cfg: dict):
@@ -466,7 +468,7 @@ def generate(cfg: dict, source_path: str) -> str:
         (otos_offset_x, otos_offset_y, otos_offset_yaw,
          otos_linear_scale, otos_angular_scale) = otos_boot_config_values(cfg)
         (estimator_heading_otos, estimator_omega_otos,
-         estimator_staleness, estimator_stop_lead) = estimator_config_for_config(cfg)
+         estimator_staleness) = estimator_config_for_config(cfg)
         (shaper_a_max, shaper_a_decel, shaper_alpha_max, shaper_alpha_decel,
          shaper_j_max, shaper_yaw_jerk_max) = shaper_config_for_config(cfg)
     except MissingRobotConfigKeyError as e:
@@ -586,14 +588,10 @@ EstimatorBootConfig defaultEstimatorConfig() {{
     // staleness_ms reasoning. NOT a live SET/wire surface itself -- see
     // EstimatorBootConfig's own doc comment (src/firm/config/boot_config.h)
     // for the separate, volatile EstimatorConfigPatch live-tuning path.
-    // stop_lead_ms (turn-prediction campaign) -- App::MoveQueue's own
-    // fail-closed boot-time anticipation lead; see that JSON's own inline
-    // comment for the derivation.
     EstimatorBootConfig cfg;
     cfg.headingOtos = {_f(estimator_heading_otos)};
     cfg.omegaOtos = {_f(estimator_omega_otos)};
     cfg.staleness = {_u32(estimator_staleness)};   // [ms]
-    cfg.stopLead = {_u32(estimator_stop_lead)};    // [ms]
     return cfg;
 }}
 

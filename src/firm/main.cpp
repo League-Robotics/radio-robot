@@ -172,14 +172,15 @@ int main() {
   static App::Drive drive(motorL, motorR, drivetrainConfig.trackwidth);
   static App::Odometry odom(motorL, motorR, drivetrainConfig.trackwidth);
 
-  // 117 ticket 004 / turn-prediction campaign: StateEstimator is now
-  // constructed BEFORE MoveQueue -- MoveQueue's own constructor holds a
-  // const StateEstimator& (its own anticipation-lead stop-condition
-  // evaluation, move_queue.h's own doc comment), so the referent must
-  // already exist. Sourced from the SAME fail-closed baked boot config
-  // every other Config::default*() call above uses --
-  // Config::defaultEstimatorConfig() (ticket 003), read ONCE here so both
-  // the fusion weights AND stopLead below come from the identical bake.
+  // 117 ticket 004: StateEstimator, sourced from the SAME fail-closed baked
+  // boot config every other Config::default*() call above uses --
+  // Config::defaultEstimatorConfig() (ticket 003). 118 ticket 004:
+  // QUARANTINED -- App::MoveQueue no longer holds a StateEstimator&
+  // (its own former anticipation-lead stop-condition evaluation is
+  // deleted, move_queue.h's own doc comment); stateEstimator stays
+  // constructed and updated here (RobotLoop's own trailing kPace block
+  // still calls stateEstimator_.update() every cycle) as the planned
+  // consumer for future fake-OTOS/fusion bench work.
   Config::EstimatorBootConfig estimatorBootConfig = Config::defaultEstimatorConfig();
   static App::StateEstimator stateEstimator(toFusionWeights(estimatorBootConfig));
   // decel-into-the-goal campaign: Motion::VelocityShaper's own accel/decel
@@ -189,16 +190,12 @@ int main() {
   // needs it.
   App::ShaperLimits shaperLimits = toShaperLimits(Config::defaultShaperConfig());
   // 116 (protocol-set-point issue): App::MoveQueue replaces App::Deadman --
-  // constructed after drive/odom/stateEstimator (it holds references to
-  // all three). stopLead is the turn-prediction campaign's own boot-config
-  // bake (Config::EstimatorBootConfig::stopLead, data/robots/*.json's
-  // estimator.stop_lead_ms) -- see move_queue.h's tick() doc comment for
-  // what it does. shaperLimits (decel-into-the-goal campaign, immediately
-  // above) is real firmware's own unconditional shaping-ON configuration
-  // -- see App::ShaperLimits's own "0 == disabled" doc comment for why
-  // this is the ONE place shaping is guaranteed non-default.
-  static App::MoveQueue moveQueue(drive, odom, clock, stateEstimator,
-                                   estimatorBootConfig.stopLead, shaperLimits);
+  // constructed after drive/odom (it holds references to both).
+  // shaperLimits (decel-into-the-goal campaign, immediately above) is real
+  // firmware's own unconditional shaping-ON configuration -- see
+  // App::ShaperLimits's own "0 == disabled" doc comment for why this is
+  // the ONE place shaping is guaranteed non-default.
+  static App::MoveQueue moveQueue(drive, odom, clock, shaperLimits);
   static App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   // 114-004 (SUC-003): the real ARM-only MicroBitStorage-backed persistence

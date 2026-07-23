@@ -9,11 +9,103 @@
 
 namespace App {
 
+namespace {
+
+// Land-at-zero completion predicate (118 ticket 004, issue
+// land-at-zero-completion-delete-stop-lead.md).
+//
+// The issue's own text suggested gating on a STATIC epsilon just above the
+// output-deadband-equivalent floor (~15mm/s per wheel, nezha_motor.cpp's
+// own writeShapedDuty() sub-deadband boost -- ~0.23 rad/s at the 128mm
+// reference trackwidth), reasoning that a target below the floor "never
+// converges" since NezhaMotor boosts a sub-floor nonzero duty back up.
+// Verified against the actual code and empirically (sim tour-closure
+// gate) this reasoning does not transfer to this predicate: the deadband
+// boost lives several layers downstream, inside NezhaMotor's own final
+// duty write -- it never clamps Motion::VelocityShaper's own
+// commandedSpeed_, which is pure arithmetic and legitimately decays
+// through and below that floor. A STATIC epsilon (either on commandedSpeed_
+// alone, or on the `remaining` value the accel-only decel-ceiling formula
+// implies at that speed) never actually binds before the raw
+// threshold/timeout backstop does, for the SAME reason the deleted
+// anticipation-lead constant itself needed repeated retuning: the
+// jerk-limited ramp-down
+// (velocity_shaper.cpp's own accel-slew clamp) trails the SAME decel
+// ceiling the shaper's own `remaining` argument implies by an amount that
+// depends on where in the taper's own curve the query lands, not a fixed
+// offset a single static threshold can capture.
+//
+// What DOES work, verified against the sim tour-closure gate's own exact
+// path (TOUR_1/TOUR_2 x ideal/realistic, the closure gate's own acceptance
+// bands): a DYNAMIC, self-referential stopping-distance check --
+// `remaining <= (commandedSpeed^2 / (2*decelCeiling)) * kStoppingMarginFactor`
+// -- "have we already entered our own braking envelope for our CURRENT
+// commanded speed." This is is the same closed-form `v^2/(2*a)` stopping-
+// distance formula velocity_shaper.cpp's own decel-taper ceiling already
+// uses, self-consistent by construction (it re-evaluates every tick
+// against whatever commandedSpeed_ currently is, rather than a single
+// fixed target), and structurally cannot misfire at Move activation
+// (commandedSpeed_ starts at/near 0, making the RHS ~0, while `remaining`
+// starts at the Move's own full threshold).
+//
+// The margin factor accounts for the ACTUAL post-Drive::stop() deceleration
+// being measurably tighter than the smooth taper's own decel ceiling
+// (Drive::stop() bypasses VelocityShaper's jerk/accel limits entirely and
+// commands the motor's raw velocity-PID loop to zero directly) -- swept
+// against sim ground truth, the SAME empirical-sweep methodology this
+// project already uses for every Motion::VelocityShaper ceiling that has no
+// simpler closed form (a_max/a_decel/alpha_max/alpha_decel/j_max/
+// yaw_jerk_max, each robot JSON's own control._shaper_note archaeology).
+//
+// TWO values, not one -- chosen by whether a chain-advance is imminent
+// (pendingCount() > 0) or the queue is about to drain to a genuine stop
+// (pendingCount() == 0). This split exists because the two measurement
+// conventions this project's own acceptance suites use for "did the turn
+// land" disagree about what "coast" even means:
+//   - test_tour_closure_gate.py's own per-turn accuracy check reads sim
+//     ground truth at the completion-ack INSTANT (TurnCheck, this file's
+//     own `_run_tour_capture()`), because a tour leg's own next Move is
+//     already queued (SUC-003 one-leg lookahead) and starts driving the
+//     SAME cycle -- there is no settle window between legs to coast into,
+//     so this reading never sees whatever the real motor/PID does after
+//     Drive::stop() would have run (chain-advance never calls it).
+//   - test_gui_button_acceptance.py's own preset/SEG checks read pose after
+//     genuine quiescence (`settle_pose()`, a real quiet-window poll) --
+//     because each button press is its OWN Move with nothing queued behind
+//     it, the robot actually reaches Drive::stop() and its real velocity-PID
+//     coasts the remaining residual speed to zero, and settle_pose()
+//     faithfully captures that coast as part of "where the robot ended up."
+// Swept independently against each measurement convention on this file's
+// own exact paths (TOUR_1/TOUR_2 x ideal/realistic for the chain case;
+// isolated 90-degree twists x ideal/realistic for the final case):
+//   - Chain-advance (pendingCount() > 0): a broad, flat plateau (0.82-0.84)
+//     all measure worst=2.398deg against the tour-closure gate's own
+//     2.5deg shaped band; 0.83 (mid-plateau) ships as the default,
+//     mirroring this project's "pick mid-plateau, not a knife-edge point"
+//     convention for every prior empirically-swept shaper constant. Firing
+//     any LATER (a bigger factor) does not help this reading (it only
+//     measures the decision instant, never the coast) and firing earlier
+//     erodes the shaped-band margin.
+//   - Final move (pendingCount() == 0): a broad, flat plateau (0.90-1.10)
+//     measures worst=1.189deg settle-based against the button-acceptance
+//     suite's own 3.0deg tolerance; 1.00 (mid-plateau) ships as the
+//     default. Firing at the CHAIN-ADVANCE factor here (0.83) measures
+//     4.997deg settle-based -- comfortably over that 3.0deg tolerance --
+//     because it lets residual commanded speed stay high enough at the
+//     decision instant that the REAL post-Drive::stop() coast (not
+//     something this predicate's timing can shrink away once Drive::stop()
+//     has already been called) adds several more degrees before the plant
+//     actually comes to rest. Firing earlier (a bigger factor) declares
+//     completion while more residual speed remains, so less of it survives
+//     into the real coast.
+constexpr float kStoppingMarginFactorChain = 0.83f;  // dimensionless
+constexpr float kStoppingMarginFactorFinal = 1.00f;  // dimensionless
+
+}  // namespace
+
 MoveQueue::MoveQueue(Drive& drive, Odometry& odom, const Devices::Clock& clock,
-                      const StateEstimator& stateEstimator, uint32_t stopLead,
                       ShaperLimits shaperLimits)
-    : drive_(drive), odom_(odom), clock_(clock), stateEstimator_(stateEstimator),
-      stopLead_(stopLead), shaperLimits_(shaperLimits) {}
+    : drive_(drive), odom_(odom), clock_(clock), shaperLimits_(shaperLimits) {}
 
 void MoveQueue::activate(const msg::Move& move, uint64_t now, float pathLength, float theta) {
   // Disabled-axis gate -- see ShaperLimits's own doc comment (move_queue.h)
@@ -183,6 +275,51 @@ void MoveQueue::shapeAndStage(uint64_t now, float pathLength, float theta) {
   drive_.setTwist(vx, active_.cruiseVY, omega);
 }
 
+// landAtZero -- see move_queue.h's own tick() doc comment for the full
+// contract. TWIST moves only: a WHEELS Move's own linearly-shaped axes
+// (v_left/v_right) have no stop_kind-matched pairing the way a TWIST
+// Move's v_x/omega do (shapeAndStage()'s own per-kind breakdown above), so
+// ticket 004's scope -- TWIST Angle/Distance stops only -- excludes WHEELS
+// structurally, via the velocityKind check below, not via a second
+// remaining/epsilon derivation for wheel-space axes.
+bool MoveQueue::landAtZero(float pathLength, float theta) const {
+  if (active_.velocityKind != msg::Move::VelocityKind::TWIST) return false;
+
+  // See this file's own anonymous-namespace comment (kStoppingMarginFactorChain/
+  // kStoppingMarginFactorFinal) for the full derivation of why this predicate
+  // needs two different margins: whether THIS completion hands off to an
+  // already-queued Move (pendingCount() > 0, chain-advance -- Drive::stop()
+  // never runs, so only the ack-instant decision matters) or drains the
+  // queue to a genuine stop (pendingCount() == 0 -- Drive::stop() runs for
+  // real and the plant's own residual speed coasts further before rest).
+  float marginFactor =
+      pendingCount_ > 0 ? kStoppingMarginFactorChain : kStoppingMarginFactorFinal;
+
+  if (active_.kind == Motion::StopCondition::Kind::Distance) {
+    bool linearShaping =
+        shaperLimits_.aMax > 0.0f && shaperLimits_.aDecel > 0.0f && shaperLimits_.jMax > 0.0f;
+    if (!linearShaping) return false;  // no taper -- the backstop is the only completion path
+    float remaining = active_.threshold - std::fabs(pathLength - active_.activationPathLength);
+    // "Have we already entered our own braking envelope for our CURRENT
+    // commanded speed."
+    float cmd = shaperVX_.commandedSpeed();
+    float epsilonRemaining = (cmd * cmd) / (2.0f * shaperLimits_.aDecel) * marginFactor;
+    return remaining <= epsilonRemaining;
+  }
+
+  if (active_.kind == Motion::StopCondition::Kind::Angle) {
+    bool angularShaping = shaperLimits_.alphaMax > 0.0f && shaperLimits_.alphaDecel > 0.0f &&
+                          shaperLimits_.yawJerkMax > 0.0f;
+    if (!angularShaping) return false;
+    float remaining = active_.threshold - std::fabs(theta - active_.activationTheta);
+    float cmd = shaperOmega_.commandedSpeed();
+    float epsilonRemaining = (cmd * cmd) / (2.0f * shaperLimits_.alphaDecel) * marginFactor;
+    return remaining <= epsilonRemaining;
+  }
+
+  return false;  // Kind::Time -- no spatial `remaining`, never qualifies.
+}
+
 MoveQueue::EnqueueResult MoveQueue::enqueue(const msg::Move& move, uint32_t corrId) {
   EnqueueResult result;
   result.corrId = corrId;
@@ -220,34 +357,29 @@ MoveQueue::TickResult MoveQueue::tick(uint64_t now, const Odometry& odom) {
                             active_.activationNow, active_.activationPathLength,
                             active_.activationTheta);
 
-  // Anticipation lead (turn-prediction campaign) -- see tick()'s own doc
-  // comment (move_queue.h) for the full rationale. Defaults to the raw
-  // current reading; only overridden below when both stopLead_ > 0 and the
-  // estimator's own body peer is warmed up.
   float pathLength = odom.pathLength();
   float theta = odom.theta();
 
-  if (stopLead_ > 0 && (active_.kind == Motion::StopCondition::Kind::Angle ||
-                        active_.kind == Motion::StopCondition::Kind::Distance)) {
-    uint32_t nowMs = static_cast<uint32_t>(now / 1000);
-    BodyEstimate predicted = stateEstimator_.bodyAt(nowMs + stopLead_);
-    if (predicted.valid) {
-      theta = predicted.heading;
-      float age = static_cast<float>((nowMs + stopLead_) - predicted.basisTime) / 1000.0f;  // [s]
-      float speed = std::sqrt(predicted.v_x * predicted.v_x + predicted.v_y * predicted.v_y);
-      pathLength = odom.pathLength() + speed * age;
-    }
+  // Backstop (threshold/timeout) is always-armed and evaluated first --
+  // "first to fire wins" (move_queue.h's own tick() doc comment). Only
+  // when it does NOT already end the Move this cycle (Continue) is the
+  // land-at-zero completion path (118 ticket 004) checked as an
+  // ADDITIONAL way for the Move to end -- treated identically to
+  // StopConditionMet (never TimedOut): the taper decided this Move is
+  // done, not the timeout backstop.
+  Motion::StopCondition::Outcome outcome = sc.tick(now, pathLength, theta);
+  if (outcome == Motion::StopCondition::Outcome::Continue && landAtZero(pathLength, theta)) {
+    outcome = Motion::StopCondition::Outcome::StopConditionMet;
   }
 
-  Motion::StopCondition::Outcome outcome = sc.tick(now, pathLength, theta);
   if (outcome == Motion::StopCondition::Outcome::Continue) {
     // Velocity shaping (decel-into-the-goal campaign) -- reuses the SAME
-    // (possibly anticipation-predicted) pathLength/theta just computed
-    // above for the stop-condition comparison; see move_queue.h's own
-    // tick()/shapeAndStage() doc comments. Only reached on Continue --
-    // a Move ending THIS cycle is about to be superseded by a
-    // chain-advance activate() or drive_.stop() below regardless, so
-    // shaping it first would be immediately overwritten.
+    // pathLength/theta just computed above for the stop-condition
+    // comparison; see move_queue.h's own tick()/shapeAndStage() doc
+    // comments. Only reached on Continue -- a Move ending THIS cycle is
+    // about to be superseded by a chain-advance activate() or
+    // drive_.stop() below regardless, so shaping it first would be
+    // immediately overwritten.
     shapeAndStage(now, pathLength, theta);
     return result;
   }
@@ -257,6 +389,30 @@ MoveQueue::TickResult MoveQueue::tick(uint64_t now, const Odometry& odom) {
   result.completion.timedOut = (outcome == Motion::StopCondition::Outcome::TimedOut);
 
   active_.occupied = false;
+
+  // Reset the axis this Move's own stop_kind was tapering, on EVERY
+  // completion (backstop OR land-at-zero), not just the empty-queue drain
+  // below. Rationale (118 ticket 004, discovered empirically against the
+  // sim tour-closure gate): the shaper* members are deliberately
+  // MoveQueue-level, not ActiveMove-level, so a same-axis chained Move
+  // continues its ramp smoothly (SUC-051 continuity, move_queue.h's own
+  // shaper* doc comment) -- but that same continuity means a Move that
+  // ends with a NONZERO residual commandedSpeed_ (any Move can, whether it
+  // ended via the exact-threshold backstop or the land-at-zero predicate
+  // above, both of which tolerate the taper not having fully reached zero)
+  // leaks that residual into the chain-advanced Move's own activation
+  // baseline, and from there into landAtZero()'s own `cmd` read for
+  // WHATEVER Move next uses this same axis -- corrupting that LATER Move's
+  // completion decision with a value that describes the PREVIOUS Move, not
+  // its own taper. Resetting here, unconditionally, cuts that leak at the
+  // source; SUC-051 continuity is preserved for the case it actually
+  // matters (a Move's OWN shaping while it runs), just not across a
+  // completion boundary.
+  if (active_.kind == Motion::StopCondition::Kind::Angle) {
+    shaperOmega_.reset();
+  } else if (active_.kind == Motion::StopCondition::Kind::Distance) {
+    shaperVX_.reset();
+  }
 
   if (pendingCount_ > 0) {
     msg::Move next = pending_[0];

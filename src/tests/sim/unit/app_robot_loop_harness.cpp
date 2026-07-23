@@ -396,14 +396,13 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   App::Telemetry tlm(comms, serialLink, radioLink);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
-  // Turn-prediction campaign: App::StateEstimator declared/constructed
-  // BEFORE App::MoveQueue -- MoveQueue's own constructor now holds a
-  // const StateEstimator& (bodyAt()-driven stop-condition anticipation),
-  // so the referent must already exist. Default-constructed (0/0/200ms
-  // weights, stopLead defaults to 0 -- anticipation OFF unless a scenario
-  // explicitly calls moveQueue.setStopLead()).
+  // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
+  // ticket 004: QUARANTINED -- App::MoveQueue no longer depends on this
+  // member (its own former anticipation-lead completion path is deleted,
+  // move_queue.h's own file header); kept solely for robotLoop's own
+  // consumption below.
   App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock, stateEstimator);
+  App::MoveQueue moveQueue(drive, odom, clock);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   // --- Drive Preamble to done() BEFORE constructing/calling RobotLoop's
@@ -537,14 +536,13 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
-  // Turn-prediction campaign: App::StateEstimator declared/constructed
-  // BEFORE App::MoveQueue -- MoveQueue's own constructor now holds a
-  // const StateEstimator& (bodyAt()-driven stop-condition anticipation),
-  // so the referent must already exist. Default-constructed (0/0/200ms
-  // weights, stopLead defaults to 0 -- anticipation OFF unless a scenario
-  // explicitly calls moveQueue.setStopLead()).
+  // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
+  // ticket 004: QUARANTINED -- App::MoveQueue no longer depends on this
+  // member (its own former anticipation-lead completion path is deleted,
+  // move_queue.h's own file header); kept solely for robotLoop's own
+  // consumption below.
   App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock, stateEstimator);
+  App::MoveQueue moveQueue(drive, odom, clock);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   clock.setMicros(0);
@@ -731,14 +729,13 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
-  // Turn-prediction campaign: App::StateEstimator declared/constructed
-  // BEFORE App::MoveQueue -- MoveQueue's own constructor now holds a
-  // const StateEstimator& (bodyAt()-driven stop-condition anticipation),
-  // so the referent must already exist. Default-constructed (0/0/200ms
-  // weights, stopLead defaults to 0 -- anticipation OFF unless a scenario
-  // explicitly calls moveQueue.setStopLead()).
+  // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
+  // ticket 004: QUARANTINED -- App::MoveQueue no longer depends on this
+  // member (its own former anticipation-lead completion path is deleted,
+  // move_queue.h's own file header); kept solely for robotLoop's own
+  // consumption below.
   App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock, stateEstimator);
+  App::MoveQueue moveQueue(drive, odom, clock);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   clock.setMicros(0);
@@ -864,10 +861,10 @@ struct LiveFixture {
   // 117 ticket 003: default-constructed (encoder-only-v1 FusionWeights{}
   // default) -- directly reachable by every LiveFixture-based scenario
   // (unlike RobotLoop's own persistedTuning_/tuningStore_, which stay
-  // private). Declared BEFORE moveQueue (turn-prediction campaign):
-  // MoveQueue's own constructor holds a const StateEstimator&, so member
-  // initialization order (DECLARATION order, not initializer-list order)
-  // requires this member to exist first.
+  // private). 118 ticket 004: QUARANTINED -- App::MoveQueue no longer
+  // depends on this member (its own former anticipation-lead completion
+  // path is deleted, move_queue.h's own file header); kept solely for
+  // robotLoop's own consumption below.
   App::StateEstimator stateEstimator;
   App::MoveQueue moveQueue;
   App::Preamble preamble;
@@ -883,7 +880,7 @@ struct LiveFixture {
         tlm(comms, serialFake, radioFake),
         drive(motorL, motorR, /*trackWidth=*/120.0f),
         odom(motorL, motorR, /*trackWidth=*/120.0f),
-        moveQueue(drive, odom, clock, stateEstimator),
+        moveQueue(drive, odom, clock),
         preamble(motorL, motorR, otos, color, line, clock),
         robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm, drive, odom, moveQueue,
                   preamble, stateEstimator, clock, sleeper) {
@@ -1325,12 +1322,12 @@ void scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles() {
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
-  // Turn-prediction campaign: default-constructed StateEstimator (0/0/200ms
-  // weights, stopLead defaults to 0 -- anticipation OFF), same posture
-  // every other MoveQueue-owning scenario in this file uses unless it
-  // explicitly opts in.
+  // Default-constructed StateEstimator (0/0/200ms weights) -- quarantined,
+  // App::MoveQueue no longer depends on it (see the other constructions in
+  // this file for the full note); kept solely for robotLoop's own
+  // consumption below.
   App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock, stateEstimator);
+  App::MoveQueue moveQueue(drive, odom, clock);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   clock.setMicros(0);
@@ -1463,7 +1460,7 @@ void scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists() {
   // Turn-prediction campaign: stateEstimator constructed before moveQueue
   // -- see the earlier scenarios' own comment for why.
   App::StateEstimator stateEstimator;  // default weights (0.0/0.0/200ms)
-  App::MoveQueue moveQueue(drive, odom, clock, stateEstimator);
+  App::MoveQueue moveQueue(drive, odom, clock);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   MockTuningStore mockStore;
@@ -1590,7 +1587,7 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   // moveQueue (turn-prediction campaign) -- see the earlier scenarios'
   // own comment for why.
   App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock, stateEstimator);
+  App::MoveQueue moveQueue(drive, odom, clock);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,

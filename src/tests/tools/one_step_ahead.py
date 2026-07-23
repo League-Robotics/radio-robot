@@ -120,10 +120,17 @@ def one_step_ahead_walk(times: "Sequence[float]", positions: "Sequence[float]",
 # current AT that earlier instant (never a basis from AFTER it -- no
 # look-ahead), how far off would it have been by the time this sample's own
 # instant arrived?" This is exactly the question App::StateEstimator::
-# bodyAt(now + stopLead)/wheelAt(..., now + stopLead) answers for
-# App::MoveQueue's own anticipation-lead stop-condition evaluation (Phase B)
-# -- the RMS of this walk's residuals, swept over shift, is the curve that
-# says how far ahead the SAME ZOH math can be trusted.
+# bodyAt(now + shift)/wheelAt(..., now + shift) answers for what USED to be
+# App::MoveQueue's own time-lead anticipation stop-condition evaluation
+# (Phase B) -- DELETED, 118 ticket 004, land-at-zero-completion-delete-
+# stop-lead.md: the completion mechanism this predicted for no longer
+# exists (App::MoveQueue::tick()'s own doc comment has the land-at-zero
+# predicate that replaces it). This module's own ZOH math and its
+# characterization utility remain valid and are kept for the planned
+# fake-OTOS/fusion bench work (App::StateEstimator itself is QUARANTINED,
+# not deleted, same ticket) -- the RMS of this walk's residuals, swept over
+# shift, is the curve that says how far ahead the SAME ZOH math can be
+# trusted, independent of what (if anything) consumes that answer.
 # ---------------------------------------------------------------------------
 
 def shifted_prediction_walk(times: "Sequence[float]", positions: "Sequence[float]",

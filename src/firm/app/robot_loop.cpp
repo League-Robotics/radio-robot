@@ -301,32 +301,32 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
   // merge onto a snapshot of the CURRENT live weights, mirroring
   // applyMotorConfigPatch()/applyOtosPatch()'s own merge-then-apply shape.
   //
-  // stop_lead_ms (turn-prediction campaign) rides the SAME wire arm/branch
-  // (config.proto's own EstimatorConfigPatch doc comment explains why) but
-  // targets moveQueue_ directly -- App::MoveQueue::setStopLead(), not the
-  // FusionWeights merge above (a different App:: object; stopLead_ is
-  // MoveQueue's own field, not StateEstimator's). Applied independently of
-  // whether any of the three weight fields are present -- an
-  // EstimatorConfigPatch carrying ONLY stop_lead_ms is a valid, complete
-  // patch. Same never-persisted contract as the weights above.
+  // a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max (decel-into-the-
+  // goal campaign) ride this SAME arm, targeting moveQueue_'s ShaperLimits
+  // directly -- the "smallest coherent path" reasoning config.proto's own
+  // EstimatorConfigPatch doc comment gives (CONFIG_ESTIMATOR is already the
+  // live-tune arm for MoveQueue-owned, non-FusionWeights state, so a fresh
+  // ConfigTarget/Patch-message pair for one more MoveQueue-owned field
+  // group would duplicate plumbing for no behavioral gain). Present-field
+  // merge onto a snapshot of the CURRENT live ShaperLimits, mirroring the
+  // FusionWeights merge above; applied independently of every other field
+  // on this patch.
   //
-  // a_max/a_decel/alpha_max/alpha_decel (decel-into-the-goal campaign)
-  // ALSO ride this same arm, targeting moveQueue_'s ShaperLimits directly
-  // -- the SAME "smallest coherent path" reasoning as stop_lead_ms
-  // immediately above (config.proto's own EstimatorConfigPatch doc comment
-  // has the full rationale). Present-field merge onto a snapshot of the
-  // CURRENT live ShaperLimits, mirroring the FusionWeights merge above;
-  // applied independently of every other field on this patch.
+  // The turn-prediction campaign's own time-lead anticipation constant
+  // (formerly EstimatorConfigPatch field 4) -- DELETED (118 ticket 004,
+  // land-at-zero-completion-delete-stop-lead.md): App::MoveQueue no longer
+  // has a field to apply it to (the anticipation-lead completion mechanism
+  // it drove is deleted -- see move_queue.h's own tick() doc comment for
+  // the land-at-zero replacement). The wire field itself is `reserved` in
+  // config.proto, not reused or removed from the wire -- a legacy client
+  // still sending it is silently ignored (parses fine, has no effect),
+  // never a decode error.
   if (env.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::ESTIMATOR) {
     const msg::EstimatorConfigPatch& patch = env.cmd.config.patch.estimator;
 
     FusionWeights weights = stateEstimator_.weights();
     mergeEstimatorPatch(weights, patch);
     stateEstimator_.setWeights(weights);
-
-    if (patch.stop_lead_ms.has) {
-      moveQueue_.setStopLead(static_cast<uint32_t>(patch.stop_lead_ms.val));
-    }
 
     ShaperLimits shaperLimits = moveQueue_.shaperLimits();
     mergeShaperPatch(shaperLimits, patch);

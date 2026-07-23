@@ -117,17 +117,35 @@ sweep against the closure gate found no value with real margin (fresh
 data confirming the constant's own multi-retune history: no single value
 exists). Per the turn-execution review's own R6 rule, `stop_lead_ms` and
 the anticipation block are DELETED rather than re-tuned. `MoveQueue::tick()`
-gains a land-at-zero completion predicate instead: with shaping enabled,
-a MOVE completes when `remaining ≤ ε AND |ω_cmd| ≤ ε_ω` — the velocity
-shaper's own decel taper (`ω = √(2·α_decel·(remaining − jerkMargin))`)
-already drives the robot to ~zero speed at the goal, so there is no tail
-left to predict once the stop decision itself is fresh. The
-`StopCondition` threshold/timeout comparison remains the always-armed
-backstop (unchanged, and the ONLY completion path when shaping is off —
-an all-zero `ShaperLimits` makes `shapeAndStage()` early-return, so
-`ω_cmd` never bleeds and the land-at-zero gate never fires). `ε_ω` is set
-just above the ~15mm/s deadband-equivalent floor (`nezha_motor.cpp`'s
-sub-deadband boost), budgeting a ~1.7° worst-case coast from that floor.
+gains a land-at-zero completion predicate instead — but NOT the static
+`remaining ≤ ε AND |ω_cmd| ≤ ε_ω` form this note originally described
+sketching: empirical tracing (printf-instrumented ticks against the sim
+tour-closure gate) showed a static `ε_ω` set near the deadband floor
+never binds before the raw backstop's own `remaining ≤ 0` already does —
+the jerk-limited taper's own commanded speed doesn't cross a fixed floor
+early enough to matter. What shipped instead is a DYNAMIC,
+self-referential stopping-distance check: `remaining ≤
+(commandedSpeed² / (2·decelCeiling)) · marginFactor` — "have we already
+entered our own braking envelope for our current commanded speed," the
+same closed-form the taper's own decel ceiling already uses. `marginFactor`
+takes one of two empirically-swept values, selected by `pendingCount() >
+0` (a chain-advance is already queued behind this MOVE — only the
+ack-instant reading matters, since `Drive::stop()` never runs) vs.
+`pendingCount() == 0` (this MOVE drains the queue to a genuine
+`Drive::stop()`, so the real post-stop motor/PID coast reaches the plant
+before it settles): this split was necessary because the sim
+tour-closure gate (ack-instant measurement) and
+`test_gui_button_acceptance.py` (settle/quiescence measurement) disagreed
+about which single scalar "worked" — no value in [0.20, 1.10] satisfied
+both until the predicate was made aware of which completion regime it was
+in. See `move_queue.cpp`'s own anonymous-namespace comment for the full
+sweep data (chain: 0.82-0.84 plateau, worst=2.398° against the gate's
+2.5° band; final: 0.90-1.10 plateau, worst=1.189° settle-based against
+the button-acceptance suite's 3.0° tolerance). The `StopCondition`
+threshold/timeout comparison remains the always-armed backstop
+(unchanged, and the ONLY completion path when shaping is off — an
+all-zero `ShaperLimits` makes `shapeAndStage()` early-return, so the
+commanded speed never bleeds and the land-at-zero gate never fires).
 Scope is TWIST Angle/Distance stops only; TIME/WHEELS moves are
 unaffected. `App::StateEstimator`'s `bodyAt()` — the anticipation block's
 one call site — now has no firmware production consumer: the module,

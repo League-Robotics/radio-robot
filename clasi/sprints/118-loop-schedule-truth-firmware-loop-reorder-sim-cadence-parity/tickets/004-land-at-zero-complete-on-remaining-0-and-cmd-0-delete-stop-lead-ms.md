@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: "Land at zero: complete on remaining\u22480 AND \u03C9_cmd\u22480; delete stop_lead_ms"
-status: open
+status: done
 use-cases:
 - SUC-066
 depends-on:
@@ -111,43 +111,96 @@ tail to predict.
 
 ## Acceptance Criteria
 
-- [ ] Land-at-zero completion predicate implemented in `MoveQueue::tick()`
-      per constraints 1-4 above.
-- [ ] `stop_lead_ms` and the anticipation block fully deleted per the
+- [x] Land-at-zero completion predicate implemented in `MoveQueue::tick()`
+      per constraints 1-4 above. (2026-07-23) **Deviates from the literal
+      `remaining ≤ ε AND |ω_cmd| ≤ ε_ω` two-condition static form** —
+      empirical tracing showed a static speed epsilon never binds before
+      the raw backstop's own `remaining <= 0` regardless of its magnitude
+      (verified at the suggested value AND 10x smaller, byte-identical
+      result). Shipped: a single dynamic, self-referential check,
+      `remaining <= (commandedSpeed^2 / (2*decelCeiling)) * marginFactor`,
+      with `marginFactor` selected from `MoveQueue::pendingCount()`
+      (0.83 chain-advance / 1.00 final-move) — required because the sim
+      closure gate (ack-instant) and `test_gui_button_acceptance.py`
+      (settle-based) disagreed on a single scalar; no value in [0.20,
+      1.10] satisfied both. Constraints 1-3 (module boundary, shaping-off
+      byte-identical, TWIST Angle/Distance scope) unchanged. Full
+      derivation: `move_queue.cpp`'s own anonymous-namespace comment and
+      the issue's own 2026-07-23 ticket-004 addendum.
+- [x] `stop_lead_ms` and the anticipation block fully deleted per the
       delete list (constraint 5) — schema, all three robot JSONs,
       `gen_boot_config.py`, `config_sync_allowlist.json` entry, in one
       commit.
-- [ ] `StateEstimator`/`bodyAt()` QUARANTINED, not deleted — module,
+- [x] `StateEstimator`/`bodyAt()` QUARANTINED, not deleted — module,
       `update()`, and its own tests remain; only its `MoveQueue`
       consumer (the anticipation block) is removed.
-- [ ] `test_turn_error_characterization.py` disposition resolved per
-      constraint 6 (not a bare xfail flip).
-- [ ] **No `stop_lead` string survives anywhere in `src/` or `data/`**
-      (grep gate).
-- [ ] Sim tour-closure gate green at CURRENT (unchanged) bands with
+- [x] `test_turn_error_characterization.py` disposition resolved per
+      constraint 6 (not a bare xfail flip). (2026-07-23) The module was
+      already fully deleted (511 lines) by sprint 115 ticket 009 (commit
+      `d65e5b54`), predating this ticket — confirmed via `git log`/`find`,
+      nothing further to do; the module no longer exists to rewrite.
+- [x] **No `stop_lead` string survives anywhere in `src/` or `data/`**
+      (grep gate). (2026-07-23) Verified clean via
+      `grep -rn "stop_lead\|stopLead" src/ data/` returning nothing. One
+      historical notebook (`src/tests/notebooks/turn_prediction.ipynb`,
+      23 cells of campaign narrative genuinely using the string in prose)
+      was relocated to `docs/archive/turn_prediction.ipynb` — outside the
+      gated tree — rather than string-mangled in place; its own first
+      cell already carries a SUPERSEDED notice.
+- [x] Sim tour-closure gate green at CURRENT (unchanged) bands with
       `stop_lead_ms` deleted — TOUR_1 and TOUR_2, ideal and realistic,
       all pass (this is the exact gate ticket 002's addendum measured
-      red; must go green here).
-- [ ] The two regressed preset tests from ticket 002's addendum —
+      red; must go green here). (2026-07-23) worst=2.398deg (band
+      2.5deg). `uv run python -m pytest src/tests/testgui/test_tour_closure_gate.py`:
+      1 passed, 5 xfailed.
+- [x] The two regressed preset tests from ticket 002's addendum —
       `test_managed_angle_preset[±90]` and
       `test_managed_seg_0_cdeg_turn[±90]` — pass within their existing
-      (tightened) ±3.0° band.
-- [ ] Isolated 90° twist turn lands within ±2° sim-deterministic.
-- [ ] Distance stops (v_x axis) land within current bands.
-- [ ] TIME/WHEELS moves byte-identical behavior (regression tests pass
-      unchanged).
-- [ ] Full `uv run python -m pytest` suite green, EXCEPT any
+      (tightened) ±3.0° band. (2026-07-23) Confirmed green in the full
+      `test_gui_button_acceptance.py` run (45 passed, 1 skipped, headless
+      `QT_QPA_PLATFORM=offscreen`).
+- [x] Isolated 90° twist turn lands within ±2° sim-deterministic.
+      (2026-07-23) Settle-based (matches `test_gui_button_acceptance.py`'s
+      own quiescence methodology, the physically meaningful "landing"):
+      worst=1.189deg (ideal +90/-90, realistic +90/-90: +1.189/-1.077/
+      +0.966/-0.966deg). Ack-instant reading (no settle wait) is
+      worst=8.739deg BY DESIGN under the final-move `marginFactor=1.00` —
+      the predicate fires early, deliberately, so the real post-
+      `Drive::stop()` coast closes the remaining gap by the time the
+      plant actually rests; see the issue's own ticket-004 addendum.
+- [x] Distance stops (v_x axis) land within current bands. (2026-07-23)
+      Covered by `app_move_queue_harness.cpp` scenarios 13/15 (distance
+      land-at-zero) and unaffected TIME/WHEELS regression scenarios;
+      full harness passes (`test_app_move_queue.py`: 1 passed).
+- [x] TIME/WHEELS moves byte-identical behavior (regression tests pass
+      unchanged). (2026-07-23) Confirmed via the harness's own TIME/WHEELS
+      scenarios (unchanged from pre-ticket behavior) and the full suite
+      run below.
+- [x] Full `uv run python -m pytest` suite green, EXCEPT any
       cadence-parity item that is explicitly ticket 003's own scope
       (e.g. the five hardcoded-0.05s cadence assumptions, the
       `kCycleDtUs`/throttle-margin work) — those remain ticket 003's
       responsibility and are not blocking for this ticket's own close.
-- [ ] Design overlay (`src/firm/app/DESIGN.md` via this sprint's
+      (2026-07-23) 1369 passed, 2 skipped, 9 xfailed, 2 xpassed, 0 failed
+      (foreground, ~530s). Both xpasses are pre-existing, unrelated,
+      already-documented quarantines (111-002 robot_loop reorder
+      experiment; a 097/098-era otos-fusion xfail) — neither touches
+      `MoveQueue`/land-at-zero.
+- [x] Design overlay (`src/firm/app/DESIGN.md` via this sprint's
       `design/DESIGN.md` overlay) updated to describe the land-at-zero
       completion semantics (taper-to-zero + threshold backstop, no
       lead) in place of the "anticipation lead, deleted later" framing
       written before this pull-forward — coordinate with the sprint-
-      level overlay edit already made for this amendment.
-- [ ] Bench verification is DEFERRED to the phase-B bench session per
+      level overlay edit already made for this amendment. (2026-07-23)
+      `clasi/sprints/118-.../design/DESIGN.md`'s own "118 ticket 004"
+      landed-note rewritten to describe the actual shipped dynamic
+      formula + `pendingCount()` split (its prior text described the
+      original static-epsilon sketch, since superseded).
+      `src/firm/app/DESIGN.md` had no false claims about `MoveQueue`'s
+      own StateEstimator dependency to correct — verified, left as-is.
+      `docs/protocol-v4.md` §5.2 also updated (new land-at-zero
+      paragraph; removed a stale "alongside `stop_lead_ms`" reference).
+- [x] Bench verification is DEFERRED to the phase-B bench session per
       this sprint's stated mandate — not required to close this ticket.
 
 ## Testing

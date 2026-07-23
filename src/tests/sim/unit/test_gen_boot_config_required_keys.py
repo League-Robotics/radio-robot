@@ -53,11 +53,13 @@ config"): ``estimator.weight_heading_otos``/``weight_omega_otos``/
 source-side fallback, mirroring `App::StateEstimator`'s own fail-closed
 boot-config precedent.
 
-ADDED (turn-prediction campaign): ``estimator.stop_lead_ms`` joins the
-same list -- ``App::MoveQueue``'s own fail-closed boot-time anticipation
-lead (``Config::EstimatorBootConfig::stopLead``), read by the SAME
-``estimator_config_for_config()`` via the SAME ``_require()`` discipline
-as its three siblings above.
+REMOVED (118 ticket 004, land-at-zero-completion-delete-stop-lead.md): a
+former fourth ``estimator.*`` key -- a boot-time anticipation-lead
+constant -- briefly joined this list (turn-prediction campaign) and is
+now gone again: the completion mechanism it fed no longer exists (see
+``App::MoveQueue::tick()``'s own doc comment for the land-at-zero
+predicate that replaces it), so ``estimator_config_for_config()`` no
+longer reads (or requires) that key at all.
 
 The "value-preserving migration, verified by diff against a pre-ticket
 golden snapshot" section this file used to carry (``fixtures/
@@ -136,7 +138,6 @@ _REQUIRED_KEY_PATHS = [
     ("estimator", "weight_heading_otos"),
     ("estimator", "weight_omega_otos"),
     ("estimator", "staleness_ms"),
-    ("estimator", "stop_lead_ms"),
 ]
 
 

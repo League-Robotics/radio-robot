@@ -4,27 +4,36 @@
 // Boundary (sprint.md Architecture Step 3): inside -- the 5-slot array (1
 // active + 4 pending), replace/flush/enqueue/ERR_FULL bookkeeping,
 // advancing active->next-pending on stop/timeout, owning and driving one
-// Motion::StopCondition for whichever Move is active; outside -- deciding
-// what a VALID Move looks like (RobotLoop::handleMove()'s job, ticket 006:
-// velocity variant present, stop variant present, timeout > 0, the
-// config-completeness gate -- every Move this class's enqueue() ever sees
-// is already permitted), how a velocity variant becomes wheel duty
-// (Drive's job), what "traveled far enough" means numerically
-// (Motion::StopCondition + App::Odometry's job). Constructor dependencies:
-// Drive&, Odometry&, const Devices::Clock&, const StateEstimator& -- the
-// StateEstimator& is a turn-prediction-campaign addition (see tick()'s own
-// doc comment below); the other three are the same collaborators the
-// deleted App::Deadman (clock only) and App::RobotLoop (drive+odom,
-// already) depended on before.
+// Motion::StopCondition for whichever Move is active, and (118 ticket 004)
+// the land-at-zero completion predicate (see tick()'s own doc comment
+// below); outside -- deciding what a VALID Move looks like
+// (RobotLoop::handleMove()'s job, ticket 006: velocity variant present,
+// stop variant present, timeout > 0, the config-completeness gate -- every
+// Move this class's enqueue() ever sees is already permitted), how a
+// velocity variant becomes wheel duty (Drive's job), what "traveled far
+// enough" means numerically (Motion::StopCondition + App::Odometry's job).
+// Constructor dependencies: Drive&, Odometry&, const Devices::Clock& --
+// the same collaborators the deleted App::Deadman (clock only) and
+// App::RobotLoop (drive+odom, already) depended on before.
 //
-// StateEstimator& dependency (turn-prediction campaign): this is a
-// DELIBERATE new dependency edge (MoveQueue -> StateEstimator), superseding
-// this file's own prior "no new dependency direction" claim -- state_
-// estimator.h's own file header always named this as the eventual consumer
-// ("consuming whereAmI()/wheelAt() to drive motion... a later, out-of-this-
-// sprint trajectory controller"); this IS that later consumer. No cycle:
-// StateEstimator depends on nothing in app/ beyond app/telemetry.h, and
-// never reads MoveQueue.
+// StateEstimator& dependency -- REMOVED (118 ticket 004, land-at-zero
+// completion; see land-at-zero-completion-delete-stop-lead.md). The
+// turn-prediction campaign (117) had added a `const StateEstimator&` here
+// to evaluate the stop condition against a predicted-forward heading/
+// pathLength (`stateEstimator_.bodyAt()` evaluated at now plus a fixed
+// millisecond lead) instead of the caller's raw current `odom` reading --
+// a hand-tuned time-lead guess with a four-retune history and no stable
+// value (see that issue's own Description). That anticipation block, the
+// lead constant that drove it, and the
+// StateEstimator& dependency it needed are all deleted: the taper
+// (Motion::VelocityShaper) already brings the commanded speed to ~zero at
+// the goal, so completion is now decided from `remaining` and the taper's
+// own commanded speed, both already local to this class -- there is no
+// tail left to predict, and no reason to reach into a peer module for one.
+// `App::StateEstimator` itself is QUARANTINED, not deleted (module,
+// `update()`, and its own tests all remain -- kept as the planned consumer
+// for future fake-OTOS/fusion bench work); this class was its only
+// firmware production consumer.
 //
 // StopCondition storage: Motion::StopCondition has no default constructor
 // (every baseline is captured at construction -- see stop_condition.h's
@@ -57,7 +66,6 @@
 
 #include "app/drive.h"
 #include "app/odometry.h"
-#include "app/state_estimator.h"
 #include "devices/clock.h"
 #include "messages/envelope.h"
 #include "motion/stop_condition.h"
@@ -96,19 +104,21 @@ namespace App {
 // shaping entirely (tick()/activate() stage a Move's raw v_x/v_left/
 // v_right unchanged, byte-identical to this class's pre-shaping
 // behavior); independently, alphaMax<=0 OR alphaDecel<=0 OR
-// yawJerkMax<=0 disables ANGULAR shaping (raw omega unchanged). This is
-// the SAME "0 == off, matching this class's own pre-feature behavior"
-// contract stopLead already established (MoveQueue's own constructor doc
-// comment) -- the default-constructed ShaperLimits{} (every field 0) is
-// therefore the exact identity/no-op configuration every pre-existing
-// MoveQueue caller (every unit-test harness, TestSim::SimHarness) keeps
-// getting without passing anything. Real firmware always supplies real
-// positive values here (gen_boot_config.py's shaper_config_for_config()
-// REQUIRES all six robot-JSON keys, config-as-truth) -- shaping is
-// therefore unconditionally ON in production, opt-in only for a sim/test
+// yawJerkMax<=0 disables ANGULAR shaping (raw omega unchanged) -- and, per
+// ticket 004, also disables the land-at-zero completion path on that axis
+// (see tick()'s own doc comment): with no taper, the commanded speed never
+// bleeds toward zero, so the threshold/timeout backstop stays the ONLY
+// completion path, exactly as before this feature existed. The default-
+// constructed ShaperLimits{} (every field 0) is therefore the exact
+// identity/no-op configuration every pre-existing MoveQueue caller (every
+// unit-test harness, TestSim::SimHarness) keeps getting without passing
+// anything. Real firmware always supplies real positive values here
+// (gen_boot_config.py's shaper_config_for_config() REQUIRES all six
+// robot-JSON keys, config-as-truth) -- shaping is therefore
+// unconditionally ON in production, opt-in only for a sim/test
 // composition root that hasn't pushed a real config (mirrors
-// FusionWeights{}/stopLead=0's own sim/production boundary precedent,
-// sim_harness.h's own comment).
+// FusionWeights{}'s own sim/production boundary precedent, sim_harness.h's
+// own comment).
 struct ShaperLimits {
   float aMax = 0.0f;         // [mm/s^2] linear accel-ramp ceiling
   float aDecel = 0.0f;       // [mm/s^2] linear decel-taper ceiling
@@ -149,22 +159,14 @@ class MoveQueue {
     Completion completion{};  // valid iff completed
   };
 
-  // stopLead -- [ms] initial anticipation lead (see tick()'s own doc
-  // comment); defaults to 0 (anticipation OFF, IDENTICAL to this class's
-  // pre-turn-prediction-campaign behavior) for a caller that doesn't source
-  // one from boot config (e.g. src/sim/sim_harness.h's own documented
-  // sim/production boundary, or a unit-test harness that doesn't care).
-  // Live-retunable afterward via setStopLead() -- see that method's own
-  // doc comment.
-  //
   // shaperLimits -- Motion::VelocityShaper's own accel/decel ceilings (see
   // ShaperLimits's own doc comment above); defaults to ShaperLimits{}
   // (every field 0 -- shaping OFF, IDENTICAL to this class's pre-shaping
-  // behavior), the SAME "opt-in for sim/test, always-on in production"
-  // shape stopLead already established. Live-retunable via
+  // behavior) for a caller that doesn't source one from boot config (e.g.
+  // src/sim/sim_harness.h's own documented sim/production boundary, or a
+  // unit-test harness that doesn't care). Live-retunable via
   // setShaperLimits().
   MoveQueue(Drive& drive, Odometry& odom, const Devices::Clock& clock,
-            const StateEstimator& stateEstimator, uint32_t stopLead = 0,
             ShaperLimits shaperLimits = ShaperLimits{});
 
   // Enqueues/replaces `move` (already shape-validated by the caller -- see
@@ -191,80 +193,82 @@ class MoveQueue {
 
   // Per-cycle tick. now/odom are the caller's CURRENT readings (see this
   // file's own header comment for why both are passed in rather than read
-  // from the held collaborators). Ticks the active Move's StopCondition;
-  // on StopConditionMet or TimedOut, ends the active Move (reported via
-  // the returned TickResult) and either activates the next pending Move
-  // THIS SAME CALL (seamless hand-off, SUC-051 -- no intervening call that
-  // stages a zero/stopped target) or, if the queue is now empty, calls
-  // Drive::stop(). A no-op (Continue, TickResult::completed == false) if
-  // no Move is active.
+  // from the held collaborators). Ticks the active Move's StopCondition
+  // (the always-armed threshold/timeout backstop -- unchanged, first to
+  // fire wins); on StopConditionMet or TimedOut, ends the active Move
+  // (reported via the returned TickResult) and either activates the next
+  // pending Move THIS SAME CALL (seamless hand-off, SUC-051 -- no
+  // intervening call that stages a zero/stopped target) or, if the queue
+  // is now empty, calls Drive::stop(). A no-op (Continue, TickResult::
+  // completed == false) if no Move is active.
   //
-  // Anticipation lead (turn-prediction campaign, StateEstimator&
-  // consumption): the kind-specific Distance/Angle comparison (never the
-  // Time kind or the timeout backstop, both genuine elapsed-wall-clock
-  // deadlines) is evaluated against `stateEstimator_.bodyAt(now + stopLead)`
-  // instead of the caller's raw CURRENT `odom` reading, whenever stopLead_
-  // > 0 AND the estimator's own body peer is valid (has seen at least one
-  // update() call) -- falls back to the raw `odom` reading otherwise
-  // (stopLead_ == 0, or too early after boot for the estimator to have a
-  // basis yet). This closes two measured error sources at once: the
-  // one-cycle basis staleness `odom` itself already carries at this call
-  // site (robot_loop.cpp's own kPace-block ordering ticks MoveQueue BEFORE
-  // stateEstimator_.update() runs each cycle) and the actuation/momentum-
-  // tail overshoot a stop condition fired exactly AT threshold-crossing
-  // still incurs (turn-prediction-campaign notebook,
-  // src/tests/notebooks/turn_prediction.ipynb -- measured ~150-250ms lag,
-  // ~18deg overshoot at omega=2rad/s in sim). Distance predicts pathLength
-  // forward using the predicted body-frame speed (|v_x, v_y|) held
-  // constant across the SAME age the heading prediction uses -- mirrors
-  // pathLength()'s own "accumulate |distance| every cycle" contract
-  // (odometry.h), extrapolated rather than measured. Activation baselines
-  // (activationPathLength_/activationTheta_) are UNCHANGED by this --
-  // still captured from the raw `odom` reading at activation time, exactly
-  // as before; only the CURRENT-reading side of the comparison anticipates.
+  // Land-at-zero completion (118 ticket 004,
+  // land-at-zero-completion-delete-stop-lead.md -- supersedes the deleted
+  // anticipation-lead mechanism this doc comment used to describe here,
+  // see this file's own header). On a cycle the backstop above does NOT
+  // already end the Move (Continue), an ADDITIONAL completion path is
+  // checked for a TWIST Move whose stop_kind is Angle (omega axis) or
+  // Distance (v_x axis) AND whose matching ShaperLimits axis is enabled
+  // (angular/linear respectively -- see ShaperLimits's own doc comment):
+  // the Move is declared done once `remaining` (threshold minus
+  // so-far-traveled/turned, the SAME quantity shapeAndStage() computes for
+  // the taper) has shrunk into the taper's OWN braking envelope for its
+  // most-recently-commanded speed on that axis
+  // (Motion::VelocityShaper::commandedSpeed()) -- a dynamic, self-
+  // referential `remaining <= (commandedSpeed^2 / (2*decelCeiling)) *
+  // marginFactor` check, not a static epsilon on either quantity alone; see
+  // move_queue.cpp's own landAtZero() and its anonymous-namespace comment
+  // for the full derivation, including why `marginFactor` takes one of two
+  // values depending on pendingCount() (chain-advance about to take over
+  // vs. this Move draining the queue to a genuine Drive::stop()). The
+  // taper is DESIGNED to bring the commanded speed to ~zero as `remaining`
+  // reaches zero (velocity_shaper.cpp's own `sqrt(2*aDecel*remaining)`
+  // ceiling), so this is an emergent "let it finish" completion, not a
+  // second tuned guess: once the taper has entered its own braking
+  // envelope, there is nothing left to gain by waiting for the raw
+  // threshold's own exact `remaining <= 0` crossing (which the output-
+  // deadband boost can otherwise stall short of indefinitely, since a
+  // sub-floor nonzero command gets boosted back UP to the floor rather
+  // than allowed to taper all the way to true zero -- nezha_motor.cpp's
+  // own writeShapedDuty()). WHEELS Moves and Kind::Time never qualify (no
+  // matching stop_kind/axis pairing exists for either -- see
+  // shapeAndStage()'s own per-kind breakdown). With the matching
+  // ShaperLimits axis DISABLED (the default), this path can never fire --
+  // the taper never exists, the commanded speed never bleeds toward zero,
+  // and the threshold/timeout backstop is the ONLY completion path,
+  // byte-identical to this class's behavior before this feature existed.
   //
-  // Velocity shaping (decel-into-the-goal campaign, follow-on to the
-  // anticipation lead above): on a Continue outcome (the Move keeps
-  // running), this method ALSO re-stages the active Move's commanded
+  // Velocity shaping (decel-into-the-goal campaign): on a Continue outcome
+  // (the Move keeps running -- neither the backstop nor land-at-zero ended
+  // it this cycle), this method ALSO re-stages the active Move's commanded
   // velocity through Drive::setTwist()/setWheels() -- Motion::
   // VelocityShaper::next() computes the next tick's speed for whichever
   // axis (linear v_x/v_left/v_right, angular omega) ShaperLimits enables,
-  // using the SAME pathLength/theta (possibly anticipation-predicted, see
-  // above) this same call already computed for the stop-condition
-  // comparison -- never a second, independent prediction. "Remaining" for
-  // the taper is threshold-minus-so-far-traveled for a Distance-kind Move
-  // (linear axis only), threshold-minus-so-far-turned for an Angle-kind
-  // Move (angular axis only), or +infinity for a Kind::Time Move on BOTH
-  // axes (accel-limited ramp-up still applies; no taper, since a Time Move
-  // ends on elapsed wall-clock time, not position -- there is no
-  // "remaining distance" to taper against). A Move's non-primary axis
-  // (e.g. a Distance-kind TWIST Move's own omega, if nonzero) is passed
-  // through UNSHAPED -- this class only shapes the axis its own stop_kind
-  // measures; see move_queue.cpp's own shapeAndStage() comment for the
-  // full per-kind breakdown, including WHEELS (v_left/v_right shaped
-  // independently, both linear, regardless of stop_kind). A no-op per
-  // axis whenever ShaperLimits disables it (ShaperLimits's own doc
-  // comment) -- Drive is never re-staged for a disabled axis, so a
-  // caller with ShaperLimits{} (the default) sees IDENTICAL behavior to
-  // this class before shaping existed (Drive is staged once, at
-  // activate(), and never again until the Move ends).
+  // using the SAME pathLength/theta this same call already computed for
+  // the stop-condition comparison above -- never a second, independent
+  // prediction. "Remaining" for the taper is threshold-minus-so-far-
+  // traveled for a Distance-kind Move (linear axis only), threshold-minus-
+  // so-far-turned for an Angle-kind Move (angular axis only), or
+  // +infinity for a Kind::Time Move on BOTH axes (accel-limited ramp-up
+  // still applies; no taper, since a Time Move ends on elapsed wall-clock
+  // time, not position -- there is no "remaining distance" to taper
+  // against). A Move's non-primary axis (e.g. a Distance-kind TWIST Move's
+  // own omega, if nonzero) is passed through UNSHAPED -- this class only
+  // shapes the axis its own stop_kind measures; see move_queue.cpp's own
+  // shapeAndStage() comment for the full per-kind breakdown, including
+  // WHEELS (v_left/v_right shaped independently, both linear, regardless
+  // of stop_kind). A no-op per axis whenever ShaperLimits disables it
+  // (ShaperLimits's own doc comment) -- Drive is never re-staged for a
+  // disabled axis, so a caller with ShaperLimits{} (the default) sees
+  // IDENTICAL behavior to this class before shaping existed (Drive is
+  // staged once, at activate(), and never again until the Move ends).
   TickResult tick(uint64_t now, const Odometry& odom);  // [us]
 
-  // setStopLead/stopLead -- the live-tuning entry point (RobotLoop::
-  // handleConfig()'s own ESTIMATOR branch, turn-prediction campaign) mirrors
-  // StateEstimator::setWeights()'s own shape: a plain in-memory write, no
-  // I2C access, no bus transaction. A reboot always reverts to the boot
-  // config's own stop_lead_ms bake (Config::EstimatorBootConfig::stopLead)
-  // -- this class never persists it, matching EstimatorConfigPatch's own
-  // "never persisted" contract for the fusion weights it already carries.
-  void setStopLead(uint32_t stopLead) { stopLead_ = stopLead; }  // [ms]
-  uint32_t stopLead() const { return stopLead_; }                // [ms]
-
   // setShaperLimits/shaperLimits -- the live-tuning entry point (RobotLoop::
-  // handleConfig()'s own ESTIMATOR branch, decel-into-the-goal campaign),
-  // the SAME shape as setStopLead()/stopLead() immediately above: a plain
-  // in-memory write, never persisted (a reboot always reverts to the boot
-  // config's own Config::ShaperBootConfig bake).
+  // handleConfig()'s own ESTIMATOR branch, decel-into-the-goal campaign): a
+  // plain in-memory write, no I2C access, no bus transaction, never
+  // persisted (a reboot always reverts to the boot config's own
+  // Config::ShaperBootConfig bake).
   void setShaperLimits(ShaperLimits limits) { shaperLimits_ = limits; }
   ShaperLimits shaperLimits() const { return shaperLimits_; }
 
@@ -332,20 +336,24 @@ class MoveQueue {
   // Called from tick() ONLY on a Continue outcome (see tick()'s own doc
   // comment for why -- a Move that ends this same cycle is about to be
   // superseded by a chain-advance activate() or drive_.stop() regardless).
-  // pathLength/theta are the SAME (possibly anticipation-predicted)
-  // readings tick() already computed for the stop-condition comparison
-  // this cycle -- never re-derived here.
+  // pathLength/theta are the SAME readings tick() already computed for the
+  // stop-condition comparison this cycle -- never re-derived here.
   void shapeAndStage(uint64_t now, float pathLength, float theta);
+
+  // landAtZero -- the land-at-zero completion predicate (118 ticket 004,
+  // see tick()'s own doc comment for the full contract). pathLength/theta
+  // are the SAME CURRENT readings tick() already has this cycle -- never
+  // re-derived here. Pure query: reads shaperLimits_/shaperVX_/
+  // shaperOmega_/active_, mutates nothing.
+  bool landAtZero(float pathLength, float theta) const;
 
   Drive& drive_;
   Odometry& odom_;
   const Devices::Clock& clock_;
-  const StateEstimator& stateEstimator_;
 
   ActiveMove active_;
   msg::Move pending_[kMaxPending];
   int pendingCount_ = 0;
-  uint32_t stopLead_ = 0;  // [ms] see tick()'s own doc comment
 
   // Velocity-shaping state (decel-into-the-goal campaign). shaperLimits_ is
   // the live-tunable config (setShaperLimits()); the four shaper* members

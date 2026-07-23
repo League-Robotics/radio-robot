@@ -160,29 +160,23 @@ class SimHarness {
         // needs non-default weights calls stateEstimator().setWeights()
         // directly, the same way a test needing non-default motor gains
         // already calls configureMotor() rather than reading boot config.
-        //
-        // Constructed BEFORE moveQueue_ (turn-prediction campaign):
-        // App::MoveQueue's own constructor now holds a const
-        // StateEstimator& (see its own tick() doc comment), so member
-        // initialization order (DECLARATION order, this file's own private
-        // section below) requires stateEstimator_ to be declared first.
+        // 118 ticket 004: QUARANTINED -- App::MoveQueue no longer holds a
+        // StateEstimator& (its own former anticipation-lead completion
+        // path is deleted, move_queue.h's own file header); stateEstimator_
+        // stays constructed here purely for robotLoop_'s own consumption
+        // below (its trailing kPace block still calls
+        // stateEstimator_.update() every cycle).
         stateEstimator_(),
-        // moveQueue_'s own stopLead SAME sim/production-boundary reasoning
-        // as stateEstimator_'s weights above -- left at its constructor
-        // default (0, anticipation OFF) rather than sourced from
-        // Config::defaultEstimatorConfig()::stopLead. A SimHarness-based
-        // test that specifically needs anticipation calls
-        // moveQueue().setStopLead() directly. shaperLimits (decel-into-
-        // the-goal campaign) is left at ITS OWN constructor default too
-        // (App::ShaperLimits{}, every field 0 -- shaping OFF, IDENTICAL to
-        // this class's pre-shaping behavior) rather than sourced from
-        // Config::defaultShaperConfig() -- the SAME "not part of the sim
-        // graph" boundary (Config::defaultShaperConfig() lives in the
-        // GENERATED config/boot_config.cpp, excluded from this CMake
-        // target per this file's own "Absent (deliberately)" note above).
-        // A test that specifically needs shaping calls
-        // moveQueue().setShaperLimits() directly.
-        moveQueue_(drive_, odom_, clock_, stateEstimator_),
+        // shaperLimits (decel-into-the-goal campaign) is left at its own
+        // constructor default (App::ShaperLimits{}, every field 0 --
+        // shaping OFF, IDENTICAL to this class's pre-shaping behavior)
+        // rather than sourced from Config::defaultShaperConfig() -- the
+        // SAME "not part of the sim graph" boundary
+        // (Config::defaultShaperConfig() lives in the GENERATED config/
+        // boot_config.cpp, excluded from this CMake target per this file's
+        // own "Absent (deliberately)" note above). A test that specifically
+        // needs shaping calls moveQueue().setShaperLimits() directly.
+        moveQueue_(drive_, odom_, clock_),
         preamble_(armorL_, armorR_, otos_, color_, line_, clock_),
         robotLoop_(plant_, armorL_, armorR_, otos_, color_, line_, comms_, tlm_,
                    drive_, odom_, moveQueue_, preamble_, stateEstimator_, clock_,
@@ -536,14 +530,13 @@ class SimHarness {
   // Config::defaultEstimatorConfig() -- see the constructor initializer
   // list's own comment above for why (preserves the sim/production
   // boundary src/sim/CMakeLists.txt documents; behaviorally equivalent
-  // this sprint). Declared BEFORE moveQueue_ (turn-prediction campaign):
-  // App::MoveQueue's own constructor holds a const StateEstimator&, so
-  // member initialization order (DECLARATION order, not the constructor
-  // initializer list's own order) requires this member to exist first.
+  // this sprint). 118 ticket 004: QUARANTINED -- App::MoveQueue no longer
+  // depends on this member (see the constructor initializer list's own
+  // comment above); kept solely for robotLoop_'s own consumption below.
   App::StateEstimator stateEstimator_;
   // 116 (protocol-set-point issue): App::MoveQueue replaces App::Deadman --
-  // declared AFTER drive_/odom_/stateEstimator_ (MoveQueue's constructor
-  // holds references to all three).
+  // declared AFTER drive_/odom_ (MoveQueue's constructor holds references
+  // to both).
   App::MoveQueue moveQueue_;
   App::Preamble preamble_;
 

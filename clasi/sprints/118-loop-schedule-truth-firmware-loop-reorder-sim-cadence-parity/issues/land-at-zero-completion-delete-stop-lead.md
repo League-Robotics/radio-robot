@@ -149,3 +149,66 @@ Description already assumed as ideal.
 Full sweep table and the closure-gate/button-acceptance before/after
 transcripts are recorded in
 `clasi/sprints/118-loop-schedule-truth-firmware-loop-reorder-sim-cadence-parity/tickets/002-stop-decision-consumes-this-cycle-odometry-relocate-movequeue-tick-into-the-pace-block.md`.
+
+## Addendum (2026-07-23, sprint 118 ticket 004 — shipped, deviates from this
+issue's own literal `remaining ≤ ε AND |ω_cmd| ≤ ε_ω` predicate text)
+
+Ticket 004 landed the delete list (constraint 5) and the completion
+predicate, but NOT the literal two-condition static-epsilon form this
+issue's own Description/constraint 4 specify. Empirical tracing
+(printf-instrumented ticks against the sim closure gate, both branches)
+found that a static epsilon on the taper's commanded speed alone — set
+"just above the deadband-equivalent floor" per constraint 4 — never binds
+before the raw backstop's own `remaining <= 0` already does: the
+jerk-limited taper's commanded speed does not cross a fixed floor early
+enough relative to `remaining` for a static AND-of-two-thresholds check to
+be the one that fires. Confirmed by testing the suggested epsilon at its
+literal magnitude and at 10x smaller — byte-identical outcome either way,
+proving the static form's `remaining` term was structurally the ONLY
+constraint that ever bound, regardless of the speed epsilon's value.
+
+**What shipped instead**: a single DYNAMIC, self-referential check —
+`remaining <= (commandedSpeed^2 / (2*decelCeiling)) * marginFactor` — "has
+the taper already entered its own braking envelope for its current
+commanded speed," the same closed-form `v^2/(2*a)` stopping-distance
+formula the taper's own decel ceiling already uses. This retains
+constraint 4's stated goal (avoid stalling on the output-deadband boost
+indefinitely) and constraints 1-3 unmodified (no new `StopCondition`
+Kind, shaping-off byte-identical, TWIST Angle/Distance scope only) — it
+changes ONLY the shape of the epsilon comparison, not the module boundary
+or the backstop's always-armed status.
+
+**A second, unanticipated finding drove a further design addition.**
+Sweeping `marginFactor` against the sim closure gate (ack-instant
+measurement — a tour leg's own next Move is already queued, so
+`Drive::stop()` never runs and no real coast is observed) found a stable
+0.82-0.84 plateau (worst=2.398deg, under the 2.5deg band). But the SAME
+sweep against `test_gui_button_acceptance.py`'s settle/quiescence
+measurement (a genuine idle window after each isolated preset press, so
+the real post-`Drive::stop()` motor/PID coast IS observed) found that
+range measures 4.997-5.008deg — over its own 3.0deg tolerance — and
+instead wants a 0.90-1.10 plateau (worst=1.189deg settle-based). No
+single value in [0.20, 1.10] satisfies both. Root cause: the two suites
+measure different things (decision-instant position vs. actual rest
+position), and the coast between them is real, physical, and roughly
+constant in magnitude for a given commanded speed at the decision instant
+— NOT a measurement artifact either test could be argued away on.
+Resolution: `marginFactor` is chosen per-completion from
+`MoveQueue::pendingCount()` (already known at the decision instant) —
+`kStoppingMarginFactorChain = 0.83` when a chain-advance is queued behind
+this Move (ack-instant is the only reading that matters),
+`kStoppingMarginFactorFinal = 1.00` when this Move drains the queue to a
+genuine stop (the real coast matters, so land earlier). Both acceptance
+suites pass simultaneously with this split; see `move_queue.cpp`'s own
+anonymous-namespace comment for the full derivation.
+
+**Measured results (final)**: sim closure gate worst=2.398deg (TOUR_1/
+TOUR_2 x ideal/realistic); isolated 90deg twist, settle-based (mirrors
+`test_gui_button_acceptance.py`'s own methodology), worst=1.189deg;
+isolated 90deg twist, ack-instant (no settle wait), worst=8.739deg — this
+last number is EXPECTED, not a defect: with `marginFactor=1.00` (the
+final-move case) the predicate fires while real residual speed remains,
+by design, because the subsequent genuine `Drive::stop()` coast is what
+closes the gap to the settled, physically-accurate landing. Full
+`uv run python -m pytest`: 1369 passed, 0 failed. `python build.py`/
+`just build`: both targets clean.

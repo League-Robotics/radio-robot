@@ -21,10 +21,18 @@
 //
 // Scenarios 13-14 (decel-into-the-goal campaign) additionally prove
 // App::MoveQueue's ShaperLimits/Motion::VelocityShaper integration:
-// scenarios 1-12 above are UNCHANGED and continue to construct MoveQueue
+// scenarios 1-10 above are UNCHANGED and continue to construct MoveQueue
 // with the default ShaperLimits{} (shaping OFF) -- they are this file's
 // own regression guard that shaping is truly opt-in/byte-identical when
-// disabled, not just documented as such.
+// disabled, not just documented as such. Scenarios 11-12 (the turn-
+// prediction campaign's own StateEstimator-anticipation coverage) are
+// DELETED (118 ticket 004, land-at-zero-completion-delete-stop-lead.md --
+// see the numbered comment where they used to live for the full
+// disposition); scenarios 15-17 (same ticket) prove the land-at-zero
+// completion predicate that supersedes them: completion via `remaining`+
+// commanded-speed convergence rather than a StateEstimator prediction, on
+// both the Distance and Angle axes, plus a shaping-OFF regression proving
+// the path structurally cannot fire without a taper.
 //
 // Compiled by test_app_move_queue.py with -DHOST_BUILD against
 // move_queue.cpp, stop_condition.cpp, velocity_shaper.cpp, drive.cpp,
@@ -38,7 +46,6 @@
 #include "app/drive.h"
 #include "app/move_queue.h"
 #include "app/odometry.h"
-#include "app/state_estimator.h"
 #include "devices/device_config.h"
 #include "devices/device_types.h"
 #include "devices/nezha_motor.h"
@@ -275,15 +282,7 @@ void scenarioEnqueueOnEmptyQueueActivatesTwistImmediately() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
-  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
-  // (body peer stays valid=false, never updated by this harness) and
-  // stopLead left at its own constructor default (0, anticipation OFF),
-  // so every scenario below is unaffected: the anticipation branch in
-  // tick() is gated on stopLead_ > 0, matching this file's own pre-
-  // existing raw-Odometry-baseline assertions unchanged.
-  App::StateEstimator estimator;
-  App::MoveQueue queue(drive, odom, clock, estimator);
+  App::MoveQueue queue(drive, odom, clock);
 
   msg::Move move = makeTwistMove(/*id=*/7, /*v_x=*/100.0f, /*v_y=*/0.0f, /*omega=*/0.0f,
                                   msg::Move::StopKind::TIME, /*stopValue=*/500.0f,
@@ -327,15 +326,7 @@ void scenarioWheelsDistanceMoveUsesRealOdometryBaseline() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
-  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
-  // (body peer stays valid=false, never updated by this harness) and
-  // stopLead left at its own constructor default (0, anticipation OFF),
-  // so every scenario below is unaffected: the anticipation branch in
-  // tick() is gated on stopLead_ > 0, matching this file's own pre-
-  // existing raw-Odometry-baseline assertions unchanged.
-  App::StateEstimator estimator;
-  App::MoveQueue queue(drive, odom, clock, estimator);
+  App::MoveQueue queue(drive, odom, clock);
 
   msg::Move move = makeWheelsMove(/*id=*/9, /*vLeft=*/90.0f, /*vRight=*/30.0f,
                                    msg::Move::StopKind::DISTANCE, /*stopValue=*/80.0f /*[mm]*/,
@@ -399,15 +390,7 @@ void scenarioAngleMoveUsesRealOdometryHeadingBaseline() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
-  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
-  // (body peer stays valid=false, never updated by this harness) and
-  // stopLead left at its own constructor default (0, anticipation OFF),
-  // so every scenario below is unaffected: the anticipation branch in
-  // tick() is gated on stopLead_ > 0, matching this file's own pre-
-  // existing raw-Odometry-baseline assertions unchanged.
-  App::StateEstimator estimator;
-  App::MoveQueue queue(drive, odom, clock, estimator);
+  App::MoveQueue queue(drive, odom, clock);
 
   msg::Move move = makeTwistMove(/*id=*/11, /*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/0.5f,
                                   msg::Move::StopKind::ANGLE, /*stopValue=*/0.5f /*[rad]*/,
@@ -453,15 +436,7 @@ void scenarioTimeMoveContinuesThenCompletesAndDrainsEmptyToStop() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
-  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
-  // (body peer stays valid=false, never updated by this harness) and
-  // stopLead left at its own constructor default (0, anticipation OFF),
-  // so every scenario below is unaffected: the anticipation branch in
-  // tick() is gated on stopLead_ > 0, matching this file's own pre-
-  // existing raw-Odometry-baseline assertions unchanged.
-  App::StateEstimator estimator;
-  App::MoveQueue queue(drive, odom, clock, estimator);
+  App::MoveQueue queue(drive, odom, clock);
 
   clock.setMicros(0);
   msg::Move move = makeTwistMove(/*id=*/5, /*v_x=*/120.0f, /*v_y=*/0.0f, /*omega=*/0.0f,
@@ -511,15 +486,7 @@ void scenarioChainedMoveActivatesSameCycleNoInterveningStop() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
-  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
-  // (body peer stays valid=false, never updated by this harness) and
-  // stopLead left at its own constructor default (0, anticipation OFF),
-  // so every scenario below is unaffected: the anticipation branch in
-  // tick() is gated on stopLead_ > 0, matching this file's own pre-
-  // existing raw-Odometry-baseline assertions unchanged.
-  App::StateEstimator estimator;
-  App::MoveQueue queue(drive, odom, clock, estimator);
+  App::MoveQueue queue(drive, odom, clock);
 
   clock.setMicros(0);
   msg::Move moveA = makeWheelsMove(21, 60.0f, 60.0f, msg::Move::StopKind::TIME, 100.0f, 5000.0f, false);
@@ -567,15 +534,7 @@ void scenarioReplaceTruePreemptsActiveAndFlushesPending() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
-  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
-  // (body peer stays valid=false, never updated by this harness) and
-  // stopLead left at its own constructor default (0, anticipation OFF),
-  // so every scenario below is unaffected: the anticipation branch in
-  // tick() is gated on stopLead_ > 0, matching this file's own pre-
-  // existing raw-Odometry-baseline assertions unchanged.
-  App::StateEstimator estimator;
-  App::MoveQueue queue(drive, odom, clock, estimator);
+  App::MoveQueue queue(drive, odom, clock);
 
   clock.setMicros(0);
   msg::Move moveA = makeWheelsMove(31, 50.0f, 50.0f, msg::Move::StopKind::TIME, 1000.0f, 5000.0f, false);
@@ -623,15 +582,7 @@ void scenarioOverflowRejectedErrFullQueueByteForByteUnchanged() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
-  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
-  // (body peer stays valid=false, never updated by this harness) and
-  // stopLead left at its own constructor default (0, anticipation OFF),
-  // so every scenario below is unaffected: the anticipation branch in
-  // tick() is gated on stopLead_ > 0, matching this file's own pre-
-  // existing raw-Odometry-baseline assertions unchanged.
-  App::StateEstimator estimator;
-  App::MoveQueue queue(drive, odom, clock, estimator);
+  App::MoveQueue queue(drive, odom, clock);
 
   msg::Move moveA = makeTwistMove(41, 10.0f, 0.0f, 0.0f, msg::Move::StopKind::TIME, 1000.0f, 5000.0f, false);
   queue.enqueue(moveA, 100);
@@ -677,15 +628,7 @@ void scenarioFlushDrainsAllPendingAndActiveWithNoCompletionAckAndStopsDrive() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
-  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
-  // (body peer stays valid=false, never updated by this harness) and
-  // stopLead left at its own constructor default (0, anticipation OFF),
-  // so every scenario below is unaffected: the anticipation branch in
-  // tick() is gated on stopLead_ > 0, matching this file's own pre-
-  // existing raw-Odometry-baseline assertions unchanged.
-  App::StateEstimator estimator;
-  App::MoveQueue queue(drive, odom, clock, estimator);
+  App::MoveQueue queue(drive, odom, clock);
 
   msg::Move moveA = makeWheelsMove(51, 60.0f, 60.0f, msg::Move::StopKind::TIME, 5000.0f, 10000.0f, false);
   queue.enqueue(moveA, 1);
@@ -739,15 +682,7 @@ void scenarioTimeoutEndsStalledDistanceMoveWithTimedOutTrue() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);  // pathLength() stays 0 -- wheels never move in this scenario
-  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
-  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
-  // (body peer stays valid=false, never updated by this harness) and
-  // stopLead left at its own constructor default (0, anticipation OFF),
-  // so every scenario below is unaffected: the anticipation branch in
-  // tick() is gated on stopLead_ > 0, matching this file's own pre-
-  // existing raw-Odometry-baseline assertions unchanged.
-  App::StateEstimator estimator;
-  App::MoveQueue queue(drive, odom, clock, estimator);
+  App::MoveQueue queue(drive, odom, clock);
 
   clock.setMicros(0);
   msg::Move move = makeWheelsMove(/*id=*/61, 40.0f, 40.0f, msg::Move::StopKind::DISTANCE,
@@ -781,15 +716,7 @@ void scenarioTickWithNoActiveMoveIsANoOp() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  // Turn-prediction campaign: MoveQueue now holds a const StateEstimator&
-  // (bodyAt()-driven stop-condition anticipation) -- default-constructed
-  // (body peer stays valid=false, never updated by this harness) and
-  // stopLead left at its own constructor default (0, anticipation OFF),
-  // so every scenario below is unaffected: the anticipation branch in
-  // tick() is gated on stopLead_ > 0, matching this file's own pre-
-  // existing raw-Odometry-baseline assertions unchanged.
-  App::StateEstimator estimator;
-  App::MoveQueue queue(drive, odom, clock, estimator);
+  App::MoveQueue queue(drive, odom, clock);
 
   checkFalse(queue.active(), "fresh MoveQueue starts with no active Move");
   App::MoveQueue::TickResult result = queue.tick(clock.nowMicros(), odom);
@@ -798,107 +725,17 @@ void scenarioTickWithNoActiveMoveIsANoOp() {
 }
 
 // ===========================================================================
-// 11. Turn-prediction campaign: a positive `stopLead` evaluates an ANGLE
-//    stop condition against StateEstimator::bodyAt(now + stopLead), not raw
-//    Odometry::theta() -- proven by making the RAW odom reading stay well
-//    under threshold (theta() untouched at 0.0) while the estimator's own
-//    predicted heading alone crosses it. If MoveQueue fell back to reading
-//    odom directly here, this Move would never complete.
+// 11 and 12 (turn-prediction campaign's own StateEstimator-anticipation
+// scenarios) -- DELETED (118 ticket 004, land-at-zero-completion-delete-
+// stop-lead.md). Both proved a positive lead evaluated a stop condition
+// against a StateEstimator-predicted reading (`bodyAt()`) instead of raw
+// Odometry -- the mechanism they characterized (App::MoveQueue's own
+// former time-lead anticipation) is deleted outright, along with the
+// StateEstimator& constructor dependency it needed; App::MoveQueue no
+// longer reaches into StateEstimator at all (see move_queue.h's own file
+// header). Replaced by the land-at-zero completion scenarios below
+// (15-17), which cover the mechanism that supersedes it.
 // ===========================================================================
-
-void scenarioAngleMoveAnticipatesViaStateEstimatorPredictedHeading() {
-  beginScenario("MoveQueue: positive stopLead evaluates ANGLE stop against "
-               "StateEstimator::bodyAt(now+stopLead), not raw Odometry::theta()");
-
-  TestSim::SimPlant plant;
-  TestSim::ScriptedI2CHook bus(plant);
-  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
-  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
-  primeAtZero(left, bus, kWireAddr);
-  primeAtZero(right, bus, kWireAddr);
-
-  TestSim::SimClock clock;
-  App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);  // theta() stays 0.0 -- wheels never move this scenario
-  App::StateEstimator estimator;
-  App::MoveQueue queue(drive, odom, clock, estimator, /*stopLead=*/200);
-
-  clock.setMicros(10000000);  // 10s -- arbitrary nonzero base, matches update()'s own [ms] domain below
-  msg::Move move = makeTwistMove(/*id=*/71, /*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/0.5f,
-                                  msg::Move::StopKind::ANGLE, /*stopValue=*/0.5f /*[rad]*/,
-                                  /*timeout=*/60000.0f, /*replace=*/false);
-  queue.enqueue(move, /*corrId=*/7);
-
-  // Feed the estimator a body basis: heading=0.42rad, omega=0.5rad/s, basis
-  // time == this tick's own `now` (so bodyAt(now+200ms)'s own age is
-  // EXACTLY stopLead -- see state_estimator.h's own age math). frame.pose.h
-  // is DELIBERATELY 0.42, NOT odom.theta() (0.0) -- this scenario's whole
-  // point is that MoveQueue reads the ESTIMATOR's prediction, never odom,
-  // once stopLead_ > 0.
-  App::Telemetry::Frame frame;
-  frame.pose = msg::Pose2D{0.0f, 0.0f, 0.42f};
-  frame.twist = msg::BodyTwist3{0.0f, 0.0f, 0.5f};
-  uint32_t nowMs = static_cast<uint32_t>(clock.nowMicros() / 1000);
-  estimator.update(frame, nowMs);
-
-  // Predicted heading at now+200ms = 0.42 + 0.5*0.2 = 0.52rad -- OVER the
-  // 0.5rad threshold, despite odom.theta() reading exactly 0.0.
-  checkFloatEq(odom.theta(), 0.0f, "sanity: raw odom.theta() is untouched (0.0) -- wheels never moved");
-  App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
-  checkTrue(tick.completed, "ANGLE Move completes via the PREDICTED heading (0.52rad >= 0.5rad threshold), "
-                            "even though raw odom.theta() (0.0rad) never came close");
-  checkUintEq(tick.completion.moveId, 71, "completion reports the ended Move's id");
-  checkFalse(tick.completion.timedOut, "ended via the (anticipated) ANGLE condition, not the timeout backstop");
-}
-
-// ===========================================================================
-// 12. Turn-prediction campaign: the SAME anticipation, DISTANCE kind -- a
-//    positive `stopLead` predicts pathLength forward using the estimator's
-//    own held body-frame speed (StateEstimator::bodyAt()'s v_x/v_y), added
-//    to the CURRENT odom.pathLength() baseline. Raw odom.pathLength() stays
-//    at 0 (wheels never move) -- only the predicted increment crosses the
-//    threshold.
-// ===========================================================================
-
-void scenarioDistanceMoveAnticipatesViaStateEstimatorPredictedSpeed() {
-  beginScenario("MoveQueue: positive stopLead evaluates DISTANCE stop against a StateEstimator-"
-               "predicted pathLength, not raw Odometry::pathLength() alone");
-
-  TestSim::SimPlant plant;
-  TestSim::ScriptedI2CHook bus(plant);
-  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
-  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
-  primeAtZero(left, bus, kWireAddr);
-  primeAtZero(right, bus, kWireAddr);
-
-  TestSim::SimClock clock;
-  App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);  // pathLength() stays 0 -- wheels never move this scenario
-  App::StateEstimator estimator;
-  App::MoveQueue queue(drive, odom, clock, estimator, /*stopLead=*/200);
-
-  clock.setMicros(10000000);
-  msg::Move move = makeTwistMove(/*id=*/72, /*v_x=*/200.0f, /*v_y=*/0.0f, /*omega=*/0.0f,
-                                  msg::Move::StopKind::DISTANCE, /*stopValue=*/80.0f /*[mm]*/,
-                                  /*timeout=*/60000.0f, /*replace=*/false);
-  queue.enqueue(move, /*corrId=*/8);
-
-  // v_x=500mm/s held basis -> predicted increment over 200ms = 100mm, added
-  // to odom.pathLength() (0) = 100mm -- OVER the 80mm threshold, despite
-  // odom.pathLength() itself never moving.
-  App::Telemetry::Frame frame;
-  frame.pose = msg::Pose2D{0.0f, 0.0f, 0.0f};
-  frame.twist = msg::BodyTwist3{500.0f, 0.0f, 0.0f};
-  uint32_t nowMs = static_cast<uint32_t>(clock.nowMicros() / 1000);
-  estimator.update(frame, nowMs);
-
-  checkFloatEq(odom.pathLength(), 0.0f, "sanity: raw odom.pathLength() is untouched (0.0) -- wheels never moved");
-  App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
-  checkTrue(tick.completed, "DISTANCE Move completes via the PREDICTED pathLength (100mm >= 80mm threshold), "
-                            "even though raw odom.pathLength() (0mm) never came close");
-  checkUintEq(tick.completion.moveId, 72, "completion reports the ended Move's id");
-  checkFalse(tick.completion.timedOut, "ended via the (anticipated) DISTANCE condition, not the timeout backstop");
-}
 
 // ===========================================================================
 // 13. Decel-into-the-goal campaign, jerk-limited S-curve stage: a
@@ -932,7 +769,6 @@ void scenarioDistanceMoveShapesLinearSpeedRampUpThenTaperNearGoal() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  App::StateEstimator estimator;
   App::ShaperLimits limits;
   limits.aMax = 1000.0f;    // [mm/s^2]
   limits.aDecel = 800.0f;   // [mm/s^2]
@@ -940,7 +776,7 @@ void scenarioDistanceMoveShapesLinearSpeedRampUpThenTaperNearGoal() {
   limits.alphaMax = 0.0f;   // angular shaping disabled -- irrelevant, v_x==300/omega==0 here anyway
   limits.alphaDecel = 0.0f;
   limits.yawJerkMax = 0.0f;
-  App::MoveQueue queue(drive, odom, clock, estimator, /*stopLead=*/0, limits);
+  App::MoveQueue queue(drive, odom, clock, limits);
 
   // Two INDEPENDENT timelines, matching this file's own established
   // convention (see scenario 2's own driveToPosition() calls): `clock`
@@ -1013,42 +849,31 @@ void scenarioDistanceMoveShapesLinearSpeedRampUpThenTaperNearGoal() {
   odom.integrate();
   checkFloatEq(odom.pathLength(), 295.0f, "sanity: 295mm traveled, 5mm remaining");
 
-  // Braking loop: 15 more ticks (300ms) with remaining pinned at 5mm.
-  // NezhaMotor represents duty as an INTEGER PWM percent (nezha_motor.cpp's
-  // own writeRawDuty(): `lroundf(duty*100)`), so a SINGLE tick's drop can
-  // round to the SAME percent as the ramp-end value and be silently
-  // write-on-change-suppressed (no bus write, appliedDuty() unchanged) --
-  // this loop runs long enough for the (jerk-limited, so not
-  // instantaneous) braking accel to compound past that 1-percentage-point
-  // (3mm/s) rounding floor and produce an unambiguous, multi-percentage-
-  // point drop.
-  float dutyNearGoal = lastDuty;
-  for (int i = 1; i <= 15; ++i) {
-    nowClockUs += 20000;
-    clock.setMicros(nowClockUs);
-    App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
-    checkFalse(tick.completed, "braking loop -- still 5mm from the 300mm threshold (remaining pinned)");
-    drive.tick();
-    nowUs += 100000;
-    runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
-    runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
-    dutyNearGoal = left.appliedDuty();
-  }
-  checkTrue(dutyNearGoal < lastDuty, "the taper engages -- commanded speed DROPS once remaining shrinks to 5mm");
-  checkLe(dutyNearGoal, kKff * 150.0f,
-          "acceptance: approach speed near the goal is well below cruise (< half of 300mm/s)");
-
-  // Finally, cross the threshold (300mm traveled) -- the stop condition
-  // still fires correctly with shaping active.
-  nowUs += 300000;
-  driveToPosition(left, bus, kWireAddr, 300.0f, nowUs);
-  driveToPosition(right, bus, kWireAddr, 300.0f, nowUs);
-  odom.integrate();
-  nowClockUs += 20000;
-  clock.setMicros(nowClockUs);
-  App::MoveQueue::TickResult tickDone = queue.tick(clock.nowMicros(), odom);
-  checkTrue(tickDone.completed, "the DISTANCE stop condition still fires once 300mm is reached");
-  checkUintEq(tickDone.completion.moveId, 81, "completion reports the shaped Move's own id");
+  // 118 ticket 004: land-at-zero (move_queue.cpp's own landAtZero())
+  // completes the Move as soon as `remaining` falls inside its own
+  // CURRENT-commanded-speed-derived braking envelope -- and jumping
+  // straight from cruise to 5mm remaining (as this scenario's own
+  // pre-118 "braking loop" used to do, to force the shaper's own decel
+  // ceiling near zero and watch duty visibly decline over several ticks)
+  // now lands DIRECTLY inside that envelope while commandedSpeed_ is
+  // STILL at cruise (300mm/s: cruise^2/(2*aDecel) is already comfortably
+  // inside 5mm) -- so land-at-zero fires on the FIRST post-jump tick,
+  // before any decline is observable this way. This is the CORRECT new
+  // behavior (the whole point of ticket 004 -- see move_queue.h's own
+  // tick() doc comment), not a regression: this scenario's own "duty
+  // visibly declines over N pinned ticks" observation is superseded by
+  // scenarios 15/16 below, which prove the land-at-zero contract
+  // rigorously (moveId, timedOut, never-explicitly-crossed threshold).
+  // What this scenario still uniquely proves, kept here: the completing
+  // tick's own commanded duty is a plausible BRAKING value (below cruise,
+  // matching the ramp-up plateau's own upper bound), not a stale
+  // full-cruise value carried through unshaped.
+  App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+  checkTrue(tick.completed,
+            "land-at-zero completes the Move the FIRST tick remaining (5mm) falls inside its "
+            "own cruise-speed braking envelope (118 ticket 004)");
+  checkUintEq(tick.completion.moveId, 81, "completion reports the shaped Move's own id");
+  checkFalse(tick.completion.timedOut, "completed via land-at-zero, not the 600s timeout backstop");
 }
 
 // ===========================================================================
@@ -1075,7 +900,6 @@ void scenarioAngleMoveShapesAngularSpeedRampUpThenTaperNearGoal() {
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
   App::Odometry odom(left, right, kTrackWidth);
-  App::StateEstimator estimator;
   App::ShaperLimits limits;
   limits.aMax = 0.0f;       // linear shaping disabled -- irrelevant, v_x==0 here anyway
   limits.aDecel = 0.0f;
@@ -1083,7 +907,7 @@ void scenarioAngleMoveShapesAngularSpeedRampUpThenTaperNearGoal() {
   limits.alphaMax = 6.0f;      // [rad/s^2]
   limits.alphaDecel = 7.0f;    // [rad/s^2] -- matches the real production tovez.json value
   limits.yawJerkMax = 100.0f;  // [rad/s^3] -- matches the real production tovez.json value
-  App::MoveQueue queue(drive, odom, clock, estimator, /*stopLead=*/0, limits);
+  App::MoveQueue queue(drive, odom, clock, limits);
 
   // Two INDEPENDENT timelines -- see scenario 13's own comment for why.
   uint64_t nowUs = 100000;
@@ -1162,36 +986,255 @@ void scenarioAngleMoveShapesAngularSpeedRampUpThenTaperNearGoal() {
   odom.integrate();
   checkFloatEq(odom.theta(), -1.58f, "sanity: -1.58rad turned (CW, matching omega's own negative sign), 0.02rad remaining", 1e-3f);
 
-  // Braking loop -- see scenario 13's own matching comment for why this
-  // needs several ticks, not just one, to clear NezhaMotor's own integer-
-  // PWM-percent rounding floor unambiguously.
-  float dutyNearGoal = lastDuty;
-  for (int i = 1; i <= 15; ++i) {
+  // 118 ticket 004: see scenario 13's own matching comment -- jumping
+  // straight from cruise to 0.02rad remaining now lands DIRECTLY inside
+  // land-at-zero's own cruise-speed braking envelope, so it completes on
+  // the FIRST post-jump tick rather than declining over several pinned
+  // ticks (this scenario's own pre-118 "braking loop" methodology).
+  // Scenarios 15/16 below prove the land-at-zero contract rigorously;
+  // what this scenario still uniquely checks: the completing tick's own
+  // commanded duty is a plausible braking value, not a stale full-cruise
+  // value carried through unshaped.
+  App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+  checkTrue(tick.completed,
+            "land-at-zero completes the Move the FIRST tick remaining (0.02rad) falls inside "
+            "its own cruise-speed braking envelope (118 ticket 004)");
+  checkUintEq(tick.completion.moveId, 82, "completion reports the shaped Move's own id");
+  checkFalse(tick.completion.timedOut, "completed via land-at-zero, not the 600s timeout backstop");
+}
+
+// ===========================================================================
+// 15. Land-at-zero completion (118 ticket 004, land-at-zero-completion-
+//    delete-stop-lead.md): a Distance-kind TWIST Move with linear shaping
+//    enabled completes once `remaining` has shrunk inside the taper's own
+//    epsilon band AND the shaper's own commanded speed has decayed to (or
+//    below) its deadband-equivalent floor -- even though driveToPosition()
+//    is NEVER called again to literally cross the raw 300mm threshold
+//    after pathLength is pinned at 299.9mm (0.1mm remaining). Proves
+//    landAtZero() is a genuine ADDITIONAL completion path (move_queue.cpp),
+//    not a restatement of the backstop: the timeout is set to 60s, far
+//    outside this scenario's own <=200-tick (<=4s virtual) budget, so a
+//    completion inside that budget can only be landAtZero() -- the raw
+//    threshold's own `pathLength >= 300` never becomes true (pathLength
+//    never advances past 299.9mm), and the timeout backstop cannot have
+//    fired yet either.
+// ===========================================================================
+
+void scenarioDistanceMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing() {
+  beginScenario("MoveQueue: land-at-zero completes a Distance Move once remaining+speed both "
+               "settle, before the raw threshold is crossed");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  primeAtZero(left, bus, kWireAddr);
+  primeAtZero(right, bus, kWireAddr);
+
+  TestSim::SimClock clock;
+  App::Drive drive(left, right, kTrackWidth);
+  App::Odometry odom(left, right, kTrackWidth);
+  App::ShaperLimits limits;
+  limits.aMax = 1000.0f;   // [mm/s^2]
+  limits.aDecel = 800.0f;  // [mm/s^2]
+  limits.jMax = 5000.0f;   // [mm/s^3]
+  App::MoveQueue queue(drive, odom, clock, limits);
+
+  uint64_t nowUs = 100000;
+  uint64_t nowClockUs = 0;
+
+  clock.setMicros(0);
+  msg::Move move = makeTwistMove(/*id=*/91, /*v_x=*/300.0f, /*v_y=*/0.0f, /*omega=*/0.0f,
+                                  msg::Move::StopKind::DISTANCE, /*stopValue=*/300.0f /*[mm]*/,
+                                  /*timeout=*/60000.0f /*[ms], far outside this scenario's budget*/,
+                                  /*replace=*/false);
+  queue.enqueue(move, /*corrId=*/1);
+
+  // Ramp up to (near) cruise first -- same technique as scenario 13.
+  for (int i = 1; i <= 30; ++i) {
     nowClockUs += 20000;
     clock.setMicros(nowClockUs);
     App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
-    checkFalse(tick.completed, "braking loop -- still 0.02rad from the 1.6rad threshold (remaining pinned)");
+    checkFalse(tick.completed, "ramp-up phase -- still far from the 300mm threshold");
     drive.tick();
     nowUs += 100000;
     runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
     runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
-    dutyNearGoal = std::fabs(left.appliedDuty());
   }
-  checkTrue(dutyNearGoal < lastDuty, "the taper engages -- |commanded omega| DROPS once remaining shrinks to 0.02rad");
-  checkLe(dutyNearGoal, 0.5f * cruiseDuty,
-          "acceptance: approach omega near the goal is well below cruise (< half of 2.0rad/s)");
 
-  // Finally, cross the threshold (1.6rad turned) -- the stop condition
-  // still fires correctly with shaping active.
+  // Pin pathLength at 299.9mm (0.1mm remaining -- inside landAtZero()'s own
+  // epsilon-remaining band for this aDecel, ~0.17mm) and NEVER advance it
+  // again below, so the raw `pathLength >= 300mm` threshold is never
+  // crossed.
   nowUs += 300000;
-  driveToPosition(left, bus, kWireAddr, 1.6f * (kTrackWidth / 2.0f), nowUs);
-  driveToPosition(right, bus, kWireAddr, -1.6f * (kTrackWidth / 2.0f), nowUs);
+  driveToPosition(left, bus, kWireAddr, 299.9f, nowUs);
+  driveToPosition(right, bus, kWireAddr, 299.9f, nowUs);
   odom.integrate();
-  nowClockUs += 20000;
-  clock.setMicros(nowClockUs);
-  App::MoveQueue::TickResult tickDone = queue.tick(clock.nowMicros(), odom);
-  checkTrue(tickDone.completed, "the ANGLE stop condition still fires once 1.6rad is reached");
-  checkUintEq(tickDone.completion.moveId, 82, "completion reports the shaped Move's own id");
+  checkFloatEq(odom.pathLength(), 299.9f, "sanity: 299.9mm traveled, 0.1mm remaining -- never reaches 300mm");
+
+  bool completedViaLandAtZero = false;
+  for (int i = 1; i <= 200 && !completedViaLandAtZero; ++i) {
+    nowClockUs += 20000;
+    clock.setMicros(nowClockUs);
+    App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+    if (tick.completed) {
+      completedViaLandAtZero = true;
+      checkUintEq(tick.completion.moveId, 91, "completion reports this Move's own id");
+      checkFalse(tick.completion.timedOut,
+                 "completed via land-at-zero, not the timeout backstop (timeout is 60s, "
+                 "far outside this loop's own <=4s virtual budget)");
+      break;
+    }
+    drive.tick();
+    nowUs += 100000;
+    runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
+    runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
+  }
+  checkTrue(completedViaLandAtZero,
+            "Move completes via land-at-zero within 200 ticks (4s) with pathLength pinned "
+            "short of the raw threshold");
+}
+
+// ===========================================================================
+// 16. Land-at-zero completion, Angle axis -- the SAME contract as scenario
+//    15, mirrored onto an Angle-kind TWIST Move with angular shaping
+//    enabled (pure rotation, matching scenario 14's own convention).
+// ===========================================================================
+
+void scenarioAngleMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing() {
+  beginScenario("MoveQueue: land-at-zero completes an Angle Move once remaining+speed both "
+               "settle, before the raw threshold is crossed");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  primeAtZero(left, bus, kWireAddr);
+  primeAtZero(right, bus, kWireAddr);
+
+  TestSim::SimClock clock;
+  App::Drive drive(left, right, kTrackWidth);
+  App::Odometry odom(left, right, kTrackWidth);
+  App::ShaperLimits limits;
+  limits.alphaMax = 6.0f;      // [rad/s^2]
+  limits.alphaDecel = 7.0f;    // [rad/s^2] -- matches the real production tovez.json value
+  limits.yawJerkMax = 100.0f;  // [rad/s^3] -- matches the real production tovez.json value
+  App::MoveQueue queue(drive, odom, clock, limits);
+
+  uint64_t nowUs = 100000;
+  uint64_t nowClockUs = 0;
+
+  clock.setMicros(0);
+  msg::Move move = makeTwistMove(/*id=*/92, /*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/-2.0f /*[rad/s]*/,
+                                  msg::Move::StopKind::ANGLE, /*stopValue=*/1.6f /*[rad]*/,
+                                  /*timeout=*/60000.0f /*[ms], far outside this scenario's budget*/,
+                                  /*replace=*/false);
+  queue.enqueue(move, /*corrId=*/2);
+
+  for (int i = 1; i <= 30; ++i) {
+    nowClockUs += 20000;
+    clock.setMicros(nowClockUs);
+    App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+    checkFalse(tick.completed, "ramp-up phase -- still far from the 1.6rad threshold");
+    drive.tick();
+    nowUs += 100000;
+    runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
+    runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
+  }
+
+  // Pin theta at -1.599rad (0.001rad remaining -- inside landAtZero()'s own
+  // epsilon-remaining band for this alphaDecel, ~0.00476rad) and NEVER
+  // advance it again below, so the raw `|theta| >= 1.6rad` threshold is
+  // never crossed.
+  nowUs += 300000;
+  driveToPosition(left, bus, kWireAddr, 1.599f * (kTrackWidth / 2.0f), nowUs);
+  driveToPosition(right, bus, kWireAddr, -1.599f * (kTrackWidth / 2.0f), nowUs);
+  odom.integrate();
+  checkFloatEq(odom.theta(), -1.599f, "sanity: -1.599rad turned, 0.001rad remaining -- never reaches 1.6rad", 1e-3f);
+
+  bool completedViaLandAtZero = false;
+  for (int i = 1; i <= 200 && !completedViaLandAtZero; ++i) {
+    nowClockUs += 20000;
+    clock.setMicros(nowClockUs);
+    App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+    if (tick.completed) {
+      completedViaLandAtZero = true;
+      checkUintEq(tick.completion.moveId, 92, "completion reports this Move's own id");
+      checkFalse(tick.completion.timedOut,
+                 "completed via land-at-zero, not the timeout backstop (timeout is 60s, "
+                 "far outside this loop's own <=4s virtual budget)");
+      break;
+    }
+    drive.tick();
+    nowUs += 100000;
+    runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
+    runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
+  }
+  checkTrue(completedViaLandAtZero,
+            "Move completes via land-at-zero within 200 ticks (4s) with theta pinned short "
+            "of the raw threshold");
+}
+
+// ===========================================================================
+// 17. Land-at-zero regression: with shaping OFF (the default ShaperLimits{}
+//    -- constraint 2, land-at-zero-completion-delete-stop-lead.md), the
+//    land-at-zero path can NEVER fire, even when `remaining` is pinned
+//    deliberately tiny -- the threshold/timeout backstop stays the ONLY
+//    completion path, byte-identical to this class's pre-land-at-zero
+//    behavior. Mirrors scenario 15's own setup (Distance Move, pathLength
+//    pinned at 299.9mm/0.1mm remaining) but with ShaperLimits{} (shaping
+//    OFF, this class's own default) instead of a real taper.
+// ===========================================================================
+
+void scenarioLandAtZeroNeverFiresWithShapingOff() {
+  beginScenario("MoveQueue: land-at-zero never fires with shaping OFF -- backstop-only, "
+               "byte-identical to pre-land-at-zero behavior");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  primeAtZero(left, bus, kWireAddr);
+  primeAtZero(right, bus, kWireAddr);
+
+  TestSim::SimClock clock;
+  App::Drive drive(left, right, kTrackWidth);
+  App::Odometry odom(left, right, kTrackWidth);
+  App::MoveQueue queue(drive, odom, clock);  // ShaperLimits{} default -- shaping OFF
+
+  clock.setMicros(0);
+  msg::Move move = makeTwistMove(/*id=*/93, /*v_x=*/300.0f, /*v_y=*/0.0f, /*omega=*/0.0f,
+                                  msg::Move::StopKind::DISTANCE, /*stopValue=*/300.0f /*[mm]*/,
+                                  /*timeout=*/60000.0f /*[ms], far outside this scenario's budget*/,
+                                  /*replace=*/false);
+  queue.enqueue(move, /*corrId=*/1);
+
+  // Pin pathLength at 299.9mm (0.1mm remaining -- the SAME tiny remaining
+  // scenario 15 uses to trigger land-at-zero WITH shaping ON) and never
+  // advance it again -- with shaping OFF, this must NEVER complete within
+  // a bounded window, since landAtZero() returns false unconditionally
+  // when !linearShaping (move_queue.cpp). nowUs=400000 (not
+  // kPastWriteThrottleUs=50000): 299.9mm over 50ms implies ~5998mm/s, well
+  // past NezhaMotor's own kMaxPlausibleStepSpeed=1200mm/s outlier-
+  // rejection gate (nezha_motor.cpp) from the primeAtZero() 0mm baseline
+  // at nowUs=0 -- 400ms implies ~750mm/s instead, safely under 1200
+  // (mirrors scenario 13/15's own "large jump needs a large elapsed nowUs
+  // gap" convention, see their own comments).
+  driveToPosition(left, bus, kWireAddr, 299.9f, 400000);
+  driveToPosition(right, bus, kWireAddr, 299.9f, 400000);
+  odom.integrate();
+  checkFloatEq(odom.pathLength(), 299.9f, "sanity: 299.9mm traveled, 0.1mm remaining");
+
+  uint64_t nowClockUs = 0;
+  for (int i = 1; i <= 200; ++i) {
+    nowClockUs += 20000;
+    clock.setMicros(nowClockUs);
+    App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+    checkFalse(tick.completed,
+               "shaping OFF -- land-at-zero never fires despite remaining pinned tiny, tick "
+                   + std::to_string(i));
+    if (g_failureCount > 0) break;  // stop early once the regression is proven, not 200x
+  }
 }
 
 }  // namespace
@@ -1207,10 +1250,11 @@ int main() {
   scenarioFlushDrainsAllPendingAndActiveWithNoCompletionAckAndStopsDrive();
   scenarioTimeoutEndsStalledDistanceMoveWithTimedOutTrue();
   scenarioTickWithNoActiveMoveIsANoOp();
-  scenarioAngleMoveAnticipatesViaStateEstimatorPredictedHeading();
-  scenarioDistanceMoveAnticipatesViaStateEstimatorPredictedSpeed();
   scenarioDistanceMoveShapesLinearSpeedRampUpThenTaperNearGoal();
   scenarioAngleMoveShapesAngularSpeedRampUpThenTaperNearGoal();
+  scenarioDistanceMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing();
+  scenarioAngleMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing();
+  scenarioLandAtZeroNeverFiresWithShapingOff();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::MoveQueue scenarios passed\n");

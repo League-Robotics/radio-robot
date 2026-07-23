@@ -153,14 +153,14 @@ MANAGED_ANGLE_ABS_MARGIN_DEG = 30.0
 MANAGED_ANGLE_REL_TOL = 0.10
 
 # wire-testgui-live-push-of-estimator-stop-lead fix (2026-07-22): the GUI's
-# own Connect click now pushes stop_lead_ms + the Motion::VelocityShaper
-# accel/jerk ceilings (EstimatorConfigPatch, __main__.py's
-# _push_estimator_config()) -- previously it did not, so MANAGED_ANGLE_*
-# above was measured with anticipation/shaping OFF even though 117/
-# b0f329a9 made them live-tunable the same day. MANAGED_ANGLE_ABS_MARGIN_DEG/
+# own Connect click now pushes the estimator fusion weights + the
+# Motion::VelocityShaper accel/jerk ceilings (EstimatorConfigPatch,
+# __main__.py's _push_estimator_config()) -- previously it did not, so
+# MANAGED_ANGLE_* above was measured with shaping OFF even though 117/
+# b0f329a9 made it live-tunable the same day. MANAGED_ANGLE_ABS_MARGIN_DEG/
 # MANAGED_ANGLE_REL_TOL above are left UNCHANGED (still cover 180/270/360,
-# not re-measured/re-tuned this fix -- the stop_lead_ms/alpha_decel tuning
-# this campaign shipped was explicitly targeted at 90-degree turns, per
+# not re-measured/re-tuned this fix -- the alpha_decel tuning this
+# campaign shipped was explicitly targeted at 90-degree turns, per
 # data/robots/tovez.json's own control._shaper_note: "15-20deg taper from
 # omega=2rad/s... targeted at the ticket's own bound"); a NEW, tighter band
 # below covers exactly the 90-degree magnitude this campaign's own tuning
@@ -169,15 +169,19 @@ MANAGED_ANGLE_REL_TOL = 0.10
 # Stakeholder's explicit quality bar (2026-07-22): "you're running 1,300
 # tests and not testing the thing I want: the tour to look good" -- managed
 # 90-degree presets and SEG turns must land within +/-3deg now that the
-# connect flow actually delivers stop_lead_ms/shaper config. A flat
-# absolute bound (no relative term -- there is only one commanded magnitude
-# in this band). Measured 2026-07-22 through the REAL GUI Connect -> click
-# flow (this module's own `gui` fixture, tovez_nocal.json) -- see this
-# constant's own value for the actual worst-case observed, kept with real
-# headroom over it, not bare-measured. Widening this specific band requires
-# stakeholder sign-off (this IS the user-visible quality bar this suite
-# exists to hold the line on -- see src/tests/DESIGN.md's own Constraints
-# section).
+# connect flow actually delivers shaper config (118 ticket 004,
+# land-at-zero-completion-delete-stop-lead.md: the connect flow's own live
+# push has since lost its former time-lead field -- the completion
+# mechanism it drove is deleted; App::MoveQueue::tick()'s own land-at-zero
+# predicate, computed on-robot, replaces it -- see that method's own doc
+# comment). A flat absolute bound (no relative term -- there is only one
+# commanded magnitude in this band). Measured through the REAL GUI
+# Connect -> click flow (this module's own `gui` fixture, tovez_nocal.json)
+# -- see this constant's own value for the actual worst-case observed,
+# kept with real headroom over it, not bare-measured. Widening this
+# specific band requires stakeholder sign-off (this IS the user-visible
+# quality bar this suite exists to hold the line on -- see
+# src/tests/DESIGN.md's own Constraints section).
 MANAGED_ANGLE_90_ABS_MARGIN_DEG = 3.0  # [deg] flat bound, single magnitude
 MANAGED_ANGLE_90_REL_TOL = 0.0
 
@@ -194,10 +198,12 @@ _MANAGED_ANGLE_90_MAGNITUDES = (90,)
 #: bespoke bare-``SimLoop`` one).
 #:
 #: ``test_tour_closure_gate.py``'s own ``_TURN_TOLERANCE_SHAPED_DEG``
-#: (2.5deg) is the DETERMINISTIC-harness number (worst 1.378-2.235deg
-#: across TOUR_1/TOUR_2 x ideal/realistic, single-stepped, no real
-#: threading) with the SAME stop_lead_ms=45/shaper config this fix's
-#: connect-time push now delivers. First attempt here used that same
+#: (2.5deg) is the DETERMINISTIC-harness number (single-stepped, no real
+#: threading) with the SAME shaper config this fix's connect-time push
+#: now delivers (118 ticket 004: land-at-zero completion, no time-lead
+#: field pushed any more -- see that ticket's own numbers in this file's
+#: git history / the closure gate's own printed report). First attempt
+#: here used that same
 #: 2.5deg bound directly -- FLAKY through the real GUI/``_TourRunner``
 #: path: 13 repeated Tour 1/Tour 2 runs (2026-07-22, 1x sim speed --
 #: see ``_run_tour()``'s own docstring for why 1x) measured per-leg worst
@@ -616,7 +622,7 @@ def test_managed_distance_preset(gui, recorder, mm):
 def _managed_angle_band(deg: int) -> "tuple[float, float]":
     """(abs_margin, rel_tol) for a managed-path angle preset -- the tight
     ``MANAGED_ANGLE_90_*`` band for exactly +/-90deg (the magnitude this
-    campaign's own stop_lead_ms/shaper tuning targets), the broader
+    campaign's own shaper tuning targets), the broader
     ``MANAGED_ANGLE_*`` band for every other preset (180/270/360 --
     unchanged, not re-tuned this fix)."""
     if abs(deg) in _MANAGED_ANGLE_90_MAGNITUDES:
