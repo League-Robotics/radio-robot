@@ -343,9 +343,12 @@ class MoveQueue {
   // landAtZero -- the land-at-zero completion predicate (118 ticket 004,
   // see tick()'s own doc comment for the full contract). pathLength/theta
   // are the SAME CURRENT readings tick() already has this cycle -- never
-  // re-derived here. Pure query: reads shaperLimits_/shaperVX_/
-  // shaperOmega_/active_, mutates nothing.
-  bool landAtZero(float pathLength, float theta) const;
+  // re-derived here. dt is this Move's own elapsed time since its last
+  // shaped tick (118 ticket 003 resolution -- the per-cycle discretization
+  // term, see move_queue.cpp's own anonymous-namespace comment). Pure
+  // query: reads shaperLimits_/shaperVX_/shaperOmega_/active_/
+  // pendingCount_, mutates nothing.
+  bool landAtZero(float pathLength, float theta, float dt) const;
 
   Drive& drive_;
   Odometry& odom_;

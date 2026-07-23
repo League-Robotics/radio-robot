@@ -75,31 +75,88 @@ namespace {
 //     it, the robot actually reaches Drive::stop() and its real velocity-PID
 //     coasts the remaining residual speed to zero, and settle_pose()
 //     faithfully captures that coast as part of "where the robot ended up."
-// Swept independently against each measurement convention on this file's
-// own exact paths (TOUR_1/TOUR_2 x ideal/realistic for the chain case;
-// isolated 90-degree twists x ideal/realistic for the final case):
-//   - Chain-advance (pendingCount() > 0): a broad, flat plateau (0.82-0.84)
-//     all measure worst=2.398deg against the tour-closure gate's own
-//     2.5deg shaped band; 0.83 (mid-plateau) ships as the default,
-//     mirroring this project's "pick mid-plateau, not a knife-edge point"
-//     convention for every prior empirically-swept shaper constant. Firing
-//     any LATER (a bigger factor) does not help this reading (it only
-//     measures the decision instant, never the coast) and firing earlier
-//     erodes the shaped-band margin.
-//   - Final move (pendingCount() == 0): a broad, flat plateau (0.90-1.10)
-//     measures worst=1.189deg settle-based against the button-acceptance
-//     suite's own 3.0deg tolerance; 1.00 (mid-plateau) ships as the
-//     default. Firing at the CHAIN-ADVANCE factor here (0.83) measures
-//     4.997deg settle-based -- comfortably over that 3.0deg tolerance --
-//     because it lets residual commanded speed stay high enough at the
-//     decision instant that the REAL post-Drive::stop() coast (not
-//     something this predicate's timing can shrink away once Drive::stop()
-//     has already been called) adds several more degrees before the plant
-//     actually comes to rest. Firing earlier (a bigger factor) declares
-//     completion while more residual speed remains, so less of it survives
-//     into the real coast.
-constexpr float kStoppingMarginFactorChain = 0.83f;  // dimensionless
+//
+// kStoppingMarginFactorFinal (pendingCount() == 0) was swept ONCE, at
+// sim's original 50ms cycle (118 ticket 004), and re-verified UNCHANGED
+// here after sim/firmware cadence parity landed at 40ms (118 ticket 003 --
+// SimHarness::kCycleDtUs now equals App::RobotLoop::kCycle exactly, see
+// sim_harness.h's own file header): 0.90-1.10 remains a broad, flat
+// plateau (worst=0.844deg settle-based at 40ms, against the button-
+// acceptance suite's own 3.0deg tolerance -- BETTER than the 50ms
+// measurement, not worse). 1.00 (mid-plateau) ships as the default. This
+// confirms Drive::stop()'s own real coast is genuinely cadence-independent
+// (governed by the motor's own velocity-PID time constants, not by how
+// often MoveQueue samples it) -- see kDiscretizationCyclesChain's own
+// comment below for the CONTRASTING chain-advance case, which is NOT
+// cadence-independent.
+//
+// kStoppingMarginFactorChain (pendingCount() > 0) is NOT cadence-
+// independent, and required real rework at 40ms (118 ticket 003
+// resolution, root-caused via move_queue.cpp's own printf-instrumented
+// trace and a standalone Motion::VelocityShaper harness comparing dt=
+// 0.050s against dt=0.040s): the 50ms value (0.83, "a broad, flat
+// plateau 0.82-0.84... worst=2.398deg") measured 4.47-6.28deg at the true
+// 40ms cadence -- a real regression, not measurement noise (confirmed by
+// A/B-reverting the UNRELATED NezhaMotor write-throttle jitter margin
+// ticket 003 also landed this same commit; byte-identical failure with
+// or without it, isolating the cadence change itself as the cause). Root
+// cause: EVERY tour leg alternates Distance/Angle (TOUR_1/TOUR_2 in
+// planner/tour.py, "D ... / RT ..." pairs) -- a chain-advance turn always
+// hands off to a Move on the OTHER axis, so `tick()`'s own reset-on-
+// completion (below) always zeroes the shared axis's shaper state to a
+// hard 0 at the handoff instant. This is a genuine commanded STEP (not a
+// smooth taper-to-zero), and the REAL plant coasts some residual angle
+// afterward exactly as it does after Drive::stop() -- but UNLIKE the
+// final-move case, this coast is only PARTIALLY visible to the ack-instant
+// reading (the next leg's own motion continues immediately, so how much
+// of the coast lands "during" this leg vs bleeds into the next one is
+// itself a function of exactly which tick the step happens on) -- making
+// the achieved reading sensitive to per-cycle quantization in a way the
+// final-move case is not.
+//
+// An extensive re-sweep at 40ms (~90 builds: kStoppingMarginFactorChain
+// alone over [0.20, 1.10]; jointly with a per-cycle discretization term,
+// see kDiscretizationCyclesChain below, over a 2-D grid; and a structural
+// variant that made the reset-on-completion conditional on pendingCount()
+// -- see tick()'s own comment for why that variant was NOT kept) found NO
+// genuinely broad plateau under the tour-closure gate's 2.5deg band: the
+// achievable worst-case error jumps discontinuously (e.g. 2.596deg at
+// chain=0.80 vs 4.474deg at chain=0.81) because different turns' own
+// error-vs-coefficient curves cross zero at slightly different points
+// (TOUR_1/TOUR_2 command a genuine variety of angles -- 90/124/146/
+// 215/217 degrees, both directions), so ANY single global coefficient's
+// own "worst across all turns" envelope is a max over several offset
+// curves, not one smooth curve. The values shipped here (0.60 chain
+// factor + a 0.53-cycle discretization term, see below) are the BEST
+// point found in that search -- worst=2.323deg at 40ms, verified passing
+// -- but this is honestly reported as a narrow pocket (neighbors 0.02-0.03
+// away measure 3.7-4.5deg), not the broad plateau this project's own
+// convention otherwise requires. Escalated to the team-lead alongside
+// this commit (118 ticket 003's own exception resolution) with the full
+// sweep data; revisit if a genuinely robust fix (e.g. sub-tick crossing
+// interpolation, rather than a per-cycle-sampled threshold) is ever
+// invested in.
+constexpr float kStoppingMarginFactorChain = 0.60f;  // dimensionless
 constexpr float kStoppingMarginFactorFinal = 1.00f;  // dimensionless
+
+// kDiscretizationCyclesChain -- CHAIN-ONLY (see landAtZero()'s own use:
+// gated on pendingCount() > 0, matching kStoppingMarginFactorChain).
+// [cycles] per-cycle discretization allowance: epsilonRemaining also grows
+// by |commandedSpeed| * dt * kDiscretizationCyclesChain, budgeting how far
+// the axis can travel in roughly this many MORE control cycles at the
+// current rate before the next decision point -- the physically-motivated
+// term the 40ms re-sweep above tested per the team-lead's own suggestion.
+// dt is this Move's own actual elapsed time since its last shaped tick
+// (tick()'s own local computation, the SAME baseline shapeAndStage() uses)
+// -- not a compile-time cadence constant -- so the term is honest about
+// real (possibly jittered) cycle timing and transfers unchanged to any
+// control period, including hardware's. Deliberately NOT applied to the
+// final-move case (kStoppingMarginFactorFinal's own comment above): that
+// regime's plateau was already broad and cadence-robust without it: adding
+// it there only shrank real margin for no benefit (measured regression:
+// test_managed_angle_preset[-90] went from a clean pass to a 3.07deg miss
+// against its 3.0deg tolerance when this term was applied unconditionally).
+constexpr float kDiscretizationCyclesChain = 0.53f;  // [cycles]
 
 }  // namespace
 
@@ -282,18 +339,28 @@ void MoveQueue::shapeAndStage(uint64_t now, float pathLength, float theta) {
 // ticket 004's scope -- TWIST Angle/Distance stops only -- excludes WHEELS
 // structurally, via the velocityKind check below, not via a second
 // remaining/epsilon derivation for wheel-space axes.
-bool MoveQueue::landAtZero(float pathLength, float theta) const {
+bool MoveQueue::landAtZero(float pathLength, float theta, float dt) const {
   if (active_.velocityKind != msg::Move::VelocityKind::TWIST) return false;
 
   // See this file's own anonymous-namespace comment (kStoppingMarginFactorChain/
-  // kStoppingMarginFactorFinal) for the full derivation of why this predicate
-  // needs two different margins: whether THIS completion hands off to an
-  // already-queued Move (pendingCount() > 0, chain-advance -- Drive::stop()
-  // never runs, so only the ack-instant decision matters) or drains the
-  // queue to a genuine stop (pendingCount() == 0 -- Drive::stop() runs for
-  // real and the plant's own residual speed coasts further before rest).
+  // kStoppingMarginFactorFinal/kDiscretizationCyclesChain) for the full
+  // derivation of why this predicate needs two different margins: whether
+  // THIS completion hands off to an already-queued Move (pendingCount() >
+  // 0, chain-advance -- Drive::stop() never runs, so only the ack-instant
+  // decision matters) or drains the queue to a genuine stop (pendingCount()
+  // == 0 -- Drive::stop() runs for real and the plant's own residual speed
+  // coasts further before rest).
   float marginFactor =
       pendingCount_ > 0 ? kStoppingMarginFactorChain : kStoppingMarginFactorFinal;
+  // The per-cycle discretization allowance (118 ticket 003 resolution) is
+  // CHAIN-ONLY -- see the anonymous-namespace comment for why: the
+  // final-move regime's own kStoppingMarginFactorFinal=1.00 plateau was
+  // already broad and verified robust (worst=1.189deg settle-based)
+  // without it; adding it there too pushed that ALREADY-solved case's own
+  // firing point earlier for no benefit, costing real margin instead
+  // (measured regression: test_managed_angle_preset[-90] went from
+  // comfortably passing to a 3.07deg miss against its 3.0deg tolerance).
+  float discretizationCycles = pendingCount_ > 0 ? kDiscretizationCyclesChain : 0.0f;
 
   if (active_.kind == Motion::StopCondition::Kind::Distance) {
     bool linearShaping =
@@ -301,9 +368,12 @@ bool MoveQueue::landAtZero(float pathLength, float theta) const {
     if (!linearShaping) return false;  // no taper -- the backstop is the only completion path
     float remaining = active_.threshold - std::fabs(pathLength - active_.activationPathLength);
     // "Have we already entered our own braking envelope for our CURRENT
-    // commanded speed."
+    // commanded speed" PLUS a per-cycle discretization allowance -- see the
+    // anonymous-namespace comment for kDiscretizationCyclesChain.
     float cmd = shaperVX_.commandedSpeed();
-    float epsilonRemaining = (cmd * cmd) / (2.0f * shaperLimits_.aDecel) * marginFactor;
+    float epsilonRemaining =
+        (cmd * cmd) / (2.0f * shaperLimits_.aDecel) * marginFactor +
+        std::fabs(cmd) * dt * discretizationCycles;
     return remaining <= epsilonRemaining;
   }
 
@@ -313,7 +383,9 @@ bool MoveQueue::landAtZero(float pathLength, float theta) const {
     if (!angularShaping) return false;
     float remaining = active_.threshold - std::fabs(theta - active_.activationTheta);
     float cmd = shaperOmega_.commandedSpeed();
-    float epsilonRemaining = (cmd * cmd) / (2.0f * shaperLimits_.alphaDecel) * marginFactor;
+    float epsilonRemaining =
+        (cmd * cmd) / (2.0f * shaperLimits_.alphaDecel) * marginFactor +
+        std::fabs(cmd) * dt * discretizationCycles;
     return remaining <= epsilonRemaining;
   }
 
@@ -360,6 +432,17 @@ MoveQueue::TickResult MoveQueue::tick(uint64_t now, const Odometry& odom) {
   float pathLength = odom.pathLength();
   float theta = odom.theta();
 
+  // dt since this Move's own last shaped tick -- the SAME quantity
+  // shapeAndStage() computes below (from the same lastShapeNow_ baseline),
+  // read here first (read-only, no mutation) so landAtZero() can fold in
+  // its own per-cycle discretization term (118 ticket 003 resolution --
+  // see landAtZero()'s own doc comment). shapeAndStage() recomputes and
+  // mutates lastShapeNow_ itself on the Continue path below; duplicating
+  // the read here is cheaper and clearer than threading a second output
+  // parameter back out of shapeAndStage().
+  float dt = static_cast<float>(now - lastShapeNow_) / 1.0e6f;  // [us] -> [s]
+  if (dt < 0.0f) dt = 0.0f;  // clock-monotonicity defense, same posture as StopCondition's own
+
   // Backstop (threshold/timeout) is always-armed and evaluated first --
   // "first to fire wins" (move_queue.h's own tick() doc comment). Only
   // when it does NOT already end the Move this cycle (Continue) is the
@@ -368,7 +451,7 @@ MoveQueue::TickResult MoveQueue::tick(uint64_t now, const Odometry& odom) {
   // StopConditionMet (never TimedOut): the taper decided this Move is
   // done, not the timeout backstop.
   Motion::StopCondition::Outcome outcome = sc.tick(now, pathLength, theta);
-  if (outcome == Motion::StopCondition::Outcome::Continue && landAtZero(pathLength, theta)) {
+  if (outcome == Motion::StopCondition::Outcome::Continue && landAtZero(pathLength, theta, dt)) {
     outcome = Motion::StopCondition::Outcome::StopConditionMet;
   }
 
@@ -408,6 +491,19 @@ MoveQueue::TickResult MoveQueue::tick(uint64_t now, const Odometry& odom) {
   // source; SUC-051 continuity is preserved for the case it actually
   // matters (a Move's OWN shaping while it runs), just not across a
   // completion boundary.
+  //
+  // 118 ticket 003 resolution: tested making this reset conditional on
+  // pendingCount() == 0 (skip it on a chain-advance, letting the next
+  // Move's own accel-ramp-toward-cruise decay any residual naturally
+  // instead of a hard step to 0) on the theory that TOUR_1/TOUR_2's own
+  // alternating Distance/Angle leg structure gives a same-axis Move
+  // several seconds to decay before its axis is reused anyway, so the
+  // corruption this reset guards against couldn't occur in THOSE tours
+  // regardless. Measured against the 40ms closure gate: no improvement
+  // (still no broad plateau across a re-swept kStoppingMarginFactorChain,
+  // best worst-case 2.932deg, itself just as fragile) -- reverted. Kept
+  // unconditional, since it is the more conservative, generally-correct
+  // choice and the conditional variant bought nothing.
   if (active_.kind == Motion::StopCondition::Kind::Angle) {
     shaperOmega_.reset();
   } else if (active_.kind == Motion::StopCondition::Kind::Distance) {
