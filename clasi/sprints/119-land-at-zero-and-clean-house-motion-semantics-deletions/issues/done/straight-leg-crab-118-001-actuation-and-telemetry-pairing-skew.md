@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 filed: 2026-07-23
 filed_by: "team-lead (turn-execution review \xA79 addendum; stakeholder-directed)"
 related: []

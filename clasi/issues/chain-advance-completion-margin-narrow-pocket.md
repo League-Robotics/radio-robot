@@ -41,3 +41,17 @@ whether the pocket is even observable on hardware before investing.
 
 Not urgent while the closure gate is green; becomes urgent the first time
 the gate flakes on an unrelated change.
+
+## Post-119-005 per-leg measurement (2026-07-23, team-lead session, deterministic sim, ideal chip)
+
+With the straight-leg crab fixed, TOUR_1 per-leg TRUE heading deltas isolate the
+remaining error entirely to chain boundaries: leg 1 (straight, from rest) is exactly
++0.00°; every straight FOLLOWING a turn gains +1.34 to +4.24° (mean ~+2.9°/boundary —
+the turn's residual omega handed off into a Move that commands omega=0, decaying while
+driving); turns scatter -2.20 to +2.06°. Tour total +17.9° over 540 commanded, all of
+it boundary residue. Supports the "complete chain turns on the same settle-consistent
+(land-at-zero) basis as final moves" candidate: at near-zero crossing speed the
+per-cycle quantization cost also collapses, so this addresses BOTH the straight-leg
+skew and most of the turn scatter. Note the trade to decide explicitly: orthogonal
+(turn->straight) boundaries carry no useful velocity anyway; same-axis carry is the
+separate reset-defeats issue.
