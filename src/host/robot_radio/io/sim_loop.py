@@ -143,18 +143,29 @@ _LIB_NAME = "libfirmware_host.dylib" if sys.platform == "darwin" else "libfirmwa
 _HERE = pathlib.Path(__file__).parent
 _DEFAULT_LIB_PATH = (_HERE / "../../../../src/sim/build" / _LIB_NAME).resolve()
 
-# One sim cycle == 50ms of sim/firmware time (TestSim::SimHarness::kCycleDtUs,
-# sim_harness.h). Real-time (1x) tick-thread pacing advances one cycle per
-# wall-clock tick by default.
-_CYCLE_DURATION_S = 0.050  # [s]
+# One sim cycle == 40ms of sim/firmware time (TestSim::SimHarness::kCycleDtUs,
+# sim_harness.h -- itself derived from firmware's own App::RobotLoop::kCycle,
+# robot_loop.h; 118 ticket 003, sim-cycle-must-match-firmware-period.md).
+# Real-time (1x) tick-thread pacing advances one cycle per wall-clock tick by
+# default. This module constant is only the FALLBACK default (used before a
+# lib is ever loaded, e.g. as SimLoop.__init__'s initial value) -- connect()
+# overwrites `self._cycle_duration_s` with the value actually compiled into
+# the LOADED library (`sim_cycle_dt_us()`) so a caller pointed at a stale or
+# differently-built .dylib/.so still paces against what that binary really
+# runs, not what this source tree currently says.
+_CYCLE_DURATION_S = 0.040  # [s]
 
 # Telemetry queue: bounded, drop-oldest -- mirrors SerialConnection's own
 # _binary_tlm_queue policy (never let an un-drained queue grow unbounded).
 _TLM_QUEUE_MAXSIZE = 512
 
-# Ground-truth pose delivered every Nth tick (~5 Hz at 1x speed, matching
-# testgui/transport.py's own _SIM_TRUTH_EVERY_N_TICKS/hardware truth-poll
-# rate).
+# Ground-truth pose delivered every Nth tick -- ~6.25 Hz at 1x speed and the
+# 40ms cycle period (118 ticket 003; was ~5 Hz at the pre-118 50ms cycle),
+# in the same ballpark as testgui/transport.py's own
+# _SIM_TRUTH_EVERY_N_TICKS/hardware truth-poll rate (that module computes
+# its own N dynamically off ITS tick duration to target ~5 Hz exactly; this
+# constant is not recomputed to match -- a UI truth-delivery rate, not a
+# gated cadence assumption).
 _TRUTH_EVERY_N_TICKS = 4
 
 # set_speed_factor() clamp range -- matches testgui/transport.py's own
@@ -327,6 +338,13 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
     lib.sim_firmware_version.argtypes = []
     lib.sim_firmware_version.restype = ctypes.c_char_p
 
+    # sim_cycle_dt_us -- 118 ticket 003: the loaded library's own compiled-in
+    # cycle period, [us] -- see connect()'s own use of this (sets
+    # self._cycle_duration_s from it rather than trusting the module-level
+    # _CYCLE_DURATION_S fallback to still match a possibly-stale-built lib).
+    lib.sim_cycle_dt_us.argtypes = []
+    lib.sim_cycle_dt_us.restype = ctypes.c_int
+
     # Commanded per-wheel velocity (velocity-PID setpoint) read live from the
     # firmware -- Path B for the commanded-vs-actual graph (cmd_vel is not on
     # the primary wire frame; see sim_ctypes.cpp's own note).
@@ -360,6 +378,11 @@ class SimLoop:
         self._track_width = track_width
         self._lib_path = pathlib.Path(lib_path) if lib_path else _DEFAULT_LIB_PATH
         self._lib: ctypes.CDLL | None = None
+        # Real-time tick-thread pacing target -- module-level _CYCLE_DURATION_S
+        # until connect() overwrites it with the LOADED library's own compiled-in
+        # value (sim_cycle_dt_us(), 118 ticket 003 -- see that constant's own
+        # doc comment for why the live value wins over this fallback).
+        self._cycle_duration_s: float = _CYCLE_DURATION_S
         self._handle: ctypes.c_void_p | None = None
 
         self.on_telemetry: "Callable[[TLMFrame], None] | None" = None
@@ -419,6 +442,10 @@ class SimLoop:
 
         self._lib = ctypes.CDLL(str(self._lib_path))
         _bind_ctypes(self._lib)
+        # 118 ticket 003: pace against what THIS loaded binary actually runs,
+        # not the module-level fallback -- see _cycle_duration_s's own
+        # __init__ comment.
+        self._cycle_duration_s = self._lib.sim_cycle_dt_us() / 1e6
         self._handle = self._lib.sim_create(ctypes.c_float(self._track_width))
 
         self._stop_event.clear()
@@ -1078,14 +1105,14 @@ class SimLoop:
                      not-yet-heard-from-plant, which defaults to the safe
                      "don't throttle" side):
                 One ``sim_step()`` + drain per iteration, exactly like
-                before this fix -- full real-time pace, ``_CYCLE_DURATION_S``
+                before this fix -- full real-time pace, ``self._cycle_duration_s``
                 per cycle, ``_speed_factor`` cycles per iteration.
 
             IDLE (self._active is False -- the plant confirmed the last
                   motion finished):
                 Step/drain/deliver only once every
                 ``_IDLE_HEARTBEAT_INTERVAL_S`` (~2s) instead of every
-                ``_CYCLE_DURATION_S`` (~50ms) -- a slow "I'm still here"
+                ``self._cycle_duration_s`` (~40ms) -- a slow "I'm still here"
                 heartbeat matching a real idle robot's cadence, instead of
                 full-rate churn over a pose that (modulo sprint 108's
                 intentional rest-dither) isn't changing.
@@ -1158,13 +1185,14 @@ class SimLoop:
 
             # Pace ONE iteration to a single cycle's wall time, regardless of
             # how many sim cycles it stepped -- so speed_factor N steps N cycles
-            # per 50ms wall = N x real-time (the previous `* cycles` here paced N
-            # cycles to N*50ms wall, i.e. always 1x, so speed_factor did nothing).
-            # At a high enough speed_factor the compute for N cycles exceeds one
-            # cycle's wall budget and this sleeps 0 -- the sim then free-runs at
-            # full compute speed (what the "fast tour" wants).
+            # per one cycle's wall time = N x real-time (the previous `* cycles`
+            # here paced N cycles to N cycles' wall time, i.e. always 1x, so
+            # speed_factor did nothing). At a high enough speed_factor the
+            # compute for N cycles exceeds one cycle's wall budget and this
+            # sleeps 0 -- the sim then free-runs at full compute speed (what the
+            # "fast tour" wants).
             elapsed = time.monotonic() - t0
-            sleep_s = _CYCLE_DURATION_S - elapsed
+            sleep_s = self._cycle_duration_s - elapsed
             if sleep_s > 0:
                 self._stop_event.wait(timeout=sleep_s)
 

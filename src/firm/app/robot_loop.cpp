@@ -16,7 +16,11 @@ namespace {
 // bus_.write()/bus_.read() postClear/preClear pair, applied here as the
 // post-duty-write clearance window.
 //
-// kCycle is the STATED TOTAL for the whole schedule (all four pacing
+// kCycle itself now lives on RobotLoop::kCycle (robot_loop.h, public) --
+// 118 ticket 003 promoted it out of this anonymous namespace so external
+// composition roots (TestSim::SimHarness's own kCycleDtUs) can derive from
+// the SAME declaration instead of an independently-hardcoded matching
+// literal. It is the STATED TOTAL for the whole schedule (all four pacing
 // blocks, not just the trailing one) -- ~25 Hz/40ms (106-001; restored by
 // 118 after commit 5f5a2ba7 zeroed kSettle/kClear and halved kCycle to 20,
 // which only made the vendor's still-mandatory 4ms settle happen as a
@@ -26,7 +30,6 @@ namespace {
 // primary-frame throttle and the loop's own pace agree by construction.
 constexpr uint32_t kSettle = 4;  // [ms] encoder-settle window, both motors
 constexpr uint32_t kClear = 4;   // [ms] post-duty-write clearance window
-constexpr uint32_t kCycle = 40;  // [ms] whole-schedule pace target (~25 Hz)
 
 // kWindows is what the three settle/clearance blocks above already consume
 // before the final (perception+odometry+pace) block runs; kPace is that
@@ -42,9 +45,9 @@ constexpr uint32_t kCycle = 40;  // [ms] whole-schedule pace target (~25 Hz)
 // have individually.
 constexpr uint32_t kWindows = 2 * kSettle + kClear;  // [ms] time the 3 settle/clear
                                                       // blocks consume before the pace block
-static_assert(kWindows <= kCycle,
+static_assert(kWindows <= RobotLoop::kCycle,
               "kSettle+kClear+kSettle must fit inside the kCycle budget");
-constexpr uint32_t kPace = kCycle - kWindows;  // [ms] final block's own gap, absorbing kWindows
+constexpr uint32_t kPace = RobotLoop::kCycle - kWindows;  // [ms] final block's own gap, absorbing kWindows
 
 constexpr uint32_t kPreamblePace = 10;  // [ms] boot-loop probe pacing
 

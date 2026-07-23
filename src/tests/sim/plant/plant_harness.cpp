@@ -146,10 +146,12 @@ void scenarioVelocityStepShowsRampWithTauInRange() {
 
   const float dtS = 0.02f;          // [s]
   const uint64_t dtUs = 20000;      // [us]
-  uint64_t nowUs = 50000;           // starts >=40ms so cycle 0's first duty
-                                     // write is not write-rate-throttled --
-                                     // see nezha_motor.cpp's writeRawDuty()
-                                     // and every other harness's identical
+  uint64_t nowUs = 50000;           // starts >=35ms (118 ticket 003's jitter
+                                     // margin, kMinWriteIntervalUs) so cycle
+                                     // 0's first duty write is not
+                                     // write-rate-throttled -- see
+                                     // nezha_motor.cpp's writeRawDuty() and
+                                     // every other harness's identical
                                      // convention (e.g.
                                      // scenarioNakedStopWriteIsRetriedNextTickNotLatched()).
 

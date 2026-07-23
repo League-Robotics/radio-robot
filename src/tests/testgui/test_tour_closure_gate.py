@@ -169,10 +169,11 @@ def _normalize_deg(delta_deg: float) -> float:
 class _SteppedClock:
     """A fake clock in lockstep with `_make_stepper()`'s own step count.
     `run_tour()`'s timeout/poll-interval math is written in real seconds --
-    this reports "seconds" too (one sim cycle == 0.05s, `SimLoop.step()`'s
-    own documented per-cycle virtual-time advance) even though no wall
-    clock is read at all, so `move_timeout`/`poll_interval`/`final_settle`
-    keep their existing meaning."""
+    this reports "seconds" too (one sim cycle == 0.04s == firmware's own
+    `App::RobotLoop::kCycle`, `SimLoop.step()`'s own documented per-cycle
+    virtual-time advance -- 118 ticket 003) even though no wall clock is
+    read at all, so `move_timeout`/`poll_interval`/`final_settle` keep their
+    existing meaning."""
 
     def __init__(self) -> None:
         self.now_s = 0.0
@@ -205,7 +206,7 @@ def _make_stepper(loop, clock: "_SteppedClock"):
     def _step(_requested_interval: float) -> None:
         loop.step(1)
         loop._drain_tlm_into_queue()  # noqa: SLF001 -- see docstring above
-        clock.now_s += 0.05  # [s] SimLoop.step()'s own per-cycle virtual-time advance
+        clock.now_s += 0.04  # [s] SimLoop.step()'s own per-cycle virtual-time advance (118 ticket 003)
 
     return _step
 
@@ -390,7 +391,12 @@ def _run_tour_capture(loop, tour_wire, *, v_max: float = 150.0,
     if deterministic:
         clock = _SteppedClock()
         run_tour_kwargs.update(
-            clock_fn=clock.now, sleep_fn=_make_stepper(loop, clock), poll_interval=0.05)
+            # poll_interval is nominal here -- _make_stepper()'s own _step()
+            # ignores the requested interval and always advances exactly one
+            # sim cycle (see its docstring) -- kept at the cycle's own value
+            # (0.04s, 118 ticket 003) for consistency, not because anything
+            # reads it as a real pacing duration in this deterministic path.
+            clock_fn=clock.now, sleep_fn=_make_stepper(loop, clock), poll_interval=0.04)
 
     result = run_tour(loop, params, heading, legs, v_max=v_max, on_leg=_on_leg, **run_tour_kwargs)
 

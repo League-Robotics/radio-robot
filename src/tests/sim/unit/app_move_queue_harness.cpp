@@ -127,9 +127,11 @@ void scriptEncoderRequestCollect(TestSim::ScriptedI2CHook& bus, uint16_t wireAdd
 }
 
 // See app_drive_harness.cpp's own comment: writeRawDuty()'s write-rate
-// limiter throttles any non-stop write to at most one per 40000us since the
-// leaf's last actual bus write -- every scenario below spaces its
-// duty-observing cycles at least this far apart.
+// limiter throttles any non-stop write to at most one per 35000us (118
+// ticket 003's jitter margin, nezha_motor.cpp's kMinWriteIntervalUs) since
+// the leaf's last actual bus write -- every scenario below spaces its
+// duty-observing cycles at least this far apart (50000 comfortably clears
+// it either way).
 constexpr uint64_t kPastWriteThrottleUs = 50000;
 
 Devices::MotorConfig baseNezhaConfig(uint32_t port) {

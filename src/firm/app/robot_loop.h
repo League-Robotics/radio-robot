@@ -39,6 +39,20 @@ namespace App {
 
 class RobotLoop {
  public:
+  // kCycle -- the whole-schedule pace target for one cycle() call (~25 Hz;
+  // 106-001, restored by 118 after commit 5f5a2ba7's regression -- see
+  // robot_loop.cpp's own file-scope comment for the timing-budget
+  // derivation of kSettle/kClear/kWindows/kPace from this value). Public
+  // (unlike those other schedule constants, which stay robot_loop.cpp
+  // implementation details) so any composition root that must run at
+  // firmware's OWN control period -- most notably
+  // TestSim::SimHarness::kCycleDtUs (sim_harness.h), the sim's per-step
+  // virtual-time advance -- derives its own constant from this ONE
+  // declaration instead of an independently-hardcoded matching literal that
+  // can drift apart again silently (118 ticket 003,
+  // sim-cycle-must-match-firmware-period.md).
+  static constexpr uint32_t kCycle = 40;  // [ms] whole-schedule pace target (~25 Hz)
+
   // Every reference below is an already-constructed leaf/app module the
   // cycle body touches by name (main.cpp on ARM, or a host harness, owns
   // construction and wiring order). bus is needed directly for the cycle

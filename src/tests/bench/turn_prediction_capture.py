@@ -91,7 +91,8 @@ _TURN_SETTLE_MARGIN_S = 0.6  # [s] extra time past the turn's own nominal durati
                              # physical coast/settle tail (the very thing being measured) is
                              # fully captured before the NEXT turn's Move preempts it.
 
-_CYCLE_S = 0.05  # [s] SimLoop.step()'s own per-cycle virtual-time advance (sim_loop.py's own doc comment)
+_CYCLE_S = 0.04  # [s] SimLoop.step()'s own per-cycle virtual-time advance -- matches firmware's
+                 # own App::RobotLoop::kCycle (118 ticket 003, sim-cycle-must-match-firmware-period.md)
 _PRIME_CYCLES = 5      # a few cycles before the first turn, so the estimator/odometry basis is warm
 _TRAILING_CYCLES = 60  # ~3s of trailing capture after the LAST turn/leg, so its own settle telemetry lands
 

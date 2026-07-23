@@ -254,8 +254,8 @@ void scenarioStopAcksAndClearsActive() {
 //    the actual MOVE-protocol signal instead: the completion ack
 //    (ack_corr == Move.id, ack_err == 0) and active clearing, matching
 //    move_queue.h's own documented completion contract. stopValue=120ms
-//    with SimHarness::kCycleDtUs=50ms meets the stop condition ~3 cycles
-//    after activation.
+//    with SimHarness::kCycleDtUs=40ms (118 ticket 003) meets the stop
+//    condition ~3 cycles after activation.
 // ===========================================================================
 
 void scenarioMoveExpiryStopsPlantWithNoFurtherHostTraffic() {

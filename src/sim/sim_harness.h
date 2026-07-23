@@ -460,10 +460,30 @@ class SimHarness {
   TestSim::SimSleeper& sleeper() { return sleeper_; }
 
   // [us] the fixed per-cycle virtual-time advance step() applies before
-  // every robotLoop_.cycle() call -- matches sim_api.h's own kCycleDtUs
-  // derivation (>=40ms so a fresh duty write is never write-rate-throttled;
-  // comfortably >= Devices::Otos::kReadPeriod so OTOS is due every cycle).
-  static constexpr uint32_t kCycleDtUs = 50000;  // [us]
+  // every robotLoop_.cycle() call -- DERIVED from App::RobotLoop::kCycle
+  // (robot_loop.h), NOT an independently-hardcoded matching literal (118
+  // ticket 003, sim-cycle-must-match-firmware-period.md): sim's own step
+  // period must equal firmware's real control period exactly, or every
+  // sim-tuned millisecond constant and every "N cycles of latency" finding
+  // is measured on a plant with a materially different control period than
+  // what ships (the review that opened this issue found the sim was
+  // "deterministic about a different robot"). The static_assert just below
+  // is a second, independent tripwire against a future edit that
+  // reintroduces a bare literal here instead of this derivation.
+  //
+  // Pre-118 this was a hand-picked 50000 (2.5x firmware's then-regressed
+  // kCycle=20) chosen only to dodge Devices::NezhaMotor's 40ms
+  // write-rate throttle (kMinWriteIntervalUs, nezha_motor.cpp) -- never a
+  // deliberate simulation-fidelity choice. Now that firmware's own kCycle
+  // is 40ms (118 tickets 001/002), deriving from it directly retires that
+  // workaround: the throttle's own jitter margin (nezha_motor.cpp) is what
+  // keeps an on-schedule write from losing to the throttle now that cycle
+  // period and throttle interval are no longer comfortably apart.
+  static constexpr uint32_t kCycleDtUs = App::RobotLoop::kCycle * 1000;  // [us]
+  static_assert(kCycleDtUs == App::RobotLoop::kCycle * 1000,
+                "SimHarness::kCycleDtUs must equal firmware's own App::RobotLoop::kCycle "
+                "(converted ms->us) -- derive it, never hardcode a second matching literal "
+                "that can drift apart silently (118 ticket 003)");
 
  private:
   // 114-001: the private static methods that used to live here (the

@@ -121,6 +121,17 @@ void checkUintEq(uint32_t actual, uint32_t expected, const std::string& what) {
   }
 }
 
+// kCycleDtUs -- 118 ticket 003 (sim-cycle-must-match-firmware-period.md):
+// single source of truth for every hand-rolled "tick the plant, advance the
+// clock, cycle() the loop" step loop in this file (LiveFixture::step() below
+// plus the standalone scenario functions that build their own local
+// plant/clock/robotLoop instead of using LiveFixture). Derived from
+// App::RobotLoop::kCycle (robot_loop.h), NOT an independently-hardcoded
+// matching literal -- exactly the class of drift this ticket exists to
+// close off (matches TestSim::SimHarness::kCycleDtUs's own derivation,
+// sim_harness.h).
+constexpr uint32_t kCycleDtUs = App::RobotLoop::kCycle * 1000;  // [us]
+
 // --- Minimal App::Transport stub -- no real serial/radio, ever. readLine()
 // always reports "nothing ready" (this harness does not need to inject
 // commands to prove the extraction runs); send()/sendReliable() just record
@@ -889,7 +900,6 @@ struct LiveFixture {
   }
 
   void step(int cycles = 1) {
-    constexpr uint32_t kCycleDtUs = 50000;  // [us] 50ms/cycle
     for (int i = 0; i < cycles; ++i) {
       plant.tick(static_cast<float>(kCycleDtUs) / 1e6f);  // [s]
       clock.advanceMicros(kCycleDtUs);
@@ -1502,8 +1512,8 @@ void scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists() {
   bool acked = false;
   uint32_t ackErr = 1;  // any nonzero sentinel -- overwritten by findAck() on a match
   for (int i = 0; i < 10 && !acked; ++i) {
-    plant.tick(0.05f);  // [s] 50ms/cycle, matching LiveFixture::step()'s own kCycleDtUs
-    clock.advanceMicros(50000);
+    plant.tick(static_cast<float>(kCycleDtUs) / 1e6f);  // [s] matches LiveFixture::step()'s own kCycleDtUs
+    clock.advanceMicros(kCycleDtUs);
     robotLoop.cycle();
     acked = findAck(serialFake.sent(), kCorrId, &ackErr);
   }
@@ -1617,8 +1627,8 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   // scenarioTwistDrivesRealPlantRamp() derivation).
   constexpr int kCycles = 20;
   for (int i = 0; i < kCycles; ++i) {
-    plant.tick(0.05f);  // [s] 50ms/cycle
-    clock.advanceMicros(50000);
+    plant.tick(static_cast<float>(kCycleDtUs) / 1e6f);  // [s]
+    clock.advanceMicros(kCycleDtUs);
     robotLoop.cycle();
   }
 
@@ -1668,8 +1678,8 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   checkTrue(!estimatorLine.empty(), "armor() of the CONFIG{estimator} envelope succeeds");
   serialFake.enqueueInbound(estimatorLine.c_str());
 
-  plant.tick(0.05f);
-  clock.advanceMicros(50000);
+  plant.tick(static_cast<float>(kCycleDtUs) / 1e6f);  // [s]
+  clock.advanceMicros(kCycleDtUs);
   robotLoop.cycle();
 
   checkFloatEq(stateEstimator.weights().headingOtos, 0.4f,

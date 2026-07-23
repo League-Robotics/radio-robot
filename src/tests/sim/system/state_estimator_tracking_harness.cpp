@@ -13,8 +13,9 @@
 // as a genuine PREDICT-TO-NOW instrument, not merely a pass-through of
 // already-known Frame data. At the end of every cycle it asks
 // StateEstimator::wheelAt()/bodyAt() to extrapolate ONE FULL CYCLE (SimHarness
-// ::kCycleDtUs, 50ms) past the CURRENT basis -- the same "predict past the
-// last collect" query a live host would make between two telemetry frames --
+// ::kCycleDtUs, 40ms -- 118 ticket 003) past the CURRENT basis -- the same
+// "predict past the last collect" query a live host would make between two
+// telemetry frames --
 // then, once that next cycle has actually run, compares the STORED
 // prediction against SimPlant's own live ground truth at that exact instant
 // (TestSim::WheelPlant::position()/velocity() for each wheel via
