@@ -75,6 +75,16 @@ import "common.proto";
 // convention: 179 B, 7 B margin (spike-003's own measurement) -- this
 // rewrite is smaller by 26 B while carrying strictly more signal
 // (per-sample timestamps, OTOS velocities, packed line/color words).
+//
+// 120 (ack ring, ADDITIVE): field 14 (`acks`, `repeated AckEntry`, depth 4)
+// replaces the single ack slot's own bench-measured "rare collision"
+// assumption -- see bench-single-ack-slot-observability-collapses-at-40ms.md
+// and Telemetry.acks's own doc comment below for the full rationale.
+// Nothing above is renumbered; ack_corr/ack_err/flags bit 5 keep their
+// exact prior meaning. See wire.h's own gen_messages.py-computed
+// kReplyEnvelopeMaxEncodedSize comment for the regenerated worst-case size
+// this addition pushed the frame to (re-measured, not hand-updated here,
+// so it never drifts from the generator's own ground truth).
 // ---------------------------------------------------------------------------
 
 // Current drive mode -- relocated here from the deleted planner.proto
@@ -108,6 +118,17 @@ message OtosReading {
   float  v_y     = 5;  // [mm/s]
   float  omega   = 6;  // [rad/s]
   uint32 time    = 7;  // [ms] robot clock at burst read
+}
+
+// One entry in Telemetry's bounded ack ring (120, ADDITIVE --
+// bench-single-ack-slot-observability-collapses-at-40ms.md). Carries the
+// exact same pair Telemetry.ack_corr/ack_err below have always carried --
+// this message exists only so more than one can ride a single frame. See
+// Telemetry.acks's own doc comment for why both a scalar "freshest ack"
+// pair and this bounded repeated ring coexist.
+message AckEntry {
+  uint32 corr_id = 1 [(max) = 65535];  // CommandEnvelope.corr_id (enqueue ack) or Move.id (completion ack)
+  uint32 err     = 2 [(max) = 7];      // 0 == OK; nonzero is the ErrCode (envelope.proto) value
 }
 
 message Telemetry {
@@ -144,11 +165,13 @@ message Telemetry {
   //   bits 16+ reserved
   uint32 flags = 4 [(max) = 65535];
 
-  // Single ack slot (was: repeated AckEntry x3, depth 3). ack_err == 0
-  // means OK; nonzero is the ErrCode (envelope.proto) value. Valid iff
-  // flags bit 5 (ack_fresh) -- a command acked within the same primary
-  // period as another overwrites (stakeholder-accepted tradeoff;
-  // `wait_for_ack` timeout+retry covers the rare bench-rate collision).
+  // Single "freshest ack" slot. ack_err == 0 means OK; nonzero is the
+  // ErrCode (envelope.proto) value. Valid iff flags bit 5 (ack_fresh).
+  // UNCHANGED by 120's ack ring below -- a command acked within the same
+  // primary period as another still overwrites THIS pair (any reader that
+  // only ever looked at ack_corr/ack_err/bit 5 keeps working, unchanged);
+  // acks (below) is the additive fix for a reader that wants every ack,
+  // not just the freshest.
   uint32 ack_corr = 5 [(max) = 65535];
   uint32 ack_err  = 6 [(max) = 7];
 
@@ -162,6 +185,22 @@ message Telemetry {
   // Packed sensor words. Valid iff flags bits 13/14 respectively.
   uint32 line  = 12;  // 4 line channels, one byte each (ch1 in the low byte)
   uint32 color = 13;  // color sensor RGBC, 8 bits per channel (R in the low byte)
+
+  // Bounded ack ring (120, ADDITIVE -- new field, next free number after
+  // 115-003's clean renumber; nothing above is renumbered or removed).
+  // Carries the last kAckRingDepth (4) AckEntry pushes since Telemetry was
+  // constructed, oldest evicted first on overflow -- so a host reading at
+  // ~15Hz against this frame's ~25Hz emit rate still observes a transient
+  // enqueue/STOP/CONFIG ack that ack_corr/ack_err above would have lost to
+  // a same-primary-period overwrite
+  // (bench-single-ack-slot-observability-collapses-at-40ms.md). Every
+  // entry here was genuinely pushed via App::Telemetry::ack() -- unlike
+  // ack_corr/ack_err (which persist their last-written value on every
+  // ordinary frame, needing flags bit 5 to say "this one is new"), a
+  // corr_id present in this list was a real ack; no separate freshness
+  // bit applies to it. A push past depth 4 evicts the OLDEST entry, not
+  // this one; see src/firm/app/DESIGN.md's "Telemetry's ack ring" note.
+  repeated AckEntry acks = 14 [(max_count) = 4];
 }
 
 // TelemetrySecondary -- the slower diagnostic frame (unchanged by 115-003;

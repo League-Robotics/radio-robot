@@ -39,6 +39,14 @@ struct OtosReading {
     // --- array / optional-string accessors ---
 };
 
+// AckEntry
+struct AckEntry {
+    uint32_t corr_id = 0;
+    uint32_t err = 0;
+
+    // --- array / optional-string accessors ---
+};
+
 // Telemetry
 struct Telemetry {
     uint32_t now = 0;
@@ -54,8 +62,12 @@ struct Telemetry {
     BodyTwist3 twist = {};
     uint32_t line = 0;
     uint32_t color = 0;
+    AckEntry acks_[4] = {};
+    uint8_t acks_count = 0;
 
     // --- array / optional-string accessors ---
+    const AckEntry* acks() const { return acks_; }
+    uint8_t acks_count_val() const { return acks_count; }
 };
 
 // TelemetrySecondary

@@ -73,28 +73,28 @@ Reader loop:
    Lines beginning with ``#`` are relay status/comment lines.  The reader loop
    drops them silently; they do not generate protocol errors.
 
-Ack matcher and TelemetrySecondary decode (104-003, narrowed to a single
-ack slot by 115-003 frame v2):
+Ack matcher and TelemetrySecondary decode (104-003, promoted; ring-based
+matching since 120):
 -----------------------------------------------------------
 Two pieces of P4 wire-protocol support live here, promoted/added by sprint
 103 so every caller -- not just ``NezhaProtocol`` -- gets the same
 guarantee without duplicating either algorithm:
 
-- ``wait_for_ack(corr_id, timeout)`` -- the single-ack-slot matcher.
-  ``twist``/``stop``/``config`` commands get no synchronous reply; their
-  outcome rides ``Telemetry.ack_corr``/``ack_err`` (valid iff ``flags`` bit
-  5, ``ack_fresh``) inside a subsequent ``Telemetry`` push
-  (``_binary_tlm_queue``). This method polls that queue (via
-  ``drain_binary_tlm()``) for a fresh ack matching ``corr_id``, bounded by
-  ``timeout``, returning on the FIRST match. 115-003 replaced the pre-115
-  depth-3 ``AckEntry`` ring (which tolerated the same corr_id legitimately
-  re-appearing across consecutive frames) with this one slot -- a command
-  acked within the same primary period as another now OVERWRITES the slot
-  instead (the "ack-depth-1 tradeoff", stakeholder-accepted); this
-  matcher's own bounded timeout+retry contract is what covers that rare
-  collision. Previously this loop lived inline in ``robot_radio.robot.
-  protocol.NezhaProtocol.wait_for_ack()``; that method now delegates here
-  so the algorithm has exactly one implementation.
+- ``wait_for_ack(corr_id, timeout)`` -- the ack-ring matcher.
+  ``move``/``stop``/``config`` commands get no synchronous reply; their
+  outcome rides ``Telemetry.acks`` (a bounded, depth-4 ring of real
+  ``App::Telemetry::ack()`` pushes, telemetry.proto) inside a subsequent
+  ``Telemetry`` push (``_binary_tlm_queue``). This method polls that queue
+  (via ``drain_binary_tlm()``) for a ring entry matching ``corr_id``,
+  bounded by ``timeout``, returning on the FIRST match. 120
+  (bench-single-ack-slot-observability-collapses-at-40ms.md) replaced the
+  115-003 single scalar ``ack_corr``/``ack_err`` slot (which OVERWROTE on
+  any same-primary-period collision -- the "ack-depth-1 tradeoff") with
+  this ring: a push past depth 4 still evicts the OLDEST entry, so a
+  bounded, but much larger, burst of other acks is now tolerated before
+  this matcher would time out. Previously this loop lived inline in
+  ``robot_radio.robot.protocol.NezhaProtocol.wait_for_ack()``; that method
+  now delegates here so the algorithm has exactly one implementation.
 - ``drain_binary_secondary_tlm()`` / ``read_binary_secondary_tlm()`` -- the
   ``TelemetrySecondary`` counterparts of ``drain_binary_tlm()``/
   ``read_binary_tlm()``. ``TelemetrySecondary`` (the slower ~5 Hz
@@ -277,21 +277,48 @@ def _parse_device_banner(line: str) -> dict[str, Any] | None:
 # here (rather than imported) because importing robot_radio.robot.protocol
 # from this module's top level would be circular -- see this file's own
 # TYPE_CHECKING note above. Both share the SAME source of truth: the
-# telemetry.proto bit-table comment.
+# telemetry.proto bit-table comment. Retained for any future reader that
+# still wants the single "freshest ack" slot -- _match_ack_in_frames()
+# below no longer uses it (120: ring-based matching needs no freshness
+# gate -- see that function's own docstring).
 _ACK_FRESH_BIT = 1 << 5
 
 
 def _match_ack_in_frames(
     frames: "list[envelope_pb2.ReplyEnvelope]", corr_id: int
-) -> "telemetry_pb2.Telemetry | None":
+) -> "telemetry_pb2.AckEntry | None":
     """Scan a batch of binary-plane ``tlm``-body ``ReplyEnvelope`` frames
-    (as returned by ``drain_binary_tlm()``) for the single ack slot
-    (``ack_corr``/``ack_err``, valid iff ``flags`` bit 5 / ``ack_fresh``)
-    matching ``corr_id`` -- frame v2 (115-003) replaced the depth-3
-    ``AckEntry`` ring this function used to scan with these two scalar
-    fields. Returns the matching frame's ``Telemetry`` message itself (the
-    caller reads ``ack_corr``/``ack_err`` off it) from the FIRST frame (in
-    list order) where a fresh, matching ack is found --
+    (as returned by ``drain_binary_tlm()``) for an ack-ring entry matching
+    ``corr_id``.
+
+    120 (bench-single-ack-slot-observability-collapses-at-40ms.md) replaces
+    the single scalar ``ack_corr``/``ack_err`` slot (valid iff ``flags``
+    bit 5 / ``ack_fresh``) this function used to scan with a scan over each
+    frame's bounded ``acks`` ring (depth ``kAckRingDepth``=4,
+    telemetry.proto) -- a corr_id present ANYWHERE in the ring was
+    genuinely acked by ``App::Telemetry::ack()`` at some point. No
+    freshness bit is needed to disambiguate a ring entry from a stale
+    leftover value the way ``ack_fresh`` was needed for the single slot
+    (whose ``ack_corr``/``ack_err`` hold their LAST-WRITTEN value on every
+    ordinary frame, fresh or not) -- an entry is either genuinely in the
+    ring (real) or it is not there at all.
+
+    Matching policy (sprint 120 Architecture Step 7's open question,
+    resolved here): return on the FIRST (frame, ring-entry) match, scanning
+    frames in list order and, within each frame, ring entries in wire
+    order (oldest-pushed first -- ``Telemetry::ack()``'s own push/evict
+    order, ``telemetry.cpp``). Since a match is an exact ``corr_id``
+    equality check, not a "freshest wins" precedence the old single-slot
+    design needed, which entry is found first only matters if the SAME
+    corr_id was somehow acked more than once (not expected in practice --
+    each corr_id is assigned once per ``SerialConnection._corr_counter``
+    and acked at most once by the firmware); oldest-first is chosen for a
+    deterministic, easy-to-reason-about contract regardless.
+
+    Returns the matching ``telemetry_pb2.AckEntry`` ring entry itself (the
+    caller reads ``corr_id``/``err`` off it -- NOT the frame's own scalar
+    ``ack_corr``/``ack_err``, which may belong to a DIFFERENT, later
+    command by the time this frame is read) --
     ``SerialConnection.wait_for_ack()``'s own pure-function matching core,
     split out so it can be unit-tested directly against synthetic frame
     batches without a real queue/thread.
@@ -303,11 +330,9 @@ def _match_ack_in_frames(
     for reply in frames:
         if reply.WhichOneof("body") != "tlm":
             continue
-        telemetry = reply.tlm
-        if not (telemetry.flags & _ACK_FRESH_BIT):
-            continue
-        if telemetry.ack_corr == corr_id:
-            return telemetry
+        for entry in reply.tlm.acks:
+            if entry.corr_id == corr_id:
+                return entry
     return None
 
 
@@ -1460,36 +1485,45 @@ class SerialConnection:
 
         return frames
 
-    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.Telemetry | None":  # [ms]
-        """Poll incoming binary ``Telemetry`` pushes for the single ack slot
-        matching ``corr_id``, for up to ``timeout`` ms.  Returns the matched
-        raw ``pb2.Telemetry`` frame (the caller reads ``ack_corr``/
-        ``ack_err`` off it), or ``None`` if the deadline passes with no
-        match -- this wait is always bounded, never infinite.
+    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.AckEntry | None":  # [ms]
+        """Poll incoming binary ``Telemetry`` pushes' bounded ack ring for an
+        entry matching ``corr_id``, for up to ``timeout`` ms. Returns the
+        matched raw ``pb2.AckEntry`` ring entry (the caller reads
+        ``corr_id``/``err`` off it -- NOT the enclosing frame's own scalar
+        ``ack_corr``/``ack_err``, which may belong to a different command by
+        the time the frame is read), or ``None`` if the deadline passes with
+        no match -- this wait is always bounded, never infinite.
 
         The ONE shared ack matcher (104-003, promoted out of
         ``robot_radio.robot.protocol.NezhaProtocol.wait_for_ack()``, which
-        delegates here -- see this module's own file-header note): every
-        ``CommandEnvelope`` oneof arm (``twist``/``stop``/``config``) gets no
-        synchronous ``ReplyEnvelope`` of its own on the P4 wire -- its
-        outcome rides the single ack slot (``Telemetry.ack_corr``/
-        ``ack_err``, valid iff ``flags`` bit 5 / ``ack_fresh``) inside the
-        next one or more regular ``Telemetry`` pushes after the command
-        reaches the firmware (103-009 Decision 2's "telemetry-only return
-        path", narrowed from a depth-3 ring to one slot by 115-003 frame
-        v2). This matcher returns on the FIRST frame where a fresh,
-        matching ack is found (via ``_match_ack_in_frames()`` below).
+        delegates here -- see this module's own file-header note; ring-based
+        matching since 120, bench-single-ack-slot-observability-collapses-
+        at-40ms.md): every ``CommandEnvelope`` oneof arm (``move``/``stop``/
+        ``config``) gets no synchronous ``ReplyEnvelope`` of its own on the
+        P4 wire -- its outcome rides ``Telemetry.acks`` (a bounded, depth-4
+        ring of real ``App::Telemetry::ack()`` pushes, oldest evicted first)
+        inside the next one or more regular ``Telemetry`` pushes after the
+        command reaches the firmware (103-009 Decision 2's "telemetry-only
+        return path"). This matcher returns on the FIRST (frame, ring-entry)
+        pair where a matching ``corr_id`` is found (via
+        ``_match_ack_in_frames()`` below) -- no freshness bit to check, a
+        ring entry is either genuinely present (real) or it is not.
 
-        Slot-overwrite (a command acked within the same primary period as
-        another, so its ack is never observed before the NEXT command's ack
-        overwrites the slot) is a real, bounded failure, not a bug: it
-        surfaces as this method's own ``timeout``, exactly like a corr_id
-        that was never acked at all -- there is no separate "overwritten"
-        outcome to report, because from the host's perspective the two are
-        indistinguishable (no frame this method polled ever carried a
-        matching, fresh ack). The amendment issue's own "ack-depth-1
-        tradeoff" note: rare at bench rates, this method's timeout+retry
-        contract covers it.
+        Ring saturation (more than ``kAckRingDepth``=4 OTHER commands acked
+        before this one's entry is ever read) is the one remaining real,
+        bounded failure mode -- narrower than the pre-120 single slot's
+        "ANY other command acked in the same primary period" failure, but
+        not eliminated by construction. It surfaces as this method's own
+        ``timeout``, exactly like a corr_id that was never acked at all --
+        there is no separate "evicted" outcome to report, because from the
+        host's perspective the two are indistinguishable (no frame this
+        method polled ever carried a matching entry, whether because none
+        was ever pushed or because it fell off the ring before being read).
+        This ticket's own rapid-fire N-enqueue bench test
+        (``src/tests/bench/move_protocol_bench.py``) is the check that
+        ``kAckRingDepth``=4 is enough in practice for the queue's own 5-deep
+        ``ERR_FULL`` ceiling; retry-on-timeout still covers the residual
+        rare case.
 
         Polls ``drain_binary_tlm()`` -- the same non-blocking binary-
         telemetry drain other callers already use -- in a short sleep loop.

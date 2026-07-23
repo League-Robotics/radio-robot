@@ -63,7 +63,7 @@ class _FakeHardwareConn:
         self.is_open = True
         self.sent: list["envelope_pb2.CommandEnvelope"] = []
         self._next_corr_id = 0
-        self.ack_result: "telemetry_pb2.Telemetry | None" = None
+        self.ack_result: "telemetry_pb2.AckEntry | None" = None
         self.tlm_script: list[list[object]] = []
 
     def send_envelope_fast(self, envelope: "envelope_pb2.CommandEnvelope") -> int:
@@ -72,7 +72,7 @@ class _FakeHardwareConn:
         self.sent.append(envelope)
         return self._next_corr_id
 
-    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.Telemetry | None":
+    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.AckEntry | None":
         return self.ack_result
 
     def drain_binary_tlm(self) -> list:
@@ -105,7 +105,7 @@ def transport():
 
 
 def _ok_ack(conn: _FakeHardwareConn) -> None:
-    conn.ack_result = telemetry_pb2.Telemetry(flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=0)
+    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=0)
 
 
 # ---------------------------------------------------------------------------
@@ -253,8 +253,7 @@ def test_ack_timeout_returns_err_unknown_move_timeout(transport):
 
 
 def test_nak_ack_returns_err_nak_with_err_code(transport):
-    transport._conn.ack_result = telemetry_pb2.Telemetry(
-        flags=_ACK_FRESH_BIT, ack_corr=1, ack_err=envelope_pb2.ERR_BADARG)
+    transport._conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=envelope_pb2.ERR_BADARG)
 
     reply = transport.command("RT 9000", read_timeout=500)
 

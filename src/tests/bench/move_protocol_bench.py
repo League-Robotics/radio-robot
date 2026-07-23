@@ -92,11 +92,37 @@ def _watch(proto: NezhaProtocol, duration: float,  # [s]
     return frames
 
 
-def _find_completion_ack(frames: list[TLMFrame], move_id: int) -> TLMFrame | None:
-    """Return the first frame whose ack slot carries `move_id`'s completion
-    ack (ack_corr == move_id, ack_fresh set) -- see protocol-v4.md Sec 7.2."""
+def _find_ack_entry(frames: list[TLMFrame], corr_id: int):
+    """Scan the bounded ack ring (`TLMFrame.acks`, 120) across `frames` for
+    the first entry matching `corr_id` -- ring-based, NOT the single
+    freshest-ack scalar slot (`ack_fresh`/`ack_corr`/`ack_err`), which this
+    script used to scan directly (a manual re-implementation of the exact
+    single-slot race this ticket's ack ring fixes -- see protocol-v4.md
+    Sec 7.1/7.2). Returns the matched `AckEntry` (its own `.ok`/`.err_code`
+    are ALWAYS the right ones for `corr_id`, even when the frame's own
+    scalar slot has since moved on to a different, later command), or
+    `None` if `corr_id` never appears in any frame's ring."""
     for f in frames:
-        if f.ack_fresh and f.ack_corr == move_id:
+        for entry in f.acks:
+            if entry.corr_id == corr_id:
+                return entry
+    return None
+
+
+def _find_completion_ack(frames: list[TLMFrame], move_id: int) -> TLMFrame | None:
+    """Return the first frame whose ack ring (120) carries `move_id`'s
+    completion ack -- see protocol-v4.md Sec 7.2. Ring-based (scans every
+    entry in every frame's bounded ack ring), not the single freshest-ack
+    scalar slot the pre-ring implementation scanned -- a completion ack
+    pushed onto the ring but later superseded as "the freshest ack" by a
+    different command's own ack is still found here. Returns the FRAME
+    (for positional/timing reasoning against the rest of the stream, e.g.
+    "no idle gap after this frame") -- use `_find_ack_entry()` instead when
+    the ack's own outcome (`.ok`/`.err_code`) is what's needed, since this
+    frame's own scalar `ack_corr`/`ack_err` may belong to a DIFFERENT,
+    later command by the time it's read."""
+    for f in frames:
+        if any(entry.corr_id == move_id for entry in f.acks):
             return f
     return None
 
@@ -388,8 +414,9 @@ def scenario_timeout_fault(proto: NezhaProtocol, result: Result) -> None:
 
     frames = _watch(proto, 1.8)
     completion = _find_completion_ack(frames, move_id)
+    completion_entry = _find_ack_entry(frames, move_id)
     timed_out = any(f.fault_move_timeout for f in frames)
-    completion_ack_err = completion.ack_err if completion is not None else None
+    completion_ack_err = completion_entry.err_code if completion_entry is not None else None
     result.record("timeout-fault: completion ack observed (Move.id)", completion is not None,
                   f"move_id={move_id}")
     result.record("timeout-fault: kFlagFaultMoveTimeout (flags bit 15) set", timed_out,
@@ -428,11 +455,7 @@ def scenario_stop_mid_motion(proto: NezhaProtocol, result: Result) -> None:
         stop_frames.append(f)
 
     frames_after = _watch(proto, 1.0, on_frame=_record)
-    stop_ack = None
-    for f in frames_after:
-        if f.ack_fresh and f.ack_corr == stop_corr:
-            stop_ack = f.ack
-            break
+    stop_ack = _find_ack_entry(frames_after, stop_corr)
     result.record("stop-mid-motion: STOP command ack ok", stop_ack is not None and stop_ack.ok,
                   f"ack={stop_ack}")
 
@@ -440,7 +463,7 @@ def scenario_stop_mid_motion(proto: NezhaProtocol, result: Result) -> None:
     # not an arbitrary wall-clock point relative to when stop() was called --
     # see scenario_empty_queue_drain_no_traffic()'s identical rationale.
     active_after_stop = None
-    stop_ack_frame = next((f for f in frames_after if f.ack_fresh and f.ack_corr == stop_corr), None)
+    stop_ack_frame = next((f for f in frames_after if any(e.corr_id == stop_corr for e in f.acks)), None)
     if stop_ack_frame is not None:
         idx = frames_after.index(stop_ack_frame)
         active_after_stop = any(f.active for f in frames_after[idx:])

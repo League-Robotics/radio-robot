@@ -32,13 +32,15 @@ none of which need live hardware or even a real `SerialConnection`:
    timeout algorithm out of this method into
    `SerialConnection.wait_for_ack()` (see
    `src/tests/unit/test_serial_conn_ack_ring.py` for that algorithm's own
-   dedicated coverage: exact match, slot-overwrite, bounded timeout — all
-   against synthetic frames, no `NezhaProtocol` involved). What remains
-   here is `NezhaProtocol.wait_for_ack()`'s own thin adapter role: delegate
-   to `self._conn.wait_for_ack(corr_id, timeout)` and wrap the matched raw
-   `telemetry_pb2.Telemetry` frame's ack slot in this module's own
-   `AckEntry` dataclass (or pass `None` through unchanged on a timeout) —
-   exercised against a fake connection that implements only `wait_for_ack()`.
+   dedicated coverage of the 120 ack-ring redesign: exact match, ring
+   saturation, bounded timeout — all against synthetic frames, no
+   `NezhaProtocol` involved). What remains here is
+   `NezhaProtocol.wait_for_ack()`'s own thin adapter role: delegate to
+   `self._conn.wait_for_ack(corr_id, timeout)` (now returning a raw
+   `telemetry_pb2.AckEntry` ring entry, not a whole `Telemetry` frame) and
+   wrap it via this module's own `AckEntry.from_ring_entry()` (or pass
+   `None` through unchanged on a timeout) — exercised against a fake
+   connection that implements only `wait_for_ack()`.
 
 Collected under `src/tests/unit/` — `pyproject.toml`'s `testpaths` includes
 `tests/unit`, so `uv run python -m pytest` collects it by default.
@@ -281,28 +283,30 @@ def test_from_pb2_does_not_crash_on_a_full_primary_frame_and_cmd_vel_stays_none(
 
 class _FakeConnWithAck:
     """Minimal fake connection: implements ONLY `wait_for_ack()` --
-    `NezhaProtocol.wait_for_ack()` (104-003) delegates the ENTIRE poll/
-    match/timeout algorithm to `SerialConnection.wait_for_ack()`; this fake
-    lets the delegation itself be tested (call forwarded with the right
-    args, the matched raw pb2 Telemetry frame's ack slot adapted to this
-    module's AckEntry dataclass, `None` passed through unchanged) without a
-    real queue/thread. The algorithm's own scenario coverage (exact match,
-    slot-overwrite, bounded timeout) lives in
+    `NezhaProtocol.wait_for_ack()` (104-003, ring-based since 120) delegates
+    the ENTIRE poll/match/timeout algorithm to
+    `SerialConnection.wait_for_ack()`; this fake lets the delegation itself
+    be tested (call forwarded with the right args, the matched raw pb2
+    AckEntry RING ENTRY adapted to this module's AckEntry dataclass via
+    `AckEntry.from_ring_entry()` -- NOT `from_telemetry()`, which reads a
+    whole frame's scalar slot instead -- `None` passed through unchanged)
+    without a real queue/thread. The algorithm's own scenario coverage
+    (exact match, ring saturation, bounded timeout) lives in
     `src/tests/unit/test_serial_conn_ack_ring.py`, against the real
     `SerialConnection.wait_for_ack()`."""
 
-    def __init__(self, result: "telemetry_pb2.Telemetry | None") -> None:
+    def __init__(self, result: "telemetry_pb2.AckEntry | None") -> None:
         self.result = result
         self.calls: list[tuple[int, int]] = []
 
-    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.Telemetry | None":
+    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.AckEntry | None":
         self.calls.append((corr_id, timeout))
         return self.result
 
 
 def test_wait_for_ack_delegates_to_shared_matcher_and_adapts_ok_result():
-    raw_telemetry = telemetry_pb2.Telemetry(flags=_FLAG_ACK_FRESH, ack_corr=5, ack_err=0)
-    conn = _FakeConnWithAck(raw_telemetry)
+    raw_entry = telemetry_pb2.AckEntry(corr_id=5, err=0)
+    conn = _FakeConnWithAck(raw_entry)
     proto = NezhaProtocol(conn)
 
     ack = proto.wait_for_ack(5, timeout=250)
@@ -312,9 +316,8 @@ def test_wait_for_ack_delegates_to_shared_matcher_and_adapts_ok_result():
 
 
 def test_wait_for_ack_delegates_to_shared_matcher_and_adapts_err_result():
-    raw_telemetry = telemetry_pb2.Telemetry(
-        flags=_FLAG_ACK_FRESH, ack_corr=9, ack_err=envelope_pb2.ERR_BADARG)
-    conn = _FakeConnWithAck(raw_telemetry)
+    raw_entry = telemetry_pb2.AckEntry(corr_id=9, err=envelope_pb2.ERR_BADARG)
+    conn = _FakeConnWithAck(raw_entry)
     proto = NezhaProtocol(conn)
 
     ack = proto.wait_for_ack(9)

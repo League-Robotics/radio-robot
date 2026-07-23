@@ -50,10 +50,10 @@ struct Result {
 // 186-byte budget fails one of the two static_asserts below at build time,
 // not at runtime on a truncated wire line.
 //   CommandEnvelope: config=49B, stop=2B, move=38B (worst=config=49B) + non-oneof=6B => total=55B
-//   ReplyEnvelope: ok=19B, err=10B, tlm=147B (worst=tlm=147B) + non-oneof=6B => total=153B
+//   ReplyEnvelope: ok=19B, err=10B, tlm=179B (worst=tlm=179B) + non-oneof=6B => total=185B
 //   TelemetrySecondary: standalone worst case = 52B (own *B-armored line, not a ReplyEnvelope oneof arm -- Decision 3)
 constexpr uint16_t kCommandEnvelopeMaxEncodedSize = 55;
-constexpr uint16_t kReplyEnvelopeMaxEncodedSize = 153;
+constexpr uint16_t kReplyEnvelopeMaxEncodedSize = 185;
 constexpr uint16_t kTelemetrySecondaryMaxEncodedSize = 52;
 static_assert(kCommandEnvelopeMaxEncodedSize <= 186,
               "CommandEnvelope worst-case encoded size exceeds the 186-byte envelope budget");

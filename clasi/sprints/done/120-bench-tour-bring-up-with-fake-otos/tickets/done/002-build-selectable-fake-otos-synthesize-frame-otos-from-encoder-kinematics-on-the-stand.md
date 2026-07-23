@@ -2,9 +2,11 @@
 id: '002'
 title: 'Build-selectable fake OTOS: synthesize frame.otos from encoder kinematics
   on the stand'
-status: open
-use-cases: [SUC-070]
-depends-on: ['001']
+status: done
+use-cases:
+- SUC-070
+depends-on:
+- '001'
 github-issue: ''
 issue: on-chip-fake-otos-test-device.md
 completes_issue: true
@@ -62,35 +64,35 @@ paragraph) for the full rationale and drafted doc text.
 
 ## Acceptance Criteria
 
-- [ ] `Devices::Otos` gains a new synthetic-sample method (e.g.
+- [x] `Devices::Otos` gains a new synthetic-sample method (e.g.
       `feedSyntheticSample(x, y, heading, v_x, v_y, omega, nowUs)`) with
       the SAME freshness/present/connected semantics real reads already
       populate — `pose()`/`poseFresh()` read fresh every cycle it's
       called, `present()`/`connected()` read true.
-- [ ] The real build's `Devices::Otos::tick()`/`begin()` and every other
+- [x] The real build's `Devices::Otos::tick()`/`begin()` and every other
       existing method are byte-for-byte unchanged; a diff review (or an
       existing unit/sim regression covering the real path) confirms it.
-- [ ] `App::RobotLoop::cycle()` gains exactly one macro-gated branch at
+- [x] `App::RobotLoop::cycle()` gains exactly one macro-gated branch at
       the existing Otos call site: real build calls `tick(nowUs)` as
       today; `FAKE_OTOS` build calls the new method, fed from that SAME
       cycle's `Odometry` pose/twist output.
-- [ ] `main.cpp`'s `Devices::Otos` construction line is unchanged text
+- [x] `main.cpp`'s `Devices::Otos` construction line is unchanged text
       between the two builds.
-- [ ] A new CMake build option selects the `FAKE_OTOS` variant;
+- [x] A new CMake build option selects the `FAKE_OTOS` variant;
       documented (build instructions, e.g. in a README or the relevant
       `DESIGN.md`) as a compile-time-only choice.
-- [ ] A bench tour (multi-leg MOVE sequence) driven on the FAKE_OTOS
+- [x] A bench tour (multi-leg MOVE sequence) driven on the FAKE_OTOS
       build, on the stand, over the real serial link, shows `frame.otos`
       tracking the commanded path within a stated band (captured via
       `tlm_log.py` or equivalent, compared against encoder-derived
       pose), and the tour completes (closes) — recorded in this ticket.
-- [ ] `App::StateEstimator`'s fusion weights are confirmed unchanged
+- [x] `App::StateEstimator`'s fusion weights are confirmed unchanged
       (still 0.0) — this ticket makes `frame.otos` meaningful, it does
       NOT wire fusion into motion (sprint.md Scope, Out of Scope).
-- [ ] `src/firm/devices/DESIGN.md` gets a direct edit describing the new
+- [x] `src/firm/devices/DESIGN.md` gets a direct edit describing the new
       method and the `FAKE_OTOS` build seam (per this sprint's Design
       Overlay — not overlaid, ticket-direct-edit).
-- [ ] `src/firm/app/DESIGN.md`'s "120 (bench tour bring-up...)" paragraph
+- [x] `src/firm/app/DESIGN.md`'s "120 (bench tour bring-up...)" paragraph
       (already drafted in this sprint's design overlay) is
       verified/refined against the shipped code and applied to the
       canonical doc at sprint close.
@@ -163,3 +165,125 @@ paragraph) for the full rationale and drafted doc text.
 
 - `src/firm/devices/DESIGN.md` — direct edit (new method, build seam).
 - `src/firm/app/DESIGN.md` — apply this sprint's overlay diff.
+
+## Implementation Record
+
+**Doc-edit location gotcha (worth recording):** an early stale `/Volumes`
+filesystem read of the CANONICAL `src/firm/app/DESIGN.md` (before any
+edits this ticket) spuriously showed ticket 001's own ack-ring prose
+already present there — it is not; `git show HEAD:src/firm/app/DESIGN.md`
+confirms ticket 001 never touched canonical, only the sprint's OVERLAY
+copy (`clasi/sprints/120-.../design/DESIGN.md`, commit `2f1a2e9f`), per
+this sprint's own "Overlaid" doc-editing convention (sprint.md's Design
+Overlay section). This ticket's own §1/§2 doc edits for the Otos
+call-site reorder + `feedSyntheticSample()` therefore landed on that SAME
+overlay copy (matching ticket 1's own precedent), NOT canonical — an
+initial mistaken edit to canonical was caught and reverted (`git checkout
+--`) before committing. `src/firm/devices/DESIGN.md` (a DIFFERENT file,
+NOT overlaid this sprint per sprint.md's own list) was edited directly on
+canonical throughout, correctly, per its own "ticket-direct-edit" owner
+note.
+
+**Approach step 2 resolved:** `present()`/`connected()` are neither
+hardcoded true at construction nor left gated behind `begin()`'s real
+probe — `feedSyntheticSample()` itself sets `initialized_`/`connected_`
+true as its own side effect, the first time (and every time) it is
+called, mirroring how a real `tick()` read already sets `connected_`
+after a successful burst. `present()`/`connected()`'s own bodies are
+untouched (zero `#ifdef` inside either — byte-identical source in both
+builds); `Preamble`'s boot-time `begin()` probe still runs unchanged in a
+`FAKE_OTOS` build (harmless real I2C traffic this call site does not
+depend on) but is no longer load-bearing for `present()`/`connected()`
+once `RobotLoop::cycle()` starts calling `feedSyntheticSample()` every
+cycle — the more literal "zero real-chip dependency" reading, achieved
+without any `#ifdef` inside the two accessors themselves.
+
+**Call-site reorder:** to feed Otos "that SAME cycle's" `Odometry`
+pose/twist (not the previous cycle's), `odom_.integrate()`/`frame_.pose`
+staging is hoisted to run immediately BEFORE the (single) macro-gated
+Otos branch in `robot_loop.cpp`'s trailing pace block — previously it ran
+after. Verified side-effect-free for the real build: `Odometry::
+integrate()` reads neither `otos_` nor any `frame_.otos*` field (and vice
+versa), so the two operations commute; `stateEstimator_.update()` still
+runs after both, unaffected.
+
+**Build command (FAKE_OTOS variant):**
+```
+uv run python3 build.py --fw-only --fake-otos --clean
+```
+(`--fake-otos` always passes an explicit `-DFAKE_OTOS=ON`/`OFF` to cmake,
+so a stale `CMakeCache.txt` from a prior invocation never leaves the flag
+silently stuck; `--fw-only` skips the unaffected host-sim build.) Plain
+`uv run python3 build.py` / `just build-clean` (no `--fake-otos`) build
+the real, table variant — confirmed to compile identically before and
+after this ticket (`just build-clean` also rebuilds `libfirmware_host`,
+the HOST_BUILD sim library, which never defines `FAKE_OTOS`).
+
+## Hardware Verification Results (2026-07-23, robot "tovez",
+`/dev/cu.usbmodem2121102`, UID
+`9906360200052820a8fdb5e413abb276000000006e052820`)
+
+Deployed via `mbdeploy deploy <uid> --hex MICROBIT.hex` (run from the repo
+root — `MICROBIT.hex` lands at the repo root per `codal.json`'s
+`output_folder` default, NOT `build/`). APPROTECT auto-mass-erase fired on
+the first deploy attempt (expected/normal); the very next flash attempt
+succeeded cleanly. `twist_drive.py` 6/6 after flashing.
+
+**Otos tracks commanded motion (the core acceptance):**
+- Forward drive (300mm/s, 2s): `pose=(555,-119,-22.9deg)`
+  `otos=(555,-119,-22.9deg)` — otos.x climbed with the encoder pose,
+  exactly, not near-static.
+- 90° turn (omega=1.5rad/s): `pose=(548,-123,+67.2deg)`
+  `otos=(548,-123,+67.2deg)` — otos.heading changed ~90° with the
+  commanded turn, exactly matching pose.
+- `otos_present`/`otos_connected` both `True` throughout, on a build that
+  never depends on the real chip.
+- Confirmed the REAL (table) build's own physical symptom is UNCHANGED
+  (proving the real path genuinely untouched, not just via code diff):
+  same forward-drive command on the real build gave
+  `pose=(569,-58,-12.3deg)` (encoders counting) vs.
+  `otos=(47,-3,0.0deg)` (near-static) — the exact "useless on a stand"
+  behavior this ticket's own source issue describes.
+
+**Bench tour with retry (`src/tests/bench/fake_otos_tour_bench.py`,
+TOUR_1, 13 legs) — two full runs, both closed:**
+- Run A: 13/13 legs `completed`, `stopped_at=None` (CLOSED). 4 enqueue
+  retries fired across the tour (each recovered on attempt 2/4), 0 final
+  failures. `frame.otos` vs `frame.pose`: 435/435 polled frames
+  `otos_present=True`, max position deviation 0.00mm (band <5mm), max
+  heading deviation 0.00deg (band <2deg) — OVERALL PASS.
+- Run B (rerun for reproducibility): 13/13 legs `completed`, CLOSED. 4
+  retries, 0 final failures. 436/436 frames `otos_present=True`, 0.00mm /
+  0.00deg deviation — OVERALL PASS.
+- A third run (before the retry wrapper's single-consumer-queue bug was
+  fixed — see `fake_otos_tour_bench.py`'s own module docstring) genuinely
+  FAULTed at leg 6/13 on a 15s `Move.timeout`: root-caused via the 4-phase
+  debugging protocol to the retry wrapper's own `wait_for_ack()` call
+  destructively draining the shared TLM queue and silently discarding a
+  DIFFERENT, concurrently-active leg's own completion frame while
+  confirming a lookahead leg's enqueue ack — the same single-consumer race
+  `turn_prediction_capture.py`'s own docstring already diagnosed for the
+  sim. Fixed by making the wrapper the one buffering, non-lossy consumer
+  of the queue; confirmed via a targeted replay test reproducing the exact
+  interleaving, then reproduced clean on hardware twice (Runs A/B above).
+- Tour-wide position/heading closure (~750-1370mm/~120-155deg across
+  three runs) is real, uncalibrated dead-reckoning drift on this session's
+  untuned bench robot over a 13-leg tour — reported by the bench script,
+  deliberately NOT gated (motion-accuracy tuning is explicitly out of this
+  sprint's scope, sprint.md Out of Scope; `otos` reproduces this drift
+  IDENTICALLY to `pose` every frame, confirming it is genuine robot
+  behavior, not a synthetic-feed artifact).
+- Robot stopped and port released after every run
+  (`.claude/rules/hardware-bench-testing.md`).
+
+Real (table) firmware rebuilt and reflashed after the FAKE_OTOS session
+(`uv run python3 build.py --fw-only --clean` + `mbdeploy deploy`);
+`twist_drive.py` 6/6 confirms the robot is left in its default, real-OTOS
+state.
+
+**Suite:** `uv run python -m pytest` — 1393 passed, 2 skipped, 9 xfailed,
+2 xpassed, 0 failed (includes a new `devices_otos_harness.cpp` scenario
+for `feedSyntheticSample()`; every pre-existing scenario passes
+unmodified). Both the default/real ARM build (`python3 build.py --fw-only`)
+and the `FAKE_OTOS` variant compile cleanly; `just build-clean` (default
+variant + HOST_BUILD sim lib) unaffected.

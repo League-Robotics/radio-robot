@@ -191,13 +191,20 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
     `OtosReading` objects) plus the config Patch types -- every number
     transcribed by hand into wire_differential_harness.cpp's
     encode_telemetry/encode_telemetry_secondary/decode-CONFIG-case, cross-
-    checked here against the SAME protos/*.proto-generated pb2 descriptors."""
+    checked here against the SAME protos/*.proto-generated pb2 descriptors.
+    `acks` (field 14, 120's ADDITIVE ack ring) extends this set without
+    renumbering anything above it."""
     expected_telemetry_numbers = {
         "now": 1, "seq": 2, "mode": 3, "flags": 4, "ack_corr": 5, "ack_err": 6,
         "enc_left": 7, "enc_right": 8, "otos": 9, "pose": 10, "twist": 11, "line": 12, "color": 13,
+        "acks": 14,
     }
     actual_telemetry_numbers = {f.name: f.number for f in pb_telemetry.Telemetry.DESCRIPTOR.fields}
     assert actual_telemetry_numbers == expected_telemetry_numbers
+
+    expected_ack_entry_numbers = {"corr_id": 1, "err": 2}
+    actual_ack_entry_numbers = {f.name: f.number for f in pb_telemetry.AckEntry.DESCRIPTOR.fields}
+    assert actual_ack_entry_numbers == expected_ack_entry_numbers
 
     expected_encoder_reading_numbers = {"position": 1, "velocity": 2, "time": 3}
     actual_encoder_reading_numbers = {f.name: f.number for f in pb_telemetry.EncoderReading.DESCRIPTOR.fields}
@@ -602,6 +609,57 @@ def test_direction_b_telemetry_all_zero_defaults(harness):
     assert reply.WhichOneof("body") == "tlm"
     zero_shape = {key: 0 for key in _TELEMETRY_FULL_SHAPE}
     _assert_telemetry_matches_shape(reply.tlm, zero_shape)
+
+
+# ---------------------------------------------------------------------------
+# Ack ring (120, ADDITIVE -- bench-single-ack-slot-observability-collapses-
+# at-40ms.md). This is the FIRST schema in this tree to ever populate a
+# `kRepeatedMessage`-kind field on the wire (every other repeated field
+# this codebase declares is a repeated SCALAR, packed differently) --
+# these tests round-trip it through the REAL google.protobuf decoder, not
+# just this codec's own self-consistency, since a latent bug in
+# `encodeInto()`'s `kRepeatedMessage` case would otherwise go undetected
+# (both sides of a hand-built-expectation comparison would share the same
+# bug -- see app_telemetry_harness.cpp's own scenario 2 note).
+# ---------------------------------------------------------------------------
+
+
+def test_direction_b_telemetry_ack_ring_round_trips(harness):
+    """A firmware-encoded Telemetry carrying N ack-ring entries decodes,
+    via the REAL pb2 decoder, to a `tlm.acks` list of exactly N AckEntry
+    messages with the expected corr_id/err values, in push order (oldest
+    first) -- and the pre-existing scalar ack_corr/ack_err/flags stay
+    exactly what was asked for, independent of the ring."""
+    raw = encode_telemetry(harness, 50, acks=[(11, 0), (12, 2), (13, 0)])
+    reply = pb_envelope.ReplyEnvelope.FromString(raw)
+    assert reply.corr_id == 50
+    assert reply.WhichOneof("body") == "tlm"
+    got = [(e.corr_id, e.err) for e in reply.tlm.acks]
+    assert got == [(11, 0), (12, 2), (13, 0)]
+
+
+def test_direction_b_telemetry_ack_ring_full_depth_and_scalar_slot_independent(harness):
+    """A FULL 4-entry ring round-trips, AND the pre-existing scalar
+    ack_corr/ack_err/ack_fresh fields are UNCHANGED/independent of the ring
+    -- the additive-wire-change acceptance criterion, proven against the
+    real protobuf decoder, not just this codec's own encode path."""
+    raw = encode_telemetry(harness, 51, ack_corr=99, ack_err=0, flags=_FLAG_ACK_FRESH,
+                            acks=[(1, 0), (2, 0), (3, 4), (4, 0)])
+    reply = pb_envelope.ReplyEnvelope.FromString(raw)
+    assert reply.tlm.ack_corr == 99
+    assert reply.tlm.ack_err == 0
+    assert reply.tlm.flags == _FLAG_ACK_FRESH
+    got = [(e.corr_id, e.err) for e in reply.tlm.acks]
+    assert got == [(1, 0), (2, 0), (3, 4), (4, 0)]
+
+
+def test_direction_b_telemetry_ack_ring_empty_by_default(harness):
+    """No `acks` kwarg -> acks_count=0 -> the wire field is entirely absent
+    (a repeated field with zero elements emits no bytes) -- pb2 decodes an
+    empty list, not a list of zero-valued entries."""
+    raw = encode_telemetry(harness, 52)
+    reply = pb_envelope.ReplyEnvelope.FromString(raw)
+    assert list(reply.tlm.acks) == []
 
 
 # ---------------------------------------------------------------------------

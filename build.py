@@ -48,6 +48,7 @@ parser.add_option('-g', '--generate-docs', dest='generate_docs', action="store_t
 parser.add_option('-j', '--parallelism', dest='parallelism', action="store", help='Set the number of parallel threads to build with, if supported', default=10)
 parser.add_option('-n', '--lines', dest='detail_lines', action="store", help="Sets the number of detail lines to output (only relevant to --status)", default=3 )
 parser.add_option('--fw-only', dest='fw_only', action="store_true", help='Build ONLY the micro:bit firmware; skip the host-simulation library. By default build.py builds BOTH the bench firmware (MICROBIT.hex) and the full-simulation library (src/sim/build/libfirmware_host).', default=False)
+parser.add_option('--fake-otos', dest='fake_otos', action="store_true", help='Build the bench FAKE_OTOS variant (120-002): App::RobotLoop::cycle() feeds Devices::Otos a synthetic pose+twist derived from encoder kinematics instead of reading the real I2C chip. Firmware (MICROBIT.hex) ONLY -- never affects the host-sim build (src/sim uses its own OtosPlant, unrelated to this flag). Always passes an explicit -DFAKE_OTOS=ON/OFF to cmake so a stale CMakeCache.txt from a prior invocation can never leave this flag silently stuck.', default=False)
 
 (options, args) = parser.parse_args()
 
@@ -216,11 +217,12 @@ def _host_sim_dir():
     return os.path.join(root, "src", "sim")
 
 
-def print_build_summary(fw_only):
+def print_build_summary(fw_only, fake_otos=False):
     """Print a one-glance summary so there is no guessing which versions exist."""
     ver = _project_version()
     print("\n=== build summary ===")
-    print("  firmware hex   v%s   -> MICROBIT.hex" % ver)
+    variant = "  (FAKE_OTOS bench variant)" if fake_otos else ""
+    print("  firmware hex   v%s   -> MICROBIT.hex%s" % (ver, variant))
     if fw_only:
         print("  host sim lib   (skipped: --fw-only)")
     elif not os.path.isdir(_host_sim_dir()):
@@ -240,7 +242,18 @@ if not options.test_platform:
         generate_docs()
         exit(0)
 
-    build(options.clean, verbose=options.verbose, parallelism=options.parallelism)
+    # FAKE_OTOS (120-002): always pass an EXPLICIT -DFAKE_OTOS=ON/OFF, never
+    # merely omit the flag when off -- option()'s CMake cache variable would
+    # otherwise stay stuck at whatever value a PRIOR invocation set in this
+    # same build/ directory's CMakeCache.txt (the CODAL build is
+    # out-of-source but persistent; `--clean` only cleans build artifacts,
+    # it does not delete/reconfigure CMakeCache.txt). This makes plain
+    # `build.py`/`build.py --clean` (no --fake-otos) deterministically
+    # produce the real, table build every time, regardless of build/'s
+    # prior state.
+    fake_otos_arg = "-DFAKE_OTOS={}".format("ON" if options.fake_otos else "OFF")
+    build(options.clean, verbose=options.verbose, parallelism=options.parallelism,
+          extra_cmake_args=fake_otos_arg)
 
     # Dev build = BOTH versions. After the bench firmware (MICROBIT.hex), also
     # build the full-simulation library (libfirmware_host, HOST_BUILD) so a single
@@ -259,7 +272,7 @@ if not options.test_platform:
         else:
             print("\nbuild.py: src/sim/ absent -- skipping host-sim build (077-001)")
 
-    print_build_summary(options.fw_only)
+    print_build_summary(options.fw_only, options.fake_otos)
     exit(0)
 
 for json_obj in test_json:

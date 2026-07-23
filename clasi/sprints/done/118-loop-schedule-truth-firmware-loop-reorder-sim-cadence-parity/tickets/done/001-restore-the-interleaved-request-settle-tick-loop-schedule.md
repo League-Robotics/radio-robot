@@ -176,6 +176,28 @@ runAndWait(kPace, {
       `kFlagFaultI2CSafetyNet = 1u << 6` (bit 6, matching this ticket's own
       Description above) — the issue's "bit 0" appears to be a typo, flagged
       here for whoever runs the phase-B bench checklist.
+      **CORRECTION (120-003, phase-B bench session, 2026-07-23, pyOCD/DBG
+      trace against real hardware):** the "I2C fault bit clear while
+      driving" prediction above (and the issue's own Verification step 4,
+      `clasi/sprints/done/118-loop-schedule-truth-firmware-loop-reorder-sim-cadence-parity/issues/done/restore-the-interleaved-request-settle-tick-loop-schedule.md`)
+      did NOT hold: `flags` bit 6 (`kFlagFaultI2CSafetyNet`) measured set
+      on 45/45 idle frames and 23/23 driving frames post-restore. This
+      ticket's own schedule fix is NOT at fault and needs no further
+      change — 120-003's on-chip trace of the raw
+      `MicroBitI2CBus::clearanceSafetyNetCount()` counter proved the
+      motor's own split-phase `requestEncoder()`/`collectEncoder()` path
+      (the thing this ticket's `kSettle`/`kClear` restore actually
+      protects) contributes ZERO safety-net trips in either an idle or a
+      driving window (exact 1:1 accounting against `Devices::Otos`'s own
+      transaction count attributes 100% of the observed trips to
+      `Devices::Otos::readPositionVelocity()`'s own self-contained
+      register-read pattern, unrelated to this ticket's loop-schedule
+      restore and unaffected by it — see 120-003's own ticket record and
+      `src/firm/app/DESIGN.md`'s `kFlagFaultI2CSafetyNet` entry for the
+      full trace). The prediction here was itself an unconfirmed guess
+      about a bit this ticket's own author never traced against real
+      hardware timing — 120-003 was filed specifically to stop repeating
+      that pattern.
 
 ## Testing
 

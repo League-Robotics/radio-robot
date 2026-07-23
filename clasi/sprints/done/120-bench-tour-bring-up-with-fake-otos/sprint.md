@@ -1,7 +1,7 @@
 ---
 id: '120'
 title: Bench tour bring-up with fake OTOS
-status: planning-docs
+status: closed
 branch: sprint/120-bench-tour-bring-up-with-fake-otos
 worktree: false
 use-cases:

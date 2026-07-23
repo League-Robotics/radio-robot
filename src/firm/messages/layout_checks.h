@@ -70,5 +70,7 @@ static_assert(std::is_standard_layout<Pose2D>::value,
               "msg::Pose2D must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<BodyTwist3>::value,
               "msg::BodyTwist3 must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<AckEntry>::value,
+              "msg::AckEntry must be standard-layout for offsetof-based field tables");
 
 }  // namespace msg

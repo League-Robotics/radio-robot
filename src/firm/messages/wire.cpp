@@ -383,8 +383,9 @@ constexpr FieldDesc kFields_Telemetry[] = {
     { .number = 11, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kMessage, .scalarType = ScalarType::kNone, .offset = offsetof(Telemetry, twist), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 18, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // twist
     { .number = 12, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kUint32, .offset = offsetof(Telemetry, line), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // line
     { .number = 13, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kUint32, .offset = offsetof(Telemetry, color), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // color
+    { .number = 14, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kRepeatedMessage, .scalarType = ScalarType::kNone, .offset = offsetof(Telemetry, acks_), .offset2 = offsetof(Telemetry, acks_count), .oneofKindValue = 0, .cap = 4, .tableIndex = 19, .elemStride = sizeof(AckEntry), .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // acks
 };
-constexpr MessageTable kTable_Telemetry = { kFields_Telemetry, 13 };
+constexpr MessageTable kTable_Telemetry = { kFields_Telemetry, 14 };
 
 constexpr FieldDesc kFields_DrivetrainConfigPatch[] = {
     { .number = 1, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kOpt, .scalarType = ScalarType::kFloat, .offset = offsetof(DrivetrainConfigPatch, trackwidth.has), .offset2 = offsetof(DrivetrainConfigPatch, trackwidth.val), .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // trackwidth
@@ -477,6 +478,12 @@ constexpr FieldDesc kFields_BodyTwist3[] = {
 };
 constexpr MessageTable kTable_BodyTwist3 = { kFields_BodyTwist3, 3 };
 
+constexpr FieldDesc kFields_AckEntry[] = {
+    { .number = 1, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kUint32, .offset = offsetof(AckEntry, corr_id), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMax, .minVal = 0.0f, .maxVal = 65535.0f, .absMaxVal = 0.0f },  // corr_id
+    { .number = 2, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kUint32, .offset = offsetof(AckEntry, err), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMax, .minVal = 0.0f, .maxVal = 7.0f, .absMaxVal = 0.0f },  // err
+};
+constexpr MessageTable kTable_AckEntry = { kFields_AckEntry, 2 };
+
 constexpr MessageTable kMessageTables[] = {
     kTable_CommandEnvelope,  // 0
     kTable_ReplyEnvelope,  // 1
@@ -497,6 +504,7 @@ constexpr MessageTable kMessageTables[] = {
     kTable_OtosReading,  // 16
     kTable_Pose2D,  // 17
     kTable_BodyTwist3,  // 18
+    kTable_AckEntry,  // 19
 };
 
 // --- Generic recursive decode/encode walkers ------------------------------

@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 filed: 2026-07-23
 filed_by: team-lead (phase-B bench session, v0.20260723.2 on the stand)
 related:

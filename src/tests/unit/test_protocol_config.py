@@ -57,15 +57,15 @@ class _FakeFastConn:
     scripts, defaulting to ``None`` -- a bounded-timeout-with-no-match).
     ``config()`` calls nothing else on ``self._conn``.
 
-    115-003 frame v2: ``wait_for_ack()`` now returns the matching raw
-    ``telemetry_pb2.Telemetry`` frame (its ``ack_corr``/``ack_err`` are the
-    single ack slot), not a ``telemetry_pb2.AckEntry`` -- that message type
-    no longer exists (the depth-3 ack ring is deleted)."""
+    120 (ack ring): ``wait_for_ack()`` now returns the matching raw
+    ``telemetry_pb2.AckEntry`` RING ENTRY (``corr_id``/``err``), not the
+    whole ``Telemetry`` frame it rode in on -- see
+    ``SerialConnection.wait_for_ack()``'s own docstring."""
 
     def __init__(self) -> None:
         self.sent: list["envelope_pb2.CommandEnvelope"] = []
         self._next_corr_id = 0
-        self.ack_result: "telemetry_pb2.Telemetry | None" = None
+        self.ack_result: "telemetry_pb2.AckEntry | None" = None
 
     def send_envelope_fast(self, envelope: "envelope_pb2.CommandEnvelope") -> int:
         self._next_corr_id += 1
@@ -73,7 +73,7 @@ class _FakeFastConn:
         self.sent.append(envelope)
         return self._next_corr_id
 
-    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.Telemetry | None":
+    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.AckEntry | None":
         return self.ack_result
 
 
@@ -249,17 +249,15 @@ def test_config_invalid_call_sends_nothing():
 
 
 # ---------------------------------------------------------------------------
-# 3. config() -> wait_for_ack() round trip (103-009's existing single-ack-
-#    slot matcher; no new matching logic added by this ticket). 104-003
-#    promoted the actual match/timeout algorithm out of NezhaProtocol into
-#    SerialConnection.wait_for_ack() -- these tests now script the fake
-#    connection's own wait_for_ack() (a raw telemetry_pb2.Telemetry frame or
-#    None) rather than a batch of TLMFrame polls. 115-003 frame v2 replaced
-#    the depth-3 AckEntry ring with a single ack_corr/ack_err slot -- the
-#    fake now scripts a Telemetry frame carrying that slot, not a
-#    telemetry_pb2.AckEntry (that message type no longer exists). The
-#    algorithm's own scenario coverage (exact match, slot-overwrite,
-#    bounded timeout) lives in src/tests/unit/test_serial_conn_ack_ring.py.
+# 3. config() -> wait_for_ack() round trip (103-009's existing ack matcher,
+#    ring-based since 120; no new matching logic added by THIS file's own
+#    tickets). 104-003 promoted the actual match/timeout algorithm out of
+#    NezhaProtocol into SerialConnection.wait_for_ack() -- these tests
+#    script the fake connection's own wait_for_ack() (a raw
+#    telemetry_pb2.AckEntry ring entry, or None on timeout) rather than a
+#    batch of TLMFrame polls. The algorithm's own scenario coverage (exact
+#    match, ring saturation, bounded timeout) lives in
+#    src/tests/unit/test_serial_conn_ack_ring.py.
 # ---------------------------------------------------------------------------
 
 
@@ -273,9 +271,7 @@ def test_config_corr_id_round_trips_through_wait_for_ack():
     proto = NezhaProtocol(conn)
     corr_id = proto.config(tw=128.0)
 
-    conn.ack_result = telemetry_pb2.Telemetry(
-        flags=1 << 5,  # ack_fresh
-        ack_corr=corr_id, ack_err=envelope_pb2.ERR_UNIMPLEMENTED)
+    conn.ack_result = telemetry_pb2.AckEntry(corr_id=corr_id, err=envelope_pb2.ERR_UNIMPLEMENTED)
 
     ack = proto.wait_for_ack(corr_id, timeout=200)
 
@@ -417,8 +413,7 @@ def test_otos_config_corr_id_round_trips_through_wait_for_ack():
     proto = NezhaProtocol(conn)
     corr_id = proto.otos_config(linear_scale=1.05)
 
-    conn.ack_result = telemetry_pb2.Telemetry(
-        flags=1 << 5, ack_corr=corr_id, ack_err=0)
+    conn.ack_result = telemetry_pb2.AckEntry(corr_id=corr_id, err=0)
 
     ack = proto.wait_for_ack(corr_id, timeout=200)
 
@@ -542,8 +537,7 @@ def test_estimator_config_corr_id_round_trips_through_wait_for_ack():
     proto = NezhaProtocol(conn)
     corr_id = proto.estimator_config(weight_heading_otos=0.4)
 
-    conn.ack_result = telemetry_pb2.Telemetry(
-        flags=1 << 5, ack_corr=corr_id, ack_err=0)
+    conn.ack_result = telemetry_pb2.AckEntry(corr_id=corr_id, err=0)
 
     ack = proto.wait_for_ack(corr_id, timeout=200)
 

@@ -530,6 +530,19 @@ void scenarioEncodeTelemetryFlagsAckAndReadings() {
   reply.corr_id = 11;
   reply.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
   msg::Telemetry& t = reply.body.tlm;
+  // `body`'s own `= {}` default-member-initializer only value-initializes
+  // the union's FIRST alternative (`ok`, an `Ack`) -- `tlm` (the THIRD
+  // alternative, far larger) is left with INDETERMINATE bytes past
+  // wherever `Ack`'s own 12 bytes end (the exact hazard `decode()`'s own
+  // `std::memset` fix -- see this file's own `decode(CommandEnvelope&)`
+  // engine-code precedent -- exists to close on the decode side; this is
+  // the identical hazard on the encode/hand-construct side). Confirmed by
+  // ASan (120): an uninitialized `acks_count` produced a garbage loop
+  // bound in `encodeInto()`'s `kRepeatedMessage` case, reading past `t`'s
+  // own bounds. Plain assignment from a fresh, fully-defaulted temporary
+  // (NOT the union's own in-place `{}` init) zeroes every field
+  // correctly, sidestepping the union-specific hazard entirely.
+  t = msg::Telemetry{};
   t.now = 5000;
   t.seq = 42;
   t.flags = 0x2021;  // arbitrary nonzero bit pattern spanning status/fault/event groups
@@ -616,6 +629,10 @@ void scenarioEncodeOversizedBufferReturnsZero() {
   reply.corr_id = 1;
   reply.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
   msg::Telemetry& t = reply.body.tlm;
+  // See scenarioEncodeTelemetryFlagsAckAndReadings()'s own comment for why
+  // this assignment (not the union's own in-place `= {}` init) is needed
+  // before touching any `tlm` field by hand.
+  t = msg::Telemetry{};
   t.flags = 0x1;
   t.ack_corr = 1;
   t.ack_err = 0;

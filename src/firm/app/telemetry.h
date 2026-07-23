@@ -62,18 +62,49 @@ namespace App {
 //                                    safety-net trip
 //                                    (Devices::I2CBus::
 //                                    clearanceSafetyNetCount() > 0).
-//                                    Bench-characterized as a boot-time
-//                                    ONE-SHOT latch, not a continuous/live
-//                                    indicator: it fires once, coincident
-//                                    with bit 11 (kFlagEventBootReady)
-//                                    first setting, and never re-fires. A
-//                                    healthy robot can show this bit set
-//                                    permanently after boot with no
-//                                    ongoing problem -- do NOT read a
-//                                    steady 1 as live evidence of a
-//                                    defect; only a bit that flips DURING
-//                                    driving (not just once at boot) is
-//                                    actionable.
+//                                    Bench-characterized (120-003,
+//                                    pyOCD/DBG trace against real
+//                                    hardware, 2026-07-23) as a
+//                                    CONTINUOUSLY LIVE, monotonically
+//                                    growing counter, NOT a boot-time
+//                                    one-shot latch (a prior claim here
+//                                    was wrong -- falsified by direct
+//                                    on-chip measurement: the raw count
+//                                    keeps climbing for as long as the
+//                                    robot runs, idle or driving, at a
+//                                    rate matching Devices::Otos's own
+//                                    ~20ms read cadence 1:1). Root cause:
+//                                    Devices::Otos::readPositionVelocity()
+//                                    (and its sibling register helpers)
+//                                    issue a register-select write()
+//                                    immediately followed by a read() on
+//                                    the SAME device with no intervening
+//                                    loop-scheduled gap, so
+//                                    waitForClearance() trips on every
+//                                    single Otos burst read,
+//                                    unconditionally -- this has nothing
+//                                    to do with the loop schedule or
+//                                    118-001's kSettle/kClear restore
+//                                    (confirmed on hardware: the motor's
+//                                    own split-phase request/collect,
+//                                    which DOES cross a real scheduled
+//                                    gap, contributes ZERO trips in
+//                                    either an idle or a driving window).
+//                                    A healthy robot with the real OTOS
+//                                    present therefore shows this bit set
+//                                    on nearly every frame, idle AND
+//                                    driving, by design -- do NOT read a
+//                                    steady 1 as evidence of a motor/
+//                                    loop-timing defect. The bit's CURRENT
+//                                    derivation (never reset) also cannot
+//                                    surface a genuine FUTURE motor-side
+//                                    regression, since it saturates to 1
+//                                    within about a second of boot and
+//                                    stays there -- see
+//                                    clasi/issues/i2c-safety-net-bit-conflates-otos-settle-wait-with-loop-schedule-health.md
+//                                    for the follow-up fix options (a
+//                                    stakeholder-level design choice, not
+//                                    guessed here).
 //   bit 7  (kFlagFaultWedgeLatch)   -- NezhaMotor/I2CBus wedge-latch
 //                                    detected (Devices::MotorArmor::
 //                                    wedged()).
@@ -149,6 +180,18 @@ constexpr uint32_t kPrimaryPeriod = 40;  // [ms] ~25 Hz, matches robot_loop.cpp'
 // refreshing at a useful bench-diagnostic rate.
 constexpr uint32_t kSecondaryPeriod = 200;  // [ms] ~5 Hz
 
+// Ack ring depth (120, ack-ring ticket -- bench-single-ack-slot-
+// observability-collapses-at-40ms.md). MUST match telemetry.proto's
+// Telemetry.acks (max_count) exactly -- checked by a static_assert against
+// the generated msg::Telemetry::acks_[] array width in telemetry.cpp, so a
+// future edit to either side without the other fails the build rather than
+// silently truncating the ring. Chosen (not merely "some depth"): the
+// issue's own suggested "e.g. 4", sized against the queue's 5-deep
+// ERR_FULL ceiling by this ticket's own rapid-fire test -- see
+// sprint.md's Architecture Decision 1 for the full alternatives-considered
+// rationale.
+constexpr uint8_t kAckRingDepth = 4;
+
 class Telemetry {
  public:
   // Primary-frame snapshot -- staged by RobotLoop's updateTlm()/kPace block
@@ -211,12 +254,14 @@ class Telemetry {
   void setFlag(uint32_t bit, bool active);
   uint32_t flags() const { return flags_; }
 
-  // ack -- pushes the single ack slot (115-005: replaces the old depth-3
-  // ack ring -- ack-depth-1 is a stakeholder-accepted tradeoff, rare at
-  // bench rates, wait_for_ack timeout+retry covers it). errCode == 0 means
-  // OK; nonzero is the msg::ErrCode value. Marks the ack "fresh" so the
-  // VERY NEXT emitPrimary() call sets flags bit 5 (kFlagAckFresh) and then
-  // clears the fresh marker -- a one-shot pulse, not a level condition.
+  // ack -- pushes BOTH the single "freshest ack" slot (115-005's
+  // ack_corr_/ack_err_ pair, unchanged behavior -- errCode == 0 means OK;
+  // nonzero is the msg::ErrCode value; marks the ack "fresh" so the VERY
+  // NEXT emitPrimary() call sets flags bit 5 (kFlagAckFresh) and then
+  // clears the fresh marker, a one-shot pulse, not a level condition) AND
+  // the bounded ack ring (120, ADDITIVE -- see kAckRingDepth's own comment
+  // below and telemetry.proto's Telemetry.acks doc comment for the
+  // rationale). Every ack() call is one push to both.
   void ack(uint32_t corrId, uint32_t errCode);
 
   // Cadence-gated: call once per loop cycle with the current time [ms]
@@ -263,6 +308,7 @@ class Telemetry {
   bool secondaryDue(uint32_t now) const;
   void emitPrimary(uint32_t now);
   void emitSecondary(uint32_t now);
+  void pushAckRing(uint32_t corrId, uint32_t errCode);
 
   Comms& comms_;
   Transport& serialLink_;
@@ -276,6 +322,20 @@ class Telemetry {
   uint32_t ackCorr_ = 0;
   uint32_t ackErr_ = 0;
   bool ackPending_ = false;  // true iff ack() was called since the last emitPrimary()
+
+  // Bounded ack ring (120) -- a plain circular buffer of the last
+  // kAckRingDepth pushes, oldest-evicted-first, persisting across emit()
+  // calls exactly like every other Frame field (Telemetry always carries
+  // the last staged snapshot, not a diff -- app/DESIGN.md Sec 3's own
+  // invariant, extended to this new field). ackRingHead_ indexes the
+  // OLDEST valid entry; ackRingCount_ (0..kAckRingDepth) is how many of
+  // ackRing_[]'s kAckRingDepth slots currently hold a real, pushed entry.
+  // Reused msg::AckEntry (the generated wire type) directly as storage --
+  // the same "stage the wire-shaped struct itself" pattern Frame already
+  // uses for encLeft/encRight/otos (msg::EncoderReading/msg::OtosReading).
+  msg::AckEntry ackRing_[kAckRingDepth]{};
+  uint8_t ackRingHead_ = 0;
+  uint8_t ackRingCount_ = 0;
 
   uint32_t seq_ = 0;  // increments once per SENT primary frame
 

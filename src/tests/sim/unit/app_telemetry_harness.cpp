@@ -177,6 +177,10 @@ void scenarioPrimaryFrameAssemblyMatchesIndependentEncode() {
   telemetry.ack(7, 0);
 
   telemetry.emit(1234);  // first call -- always sends primary (boot, no arming)
+  // (120) ack(7, 0) above ALSO pushed onto the bounded ack ring -- see
+  // this file's own scenario 2 below for the ring's push/evict/persist
+  // behavior in isolation; here it's just one entry riding alongside
+  // every other AC-listed field.
 
   checkU64Eq(serialFake.sent().size(), 1, "exactly one serial send() for the primary frame");
   checkU64Eq(radioFake.sent().size(), 1, "exactly one radio send() for the primary frame");
@@ -198,6 +202,8 @@ void scenarioPrimaryFrameAssemblyMatchesIndependentEncode() {
   expected.twist = {150.0f, 0.0f, 0.75f};
   expected.line = 0x04030201u;
   expected.color = 0x0A090807u;
+  expected.acks_count = 1;
+  expected.acks_[0] = {7, 0};
 
   msg::ReplyEnvelope env;
   env.corr_id = 0;
@@ -215,16 +221,19 @@ void scenarioPrimaryFrameAssemblyMatchesIndependentEncode() {
 }
 
 // ===========================================================================
-// 2. Single ack slot (115-005: replaces the old depth-3 ring): a SECOND
-//    ack() call before the next emit() overwrites the first -- only the
-//    LATEST corr/err survives (ack-depth-1 tradeoff, stakeholder-accepted).
+// 2. Single "freshest ack" slot (115-005, UNCHANGED by 120): a SECOND ack()
+//    call before the next emit() overwrites the first -- only the LATEST
+//    corr/err survives there (ack-depth-1 tradeoff, stakeholder-accepted).
 //    ack_fresh (flags bit 5) is a ONE-SHOT pulse: set on the frame right
 //    after an ack() call, cleared again on the FOLLOWING frame if no new
-//    ack() arrived in between.
+//    ack() arrived in between. The bounded ack ring (120, ADDITIVE) does
+//    NOT overwrite on the same collision -- BOTH pushes land in `acks`
+//    (oldest first) and persist across both frames below, unlike the
+//    single slot it rides alongside.
 // ===========================================================================
 
 void scenarioSingleAckSlotOverwritesAndAckFreshIsOneShot() {
-  beginScenario("ack(): single slot overwrites on a same-period collision; ack_fresh is a one-shot pulse");
+  beginScenario("ack(): single slot overwrites on a same-period collision; ack ring keeps both; ack_fresh is a one-shot pulse");
 
   FakeTransport serialFake;
   FakeTransport radioFake;
@@ -249,6 +258,11 @@ void scenarioSingleAckSlotOverwritesAndAckFreshIsOneShot() {
   expectedFirst.flags = App::kFlagAckFresh;
   expectedFirst.ack_corr = 4;
   expectedFirst.ack_err = static_cast<uint32_t>(msg::ErrCode::ERR_BADARG);
+  // Ring (120): BOTH pushes survive, oldest (corr=1) first -- unlike the
+  // single slot above, neither evicts the other at depth 2 of 4.
+  expectedFirst.acks_count = 2;
+  expectedFirst.acks_[0] = {1, 0};
+  expectedFirst.acks_[1] = {4, static_cast<uint32_t>(msg::ErrCode::ERR_BADARG)};
 
   msg::ReplyEnvelope envFirst;
   envFirst.corr_id = 0;
@@ -259,7 +273,8 @@ void scenarioSingleAckSlotOverwritesAndAckFreshIsOneShot() {
 
   if (!serialFake.sent().empty()) {
     checkStrEq(serialFake.sent()[0], expectedFirstLine,
-               "first frame carries only the LATEST ack (corr=4) -- corr=1 was overwritten, not queued");
+               "first frame's single slot carries only the LATEST ack (corr=4, corr=1 overwritten) -- "
+               "but its ack RING carries BOTH");
   }
 
   msg::Telemetry expectedSecond;
@@ -267,6 +282,12 @@ void scenarioSingleAckSlotOverwritesAndAckFreshIsOneShot() {
   expectedSecond.seq = 1;
   expectedSecond.ack_corr = 4;  // ack_corr/ack_err values persist -- only ack_fresh clears
   expectedSecond.ack_err = static_cast<uint32_t>(msg::ErrCode::ERR_BADARG);
+  // Ring (120): UNCHANGED from frame #1 -- no new ack() call landed, and
+  // the ring (like every other Frame field) persists its last-staged
+  // snapshot across an emit() that doesn't touch it, rather than clearing.
+  expectedSecond.acks_count = 2;
+  expectedSecond.acks_[0] = {1, 0};
+  expectedSecond.acks_[1] = {4, static_cast<uint32_t>(msg::ErrCode::ERR_BADARG)};
 
   msg::ReplyEnvelope envSecond;
   envSecond.corr_id = 0;
@@ -276,7 +297,8 @@ void scenarioSingleAckSlotOverwritesAndAckFreshIsOneShot() {
 
   if (serialFake.sent().size() == 2) {
     checkStrEq(serialFake.sent()[1], expectedSecondLine,
-               "second frame clears ack_fresh -- no new ack() call landed since the first frame");
+               "second frame clears ack_fresh -- no new ack() call landed since the first frame -- "
+               "but the ack ring still carries both prior pushes, unchanged");
   }
 }
 
@@ -476,13 +498,21 @@ void scenarioSecondaryNeverCoincidesWithPrimaryAndDoesNotDelayIt() {
 // ===========================================================================
 // 5. Frame-size: a fully-populated primary frame encodes at or under the
 //    rewritten frame's own recorded worst case (telemetry.proto's header
-//    comment, sprint 115 ticket 003: 144 B standalone / 153 B as a
-//    ReplyEnvelope.tlm arm -- smaller than the pre-rewrite 179 B while
-//    carrying strictly more signal).
+//    comment: 144 B standalone / 153 B as a ReplyEnvelope.tlm arm at
+//    sprint 115 ticket 003 -- smaller than the pre-115 179 B while
+//    carrying strictly more signal). 120's ack ring (a full 4-entry ring,
+//    each entry at ITS OWN declared worst case -- corr_id up to 65535,
+//    err up to 7) pushes the true worst case to 179 B standalone / 185 B
+//    as a ReplyEnvelope.tlm arm (wire.h's kReplyEnvelopeMaxEncodedSize,
+//    checked against the 186-byte envelope budget by that file's own
+//    static_assert) -- exercised here at FULL ring depth, not just one
+//    entry, specifically because this is the first schema in this tree to
+//    ever populate a `kRepeatedMessage`-kind field (every other repeated
+//    field this codebase declares is a repeated SCALAR).
 // ===========================================================================
 
 void scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase() {
-  beginScenario("a fully-populated primary frame's encoded size is <= the rewritten frame's recorded 153 B worst case");
+  beginScenario("a fully-populated primary frame (full ack ring included) fits the rewritten frame's recorded 185 B worst case");
 
   msg::Telemetry tlm;
   tlm.now = 0xFFFFFFFFu;
@@ -498,6 +528,12 @@ void scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase() {
   tlm.twist = {150.0f, -0.5f, 0.75f};
   tlm.line = 0xFFFFFFFFu;
   tlm.color = 0xFFFFFFFFu;
+  // Full ring (120) at its own declared worst case per entry -- proves the
+  // TRUE worst case (not just one entry) still fits the budget below.
+  tlm.acks_count = App::kAckRingDepth;
+  for (uint8_t e = 0; e < App::kAckRingDepth; ++e) {
+    tlm.acks_[e] = {0xFFFFu, 7u};
+  }
 
   msg::ReplyEnvelope env;
   env.corr_id = 0xFFFFFFFFu;
@@ -688,6 +724,111 @@ void scenarioSecondaryNotStarvedWhenCallPeriodExceedsPrimaryPeriod() {
             "occasional single-cycle delay, not a stall");
 }
 
+// ===========================================================================
+// 9. Ack ring (120) push/evict/ordering, in isolation: pushing more than
+//    kAckRingDepth (4) acks before any emit() evicts the OLDEST first,
+//    keeping only the most recent kAckRingDepth entries, oldest-to-newest
+//    order preserved in the wire field -- the ticket's own rapid-fire
+//    acceptance property, exercised at the Telemetry-unit level (the
+//    bench's own hardware rapid-fire test, src/tests/bench/
+//    move_protocol_bench.py, exercises the same property end-to-end over
+//    the real link).
+// ===========================================================================
+
+void scenarioAckRingEvictsOldestPastDepthAndPreservesOrder() {
+  beginScenario("ack(): pushing 5 acks past depth 4 evicts the OLDEST (corr=1), keeps 2..5 in oldest-to-newest order");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  App::Telemetry telemetry(comms, serialFake, radioFake);
+
+  checkU64Eq(App::kAckRingDepth, 4, "this scenario assumes the sprint's own chosen depth (4) -- update if it changes");
+
+  telemetry.ack(1, 0);
+  telemetry.ack(2, 0);
+  telemetry.ack(3, 0);
+  telemetry.ack(4, 0);
+  telemetry.ack(5, 0);  // 5th push -- ring is depth 4, evicts corr=1
+
+  telemetry.emit(0);
+
+  msg::Telemetry expected;
+  expected.now = 0;
+  expected.seq = 0;
+  expected.flags = App::kFlagAckFresh;
+  expected.ack_corr = 5;  // single "freshest ack" slot still tracks only the latest, unaffected by the ring
+  expected.ack_err = 0;
+  expected.acks_count = 4;
+  expected.acks_[0] = {2, 0};
+  expected.acks_[1] = {3, 0};
+  expected.acks_[2] = {4, 0};
+  expected.acks_[3] = {5, 0};
+
+  msg::ReplyEnvelope env;
+  env.corr_id = 0;
+  env.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
+  env.body.tlm = expected;
+  std::string expectedLine = armorReply(env);
+  checkTrue(!expectedLine.empty(), "independent encode+armor of the expected frame succeeds");
+  if (!serialFake.sent().empty()) {
+    checkStrEq(serialFake.sent()[0], expectedLine,
+               "ring holds exactly the last 4 pushes (2,3,4,5), oldest (1) evicted, oldest-to-newest wire order");
+  }
+}
+
+// ===========================================================================
+// 10. Ack ring (120) persists its snapshot across emit() calls with no new
+//     ack() in between -- the same "last staged snapshot, not a diff"
+//     invariant every other Frame field already has (app/DESIGN.md Sec 3),
+//     extended to this new field. Also confirms a ring with FEWER than
+//     kAckRingDepth entries reports the correct (small) acks_count, not a
+//     padded/zero-filled kAckRingDepth.
+// ===========================================================================
+
+void scenarioAckRingPersistsAcrossEmitsBelowFullDepth() {
+  beginScenario("ack(): a 2-entry ring (below depth 4) reports acks_count=2 and persists unchanged across a "
+                "later emit() with no new ack()");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  App::Telemetry telemetry(comms, serialFake, radioFake);
+
+  telemetry.ack(10, 0);
+  telemetry.ack(20, static_cast<uint32_t>(msg::ErrCode::ERR_FULL));
+
+  telemetry.emit(0);    // frame #1
+  telemetry.emit(100);  // frame #2 -- no new ack() call
+
+  checkU64Eq(serialFake.sent().size(), 2, "two successive primary frames were sent");
+
+  for (int f = 0; f < 2; ++f) {
+    msg::Telemetry expected;
+    expected.now = (f == 0) ? 0u : 100u;
+    expected.seq = static_cast<uint32_t>(f);
+    if (f == 0) expected.flags = App::kFlagAckFresh;
+    expected.ack_corr = 20;
+    expected.ack_err = static_cast<uint32_t>(msg::ErrCode::ERR_FULL);
+    expected.acks_count = 2;
+    expected.acks_[0] = {10, 0};
+    expected.acks_[1] = {20, static_cast<uint32_t>(msg::ErrCode::ERR_FULL)};
+
+    msg::ReplyEnvelope env;
+    env.corr_id = 0;
+    env.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
+    env.body.tlm = expected;
+    std::string expectedLine = armorReply(env);
+    if (static_cast<size_t>(f) < serialFake.sent().size()) {
+      checkStrEq(serialFake.sent()[static_cast<size_t>(f)], expectedLine,
+                 f == 0 ? "frame #1: 2-entry ring, acks_count=2, not padded to depth 4"
+                        : "frame #2: ring unchanged (no new ack()), still 2 entries");
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -699,6 +840,8 @@ int main() {
   scenarioMeasuredCadenceReport();
   scenarioMalformedFrameSetsCommsMalformedFlagBit();
   scenarioSecondaryNotStarvedWhenCallPeriodExceedsPrimaryPeriod();
+  scenarioAckRingEvictsOldestPastDepthAndPreservesOrder();
+  scenarioAckRingPersistsAcrossEmitsBelowFullDepth();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Telemetry scenarios passed\n");

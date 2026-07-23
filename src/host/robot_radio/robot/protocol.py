@@ -107,29 +107,32 @@ _DRIVE_MODE_CHAR = {
 
 @dataclass(frozen=True)
 class AckEntry:
-    """The single ack slot from a ``Telemetry`` push (``telemetry.proto``
-    ``Telemetry.ack_corr``/``ack_err``), adapted onto a plain host-side
-    shape the same way ``TLMFrame`` adapts ``Telemetry`` itself.
+    """One command's ack outcome, adapted onto a plain host-side shape the
+    same way ``TLMFrame`` adapts ``Telemetry`` itself — either the single
+    "freshest ack" scalar slot (``Telemetry.ack_corr``/``ack_err``,
+    ``from_telemetry()`` below) or one entry from the bounded ack ring
+    (``Telemetry.acks``, 120, ``from_ring_entry()`` below).
 
     Reports the outcome of ONE previously-sent command (matched by
-    ``corr_id``) via the single ack slot riding inside every ``Telemetry``
-    frame (103-009 Decision 2's "telemetry-only return path", narrowed from
-    a depth-3 ring to one slot by 115-003) — the P4 wire has no per-command
-    synchronous ``ReplyEnvelope`` for ``move``/``stop``/``config``, so this
-    is the ONLY place their outcome is reported.
-
-    115-003 frame v2: the depth-3 ``AckEntry`` ring (and the ``AckStatus``
-    enum it carried — OK/ERR/DONE/TRIVIAL/SUPERSEDED/FLUSHED/TIMEOUT/
-    SOLVE_FAIL, the executor's own per-command completion taxonomy) is
-    DELETED — there is no wire ``AckEntry`` message any more, no executor,
-    and no completion-status taxonomy beyond plain OK/ERR. ``ack_err == 0``
+    ``corr_id``) — the P4 wire has no per-command synchronous
+    ``ReplyEnvelope`` for ``move``/``stop``/``config``, so telemetry is the
+    ONLY place their outcome is reported. ``err_code == 0`` (``ok=True``)
     means OK; nonzero is the raw ``ErrCode`` (envelope.proto) value — the
-    SAME two-value shape ``TWIST``/``STOP``/``CONFIG`` always produced, so
-    nothing downstream of `ok`/`err_code` loses information. A command
-    acked within the same primary period as another OVERWRITES the slot
-    (stakeholder-accepted tradeoff, amendment issue's own "ack-depth-1
-    tradeoff" note) — rare at bench rates; ``wait_for_ack()``'s own
-    timeout+retry covers it.
+    same two-value shape every command outcome has always produced.
+
+    115-003 frame v2 deleted the pre-115 depth-3 wire ``AckEntry``
+    ring/``AckStatus`` enum (OK/ERR/DONE/TRIVIAL/SUPERSEDED/FLUSHED/
+    TIMEOUT/SOLVE_FAIL, the deleted executor's own completion taxonomy) in
+    favor of one scalar slot. 120 (bench-single-ack-slot-observability-
+    collapses-at-40ms.md) brings a wire ``AckEntry`` message back — a
+    bounded, depth-4, corr_id+err ring, NOT a revival of the old
+    ``AckStatus`` taxonomy (still plain OK/ERR) or of "overwrite is a
+    tradeoff, not a bug" (the ring simply does not overwrite until it is
+    genuinely full and evicting the OLDEST entry, so a same-primary-period
+    collision that used to overwrite the single slot now survives in the
+    ring instead). ``ack_corr``/``ack_err``/``flags`` bit 5 keep their
+    EXACT prior meaning unchanged — this dataclass now has two possible
+    origins, not two possible meanings.
     """
     corr_id: int
     ok: bool
@@ -137,15 +140,31 @@ class AckEntry:
 
     @classmethod
     def from_telemetry(cls, telemetry: "telemetry_pb2.Telemetry") -> "AckEntry":
-        """Build an ``AckEntry`` from ``telemetry``'s single ack slot
-        (``ack_corr``/``ack_err``). Call only when ``flags`` bit 5
-        (``ack_fresh``) is set — this method does not itself check the bit
-        (``TLMFrame.from_pb2()``/``NezhaProtocol.wait_for_ack()`` are the
-        two call sites, and both already gate on it)."""
+        """Build an ``AckEntry`` from ``telemetry``'s single "freshest ack"
+        scalar slot (``ack_corr``/``ack_err``) — UNCHANGED by 120. Call only
+        when ``flags`` bit 5 (``ack_fresh``) is set — this method does not
+        itself check the bit (``TLMFrame.from_pb2()`` is the one remaining
+        call site, and it already gates on it)."""
         return cls(
             corr_id=int(telemetry.ack_corr),
             ok=(telemetry.ack_err == 0),
             err_code=int(telemetry.ack_err),
+        )
+
+    @classmethod
+    def from_ring_entry(cls, entry: "telemetry_pb2.AckEntry") -> "AckEntry":
+        """Build an ``AckEntry`` from one entry of the bounded ack ring
+        (``Telemetry.acks``, 120) — ``entry`` is a raw
+        ``telemetry_pb2.AckEntry`` (``corr_id``/``err``), not the whole
+        ``Telemetry`` frame it rode in on. Unlike ``from_telemetry()``
+        above, no freshness gate applies: a corr_id present in the ring was
+        genuinely pushed by ``App::Telemetry::ack()`` at some point — see
+        this class's own docstring and ``SerialConnection.wait_for_ack()``'s
+        docstring for why the ring needs no ``ack_fresh``-style bit."""
+        return cls(
+            corr_id=int(entry.corr_id),
+            ok=(entry.err == 0),
+            err_code=int(entry.err),
         )
 
 
@@ -319,12 +338,22 @@ class TLMFrame:
     every attribute name the pre-115 standalone bool/bitmask fields
     exposed before renaming or removing any of them.
 
-    ``ack_corr``/``ack_err`` are the wire's single ack slot (raw, always
-    populated — replaces the pre-115 depth-3 ``acks`` ring), valid iff
-    ``ack_fresh``. ``ack`` is the SAME slot pre-decoded into an
-    ``AckEntry`` (``None`` unless ``ack_fresh`` was set on this frame) —
-    the convenience shape most callers want; ``wait_for_ack()`` returns
-    the identical ``AckEntry`` shape.
+    ``ack_corr``/``ack_err`` are the wire's single "freshest ack" slot
+    (raw, always populated), valid iff ``ack_fresh``. ``ack`` is the SAME
+    slot pre-decoded into an ``AckEntry`` (``None`` unless ``ack_fresh``
+    was set on this frame) — the convenience shape most callers want.
+    UNCHANGED by 120 — every existing reader of these three keeps working.
+
+    ``acks`` (120, ADDITIVE) is the bounded ack ring
+    (``telemetry.proto``'s ``Telemetry.acks``, depth 4) decoded as a plain
+    ``list[AckEntry]``, oldest-pushed first, ALWAYS populated (may be
+    empty) — independent of ``ack_fresh``, since a ring entry needs no
+    freshness gate (see ``AckEntry.from_ring_entry()``'s own docstring).
+    ``wait_for_ack()`` (``SerialConnection``/``NezhaProtocol``) scans this
+    ring, not the single slot, to find a specific ``corr_id`` reliably
+    across a bounded-but-real burst of rapid-fire commands; ``acks`` is
+    exposed here too for a caller (bench scripts, ``tlm_log.py``) that
+    wants to inspect the whole ring directly, per-frame.
 
     ``enc_left``/``enc_right`` (``EncoderReading | None``) and
     ``otos_reading`` (``OtosReading | None``, valid iff ``otos_present``)
@@ -350,9 +379,10 @@ class TLMFrame:
     encpose: tuple[int, int, int] | None = None  # (x, y, heading) [mm, mm, cdeg] -- permanent binary-decode gap
     otos_health: tuple[int, bool] | None = None  # (raw STATUS byte, fusion_blocked) -- permanent binary-decode gap
     active: bool | None = None                   # bb.drivetrain.busy — motion in progress (flags bit 2)
-    ack_corr: int | None = None                  # raw ack_corr [uint32]; valid iff ack_fresh (115-003, replaces the depth-3 acks ring)
+    ack_corr: int | None = None                  # raw ack_corr [uint32]; valid iff ack_fresh (the single "freshest ack" slot, UNCHANGED by 120)
     ack_err: int | None = None                   # raw ack_err (envelope.proto ErrCode); valid iff ack_fresh
     ack: "AckEntry | None" = None                 # ack_corr/ack_err pre-decoded, populated ONLY when ack_fresh is set
+    acks: "list[AckEntry]" = field(default_factory=list)  # bounded ack ring (120), oldest-first, ALWAYS populated (may be empty), no freshness gate
     enc_left: "EncoderReading | None" = None      # full per-wheel reading (position/velocity/time) -- always present on the wire
     enc_right: "EncoderReading | None" = None
     otos_reading: "OtosReading | None" = None      # full OTOS burst (adds v_x/v_y/omega/time over `otos`); valid iff otos_present
@@ -506,6 +536,12 @@ class TLMFrame:
         frame.ack_err = int(telemetry.ack_err)
         if frame.ack_fresh:
             frame.ack = AckEntry.from_telemetry(telemetry)
+
+        # Bounded ack ring (120, ADDITIVE) -- ALWAYS populated (may be
+        # empty), independent of ack_fresh; oldest-pushed first, matching
+        # the wire's own push/evict order (telemetry.cpp's ack() doc
+        # comment).
+        frame.acks = [AckEntry.from_ring_entry(entry) for entry in telemetry.acks]
 
         return frame
 
@@ -1403,40 +1439,46 @@ class NezhaProtocol:
         return self._conn.send_envelope_fast(envelope)
 
     def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "AckEntry | None":  # [ms]
-        """Poll incoming ``Telemetry`` pushes for the single ack slot
+        """Poll incoming ``Telemetry`` pushes' bounded ack ring for an entry
         matching ``corr_id``, for up to ``timeout`` ms. Returns the matched
         ``AckEntry``, or ``None`` if the deadline passes with no match —
         this wait is always bounded, never infinite.
 
-        The single-ack-slot matcher for the P4 "telemetry-only return path"
-        (103-009 Decision 2, narrowed from a depth-3 ring to one slot by
-        115-003 frame v2): ``move_twist()``/``move_wheels()``/``stop()``/
-        ``config()`` get no synchronous ``ReplyEnvelope`` of their own —
-        their outcome rides
-        ``Telemetry.ack_corr``/``ack_err`` (valid iff ``flags`` bit 5,
-        ``ack_fresh``) inside a subsequent ``Telemetry`` push. Because a
-        command acked within the same primary period as another OVERWRITES
-        the slot (the "ack-depth-1 tradeoff", stakeholder-accepted), a
-        caller that fires closely-spaced commands may occasionally see this
-        method time out for one of them — the documented, accepted
-        consequence of dropping the depth-3 ring; retry on timeout covers
-        it, matching this method's own bounded-wait contract.
+        The ack-ring matcher (120, bench-single-ack-slot-observability-
+        collapses-at-40ms.md — replaces the pre-120 single-scalar-slot
+        matcher this method used): ``move_twist()``/``move_wheels()``/
+        ``stop()``/``config()`` get no synchronous ``ReplyEnvelope`` of
+        their own — their outcome rides ``Telemetry.acks`` (a depth-4
+        ring, each entry a real, once-pushed ``App::Telemetry::ack()``
+        call) inside a subsequent ``Telemetry`` push. The pre-120 single
+        slot (``ack_corr``/``ack_err``, valid iff ``flags`` bit 5) lost a
+        command's ack the instant a LATER command's ack landed within the
+        same primary period, before the host's next read — bench-measured
+        as 12/43 lost transient acks at the real 40ms cycle / ~15Hz host
+        read rate. The ring survives up to ``kAckRingDepth`` (4) OTHER
+        acks landing before this one is read; only a burst of MORE than 4
+        unread acks for corr_ids other than this one would still time this
+        out (unchanged bounded-wait contract; retry covers even that rare
+        case).
 
         104-003: the actual poll/match/timeout loop is no longer inline
         here — it lives in ``SerialConnection.wait_for_ack()`` (see that
-        method's own docstring for the full algorithm) so every future
-        caller reading telemetry directly off ``SerialConnection`` — not
-        just ``NezhaProtocol`` — gets the identical matching guarantee
-        without a second copy of the algorithm. This method is a thin
-        adapter: delegate to the shared implementation, then wrap the
-        matched raw ``telemetry_pb2.Telemetry`` frame's ack slot in this
-        module's own ``AckEntry`` dataclass (the same adaptation
-        ``TLMFrame.from_pb2()`` performs for telemetry frames generally).
+        method's own docstring for the full ring-scan algorithm) so every
+        future caller reading telemetry directly off ``SerialConnection``
+        — not just ``NezhaProtocol`` — gets the identical matching
+        guarantee without a second copy of the algorithm. This method is a
+        thin adapter: delegate to the shared implementation, then wrap the
+        matched raw ``telemetry_pb2.AckEntry`` ring entry in this module's
+        own ``AckEntry`` dataclass (``AckEntry.from_ring_entry()`` — NOT
+        ``from_telemetry()``, which reads the single scalar slot instead;
+        reading ``ack_corr``/``ack_err`` off the matched FRAME here would be
+        wrong whenever a DIFFERENT, later command's ack became that frame's
+        own "freshest ack" by the time it was read).
         """
-        raw_telemetry = self._conn.wait_for_ack(corr_id, timeout=timeout)
-        if raw_telemetry is None:
+        matched_entry = self._conn.wait_for_ack(corr_id, timeout=timeout)
+        if matched_entry is None:
             return None
-        return AckEntry.from_telemetry(raw_telemetry)
+        return AckEntry.from_ring_entry(matched_entry)
 
     # ------------------------------------------------------------------
     # Telemetry
