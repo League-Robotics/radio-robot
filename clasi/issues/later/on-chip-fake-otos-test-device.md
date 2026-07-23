@@ -54,3 +54,10 @@ physical OTOS.
 
 Normal — **not blocking** the current bench tour bring-up (AUTO fallback covers
 that). This makes the bench OTOS-present and self-consistent for future work.
+
+## Triage note (2026-07-23 triage (team-lead, stakeholder-directed))
+
+Moved to later/: as written this targets `App::HeadingSource` and the OTOS-driven
+heading path, both deleted in the 115 gut. Nothing on-robot consumes OTOS today
+(estimator fusion weights committed 0.0). Revisit only when OTOS fusion has a real
+consumer; the bench meanwhile runs encoder-only, which the current stack handles.

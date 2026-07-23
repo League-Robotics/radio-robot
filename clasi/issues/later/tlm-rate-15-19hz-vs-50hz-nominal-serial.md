@@ -31,3 +31,11 @@ with sample rate).
 ## Related
 
 - docs/bench-checklists/sprint-116-move-protocol.md, sprint-117-estimator-v1.md — measurements.
+
+## Triage note (2026-07-23 triage (team-lead, stakeholder-directed))
+
+Moved to later/: premise numbers are stale — 118-001 retimed the loop to kCycle=40ms
+(kPrimaryPeriod=40ms), so nominal is now ~25Hz, not 50Hz, and the estimated serial
+load (~207B x 25Hz ~= 5.2KB/s) sits comfortably inside 115200-baud throughput. The
+throttle may no longer exist. Re-measure on hardware at the new cadence before any
+diagnosis; keep only if arrival still falls short of ~25Hz.

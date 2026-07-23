@@ -1,4 +1,5 @@
 ---
+status: resolved
 title: kCycle=20 vs Telemetry::kPrimaryPeriod=40 mismatch -- robot_loop.cpp's own
   doc comment is now false
 filed: 2026-07-19
@@ -76,3 +77,9 @@ relationship if one was intended, and fix both constants' own "~25 Hz"
 labels to match their actual values (20ms ~= 50Hz, 40ms ~= 25Hz). Not
 resolved by 111-002 -- out of that ticket's scope by explicit
 instruction.
+
+## Resolution (2026-07-23 triage (team-lead, stakeholder-directed))
+
+Closed by 115-005 (kCycle == kPrimaryPeriod == 20ms) and re-confirmed by 118-001
+(both now 40ms: `robot_loop.cpp` kCycle=40, `telemetry.h` kPrimaryPeriod=40) — the
+loop pace and primary-frame throttle agree by construction.

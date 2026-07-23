@@ -77,3 +77,8 @@ during the 104-007 session.
   robot side of the link before treating the connection as ready, if the artifact
   turns out to be a transition-timing race rather than genuine leaked control-plane
   bytes.
+
+> Triage note (2026-07-23, team-lead, stakeholder-directed): the referenced
+> `ack-ring-intermittent-delivery-gap.md` was deleted — it described the depth-3
+> ack ring, replaced by the single ack slot in 115-003; its failure mode no
+> longer exists as written.
