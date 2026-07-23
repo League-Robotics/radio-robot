@@ -1,9 +1,11 @@
 ---
-status: pending
+status: in-progress
 filed: 2026-07-23
-filed_by: team-lead (turn-execution review §9 addendum; stakeholder-directed)
+filed_by: "team-lead (turn-execution review \xA79 addendum; stakeholder-directed)"
 related: []
-tickets: []
+tickets:
+- 119-005
+sprint: '119'
 ---
 
 # Straight legs crab ~31mm/700mm: 118-001 schedule introduces L/R actuation skew AND a telemetry pairing skew that hides it

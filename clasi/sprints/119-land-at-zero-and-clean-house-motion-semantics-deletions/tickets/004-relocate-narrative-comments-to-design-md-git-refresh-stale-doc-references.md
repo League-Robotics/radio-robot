@@ -7,6 +7,7 @@ depends-on:
 - '001'
 - '002'
 - '003'
+- '005'
 github-issue: ''
 issue: relocate-narrative-comments-and-refresh-stale-docs.md
 completes_issue: true
@@ -19,6 +20,17 @@ completes_issue: true
 
 The contract belongs in the header; the history belongs in DESIGN.md and
 git. Runs LAST so it trims only what survives tickets 1-3's own changes.
+
+**Amended (2026-07-23, mid-execution): now also depends on ticket 005**
+(`straight-leg-crab-118-001-actuation-and-telemetry-pairing-skew.md`,
+filed from a concurrent stakeholder-directed session, fixing a
+same-generation actuation/telemetry defect in `robot_loop.cpp`). Ticket
+005 edits `src/firm/app/DESIGN.md` directly to describe the corrected
+schedule — this ticket's own `move_queue.h`/`robot_loop.cpp`-adjacent
+narrative work in that same file must build on ticket 005's landed
+description, not the pre-005 one. If ticket 005 hasn't landed by the
+time this ticket starts, wait for it rather than describing the
+about-to-be-superseded schedule.
 
 **Scope re-measured against the tree (2026-07-23, post-118) — this is
 what SURVIVES 118, not the original issue's pre-118 list verbatim:**
