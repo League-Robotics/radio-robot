@@ -305,17 +305,17 @@ void scenarioMoveExpiryStopsPlantWithNoFurtherHostTraffic() {
 //    per-file fixture-duplication convention; see the coding-standards
 //    rule's "grep-ability" rationale for why this file keeps its own
 //    copy rather than reaching into robot_loop.cpp's internals).
-//    111-002 (2026-07-19): retargeted from 106-001's kSettle=kClear=4/
-//    kCycle=40/kPace=28 to the CURRENT tree's kSettle=kClear=0/kCycle=20/
-//    kPace=20 -- these three numbers drifted out from under this
-//    hardcoded assertion sometime after 106-001 landed (kCycle's own
-//    robot_loop.cpp doc comment still claims "~40ms, matching
-//    Telemetry::kPrimaryPeriod=40ms", which is now FALSE -- kPrimaryPeriod
-//    is still 40 while kCycle is 20; see
-//    clasi/issues/kcycle-kprimaryperiod-mismatch.md, filed alongside this
-//    fix, not resolved by it). Whoever next changes robot_loop.cpp's
-//    timing constants must update these four to match, the same way any
-//    other duplicated-constant fixture in this codebase does.
+//    118 (loop schedule truth) restores kSettle=kClear=4/kCycle=40/kPace=28
+//    -- 106-001's original figures -- undoing the 111-002 retarget
+//    (2026-07-19) to kSettle=kClear=0/kCycle=20/kPace=20 that commit
+//    5f5a2ba7 forced onto this schedule (zeroing kSettle/kClear made the
+//    vendor's still-mandatory 4ms settle happen as a *blocking* sleep
+//    hidden inside motorL_.tick()/motorR_.tick() instead of a visible,
+//    budgeted runAndWait window -- see
+//    clasi/issues/restore-the-interleaved-request-settle-tick-loop-schedule.md).
+//    Whoever next changes robot_loop.cpp's timing constants must update
+//    these four to match, the same way any other duplicated-constant
+//    fixture in this codebase does.
 // ===========================================================================
 
 void scenarioVirtualCycleTimingDiagnostic() {
@@ -342,10 +342,10 @@ void scenarioVirtualCycleTimingDiagnostic() {
   int yieldCount = sleeper.yieldCount() - yieldsBefore;
   // robot_loop.cpp's own current kSettle/kClear/kCycle/kPace (see this
   // scenario's own file-header comment above for the duplication
-  // rationale and the 111-002 retarget note).
-  constexpr uint32_t kSettle = 0;  // [ms] mirrors robot_loop.cpp's own kSettle
-  constexpr uint32_t kClear = 0;   // [ms] mirrors robot_loop.cpp's own kClear
-  constexpr uint32_t kCycle = 20;  // [ms] mirrors robot_loop.cpp's own kCycle
+  // rationale and the 118 restore note).
+  constexpr uint32_t kSettle = 4;  // [ms] mirrors robot_loop.cpp's own kSettle
+  constexpr uint32_t kClear = 4;   // [ms] mirrors robot_loop.cpp's own kClear
+  constexpr uint32_t kCycle = 40;  // [ms] mirrors robot_loop.cpp's own kCycle
   constexpr uint32_t kWindows = 2 * kSettle + kClear;  // [ms] the 3 settle/clear blocks' own total
   constexpr uint32_t kPace = kCycle - kWindows;        // [ms] mirrors robot_loop.cpp's own kPace
   uint32_t virtualCycleMillis = kWindows + lastSleepMillis;
@@ -353,19 +353,19 @@ void scenarioVirtualCycleTimingDiagnostic() {
   checkTrue(sleepCount == 4,
             "exactly 4 Sleeper::sleepMillis() calls per cycle() (3 runAndWait blocks + final pace block)");
   checkTrue(lastSleepMillis == kPace,
-            "the final (perception+odometry+pace) block requests exactly kPace=20ms "
-            "(kCycle=20ms minus the 0ms already consumed by the 3 settle/clear windows -- "
-            "NOT a fresh, unabsorbed kCycle=20ms on top of them)");
+            "the final (perception+odometry+pace) block requests exactly kPace=28ms "
+            "(kCycle=40ms minus the 12ms already consumed by the 3 settle/clear windows -- "
+            "NOT a fresh, unabsorbed kCycle=40ms on top of them)");
   checkTrue(yieldCount == 0, "RobotLoop::cycle() never calls Sleeper::yield() directly");
   checkTrue(virtualCycleMillis == kCycle,
-            "derived total virtual schedule == 0ms (settle/clear/settle) + 20ms (pace) == 20ms == kCycle -- "
-            "proves the three windows are absorbed into the retargeted 20ms budget, not additive on top of "
-            "it (106-001)");
+            "derived total virtual schedule == 12ms (settle/clear/settle) + 28ms (pace) == 40ms == kCycle -- "
+            "proves the three windows are absorbed into the 40ms budget, not additive on top of it (118, "
+            "restoring 106-001)");
 
   std::printf(
       "  TIMING: sleepCount=%d lastSleepMillis=%ums yieldCount=%d virtualCycleMillis=%ums "
-      "(== kCycle=20ms/~50Hz design target -- see this scenario's own file-header comment for the "
-      "111-002 retarget from 106-001's kCycle=40ms figures)\n",
+      "(== kCycle=40ms/~25Hz design target -- see this scenario's own file-header comment for the "
+      "118 restore of 106-001's original kCycle=40ms figures)\n",
       sleepCount, static_cast<unsigned>(lastSleepMillis), yieldCount, static_cast<unsigned>(virtualCycleMillis));
 }
 

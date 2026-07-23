@@ -116,9 +116,12 @@ constexpr uint32_t kFlagFaultMoveTimeout = 1u << 15;
 
 // Primary cadence target: primary period == cycle period (115-005, closes
 // kcycle-kprimaryperiod-mismatch.md -- the frame is emitted every loop
-// iteration, ~50 Hz/20 ms). Callers pace against this and measure their
-// own real number; emit() does not need to hit it exactly.
-constexpr uint32_t kPrimaryPeriod = 20;  // [ms] ~50 Hz, matches robot_loop.cpp's kCycle
+// iteration). 118 restores robot_loop.cpp's own kCycle to its genuine
+// 40ms/~25Hz (kSettle/kClear had been zeroed to fake a 20ms cycle -- see
+// clasi/issues/restore-the-interleaved-request-settle-tick-loop-schedule.md),
+// so this constant follows it back to 40ms. Callers pace against this and
+// measure their own real number; emit() does not need to hit it exactly.
+constexpr uint32_t kPrimaryPeriod = 40;  // [ms] ~25 Hz, matches robot_loop.cpp's kCycle
 
 // Secondary cadence: 10x the primary period (~5 Hz) keeps the diagnostic
 // frame far enough from the primary's own deadline that the two
@@ -205,7 +208,7 @@ class Telemetry {
   // that very first call always resolves to primary -- see the tie-break
   // note below).
   //
-  // Tie-break: at a real loop period at or above kPrimaryPeriod (20ms),
+  // Tie-break: at a real loop period at or above kPrimaryPeriod (40ms),
   // primaryDue() can be true on EVERY call -- an unconditional "primary
   // always wins a tie" rule then starves secondary to 0 Hz forever. The
   // fix: when BOTH frames are genuinely due in the same call, ALTERNATE

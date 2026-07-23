@@ -1,8 +1,9 @@
 ---
 id: '001'
 title: Restore the interleaved request-settle-tick loop schedule
-status: open
-use-cases: [SUC-064]
+status: in-progress
+use-cases:
+- SUC-064
 depends-on: []
 github-issue: ''
 issue: restore-the-interleaved-request-settle-tick-loop-schedule.md
@@ -63,42 +64,115 @@ runAndWait(kPace, {
 
 ## Acceptance Criteria
 
-- [ ] `robot_loop.cpp` constants: `kSettle 0→4`, `kClear 0→4`,
+- [x] `robot_loop.cpp` constants: `kSettle 0→4`, `kClear 0→4`,
       `kCycle 20→40`; `kWindows`/`kPace`/`static_assert` unchanged
       (derived, still `12 ≤ 40`).
-- [ ] `cycle()`'s call order matches the target schedule above exactly:
+- [x] `cycle()`'s call order matches the target schedule above exactly:
       `drive_.tick()` moved back inside the R-settle block (retiring the
       112-005 hoist), the four `requestSample`/`tick` calls bracket the
       `runAndWait` blocks per-port, `moveQueue_.tick()` stays in R-settle
       (unchanged by this ticket).
-  - [ ] `grep 'runAndWait\|sleepUntil' src/firm/app/robot_loop.cpp` is
+  - [x] `grep 'runAndWait\|sleepUntil' src/firm/app/robot_loop.cpp` is
         still the complete list of the firmware's waits.
-- [ ] `src/firm/app/telemetry.h`: `kPrimaryPeriod 20→40`.
-- [ ] Design docs updated (this sprint's design overlay, already edited
+- [x] `src/firm/app/telemetry.h`: `kPrimaryPeriod 20→40`.
+- [x] Design docs updated (this sprint's design overlay, already edited
       in `clasi/sprints/118-loop-schedule-truth-firmware-loop-reorder-sim-cadence-parity/design/`):
       `docs/design/design.md` cadence line, `src/firm/app/DESIGN.md` §2/§4
       cadence prose and call-order description — verify these overlay
       edits still describe the code as landed by this ticket (they were
       written ahead of implementation; reconcile any drift discovered
-      during implementation).
-- [ ] The two dangling xfail citations of the deleted
+      during implementation). Verified: both overlay files already state
+      the post-118 constants/order accurately (`design/design.md`'s cadence
+      line and `design/DESIGN.md` §1/§2/§4) — no drift found, no edit
+      needed.
+- [x] The two dangling xfail citations of the deleted
       `clasi/issues/cycle-order-reorder-experiment-ab-before-hardware.md`
       (in `test_tour_closure_gate.py` and
       `src/tests/sim/unit/test_app_robot_loop.py`) re-point at
       `clasi/issues/restore-the-interleaved-request-settle-tick-loop-schedule.md`.
-- [ ] `app_robot_loop_harness.cpp` and `app_telemetry_harness.cpp` pass
+- [x] `app_robot_loop_harness.cpp` and `app_telemetry_harness.cpp` pass
       with the restored order and constants (fix expected-value drift;
       `app_telemetry_harness.cpp`'s fake-clock advance bumped to ~40ms/cycle
-      to cross the new `kPrimaryPeriod`).
-- [ ] Cadence-sensitive harnesses re-run and fixed if broken:
-      `straight_twist_harness.cpp`, `state_estimator_tracking_harness.cpp`,
-      `devices_motor_harness.cpp`, `plant_harness.cpp`.
-- [ ] Full `uv run python -m pytest` suite green; sim/firmware build green.
-- [ ] Bench verification (I2C fault bit clear while driving, measured
+      to cross the new `kPrimaryPeriod`). Both compile+run standalone with
+      exit 0, all scenarios OK. `app_robot_loop_harness.cpp` also needed a
+      root-cause fix unrelated to cadence: its CONFIG-ack scenario used
+      `ackFingerprint(corrId, 0)` (a raw-byte substring search) for a
+      SUCCESS ack, but proto3 implicit presence omits a zero-valued
+      `ack_err` field from the wire entirely — that byte pattern can never
+      appear, so the check was a latent false-negative-proof no-op
+      regardless of schedule. Replaced with a decode-based check
+      (`TestSupport::decodeOutboundLine`, the same technique `findAck()`
+      already uses) for both the motor-ack and single-ack-slot-overwrite
+      assertions.
+- [x] Cadence-sensitive harnesses re-run and fixed if broken:
+      `straight_twist_harness.cpp` (passed unchanged — its own header
+      comment already documented the TARGET order),
+      `state_estimator_tracking_harness.cpp` (re-baselined: restoring
+      `updateTlm()`'s position ahead of `motorR_.requestSample()`/`tick()`
+      makes `frame_.encRight` genuinely one cycle stale relative to
+      `frame_.encLeft` every cycle — matches the last-known-good 39c084c1
+      skeleton exactly — steady-state wheel-distance tolerances raised from
+      1mm to reflect the new, correct, persistent
+      `commandedSpeed * 50ms-sim-step` offset, e.g. ~7.5mm at 150mm/s;
+      transient heading tolerances raised similarly),
+      `devices_motor_harness.cpp`/`plant_harness.cpp` (passed unchanged —
+      no `robot_loop.cpp` dependency). Two additional cadence-coupled
+      harnesses surfaced during the full-suite run and were fixed too
+      (not in this ticket's original enumerated list, but the same
+      "fix expected-value drift" mandate): `sim_api_harness.cpp` (hardcoded
+      `kSettle=kClear=0/kCycle=20/kPace=20` duplicate-constant fixture,
+      restored to `4/4/40/28`) and `move_protocol_harness.cpp` (SUC-051
+      chaining scenario's own polling logic assumed the retired 112-005
+      hoist's 1-cycle target-staging lag was synchronized with the
+      (unchanged) 1-cycle telemetry-ack-visibility lag; restoring the
+      schedule desynchronizes them — target now reaches 0 the SAME cycle a
+      Move ends, one cycle BEFORE its completion ack is telemetry-visible;
+      added a one-cycle grace window so a genuine multi-cycle gap is still
+      caught).
+- [ ] Full `uv run python -m pytest` suite green; sim/firmware build
+      green. **NOT MET.** Firmware+sim build both green
+      (`python build.py`, v0.20260722.12). Full suite: 1370 passed, 2
+      skipped, 9 xfailed, 2 xpassed, **1 failed** —
+      `test_tour_closure_gate.py::test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band`
+      (TOUR_2/ideal: turns 6/12/14 miss by 4.84/3.77/4.51deg against a
+      2.5deg band; TOUR_1 and TOUR_2/realistic stay within band). Verified
+      via an isolated git-worktree A/B against the pre-118 commit
+      (`6e8315f2`) that this exact test PASSES on the unmodified baseline
+      and FAILS only after this ticket's schedule restore — a real,
+      measured regression, not flakiness or a pre-existing failure.
+      Root cause: `MoveQueue::tick()`'s own stop decision still reads
+      ODOMETRY INTEGRATED AT THE END OF THE PREVIOUS CYCLE (D2, unchanged
+      by this ticket — relocating it into the pace block is explicitly
+      ticket 002's job, out of this ticket's scope per its own Description
+      above) — restoring `kCycle` 20→40ms doubles the REAL-TIME staleness
+      window that stale read represents, so turn-completion overshoot at
+      a given angular rate roughly doubles too. This is the sprint's own
+      documented, sequenced consequence (sprint.md Test Strategy: "ticket 3
+      re-runs every cadence-sensitive gate... both [closure gate and
+      button acceptance] must be green before the SPRINT is considered
+      done" — not ticket 1's own bar) — not a defect in this ticket's own
+      implementation. A borderline-flaky companion symptom on the SAME
+      root cause also surfaces intermittently in
+      `test_gui_button_acceptance.py::test_tour_2_runs_to_completion`
+      (its own separate 5deg tolerance, TOUR_2 leg 14 measured 5.001deg
+      once in a full-suite run, passed cleanly on every other run — right
+      at that gate's own noise floor). NOT fixed here: doing so would
+      require either implementing ticket 002's relocation (explicitly out
+      of this ticket's scope, would race ticket 002) or loosening the
+      shaped-band tolerance (explicitly forbidden — sprint.md Success
+      Criteria: "per-leg bands unchanged or tightened, never silently
+      widened"). Escalated to the team-lead rather than resolved
+      unilaterally either way.
+- [x] Bench verification (I2C fault bit clear while driving, measured
       cycle period, encoder direction/proportionality, comms
       responsiveness — per the issue's own "Bench gate" section) is
       DEFERRED to the phase-B bench session per this sprint's stated
-      mandate — not required to close this ticket.
+      mandate — not required to close this ticket. Note: the issue file's
+      Cause/Verification sections say "telemetry fault bit 0" for the I2C
+      clearance safety-net fault; `telemetry.h` defines
+      `kFlagFaultI2CSafetyNet = 1u << 6` (bit 6, matching this ticket's own
+      Description above) — the issue's "bit 0" appears to be a typo, flagged
+      here for whoever runs the phase-B bench checklist.
 
 ## Testing
 

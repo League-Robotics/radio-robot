@@ -823,7 +823,7 @@ def test_tour_2_realistic_errors_turns_within_one_degree():
     strict=False,
     reason=(
         "111-002: CONFIRMED reorder-coupled, not a separate regression -- "
-        "see clasi/issues/cycle-order-reorder-experiment-ab-before-hardware.md "
+        "see clasi/issues/restore-the-interleaved-request-settle-tick-loop-schedule.md "
         "(the SAME live robot_loop.cpp cycle-order experiment that also "
         "quarantines src/tests/sim/system/test_profiled_motion_sim.py's "
         "turn scenario and two src/tests/sim/unit/test_app_robot_loop.py "

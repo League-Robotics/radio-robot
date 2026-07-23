@@ -17,14 +17,16 @@ namespace {
 // post-duty-write clearance window.
 //
 // kCycle is the STATED TOTAL for the whole schedule (all four pacing
-// blocks, not just the trailing one) -- ~50 Hz/20ms (115-005, gut S1:
-// primary telemetry emission now happens every cycle, matching
-// App::Telemetry's own kPrimaryPeriod=20ms (telemetry.h) so the
-// primary-frame throttle and the loop's own pace agree by construction --
-// closes kcycle-kprimaryperiod-mismatch.md).
-constexpr uint32_t kSettle = 0;  // [ms] encoder-settle window, both motors
-constexpr uint32_t kClear = 0;   // [ms] post-duty-write clearance window
-constexpr uint32_t kCycle = 20;  // [ms] whole-schedule pace target (~50 Hz)
+// blocks, not just the trailing one) -- ~25 Hz/40ms (106-001; restored by
+// 118 after commit 5f5a2ba7 zeroed kSettle/kClear and halved kCycle to 20,
+// which only made the vendor's still-mandatory 4ms settle happen as a
+// blocking sleep hidden inside motorL_.tick()/motorR_.tick() instead --
+// see clasi/issues/restore-the-interleaved-request-settle-tick-loop-schedule.md),
+// matching App::Telemetry's own kPrimaryPeriod=40ms (telemetry.h) so the
+// primary-frame throttle and the loop's own pace agree by construction.
+constexpr uint32_t kSettle = 4;  // [ms] encoder-settle window, both motors
+constexpr uint32_t kClear = 4;   // [ms] post-duty-write clearance window
+constexpr uint32_t kCycle = 40;  // [ms] whole-schedule pace target (~25 Hz)
 
 // kWindows is what the three settle/clearance blocks above already consume
 // before the final (perception+odometry+pace) block runs; kPace is that
@@ -528,31 +530,23 @@ void RobotLoop::cycle() {
 
   Cmd cmd;
 
-  // Request/collect MUST interleave per port: the 0x46 encoder-select is a
+  // Request/collect MUST interleave per port (118 -- restores the
+  // interleaved schedule this file's own DESIGN.md §2/§3 already claims:
+  // select L -> settle(borrow) -> collect L -> clear(borrow) -> select R
+  // -> settle(borrow) -> collect R -> pace): the 0x46 encoder-select is a
   // single latched state on the brick (one pending read; SimPlant models
   // the same via selectedPort_) -- issuing both selects before either
   // collect makes BOTH motors read the LAST-selected port's encoder
   // (observed 2026-07-18: an unmanaged pivot showed actual L == actual R
   // glued to the right wheel while cmd L/R were correctly mirrored).
 
-  // 112-005 cycle-order fix (cut the trim/PD-loop dead time that caused the
-  // terminal jitter): stage this cycle's wheel targets BEFORE the motor
-  // ticks, so the target staged last cycle is WRITTEN this cycle instead of
-  // next (-1 cycle).
-  drive_.tick();  // twist -> wheel targets, written by THIS cycle's motor ticks
-
-  // Request/collect MUST interleave per port: the 0x46 encoder-select is a
-  // single latched state on the brick (one pending read) -- issuing both
-  // selects before either collect makes BOTH motors read the last-selected
-  // port's encoder.
   motorL_.requestSample();  // 0x46 write (brick holds ONE pending read)
-  motorL_.tick(clock_.nowMicros());   // write L duty (fresh target) + collect L
-  motorR_.requestSample();
-  motorR_.tick(clock_.nowMicros());   // write R duty + collect R
 
   runAndWait(kSettle, [&] {           // >=4ms: L encoder settling, meanwhile --
     comms_.pump(cmd, cycleStart);     //   drain RX, decode <=1 frame into cmd
   });
+
+  motorL_.tick(clock_.nowMicros());   // collect L -> velocity PID -> duty write
 
   runAndWait(kClear, [&] {  // >=4ms: brick clears L's duty write, meanwhile --
     // Stage this cycle's encoder/velocity/connection fields onto the
@@ -563,6 +557,8 @@ void RobotLoop::cycle() {
     updateTlm(cycleStart);
     tlm_.emit(cycleStart);
   });
+
+  motorR_.requestSample();  // 0x46 write (brick holds ONE pending read)
 
   runAndWait(kSettle, [&] {  // >=4ms: R encoder settling, meanwhile --
     // Apply <=1 decoded command; every path that applies one acks via
@@ -582,7 +578,10 @@ void RobotLoop::cycle() {
     // cycle (seamless hand-off, SUC-051) or calling Drive::stop() with an
     // empty queue (MoveQueue::tick()'s own contract) -- so host silence
     // always ends in motors stopped, with zero further host traffic
-    // needed (no deadman lease to re-arm).
+    // needed (no deadman lease to re-arm). (118: stays in this R-settle
+    // block -- relocating it into the trailing pace block, so the stop
+    // decision reads THIS cycle's odometry instead of last cycle's, is
+    // ticket 002's own scope, not this one's.)
     MoveQueue::TickResult moveResult = moveQueue_.tick(clock_.nowMicros(), odom_);
     bool moveTimedOut = moveResult.completed && moveResult.completion.timedOut;
     // Level-set every cycle (telemetry.h's own setFlag() contract) -- true
@@ -596,7 +595,19 @@ void RobotLoop::cycle() {
       // distinguished by the flags bit set just above, not by ack_err.
       tlm_.ack(moveResult.completion.moveId, 0);
     }
+
+    // 118 (retires the 112-005 "hoist drive_.tick() above both motor
+    // ticks" experiment, tracked only in project memory, not an issue):
+    // drive_.tick() moves back to its last-known-good position (commit
+    // 39c084c1) inside the R-settle block, pure computation (no bus), so
+    // it is legal borrowed work here. Staged targets are written by
+    // motorL_.tick()/motorR_.tick() -- L already collected THIS cycle
+    // (above) against LAST cycle's staged target (-1 cycle); R collects
+    // immediately below, against THIS cycle's freshly-staged target.
+    drive_.tick();  // twist -> wheel targets, R writes them below
   });
+
+  motorR_.tick(clock_.nowMicros());   // collect R -> velocity PID -> duty write
 
   // Final (perception + odometry + pace) block -- the schedule's 4th
   // runAndWait, matching the same "own mark, own gap" shape as the three

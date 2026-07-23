@@ -658,22 +658,47 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
                "right motor kp ALSO reflects the applied patch -- kp/ki/kff/iMax/kaw apply to BOTH bound motors");
   checkFloatEq(motorR.gains().ki, 0.01f, "right motor ki also reflects the applied patch");
 
-  // --- ack content, via raw-byte ack_corr/ack_err fingerprint search on
-  // the two captured frames (single ack slot -- see this scenario's own
-  // header comment). ---
+  // --- ack content. The motor patch's ack is a SUCCESS (err==0) ack --
+  // proto3 implicit presence means encodeInto() OMITS a scalar field
+  // holding its zero/default value entirely (findAck()'s own doc comment,
+  // below, explains this in full), so ackFingerprint()/containsSubBytes()'s
+  // raw-byte substring technique -- which synthesizes a literal "field
+  // 6 (ack_err) == 0" byte pair that can never appear on the wire for a
+  // genuine success ack -- is only valid for a NONZERO err (the drivetrain
+  // check just below). The motor check instead decodes via the real
+  // generated codec (TestSupport::decodeOutboundLine(), the same technique
+  // findAck() uses) and compares the reconstructed scalar fields directly.
+  // ---
   checkTrue(!afterMotorLine.empty(), "a primary frame was captured after the motor dispatch");
-  std::string motorFrame = rawBytesFromArmoredLine(afterMotorLine);
-  checkTrue(!motorFrame.empty(), "the captured frame de-armors to non-empty raw bytes");
-  checkTrue(containsSubBytes(motorFrame, ackFingerprint(kMotorCorrId, 0)),
-            "CONFIG{motor} acks OK -- ack_corr/ack_err == (motor's corr_id, 0)");
+  TestSupport::DecodedLine motorDecoded = TestSupport::decodeOutboundLine(afterMotorLine);
+  checkTrue(motorDecoded.kind == TestSupport::DecodedKind::kTelemetry,
+            "the captured frame after the motor dispatch decodes as a Telemetry frame");
+  checkUintEq(motorDecoded.telemetry.ack_corr, kMotorCorrId,
+              "CONFIG{motor} acks against the motor patch's own corr_id");
+  checkUintEq(motorDecoded.telemetry.ack_err, 0,
+              "CONFIG{motor} acks OK (ack_err == 0, omitted from the wire by proto3 implicit presence)");
 
   checkTrue(!afterDrivetrainLine.empty(), "a primary frame was captured after the drivetrain dispatch");
   std::string drivetrainFrame = rawBytesFromArmoredLine(afterDrivetrainLine);
   checkTrue(!drivetrainFrame.empty(), "the captured frame de-armors to non-empty raw bytes");
   checkTrue(containsSubBytes(drivetrainFrame, ackFingerprint(kDrivetrainCorrId, kErrUnimplemented)),
             "CONFIG{drivetrain} still acks ERR_UNIMPLEMENTED");
-  checkTrue(!containsSubBytes(drivetrainFrame, ackFingerprint(kMotorCorrId, 0)),
-            "single ack slot: motor's own OK ack no longer appears once drivetrain's dispatch overwrote the slot");
+  // Single ack slot: the drivetrain dispatch's own ack() call OVERWRITES
+  // the shared corr/err pair outright (not just the freshness bit) -- so
+  // the motor's own corr_id must no longer be the frame's ack_corr. Decoded
+  // (not a byte-fingerprint absence check): a fingerprint search for the
+  // motor's OWN success pair would trivially "pass" regardless of overwrite
+  // state, since that exact byte pair never appears on the wire either way
+  // (same proto3 implicit-presence reason as the motor check above) -- it
+  // would not actually be testing the overwrite.
+  TestSupport::DecodedLine drivetrainDecoded = TestSupport::decodeOutboundLine(afterDrivetrainLine);
+  checkTrue(drivetrainDecoded.kind == TestSupport::DecodedKind::kTelemetry,
+            "the captured frame after the drivetrain dispatch decodes as a Telemetry frame");
+  checkTrue(drivetrainDecoded.telemetry.ack_corr != kMotorCorrId,
+            "single ack slot: motor's own ack_corr no longer appears once drivetrain's dispatch overwrote "
+            "the slot");
+  checkUintEq(drivetrainDecoded.telemetry.ack_corr, kDrivetrainCorrId,
+              "the slot now holds the drivetrain patch's own corr_id");
 }
 
 // ===========================================================================

@@ -122,7 +122,7 @@ def _find_cxx_compiler() -> str:
         "pilot_.tick() -- see robot_loop.cpp's own 'NOTE! These requests "
         "and collects have been reordered for testing and development' "
         "comment) -- see "
-        "clasi/issues/cycle-order-reorder-experiment-ab-before-hardware.md "
+        "clasi/issues/restore-the-interleaved-request-settle-tick-loop-schedule.md "
         "for the A/B-compare-before-hardware plan this is deferred to. "
         "Confirmed (111-002): this harness DOES link robot_loop.cpp in "
         "full, and only the two scenarios that actually exercise cycle() "
