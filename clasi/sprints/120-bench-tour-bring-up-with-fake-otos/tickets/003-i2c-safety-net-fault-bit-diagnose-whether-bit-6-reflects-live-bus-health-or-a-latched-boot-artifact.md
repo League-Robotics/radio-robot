@@ -2,8 +2,9 @@
 id: '003'
 title: 'I2C safety-net fault bit: diagnose whether bit 6 reflects live bus health
   or a latched boot artifact'
-status: open
-use-cases: [SUC-071]
+status: in-progress
+use-cases:
+- SUC-071
 depends-on: []
 github-issue: ''
 issue: bench-i2c-safety-net-fault-asserts-every-cycle.md
