@@ -682,39 +682,36 @@ def test_tour_2_realistic_errors_turns_within_one_degree():
 @pytest.mark.xfail(
     strict=False,
     reason=(
-        "111-002: CONFIRMED reorder-coupled, not a separate regression -- "
-        "see clasi/issues/restore-the-interleaved-request-settle-tick-loop-schedule.md "
-        "(the SAME live robot_loop.cpp cycle-order experiment that also "
-        "quarantines src/tests/sim/system/test_profiled_motion_sim.py's "
-        "turn scenario and two src/tests/sim/unit/test_app_robot_loop.py "
-        "scenarios -- this test links the SAME compiled firmware, via "
-        "src/sim/build/libfirmware_host.dylib, not a separate copy). "
-        "frame.twist[0] oscillates between roughly half and above-v_max "
-        "every sample during the steady-state window (e.g. 93, 200, 94, "
-        "138, 201, 93, 203, ...) instead of holding near v_max=150 -- the "
-        "same stale/alternating-encoder-read signature as the profiled- "
-        "motion case. Diagnosed identically: temporarily, LOCALLY (never "
-        "committed) reverted robot_loop.cpp's cycle-order experiment back "
-        "to its own documented intended order, rebuilt "
-        "src/sim/build/libfirmware_host.dylib (cmake --build src/sim/build), "
-        "and re-ran this exact test three times -- passed cleanly every "
-        "time (no dip below 135mm/s). Rebuilt again from the unmodified, "
-        "committed (reordered) source and the failure returned identically "
-        "on the first try. This is a direct, confirmed consequence of the "
-        "live reorder experiment, not a tour-boundary/planner bug. "
-        "114-006: _make_loop() now calls configure_from_robot() (required -- "
-        "the sim fail-closed refuses MOTION with no configuration at all "
-        "since 114-001/002/003); under the actually-configured plant this "
-        "test now runs ~208 ticks (~11s wall-clock, reproducible across "
-        "repeat runs) before RunOutcome.FAULT, rather than completing and "
-        "only dipping below the velocity floor -- it no longer even reaches "
-        "the min_v assertion this reason was originally written against. "
-        "Consistent with, not contradictory to, the diagnosis above (the "
-        "SAME real-time-threaded stale/alternating-encoder-read mechanism "
-        "escalating to an outright fault rather than a milder dip is not a "
-        "new failure mode); left un-re-diagnosed here per the reorder "
-        "experiment's own standing instruction (kept live and A/B-compared "
-        "just before hardware, not to be revert-tested piecemeal mid-sprint)."
+        "119-002: re-run against the current tree (post-118, post-119 ticket 001) -- "
+        "the PRIOR reason above (111-002's reorder-coupled stale/alternating-encoder "
+        "oscillation, frame.twist bouncing between roughly half and above-v_max) is "
+        "STALE: that experiment was retired by 118 ticket 001, and the failure this "
+        "test now shows is a DIFFERENT, independently-diagnosed mechanism -- a clean, "
+        "monotonic velocity dip from ~149mm/s to ~24mm/s at the leg boundary followed "
+        "by a smooth accel/jerk-limited ramp back to cruise over ~8 cycles (~320ms), "
+        "not an erratic oscillation. Root cause: App::MoveQueue::tick() "
+        "(move_queue.cpp) unconditionally hard-resets the completing axis's shaper to "
+        "(0, 0) at EVERY completion boundary (118 ticket 003's own kept decision), "
+        "even when the incoming chained Move commands that SAME axis -- so this "
+        "test's own two same-axis, same-v_max Distance legs get the hand-off reset "
+        "instead of SUC-051's carried-velocity continuity. This was always true post-118 "
+        "ticket 003, but only became visible in THIS test once 119 ticket 001 made the "
+        "shaper-limits push default-on for _make_loop()'s own SimLoop session -- "
+        "previously shaping was silently off here (no taper, no reset, no dip "
+        "possible), so this specific same-axis-compatible-chain scenario was never "
+        "exercised by 118 ticket 003's own re-sweep (TOUR_1/TOUR_2 always alternate "
+        "Distance/Angle legs, so a same-axis boundary never occurred there either). "
+        "See motion/DESIGN.md's own 'Chain-advance leg hand-off contract' (§4, 119-002) "
+        "for the verified mechanism and "
+        "clasi/issues/chain-advance-reset-defeats-same-axis-compatible-leg-continuity.md "
+        "for the fix candidate (make the reset conditional on whether the incoming "
+        "chained Move's own axis/kind actually differs) and its own concrete "
+        "unblocking condition (implement + re-sweep kStoppingMarginFactorChain/"
+        "kDiscretizationCyclesChain jointly against the tour-closure gate, since the "
+        "reset's unconditional form is part of what that gate's own margin was tuned "
+        "against) -- deliberately not fixed here: 119-002's own scope excludes "
+        "changing MoveQueue's completion-handling reset or re-deriving the already "
+        "narrow-pocket chain margin (chain-advance-completion-margin-narrow-pocket.md)."
     ),
 )
 def test_two_compatible_distance_legs_carry_velocity_through_the_boundary_at_tour_level():
@@ -772,6 +769,36 @@ def test_two_compatible_distance_legs_carry_velocity_through_the_boundary_at_tou
 
     min_v = min(v for _, v in middle)
     floor = v_max * _BOUNDARY_MIN_FRACTION
+
+    # 119-002: the contract (motion/DESIGN.md Sec 4, "Chain-advance leg
+    # hand-off contract") documents the KNOWN mechanism the no-dip
+    # assertion below currently xfails on: App::MoveQueue::tick()'s own
+    # unconditional completing-axis reset produces ONE contiguous decel-
+    # then-accel/jerk-limited-recovery dip, not the RETIRED reorder
+    # experiment's own erratic, non-monotonic oscillation (see the
+    # xfail's own reason string). Characterize the dip's own shape BEFORE
+    # the strict floor check below (so it runs even while that check
+    # keeps failing) so a future regression to that different, already-
+    # retired failure mode -- or a genuinely new one, e.g. a stall that
+    # never recovers -- is caught as a DISTINGUISHABLE break instead of
+    # silently absorbed by this same xfail.
+    below = [i for i, (_, v) in enumerate(middle) if v < floor]
+    if below:
+        gaps = [b - a for a, b in zip(below, below[1:])]
+        assert all(g == 1 for g in gaps), (
+            f"{sum(1 for g in gaps if g != 1) + 1} distinct below-floor regions in the "
+            f"middle window -- an oscillating (not a single decel-then-recover) dip "
+            f"shape, inconsistent with the documented same-axis-reset mechanism "
+            f"(motion/DESIGN.md Sec 4): {middle}"
+        )
+        dip_duration = below[-1] - below[0] + 1
+        assert dip_duration <= 20, (
+            f"below-floor dip lasted {dip_duration} samples (~{dip_duration * 0.04:.2f}s) -- "
+            f"longer than the accel/jerk-limited re-ramp the documented mechanism "
+            f"should produce (motion/DESIGN.md Sec 4's own 'Chain-advance leg hand-off "
+            f"contract'): {middle}"
+        )
+
     assert min_v >= floor, (
         f"velocity dipped to {min_v:.1f}mm/s in the middle (steady-state/boundary) window -- "
         f"expected >= {floor:.1f}mm/s ({_BOUNDARY_MIN_FRACTION * 100:.0f}% of v_max={v_max}mm/s); "
