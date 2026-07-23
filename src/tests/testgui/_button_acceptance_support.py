@@ -37,26 +37,39 @@ percentage. The abs_margin term absorbs the fixed lag; rel_tol absorbs the
 residual proportional error. See ``test_gui_button_acceptance.py``'s own
 module-level tolerance constants for the concrete numbers per path.
 
-Turn-prediction campaign (2026-07-22, ``App::MoveQueue``'s new stop-
-condition anticipation lead, ``move_queue.h``): ``MANAGED_ANGLE_ABS_MARGIN_DEG``/
-``MANAGED_DIST_ABS_MARGIN_MM`` below are DELIBERATELY left UNCHANGED by
-this campaign, even though ``test_tour_closure_gate.py``'s own sweep
-(against the SAME managed Move-queue path, with the fix pushed live via
-``EstimatorConfigPatch``) shows the fixed lag above shrinking from
-~13-23deg to ~4-7deg at ``stop_lead_ms=90``. The GUI's own connect-time
-calibration push (``__main__.py``'s ``_push_robot_calibration()``) does
-NOT yet source ``estimator.stop_lead_ms`` from the robot JSON --
-``robot_radio.config.robot_config.RobotConfig`` has no ``estimator`` field
-at all today (nothing host-side reads that JSON section; only
-``gen_boot_config.py`` does, at ARM build time) -- so a live TestGUI Sim
-session (this suite's own connect path) still runs with
-``App::MoveQueue::stopLead_ == 0`` (anticipation OFF), identically to
-before this campaign. Tightening these two constants without ALSO wiring
-that push would silently claim an accuracy improvement this suite does not
-actually exercise. Wiring the GUI's own live push is tracked as a
-follow-up (see ``clasi/issues/`` for this campaign's own tracking entry) --
-out of this campaign's own scope (real hardware needs no such wiring at
-all: it gets the fix from boot config, unconditionally, on every reboot).
+Turn-prediction campaign (2026-07-22, ``App::MoveQueue``'s stop-condition
+anticipation lead, ``move_queue.h``) / wire-testgui-live-push-of-
+estimator-stop-lead fix (same day, follow-up): ``MANAGED_ANGLE_ABS_MARGIN_DEG``/
+``MANAGED_DIST_ABS_MARGIN_MM`` below were ORIGINALLY left deliberately
+UNCHANGED by the turn-prediction campaign, even though
+``test_tour_closure_gate.py``'s own sweep (against the SAME managed
+Move-queue path, with the fix pushed live via ``EstimatorConfigPatch``)
+showed the fixed lag shrinking from ~13-23deg to ~4-7deg at
+``stop_lead_ms=90`` -- because the GUI's own connect-time push
+(``__main__.py``'s ``_push_robot_calibration()``) did not yet source
+``estimator.stop_lead_ms``/the shaper limits from the robot JSON at all:
+``robot_radio.config.robot_config.RobotConfig`` had no ``estimator`` field,
+and ``EstimatorConfigPatch`` has no ``SET key=value`` text form
+(``calibration_commands()`` never covered it), so a live TestGUI Sim
+session ran with anticipation/shaping OFF regardless of what the robot
+JSON said. THIS FIX closes that gap: ``RobotConfig.estimator`` (new
+``EstimatorConfig`` model) + ``__main__.py``'s ``_push_estimator_config()``
+push ``estimator.stop_lead_ms``/``control.a_max``/``a_decel``/
+``alpha_max``/``alpha_decel``/``j_max``/``yaw_jerk_max`` via
+``NezhaProtocol.estimator_config()`` on every Connect/robot-select, both
+transports -- see ``clasi/issues/wire-testgui-live-push-of-estimator-stop-lead.md``
+(now resolved) for the full history.
+
+``MANAGED_ANGLE_ABS_MARGIN_DEG``/``MANAGED_DIST_ABS_MARGIN_MM`` above are
+STILL left unchanged (they cover 180/270/360-degree and all distance
+presets, not re-measured/re-tuned by this fix) -- this fix instead adds a
+NEW, tight ``MANAGED_ANGLE_90_*`` band (test_gui_button_acceptance.py) for
+exactly the +/-90deg magnitude this campaign's own stop_lead_ms/shaper
+tuning targets, and a ``TOUR_TURN_ERROR_MAX_DEG`` per-leg bound for Tour 1/
+Tour 2, both measured through the REAL GUI Connect -> click flow (not a
+direct SimLoop push) -- see those constants' own module-level comments in
+test_gui_button_acceptance.py for the concrete numbers and the "stakeholder
+sign-off to widen" contract.
 """
 from __future__ import annotations
 
@@ -153,6 +166,119 @@ def allowed_error(commanded: float, *, abs_margin: float, rel_tol: float) -> flo
     """The two-term tolerance ``abs_margin + rel_tol * |commanded|`` --
     see this module's own docstring for the rationale."""
     return abs_margin + rel_tol * abs(commanded)
+
+
+@dataclass
+class TurnCheck:
+    """One turn leg's commanded-vs-achieved heading, measured against sim
+    ground truth -- the SAME shape ``test_tour_closure_gate.py``'s own
+    ``TurnCheck``/``_run_tour_capture()`` use. Duplicated here (not
+    imported cross-module) because that module's own ``_run_tour_capture()``
+    drives a bare ``SimLoop`` directly via ``planner.tour.run_tour()``,
+    while ``TourLegCapture`` below instruments the REAL button-driven tour
+    (``__main__.py``'s ``_TourRunner``) -- same instrumentation shape,
+    different call site, per this fix's own acceptance wording ("assert
+    per-leg errors from the same run_tour instrumentation the closure gate
+    uses")."""
+
+    index: int
+    commanded_deg: float
+    achieved_deg: float
+    error_deg: float
+
+
+def normalize_deg(delta_deg: float) -> float:
+    """Wrap a signed degree delta to (-180, 180] -- same convention
+    ``test_tour_closure_gate.py``'s own ``_normalize_deg()`` uses."""
+    while delta_deg > 180.0:
+        delta_deg -= 360.0
+    while delta_deg <= -180.0:
+        delta_deg += 360.0
+    return delta_deg
+
+
+class TourLegCapture:
+    """Monkeypatches ``robot_radio.planner.tour.run_tour`` -- the SAME
+    function ``__main__.py``'s ``_TourRunner.run()`` calls (imported fresh
+    at call time via ``from robot_radio.planner.tour import ...
+    run_tour``, so patching the module attribute before a Tour button click
+    takes effect) -- so a live GUI Tour-button click captures PER-LEG turn
+    accuracy against sim ground truth, exactly the way
+    ``test_tour_closure_gate.py``'s own ``_run_tour_capture()`` does for its
+    bare-``SimLoop`` runs, but applied to the REAL button-driven tour
+    instead.
+
+    Wraps (never replaces) the real ``run_tour()``: the wrapper's own
+    ``on_leg`` reads ``get_true_pose()`` before/after each leg to compute
+    ``TurnCheck.achieved_deg``/``error_deg`` for ``turn`` legs, appends to
+    ``self.turns``, then calls through to whatever ``on_leg`` the caller
+    (``_TourRunner``) itself passed -- so the GUI's own per-leg log
+    narration is completely unaffected; this is a pure observer.
+
+    Reads a RAW, immediate ``get_true_pose()`` at each leg boundary --
+    deliberately NOT a ``settle_pose()`` quiet-window wait, unlike every
+    other assertion in this suite. Tried the settle-wait first (2026-07-22)
+    on the theory that it would absorb real-tick-thread scheduling jitter
+    the way it does for single-preset assertions; it made per-leg error
+    dramatically WORSE and consistently biased low (~30-45deg short on
+    EVERY leg) instead of better. Root cause: `run_tour()`'s own one-leg
+    lookahead (`send_leg(index+1)` issued before the CURRENT leg's own
+    terminal is even awaited) means the Move-queue keeps the robot in
+    CONTINUOUS motion leg-to-leg -- there is no idle/quiet window at a tour
+    leg boundary the way there is after an isolated single-preset click
+    (which IS followed by a real stop). `settle_pose()`'s quiet-window wait
+    never finds quiescence (the robot is already driving the NEXT leg), so
+    it just times out and returns whatever pose happens to be current at
+    that point -- capturing the plant PARTWAY INTO the next leg's own
+    motion instead of the current leg's endpoint. Reverted to the raw
+    synchronous read (the SAME technique `test_tour_closure_gate.py`'s own
+    `_run_tour_capture()` uses) -- the real jitter that DOES exist in the
+    raw read (measured up to ~3.9deg run-to-run on a real tick thread,
+    vs. ~1.4-2.2deg on that file's own deterministic-stepped harness with
+    the IDENTICAL pushed config) is absorbed by
+    ``TOUR_TURN_ERROR_MAX_DEG``'s own margin instead -- see that
+    constant's comment in test_gui_button_acceptance.py.
+
+    Construct with the standard function-scoped ``monkeypatch`` fixture so
+    the patch is undone automatically at test teardown -- no manual
+    lifecycle needed.
+    """
+
+    def __init__(self, monkeypatch, get_true_pose: "Callable[[], Pose]") -> None:
+        import robot_radio.planner.tour as tour_mod
+
+        self._get_true_pose = get_true_pose
+        self.turns: list[TurnCheck] = []
+        real_run_tour = tour_mod.run_tour
+
+        def _wrapped(transport, params, heading, legs, *, on_leg=None, **kwargs):
+            true_poses = [self._get_true_pose()]
+
+            def _capture(index, total, leg, leg_result):
+                pose = self._get_true_pose()
+                if leg.kind == "turn":
+                    before_h_deg = math.degrees(true_poses[-1]["h"])
+                    after_h_deg = math.degrees(pose["h"])
+                    achieved = normalize_deg(after_h_deg - before_h_deg)
+                    self.turns.append(TurnCheck(
+                        index=index, commanded_deg=leg.value, achieved_deg=achieved,
+                        error_deg=normalize_deg(achieved - leg.value)))
+                true_poses.append(pose)
+                if on_leg is not None:
+                    on_leg(index, total, leg, leg_result)
+
+            return real_run_tour(transport, params, heading, legs, on_leg=_capture, **kwargs)
+
+        monkeypatch.setattr(tour_mod, "run_tour", _wrapped)
+
+    def clear(self) -> None:
+        self.turns = []
+
+    def worst_deg(self) -> float:
+        """Worst |error_deg| across every captured turn leg, or 0.0 if none
+        captured yet (caller should treat an empty ``self.turns`` after a
+        tour run as its own failure -- see the calling test)."""
+        return max((abs(t.error_deg) for t in self.turns), default=0.0)
 
 
 def encoder_span(frames: "list") -> "tuple[float, float] | None":

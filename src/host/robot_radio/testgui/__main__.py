@@ -2222,6 +2222,15 @@ def _build_main_window():  # type: ignore[return]
             + (f" ({n_bad} REJECTED)" if n_bad else "")
         )
 
+        # wire-testgui-live-push-of-estimator-stop-lead: EstimatorConfigPatch
+        # (estimator.stop_lead_ms + control.a_max/a_decel/alpha_max/
+        # alpha_decel/j_max/yaw_jerk_max) is a SEPARATE binary-only
+        # ConfigDelta arm with no SET key=value text form -- calibration_
+        # commands()/calibration_kwargs() above never covered it, so
+        # neither of these two SET-key mechanisms would ever push it.
+        # Unconditional, same as the Tier-2 push below (both transports).
+        _push_estimator_config(transport, cfg)
+
         if isinstance(transport, SimTransport):
             try:
                 transport.configure_from_robot(cfg)
@@ -2229,6 +2238,117 @@ def _build_main_window():  # type: ignore[return]
                 _append_log(f"[CAL] configure_from_robot (Tier 2) failed: {exc}")
                 return
             _append_log(f"[CAL] configured sim Tier 2 from robot '{cfg.robot_name}'")
+
+    def _push_estimator_config(transport: "Transport", cfg: "RobotConfig") -> None:
+        """Push the ``EstimatorConfigPatch`` binary ``ConfigDelta`` (117 /
+        decel-into-the-goal campaigns) to *transport* from *cfg*'s
+        ``estimator.*``/``control.*`` shaper fields (``push.estimator_kwargs()``).
+
+        Closes ``clasi/issues/wire-testgui-live-push-of-estimator-stop-lead.md``:
+        this arm is binary-only (``config.proto``'s own ``EstimatorConfigPatch``)
+        -- it has NO ``SET key=value`` text form, so it was never reachable
+        through ``calibration_commands()``'s text-plane vocabulary. Without
+        this push, a live GUI Sim session ran with ``stop_lead_ms`` and the
+        ``Motion::VelocityShaper`` accel/jerk ceilings all OFF/neutral even
+        after 117/b0f329a9 made them live-tunable — Sim's compiled graph
+        deliberately does not link ``boot_config.cpp`` (117-004's documented
+        deviation), so nothing baked them in the way a real robot's own
+        reflash does, and nothing host-side pushed the live patch either.
+        Real hardware was unaffected by the GAP (its own reflash always
+        bakes these fields in) but gets this push too now, for the exact
+        same "selecting a robot must be authoritative" reason
+        ``_push_robot_calibration()``'s own docstring gives for every other
+        field.
+
+        Dispatches on transport type for the ``NezhaProtocol``/ack-poll
+        pair, mirroring ``SimTransport._handle_otos_patch()``'s own
+        internal pattern (the SAME ``_config_proto``/``_config_conn`` pair
+        that mechanism and the Tier-1 SET/GET path already share -- not a
+        second, redundant ``NezhaProtocol(_SimConfigConn(loop))`` wrapper):
+        - ``SimTransport``: ``transport._config_proto``/``._config_conn``
+          (constructed once in ``connect()``; ``_config_conn.poll_ack()``
+          is the ack lookup -- ``_SimConfigConn`` deliberately has no
+          ``wait_for_ack()`` of its own, see that class's docstring).
+        - ``_HardwareTransport`` (``SerialTransport``/``RelayTransport``):
+          ``transport.protocol`` is already a real ``NezhaProtocol``
+          wrapping a live ``SerialConnection`` -- ``proto.wait_for_ack()``
+          is used directly.
+
+        No-op (logged) when *cfg* carries none of the ten estimator/shaper
+        fields (defensive -- every current robot JSON populates all ten),
+        when the config channel is not ready, or when the push itself
+        raises. Every push result -- applied or rejected -- is logged, per
+        this fix's own acceptance: silent success/failure here is exactly
+        what let the original gap go unnoticed.
+        """
+        from robot_radio.calibration.push import estimator_kwargs
+
+        kwargs = estimator_kwargs(cfg)
+        if not kwargs:
+            _append_log(
+                "[CAL] no estimator/shaper fields on active config — "
+                "EstimatorConfigPatch push skipped"
+            )
+            return
+
+        if isinstance(transport, SimTransport):
+            proto = transport._config_proto
+            conn = transport._config_conn
+            if proto is None or conn is None:
+                _append_log(
+                    "[CAL] EstimatorConfigPatch push skipped — sim config "
+                    "channel not ready"
+                )
+                return
+            poll_ack = conn.poll_ack
+        else:
+            proto = transport.protocol
+            if proto is None:
+                _append_log(
+                    "[CAL] EstimatorConfigPatch push skipped — no protocol "
+                    "on transport"
+                )
+                return
+            # getattr, not a bare proto.wait_for_ack attribute reference:
+            # a real NezhaProtocol always has this method, but a duck-typed
+            # test double standing in for one (e.g.
+            # test_tour1_geometry.py's own _FakeTwistTransport, which only
+            # implements the narrower TwistTransport surface) may not --
+            # resolving it eagerly here (found the hard way: it crashed
+            # _on_connect() for every test in that file, leaving the tour
+            # buttons disabled) must be as tolerant of a missing method as
+            # the estimator_config() call itself already is below.
+            wait_for_ack = getattr(proto, "wait_for_ack", None)
+            poll_ack = wait_for_ack if wait_for_ack is not None else (lambda *_a, **_kw: None)
+
+        try:
+            corr_id = proto.estimator_config(**kwargs)
+        except Exception as exc:  # noqa: BLE001 — log, don't kill the GUI
+            _append_log(f"[CAL] EstimatorConfigPatch push failed to send: {exc}")
+            return
+
+        try:
+            ack = poll_ack(corr_id, timeout=500)
+        except Exception as exc:  # noqa: BLE001 — log, don't kill the GUI
+            _append_log(f"[CAL] EstimatorConfigPatch ack poll failed: {exc}")
+            return
+        if ack is None:
+            _append_log(
+                f"[CAL] EstimatorConfigPatch push ({len(kwargs)} fields: "
+                f"{sorted(kwargs)}) TIMED OUT waiting for ack — 0/{len(kwargs)} "
+                f"confirmed applied"
+            )
+        elif not ack.ok:
+            _append_log(
+                f"[CAL] EstimatorConfigPatch push REJECTED (err_code="
+                f"{ack.err_code}) — 0/{len(kwargs)} applied, {len(kwargs)} rejected"
+            )
+        else:
+            _append_log(
+                f"[CAL] pushed {len(kwargs)}/{len(kwargs)} estimator/shaper "
+                f"fields from robot '{cfg.robot_name}' "
+                f"(stop_lead_ms={kwargs.get('stop_lead_ms', 'n/a')})"
+            )
 
     def _check_firmware_version(transport: "Transport") -> None:
         """Compare the robot's `VER` firmware version against the host package.

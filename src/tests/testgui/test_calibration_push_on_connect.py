@@ -702,3 +702,117 @@ def test_robot_combo_change_while_connected_repushes_and_overwrites(
             active_pointer.write_bytes(original_bytes)
         else:
             active_pointer.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# wire-testgui-live-push-of-estimator-stop-lead fix: EstimatorConfigPatch
+# (estimator.stop_lead_ms/weight_heading_otos/weight_omega_otos/
+# staleness_ms + control.a_max/a_decel/alpha_max/alpha_decel/j_max/
+# yaw_jerk_max) is a SEPARATE binary-only ConfigDelta arm with no
+# ``SET key=value`` text form at all -- calibration_commands()/
+# calibration_kwargs() above never covered it (see push.py's
+# estimator_kwargs() own docstring). These tests cover the NEW selection
+# function (pure, transport-agnostic) and the connect-time push it feeds
+# (__main__.py's _push_estimator_config()).
+# ---------------------------------------------------------------------------
+
+
+def _estimator_cfg(*, estimator=None, control=None, robot_name="r"):
+    return types.SimpleNamespace(
+        robot_name=robot_name,
+        estimator=estimator if estimator is not None else types.SimpleNamespace(),
+        control=control if control is not None else types.SimpleNamespace(),
+    )
+
+
+def test_estimator_kwargs_selects_estimator_and_shaper_fields_when_present() -> None:
+    from robot_radio.calibration.push import estimator_kwargs
+
+    cfg = _estimator_cfg(
+        estimator=types.SimpleNamespace(
+            weight_heading_otos=0.0, weight_omega_otos=0.0,
+            staleness_ms=60.0, stop_lead_ms=45.0,
+        ),
+        control=types.SimpleNamespace(
+            a_max=800.0, a_decel=800.0, alpha_max=7.0, alpha_decel=7.0,
+            j_max=5000.0, yaw_jerk_max=100.0,
+        ),
+    )
+
+    kwargs = estimator_kwargs(cfg)
+
+    assert kwargs == {
+        "weight_heading_otos": 0.0, "weight_omega_otos": 0.0,
+        "staleness_ms": 60.0, "stop_lead_ms": 45.0,
+        "a_max": 800.0, "a_decel": 800.0, "alpha_max": 7.0, "alpha_decel": 7.0,
+        "j_max": 5000.0, "yaw_jerk_max": 100.0,
+    }
+
+
+def test_estimator_kwargs_omits_none_fields() -> None:
+    """A config with only SOME fields set (e.g. stop_lead_ms alone) selects
+    only those -- mirrors calibration_kwargs()'s own PID-gain contract
+    ('None -> nothing pushed, firmware boot default kept')."""
+    from robot_radio.calibration.push import estimator_kwargs
+
+    cfg = _estimator_cfg(
+        estimator=types.SimpleNamespace(
+            weight_heading_otos=None, weight_omega_otos=None,
+            staleness_ms=None, stop_lead_ms=45.0,
+        ),
+        control=types.SimpleNamespace(
+            a_max=None, a_decel=None, alpha_max=None, alpha_decel=None,
+            j_max=None, yaw_jerk_max=None,
+        ),
+    )
+
+    assert estimator_kwargs(cfg) == {"stop_lead_ms": 45.0}
+
+
+def test_estimator_kwargs_empty_when_config_has_neither_section() -> None:
+    from robot_radio.calibration.push import estimator_kwargs
+
+    assert estimator_kwargs(_estimator_cfg()) == {}
+    assert estimator_kwargs(types.SimpleNamespace(robot_name="bare")) == {}
+
+
+def test_estimator_kwargs_real_tovez_nocal_json_via_real_model() -> None:
+    """End-to-end through the REAL pydantic model -- data/robots/
+    tovez_nocal.json's own estimator/control sections, read via
+    RobotConfig.estimator (the new EstimatorConfig model this fix adds)."""
+    from robot_radio.calibration.push import estimator_kwargs
+    from robot_radio.config.robot_config import load_robot_config
+
+    cfg_path = _REPO / "data" / "robots" / "tovez_nocal.json"
+    cfg = load_robot_config(cfg_path)
+
+    kwargs = estimator_kwargs(cfg)
+
+    for key in (
+        "weight_heading_otos", "weight_omega_otos", "staleness_ms", "stop_lead_ms",
+        "a_max", "a_decel", "alpha_max", "alpha_decel", "j_max", "yaw_jerk_max",
+    ):
+        assert key in kwargs, f"missing {key!r} in {kwargs}"
+    assert kwargs["stop_lead_ms"] == 45.0
+
+
+@_requires_sim_lib
+def test_connect_pushes_estimator_config_and_acks_cleanly(
+    qapp, monkeypatch, tmp_path
+) -> None:
+    """The fix under test, end to end: Connect (Sim) with the real
+    tovez_nocal.json active must push ALL ten estimator/shaper fields via
+    EstimatorConfigPatch and get every one of them acked -- no REJECTED, no
+    TIMED OUT, matching __main__.py's own _push_estimator_config() log
+    line format."""
+    cfg_path = _REPO / "data" / "robots" / "tovez_nocal.json"
+    window, transport = _connect_gui_with_config(qapp, monkeypatch, tmp_path, cfg_path)
+    try:
+        log_text = _log_text(window)
+        assert "pushed 10/10 estimator/shaper fields" in log_text, (
+            f"EstimatorConfigPatch push did not report a clean 10/10 apply:\n{log_text}"
+        )
+        assert "EstimatorConfigPatch push REJECTED" not in log_text, log_text
+        assert "TIMED OUT waiting for ack" not in log_text, log_text
+    finally:
+        _teardown(qapp, window)

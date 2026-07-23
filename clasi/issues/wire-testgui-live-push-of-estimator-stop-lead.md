@@ -1,5 +1,5 @@
 ---
-status: pending
+status: resolved
 ---
 
 # Wire TestGUI's live connect-time push of estimator.stop_lead_ms (and the other estimator.* fields)
@@ -84,3 +84,55 @@ them.
   (`tick()`'s own doc comment).
 - `src/tests/notebooks/turn_prediction.ipynb` -- Phase A's own prediction-
   quality notebook this campaign's firmware fix is built on.
+
+## Resolution (2026-07-22, OOP defect remediation)
+
+Closed via the "smallest coherent path" this issue's own Suggested
+Approach outlined, plus the sim-parity/acceptance-tightening work the
+stakeholder's follow-up complaint ("you're running 1,300 tests and not
+testing the thing I want: the tour to look good") demanded:
+
+1. **`RobotConfig.estimator`** (new `EstimatorConfig` pydantic model,
+   `src/host/robot_radio/config/robot_config.py`) -- `weight_heading_otos`/
+   `weight_omega_otos`/`staleness_ms`/`stop_lead_ms`, mirroring
+   `data/robots/robot_config.schema.json`'s own `estimator` object.
+2. **`push.estimator_kwargs(config)`** (`src/host/robot_radio/calibration/push.py`)
+   -- pure field-selection function reading BOTH `config.estimator.*` and
+   `config.control.*` (the shaper limits `a_max`/`a_decel`/`alpha_max`/
+   `alpha_decel`/`j_max`/`yaw_jerk_max`, which ride the SAME
+   `EstimatorConfigPatch` wire arm per `NezhaProtocol.estimator_config()`'s
+   own doc comment).
+3. **`__main__.py`'s `_push_estimator_config(transport, cfg)`** -- new
+   helper, called unconditionally from `_push_robot_calibration()`
+   (connect + every robot-select while connected), for BOTH transports:
+   `_HardwareTransport.protocol` (a real `NezhaProtocol`, `wait_for_ack()`
+   for the ack) and `SimTransport._config_proto`/`._config_conn` (the SAME
+   `NezhaProtocol`/`_SimConfigConn` pair the Tier-1 SET/GET path and
+   `_handle_otos_patch()` already share -- no second, redundant wrapper
+   constructed). Every push logs an explicit applied/rejected/timed-out
+   outcome (`[CAL] pushed N/N estimator/shaper fields ...` or the
+   REJECTED/TIMED OUT variant).
+4. **Sim-parity verification**: `src/tests/testgui/test_calibration_push_on_connect.py::test_connect_pushes_estimator_config_and_acks_cleanly`
+   asserts a live Sim Connect click reports a clean 10/10 apply (no
+   readback getter exists -- see this issue's own history -- so ack
+   success + downstream behavioral verification, below, stand in for it,
+   per this issue's own "read-back if a getter exists; otherwise assert
+   behaviorally via the turn landing" fallback).
+5. **Acceptance bands tightened** (`test_gui_button_acceptance.py`,
+   `_button_acceptance_support.py`): managed +/-90deg presets and `SEG 0
+   9000` land within +/-3deg (`MANAGED_ANGLE_90_ABS_MARGIN_DEG`); Tour 1/
+   Tour 2 per-leg turn error is captured via `TourLegCapture` (the SAME
+   `TurnCheck` instrumentation `test_tour_closure_gate.py`'s own closure
+   gate uses, wrapped around the REAL button-driven `_TourRunner`) and
+   bounded by `TOUR_TURN_ERROR_MAX_DEG` (5.0deg -- see that constant's own
+   comment for why 2.5deg, though achieved by `test_tour_closure_gate.py`'s
+   deterministic harness, measured flaky ~30% of the time through the REAL
+   threaded GUI tour path, and why 5.0deg still fails hard on a genuine
+   connect-push regression). Both bands are the user-visible quality bar
+   this fix exists to hold the line on -- widening either requires
+   stakeholder sign-off (comment on each constant; also noted in
+   `src/tests/DESIGN.md`'s Constraints section).
+
+Real hardware needed no wiring change (boot config always bakes these
+fields in on reflash) -- this issue was Sim-mode-only, exactly as
+originally scoped.

@@ -98,6 +98,7 @@ from robot_radio.testgui.transport import (
 
 from ._button_acceptance_support import (
     Row,
+    TourLegCapture,
     TraceRecorder,
     allowed_error,
     encoder_span,
@@ -150,6 +151,73 @@ MANAGED_DIST_ABS_MARGIN_MM = 45.0
 MANAGED_DIST_REL_TOL = 0.10
 MANAGED_ANGLE_ABS_MARGIN_DEG = 30.0
 MANAGED_ANGLE_REL_TOL = 0.10
+
+# wire-testgui-live-push-of-estimator-stop-lead fix (2026-07-22): the GUI's
+# own Connect click now pushes stop_lead_ms + the Motion::VelocityShaper
+# accel/jerk ceilings (EstimatorConfigPatch, __main__.py's
+# _push_estimator_config()) -- previously it did not, so MANAGED_ANGLE_*
+# above was measured with anticipation/shaping OFF even though 117/
+# b0f329a9 made them live-tunable the same day. MANAGED_ANGLE_ABS_MARGIN_DEG/
+# MANAGED_ANGLE_REL_TOL above are left UNCHANGED (still cover 180/270/360,
+# not re-measured/re-tuned this fix -- the stop_lead_ms/alpha_decel tuning
+# this campaign shipped was explicitly targeted at 90-degree turns, per
+# data/robots/tovez.json's own control._shaper_note: "15-20deg taper from
+# omega=2rad/s... targeted at the ticket's own bound"); a NEW, tighter band
+# below covers exactly the 90-degree magnitude this campaign's own tuning
+# targets.
+#
+# Stakeholder's explicit quality bar (2026-07-22): "you're running 1,300
+# tests and not testing the thing I want: the tour to look good" -- managed
+# 90-degree presets and SEG turns must land within +/-3deg now that the
+# connect flow actually delivers stop_lead_ms/shaper config. A flat
+# absolute bound (no relative term -- there is only one commanded magnitude
+# in this band). Measured 2026-07-22 through the REAL GUI Connect -> click
+# flow (this module's own `gui` fixture, tovez_nocal.json) -- see this
+# constant's own value for the actual worst-case observed, kept with real
+# headroom over it, not bare-measured. Widening this specific band requires
+# stakeholder sign-off (this IS the user-visible quality bar this suite
+# exists to hold the line on -- see src/tests/DESIGN.md's own Constraints
+# section).
+MANAGED_ANGLE_90_ABS_MARGIN_DEG = 3.0  # [deg] flat bound, single magnitude
+MANAGED_ANGLE_90_REL_TOL = 0.0
+
+#: Managed (Move-queue) 90-degree magnitude selector -- ``_run_angle_preset()``
+#: uses the tight ``MANAGED_ANGLE_90_*`` band for exactly this magnitude
+#: (both signs), the broader ``MANAGED_ANGLE_*`` band for every other preset.
+_MANAGED_ANGLE_90_MAGNITUDES = (90,)
+
+#: Tour 1/Tour 2 per-leg turn-accuracy bound -- stakeholder's own "the tour
+#: to look good" bar, applied per-leg against sim ground truth (captured via
+#: ``_button_acceptance_support.TourLegCapture``, the SAME ``TurnCheck``
+#: instrumentation ``test_tour_closure_gate.py``'s own closure gate uses,
+#: wrapped around the REAL button-driven ``_TourRunner`` run instead of a
+#: bespoke bare-``SimLoop`` one).
+#:
+#: ``test_tour_closure_gate.py``'s own ``_TURN_TOLERANCE_SHAPED_DEG``
+#: (2.5deg) is the DETERMINISTIC-harness number (worst 1.378-2.235deg
+#: across TOUR_1/TOUR_2 x ideal/realistic, single-stepped, no real
+#: threading) with the SAME stop_lead_ms=45/shaper config this fix's
+#: connect-time push now delivers. First attempt here used that same
+#: 2.5deg bound directly -- FLAKY through the real GUI/``_TourRunner``
+#: path: 13 repeated Tour 1/Tour 2 runs (2026-07-22, 1x sim speed --
+#: see ``_run_tour()``'s own docstring for why 1x) measured per-leg worst
+#: error ranging 1.22-3.86deg, ~30% of runs exceeding 2.5deg. Root cause
+#: is NOT a shaping/config regression (``TourLegCapture``'s own docstring
+#: has the full mechanism): a real background tick thread means the sim
+#: keeps advancing during the host-side Python scheduling gap between a
+#: leg's completion ack and this test's own ``get_true_pose()`` read, and
+#: -- unlike an isolated single-preset click -- a tour leg boundary has NO
+#: idle/settle window to wait through first (`run_tour()`'s one-leg
+#: lookahead keeps the robot in continuous motion leg-to-leg), so that
+#: scheduling jitter reads straight through as measurement noise. 5.0deg
+#: keeps real headroom over the worst of 13 measured runs (3.86deg) while
+#: staying a meaningful regression gate: an unshaped/un-anticipated
+#: baseline (the ORIGINAL defect this fix closes -- connect-time push
+#: missing entirely) measures 13-23deg per leg, 3-5x over this bound, so
+#: it still fails loudly if the connect-flow push ever breaks again.
+#: Widening PAST 5.0deg requires stakeholder sign-off -- see
+#: MANAGED_ANGLE_90_ABS_MARGIN_DEG's own comment.
+TOUR_TURN_ERROR_MAX_DEG = 5.0  # [deg]
 
 #: Per-wheel encoder excursion (mm) beyond which motion is considered to
 #: have "actually occurred" -- see encoder_span()'s own docstring for why
@@ -545,12 +613,24 @@ def test_managed_distance_preset(gui, recorder, mm):
     )
 
 
+def _managed_angle_band(deg: int) -> "tuple[float, float]":
+    """(abs_margin, rel_tol) for a managed-path angle preset -- the tight
+    ``MANAGED_ANGLE_90_*`` band for exactly +/-90deg (the magnitude this
+    campaign's own stop_lead_ms/shaper tuning targets), the broader
+    ``MANAGED_ANGLE_*`` band for every other preset (180/270/360 --
+    unchanged, not re-tuned this fix)."""
+    if abs(deg) in _MANAGED_ANGLE_90_MAGNITUDES:
+        return MANAGED_ANGLE_90_ABS_MARGIN_DEG, MANAGED_ANGLE_90_REL_TOL
+    return MANAGED_ANGLE_ABS_MARGIN_DEG, MANAGED_ANGLE_REL_TOL
+
+
 @pytest.mark.parametrize("deg", _ANGLE_PRESETS_DEG)
 def test_managed_angle_preset(gui, recorder, deg):
     button = f"managed_ang_btn_{deg:+d}"
+    abs_margin, rel_tol = _managed_angle_band(deg)
     _run_angle_preset(
         gui, recorder, button=button, deg=deg, path="managed",
-        abs_margin=MANAGED_ANGLE_ABS_MARGIN_DEG, rel_tol=MANAGED_ANGLE_REL_TOL,
+        abs_margin=abs_margin, rel_tol=rel_tol,
         dispatch=lambda: gui.click(button),
     )
 
@@ -566,12 +646,14 @@ def test_managed_seg_0_cdeg_turn(gui, recorder, deg):
     ``_send_seg_turn()`` itself makes. SimTransport translates this
     internally onto the identical ``RT <cdeg>`` dispatch (see
     ``transport.py``'s ``SimTransport._dispatch()``), so it shares the
-    managed angle tolerance."""
+    managed angle tolerance (including the tightened +/-90deg band --
+    ``_managed_angle_band()``)."""
     cdeg = int(round(deg * 100))
     button = f"SEG 0 {cdeg}"
+    abs_margin, rel_tol = _managed_angle_band(deg)
     _run_angle_preset(
         gui, recorder, button=button, deg=deg, path="seg",
-        abs_margin=MANAGED_ANGLE_ABS_MARGIN_DEG, rel_tol=MANAGED_ANGLE_REL_TOL,
+        abs_margin=abs_margin, rel_tol=rel_tol,
         dispatch=lambda: gui.current.command(f"SEG 0 {cdeg}", read_timeout=500),
     )
 
@@ -682,23 +764,66 @@ def test_test_button_managed_turn_360deg(gui, recorder):
 # ---------------------------------------------------------------------------
 
 
-def _run_tour(gui, recorder, *, button: str, tour_name: str, n_legs: int) -> None:
+def _run_tour(gui, recorder, monkeypatch, *, button: str, tour_name: str, n_legs: int) -> None:
+    """Click *button* and wait for the tour to finish, asserting both the
+    pre-existing report-oriented closure bound AND (wire-testgui-live-push-
+    of-estimator-stop-lead fix) the stakeholder's own per-leg turn-accuracy
+    bar: every turn leg lands within ``TOUR_TURN_ERROR_MAX_DEG`` of
+    commanded, measured against sim ground truth via ``TourLegCapture`` --
+    the SAME ``TurnCheck`` instrumentation ``test_tour_closure_gate.py``'s
+    own closure gate uses (``_run_tour_capture()``), wrapped around THIS
+    module's real button-driven ``_TourRunner`` run instead of a bespoke
+    bare-``SimLoop`` one, per this fix's own acceptance wording ("assert
+    per-leg errors from the same run_tour instrumentation the closure gate
+    uses").
+
+    Runs at 1x sim speed (temporarily, restored in a ``finally`` --
+    matches ``test_stop_mid_tour_halts_motion_and_flushes_the_queue()``'s
+    own established precedent for this exact tradeoff), NOT this module's
+    default ``SPEED_FACTOR`` (10x): measured directly (2026-07-22), the
+    same tour at 10x produced wildly wrong per-leg turn errors (up to
+    ~90deg on Tour 1 leg 4 -- a leg that barely rotated at all), while the
+    identical tour at 1x measured worst 1.69deg (Tour 1)/1.65deg (Tour 2)
+    -- matching ``test_tour_closure_gate.py``'s own ~1.4-2.2deg range for
+    the SAME tours pushed through the SAME EstimatorConfigPatch config.
+    This is a pre-existing ``SimLoop`` real-tick-thread polling/pacing
+    artifact at high speed-up factors (NOT a regression from this fix,
+    and NOT a shaping/config defect) -- ``test_tour_closure_gate.py``'s own
+    module-level ``_SPEED_FACTOR = 1`` comment already documents the
+    identical finding for its own real-time-threaded test ("higher
+    factors were tried first and caused spurious ack-timeout faults...
+    not a real Executor/Pilot defect"). Widening the tour-leg tolerance to
+    paper over the 10x artifact instead of running at 1x would defeat the
+    whole point of this bound (catching a genuine connect-flow/shaping
+    regression), so 1x is the correct fix here, not a tolerance widening.
+    """
+    from PySide6.QtWidgets import QComboBox  # type: ignore[import-untyped]
+
+    speed_combo = gui.find(QComboBox, "sim_speed_combo")
+    speed_combo.setCurrentIndex(speed_combo.findData(1))
+    gui.pump(0.1)
+
     stop_tour_btn = gui.find(__import__("PySide6.QtWidgets", fromlist=["QPushButton"]).QPushButton,
                               "stop_tour_btn")
     gui.frames.clear()
+    capture = TourLegCapture(monkeypatch, gui.current.protocol.get_true_pose)
     t0 = time.monotonic()
-    gui.click(button)
-    # _on_tour_clicked() calls _set_origin() synchronously before spawning
-    # the worker thread, so by the time click() returns the plant has
-    # already been teleported to (0,0,0) -- the correct "start" pose.
-    start = gui.current.protocol.get_true_pose()
+    try:
+        gui.click(button)
+        # _on_tour_clicked() calls _set_origin() synchronously before spawning
+        # the worker thread, so by the time click() returns the plant has
+        # already been teleported to (0,0,0) -- the correct "start" pose.
+        start = gui.current.protocol.get_true_pose()
 
-    deadline = t0 + TOUR_TIMEOUT_S
-    while time.monotonic() < deadline:
-        gui.app.processEvents()
-        time.sleep(0.02)
-        if not stop_tour_btn.isEnabled():
-            break
+        deadline = t0 + TOUR_TIMEOUT_S
+        while time.monotonic() < deadline:
+            gui.app.processEvents()
+            time.sleep(0.02)
+            if not stop_tour_btn.isEnabled():
+                break
+    finally:
+        speed_combo.setCurrentIndex(speed_combo.findData(SPEED_FACTOR))
+        gui.pump(0.1)
     elapsed = time.monotonic() - t0
     timed_out = stop_tour_btn.isEnabled()
     end = gui.current.protocol.get_true_pose()
@@ -716,15 +841,33 @@ def _run_tour(gui, recorder, *, button: str, tour_name: str, n_legs: int) -> Non
 
     span = encoder_span(gui.frames)
     moved = span is not None and max(span) >= MIN_ENCODER_SPAN_MM
+
+    turns = capture.turns
+    turns_captured = bool(turns)
+    worst_turn_deg = capture.worst_deg()
+    turns_within_band = turns_captured and worst_turn_deg <= TOUR_TURN_ERROR_MAX_DEG
+    turn_report = "; ".join(
+        f"leg{t.index + 1}:cmd={t.commanded_deg:+.1f}/ach={t.achieved_deg:+.1f}/"
+        f"err={t.error_deg:+.2f}deg" for t in turns
+    )
+
     ok = (not timed_out) and completed and not stopped_early and all_legs_ran and (
-        closure_mm < MAX_TOUR_CLOSURE_POSITION_MM) and moved
+        closure_mm < MAX_TOUR_CLOSURE_POSITION_MM) and moved and turns_within_band
 
     recorder.record(Row(
         button=button, path="tour", commanded=f"{n_legs} legs ({tour_name})",
-        measured=f"closure {closure_mm:.1f}mm / {closure_deg:+.1f}deg",
-        elapsed_s=elapsed, tolerance=f"closure<{MAX_TOUR_CLOSURE_POSITION_MM:.0f}mm, all legs complete",
+        measured=(
+            f"closure {closure_mm:.1f}mm / {closure_deg:+.1f}deg; "
+            f"worst per-leg turn err {worst_turn_deg:.2f}deg ({len(turns)} turns)"
+        ),
+        elapsed_s=elapsed,
+        tolerance=(
+            f"closure<{MAX_TOUR_CLOSURE_POSITION_MM:.0f}mm, all legs complete, "
+            f"per-leg turn err<={TOUR_TURN_ERROR_MAX_DEG:g}deg"
+        ),
         encoder_advanced=moved, verdict="PASS" if ok else "FAIL",
     ))
+    print(f"[TOUR-LEG-DETAIL] {button}: {turn_report}")
 
     assert not timed_out, f"{button}: tour never finished within {TOUR_TIMEOUT_S:.0f}s (hang?)"
     assert not stopped_early, f"{button}: tour stopped early -- log:\n{log_text}"
@@ -735,14 +878,20 @@ def _run_tour(gui, recorder, *, button: str, tour_name: str, n_legs: int) -> Non
         f"{button}: closure {closure_mm:.1f}mm implausibly large (start={start}, end={end})"
     )
     assert math.isfinite(closure_deg)
+    assert turns_captured, f"{button}: no turn legs captured -- TourLegCapture wiring regression?"
+    for t in turns:
+        assert abs(t.error_deg) <= TOUR_TURN_ERROR_MAX_DEG, (
+            f"{button}: leg {t.index + 1} (commanded {t.commanded_deg:+.1f}deg) missed by "
+            f"{t.error_deg:+.2f}deg, exceeds +/-{TOUR_TURN_ERROR_MAX_DEG:g}deg -- {turn_report}"
+        )
 
 
-def test_tour_1_runs_to_completion(gui, recorder):
-    _run_tour(gui, recorder, button="tour_btn_tour_1", tour_name="Tour 1", n_legs=13)
+def test_tour_1_runs_to_completion(gui, recorder, monkeypatch):
+    _run_tour(gui, recorder, monkeypatch, button="tour_btn_tour_1", tour_name="Tour 1", n_legs=13)
 
 
-def test_tour_2_runs_to_completion(gui, recorder):
-    _run_tour(gui, recorder, button="tour_btn_tour_2", tour_name="Tour 2", n_legs=15)
+def test_tour_2_runs_to_completion(gui, recorder, monkeypatch):
+    _run_tour(gui, recorder, monkeypatch, button="tour_btn_tour_2", tour_name="Tour 2", n_legs=15)
 
 
 # ---------------------------------------------------------------------------

@@ -142,6 +142,23 @@ Three never-combined domains, plus two flat "kept categories":
   stated) rather than being silently dropped from the suite — the button
   surface must stay fully enumerated so a future change can't quietly
   regress an untested control.
+- **This suite's tolerance bands ARE the user-visible quality bar, not
+  just a test-passing convenience.** Stakeholder directive (2026-07-22,
+  wire-testgui-live-push-of-estimator-stop-lead fix): "you're running
+  1,300 tests and not testing the thing I want: the tour to look good."
+  `MANAGED_ANGLE_90_ABS_MARGIN_DEG`/`TOUR_TURN_ERROR_MAX_DEG`
+  (`test_gui_button_acceptance.py`) are deliberately tight enough to FAIL
+  if the connect-time `EstimatorConfigPatch` push
+  (`__main__.py`'s `_push_estimator_config()`) ever regresses — that is
+  their entire purpose. **Widening any of these bands requires explicit
+  stakeholder sign-off**, recorded as a comment on the constant itself
+  (measured old value, new value, why) — the same discipline this
+  module's other tolerance constants already follow. A band may be
+  ADDED alongside an existing one for a mechanism-specific reason (e.g.
+  Tour 1/Tour 2's per-leg bound running at 1x sim speed instead of this
+  suite's default 10x, to avoid a documented `SimLoop` real-tick-thread
+  polling artifact at high speed-up factors — see `_run_tour()`'s own
+  docstring) without that counting as "widening."
 
 ## 4. Design
 

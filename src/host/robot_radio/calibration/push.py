@@ -181,6 +181,62 @@ def calibration_kwargs(config: Any) -> dict[str, float | int]:
     return kwargs
 
 
+def estimator_kwargs(config: Any) -> dict[str, float]:
+    """Select the ``EstimatorConfigPatch`` field set from *config*, as a
+    flat ``NezhaProtocol.estimator_config(**kwargs)`` kwargs dict.
+
+    Companion to ``calibration_kwargs()`` above, but for a DIFFERENT wire
+    arm: ``EstimatorConfigPatch`` is a binary-only ``ConfigDelta`` patch
+    (``config.proto``) with no ``SET key=value`` text-plane vocabulary at
+    all, so it is not, and cannot be, folded into
+    ``calibration_kwargs()``/``calibration_commands()`` -- those built the
+    ``_ALL_SET_KEYS`` text surface only.  Selects two field families that
+    ride the SAME ``EstimatorConfigPatch`` envelope (config.proto's own
+    "smallest coherent path" doc comment, restated on
+    ``NezhaProtocol.estimator_config()``):
+
+      - ``config.estimator.*`` -- ``App::StateEstimator``'s fusion weights
+        (``weight_heading_otos``/``weight_omega_otos``/``staleness_ms``)
+        and ``App::MoveQueue``'s stop-condition anticipation lead
+        (``stop_lead_ms``).
+      - ``config.control.*`` -- ``Motion::VelocityShaper``'s accel/jerk
+        ceilings (``a_max``/``a_decel``/``alpha_max``/``alpha_decel``/
+        ``j_max``/``yaw_jerk_max``, decel-into-the-goal campaign).
+
+    Each key is present only when *config* carries a non-``None`` value
+    (``EstimatorConfig``/``ControlConfig``'s own "None -> nothing pushed,
+    firmware boot default kept" contract -- unlike ``rotSlip``/OTOS in
+    ``calibration_kwargs()``, there is no "uncalibrated -> neutral
+    sentinel" discipline here: an absent estimator/shaper field simply
+    is not part of this push, exactly like the velocity-PID gains above).
+    Returns ``{}`` if *config* carries none of the ten fields at all --
+    the caller must treat that as "nothing to push", not send an empty
+    ``estimator_config()`` call (which raises ``ValueError``).
+
+    See ``clasi/issues/wire-testgui-live-push-of-estimator-stop-lead.md``
+    for why this selection previously had no push path at all: a GUI Sim
+    session ran with ``stop_lead_ms``/shaper limits OFF even after 117/
+    b0f329a9 made them live-tunable, because Sim's compiled graph does not
+    link ``boot_config.cpp`` (117-004's documented deviation) and nothing
+    host-side pushed the live patch on connect.
+    """
+    kwargs: dict[str, float] = {}
+
+    est = getattr(config, "estimator", None)
+    for attr in ("weight_heading_otos", "weight_omega_otos", "staleness_ms", "stop_lead_ms"):
+        value = getattr(est, attr, None) if est is not None else None
+        if value is not None:
+            kwargs[attr] = float(value)
+
+    ctrl = getattr(config, "control", None)
+    for attr in ("a_max", "a_decel", "alpha_max", "alpha_decel", "j_max", "yaw_jerk_max"):
+        value = getattr(ctrl, attr, None) if ctrl is not None else None
+        if value is not None:
+            kwargs[attr] = float(value)
+
+    return kwargs
+
+
 # Wire keys formatted with a plain "%.6f" (matches the pre-113-003 text
 # implementation's own ml/mr formatting exactly) rather than the "%g" every
 # other SET key below uses.
