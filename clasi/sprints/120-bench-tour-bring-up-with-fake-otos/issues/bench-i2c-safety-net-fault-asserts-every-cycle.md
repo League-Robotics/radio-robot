@@ -1,9 +1,12 @@
 ---
-status: pending
+status: in-progress
 filed: 2026-07-23
 filed_by: team-lead (phase-B bench session, v0.20260723.2 on the stand)
 related:
 - restore-the-interleaved-request-settle-tick-loop-schedule.md
+sprint: '120'
+tickets:
+- 120-003
 ---
 
 # I2C safety-net fault (flags bit 6) asserts every cycle on hardware — interleave fix did not clear it

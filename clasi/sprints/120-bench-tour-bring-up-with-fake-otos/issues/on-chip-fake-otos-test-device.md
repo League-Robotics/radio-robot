@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '120'
+tickets:
+- 120-002
 ---
 
 # On-chip fake/simulated OTOS test device for the bench (synthetic OTOS pose, heading from encoders)

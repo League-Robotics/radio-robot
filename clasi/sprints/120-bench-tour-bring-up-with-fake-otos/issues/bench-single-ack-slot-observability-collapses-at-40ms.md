@@ -1,9 +1,12 @@
 ---
-status: pending
+status: in-progress
 filed: 2026-07-23
 filed_by: team-lead (phase-B bench session, v0.20260723.2 on the stand)
 related:
 - tlm-rate-15-19hz-vs-50hz-nominal-serial.md
+sprint: '120'
+tickets:
+- 120-001
 ---
 
 # Single telemetry ack slot loses transient acks at the 40ms cycle (bench)
