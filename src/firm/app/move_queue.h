@@ -283,6 +283,19 @@ class MoveQueue {
   // The caller's frame_.mode/driving_ derivation (ticket 006).
   bool active() const { return active_.occupied; }
 
+  // shapingDisabled -- true iff BOTH axes' ShaperLimits are disabled (the
+  // SAME "aMax<=0 OR aDecel<=0 OR jMax<=0" / "alphaMax<=0 OR alphaDecel<=0
+  // OR yawJerkMax<=0" gate shapeAndStage()'s own early-return condition
+  // uses, move_queue.cpp -- ShaperLimits's own doc comment above has the
+  // full disabled-axis sentinel rationale). Independent of active() --
+  // this reads shaperLimits_ only, a config-level state that exists
+  // whether or not a Move happens to be active right now. RobotLoop ANDs
+  // this with active() to drive the new flags bit 16
+  // (kFlagFaultShapingDisabled, 119 ticket 001,
+  // kill-the-silent-off-shaping-config-boundary.md) -- see that
+  // constant's own doc comment in telemetry.h.
+  bool shapingDisabled() const;
+
   // --- Test/observability seam (mirrors Telemetry::primaryEmitCount()'s
   // own "measurement/test seam" precedent, telemetry.h) -- not called by
   // RobotLoop; lets a harness assert the queue's exact contents

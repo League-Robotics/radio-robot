@@ -1222,6 +1222,116 @@ void scenarioMoveTimeoutSetsFaultFlagOnEndingCycle() {
 }
 
 // ===========================================================================
+// 119 ticket 001 (kill-the-silent-off-shaping-config-boundary.md): flags bit
+// 16 (kFlagFaultShapingDisabled) is the loud off-state for the shaping/
+// anticipation silent-off config boundary -- it must be set on every cycle a
+// Move is active AND both ShaperLimits axes are disabled, and clear
+// otherwise. Two scenarios isolate this one bit from the Move-completion
+// mechanics the scenarios above already cover: (a) LiveFixture's own
+// default construction leaves ShaperLimits{} (every field 0, shaping OFF --
+// the exact default every pre-shaping caller, including TestSim::
+// SimHarness, still gets -- move_queue.h's own "disabled-axis sentinel"
+// doc comment) -- the bit must go high while a Move is active and clear
+// again once it ends; (b) setShaperLimits() with real, both-axes-enabled
+// values (mirrors a real robot JSON's shaper block, e.g. data/robots/
+// tovez_nocal.json) -- the bit must stay clear throughout an active Move.
+// A TIME-kind Move is used for both (armorMoveTimeTwistCommand) -- per
+// move_queue.h's own tick() doc comment, Kind::Time never qualifies for
+// land-at-zero completion regardless of ShaperLimits, so it ends via the
+// SAME raw stop_time threshold in both scenarios, keeping the two directly
+// comparable and isolating this one flag from any completion-predicate
+// interaction.
+// ===========================================================================
+
+void scenarioShapingDisabledFlagSetWhileMoveActiveWithBothAxesOff() {
+  beginScenario("119-001: kFlagFaultShapingDisabled is set while a MOVE is active with both "
+                "ShaperLimits axes at their default (off), and clears once the MOVE ends");
+
+  LiveFixture fx;
+  fx.robotLoop.markConfigured();
+
+  checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) == 0,
+            "the bit stays clear with no MOVE active at all, even with shaping off");
+
+  const uint32_t kCorrId = 9161;
+  const uint32_t kMoveId = 916;
+  fx.serialFake.enqueueInbound(
+      armorMoveTimeTwistCommand(/*includeVelocity=*/true, /*v_x=*/100.0f, /*omega=*/0.0f,
+                                 /*includeStop=*/true, /*stopTimeMs=*/200.0f, /*timeoutMs=*/2000.0f,
+                                 /*replace=*/true, kMoveId, kCorrId)
+          .c_str());
+  fx.step(1);
+  checkTrue(fx.moveQueue.active(), "the Move activates immediately");
+  checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) != 0,
+            "the bit is SET the cycle the Move activates -- both axes' ShaperLimits are the "
+            "default-off {} LiveFixture never overrides");
+
+  bool ended = false;
+  constexpr int kMaxCycles = 40;  // comfortably past the Move's own 200ms stop time
+  for (int i = 0; i < kMaxCycles && !ended; ++i) {
+    fx.step(1);
+    if (!fx.moveQueue.active()) {
+      ended = true;
+      break;
+    }
+    checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) != 0,
+              "the bit stays SET on every cycle the Move remains active");
+  }
+  checkTrue(ended, "the Move ends within a bounded number of cycles");
+  checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) == 0,
+            "the bit clears the same cycle the Move ends -- no MOVE active, no fault");
+}
+
+void scenarioShapingDisabledFlagStaysClearWhenBothAxesEnabled() {
+  beginScenario("119-001: kFlagFaultShapingDisabled stays clear throughout an active MOVE once "
+                "both ShaperLimits axes are enabled (mirrors a real robot JSON's shaper block)");
+
+  LiveFixture fx;
+  fx.robotLoop.markConfigured();
+  // Mirrors data/robots/tovez_nocal.json's own shaper block (both axes'
+  // three-field enable gate satisfied -- ShaperLimits's own doc comment,
+  // move_queue.h) -- the SAME field set SimLoop.configure_from_robot()'s
+  // new Tier 3 push (estimator_kwargs()) lands via EstimatorConfigPatch on
+  // a real connection; this scenario calls setShaperLimits() directly to
+  // isolate the flag logic from the wire/merge path already covered by
+  // scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists()
+  // below.
+  App::ShaperLimits limits;
+  limits.aMax = 800.0f;
+  limits.aDecel = 800.0f;
+  limits.jMax = 5000.0f;
+  limits.alphaMax = 7.0f;
+  limits.alphaDecel = 7.0f;
+  limits.yawJerkMax = 100.0f;
+  fx.moveQueue.setShaperLimits(limits);
+
+  const uint32_t kCorrId = 9171;
+  const uint32_t kMoveId = 917;
+  fx.serialFake.enqueueInbound(
+      armorMoveTimeTwistCommand(/*includeVelocity=*/true, /*v_x=*/100.0f, /*omega=*/0.0f,
+                                 /*includeStop=*/true, /*stopTimeMs=*/200.0f, /*timeoutMs=*/2000.0f,
+                                 /*replace=*/true, kMoveId, kCorrId)
+          .c_str());
+  fx.step(1);
+  checkTrue(fx.moveQueue.active(), "the Move activates immediately");
+  checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) == 0,
+            "the bit stays clear once shaping is enabled on both axes");
+
+  bool ended = false;
+  constexpr int kMaxCycles = 40;
+  for (int i = 0; i < kMaxCycles && !ended; ++i) {
+    fx.step(1);
+    if (!fx.moveQueue.active()) {
+      ended = true;
+      break;
+    }
+    checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) == 0,
+              "the bit stays clear on every cycle the Move remains active");
+  }
+  checkTrue(ended, "the Move ends within a bounded number of cycles");
+}
+
+// ===========================================================================
 // SUC-055: a CONFIG patch injected mid-MOVE does not change the active
 // Move's completion outcome. A/B comparison against a config-free
 // baseline -- more robust than hand-deriving the exact expected cycle
@@ -1700,6 +1810,8 @@ int main() {
   scenarioMoveSuccessfulEnqueueAcksAndActivates();
   scenarioMoveEndDrainsWithNoFurtherHostTraffic();
   scenarioMoveTimeoutSetsFaultFlagOnEndingCycle();
+  scenarioShapingDisabledFlagSetWhileMoveActiveWithBothAxesOff();
+  scenarioShapingDisabledFlagStaysClearWhenBothAxesEnabled();
   scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome();
   scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles();
 

@@ -392,7 +392,16 @@ ORPHANED — its producer, `Deadman::expired()`, was deleted along with
 `kFlagEventConfigApplied` (declared, not yet wired), bits 13/14
 `kFlagLinePresent`/`kFlagColorPresent` (see §2's line/color polling note),
 bit 15 `kFlagFaultMoveTimeout` (116: wired — set on the cycle an active
-`Move` ends via `timeout` rather than its kind-specific stop condition).
+`Move` ends via `timeout` rather than its kind-specific stop condition),
+bit 16 `kFlagFaultShapingDisabled` (119 ticket 001,
+kill-the-silent-off-shaping-config-boundary.md: set on every cycle a `Move`
+is active AND `MoveQueue::shapingDisabled()` — both linear and angular
+`ShaperLimits` axes disabled — mirroring `shapeAndStage()`'s own
+early-return gate exactly, so the bit tracks precisely the regime where the
+land-at-zero completion path can never fire and the threshold/timeout
+backstop is the ONLY completion path; the loud off-state for a
+20x-turn-accuracy-delta feature that used to have a silent, invisible off
+state).
 Declaring a
 bit before it is wired is deliberate — it reserves the bit number for a
 future caller without renumbering. `RobotLoop` assembles every bit EXCEPT

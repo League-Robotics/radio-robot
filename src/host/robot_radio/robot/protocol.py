@@ -218,6 +218,7 @@ _FLAG_EVENT_CONFIG_APPLIED = 1 << 12
 _FLAG_LINE_PRESENT = 1 << 13
 _FLAG_COLOR_PRESENT = 1 << 14
 _FLAG_FAULT_MOVE_TIMEOUT = 1 << 15
+_FLAG_FAULT_SHAPING_DISABLED = 1 << 16
 
 
 def _unpack_channels4(word: "int | None") -> "tuple[int, int, int, int] | None":
@@ -306,6 +307,13 @@ class TLMFrame:
       - ``fault_move_timeout`` (bit 15) — declared now, not wired until
         sprint 116's MOVE protocol lands (S1 has no MOVE command to time
         out); always False until then.
+      - ``fault_shaping_disabled`` (bit 16) — a MOVE is active AND both
+        angular and linear ``ShaperLimits`` axes are disabled (119 ticket
+        001, kill-the-silent-off-shaping-config-boundary.md) — the loud
+        off-state for the shaping/anticipation silent-off config
+        boundary: with no taper, the land-at-zero completion path can
+        never fire and the threshold/timeout backstop is the ONLY
+        completion path.
     These properties are the ticket's own "existing downstream consumer
     keeps working unchanged" surface — grep ``src/host/robot_radio/`` for
     every attribute name the pre-115 standalone bool/bitmask fields
@@ -400,6 +408,14 @@ class TLMFrame:
         """Bit 15 -- declared now, wired by sprint 116's MOVE protocol; S1
         has no MOVE command to time out, so this is always False today."""
         return self._flag(_FLAG_FAULT_MOVE_TIMEOUT)
+
+    @property
+    def fault_shaping_disabled(self) -> bool:
+        """Bit 16 (119 ticket 001) -- a MOVE is active AND both angular and
+        linear ``ShaperLimits`` axes are disabled -- see this class's own
+        docstring and ``telemetry.h``'s ``kFlagFaultShapingDisabled`` doc
+        comment for the full rationale."""
+        return self._flag(_FLAG_FAULT_SHAPING_DISABLED)
 
     @property
     def event_deadman_expired(self) -> bool:

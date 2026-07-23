@@ -611,7 +611,8 @@ any time window.
 | 13 | `kFlagLinePresent` | line word fresh this frame |
 | 14 | `kFlagColorPresent` | color word fresh this frame |
 | 15 | `kFlagFaultMoveTimeout` | a MOVE ended via its `timeout` backstop this cycle (§7.3) — sprint 116's own bit, first live caller |
-| 16-31 | — | reserved |
+| 16 | `kFlagFaultShapingDisabled` | a MOVE is active AND both angular and linear `ShaperLimits` axes are disabled (`App::MoveQueue::shapingDisabled()`) — 119 ticket 001's loud off-state for the shaping/anticipation silent-off config boundary: with no taper, the land-at-zero completion path can never fire and the threshold/timeout backstop is the ONLY completion path |
+| 17-31 | — | reserved |
 
 ### 8.3 Measured sizes
 

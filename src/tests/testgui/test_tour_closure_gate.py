@@ -212,9 +212,9 @@ def _make_stepper(loop, clock: "_SteppedClock"):
 
 
 def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
-                a_max: "float | None" = _A_MAX, a_decel: "float | None" = _A_DECEL,
-                alpha_max: "float | None" = _ALPHA_MAX, alpha_decel: "float | None" = _ALPHA_DECEL,
-                j_max: "float | None" = _J_MAX, yaw_jerk_max: "float | None" = _YAW_JERK_MAX):
+                a_max: "float | None" = None, a_decel: "float | None" = None,
+                alpha_max: "float | None" = None, alpha_decel: "float | None" = None,
+                j_max: "float | None" = None, yaw_jerk_max: "float | None" = None):
     from robot_radio.config.robot_config import load_robot_config
     from robot_radio.io.sim_loop import SimLoop
     from robot_radio.robot.protocol import NezhaProtocol
@@ -226,6 +226,31 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
         loop.set_speed_factor(_SPEED_FACTOR)
     # 114-006: configure BEFORE the ideal/realistic fidelity knobs below --
     # see _ACTIVE_ROBOT_JSON's own comment for why this call is now required.
+    #
+    # 119 ticket 001 (kill-the-silent-off-shaping-config-boundary.md):
+    # configure_from_robot() now ALSO pushes the SAME six decel-into-the-
+    # goal shaper ceilings (a_max/a_decel/alpha_max/alpha_decel/j_max/
+    # yaw_jerk_max) from _ACTIVE_ROBOT_JSON's own control.* section (Tier 3,
+    # estimator_kwargs()) -- _ACTIVE_ROBOT_JSON's own committed values are
+    # IDENTICAL to this file's _A_MAX/_A_DECEL/etc module constants below
+    # (both were swept against the SAME gate). This function's own a_max=/
+    # a_decel=/etc parameters default to None below (not those constants) so
+    # the common case -- every current call site in this file -- relies on
+    # Tier 3's single push instead of ALSO re-pushing the identical values a
+    # second time through this function's own manual estimator_config()
+    # call further down: a second, genuinely redundant CommandEnvelope
+    # consumes one more Comms::pump() cycle before the FIRST turn's own Move
+    # is issued, which shifts WheelPlant's rest-dither phase
+    # (wheel_plant.h's own 108-011 "flip every kDitherPeriod calls" cadence)
+    # by exactly enough to tip an already-narrow-pocket turn measurement
+    # over its own tolerance (found running this exact suite against this
+    # ticket's own change: TOUR_2/ideal turn 12 missed by +0.009deg against
+    # its 2.5deg band, xfail(strict=False)-free, a genuine regression from
+    # the redundant push, not from the shaping VALUES themselves, which are
+    # unchanged). Passing an explicit non-None override here (a future
+    # sweep/tuning caller) still works exactly as before -- it pushes
+    # AFTER configure_from_robot()'s own Tier 3 push and genuinely differs
+    # from it, so it is not redundant.
     loop.configure_from_robot(load_robot_config(_ACTIVE_ROBOT_JSON))
 
     # decel-into-the-goal campaign: a_max/a_decel/alpha_max/alpha_decel/
@@ -235,16 +260,17 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
     # (every field 0, shaping OFF; see App::ShaperLimits's own doc comment)
     # unless pushed -- SimHarness itself deliberately does not source it
     # from boot config (sim_harness.h's own "sim/production boundary"
-    # comment), so a Sim-backed test that wants the taper active must push
-    # it explicitly, exactly like the OTOS calibration push a few lines
-    # down. All six None (the default) skips the push entirely (taper OFF);
-    # the caller passes all six together to turn the (jerk-limited) taper
-    # on. 118 ticket 004 (land-at-zero-completion-delete-stop-lead.md):
-    # this used to also push a live time-lead anticipation constant
-    # alongside the taper fields -- DELETED, the completion mechanism it
-    # drove no longer exists (App::MoveQueue::tick()'s own doc comment has
-    # the land-at-zero predicate that replaces it), so there is nothing
-    # left to push for it.
+    # comment); as of 119 ticket 001, configure_from_robot() above already
+    # pushes _ACTIVE_ROBOT_JSON's own values (Tier 3), so this block below
+    # only fires for a caller that explicitly OVERRIDES at least one of the
+    # six with a value different from the JSON's own -- the common (every
+    # current call site) all-None case is a genuine no-op, not "skip a push
+    # that would otherwise be needed." 118 ticket 004
+    # (land-at-zero-completion-delete-stop-lead.md): this used to also push
+    # a live time-lead anticipation constant alongside the taper fields --
+    # DELETED, the completion mechanism it drove no longer exists
+    # (App::MoveQueue::tick()'s own doc comment has the land-at-zero
+    # predicate that replaces it), so there is nothing left to push for it.
     shaper_fields = {}
     if a_max is not None:
         shaper_fields["a_max"] = a_max

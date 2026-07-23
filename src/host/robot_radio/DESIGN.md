@@ -167,6 +167,20 @@ live one first, not just deleting the dead function.
   §5 for the firmware-side consumer of the same JSON files.
 - **`io.sim_loop.SimLoop`** — loads `src/sim/`'s dylib, drives it via
   `twist()`/`stop()`; see [`../../sim/DESIGN.md`](../../sim/DESIGN.md).
+  **`configure_from_robot()`** (113, extended 119 ticket 001) is a
+  three-tier push over one shared `SimConfigConn`: Tier 1
+  (`calibration_kwargs()` → `NezhaProtocol.set_config()`, the live
+  `SET`-key-equivalent binary plane), Tier 2 (`motor_boot_config_for()` →
+  `sim_configure_motor()`, the boot-only motor fields with no live wire
+  arm), and Tier 3 (`estimator_kwargs()` →
+  `NezhaProtocol.estimator_config()`, the `EstimatorConfigPatch` fusion
+  weights + `Motion::VelocityShaper` accel/jerk ceilings). Tier 3 closes
+  `kill-the-silent-off-shaping-config-boundary.md`: every
+  `configure_from_robot()` caller (TestGUI, bench scripts, tests) now
+  inherits shaping/anticipation by default instead of running silently OFF
+  until a caller separately remembered to push it — the TestGUI's own
+  connect-time `_push_estimator_config()` push (`testgui/__main__.py`)
+  becomes redundant-but-harmless (idempotent acks) once this landed.
 - **`rogo` console script** (`io/cli.py:main`) — the live subset is
   `repl`, `stop`, `binary stop`; see §2 for which subcommands are
   currently broken.

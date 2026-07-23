@@ -653,6 +653,17 @@ void RobotLoop::cycle() {
     // only on the exact cycle a timed-out completion is reported this
     // call, false every other cycle (SUC-054).
     tlm_.setFlag(kFlagFaultMoveTimeout, moveTimedOut);
+    // Loud off-state (119 ticket 001,
+    // kill-the-silent-off-shaping-config-boundary.md): set whenever a MOVE
+    // is active with BOTH angular and linear ShaperLimits disabled --
+    // MoveQueue::shapingDisabled() mirrors shapeAndStage()'s own
+    // early-return condition (move_queue.cpp) exactly, so this bit tracks
+    // precisely the regime where the land-at-zero completion path can
+    // never fire and the threshold/timeout backstop is the ONLY
+    // completion path. See telemetry.h's own kFlagFaultShapingDisabled
+    // doc comment.
+    tlm_.setFlag(kFlagFaultShapingDisabled,
+                 moveQueue_.active() && moveQueue_.shapingDisabled());
     if (moveResult.completed) {
       // MOVE completion ack (protocol-set-point issue, Responses section):
       // a SECOND ack on the cycle the command ends -- ack_corr ==

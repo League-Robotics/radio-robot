@@ -547,4 +547,12 @@ void MoveQueue::flush() {
   shaperVRight_.reset();
 }
 
+bool MoveQueue::shapingDisabled() const {
+  bool linearShaping =
+      shaperLimits_.aMax > 0.0f && shaperLimits_.aDecel > 0.0f && shaperLimits_.jMax > 0.0f;
+  bool angularShaping = shaperLimits_.alphaMax > 0.0f && shaperLimits_.alphaDecel > 0.0f &&
+                        shaperLimits_.yawJerkMax > 0.0f;
+  return !linearShaping && !angularShaping;
+}
+
 }  // namespace App
