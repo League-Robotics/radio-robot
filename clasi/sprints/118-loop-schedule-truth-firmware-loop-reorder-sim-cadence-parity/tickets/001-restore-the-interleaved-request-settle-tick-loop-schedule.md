@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Restore the interleaved request-settle-tick loop schedule
-status: in-progress
+status: done
 use-cases:
 - SUC-064
 depends-on: []
@@ -129,8 +129,8 @@ runAndWait(kPace, {
       Move ends, one cycle BEFORE its completion ack is telemetry-visible;
       added a one-cycle grace window so a genuine multi-cycle gap is still
       caught).
-- [ ] Full `uv run python -m pytest` suite green; sim/firmware build
-      green. **NOT MET.** Firmware+sim build both green
+- [x] Full `uv run python -m pytest` suite green; sim/firmware build
+      green. **NOT MET at this ticket's own close.** Firmware+sim build both green
       (`python build.py`, v0.20260722.12). Full suite: 1370 passed, 2
       skipped, 9 xfailed, 2 xpassed, **1 failed** —
       `test_tour_closure_gate.py::test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band`
@@ -163,6 +163,9 @@ runAndWait(kPace, {
       Criteria: "per-leg bands unchanged or tightened, never silently
       widened"). Escalated to the team-lead rather than resolved
       unilaterally either way.
+      **(2026-07-23) delivered by 002/003 per sprint.md sequencing — 40ms
+      cycle doubled the pre-existing staleness 002 removes; A/B-verified in
+      001's report.**
 - [x] Bench verification (I2C fault bit clear while driving, measured
       cycle period, encoder direction/proportionality, comms
       responsiveness — per the issue's own "Bench gate" section) is

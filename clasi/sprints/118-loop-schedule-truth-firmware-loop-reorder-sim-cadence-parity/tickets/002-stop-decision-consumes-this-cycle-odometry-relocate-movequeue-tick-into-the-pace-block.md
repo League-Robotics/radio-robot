@@ -2,9 +2,11 @@
 id: '002'
 title: Stop decision consumes this-cycle odometry (relocate MoveQueue::tick into the
   pace block)
-status: open
-use-cases: [SUC-063]
-depends-on: ['001']
+status: in-progress
+use-cases:
+- SUC-063
+depends-on:
+- '001'
 github-issue: ''
 issue: stop-decision-must-see-this-cycles-odometry.md
 completes_issue: true
