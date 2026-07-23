@@ -1,10 +1,12 @@
 ---
 id: '119'
 title: 'Land at zero and clean house: motion semantics + deletions'
-status: planning-docs
+status: closed
 branch: sprint/119-land-at-zero-and-clean-house-motion-semantics-deletions
 worktree: false
-use-cases: ['SUC-067', 'SUC-068']
+use-cases:
+- SUC-067
+- SUC-068
 issues:
 - kill-the-silent-off-shaping-config-boundary.md
 - specify-and-assert-the-leg-handoff-contract.md
