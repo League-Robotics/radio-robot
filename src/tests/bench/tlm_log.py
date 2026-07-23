@@ -83,7 +83,7 @@ CSV_FIELDNAMES: "tuple[str, ...]" = (
     "flag_conn_left", "flag_conn_right", "flag_ack_fresh",
     "flag_fault_i2c_safety_net", "flag_fault_wedge_latch",
     "flag_fault_i2c_nak_timeout", "flag_fault_malformed_frame",
-    "flag_fault_move_timeout",
+    "flag_fault_move_timeout", "flag_fault_shaping_disabled",
     "flag_event_deadman_expired", "flag_event_boot_ready", "flag_event_config_applied",
     "flag_line_present", "flag_color_present",
     "ack_corr", "ack_err",
@@ -109,7 +109,8 @@ def frame_to_row(frame: TLMFrame) -> "dict[str, object]":
     presence/status/fault/event bit `TLMFrame` exposes as a `@property`,
     covering every bit the hardware bench gate -- ticket 010 -- reads:
     otos presence/connectivity, per-motor bus connectivity, ack freshness,
-    all four faults, all three events, line/color presence); `flags` is
+    all five faults (the fifth, `fault_shaping_disabled` / flags bit 16,
+    119 ticket 001), all three events, line/color presence); `flags` is
     still carried too, raw, alongside them.
     """
     enc_left, enc_right = frame.enc_left, frame.enc_right
@@ -138,6 +139,7 @@ def frame_to_row(frame: TLMFrame) -> "dict[str, object]":
         "flag_fault_i2c_nak_timeout": frame.fault_i2c_nak_timeout,
         "flag_fault_malformed_frame": frame.fault_malformed_frame,
         "flag_fault_move_timeout": frame.fault_move_timeout,
+        "flag_fault_shaping_disabled": frame.fault_shaping_disabled,
         "flag_event_deadman_expired": frame.event_deadman_expired,
         "flag_event_boot_ready": frame.event_boot_ready,
         "flag_event_config_applied": frame.event_config_applied,
@@ -185,13 +187,37 @@ def stream_to_csv(source: FrameSource, csv_path: "str | pathlib.Path", duration:
     I/O wrapper only -- every row-shape decision lives in `frame_to_row()`,
     kept separate per this ticket's own implementation plan so the pure
     function is what `test_tlm_log.py` exercises, never this loop.
+
+    119 ticket 001 (kill-the-silent-off-shaping-config-boundary.md): every
+    frame's `fault_shaping_disabled` (flags bit 16) is checked for an EDGE
+    transition and printed on the transition only (never per-frame, which
+    would flood stdout for the duration of any unshaped MOVE) -- this is
+    the "bench tooling prints it" half of that ticket's acceptance
+    criteria, reached by BOTH `estimator_capture.py --sim` (via this
+    function) and a real hardware capture through `main()` below, with
+    zero change to either caller.
     """
     csv_path = pathlib.Path(csv_path)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
 
     row_count = 0
+    shaping_disabled_active = False
     start = time.monotonic()
     next_progress = start + progress_interval
+
+    def _write_row(frame: TLMFrame) -> None:
+        nonlocal row_count, shaping_disabled_active
+        writer.writerow(frame_to_row(frame))
+        row_count += 1
+        shaping_disabled_now = bool(frame.fault_shaping_disabled)
+        if shaping_disabled_now != shaping_disabled_active:
+            shaping_disabled_active = shaping_disabled_now
+            if shaping_disabled_now:
+                print("  [SHAPE] flags bit 16 (kFlagFaultShapingDisabled) SET -- MOVE "
+                      "active with shaping/anticipation OFF on both axes")
+            else:
+                print("  [SHAPE] flags bit 16 cleared -- shaping active again")
+
     with open(csv_path, "w", newline="") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=CSV_FIELDNAMES)
         writer.writeheader()
@@ -202,8 +228,7 @@ def stream_to_csv(source: FrameSource, csv_path: "str | pathlib.Path", duration:
             if elapsed >= duration:
                 break
             for frame in source.read_pending_binary_tlm_frames():
-                writer.writerow(frame_to_row(frame))
-                row_count += 1
+                _write_row(frame)
             if now >= next_progress:
                 print(f"  t={elapsed:6.1f}s  rows={row_count}")
                 next_progress += progress_interval
@@ -212,8 +237,7 @@ def stream_to_csv(source: FrameSource, csv_path: "str | pathlib.Path", duration:
         # Final drain -- catch anything queued between the last poll and the
         # duration deadline.
         for frame in source.read_pending_binary_tlm_frames():
-            writer.writerow(frame_to_row(frame))
-            row_count += 1
+            _write_row(frame)
 
     return row_count
 

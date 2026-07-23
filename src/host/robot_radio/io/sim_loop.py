@@ -120,6 +120,7 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import logging
 import pathlib
 import queue
 import sys
@@ -132,6 +133,8 @@ if TYPE_CHECKING:
     from robot_radio.config.robot_config import RobotConfig
     from robot_radio.robot.pb2 import envelope_pb2
     from robot_radio.robot.protocol import TLMFrame
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Lib path resolution -- same convention the deleted predecessor used
@@ -487,8 +490,9 @@ class SimLoop:
     def configure_from_robot(self, config: "RobotConfig") -> None:
         """Configure the running sim from *config* (a
         ``robot_radio.config.robot_config.RobotConfig``, or any duck-typed
-        object with the same attribute structure) -- BOTH tiers sprint 113
-        exists to close the gap between:
+        object with the same attribute structure) -- THREE tiers close the
+        gap between what a real serial boot bakes in and what a bare Sim
+        session would otherwise run with:
 
         - **Tier 1** (the live ``ConfigDelta``/SET wire plane -- fields
           BOTH real hardware and this sim already apply identically via
@@ -510,9 +514,46 @@ class SimLoop:
           was DELETED, 115-003, gut S1 motion-stack excision: nothing in
           the S1 minimal firmware reads a boot-loaded ``msg::PlannerConfig``
           any more.)
+        - **Tier 3** (119 ticket 001,
+          kill-the-silent-off-shaping-config-boundary.md): the live
+          ``EstimatorConfigPatch`` wire arm -- ``App::StateEstimator``'s
+          fusion weights plus ``Motion::VelocityShaper``'s accel/jerk
+          ceilings (``push.estimator_kwargs(config)``, the SAME field
+          selection the TestGUI's own connect-time
+          ``_push_estimator_config()`` already used). Sent over the SAME
+          ``SimConfigConn`` Tier 1 already built (one config connection,
+          not a second one) via ``NezhaProtocol.estimator_config(**kwargs)``
+          -- fire-and-poll, like ``otos_config()``/``estimator_config()``
+          themselves, so this method polls the ack itself
+          (``SimConfigConn.poll_ack()``) and logs applied/rejected/timed-out
+          exactly like the TestGUI's own push -- but ONLY when a background
+          tick thread is running (``connect()``'s default). With no tick
+          thread (``connect(start_tick_thread=False)``, the deterministic/
+          manual-step shape ``turn_prediction_capture.py``/
+          ``test_tour_closure_gate.py`` use), nothing advances the sim
+          during a blocking ack poll, so this method skips it and logs what
+          is actually known (sent, via the SAME synchronous
+          ``_run_or_enqueue()`` path Tier 1/2 already rely on) instead of
+          either wasting real wall-clock time or misreporting a landed push
+          as a false timeout -- the caller's own subsequent ``step()``
+          calls are what actually apply it; polling the ack, if ever
+          needed, is the caller's own job from there (mirrors
+          ``SimConfigConn.send_envelope()``'s own documented
+          "reply=None... caller polls separately" contract). This is THE fix for the
+          issue this ticket closes: every ``configure_from_robot()`` caller
+          (GUI, bench scripts, tests, future scripts) now inherits
+          shaping/anticipation by default instead of running silently OFF
+          until a caller remembers a SEPARATE push -- the TestGUI's own
+          connect-time push becomes redundant-but-harmless (idempotent
+          acks) once this lands; no dedup is mandated by the issue, and
+          none was added (its own "dedup or leave harmless" framing). A
+          config carrying none of the nine estimator/shaper fields (rare --
+          every shipped robot JSON populates all nine) is a logged no-op,
+          never a raised exception -- ``estimator_kwargs()``'s own "return
+          ``{}``, caller must treat that as nothing to push" contract.
 
         Tier 1 runs first (the smaller, already-proven mechanism); Tier 2
-        second. Neither tier's outcome depends on the other's.
+        second; Tier 3 third. No tier's outcome depends on another's.
 
         Requires an active connection (``_require_connected()``, matching
         every other ``SimLoop`` method's precondition style). Every import
@@ -527,11 +568,15 @@ class SimLoop:
         self._require_connected()
 
         # ---- Tier 1: live ConfigDelta/SET wire plane -----------------------
-        from robot_radio.calibration.push import calibration_kwargs
+        from robot_radio.calibration.push import calibration_kwargs, estimator_kwargs
         from robot_radio.io.sim_config import SimConfigConn
         from robot_radio.robot.protocol import NezhaProtocol
 
-        config_proto = NezhaProtocol(SimConfigConn(self))  # type: ignore[arg-type]
+        # Kept as its own local (not just wrapped straight into NezhaProtocol)
+        # so Tier 3 below can reuse its poll_ack() -- the SAME single config
+        # connection every tier of this method shares, not a second one.
+        sim_config_conn = SimConfigConn(self)
+        config_proto = NezhaProtocol(sim_config_conn)  # type: ignore[arg-type]
         config_proto.set_config(**calibration_kwargs(config))
 
         # ---- Tier 2: one-shot boot-config load surface (motor only --
@@ -545,6 +590,60 @@ class SimLoop:
                 self._handle, ctypes.c_int(port),
                 ctypes.c_float(motor_cfg["vel_filt_alpha"]),
                 ctypes.c_int(motor_cfg["fwd_sign"]))
+
+        # ---- Tier 3: live EstimatorConfigPatch wire arm (119 ticket 001) ---
+        est_kwargs = estimator_kwargs(config)
+        if not est_kwargs:
+            logger.info(
+                "configure_from_robot(): no estimator/shaper fields on config -- "
+                "EstimatorConfigPatch push skipped")
+            return
+
+        try:
+            corr_id = config_proto.estimator_config(**est_kwargs)
+        except Exception as exc:  # noqa: BLE001 -- log, don't raise out of a boot-config call
+            logger.warning(
+                "configure_from_robot(): EstimatorConfigPatch push failed to send: %s", exc)
+            return
+
+        if self._thread is None or not self._thread.is_alive():
+            # No tick thread -- a deterministic/manual-step session
+            # (`connect(start_tick_thread=False)`, this class's own `step()`
+            # docstring). Nothing advances the sim without an explicit
+            # caller-driven `step()` call, so blocking here on a real-time
+            # `poll_ack()` would either waste up to its own timeout in real
+            # wall-clock seconds for an ack that can never arrive without a
+            # `step()`, or misreport "TIMED OUT" for a push that in fact
+            # landed (found running this exact path, turn_prediction_
+            # capture.py: the config command IS applied synchronously --
+            # `_run_or_enqueue()`'s own "run now if no tick thread" contract,
+            # the SAME mechanism Tier 1/2 above already rely on -- only its
+            # ACK is unobservable here). Log what is actually known (sent,
+            # not yet confirmed) and defer ack observation to the caller,
+            # exactly like `SimConfigConn.send_envelope()`'s own documented
+            # "reply=None... caller polls separately via poll_ack()"
+            # contract.
+            logger.info(
+                "configure_from_robot(): sent %d/%d estimator/shaper fields (%s) -- no tick "
+                "thread running (manual-step session); step() the sim and poll corr_id=%d "
+                "for the ack if confirmation is needed",
+                len(est_kwargs), len(est_kwargs), sorted(est_kwargs), corr_id)
+            return
+
+        ack = sim_config_conn.poll_ack(corr_id, timeout=500)
+        if ack is None:
+            logger.warning(
+                "configure_from_robot(): EstimatorConfigPatch push (%d fields: %s) TIMED "
+                "OUT waiting for ack -- 0/%d confirmed applied",
+                len(est_kwargs), sorted(est_kwargs), len(est_kwargs))
+        elif not ack.ok:
+            logger.warning(
+                "configure_from_robot(): EstimatorConfigPatch push REJECTED (err_code=%s) -- "
+                "0/%d applied, %d rejected", ack.err_code, len(est_kwargs), len(est_kwargs))
+        else:
+            logger.info(
+                "configure_from_robot(): pushed %d/%d estimator/shaper fields (%s)",
+                len(est_kwargs), len(est_kwargs), sorted(est_kwargs))
 
     # ------------------------------------------------------------------
     # Tier-2 config-load readback (113-007) -- test-only diagnostic proving

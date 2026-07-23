@@ -102,6 +102,43 @@ _TURN_TOLERANCE_IDEAL_DEG = 0.05      # "EXACT" -- negligible-epsilon, not "with
                                       # 0.05deg is ~3 orders of magnitude tighter than the
                                       # realistic-profile gate and well inside float32 pose
                                       # accumulation noise over a 13-15 leg tour.
+
+# 119 ticket 005 (straight-leg-crab fix): per-straight-leg TRUTH heading
+# stability gate -- see StraightLegCruiseCheck's own doc comment and
+# _assert_tour_gate()'s own cruise_heading_tolerance_deg parameter.
+#
+# IMPORTANT: this is a TOUR-embedded measurement, not the isolated
+# accel/cruise/decel-only signature the straight-leg-crab issue's own repro
+# script (straight_drift_repro.py) measures. In a tour, EVERY straight leg
+# but the very first is chain-advanced immediately behind a TURN leg
+# (SUC-051 seamless hand-off) -- and 119-002's own "axis-drop coast at
+# chain boundaries" contract (motion/DESIGN.md §4) documents a REAL,
+# already-accepted, SEPARATE physical effect: the turn's own omega axis is
+# commanded to 0 at the exact hand-off instant, but the plant's own
+# residual angular velocity keeps physically coasting for a few more
+# cycles the reset does not (and structurally cannot) erase -- a
+# permanent, non-transient heading offset for the REST of that leg, not a
+# 118-001-style transient that cancels by the leg's own end. Empirically
+# confirmed here: this file's own leg-1 measurement (the tour's OWN first
+# leg, never chain-advanced from a turn) reads EXACTLY 0.0000deg under the
+# ideal-chip profile -- proving the actuation-skew fix itself is clean
+# (matches straight_drift_repro.py's own isolated 0.000deg finding
+# exactly) -- while every LATER, turn-chained leg carries a real,
+# nonzero, ticket-119-002-attributed baseline on top. These tolerances
+# therefore bound "actuation-skew fix regression + axis-drop coast," not
+# "actuation-skew fix regression" alone -- a REGRESSION of the 118-001 bug
+# would add roughly +2.7deg more (this file's own isolated pre-fix
+# measurement) on top of whatever coast baseline a given leg already
+# carries, which these margins still have comfortable room to catch.
+# Realistic profile additionally carries a REAL, non-sensing heading cost
+# from _ENC_SCALE_ERR_L/_ENC_SCALE_ERR_R (a genuine per-wheel effective-
+# diameter mismatch the velocity PID closes on, not measurement noise) --
+# confirmed present even on leg 1 (2.36deg, no preceding turn at all).
+_CRUISE_HEADING_TOLERANCE_IDEAL_DEG = 5.5        # margin over measured worst 4.2538deg
+                                                  # (TOUR_1/ideal leg 7, chain-advance-adjacent)
+_CRUISE_HEADING_TOLERANCE_REALISTIC_DEG = 10.5   # margin over measured worst 9.3066deg
+                                                  # (TOUR_1/realistic leg 5, chain-advance-adjacent
+                                                  # + real encoder-scale-mismatch heading cost)
 _CLOSURE_POSITION_MAX_MM = 600.0     # matches test_sim_transport_tour1.py's own bench-observed
                                       # bound (real TOUR_1 closures ranged up to ~500mm even when
                                       # COMPLETED cleanly) -- TOUR_1/2 are not tightly-closed loops
@@ -212,9 +249,9 @@ def _make_stepper(loop, clock: "_SteppedClock"):
 
 
 def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
-                a_max: "float | None" = _A_MAX, a_decel: "float | None" = _A_DECEL,
-                alpha_max: "float | None" = _ALPHA_MAX, alpha_decel: "float | None" = _ALPHA_DECEL,
-                j_max: "float | None" = _J_MAX, yaw_jerk_max: "float | None" = _YAW_JERK_MAX):
+                a_max: "float | None" = None, a_decel: "float | None" = None,
+                alpha_max: "float | None" = None, alpha_decel: "float | None" = None,
+                j_max: "float | None" = None, yaw_jerk_max: "float | None" = None):
     from robot_radio.config.robot_config import load_robot_config
     from robot_radio.io.sim_loop import SimLoop
     from robot_radio.robot.protocol import NezhaProtocol
@@ -226,6 +263,31 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
         loop.set_speed_factor(_SPEED_FACTOR)
     # 114-006: configure BEFORE the ideal/realistic fidelity knobs below --
     # see _ACTIVE_ROBOT_JSON's own comment for why this call is now required.
+    #
+    # 119 ticket 001 (kill-the-silent-off-shaping-config-boundary.md):
+    # configure_from_robot() now ALSO pushes the SAME six decel-into-the-
+    # goal shaper ceilings (a_max/a_decel/alpha_max/alpha_decel/j_max/
+    # yaw_jerk_max) from _ACTIVE_ROBOT_JSON's own control.* section (Tier 3,
+    # estimator_kwargs()) -- _ACTIVE_ROBOT_JSON's own committed values are
+    # IDENTICAL to this file's _A_MAX/_A_DECEL/etc module constants below
+    # (both were swept against the SAME gate). This function's own a_max=/
+    # a_decel=/etc parameters default to None below (not those constants) so
+    # the common case -- every current call site in this file -- relies on
+    # Tier 3's single push instead of ALSO re-pushing the identical values a
+    # second time through this function's own manual estimator_config()
+    # call further down: a second, genuinely redundant CommandEnvelope
+    # consumes one more Comms::pump() cycle before the FIRST turn's own Move
+    # is issued, which shifts WheelPlant's rest-dither phase
+    # (wheel_plant.h's own 108-011 "flip every kDitherPeriod calls" cadence)
+    # by exactly enough to tip an already-narrow-pocket turn measurement
+    # over its own tolerance (found running this exact suite against this
+    # ticket's own change: TOUR_2/ideal turn 12 missed by +0.009deg against
+    # its 2.5deg band, xfail(strict=False)-free, a genuine regression from
+    # the redundant push, not from the shaping VALUES themselves, which are
+    # unchanged). Passing an explicit non-None override here (a future
+    # sweep/tuning caller) still works exactly as before -- it pushes
+    # AFTER configure_from_robot()'s own Tier 3 push and genuinely differs
+    # from it, so it is not redundant.
     loop.configure_from_robot(load_robot_config(_ACTIVE_ROBOT_JSON))
 
     # decel-into-the-goal campaign: a_max/a_decel/alpha_max/alpha_decel/
@@ -235,16 +297,17 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
     # (every field 0, shaping OFF; see App::ShaperLimits's own doc comment)
     # unless pushed -- SimHarness itself deliberately does not source it
     # from boot config (sim_harness.h's own "sim/production boundary"
-    # comment), so a Sim-backed test that wants the taper active must push
-    # it explicitly, exactly like the OTOS calibration push a few lines
-    # down. All six None (the default) skips the push entirely (taper OFF);
-    # the caller passes all six together to turn the (jerk-limited) taper
-    # on. 118 ticket 004 (land-at-zero-completion-delete-stop-lead.md):
-    # this used to also push a live time-lead anticipation constant
-    # alongside the taper fields -- DELETED, the completion mechanism it
-    # drove no longer exists (App::MoveQueue::tick()'s own doc comment has
-    # the land-at-zero predicate that replaces it), so there is nothing
-    # left to push for it.
+    # comment); as of 119 ticket 001, configure_from_robot() above already
+    # pushes _ACTIVE_ROBOT_JSON's own values (Tier 3), so this block below
+    # only fires for a caller that explicitly OVERRIDES at least one of the
+    # six with a value different from the JSON's own -- the common (every
+    # current call site) all-None case is a genuine no-op, not "skip a push
+    # that would otherwise be needed." 118 ticket 004
+    # (land-at-zero-completion-delete-stop-lead.md): this used to also push
+    # a live time-lead anticipation constant alongside the taper fields --
+    # DELETED, the completion mechanism it drove no longer exists
+    # (App::MoveQueue::tick()'s own doc comment has the land-at-zero
+    # predicate that replaces it), so there is nothing left to push for it.
     shaper_fields = {}
     if a_max is not None:
         shaper_fields["a_max"] = a_max
@@ -344,10 +407,32 @@ class TurnCheck:
 
 
 @dataclass
+class StraightLegCruiseCheck:
+    """119 ticket 005 (straight-leg-crab actuation/telemetry pairing skew --
+    clasi/issues/straight-leg-crab-118-001-actuation-and-telemetry-pairing-skew.md):
+    per-STRAIGHT-leg (``leg.kind == "distance"``) TRUTH heading stability,
+    sampled every sim cycle for the leg's FULL duration (a superset of its
+    cruise phase -- the accel/decel transients are the exact place 118-001's
+    bug lived, so this check does not skip them the way the turn-accuracy
+    checks skip a settle window). ``max_abs_delta_deg`` is the largest
+    |truth heading - truth heading at the leg's own start| observed at any
+    sampled cycle -- an endpoint-only check (compare only the leg's final
+    heading to its start) is PROVABLY BLIND to this failure shape: 118-001's
+    own bug held a nonzero heading offset throughout accel+cruise+decel and
+    canceled it exactly by the end (measured final error 0.00deg while the
+    leg crabbed sideways the whole time) -- see the issue's own derivation.
+    """
+    index: int
+    distance_mm: float
+    max_abs_delta_deg: float
+
+
+@dataclass
 class TourGateResult:
     completed: bool
     stop_reason: str
     turns: list = field(default_factory=list)
+    straight_leg_cruise_headings: list = field(default_factory=list)
     start_true: dict | None = None
     end_true: dict | None = None
     position_delta: float | None = None
@@ -375,6 +460,11 @@ def _run_tour_capture(loop, tour_wire, *, v_max: float = 150.0,
 
     true_poses: list[dict] = [loop.get_true_pose()]
     turns: list[TurnCheck] = []
+    # 119 ticket 005: max |truth heading - truth heading at leg start|
+    # observed at any SAMPLED cycle of a "distance" (straight) leg, keyed by
+    # leg index -- see StraightLegCruiseCheck's own doc comment for why this
+    # is a per-cycle, whole-leg-duration check, not an endpoint comparison.
+    straight_leg_max_delta: dict[int, float] = {}
 
     def _on_leg(index, total, leg, leg_result) -> None:
         pose = loop.get_true_pose()
@@ -387,6 +477,27 @@ def _run_tour_capture(loop, tour_wire, *, v_max: float = 150.0,
                 error_deg=_normalize_deg(achieved - leg.value)))
         true_poses.append(pose)
 
+    def _on_row(_tick_index, row_leg_index, row_leg, _tick_result, _frame) -> None:
+        # RowCallback's own args (tour.py): (tick_index [GLOBAL across the
+        # WHOLE tour], leg_index, leg, TickResult, latest TLMFrame|None) --
+        # fires once per poll iteration (one sim cycle each, in this
+        # deterministic-stepper path) WHILE a leg is in flight. run_tour()
+        # calls this BEFORE on_leg() ever fires for the SAME leg index, so
+        # true_poses[-1] here is still that leg's own START pose (the
+        # previous leg's end pose, or true_poses[0] for leg 0) -- see
+        # StraightLegCruiseCheck's own doc comment.
+        if row_leg.kind != "distance":
+            return
+        start_h_deg = math.degrees(true_poses[-1]["h"])
+        current_h_deg = math.degrees(loop.get_true_pose()["h"])
+        delta = abs(_normalize_deg(current_h_deg - start_h_deg))
+        # -1.0 sentinel (never a real |delta|) so a leg whose TRUE max delta
+        # is exactly 0.0 (e.g. the tour's own first leg, with no preceding
+        # chain-advance to inherit any residual) still gets an entry instead
+        # of silently never appearing in straight_leg_max_delta at all.
+        if delta > straight_leg_max_delta.get(row_leg_index, -1.0):
+            straight_leg_max_delta[row_leg_index] = delta
+
     run_tour_kwargs: dict = {}
     if deterministic:
         clock = _SteppedClock()
@@ -398,13 +509,20 @@ def _run_tour_capture(loop, tour_wire, *, v_max: float = 150.0,
             # reads it as a real pacing duration in this deterministic path.
             clock_fn=clock.now, sleep_fn=_make_stepper(loop, clock), poll_interval=0.04)
 
-    result = run_tour(loop, params, heading, legs, v_max=v_max, on_leg=_on_leg, **run_tour_kwargs)
+    result = run_tour(loop, params, heading, legs, v_max=v_max, on_leg=_on_leg,
+                       row_callback=_on_row, **run_tour_kwargs)
 
     completed = result.stopped_at is None
     stop_reason = "" if completed else (
         f"leg {result.stopped_at + 1}/{len(legs)} ({result.stopped_outcome})")
 
+    straight_leg_cruise_headings = [
+        StraightLegCruiseCheck(index=i, distance_mm=legs[i].value, max_abs_delta_deg=d)
+        for i, d in sorted(straight_leg_max_delta.items())
+    ]
+
     gate = TourGateResult(completed=completed, stop_reason=stop_reason, turns=turns,
+                          straight_leg_cruise_headings=straight_leg_cruise_headings,
                           start_true=true_poses[0] if true_poses else None,
                           end_true=true_poses[-1] if completed and true_poses else None)
 
@@ -418,7 +536,8 @@ def _run_tour_capture(loop, tour_wire, *, v_max: float = 150.0,
     return gate
 
 
-def _assert_tour_gate(gate: TourGateResult, *, tolerance_deg: float, label: str) -> None:
+def _assert_tour_gate(gate: TourGateResult, *, tolerance_deg: float, label: str,
+                       cruise_heading_tolerance_deg: float) -> None:
     assert gate.completed, f"{label}: tour did not complete -- stopped at {gate.stop_reason}"
     assert gate.turns, f"{label}: no turn legs captured (parse_tour() regression?)"
 
@@ -437,6 +556,34 @@ def _assert_tour_gate(gate: TourGateResult, *, tolerance_deg: float, label: str)
             f"{t.error_deg:+.3f}deg (tolerance {tolerance_deg}deg)\n{report}"
         )
 
+    # 119 ticket 005: cruise-heading gate on every straight ("distance") leg
+    # -- endpoint-only checks (position_delta/heading_delta_deg below) are
+    # PROVABLY BLIND to the straight-leg-crab failure shape (118-001's own
+    # bug held a nonzero TRUE heading throughout accel+cruise+decel and
+    # canceled it exactly by the leg's own end -- see
+    # StraightLegCruiseCheck's own doc comment). This is a NEW assertion,
+    # not a replacement for the position/heading closure checks below.
+    assert gate.straight_leg_cruise_headings, (
+        f"{label}: no straight (distance) legs captured (parse_tour() regression, or a "
+        f"tour with no D steps?)"
+    )
+    cruise_report_lines = [f"{label}: per-straight-leg max |truth heading delta| during the leg:"]
+    cruise_worst = 0.0
+    for c in gate.straight_leg_cruise_headings:
+        cruise_report_lines.append(
+            f"  leg {c.index + 1} (distance={c.distance_mm:+.0f}mm): "
+            f"max|delta|={c.max_abs_delta_deg:.4f}deg")
+        cruise_worst = max(cruise_worst, c.max_abs_delta_deg)
+    cruise_report = "\n".join(cruise_report_lines)
+
+    for c in gate.straight_leg_cruise_headings:
+        assert c.max_abs_delta_deg < cruise_heading_tolerance_deg, (
+            f"{label}: straight leg {c.index + 1} (distance={c.distance_mm:+.0f}mm) truth "
+            f"heading drifted {c.max_abs_delta_deg:.4f}deg during the leg (tolerance "
+            f"{cruise_heading_tolerance_deg}deg) -- endpoint checks would have missed this if "
+            f"decel canceled it (see straight-leg-crab-118-001 issue)\n{cruise_report}"
+        )
+
     assert gate.position_delta is not None and gate.heading_delta_deg is not None
     assert gate.position_delta < _CLOSURE_POSITION_MAX_MM, (
         f"{label}: closure position delta implausibly large: {gate.position_delta:.1f}mm "
@@ -447,120 +594,35 @@ def _assert_tour_gate(gate: TourGateResult, *, tolerance_deg: float, label: str)
     # numbers the stakeholder asked to read, not adjectives.
     print(f"\n{report}\n{label}: worst |error|={worst:.3f}deg, "
           f"closure position_delta={gate.position_delta:.1f}mm, "
-          f"heading_delta={gate.heading_delta_deg:+.2f}deg")
+          f"heading_delta={gate.heading_delta_deg:+.2f}deg\n"
+          f"{cruise_report}\n{label}: worst straight-leg cruise |delta|={cruise_worst:.4f}deg "
+          f"(tolerance {cruise_heading_tolerance_deg}deg)")
 
 
 # ---------------------------------------------------------------------------
-# The gate itself
-#
-# 109-009's own Iteration Log/Impossibility Argument (ticket 009 file,
-# clasi/sprints/109-.../tickets/009-...md): six real firmware bugs were
-# found and fixed in round 1 (TLM twist never populated, chained-pivot
-# dwell completion keyed on the wrong condition, heading unwrap broken for
-# |deltaHeading|>180deg, missing STOP_TIME backstop on the terminal
-# DISTANCE branch, no distance-completion settle epsilon, STOP_TIME margin
-# too tight for the sim's own real-time jitter). Round 2 (stakeholder
-# redirect 2026-07-17) found and fixed TWO MORE: the dwell hold's own hard
-# reset-on-any-miss policy (replaced with a leaky/decaying counter) and a
-# raw one-sample rate-derivative noise-sensitivity bug (replaced with a
-# low-pass-filtered rate estimate for the dwell gate's own decision only)
-# -- see executor.cpp's own dwell-completion comment and motion/DESIGN.md.
-#
-# Net result after round 2: TOURS NOW COMPLETE RELIABLY -- 15/15 clean
-# completions (deterministic-stepped) for both TOUR_1 and TOUR_2, under
-# both the ideal and realistic error profiles, plus 4/4 real-time-threaded
-# and 3/3 SimTransport-path confirmations (see ticket 009's own completion
-# notes for the full numbers). These tests remain xfail ONLY for the two
-# accuracy gaps below, not for completion/reliability, which is resolved:
-#
-# (1) IDEAL-CHIP "exact (negligible epsilon)" is not reached (measures
-#     ~0.4-2.2deg, not <0.05deg) -- attributed to Devices::Otos's own
-#     kReadPeriod (20ms) read-rate limit letting real rotation happen
-#     unsampled during a pivot's cruise phase, a physical sampling-latency
-#     limit of the current architecture. DEFERRED to ticket 010 ("Turn-
-#     error characterization and prediction equation") by stakeholder
-#     decision (2026-07-17) -- this is expected, not a regression.
-# (2) REALISTIC-PROFILE turns are MOSTLY within 1deg but not uniformly --
-#     most turns land within ~0.5-1.6deg; TOUR_2's own final turn (leg 14,
-#     immediately preceding the tour's last leg) is a reproducible outlier
-#     at ~4.9deg, attributed to the SAME Otos read-latency mechanism as (1)
-#     compounding with cumulative drift late in a long tour. NOT closed by
-#     this ticket's own time budget -- left as an open, numbers-backed gap
-#     for ticket 010 rather than silently retuning the tolerance.
-#
-# 114-006 re-baseline: _make_loop() now calls configure_from_robot() against
-# data/robots/tovez_nocal.json (vel_kp=0.002) BEFORE the ideal/realistic
-# fidelity knobs above -- these numbers above were originally measured
-# against the pre-113 hardcoded vel_kp=0.003 fallback the sim used to run
-# silently. Re-measured against the actually-configured 0.002 plant: worst
-# ideal-chip miss is now ~1.11deg (TOUR_1/TOUR_2 turn 2, both +1.09deg,
-# still well inside the ~0.4-2.2deg range above -- same mechanism, no
-# regression); worst realistic-profile miss is now TOUR_1 turn 8 at
-# +1.46deg (TOUR_2's own leg 14, the PREVIOUS outlier, now measures a
-# non-outlier -1.22deg -- the specific worst-turn identity shifted with the
-# configured plant's dynamics, but stayed in the same ~1-1.5deg band, still
-# the same Otos read-latency mechanism, not a new regression). Both xfail
-# reason strings below get a trailing sentence recording this so the
-# specific numbers stay accurate to what the CONFIGURED plant measures, per
-# this ticket's "document old value, new value, why" rule -- the tolerances
-# themselves (0.05deg/1.0deg, the stakeholder's own stated bar) are
-# unchanged.
-#
-# xfail (not skip) so both gaps stay VISIBLE and would XPASS loudly the
-# moment either one actually closes.
+# The gate itself. 109-009's Impossibility Argument (ticket file) fixed
+# eight real firmware bugs across two rounds; tours now complete RELIABLY
+# (15/15 clean completions, both tours, both error profiles -- see that
+# ticket's own completion notes). These tests stay xfail ONLY for the two
+# residual per-turn ACCURACY gaps below, not for completion/reliability,
+# which is resolved. xfail (not skip) so both gaps stay VISIBLE and would
+# XPASS loudly the moment either one actually closes.
 # ---------------------------------------------------------------------------
 
 _XFAIL_REASON_IDEAL = (
-    "109-009 Impossibility Argument (see ticket file), DEFERRED to ticket 010 by "
-    "stakeholder decision (2026-07-17): ideal-chip turns do not reach the "
-    "stakeholder's own stated <0.05deg 'exact' bar -- attributed to Devices::Otos's "
-    "own kReadPeriod (20ms) read-rate limit letting real rotation happen unsampled "
-    "during a pivot's cruise phase, a physical sampling-latency limit of the current "
-    "architecture, not a tuning gap. Tours themselves complete RELIABLY (round-2 "
-    "dwell-completion fixes -- see the ticket's own Iteration Log/completion notes); "
-    "only this residual accuracy gap remains, explicitly out of that ticket's own "
-    "scope.\n"
-    "\n"
-    "This xfail reason's own numeric history (114-006 re-baseline, the "
-    "turn-prediction campaign's time-lead anticipation stage, the decel-into-the-goal "
-    "taper's own accel-only then jerk-limited stages) is NOT reproduced here -- every "
-    "one of those stages measured against a completion mechanism 118 ticket 004 "
-    "(land-at-zero-completion-delete-stop-lead.md) deletes outright (a hand-tuned "
-    "time-lead constant with a four-retune history and no stable value), so the "
-    "numbers would describe a regime that no longer exists. See this file's own git "
-    "history for the full chronology if it is ever needed.\n"
-    "\n"
-    "118 ticket 004 (land-at-zero completion): MoveQueue::tick() now declares a "
-    "Move done when `remaining` and the taper's own commanded speed have BOTH "
-    "converged near zero (move_queue.h's own doc comment) -- an emergent property "
-    "of the taper already designed to arrive at ~zero speed, not a tuned guess. See "
+    "109-009 Impossibility Argument: ideal-chip tour turns still don't reach the "
+    "stakeholder's <0.05deg 'exact' bar (current per-turn errors ~0.2-2.2deg; see "
     "test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band()'s own "
-    "printed report for this file's current ideal-chip measurements under the "
-    "land-at-zero regime -- still short of the stakeholder's own stated <0.05deg "
-    "'exact' bar (same Otos::kReadPeriod mechanism as ever), so this xfail stays "
-    "open."
+    "printed report) -- see clasi/issues/land-at-zero-at-orthogonal-chain-boundaries.md "
+    "for the live investigation into the dominant remaining error source."
 )
 
 _XFAIL_REASON_REALISTIC = (
-    "109-009 Impossibility Argument (see ticket file): realistic-profile turns do "
-    "not uniformly land within the stakeholder's own stated 1.0deg bar, attributed "
-    "to the same Otos read-latency mechanism as the deferred ideal-chip gap, "
-    "compounding with cumulative drift late in a tour and sensor-error-injection "
-    "noise (OTOS/encoder scale/tick-quant/slip, this file's own _OTOS_*/_ENC_* "
-    "constants). Tours themselves complete RELIABLY (round-2 dwell-completion "
-    "fixes); this residual per-turn accuracy gap is left open, numbers-backed, "
-    "rather than silently retuning the tolerance.\n"
-    "\n"
-    "This xfail reason's own numeric history is NOT reproduced here for the SAME "
-    "reason the ideal-chip xfail's own matching paragraph gives -- see that "
-    "paragraph and this file's own git history.\n"
-    "\n"
-    "118 ticket 004 (land-at-zero completion): see the ideal-chip xfail's own "
-    "matching paragraph for the mechanism. See "
-    "test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band()'s own "
-    "printed report for this file's current realistic-profile measurements under "
-    "the land-at-zero regime -- still short of the stakeholder's own stated 1.0deg "
-    "bar, so this xfail stays open."
+    "109-009 Impossibility Argument: realistic-profile tour turns still don't "
+    "uniformly land within the stakeholder's 1.0deg bar (same dominant error source "
+    "as the ideal-chip xfail, plus sensor-error-injection noise) -- see "
+    "clasi/issues/land-at-zero-at-orthogonal-chain-boundaries.md for the live "
+    "investigation."
 )
 
 
@@ -589,8 +651,11 @@ def test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band():
             finally:
                 loop.disconnect()
             profile = "realistic" if realistic else "ideal"
+            cruise_tol = (_CRUISE_HEADING_TOLERANCE_REALISTIC_DEG if realistic
+                          else _CRUISE_HEADING_TOLERANCE_IDEAL_DEG)
             _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_SHAPED_DEG,
-                               label=f"{label}/{profile}/shaped-band")
+                               label=f"{label}/{profile}/shaped-band",
+                               cruise_heading_tolerance_deg=cruise_tol)
 
 
 @pytest.mark.xfail(reason=_XFAIL_REASON_IDEAL, strict=False)
@@ -602,7 +667,8 @@ def test_tour_1_ideal_chip_turns_are_exact():
         gate = _run_tour_capture(loop, TOUR_1)
     finally:
         loop.disconnect()
-    _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_IDEAL_DEG, label="TOUR_1/ideal")
+    _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_IDEAL_DEG, label="TOUR_1/ideal",
+                       cruise_heading_tolerance_deg=_CRUISE_HEADING_TOLERANCE_IDEAL_DEG)
 
 
 @pytest.mark.xfail(reason=_XFAIL_REASON_IDEAL, strict=False)
@@ -614,7 +680,8 @@ def test_tour_2_ideal_chip_turns_are_exact():
         gate = _run_tour_capture(loop, TOUR_2)
     finally:
         loop.disconnect()
-    _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_IDEAL_DEG, label="TOUR_2/ideal")
+    _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_IDEAL_DEG, label="TOUR_2/ideal",
+                       cruise_heading_tolerance_deg=_CRUISE_HEADING_TOLERANCE_IDEAL_DEG)
 
 
 @pytest.mark.xfail(reason=_XFAIL_REASON_REALISTIC, strict=False)
@@ -626,7 +693,8 @@ def test_tour_1_realistic_errors_turns_within_one_degree():
         gate = _run_tour_capture(loop, TOUR_1)
     finally:
         loop.disconnect()
-    _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_REALISTIC_DEG, label="TOUR_1/realistic")
+    _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_REALISTIC_DEG, label="TOUR_1/realistic",
+                       cruise_heading_tolerance_deg=_CRUISE_HEADING_TOLERANCE_REALISTIC_DEG)
 
 
 @pytest.mark.xfail(reason=_XFAIL_REASON_REALISTIC, strict=False)
@@ -638,7 +706,8 @@ def test_tour_2_realistic_errors_turns_within_one_degree():
         gate = _run_tour_capture(loop, TOUR_2)
     finally:
         loop.disconnect()
-    _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_REALISTIC_DEG, label="TOUR_2/realistic")
+    _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_REALISTIC_DEG, label="TOUR_2/realistic",
+                       cruise_heading_tolerance_deg=_CRUISE_HEADING_TOLERANCE_REALISTIC_DEG)
 
 
 # ---------------------------------------------------------------------------
@@ -656,39 +725,36 @@ def test_tour_2_realistic_errors_turns_within_one_degree():
 @pytest.mark.xfail(
     strict=False,
     reason=(
-        "111-002: CONFIRMED reorder-coupled, not a separate regression -- "
-        "see clasi/issues/restore-the-interleaved-request-settle-tick-loop-schedule.md "
-        "(the SAME live robot_loop.cpp cycle-order experiment that also "
-        "quarantines src/tests/sim/system/test_profiled_motion_sim.py's "
-        "turn scenario and two src/tests/sim/unit/test_app_robot_loop.py "
-        "scenarios -- this test links the SAME compiled firmware, via "
-        "src/sim/build/libfirmware_host.dylib, not a separate copy). "
-        "frame.twist[0] oscillates between roughly half and above-v_max "
-        "every sample during the steady-state window (e.g. 93, 200, 94, "
-        "138, 201, 93, 203, ...) instead of holding near v_max=150 -- the "
-        "same stale/alternating-encoder-read signature as the profiled- "
-        "motion case. Diagnosed identically: temporarily, LOCALLY (never "
-        "committed) reverted robot_loop.cpp's cycle-order experiment back "
-        "to its own documented intended order, rebuilt "
-        "src/sim/build/libfirmware_host.dylib (cmake --build src/sim/build), "
-        "and re-ran this exact test three times -- passed cleanly every "
-        "time (no dip below 135mm/s). Rebuilt again from the unmodified, "
-        "committed (reordered) source and the failure returned identically "
-        "on the first try. This is a direct, confirmed consequence of the "
-        "live reorder experiment, not a tour-boundary/planner bug. "
-        "114-006: _make_loop() now calls configure_from_robot() (required -- "
-        "the sim fail-closed refuses MOTION with no configuration at all "
-        "since 114-001/002/003); under the actually-configured plant this "
-        "test now runs ~208 ticks (~11s wall-clock, reproducible across "
-        "repeat runs) before RunOutcome.FAULT, rather than completing and "
-        "only dipping below the velocity floor -- it no longer even reaches "
-        "the min_v assertion this reason was originally written against. "
-        "Consistent with, not contradictory to, the diagnosis above (the "
-        "SAME real-time-threaded stale/alternating-encoder-read mechanism "
-        "escalating to an outright fault rather than a milder dip is not a "
-        "new failure mode); left un-re-diagnosed here per the reorder "
-        "experiment's own standing instruction (kept live and A/B-compared "
-        "just before hardware, not to be revert-tested piecemeal mid-sprint)."
+        "119-002: re-run against the current tree (post-118, post-119 ticket 001) -- "
+        "the PRIOR reason above (111-002's reorder-coupled stale/alternating-encoder "
+        "oscillation, frame.twist bouncing between roughly half and above-v_max) is "
+        "STALE: that experiment was retired by 118 ticket 001, and the failure this "
+        "test now shows is a DIFFERENT, independently-diagnosed mechanism -- a clean, "
+        "monotonic velocity dip from ~149mm/s to ~24mm/s at the leg boundary followed "
+        "by a smooth accel/jerk-limited ramp back to cruise over ~8 cycles (~320ms), "
+        "not an erratic oscillation. Root cause: App::MoveQueue::tick() "
+        "(move_queue.cpp) unconditionally hard-resets the completing axis's shaper to "
+        "(0, 0) at EVERY completion boundary (118 ticket 003's own kept decision), "
+        "even when the incoming chained Move commands that SAME axis -- so this "
+        "test's own two same-axis, same-v_max Distance legs get the hand-off reset "
+        "instead of SUC-051's carried-velocity continuity. This was always true post-118 "
+        "ticket 003, but only became visible in THIS test once 119 ticket 001 made the "
+        "shaper-limits push default-on for _make_loop()'s own SimLoop session -- "
+        "previously shaping was silently off here (no taper, no reset, no dip "
+        "possible), so this specific same-axis-compatible-chain scenario was never "
+        "exercised by 118 ticket 003's own re-sweep (TOUR_1/TOUR_2 always alternate "
+        "Distance/Angle legs, so a same-axis boundary never occurred there either). "
+        "See motion/DESIGN.md's own 'Chain-advance leg hand-off contract' (§4, 119-002) "
+        "for the verified mechanism and "
+        "clasi/issues/chain-advance-reset-defeats-same-axis-compatible-leg-continuity.md "
+        "for the fix candidate (make the reset conditional on whether the incoming "
+        "chained Move's own axis/kind actually differs) and its own concrete "
+        "unblocking condition (implement + re-sweep kStoppingMarginFactorChain/"
+        "kDiscretizationCyclesChain jointly against the tour-closure gate, since the "
+        "reset's unconditional form is part of what that gate's own margin was tuned "
+        "against) -- deliberately not fixed here: 119-002's own scope excludes "
+        "changing MoveQueue's completion-handling reset or re-deriving the already "
+        "narrow-pocket chain margin (chain-advance-completion-margin-narrow-pocket.md)."
     ),
 )
 def test_two_compatible_distance_legs_carry_velocity_through_the_boundary_at_tour_level():
@@ -746,6 +812,36 @@ def test_two_compatible_distance_legs_carry_velocity_through_the_boundary_at_tou
 
     min_v = min(v for _, v in middle)
     floor = v_max * _BOUNDARY_MIN_FRACTION
+
+    # 119-002: the contract (motion/DESIGN.md Sec 4, "Chain-advance leg
+    # hand-off contract") documents the KNOWN mechanism the no-dip
+    # assertion below currently xfails on: App::MoveQueue::tick()'s own
+    # unconditional completing-axis reset produces ONE contiguous decel-
+    # then-accel/jerk-limited-recovery dip, not the RETIRED reorder
+    # experiment's own erratic, non-monotonic oscillation (see the
+    # xfail's own reason string). Characterize the dip's own shape BEFORE
+    # the strict floor check below (so it runs even while that check
+    # keeps failing) so a future regression to that different, already-
+    # retired failure mode -- or a genuinely new one, e.g. a stall that
+    # never recovers -- is caught as a DISTINGUISHABLE break instead of
+    # silently absorbed by this same xfail.
+    below = [i for i, (_, v) in enumerate(middle) if v < floor]
+    if below:
+        gaps = [b - a for a, b in zip(below, below[1:])]
+        assert all(g == 1 for g in gaps), (
+            f"{sum(1 for g in gaps if g != 1) + 1} distinct below-floor regions in the "
+            f"middle window -- an oscillating (not a single decel-then-recover) dip "
+            f"shape, inconsistent with the documented same-axis-reset mechanism "
+            f"(motion/DESIGN.md Sec 4): {middle}"
+        )
+        dip_duration = below[-1] - below[0] + 1
+        assert dip_duration <= 20, (
+            f"below-floor dip lasted {dip_duration} samples (~{dip_duration * 0.04:.2f}s) -- "
+            f"longer than the accel/jerk-limited re-ramp the documented mechanism "
+            f"should produce (motion/DESIGN.md Sec 4's own 'Chain-advance leg hand-off "
+            f"contract'): {middle}"
+        )
+
     assert min_v >= floor, (
         f"velocity dipped to {min_v:.1f}mm/s in the middle (steady-state/boundary) window -- "
         f"expected >= {floor:.1f}mm/s ({_BOUNDARY_MIN_FRACTION * 100:.0f}% of v_max={v_max}mm/s); "

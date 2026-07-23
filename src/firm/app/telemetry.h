@@ -96,7 +96,26 @@ namespace App {
 //                                    Declared now, wired by sprint 116's
 //                                    protocol-set-point issue -- S1 has no
 //                                    MOVE command to time out.
-//   bits 16-31 -- reserved for future use.
+//   bit 16 (kFlagFaultShapingDisabled) -- a MOVE is active AND BOTH
+//                                    ShaperLimits axes (linear, angular)
+//                                    are disabled (App::MoveQueue::
+//                                    shapingDisabled(), mirroring
+//                                    shapeAndStage()'s own early-return
+//                                    gate, move_queue.cpp) -- the loud
+//                                    off-state for the silent-off
+//                                    shaping/anticipation config boundary
+//                                    (119 ticket 001,
+//                                    kill-the-silent-off-shaping-config-
+//                                    boundary.md): with no taper, the
+//                                    land-at-zero completion path can
+//                                    never fire and the threshold/timeout
+//                                    backstop is the ONLY completion path
+//                                    -- a ~20x turn-accuracy regression a
+//                                    reader should never have to infer
+//                                    silently. Clears the same cycle no
+//                                    MOVE is active, or shaping is
+//                                    re-enabled on at least one axis.
+//   bits 17-31 -- reserved for future use.
 constexpr uint32_t kFlagOtosPresent = 1u << 0;
 constexpr uint32_t kFlagOtosConnected = 1u << 1;
 constexpr uint32_t kFlagActive = 1u << 2;
@@ -113,6 +132,7 @@ constexpr uint32_t kFlagEventConfigApplied = 1u << 12;
 constexpr uint32_t kFlagLinePresent = 1u << 13;
 constexpr uint32_t kFlagColorPresent = 1u << 14;
 constexpr uint32_t kFlagFaultMoveTimeout = 1u << 15;
+constexpr uint32_t kFlagFaultShapingDisabled = 1u << 16;
 
 // Primary cadence target: primary period == cycle period (115-005, closes
 // kcycle-kprimaryperiod-mismatch.md -- the frame is emitted every loop

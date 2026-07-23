@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Delete the config attic (20 dead control.* keys) and dead run_tour kwargs
-status: open
+status: done
 use-cases: []
 depends-on: []
 github-issue: ''
@@ -79,17 +79,17 @@ for its own one-field schema deletion.
 
 ## Acceptance Criteria
 
-- [ ] All 20 keys gone from all three `data/robots/*.json` files, the
+- [x] All 20 keys gone from all three `data/robots/*.json` files, the
       pydantic model, `robot_config.schema.json`, and
       `config_sync_allowlist.json`.
-- [ ] The four `run_tour()` kwargs + `DEFAULT_INTER_LEG_SETTLE` gone from
+- [x] The four `run_tour()` kwargs + `DEFAULT_INTER_LEG_SETTLE` gone from
       `tour.py`; every `run_tour()` caller re-verified green (do not
       assume the pre-118 call-site inventory still holds).
-- [ ] Grep gate: no surviving reference to any deleted key outside
+- [x] Grep gate: no surviving reference to any deleted key outside
       `src/archive/` and closed-sprint records.
-- [ ] Full `uv run python -m pytest` suite green.
-- [ ] Sim tour-closure gate and button-acceptance suite green.
-- [ ] Bench verification is DEFERRED to the phase-B bench session — not
+- [x] Full `uv run python -m pytest` suite green.
+- [x] Sim tour-closure gate and button-acceptance suite green.
+- [x] Bench verification is DEFERRED to the phase-B bench session — not
       required to close this ticket.
 
 ## Testing

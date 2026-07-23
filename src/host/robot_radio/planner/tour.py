@@ -1,94 +1,29 @@
 """robot_radio.planner.tour -- tour geometry ownership + chained execution.
 
-Sprint 107 ticket 002 (SUC-033, `architecture-update.md` Decision 3, corrected
-during that document's own self-review to keep the dependency direction
-`[Presentation] -> [Domain]`, not the reverse). `TOUR_1`/`TOUR_2` used to live
-in `testgui/commands.py` as raw firmware wire strings (`D`/`RT`) built for the
-now-deleted `Motion::SegmentExecutor` (sprint 102/103). The GEOMETRY those
-wire strings encode is still a real, tuned, reusable asset -- this module
-OWNS that data and parses it into typed legs.
+Owns `TOUR_1`/`TOUR_2` (typed via `parse_tour()`) and the shared per-leg
+execution loop the TestGUI (`testgui/__main__.py`'s `_TourRunner`) drives:
+sends ONE `Move` command per leg (`transport.move()`), enqueueing the NEXT
+leg while the CURRENT one is still active (one-leg lookahead, SUC-003) so
+firmware's own bounded queue and boundary-velocity carry sequence
+compatible legs without decelerating to a stop. Per-leg completion is
+driven by that `Move`'s own completion EVENT (`docs/protocol-v4.md`
+section 7.2's single ack slot, matched on `Move.id`), never a host-timed
+settle delay or a polled `fault_bits` check. Full history (the sprint 107
+origin, the 109-008 Move-queue adoption, the 2026-07-22 protocol-v4 port):
+src/host/robot_radio/DESIGN.md.
 
-109-008 (host adoption of sprint 109's `Move` wire message): `run_tour()` no
-longer builds a `profile.py` setpoint sequence and streams it through a
-`planner.executor.StreamingExecutor` -- DISTANCE/pivot trajectory planning
-(jerk-limited profile shape, heading PD closure) now lives ENTIRELY in
-firmware (`Motion::Executor`/`App::Pilot`, sprint 109 tickets 003-006).
-`run_tour()` instead sends ONE `Move` command per leg (`transport.move()`)
-and lets the firmware's own fixed-depth command queue and boundary-velocity
-carry (ticket 006) sequence them -- enqueueing the NEXT leg while the CURRENT
-one is still active (one-command lookahead) so two compatible same-`v_max`
-legs carry velocity through their shared boundary instead of decelerating to
-a stop, per sprint 109's SUC-003. Per-leg completion is driven by the
-command's own completion EVENT, not a host-timed settle delay or a
-host-computed profile exhaustion check -- this is also sprint 109 ticket
-008's own resolution of `tour1-freeze-investigation-2026-07-15.md`: the old
-streaming path's `tick()` polled raw `fault_bits` every cadence tick and
-stopped the WHOLE tour the instant any bit was set (including a transient,
-firmware-self-recovered blip); this path has no such polling at all -- the
-ONLY thing that ends a leg is that leg's OWN `Move` reaching a terminal
-state, so a transient fault bit that firmware's own `MotorArmor` recovers
-from without aborting the active command has no way to freeze/stop a tour
-that would otherwise complete.
-
-**Ported (2026-07-22, `testgui-motion-paths-dead-after-move-cutover.md`)
-onto protocol v4's `Move`/single-ack-slot wire shape** (sprint 115/116's
-frame-v2 rewrite + MOVE protocol cutover, `docs/protocol-v4.md`) -- this
-module's own body had gone dormant (raised `AttributeError` at import,
-referencing `telemetry_pb2.ACK_STATUS_DONE` and the pre-115 depth-3
-`AckEntry` ring, both deleted). The 109-008 "one `Move` per leg, one-leg
-lookahead, event-driven completion" SHAPE described above is unchanged and
-still exactly what this module does; only the WIRE mechanics changed:
-- `MoveTransport.move()`'s own kwargs are now the current `Move` schema
-  (`v_x`/`omega`/`stop_distance`/`stop_angle`/`timeout`/`replace`/`id` --
-  see that Protocol's own docstring below), not the deleted sprint-109 arc
-  shape (`distance`/`delta_heading`/`v_max`/`omega`/`time`).
-- There is no more `AckStatus` taxonomy (`DONE`/`TRIVIAL`/`SUPERSEDED`/
-  `FLUSHED`/`TIMEOUT`/`SOLVE_FAIL`) and no depth-3 ack ring. `Telemetry` now
-  carries a SINGLE ack slot (`ack_corr`/`ack_err`, `TLMFrame.ack`) that
-  rides EITHER a command's ENQUEUE ack (echoing the envelope's own
-  `corr_id`) OR a `Move`'s own COMPLETION ack (echoing `Move.id` instead --
-  `docs/protocol-v4.md` section 7.2) -- never both for the same command.
-  `_drain_and_poll()`/`_wait_for_move_terminal()` below poll for a frame
-  whose ack slot matches THIS leg's own `Move.id` (never the corr_id
-  `transport.move()` itself might return), and `_outcome_for_terminal_frame()`
-  reads the SAME frame's `fault_move_timeout` flag (bit 15) to distinguish a
-  stop-condition completion from a timeout ending -- the completion ack's
-  own `ack_err` is unconditionally 0 either way (protocol-v4.md section
-  7.3, AS-BUILT), so it carries no outcome information by itself.
-
-`planner.executor.StreamingExecutor`/`planner.profile` themselves are
-UNCHANGED and UNTOUCHED by this ticket -- only TOURS (this module) moved to
-the MOVE-queue path. No live gamepad/teleop UI is wired into this checkout
-today (nothing in `testgui/` currently constructs a `StreamingExecutor`
-outside this module and `tests/bench/`'s own bench scripts); this ticket's
-"demote the host planner to teleop input shaping only" description refers to
-ticket 003's `TIMED` `Move` wire primitive existing for a FUTURE gamepad/
-teleop consumer to use, not a live one being preserved here -- there is no
-DISTANCE/pivot planning logic left in `host/robot_radio/planner/` for THIS
-module to keep or remove either way (this module never built its own
-profile/queue logic beyond calling `profile.py`/`executor.py`, both of which
-stay exactly as they were).
-
-This is the single, shared per-leg execution loop both the TestGUI
-(`testgui/__main__.py`'s `_TourRunner`, ticket 003) and the bench script
-(`tests/bench/tour_bench_run.py`, ticket 005) call -- no duplicated per-leg
-execution/telemetry-capture logic between them.
-
-Boundary (architecture-update.md's own words, updated 109-008): inside -- the
-geometry data itself, parsing it into typed leg specs, the per-leg run loop
-(build a `Move` per leg, enqueue one leg ahead, poll the ack ring for each
-leg's own completion event, capture the measured pose before leg 1 and after
-the final leg), and closure-delta computation. Outside -- the `Move`
-encoding/wire round trip itself (calls `transport.move()`/`transport.
-read_pending_binary_tlm_frames()`, never builds a `CommandEnvelope` itself),
-heading readback (calls `heading.py` indirectly, read-only -- there is no
-heading PD to run host-side any more, firmware owns that closed loop), the
-wire/transport itself (accepts a `MoveTransport`-compatible object from the
-caller -- never imports `NezhaProtocol`/`SerialConnection`/`SimConnection`
-directly), and any GUI or trace-file-format concern (the optional
-`row_callback`/`on_leg` hooks are the only surface offered to a caller that
-wants a trace or narration -- this module itself writes nothing to disk and
-imports no Qt).
+Boundary: inside -- the geometry data, parsing it into typed leg specs,
+the per-leg run loop (build a `Move` per leg, enqueue one leg ahead, poll
+for each leg's own completion event, capture the measured pose before leg
+1 and after the final leg), and closure-delta computation. Outside -- the
+`Move` wire encoding itself (calls `transport.move()`/`transport.
+read_pending_binary_tlm_frames()`, never builds a `CommandEnvelope`),
+heading readback (read-only -- firmware owns the closed loop), the
+transport itself (accepts a `MoveTransport`-compatible object, never
+imports `NezhaProtocol`/`SerialConnection`/`SimConnection` directly), and
+any GUI/trace-file-format concern (the optional `row_callback`/`on_leg`
+hooks are the only surface offered to a caller wanting a trace or
+narration).
 
 Usage
 -----
@@ -98,9 +33,9 @@ Usage
     result = run_tour(transport, params, heading, legs)
     print(result.closure.position_delta, result.closure.heading_delta)
 
-No hardware, no sim transport required for this module's own unit-test gate
--- see `tests/unit/test_planner_tour.py`'s `FakeTransport` double convention
-(mirrors `tests/unit/test_planner_executor.py`'s own).
+No hardware, no sim transport required for this module's own test gate --
+see `src/tests/testgui/test_tour_stop.py`'s own `_FakeTransport` double and
+`test_tour_closure_gate.py`'s sim-backed coverage.
 """
 
 from __future__ import annotations
@@ -164,27 +99,21 @@ class MoveTransport(Protocol):
     def read_pending_binary_tlm_frames(self) -> "list[TLMFrame]": ...
 
 
-# TLMFrame.pose's heading is integer centidegrees (matches `heading.py`'s own
-# `_HEADING_SCALE` convention -- duplicated here, not imported, since that
-# name is `heading.py`'s own private module constant; AC3 pins tour closure
-# specifically to `TLMFrame.pose`, independent of whichever source (`pose` or
-# `otos`) the caller's `HeadingCorrector` happens to be configured to read
-# for its own per-tick trim -- see this module's own `_frame_pose_rad()`).
+# TLMFrame.pose's heading is integer centidegrees (matches `heading.py`'s
+# own `_HEADING_SCALE`, duplicated here since that's a private constant
+# there). AC3 pins tour closure to `TLMFrame.pose` specifically, independent
+# of whichever source the caller's `HeadingCorrector` reads for its own
+# per-tick trim -- see this module's own `_frame_pose_rad()`.
 _HEADING_SCALE = math.pi / 18000.0  # [rad/cdeg]
 
 
 # ---------------------------------------------------------------------------
-# Tour geometry -- moved verbatim from testgui/commands.py (Decision 3)
+# Tour geometry. A "tour" is an ordered list of legacy `D`/`RT` wire-string
+# steps (never sent as-is -- both verbs are retired); `parse_tour()` below
+# turns them into typed `TourLeg`s that `run_tour()` drives via `Move`
+# commands instead. Regression-protected against `testgui/commands.py`'s
+# own `TOURS` dict identity (src/tests/testgui/test_tour1_geometry.py).
 # ---------------------------------------------------------------------------
-#
-# A "tour" is an ordered list of firmware wire strings -- the legacy `D`/`RT`
-# steps a pre-102 GUI sent one at a time. The wire strings themselves are no
-# longer sent as-is (both verbs are retired -- see this module's own header);
-# `parse_tour()` below reads the SAME geometry data and turns it into typed
-# `TourLeg`s that `run_tour()` drives through profile.py/executor.py instead.
-# Values copied byte-for-byte from testgui/commands.py -- same leg distances/
-# angles, same order (regression-protected directly against this data by
-# `tests/unit/test_planner_tour.py`).
 
 TOUR_1: list[str] = [
     "D 200 200 345",
@@ -224,68 +153,39 @@ TOUR_2: list[str] = [
 
 # ---------------------------------------------------------------------------
 # Defaults for MOVE-queue tour execution (109-008, re-pinned 2026-07-22 for
-# protocol v4). `a_max`/`alpha_max`/`cadence` from the pre-109-008
-# profile-streaming path are GONE -- DISTANCE/pivot accel/jerk ceilings are
-# entirely firmware's own `Motion::Executor` config now, not a per-command
-# wire value or a host-computed profile.py shape. `v_max` survives: it sizes
-# a straight leg's own `MoveTwist.v_x` when the leg carries no wire-authored
-# speed of its own. `omega_max` also survives, repurposed: `RT` carries no
-# rate of its own on the wire (unlike `D`, whose left/right speed IS the
-# leg's rate), so `run_tour()` needs a host-picked constant turn rate for
-# every turn leg's own `MoveTwist.omega` -- `PlannerParams.omega_max` (this
-# module's own `params` argument) is that constant, matching
-# `testgui/transport.py`'s own `_UNMANAGED_YAW_RATE` (2.0 rad/s, same
-# numeric default) used for the SAME D/RT dispatch on both other tour-less
-# call paths (`_dispatch_managed_move()`/`_build_sim_move()`) -- duplicated
-# rather than imported (`planner/` must never import `testgui/`, the
-# `[Presentation] -> [Domain]` dependency direction this module's own header
-# explains).
+# protocol v4). Accel/jerk ceilings are entirely firmware's own config now
+# (not a per-command wire value or a host-computed profile). `v_max` sizes
+# a straight leg's `MoveTwist.v_x` fallback; `omega_max` (from
+# `PlannerParams`, this module's own `params` argument) supplies every turn
+# leg's `MoveTwist.omega`, since `RT` carries no rate of its own on the
+# wire -- duplicated from `testgui/transport.py`'s `_UNMANAGED_YAW_RATE`
+# rather than imported (`planner/` must never import `testgui/`).
 # ---------------------------------------------------------------------------
 
 DEFAULT_V_MAX = 150.0  # [mm/s] straight-leg linear ceiling fallback (no per-leg speed on the D step)
-
-DEFAULT_INTER_LEG_SETTLE = 1.0  # [s] UNUSED this ticket -- retained only for run_tour()'s own
-# call-signature back-compat with existing callers (tests/bench/tour_bench_run.py passes it as a
-# kwarg). Pre-109-008 this was a host-timed gap between two legs' own StreamingExecutor runs
-# (retuned 0.3 -> 1.0 by ticket 107-005's bench session after a kFaultWedgeLatch trip at the
-# straight->turn boundary -- see tour1-freeze-investigation-2026-07-15.md). The MOVE-queue path
-# has no equivalent host-timed gap between QUEUED legs at all: firmware's own boundary-velocity
-# carry (ticket 006) sequences the transition, and a transient fault bit no longer stops the tour
-# on its own (see this module's own file header) -- there is nothing left for a host-side sleep to
-# protect against between two enqueued legs.
-DEFAULT_FINAL_SETTLE = 0.6  # [s] post-terminal-DONE settle window before capturing the tour's own
-# closure end pose -- the final leg's own completion event fires the instant the ENCODER-relative
-# distance criterion is met, but the PLANT needs a little more real time to physically settle
-# (dwell) before its reported pose reflects where it actually stopped; matches the pre-109-008
-# path's own settle-window convention and value.
+DEFAULT_FINAL_SETTLE = 0.6  # [s] post-terminal-DONE settle window before capturing the closure end pose --
+# the completion event fires the instant the stop condition is met, but the PLANT needs a little
+# more real time to physically settle before its reported pose reflects where it actually stopped.
 DEFAULT_MOVE_TIMEOUT = 15.0  # [s] bound on how long run_tour() waits for one leg's own terminal
-# completion ack before giving up and reporting RunOutcome.FAULT itself -- this wait is ALWAYS
-# bounded, mirroring NezhaProtocol.wait_for_ack()'s own "never infinite" contract; a real leg is
-# expected to finish in well under this (TOUR_1's longest leg is 850mm at a ~150mm/s ceiling, a
-# few seconds; TOUR_2's widest turn is ~217deg at omega_max=2.0rad/s, under 2s).
+# completion ack before giving up (RunOutcome.FAULT) -- always bounded, mirroring
+# NezhaProtocol.wait_for_ack()'s own "never infinite" contract.
 
 # `Move.timeout` -- the WIRE safety backstop (docs/protocol-v4.md section 4.1: REQUIRED, <=0 is
-# ERR_BADARG) -- is distinct from DEFAULT_MOVE_TIMEOUT above (this module's own HOST-side poll
-# bound). Sized off each leg's own expected duration, same factor/floor
-# testgui/transport.py's `_move_timeout_for()` uses for the SAME D/RT dispatch shape (duplicated,
-# not imported -- see the constants block above for why).
+# ERR_BADARG) -- distinct from DEFAULT_MOVE_TIMEOUT above (this module's own HOST-side poll bound).
+# Sized off each leg's own expected duration, same factor/floor testgui/transport.py's
+# `_move_timeout_for()` uses (duplicated, not imported -- see the block comment above for why).
 _MOVE_TIMEOUT_FACTOR = 3.0    # [multiple of expected duration]
 _MOVE_MIN_TIMEOUT = 2000.0    # [ms]
 
-# `Move.id` values `run_tour()` assigns to its own legs (see `_move_kwargs_for_leg()`) -- offset
-# far above any realistic session-scoped envelope `corr_id` (`SerialConnection._corr_counter`/
-# `SimLoop._corr_id`, both start at 0 and increment by 1 per command sent this session) so a leg's
-# own COMPLETION ack (which echoes `Move.id`) can never be mistaken for some OTHER command's
-# ENQUEUE ack (which echoes the auto-assigned envelope `corr_id`) landing in the single ack slot
-# while this leg's completion is being polled for -- see `_drain_and_poll()`'s own docstring for
-# why that collision would be a false-positive "leg complete".
+# `Move.id` values `run_tour()` assigns to its own legs -- offset far above any realistic
+# session-scoped envelope `corr_id` so a leg's COMPLETION ack (echoes `Move.id`) can never be
+# mistaken for some OTHER command's ENQUEUE ack (echoes `corr_id`) landing in the single ack slot
+# -- see `_drain_and_poll()`'s own docstring for why that collision would be a false-positive.
 _TOUR_MOVE_ID_BASE = 1 << 20
-DEFAULT_POLL_INTERVAL = 0.05  # [s] sleep between two consecutive ack-ring polls while waiting for
-# a leg's own terminal status (mirrors the pre-109-008 path's own tick cadence order of magnitude).
+DEFAULT_POLL_INTERVAL = 0.05  # [s] sleep between two consecutive ack-slot polls
 
-_BEGIN_DRAIN_RETRIES = 5  # mirrors executor.py's StreamingExecutor.begin() own bounded retry --
-_BEGIN_DRAIN_RETRY_INTERVAL = 0.05  # [s] same rationale: a single read_pending_binary_tlm_frames()
-# call can legitimately race an idle queue between two ~25Hz pushes and come back empty.
+_BEGIN_DRAIN_RETRIES = 5  # bounded retry -- a single read_pending_binary_tlm_frames() call can
+_BEGIN_DRAIN_RETRY_INTERVAL = 0.05  # [s] legitimately race an idle queue between two ~25Hz pushes and come back empty.
 
 
 # ---------------------------------------------------------------------------
@@ -608,13 +508,9 @@ def run_tour(
     legs: Sequence[TourLeg],
     *,
     v_max: float = DEFAULT_V_MAX,
-    a_max: float = 0.0,  # UNUSED (109-008) -- kept for call-signature back-compat, see file header
     omega_max: float | None = None,  # [rad/s] turn-leg yaw rate override; None (the default,
     # every existing caller) resolves to params.omega_max -- see the constants block above for why
     # this is no longer simply "UNUSED".
-    alpha_max: float = 0.0,  # UNUSED (109-008), see file header
-    cadence: float | None = None,  # UNUSED (109-008), see file header
-    inter_leg_settle: float = DEFAULT_INTER_LEG_SETTLE,  # UNUSED (109-008), see file header
     final_settle: float = DEFAULT_FINAL_SETTLE,
     move_timeout: float = DEFAULT_MOVE_TIMEOUT,
     poll_interval: float = DEFAULT_POLL_INTERVAL,

@@ -273,11 +273,12 @@ derivation and the two one-line margin terms. `App::MoveQueue`'s own
 `shapeAndStage()` (`move_queue.cpp`) is the ONE caller — see that file's
 own doc comment for the per-`Move`-kind axis-selection policy.
 
-**Chain-advance leg hand-off contract (119, DRAFT — verify/refine against
-shipped `move_queue.cpp` at execution time, same convention 118 ticket
-004 used for this overlay).** Moved out of §6 Open Questions: what the
-carried shaper state SHOULD do at a `Move`-completion boundary is a
-specified contract, not a tuned-around limitation.
+**Chain-advance leg hand-off contract (119-002, VERIFIED against shipped
+`move_queue.cpp` — the planning-time draft's every claim below was
+re-checked line-by-line against the current tree, post-118/post-119-001,
+and holds).** Moved out of §6 Open Questions: what the carried shaper
+state SHOULD do at a `Move`-completion boundary is a specified contract,
+not a tuned-around limitation.
 
 - **The axis matching the ending `Move`'s own stop-condition kind is
   ALWAYS hard-reset to `(commandedSpeed=0, commandedAccel=0)` at the
@@ -298,7 +299,26 @@ specified contract, not a tuned-around limitation.
   land-at-zero predicate tolerate an imperfect-zero taper); without the
   reset, that residual leaks into whichever LATER `Move` next uses the
   SAME axis and corrupts ITS land-at-zero `remaining` computation with a
-  value describing the wrong `Move`.
+  value describing the wrong `Move`. **Verification note (119-002): this
+  unconditional reset has a real cost the original issue/draft did not
+  name — it fires even when the INCOMING chained `Move` commands the
+  SAME axis (e.g. two consecutive `Distance` legs at the same `v_max`),
+  defeating SUC-051 continuity for exactly that compatible-boundary case
+  instead of only the alternating-axis case this paragraph otherwise
+  discusses.** Reproduced against
+  `test_two_compatible_distance_legs_carry_velocity_through_the_boundary_at_tour_level`
+  (`src/tests/testgui/test_tour_closure_gate.py`): a genuine ~149→24mm/s
+  dip-and-reramp at a same-axis `Distance`→`Distance` boundary, latent
+  since 118 ticket 003 (whose own re-sweep only exercised TOUR_1/TOUR_2,
+  which always alternate axes) and only now visible because 119 ticket
+  001 made the shaper-limits push default-on for this test's own
+  `SimLoop` session (previously silently off, so no taper/reset ever
+  ran). Fixing the reset condition is a real, separate change — out of
+  this ticket's own scope (it would need its own re-sweep of
+  `kStoppingMarginFactorChain`/`kDiscretizationCyclesChain` against the
+  already-narrow chain-margin pocket) — filed as
+  `chain-advance-reset-defeats-same-axis-compatible-leg-continuity.md`;
+  the boundary test's own `xfail` is re-pointed at it (§ below).
 - **The axis NOT matching the ending `Move`'s stop-condition kind is
   UNTOUCHED at a chain-advance boundary — SUC-051's own continuity
   property, unchanged.** If the next `Move` commands that axis, it ramps
@@ -314,14 +334,42 @@ specified contract, not a tuned-around limitation.
   unconditionally reset to `(0, 0)` (above), there is no carried nonzero
   speed for a reversal to "survive" in the first place; the shaper-level
   question the original issue posed is subsumed by the unconditional-
-  reset rule. What remains a genuinely separate, unresolved question is
-  the HARDWARE-level asymmetry: `NezhaMotor`'s 100ms `reversal_dwell_ms`
+  reset rule. The remaining, genuinely separate question was the
+  HARDWARE-level asymmetry: `NezhaMotor`'s 100ms `reversal_dwell_ms`
   arms on the reversing wheel only at a D→RT boundary (asymmetric by
-  construction, `nezha_motor.cpp`) — 118 did not touch this. **Open
-  decision for the ticket owner**: accept the asymmetric per-wheel dwell
-  (state its measured heading-cost budget) OR specify symmetric dwell
-  (both wheels wait) if that budget is rejected — this contract
-  paragraph must pick one explicitly, not leave it implicit.
+  construction, `nezha_motor.cpp`) — 118 did not touch this.
+  **Decision (119-002): ACCEPT the asymmetric per-wheel dwell — do not
+  symmetrize.** Measured on the current tree (`data/robots/
+  tovez_nocal.json`, ideal chip — no injected sensor error, isolating
+  the mechanism itself — 90° turns, `test_tour_closure_gate.py`'s own
+  `_run_tour_capture()`/sim-ground-truth reading, deterministic
+  stepping): a genuine `D(300mm@150mm/s)`→`RT(90°)` chain-advance turn
+  (crossing the reversal dwell on one wheel, the exact boundary this
+  bullet is about) measured **-1.18° error** — no worse than an isolated
+  (from-rest) chain-advance 90° turn measured under the SAME margin
+  regime (`+2.90°` first turn / `+1.60°` once warmed up, two consecutive
+  turns with no preceding `Distance` leg) — the dwell asymmetry itself
+  does not measurably cost extra heading accuracy in a controlled,
+  same-regime comparison (this supersedes the pre-execution turn-
+  execution review's own "0.3° vs 1.4-1.7°" isolated/tour figures,
+  `docs/code_review/2026-07-22-turn-execution-review.md` D5, which mixed
+  the drain/ack-instant-vs-settle read convention across its two
+  numbers rather than holding the completion regime fixed — this
+  ticket's own comparison holds pendingCount()>0 (chain margin) fixed on
+  both sides instead). Both figures also stay comfortably inside the
+  project's own already-shipped, stakeholder-approved acceptance bands
+  that already cover exactly this isolated-vs-tour-embedded distinction:
+  `MANAGED_ANGLE_90_ABS_MARGIN_DEG=3.0°` (isolated single-preset turn,
+  `test_gui_button_acceptance.py`, real GUI-driven) vs
+  `TOUR_TURN_ERROR_MAX_DEG=5.0°` (chain-advance/tour-embedded turn,
+  worst of 13 real-GUI-driven runs measured 3.86°, that file's own
+  2026-07-22 sweep) — that file's own comment attributes the width of
+  THAT gap primarily to real background-tick-thread scheduling jitter at
+  the ack-instant read, not to the dwell mechanism itself. Symmetric
+  dwell (holding BOTH wheels at commanded-zero through the reversal
+  window, not just the reversing one) would cost real per-cycle margin
+  on the axis that does not need to reverse, for no demonstrated
+  accuracy benefit — rejected.
 - **vExit design reference
   (`simple-velocity-control-acceleration-limited-shaper.md`) — adopted,
   in the sense the shipped mechanism already matches its "0 on reversal
@@ -395,16 +443,25 @@ predicate that replaced it).
   not an oversight — see `docs/protocol-v4.md` §5.2's own "what it is
   not" paragraph.
 - ~~Tour-embedded turns don't reach the isolated-turn sweep's own
-  optimum~~ — **RESOLVED, moved to §4 Design (119, "Chain-advance leg
+  optimum~~ — **RESOLVED, moved to §4 Design (119-002, "Chain-advance leg
   hand-off contract")**: what the carried/reset shaper state does at a
-  completion boundary is now a specified contract (unconditional
+  completion boundary is now a specified, verified contract (unconditional
   completing-axis reset, untouched surviving axis, vExit-equivalent
   reversal handling, named axis-drop-coast mechanism for the
-  chain-advance margin's own narrow pocket), not an open, tuned-around
-  limitation. The one genuinely still-open piece — the D→RT
-  `reversal_dwell_ms` hardware asymmetry's accept-vs-symmetrize decision
-  — is called out explicitly in that same Design paragraph as this
-  ticket's own decision to make, not left implicit here.
+  chain-advance margin's own narrow pocket). The D→RT `reversal_dwell_ms`
+  hardware asymmetry's accept-vs-symmetrize decision is ALSO resolved
+  there — accepted, measured (-1.18° for a genuine D→RT chain-advance
+  turn, no worse than an isolated chain-advance turn under the same
+  margin regime) and within the project's already-shipped tour-turn
+  acceptance bands. Nothing left open in this section for the hand-off
+  contract; 119-002's own verification pass DID surface one adjacent,
+  genuinely open item the original draft did not name — the same
+  unconditional reset also defeats carried-velocity continuity for a
+  same-axis COMPATIBLE chain boundary (e.g. two consecutive `Distance`
+  legs), not just the alternating-axis case this contract otherwise
+  covers — filed as
+  `chain-advance-reset-defeats-same-axis-compatible-leg-continuity.md`,
+  out of this ticket's own scope (see §4's own note on it).
 - **Hardware residual.** A 2026-07-22 hardware bench session (tovez on the
   stand) measured a turn residual in roughly the same `0-8deg` band the
   earlier accel-only stage measured — the real plant's own coast-down

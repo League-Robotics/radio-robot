@@ -246,22 +246,29 @@ void scriptLineBeginSuccess(TestSim::ScriptedI2CHook& bus) {
 //
 // Empirically derived (via a standalone NezhaMotor+Drive-free probe, then
 // confirmed against this exact scenario's own dumpRecent() log) and
-// explained by RobotLoop::cycle()'s own real ordering: drive_.tick() (which
-// calls both leaves' setVelocity(), transitioning mode_ from its
-// pre-Drive-wiring default to Active) runs BETWEEN motorL_.tick() and
-// motorR_.tick() within a SINGLE cycle() call (see robot_loop.cpp's own
-// cycle() body). So each leaf's PID/duty dispatch activates ONE CYCLE
-// APART: R's mode_ is already Active by the time motorR_.tick() runs on
-// cycle 0 (drive_.tick() ran moments earlier, same cycle) -- R issues its
-// OWN one-time "first write" (lastWrittenPct_'s -128 sentinel, pct=0) THAT
-// cycle. L's motorL_.tick() runs BEFORE drive_.tick() has EVER executed on
-// cycle 0 (mode_ still at its pre-Drive default, no dispatch at all) -- L's
-// own one-time first write is deferred to cycle 1, once mode_ is Active
-// from cycle 0's drive_.tick() call. Both gains are zero (baseMotorConfig()
-// leaves velGains defaulted), so duty is deterministically 0 forever after
-// each leaf's own first write -- write-on-change then skips every
-// subsequent cycle for that leaf, matching this scenario's own 3/3/2
-// write-count schedule below.
+// explained by RobotLoop::cycle()'s own real ordering. 119 ticket 005
+// (fixes 118-001's straight-leg-crab actuation skew -- see
+// clasi/issues/straight-leg-crab-118-001-actuation-and-telemetry-pairing-skew.md):
+// drive_.tick() (which calls both leaves' setVelocity(), transitioning
+// mode_ from its pre-Drive-wiring default to Active) now runs at the VERY
+// TOP of cycle(), before EITHER motor's own select/collect (restores the
+// 112-005 hoist's one genuinely good half -- same-generation actuation
+// staging -- without reintroducing 118's own select-ordering fix's
+// regression). So BOTH leaves' PID/duty dispatch activates on the SAME
+// cycle: mode_ is already Active for BOTH L and R by the time EITHER
+// motorL_.tick() or motorR_.tick() runs on cycle 0 (drive_.tick() ran
+// moments earlier, same cycle, before either) -- both issue their OWN
+// one-time "first write" (lastWrittenPct_'s -128 sentinel, pct=0) on THAT
+// SAME cycle 0, not one cycle apart as 118 shipped it (where drive_.tick()
+// sat between motorL_.tick() and motorR_.tick(), activating R immediately
+// but deferring L's own first write to cycle 1 -- the asymmetry that
+// produced the straight-leg-crab actuation skew). Both gains are zero
+// (baseMotorConfig() leaves velGains defaulted), so duty is
+// deterministically 0 forever after each leaf's own first write --
+// write-on-change then skips every subsequent cycle for that leaf,
+// matching this scenario's own 4/2/2 write-count schedule below (both
+// leaves' first write lands on cycle 0, not staggered 3/3/2 across cycles
+// 0-1).
 void scriptMotorCycle(TestSim::ScriptedI2CHook& bus, float positionMm, int extraDutyWrites) {
   bus.queueWrite(kMotorWireAddr, /*status=*/0);  // requestEncoder()'s 0x46 write
   for (int i = 0; i < extraDutyWrites; ++i) {
@@ -465,10 +472,10 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   constexpr int kCycles = 3;
   for (int i = 0; i < kCycles; ++i) {
     float positionMm = static_cast<float>(i + 1) * 10.0f;
-    // R gets its own one-time first duty write on cycle 0; L gets its own
-    // one-time first duty write on cycle 1 (one cycle later than R) -- see
-    // scriptMotorCycle()'s own header comment for the full derivation.
-    scriptMotorCycle(bus, positionMm, /*extraDutyWrites=*/(i == 1) ? 1 : 0);  // Left
+    // Both L and R get their own one-time first duty write on cycle 0
+    // (119 ticket 005 -- see scriptMotorCycle()'s own header comment for
+    // the full derivation).
+    scriptMotorCycle(bus, positionMm, /*extraDutyWrites=*/(i == 0) ? 1 : 0);  // Left
     scriptMotorCycle(bus, positionMm, /*extraDutyWrites=*/(i == 0) ? 1 : 0);  // Right
     if (i == 0) scriptOtosReadZeroPose(bus);  // Otos::tick()'s hasRead_==false on cycle 1 only
 
@@ -616,16 +623,17 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
   // Otos::kReadPeriod (20ms), so every cycle needs a scripted OTOS burst
   // too. cycleIndex is a single running counter across the WHOLE scenario
   // (warm-up + dispatch + verification cycles) -- scriptMotorCycle()'s own
-  // one-time first-duty-write quirk (R at global cycle 0, L at global cycle
-  // 1) is keyed to it, matching scenarioBootThenAFewCyclesRunToCompletion's
-  // own derivation; duty stays exactly 0 forever after that regardless of
-  // the motor patch's own gain values, since target velocity is always 0
-  // and encoder position never moves in this fixture (error is always 0).
+  // one-time first-duty-write quirk (119 ticket 005: BOTH L and R at
+  // global cycle 0) is keyed to it, matching
+  // scenarioBootThenAFewCyclesRunToCompletion's own derivation; duty stays
+  // exactly 0 forever after that regardless of the motor patch's own gain
+  // values, since target velocity is always 0 and encoder position never
+  // moves in this fixture (error is always 0).
   int cycleIndex = 0;
   uint64_t nowUs = 50000;
   auto runOneCycle = [&](const char* inject) {
     clock.setMicros(nowUs);
-    scriptMotorCycle(bus, /*positionMm=*/0.0f, /*extraDutyWrites=*/(cycleIndex == 1) ? 1 : 0);  // Left
+    scriptMotorCycle(bus, /*positionMm=*/0.0f, /*extraDutyWrites=*/(cycleIndex == 0) ? 1 : 0);  // Left
     scriptMotorCycle(bus, /*positionMm=*/0.0f, /*extraDutyWrites=*/(cycleIndex == 0) ? 1 : 0);  // Right
     scriptOtosReadZeroPose(bus);
     if (inject != nullptr) serialFake.enqueueInbound(inject);
@@ -645,8 +653,8 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
     return std::string();
   };
 
-  runOneCycle(nullptr);  // warm-up, cycleIndex 0 -- absorbs R's own one-time first duty write
-  runOneCycle(nullptr);  // warm-up, cycleIndex 1 -- absorbs L's own one-time first duty write
+  runOneCycle(nullptr);  // warm-up, cycleIndex 0 -- absorbs BOTH L's and R's own one-time first duty write
+  runOneCycle(nullptr);  // warm-up, cycleIndex 1 -- plain settle cycle, no further duty writes expected
 
   runOneCycle(motorLine.c_str());
   std::string afterMotorLine = captureNextPrimaryLine();
@@ -784,12 +792,13 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
   // scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented()
   // above (see that scenario's own scriptMotorCycle() derivation comment) --
   // this fixture never issues a TWIST/MOVE either, so drive_.tick()'s
-  // one-time each-leaf "first write" lands on the identical cycles 0
-  // (right)/1 (left), independent of which cycles inject a CONFIG line.
+  // one-time each-leaf "first write" lands on the identical cycle 0 for
+  // BOTH left and right (119 ticket 005), independent of which cycles
+  // inject a CONFIG line.
   uint64_t nowUs = 50000;
   for (int i = 0; i < 4; ++i) {
     clock.setMicros(nowUs);
-    scriptMotorCycle(bus, /*positionMm=*/0.0f, /*extraDutyWrites=*/(i == 1) ? 1 : 0);  // Left
+    scriptMotorCycle(bus, /*positionMm=*/0.0f, /*extraDutyWrites=*/(i == 0) ? 1 : 0);  // Left
     scriptMotorCycle(bus, /*positionMm=*/0.0f, /*extraDutyWrites=*/(i == 0) ? 1 : 0);  // Right
     scriptOtosReadZeroPose(bus);
 
@@ -1004,13 +1013,18 @@ bool findAck(const std::deque<std::string>& lines, uint32_t corrId, uint32_t* er
 }
 
 // Steps fx one cycle at a time, up to maxCycles, checking after EACH step
-// whether corrId's ack has appeared (fresh) -- absorbs BOTH "an ack pushed
-// during cycle N's dispatch is not visible until cycle N+1's own emit()"
-// (this file's own scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented()
-// header comment above) AND the primary/secondary tie-break's own
-// occasional one-cycle emit slip (telemetry.h's emit() doc comment: "at
-// most one primary frame delayed by one loop cycle roughly once per
-// kSecondaryPeriod") without hand-deriving exact cycle parity for either.
+// whether corrId's ack has appeared (fresh) -- absorbs the primary/
+// secondary tie-break's own occasional one-cycle emit slip (telemetry.h's
+// emit() doc comment: "at most one primary frame delayed by one loop cycle
+// roughly once per kSecondaryPeriod") without hand-deriving exact cycle
+// parity. Pre-119-ticket-005, an enqueue/command ack pushed during cycle
+// N's dispatch was never visible before cycle N+1's own emit() (this
+// file's own scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented()
+// header comment above, describing the schedule as it stood then); 119
+// ticket 005 moved tlm_.emit() to AFTER dispatch in the same cycle, so
+// such an ack now usually rides the SAME cycle's own frame -- this bounded
+// retry tolerates either latency, which is exactly why no caller needed to
+// change when that shifted.
 // Returns true iff the ack was seen AND its err matched expectedErrCode.
 bool stepUntilAckSeen(LiveFixture& fx, uint32_t corrId, uint32_t expectedErrCode, int maxCycles) {
   for (int i = 0; i < maxCycles; ++i) {
@@ -1136,15 +1150,17 @@ void scenarioMoveEndDrainsWithNoFurtherHostTraffic() {
   }
   checkTrue(ended, "the Move ends within a bounded number of cycles");
 
-  // MoveQueue::tick() (this cycle's OWN 3rd runAndWait block) calls
-  // Drive::stop(), which only STAGES a zero target on Drive itself --
-  // Drive::tick() is the only method that ever calls
+  // MoveQueue::tick() (this cycle's OWN trailing pace block, the 4th
+  // runAndWait) calls Drive::stop(), which only STAGES a zero target on
+  // Drive itself -- Drive::tick() is the only method that ever calls
   // Devices::Motor::setVelocity() (drive.h's own doc comment), and it runs
-  // at the TOP of cycle() (112-005's own reorder), BEFORE this same
-  // cycle's dispatch block. So the actual zero duty write reaches the
-  // motor leaves one cycle LATER -- exactly the same one-cycle lag the
-  // deleted deadman-driven stop had, at this same schedule position; not
-  // a regression here. One more cycle before checking velocityTarget().
+  // at the TOP of cycle() (119 ticket 005 restores the 112-005 hoist's one
+  // genuinely good half here -- see robot_loop.cpp's own comment),
+  // BEFORE this same cycle's dispatch block, let alone the pace block that
+  // stages the stop. So the actual zero duty write reaches the motor
+  // leaves one cycle LATER -- exactly the same one-cycle lag the deleted
+  // deadman-driven stop had, at this same schedule position; not a
+  // regression here. One more cycle before checking velocityTarget().
   fx.step(1);
   checkFloatEq(fx.motorL.velocityTarget(), 0.0f, "left target velocity is zero once the Move ends");
   checkFloatEq(fx.motorR.velocityTarget(), 0.0f, "right target velocity is zero once the Move ends");
@@ -1205,11 +1221,12 @@ void scenarioMoveTimeoutSetsFaultFlagOnEndingCycle() {
   checkTrue(flagSetOnEndingCycle, "kFlagFaultMoveTimeout is set on the exact ending cycle");
 
   // Level-set (telemetry.h's own setFlag() contract): the flag clears
-  // again the very next cycle, and the completion ack pushed during the
-  // ending cycle's own dispatch is not visible on the wire until THIS
-  // next cycle's own emit() call (cycle N+1's 2nd runAndWait block runs
-  // BEFORE its own 3rd block, matching the CONFIG-dispatch scenario's own
-  // "ack rides the next emitted frame" convention documented above).
+  // again the very next cycle, and the completion ack pushed by the ending
+  // cycle's own moveQueue_.tick() call (trailing pace block, AFTER that
+  // same block's own updateTlm()/tlm_.emit() -- 119 ticket 005, see
+  // robot_loop.cpp's own comments) is not visible on the wire until THIS
+  // next cycle's own emit() call, matching the DISTANCE-stop scenario's
+  // own "ack rides the next emitted frame" convention documented above.
   fx.step(1);
   checkTrue((fx.tlm.flags() & App::kFlagFaultMoveTimeout) == 0,
             "kFlagFaultMoveTimeout clears again the very next cycle");
@@ -1219,6 +1236,116 @@ void scenarioMoveTimeoutSetsFaultFlagOnEndingCycle() {
               "the Move's completion ack (ack_corr==Move.id, ack_err==0) reached the wire -- a "
               "timeout is signalled via the flags bit, not ack_err");
   }
+}
+
+// ===========================================================================
+// 119 ticket 001 (kill-the-silent-off-shaping-config-boundary.md): flags bit
+// 16 (kFlagFaultShapingDisabled) is the loud off-state for the shaping/
+// anticipation silent-off config boundary -- it must be set on every cycle a
+// Move is active AND both ShaperLimits axes are disabled, and clear
+// otherwise. Two scenarios isolate this one bit from the Move-completion
+// mechanics the scenarios above already cover: (a) LiveFixture's own
+// default construction leaves ShaperLimits{} (every field 0, shaping OFF --
+// the exact default every pre-shaping caller, including TestSim::
+// SimHarness, still gets -- move_queue.h's own "disabled-axis sentinel"
+// doc comment) -- the bit must go high while a Move is active and clear
+// again once it ends; (b) setShaperLimits() with real, both-axes-enabled
+// values (mirrors a real robot JSON's shaper block, e.g. data/robots/
+// tovez_nocal.json) -- the bit must stay clear throughout an active Move.
+// A TIME-kind Move is used for both (armorMoveTimeTwistCommand) -- per
+// move_queue.h's own tick() doc comment, Kind::Time never qualifies for
+// land-at-zero completion regardless of ShaperLimits, so it ends via the
+// SAME raw stop_time threshold in both scenarios, keeping the two directly
+// comparable and isolating this one flag from any completion-predicate
+// interaction.
+// ===========================================================================
+
+void scenarioShapingDisabledFlagSetWhileMoveActiveWithBothAxesOff() {
+  beginScenario("119-001: kFlagFaultShapingDisabled is set while a MOVE is active with both "
+                "ShaperLimits axes at their default (off), and clears once the MOVE ends");
+
+  LiveFixture fx;
+  fx.robotLoop.markConfigured();
+
+  checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) == 0,
+            "the bit stays clear with no MOVE active at all, even with shaping off");
+
+  const uint32_t kCorrId = 9161;
+  const uint32_t kMoveId = 916;
+  fx.serialFake.enqueueInbound(
+      armorMoveTimeTwistCommand(/*includeVelocity=*/true, /*v_x=*/100.0f, /*omega=*/0.0f,
+                                 /*includeStop=*/true, /*stopTimeMs=*/200.0f, /*timeoutMs=*/2000.0f,
+                                 /*replace=*/true, kMoveId, kCorrId)
+          .c_str());
+  fx.step(1);
+  checkTrue(fx.moveQueue.active(), "the Move activates immediately");
+  checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) != 0,
+            "the bit is SET the cycle the Move activates -- both axes' ShaperLimits are the "
+            "default-off {} LiveFixture never overrides");
+
+  bool ended = false;
+  constexpr int kMaxCycles = 40;  // comfortably past the Move's own 200ms stop time
+  for (int i = 0; i < kMaxCycles && !ended; ++i) {
+    fx.step(1);
+    if (!fx.moveQueue.active()) {
+      ended = true;
+      break;
+    }
+    checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) != 0,
+              "the bit stays SET on every cycle the Move remains active");
+  }
+  checkTrue(ended, "the Move ends within a bounded number of cycles");
+  checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) == 0,
+            "the bit clears the same cycle the Move ends -- no MOVE active, no fault");
+}
+
+void scenarioShapingDisabledFlagStaysClearWhenBothAxesEnabled() {
+  beginScenario("119-001: kFlagFaultShapingDisabled stays clear throughout an active MOVE once "
+                "both ShaperLimits axes are enabled (mirrors a real robot JSON's shaper block)");
+
+  LiveFixture fx;
+  fx.robotLoop.markConfigured();
+  // Mirrors data/robots/tovez_nocal.json's own shaper block (both axes'
+  // three-field enable gate satisfied -- ShaperLimits's own doc comment,
+  // move_queue.h) -- the SAME field set SimLoop.configure_from_robot()'s
+  // new Tier 3 push (estimator_kwargs()) lands via EstimatorConfigPatch on
+  // a real connection; this scenario calls setShaperLimits() directly to
+  // isolate the flag logic from the wire/merge path already covered by
+  // scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists()
+  // below.
+  App::ShaperLimits limits;
+  limits.aMax = 800.0f;
+  limits.aDecel = 800.0f;
+  limits.jMax = 5000.0f;
+  limits.alphaMax = 7.0f;
+  limits.alphaDecel = 7.0f;
+  limits.yawJerkMax = 100.0f;
+  fx.moveQueue.setShaperLimits(limits);
+
+  const uint32_t kCorrId = 9171;
+  const uint32_t kMoveId = 917;
+  fx.serialFake.enqueueInbound(
+      armorMoveTimeTwistCommand(/*includeVelocity=*/true, /*v_x=*/100.0f, /*omega=*/0.0f,
+                                 /*includeStop=*/true, /*stopTimeMs=*/200.0f, /*timeoutMs=*/2000.0f,
+                                 /*replace=*/true, kMoveId, kCorrId)
+          .c_str());
+  fx.step(1);
+  checkTrue(fx.moveQueue.active(), "the Move activates immediately");
+  checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) == 0,
+            "the bit stays clear once shaping is enabled on both axes");
+
+  bool ended = false;
+  constexpr int kMaxCycles = 40;
+  for (int i = 0; i < kMaxCycles && !ended; ++i) {
+    fx.step(1);
+    if (!fx.moveQueue.active()) {
+      ended = true;
+      break;
+    }
+    checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) == 0,
+              "the bit stays clear on every cycle the Move remains active");
+  }
+  checkTrue(ended, "the Move ends within a bounded number of cycles");
 }
 
 // ===========================================================================
@@ -1381,12 +1508,13 @@ void scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles() {
   // all-zero, same posture as every other ScriptedI2CHook scenario in this
   // file) -- extraDutyWrites follows the SAME global-cycle-indexed
   // first-write schedule scriptMotorCycle()'s own header comment derives
-  // (R at cycle 0, L at cycle 1), independent of the Move injected above.
+  // (119 ticket 005: BOTH L and R at cycle 0), independent of the Move
+  // injected above.
   uint64_t nowUs = 50000;
   for (int i = 0; i <= 3; ++i) {
     clock.setMicros(nowUs);
     float positionMm = static_cast<float>(i) * 10.0f;
-    scriptMotorCycle(bus, positionMm, /*extraDutyWrites=*/(i == 1) ? 1 : 0);  // Left
+    scriptMotorCycle(bus, positionMm, /*extraDutyWrites=*/(i == 0) ? 1 : 0);  // Left
     scriptMotorCycle(bus, positionMm, /*extraDutyWrites=*/(i == 0) ? 1 : 0);  // Right
     scriptOtosReadZeroPose(bus);
     robotLoop.cycle();
@@ -1404,11 +1532,13 @@ void scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles() {
             "(one cycle later, the pre-118-ticket-002 R-settle-positioned tick() would have "
             "needed)");
 
-  // Completion ack visibility: staged during cycle 3's OWN pace block,
-  // which runs AFTER that cycle's own tlm_.emit() call (kClear block,
-  // earlier in the same cycle) -- so it is not visible on the wire until
-  // a LATER cycle's own emit(). A few bounded flat (no further motion)
-  // cycles absorb both that one-cycle lag and the primary/secondary
+  // Completion ack visibility: staged during cycle 3's OWN pace block, by
+  // moveQueue_.tick() -- which runs AFTER that SAME pace block's own
+  // updateTlm()/tlm_.emit() call (119 ticket 005: emit moved to the start
+  // of the pace block, still strictly before moveQueue_.tick() -- see
+  // robot_loop.cpp's own comments) -- so it is still not visible on the
+  // wire until a LATER cycle's own emit(). A few bounded flat (no further
+  // motion) cycles absorb both that one-cycle lag and the primary/secondary
   // tie-break's own occasional one-cycle slip (telemetry.h's emit() doc
   // comment) -- mirrors stepUntilAckSeen()'s own bounded-retry shape,
   // hand-rolled here since that helper is LiveFixture-specific.
@@ -1700,6 +1830,8 @@ int main() {
   scenarioMoveSuccessfulEnqueueAcksAndActivates();
   scenarioMoveEndDrainsWithNoFurtherHostTraffic();
   scenarioMoveTimeoutSetsFaultFlagOnEndingCycle();
+  scenarioShapingDisabledFlagSetWhileMoveActiveWithBothAxesOff();
+  scenarioShapingDisabledFlagStaysClearWhenBothAxesEnabled();
   scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome();
   scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles();
 

@@ -39,35 +39,41 @@
 //   rest of the run -- never growing further, never returning fully to
 //   zero.
 //
-// ROOT CAUSE (verified by reading src/firm/app/robot_loop.cpp's own
-// RobotLoop::cycle() schedule, not guessed): drive_.tick() -- the call that
-// converts the currently-injected twist into fresh L/R wheel velocity
-// targets -- runs BETWEEN motorR_.requestSample() and motorR_.tick(), i.e.
-// strictly AFTER motorL_.tick() has already run for that same cycle (see
-// robot_loop.cpp's own cycle() body: motorL_.requestSample() ->
-// motorL_.tick() -> ... -> drive_.tick() -> motorR_.requestSample() ->
-// motorR_.tick()). So on the very cycle a fresh twist (or a fresh profiled
-// setpoint) is dispatched, the RIGHT motor picks up the new target
-// immediately, but the LEFT motor still ticks against the OLD (stale)
-// target for one more cycle -- a genuine, one-cycle sequencing asymmetry
-// baked into the firmware's own schedule, not a simulator artifact.
-// src/tests/sim/unit/app_robot_loop_harness.cpp's own scriptMotorCycle() calls
-// independently document the identical asymmetry at the unit level ("R
-// gets its own one-time first duty write on cycle 0; L gets its own
-// one-time first duty write on cycle 1 (one cycle later than R)"). This is
-// explanation (a) from this ticket's own investigation instructions -- a
-// genuine, small, DOCUMENTED firmware startup transient -- not explanation
-// (b) (a SimPlant modeling artifact); no SimPlant/sim_plant.cpp change was
-// made as a result. TestSim::SimPlant's own tick() (sim_plant.cpp) steps
-// BOTH WheelPlants and the OtosPlant together, symmetrically, every single
-// call -- there is no left/right ordering asymmetry anywhere in the plant
-// itself to fix.
+// ROOT CAUSE, AS IT STOOD THROUGH 118 (verified by reading
+// src/firm/app/robot_loop.cpp's own RobotLoop::cycle() schedule, not
+// guessed): drive_.tick() -- the call that converts the currently-injected
+// twist into fresh L/R wheel velocity targets -- ran BETWEEN
+// motorR_.requestSample() and motorR_.tick(), i.e. strictly AFTER
+// motorL_.tick() had already run for that same cycle (robot_loop.cpp's own
+// cycle() body: motorL_.requestSample() -> motorL_.tick() -> ... ->
+// drive_.tick() -> motorR_.requestSample() -> motorR_.tick()). So on the
+// very cycle a fresh twist (or a fresh profiled setpoint) was dispatched,
+// the RIGHT motor picked up the new target immediately, but the LEFT motor
+// still ticked against the OLD (stale) target for one more cycle -- a
+// genuine, one-cycle sequencing asymmetry baked into the firmware's own
+// schedule, not a simulator artifact. TestSim::SimPlant's own tick()
+// (sim_plant.cpp) steps BOTH WheelPlants and the OtosPlant together,
+// symmetrically, every single call -- there is no left/right ordering
+// asymmetry anywhere in the plant itself to fix.
 //
-// kHeadingToleranceDeg below (8deg) is set with a small margin over the
-// empirically observed ~6.0deg PEAK (not the ~2.8deg settled residual,
-// since this scenario asserts the bound at EVERY sample, including the
-// early transient) -- tight relative to the saturating-case ~11.2deg this
-// same asymmetry produces, not loosened to paper over a larger drift.
+// FIXED by 119 ticket 005 (straight-leg-crab actuation/telemetry pairing
+// skew -- clasi/issues/straight-leg-crab-118-001-actuation-and-telemetry-pairing-skew.md):
+// drive_.tick() now runs at the very TOP of cycle(), before EITHER motor's
+// own select/collect, so both motorL_.tick() and motorR_.tick() apply the
+// SAME staged target every cycle -- the one-cycle L/R actuation skew this
+// comment used to document is gone. src/tests/sim/unit/
+// app_robot_loop_harness.cpp's own scriptMotorCycle() call sites were
+// independently re-derived to match (both leaves' one-time first duty
+// write now lands on the SAME cycle, not staggered). Empirically
+// re-measured against this exact scenario post-fix: maxAbsHeadingDeg ==
+// 0.0000 for the entire run (was ~6.0deg peak / ~2.7-2.9deg settled) --
+// kHeadingToleranceDeg below is tightened accordingly (was 8deg).
+// kHeadingToleranceDeg is set with margin over the measured 0.0000 to
+// tolerate legitimate floating-point/PID noise, not to paper over a real
+// drift -- see the straight-leg-crab issue's own repro
+// (docs/code_review/2026-07-22-turn-execution-review-scripts/straight_drift_repro.py)
+// for the independent v_x=150mm/s, stop_distance=700mm confirmation
+// (cruise heading +2.685deg -> 0.000deg, final y +32.5mm -> +0.0mm).
 //
 // Hand-rolled assertions, PASS/FAIL, nonzero exit on any failure -- mirrors
 // every other src/tests/sim/system harness's own shape. Run by
@@ -121,11 +127,13 @@ int main() {
   // 4-6s of travel).
   constexpr int kRunCycles = 120;
 
-  // See this file's own header for the full derivation: an 8deg bound sits
-  // with margin above the empirically observed ~6.0deg peak transient at
-  // this (non-saturating) cruise speed, and well under the ~11.2deg the
-  // SAME documented firmware asymmetry produces at a saturating speed.
-  constexpr float kHeadingToleranceDeg = 8.0f;
+  // See this file's own header for the full derivation: 119 ticket 005
+  // fixed the one-cycle L/R actuation skew that used to produce a ~6.0deg
+  // peak transient here (measured post-fix: maxAbsHeadingDeg == 0.0000 for
+  // the entire run). 0.5deg sits with margin over that measured 0.0000 for
+  // legitimate floating-point/PID noise -- two orders of magnitude tighter
+  // than the pre-fix 8deg bound, not loosened to paper over any drift.
+  constexpr float kHeadingToleranceDeg = 0.5f;
 
   // The startup transient itself (this file's header) legitimately holds
   // one wheel well below the other for the first several cycles after the

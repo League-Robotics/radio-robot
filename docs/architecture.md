@@ -1,5 +1,14 @@
 # radio-robot-c Architecture
 
+> **Superseded.** This document describes the pre-077 `source/` tree
+> wholesale (the five-layer `source/app|nav|control|hal|types` stack) —
+> architecture that no longer exists after the sprint 077 greenfield
+> rebuild and the subsequent gut-to-minimal-firmware/MOVE-protocol
+> sprints. For the current architecture, see
+> [`docs/design/design.md`](design/design.md) and its per-subsystem
+> `DESIGN.md` files. Kept as the historical record of the pre-rebuild
+> design, not rewritten line-by-line.
+
 ## Layers
 
 The firmware is organized into five layers. Each layer depends only on layers below it.

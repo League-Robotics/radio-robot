@@ -287,7 +287,7 @@ and captures the `Motion::StopCondition` baseline (activation clock time,
 ### 5.2 Per-cycle tick (`MoveQueue::tick()`, `move_queue.cpp:80-106`)
 
 Called unconditionally, every loop cycle (`robot_loop.cpp:507`,
-`~50 Hz` / 20 ms — the same schedule position the deleted
+`~25 Hz` / 40 ms, sprint 118 — the same schedule position the deleted
 `deadman_.expired()` check used to occupy). A no-op if no `Move` is
 active. Otherwise reconstructs a fresh `Motion::StopCondition` from the
 active slot's stored baseline+kind+threshold+timeout and calls its
@@ -505,6 +505,27 @@ landing in the same primary period overwrite each other
 v2 rewrite — `wait_for_ack()`'s timeout+retry covers the rare
 collision).
 
+**Wire-visible latency (119 ticket 005 — `robot_loop.cpp`'s telemetry-emit
+placement changed alongside the straight-leg-crab actuation fix, see
+`src/firm/app/DESIGN.md` §1's own "119 ticket 005" note).** `RobotLoop::
+cycle()`'s telemetry stage+emit call now runs AFTER `processMessage()`'s
+own command-dispatch call, in the SAME cycle (it used to run BEFORE it,
+in a different runAndWait block). Concretely:
+
+- **Enqueue/command ack** — since `processMessage()` runs strictly before
+  the now-relocated emit call within the same cycle, a `move`/`config`/
+  `stop` command decoded and dispatched on cycle N typically has its own
+  ack visible on cycle N's own emitted frame (0-cycle latency), where it
+  previously rode cycle N+1's frame (~1 cycle / `kCycle`=40ms latency).
+  This is a latency IMPROVEMENT, not a regression — no host caller
+  depends on the OLD ~1-cycle delay (`wait_for_ack()`-style callers poll
+  for a matching `corr_id` and tolerate either latency by construction).
+- **MOVE completion ack** — UNAFFECTED. `moveQueue_.tick()` (the stop
+  decision that stages this ack) still runs AFTER the telemetry emit
+  call, later in the SAME trailing pace block, so a completion ack staged
+  there is still not visible until the NEXT cycle's own emit — unchanged
+  "ack rides the next frame" behavior, both before and after this ticket.
+
 ### 7.3 AS-BUILT: the completion ack's `ack_err` is always 0 — timeout is signaled by the flags bit, not `ack_err`
 
 The set-point issue's Responses section reads (arguably ambiguously):
@@ -567,8 +588,11 @@ column is preserved for the schema's own future use.
 
 Rides `ReplyEnvelope{corr_id=0, tlm: Telemetry}` (unsolicited, `corr_id`
 always 0 for this arm), emitted **every loop cycle** — primary period ==
-cycle period, ~50 Hz / 20 ms
-(`App::Telemetry::kPrimaryPeriod`, unchanged by sprint 116). "The frame
+cycle period, ~25 Hz / 40 ms
+(`App::Telemetry::kPrimaryPeriod`, unchanged by sprint 116; restored to
+its genuine 40ms/~25Hz value by sprint 118 — see
+[`src/firm/app/DESIGN.md`](../src/firm/app/DESIGN.md) §1's "118 (loop
+schedule truth)" note). "The frame
 is the dataset": with no on-chip measurement ring and no dump command,
 a timestamped frame every iteration is the entire dataset-construction
 path — the host's log of this stream (`tlm_log.py`, §9) reconstructs
@@ -611,7 +635,8 @@ any time window.
 | 13 | `kFlagLinePresent` | line word fresh this frame |
 | 14 | `kFlagColorPresent` | color word fresh this frame |
 | 15 | `kFlagFaultMoveTimeout` | a MOVE ended via its `timeout` backstop this cycle (§7.3) — sprint 116's own bit, first live caller |
-| 16-31 | — | reserved |
+| 16 | `kFlagFaultShapingDisabled` | a MOVE is active AND both angular and linear `ShaperLimits` axes are disabled (`App::MoveQueue::shapingDisabled()`) — 119 ticket 001's loud off-state for the shaping/anticipation silent-off config boundary: with no taper, the land-at-zero completion path can never fire and the threshold/timeout backstop is the ONLY completion path |
+| 17-31 | — | reserved |
 
 ### 8.3 Measured sizes
 

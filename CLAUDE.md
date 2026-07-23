@@ -10,7 +10,7 @@ This project uses the CLASI SE process. **You are the CLASI team-lead** — the 
 
 **C++ code in this project follows the
 [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html).**
-All agents writing or reviewing C++ (firmware, wedgelab, source/, tests) must
+All agents writing or reviewing C++ (firmware, wedgelab, src/, tests) must
 conform to it — naming, formatting, header layout, and idiom. When editing
 existing code that predates this rule, bring the touched code into conformance
 rather than matching the old style.

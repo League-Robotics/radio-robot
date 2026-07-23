@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Specify and assert the chain-advance leg hand-off contract
-status: open
+status: done
 use-cases:
 - SUC-068
 depends-on: []
@@ -116,34 +116,69 @@ widen them.
 
 ## Acceptance Criteria
 
-- [ ] `motion/DESIGN.md` contract paragraph finalized (verified/refined
+- [x] `motion/DESIGN.md` contract paragraph finalized (verified/refined
       against `move_queue.cpp`, not assumed from the planning-time
       draft) — carried-axis ramp, completing-axis reset (or corrected
       description if the draft's finding doesn't hold), reversal/dwell
       decision made explicitly, vExit adoption/rejection stated, axis-drop
       coast defined. Corresponding §6 Open Questions entry removed
       (already struck in the draft — verify the final pointer).
-- [ ] The `simple-velocity-control-acceleration-limited-shaper.md`
+      Finalized in the sprint's overlay
+      (`clasi/sprints/119-.../design/DESIGN.md`, this ticket's own
+      slot) — draft's every claim re-verified line-by-line against the
+      shipped `move_queue.cpp`, held. §6 pointer updated to reflect full
+      resolution.
+- [x] The `simple-velocity-control-acceleration-limited-shaper.md`
       issue's vExit design is explicitly adopted or explicitly rejected
       in the paragraph, with reasoning either way.
-- [ ] `test_two_compatible_distance_legs_carry_velocity_through_the_boundary_at_tour_level`
+      Adopted (draft's own reading verified accurate: the unconditional
+      completing-axis reset already realizes vExit=0 as a conservative
+      superset).
+- [x] `test_two_compatible_distance_legs_carry_velocity_through_the_boundary_at_tour_level`
       re-run against the current tree first. If it passes: `xfail`
       removed entirely. If it still fails: reason re-pointed to a live
       issue with a concrete unblocking condition (not the retired
       reorder experiment).
-- [ ] That same test's assertions extended to check the contract's
+      Re-run first: still fails, but for a DIFFERENT, independently-
+      diagnosed cause (a clean same-axis completing-axis-reset dip, not
+      the retired 111-002 reorder oscillation). `xfail` reason re-pointed
+      to a freshly-filed issue,
+      `chain-advance-reset-defeats-same-axis-compatible-leg-continuity.md`,
+      with a concrete unblocking condition (same-axis-aware conditional
+      reset + re-sweep of the chain margin constants).
+- [x] That same test's assertions extended to check the contract's
       stated behavior (carried velocity through a compatible boundary;
       the reversal/dwell decision), not just the pre-existing
       no-dip-to-zero check.
-- [ ] Tour vs. isolated turn gap measured and within the budget the
+      Added dip-shape (single contiguous region) and dip-duration
+      (bounded recovery) assertions that positively characterize the
+      documented mechanism, distinguishing it from the retired
+      oscillation failure mode or a future genuinely-new regression.
+- [x] Tour vs. isolated turn gap measured and within the budget the
       contract paragraph states.
-- [ ] No behavior change beyond what the contract specifies as already
+      Measured on the current tree (ideal chip, same chain-advance
+      margin regime both sides): D->RT chain-advance turn -1.18° vs
+      isolated (from-rest) chain-advance turn +2.90°/+1.60° — both well
+      within the project's already-shipped `MANAGED_ANGLE_90_ABS_MARGIN_DEG`
+      =3.0°/`TOUR_TURN_ERROR_MAX_DEG`=5.0° bands.
+- [x] No behavior change beyond what the contract specifies as already
       true, except the explicit reversal-dwell decision if it requires
       one — any such change stays within 118's already-shipped land-at-zero
       acceptance bands.
-- [ ] Full `uv run python -m pytest` suite green; sim tour-closure gate
+      Zero firmware/behavior changes made — decision was ACCEPT the
+      existing asymmetric dwell (no code change needed); the one real
+      defect this ticket's verification surfaced (same-axis reset gap)
+      was filed as a fresh issue rather than fixed, per the ticket's own
+      minimal-change framing.
+- [x] Full `uv run python -m pytest` suite green; sim tour-closure gate
       and button-acceptance suite green.
-- [ ] Bench verification is DEFERRED to the phase-B bench session — not
+      Full suite: 1386 passed, 2 skipped, 9 xfailed, 2 xpassed, 0 failed
+      (clean run; two earlier full-suite runs each had one unrelated,
+      pre-existing flaky real-time GUI timing failure that passed
+      cleanly both in isolation and in a third full run). Tour-closure
+      gate + button-acceptance suite run together in isolation: 46
+      passed, 1 skipped, 5 xfailed, 0 failed.
+- [x] Bench verification is DEFERRED to the phase-B bench session — not
       required to close this ticket.
 
 ## Testing

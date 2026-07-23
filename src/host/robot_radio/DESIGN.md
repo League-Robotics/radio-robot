@@ -57,7 +57,7 @@ both, file-by-file or even function-by-function.
 | `kinematics/` | **Live, but unused/orphaned** | `differential_drive.py` (wraps `wpimath`, pure math). Its only importer, `robot/nezha_kinematic.py`, is itself unreferenced by anything except `robot/__init__.py`'s lazy re-export and `README.md` — no live code path actually calls it. It structurally duplicates `src/firm/kinematics/body_kinematics.h`'s `inverse()`/`forward()` equations; a host-side twin of the firmware math with no current caller. |
 | `field/` | **Live** | `playfield.py` — AprilCam/AprilTag playfield/geofence model (`aprilcam.client.control.DaemonControl`). No firmware wire dependency at all; orthogonal to the gut entirely. |
 | `media/` | **Live** | `movie.py` — camera/video capture tooling. No firmware wire dependency. |
-| `planner/` | **Dormant, by stakeholder decision** | `tour.py`'s own module docstring: `run_tour()` "sends ONE `Move` command per leg" — built entirely around the deleted sprint-109 `Move` message. Confirmed empirically: `from robot_radio.planner.tour import TOUR_1, TOUR_2` raises `AttributeError` at **import time** (references `telemetry_pb2.ACK_STATUS_DONE`, deleted by 115-003's frame-v2 telemetry rewrite) — this package does not merely fail at call time, it fails to import. `executor.py`'s `StreamingExecutor` (raw `twist()` calls, wire-compatible in isolation) and `heading.py`/`model.py`/`profile.py` (pure logic, no direct `Move` reference) have no live caller in the shipped app either way — `tour.py` itself says nothing currently constructs a `StreamingExecutor` outside this package and `src/tests/bench/`'s own scripts. |
+| `planner/` | **Mixed — `tour.py` LIVE, the rest still dormant** | `tour.py`'s `TOUR_1`/`TOUR_2`/`parse_tour()`/`run_tour()` were ported (2026-07-22, `testgui-motion-paths-dead-after-move-cutover.md`) onto protocol v4's `Move`/single-ack-slot wire shape — the pre-port `AttributeError`-at-import state this row used to describe (a reference to the deleted `telemetry_pb2.ACK_STATUS_DONE`) is fixed. Verified empirically: `from robot_radio.planner.tour import TOUR_1, TOUR_2` imports cleanly (re-checked 2026-07-23), and `run_tour()` is called directly by both `src/tests/testgui/test_tour_closure_gate.py`'s gate tests and `test_gui_button_acceptance.py`'s managed-motion tests. `executor.py`'s `StreamingExecutor` and `heading.py`/`model.py`/`profile.py` remain genuinely dormant — `tour.py` itself no longer routes through them (one `Move` per leg via `MoveTransport.move()`, not `StreamingExecutor`/`profile.py`'s setpoint-sequence path); nothing in the shipped app constructs a `StreamingExecutor` outside `src/tests/bench/`'s own scripts. |
 | `path/` | **Dormant (orphaned)** | Pure geometry (`arc.py`/`bezier.py`/`builder.py`/`catmull_rom.py`/`obstacle.py`/`patterns.py`/`sampled_path.py`) with no firmware wire dependency of its own — not itself broken, but its only real callers are the dormant `io/robot_mcp.py` MCP tools (`navigate_to`/`follow_path`/`plan_path`/`preview_path`). |
 | `nav/` | **Dormant, by stakeholder decision** | `navigator.py`'s own docstring: "Navigator is a route planner: it sequences firmware G commands... the sole steering loop" — `navigate()`/`follow_path()` call `Robot.go_to()`, which is one of `nezha.py`'s dead methods. `camera_goto.py` feeds `cli.py`'s already-dormant `goto`/`rot`/`ang` subcommands. `nav_params.py` tunes a Stanley controller `navigator.py` itself says predates the gut (already deleted pre-gut in favor of the now-also-dead G-command path). `pose_align.py` calls the dormant `Otos.align_to()`. The one exception: `pose.py` (`Pose`/`Waypoint` frozen dataclasses, zero logic) is a plain coordinate type reused by several genuinely live modules (`robot/nezha_state.py`, `robot/robot_state.py`, `sensors/odometry.py`, `sensors/otos.py`) — importing it is not itself a sign of dormancy. |
 | `testgui/` | **Mixed** | Live: `drive.py`, `canvas.py`, `live_view.py`, `telemetry_panel.py`, `recorder.py`, `traces.py`, `camera_prefs.py`, `sim_prefs.py`, `binary_bridge.py` (a translation shim converting legacy text verbs to binary `CommandEnvelope` calls — see §3), and `__main__.py`'s "Unmanaged" direct-twist/stop controls (explicitly labeled "direct twist... no planner, no heading loop" in its own comments). Dormant, by file name: `commands.py` (37 lines of first-party dormancy commentary, quoting sprint 115's own Decision 6), `transport.py` (imports `planner.executor.TwistTransport`/`planner.tour.run_tour`/`parse_tour`), `__main__.py`'s tour-button block, `turn_control.py` (a TCP socket sending a pruned `"SEG pivot"` text command), `turn_graphs.py` (visualization for tour/turn-driven telemetry — passive, no live driver), and `turn_shape.py` (its capture functions call `SimLoop.move()`, which builds a `CommandEnvelope{move: Move{...}}` — `envelope_pb2.Move` does not exist in the current schema, confirmed empirically). |
@@ -135,6 +135,39 @@ removed the dead one — merging them requires confirming every caller of
 the dead route (chiefly `io/robot_mcp.py`'s `connect`) is updated to the
 live one first, not just deleting the dead function.
 
+**`planner/tour.py`'s three-generation history.** Sprint 107 ticket 002
+(SUC-033) moved `TOUR_1`/`TOUR_2` out of `testgui/commands.py`, where they
+had lived as raw firmware wire strings (`D`/`RT`) for the since-deleted
+`Motion::SegmentExecutor` — the GEOMETRY those strings encode is a real,
+tuned asset, so this module owns the data and parses it into typed legs
+(keeping the `[Presentation] -> [Domain]` dependency direction,
+`architecture-update.md` Decision 3). 109-008 moved `run_tour()` off a
+host-computed `profile.py` setpoint sequence streamed through
+`planner.executor.StreamingExecutor` and onto ONE `Move` command per leg
+(`transport.move()`), relying on firmware's own bounded-queue + boundary-
+velocity carry (one-leg lookahead, SUC-003) to sequence legs and on each
+`Move`'s own completion EVENT (not a host-timed settle delay or polled
+`fault_bits`) to end a leg — closing `tour1-freeze-investigation-
+2026-07-15.md`, where the old streaming path's raw `fault_bits` poll froze
+a whole tour on a transient, firmware-self-recovered blip. That "one Move
+per leg, one-leg lookahead, event-driven completion" SHAPE survived
+unchanged through the 2026-07-22 port (`testgui-motion-paths-dead-after-
+move-cutover.md`) that brought the module back to life onto protocol v4's
+`Move`/single-ack-slot shape (see the `planner/` row above) — only the WIRE
+mechanics changed: `MoveTransport.move()`'s kwargs became the current
+`Move` schema (`v_x`/`omega`/`stop_distance`/`stop_angle`/`timeout`/
+`replace`/`id`, not the deleted sprint-109 arc shape), and the old
+`AckStatus` taxonomy (`DONE`/`TRIVIAL`/`SUPERSEDED`/`FLUSHED`/`TIMEOUT`/
+`SOLVE_FAIL`) plus depth-3 ack ring were replaced by `Telemetry`'s single
+ack slot (`ack_corr`/`ack_err`), which now carries EITHER a command's
+enqueue ack OR a `Move`'s own completion ack (`docs/protocol-v4.md` §7.2)
+— `tour.py`'s own `_drain_and_poll()`/`_outcome_for_terminal_frame()` poll
+and read that slot keyed on `Move.id`, never the enqueue envelope's
+`corr_id`. `planner.executor.StreamingExecutor`/`planner.profile`
+themselves were untouched by either move — only TOURS (this module)
+changed path; they remain the dormant half of `planner/` (see the
+`planner/` row above).
+
 ## 5. Interfaces
 
 ### Exposes
@@ -167,6 +200,20 @@ live one first, not just deleting the dead function.
   §5 for the firmware-side consumer of the same JSON files.
 - **`io.sim_loop.SimLoop`** — loads `src/sim/`'s dylib, drives it via
   `twist()`/`stop()`; see [`../../sim/DESIGN.md`](../../sim/DESIGN.md).
+  **`configure_from_robot()`** (113, extended 119 ticket 001) is a
+  three-tier push over one shared `SimConfigConn`: Tier 1
+  (`calibration_kwargs()` → `NezhaProtocol.set_config()`, the live
+  `SET`-key-equivalent binary plane), Tier 2 (`motor_boot_config_for()` →
+  `sim_configure_motor()`, the boot-only motor fields with no live wire
+  arm), and Tier 3 (`estimator_kwargs()` →
+  `NezhaProtocol.estimator_config()`, the `EstimatorConfigPatch` fusion
+  weights + `Motion::VelocityShaper` accel/jerk ceilings). Tier 3 closes
+  `kill-the-silent-off-shaping-config-boundary.md`: every
+  `configure_from_robot()` caller (TestGUI, bench scripts, tests) now
+  inherits shaping/anticipation by default instead of running silently OFF
+  until a caller separately remembered to push it — the TestGUI's own
+  connect-time `_push_estimator_config()` push (`testgui/__main__.py`)
+  becomes redundant-but-harmless (idempotent acks) once this landed.
 - **`rogo` console script** (`io/cli.py:main`) — the live subset is
   `repl`, `stop`, `binary stop`; see §2 for which subcommands are
   currently broken.

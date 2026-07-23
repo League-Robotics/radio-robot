@@ -533,6 +533,25 @@ void RobotLoop::cycle() {
 
   Cmd cmd;
 
+  // 119 ticket 005 (fixes 118-001's straight-leg crab -- see
+  // clasi/issues/straight-leg-crab-118-001-actuation-and-telemetry-pairing-skew.md
+  // and docs/code_review/2026-07-22-turn-execution-review.md §9): drive_.tick()
+  // runs HERE, before EITHER motor's own select, restoring the ONE genuinely
+  // good half of the retired 112-005 hoist (same-generation actuation
+  // staging) WITHOUT reintroducing the select-ordering bug 118 actually
+  // fixed (see the interleave paragraph just below -- moving this call does
+  // not touch select ordering at all, the two are orthogonal). Pure
+  // computation (no bus, no sleep), so it is legal here. Both
+  // motorL_.tick() and motorR_.tick() below therefore apply the SAME
+  // staged target this cycle -- symmetric, one cycle old relative to
+  // processMessage()'s own command-apply call (R-settle block, below,
+  // unchanged position) -- instead of 118's asymmetric split (R fresh this
+  // cycle, L stale by a further cycle), which produced a real per-cycle
+  // L/R actuation skew during every ramp (measured +2.685deg cruise yaw on
+  // a straight leg, exact match to the predicted v_cruise*kCycle/trackWidth
+  // transient).
+  drive_.tick();  // twist -> wheel targets; L and R apply THIS cycle's stage symmetrically below
+
   // Request/collect MUST interleave per port (118 -- restores the
   // interleaved schedule this file's own DESIGN.md §2/§3 already claims:
   // select L -> settle(borrow) -> collect L -> clear(borrow) -> select R
@@ -552,13 +571,19 @@ void RobotLoop::cycle() {
   motorL_.tick(clock_.nowMicros());   // collect L -> velocity PID -> duty write
 
   runAndWait(kClear, [&] {  // >=4ms: brick clears L's duty write, meanwhile --
-    // Stage this cycle's encoder/velocity/connection fields onto the
-    // persistent `frame_` (pose/otos/line/color were last updated at the
-    // END of the PREVIOUS cycle, below -- still the frame's own "last
-    // staged snapshot" contract) and emit.
-
-    updateTlm(cycleStart);
-    tlm_.emit(cycleStart);
+    // 119 ticket 005: intentionally empty now. updateTlm()/tlm_.emit()
+    // moved to the start of the trailing pace block (below), AFTER
+    // motorR_.tick()'s own collect, so every emitted frame pairs
+    // SAME-GENERATION L/R encoder samples -- the co-fix for the actuation
+    // skew above. Emitting HERE (between L's collect and R's collect, as
+    // 118 shipped it) paired fresh-L-this-cycle against stale-R-last-cycle;
+    // that pairing skew numerically CANCELED the physical skew Fix A
+    // removes, which is exactly why the host-visible encoder trace
+    // (dL-dR, encpose, frame.twist) reported a perfectly straight leg while
+    // the robot's true path crabbed ~31mm over 700mm -- see the
+    // straight-leg-crab issue's full derivation. This window still borrows
+    // its mandatory kClear settle time (the vendor's post-duty-write
+    // clearance); there is just no bus-free work left to do inside it.
   });
 
   motorR_.requestSample();  // 0x46 write (brick holds ONE pending read)
@@ -569,45 +594,68 @@ void RobotLoop::cycle() {
     // populated by at most one comms_.pump() call this cycle), so reading
     // it here bounds dispatch to at most once per cycle by construction --
     // no separate "take" flag is needed.
-    processMessage(cmd);
-
-    // 118 (retires the 112-005 "hoist drive_.tick() above both motor
-    // ticks" experiment, tracked only in project memory, not an issue):
-    // drive_.tick() moves back to its last-known-good position (commit
-    // 39c084c1) inside the R-settle block, pure computation (no bus), so
-    // it is legal borrowed work here. Staged targets are written by
-    // motorL_.tick()/motorR_.tick() -- L already collected THIS cycle
-    // (above) against LAST cycle's staged target (-1 cycle); R collects
-    // immediately below, against THIS cycle's freshly-staged target.
     //
-    // 118 ticket 002: moveQueue_.tick() -- the MOVE stop decision -- no
-    // longer runs from this block. It moved to the trailing pace block,
-    // AFTER odom_.integrate()/stateEstimator_.update(), so the decision
-    // reads THIS cycle's odometry/estimator state instead of the
-    // previous cycle's (see that block's own comment below and
-    // clasi/issues/stop-decision-must-see-this-cycles-odometry.md). This
-    // R-settle block now holds only command dispatch and drive_.tick(),
-    // both pure compute.
-    drive_.tick();  // twist -> wheel targets, R writes them below
+    // 118 ticket 002: moveQueue_.tick() -- the MOVE stop decision -- does
+    // not run from this block. It moved to the trailing pace block, AFTER
+    // odom_.integrate()/stateEstimator_.update(), so the decision reads
+    // THIS cycle's odometry/estimator state instead of the previous
+    // cycle's (see that block's own comment below and
+    // clasi/issues/stop-decision-must-see-this-cycles-odometry.md). 119
+    // ticket 005: drive_.tick() no longer runs from this block either --
+    // it moved to the very top of cycle(), above, so both motor ticks
+    // apply a same-generation target (see that call's own comment). This
+    // R-settle block now holds only command dispatch, pure compute.
+    processMessage(cmd);
   });
 
   motorR_.tick(clock_.nowMicros());   // collect R -> velocity PID -> duty write
 
-  // Final (perception + odometry + MoveQueue stop-decision + pace) block --
-  // the schedule's 4th runAndWait, matching the same "own mark, own gap"
-  // shape as the three settle/clearance blocks above (see kPace's own
-  // comment for why the gap must be derived, not a bare kCycle anchored to
-  // the cycle start). Body: OTOS + odometry + StateEstimator refresh + the
+  // Final (telemetry + perception + odometry + MoveQueue stop-decision +
+  // pace) block -- the schedule's 4th runAndWait, matching the same "own
+  // mark, own gap" shape as the three settle/clearance blocks above (see
+  // kPace's own comment for why the gap must be derived, not a bare kCycle
+  // anchored to the cycle start). Body: telemetry stage+emit (119 ticket
+  // 005, see below) + OTOS + odometry + StateEstimator refresh + the
   // MoveQueue stop decision (118 ticket 002 -- relocated here so it reads
   // THIS cycle's odometry/estimator state) + rate-limited alternating
   // line/color, outside any motor request/collect window (this class's own
   // bus-discipline responsibility) -- perception/odometry/estimator fields
   // stage into `frame_` for the NEXT cycle's tlm_.setFrame()/emit() call;
   // MoveQueue's own completion ack stages into tlm_'s ack slot the same
-  // way. Unlike the other three blocks, this one DOES touch the bus (OTOS,
-  // and at most one of line/color) -- it is the schedule's pace block, not
-  // a settle/clearance window, so that constraint doesn't apply to it.
+  // way. Unlike the two settle blocks and kClear, this one DOES touch the
+  // bus (OTOS, and at most one of line/color) -- it is the schedule's pace
+  // block, not a settle/clearance window, so that constraint doesn't apply
+  // to it.
   runAndWait(kPace, [&] {
+    // 119 ticket 005 (co-fix for the straight-leg-crab actuation skew --
+    // see drive_.tick()'s own comment at the top of this function):
+    // updateTlm()/tlm_.emit() run FIRST in this block, immediately after
+    // motorR_.tick()'s own collect just above -- both frame_.encLeft and
+    // frame_.encRight are therefore fresh THIS cycle (same generation),
+    // where 118 shipped this call in the kClear block (between L's collect
+    // and R's collect), pairing fresh-L against stale-R every frame.
+    // frame_.pose/otos/line/color are unaffected by the move -- they are
+    // still whatever the PREVIOUS cycle's own pace block last staged
+    // (updateTlm()'s own doc comment, unchanged one-cycle-staleness
+    // contract).
+    //
+    // Ack-latency consequence (documented per this ticket's own acceptance
+    // criteria -- see docs/protocol-v4.md §7.2 and
+    // app_robot_loop_harness.cpp's own updated scenario comments for the
+    // concrete before/after): this call now runs AFTER processMessage()'s
+    // own dispatch call (R-settle block, above, same cycle) instead of
+    // BEFORE it (118's kClear placement ran before R-settle). An
+    // enqueue/command ack (CONFIG/MOVE-enqueue/STOP, staged via
+    // tlm_.ack() inside processMessage()'s own handlers) therefore now
+    // typically rides THIS SAME cycle's emitted frame instead of the next
+    // one. The MOVE COMPLETION ack is UNAFFECTED: moveQueue_.tick() still
+    // runs AFTER this call, later in this SAME pace block (below), so a
+    // completion ack staged there is still not visible until the NEXT
+    // cycle's own emit() call -- "ack rides the next frame," unchanged
+    // from before this ticket (see that ack's own comment below).
+    updateTlm(cycleStart);
+    tlm_.emit(cycleStart);
+
     uint64_t nowUs = clock_.nowMicros();
 
     applyOtosSample(otos_, nowUs, frame_);
@@ -643,26 +691,42 @@ void RobotLoop::cycle() {
     // empty queue (MoveQueue::tick()'s own contract) -- so host silence
     // always ends in motors stopped, with zero further host traffic
     // needed (no deadman lease to re-arm). The staged stop/twist reaches
-    // motor duty at the NEXT cycle's own drive_.tick() call (R-settle,
-    // above) -- one cycle of decision-to-duty latency, unchanged in shape
-    // from before this ticket (only the stop DECISION moved, not
-    // drive_.tick()'s own position).
+    // motor duty at the NEXT cycle's own drive_.tick() call (119 ticket
+    // 005: now the very top of cycle(), above -- see that call's own
+    // comment) -- one cycle of decision-to-duty latency, unchanged in
+    // shape from before this ticket (only drive_.tick()'s OWN position
+    // moved, this cycle's stop DECISION did not).
     MoveQueue::TickResult moveResult = moveQueue_.tick(nowUs, odom_);
     bool moveTimedOut = moveResult.completed && moveResult.completion.timedOut;
     // Level-set every cycle (telemetry.h's own setFlag() contract) -- true
     // only on the exact cycle a timed-out completion is reported this
     // call, false every other cycle (SUC-054).
     tlm_.setFlag(kFlagFaultMoveTimeout, moveTimedOut);
+    // Loud off-state (119 ticket 001,
+    // kill-the-silent-off-shaping-config-boundary.md): set whenever a MOVE
+    // is active with BOTH angular and linear ShaperLimits disabled --
+    // MoveQueue::shapingDisabled() mirrors shapeAndStage()'s own
+    // early-return condition (move_queue.cpp) exactly, so this bit tracks
+    // precisely the regime where the land-at-zero completion path can
+    // never fire and the threshold/timeout backstop is the ONLY
+    // completion path. See telemetry.h's own kFlagFaultShapingDisabled
+    // doc comment.
+    tlm_.setFlag(kFlagFaultShapingDisabled,
+                 moveQueue_.active() && moveQueue_.shapingDisabled());
     if (moveResult.completed) {
       // MOVE completion ack (protocol-set-point issue, Responses section):
       // a SECOND ack on the cycle the command ends -- ack_corr ==
       // Move.id, ack_err == 0 regardless of outcome; a timeout ending is
       // distinguished by the flags bit set just above, not by ack_err.
-      // Staged here, in this cycle's OWN pace block (its last write to
-      // tlm_'s ack slot this cycle) -- not visible on the wire until the
-      // NEXT cycle's own tlm_.emit() call, which runs in that cycle's
-      // kClear block, BEFORE this pace block runs again. Same "ack rides
-      // the next frame" contract as before this ticket.
+      // Staged here, in this cycle's OWN pace block, AFTER this SAME
+      // block's own updateTlm()/tlm_.emit() call (119 ticket 005: emit
+      // moved to the start of this block, above -- see its own comment) --
+      // so it is still not visible on the wire until the NEXT cycle's own
+      // emit() call. Same "ack rides the next frame" contract as before
+      // this ticket -- unlike the enqueue/command ack (processMessage(),
+      // R-settle block, above emit's new position), the completion
+      // decision itself still runs after emit every cycle, so its own
+      // latency is unchanged.
       tlm_.ack(moveResult.completion.moveId, 0);
     }
 

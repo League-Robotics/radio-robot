@@ -411,6 +411,11 @@ def _build_main_window():  # type: ignore[return]
         # Latest camera ground-truth pose (x_cm, y_cm, yaw_rad, monotonic_ts)
         # cached from the transport on_truth callback for the GOTO loop.
         "last_truth": None,
+        # 119 ticket 001: tracks the LAST drained frame's own
+        # fault_shaping_disabled bit, for edge-triggered logging in
+        # _TelemetryBridge.on_frame_ready() -- see that method's own
+        # docstring.
+        "shaping_disabled_active": False,
     }
 
     # Keyboard driver — wires cursor-key VW driving onto the main window.
@@ -732,7 +737,7 @@ def _build_main_window():  # type: ignore[return]
     left_layout.addWidget(cmd_rows_widget)
     cmd_rows_widget.setVisible(False)
 
-    # Two-column motion panel (Unmanaged direct-twist | Managed Ruckig).
+    # Two-column motion panel (Unmanaged direct-twist | Managed MOVE-queue).
     # Each sends the binary SEG primitive (arc_length=0 => pure pivot), CCW+,
     # delta_heading in centidegrees: "SEG 0 <cdeg>" (binary_bridge translates
     # to CommandEnvelope{segment}). Enabled on connect via _send_buttons.
@@ -755,7 +760,7 @@ def _build_main_window():  # type: ignore[return]
     # --- Motion panel: two columns, SAME commands via DIFFERENT paths -------
     # LEFT  = Unmanaged: direct twist/stop, NO trajectory planner
     #         (SimTransport.run_unmanaged -> one twist, deadman-timed).
-    # RIGHT = Managed:   D/RT -> planner.tour.run_tour -> Ruckig.
+    # RIGHT = Managed:   D/RT -> planner.tour.run_tour -> MOVE queue.
     # Same distance/angle presets on both sides so the ONLY variable is the
     # path. Distance presets are [mm]; angle presets are [deg]; each fires
     # forward (+) and back/CCW-vs-CW (-).
@@ -922,7 +927,7 @@ def _build_main_window():  # type: ignore[return]
         _make_motion_column("Unmanaged — direct twist", "unmanaged", _unmanaged_dist, _unmanaged_ang,
                             test_us_btn, test_ut_btn, pid_checkbox_u))
     motion_panel_layout.addWidget(
-        _make_motion_column("Managed — Ruckig", "managed", _managed_dist, _managed_ang,
+        _make_motion_column("Managed — MOVE", "managed", _managed_dist, _managed_ang,
                             test_s_btn, test_t_btn, pid_checkbox_m))
     left_layout.addWidget(motion_panel)
 
@@ -1373,6 +1378,22 @@ def _build_main_window():  # type: ignore[return]
     mode_label.setStyleSheet(_init_style)
     right_layout.addWidget(mode_label)
 
+    # Shaping-disabled banner (119 ticket 001,
+    # kill-the-silent-off-shaping-config-boundary.md) -- the loud off-state
+    # indicator for flags bit 16 (kFlagFaultShapingDisabled /
+    # TLMFrame.fault_shaping_disabled). Hidden by default; shown by
+    # _TelemetryBridge.on_frame_ready() below whenever the freshest drained
+    # frame carries the bit, hidden again the frame it clears. See that
+    # method's own docstring for the edge-triggered log line this same bit
+    # also drives.
+    shaping_disabled_banner = QLabel("SHAPING DISABLED — MOVE running unshaped")
+    shaping_disabled_banner.setObjectName("shaping_disabled_banner")
+    shaping_disabled_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    shaping_disabled_banner.setStyleSheet(
+        "color: white; background-color: #c02020; font-weight: bold; padding: 2px;")
+    shaping_disabled_banner.setVisible(False)
+    right_layout.addWidget(shaping_disabled_banner)
+
     right_splitter = QSplitter(Qt.Orientation.Vertical)
     right_layout.addWidget(right_splitter)
 
@@ -1672,6 +1693,18 @@ def _build_main_window():  # type: ignore[return]
             last frame's data, with every frame's data already fed into the
             TraceModel/graph panel first) is identical to before, just
             without repainting N-1 throwaway times.
+
+            119 ticket 001 (kill-the-silent-off-shaping-config-boundary.md):
+            every drained frame's ``fault_shaping_disabled`` (flags bit 16)
+            is checked for an EDGE transition against
+            ``_state["shaping_disabled_active"]`` -- logged via
+            ``_append_log()`` only on the transition (set->clear or
+            clear->set), never every frame, so a MOVE that legitimately
+            runs unshaped for its whole duration does not flood the log at
+            cycle rate. The ``shaping_disabled_banner`` label's visibility
+            instead tracks the LAST drained frame's own state (a level, not
+            an edge) -- an honest snapshot of "is this true right now" even
+            if this burst never itself crossed an edge.
             """
             last_frame = None
             avatar_yaw_rad = None
@@ -1688,7 +1721,21 @@ def _build_main_window():  # type: ignore[return]
                 avatar_yaw_rad = trace_model.encoder_yaw
                 if avatar_yaw_rad is None and frame.pose is not None:
                     avatar_yaw_rad = math.radians(frame.pose[2] / 100.0)
+                # 119 ticket 001: loud off-state edge log -- see this
+                # method's own docstring addition above.
+                shaping_disabled_now = bool(getattr(frame, "fault_shaping_disabled", False))
+                if shaping_disabled_now != _state.get("shaping_disabled_active", False):
+                    _state["shaping_disabled_active"] = shaping_disabled_now
+                    if shaping_disabled_now:
+                        _append_log(
+                            "[SHAPE] flags bit 16 (kFlagFaultShapingDisabled) SET -- MOVE "
+                            "active with shaping/anticipation OFF on both axes; land-at-zero "
+                            "cannot fire, threshold/timeout backstop is the only completion path"
+                        )
+                    else:
+                        _append_log("[SHAPE] flags bit 16 cleared -- shaping active again")
             if any_frame:
+                shaping_disabled_banner.setVisible(_state.get("shaping_disabled_active", False))
                 if _state.get("live_view_active"):
                     canvas_ctrl.refresh(update_marker=False)
                 else:
@@ -2164,8 +2211,11 @@ def _build_main_window():  # type: ignore[return]
         on every robot change while connected).
 
         113-006 (SUC-003): for a connected ``SimTransport``, this ALSO
-        triggers the Tier-2 (boot-only fields, incl. ``model_tau_lin``/
-        ``model_tau_ang``) push via ``transport.configure_from_robot(cfg)``
+        triggers the Tier-2 (boot-only motor fields -- travel_calib/
+        fwd_sign/vel_filt_alpha; the planner half of this tier was DELETED,
+        115-003, gut S1 motion-stack excision: nothing in the S1 minimal
+        firmware reads a boot-loaded ``msg::PlannerConfig`` any more) push
+        via ``transport.configure_from_robot(cfg)``
         after the per-command loop below completes. The per-command loop
         itself stays -- it is NOT redundant with ``configure_from_robot()``:
         it is what pushes the OTOS ``OI``/``OL``/``OA`` sequence (which

@@ -408,3 +408,188 @@ def test_tick_thread_slows_to_heartbeat_when_idle_and_resumes_on_command(loop):
         f"expected full-rate stepping to resume immediately on a fresh "
         f"command (~20 cycle/s), got {resumed_rate:.2f}/s "
         f"(cycle_count {c1} -> {c2} over 0.3s)")
+
+
+# ---------------------------------------------------------------------------
+# 119 ticket 001 (kill-the-silent-off-shaping-config-boundary.md):
+# configure_from_robot()'s new Tier 3 (EstimatorConfigPatch) push, and the
+# loud off-state flags bit 16 (TLMFrame.fault_shaping_disabled) it makes
+# never-silent. See push.py's estimator_kwargs() and telemetry.h's
+# kFlagFaultShapingDisabled doc comment.
+# ---------------------------------------------------------------------------
+
+
+def _stripped_config():
+    """The real tovez_nocal.json fixture with exactly the nine fields
+    ``estimator_kwargs()`` selects nulled out -- the three ``estimator.*``
+    fusion weights (whole section) and the six ``control.*`` shaper
+    ceilings (``a_max``/``a_decel``/``alpha_max``/``alpha_decel``/``j_max``/
+    ``yaw_jerk_max``) -- the exact silent-off boundary this ticket's issue
+    describes: Tier 1/2 still push normally (``control.vel_*``/``vel_filt``
+    stay intact -- Tier 2's ``motor_boot_config_for()`` calls
+    ``gen_boot_config.vel_gains_for_config()``, which requires them,
+    sprint 114's fail-closed config-as-truth gate -- and every other real
+    calibration/geometry field is untouched), but Tier 3 has nothing to
+    select (``estimator_kwargs()`` -> ``{}``) and configure_from_robot()
+    must not push anything for it -- MoveQueue's own ShaperLimits therefore
+    stays at the sim's construction-time default (every field 0, shaping
+    OFF)."""
+    import json
+
+    from robot_radio.config.robot_config import RobotConfig
+
+    data = json.loads(_ACTIVE_ROBOT_JSON.read_text())
+    for key in ("a_max", "a_decel", "alpha_max", "alpha_decel", "j_max", "yaw_jerk_max"):
+        data["control"][key] = None
+    data["estimator"] = {
+        "weight_heading_otos": None, "weight_omega_otos": None, "staleness_ms": None,
+    }
+    return RobotConfig.model_validate(data)
+
+
+def test_configure_from_robot_pushes_estimator_config_and_logs_ack_counts(caplog):
+    """The real tovez_nocal.json fixture carries all nine estimator/shaper
+    fields -- configure_from_robot()'s new Tier 3 push must land them and
+    log a clean 9/9 apply, mirroring __main__.py's own
+    _push_estimator_config() log-line format (applied/rejected/timed-out
+    logging is this ticket's own acceptance criterion)."""
+    import logging as _logging
+
+    from robot_radio.config.robot_config import load_robot_config
+
+    sim = SimLoop()
+    sim.connect()
+    try:
+        with caplog.at_level(_logging.INFO, logger="robot_radio.io.sim_loop"):
+            sim.configure_from_robot(load_robot_config(_ACTIVE_ROBOT_JSON))
+        messages = [r.message for r in caplog.records]
+        assert any("pushed 9/9 estimator/shaper fields" in m for m in messages), (
+            f"expected a clean 9/9 EstimatorConfigPatch push log line, got: {messages}")
+        assert not any("REJECTED" in m or "TIMED OUT" in m for m in messages), messages
+    finally:
+        sim.disconnect()
+
+
+def test_configure_from_robot_logs_skip_when_config_carries_no_shaper_fields(caplog):
+    """A config with `control`/`estimator` stripped selects nothing
+    (estimator_kwargs() -> {}) -- configure_from_robot() must log a skip,
+    never attempt an empty EstimatorConfigPatch push (estimator_config()
+    raises ValueError on an all-None call, per its own docstring)."""
+    import logging as _logging
+
+    sim = SimLoop()
+    sim.connect()
+    try:
+        with caplog.at_level(_logging.INFO, logger="robot_radio.io.sim_loop"):
+            sim.configure_from_robot(_stripped_config())
+        messages = [r.message for r in caplog.records]
+        assert any("EstimatorConfigPatch push skipped" in m for m in messages), messages
+    finally:
+        sim.disconnect()
+
+
+def test_flags_bit16_shaping_disabled_asserts_when_push_stripped():
+    """With the estimator/shaper fields stripped from the active config,
+    configure_from_robot()'s Tier 3 push has nothing to send -- ShaperLimits
+    stays at the sim's own construction-time default (every field 0,
+    shaping OFF) -- flags bit 16 (kFlagFaultShapingDisabled) must assert on
+    at least one frame while a MOVE is active."""
+    sim = SimLoop()
+    sim.connect()
+    try:
+        sim.configure_from_robot(_stripped_config())
+        sim.move(v_x=100.0, stop_distance=200.0, timeout=5000.0)
+
+        seen_bit_set: list = []
+
+        def _saw_bit_set() -> bool:
+            for f in sim.read_pending_binary_tlm_frames():
+                if f.active and f.fault_shaping_disabled:
+                    seen_bit_set.append(f)
+            return len(seen_bit_set) > 0
+
+        assert _wait_until(_saw_bit_set, timeout_s=3.0), (
+            "expected flags bit 16 to assert on at least one frame while the MOVE was "
+            "active with the estimator/shaper push stripped")
+    finally:
+        sim.disconnect()
+
+
+def test_configure_from_robot_deterministic_session_never_logs_a_false_timeout(caplog):
+    """Regression: a manual-step session (`connect(start_tick_thread=False)`
+    -- turn_prediction_capture.py's own established pattern) has no
+    background tick thread, so nothing ever advances the sim during Tier
+    3's ack poll -- the push itself still lands synchronously
+    (`_run_or_enqueue()`'s own "run now if no tick thread" contract, the
+    same mechanism Tier 1/2 already rely on), but blocking on a real-time
+    `poll_ack()` here would either waste real wall-clock time or, worse,
+    misreport a landed push as "TIMED OUT". configure_from_robot() must
+    detect the no-tick-thread case and log what is actually known (sent)
+    instead of a false timeout -- found running this exact path against
+    turn_prediction_capture.py while implementing this ticket."""
+    import logging as _logging
+
+    from robot_radio.config.robot_config import load_robot_config
+
+    sim = SimLoop()
+    sim.connect(start_tick_thread=False)
+    try:
+        with caplog.at_level(_logging.INFO, logger="robot_radio.io.sim_loop"):
+            sim.configure_from_robot(load_robot_config(_ACTIVE_ROBOT_JSON))
+        messages = [r.message for r in caplog.records]
+        assert not any("TIMED OUT" in m for m in messages), (
+            f"a manual-step session must never report a false ack timeout: {messages}")
+        assert any("no tick thread running" in m for m in messages), messages
+    finally:
+        sim.disconnect()
+
+
+def test_configure_from_robot_deterministic_session_still_applies_shaper_limits():
+    """Companion: even though the ack is unobservable without stepping (see
+    the false-timeout regression test above), the push itself must still
+    have landed -- once the caller actually steps the sim and issues a
+    Move, flags bit 16 must stay clear (mirrors
+    test_flags_bit16_shaping_disabled_clear_when_push_present, but for a
+    manual-step session instead of a real-time one)."""
+    from robot_radio.config.robot_config import load_robot_config
+
+    sim = SimLoop()
+    sim.connect(start_tick_thread=False)
+    try:
+        sim.configure_from_robot(load_robot_config(_ACTIVE_ROBOT_JSON))
+        sim.move(v_x=100.0, stop_distance=200.0, timeout=5000.0)
+
+        saw_active = False
+        for _ in range(200):  # generously bounded -- well past a 200mm/100mm/s leg
+            sim.step(1)
+            for f in sim.drain_pending_tlm():
+                if f.active:
+                    saw_active = True
+                assert not (f.active and f.fault_shaping_disabled), (
+                    f"flags bit 16 must stay clear -- the Tier 3 push landed synchronously "
+                    f"even with no tick thread running: frame={f!r}")
+            if saw_active and not sim._active:
+                break
+        assert saw_active, "expected at least one active=True frame during the Move"
+    finally:
+        sim.disconnect()
+
+
+def test_flags_bit16_shaping_disabled_clear_when_push_present(loop):
+    """Companion: the SAME kind of MOVE against this file's own `loop`
+    fixture (fully configured -- tovez_nocal.json's real estimator/control
+    sections push via the new Tier 3 call) -- flags bit 16 must never
+    assert on any frame drained while the MOVE is active."""
+    loop.move(v_x=100.0, stop_distance=200.0, timeout=5000.0)
+
+    saw_active = False
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        for f in loop.read_pending_binary_tlm_frames():
+            if f.active:
+                saw_active = True
+            assert not (f.active and f.fault_shaping_disabled), (
+                f"flags bit 16 must stay clear once the Tier 3 push landed real shaper "
+                f"limits: frame={f!r}")
+        time.sleep(_POLL_INTERVAL_S)
+    assert saw_active, "expected at least one active=True frame during the Move"

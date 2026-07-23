@@ -360,3 +360,45 @@ Not verified here: hardware timing (no robot attached to this sandbox), the live
 real-time behavior under Qt/camera load, and TOUR_2 (time-boxed; the gate covers it). The
 one open empirical question is D6: whether your live GUI tours still exceed ±2°/turn now that
 F1 is closed — the two candidate explanations and the discriminating test are listed there.
+
+---
+
+## 9. Addendum (2026-07-23 morning) — straight-leg crab introduced by 118-001
+
+> Filed as its own issue (stakeholder-directed):
+> `clasi/issues/straight-leg-crab-118-001-actuation-and-telemetry-pairing-skew.md`
+
+Observed live (v0.20260723.1): a 700 mm straight leg where truth/fused/OTOS end at y ≈ +31 mm
+while the host encoder trace stays perfectly straight (`enc L +708 R +708`, encpose y 0 θ 0).
+Reproduced headlessly on this checkout and root-caused to **two defects in the 118-001 schedule
+restore** (`robot_loop.cpp`, commit 3189086f):
+
+**A — One-cycle L/R actuation skew.** `drive_.tick()` now sits in the R-settle block, *between*
+`motorL_.tick()` and `motorR_.tick()`. L therefore writes duty from the target staged **last**
+cycle; R writes **this** cycle's fresh target (the block's own comment says so: "−1 cycle" for
+L). During any commanded ramp, R physically leads L by one cycle. Predicted yaw transient
+`Δθ = v_cruise · kCycle / b = 150 · 0.040 / 128 = 2.69°`; measured truth heading during cruise
+**+2.685°**. The decel ramp restores it (final θ 0.00°), so the body crabs sideways:
+`y ≈ 660 · sin(2.69°) ≈ +31 mm` — measured **+32.5 mm** over x +708. Every accel/decel on every
+Move (straight or turn) injects this kick; hardware inherits it identically at kCycle = 40 ms.
+
+**B — Telemetry pairs fresh L with stale R.** `updateTlm()` + `emit` run in the kClear block,
+after collect L but *before* collect R, so every frame carries this cycle's L against last
+cycle's R. Measured host-visible per-frame deltas: `dL − dR = +0.00` on every frame — the
+pairing skew exactly cancels the physical skew, so host encoder dead-reckoning (encpose, the
+orange trace, frame.twist) reports a perfect straight line while the robot crabs. The firmware's
+own odometry (same-generation pairs, `odom_.integrate()` after both collects) sees the truth —
+which is why the TLM `pose` row agrees with OTOS/truth (+31) and only the host encoder view
+lies.
+
+**Fixes (both required, both preserve the per-port select→settle→collect interleave):**
+1. Stage wheel targets once per cycle at a point where **both** motor ticks write the same
+   generation — e.g. `drive_.tick()` above `motorL_.requestSample()` (both wheels then apply
+   this cycle's stage; symmetrically one cycle old). Note: this is what the retired 112-005
+   hoist did. 118-001 threw it out along with the select-ordering fix, but the glued-encoder
+   bug was select ordering only; the hoist was the part keeping L/R actuation symmetric.
+2. Move `updateTlm()`/`emit` after `motorR_.tick()` (start of the pace block) so frames carry
+   same-generation encoder pairs. Fixing (1) without (2) leaves twist/encpose skewed during
+   ramps; fixing (2) without (1) makes the crab *visible* but still present.
+
+Repro script: `docs/code_review/2026-07-22-turn-execution-review-scripts/straight_drift_repro.py`.

@@ -165,11 +165,19 @@ even when the internal C++ (or, later, Python) identifier next to them is
 renamed under this convention.
 
 Also excluded, for the same reason (the text is wire-visible even though
-it lives in a plain string literal, not a wire-key table): the `"usage: HALT
-POS <x_mm> <y_mm> <radius_mm>"` error-reply string in
-`source/commands/SystemCommands.cpp`'s `HALT POS` handler — it is emitted
-verbatim to the client on a bad-argument `ERR`, so changing the placeholder
-text inside it is a wire-format change like any other reply string.
+it lives in a plain string literal, not a wire-key table): a reply string
+emitted verbatim to the client — historical example, kept for the
+principle it illustrates: the `"usage: HALT POS <x_mm> <y_mm> <radius_mm>"`
+error-reply string in the pre-077-rebuild `source_old/commands/
+SystemCommands.cpp`'s `HALT POS` handler (`src/archive/source_old/` —
+the entire ASCII `HALT`/text-usage-string command surface it belonged to
+is gone; protocol v4's binary-only command plane has no equivalent
+per-command usage string to re-point this to). The PRINCIPLE stays live
+regardless of that one example's own retirement: changing the placeholder
+text inside any current wire-visible reply string (e.g. `docs/protocol-v4.md`
+§2.4's `DEVICE:NEZHA2:<name>:<serial>` banner, `OK pong t=<ms>`) is a
+wire-format change like any other reply string, not a units-in-identifiers
+rename.
 
 ### External/vendor function names are excluded
 

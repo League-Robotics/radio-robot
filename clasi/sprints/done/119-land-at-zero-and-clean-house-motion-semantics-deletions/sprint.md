@@ -1,15 +1,19 @@
 ---
 id: '119'
 title: 'Land at zero and clean house: motion semantics + deletions'
-status: planning-docs
+status: closed
 branch: sprint/119-land-at-zero-and-clean-house-motion-semantics-deletions
 worktree: false
-use-cases: ['SUC-067', 'SUC-068']
+use-cases:
+- SUC-067
+- SUC-068
 issues:
 - kill-the-silent-off-shaping-config-boundary.md
 - specify-and-assert-the-leg-handoff-contract.md
 - delete-the-config-attic-and-dead-tour-kwargs.md
 - relocate-narrative-comments-and-refresh-stale-docs.md
+- chain-advance-completion-margin-narrow-pocket.md
+- straight-leg-crab-118-001-actuation-and-telemetry-pairing-skew.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -217,6 +221,45 @@ merged) can run in any order, doc relocation runs last:
      not this file). Folded into this ticket's "protocol-v4 pointers"
      item since it is the same document and the same class of staleness.
 
+## Decision Record: straight-leg crab fix pulled in (2026-07-23, second mid-execution amendment)
+
+A concurrent, stakeholder-directed session filed
+`clasi/issues/straight-leg-crab-118-001-actuation-and-telemetry-pairing-skew.md`
+(committed `b04c5a0c`, with a `docs/code_review/2026-07-22-turn-execution-review.md`
+§9 addendum and a repro script,
+`docs/code_review/2026-07-22-turn-execution-review-scripts/straight_drift_repro.py`)
+while tickets 001-002 of this sprint were already executing. The finding:
+118-001's schedule restore (commit `3189086f`) introduced two coupled
+defects — `drive_.tick()` sitting BETWEEN the two motor ticks causes a
+one-cycle L/R actuation skew (measured +2.685° cruise yaw, exact
+mechanism match to the predicted `v_cruise·kCycle/b = 2.69°`), and
+`updateTlm()`/`emit` sitting between the L and R collects pairs
+fresh-L-with-stale-R telemetry that numerically CANCELS the physical
+skew — so every host-visible encoder view (`dL−dR`, `encpose`,
+`frame.twist`) reports a perfectly straight leg while the robot's true
+path crabs ~31mm over a 700mm straight. Endpoint-only heading checks are
+provably blind to this shape (final θ error measured 0.00° while
+crabbing).
+
+**Team-lead decision: pull the fix into THIS sprint as ticket 005**,
+rather than deferring it to a future sprint or filing it as an
+unscheduled hotfix, because (a) the defect affects every accel/decel
+phase of every Move — straight or turn — making it a correctness
+regression in the exact schedule sprint 118 shipped, not a new feature;
+(b) `motion/DESIGN.md`'s overlay (ticket 002) and the docs-relocation
+ticket (originally 004) both describe/narrate `robot_loop.cpp`'s current
+schedule — landing the crab fix before those narratives are finalized
+avoids describing a known-wrong schedule as correct; (c) 119's own
+remaining tickets (003, 004) don't touch `robot_loop.cpp`'s schedule, so
+ticket 005 is fully independent of them and can land without
+re-sequencing anything already done (001, 002).
+
+**Sequencing**: ticket 005 depends on nothing (independent of 003) and
+must complete before ticket 004 (docs relocation), since 004 also
+touches `src/firm/app/DESIGN.md` and must build on 005's corrected
+schedule narrative, not describe the pre-fix one. Ticket 004's own
+`depends-on` is amended to include 005.
+
 ## Success Criteria
 
 Full `uv run` pytest suite green, sim tour-closure gate + button-acceptance
@@ -224,7 +267,10 @@ suite green, no dead `control.*` key survives, every stale doc reference
 in the review's bloat inventory fixed. (`stop_lead_ms` deletion + isolated
 90° accuracy are now sprint 118's success criteria, already delivered by
 its ticket 004 — verify at this sprint's own detail-promotion that they
-still hold, but they are not this sprint's own deliverable.)
+still hold, but they are not this sprint's own deliverable.) **Amended:**
+straight closure-gate legs also assert truth heading during cruise within
+a few tenths of a degree (ticket 005) — an endpoint-only check is
+provably insufficient, per the Decision Record above.
 
 ## Scope
 
@@ -237,6 +283,10 @@ still hold, but they are not this sprint's own deliverable.)
   assertion.
 - Deletion of the 20 dead `control.*` config keys and 4 dead `run_tour()`
   kwargs + `DEFAULT_INTER_LEG_SETTLE`.
+- **(New, ticket 005)** Same-generation wheel-target actuation staging +
+  same-generation telemetry L/R pairing in `robot_loop.cpp`; a
+  cruise-heading assertion on straight closure-gate legs; the repro
+  script's scenario as a permanent regression test.
 - Narrative-comment relocation and stale-doc-reference sweep (sequenced
   last).
 
@@ -737,20 +787,27 @@ Before tickets can be created, all of the following must be true:
 
 ## Tickets
 
-Detail-promoted 2026-07-23. Four tickets, one per remaining issue,
-dependency-ordered:
+Detail-promoted 2026-07-23; ticket 005 added the same day (second
+mid-execution amendment — see Decision Record above). Five tickets:
 
 | # | Title | Depends On | Issue(s) |
 |---|-------|------------|----------|
 | 001 | Kill the silent-off shaping/anticipation config boundary | — | kill-the-silent-off-shaping-config-boundary.md |
 | 002 | Specify and assert the chain-advance leg hand-off contract | — | specify-and-assert-the-leg-handoff-contract.md, chain-advance-completion-margin-narrow-pocket.md |
 | 003 | Delete the config attic (20 dead `control.*` keys) and dead `run_tour` kwargs | — | delete-the-config-attic-and-dead-tour-kwargs.md |
-| 004 | Relocate narrative comments to DESIGN.md/git; refresh stale doc references | 001, 002, 003 | relocate-narrative-comments-and-refresh-stale-docs.md |
+| 005 | Fix 118-001 straight-leg crab: same-generation actuation staging + same-generation telemetry pairs | — | straight-leg-crab-118-001-actuation-and-telemetry-pairing-skew.md |
+| 004 | Relocate narrative comments to DESIGN.md/git; refresh stale doc references | 001, 002, 003, 005 | relocate-narrative-comments-and-refresh-stale-docs.md |
 
-Tickets execute serially in the order listed (`worktree: false`). 001-003
-are independent of each other (each depends only on sprint 118, already
-merged to master) and could in principle parallelize; 004 must run last
-since it trims only what survives 001-003's own changes, and both 001 and
-004 touch `src/host/robot_radio/DESIGN.md` — 004's own diff must include
-001's already-landed edit there, not revert it (see each ticket's own
-"design overlay coordination" note).
+Tickets execute in the order listed (numeric order ≠ execution order —
+005 runs before 004, matching the dependency column, `worktree: false`).
+001-003 and 005 are independent of each other (each depends only on
+sprint 118, already merged to master) and could in principle
+parallelize; 004 must run last since it trims only what survives
+001-003 and 005's own changes, and both 001, 004, and 005 touch
+`src/firm/app/DESIGN.md` at different points — verify the file's
+landed state before editing rather than assuming a stale copy (005 lands
+first per the dependency column, so 004 builds on 005's description, not
+the pre-005 one). Both 001 and 004 also touch
+`src/host/robot_radio/DESIGN.md` — 004's own diff must include 001's
+already-landed edit there, not revert it (see each ticket's own "design
+overlay coordination" note).

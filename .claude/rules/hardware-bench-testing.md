@@ -34,29 +34,55 @@ mbdeploy deploy --build # build firmware and flash the robot
 ```
 
 Then open the serial port (or drive through the radio relay) and issue commands.
-The current command surface is protocol v2 — see
-[docs/protocol-v2.md](../../docs/protocol-v2.md) (PING/ECHO/ID, SET/GET,
-TLM/STREAM/SNAP, motion verbs) — dispatched by
-[source/commands/CommandProcessor.cpp](../../source/commands/CommandProcessor.cpp).
+The current command surface is **protocol v4** — see
+[docs/protocol-v4.md](../../docs/protocol-v4.md) (a two-verb text safety rump,
+`HELLO`/`PING`; a binary command plane with exactly three arms, `move`/
+`config`/`stop`; and an always-on binary telemetry push) — dispatched by
+[src/firm/app/robot_loop.cpp](../../src/firm/app/robot_loop.cpp)'s
+`processMessage()`. There is no bare-command REPL shape any more: every
+motion is a bounded `Move` sent through `NezhaProtocol`
+([src/host/robot_radio/robot/protocol.py](../../src/host/robot_radio/robot/protocol.py)),
+not a hand-typed wire line — use `rogo repl` or one of the bench scripts
+below rather than typing verbs directly at the serial port.
 
-### Quick smoke sequence (STALE — predates protocol v2)
+### Quick smoke sequence (protocol v4 / MOVE-era)
 
-> The table below is the pre-v2 command set and needs a refresh; for current
-> sequences use [docs/protocol-v2.md](../../docs/protocol-v2.md) §13 verification
-> examples and the bench scripts under `tests/bench/`.
+Drive this either interactively via `rogo repl` (the `rogo` console script,
+`src/host/robot_radio/io/cli.py`) or by running
+[src/tests/bench/twist_drive.py](../../src/tests/bench/twist_drive.py) for
+steps 1-4 in one shot:
 
-| Step | Command | Expect |
+```bash
+uv run python src/tests/bench/twist_drive.py --port /dev/cu.usbmodem2121102
+```
+
+| Step | Call (`NezhaProtocol`) | Expect |
 |---|---|---|
-| Identify | `HELLO` | `DEVICE:Nezha2:<name>:microbit:<serial>` |
-| Encoders zero/read | `EZ` then `ENC` | `ACK:EZ`, then `ENC+0+0` |
-| Drive (on stand) | `S+150+150` | wheels spin; streamed `ENC…` values climb |
-| Stop | `X` | `ACK:X`; encoders hold |
-| Odometry | `SO` | `SO±x±y±h` updates after driving |
-| Line / color | `LS` / `CS` | 4 plausible channel values each |
-| OTOS | `O` then `OP` / `OR` | init ack, then position / velocity reads |
+| Identify | connect (sends `HELLO` on the text rump) | `DEVICE:NEZHA2:<name>:microbit:<serial>` banner |
+| Liveness | `PING` (text rump) | `OK pong t=<ms>` |
+| Config push | `config(**{"pid.kp": ...})` / `otos_config(...)` | ack rides the next `Telemetry` frame's ack slot (`ack_corr` == the enqueue `corr_id`, `ack_err == 0`) |
+| Drive (on stand) | `move_twist(v_x=150, stop_time=..., timeout=...)` | enqueue ack, then telemetry frames with `enc_left`/`enc_right`/`pose` climbing while the `Move` runs |
+| Completion | *(no separate call — the same `Move` ends on its own)* | a later frame's ack slot carries `ack_corr == Move.id` (the completion ack, `ack_err` always 0 — timeout vs. stop-condition is `flags` bit 15, not `ack_err`) |
+| Stop | `stop()` | enqueue ack; `flags` bit 2 (`kFlagActive`) drops, encoders hold |
+| Odometry / OTOS | read `Telemetry.pose` / `Telemetry.otos` off any frame | `pose` always present; `otos` valid when `flags` bit 0 is set |
+| Line / color | read `Telemetry.line` / `Telemetry.color` off any frame | valid when `flags` bits 13/14 are set — 4 plausible channel values each |
 
-(After Sprint 009 these become the v2 forms — `PING`, `ECHO`, `SET`/`GET`,
-combined `TLM` frames, `GRIP`, etc. — and the bench gate is re-run against them.)
+For the fuller MOVE-protocol surface (distance/angle stop conditions, the
+`wheels` velocity variant, chaining, `replace=True` preemption, the 5-deep
+`ERR_FULL` queue limit, the no-deadman empty-queue drain, the `timeout`
+safety backstop, `STOP` mid-motion, and a `CONFIG` patch arriving mid-`Move`),
+run the full bench-gate script:
+
+```bash
+uv run python src/tests/bench/move_protocol_bench.py --port /dev/cu.usbmodem2121102
+```
+
+which prints a PASS/FAIL line per scenario. See
+[src/tests/bench/](../../src/tests/bench/) for the rest of the bench-script
+catalog (`tlm_log.py` for a flat CSV telemetry capture,
+`move_accuracy_bench.py`/`turn_prediction_capture.py` for accuracy
+characterization, `otos_drift.py`/`velocity_step_response.py` for sensor/PID
+characterization).
 
 ## Safety notes
 

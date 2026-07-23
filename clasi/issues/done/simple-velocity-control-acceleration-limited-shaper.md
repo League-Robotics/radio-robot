@@ -1,8 +1,18 @@
 ---
-status: pending
+status: resolved
 ---
 
 # Simple velocity control: a swappable acceleration-limited velocity shaper
+
+## Resolution (2026-07-23 triage (team-lead, stakeholder-directed))
+
+Implemented as `Motion::VelocityShaper` (`src/firm/motion/velocity_shaper.{h,cpp}`,
+decel-into-the-goal + jerk-limited stages) driven by `App::MoveQueue::shapeAndStage()`,
+limits from robot-JSON `control.a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max`
+(swappable: all-zero `ShaperLimits` = passthrough, as specified). 118-004 extended it with
+the land-at-zero completion predicate. Delta vs this spec: the `vExit` next-move-lookahead
+blend was NOT implemented; the surviving gap is tracked by
+`chain-advance-reset-defeats-same-axis-compatible-leg-continuity.md` (119-002).
 
 ## Description
 

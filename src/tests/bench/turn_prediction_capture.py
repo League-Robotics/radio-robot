@@ -147,12 +147,28 @@ class _CsvSink:
         self._writer.writeheader()
         self.row_count = 0
         self.last_now_ms: "float | None" = None
+        # 119 ticket 001 (kill-the-silent-off-shaping-config-boundary.md):
+        # edge-tracking for the flags-bit-16 stdout print below -- see
+        # write_frame()'s own doc comment.
+        self._shaping_disabled_active = False
 
     def write_frame(self, frame) -> None:
         self._writer.writerow(frame_to_row(frame))
         self.row_count += 1
         if frame.t is not None:
             self.last_now_ms = frame.t
+        # 119 ticket 001: print flags bit 16 (kFlagFaultShapingDisabled) on
+        # an EDGE transition only (never per-frame -- a whole turn/leg can
+        # legitimately run unshaped) -- the "bench tooling prints it" half
+        # of that ticket's acceptance criteria.
+        shaping_disabled_now = bool(frame.fault_shaping_disabled)
+        if shaping_disabled_now != self._shaping_disabled_active:
+            self._shaping_disabled_active = shaping_disabled_now
+            if shaping_disabled_now:
+                print("  [SHAPE] flags bit 16 (kFlagFaultShapingDisabled) SET -- MOVE "
+                      "active with shaping/anticipation OFF on both axes")
+            else:
+                print("  [SHAPE] flags bit 16 cleared -- shaping active again")
 
     def step(self, cycles: int = 1) -> None:
         for _ in range(cycles):
