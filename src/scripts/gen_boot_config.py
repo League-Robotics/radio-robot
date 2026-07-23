@@ -62,19 +62,21 @@ those functions read (heading_kp/heading_kd/heading_source/
 heading_dwell_tol_deg/heading_dwell_rate_dps/heading_lead_bias/plan_lead/
 terminal_lead/yaw_rate_max/max_rot_accel_dps2/min_speed/arrive_dwell/
 actuation_lag/distance_kp/distance_tol/model_tau_lin/model_tau_ang/
-v_body_max/j_max/yaw_jerk_max) are STILL unread by this generator as of
-that ticket; existing robot JSON files may still carry them harmlessly
-(dead data, not a build error).
+v_body_max) are STILL unread by this generator as of that ticket; existing
+robot JSON files may still carry them harmlessly (dead data, not a build
+error).
 
-`a_max`/`a_decel` READ AGAIN (decel-into-the-goal campaign) -- the two
-exceptions to the paragraph above. Orphaned by 115-003 alongside every
-other `motion_limits_for_config()` field, they are the ONLY two of that
-list this campaign's `shaper_config_for_config()` (below) reads back into
-a NEW consumer (`Config::ShaperBootConfig` -> `Motion::VelocityShaper` /
-`App::MoveQueue`, not the deleted planner) -- see that function's own
-docstring. `alpha_max`/`alpha_decel` are genuinely new fields this
-campaign added to the schema/every robot JSON (a_max/a_decel's own angular
-sibling; no `msg::PlannerConfig` predecessor existed for either).
+`a_max`/`a_decel`/`j_max`/`yaw_jerk_max` READ AGAIN (decel-into-the-goal
+campaign) -- the four exceptions to the paragraph above. Orphaned by
+115-003 alongside every other `motion_limits_for_config()` field, they are
+the four of that list this campaign's `shaper_config_for_config()` (below)
+reads back into a NEW consumer (`Config::ShaperBootConfig` ->
+`Motion::VelocityShaper` / `App::MoveQueue`, not the deleted planner) --
+see that function's own docstring. `alpha_max`/`alpha_decel` are genuinely
+new fields this campaign added to the schema/every robot JSON (a_max/
+a_decel's own angular sibling; no `msg::PlannerConfig` predecessor existed
+for either) -- `yaw_jerk_max` already existed as `j_max`'s own angular
+sibling, so no new angular jerk field was needed.
 
 Structural, compile-time, exempt (NOT behavioral tunables, NOT migrated —
 see sprint 114's Architecture Boundary list): `K_MOTOR_COUNT` (array sizing,
@@ -418,20 +420,22 @@ def estimator_config_for_config(cfg: dict):
 
 
 def shaper_config_for_config(cfg: dict):
-    """Return (a_max, a_decel, alpha_max, alpha_decel) for
-    Config::ShaperBootConfig (decel-into-the-goal campaign) --
-    Motion::VelocityShaper's own accel/decel magnitude ceilings, consumed
-    by App::MoveQueue to taper the commanded speed toward each Move's own
-    stop threshold instead of holding a constant speed until Motion::
-    StopCondition fires.
+    """Return (a_max, a_decel, alpha_max, alpha_decel, j_max, yaw_jerk_max)
+    for Config::ShaperBootConfig (decel-into-the-goal campaign) --
+    Motion::VelocityShaper's own accel/decel/jerk magnitude ceilings,
+    consumed by App::MoveQueue to taper the commanded speed toward each
+    Move's own stop threshold instead of holding a constant speed until
+    Motion::StopCondition fires.
 
-    a_max/a_decel are READ AGAIN here -- this module's own docstring
-    explains why they were dead ("unread") data since 115-003's
-    motion-stack excision and why this campaign resurrects them into a
-    DIFFERENT consumer than the deleted planner. alpha_max/alpha_decel are
-    new fields (a_max/a_decel's own angular sibling).
+    a_max/a_decel/j_max/yaw_jerk_max are READ AGAIN here -- this module's
+    own docstring explains why all four were dead ("unread") data since
+    115-003's motion-stack excision and why this campaign resurrects them
+    into a DIFFERENT consumer than the deleted planner. alpha_max/
+    alpha_decel are new fields (a_max/a_decel's own angular sibling) --
+    yaw_jerk_max already existed as j_max's own angular sibling, so no new
+    field was needed there.
 
-    All four REQUIRED, same fail-closed posture as every other field this
+    All six REQUIRED, same fail-closed posture as every other field this
     generator bakes (sprint 114 config-as-truth, extended here) -- a robot
     JSON missing any one of them fails codegen loudly rather than shipping
     a boot image where App::ShaperLimits silently disables shaping on that
@@ -444,7 +448,10 @@ def shaper_config_for_config(cfg: dict):
     a_decel = _require(cfg, "control", "a_decel")
     alpha_max = _require(cfg, "control", "alpha_max")
     alpha_decel = _require(cfg, "control", "alpha_decel")
-    return float(a_max), float(a_decel), float(alpha_max), float(alpha_decel)
+    j_max = _require(cfg, "control", "j_max")
+    yaw_jerk_max = _require(cfg, "control", "yaw_jerk_max")
+    return (float(a_max), float(a_decel), float(alpha_max), float(alpha_decel),
+            float(j_max), float(yaw_jerk_max))
 
 
 def generate(cfg: dict, source_path: str) -> str:
@@ -460,8 +467,8 @@ def generate(cfg: dict, source_path: str) -> str:
          otos_linear_scale, otos_angular_scale) = otos_boot_config_values(cfg)
         (estimator_heading_otos, estimator_omega_otos,
          estimator_staleness, estimator_stop_lead) = estimator_config_for_config(cfg)
-        (shaper_a_max, shaper_a_decel,
-         shaper_alpha_max, shaper_alpha_decel) = shaper_config_for_config(cfg)
+        (shaper_a_max, shaper_a_decel, shaper_alpha_max, shaper_alpha_decel,
+         shaper_j_max, shaper_yaw_jerk_max) = shaper_config_for_config(cfg)
     except MissingRobotConfigKeyError as e:
         raise e.with_source(source_path) from e
 
@@ -592,21 +599,25 @@ EstimatorBootConfig defaultEstimatorConfig() {{
 
 ShaperBootConfig defaultShaperConfig() {{
     // Decel-into-the-goal campaign -- fail-closed baked from the robot
-    // JSON's control.a_max/a_decel/alpha_max/alpha_decel
-    // (data/robots/robot_config.schema.json). a_max/a_decel are the
-    // deleted msg::PlannerConfig's own former fields, orphaned by 115-003
-    // and read again here into a NEW consumer (Motion::VelocityShaper);
-    // alpha_max/alpha_decel are new (a_max/a_decel's own angular sibling).
-    // NOT a live SET/wire surface itself -- see App::MoveQueue's own
-    // setShaperLimits()/EstimatorConfigPatch's a_max/a_decel/alpha_max/
-    // alpha_decel fields (config.proto) for the separate, volatile
-    // live-tuning path (mirrors OtosBootConfig/EstimatorBootConfig's own
-    // "boot bake vs. live ConfigPatch" split).
+    // JSON's control.a_max/a_decel/alpha_max/alpha_decel/j_max/
+    // yaw_jerk_max (data/robots/robot_config.schema.json). a_max/a_decel/
+    // j_max/yaw_jerk_max are the deleted msg::PlannerConfig's own former
+    // fields, orphaned by 115-003 and read again here into a NEW consumer
+    // (Motion::VelocityShaper); alpha_max/alpha_decel are new (a_max/
+    // a_decel's own angular sibling -- yaw_jerk_max already covered the
+    // angular jerk slot). NOT a live SET/wire surface itself -- see
+    // App::MoveQueue's own setShaperLimits()/EstimatorConfigPatch's
+    // a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max fields
+    // (config.proto) for the separate, volatile live-tuning path (mirrors
+    // OtosBootConfig/EstimatorBootConfig's own "boot bake vs. live
+    // ConfigPatch" split).
     ShaperBootConfig cfg;
-    cfg.aMax = {_f(shaper_a_max)};              // [mm/s^2]
-    cfg.aDecel = {_f(shaper_a_decel)};          // [mm/s^2]
-    cfg.alphaMax = {_f(shaper_alpha_max)};      // [rad/s^2]
-    cfg.alphaDecel = {_f(shaper_alpha_decel)};  // [rad/s^2]
+    cfg.aMax = {_f(shaper_a_max)};                  // [mm/s^2]
+    cfg.aDecel = {_f(shaper_a_decel)};               // [mm/s^2]
+    cfg.alphaMax = {_f(shaper_alpha_max)};           // [rad/s^2]
+    cfg.alphaDecel = {_f(shaper_alpha_decel)};       // [rad/s^2]
+    cfg.jMax = {_f(shaper_j_max)};                   // [mm/s^3]
+    cfg.yawJerkMax = {_f(shaper_yaw_jerk_max)};      // [rad/s^3]
     return cfg;
 }}
 

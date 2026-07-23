@@ -146,23 +146,42 @@ _TURN_TOLERANCE_SHAPED_DEG = 2.5
 # truth -- turn_prediction.ipynb Section 8's own addendum has the full
 # table) found: lead=0ms/taper=OFF worst=20.3deg (today's un-shaped
 # baseline); lead=90ms/taper=OFF worst=3.1deg (the OLD tuned default,
-# unchanged); lead=60ms/taper=ON worst=0.3deg -- a materially better
-# result than either taper-off point, achieved by RE-TUNING the lead
-# downward once the taper is doing part of the deceleration work the lead
-# used to have to anticipate alone. 60.0 replaces 90.0 as this file's own
-# default for a taper-ON run.
-_STOP_LEAD_MS = 60.0
+# unchanged); lead=60ms/taper=ON (accel-limited stage) worst=0.3deg -- a
+# materially better result than either taper-off point, achieved by
+# RE-TUNING the lead downward once the taper is doing part of the
+# deceleration work the lead used to have to anticipate alone.
+#
+# jerk-limited S-curve RE-SWEEP (2026-07-22, same day, stakeholder
+# jerk-limiting directive): the S-curve's own accel ramp-up/roll-off adds
+# a SECOND source of lag on top of the anticipation lead's own -- the
+# accel-only stage's 60ms lead now produces a SYSTEMATIC ~-3.3deg
+# undershoot at TOUR level (all 6 TOUR_1 turns landing short, not
+# scattered noise) once jerk is live. Re-swept directly against the TOUR_1
+# metric itself (not the isolated single-turn sweep, which does not
+# reproduce tour-embedded dynamics -- see the ideal-chip xfail's own
+# paragraph below for why): a BROAD, flat plateau at worst=1.378deg,
+# mean~=-0.02deg (extremely well-centered) spans lead=30-54ms; 45.0 (mid-
+# plateau) replaces 60.0 as this file's own default for a jerk-limited
+# taper-ON run -- measured worst 1.97deg (TOUR_2 ideal) across all four
+# TOUR_1/TOUR_2 x ideal/realistic combinations, comfortably inside
+# _TURN_TOLERANCE_SHAPED_DEG (2.5deg) with NO tolerance loosening needed.
+_STOP_LEAD_MS = 45.0
 
-# decel-into-the-goal campaign: Motion::VelocityShaper's own accel/decel
-# ceilings, pushed alongside stop_lead_ms above -- the SAME values baked
-# into data/robots/tovez.json's own control.a_max/a_decel/alpha_max/
-# alpha_decel (control._shaper_note has the full derivation), not synthetic
-# test-only numbers, so this file's own sweep result is directly actionable
-# for the shipped default.
-_A_MAX = 800.0        # [mm/s^2]
-_A_DECEL = 800.0      # [mm/s^2]
-_ALPHA_MAX = 7.0       # [rad/s^2]
-_ALPHA_DECEL = 7.0     # [rad/s^2]
+# decel-into-the-goal campaign: Motion::VelocityShaper's own accel/decel/
+# jerk ceilings, pushed alongside stop_lead_ms above -- the SAME values
+# baked into data/robots/tovez.json's own control.a_max/a_decel/alpha_max/
+# alpha_decel/j_max/yaw_jerk_max (control._shaper_note has the full
+# derivation), not synthetic test-only numbers, so this file's own sweep
+# result is directly actionable for the shipped default. j_max/
+# yaw_jerk_max (jerk-limited S-curve stage, 2026-07-22) re-swept
+# _STOP_LEAD_MS against the SAME 60.0 optimum the accel-only stage already
+# found -- see that constant's own comment for the re-sweep result.
+_A_MAX = 800.0          # [mm/s^2]
+_A_DECEL = 800.0        # [mm/s^2]
+_ALPHA_MAX = 7.0        # [rad/s^2]
+_ALPHA_DECEL = 7.0      # [rad/s^2]
+_J_MAX = 5000.0         # [mm/s^3]
+_YAW_JERK_MAX = 100.0   # [rad/s^3]
 
 
 def _compensating_register(raw_error: float) -> float:
@@ -231,7 +250,8 @@ def _make_stepper(loop, clock: "_SteppedClock"):
 def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
                 stop_lead_ms: "float | None" = _STOP_LEAD_MS,
                 a_max: "float | None" = _A_MAX, a_decel: "float | None" = _A_DECEL,
-                alpha_max: "float | None" = _ALPHA_MAX, alpha_decel: "float | None" = _ALPHA_DECEL):
+                alpha_max: "float | None" = _ALPHA_MAX, alpha_decel: "float | None" = _ALPHA_DECEL,
+                j_max: "float | None" = _J_MAX, yaw_jerk_max: "float | None" = _YAW_JERK_MAX):
     from robot_radio.config.robot_config import load_robot_config
     from robot_radio.io.sim_loop import SimLoop
     from robot_radio.robot.protocol import NezhaProtocol
@@ -254,14 +274,15 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
     # calibration push a few lines down. `stop_lead_ms=None` skips this
     # (pre-fix baseline measurement).
     #
-    # decel-into-the-goal campaign: a_max/a_decel/alpha_max/alpha_decel ride
-    # the SAME EstimatorConfigPatch/estimator_config() call (config.proto's
-    # own "smallest coherent path" doc comment) -- App::MoveQueue also
-    # leaves ShaperLimits at its own constructor default (every field 0,
-    # shaping OFF; see App::ShaperLimits's own doc comment) unless pushed.
-    # All four None (the default) skips the push entirely (taper OFF,
-    # matching this file's own pre-campaign baseline); the caller passes
-    # all four together to turn the taper on.
+    # decel-into-the-goal campaign: a_max/a_decel/alpha_max/alpha_decel/
+    # j_max/yaw_jerk_max ride the SAME EstimatorConfigPatch/estimator_
+    # config() call (config.proto's own "smallest coherent path" doc
+    # comment) -- App::MoveQueue also leaves ShaperLimits at its own
+    # constructor default (every field 0, shaping OFF; see App::
+    # ShaperLimits's own doc comment) unless pushed. All six None (the
+    # default) skips the push entirely (taper OFF, matching this file's
+    # own pre-campaign baseline); the caller passes all six together to
+    # turn the (jerk-limited) taper on.
     shaper_fields = {}
     if a_max is not None:
         shaper_fields["a_max"] = a_max
@@ -271,6 +292,10 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
         shaper_fields["alpha_max"] = alpha_max
     if alpha_decel is not None:
         shaper_fields["alpha_decel"] = alpha_decel
+    if j_max is not None:
+        shaper_fields["j_max"] = j_max
+    if yaw_jerk_max is not None:
+        shaper_fields["yaw_jerk_max"] = yaw_jerk_max
 
     if stop_lead_ms is not None or shaper_fields:
         conn = _SimConfigConn(loop)
@@ -590,7 +615,52 @@ _XFAIL_REASON_IDEAL = (
     "this campaign. See test_tour_1_and_tour_2_ninety_degree_turns_land_"
     "within_the_shaped_band() below for the NEW, tightened, ACTUALLY-MET "
     "tolerance (2.5deg) this campaign ships as its own real acceptance gate, "
-    "distinct from this xfail's original <0.05deg aspirational bar."
+    "distinct from this xfail's original <0.05deg aspirational bar.\n"
+    "\n"
+    "jerk-limited S-curve re-baseline (2026-07-22, same day, stakeholder "
+    "jerk-limiting directive on top of the accel-limited stage above): "
+    "Motion::VelocityShaper now slews a COMMANDED ACCEL (not just commanded "
+    "speed) toward a bang-bang target at <= j_max/yaw_jerk_max per second "
+    "(velocity_shaper.h's own file header) -- j_max/yaw_jerk_max were "
+    "orphaned, unread control.* keys since 115-003, this campaign's second "
+    "consumer after a_max/a_decel/alpha_max/alpha_decel. The extra S-curve "
+    "lag pushed the accel-only stage's own 60ms lead into a SYSTEMATIC "
+    "~-3.3deg undershoot at TOUR level (all 6 TOUR_1 turns landing short, "
+    "worst 3.387deg) -- re-swept directly against TOUR_1 itself (the "
+    "isolated single-turn sweep does not reproduce tour-embedded dynamics, "
+    "same finding as the accel-only stage's own paragraph above): a broad, "
+    "flat plateau (worst=1.378deg, mean~=-0.02deg) spans lead=30-54ms; "
+    "45.0ms (mid-plateau) replaces 60.0ms as the shipped default. "
+    "Re-measured with lead=45ms/jerk ON: worst ideal-chip miss now measures "
+    "1.378deg (TOUR_1)/1.970deg (TOUR_2) -- BETTER than the accel-only "
+    "stage's own 2.025/2.235deg, despite the added jerk-limiting lag, "
+    "because the re-swept lead is a tighter fit than simply reusing the "
+    "prior stage's own optimum -- still short of the stakeholder's own "
+    "stated <0.05deg 'exact' bar, so this xfail stays open. The 2.5deg "
+    "_TURN_TOLERANCE_SHAPED_DEG gate needed NO loosening -- the jerk-"
+    "limited, re-tuned result is a genuine improvement, not a regression.\n"
+    "\n"
+    "jerk-limited stage, SIMPLIFIED (2026-07-22, same day, second "
+    "stakeholder correction): 'You're not trying to implement your own "
+    "version of Ruckig, right? I literally just wanted acceleration slew "
+    "rate limiting and velocity slew rate limiting.' The roll-off-based "
+    "design immediately above (chooseAccelTarget()'s own branching "
+    "roll-off predicate) was rewritten to EXACTLY two chained rate clamps "
+    "and an integrator -- velocity clamp (Stage 1's own sqrt(2*a_decel*"
+    "remaining) formula, byte-for-byte unchanged), then an accel clamp "
+    "(the velocity clamp's own result implies an accel; slew "
+    "commandedAccel toward it at <= j_max/yaw_jerk_max) -- plus two "
+    "one-line algebraic margin terms (not a branch, not a phase) folded "
+    "into each clamp's own input, required because a margin-free version "
+    "of the two clamps measurably overshoots/reverses sign (verified "
+    "in-tree). velocity_shaper.cpp is 94 lines (was 160 for the roll-off "
+    "attempt). Re-measured at the SAME lead=45ms (no new sweep -- still "
+    "clears the gate): worst ideal-chip miss now measures 1.651deg "
+    "(TOUR_1)/1.487deg (TOUR_2) -- same ballpark as the roll-off design's "
+    "own 1.378/1.970deg, not a regression from simplifying. See "
+    "clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md's own "
+    "'Follow-on fix, jerk-limited stage, simplified' section for the "
+    "hardware numbers."
 )
 
 _XFAIL_REASON_REALISTIC = (
@@ -633,7 +703,30 @@ _XFAIL_REASON_REALISTIC = (
     "xfail stays open. See "
     "test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band() "
     "below for the NEW, tightened, ACTUALLY-MET tolerance (2.5deg) this "
-    "campaign ships as its own real acceptance gate."
+    "campaign ships as its own real acceptance gate.\n"
+    "\n"
+    "jerk-limited S-curve re-baseline (2026-07-22, same day, stakeholder "
+    "jerk-limiting directive): see the ideal-chip xfail's own matching "
+    "paragraph for the mechanism and the lead re-sweep (45ms replaces "
+    "60ms once jerk-limiting is active). Re-measured with lead=45ms/jerk "
+    "ON: worst realistic-profile miss now measures 1.503deg (TOUR_1)/"
+    "1.668deg (TOUR_2) -- comparable to the accel-only stage's own "
+    "1.932/2.405deg immediately above, still short of the stakeholder's "
+    "own stated 1.0deg bar.\n"
+    "\n"
+    "jerk-limited stage, SIMPLIFIED (2026-07-22, same day, second "
+    "stakeholder correction -- see the ideal-chip xfail's own matching "
+    "paragraph for the full rewrite description: exactly two chained rate "
+    "clamps and an integrator, no roll-off predicate, no phase state). "
+    "Re-measured at the SAME lead=45ms (no new sweep): worst realistic-"
+    "profile miss now measures 0.934deg (TOUR_1)/2.138deg (TOUR_2) -- "
+    "TOUR_1's own worst-turn identity improved into the stakeholder's own "
+    "1.0deg bar; TOUR_2 stays just outside it -- both within the same "
+    "general band as the roll-off design's own numbers immediately above, "
+    "not a regression from simplifying. See "
+    "clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md's own "
+    "'Follow-on fix, jerk-limited stage, simplified' section for the "
+    "hardware numbers."
 )
 
 

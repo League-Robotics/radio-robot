@@ -91,18 +91,22 @@ void mergeEstimatorPatch(App::FusionWeights& weights, const msg::EstimatorConfig
 }
 
 // mergeShaperPatch (decel-into-the-goal campaign) -- folds `patch`'s
-// PRESENT a_max/a_decel/alpha_max/alpha_decel fields onto `limits` (a
-// snapshot of moveQueue_.shaperLimits(), taken by handleConfig()'s own
-// ESTIMATOR branch before calling setShaperLimits()) -- the SAME
-// present-field-merge shape mergeEstimatorPatch() immediately above uses,
-// applied to App::ShaperLimits instead of App::FusionWeights. Also never
-// persisted (config.proto's own EstimatorConfigPatch doc comment) -- a
-// reboot always reverts to the baked Config::defaultShaperConfig() default.
+// PRESENT a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max fields
+// onto `limits` (a snapshot of moveQueue_.shaperLimits(), taken by
+// handleConfig()'s own ESTIMATOR branch before calling setShaperLimits())
+// -- the SAME present-field-merge shape mergeEstimatorPatch() immediately
+// above uses, applied to App::ShaperLimits instead of App::FusionWeights.
+// j_max/yaw_jerk_max (jerk-limited S-curve stage) ride the same merge.
+// Also never persisted (config.proto's own EstimatorConfigPatch doc
+// comment) -- a reboot always reverts to the baked
+// Config::defaultShaperConfig() default.
 void mergeShaperPatch(App::ShaperLimits& limits, const msg::EstimatorConfigPatch& patch) {
   if (patch.a_max.has) limits.aMax = patch.a_max.val;
   if (patch.a_decel.has) limits.aDecel = patch.a_decel.val;
   if (patch.alpha_max.has) limits.alphaMax = patch.alpha_max.val;
   if (patch.alpha_decel.has) limits.alphaDecel = patch.alpha_decel.val;
+  if (patch.j_max.has) limits.jMax = patch.j_max.val;
+  if (patch.yaw_jerk_max.has) limits.yawJerkMax = patch.yaw_jerk_max.val;
 }
 
 // packLine -- 4 raw grayscale channels (each already a single-byte I2C

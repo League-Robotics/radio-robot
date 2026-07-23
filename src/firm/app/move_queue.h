@@ -61,6 +61,7 @@
 #include "devices/clock.h"
 #include "messages/envelope.h"
 #include "motion/stop_condition.h"
+#include "motion/velocity_shaper.h"
 
 namespace App {
 
@@ -83,28 +84,38 @@ namespace App {
 // restriction, not a style preference -- MoveQueue's constructor below
 // needs exactly this default).
 //
-// Disabled-axis sentinel: aMax<=0 OR aDecel<=0 disables LINEAR shaping
-// entirely (tick()/activate() stage a Move's raw v_x/v_left/v_right
-// unchanged, byte-identical to this class's pre-shaping behavior);
-// independently, alphaMax<=0 OR alphaDecel<=0 disables ANGULAR shaping
-// (raw omega unchanged). This is the SAME "0 == off, matching this
-// class's own pre-feature behavior" contract stopLead already
-// established (MoveQueue's own constructor doc comment) -- the
-// default-constructed ShaperLimits{} (every field 0) is therefore the
-// exact identity/no-op configuration every pre-existing MoveQueue caller
-// (every unit-test harness, TestSim::SimHarness) keeps getting without
-// passing anything. Real firmware always supplies real positive values
-// here (gen_boot_config.py's shaper_config_for_config() REQUIRES all four
-// robot-JSON keys, config-as-truth) -- shaping is therefore
-// unconditionally ON in production, opt-in only for a sim/test
+// jMax/yawJerkMax (jerk-limited S-curve stage, 2026-07-22 stakeholder
+// correction on top of this struct's own first accel-limited pass): the
+// jerk magnitude ceilings Motion::VelocityShaper's own accel-slew clamp
+// uses (velocity_shaper.h's own file header has the full algorithm).
+// `j_max`/`yaw_jerk_max` already existed as REQUIRED, unread `control.*`
+// robot-JSON keys since sprint 114 (098-001) -- this campaign is their
+// first consumer, same "read again" story as aMax/aDecel above.
+//
+// Disabled-axis sentinel: aMax<=0 OR aDecel<=0 OR jMax<=0 disables LINEAR
+// shaping entirely (tick()/activate() stage a Move's raw v_x/v_left/
+// v_right unchanged, byte-identical to this class's pre-shaping
+// behavior); independently, alphaMax<=0 OR alphaDecel<=0 OR
+// yawJerkMax<=0 disables ANGULAR shaping (raw omega unchanged). This is
+// the SAME "0 == off, matching this class's own pre-feature behavior"
+// contract stopLead already established (MoveQueue's own constructor doc
+// comment) -- the default-constructed ShaperLimits{} (every field 0) is
+// therefore the exact identity/no-op configuration every pre-existing
+// MoveQueue caller (every unit-test harness, TestSim::SimHarness) keeps
+// getting without passing anything. Real firmware always supplies real
+// positive values here (gen_boot_config.py's shaper_config_for_config()
+// REQUIRES all six robot-JSON keys, config-as-truth) -- shaping is
+// therefore unconditionally ON in production, opt-in only for a sim/test
 // composition root that hasn't pushed a real config (mirrors
 // FusionWeights{}/stopLead=0's own sim/production boundary precedent,
 // sim_harness.h's own comment).
 struct ShaperLimits {
-  float aMax = 0.0f;        // [mm/s^2] linear accel-ramp ceiling
-  float aDecel = 0.0f;      // [mm/s^2] linear decel-taper ceiling
-  float alphaMax = 0.0f;    // [rad/s^2] angular accel-ramp ceiling
-  float alphaDecel = 0.0f;  // [rad/s^2] angular decel-taper ceiling
+  float aMax = 0.0f;         // [mm/s^2] linear accel-ramp ceiling
+  float aDecel = 0.0f;       // [mm/s^2] linear decel-taper ceiling
+  float alphaMax = 0.0f;     // [rad/s^2] angular accel-ramp ceiling
+  float alphaDecel = 0.0f;   // [rad/s^2] angular decel-taper ceiling
+  float jMax = 0.0f;         // [mm/s^3] linear jerk ceiling
+  float yawJerkMax = 0.0f;   // [rad/s^3] angular jerk ceiling
 };
 
 class MoveQueue {
@@ -337,23 +348,26 @@ class MoveQueue {
   uint32_t stopLead_ = 0;  // [ms] see tick()'s own doc comment
 
   // Velocity-shaping state (decel-into-the-goal campaign). shaperLimits_ is
-  // the live-tunable config (setShaperLimits()); the four shaped* fields
-  // are the actual RUNNING per-axis commanded-speed state
-  // Motion::VelocityShaper::next()'s own "currentSpeed" argument reads and
-  // writes each tick -- deliberately MoveQueue-level, not ActiveMove-level
+  // the live-tunable config (setShaperLimits()); the four shaper* members
+  // are the actual RUNNING per-axis Motion::VelocityShaper instances --
+  // each one OWNS its own (commandedSpeed, commandedAccel) state pair
+  // (jerk-limited S-curve stage: VelocityShaper became stateful, see its
+  // own file header) -- deliberately MoveQueue-level, not ActiveMove-level
   // (survives across a chain-advance/replace so a same-axis, same-
   // direction follow-on Move continues its ramp smoothly rather than
   // restarting from 0 -- see ShaperLimits's own doc comment for the
-  // "byte-identical when disabled" contract this relies on). Initialized
-  // to 0 (a fresh boot's own resting state); each axis is self-resetting
-  // in practice, since the decel taper already drives it toward 0 as
-  // ANY Move's own `remaining` approaches 0, before that Move's stop
-  // condition fires.
+  // "byte-identical when disabled" contract this relies on). Default-
+  // constructed (both state fields 0 -- a fresh boot's own resting state);
+  // each axis is self-resetting in practice, since the decel taper already
+  // drives it toward 0 as ANY Move's own `remaining` approaches 0, before
+  // that Move's stop condition fires (and tick()'s own empty-queue-drain/
+  // flush() paths call .reset() explicitly regardless -- see their own
+  // call sites in move_queue.cpp).
   ShaperLimits shaperLimits_;
-  float shapedVX_ = 0.0f;      // [mm/s]
-  float shapedOmega_ = 0.0f;   // [rad/s]
-  float shapedVLeft_ = 0.0f;   // [mm/s]
-  float shapedVRight_ = 0.0f;  // [mm/s]
+  Motion::VelocityShaper shaperVX_;      // [mm/s] / [mm/s^2]
+  Motion::VelocityShaper shaperOmega_;   // [rad/s] / [rad/s^2]
+  Motion::VelocityShaper shaperVLeft_;   // [mm/s] / [mm/s^2]
+  Motion::VelocityShaper shaperVRight_;  // [mm/s] / [mm/s^2]
   uint64_t lastShapeNow_ = 0;  // [us] dt baseline for shapeAndStage(), reset at each activate()
 };
 

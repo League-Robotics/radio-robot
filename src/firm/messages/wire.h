@@ -49,10 +49,10 @@ struct Result {
 // build-sim`), so a future schema change that pushes an envelope over the
 // 186-byte budget fails one of the two static_asserts below at build time,
 // not at runtime on a truncated wire line.
-//   CommandEnvelope: config=44B, stop=2B, move=38B (worst=config=44B) + non-oneof=6B => total=50B
+//   CommandEnvelope: config=54B, stop=2B, move=38B (worst=config=54B) + non-oneof=6B => total=60B
 //   ReplyEnvelope: ok=19B, err=10B, tlm=147B (worst=tlm=147B) + non-oneof=6B => total=153B
 //   TelemetrySecondary: standalone worst case = 52B (own *B-armored line, not a ReplyEnvelope oneof arm -- Decision 3)
-constexpr uint16_t kCommandEnvelopeMaxEncodedSize = 50;
+constexpr uint16_t kCommandEnvelopeMaxEncodedSize = 60;
 constexpr uint16_t kReplyEnvelopeMaxEncodedSize = 153;
 constexpr uint16_t kTelemetrySecondaryMaxEncodedSize = 52;
 static_assert(kCommandEnvelopeMaxEncodedSize <= 186,

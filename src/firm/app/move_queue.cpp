@@ -18,8 +18,10 @@ MoveQueue::MoveQueue(Drive& drive, Odometry& odom, const Devices::Clock& clock,
 void MoveQueue::activate(const msg::Move& move, uint64_t now, float pathLength, float theta) {
   // Disabled-axis gate -- see ShaperLimits's own doc comment (move_queue.h)
   // for the "0 == off, byte-identical to pre-shaping behavior" contract.
-  bool linearShaping = shaperLimits_.aMax > 0.0f && shaperLimits_.aDecel > 0.0f;
-  bool angularShaping = shaperLimits_.alphaMax > 0.0f && shaperLimits_.alphaDecel > 0.0f;
+  bool linearShaping =
+      shaperLimits_.aMax > 0.0f && shaperLimits_.aDecel > 0.0f && shaperLimits_.jMax > 0.0f;
+  bool angularShaping = shaperLimits_.alphaMax > 0.0f && shaperLimits_.alphaDecel > 0.0f &&
+                        shaperLimits_.yawJerkMax > 0.0f;
 
   active_.velocityKind = move.velocity_kind;
 
@@ -30,22 +32,22 @@ void MoveQueue::activate(const msg::Move& move, uint64_t now, float pathLength, 
     active_.cruiseVY = 0.0f;
     active_.cruiseOmega = 0.0f;
 
-    // Shaping enabled: stage the CARRIED-OVER running shaped state (0 on a
+    // Shaping enabled: stage the CARRIED-OVER running shaper state (0 on a
     // fresh boot's first-ever Move; a chained/replaced Move's own
     // just-ended value otherwise -- SUC-051 continuity, no instant jump)
     // rather than the raw cruise target; shapeAndStage()'s own tick() calls
     // ramp it toward the cruise target from there. Shaping disabled: stage
     // the raw target immediately (UNCHANGED pre-shaping behavior) and keep
-    // the shaped-state mirror in sync so a LATER live-enabled shaping call
-    // doesn't inherit a stale value.
+    // the shaper's own state mirror in sync (syncTo()) so a LATER
+    // live-enabled shaping call doesn't inherit a stale value.
     float vLeft = active_.cruiseVLeft;
     float vRight = active_.cruiseVRight;
     if (linearShaping) {
-      vLeft = shapedVLeft_;
-      vRight = shapedVRight_;
+      vLeft = shaperVLeft_.commandedSpeed();
+      vRight = shaperVRight_.commandedSpeed();
     } else {
-      shapedVLeft_ = vLeft;
-      shapedVRight_ = vRight;
+      shaperVLeft_.syncTo(vLeft);
+      shaperVRight_.syncTo(vRight);
     }
     drive_.setWheels(vLeft, vRight);
   } else {
@@ -61,14 +63,14 @@ void MoveQueue::activate(const msg::Move& move, uint64_t now, float pathLength, 
     float vx = active_.cruiseVX;
     float omega = active_.cruiseOmega;
     if (linearShaping) {
-      vx = shapedVX_;
+      vx = shaperVX_.commandedSpeed();
     } else {
-      shapedVX_ = vx;
+      shaperVX_.syncTo(vx);
     }
     if (angularShaping) {
-      omega = shapedOmega_;
+      omega = shaperOmega_.commandedSpeed();
     } else {
-      shapedOmega_ = omega;
+      shaperOmega_.syncTo(omega);
     }
     drive_.setTwist(vx, active_.cruiseVY, omega);
   }
@@ -134,8 +136,10 @@ void MoveQueue::activate(const msg::Move& move, uint64_t now, float pathLength, 
 //              measure "remaining" on an axis the Move's own stop
 //              condition doesn't watch.
 void MoveQueue::shapeAndStage(uint64_t now, float pathLength, float theta) {
-  bool linearShaping = shaperLimits_.aMax > 0.0f && shaperLimits_.aDecel > 0.0f;
-  bool angularShaping = shaperLimits_.alphaMax > 0.0f && shaperLimits_.alphaDecel > 0.0f;
+  bool linearShaping =
+      shaperLimits_.aMax > 0.0f && shaperLimits_.aDecel > 0.0f && shaperLimits_.jMax > 0.0f;
+  bool angularShaping = shaperLimits_.alphaMax > 0.0f && shaperLimits_.alphaDecel > 0.0f &&
+                        shaperLimits_.yawJerkMax > 0.0f;
   if (!linearShaping && !angularShaping) return;  // Drive already holds the raw cruise target
 
   float dt = static_cast<float>(now - lastShapeNow_) / 1.0e6f;  // [us] -> [s]
@@ -150,18 +154,18 @@ void MoveQueue::shapeAndStage(uint64_t now, float pathLength, float theta) {
   } else if (active_.kind == Motion::StopCondition::Kind::Angle) {
     remainingAngular = active_.threshold - std::fabs(theta - active_.activationTheta);
   }
-  // Kind::Time -- both axes stay +infinity: accel-limited ramp-up still
-  // applies (Motion::VelocityShaper::next()'s own accel-ramp clamp), no
-  // decel taper (a Time Move ends on elapsed wall-clock time, not
-  // position -- move_queue.h's own tick() doc comment).
+  // Kind::Time -- both axes stay +infinity: accel/jerk-limited ramp-up
+  // still applies (Motion::VelocityShaper::next()'s own accel/jerk
+  // clamps), no decel taper (a Time Move ends on elapsed wall-clock time,
+  // not position -- move_queue.h's own tick() doc comment).
 
   if (active_.velocityKind == msg::Move::VelocityKind::WHEELS) {
     if (!linearShaping) return;
-    shapedVLeft_ = Motion::VelocityShaper::next(active_.cruiseVLeft, shapedVLeft_, remainingLinear,
-                                                 dt, shaperLimits_.aMax, shaperLimits_.aDecel);
-    shapedVRight_ = Motion::VelocityShaper::next(active_.cruiseVRight, shapedVRight_, remainingLinear,
-                                                  dt, shaperLimits_.aMax, shaperLimits_.aDecel);
-    drive_.setWheels(shapedVLeft_, shapedVRight_);
+    float vLeft = shaperVLeft_.next(active_.cruiseVLeft, remainingLinear, dt, shaperLimits_.aMax,
+                                     shaperLimits_.aDecel, shaperLimits_.jMax);
+    float vRight = shaperVRight_.next(active_.cruiseVRight, remainingLinear, dt, shaperLimits_.aMax,
+                                       shaperLimits_.aDecel, shaperLimits_.jMax);
+    drive_.setWheels(vLeft, vRight);
     return;
   }
 
@@ -169,14 +173,12 @@ void MoveQueue::shapeAndStage(uint64_t now, float pathLength, float theta) {
   float vx = active_.cruiseVX;
   float omega = active_.cruiseOmega;
   if (linearShaping) {
-    shapedVX_ = Motion::VelocityShaper::next(active_.cruiseVX, shapedVX_, remainingLinear, dt,
-                                              shaperLimits_.aMax, shaperLimits_.aDecel);
-    vx = shapedVX_;
+    vx = shaperVX_.next(active_.cruiseVX, remainingLinear, dt, shaperLimits_.aMax,
+                         shaperLimits_.aDecel, shaperLimits_.jMax);
   }
   if (angularShaping) {
-    shapedOmega_ = Motion::VelocityShaper::next(active_.cruiseOmega, shapedOmega_, remainingAngular,
-                                                 dt, shaperLimits_.alphaMax, shaperLimits_.alphaDecel);
-    omega = shapedOmega_;
+    omega = shaperOmega_.next(active_.cruiseOmega, remainingAngular, dt, shaperLimits_.alphaMax,
+                               shaperLimits_.alphaDecel, shaperLimits_.yawJerkMax);
   }
   drive_.setTwist(vx, active_.cruiseVY, omega);
 }
@@ -263,16 +265,17 @@ MoveQueue::TickResult MoveQueue::tick(uint64_t now, const Odometry& odom) {
     activate(next, now, odom.pathLength(), odom.theta());
   } else {
     drive_.stop();
-    // The robot has genuinely stopped -- zero the running shaped-speed
-    // memory too, not just Drive's own staged targets, so the NEXT
-    // unrelated Move (whenever it activates) ramps from a true 0 instead
-    // of inheriting a stale nonzero value from a taper that never finished
-    // (e.g. this Move ended via the timeout backstop mid-taper). See
-    // move_queue.h's own shaped* field doc comment.
-    shapedVX_ = 0.0f;
-    shapedOmega_ = 0.0f;
-    shapedVLeft_ = 0.0f;
-    shapedVRight_ = 0.0f;
+    // The robot has genuinely stopped -- reset() every shaper's own
+    // (commandedSpeed, commandedAccel) state too, not just Drive's own
+    // staged targets, so the NEXT unrelated Move (whenever it activates)
+    // ramps from a true (0, 0) instead of inheriting a stale nonzero pair
+    // from a taper that never finished (e.g. this Move ended via the
+    // timeout backstop mid-taper). See move_queue.h's own shaper* member
+    // doc comment.
+    shaperVX_.reset();
+    shaperOmega_.reset();
+    shaperVLeft_.reset();
+    shaperVRight_.reset();
   }
 
   return result;
@@ -284,12 +287,12 @@ void MoveQueue::flush() {
   active_.moveId = 0;
   drive_.stop();
   // Same reasoning as tick()'s own empty-queue-drain path above -- the
-  // robot has genuinely stopped, so the running shaped-speed memory must
-  // reset to 0 too, not just Drive's own staged targets.
-  shapedVX_ = 0.0f;
-  shapedOmega_ = 0.0f;
-  shapedVLeft_ = 0.0f;
-  shapedVRight_ = 0.0f;
+  // robot has genuinely stopped, so every shaper's own state must reset
+  // to (0, 0) too, not just Drive's own staged targets.
+  shaperVX_.reset();
+  shaperOmega_.reset();
+  shaperVLeft_.reset();
+  shaperVRight_.reset();
 }
 
 }  // namespace App

@@ -1,7 +1,8 @@
 // motion_velocity_shaper_harness.cpp -- off-hardware acceptance proof for
 // Motion::VelocityShaper (src/firm/motion/velocity_shaper.{h,cpp}),
 // decel-into-the-goal campaign (follow-on to
-// clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md).
+// clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md), jerk-
+// limited S-curve stage.
 //
 // Compiles ONLY against velocity_shaper.cpp -- no App::/Devices:: fakes of
 // any kind, mirroring motion_stop_condition_harness.cpp's own "the module
@@ -30,6 +31,10 @@ void fail(const std::string& what) {
   std::printf("  FAIL [%s]: %s\n", g_scenarioName.c_str(), what.c_str());
 }
 
+void checkTrue(bool condition, const std::string& what) {
+  if (!condition) fail(what + " -- expected true, got false");
+}
+
 void checkFloatEq(float actual, float expected, const std::string& what, float tol = 1e-3f) {
   if (std::fabs(actual - expected) > tol) {
     char buf[256];
@@ -48,219 +53,279 @@ void checkLe(float actual, float bound, const std::string& what) {
   }
 }
 
+// Common test-fixture magnitudes, shared across scenarios below (linear
+// units -- mm/s, mm/s^2, mm/s^3).
+constexpr float kDt = 0.02f;         // [s] one cycle, matches the real ~50Hz loop
+constexpr float kCruise = 300.0f;    // [mm/s]
+constexpr float kAMax = 1000.0f;     // [mm/s^2]
+constexpr float kADecel = 800.0f;    // [mm/s^2]
+constexpr float kJMax = 5000.0f;     // [mm/s^3]
+
 // ===========================================================================
-// 1. Accel clamp: from a standstill, one tick's step is exactly aMax*dt --
-//    never a jump straight to cruise.
+// 1. Accel-slew bound: across a full ramp-to-cruise-and-hold profile, the
+//    per-tick CHANGE in commandedAccel() never exceeds jMax*dt -- the jerk
+//    ceiling itself, the acceptance criterion the stakeholder's own jerk
+//    directive named explicitly ("max |da/dt| <= j_max across a full
+//    profile").
 // ===========================================================================
 
-void scenarioAccelClampFromStandstill() {
-  beginScenario("VelocityShaper::next(): accel clamp -- one tick from 0 steps by exactly aMax*dt");
+void scenarioAccelSlewNeverExceedsJerkBound() {
+  beginScenario("VelocityShaper: accel-slew per tick never exceeds jMax*dt across a full ramp");
 
-  float next = Motion::VelocityShaper::next(/*cruiseSpeed=*/300.0f, /*currentSpeed=*/0.0f,
-                                             /*remaining=*/10000.0f, /*dt=*/0.02f,
-                                             /*aMax=*/500.0f, /*aDecel=*/800.0f);
-  checkFloatEq(next, 10.0f, "next == aMax*dt (500*0.02) -- remaining/cruise both far from binding");
+  Motion::VelocityShaper shaper;
+  float prevAccel = 0.0f;
+  float worstStep = 0.0f;
+  for (int i = 0; i < 400; ++i) {
+    shaper.next(kCruise, /*remaining=*/1.0e6f, kDt, kAMax, kADecel, kJMax);
+    float step = std::fabs(shaper.commandedAccel() - prevAccel);
+    if (step > worstStep) worstStep = step;
+    prevAccel = shaper.commandedAccel();
+  }
+  checkLe(worstStep, kJMax * kDt + 1e-3f, "worst per-tick |delta accel| stays within jMax*dt");
 }
 
 // ===========================================================================
-// 2. Accel clamp never overshoots cruise -- a huge aMax*dt still lands
-//    exactly ON cruiseSpeed, not past it.
+// 2. Accel-slew bound holds through a full ramp-up + brake-to-a-stop
+//    profile too (both accel directions exercised, not just ramp-up).
 // ===========================================================================
 
-void scenarioAccelClampNeverOvershootsCruise() {
-  beginScenario("VelocityShaper::next(): accel clamp never overshoots cruiseSpeed even with a huge aMax*dt");
+void scenarioAccelSlewNeverExceedsJerkBoundThroughFullStop() {
+  beginScenario("VelocityShaper: accel-slew bound holds through ramp-up AND brake-to-stop");
 
-  float next = Motion::VelocityShaper::next(/*cruiseSpeed=*/100.0f, /*currentSpeed=*/90.0f,
-                                             /*remaining=*/10000.0f, /*dt=*/1.0f,
-                                             /*aMax=*/100000.0f, /*aDecel=*/800.0f);
-  checkFloatEq(next, 100.0f, "next lands exactly on cruiseSpeed, never past it");
+  Motion::VelocityShaper shaper;
+  float prevAccel = 0.0f;
+  float worstStep = 0.0f;
+  float remaining = 100.0f;  // [mm] short enough to trigger a full ramp-brake cycle
+  for (int i = 0; i < 400; ++i) {
+    float v = shaper.next(kCruise, remaining, kDt, kAMax, kADecel, kJMax);
+    remaining -= std::fabs(v) * kDt;
+    if (remaining < 0.0f) remaining = 0.0f;
+    float step = std::fabs(shaper.commandedAccel() - prevAccel);
+    if (step > worstStep) worstStep = step;
+    prevAccel = shaper.commandedAccel();
+  }
+  checkLe(worstStep, kJMax * kDt + 1e-3f, "worst per-tick |delta accel| stays within jMax*dt through a full stop");
 }
 
 // ===========================================================================
-// 3. Once at cruise with remaining still large, next tick holds cruise
-//    (steady state).
+// 3. S-curve reaches cruise: given ample remaining, the commanded speed
+//    converges to EXACTLY cruiseSpeed and holds there -- no steady-state
+//    error, no oscillation once settled.
 // ===========================================================================
 
-void scenarioHoldsCruiseAtSteadyState() {
-  beginScenario("VelocityShaper::next(): holds cruiseSpeed once reached, remaining still large");
+void scenarioReachesAndHoldsCruise() {
+  beginScenario("VelocityShaper: S-curve reaches cruiseSpeed and holds it, ample remaining");
 
-  float next = Motion::VelocityShaper::next(/*cruiseSpeed=*/300.0f, /*currentSpeed=*/300.0f,
-                                             /*remaining=*/10000.0f, /*dt=*/0.02f,
-                                             /*aMax=*/500.0f, /*aDecel=*/800.0f);
-  checkFloatEq(next, 300.0f, "next holds cruiseSpeed -- no drift once at steady state");
-}
+  Motion::VelocityShaper shaper;
+  float v = 0.0f;
+  for (int i = 0; i < 200; ++i) {
+    v = shaper.next(kCruise, /*remaining=*/1.0e6f, kDt, kAMax, kADecel, kJMax);
+  }
+  checkFloatEq(v, kCruise, "converges to exactly cruiseSpeed within 200 ticks");
+  checkFloatEq(shaper.commandedAccel(), 0.0f, "commandedAccel settles to 0 once at cruise (holding, not still ramping)");
 
-// ===========================================================================
-// 4. Decel taper curve: at cruise, with remaining small enough that
-//    sqrt(2*aDecel*remaining) < cruise, next is CAPPED to that sqrt value,
-//    not cruise -- the "decelerate into the goal" curve itself.
-// ===========================================================================
-
-void scenarioDecelTaperCapsBelowCruiseNearGoal() {
-  beginScenario("VelocityShaper::next(): decel taper caps next below cruiseSpeed as remaining shrinks");
-
-  // sqrt(2*800*10) = sqrt(16000) ~= 126.49 -- well under the 300 cruise.
-  float next = Motion::VelocityShaper::next(/*cruiseSpeed=*/300.0f, /*currentSpeed=*/300.0f,
-                                             /*remaining=*/10.0f, /*dt=*/0.02f,
-                                             /*aMax=*/500.0f, /*aDecel=*/800.0f);
-  checkFloatEq(next, std::sqrt(2.0f * 800.0f * 10.0f), "next == sqrt(2*aDecel*remaining), the decel-taper ceiling");
-  checkLe(next, 300.0f, "sanity: taper ceiling is below cruiseSpeed near the goal");
-}
-
-// ===========================================================================
-// 5. The taper curve monotonically shrinks as remaining shrinks -- the
-//    stakeholder's own "speed drops as you approach the target" property,
-//    sampled at several remaining values.
-// ===========================================================================
-
-void scenarioTaperMonotonicallyDecreasesWithRemaining() {
-  beginScenario("VelocityShaper::next(): taper ceiling shrinks monotonically as remaining shrinks");
-
-  float remainders[] = {200.0f, 100.0f, 50.0f, 10.0f, 1.0f};
-  float previous = 1.0e9f;
-  for (float remaining : remainders) {
-    float next = Motion::VelocityShaper::next(/*cruiseSpeed=*/300.0f, /*currentSpeed=*/300.0f,
-                                               remaining, /*dt=*/0.02f,
-                                               /*aMax=*/500.0f, /*aDecel=*/800.0f);
-    if (next > previous + 1e-3f) {
-      char buf[256];
-      std::snprintf(buf, sizeof(buf),
-                    "next (%g) at remaining=%g exceeds the previous (larger-remaining) next (%g)",
-                    static_cast<double>(next), static_cast<double>(remaining),
-                    static_cast<double>(previous));
-      fail(buf);
-    }
-    previous = next;
+  // Hold for another 50 ticks -- no drift/oscillation once settled.
+  for (int i = 0; i < 50; ++i) {
+    v = shaper.next(kCruise, /*remaining=*/1.0e6f, kDt, kAMax, kADecel, kJMax);
+    checkFloatEq(v, kCruise, "stays pinned at cruiseSpeed once settled, no oscillation");
   }
 }
 
 // ===========================================================================
-// 6. Zero/negative remaining: the taper ceiling is exactly 0 -- the goal
-//    itself commands a full stop, regardless of current/cruise.
+// 4. The S-curve never overshoots cruiseSpeed even momentarily -- the
+//    jerk-aware roll-off (chooseAccelTarget()) exists specifically to
+//    prevent this; sampled every tick through the whole ramp.
 // ===========================================================================
 
-void scenarioZeroRemainingCapsToZero() {
-  beginScenario("VelocityShaper::next(): remaining == 0 caps next to exactly 0");
+void scenarioNeverOvershootsCruiseDuringRampUp() {
+  beginScenario("VelocityShaper: commanded speed never exceeds cruiseSpeed during ramp-up");
 
-  float next = Motion::VelocityShaper::next(/*cruiseSpeed=*/300.0f, /*currentSpeed=*/300.0f,
-                                             /*remaining=*/0.0f, /*dt=*/0.02f,
-                                             /*aMax=*/500.0f, /*aDecel=*/800.0f);
-  checkFloatEq(next, 0.0f, "remaining == 0 -- decel-taper ceiling is 0");
-}
-
-void scenarioNegativeRemainingClampsToZeroSameAsZero() {
-  beginScenario("VelocityShaper::next(): negative remaining clamps to 0, same result as remaining == 0");
-
-  float next = Motion::VelocityShaper::next(/*cruiseSpeed=*/300.0f, /*currentSpeed=*/300.0f,
-                                             /*remaining=*/-5.0f, /*dt=*/0.02f,
-                                             /*aMax=*/500.0f, /*aDecel=*/800.0f);
-  checkFloatEq(next, 0.0f, "negative remaining clamps to 0 -- same malformed-input posture as stop_condition.cpp");
+  Motion::VelocityShaper shaper;
+  for (int i = 0; i < 200; ++i) {
+    float v = shaper.next(kCruise, /*remaining=*/1.0e6f, kDt, kAMax, kADecel, kJMax);
+    checkLe(v, kCruise + 1e-3f, "commanded speed never overshoots cruiseSpeed");
+  }
 }
 
 // ===========================================================================
-// 7. Sign handling: a negative cruiseSpeed (e.g. a clockwise turn) tapers
-//    toward 0 the SAME way a positive one does, mirrored in sign.
+// 5. Taper lands: driving toward a SHORT remaining, the commanded speed
+//    decays toward 0 as the goal is approached and settles at/near 0
+//    exactly as remaining reaches 0 -- no overshoot PAST the goal (the
+//    commanded speed never needs to reverse sign to "come back").
 // ===========================================================================
 
-void scenarioNegativeCruiseTapersSymmetrically() {
-  beginScenario("VelocityShaper::next(): negative cruiseSpeed (e.g. CW turn) tapers symmetrically");
+void scenarioTaperLandsAtZeroWithoutReversal() {
+  beginScenario("VelocityShaper: taper lands the commanded speed at ~0 as remaining reaches 0, no reversal");
 
-  float next = Motion::VelocityShaper::next(/*cruiseSpeed=*/-2.0f, /*currentSpeed=*/-2.0f,
-                                             /*remaining=*/0.1f /*[rad]*/, /*dt=*/0.02f,
-                                             /*aMax=*/8.0f, /*aDecel=*/8.0f);
-  float expectedMag = std::sqrt(2.0f * 8.0f * 0.1f);
-  checkFloatEq(next, -expectedMag, "negative cruise -- next carries cruiseSpeed's own sign");
-}
-
-void scenarioNegativeCruiseRampsUpFromZeroNegatively() {
-  beginScenario("VelocityShaper::next(): negative cruiseSpeed ramps up (more negative) from 0, accel-clamped");
-
-  float next = Motion::VelocityShaper::next(/*cruiseSpeed=*/-2.0f, /*currentSpeed=*/0.0f,
-                                             /*remaining=*/1000.0f, /*dt=*/0.02f,
-                                             /*aMax=*/8.0f, /*aDecel=*/8.0f);
-  checkFloatEq(next, -0.16f, "next == -aMax*dt (8*0.02) -- accel clamp respects cruise's negative sign");
-}
-
-// ===========================================================================
-// 8. current beyond cruise (e.g. a live config lowered the ceiling
-//    mid-Move) ramps DOWN toward the new cruise, at the accel-magnitude
-//    rate -- never an instantaneous drop.
-// ===========================================================================
-
-void scenarioCurrentAboveCruiseRampsDownGracefully() {
-  beginScenario("VelocityShaper::next(): current above cruiseSpeed ramps down at the accel rate, not instantly");
-
-  float next = Motion::VelocityShaper::next(/*cruiseSpeed=*/50.0f, /*currentSpeed=*/300.0f,
-                                             /*remaining=*/10000.0f, /*dt=*/0.02f,
-                                             /*aMax=*/500.0f, /*aDecel=*/800.0f);
-  checkFloatEq(next, 290.0f, "next == current - aMax*dt (300-10) -- ramps down toward the lower cruise");
+  Motion::VelocityShaper shaper;
+  float remaining = 60.0f;  // [mm] short enough to never reach cruise (a "triangle" profile)
+  float peak = 0.0f;
+  bool settled = false;
+  for (int i = 0; i < 300; ++i) {
+    float v = shaper.next(kCruise, remaining, kDt, kAMax, kADecel, kJMax);
+    if (v > peak) peak = v;
+    checkTrue(v >= -1e-3f, "commanded speed never reverses sign (goes negative) while approaching a positive-cruise goal");
+    remaining -= std::fabs(v) * kDt;
+    if (remaining < 0.0f) remaining = 0.0f;
+    if (remaining <= 0.0f && std::fabs(v) < 1e-2f) {
+      settled = true;
+      checkFloatEq(v, 0.0f, "commanded speed lands at ~0 exactly as remaining reaches 0", 0.05f);
+      break;
+    }
+  }
+  checkTrue(settled, "the shaper actually settles to ~0 within the simulated window (not stuck oscillating)");
+  checkLe(peak, kCruise + 1e-3f, "sanity: this short-remaining profile never reached full cruise (a triangle, not a trapezoid)");
 }
 
 // ===========================================================================
-// 9. remaining == +infinity (Kind::Time -- no decel taper, MoveQueue's own
-//    documented "pass +infinity" contract): the decel clamp never binds,
-//    only the accel ramp/cruise hold apply.
+// 6. Zero/negative remaining: the very next call's target is immediately
+//    braking (jerk-aware stopping distance for ANY nonzero speed exceeds
+//    0 remaining) -- commanded speed moves toward 0, never away from it.
+// ===========================================================================
+
+void scenarioZeroRemainingTargetsImmediateBraking() {
+  beginScenario("VelocityShaper: remaining == 0 targets immediate braking from a nonzero speed");
+
+  Motion::VelocityShaper shaper;
+  // Get the shaper moving first.
+  for (int i = 0; i < 50; ++i) shaper.next(kCruise, /*remaining=*/1.0e6f, kDt, kAMax, kADecel, kJMax);
+  float speedBefore = shaper.commandedSpeed();
+  checkTrue(speedBefore > 0.0f, "setup: shaper is genuinely moving before the remaining=0 call");
+
+  float v = shaper.next(kCruise, /*remaining=*/0.0f, kDt, kAMax, kADecel, kJMax);
+  checkTrue(v <= speedBefore, "commanded speed decreases (braking), never increases, once remaining hits 0");
+}
+
+void scenarioNegativeRemainingClampsSameAsZero() {
+  beginScenario("VelocityShaper: negative remaining clamps to 0, same braking behavior as remaining == 0");
+
+  Motion::VelocityShaper shaperZero;
+  Motion::VelocityShaper shaperNeg;
+  for (int i = 0; i < 50; ++i) {
+    shaperZero.next(kCruise, 1.0e6f, kDt, kAMax, kADecel, kJMax);
+    shaperNeg.next(kCruise, 1.0e6f, kDt, kAMax, kADecel, kJMax);
+  }
+  float vZero = shaperZero.next(kCruise, /*remaining=*/0.0f, kDt, kAMax, kADecel, kJMax);
+  float vNeg = shaperNeg.next(kCruise, /*remaining=*/-5.0f, kDt, kAMax, kADecel, kJMax);
+  checkFloatEq(vNeg, vZero, "negative remaining behaves identically to remaining == 0 -- same malformed-input posture as stop_condition.cpp");
+}
+
+// ===========================================================================
+// 7. Sign handling: a negative cruiseSpeed (e.g. a clockwise turn) ramps
+//    up, holds, and tapers the SAME way a positive one does, mirrored in
+//    sign -- full round trip, angular-scale units.
+// ===========================================================================
+
+void scenarioNegativeCruiseRoundTripSymmetric() {
+  beginScenario("VelocityShaper: negative cruiseSpeed (e.g. CW turn) ramps/holds/tapers symmetrically");
+
+  constexpr float kOmega = -2.0f;    // [rad/s]
+  constexpr float kAlphaMax = 6.0f;  // [rad/s^2]
+  constexpr float kAlphaDecel = 7.0f;  // [rad/s^2]
+  constexpr float kJerk = 100.0f;    // [rad/s^3]
+
+  Motion::VelocityShaper shaper;
+  float remaining = 1.5708f;  // [rad] ~pi/2
+  float v = 0.0f;
+  bool reachedCruise = false;
+  for (int i = 0; i < 400; ++i) {
+    v = shaper.next(kOmega, remaining, kDt, kAlphaMax, kAlphaDecel, kJerk);
+    checkTrue(v <= 1e-3f, "commanded omega stays <= 0 throughout -- never overshoots past the CW target's own sign");
+    if (std::fabs(v - kOmega) < 1e-2f) reachedCruise = true;
+    remaining -= std::fabs(v) * kDt;
+    if (remaining < 0.0f) remaining = 0.0f;
+    if (remaining <= 0.0f && std::fabs(v) < 1e-2f) break;
+  }
+  checkTrue(reachedCruise, "reaches the negative cruise omega at some point during the turn (ample remaining early on)");
+  checkFloatEq(v, 0.0f, "settles back to ~0 as the turn's own remaining angle reaches 0", 0.05f);
+}
+
+// ===========================================================================
+// 8. remaining == +infinity (Kind::Time -- no decel taper, MoveQueue's own
+//    documented "pass +infinity" contract): the shaper ramps to cruise and
+//    holds it indefinitely -- the braking target never triggers.
 // ===========================================================================
 
 void scenarioInfiniteRemainingDisablesDecelTaper() {
-  beginScenario("VelocityShaper::next(): remaining == +infinity disables the decel taper entirely (Kind::Time)");
+  beginScenario("VelocityShaper: remaining == +infinity disables the decel taper entirely (Kind::Time)");
 
   float inf = std::numeric_limits<float>::infinity();
-  float next = Motion::VelocityShaper::next(/*cruiseSpeed=*/300.0f, /*currentSpeed=*/300.0f,
-                                             /*remaining=*/inf, /*dt=*/0.02f,
-                                             /*aMax=*/500.0f, /*aDecel=*/800.0f);
-  checkFloatEq(next, 300.0f, "holds cruiseSpeed under infinite remaining -- taper never binds");
+  Motion::VelocityShaper shaper;
+  float v = 0.0f;
+  for (int i = 0; i < 200; ++i) {
+    v = shaper.next(kCruise, inf, kDt, kAMax, kADecel, kJMax);
+  }
+  checkFloatEq(v, kCruise, "reaches and holds cruiseSpeed under infinite remaining -- taper never binds");
 
-  float rampNext = Motion::VelocityShaper::next(/*cruiseSpeed=*/300.0f, /*currentSpeed=*/0.0f,
-                                                 /*remaining=*/inf, /*dt=*/0.02f,
-                                                 /*aMax=*/500.0f, /*aDecel=*/800.0f);
-  checkFloatEq(rampNext, 10.0f, "accel ramp still applies under infinite remaining -- only the taper is disabled");
+  // Hold for many more ticks -- still no braking, ever.
+  for (int i = 0; i < 100; ++i) {
+    v = shaper.next(kCruise, inf, kDt, kAMax, kADecel, kJMax);
+    checkFloatEq(v, kCruise, "never brakes under infinite remaining, however many ticks pass");
+  }
 }
 
 // ===========================================================================
-// 10. dt == 0 -- no accel-side movement, decel taper still evaluated.
+// 9. jMax <= 0 degrades to UNLIMITED jerk (this module's own prior accel-
+//    only pass) rather than dividing by zero -- one tick's step should
+//    exactly match "accel snaps straight to aMax, integrated over dt",
+//    i.e. aMax*dt, the SAME number the accel-only stage measured.
 // ===========================================================================
 
-void scenarioZeroDtNoAccelMovement() {
-  beginScenario("VelocityShaper::next(): dt == 0 -- no accel-side movement this tick");
+void scenarioZeroJerkDegradesToUnlimitedJerkAccelOnlyBehavior() {
+  beginScenario("VelocityShaper: jMax <= 0 degrades to unlimited-jerk (accel-only) behavior, not a divide-by-zero");
 
-  float next = Motion::VelocityShaper::next(/*cruiseSpeed=*/300.0f, /*currentSpeed=*/100.0f,
-                                             /*remaining=*/10000.0f, /*dt=*/0.0f,
-                                             /*aMax=*/500.0f, /*aDecel=*/800.0f);
-  checkFloatEq(next, 100.0f, "dt == 0 -- candidate stays at currentSpeed (accel step is 0)");
+  Motion::VelocityShaper shaper;
+  float v = shaper.next(kCruise, /*remaining=*/1.0e6f, kDt, kAMax, kADecel, /*jMax=*/0.0f);
+  checkFloatEq(v, kAMax * kDt, "jMax<=0 -- one tick from rest steps by exactly aMax*dt (unlimited jerk)");
+  checkFloatEq(shaper.commandedAccel(), kAMax, "jMax<=0 -- commandedAccel snaps directly to aMax, no slew");
 }
 
 // ===========================================================================
-// 11. Negative aMax/aDecel (malformed input) are treated as their own
-//     magnitude, matching stop_condition.cpp's own defense-in-depth
-//     posture for malformed scalar inputs.
+// 10. reset()/syncTo() -- the two state-management entry points
+//     App::MoveQueue relies on (Drive::stop()/flush() and the "shaping
+//     disabled" mirror-sync path respectively).
 // ===========================================================================
 
-void scenarioNegativeAccelMagnitudesTreatedAsMagnitude() {
-  beginScenario("VelocityShaper::next(): negative aMax/aDecel are treated as |aMax|/|aDecel|");
+void scenarioResetZeroesBothStateFields() {
+  beginScenario("VelocityShaper::reset(): zeroes both commandedSpeed() and commandedAccel()");
 
-  float next = Motion::VelocityShaper::next(/*cruiseSpeed=*/300.0f, /*currentSpeed=*/0.0f,
-                                             /*remaining=*/10000.0f, /*dt=*/0.02f,
-                                             /*aMax=*/-500.0f, /*aDecel=*/800.0f);
-  checkFloatEq(next, 10.0f, "negative aMax behaves identically to +500 (magnitude, not signed rate)");
+  Motion::VelocityShaper shaper;
+  for (int i = 0; i < 50; ++i) shaper.next(kCruise, 1.0e6f, kDt, kAMax, kADecel, kJMax);
+  checkTrue(shaper.commandedSpeed() > 0.0f, "setup: shaper is genuinely moving before reset()");
+
+  shaper.reset();
+  checkFloatEq(shaper.commandedSpeed(), 0.0f, "reset() zeroes commandedSpeed()");
+  checkFloatEq(shaper.commandedAccel(), 0.0f, "reset() zeroes commandedAccel()");
+}
+
+void scenarioSyncToSetsSpeedAndZeroesAccel() {
+  beginScenario("VelocityShaper::syncTo(): sets commandedSpeed() directly, zeroes commandedAccel(), no shaping math");
+
+  Motion::VelocityShaper shaper;
+  for (int i = 0; i < 50; ++i) shaper.next(kCruise, 1.0e6f, kDt, kAMax, kADecel, kJMax);
+  checkTrue(shaper.commandedAccel() != 0.0f || shaper.commandedSpeed() == kCruise,
+            "setup: shaper has SOME nonzero accel state before syncTo() (mid-ramp or just-settled)");
+
+  shaper.syncTo(123.5f);
+  checkFloatEq(shaper.commandedSpeed(), 123.5f, "syncTo() sets commandedSpeed() directly");
+  checkFloatEq(shaper.commandedAccel(), 0.0f, "syncTo() zeroes commandedAccel()");
 }
 
 }  // namespace
 
 int main() {
-  scenarioAccelClampFromStandstill();
-  scenarioAccelClampNeverOvershootsCruise();
-  scenarioHoldsCruiseAtSteadyState();
-  scenarioDecelTaperCapsBelowCruiseNearGoal();
-  scenarioTaperMonotonicallyDecreasesWithRemaining();
-  scenarioZeroRemainingCapsToZero();
-  scenarioNegativeRemainingClampsToZeroSameAsZero();
-  scenarioNegativeCruiseTapersSymmetrically();
-  scenarioNegativeCruiseRampsUpFromZeroNegatively();
-  scenarioCurrentAboveCruiseRampsDownGracefully();
+  scenarioAccelSlewNeverExceedsJerkBound();
+  scenarioAccelSlewNeverExceedsJerkBoundThroughFullStop();
+  scenarioReachesAndHoldsCruise();
+  scenarioNeverOvershootsCruiseDuringRampUp();
+  scenarioTaperLandsAtZeroWithoutReversal();
+  scenarioZeroRemainingTargetsImmediateBraking();
+  scenarioNegativeRemainingClampsSameAsZero();
+  scenarioNegativeCruiseRoundTripSymmetric();
   scenarioInfiniteRemainingDisablesDecelTaper();
-  scenarioZeroDtNoAccelMovement();
-  scenarioNegativeAccelMagnitudesTreatedAsMagnitude();
+  scenarioZeroJerkDegradesToUnlimitedJerkAccelOnlyBehavior();
+  scenarioResetZeroesBothStateFields();
+  scenarioSyncToSetsSpeedAndZeroesAccel();
 
   if (g_failureCount == 0) {
     std::printf("OK: all Motion::VelocityShaper scenarios passed\n");

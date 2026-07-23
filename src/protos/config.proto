@@ -233,6 +233,12 @@ message OtosConfigPatch {
 // whether any other field in the same patch is present. Same
 // "never persisted" contract as every sibling on this message -- a reboot
 // always reverts to the baked Config::ShaperBootConfig default.
+//
+// j_max/yaw_jerk_max (jerk-limited S-curve stage, 2026-07-22 stakeholder
+// correction on top of a_max/a_decel/alpha_max/alpha_decel immediately
+// above): App::ShaperLimits::jMax/yawJerkMax -- Motion::VelocityShaper's
+// own jerk magnitude ceilings, the SAME "smallest coherent path" as their
+// four siblings, riding this same arm/branch/never-persisted contract.
 message EstimatorConfigPatch {
   optional float weight_heading_otos = 1;  // [0..1] FusionWeights::headingOtos
   optional float weight_omega_otos   = 2;  // [0..1] FusionWeights::omegaOtos
@@ -242,4 +248,6 @@ message EstimatorConfigPatch {
   optional float a_decel             = 6;  // [mm/s^2] App::ShaperLimits::aDecel
   optional float alpha_max           = 7;  // [rad/s^2] App::ShaperLimits::alphaMax
   optional float alpha_decel         = 8;  // [rad/s^2] App::ShaperLimits::alphaDecel
+  optional float j_max               = 9;  // [mm/s^3] App::ShaperLimits::jMax
+  optional float yaw_jerk_max        = 10; // [rad/s^3] App::ShaperLimits::yawJerkMax
 }

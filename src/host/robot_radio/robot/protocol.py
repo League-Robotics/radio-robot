@@ -1298,7 +1298,9 @@ class NezhaProtocol:
                           a_max: float | None = None,
                           a_decel: float | None = None,
                           alpha_max: float | None = None,
-                          alpha_decel: float | None = None) -> int:
+                          alpha_decel: float | None = None,
+                          j_max: float | None = None,
+                          yaw_jerk_max: float | None = None) -> int:
         """Build and send an ``EstimatorConfigPatch`` ``ConfigDelta`` envelope
         (``CommandEnvelope{config: ConfigDelta{estimator: ...}}``, 117 ticket
         003) — the live-tuning surface for ``App::StateEstimator``'s v1
@@ -1320,15 +1322,18 @@ class NezhaProtocol:
         ``EstimatorConfigPatch``'s own doc comment, ``config.proto``); may
         be set alone (no weight field required in the same call).
 
-        ``a_max``/``a_decel``/``alpha_max``/``alpha_decel``
-        (decel-into-the-goal campaign) map to
-        ``App::MoveQueue::shaperLimits_`` (``App::MoveQueue::
-        setShaperLimits()``, ``App::ShaperLimits``) — riding the SAME arm
-        as ``stop_lead_ms`` for the identical "smallest coherent path"
-        reason; ``a_max``/``a_decel`` are ``[mm/s^2]`` linear accel-ramp/
-        decel-taper ceilings, ``alpha_max``/``alpha_decel`` are ``[rad/s^2]``
-        angular ones (``Motion::VelocityShaper``'s own limits). Any subset
-        may be set alone.
+        ``a_max``/``a_decel``/``alpha_max``/``alpha_decel``/``j_max``/
+        ``yaw_jerk_max`` (decel-into-the-goal campaign, jerk-limited
+        S-curve stage) map to ``App::MoveQueue::shaperLimits_``
+        (``App::MoveQueue::setShaperLimits()``, ``App::ShaperLimits``) —
+        riding the SAME arm as ``stop_lead_ms`` for the identical
+        "smallest coherent path" reason; ``a_max``/``a_decel`` are
+        ``[mm/s^2]`` linear accel-ramp/decel-taper ceilings, ``alpha_max``/
+        ``alpha_decel`` are ``[rad/s^2]`` angular ones, ``j_max``/
+        ``yaw_jerk_max`` are ``[mm/s^3]``/``[rad/s^3]`` jerk ceilings —
+        how fast the commanded ACCELERATION itself may change
+        (``Motion::VelocityShaper``'s own limits). Any subset may be set
+        alone.
 
         UNLIKE ``otos_config()``, a patch sent through this method is NEVER
         persisted on the robot side — ``RobotLoop::handleConfig()``'s
@@ -1365,12 +1370,16 @@ class NezhaProtocol:
             fields["alpha_max"] = float(alpha_max)
         if alpha_decel is not None:
             fields["alpha_decel"] = float(alpha_decel)
+        if j_max is not None:
+            fields["j_max"] = float(j_max)
+        if yaw_jerk_max is not None:
+            fields["yaw_jerk_max"] = float(yaw_jerk_max)
 
         if not fields:
             raise ValueError(
                 "estimator_config() requires at least one field "
                 "(weight_heading_otos/weight_omega_otos/staleness_ms/stop_lead_ms/"
-                "a_max/a_decel/alpha_max/alpha_decel)")
+                "a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max)")
 
         delta = envelope_pb2.ConfigDelta(
             estimator=config_pb2.EstimatorConfigPatch(**fields))

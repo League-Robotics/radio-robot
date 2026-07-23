@@ -72,6 +72,8 @@ struct EstimatorConfigPatch {
     Opt<float> a_decel = {};
     Opt<float> alpha_max = {};
     Opt<float> alpha_decel = {};
+    Opt<float> j_max = {};
+    Opt<float> yaw_jerk_max = {};
 
     // --- array / optional-string accessors ---
 };

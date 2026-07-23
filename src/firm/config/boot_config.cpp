@@ -112,27 +112,31 @@ EstimatorBootConfig defaultEstimatorConfig() {
     cfg.headingOtos = 0.0f;
     cfg.omegaOtos = 0.0f;
     cfg.staleness = 60u;   // [ms]
-    cfg.stopLead = 60u;    // [ms]
+    cfg.stopLead = 45u;    // [ms]
     return cfg;
 }
 
 ShaperBootConfig defaultShaperConfig() {
     // Decel-into-the-goal campaign -- fail-closed baked from the robot
-    // JSON's control.a_max/a_decel/alpha_max/alpha_decel
-    // (data/robots/robot_config.schema.json). a_max/a_decel are the
-    // deleted msg::PlannerConfig's own former fields, orphaned by 115-003
-    // and read again here into a NEW consumer (Motion::VelocityShaper);
-    // alpha_max/alpha_decel are new (a_max/a_decel's own angular sibling).
-    // NOT a live SET/wire surface itself -- see App::MoveQueue's own
-    // setShaperLimits()/EstimatorConfigPatch's a_max/a_decel/alpha_max/
-    // alpha_decel fields (config.proto) for the separate, volatile
-    // live-tuning path (mirrors OtosBootConfig/EstimatorBootConfig's own
-    // "boot bake vs. live ConfigPatch" split).
+    // JSON's control.a_max/a_decel/alpha_max/alpha_decel/j_max/
+    // yaw_jerk_max (data/robots/robot_config.schema.json). a_max/a_decel/
+    // j_max/yaw_jerk_max are the deleted msg::PlannerConfig's own former
+    // fields, orphaned by 115-003 and read again here into a NEW consumer
+    // (Motion::VelocityShaper); alpha_max/alpha_decel are new (a_max/
+    // a_decel's own angular sibling -- yaw_jerk_max already covered the
+    // angular jerk slot). NOT a live SET/wire surface itself -- see
+    // App::MoveQueue's own setShaperLimits()/EstimatorConfigPatch's
+    // a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max fields
+    // (config.proto) for the separate, volatile live-tuning path (mirrors
+    // OtosBootConfig/EstimatorBootConfig's own "boot bake vs. live
+    // ConfigPatch" split).
     ShaperBootConfig cfg;
-    cfg.aMax = 800.0f;              // [mm/s^2]
-    cfg.aDecel = 800.0f;          // [mm/s^2]
-    cfg.alphaMax = 7.0f;      // [rad/s^2]
-    cfg.alphaDecel = 7.0f;  // [rad/s^2]
+    cfg.aMax = 800.0f;                  // [mm/s^2]
+    cfg.aDecel = 800.0f;               // [mm/s^2]
+    cfg.alphaMax = 7.0f;           // [rad/s^2]
+    cfg.alphaDecel = 7.0f;       // [rad/s^2]
+    cfg.jMax = 5000.0f;                   // [mm/s^3]
+    cfg.yawJerkMax = 100.0f;      // [rad/s^3]
     return cfg;
 }
 

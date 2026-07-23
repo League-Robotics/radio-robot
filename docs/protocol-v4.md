@@ -303,29 +303,45 @@ active slot's stored baseline+kind+threshold+timeout and calls its
   zero.
 
 **Approach shaping (decel-into-the-goal campaign, `Motion::VelocityShaper`,
-`src/firm/motion/velocity_shaper.{h,cpp}`).** On a `Continue` outcome,
-`tick()` additionally re-stages the active `Move`'s commanded speed
-through `App::Drive` every cycle, instead of holding the value `activate()`
-staged once and unchanged until the stop condition fires: the next speed is
-`min(cruise, sqrt(2*a_decel*remaining), current+a_max*dt)`, ramping up from
-rest and tapering toward zero as the `Move`'s own `remaining`
-distance/angle (the SAME predicted pose §5.2's stop-condition comparison
-already computes, never a second prediction) shrinks. This closes most —
-not all — of the actuation/momentum-tail overshoot a stop condition fired
-exactly at threshold-crossing still incurs (§5.2 above still ends the
-`Move`; the shaper only shapes the approach, never decides when a `Move`
-ends). Opt-in per axis (linear `v_x`/wheels vs. angular `omega`) via
-`ShaperLimits`, live-tunable through the `ConfigDelta` `estimator` arm
-alongside `stop_lead_ms` (§6) — zero-valued limits (the default for a
+`src/firm/motion/velocity_shaper.{h,cpp}`) — velocity- and accel-slew
+rate limiting, chained.** On a `Continue` outcome, `tick()` additionally
+re-stages the active `Move`'s commanded speed through `App::Drive` every
+cycle, instead of holding the value `activate()` staged once and unchanged
+until the stop condition fires. `VelocityShaper` carries state across
+ticks — a commanded speed AND a commanded acceleration — and applies
+exactly two chained rate clamps and an integrator each tick: (1) a
+VELOCITY clamp — approach the cruise speed by at most `a_max*dt`, then cap
+the result's magnitude to the decel-taper ceiling
+`sqrt(2*a_decel*remaining)` (`remaining` is the SAME predicted-pose
+distance/angle §5.2's stop-condition comparison already computes, never a
+second prediction); (2) an ACCEL clamp — the velocity clamp's own result
+implies an acceleration this tick, and the commanded acceleration slews
+toward that implied value by at most `j_max`/`yaw_jerk_max` per second
+(the jerk clamp itself), then the commanded speed integrates from the
+just-slewed acceleration. Each clamp's own input carries one small
+algebraic margin (not a branch, not a phase) accounting for the OTHER
+clamp's own momentum — see `velocity_shaper.cpp`'s own comment for the two
+one-line formulas — needed so the chained clamps land cleanly at the goal
+instead of overshooting it. This closes most, not all, of the
+actuation/momentum-tail overshoot a stop condition fired exactly at
+threshold-crossing still incurs (§5.2 above still ends the `Move`; the
+shaper only shapes the approach, never decides when a `Move` ends).
+Opt-in per axis (linear `v_x`/wheels vs. angular `omega`) via
+`ShaperLimits` (six fields: `a_max`/`a_decel`/`alpha_max`/`alpha_decel`/
+`j_max`/`yaw_jerk_max`), live-tunable through the `ConfigDelta`
+`estimator` arm alongside `stop_lead_ms` (§6) — zero-valued limits on an
+axis (any of that axis's three ceilings <= 0, the default for a
 composition root that never configures them) reproduce this class's exact
-pre-shaping behavior. **What it is not**: a jerk-limited trapezoidal
-profile planned ahead of time with a known arrival time — it is a
-per-cycle, closed-form reactive law with no jerk bound of its own (`a_max`/
-`a_decel` are magnitude ceilings on acceleration, not on its rate of
-change), and it does not coordinate multiple simultaneously-commanded axes
-into one consistent arc. A real trajectory controller with a planned,
-commanded terminal velocity remains the path to closing the residual
-further, if ever wanted.
+pre-shaping behavior on that axis. **What it is not**: a full time-optimal
+trajectory planner (Ruckig-style seven-segment profile) planned ahead of
+time with a known arrival time — deliberately so (stakeholder directive:
+"I literally just wanted acceleration slew rate limiting and velocity
+slew rate limiting," not a profile solver) — it is two chained per-cycle
+rate clamps with no lookahead across a multi-leg path, and it does not
+coordinate multiple simultaneously-commanded axes into one consistent arc
+(linear and angular are shaped independently, not co-limited). A real
+trajectory controller with a planned, commanded terminal velocity remains
+the path to closing the residual further, if ever wanted.
 
 ### 5.3 AS-BUILT: no completion ack for a flushed-while-pending `Move`
 
@@ -696,13 +712,20 @@ table against the actual bytes on the wire.)
 
 ## 11. Deliberately NOT in this protocol
 
-Arc/segment moves, trajectory profiles, jerk limiting, heading cascade,
-pose-fix injection, `GET`/`STREAM`/`ECHO`, plan dumps, ring dumps — all
-reserved wire numbers, all recoverable from the `pre-gut-motion-stack`
-tag if ever needed. The protocol is: **bounded velocity commands in,
-timestamped measurements out.** There is also, as of this sprint, no
-live text-plane `STOP`/`ID`/`VER`/`HELP`/`SET`/`GET` — see §2.4; those
-belong to protocol v2/v3's larger text rump, not this one.
+Arc/segment moves, planned/time-optimal trajectory profiles (Ruckig-style,
+uploaded or planned ahead of time with a known arrival time), heading
+cascade, pose-fix injection, `GET`/`STREAM`/`ECHO`, plan dumps, ring dumps
+— all reserved wire numbers, all recoverable from the
+`pre-gut-motion-stack` tag if ever needed. The protocol is: **bounded
+velocity commands in, timestamped measurements out.** (Jerk-LIMITING, as
+opposed to a jerk-limited trajectory PLANNER, is no longer on this list —
+§5.2's `Motion::VelocityShaper` reactively slews the commanded
+acceleration at `<= j_max`/`yaw_jerk_max` per tick, wire-configurable via
+the existing `ConfigDelta` `estimator` arm; it is not a new verb, and it
+is not the planned/time-optimal profile this list still excludes.) There
+is also, as of this sprint, no live text-plane
+`STOP`/`ID`/`VER`/`HELP`/`SET`/`GET` — see §2.4; those belong to protocol
+v2/v3's larger text rump, not this one.
 
 ---
 

@@ -210,3 +210,84 @@ captured by the sim's own idealized model, and Option 1's fuller form (a
 genuine trajectory controller with a planned terminal velocity, not a
 per-tick reactive taper) remains the path to closing the remainder, if
 the stakeholder wants it — still out of scope here.
+
+## Follow-on fix, jerk-limited stage, simplified (2026-07-22, same day, two stakeholder corrections)
+
+Stakeholder correction #1, reading `velocity_shaper.cpp` live: "your
+velocity shaper is not jerk-limited." Correct — the fix above picked a
+bang-bang TARGET ACCEL (full `a_max`/`a_decel` until the target speed,
+then an instant drop to 0), so the commanded acceleration itself still
+changed discontinuously. A first attempt made `VelocityShaper` stateful
+and added a roll-off decision helper (`chooseAccelTarget()`) plus a
+jerk-aware stopping-distance helper — working, but grew the module to
+~317 combined header+implementation lines with a separate branching
+"which phase am I in" function.
+
+Stakeholder correction #2, same day: "You're not trying to implement your
+own version of Ruckig, right? I literally just wanted acceleration slew
+rate limiting and velocity slew rate limiting." Rewritten to EXACTLY two
+chained rate clamps and an integrator: (1) a VELOCITY clamp — approach
+cruise speed by at most `a_max*dt`, then cap the result's magnitude to
+the decel-taper ceiling `sqrt(2*a_decel*remaining)` (Stage 1's own
+formula, byte-for-byte); (2) an ACCEL clamp — the velocity clamp's own
+result implies an acceleration this tick, and the commanded acceleration
+slews toward that implied value by at most `j_max`/`yaw_jerk_max` per
+second. No separate roll-off function, no phase state. A literal,
+margin-free version of these two clamps measurably overshoots (verified
+in-tree: a `cruiseSpeed=300` ramp-up climbed to `350` and rising; a
+decel-to-a-turn's own zero crossing reversed sign) — fixed with two
+one-line algebraic margin terms folded directly into each clamp's own
+input (not a branch, not a phase): a "predicted speed"
+(`commandedSpeed + commandedAccel*|commandedAccel|/(2*jerk)`) feeds the
+velocity-approach clamp, and an "effective remaining"
+(`remaining - |commandedSpeed|*a_decel/(2*jerk)`) feeds the decel-taper
+ceiling. `src/firm/motion/velocity_shaper.cpp` is 94 lines (was 160 for
+the roll-off-based attempt), with no functions beyond `next()` and two
+tiny sign/clamp helpers — no lookahead solving, no trajectory state
+machine.
+
+**Re-verified against the existing `lead=45ms`/`_TURN_TOLERANCE_SHAPED_DEG=2.5`
+gate** (no new lead re-sweep — the existing default, chosen for the
+earlier roll-off-based design, was re-measured against the simplified
+design and still comfortably clears the gate):
+
+| tour | profile | worst \|error\| |
+|---|---|---:|
+| TOUR_1 | ideal chip | 1.651° |
+| TOUR_1 | realistic sensor errors | 0.934° |
+| TOUR_2 | ideal chip | 1.487° |
+| TOUR_2 | realistic sensor errors | 2.138° |
+
+All four comfortably under the 2.5° tolerance; a similar range to the
+roll-off-based design's own numbers (1.378/1.503/1.970/1.668°), not a
+regression from simplifying.
+
+**Hardware verification (2026-07-22, same session, tovez on the stand,
+`stop_lead_ms=45` + simplified two-clamp shaper baked, `move_accuracy_bench.py
+--skip-ab --skip-creep --trials 3`):**
+
+| Trial | Commanded | Measured | Residual |
+|---|---|---|---|
+| turn +90° #1 | +90.0° | +85.6° | 4.4° |
+| turn +90° #2 | +90.0° | +85.7° | 4.3° |
+| turn +90° #3 | +90.0° | — | ENQUEUE-REJECTED/TIMEOUT (excluded) |
+| turn -90° #1 | -90.0° | -84.5° | 5.5° |
+| turn -90° #2 | -90.0° | — | ENQUEUE-REJECTED/TIMEOUT (excluded) |
+| turn -90° #3 | -90.0° | -85.0° | 5.0° |
+
+4 of 6 commanded turns completed; residual range `4.3-5.5°`, mean `~4.8°`
+— in the same ballpark as the accel-only stage's own `4-8°`/mean `~5.3°`
+hardware result, and the roll-off-based jerk design's own `0.0-5.8°`/mean
+`~2.9°` result — small-N hardware samples across all three stages
+overlap, no clear ranking between them on THIS hardware. The two excluded
+trials hit the same pre-existing, documented intermittent serial-RX-loss-
+class enqueue-timeout noted in both stages' own tables above and in
+`.clasi/knowledge/i2c-irqguard-vs-serial-rx.md` — not a new regression.
+
+**Not fully closed, same posture as above:** the tour-level sim residual
+and the hardware residual are both real, not eliminated. This module is
+velocity- and accel-slew-rate-limited — two chained clamps, deliberately
+nothing more elaborate, per the stakeholder's own explicit scope
+correction — not a full Ruckig-style time-optimal trajectory planner.
+That remains the path to closing the remainder further, if the
+stakeholder wants it — explicitly out of scope for this campaign.

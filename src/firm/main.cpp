@@ -98,6 +98,8 @@ App::ShaperLimits toShaperLimits(const Config::ShaperBootConfig& src) {
   limits.aDecel = src.aDecel;
   limits.alphaMax = src.alphaMax;
   limits.alphaDecel = src.alphaDecel;
+  limits.jMax = src.jMax;
+  limits.yawJerkMax = src.yawJerkMax;
   return limits;
 }
 
