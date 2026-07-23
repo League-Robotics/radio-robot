@@ -1,10 +1,13 @@
 ---
-status: pending
+status: in-progress
 filed: 2026-07-22
 filed_by: team-lead (turn-execution review R4/D4, claims verified against code)
 related:
 - restore-the-interleaved-request-settle-tick-loop-schedule.md
 - tlm-rate-15-19hz-vs-50hz-nominal-serial.md
+sprint: '118'
+tickets:
+- 118-003
 ---
 
 # Sim control period must equal the firmware period (one robot, not two)

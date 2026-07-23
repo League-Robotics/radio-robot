@@ -5,6 +5,7 @@ filed_by: team-lead (turn-execution review R5/D5, claims verified against code)
 related:
 - land-at-zero-completion-delete-stop-lead.md
 - simple-velocity-control-acceleration-limited-shaper.md
+sprint: '119'
 ---
 
 # Specify and assert the chain-advance leg hand-off contract

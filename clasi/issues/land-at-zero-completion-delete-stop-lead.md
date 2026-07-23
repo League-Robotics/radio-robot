@@ -6,6 +6,7 @@ related:
 - stop-decision-must-see-this-cycles-odometry.md
 - simple-velocity-control-acceleration-limited-shaper.md
 - turn-error-characterization-postcompensation-tests-need-rewrite-after-lead-deletion.md
+sprint: '119'
 ---
 
 # Land at zero: complete on (remaining≈0 AND ω_cmd≈0); delete stop_lead_ms

@@ -1,10 +1,11 @@
 ---
 status: pending
 filed: 2026-07-22
-filed_by: team-lead (turn-execution review §6-5/§6-6/D6, measured 2026-07-22)
+filed_by: "team-lead (turn-execution review \xA76-5/\xA76-6/D6, measured 2026-07-22)"
 related:
 - specify-and-assert-the-leg-handoff-contract.md
 - restore-the-interleaved-request-settle-tick-loop-schedule.md
+sprint: '119'
 ---
 
 # Relocate narrative comments to DESIGN.md/git; refresh stale doc references

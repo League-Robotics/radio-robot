@@ -1,10 +1,12 @@
 ---
 status: pending
 filed: 2026-07-22
-filed_by: team-lead (turn-execution review §6-3/§6-4/§6-7, consumer audit verified 2026-07-22)
+filed_by: "team-lead (turn-execution review \xA76-3/\xA76-4/\xA76-7, consumer audit\
+  \ verified 2026-07-22)"
 related:
 - land-at-zero-completion-delete-stop-lead.md
 - turn-error-characterization-postcompensation-tests-need-rewrite-after-lead-deletion.md
+sprint: '119'
 ---
 
 # Delete the config attic (20 dead control.* keys) and the dead run_tour kwargs

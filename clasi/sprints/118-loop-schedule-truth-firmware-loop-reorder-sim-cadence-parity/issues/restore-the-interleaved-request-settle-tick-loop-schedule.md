@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '118'
+tickets:
+- 118-001
 ---
 
 # Restore the interleaved request→settle→tick loop schedule

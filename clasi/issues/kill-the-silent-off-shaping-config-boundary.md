@@ -5,6 +5,7 @@ filed_by: team-lead (turn-execution review R3/D1/F1, claims verified against cod
 related:
 - wire-testgui-live-push-of-estimator-stop-lead.md
 - land-at-zero-completion-delete-stop-lead.md
+sprint: '119'
 ---
 
 # Kill the silent-off shaping/anticipation config boundary

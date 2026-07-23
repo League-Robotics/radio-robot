@@ -1,9 +1,12 @@
 ---
-status: pending
+status: in-progress
 filed: 2026-07-22
 filed_by: team-lead (turn-execution review R1/F3/D2, claims verified against code)
 related:
 - restore-the-interleaved-request-settle-tick-loop-schedule.md
+sprint: '118'
+tickets:
+- 118-002
 ---
 
 # Stop decision must consume this-cycle odometry (MoveQueue tick after integrate)
