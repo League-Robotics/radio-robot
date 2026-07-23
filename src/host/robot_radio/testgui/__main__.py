@@ -2211,8 +2211,11 @@ def _build_main_window():  # type: ignore[return]
         on every robot change while connected).
 
         113-006 (SUC-003): for a connected ``SimTransport``, this ALSO
-        triggers the Tier-2 (boot-only fields, incl. ``model_tau_lin``/
-        ``model_tau_ang``) push via ``transport.configure_from_robot(cfg)``
+        triggers the Tier-2 (boot-only motor fields -- travel_calib/
+        fwd_sign/vel_filt_alpha; the planner half of this tier was DELETED,
+        115-003, gut S1 motion-stack excision: nothing in the S1 minimal
+        firmware reads a boot-loaded ``msg::PlannerConfig`` any more) push
+        via ``transport.configure_from_robot(cfg)``
         after the per-command loop below completes. The per-command loop
         itself stays -- it is NOT redundant with ``configure_from_robot()``:
         it is what pushes the OTOS ``OI``/``OL``/``OA`` sequence (which

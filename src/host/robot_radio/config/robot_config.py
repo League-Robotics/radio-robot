@@ -197,6 +197,15 @@ class ControlConfig(BaseModel):
     binary ``SET`` keys noted per-field below — so whatever the running
     binary baked in never silently leaks into a session. When a field is
     None, nothing is pushed and the firmware boot default is kept.
+
+    119-003 (config-attic sweep): 20 dead control.* keys deleted from this
+    model -- every PlannerConfigPatch-era field (heading/lead/distance/
+    model-tau/outer-loop/turn-rate/sync/arrive-dwell) that 115-003's
+    motion-stack excision left with no living consumer at all (firmware
+    reads = 0, calibration_kwargs() emitted none of them, gen_boot_config.py
+    no longer reads any of them either). See
+    clasi/sprints/119-land-at-zero-and-clean-house-motion-semantics-deletions/issues/delete-the-config-attic-and-dead-tour-kwargs.md
+    for the full consumer audit.
     """
     vel_kp:        Optional[float] = None   # → SET pid.kp   (duty per mm/s error)
     vel_ki:        Optional[float] = None   # → SET pid.ki
@@ -205,68 +214,17 @@ class ControlConfig(BaseModel):
     vel_kaw:       Optional[float] = None   # → SET pid.kaw  (anti-windup gain, 1/s; 0 = off)
     vel_filt:      Optional[float] = None   # velocity EMA weight — NO live SET key;
     #   build-time bake only (gen_boot_config.py → MotorConfig.setVelFiltAlpha())
-    heading_kp:    Optional[float] = None   # → SET headingKp (outer heading-loop P gain, 1/s)
-    heading_kd:    Optional[float] = None   # → SET headingKd (outer heading-loop D gain)
-    sync:          Optional[float] = None   # → SET sync      (cross-wheel coupling)
     min_wheel_mms: Optional[float] = None   # → SET minWheelMms (low-speed deadband)
-    turn_gate:     Optional[float] = None   # → SET turnGate   (turn-in-place gate, deg)
-    yaw_rate_max:  Optional[float] = None   # → SET yawRateMax (yaw rate ceiling, deg/s)
-    # 113-003: min_speed/distance_kp/arrive_dwell were already curated as
-    # live-tunable PlannerConfigPatch fields (config.proto) with a real
-    # firmware consumer, but had no field on this model at all -- so
-    # calibration_kwargs() had nothing to read and these three fields
-    # silently never reached the wire. Field names mirror the robot JSON's
-    # own control.* keys 1:1 (coding-standards.md's wire-key exclusion).
-    min_speed:     Optional[float] = None   # → SET minSpeed  (Drive:: pivot-mode threshold, mm/s)
-    distance_kp:   Optional[float] = None   # → SET distanceKp (distance-loop P gain)
-    arrive_dwell:  Optional[float] = None   # → SET arriveDwell (arrival dwell time, s)
 
-    # Host-side motion limit (NOT pushed to firmware): the maximum rotational
-    # acceleration, deg/s^2, that the turn / turn2 trapezoidal velocity profile
-    # ramps to and from. Default 300. Override per-call with --accel if needed.
-    max_rot_accel_dps2: Optional[float] = 300.0
-
-    # 113-004: the remaining Tier-2 (boot-only) PlannerConfig fields --
-    # gen_boot_config.py already reads every one of these from the robot
-    # JSON's control.* keys (heading_source_for_config(),
-    # lead_compensation_for_config(), actuation_lag_for_config(),
-    # distance_gains_for_config(), model_tau_for_config()), but none had a
-    # field on this model -- so a config carrying a real value (e.g.
-    # tovez_nocal.json's distance_tol=6.0/actuation_lag=0.0) would silently
-    # be dropped by pydantic at parse time and the host's own Tier-2 sim
-    # boot-config mapping helper (calibration/sim_boot_config.py) would see
-    # only the firmware fallback default -- NOT the field-for-field parity
-    # with gen_boot_config.py's own output this sprint requires. None of
-    # these have a live SET key (boot-only, config.proto's own
-    # PlannerConfigPatch header comment); added here purely so the mapping
-    # helper's RobotConfig->dict conversion is lossless, mirroring the three
-    # fields 113-003 already added to this model for the identical reason.
-    heading_source:    Optional[str] = None    # control.heading_source ("auto"/"otos"/"encoder")
-    heading_lead_bias: Optional[float] = None  # [s] control.heading_lead_bias
-    plan_lead:         Optional[float] = None  # [s] control.plan_lead
-    terminal_lead:     Optional[float] = None  # [s] control.terminal_lead
-    actuation_lag:     Optional[float] = None  # [s] control.actuation_lag
-    distance_tol:      Optional[float] = None  # [mm] control.distance_tol
-    model_tau_lin:     Optional[float] = None  # [s] control.model_tau_lin
-    model_tau_ang:     Optional[float] = None  # [s] control.model_tau_ang
-
-    # Sprint 114 (config-as-truth completion, ticket 002): these seven were
-    # the LAST gen_boot_config.py control.* keys with no field on this model
-    # at all -- heading_dwell_tol_deg/heading_dwell_rate_dps had no JSON path
-    # anywhere before this sprint; a_max/a_decel/v_body_max/j_max/
-    # yaw_jerk_max had a JSON-key mapping in gen_boot_config.py for the
-    # first time this sprint (motion_limits_for_config()). All seven are now
-    # REQUIRED in gen_boot_config.py (no source-side fallback) -- without a
-    # field here, pydantic would silently DROP them from a real robot JSON
-    # at parse time (the same landmine the 113-003/113-004 comment above
-    # already flags), and calibration/sim_boot_config.py's
-    # planner_boot_config_for() would then hard-fail on every RobotConfig
-    # (not raw-dict) caller, including the real TestGUI sim-configure path
-    # (io/sim_loop.py's configure_from_robot()) -- even for a fully-
-    # populated robot JSON. Added here purely so the RobotConfig->dict
-    # conversion stays lossless, mirroring the exact reasoning above.
-    heading_dwell_tol_deg:  Optional[float] = None  # [deg] control.heading_dwell_tol_deg
-    heading_dwell_rate_dps: Optional[float] = None  # [deg/s] control.heading_dwell_rate_dps
+    # Sprint 114 (config-as-truth completion, ticket 002): a_max/a_decel/
+    # v_body_max/j_max/yaw_jerk_max got a JSON-key mapping in
+    # gen_boot_config.py for the first time that sprint
+    # (motion_limits_for_config()) and are REQUIRED there (no source-side
+    # fallback) -- without a field here, pydantic would silently DROP them
+    # from a real robot JSON at parse time, and calibration/sim_boot_config.py's
+    # Tier-2 mapping helper would then diverge from gen_boot_config.py's own
+    # output for a fully-populated robot JSON. Added here purely so the
+    # RobotConfig->dict conversion stays lossless.
     a_max:        Optional[float] = None  # [mm/s^2] control.a_max
     a_decel:      Optional[float] = None  # [mm/s^2] control.a_decel
 

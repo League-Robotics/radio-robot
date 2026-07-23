@@ -244,15 +244,14 @@ TOUR_2: list[str] = [
 
 DEFAULT_V_MAX = 150.0  # [mm/s] straight-leg linear ceiling fallback (no per-leg speed on the D step)
 
-DEFAULT_INTER_LEG_SETTLE = 1.0  # [s] UNUSED this ticket -- retained only for run_tour()'s own
-# call-signature back-compat with existing callers (tests/bench/tour_bench_run.py passes it as a
-# kwarg). Pre-109-008 this was a host-timed gap between two legs' own StreamingExecutor runs
-# (retuned 0.3 -> 1.0 by ticket 107-005's bench session after a kFaultWedgeLatch trip at the
-# straight->turn boundary -- see tour1-freeze-investigation-2026-07-15.md). The MOVE-queue path
-# has no equivalent host-timed gap between QUEUED legs at all: firmware's own boundary-velocity
-# carry (ticket 006) sequences the transition, and a transient fault bit no longer stops the tour
-# on its own (see this module's own file header) -- there is nothing left for a host-side sleep to
-# protect against between two enqueued legs.
+# DEFAULT_INTER_LEG_SETTLE -- DELETED (119-003, config-attic sweep): the pre-109-008 host-timed gap
+# between two legs' own StreamingExecutor runs this constant fed had no caller left (the
+# retention comment's own named caller, tests/bench/tour_bench_run.py, does not exist on this
+# tree) and run_tour()'s own UNUSED `inter_leg_settle` kwarg was deleted alongside it -- the
+# MOVE-queue path has no equivalent host-timed gap between QUEUED legs at all: firmware's own
+# boundary-velocity carry (ticket 006) sequences the transition, and a transient fault bit no
+# longer stops the tour on its own (see this module's own file header) -- there was nothing left
+# for a host-side sleep to protect against between two enqueued legs.
 DEFAULT_FINAL_SETTLE = 0.6  # [s] post-terminal-DONE settle window before capturing the tour's own
 # closure end pose -- the final leg's own completion event fires the instant the ENCODER-relative
 # distance criterion is met, but the PLANT needs a little more real time to physically settle
@@ -608,13 +607,9 @@ def run_tour(
     legs: Sequence[TourLeg],
     *,
     v_max: float = DEFAULT_V_MAX,
-    a_max: float = 0.0,  # UNUSED (109-008) -- kept for call-signature back-compat, see file header
     omega_max: float | None = None,  # [rad/s] turn-leg yaw rate override; None (the default,
     # every existing caller) resolves to params.omega_max -- see the constants block above for why
     # this is no longer simply "UNUSED".
-    alpha_max: float = 0.0,  # UNUSED (109-008), see file header
-    cadence: float | None = None,  # UNUSED (109-008), see file header
-    inter_leg_settle: float = DEFAULT_INTER_LEG_SETTLE,  # UNUSED (109-008), see file header
     final_settle: float = DEFAULT_FINAL_SETTLE,
     move_timeout: float = DEFAULT_MOVE_TIMEOUT,
     poll_interval: float = DEFAULT_POLL_INTERVAL,
