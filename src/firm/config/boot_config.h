@@ -99,4 +99,46 @@ struct EstimatorBootConfig {
 // gen_boot_config.py's estimator_config_for_config().
 EstimatorBootConfig defaultEstimatorConfig();
 
+// ShaperBootConfig (decel-into-the-goal campaign, follow-on to
+// clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md's own
+// "Option 1... remains the path to closing that residual further") —
+// Motion::VelocityShaper's own accel/decel magnitude ceilings, baked from
+// the robot JSON's `control.a_max`/`control.a_decel`/`control.alpha_max`/
+// `control.alpha_decel` (data/robots/robot_config.schema.json).
+// Field-for-field mirror of App::ShaperLimits (app/move_queue.h), declared
+// independently here for the SAME reason EstimatorBootConfig/FusionWeights
+// stay independently declared: config/ may depend only on messages/
+// (docs/design/design.md §5's dependency diagram), never on app/. main.cpp
+// converts this into an App::ShaperLimits at the one composition-root
+// place both types are visible, the same toFusionWeights()/
+// toDeviceMotorConfig() pattern.
+//
+// aMax/aDecel are NOT new fields — they are the deleted msg::PlannerConfig's
+// own `a_max`/`a_decel`, orphaned dead data since 115-003's motion-stack
+// excision (gen_boot_config.py's own module docstring used to document them
+// as "unread by this generator"); this campaign reads them again, into a
+// NEW consumer (Motion::VelocityShaper/App::MoveQueue) rather than the
+// deleted planner. alphaMax/alphaDecel ARE new (a_max/a_decel's own angular
+// sibling — no msg::PlannerConfig predecessor existed for either).
+//
+// REQUIRED (config-as-truth, sprint 114's own fail-closed posture,
+// extended here): a robot JSON missing any of the four `control.a_max`/
+// `a_decel`/`alpha_max`/`alpha_decel` keys fails codegen loudly (same
+// MissingRobotConfigKeyError gen_boot_config.py's own `_require()` already
+// raises for every other REQUIRED field) rather than silently shipping an
+// unshaped (or zero-shaped, which would refuse to move at all — see
+// App::ShaperLimits's own "0 == disabled" doc comment, move_queue.h) boot
+// image.
+struct ShaperBootConfig {
+  float aMax = 0.0f;        // [mm/s^2] linear accel-ramp ceiling
+  float aDecel = 0.0f;      // [mm/s^2] linear decel-taper ceiling
+  float alphaMax = 0.0f;    // [rad/s^2] angular accel-ramp ceiling
+  float alphaDecel = 0.0f;  // [rad/s^2] angular decel-taper ceiling
+};
+
+// The boot ShaperBootConfig default — fail-closed baked accel/decel
+// ceilings, see ShaperBootConfig's own doc comment above and
+// gen_boot_config.py's shaper_config_for_config().
+ShaperBootConfig defaultShaperConfig();
+
 }  // namespace Config

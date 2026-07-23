@@ -269,6 +269,16 @@ class ControlConfig(BaseModel):
     heading_dwell_rate_dps: Optional[float] = None  # [deg/s] control.heading_dwell_rate_dps
     a_max:        Optional[float] = None  # [mm/s^2] control.a_max
     a_decel:      Optional[float] = None  # [mm/s^2] control.a_decel
+
+    # decel-into-the-goal campaign (2026-07-22): a_max/a_decel above are
+    # READ AGAIN by gen_boot_config.py's shaper_config_for_config()
+    # (Motion::VelocityShaper) after being orphaned by 115-003's
+    # motion-stack excision -- see tovez.json's own control._shaper_note
+    # for the full history. alpha_max/alpha_decel are new this campaign
+    # (a_max/a_decel's angular sibling); added here for the SAME
+    # lossless-round-trip reason as every other field in this block.
+    alpha_max:    Optional[float] = None  # [rad/s^2] control.alpha_max
+    alpha_decel:  Optional[float] = None  # [rad/s^2] control.alpha_decel
     v_body_max:   Optional[float] = None  # [mm/s] control.v_body_max
     j_max:        Optional[float] = None  # [mm/s^3] control.j_max
     yaw_jerk_max: Optional[float] = None  # [rad/s^3] control.yaw_jerk_max

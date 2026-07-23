@@ -172,7 +172,16 @@ class SimHarness {
         // default (0, anticipation OFF) rather than sourced from
         // Config::defaultEstimatorConfig()::stopLead. A SimHarness-based
         // test that specifically needs anticipation calls
-        // moveQueue().setStopLead() directly.
+        // moveQueue().setStopLead() directly. shaperLimits (decel-into-
+        // the-goal campaign) is left at ITS OWN constructor default too
+        // (App::ShaperLimits{}, every field 0 -- shaping OFF, IDENTICAL to
+        // this class's pre-shaping behavior) rather than sourced from
+        // Config::defaultShaperConfig() -- the SAME "not part of the sim
+        // graph" boundary (Config::defaultShaperConfig() lives in the
+        // GENERATED config/boot_config.cpp, excluded from this CMake
+        // target per this file's own "Absent (deliberately)" note above).
+        // A test that specifically needs shaping calls
+        // moveQueue().setShaperLimits() directly.
         moveQueue_(drive_, odom_, clock_, stateEstimator_),
         preamble_(armorL_, armorR_, otos_, color_, line_, clock_),
         robotLoop_(plant_, armorL_, armorR_, otos_, color_, line_, comms_, tlm_,

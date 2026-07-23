@@ -68,6 +68,10 @@ struct EstimatorConfigPatch {
     Opt<float> weight_omega_otos = {};
     Opt<float> staleness_ms = {};
     Opt<float> stop_lead_ms = {};
+    Opt<float> a_max = {};
+    Opt<float> a_decel = {};
+    Opt<float> alpha_max = {};
+    Opt<float> alpha_decel = {};
 
     // --- array / optional-string accessors ---
 };

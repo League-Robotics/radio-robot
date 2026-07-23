@@ -49,6 +49,7 @@ _TELEMETRY_SRC = _SOURCE_DIR / "app" / "telemetry.cpp"
 # replace the deleted App::Deadman.
 _MOVE_QUEUE_SRC = _SOURCE_DIR / "app" / "move_queue.cpp"
 _STOP_CONDITION_SRC = _SOURCE_DIR / "motion" / "stop_condition.cpp"
+_VELOCITY_SHAPER_SRC = _SOURCE_DIR / "motion" / "velocity_shaper.cpp"
 _DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
 _ODOMETRY_SRC = _SOURCE_DIR / "app" / "odometry.cpp"
 # 117 ticket 003: App::StateEstimator, threaded through RobotLoop's own
@@ -151,6 +152,7 @@ def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
         _TELEMETRY_SRC,
         _MOVE_QUEUE_SRC,
         _STOP_CONDITION_SRC,
+        _VELOCITY_SHAPER_SRC,
         _DRIVE_SRC,
         _ODOMETRY_SRC,
         _STATE_ESTIMATOR_SRC,

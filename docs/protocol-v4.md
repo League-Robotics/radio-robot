@@ -302,6 +302,31 @@ active slot's stored baseline+kind+threshold+timeout and calls its
   `Drive::stop()` is called (§5.5) — both wheel velocity targets go to
   zero.
 
+**Approach shaping (decel-into-the-goal campaign, `Motion::VelocityShaper`,
+`src/firm/motion/velocity_shaper.{h,cpp}`).** On a `Continue` outcome,
+`tick()` additionally re-stages the active `Move`'s commanded speed
+through `App::Drive` every cycle, instead of holding the value `activate()`
+staged once and unchanged until the stop condition fires: the next speed is
+`min(cruise, sqrt(2*a_decel*remaining), current+a_max*dt)`, ramping up from
+rest and tapering toward zero as the `Move`'s own `remaining`
+distance/angle (the SAME predicted pose §5.2's stop-condition comparison
+already computes, never a second prediction) shrinks. This closes most —
+not all — of the actuation/momentum-tail overshoot a stop condition fired
+exactly at threshold-crossing still incurs (§5.2 above still ends the
+`Move`; the shaper only shapes the approach, never decides when a `Move`
+ends). Opt-in per axis (linear `v_x`/wheels vs. angular `omega`) via
+`ShaperLimits`, live-tunable through the `ConfigDelta` `estimator` arm
+alongside `stop_lead_ms` (§6) — zero-valued limits (the default for a
+composition root that never configures them) reproduce this class's exact
+pre-shaping behavior. **What it is not**: a jerk-limited trapezoidal
+profile planned ahead of time with a known arrival time — it is a
+per-cycle, closed-form reactive law with no jerk bound of its own (`a_max`/
+`a_decel` are magnitude ceilings on acceleration, not on its rate of
+change), and it does not coordinate multiple simultaneously-commanded axes
+into one consistent arc. A real trajectory controller with a planned,
+commanded terminal velocity remains the path to closing the residual
+further, if ever wanted.
+
 ### 5.3 AS-BUILT: no completion ack for a flushed-while-pending `Move`
 
 The set-point issue's Architecture "Open Question 2" also left this

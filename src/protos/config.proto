@@ -215,9 +215,31 @@ message OtosConfigPatch {
 // siblings (Design Rationale Decision 4, sprint 117's overlay design.md) --
 // a reboot always reverts to the baked Config::EstimatorBootConfig::
 // stopLead default.
+//
+// a_max/a_decel/alpha_max/alpha_decel (decel-into-the-goal campaign) --
+// App::MoveQueue's own live-tunable Motion::VelocityShaper ceilings
+// (App::MoveQueue::setShaperLimits(), App::ShaperLimits, move_queue.h).
+// Ride the SAME wire arm as stop_lead_ms immediately above, for the
+// identical "smallest coherent path" reason stop_lead_ms's own paragraph
+// gives -- CONFIG_ESTIMATOR is already the live-tune arm for
+// MoveQueue-owned, non-FusionWeights state, and inventing a fifth
+// ConfigTarget/Patch-message pair for one more MoveQueue-owned quartet
+// would duplicate that plumbing (a fresh ConfigTarget enum value, a fresh
+// message, a fresh RobotLoop::handleConfig() branch, a fresh host
+// NezhaProtocol method) for no behavioral gain over widening the arm this
+// class already rides. handleConfig()'s own ESTIMATOR branch applies these
+// four directly to moveQueue_'s ShaperLimits, alongside (not merged into)
+// the FusionWeights merge/stop_lead_ms apply above -- independent of
+// whether any other field in the same patch is present. Same
+// "never persisted" contract as every sibling on this message -- a reboot
+// always reverts to the baked Config::ShaperBootConfig default.
 message EstimatorConfigPatch {
   optional float weight_heading_otos = 1;  // [0..1] FusionWeights::headingOtos
   optional float weight_omega_otos   = 2;  // [0..1] FusionWeights::omegaOtos
   optional float staleness_ms        = 3;  // [ms] FusionWeights::staleness
   optional float stop_lead_ms        = 4;  // [ms] App::MoveQueue::stopLead_
+  optional float a_max               = 5;  // [mm/s^2] App::ShaperLimits::aMax
+  optional float a_decel             = 6;  // [mm/s^2] App::ShaperLimits::aDecel
+  optional float alpha_max           = 7;  // [rad/s^2] App::ShaperLimits::alphaMax
+  optional float alpha_decel         = 8;  // [rad/s^2] App::ShaperLimits::alphaDecel
 }

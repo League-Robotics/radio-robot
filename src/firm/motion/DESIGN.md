@@ -182,3 +182,123 @@ directory.
   activates is ticket 005's decision entirely — this module only
   documents that ITS OWN lifecycle is "one instance per activated Move,"
   not how the owner stores that instance.
+
+---
+
+# `Motion::VelocityShaper` (decel-into-the-goal campaign)
+
+## 1. Purpose
+
+`Motion::VelocityShaper` answers one question, every tick, for whichever
+axis (linear or angular) `App::MoveQueue` asks it about: **given where I
+am relative to the goal and how fast I'm going, what speed should I
+command NEXT?** It is the direct follow-on to `StopCondition` above —
+`StopCondition` decides *when* a `Move` has ended; this decides how the
+commanded speed *approaches* that ending, so the actuation/momentum tail
+`StopCondition` firing exactly at threshold-crossing still incurs is
+smaller by the time it fires. Stakeholder directive: "a target velocity
+passed into some function that gives you the next maximum speed you can
+assign to the wheels," speed dropping as the target is approached —
+follow-on to `clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md`'s
+own "Option 1... remains the path to closing that residual further."
+
+## 2. Orientation
+
+One class, one static method: `VelocityShaper::next(cruiseSpeed,
+currentSpeed, remaining, dt, aMax, aDecel)` — a pure function, no
+instance, no state of its own (unlike `StopCondition`, which captures a
+baseline at construction; this module has no baseline to capture, every
+call is self-contained). The formula:
+
+```
+next = min(cruiseSpeed-approached-by-aMax*dt, sqrt(2*aDecel*max(remaining,0)))
+```
+
+computed as an "approach cruise, then clamp the result's magnitude to the
+decel-taper ceiling" two-step (see `velocity_shaper.cpp`'s own comment for
+why this is a strict generalization of the stakeholder's own literal
+three-way-`min()` formula, correct — not just convenient — when
+`currentSpeed`/`cruiseSpeed` carry different signs or `dt`/`remaining` are
+degenerate).
+
+## 3. Constraints and Invariants
+
+- **Stateless, pure, host-clean — the same "no I2C, no globals, no heap"
+  shape `StopCondition` established.** Zero dependency on `App::MoveQueue`,
+  `Motion::StopCondition`, or any `msg::*` wire type — `velocity_shaper.h`
+  includes nothing beyond what its own signature needs.
+- **Unit-agnostic by construction.** The same function shapes a linear
+  axis (`mm/s`, `mm/s^2`) and an angular axis (`rad/s`, `rad/s^2`) — the
+  caller supplies matching units on both sides of each argument pair; the
+  module itself has no unit opinion.
+- **`remaining = +infinity` disables the decel taper, not a special code
+  path.** `App::MoveQueue` passes `+infinity` for a `Kind::Time` Move (no
+  position-based "remaining" exists for an elapsed-wall-clock stop) —
+  `sqrt(2*aDecel*remaining)` diverges and the clamp never binds, so the
+  accel-ramp clamp alone governs. One formula, one code path; "no taper"
+  is a parameter choice.
+- **Never overshoots `cruiseSpeed`, and gracefully ramps DOWN if
+  `currentSpeed` is already past `cruiseSpeed`** (e.g. a live config
+  change lowered the ceiling mid-`Move`) — the accel-ramp step is a
+  bidirectional "approach," not a one-directional `current + aMax*dt`
+  add, which the stakeholder's own literal formula does not by itself
+  resolve for that case (see `.cpp`'s own comment).
+- **Never the terminal authority.** `VelocityShaper` never decides a
+  `Move` has ended — that stays `StopCondition`'s job exclusively, unfazed
+  by whatever `VelocityShaper` shaped `App::Drive`'s target to this tick.
+
+## 4. Design
+
+See `velocity_shaper.h`'s own doc comment for the full per-parameter
+contract and `velocity_shaper.cpp`'s own comment for the two-step
+approach-then-clamp derivation and its equivalence to the stakeholder's
+literal formula in the regime it was written for. `App::MoveQueue`'s own
+`shapeAndStage()` (`move_queue.cpp`) is the ONE caller — see that file's
+own doc comment for the per-`Move`-kind axis-selection policy (which
+component of a `Move`'s velocity gets shaped, and what `remaining` means
+per `Motion::StopCondition::Kind`).
+
+## 5. Interfaces
+
+### Exposes
+
+- **`VelocityShaper::next(cruiseSpeed, currentSpeed, remaining, dt, aMax,
+  aDecel)`** — static, pure. All six arguments and the return value are
+  plain `float`s in the caller's own chosen unit pair (linear or
+  angular). See `velocity_shaper.h` for the exact clamp/sign contract of
+  each.
+
+### Consumes
+
+Nothing — `velocity_shaper.h` includes no project header beyond what
+correctness needs (none). `App::MoveQueue` is the sole caller, supplying
+`aMax`/`aDecel` from its own live-tunable `ShaperLimits` (`move_queue.h`,
+sourced fail-closed from `Config::ShaperBootConfig` at boot,
+`config/boot_config.h`) and `remaining`/`dt` computed from the SAME
+predicted pose `MoveQueue`'s own stop-condition anticipation already
+reads (`move_queue.h`'s own tick() doc comment) — never a second,
+independent prediction.
+
+## 6. Open Questions / Known Limitations
+
+- **Not a jerk-limited profile.** `aMax`/`aDecel` bound acceleration
+  magnitude, not its rate of change — a real trapezoidal/S-curve motion
+  profile planned ahead of time with a known arrival time is NOT what
+  this module does; it is a per-cycle, closed-form REACTIVE law. See
+  `docs/protocol-v4.md` §5.2's own "what it is not" paragraph.
+- **Tour-embedded turns don't reach the isolated-turn sweep's own
+  optimum.** A `Move` chained via SUC-051's seamless hand-off starts its
+  own ramp from whatever the PRECEDING `Move` left the shaped-speed state
+  at, not a clean from-rest start — measured (sim) at roughly 2.0-2.4deg
+  worst-case at TOUR level vs. ~0.3deg for an isolated single turn from
+  rest (`test_tour_closure_gate.py`'s own sweep,
+  `src/tests/notebooks/turn_prediction.ipynb` Section 9). Not further
+  decomposed this campaign.
+- **Hardware residual larger than sim predicted.** A 2026-07-22 hardware
+  bench session (tovez on the stand) measured a ~4-8deg turn residual
+  with the taper active — in the same ballpark as the PRE-taper
+  anticipation-lead-only result, not the ~50% further improvement sim
+  measured. The real plant's own coast-down dynamics, motor response, and
+  I2C bus timing are not fully captured by the sim's idealized model. See
+  `clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md`'s own
+  "Follow-on fix" section for the full numbers.

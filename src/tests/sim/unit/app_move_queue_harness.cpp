@@ -19,10 +19,17 @@
 // harnesses per this codebase's established per-harness-file fixture
 // convention (see app_drive_harness.cpp's own header note).
 //
+// Scenarios 13-14 (decel-into-the-goal campaign) additionally prove
+// App::MoveQueue's ShaperLimits/Motion::VelocityShaper integration:
+// scenarios 1-12 above are UNCHANGED and continue to construct MoveQueue
+// with the default ShaperLimits{} (shaping OFF) -- they are this file's
+// own regression guard that shaping is truly opt-in/byte-identical when
+// disabled, not just documented as such.
+//
 // Compiled by test_app_move_queue.py with -DHOST_BUILD against
-// move_queue.cpp, stop_condition.cpp, drive.cpp, odometry.cpp,
-// nezha_motor.cpp, velocity_pid.cpp, sim_plant.cpp, {wheel,otos}_plant.cpp,
-// body_kinematics.cpp, sim_clock.cpp.
+// move_queue.cpp, stop_condition.cpp, velocity_shaper.cpp, drive.cpp,
+// odometry.cpp, nezha_motor.cpp, velocity_pid.cpp, sim_plant.cpp,
+// {wheel,otos}_plant.cpp, body_kinematics.cpp, sim_clock.cpp.
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -80,6 +87,16 @@ void checkFloatEq(float actual, float expected, const std::string& what, float t
     char buf[256];
     std::snprintf(buf, sizeof(buf), "%s -- expected %g, got %g", what.c_str(),
                   static_cast<double>(expected), static_cast<double>(actual));
+    fail(buf);
+  }
+}
+
+// checkLe -- decel-into-the-goal campaign scenarios (13-14 below) only.
+void checkLe(float actual, float bound, const std::string& what) {
+  if (actual > bound) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "%s -- expected <= %g, got %g", what.c_str(),
+                  static_cast<double>(bound), static_cast<double>(actual));
     fail(buf);
   }
 }
@@ -883,6 +900,235 @@ void scenarioDistanceMoveAnticipatesViaStateEstimatorPredictedSpeed() {
   checkFalse(tick.completion.timedOut, "ended via the (anticipated) DISTANCE condition, not the timeout backstop");
 }
 
+// ===========================================================================
+// 13. Decel-into-the-goal campaign: a Distance-kind TWIST Move with LINEAR
+//    shaping enabled (angular disabled) ramps v_x up from 0 (never jumps
+//    straight to cruise at activation), holds/continues ramping while
+//    `remaining` is large, then TAPERS below what pure acceleration would
+//    produce once `remaining` shrinks -- the stakeholder's own "speed
+//    drops as you approach the target." The stop condition itself still
+//    fires correctly with shaping active, and the LAST shaped speed staged
+//    before stop-fire is well below cruise.
+// ===========================================================================
+
+void scenarioDistanceMoveShapesLinearSpeedRampUpThenTaperNearGoal() {
+  beginScenario("MoveQueue: Distance-kind TWIST Move shapes v_x -- ramps up from 0, tapers near the goal");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  primeAtZero(left, bus, kWireAddr);
+  primeAtZero(right, bus, kWireAddr);
+
+  TestSim::SimClock clock;
+  App::Drive drive(left, right, kTrackWidth);
+  App::Odometry odom(left, right, kTrackWidth);
+  App::StateEstimator estimator;
+  App::ShaperLimits limits;
+  limits.aMax = 1000.0f;    // [mm/s^2]
+  limits.aDecel = 800.0f;   // [mm/s^2]
+  limits.alphaMax = 0.0f;   // angular shaping disabled -- irrelevant, v_x==300/omega==0 here anyway
+  limits.alphaDecel = 0.0f;
+  App::MoveQueue queue(drive, odom, clock, estimator, /*stopLead=*/0, limits);
+
+  // Two INDEPENDENT timelines, matching this file's own established
+  // convention (see scenario 2's own driveToPosition() calls): `clock`
+  // (StopCondition/VelocityShaper's own [us] `now`, small realistic
+  // ~20ms-cycle increments below) and `nowUs` (the NezhaMotor encoder
+  // cycle's own plausibility-check clock, passed directly to
+  // runOneCycleAtZeroPosition()/driveToPosition() -- large, well-spaced
+  // round numbers, monotonically increasing, >= kPastWriteThrottleUs apart
+  // per this file's own write-rate-throttle note). nowUs increments by
+  // 100000 (100ms) each step below -- generous headroom over both the
+  // 40000us write-rate throttle and NezhaMotor's own implausible-step
+  // rejection.
+  uint64_t nowUs = 100000;
+
+  clock.setMicros(0);
+  msg::Move move = makeTwistMove(/*id=*/81, /*v_x=*/300.0f, /*v_y=*/0.0f, /*omega=*/0.0f,
+                                  msg::Move::StopKind::DISTANCE, /*stopValue=*/50.0f /*[mm]*/,
+                                  /*timeout=*/600000.0f, /*replace=*/false);
+  queue.enqueue(move, /*corrId=*/1);
+
+  // Activation itself stages the CARRIED-OVER shaped state (0 -- a fresh
+  // queue's own resting value), NOT the raw 300mm/s cruise target --
+  // proves activate() doesn't jump straight to cruise when shaping is on.
+  drive.tick();
+  runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
+  runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
+  checkFloatEq(left.appliedDuty(), 0.0f, "activation stages the carried-over shaped state (0), not raw cruise");
+  checkFloatEq(right.appliedDuty(), 0.0f, "activation stages the carried-over shaped state (0), not raw cruise");
+
+  // t=20ms, no travel yet (remaining stays the full 50mm): accel-ramp
+  // clamp binds (aMax*dt=1000*0.02=20mm/s); decel taper
+  // (sqrt(2*800*50)~=282.8) does not.
+  clock.setMicros(20000);
+  App::MoveQueue::TickResult tick1 = queue.tick(clock.nowMicros(), odom);
+  checkFalse(tick1.completed, "still far from the 50mm threshold");
+  drive.tick();
+  nowUs += 100000;
+  runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
+  runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
+  checkFloatEq(left.appliedDuty(), kKff * 20.0f, "tick 1 -- accel-ramped to aMax*dt (1000*0.02), never straight to cruise");
+  checkFloatEq(right.appliedDuty(), kKff * 20.0f, "tick 1 -- accel-ramped to aMax*dt (1000*0.02), never straight to cruise");
+
+  // t=40ms, still no travel: accel ramp continues (20 -> 40), monotonic
+  // rise -- the stakeholder's own "speed rises smoothly" half of the
+  // shaper, not just the taper half.
+  clock.setMicros(40000);
+  App::MoveQueue::TickResult tick2 = queue.tick(clock.nowMicros(), odom);
+  checkFalse(tick2.completed, "still far from the 50mm threshold");
+  drive.tick();
+  nowUs += 100000;
+  runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
+  runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
+  checkFloatEq(left.appliedDuty(), kKff * 40.0f, "tick 2 -- accel ramp continues monotonically (20 -> 40)");
+  checkFloatEq(right.appliedDuty(), kKff * 40.0f, "tick 2 -- accel ramp continues monotonically (20 -> 40)");
+
+  // Now travel to within 2mm of the 50mm threshold (48mm traveled): the
+  // decel taper (sqrt(2*800*2)~=56.57) now binds BELOW what pure
+  // acceleration would have produced (40+1000*0.02=60) -- the taper
+  // itself, not just the ramp.
+  nowUs += 100000;
+  driveToPosition(left, bus, kWireAddr, 48.0f, nowUs);
+  driveToPosition(right, bus, kWireAddr, 48.0f, nowUs);
+  odom.integrate();
+  checkFloatEq(odom.pathLength(), 48.0f, "sanity: 48mm traveled, 2mm remaining");
+  clock.setMicros(60000);
+  App::MoveQueue::TickResult tick3 = queue.tick(clock.nowMicros(), odom);
+  checkFalse(tick3.completed, "48mm < 50mm threshold -- still Continue");
+  float expectedTaper = std::sqrt(2.0f * 800.0f * 2.0f);  // ~56.57mm/s
+  checkLe(expectedTaper, 300.0f, "sanity: the taper ceiling is below cruise this close to the goal");
+  drive.tick();
+  nowUs += 100000;
+  runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
+  runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
+  checkFloatEq(left.appliedDuty(), kKff * expectedTaper,
+               "tick 3 -- decel taper CAPS speed below the pure accel-ramp value (60) near the goal", 0.05f);
+  checkFloatEq(right.appliedDuty(), kKff * expectedTaper,
+               "tick 3 -- decel taper CAPS speed below the pure accel-ramp value (60) near the goal", 0.05f);
+  checkLe(expectedTaper, 100.0f, "acceptance: approach speed near the goal is well below cruise (< 1/3 of 300mm/s)");
+
+  // Finally, cross the threshold (50mm traveled) -- the stop condition
+  // still fires correctly with shaping active.
+  nowUs += 100000;
+  driveToPosition(left, bus, kWireAddr, 50.0f, nowUs);
+  driveToPosition(right, bus, kWireAddr, 50.0f, nowUs);
+  odom.integrate();
+  clock.setMicros(80000);
+  App::MoveQueue::TickResult tick4 = queue.tick(clock.nowMicros(), odom);
+  checkTrue(tick4.completed, "the DISTANCE stop condition still fires once 50mm is reached");
+  checkUintEq(tick4.completion.moveId, 81, "completion reports the shaped Move's own id");
+}
+
+// ===========================================================================
+// 14. Decel-into-the-goal campaign: an Angle-kind TWIST Move with ANGULAR
+//    shaping enabled (linear disabled) shapes omega the SAME way scenario
+//    13 shapes v_x -- ramps up, then tapers near the heading target.
+//    Pure rotation (equal-and-opposite wheel deltas, app_odometry_
+//    harness.cpp's own convention) via REAL Odometry::theta() progression.
+// ===========================================================================
+
+void scenarioAngleMoveShapesAngularSpeedRampUpThenTaperNearGoal() {
+  beginScenario("MoveQueue: Angle-kind TWIST Move shapes omega -- ramps up, tapers near the goal");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  primeAtZero(left, bus, kWireAddr);
+  primeAtZero(right, bus, kWireAddr);
+
+  TestSim::SimClock clock;
+  App::Drive drive(left, right, kTrackWidth);
+  App::Odometry odom(left, right, kTrackWidth);
+  App::StateEstimator estimator;
+  App::ShaperLimits limits;
+  limits.aMax = 0.0f;       // linear shaping disabled -- irrelevant, v_x==0 here anyway
+  limits.aDecel = 0.0f;
+  limits.alphaMax = 6.0f;    // [rad/s^2]
+  limits.alphaDecel = 0.5f;  // [rad/s^2] -- deliberately weak (a unit-test value, not
+                              // a production default): makes the taper ceiling reachable
+                              // by a small, easy-to-drive `remaining` below (see tick 2's
+                              // own comment for the arithmetic this depends on)
+  App::MoveQueue queue(drive, odom, clock, estimator, /*stopLead=*/0, limits);
+
+  // Two INDEPENDENT timelines -- see scenario 13's own comment for why
+  // (`clock`'s small ~20ms-cycle increments below drive VelocityShaper's
+  // own dt; `nowUs`'s large, well-spaced, monotonically increasing values
+  // drive NezhaMotor's own encoder-cycle plausibility checks).
+  //
+  // NezhaMotor duty tolerance: NezhaMotor internally represents duty as an
+  // INTEGER PWM percent (nezha_motor.cpp's own writeShapedDuty()/
+  // clampStep() -- a real, pre-existing quantization step, not a shaping
+  // artifact) -- a fraction-of-a-percent duty (this scenario's small
+  // rad/s-scale omega targets, unlike scenario 13's much larger mm/s-scale
+  // ones) can round to the nearest whole percentage point (0.01 duty).
+  // kDutyQuantization below is that one-percentage-point bound, used as
+  // the tolerance for every appliedDuty() comparison in this scenario.
+  constexpr float kDutyQuantization = 0.011f;
+  uint64_t nowUs = 100000;
+
+  clock.setMicros(0);
+  msg::Move move = makeTwistMove(/*id=*/82, /*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/2.0f,
+                                  msg::Move::StopKind::ANGLE, /*stopValue=*/1.5f /*[rad]*/,
+                                  /*timeout=*/600000.0f, /*replace=*/false);
+  queue.enqueue(move, /*corrId=*/2);
+
+  // Activation stages the carried-over shaped state (0), not raw omega.
+  drive.tick();
+  runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
+  runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
+  checkFloatEq(left.appliedDuty(), 0.0f, "activation stages the carried-over shaped state (0), not raw omega");
+  checkFloatEq(right.appliedDuty(), 0.0f, "activation stages the carried-over shaped state (0), not raw omega");
+
+  // t=20ms, no rotation yet (remaining stays the full 1.5rad): accel-ramp
+  // clamp binds (alphaMax*dt=6*0.02=0.12rad/s); decel taper
+  // (sqrt(2*8*1.5)~=4.9rad/s) does not.
+  clock.setMicros(20000);
+  App::MoveQueue::TickResult tick1 = queue.tick(clock.nowMicros(), odom);
+  checkFalse(tick1.completed, "still far from the 1.5rad threshold");
+  float expectedVL = 0.0f, expectedVR = 0.0f;
+  BodyKinematics::inverse(0.0f, 0.12f, kTrackWidth, expectedVL, expectedVR);
+  drive.tick();
+  nowUs += 100000;
+  runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
+  runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
+  checkFloatEq(left.appliedDuty(), kKff * expectedVL,
+               "tick 1 -- omega accel-ramped to alphaMax*dt (6*0.02), never straight to cruise", kDutyQuantization);
+  checkFloatEq(right.appliedDuty(), kKff * expectedVR,
+               "tick 1 -- omega accel-ramped to alphaMax*dt (6*0.02), never straight to cruise", kDutyQuantization);
+
+  // Now rotate to within 0.03rad of the 1.5rad threshold (1.47rad turned):
+  // with alphaDecel=0.5, the decel taper (sqrt(2*0.5*0.03)~=0.173rad/s) now
+  // binds BELOW what pure acceleration would have produced
+  // (0.12+6*0.02=0.24) -- the taper itself, not just the ramp. The step
+  // itself (147mm from 0) needs >=~123ms of elapsed nowUs to stay under
+  // NezhaMotor's own kMaxPlausibleStepSpeed=1200mm/s outlier-rejection
+  // gate (nezha_motor.cpp) -- 200ms (735mm/s implied) is comfortably under.
+  nowUs += 200000;
+  driveToPosition(left, bus, kWireAddr, -1.47f * (kTrackWidth / 2.0f), nowUs);
+  driveToPosition(right, bus, kWireAddr, 1.47f * (kTrackWidth / 2.0f), nowUs);
+  odom.integrate();
+  checkFloatEq(odom.theta(), 1.47f, "sanity: 1.47rad turned, 0.03rad remaining", 1e-3f);
+  clock.setMicros(40000);
+  App::MoveQueue::TickResult tick2 = queue.tick(clock.nowMicros(), odom);
+  checkFalse(tick2.completed, "1.47rad < 1.5rad threshold -- still Continue");
+  float expectedTaper = std::sqrt(2.0f * 0.5f * 0.03f);  // ~0.173rad/s
+  checkLe(expectedTaper, 0.24f, "sanity: the taper ceiling is below the pure-accel-ramp value (0.24) here");
+  BodyKinematics::inverse(0.0f, expectedTaper, kTrackWidth, expectedVL, expectedVR);
+  drive.tick();
+  nowUs += 100000;
+  runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
+  runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
+  checkFloatEq(left.appliedDuty(), kKff * expectedVL,
+               "tick 2 -- decel taper CAPS omega below the pure accel-ramp value (0.24) near the goal", kDutyQuantization);
+  checkFloatEq(right.appliedDuty(), kKff * expectedVR,
+               "tick 2 -- decel taper CAPS omega below the pure accel-ramp value (0.24) near the goal", kDutyQuantization);
+  checkLe(expectedTaper, 1.0f, "acceptance: approach omega near the goal is well below cruise (< half of 2.0rad/s)");
+}
+
 }  // namespace
 
 int main() {
@@ -898,6 +1144,8 @@ int main() {
   scenarioTickWithNoActiveMoveIsANoOp();
   scenarioAngleMoveAnticipatesViaStateEstimatorPredictedHeading();
   scenarioDistanceMoveAnticipatesViaStateEstimatorPredictedSpeed();
+  scenarioDistanceMoveShapesLinearSpeedRampUpThenTaperNearGoal();
+  scenarioAngleMoveShapesAngularSpeedRampUpThenTaperNearGoal();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::MoveQueue scenarios passed\n");

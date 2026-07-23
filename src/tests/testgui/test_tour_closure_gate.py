@@ -110,6 +110,21 @@ _CLOSURE_POSITION_MAX_MM = 600.0     # matches test_sim_transport_tour1.py's own
 _BOUNDARY_MIN_FRACTION = 0.9          # matches boundary_velocity_harness.cpp's own
                                       # "vMax*0.9" no-dip bound (SUC-003's own acceptance wording)
 
+# decel-into-the-goal campaign: the NEW, tightened tolerance that IS
+# actually met with taper+re-tuned lead active (unlike
+# _TURN_TOLERANCE_IDEAL_DEG/_TURN_TOLERANCE_REALISTIC_DEG above, the
+# ORIGINAL 109-009 stakeholder bars, which stay their own untouched,
+# still-xfailed aspirational gate below) -- ticket's own "90 turns land
+# 90+-2 target band (state achieved band honestly)". Measured worst
+# |error| across TOUR_1 (all-90-degree legs) and TOUR_2 (mixed angles) at
+# stop_lead_ms=60/taper ON: TOUR_1 ideal 2.025deg / realistic 1.932deg,
+# TOUR_2 ideal 2.235deg / realistic 2.405deg -- honestly closer to +-2.4deg
+# than a hard +-2.0deg, so this constant is 2.5deg (real headroom over the
+# worst measured point), not a bare "2.0" that would flake on ordinary
+# run-to-run float noise. See turn_prediction.ipynb Section 8's own
+# addendum for the full lead sweep this default is drawn from.
+_TURN_TOLERANCE_SHAPED_DEG = 2.5
+
 # turn-prediction campaign: App::MoveQueue's own stop-condition anticipation
 # lead, pushed live via EstimatorConfigPatch (_make_loop() below) -- matches
 # data/robots/tovez_nocal.json's own EMPIRICALLY-TUNED stop_lead_ms default
@@ -121,7 +136,33 @@ _BOUNDARY_MIN_FRACTION = 0.9          # matches boundary_velocity_harness.cpp's 
 # picked mid-plateau). SimHarness itself leaves stopLead at 0 (anticipation
 # OFF) unless explicitly pushed -- see move_queue.h's own "sim/production
 # boundary" precedent for FusionWeights, extended here.
-_STOP_LEAD_MS = 90.0
+#
+# decel-into-the-goal campaign RE-SWEEP (2026-07-22): with Motion::
+# VelocityShaper's taper ALSO active (a_max/a_decel/alpha_max/alpha_decel
+# below, pushed by _make_loop() alongside stop_lead_ms), the OLD 90.0ms
+# lead now OVERCORRECTS (undershoots) -- exactly the risk this campaign's
+# own ticket flagged going in ("the 90 ms stop_lead may now overcorrect").
+# A single-90-degree-turn sweep (both directions, ideal chip, sim ground
+# truth -- turn_prediction.ipynb Section 8's own addendum has the full
+# table) found: lead=0ms/taper=OFF worst=20.3deg (today's un-shaped
+# baseline); lead=90ms/taper=OFF worst=3.1deg (the OLD tuned default,
+# unchanged); lead=60ms/taper=ON worst=0.3deg -- a materially better
+# result than either taper-off point, achieved by RE-TUNING the lead
+# downward once the taper is doing part of the deceleration work the lead
+# used to have to anticipate alone. 60.0 replaces 90.0 as this file's own
+# default for a taper-ON run.
+_STOP_LEAD_MS = 60.0
+
+# decel-into-the-goal campaign: Motion::VelocityShaper's own accel/decel
+# ceilings, pushed alongside stop_lead_ms above -- the SAME values baked
+# into data/robots/tovez.json's own control.a_max/a_decel/alpha_max/
+# alpha_decel (control._shaper_note has the full derivation), not synthetic
+# test-only numbers, so this file's own sweep result is directly actionable
+# for the shipped default.
+_A_MAX = 800.0        # [mm/s^2]
+_A_DECEL = 800.0      # [mm/s^2]
+_ALPHA_MAX = 7.0       # [rad/s^2]
+_ALPHA_DECEL = 7.0     # [rad/s^2]
 
 
 def _compensating_register(raw_error: float) -> float:
@@ -187,7 +228,10 @@ def _make_stepper(loop, clock: "_SteppedClock"):
     return _step
 
 
-def _make_loop(*, realistic_errors: bool, deterministic: bool = True, stop_lead_ms: "float | None" = _STOP_LEAD_MS):
+def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
+                stop_lead_ms: "float | None" = _STOP_LEAD_MS,
+                a_max: "float | None" = _A_MAX, a_decel: "float | None" = _A_DECEL,
+                alpha_max: "float | None" = _ALPHA_MAX, alpha_decel: "float | None" = _ALPHA_DECEL):
     from robot_radio.config.robot_config import load_robot_config
     from robot_radio.io.sim_loop import SimLoop
     from robot_radio.robot.protocol import NezhaProtocol
@@ -209,13 +253,35 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True, stop_lead_
     # the fix active must push it explicitly, exactly like the OTOS
     # calibration push a few lines down. `stop_lead_ms=None` skips this
     # (pre-fix baseline measurement).
-    if stop_lead_ms is not None:
+    #
+    # decel-into-the-goal campaign: a_max/a_decel/alpha_max/alpha_decel ride
+    # the SAME EstimatorConfigPatch/estimator_config() call (config.proto's
+    # own "smallest coherent path" doc comment) -- App::MoveQueue also
+    # leaves ShaperLimits at its own constructor default (every field 0,
+    # shaping OFF; see App::ShaperLimits's own doc comment) unless pushed.
+    # All four None (the default) skips the push entirely (taper OFF,
+    # matching this file's own pre-campaign baseline); the caller passes
+    # all four together to turn the taper on.
+    shaper_fields = {}
+    if a_max is not None:
+        shaper_fields["a_max"] = a_max
+    if a_decel is not None:
+        shaper_fields["a_decel"] = a_decel
+    if alpha_max is not None:
+        shaper_fields["alpha_max"] = alpha_max
+    if alpha_decel is not None:
+        shaper_fields["alpha_decel"] = alpha_decel
+
+    if stop_lead_ms is not None or shaper_fields:
         conn = _SimConfigConn(loop)
         proto = NezhaProtocol(conn)  # type: ignore[arg-type]
-        corr_id = proto.estimator_config(stop_lead_ms=stop_lead_ms)
+        kwargs = dict(shaper_fields)
+        if stop_lead_ms is not None:
+            kwargs["stop_lead_ms"] = stop_lead_ms
+        corr_id = proto.estimator_config(**kwargs)
         ack = _wait_for_ack(loop, corr_id, deterministic=deterministic)
         assert ack is not None and ack.ok, (
-            f"EstimatorConfigPatch stop_lead_ms push failed to ack: {ack}"
+            f"EstimatorConfigPatch stop_lead_ms/shaper push failed to ack: {ack}"
         )
 
     if not realistic_errors:
@@ -501,7 +567,30 @@ _XFAIL_REASON_IDEAL = (
     "stays open. Residual mechanism unchanged from the original argument "
     "(Otos::kReadPeriod's own read-rate limit) plus whatever the "
     "anticipation lead's own first-order (held-omega ZOH) approximation "
-    "still misses -- not further decomposed this campaign."
+    "still misses -- not further decomposed this campaign.\n"
+    "\n"
+    "decel-into-the-goal campaign re-baseline (2026-07-22): _make_loop() "
+    "now ALSO pushes Motion::VelocityShaper's own accel/decel taper "
+    "(a_max/a_decel/alpha_max/alpha_decel, config.proto's EstimatorConfigPatch "
+    "extension) alongside stop_lead_ms -- and the OPTIMAL lead shifted with "
+    "it (a single-90-degree-turn sweep found the OLD 90ms lead now "
+    "OVERCORRECTS with the taper active, worst -3.5deg undershoot; 60ms is "
+    "the new sweep optimum, worst 0.3deg in isolation -- see _STOP_LEAD_MS's "
+    "own comment and turn_prediction.ipynb Section 8's addendum). Re-measured "
+    "AT TOUR level (not the isolated single-turn sweep) with lead=60ms/taper "
+    "ON: worst ideal-chip miss now measures 2.025deg (TOUR_1)/2.235deg "
+    "(TOUR_2) -- roughly HALVED from the 4.20/4.68deg anticipation-lead-only "
+    "baseline immediately above, a real further improvement from the taper, "
+    "but still short of the stakeholder's own stated <0.05deg 'exact' bar, "
+    "so this xfail stays open. The isolated-single-turn sweep's own 0.3deg "
+    "optimum does NOT reproduce at tour level (2.0-2.2deg instead) -- a "
+    "tour-embedded turn starts from whatever the PRECEDING leg's own "
+    "seamless hand-off (SUC-051) left the shaped state at, not a clean "
+    "from-rest start the isolated sweep measures; not further decomposed "
+    "this campaign. See test_tour_1_and_tour_2_ninety_degree_turns_land_"
+    "within_the_shaped_band() below for the NEW, tightened, ACTUALLY-MET "
+    "tolerance (2.5deg) this campaign ships as its own real acceptance gate, "
+    "distinct from this xfail's original <0.05deg aspirational bar."
 )
 
 _XFAIL_REASON_REALISTIC = (
@@ -532,8 +621,49 @@ _XFAIL_REASON_REALISTIC = (
     "(OTOS/encoder scale/tick-quant/slip, this file's own _OTOS_*/_ENC_* "
     "constants) compounds with the anticipation lead's own residual "
     "(ideal-chip xfail's own ~4.2-4.7deg) roughly additively, consistent "
-    "with two independent error sources rather than a new one."
+    "with two independent error sources rather than a new one.\n"
+    "\n"
+    "decel-into-the-goal campaign re-baseline (2026-07-22): see the "
+    "ideal-chip xfail's own matching paragraph for the full lead re-sweep "
+    "(60ms replaces 90ms once the taper is active). Re-measured with "
+    "lead=60ms/taper ON: worst realistic-profile miss now measures "
+    "1.932deg (TOUR_1)/2.405deg (TOUR_2) -- close to a 3x improvement over "
+    "the 5.46/6.90deg anticipation-lead-only baseline immediately above, "
+    "but still short of the stakeholder's own stated 1.0deg bar, so this "
+    "xfail stays open. See "
+    "test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band() "
+    "below for the NEW, tightened, ACTUALLY-MET tolerance (2.5deg) this "
+    "campaign ships as its own real acceptance gate."
 )
+
+
+# ---------------------------------------------------------------------------
+# Decel-into-the-goal campaign's own REAL (non-xfail) acceptance gate --
+# ticket's own words: "Sim system: 90 turns land 90+-2 target band (state
+# achieved band honestly)". Distinct from the ORIGINAL 109-009 stakeholder
+# bars above (_TURN_TOLERANCE_IDEAL_DEG=0.05/_TURN_TOLERANCE_REALISTIC_DEG=
+# 1.0, still their own untouched xfailed aspirational gate) -- this is the
+# tightened tolerance this campaign's own shaping work ACTUALLY achieves,
+# not loosening or replacing that older gate. TOUR_1 is all-90-degree legs
+# (the ticket's own literal target); TOUR_2 is included too since its
+# non-90-degree legs (124/146/215/217deg) measured comparable error
+# magnitudes in the sweep above, not a materially different regime.
+# ---------------------------------------------------------------------------
+
+
+def test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band():
+    from robot_radio.planner.tour import TOUR_1, TOUR_2
+
+    for label, tour in (("TOUR_1", TOUR_1), ("TOUR_2", TOUR_2)):
+        for realistic in (False, True):
+            loop = _make_loop(realistic_errors=realistic)
+            try:
+                gate = _run_tour_capture(loop, tour)
+            finally:
+                loop.disconnect()
+            profile = "realistic" if realistic else "ideal"
+            _assert_tour_gate(gate, tolerance_deg=_TURN_TOLERANCE_SHAPED_DEG,
+                               label=f"{label}/{profile}/shaped-band")
 
 
 @pytest.mark.xfail(reason=_XFAIL_REASON_IDEAL, strict=False)

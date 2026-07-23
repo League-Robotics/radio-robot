@@ -64,6 +64,49 @@
 
 namespace App {
 
+// ShaperLimits -- Motion::VelocityShaper's own accel/decel magnitude
+// ceilings (decel-into-the-goal campaign, follow-on to
+// clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md's own
+// "Option 1... remains the path to closing that residual further").
+// Field-for-field mirror of Config::ShaperBootConfig (config/
+// boot_config.h), independently declared for the SAME reason
+// App::FusionWeights is independently declared from Config::
+// EstimatorBootConfig: config/ may depend only on messages/, never on
+// app/ (docs/design/design.md's dependency diagram) -- main.cpp converts
+// Config::ShaperBootConfig into this struct at the one composition-root
+// place both types are visible. Declared at namespace scope (not nested
+// inside MoveQueue), the SAME reason FusionWeights is declared at
+// namespace scope rather than nested inside StateEstimator: a nested
+// struct's own default member initializers cannot be referenced by a
+// default ARGUMENT of the enclosing class's own constructor while that
+// enclosing class is still being defined (a real clang/C++ parse
+// restriction, not a style preference -- MoveQueue's constructor below
+// needs exactly this default).
+//
+// Disabled-axis sentinel: aMax<=0 OR aDecel<=0 disables LINEAR shaping
+// entirely (tick()/activate() stage a Move's raw v_x/v_left/v_right
+// unchanged, byte-identical to this class's pre-shaping behavior);
+// independently, alphaMax<=0 OR alphaDecel<=0 disables ANGULAR shaping
+// (raw omega unchanged). This is the SAME "0 == off, matching this
+// class's own pre-feature behavior" contract stopLead already
+// established (MoveQueue's own constructor doc comment) -- the
+// default-constructed ShaperLimits{} (every field 0) is therefore the
+// exact identity/no-op configuration every pre-existing MoveQueue caller
+// (every unit-test harness, TestSim::SimHarness) keeps getting without
+// passing anything. Real firmware always supplies real positive values
+// here (gen_boot_config.py's shaper_config_for_config() REQUIRES all four
+// robot-JSON keys, config-as-truth) -- shaping is therefore
+// unconditionally ON in production, opt-in only for a sim/test
+// composition root that hasn't pushed a real config (mirrors
+// FusionWeights{}/stopLead=0's own sim/production boundary precedent,
+// sim_harness.h's own comment).
+struct ShaperLimits {
+  float aMax = 0.0f;        // [mm/s^2] linear accel-ramp ceiling
+  float aDecel = 0.0f;      // [mm/s^2] linear decel-taper ceiling
+  float alphaMax = 0.0f;    // [rad/s^2] angular accel-ramp ceiling
+  float alphaDecel = 0.0f;  // [rad/s^2] angular decel-taper ceiling
+};
+
 class MoveQueue {
  public:
   static constexpr int kMaxPending = 4;
@@ -102,8 +145,16 @@ class MoveQueue {
   // sim/production boundary, or a unit-test harness that doesn't care).
   // Live-retunable afterward via setStopLead() -- see that method's own
   // doc comment.
+  //
+  // shaperLimits -- Motion::VelocityShaper's own accel/decel ceilings (see
+  // ShaperLimits's own doc comment above); defaults to ShaperLimits{}
+  // (every field 0 -- shaping OFF, IDENTICAL to this class's pre-shaping
+  // behavior), the SAME "opt-in for sim/test, always-on in production"
+  // shape stopLead already established. Live-retunable via
+  // setShaperLimits().
   MoveQueue(Drive& drive, Odometry& odom, const Devices::Clock& clock,
-            const StateEstimator& stateEstimator, uint32_t stopLead = 0);
+            const StateEstimator& stateEstimator, uint32_t stopLead = 0,
+            ShaperLimits shaperLimits = ShaperLimits{});
 
   // Enqueues/replaces `move` (already shape-validated by the caller -- see
   // this file's own header comment).
@@ -160,6 +211,32 @@ class MoveQueue {
   // (activationPathLength_/activationTheta_) are UNCHANGED by this --
   // still captured from the raw `odom` reading at activation time, exactly
   // as before; only the CURRENT-reading side of the comparison anticipates.
+  //
+  // Velocity shaping (decel-into-the-goal campaign, follow-on to the
+  // anticipation lead above): on a Continue outcome (the Move keeps
+  // running), this method ALSO re-stages the active Move's commanded
+  // velocity through Drive::setTwist()/setWheels() -- Motion::
+  // VelocityShaper::next() computes the next tick's speed for whichever
+  // axis (linear v_x/v_left/v_right, angular omega) ShaperLimits enables,
+  // using the SAME pathLength/theta (possibly anticipation-predicted, see
+  // above) this same call already computed for the stop-condition
+  // comparison -- never a second, independent prediction. "Remaining" for
+  // the taper is threshold-minus-so-far-traveled for a Distance-kind Move
+  // (linear axis only), threshold-minus-so-far-turned for an Angle-kind
+  // Move (angular axis only), or +infinity for a Kind::Time Move on BOTH
+  // axes (accel-limited ramp-up still applies; no taper, since a Time Move
+  // ends on elapsed wall-clock time, not position -- there is no
+  // "remaining distance" to taper against). A Move's non-primary axis
+  // (e.g. a Distance-kind TWIST Move's own omega, if nonzero) is passed
+  // through UNSHAPED -- this class only shapes the axis its own stop_kind
+  // measures; see move_queue.cpp's own shapeAndStage() comment for the
+  // full per-kind breakdown, including WHEELS (v_left/v_right shaped
+  // independently, both linear, regardless of stop_kind). A no-op per
+  // axis whenever ShaperLimits disables it (ShaperLimits's own doc
+  // comment) -- Drive is never re-staged for a disabled axis, so a
+  // caller with ShaperLimits{} (the default) sees IDENTICAL behavior to
+  // this class before shaping existed (Drive is staged once, at
+  // activate(), and never again until the Move ends).
   TickResult tick(uint64_t now, const Odometry& odom);  // [us]
 
   // setStopLead/stopLead -- the live-tuning entry point (RobotLoop::
@@ -171,6 +248,14 @@ class MoveQueue {
   // "never persisted" contract for the fusion weights it already carries.
   void setStopLead(uint32_t stopLead) { stopLead_ = stopLead; }  // [ms]
   uint32_t stopLead() const { return stopLead_; }                // [ms]
+
+  // setShaperLimits/shaperLimits -- the live-tuning entry point (RobotLoop::
+  // handleConfig()'s own ESTIMATOR branch, decel-into-the-goal campaign),
+  // the SAME shape as setStopLead()/stopLead() immediately above: a plain
+  // in-memory write, never persisted (a reboot always reverts to the boot
+  // config's own Config::ShaperBootConfig bake).
+  void setShaperLimits(ShaperLimits limits) { shaperLimits_ = limits; }
+  ShaperLimits shaperLimits() const { return shaperLimits_; }
 
   // Drains every pending slot and ends the active Move (if any) with NO
   // completion ack for any of them -- used by STOP (ticket 006), which
@@ -208,12 +293,38 @@ class MoveQueue {
     uint64_t activationNow = 0;         // [us]
     float activationPathLength = 0.0f;  // [mm]
     float activationTheta = 0.0f;       // [rad]
+
+    // Cruise-target velocity fields (decel-into-the-goal campaign) --
+    // captured once at activation from `move`'s own velocity variant;
+    // shapeAndStage() (move_queue.cpp) shapes TOWARD these every tick, the
+    // "cruiseSpeed" argument to Motion::VelocityShaper::next(). Kept
+    // alongside the stop-condition baseline above rather than re-reading
+    // the original msg::Move (this class doesn't keep a copy of the
+    // active Move itself, only pending_[] ones -- see this file's own
+    // header, "Stages ... onto drive_" activate() comment).
+    msg::Move::VelocityKind velocityKind = msg::Move::VelocityKind::NONE;
+    float cruiseVX = 0.0f;      // [mm/s] TWIST only
+    float cruiseVY = 0.0f;      // [mm/s] TWIST only (always 0 -- see Drive::setTwist()'s own doc comment)
+    float cruiseOmega = 0.0f;   // [rad/s] TWIST only
+    float cruiseVLeft = 0.0f;   // [mm/s] WHEELS only
+    float cruiseVRight = 0.0f;  // [mm/s] WHEELS only
   };
 
   // Stages `move`'s velocity variant onto drive_ and populates active_ from
   // `move` plus the (now, pathLength, theta) activation baseline -- shared
   // by enqueue()'s two activation paths and tick()'s chain-advance path.
   void activate(const msg::Move& move, uint64_t now, float pathLength, float theta);
+
+  // shapeAndStage -- decel-into-the-goal campaign. Computes this tick's
+  // shaped speed for whichever axis ShaperLimits enables (see tick()'s own
+  // doc comment) and re-stages it through drive_.setTwist()/setWheels().
+  // Called from tick() ONLY on a Continue outcome (see tick()'s own doc
+  // comment for why -- a Move that ends this same cycle is about to be
+  // superseded by a chain-advance activate() or drive_.stop() regardless).
+  // pathLength/theta are the SAME (possibly anticipation-predicted)
+  // readings tick() already computed for the stop-condition comparison
+  // this cycle -- never re-derived here.
+  void shapeAndStage(uint64_t now, float pathLength, float theta);
 
   Drive& drive_;
   Odometry& odom_;
@@ -224,6 +335,26 @@ class MoveQueue {
   msg::Move pending_[kMaxPending];
   int pendingCount_ = 0;
   uint32_t stopLead_ = 0;  // [ms] see tick()'s own doc comment
+
+  // Velocity-shaping state (decel-into-the-goal campaign). shaperLimits_ is
+  // the live-tunable config (setShaperLimits()); the four shaped* fields
+  // are the actual RUNNING per-axis commanded-speed state
+  // Motion::VelocityShaper::next()'s own "currentSpeed" argument reads and
+  // writes each tick -- deliberately MoveQueue-level, not ActiveMove-level
+  // (survives across a chain-advance/replace so a same-axis, same-
+  // direction follow-on Move continues its ramp smoothly rather than
+  // restarting from 0 -- see ShaperLimits's own doc comment for the
+  // "byte-identical when disabled" contract this relies on). Initialized
+  // to 0 (a fresh boot's own resting state); each axis is self-resetting
+  // in practice, since the decel taper already drives it toward 0 as
+  // ANY Move's own `remaining` approaches 0, before that Move's stop
+  // condition fires.
+  ShaperLimits shaperLimits_;
+  float shapedVX_ = 0.0f;      // [mm/s]
+  float shapedOmega_ = 0.0f;   // [rad/s]
+  float shapedVLeft_ = 0.0f;   // [mm/s]
+  float shapedVRight_ = 0.0f;  // [mm/s]
+  uint64_t lastShapeNow_ = 0;  // [us] dt baseline for shapeAndStage(), reset at each activate()
 };
 
 }  // namespace App

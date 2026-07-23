@@ -90,6 +90,21 @@ void mergeEstimatorPatch(App::FusionWeights& weights, const msg::EstimatorConfig
   if (patch.staleness_ms.has) weights.staleness = static_cast<uint32_t>(patch.staleness_ms.val);
 }
 
+// mergeShaperPatch (decel-into-the-goal campaign) -- folds `patch`'s
+// PRESENT a_max/a_decel/alpha_max/alpha_decel fields onto `limits` (a
+// snapshot of moveQueue_.shaperLimits(), taken by handleConfig()'s own
+// ESTIMATOR branch before calling setShaperLimits()) -- the SAME
+// present-field-merge shape mergeEstimatorPatch() immediately above uses,
+// applied to App::ShaperLimits instead of App::FusionWeights. Also never
+// persisted (config.proto's own EstimatorConfigPatch doc comment) -- a
+// reboot always reverts to the baked Config::defaultShaperConfig() default.
+void mergeShaperPatch(App::ShaperLimits& limits, const msg::EstimatorConfigPatch& patch) {
+  if (patch.a_max.has) limits.aMax = patch.a_max.val;
+  if (patch.a_decel.has) limits.aDecel = patch.a_decel.val;
+  if (patch.alpha_max.has) limits.alphaMax = patch.alpha_max.val;
+  if (patch.alpha_decel.has) limits.alphaDecel = patch.alpha_decel.val;
+}
+
 // packLine -- 4 raw grayscale channels (each already a single-byte I2C
 // read, line_sensor.cpp's own readRaw()) into one uint32, ch1 in the low
 // byte -- telemetry.proto's own `line` field layout.
@@ -288,6 +303,14 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
   // whether any of the three weight fields are present -- an
   // EstimatorConfigPatch carrying ONLY stop_lead_ms is a valid, complete
   // patch. Same never-persisted contract as the weights above.
+  //
+  // a_max/a_decel/alpha_max/alpha_decel (decel-into-the-goal campaign)
+  // ALSO ride this same arm, targeting moveQueue_'s ShaperLimits directly
+  // -- the SAME "smallest coherent path" reasoning as stop_lead_ms
+  // immediately above (config.proto's own EstimatorConfigPatch doc comment
+  // has the full rationale). Present-field merge onto a snapshot of the
+  // CURRENT live ShaperLimits, mirroring the FusionWeights merge above;
+  // applied independently of every other field on this patch.
   if (env.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::ESTIMATOR) {
     const msg::EstimatorConfigPatch& patch = env.cmd.config.patch.estimator;
 
@@ -298,6 +321,10 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
     if (patch.stop_lead_ms.has) {
       moveQueue_.setStopLead(static_cast<uint32_t>(patch.stop_lead_ms.val));
     }
+
+    ShaperLimits shaperLimits = moveQueue_.shaperLimits();
+    mergeShaperPatch(shaperLimits, patch);
+    moveQueue_.setShaperLimits(shaperLimits);
 
     tlm_.ack(env.corr_id, 0);
     return;

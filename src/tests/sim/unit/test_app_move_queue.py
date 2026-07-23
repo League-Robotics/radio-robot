@@ -36,6 +36,7 @@ _PLANT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "plant"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_move_queue_harness.cpp"
 _MOVE_QUEUE_SRC = _SOURCE_DIR / "app" / "move_queue.cpp"
 _STOP_CONDITION_SRC = _SOURCE_DIR / "motion" / "stop_condition.cpp"
+_VELOCITY_SHAPER_SRC = _SOURCE_DIR / "motion" / "velocity_shaper.cpp"
 _DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
 _ODOMETRY_SRC = _SOURCE_DIR / "app" / "odometry.cpp"
 _STATE_ESTIMATOR_SRC = _SOURCE_DIR / "app" / "state_estimator.cpp"
@@ -72,6 +73,7 @@ def test_app_move_queue_harness_compiles_and_passes(tmp_path):
         _HARNESS_SRC,
         _MOVE_QUEUE_SRC,
         _STOP_CONDITION_SRC,
+        _VELOCITY_SHAPER_SRC,
         _DRIVE_SRC,
         _ODOMETRY_SRC,
         _STATE_ESTIMATOR_SRC,

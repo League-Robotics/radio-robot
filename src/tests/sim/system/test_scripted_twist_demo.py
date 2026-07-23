@@ -87,6 +87,7 @@ _APP_SOURCES = [
 ]
 _MOTION_SOURCES = [
     _SOURCE_DIR / "motion" / "stop_condition.cpp",
+    _SOURCE_DIR / "motion" / "velocity_shaper.cpp",
 ]
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",

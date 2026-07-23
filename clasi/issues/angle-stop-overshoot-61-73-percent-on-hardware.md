@@ -134,3 +134,79 @@ remains the path to closing that residual further, if the stakeholder
 wants it — out of this fix's own scope. Marked `resolved` because the
 issue AS FILED ("MOVE overshoots 61-73%") is fixed by an order of
 magnitude, not because the mechanism is perfected.
+
+## Follow-on fix (2026-07-22, decel-into-the-goal campaign)
+
+Implemented Option 1's own lighter-weight cousin (not a full trajectory
+controller, but the same underlying idea): `Motion::VelocityShaper`
+(`src/firm/motion/velocity_shaper.{h,cpp}`) shapes the commanded speed
+every tick toward a computed terminal value —
+`min(cruise, sqrt(2*a_decel*remaining), current+a_max*dt)` — instead of
+holding a constant cruise speed until `Motion::StopCondition` fires and
+the actuation/momentum tail overshoots past it. Wired into
+`App::MoveQueue::tick()`/`shapeAndStage()`, reusing the SAME predicted
+pose the anticipation-lead fix above already computes. New fail-closed
+boot config (`Config::ShaperBootConfig`, `data/robots/*.json`'s
+`control.a_max`/`a_decel`/`alpha_max`/`alpha_decel` — the first two were
+dead/orphaned data since 115-003's motion-stack excision, read again into
+this NEW consumer; the latter two are new fields) plus a live-tune wire
+arm (`EstimatorConfigPatch.a_max`/`a_decel`/`alpha_max`/`alpha_decel`,
+riding the same `CONFIG_ESTIMATOR` arm `stop_lead_ms` already uses).
+
+**Re-tuning the lead was required.** With the taper doing part of the
+deceleration work the lead used to have to anticipate alone, the OLD
+`stop_lead_ms=90` (this issue's own bench-validated value) now
+OVERCORRECTS. A sim sweep (isolated single 90-degree turn, both
+directions, ideal chip) found `stop_lead_ms=60` is the new sim optimum
+(worst 0.3° in isolation vs. 3.1° at `lead=90`/no taper) — see
+`src/tests/notebooks/turn_prediction.ipynb` Section 9 and
+`test_tour_closure_gate.py`'s own `_STOP_LEAD_MS` comment for the full
+sweep table. At TOUR level (not an isolated from-rest turn), worst
+measured error is `2.0-2.4°` across TOUR_1/TOUR_2, both fidelity
+profiles — roughly HALF the anticipation-lead-only baseline immediately
+above.
+
+**Hardware verification (2026-07-22, tovez on the stand, `stop_lead_ms=60`
++ taper baked from `active_robot.json` -> `tovez_nocal.json` at flash
+time, `move_accuracy_bench.py --skip-ab --skip-creep --trials 3`):**
+
+| Trial | Commanded | Measured | Error |
+|---|---|---|---|
+| turn +90° #1 | +90.0° | +85.3° | -5.2% |
+| turn +90° #2 | +90.0° | +86.2° | -4.3% |
+| turn +90° #3 | +90.0° | +83.0° | -7.8% |
+| turn -90° #1 | -90.0° | -84.8° | +5.7% |
+| turn -90° #2 | -90.0° | -86.2° | +4.2% |
+| turn -90° #3 | -90.0° | -85.6° | +4.8% |
+
+A **~4-8° residual either direction** (mean ~5.3°) — in the SAME
+ballpark as this issue's own PRE-taper `stop_lead_ms=90` result (~5-6°),
+**not** the dramatic further improvement the sim predicted (sim measured
+roughly half the anticipation-lead-only error at tour level). A
+follow-up live-config A/B on the same hardware session (`stop_lead_ms` in
+{60, 90, 45, 75}ms, taper unchanged) found no value in that bracket
+clearly beats `60` — every clean trial landed in the same ~4-8° band
+(one `45ms` trial and one `60ms` trial were lost to an unrelated
+`ENQUEUE-REJECTED/TIMEOUT` pacing artifact when moves are dispatched
+back-to-back with no settle gap, a pre-existing bench-harness timing
+issue, not a shaper regression — the SAME symptom appears on a couple of
+distance legs in the full acceptance-table run below, unrelated to
+turns). `stop_lead_ms=60` ships as the default; a genuinely finer
+hardware-specific re-sweep (more trials, tighter lead bracketing) could
+still narrow this further but was not run this session (small-N,
+matching this issue's own established "not fully closed" posture).
+
+Distance stops in the SAME session (300/500mm forward, calibrated gains)
+landed within `0.0-0.8%`, unaffected/already good — unchanged from this
+issue's own original finding.
+
+**Not fully closed (extended):** the taper closes a large fraction of the
+sim-measured residual but a materially smaller fraction on THIS hardware
+sample — the ~5° hardware residual persists across every lead value
+tried in the 45-90ms bracket. This is consistent with (not contradictory
+to) the original "not fully closed" note above: the real plant's own
+coast-down dynamics, motor response, and I2C bus timing are not fully
+captured by the sim's own idealized model, and Option 1's fuller form (a
+genuine trajectory controller with a planned terminal velocity, not a
+per-tick reactive taper) remains the path to closing the remainder, if
+the stakeholder wants it — still out of scope here.

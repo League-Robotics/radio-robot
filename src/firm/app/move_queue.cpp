@@ -3,22 +3,74 @@
 #include "app/move_queue.h"
 
 #include <cmath>
+#include <limits>
+
+#include "motion/velocity_shaper.h"
 
 namespace App {
 
 MoveQueue::MoveQueue(Drive& drive, Odometry& odom, const Devices::Clock& clock,
-                      const StateEstimator& stateEstimator, uint32_t stopLead)
+                      const StateEstimator& stateEstimator, uint32_t stopLead,
+                      ShaperLimits shaperLimits)
     : drive_(drive), odom_(odom), clock_(clock), stateEstimator_(stateEstimator),
-      stopLead_(stopLead) {}
+      stopLead_(stopLead), shaperLimits_(shaperLimits) {}
 
 void MoveQueue::activate(const msg::Move& move, uint64_t now, float pathLength, float theta) {
+  // Disabled-axis gate -- see ShaperLimits's own doc comment (move_queue.h)
+  // for the "0 == off, byte-identical to pre-shaping behavior" contract.
+  bool linearShaping = shaperLimits_.aMax > 0.0f && shaperLimits_.aDecel > 0.0f;
+  bool angularShaping = shaperLimits_.alphaMax > 0.0f && shaperLimits_.alphaDecel > 0.0f;
+
+  active_.velocityKind = move.velocity_kind;
+
   if (move.velocity_kind == msg::Move::VelocityKind::WHEELS) {
-    drive_.setWheels(move.velocity.wheels.v_left, move.velocity.wheels.v_right);
+    active_.cruiseVLeft = move.velocity.wheels.v_left;
+    active_.cruiseVRight = move.velocity.wheels.v_right;
+    active_.cruiseVX = 0.0f;
+    active_.cruiseVY = 0.0f;
+    active_.cruiseOmega = 0.0f;
+
+    // Shaping enabled: stage the CARRIED-OVER running shaped state (0 on a
+    // fresh boot's first-ever Move; a chained/replaced Move's own
+    // just-ended value otherwise -- SUC-051 continuity, no instant jump)
+    // rather than the raw cruise target; shapeAndStage()'s own tick() calls
+    // ramp it toward the cruise target from there. Shaping disabled: stage
+    // the raw target immediately (UNCHANGED pre-shaping behavior) and keep
+    // the shaped-state mirror in sync so a LATER live-enabled shaping call
+    // doesn't inherit a stale value.
+    float vLeft = active_.cruiseVLeft;
+    float vRight = active_.cruiseVRight;
+    if (linearShaping) {
+      vLeft = shapedVLeft_;
+      vRight = shapedVRight_;
+    } else {
+      shapedVLeft_ = vLeft;
+      shapedVRight_ = vRight;
+    }
+    drive_.setWheels(vLeft, vRight);
   } else {
     // TWIST (and the defensive NONE fallback -- see move_queue.h's own
     // header: a well-formed Move never reaches here with velocity_kind ==
     // NONE, that shape check is RobotLoop::handleMove()'s job).
-    drive_.setTwist(move.velocity.twist.v_x, move.velocity.twist.v_y, move.velocity.twist.omega);
+    active_.cruiseVX = move.velocity.twist.v_x;
+    active_.cruiseVY = move.velocity.twist.v_y;
+    active_.cruiseOmega = move.velocity.twist.omega;
+    active_.cruiseVLeft = 0.0f;
+    active_.cruiseVRight = 0.0f;
+
+    float vx = active_.cruiseVX;
+    float omega = active_.cruiseOmega;
+    if (linearShaping) {
+      vx = shapedVX_;
+    } else {
+      shapedVX_ = vx;
+    }
+    if (angularShaping) {
+      omega = shapedOmega_;
+    } else {
+      shapedOmega_ = omega;
+    }
+    drive_.setTwist(vx, active_.cruiseVY, omega);
   }
 
   Motion::StopCondition::Kind kind = Motion::StopCondition::Kind::Time;
@@ -50,6 +102,83 @@ void MoveQueue::activate(const msg::Move& move, uint64_t now, float pathLength, 
   active_.activationNow = now;
   active_.activationPathLength = pathLength;
   active_.activationTheta = theta;
+
+  lastShapeNow_ = now;  // dt baseline for this Move's own first shapeAndStage() call
+}
+
+// shapeAndStage -- see move_queue.h's own tick()/shapeAndStage() doc
+// comments for the full contract. Per-velocity-kind axis selection:
+//   WHEELS  -- v_left/v_right shaped INDEPENDENTLY, both on the LINEAR
+//              axis (aMax/aDecel) regardless of the Move's own stop_kind
+//              -- a wheel target has no "angular" component of its own to
+//              shape; an Angle-kind WHEELS Move (a differential turn
+//              commanded by raw wheel speeds rather than TWIST.omega) gets
+//              accel-ramped but never decel-tapered on this axis (its own
+//              "remaining" stays +infinity, matching the Kind::Time
+//              posture) -- a known, documented scope limitation: WHEELS
+//              moves are not the ticket's own primary target (90-degree
+//              TWIST turns and TWIST distance stops are), and a
+//              wheel-speed-only remaining-angle mapping is not this
+//              module's concern to invent.
+//   TWIST   -- v_x shaped on the LINEAR axis, omega shaped on the ANGULAR
+//              axis, EACH independently gated by its own ShaperLimits
+//              fields and each using ITS OWN kind-matched `remaining`
+//              (Distance-kind -> remainingLinear real, remainingAngular
+//              +infinity; Angle-kind -> the reverse; Time-kind -> both
+//              +infinity). A Move whose stop_kind doesn't match a nonzero
+//              component it's ALSO commanding (e.g. a Distance-kind TWIST
+//              Move with a nonzero omega -- an arc, not a pure straight)
+//              still gets that OTHER component accel-ramped (remaining
+//              stays +infinity for it, exactly the Kind::Time posture) --
+//              never decel-tapered, since this module has no basis to
+//              measure "remaining" on an axis the Move's own stop
+//              condition doesn't watch.
+void MoveQueue::shapeAndStage(uint64_t now, float pathLength, float theta) {
+  bool linearShaping = shaperLimits_.aMax > 0.0f && shaperLimits_.aDecel > 0.0f;
+  bool angularShaping = shaperLimits_.alphaMax > 0.0f && shaperLimits_.alphaDecel > 0.0f;
+  if (!linearShaping && !angularShaping) return;  // Drive already holds the raw cruise target
+
+  float dt = static_cast<float>(now - lastShapeNow_) / 1.0e6f;  // [us] -> [s]
+  if (dt < 0.0f) dt = 0.0f;  // clock-monotonicity defense, same posture as StopCondition's own
+  lastShapeNow_ = now;
+
+  const float kInfinity = std::numeric_limits<float>::infinity();
+  float remainingLinear = kInfinity;
+  float remainingAngular = kInfinity;
+  if (active_.kind == Motion::StopCondition::Kind::Distance) {
+    remainingLinear = active_.threshold - std::fabs(pathLength - active_.activationPathLength);
+  } else if (active_.kind == Motion::StopCondition::Kind::Angle) {
+    remainingAngular = active_.threshold - std::fabs(theta - active_.activationTheta);
+  }
+  // Kind::Time -- both axes stay +infinity: accel-limited ramp-up still
+  // applies (Motion::VelocityShaper::next()'s own accel-ramp clamp), no
+  // decel taper (a Time Move ends on elapsed wall-clock time, not
+  // position -- move_queue.h's own tick() doc comment).
+
+  if (active_.velocityKind == msg::Move::VelocityKind::WHEELS) {
+    if (!linearShaping) return;
+    shapedVLeft_ = Motion::VelocityShaper::next(active_.cruiseVLeft, shapedVLeft_, remainingLinear,
+                                                 dt, shaperLimits_.aMax, shaperLimits_.aDecel);
+    shapedVRight_ = Motion::VelocityShaper::next(active_.cruiseVRight, shapedVRight_, remainingLinear,
+                                                  dt, shaperLimits_.aMax, shaperLimits_.aDecel);
+    drive_.setWheels(shapedVLeft_, shapedVRight_);
+    return;
+  }
+
+  // TWIST.
+  float vx = active_.cruiseVX;
+  float omega = active_.cruiseOmega;
+  if (linearShaping) {
+    shapedVX_ = Motion::VelocityShaper::next(active_.cruiseVX, shapedVX_, remainingLinear, dt,
+                                              shaperLimits_.aMax, shaperLimits_.aDecel);
+    vx = shapedVX_;
+  }
+  if (angularShaping) {
+    shapedOmega_ = Motion::VelocityShaper::next(active_.cruiseOmega, shapedOmega_, remainingAngular,
+                                                 dt, shaperLimits_.alphaMax, shaperLimits_.alphaDecel);
+    omega = shapedOmega_;
+  }
+  drive_.setTwist(vx, active_.cruiseVY, omega);
 }
 
 MoveQueue::EnqueueResult MoveQueue::enqueue(const msg::Move& move, uint32_t corrId) {
@@ -109,7 +238,17 @@ MoveQueue::TickResult MoveQueue::tick(uint64_t now, const Odometry& odom) {
   }
 
   Motion::StopCondition::Outcome outcome = sc.tick(now, pathLength, theta);
-  if (outcome == Motion::StopCondition::Outcome::Continue) return result;
+  if (outcome == Motion::StopCondition::Outcome::Continue) {
+    // Velocity shaping (decel-into-the-goal campaign) -- reuses the SAME
+    // (possibly anticipation-predicted) pathLength/theta just computed
+    // above for the stop-condition comparison; see move_queue.h's own
+    // tick()/shapeAndStage() doc comments. Only reached on Continue --
+    // a Move ending THIS cycle is about to be superseded by a
+    // chain-advance activate() or drive_.stop() below regardless, so
+    // shaping it first would be immediately overwritten.
+    shapeAndStage(now, pathLength, theta);
+    return result;
+  }
 
   result.completed = true;
   result.completion.moveId = active_.moveId;
@@ -124,6 +263,16 @@ MoveQueue::TickResult MoveQueue::tick(uint64_t now, const Odometry& odom) {
     activate(next, now, odom.pathLength(), odom.theta());
   } else {
     drive_.stop();
+    // The robot has genuinely stopped -- zero the running shaped-speed
+    // memory too, not just Drive's own staged targets, so the NEXT
+    // unrelated Move (whenever it activates) ramps from a true 0 instead
+    // of inheriting a stale nonzero value from a taper that never finished
+    // (e.g. this Move ended via the timeout backstop mid-taper). See
+    // move_queue.h's own shaped* field doc comment.
+    shapedVX_ = 0.0f;
+    shapedOmega_ = 0.0f;
+    shapedVLeft_ = 0.0f;
+    shapedVRight_ = 0.0f;
   }
 
   return result;
@@ -134,6 +283,13 @@ void MoveQueue::flush() {
   active_.occupied = false;
   active_.moveId = 0;
   drive_.stop();
+  // Same reasoning as tick()'s own empty-queue-drain path above -- the
+  // robot has genuinely stopped, so the running shaped-speed memory must
+  // reset to 0 too, not just Drive's own staged targets.
+  shapedVX_ = 0.0f;
+  shapedOmega_ = 0.0f;
+  shapedVLeft_ = 0.0f;
+  shapedVRight_ = 0.0f;
 }
 
 }  // namespace App

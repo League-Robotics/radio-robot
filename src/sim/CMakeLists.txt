@@ -42,6 +42,10 @@ set(PLANT_DIR "${REPO_ROOT}/src/tests/sim/plant")
 #   motion/stop_condition.cpp -- Motion::StopCondition (116-002), the
 #                                 per-Move stop-condition object MoveQueue
 #                                 owns and drives
+#   motion/velocity_shaper.cpp -- Motion::VelocityShaper (decel-into-the-
+#                                 goal campaign), the pure per-tick
+#                                 commanded-speed shaping function MoveQueue
+#                                 calls every Continue tick
 #   devices/velocity_pid.cpp, devices/nezha_motor.cpp, devices/otos.cpp,
 #   devices/color_sensor.cpp, devices/line_sensor.cpp
 #                              -- the device leaves SimPlant answers wire
@@ -92,9 +96,12 @@ set(APP_SOURCES
 )
 # motion/stop_condition.cpp (116-002) -- App::MoveQueue (APP_SOURCES, above)
 # owns and drives one Motion::StopCondition per active Move; this TU must
-# link into the host lib too.
+# link into the host lib too. motion/velocity_shaper.cpp (decel-into-the-
+# goal campaign) -- MoveQueue's own per-tick commanded-speed shaping,
+# the SAME "MoveQueue links it" reasoning as stop_condition.cpp.
 set(MOTION_SOURCES
     "${SOURCE_DIR}/motion/stop_condition.cpp"
+    "${SOURCE_DIR}/motion/velocity_shaper.cpp"
 )
 set(DEVICE_SOURCES
     "${SOURCE_DIR}/devices/velocity_pid.cpp"
