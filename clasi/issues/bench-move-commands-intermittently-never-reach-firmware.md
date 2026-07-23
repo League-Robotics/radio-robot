@@ -91,6 +91,14 @@ is speculative, not established.
 4. Check whether this correlates with recent motor activity/EMI (motor
    back-EMF coupling into the USB link is a common failure mode for
    exactly this symptom shape).
+5. **Forward note for sprint 120 ticket 002 (bench tour bring-up):**
+   the 120-001 ack ring makes a dropped enqueue OBSERVABLE (a missing ack
+   within the expected window), where before it was silently
+   indistinguishable from a merely-unobserved ack. Ticket 002's own bench
+   tour runner does not need to wait on a deep serial-RX fix here — it
+   can retry-on-missing-ack (re-send the same leg's `Move` if
+   `wait_for_ack()` times out with no completion or enqueue ack observed)
+   to get a tour to close reliably over this lossy link in the meantime.
 
 Not part of sprint 120 ticket 001's scope (which is specifically the ack
 ring, proven fixed by the evidence above) — filed as its own issue.
