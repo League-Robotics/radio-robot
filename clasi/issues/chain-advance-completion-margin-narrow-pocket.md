@@ -4,6 +4,8 @@ filed: 2026-07-23
 filed_by: team-lead (118-003 resolution escalation, commit b736a4ab)
 related:
 - specify-and-assert-the-leg-handoff-contract.md
+tickets:
+- 119-002
 ---
 
 # Chain-advance completion margin is a narrow pocket, not a plateau
