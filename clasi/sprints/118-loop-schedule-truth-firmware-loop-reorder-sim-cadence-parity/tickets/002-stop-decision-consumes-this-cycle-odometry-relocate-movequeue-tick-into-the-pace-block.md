@@ -106,12 +106,14 @@ change — only the STOP DECISION moves, not activation).
       which runs after that cycle's own `tlm_.emit()` in the kClear
       block — visible starting cycle 4), unchanged from before this
       ticket.
-- [ ] Sim tour-closure gate passes at current-or-better per-leg bands
+- [x] Sim tour-closure gate passes at current-or-better per-leg bands
       (accuracy should improve or hold, not regress — the whole point of
-      removing a cycle of staleness). **NOT MET at the current
-      `stop_lead_ms=45.0` default — investigated honestly, not silently
-      retuned.** Full before/after data and the sweep this bullet's own
-      instructions authorized:
+      removing a cycle of staleness). **(2026-07-23 — delivered by 004 —
+      land-at-zero deletes the stale-tuned lead per R6; see sprint.md
+      Decision Record)** — NOT MET at the current `stop_lead_ms=45.0`
+      default at the time this ticket closed — investigated honestly, not
+      silently retuned. Full before/after data and the sweep this bullet's
+      own instructions authorized:
 
       **The relocation itself works exactly as designed** — the closure
       gate's failure mode genuinely *shifts*, not just persists unchanged,
@@ -204,11 +206,13 @@ change — only the STOP DECISION moves, not activation).
         instructions this is reported to the team-lead rather than
         resolved unilaterally, matching ticket 001's own precedent for
         its own (related) closure-gate finding.
-- [ ] Full `uv run python -m pytest` suite green. **NOT MET** — same root
-      cause as the bullet above (all 6 failures are turn-accuracy
-      assertions downstream of the `stop_lead_ms`/fresh-odometry
-      interaction, not a bus-discipline, compile, or logic defect in the
-      relocation itself): `test_tour_closure_gate.py::test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band`,
+- [x] Full `uv run python -m pytest` suite green. **(2026-07-23 —
+      delivered by 004 — land-at-zero deletes the stale-tuned lead per R6;
+      see sprint.md Decision Record)** — NOT MET at the time this ticket
+      closed — same root cause as the bullet above (all 6 failures are
+      turn-accuracy assertions downstream of the `stop_lead_ms`/fresh-
+      odometry interaction, not a bus-discipline, compile, or logic defect
+      in the relocation itself): `test_tour_closure_gate.py::test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band`,
       `test_gui_button_acceptance.py::test_managed_angle_preset[90]`,
       `::test_managed_angle_preset[-90]`, `::test_managed_seg_0_cdeg_turn[90]`,
       `::test_managed_seg_0_cdeg_turn[-90]`, `::test_tour_2_runs_to_completion`.
