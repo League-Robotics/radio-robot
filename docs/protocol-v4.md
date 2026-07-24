@@ -532,6 +532,17 @@ the scalar pair still overwrites (unchanged "freshest ack" semantics,
 affects it (120: replaces the pre-120 "ack-depth-1" tradeoff, where the
 single slot WAS what every caller matched against).
 
+**Every consumer of either ack kind must scan `acks`, not only the scalar
+slot (121-002 — `tour-1-final-leg-completes-only-on-stop.md`).** A MOVE
+completion ack is observable in `acks` across every one of the ring's
+subsequent frames until evicted, not just the ONE frame whose scalar slot
+happened to be fresh for it — a consumer that reads only the scalar slot
+(as `robot_radio.planner.tour`'s own completion poll did until 121-002)
+sees a completion exactly once, on exactly one frame; on a lossy link,
+losing that one frame makes the completion invisible forever even though
+the ring kept carrying it. `wait_for_ack()` (§9) has scanned the ring since
+120; every other completion-ack consumer must too.
+
 **Wire-visible latency (119 ticket 005 — `robot_loop.cpp`'s telemetry-emit
 placement changed alongside the straight-leg-crab actuation fix, see
 `src/firm/app/DESIGN.md` §1's own "119 ticket 005" note).** `RobotLoop::

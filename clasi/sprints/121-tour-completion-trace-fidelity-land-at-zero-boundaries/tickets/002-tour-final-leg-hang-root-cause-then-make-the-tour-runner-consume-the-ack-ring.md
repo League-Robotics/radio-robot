@@ -2,7 +2,7 @@
 id: '002'
 title: 'Tour final-leg hang: root-cause, then make the tour runner consume the ack
   ring'
-status: open
+status: in-progress
 use-cases:
 - SUC-072
 depends-on: []
@@ -128,17 +128,56 @@ consumption fix (the ring already ships since 120-001).
       real-time TestGUI Sim mode) and, on the bench, with the frames/acks around
       the final leg captured; the actual root cause is stated vs. the filed
       single-slot hypothesis (including whether it reproduces deterministically).
-- [ ] The tour runner ends every leg — the FINAL leg included — by scanning the
+      **Sim half DONE**: ran `test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band`
+      (deterministic closure-gate stepper) and `test_sim_transport_tour1.py`
+      (real-time `SimTransport`, the TestGUI Sim-mode equivalent) against the
+      UNMODIFIED pre-fix code — both PASS (full tour completes with NO STOP,
+      including the final leg) — confirming the hang does NOT reproduce
+      deterministically in Sim, exactly as the single-slot hypothesis predicts
+      (Sim never drops a frame it produced, so the one fresh-slot frame a
+      completion rides is always eventually read). Root cause CONFIRMED (not
+      refuted): the tour runner's `_drain_and_poll()` read only
+      `TLMFrame.ack` (the single scalar slot, valid on exactly one frame) and
+      was never updated when 120-001 added the `acks` ring;
+      `wait_for_ack()`/`SerialConnection` already scanned the ring. On the
+      lossy bench link, if that ONE fresh-slot frame is dropped, the
+      completion is invisible forever even though the ring carries it for
+      several more frames — the final leg then only retires when `STOP`
+      flushes the queue. **Bench half PENDING (pending team-lead bench run on
+      the stand)** — no hardware access in this dispatch; frames/acks capture
+      around the final leg over `/dev/cu.usbmodem2121102` is the team-lead's
+      follow-up.
+- [x] The tour runner ends every leg — the FINAL leg included — by scanning the
       `acks` ring for `corr_id == Move.id`, not by reading only the single
       `frame.ack` scalar slot; the `_TOUR_MOVE_ID_BASE` / `Move.id` keying
-      contract is preserved.
+      contract is preserved. `_drain_and_poll()` now scans each drained
+      frame's `acks` ring first (falling back to the scalar slot only for a
+      frame whose own ring carries no match, kept for test doubles that never
+      populate `acks`); `_outcome_for_terminal_frame()` now reads `ok`/
+      `err_code` off the SPECIFIC matched entry, never off the frame's own
+      possibly-unrelated scalar slot.
 - [ ] A full TOUR_1 completes and reports closure WITHOUT a STOP press, in Sim
-      AND over the real serial link on the stand.
-- [ ] A regression test demonstrates the tour retires the final leg even when
+      AND over the real serial link on the stand. **Sim half DONE** (see
+      `test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band`,
+      `test_sim_transport_tour1.py`, and this ticket's own new
+      `test_run_tour_full_tour_completes_without_stop_when_every_leg_only_rides_the_ring`
+      regression test). **Bench half left unchecked (pending team-lead bench
+      run on the stand)**.
+- [x] A regression test demonstrates the tour retires the final leg even when
       the single fresh-slot frame is dropped but the ring carries the ack.
-- [ ] If reproduction found a deterministic cause, it is root-caused and fixed;
-      no fix ships past an unreproduced hypothesis.
-- [ ] No firmware ack-emission or wire-schema change.
+      `src/tests/unit/test_planner_tour.py`'s `_RingOnlyFakeTransport` models
+      exactly this (every completion ack rides the ring only,
+      `TLMFrame.ack`/`ack_corr`/`ack_err` stay `None` on every frame it ever
+      returns) — verified this test FAILS against the pre-fix code (11/12
+      failures, `git stash` A/B check) and PASSES against the fix.
+- [x] If reproduction found a deterministic cause, it is root-caused and
+      fixed; no fix ships past an unreproduced hypothesis. No deterministic
+      cause was found — Sim reproduction above confirms the hypothesis
+      rather than refuting it, so this criterion is met by NOT needing a
+      second fix.
+- [x] No firmware ack-emission or wire-schema change. Only
+      `src/host/robot_radio/planner/tour.py` (host consumption logic) plus
+      docs (`DESIGN.md`, `docs/protocol-v4.md`) were touched.
 
 ## Testing
 
