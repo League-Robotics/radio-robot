@@ -3,7 +3,7 @@ status: pending
 filed: 2026-07-23
 filed_by: team-lead (119-004 out-of-scope findings)
 related: []
-sprint: '126'
+sprint: '127'
 ---
 
 # Stale Ruckig CMake comment + dead DEV-command-family docs in src/tests

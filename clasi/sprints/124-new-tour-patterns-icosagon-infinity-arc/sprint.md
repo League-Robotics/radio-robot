@@ -12,6 +12,16 @@ issues:
 
 # Sprint 124: New tour patterns — icosagon + infinity/arc
 
+> Re-planned check 2026-07-23 (`clasi/issues/replan-sprints-122-plus-to-close-goal-exact-tours.md`):
+> KEPT as detailed, with the stakeholder amendments of 2026-07-23 IN FORCE
+> (already reflected in the spine issue, restated here so detail planning
+> cannot miss them): (1) board-fit resize — TOUR_3 s=120 mm (R=384), TOUR_4
+> L=250 mm (r=144.3, lobe arc 604 mm); (2) NO new arc verb — an arc is a
+> regular `move_twist(v_x, omega, stop_distance)`; the only host change is
+> `parse_tour()` no longer averaging a left!=right `D` step into a straight.
+> Stage bar: goal doc S1 evidence (multiplier patterns). Sequenced after 122's
+> analytic completion lands.
+>
 > Roadmap-level plan (Phase 1). Architecture, use cases, and tickets are
 > filled in at detail-planning time, after sprint 121 lands.
 

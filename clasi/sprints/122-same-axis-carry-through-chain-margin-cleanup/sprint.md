@@ -1,6 +1,6 @@
 ---
 id: '122'
-title: Same-axis carry-through & chain-margin cleanup
+title: Analytic completion & same-axis carry — margin machinery deleted
 status: roadmap
 branch: sprint/122-same-axis-carry-through-chain-margin-cleanup
 worktree: false
@@ -8,111 +8,132 @@ use-cases: []
 issues:
 - chain-advance-reset-defeats-same-axis-compatible-leg-continuity.md
 - chain-advance-completion-margin-narrow-pocket.md
+- land-at-zero-at-orthogonal-chain-boundaries.md
+- s1-gate-ratchet-harden-ideal-chip-gates-at-goal-bars.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
-# Sprint 122: Same-axis carry-through & chain-margin cleanup
+# Sprint 122: Analytic completion & same-axis carry — margin machinery deleted
 
-> Roadmap-level plan (Phase 1). Architecture, use cases, and tickets are
-> filled in at detail-planning time, after sprint 121 lands.
+> Re-planned per `clasi/issues/replan-sprints-122-plus-to-close-goal-exact-tours.md`
+> and sprint 121-003's close-out finding (2026-07-23). This sprint is the S1
+> keystone: it deletes every completion margin constant, replaces them with
+> one derived rule, restores same-axis carry, and hardens the S1 gates.
 
 ## Goals
 
-Finish the chain-advance boundary story that sprint 121 starts. 121 makes
-ORTHOGONAL boundaries (turn->straight, straight->turn) land at zero with the
-final-move predicate. 122 owns the OTHER half: SAME-AXIS COMPATIBLE
-boundaries (e.g. two `Distance` legs at the same `v_max`, same sign), where
-velocity SHOULD carry through the boundary seamlessly and does not today.
+Three jobs, one theme — completion semantics become physics, not tuning:
+
+1. **Analytic completion replaces ALL margin machinery.** 121-003 proved
+   (and the team-lead boundary trace confirmed, numbers below) that no
+   fraction of a COMMANDED-speed envelope can represent the PLANT's coast:
+   under the taper the plant lags the command by `alpha_decel * tau_plant`
+   (7 x 0.13 ~= 0.9 rad/s — measured 0.96–1.34 rad/s at the ack instant), so
+   a tight margin crosses the threshold "at cmd ~= 0" yet still coasts ~7deg
+   (the 0.92 -> 8deg inversion), and a loose one fires early and leaks
+   2–4deg into the next leg. Replace `kStoppingMarginFactorChain` (0.48),
+   `kStoppingMarginFactorOrthogonal` (0.67 — 121-003's own labeled interim
+   defect marker), `kStoppingMarginFactorFinal` (0.92), and
+   `kDiscretizationCyclesChain` with ONE derived firing rule on MEASURED
+   speed:
+
+       Angle:    remaining <= |omega_measured| * (kCycle/2 + tau_plant)
+       Distance: remaining <= |v_measured|     * (kCycle/2 + tau_plant)
+
+   applied uniformly to final, orthogonal-chain, and (as the terminal
+   condition under carry) same-axis boundaries. `tau_plant` enters the robot
+   JSON as ONE new named, bench-derived constant (plant_harness
+   characterization 0.12–0.14 s) — a measured physical quantity per the
+   replan's standing rule 3, not a swept margin. **No sweeping anywhere in
+   this sprint: if the analytic form misses its numbers, the model is wrong —
+   re-derive (e.g. a second-order coast term), never tune.**
+2. **Same-axis carry restored.** The unconditional completing-axis shaper
+   reset defeats SUC-003/SUC-051 (dip to 24 mm/s at a compatible
+   Distance->Distance boundary vs the 90%-of-v_max floor). Make the reset
+   conditional on the incoming Move sharing the ending Move's stop-kind axis
+   and sign (the `sameAxisCompatible()` split 121-003 already landed is the
+   scaffolding).
+3. **S1 gate ratchet.** With 1–2 landed, convert the ideal-chip gates to
+   permanent hard asserts at the goal-doc S1 bar (per-motion <=0.1deg/<=1mm;
+   tour net <=0.5deg, closure <=5mm, per-leg straight gain <=0.1deg) — see
+   the ratchet issue for the named-floor escape (stakeholder adjudicates;
+   tolerances never loosen).
 
 ## Problem
 
-Two coupled defects in `App::MoveQueue`'s completion/reset logic
-(`src/firm/app/move_queue.cpp`):
+Current measured state (deterministic sim, ideal chip, HEAD=121-003 commit
+81fa7858): TOUR_1 net +21.0deg over 540; straights after turns +1.2–2.8deg
+each; turns +0.7–2.3deg; single-boundary trace: predicate fires at +90.95
+with plant omega 1.34 rad/s, coasts to +93.7. Root cause per Goals-1:
+commanded-envelope margins cannot express plant coast. Separately, same-axis
+boundaries dip to 16% of v_max (reset defeats carry). Both are
+completion/hand-off semantics — the last error sources standing between this
+codebase and S1.
 
-1. **Reset defeats same-axis continuity** (SUC-003 regression).
-   `MoveQueue::tick()` hard-resets the completing axis's shaper
-   (`shaperVX_`/`shaperOmega_`) to `(0, 0)` at EVERY completion boundary,
-   unconditionally. For two genuinely compatible same-axis, same-kind chained
-   legs, the next `Move`'s `activate()` then reads that just-zeroed
-   `commandedSpeed()` as its carried starting point, so the robot decelerates
-   to ~16% of `v_max` and re-accelerates at the boundary instead of carrying
-   straight through. Reproduction:
-   `test_two_compatible_distance_legs_carry_velocity_through_the_boundary_at_tour_level`
-   (`src/tests/testgui/test_tour_closure_gate.py`) measures a dip to
-   24.0 mm/s against a 90%-of-`v_max` no-dip floor.
-2. **Chain-margin narrow pocket.** `kStoppingMarginFactorChain` /
-   `kDiscretizationCyclesChain` sit in a swept-but-fragile pocket. After 121,
-   these constants NO LONGER govern orthogonal boundaries (land-at-zero
-   replaces that use), so their only remaining role is same-axis boundaries —
-   exactly 122's concern. This is where the narrow-pocket story concludes.
+## Solution (plan of record)
 
-## Solution (candidate — confirm at detail time)
-
-Make the completing-axis reset in `MoveQueue::tick()` CONDITIONAL on whether
-the incoming chained `Move` (`pending_[0]`, when `pendingCount_ > 0`) shares
-the ending `Move`'s own stop-kind axis and sign:
-
-- Same axis, same kind, compatible sign (`Distance`->`Distance`, both `v_x`):
-  SKIP the reset — carry `commandedSpeed()`/`commandedAccel()` through,
-  restoring SUC-051/SUC-003 seamless hand-off.
-- Different axis/kind (the orthogonal case, now owned by 121's land-at-zero):
-  keep the reset — cuts the stale-residual leak the reset was added to guard.
-
-RE-SWEEP `kStoppingMarginFactorChain`/`kDiscretizationCyclesChain` jointly
-with the conditional reset against the tour-closure gate (the unconditional
-reset was part of what the prior sweep tuned against, so a conditional variant
-needs its own pass). If the re-sweep shows the conditional variant regresses
-chain accuracy again (as a `pendingCount()`-gated variant already did once in
-118-003), escalate for an explicit stakeholder decision to accept a bounded
-same-axis dip and replace the no-dip assertion with a stated
-bounded-recovery-time check.
+- `MoveQueue::landAtZero()` -> analytic completion: fire when remaining is
+  inside the measured-speed coast envelope (formulas above). Measured speed
+  comes from the same-cycle odometry twist the tick already has (post-118
+  ordering). Delete the four margin constants and their comment archaeology;
+  `move_queue.cpp`'s anonymous-namespace sweep history moves to DESIGN.md as
+  a closed chapter.
+- Conditional reset per Goals-2; orthogonal boundaries keep the reset (the
+  residual is near-zero once analytic completion fires correctly).
+- Gate work per Goals-3, including per-motion gates (90/360 turn, 700 mm
+  straight) alongside the tour gates.
 
 ## Success Criteria
 
+- The margin/discretization constants NO LONGER EXIST in firmware; grep-clean.
+- Deterministic sim, ideal chip: straights following turns gain <=0.3deg
+  each; turn legs |error| <=0.5deg; TOUR_1 net 540deg +-1deg — and then the
+  ratchet: S1 bar met (<=0.1deg/motion, tour <=0.5deg) or the physical floor
+  is named with a measurement and stakeholder sign-off.
 - `test_two_compatible_distance_legs_carry_velocity_through_the_boundary_at_tour_level`
-  passes with its 90%-of-`v_max` no-dip floor intact, OR the stakeholder has
-  explicitly accepted the dip and the assertion is replaced with a stated,
-  bounded-recovery-time check.
-- The narrow-pocket finding is re-verified (not silently changed) by whatever
-  the fix turns out to be; chain turn accuracy under the tour-closure gate
-  does not regress.
-- 121's orthogonal-boundary land-at-zero behavior is unaffected.
+  passes with the 90% no-dip floor intact (or an explicit stakeholder-accepted
+  bounded-recovery alternative).
+- 121's orthogonal land-at-zero behavior strictly improves (per-boundary
+  leak <=0.3deg, from measured 2–4deg).
+- Full suite green; S1 gates run hard (no xfail) in the default suite.
 
 ## Scope
 
 ### In Scope
 
-- `App::MoveQueue::tick()` completing-axis reset conditionalization
-  (`src/firm/app/move_queue.cpp`).
-- Joint re-sweep of `kStoppingMarginFactorChain`/`kDiscretizationCyclesChain`
-  against the tour-closure gate.
-- Firmware; Sim-testable via the closure gate; hardware bench verify if the
-  reset/margin change is behaviorally observable on the stand.
+- `App::MoveQueue` completion predicate + reset conditionalization
+  (`src/firm/app/move_queue.cpp`); `tau_plant` config key + boot plumbing;
+  gate hardening in `src/tests/testgui/test_tour_closure_gate.py` plus a new
+  per-motion gate file.
 
 ### Out of Scope
 
-- Orthogonal-boundary land-at-zero (sprint 121 owns it).
-- Heading-hold on Distance moves (sprint 123).
-- Any host/tour-runner change.
+- Heading-hold (123); new tours (124); any host/tour-runner change beyond
+  gate tests; OTOS fusion (126-replanned).
 
 ## Dependencies / Sequencing
 
-- **Depends on 121.** Land-at-zero must land first: it decouples the two
-  chain constants from orthogonal boundaries, so 122's re-sweep governs ONLY
-  the same-axis case. Doing 122 before 121 would re-entangle the two.
-- Independent of 123/124/125/126/127.
+- After 121 closes (stakeholder decision 2026-07-23: Accept + defer, with
+  the amendment recorded in 121's close-out).
+- Blocks 123/124's acceptance numbers; independent of 125.
 
 ## Architecture
 
-Deferred to detail planning. Expected tier: compact-to-substantial (a single
-firmware module, `App::MoveQueue`, but a control-behavior change that needs a
-re-sweep and a same-axis-carry regression guard).
+Compact: one firmware module (`App::MoveQueue`), one config key, gate tests.
+The analytic rule is the derived version of what the deleted `stop_lead_ms`
+and the margin family approximated by sweep — see
+`docs/code_review/2026-07-23-exactness-review.md` §2.1 and 121's close-out.
 
 ## Use Cases
 
-Deferred to detail planning. Expected to refine SUC-003/SUC-051 (seamless
-same-axis hand-off).
+Refines SUC-003/SUC-051 (seamless same-axis hand-off) and SUC-074 (land at
+zero) — SUC-074's accuracy numbers transfer here and tighten to the S1 bar.
 
 ## Tickets
 
-Deferred to detail planning.
+Detail-planning to cut approximately:
+
+1. Analytic completion (measured-speed coast rule, margin deletion,
+   `tau_plant` config key).
+2. Conditional completing-axis reset (same-axis carry) + the no-dip gate.
+3. S1 gate ratchet (hard gates, per-motion + tour, ratchet rule recorded).

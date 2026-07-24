@@ -12,6 +12,15 @@ issues:
 
 # Sprint 123: Heading-hold during Distance moves
 
+> Re-planned check 2026-07-23 (`clasi/issues/replan-sprints-122-plus-to-close-goal-exact-tours.md`):
+> KEPT as detailed. Stage bar: goal doc S1 (sim exactness of straights) with
+> the big payoff at S3 (hardware disturbance rejection). NOTE for detail
+> planning: `control.heading_kp` was DELETED by 119-003's config-attic sweep —
+> this sprint ADDS the key back with a real consumer (do not assume it still
+> exists). Acceptance numbers below are unchanged and cite
+> `docs/design/goal-exact-tours.md` S1: a clean-entry straight stays +0.00 deg;
+> corrected legs end <= 0.3 deg from activation heading.
+>
 > Roadmap-level plan (Phase 1). Architecture, use cases, and tickets are
 > filled in at detail-planning time, after sprints 121 (and ideally 122) land.
 
