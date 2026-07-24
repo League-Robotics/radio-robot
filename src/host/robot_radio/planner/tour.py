@@ -7,10 +7,13 @@ leg while the CURRENT one is still active (one-leg lookahead, SUC-003) so
 firmware's own bounded queue and boundary-velocity carry sequence
 compatible legs without decelerating to a stop. Per-leg completion is
 driven by that `Move`'s own completion EVENT (`docs/protocol-v4.md`
-section 7.2's single ack slot, matched on `Move.id`), never a host-timed
-settle delay or a polled `fault_bits` check. Full history (the sprint 107
-origin, the 109-008 Move-queue adoption, the 2026-07-22 protocol-v4 port):
-src/host/robot_radio/DESIGN.md.
+section 7.2, matched on `Move.id`, scanned off the bounded `acks` ring --
+121-002 fixed this module's own completion poll to scan the ring rather
+than only the single scalar "freshest ack" slot, closing
+`tour-1-final-leg-completes-only-on-stop.md`), never a host-timed settle
+delay or a polled `fault_bits` check. Full history (the sprint 107 origin,
+the 109-008 Move-queue adoption, the 2026-07-22 protocol-v4 port, the
+121-002 ack-ring fix): src/host/robot_radio/DESIGN.md.
 
 Boundary: inside -- the geometry data, parsing it into typed leg specs,
 the per-leg run loop (build a `Move` per leg, enqueue one leg ahead, poll
@@ -52,7 +55,7 @@ from robot_radio.planner.executor import RunOutcome, RunState, TickResult
 if TYPE_CHECKING:
     from robot_radio.planner.heading import HeadingCorrector
     from robot_radio.planner.model import PlannerParams
-    from robot_radio.robot.protocol import TLMFrame
+    from robot_radio.robot.protocol import AckEntry, TLMFrame
 
 logger = logging.getLogger(__name__)
 
@@ -179,10 +182,11 @@ _MOVE_MIN_TIMEOUT = 2000.0    # [ms]
 
 # `Move.id` values `run_tour()` assigns to its own legs -- offset far above any realistic
 # session-scoped envelope `corr_id` so a leg's COMPLETION ack (echoes `Move.id`) can never be
-# mistaken for some OTHER command's ENQUEUE ack (echoes `corr_id`) landing in the single ack slot
-# -- see `_drain_and_poll()`'s own docstring for why that collision would be a false-positive.
+# mistaken for some OTHER command's ENQUEUE ack (echoes `corr_id`) landing in the same ack
+# ring/slot -- see `_drain_and_poll()`'s own docstring for why that collision would be a
+# false-positive.
 _TOUR_MOVE_ID_BASE = 1 << 20
-DEFAULT_POLL_INTERVAL = 0.05  # [s] sleep between two consecutive ack-slot polls
+DEFAULT_POLL_INTERVAL = 0.05  # [s] sleep between two consecutive ack-ring polls
 
 _BEGIN_DRAIN_RETRIES = 5  # bounded retry -- a single read_pending_binary_tlm_frames() call can
 _BEGIN_DRAIN_RETRY_INTERVAL = 0.05  # [s] legitimately race an idle queue between two ~25Hz pushes and come back empty.
@@ -392,27 +396,64 @@ def _move_kwargs_for_leg(leg: TourLeg, v_max: float, turn_rate: float,
 
 
 def _drain_and_poll(transport: "MoveTransport", move_id: int,
-                    latest_frame: list) -> "TLMFrame | None":
+                    latest_frame: list) -> "tuple[TLMFrame, AckEntry] | None":
     """Non-blocking: drain every currently-pending `TLMFrame`, updating
     `latest_frame[0]` to the last one drained (mirrors the pre-109-008
-    path's own `ex.latest_frame` bookkeeping), and return the FIRST drained
-    frame whose ack slot is fresh AND matches `move_id`, or `None` if none
-    of them carry one yet.
+    path's own `ex.latest_frame` bookkeeping), and return the
+    `(frame, ack_entry)` pair for the FIRST drained frame that carries an
+    ack matching `move_id`, or `None` if none of them carry one yet.
+
+    121-002 (tour-1-final-leg-completes-only-on-stop.md): scans each
+    drained frame's bounded `acks` ring (`frame.acks`, `docs/protocol-v4.md`
+    section 7.1, 120) FIRST, mirroring `io/serial_conn.py`'s
+    `_match_ack_in_frames()`/`SerialConnection.wait_for_ack()` own matching
+    policy (first `(frame, ring-entry)` pair, frames in arrival order, ring
+    entries oldest-pushed-first) -- that helper cannot be imported directly
+    (it scans raw `pb2.ReplyEnvelope` objects off `drain_binary_tlm()`, not
+    the already-adapted `TLMFrame`/`AckEntry` dataclasses this module's own
+    `MoveTransport.read_pending_binary_tlm_frames()` returns -- the same
+    "small reimplementation, not an import" call `io/sim_config.py`'s
+    `SimConfigConn.poll_ack()` already made for the identical layering
+    reason; see that method's own doc comment), so this is the TLMFrame-
+    layer counterpart of the same policy. Falls back to the single
+    "freshest ack" scalar slot (`frame.ack`, valid iff `frame.ack_fresh`)
+    ONLY when a frame's own ring carries no match -- a real wire frame that
+    sets `frame.ack` always pushes the SAME ack onto `frame.acks` in the
+    SAME cycle (`docs/protocol-v4.md` section 7.1's "purely additive"
+    wire change), so this fallback exists for test doubles that populate
+    only the scalar slot (e.g. `test_tour1_geometry.py`'s
+    `_FakeTwistTransport`), not for any real frame the ring itself would
+    miss.
+
+    Root cause this replaces (planning-time finding, confirmed by
+    reproduction -- see this module's own file header / the ticket): reading
+    ONLY `frame.ack` meant a `Move`'s own completion ack was observable on
+    exactly ONE drained frame; if THAT specific frame was ever dropped (the
+    lossy bench link, not Sim, which never drops a frame it produced), the
+    completion was invisible forever even though the SAME ack kept riding
+    the ring for `kAckRingDepth`-1 more frames after it -- exactly the
+    "single ack slot" mechanism the 120 ack ring exists to route around,
+    which `wait_for_ack()` already used and this function did not.
 
     `docs/protocol-v4.md` section 7.2: a `Move`'s own COMPLETION ack echoes
-    `Move.id` (`frame.ack.corr_id`, valid iff `frame.ack_fresh`/
-    `frame.ack is not None`) -- NEVER the enqueue envelope's own `corr_id`,
-    which is a DIFFERENT ack (sent earlier, when the command was merely
-    accepted onto the queue, not yet finished). Matching on `move_id` here
-    is therefore correct and sufficient PROVIDED `move_id` cannot collide
-    with some other command's own auto-assigned envelope `corr_id` landing
-    in the same single ack slot -- `_TOUR_MOVE_ID_BASE`'s own comment is why
-    that is true for every `move_id` `run_tour()` assigns."""
-    terminal: "TLMFrame | None" = None
+    `Move.id` -- NEVER the enqueue envelope's own `corr_id`, which is a
+    DIFFERENT ack (sent earlier, when the command was merely accepted onto
+    the queue, not yet finished). Matching on `move_id` here is therefore
+    correct and sufficient PROVIDED `move_id` cannot collide with some other
+    command's own auto-assigned envelope `corr_id` landing in the same ring/
+    slot -- `_TOUR_MOVE_ID_BASE`'s own comment is why that is true for
+    every `move_id` `run_tour()` assigns."""
+    terminal: "tuple[TLMFrame, AckEntry] | None" = None
     for frame in transport.read_pending_binary_tlm_frames():
         latest_frame[0] = frame
+        if terminal is not None:
+            continue
+        for entry in frame.acks:
+            if entry.corr_id == move_id:
+                terminal = (frame, entry)
+                break
         if terminal is None and frame.ack is not None and frame.ack.corr_id == move_id:
-            terminal = frame
+            terminal = (frame, frame.ack)
     return terminal
 
 
@@ -423,7 +464,7 @@ def _wait_for_move_terminal(transport: "MoveTransport", move_id: int, latest_fra
                             should_stop: Callable[[], bool] | None,
                             row_callback: RowCallback | None,
                             global_tick_index_box: list, leg_index: int, leg: TourLeg,
-                            ) -> "tuple[TLMFrame | None, int, bool]":
+                            ) -> "tuple[tuple[TLMFrame, AckEntry] | None, int, bool]":
     """Poll for `move_id`'s own terminal (completion-ack-bearing) frame, up
     to `timeout` seconds, sleeping `poll_interval` between polls. Also polls
     `should_stop()` once per iteration (mirrors the pre-109-008 path's own
@@ -433,14 +474,15 @@ def _wait_for_move_terminal(transport: "MoveTransport", move_id: int, latest_fra
     `RunOutcome.STOPPED`, matching the OLD path's `stop_now()` shape).
     `row_callback`, if given, fires once per poll iteration.
 
-    Returns `(terminal_frame_or_None, tick_count, stop_requested)` --
-    `terminal_frame_or_None` is `None` on either a `should_stop()` interrupt
-    or a genuine timeout (the caller distinguishes the two via
-    `stop_requested`); when not `None`, it is the drained `TLMFrame` whose
-    ack slot matched `move_id` -- the caller reads its own
-    `fault_move_timeout` flag (`_outcome_for_terminal_frame()`) to learn
-    whether this leg ended via its stop condition or its `Move.timeout`
-    backstop.
+    Returns `(terminal_or_None, tick_count, stop_requested)` --
+    `terminal_or_None` is `None` on either a `should_stop()` interrupt or a
+    genuine timeout (the caller distinguishes the two via `stop_requested`);
+    when not `None`, it is the `(frame, ack_entry)` pair
+    `_drain_and_poll()` matched on `move_id` (121-002: the ack ring, not
+    only the single scalar slot -- see that function's own docstring) --
+    the caller reads `frame`'s own `fault_move_timeout` flag plus
+    `ack_entry.ok` (`_outcome_for_terminal_frame()`) to learn whether this
+    leg ended via its stop condition or its `Move.timeout` backstop.
     """
     deadline = clock_fn() + timeout
     tick_count = 0
@@ -463,9 +505,20 @@ def _wait_for_move_terminal(transport: "MoveTransport", move_id: int, latest_fra
         sleep_fn(poll_interval)
 
 
-def _outcome_for_terminal_frame(frame: "TLMFrame") -> RunOutcome:
-    """Map one leg's own terminal frame (the frame `_drain_and_poll()`
-    matched on this leg's `Move.id`) onto a `RunOutcome`.
+def _outcome_for_terminal_frame(frame: "TLMFrame", ack: "AckEntry") -> RunOutcome:
+    """Map one leg's own terminal `(frame, ack)` pair (`_drain_and_poll()`'s
+    own match on this leg's `Move.id`) onto a `RunOutcome`.
+
+    121-002: `ack` is the SPECIFIC ring entry (or, on the scalar-slot
+    fallback, `frame.ack`) `_drain_and_poll()` actually matched -- read
+    `ok`/`err_code` off THAT entry, never off `frame.ack` directly, since a
+    ring match's own entry and the enclosing frame's "freshest ack" scalar
+    slot can genuinely disagree (the frame carrying `move_id`'s completion
+    somewhere in its ring is not necessarily the SAME frame whose scalar
+    slot is fresh for `move_id` -- it may be fresh for some OTHER, later
+    command instead by the time this frame is read). `fault_move_timeout`
+    stays a `frame`-level flag (`TLMFrame.flags` bit 15), not part of any
+    ack, so it is still read off `frame` directly.
 
     `docs/protocol-v4.md` section 7.3 (AS-BUILT): a GENUINE completion
     ack's own `ack_err` is UNCONDITIONALLY 0, regardless of whether the
@@ -480,16 +533,16 @@ def _outcome_for_terminal_frame(frame: "TLMFrame") -> RunOutcome:
     the tour for.
 
     Defense in depth (turn-prediction-campaign fix): a nonzero `ack_err` on
-    the matched frame is ALSO treated as a fault, never `COMPLETED` --
+    the matched entry is ALSO treated as a fault, never `COMPLETED` --
     covers an `ERR_FULL` enqueue-rejection ack that reaches this function
     despite `SimLoop.move()`'s own corr_id/move_id aliasing fix (see that
     method's doc comment), e.g. a future caller that reintroduces the
     aliasing, or a genuinely-colliding `Move.id`/envelope `corr_id` pair.
     `ack_err` is unconditionally 0 on every REAL completion ack (the
     comment above), so this check is a no-op on the happy path and only
-    ever fires on a frame that was never a real completion in the first
+    ever fires on an entry that was never a real completion in the first
     place."""
-    if frame.ack is not None and not frame.ack.ok:
+    if not ack.ok:
         return RunOutcome.FAULT
     return RunOutcome.FAULT if frame.fault_move_timeout else RunOutcome.COMPLETED
 
@@ -629,7 +682,7 @@ def run_tour(
                         index + 1, len(legs), move_ids[index])
             outcome = RunOutcome.FAULT
         else:
-            outcome = _outcome_for_terminal_frame(terminal)
+            outcome = _outcome_for_terminal_frame(*terminal)
 
         heading_after = heading.measured_heading(latest_frame[0])
         duration = clock_fn() - leg_start

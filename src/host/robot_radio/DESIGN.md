@@ -162,13 +162,66 @@ depth-3 ack ring were replaced by `Telemetry`'s single ack slot
 (`ack_corr`/`ack_err`) — since 120, additionally backed by a bounded
 ack RING (`acks`, depth 4; see §5's own `wait_for_ack()` note below) —
 which carries EITHER a command's enqueue ack OR a `Move`'s own completion
-ack (`docs/protocol-v4.md` §7.2) — `tour.py`'s own
-`_drain_and_poll()`/`_outcome_for_terminal_frame()` poll and read that
-slot keyed on `Move.id`, never the enqueue envelope's `corr_id`.
+ack (`docs/protocol-v4.md` §7.2), keyed on `Move.id`, never the enqueue
+envelope's `corr_id`.
+
+**121-002 (tour-1-final-leg-completes-only-on-stop.md): `tour.py`'s own
+completion poll scans the RING, resolving the slot-vs-ring conflation this
+paragraph used to state ambiguously.** `_drain_and_poll()` was never
+updated when 120 added the ack ring — it kept reading only the single
+scalar slot (`TLMFrame.ack`, valid on exactly ONE drained frame), even
+though `wait_for_ack()` (§5) had already moved onto the ring. On the lossy
+bench link (~40% frame loss measured), a `Move`'s own completion ack rode
+exactly that one frame; if it was ever dropped, the completion was
+invisible forever, even though the identical ack kept riding `acks` for
+several more frames after it — the exact failure the ring exists to route
+around. Symptom: every leg of a tour completed except the FINAL one, which
+sat idle until a `STOP` flushed the queue and the runner's
+`should_stop()` path retired it as `STOPPED` instead. Confirmed NOT to
+reproduce deterministically in Sim (neither the closure-gate's
+deterministic stepper nor a real-time `SimTransport` connection ever drops
+a frame it produced) — matching the mechanism's own prediction, and ruling
+out an additional firmware/host completion-path cause. Fixed:
+`_drain_and_poll()` now scans each drained frame's `acks` ring FIRST for an
+entry matching `Move.id` (mirroring `io/serial_conn.py`'s
+`_match_ack_in_frames()` matching policy at the already-adapted
+`TLMFrame`/`AckEntry` layer — that helper itself works on raw
+`pb2.ReplyEnvelope` objects and cannot be imported directly, the same
+layering reason `io/sim_config.py`'s `SimConfigConn.poll_ack()` already
+documents for its own small reimplementation), falling back to the scalar
+slot only when a frame's own ring carries no match (kept for test doubles
+that never populate `acks`, e.g. `test_tour1_geometry.py`'s
+`_FakeTwistTransport`). `_outcome_for_terminal_frame()` now reads
+`ok`/`err_code` off the SPECIFIC matched entry, never off the enclosing
+frame's own (possibly unrelated) scalar slot — the two can genuinely
+differ once ring scanning is in play. `_TOUR_MOVE_ID_BASE`'s own
+collision-avoidance contract is unchanged.
 `planner.executor.StreamingExecutor`/`planner.profile`
 themselves were untouched by either move — only TOURS (this module)
 changed path; they remain the dormant half of `planner/` (see the
 `planner/` row above).
+
+**`testgui/traces.py`'s encoder dead-reckoner: integrator-vs-append split
+(121-001).** `TraceModel.feed()`'s host-side `EncoderDeadReckoner` fallback
+(097, used because binary telemetry carries no wire `encpose` field at all)
+used to share ONE gate — a single `if frame.active is False: return` — for
+two different jobs: (1) advancing the O(1) integrator state from
+`frame.enc`, and (2) deciding whether to append a new point to the
+`encoder` polyline. That coupling starved the integrator of a completed
+motion's tail (its taper end, final control cycle, and mechanical coast —
+real wheel travel that keeps arriving in `frame.enc` for a few more frames
+after `frame.active` drops `False`), observed on the bench as `encpose`
+running ~10 deg short per 360 deg turn even though `enc`/`pose`/`otos` all
+read correctly. The fix splits the two jobs: the integrator
+(`EncoderDeadReckoner.update()` / `TraceModel.last_encpose`) now runs on
+EVERY frame carrying `enc`, unconditionally; only the trace-list append
+(`_feed_encpose(..., append=...)`, gated by `frame.active`/the idle-epsilon
+dead-band) is conditional — preserving the original idle-trace-growth
+guard exactly. `otos`/`fused` did not need the same split: both diff an
+already-absolute firmware pose against a fixed baseline rather than
+integrating a per-step delta themselves, so skipping their append on an
+inactive frame loses no information the way skipping an integrator step
+does — their gating and baseline semantics are unchanged.
 
 ## 5. Interfaces
 

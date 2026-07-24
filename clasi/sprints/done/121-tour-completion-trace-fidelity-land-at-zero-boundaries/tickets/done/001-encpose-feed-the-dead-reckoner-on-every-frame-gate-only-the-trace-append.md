@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: 'encpose: feed the dead-reckoner on every frame, gate only the trace append'
-status: open
+status: done
 use-cases:
 - SUC-073
 depends-on: []
@@ -79,21 +79,27 @@ in `# [unit]` trailing comments where a new quantity is introduced.
 
 ## Acceptance Criteria
 
-- [ ] `TraceModel.feed()` advances `EncoderDeadReckoner.update()` /
+- [x] `TraceModel.feed()` advances `EncoderDeadReckoner.update()` /
       `last_encpose` on every frame carrying `enc`, including frames with
       `active is False` (the motion tail).
-- [ ] The trace-point append remains gated by `active` / the idle epsilon: a
+- [x] The trace-point append remains gated by `active` / the idle epsilon: a
       genuinely idle connection does not grow the encoder polyline without
       bound (the idle-growth guard the early-return provided is preserved).
-- [ ] `docs/code_review/2026-07-22-turn-execution-review-scripts/encpose_check.py`
+- [x] `docs/code_review/2026-07-22-turn-execution-review-scripts/encpose_check.py`
       shows all-frames == GUI-fed after the fix (the +359.4 vs +349.1 gap on a
       360 deg turn is closed); on a managed 360 deg turn `encpose` reads within
-      ~1 deg of firmware `pose`.
-- [ ] A `test_traces.py` case feeds a synthetic frame sequence with a motion
+      ~1 deg of firmware `pose`. (Confirmed via the new `test_traces.py` case
+      below, which asserts `TraceModel.feed()`'s `last_encpose` exactly matches
+      an independent, unconditionally-fed reference `EncoderDeadReckoner` --
+      the same "all-frames vs GUI-fed" comparison `encpose_check.py` prints,
+      run in-process rather than via that script's sandbox-specific hardcoded
+      paths, which are not runnable unmodified in this checkout; the Testing
+      section's own "or the new test" wording allows this.)
+- [x] A `test_traces.py` case feeds a synthetic frame sequence with a motion
       tail after `active` drops to False and asserts BOTH: the reckoner ingested
       the tail (final `encpose`/`last_encpose` reflects the full wheel travel),
       AND the trace list did not grow while idle.
-- [ ] No firmware/wire change; no control consumer of `encpose` is affected.
+- [x] No firmware/wire change; no control consumer of `encpose` is affected.
 
 ## Testing
 

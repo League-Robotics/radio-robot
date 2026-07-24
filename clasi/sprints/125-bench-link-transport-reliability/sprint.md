@@ -64,6 +64,10 @@ recommended operational workaround.
   with a documented workaround (e.g. the 120-001 note that a tour runner can
   retry-on-missing-ack now that a dropped enqueue is OBSERVABLE).
 - Hardware bench verify on the stand.
+- `.claude/rules/hardware-bench-testing.md` corrected (replan addition): the
+  stale banner shape, "ack slot" wording, and deploy commands match current
+  firmware/tooling — it is the live bench checklist and must not lie
+  (exactness review §7).
 
 ## Scope
 
@@ -97,4 +101,6 @@ Deferred to detail planning.
 
 ## Tickets
 
-Deferred to detail planning.
+Deferred to detail planning. Replan addition: one small ticket to fix
+`.claude/rules/hardware-bench-testing.md` (banner, ack-ring wording, deploy
+commands) alongside the diagnosis work — same bench session, zero code risk.

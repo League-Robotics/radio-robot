@@ -134,10 +134,32 @@ _TURN_TOLERANCE_IDEAL_DEG = 0.05      # "EXACT" -- negligible-epsilon, not "with
 # from _ENC_SCALE_ERR_L/_ENC_SCALE_ERR_R (a genuine per-wheel effective-
 # diameter mismatch the velocity PID closes on, not measurement noise) --
 # confirmed present even on leg 1 (2.36deg, no preceding turn at all).
-_CRUISE_HEADING_TOLERANCE_IDEAL_DEG = 5.5        # margin over measured worst 4.2538deg
-                                                  # (TOUR_1/ideal leg 7, chain-advance-adjacent)
-_CRUISE_HEADING_TOLERANCE_REALISTIC_DEG = 10.5   # margin over measured worst 9.3066deg
-                                                  # (TOUR_1/realistic leg 5, chain-advance-adjacent
+#
+# 121 ticket 003 (land-at-zero-at-orthogonal-chain-boundaries.md) RE-
+# MEASURED these against the new orthogonal-boundary land-at-zero split
+# (App::MoveQueue::landAtZero()'s own kStoppingMarginFactorOrthogonal,
+# move_queue.cpp) -- both TOUR_1 and TOUR_2 alternate Distance/Angle
+# unconditionally, so EVERY chain boundary in either tour is orthogonal,
+# and this is now the FIRST re-measurement of these tolerances under that
+# split rather than the undifferentiated chain margin 119-005 measured
+# them against. Worst moved from TOUR_1 to TOUR_2 (a different leg, not a
+# location this file previously reported) but stayed the SAME ORDER of
+# magnitude: ideal 4.2538deg -> 4.1041deg (TOUR_2/ideal leg 13, a slight
+# improvement); realistic 9.3066deg -> 9.8521deg (TOUR_2/realistic leg 9,
+# a slight regression). Net: this ticket's own aspirational target
+# (straight-following-turn gain <=0.3deg) is NOT achieved -- the residual
+# is the REAL plant's own post-reset momentum decay, not a marginFactor-
+# fixable taper-remaining-distance effect (full derivation:
+# move_queue.cpp's own anonymous-namespace comment, "HONEST RESIDUAL").
+# Tolerances below are LEFT UNCHANGED (not tightened): the achieved worst
+# numbers do not clearly beat the prior baseline enough to tighten with
+# real margin, and 5.5/10.5 already hold with 1.3959deg/0.6479deg margin
+# respectively against the NEW worst -- tightening further would risk
+# flaking on ordinary run-to-run float noise for no real gain.
+_CRUISE_HEADING_TOLERANCE_IDEAL_DEG = 5.5        # margin over measured worst 4.1041deg
+                                                  # (TOUR_2/ideal leg 13, chain-advance-adjacent)
+_CRUISE_HEADING_TOLERANCE_REALISTIC_DEG = 10.5   # margin over measured worst 9.8521deg
+                                                  # (TOUR_2/realistic leg 9, chain-advance-adjacent
                                                   # + real encoder-scale-mismatch heading cost)
 _CLOSURE_POSITION_MAX_MM = 600.0     # matches test_sim_transport_tour1.py's own bench-observed
                                       # bound (real TOUR_1 closures ranged up to ~500mm even when
@@ -157,6 +179,21 @@ _BOUNDARY_MIN_FRACTION = 0.9          # matches boundary_velocity_harness.cpp's 
 # noise) -- see test_tour_1_and_tour_2_ninety_degree_turns_land_within_
 # the_shaped_band()'s own printed report for this file's current measured
 # numbers.
+#
+# 121 ticket 003 RE-MEASURED this gate against the new orthogonal-boundary
+# land-at-zero split (move_queue.cpp's own kStoppingMarginFactorOrthogonal,
+# swept to 0.67): worst |turn error| 2.314deg (TOUR_1/ideal, was 2.218deg
+# pre-ticket) / 2.100deg (TOUR_2/realistic) -- comparable to, not
+# dramatically better than, the pre-ticket undifferentiated-chain-margin
+# baseline. NOT tightened further: 0.186deg of margin under 2.5deg is
+# already tighter than this file's own historical comfort zone (117-005's
+# own 0.282deg precedent), so tightening the gate itself risks flaking on
+# ordinary run-to-run float noise for no real gain. The sprint's own
+# aspirational turn |error| <=0.5deg target is NOT achieved -- see
+# move_queue.cpp's own "HONEST RESIDUAL" comment for why a marginFactor
+# sweep alone cannot close this gap (the residual is the real plant's own
+# post-reset momentum decay, a separate physical effect from the taper's
+# own remaining-distance margin).
 #
 # 118 ticket 004 (land-at-zero-completion-delete-stop-lead.md): the
 # turn-prediction campaign's own live time-lead anticipation constant

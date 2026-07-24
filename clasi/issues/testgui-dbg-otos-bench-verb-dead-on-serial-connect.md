@@ -1,6 +1,6 @@
 ---
 status: pending
-sprint: '126'
+sprint: '127'
 ---
 
 # TestGUI's "DBG OTOS BENCH 1" on-Serial-connect push is a dead legacy verb (no binary arm)

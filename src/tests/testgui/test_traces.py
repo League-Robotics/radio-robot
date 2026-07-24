@@ -23,23 +23,30 @@ Run with::
 
     QT_QPA_PLATFORM=offscreen uv run pytest src/tests/testgui/test_traces.py -q
 
-Requires the compiled ``src/sim/build/libfirmware_host.{dylib,so}``
-(``just build-sim``) -- every test here skips cleanly if it is not present.
-
-This module is not yet wired into ``pyproject.toml``'s ``testpaths`` (ticket
-083-004's job, which also adds this directory's own fixtures/conftest) -- run
-it directly, per ticket 083-003's Testing section.
+Most tests here require the compiled ``src/sim/build/libfirmware_host.
+{dylib,so}`` (``just build-sim``) and are marked ``@_needs_sim_lib`` so they
+skip cleanly if it is not present. 121-001's
+``test_encoder_dead_reckoner_ingests_motion_tail_after_active_drops`` is the
+one exception -- a pure synthetic-``TLMFrame`` test of ``TraceModel.feed()``'s
+integrator-vs-append gating with no ``SimTransport``/sim-lib dependency at
+all -- so it is NOT decorated with that marker and always runs.
 """
 from __future__ import annotations
 
+import math
 import time
 
 import pytest
 
+from robot_radio.robot.protocol import TLMFrame
 from robot_radio.testgui.transport import SimTransport, _sim_lib_path
-from robot_radio.testgui.traces import TraceModel
+from robot_radio.testgui.traces import EncoderDeadReckoner, TraceModel
 
-pytestmark = pytest.mark.skipif(
+# Applied per-test (not module-wide via `pytestmark`) so that
+# test_encoder_dead_reckoner_ingests_motion_tail_after_active_drops below
+# (121-001) -- a pure synthetic-frame test with no SimTransport/sim-lib
+# dependency at all -- still runs on a box that hasn't built the sim lib.
+_needs_sim_lib = pytest.mark.skipif(
     not _sim_lib_path().exists(),
     reason="sim lib not built -- run `just build-sim` first",
 )
@@ -83,6 +90,7 @@ def transport():
 # (a) encoder / otos / fused traces all grow from on_telemetry -> TraceModel.feed()
 # ---------------------------------------------------------------------------
 
+@_needs_sim_lib
 def test_encoder_trace_grows_with_forward_drive_via_dead_reckoning(
     transport: SimTransport,
 ) -> None:
@@ -130,6 +138,7 @@ def test_encoder_trace_grows_with_forward_drive_via_dead_reckoning(
     )
 
 
+@_needs_sim_lib
 @pytest.mark.xfail(
     reason="not a wire/transport gap (097's own scope) -- "
            "Subsystems::PoseEstimator::tick() (src/firm/subsystems/"
@@ -191,6 +200,7 @@ def test_otos_fused_traces_still_flat_pending_098(transport: SimTransport) -> No
 # (b) camera trace grows in step via on_truth -> feed_truth()
 # ---------------------------------------------------------------------------
 
+@_needs_sim_lib
 def test_camera_trace_grows_in_step_with_ground_truth(transport: SimTransport) -> None:
     """Feeding ground-truth poses (``SimTransport``'s ``on_truth`` callback,
     sourced from ``conn.get_true_pose()``) via ``feed_truth()`` grows the
@@ -234,4 +244,93 @@ def test_camera_trace_grows_in_step_with_ground_truth(transport: SimTransport) -
     )
     assert all(abs(y) < 5.0 for _x, y in model.camera), (
         f"camera trace drifted laterally during a straight drive: {model.camera}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# (c) 121-001: the encoder dead-reckoner ingests the motion tail even
+#     while frame.active is False; only the trace-point APPEND is gated.
+# ---------------------------------------------------------------------------
+
+def test_encoder_dead_reckoner_ingests_motion_tail_after_active_drops() -> None:
+    """Synthetic frame sequence, no SimTransport/sim-lib needed.
+
+    Feeds ``TraceModel.feed()`` a differential-drive arc (both wheels
+    advancing, right faster than left -- real translation AND heading
+    change every step, unlike a pure in-place pivot) split into an
+    "active" phase and a "tail" phase where ``frame.active`` has already
+    dropped to ``False`` but ``frame.enc`` keeps advancing by the same
+    per-step amount -- exactly the taper/coast tail described in
+    ``encpose-active-gate-freezes-dead-reckoner-before-motion-ends.md``.
+
+    Asserts BOTH halves of the 121-001 fix:
+      (a) the integrator ingests the tail -- ``model.last_encpose`` must
+          equal an independent reference ``EncoderDeadReckoner`` fed the
+          IDENTICAL frame sequence unconditionally (the "all-frames"
+          reckoner from the source issue's repro), not frozen at whatever
+          it was after the last active frame.
+      (b) the idle-growth guard the active gate exists for is preserved --
+          the ``encoder`` trace's point count must NOT grow across the
+          tail frames, even though the underlying enc values keep
+          changing by far more than ``_TRACE_IDLE_EPSILON_CM`` per step.
+    """
+    left_step = 10.0    # [mm] per-step left-wheel travel
+    right_step = 20.0   # [mm] per-step right-wheel travel (curving arc)
+    active_steps = 12
+    tail_steps = 4
+
+    model = TraceModel(trackwidth=128.0)
+    reference = EncoderDeadReckoner(trackwidth=128.0)
+
+    def _feed_step(k: int, active: bool) -> tuple[int, int, int]:
+        enc = (left_step * k, right_step * k)  # [mm] cumulative (left, right)
+        model.feed(TLMFrame(t=k, enc=enc, active=active))
+        return reference.update(*enc)
+
+    # k=0 establishes both the reckoner's zero point and TraceModel's own
+    # encpose baseline/anchor -- mirrors every other trace's "first
+    # reading is the baseline" convention.
+    ref_last = _feed_step(0, active=True)
+
+    for k in range(1, active_steps + 1):
+        ref_last = _feed_step(k, active=True)
+
+    points_after_active = len(model.encoder)
+    assert points_after_active > 1, (
+        "encoder trace did not grow during the active phase -- test setup "
+        "is not exercising the append path at all"
+    )
+
+    # The tail: frame.active is False, but enc keeps climbing by the same
+    # per-step amount -- real wheel travel a finished-but-coasting motion
+    # still produces for a few more frames.
+    for k in range(active_steps + 1, active_steps + tail_steps + 1):
+        ref_last = _feed_step(k, active=False)
+
+    # (b) idle-growth guard preserved: no new points appended while idle,
+    # regardless of how far enc has actually moved.
+    assert len(model.encoder) == points_after_active, (
+        f"encoder trace grew from {points_after_active} to "
+        f"{len(model.encoder)} points while frame.active was False"
+    )
+
+    # (a) integrator fidelity: last_encpose must reflect the FULL wheel
+    # travel (active phase + tail), matching a reckoner fed every frame
+    # unconditionally -- not just the active-gated subset. Both reckoners
+    # run the identical deterministic update() math over the identical
+    # input sequence, so this is an exact match, not an approximation.
+    assert model.last_encpose == ref_last, (
+        f"model.last_encpose {model.last_encpose} does not match the "
+        f"all-frames reference reckoner's final reading {ref_last} -- the "
+        f"motion tail was not ingested"
+    )
+    # Sanity: the tail actually mattered (theta strictly grew across it) --
+    # guards against a degenerate test that would pass even with the old,
+    # buggy early-return.
+    active_only = EncoderDeadReckoner(trackwidth=128.0)
+    active_only_last = None
+    for k in range(0, active_steps + 1):
+        active_only_last = active_only.update(left_step * k, right_step * k)
+    assert ref_last[2] > active_only_last[2], (
+        "tail frames contributed no additional heading -- test is degenerate"
     )

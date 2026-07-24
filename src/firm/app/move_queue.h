@@ -80,14 +80,23 @@ class MoveQueue {
   // StopConditionMet/TimedOut, activates the next pending Move THIS SAME
   // CALL (seamless hand-off, SUC-051) or Drive::stop() if now empty.
   //
-  // Land-at-zero (src/firm/app/DESIGN.md "118 ticket 004"): on Continue, a
-  // TWIST Move on its stop-condition axis, with that axis's ShaperLimits
-  // enabled, ALSO completes once `remaining <= (commandedSpeed^2 /
-  // (2*decelCeiling)) * marginFactor` (already inside our own braking
-  // envelope) -- kStoppingMarginFactorChain (pendingCount() > 0, ships
-  // 0.48) or kStoppingMarginFactorFinal (pendingCount() == 0, ships 0.92);
-  // sweep data in move_queue.cpp's anonymous namespace. WHEELS/Kind::Time
-  // never qualify; axis disabled (default) means this path never fires.
+  // Land-at-zero (src/firm/app/DESIGN.md "118 ticket 004"/"121 ticket
+  // 003"): on Continue, a TWIST Move on its stop-condition axis, with
+  // that axis's ShaperLimits enabled, ALSO completes once `remaining <=
+  // (commandedSpeed^2 / (2*decelCeiling)) * marginFactor` (already inside
+  // our own braking envelope) -- one of THREE margins, by boundary kind:
+  // kStoppingMarginFactorChain (ships 0.48, a SAME-AXIS COMPATIBLE chain
+  // boundary only -- sameAxisCompatible()'s own doc comment),
+  // kStoppingMarginFactorFinal (ships 0.92, the queue-drain case only),
+  // or kStoppingMarginFactorOrthogonal (ships 0.67, an ORTHOGONAL chain
+  // boundary -- the ending axis lands at zero exactly like an unchained
+  // Move, since there is no velocity worth carrying across an axis the
+  // incoming Move doesn't command; its own independently-swept value, NOT
+  // a reuse of kStoppingMarginFactorFinal -- reusing 0.92 verbatim was
+  // verified to measurably fail the closure gate); sweep data, the honest
+  // residual that remains at the shipped value, and why in
+  // move_queue.cpp's anonymous namespace. WHEELS/Kind::Time never
+  // qualify; axis disabled (default) means this path never fires.
   //
   // Shaping: on Continue, also re-stages velocity via Drive::setTwist()/
   // setWheels() through Motion::VelocityShaper (non-primary axes UNSHAPED),
@@ -146,6 +155,15 @@ class MoveQueue {
 
   // The land-at-zero predicate (tick()'s doc comment). Pure query.
   bool landAtZero(float pathLength, float theta, float dt) const;
+
+  // True iff `next` (the incoming pending Move landAtZero() is about to
+  // hand off to) continues the ACTIVE Move's own stop-kind axis in the
+  // SAME direction (121 ticket 003, land-at-zero-at-orthogonal-chain-
+  // boundaries.md) -- the "same-axis compatible boundary" the stakeholder
+  // decision carves out (e.g. two Distance legs, both forward). Pure
+  // query over active_ + `next`; see move_queue.cpp's own doc comment for
+  // the full derivation.
+  bool sameAxisCompatible(const msg::Move& next) const;
 
   Drive& drive_;
   Odometry& odom_;
