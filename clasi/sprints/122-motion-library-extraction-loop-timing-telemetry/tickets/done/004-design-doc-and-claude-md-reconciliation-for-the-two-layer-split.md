@@ -1,9 +1,11 @@
 ---
 id: '004'
 title: Design-doc and CLAUDE.md reconciliation for the two-layer split
-status: open
-use-cases: [SUC-004]
-depends-on: ["003"]
+status: done
+use-cases:
+- SUC-004
+depends-on:
+- '003'
 github-issue: ''
 issue:
 - extract-motion-library-to-src-motion.md
@@ -38,18 +40,18 @@ list).
 
 ## Acceptance Criteria
 
-- [ ] `docs/design/design.md` §2 (Subsystem Map) and §5 (dependency
+- [x] `docs/design/design.md` §2 (Subsystem Map) and §5 (dependency
       diagram / firmware-tree overview) updated: `src/firm/motion` and
       `src/firm/kinematics` no longer describe the moved modules; a new
       row or section points to `src/motion` as the (unvalidated, per §4's
       existing rationale) motion library, alongside `src/sim`/
       `src/protos`/etc. in the "Other source trees" table.
-- [ ] `src/firm/app/DESIGN.md` updated: no longer describes
+- [x] `src/firm/app/DESIGN.md` updated: no longer describes
       `MoveQueue`/`StateEstimator`/`Odometry` as `app/`'s own modules;
       describes `Drive` as the narrowed wheel-target sink implementing
       the boundary interface; documents the two new telemetry fields
       (`cycle_busy`/`cycle_period`) if ticket 003 didn't already.
-- [ ] `src/firm/motion/DESIGN.md` and `src/firm/kinematics/DESIGN.md`:
+- [x] `src/firm/motion/DESIGN.md` and `src/firm/kinematics/DESIGN.md`:
       either deleted (if their directories are now empty/removed and the
       validator requires no doc for a nonexistent subsystem) or rewritten
       as a short redirect ("this subsystem moved to src/motion, sprint
@@ -58,7 +60,7 @@ list).
       running `validate_design` (or `close_sprint`'s dry-run path if
       available) against the post-move tree before considering this
       criterion met, not by inspection alone.
-- [ ] `src/motion/DESIGN.md` has full content: purpose, module list
+- [x] `src/motion/DESIGN.md` has full content: purpose, module list
       (MoveQueue, StateEstimator, Odometry, BodyKinematics, StopCondition,
       VelocityShaper, twist decomposition), the boundary interface's
       In/Out shape, the `motion_tests` build target, and an explicit note
@@ -66,15 +68,15 @@ list).
       `.clasi/config.yaml`'s validated `sources:` (mirrors the existing
       rationale `docs/design/design.md` §4 already gives for `src/sim`/
       `src/protos`/`src/scripts`).
-- [ ] `.clasi/config.yaml`'s `sources:` list is UNCHANGED
+- [x] `.clasi/config.yaml`'s `sources:` list is UNCHANGED
       (`[src/firm, src/host]`) — explicitly verify this file was not
       touched; this is a locked scope decision, not an oversight to fix.
-- [ ] `CLAUDE.md` updated to name the two layers (firmware base vs.
+- [x] `CLAUDE.md` updated to name the two layers (firmware base vs.
       motion library) and the boundary between them, at whatever altitude
       the rest of `CLAUDE.md` already uses for architecture pointers (a
       short paragraph + a pointer to `docs/design/design.md` and
       `src/motion/DESIGN.md`, not a full restatement).
-- [ ] `validate_design` (or the equivalent check `close_sprint` runs)
+- [x] `validate_design` (or the equivalent check `close_sprint` runs)
       passes clean against the final tree — this is the concrete,
       checkable definition of "done" for this ticket, not "looks right on
       read-through."

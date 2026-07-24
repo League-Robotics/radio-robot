@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 filed: 2026-07-24
 filed_by: team-lead (stakeholder request)
 related:
