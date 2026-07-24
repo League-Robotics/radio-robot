@@ -16,9 +16,9 @@
 #include <cstdio>
 
 #include "app/fake_otos.h"
-#include "app/odometry.h"
 #include "devices/motor.h"
 #include "motion/body_kinematics.h"
+#include "motion/odometry.h"
 
 namespace {
 
@@ -79,7 +79,7 @@ constexpr float kTrackWidth = 128.0f;  // [mm]
 void scenarioAlwaysPresentFreshOnlyAfterTick() {
   std::printf("scenario: FakeOtos present/connected always true, poseFresh only after tick()\n");
   StubMotor left, right;
-  App::Odometry odom(left, right, kTrackWidth);
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   App::FakeOtos fake(odom, left, right, kTrackWidth);
 
   checkTrue(fake.present(), "present() true before any tick (a fake is always there)");
@@ -96,13 +96,13 @@ void scenarioAlwaysPresentFreshOnlyAfterTick() {
 void scenarioStraightMirrorsOdometryAndTwist() {
   std::printf("scenario: straight drive -- pose mirrors Odometry, twist matches BodyKinematics::forward\n");
   StubMotor left, right;
-  App::Odometry odom(left, right, kTrackWidth);
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   App::FakeOtos fake(odom, left, right, kTrackWidth);
 
   // Both wheels advance 100 mm -> a straight 100 mm leg, heading unchanged.
   left.setPosition(100.0f);
   right.setPosition(100.0f);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
 
   left.setVelocity(200.0f);
   right.setVelocity(200.0f);
@@ -125,13 +125,13 @@ void scenarioStraightMirrorsOdometryAndTwist() {
 void scenarioSpinMirrorsOdometryAndTwist() {
   std::printf("scenario: spin -- heading mirrors Odometry, non-zero omega from forward()\n");
   StubMotor left, right;
-  App::Odometry odom(left, right, kTrackWidth);
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   App::FakeOtos fake(odom, left, right, kTrackWidth);
 
   // Left forward, right backward by equal amounts -> pure spin.
   left.setPosition(40.0f);
   right.setPosition(-40.0f);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
 
   left.setVelocity(100.0f);
   right.setVelocity(-100.0f);

@@ -1,31 +1,46 @@
-// move_queue.h -- App::MoveQueue: owns the lifecycle of the robot's queued
+// move_queue.h -- Motion::MoveQueue: owns the lifecycle of the robot's queued
 // and active bounded motions. Full history/design rationale (StateEstimator&
-// removal, land-at-zero derivation, margin-factor sweeps): src/firm/app/DESIGN.md.
+// removal, land-at-zero derivation, margin-factor sweeps): src/firm/app/DESIGN.md
+// (pre-122 history) / src/motion/DESIGN.md.
 //
 // Boundary: inside -- the 5-slot array (1 active + 4 pending), replace/
 // flush/enqueue/ERR_FULL bookkeeping, chain-advance on stop/timeout, one
-// Motion::StopCondition per active Move, the land-at-zero predicate. Outside
-// -- validating a Move's shape (RobotLoop::handleMove()), a velocity
-// variant -> wheel duty (Drive), "traveled far enough" (StopCondition +
-// App::Odometry). tick(now, odom) takes CURRENT readings, not the held
-// Odometry&, so a same-cycle chain-advance can reuse them as the next
-// Move's StopCondition baseline instead of a second, disagreeing read.
+// Motion::StopCondition per active Move, the land-at-zero predicate, AND
+// (122-002) the twist-decomposition call (BodyKinematics::inverse()) that
+// used to live in App::Drive::setTwist() -- MoveQueue computes vL/vR itself
+// and hands them down through the WheelSink boundary via setWheels(), never
+// calling a setTwist()-shaped method on the sink (the sink only ever
+// receives wheel-space targets; see wheel_sink.h). Outside -- validating a
+// Move's shape (App::RobotLoop::handleMove()), actually staging a wheel
+// target onto hardware (the base's WheelSink implementation, App::Drive),
+// and "traveled far enough" (StopCondition + Motion::Odometry). tick(now,
+// odom) takes CURRENT readings, not a held Odometry&'s own live state, so a
+// same-cycle chain-advance can reuse them as the next Move's StopCondition
+// baseline instead of a second, disagreeing read.
+//
+// 122-002: moved from src/firm/app/move_queue.* into src/motion/, behind the
+// velocity-sink boundary. MoveQueue no longer holds a concrete App::Drive& --
+// it holds the WheelSink& boundary interface instead (any composition root
+// may hand it a different concrete sink). It also no longer holds a
+// Devices::Clock& (src/motion may not depend on devices/) -- enqueue() now
+// takes `now` as an explicit parameter, read by the caller (App::RobotLoop)
+// at the exact point in the cycle this class used to read the clock itself,
+// so the value flowing in is identical, just handed in rather than pulled.
 #pragma once
 
 #include <cstdint>
 
-#include "app/drive.h"
-#include "app/odometry.h"
-#include "devices/clock.h"
-#include "messages/envelope.h"
+#include "motion/odometry.h"
 #include "motion/stop_condition.h"
 #include "motion/velocity_shaper.h"
+#include "motion/wheel_sink.h"
+#include "messages/envelope.h"
 
-namespace App {
+namespace Motion {
 
 // ShaperLimits -- Motion::VelocityShaper's own accel/decel/jerk ceilings
 // (full derivation: velocity_shaper.h). Mirrors Config::ShaperBootConfig
-// (config/ may not depend on app/); main.cpp converts between them.
+// (config/ may not depend on motion/); main.cpp converts between them.
 // Namespace-scope, not nested in MoveQueue: a nested struct's default
 // member initializers can't be referenced by a default constructor
 // argument of the enclosing, still-being-defined class (C++ restriction).
@@ -67,18 +82,24 @@ class MoveQueue {
     Completion completion{};  // valid iff completed
   };
 
-  // shaperLimits defaults to ShaperLimits{} (shaping OFF); live-retunable via setShaperLimits().
-  MoveQueue(Drive& drive, Odometry& odom, const Devices::Clock& clock,
-            ShaperLimits shaperLimits = ShaperLimits{});
+  // trackWidth -- [mm], BodyKinematics::inverse()'s own `b` parameter (the
+  // twist-decomposition call this class now makes itself -- see file
+  // header). shaperLimits defaults to ShaperLimits{} (shaping OFF); live-
+  // retunable via setShaperLimits().
+  MoveQueue(WheelSink& sink, Odometry& odom, float trackWidth,
+            ShaperLimits shaperLimits = ShaperLimits{});  // [mm]
 
   // replace==true: flushes pending (no ack), preempts active, `move`
   // activates this SAME call (fresh StopCondition baseline). replace==
   // false: activates if empty, else appends (or ERR_FULL no-op past 4).
-  EnqueueResult enqueue(const msg::Move& move, uint32_t corrId);
+  // now -- [us], Devices::Clock::nowMicros() read by the caller at the exact
+  // point in the cycle this class used to read its own held Devices::Clock&
+  // (pre-122-002) -- see this file's own header.
+  EnqueueResult enqueue(const msg::Move& move, uint32_t corrId, uint64_t now);  // [us]
 
   // Per-cycle tick: ticks the always-armed threshold/timeout backstop; on
   // StopConditionMet/TimedOut, activates the next pending Move THIS SAME
-  // CALL (seamless hand-off, SUC-051) or Drive::stop() if now empty.
+  // CALL (seamless hand-off, SUC-051) or the sink's stop() if now empty.
   //
   // Land-at-zero (src/firm/app/DESIGN.md "118 ticket 004"/"121 ticket
   // 003"): on Continue, a TWIST Move on its stop-condition axis, with
@@ -98,9 +119,10 @@ class MoveQueue {
   // move_queue.cpp's anonymous namespace. WHEELS/Kind::Time never
   // qualify; axis disabled (default) means this path never fires.
   //
-  // Shaping: on Continue, also re-stages velocity via Drive::setTwist()/
-  // setWheels() through Motion::VelocityShaper (non-primary axes UNSHAPED),
-  // a no-op per axis whenever ShaperLimits disables it.
+  // Shaping: on Continue, also re-stages velocity via the WheelSink
+  // (twist path: BodyKinematics::inverse() then setWheels(); wheels path:
+  // setWheels() directly) through Motion::VelocityShaper (non-primary axes
+  // UNSHAPED), a no-op per axis whenever ShaperLimits disables it.
   TickResult tick(uint64_t now, const Odometry& odom);  // [us]
 
   // Live-tuning entry point: plain in-memory write, never persisted.
@@ -108,7 +130,8 @@ class MoveQueue {
   ShaperLimits shaperLimits() const { return shaperLimits_; }
 
   // Drains every pending slot and ends the active Move (if any), no ack for
-  // any of them (STOP acks itself via corr_id). Always calls Drive::stop().
+  // any of them (STOP acks itself via corr_id). Always calls the sink's
+  // stop().
   void flush();
 
   bool active() const { return active_.occupied; }  // frame_.mode/driving_ derivation
@@ -139,18 +162,19 @@ class MoveQueue {
     // Cruise-target velocity, captured at activation; shapeAndStage() shapes toward these.
     msg::Move::VelocityKind velocityKind = msg::Move::VelocityKind::NONE;
     float cruiseVX = 0.0f;      // [mm/s] TWIST only
-    float cruiseVY = 0.0f;      // [mm/s] TWIST only (always 0 -- see Drive::setTwist()'s own doc comment)
+    float cruiseVY = 0.0f;      // [mm/s] TWIST only (always 0 -- see BodyKinematics::inverse()'s own 2-arg shape)
     float cruiseOmega = 0.0f;   // [rad/s] TWIST only
     float cruiseVLeft = 0.0f;   // [mm/s] WHEELS only
     float cruiseVRight = 0.0f;  // [mm/s] WHEELS only
   };
 
-  // Stages `move`'s velocity onto drive_ and populates active_ -- shared by
-  // enqueue()'s two activation paths and tick()'s chain-advance path.
+  // Stages `move`'s velocity onto sink_ (via BodyKinematics::inverse() for
+  // TWIST) and populates active_ -- shared by enqueue()'s two activation
+  // paths and tick()'s chain-advance path.
   void activate(const msg::Move& move, uint64_t now, float pathLength, float theta);
 
   // Shaped speed for whichever axis ShaperLimits enables, re-staged via
-  // drive_. Called only on Continue; pathLength/theta reuse tick()'s own.
+  // sink_. Called only on Continue; pathLength/theta reuse tick()'s own.
   void shapeAndStage(uint64_t now, float pathLength, float theta);
 
   // The land-at-zero predicate (tick()'s doc comment). Pure query.
@@ -165,9 +189,9 @@ class MoveQueue {
   // the full derivation.
   bool sameAxisCompatible(const msg::Move& next) const;
 
-  Drive& drive_;
+  WheelSink& sink_;
   Odometry& odom_;
-  const Devices::Clock& clock_;
+  float trackWidth_;  // [mm]
 
   ActiveMove active_;
   msg::Move pending_[kMaxPending];
@@ -186,4 +210,4 @@ class MoveQueue {
   uint64_t lastShapeNow_ = 0;  // [us] dt baseline for shapeAndStage(), reset at each activate()
 };
 
-}  // namespace App
+}  // namespace Motion

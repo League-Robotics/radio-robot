@@ -27,13 +27,14 @@
 #include <cstdio>
 #include <string>
 
-#include "app/odometry.h"
+#include "app/otos_sample.h"
 #include "app/telemetry.h"
 #include "devices/device_config.h"
 #include "devices/device_types.h"
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "motion/body_kinematics.h"
+#include "motion/odometry.h"
 #include "scripted_i2c_hook.h"
 #include "sim_plant.h"
 
@@ -173,12 +174,12 @@ void scenarioStraightLineAccumulatesDistanceNoHeadingChange() {
   Devices::NezhaMotor right(plant, baseNezhaConfig(2));
 
   const float trackWidth = 200.0f;  // [mm]
-  App::Odometry odom(left, right, trackWidth);
+  Motion::Odometry odom(trackWidth, left.position(), right.position());
 
   // Both wheels advance the SAME 50mm -- vL == vR analog.
   driveToPosition(left, bus, wireAddr, 50.0f, 20000);
   driveToPosition(right, bus, wireAddr, 50.0f, 20000);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
 
   float expectedDist = 0.0f, expectedHeadingDelta = 0.0f;
   BodyKinematics::forward(50.0f, 50.0f, trackWidth, expectedDist, expectedHeadingDelta);
@@ -206,7 +207,7 @@ void scenarioPureRotationAccumulatesHeadingNoTranslation() {
   Devices::NezhaMotor right(plant, baseNezhaConfig(2));
 
   const float trackWidth = 200.0f;  // [mm]
-  App::Odometry odom(left, right, trackWidth);
+  Motion::Odometry odom(trackWidth, left.position(), right.position());
 
   // Left goes -d, right goes +d -- vL == -vR analog. d is chosen exactly
   // representable at the leaf's own 0.1mm encoder-decode resolution
@@ -217,7 +218,7 @@ void scenarioPureRotationAccumulatesHeadingNoTranslation() {
   const float d = 31.4f;  // [mm]
   driveToPosition(left, bus, wireAddr, -d, 20000);
   driveToPosition(right, bus, wireAddr, d, 20000);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
 
   float expectedDist = 0.0f, expectedHeadingDelta = 0.0f;
   BodyKinematics::forward(-d, d, trackWidth, expectedDist, expectedHeadingDelta);
@@ -251,8 +252,8 @@ void scenarioBaselineSeededFromLeafPositionAtConstruction() {
   driveToPosition(left, bus, wireAddr, 500.0f, 20000);
   driveToPosition(right, bus, wireAddr, 500.0f, 20000);
 
-  App::Odometry odom(left, right, 200.0f);
-  odom.integrate();  // no further motion since construction -- delta must be 0
+  Motion::Odometry odom(200.0f, left.position(), right.position());
+  odom.integrate(left.position(), right.position());  // no further motion since construction -- delta must be 0
 
   checkNear(odom.x(), 0.0f, 1e-3f, "x stays 0 -- the pre-existing leaf position is NOT counted as first-cycle motion");
   checkNear(odom.theta(), 0.0f, 1e-6f, "theta stays 0 for the same reason");
@@ -280,7 +281,7 @@ void scenarioPathLengthAccumulatesStraightLineTravel() {
   Devices::NezhaMotor right(plant, baseNezhaConfig(2));
 
   const float trackWidth = 200.0f;  // [mm]
-  App::Odometry odom(left, right, trackWidth);
+  Motion::Odometry odom(trackWidth, left.position(), right.position());
 
   checkNear(odom.pathLength(), 0.0f, 1e-6f, "pathLength() starts at 0 before any integrate() call");
 
@@ -292,10 +293,10 @@ void scenarioPathLengthAccumulatesStraightLineTravel() {
   // sample rather than being rejected as an implausible glitch.
   driveToPosition(left, bus, wireAddr, 25.0f, 20000);
   driveToPosition(right, bus, wireAddr, 25.0f, 20000);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
   driveToPosition(left, bus, wireAddr, 50.0f, 60000);
   driveToPosition(right, bus, wireAddr, 50.0f, 60000);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
 
   checkNear(odom.pathLength(), 50.0f, 1e-3f, "pathLength() accumulates the true straight-line distance across two integrate() calls");
 }
@@ -311,7 +312,7 @@ void scenarioPathLengthInPlaceTurnContributesApproximatelyZero() {
   Devices::NezhaMotor right(plant, baseNezhaConfig(2));
 
   const float trackWidth = 200.0f;  // [mm]
-  App::Odometry odom(left, right, trackWidth);
+  Motion::Odometry odom(trackWidth, left.position(), right.position());
 
   // Left goes -d, right goes +d -- vL == -vR analog, same as the
   // pure-rotation scenario above: forward()'s distance output is exactly 0
@@ -319,7 +320,7 @@ void scenarioPathLengthInPlaceTurnContributesApproximatelyZero() {
   const float d = 31.4f;  // [mm]
   driveToPosition(left, bus, wireAddr, -d, 20000);
   driveToPosition(right, bus, wireAddr, d, 20000);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
 
   checkNear(odom.pathLength(), 0.0f, 1e-3f, "an in-place turn contributes ~0 to pathLength() -- zero net forward travel");
 }
@@ -335,7 +336,7 @@ void scenarioPathLengthReverseTravelAccumulatesNotCancels() {
   Devices::NezhaMotor right(plant, baseNezhaConfig(2));
 
   const float trackWidth = 200.0f;  // [mm]
-  App::Odometry odom(left, right, trackWidth);
+  Motion::Odometry odom(trackWidth, left.position(), right.position());
 
   // Forward 40mm, then back to 0 -- net displacement is 0 (x() returns to
   // ~0), but pathLength() must read ~80mm (40 out + 40 back), not ~0. The
@@ -344,10 +345,10 @@ void scenarioPathLengthReverseTravelAccumulatesNotCancels() {
   // (nezha_motor.cpp) -- see the straight-line scenario's comment above.
   driveToPosition(left, bus, wireAddr, 40.0f, 20000);
   driveToPosition(right, bus, wireAddr, 40.0f, 20000);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
   driveToPosition(left, bus, wireAddr, 0.0f, 60000);
   driveToPosition(right, bus, wireAddr, 0.0f, 60000);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
 
   checkNear(odom.x(), 0.0f, 1e-3f, "sanity: net x() returns to ~0 after forward-then-reverse over the same ground");
   checkNear(odom.pathLength(), 80.0f, 1e-3f, "pathLength() accumulates |distance| -- forward+reverse ADDS to ~80mm, doesn't cancel to 0");
@@ -364,14 +365,14 @@ void scenarioPathLengthNotZeroedByReset() {
   Devices::NezhaMotor right(plant, baseNezhaConfig(2));
 
   const float trackWidth = 200.0f;  // [mm]
-  App::Odometry odom(left, right, trackWidth);
+  Motion::Odometry odom(trackWidth, left.position(), right.position());
 
   driveToPosition(left, bus, wireAddr, 60.0f, 20000);
   driveToPosition(right, bus, wireAddr, 60.0f, 20000);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
   checkNear(odom.pathLength(), 60.0f, 1e-3f, "setup: pathLength() accumulated 60mm before reset()");
 
-  odom.reset(0.0f, 0.0f, 0.0f);
+  odom.reset(0.0f, 0.0f, 0.0f, left.position(), right.position());
 
   checkNear(odom.x(), 0.0f, 1e-6f, "sanity: reset() snaps x() to the given pose");
   checkNear(odom.pathLength(), 60.0f, 1e-3f, "reset() leaves pathLength() untouched -- it is NOT zeroed by reset()");
@@ -380,7 +381,7 @@ void scenarioPathLengthNotZeroedByReset() {
   // accumulating correctly (no phantom jump) for motion AFTER the reset().
   driveToPosition(left, bus, wireAddr, 90.0f, 60000);
   driveToPosition(right, bus, wireAddr, 90.0f, 60000);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
   checkNear(odom.pathLength(), 90.0f, 1e-3f, "pathLength() continues accumulating correctly after reset() re-anchors the delta baseline");
 }
 
@@ -534,9 +535,9 @@ int main() {
   scenarioApplyOtosSampleRateLimitSkipStillReachesFrame();
 
   if (g_failureCount == 0) {
-    std::printf("OK: all App::Odometry / applyOtosSample scenarios passed\n");
+    std::printf("OK: all Motion::Odometry / App::applyOtosSample scenarios passed\n");
     return 0;
   }
-  std::printf("FAILED: %d assertion(s) across the App::Odometry scenarios\n", g_failureCount);
+  std::printf("FAILED: %d assertion(s) across the Motion::Odometry / App::applyOtosSample scenarios\n", g_failureCount);
   return 1;
 }

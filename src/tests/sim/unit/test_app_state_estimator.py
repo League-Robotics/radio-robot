@@ -1,8 +1,9 @@
 """Off-hardware acceptance proof for sprint 117 ticket 002 (SUC-057),
-App::StateEstimator (``src/firm/app/state_estimator.{h,cpp}``).
+Motion::StateEstimator (``src/motion/state_estimator.{h,cpp}``, moved from
+``src/firm/app/`` by sprint 122 ticket 002).
 
 Compiles ``app_state_estimator_harness.cpp`` together with
-``src/firm/app/state_estimator.cpp`` alone -- unlike ``test_app_odometry.py``,
+``src/motion/state_estimator.cpp`` alone -- unlike ``test_app_odometry.py``,
 this module has NO ``Devices::`` leaf / SimPlant dependency to link (see
 the harness's own file header: pure computation, no I2C bus, no owned
 clock). Mirrors every other ``src/tests/sim/unit`` harness's shape: compile
@@ -22,7 +23,7 @@ import pytest
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_state_estimator_harness.cpp"
-_STATE_ESTIMATOR_SRC = _SOURCE_DIR / "app" / "state_estimator.cpp"
+_STATE_ESTIMATOR_SRC = _REPO_ROOT / "src" / "motion" / "state_estimator.cpp"
 
 # Matches every other src/tests/sim/unit harness's own compiled standard.
 _CXX_STANDARD = "c++20"
@@ -59,6 +60,8 @@ def test_app_state_estimator_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_REPO_ROOT / "src"),
             "-o",
             str(binary),
             str(_HARNESS_SRC),

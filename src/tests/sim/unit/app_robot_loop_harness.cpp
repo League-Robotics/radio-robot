@@ -61,11 +61,8 @@
 
 #include "app/comms.h"
 #include "app/drive.h"
-#include "app/move_queue.h"
-#include "app/odometry.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
-#include "app/state_estimator.h"
 #include "app/telemetry.h"
 #include "config/persisted_tuning.h"
 #include "devices/color_sensor.h"
@@ -75,6 +72,9 @@
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "messages/wire_runtime.h"
+#include "motion/move_queue.h"
+#include "motion/odometry.h"
+#include "motion/state_estimator.h"
 #include "scripted_i2c_hook.h"
 #include "sim_clock.h"
 #include "sim_plant.h"
@@ -413,14 +413,14 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   App::Comms comms(serialLink, radioLink, "DEVICE:NEZHA2:robot:test:0");
   App::Telemetry tlm(comms, serialLink, radioLink);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
-  App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
   // ticket 004: QUARANTINED -- App::MoveQueue no longer depends on this
   // member (its own former anticipation-lead completion path is deleted,
   // move_queue.h's own file header); kept solely for robotLoop's own
   // consumption below.
-  App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock);
+  Motion::StateEstimator stateEstimator;
+  Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   // --- Drive Preamble to done() BEFORE constructing/calling RobotLoop's
@@ -553,14 +553,14 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
-  App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
   // ticket 004: QUARANTINED -- App::MoveQueue no longer depends on this
   // member (its own former anticipation-lead completion path is deleted,
   // move_queue.h's own file header); kept solely for robotLoop's own
   // consumption below.
-  App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock);
+  Motion::StateEstimator stateEstimator;
+  Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   clock.setMicros(0);
@@ -747,14 +747,14 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
-  App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
   // ticket 004: QUARANTINED -- App::MoveQueue no longer depends on this
   // member (its own former anticipation-lead completion path is deleted,
   // move_queue.h's own file header); kept solely for robotLoop's own
   // consumption below.
-  App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock);
+  Motion::StateEstimator stateEstimator;
+  Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   clock.setMicros(0);
@@ -877,7 +877,7 @@ struct LiveFixture {
   App::Comms comms;
   App::Telemetry tlm;
   App::Drive drive;
-  App::Odometry odom;
+  Motion::Odometry odom;
   // 117 ticket 003: default-constructed (encoder-only-v1 FusionWeights{}
   // default) -- directly reachable by every LiveFixture-based scenario
   // (unlike RobotLoop's own persistedTuning_/tuningStore_, which stay
@@ -885,8 +885,8 @@ struct LiveFixture {
   // depends on this member (its own former anticipation-lead completion
   // path is deleted, move_queue.h's own file header); kept solely for
   // robotLoop's own consumption below.
-  App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue;
+  Motion::StateEstimator stateEstimator;
+  Motion::MoveQueue moveQueue;
   App::Preamble preamble;
   App::RobotLoop robotLoop;
 
@@ -899,8 +899,8 @@ struct LiveFixture {
         comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0"),
         tlm(comms, serialFake, radioFake),
         drive(motorL, motorR, /*trackWidth=*/120.0f),
-        odom(motorL, motorR, /*trackWidth=*/120.0f),
-        moveQueue(drive, odom, clock),
+        odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position()),
+        moveQueue(drive, odom, /*trackWidth=*/120.0f),
         preamble(motorL, motorR, otos, color, line, clock),
         robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm, drive, odom, moveQueue,
                   preamble, stateEstimator, clock, sleeper) {
@@ -1313,7 +1313,7 @@ void scenarioShapingDisabledFlagStaysClearWhenBothAxesEnabled() {
   // isolate the flag logic from the wire/merge path already covered by
   // scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists()
   // below.
-  App::ShaperLimits limits;
+  Motion::ShaperLimits limits;
   limits.aMax = 800.0f;
   limits.aDecel = 800.0f;
   limits.jMax = 5000.0f;
@@ -1458,13 +1458,13 @@ void scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles() {
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
-  App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // Default-constructed StateEstimator (0/0/200ms weights) -- quarantined,
   // App::MoveQueue no longer depends on it (see the other constructions in
   // this file for the full note); kept solely for robotLoop's own
   // consumption below.
-  App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock);
+  Motion::StateEstimator stateEstimator;
+  Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   clock.setMicros(0);
@@ -1596,11 +1596,11 @@ void scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists() {
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
-  App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // Turn-prediction campaign: stateEstimator constructed before moveQueue
   // -- see the earlier scenarios' own comment for why.
-  App::StateEstimator stateEstimator;  // default weights (0.0/0.0/200ms)
-  App::MoveQueue moveQueue(drive, odom, clock);
+  Motion::StateEstimator stateEstimator;  // default weights (0.0/0.0/200ms)
+  Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   MockTuningStore mockStore;
@@ -1719,15 +1719,15 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
-  App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // Default weights -- sourcing from Config::defaultEstimatorConfig() is
   // main.cpp's/sim_harness.h's own job (AC #1), not this unit test's
   // concern; this scenario only cares about update()'s own call site and
   // its effect on wheel/body validity/tracking. Constructed before
   // moveQueue (turn-prediction campaign) -- see the earlier scenarios'
   // own comment for why.
-  App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock);
+  Motion::StateEstimator stateEstimator;
+  Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
@@ -1737,7 +1737,7 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   robotLoop.boot();
   robotLoop.markConfigured();
 
-  checkTrue(!stateEstimator.wheelNow(App::Wheel::Left).valid,
+  checkTrue(!stateEstimator.wheelNow(Motion::Wheel::Left).valid,
             "left wheel peer starts invalid -- update() has not run yet (boot() never calls "
             "cycle())");
   checkTrue(!stateEstimator.whereAmI(0).valid,
@@ -1764,8 +1764,8 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
 
   uint32_t nowMs = static_cast<uint32_t>(clock.nowMicros() / 1000);
 
-  App::WheelEstimate wheelL = stateEstimator.wheelNow(App::Wheel::Left);
-  App::WheelEstimate wheelR = stateEstimator.wheelNow(App::Wheel::Right);
+  Motion::WheelEstimate wheelL = stateEstimator.wheelNow(Motion::Wheel::Left);
+  Motion::WheelEstimate wheelR = stateEstimator.wheelNow(Motion::Wheel::Right);
   checkTrue(wheelL.valid, "left wheel peer is valid after several cycles of motion");
   checkTrue(wheelR.valid, "right wheel peer is valid after several cycles of motion");
   checkTrue(wheelL.velocity > 100.0f,
@@ -1775,7 +1775,7 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
             "right wheel peer's own velocity tracks the commanded forward motion (positive, "
             "well above zero)");
 
-  App::BodyEstimate body = stateEstimator.whereAmI(nowMs);
+  Motion::BodyEstimate body = stateEstimator.whereAmI(nowMs);
   checkTrue(body.valid, "body peer is valid after several cycles of motion");
   checkTrue(body.v_x > 100.0f,
             "body peer's own v_x tracks the commanded forward twist (positive, well above "

@@ -22,10 +22,7 @@
 
 #include "app/comms.h"
 #include "app/drive.h"
-#include "app/move_queue.h"
-#include "app/odometry.h"
 #include "app/preamble.h"
-#include "app/state_estimator.h"
 #include "app/telemetry.h"
 #include "config/persisted_tuning.h"
 #include "devices/clock.h"
@@ -34,6 +31,9 @@
 #include "devices/line_sensor.h"
 #include "devices/motor.h"
 #include "devices/otos.h"
+#include "motion/move_queue.h"
+#include "motion/odometry.h"
+#include "motion/state_estimator.h"
 
 namespace App {
 
@@ -86,8 +86,9 @@ class RobotLoop {
   RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
             Devices::Motor& motorR, Devices::Otos& otos,
             Devices::ColorSensorLeaf& color, Devices::LineSensorLeaf& line,
-            Comms& comms, Telemetry& tlm, Drive& drive, Odometry& odom,
-            MoveQueue& moveQueue, Preamble& preamble, StateEstimator& stateEstimator,
+            Comms& comms, Telemetry& tlm, Drive& drive, Motion::Odometry& odom,
+            Motion::MoveQueue& moveQueue, Preamble& preamble,
+            Motion::StateEstimator& stateEstimator,
             const Devices::Clock& clock, Devices::Sleeper& sleeper,
             Config::TuningStore* tuningStore = nullptr);
 
@@ -201,10 +202,10 @@ class RobotLoop {
   Comms& comms_;
   Telemetry& tlm_;
   Drive& drive_;
-  Odometry& odom_;
-  MoveQueue& moveQueue_;
+  Motion::Odometry& odom_;
+  Motion::MoveQueue& moveQueue_;
   Preamble& preamble_;
-  StateEstimator& stateEstimator_;
+  Motion::StateEstimator& stateEstimator_;
   const Devices::Clock& clock_;
   Devices::Sleeper& sleeper_;
 

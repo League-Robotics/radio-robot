@@ -39,22 +39,33 @@ add_definitions(-DHOST_BUILD=1)
 get_filename_component(REPO_ROOT "${CMAKE_SOURCE_DIR}/../.." ABSOLUTE)
 set(MOTION_DIR "${CMAKE_SOURCE_DIR}")
 set(HARNESS_DIR "${REPO_ROOT}/src/tests/sim/unit")
+# PLANT_DIR (122-002): the model plant the new end-to-end chained-moves
+# scenario (motion_move_queue_chained_harness.cpp, below) links against --
+# TestSim::WheelPlant is test-only physics scaffolding, reused as-is from
+# src/tests/sim/plant/, never folded into the `motion` library itself.
+set(PLANT_DIR "${REPO_ROOT}/src/tests/sim/plant")
 
 # ---------------------------------------------------------------------------
-# The motion library itself -- ALL THREE moved modules (stop_condition,
-# velocity_shaper, body_kinematics), proving the whole src/motion tree
-# compiles standalone, not just whichever one module a given test harness
-# happens to need. wheel_sink.h (the boundary header) is header-only and
-# not yet load-bearing (122-001: no consumer includes it yet -- ticket 002
-# is its first), so there is no .cpp for it to add here; its own compile
-# check is implicit in the fact that nothing in this tree emits an error
-# just from its presence, and ticket 002 will be the first TU that
-# actually #includes it.
+# The motion library itself. 122-001 landed the three already-pure leaves
+# (stop_condition, velocity_shaper, body_kinematics); 122-002 (this ticket)
+# adds the remaining three modules moved off src/firm/app/ behind the
+# velocity-sink boundary -- move_queue.cpp (now calls
+# BodyKinematics::inverse() itself for the twist path -- the decomposition
+# that used to live in App::Drive::setTwist()), odometry.cpp (the
+# dead-reckoning integration half; App::applyOtosSample(), the OTOS-sampling
+# half odometry.cpp used to also define, stayed base-side as a new
+# src/firm/app/otos_sample.cpp), and state_estimator.cpp (now takes a plain
+# Motion::StateEstimator::Input instead of App::Telemetry::Frame). wheel_sink.h
+# (the boundary header) is header-only -- no .cpp to add for it; move_queue.cpp
+# is its first real consumer (holds a WheelSink&).
 # ---------------------------------------------------------------------------
 add_library(motion STATIC
     "${MOTION_DIR}/stop_condition.cpp"
     "${MOTION_DIR}/velocity_shaper.cpp"
     "${MOTION_DIR}/body_kinematics.cpp"
+    "${MOTION_DIR}/move_queue.cpp"
+    "${MOTION_DIR}/odometry.cpp"
+    "${MOTION_DIR}/state_estimator.cpp"
 )
 
 # "${REPO_ROOT}/src" resolves this tree's own qualified `#include
@@ -94,15 +105,31 @@ add_executable(motion_velocity_shaper_tests
 target_link_libraries(motion_velocity_shaper_tests PRIVATE motion)
 add_test(NAME motion_velocity_shaper_tests COMMAND motion_velocity_shaper_tests)
 
+# ---------------------------------------------------------------------------
+# 122-002's own end-to-end scenario (SUC-001): two chained WHEELS Moves
+# through the REAL Motion::MoveQueue/Motion::Odometry against the REAL model
+# plant (TestSim::WheelPlant, PLANT_DIR/wheel_plant.cpp -- reused verbatim,
+# never copied). wheel_plant.cpp is test-only physics scaffolding, linked
+# directly into this one executable rather than folded into the `motion`
+# library itself (mirrors every src/tests/sim/unit/*.py wrapper's own
+# ad hoc-compile convention for this same file).
+# ---------------------------------------------------------------------------
+add_executable(motion_move_queue_chained_tests
+    "${HARNESS_DIR}/motion_move_queue_chained_harness.cpp"
+    "${PLANT_DIR}/wheel_plant.cpp"
+)
+target_include_directories(motion_move_queue_chained_tests PRIVATE "${PLANT_DIR}")
+target_link_libraries(motion_move_queue_chained_tests PRIVATE motion)
+add_test(NAME motion_move_queue_chained_tests COMMAND motion_move_queue_chained_tests)
+
 # motion_tests -- the one named target SUC-001 asks a developer to build
-# and run with plain cmake/make, no Python: depends on both test binaries,
-# then runs them via ctest as its own recipe, so `cmake --build . --target
-# motion_tests` alone builds AND runs every scenario in this ticket's
-# scope, exiting nonzero on any failure (ctest's own exit code). Ticket
-# 002 adds the end-to-end two-chained-moves model-plant scenario to this
-# same target once move_queue/wheel_plant land here.
+# and run with plain cmake/make, no Python: depends on all three test
+# binaries, then runs them via ctest as its own recipe, so `cmake --build .
+# --target motion_tests` alone builds AND runs every scenario in this
+# ticket's scope, exiting nonzero on any failure (ctest's own exit code).
 add_custom_target(motion_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
     DEPENDS motion_stop_condition_tests motion_velocity_shaper_tests
+            motion_move_queue_chained_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 )

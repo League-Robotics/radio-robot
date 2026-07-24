@@ -4,7 +4,7 @@
 
 namespace App {
 
-FakeOtos::FakeOtos(const Odometry& odom, Devices::Motor& left, Devices::Motor& right,
+FakeOtos::FakeOtos(const Motion::Odometry& odom, Devices::Motor& left, Devices::Motor& right,
                     float trackWidth)
     : odom_(odom), left_(left), right_(right), trackWidth_(trackWidth)
 {

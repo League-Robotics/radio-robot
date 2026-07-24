@@ -9,11 +9,8 @@
 #include "app/comms.h"
 #include "app/drive.h"
 #include "app/fake_otos.h"
-#include "app/move_queue.h"
-#include "app/odometry.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
-#include "app/state_estimator.h"
 #include "app/telemetry.h"
 #include "com/radio.h"
 #include "com/serial_port.h"
@@ -27,6 +24,9 @@
 #include "devices/motor_armor.h"
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
+#include "motion/move_queue.h"
+#include "motion/odometry.h"
+#include "motion/state_estimator.h"
 
 static MicroBit uBit;
 
@@ -72,15 +72,15 @@ Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
 }
 
 // toFusionWeights (117 ticket 004) -- converts the boot config's
-// Config::EstimatorBootConfig into the app-local App::FusionWeights
+// Config::EstimatorBootConfig into the Motion::FusionWeights
 // StateEstimator's constructor needs. Lives here for the SAME reason
 // toDeviceMotorConfig() above does: main.cpp is the one place both types
 // are reachable -- config/ may depend only on messages/ (docs/design/
-// design.md §5's dependency diagram), never on app/, so
+// design.md §5's dependency diagram), never on app/ or motion/, so
 // EstimatorBootConfig and FusionWeights stay independently declared and
 // meet only at this composition root.
-App::FusionWeights toFusionWeights(const Config::EstimatorBootConfig& src) {
-  App::FusionWeights weights;
+Motion::FusionWeights toFusionWeights(const Config::EstimatorBootConfig& src) {
+  Motion::FusionWeights weights;
   weights.headingOtos = src.headingOtos;
   weights.omegaOtos = src.omegaOtos;
   weights.staleness = src.staleness;
@@ -88,13 +88,13 @@ App::FusionWeights toFusionWeights(const Config::EstimatorBootConfig& src) {
 }
 
 // toShaperLimits (decel-into-the-goal campaign) -- converts the boot
-// config's Config::ShaperBootConfig into the app-local App::ShaperLimits
-// App::MoveQueue's constructor needs. Lives here for the SAME reason
+// config's Config::ShaperBootConfig into the Motion::ShaperLimits
+// Motion::MoveQueue's constructor needs. Lives here for the SAME reason
 // toFusionWeights()/toDeviceMotorConfig() above do: main.cpp is the one
 // place both types are reachable -- config/ may depend only on messages/
-// (docs/design/design.md §5's dependency diagram), never on app/.
-App::ShaperLimits toShaperLimits(const Config::ShaperBootConfig& src) {
-  App::ShaperLimits limits;
+// (docs/design/design.md §5's dependency diagram), never on app/ or motion/.
+Motion::ShaperLimits toShaperLimits(const Config::ShaperBootConfig& src) {
+  Motion::ShaperLimits limits;
   limits.aMax = src.aMax;
   limits.aDecel = src.aDecel;
   limits.alphaMax = src.alphaMax;
@@ -174,7 +174,11 @@ int main() {
   static App::Comms comms(serialLink, radioLink, banner);
   static App::Telemetry tlm(comms, serialLink, radioLink);
   static App::Drive drive(motorL, motorR, drivetrainConfig.trackwidth);
-  static App::Odometry odom(motorL, motorR, drivetrainConfig.trackwidth);
+  // 122-002: Motion::Odometry no longer holds a Devices::Motor& -- seed the
+  // delta baseline from each leaf's CURRENT position() here (both leaves
+  // still default to 0 before their first tick() -- nezha_motor.h), the
+  // same value the pre-122-002 constructor read internally.
+  static Motion::Odometry odom(drivetrainConfig.trackwidth, motorL.position(), motorR.position());
 
   // OTOS injection -- the ONE place the FAKE_OTOS build variant diverges
   // (otos-fake-seam issue). Both Preamble and RobotLoop below take a plain
@@ -191,27 +195,29 @@ int main() {
   // 117 ticket 004: StateEstimator, sourced from the SAME fail-closed baked
   // boot config every other Config::default*() call above uses --
   // Config::defaultEstimatorConfig() (ticket 003). 118 ticket 004:
-  // QUARANTINED -- App::MoveQueue no longer holds a StateEstimator&
+  // QUARANTINED -- Motion::MoveQueue no longer holds a StateEstimator&
   // (its own former anticipation-lead stop-condition evaluation is
   // deleted, move_queue.h's own doc comment); stateEstimator stays
   // constructed and updated here (RobotLoop's own trailing kPace block
   // still calls stateEstimator_.update() every cycle) as the planned
   // consumer for future fake-OTOS/fusion bench work.
   Config::EstimatorBootConfig estimatorBootConfig = Config::defaultEstimatorConfig();
-  static App::StateEstimator stateEstimator(toFusionWeights(estimatorBootConfig));
+  static Motion::StateEstimator stateEstimator(toFusionWeights(estimatorBootConfig));
   // decel-into-the-goal campaign: Motion::VelocityShaper's own accel/decel
   // ceilings, baked fail-closed from the robot JSON (Config::
   // defaultShaperConfig(), config/boot_config.h) -- read alongside the
   // other boot-config bakes above, before MoveQueue's own construction
   // needs it.
-  App::ShaperLimits shaperLimits = toShaperLimits(Config::defaultShaperConfig());
-  // 116 (protocol-set-point issue): App::MoveQueue replaces App::Deadman --
-  // constructed after drive/odom (it holds references to both).
-  // shaperLimits (decel-into-the-goal campaign, immediately above) is real
-  // firmware's own unconditional shaping-ON configuration -- see
-  // App::ShaperLimits's own "0 == disabled" doc comment for why this is
-  // the ONE place shaping is guaranteed non-default.
-  static App::MoveQueue moveQueue(drive, odom, clock, shaperLimits);
+  Motion::ShaperLimits shaperLimits = toShaperLimits(Config::defaultShaperConfig());
+  // 116 (protocol-set-point issue): Motion::MoveQueue replaces App::Deadman
+  // -- constructed after drive/odom (it holds references to both -- drive
+  // through the Motion::WheelSink boundary interface, 122-002). shaperLimits
+  // (decel-into-the-goal campaign, immediately above) is real firmware's own
+  // unconditional shaping-ON configuration -- see Motion::ShaperLimits's own
+  // "0 == disabled" doc comment for why this is the ONE place shaping is
+  // guaranteed non-default. No Devices::Clock& argument (122-002):
+  // Motion::MoveQueue takes `now` explicitly at each enqueue() call instead.
+  static Motion::MoveQueue moveQueue(drive, odom, drivetrainConfig.trackwidth, shaperLimits);
   static App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   // 114-004 (SUC-003): the real ARM-only MicroBitStorage-backed persistence

@@ -47,14 +47,18 @@ _COMMS_SRC = _SOURCE_DIR / "app" / "comms.cpp"
 _TELEMETRY_SRC = _SOURCE_DIR / "app" / "telemetry.cpp"
 # 116-006 (MOVE protocol cutover): App::MoveQueue + Motion::StopCondition
 # replace the deleted App::Deadman.
-_MOVE_QUEUE_SRC = _SOURCE_DIR / "app" / "move_queue.cpp"
+_MOVE_QUEUE_SRC = _REPO_ROOT / "src" / "motion" / "move_queue.cpp"
 _STOP_CONDITION_SRC = _REPO_ROOT / "src" / "motion" / "stop_condition.cpp"
 _VELOCITY_SHAPER_SRC = _REPO_ROOT / "src" / "motion" / "velocity_shaper.cpp"
 _DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
-_ODOMETRY_SRC = _SOURCE_DIR / "app" / "odometry.cpp"
+# 122-002: App::applyOtosSample() split out of odometry.cpp (now
+# Motion::Odometry, src/motion/) into this new base-side file --
+# robot_loop.cpp's own applyOtosSample() call needs it linked in.
+_OTOS_SAMPLE_SRC = _SOURCE_DIR / "app" / "otos_sample.cpp"
+_ODOMETRY_SRC = _REPO_ROOT / "src" / "motion" / "odometry.cpp"
 # 117 ticket 003: App::StateEstimator, threaded through RobotLoop's own
 # constructor alongside MoveQueue/Preamble.
-_STATE_ESTIMATOR_SRC = _SOURCE_DIR / "app" / "state_estimator.cpp"
+_STATE_ESTIMATOR_SRC = _REPO_ROOT / "src" / "motion" / "state_estimator.cpp"
 # 115-005 (gut S1): heading_source.cpp/pilot.cpp/motion/executor.cpp/
 # motion/jerk_trajectory.cpp/vendor/ruckig are all DELETED along with the
 # rest of the motion stack -- robot_loop.h no longer includes app/pilot.h
@@ -154,6 +158,7 @@ def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
         _STOP_CONDITION_SRC,
         _VELOCITY_SHAPER_SRC,
         _DRIVE_SRC,
+        _OTOS_SAMPLE_SRC,
         _ODOMETRY_SRC,
         _STATE_ESTIMATOR_SRC,
         _NEZHA_MOTOR_SRC,

@@ -1,13 +1,14 @@
-// move_queue.cpp -- App::MoveQueue implementation. See move_queue.h's file
+// move_queue.cpp -- Motion::MoveQueue implementation. See move_queue.h's file
 // header for the module's boundary and storage rationale.
-#include "app/move_queue.h"
+#include "motion/move_queue.h"
 
 #include <cmath>
 #include <limits>
 
+#include "motion/body_kinematics.h"
 #include "motion/velocity_shaper.h"
 
-namespace App {
+namespace Motion {
 
 namespace {
 
@@ -355,9 +356,9 @@ bool sameAxisCompatibleImpl(Motion::StopCondition::Kind endingKind, float ending
 
 }  // namespace
 
-MoveQueue::MoveQueue(Drive& drive, Odometry& odom, const Devices::Clock& clock,
+MoveQueue::MoveQueue(WheelSink& sink, Odometry& odom, float trackWidth,
                       ShaperLimits shaperLimits)
-    : drive_(drive), odom_(odom), clock_(clock), shaperLimits_(shaperLimits) {}
+    : sink_(sink), odom_(odom), trackWidth_(trackWidth), shaperLimits_(shaperLimits) {}
 
 void MoveQueue::activate(const msg::Move& move, uint64_t now, float pathLength, float theta) {
   // Disabled-axis gate -- see ShaperLimits's own doc comment (move_queue.h)
@@ -393,7 +394,7 @@ void MoveQueue::activate(const msg::Move& move, uint64_t now, float pathLength, 
       shaperVLeft_.syncTo(vLeft);
       shaperVRight_.syncTo(vRight);
     }
-    drive_.setWheels(vLeft, vRight);
+    sink_.setWheels(vLeft, vRight);
   } else {
     // TWIST (and the defensive NONE fallback -- see move_queue.h's own
     // header: a well-formed Move never reaches here with velocity_kind ==
@@ -416,7 +417,9 @@ void MoveQueue::activate(const msg::Move& move, uint64_t now, float pathLength, 
     } else {
       shaperOmega_.syncTo(omega);
     }
-    drive_.setTwist(vx, active_.cruiseVY, omega);
+    float vLeft = 0.0f, vRight = 0.0f;
+    BodyKinematics::inverse(vx, omega, trackWidth_, vLeft, vRight);
+    sink_.setWheels(vLeft, vRight);
   }
 
   Motion::StopCondition::Kind kind = Motion::StopCondition::Kind::Time;
@@ -509,7 +512,7 @@ void MoveQueue::shapeAndStage(uint64_t now, float pathLength, float theta) {
                                      shaperLimits_.aDecel, shaperLimits_.jMax);
     float vRight = shaperVRight_.next(active_.cruiseVRight, remainingLinear, dt, shaperLimits_.aMax,
                                        shaperLimits_.aDecel, shaperLimits_.jMax);
-    drive_.setWheels(vLeft, vRight);
+    sink_.setWheels(vLeft, vRight);
     return;
   }
 
@@ -524,7 +527,9 @@ void MoveQueue::shapeAndStage(uint64_t now, float pathLength, float theta) {
     omega = shaperOmega_.next(active_.cruiseOmega, remainingAngular, dt, shaperLimits_.alphaMax,
                                shaperLimits_.alphaDecel, shaperLimits_.yawJerkMax);
   }
-  drive_.setTwist(vx, active_.cruiseVY, omega);
+  float vLeft = 0.0f, vRight = 0.0f;
+  BodyKinematics::inverse(vx, omega, trackWidth_, vLeft, vRight);
+  sink_.setWheels(vLeft, vRight);
 }
 
 // sameAxisCompatible -- thin forwarder onto the anonymous namespace's own
@@ -619,20 +624,21 @@ bool MoveQueue::landAtZero(float pathLength, float theta, float dt) const {
   return false;  // Kind::Time -- no spatial `remaining`, never qualifies.
 }
 
-MoveQueue::EnqueueResult MoveQueue::enqueue(const msg::Move& move, uint32_t corrId) {
+MoveQueue::EnqueueResult MoveQueue::enqueue(const msg::Move& move, uint32_t corrId,
+                                             uint64_t now) {
   EnqueueResult result;
   result.corrId = corrId;
 
   if (move.replace) {
     pendingCount_ = 0;  // flush -- no completion ack for any of them
-    activate(move, clock_.nowMicros(), odom_.pathLength(), odom_.theta());
+    activate(move, now, odom_.pathLength(), odom_.theta());
     return result;
   }
 
   if (!active_.occupied) {
     // Queue was empty -- nothing to flush/preempt, but the activation
     // itself is identical to the replace==true path above.
-    activate(move, clock_.nowMicros(), odom_.pathLength(), odom_.theta());
+    activate(move, now, odom_.pathLength(), odom_.theta());
     return result;
   }
 
@@ -743,7 +749,7 @@ MoveQueue::TickResult MoveQueue::tick(uint64_t now, const Odometry& odom) {
     --pendingCount_;
     activate(next, now, odom.pathLength(), odom.theta());
   } else {
-    drive_.stop();
+    sink_.stop();
     // The robot has genuinely stopped -- reset() every shaper's own
     // (commandedSpeed, commandedAccel) state too, not just Drive's own
     // staged targets, so the NEXT unrelated Move (whenever it activates)
@@ -764,7 +770,7 @@ void MoveQueue::flush() {
   pendingCount_ = 0;
   active_.occupied = false;
   active_.moveId = 0;
-  drive_.stop();
+  sink_.stop();
   // Same reasoning as tick()'s own empty-queue-drain path above -- the
   // robot has genuinely stopped, so every shaper's own state must reset
   // to (0, 0) too, not just Drive's own staged targets.
@@ -782,4 +788,4 @@ bool MoveQueue::shapingDisabled() const {
   return !linearShaping && !angularShaping;
 }
 
-}  // namespace App
+}  // namespace Motion

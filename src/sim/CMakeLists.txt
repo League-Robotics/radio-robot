@@ -98,23 +98,33 @@ set(MOTION_DIR "${REPO_ROOT}/src/motion")
 set(APP_SOURCES
     "${SOURCE_DIR}/app/comms.cpp"
     "${SOURCE_DIR}/app/drive.cpp"
-    "${SOURCE_DIR}/app/move_queue.cpp"
-    "${SOURCE_DIR}/app/odometry.cpp"
+    "${SOURCE_DIR}/app/otos_sample.cpp"
     "${SOURCE_DIR}/app/preamble.cpp"
     "${SOURCE_DIR}/app/robot_loop.cpp"
-    "${SOURCE_DIR}/app/state_estimator.cpp"
     "${SOURCE_DIR}/app/telemetry.cpp"
 )
-# motion/stop_condition.cpp (116-002) -- App::MoveQueue (APP_SOURCES, above)
-# owns and drives one Motion::StopCondition per active Move; this TU must
-# link into the host lib too. motion/velocity_shaper.cpp (decel-into-the-
-# goal campaign) -- MoveQueue's own per-tick commanded-speed shaping,
-# the SAME "MoveQueue links it" reasoning as stop_condition.cpp. Both now
-# live under MOTION_DIR (122-001: src/motion, a sibling of src/firm), not
-# SOURCE_DIR -- repointed here, unchanged everywhere else.
+# motion/stop_condition.cpp (116-002) -- Motion::MoveQueue (MOTION_SOURCES,
+# below) owns and drives one Motion::StopCondition per active Move; this TU
+# must link into the host lib too. motion/velocity_shaper.cpp (decel-into-
+# the-goal campaign) -- MoveQueue's own per-tick commanded-speed shaping,
+# the SAME "MoveQueue links it" reasoning as stop_condition.cpp. Both live
+# under MOTION_DIR (122-001: src/motion, a sibling of src/firm), not
+# SOURCE_DIR.
+#
+# move_queue.cpp/odometry.cpp/state_estimator.cpp (122-002, motion-library
+# extraction ticket 2): moved from SOURCE_DIR/app/ into MOTION_DIR, behind
+# the velocity-sink boundary (motion/wheel_sink.h) -- App::Drive
+# (APP_SOURCES, above) is now the one WheelSink implementation these link
+# against. App::applyOtosSample() (the OTOS-perception half odometry.cpp
+# used to also define) stayed behind as a NEW app/otos_sample.cpp
+# (APP_SOURCES, above) -- Motion::Odometry may not depend on Devices::Otos/
+# App::Telemetry::Frame.
 set(MOTION_SOURCES
     "${MOTION_DIR}/stop_condition.cpp"
     "${MOTION_DIR}/velocity_shaper.cpp"
+    "${MOTION_DIR}/move_queue.cpp"
+    "${MOTION_DIR}/odometry.cpp"
+    "${MOTION_DIR}/state_estimator.cpp"
 )
 set(DEVICE_SOURCES
     "${SOURCE_DIR}/devices/velocity_pid.cpp"
