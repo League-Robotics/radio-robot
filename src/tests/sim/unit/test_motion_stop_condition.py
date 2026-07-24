@@ -1,9 +1,9 @@
 """Off-hardware acceptance proof for ticket 116-002 (SUC-050/SUC-051/
 SUC-052/SUC-054), ``Motion::StopCondition``
-(``src/firm/motion/stop_condition.{h,cpp}``).
+(``src/motion/stop_condition.{h,cpp}``).
 
 Compiles ``motion_stop_condition_harness.cpp`` together with
-``src/firm/motion/stop_condition.cpp`` ONLY -- no ``TestSim::SimClock``,
+``src/motion/stop_condition.cpp`` ONLY -- no ``TestSim::SimClock``,
 no ``App::``/``Devices::`` fakes of any kind, since the module takes every
 reading (``now``/``pathLength``/``theta``) as a plain parameter rather than
 reading from a held collaborator (see ``stop_condition.h``'s file header).
@@ -27,7 +27,7 @@ import pytest
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "motion_stop_condition_harness.cpp"
-_STOP_CONDITION_SRC = _SOURCE_DIR / "motion" / "stop_condition.cpp"
+_STOP_CONDITION_SRC = _REPO_ROOT / "src" / "motion" / "stop_condition.cpp"
 
 # Matches every other src/tests/sim/unit harness's own compiled standard --
 # the project's actual compiled standard is -std=gnu++20.
@@ -64,6 +64,8 @@ def test_motion_stop_condition_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_REPO_ROOT / "src"),
             "-o",
             str(binary),
             str(_HARNESS_SRC),

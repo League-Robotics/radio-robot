@@ -3,7 +3,7 @@ SUC-052), ``App::MoveQueue`` (``src/firm/app/move_queue.{h,cpp}``).
 
 Compiles ``app_move_queue_harness.cpp`` together with the HOST_BUILD
 implementations it needs -- ``src/firm/app/move_queue.cpp``,
-``src/firm/motion/stop_condition.cpp`` (116-002), ``src/firm/motion/
+``src/motion/stop_condition.cpp`` (116-002), ``src/motion/
 velocity_shaper.cpp`` (decel-into-the-goal campaign; 118 ticket 004's own
 land-at-zero completion predicate reads its ``commandedSpeed()``),
 ``src/firm/app/drive.cpp`` (116-004's ``setWheels()``), ``src/firm/app/
@@ -12,7 +12,7 @@ odometry.cpp`` (116-003's ``pathLength()`` -- odometry.cpp also defines
 though this harness never calls it), ``src/sim/sim_plant.cpp`` + its
 ``src/tests/sim/plant/{wheel,otos}_plant.cpp`` physics dependencies,
 ``src/firm/devices/velocity_pid.cpp``, ``src/firm/devices/nezha_motor.cpp``,
-``src/firm/kinematics/body_kinematics.cpp``, and ``src/sim/sim_clock.cpp``
+``src/motion/body_kinematics.cpp``, and ``src/sim/sim_clock.cpp``
 -- with ``-DHOST_BUILD``, against the SAME headers every ARM build compiles.
 ``App::StateEstimator`` is NOT compiled into this binary (118 ticket 004:
 ``App::MoveQueue`` no longer holds a ``const StateEstimator&`` -- see
@@ -38,11 +38,11 @@ _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
 _PLANT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "plant"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_move_queue_harness.cpp"
-_MOVE_QUEUE_SRC = _SOURCE_DIR / "app" / "move_queue.cpp"
-_STOP_CONDITION_SRC = _SOURCE_DIR / "motion" / "stop_condition.cpp"
-_VELOCITY_SHAPER_SRC = _SOURCE_DIR / "motion" / "velocity_shaper.cpp"
+_MOVE_QUEUE_SRC = _REPO_ROOT / "src" / "motion" / "move_queue.cpp"
+_STOP_CONDITION_SRC = _REPO_ROOT / "src" / "motion" / "stop_condition.cpp"
+_VELOCITY_SHAPER_SRC = _REPO_ROOT / "src" / "motion" / "velocity_shaper.cpp"
 _DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
-_ODOMETRY_SRC = _SOURCE_DIR / "app" / "odometry.cpp"
+_ODOMETRY_SRC = _REPO_ROOT / "src" / "motion" / "odometry.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _SIM_CLOCK_SRC = _INFRA_SIM_DIR / "sim_clock.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
@@ -50,7 +50,7 @@ _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 _VELOCITY_PID_SRC = _SOURCE_DIR / "devices" / "velocity_pid.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "devices" / "nezha_motor.cpp"
 _OTOS_SRC = _SOURCE_DIR / "devices" / "otos.cpp"
-_BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
 
 # Matches every other src/tests/sim/unit harness's own compiled standard --
 # the project's actual compiled standard is -std=gnu++20.
@@ -104,6 +104,8 @@ def test_app_move_queue_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_REPO_ROOT / "src"),
             "-I",
             str(_INFRA_SIM_DIR),
             "-I",

@@ -75,8 +75,8 @@
 #include <string>
 #include <vector>
 
-#include "app/state_estimator.h"
 #include "app/telemetry.h"
+#include "motion/state_estimator.h"
 #include "bench_test_config.h"
 #include "sim_harness.h"
 #include "wire_test_codec.h"
@@ -144,9 +144,9 @@ PhaseStats runPhase(TestSim::SimHarness& sim, const std::string& name, int cycle
   stats.name = name;
 
   bool havePending = false;
-  App::WheelEstimate pendingLeft;
-  App::WheelEstimate pendingRight;
-  App::BodyEstimate pendingBody;
+  Motion::WheelEstimate pendingLeft;
+  Motion::WheelEstimate pendingRight;
+  Motion::BodyEstimate pendingBody;
 
   constexpr uint32_t kHorizonMs = TestSim::SimHarness::kCycleDtUs / 1000;  // [ms] one full cycle ahead
 
@@ -181,8 +181,8 @@ PhaseStats runPhase(TestSim::SimHarness& sim, const std::string& name, int cycle
       ++stats.samples;
     }
 
-    pendingLeft = sim.stateEstimator().wheelAt(App::Wheel::Left, nowMs + kHorizonMs);
-    pendingRight = sim.stateEstimator().wheelAt(App::Wheel::Right, nowMs + kHorizonMs);
+    pendingLeft = sim.stateEstimator().wheelAt(Motion::Wheel::Left, nowMs + kHorizonMs);
+    pendingRight = sim.stateEstimator().wheelAt(Motion::Wheel::Right, nowMs + kHorizonMs);
     pendingBody = sim.stateEstimator().bodyAt(nowMs + kHorizonMs);
     havePending = true;
   }

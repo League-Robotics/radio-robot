@@ -32,6 +32,17 @@ Transport (ABC)
             Called from the reader thread for every parsed TLM line.
             Callers that need Qt-thread safety must marshal via
             QMetaObject.invokeMethod or a thread-safe signal.
+        on_telemetry_secondary: Callable[["telemetry_pb2.TelemetrySecondary"], None] | None
+            122-003: called from the reader thread for every parsed
+            TelemetrySecondary line (the slower ~5 Hz diagnostic frame --
+            carries cycle_busy/cycle_period among other fields; see
+            telemetry.proto's own TelemetrySecondary doc comment). Hardware
+            backends only (``_HardwareTransport``, which already drains
+            ``SerialConnection.drain_binary_secondary_tlm()``);
+            ``SimTransport`` does not yet decode a secondary frame at all
+            (pre-existing gap, unrelated to this callback) so this stays
+            unset/never invoked there. Same Qt-thread-marshaling caveat as
+            ``on_telemetry`` above.
         on_truth: Callable[[(float, float, float) | None], None] | None
             Called from the camera-truth poller with (x_cm, y_cm, yaw_rad),
             or None when the daemon is not available.
@@ -505,6 +516,13 @@ class Transport(abc.ABC):
         from the robot.  Invoked from a background thread; GUI callers
         must marshal to the Qt main thread.
 
+    ``on_telemetry_secondary`` (122-003)
+        Called with a raw ``telemetry_pb2.TelemetrySecondary`` for each
+        parsed secondary line (~5 Hz). Hardware backends only -- see this
+        module's own file-header doc for the ``SimTransport`` gap.
+        Invoked from a background thread; GUI callers must marshal to the
+        Qt main thread, same as ``on_telemetry``.
+
     ``on_truth``
         Called with ``(x_cm, y_cm, yaw_rad)`` when a camera-truth pose
         is available, or ``None`` when the camera daemon is not present.
@@ -516,6 +534,7 @@ class Transport(abc.ABC):
 
     def __init__(self) -> None:
         self.on_telemetry: TelemetryCB | None = None
+        self.on_telemetry_secondary: "Callable[[object], None] | None" = None
         self.on_truth: TruthCB | None = None
         self.on_log: LogCB | None = None
 
@@ -629,6 +648,14 @@ class Transport(abc.ABC):
                 self.on_telemetry(frame)
             except Exception:
                 _log.exception("on_telemetry callback raised")
+
+    def _deliver_secondary(self, secondary: object) -> None:
+        """Invoke on_telemetry_secondary safely (122-003)."""
+        if self.on_telemetry_secondary:
+            try:
+                self.on_telemetry_secondary(secondary)
+            except Exception:
+                _log.exception("on_telemetry_secondary callback raised")
 
     def _deliver_truth(self, pose: TruthPose | None) -> None:
         """Invoke on_truth safely."""
@@ -1208,6 +1235,16 @@ class _HardwareTransport(Transport):
         this thread drains that queue (``drain_binary_tlm()``) and adapts
         each frame via ``TLMFrame.from_pb2()``, forwarding results to
         on_telemetry.
+
+        122-003: ALSO drains ``_binary_secondary_queue`` (via
+        ``drain_binary_secondary_tlm()``, already maintained by
+        ``SerialConnection`` -- see that method's own docstring) and
+        delivers each raw ``telemetry_pb2.TelemetrySecondary`` to
+        ``on_telemetry_secondary``, same best-effort/never-raises posture
+        as the primary drain above. Not gated by ``_reader_suspended`` --
+        that flag only protects the shared PRIMARY queue a tour executor
+        needs exclusive access to (see the skip branch's own comment); the
+        secondary queue has no such competing consumer.
         """
         while not self._stop_event.is_set():
             if self._conn is None or not self._conn.is_open:
@@ -1230,6 +1267,14 @@ class _HardwareTransport(Transport):
                 frame = TLMFrame.from_pb2(reply.tlm)
                 self._last_tlm = frame
                 self._deliver_tlm(frame)
+
+            try:
+                secondaries = self._conn.drain_binary_secondary_tlm()
+            except Exception:
+                secondaries = []
+
+            for secondary in secondaries:
+                self._deliver_secondary(secondary)
 
             # Wait a short interval before draining again.
             self._stop_event.wait(timeout=_TLM_DRAIN_INTERVAL_S)

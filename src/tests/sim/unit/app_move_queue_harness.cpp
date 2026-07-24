@@ -44,12 +44,12 @@
 #include <string>
 
 #include "app/drive.h"
-#include "app/move_queue.h"
-#include "app/odometry.h"
 #include "devices/device_config.h"
 #include "devices/device_types.h"
 #include "devices/nezha_motor.h"
-#include "kinematics/body_kinematics.h"
+#include "motion/body_kinematics.h"
+#include "motion/move_queue.h"
+#include "motion/odometry.h"
 #include "messages/envelope.h"
 #include "scripted_i2c_hook.h"
 #include "sim_clock.h"
@@ -283,14 +283,14 @@ void scenarioEnqueueOnEmptyQueueActivatesTwistImmediately() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
+  Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
   msg::Move move = makeTwistMove(/*id=*/7, /*v_x=*/100.0f, /*v_y=*/0.0f, /*omega=*/0.0f,
                                   msg::Move::StopKind::TIME, /*stopValue=*/500.0f,
                                   /*timeout=*/5000.0f, /*replace=*/false);
 
-  App::MoveQueue::EnqueueResult result = queue.enqueue(move, /*corrId=*/42);
+  Motion::MoveQueue::EnqueueResult result = queue.enqueue(move, /*corrId=*/42, clock.nowMicros());
   checkUintEq(result.corrId, 42, "EnqueueResult echoes corrId unchanged");
   checkTrue(result.err == msg::ErrCode::ERR_NONE, "activation on an empty queue is ERR_NONE, never ERR_FULL");
   checkTrue(queue.active(), "queue is active immediately after enqueue() on an empty queue");
@@ -327,13 +327,13 @@ void scenarioWheelsDistanceMoveUsesRealOdometryBaseline() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
+  Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
   msg::Move move = makeWheelsMove(/*id=*/9, /*vLeft=*/90.0f, /*vRight=*/30.0f,
                                    msg::Move::StopKind::DISTANCE, /*stopValue=*/80.0f /*[mm]*/,
                                    /*timeout=*/60000.0f, /*replace=*/false);
-  App::MoveQueue::EnqueueResult enqRes = queue.enqueue(move, /*corrId=*/1);
+  Motion::MoveQueue::EnqueueResult enqRes = queue.enqueue(move, /*corrId=*/1, clock.nowMicros());
   checkTrue(enqRes.err == msg::ErrCode::ERR_NONE, "enqueue on empty queue is ERR_NONE");
 
   drive.tick();
@@ -346,19 +346,19 @@ void scenarioWheelsDistanceMoveUsesRealOdometryBaseline() {
   // distance == 50mm) -- under the 80mm threshold, motion should CONTINUE.
   driveToPosition(left, bus, kWireAddr, 50.0f, 200000);
   driveToPosition(right, bus, kWireAddr, 50.0f, 200000);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
   checkFloatEq(odom.pathLength(), 50.0f, "sanity: pathLength() reflects the 50mm straight-line travel");
 
-  App::MoveQueue::TickResult tick1 = queue.tick(clock.nowMicros(), odom);
+  Motion::MoveQueue::TickResult tick1 = queue.tick(clock.nowMicros(), odom);
   checkFalse(tick1.completed, "DISTANCE Move continues at 50mm traveled -- under the 80mm threshold");
   checkTrue(queue.active(), "queue is still active after a Continue tick");
 
   // Advance a further 40mm (total 90mm traveled) -- over the 80mm threshold.
   driveToPosition(left, bus, kWireAddr, 90.0f, 260000);
   driveToPosition(right, bus, kWireAddr, 90.0f, 260000);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
 
-  App::MoveQueue::TickResult tick2 = queue.tick(clock.nowMicros(), odom);
+  Motion::MoveQueue::TickResult tick2 = queue.tick(clock.nowMicros(), odom);
   checkTrue(tick2.completed, "DISTANCE Move ends once 90mm >= the 80mm threshold");
   checkUintEq(tick2.completion.moveId, 9, "completion reports the ended Move's id");
   checkFalse(tick2.completion.timedOut, "ended via the DISTANCE condition, not the timeout backstop");
@@ -391,30 +391,30 @@ void scenarioAngleMoveUsesRealOdometryHeadingBaseline() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
+  Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
   msg::Move move = makeTwistMove(/*id=*/11, /*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/0.5f,
                                   msg::Move::StopKind::ANGLE, /*stopValue=*/0.5f /*[rad]*/,
                                   /*timeout=*/60000.0f, /*replace=*/false);
-  queue.enqueue(move, /*corrId=*/2);
+  queue.enqueue(move, /*corrId=*/2, clock.nowMicros());
 
   // Left goes -d, right goes +d -- headingDelta = 2d/trackWidth, distance
   // stays 0 (BodyKinematics::forward() for equal-and-opposite deltas).
   driveToPosition(left, bus, kWireAddr, -30.0f, 200000);
   driveToPosition(right, bus, kWireAddr, 30.0f, 200000);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
   checkFloatEq(odom.theta(), 0.3f, "sanity: theta() reflects the pure-rotation headingDelta", 1e-3f);
   checkFloatEq(odom.pathLength(), 0.0f, "sanity: pathLength() stays ~0 for a pure rotation");
 
-  App::MoveQueue::TickResult tick1 = queue.tick(clock.nowMicros(), odom);
+  Motion::MoveQueue::TickResult tick1 = queue.tick(clock.nowMicros(), odom);
   checkFalse(tick1.completed, "ANGLE Move continues at 0.3rad turned -- under the 0.5rad threshold");
 
   driveToPosition(left, bus, kWireAddr, -60.0f, 260000);
   driveToPosition(right, bus, kWireAddr, 60.0f, 260000);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
 
-  App::MoveQueue::TickResult tick2 = queue.tick(clock.nowMicros(), odom);
+  Motion::MoveQueue::TickResult tick2 = queue.tick(clock.nowMicros(), odom);
   checkTrue(tick2.completed, "ANGLE Move ends once 0.6rad >= the 0.5rad threshold");
   checkUintEq(tick2.completion.moveId, 11, "completion reports the ended Move's id");
   checkFalse(tick2.completion.timedOut, "ended via the ANGLE condition, not the timeout backstop");
@@ -437,14 +437,14 @@ void scenarioTimeMoveContinuesThenCompletesAndDrainsEmptyToStop() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
+  Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
   clock.setMicros(0);
   msg::Move move = makeTwistMove(/*id=*/5, /*v_x=*/120.0f, /*v_y=*/0.0f, /*omega=*/0.0f,
                                   msg::Move::StopKind::TIME, /*stopValue=*/100.0f /*[ms]*/,
                                   /*timeout=*/5000.0f, /*replace=*/false);
-  queue.enqueue(move, /*corrId=*/3);
+  queue.enqueue(move, /*corrId=*/3, clock.nowMicros());
 
   drive.tick();
   runOneCycleAtZeroPosition(left, bus, kWireAddr, kPastWriteThrottleUs);
@@ -452,12 +452,12 @@ void scenarioTimeMoveContinuesThenCompletesAndDrainsEmptyToStop() {
   checkTrue(left.appliedDuty() != 0.0f, "setup: left duty nonzero -- the Move is genuinely driving before completion");
 
   clock.setMicros(99000);  // 99ms -- under the 100ms TIME threshold
-  App::MoveQueue::TickResult tick1 = queue.tick(clock.nowMicros(), odom);
+  Motion::MoveQueue::TickResult tick1 = queue.tick(clock.nowMicros(), odom);
   checkFalse(tick1.completed, "not completed at 99ms -- under the 100ms threshold");
   checkTrue(queue.active(), "still active at 99ms");
 
   clock.setMicros(100000);  // 100ms -- AT the threshold
-  App::MoveQueue::TickResult tick2 = queue.tick(clock.nowMicros(), odom);
+  Motion::MoveQueue::TickResult tick2 = queue.tick(clock.nowMicros(), odom);
   checkTrue(tick2.completed, "completed AT the 100ms threshold (>=, not >)");
   checkUintEq(tick2.completion.moveId, 5, "completion reports the ended Move's id");
   checkFalse(tick2.completion.timedOut, "ended via the TIME condition, not the timeout backstop");
@@ -487,21 +487,21 @@ void scenarioChainedMoveActivatesSameCycleNoInterveningStop() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
+  Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
   clock.setMicros(0);
   msg::Move moveA = makeWheelsMove(21, 60.0f, 60.0f, msg::Move::StopKind::TIME, 100.0f, 5000.0f, false);
-  App::MoveQueue::EnqueueResult resA = queue.enqueue(moveA, 10);
+  Motion::MoveQueue::EnqueueResult resA = queue.enqueue(moveA, 10, clock.nowMicros());
   checkTrue(resA.err == msg::ErrCode::ERR_NONE, "A activates on the empty queue");
 
   msg::Move moveB = makeWheelsMove(22, -40.0f, 40.0f, msg::Move::StopKind::TIME, 200.0f, 5000.0f, false);
-  App::MoveQueue::EnqueueResult resB = queue.enqueue(moveB, 11);
+  Motion::MoveQueue::EnqueueResult resB = queue.enqueue(moveB, 11, clock.nowMicros());
   checkTrue(resB.err == msg::ErrCode::ERR_NONE, "B enqueues behind A -- queue has room");
   checkUintEq(static_cast<uint32_t>(queue.pendingCount()), 1, "B is pending, 1 slot occupied");
 
   clock.setMicros(100000);  // A's TIME threshold
-  App::MoveQueue::TickResult tick1 = queue.tick(clock.nowMicros(), odom);
+  Motion::MoveQueue::TickResult tick1 = queue.tick(clock.nowMicros(), odom);
   checkTrue(tick1.completed, "A ends at its 100ms threshold");
   checkUintEq(tick1.completion.moveId, 21, "completion reports A's id");
   checkTrue(queue.active(), "queue is STILL active -- B activated the SAME call (seamless hand-off)");
@@ -535,18 +535,18 @@ void scenarioReplaceTruePreemptsActiveAndFlushesPending() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
+  Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
   clock.setMicros(0);
   msg::Move moveA = makeWheelsMove(31, 50.0f, 50.0f, msg::Move::StopKind::TIME, 1000.0f, 5000.0f, false);
-  queue.enqueue(moveA, 1);
+  queue.enqueue(moveA, 1, clock.nowMicros());
   msg::Move moveB = makeWheelsMove(32, 20.0f, 20.0f, msg::Move::StopKind::TIME, 1000.0f, 5000.0f, false);
-  queue.enqueue(moveB, 2);
+  queue.enqueue(moveB, 2, clock.nowMicros());
   checkUintEq(static_cast<uint32_t>(queue.pendingCount()), 1, "setup: B is pending behind A");
 
   msg::Move moveC = makeWheelsMove(33, -70.0f, 70.0f, msg::Move::StopKind::TIME, 150.0f, 5000.0f, /*replace=*/true);
-  App::MoveQueue::EnqueueResult resC = queue.enqueue(moveC, 3);
+  Motion::MoveQueue::EnqueueResult resC = queue.enqueue(moveC, 3, clock.nowMicros());
   checkTrue(resC.err == msg::ErrCode::ERR_NONE, "replace=true is always accepted, never ERR_FULL");
   checkTrue(queue.active(), "C is active immediately");
   checkUintEq(queue.activeMoveId(), 33, "C preempted A -- C is now active");
@@ -560,7 +560,7 @@ void scenarioReplaceTruePreemptsActiveAndFlushesPending() {
 
   // C ends -- B never appears (it was flushed, not merely deprioritized).
   clock.setMicros(150000);
-  App::MoveQueue::TickResult tickC = queue.tick(clock.nowMicros(), odom);
+  Motion::MoveQueue::TickResult tickC = queue.tick(clock.nowMicros(), odom);
   checkTrue(tickC.completed, "C ends at its own 150ms threshold");
   checkUintEq(tickC.completion.moveId, 33, "completion reports C's id");
   checkFalse(queue.active(), "queue drains fully empty -- B never activates (flushed, not just pending)");
@@ -583,24 +583,24 @@ void scenarioOverflowRejectedErrFullQueueByteForByteUnchanged() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
+  Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
   msg::Move moveA = makeTwistMove(41, 10.0f, 0.0f, 0.0f, msg::Move::StopKind::TIME, 1000.0f, 5000.0f, false);
-  queue.enqueue(moveA, 100);
+  queue.enqueue(moveA, 100, clock.nowMicros());
 
   msg::Move moveB = makeTwistMove(42, 20.0f, 0.0f, 0.0f, msg::Move::StopKind::DISTANCE, 30.0f, 5000.0f, false);
   msg::Move moveC = makeWheelsMove(43, 5.0f, 5.0f, msg::Move::StopKind::ANGLE, 0.4f, 5000.0f, false);
   msg::Move moveD = makeTwistMove(44, -15.0f, 0.0f, 0.2f, msg::Move::StopKind::TIME, 250.0f, 5000.0f, false);
   msg::Move moveE = makeWheelsMove(45, -8.0f, 8.0f, msg::Move::StopKind::TIME, 400.0f, 5000.0f, false);
-  queue.enqueue(moveB, 101);
-  queue.enqueue(moveC, 102);
-  queue.enqueue(moveD, 103);
-  queue.enqueue(moveE, 104);
+  queue.enqueue(moveB, 101, clock.nowMicros());
+  queue.enqueue(moveC, 102, clock.nowMicros());
+  queue.enqueue(moveD, 103, clock.nowMicros());
+  queue.enqueue(moveE, 104, clock.nowMicros());
   checkUintEq(static_cast<uint32_t>(queue.pendingCount()), 4, "setup: 4 Moves pending, queue at capacity");
 
   msg::Move moveF = makeTwistMove(46, 99.0f, 0.0f, 0.0f, msg::Move::StopKind::TIME, 1000.0f, 5000.0f, false);
-  App::MoveQueue::EnqueueResult resF = queue.enqueue(moveF, 105);
+  Motion::MoveQueue::EnqueueResult resF = queue.enqueue(moveF, 105, clock.nowMicros());
   checkTrue(resF.err == msg::ErrCode::ERR_FULL, "a 5th pending Move is rejected ERR_FULL");
   checkUintEq(resF.corrId, 105, "EnqueueResult still echoes the rejected command's corrId");
 
@@ -629,15 +629,15 @@ void scenarioFlushDrainsAllPendingAndActiveWithNoCompletionAckAndStopsDrive() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
+  Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
   msg::Move moveA = makeWheelsMove(51, 60.0f, 60.0f, msg::Move::StopKind::TIME, 5000.0f, 10000.0f, false);
-  queue.enqueue(moveA, 1);
+  queue.enqueue(moveA, 1, clock.nowMicros());
   msg::Move moveB = makeWheelsMove(52, 30.0f, 30.0f, msg::Move::StopKind::TIME, 5000.0f, 10000.0f, false);
   msg::Move moveC = makeWheelsMove(53, 15.0f, 15.0f, msg::Move::StopKind::TIME, 5000.0f, 10000.0f, false);
-  queue.enqueue(moveB, 2);
-  queue.enqueue(moveC, 3);
+  queue.enqueue(moveB, 2, clock.nowMicros());
+  queue.enqueue(moveC, 3, clock.nowMicros());
   checkTrue(queue.active(), "setup: A is active");
   checkUintEq(static_cast<uint32_t>(queue.pendingCount()), 2, "setup: B, C pending");
 
@@ -660,7 +660,7 @@ void scenarioFlushDrainsAllPendingAndActiveWithNoCompletionAckAndStopsDrive() {
   // After flush(), the queue behaves as freshly empty -- proves B/C are
   // truly gone, not merely deprioritized ("still 2 pending" residue).
   msg::Move moveD = makeTwistMove(54, 5.0f, 0.0f, 0.0f, msg::Move::StopKind::TIME, 100.0f, 5000.0f, false);
-  App::MoveQueue::EnqueueResult resD = queue.enqueue(moveD, 4);
+  Motion::MoveQueue::EnqueueResult resD = queue.enqueue(moveD, 4, clock.nowMicros());
   checkTrue(resD.err == msg::ErrCode::ERR_NONE, "post-flush() enqueue succeeds on a genuinely empty queue");
   checkUintEq(queue.activeMoveId(), 54, "D activates immediately -- B/C are truly gone, not just deprioritized");
 }
@@ -683,21 +683,21 @@ void scenarioTimeoutEndsStalledDistanceMoveWithTimedOutTrue() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);  // pathLength() stays 0 -- wheels never move in this scenario
-  App::MoveQueue queue(drive, odom, clock);
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());  // pathLength() stays 0 -- wheels never move in this scenario
+  Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
   clock.setMicros(0);
   msg::Move move = makeWheelsMove(/*id=*/61, 40.0f, 40.0f, msg::Move::StopKind::DISTANCE,
                                    /*stopValue=*/500.0f /*[mm], never reached -- no encoder motion below*/,
                                    /*timeout=*/200.0f /*[ms]*/, false);
-  queue.enqueue(move, 6);
+  queue.enqueue(move, 6, clock.nowMicros());
 
   clock.setMicros(199000);  // 199ms -- under the 200ms timeout, pathLength still 0
-  App::MoveQueue::TickResult tick1 = queue.tick(clock.nowMicros(), odom);
+  Motion::MoveQueue::TickResult tick1 = queue.tick(clock.nowMicros(), odom);
   checkFalse(tick1.completed, "not yet timed out at 199ms, DISTANCE condition nowhere near met (pathLength still 0)");
 
   clock.setMicros(200000);  // 200ms -- AT the timeout
-  App::MoveQueue::TickResult tick2 = queue.tick(clock.nowMicros(), odom);
+  Motion::MoveQueue::TickResult tick2 = queue.tick(clock.nowMicros(), odom);
   checkTrue(tick2.completed, "ends AT the 200ms timeout");
   checkUintEq(tick2.completion.moveId, 61, "completion reports the ended Move's id");
   checkTrue(tick2.completion.timedOut, "ended via the timeout backstop, NOT the DISTANCE condition -- timedOut must be true");
@@ -717,11 +717,11 @@ void scenarioTickWithNoActiveMoveIsANoOp() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
+  Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
   checkFalse(queue.active(), "fresh MoveQueue starts with no active Move");
-  App::MoveQueue::TickResult result = queue.tick(clock.nowMicros(), odom);
+  Motion::MoveQueue::TickResult result = queue.tick(clock.nowMicros(), odom);
   checkFalse(result.completed, "tick() on an empty queue reports no completion");
   checkFalse(queue.active(), "still not active after a no-op tick()");
 }
@@ -770,15 +770,15 @@ void scenarioDistanceMoveShapesLinearSpeedRampUpThenTaperNearGoal() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);
-  App::ShaperLimits limits;
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
+  Motion::ShaperLimits limits;
   limits.aMax = 1000.0f;    // [mm/s^2]
   limits.aDecel = 800.0f;   // [mm/s^2]
   limits.jMax = 5000.0f;    // [mm/s^3]
   limits.alphaMax = 0.0f;   // angular shaping disabled -- irrelevant, v_x==300/omega==0 here anyway
   limits.alphaDecel = 0.0f;
   limits.yawJerkMax = 0.0f;
-  App::MoveQueue queue(drive, odom, clock, limits);
+  Motion::MoveQueue queue(drive, odom, kTrackWidth, limits);
 
   // Two INDEPENDENT timelines, matching this file's own established
   // convention (see scenario 2's own driveToPosition() calls): `clock`
@@ -795,7 +795,7 @@ void scenarioDistanceMoveShapesLinearSpeedRampUpThenTaperNearGoal() {
   msg::Move move = makeTwistMove(/*id=*/81, /*v_x=*/300.0f, /*v_y=*/0.0f, /*omega=*/0.0f,
                                   msg::Move::StopKind::DISTANCE, /*stopValue=*/300.0f /*[mm]*/,
                                   /*timeout=*/600000.0f, /*replace=*/false);
-  queue.enqueue(move, /*corrId=*/1);
+  queue.enqueue(move, /*corrId=*/1, clock.nowMicros());
 
   // Activation itself stages the CARRIED-OVER shaper state (0 -- a fresh
   // queue's own resting value), NOT the raw 300mm/s cruise target --
@@ -824,7 +824,7 @@ void scenarioDistanceMoveShapesLinearSpeedRampUpThenTaperNearGoal() {
   for (int i = 1; i <= 30; ++i) {
     nowClockUs += 20000;
     clock.setMicros(nowClockUs);
-    App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+    Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
     checkFalse(tick.completed, "ramp-up phase -- still far from the 300mm threshold");
     drive.tick();
     nowUs += 100000;
@@ -848,7 +848,7 @@ void scenarioDistanceMoveShapesLinearSpeedRampUpThenTaperNearGoal() {
   nowUs += 300000;
   driveToPosition(left, bus, kWireAddr, 295.0f, nowUs);
   driveToPosition(right, bus, kWireAddr, 295.0f, nowUs);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
   checkFloatEq(odom.pathLength(), 295.0f, "sanity: 295mm traveled, 5mm remaining");
 
   // 118 ticket 004: land-at-zero (move_queue.cpp's own landAtZero())
@@ -870,7 +870,7 @@ void scenarioDistanceMoveShapesLinearSpeedRampUpThenTaperNearGoal() {
   // tick's own commanded duty is a plausible BRAKING value (below cruise,
   // matching the ramp-up plateau's own upper bound), not a stale
   // full-cruise value carried through unshaped.
-  App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+  Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
   checkTrue(tick.completed,
             "land-at-zero completes the Move the FIRST tick remaining (5mm) falls inside its "
             "own cruise-speed braking envelope (118 ticket 004)");
@@ -901,15 +901,15 @@ void scenarioAngleMoveShapesAngularSpeedRampUpThenTaperNearGoal() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);
-  App::ShaperLimits limits;
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
+  Motion::ShaperLimits limits;
   limits.aMax = 0.0f;       // linear shaping disabled -- irrelevant, v_x==0 here anyway
   limits.aDecel = 0.0f;
   limits.jMax = 0.0f;
   limits.alphaMax = 6.0f;      // [rad/s^2]
   limits.alphaDecel = 7.0f;    // [rad/s^2] -- matches the real production tovez.json value
   limits.yawJerkMax = 100.0f;  // [rad/s^3] -- matches the real production tovez.json value
-  App::MoveQueue queue(drive, odom, clock, limits);
+  Motion::MoveQueue queue(drive, odom, kTrackWidth, limits);
 
   // Two INDEPENDENT timelines -- see scenario 13's own comment for why.
   uint64_t nowUs = 100000;
@@ -919,7 +919,7 @@ void scenarioAngleMoveShapesAngularSpeedRampUpThenTaperNearGoal() {
   msg::Move move = makeTwistMove(/*id=*/82, /*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/-2.0f /*[rad/s]*/,
                                   msg::Move::StopKind::ANGLE, /*stopValue=*/1.6f /*[rad]*/,
                                   /*timeout=*/600000.0f, /*replace=*/false);
-  queue.enqueue(move, /*corrId=*/2);
+  queue.enqueue(move, /*corrId=*/2, clock.nowMicros());
 
   // Activation stages the carried-over shaper state (0), not raw omega.
   drive.tick();
@@ -951,7 +951,7 @@ void scenarioAngleMoveShapesAngularSpeedRampUpThenTaperNearGoal() {
   for (int i = 1; i <= 15; ++i) {
     nowClockUs += 20000;
     clock.setMicros(nowClockUs);
-    App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+    Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
     checkFalse(tick.completed, "ramp-up phase -- still far from the 1.6rad threshold");
     drive.tick();
     nowUs += 100000;
@@ -964,7 +964,7 @@ void scenarioAngleMoveShapesAngularSpeedRampUpThenTaperNearGoal() {
   for (int i = 16; i <= 30; ++i) {
     nowClockUs += 20000;
     clock.setMicros(nowClockUs);
-    App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+    Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
     checkFalse(tick.completed, "settling phase -- still far from the 1.6rad threshold");
     drive.tick();
     nowUs += 100000;
@@ -985,7 +985,7 @@ void scenarioAngleMoveShapesAngularSpeedRampUpThenTaperNearGoal() {
   nowUs += 300000;
   driveToPosition(left, bus, kWireAddr, 1.58f * (kTrackWidth / 2.0f), nowUs);
   driveToPosition(right, bus, kWireAddr, -1.58f * (kTrackWidth / 2.0f), nowUs);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
   checkFloatEq(odom.theta(), -1.58f, "sanity: -1.58rad turned (CW, matching omega's own negative sign), 0.02rad remaining", 1e-3f);
 
   // 118 ticket 004: see scenario 13's own matching comment -- jumping
@@ -997,7 +997,7 @@ void scenarioAngleMoveShapesAngularSpeedRampUpThenTaperNearGoal() {
   // what this scenario still uniquely checks: the completing tick's own
   // commanded duty is a plausible braking value, not a stale full-cruise
   // value carried through unshaped.
-  App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+  Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
   checkTrue(tick.completed,
             "land-at-zero completes the Move the FIRST tick remaining (0.02rad) falls inside "
             "its own cruise-speed braking envelope (118 ticket 004)");
@@ -1035,12 +1035,12 @@ void scenarioDistanceMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);
-  App::ShaperLimits limits;
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
+  Motion::ShaperLimits limits;
   limits.aMax = 1000.0f;   // [mm/s^2]
   limits.aDecel = 800.0f;  // [mm/s^2]
   limits.jMax = 5000.0f;   // [mm/s^3]
-  App::MoveQueue queue(drive, odom, clock, limits);
+  Motion::MoveQueue queue(drive, odom, kTrackWidth, limits);
 
   uint64_t nowUs = 100000;
   uint64_t nowClockUs = 0;
@@ -1050,13 +1050,13 @@ void scenarioDistanceMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing() {
                                   msg::Move::StopKind::DISTANCE, /*stopValue=*/300.0f /*[mm]*/,
                                   /*timeout=*/60000.0f /*[ms], far outside this scenario's budget*/,
                                   /*replace=*/false);
-  queue.enqueue(move, /*corrId=*/1);
+  queue.enqueue(move, /*corrId=*/1, clock.nowMicros());
 
   // Ramp up to (near) cruise first -- same technique as scenario 13.
   for (int i = 1; i <= 30; ++i) {
     nowClockUs += 20000;
     clock.setMicros(nowClockUs);
-    App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+    Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
     checkFalse(tick.completed, "ramp-up phase -- still far from the 300mm threshold");
     drive.tick();
     nowUs += 100000;
@@ -1071,14 +1071,14 @@ void scenarioDistanceMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing() {
   nowUs += 300000;
   driveToPosition(left, bus, kWireAddr, 299.9f, nowUs);
   driveToPosition(right, bus, kWireAddr, 299.9f, nowUs);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
   checkFloatEq(odom.pathLength(), 299.9f, "sanity: 299.9mm traveled, 0.1mm remaining -- never reaches 300mm");
 
   bool completedViaLandAtZero = false;
   for (int i = 1; i <= 200 && !completedViaLandAtZero; ++i) {
     nowClockUs += 20000;
     clock.setMicros(nowClockUs);
-    App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+    Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
     if (tick.completed) {
       completedViaLandAtZero = true;
       checkUintEq(tick.completion.moveId, 91, "completion reports this Move's own id");
@@ -1116,12 +1116,12 @@ void scenarioAngleMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);
-  App::ShaperLimits limits;
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
+  Motion::ShaperLimits limits;
   limits.alphaMax = 6.0f;      // [rad/s^2]
   limits.alphaDecel = 7.0f;    // [rad/s^2] -- matches the real production tovez.json value
   limits.yawJerkMax = 100.0f;  // [rad/s^3] -- matches the real production tovez.json value
-  App::MoveQueue queue(drive, odom, clock, limits);
+  Motion::MoveQueue queue(drive, odom, kTrackWidth, limits);
 
   uint64_t nowUs = 100000;
   uint64_t nowClockUs = 0;
@@ -1131,12 +1131,12 @@ void scenarioAngleMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing() {
                                   msg::Move::StopKind::ANGLE, /*stopValue=*/1.6f /*[rad]*/,
                                   /*timeout=*/60000.0f /*[ms], far outside this scenario's budget*/,
                                   /*replace=*/false);
-  queue.enqueue(move, /*corrId=*/2);
+  queue.enqueue(move, /*corrId=*/2, clock.nowMicros());
 
   for (int i = 1; i <= 30; ++i) {
     nowClockUs += 20000;
     clock.setMicros(nowClockUs);
-    App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+    Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
     checkFalse(tick.completed, "ramp-up phase -- still far from the 1.6rad threshold");
     drive.tick();
     nowUs += 100000;
@@ -1151,14 +1151,14 @@ void scenarioAngleMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing() {
   nowUs += 300000;
   driveToPosition(left, bus, kWireAddr, 1.599f * (kTrackWidth / 2.0f), nowUs);
   driveToPosition(right, bus, kWireAddr, -1.599f * (kTrackWidth / 2.0f), nowUs);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
   checkFloatEq(odom.theta(), -1.599f, "sanity: -1.599rad turned, 0.001rad remaining -- never reaches 1.6rad", 1e-3f);
 
   bool completedViaLandAtZero = false;
   for (int i = 1; i <= 200 && !completedViaLandAtZero; ++i) {
     nowClockUs += 20000;
     clock.setMicros(nowClockUs);
-    App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+    Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
     if (tick.completed) {
       completedViaLandAtZero = true;
       checkUintEq(tick.completion.moveId, 92, "completion reports this Move's own id");
@@ -1201,15 +1201,15 @@ void scenarioLandAtZeroNeverFiresWithShapingOff() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);
-  App::MoveQueue queue(drive, odom, clock);  // ShaperLimits{} default -- shaping OFF
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
+  Motion::MoveQueue queue(drive, odom, kTrackWidth);  // ShaperLimits{} default -- shaping OFF
 
   clock.setMicros(0);
   msg::Move move = makeTwistMove(/*id=*/93, /*v_x=*/300.0f, /*v_y=*/0.0f, /*omega=*/0.0f,
                                   msg::Move::StopKind::DISTANCE, /*stopValue=*/300.0f /*[mm]*/,
                                   /*timeout=*/60000.0f /*[ms], far outside this scenario's budget*/,
                                   /*replace=*/false);
-  queue.enqueue(move, /*corrId=*/1);
+  queue.enqueue(move, /*corrId=*/1, clock.nowMicros());
 
   // Pin pathLength at 299.9mm (0.1mm remaining -- the SAME tiny remaining
   // scenario 15 uses to trigger land-at-zero WITH shaping ON) and never
@@ -1224,14 +1224,14 @@ void scenarioLandAtZeroNeverFiresWithShapingOff() {
   // gap" convention, see their own comments).
   driveToPosition(left, bus, kWireAddr, 299.9f, 400000);
   driveToPosition(right, bus, kWireAddr, 299.9f, 400000);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
   checkFloatEq(odom.pathLength(), 299.9f, "sanity: 299.9mm traveled, 0.1mm remaining");
 
   uint64_t nowClockUs = 0;
   for (int i = 1; i <= 200; ++i) {
     nowClockUs += 20000;
     clock.setMicros(nowClockUs);
-    App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+    Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
     checkFalse(tick.completed,
                "shaping OFF -- land-at-zero never fires despite remaining pinned tiny, tick "
                    + std::to_string(i));
@@ -1274,12 +1274,12 @@ void scenarioOrthogonalBoundaryTurnToStraightUsesOrthogonalPredicate() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);
-  App::ShaperLimits limits;
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
+  Motion::ShaperLimits limits;
   limits.alphaMax = 6.0f;      // [rad/s^2] -- matches scenario 14/16's own config
   limits.alphaDecel = 7.0f;    // [rad/s^2]
   limits.yawJerkMax = 100.0f;  // [rad/s^3]
-  App::MoveQueue queue(drive, odom, clock, limits);
+  Motion::MoveQueue queue(drive, odom, kTrackWidth, limits);
 
   uint64_t nowUs = 100000;
   uint64_t nowClockUs = 0;
@@ -1288,14 +1288,14 @@ void scenarioOrthogonalBoundaryTurnToStraightUsesOrthogonalPredicate() {
   msg::Move turnMove = makeTwistMove(/*id=*/101, /*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/-2.0f,
                                       msg::Move::StopKind::ANGLE, /*stopValue=*/1.6f /*[rad]*/,
                                       /*timeout=*/60000.0f /*[ms]*/, /*replace=*/false);
-  queue.enqueue(turnMove, /*corrId=*/1);
+  queue.enqueue(turnMove, /*corrId=*/1, clock.nowMicros());
 
   // Orthogonal: the pending Move is Distance-kind with a nonzero v_x and
   // omega==0 -- it does NOT command the ending turn Move's own Angle axis.
   msg::Move straightMove = makeTwistMove(/*id=*/102, /*v_x=*/150.0f, /*v_y=*/0.0f, /*omega=*/0.0f,
                                           msg::Move::StopKind::DISTANCE, /*stopValue=*/300.0f /*[mm]*/,
                                           /*timeout=*/60000.0f /*[ms]*/, /*replace=*/false);
-  App::MoveQueue::EnqueueResult res = queue.enqueue(straightMove, /*corrId=*/2);
+  Motion::MoveQueue::EnqueueResult res = queue.enqueue(straightMove, /*corrId=*/2, clock.nowMicros());
   checkTrue(res.err == msg::ErrCode::ERR_NONE, "setup: straight Move enqueues behind the turn");
   checkUintEq(static_cast<uint32_t>(queue.pendingCount()), 1,
               "setup: 1 Move pending behind the turn");
@@ -1306,7 +1306,7 @@ void scenarioOrthogonalBoundaryTurnToStraightUsesOrthogonalPredicate() {
   for (int i = 1; i <= 30; ++i) {
     nowClockUs += 20000;
     clock.setMicros(nowClockUs);
-    App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+    Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
     checkFalse(tick.completed, "ramp-up phase -- still far from the 1.6rad threshold");
     drive.tick();
     nowUs += 100000;
@@ -1320,12 +1320,12 @@ void scenarioOrthogonalBoundaryTurnToStraightUsesOrthogonalPredicate() {
   nowUs += 300000;
   driveToPosition(left, bus, kWireAddr, 1.425f * (kTrackWidth / 2.0f), nowUs);
   driveToPosition(right, bus, kWireAddr, -1.425f * (kTrackWidth / 2.0f), nowUs);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
   checkFloatEq(odom.theta(), -1.425f, "sanity: -1.425rad turned, 0.175rad remaining", 1e-3f);
 
   nowClockUs += 20000;  // dt=0.02s for the pinned tick, matching the header comment's derivation
   clock.setMicros(nowClockUs);
-  App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+  Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
   checkTrue(tick.completed,
             "orthogonal boundary completes at 0.175rad remaining via the ORTHOGONAL predicate "
             "(the chain predicate alone would still reject this remaining)");
@@ -1361,12 +1361,12 @@ void scenarioSameAxisBoundaryTurnToTurnKeepsChainPredicate() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
-  App::Odometry odom(left, right, kTrackWidth);
-  App::ShaperLimits limits;
+  Motion::Odometry odom(kTrackWidth, left.position(), right.position());
+  Motion::ShaperLimits limits;
   limits.alphaMax = 6.0f;
   limits.alphaDecel = 7.0f;
   limits.yawJerkMax = 100.0f;
-  App::MoveQueue queue(drive, odom, clock, limits);
+  Motion::MoveQueue queue(drive, odom, kTrackWidth, limits);
 
   uint64_t nowUs = 100000;
   uint64_t nowClockUs = 0;
@@ -1375,7 +1375,7 @@ void scenarioSameAxisBoundaryTurnToTurnKeepsChainPredicate() {
   msg::Move turnMove = makeTwistMove(/*id=*/111, /*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/-2.0f,
                                       msg::Move::StopKind::ANGLE, /*stopValue=*/1.6f,
                                       /*timeout=*/60000.0f, /*replace=*/false);
-  queue.enqueue(turnMove, /*corrId=*/1);
+  queue.enqueue(turnMove, /*corrId=*/1, clock.nowMicros());
 
   // Same-axis compatible: the pending Move is Angle-kind with a NONZERO
   // omega of the SAME sign (-2.0rad/s, matching the ending Move's own
@@ -1384,7 +1384,7 @@ void scenarioSameAxisBoundaryTurnToTurnKeepsChainPredicate() {
   msg::Move secondTurn = makeTwistMove(/*id=*/112, /*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/-2.0f,
                                         msg::Move::StopKind::ANGLE, /*stopValue=*/0.8f,
                                         /*timeout=*/60000.0f, /*replace=*/false);
-  App::MoveQueue::EnqueueResult res = queue.enqueue(secondTurn, /*corrId=*/2);
+  Motion::MoveQueue::EnqueueResult res = queue.enqueue(secondTurn, /*corrId=*/2, clock.nowMicros());
   checkTrue(res.err == msg::ErrCode::ERR_NONE, "setup: second turn enqueues behind the first");
   checkUintEq(static_cast<uint32_t>(queue.pendingCount()), 1,
               "setup: 1 Move pending behind the first turn");
@@ -1392,7 +1392,7 @@ void scenarioSameAxisBoundaryTurnToTurnKeepsChainPredicate() {
   for (int i = 1; i <= 30; ++i) {
     nowClockUs += 20000;
     clock.setMicros(nowClockUs);
-    App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+    Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
     checkFalse(tick.completed, "ramp-up phase -- still far from the 1.6rad threshold");
     drive.tick();
     nowUs += 100000;
@@ -1404,12 +1404,12 @@ void scenarioSameAxisBoundaryTurnToTurnKeepsChainPredicate() {
   nowUs += 300000;
   driveToPosition(left, bus, kWireAddr, 1.425f * (kTrackWidth / 2.0f), nowUs);
   driveToPosition(right, bus, kWireAddr, -1.425f * (kTrackWidth / 2.0f), nowUs);
-  odom.integrate();
+  odom.integrate(left.position(), right.position());
   checkFloatEq(odom.theta(), -1.425f, "sanity: -1.425rad turned, 0.175rad remaining", 1e-3f);
 
   nowClockUs += 20000;
   clock.setMicros(nowClockUs);
-  App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+  Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
   checkFalse(tick.completed,
              "same-axis boundary does NOT yet complete at 0.175rad remaining -- the chain "
              "predicate's own tighter epsilonRemaining is not yet satisfied (contrast "
@@ -1440,9 +1440,9 @@ int main() {
   scenarioSameAxisBoundaryTurnToTurnKeepsChainPredicate();
 
   if (g_failureCount == 0) {
-    std::printf("OK: all App::MoveQueue scenarios passed\n");
+    std::printf("OK: all Motion::MoveQueue scenarios passed\n");
     return 0;
   }
-  std::printf("FAILED: %d assertion(s) across the App::MoveQueue scenarios\n", g_failureCount);
+  std::printf("FAILED: %d assertion(s) across the Motion::MoveQueue scenarios\n", g_failureCount);
   return 1;
 }

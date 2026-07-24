@@ -27,9 +27,9 @@
 
 #include <cstdint>
 
-#include "app/odometry.h"
 #include "devices/motor.h"
 #include "devices/otos.h"
+#include "motion/odometry.h"
 
 namespace App {
 
@@ -38,7 +38,7 @@ class FakeOtos : public Devices::Otos {
   // odom -- the pose source (read, never mutated). left/right -- the SAME
   // two Motor leaves Odometry integrates, used only for their velocity() to
   // fuse the body twist. trackWidth -- [mm], BodyKinematics::forward()'s `b`.
-  FakeOtos(const Odometry& odom, Devices::Motor& left, Devices::Motor& right,
+  FakeOtos(const Motion::Odometry& odom, Devices::Motor& left, Devices::Motor& right,
            float trackWidth);  // [mm]
 
   // No real chip: begin()/init()/calibration setters are all no-ops (a fake
@@ -61,7 +61,7 @@ class FakeOtos : public Devices::Otos {
   bool present() const override { return true; }
 
  private:
-  const Odometry& odom_;
+  const Motion::Odometry& odom_;
   Devices::Motor& left_;
   Devices::Motor& right_;
   float trackWidth_;  // [mm]

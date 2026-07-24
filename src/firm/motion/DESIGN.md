@@ -8,6 +8,26 @@ root: ../../../docs/design/design.md
 
 ---
 
+> **RETIRED — code relocated (sprint 122 ticket 001, 2026-07-24, finalized
+> ticket 122-004).** Both classes this file documents (`Motion::
+> StopCondition`, `Motion::VelocityShaper`) have been MOVED to
+> `src/motion/` — a new SIBLING tree of `src/firm` (sprint 122's
+> two-layer base/motion split; see that sprint's `sprint.md`), not a
+> child of it. This directory (`src/firm/motion/`) permanently holds only
+> this DESIGN.md, no source — it remains a required, one-level-down
+> child of the validated root `src/firm` (`.clasi/config.yaml`'s
+> `sources:`) purely so `close_sprint`'s design validator has a
+> `DESIGN.md` to find here; it is kept, not deleted, because the
+> math/rationale below is unchanged and still authoritative, and several
+> other current docs
+> (`docs/design/design.md`, `src/firm/app/DESIGN.md`, `docs/protocol-v4.md`)
+> link to it by this path. **For current orientation, the module list,
+> the boundary contract, and the `motion_tests` build, see
+> [`src/motion/DESIGN.md`](../../motion/DESIGN.md)** — this file is the
+> historical derivation record only; treat every "Orientation"/
+> "Interfaces" section below as accurate MATH at a location this
+> subsystem no longer occupies.
+
 ## 1. Purpose
 
 `Motion::StopCondition` answers exactly one question, every cycle, for

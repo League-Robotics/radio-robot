@@ -214,6 +214,37 @@ message Telemetry {
 // sample-timestamp fields are redundant with EncoderReading.time --
 // candidates for pruning if this message is next touched, per the
 // amendment's own note. Not pruned here (out of this ticket's scope).
+//
+// 122-003 (cycle_busy/cycle_period, fields 11/12): these are the loop-
+// timing fields telemetry-report-loop-cycle-duration.md asks for --
+// INTERIM PLACEMENT on this SECONDARY frame, not the primary per-cycle
+// `Telemetry` message the issue originally targeted. The primary frame
+// cannot take them: its own worst-case encoded size already sits 1 B under
+// the shared 186-byte envelope budget (this message's own header/the
+// Telemetry message's own size comment), and the SERIAL transport has a
+// second, tighter, independent ceiling underneath that budget -- CODAL's
+// `Serial` TX ring buffer (`src/libraries/codal-core/source/driver-models/
+// Serial.cpp`, `setTxBufferSize(uint8_t)`) caps out at 254 usable bytes,
+// and the CURRENT 186-byte budget's base64-armored+CRLF wire line already
+// consumes 252 of those -- only 2 B of headroom, and raising the raw
+// budget past 186 crosses a base64 3-byte encoding boundary (+4 encoded
+// bytes minimum), guaranteeing mid-line truncation on EVERY over-budget
+// primary frame sent over serial (see this ticket's own two thrown-and-
+// resolved exceptions, 2026-07-24, for the full derivation: sprint 122
+// ticket 003's exception history). TelemetrySecondary has no such
+// problem -- its own worst-case size (`kTelemetrySecondaryMaxEncodedSize`,
+// generated) sits far under 186 with room to spare, so two more `uint32`
+// fields are trivially safe on every transport. This placement is
+// EXPLICITLY INTERIM: a future COBS+CRC framing rework (tracked
+// separately, not this sprint) removes the base64-armor 33% expansion
+// that creates the primary frame's own tight ceiling, and these two
+// fields migrate back to the primary per-cycle frame once that lands --
+// see robot_loop.cpp's own staging comment for the corresponding
+// firmware-side note. Consequence of the secondary frame's own ~5 Hz
+// cadence (`App::kSecondaryPeriod`, telemetry.h): these values are a
+// snapshot of ONE cycle's timing -- specifically the cycle on which
+// RobotLoop last staged the secondary frame before it happened to be
+// sent -- not a per-cycle series like the primary frame's own fields.
 message TelemetrySecondary {
   uint32 now = 1;  // [ms] t= -- same clock as Telemetry.now, sampled at this frame's own
                     // (slower) emission cadence
@@ -230,4 +261,13 @@ message TelemetrySecondary {
 
   uint32 ts_left  = 9;   // [ms] last-sample timestamp, left
   uint32 ts_right = 10;  // [ms] last-sample timestamp, right
+
+  // 122-003 (ADDITIVE, interim placement -- see this message's own header
+  // comment above): loop-timing diagnostics from the ONE cycle whose
+  // staging this frame last captured. Bounded to the tens-of-thousands-of-
+  // microseconds range (a pathological multi-second stall would saturate,
+  // not overflow, this field -- (max) reflects the realistic diagnostic
+  // range, not a hard wire limit).
+  uint32 cycle_busy   = 11 [(max) = 200000];  // [us] cycleStart -> frame-staging instant, THAT cycle
+  uint32 cycle_period = 12 [(max) = 200000];  // [us] this cycle's cycleStart minus the previous cycle's
 }

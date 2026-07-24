@@ -11,19 +11,34 @@ root: ../../../docs/design/design.md
 ## 1. Purpose
 
 `app/` is the single cooperatively-timed control loop (`App::RobotLoop`) and
-the passive modules it drives:
+the BASE-side passive modules it owns:
 
 * `Comms` (wire framing),
-* `Telemetry` (outbound frames),
-* `Drive` (velocity → wheel targets, twist or wheels variant),
-* `Odometry` (dead reckoning, plus cumulative path length),
-* `MoveQueue` (the 1-active + 4-pending bounded-motion queue — every
-  `Move` is self-bounding by construction, so there is no separate
-  staleness gate),
-* `StateEstimator` (117 — predict-to-now wheel/body peer estimates,
-  zero-order-hold extrapolation, v1 complementary blend against OTOS),
-  and
+* `Telemetry` (outbound frames, including the `cycle_busy`/`cycle_period`
+  loop-timing fields — 122-003, see §4 below),
+* `Drive` (122-002, NARROWED — the wheel-target sink only:
+  `setWheels()`/`stop()`/`tick()`, implementing `Motion::WheelSink`
+  (`src/motion/wheel_sink.h`); it lost `setTwist()`/its `BodyKinematics`
+  dependency to `Motion::MoveQueue`, see below), and
 * `Preamble` (boot-time device detection).
+
+**`RobotLoop` also constructs and drives three MOTION-LIBRARY objects
+through the velocity-sink boundary** (sprint 122's two-layer base/motion
+split — `docs/design/design.md` §2/§5): `Motion::MoveQueue` (the
+1-active + 4-pending bounded-motion queue — every `Move` is self-bounding
+by construction, so there is no separate staleness gate), `Motion::
+Odometry` (dead reckoning, plus cumulative path length), and `Motion::
+StateEstimator` (117 — predict-to-now wheel/body peer estimates,
+zero-order-hold extrapolation, v1 complementary blend against OTOS).
+These three live in `src/motion/` (a sibling tree, not a child of
+`app/`) as of sprint 122 ticket 002 — `RobotLoop` holds them by reference
+exactly like its own base-side modules (constructed at the composition
+root, `main.cpp`/`SimHarness`) and calls into them at specific points in
+its own schedule, but they are motion-library types, not `app/`'s own.
+See this file's own "122 (motion-library extraction)" note at the end of
+this section for the full before/after, and
+[`src/motion/DESIGN.md`](../../motion/DESIGN.md) for their current
+orientation, boundary contract, and standalone `motion_tests` build.
 
 This is the seam that owns the robot's *timing* — every I2C
 transaction, every wait, every cadence decision lives here or is called from
@@ -357,6 +372,35 @@ textually unchanged. Full per-leg numbers and the retry mechanism's own
 design (including a real single-consumer-queue bug the bench script's
 first draft hit and fixed) are recorded in ticket 002's own file.
 
+**122 (motion-library extraction — landed, 2026-07-24, reconciled ticket
+004).** `App::MoveQueue`/`App::Odometry`/`App::StateEstimator` — all
+three described above and throughout this file's history as `app/`'s own
+modules through sprint 121 — MOVE to `src/motion/` (a new sibling tree of
+`src/firm`, not a child of it) and are renamed `Motion::MoveQueue`/
+`Motion::Odometry`/`Motion::StateEstimator`. `App::Drive` narrows to the
+wheel-target sink only (`setWheels()`/`stop()`/`tick()`), losing
+`setTwist()`/its `BodyKinematics` dependency to `Motion::MoveQueue`,
+which now calls `BodyKinematics::inverse()` itself and hands already-
+decomposed wheel targets down through a new boundary interface,
+`Motion::WheelSink` (`src/motion/wheel_sink.h`) — `Drive` implements it;
+nothing else in `app/` does. `BodyKinematics` itself moves out of
+`src/firm/kinematics/` to `src/motion/body_kinematics.{h,cpp}` (flat, no
+nested `kinematics/` under `src/motion`) for the same reason. Every
+mention of `App::MoveQueue`/`App::Odometry`/`App::StateEstimator`,
+`app/move_queue.*`/`app/odometry.*`/`app/state_estimator.*`, or
+`src/firm/motion/`/`src/firm/kinematics/` earlier in this file's own
+history (115-121) is an accurate PRE-122 record of where that code lived
+and what it was called AT THE TIME — not restated or renamed throughout
+this document — see [`src/motion/DESIGN.md`](../../motion/DESIGN.md) for
+the current orientation, module list, and boundary contract, and
+`docs/design/design.md` §2/§5 for the two-layer split at the system
+level. Zero behavior change (this was a pure mechanical move, sprint
+122's own refactor gate); `cycle_busy`/`cycle_period` (122-003, §4 below)
+is the one independent, additive change riding in the same sprint.
+`velocity_pid.*` and `Devices::NezhaMotor`'s PID ownership are UNCHANGED,
+still base-side (sprint 122 Design Rationale Decision 2 — the duty-sink
+rewrite that would move them is deferred to sprint 2).
+
 ## 2. Orientation
 
 `RobotLoop` has two phases. `boot()` steps `Preamble` until every device
@@ -600,6 +644,30 @@ unconditional "primary wins ties" rule starves secondary to 0Hz. The
 alternation costs at most one primary frame delayed by one cycle roughly
 once per secondary period; a non-tied call is unaffected.
 
+**`cycle_busy`/`cycle_period` loop-timing fields (122-003, ADDITIVE —
+`TelemetrySecondary` fields 11/12).** Landed on the SECONDARY frame,
+INTERIM: the issue that motivated these
+(`telemetry-report-loop-cycle-duration.md`) originally targeted the
+PRIMARY per-cycle frame, but `msg::Telemetry`'s own `ReplyEnvelope`-wrapped
+worst case already sits 1 B under the shared 186-byte envelope budget, and
+the serial transport carries a second, tighter, independent ceiling
+underneath that budget (CODAL's `Serial` TX ring buffer caps at 254 usable
+bytes; the current 186-byte budget's armored+CRLF wire line already
+consumes 252 of those) — raising the primary budget at all guarantees
+mid-line truncation on serial. `TelemetrySecondary`'s own worst case
+(`kTelemetrySecondaryMaxEncodedSize`, generated — 60 B as of this ticket)
+has no such problem, so the two fields land here instead, staged fresh
+every cycle by `RobotLoop::cycle()`'s own `previousCycleStartUs_`/
+`everCycled_` bookkeeping (independent of `markTime()`'s `[ms]`-truncated
+`cycleStart` — a separate `clock_.nowMicros()` read gives the `[us]`
+resolution these diagnostics need). Consequence of secondary's own ~5Hz
+cadence: these report ONE cycle's timing (whichever cycle RobotLoop last
+staged before secondary happened to be the frame `emit()` sent), not a
+per-cycle series like every other primary-frame field. Migrates to the
+primary frame once a future COBS+CRC framing rework removes the
+base64-armor expansion that creates the primary frame's own ceiling
+(tracked separately, not scheduled this sprint).
+
 **Telemetry's ack ring (120 ticket 001, LANDED — replaces the 115-005
 single-slot design, which itself had replaced the original depth-3
 `AckEntry` ring).** Bench measurement at the real 40ms cycle / ~15Hz host
@@ -787,30 +855,37 @@ called with real elapsed time between calls).
   the one call that actually sends, at most one frame type, bounded work,
   never sleeps, never touches the I2C bus. See §4's "Telemetry's ack slot"
   and "The `flags` bit-string" notes above for the 115-005 shape.
-- **`Drive::setTwist(v_x, v_y, omega)`/`setWheels(v_left, v_right)`/`stop`/
-  `tick()`:** `setTwist` only stages a target — `v_y` is accepted and
-  IGNORED (wire-forwarded since 115 for a future holonomic base, now
-  carried by 116's `MoveTwist`; every call site through this sprint still
-  passes 0). `setWheels` (116) is a second, independent staging path for
-  `MoveWheels` — last-wins against whichever of `setTwist`/`setWheels` was
-  called most recently; `tick()` computes from whichever is live; `stop()`
-  clears both to zero regardless of which was staged (Decision 3:
-  `MoveWheels` is staged directly, never translated into an equivalent
-  twist via `BodyKinematics::forward()`). `tick()` computes wheel
-  velocities for the `setTwist` path via `BodyKinematics::inverse()` and
-  stages them onto the two motor leaves via their own `setVelocity()` — it
-  never calls a motor's own `tick()`, and (115-005) has NO feedforward term
-  any more: `configure()`/`actuationLag_`/the `a_x`/`alpha`
-  acceleration-feedforward staging (112-002) were deleted along with
-  `msg::PlannerConfig`, the type the gain came from. `Drive` depends on
-  nothing but `Devices::Motor` and `BodyKinematics` now.
-- **`Odometry::integrate()`/`pathLength()`:** `integrate()` — call once per
-  cycle, after both motors' own `tick()` has run that cycle; reads each
-  leaf's current `position()` and accumulates world pose via midpoint-arc
-  integration over `BodyKinematics::forward()`'s per-cycle body-frame
-  delta. `pathLength()` (116) is a read-only accessor over a running total
-  of `|distance|` that `integrate()` already computes internally each
-  cycle — the DISTANCE stop-condition's source of truth.
+- **`Drive::setWheels(v_left, v_right)`/`stop()`/`tick()`:** (122-002,
+  NARROWED — `setTwist()` is GONE, moved to `Motion::MoveQueue`, which now
+  calls `BodyKinematics::inverse()` itself and hands `Drive` an
+  already-decomposed wheel-target pair through the `Motion::WheelSink`
+  boundary `Drive` implements; see
+  [`src/motion/DESIGN.md`](../../motion/DESIGN.md).) `setWheels()` only
+  STAGES a target; `tick()` stages the last `setWheels()`/`stop()` target
+  onto the two motor leaves via their own `setVelocity()` — it never calls
+  a motor's own `tick()`, never touches the bus, never sleeps. `stop()`
+  stages zero. `Drive` depends on nothing but `Devices::Motor` now — it
+  lost its `BodyKinematics` dependency along with `setTwist()` (122-002);
+  see `drive.h`'s own doc comment for the exact current contract. (Pre-122
+  history: through sprint 121, `Drive::setTwist(v_x, v_y, omega)` was a
+  second staging path computing wheel velocities via
+  `BodyKinematics::inverse()` internally, and had already lost its
+  acceleration-feedforward term at 115-005 — both `setTwist()` and that
+  internal `BodyKinematics::inverse()` call moved to `Motion::MoveQueue`
+  at 122-002, not merely deleted.)
+- **`Motion::Odometry::integrate(leftPosition, rightPosition)`/
+  `pathLength()`:** (122-002, MOVED to `src/motion/` — see
+  [`src/motion/DESIGN.md`](../../motion/DESIGN.md) for the current,
+  exact contract; no longer holds a `Devices::Motor&`, takes the
+  caller's current wheel positions as plain float parameters instead.)
+  `integrate()` — call once per cycle, after both motors' own `tick()`
+  has run that cycle; the caller (`RobotLoop`) reads each leaf's current
+  `position()` and passes both floats in; `Odometry` accumulates world
+  pose via midpoint-arc integration over `BodyKinematics::forward()`'s
+  per-cycle body-frame delta. `pathLength()` (116) is a read-only
+  accessor over a running total of `|distance|` that `integrate()`
+  already computes internally each cycle — the DISTANCE stop-condition's
+  source of truth.
 - **`applyOtosSample(otos, now, frame)`:** safe to call every cycle — a
   too-soon call given OTOS's own internal rate limit is already a
   documented no-bus-traffic no-op. Carries the FULL `OtosReading` (x, y,
@@ -820,38 +895,51 @@ called with real elapsed time between calls).
   loop's job, not this function's).
 - **`RobotLoop::updateLineColor(nowUs)`:** private, called once per cycle
   from the `kPace` block — see §2's own doc comment for the full contract.
-- **`MoveQueue::enqueue(move)`/`tick(now, odom)`/`flush()`/`active()`:**
-  (116) `enqueue()` applies `replace`/enqueue semantics (`ERR_FULL` past 4
-  pending) and, for the newly-active slot, stages its velocity onto
-  `Drive` and captures its `Motion::StopCondition` baseline; `tick()`
-  advances the active `Move`'s `StopCondition`, hands off to the next
-  pending `Move` on stop/timeout (same cycle, no motion gap), and calls
-  `Drive::stop()` when the queue drains empty; `flush()` clears every
-  pending slot without disturbing the active one (used by `STOP`).
+- **`Motion::MoveQueue::enqueue(move, now)`/`tick(now, odom)`/`flush()`/
+  `active()`:** (116, MOVED to `src/motion/` at 122-002 — see
+  [`src/motion/DESIGN.md`](../../motion/DESIGN.md) and `move_queue.h`'s
+  own doc comment for the current, exact signatures; `MoveQueue` no
+  longer holds a concrete `App::Drive&` or a `Devices::Clock&` — it holds
+  a `Motion::WheelSink&` and takes `now` as an explicit parameter
+  instead.) `enqueue()` applies `replace`/enqueue semantics (`ERR_FULL`
+  past 4 pending) and, for the newly-active slot, computes wheel targets
+  (`BodyKinematics::inverse()`, for a twist-kind `Move` — 122-002 moved
+  this call here from `Drive::setTwist()`) and stages them onto the
+  `WheelSink` boundary, capturing the `Motion::StopCondition` baseline;
+  `tick()` advances the active `Move`'s `StopCondition`, hands off to the
+  next pending `Move` on stop/timeout (same cycle, no motion gap), and
+  calls the sink's `stop()` when the queue drains empty; `flush()` clears
+  every pending slot without disturbing the active one (used by `STOP`).
   `active()` reports whether a `Move` is currently in progress (feeds
   `frame_.mode`/`driving_`).
 - **`Preamble::step()`/`done()`/per-device status accessors:** `step()`
   never blocks; `done()` is true once every device has reached a terminal
   state (present-and-ready or confirmed-absent).
-- **`StateEstimator::update(frame, now)`/`wheelAt(wheel, t)`/`bodyAt(t)`/
-  `whereAmI(now)`/`wheelNow(wheel)`/`reset(x, y, heading)`/
-  `innovations()`/`setWeights(weights)`** (117): `update()` — call once
-  per cycle from the trailing `kPace` block, after `frame_.pose` is
-  staged; refreshes both wheel peers' and the body peer's basis. `wheelAt`/
-  `bodyAt` — pure ZOH extrapolation from the current basis to an
-  explicit query time `t`; no owned clock, hand-fed `t` always, mirroring
-  `Motion::StopCondition`'s own testability shape. `whereAmI(now)` is
-  exactly `bodyAt(now)`; `wheelNow(wheel)` returns the wheel's raw basis
-  with no extrapolation. `reset(x, y, heading)` re-anchors the body
-  peer's world pose only (wheel peers are untouched — they track
-  per-wheel distance, not world pose, the same reasoning `Odometry::
-  pathLength()` is untouched by `Odometry::reset()`). `innovations()`
-  returns the most recent OTOS-vs-predicted heading/omega residual —
-  computed for diagnostic/validation purposes even while its fusion
-  weight is 0, never fed back into the estimate itself at that weight.
-  `setWeights()` is `RobotLoop::handleConfig()`'s own entry point for a
-  live `EstimatorConfigPatch` (§3 above) — a plain in-memory update, not
-  a bus transaction. All of the above are pure computation: no I2C
+- **`Motion::StateEstimator::update(input, now)`/`wheelAt(wheel, t)`/
+  `bodyAt(t)`/`whereAmI(now)`/`wheelNow(wheel)`/`reset(x, y, heading)`/
+  `innovations()`/`setWeights(weights)`** (117, MOVED to `src/motion/` at
+  122-002 — see [`src/motion/DESIGN.md`](../../motion/DESIGN.md) and
+  `state_estimator.h`'s own doc comment for the current, exact contract;
+  `update()` now takes a plain `Motion::StateEstimator::Input` struct
+  instead of `App::Telemetry::Frame`, since this tree may not depend on
+  `app/` — `RobotLoop` copies the same fields it always read off
+  `frame_` into an `Input` and passes that instead, values unchanged):
+  `update()` — call once per cycle from the trailing `kPace` block, after
+  `frame_.pose` is staged; refreshes both wheel peers' and the body
+  peer's basis. `wheelAt`/`bodyAt` — pure ZOH extrapolation from the
+  current basis to an explicit query time `t`; no owned clock, hand-fed
+  `t` always, mirroring `Motion::StopCondition`'s own testability shape.
+  `whereAmI(now)` is exactly `bodyAt(now)`; `wheelNow(wheel)` returns the
+  wheel's raw basis with no extrapolation. `reset(x, y, heading)`
+  re-anchors the body peer's world pose only (wheel peers are untouched —
+  they track per-wheel distance, not world pose, the same reasoning
+  `Motion::Odometry::pathLength()` is untouched by `Odometry::reset()`).
+  `innovations()` returns the most recent OTOS-vs-predicted heading/omega
+  residual — computed for diagnostic/validation purposes even while its
+  fusion weight is 0, never fed back into the estimate itself at that
+  weight. `setWeights()` is `RobotLoop::handleConfig()`'s own entry point
+  for a live `EstimatorConfigPatch` (§3 above) — a plain in-memory update,
+  not a bus transaction. All of the above are pure computation: no I2C
   access, no sleep, bounded per call.
 
 ### Consumes
@@ -860,25 +948,40 @@ called with real elapsed time between calls).
   `Devices::LineSensorLeaf`, `Devices::I2CBus`, `Devices::Clock`,
   `Devices::Sleeper`:** the device leaves and time/bus seams `app/` drives
   — see [devices/DESIGN.md](../devices/DESIGN.md).
-- **`BodyKinematics::inverse()`/`forward()`:** stateless twist↔wheel math —
-  see [kinematics/DESIGN.md](../kinematics/DESIGN.md).
+- **`BodyKinematics::inverse()`/`forward()`:** stateless twist↔wheel math
+  — moved to `src/motion/body_kinematics.{h,cpp}` at 122-001 (from
+  `src/firm/kinematics/`); `Motion::MoveQueue` now calls `inverse()`
+  directly (122-002 — the twist-decomposition call moved out of
+  `Drive::setTwist()`, see above), while `RobotLoop::updateTlm()` still
+  calls `forward()` directly here in `app/` to fuse the two leaves'
+  measured velocities for telemetry (`Drive::trackWidth()`'s own doc
+  comment). See [`src/motion/DESIGN.md`](../../motion/DESIGN.md) and
+  [`src/firm/kinematics/DESIGN.md`](../kinematics/DESIGN.md) (retired,
+  redirects to the current doc) for the full derivation.
 - **`msg::CommandEnvelope`/`ReplyEnvelope`/`Telemetry`/`TelemetrySecondary`,
   `msg::wire::encode`/`decode`, `WireRuntime::base64Encode`/`Decode`:** the
   wire schema and codec — see [messages/DESIGN.md](../messages/DESIGN.md).
 - **`SerialPort`, `Radio` (ARM builds only):** the two real transports
   `SerialTransport`/`RadioTransport` adapt into `app::Transport` — see
   [com/DESIGN.md](../com/DESIGN.md).
-- **`Motion::StopCondition`** (116, `src/firm/motion/stop_condition.h`):
-  the bounded-motion stop/timeout comparison `App::MoveQueue` owns and
-  drives per active `Move` — see [motion/DESIGN.md](../motion/DESIGN.md).
-  This is NOT a revival of the deleted `Motion::Executor`/`Motion::Cmd`/
-  `Motion::fromMove()` (115-005, still gone) — the recreated `motion/`
-  directory contains only this one small, pure-comparison module,
-  mirroring `kinematics/`'s existing small-pure-computation pattern.
-- **`Telemetry::Frame`** (117): `StateEstimator::update()` reads the SAME
-  per-cycle `Frame` struct `Telemetry::setFrame()` stages — it does not
-  hold its own leaf/bus references and does not read `Devices::Motor`/
-  `Devices::Otos` directly. Wire-plane `msg::EstimatorConfigPatch` stops
+- **`Motion::StopCondition`** (116, moved to `src/motion/stop_condition.h`
+  at 122-001, from `src/firm/motion/`): the bounded-motion stop/timeout
+  comparison `Motion::MoveQueue` owns and drives per active `Move` — see
+  [`src/motion/DESIGN.md`](../../motion/DESIGN.md) and
+  [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) (retired, redirects
+  to the current doc) for the full derivation. This is NOT a revival of
+  the deleted `Motion::Executor`/`Motion::Cmd`/`Motion::fromMove()`
+  (115-005, still gone) — `src/motion/` contains only the modules listed
+  in [`src/motion/DESIGN.md`](../../motion/DESIGN.md) §2, mirroring the
+  original tiny `src/firm/motion/`'s own small-pure-comparison pattern at
+  a new, sibling-tree location.
+- **`Telemetry::Frame`** (117): `Motion::StateEstimator::update()` is
+  handed the same fields `Telemetry::setFrame()` stages, copied by the
+  caller (`RobotLoop`) into a plain `Motion::StateEstimator::Input`
+  struct (122-002 — `StateEstimator` may not depend on `app/`'s
+  `Telemetry::Frame` type directly any more); it does not hold its own
+  leaf/bus references and does not read `Devices::Motor`/`Devices::Otos`
+  directly either way. Wire-plane `msg::EstimatorConfigPatch` stops
   at `RobotLoop::handleConfig()` exactly like `msg::MotorConfigPatch`/
   `msg::OtosConfigPatch` already do (devices/app isolation invariant
   above, extended by analogy) — `StateEstimator`'s own `setWeights()`

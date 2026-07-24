@@ -3,7 +3,8 @@
 // timing-schedule rationale.
 #include "app/robot_loop.h"
 
-#include "kinematics/body_kinematics.h"
+#include "app/otos_sample.h"
+#include "motion/body_kinematics.h"
 #include "messages/envelope.h"
 
 namespace App {
@@ -89,7 +90,7 @@ void mergeOtosPatch(msg::OtosConfigPatch& slot, const msg::OtosConfigPatch& inco
 // persistedTuning_ slot -- EstimatorConfigPatch is never persisted (Design
 // Rationale Decision 4, this sprint's overlay design/design.md): a reboot
 // always reverts to the baked Config::defaultEstimatorConfig() default.
-void mergeEstimatorPatch(App::FusionWeights& weights, const msg::EstimatorConfigPatch& patch) {
+void mergeEstimatorPatch(Motion::FusionWeights& weights, const msg::EstimatorConfigPatch& patch) {
   if (patch.weight_heading_otos.has) weights.headingOtos = patch.weight_heading_otos.val;
   if (patch.weight_omega_otos.has) weights.omegaOtos = patch.weight_omega_otos.val;
   if (patch.staleness_ms.has) weights.staleness = static_cast<uint32_t>(patch.staleness_ms.val);
@@ -105,7 +106,7 @@ void mergeEstimatorPatch(App::FusionWeights& weights, const msg::EstimatorConfig
 // Also never persisted (config.proto's own EstimatorConfigPatch doc
 // comment) -- a reboot always reverts to the baked
 // Config::defaultShaperConfig() default.
-void mergeShaperPatch(App::ShaperLimits& limits, const msg::EstimatorConfigPatch& patch) {
+void mergeShaperPatch(Motion::ShaperLimits& limits, const msg::EstimatorConfigPatch& patch) {
   if (patch.a_max.has) limits.aMax = patch.a_max.val;
   if (patch.a_decel.has) limits.aDecel = patch.a_decel.val;
   if (patch.alpha_max.has) limits.alphaMax = patch.alpha_max.val;
@@ -136,8 +137,8 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
                       Devices::Motor& motorR, Devices::Otos& otos,
                       Devices::ColorSensorLeaf& color, Devices::LineSensorLeaf& line,
                       Comms& comms, Telemetry& tlm, Drive& drive,
-                      Odometry& odom, MoveQueue& moveQueue, Preamble& preamble,
-                      StateEstimator& stateEstimator, const Devices::Clock& clock,
+                      Motion::Odometry& odom, Motion::MoveQueue& moveQueue, Preamble& preamble,
+                      Motion::StateEstimator& stateEstimator, const Devices::Clock& clock,
                       Devices::Sleeper& sleeper, Config::TuningStore* tuningStore)
     : bus_(bus),
       motorL_(motorL),
@@ -252,7 +253,12 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
     return;
   }
 
-  MoveQueue::EnqueueResult result = moveQueue_.enqueue(move, env.corr_id);
+  // now -- read HERE, at the exact point in the cycle App::MoveQueue's own
+  // pre-122-002 held Devices::Clock& used to read it internally (see
+  // move_queue.h's own file header) -- Motion::MoveQueue may not depend on
+  // devices/, so the caller (this class) now threads it through explicitly.
+  Motion::MoveQueue::EnqueueResult result =
+      moveQueue_.enqueue(move, env.corr_id, clock_.nowMicros());
   tlm_.ack(result.corrId, static_cast<uint32_t>(result.err));
 }
 
@@ -327,11 +333,11 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
   if (env.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::ESTIMATOR) {
     const msg::EstimatorConfigPatch& patch = env.cmd.config.patch.estimator;
 
-    FusionWeights weights = stateEstimator_.weights();
+    Motion::FusionWeights weights = stateEstimator_.weights();
     mergeEstimatorPatch(weights, patch);
     stateEstimator_.setWeights(weights);
 
-    ShaperLimits shaperLimits = moveQueue_.shaperLimits();
+    Motion::ShaperLimits shaperLimits = moveQueue_.shaperLimits();
     mergeShaperPatch(shaperLimits, patch);
     moveQueue_.setShaperLimits(shaperLimits);
 
@@ -531,6 +537,14 @@ void RobotLoop::boot() {
 void RobotLoop::cycle() {
   uint32_t cycleStart = markTime();  // [ms] pace anchor
 
+  // 122-003: a SEPARATE, un-truncated [us] read of the SAME instant
+  // markTime() just anchored, kept only for the loop-timing telemetry
+  // fields below -- markTime()'s own [ms] truncation would hide the
+  // sub-millisecond I2C-stall/comms-burst detail those fields exist to
+  // surface. Read here, at cycle()'s own top, so cycleBusy below measures
+  // from the same starting instant cycleStart already anchors.
+  const uint64_t cycleStartUs = clock_.nowMicros();  // [us]
+
   Cmd cmd;
 
   // 119 ticket 005 (fixes 118-001's straight-leg crab -- see
@@ -654,6 +668,26 @@ void RobotLoop::cycle() {
     // cycle's own emit() call -- "ack rides the next frame," unchanged
     // from before this ticket (see that ack's own comment below).
     updateTlm(cycleStart);
+
+    // 122-003: loop-timing telemetry, staged onto the SECONDARY frame
+    // (interim placement -- telemetry.h's SecondaryFrame doc comment; the
+    // primary frame this ticket originally targeted has no budget left).
+    // Measured HERE, at "frame staging" -- the same instant the primary
+    // frame's own encoder/pose/twist snapshot above is finalized -- NOT the
+    // true end of this cycle's work (odometry/OTOS/MoveQueue-tick/
+    // line-color still run after this point, every cycle, unchanged from
+    // before this ticket). Staged every cycle regardless of whether THIS
+    // cycle's own emit() call below actually transmits the secondary frame
+    // (Telemetry always carries the last-staged snapshot -- telemetry.h's
+    // own setSecondaryFrame() doc comment) -- whichever cycle secondary
+    // next goes out on reports whatever was staged here that cycle.
+    secondaryFrame_.cycleBusy = static_cast<uint32_t>(clock_.nowMicros() - cycleStartUs);  // [us]
+    secondaryFrame_.cyclePeriod =
+        everCycled_ ? static_cast<uint32_t>(cycleStartUs - previousCycleStartUs_) : 0u;  // [us]
+    previousCycleStartUs_ = cycleStartUs;
+    everCycled_ = true;
+    tlm_.setSecondaryFrame(secondaryFrame_);
+
     tlm_.emit(cycleStart);
 
     uint64_t nowUs = clock_.nowMicros();
@@ -665,7 +699,12 @@ void RobotLoop::cycle() {
     // Odometry::integrate() reads neither otos_ nor any frame_.otos* field
     // (and vice versa), so its position relative to the Otos call changes
     // nothing observable there.
-    odom_.integrate();  // odometry from both fresh wheel samples
+    // 122-002: Motion::Odometry no longer holds a Devices::Motor& (src/motion
+    // may not depend on devices/) -- this class reads both leaves' CURRENT
+    // position() here, at the exact point in the cycle Odometry::integrate()
+    // used to read them itself, and hands the two floats in. Same values,
+    // same instant -- zero behavior change.
+    odom_.integrate(motorL_.position(), motorR_.position());  // odometry from both fresh wheel samples
     frame_.pose = {odom_.x(), odom_.y(), odom_.theta()};
 
     // Perception step -- sample the OTOS and stage its reading into frame_.
@@ -686,7 +725,29 @@ void RobotLoop::cycle() {
     // this sprint's overlay DESIGN.md §2 exactly. Pure computation over
     // already-staged data -- no I2C access, no sleep, bounded work, the same
     // posture odom_.integrate()/the Otos branch already keep in this block.
-    stateEstimator_.update(frame_, static_cast<uint32_t>(nowUs / 1000));  // [us] -> [ms]
+    // 122-002: Motion::StateEstimator no longer takes App::Telemetry::Frame
+    // (src/motion may not depend on app/) -- copy the same fields it always
+    // read off frame_ into a Motion::StateEstimator::Input and pass that
+    // instead. Identical values, just handed in through a motion-owned
+    // struct rather than a base-owned one.
+    Motion::StateEstimator::Input estimatorInput;
+    estimatorInput.encLeftPosition = frame_.encLeft.position;
+    estimatorInput.encLeftVelocity = frame_.encLeft.velocity;
+    estimatorInput.encLeftTime = frame_.encLeft.time;
+    estimatorInput.encRightPosition = frame_.encRight.position;
+    estimatorInput.encRightVelocity = frame_.encRight.velocity;
+    estimatorInput.encRightTime = frame_.encRight.time;
+    estimatorInput.poseX = frame_.pose.x;
+    estimatorInput.poseY = frame_.pose.y;
+    estimatorInput.poseHeading = frame_.pose.h;
+    estimatorInput.twistVX = frame_.twist.v_x;
+    estimatorInput.twistVY = frame_.twist.v_y;
+    estimatorInput.twistOmega = frame_.twist.omega;
+    estimatorInput.otosPresent = frame_.otosPresent;
+    estimatorInput.otosHeading = frame_.otos.heading;
+    estimatorInput.otosOmega = frame_.otos.omega;
+    estimatorInput.otosTime = frame_.otos.time;
+    stateEstimator_.update(estimatorInput, static_cast<uint32_t>(nowUs / 1000));  // [us] -> [ms]
 
     // MoveQueue's per-cycle tick (116, protocol-set-point issue; 118
     // ticket 002 relocates it HERE -- after odom_.integrate()/
@@ -710,7 +771,7 @@ void RobotLoop::cycle() {
     // comment) -- one cycle of decision-to-duty latency, unchanged in
     // shape from before this ticket (only drive_.tick()'s OWN position
     // moved, this cycle's stop DECISION did not).
-    MoveQueue::TickResult moveResult = moveQueue_.tick(nowUs, odom_);
+    Motion::MoveQueue::TickResult moveResult = moveQueue_.tick(nowUs, odom_);
     bool moveTimedOut = moveResult.completed && moveResult.completion.timedOut;
     // Level-set every cycle (telemetry.h's own setFlag() contract) -- true
     // only on the exact cycle a timed-out completion is reported this

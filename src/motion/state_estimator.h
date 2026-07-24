@@ -1,4 +1,4 @@
-// state_estimator.h -- App::StateEstimator: predict-to-now wheel/body PEER
+// state_estimator.h -- Motion::StateEstimator: predict-to-now wheel/body PEER
 // state estimates, zero-order-hold (ZOH) v1 extrapolation, and a v1
 // complementary-blend fusion against OTOS heading/omega.
 //
@@ -6,22 +6,25 @@
 // answering "predict to now"/"predict to an arbitrary instant" queries via
 // ZOH extrapolation, and blending a fresh OTOS heading/omega reading onto
 // the body peer's basis via a live-tunable complementary weight; outside --
-// deciding WHEN to call update() (RobotLoop's own kPace-block placement,
-// ticket 004), where the fusion weights actually come from at boot/live-tune
-// time (Config::defaultEstimatorConfig()/a live EstimatorConfigPatch, both
-// ticket 003's job -- this class only ever receives a plain FusionWeights
-// value, never a msg::* patch type), and consuming whereAmI()/wheelAt() to
-// drive motion (a later, out-of-this-sprint trajectory controller).
+// deciding WHEN to call update() (App::RobotLoop's own kPace-block
+// placement, ticket 004), where the fusion weights actually come from at
+// boot/live-tune time (Config::defaultEstimatorConfig()/a live
+// EstimatorConfigPatch, both ticket 003's job -- this class only ever
+// receives a plain FusionWeights value, never a msg::* patch type), and
+// consuming whereAmI()/wheelAt() to drive motion (a later, out-of-this-
+// sprint trajectory controller).
 //
-// No #include of any messages/ or config/ header: this module is pure
-// app/-internal computation and never spells msg::* anywhere in its own
-// source -- mirrors App::Odometry's own established posture (odometry.h
-// includes app/telemetry.h and reads/writes Telemetry::Frame's msg-typed
-// fields via plain member access without ever naming msg:: itself). Wire-
-// plane conversion for a live EstimatorConfigPatch stops at
-// RobotLoop::handleConfig(), exactly like msg::MotorConfigPatch/
-// msg::OtosConfigPatch already do -- setWeights() below takes a plain,
-// Devices-local-style FusionWeights struct, never a msg::* type.
+// No #include of any messages/, config/, or (122-002) app/ header: this
+// module is pure motion-internal computation and never spells msg:: or
+// App:: anywhere in its own source. update() takes a plain Input struct
+// (below) rather than App::Telemetry::Frame -- 122-002 (motion-library
+// extraction) moved this class from src/firm/app/ into src/motion/, behind
+// the velocity-sink boundary; App::Telemetry::Frame is a base-side (app/)
+// type this tree may not depend on, so the caller (App::RobotLoop) now
+// copies the same fields it always read off frame_ into a Motion::
+// StateEstimator::Input and passes that instead -- the values flowing in
+// are identical, just handed in through a motion-owned struct rather than a
+// base-owned one.
 //
 // No I2C bus access, no sleeping, no owned Devices::Clock& collaborator:
 // every time-taking method (update()/wheelAt()/bodyAt()/whereAmI()) takes
@@ -30,17 +33,16 @@
 // file header) -- keeps this class constructible/testable with plain
 // numbers, no fake clock needed. Basis times are uint32_t [ms], matching
 // EncoderReading/OtosReading::time's existing wire-frame units (NOT
-// uint64_t [us]) -- the granularity Frame's own fields actually carry, not
-// a claim of more precision than the frame provides.
+// uint64_t [us]) -- the granularity the caller's own frame actually
+// carries, not a claim of more precision than the frame provides.
 //
-// Design/rationale: DESIGN.md (this directory) -- see its "117" sections.
+// Design/rationale: src/firm/app/DESIGN.md's "117" sections (pre-122
+// history) / src/motion/DESIGN.md.
 #pragma once
 
 #include <cstdint>
 
-#include "app/telemetry.h"
-
-namespace App {
+namespace Motion {
 
 // Which wheel a wheelAt()/wheelNow() query targets -- a plain, module-local
 // enum (mirrors Motion::StopCondition::Kind's own un-prefixed scoped-enum
@@ -50,8 +52,8 @@ enum class Wheel : uint8_t { Left, Right };
 
 // WheelEstimate -- one wheel's PEER basis reading (independently
 // valid/stale from the other wheel and from the body peer). `distance` is
-// the wheel's own traveled distance (EncoderReading::position, NOT a world
-// pose) at `basisTime`; `velocity` is held constant across a ZOH
+// the wheel's own traveled distance (matching EncoderReading::position, NOT
+// a world pose) at `basisTime`; `velocity` is held constant across a ZOH
 // extrapolation from that basis.
 struct WheelEstimate {
   float distance = 0.0f;   // [mm]
@@ -63,11 +65,11 @@ struct WheelEstimate {
 // BodyEstimate -- the body peer's PEER basis reading: a world pose
 // (x, y, heading) plus a body-frame twist (v_x, v_y, omega), all held
 // constant across a ZOH extrapolation from `basisTime`. x/y/v_x/v_y always
-// come straight from Odometry's own dead-reckoned frame.pose/frame.twist
+// come straight from Motion::Odometry's own dead-reckoned pose/twist
 // (encoder-only, never OTOS-blended this sprint -- the wire schema's
 // EstimatorConfigPatch has no weight_x_otos/weight_y_otos field, ticket
 // 003); heading/omega are the v1 complementary blend against a fresh
-// frame.otos reading when present (see update()'s own doc comment).
+// OTOS reading when present (see update()'s own doc comment).
 struct BodyEstimate {
   float x = 0.0f;          // [mm]
   float y = 0.0f;          // [mm]
@@ -96,7 +98,7 @@ struct FusionWeights {
 // computed by update() whenever a fresh OTOS reading is blended -- even at
 // weight 0.0 (diagnostic/validation only at that weight; never fed back
 // into the estimate itself at v1). Holds its last value on a cycle with no
-// fresh OTOS reading, mirroring Telemetry's own "last staged snapshot,
+// fresh OTOS reading, mirroring App::Telemetry's own "last staged snapshot,
 // never a diff" posture.
 struct Innovations {
   float heading = 0.0f;  // [rad] OTOS heading minus predicted heading, at blend time
@@ -106,24 +108,52 @@ struct Innovations {
 
 class StateEstimator {
  public:
+  // Input -- the plain, motion-owned snapshot update() reads every cycle,
+  // in place of App::Telemetry::Frame (pre-122-002). The caller
+  // (App::RobotLoop) copies these fields verbatim off its own frame_ each
+  // cycle -- same values, same units, just handed in through a struct this
+  // tree owns rather than one it may not depend on. Field-for-field mirror
+  // of what update() used to read off frame.encLeft/encRight/pose/twist/
+  // otos/otosPresent.
+  struct Input {
+    float encLeftPosition = 0.0f;    // [mm]
+    float encLeftVelocity = 0.0f;    // [mm/s] signed
+    uint32_t encLeftTime = 0;        // [ms]
+    float encRightPosition = 0.0f;   // [mm]
+    float encRightVelocity = 0.0f;   // [mm/s] signed
+    uint32_t encRightTime = 0;       // [ms]
+
+    float poseX = 0.0f;        // [mm] Motion::Odometry::x()
+    float poseY = 0.0f;        // [mm] Motion::Odometry::y()
+    float poseHeading = 0.0f;  // [rad] Motion::Odometry::theta()
+    float twistVX = 0.0f;      // [mm/s] fused body-frame forward velocity
+    float twistVY = 0.0f;      // [mm/s] fused body-frame lateral velocity
+    float twistOmega = 0.0f;   // [rad/s] fused body-frame yaw rate
+
+    bool otosPresent = false;   // OtosReading fresh THIS frame (App::applyOtosSample()'s own contract)
+    float otosHeading = 0.0f;   // [rad]
+    float otosOmega = 0.0f;     // [rad/s]
+    uint32_t otosTime = 0;      // [ms]
+  };
+
   // weights -- constructor-injected plain value (see FusionWeights' own
   // doc comment); defaults to a conservative encoder-only/no-blend
   // FusionWeights{} for a caller (e.g. a ZOH-extrapolation-only unit test)
   // that never cares about fusion.
   explicit StateEstimator(FusionWeights weights = FusionWeights{});
 
-  // update -- refreshes both wheel peers straight from `frame.encLeft`/
-  // `frame.encRight` (position, velocity, their own collect `time`) and the
-  // body peer from `frame.pose`/`frame.twist` (Odometry's own dead-reckoned
-  // fusion, already computed earlier the same cycle) blended with
-  // `frame.otos`/`frame.otosPresent` (when fresh -- `frame.otosPresent`
+  // update -- refreshes both wheel peers straight from `input.encLeft*`/
+  // `input.encRight*` (position, velocity, their own collect time) and the
+  // body peer from `input.pose*`/`input.twist*` (Motion::Odometry's own
+  // dead-reckoned fusion, already computed earlier the same cycle) blended
+  // with `input.otos*`/`input.otosPresent` (when fresh -- `input.otosPresent`
   // AND the reading's own age against `weights().staleness`) via the v1
-  // complementary weight. Call once per cycle, after `frame.pose` is
-  // staged (RobotLoop's trailing kPace block, ticket 004). Pure
-  // computation over already-staged data: no I2C access, no sleep, bounded
-  // work -- mirrors Odometry::integrate()/applyOtosSample()'s own posture
-  // in that same block.
-  void update(const Telemetry::Frame& frame, uint32_t now);  // [ms]
+  // complementary weight. Call once per cycle, after the pose is staged
+  // (App::RobotLoop's trailing kPace block, ticket 004). Pure computation
+  // over already-staged data: no I2C access, no sleep, bounded work --
+  // mirrors Motion::Odometry::integrate()/App::applyOtosSample()'s own
+  // posture in that same block.
+  void update(const Input& input, uint32_t now);  // [ms]
 
   // wheelAt/bodyAt -- pure ZOH extrapolation from the CURRENT basis to an
   // explicit query time `t`. Precondition: `t` is at or after the queried
@@ -151,7 +181,7 @@ class StateEstimator {
   WheelEstimate wheelNow(Wheel wheel) const;
 
   // reset -- re-anchors ONLY the body peer's world pose (x, y, heading),
-  // mirroring Odometry::reset()'s own teleport semantics (no `now`
+  // mirroring Motion::Odometry::reset()'s own teleport semantics (no `now`
   // argument, same as Odometry -- the next update() call naturally
   // re-baselines basisTime within one cycle). Wheel-peer state (distance/
   // velocity/basisTime/valid) is UNTOUCHED -- wheel peers track per-wheel
@@ -164,8 +194,8 @@ class StateEstimator {
   // innovations -- see Innovations' own doc comment.
   Innovations innovations() const { return innovations_; }
 
-  // setWeights -- RobotLoop::handleConfig()'s own entry point for a live
-  // EstimatorConfigPatch (ticket 003): replaces the whole live weight
+  // setWeights -- App::RobotLoop::handleConfig()'s own entry point for a
+  // live EstimatorConfigPatch (ticket 003): replaces the whole live weight
   // state at once (ticket 003's own handler merges the wire patch's
   // PRESENT fields onto a snapshot of weights() BEFORE calling this, the
   // same present-field-merge-then-apply shape applyMotorConfigPatch()/
@@ -182,4 +212,4 @@ class StateEstimator {
   Innovations innovations_;
 };
 
-}  // namespace App
+}  // namespace Motion

@@ -61,11 +61,8 @@
 
 #include "app/comms.h"
 #include "app/drive.h"
-#include "app/move_queue.h"
-#include "app/odometry.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
-#include "app/state_estimator.h"
 #include "app/telemetry.h"
 #include "config/persisted_tuning.h"
 #include "devices/color_sensor.h"
@@ -75,6 +72,9 @@
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "messages/wire_runtime.h"
+#include "motion/move_queue.h"
+#include "motion/odometry.h"
+#include "motion/state_estimator.h"
 #include "scripted_i2c_hook.h"
 #include "sim_clock.h"
 #include "sim_plant.h"
@@ -413,14 +413,14 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   App::Comms comms(serialLink, radioLink, "DEVICE:NEZHA2:robot:test:0");
   App::Telemetry tlm(comms, serialLink, radioLink);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
-  App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
   // ticket 004: QUARANTINED -- App::MoveQueue no longer depends on this
   // member (its own former anticipation-lead completion path is deleted,
   // move_queue.h's own file header); kept solely for robotLoop's own
   // consumption below.
-  App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock);
+  Motion::StateEstimator stateEstimator;
+  Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   // --- Drive Preamble to done() BEFORE constructing/calling RobotLoop's
@@ -553,14 +553,14 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
-  App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
   // ticket 004: QUARANTINED -- App::MoveQueue no longer depends on this
   // member (its own former anticipation-lead completion path is deleted,
   // move_queue.h's own file header); kept solely for robotLoop's own
   // consumption below.
-  App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock);
+  Motion::StateEstimator stateEstimator;
+  Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   clock.setMicros(0);
@@ -747,14 +747,14 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
-  App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
   // ticket 004: QUARANTINED -- App::MoveQueue no longer depends on this
   // member (its own former anticipation-lead completion path is deleted,
   // move_queue.h's own file header); kept solely for robotLoop's own
   // consumption below.
-  App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock);
+  Motion::StateEstimator stateEstimator;
+  Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   clock.setMicros(0);
@@ -877,7 +877,7 @@ struct LiveFixture {
   App::Comms comms;
   App::Telemetry tlm;
   App::Drive drive;
-  App::Odometry odom;
+  Motion::Odometry odom;
   // 117 ticket 003: default-constructed (encoder-only-v1 FusionWeights{}
   // default) -- directly reachable by every LiveFixture-based scenario
   // (unlike RobotLoop's own persistedTuning_/tuningStore_, which stay
@@ -885,8 +885,8 @@ struct LiveFixture {
   // depends on this member (its own former anticipation-lead completion
   // path is deleted, move_queue.h's own file header); kept solely for
   // robotLoop's own consumption below.
-  App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue;
+  Motion::StateEstimator stateEstimator;
+  Motion::MoveQueue moveQueue;
   App::Preamble preamble;
   App::RobotLoop robotLoop;
 
@@ -899,8 +899,8 @@ struct LiveFixture {
         comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0"),
         tlm(comms, serialFake, radioFake),
         drive(motorL, motorR, /*trackWidth=*/120.0f),
-        odom(motorL, motorR, /*trackWidth=*/120.0f),
-        moveQueue(drive, odom, clock),
+        odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position()),
+        moveQueue(drive, odom, /*trackWidth=*/120.0f),
         preamble(motorL, motorR, otos, color, line, clock),
         robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm, drive, odom, moveQueue,
                   preamble, stateEstimator, clock, sleeper) {
@@ -1313,7 +1313,7 @@ void scenarioShapingDisabledFlagStaysClearWhenBothAxesEnabled() {
   // isolate the flag logic from the wire/merge path already covered by
   // scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists()
   // below.
-  App::ShaperLimits limits;
+  Motion::ShaperLimits limits;
   limits.aMax = 800.0f;
   limits.aDecel = 800.0f;
   limits.jMax = 5000.0f;
@@ -1458,13 +1458,13 @@ void scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles() {
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
-  App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // Default-constructed StateEstimator (0/0/200ms weights) -- quarantined,
   // App::MoveQueue no longer depends on it (see the other constructions in
   // this file for the full note); kept solely for robotLoop's own
   // consumption below.
-  App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock);
+  Motion::StateEstimator stateEstimator;
+  Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   clock.setMicros(0);
@@ -1596,11 +1596,11 @@ void scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists() {
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
-  App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // Turn-prediction campaign: stateEstimator constructed before moveQueue
   // -- see the earlier scenarios' own comment for why.
-  App::StateEstimator stateEstimator;  // default weights (0.0/0.0/200ms)
-  App::MoveQueue moveQueue(drive, odom, clock);
+  Motion::StateEstimator stateEstimator;  // default weights (0.0/0.0/200ms)
+  Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   MockTuningStore mockStore;
@@ -1719,15 +1719,15 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
   App::Telemetry tlm(comms, serialFake, radioFake);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
-  App::Odometry odom(motorL, motorR, /*trackWidth=*/120.0f);
+  Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // Default weights -- sourcing from Config::defaultEstimatorConfig() is
   // main.cpp's/sim_harness.h's own job (AC #1), not this unit test's
   // concern; this scenario only cares about update()'s own call site and
   // its effect on wheel/body validity/tracking. Constructed before
   // moveQueue (turn-prediction campaign) -- see the earlier scenarios'
   // own comment for why.
-  App::StateEstimator stateEstimator;
-  App::MoveQueue moveQueue(drive, odom, clock);
+  Motion::StateEstimator stateEstimator;
+  Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
   App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
@@ -1737,7 +1737,7 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   robotLoop.boot();
   robotLoop.markConfigured();
 
-  checkTrue(!stateEstimator.wheelNow(App::Wheel::Left).valid,
+  checkTrue(!stateEstimator.wheelNow(Motion::Wheel::Left).valid,
             "left wheel peer starts invalid -- update() has not run yet (boot() never calls "
             "cycle())");
   checkTrue(!stateEstimator.whereAmI(0).valid,
@@ -1764,8 +1764,8 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
 
   uint32_t nowMs = static_cast<uint32_t>(clock.nowMicros() / 1000);
 
-  App::WheelEstimate wheelL = stateEstimator.wheelNow(App::Wheel::Left);
-  App::WheelEstimate wheelR = stateEstimator.wheelNow(App::Wheel::Right);
+  Motion::WheelEstimate wheelL = stateEstimator.wheelNow(Motion::Wheel::Left);
+  Motion::WheelEstimate wheelR = stateEstimator.wheelNow(Motion::Wheel::Right);
   checkTrue(wheelL.valid, "left wheel peer is valid after several cycles of motion");
   checkTrue(wheelR.valid, "right wheel peer is valid after several cycles of motion");
   checkTrue(wheelL.velocity > 100.0f,
@@ -1775,7 +1775,7 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
             "right wheel peer's own velocity tracks the commanded forward motion (positive, "
             "well above zero)");
 
-  App::BodyEstimate body = stateEstimator.whereAmI(nowMs);
+  Motion::BodyEstimate body = stateEstimator.whereAmI(nowMs);
   checkTrue(body.valid, "body peer is valid after several cycles of motion");
   checkTrue(body.v_x > 100.0f,
             "body peer's own v_x tracks the commanded forward twist (positive, well above "
@@ -1818,6 +1818,79 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
                "refreshing every cycle -- not a second, disconnected instance");
 }
 
+// ===========================================================================
+// 122-003 (SUC-003, telemetry-report-loop-cycle-duration.md): cycle_busy/
+// cycle_period loop-timing fields, staged onto the SECONDARY frame (interim
+// placement -- see telemetry.h's SecondaryFrame doc comment and
+// telemetry.proto's TelemetrySecondary doc comment for the full derivation).
+// Drives RobotLoop::cycle() a bounded number of times against LiveFixture's
+// LIVE (unscripted) SimPlant with deliberately non-uniform per-cycle clock
+// advances -- individually >= kSecondaryPeriod (200ms) so secondary is
+// guaranteed a slot somewhere in this run (telemetry.h's own emit() comment:
+// "secondary is guaranteed a slot within roughly one kSecondaryPeriod
+// instead of starving forever") without needing to hand-predict exactly
+// which cycle's own tie-break lands on secondary. Whichever cycle(s)
+// secondary actually transmits on, this test already knows -- from its own
+// per-cycle bookkeeping -- the EXACT cycle_period that cycle must carry
+// (this cycle's own clock advance, or 0 for the very first-ever cycle()
+// call: RobotLoop's previousCycleStartUs_/everCycled_ start fresh per
+// instance, untouched by LiveFixture's own constructor-time boot(), which
+// never calls cycle() at all) and the exact cycle_busy (always 0 -- under a
+// clock that only moves when THIS test explicitly advances it between
+// cycle() calls, no simulated time passes DURING one synchronous cycle()
+// call, so 0 is the correct, exact, deterministic value here -- not a
+// tolerance/range check dodging a harder assertion).
+// ===========================================================================
+
+void scenarioSecondaryFrameCarriesExactLoopTimingFields() {
+  beginScenario("RobotLoop secondary frame: cycle_busy/cycle_period carry EXACT loop-timing values (122-003)");
+
+  LiveFixture fixture;
+
+  // Deliberately non-uniform per-cycle advances [us] -- not a common
+  // multiple of kPrimaryPeriod/kSecondaryPeriod -- so cycle_period is
+  // distinguishable cycle to cycle, proving the actual subtraction rather
+  // than a hardcoded constant. Individually >= kSecondaryPeriod (200ms, see
+  // this scenario's own header comment).
+  const uint64_t kSteps[] = {210000, 260000, 190000, 240000, 205000,
+                             230000, 215000, 245000, 195000, 225000};
+  const int kNumCycles = static_cast<int>(sizeof(kSteps) / sizeof(kSteps[0]));
+
+  uint64_t expectedCyclePeriod[kNumCycles];
+  int secondaryFramesChecked = 0;
+
+  for (int i = 0; i < kNumCycles; ++i) {
+    // First-ever cycle() call on this fixture (LiveFixture's own
+    // constructor never calls cycle() -- only boot()) always reports
+    // cyclePeriod == 0 regardless of the applied step, since there is no
+    // previous cycle() call to subtract against.
+    expectedCyclePeriod[i] = (i == 0) ? 0 : kSteps[i];
+
+    fixture.plant.tick(static_cast<float>(kSteps[i]) / 1e6f);  // [s]
+    fixture.clock.advanceMicros(kSteps[i]);
+
+    uint32_t beforeSecondary = fixture.tlm.secondaryEmitCount();
+    fixture.robotLoop.cycle();
+
+    if (fixture.tlm.secondaryEmitCount() > beforeSecondary) {
+      TestSupport::DecodedLine decoded = TestSupport::decodeOutboundLine(fixture.serialFake.sent().back());
+      checkTrue(decoded.kind == TestSupport::DecodedKind::kSecondary,
+                "captured line after a secondaryEmitCount() bump decodes as TelemetrySecondary");
+      checkUintEq(decoded.secondary.cycle_busy, 0,
+                  "cycle_busy is EXACTLY 0 -- no simulated time passes between cycleStart and "
+                  "frame-staging within one synchronous cycle() call against a test-driven clock");
+      checkUintEq(decoded.secondary.cycle_period, static_cast<uint32_t>(expectedCyclePeriod[i]),
+                  "cycle_period is EXACTLY this cycle's own clock advance since the previous "
+                  "cycle() call's cycleStart -- proves the subtraction, not a hardcoded constant");
+      ++secondaryFramesChecked;
+    }
+  }
+
+  checkTrue(secondaryFramesChecked >= 2,
+            "at least two secondary frames captured across this run, each independently "
+            "carrying an exact, distinguishable cycle_period");
+}
+
 }  // namespace
 
 int main() {
@@ -1837,6 +1910,8 @@ int main() {
 
   scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists();
   scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression();
+
+  scenarioSecondaryFrameCarriesExactLoopTimingFields();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::RobotLoop scenarios passed\n");

@@ -40,3 +40,23 @@ protocol — the host must open the relay with DTR asserted, send `!GO` to enter
 data plane, then send plain commands with no `>` prefix; `rogo`/`robot_radio` use
 the older `>`-prefix protocol and cannot reach the robot through the current relay
 firmware). Check there before re-deriving comms or hardware behavior.
+
+# Architecture — Two Firmware Layers (base vs. motion library)
+
+The firmware is split into two layers (sprint 122, stakeholder directive
+2026-07-24): a hardened **firmware base** (`src/firm`) — buses, devices,
+the velocity PID, the wire, the loop schedule — meant to eventually
+freeze and move to its own repository (`git subtree split`); and a
+**motion library** (`src/motion`, a sibling tree, not a child of
+`src/firm`) — twist decomposition, queueing, shaping, estimation, and
+odometry — still under active development, with its own standalone,
+Python-free `motion_tests` build. The two communicate through one narrow
+boundary interface, `Motion::WheelSink` (`src/motion/wheel_sink.h`): a
+velocity sink (`setWheels()`/`stop()`) the base implements
+(`App::Drive`) and the motion library drives (`Motion::MoveQueue`). See
+[`docs/design/design.md`](docs/design/design.md) §2/§5 for the
+system-level split and [`src/motion/DESIGN.md`](src/motion/DESIGN.md)
+for the motion library's own current orientation — `src/motion` is real,
+current documentation but deliberately outside `.clasi/config.yaml`'s
+validated `sources:` (`[src/firm, src/host]`, unchanged), the same
+treatment `src/sim`/`src/protos`/`src/scripts` already get.

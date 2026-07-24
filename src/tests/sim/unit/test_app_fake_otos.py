@@ -5,7 +5,7 @@ Devices::Otos interface introduced by the otos-fake-seam refactor.
 Compiles ``app_fake_otos_harness.cpp`` together with the HOST_BUILD
 implementations it needs (``src/firm/app/fake_otos.cpp``,
 ``src/firm/app/odometry.cpp``,
-``src/firm/kinematics/body_kinematics.cpp``) with ``-DHOST_BUILD``, against
+``src/motion/body_kinematics.cpp``) with ``-DHOST_BUILD``, against
 the SAME headers every ARM build compiles. Mirrors ``test_app_odometry.py``'s
 shape: compile with the system C++ compiler, run the binary, assert exit 0.
 
@@ -24,8 +24,8 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_fake_otos_harness.cpp"
 _FAKE_OTOS_SRC = _SOURCE_DIR / "app" / "fake_otos.cpp"
-_ODOMETRY_SRC = _SOURCE_DIR / "app" / "odometry.cpp"
-_BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
+_ODOMETRY_SRC = _REPO_ROOT / "src" / "motion" / "odometry.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
 # otos.cpp carries the abstract Devices::Otos base's out-of-line anchor
 # (~Otos / vtable / typeinfo) that any concrete subclass -- FakeOtos -- links.
 _OTOS_SRC = _SOURCE_DIR / "devices" / "otos.cpp"
@@ -72,6 +72,8 @@ def test_app_fake_otos_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_REPO_ROOT / "src"),
             "-o",
             str(binary),
             *[str(src) for src in sources],

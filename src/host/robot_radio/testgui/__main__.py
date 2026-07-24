@@ -1588,6 +1588,15 @@ def _build_main_window():  # type: ignore[return]
     import queue as _queue_mod
     _pending_frames: "_queue_mod.Queue" = _queue_mod.Queue()
 
+    # 122-003: thread-safe queue for raw telemetry_pb2.TelemetrySecondary
+    # objects (~5 Hz -- cycle_busy/cycle_period among other fields; see
+    # transport.py's own on_telemetry_secondary doc comment). Hardware
+    # backends only -- SimTransport never calls on_telemetry_secondary, so
+    # this queue simply stays empty in Sim mode (no error, just no data --
+    # matches every other pre-existing TelemetrySecondary-only field's
+    # sim-mode gap).
+    _pending_secondary: "_queue_mod.Queue" = _queue_mod.Queue()
+
     # Use a QObject subclass with proper Qt signals to bridge the thread hop
     # safely.  QMetaObject.invokeMethod with a missing slot silently fails, so
     # we use dedicated signals connected with QueuedConnection instead.
@@ -1638,6 +1647,7 @@ def _build_main_window():  # type: ignore[return]
         """
         frame_ready = Signal()
         truth_ready = Signal(float, float, float)
+        secondary_ready = Signal()  # 122-003
 
         def __init__(self) -> None:
             super().__init__()
@@ -1754,6 +1764,25 @@ def _build_main_window():  # type: ignore[return]
                     last_frame.encpose = trace_model.last_encpose
                 telemetry_ctrl.update_frame(last_frame)
 
+        @Slot()
+        def on_secondary_ready(self) -> None:
+            """Process all pending TelemetrySecondary frames (122-003).
+
+            Drains ``_pending_secondary`` and refreshes the telemetry panel
+            with the FRESHEST one only (same "last one wins, cheap to
+            drain them all" posture as ``on_frame_ready`` above) --
+            ``telemetry_ctrl.update_secondary()`` renders one loop-timing
+            line (``cycle_busy``/``cycle_period``, converted us -> ms).
+            """
+            last_secondary = None
+            while True:
+                try:
+                    last_secondary = _pending_secondary.get_nowait()
+                except Exception:
+                    break
+            if last_secondary is not None:
+                telemetry_ctrl.update_secondary(last_secondary)
+
         @Slot(float, float, float)
         def on_truth_ready(self, x_cm: float, y_cm: float, yaw_rad: float) -> None:
             """Process a ground-truth pose update on the Qt main thread.
@@ -1772,6 +1801,7 @@ def _build_main_window():  # type: ignore[return]
     _bridge = _TelemetryBridge()
     _bridge.frame_ready.connect(_bridge.on_frame_ready, Qt.ConnectionType.QueuedConnection)
     _bridge.truth_ready.connect(_bridge.on_truth_ready, Qt.ConnectionType.QueuedConnection)
+    _bridge.secondary_ready.connect(_bridge.on_secondary_ready, Qt.ConnectionType.QueuedConnection)
 
     class _WorkerBridge(QObject):
         """Marshals background-worker signals onto the Qt GUI main thread.
@@ -2117,6 +2147,15 @@ def _build_main_window():  # type: ignore[return]
         _state["last_tlm"] = (frame, _time.monotonic())
         _pending_frames.put(frame)
         _bridge.frame_ready.emit()  # type: ignore[attr-defined]
+
+    def _on_secondary_thread_v2(secondary: "object") -> None:
+        """Transport on_telemetry_secondary callback (122-003) — fires on
+        the reader thread. Enqueues the raw ``telemetry_pb2.
+        TelemetrySecondary`` and emits the bridge signal, same
+        queue-then-signal pattern as ``_on_telemetry_thread_v2`` above.
+        """
+        _pending_secondary.put(secondary)
+        _bridge.secondary_ready.emit()  # type: ignore[attr-defined]
 
     def _on_truth_thread(pose: "tuple | None") -> None:
         """Transport on_truth callback — fires on the truth/tick thread.
@@ -2962,6 +3001,7 @@ def _build_main_window():  # type: ignore[return]
         # Wire telemetry and truth callbacks — these fire on background threads;
         # the bridge marshals them safely to the Qt main thread.
         transport.on_telemetry = _on_telemetry_thread_v2
+        transport.on_telemetry_secondary = _on_secondary_thread_v2  # 122-003
         transport.on_truth = _on_truth_thread
 
         # Clear any stale trace data from a previous session.

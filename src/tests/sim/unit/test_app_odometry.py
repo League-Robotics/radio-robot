@@ -7,7 +7,7 @@ implementations it needs (``src/firm/app/odometry.cpp``,
 implementation -- plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
 physics dependencies, ``src/firm/devices/velocity_pid.cpp``,
 ``src/firm/devices/nezha_motor.cpp``, ``src/firm/devices/otos.cpp``,
-``src/firm/kinematics/body_kinematics.cpp``) with ``-DHOST_BUILD``, against the
+``src/motion/body_kinematics.cpp``) with ``-DHOST_BUILD``, against the
 SAME headers every ARM build compiles. Mirrors ``test_app_drive.py``'s exact
 shape: compile with the system C++ compiler, run the resulting binary,
 assert it exits 0.
@@ -33,14 +33,17 @@ _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
 _PLANT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "plant"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_odometry_harness.cpp"
-_ODOMETRY_SRC = _SOURCE_DIR / "app" / "odometry.cpp"
+_ODOMETRY_SRC = _REPO_ROOT / "src" / "motion" / "odometry.cpp"
+# 122-002: App::applyOtosSample() split out of odometry.cpp into this new
+# base-side file -- this harness calls it directly (scenario 4/5).
+_OTOS_SAMPLE_SRC = _SOURCE_DIR / "app" / "otos_sample.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 _VELOCITY_PID_SRC = _SOURCE_DIR / "devices" / "velocity_pid.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "devices" / "nezha_motor.cpp"
 _OTOS_SRC = _SOURCE_DIR / "devices" / "otos.cpp"
-_BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
 
 # Matches every other src/tests/sim/unit harness's own compiled standard.
 _CXX_STANDARD = "c++20"
@@ -64,6 +67,7 @@ def test_app_odometry_harness_compiles_and_passes(tmp_path):
     sources = [
         _HARNESS_SRC,
         _ODOMETRY_SRC,
+        _OTOS_SAMPLE_SRC,
         _SIM_PLANT_SRC,
         _WHEEL_PLANT_SRC,
         _OTOS_PLANT_SRC,
@@ -88,6 +92,8 @@ def test_app_odometry_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_REPO_ROOT / "src"),
             "-I",
             str(_INFRA_SIM_DIR),
             "-I",

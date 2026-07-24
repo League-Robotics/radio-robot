@@ -301,6 +301,30 @@ list(APPEND SOURCE_FILES ${CC_FILES})
 # itself -- RECURSIVE_FIND_FILE above already covers everything remaining
 # under CODAL_APP_SOURCE_DIR (src/firm).
 
+# 122-001 (motion-library extraction): src/motion is a SIBLING of src/firm
+# (sprint 122's architecture, Design Rationale Decision 3 -- subtree-split
+# readiness), so it is NOT covered by CODAL_APP_SOURCE_DIR's own glob above.
+# Without this second glob, the firmware image would silently stop linking
+# src/motion's sources the moment they leave src/firm -- this is the
+# "easy-to-miss" build-system change sprint.md's Migration Concerns calls
+# out explicitly. MOTION_SOURCE_DIR is a fixed path (not CODAL_APP_SOURCE_DIR-
+# relative): unlike src/firm, src/motion has no equivalent "application
+# root" override in codal.json, it is simply always there once populated.
+set(MOTION_SOURCE_DIR "src/motion")
+RECURSIVE_FIND_DIR(MOTION_INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/${MOTION_SOURCE_DIR}" "*.h")
+list(APPEND INCLUDE_DIRS ${MOTION_INCLUDE_DIRS})
+list(APPEND INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/${MOTION_SOURCE_DIR}")
+# The parent of BOTH src/firm and src/motion ("src/"), so a qualified
+# `#include "motion/stop_condition.h"` (the SAME include string these
+# modules used when they lived at src/firm/motion/, back when src/firm
+# itself being on the include path made "motion/..." resolve) keeps
+# resolving now that "motion" is a top-level dir under src/ instead of a
+# child of src/firm -- zero #include text churn in src/firm callers
+# (app/move_queue.h etc.) that already said `#include "motion/...h"`.
+list(APPEND INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/src")
+RECURSIVE_FIND_FILE(MOTION_SOURCE_FILES "${PROJECT_SOURCE_DIR}/${MOTION_SOURCE_DIR}" "*.cpp")
+list(APPEND SOURCE_FILES ${MOTION_SOURCE_FILES})
+
 # ---------------------------------------------------------------------------
 # ROBOT_RUN_MODE (039-005): explicit build-target run mode. Retained as a
 # structural marker (REAL is the only mode this build ever produces now --

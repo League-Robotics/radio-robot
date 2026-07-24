@@ -1,45 +1,45 @@
-// state_estimator.cpp -- App::StateEstimator implementation. See
+// state_estimator.cpp -- Motion::StateEstimator implementation. See
 // state_estimator.h's file header for the module's boundary and rationale.
-#include "app/state_estimator.h"
+#include "motion/state_estimator.h"
 
 #include <cmath>
 
-namespace App {
+namespace Motion {
 
 StateEstimator::StateEstimator(FusionWeights weights) : weights_(weights) {}
 
-void StateEstimator::update(const Telemetry::Frame& frame, uint32_t now) {  // [ms]
+void StateEstimator::update(const Input& input, uint32_t now) {  // [ms]
   // Wheel peers -- always refreshed straight from this cycle's already-
-  // staged EncoderReading (position, velocity, its own collect time). Each
+  // staged encoder reading (position, velocity, its own collect time). Each
   // wheel is its own independent peer -- no cross-wheel dependency here.
-  wheelLeft_.distance = frame.encLeft.position;
-  wheelLeft_.velocity = frame.encLeft.velocity;
-  wheelLeft_.basisTime = frame.encLeft.time;
+  wheelLeft_.distance = input.encLeftPosition;
+  wheelLeft_.velocity = input.encLeftVelocity;
+  wheelLeft_.basisTime = input.encLeftTime;
   wheelLeft_.valid = true;
 
-  wheelRight_.distance = frame.encRight.position;
-  wheelRight_.velocity = frame.encRight.velocity;
-  wheelRight_.basisTime = frame.encRight.time;
+  wheelRight_.distance = input.encRightPosition;
+  wheelRight_.velocity = input.encRightVelocity;
+  wheelRight_.basisTime = input.encRightTime;
   wheelRight_.valid = true;
 
-  // Body peer -- x/y/v_x/v_y always come straight from Odometry's own
-  // dead-reckoned frame.pose/frame.twist (never OTOS-blended this sprint --
-  // see BodyEstimate's own doc comment). heading/omega start from the SAME
+  // Body peer -- x/y/v_x/v_y always come straight from Motion::Odometry's
+  // own dead-reckoned pose/twist (never OTOS-blended this sprint -- see
+  // BodyEstimate's own doc comment). heading/omega start from the SAME
   // encoder-derived values, then blend toward a fresh OTOS reading via the
   // v1 complementary weight.
-  float heading = frame.pose.h;
-  float omega = frame.twist.omega;
+  float heading = input.poseHeading;
+  float omega = input.twistOmega;
 
   // Eligible to blend this cycle iff the frame's own per-cycle freshness
-  // bit is set (frame.otosPresent -- "this cycle's burst actually
-  // refreshed the cached pose", odometry.h's own applyOtosSample() doc
-  // comment) AND the reading's own age is within the live staleness
-  // window. `now >= frame.otos.time` guards the unsigned subtract below --
-  // both are the same [ms] robot-clock domain by construction (frame.otos
-  // is stamped by the SAME cycle's applyOtosSample() call whenever
+  // bit is set (input.otosPresent -- "this cycle's burst actually
+  // refreshed the cached pose", App::applyOtosSample()'s own doc comment)
+  // AND the reading's own age is within the live staleness window.
+  // `now >= input.otosTime` guards the unsigned subtract below -- both are
+  // the same [ms] robot-clock domain by construction (input.otosTime is
+  // stamped by the SAME cycle's applyOtosSample() call whenever
   // otosPresent is true), so this should hold whenever otosPresent does.
-  bool otosFresh = frame.otosPresent && (now >= frame.otos.time) &&
-                    ((now - frame.otos.time) <= weights_.staleness);
+  bool otosFresh = input.otosPresent && (now >= input.otosTime) &&
+                    ((now - input.otosTime) <= weights_.staleness);
   if (otosFresh) {
     // Innovations are computed whenever a fresh OTOS reading is blended --
     // even at weight 0.0 (diagnostic/validation only at that weight; the
@@ -47,19 +47,19 @@ void StateEstimator::update(const Telemetry::Frame& frame, uint32_t now) {  // [
     // against the PRE-blend (pure encoder-derived) heading/omega, matching
     // "OTOS-vs-predicted" -- the prediction being compared against is this
     // cycle's own encoder-only estimate, before any OTOS influence.
-    innovations_.heading = frame.otos.heading - heading;
-    innovations_.omega = frame.otos.omega - omega;
+    innovations_.heading = input.otosHeading - heading;
+    innovations_.omega = input.otosOmega - omega;
     innovations_.valid = true;
 
-    heading = heading + weights_.headingOtos * (frame.otos.heading - heading);
-    omega = omega + weights_.omegaOtos * (frame.otos.omega - omega);
+    heading = heading + weights_.headingOtos * (input.otosHeading - heading);
+    omega = omega + weights_.omegaOtos * (input.otosOmega - omega);
   }
 
-  body_.x = frame.pose.x;
-  body_.y = frame.pose.y;
+  body_.x = input.poseX;
+  body_.y = input.poseY;
   body_.heading = heading;
-  body_.v_x = frame.twist.v_x;
-  body_.v_y = frame.twist.v_y;
+  body_.v_x = input.twistVX;
+  body_.v_y = input.twistVY;
   body_.omega = omega;
   body_.basisTime = now;
   body_.valid = true;
@@ -120,4 +120,4 @@ void StateEstimator::reset(float x, float y, float heading) {  // [mm] [mm] [rad
   // method's own doc comment (state_estimator.h).
 }
 
-}  // namespace App
+}  // namespace Motion

@@ -5,7 +5,7 @@ source_paths:
 ---
 # radio-robot-elite — System Design
 
-**Owner:** Eric Busboom · **Last reviewed:** 2026-07-21 · **Status:** in-flux
+**Owner:** Eric Busboom · **Last reviewed:** 2026-07-24 · **Status:** in-flux
 
 ---
 
@@ -62,13 +62,13 @@ docs living outside those two roots.
 
 | Subsystem | Role |
 |---|---|
-| [`app/`](../../src/firm/app/DESIGN.md) | The single cooperatively-timed control loop (`App::RobotLoop`) and its passive modules: Comms, Telemetry, Drive, Odometry, MoveQueue, StateEstimator, Preamble. |
+| [`app/`](../../src/firm/app/DESIGN.md) | The single cooperatively-timed control loop (`App::RobotLoop`) and its BASE-side passive modules: Comms, Telemetry, Drive (122 — narrowed to the wheel-target sink implementing the boundary interface below), Preamble. `RobotLoop` also constructs and drives the motion-library's `Motion::MoveQueue`/`Motion::Odometry`/`Motion::StateEstimator` (122 — moved to [`src/motion/`](../../src/motion/DESIGN.md), a sibling tree, see §5) through that boundary. |
 | [`com/`](../../src/firm/com/DESIGN.md) | ARM-only raw transports: USB CDC serial, the micro:bit radio, persisted radio-channel storage. |
 | [`config/`](../../src/firm/config/DESIGN.md) | Generated boot configuration — per-robot calibration baked at build time from `data/robots/active_robot.json`. |
 | [`devices/`](../../src/firm/devices/DESIGN.md) | I2C-attached device leaves (Nezha motors, OTOS, color/line sensors), the shared `MotorArmor` policy, the velocity PID, and the pure `I2CBus`/`Clock`/`Sleeper` hardware seams. |
-| [`kinematics/`](../../src/firm/kinematics/DESIGN.md) | Stateless differential-drive math: inverse/forward twist↔wheel maps, curvature-preserving saturation. |
+| [`kinematics/`](../../src/firm/kinematics/DESIGN.md) | **Retired (122) — code moved to [`src/motion/`](../../src/motion/DESIGN.md).** `BodyKinematics` (stateless differential-drive twist↔wheel maps, curvature-preserving saturation) now lives in the sibling `src/motion` tree; this directory keeps only a redirect `DESIGN.md` (the original derivation, unchanged) so the validator has a doc for this still-declared child of `src/firm`. |
 | [`messages/`](../../src/firm/messages/DESIGN.md) | The wire schema: generated message structs, the generated envelope codec, the hand-written byte-level wire runtime. |
-| [`motion/`](../../src/firm/motion/DESIGN.md) | Pure, bounded-motion stop/timeout comparison logic (`Motion::StopCondition`) — no owned state beyond what's passed into `tick()`, no dependency on `MoveQueue`/`Drive`/wire types. A fresh, tiny directory (116) — not a revival of the larger `motion/` tree sprint 115 deleted. |
+| [`motion/`](../../src/firm/motion/DESIGN.md) | **Retired (122) — code moved to [`src/motion/`](../../src/motion/DESIGN.md).** `Motion::StopCondition`/`Motion::VelocityShaper` (bounded-motion stop/timeout comparison and the decel-into-the-goal speed shaper) now live in the sibling `src/motion` tree; this directory keeps only a redirect `DESIGN.md` (the original derivation, unchanged) so the validator has a doc for this still-declared child of `src/firm`. |
 | [`types/`](../../src/firm/types/DESIGN.md) | Vestigial protocol-v2 text-tag constants and the firmware-version generation seam (mostly dead code — see its own §6). |
 
 (`src/firm/README-DESIGN.md` is a one-paragraph pointer back to this
@@ -89,6 +89,7 @@ even though nothing requires it:
 
 | Subsystem | Role |
 |---|---|
+| [`src/motion/`](../../src/motion/DESIGN.md) | The motion-control library (sprint 122's two-layer base/motion split): `MoveQueue`, `StateEstimator`, `Odometry`, `BodyKinematics`, `StopCondition`, `VelocityShaper`, and the `WheelSink` boundary interface the base (`src/firm/app`'s `Drive`) implements. A SIBLING tree of `src/firm` (not a child), imports nothing from `src/firm` except `messages/`, and builds its own standalone `motion_tests` CMake target (no sim library, no Python). Real, current documentation — deliberately kept OUTSIDE the validated `sources:` list (Design Rationale Decision 3, sprint 122), same unvalidated-but-real treatment this table's other rows already get. |
 | [`src/sim/`](../../src/sim/DESIGN.md) | The host-build firmware simulator: compiles the real firmware into a shared library, drives it from Python over an `extern "C"` ABI. One sim object shared by the pytest suite and the TestGUI. |
 | [`src/protos/`](../../src/protos/DESIGN.md) | The wire-schema source of truth (`.proto` files) both the firmware and host codegen compile from. |
 | [`src/scripts/`](../../src/scripts/DESIGN.md) | Build-time code generators (messages, host protobuf bindings, boot config, firmware version) plus one CI-only config-sync lint. |
@@ -292,31 +293,68 @@ against the on-chip estimator instance. See
 [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) for the full
 detail.
 
+**122 (motion-library extraction + loop-timing telemetry) — landed.**
+Stakeholder-directed two-layer restructuring (2026-07-24): the firmware
+splits into a hardened FIRMWARE BASE (`src/firm`, meant to eventually
+freeze and move to its own repository) and a separate MOTION LIBRARY
+(`src/motion`, a new sibling tree, not a child of `src/firm`) holding the
+motion-control logic still under active development. `Motion::MoveQueue`/
+`Motion::StateEstimator`/`Motion::Odometry` move out of `src/firm/app/`;
+`BodyKinematics` and `Motion::StopCondition`/`Motion::VelocityShaper` move
+out of `src/firm/kinematics/` and `src/firm/motion/` respectively — both
+of those `src/firm` directories are now retired (redirect `DESIGN.md`
+only, see §2's table). One new boundary header, motion-owned,
+`Motion::WheelSink` (`src/motion/wheel_sink.h`) — a plain VELOCITY sink
+(`setWheels(v_left, v_right)`/`stop()`), NOT a duty sink (that rewrite,
+folding sprint 2's PID-placement decision in, is deliberately deferred) —
+`App::Drive` narrows to implement it, losing `setTwist()`/its
+`BodyKinematics` dependency to `Motion::MoveQueue`, which now calls
+`BodyKinematics::inverse()` directly. `velocity_pid.*` and
+`Devices::NezhaMotor`'s PID ownership stay in the base, unchanged.
+Independently, `Telemetry::SecondaryFrame` gains `cycle_busy`/
+`cycle_period` (`uint32 [us]`, additive fields) reporting real per-cycle
+loop timing — landed on the secondary, not primary, frame as an interim
+placement (the primary frame's armored envelope is 1 byte under its
+186-byte budget; migrates once a future COBS+CRC framing rework removes
+that ceiling). Zero behavior change, zero wire change beyond that one
+additive field pair — see sprint 122's own `sprint.md` for the full
+architecture, diagrams, and Design Rationale (why a velocity sink, why
+`src/motion` is a sibling rather than a nested child, why `motion_tests`
+is a standalone CMake target). See
+[`src/motion/DESIGN.md`](../../src/motion/DESIGN.md) for the
+motion library's own current orientation and
+[`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) for the base's.
+
 Flow of one cycle, at orientation altitude:
 
 1. **Comms in** — `App::Comms` polls the two transports (serial, radio)
    for one armored `*B` line, dearmors and decodes it into a
    `msg::CommandEnvelope`.
 2. **Dispatch** — the loop's own switch acts on the command: a Move
-   enqueues onto `App::MoveQueue` (1 active + 4 pending; `replace=true`
-   flushes pending and preempts the active `Move`, `replace=false`
-   enqueues or acks `ERR_FULL` past 4 pending), which stages the active
-   motion's velocity onto `App::Drive` and drives its own
-   `Motion::StopCondition`; a Stop flushes the queue and halts `Drive`
-   immediately; config/queries reply via the primary telemetry frame's
-   single ack slot (`ack_corr`/`ack_err`, valid iff `flags` bit 5 — see
-   [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) §2).
+   enqueues onto `Motion::MoveQueue` (122 — moved to `src/motion`, see
+   below; 1 active + 4 pending; `replace=true` flushes pending and
+   preempts the active `Move`, `replace=false` enqueues or acks
+   `ERR_FULL` past 4 pending), which stages the active motion's velocity
+   onto `App::Drive` through the `Motion::WheelSink` boundary and drives
+   its own `Motion::StopCondition`; a Stop flushes the queue and halts
+   `Drive` immediately; config/queries reply via the primary telemetry
+   frame's single ack slot (`ack_corr`/`ack_err`, valid iff `flags` bit 5
+   — see [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) §2).
 3. **Motor service** — the loop runs each `Devices::NezhaMotor`'s
    split-phase encoder request → settle → collect → PID → duty-write
    sequence, with the settle/clearance gaps expressed as
    `runAndWait(gap, body)` blocks whose wait time is borrowed for other
    bounded work (OTOS sampling, odometry integration, telemetry
    assembly).
-4. **State out** — `App::Odometry` integrates encoder deltas through
-   `BodyKinematics::forward()`; `App::StateEstimator` (117) ingests the
-   same cycle's staged `Frame` and refreshes its wheel/body ZOH
-   predict-to-now estimates; `App::Telemetry` emits the primary TLM frame
-   (or the slower secondary diagnostic frame) through Comms.
+4. **State out** — `Motion::Odometry` (122 — moved to `src/motion`)
+   integrates encoder deltas through `BodyKinematics::forward()`;
+   `Motion::StateEstimator` (117; 122 — moved to `src/motion`) ingests
+   the same cycle's staged data (handed in via a plain `Input` struct,
+   not `App::Telemetry::Frame` directly) and refreshes its wheel/body
+   ZOH predict-to-now estimates; `App::Telemetry` emits the primary TLM
+   frame (or the slower secondary diagnostic frame, which also now
+   carries the `cycle_busy`/`cycle_period` loop-timing fields — 122)
+   through Comms.
 5. **Pace** — a final `runAndWait` paces the cycle to `kCycle` = 40 ms
    (~25 Hz), matching `Telemetry::kPrimaryPeriod` so every cycle emits a
    primary frame. (118 — restores the schedule's genuine 4ms/4ms
@@ -329,19 +367,31 @@ Boot is a separate loop: `App::Preamble` steps per-device detection (one
 bounded probe per pass) while telemetry frames report detection status;
 command consumption starts only when `preamble.done()`.
 
-Dependency direction (arrows = "includes/uses"):
+Dependency direction (arrows = "includes/uses"). **122 changed this
+diagram's shape**: `motion/`/`kinematics/` stop being children of
+`src/firm` and become `src/motion`, a SIBLING tree `app` depends on
+through one narrow boundary interface (`Motion::WheelSink`) — not a
+`src/firm`-internal include any more:
 
 ```
 main.cpp ──► app ──► devices ──► (nothing project-local except itself)
-   │          │  └─► messages, kinematics
+   │          │  └─► messages
+   │          ├────► src/motion (sibling tree, via Motion::WheelSink) ──► messages
    │          └────► com (via ARM-only Transport adapters)
    ├────────► config ──► messages
-   └────────► com, devices, config
+   └────────► com, devices, config, src/motion
 ```
 
-`devices/` is the bottom of the stack and deliberately includes nothing
-from `messages/` or `config/`. `kinematics/` and `messages/` are leaf
-libraries with no project dependencies of their own.
+`devices/` is the bottom of the `src/firm` stack and deliberately
+includes nothing from `messages/` or `config/`. `messages/` is a leaf
+library with no project dependencies of its own. `src/motion` (122) is
+similarly leaf-like from `src/firm`'s point of view — it imports nothing
+from `src/firm` except `messages/` — but is a whole sibling tree, not a
+single-directory leaf; see
+[`src/motion/DESIGN.md`](../../src/motion/DESIGN.md) for its own
+internal module graph. `src/firm/kinematics/` and `src/firm/motion/` are
+both now retired, empty-of-code directories (each keeps a redirect
+`DESIGN.md` only — see §2's table above).
 
 **Cross-cutting constraints and invariants** (each subsystem doc repeats
 only what's specific to it — this is the shared set):
@@ -377,8 +427,9 @@ only what's specific to it — this is the shared set):
   are frozen protocol surface, excluded from the naming-convention
   rename sweep — see §3.
 - **No deadman — every `Move` is structurally self-bounding:**
-  `App::MoveQueue::tick()` runs unconditionally every cycle and drains
-  to `Drive::stop()` once the active `Move`'s stop condition or
+  `Motion::MoveQueue::tick()` (122 — moved to `src/motion`) runs
+  unconditionally every cycle and drains to `Drive::stop()` once the
+  active `Move`'s stop condition or
   `timeout` fires and nothing is pending — an emergent property of every
   queued command carrying its own bound, not a second, independently-
   timed staleness timer. `App::Deadman` does not exist in this tree. No
@@ -429,7 +480,8 @@ for its full boundary/interface detail.
   tour/nav machinery onto the new wire surface is explicit future work,
   not part of 116.
 - **Sprint 117 (predict-to-now estimator v1) has landed.**
-  `App::StateEstimator` ticks every cycle with wheel/body peer ZOH
+  `Motion::StateEstimator` (122 — moved to `src/motion`, `App::` through
+  sprint 121) ticks every cycle with wheel/body peer ZOH
   estimates; its OTOS-fusion weights are fail-closed baked config,
   defaulting to 0.0 (encoder-only v1) and live-tunable via the new
   `ConfigDelta.estimator` arm — NOT persisted to flash. Its predictions
@@ -439,6 +491,19 @@ for its full boundary/interface detail.
   camera pose fusion, and the remaining-distance trajectory controller —
   the source issue's further-out goals — remain future work, not part of
   117.
+- **Sprint 122 (motion-library extraction + loop-timing telemetry) has
+  landed.** `src/firm` splits into a hardened base and a separate
+  `src/motion` library (sibling tree) per the stakeholder's two-sprint
+  restructuring directive (2026-07-24) — see this section's own §5 "122"
+  paragraph above for the full change, and
+  [`src/motion/DESIGN.md`](../../src/motion/DESIGN.md) for the library's
+  current orientation. `src/firm/motion/`/`src/firm/kinematics/` are
+  retired (redirect `DESIGN.md` only, kept so the design-doc validator
+  still finds a doc for each still-declared child of `src/firm` — §2's
+  table). Sprint 2 (base hardening: the duty-sink boundary, bounded wheel
+  moves, a per-wheel command observer) is explicitly NOT part of 122 —
+  tracked by
+  `clasi/issues/firmware-base-hardening-bounded-wheel-moves-and-wheel-observer.md`.
 - **The design-doc-set's mechanical validator cannot express "this
   child is out of scope because it symlinks outside the repository."**
   `src/vendor` remains permanently undocumented for that reason (§4).

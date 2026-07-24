@@ -50,17 +50,18 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "telemetry.cpp",
     # 116-006 (MOVE protocol cutover): App::MoveQueue replaces the deleted
     # App::Deadman.
-    _SOURCE_DIR / "app" / "move_queue.cpp",
+    _REPO_ROOT / "src" / "motion" / "move_queue.cpp",
     _SOURCE_DIR / "app" / "drive.cpp",
-    _SOURCE_DIR / "app" / "odometry.cpp",
+    _SOURCE_DIR / "app" / "otos_sample.cpp",
+    _REPO_ROOT / "src" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
     # 117 ticket 003: App::StateEstimator, threaded through RobotLoop's/
     # SimHarness's own constructors alongside moveQueue/preamble.
-    _SOURCE_DIR / "app" / "state_estimator.cpp",
+    _REPO_ROOT / "src" / "motion" / "state_estimator.cpp",
 ]
 _MOTION_SOURCES = [
-    _SOURCE_DIR / "motion" / "stop_condition.cpp",
-    _SOURCE_DIR / "motion" / "velocity_shaper.cpp",
+    _REPO_ROOT / "src" / "motion" / "stop_condition.cpp",
+    _REPO_ROOT / "src" / "motion" / "velocity_shaper.cpp",
 ]
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
@@ -80,7 +81,7 @@ _MESSAGE_SOURCES = [
     _SOURCE_DIR / "messages" / "wire_runtime.cpp",
 ]
 _KINEMATICS_SOURCES = [
-    _SOURCE_DIR / "kinematics" / "body_kinematics.cpp",
+    _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp",
 ]
 
 _CXX_STANDARD = "c++20"
@@ -131,6 +132,8 @@ def test_config_gate_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_REPO_ROOT / "src"),
             "-I",
             str(_SUPPORT_DIR),
             "-I",

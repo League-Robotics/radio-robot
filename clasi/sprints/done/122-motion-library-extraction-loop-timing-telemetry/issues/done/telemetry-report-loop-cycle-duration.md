@@ -1,10 +1,13 @@
 ---
-status: pending
+status: done
 filed: 2026-07-24
 filed_by: team-lead (stakeholder request)
 related:
 - firmware-base-hardening-bounded-wheel-moves-and-wheel-observer.md
-tickets: []
+tickets:
+- 122-003
+- 122-004
+sprint: '122'
 ---
 
 # Telemetry: report how long the loop took to run

@@ -32,11 +32,8 @@
 
 #include "app/comms.h"
 #include "app/drive.h"
-#include "app/move_queue.h"
-#include "app/odometry.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
-#include "app/state_estimator.h"
 #include "app/telemetry.h"
 #include "devices/color_sensor.h"
 #include "devices/device_config.h"
@@ -45,6 +42,9 @@
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "fake_transport.h"
+#include "motion/move_queue.h"
+#include "motion/odometry.h"
+#include "motion/state_estimator.h"
 #include "sim_clock.h"
 #include "sim_plant.h"
 #include "wire_test_codec.h"
@@ -73,20 +73,26 @@ class SimHarness {
         comms_(serialLink_, radioLink_, "DEVICE:NEZHA2:sim:sim_harness:1"),
         tlm_(comms_, serialLink_, radioLink_),
         drive_(armorL_, armorR_, trackWidth),
-        odom_(armorL_, armorR_, trackWidth),
+        // 122-002: Motion::Odometry no longer holds a Devices::Motor& --
+        // seed the delta baseline from each leaf's CURRENT position() (both
+        // default to 0 before their first tick()), same value the
+        // pre-122-002 constructor read internally.
+        odom_(trackWidth, armorL_.position(), armorR_.position()),
         // Default-constructed, not sourced from Config::
         // defaultEstimatorConfig() -- that generated config lives outside
         // the sim CMake target (bakes in the active robot JSON at ARM
         // build time; src/sim/CMakeLists.txt's own "Absent (deliberately)"
         // note). Behaviorally equivalent (FusionWeights{}'s defaults match
         // every robot JSON's committed estimator weights). Kept solely for
-        // robotLoop_'s own stateEstimator_.update() call -- App::MoveQueue
+        // robotLoop_'s own stateEstimator_.update() call -- Motion::MoveQueue
         // no longer holds a StateEstimator& (move_queue.h).
         stateEstimator_(),
-        // shaperLimits similarly left at its default (App::ShaperLimits{},
+        // shaperLimits similarly left at its default (Motion::ShaperLimits{},
         // shaping OFF) for the same "not part of the sim graph" boundary --
         // a test needing shaping calls moveQueue().setShaperLimits() directly.
-        moveQueue_(drive_, odom_, clock_),
+        // No Devices::Clock& argument (122-002): Motion::MoveQueue takes
+        // `now` explicitly at each enqueue() call instead.
+        moveQueue_(drive_, odom_, trackWidth),
         preamble_(armorL_, armorR_, otos_, color_, line_, clock_),
         robotLoop_(plant_, armorL_, armorR_, otos_, color_, line_, comms_, tlm_,
                    drive_, odom_, moveQueue_, preamble_, stateEstimator_, clock_,
@@ -246,15 +252,18 @@ class SimHarness {
     plant_.setTruePose(x, y, heading);
     motorL_.begin();
     motorR_.begin();
-    odom_.reset(x, y, heading);
+    // 122-002: Motion::Odometry::reset() takes the CURRENT leaf positions
+    // explicitly (both leaves already reset to 0 by begin() above, same
+    // values the pre-122-002 reset() read internally at this exact point).
+    odom_.reset(x, y, heading, motorL_.position(), motorR_.position());
   }
 
   Devices::NezhaMotor& motorLeft() { return motorL_; }
   Devices::NezhaMotor& motorRight() { return motorR_; }
 
-  // Exposes the owned App::StateEstimator; a test needing non-default
+  // Exposes the owned Motion::StateEstimator; a test needing non-default
   // fusion weights calls stateEstimator().setWeights(...) directly.
-  App::StateEstimator& stateEstimator() { return stateEstimator_; }
+  Motion::StateEstimator& stateEstimator() { return stateEstimator_; }
 
   // Concrete TestSim::SimClock&, not Devices::Clock& -- callers need the
   // setMicros()/advanceMicros() stepping surface only the concrete fake
@@ -320,10 +329,10 @@ class SimHarness {
   App::Comms comms_;
   App::Telemetry tlm_;
   App::Drive drive_;
-  App::Odometry odom_;
-  App::StateEstimator stateEstimator_;  // default-constructed, see ctor initializer list's own comment above
-  // Declared AFTER drive_/odom_ (MoveQueue's constructor holds references to both).
-  App::MoveQueue moveQueue_;
+  Motion::Odometry odom_;
+  Motion::StateEstimator stateEstimator_;  // default-constructed, see ctor initializer list's own comment above
+  // Declared AFTER drive_/odom_ (MoveQueue's constructor holds references to both -- drive_ through the Motion::WheelSink boundary).
+  Motion::MoveQueue moveQueue_;
   App::Preamble preamble_;
   App::RobotLoop robotLoop_;
 

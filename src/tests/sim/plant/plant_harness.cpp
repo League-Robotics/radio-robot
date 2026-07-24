@@ -47,12 +47,12 @@
 #include <string>
 #include <vector>
 
-#include "app/odometry.h"
 #include "devices/device_config.h"
 #include "devices/device_types.h"
 #include "devices/i2c_bus.h"
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
+#include "motion/odometry.h"
 #include "sim_plant.h"
 
 namespace {
@@ -271,7 +271,7 @@ std::vector<CycleSample> runScenario(float dutyLeft, float dutyRight, int cycles
                    // no bus scripting needed (the deleted scripted-FIFO fake's own
                    // exact-write-count bookkeeping does not apply to a real responder).
 
-  App::Odometry odom(motorLeft, motorRight, kTrackWidth);
+  Motion::Odometry odom(kTrackWidth, motorLeft.position(), motorRight.position());
 
   const float dtS = 0.02f;        // [s]
   const uint64_t dtUs = 20000;    // [us] == Devices::Otos's own kReadPeriod, so
@@ -310,7 +310,7 @@ std::vector<CycleSample> runScenario(float dutyLeft, float dutyRight, int cycles
     motorRight.tick(nowUs);
     otos.tick(nowUs);
 
-    odom.integrate();
+    odom.integrate(motorLeft.position(), motorRight.position());
 
     trace.push_back(CycleSample{
         motorLeft.position(), motorRight.position(),
