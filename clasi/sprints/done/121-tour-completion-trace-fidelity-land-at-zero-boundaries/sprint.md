@@ -1,7 +1,7 @@
 ---
 id: '121'
 title: Tour completion, trace fidelity & land-at-zero boundaries
-status: planning-docs
+status: closed
 branch: sprint/121-tour-completion-trace-fidelity-land-at-zero-boundaries
 worktree: false
 use-cases:
