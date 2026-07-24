@@ -1239,6 +1239,185 @@ void scenarioLandAtZeroNeverFiresWithShapingOff() {
   }
 }
 
+// ===========================================================================
+// 18. Orthogonal chain boundary (121 ticket 003, land-at-zero-at-
+//    orthogonal-chain-boundaries.md): a turn (Angle-kind TWIST Move)
+//    chained into a Distance-kind TWIST Move (turn->straight -- the
+//    incoming pending Move's own omega is 0, so it does NOT command the
+//    ending Move's own Angle axis) selects the dedicated ORTHOGONAL
+//    land-at-zero predicate (kStoppingMarginFactorOrthogonal=0.67, no
+//    discretization term -- swept against the closure gate, see
+//    move_queue.cpp's own anonymous-namespace comment for the full
+//    derivation and why literally reusing kStoppingMarginFactorFinal=0.92
+//    measurably fails), NOT the chain predicate
+//    (kStoppingMarginFactorChain=0.48 + kDiscretizationCyclesChain) --
+//    proven by pinning `remaining` at a value strictly BETWEEN this
+//    configuration's own chain epsilonRemaining (~0.1583rad at cruise
+//    cmd=2.0rad/s, alphaDecel=7.0, dt=0.02s: analytic 0.2857rad * 0.48 +
+//    2.0*0.02*0.53) and its orthogonal epsilonRemaining (~0.1914rad:
+//    analytic 0.2857rad * 0.67, no discretization term) -- the chain
+//    predicate alone would still Continue at this remaining; only the
+//    ORTHOGONAL predicate completes. See scenario 19 below for the
+//    same-axis contrast at the IDENTICAL pinned remaining.
+// ===========================================================================
+
+void scenarioOrthogonalBoundaryTurnToStraightUsesOrthogonalPredicate() {
+  beginScenario("MoveQueue: orthogonal boundary (turn->straight) selects the dedicated "
+               "ORTHOGONAL land-at-zero predicate, not chain (121 ticket 003)");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  primeAtZero(left, bus, kWireAddr);
+  primeAtZero(right, bus, kWireAddr);
+
+  TestSim::SimClock clock;
+  App::Drive drive(left, right, kTrackWidth);
+  App::Odometry odom(left, right, kTrackWidth);
+  App::ShaperLimits limits;
+  limits.alphaMax = 6.0f;      // [rad/s^2] -- matches scenario 14/16's own config
+  limits.alphaDecel = 7.0f;    // [rad/s^2]
+  limits.yawJerkMax = 100.0f;  // [rad/s^3]
+  App::MoveQueue queue(drive, odom, clock, limits);
+
+  uint64_t nowUs = 100000;
+  uint64_t nowClockUs = 0;
+
+  clock.setMicros(0);
+  msg::Move turnMove = makeTwistMove(/*id=*/101, /*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/-2.0f,
+                                      msg::Move::StopKind::ANGLE, /*stopValue=*/1.6f /*[rad]*/,
+                                      /*timeout=*/60000.0f /*[ms]*/, /*replace=*/false);
+  queue.enqueue(turnMove, /*corrId=*/1);
+
+  // Orthogonal: the pending Move is Distance-kind with a nonzero v_x and
+  // omega==0 -- it does NOT command the ending turn Move's own Angle axis.
+  msg::Move straightMove = makeTwistMove(/*id=*/102, /*v_x=*/150.0f, /*v_y=*/0.0f, /*omega=*/0.0f,
+                                          msg::Move::StopKind::DISTANCE, /*stopValue=*/300.0f /*[mm]*/,
+                                          /*timeout=*/60000.0f /*[ms]*/, /*replace=*/false);
+  App::MoveQueue::EnqueueResult res = queue.enqueue(straightMove, /*corrId=*/2);
+  checkTrue(res.err == msg::ErrCode::ERR_NONE, "setup: straight Move enqueues behind the turn");
+  checkUintEq(static_cast<uint32_t>(queue.pendingCount()), 1,
+              "setup: 1 Move pending behind the turn");
+
+  // Ramp omega to cruise (-2.0rad/s) -- 30 ticks (600ms), same technique as
+  // scenario 14/16 (encoder position held at 0 throughout -- remaining
+  // stays the full 1.6rad the whole ramp).
+  for (int i = 1; i <= 30; ++i) {
+    nowClockUs += 20000;
+    clock.setMicros(nowClockUs);
+    App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+    checkFalse(tick.completed, "ramp-up phase -- still far from the 1.6rad threshold");
+    drive.tick();
+    nowUs += 100000;
+    runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
+    runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
+  }
+
+  // Pin theta at -1.425rad (0.175rad remaining) -- see this scenario's own
+  // header comment for the epsilonRemaining derivation this value sits
+  // between.
+  nowUs += 300000;
+  driveToPosition(left, bus, kWireAddr, 1.425f * (kTrackWidth / 2.0f), nowUs);
+  driveToPosition(right, bus, kWireAddr, -1.425f * (kTrackWidth / 2.0f), nowUs);
+  odom.integrate();
+  checkFloatEq(odom.theta(), -1.425f, "sanity: -1.425rad turned, 0.175rad remaining", 1e-3f);
+
+  nowClockUs += 20000;  // dt=0.02s for the pinned tick, matching the header comment's derivation
+  clock.setMicros(nowClockUs);
+  App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+  checkTrue(tick.completed,
+            "orthogonal boundary completes at 0.175rad remaining via the ORTHOGONAL predicate "
+            "(the chain predicate alone would still reject this remaining)");
+  checkUintEq(tick.completion.moveId, 101, "completion reports the ENDING turn Move's own id");
+  checkFalse(tick.completion.timedOut, "completed via land-at-zero, not the 60s timeout backstop");
+  checkTrue(queue.active(), "the chained straight Move activates the SAME cycle (SUC-051)");
+  checkUintEq(queue.activeMoveId(), 102, "the straight Move is now active -- seamless hand-off");
+}
+
+// ===========================================================================
+// 19. Same-axis compatible chain boundary (121 ticket 003) -- regression
+//    guard for sprint 122's still-deferred velocity-carry half: a turn
+//    chained into ANOTHER turn in the SAME direction (turn->turn, same
+//    sign omega) keeps the CHAIN land-at-zero predicate. At the IDENTICAL
+//    0.175rad remaining scenario 18 above completes on via the ORTHOGONAL
+//    predicate, THIS boundary does NOT yet complete -- the chain
+//    predicate's own tighter epsilonRemaining (~0.1583rad) is not yet
+//    satisfied. Proves the split selects the CORRECT predicate on BOTH
+//    sides, not just that "something other than chain" fires at an
+//    orthogonal boundary.
+// ===========================================================================
+
+void scenarioSameAxisBoundaryTurnToTurnKeepsChainPredicate() {
+  beginScenario("MoveQueue: same-axis boundary (turn->turn, same sign) keeps the chain "
+               "land-at-zero predicate (121 ticket 003 regression guard)");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  primeAtZero(left, bus, kWireAddr);
+  primeAtZero(right, bus, kWireAddr);
+
+  TestSim::SimClock clock;
+  App::Drive drive(left, right, kTrackWidth);
+  App::Odometry odom(left, right, kTrackWidth);
+  App::ShaperLimits limits;
+  limits.alphaMax = 6.0f;
+  limits.alphaDecel = 7.0f;
+  limits.yawJerkMax = 100.0f;
+  App::MoveQueue queue(drive, odom, clock, limits);
+
+  uint64_t nowUs = 100000;
+  uint64_t nowClockUs = 0;
+
+  clock.setMicros(0);
+  msg::Move turnMove = makeTwistMove(/*id=*/111, /*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/-2.0f,
+                                      msg::Move::StopKind::ANGLE, /*stopValue=*/1.6f,
+                                      /*timeout=*/60000.0f, /*replace=*/false);
+  queue.enqueue(turnMove, /*corrId=*/1);
+
+  // Same-axis compatible: the pending Move is Angle-kind with a NONZERO
+  // omega of the SAME sign (-2.0rad/s, matching the ending Move's own
+  // cruiseOmega sign) -- it DOES command the ending Move's own Angle axis,
+  // same direction.
+  msg::Move secondTurn = makeTwistMove(/*id=*/112, /*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/-2.0f,
+                                        msg::Move::StopKind::ANGLE, /*stopValue=*/0.8f,
+                                        /*timeout=*/60000.0f, /*replace=*/false);
+  App::MoveQueue::EnqueueResult res = queue.enqueue(secondTurn, /*corrId=*/2);
+  checkTrue(res.err == msg::ErrCode::ERR_NONE, "setup: second turn enqueues behind the first");
+  checkUintEq(static_cast<uint32_t>(queue.pendingCount()), 1,
+              "setup: 1 Move pending behind the first turn");
+
+  for (int i = 1; i <= 30; ++i) {
+    nowClockUs += 20000;
+    clock.setMicros(nowClockUs);
+    App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+    checkFalse(tick.completed, "ramp-up phase -- still far from the 1.6rad threshold");
+    drive.tick();
+    nowUs += 100000;
+    runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
+    runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
+  }
+
+  // Pin theta at the IDENTICAL 0.175rad remaining scenario 18 uses.
+  nowUs += 300000;
+  driveToPosition(left, bus, kWireAddr, 1.425f * (kTrackWidth / 2.0f), nowUs);
+  driveToPosition(right, bus, kWireAddr, -1.425f * (kTrackWidth / 2.0f), nowUs);
+  odom.integrate();
+  checkFloatEq(odom.theta(), -1.425f, "sanity: -1.425rad turned, 0.175rad remaining", 1e-3f);
+
+  nowClockUs += 20000;
+  clock.setMicros(nowClockUs);
+  App::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
+  checkFalse(tick.completed,
+             "same-axis boundary does NOT yet complete at 0.175rad remaining -- the chain "
+             "predicate's own tighter epsilonRemaining is not yet satisfied (contrast "
+             "scenario 18's identical remaining under the ORTHOGONAL predicate)");
+  checkTrue(queue.active(), "the first turn is still active -- Continue, no completion this tick");
+  checkUintEq(queue.activeMoveId(), 111, "the first turn Move is still the active one");
+}
+
 }  // namespace
 
 int main() {
@@ -1257,6 +1436,8 @@ int main() {
   scenarioDistanceMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing();
   scenarioAngleMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing();
   scenarioLandAtZeroNeverFiresWithShapingOff();
+  scenarioOrthogonalBoundaryTurnToStraightUsesOrthogonalPredicate();
+  scenarioSameAxisBoundaryTurnToTurnKeepsChainPredicate();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::MoveQueue scenarios passed\n");
