@@ -1,11 +1,12 @@
 ---
-status: pending
+status: in-progress
 filed: 2026-07-23
 filed_by: team-lead (118-003 resolution escalation, commit b736a4ab)
 related:
 - specify-and-assert-the-leg-handoff-contract.md
 tickets:
 - 119-002
+- 122-001
 sprint: '122'
 ---
 

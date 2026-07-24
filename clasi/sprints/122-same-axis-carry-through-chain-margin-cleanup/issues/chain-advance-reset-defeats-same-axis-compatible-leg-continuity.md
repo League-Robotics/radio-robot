@@ -1,5 +1,5 @@
 ---
-status: pending
+status: in-progress
 filed: 2026-07-23
 filed_by: programmer (119-002 boundary-test diagnosis)
 related:
@@ -7,6 +7,7 @@ related:
 - chain-advance-completion-margin-narrow-pocket.md
 tickets:
 - 119-002
+- 122-002
 sprint: '122'
 ---
 

@@ -1,10 +1,11 @@
 ---
-status: pending
+status: in-progress
 filed: 2026-07-23
-filed_by: team-lead (replan Step 0; review §8 item G3)
+filed_by: "team-lead (replan Step 0; review \xA78 item G3)"
 related:
 - replan-sprints-122-plus-to-close-goal-exact-tours.md
-tickets: []
+tickets:
+- 122-003
 sprint: '122'
 ---
 
