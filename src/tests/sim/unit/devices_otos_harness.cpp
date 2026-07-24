@@ -189,7 +189,7 @@ void scenarioProductIdGatesAllTraffic() {
     scriptGenerousWrites(bus, 20);
     scriptProductId(bus, 0x00);   // wrong id -- real chip reports 0x5F
 
-    Devices::Otos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+    Devices::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
     odom.begin();
 
     checkFalse(odom.present(), "mismatch: present() false");
@@ -203,7 +203,7 @@ void scenarioProductIdGatesAllTraffic() {
     TestSim::SimPlant plant;
     TestSim::ScriptedI2CHook bus(plant);   // no scripts queued -- any traffic surfaces as an error
 
-    Devices::Otos odom(plant, makeConfig(-47.7f, 3.5f, 0.0f, 1.067f, 0.987f));
+    Devices::RealOtos odom(plant, makeConfig(-47.7f, 3.5f, 0.0f, 1.067f, 0.987f));
 
     float ox = 0, oy = 0, oh = 0;
     odom.init();
@@ -238,7 +238,7 @@ void scenarioProductIdGatesAllTraffic() {
     scriptGenerousWrites(bus, 20);
     scriptProductId(bus, 0x5F);
 
-    Devices::Otos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+    Devices::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
     odom.begin();
 
     checkTrue(odom.present(), "match: present() true");
@@ -260,7 +260,7 @@ void scenarioReadDueRateLimitsRealReads() {
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
 
-  Devices::Otos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Devices::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   checkTrue(odom.readDue(0), "readDue() true before begin() is ever called");
 
   odom.begin();
@@ -307,7 +307,7 @@ void scenarioTickLeverArmOnlyTransform() {
 
   constexpr float kOffsetX = -47.7f;   // [mm] tovez.json-realistic
   constexpr float kOffsetY = 3.5f;     // [mm]
-  Devices::Otos odom(plant, makeConfig(kOffsetX, kOffsetY, 0.0f, 1.0f, 1.0f));
+  Devices::RealOtos odom(plant, makeConfig(kOffsetX, kOffsetY, 0.0f, 1.0f, 1.0f));
   odom.begin();
 
   constexpr int16_t kRx = 2000, kRy = 1000, kRh = 5217;
@@ -350,7 +350,7 @@ void scenarioTickMountingYawRotationOnlyTransform() {
   scriptProductId(bus, 0x5F);
 
   constexpr float kOffsetYaw = 0.3f;   // [rad] a hypothetical rotated mount
-  Devices::Otos odom(plant, makeConfig(0.0f, 0.0f, kOffsetYaw, 1.0f, 1.0f));
+  Devices::RealOtos odom(plant, makeConfig(0.0f, 0.0f, kOffsetYaw, 1.0f, 1.0f));
   odom.begin();
 
   constexpr int16_t kRx = 1500, kRy = -800, kRh = 2000;
@@ -390,7 +390,7 @@ void scenarioLeverArmCancelsOnPureSpin() {
 
   constexpr float kOffsetX = -47.7f;   // [mm] tovez.json-realistic
   constexpr float kOffsetY = 3.5f;     // [mm]
-  Devices::Otos odom(plant, makeConfig(kOffsetX, kOffsetY, 0.0f, 1.0f, 1.0f));
+  Devices::RealOtos odom(plant, makeConfig(kOffsetX, kOffsetY, 0.0f, 1.0f, 1.0f));
   odom.begin();
 
   // Spin sweep -- spread across most of the chip's representable heading
@@ -439,7 +439,7 @@ void scenarioBurstFailureHoldsPriorPoseAndMarksStale() {
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
 
-  Devices::Otos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Devices::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   odom.begin();
 
   // Tick 1: clean burst -- establishes a known-good cached pose.
@@ -482,7 +482,7 @@ void scenarioPresentTracksDetectionOnlyIndependentOfConnected() {
   // Case A: never begin()'d at all.
   TestSim::SimPlant plantNeverBegun;
   TestSim::ScriptedI2CHook busNeverBegun(plantNeverBegun);
-  Devices::Otos odomNeverBegun(plantNeverBegun, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Devices::RealOtos odomNeverBegun(plantNeverBegun, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   checkFalse(odomNeverBegun.present(), "present() false -- begin() was never called");
   checkUintEq(busNeverBegun.errCount(kAddr7), 0, "no bus traffic at all when begin() is never called");
 
@@ -491,7 +491,7 @@ void scenarioPresentTracksDetectionOnlyIndependentOfConnected() {
   TestSim::ScriptedI2CHook busWrongId(plantWrongId);
   scriptGenerousWrites(busWrongId, 20);
   scriptProductId(busWrongId, 0x00);
-  Devices::Otos odomWrongId(plantWrongId, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Devices::RealOtos odomWrongId(plantWrongId, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   odomWrongId.begin();
   checkFalse(odomWrongId.present(), "present() false -- begin()'s product-ID detect failed");
 
@@ -502,7 +502,7 @@ void scenarioPresentTracksDetectionOnlyIndependentOfConnected() {
   TestSim::ScriptedI2CHook busPresent(plantPresent);
   scriptGenerousWrites(busPresent, 20);
   scriptProductId(busPresent, 0x5F);
-  Devices::Otos odomPresent(plantPresent, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Devices::RealOtos odomPresent(plantPresent, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   odomPresent.begin();
   checkTrue(odomPresent.present(), "present() true -- begin()'s product-ID detect succeeded");
 
@@ -527,7 +527,7 @@ void scenarioSetPoseStagedReanchorAppliesAtNextTick() {
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
 
-  Devices::Otos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Devices::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   odom.begin();
 
   // Establish a known-good cached pose first.
@@ -568,7 +568,7 @@ void scenarioSecondaryPrimitivesRoundTrip() {
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
 
-  Devices::Otos odom(plant, makeConfig(10.0f, -5.0f, 0.0f, 1.0f, 1.0f));
+  Devices::RealOtos odom(plant, makeConfig(10.0f, -5.0f, 0.0f, 1.0f, 1.0f));
   odom.begin();
   uint32_t base = bus.txnCount(kAddr7);
 
@@ -627,7 +627,7 @@ void scenarioFeedSyntheticSamplePublishesDirectlyNoBusTraffic() {
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);   // no scripts queued -- any real traffic surfaces as an error
 
-  Devices::Otos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Devices::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
 
   // Never begin()'d -- present()/connected() start false, matching every
   // other never-begun scenario above.

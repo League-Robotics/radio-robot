@@ -221,7 +221,7 @@ void scenarioAllPresentHappyPath() {
 
   Devices::NezhaMotor left(plant, baseMotorConfig(1));
   Devices::NezhaMotor right(plant, baseMotorConfig(2));
-  Devices::Otos otos(plant, Devices::OtosConfig{});
+  Devices::RealOtos otos(plant, Devices::OtosConfig{});
   Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
   Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
 
@@ -301,7 +301,7 @@ void scenarioOtosAbsentLatchesAfterRetries() {
 
   Devices::NezhaMotor left(plant, baseMotorConfig(1));
   Devices::NezhaMotor right(plant, baseMotorConfig(2));
-  Devices::Otos otos(plant, Devices::OtosConfig{});  // never scripted -- always absent
+  Devices::RealOtos otos(plant, Devices::OtosConfig{});  // never scripted -- always absent
   Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
   Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
 
@@ -384,7 +384,7 @@ void scenarioTransientMotorNakDuringBeginNotLatched() {
 
   Devices::NezhaMotor left(plant, baseMotorConfig(1));
   Devices::NezhaMotor right(plant, baseMotorConfig(2));
-  Devices::Otos otos(plant, Devices::OtosConfig{});
+  Devices::RealOtos otos(plant, Devices::OtosConfig{});
   Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
   Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
 
@@ -435,7 +435,7 @@ void scenarioMultipleAbsentLeavesStillTerminates() {
 
   Devices::NezhaMotor left(plant, baseMotorConfig(1));
   Devices::NezhaMotor right(plant, baseMotorConfig(2));
-  Devices::Otos otos(plant, Devices::OtosConfig{});          // absent
+  Devices::RealOtos otos(plant, Devices::OtosConfig{});          // absent
   Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});  // absent
   Devices::LineSensorLeaf line(plant, Devices::LineConfig{});     // absent
 

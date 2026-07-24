@@ -8,6 +8,7 @@
 
 #include "app/comms.h"
 #include "app/drive.h"
+#include "app/fake_otos.h"
 #include "app/move_queue.h"
 #include "app/odometry.h"
 #include "app/preamble.h"
@@ -155,7 +156,10 @@ int main() {
   otosConfig.offsetYaw = otosBootConfig.offsetYaw;
   otosConfig.linearScale = otosBootConfig.linearScale;
   otosConfig.angularScale = otosBootConfig.angularScale;
-  static Devices::Otos otos(bus, otosConfig);
+  // [[maybe_unused]]: a FAKE_OTOS build injects App::FakeOtos below instead,
+  // leaving this real leaf constructed-but-unreferenced (harmless -- the
+  // ctor touches no bus).
+  [[maybe_unused]] static Devices::RealOtos realOtos(bus, otosConfig);
 
   static Devices::ColorConfig colorConfig;
   static Devices::ColorSensorLeaf color(bus, colorConfig);
@@ -171,6 +175,18 @@ int main() {
   static App::Telemetry tlm(comms, serialLink, radioLink);
   static App::Drive drive(motorL, motorR, drivetrainConfig.trackwidth);
   static App::Odometry odom(motorL, motorR, drivetrainConfig.trackwidth);
+
+  // OTOS injection -- the ONE place the FAKE_OTOS build variant diverges
+  // (otos-fake-seam issue). Both Preamble and RobotLoop below take a plain
+  // Devices::Otos& and drive it uniformly; only which concrete implementation
+  // backs that reference is chosen here. The fake pulls its synthetic pose
+  // from `odom` + the wheel Motors' twist, so it is constructed AFTER odom.
+#ifdef FAKE_OTOS
+  static App::FakeOtos fakeOtos(odom, motorL, motorR, drivetrainConfig.trackwidth);
+  Devices::Otos& otos = fakeOtos;
+#else
+  Devices::Otos& otos = realOtos;
+#endif
 
   // 117 ticket 004: StateEstimator, sourced from the SAME fail-closed baked
   // boot config every other Config::default*() call above uses --

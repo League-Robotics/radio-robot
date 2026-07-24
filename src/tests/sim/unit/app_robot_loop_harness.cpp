@@ -404,7 +404,7 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
 
   Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
   Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
-  Devices::Otos otos(plant, Devices::OtosConfig{});
+  Devices::RealOtos otos(plant, Devices::OtosConfig{});
   Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
   Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
 
@@ -544,7 +544,7 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
 
   Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
   Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
-  Devices::Otos otos(plant, Devices::OtosConfig{});
+  Devices::RealOtos otos(plant, Devices::OtosConfig{});
   Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
   Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
 
@@ -738,7 +738,7 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
 
   Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
   Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
-  Devices::Otos otos(plant, Devices::OtosConfig{});
+  Devices::RealOtos otos(plant, Devices::OtosConfig{});
   Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
   Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
 
@@ -867,7 +867,7 @@ struct LiveFixture {
 
   Devices::NezhaMotor motorL;
   Devices::NezhaMotor motorR;
-  Devices::Otos otos;
+  Devices::RealOtos otos;
   Devices::ColorSensorLeaf color;
   Devices::LineSensorLeaf line;
 
@@ -1449,7 +1449,7 @@ void scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles() {
 
   Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
   Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
-  Devices::Otos otos(plant, Devices::OtosConfig{});
+  Devices::RealOtos otos(plant, Devices::OtosConfig{});
   Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
   Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
 
@@ -1587,7 +1587,7 @@ void scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists() {
 
   Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
   Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
-  Devices::Otos otos(plant, Devices::OtosConfig{});
+  Devices::RealOtos otos(plant, Devices::OtosConfig{});
   Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
   Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
 
@@ -1710,7 +1710,7 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   // scenario above) will not do here.
   Devices::NezhaMotor motorL(plant, TestSupport::benchTestMotorConfig(1));
   Devices::NezhaMotor motorR(plant, TestSupport::benchTestMotorConfig(2));
-  Devices::Otos otos(plant, Devices::OtosConfig{});
+  Devices::RealOtos otos(plant, Devices::OtosConfig{});
   Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
   Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
 

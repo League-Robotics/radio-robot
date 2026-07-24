@@ -41,16 +41,17 @@
 // tick(), so "drained at a safe slot" falls directly out of tick()'s own
 // call order.
 //
-// FAKE_OTOS build seam (120-002, on-chip-fake-otos-test-device.md):
-// feedSyntheticSample() below publishes a synthetic pose+twist as this
-// leaf's current reading DIRECTLY — unlike setPose() above, no staging/
-// drain; the sample is fresh immediately. App::RobotLoop::cycle() is the
-// ONLY caller (a single macro-gated branch, app/robot_loop.cpp), fed from
-// that same cycle's own Odometry pose + BodyKinematics twist — never
-// called from this leaf's own tick()/begin(), which stay byte-for-byte
-// unchanged for the real (non-FAKE_OTOS) build. See
-// feedSyntheticSample()'s own declaration comment below for the full
-// contract.
+// Interface / implementation split (otos-fake-seam issue): `Otos` below is
+// a pure abstract interface — the set of operations App:: drives an OTOS
+// through (the pose/freshness accessors the loop reads, plus the
+// calibration/offset setters a CONFIG patch pushes). It has exactly two
+// implementations: `RealOtos` (this file — the SparkFun I2C leaf documented
+// throughout) and `App::FakeOtos` (app/fake_otos.h — a bench synthesizer
+// that reports the dead-reckoned Odometry pose as if it were the chip). The
+// loop holds a `Devices::Otos&` and calls it uniformly; `main.cpp` picks
+// which concrete instance to inject (a single `#ifdef FAKE_OTOS` at the
+// composition root, nowhere else). There is no synthetic-sample method on
+// the real leaf — the fake owns its own synthesis (see FakeOtos).
 //
 // Scope changes from a full odometer abstraction (isolation-invariant
 // driven, mirrors nezha_motor.h's own precedent):
@@ -92,9 +93,40 @@ namespace Devices {
 // clearance timers never interact with the motor leaves'.
 constexpr uint8_t kOtosDeviceAddr = 0x17;
 
+// Otos — the abstract OTOS interface App:: drives (see this file's header
+// for the interface/implementation-split rationale). Two implementations:
+// RealOtos (below) and App::FakeOtos (app/fake_otos.h). Every method here
+// is exactly one App:: call site drives through a `Devices::Otos&`: the
+// per-cycle read path (begin/tick/pose/poseFresh/connected/present, via the
+// loop + Preamble + applyOtosSample()) and the CONFIG calibration path
+// (setLinearScalar/setAngularScalar/setOffset/getOffset/init, via
+// RobotLoop's OTOS-config patch handler). Implementation-only primitives
+// (setPose, resetTracking, readDue, the raw-register setters, …) stay on
+// RealOtos and are NOT part of this contract.
 class Otos {
  public:
-  Otos(I2CBus& bus, const OtosConfig& config);
+  virtual ~Otos() = default;
+
+  virtual void begin() = 0;
+  virtual void tick(uint64_t nowUs) = 0;  // [us]
+  virtual PoseReading pose() const = 0;
+  virtual bool poseFresh() const = 0;
+  virtual bool connected() const = 0;
+  virtual bool present() const = 0;
+  virtual void setLinearScalar(float scalar) = 0;
+  virtual void setAngularScalar(float scalar) = 0;
+  virtual void setOffset(float x, float y, float heading) = 0;     // [mm] [mm] [rad]
+  virtual void getOffset(float& x, float& y, float& heading) = 0;  // [mm] [mm] [rad]
+  virtual void init() = 0;
+};
+
+// RealOtos — the SparkFun OTOS I2C leaf. All the behavior documented in
+// this file's header (fire-and-forget IMU calibration, the combined burst
+// read, lever-arm compensation, wrap-aware heading, staged setPose()
+// re-anchor) lives here.
+class RealOtos : public Otos {
+ public:
+  RealOtos(I2CBus& bus, const OtosConfig& config);
 
   // Detect (PRODUCT_ID read) and, if found: enable signal processing +
   // reset Kalman tracking + kick off IMU bias calibration (init(), below —
@@ -106,25 +138,25 @@ class Otos {
   // origin). Sets present()/connected() accordingly; a failed product-ID
   // detect leaves this leaf permanently un-initialized — no further bus
   // traffic from any method below.
-  void begin();
+  void begin() override;
 
   // Returns the cached pose computed by the most recent successful tick()
   // read (or a staged setPose() drain — see setPose()'s own comment) — a
   // cheap accessor, never issues I2C traffic. Defaults to a zero PoseReading
   // before the first successful tick().
-  PoseReading pose() const;
+  PoseReading pose() const override;
 
   // True iff pose() reflects a sample this leaf actually refreshed on the
   // MOST RECENT tick() call — false when that call was rate-limited
   // (readDue() was false), drained a staged setPose() instead of reading, or
   // its burst read failed. See file header's "Scope changes" note for why
   // PoseReading itself carries no such bit yet.
-  bool poseFresh() const;
+  bool poseFresh() const override;
 
   // True once PRODUCT_ID was detected at begin() AND the most recent tick()
   // (or begin()'s own probe) completed its I2C burst without error. Live,
   // per-tick — see present()'s own comment for the distinction.
-  bool connected() const;
+  bool connected() const override;
 
   // True once (and permanently, never re-evaluated after) begin()'s
   // PRODUCT_ID detect succeeded — independent of connected()'s live,
@@ -133,7 +165,7 @@ class Otos {
   // slot at all needs — gating that decision on connected() instead would
   // let one transient I2C read failure on an otherwise-healthy chip
   // permanently stop it from ever being scheduled again.
-  bool present() const;
+  bool present() const override;
 
   // The last product-ID byte begin()'s probe read (bench triage of a
   // connected=False condition): 0x5F when the OTOS answered correctly, 0xFF
@@ -151,13 +183,6 @@ class Otos {
   // DELETED (115-002, gut-to-minimal-firmware S1 motion-stack excision);
   // no live App:: consumer remains, but the accessor stays (exercised by
   // app_robot_loop_harness.cpp and useful for future bench diagnostics).
-  // 120-002: feedSyntheticSample() below ALSO advances this timestamp (a
-  // FAKE_OTOS build never calls tick(), so this is the only source of
-  // freshness-age information in that build) -- "most recent REAL bus
-  // read" widens, for that build only, to "most recent published sample,
-  // real or synthetic"; readDue()'s own rate-limit meaning is unaffected
-  // since a FAKE_OTOS build never consults it (tick() is never called
-  // there either).
   uint64_t lastReadUs() const { return lastReadUs_; }
 
   // True if a real bus read is due: either no real read has ever happened
@@ -192,7 +217,7 @@ class Otos {
   // comment), and caches the result. A burst failure holds the previously
   // cached pose but marks it stale — always-retried next tick(), never
   // permanently latched.
-  void tick(uint64_t nowUs);  // [us]
+  void tick(uint64_t nowUs) override;  // [us]
 
   // Stages an (x, y, heading) re-anchor request; touches no bus. Drained by
   // the next tick() call (see tick()'s own "Drain order" comment above).
@@ -202,36 +227,6 @@ class Otos {
   // present() — the drain in tick() is itself a no-op on an uninitialized
   // chip, exactly like every other primitive below.
   void setPose(float x, float y, float heading);  // [mm] [mm] [rad]
-
-  // feedSyntheticSample() -- FAKE_OTOS build seam (120-002,
-  // on-chip-fake-otos-test-device.md). Publishes (x, y, heading, v_x, v_y,
-  // omega) as this leaf's current reading DIRECTLY: no bus traffic
-  // whatsoever (never attempts a real burst read, per the source issue's
-  // own "instead of reading the I2C chip" framing), no staging/drain --
-  // unlike setPose() immediately above, the sample is fresh the instant
-  // this call returns. Marks the leaf itself present()/connected() from
-  // this call on, REGARDLESS of whether begin()'s own real product-ID
-  // probe ever ran or succeeded -- a FAKE_OTOS build has zero real-chip
-  // dependency once its own RobotLoop::cycle() starts calling this every
-  // cycle (sprint 120 Design Rationale; Preamble's boot-time begin() probe
-  // still runs unchanged in a FAKE_OTOS build -- harmless real I2C traffic
-  // this call site does not depend on either way). Does not touch
-  // tick()/begin() or any of their private state beyond the SAME
-  // initialized_/connected_/cachedPose_/poseFresh_ fields a real read
-  // already writes -- present()/pose()/poseFresh()/connected() read this
-  // call's result exactly as they would a real tick()'s.
-  //
-  // The ONLY caller is App::RobotLoop::cycle()'s FAKE_OTOS-gated branch
-  // (app/robot_loop.cpp), fed from that SAME cycle's already-integrated
-  // App::Odometry pose (x, y, theta) and the BodyKinematics-fused body
-  // twist (v_x, v_y, omega) -- never called from a real (non-FAKE_OTOS)
-  // build, and never called by this leaf itself. Devices::Otos gains no
-  // dependency on App::Odometry or any other app/ type by adding this
-  // method -- it is a plain 7-float/uint64_t primitive, same as every
-  // other setter on this leaf (devices isolation invariant, devices/
-  // DESIGN.md).
-  void feedSyntheticSample(float x, float y, float heading, float v_x, float v_y, float omega,
-                            uint64_t nowUs);  // [mm] [mm] [rad] [mm/s] [mm/s] [rad/s] [us]
 
   // --- Remaining primitive setters/getters — each a no-op (zero return
   // where applicable) if begin() never detected the chip, mirroring every
@@ -246,8 +241,8 @@ class Otos {
   // 127, 0.1%-per-LSB value — docs/protocol-v2.md's OL/OA wire contract),
   // NOT the OtosConfig linear/angular SCALE multipliers begin() converts
   // once via scaleToRegister() before handing them to these same setters.
-  void setLinearScalar(float scalar);   // OL
-  void setAngularScalar(float scalar);  // OA
+  void setLinearScalar(float scalar) override;   // OL
+  void setAngularScalar(float scalar) override;  // OA
 
   // setOffset()/getOffset() — REG_OFFSET (0x10-0x15), the chip's own
   // mounting-offset compensation register. Shares the exact same
@@ -261,8 +256,8 @@ class Otos {
   // imuCalibrationSamplesRemaining() all issue a real I2C read as an
   // externally-visible side effect (bus traffic, txnCount()), so they are
   // read ACCESSORS in the "getter" sense but not in the const-method sense.
-  void setOffset(float x, float y, float heading);       // [mm] [mm] [rad]
-  void getOffset(float& x, float& y, float& heading);    // [mm] [mm] [rad]
+  void setOffset(float x, float y, float heading) override;       // [mm] [mm] [rad]
+  void getOffset(float& x, float& y, float& heading) override;    // [mm] [mm] [rad]
 
   // REG_SIGNAL_PROCESS_CFG (0x0E) raw register value (LUT=0x01, Accel=0x02,
   // Rotation=0x04, Variance=0x08). init() already writes 0x0F (all four
@@ -280,7 +275,7 @@ class Otos {
   // fire-and-forget kick off IMU bias calibration. Public (not just
   // begin()'s private helper) so a later wire command can re-trigger it
   // without a full begin(), mirroring the pre-port file's own OI primitive.
-  void init();
+  void init() override;
 
  private:
   I2CBus& bus_;

@@ -266,7 +266,7 @@ std::vector<CycleSample> runScenario(float dutyLeft, float dutyRight, int cycles
 
   Devices::OtosConfig otosCfg;   // identity mounting (offsetX=offsetY=offsetYaw=0) --
                                   // see otos_plant.h's own "Identity-mounting assumption".
-  Devices::Otos otos(bus, otosCfg);
+  Devices::RealOtos otos(bus, otosCfg);
   otos.begin();   // SimPlant answers the product-ID probe + init/config writes live --
                    // no bus scripting needed (the deleted scripted-FIFO fake's own
                    // exact-write-count bookkeeping does not apply to a real responder).

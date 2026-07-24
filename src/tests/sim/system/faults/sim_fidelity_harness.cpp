@@ -140,7 +140,7 @@ void scenarioOtosRawScaleErrorDivergesThenCalibrationConverges() {
   // un-calibrated chip) -- begin() pushes it via the REAL setLinearScalar()/
   // setAngularScalar() wire path, exercising handleOtosWrite()'s register
   // capture from the very first boot.
-  Devices::Otos odom(plant, makeConfig(/*linearScale=*/1.0f, /*angularScale=*/1.0f));
+  Devices::RealOtos odom(plant, makeConfig(/*linearScale=*/1.0f, /*angularScale=*/1.0f));
   odom.begin();
 
   constexpr float kTrueX = 1000.0f;   // [mm]

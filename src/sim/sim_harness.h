@@ -310,7 +310,7 @@ class SimHarness {
   // app graph below takes the ARMOR, never the bare leaf.
   Devices::MotorArmor armorL_;
   Devices::MotorArmor armorR_;
-  Devices::Otos otos_;
+  Devices::RealOtos otos_;
   Devices::ColorSensorLeaf color_;
   Devices::LineSensorLeaf line_;
 

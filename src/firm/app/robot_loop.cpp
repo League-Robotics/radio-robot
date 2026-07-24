@@ -658,45 +658,24 @@ void RobotLoop::cycle() {
 
     uint64_t nowUs = clock_.nowMicros();
 
-    // 120-002: odom_.integrate()/frame_.pose staging is hoisted AHEAD of
-    // the Otos call site below (previously ran after it) so a FAKE_OTOS
-    // build can feed Otos THIS cycle's genuinely fresh pose, not last
-    // cycle's -- see the #ifdef block's own comment just below. A
-    // side-effect-free reorder for the real (non-FAKE_OTOS) build too:
+    // odom_.integrate()/frame_.pose staging is hoisted AHEAD of the Otos
+    // sample call below (120-002 reorder): a FakeOtos (main.cpp's FAKE_OTOS
+    // build variant) reports THIS cycle's just-integrated Odometry pose, so
+    // it must be integrated first. Side-effect-free for the real leaf too --
     // Odometry::integrate() reads neither otos_ nor any frame_.otos* field
-    // (and vice versa), so its position relative to the Otos call site
-    // changes nothing observable there -- ticket 120-002's own record has
-    // the full reasoning.
+    // (and vice versa), so its position relative to the Otos call changes
+    // nothing observable there.
     odom_.integrate();  // odometry from both fresh wheel samples
     frame_.pose = {odom_.x(), odom_.y(), odom_.theta()};
 
-#ifdef FAKE_OTOS
-    // FAKE_OTOS build (120-002, sprint 120 Architecture Decision 3): feed
-    // Otos a synthetic sample derived from THIS cycle's just-integrated
-    // Odometry pose and the body twist updateTlm() already fused above
-    // (via BodyKinematics::forward()), instead of a real I2C burst read --
-    // see otos.h's feedSyntheticSample() doc comment. The real build's
-    // Devices::Otos::tick()/begin() (the #else arm, applyOtosSample()) are
-    // untouched by this branch -- this is the sprint's ONE macro-gated
-    // Otos call-site branch; main.cpp's Devices::Otos construction stays
-    // an unconditional, identical line in both builds.
-    otos_.feedSyntheticSample(odom_.x(), odom_.y(), odom_.theta(), frame_.twist.v_x,
-                              frame_.twist.v_y, frame_.twist.omega, nowUs);
-    frame_.otosConnected = otos_.connected();
-    frame_.otosPresent = otos_.present() && otos_.poseFresh();
-    if (frame_.otosPresent) {
-      Devices::PoseReading reading = otos_.pose();
-      frame_.otos.x = reading.x;
-      frame_.otos.y = reading.y;
-      frame_.otos.heading = reading.heading;
-      frame_.otos.v_x = reading.v_x;
-      frame_.otos.v_y = reading.v_y;
-      frame_.otos.omega = reading.omega;
-      frame_.otos.time = static_cast<uint32_t>(nowUs / 1000);  // [us] -> [ms]
-    }
-#else
+    // Perception step -- sample the OTOS and stage its reading into frame_.
+    // UNIFORM across both builds (otos-fake-seam issue): otos_ is a
+    // Devices::Otos&, backed by either the real SparkFun leaf (a rate-limited
+    // I2C burst read) or App::FakeOtos (synthetic pose from odom_ + wheel
+    // twist) -- chosen once at construction (main.cpp), never branched on
+    // here. applyOtosSample() calls otos_.tick() then copies pose/freshness
+    // into frame_.otos (odometry.cpp).
     applyOtosSample(otos_, nowUs, frame_);
-#endif
     tlm_.setFlag(kFlagOtosPresent, frame_.otosPresent);
     tlm_.setFlag(kFlagOtosConnected, frame_.otosConnected);
 

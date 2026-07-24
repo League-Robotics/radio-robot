@@ -397,7 +397,7 @@ void scenarioApplyOtosSamplePresentAndConnectedCopiesPose() {
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
   Devices::OtosConfig cfg;  // zero offsets, scale 1.0 -- identity transform
-  Devices::Otos otos(plant, cfg);
+  Devices::RealOtos otos(plant, cfg);
 
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
@@ -422,7 +422,7 @@ void scenarioApplyOtosSampleBurstFailureHoldsStalePoseReportsDisconnected() {
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
   Devices::OtosConfig cfg;
-  Devices::Otos otos(plant, cfg);
+  Devices::RealOtos otos(plant, cfg);
 
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
@@ -457,7 +457,7 @@ void scenarioApplyOtosSampleNeverDetectedLeavesFrameUntouched() {
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
   Devices::OtosConfig cfg;
-  Devices::Otos otos(plant, cfg);
+  Devices::RealOtos otos(plant, cfg);
 
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x00);  // wrong id -- real chip reports 0x5F
@@ -490,7 +490,7 @@ void scenarioApplyOtosSampleRateLimitSkipStillReachesFrame() {
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
   Devices::OtosConfig cfg;
-  Devices::Otos otos(plant, cfg);
+  Devices::RealOtos otos(plant, cfg);
 
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);

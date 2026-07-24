@@ -18,7 +18,7 @@ float clampf(float v, float lo, float hi) {
 }
 }  // namespace
 
-Otos::Otos(I2CBus& bus, const OtosConfig& config)
+RealOtos::RealOtos(I2CBus& bus, const OtosConfig& config)
     : bus_(bus), config_(config)
 {
 }
@@ -27,7 +27,7 @@ Otos::Otos(I2CBus& bus, const OtosConfig& config)
 // begin() — product-ID detect, then init() + config scalars + zero pose.
 // ---------------------------------------------------------------------------
 
-void Otos::begin()
+void RealOtos::begin()
 {
     uint8_t id = readReg8(kRegProductId);
     lastProbeId_ = id;   // [101-001] captured for ODIAG bench triage
@@ -50,13 +50,13 @@ void Otos::begin()
 // pose() / poseFresh() / connected() / present() — cheap accessors, no I2C.
 // ---------------------------------------------------------------------------
 
-PoseReading Otos::pose() const { return cachedPose_; }
+PoseReading RealOtos::pose() const { return cachedPose_; }
 
-bool Otos::poseFresh() const { return poseFresh_; }
+bool RealOtos::poseFresh() const { return poseFresh_; }
 
-bool Otos::connected() const { return initialized_ && connected_; }
+bool RealOtos::connected() const { return initialized_ && connected_; }
 
-bool Otos::present() const { return initialized_; }
+bool RealOtos::present() const { return initialized_; }
 
 // ---------------------------------------------------------------------------
 // readDue() -- pure scheduling query, no I2C traffic. Deliberately NOT
@@ -64,7 +64,7 @@ bool Otos::present() const { return initialized_; }
 // separate conjunct (see this method's declaration comment, otos.h).
 // ---------------------------------------------------------------------------
 
-bool Otos::readDue(uint64_t nowUs) const
+bool RealOtos::readDue(uint64_t nowUs) const
 {
     return !hasRead_ || (nowUs - lastReadUs_) >= kReadPeriod;
 }
@@ -74,7 +74,7 @@ bool Otos::readDue(uint64_t nowUs) const
 // "Drain order" comment (otos.h) for how/when this is applied.
 // ---------------------------------------------------------------------------
 
-void Otos::setPose(float x, float y, float heading)
+void RealOtos::setPose(float x, float y, float heading)
 {
     pendingX_ = x;
     pendingY_ = y;
@@ -83,44 +83,11 @@ void Otos::setPose(float x, float y, float heading)
 }
 
 // ---------------------------------------------------------------------------
-// feedSyntheticSample() -- FAKE_OTOS build seam (120-002). Publishes the
-// given pose+twist as this leaf's current reading DIRECTLY -- no bus
-// traffic, no staging/drain (unlike setPose() above). See otos.h's
-// declaration comment for the full contract.
-// ---------------------------------------------------------------------------
-
-void Otos::feedSyntheticSample(float x, float y, float heading, float v_x, float v_y,
-                                float omega, uint64_t nowUs)
-{
-    // Marks this leaf present()/connected() from this call on, independent
-    // of whether begin()'s own real product-ID probe ever ran -- see this
-    // method's own declaration comment (otos.h) for why that is the
-    // intended, "zero real-chip dependency" posture for a FAKE_OTOS build.
-    initialized_ = true;
-    connected_ = true;
-
-    cachedPose_.x = x;
-    cachedPose_.y = y;
-    cachedPose_.heading = heading;
-    cachedPose_.v_x = v_x;
-    cachedPose_.v_y = v_y;
-    cachedPose_.omega = omega;
-    poseFresh_ = true;
-
-    // lastReadUs_/hasRead_ -- the SAME bookkeeping a real tick() read
-    // updates (see lastReadUs()'s own widened doc comment, otos.h): a
-    // FAKE_OTOS build never calls tick(), so this is the only source of
-    // freshness-age information in that build.
-    lastReadUs_ = nowUs;
-    hasRead_ = true;
-}
-
-// ---------------------------------------------------------------------------
 // tick() -- drain a staged setPose(), else rate-limited burst-read +
 // transform + cache. See otos.h's declaration comment for the full contract.
 // ---------------------------------------------------------------------------
 
-void Otos::tick(uint64_t nowUs)
+void RealOtos::tick(uint64_t nowUs)
 {
     if (!initialized_) return;   // never detected at begin() -- no bus traffic
 
@@ -200,7 +167,7 @@ void Otos::tick(uint64_t nowUs)
 // sensor-frame pose that reads back as the given world CENTRE pose.
 // ---------------------------------------------------------------------------
 
-void Otos::applyPendingPose()
+void RealOtos::applyPendingPose()
 {
     float sensorX = 0.0f, sensorY = 0.0f;
     centreToSensor(pendingX_, pendingY_, pendingHeading_, config_.offsetX, config_.offsetY,
@@ -223,7 +190,7 @@ void Otos::applyPendingPose()
 // Remaining primitive setters/getters -- each a no-op if never initialized.
 // ---------------------------------------------------------------------------
 
-void Otos::init()
+void RealOtos::init()
 {
     if (!initialized_) return;
     // Enable all signal processing: LUT | Accel | Rotation | Variance = 0x0F.
@@ -236,13 +203,13 @@ void Otos::init()
     writeReg8(kRegImuCalibration, kImuCalibSamples);
 }
 
-void Otos::resetTracking()
+void RealOtos::resetTracking()
 {
     if (!initialized_) return;
     writeReg8(kRegReset, 0x01);
 }
 
-void Otos::setOffset(float x, float y, float heading)
+void RealOtos::setOffset(float x, float y, float heading)
 {
     if (!initialized_) return;
     // Direct write -- REG_OFFSET holds the mounting-offset VALUE ITSELF, not
@@ -251,7 +218,7 @@ void Otos::setOffset(float x, float y, float heading)
     writePoseMm(kRegOffsetXl, x, y, heading);
 }
 
-void Otos::getOffset(float& x, float& y, float& heading)
+void RealOtos::getOffset(float& x, float& y, float& heading)
 {
     x = 0.0f; y = 0.0f; heading = 0.0f;
     if (!initialized_) return;
@@ -264,32 +231,32 @@ void Otos::getOffset(float& x, float& y, float& heading)
     heading = static_cast<float>(rh) * kHdgRadPerLsb; // [rad]
 }
 
-void Otos::setSignalProcessConfig(uint8_t config)
+void RealOtos::setSignalProcessConfig(uint8_t config)
 {
     if (!initialized_) return;
     writeReg8(kRegSignalProcessCfg, config);
 }
 
-uint8_t Otos::signalProcessConfig()
+uint8_t RealOtos::signalProcessConfig()
 {
     if (!initialized_) return 0;
     return readReg8(kRegSignalProcessCfg);
 }
 
-uint8_t Otos::imuCalibrationSamplesRemaining()
+uint8_t RealOtos::imuCalibrationSamplesRemaining()
 {
     if (!initialized_) return 0;
     return readReg8(kRegImuCalibration);
 }
 
-void Otos::setLinearScalar(float scalar)
+void RealOtos::setLinearScalar(float scalar)
 {
     if (!initialized_) return;
     int8_t clamped = static_cast<int8_t>(clampf(scalar, -127.0f, 127.0f));
     writeReg8(kRegLinearScalar, static_cast<uint8_t>(clamped));
 }
 
-void Otos::setAngularScalar(float scalar)
+void RealOtos::setAngularScalar(float scalar)
 {
     if (!initialized_) return;
     int8_t clamped = static_cast<int8_t>(clampf(scalar, -127.0f, 127.0f));
@@ -300,7 +267,7 @@ void Otos::setAngularScalar(float scalar)
 // scaleToRegister
 // ---------------------------------------------------------------------------
 
-int8_t Otos::scaleToRegister(float scale)
+int8_t RealOtos::scaleToRegister(float scale)
 {
     // scalar = clamp(round((scale - 1.0) / 0.001), -127, 127).
     float raw = roundf((scale - 1.0f) / 0.001f);
@@ -315,7 +282,7 @@ int8_t Otos::scaleToRegister(float scale)
 // this relies on.
 // ---------------------------------------------------------------------------
 
-void Otos::sensorToCentre(float sensorX, float sensorY, float sensorHeading,
+void RealOtos::sensorToCentre(float sensorX, float sensorY, float sensorHeading,
                            float offsetX, float offsetY,
                            float& centreXOut, float& centreYOut)
 {
@@ -327,7 +294,7 @@ void Otos::sensorToCentre(float sensorX, float sensorY, float sensorHeading,
     centreYOut = sensorY - offsetYWorld;
 }
 
-void Otos::centreToSensor(float centreX, float centreY, float centreHeading,
+void RealOtos::centreToSensor(float centreX, float centreY, float centreHeading,
                            float offsetX, float offsetY,
                            float& sensorXOut, float& sensorYOut)
 {
@@ -341,14 +308,14 @@ void Otos::centreToSensor(float centreX, float centreY, float centreHeading,
 // Private register-map helpers.
 // ---------------------------------------------------------------------------
 
-void Otos::writeReg8(uint8_t reg, uint8_t val)
+void RealOtos::writeReg8(uint8_t reg, uint8_t val)
 {
     uint8_t buf[2] = {reg, val};
     bus_.write(static_cast<uint16_t>(kOtosDeviceAddr << 1), buf, 2, false,
                /*preClear=*/0, /*postClear=*/kBusClearance);
 }
 
-uint8_t Otos::readReg8(uint8_t reg)
+uint8_t RealOtos::readReg8(uint8_t reg)
 {
     uint8_t result = 0;
     bus_.write(static_cast<uint16_t>(kOtosDeviceAddr << 1), &reg, 1, false,
@@ -358,7 +325,7 @@ uint8_t Otos::readReg8(uint8_t reg)
     return result;
 }
 
-bool Otos::readPositionVelocity(int16_t& x, int16_t& y, int16_t& h,
+bool RealOtos::readPositionVelocity(int16_t& x, int16_t& y, int16_t& h,
                                  int16_t& vx, int16_t& vy, int16_t& vh)
 {
     // ONE 12-byte burst read covers kRegPositionXl (6 bytes) followed
@@ -380,7 +347,7 @@ bool Otos::readPositionVelocity(int16_t& x, int16_t& y, int16_t& h,
     return (writeStatus == kOk && readStatus == kOk);
 }
 
-void Otos::writeXYH(uint8_t startReg, int16_t x, int16_t y, int16_t h)
+void RealOtos::writeXYH(uint8_t startReg, int16_t x, int16_t y, int16_t h)
 {
     uint8_t buf[7];
     buf[0] = startReg;
@@ -394,7 +361,7 @@ void Otos::writeXYH(uint8_t startReg, int16_t x, int16_t y, int16_t h)
                /*preClear=*/0, /*postClear=*/kBusClearance);
 }
 
-bool Otos::readXYH(uint8_t startReg, int16_t& x, int16_t& y, int16_t& h)
+bool RealOtos::readXYH(uint8_t startReg, int16_t& x, int16_t& y, int16_t& h)
 {
     uint8_t reg = startReg;
     uint8_t raw[6] = {0, 0, 0, 0, 0, 0};
@@ -410,7 +377,7 @@ bool Otos::readXYH(uint8_t startReg, int16_t& x, int16_t& y, int16_t& h)
     return (writeStatus == kOk && readStatus == kOk);
 }
 
-void Otos::writePoseMm(uint8_t startReg, float xF, float yF, float hF)
+void RealOtos::writePoseMm(uint8_t startReg, float xF, float yF, float hF)
 {
     long rx = lroundf(xF / kPosMmPerLsb);
     long ry = lroundf(yF / kPosMmPerLsb);
