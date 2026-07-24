@@ -1,10 +1,14 @@
 ---
 id: '122'
 title: Motion-library extraction + loop-timing telemetry
-status: planning-docs
+status: closed
 branch: sprint/122-motion-library-extraction-loop-timing-telemetry
 worktree: false
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
 issues:
 - extract-motion-library-to-src-motion.md
 - telemetry-report-loop-cycle-duration.md
