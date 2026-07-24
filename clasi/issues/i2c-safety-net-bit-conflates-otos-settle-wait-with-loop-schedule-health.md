@@ -4,6 +4,7 @@ filed: 2026-07-23
 filed_by: programmer (120-003 diagnosis)
 related:
 - restore-the-interleaved-request-settle-tick-loop-schedule.md
+sprint: '127'
 ---
 
 # I2C safety-net fault bit conflates Otos's own settle-wait with loop-schedule health

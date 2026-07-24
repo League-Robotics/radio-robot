@@ -5,6 +5,7 @@ filed_by: team-lead (stakeholder-directed)
 related:
 - land-at-zero-at-orthogonal-chain-boundaries.md
 tickets: []
+sprint: '123'
 ---
 
 # Hold heading during Distance moves (close the loop on the uncommanded omega axis)

@@ -1,11 +1,13 @@
 ---
-status: pending
+status: in-progress
 filed: 2026-07-23
 filed_by: team-lead (stakeholder bug report, /issue during sprint 120 execution)
 related:
 - chain-advance-completion-margin-narrow-pocket.md
 - land-at-zero-at-orthogonal-chain-boundaries.md
-tickets: []
+tickets:
+- 121-002
+sprint: '121'
 ---
 
 # Tour 1 never completes its final leg — it hangs until you press STOP

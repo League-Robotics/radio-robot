@@ -5,6 +5,7 @@ filed_by: programmer agent (sprint 120 ticket 001 hardware verification session)
 related:
 - bench-single-ack-slot-observability-collapses-at-40ms.md
 - tlm-rate-15-19hz-vs-50hz-nominal-serial.md
+sprint: '125'
 ---
 
 # Bench move commands intermittently never reach the firmware (dropped/corrupted CommandEnvelope, not an ack-observability issue)

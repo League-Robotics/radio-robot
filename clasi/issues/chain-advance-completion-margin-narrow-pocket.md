@@ -6,6 +6,7 @@ related:
 - specify-and-assert-the-leg-handoff-contract.md
 tickets:
 - 119-002
+sprint: '122'
 ---
 
 # Chain-advance completion margin is a narrow pocket, not a plateau

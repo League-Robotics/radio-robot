@@ -7,6 +7,7 @@ related:
 - chain-advance-completion-margin-narrow-pocket.md
 tickets:
 - 119-002
+sprint: '122'
 ---
 
 # Chain-advance completing-axis reset defeats same-axis compatible-leg continuity (SUC-003 regression)

@@ -1,11 +1,13 @@
 ---
-status: pending
+status: in-progress
 filed: 2026-07-23
 filed_by: team-lead (stakeholder-directed; stakeholder decision recorded below)
 related:
 - chain-advance-completion-margin-narrow-pocket.md
 - chain-advance-reset-defeats-same-axis-compatible-leg-continuity.md
-tickets: []
+tickets:
+- 121-003
+sprint: '121'
 ---
 
 # Chain-advance turns: land at zero at ORTHOGONAL boundaries (stakeholder decision — stop sweeping the chain margin)

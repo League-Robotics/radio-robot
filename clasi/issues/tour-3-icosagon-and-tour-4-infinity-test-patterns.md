@@ -6,6 +6,7 @@ related:
 - land-at-zero-at-orthogonal-chain-boundaries.md
 - chain-advance-reset-defeats-same-axis-compatible-leg-continuity.md
 tickets: []
+sprint: '124'
 ---
 
 # TOUR_3 (20-gon "circle") and TOUR_4 (infinity symbol) — chained-turn and arc test patterns
@@ -36,11 +37,13 @@ drive the same first leg, turn left 90°, then drive the polygon.
     20 x [ D 200 200 <s> , RT 1800 ]   # exterior angle 360/20 = 18 deg, CCW
 
 Geometry: a regular 20-gon with side `s` has circumradius `R = s / (2 sin(pi/20))
-= 3.196 * s`. Pick `s` so the figure fits the playfield from the entry point
-(s = 120-150 mm -> diameter 0.77-0.96 m; implementer fits it, CW vs CCW
-likewise — whichever keeps the polygon on the board from the TOUR_1 entry
-pose). The tour ends at polygon closure (start vertex, heading +90° again);
-no return-home legs — closure is measured on the polygon itself.
+= 3.196 * s`. **Sized to the board (stakeholder-authorized resize, 2026-07-23):
+`s = 120 mm`** -> R = 384 mm, diameter 767 mm — fits the ~1010 x 890 mm
+playfield (the calibration default, cli.py) from the TOUR_1 entry pose with
+margin on both axes. `s` stays a parameter; CW vs CCW is the implementer's
+call, whichever keeps the polygon on the board. The tour ends at polygon
+closure (start vertex, heading +90° again); no return-home legs — closure is
+measured on the polygon itself.
 
 Acceptance (sim ground truth, ideal chip, after the land-at-zero boundary fix):
 - polygon start/end position delta below ~30 mm; net heading 360° within ~1°
@@ -70,33 +73,43 @@ both crossing straights, the lobe center sits on the crossing bisector and
     arc path length = r * (4*pi/3) = 4.189 * r
     half-width of the whole figure = sqrt(3) * L   (total width 3.46 * L)
 
-**Fit warning:** the stakeholder default L=500 mm gives a 1.73 m-wide figure —
-almost certainly off the board. L = 250-300 mm (width 0.87-1.04 m) is the
-realistic bracket; keep L a parameter and state the value used.
+**Sizing (stakeholder-authorized resize, 2026-07-23):** the original L=500 mm
+gives a 1.73 m-wide figure — off the ~1010 x 890 mm board. **Ship `L = 250 mm`**:
+total width sqrt(3)*2*L = 866 mm, lobe height 2r = 289 mm, r = 144.3 mm,
+lobe arc length = 4.189*r = 604 mm, through-center leg 2L = 500 mm. `L` and
+`alpha` stay parameters.
 
-Wire realization of an arc leg: `move_twist(v_x = v, omega = ±v/r,
-stop_angle = radians(240), timeout = ...)` — stop on ANGLE (the lobe is
-defined by its sweep), timeout as the distance backstop.
+Wire realization of an arc leg (stakeholder direction, 2026-07-23): **a
+regular Move, nothing new** — forward velocity + turn velocity + distance
+stop: `move_twist(v_x = v, omega = ±v/r, stop_distance = 4.189*r,
+timeout = ...)`. No new wire verb, no firmware change — the MOVE protocol
+already expresses arcs.
 
 ### Known gap this tour will expose (deliberate)
 
 `MoveQueue::shapeAndStage()` shapes ONLY the stop-kind axis; an arc's other
 commanded axis passes through unshaped (documented in move_queue.cpp's own
-shapeAndStage comment as a scope limitation). An Angle-stop arc therefore
-tapers omega into the lobe exit but steps v_x; a Distance-stop arc does the
-reverse. TOUR_4's acceptance should first RECORD what this does (curvature
-error at lobe entry/exit), then the team decides whether coordinated
-two-axis tapering is worth building or whether arc entry/exit error is
-tolerable. Do not silently "fix" this with a special case inside the tour —
-if two-axis shaping is needed, it is its own issue.
+shapeAndStage comment as a scope limitation). A Distance-stop arc therefore
+tapers v_x into the lobe exit while omega holds cruise — curvature TIGHTENS
+as the taper runs (kappa = omega/v grows as v drops). TOUR_4's acceptance
+should first RECORD what this does (curvature/heading error at lobe exit),
+then the team decides whether coordinated two-axis tapering is worth
+building or whether arc exit error is tolerable. Do not silently "fix" this
+with a special case inside the tour — if two-axis shaping is needed, it is
+its own issue.
 
-### Parser/vocabulary work (host)
+### Tour-list spelling (host, minimal)
 
-`parse_tour()` (`src/host/robot_radio/planner/tour.py`) knows only `D` and
-`RT`; TOUR_4 needs an arc verb — e.g. `"A <sweep_cdeg> <radius_mm> <v_mms>"` —
-parsed to a `TourLeg(kind="arc", ...)` and mapped by `_move_kwargs_for_leg()`
-onto the `move_twist(v_x, omega, stop_angle)` shape above. Signed sweep
-carries the hand (CW negative), mirroring `RT`'s own sign convention.
+No new verb (stakeholder direction, 2026-07-23): the wire needs nothing, and
+the tour string list barely does. The existing `D <left> <right> <mm>` step
+already carries two wheel speeds; `parse_tour()` currently AVERAGES them into
+one straight-leg speed, silently discarding a left≠right arc. Fix the parser
+instead of adding vocabulary: when left ≠ right, emit an arc leg —
+`v_x = (l+r)/2`, `omega = (r-l)/trackwidth`, distance stop = the step's own
+`<mm>` (path length) — mapped by `_move_kwargs_for_leg()` onto the regular
+`move_twist(v_x, omega, stop_distance)` above. A TOUR_4 lobe at L=250 is then
+just e.g. `D 111 289 604` (v=200 mm/s, omega=(289-111)/128=+1.39 rad/s =
+v/r at r=144.3 mm) and its mirror `D 289 111 604` for the reverse curve.
 
 Acceptance (sim ground truth, ideal chip):
 - both crossings pass within ~25 mm of the center point;

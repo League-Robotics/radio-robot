@@ -1,9 +1,12 @@
 ---
-status: pending
+status: in-progress
 filed: 2026-07-23
-filed_by: team-lead (stakeholder session — encpose 349.1 vs pose 359.7 on a 360deg turn)
+filed_by: "team-lead (stakeholder session \u2014 encpose 349.1 vs pose 359.7 on a\
+  \ 360deg turn)"
 related: []
-tickets: []
+tickets:
+- 121-001
+sprint: '121'
 ---
 
 # encpose active-gate freezes the host dead-reckoner before motion ends (~10deg short per 360)
