@@ -36,8 +36,8 @@ msg::DrivetrainConfig defaultDrivetrainConfig();
 //
 // Boot-time-baked only, deliberately NOT a live SET/wire surface itself —
 // see DESIGN.md §3/§4 for why. Consumed directly by main.cpp's
-// Devices::Otos construction; the scale multipliers are converted to the
-// OTOS chip's raw register scalar once at Devices::Otos::begin(), not
+// Devices::RealOtos construction; the scale multipliers are converted to the
+// OTOS chip's raw register scalar once at Devices::RealOtos::begin(), not
 // re-derived per wire call (docs/protocol-v2.md §11). 109-004 added a
 // SEPARATE, live runtime override on top of this boot bake —
 // `OtosConfigPatch` (config.proto), applied by RobotLoop::handleConfig

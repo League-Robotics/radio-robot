@@ -145,20 +145,20 @@ if("${device.definitions}" STRGREATER "")
     add_definitions("${device.definitions}")
 endif()
 
-# FAKE_OTOS (120-002, sprint 120 "bench tour bring-up with fake OTOS"):
-# opt-in, compile-time-only bench build variant. When ON, App::RobotLoop::
-# cycle() feeds Devices::Otos a synthetic pose+twist derived from THIS
-# cycle's own encoder-kinematics Odometry output instead of issuing a real
-# I2C burst read to the OTOS chip -- see src/firm/devices/otos.h's
-# feedSyntheticSample() doc comment and src/firm/app/DESIGN.md's "120" note.
-# OFF (default) is the real, table build -- byte-for-byte unchanged from
-# before this option existed (Devices::Otos::tick()/begin() are never
-# touched by this flag; main.cpp's Devices::Otos construction line is
-# identical either way). Select via `cmake .. -DFAKE_OTOS=ON`, or
-# build.py's own --fake-otos flag (which always passes an explicit
-# ON/OFF so a stale CMakeCache.txt from a prior invocation can never leave
-# this flag silently stuck) -- never a runtime/wire toggle (sprint 120's
-# own Scope, Out of Scope).
+# FAKE_OTOS (120-002; reshaped by the otos-fake-seam refactor): opt-in,
+# compile-time-only bench build variant. When ON, main.cpp binds the
+# Devices::Otos& the loop drives to an App::FakeOtos (app/fake_otos.h) --
+# which reports the dead-reckoned Odometry pose + wheel-fused body twist as
+# if it were the chip -- instead of the real Devices::RealOtos I2C leaf.
+# The loop's own per-cycle OTOS call (applyOtosSample()) is IDENTICAL in
+# both builds; only which implementation backs the interface differs, chosen
+# once at the main.cpp composition root under #ifdef FAKE_OTOS. See
+# src/firm/devices/DESIGN.md's Otos interface/RealOtos-split paragraph and
+# src/firm/app/DESIGN.md's "Otos call site" note. OFF (default) is the real,
+# table build. Select via `cmake .. -DFAKE_OTOS=ON`, or build.py's own
+# --fake-otos flag (which always passes an explicit ON/OFF so a stale
+# CMakeCache.txt can never leave this flag silently stuck) -- never a
+# runtime/wire toggle.
 option(FAKE_OTOS "Bench variant: synthesize frame.otos from encoder kinematics instead of reading the real OTOS chip" OFF)
 if(FAKE_OTOS)
     add_definitions(-DFAKE_OTOS)

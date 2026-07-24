@@ -4,10 +4,11 @@ real serial link against a FAKE_OTOS-built robot (see
 ``clasi/sprints/120-.../tickets/002-...md``), with bounded enqueue-ack
 retry over the known lossy link, and confirm two things:
 
-1. ``frame.otos`` TRACKS the commanded motion (it is fed every cycle from
-   the SAME encoder-kinematics ``App::Odometry`` output ``frame.pose``
-   already carries -- see ``devices/otos.h``'s ``feedSyntheticSample()``
-   and ``app/robot_loop.cpp``'s FAKE_OTOS branch) -- checked by comparing
+1. ``frame.otos`` TRACKS the commanded motion (it is synthesized every
+   cycle from the SAME encoder-kinematics ``App::Odometry`` output
+   ``frame.pose`` already carries -- see ``app/fake_otos.h``'s
+   ``App::FakeOtos``, the ``Devices::Otos`` implementation a FAKE_OTOS build
+   binds at construction) -- checked by comparing
    ``frame.otos`` against ``frame.pose`` on every polled frame across the
    whole tour and asserting the two never diverge past a small band.
 2. The tour actually CLOSES (every leg completes, `run_tour()`'s own
@@ -115,8 +116,8 @@ ENQUEUE_ACK_TIMEOUT_MS = 400   # [ms] how long to wait for one enqueue's own ack
 MAX_ENQUEUE_RETRIES = 4        # bounded -- never an infinite resend loop
 
 # --- Acceptance bands ---
-# frame.otos vs frame.pose: in a FAKE_OTOS build, Otos::feedSyntheticSample()
-# is fed x/y/heading straight from THIS SAME cycle's odom_.x()/y()/theta() --
+# frame.otos vs frame.pose: in a FAKE_OTOS build, App::FakeOtos reports
+# x/y/heading straight from THIS SAME cycle's odom_.x()/y()/theta() --
 # no lever-arm/mounting-yaw transform, no independent sensor noise -- so the
 # two should read essentially IDENTICAL on every frame (to wire-encode
 # quantization + float rounding), not merely "close". A band this tight is

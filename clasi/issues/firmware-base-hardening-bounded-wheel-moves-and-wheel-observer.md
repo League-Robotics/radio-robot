@@ -87,3 +87,35 @@ first, same stand time). This issue plus extraction replace the previous
 (settle completion, heading hold, fusion, tours, S-bars) transfers to the
 motion library's plan, unchanged in substance, executed against
 `motion_tests` first.
+
+## REVISION (stakeholder decision, 2026-07-24): PID moves to motion; base primitive is DUTY
+
+The rate argument settles it: the PID cannot update faster than the loop
+(encoder freshness ~80 ms bounds it) wherever it lives, so motor residency
+buys nothing. Revised base contract, superseding item 1 above:
+
+- **Command primitive: per-wheel DUTY** (`[-1,1]`), one visible write per
+  wheel per cycle. The velocity PID, the kff mapping, and therefore the
+  bounded WHEEL-SPEED move (`MoveWheels` + stop conditions + timeout) move
+  UP into the motion library's lowest tier — a speed-stop cannot be tracked
+  without the PID.
+- **Safety: zero-on-silence** — a cycle that hands the motor no duty writes
+  zero — plus the plausibility clamp (|duty| ≤ 1, NaN → 0). Simpler and
+  stronger than a speed-tracking rump; the wire-level Move bounding
+  (timeout backstop) rides with the motion library, which is statically
+  linked in the same image.
+- **The observer stays in the base** (per-wheel, hardware-characterized
+  truth reporting), now consuming commanded duty + encoder samples — its
+  model is duty→velocity directly, matching both the sim `WheelPlant` and
+  the bench step-response characterization 1:1.
+- **`appliedDuty` feedback:** the dwell/deadband shaping remains in the base
+  (brick protection); the actually-written duty is reported in the per-wheel
+  sample so the motion-side PID's anti-windup sees actuator truth.
+- `NezhaMotor` target size drops again: protocol + dwell/deadband + clamp,
+  ~200 lines; `MotorVelocityPid` relocates to the motion library with its
+  gains as motion config.
+
+Base gate items update accordingly: "tracking" moves to the motion library's
+gate; the base gate keeps observer fidelity, completion of the duty write
+path (shaping visible, applied duty reported), telemetry truthfulness, and
+zero-on-silence verified.

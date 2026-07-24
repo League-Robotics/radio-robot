@@ -18,6 +18,11 @@ float clampf(float v, float lo, float hi) {
 }
 }  // namespace
 
+// Out-of-line anchor / key function for the abstract Otos base — see its
+// declaration comment (otos.h) for why this must not be `= default` in the
+// header.
+Otos::~Otos() = default;
+
 RealOtos::RealOtos(I2CBus& bus, const OtosConfig& config)
     : bus_(bus), config_(config)
 {

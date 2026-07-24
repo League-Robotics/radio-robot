@@ -98,3 +98,13 @@ carry, heading-hold, and the rest of the exactness work move INTO the
 motion library's own plan and proceed after extraction, developed against
 `motion_tests` first, sim gates second. The companion base-hardening issue
 runs in this repo in parallel once the boundary exists.
+
+## REVISION (stakeholder decision, 2026-07-24)
+
+`devices/velocity_pid.*` MOVES to src/motion as well (PID placement decision
+— see the base-hardening issue's revision of the same date). "What stays"
+correspondingly loses the bounded wheel-move executor: the base keeps a
+duty-level wheel sink with zero-on-silence; ALL Move handling (wheels and
+twist variants) lives in the motion library. The boundary structs are
+per-wheel duty down, per-wheel samples (with `appliedDuty`) up — see
+`docs/design/base-explicit-loop-sketch.md` for the current interface.

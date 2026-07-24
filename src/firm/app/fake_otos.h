@@ -45,9 +45,9 @@ class FakeOtos : public Devices::Otos {
   // has nothing to probe or configure). getOffset() reports a zero offset.
   void begin() override {}
   void init() override {}
-  void setLinearScalar(float scalar) override {}
-  void setAngularScalar(float scalar) override {}
-  void setOffset(float x, float y, float heading) override {}       // [mm] [mm] [rad]
+  void setLinearScalar(float) override {}
+  void setAngularScalar(float) override {}
+  void setOffset(float, float, float) override {}                   // [mm] [mm] [rad]
   void getOffset(float& x, float& y, float& heading) override;      // [mm] [mm] [rad]
 
   // Refresh the synthetic reading from this cycle's Odometry pose + fused

@@ -312,32 +312,26 @@ phase-B bench-observability fixes. See "Telemetry's ack ring" (§4) for
 the ack-slot→ack-ring change and the `kFlagFaultI2CSafetyNet` paragraph
 (§4) for the bit-6 diagnosis (ticket 3, LANDED: diagnosis-only, no code
 fix — see that paragraph for the confirmed root cause and why no fix
-ships). The third change (ticket 2, LANDED): `Devices::Otos` gains a new
-synthetic-sample method, `feedSyntheticSample(x, y, heading, v_x, v_y,
-omega, nowUs)` (see [`devices/DESIGN.md`](../devices/DESIGN.md), edited
-directly by ticket 2, not overlaid here, for the leaf's own full
-contract) that publishes a pose+twist `RobotLoop` feeds it from that SAME
-cycle's `Odometry` output, instead of a real I2C burst read — selected by
-a compile-time build option (`FAKE_OTOS`, a new root `CMakeLists.txt`
-option; select via `cmake .. -DFAKE_OTOS=ON` or `build.py --fake-otos`),
-never a runtime toggle. This is the first FIRMWARE PRODUCTION CONSUMER of
-the "OTOS is present and reads a meaningful pose on a stand" property the
-previous paragraph's quarantine note anticipated — NOT yet a consumer of
+ships). The third change (ticket 2, LANDED): a compile-time `FAKE_OTOS` bench
+build variant that reports the dead-reckoned `Odometry` pose in place of a
+real OTOS burst read. **This mechanism was later reshaped by the
+otos-fake-seam refactor** (see §2's "Otos call site" and
+[`devices/DESIGN.md`](../devices/DESIGN.md)): what shipped in 120-002 as a
+`Devices::Otos::feedSyntheticSample()` method + a per-cycle `#ifdef
+FAKE_OTOS` branch in `RobotLoop::cycle()` is now `Devices::Otos` as an
+abstract interface with two implementations — `Devices::RealOtos` (the
+chip) and `App::FakeOtos` (the synthesizer) — selected once at the
+`main.cpp` composition root. The bench property it established is
+unchanged: this is the first FIRMWARE PRODUCTION CONSUMER of the "OTOS is
+present and reads a meaningful pose on a stand" property the previous
+paragraph's quarantine note anticipated — NOT yet a consumer of
 `StateEstimator::bodyAt()` itself (that stays quarantined; the fake feeds
-`Devices::Otos`/`frame.otos` directly, one layer below the estimator, and
-`StateEstimator`'s own OTOS-fusion weights stay 0.0, unchanged — confirmed
-still 0.0/0.0 in `config/boot_config.cpp`'s `defaultEstimatorConfig()`,
-untouched by this ticket). The one new call site lives in
-`RobotLoop::cycle()` (§2), not in `Devices::Otos`'s own construction
-(`main.cpp`) — see this sprint's own Architecture Design Rationale
-(Decision 3) for why the branch sits at the per-cycle call site rather
-than at composition time; `main.cpp`'s `Devices::Otos otos(bus,
-otosConfig)` construction line is unchanged (byte-identical text) between
-the real and bench builds. `odom_.integrate()`/`frame_.pose` staging was
-hoisted to run immediately BEFORE this call site (previously ran after)
-so the `FAKE_OTOS` branch feeds THIS cycle's genuinely fresh pose, not the
-previous cycle's — see §2's own "Otos call site" paragraph for the full
-before/after and why this reorder is side-effect-free for the real build.
+`frame.otos` one layer below the estimator, and `StateEstimator`'s own
+OTOS-fusion weights stay 0.0/0.0 in `defaultEstimatorConfig()`).
+`odom_.integrate()`/`frame_.pose` staging runs immediately BEFORE the Otos
+call site so a `FakeOtos` reports THIS cycle's genuinely fresh pose — see
+§2's own "Otos call site" paragraph for why this reorder is
+side-effect-free for the real build.
 
 **Hardware verification (2026-07-23, robot "tovez",
 `/dev/cu.usbmodem2121102`).** Flashed via `mbdeploy deploy <uid> --hex
@@ -379,8 +373,8 @@ always claimed for the request/collect halves): request/settle(borrow:
 settle(borrow: `processMessage`)/collect/PID for the right motor, then a
 trailing pace block that FIRST stages and emits telemetry (119 ticket 005 —
 see below), then integrates odometry (`Odometry::integrate`) and samples
-OTOS (real build) or feeds Otos a synthetic sample from that SAME
-odometry (`FAKE_OTOS` build — 120 ticket 002, see below), refreshes
+OTOS (`applyOtosSample()` — uniform across builds; the sensor behind it is
+a real chip or an `App::FakeOtos`, chosen at construction), refreshes
 `App::StateEstimator`'s predict-to-now estimates from that same
 cycle's staged `Frame` (117), evaluates the `MoveQueue`'s unconditional
 per-cycle stop decision (`moveQueue_.tick(now, odom_)` — 118: relocated
@@ -425,29 +419,27 @@ explicitly cleared the same cycle (it was not even touched), matching the
 wire spec's "line/color word fresh" (fresh THIS frame, not merely "known at
 some point") semantics.
 
-**Otos call site / `FAKE_OTOS` build seam (120 ticket 002).** Runs once
-per cycle from the trailing `kPace` block, immediately after
-`odom_.integrate()`/`frame_.pose` staging (120 ticket 002 hoisted this
-pair to run BEFORE the Otos call site — previously it ran after; a
-side-effect-free reorder for the real build, since `Odometry::
-integrate()` reads neither `otos_` nor any `frame_.otos*` field and vice
-versa). Exactly ONE macro-gated branch (`#ifdef FAKE_OTOS`) lives here:
-the real build calls `applyOtosSample(otos_, nowUs, frame_)` — unchanged,
-issues a real I2C burst read via `otos_.tick(nowUs)` — while a `FAKE_OTOS`
-build instead calls `otos_.feedSyntheticSample(odom_.x(), odom_.y(),
-odom_.theta(), frame_.twist.v_x, frame_.twist.v_y, frame_.twist.omega,
-nowUs)`, publishing THIS cycle's already-integrated `Odometry` pose and
-the `BodyKinematics`-fused body twist directly as `Otos`'s current
-reading — no bus traffic at all. Either way, `frame_.otosConnected`/
-`frame_.otosPresent`/`frame_.otos` are staged from `otos_.connected()`/
-`otos_.present()`/`otos_.poseFresh()`/`otos_.pose()` immediately
-afterward, unconditionally, exactly the same shape `applyOtosSample()`
-itself already used. See [`devices/DESIGN.md`](../devices/DESIGN.md) for
-`Devices::Otos::feedSyntheticSample()`'s own full contract and the
-`FAKE_OTOS` CMake build seam; `main.cpp`'s `Devices::Otos` construction is
-textually identical between the two builds (sprint 120's own Architecture
-Design Rationale Decision 3 — the branch lives at this per-cycle call
-site, not at composition time).
+**Otos call site (uniform across builds; `FAKE_OTOS` chosen at
+construction).** Runs once per cycle from the trailing `kPace` block,
+immediately after `odom_.integrate()`/`frame_.pose` staging (this pair is
+hoisted to run BEFORE the Otos call so an `App::FakeOtos` reports THIS
+cycle's fresh pose — a side-effect-free reorder for the real leaf, since
+`Odometry::integrate()` reads neither `otos_` nor any `frame_.otos*`
+field and vice versa). There is **no `#ifdef` here** anymore: the loop
+holds a plain `Devices::Otos&` and always calls
+`applyOtosSample(otos_, nowUs, frame_)` (`app/odometry.*`), which
+`otos_.tick()`s the sensor then stages `frame_.otosConnected`/
+`frame_.otosPresent`/`frame_.otos` from
+`connected()`/`present()`/`poseFresh()`/`pose()`. Which implementation
+backs `otos_` — the real SparkFun leaf (`Devices::RealOtos`, a rate-limited
+I2C burst read) or the bench synthesizer (`App::FakeOtos`, which reports
+the dead-reckoned `Odometry` pose + `BodyKinematics`-fused wheel twist) —
+is chosen ONCE at the `main.cpp` composition root under `#ifdef FAKE_OTOS`,
+the only place that macro appears (otos-fake-seam refactor, superseding
+120-002's per-cycle branch + the deleted
+`Devices::Otos::feedSyntheticSample()`). See
+[`devices/DESIGN.md`](../devices/DESIGN.md) for the `Otos` interface /
+`RealOtos` split and [`app/fake_otos.h`](fake_otos.h) for the fake.
 
 **Predict-to-now estimation (`RobotLoop`'s `StateEstimator::update()`
 call, 117).** Runs once per cycle from the trailing `kPace` block,

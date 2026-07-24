@@ -105,7 +105,12 @@ constexpr uint8_t kOtosDeviceAddr = 0x17;
 // RealOtos and are NOT part of this contract.
 class Otos {
  public:
-  virtual ~Otos() = default;
+  // Out-of-line (defined in otos.cpp), NOT `= default` here: it is this
+  // abstract base's key function — the anchor that pins the class's single
+  // vtable/typeinfo to one translation unit. Without an out-of-line virtual,
+  // the embedded arm-none-eabi link fails with "undefined reference to
+  // Devices::Otos::pose()/begin()/…" on every virtual call site.
+  virtual ~Otos();
 
   virtual void begin() = 0;
   virtual void tick(uint64_t nowUs) = 0;  // [us]

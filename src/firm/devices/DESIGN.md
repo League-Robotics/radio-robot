@@ -228,51 +228,52 @@ is the general pattern for any future leaf whose detection needs more
 than one attempt: never a blocking retry loop, always a step function the
 loop drives.
 
-**`Otos::feedSyntheticSample()` — the `FAKE_OTOS` bench build seam
-(120-002, on-chip-fake-otos-test-device.md).** On the bench stand the
-wheels spin free and the robot never translates, so the real chip's own
-`tick()` reports a near-static pose while the encoders count — useless for
-verifying that a bench tour tracks its commanded path through the SAME
-OTOS-present code path the table build uses. `Otos` gains one new method,
-`feedSyntheticSample(x, y, heading, v_x, v_y, omega, nowUs)`, that
-publishes a caller-supplied pose+twist as this leaf's current reading
-DIRECTLY — zero bus traffic, no staging/drain (unlike `setPose()`'s
-staged re-anchor cell) — and marks the leaf `present()`/`connected()`
-true from that call on, regardless of whether `begin()`'s own real
-product-ID probe ever ran or succeeded. This keeps `Otos` a single,
-concrete, non-virtual leaf (no second `FakeOtos` implementation, no
-interface) — the SAME "one shape, no inheritance" convention every other
-leaf in this directory follows (this section's own opening paragraph) —
-and adds zero dependency on `App::Odometry` or any other `app/` type
-(the isolation invariant, §3, holds exactly as before: the new method is
-a plain 7-float/`uint64_t` primitive, nothing more). The ONE call site is
-`App::RobotLoop::cycle()`'s existing per-cycle Otos slot
-(`app/robot_loop.cpp`, a single `#ifdef FAKE_OTOS` branch): the real
-(non-`FAKE_OTOS`) build calls `tick(nowUs)` exactly as before (via the
-unchanged `applyOtosSample()` free function, `app/odometry.*`); a
-`FAKE_OTOS` build calls `feedSyntheticSample()` instead, fed from that
-SAME cycle's already-integrated `App::Odometry` pose (`x()`/`y()`/
-`theta()`) and the `BodyKinematics`-fused body twist the loop's own
-`updateTlm()` already computed that cycle — see
-[`../app/DESIGN.md`](../app/DESIGN.md)'s own "120" note for the loop-side
-half of this story. `Otos::tick()`/`begin()` and every other existing
-method are byte-for-byte unchanged by this addition — confirmed by the
-existing `devices_otos_harness.cpp` regression (unmodified scenarios
-still pass) plus a new scenario covering `feedSyntheticSample()`'s own
-contract (zero bus traffic, immediate freshness, present/connected true
-without `begin()`).
+**`Otos` is an interface with two implementations — the `FAKE_OTOS` bench
+seam (otos-fake-seam refactor; supersedes 120-002).** `Otos` is the one
+leaf in this directory that is NOT a single concrete class: it is a pure
+abstract interface (the pose/freshness accessors the loop reads via
+`applyOtosSample()`, plus the calibration/offset setters a CONFIG patch
+pushes). Two classes implement it:
 
-Build selection is a new CMake option, `FAKE_OTOS` (root `CMakeLists.txt`,
-OFF by default), which `add_definitions(-DFAKE_OTOS)`s for the WHOLE
-firmware target when ON — compile-time only, never a runtime/wire toggle.
-Select it via `cmake .. -DFAKE_OTOS=ON` or `build.py --fake-otos` (which
-always passes an explicit `-DFAKE_OTOS=ON`/`OFF`, so a stale
-`CMakeCache.txt` from a prior invocation can never leave the flag stuck).
-`main.cpp`'s `Devices::Otos otos(bus, otosConfig)` construction line is
-textually identical between the two builds (sprint 120's own Architecture
-Design Rationale Decision 3) — the branch lives at the per-cycle call
-site, not at composition time, because only `RobotLoop::cycle()` has both
-`Otos` and that cycle's fresh `Odometry` output simultaneously in scope.
+- **`Devices::RealOtos`** — the SparkFun OTOS I2C leaf; all the behavior
+  documented above (fire-and-forget IMU calibration, the combined burst
+  read, lever-arm compensation, wrap-aware heading, staged `setPose()`)
+  lives here. This is the only implementation with any real-chip or bus
+  dependency.
+- **`App::FakeOtos`** ([`../app/fake_otos.h`](../app/fake_otos.h), in
+  `app/` not here) — a bench synthesizer whose `tick()` reports the
+  dead-reckoned `App::Odometry` pose + the `BodyKinematics`-fused wheel
+  twist as if it were the chip, so a bench tour on a free-spinning stand
+  tracks its commanded path through the SAME `applyOtosSample()` code path
+  the table build uses. It lives in `app/` precisely because it needs
+  `App::Odometry` — a dependency the devices/ isolation invariant (§3)
+  forbids this layer from taking. That is exactly why the SEAM is the
+  interface (here) and the app-coupled implementation sits above it: the
+  invariant is preserved (`RealOtos` and this header stay app-free) while
+  the fake gets the context it needs.
+
+Why an interface rather than 120-002's original `feedSyntheticSample()`
+method + per-cycle `#ifdef FAKE_OTOS`: the old shape put a test-only
+synthetic-sample method on the production chip driver and branched the hot
+loop on the build. The interface confines the build choice to a single
+construction-time selection (`main.cpp`, `#ifdef FAKE_OTOS`), gives the
+loop one uniform `Devices::Otos&` call site, and keeps synthesis logic
+inside the fake where it belongs. The abstract base carries an out-of-line
+virtual destructor (defined in `otos.cpp`) as its key function — the
+anchor that pins the single vtable/typeinfo to one TU; without it the
+embedded arm link fails on every virtual call site. Coverage:
+`devices_otos_harness.cpp` exercises `RealOtos`; `app_fake_otos_harness.cpp`
+(`test_app_fake_otos.py`) exercises `FakeOtos`.
+
+Build selection is the CMake option `FAKE_OTOS` (root `CMakeLists.txt`,
+OFF by default), `add_definitions(-DFAKE_OTOS)` for the WHOLE firmware
+target when ON — compile-time only, never a runtime/wire toggle. Select it
+via `cmake .. -DFAKE_OTOS=ON` or `build.py --fake-otos` (which always
+passes an explicit `-DFAKE_OTOS=ON`/`OFF`, so a stale `CMakeCache.txt`
+can never leave the flag stuck). In `main.cpp` a `RealOtos` is constructed
+and, under `#ifdef FAKE_OTOS`, an `App::FakeOtos` too; a `Devices::Otos&`
+is bound to whichever the build selected and handed to `Preamble` and
+`RobotLoop` — the ONE place the variant diverges.
 
 **`MotorArmor`'s reset dispatch (hard vs. soft).** A staged
 `resetPosition()` request is resolved at the top of the leaf's next
@@ -380,9 +381,9 @@ needs this; every other interpolated field uses plain `lerp()`.
   surface, called directly by the loop (`app/robot_loop.cpp`) — see each
   header's own declaration comments for the per-call contract (rate
   limits, no-op-until-detected behavior, staleness semantics).
-  `Otos::feedSyntheticSample(x, y, heading, v_x, v_y, omega, nowUs)`
-  (120-002) is a `FAKE_OTOS`-build-only addition to this same leaf — see
-  §4's own paragraph for the full contract and build seam.
+  `Otos` is an abstract interface with two implementations —
+  `Devices::RealOtos` (the chip) and `App::FakeOtos` (the `FAKE_OTOS`
+  bench synthesizer) — see §4's own paragraph for the split and build seam.
 - **`Devices::MeasurementRing<T>`/`Devices::Sample<T>`**
   (`measurement_ring.h`): `publish(value, stamp)`, `latest()`,
   `sample(age)`, `bracket(t, older, newer)` — see §3/§4 for the gap-write
