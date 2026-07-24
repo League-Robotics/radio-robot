@@ -19,6 +19,13 @@ one labelled row per component:
                   loudly (amber background + "(fallback)" text) whenever
                   the source is ENCODER, not just a plain text value like
                   every other row above.
+    loop   — cycle_busy / cycle_period (122-003), converted us -> ms for
+                  display, e.g. "3.2ms / 40.0ms". Sourced from the
+                  TelemetrySecondary frame (interim placement -- see that
+                  message's own proto doc comment), NOT the per-cycle
+                  TLMFrame every other row above reads -- refreshed at
+                  TelemetrySecondary's own ~5 Hz cadence via
+                  ``update_secondary()``, independent of ``update_frame()``.
 
 Velocity vectors (``vel`` and ``twist``) are additionally drawn as an arrow
 whose direction is the body-frame direction of motion (forward = up, left =
@@ -200,6 +207,16 @@ def fmt_heading_source(heading_source: "int | None") -> str:
     return "OTOS"
 
 
+def fmt_loop_timing(cycle_busy: "int | None", cycle_period: "int | None") -> str:
+    """``cycle_busy``/``cycle_period`` (122-003, both [us]) as e.g.
+    ``"3.2ms / 40.0ms"``; ``—`` if either is absent (no TelemetrySecondary
+    decoded yet -- see this module's own ``loop`` row docstring).
+    """
+    if cycle_busy is None or cycle_period is None:
+        return "—"
+    return f"{cycle_busy / 1000.0:.1f}ms / {cycle_period / 1000.0:.1f}ms"
+
+
 def fmt_twist(twist: "tuple[int, ...] | None") -> str:
     """Body-frame twist; differential ``(v, ω)`` or mecanum ``(vx, vy, ω)``."""
     parsed = twist_velocity(twist)
@@ -363,6 +380,7 @@ def build_telemetry_panel(recorder: "Any" = None) -> "tuple[Any, Any]":
         ("otos", "tlm_val_otos", False, None),
         ("twist", "tlm_val_twist", True, "tlm_arrow_twist"),
         ("heading src", "tlm_val_heading_source", False, None),
+        ("loop", "tlm_val_loop", False, None),  # 122-003
     ]
 
     value_labels: dict[str, Any] = {}
@@ -461,5 +479,21 @@ def build_telemetry_panel(recorder: "Any" = None) -> "tuple[Any, Any]":
 
             tw = twist_velocity(getattr(frame, "twist", None))
             self._arrows["tlm_arrow_twist"].set_vector(*(tw[:2] if tw else (0.0, 0.0)))
+
+        def update_secondary(self, secondary: "Any") -> None:
+            """Update the ``loop`` row from a TelemetrySecondary (122-003).
+
+            *secondary* is the raw ``telemetry_pb2.TelemetrySecondary``
+            protobuf message (``transport.py``'s ``on_telemetry_secondary``
+            callback delivers it undecoded -- unlike ``update_frame()``,
+            there is no adapting dataclass for this frame yet, see
+            ``TLMFrame``'s own docstring's "permanent gap" note). Reads
+            ``cycle_busy``/``cycle_period`` directly off it; refreshed at
+            TelemetrySecondary's own ~5 Hz cadence, independent of
+            ``update_frame()``'s per-primary-frame refresh rate.
+            """
+            cycle_busy = getattr(secondary, "cycle_busy", None)
+            cycle_period = getattr(secondary, "cycle_period", None)
+            self._values["tlm_val_loop"].setText(fmt_loop_timing(cycle_busy, cycle_period))
 
     return panel, _TelemetryPanelController()

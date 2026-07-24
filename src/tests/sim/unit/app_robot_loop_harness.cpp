@@ -1818,6 +1818,79 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
                "refreshing every cycle -- not a second, disconnected instance");
 }
 
+// ===========================================================================
+// 122-003 (SUC-003, telemetry-report-loop-cycle-duration.md): cycle_busy/
+// cycle_period loop-timing fields, staged onto the SECONDARY frame (interim
+// placement -- see telemetry.h's SecondaryFrame doc comment and
+// telemetry.proto's TelemetrySecondary doc comment for the full derivation).
+// Drives RobotLoop::cycle() a bounded number of times against LiveFixture's
+// LIVE (unscripted) SimPlant with deliberately non-uniform per-cycle clock
+// advances -- individually >= kSecondaryPeriod (200ms) so secondary is
+// guaranteed a slot somewhere in this run (telemetry.h's own emit() comment:
+// "secondary is guaranteed a slot within roughly one kSecondaryPeriod
+// instead of starving forever") without needing to hand-predict exactly
+// which cycle's own tie-break lands on secondary. Whichever cycle(s)
+// secondary actually transmits on, this test already knows -- from its own
+// per-cycle bookkeeping -- the EXACT cycle_period that cycle must carry
+// (this cycle's own clock advance, or 0 for the very first-ever cycle()
+// call: RobotLoop's previousCycleStartUs_/everCycled_ start fresh per
+// instance, untouched by LiveFixture's own constructor-time boot(), which
+// never calls cycle() at all) and the exact cycle_busy (always 0 -- under a
+// clock that only moves when THIS test explicitly advances it between
+// cycle() calls, no simulated time passes DURING one synchronous cycle()
+// call, so 0 is the correct, exact, deterministic value here -- not a
+// tolerance/range check dodging a harder assertion).
+// ===========================================================================
+
+void scenarioSecondaryFrameCarriesExactLoopTimingFields() {
+  beginScenario("RobotLoop secondary frame: cycle_busy/cycle_period carry EXACT loop-timing values (122-003)");
+
+  LiveFixture fixture;
+
+  // Deliberately non-uniform per-cycle advances [us] -- not a common
+  // multiple of kPrimaryPeriod/kSecondaryPeriod -- so cycle_period is
+  // distinguishable cycle to cycle, proving the actual subtraction rather
+  // than a hardcoded constant. Individually >= kSecondaryPeriod (200ms, see
+  // this scenario's own header comment).
+  const uint64_t kSteps[] = {210000, 260000, 190000, 240000, 205000,
+                             230000, 215000, 245000, 195000, 225000};
+  const int kNumCycles = static_cast<int>(sizeof(kSteps) / sizeof(kSteps[0]));
+
+  uint64_t expectedCyclePeriod[kNumCycles];
+  int secondaryFramesChecked = 0;
+
+  for (int i = 0; i < kNumCycles; ++i) {
+    // First-ever cycle() call on this fixture (LiveFixture's own
+    // constructor never calls cycle() -- only boot()) always reports
+    // cyclePeriod == 0 regardless of the applied step, since there is no
+    // previous cycle() call to subtract against.
+    expectedCyclePeriod[i] = (i == 0) ? 0 : kSteps[i];
+
+    fixture.plant.tick(static_cast<float>(kSteps[i]) / 1e6f);  // [s]
+    fixture.clock.advanceMicros(kSteps[i]);
+
+    uint32_t beforeSecondary = fixture.tlm.secondaryEmitCount();
+    fixture.robotLoop.cycle();
+
+    if (fixture.tlm.secondaryEmitCount() > beforeSecondary) {
+      TestSupport::DecodedLine decoded = TestSupport::decodeOutboundLine(fixture.serialFake.sent().back());
+      checkTrue(decoded.kind == TestSupport::DecodedKind::kSecondary,
+                "captured line after a secondaryEmitCount() bump decodes as TelemetrySecondary");
+      checkUintEq(decoded.secondary.cycle_busy, 0,
+                  "cycle_busy is EXACTLY 0 -- no simulated time passes between cycleStart and "
+                  "frame-staging within one synchronous cycle() call against a test-driven clock");
+      checkUintEq(decoded.secondary.cycle_period, static_cast<uint32_t>(expectedCyclePeriod[i]),
+                  "cycle_period is EXACTLY this cycle's own clock advance since the previous "
+                  "cycle() call's cycleStart -- proves the subtraction, not a hardcoded constant");
+      ++secondaryFramesChecked;
+    }
+  }
+
+  checkTrue(secondaryFramesChecked >= 2,
+            "at least two secondary frames captured across this run, each independently "
+            "carrying an exact, distinguishable cycle_period");
+}
+
 }  // namespace
 
 int main() {
@@ -1837,6 +1910,8 @@ int main() {
 
   scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists();
   scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression();
+
+  scenarioSecondaryFrameCarriesExactLoopTimingFields();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::RobotLoop scenarios passed\n");

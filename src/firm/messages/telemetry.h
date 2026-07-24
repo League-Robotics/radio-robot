@@ -82,6 +82,8 @@ struct TelemetrySecondary {
     uint32_t glitch_right = 0;
     uint32_t ts_left = 0;
     uint32_t ts_right = 0;
+    uint32_t cycle_busy = 0;
+    uint32_t cycle_period = 0;
 
     // --- array / optional-string accessors ---
 };

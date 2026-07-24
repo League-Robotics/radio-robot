@@ -242,6 +242,7 @@ def encode_telemetry_secondary(binary: pathlib.Path, **fields) -> bytes | None:
     order = (
         "now", "has_cmd_vel", "cmd_vel_left", "cmd_vel_right", "acc_left", "acc_right",
         "glitch_left", "glitch_right", "ts_left", "ts_right",
+        "cycle_busy", "cycle_period",  # 122-003, ADDITIVE (fields 11/12)
     )
     unknown = set(fields) - set(order)
     assert not unknown, f"unknown TelemetrySecondary field(s): {unknown}"

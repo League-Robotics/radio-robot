@@ -309,6 +309,12 @@ bool decodeTelemetrySecondaryMessage(const uint8_t* buf, size_t len, msg::Teleme
       case 10:
         if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->ts_right)) return false;
         break;
+      case 11:  // cycle_busy (122-003, interim placement on this frame)
+        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->cycle_busy)) return false;
+        break;
+      case 12:  // cycle_period (122-003, interim placement on this frame)
+        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->cycle_period)) return false;
+        break;
       default:
         if (!WireRuntime::skipField(buf, len, &pos, wireType)) return false;
         break;

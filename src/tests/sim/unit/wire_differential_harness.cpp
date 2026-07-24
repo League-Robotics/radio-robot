@@ -68,10 +68,12 @@
 //
 //   encode_telemetry_secondary <now> <has_cmd_vel> <cmd_vel_left>
 //     <cmd_vel_right> <acc_left> <acc_right> <glitch_left> <glitch_right>
-//     <ts_left> <ts_right>
+//     <ts_left> <ts_right> <cycle_busy> <cycle_period>
 //     Builds a STANDALONE TelemetrySecondary (Decision 3 -- its own
 //     independently-armored line, not wrapped in ReplyEnvelope, so no
-//     corr_id argument). Unchanged by 115-003.
+//     corr_id argument). Unchanged by 115-003. The trailing 2 args (122-003,
+//     ADDITIVE) are the interim-placement loop-timing fields (fields 11/12
+//     -- see telemetry.proto's own TelemetrySecondary doc comment).
 //     -> "B64 <base64 bytes>" or "ZERO".
 //
 // Float formatting: `%.9g` on both the encode-input parse (strtof) and the
@@ -412,7 +414,7 @@ int cmdEncodeTelemetry(int argc, char** argv) {
 // encode_telemetry_secondary -- STANDALONE TelemetrySecondary (Decision 3 --
 // its own independently-armored line, no ReplyEnvelope wrapper, no corr_id).
 int cmdEncodeTelemetrySecondary(int argc, char** argv) {
-  if (argc < 12) {
+  if (argc < 14) {
     std::printf("USAGE_ERROR\n");
     return 1;
   }
@@ -428,6 +430,8 @@ int cmdEncodeTelemetrySecondary(int argc, char** argv) {
   sec.glitch_right = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
   sec.ts_left = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
   sec.ts_right = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  sec.cycle_busy = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));    // 122-003
+  sec.cycle_period = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));  // 122-003
 
   uint8_t buf[256] = {};
   const uint16_t n = msg::wire::encode(sec, buf, sizeof(buf));

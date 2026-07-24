@@ -537,6 +537,14 @@ void RobotLoop::boot() {
 void RobotLoop::cycle() {
   uint32_t cycleStart = markTime();  // [ms] pace anchor
 
+  // 122-003: a SEPARATE, un-truncated [us] read of the SAME instant
+  // markTime() just anchored, kept only for the loop-timing telemetry
+  // fields below -- markTime()'s own [ms] truncation would hide the
+  // sub-millisecond I2C-stall/comms-burst detail those fields exist to
+  // surface. Read here, at cycle()'s own top, so cycleBusy below measures
+  // from the same starting instant cycleStart already anchors.
+  const uint64_t cycleStartUs = clock_.nowMicros();  // [us]
+
   Cmd cmd;
 
   // 119 ticket 005 (fixes 118-001's straight-leg crab -- see
@@ -660,6 +668,26 @@ void RobotLoop::cycle() {
     // cycle's own emit() call -- "ack rides the next frame," unchanged
     // from before this ticket (see that ack's own comment below).
     updateTlm(cycleStart);
+
+    // 122-003: loop-timing telemetry, staged onto the SECONDARY frame
+    // (interim placement -- telemetry.h's SecondaryFrame doc comment; the
+    // primary frame this ticket originally targeted has no budget left).
+    // Measured HERE, at "frame staging" -- the same instant the primary
+    // frame's own encoder/pose/twist snapshot above is finalized -- NOT the
+    // true end of this cycle's work (odometry/OTOS/MoveQueue-tick/
+    // line-color still run after this point, every cycle, unchanged from
+    // before this ticket). Staged every cycle regardless of whether THIS
+    // cycle's own emit() call below actually transmits the secondary frame
+    // (Telemetry always carries the last-staged snapshot -- telemetry.h's
+    // own setSecondaryFrame() doc comment) -- whichever cycle secondary
+    // next goes out on reports whatever was staged here that cycle.
+    secondaryFrame_.cycleBusy = static_cast<uint32_t>(clock_.nowMicros() - cycleStartUs);  // [us]
+    secondaryFrame_.cyclePeriod =
+        everCycled_ ? static_cast<uint32_t>(cycleStartUs - previousCycleStartUs_) : 0u;  // [us]
+    previousCycleStartUs_ = cycleStartUs;
+    everCycled_ = true;
+    tlm_.setSecondaryFrame(secondaryFrame_);
+
     tlm_.emit(cycleStart);
 
     uint64_t nowUs = clock_.nowMicros();

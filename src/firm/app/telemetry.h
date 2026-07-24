@@ -220,6 +220,22 @@ class Telemetry {
 
   // Secondary-frame snapshot -- mirrors msg::TelemetrySecondary's own
   // has_*/value pairs (no `now` -- emit()'s own argument fills it).
+  //
+  // cycleBusy/cyclePeriod (122-003, telemetry-report-loop-cycle-duration.md)
+  // -- INTERIM PLACEMENT: these loop-timing diagnostics were designed
+  // against the PRIMARY per-cycle Telemetry frame (every cycle would carry
+  // its own timing), but the primary frame has no budget left (it already
+  // sits 1 B under the shared 186-byte envelope budget, and the serial
+  // transport's own CODAL TX-ring ceiling sits tighter still underneath
+  // that -- see telemetry.proto's TelemetrySecondary doc comment for the
+  // full derivation and the two exceptions this ticket threw before the
+  // stakeholder picked this resolution, 2026-07-24). Landing them here
+  // instead means they report the timing of whichever cycle RobotLoop last
+  // staged before THIS secondary frame happened to be the one sent -- a
+  // ~5Hz (kSecondaryPeriod) SAMPLE of per-cycle timing, not a per-cycle
+  // series. Migrates to the primary frame once a future COBS+CRC framing
+  // rework removes the base64-armor expansion that creates the primary
+  // frame's own ceiling (separate, not-yet-scheduled work).
   struct SecondaryFrame {
     bool hasCmdVel = false;
     float cmdVelLeft = 0.0f;   // [mm/s] signed
@@ -230,6 +246,16 @@ class Telemetry {
     uint32_t glitchRight = 0;
     uint32_t tsLeft = 0;   // [ms]
     uint32_t tsRight = 0;  // [ms]
+
+    // cycleStart (RobotLoop::cycle()'s own pace anchor) -> the instant this
+    // struct was staged onto Telemetry, THAT cycle only -- see this
+    // struct's own doc comment above for the interim-placement/~5Hz-sample
+    // caveat.
+    uint32_t cycleBusy = 0;    // [us]
+    // this cycle's own cycleStart minus the PREVIOUS cycle() call's
+    // cycleStart -- 0 on the first-ever cycle() call (no previous cycle to
+    // subtract).
+    uint32_t cyclePeriod = 0;  // [us]
   };
 
   // comms -- primary-frame send path (Comms::sendReply(), ticket 004).

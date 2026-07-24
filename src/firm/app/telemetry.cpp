@@ -182,6 +182,11 @@ void Telemetry::emitSecondary(uint32_t now) {
   sec.glitch_right = secondaryFrame_.glitchRight;
   sec.ts_left = secondaryFrame_.tsLeft;
   sec.ts_right = secondaryFrame_.tsRight;
+  // 122-003 (interim placement -- see SecondaryFrame's own doc comment,
+  // telemetry.h): the ~5Hz sample of RobotLoop's own last-staged loop-timing
+  // pair.
+  sec.cycle_busy = secondaryFrame_.cycleBusy;
+  sec.cycle_period = secondaryFrame_.cyclePeriod;
 
   // Own top-level armored payload -- same encode+armor sequence as
   // Comms::sendReply(), reused here via

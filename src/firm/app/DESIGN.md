@@ -600,6 +600,30 @@ unconditional "primary wins ties" rule starves secondary to 0Hz. The
 alternation costs at most one primary frame delayed by one cycle roughly
 once per secondary period; a non-tied call is unaffected.
 
+**`cycle_busy`/`cycle_period` loop-timing fields (122-003, ADDITIVE —
+`TelemetrySecondary` fields 11/12).** Landed on the SECONDARY frame,
+INTERIM: the issue that motivated these
+(`telemetry-report-loop-cycle-duration.md`) originally targeted the
+PRIMARY per-cycle frame, but `msg::Telemetry`'s own `ReplyEnvelope`-wrapped
+worst case already sits 1 B under the shared 186-byte envelope budget, and
+the serial transport carries a second, tighter, independent ceiling
+underneath that budget (CODAL's `Serial` TX ring buffer caps at 254 usable
+bytes; the current 186-byte budget's armored+CRLF wire line already
+consumes 252 of those) — raising the primary budget at all guarantees
+mid-line truncation on serial. `TelemetrySecondary`'s own worst case
+(`kTelemetrySecondaryMaxEncodedSize`, generated — 60 B as of this ticket)
+has no such problem, so the two fields land here instead, staged fresh
+every cycle by `RobotLoop::cycle()`'s own `previousCycleStartUs_`/
+`everCycled_` bookkeeping (independent of `markTime()`'s `[ms]`-truncated
+`cycleStart` — a separate `clock_.nowMicros()` read gives the `[us]`
+resolution these diagnostics need). Consequence of secondary's own ~5Hz
+cadence: these report ONE cycle's timing (whichever cycle RobotLoop last
+staged before secondary happened to be the frame `emit()` sent), not a
+per-cycle series like every other primary-frame field. Migrates to the
+primary frame once a future COBS+CRC framing rework removes the
+base64-armor expansion that creates the primary frame's own ceiling
+(tracked separately, not scheduled this sprint).
+
 **Telemetry's ack ring (120 ticket 001, LANDED — replaces the 115-005
 single-slot design, which itself had replaced the original depth-3
 `AckEntry` ring).** Bench measurement at the real 40ms cycle / ~15Hz host
