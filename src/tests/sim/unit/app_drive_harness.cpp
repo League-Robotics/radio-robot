@@ -51,7 +51,7 @@
 #include "devices/device_config.h"
 #include "devices/device_types.h"
 #include "devices/nezha_motor.h"
-#include "kinematics/body_kinematics.h"
+#include "motion/body_kinematics.h"
 #include "scripted_i2c_hook.h"
 #include "sim_plant.h"
 

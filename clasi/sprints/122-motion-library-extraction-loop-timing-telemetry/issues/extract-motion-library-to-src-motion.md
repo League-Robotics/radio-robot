@@ -1,11 +1,15 @@
 ---
-status: pending
+status: in-progress
 filed: 2026-07-24
 filed_by: team-lead (stakeholder restructuring directive)
 related:
 - firmware-base-hardening-bounded-wheel-moves-and-wheel-observer.md
 - replan-sprints-122-plus-to-close-goal-exact-tours.md
-tickets: []
+tickets:
+- 122-001
+- 122-002
+- 122-004
+sprint: '122'
 ---
 
 # Extract the motion library: move all motion-control code from src/firm to src/motion

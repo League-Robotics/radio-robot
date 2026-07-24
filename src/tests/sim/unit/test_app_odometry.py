@@ -7,7 +7,7 @@ implementations it needs (``src/firm/app/odometry.cpp``,
 implementation -- plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
 physics dependencies, ``src/firm/devices/velocity_pid.cpp``,
 ``src/firm/devices/nezha_motor.cpp``, ``src/firm/devices/otos.cpp``,
-``src/firm/kinematics/body_kinematics.cpp``) with ``-DHOST_BUILD``, against the
+``src/motion/body_kinematics.cpp``) with ``-DHOST_BUILD``, against the
 SAME headers every ARM build compiles. Mirrors ``test_app_drive.py``'s exact
 shape: compile with the system C++ compiler, run the resulting binary,
 assert it exits 0.
@@ -40,7 +40,7 @@ _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 _VELOCITY_PID_SRC = _SOURCE_DIR / "devices" / "velocity_pid.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "devices" / "nezha_motor.cpp"
 _OTOS_SRC = _SOURCE_DIR / "devices" / "otos.cpp"
-_BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
 
 # Matches every other src/tests/sim/unit harness's own compiled standard.
 _CXX_STANDARD = "c++20"
@@ -88,6 +88,8 @@ def test_app_odometry_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_REPO_ROOT / "src"),
             "-I",
             str(_INFRA_SIM_DIR),
             "-I",

@@ -3,7 +3,7 @@
 // timing-schedule rationale.
 #include "app/robot_loop.h"
 
-#include "kinematics/body_kinematics.h"
+#include "motion/body_kinematics.h"
 #include "messages/envelope.h"
 
 namespace App {

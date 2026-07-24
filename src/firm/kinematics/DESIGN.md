@@ -8,6 +8,19 @@ root: ../../../docs/design/design.md
 
 ---
 
+> **IN-FLIGHT RELOCATION (sprint 122 ticket 001, 2026-07-24):**
+> `BodyKinematics` has been MOVED to `src/motion/body_kinematics.{h,cpp}`
+> — a new SIBLING tree of `src/firm` (sprint 122's two-layer base/motion
+> split; see that sprint's `sprint.md`), flat (no nested `kinematics/`
+> subdirectory under `src/motion`). This directory (`src/firm/
+> kinematics/`) now holds only this DESIGN.md, no source. The math/
+> rationale below is unchanged and still authoritative — kept here rather
+> than duplicated because ticket 122-004 (design-doc reconciliation) is
+> the ticket that finalizes `src/motion/DESIGN.md` (currently a stub) and
+> retires or redirects this file for good; until then, treat this file as
+> the historical reference and `src/motion/DESIGN.md` as the current
+> orientation for the relocated tree.
+
 ## 1. Purpose
 
 `BodyKinematics` is the differential-drive math: the (v, ω) ↔ (vL, vR)

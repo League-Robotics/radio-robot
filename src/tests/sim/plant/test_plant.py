@@ -8,7 +8,7 @@ physics feed; ticket 108-004 migrated this harness onto it, replacing the
 deleted scripted-FIFO ``Devices::I2CBus`` fake ticket 108-001 removed), and
 the HOST_BUILD Devices/App/Kinematics sources they exercise
 (``src/firm/devices/velocity_pid.cpp``, ``src/firm/devices/nezha_motor.cpp``,
-``src/firm/devices/otos.cpp``, ``src/firm/kinematics/body_kinematics.cpp``,
+``src/firm/devices/otos.cpp``, ``src/motion/body_kinematics.cpp``,
 ``src/firm/app/odometry.cpp``) with ``-DHOST_BUILD``, against the SAME headers
 every ARM build compiles. Mirrors ``test_app_odometry.py``'s exact shape:
 compile with the system C++ compiler, run the resulting binary, assert it
@@ -38,7 +38,7 @@ _ODOMETRY_SRC = _SOURCE_DIR / "app" / "odometry.cpp"
 _VELOCITY_PID_SRC = _SOURCE_DIR / "devices" / "velocity_pid.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "devices" / "nezha_motor.cpp"
 _OTOS_SRC = _SOURCE_DIR / "devices" / "otos.cpp"
-_BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
 
 # Matches every other src/tests/sim/unit harness's own compiled standard.
 _CXX_STANDARD = "c++20"
@@ -86,6 +86,8 @@ def test_plant_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_REPO_ROOT / "src"),
             "-I",
             str(_PLANT_DIR),
             "-I",

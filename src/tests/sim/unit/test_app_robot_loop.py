@@ -48,8 +48,8 @@ _TELEMETRY_SRC = _SOURCE_DIR / "app" / "telemetry.cpp"
 # 116-006 (MOVE protocol cutover): App::MoveQueue + Motion::StopCondition
 # replace the deleted App::Deadman.
 _MOVE_QUEUE_SRC = _SOURCE_DIR / "app" / "move_queue.cpp"
-_STOP_CONDITION_SRC = _SOURCE_DIR / "motion" / "stop_condition.cpp"
-_VELOCITY_SHAPER_SRC = _SOURCE_DIR / "motion" / "velocity_shaper.cpp"
+_STOP_CONDITION_SRC = _REPO_ROOT / "src" / "motion" / "stop_condition.cpp"
+_VELOCITY_SHAPER_SRC = _REPO_ROOT / "src" / "motion" / "velocity_shaper.cpp"
 _DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
 _ODOMETRY_SRC = _SOURCE_DIR / "app" / "odometry.cpp"
 # 117 ticket 003: App::StateEstimator, threaded through RobotLoop's own
@@ -72,7 +72,7 @@ _CLOCK_HOST_FAKE_SRC = _INFRA_SIM_DIR / "sim_clock.cpp"
 # its pure serializeSnapshot()/Config::TuningStore seam directly.
 _PERSISTED_TUNING_SRC = _SOURCE_DIR / "config" / "persisted_tuning.cpp"
 
-_BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
 
 _WIRE_SRC = _SOURCE_DIR / "messages" / "wire.cpp"
 _WIRE_RUNTIME_SRC = _SOURCE_DIR / "messages" / "wire_runtime.cpp"
@@ -188,6 +188,8 @@ def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_REPO_ROOT / "src"),
             "-I",
             str(_TESTS_SIM_DIR),
             "-I",

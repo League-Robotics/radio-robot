@@ -1,5 +1,5 @@
 // motion_velocity_shaper_harness.cpp -- off-hardware acceptance proof for
-// Motion::VelocityShaper (src/firm/motion/velocity_shaper.{h,cpp}),
+// Motion::VelocityShaper (src/motion/velocity_shaper.{h,cpp}),
 // decel-into-the-goal campaign (follow-on to
 // clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md), jerk-
 // limited S-curve stage.

@@ -36,7 +36,7 @@ _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "devices_sensors_harnes
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
-_BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
 _COLOR_SENSOR_SRC = _DEVICES_DIR / "color_sensor.cpp"
 _LINE_SENSOR_SRC = _DEVICES_DIR / "line_sensor.cpp"
 
@@ -91,6 +91,8 @@ def test_devices_sensors_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_REPO_ROOT / "src"),
             "-I",
             str(_INFRA_SIM_DIR),
             "-I",

@@ -23,6 +23,10 @@ get_filename_component(REPO_ROOT "${CMAKE_SOURCE_DIR}/../.." ABSOLUTE)
 set(SOURCE_DIR "${REPO_ROOT}/src/firm")
 set(SUPPORT_DIR "${REPO_ROOT}/src/tests/sim/support")
 set(PLANT_DIR "${REPO_ROOT}/src/tests/sim/plant")
+# 122-001 (motion-library extraction): src/motion is a SIBLING of src/firm,
+# not a child (sprint 122 architecture, Design Rationale Decision 3) --
+# MOTION_DIR is therefore its own path, not SOURCE_DIR-relative.
+set(MOTION_DIR "${REPO_ROOT}/src/motion")
 
 # ---------------------------------------------------------------------------
 # Explicit source list -- no glob-then-filter. Mirrors
@@ -39,13 +43,17 @@ set(PLANT_DIR "${REPO_ROOT}/src/tests/sim/plant")
 #                                 rebuild's whole App:: graph; 116-006:
 #                                 App::MoveQueue replaces the deleted
 #                                 App::Deadman)
-#   motion/stop_condition.cpp -- Motion::StopCondition (116-002), the
+#   src/motion/stop_condition.cpp -- Motion::StopCondition (116-002), the
 #                                 per-Move stop-condition object MoveQueue
-#                                 owns and drives
-#   motion/velocity_shaper.cpp -- Motion::VelocityShaper (decel-into-the-
+#                                 owns and drives. Moved out of SOURCE_DIR
+#                                 (122-001: src/motion is now a SIBLING of
+#                                 src/firm, not a child -- see MOTION_DIR
+#                                 above) -- linked in unchanged otherwise.
+#   src/motion/velocity_shaper.cpp -- Motion::VelocityShaper (decel-into-the-
 #                                 goal campaign), the pure per-tick
 #                                 commanded-speed shaping function MoveQueue
-#                                 calls every Continue tick
+#                                 calls every Continue tick. Also under
+#                                 MOTION_DIR now (122-001).
 #   devices/velocity_pid.cpp, devices/nezha_motor.cpp, devices/otos.cpp,
 #   devices/color_sensor.cpp, devices/line_sensor.cpp
 #                              -- the device leaves SimPlant answers wire
@@ -53,8 +61,11 @@ set(PLANT_DIR "${REPO_ROOT}/src/tests/sim/plant")
 #   messages/wire.cpp, messages/wire_runtime.cpp
 #                              -- the generated + hand-written codec
 #                                 primitives
-#   kinematics/body_kinematics.cpp
-#                              -- pure math, no CODAL deps
+#   src/motion/body_kinematics.cpp
+#                              -- pure math, no CODAL deps. Moved out of
+#                                 SOURCE_DIR/kinematics/ (122-001: that
+#                                 directory is retired, folded flat into
+#                                 src/motion) -- under MOTION_DIR now.
 #   sim_ctypes.cpp             -- this ticket's C ABI (108-005)
 #   sim_plant.cpp               -- ticket 108-002's SimPlant (tests/_infra/sim/)
 #   sim_clock.cpp                -- ticket 108-010's TestSim::SimClock/
@@ -98,10 +109,12 @@ set(APP_SOURCES
 # owns and drives one Motion::StopCondition per active Move; this TU must
 # link into the host lib too. motion/velocity_shaper.cpp (decel-into-the-
 # goal campaign) -- MoveQueue's own per-tick commanded-speed shaping,
-# the SAME "MoveQueue links it" reasoning as stop_condition.cpp.
+# the SAME "MoveQueue links it" reasoning as stop_condition.cpp. Both now
+# live under MOTION_DIR (122-001: src/motion, a sibling of src/firm), not
+# SOURCE_DIR -- repointed here, unchanged everywhere else.
 set(MOTION_SOURCES
-    "${SOURCE_DIR}/motion/stop_condition.cpp"
-    "${SOURCE_DIR}/motion/velocity_shaper.cpp"
+    "${MOTION_DIR}/stop_condition.cpp"
+    "${MOTION_DIR}/velocity_shaper.cpp"
 )
 set(DEVICE_SOURCES
     "${SOURCE_DIR}/devices/velocity_pid.cpp"
@@ -127,8 +140,13 @@ set(MESSAGE_SOURCES
     "${SOURCE_DIR}/messages/wire.cpp"
     "${SOURCE_DIR}/messages/wire_runtime.cpp"
 )
+# body_kinematics.cpp also moved under MOTION_DIR (122-001) -- it lived at
+# SOURCE_DIR/kinematics/ (a child of src/firm) before this ticket; the
+# kinematics/ directory itself is retired (folded flat into src/motion).
+# KINEMATICS_SOURCES keeps its own variable name (nothing downstream needs
+# renaming to know it's now motion-owned).
 set(KINEMATICS_SOURCES
-    "${SOURCE_DIR}/kinematics/body_kinematics.cpp"
+    "${MOTION_DIR}/body_kinematics.cpp"
 )
 set(SIM_SOURCES
     "${CMAKE_SOURCE_DIR}/sim_ctypes.cpp"
@@ -157,9 +175,17 @@ add_library(firmware_host SHARED
 # bare-filename includes (fake_transport.h, wire_test_codec.h,
 # {wheel,otos}_plant.h, sim_plant.h/sim_harness.h) the way
 # test_straight_twist.py's three additional -I flags do.
+#
+# "${REPO_ROOT}/src" (122-001): src/motion is now a SIBLING of src/firm, not
+# a child -- a qualified `#include "motion/stop_condition.h"` (the SAME
+# text these headers used when they lived under src/firm/motion/) resolves
+# via THIS root, since "motion" is a top-level dir under src/ now instead
+# of a child of SOURCE_DIR. Zero #include text churn in src/firm callers
+# (app/move_queue.h etc.) that already said `#include "motion/...h"`.
 target_include_directories(firmware_host PRIVATE
     "${SOURCE_DIR}"
     "${SUPPORT_DIR}"
     "${PLANT_DIR}"
     "${CMAKE_SOURCE_DIR}"
+    "${REPO_ROOT}/src"
 )

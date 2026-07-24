@@ -1,6 +1,6 @@
 // motion_stop_condition_harness.cpp -- off-hardware acceptance harness for
 // ticket 116-002 (SUC-050/SUC-051/SUC-052/SUC-054), Motion::StopCondition
-// (src/firm/motion/stop_condition.{h,cpp}).
+// (src/motion/stop_condition.{h,cpp}).
 //
 // Unlike app_deadman_harness.cpp (which needs TestSim::SimClock because
 // App::Deadman holds a Devices::Clock& and reads nowMicros() itself),

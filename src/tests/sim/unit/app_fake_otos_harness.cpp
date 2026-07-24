@@ -18,7 +18,7 @@
 #include "app/fake_otos.h"
 #include "app/odometry.h"
 #include "devices/motor.h"
-#include "kinematics/body_kinematics.h"
+#include "motion/body_kinematics.h"
 
 namespace {
 

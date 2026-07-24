@@ -6,7 +6,7 @@ implementations it needs (``src/firm/app/drive.cpp``,
 ``src/sim/sim_plant.cpp`` -- ticket 108-002's real Devices::I2CBus
 implementation -- plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
 physics dependencies, ``src/firm/devices/velocity_pid.cpp``,
-``src/firm/devices/nezha_motor.cpp``, ``src/firm/kinematics/body_kinematics.cpp``)
+``src/firm/devices/nezha_motor.cpp``, ``src/motion/body_kinematics.cpp``)
 with ``-DHOST_BUILD``, against the SAME headers every ARM build compiles.
 Mirrors ``test_devices_motor.py``/``test_app_telemetry.py``'s exact shape:
 compile with the system C++ compiler, run the resulting binary, assert it
@@ -39,7 +39,7 @@ _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 _VELOCITY_PID_SRC = _SOURCE_DIR / "devices" / "velocity_pid.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "devices" / "nezha_motor.cpp"
-_BODY_KINEMATICS_SRC = _SOURCE_DIR / "kinematics" / "body_kinematics.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
 
 # Matches every other src/tests/sim/unit harness's own compiled standard.
 _CXX_STANDARD = "c++20"
@@ -86,6 +86,8 @@ def test_app_drive_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_REPO_ROOT / "src"),
             "-I",
             str(_INFRA_SIM_DIR),
             "-I",

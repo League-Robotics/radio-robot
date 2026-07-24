@@ -1,10 +1,10 @@
 """Off-hardware acceptance proof for ``Motion::VelocityShaper``
-(``src/firm/motion/velocity_shaper.{h,cpp}``), decel-into-the-goal
+(``src/motion/velocity_shaper.{h,cpp}``), decel-into-the-goal
 campaign (follow-on to
 ``clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md``).
 
 Compiles ``motion_velocity_shaper_harness.cpp`` together with
-``src/firm/motion/velocity_shaper.cpp`` ONLY -- no ``TestSim::SimClock``,
+``src/motion/velocity_shaper.cpp`` ONLY -- no ``TestSim::SimClock``,
 no ``App::``/``Devices::`` fakes of any kind, mirroring
 ``test_motion_stop_condition.py``'s own shape exactly (same compiler
 discovery, same ``-std=gnu++20``/``-DHOST_BUILD`` flags, same
@@ -25,7 +25,7 @@ import pytest
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "motion_velocity_shaper_harness.cpp"
-_VELOCITY_SHAPER_SRC = _SOURCE_DIR / "motion" / "velocity_shaper.cpp"
+_VELOCITY_SHAPER_SRC = _REPO_ROOT / "src" / "motion" / "velocity_shaper.cpp"
 
 # Matches every other src/tests/sim/unit harness's own compiled standard --
 # the project's actual compiled standard is -std=gnu++20.
@@ -62,6 +62,8 @@ def test_motion_velocity_shaper_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_REPO_ROOT / "src"),
             "-o",
             str(binary),
             str(_HARNESS_SRC),

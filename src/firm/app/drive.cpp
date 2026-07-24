@@ -1,6 +1,6 @@
 #include "app/drive.h"
 
-#include "kinematics/body_kinematics.h"
+#include "motion/body_kinematics.h"
 
 namespace App {
 
