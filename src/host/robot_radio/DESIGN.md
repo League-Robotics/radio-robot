@@ -170,6 +170,28 @@ themselves were untouched by either move — only TOURS (this module)
 changed path; they remain the dormant half of `planner/` (see the
 `planner/` row above).
 
+**`testgui/traces.py`'s encoder dead-reckoner: integrator-vs-append split
+(121-001).** `TraceModel.feed()`'s host-side `EncoderDeadReckoner` fallback
+(097, used because binary telemetry carries no wire `encpose` field at all)
+used to share ONE gate — a single `if frame.active is False: return` — for
+two different jobs: (1) advancing the O(1) integrator state from
+`frame.enc`, and (2) deciding whether to append a new point to the
+`encoder` polyline. That coupling starved the integrator of a completed
+motion's tail (its taper end, final control cycle, and mechanical coast —
+real wheel travel that keeps arriving in `frame.enc` for a few more frames
+after `frame.active` drops `False`), observed on the bench as `encpose`
+running ~10 deg short per 360 deg turn even though `enc`/`pose`/`otos` all
+read correctly. The fix splits the two jobs: the integrator
+(`EncoderDeadReckoner.update()` / `TraceModel.last_encpose`) now runs on
+EVERY frame carrying `enc`, unconditionally; only the trace-list append
+(`_feed_encpose(..., append=...)`, gated by `frame.active`/the idle-epsilon
+dead-band) is conditional — preserving the original idle-trace-growth
+guard exactly. `otos`/`fused` did not need the same split: both diff an
+already-absolute firmware pose against a fixed baseline rather than
+integrating a per-step delta themselves, so skipping their append on an
+inactive frame loses no information the way skipping an integrator step
+does — their gating and baseline semantics are unchanged.
+
 ## 5. Interfaces
 
 ### Exposes

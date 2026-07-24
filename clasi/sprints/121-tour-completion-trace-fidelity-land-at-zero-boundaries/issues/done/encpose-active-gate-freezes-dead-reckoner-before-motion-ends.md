@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 filed: 2026-07-23
 filed_by: "team-lead (stakeholder session \u2014 encpose 349.1 vs pose 359.7 on a\
   \ 360deg turn)"

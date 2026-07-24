@@ -365,44 +365,61 @@ class TraceModel:
         anchor-rotation machinery unchanged. A real firmware ``encpose``
         (if a future build ever adds it back) always takes priority.
 
-        Motion-state gate (``frame.active`` -- OOP sim-motor-state fix)
+        Motion-state gate (``frame.active`` -- OOP sim-motor-state fix,
+        refined 121-001)
         -----------------------------------------------------------------
         ``frame.active`` (``bb.drivetrain.busy`` -- TRUE while a motion is
         in progress, FALSE once it completes) is the authoritative "is the
         robot actually moving" signal -- stronger than the
         ``_TRACE_IDLE_EPSILON_CM`` dead-band above, which only filters
-        SMALL jitter and still lets a stopped motion's point COUNT climb
-        forever (each below-threshold call is a no-op append, but the
-        canvas/consumer code that previously counted "did feed() run"
-        couldn't tell rest-jitter from real motion). When a frame
-        EXPLICITLY reports ``active is False``, this method returns
-        immediately without touching any trace list at all -- a finished
-        motion's point count freezes, full stop. ``active is None``
-        (older/pre-fault frames that never set the field) keeps prior
-        behavior -- fall through to the epsilon-gated append below, since
-        "unknown" must not be treated the same as a confirmed idle.
+        SMALL jitter and would otherwise let a stopped motion's point
+        COUNT climb forever off idle rest-dither alone. But the gate
+        applies ONLY to the trace-point APPEND, never to the
+        ``EncoderDeadReckoner`` integrator: a completed motion's taper
+        end, its final control cycle, and the plant's mechanical coast are
+        all REAL wheel travel that keeps arriving in ``frame.enc`` for a
+        few more frames after ``frame.active`` drops to ``False``
+        (121-001,
+        ``encpose-active-gate-freezes-dead-reckoner-before-motion-ends.md``).
+        Returning early here used to starve the integrator of that tail --
+        observed on the bench as ``encpose`` running ~10 deg short per
+        360 deg turn -- because a frame this method never reached also
+        never reached ``_dead_reckoner.update()``. Below, the integrator
+        (``_dead_reckoner.update()`` / ``last_encpose``) runs
+        UNCONDITIONALLY on every frame carrying ``enc``; only the
+        trace-list append (``_feed_encpose(..., append=...)``, and the
+        ``_feed_otos``/``_feed_fused`` calls below) is gated on
+        ``active is not False`` -- so the idle-trace-growth problem the
+        gate was added to solve stays solved (only the polylines' growth
+        freezes; the reckoner is O(1) state, not a growing list).
+        ``active is None`` (older/pre-fault frames that never set the
+        field) still appends, same as before -- "unknown" must not be
+        treated the same as a confirmed idle.
         """
-        if frame.active is False:
-            return
-
         if not self._anchor_set:
             self.anchor(0.0, 0.0, 0.0)
 
+        append = frame.active is not False  # None (unknown) still appends
+
         # --- encoder-only dead-reckoned pose ---
+        # The integrator runs unconditionally (121-001) -- see the
+        # "Motion-state gate" note above; only the trace-point append
+        # inside _feed_encpose() is gated by `append`.
         encpose = frame.encpose
         if encpose is None and frame.enc is not None:
             encpose = self._dead_reckoner.update(*frame.enc)
         if encpose is not None:
             self.last_encpose = encpose
-            self._feed_encpose(encpose)
+            self._feed_encpose(encpose, append=append)
 
-        # --- OTOS odometry ---
-        if frame.otos is not None:
-            self._feed_otos(frame.otos)
+        if append:
+            # --- OTOS odometry ---
+            if frame.otos is not None:
+                self._feed_otos(frame.otos)
 
-        # --- fused / EKF pose ---
-        if frame.pose is not None:
-            self._feed_fused(frame.pose)
+            # --- fused / EKF pose ---
+            if frame.pose is not None:
+                self._feed_fused(frame.pose)
 
     def feed_truth(self, x_cm: float, y_cm: float, yaw_rad: float) -> None:
         """Append a camera ground-truth pose to the ``camera`` trace.
@@ -516,7 +533,7 @@ class TraceModel:
                 return
         trace.append(point)
 
-    def _feed_encpose(self, encpose: tuple[int, int, int]) -> None:
+    def _feed_encpose(self, encpose: tuple[int, int, int], append: bool = True) -> None:
         """Compute encoder-only pose displacement and append to the encoder trace.
 
         Structurally identical to ``_feed_otos``/``_feed_fused`` (068-003):
@@ -541,19 +558,32 @@ class TraceModel:
         encpose:
             (x, y, heading) in (mm, mm, cdeg) absolute encoder-only pose,
             firmware ``encpose`` or the host dead-reckoning fallback.
+        append:
+            Whether to append a point to the ``encoder`` trace on this
+            call (121-001) — ``feed()`` passes ``False`` for a frame whose
+            ``active`` gate says "don't grow the polyline" (a motion tail
+            or a genuinely idle connection). The baseline and
+            ``encoder_yaw`` bookkeeping below always run regardless of
+            this flag, so a non-appending call still leaves both correct
+            for the next call that DOES append. Defaults to ``True`` so
+            any other caller (e.g. a test driving this method directly)
+            keeps the pre-121-001 unconditional-append behavior.
         """
         if self._encpose_baseline is None:
             self._encpose_baseline = encpose
-            self.encoder.append(self._tw(0.0, 0.0))
+            if append:
+                self.encoder.append(self._tw(0.0, 0.0))
             self.encoder_yaw = self._anchor_h
             return
 
         dx_cm = (encpose[0] - self._encpose_baseline[0]) / 10.0
         dy_cm = (encpose[1] - self._encpose_baseline[1]) / 10.0
         rot = self._anchor_h - math.radians(self._encpose_baseline[2] / 100.0)
-        self._append_if_moved(self.encoder, self._rw(dx_cm, dy_cm, rot))
+        if append:
+            self._append_if_moved(self.encoder, self._rw(dx_cm, dy_cm, rot))
         # encoder_yaw always tracks the latest heading, even on a frame
-        # whose position was too small to append (idle jitter) -- it's a
+        # whose position was too small to append (idle jitter) or whose
+        # append was gated off entirely (a motion tail, 121-001) -- it's a
         # scalar (the canvas avatar's heading source), not a growing list,
         # so there's no "grows forever" concern gating it would address.
         self.encoder_yaw = rot + math.radians(encpose[2] / 100.0)
