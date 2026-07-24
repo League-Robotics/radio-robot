@@ -1,4 +1,4 @@
-# Recordings (`src/recordings`)
+# Recordings (`data/recordings`)
 
 **Owner:** Eric Busboom · **Last reviewed:** 2026-07-21 · **Status:** stable
 
@@ -6,7 +6,7 @@
 
 ## 1. Purpose
 
-`src/recordings/` holds recorded telemetry logs (currently just
+`data/recordings/` holds recorded telemetry logs (currently just
 `latest.jsonl`) written by host-side tooling during bench/playfield runs.
 It has **no architecturally significant content** — it is a data
 directory, not source: a place captured JSONL telemetry lands, not code
@@ -21,9 +21,9 @@ independent of which tool wrote it.
 
 - **`latest.jsonl`** — the most recent recorded telemetry stream (one
   JSON object per line), written by whichever host-side capture tool ran
-  last (see [`../host/robot_radio/DESIGN.md`](../host/robot_radio/DESIGN.md)
+  last (see [`../../src/host/robot_radio/DESIGN.md`](../../src/host/robot_radio/DESIGN.md)
   for the writer(s) — e.g. `tlm_log.py` in
-  [`../tests/DESIGN.md`](../tests/DESIGN.md)'s `bench/` tooling).
+  [`../../src/tests/DESIGN.md`](../../src/tests/DESIGN.md)'s `bench/` tooling).
 
 ### Consumes
 

@@ -107,7 +107,6 @@ outside this repository entirely (see §4's last paragraph).
 |---|---|
 | [`src/archive/`](../../src/archive/DESIGN.md) | Parked pre-rebuild trees and one-off historical artifacts. Never imported by anything live. |
 | [`src/libraries/`](../../src/libraries/DESIGN.md) | The vendored CODAL SDK — entirely `.gitignore`d, fetched by build tooling, zero project-authored content. |
-| [`src/recordings/`](../../src/recordings/DESIGN.md) | Recorded telemetry JSONL output — a data directory, not source. |
 | `src/vendor` | A symlink to an unrelated, external, actively-developed project (`/Volumes/Proj/proj/league-projects/scratch/radio-robot/vendor`) — **not documented here** for the reason given in §4; never written to by this project's tooling. |
 
 ## 3. Global Conventions
@@ -197,13 +196,13 @@ this cleanly: their real children (`app`/`com`/`config`/`devices`/
 `kinematics`/`messages`/`types` under `src/firm`; `robot_radio` under
 `src/host`) become the one-level-down subsystems the validator expects
 — matching the actual doc placement exactly — while `src/vendor`,
-`src/archive`, `src/libraries`, `src/protos`, `src/recordings`,
+`src/archive`, `src/libraries`, `src/protos`,
 `src/scripts`, `src/sim`, `src/tests`, and `src/utils` never enter the
 enumeration at all, not even as a required stub. Most of those trees
 still have real, current `DESIGN.md` files (§2's "Other source trees"
 table) — they are simply unvalidated-but-real documentation, kept honest
-by hand rather than by the mechanical gate. `src/archive`,
-`src/libraries`, and `src/recordings` got a short, honest "no
+by hand rather than by the mechanical gate. `src/archive` and
+`src/libraries` got a short, honest "no
 architecturally significant content" doc for the same reason (§2's last
 table) — `src/vendor` alone was left undocumented, because writing even
 a one-line stub there means writing into that other, unrelated
