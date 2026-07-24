@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 filed: 2026-07-23
 filed_by: team-lead (stakeholder bug report, /issue during sprint 120 execution)
 related:

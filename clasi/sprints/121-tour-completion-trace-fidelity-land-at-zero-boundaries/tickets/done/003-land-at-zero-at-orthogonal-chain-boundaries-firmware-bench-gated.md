@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Land at zero at orthogonal chain boundaries (firmware; bench-gated)
-status: in-progress
+status: done
 use-cases:
 - SUC-074
 depends-on: []

@@ -2,7 +2,7 @@
 id: '002'
 title: 'Tour final-leg hang: root-cause, then make the tour runner consume the ack
   ring'
-status: in-progress
+status: done
 use-cases:
 - SUC-072
 depends-on: []
