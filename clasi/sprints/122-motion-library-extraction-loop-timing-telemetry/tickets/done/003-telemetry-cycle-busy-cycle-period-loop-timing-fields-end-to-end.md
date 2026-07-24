@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: 'Telemetry: cycle_busy/cycle_period loop-timing fields end to end'
-status: in-progress
+status: done
 use-cases:
 - SUC-003
 depends-on:
@@ -252,3 +252,82 @@ gains a line noting the two new fields (folded into ticket 004's broader
 reconciliation pass if that lands after this ticket in execution, or
 added directly here if simpler — either is acceptable, just don't leave
 the frame's documented field list stale).
+
+## Completion Notes (2026-07-24, recovery from exception)
+
+**Recovery**: ticket was in `exception` (twice-thrown — see the two
+`exception:` blocks in this file's frontmatter for the full primary-frame
+budget/serial-ceiling derivation). Recovered `exception` -> `in-progress`
+per the stakeholder's 2026-07-24 resolution and implemented against that
+resolution, not either prior exception's own (rejected) proposed fix.
+
+**Placement + why**: `cycle_busy`/`cycle_period` land on `TelemetrySecondary`
+(fields 11, 12), NOT the primary per-cycle `Telemetry` frame this ticket
+originally targeted. The primary frame has no room: its `ReplyEnvelope`-
+wrapped worst case already sits 1 B under the shared 186-byte envelope
+budget, and — the fact the ticket's second exception surfaced — the serial
+transport carries a SECOND, tighter, independent ceiling underneath that
+budget: CODAL's `Serial` TX ring buffer (`setTxBufferSize(uint8_t)`) caps
+at 254 usable bytes, and the current 186-byte budget's armored+CRLF wire
+line already consumes 252 of those (2 B headroom). Raising the primary
+budget at all crosses a base64 3-byte encoding boundary (+4 encoded bytes
+minimum), guaranteeing mid-line truncation on every over-budget primary
+frame sent over serial. `TelemetrySecondary` has no such problem —
+`kTelemetrySecondaryMaxEncodedSize` moved 52 -> 60 B, still ~126 B under
+the 186 cap.
+
+**Interim-ness + follow-up**: this placement is explicitly interim. A
+future COBS+CRC framing rework (separate, not-yet-scheduled work) removes
+the base64-armor 33% expansion that creates the primary frame's own
+ceiling; once that lands, these two fields migrate back to the primary
+per-cycle `Telemetry` frame, restoring true per-cycle (not ~5Hz-sampled)
+reporting. Documented in code at: `telemetry.proto`'s `TelemetrySecondary`
+doc comment, `telemetry.h`'s `SecondaryFrame` doc comment,
+`robot_loop.cpp`'s staging-site comment, and `app/DESIGN.md`'s telemetry
+section.
+
+**pytest counts**: baseline 1407 passed / 2 skipped / 9 xfailed / 2
+xpassed. After this ticket: IDENTICAL — 1407 passed / 2 skipped / 9
+xfailed / 2 xpassed (verified twice, before and after the
+`test_field_numbers_match_pb2_descriptors_telemetry` fix below). The
+ticket's own "expect 1408 passed" projection assumed a new sim test would
+be a freshly-collected pytest item; the actual new sim-test coverage
+(`scenarioSecondaryFrameCarriesExactLoopTimingFields`) instead extends
+`app_robot_loop_harness.cpp`'s existing `main()` — the established
+one-C++-binary-many-scenarios-per-pytest-wrapper pattern this whole file
+already uses for every other scenario, including the pre-existing
+`test_app_robot_loop_harness_compiles_and_passes` xpass. Verified directly
+by compiling and running the harness binary standalone (bypassing the
+xfail marker's masking): exit 0, zero `FAIL` lines, the new scenario's own
+"OK" trace present. One EXISTING test needed a real fix, not just
+re-verification: `test_field_numbers_match_pb2_descriptors_telemetry`
+(`test_wire_differential.py`) had a hand-transcribed
+`TelemetrySecondary` field-number table that went stale the moment the
+proto gained fields 11/12 — updated, plus extended
+`wire_differential_harness.cpp`'s `encode_telemetry_secondary` CLI verb
+and `_wire_diff_driver.py`/`test_wire_differential.py`'s fixtures to
+actually fuzz/round-trip-cover the two new fields against
+`google.protobuf` (not just leave them silently defaulted to 0 in every
+differential case) — this file's own header calls it "the correctness
+gate... a BLOCKING regression, never an xfail/skip," so extending real
+coverage rather than only patching the failing assertion matched its own
+stated bar.
+
+**`kTelemetrySecondaryMaxEncodedSize`**: 52 B -> 60 B (generated,
+`gen_messages.py`). `kReplyEnvelopeMaxEncodedSize` (primary frame): 185 B,
+UNCHANGED. All three `wire.h` envelope `static_assert`s pass. `uv run
+python3 build.py --clean` green (ARM `MICROBIT.hex` + host-sim
+`libfirmware_host`, plus `motion_tests` picked up incidentally — an
+unrelated stray `src/motion/build/` artifact from ticket 001/002's own
+work was blocking a from-scratch `--clean` build before this ticket even
+started; removed as a pre-existing, gitignored generated directory, not a
+source change).
+
+**Files touched**: `src/protos/telemetry.proto`,
+`src/firm/app/telemetry.{h,cpp}`, `src/firm/app/robot_loop.{h,cpp}`,
+`src/firm/messages/telemetry.h`/`wire.{h,cpp}` (generated),
+`src/host/robot_radio/robot/pb2/telemetry_pb2.py` (generated),
+`src/host/robot_radio/testgui/{transport,__main__,telemetry_panel}.py`,
+`src/tests/sim/support/wire_test_codec.cpp`,
+`src/tests/sim/unit/{app_robot_loop_harness.cpp,wire_differential_harness.cpp,
+_wire_diff_driver.py,test_wire_differential.py}`, `src/firm/app/DESIGN.md`.
