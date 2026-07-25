@@ -1,5 +1,9 @@
 ---
-status: pending
+status: in-progress
+sprint: '124'
+tickets:
+- 124-010
+- 124-013
 ---
 
 # Relay connect handshake trips `kFaultCommsMalformed` before any application command

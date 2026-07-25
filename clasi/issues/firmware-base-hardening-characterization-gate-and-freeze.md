@@ -1,7 +1,7 @@
 ---
 status: pending
 split_from: firmware-base-hardening-bounded-wheel-moves-and-wheel-observer.md
-sprint: '125'
+sprint: '126'
 ---
 
 # Firmware base hardening: characterization, gate, and freeze

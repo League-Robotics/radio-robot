@@ -1,5 +1,5 @@
 ---
-status: pending
+status: in-progress
 filed: 2026-07-25
 filed_by: team-lead (stakeholder directive, protocol design session 2026-07-25)
 related:
@@ -8,7 +8,17 @@ related:
 - binary-plane-bursty-reply-loss-on-hardware-post-gut-regression.md
 - telemetry-frame-is-the-robot-state.md
 - tlm-rate-15-19hz-vs-50hz-nominal-serial.md
-tickets: []
+tickets:
+- 124-001
+- 124-002
+- 124-003
+- 124-004
+- 124-005
+- 124-006
+- 124-008
+- 124-013
+- 124-014
+sprint: '124'
 ---
 
 # Protocol v5: one line per packet, packed telemetry, state-derived frame assembly

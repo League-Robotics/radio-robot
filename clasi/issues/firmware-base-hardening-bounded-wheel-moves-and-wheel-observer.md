@@ -9,7 +9,7 @@ related:
 tickets: []
 split_into:
 - firmware-base-hardening-characterization-gate-and-freeze.md
-sprint: '124'
+sprint: '125'
 ---
 ## Stakeholder directive (2026-07-24)
 

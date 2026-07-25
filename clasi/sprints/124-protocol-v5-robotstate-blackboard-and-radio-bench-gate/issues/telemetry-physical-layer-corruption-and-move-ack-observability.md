@@ -1,3 +1,12 @@
+---
+sprint: '124'
+status: in-progress
+tickets:
+- 124-006
+- 124-011
+- 124-012
+- 124-013
+---
 # Telemetry physical-layer corruption + move-enqueue ack observability
 
 **Filed:** 2026-07-25 (sprint 123 overnight bench work, ticket 006 follow-up)

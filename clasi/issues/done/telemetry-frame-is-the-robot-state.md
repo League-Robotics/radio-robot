@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 # Telemetry frame should BE the robot state — one object, filled and sent
