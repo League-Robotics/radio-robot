@@ -27,6 +27,14 @@ PROTO_DIR  = REPO_ROOT / "src" / "protos"
 OUT_DIR    = REPO_ROOT / "src" / "firm" / "messages"
 INVENTORY_OUT = REPO_ROOT / "docs" / "design" / "message-inventory.md"
 
+# Command-name registry (124-001) — the host-consumable mirror of
+# src/firm/messages/commands.h, generated from the SAME commands.proto
+# schema. Not under OUT_DIR (firmware-only) — this is the one generated
+# artifact this script writes outside src/firm/messages/.
+HOST_COMMANDS_OUT = (
+    REPO_ROOT / "src" / "host" / "robot_radio" / "io" / "wire_commands.py"
+)
+
 # ---------------------------------------------------------------------------
 # Extension field numbers defined in options.proto
 # ---------------------------------------------------------------------------
@@ -37,6 +45,17 @@ _FIELD_OPT_MAX       = 50003
 _FIELD_OPT_ABS_MAX   = 50004
 _FIELD_OPT_REQ       = 50005
 _FIELD_OPT_STR_LEN   = 50006
+
+# Extension field number for the (binary) ENUM-VALUE option (options.proto)
+# -- a separate number space from the _FIELD_OPT_* block above (FieldOptions
+# vs. EnumValueOptions are different extended message types). Used by
+# commands.proto's Verb enum (124-001, command-name registry).
+_ENUM_VALUE_OPT_BINARY = 50100
+
+# The required proto3 zero value for commands.proto's Verb enum -- never a
+# real wire verb, excluded from every generated registry row (firmware
+# kVerbTable[] and host VERBS/wire_commands.py alike).
+_VERB_UNSPECIFIED_NAME = "VERB_UNSPECIFIED"
 
 # Default fixed-array width for a `string` field with no `(str_len)`
 # override (095-005 Step 0b: minimal per-field string-width mechanism,
@@ -546,6 +565,55 @@ def _read_req(field) -> bool:
     return bool(opts.get(_FIELD_OPT_REQ, 0))
 
 
+def _parse_enum_value_options(value) -> dict:
+    """Parse an EnumValueDescriptorProto's serialized EnumValueOptions
+    extension bytes into {field_number: raw_value}.
+
+    Mirrors `_parse_field_options()`'s own varint-walk exactly, but over
+    `value.options` (EnumValueOptions) rather than `field.options`
+    (FieldOptions) -- these are two different extended message types with
+    independent extension-number spaces (options.proto's own comment), so
+    the two parsers stay separate rather than sharing one that would need
+    to take the extended-message type as a parameter for no real reuse
+    benefit (each is a ~15-line self-contained walk).
+    """
+    import struct
+
+    raw = value.options.SerializeToString()
+    pos = 0
+    out: dict = {}
+    while pos < len(raw):
+        tag, pos = _read_varint(raw, pos)
+        field_num = tag >> 3
+        wire_type = tag & 7
+        if wire_type == 0:  # varint (bool options: binary)
+            val, pos = _read_varint(raw, pos)
+            out[field_num] = val
+        elif wire_type == 1:  # fixed64
+            (val,) = struct.unpack_from("<d", raw, pos)
+            pos += 8
+            out[field_num] = val
+        elif wire_type == 2:  # length-delimited
+            vlen, pos = _read_varint(raw, pos)
+            out[field_num] = raw[pos:pos + vlen]
+            pos += vlen
+        elif wire_type == 5:  # fixed32
+            (val,) = struct.unpack_from("<f", raw, pos)
+            pos += 4
+            out[field_num] = val
+        else:
+            break
+    return out
+
+
+def _read_verb_binary_flag(value) -> bool:
+    """Return whether a commands.proto Verb enum value's (binary) option is
+    set true (default false -- a verb with no (binary) option is
+    cleartext)."""
+    opts = _parse_enum_value_options(value)
+    return bool(opts.get(_ENUM_VALUE_OPT_BINARY, 0))
+
+
 # ---------------------------------------------------------------------------
 # Proto scalar → C++ type mapping
 # ---------------------------------------------------------------------------
@@ -639,6 +707,115 @@ def _emit_enum(ed, lines: list[str]) -> None:
         lines.append(f"    {val.name} = {val.number},")
     lines.append("};")
     lines.append("")
+
+
+# ---------------------------------------------------------------------------
+# Command-name registry (124-001) — commands.proto's Verb enum gets its
+# usual `enum class Verb` emitted by `_emit_enum()` above like any other
+# proto enum; the two functions below emit the ADDITIONAL registry table
+# (name + binary/cleartext flag) that is this schema's whole point, one for
+# each language. Both walk the identical `ed.value` list (skipping the
+# proto3 sentinel `VERB_UNSPECIFIED`), so a verb added to commands.proto
+# lands in both outputs from one source, by construction.
+# ---------------------------------------------------------------------------
+def _verb_rows(ed):
+    """Return [(name, binary_bool), ...] for every real verb in a Verb enum
+    descriptor, in declaration order, excluding the proto3 zero sentinel."""
+    return [
+        (val.name, _read_verb_binary_flag(val))
+        for val in ed.value
+        if val.name != _VERB_UNSPECIFIED_NAME
+    ]
+
+
+def _emit_verb_registry_cpp(ed, lines: list[str]) -> None:
+    """Append the firmware-side VerbEntry table to `lines`, following the
+    `enum class Verb` _emit_enum() already appended.
+
+    `App::Comms` looks this table up by name (a linear scan over
+    `kVerbCount` rows -- the registry is small and firmware has no hash-map
+    primitive) to get a verb's `(binary)` flag; ticket 005 wires that
+    lookup in, not this ticket (see this file's own header comment)."""
+    rows = _verb_rows(ed)
+    lines.append(
+        "// VerbEntry -- one row of the closed v5 command-name registry "
+        "(124-001, sprint 124"
+    )
+    lines.append(
+        "// architecture Decision 2): the wire verb name and whether its "
+        "<data> is binary"
+    )
+    lines.append(
+        "// (COBS+CRC-framed) or cleartext. Generated from "
+        "protos/commands.proto's Verb"
+    )
+    lines.append(
+        "// enum + (binary) enum-value option -- the ONE source this table "
+        "and the host"
+    )
+    lines.append("// wire_commands.py mirror both come from.")
+    lines.append("struct VerbEntry {")
+    lines.append("    Verb verb;")
+    lines.append("    const char* name;")
+    lines.append("    bool binary;")
+    lines.append("};")
+    lines.append("")
+    lines.append(f"constexpr VerbEntry kVerbTable[{len(rows)}] = {{")
+    for name, binary in rows:
+        cpp_bool = "true" if binary else "false"
+        lines.append(f'    {{ Verb::{name}, "{name}", {cpp_bool} }},')
+    lines.append("};")
+    lines.append(f"constexpr uint8_t kVerbCount = {len(rows)};")
+    lines.append("")
+
+
+_HOST_COMMANDS_MODULE_BANNER = '''\
+"""wire_commands.py -- GENERATED command-name registry (124-001).
+
+AUTO-GENERATED by scripts/gen_messages.py -- do not edit by hand.
+Source: protos/commands.proto's Verb enum + (binary) enum-value option.
+
+The single source firmware dispatch (src/firm/messages/commands.h's
+kVerbTable[]) and this host module are generated from the SAME schema --
+see sprint 124 architecture Decision 2 (command-name registry, closing the
+firmware/host/doc 3-way drift risk). Adding a future verb means editing
+protos/commands.proto and regenerating -- never hand-editing this file.
+"""
+
+from __future__ import annotations
+
+from typing import NamedTuple
+
+
+class VerbEntry(NamedTuple):
+    name: str
+    binary: bool  # True: COBS+CRC-framed binary <data>; False: cleartext
+
+
+'''
+
+
+def _render_host_commands_module(ed) -> str:
+    """Render src/host/robot_radio/io/wire_commands.py's full content from
+    a Verb enum descriptor -- the host-side mirror of
+    _emit_verb_registry_cpp()'s firmware table, same source rows."""
+    rows = _verb_rows(ed)
+    lines: list[str] = [_HOST_COMMANDS_MODULE_BANNER.rstrip("\n"), ""]
+    lines.append("VERBS: tuple[VerbEntry, ...] = (")
+    for name, binary in rows:
+        lines.append(f'    VerbEntry("{name}", {binary}),')
+    lines.append(")")
+    lines.append("")
+    lines.append("VERB_BY_NAME: dict[str, VerbEntry] = {v.name: v for v in VERBS}")
+    lines.append("")
+    lines.append("BINARY_VERBS: frozenset[str] = frozenset(")
+    lines.append("    v.name for v in VERBS if v.binary")
+    lines.append(")")
+    lines.append("CLEARTEXT_VERBS: frozenset[str] = frozenset(")
+    lines.append("    v.name for v in VERBS if not v.binary")
+    lines.append(")")
+    lines.append("")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -2437,6 +2614,7 @@ def _emit_file(fd, file_messages: dict, file_enums: dict,
     lines.append("")
 
     is_common = (proto_name == "common.proto")
+    is_commands = (proto_name == "commands.proto")
 
     if is_common:
         # <stdint.h> goes outside the namespace (it defines global typedefs).
@@ -2456,6 +2634,11 @@ def _emit_file(fd, file_messages: dict, file_enums: dict,
     # Emit top-level enums in this file
     for ed in fd.enum_type:
         _emit_enum(ed, lines)
+        # commands.proto (124-001): the Verb enum's registry table (name +
+        # (binary) flag) rides alongside its own enum, in the same header --
+        # see _emit_verb_registry_cpp()'s own doc comment.
+        if is_commands and ed.name == "Verb":
+            _emit_verb_registry_cpp(ed, lines)
 
     # Emit messages in this file
     for md in fd.message_type:
@@ -2537,9 +2720,14 @@ class GenMessagesError(RuntimeError):
 def _run_codegen_pipeline():
     """Run protoc over protos/*.proto and emit every header's content in-memory.
 
-    Returns (outputs, fds):
-      outputs: {header_name: content} for the proto-derived headers -- no
-        filesystem writes.
+    Returns (outputs, host_outputs, fds):
+      outputs: {header_name: content} for the proto-derived FIRMWARE headers
+        (written under OUT_DIR) -- no filesystem writes here.
+      host_outputs: {absolute_path: content} for generated HOST-side files
+        (124-001: just wire_commands.py today) -- a separate dict, not
+        merged into `outputs`, because these write to a different directory
+        tree (src/host/, not src/firm/messages/) than the loop that
+        consumes `outputs` assumes.
       fds: the parsed FileDescriptorSet (needed by --emit-inventory).
 
     Raises GenMessagesError on any pipeline failure (missing grpcio-tools,
@@ -2648,7 +2836,21 @@ def _run_codegen_pipeline():
     print(f"  {_render_arm_report(cmd_report)}", file=sys.stderr)
     print(f"  {_render_arm_report(reply_report)}", file=sys.stderr)
 
-    return outputs, fds
+    # ------------------------------------------------------------------
+    # 124-001: command-name registry host mirror (wire_commands.py) --
+    # generated from commands.proto's Verb enum, the SAME descriptor
+    # _emit_verb_registry_cpp() above already rendered into commands.h's
+    # kVerbTable[]. Both come from the same `ed.value` walk (_verb_rows()),
+    # so the two outputs cannot independently drift.
+    # ------------------------------------------------------------------
+    host_outputs: dict[str, str] = {}
+    commands_fd = file_map.get("commands.proto")
+    if commands_fd is not None:
+        verb_ed = next((ed for ed in commands_fd.enum_type if ed.name == "Verb"), None)
+        if verb_ed is not None:
+            host_outputs[str(HOST_COMMANDS_OUT)] = _render_host_commands_module(verb_ed)
+
+    return outputs, host_outputs, fds
 
 
 def generate_headers() -> dict:
@@ -2661,8 +2863,20 @@ def generate_headers() -> dict:
     the guard must run the same codegen path a real build runs, not a grep
     over the checked-in headers alone).
     """
-    outputs, _fds = _run_codegen_pipeline()
+    outputs, _host_outputs, _fds = _run_codegen_pipeline()
     return outputs
+
+
+def generate_command_registry() -> tuple[str, str]:
+    """Run the codegen pipeline and return (commands_h_text, wire_commands_py_text).
+
+    Public entry point for the 124-001 differential test
+    (tests/unit/test_command_registry.py): both texts come from this one
+    in-process run, so the test exercises the exact generator a real build
+    invokes, not a re-derivation of it.
+    """
+    outputs, host_outputs, _fds = _run_codegen_pipeline()
+    return outputs["commands.h"], host_outputs[str(HOST_COMMANDS_OUT)]
 
 
 # ---------------------------------------------------------------------------
@@ -2679,7 +2893,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        outputs, fds = _run_codegen_pipeline()
+        outputs, host_outputs, fds = _run_codegen_pipeline()
     except GenMessagesError as exc:
         print(f"gen_messages: {exc}", file=sys.stderr)
         return 1
@@ -2698,6 +2912,22 @@ def main(argv=None) -> int:
             for line in content.splitlines()[:5]:
                 print(f"    {line}")
         else:
+            out_path.write_text(content)
+            print(f"gen_messages: wrote {out_path.relative_to(REPO_ROOT)}",
+                  file=sys.stderr)
+
+    # ------------------------------------------------------------------
+    # 124-001: generated host-side files (outside OUT_DIR/src/firm/messages)
+    # ------------------------------------------------------------------
+    for out_path_str, content in sorted(host_outputs.items()):
+        out_path = Path(out_path_str)
+        if args.dry_run:
+            print(f"[dry-run] would write {out_path.relative_to(REPO_ROOT)}")
+            print("  first 5 lines:")
+            for line in content.splitlines()[:5]:
+                print(f"    {line}")
+        else:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(content)
             print(f"gen_messages: wrote {out_path.relative_to(REPO_ROOT)}",
                   file=sys.stderr)

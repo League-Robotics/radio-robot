@@ -35,3 +35,23 @@ extend google.protobuf.FieldOptions {
   optional bool   req       = 50005;
   optional uint32 str_len   = 50006;
 }
+
+// Custom enum-VALUE option for the command-name registry (124-001, sprint
+// 124 architecture Decision 2 — commands.proto's `Verb` enum).
+//
+// (binary) — true: this verb's wire <data> is a binary, COBS+CRC-framed
+//            payload (decoded through the existing CommandEnvelope/
+//            ReplyEnvelope schema). false/absent (the proto3 default):
+//            this verb's <data> is cleartext ASCII, hand-parsed, or the
+//            verb carries no data at all. This is the SOLE text-vs-binary
+//            discriminator under protocol v5 — see commands.proto's own
+//            header comment.
+//
+// A separate extend block (not folded into the FieldOptions block above):
+// FieldOptions and EnumValueOptions are different extended message types,
+// so their extension field numbers occupy independent number spaces —
+// starting this block at 50100 (rather than continuing 50007) keeps that
+// distinction visible at a glance rather than implying a shared sequence.
+extend google.protobuf.EnumValueOptions {
+  optional bool binary = 50100;
+}
