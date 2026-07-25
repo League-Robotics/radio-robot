@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Firmware framer integration (Comms + transports + wire budget)
-status: in-progress
+status: exception
 use-cases:
 - SUC-001
 - SUC-002
@@ -11,6 +11,53 @@ depends-on:
 github-issue: ''
 issue: cobs-crc-binary-framing-replace-base64-armor.md
 completes_issue: true
+exception:
+  thrown_by: programmer
+  thrown_at: '2026-07-25T02:07:58.906199+00:00'
+  attempted: 'Implemented the full COBS+CRC firmware framer within ticket 002''s authorized
+    scope: App::Comms (CRC-then-COBS composition, decodeBinaryFrame/sendReply), SerialPort/Radio
+    (each gained its own FrameKind enum with no dependency on app/, binary-clean accumulation,
+    a new Radio::sendText() since the two frame kinds now need different trailing
+    delimiters), Telemetry''s own independently-framed secondary-frame path, and wire.h''s
+    envelope-size ceiling recompute (186B->240B) via a new gen_messages.py constant.
+    Also updated every file explicitly authorized by the dispatch brief to keep src/tests/sim
+    green: wire_test_codec.{h,cpp}, TestSupport::FakeTransport, and every C++ harness
+    with its own local armor()/armorLine() helper (app_comms_harness.cpp, app_telemetry_harness.cpp,
+    app_robot_loop_harness.cpp, config_gate_harness.cpp, move_protocol_harness.cpp,
+    fake_transport_harness.cpp), adding a genuine CRC-mismatch fault-injection scenario
+    per SUC-002. Also made one narrow, signature-preserving fix to src/sim/sim_harness.h''s
+    injectCommand() (tags frames kBinary instead of kText) since src/tests/sim system
+    harnesses call it directly. Ran uv run python3 build.py --clean (ARM + host-sim
+    both green) then uv run python -m pytest -q twice: src/tests/sim alone is green
+    except 5 tests that route through src/host/robot_radio/io/sim_loop.py''s SimLoop;
+    the full suite has 81 failures, all traced (via a representative traceback showing
+    every ack/telemetry round-trip timing out) to sim_loop.py still de-arming the
+    OLD *B<base64> text against firmware that now emits COBS+CRC, plus a second, more
+    structural issue: src/sim/sim_ctypes.cpp''s sim_drain_tlm() newline-joins raw
+    outbound frames for the Python ctypes boundary, which is incompatible with binary
+    content that may embed newlines/control bytes as legitimate COBS+CRC payload --
+    that C ABI file is unlisted in either ticket 002 or 003''s file scope.'
+  conflict: 'Sprint 123''s own ticket-boundary decision splits this wire-format change
+    into ticket 002 (firmware: comms.cpp/transports/wire.h) and ticket 003 (host:
+    io/cli.py, io/sim_loop.py, io/serial_conn.py, io/sim_config.py, testgui/transport.py,
+    robot/protocol.py) -- explicitly a flag-day cutover with no dual-stack (Migration
+    Concerns). Ticket 002''s own acceptance criterion "Full sim suite green" cannot
+    be satisfied without also changing src/host/robot_radio/io/sim_loop.py (ticket
+    003''s file) and src/sim/sim_ctypes.cpp (a C ABI bridge file listed in NEITHER
+    ticket''s scope) -- because src/sim/ is a shared composition root: the SAME TestSupport::FakeTransport/App::Comms
+    graph that src/tests/sim''s C++ harnesses compile fresh per test is also compiled
+    into the persistent src/sim/build/libfirmware_host.dylib that Python''s SimLoop
+    drives via ctypes, and dozens of src/tests/testgui/ pytest files exercise that
+    real compiled library end-to-end. The dispatch brief itself anticipated and pre-authorized
+    exactly this stop condition ("If you find the suite cannot go green without touching
+    production src/host/robot_radio/ decoders ... STOP and report ... I will decide
+    whether to merge 002+003"), but the actual blocker is one layer deeper than that
+    brief assumed: it is not merely that ticket 003''s Python files need updating,
+    but that a THIRD, currently-unowned file (src/sim/sim_ctypes.cpp) also needs a
+    binary-safe redesign of its outbound telemetry drain (currently newline-joins
+    raw frame text) before ticket 003''s Python fix could even have well-formed bytes
+    to decode.'
+  surface: internal
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
