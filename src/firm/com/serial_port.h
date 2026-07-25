@@ -26,6 +26,16 @@ class SerialPort {
 public:
     enum class FrameKind : uint8_t { kNone = 0, kText = 1, kBinary = 2 };
 
+    // Usable TX ring-buffer capacity assumed by both backpressure checks in
+    // this class: send()'s whole-frame-fits gate and sendReliable()'s
+    // bounded wait. begin() configures the underlying CODAL UART TX buffer
+    // to 255 bytes (the uint8_t max); a circular buffer of N bytes holds at
+    // most N-1 bytes before head catches tail (ambiguous with empty), so the
+    // true ceiling is 254 -- this constant keeps a small extra margin below
+    // that. 123-006: single source of truth so send()'s drop check and
+    // sendReliable()'s spin-wait can never assume two different capacities.
+    static constexpr uint16_t kTxBufferCapacity = 250;  // [bytes]
+
     explicit SerialPort(NRF52Serial& serial);
 
     // Configure buffers (256 bytes each) and set baud rate to 115200.
@@ -44,11 +54,18 @@ public:
     // content is 0x00-free by construction).
     FrameKind readLine(char* buf, uint16_t cap, uint16_t* outLen);
 
-    // ASYNC, drop-on-full — for telemetry. `data`/`len` is a COBS+CRC
-    // frame body (0x00-free by construction, per App::Transport::send()'s
-    // own contract); this appends the trailing 0x00 delimiter itself and
-    // sends the raw buffer (never a ManagedString/strlen-based path --
-    // the content is not necessarily printable ASCII).
+    // ASYNC, WHOLE-FRAME drop-on-full — for telemetry. `data`/`len` is a
+    // COBS+CRC frame body (0x00-free by construction, per
+    // App::Transport::send()'s own contract); this appends the trailing
+    // 0x00 delimiter itself and sends the raw buffer (never a
+    // ManagedString/strlen-based path -- the content is not necessarily
+    // printable ASCII). 123-006: checks free TX-buffer space FIRST -- if the
+    // full framed length (body + delimiter) does not fit, the ENTIRE frame
+    // is dropped and nothing is written. Never hands CODAL's ASYNC send() a
+    // frame it might only partially copy: a partial write both corrupts
+    // this frame (fails the host's CRC) and, when the dropped tail includes
+    // the trailing delimiter, merges into and corrupts the NEXT frame too.
+    // Still fully non-blocking -- no spin-wait, unlike sendReliable().
     void send(const uint8_t* data, uint16_t len);
 
     void sendReliable(const char* msg);  // bounded-wait for room — for replies/EVT (text-plane only, "\r\n"-terminated, unchanged)

@@ -53,9 +53,17 @@ SerialPort::FrameKind SerialPort::readLine(char* buf, uint16_t cap, uint16_t* ou
 }
 
 void SerialPort::send(const uint8_t* data, uint16_t len) {
-    // ASYNC: queue what fits in the TX buffer and return IMMEDIATELY, never
-    // blocking the loop. Drop-on-full — a frame may be silently truncated
-    // under a flood. For must-arrive lines use sendReliable() instead.
+    // ASYNC: queue the WHOLE frame and return IMMEDIATELY, never blocking
+    // the loop. 123-006: drop-on-full now means drop the ENTIRE frame, not
+    // whatever prefix happens to fit -- CODAL's ASYNC send() (setTxInterrupt())
+    // copies bytes until the buffer fills and then silently stops, which used
+    // to hand a truncated frame to the wire. A truncated frame always fails
+    // the host's CRC (malformed), and if the dropped tail included the
+    // trailing 0x00 delimiter, the leftover bytes prefix the NEXT frame and
+    // corrupt it too. Checking free space FIRST and refusing to send at all
+    // when the frame doesn't fit costs one honest, countable seq gap instead
+    // -- never a corrupt or merged frame. For must-arrive lines use
+    // sendReliable() instead.
     //
     // 123-002: binary frame body + the trailing 0x00 delimiter, via the
     // raw uint8_t*/len send() overload (NOT ManagedString -- the content is
@@ -64,7 +72,14 @@ void SerialPort::send(const uint8_t* data, uint16_t len) {
     uint16_t n = (len < sizeof(framed) - 1) ? len : (uint16_t)(sizeof(framed) - 1);
     memcpy(framed, data, n);
     framed[n] = 0x00;
-    _serial.send(framed, n + 1, ASYNC);
+
+    const int frameLen = static_cast<int>(n) + 1;
+    if (kTxBufferCapacity - _serial.txBufferedSize() < frameLen) {
+        // Not enough room for the WHOLE frame -- drop it atomically. Nothing
+        // is written to the UART; the frame is simply never sent.
+        return;
+    }
+    _serial.send(framed, frameLen, ASYNC);
 }
 
 void SerialPort::sendReliable(const char* msg) {
@@ -76,7 +91,7 @@ void SerialPort::sendReliable(const char* msg) {
     ManagedString s = ManagedString(msg) + ManagedString("\r\n");
     const int len = s.length();
     const uint64_t deadline = system_timer_current_time_us() + 5000;   // [us]
-    while ((250 - _serial.txBufferedSize()) < len &&
+    while ((kTxBufferCapacity - _serial.txBufferedSize()) < len &&
            system_timer_current_time_us() < deadline) {
         // spin briefly; the UART's DMA drains the buffer in the background
     }
