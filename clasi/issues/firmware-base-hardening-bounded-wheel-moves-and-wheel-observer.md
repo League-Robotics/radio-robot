@@ -7,92 +7,76 @@ related:
 - bench-move-commands-intermittently-never-reach-firmware.md
 - bench-accuracy-campaign-s3.md
 tickets: []
+split_into:
+- firmware-base-hardening-characterization-gate-and-freeze.md
+sprint: '124'
 ---
-
-# Firmware base hardening: bounded wheel moves + per-wheel command observer, gated and frozen
-
 ## Stakeholder directive (2026-07-24)
 
 This repo's focus is now the FIRMWARE BASE: the layer that takes the most
-basic motion command — left/right wheel speeds — runs it to completion
-properly, tracks those speeds well, and reports truthfully (wheel state +
-raw sensors). Harden it behind a numeric gate, then FREEZE it: the base
-becomes the thing we know we will not have to change while the motion
-library (separate branch/worktree/repo) builds on top.
+basic motion command — left/right wheel duty — runs it to completion
+properly, tracks wheel state well, and reports truthfully (wheel state +
+raw sensors). Harden it, then FREEZE it (gate/freeze criteria split out
+to `firmware-base-hardening-characterization-gate-and-freeze.md`, sprint
+125): the base becomes the thing we know we will not have to change while
+the motion library (separate branch/worktree/repo) builds on top.
+
+**Scope note (split 2026-07-24):** this issue now covers the base-CONTRACT
+change only — the duty primitive, the per-wheel command observer, and the
+`NezhaMotor` shrink (sprint 124). The characterization battery, the
+numeric gate, and the freeze declaration are split off to
+`firmware-base-hardening-characterization-gate-and-freeze.md` (sprint
+125), which depends on this issue landing first.
 
 ## The base contract
 
-1. **Command primitive: bounded wheel moves.** `MoveWheels(v_left, v_right)`
-   + stop condition (distance | time) + required timeout — already on the
-   wire. "Run to completion properly" and the host-silence safety backstop
-   live HERE, in the frozen layer. (Stakeholder-confirmed scope: bounded,
-   not raw streaming.)
+1. **Command primitive: per-wheel DUTY** (`[-1,1]`), one visible write per
+   wheel per cycle (see the REVISION below — this superseded an earlier
+   bounded-wheel-speed-move contract). Safety: zero-on-silence (a cycle
+   that hands the motor no duty writes zero) plus the plausibility clamp
+   (`|duty| ≤ 1`, NaN → 0).
 2. **Per-wheel command observer (the feed-forward insight).** We know what
    we commanded and when; encoder samples arrive slowly (per 40 ms cycle,
-   slower effective on hardware I2C). Stop ignoring the command: propagate a
-   characterized per-wheel response model (dead time, rise shape, deadband
-   floor) as the EXPECTED wheel state between samples, and CORRECT the
-   estimate on every real encoder sample. Predict-correct, not
-   predict-and-act-blind — the distinction between an observer and the three
-   failed open-loop predictors (stop_lead, margins, analytic coast): model
-   error here survives at most one encoder interval before a measurement
-   trims it. The observer's per-wheel (position, velocity, estimate age)
-   becomes the wheel state the boundary hands upward, alongside the raw
-   encoder values (both reported; consumers choose).
+   slower effective on hardware I2C). Stop ignoring the command: propagate
+   a characterized per-wheel response model (dead time, rise shape,
+   deadband floor) as the EXPECTED wheel state between samples, and
+   CORRECT the estimate on every real encoder sample. Predict-correct, not
+   predict-and-act-blind — the distinction between an observer and the
+   three failed open-loop predictors (stop_lead, margins, analytic coast):
+   model error here survives at most one encoder interval before a
+   measurement trims it. The observer's per-wheel (position, velocity,
+   estimate age) becomes the wheel state the boundary hands upward,
+   alongside the raw encoder values (both reported; consumers choose).
 3. **Truthful telemetry.** Same-generation L/R pairs (121-005's fix stands
-   as a base invariant with a test), commanded targets AND observed AND raw
+   as a base invariant with a test), commanded duty AND observed AND raw
    encoder state all visible per frame, sensors passed through raw. The
    base never lies and never hides latency.
 
-## Characterization (constants with derivations — never swept)
-
-- Sim: the plant is first-order by construction — the observer must track it
-  EXACTLY (validates machinery; any residual is a bug, not tuning).
-- Bench: per-wheel step-response battery (both directions, several speeds,
-  loaded on the stand): dead time, effective tau, deadband floor,
-  reversal-dwell effect; recorded per-robot in the JSON with measurement
-  provenance. Sensitivity note vs battery voltage stated (observer's
-  correction step absorbs slow drift; characterize, don't chase).
-- Every constant names its measurement; the no-sweep rule applies in full.
-
-## The base gate (numbers, then freeze)
-
-- **Tracking:** commanded step ±200 mm/s — observed and encoder-measured
-  velocity settle within a stated band/time (numbers set by the first
-  characterization run, then ratcheted).
-- **Observer fidelity:** sim — exact (≤0.1 mm / ≤0.1 mm/s vs plant truth);
-  bench — stated band between observer estimate and encoder truth at the
-  next sample (e.g. ≤5 mm/s during cruise, ≤ one dead-time's worth during
-  transients), measured across the step battery.
-- **Completion:** bounded wheel moves stop within one cycle + coast of the
-  stop condition; timeout backstop fires exactly when due.
-- **Telemetry:** pairing test, rate test (~25 Hz sustained), gap-free seq.
-- Gate green ⇒ base is FROZEN: subsequent base changes require a
-  stakeholder-signed issue; the motion library treats the boundary + gate
-  numbers as a stable platform contract.
-
 ## Explicitly out of scope (motion library's job, other repo/branch)
 
-Twist semantics, kinematics, odometry/pose, estimator/OTOS fusion, shaping,
-chain hand-off, settle completion, heading hold, tours. The base does not
-know the robot has a body — only two wheels, a clock, sensors, and a wire.
+Twist semantics, kinematics, odometry/pose, estimator/OTOS fusion,
+shaping, chain hand-off, settle completion, heading hold, tours,
+`MoveWheels`/the velocity PID (moved to `src/motion` — see REVISION). The
+base does not know the robot has a body — only two wheels, a clock,
+sensors, and a wire.
 
 ## Sequencing
 
-After (or interleaved with) the extraction issue — the boundary must exist
-for the observer's outputs to have a consumer shape. Bench halves of the
-gate ride the existing bench-session cadence (transport reliability issue
-first, same stand time). This issue plus extraction replace the previous
-122+ exactness sequence AS THIS REPO'S PLAN; the exactness sequence itself
-(settle completion, heading hold, fusion, tours, S-bars) transfers to the
-motion library's plan, unchanged in substance, executed against
-`motion_tests` first.
+Second of the three sprints in this repo's firmware-base-hardening
+restructuring: 123 (COBS+CRC framing) lands first — it frees the
+telemetry headroom this sprint's wider per-wheel frame needs and adds the
+integrity a duty-primitive rewrite deserves. This sprint (124) is the
+base-contract change. Sprint 125 characterizes, gates, and freezes it
+(split off, see `firmware-base-hardening-characterization-gate-and-freeze.md`).
+Bench halves of the gate ride the existing bench-session cadence
+(transport reliability issue first, same stand time).
 
 ## REVISION (stakeholder decision, 2026-07-24): PID moves to motion; base primitive is DUTY
 
 The rate argument settles it: the PID cannot update faster than the loop
 (encoder freshness ~80 ms bounds it) wherever it lives, so motor residency
-buys nothing. Revised base contract, superseding item 1 above:
+buys nothing. Revised base contract, superseding an earlier
+bounded-wheel-speed-move primitive:
 
 - **Command primitive: per-wheel DUTY** (`[-1,1]`), one visible write per
   wheel per cycle. The velocity PID, the kff mapping, and therefore the
@@ -108,14 +92,17 @@ buys nothing. Revised base contract, superseding item 1 above:
   truth reporting), now consuming commanded duty + encoder samples — its
   model is duty→velocity directly, matching both the sim `WheelPlant` and
   the bench step-response characterization 1:1.
-- **`appliedDuty` feedback:** the dwell/deadband shaping remains in the base
-  (brick protection); the actually-written duty is reported in the per-wheel
-  sample so the motion-side PID's anti-windup sees actuator truth.
+- **`appliedDuty` feedback:** the dwell/deadband shaping remains in the
+  base (brick protection); the actually-written duty is reported in the
+  per-wheel sample so the motion-side PID's anti-windup sees actuator
+  truth.
 - `NezhaMotor` target size drops again: protocol + dwell/deadband + clamp,
   ~200 lines; `MotorVelocityPid` relocates to the motion library with its
   gains as motion config.
 
-Base gate items update accordingly: "tracking" moves to the motion library's
-gate; the base gate keeps observer fidelity, completion of the duty write
-path (shaping visible, applied duty reported), telemetry truthfulness, and
-zero-on-silence verified.
+## Design reference
+
+`docs/design/base-explicit-loop-sketch.md` — the explicit-dataflow loop
+design (three principles, full `NezhaMotor` inventory with KEEP/MOVE/
+DELETE verdicts, normative loop dataflow, boundary structs, resolved/open
+questions). Primary design reference for this sprint's ticket work.
