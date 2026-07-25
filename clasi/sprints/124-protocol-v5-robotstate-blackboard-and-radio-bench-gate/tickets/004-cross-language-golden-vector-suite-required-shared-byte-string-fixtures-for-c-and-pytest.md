@@ -2,9 +2,11 @@
 id: '004'
 title: 'Cross-language golden vector suite (REQUIRED): shared byte-string fixtures
   for C++ and pytest'
-status: open
-use-cases: [SUC-002]
-depends-on: ['003']
+status: in-progress
+use-cases:
+- SUC-002
+depends-on:
+- '003'
 github-issue: ''
 issue: protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md
 completes_issue: true
