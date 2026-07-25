@@ -1,5 +1,12 @@
 set dotenv-load := true
 
+# Robot's USB serial port. Override per-bench with ROBOT_PORT (env or .env);
+# confirm with `mbdeploy list`'s ROLE column — ports move across power cycles.
+robot_port := env('ROBOT_PORT', '/dev/cu.usbmodem2121102')
+pyocd_target := env('PYOCD_TARGET', 'nrf52833')
+pyocd_probe := env('PYOCD_PROBE', '')
+pyocd_probe_args := if pyocd_probe != '' { '--uid ' + pyocd_probe } else { '' }
+
 default:
     @just --list
 
@@ -56,6 +63,32 @@ deploy *args='':
 
 build-deploy *args='':
     mbdeploy build && mbdeploy deploy {{args}}
+
+# Flash the bench firmware image directly over SWD with pyOCD, bypassing
+# mbdeploy's serial-announcement handshake. Uses the normal incremental build;
+# run `just build-clean` first when you specifically want a fresh rebuild.
+# Bench flashes use the generated MICROBIT.hex artifact; if the target rejects
+# the initial write, recover with a mass erase, retry, then reset into the
+# flashed image.
+deploy-pyocd: build
+    (pyocd load {{pyocd_probe_args}} -t {{pyocd_target}} MICROBIT.hex || { pyocd erase {{pyocd_probe_args}} -t {{pyocd_target}} --mass && pyocd load {{pyocd_probe_args}} -t {{pyocd_target}} MICROBIT.hex; }) && pyocd reset {{pyocd_probe_args}} -t {{pyocd_target}}
+
+# Bench dev loop: build the firmware, flash the connected robot, then capture
+# binary PUSH telemetry with src/tests/bench/relay_telemetry_rate.py and print
+# the rate/drop/gap/malformed report. Read-only on the robot — no motion is
+# commanded, so it is safe on the stand.
+#
+# Extra args go to the capture script and win over the defaults below (argparse
+# takes the last occurrence), e.g.:
+#     just devtest --duration 120
+#     just devtest --port /dev/cu.usbmodem2121302 --label relay --json-out /tmp/relay.json
+devtest-deploy *args='': deploy-pyocd
+    uv run python src/tests/bench/relay_telemetry_rate.py \
+        --port {{robot_port}} --label devtest --duration 30 {{args}}
+
+devtest *args='':
+    uv run python src/tests/bench/relay_telemetry_rate.py \
+        --port {{robot_port}} --label devtest --duration 30 {{args}}
 
 # Leave running, then attach VS Code "(attach) micro:bit PyOCD" or `just gdb`.
 # Start a pyOCD GDB server for the micro:bit V2 (nRF52833) on :3333.

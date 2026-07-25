@@ -194,6 +194,11 @@ class Comms {
   // failure means silently send nothing.
   void sendReply(const msg::ReplyEnvelope& reply);
 
+  // Push the banner unprompted on both transports, text plane. Emitted twice
+  // per boot -- main.cpp at power-on, RobotLoop::boot() when the preamble
+  // finishes -- byte-identical both times, so a banner parser needs no change.
+  void sendBanner();
+
   // Diagnostic counter -- malformed COBS frame, CRC mismatch, malformed
   // protobuf decode, AND unrecognized text-plane lines (not "*", not
   // HELLO, not PING) all increment this. RobotLoop reads it as the

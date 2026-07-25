@@ -1,7 +1,7 @@
 ---
 id: '123'
 title: 'Firmware base hardening: COBS+CRC binary framing + telemetry migration'
-status: stakeholder-review
+status: closed
 branch: sprint/123-firmware-base-hardening-cobs-crc-binary-framing-telemetry-migration
 worktree: false
 use-cases:

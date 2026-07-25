@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """src/tests/bench/relay_telemetry_rate.py — sprint 102 ticket 001 P0 spike.
 
-Measures whether binary PUSH telemetry (armed via NezhaProtocol.stream(),
-CommandEnvelope{stream: StreamControl{period, binary: true}}) survives
-sustained delivery at a ~30 Hz target rate, direct over USB and through the
-radio relay's `!GO` data plane, against CURRENT (pre-single-loop) firmware.
-This is a read-only diagnostic: it arms/disarms telemetry only, never issues
-a motion command, and leaves the robot on the stand with motors neutralized
+Measures whether binary PUSH telemetry — protocol v4's always-on binary
+`Telemetry` push, with no arm/disarm call of any kind (firmware drives the
+cadence unconditionally; the client only drains
+`NezhaProtocol.read_pending_binary_tlm_frames()`) — survives sustained
+delivery at the firmware's own cycle rate (robot_loop.h kCycle, 40 ms /
+~25 Hz), direct over USB and through the radio relay's `!GO` data plane.
+The delivered primary rate is the cycle rate less the ~5 Hz secondary
+frames, which take a cycle's emit slot; the report compares against the
+cycle period the frames themselves carry, not an assumed cadence. This is
+a read-only diagnostic: it never issues a
+motion command, and leaves the robot on the stand with motors neutralized
 throughout.
 
 Uses the canonical SerialConnection + NezhaProtocol stack (never hand-rolled
@@ -62,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 import sys
 import time
 from collections import Counter
@@ -71,6 +77,16 @@ from robot_radio.io.serial_conn import SerialConnection
 from robot_radio.io.wire_codec import decode_frame
 from robot_radio.robot.pb2 import envelope_pb2
 from robot_radio.robot.protocol import NezhaProtocol, TLMFrame, tlm_drop_rate
+
+
+# Secondary frames (telemetry.h kSecondaryPeriod, 200 ms) take a cycle's
+# emit slot from the primary frame, so the primary rate this script counts
+# is the cycle rate less this. Not a drop -- see report()'s own line.
+kSecondaryRate = 5.0  # [Hz]
+
+# Firmware's own whole-schedule pace target (robot_loop.h kCycle); the
+# primary telemetry period equals it (telemetry.h kPrimaryPeriod).
+kCycleTarget = 40  # [ms]
 
 
 def instrument_malformed_counter(conn: SerialConnection) -> dict:
@@ -114,8 +130,8 @@ class GapEvent:
 class CaptureResult:
     label: str
     port: str
-    period: int              # [ms] armed STREAM period
-    duration: float           # [s] wall-clock capture window (arm to disarm)
+    period: int              # [ms] expected cadence (informational; firmware-driven in v4)
+    duration: float           # [s] wall-clock capture window
     delivered: int            # frames actually received
     expected_from_seq: int    # frames implied by the first/last seq span
     delivery_rate: float      # [fps] delivered / duration
@@ -124,7 +140,8 @@ class CaptureResult:
     gap_events: list          # list[GapEvent] — every run of >=1 missing frame
     malformed: int            # binary frames that failed COBS+CRC/protobuf decode
     connect_info: dict        # SerialConnection.connect() return value
-    ping_ok: bool             # sanity PING succeeded before arming stream
+    live_ok: bool             # telemetry frames observed during warmup — v4 has no text ping
+    cycle_period: float | None  # [ms] median firmware cycle period, read off the frames
 
 
 def analyze(frames_with_time: "list[tuple[float, TLMFrame]]") -> dict:
@@ -191,20 +208,18 @@ def run_capture(port: str, label: str, duration: float, period: int,
 
     proto = NezhaProtocol(conn)
 
-    # Sanity round-trip before arming the stream (per ticket: confirm we are
-    # actually talking to the robot on this path, not just that the port
-    # opened).
-    ping_result = proto.ping()
-    ping_ok = ping_result is not None
-    print(f"[{label}] connect: {info.get('mode')!r} ping={ping_result} "
-          f"announcement={info.get('announcement')}")
-
-    # Drop any stale frames left over from a previous session before arming.
+    # Drop any stale frames left over from a previous session, then confirm
+    # the always-on binary push is actually alive on this path before timing
+    # the real capture window (v4 has no arm/ping call to sanity-check
+    # against — the only liveness signal is frames actually arriving).
     proto.read_pending_binary_tlm_frames()
+    time.sleep(0.5)
+    live_ok = len(proto.read_pending_binary_tlm_frames()) > 0
+    print(f"[{label}] connect: {info.get('mode')!r} live={live_ok} "
+          f"announcement={info.get('announcement')}")
 
     frames_with_time: list[tuple[float, TLMFrame]] = []
     start = time.monotonic()
-    proto.stream(period)
     try:
         next_poll = start
         while True:
@@ -220,11 +235,13 @@ def run_capture(port: str, label: str, duration: float, period: int,
             for frame in batch:
                 frames_with_time.append((poll_time, frame))
             if int(poll_time) % 30 == 0:
-                print(f"[{label}] t={poll_time:6.1f}s frames_so_far={len(frames_with_time)} "
+                print(f"\n[{label}] t={poll_time:6.1f}s frames_so_far={len(frames_with_time)} "
                       f"malformed_so_far={malformed_counts['malformed']}")
+            else:
+                print(".", end="", flush=True)
     finally:
-        proto.stream(0)
-        # Final drain — catch anything queued between the last poll and disarm.
+        # Final drain — catch anything queued between the last poll and the
+        # duration deadline.
         tail = proto.read_pending_binary_tlm_frames()
         tail_time = time.monotonic() - start
         for frame in tail:
@@ -232,6 +249,14 @@ def run_capture(port: str, label: str, duration: float, period: int,
 
     actual_duration = time.monotonic() - start
     stats = analyze(frames_with_time)
+
+    # The firmware's OWN measured cycle period (123-004's cycle_period field,
+    # [us]), not an assumption: the primary telemetry period IS the cycle
+    # period (telemetry.h kPrimaryPeriod == robot_loop.h kCycle), so this is
+    # what the delivered rate should be compared against.
+    periods = [f.cycle_period / 1000.0 for _, f in frames_with_time
+               if f.cycle_period]  # [ms]
+    cycle_period = statistics.median(periods) if periods else None
 
     return CaptureResult(
         label=label,
@@ -246,16 +271,27 @@ def run_capture(port: str, label: str, duration: float, period: int,
         gap_events=stats["gap_events"],
         malformed=malformed_counts["malformed"],
         connect_info={k: v for k, v in info.items() if k != "lines"},
-        ping_ok=ping_ok,
+        live_ok=live_ok,
+        cycle_period=cycle_period,
     )
 
 
 def report(result: CaptureResult) -> None:
     print()
     print(f"=== {result.label} ({result.port}) ===")
-    print(f"  period armed        : {result.period} ms (~{1000.0 / result.period:.1f} Hz target)")
+    if result.cycle_period:
+        cycle_rate = 1000.0 / result.cycle_period                  # [Hz]
+        expected_rate = cycle_rate - kSecondaryRate                # [fps]
+        print(f"  cycle period (observed): {result.cycle_period:.1f} ms "
+              f"(~{cycle_rate:.1f} Hz) vs kCycle target {result.period} ms "
+              f"(~{1000.0 / result.period:.1f} Hz)")
+        print(f"  expected primary rate: {expected_rate:.1f} fps "
+              f"(cycle rate less the ~{kSecondaryRate:.0f} Hz secondary frames)")
+    else:
+        print(f"  cycle period (observed): n/a -- no frame carried cycle_period; "
+              f"kCycle target {result.period} ms")
     print(f"  capture duration     : {result.duration:.1f} s")
-    print(f"  ping sanity check    : {'OK' if result.ping_ok else 'FAILED'}")
+    print(f"  liveness (frames arriving) : {'OK' if result.live_ok else 'FAILED'}")
     print(f"  delivered frames     : {result.delivered}")
     print(f"  expected (seq span)  : {result.expected_from_seq}")
     print(f"  frames/sec delivered : {result.delivery_rate:.2f}")
@@ -270,7 +306,7 @@ def main() -> int:
     parser.add_argument("--port", required=True)
     parser.add_argument("--label", default="capture")
     parser.add_argument("--duration", type=float, default=240.0)      # [s]
-    parser.add_argument("--period", type=int, default=33)             # [ms] ~30 Hz
+    parser.add_argument("--period", type=int, default=kCycleTarget)   # [ms] kCycle
     parser.add_argument("--poll-interval", type=float, default=1.0)   # [s]
     parser.add_argument("--json-out", default=None)
     args = parser.parse_args()
@@ -285,7 +321,7 @@ def main() -> int:
             json.dump(payload, f, indent=2, default=str)
         print(f"\nwrote {args.json_out}")
 
-    return 0 if result.ping_ok else 2
+    return 0 if result.live_ok else 2
 
 
 if __name__ == "__main__":

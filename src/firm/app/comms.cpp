@@ -201,4 +201,10 @@ void Comms::sendReply(const msg::ReplyEnvelope& reply) {
   radioLink_.send(framed, static_cast<uint16_t>(framedLen));
 }
 
+void Comms::sendBanner() {
+  // sendReliable(), not send(): one-off text-plane line (com/DESIGN.md §3).
+  serialLink_.sendReliable(banner_);
+  radioLink_.sendReliable(banner_);
+}
+
 }  // namespace App

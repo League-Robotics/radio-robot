@@ -529,11 +529,15 @@ void RobotLoop::processMessage(const Cmd& cmd) {
 }
 
 // ---- Boot: resolve every device before entering the control loop.
-// Telemetry flows from power-on (frames report per-device status), so the
-// host can tell booting from dead; commands are not consumed until the
-// main loop starts (no Comms::pump() call here). ----
+// Telemetry flows from power-on (frames report per-device status), and the
+// text rump stays live so HELLO/PING can classify a rebooting robot while
+// the preamble is still probing devices. Binary commands are ignored until
+// the main loop starts. ----
 void RobotLoop::boot() {
   while (!preamble_.done()) {
+    Cmd bootCmd;
+    comms_.pump(bootCmd, markTime());
+
     preamble_.step();  // one bounded probe action per pass
 
     Telemetry::Frame bootFrame;
@@ -546,6 +550,8 @@ void RobotLoop::boot() {
     sleeper_.sleepMillis(kPreamblePace);  // paces probes AND yields (radio RX)
   }
   tlm_.setFlag(kFlagEventBootReady, true);  // Preamble::done() first-true transition
+
+  comms_.sendBanner();  // preamble done, main loop next -- see Comms::sendBanner()
 }
 
 // ---- Main cycle: devices resolved, no readiness checks below this line.

@@ -1,7 +1,7 @@
 ---
 id: '006'
 title: Bench hardware verification gate
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 - SUC-003
@@ -180,3 +180,27 @@ Full sim suite (`uv run python -m pytest`): 1434 passed (1428 baseline +
 6 new tests in `test_host_wire_codec.py`), 2 skipped, 9 xfailed,
 2 xpassed — no regressions. Firmware build (`just build-clean`) succeeds
 clean for both the ARM target and the host-sim library.
+
+
+## Completion (2026-07-25)
+
+Bench gate executed on the stand, robot `tovez`, firmware v0.20260724.2
+flashed over SWD:
+
+- Boot announcement verified on the real link — the banner now appears
+  TWICE per boot (power-on from `main.cpp`, then post-preamble from
+  `RobotLoop::boot()` -> `Comms::sendBanner()`), ~2.3 s apart.
+- Sustained binary telemetry over direct USB: 307 frames / 20 s,
+  **0.00% drop, 0 seq gaps, 0 malformed COBS+CRC frames**
+  (`src/tests/bench/relay_telemetry_rate.py`).
+- Firmware cycle period measured from the frames' own `cycle_period`
+  field: 52.0 ms steady (min == max) against `kCycle`'s 40 ms target.
+  Loop-budget overrun recorded as a follow-up, not a framing defect.
+- `just devtest` (clean build -> pyOCD flash -> capture) ran end to end.
+
+Blocked mid-session by a hardware fault, now resolved: the motor brick's
+battery was dead, leaving the external I2C bus with no pull-ups, which
+hung the firmware forever in `NRF52I2C::waitForStop` with IRQs masked
+(total radio/serial silence). Brick replaced by the stakeholder. The
+firmware's inability to degrade loudly on a dead bus is a real
+robustness gap, filed separately.
