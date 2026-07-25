@@ -139,6 +139,34 @@ std::string armor(const uint8_t* raw, size_t rawLen) {
   return std::string(reinterpret_cast<const char*>(framed), framedLen);
 }
 
+// armorScoped() -- extends armor() with a CRC-scope command-name prefix
+// (124-003, issue §3): `crc16(command ':' raw)` instead of `crc16(raw)`
+// alone when `commandLen > 0`. An INDEPENDENT re-implementation of
+// comms.cpp's own crcOverScope() (a private helper, not reachable from
+// this translation unit), built the exact same way -- WireRuntime's
+// incremental crcInit()/crcUpdate(), command and raw bytes never
+// concatenated into one buffer -- so the two directions are tested
+// against each other, not tautologically (same discipline armor() itself
+// already follows for the unscoped case).
+std::string armorScoped(const uint8_t* raw, size_t rawLen, const uint8_t* command, size_t commandLen) {
+  uint8_t combined[256];
+  if (rawLen > sizeof(combined) - 2) return std::string();
+  std::memcpy(combined, raw, rawLen);
+  size_t combinedLen = rawLen;
+  uint16_t crc = WireRuntime::crcInit();
+  if (commandLen > 0) {
+    crc = WireRuntime::crcUpdate(crc, command, commandLen);
+    const uint8_t sep = ':';
+    crc = WireRuntime::crcUpdate(crc, &sep, 1);
+  }
+  crc = WireRuntime::crcUpdate(crc, raw, rawLen);
+  if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) return std::string();
+  uint8_t framed[300];
+  size_t framedLen = 0;
+  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen)) return std::string();
+  return std::string(reinterpret_cast<const char*>(framed), framedLen);
+}
+
 using TestSupport::FakeTransport;
 
 // ===========================================================================
@@ -451,6 +479,112 @@ void scenarioSendReplyBroadcastsIdenticalLineOnBothTransports() {
   }
 }
 
+// ===========================================================================
+// 6. CRC-scope extension (124-003, issue §3): the CRC's input now covers
+//    `COMMAND ':' payload`, not just `payload` -- sendReply()/
+//    decodeBinaryFrame() take the command bytes as a SEPARATE argument
+//    (default empty, byte-identical to protocol v4's CRC, since no CURRENT
+//    call site has a real ASCII command prefix to pass yet -- that grammar
+//    cutover is ticket 124-005).
+// ===========================================================================
+
+void scenarioSendReplyCrcScopeDiffersByCommand() {
+  beginScenario(
+      "sendReply(): identical reply payload under two different command names produces two different CRCs "
+      "(124-003, issue §3)");
+
+  msg::ReplyEnvelope reply;
+  reply.corr_id = 9;
+  reply.body_kind = msg::ReplyEnvelope::BodyKind::OK;
+  reply.body.ok.q = 5;
+  reply.body.ok.rem = 12.5f;
+  reply.body.ok.t = 4242;
+
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+
+  const uint8_t commandA[] = {'M', 'O', 'V', 'E'};
+  const uint8_t commandB[] = {'S', 'T', 'O', 'P'};
+
+  FakeTransport serialFakeA;
+  FakeTransport radioFakeA;
+  App::Comms commsA(serialFakeA, radioFakeA, banner);
+  commsA.sendReply(reply, commandA, sizeof(commandA));
+
+  FakeTransport serialFakeB;
+  FakeTransport radioFakeB;
+  App::Comms commsB(serialFakeB, radioFakeB, banner);
+  commsB.sendReply(reply, commandB, sizeof(commandB));
+
+  checkU64Eq(serialFakeA.sent().size(), 1, "commandA send produced exactly one frame");
+  checkU64Eq(serialFakeB.sent().size(), 1, "commandB send produced exactly one frame");
+  if (serialFakeA.sent().empty() || serialFakeB.sent().empty()) return;
+
+  const std::string& frameA = serialFakeA.sent()[0];
+  const std::string& frameB = serialFakeB.sent()[0];
+  checkTrue(frameA != frameB, "two different command names produce two different frames (the CRC differs)");
+
+  // Decode both frames independently (plain COBS, delimiter 0x00 -- the
+  // wire LAYOUT is unaffected by 124-003, only the CRC's input range) and
+  // confirm the schema-encoded payload bytes are IDENTICAL between the two
+  // (same reply content, same encode()) while the trailing 2-byte CRC
+  // differs -- isolating the difference to the CRC exactly, not a
+  // coincidental side effect of framing.
+  uint8_t decodedA[300] = {};
+  size_t decodedALen = 0;
+  uint8_t decodedB[300] = {};
+  size_t decodedBLen = 0;
+  checkTrue(WireRuntime::cobsDecode(reinterpret_cast<const uint8_t*>(frameA.data()), frameA.size(), decodedA,
+                                     sizeof(decodedA), &decodedALen),
+            "frame A COBS-decodes cleanly");
+  checkTrue(WireRuntime::cobsDecode(reinterpret_cast<const uint8_t*>(frameB.data()), frameB.size(), decodedB,
+                                     sizeof(decodedB), &decodedBLen),
+            "frame B COBS-decodes cleanly");
+  checkTrue(decodedALen == decodedBLen && decodedALen >= 2, "both decode to the same combined length");
+  if (decodedALen == decodedBLen && decodedALen >= 2) {
+    const size_t payloadLen = decodedALen - 2;
+    checkTrue(std::memcmp(decodedA, decodedB, payloadLen) == 0,
+              "the schema-encoded payload bytes are identical between the two command names");
+    checkTrue(std::memcmp(decodedA + payloadLen, decodedB + payloadLen, 2) != 0,
+              "the trailing 2-byte CRC differs between the two command names");
+  }
+}
+
+void scenarioDecodeBinaryFrameRejectsMismatchedCommandScope() {
+  beginScenario(
+      "pump(): frame CRC-scoped under a command name (124-003) fails verification when decoded under a "
+      "DIFFERENT scope -- never dispatches");
+
+  Buf env;
+  putVarintField(env, 1, 11);  // corr_id
+  putVarintField(env, 13, 0);  // CommandEnvelope.stop (empty message, field 13)
+
+  const uint8_t command[] = {'M', 'O', 'V', 'E'};
+  std::string line = armorScoped(env.data, env.len, command, sizeof(command));
+  checkTrue(!line.empty(), "armorScoped() produced a non-empty frame");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  serialFake.enqueueInboundBinary(line);
+
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+
+  // pump()'s CURRENT call site (pumpTransport(), comms.cpp) decodes with
+  // decodeBinaryFrame()'s default EMPTY CRC scope -- the wire's own ASCII
+  // command prefix is not parsed and threaded through yet (that is ticket
+  // 124-005's grammar cutover; comms.h's decodeBinaryFrame() doc comment
+  // says so explicitly). So a frame whose CRC was computed under a REAL
+  // command scope must fail verification here -- a stand-in for "the
+  // command byte was mutated/lost in transit" the issue's own AC names,
+  // proven with the tooling this ticket actually lands rather than the
+  // full wire-line parse 005 owns.
+  App::Cmd cmd;
+  comms.pump(cmd, /*now=*/0);
+
+  checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone -- scope-mismatched frame never decodes");
+  checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once (CRC-scope mismatch detected)");
+}
+
 }  // namespace
 
 int main() {
@@ -463,6 +597,8 @@ int main() {
   scenarioPingRepliesOkPongViaSendReliable();
   scenarioPumpBoundedToOneTransportPerCall();
   scenarioSendReplyBroadcastsIdenticalLineOnBothTransports();
+  scenarioSendReplyCrcScopeDiffersByCommand();
+  scenarioDecodeBinaryFrameRejectsMismatchedCommandScope();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Comms scenarios passed\n");

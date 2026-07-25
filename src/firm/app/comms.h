@@ -14,6 +14,7 @@
 // (that is RobotLoop's own dispatch). Design/rationale: DESIGN.md.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "messages/envelope.h"
@@ -192,7 +193,19 @@ class Comms {
   // every cadence, not just "back to whoever last spoke"). This is what
   // Telemetry calls. No return value: encode()==0 or a COBS/CRC framing
   // failure means silently send nothing.
-  void sendReply(const msg::ReplyEnvelope& reply);
+  //
+  // command/commandLen -- the ASCII command-name bytes (no ':' separator)
+  // this reply's CRC input is scoped to extend over, per protocol v5's
+  // `crc = crc16(COMMAND ':' payload)` composition (124-003, issue §3): a
+  // SEPARATE argument, deliberately never concatenated with the encoded
+  // envelope bytes into one scratch buffer (see comms.cpp's crcOverScope()).
+  // Defaults to an empty scope -- `crc16(payload)` alone, byte-identical
+  // to protocol v4's CRC -- because every CURRENT call site (Telemetry)
+  // still has no ASCII verb prefix to pass: the reply-plane grammar itself
+  // (`PONG:`/`ID:`/`VER:`/a per-reply command name) is ticket 124-005's
+  // cutover, not this one's. This parameter exists so 005 has a
+  // scope-aware sendReply() to call into without a second CRC rework.
+  void sendReply(const msg::ReplyEnvelope& reply, const uint8_t* command = nullptr, size_t commandLen = 0);
 
   // Push the banner unprompted on both transports, text plane. Emitted twice
   // per boot -- main.cpp at power-on, RobotLoop::boot() when the preamble
@@ -216,7 +229,17 @@ class Comms {
   // comms.cpp for the discipline note. `frame`/`frameLen` is the raw
   // COBS+CRC-encoded frame body Transport::readLine() delivered (the
   // trailing 0x00 delimiter already stripped by the transport).
-  void decodeBinaryFrame(const uint8_t* frame, uint16_t frameLen, Cmd& out);
+  //
+  // command/commandLen -- same CRC-scope argument as sendReply() above,
+  // the OTHER direction: the ASCII command-name bytes the wire line's
+  // parsed prefix identified BEFORE this binary frame body was reached
+  // (124-005's grammar cutover owns that parse). Defaults to an empty
+  // scope, matching pumpTransport()'s current call site, which has no
+  // prefix to pass yet -- see sendReply()'s doc comment above for why an
+  // empty default is the correct placeholder rather than a functional
+  // change.
+  void decodeBinaryFrame(const uint8_t* frame, uint16_t frameLen, Cmd& out, const uint8_t* command = nullptr,
+                          size_t commandLen = 0);
 
   Transport& serialLink_;
   Transport& radioLink_;

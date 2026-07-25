@@ -66,6 +66,31 @@ void RadioTransport::sendReliable(const char* msg) { radio_.sendText(msg); }
 
 #endif  // HOST_BUILD
 
+namespace {
+
+// crcOverScope() -- the CRC-scope composition protocol v5 needs (124-003,
+// issue §3): `crc16(COMMAND ':' payload)` when a command name is given,
+// `crc16(payload)` alone (byte-identical to protocol v4's CRC) when it is
+// not. Threads WireRuntime's incremental crcInit()/crcUpdate() so the
+// command bytes and the payload bytes -- two ranges that are never
+// adjacent in memory -- are never concatenated into a scratch buffer just
+// to hash them together. This composition (the ':' separator, "empty
+// command means no scope extension") is protocol grammar, which is
+// Comms's boundary, not WireRuntime's (see messages/DESIGN.md's
+// three-layer split) -- WireRuntime only supplies the generic incremental
+// primitive.
+uint16_t crcOverScope(const uint8_t* command, size_t commandLen, const uint8_t* payload, size_t payloadLen) {
+  uint16_t crc = WireRuntime::crcInit();
+  if (commandLen > 0) {
+    crc = WireRuntime::crcUpdate(crc, command, commandLen);
+    static constexpr uint8_t kCommandSeparator = ':';
+    crc = WireRuntime::crcUpdate(crc, &kCommandSeparator, 1);
+  }
+  return WireRuntime::crcUpdate(crc, payload, payloadLen);
+}
+
+}  // namespace
+
 // --- Comms -----------------------------------------------------------
 
 Comms::Comms(Transport& serialLink, Transport& radioLink, const char* banner)
@@ -114,12 +139,14 @@ bool Comms::pumpTransport(Transport& t, Cmd& out, uint32_t now) {
   return true;
 }
 
-void Comms::decodeBinaryFrame(const uint8_t* frame, uint16_t frameLen, Cmd& out) {
+void Comms::decodeBinaryFrame(const uint8_t* frame, uint16_t frameLen, Cmd& out, const uint8_t* command,
+                               size_t commandLen) {
   // Reverse of sendReply()'s CRC-then-COBS composition (123-001 completion
   // notes, pinned exactly so firmware and host agree byte-for-byte): 1)
   // COBS-decode the received frame bytes back into (schema payload + CRC)
   // combined bytes, 2) split off the trailing 2-byte CRC, 3) verify it
-  // against the leading payload bytes, 4) only then hand the payload to
+  // against the leading payload bytes (CRC-scoped over `command` too, per
+  // 124-003 -- see crcOverScope() above), 4) only then hand the payload to
   // msg::wire::decode(). Every step fails cleanly (malformedCount_++,
   // out left untouched) on any malformed/corrupt input -- no partial state
   // ever reaches `out` (see pump()'s own doc comment).
@@ -141,7 +168,8 @@ void Comms::decodeBinaryFrame(const uint8_t* frame, uint16_t frameLen, Cmd& out)
     ++malformedCount_;
     return;
   }
-  if (!WireRuntime::crcVerify(combined, payloadLen, receivedCrc)) {
+  const uint16_t expectedCrc = crcOverScope(command, commandLen, combined, payloadLen);
+  if (expectedCrc != receivedCrc) {
     ++malformedCount_;
     return;
   }
@@ -163,7 +191,7 @@ void Comms::decodeBinaryFrame(const uint8_t* frame, uint16_t frameLen, Cmd& out)
   out.env = decoded;
 }
 
-void Comms::sendReply(const msg::ReplyEnvelope& reply) {
+void Comms::sendReply(const msg::ReplyEnvelope& reply, const uint8_t* command, size_t commandLen) {
   uint8_t rawBuf[kMaxEnvelopeBytes];
   const uint16_t n = msg::wire::encode(reply, rawBuf, static_cast<uint16_t>(sizeof(rawBuf)));
   if (n == 0) {
@@ -177,11 +205,15 @@ void Comms::sendReply(const msg::ReplyEnvelope& reply) {
   // COBS-then-append-CRC, which would risk emitting a literal 0x00 if the
   // CRC bytes happen to contain one, breaking the delimiter property):
   // append the 2-byte CRC-16/CCITT-FALSE (little-endian) to the
-  // schema-encoded payload, THEN COBS-encode the combined bytes.
+  // schema-encoded payload, THEN COBS-encode the combined bytes. The CRC
+  // itself is scoped over `command` too when one is given (124-003 --
+  // crcOverScope() above), so the wire layout here is unchanged: the CRC
+  // still covers only `rawBuf`/`combined`'s own bytes on the wire, and
+  // `command`/`commandLen` never enter the COBS input.
   uint8_t combined[kMaxCrcPayloadBytes];
   std::memcpy(combined, rawBuf, n);
   size_t combinedLen = n;
-  const uint16_t crc = WireRuntime::crcCompute(rawBuf, n);
+  const uint16_t crc = crcOverScope(command, commandLen, rawBuf, n);
   if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) {
     return;  // unreachable in practice -- combined is sized for exactly this
   }

@@ -125,6 +125,23 @@ firmware runtime; the device itself never sees protobuf. It also emits
   io/wire_codec.py` ports the identical variant to Python. Changing the
   variant on only one side breaks every frame's CRC check silently
   (every frame appears corrupt and is dropped, not decoded).
+  **124-003 (CRC scope extension):** the *variant* above is unchanged —
+  `crcCompute()` still computes exactly the same value it always did —
+  but the CRC's *input range* now extends to `COMMAND ':' payload`
+  instead of `payload` alone, closing the "a bit-flip inside the command
+  name lands on another valid verb and dispatches with a passing CRC"
+  gap. `WireRuntime` gained an incremental `crcInit()`/`crcUpdate()` pair
+  (`crcCompute(data, len) == crcUpdate(crcInit(), data, len)`, same loop
+  body) so a caller can fold a command-name prefix and a payload — two
+  byte ranges that are not adjacent in memory — into one CRC without
+  concatenating them into a scratch buffer first. `WireRuntime` itself
+  still knows nothing about a command name or a `':'` separator — that
+  composition is `Comms`'s boundary (`comms.cpp`'s `crcOverScope()`) /
+  `wire_codec.py`'s (`_crc_over_scope()`), not `WireRuntime`'s, per this
+  file's own three-layer split. Every call site as of 124-003 still
+  passes an empty scope (byte-identical to the pre-124 CRC) because the
+  wire's own ASCII command prefix this scope is *for* does not exist yet
+  — that is ticket 124-005's grammar cutover.
 - **COBS is the wire's current framing** (sprint 123, replacing base64
   armor). A COBS-encoded frame body never contains an embedded `0x00`
   byte by construction — that byte is reserved exclusively as the
@@ -133,6 +150,18 @@ firmware runtime; the device itself never sees protobuf. It also emits
   unambiguously (`App::FrameKind`, `src/firm/app/comms.h`). See
   `docs/protocol-v4.md` §2 for the full frame layout and byte-budget
   derivation.
+  **124-003 (delimiter parameterization):** `cobsEncode()`/`cobsDecode()`
+  gained a trailing `delimiter` byte parameter (default `0x00`, every
+  pre-124 call site unaffected). The mechanism is an XOR of every output
+  byte (encode) / every input byte at the point of reading (decode) by
+  `delimiter` — sound because `cobsEncode()`'s pre-XOR output is
+  guaranteed `0x00`-free by construction, and `b ^ delimiter ==
+  delimiter` iff `b == 0`, which never occurs, so the XOR-ed stream can
+  never contain `delimiter` either. `Comms`/transports still key on
+  `0x00` as of this ticket (switching the live wire delimiter to `0x0A`
+  and unifying it with the `\n` grammar terminator is ticket 124-005's
+  cutover) — this ticket only lands the parameterized primitive both
+  sides will call with `delimiter=0x0A` once that grammar exists.
 - **Struct layout must stay standard-layout.** Every `msg::*` struct
   reachable from `CommandEnvelope`/`ReplyEnvelope`/`TelemetrySecondary` must
   satisfy `std::is_standard_layout` — this is what makes the generated

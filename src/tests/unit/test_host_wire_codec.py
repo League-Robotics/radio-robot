@@ -20,6 +20,8 @@ from robot_radio.io.wire_codec import (
     cobs_encode,
     cobs_encoded_max_length,
     crc16_ccitt_false,
+    crc16_init,
+    crc16_update,
     decode_frame,
     encode_frame,
 )
@@ -49,6 +51,35 @@ def test_crc16_changes_on_any_single_bit_flip():
             mutated = bytearray(data)
             mutated[i] ^= 1 << bit
             assert crc16_ccitt_false(bytes(mutated)) != base_crc
+
+
+# ---------------------------------------------------------------------------
+# CRC-16/CCITT-FALSE incremental primitives (124-003, issue §3): crc16_init()/
+# crc16_update() are the base crc16_ccitt_false() is built on, and the
+# primitive encode_frame()/decode_frame()'s CRC-scope composition uses so a
+# command-name prefix and a payload -- two byte ranges that are not one
+# ``bytes`` object -- can be hashed together without concatenating them first.
+# ---------------------------------------------------------------------------
+
+
+def test_crc16_incremental_matches_crc16_ccitt_false():
+    data = b"123456789"
+    assert crc16_update(crc16_init(), data) == crc16_ccitt_false(data)
+    assert crc16_ccitt_false(data) == 0x29B1  # sanity: still the pinned value
+
+
+def test_crc16_incremental_composes_across_two_ranges():
+    """Composing over TWO separate ranges (prefix, then suffix) matches
+    crc16_ccitt_false() over their concatenation -- the property
+    _crc_over_scope() (and comms.cpp's crcOverScope()) are built on."""
+    prefix = b"MOVE:"
+    suffix = bytes([0x08, 0x07, 0x1A, 0x00, 0x22, 0x03])
+    via_concatenation = crc16_ccitt_false(prefix + suffix)
+
+    crc = crc16_init()
+    crc = crc16_update(crc, prefix)
+    crc = crc16_update(crc, suffix)
+    assert crc == via_concatenation
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +143,71 @@ def test_cobs_decode_rejects_literal_zero_inside_data_block():
 
 
 # ---------------------------------------------------------------------------
+# COBS delimiter parameterization (124-003, issue §2): cobs_encode()/
+# cobs_decode() gained a ``delimiter`` parameter, default 0x00.
+# ---------------------------------------------------------------------------
+
+
+def test_cobs_default_delimiter_matches_explicit_0x00():
+    """Omitting ``delimiter`` matches passing 0x00 explicitly, byte-for-byte
+    -- every pre-124 call site keeps computing the exact same output."""
+    data = bytes([0x41, 0x00, 0x0A, 0x00, 0x42, 0x00])
+    assert cobs_encode(data) == cobs_encode(data, delimiter=0x00)
+    # A literal 0x0A survives untouched in the output when delimiter=0x00 --
+    # only 0x00 is special under the pre-124 default.
+    assert 0x0A in cobs_encode(data)
+
+
+def test_cobs_delimiter_0x0a_adversarial_vectors_from_issue():
+    """The exact worked/adversarial vectors ``protocol-v5-...md`` §2 verified
+    by hand: all-0x0A, all-0x00, and a 0x00..0x0F sweep, each run through the
+    SAME "payload + CRC, then COBS(delimiter=0x0A)" composition the issue's
+    own table describes -- asserted against the EXACT wire bytes the issue
+    lists, not just "some encoding happened."""
+
+    def wire_frame(payload: bytes) -> bytes:
+        crc = crc16_ccitt_false(payload)
+        combined = payload + bytes((crc & 0xFF, (crc >> 8) & 0xFF))
+        return cobs_encode(combined, delimiter=0x0A)
+
+    cases = {
+        bytes([0x0A] * 8): bytes.fromhex("01 00 00 00 00 00 00 00 00 41 78"),
+        bytes(8): bytes.fromhex("0b 0b 0b 0b 0b 0b 0b 0b 09 34 3b"),
+        bytes(range(0x10)): bytes.fromhex(
+            "0b 18 0b 08 09 0e 0f 0c 0d 02 03 00 01 06 07 04 05 3d 31"
+        ),
+    }
+
+    for payload, expected_wire in cases.items():
+        wire = wire_frame(payload)
+        assert wire == expected_wire, f"payload={payload.hex()}: wire mismatch"
+        assert 0x0A not in wire, f"payload={payload.hex()}: wire contains a literal 0x0A"
+
+        combined = cobs_decode(wire, delimiter=0x0A)
+        assert combined[:-2] == payload, f"payload={payload.hex()}: round-trip mismatch"
+
+
+def test_cobs_delimiter_0x0a_no_literal_and_roundtrips_up_to_251_bytes():
+    """Property test (issue AC #3): for payloads up to 251 bytes, the
+    encoded frame contains no 0x0A byte and decode round-trips -- a
+    deterministic 0x00-0xFF sweep plus random sampling, not just one shape."""
+    # Every byte value at least once.
+    sweep = bytes(range(256))
+    encoded = cobs_encode(sweep, delimiter=0x0A)
+    assert 0x0A not in encoded
+    assert cobs_decode(encoded, delimiter=0x0A) == sweep
+
+    # Random payloads up to 251 bytes (the issue's own affordable ceiling,
+    # §6), including the empty payload.
+    for _ in range(500):
+        n = os.urandom(1)[0] % 252
+        data = os.urandom(n)
+        encoded = cobs_encode(data, delimiter=0x0A)
+        assert 0x0A not in encoded
+        assert cobs_decode(encoded, delimiter=0x0A) == data
+
+
+# ---------------------------------------------------------------------------
 # Frame encode/decode (CRC-then-COBS composition)
 # ---------------------------------------------------------------------------
 
@@ -162,6 +258,66 @@ def test_decode_frame_rejects_combined_length_under_two():
     with a bogus CRC."""
     frame = cobs_encode(b"\x01")  # decodes to exactly 1 byte -- no room for a CRC
     assert decode_frame(frame) is None
+
+
+# ---------------------------------------------------------------------------
+# CRC-scope extension (124-003, issue §3): encode_frame()/decode_frame()
+# gained a ``command: bytes = b""`` argument -- the CRC's input extends to
+# cover ``command + b":" + payload`` instead of ``payload`` alone. Empty
+# (the default) means no scope extension, byte-identical to protocol v4's
+# CRC -- every CURRENT caller still gets that, since no wire ASCII command
+# prefix exists yet (ticket 124-005's own grammar cutover).
+# ---------------------------------------------------------------------------
+
+
+def test_encode_frame_default_command_matches_pre_124_behavior():
+    """Omitting ``command`` reproduces the exact pre-124 frame bytes --
+    every existing call site (serial_conn.py, sim_loop.py, ...) keeps
+    computing byte-identical frames."""
+    payload = b"the quick brown fox"
+    assert encode_frame(payload) == encode_frame(payload, command=b"")
+
+
+def test_frame_roundtrip_with_matching_command_scope():
+    # encode_frame()/decode_frame() still COBS(delimiter=0x00) at this layer
+    # (124-003 does not thread the delimiter through the higher-level frame
+    # API, only cobs_encode()/cobs_decode() themselves -- see this module's
+    # header) -- only 0x00 bytes are special here, so a literal 0x0A in the
+    # payload is ordinary content and survives untouched, same as pre-124.
+    payload = b"MoveTwist payload bytes \x00\x0a\xff"
+    frame = encode_frame(payload, command=b"MOVE")
+    assert 0 not in frame
+    assert decode_frame(frame, command=b"MOVE") == payload
+
+
+def test_decode_frame_rejects_mismatched_command_scope():
+    """A frame CRC-scoped under one command name fails verification when
+    decoded under a DIFFERENT one -- the 'command byte mutated in transit'
+    acceptance criterion (issue §3 / ticket 003 AC)."""
+    payload = b"identical payload bytes"
+    frame = encode_frame(payload, command=b"MOVE")
+
+    assert decode_frame(frame, command=b"MOVE") == payload  # control: matching scope succeeds
+    assert decode_frame(frame, command=b"STOP") is None  # different command name -> CRC mismatch
+    assert decode_frame(frame) is None  # no command at all (empty scope) -> also a CRC mismatch
+
+
+def test_encode_frame_two_different_commands_produce_two_different_crcs():
+    """Identical payload under two different command names produces two
+    different CRCs (issue §3 / ticket 003 AC) -- proven by showing the
+    schema payload bytes are identical between the two frames while the
+    trailing 2-byte CRC differs, isolating the difference to the CRC
+    exactly."""
+    payload = b"identical payload bytes"
+    frame_move = encode_frame(payload, command=b"MOVE")
+    frame_stop = encode_frame(payload, command=b"STOP")
+
+    assert frame_move != frame_stop
+
+    combined_move = cobs_decode(frame_move)
+    combined_stop = cobs_decode(frame_stop)
+    assert combined_move[:-2] == combined_stop[:-2] == payload  # same payload, both directions
+    assert combined_move[-2:] != combined_stop[-2:]  # different CRC
 
 
 # ---------------------------------------------------------------------------

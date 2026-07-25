@@ -38,7 +38,23 @@ match byte-for-byte -- there is no negotiation, no version byte):
     xorout = 0x0000 (no final XOR)
 Known-answer vector (CRC RevEng catalogue): ``crc16_ccitt_false(b"123456789")
 == 0x29B1`` -- exercised as an exact-value test, not merely "some CRC
-changed" (see ``src/tests/unit/test_wire_codec.py``).
+changed" (see ``src/tests/unit/test_host_wire_codec.py``).
+
+Sprint 124 ticket 003 (protocol v5 Part A, issue §2/§3) extended this module
+again, mirroring ``wire_runtime.h``'s own byte-for-byte changes, with no new
+primitive functions beyond the two named below: ``cobs_encode()``/
+``cobs_decode()`` gained a ``delimiter`` parameter (default ``0x00``, so
+every pre-124 call site keeps computing byte-identical output -- XOR-ing by
+``0x00`` is the identity), and ``crc16_ccitt_false()`` is now built on a new
+incremental ``crc16_init()``/``crc16_update()`` pair so ``encode_frame()``/
+``decode_frame()`` can hash a command-name prefix and a payload together
+(``crc16(COMMAND ':' payload)``) without concatenating the two into one
+``bytes`` object first. Both gained a ``command: bytes = b""`` parameter
+for exactly that -- empty (the default) means "no scope extension",
+``crc16(payload)`` alone, byte-identical to protocol v4's CRC, which is
+what every CURRENT caller still gets: the reply-plane's ASCII verb prefix
+this scope is FOR does not exist on the wire yet (ticket 124-005's own
+grammar cutover), so no existing call site has a command name to pass.
 """
 
 from __future__ import annotations
@@ -46,6 +62,8 @@ from __future__ import annotations
 __all__ = [
     "WireFrameError",
     "crc16_ccitt_false",
+    "crc16_init",
+    "crc16_update",
     "cobs_encode",
     "cobs_decode",
     "cobs_encoded_max_length",
@@ -119,12 +137,22 @@ class WireFrameError(ValueError):
     exception raised."""
 
 
-def crc16_ccitt_false(data: bytes) -> int:
-    """CRC-16/CCITT-FALSE over ``data`` -- byte-for-byte port of
-    ``WireRuntime::crcCompute()`` (wire_runtime.cpp): MSB-first, no input/
-    output reflection, no final XOR. See this module's header for the pinned
-    parameters and the known-answer test vector."""
-    crc = _CRC16_INIT
+def crc16_init() -> int:
+    """Initial CRC-16/CCITT-FALSE register value -- the starting point for
+    an incremental ``crc16_update()`` chain. Byte-for-byte port of
+    ``WireRuntime::crcInit()`` (wire_runtime.cpp/.h item 9, 124-003):
+    exposed so a caller composing a CRC over multiple byte ranges (see
+    ``encode_frame()``/``decode_frame()`` below) never needs to
+    concatenate those ranges into one ``bytes`` object first."""
+    return _CRC16_INIT
+
+
+def crc16_update(crc: int, data: bytes) -> int:
+    """Continue a running CRC-16/CCITT-FALSE computation with more bytes --
+    byte-for-byte port of ``WireRuntime::crcUpdate()``. ``crc16_ccitt_false(
+    data) == crc16_update(crc16_init(), data)`` exactly (same loop body) --
+    this is the incremental primitive that equivalence, and the CRC-scope
+    composition in ``encode_frame()``/``decode_frame()``, are built on."""
     for byte in data:
         crc = (crc ^ (byte << 8)) & 0xFFFF
         for _ in range(8):
@@ -135,6 +163,14 @@ def crc16_ccitt_false(data: bytes) -> int:
     return crc
 
 
+def crc16_ccitt_false(data: bytes) -> int:
+    """CRC-16/CCITT-FALSE over ``data`` -- byte-for-byte port of
+    ``WireRuntime::crcCompute()`` (wire_runtime.cpp): MSB-first, no input/
+    output reflection, no final XOR. See this module's header for the pinned
+    parameters and the known-answer test vector."""
+    return crc16_update(crc16_init(), data)
+
+
 def cobs_encoded_max_length(raw_len: int) -> int:
     """Worst-case COBS-encoded length of ``raw_len`` bytes -- port of
     ``WireRuntime::cobsEncodedMaxLength()``: one code byte per <=254-byte
@@ -142,45 +178,72 @@ def cobs_encoded_max_length(raw_len: int) -> int:
     return raw_len + raw_len // _COBS_MAX_BLOCK + 1
 
 
-def cobs_encode(data: bytes) -> bytes:
+def cobs_encode(data: bytes, delimiter: int = 0x00) -> bytes:
     """Consistent Overhead Byte Stuffing encode -- byte-for-byte port of
-    ``WireRuntime::cobsEncode()`` (wire_runtime.cpp). Removes every ``0x00``
-    byte from ``data`` so the result can be delimited on the wire by a single
-    ``0x00`` -- the caller's job (this primitive never appends that trailing
-    delimiter itself, matching the C++ primitive's own documented
-    boundary)."""
+    ``WireRuntime::cobsEncode()`` (wire_runtime.cpp). Removes every
+    occurrence of ``delimiter`` from ``data`` so the result can be
+    delimited on the wire by a single instance of that same byte -- the
+    caller's job (this primitive never appends that trailing delimiter
+    itself, matching the C++ primitive's own documented boundary).
+
+    ``delimiter`` defaults to ``0x00``, matching every pre-124 call site
+    byte-for-byte (XOR-ing by ``0x00`` is the identity -- see below). 124-003
+    (issue §2) needs ``0x0A`` for the same reason ``wire_runtime.h``'s own
+    item 8 doc comment gives: COBS guarantees ``0x00``-freedom but nothing
+    about any other byte value, and a literal ``0x0A`` in the payload
+    corrupts a ``\\n``-delimited wire.
+
+    Mechanism: run the standard ``0x00``-keyed COBS algorithm exactly as
+    before, but XOR every byte written to the output (data bytes AND code
+    bytes) with ``delimiter`` at the moment it is finalized -- equivalent to
+    computing the whole ``0x00``-keyed encoding first and XOR-ing every
+    output byte afterward (XOR is position-wise, order-independent), just
+    without a second pass. This never emits a byte equal to ``delimiter``:
+    the pre-XOR output is ``0x00``-free by construction (code bytes are
+    ``>= 1``, data bytes are non-zero), and ``b ^ delimiter == delimiter``
+    iff ``b == 0``, which never occurs."""
     out = bytearray()
     out.append(0)  # placeholder for the first block's code byte
     code_pos = 0
     code = 1  # distance to the next zero (or block end), inclusive of the code byte itself
     for byte in data:
         if byte == 0:
-            out[code_pos] = code
+            out[code_pos] = code ^ delimiter
             code_pos = len(out)
             out.append(0)  # placeholder for the next block
             code = 1
         else:
-            out.append(byte)
+            out.append(byte ^ delimiter)
             code += 1
             if code == 0xFF:
                 # Block hit the 254-non-zero-byte cap before finding a zero:
                 # flush it as a full block and start a fresh one, exactly as
                 # if a zero had been seen.
-                out[code_pos] = code
+                out[code_pos] = code ^ delimiter
                 code_pos = len(out)
                 out.append(0)
                 code = 1
-    out[code_pos] = code
+    out[code_pos] = code ^ delimiter
     return bytes(out)
 
 
-def cobs_decode(data: bytes) -> bytes:
+def cobs_decode(data: bytes, delimiter: int = 0x00) -> bytes:
     """Reverse of ``cobs_encode()`` -- byte-for-byte port of
     ``WireRuntime::cobsDecode()``. Raises ``WireFrameError`` on any malformed
     or truncated input: a literal ``0x00`` code byte, a literal ``0x00``
     inside a data block (an encoder never emits one), or a code byte whose
     claimed block length runs past the end of the input. Never returns a
-    partial result."""
+    partial result.
+
+    ``delimiter`` mirrors ``cobs_encode()``'s own parameter (default
+    ``0x00``, identity XOR, byte-identical to every pre-124 call site): every
+    byte read from ``data`` is XOR-ed with ``delimiter`` at the point of
+    reading (rather than materializing a de-XORed copy first) -- this
+    recovers exactly the ``0x00``-keyed bytes the standard algorithm below
+    already knows how to walk, and it means the malformed-input checks below
+    need no change for a non-``0x00`` delimiter: a literal ``delimiter`` byte
+    inside a frame (impossible from a correct encoder) reads back as a
+    literal ``0x00`` post-XOR, tripping the same rejections."""
     if len(data) == 0:
         # Even the encoding of a zero-byte payload is exactly one code byte
         # (0x01) -- a truly empty input has nothing to decode.
@@ -190,14 +253,14 @@ def cobs_decode(data: bytes) -> bytes:
     read_pos = 0
     n = len(data)
     while read_pos < n:
-        code = data[read_pos]
+        code = data[read_pos] ^ delimiter
         if code == 0:
             raise WireFrameError("cobs_decode(): literal 0x00 code byte")
         read_pos += 1
         block_len = code - 1
         if block_len > n - read_pos:
             raise WireFrameError("cobs_decode(): block length exceeds remaining input")
-        block = data[read_pos:read_pos + block_len]
+        block = bytes(b ^ delimiter for b in data[read_pos:read_pos + block_len])
         if 0 in block:
             raise WireFrameError("cobs_decode(): literal 0x00 inside data block")
         out.extend(block)
@@ -211,7 +274,22 @@ def cobs_decode(data: bytes) -> bytes:
     return bytes(out)
 
 
-def encode_frame(payload: bytes) -> bytes:
+def _crc_over_scope(command: bytes, payload: bytes) -> int:
+    """The CRC-scope composition protocol v5 needs (124-003, issue §3):
+    ``crc16(COMMAND ':' payload)`` when ``command`` is non-empty,
+    ``crc16(payload)`` alone (byte-identical to protocol v4's CRC) when it
+    is not -- byte-for-byte port of ``comms.cpp``'s ``crcOverScope()``.
+    Built on ``crc16_init()``/``crc16_update()`` so ``command`` and
+    ``payload`` are never concatenated into one ``bytes`` object just to
+    hash them together."""
+    crc = crc16_init()
+    if command:
+        crc = crc16_update(crc, command)
+        crc = crc16_update(crc, b":")
+    return crc16_update(crc, payload)
+
+
+def encode_frame(payload: bytes, command: bytes = b"") -> bytes:
     """Encode ``payload`` (a schema-encoded protobuf message's raw bytes)
     into a COBS+CRC frame body -- CRC-then-COBS composition, matching
     ``Comms::sendReply()``/ticket 001's completion notes EXACTLY (NOT
@@ -219,24 +297,37 @@ def encode_frame(payload: bytes) -> bytes:
     CRC bytes happen to contain one): append the little-endian CRC-16 to
     ``payload``, THEN COBS-encode the combined bytes.
 
+    ``command`` -- the ASCII command-name bytes (no ``':'`` separator) the
+    CRC's input is scoped to extend over (124-003, issue §3); a SEPARATE
+    argument, never concatenated with ``payload`` before COBS-encoding (the
+    command is NOT part of the COBS input -- only its CRC scope). Defaults
+    to empty, which extends nothing: ``crc16(payload)`` alone, byte-identical
+    to protocol v4's CRC -- every CURRENT caller still passes no command
+    name because the reply/command-plane's ASCII verb prefix this scope is
+    FOR does not exist on the wire yet (ticket 124-005's own grammar
+    cutover).
+
     Returns the COBS-encoded frame body -- 0x00-free by construction, NOT
     including the trailing ``0x00`` wire delimiter (append ``FRAME_DELIMITER``
     yourself when writing to a byte stream, matching
     ``Transport::send()``'s own division of labor: the framer builds the
     frame body, the concrete transport appends the delimiter)."""
-    crc = crc16_ccitt_false(payload)
+    crc = _crc_over_scope(command, payload)
     combined = payload + bytes((crc & 0xFF, (crc >> 8) & 0xFF))
     return cobs_encode(combined)
 
 
-def decode_frame(frame: bytes) -> bytes | None:
+def decode_frame(frame: bytes, command: bytes = b"") -> bytes | None:
     """Reverse of ``encode_frame()`` -- byte-for-byte port of
     ``Comms::decodeBinaryFrame()``: COBS-decode, split off the trailing
-    2-byte little-endian CRC, verify it against the leading payload bytes,
-    and return the payload on success.
+    2-byte little-endian CRC, verify it (CRC-scoped over ``command`` too,
+    per 124-003 -- see ``encode_frame()``'s own doc comment) against the
+    leading payload bytes, and return the payload on success.
 
     Returns ``None`` on ANY malformed/corrupt input (malformed COBS, a
-    combined-bytes length under 2, or a CRC mismatch) -- NEVER raises. This
+    combined-bytes length under 2, or a CRC mismatch -- including a
+    ``command`` that does not match what the frame was actually encoded
+    with, e.g. a command byte mutated in transit) -- NEVER raises. This
     mirrors ``Comms::decodeBinaryFrame()``'s own "silently count and drop,
     never propagate a partial/corrupt decode" contract: a caller that wants
     fault visibility counts its own ``None`` returns (see
@@ -250,7 +341,7 @@ def decode_frame(frame: bytes) -> bytes | None:
         return None
     payload, crc_bytes = bytes(combined[:-2]), combined[-2:]
     received_crc = crc_bytes[0] | (crc_bytes[1] << 8)
-    if crc16_ccitt_false(payload) != received_crc:
+    if _crc_over_scope(command, payload) != received_crc:
         return None
     return payload
 

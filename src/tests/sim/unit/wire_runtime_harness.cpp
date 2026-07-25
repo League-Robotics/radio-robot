@@ -807,6 +807,254 @@ void scenarioCrcDetectsCorruption() {
   }
 }
 
+// 11. COBS delimiter parameterization (124-003, issue §2): cobsEncode()/
+// cobsDecode() gained a trailing `delimiter` parameter, default 0x00.
+// Confirms the default is unaffected (omitting the argument matches
+// passing 0x00 explicitly, byte-for-byte) and that an explicit delimiter
+// of 0x00 reproduces the exact pre-124 byte sequence for a payload with
+// embedded zeros.
+void scenarioCobsDelimiterDefaultUnaffected() {
+  beginScenario("COBS: default delimiter (0x00, omitted) matches passing 0x00 explicitly, byte-for-byte");
+
+  const uint8_t data[6] = {0x41, 0x00, 0x0A, 0x00, 0x42, 0x00};
+
+  uint8_t encodedDefault[32] = {};
+  size_t encodedDefaultLen = 0;
+  checkTrue(WireRuntime::cobsEncode(data, sizeof(data), encodedDefault, sizeof(encodedDefault), &encodedDefaultLen),
+            "cobsEncode() with the delimiter omitted succeeds");
+
+  uint8_t encodedExplicit[32] = {};
+  size_t encodedExplicitLen = 0;
+  checkTrue(WireRuntime::cobsEncode(data, sizeof(data), encodedExplicit, sizeof(encodedExplicit), &encodedExplicitLen,
+                                     0x00),
+            "cobsEncode() with delimiter=0x00 explicit succeeds");
+
+  checkSizeEq(encodedDefaultLen, encodedExplicitLen, "omitted and explicit-0x00 encodings are the same length");
+  checkTrue(encodedDefaultLen == encodedExplicitLen &&
+                std::memcmp(encodedDefault, encodedExplicit, encodedDefaultLen) == 0,
+            "omitted and explicit-0x00 encodings are byte-for-byte identical");
+
+  // The encoded output still contains the payload's own literal 0x0A byte
+  // (only 0x00 is special when delimiter == 0x00) -- confirms the
+  // parameterization did not accidentally start treating 0x0A as special
+  // under the default.
+  bool sawLiteral0x0A = false;
+  for (size_t i = 0; i < encodedDefaultLen; ++i) {
+    if (encodedDefault[i] == 0x0A) sawLiteral0x0A = true;
+  }
+  checkTrue(sawLiteral0x0A, "delimiter=0x00 leaves a literal 0x0A data byte untouched in the output");
+
+  uint8_t decoded[32] = {};
+  size_t decodedLen = 0;
+  checkTrue(WireRuntime::cobsDecode(encodedDefault, encodedDefaultLen, decoded, sizeof(decoded), &decodedLen),
+            "cobsDecode() with the delimiter omitted succeeds");
+  checkSizeEq(decodedLen, sizeof(data), "decoded length matches the original payload");
+  checkTrue(std::memcmp(decoded, data, sizeof(data)) == 0, "decoded bytes match the original payload exactly");
+}
+
+// 12. COBS keyed on 0x0A (124-003, issue §2): the exact worked/adversarial
+// vectors the issue verified by hand -- all-0x0A, all-0x00, and a
+// 0x00..0x0F sweep, each run through the SAME "payload + CRC, then
+// COBS(delimiter=0x0A)" composition the issue's own table describes,
+// asserting the EXACT wire bytes, not just "some encoding happened."
+void scenarioCobsKeyedOn0x0AAdversarialVectors() {
+  beginScenario("COBS delimiter=0x0A: issue's exact worked adversarial vectors (payload+CRC composition)");
+
+  auto wireFrame = [](const uint8_t* payload, size_t payloadLen, uint8_t* out, size_t outCap, size_t* outLen) {
+    uint8_t combined[32] = {};
+    std::memcpy(combined, payload, payloadLen);
+    size_t combinedLen = payloadLen;
+    const uint16_t crc = WireRuntime::crcCompute(payload, payloadLen);
+    if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) return false;
+    return WireRuntime::cobsEncode(combined, combinedLen, out, outCap, outLen, 0x0A);
+  };
+
+  auto checkVector = [&](const uint8_t* payload, size_t payloadLen, const uint8_t* expectedWire,
+                          size_t expectedWireLen, const char* label) {
+    uint8_t wire[40] = {};
+    size_t wireLen = 0;
+    checkTrue(wireFrame(payload, payloadLen, wire, sizeof(wire), &wireLen),
+              std::string(label) + ": payload+CRC, COBS(delimiter=0x0A) succeeds");
+    checkSizeEq(wireLen, expectedWireLen, std::string(label) + ": wire frame length matches the issue's table");
+    checkTrue(wireLen == expectedWireLen && std::memcmp(wire, expectedWire, expectedWireLen) == 0,
+              std::string(label) + ": wire frame bytes match the issue's table exactly");
+
+    bool sawDelimiter = false;
+    for (size_t i = 0; i < wireLen; ++i) {
+      if (wire[i] == 0x0A) sawDelimiter = true;
+    }
+    checkFalse(sawDelimiter, std::string(label) + ": wire frame contains no 0x0A byte");
+
+    uint8_t decodedCombined[40] = {};
+    size_t decodedCombinedLen = 0;
+    checkTrue(WireRuntime::cobsDecode(wire, wireLen, decodedCombined, sizeof(decodedCombined), &decodedCombinedLen,
+                                       0x0A),
+              std::string(label) + ": cobsDecode(delimiter=0x0A) round-trips");
+    checkTrue(decodedCombinedLen >= 2, std::string(label) + ": decoded combined bytes hold at least a CRC");
+    if (decodedCombinedLen >= 2) {
+      const size_t decodedPayloadLen = decodedCombinedLen - 2;
+      checkSizeEq(decodedPayloadLen, payloadLen, std::string(label) + ": decoded payload length round-trips");
+      checkTrue(decodedPayloadLen == payloadLen && std::memcmp(decodedCombined, payload, payloadLen) == 0,
+                std::string(label) + ": decoded payload bytes round-trip exactly");
+    }
+  };
+
+  // "all 0x0A (8B)" -- issue §2's own table.
+  {
+    const uint8_t payload[8] = {0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A};
+    const uint8_t expected[11] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x41, 0x78};
+    checkVector(payload, sizeof(payload), expected, sizeof(expected), "all 0x0A (8B)");
+  }
+
+  // "all 0x00 (8B)" -- issue §2's own table.
+  {
+    const uint8_t payload[8] = {};  // already all-zero
+    const uint8_t expected[11] = {0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x09, 0x34, 0x3b};
+    checkVector(payload, sizeof(payload), expected, sizeof(expected), "all 0x00 (8B)");
+  }
+
+  // "0x00..0x0F" -- issue §2's own table (16-byte sweep).
+  {
+    uint8_t payload[16];
+    for (size_t i = 0; i < sizeof(payload); ++i) payload[i] = static_cast<uint8_t>(i);
+    const uint8_t expected[19] = {0x0b, 0x18, 0x0b, 0x08, 0x09, 0x0e, 0x0f, 0x0c, 0x0d, 0x02,
+                                    0x03, 0x00, 0x01, 0x06, 0x07, 0x04, 0x05, 0x3d, 0x31};
+    checkVector(payload, sizeof(payload), expected, sizeof(expected), "0x00..0x0F");
+  }
+}
+
+// 13. COBS delimiter=0x0A property test (124-003 acceptance criterion,
+// issue AC #3): for payloads up to 251 bytes (this wire's own affordable
+// ceiling, issue §6), the encoded frame contains no 0x0A byte and decode
+// round-trips -- covers every byte value 0x00-0xFF at least once (not just
+// random sampling) via a deterministic sweep, plus a handful of
+// pseudo-random-shaped payloads at varying lengths.
+void scenarioCobsDelimiter0x0APropertyNoLiteralAndRoundTrips() {
+  beginScenario("COBS delimiter=0x0A: no payload up to 251 bytes ever encodes a literal 0x0A; all round-trip");
+
+  auto checkNoLiteralAndRoundTrips = [](const uint8_t* data, size_t len, const char* label) {
+    uint8_t encoded[600] = {};
+    size_t encodedLen = 0;
+    checkTrue(WireRuntime::cobsEncode(data, len, encoded, sizeof(encoded), &encodedLen, 0x0A),
+              std::string(label) + ": cobsEncode(delimiter=0x0A) succeeds");
+    bool sawDelimiter = false;
+    for (size_t i = 0; i < encodedLen; ++i) {
+      if (encoded[i] == 0x0A) sawDelimiter = true;
+    }
+    checkFalse(sawDelimiter, std::string(label) + ": encoded output contains no 0x0A byte");
+
+    uint8_t decoded[600] = {};
+    size_t decodedLen = 0;
+    checkTrue(WireRuntime::cobsDecode(encoded, encodedLen, decoded, sizeof(decoded), &decodedLen, 0x0A),
+              std::string(label) + ": cobsDecode(delimiter=0x0A) succeeds");
+    checkSizeEq(decodedLen, len, std::string(label) + ": decoded length matches the original payload length");
+    checkTrue(len == 0 || std::memcmp(decoded, data, len) == 0,
+              std::string(label) + ": decoded bytes match the original payload exactly");
+  };
+
+  // Every byte value 0x00-0xFF, at least once, in one 256-byte payload
+  // (deliberately over the 251-byte affordable ceiling -- COBS itself
+  // places no such limit; the ceiling is a wire-budget concern, not a
+  // codec one).
+  {
+    uint8_t data[256];
+    for (size_t i = 0; i < sizeof(data); ++i) data[i] = static_cast<uint8_t>(i);
+    checkNoLiteralAndRoundTrips(data, sizeof(data), "0x00-0xFF sweep (256B)");
+  }
+
+  // A representative 251-byte payload (the issue's own affordable
+  // ceiling, §6) with a pseudo-random shape (LCG-derived, deterministic
+  // across runs), deliberately containing many 0x0A and 0x00 bytes.
+  {
+    uint8_t data[251];
+    uint32_t state = 0xC0FFEEu;
+    for (size_t i = 0; i < sizeof(data); ++i) {
+      state = state * 1103515245u + 12345u;
+      data[i] = static_cast<uint8_t>(state >> 16);
+    }
+    checkNoLiteralAndRoundTrips(data, sizeof(data), "251-byte pseudo-random payload");
+  }
+
+  // Empty payload -- the degenerate case.
+  checkNoLiteralAndRoundTrips(nullptr, 0, "empty");
+
+  // A handful of short/medium payloads at varying lengths, still
+  // pseudo-random-shaped.
+  {
+    const size_t lengths[] = {1, 7, 32, 100, 200};
+    for (size_t len : lengths) {
+      uint8_t data[200];
+      uint32_t state = static_cast<uint32_t>(len) * 2654435761u + 1u;
+      for (size_t i = 0; i < len; ++i) {
+        state = state * 1103515245u + 12345u;
+        data[i] = static_cast<uint8_t>(state >> 16);
+      }
+      char label[64];
+      std::snprintf(label, sizeof(label), "pseudo-random(%zu)", len);
+      checkNoLiteralAndRoundTrips(data, len, label);
+    }
+  }
+}
+
+// 14. CRC incremental primitives (124-003, issue §3): crcInit()/crcUpdate()
+// are the base crcCompute() is built on, and are what lets a caller (e.g.
+// Comms::sendReply()) hash two byte ranges that are not adjacent in
+// memory (a command-name prefix, then a payload) without concatenating
+// them into a scratch buffer first.
+void scenarioCrcIncrementalMatchesComputeAndComposes() {
+  beginScenario("CRC-16/CCITT-FALSE: crcInit()/crcUpdate() match crcCompute() and compose across two ranges");
+
+  // crcUpdate(crcInit(), data, len) == crcCompute(data, len), exactly.
+  {
+    const uint8_t data[9] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
+    const uint16_t viaCompute = WireRuntime::crcCompute(data, sizeof(data));
+    const uint16_t viaIncremental = WireRuntime::crcUpdate(WireRuntime::crcInit(), data, sizeof(data));
+    checkU64Eq(viaIncremental, viaCompute, "crcUpdate(crcInit(), data, len) == crcCompute(data, len)");
+    checkU64Eq(viaCompute, 0x29B1u, "crcCompute(\"123456789\") == 0x29B1 (sanity: still the pinned value)");
+  }
+
+  // Composing over TWO separate ranges (prefix, then suffix) matches
+  // crcCompute() over their concatenation -- the property
+  // Comms::sendReply()'s crcOverScope()/wire_codec.py's _crc_over_scope()
+  // are built on, proven here without depending on either.
+  {
+    const uint8_t prefix[5] = {'M', 'O', 'V', 'E', ':'};
+    const uint8_t suffix[6] = {0x08, 0x07, 0x1a, 0x00, 0x22, 0x03};
+    uint8_t concatenated[11];
+    std::memcpy(concatenated, prefix, sizeof(prefix));
+    std::memcpy(concatenated + sizeof(prefix), suffix, sizeof(suffix));
+
+    const uint16_t viaConcatenation = WireRuntime::crcCompute(concatenated, sizeof(concatenated));
+
+    uint16_t viaIncremental = WireRuntime::crcInit();
+    viaIncremental = WireRuntime::crcUpdate(viaIncremental, prefix, sizeof(prefix));
+    viaIncremental = WireRuntime::crcUpdate(viaIncremental, suffix, sizeof(suffix));
+    checkU64Eq(viaIncremental, viaConcatenation,
+               "crcUpdate() chained over two ranges == crcCompute() over their concatenation");
+  }
+
+  // CRC-scope AC (issue §3 / ticket 003 AC): the SAME suffix ("payload")
+  // under two different prefixes ("command names") produces two DIFFERENT
+  // CRCs.
+  {
+    const uint8_t payload[4] = {0x11, 0x22, 0x33, 0x44};
+    const uint8_t commandA[5] = {'M', 'O', 'V', 'E', ':'};
+    const uint8_t commandB[5] = {'S', 'T', 'O', 'P', ':'};
+
+    const uint16_t crcA = WireRuntime::crcUpdate(WireRuntime::crcUpdate(WireRuntime::crcInit(), commandA,
+                                                                          sizeof(commandA)),
+                                                   payload, sizeof(payload));
+    const uint16_t crcB = WireRuntime::crcUpdate(WireRuntime::crcUpdate(WireRuntime::crcInit(), commandB,
+                                                                          sizeof(commandB)),
+                                                   payload, sizeof(payload));
+    const uint16_t crcNoCommand = WireRuntime::crcCompute(payload, sizeof(payload));
+
+    checkTrue(crcA != crcB, "identical payload under two different command names produces two different CRCs");
+    checkTrue(crcA != crcNoCommand, "a command-scoped CRC differs from the unscoped CRC over the same payload");
+    checkTrue(crcB != crcNoCommand, "a command-scoped CRC differs from the unscoped CRC over the same payload");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -826,6 +1074,10 @@ int main() {
   scenarioCobsMalformedInput();
   scenarioCrcKnownVectorAndCleanFrame();
   scenarioCrcDetectsCorruption();
+  scenarioCobsDelimiterDefaultUnaffected();
+  scenarioCobsKeyedOn0x0AAdversarialVectors();
+  scenarioCobsDelimiter0x0APropertyNoLiteralAndRoundTrips();
+  scenarioCrcIncrementalMatchesComputeAndComposes();
 
   if (g_failureCount == 0) {
     std::printf("OK: all WireRuntime scenarios passed\n");
