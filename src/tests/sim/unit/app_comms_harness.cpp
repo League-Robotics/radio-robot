@@ -1,14 +1,16 @@
 // app_comms_harness.cpp -- off-hardware acceptance harness for ticket
 // 103-004 (SUC-004), App::Comms (src/firm/app/comms.{h,cpp}). Proves the
-// "*B" armor/dearmor sequence transcribed from the deleted
-// src/firm/commands/binary_channel.cpp (sprint 102's transcription note,
+// CRC-then-COBS binary armor/dearmor sequence (123-002 -- supersedes the
+// "*B"+base64 armor transcribed from the deleted
+// src/firm/commands/binary_channel.cpp, sprint 102's transcription note,
 // clasi/sprints/done/102-single-loop-firmware-spikes-archive-and-delete-
 // to-stub-p0-p2/notes/armor-wire-codec-transcription.md) round-trips a
 // hand-built CommandEnvelope, rejects malformed input cleanly (no crash,
-// no partial state), reproduces the HELLO/PING text-plane exception
-// byte-identically to today's main.cpp stub, bounds pump() to at most one
-// consumed line per call, and that sendReply() broadcasts an identical
-// armored line on both transports.
+// no partial state -- including a genuine CRC-mismatch fault injection,
+// SUC-002), reproduces the HELLO/PING text-plane exception (demuxed from
+// the binary frames on the SAME byte stream) byte-identically to today's
+// main.cpp stub, bounds pump() to at most one consumed frame per call, and
+// that sendReply() broadcasts an identical framed body on both transports.
 //
 // Mirrors wire_codec_harness.cpp's exact shape: hand-rolled
 // beginScenario/fail/checkTrue/checkFalse/checkU64Eq assertion plumbing,
@@ -116,19 +118,25 @@ bool putMessageField(Buf& b, uint32_t number, const Buf& nested) {
   return putBytesField(b, number, nested.data, nested.len);
 }
 
-// Armor a raw CommandEnvelope/ReplyEnvelope byte buffer into a "*B<base64>"
-// line -- the SAME sequence comms.cpp's own sendReply() performs, used here
-// only to construct scenario INPUT (pump()'s inbound side), independent of
-// Comms's own outbound path so the two directions are tested against each
-// other, not tautologically.
+// Armor a raw CommandEnvelope/ReplyEnvelope byte buffer into a CRC-then-COBS
+// frame body (123-002 -- was "*B<base64>" pre-123) -- the SAME composition
+// comms.cpp's own decodeBinaryFrame()/sendReply() perform, used here only to
+// construct scenario INPUT (pump()'s inbound side), independent of Comms's
+// own outbound path so the two directions are tested against each other,
+// not tautologically. The trailing 0x00 delimiter is a transport concern,
+// not included here -- push the result via FakeTransport::
+// enqueueInboundBinary(), not enqueueInbound() (that tags a frame kText).
 std::string armor(const uint8_t* raw, size_t rawLen) {
-  char b64[512] = {};
-  size_t b64Len = 0;
-  bool ok = WireRuntime::base64Encode(raw, rawLen, b64, sizeof(b64), &b64Len);
-  if (!ok) return std::string();
-  std::string out = "*B";
-  out.append(b64, b64Len);
-  return out;
+  uint8_t combined[256];
+  if (rawLen > sizeof(combined) - 2) return std::string();
+  std::memcpy(combined, raw, rawLen);
+  size_t combinedLen = rawLen;
+  const uint16_t crc = WireRuntime::crcCompute(raw, rawLen);
+  if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) return std::string();
+  uint8_t framed[300];
+  size_t framedLen = 0;
+  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen)) return std::string();
+  return std::string(reinterpret_cast<const char*>(framed), framedLen);
 }
 
 using TestSupport::FakeTransport;
@@ -158,11 +166,11 @@ void scenarioMoveRoundTrip() {
   putMessageField(env, 21, move);  // CommandEnvelope.cmd.move, field 21
 
   std::string line = armor(env.data, env.len);
-  checkTrue(!line.empty(), "armor() produced a non-empty line");
+  checkTrue(!line.empty(), "armor() produced a non-empty frame");
 
   FakeTransport serialFake;
   FakeTransport radioFake;
-  serialFake.enqueueInbound(line.c_str());
+  serialFake.enqueueInboundBinary(line);
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
@@ -186,13 +194,16 @@ void scenarioMoveRoundTrip() {
 }
 
 // ===========================================================================
-// 2. Malformed input -- bad armor prefix, truncated base64, corrupt-but-
-//    valid-base64 protobuf bytes -- each rejected cleanly: no crash,
-//    out.status stays kNone, malformedCount() increments.
+// 2. Malformed input -- 123-002: an unrecognized text-plane line (there is
+//    no more "*B" armor-prefix check -- armor is binary now), a malformed
+//    COBS frame, a CRC mismatch (SUC-002's own fault-injection acceptance
+//    criterion -- a corrupted frame is DETECTED, not silently mis-parsed),
+//    and corrupt-but-well-framed protobuf bytes -- each rejected cleanly:
+//    no crash, out.status stays kNone, malformedCount() increments.
 // ===========================================================================
 
-void scenarioMalformedArmorPrefixRejected() {
-  beginScenario("pump(): line[1] != 'B' rejected -- malformedCount increments, out untouched");
+void scenarioMalformedUnrecognizedTextLineRejected() {
+  beginScenario("pump(): unrecognized text-plane line (not HELLO/PING) rejected -- malformedCount increments");
 
   FakeTransport serialFake;
   FakeTransport radioFake;
@@ -208,12 +219,17 @@ void scenarioMalformedArmorPrefixRejected() {
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once");
 }
 
-void scenarioMalformedTruncatedBase64Rejected() {
-  beginScenario("pump(): truncated base64 (not a multiple of 4) rejected -- malformedCount increments");
+void scenarioMalformedCobsFrameRejected() {
+  beginScenario("pump(): malformed COBS frame (truncated code byte) rejected -- malformedCount increments");
+
+  // A code byte claiming a 10-byte block when only 2 bytes remain --
+  // WireRuntime::cobsDecode()'s own "code claims more data bytes than
+  // remain" malformed-input case (wire_runtime.cpp).
+  const uint8_t badFrame[] = {0x0B, 0x01, 0x02};
 
   FakeTransport serialFake;
   FakeTransport radioFake;
-  serialFake.enqueueInbound("*BQQ");  // "QQ" -- 2 chars, not a multiple of 4
+  serialFake.enqueueInboundBinary(badFrame, sizeof(badFrame));
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
@@ -225,24 +241,64 @@ void scenarioMalformedTruncatedBase64Rejected() {
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once");
 }
 
+void scenarioMalformedCrcMismatchRejected() {
+  beginScenario(
+      "pump(): well-framed COBS but CRC mismatch (bit-flipped payload) rejected -- SUC-002 fault-injection, "
+      "malformedCount increments");
+
+  // A well-formed CommandEnvelope{corr_id=7, stop}, correctly CRC-then-COBS
+  // framed by armor()'s own reverse-of-decodeBinaryFrame() composition,
+  // then a SINGLE BIT FLIPPED in the framed bytes after the fact -- proves
+  // the CRC (not just the COBS framing) is actually checked: the frame
+  // still COBS-decodes cleanly (the flipped bit doesn't touch a code byte),
+  // but the recomputed CRC no longer matches the trailing 2 CRC bytes.
+  Buf env;
+  putVarintField(env, 1, 7);  // corr_id
+  putVarintField(env, 13, 0);  // CommandEnvelope.stop (empty message, field 13)
+
+  std::string line = armor(env.data, env.len);
+  checkTrue(!line.empty(), "armor() produced a non-empty frame");
+  checkTrue(line.size() > 2, "frame has enough bytes to flip one safely");
+  // Flip a bit in a byte comfortably inside the frame body (not the first
+  // COBS code byte, which -- for this short a payload -- would desync
+  // framing entirely rather than exercise the CRC check specifically).
+  line[line.size() - 2] ^= 0x01;
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  serialFake.enqueueInboundBinary(line);
+
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+
+  App::Cmd cmd;
+  comms.pump(cmd, /*now=*/0);
+
+  checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone -- corrupted frame never decodes");
+  checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once (CRC mismatch detected, not mis-parsed)");
+}
+
 void scenarioMalformedCorruptProtobufRejected() {
   beginScenario(
-      "pump(): well-formed base64 but corrupt protobuf bytes (truncated wire tag) rejected -- malformedCount "
+      "pump(): well-framed COBS+CRC but corrupt protobuf bytes (truncated wire tag) rejected -- malformedCount "
       "increments");
 
   // Mirrors wire_codec_harness.cpp's scenarioMalformedBufferRejected: a
   // well-formed corr_id field followed by a truncated varint continuation
-  // byte with no following byte.
+  // byte with no following byte. armor() computes a CORRECT CRC over these
+  // (already-corrupt-at-the-protobuf-level) bytes, so this scenario
+  // specifically exercises msg::wire::decode()'s own rejection -- NOT the
+  // CRC check (that is scenarioMalformedCrcMismatchRejected() above).
   Buf env;
   putVarintField(env, 1, 3);
   env.data[env.len++] = 0x80;
 
   std::string line = armor(env.data, env.len);
-  checkTrue(!line.empty(), "armor() produced a non-empty line for the corrupt payload");
+  checkTrue(!line.empty(), "armor() produced a non-empty frame for the corrupt payload");
 
   FakeTransport serialFake;
   FakeTransport radioFake;
-  serialFake.enqueueInbound(line.c_str());
+  serialFake.enqueueInboundBinary(line);
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
@@ -349,12 +405,12 @@ void scenarioPumpBoundedToOneTransportPerCall() {
 
 // ===========================================================================
 // 5. sendReply() round-trip: both transports' send() logs capture the exact
-//    same "*B<base64>" line, matching an independent re-encode of the same
-//    ReplyEnvelope.
+//    same CRC-then-COBS frame body (123-002 -- was "*B<base64>" pre-123),
+//    matching an independent re-encode of the same ReplyEnvelope.
 // ===========================================================================
 
 void scenarioSendReplyBroadcastsIdenticalLineOnBothTransports() {
-  beginScenario("sendReply(): identical \"*B<base64>\" line sent on both transports via send() (not sendReliable())");
+  beginScenario("sendReply(): identical COBS+CRC frame sent on both transports via send() (not sendReliable())");
 
   msg::ReplyEnvelope reply;
   reply.corr_id = 9;
@@ -377,11 +433,11 @@ void scenarioSendReplyBroadcastsIdenticalLineOnBothTransports() {
 
   if (!serialFake.sent().empty() && !radioFake.sent().empty()) {
     checkStrEq(serialFake.sent()[0], radioFake.sent()[0],
-               "serial and radio received byte-identical armored lines");
+               "serial and radio received byte-identical COBS+CRC frames");
   }
 
   // Independent re-encode, without going through Comms::sendReply() at
-  // all -- proves the line is exactly what encode()+base64Encode() would
+  // all -- proves the frame is exactly what encode()+CRC-then-COBS would
   // produce (round-trip proof without needing a generic ReplyEnvelope
   // decoder, per the ticket's own testing plan).
   uint8_t rawBuf[App::kMaxEnvelopeBytes];
@@ -399,8 +455,9 @@ void scenarioSendReplyBroadcastsIdenticalLineOnBothTransports() {
 
 int main() {
   scenarioMoveRoundTrip();
-  scenarioMalformedArmorPrefixRejected();
-  scenarioMalformedTruncatedBase64Rejected();
+  scenarioMalformedUnrecognizedTextLineRejected();
+  scenarioMalformedCobsFrameRejected();
+  scenarioMalformedCrcMismatchRejected();
   scenarioMalformedCorruptProtobufRejected();
   scenarioHelloRepliesWithBannerViaSendReliable();
   scenarioPingRepliesOkPongViaSendReliable();

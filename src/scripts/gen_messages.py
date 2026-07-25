@@ -1357,7 +1357,8 @@ def _envelope_worst_case_report(struct_name: str, oneof_field_name: str, msg_map
     reported size is its OWN wrapped contribution (tag+len+payload) as it
     sits inside the envelope, matching the exception's own reporting
     convention; `total` (non-oneof fields + the single worst arm) is the
-    number actually checked against the 186-byte budget.
+    number actually checked against the _ENVELOPE_BUDGET_BYTES budget
+    (123-002: 240, recomputed for COBS+CRC overhead -- was 186 pre-123).
     """
     md = msg_map[struct_name]
     real_oneofs, _opt = _classify_oneofs(md)
@@ -1648,9 +1649,32 @@ struct Result {
 // MAX -- not sum -- across mutually exclusive oneof arms). Recomputed on
 // every regeneration (gen_messages.py runs before every `just build`/`just
 // build-sim`), so a future schema change that pushes an envelope over the
-// 186-byte budget fails one of the two static_asserts below at build time,
-// not at runtime on a truncated wire line.
+// kEnvelopeBudgetBytes-byte budget fails one of the three static_asserts
+// below at build time, not at runtime on a truncated wire line.
+//
+// kEnvelopeBudgetBytes (123-002, COBS+CRC recompute): the budget ceiling
+// itself was 186 bytes pre-123, sized against the OLD "*B"+base64+"\\r\\n"
+// armor's ~33% expansion so an armored line stayed under the CODAL serial
+// TX ring's 254-usable-byte ceiling (SerialPort::begin()'s
+// setTxBufferSize(255), a uint8_t max). COBS+CRC framing (123-001/123-002)
+// replaces that armor: fixed overhead is now exactly CRC(2B) + one COBS
+// code byte (0 extra blocks below the 254-byte block boundary) + the
+// trailing 0x00 delimiter = 4 bytes total, independent of payload content
+// (vs base64's ~33%+2). Solving `E + 4 <= 254` gives `E <= 250`; this
+// constant ships at 240, ten bytes of margin below that exact edge (not
+// pushed to the limit) -- comfortably above every schema value this sprint
+// computes (185 largest, unchanged -- no schema/field-shape change this
+// sprint) while leaving headroom for ticket 004's cycle_busy/cycle_period
+// primary-frame migration, the whole reason this budget needed recomputing.
 """
+
+# 123-002: the recomputed envelope-size ceiling every generated
+# static_assert below checks against -- see _WIRE_H_BANNER's own derivation
+# comment (COBS+CRC fixed 4-byte overhead vs the old base64 armor's ~33%
+# expansion). NOT derived from a schema value -- this is the transport-
+# ceiling side of the budget, unchanged by any CommandEnvelope/
+# ReplyEnvelope/TelemetrySecondary field-shape edit.
+_ENVELOPE_BUDGET_BYTES = 240
 
 _WIRE_H_FOOTER = """
 // decode(): walks CommandEnvelope's generated FieldDesc table per incoming
@@ -2130,10 +2154,12 @@ Result decodeInto(void* base, const MessageTable& table, const uint8_t* buf, siz
   return Result{true, 0, ErrCode::ERR_NONE};
 }
 
-// Scratch cap for a nested message's own encoded payload -- comfortably
-// above the 186-byte whole-envelope budget (no nested message this schema
-// declares can itself approach 186B; the largest, DeviceId, is ~171B and is
-// never nested inside another message -- it IS the top-level reply body).
+// Scratch cap for a nested message's own encoded payload -- sized against
+// the largest NESTED message this schema declares (DeviceId, ~171B, never
+// itself nested inside another message -- it IS the top-level reply body),
+// not against the outer envelope budget (123-002: recomputed to 240B for
+// COBS+CRC overhead, was 186B pre-123) -- unaffected by that recompute
+// since no nested message here approaches either ceiling.
 constexpr size_t kEncodeScratchCap = 220;
 
 bool encodeInto(const void* base, const MessageTable& table, uint8_t* buf, size_t cap, size_t* pos);
@@ -2371,12 +2397,15 @@ def _emit_wire_files(fds):
               + f"constexpr uint16_t kCommandEnvelopeMaxEncodedSize = {cmd_report['total']};\n"
               + f"constexpr uint16_t kReplyEnvelopeMaxEncodedSize = {reply_report['total']};\n"
               + f"constexpr uint16_t kTelemetrySecondaryMaxEncodedSize = {secondary_size};\n"
-              + "static_assert(kCommandEnvelopeMaxEncodedSize <= 186,\n"
-              + '              "CommandEnvelope worst-case encoded size exceeds the 186-byte envelope budget");\n'
-              + "static_assert(kReplyEnvelopeMaxEncodedSize <= 186,\n"
-              + '              "ReplyEnvelope worst-case encoded size exceeds the 186-byte envelope budget");\n'
-              + "static_assert(kTelemetrySecondaryMaxEncodedSize <= 186,\n"
-              + '              "TelemetrySecondary worst-case encoded size exceeds the 186-byte envelope budget");\n'
+              + f"static_assert(kCommandEnvelopeMaxEncodedSize <= {_ENVELOPE_BUDGET_BYTES},\n"
+              + f'              "CommandEnvelope worst-case encoded size exceeds the '
+              + f'{_ENVELOPE_BUDGET_BYTES}-byte envelope budget");\n'
+              + f"static_assert(kReplyEnvelopeMaxEncodedSize <= {_ENVELOPE_BUDGET_BYTES},\n"
+              + f'              "ReplyEnvelope worst-case encoded size exceeds the '
+              + f'{_ENVELOPE_BUDGET_BYTES}-byte envelope budget");\n'
+              + f"static_assert(kTelemetrySecondaryMaxEncodedSize <= {_ENVELOPE_BUDGET_BYTES},\n"
+              + f'              "TelemetrySecondary worst-case encoded size exceeds the '
+              + f'{_ENVELOPE_BUDGET_BYTES}-byte envelope budget");\n'
               + _WIRE_H_FOOTER)
 
     cpp_parts = [_WIRE_CPP_PART1]

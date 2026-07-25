@@ -1,9 +1,21 @@
 // fake_transport.h -- HOST_BUILD-only App::Transport double: an in-memory,
-// FIFO-based fake a test can push armored "*B..." command lines into (so
+// FIFO-based fake a test can push complete inbound frames into (so
 // App::Comms::pump() reads them exactly as if from a real serial/radio
-// line) and read captured outbound armored lines back out of (every
+// line) and read captured outbound frames back out of (every
 // App::Comms::sendReply()/App::Telemetry emit call). Ticket 105-002
 // (SUC-019); mirrors comms.h's own documentation density/style.
+//
+// 123-002 (COBS+CRC framer integration): the wire's armor changed from
+// text "*B<base64>\r\n" lines to a binary-clean, 0x00-delimited COBS+CRC
+// frame demuxed from the HELLO/PING text rump on the same stream --
+// App::Transport::readLine() now reports which FrameKind it delivered,
+// and App::Transport::send() takes an explicit uint8_t*/len (no longer a
+// NUL-terminated C string). This fake's queues/captures follow suit:
+// enqueueInbound() (text, unchanged) gets a binary sibling
+// (enqueueInboundBinary()), and sent()/sentReliable() hold std::string
+// built from an explicit-length constructor so embedded arbitrary bytes
+// (including 0x00, which a COBS+CRC frame never contains but this fake
+// makes no assumption either way) survive the capture intact.
 //
 // This is the ONE canonical FakeTransport for src/tests/sim/ -- several
 // harnesses previously carried their own ad hoc copy (app_comms_harness.cpp,
@@ -15,10 +27,11 @@
 // fake_transport.h)" entry.
 //
 // Design: two SEPARATE concerns, matching Transport's own two directions.
-//   - Inbound: a test calls enqueueInbound() to script complete armored
-//     lines; readLine() pops at most one per call (matches Comms::pump()'s
-//     own "at most one line per call" contract) and returns false, non-
-//     blocking, the instant the queue is empty -- never populating buf.
+//   - Inbound: a test calls enqueueInbound()/enqueueInboundBinary() to
+//     script complete frames; readLine() pops at most one per call
+//     (matches Comms::pump()'s own "at most one line per call" contract)
+//     and returns App::FrameKind::kNone, non-blocking, the instant the
+//     queue is empty -- never populating buf.
 //   - Outbound: send() (async, drop-on-full on the real transports) and
 //     sendReliable() (bounded-wait, must-not-drop) each append to their OWN
 //     capture -- this fake never actually drops anything (a host test wants
@@ -32,8 +45,10 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <deque>
 #include <string>
+#include <utility>
 
 #include "app/comms.h"
 
@@ -41,36 +56,79 @@ namespace TestSupport {
 
 class FakeTransport : public App::Transport {
  public:
-  // Push one complete armored line into the inbound FIFO; readLine() pops
-  // it (oldest first) on a later call.
-  void enqueueInbound(const char* line) { inbound_.emplace_back(line); }
+  // Push one complete TEXT line into the inbound FIFO (HELLO/PING) --
+  // readLine() pops it (oldest first, App::FrameKind::kText) on a later
+  // call. Unchanged from pre-123.
+  void enqueueInbound(const char* line) { inbound_.emplace_back(App::FrameKind::kText, std::string(line)); }
 
-  // Non-blocking: pops the oldest queued inbound line into buf (NUL-
-  // terminated) and returns true, or returns false immediately when the
-  // queue is empty -- buf is left untouched in that case. Matches
-  // Transport::readLine()'s own documented contract exactly.
-  bool readLine(char* buf, uint16_t len) override {
-    if (inbound_.empty()) return false;
-    std::string line = std::move(inbound_.front());
-    inbound_.pop_front();
-    std::snprintf(buf, len, "%s", line.c_str());
-    return true;
+  // Push one complete BINARY frame body into the inbound FIFO -- the
+  // still-COBS+CRC-encoded bytes a real transport would deliver with the
+  // trailing 0x00 delimiter already stripped (matching
+  // App::Transport::readLine()'s own kBinary contract). readLine() pops
+  // it (oldest first, App::FrameKind::kBinary) on a later call.
+  void enqueueInboundBinary(const uint8_t* data, size_t len) {
+    inbound_.emplace_back(App::FrameKind::kBinary,
+                           std::string(reinterpret_cast<const char*>(data), len));
   }
 
-  void send(const char* msg) override { sent_.emplace_back(msg); }
+  // Convenience overload for a std::string-held frame (the shape
+  // TestSupport::armor()/armorMoveCommand()/armorStopCommand() return) --
+  // uses the string's own explicit size(), safe even for a deliberately
+  // malformed test frame that embeds a literal 0x00 (a fault-injection
+  // scenario constructing bad COBS/CRC bytes on purpose), unlike a
+  // strlen()-based recovery which would silently truncate at the first
+  // embedded 0x00.
+  void enqueueInboundBinary(const std::string& frame) {
+    enqueueInboundBinary(reinterpret_cast<const uint8_t*>(frame.data()), frame.size());
+  }
+
+  // Convenience overload for a NUL-terminated binary frame (safe because
+  // COBS-encoded content is 0x00-free by construction, per
+  // WireRuntime::cobsEncode()'s own contract) -- lets a caller holding a
+  // bare `const char*`/`.c_str()` push it without recomputing its own
+  // length. Prefer the std::string overload above when the frame might be
+  // deliberately malformed (may embed a literal 0x00).
+  void enqueueInboundBinary(const char* frame) {
+    enqueueInboundBinary(reinterpret_cast<const uint8_t*>(frame), std::strlen(frame));
+  }
+
+  // Non-blocking: pops the oldest queued inbound frame into buf and
+  // returns its FrameKind, or returns App::FrameKind::kNone immediately
+  // when the queue is empty -- buf/*outLen left untouched in that case.
+  // Matches App::Transport::readLine()'s own documented contract exactly
+  // (buf is always NUL-terminated in addition to *outLen being set, safe
+  // for both frame kinds -- see that method's own doc comment).
+  App::FrameKind readLine(char* buf, uint16_t cap, uint16_t* outLen) override {
+    if (inbound_.empty()) return App::FrameKind::kNone;
+    std::pair<App::FrameKind, std::string> entry = std::move(inbound_.front());
+    inbound_.pop_front();
+    const std::string& line = entry.second;
+    uint16_t copy = (line.size() < static_cast<size_t>(cap - 1)) ? static_cast<uint16_t>(line.size())
+                                                                  : static_cast<uint16_t>(cap - 1);
+    std::memcpy(buf, line.data(), copy);
+    buf[copy] = '\0';
+    if (outLen) *outLen = copy;
+    return entry.first;
+  }
+
+  void send(const uint8_t* data, uint16_t len) override {
+    sent_.emplace_back(reinterpret_cast<const char*>(data), len);
+  }
   void sendReliable(const char* msg) override { sentReliable_.emplace_back(msg); }
 
   // Outbound captures -- a test drains/inspects these after stepping the
   // loop. Two SEPARATE captures, matching send() vs. sendReliable()'s
   // distinct call sites (Telemetry's primary/secondary frames ride send();
-  // the HELLO/PING text-plane replies ride sendReliable()).
+  // the HELLO/PING text-plane replies ride sendReliable()). send()'s
+  // capture holds raw COBS+CRC frame bytes (123-002) -- NOT NUL-terminated
+  // text -- constructed via the explicit-length std::string ctor above.
   const std::deque<std::string>& sent() const { return sent_; }
   const std::deque<std::string>& sentReliable() const { return sentReliable_; }
 
   size_t inboundSize() const { return inbound_.size(); }
 
  private:
-  std::deque<std::string> inbound_;
+  std::deque<std::pair<App::FrameKind, std::string>> inbound_;
   std::deque<std::string> sent_;
   std::deque<std::string> sentReliable_;
 };

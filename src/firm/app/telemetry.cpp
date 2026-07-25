@@ -3,6 +3,8 @@
 // layout.
 #include "app/telemetry.h"
 
+#include <cstring>
+
 #include "messages/wire.h"
 #include "messages/wire_runtime.h"
 
@@ -188,12 +190,12 @@ void Telemetry::emitSecondary(uint32_t now) {
   sec.cycle_busy = secondaryFrame_.cycleBusy;
   sec.cycle_period = secondaryFrame_.cyclePeriod;
 
-  // Own top-level armored payload -- same encode+armor sequence as
-  // Comms::sendReply(), reused here via
-  // App::kArmoredBufSize/WireRuntime::base64Encode() rather than
-  // duplicated in a private helper, since Comms's own send path only
-  // accepts a ReplyEnvelope (TelemetrySecondary is not one of its oneof
-  // arms).
+  // Own top-level framed payload -- same CRC-then-COBS composition (123-002
+  // -- was "*B"+base64 pre-123) as Comms::sendReply(), reused here via
+  // App::kMaxCrcPayloadBytes/kFramedMaxBytes/WireRuntime's COBS+CRC
+  // primitives rather than duplicated in a private helper, since Comms's
+  // own send path only accepts a ReplyEnvelope (TelemetrySecondary is not
+  // one of its oneof arms).
   uint8_t rawBuf[msg::wire::kTelemetrySecondaryMaxEncodedSize];
   const uint16_t n = msg::wire::encode(sec, rawBuf, static_cast<uint16_t>(sizeof(rawBuf)));
   if (n == 0) {
@@ -207,22 +209,30 @@ void Telemetry::emitSecondary(uint32_t now) {
     return;
   }
 
-  char armored[kArmoredBufSize];
-  armored[0] = '*';
-  armored[1] = 'B';
-  size_t b64Len = 0;
-  if (!WireRuntime::base64Encode(rawBuf, n, armored + 2, sizeof(armored) - 3, &b64Len)) {
+  uint8_t combined[kMaxCrcPayloadBytes];
+  std::memcpy(combined, rawBuf, n);
+  size_t combinedLen = n;
+  const uint16_t crc = WireRuntime::crcCompute(rawBuf, n);
+  if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) {
     everEmittedSecondary_ = true;
     lastSecondaryEmit_ = now;
     return;  // same unreachable-in-practice sizing argument as above
   }
-  armored[2 + b64Len] = '\0';
+
+  uint8_t framed[kFramedMaxBytes];
+  size_t framedLen = 0;
+  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen)) {
+    everEmittedSecondary_ = true;
+    lastSecondaryEmit_ = now;
+    return;  // same unreachable-in-practice sizing argument as above
+  }
 
   // Broadcast on both transports, async/drop-on-full -- same discipline as
   // Comms::sendReply(): telemetry is always-on and must never stall the
-  // loop on backpressure.
-  serialLink_.send(armored);
-  radioLink_.send(armored);
+  // loop on backpressure. The concrete transport appends the trailing
+  // 0x00 delimiter itself.
+  serialLink_.send(framed, static_cast<uint16_t>(framedLen));
+  radioLink_.send(framed, static_cast<uint16_t>(framedLen));
 
   everEmittedSecondary_ = true;
   lastSecondaryEmit_ = now;

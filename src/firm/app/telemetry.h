@@ -14,12 +14,13 @@
 // msg::ReplyEnvelope{corr_id=0, body_kind=TLM} through Comms::sendReply()
 // -- Telemetry holds a Comms& for this. TelemetrySecondary is NOT a
 // ReplyEnvelope oneof arm (envelope.proto's body oneof is fixed at
-// ok/err/tlm) -- it rides as its own, independently-armored "*B" line, so
-// Telemetry also holds the two Transport& references directly and performs
-// its own armor+broadcast for that one frame type, reusing Comms's public
-// kArmoredBufSize constant and WireRuntime::base64Encode() (the same
-// primitives Comms::sendReply() itself is built on) rather than
-// duplicating a private encode path.
+// ok/err/tlm) -- it rides as its own, independently CRC-then-COBS-framed
+// binary frame (123-002 -- was an independently-armored "*B" line
+// pre-123), so Telemetry also holds the two Transport& references directly
+// and performs its own framing+broadcast for that one frame type, reusing
+// Comms's public kMaxCrcPayloadBytes/kFramedMaxBytes constants and
+// WireRuntime's COBS+CRC primitives (the same primitives Comms::sendReply()
+// itself is built on) rather than duplicating a private encode path.
 //
 // Telemetry is a standalone, testable class: it never holds a pointer to a
 // leaf, I2CBus, or Deadman instance (that wiring is RobotLoop's job).
@@ -224,18 +225,20 @@ class Telemetry {
   // cycleBusy/cyclePeriod (122-003, telemetry-report-loop-cycle-duration.md)
   // -- INTERIM PLACEMENT: these loop-timing diagnostics were designed
   // against the PRIMARY per-cycle Telemetry frame (every cycle would carry
-  // its own timing), but the primary frame has no budget left (it already
-  // sits 1 B under the shared 186-byte envelope budget, and the serial
-  // transport's own CODAL TX-ring ceiling sits tighter still underneath
-  // that -- see telemetry.proto's TelemetrySecondary doc comment for the
-  // full derivation and the two exceptions this ticket threw before the
-  // stakeholder picked this resolution, 2026-07-24). Landing them here
-  // instead means they report the timing of whichever cycle RobotLoop last
-  // staged before THIS secondary frame happened to be the one sent -- a
-  // ~5Hz (kSecondaryPeriod) SAMPLE of per-cycle timing, not a per-cycle
-  // series. Migrates to the primary frame once a future COBS+CRC framing
-  // rework removes the base64-armor expansion that creates the primary
-  // frame's own ceiling (separate, not-yet-scheduled work).
+  // its own timing), but pre-123 the primary frame had no budget left (it
+  // sat 1 B under the shared 186-byte base64-armored envelope budget, and
+  // the serial transport's own CODAL TX-ring ceiling sat tighter still
+  // underneath that -- see telemetry.proto's TelemetrySecondary doc
+  // comment for the full derivation and the two exceptions this ticket
+  // threw before the stakeholder picked this resolution, 2026-07-24).
+  // Landing them here instead means they report the timing of whichever
+  // cycle RobotLoop last staged before THIS secondary frame happened to be
+  // the one sent -- a ~5Hz (kSecondaryPeriod) SAMPLE of per-cycle timing,
+  // not a per-cycle series. 123-002 landed the COBS+CRC framing rework
+  // that removes the base64-armor expansion creating the primary frame's
+  // own ceiling (recomputed budget: 240B, up from 186B) -- migrating these
+  // two fields onto the primary frame itself is sprint 123 ticket 004's
+  // own scope, not yet done as of this file's own edit.
   struct SecondaryFrame {
     bool hasCmdVel = false;
     float cmdVelLeft = 0.0f;   // [mm/s] signed

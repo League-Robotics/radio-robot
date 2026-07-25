@@ -47,20 +47,35 @@ struct Result {
 // MAX -- not sum -- across mutually exclusive oneof arms). Recomputed on
 // every regeneration (gen_messages.py runs before every `just build`/`just
 // build-sim`), so a future schema change that pushes an envelope over the
-// 186-byte budget fails one of the two static_asserts below at build time,
-// not at runtime on a truncated wire line.
+// kEnvelopeBudgetBytes-byte budget fails one of the three static_asserts
+// below at build time, not at runtime on a truncated wire line.
+//
+// kEnvelopeBudgetBytes (123-002, COBS+CRC recompute): the budget ceiling
+// itself was 186 bytes pre-123, sized against the OLD "*B"+base64+"\r\n"
+// armor's ~33% expansion so an armored line stayed under the CODAL serial
+// TX ring's 254-usable-byte ceiling (SerialPort::begin()'s
+// setTxBufferSize(255), a uint8_t max). COBS+CRC framing (123-001/123-002)
+// replaces that armor: fixed overhead is now exactly CRC(2B) + one COBS
+// code byte (0 extra blocks below the 254-byte block boundary) + the
+// trailing 0x00 delimiter = 4 bytes total, independent of payload content
+// (vs base64's ~33%+2). Solving `E + 4 <= 254` gives `E <= 250`; this
+// constant ships at 240, ten bytes of margin below that exact edge (not
+// pushed to the limit) -- comfortably above every schema value this sprint
+// computes (185 largest, unchanged -- no schema/field-shape change this
+// sprint) while leaving headroom for ticket 004's cycle_busy/cycle_period
+// primary-frame migration, the whole reason this budget needed recomputing.
 //   CommandEnvelope: config=49B, stop=2B, move=38B (worst=config=49B) + non-oneof=6B => total=55B
 //   ReplyEnvelope: ok=19B, err=10B, tlm=179B (worst=tlm=179B) + non-oneof=6B => total=185B
 //   TelemetrySecondary: standalone worst case = 60B (own *B-armored line, not a ReplyEnvelope oneof arm -- Decision 3)
 constexpr uint16_t kCommandEnvelopeMaxEncodedSize = 55;
 constexpr uint16_t kReplyEnvelopeMaxEncodedSize = 185;
 constexpr uint16_t kTelemetrySecondaryMaxEncodedSize = 60;
-static_assert(kCommandEnvelopeMaxEncodedSize <= 186,
-              "CommandEnvelope worst-case encoded size exceeds the 186-byte envelope budget");
-static_assert(kReplyEnvelopeMaxEncodedSize <= 186,
-              "ReplyEnvelope worst-case encoded size exceeds the 186-byte envelope budget");
-static_assert(kTelemetrySecondaryMaxEncodedSize <= 186,
-              "TelemetrySecondary worst-case encoded size exceeds the 186-byte envelope budget");
+static_assert(kCommandEnvelopeMaxEncodedSize <= 240,
+              "CommandEnvelope worst-case encoded size exceeds the 240-byte envelope budget");
+static_assert(kReplyEnvelopeMaxEncodedSize <= 240,
+              "ReplyEnvelope worst-case encoded size exceeds the 240-byte envelope budget");
+static_assert(kTelemetrySecondaryMaxEncodedSize <= 240,
+              "TelemetrySecondary worst-case encoded size exceeds the 240-byte envelope budget");
 
 // decode(): walks CommandEnvelope's generated FieldDesc table per incoming
 // wire tag, validating (min)/(max)/(abs_max)/(req) inline during the same

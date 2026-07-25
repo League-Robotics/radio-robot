@@ -16,36 +16,63 @@ void SerialPort::begin() {
     _serial.setBaud(115200);
 }
 
-bool SerialPort::readLine(char* buf, uint16_t len) {
+SerialPort::FrameKind SerialPort::readLine(char* buf, uint16_t cap, uint16_t* outLen) {
     int c;
     while ((c = _serial.read(ASYNC)) != MICROBIT_NO_DATA) {
-        if (c == '\r') continue;
+        if (c == 0x00) {
+            // Binary frame delimiter -- deliver the accumulated bytes
+            // AS-IS (no '\r' stripping -- a COBS+CRC frame may legitimately
+            // carry 0x0D as content, unlike a text-plane line).
+            uint16_t copy = (_rxLen < cap - 1) ? _rxLen : (cap - 1);
+            memcpy(buf, _rxBuf, copy);
+            // Safe to NUL-terminate even for binary content: COBS-encoded
+            // bytes never contain 0x00 by construction, so this terminator
+            // can never collide with real frame content.
+            buf[copy] = '\0';
+            if (outLen) *outLen = copy;
+            _rxLen = 0;
+            return FrameKind::kBinary;
+        }
         if (c == '\n') {
-            _rxBuf[_rxLen] = '\0';
-            uint16_t copy = (_rxLen < len - 1) ? _rxLen : (len - 1);
+            // Text-plane line -- strip a single trailing '\r' (the
+            // "\r\n" text-line convention), matching pre-123 behavior for
+            // HELLO/PING.
+            uint16_t n = _rxLen;
+            if (n > 0 && _rxBuf[n - 1] == '\r') --n;
+            uint16_t copy = (n < cap - 1) ? n : (cap - 1);
             memcpy(buf, _rxBuf, copy);
             buf[copy] = '\0';
+            if (outLen) *outLen = copy;
             _rxLen = 0;
-            return true;
+            return FrameKind::kText;
         }
         if (_rxLen < sizeof(_rxBuf) - 1)
             _rxBuf[_rxLen++] = (char)c;
     }
-    return false;
+    return FrameKind::kNone;
 }
 
-void SerialPort::send(const char* msg) {
+void SerialPort::send(const uint8_t* data, uint16_t len) {
     // ASYNC: queue what fits in the TX buffer and return IMMEDIATELY, never
     // blocking the loop. Drop-on-full — a frame may be silently truncated
     // under a flood. For must-arrive lines use sendReliable() instead.
-    _serial.send(ManagedString(msg) + ManagedString("\r\n"), ASYNC);
+    //
+    // 123-002: binary frame body + the trailing 0x00 delimiter, via the
+    // raw uint8_t*/len send() overload (NOT ManagedString -- the content is
+    // not a NUL-terminated C string and may not be printable ASCII).
+    uint8_t framed[256];
+    uint16_t n = (len < sizeof(framed) - 1) ? len : (uint16_t)(sizeof(framed) - 1);
+    memcpy(framed, data, n);
+    framed[n] = 0x00;
+    _serial.send(framed, n + 1, ASYNC);
 }
 
 void SerialPort::sendReliable(const char* msg) {
     // Like send(), but bounded-waits for TX-buffer room so the WHOLE line
     // fits before handing off to ASYNC. 5 ms cap: a dead/absent reader can't
     // hang the loop — falls through and sends anyway, dropping the overflow
-    // exactly as pure ASYNC would.
+    // exactly as pure ASYNC would. Text-plane only (HELLO/PING replies) --
+    // still "\r\n"-terminated, unchanged from pre-123.
     ManagedString s = ManagedString(msg) + ManagedString("\r\n");
     const int len = s.length();
     const uint64_t deadline = system_timer_current_time_us() + 5000;   // [us]
@@ -75,5 +102,5 @@ void SerialPort::sendf(const char* fmt, ...) {
     va_start(args, fmt);
     vsnprintf(tmp, sizeof(tmp), fmt, args);
     va_end(args);
-    send(tmp);
+    sendReliable(tmp);
 }

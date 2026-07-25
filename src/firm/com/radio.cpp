@@ -5,7 +5,7 @@ Radio* Radio::_instance = nullptr;
 
 Radio::Radio(MicroBitRadio& radio, MessageBus& bus)
     : _radio(radio), _bus(bus),
-      _reasmLen(0), _reasmActive(false), _msgReady(false), _txSeq(0)
+      _reasmLen(0), _reasmActive(false), _msgLen(0), _msgReady(false), _txSeq(0)
 {
     memset(_reasm, 0, sizeof(_reasm));
     memset(_msg, 0, sizeof(_msg));
@@ -32,6 +32,9 @@ int Radio::setChannel(int channel) {
 }
 
 // Reassemble §5 fragments in place. Runs in the radio datagram ISR context.
+// Binary-clean by construction (raw memcpy, no byte-level interpretation) --
+// unchanged by 123-002; only the trailing-byte CONVENTION each sender
+// appends (0x00 binary / '\n' text) and poll()'s own demux of it changed.
 void Radio::onData(MicroBitEvent) {
     Radio* self = _instance;
     if (!self) return;
@@ -63,6 +66,7 @@ void Radio::onData(MicroBitEvent) {
         if (self->_reasmActive && !self->_msgReady) {
             memcpy(self->_msg, self->_reasm, self->_reasmLen);
             self->_msg[self->_reasmLen] = '\0';
+            self->_msgLen = self->_reasmLen;
             self->_msgReady = true;
         }
         self->_reasmActive = false;
@@ -70,47 +74,83 @@ void Radio::onData(MicroBitEvent) {
     }
 }
 
-bool Radio::poll(char* buf, uint16_t len) {
-    if (!_msgReady) return false;
-    uint16_t out = (uint16_t)strlen(_msg);
-    if (out >= len) out = len - 1;
+Radio::FrameKind Radio::poll(char* buf, uint16_t cap, uint16_t* outLen) {
+    if (!_msgReady) return FrameKind::kNone;
+
+    int contentLen = _msgLen;
+    FrameKind kind;
+    // Frame kind is determined by the trailing byte the SENDER appended --
+    // send() (binary) appends 0x00; sendText() (HELLO/PING replies)
+    // appends '\n' -- see this class's own file header.
+    if (contentLen > 0 && static_cast<uint8_t>(_msg[contentLen - 1]) == 0x00) {
+        kind = FrameKind::kBinary;
+        --contentLen;   // exclude the delimiter itself
+    } else {
+        kind = FrameKind::kText;
+        if (contentLen > 0 && _msg[contentLen - 1] == '\n') --contentLen;
+        if (contentLen > 0 && _msg[contentLen - 1] == '\r') --contentLen;
+    }
+
+    uint16_t out = static_cast<uint16_t>(contentLen);
+    if (out >= cap) out = cap - 1;
     memcpy(buf, _msg, out);
     buf[out] = '\0';
+    if (outLen) *outLen = out;
     _msgReady = false;   // release the slot for the next message
-    return true;
+    return kind;
 }
 
-void Radio::send(const char* msg) {
-    // Terminate every message with '\n' (mirrors SerialPort::send's "\r\n") —
-    // required so the host's line reader can split consecutive messages after
-    // !GO; see DESIGN.md. The '\n' is the last payload byte (msgLen counts
-    // it) so it survives reassembly.
-    int msgLen = (int)strlen(msg) + 1;   // +1 for the trailing '\n'
+// Shared fragmentation body -- `payload[0..payloadLen)` already carries its
+// own trailing delimiter byte (0x00 or '\n', appended by send()/sendText()
+// respectively) as its LAST byte; this function only knows about RAW250
+// fragment framing, never about what the trailing byte means.
+void Radio::sendFragmented(const uint8_t* payload, int payloadLen) {
     int off = 0;
     bool first = true;
     uint8_t frame[FRAME_HEADER + MTU];
 
     do {
-        int chunk = msgLen - off;
+        int chunk = payloadLen - off;
         if (chunk > MTU) chunk = MTU;
 
         uint8_t flags = 0;
         if (first) flags |= FLAG_START;
-        if (off + chunk < msgLen) flags |= FLAG_MORE;
-        else                      flags |= FLAG_END;
+        if (off + chunk < payloadLen) flags |= FLAG_MORE;
+        else                          flags |= FLAG_END;
 
         frame[0] = _txSeq++;
         frame[1] = flags;
         frame[2] = (uint8_t)chunk;
-        for (int i = 0; i < chunk; ++i) {
-            int idx = off + i;
-            // All but the final byte come from msg; the final byte is '\n'.
-            frame[FRAME_HEADER + i] =
-                (idx < msgLen - 1) ? (uint8_t)msg[idx] : (uint8_t)'\n';
-        }
+        if (chunk > 0) memcpy(frame + FRAME_HEADER, payload + off, chunk);
         _radio.datagram.send(frame, FRAME_HEADER + chunk);
 
         off += chunk;
         first = false;
-    } while (off < msgLen);
+    } while (off < payloadLen);
+}
+
+void Radio::send(const uint8_t* data, uint16_t len) {
+    // Binary COBS+CRC frame body + trailing 0x00 delimiter -- see this
+    // class's own file header. Payload buffer generously covers
+    // App::kFramedMaxBytes (192) + 1 delimiter with headroom; truncates
+    // (rather than overflows) on an over-length caller, mirroring
+    // SerialPort::send()'s own defensive truncation.
+    uint8_t payload[256];
+    uint16_t n = (len < sizeof(payload) - 1) ? len : (uint16_t)(sizeof(payload) - 1);
+    if (n > 0) memcpy(payload, data, n);
+    payload[n] = 0x00;
+    sendFragmented(payload, static_cast<int>(n) + 1);
+}
+
+void Radio::sendText(const char* msg) {
+    // Text-plane reply (HELLO banner / PING pong) + trailing '\n' -- the
+    // SAME terminator `send()` appended for everything pre-123 (see this
+    // class's own file header for why the embedded newline is required
+    // after `!GO`).
+    uint8_t payload[256];
+    size_t n = strlen(msg);
+    if (n > sizeof(payload) - 1) n = sizeof(payload) - 1;
+    if (n > 0) memcpy(payload, msg, n);
+    payload[n] = (uint8_t)'\n';
+    sendFragmented(payload, static_cast<int>(n) + 1);
 }

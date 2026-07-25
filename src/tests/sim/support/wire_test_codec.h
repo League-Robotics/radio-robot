@@ -83,18 +83,23 @@ struct DecodedLine {
   msg::TelemetrySecondary secondary = {};  // valid when kind == kSecondary
 };
 
-// Dearmors ("*B" + base64) and decodes ONE outbound line -- exactly what a
-// FakeTransport::sent()/sentReliable() entry holds. Returns kind ==
-// kUnknown (all other fields default-constructed) on anything that isn't a
-// well-formed instance of one of the two shapes above -- a malformed/
-// truncated line, or a plain-text HELLO/PING reply (line[0] != '*').
+// Dearmors (COBS+CRC, 123-002 -- was "*B" + base64 pre-123) and decodes ONE
+// outbound frame -- exactly what a FakeTransport::sent() entry holds (a raw
+// frame body, NOT NUL-terminated text). Returns kind == kUnknown (all other
+// fields default-constructed) on anything that isn't a well-formed instance
+// of one of the two shapes above -- a malformed/truncated/CRC-mismatched
+// frame, or (since sentReliable()'s plain-text HELLO/PING replies are a
+// SEPARATE capture, never routed through this decoder) any other bytes.
 DecodedLine decodeOutboundLine(const std::string& line);
 
 // --- Inbound encode (host -> firmware) --------------------------------
 //
-// Builds a complete armored ("*B"+base64) CommandEnvelope line, byte-for-
-// byte what a real host would send over serial/radio -- the reverse of
-// App::Comms::decodeArmoredLine(). corrId == 0 is proto3's own implicit-
+// Builds a complete COBS+CRC-framed CommandEnvelope frame body (123-002 --
+// was armored "*B"+base64 pre-123), byte-for-byte what a real host would
+// send over serial/radio -- the reverse of App::Comms::decodeBinaryFrame().
+// Push the result via TestSupport::FakeTransport::enqueueInboundBinary()
+// (NOT enqueueInbound(), which tags a frame kText). corrId == 0 is proto3's
+// own implicit-
 // presence default (omitted from the wire, exactly like every other
 // generated encode() path in this codebase) -- pass a nonzero value to
 // exercise the single-ack-slot/correlation-id path (Telemetry.ack_corr,

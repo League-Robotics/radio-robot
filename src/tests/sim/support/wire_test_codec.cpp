@@ -417,35 +417,59 @@ size_t encodeMoveEnvelope(uint32_t velocityFieldNumber, const uint8_t* velocityP
   return pos;
 }
 
+// armor() -- 123-002 (COBS+CRC framer integration): builds the CRC-then-COBS
+// frame BODY (the trailing 0x00 delimiter itself is a transport-level
+// concern -- see comms.h's own Transport::send()/readLine() doc comments --
+// NOT included in this function's own return value, mirroring what a real
+// Transport::readLine() delivers to Comms::pumpTransport() with the
+// delimiter already stripped). Byte-for-byte the same composition as
+// App::Comms::sendReply() (comms.cpp): append the 2-byte CRC-16/CCITT-FALSE
+// (little-endian) to the raw schema-encoded payload, THEN COBS-encode the
+// combined bytes. Callers push the result via
+// TestSupport::FakeTransport::enqueueInboundBinary() (NOT enqueueInbound(),
+// which tags a frame kText -- these are binary frames), matching how
+// App::Comms::decodeBinaryFrame() reverses this exact composition.
 std::string armor(const uint8_t* raw, size_t rawLen) {
-  char b64[512] = {};
-  size_t b64Len = 0;
-  if (!WireRuntime::base64Encode(raw, rawLen, b64, sizeof(b64), &b64Len)) return std::string();
-  std::string out = "*B";
-  out.append(b64, b64Len);
-  return out;
+  uint8_t combined[256];
+  if (rawLen > sizeof(combined) - 2) return std::string();
+  std::memcpy(combined, raw, rawLen);
+  size_t combinedLen = rawLen;
+  const uint16_t crc = WireRuntime::crcCompute(raw, rawLen);
+  if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) return std::string();
+
+  uint8_t framed[300];
+  size_t framedLen = 0;
+  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen)) return std::string();
+  return std::string(reinterpret_cast<const char*>(framed), framedLen);
 }
 
 }  // namespace
 
 DecodedLine decodeOutboundLine(const std::string& line) {
   DecodedLine result;
-  if (line.size() < 2 || line[0] != '*' || line[1] != 'B') return result;
 
-  const char* b64 = line.c_str() + 2;
-  size_t b64Len = line.size() - 2;
-  while (b64Len > 0 && (b64[b64Len - 1] == '\r' || b64[b64Len - 1] == '\n' ||
-                        b64[b64Len - 1] == ' ' || b64[b64Len - 1] == '\t')) {
-    --b64Len;
+  // Reverse of App::Comms::sendReply()'s CRC-then-COBS composition
+  // (comms.cpp) -- see this file's own armor() for the exact mirrored
+  // encode side. `line` is the raw frame body a TestSupport::FakeTransport
+  // capture holds (FakeTransport::sent(), 123-002) -- NOT NUL-terminated
+  // text, an explicit-length byte buffer that may contain any byte value.
+  uint8_t combined[256];
+  size_t combinedLen = 0;
+  if (!WireRuntime::cobsDecode(reinterpret_cast<const uint8_t*>(line.data()), line.size(), combined,
+                                sizeof(combined), &combinedLen)) {
+    return result;
   }
+  if (combinedLen < 2) return result;
 
-  uint8_t rawBuf[256];
-  size_t rawLen = 0;
-  if (!WireRuntime::base64Decode(b64, b64Len, rawBuf, sizeof(rawBuf), &rawLen)) return result;
+  const size_t payloadLen = combinedLen - 2;
+  size_t crcPos = payloadLen;
+  uint16_t receivedCrc = 0;
+  if (!WireRuntime::decodeCrc16(combined, combinedLen, &crcPos, &receivedCrc)) return result;
+  if (!WireRuntime::crcVerify(combined, payloadLen, receivedCrc)) return result;
 
   uint32_t corrId = 0;
   msg::Telemetry tlm;
-  if (decodeReplyEnvelopeTlm(rawBuf, rawLen, &corrId, &tlm)) {
+  if (decodeReplyEnvelopeTlm(combined, payloadLen, &corrId, &tlm)) {
     result.kind = DecodedKind::kTelemetry;
     result.corrId = corrId;
     result.telemetry = tlm;
@@ -453,7 +477,7 @@ DecodedLine decodeOutboundLine(const std::string& line) {
   }
 
   msg::TelemetrySecondary sec;
-  if (decodeTelemetrySecondaryMessage(rawBuf, rawLen, &sec)) {
+  if (decodeTelemetrySecondaryMessage(combined, payloadLen, &sec)) {
     result.kind = DecodedKind::kSecondary;
     result.secondary = sec;
     return result;

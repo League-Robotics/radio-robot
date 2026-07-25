@@ -38,8 +38,17 @@
 // compute/verify (item 9) -- the wire's new binary framing + integrity
 // check, replacing the base64 armor's expansion cost and closing the "no
 // integrity check anywhere" gap (see `clasi/sprints/123-.../sprint.md`
-// Design Rationale). Base64 (item 7) stays present for now; ticket 002
-// cuts the actual armor over and removes it.
+// Design Rationale). Ticket 002 cut the actual ARMOR over (comms.cpp/
+// telemetry.cpp no longer call base64Encode()/base64Decode() at all) --
+// base64 (item 7) itself is RETAINED, not removed, because
+// wire_differential_harness.cpp (src/tests/sim/unit/) independently
+// depends on it for its own, unrelated debug-CLI wire encoding (comparing
+// this codec's encode/decode against a Python protobuf reference), a
+// consumer with no connection to the Comms armor scheme. Deleting the
+// primitive would be a second, out-of-scope breaking change for zero
+// benefit -- ticket 001's own forward-reference to removal assumed no such
+// independent consumer existed; ticket 002 found one and kept the
+// primitive rather than force that collateral change.
 //
 // Decode-side contract: every `decode*` function takes a source `const
 // uint8_t* buf`/`size_t len` and a `size_t* pos` cursor; it returns `false`

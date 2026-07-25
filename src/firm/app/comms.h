@@ -1,10 +1,17 @@
-// comms.h -- App::Comms: the "*B" armor/dearmor framing layer between the
-// two transports (serial + radio) and decoded msg::CommandEnvelope /
-// msg::ReplyEnvelope.
+// comms.h -- App::Comms: the COBS+CRC binary-frame armor/dearmor layer
+// between the two transports (serial + radio) and decoded
+// msg::CommandEnvelope / msg::ReplyEnvelope.
 //
-// Boundary: inside -- the "*B" armor/dearmor sequence, msg::wire::encode()/
-// decode() calls; outside -- deciding what a decoded command DOES (that is
-// RobotLoop's own dispatch). Design/rationale: DESIGN.md.
+// 123-002 (COBS+CRC framer integration): replaces the old "*B"+base64+
+// "\r\n" line armor with a binary-clean, 0x00-delimited COBS+CRC frame,
+// demuxed from the HELLO/PING text-plane rump (still "\r\n"-terminated)
+// on the SAME byte stream. See wire_runtime.h's own file header (123-001)
+// for the COBS/CRC primitives this file is built on, and this ticket's
+// completion notes for the exact frame layout.
+//
+// Boundary: inside -- the COBS+CRC armor/dearmor sequence, msg::wire::
+// encode()/decode() calls; outside -- deciding what a decoded command DOES
+// (that is RobotLoop's own dispatch). Design/rationale: DESIGN.md.
 #pragma once
 
 #include <cstdint>
@@ -19,6 +26,14 @@ class Radio;
 
 namespace App {
 
+// FrameKind -- which of the two coexisting frame shapes a completed
+// Transport::readLine() call delivered. Never ambiguous: a binary frame is
+// 0x00-free by COBS construction (0x00 is exclusively the frame
+// delimiter); a text-plane line is typed ASCII (HELLO/PING) and never
+// contains a 0x00 byte. Whichever terminator the transport's own
+// accumulator sees FIRST (0x00 or '\n') decides the kind.
+enum class FrameKind : uint8_t { kNone = 0, kText = 1, kBinary = 2 };
+
 // Transport -- the abstract non-blocking line-in/line-out seam Comms is
 // built on. Plain virtual base class (not an #ifdef HOST_BUILD fork) so
 // comms.h/comms.cpp themselves never drag in MicroBit.h under HOST_BUILD;
@@ -27,19 +42,28 @@ class Transport {
  public:
   virtual ~Transport() = default;
 
-  // Non-blocking. True + fills buf (NUL-terminated) when one complete line
-  // is ready. SerialPort::readLine() already strips the trailing '\n';
-  // Radio::poll() does not (dearmor's own trailing-whitespace trim, per
-  // the transcription note, handles both). Never sleeps, never blocks.
-  virtual bool readLine(char* buf, uint16_t len) = 0;
+  // Non-blocking. Demuxes a 0x00-delimited COBS+CRC binary frame from a
+  // '\r'?'\n'-terminated text line (HELLO/PING) on the SAME byte stream.
+  // Returns kNone when nothing complete is ready (buf/*outLen untouched).
+  // kText: buf holds a NUL-terminated ASCII line (trailing '\r'/'\n'
+  // stripped), *outLen == strlen(buf). kBinary: buf holds *outLen raw
+  // bytes -- the still-COBS+CRC-encoded frame body (the trailing 0x00
+  // delimiter itself is consumed by the transport, never included in
+  // buf/*outLen). Never partially delivers a frame.
+  virtual FrameKind readLine(char* buf, uint16_t cap, uint16_t* outLen) = 0;
 
-  // Async, drop-on-full send -- for telemetry; Comms::sendReply() (a
+  // Async, drop-on-full send -- ALWAYS a binary COBS+CRC frame body
+  // (`data`/`len`, 0x00-free by construction); Comms::sendReply() (a
   // high-cadence caller) uses this so a full serial buffer never stalls
-  // the loop.
-  virtual void send(const char* msg) = 0;
+  // the loop. The concrete transport appends the trailing 0x00 delimiter
+  // itself -- callers never include it in `data`/`len`.
+  virtual void send(const uint8_t* data, uint16_t len) = 0;
 
-  // Bounded-wait, must-not-drop send -- for replies/EVT; used for the
-  // HELLO/PING text-exception replies (rare, one-off).
+  // Bounded-wait, must-not-drop send -- ALWAYS a text-plane reply
+  // (NUL-terminated ASCII); used for the HELLO/PING text-exception
+  // replies (rare, one-off). The concrete transport appends its own
+  // text-line terminator ("\r\n" serial / "\n" radio), unchanged from
+  // pre-123.
   virtual void sendReliable(const char* msg) = 0;
 };
 
@@ -55,8 +79,8 @@ class Transport {
 class SerialTransport : public Transport {
  public:
   explicit SerialTransport(SerialPort& serial);
-  bool readLine(char* buf, uint16_t len) override;
-  void send(const char* msg) override;
+  FrameKind readLine(char* buf, uint16_t cap, uint16_t* outLen) override;
+  void send(const uint8_t* data, uint16_t len) override;
   void sendReliable(const char* msg) override;
 
  private:
@@ -66,10 +90,10 @@ class SerialTransport : public Transport {
 class RadioTransport : public Transport {
  public:
   explicit RadioTransport(Radio& radio);
-  bool readLine(char* buf, uint16_t len) override;
-  void send(const char* msg) override;         // both send() and sendReliable()
-  void sendReliable(const char* msg) override;  // delegate to radio_.send() --
-                                                 // Radio has only one send path
+  FrameKind readLine(char* buf, uint16_t cap, uint16_t* outLen) override;
+  void send(const uint8_t* data, uint16_t len) override;
+  void sendReliable(const char* msg) override;
+
  private:
   Radio& radio_;
 };
@@ -78,27 +102,43 @@ class RadioTransport : public Transport {
 
 // kMaxEnvelopeBytes -- the larger of the two generated per-direction
 // budgets (msg::wire::kCommandEnvelopeMaxEncodedSize (55) /
-// kReplyEnvelopeMaxEncodedSize (185, 120's ack-ring addition -- was 153
-// pre-120)) -- one raw-byte scratch buffer, reused sequentially for an
-// incoming decode or an outgoing encode (never overlapping within a
-// single call). Computed by the constexpr expression itself so a future
-// schema regeneration that changes either constant updates this one
-// automatically.
+// kReplyEnvelopeMaxEncodedSize (185)) -- one raw-byte scratch buffer,
+// reused sequentially for an incoming decode or an outgoing encode (never
+// overlapping within a single call). Computed by the constexpr expression
+// itself so a future schema regeneration that changes either constant
+// updates this one automatically.
 constexpr uint16_t kMaxEnvelopeBytes =
     (msg::wire::kCommandEnvelopeMaxEncodedSize > msg::wire::kReplyEnvelopeMaxEncodedSize)
         ? msg::wire::kCommandEnvelopeMaxEncodedSize
         : msg::wire::kReplyEnvelopeMaxEncodedSize;  // == 185
 
-// kArmoredBufSize -- "*B" (2) + base64(kMaxEnvelopeBytes=185) (ceil(185/3)*4
-// = 248) + NUL (1) = 251, rounded up to 256 (5 B headroom). 120's ack-ring
-// addition pushes this past the previous "~250B outbound-line guidance"
-// (243 B pre-120) -- still safe: `Radio::send()` (com/radio.h) already
-// fragments any message over its own 247-byte MTU across multiple RAW250
-// frames (a pre-existing capability, not new here), and `SerialPort`'s own
-// `_rxBuf[256]` still has headroom (251 < 256). Revisit kArmoredBufSize
-// itself only if a future schema change pushes kMaxEnvelopeBytes high
-// enough to threaten this 5-byte margin.
-constexpr uint16_t kArmoredBufSize = 256;
+// kMaxCrcPayloadBytes -- kMaxEnvelopeBytes + 2 (the CRC-16 appended AFTER
+// the schema payload, per the CRC-then-COBS composition -- see comms.cpp's
+// sendReply()/decodeBinaryFrame() for the exact byte layout). This is the
+// buffer the COBS encode/decode step itself operates on.
+constexpr uint16_t kMaxCrcPayloadBytes = kMaxEnvelopeBytes + 2;  // == 187
+
+// kFramedMaxBytes -- 123-002 recompute, replacing the old base64
+// kArmoredBufSize. Worst-case COBS-encoded length of kMaxCrcPayloadBytes
+// (187) zero-free bytes: cobsEncodedMaxLength(187) = 187 + 187/254 + 1 =
+// 188 (WireRuntime::cobsEncodedMaxLength()'s own documented formula,
+// 123-001 completion notes). This is the size of the buffer Comms builds
+// BEFORE handing it to Transport::send() -- the transport appends the
+// trailing 0x00 delimiter itself (one more byte on the wire, not counted
+// here). Rounded up to 192 (4B headroom) the same way the old
+// kArmoredBufSize rounded 251 up to 256.
+constexpr uint16_t kFramedMaxBytes = 192;
+static_assert(kFramedMaxBytes >= kMaxCrcPayloadBytes + kMaxCrcPayloadBytes / 254 + 1,
+              "kFramedMaxBytes must cover cobsEncodedMaxLength(kMaxCrcPayloadBytes)");
+
+// kArmoredBufSize -- Comms's own inbound scratch-line buffer size, shared
+// by pumpTransport()'s single stack buffer for whichever frame kind (text
+// or binary) is next on either transport. Sized to the larger of
+// kFramedMaxBytes (the binary worst case) and a generous allowance for the
+// text-plane rump (HELLO/PING lines are a handful of bytes; the buffer
+// only needs to be at least as big as the longest recognized text-plane
+// line, which is smaller than kFramedMaxBytes by a wide margin).
+constexpr uint16_t kArmoredBufSize = kFramedMaxBytes;
 
 enum class CmdStatus : uint8_t { kNone = 0, kDecoded = 1 };
 
@@ -128,16 +168,16 @@ class Comms {
   // handed in, not read from an owned clock.
   void pump(Cmd& out, uint32_t now);  // [ms]
 
-  // Encode (msg::wire::encode) + armor ("*B" + base64) + send ONCE on BOTH
-  // transports via Transport::send() (async/drop-on-full -- telemetry is
-  // always-on and must never stall the loop on backpressure; primary and
-  // secondary frames go out on both transports every cadence, not just
-  // "back to whoever last spoke"). This is what Telemetry calls. No return
-  // value: encode()==0 or base64Encode() failure means silently send
-  // nothing.
+  // Encode (msg::wire::encode) + CRC-then-COBS frame (see comms.cpp) +
+  // send ONCE on BOTH transports via Transport::send() (async/drop-on-full
+  // -- telemetry is always-on and must never stall the loop on
+  // backpressure; primary and secondary frames go out on both transports
+  // every cadence, not just "back to whoever last spoke"). This is what
+  // Telemetry calls. No return value: encode()==0 or a COBS/CRC framing
+  // failure means silently send nothing.
   void sendReply(const msg::ReplyEnvelope& reply);
 
-  // Diagnostic counter -- malformed armor, malformed base64, malformed
+  // Diagnostic counter -- malformed COBS frame, CRC mismatch, malformed
   // protobuf decode, AND unrecognized text-plane lines (not "*", not
   // HELLO, not PING) all increment this. RobotLoop reads it as the
   // App::kFaultCommsMalformed telemetry fault-bit source.
@@ -151,8 +191,10 @@ class Comms {
   bool pumpTransport(Transport& t, Cmd& out, uint32_t now);  // [ms]
 
   // NEVER replies -- acks ride Telemetry's ack ring, not per-command; see
-  // comms.cpp for the discipline note.
-  void decodeArmoredLine(const char* line, Cmd& out);
+  // comms.cpp for the discipline note. `frame`/`frameLen` is the raw
+  // COBS+CRC-encoded frame body Transport::readLine() delivered (the
+  // trailing 0x00 delimiter already stripped by the transport).
+  void decodeBinaryFrame(const uint8_t* frame, uint16_t frameLen, Cmd& out);
 
   Transport& serialLink_;
   Transport& radioLink_;

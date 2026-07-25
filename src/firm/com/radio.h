@@ -16,9 +16,24 @@
  *
  * Only one Radio instance may call begin(). _instance is a static singleton
  * pointer used by the static ISR callback.
+ *
+ * 123-002 (COBS+CRC framer integration): fragment reassembly (`onData`) was
+ * ALREADY binary-clean (raw memcpy, no byte-level interpretation) -- what
+ * changes here is the trailing byte convention and `poll()`'s demux.
+ * `send()` (binary, COBS+CRC frame body) appends a trailing 0x00; the NEW
+ * `sendText()` (text-plane HELLO/PING replies) appends a trailing '\n', the
+ * same terminator `send()` used for everything pre-123. `poll()` looks at
+ * the reassembled message's OWN trailing byte (whichever the sender
+ * appended) to decide which of the two it just received -- no dependency
+ * on `app/`, per this directory's own "com/ has no dependency on app/,
+ * messages/, or any wire-schema type" invariant (com/DESIGN.md);
+ * `app/comms.h`'s `RadioTransport` adapter maps `Radio::FrameKind` onto
+ * `App::FrameKind` at the one seam that is allowed to know both.
  */
 class Radio {
 public:
+    enum class FrameKind : uint8_t { kNone = 0, kText = 1, kBinary = 2 };
+
     explicit Radio(MicroBitRadio& radio, MessageBus& bus);
 
     // enable(), setFrequencyBand(channel), setGroup(10), setTransmitPower(7),
@@ -35,13 +50,30 @@ public:
     // The channel (frequency band) currently in use.
     int channel() const { return _channel; }
 
-    // Non-blocking. Returns true and fills buf (NUL-terminated) when a complete
-    // reassembled message is ready. Only one message is buffered — a second
-    // message completing before poll() drains the first is dropped.
-    bool poll(char* buf, uint16_t len);
+    // Non-blocking. Returns FrameKind::kNone until a complete reassembled
+    // message is ready. FrameKind::kBinary: buf holds *outLen raw bytes (the
+    // COBS+CRC frame body, trailing 0x00 delimiter consumed/not included).
+    // FrameKind::kText: buf holds a NUL-terminated ASCII line (trailing
+    // '\n'/'\r' stripped), *outLen == strlen(buf). Only one message is
+    // buffered — a second message completing before poll() drains the
+    // first is dropped.
+    FrameKind poll(char* buf, uint16_t cap, uint16_t* outLen);
 
-    // Fragment msg into RAW250 frames and transmit each one.
-    void send(const char* msg);
+    // Fragment a COBS+CRC binary frame body into RAW250 frames and
+    // transmit each one, appending a trailing 0x00 delimiter as the FINAL
+    // payload byte (mirrors SerialPort::send()'s own delimiter-appending
+    // contract). `data`/`len` is 0x00-free by construction (App::Transport::
+    // send()'s own contract) so the 0x00 this appends is unambiguous.
+    void send(const uint8_t* data, uint16_t len);
+
+    // Fragment a text-plane reply (NUL-terminated ASCII -- HELLO/PING) into
+    // RAW250 frames, appending a trailing '\n' as the FINAL payload byte --
+    // this is what `send()` did for EVERYTHING pre-123 (RadioRelay §5
+    // framing alone delimits a message on the wire, but after `!GO` the
+    // link becomes a transparent byte pipe with no per-message boundary of
+    // its own; without the embedded newline, consecutive host-bound text
+    // replies concatenate and the host's line reader can't split them).
+    void sendText(const char* msg);
 
 private:
     MicroBitRadio& _radio;
@@ -65,10 +97,21 @@ private:
 
     // Completed message published to poll(). _msgReady gates the handoff and is
     // the single synchronization point between the ISR and the main loop.
+    // _msgLen is the EXACT reassembled byte count (set by the ISR alongside
+    // _msgReady) -- poll() trusts this instead of strlen(_msg) so a stray
+    // embedded 0x00 in a corrupt/fault-injected binary frame can never
+    // truncate the length the demux reasons about.
     char          _msg[REASM_MAX];
+    int           _msgLen;
     volatile bool _msgReady;
 
     uint8_t _txSeq;           // rolling §5 sequence number
+
+    // Shared fragmentation body for send()/sendText(): fragments
+    // `payload[0..payloadLen)` into RAW250 frames. Used by both public
+    // sends -- the only difference between them is the trailing delimiter
+    // byte the caller already appended into `payload`.
+    void sendFragmented(const uint8_t* payload, int payloadLen);
 
     static void onData(MicroBitEvent);
     static Radio* _instance;

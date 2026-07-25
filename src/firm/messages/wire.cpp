@@ -646,10 +646,12 @@ Result decodeInto(void* base, const MessageTable& table, const uint8_t* buf, siz
   return Result{true, 0, ErrCode::ERR_NONE};
 }
 
-// Scratch cap for a nested message's own encoded payload -- comfortably
-// above the 186-byte whole-envelope budget (no nested message this schema
-// declares can itself approach 186B; the largest, DeviceId, is ~171B and is
-// never nested inside another message -- it IS the top-level reply body).
+// Scratch cap for a nested message's own encoded payload -- sized against
+// the largest NESTED message this schema declares (DeviceId, ~171B, never
+// itself nested inside another message -- it IS the top-level reply body),
+// not against the outer envelope budget (123-002: recomputed to 240B for
+// COBS+CRC overhead, was 186B pre-123) -- unaffected by that recompute
+// since no nested message here approaches either ceiling.
 constexpr size_t kEncodeScratchCap = 220;
 
 bool encodeInto(const void* base, const MessageTable& table, uint8_t* buf, size_t cap, size_t* pos);

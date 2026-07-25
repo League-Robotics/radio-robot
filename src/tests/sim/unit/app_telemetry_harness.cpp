@@ -94,18 +94,24 @@ void checkInRange(uint64_t actual, uint64_t lo, uint64_t hi, const std::string& 
   }
 }
 
-// --- armor() -- same "*B<base64>" sequence Comms::sendReply()/
-// Telemetry::emitSecondary() themselves perform, used here only to build
-// scenario EXPECTATIONS independently of Telemetry's own send path. ------
+// --- armor() -- 123-002: same CRC-then-COBS frame-body composition
+// Comms::sendReply()/Telemetry::emitSecondary() themselves perform (was
+// "*B<base64>" pre-123), used here only to build scenario EXPECTATIONS
+// independently of Telemetry's own send path. The trailing 0x00 delimiter
+// is a transport concern, not included in this function's return value --
+// matches what a FakeTransport::sent() capture holds. ------
 
 std::string armor(const uint8_t* raw, size_t rawLen) {
-  char b64[512] = {};
-  size_t b64Len = 0;
-  bool ok = WireRuntime::base64Encode(raw, rawLen, b64, sizeof(b64), &b64Len);
-  if (!ok) return std::string();
-  std::string out = "*B";
-  out.append(b64, b64Len);
-  return out;
+  uint8_t combined[256];
+  if (rawLen > sizeof(combined) - 2) return std::string();
+  std::memcpy(combined, raw, rawLen);
+  size_t combinedLen = rawLen;
+  const uint16_t crc = WireRuntime::crcCompute(raw, rawLen);
+  if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) return std::string();
+  uint8_t framed[300];
+  size_t framedLen = 0;
+  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen)) return std::string();
+  return std::string(reinterpret_cast<const char*>(framed), framedLen);
 }
 
 std::string armorReply(const msg::ReplyEnvelope& env) {
@@ -602,9 +608,11 @@ void scenarioMalformedFrameSetsCommsMalformedFlagBit() {
 
   FakeTransport serialFake;
   FakeTransport radioFake;
-  // Bad armor prefix -- same malformed input app_comms_harness.cpp's own
-  // scenarioMalformedArmorPrefixRejected() uses to increment
-  // malformedCount() by exactly 1.
+  // Unrecognized text-plane line (not HELLO, not PING) -- 123-002 removed
+  // the "*B" armor-prefix check entirely (armor is binary now), so any
+  // non-HELLO/PING text line is malformed by construction; mirrors
+  // app_comms_harness.cpp's own scenarioMalformedUnrecognizedTextLineRejected()
+  // to increment malformedCount() by exactly 1.
   serialFake.enqueueInbound("*Xsomeunrecognizedarmor");
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";

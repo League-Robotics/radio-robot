@@ -132,14 +132,24 @@ bool putMessageField(Buf& b, uint32_t number, const Buf& nested) {
   return putBytesField(b, number, nested.data, nested.len);
 }
 
+// armorLine() -- 123-002: CRC-then-COBS frame body (was "*B"+base64 line
+// pre-123), byte-for-byte the same composition as App::Comms::sendReply()/
+// TestSupport::armor() (wire_test_codec.cpp). The trailing 0x00 delimiter
+// is a transport concern, not included here -- SimHarness::injectCommand()
+// (this file's only caller, via armorMotorConfigCommand() below) recovers
+// the length via strlen() since COBS-encoded output is 0x00-free by
+// construction.
 std::string armorLine(const uint8_t* raw, size_t rawLen) {
-  char b64[512] = {};
-  size_t b64Len = 0;
-  bool ok = WireRuntime::base64Encode(raw, rawLen, b64, sizeof(b64), &b64Len);
-  if (!ok) return std::string();
-  std::string out = "*B";
-  out.append(b64, b64Len);
-  return out;
+  uint8_t combined[256];
+  if (rawLen > sizeof(combined) - 2) return std::string();
+  std::memcpy(combined, raw, rawLen);
+  size_t combinedLen = rawLen;
+  const uint16_t crc = WireRuntime::crcCompute(raw, rawLen);
+  if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) return std::string();
+  uint8_t framed[300];
+  size_t framedLen = 0;
+  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen)) return std::string();
+  return std::string(reinterpret_cast<const char*>(framed), framedLen);
 }
 
 // Builds an armored CommandEnvelope{corr_id, config: ConfigDelta{motor:

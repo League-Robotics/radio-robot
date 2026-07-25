@@ -139,8 +139,8 @@ constexpr uint32_t kCycleDtUs = App::RobotLoop::kCycle * 1000;  // [us]
 // reachable end-to-end through Comms with no MicroBit.h dependency. -------
 class NullTransport : public App::Transport {
  public:
-  bool readLine(char*, uint16_t) override { return false; }
-  void send(const char*) override { ++sendCount; }
+  App::FrameKind readLine(char*, uint16_t, uint16_t*) override { return App::FrameKind::kNone; }
+  void send(const uint8_t*, uint16_t) override { ++sendCount; }
   void sendReliable(const char*) override { ++sendCount; }
 
   int sendCount = 0;
@@ -338,29 +338,46 @@ bool putMessageField(Buf& b, uint32_t number, const Buf& nested) {
   return putBytesField(b, number, nested.data, nested.len);
 }
 
+// armorLine() -- 123-002: CRC-then-COBS frame body (was "*B"+base64 line
+// pre-123), byte-for-byte the same composition as App::Comms::sendReply()/
+// TestSupport::armor() (wire_test_codec.cpp). The trailing 0x00 delimiter
+// is a transport concern, not included here -- push the result via
+// TestSupport::FakeTransport::enqueueInboundBinary(), not enqueueInbound().
 std::string armorLine(const uint8_t* raw, size_t rawLen) {
-  char b64[512] = {};
-  size_t b64Len = 0;
-  bool ok = WireRuntime::base64Encode(raw, rawLen, b64, sizeof(b64), &b64Len);
-  if (!ok) return std::string();
-  std::string out = "*B";
-  out.append(b64, b64Len);
-  return out;
+  uint8_t combined[256];
+  if (rawLen > sizeof(combined) - 2) return std::string();
+  std::memcpy(combined, raw, rawLen);
+  size_t combinedLen = rawLen;
+  const uint16_t crc = WireRuntime::crcCompute(raw, rawLen);
+  if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) return std::string();
+  uint8_t framed[300];
+  size_t framedLen = 0;
+  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen)) return std::string();
+  return std::string(reinterpret_cast<const char*>(framed), framedLen);
 }
 
-// De-armors a captured "*B<base64>" outbound line back into raw protobuf
-// bytes -- the inverse of armorLine(), needed only because no
-// decode(ReplyEnvelope) codec exists (app_telemetry_harness.cpp's own file
-// header note): a substring search over these raw bytes is this harness's
-// way of confirming a specific ack landed, without reconstructing the
-// entire frame's other fields.
+// De-frames a captured COBS+CRC outbound frame (123-002 -- was "*B<base64>"
+// text pre-123) back into raw protobuf bytes -- the inverse of armorLine(),
+// needed only because no decode(ReplyEnvelope) codec exists
+// (app_telemetry_harness.cpp's own file header note): a substring search
+// over these raw bytes is this harness's way of confirming a specific ack
+// landed, without reconstructing the entire frame's other fields. Verifies
+// the CRC (not just the COBS framing) before returning, matching
+// App::Comms::decodeBinaryFrame()'s own contract.
 std::string rawBytesFromArmoredLine(const std::string& line) {
-  if (line.size() < 2 || line[0] != '*' || line[1] != 'B') return std::string();
-  uint8_t raw[App::kMaxEnvelopeBytes] = {};
-  size_t rawLen = 0;
-  bool ok = WireRuntime::base64Decode(line.c_str() + 2, line.size() - 2, raw, sizeof(raw), &rawLen);
-  if (!ok) return std::string();
-  return std::string(reinterpret_cast<const char*>(raw), rawLen);
+  uint8_t combined[256];
+  size_t combinedLen = 0;
+  if (!WireRuntime::cobsDecode(reinterpret_cast<const uint8_t*>(line.data()), line.size(), combined,
+                                sizeof(combined), &combinedLen)) {
+    return std::string();
+  }
+  if (combinedLen < 2) return std::string();
+  const size_t payloadLen = combinedLen - 2;
+  size_t pos = payloadLen;
+  uint16_t receivedCrc = 0;
+  if (!WireRuntime::decodeCrc16(combined, combinedLen, &pos, &receivedCrc)) return std::string();
+  if (!WireRuntime::crcVerify(combined, payloadLen, receivedCrc)) return std::string();
+  return std::string(reinterpret_cast<const char*>(combined), payloadLen);
 }
 
 bool containsSubBytes(const std::string& haystack, const Buf& needle) {
@@ -636,7 +653,7 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
     scriptMotorCycle(bus, /*positionMm=*/0.0f, /*extraDutyWrites=*/(cycleIndex == 0) ? 1 : 0);  // Left
     scriptMotorCycle(bus, /*positionMm=*/0.0f, /*extraDutyWrites=*/(cycleIndex == 0) ? 1 : 0);  // Right
     scriptOtosReadZeroPose(bus);
-    if (inject != nullptr) serialFake.enqueueInbound(inject);
+    if (inject != nullptr) serialFake.enqueueInboundBinary(inject);
     robotLoop.cycle();
     nowUs += 41000;  // > kPrimaryPeriod -- guarantees the NEXT cycle's primaryDue() is true
     ++cycleIndex;
@@ -802,7 +819,7 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
     scriptMotorCycle(bus, /*positionMm=*/0.0f, /*extraDutyWrites=*/(i == 0) ? 1 : 0);  // Right
     scriptOtosReadZeroPose(bus);
 
-    if (i == 1 || i == 2) serialFake.enqueueInbound(motorLine.c_str());  // dispatch the SAME patch twice
+    if (i == 1 || i == 2) serialFake.enqueueInboundBinary(motorLine.c_str());  // dispatch the SAME patch twice
 
     robotLoop.cycle();
     nowUs += 41000;
@@ -1054,7 +1071,7 @@ void scenarioMoveConfigGateRefusesWhenUnconfigured() {
                                                      /*stopTimeMs=*/200.0f, /*timeoutMs=*/5000.0f,
                                                      /*replace=*/true, /*id=*/1, kCorrId);
   checkTrue(!moveLine.empty(), "armor() of the MOVE envelope succeeds");
-  fx.serialFake.enqueueInbound(moveLine.c_str());
+  fx.serialFake.enqueueInboundBinary(moveLine.c_str());
 
   checkTrue(stepUntilAckSeen(fx, kCorrId, static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED), 10),
             "the MOVE's ack is ERR_NOT_CONFIGURED");
@@ -1074,21 +1091,21 @@ void scenarioMoveBadArgShapeValidation() {
   const uint32_t kNonPositiveTimeoutCorrId = 913;
   const uint32_t kErrBadArg = static_cast<uint32_t>(msg::ErrCode::ERR_BADARG);
 
-  fx.serialFake.enqueueInbound(
+  fx.serialFake.enqueueInboundBinary(
       armorMoveTimeTwistCommand(/*includeVelocity=*/false, 0.0f, 0.0f, /*includeStop=*/true, 200.0f,
                                  5000.0f, true, 1, kMissingVelocityCorrId)
           .c_str());
   checkTrue(stepUntilAckSeen(fx, kMissingVelocityCorrId, kErrBadArg, 10),
             "missing velocity variant acks ERR_BADARG");
 
-  fx.serialFake.enqueueInbound(
+  fx.serialFake.enqueueInboundBinary(
       armorMoveTimeTwistCommand(/*includeVelocity=*/true, 500.0f, 0.0f, /*includeStop=*/false, 0.0f,
                                  5000.0f, true, 2, kMissingStopCorrId)
           .c_str());
   checkTrue(stepUntilAckSeen(fx, kMissingStopCorrId, kErrBadArg, 10),
             "missing stop variant acks ERR_BADARG");
 
-  fx.serialFake.enqueueInbound(
+  fx.serialFake.enqueueInboundBinary(
       armorMoveTimeTwistCommand(/*includeVelocity=*/true, 500.0f, 0.0f, /*includeStop=*/true, 200.0f,
                                  /*timeoutMs=*/0.0f, true, 3, kNonPositiveTimeoutCorrId)
           .c_str());
@@ -1107,7 +1124,7 @@ void scenarioMoveSuccessfulEnqueueAcksAndActivates() {
 
   const uint32_t kCorrId = 921;
   const uint32_t kMoveId = 55;
-  fx.serialFake.enqueueInbound(
+  fx.serialFake.enqueueInboundBinary(
       armorMoveTimeTwistCommand(true, 500.0f, 0.0f, true, 300.0f, 5000.0f, true, kMoveId, kCorrId)
           .c_str());
   fx.step(1);
@@ -1135,7 +1152,7 @@ void scenarioMoveEndDrainsWithNoFurtherHostTraffic() {
   const uint32_t kMoveId = 61;
   // TIME stop at 150ms, generous 5s timeout -- ends via its OWN stop
   // condition, not the timeout backstop.
-  fx.serialFake.enqueueInbound(
+  fx.serialFake.enqueueInboundBinary(
       armorMoveTimeTwistCommand(true, /*v_x=*/500.0f, /*omega=*/0.0f, true, /*stopTimeMs=*/150.0f,
                                  /*timeoutMs=*/5000.0f, true, kMoveId, kCorrId)
           .c_str());
@@ -1198,7 +1215,7 @@ void scenarioMoveTimeoutSetsFaultFlagOnEndingCycle() {
   // only the timeout backstop can end this Move.
   const uint32_t kCorrId = 941;
   const uint32_t kMoveId = 71;
-  fx.serialFake.enqueueInbound(armorMoveDistanceTwistCommand(/*v_x=*/500.0f, /*omega=*/0.0f,
+  fx.serialFake.enqueueInboundBinary(armorMoveDistanceTwistCommand(/*v_x=*/500.0f, /*omega=*/0.0f,
                                                               /*stopDistanceMm=*/50.0f,
                                                               /*timeoutMs=*/120.0f, /*replace=*/true,
                                                               kMoveId, kCorrId)
@@ -1272,7 +1289,7 @@ void scenarioShapingDisabledFlagSetWhileMoveActiveWithBothAxesOff() {
 
   const uint32_t kCorrId = 9161;
   const uint32_t kMoveId = 916;
-  fx.serialFake.enqueueInbound(
+  fx.serialFake.enqueueInboundBinary(
       armorMoveTimeTwistCommand(/*includeVelocity=*/true, /*v_x=*/100.0f, /*omega=*/0.0f,
                                  /*includeStop=*/true, /*stopTimeMs=*/200.0f, /*timeoutMs=*/2000.0f,
                                  /*replace=*/true, kMoveId, kCorrId)
@@ -1324,7 +1341,7 @@ void scenarioShapingDisabledFlagStaysClearWhenBothAxesEnabled() {
 
   const uint32_t kCorrId = 9171;
   const uint32_t kMoveId = 917;
-  fx.serialFake.enqueueInbound(
+  fx.serialFake.enqueueInboundBinary(
       armorMoveTimeTwistCommand(/*includeVelocity=*/true, /*v_x=*/100.0f, /*omega=*/0.0f,
                                  /*includeStop=*/true, /*stopTimeMs=*/200.0f, /*timeoutMs=*/2000.0f,
                                  /*replace=*/true, kMoveId, kCorrId)
@@ -1366,7 +1383,7 @@ void scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome() {
 
   LiveFixture baseline;
   baseline.robotLoop.markConfigured();
-  baseline.serialFake.enqueueInbound(
+  baseline.serialFake.enqueueInboundBinary(
       armorMoveTimeTwistCommand(true, 0.0f, 0.0f, true, kStopTimeMs, kTimeoutMs, true, kMoveId, 951)
           .c_str());
   baseline.step(1);
@@ -1380,7 +1397,7 @@ void scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome() {
 
   LiveFixture interfered;
   interfered.robotLoop.markConfigured();
-  interfered.serialFake.enqueueInbound(
+  interfered.serialFake.enqueueInboundBinary(
       armorMoveTimeTwistCommand(true, 0.0f, 0.0f, true, kStopTimeMs, kTimeoutMs, true, kMoveId, 953)
           .c_str());
   interfered.step(1);
@@ -1392,7 +1409,7 @@ void scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome() {
   // MoveQueue's own tick() has nothing to do with CONFIG dispatch
   // (handleConfig() is a fully separate branch of processMessage()'s own
   // switch), so this must not perturb the Move's own timing at all.
-  interfered.serialFake.enqueueInbound(armorMotorConfigPatchCommand(/*kp=*/0.02f, /*corrId=*/954).c_str());
+  interfered.serialFake.enqueueInboundBinary(armorMotorConfigPatchCommand(/*kp=*/0.02f, /*corrId=*/954).c_str());
   interfered.step(1);
   checkFloatEq(interfered.motorL.gains().kp, 0.02f,
                "interfered: the CONFIG patch's own kp landed live, unaffected by the concurrently-"
@@ -1489,7 +1506,7 @@ void scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles() {
   // Injected before cycle 0 runs -- decoded via comms_.pump() (L-settle)
   // and activated via processMessage()/handleMove() (R-settle) that SAME
   // cycle, capturing activationPathLength=0 (nothing integrated yet).
-  serialFake.enqueueInbound(
+  serialFake.enqueueInboundBinary(
       armorMoveDistanceTwistCommand(/*v_x=*/500.0f, /*omega=*/0.0f, /*stopDistanceMm=*/30.0f,
                                      /*timeoutMs=*/5000.0f, /*replace=*/true, kMoveId, kCorrId)
           .c_str());
@@ -1633,7 +1650,7 @@ void scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists() {
   std::string estimatorLine = armorLine(estimatorEnv.data, estimatorEnv.len);
   checkTrue(!estimatorLine.empty(), "armor() of the CONFIG{estimator} envelope succeeds");
 
-  serialFake.enqueueInbound(estimatorLine.c_str());
+  serialFake.enqueueInboundBinary(estimatorLine.c_str());
 
   // Steps a bounded number of live cycles until the ack (fresh, matching
   // corr_id) appears -- mirrors stepUntilAckSeen()'s own shape (that
@@ -1750,7 +1767,7 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
       /*includeVelocity=*/true, kCommandedVx, /*omega=*/0.0f, /*includeStop=*/true,
       /*stopTimeMs=*/5000.0f, /*timeoutMs=*/5000.0f, /*replace=*/true, kMoveId, kMoveCorrId);
   checkTrue(!moveLine.empty(), "armor() of the MOVE envelope succeeds");
-  serialFake.enqueueInbound(moveLine.c_str());
+  serialFake.enqueueInboundBinary(moveLine.c_str());
 
   // ~1s of virtual ramp time -- comfortably >> the plant's default tau
   // (TestSim::kDefaultTau, 130ms, per sim_api_harness.cpp's own
@@ -1806,7 +1823,7 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   putMessageField(estimatorEnv, 6, estimatorDelta);   // CommandEnvelope.config, field 6
   std::string estimatorLine = armorLine(estimatorEnv.data, estimatorEnv.len);
   checkTrue(!estimatorLine.empty(), "armor() of the CONFIG{estimator} envelope succeeds");
-  serialFake.enqueueInbound(estimatorLine.c_str());
+  serialFake.enqueueInboundBinary(estimatorLine.c_str());
 
   plant.tick(static_cast<float>(kCycleDtUs) / 1e6f);  // [s]
   clock.advanceMicros(kCycleDtUs);

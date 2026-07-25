@@ -27,6 +27,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -129,10 +130,17 @@ class SimHarness {
     }
   }
 
-  // Pushes one complete armored ("*B...") line onto the inbound serial
-  // FakeTransport -- App::Comms::pump() consumes at most one per cycle()
-  // call.
-  void injectCommand(const char* armoredLine) { serialLink_.enqueueInbound(armoredLine); }
+  // Pushes one complete COBS+CRC-framed command frame (123-002 -- was
+  // armored "*B..." text pre-123) onto the inbound serial FakeTransport --
+  // App::Comms::pump() consumes at most one per cycle() call. `frame` is
+  // always a TestSupport::armorMoveCommand()/armorStopCommand()/-built
+  // frame body (0x00-free by COBS construction, per that helper's own doc
+  // comment), so recovering its length via strlen() here is safe --
+  // tagged App::FrameKind::kBinary (enqueueInboundBinary()), never
+  // enqueueInbound()'s kText (this is never a HELLO/PING text line).
+  void injectCommand(const char* frame) {
+    serialLink_.enqueueInboundBinary(reinterpret_cast<const uint8_t*>(frame), std::strlen(frame));
+  }
 
   // Convenience wrappers over injectCommand() + TestSupport::armorMoveCommand()
   // -- the only way a caller injects a Move/Stop (there is no

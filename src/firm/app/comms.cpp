@@ -18,11 +18,37 @@ namespace App {
 
 // --- SerialTransport ---------------------------------------------------
 
+namespace {
+
+// Maps a concrete transport's OWN frame-kind enum onto App::FrameKind --
+// com/ has no dependency on app/ (com/DESIGN.md), so SerialPort/Radio each
+// declare their own identical-shaped enum; this is the one seam (comms.cpp,
+// which already depends on both) allowed to know both exist.
+FrameKind toAppFrameKind(SerialPort::FrameKind k) {
+  switch (k) {
+    case SerialPort::FrameKind::kText: return FrameKind::kText;
+    case SerialPort::FrameKind::kBinary: return FrameKind::kBinary;
+    default: return FrameKind::kNone;
+  }
+}
+
+FrameKind toAppFrameKind(Radio::FrameKind k) {
+  switch (k) {
+    case Radio::FrameKind::kText: return FrameKind::kText;
+    case Radio::FrameKind::kBinary: return FrameKind::kBinary;
+    default: return FrameKind::kNone;
+  }
+}
+
+}  // namespace
+
 SerialTransport::SerialTransport(SerialPort& serial) : serial_(serial) {}
 
-bool SerialTransport::readLine(char* buf, uint16_t len) { return serial_.readLine(buf, len); }
+FrameKind SerialTransport::readLine(char* buf, uint16_t cap, uint16_t* outLen) {
+  return toAppFrameKind(serial_.readLine(buf, cap, outLen));
+}
 
-void SerialTransport::send(const char* msg) { serial_.send(msg); }
+void SerialTransport::send(const uint8_t* data, uint16_t len) { serial_.send(data, len); }
 
 void SerialTransport::sendReliable(const char* msg) { serial_.sendReliable(msg); }
 
@@ -30,15 +56,13 @@ void SerialTransport::sendReliable(const char* msg) { serial_.sendReliable(msg);
 
 RadioTransport::RadioTransport(Radio& radio) : radio_(radio) {}
 
-bool RadioTransport::readLine(char* buf, uint16_t len) { return radio_.poll(buf, len); }
-
-void RadioTransport::send(const char* msg) { radio_.send(msg); }
-
-void RadioTransport::sendReliable(const char* msg) {
-  // Radio has only one send path -- both Transport::send() and
-  // sendReliable() delegate to the same Radio::send().
-  radio_.send(msg);
+FrameKind RadioTransport::readLine(char* buf, uint16_t cap, uint16_t* outLen) {
+  return toAppFrameKind(radio_.poll(buf, cap, outLen));
 }
+
+void RadioTransport::send(const uint8_t* data, uint16_t len) { radio_.send(data, len); }
+
+void RadioTransport::sendReliable(const char* msg) { radio_.sendText(msg); }
 
 #endif  // HOST_BUILD
 
@@ -55,54 +79,69 @@ void Comms::pump(Cmd& out, uint32_t now) {
 
 bool Comms::pumpTransport(Transport& t, Cmd& out, uint32_t now) {
   char line[kArmoredBufSize];
-  if (!t.readLine(line, sizeof(line))) return false;
+  uint16_t lineLen = 0;
+  const FrameKind kind = t.readLine(line, sizeof(line), &lineLen);
+  if (kind == FrameKind::kNone) return false;
 
-  // Text plane, checked BEFORE the '*' armor check -- HELLO/PING replies.
-  if (std::strcmp(line, "HELLO") == 0) {
-    t.sendReliable(banner_);
-    return true;
-  }
-  if (std::strcmp(line, "PING") == 0) {
-    // t=<ms> is the robot's own clock at reply-formatting time (117,
-    // SUC-056) -- activates the host's ClockSync (min-RTT offset + skew
-    // fit). Integer formatting only: newlib-nano has no printf float
-    // support, but `now` is already an integer, so this is a non-issue,
-    // not a workaround. Buffer sized generously for "OK pong t=" (10) +
-    // a uint32_t's worst case (10 digits) + NUL.
-    char pong[32];
-    std::snprintf(pong, sizeof(pong), "OK pong t=%lu", static_cast<unsigned long>(now));
-    t.sendReliable(pong);
-    return true;
-  }
-  if (line[0] != '*') {
-    // Not HELLO, not PING, not armored -- unrecognized text-plane line.
+  if (kind == FrameKind::kText) {
+    // Text plane -- HELLO/PING replies. Every other text-plane line
+    // (not "HELLO", not "PING") is unrecognized, not merely un-armored --
+    // there is no more "*B..." prefix check now that armor is binary, so
+    // ANY text line that isn't one of the two recognized commands counts
+    // as malformed.
+    if (std::strcmp(line, "HELLO") == 0) {
+      t.sendReliable(banner_);
+      return true;
+    }
+    if (std::strcmp(line, "PING") == 0) {
+      // t=<ms> is the robot's own clock at reply-formatting time (117,
+      // SUC-056) -- activates the host's ClockSync (min-RTT offset + skew
+      // fit). Integer formatting only: newlib-nano has no printf float
+      // support, but `now` is already an integer, so this is a non-issue,
+      // not a workaround. Buffer sized generously for "OK pong t=" (10) +
+      // a uint32_t's worst case (10 digits) + NUL.
+      char pong[32];
+      std::snprintf(pong, sizeof(pong), "OK pong t=%lu", static_cast<unsigned long>(now));
+      t.sendReliable(pong);
+      return true;
+    }
     ++malformedCount_;
     return true;
   }
 
-  decodeArmoredLine(line, out);
+  // kind == FrameKind::kBinary
+  decodeBinaryFrame(reinterpret_cast<const uint8_t*>(line), lineLen, out);
   return true;
 }
 
-void Comms::decodeArmoredLine(const char* line, Cmd& out) {
-  // Caller guarantees line[0] == '*'; line[1] != 'B' is still a real
-  // possibility (a malformed/future-armor line) and must be rejected
-  // cleanly, not assumed away.
-  if (line[1] != 'B') {
+void Comms::decodeBinaryFrame(const uint8_t* frame, uint16_t frameLen, Cmd& out) {
+  // Reverse of sendReply()'s CRC-then-COBS composition (123-001 completion
+  // notes, pinned exactly so firmware and host agree byte-for-byte): 1)
+  // COBS-decode the received frame bytes back into (schema payload + CRC)
+  // combined bytes, 2) split off the trailing 2-byte CRC, 3) verify it
+  // against the leading payload bytes, 4) only then hand the payload to
+  // msg::wire::decode(). Every step fails cleanly (malformedCount_++,
+  // out left untouched) on any malformed/corrupt input -- no partial state
+  // ever reaches `out` (see pump()'s own doc comment).
+  uint8_t combined[kMaxCrcPayloadBytes];
+  size_t combinedLen = 0;
+  if (!WireRuntime::cobsDecode(frame, frameLen, combined, sizeof(combined), &combinedLen)) {
+    ++malformedCount_;
+    return;
+  }
+  if (combinedLen < 2) {
     ++malformedCount_;
     return;
   }
 
-  const char* b64 = line + 2;
-  size_t b64Len = std::strlen(b64);
-  while (b64Len > 0 && (b64[b64Len - 1] == '\r' || b64[b64Len - 1] == '\n' ||
-                        b64[b64Len - 1] == ' ' || b64[b64Len - 1] == '\t')) {
-    --b64Len;
+  const size_t payloadLen = combinedLen - 2;
+  size_t crcPos = payloadLen;
+  uint16_t receivedCrc = 0;
+  if (!WireRuntime::decodeCrc16(combined, combinedLen, &crcPos, &receivedCrc)) {
+    ++malformedCount_;
+    return;
   }
-
-  uint8_t rawBuf[kMaxEnvelopeBytes];
-  size_t rawLen = 0;
-  if (!WireRuntime::base64Decode(b64, b64Len, rawBuf, sizeof(rawBuf), &rawLen)) {
+  if (!WireRuntime::crcVerify(combined, payloadLen, receivedCrc)) {
     ++malformedCount_;
     return;
   }
@@ -113,7 +152,8 @@ void Comms::decodeArmoredLine(const char* line, Cmd& out) {
   // frame is silently counted (malformedCount_) and surfaced as a
   // Telemetry fault bit (App::kFaultCommsMalformed) instead.
   msg::CommandEnvelope decoded;
-  const msg::wire::Result r = msg::wire::decode(decoded, rawBuf, static_cast<uint16_t>(rawLen));
+  const msg::wire::Result r =
+      msg::wire::decode(decoded, combined, static_cast<uint16_t>(payloadLen));
   if (!r.ok) {
     ++malformedCount_;
     return;
@@ -133,21 +173,32 @@ void Comms::sendReply(const msg::ReplyEnvelope& reply) {
     return;
   }
 
-  char armored[kArmoredBufSize];
-  armored[0] = '*';
-  armored[1] = 'B';
-  size_t b64Len = 0;
-  if (!WireRuntime::base64Encode(rawBuf, n, armored + 2, sizeof(armored) - 3, &b64Len)) {
-    return;  // same unreachable-in-practice sizing argument as above
+  // CRC-then-COBS composition (123-001 completion notes -- NOT
+  // COBS-then-append-CRC, which would risk emitting a literal 0x00 if the
+  // CRC bytes happen to contain one, breaking the delimiter property):
+  // append the 2-byte CRC-16/CCITT-FALSE (little-endian) to the
+  // schema-encoded payload, THEN COBS-encode the combined bytes.
+  uint8_t combined[kMaxCrcPayloadBytes];
+  std::memcpy(combined, rawBuf, n);
+  size_t combinedLen = n;
+  const uint16_t crc = WireRuntime::crcCompute(rawBuf, n);
+  if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) {
+    return;  // unreachable in practice -- combined is sized for exactly this
   }
-  armored[2 + b64Len] = '\0';
+
+  uint8_t framed[kFramedMaxBytes];
+  size_t framedLen = 0;
+  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen)) {
+    return;  // unreachable in practice -- framed is sized to the worst case
+  }
 
   // Broadcast on BOTH transports every call, via the async/drop-on-full
   // send() path (never sendReliable()) -- telemetry is always-on and must
   // never stall the loop on backpressure (primary+secondary frames go out
-  // on both transports every cadence).
-  serialLink_.send(armored);
-  radioLink_.send(armored);
+  // on both transports every cadence). The concrete transport appends the
+  // trailing 0x00 delimiter itself.
+  serialLink_.send(framed, static_cast<uint16_t>(framedLen));
+  radioLink_.send(framed, static_cast<uint16_t>(framedLen));
 }
 
 }  // namespace App
