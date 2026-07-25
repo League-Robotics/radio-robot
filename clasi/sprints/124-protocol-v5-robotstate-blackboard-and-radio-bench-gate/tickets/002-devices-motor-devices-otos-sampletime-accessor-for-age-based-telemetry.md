@@ -1,8 +1,9 @@
 ---
 id: '002'
 title: 'Devices::Motor / Devices::Otos: sampleTime() accessor for age-based telemetry'
-status: open
-use-cases: [SUC-006]
+status: done
+use-cases:
+- SUC-006
 depends-on: []
 github-issue: ''
 issue: protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md
@@ -29,16 +30,16 @@ the `nowUs` of the tick that produced the currently-cached reading — not
 
 ## Acceptance Criteria
 
-- [ ] `Motor::sampleTime()` and `Otos::sampleTime()` declared (pure
+- [x] `Motor::sampleTime()` and `Otos::sampleTime()` declared (pure
       virtual, matching `position()`/`velocity()`'s existing shape) and
       implemented in `NezhaMotor`, the sim/fake motor, and both the real
       and fake `Otos` implementations.
-- [ ] `MotorArmor::sampleTime()` forwards to `inner_.sampleTime()`, same
+- [x] `MotorArmor::sampleTime()` forwards to `inner_.sampleTime()`, same
       as its other passthrough accessors.
-- [ ] The returned value reflects the actual tick timestamp of the last
+- [x] The returned value reflects the actual tick timestamp of the last
       ACCEPTED fresh sample (matching `lastFreshUs_`'s existing role in
       `NezhaMotor`), not the current cycle's `now`.
-- [ ] Existing device unit tests pass unmodified; new tests cover the
+- [x] Existing device unit tests pass unmodified; new tests cover the
       accessor directly.
 
 ## Testing

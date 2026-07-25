@@ -615,6 +615,50 @@ void scenarioSecondaryPrimitivesRoundTrip() {
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
 }
 
+// 9. sampleTime() (124-002, protocol-v5 §B2 prerequisite): reports the nowUs
+//    of the tick that performed the last REAL bus-read attempt -- NOT the
+//    current tick's own now. It must stay fixed across a rate-limited
+//    (too-soon) tick() that issues zero bus traffic, and advance to the new
+//    tick's nowUs once a real read is due and attempted again. This is the
+//    accessor the wire's `otos` age field (ticket 008/009) will read.
+void scenarioSampleTimeReflectsLastRealReadAttemptNotCurrentNow() {
+  beginScenario("sampleTime() reflects the last REAL read attempt's tick, not this tick's own now");
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  scriptGenerousWrites(bus, 20);
+  scriptProductId(bus, 0x5F);
+
+  Devices::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  checkTrue(odom.sampleTime() == 0, "sampleTime() defaults to 0 before begin()/any tick()");
+
+  odom.begin();
+  checkTrue(odom.sampleTime() == 0, "sampleTime() unchanged by begin() -- begin()'s probe is not tick()'s own real read");
+
+  // Tick 1: hasRead_ starts false -- always issues a real read; sampleTime()
+  // lands on exactly this tick's nowUs.
+  scriptPosVel(bus, 1000, 500, 0, 300, -100, 50);
+  odom.tick(1000000);
+  checkTrue(odom.sampleTime() == 1000000, "tick 1 (real read): sampleTime() == this tick's own nowUs");
+
+  // Tick 2, just inside the rate-limit window: too soon -- zero bus traffic,
+  // so sampleTime() must NOT advance to this tick's nowUs.
+  uint64_t tooSoonNowUs = 1000000 + kReadPeriodUs - 1;
+  odom.tick(tooSoonNowUs);
+  checkTrue(odom.sampleTime() == 1000000,
+            "tick 2 (too soon, no bus traffic): sampleTime() stays fixed at tick 1's nowUs");
+  checkTrue(odom.sampleTime() != tooSoonNowUs,
+            "tick 2: sampleTime() is NOT this tick's own now -- a real skew, not a re-stamp");
+
+  // Tick 3, exactly at the rate-limit boundary: due again -- a real read is
+  // attempted, so sampleTime() advances to this tick's nowUs.
+  scriptPosVel(bus, 1100, 550, 0, 300, -100, 50);
+  uint64_t dueNowUs = 1000000 + kReadPeriodUs;
+  odom.tick(dueNowUs);
+  checkTrue(odom.sampleTime() == dueNowUs, "tick 3 (period elapsed): sampleTime() advances to this tick's own nowUs");
+
+  checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
+}
+
 // (The former scenario 9 exercised Devices::Otos::feedSyntheticSample() --
 // the 120-002 FAKE_OTOS build seam. That method is deleted: synthesis now
 // lives in App::FakeOtos (app/fake_otos.h), covered by its own harness
@@ -633,6 +677,7 @@ int main() {
   scenarioPresentTracksDetectionOnlyIndependentOfConnected();
   scenarioSetPoseStagedReanchorAppliesAtNextTick();
   scenarioSecondaryPrimitivesRoundTrip();
+  scenarioSampleTimeReflectsLastRealReadAttemptNotCurrentNow();
 
   if (g_failureCount == 0) {
     std::printf("OK: all Devices::Otos scenarios passed\n");

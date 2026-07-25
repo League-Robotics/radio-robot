@@ -381,6 +381,18 @@ needs this; every other interpolated field uses plain `lerp()`.
   surface, called directly by the loop (`app/robot_loop.cpp`) — see each
   header's own declaration comments for the per-call contract (rate
   limits, no-op-until-detected behavior, staleness semantics).
+  `Motor`/`Otos` additionally expose `sampleTime()` [us] (124-002): the
+  `nowUs` of the tick that produced the CURRENTLY-cached reading — the
+  last ACCEPTED fresh sample's own timestamp (`NezhaMotor::lastFreshUs_`/
+  `RealOtos::lastReadUs_`), never "now" at call time. `MotorArmor` forwards
+  it unmodified (no armor-side state of its own); every fake/stub in
+  `tests/sim/unit/` and `App::FakeOtos` implement it too, since it is part
+  of the abstract interface, not an ad hoc addition to the two real leaves.
+  Added so a caller (telemetry's per-sample `age` fields) can compute a
+  REAL per-sample age instead of stamping every reading with the same
+  cycle's `now` — see
+  `clasi/sprints/124-protocol-v5-robotstate-blackboard-and-radio-bench-gate/issues/protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md`
+  §B2.
   `Otos` is an abstract interface with two implementations —
   `Devices::RealOtos` (the chip) and `App::FakeOtos` (the `FAKE_OTOS`
   bench synthesizer) — see §4's own paragraph for the split and build seam.
