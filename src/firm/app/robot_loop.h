@@ -141,43 +141,54 @@ class RobotLoop {
   template <typename Body>
   void runAndWait(uint32_t gap, Body body);  // [ms]
 
-  // Update tlm_ from bus_/motorL_/motorR_/comms_ -- everything knowable
-  // synchronously at this point in the cycle. `now` -- [ms], this cycle's
-  // own cycleStart mark, used both as the encoder readings' own
-  // collect-time stamp and (by the caller) as tlm_.emit()'s own `now`
-  // argument, keeping the two in the same time domain.
-  void updateTlm(uint32_t now);  // [ms]
-
-  // updateLineColor -- rate-limited, ALTERNATING line/color steady-state
-  // sampling (115-005, gut S1's own line/color wiring). Called once per
-  // cycle from the kPace block. Ticks EXACTLY ONE of {line_, color_} this
-  // call (never both -- the 098-004 per-pass-read regression precedent:
-  // never let a per-cycle sensor read disrupt the motor request/collect
-  // cadence) and alternates which one on the NEXT call. Each leaf's own
-  // tick()/readDue() rate-limits the actual bus transaction further (the
-  // same Otos::readDue() pattern) -- this alternation only bounds how
-  // often either leaf is even OFFERED a cycle to check its own due-ness.
-  // A fresh reading packs into frame_.line/frame_.color and sets the
-  // corresponding flags bit (13/14) for THIS cycle only -- the OTHER
-  // leaf's own bit is explicitly cleared this same cycle (it was not even
-  // touched), matching the wire spec's "line/color word fresh" (i.e. fresh
-  // THIS frame, not merely "known at some point") semantics.
-  void updateLineColor(uint64_t nowUs);  // [us]
-
-  // applyOtosSample -- the minimal OTOS-only perception step: ticks otos_
-  // (rate-limited internally by its own readDue()/kReadPeriod) and copies
-  // the full reading (x, y, heading, v_x, v_y, omega) plus the burst's read
-  // time into frame_.otos; sets frame_.otosConnected = otos_.connected() and
-  // frame_.otosPresent = otos_.present() && otos_.poseFresh() (fresh THIS
-  // cycle only). No fusion -- the raw OTOS pose rides to the host verbatim.
-  // frame_.otos is overwritten only when otosPresent; otherwise left as the
-  // last staged snapshot. The base-side counterpart to updateLineColor(),
-  // called once per cycle from the pace block. (Was the free function
-  // App::applyOtosSample() in app/otos_sample.{h,cpp}; folded in here since
-  // RobotLoop is its only production caller and its sibling perception steps
-  // live here. It cannot live in src/motion -- the isolation invariant
-  // forbids motion depending on Devices::Otos/Telemetry::Frame.)
-  void applyOtosSample(uint64_t now);  // [us]
+  // assembleFrame -- 123-007's single telemetry-assembly point (Eric,
+  // 2026-07-25: "assemble it right before you emit it, and assemble it
+  // from primary sources, not by collecting stuff piecemeal ... one
+  // assembly and one update to set the flags, and then send it"). Called
+  // ONCE per cycle, from the kPace block, immediately before tlm_.emit() --
+  // replaces the old updateTlm()/updateLineColor()/applyOtosSample() trio
+  // (each of which used to write its own slice of frame_ from a different
+  // point in the cycle) plus the cycle body's own inline cycleBusy/
+  // cyclePeriod staging. Builds the WHOLE frame_ and sets every telemetry
+  // flag whose underlying condition is ALREADY knowable at this point in
+  // the cycle, reading bus_/motorL_/motorR_/otos_/odom_/moveQueue_/comms_/
+  // line_/color_ directly (primary sources) -- never reads a value back
+  // out of frame_ itself. `now` -- [ms], this cycle's own cycleStart mark
+  // (encoder collect-time stamp and tlm_.emit()'s own `now` argument, same
+  // time domain). `cycleStartUs`/`nowUs` -- [us], 123-004's own
+  // loop-timing instants (cycleBusy/cyclePeriod). `twistVx`/`twistOmega`
+  // and `otosReading`/`otosPresent`/`otosConnected` are handed in rather
+  // than re-read a second time -- the SAME primary-source values cycle()'s
+  // own StateEstimator::Input construction (immediately before this call)
+  // just computed via BodyKinematics::forward()/otos_.pose(); re-deriving
+  // them here would be a harmless-but-pointless second read of the same
+  // instant, not a correctness issue either way. `lineFresh`/`colorFresh`
+  // -- which ONE of {line_, color_} this cycle's own alternating tick
+  // (cycle()'s own kPace-block body, unchanged 115-005 cadence) actually
+  // ticked; the OTHER leaf's own flag/word is left untouched this cycle
+  // (matching the wire spec's "fresh THIS frame" semantics the old
+  // updateLineColor() already honored).
+  //
+  // NOT set here: kFlagFaultMoveTimeout/kFlagFaultShapingDisabled. Both
+  // read moveQueue_'s own state AFTER its per-cycle tick() call, which
+  // must stay positioned AFTER this method/tlm_.emit() every cycle (so a
+  // completion ack rides the NEXT frame, protocol-v4 §7.2 -- see cycle()'s
+  // own comment at the moveQueue_.tick() call site). The harness
+  // (app_robot_loop_harness.cpp's SUC-054/119-001 scenarios) queries
+  // tlm_.flags() directly (LIVE internal state, not decoded wire content)
+  // and requires both bits to already reflect THIS cycle's own tick()
+  // outcome by the time cycle() returns -- deferring them to the NEXT
+  // cycle's assembleFrame() call (as this ticket's first draft tried)
+  // makes the live flags lag tick() by a full extra cycle, which both
+  // scenarios catch. So these two are level-set via direct tlm_.setFlag()
+  // calls immediately after moveQueue_.tick(), the same position/logic as
+  // before this ticket -- the one place in this file a flag is still set
+  // outside assembleFrame(), and unavoidably so: their data does not EXIST
+  // yet at assembly time.
+  void assembleFrame(uint32_t now, uint64_t cycleStartUs, uint64_t nowUs,  // [ms] [us] [us]
+                      float twistVx, float twistOmega,                    // [mm/s] [rad/s]
+                      const Devices::PoseReading& otosReading, bool otosPresent,
+                      bool otosConnected, bool lineFresh, bool colorFresh);
 
   // Dispatches the <=1 decoded command in cmd to its own handler by
   // cmd_kind (NONE is a no-op). Each handler applies its command and acks
@@ -239,9 +250,11 @@ class RobotLoop {
   // set/clear call sites one-for-one (activate/flush/timeout-drain).
   Telemetry::Frame frame_;
 
-  // updateLineColor()'s own alternation cursor -- true means the NEXT
-  // updateLineColor() call ticks line_, false means it ticks color_. See
-  // that method's own doc comment.
+  // Line/color alternation cursor (115-005) -- true means the NEXT pass
+  // ticks line_, false means it ticks color_. Owned by cycle()'s own
+  // kPace-block body now (the tick itself is no longer a separate private
+  // method -- see assembleFrame()'s own doc comment); this cursor is the
+  // only piece of that cadence that must persist across cycle() calls.
   bool lineTurnNext_ = true;
 
   // --- Loop-timing telemetry (122-003, cycle_busy/cycle_period -- now
