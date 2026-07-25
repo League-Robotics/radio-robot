@@ -10,8 +10,16 @@
 micro:bit V2 (nRF52833) that drives a PlanetX Nezha V2
 differential-drive robot. It reads wheel encoders and sensors over one
 shared I2C bus, closes per-wheel velocity loops, integrates odometry,
-and exchanges binary-armored protobuf-style messages with a host over
-USB serial and the micro:bit radio.
+and exchanges COBS+CRC-framed protobuf-style messages with a host over
+USB serial and the micro:bit radio (sprint 123 — replaces the base64
+line armor this file described prior to that sprint; see §4 below). NOTE:
+this file predates and was not updated for sprint 122's motion-library
+extraction (`docs/design/design.md` §2/§5) — its module list and
+dependency diagram below still describe the pre-122 shape (`App::
+MoveQueue`/`App::Odometry`/`App::StateEstimator`, `src/firm/kinematics/`,
+a small `src/firm/motion/`); `docs/design/design.md` is the current,
+reconciled source for that restructuring. Only this file's wire-framing
+content is updated here (sprint 123 ticket 005's own scope).
 
 It is the **plant** end of the host/robot split — the host side is
 [`src/host`](../host/DESIGN.md). The host plans motion (currently just
@@ -75,8 +83,9 @@ subsystem/message-dispatch stack (deleted in sprints 102–107).
 Flow of one cycle, at orientation altitude:
 
 1. **Comms in** — `App::Comms` polls the two transports (serial, radio)
-   for one armored `*B` line, dearmors and decodes it into a
-   `msg::CommandEnvelope`.
+   for one complete frame, demuxing a `0x00`-delimited COBS+CRC binary
+   frame from the HELLO/PING text rump on the same byte stream (123),
+   then decodes the binary frame into a `msg::CommandEnvelope`.
 2. **Dispatch** — the loop's own switch acts on the command: a `Move`
    enqueues onto `App::MoveQueue` (1 active + 4 pending; `replace=true`
    flushes pending and preempts the active `Move`, `replace=false`
@@ -135,12 +144,14 @@ why `devices/` stays free of wire-plane and config types (§5): the more
 of the graph that compiles host-side, the more of the robot the sim and
 the pytest suite can exercise without hardware.
 
-**Wire boundary.** The command/reply protocol is armored binary:
-`*B<base64>` lines over USB serial (115200 CDC) and the micro:bit radio
-(group 10, channel 0–35 persisted in flash). Payloads are
+**Wire boundary.** The command/reply protocol is COBS+CRC-framed binary
+(sprint 123 — replaces the pre-123 `*B<base64>\r\n` line armor):
+`0x00`-delimited frames over USB serial (115200 CDC) and the micro:bit
+radio (group 10, channel 0–35 persisted in flash), demuxed on the same
+byte stream from the `\n`-terminated HELLO/PING text rump. Payloads are
 `msg::CommandEnvelope` in (a `move` / `config` / `stop` oneof — exactly
 three inbound commands), `msg::ReplyEnvelope` out (`ok` / `err` / `tlm`
-oneof), plus an independently-armored `msg::TelemetrySecondary`
+oneof), plus an independently-COBS+CRC-framed `msg::TelemetrySecondary`
 diagnostic frame. The schema source of truth is `src/protos/*.proto`
 ([`src/protos`](../protos/DESIGN.md)); the codec and byte-level runtime
 live in [`messages/`](messages/DESIGN.md). The boot banner

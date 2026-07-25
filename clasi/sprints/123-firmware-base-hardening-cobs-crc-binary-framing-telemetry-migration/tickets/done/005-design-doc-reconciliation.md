@@ -1,9 +1,17 @@
 ---
 id: '005'
 title: Design-doc reconciliation
-status: open
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004, SUC-005]
-depends-on: ['002', '003', '004']
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+depends-on:
+- '002'
+- '003'
+- '004'
 github-issue: ''
 issue: cobs-crc-binary-framing-replace-base64-armor.md
 completes_issue: true
@@ -26,13 +34,13 @@ resolves the "122-003" interim-placement note), `src/host/DESIGN.md` and
 
 ## Acceptance Criteria
 
-- [ ] All six docs above updated to describe COBS+CRC as the CURRENT
+- [x] All six docs above updated to describe COBS+CRC as the CURRENT
       framing (not "planned" or "interim") once tickets 002-004 land.
-- [ ] `messages/DESIGN.md`'s §3 base64-alphabet invariant either removed
+- [x] `messages/DESIGN.md`'s §3 base64-alphabet invariant either removed
       or clearly marked historical/superseded.
-- [ ] `close_sprint`'s design validation (`validate_design`) passes with
+- [x] `close_sprint`'s design validation (`validate_design`) passes with
       no dangling or missing `DESIGN.md`.
-- [ ] `docs/design/design.md`'s own "122 (motion-library extraction...)"
+- [x] `docs/design/design.md`'s own "122 (motion-library extraction...)"
       note, which explicitly forward-references "a future COBS+CRC
       framing rework," is updated to point at this sprint as landed,
       not future.

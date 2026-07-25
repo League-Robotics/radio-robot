@@ -13,9 +13,12 @@ root: ../../../docs/design/design.md
 `app/` is the single cooperatively-timed control loop (`App::RobotLoop`) and
 the BASE-side passive modules it owns:
 
-* `Comms` (wire framing),
+* `Comms` (wire framing — COBS+CRC binary frames demuxed from the HELLO/PING
+  text rump, 123-002; base64 line-armor before that, see §4 below),
 * `Telemetry` (outbound frames, including the `cycle_busy`/`cycle_period`
-  loop-timing fields — 122-003, see §4 below),
+  loop-timing fields — now on the PRIMARY frame every cycle, 123-004;
+  landed on the secondary frame as an interim placement at 122-003, see §4
+  below),
 * `Drive` (122-002, NARROWED — the wheel-target sink only:
   `setWheels()`/`stop()`/`tick()`, implementing `Motion::WheelSink`
   (`src/motion/wheel_sink.h`); it lost `setTwist()`/its `BodyKinematics`
@@ -401,6 +404,24 @@ is the one independent, additive change riding in the same sprint.
 still base-side (sprint 122 Design Rationale Decision 2 — the duty-sink
 rewrite that would move them is deferred to sprint 2).
 
+**123 (COBS+CRC binary framing + telemetry migration) — landed.**
+`Comms` (`comms.{h,cpp}`) and the two transports (`com/serial_port.*`,
+`com/radio.*`) cut over from `*B<base64>\r\n` line armor to a
+binary-clean byte stream that demuxes a `0x00`-delimited COBS+CRC frame
+from the `\r`?`\n`-terminated HELLO/PING text rump on the same stream
+(`App::FrameKind`) — a flag-day cutover, no dual-stack, base64 armor
+call sites removed from `app/` entirely (`WireRuntime::base64Encode()`/
+`Decode()` themselves are retained only for an unrelated debug harness,
+see `messages/DESIGN.md` §3). `wire.h`'s envelope-size budget is
+recomputed from 186 to 240 bytes, restoring the primary frame's
+headroom; ticket 004 uses that headroom to migrate `cycle_busy`/
+`cycle_period` off `TelemetrySecondary` (where 122-003 landed them as an
+interim placement) onto the primary `Telemetry` frame every cycle. Zero
+schema change beyond that one field relocation and the two envelope-size
+constants — every `CommandEnvelope`/`ReplyEnvelope` field shape is
+otherwise untouched. See §4 below for the full technical detail and
+`docs/protocol-v4.md` §2/§8 for the wire-level reference.
+
 ## 2. Orientation
 
 `RobotLoop` has two phases. `boot()` steps `Preamble` until every device
@@ -630,12 +651,14 @@ telemetry flags bit instead of answered inline. This keeps replies
 flowing through one channel (the ack slot) rather than two.
 
 **Telemetry's two send paths.** The primary frame (`msg::Telemetry`, ack
-slot + `flags` + pose/enc/vel/otos/line/color) rides a `ReplyEnvelope`
-through `Comms::sendReply()`. The secondary diagnostic frame
+slot + `flags` + pose/enc/vel/otos/line/color + `cycle_busy`/
+`cycle_period`, 123-004 — see below) rides a `ReplyEnvelope` through
+`Comms::sendReply()`. The secondary diagnostic frame
 (`msg::TelemetrySecondary`) is not a `ReplyEnvelope` oneof arm, so
 `Telemetry` holds its own `Transport&` pair and performs its own
-armor+broadcast for that one frame type, reusing `Comms`'s armor buffer
-size and `WireRuntime::base64Encode()` rather than duplicating a private
+COBS+CRC-frame-and-broadcast for that one frame type (123-002 — base64
+armor+broadcast before that), reusing `Comms`'s framed-buffer size and
+`WireRuntime`'s COBS/CRC primitives rather than duplicating a private
 encode path. `emit()` sends at most one frame type per call and normally
 lets whichever frame is due win; when both are genuinely due in the same
 call it *alternates* rather than always favoring primary — at the real
@@ -644,29 +667,41 @@ unconditional "primary wins ties" rule starves secondary to 0Hz. The
 alternation costs at most one primary frame delayed by one cycle roughly
 once per secondary period; a non-tied call is unaffected.
 
-**`cycle_busy`/`cycle_period` loop-timing fields (122-003, ADDITIVE —
-`TelemetrySecondary` fields 11/12).** Landed on the SECONDARY frame,
-INTERIM: the issue that motivated these
-(`telemetry-report-loop-cycle-duration.md`) originally targeted the
-PRIMARY per-cycle frame, but `msg::Telemetry`'s own `ReplyEnvelope`-wrapped
-worst case already sits 1 B under the shared 186-byte envelope budget, and
-the serial transport carries a second, tighter, independent ceiling
-underneath that budget (CODAL's `Serial` TX ring buffer caps at 254 usable
-bytes; the current 186-byte budget's armored+CRLF wire line already
-consumes 252 of those) — raising the primary budget at all guarantees
-mid-line truncation on serial. `TelemetrySecondary`'s own worst case
-(`kTelemetrySecondaryMaxEncodedSize`, generated — 60 B as of this ticket)
-has no such problem, so the two fields land here instead, staged fresh
-every cycle by `RobotLoop::cycle()`'s own `previousCycleStartUs_`/
-`everCycled_` bookkeeping (independent of `markTime()`'s `[ms]`-truncated
-`cycleStart` — a separate `clock_.nowMicros()` read gives the `[us]`
-resolution these diagnostics need). Consequence of secondary's own ~5Hz
-cadence: these report ONE cycle's timing (whichever cycle RobotLoop last
-staged before secondary happened to be the frame `emit()` sent), not a
-per-cycle series like every other primary-frame field. Migrates to the
-primary frame once a future COBS+CRC framing rework removes the
-base64-armor expansion that creates the primary frame's own ceiling
-(tracked separately, not scheduled this sprint).
+**`cycle_busy`/`cycle_period` loop-timing fields — landed on the PRIMARY
+frame (123-004, `Telemetry` fields 15/16, ADDITIVE).** Originally landed
+on the SECONDARY frame as an interim placement (122-003,
+`TelemetrySecondary` fields 11/12): the issue that motivated these
+(`telemetry-report-loop-cycle-duration.md`) always targeted the PRIMARY
+per-cycle frame, but at that time `msg::Telemetry`'s own
+`ReplyEnvelope`-wrapped worst case sat 1 B under the shared 186-byte
+base64-armored envelope budget, and the serial transport carried a
+second, tighter, independent ceiling underneath that budget (CODAL's
+`Serial` TX ring buffer caps at 254 usable bytes; the 186-byte budget's
+armored+CRLF wire line already consumed 252 of those) — raising the
+primary budget at all guaranteed mid-line truncation on serial.
+`TelemetrySecondary`'s own worst case had no such problem, so the two
+fields landed there first.
+
+Sprint 123's COBS+CRC binary framing (tickets 001/002) replaced the
+base64 armor's ~33% expansion with COBS+CRC's fixed ~4-byte overhead
+(CRC + one COBS code byte + the trailing `0x00` delimiter, independent of
+payload content), letting the envelope budget be recomputed from 186 to
+**240 bytes** (`wire.h`, `messages/DESIGN.md` §3) — restoring the primary
+frame's headroom. Ticket 004 then migrated `cycle_busy`/`cycle_period`
+onto the primary `Telemetry` frame (fields 15/16, `188 B` standalone /
+`194 B` wrapped as the `tlm` arm, 46 B under the new budget — see
+`docs/protocol-v4.md` §8.3) and marked `TelemetrySecondary`'s former
+fields 11/12 `reserved`, not reused (Open Question 4 resolved: remove
+from secondary rather than keep both, since two frames independently
+reporting the same fields at different cadences risks silent
+divergence with no benefit). Staged EXACTLY as before — RobotLoop's own
+`previousCycleStartUs_`/`everCycled_` bookkeeping (independent of
+`markTime()`'s `[ms]`-truncated `cycleStart` — a separate
+`clock_.nowMicros()` read gives the `[us]` resolution these diagnostics
+need) — only the destination frame moved, so every primary frame now
+carries this cycle's own fresh timing data instead of secondary's ~5 Hz
+sample (whichever cycle RobotLoop last staged before secondary happened
+to be the frame `emit()` sent).
 
 **Telemetry's ack ring (120 ticket 001, LANDED — replaces the 115-005
 single-slot design, which itself had replaced the original depth-3
@@ -705,16 +740,23 @@ once-pushed ack) or not there at all — there is no "stale leftover value"
 ambiguity for a repeated field the way there is for a persisting scalar
 pair.
 
-Wire-size consequence: `Telemetry` standalone grows from 144 B to a
-worst-case 179 B (a full 4-entry ring, each entry at its own declared
-bound — `corr_id` up to 65535, `err` up to 7); wrapped as
-`ReplyEnvelope.body`'s `tlm` arm, the whole envelope's worst case grows
-from 153 B to **185 B**, exactly 1 B under the 186-byte envelope budget
-(`wire.h`'s own regenerated `kReplyEnvelopeMaxEncodedSize` constant and
-static_assert) — the tightest margin in the schema; a future field added
-to `Telemetry` will need either this ring's own depth/bound choices
-revisited or the 186-byte budget itself raised. See
-`docs/protocol-v4.md` §8.3 for the full breakdown.
+Wire-size consequence (AS OF 120, pre-123 base64-armored budget):
+`Telemetry` standalone grows from 144 B to a worst-case 179 B (a full
+4-entry ring, each entry at its own declared bound — `corr_id` up to
+65535, `err` up to 7); wrapped as `ReplyEnvelope.body`'s `tlm` arm, the
+whole envelope's worst case grows from 153 B to **185 B**, exactly 1 B
+under the then-186-byte envelope budget — the tightest margin in the
+schema at that time.
+
+**AS OF 123 (current):** the envelope budget is recomputed to
+**240 bytes** (COBS+CRC replacing base64 armor, see §4's own
+`cycle_busy`/`cycle_period` note above and `messages/DESIGN.md` §3), and
+ticket 004 additively migrated `cycle_busy`/`cycle_period` (fields 15/16)
+onto this same frame: `Telemetry` standalone is now **188 B**, wrapped
+`ReplyEnvelope` total **194 B** (`wire.h`'s own regenerated
+`kReplyEnvelopeMaxEncodedSize` constant and static_assert) — **46 B**
+margin under the 240-byte budget, comfortably restored from the pre-123
+1-B margin. See `docs/protocol-v4.md` §8.3 for the full breakdown.
 
 Host-side matcher (Architecture Step 7's open question, resolved):
 `SerialConnection.wait_for_ack()`/`NezhaProtocol.wait_for_ack()`
@@ -847,9 +889,10 @@ called with real elapsed time between calls).
 - **`Comms::pump(Cmd&)`:** non-blocking, decodes at most one frame per call
   across both transports; resets `out.status` to `kNone` at entry so a
   caller never sees stale decode state.
-- **`Comms::sendReply(const msg::ReplyEnvelope&)`:** encodes, armors, and
-  broadcasts on both transports via the async/drop-on-full send path —
-  never blocks the loop on backpressure.
+- **`Comms::sendReply(const msg::ReplyEnvelope&)`:** encodes, COBS+CRC
+  frames (123-002 — base64-armors before that), and broadcasts on both
+  transports via the async/drop-on-full send path — never blocks the loop
+  on backpressure.
 - **`Telemetry::setFrame`/`setFlag`/`ack`/`emit(now)`:** staging calls are
   cheap and can be called any number of times per cycle; `emit(now)` is
   the one call that actually sends, at most one frame type, bounded work,
@@ -959,8 +1002,11 @@ called with real elapsed time between calls).
   [`src/firm/kinematics/DESIGN.md`](../kinematics/DESIGN.md) (retired,
   redirects to the current doc) for the full derivation.
 - **`msg::CommandEnvelope`/`ReplyEnvelope`/`Telemetry`/`TelemetrySecondary`,
-  `msg::wire::encode`/`decode`, `WireRuntime::base64Encode`/`Decode`:** the
-  wire schema and codec — see [messages/DESIGN.md](../messages/DESIGN.md).
+  `msg::wire::encode`/`decode`, `WireRuntime::cobsEncode`/`Decode`,
+  `crcCompute`/`Verify` (123 — the current framing primitives;
+  `WireRuntime::base64Encode`/`Decode` is retained but no longer called by
+  `app/`, see `messages/DESIGN.md` §3):** the wire schema and codec — see
+  [messages/DESIGN.md](../messages/DESIGN.md).
 - **`SerialPort`, `Radio` (ARM builds only):** the two real transports
   `SerialTransport`/`RadioTransport` adapt into `app::Transport` — see
   [com/DESIGN.md](../com/DESIGN.md).

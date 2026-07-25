@@ -12,7 +12,8 @@ root: ../../../docs/design/design.md
 
 `messages/` is the firmware's wire schema: the C++ shape of every message
 that crosses the host/robot boundary, plus the codec that turns those shapes
-into and out of bytes on the armored serial/radio link. It exists as its own
+into and out of bytes on the COBS+CRC-framed serial/radio link (sprint 123 —
+replaces the pre-123 base64 line armor, see §3/§4 below). It exists as its own
 directory because it is a **leaf library with no project dependencies of its
 own** (see the system doc's dependency diagram, `docs/design/design.md`
 §5) — `app/` depends on it to talk to the host, `config/` depends on it
@@ -49,9 +50,14 @@ Three layers, in dependency order:
    `wire_runtime.cpp`. The one hand-authored file pair in this directory:
    raw protobuf-wire-format primitives (varint, zigzag, fixed32/float,
    length-delimited framing, packed-repeated arrays, unknown-field skip,
-   base64) that know nothing about field numbers, message shapes, or `msg::`
-   types at all. Layer 2 is built on top of these; layer 2 owns the schema
-   knowledge, layer 3 owns the bytes.
+   base64) PLUS, as of sprint 123, two more schema-agnostic byte
+   primitives at this same layer: COBS frame encode/decode
+   (`cobsEncode()`/`cobsDecode()`) and CRC-16/CCITT-FALSE compute/verify
+   (`crcCompute()`/`crcVerify()`/`encodeCrc16()`/`decodeCrc16()`) — the
+   wire's current binary framing + integrity check (§3/§4). None of these
+   primitives know anything about field numbers, message shapes, or
+   `msg::` types at all. Layer 2 is built on top of these; layer 2 owns
+   the schema knowledge, layer 3 owns the bytes.
 
 `layout_checks.h`/`layout_checks.cpp` sit alongside these as a **generated**
 build-time gate (see §3) rather than a fourth layer: they exist to prove the
@@ -99,13 +105,34 @@ firmware runtime; the device itself never sees protobuf. It also emits
   bad base64 padding) verify under ASan/UBSan — breaking it turns a
   malformed wire line into an out-of-bounds read/write instead of a clean
   rejection.
-- **Base64 alphabet is pinned to standard (RFC 4648 `+/`), not URL-safe.**
-  Both sides of the `*B<base64>` armor must agree; the host's
-  `base64.b64encode`/`base64.b64decode` default to this same alphabet. There
-  is no negotiation and no version byte — whichever alphabet
-  `wire_runtime.cpp` encodes/decodes with **is** the wire format. Changing
-  it on only one side breaks every armored line silently (garbage decode,
-  not an error).
+- **HISTORICAL/SUPERSEDED (pre-123): base64 alphabet was pinned to standard
+  (RFC 4648 `+/`), not URL-safe, because base64 was the wire's armor.**
+  Sprint 123 replaced base64 armor with COBS+CRC framing (see the next
+  bullet) — `Comms`/`Telemetry` no longer encode or decode base64 at all.
+  `WireRuntime::base64Encode()`/`base64Decode()` themselves are RETAINED,
+  not removed, purely because `wire_differential_harness.cpp`
+  (`src/tests/sim/unit/`) independently depends on the primitive for its
+  own, unrelated debug-CLI wire encoding — a consumer with no connection
+  to the armor scheme. This invariant no longer governs the live wire;
+  kept here as the historical record of what the pre-123 armor required.
+- **CRC-16/CCITT-FALSE variant is pinned exactly, with no negotiation and
+  no version byte (sprint 123, the CURRENT wire integrity check).** Both
+  sides of every COBS+CRC frame must agree byte-for-byte: poly `0x1021`,
+  init `0xFFFF`, no input/output reflection, no final XOR —
+  `wire_runtime.h`'s file header names this the CRC RevEng catalogue's
+  "CRC-16/CCITT-FALSE," with a known-answer test vector
+  (`crcCompute("123456789", 9) == 0x29B1`). `src/host/robot_radio/
+  io/wire_codec.py` ports the identical variant to Python. Changing the
+  variant on only one side breaks every frame's CRC check silently
+  (every frame appears corrupt and is dropped, not decoded).
+- **COBS is the wire's current framing** (sprint 123, replacing base64
+  armor). A COBS-encoded frame body never contains an embedded `0x00`
+  byte by construction — that byte is reserved exclusively as the
+  trailing frame delimiter the transport appends, which is what lets the
+  same byte stream also carry `\n`-terminated HELLO/PING text lines
+  unambiguously (`App::FrameKind`, `src/firm/app/comms.h`). See
+  `docs/protocol-v4.md` §2 for the full frame layout and byte-budget
+  derivation.
 - **Struct layout must stay standard-layout.** Every `msg::*` struct
   reachable from `CommandEnvelope`/`ReplyEnvelope`/`TelemetrySecondary` must
   satisfy `std::is_standard_layout` — this is what makes the generated
@@ -128,10 +155,28 @@ firmware runtime; the device itself never sees protobuf. It also emits
   `kTelemetrySecondaryMaxEncodedSize` — the worst-case encoded size of the
   largest oneof arm in each envelope, computed by the generator from the
   schema's own field widths (max, not sum, across mutually exclusive oneof
-  arms) — each checked at build time against a 186-byte envelope budget.
+  arms) — each checked at build time against a **240-byte** envelope
+  budget (sprint 123 recompute — see below; **186 bytes pre-123**).
   A schema change that pushes an envelope over budget fails a
   `static_assert` at build time, not silently at runtime on a truncated wire
-  line. As of 116-001 (MOVE protocol cutover — see
+  line.
+
+  **123-002 (COBS+CRC budget recompute).** The 186-byte ceiling was sized
+  against the pre-123 base64 armor's ~33% expansion, keeping an armored
+  `"*B" + base64(...) + "\r\n"` line under the CODAL serial TX ring's
+  254-usable-byte hard ceiling (`SerialPort::begin()`'s
+  `setTxBufferSize(255)`, a `uint8_t` max). COBS+CRC framing's overhead is
+  fixed instead of proportional: CRC (2 B) + one COBS code byte (0 extra
+  blocks below the 254-byte block boundary) + the trailing `0x00`
+  delimiter = 4 B total, independent of payload content. Solving
+  `E + 4 <= 254` gives `E <= 250`; the budget ships at **240**, 10 B of
+  margin below that edge — comfortably above every schema value this
+  sprint computes, including ticket 004's `cycle_busy`/`cycle_period`
+  primary-frame migration (194 B largest, up from 185 B pre-migration —
+  the whole reason this budget needed recomputing). See
+  `docs/protocol-v4.md` §2.3 for the full derivation and size table.
+
+  As of 116-001 (MOVE protocol cutover — see
   [envelope.proto](../../protos/envelope.proto)'s own header comment):
   `CommandEnvelope` is still 50B (`cmd` oneof = `{config, stop, move}` —
   `twist` (arm 19, the bare v_x/omega/duration shape 103-001 added) is
@@ -159,6 +204,21 @@ firmware runtime; the device itself never sees protobuf. It also emits
   own worst-case arm (and therefore `CommandEnvelope`'s `config`=44B and its
   50B total) is **unchanged** — re-measured against the regenerated
   `wire.h`'s size-report comment, not assumed.
+
+  **As of sprint 123 (current, regenerated ground truth — `wire.h`'s own
+  header comment):** `CommandEnvelope`'s worst-case arm is `config`=49B
+  (`stop`=2B, `move`=38B) for a **55B total** — 5B more than the 117-era
+  44B/50B snapshot above from schema growth in an intervening sprint
+  unrelated to wire framing (this ticket's own scope is the envelope
+  BUDGET recompute and the loop-timing FRAME PLACEMENT, not
+  `CommandEnvelope`'s own field shapes — see `wire.h` directly for
+  exactly which field grew). `ReplyEnvelope`'s `tlm` arm now measures
+  188B for a **194B total** — ticket 004's `cycle_busy`/`cycle_period`
+  primary-frame migration, +9B over the 179B `tlm` arm above.
+  `TelemetrySecondary` remains **52B** — its own former fields 11/12
+  are now `reserved`, not populated (see `app/DESIGN.md` §4 and
+  `docs/protocol-v4.md` §8.4). All three totals sit comfortably under
+  the 240-byte budget above.
 - **A `(max)`/`(abs_max)` bound now narrows a VARINT field's worst-case wire
   width, not just a `float` field's semantic range** (109-003 —
   `gen_messages.py`'s `_worst_case_scalar_size()`; previously this docstring
@@ -214,7 +274,9 @@ firmware target is CODAL/`-fno-exceptions -fno-rtti`, newlib-nano, no heap —
 incompatible with a general-purpose protobuf runtime. `wire_runtime` supplies
 exactly the wire-format primitives this schema needs (varint, zigzag,
 fixed32, length-delimited framing, packed-repeated, unknown-field skip,
-base64) with caller-owned buffers and no allocation; the generated `wire.cpp`
+base64 — retained but no longer the live armor, §3) plus, as of sprint 123,
+the wire's current framing primitives (COBS encode/decode, CRC-16 compute/
+verify) with caller-owned buffers and no allocation; the generated `wire.cpp`
 then supplies only the schema-specific knowledge (field numbers, struct
 offsets, bounds) as data tables that a small generic walker interprets. This
 split is why `wire_runtime` never regenerates and never needs to.
@@ -230,12 +292,17 @@ default is omitted from the wire entirely, matching a real protobuf
 encoder's byte-for-byte output (verified against `google.protobuf` by a
 differential fuzz suite).
 
-**`TelemetrySecondary` rides its own armored line.** Unlike `ReplyEnvelope`'s
-oneof arms, `TelemetrySecondary` is encode-only and never a `ReplyEnvelope`
-oneof arm — it is the slower diagnostic frame, firmware-emitted only, never
-host-decoded on the robot side, framed as its own independently-armored `*B`
-line (see `telemetry.h`'s own doc comment and `docs/design/design.md`
-§5 "Command plane").
+**`TelemetrySecondary` rides its own COBS+CRC-framed line.** Unlike
+`ReplyEnvelope`'s oneof arms, `TelemetrySecondary` is encode-only and
+never a `ReplyEnvelope` oneof arm — it is the slower diagnostic frame,
+firmware-emitted only, never host-decoded on the robot side, framed as
+its own independently-COBS+CRC-framed line (see `telemetry.h`'s own doc
+comment and `docs/design/design.md` §5 "Command plane"). Its former
+`cycle_busy`/`cycle_period` fields (11/12, sprint 122's interim
+placement) are `reserved` as of sprint 123 ticket 004, migrated onto
+the primary `Telemetry` frame instead (fields 15/16) now that COBS+CRC
+framing restored primary-frame headroom — see `app/DESIGN.md` §4 and
+`docs/protocol-v4.md` §8.1/§8.4.
 
 **Unknown fields are forward-compatible by design.** `skipField()`
 advances past an unrecognized field number's value without interpreting it,
@@ -257,7 +324,8 @@ that conversion — it only defines the wire-side shape.
 
 - **`msg::wire::decode(CommandEnvelope& out, const uint8_t* buf, uint16_t
   len) -> Result`:** decodes and validates one `CommandEnvelope` from a raw
-  (already base64-decoded) byte buffer. `Result{ok, field, code}`: `ok` is
+  (already COBS-decoded, CRC-verified — sprint 123) byte buffer.
+  `Result{ok, field, code}`: `ok` is
   false on the first violation encountered (missing `(req)` field,
   out-of-bound value, or malformed wire bytes), `field` names which field
   number, `code` is an `ErrCode` (see `envelope.proto`'s doc comment for
@@ -287,7 +355,7 @@ that conversion — it only defines the wire-side shape.
   decode/encode entry points at runtime — see
   [app/DESIGN.md](../app/DESIGN.md) for how a decoded `CommandEnvelope`
   reaches the loop's dispatch and how a `ReplyEnvelope`/
-  `TelemetrySecondary` gets armored and sent.
+  `TelemetrySecondary` gets COBS+CRC-framed and sent.
 - **`config/`:** consumes generated `msg::*Config`/`msg::*ConfigPatch`
   shapes declared here for baked boot configuration — see
   [config/DESIGN.md](../config/DESIGN.md).

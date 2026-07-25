@@ -224,8 +224,8 @@ stakeholder's habit of opening that path doesn't dead-end.
 micro:bit V2 (nRF52833) that drives a PlanetX Nezha V2 differential-drive
 robot. It reads wheel encoders and sensors over one shared I2C bus,
 closes per-wheel velocity loops, integrates odometry, and exchanges
-binary-armored protobuf-style messages with a host over USB serial and
-the micro:bit radio. It is the "plant" end of the host/robot split: the
+COBS+CRC-framed protobuf-style messages with a host over USB serial and
+the micro:bit radio (123). It is the "plant" end of the host/robot split: the
 host plans motion (currently just profiled twists/wheel-velocity
 MOVEs — see
 [`src/host/robot_radio/DESIGN.md`](../../src/host/robot_radio/DESIGN.md));
@@ -314,9 +314,10 @@ folding sprint 2's PID-placement decision in, is deliberately deferred) —
 Independently, `Telemetry::SecondaryFrame` gains `cycle_busy`/
 `cycle_period` (`uint32 [us]`, additive fields) reporting real per-cycle
 loop timing — landed on the secondary, not primary, frame as an interim
-placement (the primary frame's armored envelope is 1 byte under its
-186-byte budget; migrates once a future COBS+CRC framing rework removes
-that ceiling). Zero behavior change, zero wire change beyond that one
+placement (the primary frame's armored envelope was then 1 byte under its
+186-byte budget). **Sprint 123 (COBS+CRC binary framing + telemetry
+migration) has since landed this migration** — see this section's own
+"123" paragraph below. Zero behavior change, zero wire change beyond that one
 additive field pair — see sprint 122's own `sprint.md` for the full
 architecture, diagrams, and Design Rationale (why a velocity sink, why
 `src/motion` is a sibling rather than a nested child, why `motion_tests`
@@ -325,11 +326,33 @@ is a standalone CMake target). See
 motion library's own current orientation and
 [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) for the base's.
 
+**123 (firmware base hardening: COBS+CRC binary framing + telemetry
+migration) — landed.** The wire's `*B<base64>\r\n` line armor is
+replaced end-to-end (both transports, `App::Comms`, every host decoder)
+with COBS framing (`0x00`-delimited, ~0.4% overhead, self-resynchronizing
+on byte loss) plus a CRC-16/CCITT-FALSE integrity check — the wire's
+first integrity check of any kind. This is a flag-day cutover with no
+dual-stack: base64 itself is retained in `wire_runtime.{h,cpp}` only
+because an unrelated debug harness (`wire_differential_harness.cpp`)
+still depends on the primitive, but no `Comms`/`Telemetry` call site
+encodes/decodes it any more. The freed headroom (envelope budget
+recomputed 186→240 bytes) is what let this sprint's own ticket 004
+complete 122's own forward-referenced migration: `cycle_busy`/
+`cycle_period` move off `TelemetrySecondary` (122-003's interim
+placement, fields 11/12, now `reserved`) onto the primary `Telemetry`
+frame (fields 15/16) every cycle. See sprint 123's own `sprint.md` for
+the full architecture and Design Rationale (CRC width choice, the
+COBS-vs-length-prefix-vs-SLIP alternatives considered), and
+[`src/firm/messages/DESIGN.md`](../../src/firm/messages/DESIGN.md) §3/§4
+and [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) §1/§4 for
+the subsystem-level detail.
+
 Flow of one cycle, at orientation altitude:
 
 1. **Comms in** — `App::Comms` polls the two transports (serial, radio)
-   for one armored `*B` line, dearmors and decodes it into a
-   `msg::CommandEnvelope`.
+   for one complete frame, demuxing a `0x00`-delimited COBS+CRC binary
+   frame from the HELLO/PING text rump on the same byte stream (123),
+   then decodes the binary frame into a `msg::CommandEnvelope`.
 2. **Dispatch** — the loop's own switch acts on the command: a Move
    enqueues onto `Motion::MoveQueue` (122 — moved to `src/motion`, see
    below; 1 active + 4 pending; `replace=true` flushes pending and
@@ -352,9 +375,10 @@ Flow of one cycle, at orientation altitude:
    the same cycle's staged data (handed in via a plain `Input` struct,
    not `App::Telemetry::Frame` directly) and refreshes its wheel/body
    ZOH predict-to-now estimates; `App::Telemetry` emits the primary TLM
-   frame (or the slower secondary diagnostic frame, which also now
-   carries the `cycle_busy`/`cycle_period` loop-timing fields — 122)
-   through Comms.
+   frame — carrying the `cycle_busy`/`cycle_period` loop-timing fields
+   every cycle (123, migrated off the slower secondary diagnostic frame
+   where 122 had landed them as an interim placement) — or the secondary
+   diagnostic frame, through Comms.
 5. **Pace** — a final `runAndWait` paces the cycle to `kCycle` = 40 ms
    (~25 Hz), matching `Telemetry::kPrimaryPeriod` so every cycle emits a
    primary frame. (118 — restores the schedule's genuine 4ms/4ms
@@ -442,11 +466,14 @@ only what's specific to it — this is the shared set):
   (`.claude/rules/hardware-bench-testing.md`). Host tests alone do not
   close a change.
 
-**Wire boundary.** Armored binary command/reply protocol: `*B<base64>`
-lines over USB serial (115200 CDC) and the micro:bit radio (group 10,
-channel 0–35 persisted in flash). Payloads are `msg::CommandEnvelope` in
+**Wire boundary.** Binary command/reply protocol framed with COBS + a
+CRC-16/CCITT-FALSE integrity check (123 — replacing the pre-123
+`*B<base64>\r\n` line armor): `0x00`-delimited frames over USB serial
+(115200 CDC) and the micro:bit radio (group 10, channel 0–35 persisted in
+flash), demuxed on the same byte stream from the `\n`-terminated
+HELLO/PING text safety rump. Payloads are `msg::CommandEnvelope` in
 (`move`/`config`/`stop` oneof), `msg::ReplyEnvelope` (`ok`/`err`/`tlm`
-oneof) out, plus an independently-armored `msg::TelemetrySecondary`
+oneof) out, plus an independently-COBS+CRC-framed `msg::TelemetrySecondary`
 frame. Schema source of truth: `src/protos/*.proto`. Boot banner:
 `DEVICE:NEZHA2:robot:<name>:<serial>` — byte-frozen. See
 [`src/firm/messages/DESIGN.md`](../../src/firm/messages/DESIGN.md) and
@@ -504,6 +531,20 @@ for its full boundary/interface detail.
   moves, a per-wheel command observer) is explicitly NOT part of 122 —
   tracked by
   `clasi/issues/firmware-base-hardening-bounded-wheel-moves-and-wheel-observer.md`.
+- **Sprint 123 (firmware base hardening: COBS+CRC binary framing +
+  telemetry migration) has landed.** The wire's `*B<base64>\r\n` line
+  armor is replaced end-to-end with COBS framing + a CRC-16/CCITT-FALSE
+  integrity check (flag-day cutover, no dual-stack) — see this section's
+  own §5 "123" paragraph above and "Wire boundary" note for the full
+  change, [`src/firm/messages/DESIGN.md`](../../src/firm/messages/DESIGN.md)
+  §3/§4 for the codec/budget detail, and
+  [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) §1/§4 for the
+  `Comms`/`Telemetry` detail. `cycle_busy`/`cycle_period` complete the
+  migration 122-003 forward-referenced, moving from `TelemetrySecondary`
+  (now `reserved` fields 11/12) onto the primary `Telemetry` frame
+  (fields 15/16) every cycle. The duty-sink boundary/bounded-wheel-moves/
+  per-wheel-observer work the paragraph above tracks remains a distinct,
+  not-yet-scheduled future sprint — 123 did not touch that surface.
 - **The design-doc-set's mechanical validator cannot express "this
   child is out of scope because it symlinks outside the repository."**
   `src/vendor` remains permanently undocumented for that reason (§4).

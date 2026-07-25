@@ -3,21 +3,29 @@
 **Current wire truth.** This document describes the Nezha firmware
 command/telemetry protocol **as shipped by sprint 116** ("MOVE protocol
 cutover", tickets 001-008) — the converged, bounded-`MOVE` command
-surface the minimal single-loop firmware speaks once that sprint closed.
-It supersedes [`docs/protocol-v2.md`](protocol-v2.md) and
+surface the minimal single-loop firmware speaks once that sprint closed
+— with §2 (Transport & framing) updated for **sprint 123**'s COBS+CRC
+binary-framing cutover (replacing the base64 line-armor described here
+through sprint 122) and §8 updated for sprint 123's `cycle_busy`/
+`cycle_period` migration onto the primary frame. It supersedes
+[`docs/protocol-v2.md`](protocol-v2.md) and
 [`docs/protocol-v3.md`](protocol-v3.md) (both kept, not deleted, as the
 historical record of what shipped when — see each file's own banner).
 
 Source of the contract this document transcribes:
 [`protocol-set-point-the-minimal-firmware-s-complete-command-surface.md`](../clasi/sprints/116-move-protocol-cutover/issues/protocol-set-point-the-minimal-firmware-s-complete-command-surface.md)
-(the ratified stakeholder decision, Eric, 2026-07-21). Every claim below
+for the command-surface shape (sprint 116), and
+[`cobs-crc-binary-framing-replace-base64-armor.md`](../clasi/sprints/123-firmware-base-hardening-cobs-crc-binary-framing-telemetry-migration/issues/cobs-crc-binary-framing-replace-base64-armor.md)
+for the wire framing (sprint 123). Every claim below
 was cross-checked against the actual shipped source
 (`src/protos/envelope.proto`, `src/protos/telemetry.proto`,
 `src/firm/app/robot_loop.cpp`, `src/firm/app/move_queue.{h,cpp}`,
 `src/firm/motion/stop_condition.{h,cpp}`, `src/firm/app/comms.cpp`,
-`src/host/robot_radio/robot/protocol.py`) and its own test suite, not
-restated from the set-point issue's proposal alone. Wherever
-implementation had to pin down something the issue's own Architecture
+`src/firm/messages/wire_runtime.{h,cpp}`, `src/firm/messages/wire.h`,
+`src/host/robot_radio/robot/protocol.py`,
+`src/host/robot_radio/io/wire_codec.py`) and its own test suite, not
+restated from either issue's proposal alone. Wherever
+implementation had to pin down something an issue's own Architecture
 "Open Questions" left unresolved, or otherwise diverged from the
 proposal in a load-bearing way, that is called out explicitly as
 **AS-BUILT** below — see §5.3, §5.4, §7.2, §7.4.
@@ -33,9 +41,9 @@ bounded motion command**:
 
 | Plane | Shape | Carries |
 |---|---|---|
-| Binary command plane | `*B<base64(CommandEnvelope)>` (host→robot) | `move` / `config` / `stop` — exactly three `cmd` oneof arms (§3) |
+| Binary command plane | `0x00`-delimited COBS+CRC frame (`CommandEnvelope`) (host→robot) | `move` / `config` / `stop` — exactly three `cmd` oneof arms (§3) |
 | Text safety rump | Two hand-typeable verbs | `HELLO` (identity banner), `PING` (liveness) — see §2.4 |
-| Telemetry return channel | `*B<base64(ReplyEnvelope{tlm: Telemetry})>` (robot→host), every cycle | The frame v2 shape (§8) — the SOLE per-command outcome path (§7) |
+| Telemetry return channel | `0x00`-delimited COBS+CRC frame (`ReplyEnvelope{tlm: Telemetry}`) (robot→host), every cycle | The frame v2 shape (§8) — the SOLE per-command outcome path (§7) |
 
 The defining change from protocol v3: the interim `Twist` arm (a bare
 `v_x`/`omega` + a `duration` that re-armed a separate `App::Deadman`
@@ -52,72 +60,114 @@ timeout fires, with no second, independently-timed watchdog needed.
 
 ## 2. Transport & framing
 
-Unchanged in every particular from v2/v3 except where noted (§2.4).
+**Sprint 123 replaced the pre-123 `*B<base64(...)>\r\n` line armor
+described in `docs/protocol-v2.md`/`docs/protocol-v3.md` with COBS
+framing + a CRC** (§2.1/§2.2 below). The command surface itself (§3+)
+and the text safety rump's two verbs (§2.4) are unaffected — this is a
+framing-layer change only, not a schema or command-surface change.
 
-### 2.1 Line shapes
+### 2.1 Frame shapes
 
 ```
-*B<base64(CommandEnvelope bytes)>\n     -- host -> robot
-*B<base64(ReplyEnvelope bytes)>\n       -- robot -> host
-HELLO\n / PING\n                        -- text plane, both directions bare
+<COBS(payload + CRC-16)>0x00     -- binary frame, either direction (CommandEnvelope / ReplyEnvelope)
+HELLO\n / PING\n                 -- text plane, both directions, bare, '\n'-terminated
 ```
 
-Line-based over serial CDC (bench, 115200 baud) or the radio relay
-(`RadioTransport`) — `App::Comms::pump()` (`src/firm/app/comms.cpp`)
-reads at most one line per call from serial first, falling back to
-radio only if serial had nothing (`Comms::pump()`, `comms.cpp:49-53`).
+One shared byte stream per transport (serial CDC, bench 115200 baud; or
+the radio relay, `RadioTransport`) carries both frame kinds, demuxed by
+`App::Transport::readLine()` (`comms.h`'s `FrameKind`): whichever
+terminator the transport's own byte accumulator sees FIRST — a `0x00`
+(ends a binary frame) or a `\n`/`\r\n` (ends a text line) — decides the
+kind. This is unambiguous by construction: a COBS-encoded frame body
+never contains an embedded `0x00` (that byte is reserved exclusively for
+the delimiter), and a text-plane line never contains one either.
+`App::Comms::pump()` (`src/firm/app/comms.cpp`) reads at most one
+complete frame per call from serial first, falling back to radio only if
+serial had nothing (`Comms::pump()`).
 
-### 2.2 Base64 armor
+### 2.2 COBS + CRC framing (sprint 123 — replaces the pre-123 base64 armor)
 
-- **Standard alphabet (`+/`)**, RFC 4648 `=` padding — NOT URL-safe
-  (`-_`). Both sides must agree; there is no negotiation and no version
-  byte (`src/firm/messages/wire_runtime.{h,cpp}` vs. Python's
-  `base64.b64encode`/`b64decode`, whose default alphabet is this same
-  one).
-- **Dearmor** (`Comms::decodeArmoredLine()`, `comms.cpp:78-115`):
-  `line[1] != 'B'` is rejected (malformed-count increment, no reply —
-  see §7.4). Trailing `\r`/`\n`/space/tab is trimmed off the base64
-  payload before decode.
-- **Decode**: `msg::wire::decode()` (generated,
-  `src/firm/messages/wire.{h,cpp}`) walks `CommandEnvelope`'s field
+- **Encode** (`Comms::sendReply()`/`Telemetry`'s secondary-frame send
+  path, `comms.cpp`): the schema-encoded payload (`msg::wire::encode()`)
+  has a little-endian CRC-16 appended (`WireRuntime::encodeCrc16()`),
+  then the combined `payload + CRC` bytes are COBS-encoded
+  (`WireRuntime::cobsEncode()`); the transport (`SerialPort::send()`/
+  `Radio::send()`) appends the trailing `0x00` delimiter itself — callers
+  never include it.
+- **CRC variant, pinned exactly, no negotiation, no version byte**
+  (`wire_runtime.h`'s file header — both sides must agree byte-for-byte):
+  **CRC-16/CCITT-FALSE** — poly `0x1021`, init `0xFFFF`, no input/output
+  reflection, no final XOR. Known-answer vector:
+  `crcCompute("123456789", 9) == 0x29B1`.
+- **Decode** (`Comms::decodeBinaryFrame()`, `comms.cpp`): the exact
+  reverse — COBS-decode the received frame, split off the trailing 2-byte
+  CRC, verify it against the leading payload bytes, and only THEN hand
+  the payload to `msg::wire::decode()` (generated,
+  `src/firm/messages/wire.{h,cpp}`) to walk `CommandEnvelope`'s field
   table. Unknown field numbers are skipped, not rejected (forward
-  compatible with a newer schema). Malformed/truncated bytes fail the
-  decode — see §7.4 for what happens next (nothing is sent back; the
-  failure is counted, not acked).
+  compatible with a newer schema). Any step failing — malformed COBS,
+  CRC mismatch, or a malformed/truncated decode — increments
+  `malformedCount_` and sends no reply; see §7.4 for what happens next.
+- **Host mirror**: `src/host/robot_radio/io/wire_codec.py` is the ONE
+  place the host encodes/decodes this framing (every producer/consumer —
+  `io/serial_conn.py`, `io/sim_loop.py`, `io/cli.py`, `io/sim_config.py`,
+  `testgui/transport.py`, `robot/protocol.py`, `src/sim/sim_ctypes.cpp`'s
+  Python-side counterpart — imports from here rather than
+  re-implementing the codec at each call site).
+- **Base64 is RETAINED, not removed, but is no longer the wire's armor.**
+  `WireRuntime::base64Encode()`/`base64Decode()` (standard RFC 4648
+  alphabet, `+/`) still exist in `wire_runtime.{h,cpp}` because
+  `wire_differential_harness.cpp` (`src/tests/sim/unit/`) independently
+  depends on the primitive for its own, unrelated debug-CLI wire encoding
+  — no `Comms`/`Telemetry` call site encodes or decodes base64 any more.
 
 ### 2.3 Size budget (measured, `gen_messages.py`-computed)
 
 Recomputed by the generator on every build; a schema change that pushes
-either total over the 186-byte envelope budget fails a build-time
+any total over the 240-byte envelope budget fails a build-time
 `static_assert`, never a silently truncated wire line
-(`src/firm/messages/wire.h:43-63`, `src/firm/messages/DESIGN.md` §3):
+(`src/firm/messages/wire.h`, `src/firm/messages/DESIGN.md` §3). The
+240-byte ceiling itself is sprint 123's recompute: COBS+CRC's fixed
+overhead (CRC 2B + one COBS code byte + the trailing `0x00` delimiter =
+4B, independent of payload content, vs. base64's ~33%+2B) leaves
+`E + 4 <= 254` (the CODAL serial TX ring's usable-byte ceiling,
+`SerialPort::begin()`'s `setTxBufferSize(255)`, a `uint8_t` max) —
+solving gives `E <= 250`; 240 ships with 10 B of margin below that edge,
+up from the pre-123 186-byte budget (sized against base64's ~33%
+expansion instead):
 
 | Envelope | Worst-case arm | Total (worst arm + non-oneof bytes) |
 |---|---|---|
-| `CommandEnvelope` | `config`=44B, `stop`=2B, **`move`=38B** (worst=`config`) | **50 B** |
-| `ReplyEnvelope` | `ok`=19B, `err`=10B, **`tlm`=179B** (worst=`tlm`, 120: a full 4-entry `acks` ring, was 147B pre-120) | **185 B** |
-| `TelemetrySecondary` | (own armored line, not a `ReplyEnvelope` arm) | **52 B** |
+| `CommandEnvelope` | `config`=49B, `stop`=2B, **`move`=38B** (worst=`config`) | **55 B** |
+| `ReplyEnvelope` | `ok`=19B, `err`=10B, **`tlm`=188B** (worst=`tlm`, 123-004: `cycle_busy`/`cycle_period` now ride this frame — see §8.3) | **194 B** |
+| `TelemetrySecondary` | (own COBS+CRC-framed line, not a `ReplyEnvelope` arm) | **52 B** |
 
-`CommandEnvelope` sits comfortably under the 186-byte cap (136 B
-margin). `ReplyEnvelope` (120: the ack ring, §7.1/§8.1/§8.3) now sits
-just **1 B** under it — the tightest margin in the schema; see §8.3 for
-the full breakdown and what a future field addition here would need to
-account for. Note `move` (38 B, two nested oneofs + `id`) is a
-structurally bigger message than the `Twist` arm it replaced, yet
-`CommandEnvelope`'s own worst-case total is unchanged at 50 B — `config`
-(dominated by `DrivetrainConfigPatch`) stays the larger arm either way
-(`src/firm/messages/DESIGN.md` §3, "Envelope size is bounded...").
+`CommandEnvelope` sits comfortably under the 240-byte cap (185 B
+margin). `ReplyEnvelope` (194 B, §8.3) has 46 B of margin — comfortably
+restored headroom vs. the pre-123 budget's 1-B margin, and the whole
+reason ticket 004's `cycle_busy`/`cycle_period` migration could land on
+this frame at all. `TelemetrySecondary` returns to its pre-122 52 B
+worst case now that fields 11/12 are `reserved`, not populated (§8.4).
 
-- **Armored buffer**: 256 bytes (`kArmoredBufSize`, `comms.h:95`) — "*B"
-  (2) + base64(153) (204, rounded up) + NUL, with headroom.
+- **Framed buffer**: 200 bytes (`kFramedMaxBytes`, `comms.h`) — the
+  worst-case COBS-encoded length of `kMaxEnvelopeBytes` (194) + 2-byte
+  CRC = 196 payload bytes, `cobsEncodedMaxLength(196)` = 197, rounded up
+  to 200 for headroom (the transport's own trailing `0x00` delimiter adds
+  one more byte on the wire, not counted in this buffer size).
 - **Nesting depth cap**: 8 levels (`WireRuntime::kMaxNestingDepth`) —
   this schema's deepest actual chain
-  (`CommandEnvelope → *ConfigPatch`) is far shallower.
+  (`CommandEnvelope → *ConfigPatch`) is far shallower. Unchanged by the
+  framing cutover — this bound is a property of the schema, not the wire
+  armor.
 
 ### 2.4 Text safety rump — `HELLO` / `PING`
 
-`Comms::pumpTransport()` (`comms.cpp:56-85`) checks these two literal
-strings **before** the `*B` armor check:
+`Comms::pumpTransport()` (`comms.cpp`) only evaluates these two literal
+strings against a line the transport has ALREADY classified as
+`FrameKind::kText` (§2.1) — there is no `*B` armor check to fall through
+to any more; a text-plane line that isn't `HELLO`/`PING` is unrecognized
+and increments `malformedCount_` directly, without any binary decode
+attempt:
 
 | Verb | Reply | Notes |
 |---|---|---|
@@ -589,10 +639,10 @@ ack — never via a nonzero `ack_err`. `TLMFrame.fault_move_timeout`
 
 ### 7.4 A malformed/undecodable frame gets no reply at all
 
-`Comms`'s dearmor path (armor error, base64 error, or
-`msg::wire::decode()` failure) **never replies synchronously** — it
-increments `malformedCount_` and returns, leaving `Cmd.status` at
-`kNone` (`comms.cpp:78-115`, `decodeArmoredLine()`'s own doc comment:
+`Comms`'s binary-frame decode path (malformed COBS, a CRC mismatch, or
+`msg::wire::decode()` failure — §2.2) **never replies synchronously** —
+it increments `malformedCount_` and returns, leaving `Cmd.status` at
+`kNone` (`Comms::decodeBinaryFrame()`, `comms.cpp`, own doc comment:
 "NEVER replies"). `RobotLoop::processMessage()`'s switch on
 `CmdKind::NONE` dispatches to no handler and sends no ack of any kind
 for that line. The only observable effect is
@@ -653,11 +703,20 @@ any time window.
 | `line` | 12 | `uint32`, 4 packed 1-byte channels (ch1 low byte) | valid iff `flags` bit 13 |
 | `color` | 13 | `uint32`, packed RGBC (R low byte) | valid iff `flags` bit 14 |
 | `acks` | 14 | `repeated AckEntry{corr_id, err}`, up to 4 (120, ADDITIVE) | always present (may be an empty list); each entry unconditionally valid, no freshness gate |
+| `cycle_busy` | 15 | `uint32` [us] `cycleStart` → frame-staging instant, THIS cycle | always |
+| `cycle_period` | 16 | `uint32` [us] this cycle's `cycleStart` minus the previous cycle's | always (0 on the first-ever cycle) |
 
 Field 14 (`acks`) is additive — sprint 120's ack ring
-(`bench-single-ack-slot-observability-collapses-at-40ms.md`). Nothing
-above it is renumbered or removed. See §7.1/§7.2 for the ack semantics;
-§8.3 for the size-budget consequence.
+(`bench-single-ack-slot-observability-collapses-at-40ms.md`). Fields
+15/16 (`cycle_busy`/`cycle_period`) are additive too — sprint 123 ticket
+004's migration of these loop-timing diagnostics onto the PRIMARY frame
+(every cycle) from `TelemetrySecondary`'s ~5 Hz sample, where they first
+landed as an interim placement (sprint 122 ticket 003) because the
+pre-123 base64-armored envelope had no headroom left; COBS+CRC framing
+(§2.2) freed the room. `TelemetrySecondary`'s former fields 11/12 are now
+`reserved`, not reused (§8.4). Nothing above field 14 is renumbered or
+removed. See §7.1/§7.2 for the ack semantics; §8.3 for the size-budget
+consequence.
 
 ### 8.2 `flags` bit table
 
@@ -694,25 +753,42 @@ these numbers are transcribed from it, not hand-computed):
 - **`Telemetry`, standalone, AS OF 120** (a FULL 4-entry `acks` ring, each
   entry at its own declared worst case — `corr_id` up to 65535, `err` up
   to 7): **179 B** (+35 B over pre-120 — each `AckEntry` costs 8 B tag/
-  length/payload overhead on top of its own 6 B content, times 4).
+  length/payload overhead on top of its own 6 B content, times 4). This
+  size is unchanged by sprint 123 ticket 002's COBS+CRC framing cutover
+  (a framing-only change, no schema change).
+- **`Telemetry`, standalone, AS OF 123-004** (`cycle_busy`/`cycle_period`
+  migrated on, fields 15/16, ADDITIVE over the 120-era shape): **188 B**
+  (+9 B over 179 B — field 15's tag is 1 B (field numbers 1-15 fit a
+  1-byte tag) + a 3-byte varint for its `(max)=200000` bound = 4 B; field
+  16's tag is 2 B (field numbers ≥16 need a 2-byte tag) + the same 3-byte
+  varint = 5 B).
 - **Wrapped as `ReplyEnvelope.body`'s `tlm` arm** (how a primary frame
-  actually goes on the wire): 179 B payload + 1 B tag + 2 B length varint
-  (179 ≥ 128 needs a 2-byte length) = 182 B arm contribution + 6 B
-  non-oneof `ReplyEnvelope` overhead = **185 B total**, exactly **1 B
-  margin** under the 186-byte envelope budget (matches §2.3's table,
-  `wire.h`'s `kReplyEnvelopeMaxEncodedSize` static_assert). This is now
-  the tightest margin in the schema — a future field added to `Telemetry`
-  (or a wider bound on an existing field) will need either the ack ring's
-  own depth/bound choices revisited or the 186-byte budget itself raised.
-  Pre-120, this arm was 147 B / 153 B total (33 B margin).
+  actually goes on the wire): **194 B total** — `wire.h`'s own
+  regenerated `kReplyEnvelopeMaxEncodedSize` comment gives the exact
+  breakdown (`ok=19B, err=10B, tlm=188B (worst) + non-oneof=6B =>
+  total=194B`), transcribed here rather than re-derived. This sits **46 B**
+  under the 240-byte envelope budget (§2.3) — a wide margin restored by
+  the COBS+CRC framing cutover, vs. the pre-123 186-byte budget's 1-B
+  margin for the same 120-era, pre-migration schema (185 B total then).
+  This restored headroom is precisely what let ticket 004's
+  `cycle_busy`/`cycle_period` migration land on this frame at all — see
+  `src/firm/messages/wire.h` and `src/firm/app/DESIGN.md` §4 for the
+  full history.
 
-### 8.4 `TelemetrySecondary` — unchanged, out of this sprint's scope
+### 8.4 `TelemetrySecondary` — COBS+CRC-framed like every other frame; former loop-timing fields now `reserved`
 
 The slower (~5 Hz) diagnostic frame (`cmd_vel`/`acc_*`/`glitch_*`/
-`ts_*`) rides its own independently-armored `*B` line, own
-`msg::wire::encode()` overload — untouched by the MOVE cutover. 52 B
-worst case (§2.3). See `telemetry.proto`'s own header comment for its
-field list; not repeated here.
+`ts_*`) rides its own COBS+CRC-framed line (§2.2), its own
+`msg::wire::encode()` overload — untouched by the MOVE cutover, and by
+sprint 123's framing cutover beyond the armor-scheme change itself. Its
+former fields 11/12 (`cycle_busy`/`cycle_period`, sprint 122 ticket 003's
+interim placement) are `reserved`, not reused, since sprint 123 ticket
+004 migrated them onto the primary `Telemetry` frame (§8.1) — a
+`reserved` field number is never renumbered or repurposed, per this
+project's standing wire-stability discipline. **52 B** worst case (§2.3)
+— back to its pre-122 size now that those two fields no longer occupy
+it. See `telemetry.proto`'s own header comment for its field list; not
+repeated here.
 
 ---
 

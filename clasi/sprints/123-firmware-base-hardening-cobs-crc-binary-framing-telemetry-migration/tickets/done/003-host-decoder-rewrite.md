@@ -1,9 +1,13 @@
 ---
 id: '003'
 title: Host decoder rewrite
-status: open
-use-cases: [SUC-001, SUC-002, SUC-003]
-depends-on: ['002']
+status: done
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+depends-on:
+- '002'
 github-issue: ''
 issue: cobs-crc-binary-framing-replace-base64-armor.md
 completes_issue: true

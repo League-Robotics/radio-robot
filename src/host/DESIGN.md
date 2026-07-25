@@ -95,6 +95,17 @@ in which file is which) is in
 - **Consumes the wire schema** via `robot/pb2/` — the compiled Python
   bindings for `src/firm/messages/`; source of truth
   [`src/protos`](../protos/DESIGN.md).
+- **Consumes the wire framing** via `io/wire_codec.py` — the host-side
+  mirror of `src/firm/messages/wire_runtime.h`'s COBS + CRC-16/CCITT-FALSE
+  primitives (sprint 123, replacing the pre-123 `*B<base64>\r\n` line
+  armor). The one place the host encodes/decodes the binary frame's
+  bytes-on-the-wire; every transport/decoder module
+  (`robot_radio/io/serial_conn.py`, `io/sim_loop.py`, `io/cli.py`,
+  `io/sim_config.py`, `testgui/transport.py`, `robot/protocol.py`, and
+  `src/sim/sim_ctypes.cpp`'s Python-side counterpart) imports from here
+  rather than re-implementing the codec — see
+  [`robot_radio/DESIGN.md`](robot_radio/DESIGN.md) for the file-by-file
+  detail.
 - **Consumes the simulator** — `io/sim_loop.py` loads
   [`src/sim`](../sim/DESIGN.md)'s dylib (the real firmware compiled
   `-DHOST_BUILD`) and drives it over the same `CommandEnvelope` surface
