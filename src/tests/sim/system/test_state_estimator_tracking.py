@@ -48,7 +48,6 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "telemetry.cpp",
     _REPO_ROOT / "src" / "motion" / "move_queue.cpp",
     _SOURCE_DIR / "app" / "drive.cpp",
-    _SOURCE_DIR / "app" / "otos_sample.cpp",
     _REPO_ROOT / "src" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
     # 117 ticket 002/004: App::StateEstimator -- this harness's own subject

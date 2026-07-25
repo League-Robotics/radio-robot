@@ -164,6 +164,21 @@ class RobotLoop {
   // THIS frame, not merely "known at some point") semantics.
   void updateLineColor(uint64_t nowUs);  // [us]
 
+  // applyOtosSample -- the minimal OTOS-only perception step: ticks otos_
+  // (rate-limited internally by its own readDue()/kReadPeriod) and copies
+  // the full reading (x, y, heading, v_x, v_y, omega) plus the burst's read
+  // time into frame_.otos; sets frame_.otosConnected = otos_.connected() and
+  // frame_.otosPresent = otos_.present() && otos_.poseFresh() (fresh THIS
+  // cycle only). No fusion -- the raw OTOS pose rides to the host verbatim.
+  // frame_.otos is overwritten only when otosPresent; otherwise left as the
+  // last staged snapshot. The base-side counterpart to updateLineColor(),
+  // called once per cycle from the pace block. (Was the free function
+  // App::applyOtosSample() in app/otos_sample.{h,cpp}; folded in here since
+  // RobotLoop is its only production caller and its sibling perception steps
+  // live here. It cannot live in src/motion -- the isolation invariant
+  // forbids motion depending on Devices::Otos/Telemetry::Frame.)
+  void applyOtosSample(uint64_t now);  // [us]
+
   // Dispatches the <=1 decoded command in cmd to its own handler by
   // cmd_kind (NONE is a no-op). Each handler applies its command and acks
   // via tlm_.ack().

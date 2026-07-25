@@ -3,7 +3,6 @@
 // timing-schedule rationale.
 #include "app/robot_loop.h"
 
-#include "app/otos_sample.h"
 #include "motion/body_kinematics.h"
 #include "messages/envelope.h"
 
@@ -226,6 +225,24 @@ void RobotLoop::updateLineColor(uint64_t nowUs) {  // [us]
 
   tlm_.setFlag(kFlagLinePresent, lineFresh);
   tlm_.setFlag(kFlagColorPresent, colorFresh);
+}
+
+// applyOtosSample -- the minimal OTOS-only perception step. See robot_loop.h's
+// own declaration comment for the full contract.
+void RobotLoop::applyOtosSample(uint64_t now) {  // [us]
+  otos_.tick(now);
+  frame_.otosConnected = otos_.connected();
+  frame_.otosPresent = otos_.present() && otos_.poseFresh();
+  if (frame_.otosPresent) {
+    Devices::PoseReading reading = otos_.pose();
+    frame_.otos.x = reading.x;
+    frame_.otos.y = reading.y;
+    frame_.otos.heading = reading.heading;
+    frame_.otos.v_x = reading.v_x;
+    frame_.otos.v_y = reading.v_y;
+    frame_.otos.omega = reading.omega;
+    frame_.otos.time = static_cast<uint32_t>(now / 1000);  // [us] -> [ms]
+  }
 }
 
 // handleMove -- replaces the deleted handleTwist() (116, protocol-set-point
@@ -713,8 +730,8 @@ void RobotLoop::cycle() {
     // I2C burst read) or App::FakeOtos (synthetic pose from odom_ + wheel
     // twist) -- chosen once at construction (main.cpp), never branched on
     // here. applyOtosSample() calls otos_.tick() then copies pose/freshness
-    // into frame_.otos (odometry.cpp).
-    applyOtosSample(otos_, nowUs, frame_);
+    // into frame_.otos (a private RobotLoop method below).
+    applyOtosSample(nowUs);
     tlm_.setFlag(kFlagOtosPresent, frame_.otosPresent);
     tlm_.setFlag(kFlagOtosConnected, frame_.otosConnected);
 

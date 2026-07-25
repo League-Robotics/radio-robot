@@ -98,7 +98,6 @@ set(MOTION_DIR "${REPO_ROOT}/src/motion")
 set(APP_SOURCES
     "${SOURCE_DIR}/app/comms.cpp"
     "${SOURCE_DIR}/app/drive.cpp"
-    "${SOURCE_DIR}/app/otos_sample.cpp"
     "${SOURCE_DIR}/app/preamble.cpp"
     "${SOURCE_DIR}/app/robot_loop.cpp"
     "${SOURCE_DIR}/app/telemetry.cpp"
@@ -115,9 +114,9 @@ set(APP_SOURCES
 # extraction ticket 2): moved from SOURCE_DIR/app/ into MOTION_DIR, behind
 # the velocity-sink boundary (motion/wheel_sink.h) -- App::Drive
 # (APP_SOURCES, above) is now the one WheelSink implementation these link
-# against. App::applyOtosSample() (the OTOS-perception half odometry.cpp
-# used to also define) stayed behind as a NEW app/otos_sample.cpp
-# (APP_SOURCES, above) -- Motion::Odometry may not depend on Devices::Otos/
+# against. The OTOS-perception half odometry.cpp used to also define
+# (applyOtosSample()) is now a private RobotLoop method (robot_loop.cpp,
+# APP_SOURCES) -- Motion::Odometry may not depend on Devices::Otos/
 # App::Telemetry::Frame.
 set(MOTION_SOURCES
     "${MOTION_DIR}/stop_condition.cpp"

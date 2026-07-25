@@ -1,19 +1,21 @@
-// app_odometry_harness.cpp -- off-hardware acceptance harness for ticket
-// 103-006 (SUC-006), App::Odometry + applyOtosSample()
-// (src/firm/app/odometry.{h,cpp}). Proves: Odometry::integrate() accumulates
-// world x/y/theta correctly for a straight-line case (equal wheel deltas)
-// and a pure-rotation case (equal-and-opposite wheel deltas), reading the
-// REAL Devices::NezhaMotor leaves' own position() (no shadow copy); and
-// applyOtosSample() copies a REAL Devices::Otos leaf's sample into a
-// Telemetry::Frame, respecting the leaf's own read-rate throttle and never
-// clobbering the frame when the chip was never detected.
+// app_odometry_harness.cpp -- off-hardware acceptance harness for
+// Motion::Odometry (src/motion/odometry.{h,cpp}). Proves:
+// Odometry::integrate() accumulates world x/y/theta correctly for a
+// straight-line case (equal wheel deltas) and a pure-rotation case
+// (equal-and-opposite wheel deltas), reading the REAL Devices::NezhaMotor
+// leaves' own position() (no shadow copy), plus the pathLength() odometer
+// semantics.
 //
-// Reuses devices_motor_harness.cpp's NezhaMotor-scripting convention and
-// devices_otos_harness.cpp's Otos-scripting convention, duplicated here per
-// this codebase's established per-harness-file fixture convention.
-// Compiled by test_app_odometry.py with -DHOST_BUILD against odometry.cpp,
-// nezha_motor.cpp, velocity_pid.cpp, otos.cpp, sim_plant.cpp,
-// {wheel,otos}_plant.cpp, body_kinematics.cpp.
+// (The former applyOtosSample() scenarios moved out: that base-side
+// perception step is now a private RobotLoop method -- its OTOS behaviors
+// are covered directly in devices_otos_harness.cpp and end-to-end in
+// app_robot_loop_harness.cpp.)
+//
+// Reuses devices_motor_harness.cpp's NezhaMotor-scripting convention,
+// duplicated here per this codebase's established per-harness-file fixture
+// convention. Compiled by test_app_odometry.py with -DHOST_BUILD against
+// odometry.cpp, nezha_motor.cpp, velocity_pid.cpp, sim_plant.cpp,
+// wheel_plant.cpp, body_kinematics.cpp.
 //
 // Migrated by sprint 108 ticket 009 off the deleted src/firm/devices/
 // i2c_bus_host.cpp scripted-FIFO Devices::I2CBus fake (ticket 001 reduced
@@ -27,12 +29,9 @@
 #include <cstdio>
 #include <string>
 
-#include "app/otos_sample.h"
-#include "app/telemetry.h"
 #include "devices/device_config.h"
 #include "devices/device_types.h"
 #include "devices/nezha_motor.h"
-#include "devices/otos.h"
 #include "motion/body_kinematics.h"
 #include "motion/odometry.h"
 #include "scripted_i2c_hook.h"
@@ -114,46 +113,6 @@ void driveToPosition(Devices::NezhaMotor& motor, TestSim::ScriptedI2CHook& bus,
   scriptEncoderRequestCollect(bus, wireAddr, positionMm);
   motor.requestSample();
   motor.tick(nowUs);
-}
-
-// --- Devices::Otos scripting helpers (duplicated from
-// devices_otos_harness.cpp) --------------------------------------------------
-
-constexpr uint16_t kOtosAddr7 = Devices::kOtosDeviceAddr;                      // 0x17
-constexpr uint16_t kOtosWireAddr = static_cast<uint16_t>(kOtosAddr7 << 1);     // 0x2E
-
-// Same LSB scale factors as otos.cpp -- duplicated here per this codebase's
-// established per-file convention (devices_otos_harness.cpp's own
-// precedent). Valid as a DIRECT scale check only because every scenario
-// below uses zero mounting offset/yaw (identity lever-arm/rotation).
-constexpr float kPosMmPerLsb = 0.305f;
-constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);
-
-void scriptGenerousWrites(TestSim::ScriptedI2CHook& bus, int count) {
-  for (int i = 0; i < count; ++i) bus.queueWrite(kOtosWireAddr, /*status=*/0);
-}
-
-void scriptProductId(TestSim::ScriptedI2CHook& bus, uint8_t id, int status = 0) {
-  uint8_t data[1] = {id};
-  bus.queueRead(kOtosWireAddr, data, 1, status);
-}
-
-void scriptPosVel(TestSim::ScriptedI2CHook& bus, int16_t x, int16_t y, int16_t h,
-                   int16_t vx, int16_t vy, int16_t vh, int status = 0) {
-  uint8_t raw[12];
-  raw[0]  = static_cast<uint8_t>(x & 0xFF);
-  raw[1]  = static_cast<uint8_t>((x >> 8) & 0xFF);
-  raw[2]  = static_cast<uint8_t>(y & 0xFF);
-  raw[3]  = static_cast<uint8_t>((y >> 8) & 0xFF);
-  raw[4]  = static_cast<uint8_t>(h & 0xFF);
-  raw[5]  = static_cast<uint8_t>((h >> 8) & 0xFF);
-  raw[6]  = static_cast<uint8_t>(vx & 0xFF);
-  raw[7]  = static_cast<uint8_t>((vx >> 8) & 0xFF);
-  raw[8]  = static_cast<uint8_t>(vy & 0xFF);
-  raw[9]  = static_cast<uint8_t>((vy >> 8) & 0xFF);
-  raw[10] = static_cast<uint8_t>(vh & 0xFF);
-  raw[11] = static_cast<uint8_t>((vh >> 8) & 0xFF);
-  bus.queueRead(kOtosWireAddr, raw, 12, status);
 }
 
 // ===========================================================================
@@ -385,139 +344,6 @@ void scenarioPathLengthNotZeroedByReset() {
   checkNear(odom.pathLength(), 90.0f, 1e-3f, "pathLength() continues accumulating correctly after reset() re-anchors the delta baseline");
 }
 
-// ===========================================================================
-// 4. applyOtosSample(): a present+connected chip copies its pose into the
-//    frame; a burst-read failure holds the stale pose but reports
-//    disconnected; a never-detected chip leaves the frame's otos field
-//    untouched.
-// ===========================================================================
-
-void scenarioApplyOtosSamplePresentAndConnectedCopiesPose() {
-  beginScenario("applyOtosSample(): present+connected -- frame carries otosPresent/otosConnected/otos pose");
-
-  TestSim::SimPlant plant;
-  TestSim::ScriptedI2CHook bus(plant);
-  Devices::OtosConfig cfg;  // zero offsets, scale 1.0 -- identity transform
-  Devices::RealOtos otos(plant, cfg);
-
-  scriptGenerousWrites(bus, 20);
-  scriptProductId(bus, 0x5F);
-  otos.begin();
-  checkTrue(otos.present(), "setup: begin() detected the chip");
-
-  scriptPosVel(bus, /*x=*/100, /*y=*/50, /*h=*/1000, /*vx=*/0, /*vy=*/0, /*vh=*/0);
-
-  App::Telemetry::Frame frame;
-  App::applyOtosSample(otos, /*now=*/20000, frame);
-
-  checkTrue(frame.otosPresent, "otosPresent mirrors present()");
-  checkTrue(frame.otosConnected, "otosConnected mirrors this tick's connected()");
-  checkNear(frame.otos.x, 100.0f * kPosMmPerLsb, 1e-3f, "otos.x matches the scripted burst read, scaled");
-  checkNear(frame.otos.y, 50.0f * kPosMmPerLsb, 1e-3f, "otos.y matches the scripted burst read, scaled");
-  checkNear(frame.otos.heading, 1000.0f * kHdgRadPerLsb, 1e-4f, "otos.heading matches the scripted burst read, scaled");
-}
-
-void scenarioApplyOtosSampleBurstFailureHoldsStalePoseReportsDisconnected() {
-  beginScenario("applyOtosSample(): a failed burst read holds the stale pose but reports otosConnected=false");
-
-  TestSim::SimPlant plant;
-  TestSim::ScriptedI2CHook bus(plant);
-  Devices::OtosConfig cfg;
-  Devices::RealOtos otos(plant, cfg);
-
-  scriptGenerousWrites(bus, 20);
-  scriptProductId(bus, 0x5F);
-  otos.begin();
-
-  scriptPosVel(bus, 200, 300, 500, 0, 0, 0);
-  App::Telemetry::Frame frame;
-  App::applyOtosSample(otos, /*now=*/0, frame);
-  float expectedX = 200.0f * kPosMmPerLsb;
-  checkNear(frame.otos.x, expectedX, 1e-3f, "setup: first sample populated a real pose");
-  checkTrue(frame.otosConnected, "setup: first sample reports connected");
-
-  // Second read, past kReadPeriod (20000us), scripted to FAIL.
-  scriptPosVel(bus, 0, 0, 0, 0, 0, 0, /*status=*/-5);
-  App::applyOtosSample(otos, /*now=*/20000, frame);
-
-  // 115-005: otosPresent is now "OtosReading fresh THIS frame" (tighter than
-  // the old pre-115 hasOtos, which mirrored present() -- see
-  // applyOtosSample()'s own doc comment in odometry.h). A failed burst read
-  // means no fresh pose this frame, so otosPresent is false here even
-  // though the chip is still detected (present() stays true, unchecked by
-  // this scenario -- otosConnected below is the live per-tick signal that
-  // actually reflects this cycle's I2C failure).
-  checkFalse(frame.otosPresent, "otosPresent reflects THIS cycle's failed read -- no fresh pose this frame");
-  checkFalse(frame.otosConnected, "otosConnected reflects THIS cycle's failed read");
-  checkNear(frame.otos.x, expectedX, 1e-3f, "the stale pose is held, not clobbered by the failed read");
-}
-
-void scenarioApplyOtosSampleNeverDetectedLeavesFrameUntouched() {
-  beginScenario("applyOtosSample(): a never-detected chip leaves frame.otos untouched, both bools false");
-
-  TestSim::SimPlant plant;
-  TestSim::ScriptedI2CHook bus(plant);
-  Devices::OtosConfig cfg;
-  Devices::RealOtos otos(plant, cfg);
-
-  scriptGenerousWrites(bus, 20);
-  scriptProductId(bus, 0x00);  // wrong id -- real chip reports 0x5F
-  otos.begin();
-  checkFalse(otos.present(), "setup: begin() did not detect a chip");
-
-  App::Telemetry::Frame frame;
-  frame.otos = {7.0f, 8.0f, 9.0f};  // sentinel -- must survive untouched
-
-  App::applyOtosSample(otos, /*now=*/1000, frame);
-
-  checkFalse(frame.otosPresent, "otosPresent reflects present() == false");
-  checkFalse(frame.otosConnected, "otosConnected reflects connected() == false");
-  checkNear(frame.otos.x, 7.0f, 1e-6f, "otos.x left untouched when the chip was never detected");
-  checkNear(frame.otos.y, 8.0f, 1e-6f, "otos.y left untouched");
-  checkNear(frame.otos.heading, 9.0f, 1e-6f, "otos.heading left untouched");
-  checkUintEq(bus.txnCount(kOtosAddr7), 2, "applyOtosSample() adds zero bus traffic -- Otos::tick() itself no-ops");
-}
-
-// ===========================================================================
-// 5. Rate-limit: a too-soon second call issues no extra bus traffic (Otos's
-//    own kReadPeriod throttle, unchanged) yet the frame still carries the
-//    last real reading -- "sampled at least once per cycle" means the call
-//    happens every cycle, not that a fresh bus transaction does.
-// ===========================================================================
-
-void scenarioApplyOtosSampleRateLimitSkipStillReachesFrame() {
-  beginScenario("applyOtosSample(): a too-soon call issues zero extra bus traffic but still reaches the frame");
-
-  TestSim::SimPlant plant;
-  TestSim::ScriptedI2CHook bus(plant);
-  Devices::OtosConfig cfg;
-  Devices::RealOtos otos(plant, cfg);
-
-  scriptGenerousWrites(bus, 20);
-  scriptProductId(bus, 0x5F);
-  otos.begin();
-
-  scriptPosVel(bus, 100, 50, 1000, 0, 0, 0);
-  App::Telemetry::Frame frame;
-  App::applyOtosSample(otos, /*now=*/0, frame);  // first call always reads (hasRead_ starts false)
-  uint32_t txnAfterFirst = bus.txnCount(kOtosAddr7);
-
-  // Second call only 5000us later -- well under kReadPeriod (20000us). No
-  // read is scripted for it; a bus-traffic attempt would surface as a
-  // script-mismatch error.
-  App::applyOtosSample(otos, /*now=*/5000, frame);
-
-  checkUintEq(bus.txnCount(kOtosAddr7), txnAfterFirst,
-              "a too-soon call issues zero additional bus traffic");
-  checkUintEq(bus.errCount(kOtosAddr7), 0, "no script-mismatch error -- confirms no unexpected bus call was attempted");
-  // 115-005: otosPresent is "fresh THIS frame" (see the burst-failure
-  // scenario's own comment above) -- a rate-limited (too-soon) call means
-  // no read happened THIS call, so no fresh pose this frame either, even
-  // though frame.otos still carries the last real reading below.
-  checkFalse(frame.otosPresent, "otosPresent is false on a rate-limited cycle -- no fresh pose read this call");
-  checkTrue(frame.otosConnected, "otosConnected still reflects the last REAL read's health, not falsely cleared");
-  checkNear(frame.otos.x, 100.0f * kPosMmPerLsb, 1e-3f, "otos pose still carries the last real reading on a rate-limited cycle");
-}
 
 }  // namespace
 
@@ -529,15 +355,11 @@ int main() {
   scenarioPathLengthInPlaceTurnContributesApproximatelyZero();
   scenarioPathLengthReverseTravelAccumulatesNotCancels();
   scenarioPathLengthNotZeroedByReset();
-  scenarioApplyOtosSamplePresentAndConnectedCopiesPose();
-  scenarioApplyOtosSampleBurstFailureHoldsStalePoseReportsDisconnected();
-  scenarioApplyOtosSampleNeverDetectedLeavesFrameUntouched();
-  scenarioApplyOtosSampleRateLimitSkipStillReachesFrame();
 
   if (g_failureCount == 0) {
-    std::printf("OK: all Motion::Odometry / App::applyOtosSample scenarios passed\n");
+    std::printf("OK: all Motion::Odometry scenarios passed\n");
     return 0;
   }
-  std::printf("FAILED: %d assertion(s) across the Motion::Odometry / App::applyOtosSample scenarios\n", g_failureCount);
+  std::printf("FAILED: %d assertion(s) across the Motion::Odometry scenarios\n", g_failureCount);
   return 1;
 }

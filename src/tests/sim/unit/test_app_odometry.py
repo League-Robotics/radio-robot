@@ -36,7 +36,6 @@ _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_odometry_harness.c
 _ODOMETRY_SRC = _REPO_ROOT / "src" / "motion" / "odometry.cpp"
 # 122-002: App::applyOtosSample() split out of odometry.cpp into this new
 # base-side file -- this harness calls it directly (scenario 4/5).
-_OTOS_SAMPLE_SRC = _SOURCE_DIR / "app" / "otos_sample.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
@@ -67,7 +66,6 @@ def test_app_odometry_harness_compiles_and_passes(tmp_path):
     sources = [
         _HARNESS_SRC,
         _ODOMETRY_SRC,
-        _OTOS_SAMPLE_SRC,
         _SIM_PLANT_SRC,
         _WHEEL_PLANT_SRC,
         _OTOS_PLANT_SRC,

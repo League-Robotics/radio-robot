@@ -54,7 +54,6 @@ _DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
 # 122-002: App::applyOtosSample() split out of odometry.cpp (now
 # Motion::Odometry, src/motion/) into this new base-side file --
 # robot_loop.cpp's own applyOtosSample() call needs it linked in.
-_OTOS_SAMPLE_SRC = _SOURCE_DIR / "app" / "otos_sample.cpp"
 _ODOMETRY_SRC = _REPO_ROOT / "src" / "motion" / "odometry.cpp"
 # 117 ticket 003: App::StateEstimator, threaded through RobotLoop's own
 # constructor alongside MoveQueue/Preamble.
@@ -158,7 +157,6 @@ def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
         _STOP_CONDITION_SRC,
         _VELOCITY_SHAPER_SRC,
         _DRIVE_SRC,
-        _OTOS_SAMPLE_SRC,
         _ODOMETRY_SRC,
         _STATE_ESTIMATOR_SRC,
         _NEZHA_MOTOR_SRC,
