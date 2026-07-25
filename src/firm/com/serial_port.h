@@ -12,7 +12,19 @@
  * doc comment for the exact contract. Bytes are accumulated UNFILTERED
  * (no longer dropping every '\r' on sight, since a binary frame may
  * legitimately carry 0x0D as content) until one of the two terminators
- * ends the frame. `SerialPort::FrameKind` is this class's OWN plain enum
+ * ends the frame.
+ *
+ * 123-006 (bench-surfaced fix): a 0x0A byte does NOT always end the frame
+ * -- COBS only guarantees a frame is 0x00-free, not 0x0A-free. A 0x0A only
+ * terminates a TEXT line when the accumulated bytes before it are exactly
+ * a recognized text-rump command (HELLO/PING -- the closed set this side
+ * ever legitimately receives inbound); otherwise it is binary content and
+ * accumulation continues to the eventual 0x00 delimiter. See readLine()'s
+ * own doc comment. The host's mirror, wire_codec.py's
+ * ByteStreamDemuxer.feed(), shares this same demux SKELETON but uses a
+ * different recognizer for ITS (opposite) direction -- see that class's
+ * own docstring for why an exact-match check cannot work there.
+ * `SerialPort::FrameKind` is this class's OWN plain enum
  * (no dependency on `app/`, per this directory's own "com/ has no
  * dependency on app/, messages/, or any wire-schema type" invariant --
  * com/DESIGN.md) -- `app/comms.h`'s `SerialTransport` adapter maps this
@@ -43,15 +55,19 @@ public:
     void begin();
 
     // Non-blocking. Accumulates bytes from ASYNC read (unfiltered -- see
-    // this class's own file header) until either terminator ends a
-    // complete frame: 0x00 ends a BINARY frame (FrameKind::kBinary, buf
-    // holds *outLen raw bytes, delimiter consumed/not included); '\n' ends
-    // a TEXT frame (FrameKind::kText, a trailing '\r' stripped, buf
-    // NUL-terminated, *outLen == strlen(buf)). Returns FrameKind::kNone
-    // (buf/*outLen untouched) when nothing complete is ready yet. `cap`
-    // bounds buf's capacity (including the NUL terminator this call
-    // always writes, even for a binary frame -- safe because COBS-encoded
-    // content is 0x00-free by construction).
+    // this class's own file header) until a terminator ends a complete
+    // frame: 0x00 ALWAYS ends a BINARY frame (FrameKind::kBinary, buf
+    // holds *outLen raw bytes, delimiter consumed/not included). A 0x0A
+    // ends a TEXT frame (FrameKind::kText, a trailing '\r' stripped, buf
+    // NUL-terminated, *outLen == strlen(buf)) ONLY when the bytes
+    // accumulated before it are exactly a recognized text-rump command
+    // (HELLO/PING) -- otherwise the 0x0A is binary content and
+    // accumulation continues toward the 0x00 delimiter (123-006: COBS
+    // guarantees 0x00-freedom, never 0x0A-freedom). Returns
+    // FrameKind::kNone (buf/*outLen untouched) when nothing complete is
+    // ready yet. `cap` bounds buf's capacity (including the NUL terminator
+    // this call always writes, even for a binary frame -- safe because
+    // COBS-encoded content is 0x00-free by construction).
     FrameKind readLine(char* buf, uint16_t cap, uint16_t* outLen);
 
     // ASYNC, WHOLE-FRAME drop-on-full — for telemetry. `data`/`len` is a

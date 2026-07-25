@@ -105,3 +105,78 @@ bench re-run (team-lead to perform).
 Full sim suite (`uv run python -m pytest`): 1428 passed, 2 skipped,
 9 xfailed, 2 xpassed — no regressions. Firmware build (`just build-clean`)
 succeeds clean for both the ARM target and the host-sim library.
+
+## Bench-Surfaced Defect and Fix #2: 0x0A-in-binary-frame demux corruption
+
+**Defect (root-caused and proven on hardware this session):** the text/
+binary demux treated `0x0A` (`\n`) as a text-line terminator EVEN inside a
+binary frame. COBS guarantees a binary frame contains no `0x00`, but does
+**not** remove `0x0A`. A `move_wheels` framed envelope is 30 bytes and
+contains one `0x0A` byte → 0/10 moves executed on hardware (firmware set
+`kFlagFaultCommsMalformed` every time; the robot was undriveable over USB).
+A `stop` envelope is 5 bytes with no `0x0A` → worked every time. This is a
+distinct defect from the TX-buffer-truncation fix recorded above (that one
+corrupted frames on send; this one corrupted them on receive-side demux),
+found during the same bench verification pass.
+
+**Fix:** a binary frame is now terminated **only** by `0x00`; a `0x0A`
+inside a binary frame is content, never a terminator.
+
+- `SerialPort::readLine()` (`src/firm/com/serial_port.cpp`): a `0x0A`
+  ends a TEXT line only when the accumulated bytes before it (a trailing
+  `\r` stripped) are an EXACT match against the closed set of text-rump
+  commands this side ever legitimately receives inbound (`HELLO`, `PING`
+  — protocol-v4's whole text-plane rump, `kTextCommands`). Otherwise the
+  `0x0A` is appended as ordinary binary content and accumulation
+  continues to the eventual `0x00` delimiter.
+- `wire_codec.py`'s `ByteStreamDemuxer.feed()` (host mirror): shares the
+  same `0x00`-always-binary / `0x0A`-conditionally-text demux skeleton,
+  but **cannot** use the same exact-match recognizer — this class reads
+  the OPPOSITE direction (firmware/relay output), which is not a fixed
+  literal set: the `DEVICE:...` banner and `OK pong t=<ms>` reply both
+  carry dynamic content (name/serial, live timestamp), and the
+  RadioRelay's own pre-`!GO` `#`-comment lines (`serial_conn.py`'s
+  `_relay_handshake()`) are free-form text on a wire segment that
+  carries no `0x00` at all. Verified empirically: mirroring the
+  firmware's literal `HELLO`/`PING`-only recognizer onto the host side
+  breaks `_relay_handshake()` (relay comment lines never flush, since no
+  `0x00` ever arrives on that segment) and an existing passing test
+  (`test_demuxer_splits_interleaved_text_and_binary`'s `OK pong t=5`
+  line) — so the host instead uses a content-shape recognizer,
+  `_looks_like_text()` (printable-ASCII-only, deliberately excluding tab
+  and other control bytes — a short zero-free COBS frame's own leading
+  code byte is exactly "block length + 1" and can coincidentally land on
+  a low control-byte value including tab, so the alphabet is kept as
+  narrow as real traffic requires). A genuine COBS+CRC frame's bytes are
+  effectively arbitrary across the full non-zero range and in practice
+  always contain at least one non-printable byte, so this reliably
+  distinguishes real text-plane replies from binary content.
+- `comms.h`'s `FrameKind` doc comment and both `SerialPort`/
+  `ByteStreamDemuxer` file-header comments updated to describe the
+  corrected contract and this direction-dependent recognizer split (the
+  two sides share the demux SKELETON, not a byte-for-byte identical
+  recognizer — corrected from an earlier, inaccurate "never ambiguous"/
+  "byte-for-byte mirror" framing in both files' comments).
+
+**Regression tests** (`src/tests/unit/test_host_wire_codec.py`): a binary
+frame containing an embedded `0x0A` round-trips whole in a single feed,
+split across two `feed()` calls (the exact hardware failure mode — the
+`0x0A` byte lands in an earlier chunk than the frame's own `0x00`), and
+interleaved with `HELLO`/`PING` lines; a frame with several embedded
+`0x0A` bytes; plus two guard tests locking in the host-side design
+decision above (relay `#`-comment lines with no `0x00` ever present, and
+`DEVICE:`/`OK pong` replies with dynamic content) so a future "simplify to
+an exact-match list" edit cannot silently reintroduce the
+`_relay_handshake()` regression. All new tests were confirmed to FAIL
+against the pre-fix demux logic (verified via `git stash` of
+`wire_codec.py` alone) and PASS against the fix. No C++ regression test
+was added for `SerialPort::readLine()` itself: it takes a concrete
+`NRF52Serial&` with no existing fake-transport seam (same gap already
+noted above for the TX-truncation fix) — coverage relies on the host
+test (identical demux skeleton) plus the team-lead's hardware
+verification.
+
+Full sim suite (`uv run python -m pytest`): 1434 passed (1428 baseline +
+6 new tests in `test_host_wire_codec.py`), 2 skipped, 9 xfailed,
+2 xpassed — no regressions. Firmware build (`just build-clean`) succeeds
+clean for both the ARM target and the host-sim library.

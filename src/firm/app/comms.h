@@ -27,11 +27,24 @@ class Radio;
 namespace App {
 
 // FrameKind -- which of the two coexisting frame shapes a completed
-// Transport::readLine() call delivered. Never ambiguous: a binary frame is
-// 0x00-free by COBS construction (0x00 is exclusively the frame
-// delimiter); a text-plane line is typed ASCII (HELLO/PING) and never
-// contains a 0x00 byte. Whichever terminator the transport's own
-// accumulator sees FIRST (0x00 or '\n') decides the kind.
+// Transport::readLine() call delivered. A binary frame is 0x00-free by
+// COBS construction, so 0x00 ALWAYS ends a binary frame. COBS does NOT
+// guarantee 0x0A-freedom, though, so 0x0A is NOT an unconditional
+// terminator: it ends a text-plane line ONLY when the bytes accumulated
+// before it are exactly a recognized text-rump command (HELLO/PING);
+// otherwise it is binary content and accumulation continues to the
+// eventual 0x00 delimiter. (123-006 bench-surfaced fix: a move_wheels
+// envelope embedding a literal 0x0A byte was being split and corrupted
+// under the old "whichever terminator comes first" rule -- proven 0/10 on
+// hardware.) See SerialPort::readLine() (com/serial_port.cpp) for this
+// direction's own recognizer (an EXACT match against the closed set of
+// text-rump commands this side ever legitimately receives, HELLO/PING).
+// The host's mirror, wire_codec.py's ByteStreamDemuxer.feed(), shares this
+// same 0x00-always-binary/0x0A-conditionally-text demux SKELETON but
+// necessarily uses a different recognizer for ITS direction (bytes
+// arriving FROM the firmware/relay are not a fixed literal set -- the
+// DEVICE:/OK-pong replies carry dynamic content and the RadioRelay's own
+// pre-!GO comment lines are free-form) -- see that class's own docstring.
 enum class FrameKind : uint8_t { kNone = 0, kText = 1, kBinary = 2 };
 
 // Transport -- the abstract non-blocking line-in/line-out seam Comms is

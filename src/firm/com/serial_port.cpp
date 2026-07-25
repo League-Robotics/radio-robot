@@ -2,6 +2,34 @@
 #include <string.h>
 #include <stdio.h>
 
+namespace {
+
+// Text-plane commands recognized by readLine()'s demux discriminator --
+// the CLOSED set of text this side (host->firmware) ever legitimately
+// receives inbound (protocol-v4's whole text-plane rump). 123-006
+// bench-surfaced fix: a 0x0A byte only terminates a TEXT line when the
+// bytes accumulated before it are exactly one of these; otherwise it is
+// binary content (see readLine()'s own doc comment). NOTE: the host's own
+// demux (wire_codec.py's ByteStreamDemuxer, which reads the OPPOSITE
+// direction -- firmware/relay output, not a fixed literal set) uses a
+// different, content-shape recognizer instead of this exact-match list --
+// see that class's own docstring for why.
+const char* const kTextCommands[] = {"HELLO", "PING"};
+constexpr size_t kTextCommandCount = sizeof(kTextCommands) / sizeof(kTextCommands[0]);
+
+// True if data[0..len) is exactly one of kTextCommands (no partial/prefix
+// match -- a candidate line must match a whole command's length too).
+bool isRecognizedTextCommand(const char* data, uint16_t len) {
+    for (size_t i = 0; i < kTextCommandCount; ++i) {
+        const char* cmd = kTextCommands[i];
+        size_t cmdLen = strlen(cmd);
+        if (len == cmdLen && memcmp(data, cmd, cmdLen) == 0) return true;
+    }
+    return false;
+}
+
+}  // namespace
+
 SerialPort::SerialPort(NRF52Serial& serial)
     : _serial(serial), _rxLen(0)
 {
@@ -34,17 +62,27 @@ SerialPort::FrameKind SerialPort::readLine(char* buf, uint16_t cap, uint16_t* ou
             return FrameKind::kBinary;
         }
         if (c == '\n') {
-            // Text-plane line -- strip a single trailing '\r' (the
-            // "\r\n" text-line convention), matching pre-123 behavior for
-            // HELLO/PING.
+            // 123-006 bench-surfaced fix: a 0x0A byte terminates a TEXT
+            // line ONLY when the bytes accumulated before it (a single
+            // trailing '\r' stripped) are a recognized text-rump command
+            // (HELLO/PING). COBS guarantees a binary frame is 0x00-free,
+            // NOT 0x0A-free -- a move_wheels envelope embedding a literal
+            // 0x0A was being split and corrupted here (proven on hardware:
+            // 0/10 moves executed). Anything else falls through and the
+            // 0x0A is appended as ordinary binary content below; only a
+            // 0x00 ever ends a binary frame.
             uint16_t n = _rxLen;
             if (n > 0 && _rxBuf[n - 1] == '\r') --n;
-            uint16_t copy = (n < cap - 1) ? n : (cap - 1);
-            memcpy(buf, _rxBuf, copy);
-            buf[copy] = '\0';
-            if (outLen) *outLen = copy;
-            _rxLen = 0;
-            return FrameKind::kText;
+            if (isRecognizedTextCommand(_rxBuf, n)) {
+                uint16_t copy = (n < cap - 1) ? n : (cap - 1);
+                memcpy(buf, _rxBuf, copy);
+                buf[copy] = '\0';
+                if (outLen) *outLen = copy;
+                _rxLen = 0;
+                return FrameKind::kText;
+            }
+            // Not a recognized command -- treat as binary content, fall
+            // through to the generic append below.
         }
         if (_rxLen < sizeof(_rxBuf) - 1)
             _rxBuf[_rxLen++] = (char)c;

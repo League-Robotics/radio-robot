@@ -61,6 +61,44 @@ __all__ = [
 # exclusively the binary-frame delimiter; ASCII text never carries it).
 FRAME_DELIMITER = b"\x00"
 
+# ``_looks_like_text()``'s printable-ASCII alphabet -- see that function's
+# own docstring for the 123-006 rationale (this module's 0x0A-vs-0x00
+# discriminator, the host-side counterpart of serial_port.cpp's
+# kTextCommands EXACT-match discriminator -- see that file's own comment for
+# why the two sides use a DIFFERENT recognizer despite sharing the same
+# 0x00-always-ends-binary/0x0A-conditionally-ends-text demux skeleton).
+# Deliberately printable-ASCII ONLY (0x20-0x7E, space through tilde) -- NOT
+# also tab/other control bytes: every real text-plane line this host
+# receives (DEVICE:.../OK pong.../relay '#'-comment lines) is plain
+# space-separated ASCII with no control bytes, and a short, zero-free COBS
+# frame's own leading code byte is exactly "block length + 1" -- for a
+# short envelope that can easily land on 0x09 (tab) by pure coincidence of
+# length, so admitting tab here would silently readmit the same class of
+# misclassification 123-006 fixed. Keep this alphabet as narrow as the real
+# traffic requires, not broader.
+_TEXT_SAFE_BYTES = frozenset(range(0x20, 0x7F))  # printable ASCII only
+
+
+def _looks_like_text(data: bytes) -> bool:
+    """True if every byte in ``data`` is drawn from ``_TEXT_SAFE_BYTES`` --
+    the alphabet every real text-plane line this host ever receives is made
+    of: the ``DEVICE:...`` banner, the ``OK pong t=<ms>`` reply (both
+    dynamic-content replies to HELLO/PING -- NOT a fixed literal string, so
+    an exact-match check like firmware's own ``kTextCommands`` cannot work
+    here), and the RadioRelay's own ``#``-prefixed command-plane comment
+    lines (``_relay_handshake()``'s pre-``!GO`` traffic, which never
+    contains a single ``0x00`` byte at all).
+
+    A genuine binary COBS+CRC frame's bytes are effectively arbitrary
+    across the full ``0x01``-``0xFF`` range (COBS code bytes, the CRC-16
+    tail, raw protobuf field bytes) -- in practice always containing at
+    least one byte outside this printable range, which is exactly the
+    123-006 bench-surfaced discriminator ``ByteStreamDemuxer.feed()`` uses
+    to decide whether an accumulated ``0x0A`` ends a text line or is
+    ordinary binary content (wait for the frame's own ``0x00``
+    delimiter)."""
+    return all(b in _TEXT_SAFE_BYTES for b in data)
+
 # COBS block cap -- WireRuntime::kCobsMaxBlockLength (wire_runtime.h): a
 # block of up to this many non-zero bytes is prefixed by one code byte
 # (0xFF for a full block that hit this cap before finding a zero).
@@ -220,13 +258,33 @@ def decode_frame(frame: bytes) -> bytes | None:
 class ByteStreamDemuxer:
     """Accumulates raw bytes from a byte-oriented transport and demuxes them
     into complete text lines or complete binary COBS+CRC frame bodies --
-    byte-for-byte mirror of ``App::Transport::readLine()``'s demux contract
-    (``comms.h``): whichever terminator (``0x00`` or ``\\n``) appears FIRST
-    in the accumulated byte stream decides the kind of everything accumulated
-    before it. A binary frame is 0x00-free by COBS construction (0x00 is
-    exclusively the frame delimiter); a text-plane line is typed ASCII
-    (HELLO/PING) and never contains a 0x00 byte -- so the two are never
-    ambiguous.
+    same demux SKELETON as ``App::Transport::readLine()``'s contract
+    (``comms.h``) / ``SerialPort::readLine()``'s concrete implementation
+    (``serial_port.cpp``): ``0x00`` ALWAYS ends a binary frame (COBS
+    guarantees a frame body is 0x00-free by construction). ``0x0A`` ends a
+    TEXT line ONLY when the bytes accumulated before it (a single trailing
+    ``\\r`` stripped) are recognized as text (``_looks_like_text()``);
+    otherwise the ``0x0A`` is binary CONTENT, not a terminator, and
+    accumulation continues to the eventual ``0x00`` delimiter. 123-006
+    bench-surfaced fix: COBS only guarantees 0x00-freedom, never
+    0x0A-freedom -- a prior "whichever terminator comes first" rule split
+    and corrupted any binary frame (e.g. a move_wheels envelope) that
+    happened to embed a literal 0x0A byte, proven 0/10 on hardware.
+
+    NOTE the recognizer itself is NOT a byte-for-byte mirror of firmware's
+    own ``kTextCommands`` exact-match check (``serial_port.cpp``): firmware
+    only ever receives two fixed literal commands inbound (``HELLO``,
+    ``PING`` -- protocol-v4's whole text-plane rump), so an exact-string
+    match is both correct and simplest there. This class instead demuxes
+    bytes arriving FROM the firmware/relay, which are NOT a fixed literal
+    set -- the ``DEVICE:...`` banner and ``OK pong t=<ms>`` reply both carry
+    dynamic content, and the RadioRelay's own pre-``!GO`` ``#``-comment
+    lines (``_relay_handshake()``, ``serial_conn.py``) are free-form too.
+    ``_looks_like_text()``'s printable-ASCII content check is the
+    discriminator that generalizes correctly across all of those shapes
+    while still recognizing genuine binary COBS+CRC content (which is
+    essentially never all-printable) as binary. See that function's own
+    docstring.
 
     This is the piece that makes the host's serial reads safe against a
     binary frame that happens to embed a literal ``\\n`` (0x0A) as legitimate
@@ -247,7 +305,8 @@ class ByteStreamDemuxer:
         ``"binary"`` (payload is the still-COBS+CRC-encoded frame body, the
         delimiting ``0x00`` consumed -- decode it with ``decode_frame()``).
         Never partially delivers a frame; leftover undelimited bytes stay
-        buffered for the next ``feed()`` call."""
+        buffered for the next ``feed()`` call. See this class's own
+        docstring for the ``0x00``-vs-``0x0A`` discrimination rule."""
         self._buf.extend(data)
         out: "list[tuple[str, bytes]]" = []
         while True:
@@ -255,14 +314,32 @@ class ByteStreamDemuxer:
             idx_text = self._buf.find(0x0A)
             if idx_bin == -1 and idx_text == -1:
                 break
-            if idx_bin != -1 and (idx_text == -1 or idx_bin < idx_text):
+            # A 0x00 is present: everything up to it is ONE binary frame,
+            # UNLESS a text line ends (at a 0x0A) strictly before it.
+            if idx_bin != -1:
+                if idx_text != -1 and idx_text < idx_bin:
+                    line = bytes(self._buf[:idx_text])
+                    if line.endswith(b"\r"):
+                        line = line[:-1]
+                    if _looks_like_text(line):
+                        del self._buf[:idx_text + 1]
+                        out.append(("text", line))
+                        continue
+                    # else: the 0x0A is binary content -- fall through to
+                    # the 0x00 split below.
                 frame = bytes(self._buf[:idx_bin])
                 del self._buf[:idx_bin + 1]
                 out.append(("binary", frame))
-            else:
-                line = bytes(self._buf[:idx_text])
+                continue
+            # No 0x00 yet: only a 0x0A is present. It's a text line if it
+            # looks like text; otherwise this is an incomplete binary frame
+            # -- stop and wait for its 0x00 delimiter.
+            line = bytes(self._buf[:idx_text])
+            if line.endswith(b"\r"):
+                line = line[:-1]
+            if _looks_like_text(line):
                 del self._buf[:idx_text + 1]
-                if line.endswith(b"\r"):
-                    line = line[:-1]
                 out.append(("text", line))
+                continue
+            break
         return out

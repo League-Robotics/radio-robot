@@ -195,10 +195,11 @@ def test_demuxer_handles_partial_feeds_across_calls():
     """A frame/line split across two feed() calls (simulating a partial
     serial read) is not delivered until the terminator actually arrives."""
     # Pick a payload whose encoded frame happens to contain no 0x0A byte --
-    # COBS only guarantees 0x00-freedom, not 0x0A-freedom (see
-    # ByteStreamDemuxer's own docstring: an embedded 0x0A INSIDE a frame is a
-    # real, firmware-shared ambiguity this test must avoid to isolate the
-    # "partial feed" behavior it actually targets).
+    # 123-006 fixed the demux so an embedded 0x0A no longer splits/corrupts a
+    # binary frame (see test_demuxer_binary_frame_with_embedded_0x0a_* below),
+    # but this test targets partial-feed buffering specifically, so it still
+    # picks a 0x0A-free frame to keep that behavior isolated from the
+    # 0x0A-discrimination behavior covered separately.
     for seed in range(20):
         candidate = encode_frame(bytes([seed]) + b"payload")
         if 0x0A not in candidate:
@@ -221,6 +222,106 @@ def test_demuxer_handles_multiple_frames_in_one_feed():
     results = demux.feed(stream)
 
     assert results == [("binary", f) for f in frames]
+
+
+def _find_0x0a_frame(label: bytes = b"payload") -> bytes:
+    """Return an encoded frame that embeds at least one literal 0x0A byte
+    -- COBS only guarantees 0x00-freedom, never 0x0A-freedom, so any long
+    enough envelope has a real chance of containing one (this is the exact
+    class of frame that corrupted the bench's move_wheels command, proven
+    0/10 on hardware before 123-006's fix).
+
+    Also includes a literal ``0x01`` byte in the payload -- COBS never
+    rewrites a non-zero data byte, so it survives into the encoded frame
+    unchanged, GUARANTEEING (not just "very likely", regardless of which
+    ``seed`` also happens to produce the 0x0A) that the frame contains a
+    byte outside ``_looks_like_text()``'s printable-ASCII alphabet. This
+    makes every test using this helper deterministic: the demuxer must
+    always classify the frame as binary, never text."""
+    for seed in range(200):
+        candidate = encode_frame(b"\x01" + bytes([seed]) + label)
+        if 0x0A in candidate:
+            return candidate
+    pytest.fail("could not find a 0x0A-containing encoded frame")  # pragma: no cover
+
+
+# ---------------------------------------------------------------------------
+# 123-006 regression: 0x0A embedded inside a binary frame must NOT terminate
+# it early -- only 0x00 ends a binary frame; 0x0A ends a TEXT line only when
+# what precedes it "looks like text" (_looks_like_text() -- printable ASCII).
+# ---------------------------------------------------------------------------
+
+
+def test_demuxer_binary_frame_with_embedded_0x0a_single_feed():
+    frame = _find_0x0a_frame()
+    demux = ByteStreamDemuxer()
+    assert demux.feed(frame + b"\x00") == [("binary", frame)]
+
+
+def test_demuxer_binary_frame_with_embedded_0x0a_split_across_feeds():
+    frame = _find_0x0a_frame()
+    idx = frame.index(0x0A)
+    demux = ByteStreamDemuxer()
+
+    # Split the feed so the 0x0A byte itself lands in the FIRST chunk --
+    # the old "whichever terminator comes first" logic would have emitted a
+    # (bogus) text line right there, before the frame's own 0x00 ever
+    # arrives.
+    assert demux.feed(frame[: idx + 1]) == []
+    assert demux.feed(frame[idx + 1 :]) == []  # still no 0x00 delimiter yet
+    assert demux.feed(b"\x00") == [("binary", frame)]
+
+
+def test_demuxer_binary_frame_with_embedded_0x0a_interleaved_with_hello_ping():
+    frame = _find_0x0a_frame()
+    stream = b"HELLO\r\n" + frame + b"\x00" + b"PING\n"
+
+    demux = ByteStreamDemuxer()
+    results = demux.feed(stream)
+
+    assert results == [
+        ("text", b"HELLO"),
+        ("binary", frame),
+        ("text", b"PING"),
+    ]
+
+
+def test_demuxer_multiple_0x0a_bytes_inside_one_binary_frame():
+    """Not just one embedded 0x0A -- a frame with several must still be
+    delivered whole."""
+    frame = encode_frame(b"\x0a\x01\x0a\x02\x0a\x03")
+    assert 0x0A in frame
+    demux = ByteStreamDemuxer()
+    assert demux.feed(frame + b"\x00") == [("binary", frame)]
+
+
+def test_demuxer_recognizes_relay_comment_lines_with_no_0x00_ever():
+    """RadioRelay's own pre-``!GO`` command-plane responses
+    (``serial_conn.py``'s ``_relay_handshake()``) are ``#``-prefixed text
+    lines on a wire segment that carries NO ``0x00`` byte at all -- these
+    must still be delivered as text immediately, not held forever waiting
+    for a ``0x00`` delimiter that will never arrive. This is exactly why
+    123-006's fix uses a content-shape recognizer (``_looks_like_text()``)
+    on the host side rather than mirroring firmware's closed HELLO/PING
+    literal-match list, which would never recognize this free-form text."""
+    demux = ByteStreamDemuxer()
+    assert demux.feed(b"# channel: 0\r\n") == [("text", b"# channel: 0")]
+    assert demux.feed(b"# entering data plane\n") == [
+        ("text", b"# entering data plane")
+    ]
+
+
+def test_demuxer_recognizes_device_banner_and_pong_reply_dynamic_content():
+    """The firmware's two real text-plane replies carry DYNAMIC content
+    (device name/serial, a live timestamp) -- not a fixed literal string --
+    so an exact-match recognizer (mirroring firmware's own inbound
+    HELLO/PING check) could never recognize them. Confirms
+    ``_looks_like_text()`` handles both real shapes."""
+    demux = ByteStreamDemuxer()
+    assert demux.feed(b"DEVICE:NEZHA2:robot:my-bot:1234\r\n") == [
+        ("text", b"DEVICE:NEZHA2:robot:my-bot:1234")
+    ]
+    assert demux.feed(b"OK pong t=987654\n") == [("text", b"OK pong t=987654")]
 
 
 if __name__ == "__main__":
