@@ -1,11 +1,18 @@
 ---
-status: pending
+status: in-progress
 filed: 2026-07-24
 filed_by: team-lead (stakeholder question, sprint 122)
 related:
 - firmware-base-hardening-bounded-wheel-moves-and-wheel-observer.md
 - telemetry-report-loop-cycle-duration.md
 sprint: '123'
+tickets:
+- 123-001
+- 123-002
+- 123-003
+- 123-004
+- 123-005
+- 123-006
 ---
 
 # Replace base64 line-armor with COBS + CRC binary framing

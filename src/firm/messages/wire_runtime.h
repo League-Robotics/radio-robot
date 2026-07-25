@@ -33,6 +33,14 @@
 // and returns `false`, leaving `*pos` unchanged, if the value would not
 // fully fit in `[*pos, cap)` -- never a partial write.
 //
+// Sprint 123 added two more schema-agnostic byte primitives to this same
+// layer: COBS frame encode/decode (item 8) and CRC-16/CCITT-FALSE
+// compute/verify (item 9) -- the wire's new binary framing + integrity
+// check, replacing the base64 armor's expansion cost and closing the "no
+// integrity check anywhere" gap (see `clasi/sprints/123-.../sprint.md`
+// Design Rationale). Base64 (item 7) stays present for now; ticket 002
+// cuts the actual armor over and removes it.
+//
 // Decode-side contract: every `decode*` function takes a source `const
 // uint8_t* buf`/`size_t len` and a `size_t* pos` cursor; it returns `false`
 // and leaves `*pos` unchanged on ANY malformed or truncated input --
@@ -176,5 +184,84 @@ size_t base64EncodedLength(size_t rawLen);
 size_t base64DecodedMaxLength(size_t encodedLen);
 bool base64Encode(const uint8_t* data, size_t len, char* out, size_t cap, size_t* outLen);
 bool base64Decode(const char* in, size_t inLen, uint8_t* out, size_t cap, size_t* outLen);
+
+// --- 8. COBS (Consistent Overhead Byte Stuffing) frame encode/decode ----
+//
+// Removes every 0x00 byte from an arbitrary payload so the encoded result
+// can be safely delimited on the wire by a single 0x00 byte -- the frame
+// delimiter itself. This primitive does NOT append that trailing
+// delimiter; deciding where the delimiter goes (and demuxing it from the
+// HELLO/PING text rump's `\r\n`-terminated lines on the same byte stream)
+// is `Comms`'s job (sprint 123 ticket 002), not this schema-agnostic
+// primitive's. `cobsEncode()`'s OUTPUT never contains a 0x00 byte of its
+// own -- that is the whole property that makes the trailing delimiter
+// unambiguous.
+//
+// Standard COBS algorithm (Cheshire & Baker 1999): walks the input,
+// splitting it into blocks of at most `kCobsMaxBlockLength` (254) non-zero
+// bytes, each block prefixed by a 1-byte code -- the distance (in bytes,
+// inclusive of the code byte itself) to the next zero, or `0xFF` for a
+// full 254-byte block that hit the block-size cap before finding one.
+// Overhead is exactly one code byte per <=254-byte block: at most
+// `cobsEncodedMaxLength(len)` bytes total, ~0.4% for the frame sizes this
+// wire actually carries (well under 256 B).
+//
+// `cobsEncodedMaxLength()` is a worst-case bound a caller must size its
+// destination buffer to before calling `cobsEncode()` -- exact only when
+// the input contains no embedded zero bytes; a zero-dense input can
+// encode to fewer bytes than this bound (never more). `cobsDecodedMaxLength()`
+// is exact-as-an-upper-bound the other direction: decoding only ever
+// REMOVES the code-byte overhead, so the decoded payload can never exceed
+// the encoded frame's own length.
+//
+// Encode/decode never-partial contract (same as every other primitive in
+// this file): `cobsEncode()`/`cobsDecode()` write nothing and return
+// `false`, leaving `*outLen` unset, on any capacity failure or malformed
+// input -- in particular `cobsDecode()` rejects a literal 0x00 byte found
+// INSIDE the encoded frame (an encoder never emits one; seeing one means
+// the frame is corrupt) and a code byte whose claimed block length runs
+// past the end of the input (truncation).
+constexpr size_t kCobsMaxBlockLength = 254;
+
+size_t cobsEncodedMaxLength(size_t rawLen);
+size_t cobsDecodedMaxLength(size_t encodedLen);
+bool cobsEncode(const uint8_t* data, size_t len, uint8_t* out, size_t cap, size_t* outLen);
+bool cobsDecode(const uint8_t* in, size_t inLen, uint8_t* out, size_t cap, size_t* outLen);
+
+// --- 9. CRC-16/CCITT-FALSE (wire integrity check) -----------------------
+//
+// Decided variant, PINNED exactly so firmware and host (ticket 003) agree
+// byte-for-byte -- there is no negotiation, no version byte:
+//   poly   = 0x1021
+//   init   = 0xFFFF
+//   refin  = false  (processed MSB-first, no input reflection)
+//   refout = false  (no output reflection)
+//   xorout = 0x0000 (no final XOR)
+// This is the variant the CRC RevEng catalogue calls "CRC-16/CCITT-FALSE".
+// Known-answer vector (from that catalogue): `crcCompute("123456789", 9)
+// == 0x29B1` -- exercised as an exact-value test, not merely "some CRC
+// changed."
+//
+// Width decision (sprint 123 Open Question 1): 16 bits, not 32. Frames on
+// this wire are small -- well under 256 B even before this sprint's
+// COBS+CRC change -- so a 16-bit CRC's 2^-16 miss rate on random
+// corruption is strong detection for this size range at HALF the
+// per-frame overhead (2 bytes) a CRC-32 would cost (4 bytes), on a link
+// whose whole point of this sprint is shedding overhead (base64's 33%
+// expansion) rather than re-spending most of it back on the integrity
+// check that replaces it.
+//
+// `crcCompute()` takes a raw pointer/length (not the buf/cap/pos cursor
+// shape the encode/decode primitives use) because a CRC is a scalar
+// reduction over a byte range, not a byte-buffer transform with its own
+// cursor -- there is nothing to advance. `encodeCrc16()`/`decodeCrc16()`
+// give the buf/cap/pos-cursor wire-placement pair (little-endian, 2
+// bytes) for a caller (ticket 002) that wants to append/read the CRC value
+// itself as part of a framed byte sequence, following the exact same
+// never-partial contract as `encodeFixed32()`/`decodeFixed32()`.
+uint16_t crcCompute(const uint8_t* data, size_t len);
+bool crcVerify(const uint8_t* data, size_t len, uint16_t expectedCrc);
+bool encodeCrc16(uint16_t crc, uint8_t* buf, size_t cap, size_t* pos);
+bool decodeCrc16(const uint8_t* buf, size_t len, size_t* pos, uint16_t* crc);
 
 }  // namespace WireRuntime

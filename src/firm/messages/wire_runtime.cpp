@@ -45,6 +45,11 @@ constexpr std::array<int8_t, 256> makeBase64DecodeTable() {
 
 constexpr std::array<int8_t, 256> kBase64DecodeTable = makeBase64DecodeTable();
 
+// --- CRC-16/CCITT-FALSE constants -- see wire_runtime.h item 9 for the
+// exact pinned variant (poly/init/refin/refout/xorout) and why. ---
+constexpr uint16_t kCrc16CcittFalsePoly = 0x1021;
+constexpr uint16_t kCrc16CcittFalseInit = 0xFFFF;
+
 }  // namespace
 
 // --- 1. Varint -----------------------------------------------------------
@@ -358,6 +363,131 @@ bool base64Decode(const char* in, size_t inLen, uint8_t* out, size_t cap, size_t
     if (bytesThisGroup >= 3) out[o++] = static_cast<uint8_t>(chunk & 0xFFu);
   }
   *outLen = o;
+  return true;
+}
+
+// --- 8. COBS ---------------------------------------------------------------
+
+size_t cobsEncodedMaxLength(size_t rawLen) { return rawLen + rawLen / kCobsMaxBlockLength + 1; }
+
+size_t cobsDecodedMaxLength(size_t encodedLen) { return encodedLen; }
+
+bool cobsEncode(const uint8_t* data, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
+  if ((data == nullptr && len != 0) || out == nullptr || outLen == nullptr) return false;
+  if (cap < cobsEncodedMaxLength(len)) return false;  // caller must size the destination to the worst case
+
+  size_t readPos = 0;
+  size_t writePos = 0;
+  size_t codePos = writePos;  // index of the current block's not-yet-known code byte
+  if (writePos >= cap) return false;
+  out[writePos++] = 0;  // placeholder, overwritten with the real code once the block ends
+  uint8_t code = 1;      // distance to the next zero (or block end), inclusive of the code byte itself
+
+  while (readPos < len) {
+    const uint8_t byte = data[readPos++];
+    if (byte == 0) {
+      out[codePos] = code;
+      codePos = writePos;
+      if (writePos >= cap) return false;
+      out[writePos++] = 0;  // placeholder for the next block
+      code = 1;
+    } else {
+      if (writePos >= cap) return false;
+      out[writePos++] = byte;
+      ++code;
+      if (code == 0xFFu) {
+        // Block hit the 254-non-zero-byte cap before finding a zero: flush
+        // it as a full block (code 0xFF means "254 data bytes, no zero
+        // terminator") and start a fresh block, exactly as if a zero had
+        // been seen -- this is the "block-size boundary (254 bytes)"
+        // behavior the acceptance criteria calls out by name.
+        out[codePos] = code;
+        codePos = writePos;
+        if (writePos >= cap) return false;
+        out[writePos++] = 0;
+        code = 1;
+      }
+    }
+  }
+  out[codePos] = code;
+  *outLen = writePos;
+  return true;
+}
+
+bool cobsDecode(const uint8_t* in, size_t inLen, uint8_t* out, size_t cap, size_t* outLen) {
+  if ((in == nullptr && inLen != 0) || out == nullptr || outLen == nullptr) return false;
+  // Even the encoding of a zero-byte payload is exactly one code byte
+  // (0x01) -- a truly zero-length input here has nothing to decode and is
+  // malformed, not "empty payload."
+  if (inLen == 0) return false;
+
+  size_t readPos = 0;
+  size_t writePos = 0;
+  while (readPos < inLen) {
+    const uint8_t code = in[readPos];
+    if (code == 0) return false;  // a literal 0x00 code byte never appears in a valid COBS frame -- corrupt
+    ++readPos;
+    const size_t blockLen = static_cast<size_t>(code) - 1;
+    if (blockLen > inLen - readPos) return false;  // code claims more data bytes than remain -- truncated frame
+
+    for (size_t i = 0; i < blockLen; ++i) {
+      const uint8_t b = in[readPos + i];
+      if (b == 0) return false;  // a literal 0x00 inside a data block is corrupt (encode never emits one)
+      if (writePos >= cap) return false;
+      out[writePos++] = b;
+    }
+    readPos += blockLen;
+
+    // A block whose code is < 0xFF was terminated by an actual zero byte in
+    // the ORIGINAL data, UNLESS this block is the last one in the frame (in
+    // which case there was no zero -- the frame just ended). A 0xFF-coded
+    // block hit the 254-byte cap with no zero at all, so never emit one for
+    // it regardless of position.
+    if (code != 0xFFu && readPos < inLen) {
+      if (writePos >= cap) return false;
+      out[writePos++] = 0;
+    }
+  }
+  *outLen = writePos;
+  return true;
+}
+
+// --- 9. CRC-16/CCITT-FALSE --------------------------------------------------
+
+uint16_t crcCompute(const uint8_t* data, size_t len) {
+  if (data == nullptr) len = 0;  // defensive: never dereference a null pointer, even with a nonzero len argument
+  uint16_t crc = kCrc16CcittFalseInit;
+  for (size_t i = 0; i < len; ++i) {
+    crc = static_cast<uint16_t>(crc ^ (static_cast<uint16_t>(data[i]) << 8));
+    for (int bit = 0; bit < 8; ++bit) {
+      if ((crc & 0x8000u) != 0) {
+        crc = static_cast<uint16_t>((crc << 1) ^ kCrc16CcittFalsePoly);
+      } else {
+        crc = static_cast<uint16_t>(crc << 1);
+      }
+    }
+  }
+  return crc;
+}
+
+bool crcVerify(const uint8_t* data, size_t len, uint16_t expectedCrc) { return crcCompute(data, len) == expectedCrc; }
+
+bool encodeCrc16(uint16_t crc, uint8_t* buf, size_t cap, size_t* pos) {
+  if (buf == nullptr || pos == nullptr || *pos > cap) return false;
+  const size_t p = *pos;
+  if (cap - p < 2) return false;
+  buf[p + 0] = static_cast<uint8_t>(crc & 0xFFu);
+  buf[p + 1] = static_cast<uint8_t>((crc >> 8) & 0xFFu);
+  *pos = p + 2;
+  return true;
+}
+
+bool decodeCrc16(const uint8_t* buf, size_t len, size_t* pos, uint16_t* crc) {
+  if (buf == nullptr || pos == nullptr || crc == nullptr || *pos > len) return false;
+  const size_t p = *pos;
+  if (len - p < 2) return false;
+  *crc = static_cast<uint16_t>(static_cast<uint16_t>(buf[p + 0]) | (static_cast<uint16_t>(buf[p + 1]) << 8));
+  *pos = p + 2;
   return true;
 }
 

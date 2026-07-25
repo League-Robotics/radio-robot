@@ -7,6 +7,14 @@
 // recursion depth bound, the packed-repeated max_count clamp, and
 // unknown-field skip across all four wire types.
 //
+// Sprint 123 ticket 001 (SUC-001, SUC-002) extended this same harness with
+// COBS frame encode/decode round-trip (empty/short/all-zeros/no-zeros/
+// 254-byte-block-boundary payloads, the never-emits-a-stray-0x00 property,
+// and malformed-input rejection) and CRC-16/CCITT-FALSE compute/verify
+// (the pinned known-answer vector, a clean frame, and single-bit-flip/
+// truncation/over-length corruption detection) -- see wire_runtime.h's
+// item 8/9 doc comments for the exact algorithm and CRC variant pinned.
+//
 // Mirrors runtime_blackboard_harness.cpp's exact pattern (see that file's
 // header for the shape this follows): #includes only
 // src/firm/messages/wire_runtime.h (which itself includes only <cstddef>/
@@ -581,6 +589,224 @@ void scenarioTagRoundTripAndRejectsUnknownWireType() {
   checkSizeEq(groupReadPos, 0, "*pos left unchanged when decodeTag rejects an unknown wire type");
 }
 
+// 9. COBS: round-trip for empty, short, all-zeros, no-zeros, and
+// at/near-the-254-byte-block-boundary payloads (the exact set the ticket
+// 123-001 acceptance criteria names by name), plus the "never emits a
+// stray 0x00" property and malformed-input rejection.
+void scenarioCobsRoundTrip() {
+  beginScenario("COBS: round-trip empty/short/all-zeros/no-zeros/254-byte-boundary payloads");
+
+  auto roundTrip = [](const uint8_t* data, size_t len, const char* label) {
+    uint8_t encoded[600] = {};
+    size_t encodedLen = 999;
+    checkTrue(WireRuntime::cobsEncode(data, len, encoded, sizeof(encoded), &encodedLen),
+              std::string(label) + ": cobsEncode succeeds");
+    checkTrue(encodedLen <= WireRuntime::cobsEncodedMaxLength(len),
+              std::string(label) + ": encoded length within the documented worst-case bound");
+
+    // The encoded output must never contain a literal 0x00 byte -- that is
+    // the entire property that lets a caller safely delimit frames with one.
+    bool sawZero = false;
+    for (size_t i = 0; i < encodedLen; ++i) {
+      if (encoded[i] == 0x00) sawZero = true;
+    }
+    checkFalse(sawZero, std::string(label) + ": encoded output contains no 0x00 byte");
+
+    uint8_t decoded[600] = {};
+    size_t decodedLen = 999;
+    checkTrue(WireRuntime::cobsDecode(encoded, encodedLen, decoded, sizeof(decoded), &decodedLen),
+              std::string(label) + ": cobsDecode succeeds");
+    checkSizeEq(decodedLen, len, std::string(label) + ": decoded length matches the original payload length");
+    checkTrue(len == 0 || std::memcmp(decoded, data, len) == 0,
+              std::string(label) + ": decoded bytes match the original payload exactly");
+  };
+
+  // Empty payload.
+  roundTrip(nullptr, 0, "empty");
+
+  // Short payload, no embedded zeros.
+  {
+    const uint8_t data[3] = {0x01, 0x02, 0x03};
+    roundTrip(data, sizeof(data), "short/no-zeros");
+  }
+
+  // Short payload WITH an embedded 0x00 (the property COBS exists for).
+  {
+    const uint8_t data[4] = {0x41, 0x00, 0x42, 0x00};
+    roundTrip(data, sizeof(data), "short/embedded-zeros");
+  }
+
+  // All-zeros payload -- the densest possible zero payload, one block per
+  // byte.
+  {
+    uint8_t data[10] = {};  // already all-zero
+    roundTrip(data, sizeof(data), "all-zeros(10)");
+  }
+
+  // No-zeros payload well past a single COBS block (300 bytes), forcing a
+  // 0xFF (block-cap) code byte partway through.
+  {
+    uint8_t data[300];
+    for (size_t i = 0; i < sizeof(data); ++i) data[i] = static_cast<uint8_t>((i % 255) + 1);  // never 0x00
+    roundTrip(data, sizeof(data), "no-zeros(300)");
+  }
+
+  // At the exact 254-byte block-size boundary, no embedded zero: exercises
+  // the 0xFF code-byte path precisely at its trigger point.
+  {
+    uint8_t data[WireRuntime::kCobsMaxBlockLength];
+    for (size_t i = 0; i < sizeof(data); ++i) data[i] = static_cast<uint8_t>(i + 1);  // never 0x00
+    roundTrip(data, sizeof(data), "exactly-254-bytes-no-zeros");
+
+    uint8_t encoded[300] = {};
+    size_t encodedLen = 0;
+    WireRuntime::cobsEncode(data, sizeof(data), encoded, sizeof(encoded), &encodedLen);
+    checkSizeEq(encodedLen, 256, "254-byte no-zero payload encodes to exactly 256 bytes (0xFF code + 254 data + final 0x01 code)");
+  }
+
+  // Just past the boundary (255 and 508 bytes, no zeros) -- 508 = 2x254
+  // exercises the double-full-block edge case where BOTH blocks land
+  // exactly on the 0xFF trigger.
+  {
+    uint8_t data[255];
+    for (size_t i = 0; i < sizeof(data); ++i) data[i] = static_cast<uint8_t>((i % 255) + 1);
+    roundTrip(data, sizeof(data), "255-bytes-no-zeros (just past the boundary)");
+  }
+  {
+    uint8_t data[2 * WireRuntime::kCobsMaxBlockLength];
+    for (size_t i = 0; i < sizeof(data); ++i) data[i] = static_cast<uint8_t>((i % 255) + 1);
+    roundTrip(data, sizeof(data), "508-bytes-no-zeros (2x block boundary)");
+
+    uint8_t encoded[600] = {};
+    size_t encodedLen = 0;
+    WireRuntime::cobsEncode(data, sizeof(data), encoded, sizeof(encoded), &encodedLen);
+    checkSizeEq(encodedLen, 511, "508-byte no-zero payload encodes to exactly 511 bytes (two 0xFF blocks + final empty code)");
+  }
+}
+
+// 9b. COBS malformed input: cobsDecode must reject a literal 0x00 byte
+// appearing where a code byte is expected, and a code byte whose claimed
+// block length runs past the end of the input -- cleanly, without writing
+// a trusted *outLen.
+void scenarioCobsMalformedInput() {
+  beginScenario("COBS: malformed input (literal 0x00 code byte, truncated block) rejected cleanly");
+
+  // A literal 0x00 in place of a code byte -- never emitted by a correct
+  // encoder, so seeing one means the frame is corrupt.
+  {
+    const uint8_t bad[1] = {0x00};
+    uint8_t decoded[8] = {};
+    size_t decodedLen = 999;
+    checkFalse(WireRuntime::cobsDecode(bad, sizeof(bad), decoded, sizeof(decoded), &decodedLen),
+               "literal 0x00 code byte rejected");
+  }
+
+  // A code byte claiming a 4-byte data block when only 1 byte remains.
+  {
+    const uint8_t bad[2] = {0x05, 0x41};  // code=5 -> 4 data bytes claimed, only 1 present
+    uint8_t decoded[8] = {};
+    size_t decodedLen = 999;
+    checkFalse(WireRuntime::cobsDecode(bad, sizeof(bad), decoded, sizeof(decoded), &decodedLen),
+               "code byte overclaiming the remaining input rejected (truncated block)");
+  }
+
+  // A zero-length input is malformed -- even an empty payload's encoding is
+  // one code byte, so there is no valid zero-length COBS frame.
+  {
+    uint8_t decoded[8] = {};
+    size_t decodedLen = 999;
+    checkFalse(WireRuntime::cobsDecode(nullptr, 0, decoded, sizeof(decoded), &decodedLen),
+               "zero-length input rejected");
+  }
+
+  // A literal 0x00 embedded inside what should be a data block (not just at
+  // the code-byte position) is equally corrupt.
+  {
+    const uint8_t bad[3] = {0x03, 0x41, 0x00};  // code=3 claims 2 data bytes; the 2nd is a literal 0x00
+    uint8_t decoded[8] = {};
+    size_t decodedLen = 999;
+    checkFalse(WireRuntime::cobsDecode(bad, sizeof(bad), decoded, sizeof(decoded), &decodedLen),
+               "literal 0x00 inside a data block rejected");
+  }
+}
+
+// 10. CRC-16/CCITT-FALSE: the pinned known-answer vector, a clean frame
+// verifying true, and detection of a single-bit flip, a byte truncation,
+// and over-length corruption -- the exact three corruption modes the
+// ticket's acceptance criteria name.
+void scenarioCrcKnownVectorAndCleanFrame() {
+  beginScenario("CRC-16/CCITT-FALSE: known-answer vector and clean-frame pass");
+
+  // RevEng catalogue check value for "123456789" under CRC-16/CCITT-FALSE
+  // (poly 0x1021, init 0xFFFF, refin=false, refout=false, xorout=0x0000).
+  const uint8_t check[9] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
+  const uint16_t crc = WireRuntime::crcCompute(check, sizeof(check));
+  checkU64Eq(crc, 0x29B1u, "crcCompute(\"123456789\") == 0x29B1 (RevEng catalogue check value)");
+  checkTrue(WireRuntime::crcVerify(check, sizeof(check), 0x29B1u), "crcVerify accepts the matching known-answer CRC");
+
+  // A representative frame-sized payload, clean, passes.
+  {
+    uint8_t data[40];
+    for (size_t i = 0; i < sizeof(data); ++i) data[i] = static_cast<uint8_t>(i * 7 + 3);
+    const uint16_t frameCrc = WireRuntime::crcCompute(data, sizeof(data));
+    checkTrue(WireRuntime::crcVerify(data, sizeof(data), frameCrc), "clean frame's own CRC verifies true");
+  }
+
+  // Empty input has a well-defined CRC (the init value, since no bytes are
+  // folded in) and verifies against itself.
+  {
+    const uint16_t emptyCrc = WireRuntime::crcCompute(nullptr, 0);
+    checkTrue(WireRuntime::crcVerify(nullptr, 0, emptyCrc), "empty input's CRC verifies against itself");
+  }
+
+  // Wire placement round-trip: encodeCrc16/decodeCrc16 (little-endian).
+  {
+    uint8_t buf[4] = {};
+    size_t pos = 0;
+    checkTrue(WireRuntime::encodeCrc16(0x1234, buf, sizeof(buf), &pos), "encodeCrc16 succeeds");
+    checkSizeEq(pos, 2, "encodeCrc16 always writes exactly 2 bytes");
+    checkTrue(buf[0] == 0x34 && buf[1] == 0x12, "encodeCrc16 writes little-endian");
+
+    size_t decodePos = 0;
+    uint16_t decoded = 0;
+    checkTrue(WireRuntime::decodeCrc16(buf, pos, &decodePos, &decoded), "decodeCrc16 succeeds");
+    checkU64Eq(decoded, 0x1234u, "decodeCrc16 round-trips the value encodeCrc16 wrote");
+  }
+}
+
+void scenarioCrcDetectsCorruption() {
+  beginScenario("CRC-16/CCITT-FALSE: detects single-bit flip, truncation, and over-length corruption");
+
+  uint8_t original[32];
+  for (size_t i = 0; i < sizeof(original); ++i) original[i] = static_cast<uint8_t>(i * 5 + 1);
+  const uint16_t goodCrc = WireRuntime::crcCompute(original, sizeof(original));
+  checkTrue(WireRuntime::crcVerify(original, sizeof(original), goodCrc), "control: unmodified frame verifies true");
+
+  // Single-bit flip in the middle of the frame.
+  {
+    uint8_t corrupted[32];
+    std::memcpy(corrupted, original, sizeof(original));
+    corrupted[16] ^= 0x01u;  // flip the low bit of one byte
+    checkFalse(WireRuntime::crcVerify(corrupted, sizeof(corrupted), goodCrc), "single-bit flip detected (CRC mismatch)");
+  }
+
+  // Byte truncation: verify the shorter buffer against the CRC computed
+  // over the full-length original -- must NOT verify.
+  {
+    checkFalse(WireRuntime::crcVerify(original, sizeof(original) - 1, goodCrc),
+               "byte truncation detected (CRC mismatch)");
+  }
+
+  // Over-length corruption: extra trailing byte(s) appended beyond what the
+  // CRC was computed over.
+  {
+    uint8_t extended[33];
+    std::memcpy(extended, original, sizeof(original));
+    extended[32] = 0xAAu;  // spurious extra byte
+    checkFalse(WireRuntime::crcVerify(extended, sizeof(extended), goodCrc), "over-length corruption detected (CRC mismatch)");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -596,6 +822,10 @@ int main() {
   scenarioPackedRepeatedClamp();
   scenarioUnknownFieldSkip();
   scenarioTagRoundTripAndRejectsUnknownWireType();
+  scenarioCobsRoundTrip();
+  scenarioCobsMalformedInput();
+  scenarioCrcKnownVectorAndCleanFrame();
+  scenarioCrcDetectsCorruption();
 
   if (g_failureCount == 0) {
     std::printf("OK: all WireRuntime scenarios passed\n");
