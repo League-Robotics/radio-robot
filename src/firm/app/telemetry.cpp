@@ -160,6 +160,12 @@ void Telemetry::emitPrimary(uint32_t now) {
   tlm.line = frame_.line;
   tlm.color = frame_.color;
 
+  // 123-004 (migrated from TelemetrySecondary -- see Frame's own doc
+  // comment, telemetry.h): loop-timing diagnostics, now fresh every
+  // primary frame instead of a ~5Hz secondary-frame sample.
+  tlm.cycle_busy = frame_.cycleBusy;
+  tlm.cycle_period = frame_.cyclePeriod;
+
   msg::ReplyEnvelope env;
   env.corr_id = 0;  // unsolicited push -- envelope.proto's own convention
   env.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
@@ -184,11 +190,10 @@ void Telemetry::emitSecondary(uint32_t now) {
   sec.glitch_right = secondaryFrame_.glitchRight;
   sec.ts_left = secondaryFrame_.tsLeft;
   sec.ts_right = secondaryFrame_.tsRight;
-  // 122-003 (interim placement -- see SecondaryFrame's own doc comment,
-  // telemetry.h): the ~5Hz sample of RobotLoop's own last-staged loop-timing
-  // pair.
-  sec.cycle_busy = secondaryFrame_.cycleBusy;
-  sec.cycle_period = secondaryFrame_.cyclePeriod;
+  // cycle_busy/cycle_period (122-003) formerly lived here as an interim
+  // placement -- MIGRATED to the primary frame (123-004, emitPrimary()
+  // above) now that COBS+CRC restored primary-frame headroom; see
+  // SecondaryFrame's own doc comment, telemetry.h.
 
   // Own top-level framed payload -- same CRC-then-COBS composition (123-002
   // -- was "*B"+base64 pre-123) as Comms::sendReply(), reused here via

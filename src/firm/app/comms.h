@@ -102,32 +102,36 @@ class RadioTransport : public Transport {
 
 // kMaxEnvelopeBytes -- the larger of the two generated per-direction
 // budgets (msg::wire::kCommandEnvelopeMaxEncodedSize (55) /
-// kReplyEnvelopeMaxEncodedSize (185)) -- one raw-byte scratch buffer,
-// reused sequentially for an incoming decode or an outgoing encode (never
-// overlapping within a single call). Computed by the constexpr expression
-// itself so a future schema regeneration that changes either constant
-// updates this one automatically.
+// kReplyEnvelopeMaxEncodedSize (194, up from 185 pre-123-004 -- ticket
+// 004's cycle_busy/cycle_period primary-frame migration)) -- one raw-byte
+// scratch buffer, reused sequentially for an incoming decode or an
+// outgoing encode (never overlapping within a single call). Computed by
+// the constexpr expression itself so a future schema regeneration that
+// changes either constant updates this one automatically.
 constexpr uint16_t kMaxEnvelopeBytes =
     (msg::wire::kCommandEnvelopeMaxEncodedSize > msg::wire::kReplyEnvelopeMaxEncodedSize)
         ? msg::wire::kCommandEnvelopeMaxEncodedSize
-        : msg::wire::kReplyEnvelopeMaxEncodedSize;  // == 185
+        : msg::wire::kReplyEnvelopeMaxEncodedSize;  // == 194
 
 // kMaxCrcPayloadBytes -- kMaxEnvelopeBytes + 2 (the CRC-16 appended AFTER
 // the schema payload, per the CRC-then-COBS composition -- see comms.cpp's
 // sendReply()/decodeBinaryFrame() for the exact byte layout). This is the
 // buffer the COBS encode/decode step itself operates on.
-constexpr uint16_t kMaxCrcPayloadBytes = kMaxEnvelopeBytes + 2;  // == 187
+constexpr uint16_t kMaxCrcPayloadBytes = kMaxEnvelopeBytes + 2;  // == 196
 
 // kFramedMaxBytes -- 123-002 recompute, replacing the old base64
-// kArmoredBufSize. Worst-case COBS-encoded length of kMaxCrcPayloadBytes
-// (187) zero-free bytes: cobsEncodedMaxLength(187) = 187 + 187/254 + 1 =
-// 188 (WireRuntime::cobsEncodedMaxLength()'s own documented formula,
-// 123-001 completion notes). This is the size of the buffer Comms builds
-// BEFORE handing it to Transport::send() -- the transport appends the
-// trailing 0x00 delimiter itself (one more byte on the wire, not counted
-// here). Rounded up to 192 (4B headroom) the same way the old
-// kArmoredBufSize rounded 251 up to 256.
-constexpr uint16_t kFramedMaxBytes = 192;
+// kArmoredBufSize; re-recomputed by 123-004 (kMaxEnvelopeBytes grew from
+// 185 to 194 with the cycle_busy/cycle_period primary-frame migration).
+// Worst-case COBS-encoded length of kMaxCrcPayloadBytes (196) zero-free
+// bytes: cobsEncodedMaxLength(196) = 196 + 196/254 + 1 = 197
+// (WireRuntime::cobsEncodedMaxLength()'s own documented formula, 123-001
+// completion notes). This is the size of the buffer Comms builds BEFORE
+// handing it to Transport::send() -- the transport appends the trailing
+// 0x00 delimiter itself (one more byte on the wire, not counted here).
+// Rounded up to 200 (3B headroom), the same rounding-up-for-headroom
+// convention the pre-123-004 constant (188 -> 192) and the old base64-era
+// kArmoredBufSize (251 -> 256) both used.
+constexpr uint16_t kFramedMaxBytes = 200;
 static_assert(kFramedMaxBytes >= kMaxCrcPayloadBytes + kMaxCrcPayloadBytes / 254 + 1,
               "kFramedMaxBytes must cover cobsEncodedMaxLength(kMaxCrcPayloadBytes)");
 

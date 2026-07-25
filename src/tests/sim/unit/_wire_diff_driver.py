@@ -191,11 +191,12 @@ def encode_telemetry(binary: pathlib.Path, corr_id: int,
     positional list) -- frame v2 shape (115-003): one `flags` bit-string,
     one `ack_corr`/`ack_err` slot, two `EncoderReading`s
     (`enc_left_*`/`enc_right_*`), one `OtosReading` (`otos_*`),
-    always-present `pose_*`/`twist_*`, the packed `line`/`color` words, and
-    (120, ADDITIVE) the bounded `acks` ring. `fields` keys are the
-    flattened per-field names below; every field not passed defaults to
-    its proto zero value (0 / 0.0). `acks` is a list of up to
-    `_ACK_RING_DEPTH` (corr_id, err) pairs, oldest-first, matching
+    always-present `pose_*`/`twist_*`, the packed `line`/`color` words,
+    (123-004, ADDITIVE) `cycle_busy`/`cycle_period` (migrated from
+    TelemetrySecondary), and (120, ADDITIVE) the bounded `acks` ring.
+    `fields` keys are the flattened per-field names below; every field not
+    passed defaults to its proto zero value (0 / 0.0). `acks` is a list of
+    up to `_ACK_RING_DEPTH` (corr_id, err) pairs, oldest-first, matching
     `Telemetry.acks`'s own wire order -- defaults to an empty ring."""
     order = (
         "now", "mode", "seq", "flags", "ack_corr", "ack_err",
@@ -205,6 +206,7 @@ def encode_telemetry(binary: pathlib.Path, corr_id: int,
         "pose_x", "pose_y", "pose_h",
         "twist_v_x", "twist_v_y", "twist_omega",
         "line", "color",
+        "cycle_busy", "cycle_period",  # 123-004, ADDITIVE (fields 15/16, migrated from TelemetrySecondary)
     )
     unknown = set(fields) - set(order)
     assert not unknown, f"unknown Telemetry field(s): {unknown}"
@@ -242,7 +244,9 @@ def encode_telemetry_secondary(binary: pathlib.Path, **fields) -> bytes | None:
     order = (
         "now", "has_cmd_vel", "cmd_vel_left", "cmd_vel_right", "acc_left", "acc_right",
         "glitch_left", "glitch_right", "ts_left", "ts_right",
-        "cycle_busy", "cycle_period",  # 122-003, ADDITIVE (fields 11/12)
+        # cycle_busy/cycle_period (122-003, formerly fields 11/12 here) --
+        # MIGRATED to Telemetry (123-004, encode_telemetry's own order tuple
+        # above); no longer part of this message.
     )
     unknown = set(fields) - set(order)
     assert not unknown, f"unknown TelemetrySecondary field(s): {unknown}"

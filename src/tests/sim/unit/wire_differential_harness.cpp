@@ -53,27 +53,30 @@
 //     <enc_right_position> <enc_right_velocity> <enc_right_time> <otos_x>
 //     <otos_y> <otos_heading> <otos_v_x> <otos_v_y> <otos_omega>
 //     <otos_time> <pose_x> <pose_y> <pose_h> <twist_v_x> <twist_v_y>
-//     <twist_omega> <line> <color> <acks_count> <acks_0_corr> <acks_0_err>
-//     <acks_1_corr> <acks_1_err> <acks_2_corr> <acks_2_err> <acks_3_corr>
-//     <acks_3_err>
+//     <twist_omega> <line> <color> <cycle_busy> <cycle_period> <acks_count>
+//     <acks_0_corr> <acks_0_err> <acks_1_corr> <acks_1_err> <acks_2_corr>
+//     <acks_2_err> <acks_3_corr> <acks_3_err>
 //     Builds ReplyEnvelope{tlm=Telemetry{...}} per the frame-v2 shape
 //     (telemetry.proto, 115-003) -- one `flags` bit-string, one ack slot,
-//     two EncoderReadings, one OtosReading, always-present pose/twist, and
-//     the packed line/color words. The trailing 9 args (120, ADDITIVE) are
-//     the bounded ack ring: `acks_count` (0..App::kAckRingDepth=4) then
-//     exactly kAckRingDepth (corr_id, err) pairs -- slots at or past
-//     `acks_count` are still parsed (keeps this verb's own argv shape
-//     fixed) but never copied into `t.acks_`/`t.acks_count`.
+//     two EncoderReadings, one OtosReading, always-present pose/twist, the
+//     packed line/color words, and (123-004, ADDITIVE) the migrated
+//     cycle_busy/cycle_period loop-timing fields. The trailing 9 args (120,
+//     ADDITIVE) are the bounded ack ring: `acks_count`
+//     (0..App::kAckRingDepth=4) then exactly kAckRingDepth (corr_id, err)
+//     pairs -- slots at or past `acks_count` are still parsed (keeps this
+//     verb's own argv shape fixed) but never copied into
+//     `t.acks_`/`t.acks_count`.
 //     -> "B64 <base64 bytes>" or "ZERO".
 //
 //   encode_telemetry_secondary <now> <has_cmd_vel> <cmd_vel_left>
 //     <cmd_vel_right> <acc_left> <acc_right> <glitch_left> <glitch_right>
-//     <ts_left> <ts_right> <cycle_busy> <cycle_period>
+//     <ts_left> <ts_right>
 //     Builds a STANDALONE TelemetrySecondary (Decision 3 -- its own
 //     independently-armored line, not wrapped in ReplyEnvelope, so no
-//     corr_id argument). Unchanged by 115-003. The trailing 2 args (122-003,
-//     ADDITIVE) are the interim-placement loop-timing fields (fields 11/12
-//     -- see telemetry.proto's own TelemetrySecondary doc comment).
+//     corr_id argument). Unchanged by 115-003. cycle_busy/cycle_period
+//     (122-003, formerly fields 11/12 here) are MIGRATED to
+//     msg::Telemetry (123-004, see encode_telemetry above) -- no longer
+//     part of this verb's argv.
 //     -> "B64 <base64 bytes>" or "ZERO".
 //
 // Float formatting: `%.9g` on both the encode-input parse (strtof) and the
@@ -343,7 +346,7 @@ int cmdEncodeErr(int argc, char** argv) {
 // 115-003; the ack ring's 9 trailing args added by 120 -- see this file's
 // header comment for the full argv list).
 int cmdEncodeTelemetry(int argc, char** argv) {
-  if (argc < 39) {
+  if (argc < 41) {
     std::printf("USAGE_ERROR\n");
     return 1;
   }
@@ -386,6 +389,11 @@ int cmdEncodeTelemetry(int argc, char** argv) {
   t.line = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
   t.color = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
 
+  // cycle_busy/cycle_period (123-004, ADDITIVE -- migrated from
+  // TelemetrySecondary's fields 11/12, 122-003).
+  t.cycle_busy = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  t.cycle_period = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+
   // Bounded ack ring (120, ADDITIVE -- telemetry.proto's Telemetry.acks doc
   // comment). kRingDepth mirrors App::kAckRingDepth (app/telemetry.h) --
   // duplicated as a local literal rather than an #include of app/
@@ -414,7 +422,7 @@ int cmdEncodeTelemetry(int argc, char** argv) {
 // encode_telemetry_secondary -- STANDALONE TelemetrySecondary (Decision 3 --
 // its own independently-armored line, no ReplyEnvelope wrapper, no corr_id).
 int cmdEncodeTelemetrySecondary(int argc, char** argv) {
-  if (argc < 14) {
+  if (argc < 12) {
     std::printf("USAGE_ERROR\n");
     return 1;
   }
@@ -430,8 +438,9 @@ int cmdEncodeTelemetrySecondary(int argc, char** argv) {
   sec.glitch_right = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
   sec.ts_left = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
   sec.ts_right = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-  sec.cycle_busy = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));    // 122-003
-  sec.cycle_period = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));  // 122-003
+  // cycle_busy/cycle_period (formerly parsed here, 122-003) -- MIGRATED to
+  // msg::Telemetry (123-004, cmdEncodeTelemetry() above); no longer part
+  // of this verb's argv.
 
   uint8_t buf[256] = {};
   const uint16_t n = msg::wire::encode(sec, buf, sizeof(buf));

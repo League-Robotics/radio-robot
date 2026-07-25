@@ -213,6 +213,12 @@ bool decodeTelemetryMessage(const uint8_t* buf, size_t len, msg::Telemetry* out)
       case 13:
         if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->color)) return false;
         break;
+      case 15:  // cycle_busy (123-004, migrated from TelemetrySecondary's field 11)
+        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->cycle_busy)) return false;
+        break;
+      case 16:  // cycle_period (123-004, migrated from TelemetrySecondary's field 12)
+        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->cycle_period)) return false;
+        break;
       default:
         if (!WireRuntime::skipField(buf, len, &pos, wireType)) return false;
         break;
@@ -309,12 +315,11 @@ bool decodeTelemetrySecondaryMessage(const uint8_t* buf, size_t len, msg::Teleme
       case 10:
         if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->ts_right)) return false;
         break;
-      case 11:  // cycle_busy (122-003, interim placement on this frame)
-        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->cycle_busy)) return false;
-        break;
-      case 12:  // cycle_period (122-003, interim placement on this frame)
-        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->cycle_period)) return false;
-        break;
+      // cycle_busy/cycle_period (formerly fields 11/12, 122-003 interim
+      // placement) -- MIGRATED to msg::Telemetry (123-004, see
+      // decodeTelemetryMessage()'s cases 15/16 above); fields 11/12 are
+      // `reserved` on the wire now (telemetry.proto), so any incoming
+      // instance of either falls through to skipField() below.
       default:
         if (!WireRuntime::skipField(buf, len, &pos, wireType)) return false;
         break;

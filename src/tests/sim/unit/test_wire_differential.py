@@ -198,6 +198,7 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
         "now": 1, "seq": 2, "mode": 3, "flags": 4, "ack_corr": 5, "ack_err": 6,
         "enc_left": 7, "enc_right": 8, "otos": 9, "pose": 10, "twist": 11, "line": 12, "color": 13,
         "acks": 14,
+        "cycle_busy": 15, "cycle_period": 16,  # 123-004, ADDITIVE (migrated from TelemetrySecondary)
     }
     actual_telemetry_numbers = {f.name: f.number for f in pb_telemetry.Telemetry.DESCRIPTOR.fields}
     assert actual_telemetry_numbers == expected_telemetry_numbers
@@ -219,7 +220,9 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
     expected_telemetry_secondary_numbers = {
         "now": 1, "has_cmd_vel": 2, "cmd_vel_left": 3, "cmd_vel_right": 4, "acc_left": 5, "acc_right": 6,
         "glitch_left": 7, "glitch_right": 8, "ts_left": 9, "ts_right": 10,
-        "cycle_busy": 11, "cycle_period": 12,  # 122-003, ADDITIVE
+        # cycle_busy (11) / cycle_period (12), 122-003 -- MIGRATED to
+        # Telemetry (123-004, see expected_telemetry_numbers above) and
+        # `reserved` here now; no longer active fields on this message.
     }
     actual_telemetry_secondary_numbers = {f.name: f.number for f in pb_telemetry.TelemetrySecondary.DESCRIPTOR.fields}
     assert actual_telemetry_secondary_numbers == expected_telemetry_secondary_numbers
@@ -530,6 +533,7 @@ _TELEMETRY_FULL_SHAPE = dict(
     pose_x=1.5, pose_y=-2.5, pose_h=3.25,
     twist_v_x=-100.5, twist_v_y=0.5, twist_omega=1.75,
     line=0x04030201, color=0x0A0B0C0D,
+    cycle_busy=3200, cycle_period=40100,  # 123-004, ADDITIVE (migrated from TelemetrySecondary)
 )
 
 
@@ -561,6 +565,8 @@ def _assert_telemetry_matches_shape(tlm, shape: dict) -> None:
     assert tlm.twist.omega == f32(shape["twist_omega"])
     assert tlm.line == shape["line"]
     assert tlm.color == shape["color"]
+    assert tlm.cycle_busy == shape["cycle_busy"]
+    assert tlm.cycle_period == shape["cycle_period"]
 
 
 def test_direction_b_telemetry_full_shape(harness):
@@ -766,7 +772,8 @@ def test_direction_b_telemetry_reading_times_monotonic_across_frames(harness):
 _TELEMETRY_SECONDARY_FULL_SHAPE = dict(
     now=6000, has_cmd_vel=True, cmd_vel_left=120.0, cmd_vel_right=-120.0, acc_left=3.5, acc_right=-1.25,
     glitch_left=2, glitch_right=4294967295, ts_left=7000, ts_right=7001,
-    cycle_busy=3200, cycle_period=40100,  # 122-003, ADDITIVE (fields 11/12)
+    # cycle_busy/cycle_period (122-003, formerly fields 11/12 here) --
+    # MIGRATED to Telemetry (123-004, see _TELEMETRY_FULL_SHAPE above).
 )
 
 
@@ -784,8 +791,6 @@ def test_direction_b_telemetry_secondary_full_shape(harness):
     assert sec.glitch_right == _TELEMETRY_SECONDARY_FULL_SHAPE["glitch_right"]
     assert sec.ts_left == _TELEMETRY_SECONDARY_FULL_SHAPE["ts_left"]
     assert sec.ts_right == _TELEMETRY_SECONDARY_FULL_SHAPE["ts_right"]
-    assert sec.cycle_busy == _TELEMETRY_SECONDARY_FULL_SHAPE["cycle_busy"]
-    assert sec.cycle_period == _TELEMETRY_SECONDARY_FULL_SHAPE["cycle_period"]
 
 
 def test_direction_b_telemetry_secondary_all_other_fields_zero_default(harness):
@@ -809,8 +814,6 @@ def test_direction_b_telemetry_secondary_all_other_fields_zero_default(harness):
     assert sec.cmd_vel_left == 0.0
     assert sec.glitch_left == 0
     assert sec.ts_left == 0
-    assert sec.cycle_busy == 0
-    assert sec.cycle_period == 0
 
 
 # ===========================================================================

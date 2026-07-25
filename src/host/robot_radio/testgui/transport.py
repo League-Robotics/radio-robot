@@ -35,7 +35,9 @@ Transport (ABC)
         on_telemetry_secondary: Callable[["telemetry_pb2.TelemetrySecondary"], None] | None
             122-003: called from the reader thread for every parsed
             TelemetrySecondary line (the slower ~5 Hz diagnostic frame --
-            carries cycle_busy/cycle_period among other fields; see
+            carries cmd_vel/acc_*/glitch_*/ts_* fields; cycle_busy/
+            cycle_period lived here as an interim placement until 123-004
+            migrated them onto the primary Telemetry frame -- see
             telemetry.proto's own TelemetrySecondary doc comment). Hardware
             backends only (``_HardwareTransport``, which already drains
             ``SerialConnection.drain_binary_secondary_tlm()``);

@@ -244,22 +244,19 @@ class RobotLoop {
   // that method's own doc comment.
   bool lineTurnNext_ = true;
 
-  // --- Loop-timing telemetry (122-003, cycle_busy/cycle_period -- interim
-  // placement on the SECONDARY frame, see telemetry.h's SecondaryFrame doc
-  // comment for the full derivation). previousCycleStartUs_/everCycled_
-  // track cycle()'s OWN call history in [us] (independent of markTime()'s
-  // [ms]-truncated cycleStart, which has too little resolution for a
-  // diagnostic meant to surface sub-millisecond I2C stalls) -- NOT touched
-  // by boot(), which never calls cycle(), so the first-ever cycle() call
-  // always reports cyclePeriod == 0 (no previous cycle() call exists yet).
+  // --- Loop-timing telemetry (122-003, cycle_busy/cycle_period -- now
+  // staged onto the PRIMARY frame, 123-004 -- see telemetry.h's Frame doc
+  // comment for the full migration history). previousCycleStartUs_/
+  // everCycled_ track cycle()'s OWN call history in [us] (independent of
+  // markTime()'s [ms]-truncated cycleStart, which has too little
+  // resolution for a diagnostic meant to surface sub-millisecond I2C
+  // stalls) -- NOT touched by boot(), which never calls cycle(), so the
+  // first-ever cycle() call always reports cyclePeriod == 0 (no previous
+  // cycle() call exists yet). Unchanged mechanism from 122-003 -- only the
+  // destination frame (frame_ instead of a local SecondaryFrame snapshot)
+  // moved.
   uint64_t previousCycleStartUs_ = 0;  // [us]
   bool everCycled_ = false;
-
-  // Persists across cycle() calls exactly like frame_ above -- staged
-  // fresh every cycle (cycleBusy_/cyclePeriod_ below always change; the
-  // other SecondaryFrame fields are not yet wired from this class and stay
-  // at their struct default, unchanged from before this ticket).
-  Telemetry::SecondaryFrame secondaryFrame_;
 
   // Configuration-completeness gate (114-001) -- see markConfigured()/
   // isConfigured() above for the contract. false until markConfigured()

@@ -1663,9 +1663,9 @@ struct Result {
 // (vs base64's ~33%+2). Solving `E + 4 <= 254` gives `E <= 250`; this
 // constant ships at 240, ten bytes of margin below that exact edge (not
 // pushed to the limit) -- comfortably above every schema value this sprint
-// computes (185 largest, unchanged -- no schema/field-shape change this
-// sprint) while leaving headroom for ticket 004's cycle_busy/cycle_period
-// primary-frame migration, the whole reason this budget needed recomputing.
+// computes, including ticket 004's cycle_busy/cycle_period primary-frame
+// migration (194B largest, up from 185B pre-migration -- the whole reason
+// this budget needed recomputing in the first place).
 """
 
 # 123-002: the recomputed envelope-size ceiling every generated

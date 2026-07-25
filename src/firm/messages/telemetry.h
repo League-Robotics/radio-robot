@@ -64,6 +64,8 @@ struct Telemetry {
     uint32_t color = 0;
     AckEntry acks_[4] = {};
     uint8_t acks_count = 0;
+    uint32_t cycle_busy = 0;
+    uint32_t cycle_period = 0;
 
     // --- array / optional-string accessors ---
     const AckEntry* acks() const { return acks_; }
@@ -82,8 +84,6 @@ struct TelemetrySecondary {
     uint32_t glitch_right = 0;
     uint32_t ts_left = 0;
     uint32_t ts_right = 0;
-    uint32_t cycle_busy = 0;
-    uint32_t cycle_period = 0;
 
     // --- array / optional-string accessors ---
 };

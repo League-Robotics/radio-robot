@@ -303,6 +303,15 @@ class TLMFrame:
     untouched by this ticket) — same permanent gap on the PRIMARY frame
     this class decodes.
 
+    ``cycle_busy``/``cycle_period`` (123-004) are loop-timing diagnostics,
+    ALWAYS populated (no presence gate — plain ``uint32`` fields on the
+    wire, proto3 zero-value default when genuinely zero) — MIGRATED here
+    from ``TelemetrySecondary`` (122-003's interim placement, forced by
+    the pre-123 base64-armored envelope budget having no room on the
+    primary frame) now that COBS+CRC framing (123-001/123-002) restored
+    that headroom. Fresh every cycle now, not just at
+    ``TelemetrySecondary``'s own ~5 Hz cadence.
+
     ``active`` is ``bb.drivetrain.busy`` (flags bit 2) — TRUE while a
     motion is in progress. The one reliable motion-complete signal
     (``mode`` does not track it for every drive path).
@@ -389,6 +398,8 @@ class TLMFrame:
     enc_left: "EncoderReading | None" = None      # full per-wheel reading (position/velocity/time) -- always present on the wire
     enc_right: "EncoderReading | None" = None
     otos_reading: "OtosReading | None" = None      # full OTOS burst (adds v_x/v_y/omega/time over `otos`); valid iff otos_present
+    cycle_busy: int | None = None                 # [us] cycleStart -> frame-staging instant, THIS cycle (123-004, migrated from TelemetrySecondary)
+    cycle_period: int | None = None               # [us] this cycle's cycleStart minus the previous cycle's (123-004)
 
     # ------------------------------------------------------------------
     # flags-derived properties (115-003) -- see this class's own docstring.
@@ -534,6 +545,11 @@ class TLMFrame:
             frame.line = _unpack_channels4(int(telemetry.line))
         if frame.color_present:
             frame.color = _unpack_channels4(int(telemetry.color))
+
+        # 123-004 (migrated from TelemetrySecondary, 122-003): always
+        # populated, no presence gate.
+        frame.cycle_busy = int(telemetry.cycle_busy)
+        frame.cycle_period = int(telemetry.cycle_period)
 
         frame.ack_corr = int(telemetry.ack_corr)
         frame.ack_err = int(telemetry.ack_err)

@@ -19,13 +19,13 @@ one labelled row per component:
                   loudly (amber background + "(fallback)" text) whenever
                   the source is ENCODER, not just a plain text value like
                   every other row above.
-    loop   — cycle_busy / cycle_period (122-003), converted us -> ms for
-                  display, e.g. "3.2ms / 40.0ms". Sourced from the
-                  TelemetrySecondary frame (interim placement -- see that
-                  message's own proto doc comment), NOT the per-cycle
-                  TLMFrame every other row above reads -- refreshed at
-                  TelemetrySecondary's own ~5 Hz cadence via
-                  ``update_secondary()``, independent of ``update_frame()``.
+    loop   — cycle_busy / cycle_period (123-004, migrated from
+                  TelemetrySecondary's own interim placement, 122-003),
+                  converted us -> ms for display, e.g. "3.2ms / 40.0ms".
+                  Sourced from the same per-cycle ``TLMFrame`` every other
+                  row above reads -- refreshed via ``update_frame()``, at
+                  the primary frame's own (faster) cadence, not
+                  TelemetrySecondary's ~5 Hz.
 
 Velocity vectors (``vel`` and ``twist``) are additionally drawn as an arrow
 whose direction is the body-frame direction of motion (forward = up, left =
@@ -208,9 +208,9 @@ def fmt_heading_source(heading_source: "int | None") -> str:
 
 
 def fmt_loop_timing(cycle_busy: "int | None", cycle_period: "int | None") -> str:
-    """``cycle_busy``/``cycle_period`` (122-003, both [us]) as e.g.
-    ``"3.2ms / 40.0ms"``; ``—`` if either is absent (no TelemetrySecondary
-    decoded yet -- see this module's own ``loop`` row docstring).
+    """``cycle_busy``/``cycle_period`` (123-004, both [us]) as e.g.
+    ``"3.2ms / 40.0ms"``; ``—`` if either is absent (no TLMFrame decoded
+    yet -- see this module's own ``loop`` row docstring).
     """
     if cycle_busy is None or cycle_period is None:
         return "—"
@@ -459,6 +459,8 @@ def build_telemetry_panel(recorder: "Any" = None) -> "tuple[Any, Any]":
             self._values["tlm_val_encpose"].setText(fmt_pose(getattr(frame, "encpose", None)))
             self._values["tlm_val_otos"].setText(fmt_pose(getattr(frame, "otos", None)))
             self._values["tlm_val_twist"].setText(fmt_twist(getattr(frame, "twist", None)))
+            self._values["tlm_val_loop"].setText(
+                fmt_loop_timing(getattr(frame, "cycle_busy", None), getattr(frame, "cycle_period", None)))
 
             heading_source = getattr(frame, "heading_source", None)
             heading_lbl = self._values["tlm_val_heading_source"]
@@ -480,20 +482,10 @@ def build_telemetry_panel(recorder: "Any" = None) -> "tuple[Any, Any]":
             tw = twist_velocity(getattr(frame, "twist", None))
             self._arrows["tlm_arrow_twist"].set_vector(*(tw[:2] if tw else (0.0, 0.0)))
 
-        def update_secondary(self, secondary: "Any") -> None:
-            """Update the ``loop`` row from a TelemetrySecondary (122-003).
-
-            *secondary* is the raw ``telemetry_pb2.TelemetrySecondary``
-            protobuf message (``transport.py``'s ``on_telemetry_secondary``
-            callback delivers it undecoded -- unlike ``update_frame()``,
-            there is no adapting dataclass for this frame yet, see
-            ``TLMFrame``'s own docstring's "permanent gap" note). Reads
-            ``cycle_busy``/``cycle_period`` directly off it; refreshed at
-            TelemetrySecondary's own ~5 Hz cadence, independent of
-            ``update_frame()``'s per-primary-frame refresh rate.
-            """
-            cycle_busy = getattr(secondary, "cycle_busy", None)
-            cycle_period = getattr(secondary, "cycle_period", None)
-            self._values["tlm_val_loop"].setText(fmt_loop_timing(cycle_busy, cycle_period))
+        # update_secondary() -- REMOVED (123-004): the ``loop`` row's
+        # cycle_busy/cycle_period migrated off TelemetrySecondary onto the
+        # primary Telemetry frame, so update_frame() above now refreshes it
+        # directly; there is no longer a separate TelemetrySecondary-driven
+        # refresh path for this panel.
 
     return panel, _TelemetryPanelController()

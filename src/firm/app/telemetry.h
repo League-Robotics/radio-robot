@@ -217,28 +217,31 @@ class Telemetry {
     bool linePresent = false;   // staging only (not wire) -- flags bit 13 source
     uint32_t color = 0;
     bool colorPresent = false;  // staging only (not wire) -- flags bit 14 source
+
+    // cycleBusy/cyclePeriod (123-004, MIGRATED from SecondaryFrame below --
+    // telemetry-report-loop-cycle-duration.md): loop-timing diagnostics,
+    // now landing on THIS per-cycle primary frame every cycle instead of
+    // SecondaryFrame's ~5Hz sample (122-003's interim placement, forced by
+    // the pre-123 base64-armored envelope budget having no room left --
+    // see telemetry.proto's own Telemetry.cycle_busy/cycle_period doc
+    // comment for the full history). Staged by RobotLoop's own kPace
+    // block, same cycleStart/previousCycleStartUs_/everCycled_ bookkeeping
+    // as before -- only the destination frame moved.
+    uint32_t cycleBusy = 0;    // [us] cycleStart -> frame-staging instant, THIS cycle
+    // this cycle's own cycleStart minus the PREVIOUS cycle() call's
+    // cycleStart -- 0 on the first-ever cycle() call (no previous cycle to
+    // subtract).
+    uint32_t cyclePeriod = 0;  // [us]
   };
 
   // Secondary-frame snapshot -- mirrors msg::TelemetrySecondary's own
   // has_*/value pairs (no `now` -- emit()'s own argument fills it).
-  //
-  // cycleBusy/cyclePeriod (122-003, telemetry-report-loop-cycle-duration.md)
-  // -- INTERIM PLACEMENT: these loop-timing diagnostics were designed
-  // against the PRIMARY per-cycle Telemetry frame (every cycle would carry
-  // its own timing), but pre-123 the primary frame had no budget left (it
-  // sat 1 B under the shared 186-byte base64-armored envelope budget, and
-  // the serial transport's own CODAL TX-ring ceiling sat tighter still
-  // underneath that -- see telemetry.proto's TelemetrySecondary doc
-  // comment for the full derivation and the two exceptions this ticket
-  // threw before the stakeholder picked this resolution, 2026-07-24).
-  // Landing them here instead means they report the timing of whichever
-  // cycle RobotLoop last staged before THIS secondary frame happened to be
-  // the one sent -- a ~5Hz (kSecondaryPeriod) SAMPLE of per-cycle timing,
-  // not a per-cycle series. 123-002 landed the COBS+CRC framing rework
-  // that removes the base64-armor expansion creating the primary frame's
-  // own ceiling (recomputed budget: 240B, up from 186B) -- migrating these
-  // two fields onto the primary frame itself is sprint 123 ticket 004's
-  // own scope, not yet done as of this file's own edit.
+  // cycleBusy/cyclePeriod (122-003) lived here as an interim placement
+  // until 123-004 migrated them onto Frame above, once COBS+CRC (123-001/
+  // 123-002) restored primary-frame headroom -- see telemetry.proto's own
+  // TelemetrySecondary doc comment for the full history. Every other field
+  // below stays a permanent, not-yet-wired-from-RobotLoop gap (unrelated
+  // to this migration).
   struct SecondaryFrame {
     bool hasCmdVel = false;
     float cmdVelLeft = 0.0f;   // [mm/s] signed
@@ -249,16 +252,6 @@ class Telemetry {
     uint32_t glitchRight = 0;
     uint32_t tsLeft = 0;   // [ms]
     uint32_t tsRight = 0;  // [ms]
-
-    // cycleStart (RobotLoop::cycle()'s own pace anchor) -> the instant this
-    // struct was staged onto Telemetry, THAT cycle only -- see this
-    // struct's own doc comment above for the interim-placement/~5Hz-sample
-    // caveat.
-    uint32_t cycleBusy = 0;    // [us]
-    // this cycle's own cycleStart minus the PREVIOUS cycle() call's
-    // cycleStart -- 0 on the first-ever cycle() call (no previous cycle to
-    // subtract).
-    uint32_t cyclePeriod = 0;  // [us]
   };
 
   // comms -- primary-frame send path (Comms::sendReply(), ticket 004).

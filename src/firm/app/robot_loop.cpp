@@ -686,24 +686,24 @@ void RobotLoop::cycle() {
     // from before this ticket (see that ack's own comment below).
     updateTlm(cycleStart);
 
-    // 122-003: loop-timing telemetry, staged onto the SECONDARY frame
-    // (interim placement -- telemetry.h's SecondaryFrame doc comment; the
-    // primary frame this ticket originally targeted has no budget left).
-    // Measured HERE, at "frame staging" -- the same instant the primary
-    // frame's own encoder/pose/twist snapshot above is finalized -- NOT the
-    // true end of this cycle's work (odometry/OTOS/MoveQueue-tick/
+    // 123-004 (migrated from the SECONDARY frame, 122-003 -- see
+    // telemetry.h's Frame doc comment for the full history): loop-timing
+    // telemetry, staged onto the PRIMARY frame now that COBS+CRC (123-001/
+    // 123-002) restored primary-frame headroom. Measured HERE, at "frame
+    // staging" -- the same instant updateTlm()'s own tlm_.setFrame() call
+    // just above finalized this cycle's encoder/pose/twist snapshot -- NOT
+    // the true end of this cycle's work (odometry/OTOS/MoveQueue-tick/
     // line-color still run after this point, every cycle, unchanged from
-    // before this ticket). Staged every cycle regardless of whether THIS
-    // cycle's own emit() call below actually transmits the secondary frame
-    // (Telemetry always carries the last-staged snapshot -- telemetry.h's
-    // own setSecondaryFrame() doc comment) -- whichever cycle secondary
-    // next goes out on reports whatever was staged here that cycle.
-    secondaryFrame_.cycleBusy = static_cast<uint32_t>(clock_.nowMicros() - cycleStartUs);  // [us]
-    secondaryFrame_.cyclePeriod =
+    // before this ticket). Unchanged bookkeeping mechanism from 122-003
+    // (previousCycleStartUs_/everCycled_); only the destination frame
+    // moved, so frame_ is re-staged via a second tlm_.setFrame() call
+    // (updateTlm() already staged everything else this frame carries).
+    frame_.cycleBusy = static_cast<uint32_t>(clock_.nowMicros() - cycleStartUs);  // [us]
+    frame_.cyclePeriod =
         everCycled_ ? static_cast<uint32_t>(cycleStartUs - previousCycleStartUs_) : 0u;  // [us]
     previousCycleStartUs_ = cycleStartUs;
     everCycled_ = true;
-    tlm_.setSecondaryFrame(secondaryFrame_);
+    tlm_.setFrame(frame_);
 
     tlm_.emit(cycleStart);
 
