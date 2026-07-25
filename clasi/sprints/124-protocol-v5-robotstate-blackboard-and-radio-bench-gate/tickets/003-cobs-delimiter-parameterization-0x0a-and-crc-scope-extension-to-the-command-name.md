@@ -2,8 +2,9 @@
 id: '003'
 title: COBS delimiter parameterization (0x0A) and CRC scope extension to the command
   name
-status: open
-use-cases: [SUC-001]
+status: in-progress
+use-cases:
+- SUC-001
 depends-on: []
 github-issue: ''
 issue: protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md
