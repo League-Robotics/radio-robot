@@ -9,9 +9,8 @@ reaches command, no jitter, no reversal.
 """
 from __future__ import annotations
 
-import base64
-
 from robot_radio.io.sim_loop import SimLoop
+from robot_radio.io.wire_codec import encode_frame
 from robot_radio.testgui.transport import _sim_lib_path
 
 TARGET_MM = 700.0
@@ -28,7 +27,7 @@ def push_calibration(loop):
     def send(patch):
         env = envelope_pb2.CommandEnvelope(
             corr_id=1, config=envelope_pb2.ConfigDelta(motor=patch))
-        loop.inject_command("*B" + base64.b64encode(env.SerializeToString()).decode("ascii"))
+        loop.inject_command(encode_frame(env.SerializeToString()))
 
     send(config_pb2.MotorConfigPatch(side=config_pb2.LEFT, travel_calib=ML_MR))
     send(config_pb2.MotorConfigPatch(side=config_pb2.RIGHT, travel_calib=ML_MR))

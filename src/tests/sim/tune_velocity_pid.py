@@ -8,20 +8,19 @@ commanded speed is read live from the firmware (Path B ctypes hook, frame.cmd_ve
 """
 from __future__ import annotations
 
-import base64
-
 from robot_radio.io.sim_loop import SimLoop
+from robot_radio.io.wire_codec import encode_frame
 from robot_radio.testgui.transport import _sim_lib_path
 
 TRACK = 128.0
 TARGET = 150.0  # [mm/s] commanded step
 
 
-def _config_line(**gains) -> str:
+def _config_line(**gains) -> bytes:
     from robot_radio.robot.pb2 import config_pb2, envelope_pb2
     delta = envelope_pb2.ConfigDelta(motor=config_pb2.MotorConfigPatch(**gains))
     env = envelope_pb2.CommandEnvelope(corr_id=7, config=delta)
-    return "*B" + base64.b64encode(env.SerializeToString()).decode("ascii")
+    return encode_frame(env.SerializeToString())
 
 
 def step_response(kp, ki, kff, i_max, kaw):

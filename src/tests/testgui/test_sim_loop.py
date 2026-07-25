@@ -188,19 +188,18 @@ def test_move_wheels_variant_builds_wheels_arm_not_twist(loop):
     independent of ``BodyKinematics``, so there is no twist-shaped pose
     assertion to make here the way the two tests above make for
     ``MoveTwist``."""
-    import base64
-
+    from robot_radio.io.wire_codec import decode_frame
     from robot_radio.robot.pb2 import envelope_pb2 as pb2_mod
 
-    captured: list[str] = []
+    captured: list[bytes] = []
     loop.inject_command = captured.append  # type: ignore[method-assign]
 
     loop.move(v_left=100.0, v_right=200.0, stop_distance=300.0, timeout=1000.0)
 
     assert len(captured) == 1
-    armored = captured[0]
-    assert armored.startswith("*B")
-    decoded = pb2_mod.CommandEnvelope.FromString(base64.b64decode(armored[2:]))
+    payload = decode_frame(captured[0])
+    assert payload is not None
+    decoded = pb2_mod.CommandEnvelope.FromString(payload)
     assert decoded.move.WhichOneof("velocity") == "wheels"
     assert decoded.move.wheels.v_left == pytest.approx(100.0)
     assert decoded.move.wheels.v_right == pytest.approx(200.0)
@@ -247,17 +246,18 @@ def test_move_honors_an_explicit_id(loop):
     ``id``. See ``sim_loop.py``'s ``move()`` doc comment for the full
     aliasing bug this closed (an enqueue ack could be mistaken for a
     Move's own completion ack when the two shared one number)."""
-    import base64
-
+    from robot_radio.io.wire_codec import decode_frame
     from robot_radio.robot.pb2 import envelope_pb2 as pb2_mod
 
-    captured: list[str] = []
+    captured: list[bytes] = []
     loop.inject_command = captured.append  # type: ignore[method-assign]
 
     returned_id = loop.move(v_x=100.0, stop_distance=50.0, timeout=1000.0, id=42)
 
     assert returned_id == 42
-    decoded = pb2_mod.CommandEnvelope.FromString(base64.b64decode(captured[0][2:]))
+    payload = decode_frame(captured[0])
+    assert payload is not None
+    decoded = pb2_mod.CommandEnvelope.FromString(payload)
     assert decoded.corr_id != 42, (
         "corr_id must NOT alias move_id/id -- that was the bug (see this test's own docstring)"
     )

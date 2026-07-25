@@ -1191,7 +1191,8 @@ def cmd_ez(args):
 #
 # `rogo binary <arm>` builds a pb2.CommandEnvelope for one of the P4 wire's
 # live oneof arms and sends it via SerialConnection.send_envelope() -- the
-# *B<base64> binary plane. 104-002 (Legacy translator and dead-verb
+# COBS+CRC binary plane (sprint 123; was *B<base64> pre-123). 104-002
+# (Legacy translator and dead-verb
 # deletion): drive/segment/replace/ping/echo/id/hello/ver/help all targeted
 # CommandEnvelope/ReplyEnvelope oneof arms 103-001's schema prune reserved
 # (see protocol.py's own module docstring) -- those subcommands, `rogo
@@ -1637,18 +1638,19 @@ def main():
                          help="Sample over white first to install a fresh "
                               "white reference for this call.")
 
-    # binary: 095-002 binary command-plane (*B<base64> pb2.CommandEnvelope)
-    # send path. 104-002: drive/segment/replace/ping/echo/id/hello/ver/help
-    # all targeted now-reserved CommandEnvelope/ReplyEnvelope oneof arms
-    # (103-001's schema prune) -- removed alongside `rogo send` (the
-    # legacy_verbs-based text/binary translator) and `rogo proxy` (the
-    # rogo-translator-proxy standing bridge, io/proxy.py, also deleted).
-    # `stop` is the P4 wire's one surviving zero-field arm.
+    # binary: 095-002 binary command-plane (COBS+CRC-framed
+    # pb2.CommandEnvelope, sprint 123; was *B<base64> pre-123) send path.
+    # 104-002: drive/segment/replace/ping/echo/id/hello/ver/help all targeted
+    # now-reserved CommandEnvelope/ReplyEnvelope oneof arms (103-001's schema
+    # prune) -- removed alongside `rogo send` (the legacy_verbs-based
+    # text/binary translator) and `rogo proxy` (the rogo-translator-proxy
+    # standing bridge, io/proxy.py, also deleted). `stop` is the P4 wire's
+    # one surviving zero-field arm.
     p_binary = sub.add_parser(
         "binary",
-        help="Binary command plane (095): *B<base64> pb2.CommandEnvelope send "
-             "path. Only `stop` survives 104-002's dead-verb deletion -- see "
-             "protocol.py's own module docstring for the P4 wire's live arms.",
+        help="Binary command plane (095): COBS+CRC-framed pb2.CommandEnvelope "
+             "send path. Only `stop` survives 104-002's dead-verb deletion -- "
+             "see protocol.py's own module docstring for the P4 wire's live arms.",
     )
     p_binary.add_argument("--read-timeout", type=int, default=500,
                           help="Reply read timeout (ms, default 500)")

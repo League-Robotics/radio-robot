@@ -8,8 +8,11 @@ All command encoding and response parsing lives here; higher-level objects
 Wire format — P4 (single-loop firmware, 103-001)
 -------------------------------------------------
 The command plane is binary-only: one ``CommandEnvelope`` (protobuf,
-``protos/envelope.proto``) per outbound command, armored as a `*B<base64>`
-line. ``CommandEnvelope``'s ``cmd`` oneof carries exactly THREE arms —
+``protos/envelope.proto``) per outbound command, framed as a COBS+CRC frame
+(sprint 123 tickets 001/002/003; was armored as a `*B<base64>` line pre-123
+-- see ``io/serial_conn.py``'s ``send_envelope()``/``send_envelope_fast()``
+and ``io/wire_codec.py`` for the current framing). ``CommandEnvelope``'s
+``cmd`` oneof carries exactly THREE arms —
 ``move``/``config``/``stop`` — every earlier arm (ping/echo/id/hello/ver/
 help/get/drive/segment/replace/motion/pose_fix/otos/stream/plan_dump) was
 pruned by 103-001's schema prune and is `reserved`, not reused (see

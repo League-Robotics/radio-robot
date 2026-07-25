@@ -63,9 +63,9 @@ Collected under ``src/tests/testgui/`` per ``pyproject.toml``'s ``testpaths``
 
 from __future__ import annotations
 
-import base64
-
 import pytest
+
+from robot_radio.io.wire_codec import encode_frame
 
 from robot_radio.robot.pb2 import config_pb2, envelope_pb2, telemetry_pb2
 from robot_radio.robot.protocol import NezhaProtocol
@@ -433,8 +433,12 @@ def test_command_oneof_no_longer_has_drive_segment_replace():
 # ---------------------------------------------------------------------------
 
 
-def _armor(msg) -> str:
-    return "*B" + base64.b64encode(msg.SerializeToString()).decode("ascii")
+def _armor(msg) -> bytes:
+    """COBS+CRC-frame a pb2 message (123-002/003; was ``*B`` + base64
+    pre-123) -- ``render_log_line()`` now dispatches by Python TYPE
+    (``bytes`` for a binary frame, ``str`` for a text-plane line), not by
+    string prefix."""
+    return encode_frame(msg.SerializeToString())
 
 
 def test_tlm_reply_is_dropped_entirely():
@@ -486,16 +490,23 @@ def test_outbound_command_renders_readable_text_not_raw_armor():
     assert "200" in rendered
 
 
-def test_non_armored_line_passes_through_unchanged():
+def test_text_plane_line_passes_through_unchanged():
+    """123-002/003: dispatch is now by Python TYPE -- any ``str`` (a
+    text-plane line) passes through unchanged, regardless of content."""
     line = "DEVICE:NEZHA2:robot:tovez:123"
     assert binary_bridge.render_log_line(line, outbound=True) == line
     assert binary_bridge.render_log_line(line, outbound=False) == line
 
 
-def test_malformed_armor_passes_through_unchanged_never_raises():
-    garbage = "*Bnot-valid-base64!!!"
-    assert binary_bridge.render_log_line(garbage, outbound=True) == garbage
-    assert binary_bridge.render_log_line(garbage, outbound=False) == garbage
+def test_malformed_binary_frame_renders_marker_never_raises():
+    """A ``bytes`` input that fails to COBS/CRC-decode renders a defensive
+    malformed-marker string (never raises, never silently passes the raw
+    bytes through as if they were text)."""
+    garbage = b"not-a-valid-cobs-crc-frame-body"
+    for outbound in (True, False):
+        rendered = binary_bridge.render_log_line(garbage, outbound=outbound)
+        assert rendered is not None
+        assert "malformed" in rendered
 
 
 # ---------------------------------------------------------------------------

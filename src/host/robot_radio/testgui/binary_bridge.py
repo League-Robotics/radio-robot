@@ -498,32 +498,35 @@ def _handle_snap(proto: NezhaProtocol, corr_id: int | None) -> str:
 
 # ---------------------------------------------------------------------------
 # Serial/message monitor filtering (097, Goal 4) -- translates every raw
-# `*B<base64>` wire log line SerialConnection's on_send/on_recv hooks
-# deliver (see io/serial_conn.py's `_reader_loop`/`send_envelope`
-# docstrings: on_recv fires for EVERY decoded line before any
-# classification, including the high-rate binary telemetry push stream)
-# into readable text for the TestGUI's log pane, instead of an opaque
-# base64 blob a human cannot read. `_HardwareTransport`'s `_on_send`/
-# `_on_recv` closures (transport.py) are the only callers -- SimTransport
-# never needs this: its own send()/command()/_drain_cmd_queue() already log
-# translate_command()'s human-readable return value (or the original text
-# line), and its tick-thread never logs the raw armored telemetry stream at
-# all (see transport.py's `_tick_loop`).
+# wire log line SerialConnection's on_send/on_recv hooks deliver (see
+# io/serial_conn.py's `_reader_loop`/`send_envelope` docstrings: on_recv
+# fires for EVERY decoded line/frame before any classification, including
+# the high-rate binary telemetry push stream) into readable text for the
+# TestGUI's log pane, instead of an opaque blob a human cannot read.
+# `_HardwareTransport`'s `_on_send`/`_on_recv` closures (transport.py) are
+# the only callers -- SimTransport never needs this: its own
+# send()/command()/_drain_cmd_queue() already log translate_command()'s
+# human-readable return value (or the original text line), and its
+# tick-thread never logs the raw framed telemetry stream at all (see
+# transport.py's `_tick_loop`).
+#
+# 123-002/003 COBS+CRC cutover: a binary frame is no longer distinguished by
+# a `*B` TEXT prefix -- ``SerialConnection`` now hands this function raw
+# ``bytes`` for a binary frame (post-delimiter-strip, still COBS+CRC-encoded)
+# and a plain ``str`` for a text-plane line, so the dispatch below is by
+# Python TYPE, not by string prefix.
 # ---------------------------------------------------------------------------
 
-_BINARY_ARMOR_PREFIX = "*B"
 
+def render_log_line(raw_line: "str | bytes", *, outbound: bool) -> str | None:
+    """Translate one raw wire log line/frame for display in the message
+    monitor.
 
-def render_log_line(raw_line: str, *, outbound: bool) -> str | None:
-    """Translate one raw wire log line for display in the message monitor.
-
-    ``outbound=True``: ``raw_line`` is a sent line -- a plain text-v2
-    command line, OR (095-002 armor) a ``*B<base64>``-encoded
-    ``CommandEnvelope``. ``outbound=False``: ``raw_line`` is a received
-    line -- a ``*B<base64>``-encoded ``ReplyEnvelope`` (the firmware is
-    binary-only plus the 6-verb text rump; a received rump reply, e.g.
-    ``DEVICE:...``, is plain text and passes through unchanged the same as
-    any other non-armored line).
+    ``raw_line`` is a plain ``str`` for a text-plane line (HELLO/PING and
+    their replies -- returned unchanged) or raw ``bytes`` for a binary
+    COBS+CRC frame body: ``outbound=True`` means a sent ``CommandEnvelope``,
+    ``outbound=False`` means a received ``ReplyEnvelope`` (or, per the
+    disambiguation below, a ``TelemetrySecondary``).
 
     Returns:
       - ``None`` to mean "drop this line entirely" -- a ``ReplyEnvelope{tlm}``
@@ -531,9 +534,10 @@ def render_log_line(raw_line: str, *, outbound: bool) -> str | None:
         with no per-line operator value (broken out into the telemetry
         panel instead, same rationale as ``telemetry_panel.
         is_telemetry_log_line()``'s text-plane precedent).
-      - ``raw_line`` unchanged, for any non-armored line, or an armored
-        line that fails to base64-decode/protobuf-parse (defensive; never
-        raises out of a log hook).
+      - The original text line unchanged, for a ``str`` input, or a hex
+        fallback (``<binary: malformed, N bytes>``) for a binary frame that
+        fails to COBS/CRC-decode or protobuf-parse (defensive; never raises
+        out of a log hook).
       - Otherwise, a single-line human-readable rendering of the decoded
         envelope: a received reply uses ``legacy_render``'s own
         context-free renderers where one exists for that oneof arm
@@ -542,20 +546,21 @@ def render_log_line(raw_line: str, *, outbound: bool) -> str | None:
         (``render_ok_for_verb()``/``render_cfg_line()`` both need the
         ORIGINAL request's verb/keys, which a bare reply line does not
         carry) -- rendered instead via ``google.protobuf.text_format``, the
-        same "readable text instead of raw armor" outcome without
+        same "readable text instead of raw frame bytes" outcome without
         inventing a verb-guessing scheme. A sent command (outbound) has no
         ``legacy_render`` equivalent at all (that module renders replies,
         not requests) -- always rendered via ``text_format``.
 
-    Received (``outbound=False``) lines share their ``*B`` armor with TWO
+    Received (``outbound=False``) frames share their framing with TWO
     distinct message shapes -- ``pb2.ReplyEnvelope`` and (104-003)
     ``pb2.TelemetrySecondary``, the slower ~5Hz diagnostic frame emitted as
-    its own bare, unwrapped armored line (never inside a ``ReplyEnvelope`` --
-    see ``io/serial_conn.py``'s ``_handle_binary_reply()`` docstring, which
-    this function mirrors). Before this fix, a bare ``TelemetrySecondary``
-    frame "successfully" parsed as a ``ReplyEnvelope`` with an EMPTY body
-    oneof (a field-number/wire-type collision -- ``TelemetrySecondary``'s
-    first field, its millisecond timestamp, happens to decode into
+    its own bare, independently-framed frame (never inside a
+    ``ReplyEnvelope`` -- see ``io/serial_conn.py``'s
+    ``_handle_binary_reply()`` docstring, which this function mirrors).
+    Before an earlier fix, a bare ``TelemetrySecondary`` frame
+    "successfully" parsed as a ``ReplyEnvelope`` with an EMPTY body oneof (a
+    field-number/wire-type collision -- ``TelemetrySecondary``'s first
+    field, its millisecond timestamp, happens to decode into
     ``ReplyEnvelope.corr_id``), so every secondary frame rendered as a bare
     ``corr_id: N`` line and flooded the log at the secondary frame's own
     ~4 lines/s. Fixed the same way ``_handle_binary_reply()`` already
@@ -565,26 +570,27 @@ def render_log_line(raw_line: str, *, outbound: bool) -> str | None:
     same "no per-line operator value" policy already applied to primary
     ``tlm`` push frames below.
     """
-    if not raw_line.startswith(_BINARY_ARMOR_PREFIX):
+    if isinstance(raw_line, str):
         return raw_line
-
-    import base64
 
     from google.protobuf import text_format  # type: ignore[import-untyped]
 
+    from robot_radio.io.wire_codec import decode_frame
     from robot_radio.robot.pb2 import envelope_pb2
 
-    try:
-        raw_bytes = base64.b64decode(raw_line[len(_BINARY_ARMOR_PREFIX):])
-    except Exception:
-        return raw_line
+    def _malformed_marker() -> str:
+        return f"<binary: malformed, {len(raw_line)} bytes>"
+
+    raw_bytes = decode_frame(raw_line)
+    if raw_bytes is None:
+        return _malformed_marker()
 
     if outbound:
         try:
             cmd = envelope_pb2.CommandEnvelope.FromString(raw_bytes)
         except Exception:
-            return raw_line
-        return text_format.MessageToString(cmd, as_one_line=True).strip() or raw_line
+            return _malformed_marker()
+        return text_format.MessageToString(cmd, as_one_line=True).strip() or _malformed_marker()
 
     reply = None
     try:
@@ -597,13 +603,13 @@ def render_log_line(raw_line: str, *, outbound: bool) -> str | None:
         # disambiguation as io/serial_conn.py's _handle_binary_reply(); see
         # this function's own docstring). A successful secondary decode is
         # dropped from the log, same policy as a primary `tlm` push frame
-        # below; any other failure falls back to the raw line.
+        # below; any other failure falls back to the malformed marker.
         from robot_radio.robot.pb2 import telemetry_pb2
 
         try:
             telemetry_pb2.TelemetrySecondary.FromString(raw_bytes)
         except Exception:
-            return raw_line
+            return _malformed_marker()
         return None
 
     which = reply.WhichOneof("body")
@@ -626,4 +632,4 @@ def render_log_line(raw_line: str, *, outbound: bool) -> str | None:
     # agnostic legacy_render renderer exists (see this function's own
     # docstring); text_format gives readable text without guessing. Also
     # reached for err/id/echo/helptext when render itself is unavailable.
-    return text_format.MessageToString(reply, as_one_line=True).strip() or raw_line
+    return text_format.MessageToString(reply, as_one_line=True).strip() or _malformed_marker()

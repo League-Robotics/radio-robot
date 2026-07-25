@@ -113,7 +113,6 @@ guarantee without duplicating either algorithm:
   rationale.
 """
 
-import base64
 import glob
 import queue
 import re
@@ -122,6 +121,8 @@ import time
 from typing import Any, TYPE_CHECKING
 
 import serial
+
+from robot_radio.io.wire_codec import ByteStreamDemuxer, decode_frame, encode_frame
 
 if TYPE_CHECKING:
     # Type-checking only: importing robot_radio.robot.pb2.envelope_pb2 at
@@ -185,11 +186,13 @@ _TLM_QUEUE_DEPTH = 256
 # Corr-id pattern: ``#<digits>`` at the end of a reply line.
 _CORR_ID_RE = re.compile(r"#(\d+)$")
 
-# Binary-plane armor prefix (095-002, M7 Host Codec Mirror): a `*B<base64>`
-# line carries one base64-encoded, serialized pb2.ReplyEnvelope. See
-# architecture-update.md (095) Risk 5 for why `*` cannot collide with any
-# text verb, `OK/ERR/...` reply prefix, or the relay's `#`-line convention.
-_BINARY_ARMOR_PREFIX = "*B"
+# Pre-123 binary-plane armor prefix (095-002, M7 Host Codec Mirror): a
+# `*B<base64>` line carried one base64-encoded, serialized pb2.ReplyEnvelope.
+# Sprint 123 (tickets 001/002/003) replaced this text armor with a binary,
+# 0x00-delimited COBS+CRC frame demuxed STRUCTURALLY by ``ByteStreamDemuxer``
+# (see ``robot_radio.io.wire_codec``) rather than by a text prefix -- there is
+# no more `*B` byte sequence on the wire to check for. Kept only as a
+# historical note; no code references it any more.
 
 # Module-level cache for the lazily-imported envelope_pb2/telemetry_pb2
 # modules (see _get_envelope_pb2()'s docstring for why this cannot be a
@@ -249,6 +252,41 @@ def _disable_hupcl(ser) -> None:
         termios.tcsetattr(fd, termios.TCSANOW, attrs)
     except Exception:
         pass
+
+
+def _read_text_line_raw(ser, demux: ByteStreamDemuxer, deadline: float) -> str:
+    """Read/demux raw bytes off ``ser`` until a complete TEXT line is
+    demuxed or ``deadline`` (a ``time.time()``-based timestamp) passes.
+
+    123-002/003: replaces a raw ``ser.readline()`` call for every PRE-reader-
+    thread helper (``_banner_classify``/``_relay_handshake``/
+    ``_poll_read_lines``/``probe_devices()``) -- a binary telemetry frame may
+    already be interleaved with the HELLO/PING text rump at this point (the
+    firmware emits telemetry every cycle regardless of whether HELLO has been
+    sent yet), and that frame's content may legitimately embed a literal
+    ``0x0A`` byte (only ``0x00`` is guaranteed absent) -- unsafe for a plain
+    ``readline()`` to split on. Binary frames demuxed during this window are
+    dropped (nothing consumes telemetry before the reader thread starts;
+    see ``SerialConnection``'s own module docstring for the pre-reader-thread
+    access-point list). Returns ``""`` on timeout, mirroring pyserial's own
+    ``readline()``-timeout return convention.
+    """
+    while time.time() < deadline:
+        try:
+            n = ser.in_waiting or 1
+            chunk = ser.read(n)
+        except Exception:
+            return ""
+        if not chunk:
+            continue
+        for kind, payload in demux.feed(chunk):
+            if kind == "text":
+                try:
+                    return payload.decode("utf-8", "ignore")
+                except Exception:
+                    continue
+            # kind == "binary": drop -- nothing consumes telemetry pre-reader.
+    return ""
 
 
 def _parse_device_banner(line: str) -> dict[str, Any] | None:
@@ -422,6 +460,22 @@ class SerialConnection:
         # Monotonically incrementing corr-id source for send().
         self._corr_counter: int = 0
 
+        # 123-002/003: shared demuxer for every PRE-reader-thread raw read
+        # (_banner_classify/_relay_handshake/_poll_ready/_poll_read_lines) --
+        # one instance per connect() attempt (reset at the top of connect()),
+        # so a partial line/frame split across two of those helper calls
+        # within the SAME attempt is not lost. See _read_text_line_raw()'s
+        # own doc comment for why these can no longer use a plain
+        # self._ser.readline() call.
+        self._handshake_demux = ByteStreamDemuxer()
+
+        # 123-003: counted-fault surface for a binary frame that fails to
+        # decode (malformed COBS, CRC mismatch, or bytes that decode as
+        # neither a ReplyEnvelope nor a TelemetrySecondary) -- the host-side
+        # counterpart of firmware's own App::Comms::malformedCount_. Never
+        # raises; a caller that wants fault visibility reads this counter.
+        self.malformed_frame_count: int = 0
+
     @property
     def is_open(self) -> bool:
         return self._ser is not None and self._ser.is_open
@@ -490,6 +544,10 @@ class SerialConnection:
             if self._ser.port == self._port:
                 return {"status": "already_connected", "port": self._port, "mode": self._mode}
             self._ser.close()
+
+        # Fresh demuxer for this connect() attempt -- see its own __init__
+        # doc comment.
+        self._handshake_demux = ByteStreamDemuxer()
 
         try:
             # Open the port with DTR asserted (pyserial default).
@@ -618,31 +676,42 @@ class SerialConnection:
                     break
                 next_hello = now + _HELLO_ATTEMPT_DELAY_S
 
+            # 123-002/003: raw read + demux, NOT self._ser.readline() -- a
+            # binary telemetry frame may already be interleaved with the
+            # HELLO rump at this point (the firmware emits telemetry every
+            # cycle regardless of whether HELLO has been sent yet), and its
+            # content may legitimately embed a literal 0x0A (see
+            # _read_text_line_raw()'s own doc comment). Binary frames
+            # demuxed here are dropped -- nothing consumes telemetry before
+            # the reader thread starts.
             try:
-                raw = self._ser.readline()
+                n = self._ser.in_waiting or 1
+                chunk = self._ser.read(n)
             except Exception:
                 break
-            if not raw:
+            if not chunk:
                 continue
 
-            try:
-                text = raw.decode("utf-8", "ignore").strip()
-            except Exception:
-                continue
+            for kind, payload in self._handshake_demux.feed(chunk):
+                if kind == "binary":
+                    continue
+                try:
+                    text = payload.decode("utf-8", "ignore").strip()
+                except Exception:
+                    continue
+                if not text:
+                    continue
 
-            if not text:
-                continue
-
-            # Look for the DEVICE: announcement.
-            idx = text.find("DEVICE:")
-            if idx >= 0:
-                parts = text[idx:].split(":")
-                # DEVICE:<ROLE>:<common_name>:<device_name>:<serial>
-                role_field = parts[1].upper() if len(parts) >= 2 else ""
-                if "RADIOBRIDGE" in role_field or "RADIORELAY" in role_field:
-                    return "relay", text
-                # NEZHA2 or any other robot type → direct
-                return "direct", text
+                # Look for the DEVICE: announcement.
+                idx = text.find("DEVICE:")
+                if idx >= 0:
+                    parts = text[idx:].split(":")
+                    # DEVICE:<ROLE>:<common_name>:<device_name>:<serial>
+                    role_field = parts[1].upper() if len(parts) >= 2 else ""
+                    if "RADIOBRIDGE" in role_field or "RADIORELAY" in role_field:
+                        return "relay", text
+                    # NEZHA2 or any other robot type → direct
+                    return "direct", text
 
         # Timeout reached without a banner.
         return "direct", ""
@@ -673,19 +742,14 @@ class SerialConnection:
             except Exception:
                 return ""
             deadline = time.time() + timeout_s
+            # 123-002/003: raw read + demux (self._handshake_demux), NOT
+            # self._ser.readline() -- see _read_text_line_raw()'s own doc
+            # comment for why a binary telemetry frame interleaved at this
+            # point makes a plain readline() unsafe.
             while time.time() < deadline:
-                try:
-                    raw = self._ser.readline()
-                except Exception:
-                    break
-                if not raw:
-                    continue
-                try:
-                    text = raw.decode("utf-8", "ignore").strip()
-                except Exception:
-                    continue
+                text = _read_text_line_raw(self._ser, self._handshake_demux, deadline)
                 if not text:
-                    continue
+                    break
                 if ack_fragment in text:
                     return text
             return ""
@@ -728,10 +792,54 @@ class SerialConnection:
         self._reader_thread = None
 
     def _reader_loop(self) -> None:
-        """Background reader: sole owner of ``_ser.readline()``.
+        """Background reader: sole owner of raw reads off ``_ser``.
 
-        Classifies each decoded, stripped line and routes it to the
-        appropriate queue:
+        123-002/003 COBS+CRC cutover: reads raw bytes (``_ser.read()``, never
+        ``_ser.readline()``) and demuxes them through a ``ByteStreamDemuxer``
+        (``robot_radio.io.wire_codec``) into complete text lines or complete
+        binary COBS+CRC frame bodies -- mirroring firmware's own
+        ``App::Transport::readLine()`` demux exactly. A raw ``readline()``
+        call is unsafe here: a binary frame's content may legitimately embed
+        a literal ``0x0A`` (only ``0x00`` is guaranteed absent), which the
+        pre-123 base64 armor's ASCII alphabet could never produce.
+
+        Each demuxed unit is routed:
+
+        - ``kind == "text"`` → ``_handle_text_line()`` (TLM/EVT/OK/ERR/CFG/ID/
+          keepalive/`#`-comment classification, unchanged from pre-123).
+        - ``kind == "binary"`` → ``_handle_binary_reply()`` (COBS-decode,
+          CRC-verify, then parse as a ``ReplyEnvelope`` or, on failure of
+          that shape, a ``TelemetrySecondary`` -- see that method's own
+          docstring).
+        """
+        demux = ByteStreamDemuxer()
+        while not self._reader_stop.is_set():
+            try:
+                if self._ser is None or not self._ser.is_open:
+                    break
+                n = self._ser.in_waiting or 1
+                chunk = self._ser.read(n)
+            except Exception:
+                break  # port closed or gone — exit silently
+
+            if not chunk:
+                continue
+
+            for kind, payload in demux.feed(chunk):
+                if kind == "binary":
+                    # Verbose RX hook: raw bytes (not text) for a binary
+                    # frame -- see this class's own on_recv docstring.
+                    if self.on_recv:
+                        self.on_recv(payload)
+                    self._handle_binary_reply(payload)
+                else:
+                    self._handle_text_line(payload)
+
+    def _handle_text_line(self, raw: bytes) -> None:
+        """Classify one demuxed text-plane line and route it to the
+        appropriate queue -- the text-plane half of ``_reader_loop()``'s own
+        demux, unchanged in behavior from pre-123 (only the byte source
+        changed -- see that method's docstring):
 
         - ``TLM ...``  → ``_tlm_queue``  (drop oldest if full)
         - ``EVT ...``  → ``_evt_queue``
@@ -739,121 +847,89 @@ class SerialConnection:
         - ``OK``/``ERR``/``CFG`` with no corr-id → ``_reply_queues[""]``
         - ``OK keepalive`` / lines containing ``keepalive`` → dropped silently
         - Lines beginning with ``#`` → relay status/comment lines, dropped
-        - ``*B<base64>`` (binary plane, 095-002) → dearmored, parsed as a
-          ``pb2.ReplyEnvelope``. A ``tlm`` body (096's ``telemetryEmitBinary()``
-          push frames, always ``corr_id=0``) routes to ``_binary_tlm_queue``
-          (drop oldest if full) BEFORE the corr-id lookup below (097-001) --
-          these are unsolicited pushes, never a reply a blocked ``send()``/
-          ``send_envelope()`` call is waiting on. Every other body
-          (``ok``/``err``/``cfg``/``id``/``echo``) routes to
-          ``_reply_queues[envelope.corr_id]`` exactly like an
-          ``OK``/``ERR``/``CFG``/``ID`` reply above. A ``*B`` line that does
-          NOT decode as a ``ReplyEnvelope`` with a populated ``body`` oneof
-          is retried as a ``TelemetrySecondary`` (104-003) and, on success,
-          routed to ``_binary_secondary_queue`` (drop oldest if full) --
-          see ``_handle_binary_reply()``'s own docstring.
         - Anything else → dropped silently
         """
-        while not self._reader_stop.is_set():
-            try:
-                if self._ser is None or not self._ser.is_open:
-                    break
-                raw = self._ser.readline()
-            except Exception:
-                break  # port closed or gone — exit silently
+        try:
+            text = raw.decode("utf-8", "ignore").strip()
+        except Exception:
+            return
 
-            if not raw:
-                continue
+        if not text:
+            return
 
-            try:
-                text = raw.decode("utf-8", "ignore").strip()
-            except Exception:
-                continue
+        # Verbose RX hook: report every decoded text line (incl. keepalive/
+        # relay comment lines) before the routing/drop filters below.
+        if self.on_recv:
+            self.on_recv(text)
 
-            if not text:
-                continue
+        # Drop keepalive acks.
+        if "keepalive" in text:
+            return
 
-            # Verbose RX hook: report every decoded line (incl. keepalive/relay
-            # comment lines) before the routing/drop filters below.
-            if self.on_recv:
-                self.on_recv(text)
+        # Drop relay comment/status lines (# channel:, # entering data
+        # plane, # echo:, # mode:, # DBG ..., etc.).  These are relay
+        # command-plane responses that should have been consumed during the
+        # pre-reader handshake; any that leak through post-!GO are benign.
+        if text.startswith("#"):
+            return
 
-            # Drop keepalive acks.
-            if "keepalive" in text:
-                continue
-
-            # Drop relay comment/status lines (# channel:, # entering data
-            # plane, # echo:, # mode:, # DBG ..., etc.).  These are relay
-            # command-plane responses that should have been consumed during the
-            # pre-reader handshake; any that leak through post-!GO are benign.
-            if text.startswith("#"):
-                continue
-
-            if text.startswith("TLM"):
-                # Bounded TLM queue: drop oldest on overflow.
-                if self._tlm_queue.full():
-                    try:
-                        self._tlm_queue.get_nowait()
-                    except queue.Empty:
-                        pass
+        if text.startswith("TLM"):
+            # Bounded TLM queue: drop oldest on overflow.
+            if self._tlm_queue.full():
                 try:
-                    self._tlm_queue.put_nowait(text)
-                except queue.Full:
-                    pass  # extremely unlikely race; drop
-                continue
+                    self._tlm_queue.get_nowait()
+                except queue.Empty:
+                    pass
+            try:
+                self._tlm_queue.put_nowait(text)
+            except queue.Full:
+                pass  # extremely unlikely race; drop
+            return
 
-            if text.startswith("EVT"):
-                self._evt_queue.put(text)
-                continue
+        if text.startswith("EVT"):
+            self._evt_queue.put(text)
+            return
 
-            # Route OK/ERR/CFG/ID replies by corr-id.
-            # NOTE: ID replies carry a trailing corr-id (e.g. "ID model=... #7")
-            # and must be routed like OK/ERR/CFG — not dropped silently.
-            if text.startswith(("OK", "ERR", "CFG", "ID")):
-                m = _CORR_ID_RE.search(text)
-                if m:
-                    corr_id = m.group(1)
-                else:
-                    corr_id = ""
-                with self._reply_lock:
-                    q = self._reply_queues.get(corr_id)
-                if q is not None:
-                    q.put(text)
-                # If no queue is registered for this id, drop silently.
-                continue
+        # Route OK/ERR/CFG/ID replies by corr-id.
+        # NOTE: ID replies carry a trailing corr-id (e.g. "ID model=... #7")
+        # and must be routed like OK/ERR/CFG — not dropped silently.
+        if text.startswith(("OK", "ERR", "CFG", "ID")):
+            m = _CORR_ID_RE.search(text)
+            if m:
+                corr_id = m.group(1)
+            else:
+                corr_id = ""
+            with self._reply_lock:
+                q = self._reply_queues.get(corr_id)
+            if q is not None:
+                q.put(text)
+            # If no queue is registered for this id, drop silently.
+            return
 
-            # Binary plane (095-002, M7): `*B<base64>` carries one
-            # serialized pb2.ReplyEnvelope. Routed by the envelope's own
-            # `corr_id` field -- the binary-plane equivalent of the
-            # `#<digits>` suffix the text plane's OK/ERR/CFG/ID branch above
-            # parses out of the line. A pure addition: this branch cannot be
-            # reached by any text-plane reply (no existing reply prefix
-            # starts with `*`).
-            if text.startswith(_BINARY_ARMOR_PREFIX):
-                self._handle_binary_reply(text)
-                continue
+        # All other lines: drop silently (diagnostics, unknown, etc.)
 
-            # All other lines: drop silently (diagnostics, unknown, etc.)
+    def _handle_binary_reply(self, frame: bytes) -> None:
+        """COBS-decode, CRC-verify, protobuf-decode, and route one binary
+        reply frame (123-002/003; was a ``*B<base64>`` armored text line
+        pre-123).
 
-    def _handle_binary_reply(self, text: str) -> None:
-        """Dearmor, decode, and route one ``*B<base64>`` binary reply line.
+        Called only from ``_reader_loop`` (see its docstring). COBS-decodes
+        and CRC-verifies via ``wire_codec.decode_frame()``; a decode failure
+        here (malformed COBS or a CRC mismatch) increments
+        ``malformed_frame_count`` and the frame is dropped outright -- there
+        are no bytes to try a second interpretation against.
 
-        Called only from ``_reader_loop`` (see its docstring). Strips the
-        ``*B`` armor prefix and base64-decodes; a decode failure here
-        (malformed base64) is swallowed and the line dropped outright --
-        there are no bytes to try a second interpretation against.
-
-        Two message types share this exact ``*B<base64>`` armor (103-001
-        Decision 3, hardened 104-003): ``pb2.ReplyEnvelope`` (the common
-        case -- corr-id'd ``ok``/``err`` replies and unsolicited ``tlm``
-        pushes) and ``pb2.TelemetrySecondary`` (the slower ~5 Hz
+        Two message types share this exact framing (103-001 Decision 3,
+        hardened 104-003, re-framed 123-002/003): ``pb2.ReplyEnvelope`` (the
+        common case -- corr-id'd ``ok``/``err`` replies and unsolicited
+        ``tlm`` pushes) and ``pb2.TelemetrySecondary`` (the slower ~5 Hz
         acc/glitch/ts/cmd_vel diagnostic frame, telemetry.proto). The wire
         carries NO discriminator byte between them -- ``TelemetrySecondary``
-        rides as its OWN independently-armored line specifically because
+        rides as its OWN independently-framed frame specifically because
         ``ReplyEnvelope.body``'s oneof is fixed at ``ok``/``err``/``tlm``
         (envelope.proto) and cannot grow a fourth arm for it
         (``src/firm/app/telemetry.cpp``'s ``emitSecondary()`` encodes and
-        armors a bare ``TelemetrySecondary`` directly, never wrapping it in
+        frames a bare ``TelemetrySecondary`` directly, never wrapping it in
         a ``ReplyEnvelope``).
 
         Disambiguation: try ``ReplyEnvelope`` FIRST. Every real
@@ -896,18 +972,18 @@ class SerialConnection:
         (``TelemetrySecondary`` carries no ``corr_id`` field at all; it is a
         pure unsolicited push, like primary ``tlm``).
 
-        Any decode/parse failure of EITHER shape (malformed base64,
-        malformed protobuf bytes, or bytes that are neither a well-formed
-        ``ReplyEnvelope`` nor a well-formed ``TelemetrySecondary``) is
-        swallowed and the line dropped -- a single corrupted binary reply
-        must not crash the reader thread, matching this loop's existing
-        tolerance for undecodable bytes elsewhere (e.g. the UTF-8-decode
-        ``except Exception: continue`` above).
+        Any decode/parse failure of EITHER shape (malformed COBS, a CRC
+        mismatch, malformed protobuf bytes, or bytes that are neither a
+        well-formed ``ReplyEnvelope`` nor a well-formed
+        ``TelemetrySecondary``) increments ``malformed_frame_count`` and the
+        frame is dropped -- a single corrupted binary reply must not crash
+        the reader thread, matching this loop's existing tolerance for
+        undecodable bytes elsewhere (e.g. the UTF-8-decode
+        ``except Exception: return`` in ``_handle_text_line()``).
         """
-        armored = text[len(_BINARY_ARMOR_PREFIX):]
-        try:
-            raw_bytes = base64.b64decode(armored)
-        except Exception:
+        raw_bytes = decode_frame(frame)
+        if raw_bytes is None:
+            self.malformed_frame_count += 1
             return
 
         reply = None
@@ -946,8 +1022,10 @@ class SerialConnection:
         try:
             secondary = _get_telemetry_pb2().TelemetrySecondary.FromString(raw_bytes)
         except Exception:
-            return  # neither shape decoded -- drop, matching this loop's
-                     # tolerance for undecodable bytes elsewhere.
+            # Neither shape decoded -- drop, matching this loop's tolerance
+            # for undecodable bytes elsewhere.
+            self.malformed_frame_count += 1
+            return
 
         if self._binary_secondary_queue.full():
             try:
@@ -986,20 +1064,20 @@ class SerialConnection:
                          stop_token: str | None = None) -> list[str]:
         """Read lines directly from ``_ser`` for up to ``duration``.
 
-        Used exclusively by ``_poll_ready`` (before the reader thread starts).
+        Used exclusively by ``_poll_ready`` (before the reader thread
+        starts) and as ``read_lines()``'s own pre-reader-thread fallback.
+
+        123-002/003: raw read + demux (``self._handshake_demux``), NOT
+        ``self._ser.readline()`` -- see ``_read_text_line_raw()``'s own doc
+        comment for why a binary telemetry frame interleaved at this point
+        makes a plain ``readline()`` unsafe.
         """
         lines: list[str] = []
         deadline = time.time() + (duration / 1000.0)
         while time.time() < deadline:
-            try:
-                raw = self._ser.readline()
-            except Exception:
-                break
-            if not raw:
-                continue
-            text = raw.decode("utf-8", "ignore").strip()
+            text = _read_text_line_raw(self._ser, self._handshake_demux, deadline)
             if not text:
-                continue
+                break
             if "keepalive" in text:
                 continue
             lines.append(text)
@@ -1166,8 +1244,10 @@ class SerialConnection:
         """Send a binary ``pb2.CommandEnvelope``, block for its reply envelope.
 
         The binary-plane counterpart of ``send()``: serializes ``envelope``,
-        base64-armors it as ``*B<base64>\\n``, writes it, and blocks on the
-        corr-id-keyed reply queue exactly like ``send()`` does today -- the
+        COBS+CRC-frames it (123-002/003; was base64-armored as
+        ``*B<base64>\\n`` pre-123) and writes the frame body plus the
+        trailing 0x00 delimiter, then blocks on the corr-id-keyed reply
+        queue exactly like ``send()`` does today -- the
         envelope's own ``corr_id`` field takes the place of ``send()``'s
         ``#<corr_id>`` text suffix. ``envelope.corr_id`` is assigned here
         (overwriting whatever the caller set) from the same
@@ -1207,15 +1287,14 @@ class SerialConnection:
             self._reply_queues[str(corr_id)] = reply_q
 
         envelope.corr_id = corr_id
-        armored = base64.b64encode(envelope.SerializeToString()).decode("ascii")
-        line = f"{_BINARY_ARMOR_PREFIX}{armored}\n"
+        frame = encode_frame(envelope.SerializeToString())
 
         if self.on_send:
-            self.on_send(line.rstrip())
+            self.on_send(frame)
 
         try:
             with self._write_lock:
-                self._ser.write(line.encode("ascii"))
+                self._ser.write(frame + b"\x00")
                 self._ser.flush()
                 self._last_write_s = time.monotonic()  # defer the next "+"
         except Exception as exc:
@@ -1260,7 +1339,8 @@ class SerialConnection:
         This method skips that registration/wait entirely: it assigns
         ``envelope.corr_id`` from the SAME ``_corr_counter`` sequence
         ``send_envelope()`` uses (so binary corr-ids never collide whichever
-        send path issued them), writes the ``*B<base64>`` armored line, and
+        send path issued them), writes the COBS+CRC-framed envelope
+        (123-002/003; was the ``*B<base64>`` armored line pre-123), and
         returns the assigned corr_id for the caller to match against the ack
         slot itself (see ``NezhaProtocol.wait_for_ack()``).
 
@@ -1278,14 +1358,13 @@ class SerialConnection:
             corr_id = self._corr_counter
 
         envelope.corr_id = corr_id
-        armored = base64.b64encode(envelope.SerializeToString()).decode("ascii")
-        line = f"{_BINARY_ARMOR_PREFIX}{armored}\n"
+        frame = encode_frame(envelope.SerializeToString())
 
         if self.on_send:
-            self.on_send(line.rstrip())
+            self.on_send(frame)
 
         with self._write_lock:
-            self._ser.write(line.encode("ascii"))
+            self._ser.write(frame + b"\x00")
             self._ser.flush()
             self._last_write_s = time.monotonic()  # defer the next "+"
 
@@ -1594,21 +1673,36 @@ def probe_devices(read_timeout: int = 1200) -> list[dict[str, Any]]:  # [ms]
             responsive = False
             deadline = time.time() + (read_timeout / 1000.0)
             next_hello = 0.0  # send immediately on the first iteration
+            # 123-002/003: raw read + demux (one chunk per iteration, so the
+            # periodic HELLO resend below still runs), NOT ser.readline() --
+            # see _read_text_line_raw()'s own doc comment for why a binary
+            # telemetry frame interleaved at this point makes a plain
+            # readline() unsafe.
+            demux = ByteStreamDemuxer()
             while time.time() < deadline:
                 now = time.time()
                 if now >= next_hello:
                     ser.write(b"HELLO\n")
                     ser.flush()
                     next_hello = now + _HELLO_ATTEMPT_DELAY_S
-                raw = ser.readline()
-                if not raw:
+                try:
+                    chunk = ser.read(ser.in_waiting or 1)
+                except Exception:
+                    break
+                if not chunk:
                     continue
-                text = raw.decode("utf-8", "ignore").strip()
-                if text:
+                for kind, payload in demux.feed(chunk):
+                    if kind == "binary":
+                        continue
+                    text = payload.decode("utf-8", "ignore").strip()
+                    if not text:
+                        continue
                     lines.append(text)
                     if "DEVICE:" in text:
                         responsive = True
                         break
+                if responsive:
+                    break
             ser.close()
             results.append({"port": port, "lines": lines, "responsive": responsive})
         except Exception as exc:

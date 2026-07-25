@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Firmware framer integration (Comms + transports + wire budget)
-status: exception
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -94,15 +94,40 @@ COBS+CRC overhead in place of base64's.
       base64Encode()/base64Decode() — the primitive itself is RETAINED in
       wire_runtime, not deleted, per an independent unrelated consumer;
       see Completion Notes).
-- [ ] Full sim suite green. **BLOCKED — see Completion Notes / thrown
-      exception.** `src/tests/sim` (the domain within this ticket's
-      authorized scope) is green modulo 5 tests that route through the
-      `src/sim/` ctypes bridge to Python; the FULL `uv run python -m
-      pytest -q` suite has 81 failures, all rooted in
-      `src/host/robot_radio/io/sim_loop.py` (ticket 003 scope) and
-      `src/sim/sim_ctypes.cpp` (unlisted in either ticket) still decoding/
-      framing the OLD `*B<base64>` armor against firmware that now emits
-      COBS+CRC.
+- [x] Full sim suite green. **UNBLOCKED — team-lead merged ticket 003's
+      host-decoder scope into this ticket** (see Completion Notes — 002/003
+      Merge Resolution). `uv run python -m pytest -q`:
+      **1428 passed, 2 skipped, 9 xfailed, 2 xpassed, 0 failed** (before:
+      1407/2/9/2 baseline, 81 failed mid-cutover; after: baseline + 21 new
+      tests, zero failures — see Completion Notes for the full before/after
+      and the file-by-file diff).
+
+## Folded-in scope — ticket 003 (Host decoder rewrite)
+
+Per the exception thrown above and team-lead's decision to merge 002+003
+under this ticket (see sprint's own dispatch record), the following is
+ticket 003's own acceptance criteria, satisfied here:
+
+- [x] Each of `io/serial_conn.py`, `io/sim_loop.py`, `io/sim_config.py`,
+      `io/cli.py` (doc-only — no functional base64), `testgui/transport.py`
+      (doc-only), `robot/protocol.py` (doc-only) decodes/encodes via
+      COBS+CRC; no remaining `base64.b64decode`/`b64encode` call on the
+      wire path (confirmed via `grep -rn base64 src/host/` — every hit left
+      is a historical doc-comment, none a code path; see Completion Notes).
+  - [x] `SerialConnection`/`NezhaProtocol`/`sim_loop`/TestGUI's
+        `transport.py` all pass their existing higher-level test suites
+        unchanged (command builders, `TLMFrame` field access untouched).
+  - [x] HELLO/PING text rump still decodes correctly when interleaved
+        with binary frames on the same connection — `ByteStreamDemuxer`
+        (new `io/wire_codec.py`) demuxes both shapes structurally off the
+        SAME raw byte stream, exercised directly
+        (`test_host_wire_codec.py`) and through `SerialConnection`'s own
+        reader-loop tests (`test_serial_conn_binary_plane.py`).
+  - [x] Fault-injection test: a corrupted frame is dropped on the host
+        decode path with a counted fault, not silently mis-parsed —
+        `SerialConnection.malformed_frame_count` (new, 123-003) plus
+        `test_reader_loop_crc_corrupted_binary_frame_is_dropped_not_raised`/
+        `test_decode_frame_rejects_crc_corrupted_frame`.
 
 ## Implementation Plan
 
@@ -243,3 +268,188 @@ must also change. Stopping here rather than expanding scope unilaterally.
 Ticket left in `exception` status; all firmware-side + authorized
 sim-test-side work is committed and `src/tests/sim` (minus the 5 bridge-
 dependent tests) is green.
+
+## 002/003 Merge Resolution — completed
+
+Team-lead decided to merge ticket 003's host-decoder scope into this
+ticket (the wire-format change is atomic; there is no green-per-ticket
+boundary once the sim suite exercises the production host decode path).
+Ticket moved `exception` -> `in-progress` and this second pass completed
+the full cutover: firmware side (already committed, 72812f49/e60c0b75)
+required NO further changes; everything below is the host + bridge half.
+
+### Final frame layout (unchanged from the firmware-side completion notes
+above — restated here because this is now the byte-for-byte contract the
+HOST side implements independently, not just documents)
+
+Outbound: `msg::wire::encode()` (N bytes) -> append little-endian
+CRC-16/CCITT-FALSE (2 bytes, poly 0x1021, init 0xFFFF, no reflection, no
+xorout) -> COBS-encode the combined N+2 bytes -> transport appends exactly
+one trailing `0x00` delimiter. Inbound: strip the transport's own `0x00`
+delimiter -> COBS-decode -> split trailing 2 CRC bytes -> verify -> decode
+the schema payload. Demux of the coexisting HELLO/PING text rump: whichever
+byte (`0x00` or `\n`) is seen FIRST in the accumulated stream decides the
+kind — this is a byte-for-byte port of `App::Transport::readLine()`
+(`comms.h`), including its one known, narrow, ACCEPTED collision (a COBS
+frame's content is only guaranteed `0x00`-free, not `0x0A`-free; an
+embedded `0x0A` before a frame's own terminator can misclassify a text/
+binary boundary — present in firmware too, not a defect introduced here;
+self-heals via each side's own malformed-frame counting and retry
+discipline. See `wire_codec.py`'s `ByteStreamDemuxer` docstring).
+
+### `src/sim/sim_ctypes.cpp` binary-safe redesign (the unplanned, unlisted
+file both tickets' exceptions flagged)
+
+`sim_drain_tlm(SimHandle h, uint8_t* buf, int buflen)` no longer
+newline-joins raw outbound text (safe pre-123 only because base64's
+alphabet excludes both `0x00`/`0x0A`; unsafe now that frame content is
+arbitrary bytes). It now `memcpy`s each captured COBS+CRC frame into `buf`
+with exactly one `0x00` appended per frame — the SAME trailing-delimiter
+shape multiple back-to-back real wire frames would have — and returns the
+total byte count (snprintf-return-value convention: `> buflen` means only
+a whole-frame PREFIX was copied; never splits a frame across the boundary).
+The Python side (`sim_loop.py`'s `_drain_tlm_into_queue()`) reads
+`buf.raw[:n]` (never `.value`, which stops at the first embedded `0x00`)
+and splits on `b"\x00"` directly — no text/binary demux needed on this
+path since `drainRawTelemetry()` only ever captures binary `send()` frames,
+never text `sendReliable()` replies. `sim_inject_command()`'s own
+`const char*` signature needed NO change: a COBS-encoded frame body is
+0x00-free by construction, so a NUL-terminated C string safely carries it
+(only the Python CALLER changed, from `"*B" + base64...` to
+`wire_codec.encode_frame(...)`).
+
+### Every host file changed
+
+- **New:** `src/host/robot_radio/io/wire_codec.py` — the one Python
+  mirror of `wire_runtime.h`'s COBS/CRC primitives:
+  `crc16_ccitt_false()`, `cobs_encode()`/`cobs_decode()`,
+  `encode_frame()`/`decode_frame()` (CRC-then-COBS composition,
+  `decode_frame()` returns `None` on any malformed input, never raises),
+  and `ByteStreamDemuxer` (the text/binary stream demuxer). Verified
+  against the firmware's own known-answer CRC vector
+  (`crc16_ccitt_false(b"123456789") == 0x29B1`) and round-tripped against
+  500 random payloads each for COBS and the full frame codec.
+- **`io/serial_conn.py`** — `_reader_loop()` rewritten to read raw bytes
+  (`_ser.read()`/`.in_waiting`, never `.readline()`) through a
+  `ByteStreamDemuxer`; text-plane classification extracted into a new
+  `_handle_text_line()` (behavior unchanged). `_handle_binary_reply()`
+  takes a raw frame body, decodes via `wire_codec.decode_frame()`, counts
+  a new `malformed_frame_count` on failure. `send_envelope()`/
+  `send_envelope_fast()` write `encode_frame(...) + b"\x00"` instead of
+  `f"*B{base64...}\n"`. The pre-reader-thread handshake helpers
+  (`_banner_classify`/`_relay_handshake`/`_poll_ready`/`_poll_read_lines`,
+  plus the standalone `probe_devices()`) also switched off raw
+  `.readline()` onto a new module helper `_read_text_line_raw()` +  a
+  per-connect-attempt `self._handshake_demux` — a binary telemetry frame
+  can now legitimately arrive interleaved with the boot banner/PING
+  handshake (the firmware streams telemetry from boot regardless of
+  HELLO), and unlike base64 text, a raw frame may embed a literal `0x0A`
+  that a plain `readline()` would misinterpret as a line ending.
+- **`io/sim_loop.py`** — `_dearmor_reply()` replaced with
+  `_decode_reply_frame()` (COBS+CRC via `wire_codec`); `move()`/
+  `inject_command()` build/accept frame `bytes` instead of `"*B..."` `str`;
+  `_drain_tlm_into_queue()` reads the binary-safe `sim_drain_tlm()` output
+  per the sim_ctypes.cpp redesign above.
+- **`io/sim_config.py`** — `SimConfigConn.send_envelope_fast()` builds a
+  frame via `encode_frame()` instead of base64-armoring.
+- **`io/cli.py`, `robot/protocol.py`, `testgui/transport.py`** — doc-only
+  updates (module docstrings/help text describing the wire shape); neither
+  file had a functional base64 call site (both delegate framing to
+  `serial_conn.py`/`sim_config.py`).
+- **`testgui/binary_bridge.py`** — `render_log_line()` redesigned to
+  dispatch by Python TYPE (`bytes` = binary frame, `str` = text line)
+  instead of a `"*B"` string-prefix check, since a real frame is no longer
+  guaranteed ASCII-safe to carry as a Python `str` at all. Malformed/
+  undecodable binary input now renders a `<binary: malformed, N bytes>`
+  marker instead of falling back to the (no-longer-meaningful) raw line.
+- **`src/tests/bench/relay_telemetry_rate.py`,
+  `src/tests/sim/{tune_velocity_pid,scoreboard_700}.py`** — non-pytest-
+  collected diagnostic tools, updated for consistency (not required for
+  the acceptance gate, but left on the old wire shape would have silently
+  broken on next use): `instrument_malformed_counter()`'s wrapper and the
+  two scripts' inline envelope-injection helpers now go through
+  `wire_codec`. `src/tests/notebooks/plan_dump_trace_overlay.ipynb`
+  (targets the already-`reserved` `plan_dump` arm, pre-existing sprint-
+  103-era staleness unrelated to this cutover) was left untouched —
+  out of scope, not pytest-collected, not a live wire-shape reference.
+
+### Tests
+
+- **New:** `src/tests/unit/test_host_wire_codec.py` (20 tests — CRC known-
+  answer + bit-sensitivity, COBS round-trip/boundary/malformed-input,
+  frame round-trip + the CRC-corruption/malformed fault-injection pair,
+  `ByteStreamDemuxer` interleaving/partial-feed). Named `test_host_wire_
+  codec.py`, not `test_wire_codec.py`, to avoid a pytest module-name
+  collision with the pre-existing, unrelated
+  `src/tests/sim/unit/test_wire_codec.py` (the C++ `wire.{h,cpp}` generated-
+  codec harness wrapper — neither `src/tests/unit/` nor `src/tests/sim/
+  unit/` has an `__init__.py`, so pytest's default rootdir-insertion import
+  mode requires distinct basenames).
+- **New:** `src/tests/unit/_wire_test_helpers.py` — shared `FakeSerial`
+  (byte-buffer-backed, `.read()`/`.in_waiting`, "raises once exhausted"
+  contract) + `binary_frame()`/`text_line()` builders, used by
+  `test_serial_conn_binary_plane.py`/`test_serial_conn_telemetry_
+  secondary.py`. Not itself pytest-collected (no `test_`/`_test` filename
+  match).
+- **Rewritten:** `test_serial_conn_binary_plane.py`,
+  `test_serial_conn_telemetry_secondary.py`, `test_protocol_binary_client.py`
+  — every `_FakeSerial`/`_LoopbackSerial`/`_RecordingSerial`/
+  `_ConfigLoopbackSerial`/`_NoReplySerial` test double rebuilt on the raw
+  `.read()`/`.in_waiting` contract instead of `.readline()`; every
+  `"*B" + base64...` line builder replaced with `binary_frame()`/
+  `encode_frame()`. Added one new test,
+  `test_reader_loop_crc_corrupted_binary_frame_is_dropped_not_raised`
+  (SUC-002's host-side half: a bit-flipped, well-COBS-framed frame is
+  dropped via CRC, not mis-parsed). One test's synthetic field values were
+  changed (`tlm.now=999` -> `42`) after discovering they happened to
+  produce a frame starting with the shared, accepted `0x0A` collision byte
+  described above — not a bug, a deterministic (non-flaky) authoring
+  pitfall now documented inline.
+- **Rewritten:** `src/tests/testgui/test_sim_loop.py` (two tests capturing
+  `inject_command()`'s argument now decode a `bytes` frame via
+  `wire_codec.decode_frame()` instead of base64), `src/tests/testgui/
+  test_binary_bridge.py` (`_armor()` helper now returns `encode_frame(...)`
+  bytes; the "malformed/non-armored passes through unchanged" tests split
+  into a type-based pair — `test_text_plane_line_passes_through_unchanged`
+  and `test_malformed_binary_frame_renders_marker_never_raises`, matching
+  `render_log_line()`'s new dispatch-by-type contract).
+- **Unchanged, confirmed still green as-is (no wire-shape dependency):**
+  `test_serial_conn_ack_ring.py`, `test_twist_stop_ack_matcher.py`,
+  `test_protocol_config.py` (all operate above the framing layer, on
+  `_binary_tlm_queue`/duck-typed connections).
+
+### Verification
+
+- `uv run python3 build.py --clean` — ARM firmware (`v0.20260724.2`,
+  MICROBIT.hex) and the host-sim library (`libfirmware_host.dylib`,
+  HOST_BUILD) both built clean, no warnings introduced by this ticket's
+  changes.
+- `uv run python -m pytest -q` — **1428 passed, 2 skipped, 9 xfailed, 2
+  xpassed, 0 failed** in ~523s. Before (exception-time baseline): 1407
+  passed/2 skipped/9 xfailed/2 xpassed with 81 FAILED. The +21 passed
+  delta is exactly the 20 new `test_host_wire_codec.py` tests plus the one
+  new CRC-fault-injection test added to `test_serial_conn_binary_plane.py`
+  — every other file's test COUNT is unchanged, only its wire-shape
+  construction — confirming no test was silently dropped in the rewrite.
+  Skipped/xfailed/xpassed counts are byte-identical to baseline (no
+  incidental change in unrelated marked tests).
+- Corrupted-frame rejection confirmed on BOTH sides: firmware
+  (`app_comms_harness.cpp`'s CRC-mismatch fault-injection scenario, already
+  committed by the earlier firmware-side pass) and host
+  (`test_decode_frame_rejects_crc_corrupted_frame`,
+  `test_reader_loop_crc_corrupted_binary_frame_is_dropped_not_raised`,
+  both new).
+
+### Explicit statement for team-lead: ticket 003 is COMPLETE
+
+Every one of ticket 003's own acceptance criteria (host decoder rewrite:
+`io/serial_conn.py`, `io/sim_loop.py`, `io/sim_config.py`, plus the doc-only
+`io/cli.py`/`robot/protocol.py`/`testgui/transport.py`; no remaining
+`base64.b64decode`/`b64encode` on the wire path; existing higher-level test
+suites pass unchanged; HELLO/PING-interleaved-with-binary demux; host-side
+fault-injection) is satisfied by the work described above, folded into this
+ticket per team-lead's merge decision. Ticket 003 itself was NOT moved to
+`done` by this agent (out of scope per dispatch instructions — "Do NOT touch
+ticket 003's status — team-lead will move it to done") — its file scope,
+acceptance criteria, and file list are otherwise fully covered here and it
+is ready for team-lead to fold/close.

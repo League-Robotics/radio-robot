@@ -39,27 +39,64 @@
 // ---- Command injection ----
 //   void sim_inject_twist(SimHandle h, float v_x, float omega, float duration, uint32_t corr);
 //   void sim_inject_stop(SimHandle h, uint32_t corr);
-//   void sim_inject_command(SimHandle h, const char* armoredLine);
-//     Raw, non-actuation escape hatch -- pushes ANY already-armored ("*B...")
-//     line straight onto the inbound FakeTransport, for tests that need a
-//     wire shape sim_inject_twist()/sim_inject_stop() don't cover.
+//   void sim_inject_command(SimHandle h, const char* frame);
+//     Raw, non-actuation escape hatch -- pushes ANY already-COBS+CRC-framed
+//     command frame body (123-002; was an already-armored "*B..." line
+//     pre-123) straight onto the inbound FakeTransport, for tests that need a
+//     wire shape sim_inject_twist()/sim_inject_stop() don't cover. `frame` is
+//     NUL-terminated (`strlen()`-recovered on the C++ side,
+//     `SimHarness::injectCommand()`) -- safe because a COBS-encoded frame
+//     body is guaranteed 0x00-free by construction, so passing it as a plain
+//     C string never truncates it. Build `frame` with
+//     `robot_radio.io.wire_codec.encode_frame()` on the Python side (the SAME
+//     codec every other binary command producer uses) -- NOT the pre-123
+//     `*B<base64>` shape.
 //
 // ---- Telemetry drain ----
-//   int sim_drain_tlm(SimHandle h, char* buf, int buflen);
-//     Drains every raw (still-armored "*B...") outbound line captured since
-//     the LAST sim_drain_tlm() call on this handle, newline-joins them, and
-//     copies up to buflen-1 bytes plus a NUL terminator into buf (buf may be
-//     NULL / buflen may be 0 to just drain-and-discard). Returns the number
-//     of bytes the FULL joined string would occupy, NOT counting the NUL --
-//     exactly like snprintf()'s own return-value convention, so a caller can
-//     detect truncation (return value >= buflen) and knows how big a buffer
-//     to retry with. NOTE: the drain always advances regardless of whether
-//     buf was big enough -- a caller that truncates has still consumed
-//     those lines; pass a buffer sized generously (a handful of KB comfortably
+//   int sim_drain_tlm(SimHandle h, uint8_t* buf, int buflen);
+//     123-002/003 BINARY-SAFE REDESIGN: drains every raw outbound COBS+CRC
+//     frame body captured since the LAST sim_drain_tlm() call on this handle
+//     (still-framed bytes, 0x00-free by COBS construction -- exactly what
+//     App::Transport::send() received per frame) and copies them into `buf`
+//     with EXACTLY one 0x00 byte appended after each frame -- the SAME
+//     trailing-delimiter convention the real wire itself uses
+//     (comms.h's Transport::send() doc comment), reproduced here explicitly
+//     because SimHarness::drainRawTelemetry()'s own capture does NOT include
+//     that trailing byte (it captures only the framed body Comms::sendReply()
+//     built, before a real transport would append its own delimiter). This
+//     makes the joined buffer byte-for-byte the same shape multiple
+//     back-to-back real wire frames would occupy on an actual serial/radio
+//     byte stream, so the Python side demuxes it with the EXACT SAME
+//     0x00-split + COBS-decode + CRC-verify logic
+//     (`robot_radio.io.wire_codec.ByteStreamDemuxer`/`decode_frame()`) it
+//     already needs for a real transport -- no separate "sim ABI framing"
+//     convention to maintain.
+//
+//     Pre-123 this newline-joined RAW `*B<base64>` wire TEXT (base64's
+//     alphabet excludes both 0x00 and 0x0A, so a text join was safe); that
+//     joining is now WRONG for arbitrary binary frame content, which may
+//     legitimately embed a literal 0x0A (only 0x00 is guaranteed absent) --
+//     hence the switch to memcpy'd raw bytes + a 0x00 join, never a
+//     snprintf("%s")-style text copy that would stop at the first embedded
+//     0x00 inside what is now a MULTI-frame buffer.
+//
+//     Returns the TOTAL number of bytes across every captured frame (each
+//     frame's own length + 1 for its trailing 0x00 delimiter) -- mirroring
+//     snprintf()'s own return-value convention so a caller can detect
+//     truncation (return value > buflen means only a PREFIX of whole frames
+//     was copied), except this is a raw byte count, not a string length: the
+//     copy is a memcpy, never assumes or inserts a text NUL terminator of its
+//     own beyond what the frames' own trailing delimiters already provide.
+//     Never splits a frame across the buflen boundary -- if a frame would not
+//     fit whole, it (and every frame after it in this drain) is left
+//     uncopied, though the drain has still CONSUMED it (same "drain always
+//     advances regardless of whether buf was big enough" contract as
+//     pre-123): pass a buffer sized generously (a handful of KB comfortably
 //     covers a burst of frames from one step() call) to avoid this in
-//     practice. The lines returned are RAW wire text -- this file does not
-//     dearmor or decode them; the Python side does that with the exact same
-//     pb2 codec a real robot's replies go through (host/robot_radio/robot/pb2).
+//     practice. buf may be NULL / buflen may be 0 to just drain-and-discard
+//     (only the total byte count is computed). The Python side decodes each
+//     demuxed frame with the exact same COBS+CRC codec a real robot's
+//     replies go through (`robot_radio.io.wire_codec`).
 //
 // ---- True pose ----
 //   float sim_true_x(SimHandle h);  // [mm]
@@ -288,17 +325,24 @@ void sim_inject_command(SimHandle h, const char* armoredLine) {
 
 // ---- Telemetry drain ----
 
-int sim_drain_tlm(SimHandle h, char* buf, int buflen) {
-  std::vector<std::string> lines = asHarness(h)->drainRawTelemetry();
-  std::string joined;
-  for (size_t i = 0; i < lines.size(); ++i) {
-    if (i != 0) joined += '\n';
-    joined += lines[i];
-  }
+int sim_drain_tlm(SimHandle h, uint8_t* buf, int buflen) {
+  std::vector<std::string> frames = asHarness(h)->drainRawTelemetry();
+
+  size_t total = 0;
+  for (const std::string& frame : frames) total += frame.size() + 1;  // +1 for the trailing 0x00
+
   if (buf != nullptr && buflen > 0) {
-    std::snprintf(buf, static_cast<size_t>(buflen), "%s", joined.c_str());
+    size_t copied = 0;
+    const size_t cap = static_cast<size_t>(buflen);
+    for (const std::string& frame : frames) {
+      const size_t frameTotal = frame.size() + 1;
+      if (copied + frameTotal > cap) break;  // never split a frame across the buffer boundary
+      std::memcpy(buf + copied, frame.data(), frame.size());
+      buf[copied + frame.size()] = 0x00;
+      copied += frameTotal;
+    }
   }
-  return static_cast<int>(joined.size());
+  return static_cast<int>(total);
 }
 
 // ---- True pose ----

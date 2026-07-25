@@ -27,12 +27,15 @@ counter, shared by STREAM/SNAP, wraps at 65535):
     few poll windows (burst, e.g. a relay stall) or spread one-or-two-per-
     many windows (uniform sparse loss, e.g. the single-slot RX reassembly
     buffer dropping a message here and there)?
-  - malformed *B frame count: instrumented via a local (script-side only,
-    no production file touched) wrap of SerialConnection._handle_binary_reply
-    that re-attempts the same base64/protobuf decode it performs and counts
-    decode exceptions BEFORE they are swallowed. This is the only way to
-    observe them at all — a malformed frame is otherwise silently dropped
-    inside the reader thread and would appear only as an ordinary seq gap.
+  - malformed binary frame count: instrumented via a local (script-side
+    only, no production file touched) wrap of
+    SerialConnection._handle_binary_reply that re-attempts the same
+    COBS+CRC/protobuf decode it performs (123-002/003; was base64/protobuf
+    pre-123) and counts decode failures BEFORE they are swallowed. This is
+    the only way to observe them at all — a malformed frame is otherwise
+    silently dropped inside the reader thread and would appear only as an
+    ordinary seq gap. (SerialConnection.malformed_frame_count, added
+    123-003, is now also directly readable without this wrapper.)
 
 Usage (ports are bench-specific — always confirm with `mbdeploy list`'s ROLE
 column rather than trusting a stale example; the relay and robot enumerate as
@@ -58,7 +61,6 @@ retraction of the "async STREAM frames dropped by the bridge" claim.
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import sys
 import time
@@ -66,31 +68,37 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 
 from robot_radio.io.serial_conn import SerialConnection
+from robot_radio.io.wire_codec import decode_frame
 from robot_radio.robot.pb2 import envelope_pb2
 from robot_radio.robot.protocol import NezhaProtocol, TLMFrame, tlm_drop_rate
 
 
 def instrument_malformed_counter(conn: SerialConnection) -> dict:
-    """Wrap ``conn._handle_binary_reply`` to count ``*B`` decode failures.
+    """Wrap ``conn._handle_binary_reply`` to count binary-frame decode
+    failures (123-002/003: COBS+CRC frame bodies; was base64 pre-123).
 
     Script-side only — does not modify serial_conn.py. Re-performs the same
-    base64-decode + ReplyEnvelope.FromString() that the real handler does,
-    purely to observe whether it would have raised, then always calls the
+    COBS+CRC-decode + ReplyEnvelope.FromString() that the real handler does,
+    purely to observe whether it would have failed, then always calls the
     real (unmodified) handler so behavior is unchanged. Returns a dict the
-    caller can read live: {"malformed": <count>}.
+    caller can read live: {"malformed": <count>} -- also mirrored by
+    ``conn.malformed_frame_count`` directly (123-003), kept alongside this
+    wrapper rather than replacing it so the script's own live dict-read
+    call sites are untouched.
     """
     original = conn._handle_binary_reply
     counts = {"malformed": 0}
-    prefix = "*B"
 
-    def wrapped(text: str) -> None:
-        if text.startswith(prefix):
+    def wrapped(frame: bytes) -> None:
+        raw_bytes = decode_frame(frame)
+        if raw_bytes is None:
+            counts["malformed"] += 1
+        else:
             try:
-                raw_bytes = base64.b64decode(text[len(prefix):])
                 envelope_pb2.ReplyEnvelope.FromString(raw_bytes)
             except Exception:
                 counts["malformed"] += 1
-        return original(text)
+        return original(frame)
 
     conn._handle_binary_reply = wrapped  # type: ignore[method-assign]
     return counts
@@ -114,7 +122,7 @@ class CaptureResult:
     drop_rate: float          # fraction of expected-from-seq frames missing
     longest_gap: int          # largest single run of consecutive missing seq
     gap_events: list          # list[GapEvent] — every run of >=1 missing frame
-    malformed: int            # *B frames that failed base64/protobuf decode
+    malformed: int            # binary frames that failed COBS+CRC/protobuf decode
     connect_info: dict        # SerialConnection.connect() return value
     ping_ok: bool             # sanity PING succeeded before arming stream
 

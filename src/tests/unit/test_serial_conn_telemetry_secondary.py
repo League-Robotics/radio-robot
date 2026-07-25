@@ -7,29 +7,30 @@ ack-ring matcher hardening + TelemetrySecondary consumption).
 -- and resolved its wire framing: a SECOND, independently-armored ``*B``
 line, NOT a ``ReplyEnvelope.body`` oneof arm (that oneof is fixed at
 ``ok``/``err``/``tlm``, envelope.proto). ``src/firm/app/telemetry.cpp``'s
-``emitSecondary()`` (confirmed against the merged tree) armors and sends a
+``emitSecondary()`` (confirmed against the merged tree) frames and sends a
 BARE ``msg::TelemetrySecondary`` directly -- never wrapped in a
-``ReplyEnvelope`` -- under the exact same ``*B<base64>`` prefix a
-``ReplyEnvelope`` line uses. No host consumer decoded this frame before this
-ticket, even though the wire framing had been decided since 103-001.
+``ReplyEnvelope`` -- under the exact same COBS+CRC framing (123-002/003;
+was the ``*B<base64>`` prefix pre-123) a ``ReplyEnvelope`` frame uses. No
+host consumer decoded this frame before ticket 104-003, even though the
+wire framing had been decided since 103-001.
 
 This file covers ``serial_conn.py``'s new decode path
 (``_handle_binary_reply()``'s ``TelemetrySecondary`` fallback,
 ``_binary_secondary_queue``, ``drain_binary_secondary_tlm()``/
 ``read_binary_secondary_tlm()``), no live hardware, no real serial port
-(mirrors ``test_serial_conn_binary_plane.py``'s own ``_FakeSerial``/
-``_new_conn()`` pattern):
+(rewritten for 123-002/003; mirrors ``test_serial_conn_binary_plane.py``'s
+own ``_wire_test_helpers.FakeSerial``/``_new_conn()`` pattern):
 
-1. A synthetic ``TelemetrySecondary``, armored exactly as
-   ``src/firm/app/telemetry.cpp`` armors it, round-trips through
+1. A synthetic ``TelemetrySecondary``, framed exactly as
+   ``src/firm/app/telemetry.cpp`` frames it, round-trips through
    ``_reader_loop()`` into ``_binary_secondary_queue`` with every field
    (``acc``, ``glitch``, ``ts``, ``cmd_vel``) intact -- this ticket's own
    required round-trip test.
 2. Disambiguation: an ordinary ``ReplyEnvelope`` (``ok``/``err``/``tlm``)
-   line is routed exactly as before (never misrouted to the secondary
-   queue), and a ``TelemetrySecondary`` line is never misrouted to
+   frame is routed exactly as before (never misrouted to the secondary
+   queue), and a ``TelemetrySecondary`` frame is never misrouted to
    ``_reply_queues``/``_binary_tlm_queue`` -- proving the two message types
-   sharing one armor prefix coexist correctly in the same reader-thread
+   sharing one frame shape coexist correctly in the same reader-thread
    session.
 3. ``drain_binary_secondary_tlm()`` / ``read_binary_secondary_tlm()`` --
    the TelemetrySecondary counterparts of ``drain_binary_tlm()``/
@@ -42,7 +43,6 @@ Collected under ``src/tests/unit/`` — ``pyproject.toml``'s ``testpaths`` inclu
 
 from __future__ import annotations
 
-import base64
 import queue
 
 import pytest
@@ -50,38 +50,16 @@ import pytest
 from robot_radio.io.serial_conn import SerialConnection
 from robot_radio.robot.pb2 import envelope_pb2, telemetry_pb2
 
+from _wire_test_helpers import FakeSerial, binary_frame
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-class _FakeSerial:
-    """Minimal readline()-based stand-in for pyserial.Serial (mirrors
-    test_serial_conn_binary_plane.py's own fixture) -- feeds a fixed
-    sequence of lines to ``_reader_loop()`` when called SYNCHRONOUSLY, no
-    threading, cannot hang."""
-
-    is_open = True
-
-    def __init__(self, lines: list[bytes]):
-        self._lines = list(lines)
-
-    def readline(self) -> bytes:
-        if not self._lines:
-            raise RuntimeError("fake serial exhausted (mimics a closed port)")
-        return self._lines.pop(0)
-
-
 def _new_conn() -> SerialConnection:
     return SerialConnection()
-
-
-def _armor(message) -> str:
-    """Armor a pb2 message exactly as src/firm/app/telemetry.cpp's
-    emitSecondary() (bare TelemetrySecondary) and Comms::sendReply()
-    (ReplyEnvelope) both do: `*B` + base64(serialized bytes)."""
-    return "*B" + base64.b64encode(message.SerializeToString()).decode("ascii")
 
 
 def _synthetic_secondary(**kwargs) -> "telemetry_pb2.TelemetrySecondary":
@@ -109,9 +87,8 @@ def _synthetic_secondary(**kwargs) -> "telemetry_pb2.TelemetrySecondary":
 def test_telemetry_secondary_round_trips_every_field_through_reader_loop():
     conn = _new_conn()
     secondary = _synthetic_secondary()
-    armored = _armor(secondary)
 
-    conn._ser = _FakeSerial([(armored + "\n").encode("ascii")])
+    conn._ser = FakeSerial(binary_frame(secondary))
     conn._reader_loop()
 
     decoded = conn._binary_secondary_queue.get_nowait()
@@ -132,9 +109,8 @@ def test_telemetry_secondary_has_cmd_vel_false_round_trips():
     conn = _new_conn()
     secondary = _synthetic_secondary(has_cmd_vel=False, cmd_vel_left=0.0,
                                       cmd_vel_right=0.0)
-    armored = _armor(secondary)
 
-    conn._ser = _FakeSerial([(armored + "\n").encode("ascii")])
+    conn._ser = FakeSerial(binary_frame(secondary))
     conn._reader_loop()
 
     decoded = conn._binary_secondary_queue.get_nowait()
@@ -159,20 +135,15 @@ def test_reply_envelope_lines_still_route_normally_alongside_telemetry_secondary
     ack = envelope_pb2.ReplyEnvelope(corr_id=9)
     ack.ok.q = 2
     ack.ok.rem = 5.0
-    ack_armored = _armor(ack)
 
     push = envelope_pb2.ReplyEnvelope(corr_id=0)
     push.tlm.now = 42
     push.tlm.seq = 8
-    push_armored = _armor(push)
 
-    secondary_armored = _armor(_synthetic_secondary(now=999))
+    secondary = _synthetic_secondary(now=999)
 
-    conn._ser = _FakeSerial([
-        (ack_armored + "\n").encode("ascii"),
-        (secondary_armored + "\n").encode("ascii"),
-        (push_armored + "\n").encode("ascii"),
-    ])
+    conn._ser = FakeSerial(
+        binary_frame(ack) + binary_frame(secondary) + binary_frame(push))
     conn._reader_loop()
 
     ack_reply = reply_q.get_nowait()
@@ -197,27 +168,27 @@ def test_telemetry_secondary_never_registers_a_reply_queue_entry():
     """TelemetrySecondary carries no corr_id at all -- confirms the fallback
     path never touches _reply_queues (there is nothing to key a lookup by)."""
     conn = _new_conn()
-    armored = _armor(_synthetic_secondary())
 
-    conn._ser = _FakeSerial([(armored + "\n").encode("ascii")])
+    conn._ser = FakeSerial(binary_frame(_synthetic_secondary()))
     conn._reader_loop()
 
     assert conn._reply_queues == {}
     assert conn._binary_tlm_queue.empty()
 
 
-def test_malformed_binary_line_still_dropped_not_misrouted_to_secondary_queue():
-    """A corrupted `*B` line (neither a valid ReplyEnvelope NOR a valid
+def test_malformed_binary_frame_still_dropped_not_misrouted_to_secondary_queue():
+    """A corrupted binary frame (neither a valid ReplyEnvelope NOR a valid
     TelemetrySecondary) must still be dropped silently, not crash the
     reader thread and not land in either queue."""
     conn = _new_conn()
 
-    conn._ser = _FakeSerial([b"*Bnot-valid-base64!!!\n"])
+    conn._ser = FakeSerial(b"not-a-valid-cobs-crc-frame-body" + b"\x00")
     conn._reader_loop()  # must not raise
 
     assert conn._binary_tlm_queue.empty()
     assert conn._binary_secondary_queue.empty()
     assert conn._reply_queues == {}
+    assert conn.malformed_frame_count >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +254,9 @@ def test_binary_secondary_queue_drops_oldest_on_overflow():
     conn._binary_secondary_queue = queue.Queue(maxsize=3)
 
     for now in range(5):
-        conn._handle_binary_reply(_armor(_synthetic_secondary(now=now)))
+        # _handle_binary_reply() takes the frame BODY (trailing 0x00
+        # delimiter already stripped by the demuxer in the real reader loop).
+        conn._handle_binary_reply(binary_frame(_synthetic_secondary(now=now))[:-1])
 
     remaining = []
     while not conn._binary_secondary_queue.empty():

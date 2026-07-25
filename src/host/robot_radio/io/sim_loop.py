@@ -118,7 +118,6 @@ call is round-tripped onto the tick thread -- see "Threading model" above.
 
 from __future__ import annotations
 
-import base64
 import ctypes
 import logging
 import pathlib
@@ -128,6 +127,8 @@ import threading
 import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Iterator
+
+from robot_radio.io.wire_codec import decode_frame, encode_frame
 
 if TYPE_CHECKING:
     from robot_radio.config.robot_config import RobotConfig
@@ -226,17 +227,17 @@ def _get_envelope_pb2():
     return _envelope_pb2_module
 
 
-def _dearmor_reply(line: str, pb2_mod) -> "envelope_pb2.ReplyEnvelope | None":
-    """Strip a ``*B`` armor prefix, base64-decode, and parse as a
-    ``pb2.ReplyEnvelope``. Returns ``None`` on any malformed input, mirroring
-    ``SerialConnection._handle_binary_reply()``'s own tolerance for a single
-    corrupted binary reply -- never raises."""
-    line = line.strip()
-    if not line.startswith("*B"):
+def _decode_reply_frame(frame: bytes, pb2_mod) -> "envelope_pb2.ReplyEnvelope | None":
+    """COBS+CRC-decode ``frame`` (123-002/003; was a ``*B<base64>`` armored
+    text line pre-123) and parse it as a ``pb2.ReplyEnvelope``. Returns
+    ``None`` on any malformed/corrupt input (bad COBS, CRC mismatch, bad
+    protobuf bytes), mirroring ``SerialConnection._handle_binary_reply()``'s
+    own tolerance for a single corrupted binary reply -- never raises."""
+    payload = decode_frame(frame)
+    if payload is None:
         return None
     try:
-        raw = base64.b64decode(line[2:])
-        return pb2_mod.ReplyEnvelope.FromString(raw)
+        return pb2_mod.ReplyEnvelope.FromString(payload)
     except Exception:
         return None
 
@@ -272,9 +273,20 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
     lib.sim_inject_stop.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
     lib.sim_inject_stop.restype = None
 
+    # `frame` is a COBS+CRC-framed command body (123-002/003; was a
+    # `*B<base64>` armored line pre-123) -- build it with
+    # `robot_radio.io.wire_codec.encode_frame()`. Safe as a NUL-terminated
+    # `c_char_p` because a COBS-encoded frame body is guaranteed 0x00-free.
     lib.sim_inject_command.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
     lib.sim_inject_command.restype = None
 
+    # 123-002/003: `buf` now receives raw, memcpy'd bytes -- every captured
+    # outbound COBS+CRC frame this drain call, each followed by exactly one
+    # 0x00 delimiter (sim_ctypes.cpp's own doc comment) -- NOT a
+    # snprintf("%s")-style NUL-terminated string. Read exactly the returned
+    # byte count (or `buflen`, whichever is smaller) via the buffer's `.raw`
+    # attribute, never `.value` (which would stop at the FIRST embedded
+    # 0x00 -- i.e. after the first frame only).
     lib.sim_drain_tlm.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
     lib.sim_drain_tlm.restype = ctypes.c_int
 
@@ -798,8 +810,8 @@ class SimLoop:
             move=pb2_mod.Move(
                 timeout=timeout, replace=replace, id=move_id,
                 **velocity_kwargs, **stop_kwargs))
-        armored = base64.b64encode(envelope.SerializeToString()).decode("ascii")
-        self.inject_command(f"*B{armored}")
+        frame = encode_frame(envelope.SerializeToString())
+        self.inject_command(frame)
         return move_id
 
     def read_pending_binary_tlm_frames(self) -> "list[TLMFrame]":
@@ -834,14 +846,15 @@ class SimLoop:
     # Raw command injection escape hatch
     # ------------------------------------------------------------------
 
-    def inject_command(self, armored_line: str) -> None:
-        """Push an already-armored (``*B...``) line straight onto the
-        inbound FakeTransport -- ``sim_inject_command()``'s own escape
-        hatch for a wire shape ``twist()``/``stop()`` don't cover."""
+    def inject_command(self, frame: bytes) -> None:
+        """Push an already-COBS+CRC-framed command frame body (123-002/003;
+        was an already-armored ``*B...`` text line pre-123) straight onto the
+        inbound FakeTransport -- ``sim_inject_command()``'s own escape hatch
+        for a wire shape ``twist()``/``stop()`` don't cover. Build ``frame``
+        with ``robot_radio.io.wire_codec.encode_frame()``."""
         self._require_connected()
-        encoded = armored_line.encode("ascii")
         self._run_or_enqueue(
-            lambda: self._lib.sim_inject_command(self._handle, encoded))
+            lambda: self._lib.sim_inject_command(self._handle, frame))
 
     # ------------------------------------------------------------------
     # True pose
@@ -1329,26 +1342,38 @@ class SimLoop:
         docstring for how this drives the tick cadence."""
         from robot_radio.robot.protocol import TLMFrame
 
+        # 123-002/003: sim_drain_tlm() now fills `buf` with raw, memcpy'd
+        # bytes -- every captured outbound COBS+CRC frame, each followed by
+        # exactly one 0x00 delimiter (sim_ctypes.cpp's own doc comment) --
+        # NOT a NUL-terminated string. Read via `.raw[:n]` (never `.value`,
+        # which would stop at the FIRST embedded 0x00, i.e. after the first
+        # frame only) and split on the SAME 0x00 delimiter. This drain path
+        # only ever carries binary frames (drainRawTelemetry() reads
+        # FakeTransport::sent(), never sentReliable()'s text-plane
+        # HELLO/PING replies), so a plain b"\x00"-split is correct here --
+        # no text/binary demux ambiguity to resolve (contrast
+        # ByteStreamDemuxer, used where text and binary genuinely
+        # interleave on the same stream, e.g. a real serial connection).
         buf = ctypes.create_string_buffer(_TLM_DRAIN_BUFFER)
         needed = self._lib.sim_drain_tlm(self._handle, buf, _TLM_DRAIN_BUFFER)
-        if needed >= _TLM_DRAIN_BUFFER:
+        if needed > _TLM_DRAIN_BUFFER:
             # Truncated -- retry once with an exactly-sized buffer (the
             # drain already advanced regardless, per sim_ctypes.cpp's own
-            # snprintf-return-value convention, so this is a fresh drain
-            # of whatever accumulated since, not a re-fetch of the lost
-            # data).
-            buf = ctypes.create_string_buffer(needed + 1)
-            self._lib.sim_drain_tlm(self._handle, buf, needed + 1)
-        joined = buf.value.decode("utf-8", errors="replace")
-        if not joined:
+            # snprintf-return-value-style convention, so this is a fresh
+            # drain of whatever accumulated since, not a re-fetch of the
+            # lost data).
+            buf = ctypes.create_string_buffer(needed)
+            needed = self._lib.sim_drain_tlm(self._handle, buf, needed)
+        raw = buf.raw[:needed]
+        if not raw:
             return
 
         pb2_mod = _get_envelope_pb2()
         suspended = self._telemetry_suspended.is_set()
-        for line in joined.split("\n"):
-            if not line:
+        for frame_bytes in raw.split(b"\x00"):
+            if not frame_bytes:
                 continue
-            reply = _dearmor_reply(line, pb2_mod)
+            reply = _decode_reply_frame(frame_bytes, pb2_mod)
             if reply is None or reply.WhichOneof("body") != "tlm":
                 continue
             frame = TLMFrame.from_pb2(reply.tlm)

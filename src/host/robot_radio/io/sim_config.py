@@ -18,9 +18,10 @@ of defining its own copy -- see that module for the import site.
 
 from __future__ import annotations
 
-import base64
 import time
 from typing import TYPE_CHECKING
+
+from robot_radio.io.wire_codec import encode_frame
 
 if TYPE_CHECKING:
     from robot_radio.io.sim_loop import SimLoop
@@ -58,13 +59,14 @@ class SimConfigConn:
         self._loop = loop
 
     def send_envelope_fast(self, envelope: "envelope_pb2.CommandEnvelope") -> int:
-        """Assign a corr_id, armor, and inject via ``SimLoop.
-        inject_command()`` -- the exact ``*B<base64>`` shape
+        """Assign a corr_id, frame (COBS+CRC), and inject via ``SimLoop.
+        inject_command()`` -- the exact framing (123-002/003)
         ``SerialConnection.send_envelope_fast()`` writes to a real serial
-        port (see that method's own docstring), minus the trailing
-        newline framing a live serial stream needs and a direct
+        port (see that method's own docstring), minus the trailing 0x00
+        delimiter a live serial stream needs and a direct
         ``inject_command()`` call does not (``FakeTransport::
-        enqueueInbound()`` takes one already-delimited line per call).
+        enqueueInboundBinary()`` takes one already-delimited frame per
+        call).
 
         113-006 correction: corr_id comes from ``self._loop._next_corr_id()``
         -- the SAME thread-safe, monotonic counter ``SimLoop.twist()``/
@@ -92,8 +94,8 @@ class SimConfigConn:
         constructed over its lifetime, closing the collision structurally."""
         corr_id = self._loop._next_corr_id()
         envelope.corr_id = corr_id
-        armored = base64.b64encode(envelope.SerializeToString()).decode("ascii")
-        self._loop.inject_command(f"*B{armored}")
+        frame = encode_frame(envelope.SerializeToString())
+        self._loop.inject_command(frame)
         return corr_id
 
     def send_envelope(self, envelope: "envelope_pb2.CommandEnvelope",

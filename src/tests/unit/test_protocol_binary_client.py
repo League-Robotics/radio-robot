@@ -63,13 +63,13 @@ it.
 
 from __future__ import annotations
 
-import base64
 import contextlib
 import queue
 
 import pytest
 
 from robot_radio.io.serial_conn import SerialConnection
+from robot_radio.io.wire_codec import decode_frame, encode_frame
 from robot_radio.robot.pb2 import common_pb2, config_pb2, envelope_pb2, telemetry_pb2
 from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
 from robot_radio.robot._legacy_tlm_text import parse_historical_tlm_line
@@ -270,61 +270,73 @@ _ACK_FRESH_BIT = 1 << 5
 class _ConfigLoopbackSerial:
     """Mock transport for the binary config set round-trip tests.
 
-    On write() of a `*B<base64>` CommandEnvelope, decodes it, records it
-    (``sent_envelopes``), and synthesizes an ack -- mirroring the CURRENT
-    single-loop firmware's fire-and-poll contract (bench fix, 2026-07-22):
-    ``config`` gets NO synchronous ``ReplyEnvelope`` of its own
-    (``docs/protocol-v4.md`` sec 7.1 -- ``Comms::sendReply()`` is called
-    from exactly one site, ``Telemetry::emitPrimary()``, always with
-    ``body_kind = TLM``); its outcome rides the bounded ack ring
-    (``acks``, 120) -- and, unchanged, the single "freshest ack" scalar
-    slot (``ack_corr``/``ack_err``, valid iff ``flags`` bit 5) -- inside
-    the NEXT unsolicited ``ReplyEnvelope{tlm: Telemetry}`` push instead --
-    exactly what ``move``/``stop`` already do, and what
-    ``set_config_binary()`` now polls for via
-    ``wait_for_ack()``/``_match_ack_in_frames()`` (``io/serial_conn.py``),
-    not a synchronous ``ok`` oneof.
+    On write() of a COBS+CRC-framed CommandEnvelope (123-002/003; was a
+    `*B<base64>` line pre-123), decodes it, records it (``sent_envelopes``),
+    and synthesizes an ack -- mirroring the CURRENT single-loop firmware's
+    fire-and-poll contract (bench fix, 2026-07-22): ``config`` gets NO
+    synchronous ``ReplyEnvelope`` of its own (``docs/protocol-v4.md`` sec
+    7.1 -- ``Comms::sendReply()`` is called from exactly one site,
+    ``Telemetry::emitPrimary()``, always with ``body_kind = TLM``); its
+    outcome rides the bounded ack ring (``acks``, 120) -- and, unchanged,
+    the single "freshest ack" scalar slot (``ack_corr``/``ack_err``, valid
+    iff ``flags`` bit 5) -- inside the NEXT unsolicited
+    ``ReplyEnvelope{tlm: Telemetry}`` push instead -- exactly what
+    ``move``/``stop`` already do, and what ``set_config_binary()`` now
+    polls for via ``wait_for_ack()``/``_match_ack_in_frames()``
+    (``io/serial_conn.py``), not a synchronous ``ok`` oneof.
+
+    Exposes ``read()``/``in_waiting`` (never ``readline()``) -- the raw-byte
+    contract ``SerialConnection``'s reader thread now uses; never
+    "exhausts" (``read()`` returns ``b""`` when idle, like a live, open
+    port) -- tests stop the reader thread explicitly via ``_stop_reader()``.
     """
 
     is_open = True
 
     def __init__(self) -> None:
-        self._pending: queue.Queue = queue.Queue()
+        self._out = bytearray()
         self.sent_envelopes: list[envelope_pb2.CommandEnvelope] = []
-        # 097-002: raw armored lines actually written, for tests that assert
+        # 097-002: raw frame bytes actually written, for tests that assert
         # the literal wire bytes (not just the decoded envelope).
         self.raw_writes: list[bytes] = []
 
     def write(self, data: bytes) -> int:
         self.raw_writes.append(data)
-        text = data.decode("ascii").strip()
-        if text.startswith("*B"):
-            raw = base64.b64decode(text[2:])
-            cmd = envelope_pb2.CommandEnvelope.FromString(raw)
-            self.sent_envelopes.append(cmd)
+        if data.endswith(b"\x00"):
+            raw = decode_frame(data[:-1])
+            if raw is not None:
+                cmd = envelope_pb2.CommandEnvelope.FromString(raw)
+                self.sent_envelopes.append(cmd)
 
-            # Unsolicited tlm push carrying the ack -- corr_id=0 on the
-            # ENVELOPE itself (matches real firmware: primary frames always
-            # carry corr_id=0). wait_for_ack() (120: ring-based) actually
-            # matches on the `acks` ring entry; the scalar ack_corr/ack_err/
-            # flags bit 5 are populated too, mirroring how real firmware's
-            # Telemetry::ack() pushes both simultaneously, for any OTHER
-            # reader that still wants the single freshest-ack slot.
-            tlm = telemetry_pb2.Telemetry(flags=_ACK_FRESH_BIT, ack_corr=cmd.corr_id, ack_err=0)
-            tlm.acks.add(corr_id=cmd.corr_id, err=0)
-            reply = envelope_pb2.ReplyEnvelope(corr_id=0, tlm=tlm)
-            armored = "*B" + base64.b64encode(reply.SerializeToString()).decode("ascii")
-            self._pending.put((armored + "\n").encode("ascii"))
+                # Unsolicited tlm push carrying the ack -- corr_id=0 on the
+                # ENVELOPE itself (matches real firmware: primary frames
+                # always carry corr_id=0). wait_for_ack() (120: ring-based)
+                # actually matches on the `acks` ring entry; the scalar
+                # ack_corr/ack_err/flags bit 5 are populated too, mirroring
+                # how real firmware's Telemetry::ack() pushes both
+                # simultaneously, for any OTHER reader that still wants the
+                # single freshest-ack slot.
+                tlm = telemetry_pb2.Telemetry(
+                    flags=_ACK_FRESH_BIT, ack_corr=cmd.corr_id, ack_err=0)
+                tlm.acks.add(corr_id=cmd.corr_id, err=0)
+                reply = envelope_pb2.ReplyEnvelope(corr_id=0, tlm=tlm)
+                self._out += encode_frame(reply.SerializeToString()) + b"\x00"
         return len(data)
 
     def flush(self) -> None:
         pass
 
-    def readline(self) -> bytes:
-        try:
-            return self._pending.get(timeout=0.2)
-        except queue.Empty:
+    @property
+    def in_waiting(self) -> int:
+        return len(self._out)
+
+    def read(self, size: int = 1) -> bytes:
+        if not self._out:
             return b""
+        n = max(1, min(size, len(self._out)))
+        chunk = bytes(self._out[:n])
+        del self._out[:n]
+        return chunk
 
 
 class _NoReplySerial:
@@ -338,7 +350,11 @@ class _NoReplySerial:
     def flush(self) -> None:
         pass
 
-    def readline(self) -> bytes:
+    @property
+    def in_waiting(self) -> int:
+        return 0
+
+    def read(self, size: int = 1) -> bytes:
         return b""
 
 
