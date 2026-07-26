@@ -117,10 +117,10 @@ envelopes directly — the exact gap the two REQUIRED tickets below close.
 All checkable, and the bench gate runs over the **radio relay**, not USB
 (per stakeholder directive — a sprint is not done on tests alone):
 
-- [ ] Cross-language golden vectors (all-`0x0A`, all-`0x00`,
+- [x] Cross-language golden vectors (all-`0x0A`, all-`0x00`,
       `0x00..0xFF` sweep, empty payload) pass byte-identically in both
       the C++ and pytest suites.
-- [ ] Sim/loopback framing test exercises the real wire codec end to
+- [x] Sim/loopback framing test exercises the real wire codec end to
       end (not `sim_ctypes`'s envelope bypass) off-hardware.
 - [ ] `move_wheels` embedding a literal `0x0A` executes 10/10 over the
       radio relay (the 123-006 hardware repro, now over relay).
@@ -135,17 +135,17 @@ All checkable, and the bench gate runs over the **radio relay**, not USB
       relay with a stated loss budget, alongside the equivalent USB
       measurement (both paths characterized, neither investigated
       open-endedly).
-- [ ] `cycle()` contains exactly one `tlm_.update(state)` call and zero
+- [x] `cycle()` contains exactly one `tlm_.update(state)` call and zero
       `setFlag()` calls (grep-enforceable).
-- [ ] `TelemetrySecondary`'s frame type, wire arm, and tie-break
+- [x] `TelemetrySecondary`'s frame type, wire arm, and tie-break
       machinery are gone from the diff, not just unused.
-- [ ] Regenerated `kReplyEnvelopeMaxEncodedSize` ≤ 130 B.
-- [ ] A wheel's position never silently clips: `RobotLoop` calls the
+- [x] Regenerated `kReplyEnvelopeMaxEncodedSize` ≤ 130 B.
+- [x] A wheel's position never silently clips: `RobotLoop` calls the
       *existing, unmodified* `Motor::rebaseline()` (never
       `resetPosition()`) when position nears the `±32 m` wire bound, and
       an observable `positionEpoch` lets the host detect the rebase — no
       device command is ever sent to perform it.
-- [ ] `Devices::Motor`/`NezhaMotor`/`MotorArmor` are unmodified by this
+- [x] `Devices::Motor`/`NezhaMotor`/`MotorArmor` are unmodified by this
       sprint (grep-enforceable — the offset/rebaseline mechanism they
       already carry is reused as-is).
 
@@ -1037,11 +1037,14 @@ Parent: UC-001 (radio commands running reliably)
 
 Before tickets can be created, all of the following must be true:
 
-- [ ] Sprint planning document is complete (sprint.md, including its
+- [x] Sprint planning document is complete (sprint.md, including its
       Architecture and Use Cases sections)
-- [ ] Architecture review passed (or skipped, for changes with no
-      architectural impact)
-- [ ] Stakeholder has approved the sprint plan
+- [x] Architecture review passed (or skipped, for changes with no
+      architectural impact) — recorded `passed`, 2026-07-25T22:10:59Z
+      (full five-category substantial-tier review, verdict APPROVE)
+- [x] Stakeholder has approved the sprint plan — recorded `passed`,
+      2026-07-25T22:12:24Z (replan directive; scope valve pulled; Q9
+      correction folded in)
 
 ## Tickets
 
@@ -1063,3 +1066,73 @@ Before tickets can be created, all of the following must be true:
 | 014 | Documentation update: protocol-v5 doc, design.md/DESIGN.md, published protocol page | 013 |
 
 Tickets execute serially in the order listed.
+
+## Closing Notes
+
+**No hardware was connected at any point during this sprint's
+execution** (`pyocd list` reports no probe; no `/dev/cu.usbmodem*`
+present throughout). This is the single fact that governs every
+unchecked box above and in the tickets below — not an oversight, not a
+partial failure, but the honest state of what could and could not be
+established off a bench.
+
+Concretely, **15 acceptance criteria across tickets 005, 010, 012, and
+013 are unchecked for this reason**:
+- **005** (2): the 123-006 `0x0A` repro over the wire, and the
+  `HELLO`/`PING`/`ID`/`VER` round-trip over a real transport.
+- **010** (2): reproducing the relay-handshake fix against the isolated
+  live sequence, and confirming `kFaultCommsMalformed` stays clear
+  through an actual fresh relay connect.
+- **012** (2): the actual USB-vs-relay wire-quality measurement and the
+  `unparseable=0` reconfirmation on both physical paths.
+- **013** (9, the full bench-gate ticket): banner-on-connect,
+  `HELLO`/`PING`/`ID`/`VER` over the relay, `move_wheels` start/stop,
+  encoder climb, enqueue+completion acks, the wire-quality-vs-budget
+  measurement, `kFaultCommsMalformed` holding through the full gate, the
+  relay-specifically requirement, and the 0x0A repro over the actual
+  acceptance transport.
+
+**The sprint's own acceptance gate was built but never run.**
+`src/tests/bench/radio_bench_gate.py` (ticket 013) is committed,
+self-scoring, and dry-run verified, but with no hardware present it has
+never executed against a real robot. The stakeholder runs it on
+`master`. Until then, this sprint's headline acceptance — a clean
+radio-relay bench run — is **unverified**, not proven, and this record
+says so rather than implying otherwise.
+
+**What the sprint does have is off-hardware proof through the real
+codec**, not a substitute for the above but a different and genuinely
+established thing: the cross-language golden vectors (ticket 004) and
+the sim/loopback framing path (ticket 006) both exercise the actual
+encode→COBS→decode chain, and both were independently proven as real
+tripwires, not just passing tests — flipping the CRC polynomial broke
+the C++ suite (14 assertions across 8 vectors) while Python stayed
+green; reverting `cobsDecode()`'s `0x0A` keying to `0x00` broke both
+sim/loopback tests with "no ack observed within 25 cycles." That is a
+meaningfully different and weaker claim than a hardware pass — it rules
+out framing regressions catchable off-hardware, it does not confirm the
+robot itself behaves correctly over the relay.
+
+**Q9 (position-rebaseline policy) was corrected twice during
+planning** — see Architecture Revision 1 (a memory-based assumption
+about `resetPosition()` corrected against the actual tree) and Revision
+2 (stakeholder ruling: a software-only offset via the existing,
+unmodified `Motor::rebaseline()`, never a device-touching reset) above.
+Not restated here beyond this cross-reference.
+
+**Known gaps carried to sprint 125, disclosed rather than silent:**
+- `RobotState::Command.v_x`/`omega` and `RobotState::Estimate` are
+  defined but unpopulated — `MoveQueue` exposes no accessor for its
+  staged twist, and `StateEstimator` keeps its fused results in private
+  members queried via `wheelAt()`/`bodyAt()` rather than writing them
+  back into `RobotState`.
+- The Drive/Sensors device-ownership reshuffle deferred per Design
+  Rationale Decision 1 (the scope valve) — 125's own scope.
+
+**Measurement bias in the relay malformed-frame counter (tickets
+010/012).** Ticket 010's relay carve-out drops lines starting
+`#`/`!`/`?` uncounted; a corrupted frame whose first byte happens to
+land on one of those three sigils will not increment
+`malformedCount()`. Ticket 012's instrument reports both its own true
+rate and production's biased rate so the gap stays visible rather than
+silently understating loss.
