@@ -280,7 +280,8 @@ the zero-error harness).
 
 1. **Per-wheel EMA velocity filter** (`WheelChannel`): raw encoder
    velocities are very noisy. The filter advances ONLY when `sampleTime`
-   changes (the encoder register refreshes ~80 ms vs the 50 ms loop, so
+   changes (measured 2026-07-26: the register itself is live at <=16 ms —
+   see §7.3 — but through the loop a sample can still repeat, so
    most cycles re-see the SAME sample; re-feeding it would silently
    re-weight old data). First fresh sample seeds. Filtered velocity
    feeds extrapolation and the profiler's current-speed input; traveled
@@ -329,13 +330,36 @@ checkpoint, item 7 remains deferred, and item 8 is still open.
    truthfully — add a `settled` bool to TickResult). In the zero-error
    sim, settle-complete and profile-complete coincide on the same tick
    (test that).
-3. **Bench measurement — encoder refresh interval.** On the real robot
-   (mounted on a stand, wheels free): command a constant wheel velocity,
-   log timestamped raw encoder collects for ≥ 60 s at 2-3 speeds,
-   histogram the intervals between raw-count CHANGES per wheel. Output:
-   a short markdown note + CSV in `src/motion/planner/bench/`. The ~80 ms
-   folklore number has never been formally characterized; the measured
-   distribution sets the EMA weight and the noise model for item 1.
+3. **Bench measurement — encoder refresh interval. DONE 2026-07-26 —
+   and the answer overturns the premise.** A dedicated bench firmware
+   (`src/tests/firmware/encoder_rate/` — own CODAL CMake project, raw
+   0x46 protocol, no driver conditioning) tight-polled both encoders on
+   the stand. Findings (full write-up:
+   `src/tests/firmware/encoder_rate/RESULTS.md`, raw captures alongside):
+   - **The ~80 ms folklore is FALSE.** The register returned a fresh
+     value on EVERY poll at 16/24/32 ms periods, single-port,
+     alternating ports, with duty writes before the select, and at 8%
+     duty. No latch quantization in the count deltas. The register is
+     live at ≤ 16 ms.
+   - **The historical staleness was a loop-schedule artifact:** a 0x10
+     transaction interposed between the 0x46 select-write and its read
+     returns raw 0, 416/416 times (phase F) — the driver's glitch
+     rejection then reads that cycle as "stale." The pre-118 loop
+     schedule interposed exactly like that; the current interleaved
+     schedule keeps the window clean.
+   - Select latch: the brick holds ONE pending select, last wins
+     (phase G) — ordering matters, data stays valid.
+   Consequences: plan for FRESH samples at the 50 ms loop cadence
+   (fresh-sample EMA gating stays correct — it keys on `sampleTime`);
+   the noise tier's stale-cadence emulation becomes a degraded-mode
+   test, not the expected regime; the angular `settled` concern below
+   (encoder quantum, not refresh) still stands. The telemetry-based
+   capture half of `src/motion/planner/bench/encoder_refresh.py` is
+   superseded for this question but remains useful to CONFIRM per-cycle
+   freshness through the real loop's own telemetry. Base-side follow-up
+   (main repo): correct the "~80 ms" claims in
+   `src/firm/devices/DESIGN.md`, `nezha_motor.{h,cpp}`, and
+   `docs/design/base-explicit-loop-sketch.md` items 4/7.
 4. **Heading hold on Distance Moves (M3).** A P controller on the
    uncommanded axis: during a Distance Move, `omegaCorrection = kHeading
    · (baselineHeading − heading)` (gain in PlannerLimits, default 0 =
@@ -522,20 +546,17 @@ actually valid, and marks it invalid until both wheels have a sample.
 
 ### Not done, and why
 
-**§7.3 — bench measurement of the encoder refresh interval: TOOLING
-WRITTEN, MEASUREMENT NOT RUN.** No robot is attached to this checkout —
-`pyocd list` reports "No available debug probes are connected" and no
-`/dev/cu.usbmodem*` device exists. `src/motion/planner/bench/
-encoder_refresh.py` drives 60/150/300 mm/s for 60 s each, captures
-telemetry, and histograms the per-wheel intervals between changes in both
-the sample stamp and the reported position (they answer different
-questions), emitting CSV + a markdown note. Its analysis half is exercised
-and correct — validated against a synthetic capture, where it correctly
-reads a flat p50 across speeds as the fixed-timer signature. Its capture
-half is unverified against real hardware. Run it, then set
-`velocityFilterWeight` and the noise tier's `sampleDivisor` from the result
-(and `settleWindow` from the p99, not the p50). See
-`src/motion/planner/bench/README.md`.
+**§7.3 — bench measurement: RUN AND ANSWERED 2026-07-26** (the robot was
+attached to this checkout at the time), via a dedicated bench firmware
+rather than the telemetry path — see §7.3's own updated text and
+`src/tests/firmware/encoder_rate/RESULTS.md`. Headline: the register is
+live at ≤ 16 ms; the ~80 ms folklore was interposed-traffic sample
+invalidation under the pre-118 loop schedule. `src/motion/planner/bench/
+encoder_refresh.py`'s telemetry capture remains useful as a THROUGH-THE-
+LOOP freshness confirmation (expect: fresh every 50 ms cycle on the
+current schedule); set `velocityFilterWeight` and the noise tier's
+`sampleDivisor` accordingly (staleness emulation = degraded mode now,
+not the expected regime).
 
 **§7.5 (RobotState joint checkpoint)** and **§7.6 (duty-plane back end)**
 remain blocked: both wait on sprint 124 landing in the main environment,
@@ -630,8 +651,9 @@ and the window is now); trusting the bit on hardware waits on §7.3.
 3. **After the merge:** Decision 2, then §7.5 (the RobotState joint
    checkpoint — delete `types/robot_state.h`, point the build at
    `src/firm/types/robot_state.h`, rerun the ctypes layout guard).
-4. **In parallel, needs the robot on the stand:** §7.3's encoder-refresh
-   measurement, and a velocity step response to replace the noise tier's
-   guessed `trackingLag = 0.8` with a measured one (§10 shows tracking lag
-   is now the ENTIRE residual error).
+4. **In parallel, needs the robot on the stand:** ~~§7.3's encoder-refresh
+   measurement~~ (DONE 2026-07-26 — see §7.3), and a velocity step
+   response to replace the noise tier's guessed `trackingLag = 0.8` with
+   a measured one (§10 shows tracking lag is now the ENTIRE residual
+   error).
 5. **Cross-effort, start the conversation now:** Decision 3.
