@@ -151,7 +151,13 @@ class PlannerLimits(ctypes.Structure):
                 ("velKff", ctypes.c_float),   # [duty/(mm/s)] M4 duty stage
                 ("velKp", ctypes.c_float),    # [duty/(mm/s)]
                 ("velKi", ctypes.c_float),    # [duty/(mm/s)/s]
-                ("velIMax", ctypes.c_float)]  # [duty]
+                ("velIMax", ctypes.c_float),  # [duty]
+                ("velKaff", ctypes.c_float),  # [duty/(mm/s^2)] accel feedforward
+                ("velIAccelGate", ctypes.c_float),  # [mm/s^2] integral ramp gate
+                ("jerkMax", ctypes.c_float),     # [mm/s^3] S-curve
+                ("yawJerkMax", ctypes.c_float),  # [rad/s^3]
+                ("settleRestVelocity", ctypes.c_float),  # [mm/s]
+                ("settleRestOmega", ctypes.c_float)]     # [rad/s]
 
 
 class TickResult(ctypes.Structure):
@@ -219,6 +225,12 @@ def benchLimits() -> PlannerLimits:
     limits.velKp = 0.0
     limits.velKi = 0.0
     limits.velIMax = 0.0
+    limits.velKaff = 0.0
+    limits.velIAccelGate = 1.0e9
+    limits.jerkMax = 0.0
+    limits.yawJerkMax = 0.0
+    limits.settleRestVelocity = 5.0
+    limits.settleRestOmega = 0.02
     return limits
 
 

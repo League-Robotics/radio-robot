@@ -19,6 +19,14 @@ struct AxisLimits {
   float vMax = 0.0f;
   float aMax = 0.0f;
   float aDecel = 0.0f;
+  // Jerk ceiling (0 = disabled, plain trapezoid). When set, the ACCEL
+  // side becomes an S-curve: per-step acceleration may grow by at most
+  // jMax*dt, and is tapered as sqrt(2*jMax*(cruise - v)) approaching
+  // cruise so it reaches zero exactly at cruise -- no instant accel
+  // corner. The BRAKING side deliberately keeps its instant-aDecel
+  // authority: the discrete feasibility/braking accounting stays exact
+  // and the landing guarantee is untouched.
+  float jMax = 0.0f;
 };
 
 struct ProfileResult {
@@ -46,8 +54,11 @@ float maxEntryVelocity(float distance, float boundary, const AxisLimits& limits,
 // Picks the largest velocity that keeps landing feasible; emits the exact
 // terminal step (remaining/dt) when it is reachable within the accel/decel
 // window, closing the sum to `remaining` exactly.
+// `previousAccel` is the accel the caller's LAST emitted step implied
+// ((v_k - v_{k-1})/dt, signed, positive frame); only consulted when
+// limits.jMax > 0.
 ProfileResult profileStep(float remaining, float previous, float cruise,
                           float boundary, const AxisLimits& limits,
-                          float dt);  // [s]
+                          float dt, float previousAccel = 0.0f);  // [s] [mm/s^2]
 
 }  // namespace Motion

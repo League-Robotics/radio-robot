@@ -1,5 +1,6 @@
 #include "estimation.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace Motion {
@@ -20,7 +21,11 @@ void WheelChannel::ingest(float position, float velocity,
 
 float WheelChannel::positionAt(uint32_t t) const {
   if (!valid_) return 0.0f;
-  const float age = static_cast<float>(t - anchorTime_) * 0.001f;  // [s]
+  // Signed: a caller may legitimately ask for an instant slightly BEFORE
+  // this anchor (the loop stamps cycleStart before the collects) -- treat
+  // that as zero extrapolation, never as a wrapped ~50-day age.
+  const float age = std::max(
+      0.0f, static_cast<float>(static_cast<int32_t>(t - anchorTime_)) * 0.001f);  // [s]
   return anchorPosition_ + velocityFiltered_ * age;
 }
 

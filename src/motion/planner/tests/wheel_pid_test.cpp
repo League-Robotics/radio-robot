@@ -30,17 +30,17 @@ struct LagPlant {
 
 void testFailClosedZeroGains() {
   WheelPid pid;  // default all-zero gains
-  CHECK_NEAR(pid.compute(300.0f, 0.0f, kDt), 0.0f, 1e-9);
+  CHECK_NEAR(pid.compute(300.0f, 0.0f, 0.0f, kDt), 0.0f, 1e-9);
 }
 
 void testFeedforwardMapping() {
   WheelPid pid;
   pid.configure(PidGains{0.002f, 0.0f, 0.0f, 0.0f});
   // Pure kff: duty = kff * target regardless of measurement.
-  CHECK_NEAR(pid.compute(300.0f, 999.0f, kDt), 0.6f, 1e-6);
-  CHECK_NEAR(pid.compute(-300.0f, 0.0f, kDt), -0.6f, 1e-6);
+  CHECK_NEAR(pid.compute(300.0f, 0.0f, 999.0f, kDt), 0.6f, 1e-6);
+  CHECK_NEAR(pid.compute(-300.0f, 0.0f, 0.0f, kDt), -0.6f, 1e-6);
   // Output clamps at [-1, 1].
-  CHECK_NEAR(pid.compute(1000.0f, 0.0f, kDt), 1.0f, 1e-6);
+  CHECK_NEAR(pid.compute(1000.0f, 0.0f, 0.0f, kDt), 1.0f, 1e-6);
 }
 
 // The reason the PID exists: with the plant gain misestimated (kff 30%
@@ -56,8 +56,8 @@ void testClosedLoopBeatsOpenLoop() {
   closedLoop.configure(PidGains{0.0014f, 0.0016f, 0.005f, 0.3f});
 
   for (int i = 0; i < 200; ++i) {  // 10 s
-    openPlant.step(openLoop.compute(target, openPlant.velocity, kDt), kDt);
-    closedPlant.step(closedLoop.compute(target, closedPlant.velocity, kDt),
+    openPlant.step(openLoop.compute(target, 0.0f, openPlant.velocity, kDt), kDt);
+    closedPlant.step(closedLoop.compute(target, 0.0f, closedPlant.velocity, kDt),
                      kDt);
   }
   const float openError = std::fabs(openPlant.velocity - target);
@@ -73,12 +73,12 @@ void testAntiWindup() {
   // Demand far beyond the plant: output saturates; integrator must stay
   // clamped, and the output must recover promptly when the demand drops.
   for (int i = 0; i < 400; ++i) {
-    (void)pid.compute(2000.0f, 100.0f, kDt);
+    (void)pid.compute(2000.0f, 0.0f, 100.0f, kDt);
   }
   CHECK(std::fabs(pid.integral()) <= 0.3f + 1e-6f);
   // Post-saturation: a modest, matched target must not be dragged far by
   // leftover integral.
-  const float duty = pid.compute(100.0f, 100.0f, kDt);
+  const float duty = pid.compute(100.0f, 0.0f, 100.0f, kDt);
   CHECK(duty <= 0.2f + 0.3f + 1e-3f);  // kff term + at most the clamp
 }
 

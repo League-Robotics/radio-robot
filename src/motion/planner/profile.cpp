@@ -41,10 +41,24 @@ float maxEntryVelocity(float distance, float boundary, const AxisLimits& limits,
 }
 
 ProfileResult profileStep(float remaining, float previous, float cruise,
-                          float boundary, const AxisLimits& limits, float dt) {
+                          float boundary, const AxisLimits& limits, float dt,
+                          float previousAccel) {
   const float r = std::max(0.0f, remaining);
+  // Accel authority this step. Plain trapezoid: aMax. With a jerk ceiling:
+  // accel may grow from the previous step's accel by at most jMax*dt, and
+  // is tapered to hit zero exactly at cruise (v(a=0) matches cruise when
+  // a = sqrt(2*jMax*(cruise - v))) -- the S-curve's two accel corners
+  // rounded, no instant jump into or out of the ramp.
+  float accelAllow = limits.aMax;
+  if (limits.jMax > 0.0f) {
+    const float grown = std::max(0.0f, previousAccel) + limits.jMax * dt;
+    const float headroom = std::max(0.0f, std::min(cruise, limits.vMax) -
+                                              previous);
+    const float taper = std::sqrt(2.0f * limits.jMax * headroom);
+    accelAllow = std::min(limits.aMax, std::min(grown, taper));
+  }
   float ceiling = std::min(std::min(cruise, limits.vMax),
-                           previous + limits.aMax * dt);
+                           previous + accelAllow * dt);
   const float floor = std::max(0.0f, previous - limits.aDecel * dt);
   if (ceiling < floor) ceiling = floor;  // cruise below reachable: brake toward it
 

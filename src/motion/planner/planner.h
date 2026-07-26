@@ -144,6 +144,7 @@ class Planner {
   // Positive-frame previous command on the profiled axis (the carry the
   // next tick ramps from); per-wheel carries for Wheels Moves and drain.
   float profileVelocity_ = 0.0f;
+  float profileAccel_ = 0.0f;  // [mm/s^2 or rad/s^2] last step's implied accel (jerk carry)
   float cmdLeft_ = 0.0f;   // [mm/s] staged last tick
   float cmdRight_ = 0.0f;  // [mm/s] staged last tick
   // Staged the tick before last -- the command actually driving the wheels

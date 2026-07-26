@@ -1,6 +1,7 @@
 #include "planner.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 
 #include "profile.h"
@@ -20,16 +21,28 @@ constexpr float kDoneEpsilonAngular = 1e-5f;  // [rad]
 // target, and stopped" for a real, lagging plant.
 constexpr float kSettleEpsilonLinear = 1.0f;      // [mm]
 constexpr float kSettleEpsilonAngular = 0.005f;   // [rad]
-// Rest floors. The gate is |velocity| <= max(floor, one decel step): a
-// body within one decel step of zero is PROVABLY at rest by the end of the
-// next interval, which is what makes settle-complete coincide with
-// profile-complete in a zero-error plant (the profiler's terminal step is
-// itself capped at one decel step above the boundary). The constants are
-// the noise floor below that, for an already-stopped real encoder.
-constexpr float kSettleRestLinear = 5.0f;    // [mm/s]
-constexpr float kSettleRestAngular = 0.05f;  // [rad/s]
+// Rest floors -- the settle gate's ONLY velocity criterion. (An earlier
+// revision widened the gate to max(floor, one decel step), reasoning a
+// commanded plant one step from zero is at rest next interval -- but a
+// REAL plant with time constant tau COASTS ~v*tau past the target after
+// the command reaches zero: at alphaDecel*dt = 0.25 rad/s that admitted
+// +0.9 deg of post-settle coast per turn. The floors are sized so the
+// worst coast is within the arrival epsilons.)
+// (Rest floors moved to PlannerLimits::settleRestVelocity/settleRestOmega
+// -- a per-robot noise property, not a universal constant.)
 
 float sign(float value) { return value < 0.0f ? -1.0f : 1.0f; }
+
+// Signed, clamped age between two robot-clock stamps [ms] -> [s]. The
+// loop stamps cycleStart at the TOP of the cycle but collects encoder
+// samples several ms LATER in the schedule, so a fresh sample's time is
+// legitimately AHEAD of `now` -- unsigned subtraction would wrap to a
+// ~50-day age and corrupt every prediction (surfaced the moment the sim
+// mirrored the real schedule, 2026-07-26).
+float ageSeconds(uint32_t now, uint32_t basis) {
+  return std::max(
+      0.0f, static_cast<float>(static_cast<int32_t>(now - basis)) * 0.001f);
+}
 
 // Signed one-axis ramp for Time/Wheels Moves: hold toward `cruise`, and
 // once the remaining ticks are just enough to reach `boundary` at the
@@ -54,7 +67,7 @@ Planner::Planner(const PlannerLimits& limits) : limits_(limits) {
   right_.configure(limits_.velocityFilterWeight);
   pose_.configure(limits_.trackWidth);
   const PidGains gains{limits_.velKff, limits_.velKp, limits_.velKi,
-                       limits_.velIMax};
+                       limits_.velIMax, limits_.velKaff, limits_.velIAccelGate};
   pidLeft_.configure(gains);
   pidRight_.configure(gains);
 }
@@ -74,17 +87,21 @@ Planner::Planner(const PlannerLimits& limits) : limits_(limits) {
 // still moving fast the PID stays engaged and actively brakes.
 void Planner::stageDuty(float dt) {
   constexpr float kRestClampVelocity = 30.0f;  // [mm/s]
-  const auto stage = [&](WheelPid& pid, float cmd, float measured,
-                         float& duty) {
+  const auto stage = [&](WheelPid& pid, float cmd, float cmdPrevious,
+                         float measured, float& duty) {
     if (cmd == 0.0f && std::fabs(measured) <= kRestClampVelocity) {
       pid.reset();
       duty = 0.0f;
       return;
     }
-    duty = pid.compute(cmd, measured, dt);
+    // The commanded accel behind this tick's target -- feeds the PID's
+    // acceleration feedforward (PidGains::kaff).
+    const float targetAccel = (cmd - cmdPrevious) / dt;
+    duty = pid.compute(cmd, targetAccel, measured, dt);
   };
-  stage(pidLeft_, cmdLeft_, left_.velocity(), dutyLeft_);
-  stage(pidRight_, cmdRight_, right_.velocity(), dutyRight_);
+  stage(pidLeft_, cmdLeft_, cmdLeftPrevious_, left_.velocity(), dutyLeft_);
+  stage(pidRight_, cmdRight_, cmdRightPrevious_, right_.velocity(),
+        dutyRight_);
 }
 
 bool Planner::move(const Move& next, bool replace) {
@@ -120,6 +137,7 @@ void Planner::stop() {
   pendingCount_ = 0;
   active_.occupied = false;
   profileVelocity_ = 0.0f;
+  profileAccel_ = 0.0f;
   cmdLeft_ = 0.0f;
   cmdRight_ = 0.0f;
   // The history too: after a stop there is no travel left to anticipate.
@@ -163,7 +181,8 @@ TickResult Planner::tick(const Types::RobotState& state) {
   // "traveled distance is ALWAYS anchored to measured positions").
   pose_.integrate(left_.basisPosition(), right_.basisPosition());
   if (state.otos.present && limits_.headingOtosWeight > 0.0f &&
-      now - state.otos.sampleTime <= limits_.otosStaleness) {
+      static_cast<int32_t>(now - state.otos.sampleTime) <=
+          static_cast<int32_t>(limits_.otosStaleness)) {
     pose_.blendHeading(state.otos.heading, limits_.headingOtosWeight);
   }
 
@@ -298,7 +317,10 @@ void Planner::activateNext(uint32_t now) {
   // Same-axis carry keeps the profile's ramp continuity; an axis change
   // starts the new axis's profile from rest (we landed at ~0 there).
   const Axis axis = axisOf(next);
-  if (axis != lastAxis_) profileVelocity_ = 0.0f;
+  if (axis != lastAxis_) {
+    profileVelocity_ = 0.0f;
+    profileAccel_ = 0.0f;
+  }
   lastAxis_ = axis;
   activeBoundary_ = 0.0f;
 }
@@ -329,10 +351,8 @@ Planner::Measurement Planner::measure(uint32_t now) const {
   // fully corrected by the next anchor; it never accumulates, because the
   // pose itself is anchored to measured positions.
   const float delay = limits_.actuationDelay * 0.001f;  // [s]
-  const float ageLeft =
-      static_cast<float>(now - left_.basisTime()) * 0.001f;  // [s]
-  const float ageRight =
-      static_cast<float>(now - right_.basisTime()) * 0.001f;  // [s]
+  const float ageLeft = ageSeconds(now, left_.basisTime());    // [s]
+  const float ageRight = ageSeconds(now, right_.basisTime());  // [s]
   const float elapsedLeft = delay > 0.0f ? cmdLeftPrevious_ : cmdLeft_;
   const float elapsedRight = delay > 0.0f ? cmdRightPrevious_ : cmdRight_;
   const float predictLeft =
@@ -367,6 +387,7 @@ Planner::Measurement Planner::measure(uint32_t now) const {
 
 bool Planner::settleReached(const Measurement& measured, float dt) const {
   if (!active_.occupied) return false;
+
   const Move& m = active_.move;
   if (m.velocityKind != Move::VelocityKind::Twist) return false;
   switch (m.kind) {
@@ -374,12 +395,10 @@ bool Planner::settleReached(const Measurement& measured, float dt) const {
       return false;  // nothing physical to confirm
     case Move::Kind::Distance:
       return std::fabs(measured.anchoredRemaining) <= kSettleEpsilonLinear &&
-             std::fabs(measured.bodyVelocity) <=
-                 std::max(kSettleRestLinear, limits_.aDecel * dt);
+             std::fabs(measured.bodyVelocity) <= limits_.settleRestVelocity;
     case Move::Kind::Angle:
       return std::fabs(measured.anchoredRemaining) <= kSettleEpsilonAngular &&
-             std::fabs(measured.omega) <=
-                 std::max(kSettleRestAngular, limits_.alphaDecel * dt);
+             std::fabs(measured.omega) <= limits_.settleRestOmega;
   }
   return false;
 }
@@ -429,6 +448,52 @@ void Planner::planActive(uint32_t now, float dt, const Measurement& measured) {
   const float elapsed = static_cast<float>(now - active_.activationTime);
   const float period = limits_.controlPeriod;  // [ms]
 
+  // M1 terminal-settle: once the profile has closed its sum, the final
+  // approach is a CLOSED-LOOP, BIDIRECTIONAL creep on the MEASURED
+  // residual -- the profile itself is positive-frame and legally lands
+  // with up to one decel step of residual speed, which a lagging plant
+  // coasts PAST the target (measured: +3.3 deg past a turn, from where a
+  // forward-only profile can never return). The creep is a plain P law
+  // with tight caps: it walks the residual to the arrival epsilon from
+  // EITHER side, decelerating as it converges, so the rest gate and the
+  // arrival gate become satisfiable together.
+  if (active_.settling &&
+      (m.kind == Move::Kind::Distance || m.kind == Move::Kind::Angle)) {
+    constexpr float kCreepGain = 2.0f;         // [1/s]
+    constexpr float kCreepMaxLinear = 40.0f;   // [mm/s]
+    constexpr float kCreepMaxAngular = 0.4f;   // [rad/s]
+    if (m.kind == Move::Kind::Distance) {
+      const float dir = sign(m.v_x);
+      const float previous = 0.5f * (cmdLeftPrevious_ + cmdRightPrevious_);
+      float v = dir * std::clamp(kCreepGain * measured.anchoredRemaining,
+                                 -kCreepMaxLinear, kCreepMaxLinear);
+      // The creep obeys the axis accel/decel limits like any other
+      // commanded motion -- a P law is not a license for command steps.
+      v = std::clamp(v, previous - limits_.aDecel * dt,
+                     previous + limits_.aMax * dt);
+      profileVelocity_ = std::fabs(v);
+      profileAccel_ = 0.0f;
+      cmdLeft_ = v;
+      cmdRight_ = v;
+      applyHeadingHold();
+    } else {
+      const float dir = sign(m.omega);
+      const float previousOmega =
+          (cmdRightPrevious_ - cmdLeftPrevious_) / limits_.trackWidth;
+      float omega =
+          dir * std::clamp(kCreepGain * measured.anchoredRemaining,
+                           -kCreepMaxAngular, kCreepMaxAngular);
+      omega = std::clamp(omega, previousOmega - limits_.alphaDecel * dt,
+                         previousOmega + limits_.alphaMax * dt);
+      profileVelocity_ = std::fabs(omega);
+      profileAccel_ = 0.0f;
+      const float halfTrack = 0.5f * limits_.trackWidth;
+      cmdLeft_ = -omega * halfTrack;
+      cmdRight_ = omega * halfTrack;
+    }
+    return;
+  }
+
   if (m.velocityKind == Move::VelocityKind::Wheels) {
     // Time-bounded per-wheel ramp (v1 scope; no wheels lookahead).
     const float ticksLeft = (m.threshold - elapsed) / period;
@@ -445,11 +510,18 @@ void Planner::planActive(uint32_t now, float dt, const Measurement& measured) {
   switch (m.kind) {
     case Move::Kind::Distance: {
       const float dir = sign(m.v_x);
-      const AxisLimits lin{limits_.vMax, limits_.aMax, limits_.aDecel};
+      const AxisLimits lin{limits_.vMax, limits_.aMax, limits_.aDecel,
+                           limits_.jerkMax};
       activeBoundary_ = boundaryVelocity(dt);
+      // Plan from the max of the last command and the MEASURED speed: on
+      // a lagging plant the body genuinely runs faster than the command
+      // during decel (lag ~a*tau), and braking feasibility must hold for
+      // the TRUE state or the landing starts too late (measured as gross
+      // turn overshoot the moment the sim mirrored the real schedule).
       const ProfileResult step = profileStep(
           measured.plannedRemaining, profileVelocity_, std::fabs(m.v_x),
-          activeBoundary_, lin, dt);
+          activeBoundary_, lin, dt, profileAccel_);
+      profileAccel_ = (step.velocity - profileVelocity_) / dt;
       profileVelocity_ = step.velocity;
       active_.closingIssued = step.closing;
       const float v = dir * step.velocity;
@@ -461,11 +533,12 @@ void Planner::planActive(uint32_t now, float dt, const Measurement& measured) {
     case Move::Kind::Angle: {
       const float dir = sign(m.omega);
       const AxisLimits ang{limits_.omegaMax, limits_.alphaMax,
-                           limits_.alphaDecel};
+                           limits_.alphaDecel, limits_.yawJerkMax};
       activeBoundary_ = boundaryVelocity(dt);
       const ProfileResult step = profileStep(
           measured.plannedRemaining, profileVelocity_, std::fabs(m.omega),
-          activeBoundary_, ang, dt);
+          activeBoundary_, ang, dt, profileAccel_);
+      profileAccel_ = (step.velocity - profileVelocity_) / dt;
       profileVelocity_ = step.velocity;
       active_.closingIssued = step.closing;
       const float omega = dir * step.velocity;

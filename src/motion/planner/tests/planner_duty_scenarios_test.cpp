@@ -41,7 +41,9 @@ PlannerLimits dutyLimits() {
   limits.actuationDelay = 50.0f;  // [ms] one cycle: sample age at decide time
   limits.velocityFilterWeight = 0.35f;  // reported velocity is noisy
   limits.requireSettle = true;
-  limits.settleWindow = 800.0f;  // [ms]
+  limits.settleWindow = 1500.0f;  // [ms] -- the measured-velocity-only
+                                  // rest gate needs the lagging plant to
+                                  // decay to true rest (tau ~230 ms)
   limits.headingHoldGain = 1.5f;  // [1/s] trims the L/R gain asymmetry
   // M4 duty stage, from the measured plant: kff = 1/gain(nominal 1370);
   // feedback sized for one-cycle dead time + tau 0.23 s.
@@ -49,6 +51,7 @@ PlannerLimits dutyLimits() {
   limits.velKp = 0.0009f;
   limits.velKi = 0.006f;
   limits.velIMax = 0.25f;
+  limits.velIAccelGate = 50.0f;  // [mm/s^2] integral trims at steady state only
   return limits;
 }
 

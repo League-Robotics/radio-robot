@@ -71,6 +71,30 @@ struct PlannerLimits {
   float velKp = 0.0f;    // [duty/(mm/s)] proportional
   float velKi = 0.0f;    // [duty/(mm/s)/s] integral rate
   float velIMax = 0.0f;  // [duty] integrator clamp; 0 disables integration
+
+  // Acceleration feedforward (velKaff ~= plantTau * velKff): a first-order
+  // plant needs (v + tau*dv/dt)/gain of duty to TRACK a ramp, not v/gain.
+  // Feeding the commanded accel through this term keeps ramp tracking
+  // error near zero, so the integral never winds up during ramps -- the
+  // measured cruise-entry overshoot spike was exactly that windup
+  // releasing. 0 = off.
+  float velKaff = 0.0f;  // [duty/(mm/s^2)]
+  float velIAccelGate = 1.0e9f;  // [mm/s^2] integral ramp gate (wheel_pid.h)
+
+  // Jerk ceilings (S-curve shaping): bound how fast the PROFILE's own
+  // acceleration may change, and taper acceleration to zero exactly at
+  // cruise (no instant accel corners -> no whiplash). 0 = disabled
+  // (plain trapezoid, all pre-existing behavior unchanged).
+  float jerkMax = 0.0f;     // [mm/s^3] linear axis
+  float yawJerkMax = 0.0f;  // [rad/s^3] angular axis
+
+  // Settle rest floors -- "at rest" thresholds on the FILTERED measured
+  // velocity. A per-robot property: they must sit ABOVE the robot's own
+  // filtered velocity-noise floor (else rest never confirms) and LOW
+  // enough that the post-settle coast (~floor * plant tau) stays inside
+  // the arrival epsilons. Defaults match the previous built-in constants.
+  float settleRestVelocity = 5.0f;  // [mm/s]
+  float settleRestOmega = 0.02f;    // [rad/s]
 };
 
 // The per-tick completion event, returned by tick() (never written into
