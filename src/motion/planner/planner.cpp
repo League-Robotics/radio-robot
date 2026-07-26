@@ -63,9 +63,28 @@ Planner::Planner(const PlannerLimits& limits) : limits_(limits) {
 // filtered measured wheel velocities -> per-wheel duty. Runs on every
 // tick() exit path so the duty outputs always mirror the velocity
 // outputs; inert (0) at the default all-zero gains.
+//
+// Rest clamp: an exactly-zero target with the wheel already near rest is
+// a hard stop, not a control problem -- zero the duty and reset the trim
+// integral instead of letting feedback (a) dither around velocity
+// measurement noise forever and (b) reverse-creep the landed pose while
+// the integral unwinds through zero (measured on the duty plant: ~1 deg
+// of back-rotation after a settled turn). Mirrors the firmware write
+// path's own exact-zero immediate-stop exemption. While the wheel is
+// still moving fast the PID stays engaged and actively brakes.
 void Planner::stageDuty(float dt) {
-  dutyLeft_ = pidLeft_.compute(cmdLeft_, left_.velocity(), dt);
-  dutyRight_ = pidRight_.compute(cmdRight_, right_.velocity(), dt);
+  constexpr float kRestClampVelocity = 30.0f;  // [mm/s]
+  const auto stage = [&](WheelPid& pid, float cmd, float measured,
+                         float& duty) {
+    if (cmd == 0.0f && std::fabs(measured) <= kRestClampVelocity) {
+      pid.reset();
+      duty = 0.0f;
+      return;
+    }
+    duty = pid.compute(cmd, measured, dt);
+  };
+  stage(pidLeft_, cmdLeft_, left_.velocity(), dutyLeft_);
+  stage(pidRight_, cmdRight_, right_.velocity(), dutyRight_);
 }
 
 bool Planner::move(const Move& next, bool replace) {
