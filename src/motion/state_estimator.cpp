@@ -10,16 +10,16 @@ StateEstimator::StateEstimator(FusionWeights weights) : weights_(weights) {}
 
 void StateEstimator::update(const Input& input, uint32_t now) {  // [ms]
   // Wheel peers -- always refreshed straight from this cycle's already-
-  // staged encoder reading (position, velocity, its own collect time). Each
+  // staged encoder reading (position, velocity, its own sample time). Each
   // wheel is its own independent peer -- no cross-wheel dependency here.
-  wheelLeft_.distance = input.encLeftPosition;
-  wheelLeft_.velocity = input.encLeftVelocity;
-  wheelLeft_.basisTime = input.encLeftTime;
+  wheelLeft_.distance = input.wheelLeft.position;
+  wheelLeft_.velocity = input.wheelLeft.velocity;
+  wheelLeft_.basisTime = input.wheelLeft.sampleTime;
   wheelLeft_.valid = true;
 
-  wheelRight_.distance = input.encRightPosition;
-  wheelRight_.velocity = input.encRightVelocity;
-  wheelRight_.basisTime = input.encRightTime;
+  wheelRight_.distance = input.wheelRight.position;
+  wheelRight_.velocity = input.wheelRight.velocity;
+  wheelRight_.basisTime = input.wheelRight.sampleTime;
   wheelRight_.valid = true;
 
   // Body peer -- x/y/v_x/v_y always come straight from Motion::Odometry's
@@ -27,19 +27,20 @@ void StateEstimator::update(const Input& input, uint32_t now) {  // [ms]
   // BodyEstimate's own doc comment). heading/omega start from the SAME
   // encoder-derived values, then blend toward a fresh OTOS reading via the
   // v1 complementary weight.
-  float heading = input.poseHeading;
-  float omega = input.twistOmega;
+  float heading = input.pose.heading;
+  float omega = input.pose.omega;
 
   // Eligible to blend this cycle iff the frame's own per-cycle freshness
-  // bit is set (input.otosPresent -- "this cycle's burst actually
+  // bit is set (input.otos.present -- "this cycle's burst actually
   // refreshed the cached pose", App::applyOtosSample()'s own doc comment)
   // AND the reading's own age is within the live staleness window.
-  // `now >= input.otosTime` guards the unsigned subtract below -- both are
-  // the same [ms] robot-clock domain by construction (input.otosTime is
-  // stamped by the SAME cycle's applyOtosSample() call whenever
-  // otosPresent is true), so this should hold whenever otosPresent does.
-  bool otosFresh = input.otosPresent && (now >= input.otosTime) &&
-                    ((now - input.otosTime) <= weights_.staleness);
+  // `now >= input.otos.sampleTime` guards the unsigned subtract below --
+  // both are the same [ms] robot-clock domain by construction
+  // (input.otos.sampleTime is stamped by the SAME cycle's
+  // applyOtosSample() call whenever `present` is true), so this should
+  // hold whenever `present` does.
+  bool otosFresh = input.otos.present && (now >= input.otos.sampleTime) &&
+                    ((now - input.otos.sampleTime) <= weights_.staleness);
   if (otosFresh) {
     // Innovations are computed whenever a fresh OTOS reading is blended --
     // even at weight 0.0 (diagnostic/validation only at that weight; the
@@ -47,19 +48,19 @@ void StateEstimator::update(const Input& input, uint32_t now) {  // [ms]
     // against the PRE-blend (pure encoder-derived) heading/omega, matching
     // "OTOS-vs-predicted" -- the prediction being compared against is this
     // cycle's own encoder-only estimate, before any OTOS influence.
-    innovations_.heading = input.otosHeading - heading;
-    innovations_.omega = input.otosOmega - omega;
+    innovations_.heading = input.otos.heading - heading;
+    innovations_.omega = input.otos.omega - omega;
     innovations_.valid = true;
 
-    heading = heading + weights_.headingOtos * (input.otosHeading - heading);
-    omega = omega + weights_.omegaOtos * (input.otosOmega - omega);
+    heading = heading + weights_.headingOtos * (input.otos.heading - heading);
+    omega = omega + weights_.omegaOtos * (input.otos.omega - omega);
   }
 
-  body_.x = input.poseX;
-  body_.y = input.poseY;
+  body_.x = input.pose.x;
+  body_.y = input.pose.y;
   body_.heading = heading;
-  body_.v_x = input.twistVX;
-  body_.v_y = input.twistVY;
+  body_.v_x = input.pose.v_x;
+  body_.v_y = input.pose.v_y;
   body_.omega = omega;
   body_.basisTime = now;
   body_.valid = true;

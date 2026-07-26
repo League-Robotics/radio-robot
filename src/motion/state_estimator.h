@@ -16,15 +16,25 @@
 //
 // No #include of any messages/, config/, or (122-002) app/ header: this
 // module is pure motion-internal computation and never spells msg:: or
-// App:: anywhere in its own source. update() takes a plain Input struct
-// (below) rather than App::Telemetry::Frame -- 122-002 (motion-library
-// extraction) moved this class from src/firm/app/ into src/motion/, behind
-// the velocity-sink boundary; App::Telemetry::Frame is a base-side (app/)
-// type this tree may not depend on, so the caller (App::RobotLoop) now
-// copies the same fields it always read off frame_ into a Motion::
-// StateEstimator::Input and passes that instead -- the values flowing in
-// are identical, just handed in through a motion-owned struct rather than a
-// base-owned one.
+// App:: anywhere in its own source. The ONE exception, deliberate (124-007,
+// robot-state-blackboard-...md, sprint 124 architecture Step 4's dependency
+// graph): `#include "firm/types/robot_state.h"` below, a second
+// base<->motion crossing alongside wheel_sink.h's actuation crossing, but
+// in the opposite direction of the messages/config/app exclusion above --
+// firm/types is a dependency-FREE shared floor (cstdint-level includes
+// only, no msg::/messages/ types, no app/ types) both trees may stand on,
+// not a base-owned type this tree may not depend on. update() takes
+// Types::RobotState (aliased below as Input for source continuity) in
+// place of a private near-duplicate struct -- 122-002 (motion-library
+// extraction) first moved this class from src/firm/app/ into src/motion/,
+// behind the velocity-sink boundary, introducing that private Input struct
+// because App::Telemetry::Frame (base-side) was off limits; 124-007
+// replaces it with the shared, still base-independent RobotState instead
+// of continuing to hand-maintain a near-duplicate. The caller
+// (App::RobotLoop) fills the same fields it always did, just through
+// RobotState's own sectioned field paths now (wheelLeft.position instead
+// of encLeftPosition, etc. -- see robot_state.h for the full section
+// list) -- the values flowing in are identical.
 //
 // No I2C bus access, no sleeping, no owned Devices::Clock& collaborator:
 // every time-taking method (update()/wheelAt()/bodyAt()/whereAmI()) takes
@@ -41,6 +51,8 @@
 #pragma once
 
 #include <cstdint>
+
+#include "firm/types/robot_state.h"
 
 namespace Motion {
 
@@ -108,33 +120,19 @@ struct Innovations {
 
 class StateEstimator {
  public:
-  // Input -- the plain, motion-owned snapshot update() reads every cycle,
-  // in place of App::Telemetry::Frame (pre-122-002). The caller
-  // (App::RobotLoop) copies these fields verbatim off its own frame_ each
-  // cycle -- same values, same units, just handed in through a struct this
-  // tree owns rather than one it may not depend on. Field-for-field mirror
-  // of what update() used to read off frame.encLeft/encRight/pose/twist/
-  // otos/otosPresent.
-  struct Input {
-    float encLeftPosition = 0.0f;    // [mm]
-    float encLeftVelocity = 0.0f;    // [mm/s] signed
-    uint32_t encLeftTime = 0;        // [ms]
-    float encRightPosition = 0.0f;   // [mm]
-    float encRightVelocity = 0.0f;   // [mm/s] signed
-    uint32_t encRightTime = 0;       // [ms]
-
-    float poseX = 0.0f;        // [mm] Motion::Odometry::x()
-    float poseY = 0.0f;        // [mm] Motion::Odometry::y()
-    float poseHeading = 0.0f;  // [rad] Motion::Odometry::theta()
-    float twistVX = 0.0f;      // [mm/s] fused body-frame forward velocity
-    float twistVY = 0.0f;      // [mm/s] fused body-frame lateral velocity
-    float twistOmega = 0.0f;   // [rad/s] fused body-frame yaw rate
-
-    bool otosPresent = false;   // OtosReading fresh THIS frame (App::applyOtosSample()'s own contract)
-    float otosHeading = 0.0f;   // [rad]
-    float otosOmega = 0.0f;     // [rad/s]
-    uint32_t otosTime = 0;      // [ms]
-  };
+  // Input -- 124-007: a type alias onto the shared, dependency-free
+  // Types::RobotState (firm/types/robot_state.h), not a private struct of
+  // its own any more. update() reads the same 16 logical values it always
+  // has (encLeft*/encRight*/pose*/twist*/otos* -- see robot_state.h's own
+  // Wheel/Pose/Otos section comments for the field-for-field mapping),
+  // just through RobotState's own sectioned field paths
+  // (input.wheelLeft.position, input.pose.x, input.otos.heading, ...)
+  // rather than the flat names this struct used to declare itself. Kept as
+  // an `Input` alias (not a bare `Types::RobotState` parameter type)
+  // purely for source continuity at this class's own call sites/doc
+  // comments below; there is no behavioral difference between the two
+  // spellings.
+  using Input = Types::RobotState;
 
   // weights -- constructor-injected plain value (see FusionWeights' own
   // doc comment); defaults to a conservative encoder-only/no-blend
@@ -142,11 +140,11 @@ class StateEstimator {
   // that never cares about fusion.
   explicit StateEstimator(FusionWeights weights = FusionWeights{});
 
-  // update -- refreshes both wheel peers straight from `input.encLeft*`/
-  // `input.encRight*` (position, velocity, their own collect time) and the
-  // body peer from `input.pose*`/`input.twist*` (Motion::Odometry's own
-  // dead-reckoned fusion, already computed earlier the same cycle) blended
-  // with `input.otos*`/`input.otosPresent` (when fresh -- `input.otosPresent`
+  // update -- refreshes both wheel peers straight from `input.wheelLeft`/
+  // `input.wheelRight` (position, velocity, their own sampleTime) and the
+  // body peer from `input.pose` (Motion::Odometry's own dead-reckoned
+  // fusion, already computed earlier the same cycle) blended with
+  // `input.otos` (when fresh -- `input.otos.present`
   // AND the reading's own age against `weights().staleness`) via the v1
   // complementary weight. Call once per cycle, after the pose is staged
   // (App::RobotLoop's trailing kPace block, ticket 004). Pure computation

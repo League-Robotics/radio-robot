@@ -750,24 +750,29 @@ void RobotLoop::cycle() {
     // posture odom_.integrate()/the OTOS tick already keep in this block.
     // 123-007: fed from PRIMARY SOURCES (motorL_/motorR_/odom_/otos_,
     // already read above) instead of copying the same values back OUT of
-    // frame_ -- identical values, sourced correctly.
+    // frame_ -- identical values, sourced correctly. 124-007: built through
+    // Types::RobotState's own sectioned field paths (Motion::StateEstimator::
+    // Input is now an alias onto it -- see state_estimator.h) instead of the
+    // former flat encLeft*/poseX/twistVX/otos* names; this is still a
+    // cycle-local, throwaway variable (NOT state_, the loop's own future
+    // blackboard member -- that wiring is ticket 009's job, not this one's).
     Motion::StateEstimator::Input estimatorInput;
-    estimatorInput.encLeftPosition = motorL_.position();
-    estimatorInput.encLeftVelocity = motorL_.velocity();
-    estimatorInput.encLeftTime = cycleStart;
-    estimatorInput.encRightPosition = motorR_.position();
-    estimatorInput.encRightVelocity = motorR_.velocity();
-    estimatorInput.encRightTime = cycleStart;
-    estimatorInput.poseX = odom_.x();
-    estimatorInput.poseY = odom_.y();
-    estimatorInput.poseHeading = odom_.theta();
-    estimatorInput.twistVX = twistVx;
-    estimatorInput.twistVY = 0.0f;
-    estimatorInput.twistOmega = twistOmega;
-    estimatorInput.otosPresent = otosPresent;
-    estimatorInput.otosHeading = otosReading.heading;
-    estimatorInput.otosOmega = otosReading.omega;
-    estimatorInput.otosTime = static_cast<uint32_t>(nowUs / 1000);  // [us] -> [ms]
+    estimatorInput.wheelLeft.position = motorL_.position();
+    estimatorInput.wheelLeft.velocity = motorL_.velocity();
+    estimatorInput.wheelLeft.sampleTime = cycleStart;
+    estimatorInput.wheelRight.position = motorR_.position();
+    estimatorInput.wheelRight.velocity = motorR_.velocity();
+    estimatorInput.wheelRight.sampleTime = cycleStart;
+    estimatorInput.pose.x = odom_.x();
+    estimatorInput.pose.y = odom_.y();
+    estimatorInput.pose.heading = odom_.theta();
+    estimatorInput.pose.v_x = twistVx;
+    estimatorInput.pose.v_y = 0.0f;
+    estimatorInput.pose.omega = twistOmega;
+    estimatorInput.otos.present = otosPresent;
+    estimatorInput.otos.heading = otosReading.heading;
+    estimatorInput.otos.omega = otosReading.omega;
+    estimatorInput.otos.sampleTime = static_cast<uint32_t>(nowUs / 1000);  // [us] -> [ms]
     stateEstimator_.update(estimatorInput, static_cast<uint32_t>(nowUs / 1000));  // [us] -> [ms]
 
     // Single assembly point (123-007) -- builds the WHOLE frame_ and sets

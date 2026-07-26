@@ -56,19 +56,26 @@ pre-122 history) rather than reproduced here.
 | `body_kinematics.{h,cpp}` | `BodyKinematics` — stateless differential-drive twist/wheel-speed maps (`inverse`/`forward`) and curvature-preserving `saturate`. Moved verbatim from `src/firm/kinematics/` (122-001; that directory is retired, folded flat here rather than nested as `src/motion/kinematics/`). The one permitted `src/firm` dependency: `#include "messages/common.h"` for the array-form overloads' `msg::BodyTwist3` parameter. Full derivation: [`src/firm/kinematics/DESIGN.md`](../firm/kinematics/DESIGN.md) and [`docs/kinematics-model.md`](../../docs/kinematics-model.md). |
 | `move_queue.{h,cpp}` | `Motion::MoveQueue` — owns the lifecycle of the robot's queued and active bounded motions: the 5-slot array (1 active + 4 pending), replace/flush/enqueue/`ERR_FULL` bookkeeping, chain-advance on stop/timeout, one `Motion::StopCondition` per active `Move`, the land-at-zero completion predicate, and (122-002) the twist-decomposition call (`BodyKinematics::inverse()`) that used to live in `App::Drive::setTwist()` — `MoveQueue` computes `v_left`/`v_right` itself and hands them down through the `WheelSink` boundary via `setWheels()`. Moved from `src/firm/app/move_queue.*` (122-002); no longer holds a concrete `App::Drive&` (holds a `Motion::WheelSink&` instead) or a `Devices::Clock&` (`tick()`/`enqueue()` take `now` as an explicit parameter). Pre-122 design history (land-at-zero derivation, margin-factor sweeps, chain-advance contract): [`src/firm/app/DESIGN.md`](../firm/app/DESIGN.md). |
 | `odometry.{h,cpp}` | `Motion::Odometry` — encoder-only dead-reckoning: integrates both wheels' position deltas through `BodyKinematics::forward()` into a world pose (`x`/`y`/`theta`) plus cumulative `pathLength()`. Moved from `src/firm/app/odometry.*` (122-002); no longer holds a `Devices::Motor&` — `integrate()` takes the caller's current wheel positions as plain float parameters. OTOS sampling (`applyOtosSample()`) split out to stay base-side (`src/firm/app/otos_sample.{h,cpp}`) since it needs `Devices::Otos&`/`Telemetry::Frame&`, neither of which this tree may depend on. |
-| `state_estimator.{h,cpp}` | `Motion::StateEstimator` — predict-to-now wheel/body PEER state estimates: zero-order-hold extrapolation from the latest basis reading, plus a v1 complementary blend against OTOS heading/omega (fail-closed weights, defaulting to 0.0, supplied by the caller — never read from `config/` directly). Moved from `src/firm/app/state_estimator.*` (122-002); `update()` takes a plain `Motion::StateEstimator::Input` struct instead of `App::Telemetry::Frame` (this tree may not depend on `app/`). Does not yet drive motion — greenfield/quarantined, same posture as pre-122. |
+| `state_estimator.{h,cpp}` | `Motion::StateEstimator` — predict-to-now wheel/body PEER state estimates: zero-order-hold extrapolation from the latest basis reading, plus a v1 complementary blend against OTOS heading/omega (fail-closed weights, defaulting to 0.0, supplied by the caller — never read from `config/` directly). Moved from `src/firm/app/state_estimator.*` (122-002); `update()` took a plain `Motion::StateEstimator::Input` struct instead of `App::Telemetry::Frame` (this tree may not depend on `app/`) until 124-007 replaced that private struct with `Input` as a type alias onto `Types::RobotState` (`src/firm/types/robot_state.h`) — the second, deliberate base↔motion crossing alongside `wheel_sink.h`'s actuation crossing (see §3 below). Does not yet drive motion — greenfield/quarantined, same posture as pre-122. |
 | `wheel_sink.h` | `Motion::WheelSink` — the ONE boundary header (122-001): an abstract wheel-velocity command sink (`setWheels(v_left, v_right)`/`stop()`), the per-wheel state struct (`WheelState`) Motion reads, and the plain config struct (`WheelSinkConfig`) Motion is constructed with. See §3/§5 below for the full contract. No concrete implementation lives here — that's the base's job (`App::Drive`, `src/firm/app`). |
 | `CMakeLists.txt` | The standalone `motion_tests` build (Design Rationale Decision 4): plain CMake, no `libfirmware_host`, no ctypes, no Python anywhere in the build/run path. Builds a static `motion` library from all six `.cpp` files above and three `ctest`-registered executables (StopCondition, VelocityShaper, and the end-to-end chained-`Wheels`-`Move` scenario against the model plant), plus a `motion_tests` custom target that builds and runs all three via `ctest --output-on-failure`. See §4 below and the file's own header comment for exact build/run commands. |
 
 ## 3. Constraints and Invariants
 
 - **`src/motion` imports NOTHING from `src/firm` except `messages/`
-  headers.** Grep-verifiable: `grep -rn '#include "' src/motion | grep
-  -v 'messages/'` shows no other `src/firm` path.
-  `body_kinematics.h`'s `#include "messages/common.h"` is the one
-  explicit, permitted exception (the array-form `BodyKinematics`
-  overloads take `msg::BodyTwist3`); every other module in this tree has
-  zero `src/firm` dependency of any kind.
+  headers and, as of 124-007, `firm/types/`.** Grep-verifiable: `grep -rn
+  '#include "' src/motion | grep -v 'messages/' | grep -v 'firm/types/'`
+  shows no other `src/firm` path. `body_kinematics.h`'s `#include
+  "messages/common.h"` is one explicit, permitted exception (the
+  array-form `BodyKinematics` overloads take `msg::BodyTwist3`);
+  `state_estimator.h`'s `#include "firm/types/robot_state.h"` is the
+  second (sprint 124 architecture, Step 4's dependency graph) — NOT a
+  same-shape exception, since `firm/types` is itself a dependency-free
+  leaf (cstdint-level includes only, no `msg::`/`messages/` types, no
+  `app/` types — see `src/firm/types/DESIGN.md`) that both `src/firm` and
+  `src/motion` stand on, rather than a base-owned type this tree reaches
+  into. Every other module in this tree has zero `src/firm` dependency of
+  any kind.
 - **The boundary is a velocity sink, never a duty sink** (sprint 122
   Design Rationale Decision 1, stakeholder-locked 2026-07-24) —
   `Motion::WheelSink::setWheels(v_left, v_right)`/`stop()`, not a duty
@@ -118,10 +125,16 @@ more `Motion::VelocityShaper` instances (one per axis), and calls
 `Odometry` calls `BodyKinematics::forward()` to fold encoder deltas into
 a world pose. `StateEstimator` is currently a peer, not a `MoveQueue`
 collaborator — it reads the same per-cycle wheel/pose data `MoveQueue`
-and `Odometry` produce (handed to it via its own `Input` struct by the
-caller, `App::RobotLoop`), but nothing in this tree yet consumes its
-`whereAmI()`/`wheelAt()` output (the future trajectory controller does,
-out of this sprint's scope).
+and `Odometry` produce (handed to it via its own `Input` alias, now
+`Types::RobotState`, filled in by the caller, `App::RobotLoop`), but
+nothing in this tree yet consumes its `whereAmI()`/`wheelAt()` output
+(the future trajectory controller does, out of this sprint's scope).
+124-007 lands the shared `RobotState` type and re-points `StateEstimator`
+at it; `RobotLoop` still builds a cycle-local `Motion::StateEstimator::
+Input` variable field-by-field to pass in (not yet `RobotLoop`'s own
+future `state_` blackboard member) — that wiring, and `MoveQueue`/
+`Odometry` themselves taking `RobotState&` directly, is a later ticket's
+job (124-009), not this one's.
 
 **The boundary interface's In/Out shape (`wheel_sink.h`).** In (Motion
 reads): `WheelState` — one wheel's `position`/`velocity`/`sampleTime` per
