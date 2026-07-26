@@ -104,7 +104,6 @@ Devices::MotorConfig baseNezhaConfig(uint32_t port) {
   cfg.port = port;
   cfg.fwdSign = 1;
   cfg.wheelTravelCalib = 1.0f;
-  cfg.velFiltAlpha = 1.0f;
   return cfg;
 }
 

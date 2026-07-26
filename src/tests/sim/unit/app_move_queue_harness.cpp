@@ -139,14 +139,26 @@ Devices::MotorConfig baseNezhaConfig(uint32_t port) {
   cfg.port = port;
   cfg.fwdSign = 1;
   cfg.wheelTravelCalib = 1.0f;
-  cfg.velFiltAlpha = 1.0f;
-  // kp=0, ki=0 isolates appliedDuty() to a single deterministic linear
-  // relation (rawDuty == kff * target) -- see app_drive_harness.cpp's own
-  // header comment.
-  cfg.velGains = Devices::Gains{/*kp=*/0.0f, /*ki=*/0.0f, /*kff=*/0.002f,
-                                 /*iMax=*/1.0f, /*kaw=*/2.0f};
-  cfg.velDeadband = 0.0f;
   return cfg;
+}
+
+// applyBaseGains -- 125-003: kp=0/ki=0 isolates App::Drive's own interim
+// closed loop (drive.h's own header) to a single deterministic linear
+// relation (rawDuty == kff * target) -- see app_drive_harness.cpp's own
+// header comment. Relocated from the pre-125-003 baseNezhaConfig()'s own
+// velGains/velFiltAlpha/velDeadband (Devices::MotorConfig no longer carries
+// any of those fields) -- every scenario below that constructs an
+// App::Drive calls this immediately afterward, matching every
+// App::Drive drive(left, right, kTrackWidth) construction site 1:1.
+void applyBaseGains(App::Drive& drive) {
+  Motion::Gains gains;
+  gains.kp = 0.0f;
+  gains.ki = 0.0f;
+  gains.kff = 0.002f;
+  gains.iMax = 1.0f;
+  gains.kaw = 2.0f;
+  drive.applyGainsLeft(gains);
+  drive.applyGainsRight(gains);
 }
 
 void primeAtZero(Devices::NezhaMotor& motor, TestSim::ScriptedI2CHook& bus, uint16_t wireAddr) {
@@ -283,6 +295,7 @@ void scenarioEnqueueOnEmptyQueueActivatesTwistImmediately() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
@@ -327,6 +340,7 @@ void scenarioWheelsDistanceMoveUsesRealOdometryBaseline() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
@@ -391,6 +405,7 @@ void scenarioAngleMoveUsesRealOdometryHeadingBaseline() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
@@ -437,6 +452,7 @@ void scenarioTimeMoveContinuesThenCompletesAndDrainsEmptyToStop() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
@@ -487,6 +503,7 @@ void scenarioChainedMoveActivatesSameCycleNoInterveningStop() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
@@ -535,6 +552,7 @@ void scenarioReplaceTruePreemptsActiveAndFlushesPending() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
@@ -583,6 +601,7 @@ void scenarioOverflowRejectedErrFullQueueByteForByteUnchanged() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
@@ -629,6 +648,7 @@ void scenarioFlushDrainsAllPendingAndActiveWithNoCompletionAckAndStopsDrive() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
@@ -683,6 +703,7 @@ void scenarioTimeoutEndsStalledDistanceMoveWithTimedOutTrue() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());  // pathLength() stays 0 -- wheels never move in this scenario
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
@@ -717,6 +738,7 @@ void scenarioTickWithNoActiveMoveIsANoOp() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
 
@@ -770,6 +792,7 @@ void scenarioDistanceMoveShapesLinearSpeedRampUpThenTaperNearGoal() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::ShaperLimits limits;
   limits.aMax = 1000.0f;    // [mm/s^2]
@@ -901,6 +924,7 @@ void scenarioAngleMoveShapesAngularSpeedRampUpThenTaperNearGoal() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::ShaperLimits limits;
   limits.aMax = 0.0f;       // linear shaping disabled -- irrelevant, v_x==0 here anyway
@@ -1035,6 +1059,7 @@ void scenarioDistanceMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::ShaperLimits limits;
   limits.aMax = 1000.0f;   // [mm/s^2]
@@ -1116,6 +1141,7 @@ void scenarioAngleMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::ShaperLimits limits;
   limits.alphaMax = 6.0f;      // [rad/s^2]
@@ -1201,6 +1227,7 @@ void scenarioLandAtZeroNeverFiresWithShapingOff() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);  // ShaperLimits{} default -- shaping OFF
 
@@ -1274,6 +1301,7 @@ void scenarioOrthogonalBoundaryTurnToStraightUsesOrthogonalPredicate() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::ShaperLimits limits;
   limits.alphaMax = 6.0f;      // [rad/s^2] -- matches scenario 14/16's own config
@@ -1361,6 +1389,7 @@ void scenarioSameAxisBoundaryTurnToTurnKeepsChainPredicate() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::ShaperLimits limits;
   limits.alphaMax = 6.0f;

@@ -63,10 +63,13 @@ _APP_SOURCES = [
 _MOTION_SOURCES = [
     _REPO_ROOT / "src" / "motion" / "stop_condition.cpp",
     _REPO_ROOT / "src" / "motion" / "velocity_shaper.cpp",
+    # 125-003: relocated from devices/velocity_pid.cpp
+    # (Devices::MotorVelocityPid -> Motion::WheelVelocityPid) -- App::Drive
+    # (APP_SOURCES, above) holds the interim instances this sprint.
+    _REPO_ROOT / "src" / "motion" / "wheel_velocity_pid.cpp",
 ]
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
-    _SOURCE_DIR / "devices" / "velocity_pid.cpp",
     _SOURCE_DIR / "devices" / "nezha_motor.cpp",
     _SOURCE_DIR / "devices" / "otos.cpp",
     _SOURCE_DIR / "devices" / "color_sensor.cpp",

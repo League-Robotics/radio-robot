@@ -15,24 +15,37 @@ is DELETED, not ported -- `msg::PlannerConfig` itself, and the
 `SimLoop.read_planner_config()` readback this file drove, went with
 `Motion::Executor`/`App::Pilot` (115-003). Only the MOTOR half of the
 Tier-2 golden-parity mechanism (`sim_configure_motor()`/
-`sim_read_motor_config()` -- unaffected by the gut) survives, plus a
-motor-config-driven re-derivation of the robot-switch replace-not-merge
-proof (SUC-003), which is a property of `configure_from_robot()` itself,
-independent of which config fields happen to carry it.
+`sim_read_motor_config()` -- unaffected by the gut) survives.
 
-Golden-parity design (SUC-001/SUC-002, motor half only)
+Rewritten AGAIN 125-003 (Devices::MotorConfig::velFiltAlpha deleted --
+sprint.md Decision 2, "protection vs. control": the EMA velocity estimator
+it fed was measurement conditioning, deleted outright pending ticket 004's
+App::WheelObserver, not relocated with a config surface of its own yet).
+`vel_filt_alpha` was this file's ONLY discriminating field for BOTH the
+golden-parity check and the robot-switch replace-not-merge proof (SUC-003)
+-- `fwd_sign` is identical across every port on both `tovez_nocal.json` and
+`tovez.json` (verified: `[1, -1, 1, 1]` on both), so it cannot stand in as a
+replacement discriminator. `test_robot_switch_replaces_not_merges` is
+therefore DELETED, not adapted -- exactly the precedent this file's own
+history already set for `PlannerConfig`'s `heading_kp`/`distance_kp`
+discriminators above. Golden-parity (`test_golden_parity_motor_config`)
+survives, narrowed to `fwd_sign` only. If ticket 004's App::WheelObserver
+(or a later ticket) introduces its own live Tier-2 config surface, THAT
+ticket should add its own golden-parity/robot-switch coverage here rather
+than resurrecting `vel_filt_alpha`'s.
+
+Golden-parity design (SUC-001/SUC-002, fwd_sign only)
 --------------------------------------------------------
 For each of ``tovez_nocal.json`` and ``tovez.json``:
 
-  (a) Compute the EXPECTED ``MotorConfig`` values (``vel_filt_alpha``/
-      ``fwd_sign``) by calling ``gen_boot_config.py``'s own mapping
-      functions DIRECTLY (``vel_gains_for_config()``, ``fwd_sign_for_ports()``)
-      -- deliberately NOT via ``robot_radio.calibration.sim_boot_config``'s
+  (a) Compute the EXPECTED ``fwd_sign`` by calling ``gen_boot_config.py``'s
+      own mapping function DIRECTLY (``fwd_sign_for_ports()``) --
+      deliberately NOT via ``robot_radio.calibration.sim_boot_config``'s
       ``motor_boot_config_for()`` (ticket 004's own wrapper). This is
       sprint.md ticket 007's own explicit design constraint: asserting
       against ticket 004's wrapper would let a bug in that wrapper's own
       plumbing hide behind testing itself -- this file re-derives
-      "expected" independently, using only the same generator functions
+      "expected" independently, using only the same generator function
       ``gen_boot_config.py``'s ``generate()`` itself calls to bake a real
       robot's ``boot_config.cpp``.
   (b) Construct a HEADLESS ``SimLoop`` (``start_tick_thread=False``, ticket
@@ -43,10 +56,7 @@ For each of ``tovez_nocal.json`` and ``tovez.json``:
       ``sim_boot_config.py``'s Tier-2 motor mapping -> ``sim_configure_motor()``
       ctypes -> ``SimHarness::configureMotor()``), then read back the LIVE
       config via ``sim_read_motor_config()`` (``SimLoop.read_motor_config()``).
-  (c) Assert every Tier-2 field matches (a) field-for-field, with a small
-      float tolerance for the double(Python)->float32(wire struct)->
-      double(Python) round trip every field takes through the ctypes
-      boundary.
+  (c) Assert fwd_sign matches (a).
 
 Run with::
 
@@ -109,27 +119,26 @@ def _make_loop():
     return loop
 
 
-def _expected_motor_config(cfg: dict, port: int) -> "dict[str, float | int]":
-    """``{"vel_filt_alpha": ..., "fwd_sign": ...}`` for *port* (1=left,
-    2=right), computed directly from gen_boot_config.py's
-    ``vel_gains_for_config()``/``fwd_sign_for_ports()`` -- see module
+def _expected_motor_config(cfg: dict, port: int) -> "dict[str, int]":
+    """``{"fwd_sign": ...}`` for *port* (1=left, 2=right), computed directly
+    from gen_boot_config.py's ``fwd_sign_for_ports()`` -- see module
     docstring for why this is a separate call site from
     ``sim_boot_config.motor_boot_config_for()``."""
-    *_gains, filt_alpha = gbc.vel_gains_for_config(cfg)
     fwd_signs = gbc.fwd_sign_for_ports(cfg)
-    return {"vel_filt_alpha": filt_alpha, "fwd_sign": fwd_signs[port - 1]}
+    return {"fwd_sign": fwd_signs[port - 1]}
 
 
 # ---------------------------------------------------------------------------
-# Golden parity (SUC-001/SUC-002, motor half)
+# Golden parity (SUC-001/SUC-002, fwd_sign only -- see module docstring for
+# why vel_filt_alpha's own half of this coverage was retired, 125-003)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("robot_json", [_TOVEZ_NOCAL_JSON, _TOVEZ_JSON], ids=lambda p: p.stem)
 @pytest.mark.parametrize("port", [1, 2], ids=["left", "right"])
 def test_golden_parity_motor_config(robot_json, port):
-    """A headless SimLoop's live per-motor vel_filt_alpha/fwd_sign, after
+    """A headless SimLoop's live per-motor fwd_sign, after
     configure_from_robot(), matches gen_boot_config.py's own directly-computed
-    values for both drive-pair ports (1=left, 2=right)."""
+    value for both drive-pair ports (1=left, 2=right)."""
     from robot_radio.config.robot_config import load_robot_config
 
     raw_cfg = json.loads(robot_json.read_text())
@@ -147,62 +156,6 @@ def test_golden_parity_motor_config(robot_json, port):
         f"{robot_json.name} port {port}: fwd_sign mismatch -- "
         f"gen_boot_config.py says {expected['fwd_sign']!r}, sim readback says "
         f"{actual['fwd_sign']!r}"
-    )
-    assert actual["vel_filt_alpha"] == pytest.approx(expected["vel_filt_alpha"], **_APPROX), (
-        f"{robot_json.name} port {port}: vel_filt_alpha mismatch -- "
-        f"gen_boot_config.py says {expected['vel_filt_alpha']!r}, sim readback "
-        f"says {actual['vel_filt_alpha']!r}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Robot-switch (SUC-003): a mid-session profile switch fully REPLACES config,
-# not merges it. Re-derived against the surviving MOTOR config (115-009 --
-# the original discriminating fields, heading_kp/distance_kp, were
-# PlannerConfig fields deleted by 115-003); the replace-not-merge property
-# itself is a property of configure_from_robot(), independent of which
-# config fields happen to carry it.
-# ---------------------------------------------------------------------------
-
-def test_robot_switch_replaces_not_merges():
-    """Connect once against tovez_nocal.json, read back motor config, call
-    configure_from_robot() again with tovez.json, read back again -- the
-    second reading must reflect tovez.json's OWN values, not a merge of
-    both. vel_filt_alpha (1.0 nocal vs 0.3 tovez, both ports) is the
-    discriminating field -- it differs meaningfully between the two
-    profiles' own JSON, so an unreplaced leftover from the FIRST
-    configure_from_robot() call would be caught."""
-    from robot_radio.config.robot_config import load_robot_config
-
-    nocal_cfg = json.loads(_TOVEZ_NOCAL_JSON.read_text())
-    tovez_cfg = json.loads(_TOVEZ_JSON.read_text())
-    expected_nocal = _expected_motor_config(nocal_cfg, port=1)
-    expected_tovez = _expected_motor_config(tovez_cfg, port=1)
-
-    # The two profiles must actually diverge on this field for this test to
-    # prove anything -- guard against a future edit to either JSON silently
-    # collapsing the discrimination this test relies on.
-    assert expected_nocal["vel_filt_alpha"] != pytest.approx(expected_tovez["vel_filt_alpha"])
-
-    robot_config_nocal = load_robot_config(_TOVEZ_NOCAL_JSON)
-    robot_config_tovez = load_robot_config(_TOVEZ_JSON)
-
-    loop = _make_loop()
-    try:
-        loop.configure_from_robot(robot_config_nocal)
-        first = loop.read_motor_config(1)
-        assert first["vel_filt_alpha"] == pytest.approx(expected_nocal["vel_filt_alpha"], **_APPROX)
-
-        loop.configure_from_robot(robot_config_tovez)
-        second = loop.read_motor_config(1)
-    finally:
-        loop.disconnect()
-
-    assert second["vel_filt_alpha"] == pytest.approx(expected_tovez["vel_filt_alpha"], **_APPROX), (
-        f"post-switch vel_filt_alpha mismatch -- expected tovez.json's own "
-        f"value {expected_tovez['vel_filt_alpha']!r} (a full replace), got "
-        f"{second['vel_filt_alpha']!r} (possible leftover from the first "
-        f"configure_from_robot(tovez_nocal) call -- a merge, not a replace)"
     )
 
 

@@ -2,51 +2,53 @@
 // ticket DB-004; restructured 2026-07-18 with the Motor-interface split):
 // exercises Devices::NezhaMotor's OWN write shaping (reversal dwell +
 // output deadband, folded into the leaf's writeShapedDuty()), its
-// request/collect encoder pairing, embedded PID, and PID-on/off dispatch
-// through the real leaf against a TestSim::SimPlant (108-002), scripted
-// deterministically via TestSim::ScriptedI2CHook (108-009) — AND the
-// Devices::MotorArmor DECORATOR's observation/recovery policy
-// (standstill-guarded resets, motion-qualified wedge reporting) through a
-// dependency-free MockMotor inner double.
+// request/collect encoder pairing, and duty passthrough through the real
+// leaf against a TestSim::SimPlant (108-002), scripted deterministically
+// via TestSim::ScriptedI2CHook (108-009) — AND the Devices::MotorArmor
+// DECORATOR's observation/recovery policy (standstill-guarded resets,
+// motion-qualified wedge reporting) through a dependency-free MockMotor
+// inner double.
+//
+// 125-003 (sprint 125 Decision 2, "protection vs. control" — see
+// sprint.md): SHRUNK alongside NezhaMotor's own shrink. Every scenario that
+// exercised the embedded MotorVelocityPid, the freshness gate, source-side
+// glitch rejection, or the EMA/least-squares velocity-estimator pair is
+// DELETED, not adapted — those mechanisms are gone from NezhaMotor
+// (relocated to Motion::WheelVelocityPid / pending ticket 004's
+// App::WheelObserver, see nezha_motor.cpp's own file header). What
+// survives: protocol/bus-hygiene/dwell/deadband/clamp scenarios (unchanged
+// behavior) plus a NEW duty-passthrough scenario (scenario 5 below)
+// replacing the deleted PID-chase coverage.
 //
 // Migrated by sprint 108 ticket 009
 // (clasi/sprints/108-pure-i2cbus-clock-interfaces-and-a-real-simplant-
 // simulator-sim-mode-tours/tickets/009-migrate-the-13-register-level-unit-
 // tests-to-python-simplant-hook-tests-delete-c-harnesses.md) off the deleted
 // src/firm/devices/i2c_bus_host.cpp scripted-FIFO Devices::I2CBus fake (ticket
-// 001 reduced Devices::I2CBus to a pure interface and removed it). Every
-// scenario below is otherwise UNCHANGED from the pre-migration harness --
-// only the bus/scripting plumbing moved from the deleted concrete
-// Devices::I2CBus onto TestSim::SimPlant + TestSim::ScriptedI2CHook.
+// 001 reduced Devices::I2CBus to a pure interface and removed it).
 //
 // Modeled on src/tests/sim/unit/motor_policy_harness.cpp (the MockMotor-style
-// armor scenarios) + src/tests/sim/unit/velocity_pid_harness.cpp (the PID
-// convergence-scenario style), per device-bus-tickets.md's DB-004
-// acceptance criteria. Unlike those pre-port harnesses, this one #includes
-// ONLY src/firm/devices/ headers (isolation invariant) plus plain C/C++
-// stdlib -- no messages/*.h, no com/i2c_bus.h.
+// armor scenarios), per device-bus-tickets.md's DB-004 acceptance criteria.
+// Unlike those pre-port harnesses, this one #includes ONLY
+// src/firm/devices/ headers (isolation invariant) plus plain C/C++ stdlib
+// -- no messages/*.h, no com/i2c_bus.h.
 //
 // Plain C++ program, hand-rolled assertions -- prints a PASS/FAIL line per
 // scenario and exits nonzero if any assertion failed. Run by the pytest
 // wrapper in test_devices_motor.py, which compiles this file together with
 // tests/_infra/sim/sim_plant.cpp, src/tests/sim/plant/{wheel,otos}_plant.cpp,
-// src/firm/devices/velocity_pid.cpp, and src/firm/devices/nezha_motor.cpp under
-// -DHOST_BUILD, then runs the resulting binary via subprocess and asserts
-// exit code 0.
+// and src/firm/devices/nezha_motor.cpp under -DHOST_BUILD, then runs the
+// resulting binary via subprocess and asserts exit code 0.
 
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <string>
-#include <vector>
 
 #include "devices/device_config.h"
 #include "devices/device_types.h"
-#include "devices/i2c_bus.h"
 #include "devices/motor_armor.h"
 #include "devices/nezha_motor.h"
-#include "devices/velocity_pid.h"
 #include "scripted_i2c_hook.h"
 #include "sim_plant.h"
 
@@ -91,19 +93,6 @@ void checkUintEq(uint32_t actual, uint32_t expected, const std::string& what) {
   }
 }
 
-void checkVecEq(const std::vector<float>& actual,
-                 const std::vector<float>& expected, const std::string& what) {
-  bool ok = actual.size() == expected.size();
-  if (ok) {
-    for (size_t i = 0; i < actual.size(); ++i) {
-      if (std::fabs(actual[i] - expected[i]) > 1e-6f) { ok = false; break; }
-    }
-  }
-  if (!ok) {
-    fail(what + " — write-call sequence mismatch");
-  }
-}
-
 // --- MockMotor ---------------------------------------------------------
 //
 // A dependency-free Devices::Motor double for the MotorArmor DECORATOR
@@ -116,14 +105,9 @@ class MockMotor : public Devices::Motor {
   // --- Motor faceplate (trivial forwarding/recording) ---
   void begin() override {}
   void requestSample() override {}
-  void setVelocity(float velocity) override { lastVelocityCmd = velocity; }
   void setDuty(float duty) override { lastDutyCmd = duty; }
   void setNeutral(Devices::Neutral) override {}
-  void setPidEnabled(bool) override {}
-  void applyGains(const Devices::Gains& gains, Devices::Opt<float> = {}) override {
-    gains_ = gains;
-  }
-  const Devices::Gains& gains() const override { return gains_; }
+  void applyTravelCalib(float) override {}
   // REVISION 1 (114-001, motor.h): trivial always-succeeds stand-in --
   // MockMotor has no boot-identity config of its own to actually reassign,
   // it only needs to satisfy the new pure virtual and let scenarios assert
@@ -135,7 +119,6 @@ class MockMotor : public Devices::Motor {
   void tick(uint64_t) override { ++tickCalls; }
   float position() const override { return mockPosition_; }
   float velocity() const override { return mockVelocity_; }
-  float velocityTarget() const override { return lastVelocityCmd; }
   float appliedDuty() const override { return mockAppliedDuty_; }
   bool connected() const override { return true; }
   uint64_t sampleTime() const override { return mockSampleTimeUs_; }  // [us]
@@ -153,7 +136,6 @@ class MockMotor : public Devices::Motor {
   int rebaselineCalls = 0;
   int tickCalls = 0;
   int reconfigureCalls = 0;
-  float lastVelocityCmd = 0.0f;
   float lastDutyCmd = 0.0f;
 
  private:
@@ -161,17 +143,12 @@ class MockMotor : public Devices::Motor {
   float mockVelocity_ = 0.0f;
   float mockAppliedDuty_ = 0.0f;
   uint64_t mockSampleTimeUs_ = 0;  // [us]
-  Devices::Gains gains_{};
 };
 
 // Config for the MotorArmor decorator scenarios below (MockMotor inner --
 // only outputDeadband is functionally relevant here, MotorArmor::
 // reconfigure() reads it straight into its own motionThreshold_ motion-gate
 // cache; MockMotor ignores config entirely, so reversalDwell is moot).
-// Sprint 114 ticket 003: MotorConfig's write-shaping fields are now plain
-// required floats -- no more ctor/reconfigure() ship-default substitution --
-// so this sets the historical ship-default value (0.03) explicitly, matching
-// what a real robot's config always carries.
 Devices::MotorConfig defaultArmorConfig() {
   Devices::MotorConfig cfg;
   cfg.outputDeadband = 0.03f;   // [-1,1] fraction
@@ -179,7 +156,7 @@ Devices::MotorConfig defaultArmorConfig() {
 }
 
 // --- Write-shaping scenarios (real NezhaMotor — the dwell/deadband gate
-// moved INTO the leaf's own writeShapedDuty(), 2026-07-18 restructure) ----
+// lives in the leaf's own writeShapedDuty()) ------------------------------
 
 // Forward declarations — defined with the NezhaMotor scenario helpers below.
 void scriptEncoderRequestCollect(TestSim::ScriptedI2CHook& bus, uint16_t wireAddr,
@@ -255,12 +232,7 @@ void scenarioReversalDwellWritesZeroThenHoldsThroughDeadline() {
 //    through unmodified (never floored DOWN); and a boosted duty that also
 //    represents a sign reversal (relative to lastRequestedDuty_) still
 //    arms/holds/releases through the SAME reversal-dwell mechanism as any
-//    other nonzero-duty reversal would -- the boost happens BEFORE the
-//    dwell/sign-change check and falls straight into it unchanged, so a
-//    tiny reversal is never a backdoor around wedge protection. Replaces
-//    the pre-114-005 "sub-deadband duty is immediate/unclamped" scenario,
-//    whose own premise (every sub-deadband duty, any sign, always writes 0)
-//    is exactly the defect this ticket fixes.
+//    other nonzero-duty reversal would.
 void scenarioOutputDeadbandBoostsSubDeadbandNonzeroDutyExactZeroStaysZero() {
   beginScenario("output deadband boosts sub-deadband nonzero duty; exact zero stays zero");
 
@@ -467,13 +439,8 @@ void scenarioWedgeLatchAndSuspectDeriveAsBefore() {
 // scripted I2CBus's writes/reads are independent FIFOs matched on address
 // only (not on payload), so both the request write and a possible duty
 // write draw from the SAME scriptedWrites_ queue, in call order. Scripting
-// one slack entry per cycle is always sufficient (tick()'s dispatch issues
-// at most one writeRawDuty() call, which itself writes to the bus at most
-// once) and harmless when the duty write doesn't land that cycle (write-
-// on-change/throttle skip) — the unused slack entry is simply drained by a
-// later cycle's write instead, and this fake's queueWrite() never checks
-// the written payload, only address+order, so which "logical" write
-// consumes which slot does not matter.
+// one slack entry per cycle is always sufficient and harmless when the duty
+// write doesn't land that cycle (write-on-change/throttle skip).
 void scriptEncoderRequestCollect(TestSim::ScriptedI2CHook& bus, uint16_t wireAddr,
                                   float positionMm) {
   bus.queueWrite(wireAddr, /*status=*/0);   // requestEncoder()'s 0x46 write
@@ -494,7 +461,6 @@ Devices::MotorConfig baseNezhaConfig() {
   cfg.port = 1;
   cfg.fwdSign = 1;
   cfg.wheelTravelCalib = 1.0f;
-  cfg.velFiltAlpha = 1.0f;   // no smoothing — velocity() reflects each tick's raw difference-quotient exactly
   // Write-shaping — sprint 114 ticket 003: reversalDwell/outputDeadband are
   // now plain required floats (no more NezhaMotor ctor ship-default
   // substitution), so this harness sets the historical ship-default values
@@ -508,8 +474,10 @@ Devices::MotorConfig baseNezhaConfig() {
 // 5. request->collect encoder pairing produces expected position()/
 //    velocity(): requestSample() (phase 1, a scripted write) followed by
 //    tick() (phase 2, collectEncoder() — a scripted read) yields the
-//    expected position, and velocity() reflects the difference quotient
-//    across two paired cycles.
+//    expected position, and velocity() reflects the naive difference
+//    quotient across two paired cycles (125-003: NezhaMotor's own velocity()
+//    is now a plain per-tick diff -- no freshness gate, no EMA -- see
+//    nezha_motor.cpp's own file header).
 void scenarioRequestCollectPairingYieldsExpectedPositionVelocity() {
   beginScenario("request->collect encoder pairing yields expected position()/velocity()");
   TestSim::SimPlant plant;
@@ -537,297 +505,62 @@ void scenarioRequestCollectPairingYieldsExpectedPositionVelocity() {
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the pairing");
 }
 
-// 6. PID-on chases a velocity target: with a simple first-order plant
-//    stand-in (measured velocity chases the last-applied duty, one-tick
-//    actuation lag — mirrors velocity_pid_harness.cpp's own plant model),
-//    driven entirely through NezhaMotor's real tick()/armor/PID path, the
-//    tracking error shrinks substantially from the first cycle to the last.
-void scenarioPidOnChasesVelocityTarget() {
-  beginScenario("PID-on chases a velocity target");
+// 6. Duty passthrough (NEW, 125-003 -- replaces the deleted PID-chase
+//    coverage): setDuty()->tick() writes EXACTLY the given duty through the
+//    dwell/deadband shaping -- NezhaMotor no longer has any velocity
+//    decision of its own, so appliedDuty() must equal the staged duty
+//    (once above the deadband and with no dwell in play) on the very next
+//    landed write, regardless of what the plant reports.
+void scenarioSetDutyTickWritesExactlyTheGivenDutyThroughShaping() {
+  beginScenario("setDuty()->tick() writes exactly the given duty through dwell/deadband shaping");
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
 
   Devices::MotorConfig cfg = baseNezhaConfig();
-  cfg.velGains = Devices::Gains{/*kp=*/0.01f, /*ki=*/0.05f, /*kff=*/0.002f,
-                                 /*iMax=*/1.0f, /*kaw=*/2.0f};
-  cfg.velDeadband = 5.0f;   // [mm/s] well below the target — not in deadband
+  cfg.slewRate = 100.0f;   // no slew clamping -- isolates the passthrough
 
   Devices::NezhaMotor motor(plant, cfg);
-  checkTrue(motor.pidEnabled(), "PID is enabled by default");
 
-  const float target = 300.0f;   // [mm/s]
-  const uint32_t dtMs = 20;      // [ms] cycle cadence
-  const float dtS = 0.02f;       // [s]
-
-  motor.setVelocity(target);
-
-  float position = 0.0f;
-  float measuredVel = 0.0f;
-  uint64_t nowUs = 0;
-
-  // Prime cycle — establishes lastPosition_/lastTickUs_, no velocity yet.
-  scriptEncoderRequestCollect(bus, wireAddr, position);
-  motor.requestSample();
-  motor.tick(nowUs);
-
-  float firstError = std::fabs(target - motor.velocity());
-
-  const int kTicks = 400;
-  for (int i = 0; i < kTicks; ++i) {
-    // Plant response to whatever was actually forwarded to the bus last
-    // cycle (appliedDuty() — reflects armor's slew/throttle/dwell gating,
-    // exactly like the real wheel would).
-    float duty = motor.appliedDuty();
-    measuredVel += (duty * 500.0f - measuredVel) * 0.1f;
-    position += measuredVel * dtS;
-
-    nowUs += static_cast<uint64_t>(dtMs) * 1000;
-    scriptEncoderRequestCollect(bus, wireAddr, position);
+  // A sequence of well-spaced (>=35ms apart, clears the write-rate
+  // throttle), above-deadband, same-sign duties (no dwell in play) --
+  // appliedDuty() must track each one exactly, on the very next tick.
+  uint64_t nowUs = 50000;
+  const float duties[] = {0.25f, 0.60f, 0.10f, 0.35f};
+  for (float duty : duties) {
+    scriptEncoderRequestCollect(bus, wireAddr, 0.0f);   // stationary plant -- irrelevant to duty passthrough
+    motor.setDuty(duty);
     motor.requestSample();
     motor.tick(nowUs);
+    checkFloatEq(motor.appliedDuty(), duty,
+                 "appliedDuty() reflects the exact staged duty, no PID/velocity decision in the way");
+    nowUs += 50000;
   }
 
-  float lastError = std::fabs(target - motor.velocity());
-
-  checkTrue(lastError < firstError,
-            "tracking error shrinks from the first cycle to the last");
-  checkTrue(lastError <= firstError * 0.5f,
-            "converged error is well below the initial error (no blow-up)");
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the chase");
-}
-
-// 7. PID-off feeds raw duty through the armor unchanged: with PID disabled,
-//    setVelocity()'s staged target is ignored and setDuty()'s staged raw
-//    duty reaches appliedDuty() via the SAME armoredWrite() gate PID-on
-//    uses — including a reversal, proving the armor gates identically in
-//    both modes ("armor applies in both modes").
-void scenarioPidOffRoutesRawDutyThroughArmorUnchanged() {
-  beginScenario("PID-off feeds raw duty through the armor unchanged");
-  TestSim::SimPlant plant;
-  TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-
-  Devices::MotorConfig cfg = baseNezhaConfig();
-  cfg.slewRate = 100.0f;   // no slew clamping — isolates armor gating (reversal dwell) from the independent slew-cap concern
-  Devices::NezhaMotor motor(plant, cfg);
-
-  motor.setPidEnabled(false);
-  motor.setVelocity(999.0f);   // staged but must be ignored while PID is off
-  motor.setDuty(0.5f);
-
-  uint64_t nowUs = 0;
-  const float stationaryPosition = 0.0f;   // stationary plant — isolates the write-path behavior
-
-  // Several well-spaced (>35ms apart) cycles so slew/throttle both allow
-  // the raw duty to fully land.
-  for (int i = 0; i < 5; ++i) {
-    scriptEncoderRequestCollect(bus, wireAddr, stationaryPosition);
-    motor.requestSample();
-    nowUs += 50000;   // 50ms — clears the 35ms write-rate throttle every cycle (118 ticket 003)
-    motor.tick(nowUs);
-  }
-
-  checkFloatEq(motor.appliedDuty(), 0.5f,
-               "raw staged duty reaches the write path (PID target ignored while PID is off)");
-
-  // Now command a reversal while still PID-off: armor must gate it exactly
-  // as it would in PID-on mode (write 0, hold through the dwell, then
-  // resume in the new direction).
-  motor.setDuty(-0.5f);
-  scriptEncoderRequestCollect(bus, wireAddr, stationaryPosition);
+  // A genuine reversal (opposite sign) still passes through EXACT duty
+  // magnitudes once the dwell elapses -- proves the passthrough holds even
+  // across the one write-shaping mechanism this leaf still owns.
+  scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
+  motor.setDuty(-0.35f);
   motor.requestSample();
-  nowUs += 50000;
-  motor.tick(nowUs);   // sign flip — armor writes 0, arms the 100ms dwell
-  checkFloatEq(motor.appliedDuty(), 0.0f,
-               "reversal while PID-off is dwelled by the SAME armor gate (write 0 first)");
-
-  // Still mid-dwell (deadline is dwell-arm-time + 100ms).
-  scriptEncoderRequestCollect(bus, wireAddr, stationaryPosition);
+  motor.tick(nowUs);   // sign flip -- dwell writes 0 first
+  checkFloatEq(motor.appliedDuty(), 0.0f, "sign flip dwells at 0 first (unchanged dwell behavior)");
+  nowUs += 150000;      // past the 100ms dwell
+  scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
   motor.requestSample();
-  nowUs += 30000;   // 30ms later — dwell (100ms) not yet elapsed
   motor.tick(nowUs);
-  checkFloatEq(motor.appliedDuty(), 0.0f, "still held at 0 mid-dwell");
+  checkFloatEq(motor.appliedDuty(), -0.35f,
+               "dwell elapsed -- exact staged duty forwarded, unchanged in magnitude");
 
-  // Dwell elapses — resumes the new direction.
-  scriptEncoderRequestCollect(bus, wireAddr, stationaryPosition);
-  motor.requestSample();
-  nowUs += 100000;   // well past the 100ms deadline
-  motor.tick(nowUs);
-  checkFloatEq(motor.appliedDuty(), -0.5f, "dwell elapsed — resumes the new-direction raw duty");
-
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the PID-off sequence");
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the duty-passthrough sequence");
 }
 
-// 8. Fresh-sample gate (HARDWARE-CONFIRMED DB-004 fix): a cycle can
-//    re-collect the SAME raw count (measured 2026-07-26: NOT an ~80ms
-//    register refresh, which is false -- repeats come from interposed-
-//    traffic sample invalidation and degraded modes; see docs/design/
-//    encoder-refresh-characterization.md). Scripts the SAME raw encoder
-//    value for several consecutive request/collect cycles (simulating a
-//    repeated-sample stretch), then a jump to a fresh value, repeated
-//    across several such windows -- while ALSO commanding a duty so
-//    appliedDuty() is nonzero throughout ("normal driving"). Proves
-//    velocity() computes the CORRECT speed (step / real elapsed time since
-//    the LAST FRESH sample, not this tick's own dt) on every fresh sample,
-//    is never rejected as a glitch, is never left starved at/near 0, and
-//    that the wedge detector does not false-latch (neither wedged() nor
-//    wedgeSuspect()) across the run -- reproducing and proving the fix for
-//    the exact bring-up-image symptom (vel=0.000 always, glitch count
-//    climbing, wedged=1) while the wheel was physically moving.
-void scenarioFreshSampleGateSurvivesSlowBrickRefreshUnderFastFiberCycle() {
-  beginScenario("fresh-sample gate survives slow brick refresh under fast fiber cycle");
-  TestSim::SimPlant plant;
-  TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-
-  Devices::MotorConfig cfg = baseNezhaConfig();   // velFiltAlpha=1.0 -- velocity() reflects each fresh sample's raw difference-quotient exactly
-  Devices::NezhaMotor motor(plant, cfg);
-  // Wedge detection lives in the MotorArmor DECORATOR now (2026-07-18
-  // restructure) -- wrap the leaf and tick through the armor so the
-  // detector actually observes the run; the wedge assertions below read
-  // the armor's latches.
-  Devices::MotorArmor armored(motor);
-  // Byte-for-byte-behavior-preserving rename (114-001 Revision 1): SAME cfg
-  // the wrapped motor was constructed with -- motor is fresh (mode_ ==
-  // Mode::None), so reconfigure() always succeeds here.
-  (void)armored.reconfigure(cfg);
-
-  // Drive a raw duty throughout (PID off, to keep the plant simple/
-  // deterministic) so appliedDuty() is nonzero -- exercises the
-  // wedgeSuspect() ("commanded but not moving") path alongside the raw
-  // wedged() latch, matching the ticket's "normal driving" concern.
-  motor.setPidEnabled(false);
-  motor.setDuty(0.4f);
-
-  const uint64_t kFiberCycleUs = 16000;    // [us] ~16ms fiber cycle (DB-007/DB-008)
-  const int kStaleCyclesPerRefresh = 4;    // 4 stale + 1 fresh per window -- a worst-case repeated-sample stretch, not a claimed brick refresh period
-  const float kStepPerRefresh = 40.0f;     // [mm] realistic per-refresh position step (500mm/s-class motion)
-
-  // Prime cycle: boot-anchor at position 0. Scripts an extra write slack
-  // entry (scriptEncoderRequestCollect already provides one) to absorb the
-  // very first duty write this tick's mode dispatch may also issue.
-  uint64_t nowUs = 0;
-  float position = 0.0f;
-  scriptEncoderRequestCollect(bus, wireAddr, position);
-  motor.requestSample();
-  armored.tick(nowUs);
-  checkFloatEq(motor.position(), 0.0f, "primed position is 0");
-  checkUintEq(motor.encGlitchCount(), 0, "boot anchor is not counted as a glitch");
-
-  for (int refresh = 0; refresh < 6; ++refresh) {
-    // Stale cycles: the brick has NOT refreshed -- same raw value.
-    for (int i = 0; i < kStaleCyclesPerRefresh; ++i) {
-      nowUs += kFiberCycleUs;
-      scriptEncoderRequestCollect(bus, wireAddr, position);   // unchanged raw
-      motor.requestSample();
-      armored.tick(nowUs);
-    }
-
-    // Fresh cycle: the brick has refreshed -- position jumps by a realistic
-    // step. freshElapsed is ALWAYS exactly (kStaleCyclesPerRefresh+1) fiber
-    // cycles here (every window is the same length), so the expected
-    // velocity is constant across every refresh window.
-    position += kStepPerRefresh;
-    nowUs += kFiberCycleUs;
-    scriptEncoderRequestCollect(bus, wireAddr, position);
-    motor.requestSample();
-    armored.tick(nowUs);
-
-    const float freshElapsed = static_cast<float>(kFiberCycleUs) *
-                                static_cast<float>(kStaleCyclesPerRefresh + 1) / 1e6f;
-    const float expectedVel = kStepPerRefresh / freshElapsed;   // 40mm / 0.08s = 500mm/s
-
-    checkFloatEq(motor.position(), position, "position reflects the fresh sample, not a stale intermediate one");
-    checkFloatEq(motor.velocity(), expectedVel,
-                 "velocity == step / real elapsed time since the LAST FRESH sample (not per-tick)", 1.0f);
-    checkTrue(motor.velocity() > 100.0f,
-              "velocity is not starved to ~0 by the intervening stale cycles");
-  }
-
-  checkUintEq(motor.encGlitchCount(), 0,
-              "no false glitches across repeated stale-then-fresh refresh windows");
-  checkTrue(!armored.wedged(),
-            "raw wedge latch does not false-trigger across normal stale-then-fresh cycling");
-  checkTrue(!armored.wedgeSuspect(),
-            "motion-qualified wedge-suspect does not false-trigger while genuinely driving");
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the run");
-}
-
-// 9. Boot anchor: the first-ever fresh sample may report a large lifetime-
-//    accumulated raw count (hardware-observed: ~-33526mm) -- this is
-//    NORMAL (an already-running brick's accumulated register), not a
-//    glitch. It must be anchored directly (no diff-from-0 "glitch"), and
-//    stale/fresh cycling immediately after boot must not re-glitch or
-//    loop on the anchor, nor false-latch the wedge detector.
-void scenarioBootAnchorAcceptsLargeInitialPositionWithoutGlitchOrWedge() {
-  beginScenario("boot anchor accepts a large initial position without glitch or wedge");
-  TestSim::SimPlant plant;
-  TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-
-  Devices::MotorConfig cfg = baseNezhaConfig();
-  Devices::NezhaMotor motor(plant, cfg);
-  // Wedge detection lives in the MotorArmor DECORATOR now (2026-07-18
-  // restructure) -- wrap and tick through the armor so the detector runs.
-  Devices::MotorArmor armored(motor);
-  // Byte-for-byte-behavior-preserving rename (114-001 Revision 1): SAME cfg
-  // the wrapped motor was constructed with -- motor is fresh (mode_ ==
-  // Mode::None), so reconfigure() always succeeds here.
-  (void)armored.reconfigure(cfg);
-
-  const float kBootPosition = -33526.0f;   // [mm] hardware-observed lifetime-accumulated boot value
-
-  scriptEncoderRequestCollect(bus, wireAddr, kBootPosition);
-  motor.requestSample();
-  armored.tick(0);
-
-  checkFloatEq(motor.position(), kBootPosition,
-               "boot anchor lands directly on the first sample, no diff-from-0 glitch");
-  checkFloatEq(motor.velocity(), 0.0f, "no spurious velocity computed on the boot anchor itself");
-  checkUintEq(motor.encGlitchCount(), 0, "boot anchor is never counted as a glitch");
-  checkTrue(!armored.wedged(), "boot anchor alone does not latch the wedge");
-
-  // A handful of stale cycles right after boot (brick hasn't refreshed
-  // yet) must hold the anchor, not loop or re-glitch on it.
-  uint64_t nowUs = 0;
-  float position = kBootPosition;
-  for (int i = 0; i < 3; ++i) {
-    nowUs += 16000;
-    scriptEncoderRequestCollect(bus, wireAddr, position);   // still stale
-    motor.requestSample();
-    armored.tick(nowUs);
-  }
-  checkFloatEq(motor.position(), kBootPosition, "position holds through stale post-boot cycles");
-  checkUintEq(motor.encGlitchCount(), 0, "stale post-boot cycles are not glitches (simply not fresh)");
-  checkTrue(!armored.wedged(), "stale post-boot cycles alone do not latch the wedge");
-
-  // First genuinely fresh post-boot sample: real, realistic motion off the
-  // large boot anchor computes correctly and is not misclassified.
-  // +30mm over the 64ms since the anchor = ~469 mm/s -- deliberately below
-  // kMaxPlausibleSpeed (halved 1000 -> 600 in the 2026-07-18 tuning pass;
-  // the prior +40mm/625mm/s now trips the gate and holds velocity at 0,
-  // which is the gate working, not the boot-anchor behavior under test).
-  nowUs += 16000;
-  position += 30.0f;
-  scriptEncoderRequestCollect(bus, wireAddr, position);
-  motor.requestSample();
-  armored.tick(nowUs);
-  checkFloatEq(motor.position(), position, "first post-boot fresh sample lands correctly");
-  checkTrue(motor.velocity() > 100.0f, "first post-boot fresh sample yields a real (non-zero) velocity");
-  checkUintEq(motor.encGlitchCount(), 0, "genuine post-boot motion off a large anchor is not a glitch");
-  checkTrue(!armored.wedged(), "no wedge latch through the boot+stale+fresh sequence");
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the boot sequence");
-}
-
-// 10. C1 fix (103-002, 2026-07-13 code review): a NAK'd STOP write (pct==0)
-//     must NOT be latched as "already written" -- write-on-change (nezha_
-//     motor.cpp's writeRawDuty()) must retry the SAME value next tick
-//     instead of permanently suppressing it, and appliedDuty() must keep
-//     reporting the PREVIOUS (still physically applied) duty until a write
-//     actually succeeds -- the exact scenario the review flagged: a failed
-//     stop leaving the watchdog's "re-assert Neutral every cycle" (the
-//     loop's stale-target gate) permanently defeated.
+// 7. A NAK'd STOP write (pct==0) must NOT be latched as "already written" --
+//    write-on-change (nezha_motor.cpp's writeRawDuty()) must retry the SAME
+//    value next tick instead of permanently suppressing it, and
+//    appliedDuty() must keep reporting the PREVIOUS (still physically
+//    applied) duty until a write actually succeeds -- 103-002, 2026-07-13
+//    code review C1 fix.
 void scenarioNakedStopWriteIsRetriedNextTickNotLatched() {
   beginScenario("a NAK'd stop write is retried next tick, not permanently latched-as-written");
   TestSim::SimPlant plant;
@@ -837,13 +570,11 @@ void scenarioNakedStopWriteIsRetriedNextTickNotLatched() {
   Devices::MotorConfig cfg = baseNezhaConfig();
   cfg.slewRate = 100.0f;   // no slew clamping -- isolates the write-status behavior
   Devices::NezhaMotor motor(plant, cfg);
-  motor.setPidEnabled(false);
 
   // Starts at 50ms (not 0): writeRawDuty()'s write-rate throttle compares
   // this tick's nowUs against lastWriteTimeUs_'s zero-init value, so a
   // first tick at nowUs==0 would itself read as "0us since the last write"
-  // and be throttled away — every other scenario in this file sidesteps
-  // this the same way (see scenarioPidOffRoutesRawDutyThroughArmorUnchanged).
+  // and be throttled away.
   uint64_t nowUs = 50000;
   const float stationaryPosition = 0.0f;
 
@@ -889,85 +620,13 @@ void scenarioNakedStopWriteIsRetriedNextTickNotLatched() {
               "no new error -- the retry succeeded; errCount stays at the one earlier NAK");
 }
 
-// 11. applyGains() takes effect on the SAME instance, same boot, no
-//     reflash/reconstruction (106-002/SUC-025): with gains initially at 0
-//     (PID output stays pinned at 0 regardless of error), the plant never
-//     moves; applyGains() with real gains, called mid-run on the SAME
-//     NezhaMotor object, makes it start chasing the target on the very
-//     next tick.
-void scenarioApplyGainsTakesEffectSameBootNoReflash() {
-  beginScenario("applyGains() changes subsequent PID output on the same boot, no reflash");
-  TestSim::SimPlant plant;
-  TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-
-  Devices::MotorConfig cfg = baseNezhaConfig();
-  cfg.velDeadband = 5.0f;   // well below the target -- not in deadband
-  // cfg.velGains left at Devices::Gains{}'s all-zero default -- PID output
-  // is inert (0) regardless of error.
-
-  Devices::NezhaMotor motor(plant, cfg);
-  checkFloatEq(motor.gains().kp, 0.0f, "gains() reflects the constructed (zero) kp before applyGains()");
-
-  const float target = 300.0f;   // [mm/s]
-  const uint32_t dtMs = 20;      // [ms] cycle cadence
-  const float dtS = 0.02f;       // [s]
-  motor.setVelocity(target);
-
-  float position = 0.0f;
-  float measuredVel = 0.0f;
-  uint64_t nowUs = 0;
-
-  scriptEncoderRequestCollect(bus, wireAddr, position);
-  motor.requestSample();
-  motor.tick(nowUs);
-
-  // Phase 1: zero gains -- output stays pinned at 0 despite a large error.
-  for (int i = 0; i < 20; ++i) {
-    float duty = motor.appliedDuty();
-    measuredVel += (duty * 500.0f - measuredVel) * 0.1f;
-    position += measuredVel * dtS;
-    nowUs += static_cast<uint64_t>(dtMs) * 1000;
-    scriptEncoderRequestCollect(bus, wireAddr, position);
-    motor.requestSample();
-    motor.tick(nowUs);
-  }
-  checkFloatEq(motor.appliedDuty(), 0.0f, "zero gains -- applied duty stays 0 despite a large error");
-  checkFloatEq(motor.velocity(), 0.0f, "zero gains -- plant never moves");
-  float errorBeforeGainChange = std::fabs(target - motor.velocity());
-
-  // Live gain-apply, no reconstruction -- the SAME motor instance.
-  Devices::Gains newGains{/*kp=*/0.01f, /*ki=*/0.05f, /*kff=*/0.002f,
-                           /*iMax=*/1.0f, /*kaw=*/2.0f};
-  motor.applyGains(newGains);
-  checkFloatEq(motor.gains().kp, 0.01f, "gains() reflects the newly-applied kp immediately");
-
-  // Phase 2: same instance, same plant state, same target -- now converges.
-  for (int i = 0; i < 400; ++i) {
-    float duty = motor.appliedDuty();
-    measuredVel += (duty * 500.0f - measuredVel) * 0.1f;
-    position += measuredVel * dtS;
-    nowUs += static_cast<uint64_t>(dtMs) * 1000;
-    scriptEncoderRequestCollect(bus, wireAddr, position);
-    motor.requestSample();
-    motor.tick(nowUs);
-  }
-  float errorAfterGainChange = std::fabs(target - motor.velocity());
-
-  checkTrue(errorAfterGainChange < errorBeforeGainChange,
-            "after applyGains(), tracking error shrinks on the SAME instance -- no reflash/reconstruction needed");
-  checkTrue(motor.appliedDuty() != 0.0f, "post-applyGains() duty is no longer pinned at 0");
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the gain-change sequence");
-}
-
-// 12. applyGains(): travelCalib only updates config_.wheelTravelCalib when
-//     explicitly PRESENT (Opt<float>{has=true}); a gains-only call (default
-//     travelCalib, absent) leaves it unchanged -- proves the two parameters
-//     are independently gated, matching RobotLoop's own per-side
-//     travel_calib vs. both-sides kp/ki/kff/iMax/kaw application split
-//     (config.proto's MotorConfigPatch.side comment).
-void scenarioApplyGainsTravelCalibAppliesWhenPresentOtherwiseUnchanged() {
-  beginScenario("applyGains(): travelCalib updates wheelTravelCalib only when explicitly present");
+// 8. applyTravelCalib() (125-003: narrowed from the pre-125-003
+//    applyGains(Gains, Opt<float>) -- see motor.h's own header) takes
+//    effect on the SAME instance, same boot, no reflash: a raw step
+//    scripted under wheelTravelCalib=1.0 decodes to double the mm once
+//    applyTravelCalib(2.0) has been called.
+void scenarioApplyTravelCalibTakesEffectSameBootNoReflash() {
+  beginScenario("applyTravelCalib() changes subsequent position() decode on the same boot, no reflash");
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
@@ -980,24 +639,17 @@ void scenarioApplyGainsTravelCalibAppliesWhenPresentOtherwiseUnchanged() {
   motor.requestSample();
   motor.tick(0);
 
-  // Gains-only applyGains() (default travelCalib -- absent) must leave
-  // wheelTravelCalib unchanged: a raw step scripted for "10.0mm at
-  // calib=1.0" still lands at 10.0mm.
-  motor.applyGains(Devices::Gains{0.02f, 0.0f, 0.0f, 1.0f, 1.0f});
-  scriptEncoderRequestCollect(bus, wireAddr, 10.0f);
+  scriptEncoderRequestCollect(bus, wireAddr, 10.0f);   // raw=100 -- at calib=1.0 decodes to 10.0mm
   motor.requestSample();
   motor.tick(20000);
-  checkFloatEq(motor.position(), 10.0f,
-               "gains-only applyGains() call leaves wheelTravelCalib unchanged (still 1.0)");
+  checkFloatEq(motor.position(), 10.0f, "position decodes at the constructed wheelTravelCalib (1.0)");
 
-  // applyGains() WITH travelCalib=2.0 present -- the SAME raw register
-  // value (this helper's own positionMm*10 raw convention, still assuming
-  // calib=1.0 to construct the raw bytes) now decodes to DOUBLE the mm,
-  // proving the side-selected field landed live, same boot, no reflash.
-  Devices::Opt<float> travelCalib;
-  travelCalib.has = true;
-  travelCalib.val = 2.0f;
-  motor.applyGains(motor.gains(), travelCalib);
+  // Live apply, no reconstruction -- the SAME motor instance.
+  motor.applyTravelCalib(2.0f);
+
+  // The SAME raw register value (this helper's own positionMm*10 raw
+  // convention, still assuming calib=1.0 to construct the raw bytes) now
+  // decodes to DOUBLE the mm, proving the change landed live, same boot.
   scriptEncoderRequestCollect(bus, wireAddr, 15.0f);   // raw=150 -- at calib=2.0 this decodes to 30.0mm
   motor.requestSample();
   motor.tick(40000);
@@ -1007,16 +659,12 @@ void scenarioApplyGainsTravelCalibAppliesWhenPresentOtherwiseUnchanged() {
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the travelCalib sequence");
 }
 
-// 13. reconfigure() -- REVISION 1 (114-001, motor.h): guarded, whole-config
-//     replacement. Succeeds and fully replaces config_ (fwdSign/
-//     wheelTravelCalib/velGains -- NOT just the narrow applyGains() surface)
-//     when the motor has never been commanded (mode_ == Mode::None); fails
-//     and leaves config_ UNCHANGED when the motor is actively driving and
-//     not at rest; succeeds again once the motor returns to rest. This is
-//     the exact mechanism that resolves ticket 001's own thrown exception
-//     (SimHarness::configureMotor() previously reached only MotorArmor's
-//     own cached motionThreshold_, never the wrapped NezhaMotor's config_ --
-//     see sprint.md's Architecture Revision 1 / Decision 6).
+// 9. reconfigure() -- REVISION 1 (114-001, motor.h): guarded, whole-config
+//    replacement. Succeeds and fully replaces config_ (fwdSign/
+//    wheelTravelCalib -- NOT just the narrow applyTravelCalib() surface)
+//    when the motor has never been commanded (mode_ == Mode::None); fails
+//    and leaves config_ UNCHANGED when the motor is actively driving and
+//    not at rest; succeeds again once the motor returns to rest.
 void scenarioReconfigureGuardedWholeConfigReplacement() {
   beginScenario("reconfigure(): succeeds pre-command (whole config_ replace), fails while driving "
                 "and not at rest, succeeds again once at rest");
@@ -1028,17 +676,15 @@ void scenarioReconfigureGuardedWholeConfigReplacement() {
   Devices::NezhaMotor motor(plant, cfg);
 
   // --- Step 1: never commanded (mode_ == Mode::None) -- reconfigure()
-  //     succeeds and replaces config_ WHOLESALE, not just the narrow
-  //     applyGains() surface (fwdSign/wheelTravelCalib have no other
-  //     runtime setter -- this is the ONLY path that can change them
-  //     post-construction). ---
+  //     succeeds and replaces config_ WHOLESALE (fwdSign/wheelTravelCalib
+  //     have no other runtime setter besides applyTravelCalib(), which only
+  //     touches wheelTravelCalib -- this is the ONLY path that can change
+  //     fwdSign post-construction). ---
   Devices::MotorConfig cfgA = baseNezhaConfig();
   cfgA.fwdSign = -1;
   cfgA.wheelTravelCalib = 2.0f;
-  cfgA.velGains.kp = 0.77f;
   bool ok1 = motor.reconfigure(cfgA);
   checkTrue(ok1, "reconfigure() succeeds on a never-yet-commanded motor (mode_ == Mode::None)");
-  checkFloatEq(motor.gains().kp, 0.77f, "kp took effect -- config_ was replaced, not just cached");
 
   // raw = positionMm*10 (the helper's own convention, see scriptEncoderRequestCollect()'s
   // header) -- at fwdSign=-1/wheelTravelCalib=2.0, positionMm=10.0 (raw=100) decodes to
@@ -1054,15 +700,6 @@ void scenarioReconfigureGuardedWholeConfigReplacement() {
   // --- Step 2: drive the motor (setDuty() + a real landed write) --
   //     mode_ != Mode::None and appliedDuty() != 0 -- NOT at rest.
   //     reconfigure() must now refuse and leave config_ untouched.
-  //
-  //     Every scripted sample from here on repeats the SAME raw position
-  //     (10.0mm, matching step 1's own boot-anchor raw) -- an unchanged raw
-  //     count is a STALE sample (NezhaMotor's own freshness gate, see
-  //     nezha_motor.cpp's tick() step 2), so filteredVelocity_ never moves
-  //     off its 0.0f default. This deliberately keeps the "at rest" checks
-  //     below hinging ONLY on appliedDuty() -- exactly what setDuty(0.0f)
-  //     controls -- rather than on an incidental velocity spike from a
-  //     verification-only encoder jump. ---
   motor.setDuty(0.5f);
   scriptEncoderRequestCollect(bus, wireAddr, 10.0f);   // stationary (stale raw) -- unchanged raw
   motor.requestSample();
@@ -1072,10 +709,8 @@ void scenarioReconfigureGuardedWholeConfigReplacement() {
   Devices::MotorConfig cfgB = baseNezhaConfig();
   cfgB.fwdSign = 1;
   cfgB.wheelTravelCalib = 1.0f;
-  cfgB.velGains.kp = 0.99f;
   bool ok2 = motor.reconfigure(cfgB);
   checkTrue(!ok2, "reconfigure() refuses while the motor is actively driving and not at rest");
-  checkFloatEq(motor.gains().kp, 0.77f, "kp UNCHANGED after the refused reconfigure() -- still cfgA's value");
 
   // --- Step 3: return to rest (a commanded stop is immediate/unclamped,
   //     exempt from both the slew cap and the write-rate throttle) --
@@ -1088,13 +723,10 @@ void scenarioReconfigureGuardedWholeConfigReplacement() {
 
   bool ok3 = motor.reconfigure(cfgB);
   checkTrue(ok3, "reconfigure() succeeds again once the motor has returned to rest");
-  checkFloatEq(motor.gains().kp, 0.99f, "kp now reflects cfgB -- reconfigure() took effect this time");
 
   // A FRESH scripted sample (a genuinely new raw value) now decodes under
   // cfgB's fwdSign=1/wheelTravelCalib=1.0, not cfgA's (-1/2.0) -- the
-  // recovery reconfigure() genuinely took effect. This is the last tick in
-  // the sequence, so the resulting velocity spike (from the stale-anchored
-  // boot position) has no further "at rest" check downstream to disturb.
+  // recovery reconfigure() genuinely took effect.
   scriptEncoderRequestCollect(bus, wireAddr, 15.0f);   // raw=150
   motor.requestSample();
   motor.tick(150000);
@@ -1105,14 +737,12 @@ void scenarioReconfigureGuardedWholeConfigReplacement() {
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the reconfigure() sequence");
 }
 
-// 13. Explicit all-zero write shaping (reversalDwell=0/outputDeadband=0) is
+// 10. Explicit all-zero write shaping (reversalDwell=0/outputDeadband=0) is
 //     a pure pass-through -- proves the Opt<float> -> float collapse
 //     (sprint 114 ticket 003) did not silently change the MEANING of an
 //     explicit zero. A duty that would have been zeroed under the old ship
 //     default (0.03) lands unmodified, and a sign flip forwards immediately
-//     with no intermediate zero write -- matching writeShapedDuty()'s own
-//     documented "reversalDwell_ == 0 skips the dwell transition entirely"
-//     contract (nezha_motor.cpp).
+//     with no intermediate zero write.
 void scenarioExplicitZeroWriteShapingIsPassThrough() {
   beginScenario("explicit reversalDwell=0/outputDeadband=0 is a pure pass-through");
   TestSim::SimPlant plant;
@@ -1138,565 +768,13 @@ void scenarioExplicitZeroWriteShapingIsPassThrough() {
                "sign flip forwarded immediately at reversalDwell=0 -- no dwell armed");
 }
 
-// 14. Settle-not-hunt sweep (sprint 114 ticket 005 -- Design Rationale
-//     Decision 4's own explicit "prove it empirically, don't just assert
-//     it" requirement, sprint.md). Decision 4's structural argument for why
-//     this boost is safe where the deleted App::Pilot min-speed floor
-//     (112-004) was not: the boost sits INSIDE NezhaMotor's own velocity-PID
-//     closed loop, so real measured velocity feeds back every tick, AND
-//     (the load-bearing half of the argument, re-derived here) the OUTER
-//     loop's own commanded target is itself proportional to a residual
-//     ERROR that shrinks as real motion closes it (App::Pilot's
-//     `omega += headingKp_ * thetaErr` / `distanceKp_ * (sRef - sMeas)`) --
-//     a boosted write is never invisible, so the very next tick's target is
-//     already smaller. This is NOT the same claim as "NezhaMotor's own
-//     velocity PID can smoothly HOLD an arbitrary constant velocity below
-//     the deadband floor forever" -- it structurally cannot (the plant's
-//     achievable-velocity set excludes the open interval (0,
-//     outputDeadband_/kff), so a controller asked to hold a FIXED point
-//     inside that gap has no choice but to dither between 0 and the floor).
-//     An earlier version of this sweep drove NezhaMotor with a fixed
-//     constant target and found exactly that dither (up to ~190 sign
-//     reversals per case) -- a REAL finding, but about a scenario the
-//     production system never actually poses: App::Pilot never asks for a
-//     constant sub-floor velocity forever, it asks for a velocity
-//     proportional to a shrinking residual. This sweep instead drives an
-//     explicit OUTER P loop (`target = kpOuter * residual`, `residual -=
-//     measuredVel * dt`) around the REAL NezhaMotor + writeShapedDuty()
-//     fix, mirroring App::Pilot's own error-driven-target shape (the same
-//     shape, not the full Pilot/Executor/HeadingSource graph, which the sim
-//     SYSTEM test in deadband_terminal_correction_harness.cpp exercises
-//     end-to-end) -- the actual claim under test.
-//
-//     Sweeps small initial residuals near a real dwell-tolerance
-//     neighborhood (bench_test_config.cpp's own heading_dwell_tol=3deg at
-//     trackWidth/2=64mm ~= 3.3mm; distance_tol=6mm) AND the outer loop's own
-//     gain (the sweep axis the ticket's own acceptance criteria call out:
-//     "across the model-reference feedback's current gain"), matching the
-//     order of magnitude of bench_test_config.cpp's own
-//     distance_kp=2.5/heading_kp=2.5. Every swept case must settle --
-//     converge the residual into a small tolerance band and STAY there --
-//     with AT MOST ONE sign reversal (one overshoot past the target, then
-//     settle), never a sustained oscillation.
-void scenarioDeadbandBoostSettlesNotHuntsAcrossResidualSweep() {
-  beginScenario("deadband boost settles (not hunts) across a residual-error/outer-gain sweep");
-
-  const float kResiduals[] = {3.0f, 5.0f, 8.0f, 12.0f, 20.0f};   // [mm] initial residual error
-  const float kOuterKps[] = {1.5f, 2.5f, 4.0f};                  // [1/s] outer P loop gain
-
-  constexpr float kKff = 0.002f;       // [duty per mm/s] matches bench_test_config.cpp's own convention
-  constexpr float kMotorKp = 0.01f;    // NezhaMotor's own embedded velocity-PID proportional gain
-  constexpr float kSettleTol = 1.5f;   // [mm] small tolerance band around a fully-closed residual
-  constexpr int kTicks = 300;          // 6s of virtual time at dtMs=20 -- generous convergence budget
-  constexpr int kTailTicks = 50;       // last 1s of the run -- "settled and STAYS settled"
-  constexpr uint32_t dtMs = 20;
-  constexpr float dtS = 0.02f;
-
-  for (float kpOuter : kOuterKps) {
-    for (float e0 : kResiduals) {
-      TestSim::SimPlant plant;
-      TestSim::ScriptedI2CHook bus(plant);
-      const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-
-      Devices::MotorConfig cfg = baseNezhaConfig();   // outputDeadband=0.03, reversalDwell=100ms
-      cfg.velGains = Devices::Gains{/*kp=*/kMotorKp, /*ki=*/0.0f, /*kff=*/kKff, /*iMax=*/1.0f, /*kaw=*/2.0f};
-      cfg.velDeadband = 0.5f;   // [mm/s] small -- keeps the PID's P+FF terms engaged for every swept target
-
-      Devices::NezhaMotor motor(plant, cfg);
-
-      float residual = e0;   // [mm] the outer loop's own error -- shrinks with real measured motion
-      float position = 0.0f;
-      float measuredVel = 0.0f;
-      uint64_t nowUs = 0;
-
-      // Prime cycle -- establishes lastPosition_/lastTickUs_, no velocity yet.
-      scriptEncoderRequestCollect(bus, wireAddr, position);
-      motor.requestSample();
-      motor.tick(nowUs);
-
-      std::vector<float> residuals;
-      residuals.reserve(kTicks + 1);
-      residuals.push_back(residual);
-
-      for (int i = 0; i < kTicks; ++i) {
-        // Outer P loop -- App::Pilot's own error-driven-target shape,
-        // applied directly to the residual (NezhaMotor has no heading/
-        // distance concept of its own; the sim SYSTEM test exercises the
-        // REAL App::Pilot graph end to end).
-        float target = kpOuter * residual;
-        motor.setVelocity(target);
-
-        // Plant responds to whatever ACTUALLY landed on the wire last cycle
-        // (appliedDuty() -- the real, shaped write, reversal-dwell/write-
-        // throttle/slew all included, exactly as scenarioPidOnChasesVelocityTarget
-        // above does), same simple first-order stand-in.
-        float duty = motor.appliedDuty();
-        measuredVel += (duty * 500.0f - measuredVel) * 0.1f;
-        position += measuredVel * dtS;
-        residual -= measuredVel * dtS;   // the outer error closes with REAL motion, not the target
-
-        nowUs += static_cast<uint64_t>(dtMs) * 1000;
-        scriptEncoderRequestCollect(bus, wireAddr, position);
-        motor.requestSample();
-        motor.tick(nowUs);
-
-        residuals.push_back(residual);
-      }
-
-      char label[128];
-      std::snprintf(label, sizeof(label), "e0=%.1fmm kpOuter=%.2f/s", static_cast<double>(e0),
-                    static_cast<double>(kpOuter));
-
-      // Overshoot count: a genuine sign reversal of the residual, gated on
-      // the PRIOR residual being outside the settle band -- a sample
-      // hovering near 0 and dithering sign trivially is exactly what
-      // settled-and-holding looks like, not a hunt.
-      int reversals = 0;
-      for (size_t i = 1; i < residuals.size(); ++i) {
-        bool prevOutside = std::fabs(residuals[i - 1]) > kSettleTol;
-        bool signFlip = (residuals[i] > 0.0f) != (residuals[i - 1] > 0.0f);
-        if (prevOutside && signFlip) ++reversals;
-      }
-      checkTrue(reversals <= 1, std::string("bounded overshoot (<=1 sign reversal) -- ") + label +
-                                     ": saw " + std::to_string(reversals) + " reversal(s)");
-
-      // Settled and STAYS settled -- the tail of the run holds inside the
-      // tolerance band, proving convergence rather than one lucky crossing.
-      bool tailSettled = true;
-      float worstTailResidual = 0.0f;
-      for (size_t i = residuals.size() - kTailTicks; i < residuals.size(); ++i) {
-        worstTailResidual = std::max(worstTailResidual, std::fabs(residuals[i]));
-        if (std::fabs(residuals[i]) > kSettleTol) tailSettled = false;
-      }
-      char tailMsg[192];
-      std::snprintf(tailMsg, sizeof(tailMsg),
-                    "settles and stays within +/-%.1fmm -- %s (worst tail residual %.2fmm)",
-                    static_cast<double>(kSettleTol), label, static_cast<double>(worstTailResidual));
-      checkTrue(tailSettled, tailMsg);
-    }
-  }
-}
-
-// 15. Exact-zero target ignores residual measured-velocity noise (2026-07-22
-//     bench fix -- stakeholder bench finding: idle telemetry over 20s showed
-//     one wheel's encoder position drifting ~12mm while its reported
-//     velocity alternated sign (roughly +/-10mm/s) the ENTIRE time -- i.e.
-//     after a Move completes and Drive::stop()/an emptied MoveQueue set the
-//     commanded target to EXACT 0.0f, propagating straight to
-//     NezhaMotor::setVelocity(0.0f). Root cause: MotorVelocityPid::compute()
-//     froze the INTEGRAL for an in-deadband target but still computed and
-//     returned an active kp*err PROPORTIONAL term against whatever
-//     `measured` the plant happened to report -- pure noise, at an exact-
-//     zero target -- which writeShapedDuty() (nezha_motor.cpp) then boosted
-//     up to the full outputDeadband_ magnitude, in whatever sign the noise
-//     landed on, every tick it flipped.
-//
-//     Distinct from scenario 14 above (scenarioDeadbandBoostSettlesNotHunts
-//     AcrossResidualSweep): that sweep drives an OUTER-LOOP-DRIVEN shrinking
-//     NONZERO target (App::Pilot's own old error-driven-target shape,
-//     deleted 115-003) and asserts it settles rather than hunts -- a
-//     different regime from THIS scenario's literal "target is already
-//     exactly zero, forever, until the next Move" case, which is what the
-//     current MoveQueue-driven architecture actually produces at rest and
-//     which that sweep never exercises (its target is never exactly 0.0f).
-//
-//     This scenario feeds alternating-sign residual "noise" as the
-//     MEASURED velocity (a plausible encoder-jitter/coast-down signature),
-//     small enough to stay under the rest-noise floor
-//     (kZeroTargetRestNoiseFloor, velocity_pid.cpp), across many ticks
-//     while the commanded target stays exactly 0.0f the whole time, and
-//     asserts appliedDuty() never leaves 0.0f -- proving the fix
-//     (velocity_pid.cpp's `if (target == 0.0f && fabsf(measured) <=
-//     restThreshold) return 0.0f;` early-return, added ahead of the
-//     err/kp*err computation) actually reaches writeShapedDuty() and
-//     prevents the boosted dither. Scenario 16 below is this scenario's
-//     own companion/regression-guard: the SAME exact-zero target, but
-//     `measured` starts well ABOVE the rest-noise floor (a real
-//     deceleration-from-speed case), asserting the P-term's active
-//     braking is NOT suppressed in that regime -- the stakeholder live
-//     report this refinement responds to.
-void scenarioExactZeroTargetIgnoresResidualMeasuredVelocityNoise() {
-  beginScenario("exact-zero target ignores residual measured-velocity noise (no boosted dither)");
-  TestSim::SimPlant plant;
-  TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-
-  Devices::MotorConfig cfg = baseNezhaConfig();   // outputDeadband=0.03, reversalDwell=100ms
-  cfg.velGains = Devices::Gains{/*kp=*/0.01f, /*ki=*/0.05f, /*kff=*/0.002f,
-                                 /*iMax=*/1.0f, /*kaw=*/2.0f};
-  // velDeadband left at baseNezhaConfig()'s own default (0.0f, unconfigured)
-  // -- the rest-noise floor is velocity_pid.cpp's own
-  // kZeroTargetRestNoiseFloor (15mm/s) in that case, not velDeadband (see
-  // that constant's own comment on why velDeadband alone is not it on
-  // real hardware).
-
-  Devices::NezhaMotor motor(plant, cfg);
-  motor.setVelocity(0.0f);   // the exact command Drive::stop() produces
-
-  float position = 0.0f;
-  uint64_t nowUs = 0;
-
-  // Prime cycle -- establishes lastPosition_/lastTickUs_, no velocity yet.
-  scriptEncoderRequestCollect(bus, wireAddr, position);
-  motor.requestSample();
-  motor.tick(nowUs);
-
-  const int kTicks = 200;
-  const uint32_t dtMs = 20;
-  const float dtS = 0.02f;
-  bool everNonzero = false;
-  float worstNonzero = 0.0f;
-
-  for (int i = 0; i < kTicks; ++i) {
-    // Alternating-sign residual velocity noise, well above float epsilon
-    // but well BELOW the 15mm/s rest-noise floor (4mm/s -- comparable in
-    // magnitude to the bench's own observed at-rest alternation) -- fed as
-    // a real position delta so NezhaMotor's OWN velocity estimation
-    // (velFiltAlpha=1.0f, no smoothing -- baseNezhaConfig()'s own comment)
-    // reports it back through the exact same pipeline production code
-    // uses, not injected directly into the PID.
-    float noise = (i % 2 == 0) ? 4.0f : -4.0f;   // [mm/s]
-    position += noise * dtS;
-
-    nowUs += static_cast<uint64_t>(dtMs) * 1000;
-    scriptEncoderRequestCollect(bus, wireAddr, position);
-    motor.requestSample();
-    motor.tick(nowUs);
-
-    float duty = motor.appliedDuty();
-    if (duty != 0.0f) {
-      everNonzero = true;
-      worstNonzero = std::max(worstNonzero, std::fabs(duty));
-    }
-  }
-
-  char msg[160];
-  std::snprintf(msg, sizeof(msg),
-                "appliedDuty stays exactly 0.0f for every tick despite alternating "
-                "residual noise (worst nonzero seen: %.4f)",
-                static_cast<double>(worstNonzero));
-  checkTrue(!everNonzero, msg);
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the noise sweep");
-}
-
-// 16. Exact-zero target STILL actively brakes while measured velocity is
-//     genuinely large (2026-07-22 refinement -- companion/regression guard
-//     for scenario 15 above). The P4 Move model is bang-bang: a Move runs
-//     at its own full commanded velocity until its stop condition fires,
-//     then Drive::stop()/an emptied MoveQueue snap the target directly to
-//     0.0f -- no deceleration ramp of their own. A same-day stakeholder
-//     live report caught the FIRST cut of the rest-hunt fix (gating on
-//     `target == 0.0f` alone) ALSO suppressing this loop's own active
-//     P-term braking the instant that happens, discovered via two sim
-//     regressions: STOP-convergence from ~500mm/s taking measurably
-//     longer to cross a 5mm/s tolerance, and SUC-050's own angle-stop
-//     tolerance missed by 0.4%. This scenario proves the refined gate
-//     (requiring `fabsf(measured)` to ALSO already be within the
-//     rest-noise floor) does NOT reproduce that regression: starting well
-//     above the floor (300mm/s, a plausible mid-deceleration reading) with
-//     target snapped to 0.0f, appliedDuty() must be a real, actively-
-//     braking NEGATIVE duty on the very first tick (not 0.0f), and the
-//     measured velocity must monotonically decrease tick over tick as
-//     that braking takes effect.
-void scenarioExactZeroTargetStillBrakesWhileMeasuredIsLarge() {
-  beginScenario("exact-zero target still actively brakes while measured velocity is large");
-  TestSim::SimPlant plant;
-  TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-
-  Devices::MotorConfig cfg = baseNezhaConfig();
-  cfg.velGains = Devices::Gains{/*kp=*/0.01f, /*ki=*/0.05f, /*kff=*/0.002f,
-                                 /*iMax=*/1.0f, /*kaw=*/2.0f};
-  // Isolates the PID's own output from TWO SEPARATE writeShapedDuty()
-  // shaping stages this scenario is not about (both real, independent
-  // Nezha-brick protections that would otherwise blunt/delay the very
-  // duty this scenario checks, exactly like they would in production --
-  // see scenarioReversalDwellWritesZeroThenHoldsThroughDeadline and any
-  // "no slew clamping" scenario above for their own, separate coverage):
-  // reversalDwell (a full-scale reversal -- positive cruise duty ->
-  // negative braking duty -- would otherwise write 0 and arm a 100ms
-  // dwell), and slewRate (NezhaMotor::tick() substitutes a nonzero
-  // kDefaultSlewRate when left at its 0.0f "unset" default, capping how
-  // far a single write can step toward the target duty).
-  cfg.reversalDwell = 0.0f;
-  cfg.slewRate = 100.0f;
-
-  Devices::NezhaMotor motor(plant, cfg);
-
-  // Prime the motor's velocity ESTIMATE at ~300mm/s (well above the
-  // 15mm/s rest-noise floor) by scripting a real, fast-moving position
-  // trace for a few ticks BEFORE the stop -- mirrors "a Move was cruising,
-  // then its stop condition fired."
-  float position = 0.0f;
-  uint64_t nowUs = 0;
-  const uint32_t dtMs = 20;
-  const float dtS = 0.02f;
-  const float kCruiseVelocity = 300.0f;   // [mm/s]
-
-  scriptEncoderRequestCollect(bus, wireAddr, position);
-  motor.requestSample();
-  motor.tick(nowUs);
-  motor.setVelocity(kCruiseVelocity);
-  for (int i = 0; i < 5; ++i) {
-    position += kCruiseVelocity * dtS;
-    nowUs += static_cast<uint64_t>(dtMs) * 1000;
-    scriptEncoderRequestCollect(bus, wireAddr, position);
-    motor.requestSample();
-    motor.tick(nowUs);
-  }
-  float measuredBeforeStop = motor.velocity();
-  checkTrue(measuredBeforeStop > 15.0f,
-            "primed measured velocity is above the rest-noise floor before the stop");
-
-  // Now the Move's stop condition fires -- target snaps directly to 0.0f,
-  // matching Drive::stop()'s own bang-bang contract. Position stays FROZEN
-  // this tick (no further real motion scripted) so the plant's next
-  // reported measured velocity still reflects the cruise, not a fresh
-  // zero -- isolating what compute() does with a still-large `measured`
-  // the instant target goes to zero.
-  motor.setVelocity(0.0f);
-  nowUs += static_cast<uint64_t>(dtMs) * 1000;
-  scriptEncoderRequestCollect(bus, wireAddr, position);   // unchanged position
-  motor.requestSample();
-  motor.tick(nowUs);
-
-  float dutyAtStop = motor.appliedDuty();
-  char msg[160];
-  std::snprintf(msg, sizeof(msg),
-                "appliedDuty is a real active-braking duty on the stop tick, not 0.0f "
-                "(measured was %.1fmm/s, duty=%.4f)",
-                static_cast<double>(measuredBeforeStop), static_cast<double>(dutyAtStop));
-  checkTrue(dutyAtStop != 0.0f, msg);
-  checkTrue(dutyAtStop < 0.0f,
-            "active-braking duty opposes the still-forward measured velocity (negative)");
-
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the stop-from-speed tick");
-}
-
-// 17. Defect-1 fix (2026-07-22 GUI stakeholder report, strip-chart wheel-
-//     speed trace): the rest gate (velocity_pid.cpp's `target == 0.0f &&
-//     fabsf(measured) <= restThreshold` early-return, c98be2e9) hard-zeros
-//     DUTY the instant it engages, but -- before THIS fix -- did nothing to
-//     the SEPARATE velocity ESTIMATOR (filteredVelocity_/the line-fit
-//     ring): its own EMA/line-fit tail kept reporting a lingering, slowly-
-//     decaying nonzero velocity() for seconds after the wheel had actually
-//     stopped, even though physical motion (and the commanded duty) had
-//     already stopped. Reported bench symptom: velocity() lingering near
-//     +/-12mm/s and decaying over seconds after a MOVE completed, with
-//     position flat.
-//
-//     Drives the motor to a realistic near-rest residual (matching
-//     scenario 15's own <15mm/s noise band -- and the stakeholder's own
-//     reported ~12mm/s lingering value) with target already at the exact
-//     0.0f Drive::stop()/a completed Move produces, then asserts:
-//       (a) velocity() reads EXACTLY 0.0f every tick the gate is engaged --
-//           not the noisy ~12mm/s residual the pre-fix EMA/line-fit tail
-//           would have reported.
-//       (b) once physical motion genuinely stops (position held flat), the
-//           reported position holds too -- the estimator reset never
-//           touches lastPosition_/the freshness anchor, only the velocity
-//           estimate.
-//       (c) appliedDuty() stays hard-zeroed throughout (c98be2e9's
-//           pre-existing behavior, unchanged by this fix).
-//     Companion/regression guard: scenario 16 above already proves the
-//     complementary case (measured genuinely large, gate NOT engaged) still
-//     actively brakes -- i.e. this reset is gate-engaged-only, never a
-//     mid-motion reset of a real, in-flight velocity estimate.
-void scenarioRestGateResetsVelocityEstimatorPositionHolds() {
-  beginScenario("rest gate resets the velocity estimator to 0.0 (position holds)");
-  TestSim::SimPlant plant;
-  TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-
-  Devices::MotorConfig cfg = baseNezhaConfig();   // velFiltAlpha=1.0f -- exercises the EMA path on each fresh sample directly (no cross-tick smoothing to confound the assertion)
-  cfg.velGains = Devices::Gains{/*kp=*/0.01f, /*ki=*/0.05f, /*kff=*/0.002f,
-                                 /*iMax=*/1.0f, /*kaw=*/2.0f};
-
-  Devices::NezhaMotor motor(plant, cfg);
-  motor.setVelocity(0.0f);   // the exact command Drive::stop()/a completed Move produces
-
-  float position = 0.0f;
-  uint64_t nowUs = 0;
-  const uint32_t dtMs = 20;
-  const float dtS = 0.02f;
-
-  // Prime cycle -- establishes lastPosition_/lastTickUs_, no velocity yet.
-  scriptEncoderRequestCollect(bus, wireAddr, position);
-  motor.requestSample();
-  motor.tick(nowUs);
-
-  // A handful of ticks with a small residual position drift -- well under
-  // the 15mm/s rest-noise floor (comfortable margin, not the stakeholder's
-  // own reported ~12mm/s edge value: 12mm/s * dtS=0.02s = 0.24mm/tick does
-  // NOT divide evenly into the encoder's 0.1mm (tenths-of-degree) wire
-  // quantization grid, so consecutive quantized samples alias between
-  // ~10mm/s and ~15.000001mm/s -- the latter, after float rounding, lands a
-  // hair ABOVE the exact 15.0f threshold and would flakily fail to engage
-  // the gate on some ticks, which is a test-quantization artifact, not a
-  // fix defect. 5mm/s * 0.02s = 0.1mm/tick is an exact single wire-count
-  // step, so every computed velocity lands cleanly on 5.0f, well clear of
-  // the boundary), so the gate is engaged on every one of these ticks
-  // (target is 0.0f throughout). Before this fix, the EMA path would have
-  // reported this residual back out through velocity() unfiltered
-  // (velFiltAlpha=1.0f); after the fix, the gate-engaged reset overwrites
-  // it to exactly 0.0f the SAME tick it is computed.
-  const float kResidual = 5.0f;   // [mm/s]
-  for (int i = 0; i < 5; ++i) {
-    position += kResidual * dtS;
-    nowUs += static_cast<uint64_t>(dtMs) * 1000;
-    scriptEncoderRequestCollect(bus, wireAddr, position);
-    motor.requestSample();
-    motor.tick(nowUs);
-
-    checkFloatEq(motor.velocity(), 0.0f,
-                 "reported velocity is exactly 0.0 while the rest gate is engaged, "
-                 "not the ~5mm/s residual (no lingering EMA/line-fit tail)");
-    checkFloatEq(motor.appliedDuty(), 0.0f, "duty stays hard-zeroed throughout (unchanged c98be2e9 behavior)");
-  }
-
-  float positionAtRest = motor.position();
-
-  // A further tick with position held EXACTLY flat (genuinely no more
-  // physical motion) must keep reporting 0.0 and hold position -- the
-  // estimator reset never touches lastPosition_/the freshness anchor.
-  nowUs += static_cast<uint64_t>(dtMs) * 1000;
-  scriptEncoderRequestCollect(bus, wireAddr, position);   // unchanged
-  motor.requestSample();
-  motor.tick(nowUs);
-
-  checkFloatEq(motor.velocity(), 0.0f, "velocity stays 0.0 once physical motion has actually stopped");
-  checkFloatEq(motor.position(), positionAtRest, "position holds flat once physical motion has actually stopped");
-
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the rest-gate sequence");
-}
-
-// 18. Stale-encoder rest snap (2026-07-22 bench fix, hardware-confirmed the
-//     SAME day as scenario 17 above): scenario 17 covers the case where
-//     `measured` is ALREADY within the rest-noise floor on every tick.
-//     Real bench hardware exposed a DIFFERENT, worse case scenario 17 does
-//     not reach: the LAST fresh sample computed before the wheel went
-//     fully still can land ABOVE the 15mm/s floor purely by bad luck of
-//     encoder quantization -- and once the encoder stops producing fresh
-//     samples entirely (tick()'s own freshness gate then HOLDS
-//     filteredVelocity_ unchanged forever, per its own "hold on no new
-//     information" comment), c98be2e9's own gate (`target==0 &&
-//     measured<=floor`) never re-fires, because `measured` is never
-//     recomputed down through the floor -- it just sits there. Confirmed
-//     on the real robot: one wheel's reported velocity froze at a
-//     constant, never-decaying 36mm/s for 12+ consecutive ticks after
-//     both wheels' encoder positions had gone flat.
-//
-//     Drives to a real cruise speed, commands a stop, feeds exactly ONE
-//     more fresh sample landing above the floor (simulating "the last real
-//     sample before the wheel went still"), then holds the SAME raw
-//     encoder value (genuinely stale) for a run of ticks spanning past
-//     kStaleRestTimeoutUs (150ms, nezha_motor.cpp). Asserts: (a) shortly
-//     after that last fresh sample (well under the timeout), velocity()
-//     STILL reports the frozen above-floor value -- the fix must not fire
-//     the instant a fresh sample lands, only once genuine staleness is
-//     confirmed; (b) once the timeout has elapsed, velocity() reads
-//     EXACTLY 0.0f and appliedDuty() is hard-zeroed; (c) position never
-//     moves across the whole stale window (nothing here should ever touch
-//     lastPosition_/the freshness anchor).
-void scenarioStaleEncoderRestSnapForcesVelocityToZeroWhenFreshSamplesStop() {
-  beginScenario("stale-encoder rest snap forces velocity to 0 once fresh samples stop");
-  TestSim::SimPlant plant;
-  TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-
-  Devices::MotorConfig cfg = baseNezhaConfig();   // velFiltAlpha=1.0f
-  cfg.velGains = Devices::Gains{/*kp=*/0.01f, /*ki=*/0.05f, /*kff=*/0.002f,
-                                 /*iMax=*/1.0f, /*kaw=*/2.0f};
-
-  Devices::NezhaMotor motor(plant, cfg);
-
-  float position = 0.0f;
-  uint64_t nowUs = 0;
-  const uint32_t dtMs = 20;
-  const float dtS = 0.02f;
-
-  // Prime cycle.
-  scriptEncoderRequestCollect(bus, wireAddr, position);
-  motor.requestSample();
-  motor.tick(nowUs);
-
-  // Cruise at a real speed for a few ticks (fresh sample every tick).
-  motor.setVelocity(140.0f);
-  for (int i = 0; i < 5; ++i) {
-    position += 140.0f * dtS;   // 2.8mm/tick -- clean multiple of the 0.1mm quantization grid
-    nowUs += static_cast<uint64_t>(dtMs) * 1000;
-    scriptEncoderRequestCollect(bus, wireAddr, position);
-    motor.requestSample();
-    motor.tick(nowUs);
-  }
-  checkTrue(motor.velocity() > 100.0f, "cruise established a real, non-noise velocity estimate");
-
-  // Stop commanded -- ONE more fresh sample lands above the 15mm/s floor
-  // (the "last real sample before the wheel went still"), then the
-  // encoder goes genuinely silent (same raw value every subsequent tick).
-  motor.setVelocity(0.0f);
-  position += 0.7f;   // 35mm/s over this 20ms tick -- above the rest floor
-  nowUs += static_cast<uint64_t>(dtMs) * 1000;
-  scriptEncoderRequestCollect(bus, wireAddr, position);
-  motor.requestSample();
-  motor.tick(nowUs);
-
-  float staleVel = motor.velocity();
-  char primeMsg[160];
-  std::snprintf(primeMsg, sizeof(primeMsg),
-                "the last-fresh-sample velocity lands above the 15mm/s rest floor (got %.2f)",
-                static_cast<double>(staleVel));
-  checkTrue(staleVel > 15.0f, primeMsg);
-  float positionAtStale = motor.position();
-  uint64_t lastFreshNowUs = nowUs;
-
-  // Shortly after (well under the stale timeout): the frozen value must
-  // NOT have been reset yet -- proves this isn't an instant/eager reset
-  // that could clobber a still-in-flight deceleration (scenario 16's own
-  // concern).
-  nowUs += static_cast<uint64_t>(dtMs) * 1000;   // +20ms since the last fresh sample
-  scriptEncoderRequestCollect(bus, wireAddr, position);   // unchanged raw -- genuinely stale
-  motor.requestSample();
-  motor.tick(nowUs);
-  checkFloatEq(motor.velocity(), staleVel,
-               "shortly after the last fresh sample, the frozen value is NOT yet reset "
-               "(the stale-timeout has not elapsed)");
-
-  // Keep holding the SAME raw value until well past kStaleRestTimeoutUs
-  // (150ms) since lastFreshNowUs.
-  bool sawZero = false;
-  while (nowUs - lastFreshNowUs <= 300000) {   // run out to 300ms -- 2x the 150ms timeout
-    nowUs += static_cast<uint64_t>(dtMs) * 1000;
-    scriptEncoderRequestCollect(bus, wireAddr, position);   // still unchanged
-    motor.requestSample();
-    motor.tick(nowUs);
-    if (motor.velocity() == 0.0f) {
-      sawZero = true;
-      break;
-    }
-  }
-  checkTrue(sawZero,
-            "velocity() eventually snaps to EXACTLY 0.0 once the encoder has stayed "
-            "stale past kStaleRestTimeoutUs -- not stuck at the frozen above-floor value");
-  checkFloatEq(motor.appliedDuty(), 0.0f, "duty is hard-zeroed once the stale-rest snap fires");
-  checkFloatEq(motor.position(), positionAtStale,
-               "position never moved across the whole stale window (only the estimator was reset)");
-
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the stale-rest sequence");
-}
-
-// sampleTime() (124-002, protocol-v5 §B2 prerequisite): reports the nowUs of
-// the last ACCEPTED fresh sample (lastFreshUs_), not this tick's own now --
-// reuses the exact stale/fresh brick-refresh cadence
-// scenarioFreshSampleGateSurvivesSlowBrickRefreshUnderFastFiberCycle()
-// exercises for velocity(), but asserts on sampleTime() instead: it must
-// stay FIXED across the stale (same-raw-count) cycles between refreshes and
-// only advance -- to that fresh cycle's own nowUs -- when the brick has
-// genuinely refreshed. This is the accessor the wire's `enc_left`/
-// `enc_right` age fields (ticket 008/009) will read instead of stamping
-// both wheels with the same cycle's `now`.
-void scenarioSampleTimeReflectsLastAcceptedFreshTickNotCurrentNow() {
-  beginScenario("sampleTime() reflects the last ACCEPTED fresh tick, not this tick's own now");
+// sampleTime() (124-002, protocol-v5 §B2 prerequisite) -- 125-003: with the
+// freshness gate deleted, sampleTime() now simply reports the nowUs of the
+// most recent tick() call (see nezha_motor.h's own doc comment) -- this is
+// the accessor the wire's `enc_left`/`enc_right` age fields read; ticket
+// 004's App::WheelObserver will restore a real per-sample age.
+void scenarioSampleTimeReflectsMostRecentTick() {
+  beginScenario("sampleTime() reflects the most recent tick() call's own nowUs");
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
@@ -1704,47 +782,17 @@ void scenarioSampleTimeReflectsLastAcceptedFreshTickNotCurrentNow() {
   Devices::MotorConfig cfg = baseNezhaConfig();
   Devices::NezhaMotor motor(plant, cfg);
 
-  const uint64_t kFiberCycleUs = 16000;   // [us] ~16ms fiber cycle
-  const int kStaleCyclesPerRefresh = 4;   // 4 stale + 1 fresh per ~80ms brick refresh
-  const float kStepPerRefresh = 40.0f;    // [mm]
-
-  // Prime (boot-anchor) cycle: the first-ever fresh sample anchors
-  // sampleTime() to nowUs==0 directly.
   uint64_t nowUs = 0;
-  float position = 0.0f;
-  scriptEncoderRequestCollect(bus, wireAddr, position);
+  scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
   motor.requestSample();
   motor.tick(nowUs);
-  checkTrue(motor.sampleTime() == nowUs, "boot anchor: sampleTime() == the anchoring tick's own nowUs");
+  checkTrue(motor.sampleTime() == nowUs, "sampleTime() == the tick's own nowUs");
 
-  for (int refresh = 0; refresh < 3; ++refresh) {
-    uint64_t lastFreshSampleTime = motor.sampleTime();
-
-    // Stale cycles: raw count unchanged -- sampleTime() must NOT advance,
-    // even though nowUs keeps moving forward every cycle.
-    for (int i = 0; i < kStaleCyclesPerRefresh; ++i) {
-      nowUs += kFiberCycleUs;
-      scriptEncoderRequestCollect(bus, wireAddr, position);   // unchanged raw
-      motor.requestSample();
-      motor.tick(nowUs);
-      checkTrue(motor.sampleTime() == lastFreshSampleTime,
-                "stale cycle: sampleTime() stays fixed at the last ACCEPTED fresh tick");
-      checkTrue(motor.sampleTime() != nowUs,
-                "stale cycle: sampleTime() is NOT this tick's own now -- a real skew, not a re-stamp "
-                "(this IS the enc_left/enc_right defect this accessor exists to let telemetry fix)");
-    }
-
-    // Fresh cycle: the brick has refreshed -- sampleTime() advances to
-    // exactly THIS tick's nowUs.
-    position += kStepPerRefresh;
-    nowUs += kFiberCycleUs;
-    scriptEncoderRequestCollect(bus, wireAddr, position);
-    motor.requestSample();
-    motor.tick(nowUs);
-    checkTrue(motor.sampleTime() == nowUs, "fresh cycle: sampleTime() advances to this tick's own nowUs");
-    checkTrue(motor.sampleTime() > lastFreshSampleTime,
-              "fresh cycle: sampleTime() strictly advances past the previous fresh sample's time");
-  }
+  nowUs = 123456;
+  scriptEncoderRequestCollect(bus, wireAddr, 5.0f);
+  motor.requestSample();
+  motor.tick(nowUs);
+  checkTrue(motor.sampleTime() == nowUs, "sampleTime() advances to the next tick's own nowUs");
 
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the run");
 }
@@ -1757,21 +805,12 @@ int main() {
   scenarioStandstillGuardedResetGatesOnRestTicks();
   scenarioWedgeLatchAndSuspectDeriveAsBefore();
   scenarioRequestCollectPairingYieldsExpectedPositionVelocity();
-  scenarioPidOnChasesVelocityTarget();
-  scenarioPidOffRoutesRawDutyThroughArmorUnchanged();
-  scenarioFreshSampleGateSurvivesSlowBrickRefreshUnderFastFiberCycle();
-  scenarioBootAnchorAcceptsLargeInitialPositionWithoutGlitchOrWedge();
+  scenarioSetDutyTickWritesExactlyTheGivenDutyThroughShaping();
   scenarioNakedStopWriteIsRetriedNextTickNotLatched();
-  scenarioApplyGainsTakesEffectSameBootNoReflash();
-  scenarioApplyGainsTravelCalibAppliesWhenPresentOtherwiseUnchanged();
+  scenarioApplyTravelCalibTakesEffectSameBootNoReflash();
   scenarioReconfigureGuardedWholeConfigReplacement();
   scenarioExplicitZeroWriteShapingIsPassThrough();
-  scenarioDeadbandBoostSettlesNotHuntsAcrossResidualSweep();
-  scenarioExactZeroTargetIgnoresResidualMeasuredVelocityNoise();
-  scenarioExactZeroTargetStillBrakesWhileMeasuredIsLarge();
-  scenarioRestGateResetsVelocityEstimatorPositionHolds();
-  scenarioStaleEncoderRestSnapForcesVelocityToZeroWhenFreshSamplesStop();
-  scenarioSampleTimeReflectsLastAcceptedFreshTickNotCurrentNow();
+  scenarioSampleTimeReflectsMostRecentTick();
 
   if (g_failureCount == 0) {
     std::printf("OK: all devices motor scenarios passed\n");

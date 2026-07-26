@@ -153,15 +153,16 @@ state out → pace) and the schedule these leaves are ticked from, see root
   `devices/`.
 - **Deliberate non-goal: no onboard POSITION mode.** The Nezha chip's
   0x5D absolute-angle move is not wired into `NezhaMotor` — the leaf's
-  public surface only covers velocity-PID and raw-duty modes. Adding it
-  back requires a fresh design pass (a staged target, a completion
-  signal, interaction with the armor's reset/wedge state), not a
-  quick register-write bolt-on.
-- **Deliberate non-goal: no additive velocity feedforward term beyond
-  `Gains::kff`.** `MotorVelocityPid::compute()`'s output is exactly the PI
-  (+ `kff`) law; there is no separate feedforward path layered on top of
-  it the way an earlier design once had. If a future tuning pass needs
-  one, it belongs in the control law itself, not bolted onto a leaf.
+  public surface only covers raw-duty mode. Adding it back requires a
+  fresh design pass (a staged target, a completion signal, interaction
+  with the armor's reset/wedge state), not a quick register-write bolt-on.
+- **(Historical, pre-125-003) Deliberate non-goal: no additive velocity
+  feedforward term beyond the control law's own feedforward gain.** The
+  velocity control law's output used to be exactly the PI (+ feedforward)
+  law with no separate feedforward path layered on top of it. 125-003
+  relocated the whole control law off this leaf to the motion library
+  (`src/motion/wheel_velocity_pid.h`) — this section describes the
+  pre-move design; see that header for the current one.
 
 ## 4. Design
 
@@ -289,7 +290,11 @@ verified standstill); otherwise it performs an immediate `softRebaseline()`
 standstill guard exists because the hardware re-prime sequence is not
 safe to run while the wheel is actually moving.
 
-**`MotorVelocityPid` — a reduced PI with back-calculation anti-windup.**
+**(Historical, pre-125-003) The velocity control law — a reduced PI with
+back-calculation anti-windup.** This subsection describes the control law
+that used to be embedded here, before 125-003 relocated it wholesale to
+the motion library (`Motion::WheelVelocityPid`, `src/motion/
+wheel_velocity_pid.h`) — kept for history, not current architecture.
 The control law is a discrete PI (+ feedforward, `Gains::kff`) with
 back-calculation anti-windup against `Gains::iMax`, plus one integrator
 behavior worth calling out: the integrator is *frozen* (left unchanged)
