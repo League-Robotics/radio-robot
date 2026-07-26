@@ -69,7 +69,7 @@ docs living outside those two roots.
 | [`kinematics/`](../../src/firm/kinematics/DESIGN.md) | **Retired (122) — code moved to [`src/motion/`](../../src/motion/DESIGN.md).** `BodyKinematics` (stateless differential-drive twist↔wheel maps, curvature-preserving saturation) now lives in the sibling `src/motion` tree; this directory keeps only a redirect `DESIGN.md` (the original derivation, unchanged) so the validator has a doc for this still-declared child of `src/firm`. |
 | [`messages/`](../../src/firm/messages/DESIGN.md) | The wire schema: generated message structs, the generated envelope codec, the hand-written byte-level wire runtime. |
 | [`motion/`](../../src/firm/motion/DESIGN.md) | **Retired (122) — code moved to [`src/motion/`](../../src/motion/DESIGN.md).** `Motion::StopCondition`/`Motion::VelocityShaper` (bounded-motion stop/timeout comparison and the decel-into-the-goal speed shaper) now live in the sibling `src/motion` tree; this directory keeps only a redirect `DESIGN.md` (the original derivation, unchanged) so the validator has a doc for this still-declared child of `src/firm`. |
-| [`types/`](../../src/firm/types/DESIGN.md) | Vestigial protocol-v2 text-tag constants and the firmware-version generation seam (mostly dead code — see its own §6). |
+| [`types/`](../../src/firm/types/DESIGN.md) | `Types::RobotState` (sprint 124) — the dependency-free, per-cycle blackboard struct that is now a SECOND shared floor `src/firm` and `src/motion` both stand on, alongside `Motion::WheelSink` (see §5's "Wire boundary" note and the dependency graph below). Also holds vestigial protocol-v2 text-tag constants and the firmware-version generation seam (mostly dead code — see its own §6). |
 
 (`src/firm/README-DESIGN.md` is a one-paragraph pointer back to this
 document — `src/firm` itself has no co-located `DESIGN.md`; see §4.)
@@ -347,12 +347,51 @@ COBS-vs-length-prefix-vs-SLIP alternatives considered), and
 and [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) §1/§4 for
 the subsystem-level detail.
 
+**124 (protocol v5, `RobotState` blackboard, radio bench gate) —
+landed.** Supersedes 123's own COBS+CRC framing with one uniform
+`<COMMAND>[':' <data>]'\n'` grammar in both directions, both text and
+binary — the COBS delimiter moves from `0x00` to `0x0A` and the CRC's
+scope extends to cover `COMMAND ':'`, closing "a bit-flip inside the
+command name lands on another valid verb and still passes CRC." A
+generated command registry (`src/protos/commands.proto`) is the single
+source firmware dispatch, the host codec, and
+[`docs/protocol-v5.md`](../protocol-v5.md) are generated from or checked
+against — closing a firmware/host/doc three-way drift risk. The reply
+plane gains the same grammar: `PONG:t=<ms>` (was `OK pong t=<ms>`),
+`ID:<drivetrain>:<profile>:<version>` (configured identity, distinct from
+`DEVICE:`'s hardware identity), `VER:<version>` (reads the existing
+generated build-version constant). Telemetry's position/velocity/pose/
+twist/OTOS fields switch from `float` to `sint32`+zigzag with a
+generated `(scale)` conversion; the ack ring's elements pack to a single
+`uint32` each; the older single scalar "freshest ack" slot is deleted —
+the bounded `acks` ring is the sole ack-observability path now.
+`Types::RobotState` (`src/firm/types/robot_state.h`) becomes a SECOND
+dependency-free shared floor `src/firm` and `src/motion` both stand on,
+alongside `Motion::WheelSink` — the one struct every subsystem publishes
+its per-cycle section to and the one source `Telemetry::update(state)`
+projects from; `Motion::StateEstimator::Input` is now a type alias onto
+it, not a hand-copied near-duplicate. `msg::TelemetrySecondary` — frame
+type, wire arm, and tie-break/alternation cadence machinery — is deleted
+outright. See sprint 124's own `sprint.md` for the full architecture and
+Design Rationale (the command-registry/scale-generation/ID-VER-content
+decisions, and the position-rebaseline policy — `RobotLoop` calls the
+existing, unmodified `Devices::Motor::rebaseline()` in software only,
+never a device command, when a wheel's position nears the wire's ±32m
+bound, owning a new `positionEpoch` counter the host can watch for a
+rebase), and
+[`src/firm/messages/DESIGN.md`](../../src/firm/messages/DESIGN.md) §3/§4
+and [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) §1/§4/§5 for
+the subsystem-level detail.
+
 Flow of one cycle, at orientation altitude:
 
 1. **Comms in** — `App::Comms` polls the two transports (serial, radio)
-   for one complete frame, demuxing a `0x00`-delimited COBS+CRC binary
-   frame from the HELLO/PING text rump on the same byte stream (123),
-   then decodes the binary frame into a `msg::CommandEnvelope`.
+   for one complete `\n`-terminated line, parses its `<COMMAND>` prefix
+   and dispatches by a generated command registry's binary/cleartext
+   flag (protocol v5, sprint 124 — supersedes the pre-124 `0x00`-
+   delimited-frame-vs-HELLO/PING-text-rump demux this step used to
+   describe), then decodes a binary command line into a
+   `msg::CommandEnvelope`.
 2. **Dispatch** — the loop's own switch acts on the command: a Move
    enqueues onto `Motion::MoveQueue` (122 — moved to `src/motion`, see
    below; 1 active + 4 pending; `replace=true` flushes pending and
@@ -361,8 +400,9 @@ Flow of one cycle, at orientation altitude:
    onto `App::Drive` through the `Motion::WheelSink` boundary and drives
    its own `Motion::StopCondition`; a Stop flushes the queue and halts
    `Drive` immediately; config/queries reply via the primary telemetry
-   frame's single ack slot (`ack_corr`/`ack_err`, valid iff `flags` bit 5
-   — see [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) §2).
+   frame's bounded ack ring (sprint 124 ticket 008 deleted the older
+   single scalar ack slot — ring membership alone means "acked" — see
+   [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) §2/§4).
 3. **Motor service** — the loop runs each `Devices::NezhaMotor`'s
    split-phase encoder request → settle → collect → PID → duty-write
    sequence, with the settle/clearance gaps expressed as
@@ -371,14 +411,15 @@ Flow of one cycle, at orientation altitude:
    assembly).
 4. **State out** — `Motion::Odometry` (122 — moved to `src/motion`)
    integrates encoder deltas through `BodyKinematics::forward()`;
-   `Motion::StateEstimator` (117; 122 — moved to `src/motion`) ingests
-   the same cycle's staged data (handed in via a plain `Input` struct,
-   not `App::Telemetry::Frame` directly) and refreshes its wheel/body
-   ZOH predict-to-now estimates; `App::Telemetry` emits the primary TLM
-   frame — carrying the `cycle_busy`/`cycle_period` loop-timing fields
-   every cycle (123, migrated off the slower secondary diagnostic frame
-   where 122 had landed them as an interim placement) — or the secondary
-   diagnostic frame, through Comms.
+   `Motion::StateEstimator` (117; 122 — moved to `src/motion`) ingests the
+   same cycle's published `Types::RobotState` (124 — `Input` is now a type
+   alias onto `RobotState`, not a hand-copied near-duplicate struct) and
+   refreshes its wheel/body ZOH predict-to-now estimates; `App::Telemetry`
+   projects `RobotState` and emits the ONE primary TLM frame — carrying
+   the `cycle_busy`/`cycle_period` loop-timing fields every cycle (123)
+   and packed fixed-point sensor/pose fields (124) — through Comms. There
+   is no second/secondary frame any more: `msg::TelemetrySecondary` is
+   deleted outright (124), not merely unused.
 5. **Pace** — a final `runAndWait` paces the cycle to `kCycle` = 40 ms
    (~25 Hz), matching `Telemetry::kPrimaryPeriod` so every cycle emits a
    primary frame. (118 — restores the schedule's genuine 4ms/4ms
@@ -466,19 +507,38 @@ only what's specific to it — this is the shared set):
   (`.claude/rules/hardware-bench-testing.md`). Host tests alone do not
   close a change.
 
-**Wire boundary.** Binary command/reply protocol framed with COBS + a
-CRC-16/CCITT-FALSE integrity check (123 — replacing the pre-123
-`*B<base64>\r\n` line armor): `0x00`-delimited frames over USB serial
-(115200 CDC) and the micro:bit radio (group 10, channel 0–35 persisted in
-flash), demuxed on the same byte stream from the `\n`-terminated
-HELLO/PING text safety rump. Payloads are `msg::CommandEnvelope` in
-(`move`/`config`/`stop` oneof), `msg::ReplyEnvelope` (`ok`/`err`/`tlm`
-oneof) out, plus an independently-COBS+CRC-framed `msg::TelemetrySecondary`
-frame. Schema source of truth: `src/protos/*.proto`. Boot banner:
-`DEVICE:NEZHA2:robot:<name>:<serial>` — byte-frozen. See
+**Wire boundary — protocol v5 (124, superseding the framing this
+paragraph describes through 123).** Every packet, both directions, text
+or binary, is one `\n`-terminated line: `<COMMAND>[':' <data>]'\n'`. A
+binary command's `<data>` is CRC-then-COBS framed — CRC-16/CCITT-FALSE
+now scoped over `COMMAND ':' payload` (not payload alone), then
+COBS-encoded keyed on `0x0A` (not `0x00`, so `\n` is a genuine,
+unconditional terminator with no text/binary demux heuristic at the
+transport layer) — over USB serial (115200 CDC) and the micro:bit radio
+(group 10, channel 0–35 persisted in flash). Which of a generated,
+closed set of verbs a line names, and whether its data is cleartext or
+binary, comes from one generated registry (`src/protos/commands.proto`),
+the single source firmware dispatch, the host codec, and
+[`docs/protocol-v5.md`](../protocol-v5.md) are all generated from or
+checked against. Payloads are `msg::CommandEnvelope` in
+(`move`/`config`/`stop` — three binary command verbs), `msg::
+ReplyEnvelope` (`tlm` oneof — the only arm with a live producer) out, plus
+four cleartext verbs answered inline: `HELLO`→`DEVICE:...` (byte-frozen
+boot banner), `PING`→`PONG:t=<ms>`, `ID`→`ID:<drivetrain>:<profile>:
+<version>` (configured identity), `VER`→`VER:<version>` (build identity).
+`msg::TelemetrySecondary` — a second, independently-framed diagnostic
+frame that existed through 123 — is DELETED outright (124), not merely
+unused; there is only ever one outbound telemetry frame now, carrying
+packed `sint32`/zigzag + `(scale)` fixed-point sensor/pose fields and a
+bounded ack ring (`acks`, the sole ack-observability path — the older
+single scalar "freshest ack" slot is deleted). Schema source of truth:
+`src/protos/*.proto`. Boot banner: `DEVICE:NEZHA2:robot:<name>:<serial>`
+— byte-frozen, unchanged by the v5 cutover. See
+[`docs/protocol-v5.md`](../protocol-v5.md) for the full wire reference
+(supersedes `docs/protocol-v4.md`),
 [`src/firm/messages/DESIGN.md`](../../src/firm/messages/DESIGN.md) and
-[`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) for the full
-wire shape and dispatch detail, and
+[`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) for the
+dispatch/codec detail, and
 [`src/protos/DESIGN.md`](../../src/protos/DESIGN.md) for the schema
 source of truth itself.
 
@@ -545,6 +605,21 @@ for its full boundary/interface detail.
   (fields 15/16) every cycle. The duty-sink boundary/bounded-wheel-moves/
   per-wheel-observer work the paragraph above tracks remains a distinct,
   not-yet-scheduled future sprint — 123 did not touch that surface.
+- **Sprint 124 (protocol v5, `RobotState` blackboard, radio bench gate)
+  has landed.** See this section's own §5 "124" paragraph above and "Wire
+  boundary" note for the full change,
+  [`src/firm/messages/DESIGN.md`](../../src/firm/messages/DESIGN.md) §3/§4
+  for the codec/registry/size-budget detail (now `kReplyEnvelopeMaxEncodedSize
+  <= 130` bytes), and [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md)
+  §1/§4/§5 for the `Comms`/`Telemetry`/`RobotLoop` detail. The Drive/
+  Sensors device-ownership reshuffle the blackboard issue's own cycle-body
+  sketch illustrates is explicitly deferred to sprint 125 (Design
+  Rationale Decision 1, "the scope valve") — `RobotLoop` still owns
+  `motorL_`/`motorR_`/`otos_`/`line_`/`color_` directly; only state
+  ASSEMBLY (not device ownership) moved to the one-`RobotState`-per-cycle
+  shape this sprint required. The radio-relay standing bench gate
+  (`src/tests/bench/`) is this sprint's own acceptance mechanism, run over
+  the relay per stakeholder directive, not merely over USB.
 - **The design-doc-set's mechanical validator cannot express "this
   child is out of scope because it symlinks outside the repository."**
   `src/vendor` remains permanently undocumented for that reason (§4).

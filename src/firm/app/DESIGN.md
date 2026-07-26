@@ -173,7 +173,7 @@ the SAME cycle, where 118's kClear placement ran BEFORE it. An
 enqueue/command ack (CONFIG/MOVE-enqueue/STOP, staged via `tlm_.ack()`
 inside `processMessage()`'s own handlers) therefore now typically rides
 THIS SAME cycle's emitted frame instead of the next one — see §7.2 of
-`docs/protocol-v4.md` for the wire-level statement. The MOVE COMPLETION
+`docs/protocol-v5.md` for the wire-level statement. The MOVE COMPLETION
 ack is UNAFFECTED: `moveQueue_.tick()` (the stop decision) still runs
 AFTER `updateTlm()`/`emit()`, later in the SAME pace block, so a
 completion ack staged there is still not visible until the NEXT cycle's
@@ -423,7 +423,10 @@ interim placement) onto the primary `Telemetry` frame every cycle. Zero
 schema change beyond that one field relocation and the two envelope-size
 constants — every `CommandEnvelope`/`ReplyEnvelope` field shape is
 otherwise untouched. See §4 below for the full technical detail and
-`docs/protocol-v4.md` §2/§8 for the wire-level reference.
+`docs/protocol-v5.md` §2/§8 for the wire-level reference (superseded — the
+COBS delimiter/CRC scope/reply grammar it describes were themselves
+replaced by sprint 124's protocol v5 cutover, see this section's own
+"124-005"/"AS OF 124" paragraphs below).
 
 **124-005 (protocol v5 Part A, "framing grammar cutover") — landed.**
 123's own `App::FrameKind`-based transport-level demux (a heuristic
@@ -499,12 +502,15 @@ matching the pre-124-005 HELLO/PING reply path's bounded-wait policy.
 `<COMMAND>':'` prefix and the CRC's scope-extension input) is now derived
 INTERNALLY from `reply.body_kind` (`TLM`/`OK`/`ERR` map 1:1 onto
 `messages/commands.h`'s `Verb::TLM`/`OK`/`ERR`) rather than threaded in
-by the caller — see §5 below. `Telemetry::emitSecondary()` reuses the
-`TLM` verb/CRC-scope for `TelemetrySecondary` too (no registry entry
-exists for the secondary diagnostic frame, and the host already
-structurally disambiguates the two shapes by trial-decode) — a narrow,
-documented choice that does not touch tickets 007-009's own
-`RobotState`/`TelemetrySecondary` field-packing scope. `kFramedMaxBytes`/
+by the caller — see §5 below. **Superseded by 124-009**: at the time
+124-005 landed, `Telemetry::emitSecondary()` still existed and reused the
+same `TLM` verb/CRC-scope for `TelemetrySecondary`'s own independently-
+framed line (no registry entry existed for the secondary diagnostic frame,
+so the host structurally disambiguated the two shapes by trial-decode).
+124-009 deleted `TelemetrySecondary` — frame type, `emitSecondary()`, and
+the trial-decode disambiguation — outright (see this section's own
+"AS OF 124" paragraph below), so there is only ever one outbound `TLM`
+shape now and this consideration no longer applies. `kFramedMaxBytes`/
 `kMaxCrcPayloadBytes` (`comms.h`) are unchanged by this ticket (the
 command prefix lives OUTSIDE the COBS-encoded region); a new
 `kMaxLineBytes = kFramedMaxBytes + kMaxCommandPrefixBytes` constant
@@ -540,7 +546,7 @@ and emits telemetry" ordering, which predates the RobotState blackboard),
 evaluates the `MoveQueue`'s unconditional per-cycle stop decision
 (`moveQueue_.tick(now, odom_)` — 118: AFTER odometry/estimator refresh
 AND AFTER `tlm_.update()`/`emit()`, so the decision reads THIS cycle's
-data and a completion ack still rides the NEXT frame, protocol-v4 §7.2),
+data and a completion ack still rides the NEXT frame, protocol-v5 §7.2),
 and paces the whole cycle. `Drive`, `Odometry`, and `MoveQueue` are pure,
 bounded, non-bus-touching helpers that `RobotLoop` calls at specific
 points in its own schedule; `MoveQueue::tick()` is called unconditionally
@@ -779,22 +785,26 @@ frame is silently counted (`Comms::malformedCount()`) and surfaced as a
 telemetry flags bit instead of answered inline. This keeps replies
 flowing through one channel (the ack slot) rather than two.
 
-**Telemetry's two send paths.** The primary frame (`msg::Telemetry`, ack
-slot + `flags` + pose/enc/vel/otos/line/color + `cycle_busy`/
-`cycle_period`, 123-004 — see below) rides a `ReplyEnvelope` through
-`Comms::sendReply()`. The secondary diagnostic frame
-(`msg::TelemetrySecondary`) is not a `ReplyEnvelope` oneof arm, so
-`Telemetry` holds its own `Transport&` pair and performs its own
-COBS+CRC-frame-and-broadcast for that one frame type (123-002 — base64
-armor+broadcast before that), reusing `Comms`'s framed-buffer size and
-`WireRuntime`'s COBS/CRC primitives rather than duplicating a private
-encode path. `emit()` sends at most one frame type per call and normally
-lets whichever frame is due win; when both are genuinely due in the same
-call it *alternates* rather than always favoring primary — at the real
-loop period (~40ms, 118), primary is due on essentially every call, so an
-unconditional "primary wins ties" rule starves secondary to 0Hz. The
-alternation costs at most one primary frame delayed by one cycle roughly
-once per secondary period; a non-tied call is unaffected.
+**Telemetry has one send path (historical: it used to have two).** The
+primary frame (`msg::Telemetry`, ack ring + `flags` + pose/enc/vel/otos/
+line/color + `cycle_busy`/`cycle_period`, 123-004 — see below) rides a
+`ReplyEnvelope` through `Comms::sendReply()`. Through 123, a SECOND,
+independently-COBS+CRC-framed diagnostic frame (`msg::TelemetrySecondary`)
+also existed: not a `ReplyEnvelope` oneof arm, so `Telemetry` held its own
+`Transport&` pair and performed its own frame-and-broadcast for it
+(123-002 — base64 armor+broadcast before that), and `emit()` alternated
+between the two when both were due in the same call rather than always
+favoring primary (at the real loop period, ~40ms/118, primary is due on
+essentially every call, so an unconditional "primary wins ties" rule would
+have starved secondary to 0Hz). **124-009 deleted `TelemetrySecondary`
+outright** — the frame type, `emitSecondary()`, `Telemetry`'s own
+`Transport&` pair, and the alternation/tie-break logic are all gone, not
+merely unused (issue's own "Telemetry is a lean projection — and
+TelemetrySecondary dies"). `Telemetry` now holds a `Comms&` only (no
+direct transport references at all) and `emit()` is a plain "primary due
+since last send" gate — there is no second frame type to arbitrate against
+any more. See this section's own "AS OF 124" paragraph below for the full
+disposition.
 
 **`cycle_busy`/`cycle_period` loop-timing fields — landed on the PRIMARY
 frame (123-004, `Telemetry` fields 15/16, ADDITIVE).** Originally landed
@@ -877,28 +887,63 @@ whole envelope's worst case grows from 153 B to **185 B**, exactly 1 B
 under the then-186-byte envelope budget — the tightest margin in the
 schema at that time.
 
-**AS OF 123 (current):** the envelope budget is recomputed to
-**240 bytes** (COBS+CRC replacing base64 armor, see §4's own
-`cycle_busy`/`cycle_period` note above and `messages/DESIGN.md` §3), and
-ticket 004 additively migrated `cycle_busy`/`cycle_period` (fields 15/16)
-onto this same frame: `Telemetry` standalone is now **188 B**, wrapped
-`ReplyEnvelope` total **194 B** (`wire.h`'s own regenerated
-`kReplyEnvelopeMaxEncodedSize` constant and static_assert) — **46 B**
-margin under the 240-byte budget, comfortably restored from the pre-123
-1-B margin. See `docs/protocol-v4.md` §8.3 for the full breakdown.
+**AS OF 123 (historical — superseded by 124, below):** the envelope
+budget was recomputed to **240 bytes** (COBS+CRC replacing base64 armor,
+see §4's own `cycle_busy`/`cycle_period` note above and
+`messages/DESIGN.md` §3), and ticket 004 additively migrated
+`cycle_busy`/`cycle_period` (fields 15/16) onto this same frame:
+`Telemetry` standalone was **188 B**, wrapped `ReplyEnvelope` total
+**194 B** — **46 B** margin under the 240-byte budget, restored from the
+pre-123 1-B margin.
+
+**AS OF 124 (current) — the scalar ack slot is DELETED; the ring is the
+SOLE ack path; fields are packed fixed-point.** Sprint 124 ticket 008
+(issue §B4) deletes `ack_corr`/`ack_err` (the pre-120 scalar pair,
+`telemetry.proto` fields 5/6, now `reserved` — not reused) and `flags`
+bit 5 (`kFlagAckFresh`, now RESERVED — see the flags bit-string paragraph
+below): ring membership already means "really acked," so the separate
+"freshest ack" scalar and its freshness bit added nothing a ring scan
+didn't already have. `Telemetry::ack(corrId, errCode)` pushes ONLY to the
+ring now (`pushAckRing()`, `telemetry.cpp`) — no more dual push. Each ring
+element is a single packed `uint32_t` (`corr_id << 4 | err`, `wire.cpp`'s
+first real `FieldKind::kRepeatedScalar` use), not `msg::AckEntry`
+(deleted) — `corr_id` gets the upper 28 bits, `err` the low 4 (`ErrCode`'s
+own span tops out at `ERR_NOT_CONFIGURED`=8). Ticket 008 also switches
+`EncoderReading.position`/`velocity`, `OtosReading`'s six fields, and
+`Pose2D`/`BodyTwist3`'s fields from `float` to `sint32` + a GENERATED
+`(scale)` conversion (zigzag-encoded, options.proto) — a negative value
+now costs the varint width of its magnitude, not a sign-extended 10 B —
+and renames `EncoderReading.time`/`OtosReading.time` to `age` (an
+absolute clock value could never be packed small; `age` is the delta
+behind `Telemetry.now`, bounded to 255 ms). `EncoderReading.position_epoch`
+(ADDITIVE, field 4) is the position-rebaseline policy's own counter
+(sprint 124 architecture Decision 6) — see §2's own "Position-rebaseline
+policy" note and `robot_state.h`'s own `Wheel::positionEpoch` doc comment.
+Ticket 009 further wires `age` to genuine independent per-sample capture
+skew (`Devices::Motor::sampleTime()`/`Devices::Otos::sampleTime()`, ticket
+002's enabling change) in place of 008's honest-zero placeholder, and folds
+`TelemetrySecondary`'s deletion in (see this section's own paragraph
+above). The combined effect: `Telemetry` standalone/wrapped
+`ReplyEnvelope` shrinks to **130 B** (`wire.h`'s own regenerated
+`kReplyEnvelopeMaxEncodedSize` constant and static_assert — sprint 124's
+own ≤130 B gate) despite the ADDITIVE `position_epoch` field, comfortably
+under the 240-byte envelope budget. See
+[`docs/protocol-v5.md`](../../../docs/protocol-v5.md) §8 for the full
+wire-level field table and flags bit reference (supersedes the retired
+`docs/protocol-v4.md`).
 
 Host-side matcher (Architecture Step 7's open question, resolved):
 `SerialConnection.wait_for_ack()`/`NezhaProtocol.wait_for_ack()`
 (`src/host/robot_radio/io/serial_conn.py`,
-`src/host/robot_radio/robot/protocol.py`) now scan the ring (via
-`_match_ack_in_frames()`), not the scalar slot — returning on the FIRST
+`src/host/robot_radio/robot/protocol.py`) scan the ring (via
+`_match_ack_in_frames()`), not a scalar slot — returning on the FIRST
 (frame, ring-entry) match found, scanning frames in arrival order and,
 within a frame, ring entries in wire order (oldest first). No freshness
-check applies to a ring scan (see above). `TLMFrame.acks` (a new,
-ADDITIVE field, always populated, independent of `ack_fresh`) exposes the
-full decoded ring to any caller that wants to inspect it directly
-(bench scripts, `tlm_log.py`), alongside the unchanged
-`TLMFrame.ack`/`ack_corr`/`ack_err`/`ack_fresh`.
+check applies to a ring scan. `TLMFrame.acks` exposes the full decoded
+ring to any caller that wants to inspect it directly (bench scripts,
+`tlm_log.py`) — since 124-008, this is the ONLY ack-observability field:
+`TLMFrame.ack`/`ack_corr`/`ack_err`/`ack_fresh` are DELETED host-side too
+(the wire fields they read no longer exist), not merely unused.
 
 **Hardware verification (2026-07-23, robot "tovez",
 `/dev/cu.usbmodem2121102`).** The ring itself is proven solid on real
@@ -926,7 +971,9 @@ fresh THIS frame — chip detected AND this cycle's burst actually
 refreshed the cached pose, NOT the old pre-115 "chip ever detected"
 semantic), bit 1 `kFlagOtosConnected` (live bus health), bit 2 `kFlagActive`
 (motion in progress), bits 3/4 `kFlagConnLeft`/`kFlagConnRight` (motor bus
-connectivity), bit 5 `kFlagAckFresh` (Telemetry-internal, see above), bit 6
+connectivity), bit 5 RESERVED (124-008: formerly `kFlagAckFresh` — deleted
+along with the scalar ack slot it gated; ring membership already means
+"really acked," see this section's own "AS OF 124" paragraph above), bit 6
 `kFlagFaultI2CSafetyNet` (`I2CBus::clearanceSafetyNetCount() > 0` —
 **120-003, CONFIRMED via pyOCD/DBG trace against real hardware,
 2026-07-23** (robot "tovez", `/dev/cu.usbmodem2121102`): this is a
@@ -982,7 +1029,14 @@ early-return gate exactly, so the bit tracks precisely the regime where the
 land-at-zero completion path can never fire and the threshold/timeout
 backstop is the ONLY completion path; the loud off-state for a
 20x-turn-accuracy-delta feature that used to have a silent, invisible off
-state).
+state), bit 17 `kFlagFaultPositionClamped` (124-008, Decision 6's
+"bound-exceeded fallback": a wheel's position was clamped to
+`EncoderReading.position`'s own `(abs_max)` at the encode step rather than
+allowed to wrap — not the expected path, since `RobotLoop`'s own per-cycle
+rebaseline trigger at a 2000mm margin below the bound should prevent this
+in normal operation; purely observable evidence the defensive fallback
+engaged. Derived from `Types::RobotState::Health::positionClamped` inside
+`Telemetry::update()`, 124-009).
 Declaring a
 bit before it is wired is deliberate — it reserves the bit number for a
 future caller without renumbering. As of 124-009, `RobotLoop` never calls

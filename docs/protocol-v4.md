@@ -1,6 +1,21 @@
 # Protocol v4 Wire Specification
 
-**Current wire truth.** This document describes the Nezha firmware
+> **SUPERSEDED by [`docs/protocol-v5.md`](protocol-v5.md) (sprint 124,
+> 2026-07).** Protocol v5 replaces this document's §2 (transport &
+> framing — one-line-per-packet grammar, `0x0A`-keyed COBS, CRC scope
+> extended to the command name), §7 (responses — the single scalar ack
+> slot this document describes, `ack_corr`/`ack_err`/`flags` bit 5, is
+> deleted; the ack ring is the sole path), and §8 (telemetry — packed
+> `sint32`/zigzag fields, `TelemetrySecondary` deleted outright). This
+> document's §3-§6 (the `CommandEnvelope`/`Move`/execution-model/
+> `ConfigDelta` command surface) remain byte-accurate — sprint 124 did
+> not change that surface — and are the reason this file is kept, not
+> deleted, per this project's standing "historical record of what shipped
+> when" convention (see the Appendix below, and `docs/protocol-v2.md`/
+> `docs/protocol-v3.md` for the same treatment one sprint earlier).
+
+**Historical wire truth (superseded — see the notice above).** This
+document describes the Nezha firmware
 command/telemetry protocol **as shipped by sprint 116** ("MOVE protocol
 cutover", tickets 001-008) — the converged, bounded-`MOVE` command
 surface the minimal single-loop firmware speaks once that sprint closed

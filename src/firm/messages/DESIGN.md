@@ -40,12 +40,15 @@ Three layers, in dependency order:
    every wire line actually carries.
 2. **Generated table-driven codec** — `wire.h`/`wire.cpp`. Declares/defines
    `msg::wire::decode(CommandEnvelope&, ...)` and
-   `msg::wire::encode(ReplyEnvelope|TelemetrySecondary, ...)`, which walk
-   per-message `FieldDesc` tables (field number, wire type, byte offset,
-   bounds) emitted into `wire.cpp` to decode, encode, and validate
+   `msg::wire::encode(ReplyEnvelope&, ...)`, which walk per-message
+   `FieldDesc` tables (field number, wire type, byte offset, bounds)
+   emitted into `wire.cpp` to decode, encode, and validate
    (`(min)`/`(max)`/`(abs_max)`/`(req)`, see `protos/options.proto`) every
-   message reachable from `CommandEnvelope`/`ReplyEnvelope`/
-   `TelemetrySecondary`.
+   message reachable from `CommandEnvelope`/`ReplyEnvelope`. (Through
+   sprint 123, a THIRD top-level message, `TelemetrySecondary`, had its
+   own `encode()` overload here too — sprint 124 ticket 009 deleted
+   `TelemetrySecondary` outright, so `ReplyEnvelope` is the only outbound
+   top-level message now; see §3/§4 below.)
 3. **Hand-written, schema-agnostic byte primitives** — `wire_runtime.h`/
    `wire_runtime.cpp`. The one hand-authored file pair in this directory:
    raw protobuf-wire-format primitives (varint, zigzag, fixed32/float,
@@ -165,7 +168,7 @@ firmware runtime; the device itself never sees protobuf. It also emits
   cited by the pre-124-005 wording here) no longer exists — see
   [`../app/DESIGN.md`](../app/DESIGN.md) §1 and
   [`../com/DESIGN.md`](../com/DESIGN.md) §2 for the uniform-grammar
-  replacement. See `docs/protocol-v4.md` §2 for the full frame layout and
+  replacement. See `docs/protocol-v5.md` §2 for the full frame layout and
   byte-budget derivation.
   **124-003 (delimiter parameterization):** `cobsEncode()`/`cobsDecode()`
   gained a trailing `delimiter` byte parameter (default `0x00`, every
@@ -190,8 +193,12 @@ firmware runtime; the device itself never sees protobuf. It also emits
   default parameter stays `0x00` (unchanged — some non-live callers, e.g.
   `wire_differential_harness.cpp`'s unrelated debug-CLI encoding, still
   want that default); only the *live wire's* callers pass `0x0A`.
+  (`Telemetry::emitSecondary()`, the third call site this bullet used to
+  list alongside `sendReply()`/`decodeBinaryFrame()`, no longer exists —
+  124-009 deleted `TelemetrySecondary` outright, see §4 below.)
 - **Struct layout must stay standard-layout.** Every `msg::*` struct
-  reachable from `CommandEnvelope`/`ReplyEnvelope`/`TelemetrySecondary` must
+  reachable from `CommandEnvelope`/`ReplyEnvelope` (through sprint 123,
+  also `TelemetrySecondary` — deleted 124-009, see §4) must
   satisfy `std::is_standard_layout` — this is what makes the generated
   `wire.cpp` field tables' `offsetof()` calls well-defined. `layout_checks.h`
   is the generated build-time gate that proves this for the current schema;
@@ -208,9 +215,10 @@ firmware runtime; the device itself never sees protobuf. It also emits
   vendored CODAL target's nominal C++11 pin) — so this is standard-guaranteed
   here, not merely "GCC/Clang define it in practice."
 - **Envelope size is bounded and checked at compile time.** `wire.h`
-  declares `kCommandEnvelopeMaxEncodedSize`/`kReplyEnvelopeMaxEncodedSize`/
-  `kTelemetrySecondaryMaxEncodedSize` — the worst-case encoded size of the
-  largest oneof arm in each envelope, computed by the generator from the
+  declares `kCommandEnvelopeMaxEncodedSize`/`kReplyEnvelopeMaxEncodedSize`
+  (through sprint 123, also `kTelemetrySecondaryMaxEncodedSize` — that
+  constant and the message it sized are DELETED by 124-009, see §4) — the
+  worst-case encoded size of the largest oneof arm in each envelope, computed by the generator from the
   schema's own field widths (max, not sum, across mutually exclusive oneof
   arms) — each checked at build time against a **240-byte** envelope
   budget (sprint 123 recompute — see below; **186 bytes pre-123**).
@@ -231,7 +239,7 @@ firmware runtime; the device itself never sees protobuf. It also emits
   sprint computes, including ticket 004's `cycle_busy`/`cycle_period`
   primary-frame migration (194 B largest, up from 185 B pre-migration —
   the whole reason this budget needed recomputing). See
-  `docs/protocol-v4.md` §2.3 for the full derivation and size table.
+  `docs/protocol-v5.md` §2 for the current derivation and size table (this bullet describes the sprint-123 recompute historically -- see the 124-008 bullet below for the current ≤130B gate).
 
   As of 116-001 (MOVE protocol cutover — see
   [envelope.proto](../../protos/envelope.proto)'s own header comment):
@@ -272,10 +280,12 @@ firmware runtime; the device itself never sees protobuf. It also emits
   exactly which field grew). `ReplyEnvelope`'s `tlm` arm now measures
   188B for a **194B total** — ticket 004's `cycle_busy`/`cycle_period`
   primary-frame migration, +9B over the 179B `tlm` arm above.
-  `TelemetrySecondary` remains **52B** — its own former fields 11/12
-  are now `reserved`, not populated (see `app/DESIGN.md` §4 and
-  `docs/protocol-v4.md` §8.4). All three totals sit comfortably under
-  the 240-byte budget above.
+  `TelemetrySecondary` remained **52B** at that point in the sprint's own
+  history — its former fields 11/12 were by then `reserved`, not
+  populated (see `app/DESIGN.md` §4). Sprint 124 ticket 009 later deleted
+  `TelemetrySecondary` outright (see below) — there is no third size to
+  track any more. All totals sat comfortably under the 240-byte budget
+  above.
 
   **124-008 (issue §B5, a NEW, tighter, explicit gate — `kReplyEnvelope
   MaxEncodedSize <= 130` bytes, separate from and stricter than the
@@ -297,6 +307,19 @@ firmware runtime; the device itself never sees protobuf. It also emits
   options before this). Exact regenerated result at ticket-close: **130
   bytes** — confirm against `wire.h`'s own `kReplyEnvelopeMaxEncodedSize`
   before assuming this number is still current.
+- **124-009: `TelemetrySecondary` — message, `encode()` overload,
+  `kTelemetrySecondaryMaxEncodedSize`, and the wire arm/tie-break
+  machinery that used to pick between it and the primary frame — is
+  DELETED OUTRIGHT, not merely unused.** It emitted nothing but `now` in
+  production (no firmware caller ever populated `has_cmd_vel`/`acc_*`/
+  `glitch_*`/`ts_*`), and `RobotState ⊇ wire` (the blackboard issue's own
+  framing, see [`../types/DESIGN.md`](../types/DESIGN.md)) means there is
+  no wire-visibility invariant obligating any of its former fields to fold
+  into the primary frame. `ReplyEnvelope`/`Telemetry` is the ONLY outbound
+  top-level wire message now; every "reachable from
+  `CommandEnvelope`/`ReplyEnvelope`/`TelemetrySecondary`" statement
+  elsewhere in this document describes a PRE-124-009 state, called out
+  inline where it appears.
 - **A `(max)`/`(abs_max)` bound now narrows a VARINT field's worst-case wire
   width, not just a `float` field's semantic range** (109-003 —
   `gen_messages.py`'s `_worst_case_scalar_size()`; previously this docstring
@@ -486,17 +509,20 @@ default is omitted from the wire entirely, matching a real protobuf
 encoder's byte-for-byte output (verified against `google.protobuf` by a
 differential fuzz suite).
 
-**`TelemetrySecondary` rides its own COBS+CRC-framed line.** Unlike
-`ReplyEnvelope`'s oneof arms, `TelemetrySecondary` is encode-only and
-never a `ReplyEnvelope` oneof arm — it is the slower diagnostic frame,
-firmware-emitted only, never host-decoded on the robot side, framed as
-its own independently-COBS+CRC-framed line (see `telemetry.h`'s own doc
-comment and `docs/design/design.md` §5 "Command plane"). Its former
-`cycle_busy`/`cycle_period` fields (11/12, sprint 122's interim
-placement) are `reserved` as of sprint 123 ticket 004, migrated onto
-the primary `Telemetry` frame instead (fields 15/16) now that COBS+CRC
-framing restored primary-frame headroom — see `app/DESIGN.md` §4 and
-`docs/protocol-v4.md` §8.1/§8.4.
+**`TelemetrySecondary` — DELETED (sprint 124 ticket 009); this paragraph
+is now historical.** Through sprint 123, `TelemetrySecondary` rode its
+own, independently-COBS+CRC-framed line: encode-only, never a
+`ReplyEnvelope` oneof arm, the slower diagnostic frame, firmware-emitted
+only, never host-decoded on the robot side. Its former `cycle_busy`/
+`cycle_period` fields (11/12, sprint 122's interim placement) became
+`reserved` at sprint 123 ticket 004, migrated onto the primary
+`Telemetry` frame instead (fields 15/16) once COBS+CRC framing restored
+primary-frame headroom — see `app/DESIGN.md` §4. Sprint 124 ticket 009
+deleted the message, its wire arm, and the tie-break/alternation cadence
+machinery that used to choose between it and the primary frame outright
+— there is only ever one outbound telemetry frame now. See
+[`docs/protocol-v5.md`](../../../docs/protocol-v5.md) §8 for the current
+field reference.
 
 **Unknown fields are forward-compatible by design.** `skipField()`
 advances past an unrecognized field number's value without interpreting it,
@@ -526,9 +552,10 @@ that conversion — it only defines the wire-side shape.
   which code means which). Never partially decodes into `out` on failure in
   a way the caller should trust.
 - **`msg::wire::encode(const ReplyEnvelope& in, uint8_t* buf, uint16_t cap)
-  -> uint16_t`** and the `TelemetrySecondary` overload: encode into `buf`,
-  return the number of bytes written, or `0` if `cap` is smaller than the
-  required output (never a truncated/corrupt partial buffer).
+  -> uint16_t`:** encode into `buf`, return the number of bytes written, or
+  `0` if `cap` is smaller than the required output (never a
+  truncated/corrupt partial buffer). (Through sprint 123 there was also a
+  `TelemetrySecondary` overload — deleted outright by 124-009, see §3/§4.)
 - **`msg::wire::decode(Telemetry& out, const uint8_t* buf, uint16_t len)
   -> Result`** (124-008, test-only — see §3's own bullet): the same
   decode contract as `decode(CommandEnvelope&, ...)` above, applied to a
@@ -554,8 +581,9 @@ that conversion — it only defines the wire-side shape.
 - **`app/` (via `App::Comms`/`App::Telemetry`):** the only consumer of the
   decode/encode entry points at runtime — see
   [app/DESIGN.md](../app/DESIGN.md) for how a decoded `CommandEnvelope`
-  reaches the loop's dispatch and how a `ReplyEnvelope`/
-  `TelemetrySecondary` gets COBS+CRC-framed and sent.
+  reaches the loop's dispatch and how a `ReplyEnvelope` gets
+  CRC-then-COBS framed and sent (the only outbound top-level message —
+  `TelemetrySecondary` is deleted, 124-009).
 - **`config/`:** consumes generated `msg::*Config`/`msg::*ConfigPatch`
   shapes declared here for baked boot configuration — see
   [config/DESIGN.md](../config/DESIGN.md).

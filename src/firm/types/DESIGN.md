@@ -4,7 +4,7 @@ root: ../../../docs/design/design.md
 
 # types/ — RobotState Blackboard, Protocol Constants, and Version Plumbing
 
-**Owner:** Eric Busboom · **Last reviewed:** 2026-07-25 · **Status:** mixed — `robot_state.h` is live and load-bearing (sprint 124 ticket 007); the rest is vestigial (see §6)
+**Owner:** Eric Busboom · **Last reviewed:** 2026-07-26 · **Status:** mixed — `robot_state.h` is live, load-bearing, AND PUBLISHED every cycle (sprint 124 tickets 007-009); the rest is vestigial (see §6)
 
 ---
 
@@ -91,17 +91,18 @@ key=value token struct. `version_generated.h` is emitted by
   every cycle a command lands — the exclusion is about WHAT KIND of thing
   an ack is (a protocol receipt), not how often it changes. Config keeps
   its own patch/persistence path (`Config::TuningSnapshot` and friends).
-- **This ticket (124-007) defines the struct only — it does not claim any
-  field is currently populated by `RobotLoop`.** `App::RobotLoop` still
-  builds its own cycle-local `Motion::StateEstimator::Input` variable
-  field-by-field from `motorL_`/`motorR_`/`odom_`/`otos_` each cycle (now
-  through `RobotState`'s own sectioned field paths, e.g.
-  `estimatorInput.wheelLeft.position` in place of the former
-  `estimatorInput.encLeftPosition`) rather than through a `RobotLoop`-owned
-  `state_` blackboard member — that wiring, plus `App::Telemetry`'s
-  projection step and `TelemetrySecondary`'s deletion, is tickets 008/009's
-  job, not this one's. Do not read "the struct exists" as "the loop
-  publishes it" until those tickets land.
+- **Superseded by tickets 008/009 — `RobotState` is now published every
+  cycle, not merely defined.** Ticket 007 defined the struct only (`App::
+  RobotLoop` still built a cycle-local `Motion::StateEstimator::Input`
+  variable field-by-field back then); tickets 008 (packed telemetry +
+  position-rebaseline trigger) and 009 (the `RobotLoop`/`Telemetry`
+  restructure) wired `RobotLoop` to own a persistent `state_` member,
+  publish each section at its coherence point exactly once per cycle, and
+  call `Telemetry::update(state_)` as the ONE projection point — see
+  [`../app/DESIGN.md`](../app/DESIGN.md) §2/§4 for the exact call sites.
+  `Motion::StateEstimator::update(state_, now)` and `Telemetry::
+  update(state_)` are both now real, live consumers of a genuinely
+  RobotLoop-owned instance, not a throwaway local.
 - **`version_generated.h` is generated, git-ignored, and never hand-edited.**
   `scripts/gen_version.py` overwrites it at every build from `pyproject.toml`.
   Edits here are silently destroyed by the next build.
@@ -218,22 +219,18 @@ it likewise has no control flow of its own to describe here — its
 
 ## 6. Open Questions / Known Limitations
 
-- **`RobotState` is defined but not yet published.** No section is
-  currently written by anything other than a cycle-local, throwaway
-  `Motion::StateEstimator::Input` variable inside `App::RobotLoop::cycle()`
-  (the `wheelLeft`/`wheelRight`/`pose`/`otos` fields that variable's own
-  construction fills — everything else, including `Wheel::cmdVelocity`/
-  `positionEpoch`, `Command`, and `Health`, is defined but never assigned
-  anywhere yet). This is 124-007's own explicit scope boundary, not an
-  oversight: the struct-vs-wiring split was deliberate (ticket text: "this
-  ticket is the struct DEFINITION only"), and the Drive/Sensors device-
-  ownership reshuffle that would let `RobotLoop` publish most sections
-  through named subsystem methods is sprint 125's job (sprint.md Design
-  Rationale Decision 1, "the scope valve"). Tickets 008 (packed telemetry
-  encoding, including the `positionEpoch` rebaseline trigger) and 009 (the
-  `RobotLoop`/`Telemetry` restructure to one persistent `state_` member,
-  published once per section per cycle, plus `TelemetrySecondary`'s
-  deletion) close this gap.
+- **RESOLVED (was open through 124-007): `RobotState` is now published
+  every cycle.** Tickets 008/009 closed this gap — `App::RobotLoop` owns a
+  persistent `state_` member, publishes every section (`wheelLeft`/
+  `wheelRight` including `cmdVelocity`/`positionEpoch`, `otos`,
+  `perception`, `pose`, `estimate`, `command`, `health`) at its own
+  coherence point exactly once per cycle, and `Telemetry::update(state_)`
+  is the ONE projection call (`RobotLoop::cycle()`'s own grep-enforceable
+  contract: zero `tlm_.setFlag()` calls outside `Telemetry::update()`).
+  `RobotLoop` still owns the underlying devices directly (Decision 1's
+  "scope valve" — the Drive/Sensors ownership reshuffle remains deferred
+  to sprint 125), but that is an ownership question, orthogonal to
+  publication: every `RobotState` section is genuinely live now.
 - **`protocol.h` is currently included by nothing.** A repo-wide grep
   (`grep -rn "PROTO_TAG_\|ReplyCtx\|ReplyFn\|FIRMWARE_VERSION\|PROTO_VERSION\|KVPair" src --include='*.cpp' --include='*.h'`)
   finds real consumers only in `src/archive/source_old/` (the pre-rebuild
@@ -244,8 +241,10 @@ it likewise has no control flow of its own to describe here — its
   includes `types/protocol.h` at all. `main.cpp`'s banner
   (`DEVICE:NEZHA2:robot:<name>:<serial>`) is hand-formatted from name and
   serial only; it does not use `FIRMWARE_VERSION` or `PROTO_VERSION`.
-  `App::Comms::pumpTransport` answers `HELLO`/`PING` with the literal
-  strings `"OK pong"` and the caller-supplied banner, not `PROTO_TAG_OK`.
+  `App::Comms::dispatchCleartext()` answers `HELLO`/`PING`/`ID`/`VER`
+  with the literal strings `banner_`/`"PONG:t=<ms>"`/`idLine_`/
+  `"VER:" FIRMWARE_VERSION_STR` (protocol v5, sprint 124 — supersedes the
+  pre-124 `"OK pong"` reply this bullet used to cite), not `PROTO_TAG_OK`.
 - **`PROTO_TAG_*` predate the binary cutover.** They belong to the old
   text-tag reply format (`OK`/`ERR`/`EVT`/`TLM`/`CFG`/`ID` as a leading
   token). The current wire protocol is the binary-armored envelope codec

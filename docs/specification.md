@@ -7,7 +7,7 @@
 > subsequent gut-to-minimal-firmware/MOVE-protocol sprints. For the
 > current architecture, see [`docs/design/design.md`](design/design.md)
 > and its per-subsystem `DESIGN.md` files; for the current wire protocol,
-> see [`docs/protocol-v4.md`](protocol-v4.md). Kept as the historical
+> see [`docs/protocol-v5.md`](protocol-v5.md). Kept as the historical
 > record of the pre-rebuild design, not rewritten line-by-line.
 
 ## Hardware
