@@ -854,74 +854,23 @@ void scenarioCobsDelimiterDefaultUnaffected() {
 
 // 12. COBS keyed on 0x0A (124-003, issue §2): the exact worked/adversarial
 // vectors the issue verified by hand -- all-0x0A, all-0x00, and a
-// 0x00..0x0F sweep, each run through the SAME "payload + CRC, then
-// COBS(delimiter=0x0A)" composition the issue's own table describes,
-// asserting the EXACT wire bytes, not just "some encoding happened."
-void scenarioCobsKeyedOn0x0AAdversarialVectors() {
-  beginScenario("COBS delimiter=0x0A: issue's exact worked adversarial vectors (payload+CRC composition)");
-
-  auto wireFrame = [](const uint8_t* payload, size_t payloadLen, uint8_t* out, size_t outCap, size_t* outLen) {
-    uint8_t combined[32] = {};
-    std::memcpy(combined, payload, payloadLen);
-    size_t combinedLen = payloadLen;
-    const uint16_t crc = WireRuntime::crcCompute(payload, payloadLen);
-    if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) return false;
-    return WireRuntime::cobsEncode(combined, combinedLen, out, outCap, outLen, 0x0A);
-  };
-
-  auto checkVector = [&](const uint8_t* payload, size_t payloadLen, const uint8_t* expectedWire,
-                          size_t expectedWireLen, const char* label) {
-    uint8_t wire[40] = {};
-    size_t wireLen = 0;
-    checkTrue(wireFrame(payload, payloadLen, wire, sizeof(wire), &wireLen),
-              std::string(label) + ": payload+CRC, COBS(delimiter=0x0A) succeeds");
-    checkSizeEq(wireLen, expectedWireLen, std::string(label) + ": wire frame length matches the issue's table");
-    checkTrue(wireLen == expectedWireLen && std::memcmp(wire, expectedWire, expectedWireLen) == 0,
-              std::string(label) + ": wire frame bytes match the issue's table exactly");
-
-    bool sawDelimiter = false;
-    for (size_t i = 0; i < wireLen; ++i) {
-      if (wire[i] == 0x0A) sawDelimiter = true;
-    }
-    checkFalse(sawDelimiter, std::string(label) + ": wire frame contains no 0x0A byte");
-
-    uint8_t decodedCombined[40] = {};
-    size_t decodedCombinedLen = 0;
-    checkTrue(WireRuntime::cobsDecode(wire, wireLen, decodedCombined, sizeof(decodedCombined), &decodedCombinedLen,
-                                       0x0A),
-              std::string(label) + ": cobsDecode(delimiter=0x0A) round-trips");
-    checkTrue(decodedCombinedLen >= 2, std::string(label) + ": decoded combined bytes hold at least a CRC");
-    if (decodedCombinedLen >= 2) {
-      const size_t decodedPayloadLen = decodedCombinedLen - 2;
-      checkSizeEq(decodedPayloadLen, payloadLen, std::string(label) + ": decoded payload length round-trips");
-      checkTrue(decodedPayloadLen == payloadLen && std::memcmp(decodedCombined, payload, payloadLen) == 0,
-                std::string(label) + ": decoded payload bytes round-trip exactly");
-    }
-  };
-
-  // "all 0x0A (8B)" -- issue §2's own table.
-  {
-    const uint8_t payload[8] = {0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A};
-    const uint8_t expected[11] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x41, 0x78};
-    checkVector(payload, sizeof(payload), expected, sizeof(expected), "all 0x0A (8B)");
-  }
-
-  // "all 0x00 (8B)" -- issue §2's own table.
-  {
-    const uint8_t payload[8] = {};  // already all-zero
-    const uint8_t expected[11] = {0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x09, 0x34, 0x3b};
-    checkVector(payload, sizeof(payload), expected, sizeof(expected), "all 0x00 (8B)");
-  }
-
-  // "0x00..0x0F" -- issue §2's own table (16-byte sweep).
-  {
-    uint8_t payload[16];
-    for (size_t i = 0; i < sizeof(payload); ++i) payload[i] = static_cast<uint8_t>(i);
-    const uint8_t expected[19] = {0x0b, 0x18, 0x0b, 0x08, 0x09, 0x0e, 0x0f, 0x0c, 0x0d, 0x02,
-                                    0x03, 0x00, 0x01, 0x06, 0x07, 0x04, 0x05, 0x3d, 0x31};
-    checkVector(payload, sizeof(payload), expected, sizeof(expected), "0x00..0x0F");
-  }
-}
+// 0x00..0x0F sweep.
+//
+// 124-004: this scenario USED TO hardcode those vectors here, independently
+// of the byte-for-byte IDENTICAL table hardcoded into
+// test_host_wire_codec.py's test_cobs_delimiter_0x0a_adversarial_vectors_
+// from_issue() -- exactly the "two hand-maintained copies, no shared
+// vector forcing them to agree" defect class the issue itself documents
+// (the 123-006 0x0A-in-binary-frame bug shipped because firmware's and
+// host's demuxers were two independent guesses this same way). Both
+// hardcoded copies are DELETED; this coverage -- and more (a 0x00..0xFF
+// sweep, an empty payload, and the CRC-scope pair proving two different
+// command names produce two different CRCs over the identical payload) --
+// now lives in ONE place, src/tests/fixtures/wire_golden_vectors.txt, read
+// by BOTH src/tests/sim/unit/wire_golden_vector_harness.cpp (this
+// language) and src/tests/unit/test_wire_golden_vectors.py (the host). See
+// that fixture's own header comment and wire_golden_vector_harness.cpp for
+// the full cross-language suite.
 
 // 13. COBS delimiter=0x0A property test (124-003 acceptance criterion,
 // issue AC #3): for payloads up to 251 bytes (this wire's own affordable
@@ -1075,7 +1024,6 @@ int main() {
   scenarioCrcKnownVectorAndCleanFrame();
   scenarioCrcDetectsCorruption();
   scenarioCobsDelimiterDefaultUnaffected();
-  scenarioCobsKeyedOn0x0AAdversarialVectors();
   scenarioCobsDelimiter0x0APropertyNoLiteralAndRoundTrips();
   scenarioCrcIncrementalMatchesComputeAndComposes();
 

@@ -163,28 +163,33 @@ def test_cobs_delimiter_0x0a_adversarial_vectors_from_issue():
     by hand: all-0x0A, all-0x00, and a 0x00..0x0F sweep, each run through the
     SAME "payload + CRC, then COBS(delimiter=0x0A)" composition the issue's
     own table describes -- asserted against the EXACT wire bytes the issue
-    lists, not just "some encoding happened."""
+    lists, not just "some encoding happened."
 
-    def wire_frame(payload: bytes) -> bytes:
-        crc = crc16_ccitt_false(payload)
-        combined = payload + bytes((crc & 0xFF, (crc >> 8) & 0xFF))
-        return cobs_encode(combined, delimiter=0x0A)
+    124-004: these vectors used to be HARDCODED here, independently, as a
+    second copy of the exact same table hardcoded into
+    ``wire_runtime_harness.cpp``'s ``scenarioCobsKeyedOn0x0AAdversarialVectors``
+    -- exactly the "two hand-maintained copies with no shared vector forcing
+    them to agree" defect class the issue itself is about. Both now read
+    ``src/tests/fixtures/wire_golden_vectors.txt``, the ONE shared fixture
+    (see ``test_wire_golden_vectors.py`` for the full byte-for-byte
+    cross-language suite this table is now a thin wrapper over); this test
+    stays as a readable, issue-section-scoped subset for anyone landing on
+    this file first."""
+    from test_wire_golden_vectors import load_golden_vectors
 
-    cases = {
-        bytes([0x0A] * 8): bytes.fromhex("01 00 00 00 00 00 00 00 00 41 78"),
-        bytes(8): bytes.fromhex("0b 0b 0b 0b 0b 0b 0b 0b 09 34 3b"),
-        bytes(range(0x10)): bytes.fromhex(
-            "0b 18 0b 08 09 0e 0f 0c 0d 02 03 00 01 06 07 04 05 3d 31"
-        ),
-    }
+    issue_vectors = [v for v in load_golden_vectors() if v.source == "issue_section2_table"]
+    assert len(issue_vectors) == 3, "expected exactly the issue's own 3-row §2 table"
 
-    for payload, expected_wire in cases.items():
-        wire = wire_frame(payload)
-        assert wire == expected_wire, f"payload={payload.hex()}: wire mismatch"
-        assert 0x0A not in wire, f"payload={payload.hex()}: wire contains a literal 0x0A"
+    for vector in issue_vectors:
+        crc = crc16_ccitt_false(vector.payload)
+        combined = vector.payload + bytes((crc & 0xFF, (crc >> 8) & 0xFF))
+        wire = cobs_encode(combined, delimiter=0x0A)
 
-        combined = cobs_decode(wire, delimiter=0x0A)
-        assert combined[:-2] == payload, f"payload={payload.hex()}: round-trip mismatch"
+        assert wire == vector.expected_wire, f"{vector.name}: wire mismatch"
+        assert 0x0A not in wire, f"{vector.name}: wire contains a literal 0x0A"
+
+        decoded_combined = cobs_decode(wire, delimiter=0x0A)
+        assert decoded_combined[:-2] == vector.payload, f"{vector.name}: round-trip mismatch"
 
 
 def test_cobs_delimiter_0x0a_no_literal_and_roundtrips_up_to_251_bytes():
