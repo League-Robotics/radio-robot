@@ -104,7 +104,7 @@ def tourLimits() -> PlannerLimits:
     limits.otosStaleness = 200
     limits.headingOtosWeight = 0.0
     limits.requireSettle = True
-    limits.settleWindow = 800.0
+    limits.settleWindow = 2500.0
     limits.headingHoldGain = 2.0
     limits.velKff = 1.0 / GAIN_NOMINAL
     limits.velKp = 0.0009
@@ -254,6 +254,13 @@ def main() -> None:
                          fontsize=7.5, rotation=90, va="top", ha="right",
                          color="#666666")
 
+    # Zero-aligned dual axes: both symmetric about zero so y=0 coincides.
+    speedLim = 1.1 * max(max(map(abs, log["velLeft"])),
+                         max(map(abs, log["velRight"])))
+    dutyLim = 1.15 * max(max(map(abs, log["dutyLeft"])),
+                         max(map(abs, log["dutyRight"])), 0.01)
+    axSpeed.set_ylim(-speedLim, speedLim)
+    axDuty.set_ylim(-dutyLim, dutyLim)
     axSpeed.set_xlabel("time [s]")
     axSpeed.set_ylabel("true wheel speed [mm/s]")
     axDuty.set_ylabel("commanded duty [-1..1]")

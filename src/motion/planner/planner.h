@@ -61,7 +61,7 @@ class Planner {
     bool occupied = false;
     Move move{};
     uint32_t activationTime = 0;   // [ms]
-    float baselinePath = 0.0f;     // [mm] pathLength() at activation
+    float baselinePath = 0.0f;     // [mm] signed mean wheel position at activation
     float baselineHeading = 0.0f;  // [rad] heading() at activation
     bool closingIssued = false;    // last command was the exact terminal step
     // Settle-confirm (PlannerLimits::requireSettle): profile-complete has

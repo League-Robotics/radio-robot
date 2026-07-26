@@ -95,9 +95,23 @@ void Planner::stageDuty(float dt) {
       return;
     }
     // The commanded accel behind this tick's target -- feeds the PID's
-    // acceleration feedforward (PidGains::kaff).
-    const float targetAccel = (cmd - cmdPrevious) / dt;
-    duty = pid.compute(cmd, targetAccel, measured, dt);
+    // acceleration feedforward (PidGains::kaff). Forced to ZERO during
+    // the settle phase: the creep is quasi-static, and running the accel
+    // feedforward + filter-lag compensation on its per-tick command
+    // jitter was measured to drive a +-0.25 rad/s hunt that kept the
+    // rest gate from ever confirming.
+    const float targetAccel =
+        active_.settling ? 0.0f : (cmd - cmdPrevious) / dt;
+    // Filter-lag compensation: the EMA velocity filter has a group delay
+    // of ~dt*(1-w)/w, so during a ramp the filtered feedback reads
+    // a*lag LOW -- kp (and the ramp-rate integral) then chase a phantom
+    // error that scales with accel. Predict the measurement forward by
+    // the filter's own delay (derived from the configured weight, no new
+    // tunable); exact zero at steady state.
+    const float w = std::max(limits_.velocityFilterWeight, 0.05f);
+    const float filterLag = dt * (1.0f - w) / w;  // [s]
+    duty = pid.compute(cmd, targetAccel, measured + targetAccel * filterLag,
+                       dt);
   };
   stage(pidLeft_, cmdLeft_, cmdLeftPrevious_, left_.velocity(), dutyLeft_);
   stage(pidRight_, cmdRight_, cmdRightPrevious_, right_.velocity(),
@@ -267,7 +281,7 @@ TickResult Planner::tick(const Types::RobotState& state) {
     // timeout aborts the motion: no carry, next baselines re-anchor.
     carryValid_ = !timedOut;
     carryKind_ = m.kind;
-    carryPath_ = active_.baselinePath + m.threshold;
+    carryPath_ = active_.baselinePath + sign(m.v_x) * m.threshold;
     carryHeading_ =
         active_.baselineHeading + sign(m.omega) * m.threshold;
     active_.occupied = false;
@@ -301,7 +315,8 @@ void Planner::activateNext(uint32_t now) {
   active_.closingIssued = false;
   active_.settling = false;
   active_.settleStart = now;
-  active_.baselinePath = pose_.pathLength();
+  active_.baselinePath =
+      0.5f * (left_.basisPosition() + right_.basisPosition());
   active_.baselineHeading = pose_.heading();
   if (carryValid_) {
     if (carryKind_ == Move::Kind::Distance &&
@@ -368,9 +383,17 @@ Planner::Measurement Planner::measure(uint32_t now) const {
     case Move::Kind::Time:
       break;  // a Time Move's residual is the clock, not a distance
     case Move::Kind::Distance: {
+      // Traveled distance is the SIGNED mean-wheel displacement along the
+      // Move's direction -- a telescoping measure (final minus baseline
+      // anchor positions), immune to noise/quantum rectification. The
+      // former pathLength() measure accumulated |ds| per cycle, so the
+      // encoder quantum's flicker during a slow settle-creep INFLATED it
+      // ~0.07 mm per jitter cycle and completed Moves measurably short.
       const float dir = sign(m.v_x);
+      const float meanPosition =
+          0.5f * (left_.basisPosition() + right_.basisPosition());
       out.anchoredRemaining =
-          m.threshold - (pose_.pathLength() - active_.baselinePath);
+          m.threshold - dir * (meanPosition - active_.baselinePath);
       out.plannedRemaining = out.anchoredRemaining - dir * predictPath;
       break;
     }
@@ -387,6 +410,7 @@ Planner::Measurement Planner::measure(uint32_t now) const {
 
 bool Planner::settleReached(const Measurement& measured, float dt) const {
   if (!active_.occupied) return false;
+
 
   const Move& m = active_.move;
   if (m.velocityKind != Move::VelocityKind::Twist) return false;
@@ -459,9 +483,13 @@ void Planner::planActive(uint32_t now, float dt, const Measurement& measured) {
   // arrival gate become satisfiable together.
   if (active_.settling &&
       (m.kind == Move::Kind::Distance || m.kind == Move::Kind::Angle)) {
-    constexpr float kCreepGain = 2.0f;         // [1/s]
-    constexpr float kCreepMaxLinear = 40.0f;   // [mm/s]
-    constexpr float kCreepMaxAngular = 0.4f;   // [rad/s]
+    // Gain sized for convergence well inside a ~2 s window from the
+    // worst hand-off residual; safe from hunting now that the accel
+    // feedforward and filter-lag compensation are disabled during
+    // settling (they were the churn source, not the gain).
+    constexpr float kCreepGain = 2.5f;         // [1/s]
+    constexpr float kCreepMaxLinear = 35.0f;   // [mm/s]
+    constexpr float kCreepMaxAngular = 0.35f;  // [rad/s]
     if (m.kind == Move::Kind::Distance) {
       const float dir = sign(m.v_x);
       const float previous = 0.5f * (cmdLeftPrevious_ + cmdRightPrevious_);

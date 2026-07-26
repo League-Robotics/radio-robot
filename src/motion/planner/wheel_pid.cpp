@@ -2,9 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#ifdef PLANNER_PID_DEBUG
-#include <cstdio>
-#endif
 
 namespace Motion {
 
@@ -31,16 +28,6 @@ float WheelPid::compute(float target, float targetAccel, float measured,
     integral_ = std::clamp(integral_, -gains_.iMax, gains_.iMax);
   }
   const float duty = feed + gains_.kp * error + integral_;
-#ifdef PLANNER_PID_DEBUG
-  static int dbgCount = 0;
-  if (dbgCount < 200 && (dbgCount++ % 2 == 0)) {
-    std::printf("[pid] tgt %7.1f a %7.1f meas %7.1f | kff %+.4f kaff %+.4f "
-                "kp %+.4f I %+.4f -> %+.4f\n",
-                target, targetAccel, measured, gains_.kff * target,
-                gains_.kaff * targetAccel, gains_.kp * error, integral_,
-                duty);
-  }
-#endif
   return std::clamp(duty, -1.0f, 1.0f);
 }
 
