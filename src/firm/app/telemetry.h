@@ -3,12 +3,15 @@
 // flags bit-string) at a fixed cadence, and the slower msg::TelemetrySecondary
 // diagnostic frame on other cycles, never both in the same emit() call.
 //
-// Boundary: inside -- primary/secondary frame assembly, the single ack
-// slot, flags-bit encoding, cadence pacing; outside -- deciding WHEN a
+// Boundary: inside -- primary/secondary frame assembly, the bounded ack
+// ring, flags-bit encoding, cadence pacing; outside -- deciding WHEN a
 // fault/event/presence condition occurred (callers -- I2CBus's safety net,
 // Deadman's trip, RobotLoop's own updateTlm()/line-color polling -- set the
-// bit; Telemetry only carries it and folds in its own ack_fresh bit at
-// encode time).
+// bit; Telemetry only carries it). 124-008 (issue §B4): the single
+// "freshest ack" scalar slot (ack_corr/ack_err) and its own ack_fresh bit
+// are DELETED -- ring membership in the ack ring already means "really
+// acked," so there is no separate freshness bit for Telemetry to track or
+// fold in at encode time any more.
 //
 // Two send paths: the PRIMARY frame rides a
 // msg::ReplyEnvelope{corr_id=0, body_kind=TLM} through Comms::sendReply()
@@ -27,8 +30,7 @@
 // Callers stage the next frame's data via setFrame()/setSecondaryFrame()
 // and report status/fault/event conditions via setFlag() using the bit
 // constants below -- Telemetry only carries whatever the caller last told
-// it, plus its own internally-tracked ack_fresh bit. Design/rationale:
-// DESIGN.md.
+// it. Design/rationale: DESIGN.md.
 #pragma once
 
 #include <cstdint>
@@ -56,9 +58,10 @@ namespace App {
 //   bit 2  (kFlagActive)         -- motion in progress.
 //   bit 3  (kFlagConnLeft)       -- left motor bus connectivity.
 //   bit 4  (kFlagConnRight)      -- right motor bus connectivity.
-//   bit 5  (kFlagAckFresh)       -- ack_corr/ack_err are a NEW ack this
-//                                    frame (Telemetry-internal -- see
-//                                    above).
+//   bit 5  -- RESERVED (124-008: formerly kFlagAckFresh -- deleted with
+//                                    the single "freshest ack" scalar slot
+//                                    it gated; ring membership already
+//                                    means "really acked").
 //   bit 6  (kFlagFaultI2CSafetyNet) -- I2CBus `readyAt` clearance
 //                                    safety-net trip
 //                                    (Devices::I2CBus::
@@ -147,13 +150,26 @@ namespace App {
 //                                    silently. Clears the same cycle no
 //                                    MOVE is active, or shaping is
 //                                    re-enabled on at least one axis.
-//   bits 17-31 -- reserved for future use.
+//   bit 17 (kFlagFaultPositionClamped) -- 124-008, position-rebaseline
+//                                    policy's defensive fallback (sprint
+//                                    124 architecture Decision 6): a
+//                                    wheel's position was clamped to
+//                                    EncoderReading.position's own
+//                                    (abs_max) at the encode step rather
+//                                    than allowed to wrap. Not the
+//                                    expected path -- RobotLoop's own
+//                                    per-cycle rebaseline trigger (a
+//                                    2000mm margin below the bound) should
+//                                    prevent this in normal operation;
+//                                    purely observable evidence the
+//                                    defensive fallback engaged.
+//   bits 18-31 -- reserved for future use.
 constexpr uint32_t kFlagOtosPresent = 1u << 0;
 constexpr uint32_t kFlagOtosConnected = 1u << 1;
 constexpr uint32_t kFlagActive = 1u << 2;
 constexpr uint32_t kFlagConnLeft = 1u << 3;
 constexpr uint32_t kFlagConnRight = 1u << 4;
-constexpr uint32_t kFlagAckFresh = 1u << 5;  // Telemetry-internal -- see above
+// bit 5 -- RESERVED (124-008, formerly kFlagAckFresh) -- see above.
 constexpr uint32_t kFlagFaultI2CSafetyNet = 1u << 6;
 constexpr uint32_t kFlagFaultWedgeLatch = 1u << 7;
 constexpr uint32_t kFlagFaultI2CNak = 1u << 8;
@@ -165,6 +181,7 @@ constexpr uint32_t kFlagLinePresent = 1u << 13;
 constexpr uint32_t kFlagColorPresent = 1u << 14;
 constexpr uint32_t kFlagFaultMoveTimeout = 1u << 15;
 constexpr uint32_t kFlagFaultShapingDisabled = 1u << 16;
+constexpr uint32_t kFlagFaultPositionClamped = 1u << 17;
 
 // Primary cadence target: primary period == cycle period (115-005, closes
 // kcycle-kprimaryperiod-mismatch.md -- the frame is emitted every loop
@@ -276,14 +293,13 @@ class Telemetry {
   void setFlag(uint32_t bit, bool active);
   uint32_t flags() const { return flags_; }
 
-  // ack -- pushes BOTH the single "freshest ack" slot (115-005's
-  // ack_corr_/ack_err_ pair, unchanged behavior -- errCode == 0 means OK;
-  // nonzero is the msg::ErrCode value; marks the ack "fresh" so the VERY
-  // NEXT emitPrimary() call sets flags bit 5 (kFlagAckFresh) and then
-  // clears the fresh marker, a one-shot pulse, not a level condition) AND
-  // the bounded ack ring (120, ADDITIVE -- see kAckRingDepth's own comment
-  // below and telemetry.proto's Telemetry.acks doc comment for the
-  // rationale). Every ack() call is one push to both.
+  // ack -- pushes to the bounded ack ring (120, ADDITIVE -- see
+  // kAckRingDepth's own comment below and telemetry.proto's Telemetry.acks
+  // doc comment for the rationale). errCode == 0 means OK; nonzero is the
+  // msg::ErrCode value. 124-008 (issue §B4) deleted the single "freshest
+  // ack" scalar slot (ack_corr_/ack_err_) this method used to also push --
+  // ring membership already means "really acked," so this is now the ONE
+  // thing ack() does.
   void ack(uint32_t corrId, uint32_t errCode);
 
   // Cadence-gated: call once per loop cycle with the current time [ms]
@@ -339,11 +355,7 @@ class Telemetry {
   Frame frame_;
   SecondaryFrame secondaryFrame_;
 
-  uint32_t flags_ = 0;  // every bit EXCEPT kFlagAckFresh -- see setFlag()
-
-  uint32_t ackCorr_ = 0;
-  uint32_t ackErr_ = 0;
-  bool ackPending_ = false;  // true iff ack() was called since the last emitPrimary()
+  uint32_t flags_ = 0;  // every caller-reported bit -- see setFlag()
 
   // Bounded ack ring (120) -- a plain circular buffer of the last
   // kAckRingDepth pushes, oldest-evicted-first, persisting across emit()
@@ -352,10 +364,12 @@ class Telemetry {
   // invariant, extended to this new field). ackRingHead_ indexes the
   // OLDEST valid entry; ackRingCount_ (0..kAckRingDepth) is how many of
   // ackRing_[]'s kAckRingDepth slots currently hold a real, pushed entry.
-  // Reused msg::AckEntry (the generated wire type) directly as storage --
-  // the same "stage the wire-shaped struct itself" pattern Frame already
-  // uses for encLeft/encRight/otos (msg::EncoderReading/msg::OtosReading).
-  msg::AckEntry ackRing_[kAckRingDepth]{};
+  //
+  // 124-008 (issue §B4): storage is now a plain `uint32_t` packed word
+  // (`corr_id<<4 | err`), not msg::AckEntry (DELETED -- Telemetry.acks is
+  // `repeated uint32`, packed, this engine's first real
+  // FieldKind::kRepeatedScalar use) -- pushAckRing() does the packing.
+  uint32_t ackRing_[kAckRingDepth]{};
   uint8_t ackRingHead_ = 0;
   uint8_t ackRingCount_ = 0;
 

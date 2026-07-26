@@ -194,8 +194,11 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
     checked here against the SAME protos/*.proto-generated pb2 descriptors.
     `acks` (field 14, 120's ADDITIVE ack ring) extends this set without
     renumbering anything above it."""
+    # 124-008 (issue §B4): ack_corr/ack_err (fields 5/6) DELETED, reserved
+    # not reused -- the single "freshest ack" scalar slot is gone, ring
+    # membership already means "really acked."
     expected_telemetry_numbers = {
-        "now": 1, "seq": 2, "mode": 3, "flags": 4, "ack_corr": 5, "ack_err": 6,
+        "now": 1, "seq": 2, "mode": 3, "flags": 4,
         "enc_left": 7, "enc_right": 8, "otos": 9, "pose": 10, "twist": 11, "line": 12, "color": 13,
         "acks": 14,
         "cycle_busy": 15, "cycle_period": 16,  # 123-004, ADDITIVE (migrated from TelemetrySecondary)
@@ -203,16 +206,18 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
     actual_telemetry_numbers = {f.name: f.number for f in pb_telemetry.Telemetry.DESCRIPTOR.fields}
     assert actual_telemetry_numbers == expected_telemetry_numbers
 
-    expected_ack_entry_numbers = {"corr_id": 1, "err": 2}
-    actual_ack_entry_numbers = {f.name: f.number for f in pb_telemetry.AckEntry.DESCRIPTOR.fields}
-    assert actual_ack_entry_numbers == expected_ack_entry_numbers
+    # AckEntry -- DELETED (124-008, issue §B4): Telemetry.acks is now
+    # `repeated uint32`, packed (corr_id<<4|err), not `repeated AckEntry`.
+    assert not hasattr(pb_telemetry, "AckEntry"), "AckEntry should be deleted (124-008, issue §B4)"
 
-    expected_encoder_reading_numbers = {"position": 1, "velocity": 2, "time": 3}
+    # 124-008 (issue §B2/§B3): `time` RENAMED `age` (field number unchanged);
+    # `position_epoch` (field 4, ADDITIVE, Decision 6) is new.
+    expected_encoder_reading_numbers = {"position": 1, "velocity": 2, "age": 3, "position_epoch": 4}
     actual_encoder_reading_numbers = {f.name: f.number for f in pb_telemetry.EncoderReading.DESCRIPTOR.fields}
     assert actual_encoder_reading_numbers == expected_encoder_reading_numbers
 
     expected_otos_reading_numbers = {
-        "x": 1, "y": 2, "heading": 3, "v_x": 4, "v_y": 5, "omega": 6, "time": 7,
+        "x": 1, "y": 2, "heading": 3, "v_x": 4, "v_y": 5, "omega": 6, "age": 7,
     }
     actual_otos_reading_numbers = {f.name: f.number for f in pb_telemetry.OtosReading.DESCRIPTOR.fields}
     assert actual_otos_reading_numbers == expected_otos_reading_numbers
@@ -510,7 +515,8 @@ _FLAG_OTOS_CONNECTED = 1 << 1      # status
 _FLAG_ACTIVE = 1 << 2              # status
 _FLAG_CONN_LEFT = 1 << 3           # status
 _FLAG_CONN_RIGHT = 1 << 4          # status
-_FLAG_ACK_FRESH = 1 << 5           # status
+_FLAG_RESERVED_BIT5 = 1 << 5       # 124-008: formerly ack_fresh, now reserved (deleted with the single
+                                    # "freshest ack" scalar slot) -- still a legal wire bit position
 _FLAG_FAULT_I2C_CLEARANCE = 1 << 6   # fault
 _FLAG_FAULT_WEDGE_LATCH = 1 << 7     # fault
 _FLAG_FAULT_I2C_NAK_TIMEOUT = 1 << 8  # fault
@@ -522,16 +528,22 @@ _FLAG_LINE_PRESENT = 1 << 13       # status
 _FLAG_COLOR_PRESENT = 1 << 14      # status
 _FLAG_FAULT_MOVE_TIMEOUT = 1 << 15   # fault
 
+# 124-008 (issue §B3): position/velocity/x/y/heading/v_x/v_y/omega/h are
+# now sint32 (zigzag), raw wire ints -- NOT float any more (the (scale)
+# option is a header-generation-time concept only, invisible to the wire
+# codec/differential test, which compares raw encoded bytes). `_time`
+# fields are RENAMED `_age` (issue §B2, bounded 0-255) -- see
+# EncoderReading.age's own doc comment (telemetry.proto). ack_corr/ack_err
+# are DELETED (issue §B4) -- the single "freshest ack" slot is gone.
 _TELEMETRY_FULL_SHAPE = dict(
     now=123456, mode=2, seq=99,
-    flags=(_FLAG_OTOS_PRESENT | _FLAG_ACTIVE | _FLAG_CONN_LEFT | _FLAG_ACK_FRESH | _FLAG_FAULT_WEDGE_LATCH
+    flags=(_FLAG_OTOS_PRESENT | _FLAG_ACTIVE | _FLAG_CONN_LEFT | _FLAG_FAULT_WEDGE_LATCH
            | _FLAG_EVENT_BOOT_READY | _FLAG_LINE_PRESENT | _FLAG_COLOR_PRESENT),
-    ack_corr=101, ack_err=0,
-    enc_left_position=100.5, enc_left_velocity=-50.0, enc_left_time=123440,
-    enc_right_position=-200.25, enc_right_velocity=60.5, enc_right_time=123440,
-    otos_x=4.5, otos_y=5.5, otos_heading=6.5, otos_v_x=-100.5, otos_v_y=0.5, otos_omega=1.75, otos_time=123400,
-    pose_x=1.5, pose_y=-2.5, pose_h=3.25,
-    twist_v_x=-100.5, twist_v_y=0.5, twist_omega=1.75,
+    enc_left_position=1005, enc_left_velocity=-500, enc_left_age=40, enc_left_position_epoch=0,
+    enc_right_position=-2002, enc_right_velocity=605, enc_right_age=40, enc_right_position_epoch=1,
+    otos_x=45, otos_y=55, otos_heading=65, otos_v_x=-1005, otos_v_y=5, otos_omega=175, otos_age=5,
+    pose_x=15, pose_y=-25, pose_h=325,
+    twist_v_x=-1005, twist_v_y=5, twist_omega=175,
     line=0x04030201, color=0x0A0B0C0D,
     cycle_busy=3200, cycle_period=40100,  # 123-004, ADDITIVE (migrated from TelemetrySecondary)
 )
@@ -542,27 +554,27 @@ def _assert_telemetry_matches_shape(tlm, shape: dict) -> None:
     assert tlm.mode == shape["mode"]
     assert tlm.seq == shape["seq"]
     assert tlm.flags == shape["flags"]
-    assert tlm.ack_corr == shape["ack_corr"]
-    assert tlm.ack_err == shape["ack_err"]
-    assert tlm.enc_left.position == f32(shape["enc_left_position"])
-    assert tlm.enc_left.velocity == f32(shape["enc_left_velocity"])
-    assert tlm.enc_left.time == shape["enc_left_time"]
-    assert tlm.enc_right.position == f32(shape["enc_right_position"])
-    assert tlm.enc_right.velocity == f32(shape["enc_right_velocity"])
-    assert tlm.enc_right.time == shape["enc_right_time"]
-    assert tlm.otos.x == f32(shape["otos_x"])
-    assert tlm.otos.y == f32(shape["otos_y"])
-    assert tlm.otos.heading == f32(shape["otos_heading"])
-    assert tlm.otos.v_x == f32(shape["otos_v_x"])
-    assert tlm.otos.v_y == f32(shape["otos_v_y"])
-    assert tlm.otos.omega == f32(shape["otos_omega"])
-    assert tlm.otos.time == shape["otos_time"]
-    assert tlm.pose.x == f32(shape["pose_x"])
-    assert tlm.pose.y == f32(shape["pose_y"])
-    assert tlm.pose.h == f32(shape["pose_h"])
-    assert tlm.twist.v_x == f32(shape["twist_v_x"])
-    assert tlm.twist.v_y == f32(shape["twist_v_y"])
-    assert tlm.twist.omega == f32(shape["twist_omega"])
+    assert tlm.enc_left.position == shape["enc_left_position"]
+    assert tlm.enc_left.velocity == shape["enc_left_velocity"]
+    assert tlm.enc_left.age == shape["enc_left_age"]
+    assert tlm.enc_left.position_epoch == shape["enc_left_position_epoch"]
+    assert tlm.enc_right.position == shape["enc_right_position"]
+    assert tlm.enc_right.velocity == shape["enc_right_velocity"]
+    assert tlm.enc_right.age == shape["enc_right_age"]
+    assert tlm.enc_right.position_epoch == shape["enc_right_position_epoch"]
+    assert tlm.otos.x == shape["otos_x"]
+    assert tlm.otos.y == shape["otos_y"]
+    assert tlm.otos.heading == shape["otos_heading"]
+    assert tlm.otos.v_x == shape["otos_v_x"]
+    assert tlm.otos.v_y == shape["otos_v_y"]
+    assert tlm.otos.omega == shape["otos_omega"]
+    assert tlm.otos.age == shape["otos_age"]
+    assert tlm.pose.x == shape["pose_x"]
+    assert tlm.pose.y == shape["pose_y"]
+    assert tlm.pose.h == shape["pose_h"]
+    assert tlm.twist.v_x == shape["twist_v_x"]
+    assert tlm.twist.v_y == shape["twist_v_y"]
+    assert tlm.twist.omega == shape["twist_omega"]
     assert tlm.line == shape["line"]
     assert tlm.color == shape["color"]
     assert tlm.cycle_busy == shape["cycle_busy"]
@@ -631,33 +643,38 @@ def test_direction_b_telemetry_all_zero_defaults(harness):
 # ---------------------------------------------------------------------------
 
 
+def _unpack_acks(tlm) -> "list[tuple[int, int]]":
+    """Unpacks tlm.acks (124-008: repeated uint32, corr_id<<4|err) into
+    (corr_id, err) tuples -- the REAL pb2 decoder hands back plain python
+    ints for a packed-scalar repeated field, not AckEntry messages
+    (AckEntry is deleted, issue §B4)."""
+    return [(v >> 4, v & 0xF) for v in tlm.acks]
+
+
 def test_direction_b_telemetry_ack_ring_round_trips(harness):
     """A firmware-encoded Telemetry carrying N ack-ring entries decodes,
-    via the REAL pb2 decoder, to a `tlm.acks` list of exactly N AckEntry
-    messages with the expected corr_id/err values, in push order (oldest
-    first) -- and the pre-existing scalar ack_corr/ack_err/flags stay
-    exactly what was asked for, independent of the ring."""
+    via the REAL pb2 decoder, to a `tlm.acks` list of exactly N packed
+    uint32 words with the expected corr_id/err values, in push order
+    (oldest first)."""
     raw = encode_telemetry(harness, 50, acks=[(11, 0), (12, 2), (13, 0)])
     reply = pb_envelope.ReplyEnvelope.FromString(raw)
     assert reply.corr_id == 50
     assert reply.WhichOneof("body") == "tlm"
-    got = [(e.corr_id, e.err) for e in reply.tlm.acks]
-    assert got == [(11, 0), (12, 2), (13, 0)]
+    assert _unpack_acks(reply.tlm) == [(11, 0), (12, 2), (13, 0)]
 
 
-def test_direction_b_telemetry_ack_ring_full_depth_and_scalar_slot_independent(harness):
-    """A FULL 4-entry ring round-trips, AND the pre-existing scalar
-    ack_corr/ack_err/ack_fresh fields are UNCHANGED/independent of the ring
-    -- the additive-wire-change acceptance criterion, proven against the
-    real protobuf decoder, not just this codec's own encode path."""
-    raw = encode_telemetry(harness, 51, ack_corr=99, ack_err=0, flags=_FLAG_ACK_FRESH,
+def test_direction_b_telemetry_ack_ring_full_depth(harness):
+    """A FULL 4-entry ring round-trips -- the additive-wire-change
+    acceptance criterion, proven against the real protobuf decoder, not
+    just this codec's own encode path. 124-008 deleted the single
+    "freshest ack" scalar slot (ack_corr/ack_err) this scenario used to
+    also check independence against -- ring membership alone now means
+    "really acked.\""""
+    raw = encode_telemetry(harness, 51, flags=_FLAG_OTOS_PRESENT,
                             acks=[(1, 0), (2, 0), (3, 4), (4, 0)])
     reply = pb_envelope.ReplyEnvelope.FromString(raw)
-    assert reply.tlm.ack_corr == 99
-    assert reply.tlm.ack_err == 0
-    assert reply.tlm.flags == _FLAG_ACK_FRESH
-    got = [(e.corr_id, e.err) for e in reply.tlm.acks]
-    assert got == [(1, 0), (2, 0), (3, 4), (4, 0)]
+    assert reply.tlm.flags == _FLAG_OTOS_PRESENT
+    assert _unpack_acks(reply.tlm) == [(1, 0), (2, 0), (3, 4), (4, 0)]
 
 
 def test_direction_b_telemetry_ack_ring_empty_by_default(harness):
@@ -681,7 +698,7 @@ _FLAG_SINGLE_BIT_CASES = [
     (_FLAG_OTOS_PRESENT, "status:otos_present"),
     (_FLAG_ACTIVE, "status:active"),
     (_FLAG_CONN_RIGHT, "status:conn_right"),
-    (_FLAG_ACK_FRESH, "status:ack_fresh"),
+    (_FLAG_RESERVED_BIT5, "reserved:bit5"),
     (_FLAG_LINE_PRESENT, "status:line_present"),
     (_FLAG_FAULT_I2C_CLEARANCE, "fault:i2c_clearance"),
     (_FLAG_FAULT_WEDGE_LATCH, "fault:wedge_latch"),
@@ -707,7 +724,7 @@ def test_direction_b_telemetry_flags_all_groups_combined_round_trip(harness):
     share one uint32 with no aliasing between them."""
     all_bits = (
         _FLAG_OTOS_PRESENT | _FLAG_OTOS_CONNECTED | _FLAG_ACTIVE | _FLAG_CONN_LEFT | _FLAG_CONN_RIGHT
-        | _FLAG_ACK_FRESH | _FLAG_FAULT_I2C_CLEARANCE | _FLAG_FAULT_WEDGE_LATCH | _FLAG_FAULT_I2C_NAK_TIMEOUT
+        | _FLAG_RESERVED_BIT5 | _FLAG_FAULT_I2C_CLEARANCE | _FLAG_FAULT_WEDGE_LATCH | _FLAG_FAULT_I2C_NAK_TIMEOUT
         | _FLAG_FAULT_MALFORMED_FRAME | _FLAG_EVENT_DEADMAN_EXPIRED | _FLAG_EVENT_BOOT_READY
         | _FLAG_EVENT_CONFIG_APPLIED | _FLAG_LINE_PRESENT | _FLAG_COLOR_PRESENT | _FLAG_FAULT_MOVE_TIMEOUT
     )
@@ -718,49 +735,51 @@ def test_direction_b_telemetry_flags_all_groups_combined_round_trip(harness):
 
 
 # ---------------------------------------------------------------------------
-# Reading `time` stamps -- monotonic across frames, and consistent with the
-# frame's own `now` (readings are always sampled at-or-before the frame that
-# reports them; the amendment issue's own Verification requirement).
+# Reading `age` (124-008: RENAMED from the old absolute `time` -- issue
+# §B2). An absolute robot-clock value can't be packed small (grows for the
+# whole session); `age` is the delta a sample's own collect time is BEHIND
+# Telemetry.now, bounded to 255ms. This suite only proves the WIRE FIELD
+# round-trips correctly at its declared bound -- production always emits 0
+# this ticket (genuine per-sample skew is ticket 009's own
+# RobotState-projection work, per the field's own doc comment).
 # ---------------------------------------------------------------------------
 
 
-def test_direction_b_telemetry_reading_times_consistent_with_frame_now(harness):
-    """Every per-source reading's `time` is <= the frame's own `now` (a
-    reading is always collected at-or-before the frame that carries it is
-    assembled) and round-trips exactly -- no truncation/rounding through
-    the wire for a `now`-adjacent uint32 timestamp."""
-    now = 500_000
-    raw = encode_telemetry(
-        harness, 42, now=now,
-        enc_left_time=now - 20, enc_right_time=now - 20, otos_time=now - 5,
-    )
-    reply = pb_envelope.ReplyEnvelope.FromString(raw)
-    assert reply.tlm.now == now
-    assert reply.tlm.enc_left.time == now - 20 <= reply.tlm.now
-    assert reply.tlm.enc_right.time == now - 20 <= reply.tlm.now
-    assert reply.tlm.otos.time == now - 5 <= reply.tlm.now
+def test_direction_b_telemetry_reading_ages_round_trip_at_declared_bound(harness):
+    """Every per-source reading's `age` round-trips exactly across its
+    declared range, including both bounds (0 and 255) and an interior
+    value -- no truncation/rounding through the wire for a small bounded
+    uint32."""
+    for age in (0, 1, 127, 254, 255):
+        raw = encode_telemetry(
+            harness, 42, now=500_000,
+            enc_left_age=age, enc_right_age=age, otos_age=age,
+        )
+        reply = pb_envelope.ReplyEnvelope.FromString(raw)
+        assert reply.tlm.now == 500_000
+        assert reply.tlm.enc_left.age == age
+        assert reply.tlm.enc_right.age == age
+        assert reply.tlm.otos.age == age
 
 
-def test_direction_b_telemetry_reading_times_monotonic_across_frames(harness):
-    """A sequence of frames with strictly increasing `now`/reading times
-    round-trips in the SAME strictly-increasing order -- the wire codec
-    introduces no reordering or clamping of consecutive timestamps."""
-    base = 1_000_000
+def test_direction_b_telemetry_reading_ages_independent_across_frames(harness):
+    """A sequence of frames, each with its own distinct `age` values, each
+    round-trip independently -- the wire codec introduces no cross-frame
+    aliasing or clamping."""
     frames = []
     for i in range(5):
-        now = base + i * 20
         raw = encode_telemetry(
-            harness, 43 + i, now=now,
-            enc_left_time=now, enc_right_time=now, otos_time=now,
+            harness, 43 + i, now=1_000_000 + i * 20,
+            enc_left_age=i, enc_right_age=i + 1, otos_age=i + 2,
         )
         frames.append(pb_envelope.ReplyEnvelope.FromString(raw).tlm)
 
-    nows = [f.now for f in frames]
-    enc_left_times = [f.enc_left.time for f in frames]
-    otos_times = [f.otos.time for f in frames]
-    assert nows == sorted(nows) and len(set(nows)) == len(nows)
-    assert enc_left_times == nows
-    assert otos_times == nows
+    enc_left_ages = [f.enc_left.age for f in frames]
+    enc_right_ages = [f.enc_right.age for f in frames]
+    otos_ages = [f.otos.age for f in frames]
+    assert enc_left_ages == [0, 1, 2, 3, 4]
+    assert enc_right_ages == [1, 2, 3, 4, 5]
+    assert otos_ages == [2, 3, 4, 5, 6]
 
 
 # ---------------------------------------------------------------------------

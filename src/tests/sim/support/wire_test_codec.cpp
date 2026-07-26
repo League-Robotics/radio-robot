@@ -36,35 +36,25 @@ bool readFloat(const uint8_t* buf, size_t len, size_t* pos, float* out) {
   return WireRuntime::decodeFloat(buf, len, pos, out);
 }
 
-// Decodes a flat {field1: fixed32 float, field2: fixed32 float, field3:
-// fixed32 float} message -- the exact shape BOTH Pose2D (x,y,h) and
-// BodyTwist3 (v_x,v_y,omega) use. Unknown fields are skipped (forward
-// compatible); any recognized field arriving with the wrong wire type is
-// treated as a hard decode failure (this shape has no float field that is
-// legitimately anything but fixed32).
-bool decodeThreeFloats(const uint8_t* buf, size_t len, float* a, float* b, float* c) {
-  size_t pos = 0;
-  while (pos < len) {
-    uint32_t fieldNumber = 0;
-    WireType wireType = WireType::kVarint;
-    if (!WireRuntime::decodeTag(buf, len, &pos, &fieldNumber, &wireType)) return false;
-    if ((fieldNumber == 1 || fieldNumber == 2 || fieldNumber == 3) && wireType == WireType::kFixed32) {
-      float v = 0.0f;
-      if (!readFloat(buf, len, &pos, &v)) return false;
-      if (fieldNumber == 1) *a = v;
-      else if (fieldNumber == 2) *b = v;
-      else *c = v;
-      continue;
-    }
-    if (!WireRuntime::skipField(buf, len, &pos, wireType)) return false;
-  }
+// readSint32 -- 124-008: reads a zigzag-encoded varint (ScalarType::kSint32,
+// wire.cpp) into a raw int32_t. The GENERATED pack*()/unpack*() methods on
+// the destination struct (options.proto's (scale) doc comment) turn this
+// raw value into/out of a real float -- this helper stops at the raw int,
+// same "decode the wire shape, let the generated method do the scale
+// arithmetic" split production code (robot_loop.cpp) uses.
+bool readSint32(const uint8_t* buf, size_t len, size_t* pos, int32_t* out) {
+  uint64_t v = 0;
+  if (!WireRuntime::decodeVarint(buf, len, pos, &v)) return false;
+  *out = WireRuntime::zigzagDecode32(static_cast<uint32_t>(v));
   return true;
 }
 
 // Decodes a msg::EncoderReading payload (Telemetry.enc_left/enc_right's own
 // nested bytes) -- field numbers/wire types mirror src/firm/messages/wire.cpp
 // kFields_EncoderReading exactly. Recognized-field/wrong-wire-type is a hard
-// failure (same policy as decodeThreeFloats()); unrecognized fields skipped.
+// failure; unrecognized fields skipped. 124-008: position/velocity are now
+// zigzag sint32 (issue §B3); time is renamed age (field 3); position_epoch
+// is new (field 4).
 bool decodeEncoderReading(const uint8_t* buf, size_t len, msg::EncoderReading* out) {
   size_t pos = 0;
   while (pos < len) {
@@ -73,13 +63,16 @@ bool decodeEncoderReading(const uint8_t* buf, size_t len, msg::EncoderReading* o
     if (!WireRuntime::decodeTag(buf, len, &pos, &fieldNumber, &wireType)) return false;
     switch (fieldNumber) {
       case 1:
-        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->position)) return false;
+        if (wireType != WireType::kVarint || !readSint32(buf, len, &pos, &out->position)) return false;
         break;
       case 2:
-        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->velocity)) return false;
+        if (wireType != WireType::kVarint || !readSint32(buf, len, &pos, &out->velocity)) return false;
         break;
       case 3:
-        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->time)) return false;
+        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->age)) return false;
+        break;
+      case 4:
+        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->position_epoch)) return false;
         break;
       default:
         if (!WireRuntime::skipField(buf, len, &pos, wireType)) return false;
@@ -91,7 +84,8 @@ bool decodeEncoderReading(const uint8_t* buf, size_t len, msg::EncoderReading* o
 
 // Decodes a msg::OtosReading payload (Telemetry.otos's own nested bytes) --
 // field numbers/wire types mirror src/firm/messages/wire.cpp
-// kFields_OtosReading exactly.
+// kFields_OtosReading exactly. 124-008: x/y/heading/v_x/v_y/omega are now
+// zigzag sint32 (issue §B3); time is renamed age (field 7).
 bool decodeOtosReading(const uint8_t* buf, size_t len, msg::OtosReading* out) {
   size_t pos = 0;
   while (pos < len) {
@@ -100,30 +94,73 @@ bool decodeOtosReading(const uint8_t* buf, size_t len, msg::OtosReading* out) {
     if (!WireRuntime::decodeTag(buf, len, &pos, &fieldNumber, &wireType)) return false;
     switch (fieldNumber) {
       case 1:
-        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->x)) return false;
+        if (wireType != WireType::kVarint || !readSint32(buf, len, &pos, &out->x)) return false;
         break;
       case 2:
-        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->y)) return false;
+        if (wireType != WireType::kVarint || !readSint32(buf, len, &pos, &out->y)) return false;
         break;
       case 3:
-        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->heading)) return false;
+        if (wireType != WireType::kVarint || !readSint32(buf, len, &pos, &out->heading)) return false;
         break;
       case 4:
-        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->v_x)) return false;
+        if (wireType != WireType::kVarint || !readSint32(buf, len, &pos, &out->v_x)) return false;
         break;
       case 5:
-        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->v_y)) return false;
+        if (wireType != WireType::kVarint || !readSint32(buf, len, &pos, &out->v_y)) return false;
         break;
       case 6:
-        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->omega)) return false;
+        if (wireType != WireType::kVarint || !readSint32(buf, len, &pos, &out->omega)) return false;
         break;
       case 7:
-        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->time)) return false;
+        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->age)) return false;
         break;
       default:
         if (!WireRuntime::skipField(buf, len, &pos, wireType)) return false;
         break;
     }
+  }
+  return true;
+}
+
+// Decodes a msg::Pose2D payload -- field numbers mirror kFields_Pose2D.
+// 124-008: x/y/h are now zigzag sint32 (issue §B3).
+bool decodePose2D(const uint8_t* buf, size_t len, msg::Pose2D* out) {
+  size_t pos = 0;
+  while (pos < len) {
+    uint32_t fieldNumber = 0;
+    WireType wireType = WireType::kVarint;
+    if (!WireRuntime::decodeTag(buf, len, &pos, &fieldNumber, &wireType)) return false;
+    if (wireType == WireType::kVarint && (fieldNumber == 1 || fieldNumber == 2 || fieldNumber == 3)) {
+      int32_t v = 0;
+      if (!readSint32(buf, len, &pos, &v)) return false;
+      if (fieldNumber == 1) out->x = v;
+      else if (fieldNumber == 2) out->y = v;
+      else out->h = v;
+      continue;
+    }
+    if (!WireRuntime::skipField(buf, len, &pos, wireType)) return false;
+  }
+  return true;
+}
+
+// Decodes a msg::BodyTwist3 payload -- field numbers mirror
+// kFields_BodyTwist3. 124-008: v_x/v_y/omega are now zigzag sint32 (issue
+// §B3).
+bool decodeBodyTwist3(const uint8_t* buf, size_t len, msg::BodyTwist3* out) {
+  size_t pos = 0;
+  while (pos < len) {
+    uint32_t fieldNumber = 0;
+    WireType wireType = WireType::kVarint;
+    if (!WireRuntime::decodeTag(buf, len, &pos, &fieldNumber, &wireType)) return false;
+    if (wireType == WireType::kVarint && (fieldNumber == 1 || fieldNumber == 2 || fieldNumber == 3)) {
+      int32_t v = 0;
+      if (!readSint32(buf, len, &pos, &v)) return false;
+      if (fieldNumber == 1) out->v_x = v;
+      else if (fieldNumber == 2) out->v_y = v;
+      else out->omega = v;
+      continue;
+    }
+    if (!WireRuntime::skipField(buf, len, &pos, wireType)) return false;
   }
   return true;
 }
@@ -159,12 +196,10 @@ bool decodeTelemetryMessage(const uint8_t* buf, size_t len, msg::Telemetry* out)
       case 4:
         if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->flags)) return false;
         break;
-      case 5:
-        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->ack_corr)) return false;
-        break;
-      case 6:
-        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->ack_err)) return false;
-        break;
+      // fields 5/6 (ack_corr/ack_err) -- RESERVED, not reused (124-008,
+      // issue §B4: the single "freshest ack" scalar slot is deleted, ring
+      // membership in acks below already means "really acked"). Any
+      // incoming instance of either falls through to skipField() below.
       case 7: {  // enc_left (EncoderReading)
         if (wireType != WireType::kLengthDelimited) return false;
         size_t payloadLen = 0;
@@ -193,7 +228,7 @@ bool decodeTelemetryMessage(const uint8_t* buf, size_t len, msg::Telemetry* out)
         if (wireType != WireType::kLengthDelimited) return false;
         size_t payloadLen = 0;
         if (!WireRuntime::beginLengthDelimited(buf, len, &pos, 0, &payloadLen)) return false;
-        if (!decodeThreeFloats(buf + pos, payloadLen, &out->pose.x, &out->pose.y, &out->pose.h)) return false;
+        if (!decodePose2D(buf + pos, payloadLen, &out->pose)) return false;
         pos += payloadLen;
         break;
       }
@@ -201,9 +236,7 @@ bool decodeTelemetryMessage(const uint8_t* buf, size_t len, msg::Telemetry* out)
         if (wireType != WireType::kLengthDelimited) return false;
         size_t payloadLen = 0;
         if (!WireRuntime::beginLengthDelimited(buf, len, &pos, 0, &payloadLen)) return false;
-        if (!decodeThreeFloats(buf + pos, payloadLen, &out->twist.v_x, &out->twist.v_y, &out->twist.omega)) {
-          return false;
-        }
+        if (!decodeBodyTwist3(buf + pos, payloadLen, &out->twist)) return false;
         pos += payloadLen;
         break;
       }
@@ -213,6 +246,18 @@ bool decodeTelemetryMessage(const uint8_t* buf, size_t len, msg::Telemetry* out)
       case 13:
         if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->color)) return false;
         break;
+      case 14: {  // acks (124-008: repeated uint32, PACKED -- corr_id<<4|err)
+        if (wireType != WireType::kLengthDelimited) return false;
+        size_t payloadLen = 0;
+        if (!WireRuntime::beginLengthDelimited(buf, len, &pos, 0, &payloadLen)) return false;
+        size_t outCount = 0;
+        if (!WireRuntime::decodePackedVarint(buf + pos, payloadLen, out->acks_, /*maxCount=*/4, &outCount)) {
+          return false;
+        }
+        out->acks_count = static_cast<uint8_t>(outCount);
+        pos += payloadLen;
+        break;
+      }
       case 15:  // cycle_busy (123-004, migrated from TelemetrySecondary's field 11)
         if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->cycle_busy)) return false;
         break;

@@ -235,9 +235,12 @@ void scenarioEncoderDropoutStaysSaneUnderModerateLoss() {
     if (f.telemetry.flags & App::kFlagFaultWedgeLatch) sawWedgeLatch = true;
     // EncoderReading is unconditionally present every frame (115-005 frame
     // v2 -- no has_vel presence flag any more), so every frame's
-    // enc_left.velocity is real data, not a filtered subset.
-    if (std::fabs(f.telemetry.enc_left.velocity) < 50.0f) sawStarvedVelocity = true;
-    if (f.telemetry.enc_left.velocity > 300.0f) sawHealthyVelocity = true;
+    // enc_left.velocity is real data, not a filtered subset. 124-008
+    // (issue §B3): velocity is a raw sint32 wire int (0.1mm/s scale) --
+    // unpackVelocity() is the GENERATED conversion.
+    const float velLeft = msg::EncoderReading::unpackVelocity(f.telemetry.enc_left.velocity);
+    if (std::fabs(velLeft) < 50.0f) sawStarvedVelocity = true;
+    if (velLeft > 300.0f) sawHealthyVelocity = true;
   }
   checkTrue(!sawWedgeLatch, "no false kFlagFaultWedgeLatch across sustained moderate dropout");
   checkTrue(!sawStarvedVelocity, "velLeft never starved to ~0 by the held/stale reads");

@@ -220,13 +220,21 @@ _MOVE_MIN_TIMEOUT = 2000.0    # [ms]
 # fire-and-poll on the ENQUEUE ack only, never reporting the Move's own
 # completion). docs/protocol-v4.md sec 7.2: the completion ack echoes
 # `Move.id`, NOT the envelope's own `corr_id` -- a SEPARATE key riding the
-# SAME single ack slot. `SerialConnection._corr_counter` (io/serial_conn.py)
+# SAME ack ring. `SerialConnection._corr_counter` (io/serial_conn.py)
 # assigns small sequential envelope corr_ids (starts at 0, +1 per envelope
 # sent this connection) -- picking Move.id values from a disjoint, far
-# higher range means a completion ack (`ack_corr == move_id`) can never be
-# confused with an unrelated enqueue ack that happens to share the same
-# small integer. No real session sends anywhere near 2**30 envelopes.
-_MOVE_ID_BASE = 1 << 30
+# higher range means a completion ack can never be confused with an
+# unrelated enqueue ack that happens to share the same small integer.
+#
+# 124-008 (issue Sec B4) packs every ring entry as a single wire uint32,
+# `(corr_id << 4) | err` -- corr_id/Move.id must fit in the top 28 bits
+# (0 .. 2**28-1 == 268,435,455) or the shift silently truncates high-order
+# bits on the wire, corrupting correlation. 2**30 (the old base) already
+# overflows that budget on the very first Move a GUI session sends. 2**24
+# keeps the same "disjoint from small corr_ids" property (still dwarfs any
+# realistic per-connection corr_id count) while leaving 4 clear bits of
+# headroom under the 28-bit packed field before wraparound.
+_MOVE_ID_BASE = 1 << 24
 _move_id_counter = _MOVE_ID_BASE
 _move_id_lock = threading.Lock()
 
@@ -943,7 +951,11 @@ class _HardwareTransport(Transport):
                         frame = TLMFrame.from_pb2(reply.tlm)
                         self._last_tlm = frame
                         self._deliver_tlm(frame)
-                        if frame.ack_fresh and frame.ack_corr == move_id:
+                        # 124-008 (issue §B4): the single "freshest ack"
+                        # scalar slot (ack_fresh/ack_corr) is deleted --
+                        # scan the bounded ack ring instead. Ring membership
+                        # alone means "really acked," no freshness gate.
+                        if any(entry.corr_id == move_id for entry in frame.acks):
                             matched = frame
                     if matched is not None:
                         elapsed = time.monotonic() - start

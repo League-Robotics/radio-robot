@@ -50,6 +50,15 @@
 
 namespace {
 
+// packAck() -- mirrors telemetry.cpp's own pushAckRing() packed-word format
+// EXACTLY (124-008, issue §B4): corr_id<<4 | err. Used here only to build
+// independent EXPECTED msg::Telemetry.acks_[] entries -- production code's
+// own kAckErrBits/kAckErrMask live in telemetry.cpp (internal linkage), not
+// reachable from this TU, so this is a second, deliberately-independent
+// implementation of the same packing rule (same spirit as this file's own
+// armor()/armorReply() re-implementing the production encode path).
+constexpr uint32_t packAck(uint32_t corrId, uint32_t err) { return (corrId << 4) | err; }
+
 // --- Hand-rolled assertion plumbing (see app_comms_harness.cpp) ----------
 
 int g_failureCount = 0;
@@ -169,13 +178,23 @@ void scenarioPrimaryFrameAssemblyMatchesIndependentEncode() {
 
   App::Telemetry::Frame frame;
   frame.mode = msg::DriveMode::VELOCITY;
-  frame.encLeft = {12.5f, 100.0f, 111};
-  frame.encRight = {-3.25f, -50.0f, 111};
-  frame.otos = {1.1f, 2.2f, 0.6f, 10.0f, -5.0f, 0.2f, 120};
+  // 124-008: EncoderReading/OtosReading/Pose2D/BodyTwist3 fields are now
+  // sint32+scale on the wire (issue §B3) -- pack*() is the GENERATED
+  // conversion (options.proto's (scale) doc comment). age/position_epoch
+  // are arbitrary in-bound test values, not physically meaningful here.
+  frame.encLeft = {msg::EncoderReading::packPosition(12.5f), msg::EncoderReading::packVelocity(100.0f),
+                    /*age=*/111, /*position_epoch=*/0};
+  frame.encRight = {msg::EncoderReading::packPosition(-3.25f), msg::EncoderReading::packVelocity(-50.0f),
+                     /*age=*/111, /*position_epoch=*/0};
+  frame.otos = {msg::OtosReading::packX(1.1f),   msg::OtosReading::packY(2.2f),
+                msg::OtosReading::packHeading(0.6f), msg::OtosReading::packVX(10.0f),
+                msg::OtosReading::packVY(-5.0f), msg::OtosReading::packOmega(0.2f),
+                /*age=*/120};
   frame.otosPresent = true;
   frame.otosConnected = true;
-  frame.pose = {1.0f, 2.0f, 0.5f};
-  frame.twist = {150.0f, 0.0f, 0.75f};
+  frame.pose = {msg::Pose2D::packX(1.0f), msg::Pose2D::packY(2.0f), msg::Pose2D::packH(0.5f)};
+  frame.twist = {msg::BodyTwist3::packVX(150.0f), msg::BodyTwist3::packVY(0.0f),
+                 msg::BodyTwist3::packOmega(0.75f)};
   frame.line = 0x04030201u;
   frame.linePresent = true;
   frame.color = 0x0A090807u;
@@ -212,20 +231,29 @@ void scenarioPrimaryFrameAssemblyMatchesIndependentEncode() {
   expected.now = 1234;
   expected.seq = 0;
   expected.mode = msg::DriveMode::VELOCITY;
+  // 124-008 (issue §B4): kFlagAckFresh (bit 5) is deleted with the single
+  // "freshest ack" scalar slot -- ring membership in acks_ below already
+  // means "really acked."
   expected.flags = App::kFlagOtosPresent | App::kFlagOtosConnected | App::kFlagActive |
-                    App::kFlagConnLeft | App::kFlagConnRight | App::kFlagAckFresh |
+                    App::kFlagConnLeft | App::kFlagConnRight |
                     App::kFlagLinePresent | App::kFlagColorPresent;
-  expected.ack_corr = 7;
-  expected.ack_err = 0;
-  expected.enc_left = {12.5f, 100.0f, 111};
-  expected.enc_right = {-3.25f, -50.0f, 111};
-  expected.otos = {1.1f, 2.2f, 0.6f, 10.0f, -5.0f, 0.2f, 120};
-  expected.pose = {1.0f, 2.0f, 0.5f};
-  expected.twist = {150.0f, 0.0f, 0.75f};
+  expected.enc_left = {msg::EncoderReading::packPosition(12.5f), msg::EncoderReading::packVelocity(100.0f),
+                        /*age=*/111, /*position_epoch=*/0};
+  expected.enc_right = {msg::EncoderReading::packPosition(-3.25f), msg::EncoderReading::packVelocity(-50.0f),
+                         /*age=*/111, /*position_epoch=*/0};
+  expected.otos = {msg::OtosReading::packX(1.1f),   msg::OtosReading::packY(2.2f),
+                    msg::OtosReading::packHeading(0.6f), msg::OtosReading::packVX(10.0f),
+                    msg::OtosReading::packVY(-5.0f), msg::OtosReading::packOmega(0.2f),
+                    /*age=*/120};
+  expected.pose = {msg::Pose2D::packX(1.0f), msg::Pose2D::packY(2.0f), msg::Pose2D::packH(0.5f)};
+  expected.twist = {msg::BodyTwist3::packVX(150.0f), msg::BodyTwist3::packVY(0.0f),
+                     msg::BodyTwist3::packOmega(0.75f)};
   expected.line = 0x04030201u;
   expected.color = 0x0A090807u;
+  // 124-008 (issue §B4): acks_ is now packed uint32 (corr_id<<4|err), not
+  // msg::AckEntry (deleted).
   expected.acks_count = 1;
-  expected.acks_[0] = {7, 0};
+  expected.acks_[0] = packAck(7, 0);
 
   msg::ReplyEnvelope env;
   env.corr_id = 0;
@@ -243,19 +271,17 @@ void scenarioPrimaryFrameAssemblyMatchesIndependentEncode() {
 }
 
 // ===========================================================================
-// 2. Single "freshest ack" slot (115-005, UNCHANGED by 120): a SECOND ack()
-//    call before the next emit() overwrites the first -- only the LATEST
-//    corr/err survives there (ack-depth-1 tradeoff, stakeholder-accepted).
-//    ack_fresh (flags bit 5) is a ONE-SHOT pulse: set on the frame right
-//    after an ack() call, cleared again on the FOLLOWING frame if no new
-//    ack() arrived in between. The bounded ack ring (120, ADDITIVE) does
-//    NOT overwrite on the same collision -- BOTH pushes land in `acks`
-//    (oldest first) and persist across both frames below, unlike the
-//    single slot it rides alongside.
+// 2. Ack ring (124-008, issue §B4): the single "freshest ack" scalar slot
+//    (ack_corr/ack_err, flags bit 5 kFlagAckFresh) is DELETED -- ring
+//    membership in `acks` already means "really acked," so two ack() calls
+//    before the next emit() land BOTH entries in the ring (oldest first),
+//    and the ring persists unchanged (no new push) across a later emit()
+//    that follows.
 // ===========================================================================
 
-void scenarioSingleAckSlotOverwritesAndAckFreshIsOneShot() {
-  beginScenario("ack(): single slot overwrites on a same-period collision; ack ring keeps both; ack_fresh is a one-shot pulse");
+void scenarioAckRingCarriesEveryPushAndPersistsAcrossEmits() {
+  beginScenario("ack(): every push lands in the ring (no single-slot overwrite); ring persists across an emit() "
+                "with no new ack()");
 
   FakeTransport serialFake;
   FakeTransport radioFake;
@@ -263,28 +289,23 @@ void scenarioSingleAckSlotOverwritesAndAckFreshIsOneShot() {
   App::Comms comms(serialFake, radioFake, banner);
   App::Telemetry telemetry(comms, serialFake, radioFake);
 
-  // Two acks land before the next emit() -- only the second (corr=4) is
-  // visible; corr=1's own ack is silently overwritten (the documented
-  // tradeoff: wait_for_ack timeout+retry covers this on the host side).
+  // Two acks land before the next emit() -- BOTH survive in the ring (no
+  // single-slot overwrite any more, 124-008).
   telemetry.ack(1, 0);
   telemetry.ack(4, static_cast<uint32_t>(msg::ErrCode::ERR_BADARG));
 
-  telemetry.emit(0);   // frame #1 -- carries corr=4's ack, ack_fresh set
-  telemetry.emit(40);  // frame #2 -- no ack() call in between, ack_fresh clears
+  telemetry.emit(0);   // frame #1 -- carries both acks in the ring
+  telemetry.emit(40);  // frame #2 -- no ack() call in between, ring unchanged
 
   checkU64Eq(serialFake.sent().size(), 2, "two successive primary frames were sent");
 
   msg::Telemetry expectedFirst;
   expectedFirst.now = 0;
   expectedFirst.seq = 0;
-  expectedFirst.flags = App::kFlagAckFresh;
-  expectedFirst.ack_corr = 4;
-  expectedFirst.ack_err = static_cast<uint32_t>(msg::ErrCode::ERR_BADARG);
-  // Ring (120): BOTH pushes survive, oldest (corr=1) first -- unlike the
-  // single slot above, neither evicts the other at depth 2 of 4.
+  // Ring (120): BOTH pushes survive, oldest (corr=1) first.
   expectedFirst.acks_count = 2;
-  expectedFirst.acks_[0] = {1, 0};
-  expectedFirst.acks_[1] = {4, static_cast<uint32_t>(msg::ErrCode::ERR_BADARG)};
+  expectedFirst.acks_[0] = packAck(1, 0);
+  expectedFirst.acks_[1] = packAck(4, static_cast<uint32_t>(msg::ErrCode::ERR_BADARG));
 
   msg::ReplyEnvelope envFirst;
   envFirst.corr_id = 0;
@@ -295,21 +316,18 @@ void scenarioSingleAckSlotOverwritesAndAckFreshIsOneShot() {
 
   if (!serialFake.sent().empty()) {
     checkStrEq(serialFake.sent()[0], expectedFirstLine,
-               "first frame's single slot carries only the LATEST ack (corr=4, corr=1 overwritten) -- "
-               "but its ack RING carries BOTH");
+               "first frame's ring carries BOTH pushes, oldest first");
   }
 
   msg::Telemetry expectedSecond;
   expectedSecond.now = 40;
   expectedSecond.seq = 1;
-  expectedSecond.ack_corr = 4;  // ack_corr/ack_err values persist -- only ack_fresh clears
-  expectedSecond.ack_err = static_cast<uint32_t>(msg::ErrCode::ERR_BADARG);
   // Ring (120): UNCHANGED from frame #1 -- no new ack() call landed, and
   // the ring (like every other Frame field) persists its last-staged
   // snapshot across an emit() that doesn't touch it, rather than clearing.
   expectedSecond.acks_count = 2;
-  expectedSecond.acks_[0] = {1, 0};
-  expectedSecond.acks_[1] = {4, static_cast<uint32_t>(msg::ErrCode::ERR_BADARG)};
+  expectedSecond.acks_[0] = packAck(1, 0);
+  expectedSecond.acks_[1] = packAck(4, static_cast<uint32_t>(msg::ErrCode::ERR_BADARG));
 
   msg::ReplyEnvelope envSecond;
   envSecond.corr_id = 0;
@@ -319,8 +337,8 @@ void scenarioSingleAckSlotOverwritesAndAckFreshIsOneShot() {
 
   if (serialFake.sent().size() == 2) {
     checkStrEq(serialFake.sent()[1], expectedSecondLine,
-               "second frame clears ack_fresh -- no new ack() call landed since the first frame -- "
-               "but the ack ring still carries both prior pushes, unchanged");
+               "second frame -- no new ack() call landed since the first frame -- the ack ring still carries "
+               "both prior pushes, unchanged");
   }
 }
 
@@ -518,47 +536,53 @@ void scenarioSecondaryNeverCoincidesWithPrimaryAndDoesNotDelayIt() {
 }
 
 // ===========================================================================
-// 5. Frame-size: a fully-populated primary frame encodes at or under the
-//    rewritten frame's own recorded worst case (telemetry.proto's header
-//    comment: 144 B standalone / 153 B as a ReplyEnvelope.tlm arm at
-//    sprint 115 ticket 003 -- smaller than the pre-115 179 B while
-//    carrying strictly more signal). 120's ack ring (a full 4-entry ring,
-//    each entry at ITS OWN declared worst case -- corr_id up to 65535,
-//    err up to 7) pushes the true worst case to 179 B standalone / 185 B
-//    as a ReplyEnvelope.tlm arm (wire.h's kReplyEnvelopeMaxEncodedSize,
-//    checked against the 186-byte envelope budget by that file's own
-//    static_assert) -- exercised here at FULL ring depth, not just one
-//    entry, specifically because this is the first schema in this tree to
-//    ever populate a `kRepeatedMessage`-kind field (every other repeated
-//    field this codebase declares is a repeated SCALAR).
+// 5. Frame-size: a primary frame populated at EVERY field's own declared
+//    (max)/(abs_max) bound (124-008, issue §B5's size-accounting table)
+//    fits the regenerated worst case, kReplyEnvelopeMaxEncodedSize (<=130B,
+//    this ticket's own AC #8). Several bounds this ticket adds (now/seq/
+//    the packed acks word/ReplyEnvelope.corr_id) are SIZING bounds, not
+//    hard wire limits -- see telemetry.proto's/envelope.proto's own doc
+//    comments -- so this scenario, unlike a real robot's own output, uses
+//    the DECLARED bound itself (not an arbitrary large value) to prove the
+//    budget the generator computed is actually achievable, not merely
+//    asserted. line/color are genuinely unbounded (any byte per channel
+//    can be 0xFF) and use the full uint32 range.
 // ===========================================================================
 
 void scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase() {
-  beginScenario("a fully-populated primary frame (full ack ring included) fits the rewritten frame's recorded 185 B worst case");
+  beginScenario("a primary frame at every field's own declared bound fits the regenerated <=130B worst case");
 
   msg::Telemetry tlm;
-  tlm.now = 0xFFFFFFFFu;
-  tlm.seq = 0xFFFFFFFFu;
+  tlm.now = 2097151u;   // (max) -- sizing bound, not a hard wire limit
+  tlm.seq = 127u;       // (max) -- sizing bound, not a hard wire limit
   tlm.mode = msg::DriveMode::GO_TO;
-  tlm.flags = 0xFFFFu;  // every declared bit (0-15) set -- max() = 65535
-  tlm.ack_corr = 0xFFFFu;
-  tlm.ack_err = 7u;
-  tlm.enc_left = {-1234.5f, -500.0f, 0xFFFFFFFFu};
-  tlm.enc_right = {6789.25f, 500.0f, 0xFFFFFFFFu};
-  tlm.otos = {1234.5f, -6789.25f, 3.14159f, -500.0f, 500.0f, -3.14159f, 0xFFFFFFFFu};
-  tlm.pose = {1234.5f, -6789.25f, 3.14159f};
-  tlm.twist = {150.0f, -0.5f, 0.75f};
+  tlm.flags = 262143u;  // (max) -- covers bit 16 (kFlagFaultShapingDisabled) and bit 17 (kFlagFaultPositionClamped)
+  // EncoderReading/OtosReading/Pose2D/BodyTwist3: raw wire ints at their
+  // own declared (abs_max) -- the RUNTIME engine's validateBounds()/
+  // worst-case-size calculator both operate on the raw sint32 value, never
+  // the scaled float (scale is a header-generation-time concept only --
+  // options.proto's own (scale) doc comment).
+  tlm.enc_left = {/*position=*/-32000, /*velocity=*/4000, /*age=*/255, /*position_epoch=*/127};
+  tlm.enc_right = {/*position=*/32000, /*velocity=*/-4000, /*age=*/255, /*position_epoch=*/127};
+  tlm.otos = {/*x=*/32000, /*y=*/-32000, /*heading=*/3142, /*v_x=*/-4000, /*v_y=*/4000, /*omega=*/-1000,
+              /*age=*/255};
+  tlm.pose = {/*x=*/-32000, /*y=*/32000, /*h=*/-3142};
+  tlm.twist = {/*v_x=*/4000, /*v_y=*/-4000, /*omega=*/1000};
   tlm.line = 0xFFFFFFFFu;
   tlm.color = 0xFFFFFFFFu;
-  // Full ring (120) at its own declared worst case per entry -- proves the
-  // TRUE worst case (not just one entry) still fits the budget below.
+  // Full ring (120) at its own declared worst case per entry (124-008:
+  // packed uint32, (max)=1048575 == (65535<<4)|15) -- proves the TRUE
+  // worst case (not just one entry) still fits the budget below. This is
+  // the engine's first real FieldKind::kRepeatedScalar use.
   tlm.acks_count = App::kAckRingDepth;
   for (uint8_t e = 0; e < App::kAckRingDepth; ++e) {
-    tlm.acks_[e] = {0xFFFFu, 7u};
+    tlm.acks_[e] = packAck(65535u, 15u);
   }
+  tlm.cycle_busy = 200000u;
+  tlm.cycle_period = 200000u;
 
   msg::ReplyEnvelope env;
-  env.corr_id = 0xFFFFFFFFu;
+  env.corr_id = 65535u;  // ReplyEnvelope.corr_id's own declared (max), 124-008
   env.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
   env.body.tlm = tlm;
 
@@ -567,6 +591,8 @@ void scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase() {
   checkTrue(n > 0, "encode() succeeds for a fully-populated frame");
   checkTrue(n <= msg::wire::kReplyEnvelopeMaxEncodedSize,
             "encoded size fits the rewritten frame's recorded worst case for ReplyEnvelope{tlm}");
+  checkTrue(msg::wire::kReplyEnvelopeMaxEncodedSize <= 130,
+            "this ticket's own AC #8: kReplyEnvelopeMaxEncodedSize <= 130B");
   std::printf("  measured: fully-populated primary frame encodes to %u bytes (worst case %u)\n",
               static_cast<unsigned>(n), static_cast<unsigned>(msg::wire::kReplyEnvelopeMaxEncodedSize));
 }
@@ -781,14 +807,11 @@ void scenarioAckRingEvictsOldestPastDepthAndPreservesOrder() {
   msg::Telemetry expected;
   expected.now = 0;
   expected.seq = 0;
-  expected.flags = App::kFlagAckFresh;
-  expected.ack_corr = 5;  // single "freshest ack" slot still tracks only the latest, unaffected by the ring
-  expected.ack_err = 0;
   expected.acks_count = 4;
-  expected.acks_[0] = {2, 0};
-  expected.acks_[1] = {3, 0};
-  expected.acks_[2] = {4, 0};
-  expected.acks_[3] = {5, 0};
+  expected.acks_[0] = packAck(2, 0);
+  expected.acks_[1] = packAck(3, 0);
+  expected.acks_[2] = packAck(4, 0);
+  expected.acks_[3] = packAck(5, 0);
 
   msg::ReplyEnvelope env;
   env.corr_id = 0;
@@ -833,12 +856,9 @@ void scenarioAckRingPersistsAcrossEmitsBelowFullDepth() {
     msg::Telemetry expected;
     expected.now = (f == 0) ? 0u : 100u;
     expected.seq = static_cast<uint32_t>(f);
-    if (f == 0) expected.flags = App::kFlagAckFresh;
-    expected.ack_corr = 20;
-    expected.ack_err = static_cast<uint32_t>(msg::ErrCode::ERR_FULL);
     expected.acks_count = 2;
-    expected.acks_[0] = {10, 0};
-    expected.acks_[1] = {20, static_cast<uint32_t>(msg::ErrCode::ERR_FULL)};
+    expected.acks_[0] = packAck(10, 0);
+    expected.acks_[1] = packAck(20, static_cast<uint32_t>(msg::ErrCode::ERR_FULL));
 
     msg::ReplyEnvelope env;
     env.corr_id = 0;
@@ -857,7 +877,7 @@ void scenarioAckRingPersistsAcrossEmitsBelowFullDepth() {
 
 int main() {
   scenarioPrimaryFrameAssemblyMatchesIndependentEncode();
-  scenarioSingleAckSlotOverwritesAndAckFreshIsOneShot();
+  scenarioAckRingCarriesEveryPushAndPersistsAcrossEmits();
   scenarioFlagsReflectRealCallSiteValues();
   scenarioSecondaryNeverCoincidesWithPrimaryAndDoesNotDelayIt();
   scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase();

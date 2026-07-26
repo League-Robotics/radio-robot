@@ -92,6 +92,34 @@ import "common.proto";
 // restored the headroom 122-003 was blocked on). Nothing above is
 // renumbered or removed. See wire.h's own regenerated worst-case size
 // comment for the current number (re-measured, not hand-updated here).
+//
+// 124-008 (packed telemetry field encoding, issue protocol-v5-...md §B3-B6):
+// EncoderReading.position/velocity, OtosReading.x/y/heading/v_x/v_y/omega,
+// and common.proto's Pose2D.x/y/h + BodyTwist3.v_x/v_y/omega all switch
+// from `float` to `sint32` + a GENERATED `(scale)` option (options.proto)
+// -- zigzag-encoded, so a negative value costs the varint width of its
+// magnitude, not a sign-extended 10B. `EncoderReading.time`/
+// `OtosReading.time` RENAMED to `age` (an absolute robot-clock value could
+// never be packed small; `age` is the delta behind Telemetry.now, bounded
+// to 255ms -- issue §B2's own field). `AckEntry` is DELETED --
+// `Telemetry.acks` is now `repeated uint32` (packed `corr_id<<4|err`, this
+// engine's first real packed-repeated-scalar use), and the single
+// "freshest ack" slot (`ack_corr`/`ack_err`, fields 5/6, RESERVED not
+// reused) is deleted with it -- ring membership already means "really
+// acked." `flags`' `(max)` widened to cover `kFlagFaultShapingDisabled`
+// (bit 16, already live, previously an unbounded-on-decode defect) and
+// this ticket's own new bit 17 (position-rebaseline defensive-clamp
+// fault). `EncoderReading.position_epoch` (ADDITIVE, field 4) is the
+// position-rebaseline policy's own counter (sprint 124 architecture
+// Decision 6, revised twice -- see sprint.md): RobotLoop increments it
+// each time it software-rebaselines a wheel's position via the existing,
+// unmodified `Devices::Motor::rebaseline()`. Several other fields
+// (`now`/`seq`/`ReplyEnvelope.corr_id`/the packed `acks` word) gained
+// SIZING-only `(max)` bounds (not hard wire limits -- validateBounds()
+// never runs on encode, so none of these are ever enforced against a real
+// value) purely to hit this ticket's own ≤130B `kReplyEnvelopeMaxEncodedSize`
+// gate once `position_epoch`'s real cost was accounted for. See wire.h's
+// own regenerated worst-case size comment for the current number.
 // ---------------------------------------------------------------------------
 
 // Current drive mode -- relocated here from the deleted planner.proto
@@ -107,40 +135,102 @@ enum DriveMode {
 
 // One wheel's encoder sample -- position AND velocity together, stamped
 // with the sample's own collect time (robot clock, same domain as
-// Telemetry.now).
+// Telemetry.now). Packed fixed-point on the wire (sprint 124 ticket 008,
+// issue §B3): position at 1mm scale, velocity at 0.1mm/s scale --
+// generated pack*()/unpack*() conversion methods live on the generated
+// struct (options.proto's (scale) doc comment), NOT hand-transcribed.
+//
+// position's (abs_max)=32000 (±32m) is the position-rebaseline policy's
+// tight constraint (sprint 124 architecture Decision 6, revised twice --
+// see sprint.md): EncoderReading.position accumulates monotonically for
+// the entire session (storage side, NezhaMotor::encOffset_, is wide enough
+// by many orders of magnitude and never needs widening -- see Decision 6's
+// storage-vs-wire analysis). RobotLoop calls the existing, unmodified
+// Devices::Motor::rebaseline() (software-only re-anchor, zero bus traffic)
+// when a wheel's position nears this bound, and owns position_epoch below.
 message EncoderReading {
-  float  position = 1;  // [mm] accumulated
-  float  velocity = 2;  // [mm/s] signed, measured
-  uint32 time     = 3;  // [ms] robot clock at sample collect
+  sint32 position = 1 [(scale) = 1.0, (abs_max) = 32000];   // [mm] accumulated
+  sint32 velocity = 2 [(scale) = 0.1, (abs_max) = 4000];    // [mm/s] signed, measured
+
+  // age -- RENAMED from the old absolute `time` (124-008): an absolute
+  // robot-clock ms value cannot be bounded small (it grows for the whole
+  // session), so it could never be packed -- this ticket's own ≤130B size
+  // gate (issue §B5) is unreachable without shrinking it. `age` is the
+  // delta this sample's own collect time is BEHIND Telemetry.now,
+  // bounded to 255ms (issue §B2's own field, "age, not age_ms" -- units
+  // in the // [ms] tag per naming-and-style.md). This ticket wires the
+  // FIELD (rename + bound + always-0 emission, since the current
+  // production assembly stamps every reading with the frame's own `now`,
+  // i.e. a genuine, honest age of 0) -- making it carry real per-sample
+  // collect skew (distinct nonzero left/right/otos values) is §B2's own
+  // enabling-change work (a `sampleTime()` accessor on Devices::Motor/
+  // Devices::Otos), explicitly deferred: this ticket's own AC forbids any
+  // change to Devices::Motor/NezhaMotor/MotorArmor, and the fuller
+  // RobotState-projection restructure is ticket 009's job (see this
+  // ticket's own "Handoff from 007" section).
+  uint32 age = 3 [(max) = 255];  // [ms]
+
+  // position_epoch (124-008, Decision 6, ADDITIVE): increments each time
+  // RobotLoop software-rebaselines this wheel's position (an 8-bit
+  // wrap-around counter suffices -- Decision 6's own sizing). Owned and
+  // incremented by RobotLoop itself, never by Devices::Motor/NezhaMotor/
+  // MotorArmor (unchanged by this ticket). A host observing an epoch
+  // change knows a rebase occurred even if it missed the exact boundary
+  // frame -- see Decision 6's "Host reconciliation" note.
+  // (max)=127, not 255 (124-008, issue §B5's own size-accounting table --
+  // needed to hit the ≤130B gate): a SIZING bound (same non-hard-limit
+  // status as now's/seq's own bounds just above, telemetry.proto's
+  // Telemetry message) -- the C++/RobotState STORAGE stays a full 8-bit
+  // counter (Decision 6's own "an 8-bit wrap-around counter suffices"),
+  // this only narrows the varint width the SIZE TABLE assumes (127 fits
+  // one varint byte; 128-255 would cost a 2nd, non-fatal, exactly the
+  // established "size table under-estimates a rare case" precedent).
+  uint32 position_epoch = 4 [(max) = 127];
 }
 
 // Everything the OTOS supplies in one burst read: position, heading, AND
 // the measured velocities (previously read by the driver and dropped),
-// stamped with the burst's own read time.
+// stamped with the burst's own read time. Packed fixed-point on the wire
+// (124-008, issue §B3): x/y at 1mm scale, heading at 1mrad scale, v_x/v_y
+// at 0.1mm/s scale, omega at 0.01rad/s scale.
 message OtosReading {
-  float  x       = 1;  // [mm]
-  float  y       = 2;  // [mm]
-  float  heading = 3;  // [rad]
-  float  v_x     = 4;  // [mm/s]
-  float  v_y     = 5;  // [mm/s]
-  float  omega   = 6;  // [rad/s]
-  uint32 time    = 7;  // [ms] robot clock at burst read
+  sint32 x       = 1 [(scale) = 1.0, (abs_max) = 32000];    // [mm]
+  sint32 y       = 2 [(scale) = 1.0, (abs_max) = 32000];    // [mm]
+  sint32 heading = 3 [(scale) = 0.001, (abs_max) = 3142];   // [rad]
+  sint32 v_x     = 4 [(scale) = 0.1, (abs_max) = 4000];     // [mm/s]
+  sint32 v_y     = 5 [(scale) = 0.1, (abs_max) = 4000];     // [mm/s]
+  sint32 omega   = 6 [(scale) = 0.01, (abs_max) = 1000];    // [rad/s]
+  uint32 age     = 7 [(max) = 255];  // [ms] see EncoderReading.age's own doc comment -- same rename/rationale
 }
 
-// One entry in Telemetry's bounded ack ring (120, ADDITIVE --
-// bench-single-ack-slot-observability-collapses-at-40ms.md). Carries the
-// exact same pair Telemetry.ack_corr/ack_err below have always carried --
-// this message exists only so more than one can ride a single frame. See
-// Telemetry.acks's own doc comment for why both a scalar "freshest ack"
-// pair and this bounded repeated ring coexist.
-message AckEntry {
-  uint32 corr_id = 1 [(max) = 65535];  // CommandEnvelope.corr_id (enqueue ack) or Move.id (completion ack)
-  uint32 err     = 2 [(max) = 7];      // 0 == OK; nonzero is the ErrCode (envelope.proto) value
-}
+// AckEntry -- DELETED (124-008, issue §B4): `repeated AckEntry acks` cost a
+// tag AND a length prefix per element (8B x 4 = 32B, the frame's single
+// largest line). Telemetry.acks below is now `repeated uint32`, PACKED,
+// each element `corr_id<<4 | err` -- one tag + one length + four varints
+// (14B worst case). corr_id needs 16 bits, err needs 4 (ErrCode's own
+// enumerator span tops out at ERR_NOT_CONFIGURED=8). Field numbers 1/2
+// (corr_id/err) were this message's own, not shared with any other
+// message -- nothing to reserve.
 
 message Telemetry {
-  uint32    now  = 1;  // [ms] robot clock at frame assembly -- always present
-  uint32    seq  = 2;  // always present
+  // now's (max) (124-008, issue §B5's own size-accounting table -- needed
+  // to hit the ≤130B gate): a SIZING bound, not a hard wire limit -- same
+  // established precedent as cycle_busy/cycle_period below ("(max)
+  // reflects the realistic diagnostic range, not a hard wire limit").
+  // validateBounds() runs on DECODE only, never encode (wire.cpp's own
+  // decodeInto()/encodeInto() split -- the exact asymmetry B6 is about);
+  // Telemetry is firmware-ENCODE-only (there is no decode(Telemetry&,...)
+  // in production code, only a 124-008 test-only addition), so this bound
+  // is NEVER evaluated against a real value at runtime -- exceeding it
+  // costs a few extra encoded bytes on an unusually long session, nothing
+  // is ever rejected, clamped, or truncated.
+  uint32    now  = 1 [(max) = 2097151];  // [ms] robot clock at frame assembly -- always present
+  // seq wraps (124-008, same rationale as now's bound just above): a
+  // wrapping per-frame counter used only for host-side drop/reorder
+  // detection stays useful at a small wrap window given the host reads
+  // faster than the wrap period -- narrows the worst-case varint width
+  // from 5B (unbounded uint32) to 2B.
+  uint32    seq  = 2 [(max) = 127];  // always present, wraps
   DriveMode mode = 3;  // always present
 
   // flags -- THE bit string: status + faults + events, one field. Every
@@ -151,7 +241,10 @@ message Telemetry {
   //   bit 2  -- active          (motion in progress)
   //   bit 3  -- conn_left       (left motor bus connectivity)
   //   bit 4  -- conn_right      (right motor bus connectivity)
-  //   bit 5  -- ack_fresh       (ack_corr/ack_err are a new ack this frame)
+  //   bit 5  -- RESERVED (formerly ack_fresh -- 124-008 deleted the single
+  //             "freshest ack" scalar slot (ack_corr/ack_err) this bit
+  //             gated; ring membership in acks below already means
+  //             "really acked," so no freshness bit is needed any more)
   //   bit 6  -- fault: I2C clearance safety-net trip (known benign boot
   //             one-shot -- see the pre-rewrite frame's own bit-0 comment
   //             history for the full characterization; a healthy robot can
@@ -169,18 +262,37 @@ message Telemetry {
   //   bit 15 -- fault: MOVE timeout backstop fired (declared now, wired by
   //             sprint 116's protocol-set-point issue -- S1 does not flip
   //             this bit, S1 has no MOVE command to time out)
-  //   bits 16+ reserved
-  uint32 flags = 4 [(max) = 65535];
+  //   bit 16 -- fault: MOVE active AND shaping disabled on both axes
+  //             (App::MoveQueue::shapingDisabled()) -- see
+  //             kFlagFaultShapingDisabled's own doc comment, telemetry.h.
+  //   bit 17 -- fault: position-rebaseline defensive clamp fired (124-008,
+  //             Decision 6's "bound-exceeded fallback") -- a wheel's
+  //             position was clamped to EncoderReading.position's own
+  //             (abs_max) at the encode step rather than allowed to wrap.
+  //             Not the expected path (RobotLoop's own per-cycle
+  //             rebaseline trigger, at a 2000mm margin below the bound,
+  //             should prevent this in normal operation) -- purely
+  //             observable evidence the defensive fallback engaged.
+  //   bits 18-31 reserved
+  //
+  // (max)=262143 ((1<<18)-1) -- 124-008 (issue §B6): this bound was
+  // 65535 (16 bits) while kFlagFaultShapingDisabled (bit 16, added a prior
+  // sprint) had already pushed a real value to 65536 -- a live defect,
+  // silent because validateBounds() runs on decode only, never encode (see
+  // wire.cpp's own decodeInto()/encodeInto() split). Widened to cover both
+  // bit 16 and this ticket's own new bit 17.
+  uint32 flags = 4 [(max) = 262143];
 
-  // Single "freshest ack" slot. ack_err == 0 means OK; nonzero is the
-  // ErrCode (envelope.proto) value. Valid iff flags bit 5 (ack_fresh).
-  // UNCHANGED by 120's ack ring below -- a command acked within the same
-  // primary period as another still overwrites THIS pair (any reader that
-  // only ever looked at ack_corr/ack_err/bit 5 keeps working, unchanged);
-  // acks (below) is the additive fix for a reader that wants every ack,
-  // not just the freshest.
-  uint32 ack_corr = 5 [(max) = 65535];
-  uint32 ack_err  = 6 [(max) = 7];
+  // ack_corr/ack_err -- DELETED (124-008, issue §B4): the single "freshest
+  // ack" scalar slot duplicated the ack ring's (acks, below) newest entry;
+  // ring membership already means "really acked," so the separate
+  // freshness bit (flags bit 5, kFlagAckFresh) these fields needed is gone
+  // too -- bit 5 is now reserved documentation, not a live bit. Field
+  // numbers 5/6 are RESERVED, not reused (this project's standing "no
+  // silent field-number reuse" discipline for a message with a real,
+  // actively-bench-tested consumer).
+  reserved 5, 6;
+  reserved "ack_corr", "ack_err";
 
   // Sensors and encoders.
   EncoderReading enc_left  = 7;
@@ -195,19 +307,36 @@ message Telemetry {
 
   // Bounded ack ring (120, ADDITIVE -- new field, next free number after
   // 115-003's clean renumber; nothing above is renumbered or removed).
-  // Carries the last kAckRingDepth (4) AckEntry pushes since Telemetry was
+  // Carries the last kAckRingDepth (4) ack pushes since Telemetry was
   // constructed, oldest evicted first on overflow -- so a host reading at
   // ~15Hz against this frame's ~25Hz emit rate still observes a transient
-  // enqueue/STOP/CONFIG ack that ack_corr/ack_err above would have lost to
-  // a same-primary-period overwrite
+  // enqueue/STOP/CONFIG ack that the old single ack_corr/ack_err slot
+  // would have lost to a same-primary-period overwrite
   // (bench-single-ack-slot-observability-collapses-at-40ms.md). Every
-  // entry here was genuinely pushed via App::Telemetry::ack() -- unlike
-  // ack_corr/ack_err (which persist their last-written value on every
-  // ordinary frame, needing flags bit 5 to say "this one is new"), a
-  // corr_id present in this list was a real ack; no separate freshness
-  // bit applies to it. A push past depth 4 evicts the OLDEST entry, not
-  // this one; see src/firm/app/DESIGN.md's "Telemetry's ack ring" note.
-  repeated AckEntry acks = 14 [(max_count) = 4];
+  // entry here was genuinely pushed via App::Telemetry::ack() -- ring
+  // membership already means "really acked," no separate freshness bit
+  // applies. A push past depth 4 evicts the OLDEST entry, not this one;
+  // see src/firm/app/DESIGN.md's "Telemetry's ack ring" note.
+  //
+  // PACKED (124-008, issue §B4): was `repeated AckEntry` (a 2-field
+  // message per element -- tag+length-delimited PER element, 8B x 4 =
+  // 32B, the frame's single largest line before this change). Each
+  // element is now one packed uint32: `corr_id<<4 | err` -- corr_id needs
+  // 16 bits (CommandEnvelope.corr_id/Move.id, (max)=65535 as AckEntry's
+  // own field used to declare), err needs 4 (ErrCode's own enumerator
+  // span tops out at ERR_NOT_CONFIGURED=8, not the 7 AckEntry.err used to
+  // declare -- also fixed here, issue §B6). One tag + one length + four
+  // varints = 14B worst case -- the engine's `FieldKind::kRepeatedScalar`
+  // (wire.cpp), declared "PACKED on the wire" since the M4 codec landed
+  // but never exercised by any schema field until this one.
+  // (max)=1048575 ((65535<<4)|15, the packed word's own true ceiling --
+  // corr_id maxed at 16 bits, err maxed at 4 bits) narrows each packed
+  // element's worst-case varint width from 5B (unbounded uint32) to 3B --
+  // this bound is not enforced at runtime (packed-scalar elements are not
+  // individually bounds-checked by decodeInto()'s kRepeatedScalar case,
+  // same as every other repeated field in this schema), purely a size-
+  // accounting fact the generator can prove from the schema.
+  repeated uint32 acks = 14 [(max_count) = 4, (max) = 1048575];
 
   // 123-004 (MIGRATED from TelemetrySecondary's fields 11/12, ADDITIVE here
   // -- next free numbers after 120's acks=14; nothing above is renumbered):
@@ -233,9 +362,10 @@ message Telemetry {
 //
 // NOTE: with EncoderReading.velocity now carrying velocity inside the
 // PRIMARY frame's per-wheel readings, this message's own ts_left/ts_right
-// sample-timestamp fields are redundant with EncoderReading.time --
-// candidates for pruning if this message is next touched, per the
-// amendment's own note. Not pruned here (out of this ticket's scope).
+// sample-timestamp fields are redundant with EncoderReading.age (124-008:
+// RENAMED from `time`) -- candidates for pruning if this message is next
+// touched, per the amendment's own note. Not pruned here (out of this
+// ticket's scope).
 //
 // cycle_busy/cycle_period -- MOVED (123-004): these loop-timing fields
 // landed HERE as an interim placement (122-003, fields 11/12) because the

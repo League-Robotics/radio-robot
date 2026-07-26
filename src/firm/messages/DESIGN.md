@@ -276,20 +276,49 @@ firmware runtime; the device itself never sees protobuf. It also emits
   are now `reserved`, not populated (see `app/DESIGN.md` §4 and
   `docs/protocol-v4.md` §8.4). All three totals sit comfortably under
   the 240-byte budget above.
+
+  **124-008 (issue §B5, a NEW, tighter, explicit gate — `kReplyEnvelope
+  MaxEncodedSize <= 130` bytes, separate from and stricter than the
+  240-byte envelope budget above):** driven by the sint32+`(scale)`
+  conversion (shrinks every position/velocity/pose/twist/OtOS field from a
+  flat 4-byte `float` to a zigzag varint, usually 1-3 bytes at realistic
+  magnitudes) and packed `acks` (one `uint32` per ring entry instead of a
+  nested `AckEntry` sub-message's own tag+length+two-field overhead)
+  bringing `ReplyEnvelope`'s `tlm` arm down from 188B to comfortably under
+  130B — reached by iterating the REGENERATED `wire.h` size-report comment
+  (never hand-calculated or assumed) and adding SIZING-ONLY bounds (this
+  section's own "sizing-only" bullet above) to `EncoderReading.
+  position_epoch` (127, not the field's raw 8-bit storage range), `now`
+  (2097151), `seq` (127, and made genuinely wrapping in the real value —
+  see the "sizing-only" bullet above), the packed `acks` word (1048575 ==
+  `(65535 << 4) | 15`, the worst case for a 16-bit corr_id), and
+  `ReplyEnvelope.corr_id` itself (65535 — required threading `import
+  "options.proto"` into `envelope.proto`, which had never needed field
+  options before this). Exact regenerated result at ticket-close: **130
+  bytes** — confirm against `wire.h`'s own `kReplyEnvelopeMaxEncodedSize`
+  before assuming this number is still current.
 - **A `(max)`/`(abs_max)` bound now narrows a VARINT field's worst-case wire
   width, not just a `float` field's semantic range** (109-003 —
   `gen_messages.py`'s `_worst_case_scalar_size()`; previously this docstring
   said "a future bounded VARINT field would need this revisited" — this
-  ticket is that future). `AckEntry.err_code`'s `(max) = 7` (its real
-  domain — `ErrCode`'s own highest enumerator) and `Telemetry.queue_depth`'s
-  `(max) = 8` (the ring's own real depth) are both ACCURATE bounds, not
-  artificial shrinks — narrowing them bought back the wire budget the
-  three new `Telemetry` fields (`queue_depth`/`active_id`/`exec_state`)
-  spent. This is a size-estimation optimization only: the runtime encoder
-  never clamps or rejects a value exceeding its declared bound, it just
-  costs more bytes than the worst-case table assumed for that one frame,
-  and `msg::wire::encode()`'s own capacity check means that rare case
-  safely skips sending the frame rather than corrupting a buffer.
+  ticket is that future). Two flavors of bound now coexist: an ACCURATE
+  domain bound (e.g. `ack_err`'s pre-124-008 `(max) = 7`, `ErrCode`'s own
+  highest enumerator at the time — now 8, `ERR_NOT_CONFIGURED`, and no
+  longer a standalone field at all, folded into the packed ack word below)
+  and a **SIZING-ONLY** bound (124-008, issue §B5's ≤130B gate): a bound
+  that narrows the generator's worst-case estimate without the runtime
+  ever enforcing it, added purely to make the size table's own assumption
+  honest for a field `msg::wire::encode()` never validates on the way out
+  (`Telemetry.now`, `.seq`, `.acks`, `ReplyEnvelope.corr_id` — see each
+  field's own proto doc comment for why encode-only fields get this
+  treatment; `seq_`, telemetry.cpp, is also made to genuinely wrap at its
+  declared bound in the real running value, not just the wire table, so
+  the declared bound and the true worst case never drift apart). Either
+  way this is a size-ESTIMATION mechanic only: the runtime encoder never
+  clamps or rejects a value exceeding its declared bound, it just costs
+  more bytes than the worst-case table assumed for that one frame, and
+  `msg::wire::encode()`'s own capacity check means that rare case safely
+  skips sending the frame rather than corrupting a buffer.
 - **Bounds are stored as `float`, not `double`.** `FieldDesc.minVal`/
   `maxVal`/`absMaxVal` in the generated `wire.cpp` tables are `float` (4
   bytes) even though `protos/options.proto`'s `(min)`/`(max)`/`(abs_max)`
@@ -298,12 +327,120 @@ firmware runtime; the device itself never sees protobuf. It also emits
   uses; no schema field needs more than `float` precision for a bound. This
   was a deliberate day-one decision, not an oversight — do not "fix" it back
   to `double` without re-justifying the flash cost.
-- **No `sint32`/`sint64` (zigzag) fields exist in the schema today** — every
-  signed/bounded quantity is a protobuf `float` (fixed32 wire type), not a
-  zigzag-mapped integer. `wire_runtime`'s zigzag functions are implemented
-  anyway as a cheap, standard primitive for a future schema addition; they
-  are currently unused. Confirm this is still true before assuming
-  zigzag is dead code to delete.
+- **`sint32` (zigzag) fields exist in the schema as of 124-008** — every
+  signed, bounded physical quantity (`Pose2D.x/y/h`, `BodyTwist3.v_x/v_y/
+  omega`, `EncoderReading.position/velocity`, `OtosReading.x/y/heading/
+  v_x/v_y/omega`) is now a protobuf `sint32` (zigzag varint wire type), not
+  a `float` (fixed32) — `WireRuntime::zigzagEncode32()`/`zigzagDecode32()`
+  (previously implemented but unused, per this bullet's pre-124-008
+  wording) are now live, exercised by `ScalarType::kSint32`'s branches in
+  `decodeScalarValue()`/`encodeScalarValue()`/`scalarIsDefault()`/
+  `scalarAsDouble()` (`wire.cpp`'s generated engine). Motivation: a
+  zigzag-mapped small-magnitude signed integer costs far fewer bytes than
+  a `float`'s fixed 4 bytes (a value like `0` costs 1 byte; the full
+  `(abs_max)`-bounded range still costs at most 3-5 bytes depending on the
+  field, well under `float`'s flat 4) — this shrink is what made the
+  124-008 ≤130B `ReplyEnvelope` gate reachable at all (see the size-budget
+  update below) alongside packed acks. No `sint64` field exists; `int32`/
+  `int64` (non-zigzag, sign-extending) fields also do not exist in the
+  schema — every signed field uses `sint32` specifically. Confirm this is
+  still accurate before assuming any of these three are still unused/dead.
+- **A field's `(scale)` option (`protos/options.proto`, extension 50007,
+  124-008) is a GENERATED conversion, not a documentation-only tag** —
+  contrast `(units)`, which is purely informational and never generates
+  code. Any non-oneof, non-repeated `sint32` field carrying `(scale)`
+  causes `gen_messages.py`'s `_emit_message()` to additionally emit, on
+  that field's own generated struct, a `static constexpr float k<Field>
+  Scale`, a `static int32_t pack<Field>(float value)` (round-half-away-
+  from-zero, not truncate — `value/scale + 0.5f` for positive, `- 0.5f`
+  for negative), and a `static float unpack<Field>(int32_t raw)`
+  (`raw * scale`). The wire codec ENGINE (`decodeScalarValue()`/
+  `encodeScalarValue()` in `wire.cpp`) is completely scale-agnostic — it
+  only ever moves a raw zigzag `int32_t` on and off the wire; `(scale)` is
+  purely a header-generation-time concept, applied by every CALLER (e.g.
+  `App::RobotLoop::assembleFrame()`, `robot_loop.cpp`) via these generated
+  pack/unpack methods, never inline division/multiplication by a
+  hand-copied constant. `gen_messages.py` raises `GenMessagesError` if
+  `(scale)` is declared on any non-`sint32` field — the option only makes
+  sense paired with the zigzag integer representation it converts to/from.
+  Struct MEMBERS stay `int32_t` (raw wire ticks) regardless — `(scale)`
+  changes what the generator emits alongside a field, never the field's
+  own storage type.
+- **`Telemetry.acks` is a PACKED `repeated uint32`, not `repeated
+  AckEntry`, as of 124-008 (issue §B4)** — the wire message type
+  `msg::AckEntry` is DELETED (`telemetry.proto`'s own history: introduced
+  120, deleted 124-008), along with `Telemetry.ack_corr`/`ack_err` (fields
+  5/6, the pre-120 single "freshest ack" scalar slot these two fields
+  duplicated) and `flags` bit 5 (`kFlagAckFresh`, its own freshness
+  signal). Every entry is one wire `uint32`, packed
+  `(corr_id << 4) | err` — 4 low bits for `err` (an `ErrCode`, whose real
+  ceiling `ERR_NOT_CONFIGURED` = 8 needs exactly 4 bits), the remaining 28
+  bits for `corr_id`/`Move.id` (in practice these need at most 16 bits on
+  the wire, `envelope.proto`'s own `CommandEnvelope.corr_id`/`Move.id`
+  doc comments — but see the caution below). `App::Telemetry::
+  pushAckRing()` (`telemetry.cpp`) is the one packer; `AckEntry::
+  from_ring_entry()` (`src/host/robot_radio/robot/protocol.py`) is the
+  one host-side unpacker — both duplicate the exact same `kAckErrBits=4`/
+  `kAckErrMask=0xF` shift/mask locally (no shared header exports this
+  formula across the C++/Python boundary; every other ring consumer in
+  the test tree mirrors it the same way, by grep). This is NOT a special
+  case in the generated codec engine — `FieldKind::kRepeatedScalar`'s
+  packed encode/decode (`WireRuntime::decodePackedVarint()`/
+  `decodePackedFixed32()`, plus a scratch-buffer packing loop in
+  `encodeInto()`) already existed generically before this ticket; `acks`
+  is simply its first real schema use. **Caution for any future caller
+  choosing a `corr_id`/`Move.id` value:** the packed format's 28-bit
+  budget for `corr_id` is a HARD ceiling — a value at or above `2**28`
+  silently loses its high-order bits on `<< 4`, corrupting ack
+  correlation with no error signal anywhere in this codec. This bit the
+  project once already (124-008's own fix to
+  `src/host/robot_radio/testgui/transport.py`'s `_MOVE_ID_BASE`, which
+  picked `1 << 30` specifically to stay disjoint from small envelope
+  `corr_id`s and overflowed the packed field on the very first Move a GUI
+  session sent — fixed to `1 << 24`, still comfortably disjoint, still
+  comfortably under `2**28`).
+- **`Telemetry.flags`'s `(max)` bound was widened past 65535 (124-008,
+  a real bug fix, not a cosmetic tidy)** — real usage already reaches bit
+  16 (`kFlagFaultShapingDisabled`, 119-001) and this ticket adds bit 17
+  (`kFlagFaultPositionClamped`), both well past the 16-bit ceiling a
+  `(max) = 65535` sizing bound implied; the declared bound now reads
+  `262143` (`(1 << 18) - 1`, covering both bits with headroom). Before
+  this fix the sizing table UNDERESTIMATED `flags`'s own worst-case wire
+  width relative to what the real running value could already produce —
+  the opposite direction of every other sizing-bound fix in this ticket
+  (those NARROW an honest overestimate; this one widens a bound that had
+  gone stale relative to the real field).
+- **The position-rebaseline policy (sprint 124 architecture Decision 6)
+  lives in `app/robot_loop.cpp`, not here** — this directory's own stake
+  in it is purely the WIRE SHAPE: `EncoderReading.position`'s `(abs_max) =
+  32000` (mm) is the tight bound the policy exists to respect (storage
+  side, `Devices::NezhaMotor::encOffset_`, is ~121km capacity and never
+  needs it), and `EncoderReading.position_epoch` (ADDITIVE, field 4,
+  `uint32` on the wire but 8 bits of real storage suffice per Decision
+  6's own sizing call) is the counter `App::RobotLoop` owns and increments
+  each time it software-rebaselines a wheel via the EXISTING, unmodified
+  `Devices::Motor::rebaseline()` — never `Motor::resetPosition()`, which
+  can still choose a real bus-touching hard reset and is forbidden
+  outright for this policy by stakeholder ruling. See
+  [`../app/DESIGN.md`](../app/DESIGN.md) for the policy's own trigger/
+  clamp mechanism. `EncoderReading.time` is RENAMED `age` (field 3,
+  `(max) = 255` ms) in the same pass — an absolute robot-clock timestamp
+  cannot be packed small (it grows for the whole session), so it could
+  never fit this ticket's own ≤130B gate; `age` (the delta a sample's own
+  collect time sits behind `Telemetry.now`) can. Production firmware
+  emits `age = 0` as of 124-008 (a genuinely honest zero, not a stub —
+  every reading is still stamped with the frame's own `now`); wiring real
+  nonzero per-sample skew is a later ticket's work, not this one's.
+- **`msg::wire::decode(Telemetry& out, const uint8_t* buf, uint16_t len)`
+  is TEST-ONLY infrastructure, added 124-008** — production firmware only
+  ever ENCODES a `Telemetry` (it is the outbound push, never something the
+  robot itself decodes), but decoding one back is exactly what a test
+  needs to exercise `validateBounds()` against `Telemetry`'s own bounded
+  fields (`flags`, the packed `acks` word, …) the same way
+  `decode(CommandEnvelope&, ...)` already does for the inbound side — see
+  §5 "Exposes" below. Same `std::memset` + `decodeInto(&out, kTable_
+  Telemetry, ...)` shape as every other generated `decode()` overload;
+  nothing about it is hand-written or special-cased.
 - **Length-delimited nesting is capped at depth 8** (`kMaxNestingDepth`) —
   small-constant headroom over the schema's actual deepest chain today
   (`CommandEnvelope → *Command → WheelTargets → repeated WheelTarget`, 3
@@ -392,6 +529,12 @@ that conversion — it only defines the wire-side shape.
   -> uint16_t`** and the `TelemetrySecondary` overload: encode into `buf`,
   return the number of bytes written, or `0` if `cap` is smaller than the
   required output (never a truncated/corrupt partial buffer).
+- **`msg::wire::decode(Telemetry& out, const uint8_t* buf, uint16_t len)
+  -> Result`** (124-008, test-only — see §3's own bullet): the same
+  decode contract as `decode(CommandEnvelope&, ...)` above, applied to a
+  message production code only ever encodes. Exists so a test can exercise
+  `validateBounds()` against `Telemetry`'s own bounded fields without a
+  hand-rolled parallel decoder.
 - **`WireRuntime::*` primitives** (`wire_runtime.h`): the encode/decode
   never-partial contract described in §3, for any future hand-written
   caller needing raw protobuf-wire-format bytes without going through the

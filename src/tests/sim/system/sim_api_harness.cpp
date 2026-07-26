@@ -98,16 +98,22 @@ bool anyEventSet(const std::vector<DecodedLine>& frames, uint32_t bit) {
   return false;
 }
 
-// Matches against the single ack slot (Telemetry.ack_corr/ack_err, valid
-// iff flags bit 5/kFlagAckFresh) that replaced the pre-115 depth-3 AckEntry
-// ring (115-003 frame v2). `okOnly=true` (every existing caller) matches
-// only a fresh ack for corrId whose ack_err == 0 (OK).
+// Matches against the bounded ack ring (Telemetry.acks, 124-008: packed
+// uint32 corr_id<<4|err -- the single "freshest ack" scalar slot/
+// kFlagAckFresh this used to gate on is DELETED, issue §B4; ring membership
+// alone means "really acked"). `okOnly=true` (every existing caller)
+// matches only an ack for corrId whose err == 0 (OK).
 bool anyAckMatches(const std::vector<DecodedLine>& frames, uint32_t corrId, bool okOnly = true) {
+  constexpr uint32_t kAckErrBits = 4;
+  constexpr uint32_t kAckErrMask = (1u << kAckErrBits) - 1;
   for (const auto& f : frames) {
-    if (!(f.telemetry.flags & App::kFlagAckFresh)) continue;
-    if (f.telemetry.ack_corr != corrId) continue;
-    if (okOnly && f.telemetry.ack_err != 0) continue;
-    return true;
+    for (uint8_t i = 0; i < f.telemetry.acks_count; ++i) {
+      const uint32_t packed = f.telemetry.acks_[i];
+      if ((packed >> kAckErrBits) != corrId) continue;
+      const uint32_t err = packed & kAckErrMask;
+      if (okOnly && err != 0) continue;
+      return true;
+    }
   }
   return false;
 }
@@ -186,14 +192,17 @@ void scenarioTwistDrivesRealPlantRamp() {
   float firstEncLeft = 0.0f, lastEncLeft = 0.0f;
   float lastVelRight = 0.0f;
   bool first = true;
+  // 124-008 (issue §B3): velocity is a raw sint32 wire int (0.1mm/s scale)
+  // -- unpackVelocity() is the GENERATED conversion; position is scale=1.0
+  // (raw == real mm, safe as-is).
   for (const auto& f : frames) {
     if (first) {
-      firstVelLeft = f.telemetry.enc_left.velocity;
+      firstVelLeft = msg::EncoderReading::unpackVelocity(f.telemetry.enc_left.velocity);
       firstEncLeft = f.telemetry.enc_left.position;
       first = false;
     }
-    lastVelLeft = f.telemetry.enc_left.velocity;
-    lastVelRight = f.telemetry.enc_right.velocity;
+    lastVelLeft = msg::EncoderReading::unpackVelocity(f.telemetry.enc_left.velocity);
+    lastVelRight = msg::EncoderReading::unpackVelocity(f.telemetry.enc_right.velocity);
     lastEncLeft = f.telemetry.enc_left.position;
   }
 

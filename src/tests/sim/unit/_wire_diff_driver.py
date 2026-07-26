@@ -183,26 +183,35 @@ def encode_err(binary: pathlib.Path, corr_id: int, code_name: str, field_num: in
 _ACK_RING_DEPTH = 4  # mirrors App::kAckRingDepth (app/telemetry.h) / telemetry.proto's Telemetry.acks max_count
 
 
+def pack_ack(corr_id: int, err: int) -> int:
+    """Mirrors telemetry.cpp's own pushAckRing() packed-word format EXACTLY
+    (124-008, issue §B4): corr_id<<4 | err."""
+    return (corr_id << 4) | err
+
+
 def encode_telemetry(binary: pathlib.Path, corr_id: int,
                       acks: "list[tuple[int, int]] | None" = None,
                       **fields) -> bytes | None:
     """Builds ReplyEnvelope{tlm=Telemetry{...}} via the `encode_telemetry`
     argv verb (see wire_differential_harness.cpp's file header for the full
-    positional list) -- frame v2 shape (115-003): one `flags` bit-string,
-    one `ack_corr`/`ack_err` slot, two `EncoderReading`s
+    positional list) -- packed-telemetry shape (124-008, issue §B3/B4/B6):
+    one `flags` bit-string, two `EncoderReading`s
     (`enc_left_*`/`enc_right_*`), one `OtosReading` (`otos_*`),
-    always-present `pose_*`/`twist_*`, the packed `line`/`color` words,
-    (123-004, ADDITIVE) `cycle_busy`/`cycle_period` (migrated from
-    TelemetrySecondary), and (120, ADDITIVE) the bounded `acks` ring.
-    `fields` keys are the flattened per-field names below; every field not
-    passed defaults to its proto zero value (0 / 0.0). `acks` is a list of
-    up to `_ACK_RING_DEPTH` (corr_id, err) pairs, oldest-first, matching
-    `Telemetry.acks`'s own wire order -- defaults to an empty ring."""
+    always-present `pose_*`/`twist_*` (ALL sint32/zigzag raw wire ints now,
+    not float), the packed `line`/`color` words, (123-004, ADDITIVE)
+    `cycle_busy`/`cycle_period` (migrated from TelemetrySecondary), and
+    (120, ADDITIVE) the bounded `acks` ring. The single "freshest ack"
+    slot (`ack_corr`/`ack_err`) is DELETED (124-008). `fields` keys are the
+    flattened per-field names below; every field not passed defaults to
+    its proto zero value (0). `acks` is a list of up to `_ACK_RING_DEPTH`
+    (corr_id, err) pairs, oldest-first, matching `Telemetry.acks`'s own
+    wire order -- packed via `pack_ack()` before hitting argv -- defaults
+    to an empty ring."""
     order = (
-        "now", "mode", "seq", "flags", "ack_corr", "ack_err",
-        "enc_left_position", "enc_left_velocity", "enc_left_time",
-        "enc_right_position", "enc_right_velocity", "enc_right_time",
-        "otos_x", "otos_y", "otos_heading", "otos_v_x", "otos_v_y", "otos_omega", "otos_time",
+        "now", "mode", "seq", "flags",
+        "enc_left_position", "enc_left_velocity", "enc_left_age", "enc_left_position_epoch",
+        "enc_right_position", "enc_right_velocity", "enc_right_age", "enc_right_position_epoch",
+        "otos_x", "otos_y", "otos_heading", "otos_v_x", "otos_v_y", "otos_omega", "otos_age",
         "pose_x", "pose_y", "pose_h",
         "twist_v_x", "twist_v_y", "twist_omega",
         "line", "color",
@@ -214,8 +223,9 @@ def encode_telemetry(binary: pathlib.Path, corr_id: int,
     for key in order:
         value = fields.get(key, 0)
         # bool -> "0"/"1", NOT Python's own str(True) == "True" -- the
-        # harness parses every non-float positional arg with strtoul(), which
-        # silently reads "True"/"False" as 0 (no leading digit).
+        # harness parses every non-float positional arg with strtoul()/
+        # strtol(), which silently reads "True"/"False" as 0 (no leading
+        # digit).
         args.append(str(int(value)) if isinstance(value, bool) else str(value))
 
     acks = acks or []
@@ -224,8 +234,7 @@ def encode_telemetry(binary: pathlib.Path, corr_id: int,
     args.append(str(len(acks)))
     for idx in range(_ACK_RING_DEPTH):
         entry_corr, entry_err = acks[idx] if idx < len(acks) else (0, 0)
-        args.append(str(entry_corr))
-        args.append(str(entry_err))
+        args.append(str(pack_ack(entry_corr, entry_err)))
 
     r = run_harness(binary, "encode_telemetry", *args)
     assert not r.crashed, f"encode_telemetry crashed: {r.stdout}\n{r.stderr}"
@@ -397,7 +406,7 @@ def env_config_otos(corr_id: int, **fields) -> bytes:
 __all__ = [
     "pb_common", "pb_config", "pb_envelope", "pb_telemetry",
     "compile_harness", "run_harness", "decode", "parse_decode_line",
-    "encode_ok", "encode_err", "encode_telemetry", "encode_telemetry_secondary", "f32", "float_eq",
+    "encode_ok", "encode_err", "encode_telemetry", "encode_telemetry_secondary", "pack_ack", "f32", "float_eq",
     "unknown_varint_field",
     "env_move_twist", "env_move_wheels", "env_stop",
     "env_config_drivetrain", "env_config_motor", "env_config_otos",

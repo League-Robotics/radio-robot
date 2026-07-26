@@ -54,13 +54,14 @@ def tlm_log():
 # deliberately left clear below (fault_wedge_latch, fault_i2c_nak_timeout,
 # fault_malformed_frame, event_boot_ready, fault_move_timeout) so the "full"
 # frame exercises both a True and a False decode within the same frame.
+# 124-008 (issue §B4): bit 5 (formerly ack_fresh) is RESERVED now -- the
+# single "freshest ack" scalar slot is deleted, dropped from this mask.
 _FULL_FLAGS = (
     (1 << 0)   # otos_present
     | (1 << 1)  # otos_connected
     | (1 << 2)  # active
     | (1 << 3)  # conn_left
     | (1 << 4)  # conn_right
-    | (1 << 5)  # ack_fresh
     | (1 << 6)  # fault_i2c_safety_net
     | (1 << 10)  # event_deadman_expired
     | (1 << 12)  # event_config_applied
@@ -69,35 +70,44 @@ _FULL_FLAGS = (
 )
 
 
+def _pack_ack(corr_id: int, err: int) -> int:
+    """Mirrors telemetry.cpp's own pushAckRing() packed-word format EXACTLY
+    (124-008, issue §B4): corr_id<<4 | err."""
+    return (corr_id << 4) | err
+
+
 def _full_telemetry() -> "telemetry_pb2.Telemetry":
-    """A frame with every gated field present: otos/line/color/ack all
-    fresh."""
+    """A frame with every gated field present: otos/line/color present, one
+    ack in the ring. 124-008 (issue §B3): position/velocity/x/y/heading/
+    v_x/v_y/omega/h are sint32+scale raw wire ints now -- values below are
+    chosen to be exactly representable at each field's own declared scale
+    (options.proto's (scale) doc comment)."""
     return telemetry_pb2.Telemetry(
         now=12345, seq=42, mode=telemetry_pb2.STREAMING,
         flags=_FULL_FLAGS,
-        ack_corr=99, ack_err=0,
-        enc_left=telemetry_pb2.EncoderReading(position=100.5, velocity=50.0, time=12340),
-        enc_right=telemetry_pb2.EncoderReading(position=-100.5, velocity=-50.0, time=12341),
+        acks=[_pack_ack(99, 0)],
+        enc_left=telemetry_pb2.EncoderReading(position=100, velocity=500, age=200, position_epoch=1),
+        enc_right=telemetry_pb2.EncoderReading(position=-100, velocity=-500, age=201, position_epoch=2),
         otos=telemetry_pb2.OtosReading(
-            x=10.0, y=20.0, heading=0.5, v_x=15.0, v_y=-3.0, omega=0.2, time=12300),
-        pose=common_pb2.Pose2D(x=100.0, y=200.0, h=0.3),
-        twist=common_pb2.BodyTwist3(v_x=250.0, v_y=0.0, omega=1.5),
+            x=10, y=20, heading=500, v_x=150, v_y=-30, omega=20, age=45),
+        pose=common_pb2.Pose2D(x=100, y=200, h=300),
+        twist=common_pb2.BodyTwist3(v_x=2500, v_y=0, omega=150),
         line=10 | (20 << 8) | (30 << 16) | (40 << 24),
         color=1 | (2 << 8) | (3 << 16) | (4 << 24),
     )
 
 
 def _minimal_telemetry() -> "telemetry_pb2.Telemetry":
-    """A frame with every gate clear: no otos, no line, no color, no fresh
-    ack -- only the always-present fields (enc_left/enc_right/pose/twist)
-    are populated."""
+    """A frame with every gate clear: no otos, no line, no color, no acks in
+    the ring -- only the always-present fields (enc_left/enc_right/pose/
+    twist) are populated."""
     return telemetry_pb2.Telemetry(
         now=1, seq=1, mode=telemetry_pb2.IDLE,
         flags=0,
-        enc_left=telemetry_pb2.EncoderReading(position=0.0, velocity=0.0, time=1),
-        enc_right=telemetry_pb2.EncoderReading(position=0.0, velocity=0.0, time=1),
-        pose=common_pb2.Pose2D(x=0.0, y=0.0, h=0.0),
-        twist=common_pb2.BodyTwist3(v_x=0.0, v_y=0.0, omega=0.0),
+        enc_left=telemetry_pb2.EncoderReading(position=0, velocity=0, age=0),
+        enc_right=telemetry_pb2.EncoderReading(position=0, velocity=0, age=0),
+        pose=common_pb2.Pose2D(x=0, y=0, h=0),
+        twist=common_pb2.BodyTwist3(v_x=0, v_y=0, omega=0),
     )
 
 
@@ -130,7 +140,6 @@ class TestFrameToRow:
         assert row["flag_active"] is True
         assert row["flag_conn_left"] is True
         assert row["flag_conn_right"] is True
-        assert row["flag_ack_fresh"] is True
         assert row["flag_fault_i2c_safety_net"] is True
         assert row["flag_fault_wedge_latch"] is False
         assert row["flag_fault_i2c_nak_timeout"] is False
@@ -142,15 +151,16 @@ class TestFrameToRow:
         assert row["flag_line_present"] is True
         assert row["flag_color_present"] is True
 
-        assert row["ack_corr"] == 99
-        assert row["ack_err"] == 0
+        assert row["acks"] == [(99, 0)]
 
-        assert row["enc_left_position"] == pytest.approx(100.5)
+        assert row["enc_left_position"] == pytest.approx(100.0)
         assert row["enc_left_velocity"] == pytest.approx(50.0)
-        assert row["enc_left_time"] == 12340
-        assert row["enc_right_position"] == pytest.approx(-100.5)
+        assert row["enc_left_age"] == 200
+        assert row["enc_left_position_epoch"] == 1
+        assert row["enc_right_position"] == pytest.approx(-100.0)
         assert row["enc_right_velocity"] == pytest.approx(-50.0)
-        assert row["enc_right_time"] == 12341
+        assert row["enc_right_age"] == 201
+        assert row["enc_right_position_epoch"] == 2
 
         assert row["otos_x"] == pytest.approx(10.0)
         assert row["otos_y"] == pytest.approx(20.0)
@@ -158,7 +168,7 @@ class TestFrameToRow:
         assert row["otos_v_x"] == pytest.approx(15.0)
         assert row["otos_v_y"] == pytest.approx(-3.0)
         assert row["otos_omega"] == pytest.approx(0.2)
-        assert row["otos_time"] == 12300
+        assert row["otos_age"] == 45
 
         assert row["pose_x"] == 100
         assert row["pose_y"] == 200
@@ -182,7 +192,7 @@ class TestFrameToRow:
         assert row["flag_color_present"] is False
 
         for key in ("otos_x", "otos_y", "otos_heading", "otos_v_x", "otos_v_y",
-                    "otos_omega", "otos_time"):
+                    "otos_omega", "otos_age"):
             assert row[key] is None, key
         for key in ("line_ch1", "line_ch2", "line_ch3", "line_ch4",
                     "color_r", "color_g", "color_b", "color_c"):

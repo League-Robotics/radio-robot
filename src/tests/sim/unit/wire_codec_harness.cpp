@@ -523,8 +523,19 @@ void scenarioEncodeErrorHandParsed() {
   checkU64Eq(errFields[1].varintVal, 4, "Error.field round-trips");
 }
 
-void scenarioEncodeTelemetryFlagsAckAndReadings() {
-  beginScenario("encode(): ReplyEnvelope{tlm=Telemetry{flags, ack_corr/ack_err, "
+// zigzag32() -- test-local mirror of WireRuntime::zigzagEncode32() (124-008)
+// used to predict a sint32 field's RAW ON-WIRE varint value from the signed
+// int this scenario assigns to it -- `parseFields()` is a generic scanner
+// that reports a varint field's raw unsigned value (`varintVal`), never
+// zigzag-decoding it (it has no schema knowledge of which varint fields are
+// sint32 vs. plain uint32) -- see options.proto's own (scale) doc comment:
+// scale is a header-generation-time concept, invisible to the wire engine.
+uint64_t zigzag32(int32_t v) {
+  return (static_cast<uint32_t>(v) << 1) ^ static_cast<uint32_t>(v >> 31);
+}
+
+void scenarioEncodeTelemetryFlagsAckRingAndReadings() {
+  beginScenario("encode(): ReplyEnvelope{tlm=Telemetry{flags, packed acks, "
                 "EncoderReading, OtosReading, line, color}} -- hand-parsed via generic scanner");
   msg::ReplyEnvelope reply;
   reply.corr_id = 11;
@@ -546,17 +557,27 @@ void scenarioEncodeTelemetryFlagsAckAndReadings() {
   t.now = 5000;
   t.seq = 42;
   t.flags = 0x2021;  // arbitrary nonzero bit pattern spanning status/fault/event groups
-  t.ack_corr = 77;
-  t.ack_err = 0;  // zero-value -- implicit presence omits it from the wire
-  t.enc_left.position = 10.0f;
-  t.enc_left.velocity = 1.5f;
-  t.enc_left.time = 4980;
-  t.enc_right.position = -5.0f;
-  t.enc_right.velocity = -1.0f;
-  t.enc_right.time = 4980;
-  t.otos.x = 1.0f;
-  t.otos.y = 2.0f;
-  t.otos.heading = 0.5f;
+  // 124-008 (issue §B4): the single "freshest ack" scalar slot (ack_corr/
+  // ack_err, fields 5/6) is DELETED -- reserved, not reused. The bounded
+  // ack ring (field 14) is packed uint32 (corr_id<<4|err) now, this
+  // engine's first real FieldKind::kRepeatedScalar use.
+  t.acks_count = 1;
+  t.acks_[0] = (77u << 4) | 0u;
+  // 124-008 (issue §B3): position/velocity/x/y/heading are sint32 (zigzag)
+  // raw wire ints now, not float -- the (scale) conversion is a
+  // header-generation-time concept (generated pack*()/unpack*() methods),
+  // invisible to the wire engine itself. `time` is RENAMED `age` (field 3);
+  // `position_epoch` (field 4) is new (Decision 6).
+  t.enc_left.position = 10;
+  t.enc_left.velocity = 15;
+  t.enc_left.age = 200;
+  t.enc_left.position_epoch = 3;
+  t.enc_right.position = -5;
+  t.enc_right.velocity = -1;
+  t.enc_right.age = 200;
+  t.otos.x = 1;
+  t.otos.y = 2;
+  t.otos.heading = 500;
   t.line = 0x01020304;
   t.color = 0x0A0B0C0D;
 
@@ -581,11 +602,20 @@ void scenarioEncodeTelemetryFlagsAckAndReadings() {
   if (!flags.empty()) checkU64Eq(flags[0].varintVal, 0x2021, "flags round-trips");
 
   auto ackCorr = fieldsWithNumber(tlmFields, 5);
-  checkU64Eq(ackCorr.size(), 1, "ack_corr (field 5) present");
-  if (!ackCorr.empty()) checkU64Eq(ackCorr[0].varintVal, 77, "ack_corr round-trips");
-
+  checkTrue(ackCorr.empty(), "ack_corr (field 5) is RESERVED, not reused (124-008, issue §B4)");
   auto ackErr = fieldsWithNumber(tlmFields, 6);
-  checkTrue(ackErr.empty(), "ack_err (field 6, zero) omitted -- implicit presence");
+  checkTrue(ackErr.empty(), "ack_err (field 6) is RESERVED, not reused (124-008, issue §B4)");
+
+  auto acks = fieldsWithNumber(tlmFields, 14);
+  checkU64Eq(acks.size(), 1, "acks (field 14) present -- packed repeated uint32");
+  if (!acks.empty()) {
+    checkTrue(acks[0].type == WireType::kLengthDelimited, "packed acks is length-delimited");
+    size_t pos = 0;
+    uint64_t packed = 0;
+    checkTrue(WireRuntime::decodeVarint(acks[0].bytes, acks[0].bytesLen, &pos, &packed),
+              "packed acks[0] varint decodes");
+    checkU64Eq(packed, (77u << 4) | 0u, "acks[0] == corr_id<<4|err round-trips");
+  }
 
   auto encLeft = fieldsWithNumber(tlmFields, 7);
   checkU64Eq(encLeft.size(), 1, "enc_left (field 7) present -- EncoderReading is an unconditionally-emitted embedded message");
@@ -593,13 +623,16 @@ void scenarioEncodeTelemetryFlagsAckAndReadings() {
     auto encLeftFields = parseFields(encLeft[0].bytes, encLeft[0].bytesLen);
     auto position = fieldsWithNumber(encLeftFields, 1);
     checkU64Eq(position.size(), 1, "enc_left.position (field 1) present");
-    if (!position.empty()) checkFloatEq(position[0].floatVal, 10.0f, "enc_left.position round-trips");
+    if (!position.empty()) checkU64Eq(position[0].varintVal, zigzag32(10), "enc_left.position round-trips (zigzag)");
     auto velocity = fieldsWithNumber(encLeftFields, 2);
     checkU64Eq(velocity.size(), 1, "enc_left.velocity (field 2) present");
-    if (!velocity.empty()) checkFloatEq(velocity[0].floatVal, 1.5f, "enc_left.velocity round-trips");
-    auto time = fieldsWithNumber(encLeftFields, 3);
-    checkU64Eq(time.size(), 1, "enc_left.time (field 3) present");
-    if (!time.empty()) checkU64Eq(time[0].varintVal, 4980, "enc_left.time round-trips");
+    if (!velocity.empty()) checkU64Eq(velocity[0].varintVal, zigzag32(15), "enc_left.velocity round-trips (zigzag)");
+    auto age = fieldsWithNumber(encLeftFields, 3);
+    checkU64Eq(age.size(), 1, "enc_left.age (field 3) present");
+    if (!age.empty()) checkU64Eq(age[0].varintVal, 200, "enc_left.age round-trips");
+    auto epoch = fieldsWithNumber(encLeftFields, 4);
+    checkU64Eq(epoch.size(), 1, "enc_left.position_epoch (field 4) present");
+    if (!epoch.empty()) checkU64Eq(epoch[0].varintVal, 3, "enc_left.position_epoch round-trips");
   }
 
   auto otos = fieldsWithNumber(tlmFields, 9);
@@ -608,10 +641,10 @@ void scenarioEncodeTelemetryFlagsAckAndReadings() {
     auto otosFields = parseFields(otos[0].bytes, otos[0].bytesLen);
     auto x = fieldsWithNumber(otosFields, 1);
     checkU64Eq(x.size(), 1, "otos.x (field 1) present");
-    if (!x.empty()) checkFloatEq(x[0].floatVal, 1.0f, "otos.x round-trips");
+    if (!x.empty()) checkU64Eq(x[0].varintVal, zigzag32(1), "otos.x round-trips (zigzag)");
     auto heading = fieldsWithNumber(otosFields, 3);
     checkU64Eq(heading.size(), 1, "otos.heading (field 3) present");
-    if (!heading.empty()) checkFloatEq(heading[0].floatVal, 0.5f, "otos.heading round-trips");
+    if (!heading.empty()) checkU64Eq(heading[0].varintVal, zigzag32(500), "otos.heading round-trips (zigzag)");
   }
 
   auto line = fieldsWithNumber(tlmFields, 12);
@@ -629,16 +662,16 @@ void scenarioEncodeOversizedBufferReturnsZero() {
   reply.corr_id = 1;
   reply.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
   msg::Telemetry& t = reply.body.tlm;
-  // See scenarioEncodeTelemetryFlagsAckAndReadings()'s own comment for why
-  // this assignment (not the union's own in-place `= {}` init) is needed
-  // before touching any `tlm` field by hand.
+  // See scenarioEncodeTelemetryFlagsAckRingAndReadings()'s own comment for
+  // why this assignment (not the union's own in-place `= {}` init) is
+  // needed before touching any `tlm` field by hand.
   t = msg::Telemetry{};
   t.flags = 0x1;
-  t.ack_corr = 1;
-  t.ack_err = 0;
-  t.enc_left.position = 1.0f;
-  t.enc_right.position = 1.0f;
-  t.otos.x = 1.0f;
+  t.acks_count = 1;
+  t.acks_[0] = (1u << 4) | 0u;
+  t.enc_left.position = 1;
+  t.enc_right.position = 1;
+  t.otos.x = 1;
 
   // A fully-populated Telemetry frame needs well over a handful of bytes --
   // 4 is nowhere near enough.
@@ -705,7 +738,7 @@ int main() {
   scenarioMalformedBufferRejected();
   scenarioEncodeAckHandParsed();
   scenarioEncodeErrorHandParsed();
-  scenarioEncodeTelemetryFlagsAckAndReadings();
+  scenarioEncodeTelemetryFlagsAckRingAndReadings();
   scenarioEncodeOversizedBufferReturnsZero();
   scenarioEncodeTelemetrySecondary();
 

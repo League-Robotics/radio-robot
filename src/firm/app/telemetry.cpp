@@ -18,8 +18,19 @@ namespace App {
 // object is never constructed at runtime) -- the same "prove a size fact
 // at compile time with no runtime cost" idiom this file's own generated
 // siblings (layout_checks.h) already use for standard-layout checks.
-static_assert(sizeof(msg::Telemetry{}.acks_) == static_cast<size_t>(kAckRingDepth) * sizeof(msg::AckEntry),
+//
+// 124-008: acks_[] is now uint32_t[4] (packed corr_id<<4|err), not
+// msg::AckEntry[4] -- msg::AckEntry is deleted (issue §B4).
+static_assert(sizeof(msg::Telemetry{}.acks_) == static_cast<size_t>(kAckRingDepth) * sizeof(uint32_t),
               "App::kAckRingDepth (telemetry.h) must match telemetry.proto's Telemetry.acks (max_count)");
+
+// Packed ack-ring word format (124-008, issue §B4): corr_id in the upper
+// 28 bits, err (an ErrCode, 0-8) in the low 4 bits. err's real range fits
+// comfortably in 4 bits (ERR_NOT_CONFIGURED=8 is the enum's own ceiling);
+// corr_id needs 16 bits in practice (CommandEnvelope.corr_id/Move.id) and
+// has 28 available.
+constexpr uint32_t kAckErrBits = 4;
+constexpr uint32_t kAckErrMask = (1u << kAckErrBits) - 1;
 
 Telemetry::Telemetry(Comms& comms, Transport& serialLink, Transport& radioLink)
     : comms_(comms), serialLink_(serialLink), radioLink_(radioLink) {}
@@ -37,9 +48,6 @@ void Telemetry::setFlag(uint32_t bit, bool active) {
 }
 
 void Telemetry::ack(uint32_t corrId, uint32_t errCode) {
-  ackCorr_ = corrId;
-  ackErr_ = errCode;
-  ackPending_ = true;
   pushAckRing(corrId, errCode);
 }
 
@@ -60,8 +68,8 @@ void Telemetry::pushAckRing(uint32_t corrId, uint32_t errCode) {
     tail = ackRingHead_;
     ackRingHead_ = static_cast<uint8_t>((ackRingHead_ + 1) % kAckRingDepth);
   }
-  ackRing_[tail].corr_id = corrId;
-  ackRing_[tail].err = errCode;
+  // Packed word (124-008, issue §B4): corr_id<<4 | err.
+  ackRing_[tail] = (corrId << kAckErrBits) | (errCode & kAckErrMask);
 }
 
 bool Telemetry::primaryDue(uint32_t now) const {
@@ -121,31 +129,30 @@ void Telemetry::emitPrimary(uint32_t now) {
   msg::Telemetry tlm;
 
   tlm.now = now;
-  tlm.seq = seq_++;
+  // seq wraps at telemetry.proto's own declared (max)=127 (124-008, issue
+  // §B5's size-accounting) -- kept genuinely small on the real value too,
+  // not just the wire bound, so the two never drift: a caller reading the
+  // declared bound sees the true worst case, not an optimistic one.
+  tlm.seq = seq_;
+  seq_ = (seq_ + 1) % 128u;
   tlm.mode = frame_.mode;
 
-  // flags -- the single assembly point: OR the caller-staged bits (every
+  // flags -- the single assembly point: the caller-staged bits (every
   // status/fault/event/presence bit RobotLoop already computed into
-  // flags_ via setFlag()) with Telemetry's OWN internally-tracked
-  // ack_fresh bit (kFlagAckFresh, bit 5) -- the one bit no caller ever
-  // sets directly (see kFlagAckFresh's own doc comment in telemetry.h).
-  uint32_t flags = flags_;
-  if (ackPending_) flags |= kFlagAckFresh;
-  tlm.flags = flags;
-  ackPending_ = false;
-
-  tlm.ack_corr = ackCorr_;
-  tlm.ack_err = ackErr_;
+  // flags_ via setFlag()). 124-008 (issue §B4) deleted the single
+  // "freshest ack" scalar slot and its own ack_fresh bit (bit 5) --
+  // Telemetry no longer ORs in an internally-tracked bit here.
+  tlm.flags = flags_;
 
   // Ack ring (120, ADDITIVE) -- serialize the ring's CURRENT contents,
   // oldest-to-newest (ackRingHead_'s own push/evict order), every
   // emitPrimary() call, exactly like every other Frame field: the last
   // staged snapshot, not a diff since the last send (app/DESIGN.md Sec 3).
   // A frame this call sends carries whatever the ring holds RIGHT NOW,
-  // regardless of whether a new ack() landed since the last emit -- unlike
-  // ack_fresh above, there is no separate "is this new" bit for the ring
-  // (see telemetry.proto's own Telemetry.acks doc comment for why one
-  // isn't needed).
+  // regardless of whether a new ack() landed since the last emit -- no
+  // separate "is this new" bit applies (telemetry.proto's own
+  // Telemetry.acks doc comment). 124-008: each entry is now a packed
+  // uint32_t (corr_id<<4|err), not msg::AckEntry (deleted).
   tlm.acks_count = ackRingCount_;
   for (uint8_t i = 0; i < ackRingCount_; ++i) {
     const uint8_t idx = static_cast<uint8_t>((ackRingHead_ + i) % kAckRingDepth);

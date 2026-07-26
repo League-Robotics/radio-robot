@@ -290,12 +290,15 @@ class _FakeTwistTransport:
         byproduct of leg N's own earlier poll (which only ever matches on
         leg N's own move_id and ignores the rest of the batch) would starve
         leg N+1's own wait loop forever."""
+        # 124-008 (issue §B4): the single "freshest ack" scalar slot
+        # (ack_corr/ack_err/ack/kFlagAckFresh) is deleted -- every pending
+        # ack now rides the bounded ack ring (`acks`) on ONE synthesized
+        # frame, mirroring how a real frame can carry more than one ack.
         if not self._pending_acks:
             return [self._make_frame()]
-        return [self._make_frame(ack_corr=move_id, ack_err=err_code)
-               for move_id, err_code in self._pending_acks]
+        return [self._make_frame(acks=list(self._pending_acks))]
 
-    def _make_frame(self, ack_corr: "int | None" = None, ack_err: "int | None" = None):
+    def _make_frame(self, acks: "list[tuple[int, int]] | None" = None):
         from robot_radio.robot.protocol import AckEntry, TLMFrame
 
         enc_i = int(self._enc)
@@ -303,13 +306,9 @@ class _FakeTwistTransport:
             int(self._x), int(self._y),
             int(round(math.degrees(self._heading) * 100.0)),  # [cdeg]
         )
-        flags = 0
-        ack = None
-        if ack_corr is not None:
-            flags |= 1 << 5  # kFlagAckFresh (telemetry.proto Telemetry.flags bit 5)
-            ack = AckEntry(corr_id=ack_corr, ok=(not ack_err), err_code=ack_err or 0)
-        return TLMFrame(enc=(enc_i, enc_i), pose=pose, otos=pose, flags=flags,
-                        ack_corr=ack_corr, ack_err=ack_err, ack=ack)
+        ack_entries = [AckEntry(corr_id=corr_id, ok=(not err_code), err_code=err_code or 0)
+                      for corr_id, err_code in (acks or [])]
+        return TLMFrame(enc=(enc_i, enc_i), pose=pose, otos=pose, flags=0, acks=ack_entries)
 
 
 # ---------------------------------------------------------------------------

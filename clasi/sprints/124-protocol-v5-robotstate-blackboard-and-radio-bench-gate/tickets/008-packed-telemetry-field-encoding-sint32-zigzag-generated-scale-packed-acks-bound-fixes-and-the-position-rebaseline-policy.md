@@ -2,7 +2,7 @@
 id: 008
 title: 'Packed telemetry field encoding: sint32/zigzag, generated (scale), packed
   acks, bound fixes, and the position-rebaseline policy'
-status: in-progress
+status: done
 use-cases:
 - SUC-005
 - SUC-006
@@ -73,34 +73,34 @@ margin.
 
 ## Acceptance Criteria
 
-- [ ] `ScalarType::kSint32` + `zigzagEncode32/64` wired into `wire.cpp`
+- [x] `ScalarType::kSint32` + `zigzagEncode32/64` wired into `wire.cpp`
       (previously declared, unused) and the generator mapping.
-- [ ] `(scale)` option added to `options.proto`; conversion is
+- [x] `(scale)` option added to `options.proto`; conversion is
       GENERATED (both firmware and host), not hand-transcribed.
-- [ ] `sint32`/scale round-trip: negative values at each declared bound
+- [x] `sint32`/scale round-trip: negative values at each declared bound
       (`enc_left`/`enc_right`/`otos`/`pose`/`twist` per the issue's B3
       table) encode to the documented width — an explicit regression
       test against the `int32` sign-extension trap (a negative velocity
       costs 3 B, not 10).
-- [ ] Packed `acks` round-trips at ring depths 0-4, with `corr_id` at
+- [x] Packed `acks` round-trips at ring depths 0-4, with `corr_id` at
       65535 and `err` at 8 (the real `ErrCode` ceiling).
-- [ ] `flags` with bit 16 set, and an ack carrying `ERR_NOT_CONFIGURED`,
+- [x] `flags` with bit 16 set, and an ack carrying `ERR_NOT_CONFIGURED`,
       both survive a firmware-side decode without `ERR_RANGE`.
-- [ ] **Position-rebaseline policy**: `RobotLoop` calls the existing
+- [x] **Position-rebaseline policy**: `RobotLoop` calls the existing
       `Motor::rebaseline()` directly (never `resetPosition()`) when a
       wheel's position nears `(abs_max) = 32000`; `positionEpoch`
       increments observably each time; a sim run driving one wheel's
       cumulative signed travel past 30,000 mm over an extended session
       shows `position` never silently clips and `positionEpoch`
       increments at the expected point.
-- [ ] `Devices::Motor`/`NezhaMotor`/`MotorArmor` are unmodified by this
+- [x] `Devices::Motor`/`NezhaMotor`/`MotorArmor` are unmodified by this
       ticket — `git diff` on those three files is empty (grep/diff
       enforceable).
-- [ ] Defensive fallback: if `position` is ever computed beyond `±32000`
+- [x] Defensive fallback: if `position` is ever computed beyond `±32000`
       despite the margin (test by forcing the condition), the encode
       step clamps rather than wraps and sets an observable flag —
       never silent wraparound.
-- [ ] Regenerated `kReplyEnvelopeMaxEncodedSize` ≤ 130 B.
+- [x] Regenerated `kReplyEnvelopeMaxEncodedSize` ≤ 130 B.
 
 ## Testing
 

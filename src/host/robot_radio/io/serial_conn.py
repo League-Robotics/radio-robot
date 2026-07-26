@@ -367,36 +367,30 @@ def _parse_device_banner(line: str) -> dict[str, Any] | None:
     }
 
 
-# flags bit 5 (ack_fresh) -- telemetry.proto Telemetry.flags. Mirrors
-# robot_radio.robot.protocol's own _FLAG_ACK_FRESH constant; duplicated
-# here (rather than imported) because importing robot_radio.robot.protocol
-# from this module's top level would be circular -- see this file's own
-# TYPE_CHECKING note above. Both share the SAME source of truth: the
-# telemetry.proto bit-table comment. Retained for any future reader that
-# still wants the single "freshest ack" slot -- _match_ack_in_frames()
-# below no longer uses it (120: ring-based matching needs no freshness
-# gate -- see that function's own docstring).
-_ACK_FRESH_BIT = 1 << 5
+# flags bit 5 -- RESERVED (124-008: formerly ack_fresh, deleted with the
+# single "freshest ack" scalar slot it gated -- issue §B4). The former
+# _ACK_FRESH_BIT constant here is gone; _match_ack_in_frames() below
+# needs no freshness gate at all (120: ring-based matching -- see that
+# function's own docstring).
 
 
 def _match_ack_in_frames(
     frames: "list[envelope_pb2.ReplyEnvelope]", corr_id: int
-) -> "telemetry_pb2.AckEntry | None":
+) -> "int | None":
     """Scan a batch of binary-plane ``tlm``-body ``ReplyEnvelope`` frames
     (as returned by ``drain_binary_tlm()``) for an ack-ring entry matching
     ``corr_id``.
 
     120 (bench-single-ack-slot-observability-collapses-at-40ms.md) replaces
     the single scalar ``ack_corr``/``ack_err`` slot (valid iff ``flags``
-    bit 5 / ``ack_fresh``) this function used to scan with a scan over each
-    frame's bounded ``acks`` ring (depth ``kAckRingDepth``=4,
-    telemetry.proto) -- a corr_id present ANYWHERE in the ring was
-    genuinely acked by ``App::Telemetry::ack()`` at some point. No
-    freshness bit is needed to disambiguate a ring entry from a stale
-    leftover value the way ``ack_fresh`` was needed for the single slot
-    (whose ``ack_corr``/``ack_err`` hold their LAST-WRITTEN value on every
-    ordinary frame, fresh or not) -- an entry is either genuinely in the
-    ring (real) or it is not there at all.
+    bit 5 / ``ack_fresh``, both DELETED 124-008 issue §B4) this function
+    used to scan with a scan over each frame's bounded ``acks`` ring (depth
+    ``kAckRingDepth``=4, telemetry.proto) -- a corr_id present ANYWHERE in
+    the ring was genuinely acked by ``App::Telemetry::ack()`` at some
+    point. No freshness bit is needed to disambiguate a ring entry from a
+    stale leftover value the way ``ack_fresh`` was needed for the single
+    slot -- an entry is either genuinely in the ring (real) or it is not
+    there at all.
 
     Matching policy (sprint 120 Architecture Step 7's open question,
     resolved here): return on the FIRST (frame, ring-entry) match, scanning
@@ -410,10 +404,12 @@ def _match_ack_in_frames(
     and acked at most once by the firmware); oldest-first is chosen for a
     deterministic, easy-to-reason-about contract regardless.
 
-    Returns the matching ``telemetry_pb2.AckEntry`` ring entry itself (the
-    caller reads ``corr_id``/``err`` off it -- NOT the frame's own scalar
-    ``ack_corr``/``ack_err``, which may belong to a DIFFERENT, later
-    command by the time this frame is read) --
+    Returns the matching packed ``int`` ring entry itself (124-008: the
+    real protobuf decoder hands back a bare int for a packed-scalar
+    repeated field -- ``Telemetry.acks`` is ``repeated uint32``, packed
+    ``corr_id<<4|err``; ``telemetry_pb2.AckEntry`` is deleted, issue §B4 --
+    the caller unpacks ``corr_id``/``err`` via
+    ``protocol.AckEntry.from_ring_entry()``) --
     ``SerialConnection.wait_for_ack()``'s own pure-function matching core,
     split out so it can be unit-tested directly against synthetic frame
     batches without a real queue/thread.
@@ -426,7 +422,7 @@ def _match_ack_in_frames(
         if reply.WhichOneof("body") != "tlm":
             continue
         for entry in reply.tlm.acks:
-            if entry.corr_id == corr_id:
+            if (entry >> 4) == corr_id:
                 return entry
     return None
 
@@ -1620,14 +1616,15 @@ class SerialConnection:
 
         return frames
 
-    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.AckEntry | None":  # [ms]
+    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "int | None":  # [ms]
         """Poll incoming binary ``Telemetry`` pushes' bounded ack ring for an
         entry matching ``corr_id``, for up to ``timeout`` ms. Returns the
-        matched raw ``pb2.AckEntry`` ring entry (the caller reads
-        ``corr_id``/``err`` off it -- NOT the enclosing frame's own scalar
-        ``ack_corr``/``ack_err``, which may belong to a different command by
-        the time the frame is read), or ``None`` if the deadline passes with
-        no match -- this wait is always bounded, never infinite.
+        matched raw packed ``int`` ring entry (124-008: a plain int,
+        ``corr_id<<4|err`` -- ``telemetry_pb2.AckEntry`` is deleted, issue
+        §B4; the caller unpacks via
+        ``robot_radio.robot.protocol.AckEntry.from_ring_entry()``), or
+        ``None`` if the deadline passes with no match -- this wait is
+        always bounded, never infinite.
 
         The ONE shared ack matcher (104-003, promoted out of
         ``robot_radio.robot.protocol.NezhaProtocol.wait_for_ack()``, which

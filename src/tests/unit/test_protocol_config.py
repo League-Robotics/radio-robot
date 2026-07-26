@@ -57,15 +57,16 @@ class _FakeFastConn:
     scripts, defaulting to ``None`` -- a bounded-timeout-with-no-match).
     ``config()`` calls nothing else on ``self._conn``.
 
-    120 (ack ring): ``wait_for_ack()`` now returns the matching raw
-    ``telemetry_pb2.AckEntry`` RING ENTRY (``corr_id``/``err``), not the
-    whole ``Telemetry`` frame it rode in on -- see
-    ``SerialConnection.wait_for_ack()``'s own docstring."""
+    120 (ack ring): ``wait_for_ack()`` now returns the matching raw packed
+    ``int`` RING ENTRY (``corr_id<<4|err`` -- 124-008, issue §B4:
+    ``telemetry_pb2.AckEntry`` is deleted, ``Telemetry.acks`` is
+    ``repeated uint32``), not the whole ``Telemetry`` frame it rode in on
+    -- see ``SerialConnection.wait_for_ack()``'s own docstring."""
 
     def __init__(self) -> None:
         self.sent: list["envelope_pb2.CommandEnvelope"] = []
         self._next_corr_id = 0
-        self.ack_result: "telemetry_pb2.AckEntry | None" = None
+        self.ack_result: "int | None" = None
 
     def send_envelope_fast(self, envelope: "envelope_pb2.CommandEnvelope") -> int:
         self._next_corr_id += 1
@@ -73,7 +74,7 @@ class _FakeFastConn:
         self.sent.append(envelope)
         return self._next_corr_id
 
-    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.AckEntry | None":
+    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "int | None":
         return self.ack_result
 
 
@@ -271,7 +272,7 @@ def test_config_corr_id_round_trips_through_wait_for_ack():
     proto = NezhaProtocol(conn)
     corr_id = proto.config(tw=128.0)
 
-    conn.ack_result = telemetry_pb2.AckEntry(corr_id=corr_id, err=envelope_pb2.ERR_UNIMPLEMENTED)
+    conn.ack_result = ((corr_id) << 4) | (envelope_pb2.ERR_UNIMPLEMENTED)
 
     ack = proto.wait_for_ack(corr_id, timeout=200)
 
@@ -413,7 +414,7 @@ def test_otos_config_corr_id_round_trips_through_wait_for_ack():
     proto = NezhaProtocol(conn)
     corr_id = proto.otos_config(linear_scale=1.05)
 
-    conn.ack_result = telemetry_pb2.AckEntry(corr_id=corr_id, err=0)
+    conn.ack_result = ((corr_id) << 4) | (0)
 
     ack = proto.wait_for_ack(corr_id, timeout=200)
 
@@ -537,7 +538,7 @@ def test_estimator_config_corr_id_round_trips_through_wait_for_ack():
     proto = NezhaProtocol(conn)
     corr_id = proto.estimator_config(weight_heading_otos=0.4)
 
-    conn.ack_result = telemetry_pb2.AckEntry(corr_id=corr_id, err=0)
+    conn.ack_result = ((corr_id) << 4) | (0)
 
     ack = proto.wait_for_ack(corr_id, timeout=200)
 

@@ -45,6 +45,7 @@ _FIELD_OPT_MAX       = 50003
 _FIELD_OPT_ABS_MAX   = 50004
 _FIELD_OPT_REQ       = 50005
 _FIELD_OPT_STR_LEN   = 50006
+_FIELD_OPT_SCALE     = 50007
 
 # Extension field number for the (binary) ENUM-VALUE option (options.proto)
 # -- a separate number space from the _FIELD_OPT_* block above (FieldOptions
@@ -449,6 +450,7 @@ try:
     _TYPE_DOUBLE  = _dpb2.FieldDescriptorProto.TYPE_DOUBLE
     _TYPE_INT32   = _dpb2.FieldDescriptorProto.TYPE_INT32
     _TYPE_INT64   = _dpb2.FieldDescriptorProto.TYPE_INT64
+    _TYPE_SINT32  = _dpb2.FieldDescriptorProto.TYPE_SINT32
     _TYPE_UINT32  = _dpb2.FieldDescriptorProto.TYPE_UINT32
     _TYPE_UINT64  = _dpb2.FieldDescriptorProto.TYPE_UINT64
     _TYPE_BOOL    = _dpb2.FieldDescriptorProto.TYPE_BOOL
@@ -565,6 +567,13 @@ def _read_req(field) -> bool:
     return bool(opts.get(_FIELD_OPT_REQ, 0))
 
 
+def _read_scale(field) -> float | None:
+    """Return the (scale) option value for a field, or None (sprint 124
+    ticket 008, options.proto's (scale) doc comment -- GENERATED fixed-point
+    divisor, not informational-only like (units))."""
+    return _read_bound(field, _FIELD_OPT_SCALE)
+
+
 def _parse_enum_value_options(value) -> dict:
     """Parse an EnumValueDescriptorProto's serialized EnumValueOptions
     extension bytes into {field_number: raw_value}.
@@ -623,6 +632,7 @@ def _scalar_cpp_type(field) -> str:
     if t == _TYPE_FLOAT:   return "float"
     if t == _TYPE_DOUBLE:  return "double"
     if t == _TYPE_INT32:   return "int32_t"
+    if t == _TYPE_SINT32:  return "int32_t"
     if t == _TYPE_INT64:   return "int64_t"
     if t == _TYPE_UINT32:  return "uint32_t"
     if t == _TYPE_UINT64:  return "uint64_t"
@@ -637,7 +647,7 @@ def _scalar_default(field) -> str:
     t = field.type
     if t == _TYPE_FLOAT:   return "0.0f"
     if t == _TYPE_DOUBLE:  return "0.0"
-    if t in (_TYPE_INT32, _TYPE_INT64, _TYPE_UINT32, _TYPE_UINT64): return "0"
+    if t in (_TYPE_INT32, _TYPE_SINT32, _TYPE_INT64, _TYPE_UINT32, _TYPE_UINT64): return "0"
     if t == _TYPE_BOOL:    return "false"
     return "0"
 
@@ -945,6 +955,38 @@ def _emit_message(md, want_setters: bool, lines: list[str],
             default = _scalar_default(field)
             ft = _scalar_cpp_type(field)
             lines.append(f"    {ft} {fname} = {default};")
+
+    # --- Generated fixed-point conversion methods (sprint 124 ticket 008,
+    # options.proto's (scale) option, architecture Decision 3: "generated
+    # conversion, not hand-honoured documentation" -- the field itself
+    # stores the raw wire int (int32_t, the sint32 wire type's C++ storage);
+    # these are the ONE generated place a caller converts to/from the real
+    # float value (scale) describes, so a mismatch between what one side
+    # multiplies by and what the other divides by cannot arise from two
+    # independently hand-typed literals drifting apart. Scoped to plain
+    # (non-oneof, non-repeated, non-Opt) fields -- the only shape (scale)
+    # is meaningful on. ---
+    for field in md.field:
+        if field.HasField("oneof_index"):
+            continue
+        if field.label == _LABEL_REPEATED:
+            continue
+        scale = _read_scale(field)
+        if scale is None:
+            continue
+        if field.type != _TYPE_SINT32:
+            raise GenMessagesError(
+                f"wire.cpp codegen: {struct_name}.{field.name} has a (scale) "
+                f"option but is not a sint32 field -- (scale) is only "
+                f"meaningful on sint32 (options.proto's own doc comment)")
+        cap = _cap_camel(field.name)
+        lines.append("")
+        lines.append(f"    static constexpr float k{cap}Scale = {_float_literal(scale)};  // real = raw * scale")
+        lines.append(f"    static int32_t pack{cap}(float value) {{")
+        lines.append(f"        return static_cast<int32_t>(value >= 0.0f ? (value / k{cap}Scale + 0.5f)"
+                     f" : (value / k{cap}Scale - 0.5f));")
+        lines.append("    }")
+        lines.append(f"    static float unpack{cap}(int32_t raw) {{ return static_cast<float>(raw) * k{cap}Scale; }}")
 
     # --- Array / optional-string accessors ---
     # 080-001: every get_*-prefixed accessor (oneof-kind discriminator,
@@ -1327,6 +1369,8 @@ def _scalar_type_literal(field) -> str:
         return "kDouble"
     if t == _TYPE_INT32:
         return "kInt32"
+    if t == _TYPE_SINT32:
+        return "kSint32"
     if t == _TYPE_INT64:
         return "kInt64"
     if t == _TYPE_UINT32:
@@ -1345,6 +1389,7 @@ _WIRE_TYPE_BY_SCALAR = {
     "kFloat": "kFixed32",
     "kDouble": "kFixed64",
     "kInt32": "kVarint",
+    "kSint32": "kVarint",
     "kInt64": "kVarint",
     "kUint32": "kVarint",
     "kUint64": "kVarint",
@@ -1356,7 +1401,7 @@ _WIRE_TYPE_BY_SCALAR = {
 # elemStride (unused by this sprint's reachable schema, see FieldKind's own
 # doc comment in wire.cpp, but computed correctly for engine completeness).
 _SCALAR_CPP_SIZE = {
-    "kFloat": 4, "kDouble": 8, "kInt32": 4, "kInt64": 8,
+    "kFloat": 4, "kDouble": 8, "kInt32": 4, "kSint32": 4, "kInt64": 8,
     "kUint32": 4, "kUint64": 8, "kBool": 1, "kEnum": 1,
 }
 
@@ -1394,7 +1439,7 @@ def _field_wire_type_bits(field, packed: bool = False) -> int:
         return 5
     if t == _TYPE_DOUBLE:
         return 1
-    if t in (_TYPE_INT32, _TYPE_INT64, _TYPE_UINT32, _TYPE_UINT64, _TYPE_BOOL, _TYPE_ENUM):
+    if t in (_TYPE_INT32, _TYPE_SINT32, _TYPE_INT64, _TYPE_UINT32, _TYPE_UINT64, _TYPE_BOOL, _TYPE_ENUM):
         return 0
     if t in (_TYPE_STRING, _TYPE_BYTES, _TYPE_MESSAGE):
         return 2
@@ -1454,6 +1499,24 @@ def _worst_case_scalar_size(field) -> int:
         if bound is not None and bound >= 0:
             return _varint_len(int(bound))
         return 5  # ceil(32/7)
+    if t == _TYPE_SINT32:
+        # sint32/zigzag (124-008, issue §B3): a bounded field's worst-case
+        # wire width is the varint length of its zigzag-mapped magnitude,
+        # NOT the sign-extended-to-64-bit width _TYPE_INT32 below uses --
+        # that is exactly the gotcha this scalar type exists to dodge (a
+        # negative int32 costs 10B; a negative sint32 at the SAME magnitude
+        # costs the same as the positive value, via zigzag). zigzag(n) for a
+        # symmetric (abs_max) bound has worst-case magnitude 2*abs_max - 1
+        # (e.g. -abs_max -> 2*abs_max - 1); 2*abs_max is a safe (never
+        # under-) approximation that never costs an extra varint byte in
+        # practice for this schema's bounds (all comfortably clear of a
+        # 7-bit boundary).
+        bound = _read_bound(field, _FIELD_OPT_ABS_MAX)
+        if bound is None:
+            bound = _read_bound(field, _FIELD_OPT_MAX)
+        if bound is not None:
+            return _varint_len(int(2 * abs(bound)))
+        return 5  # ceil(32/7) -- unbounded sint32 worst case
     if t == _TYPE_INT32:
         # protobuf's own well-known gotcha: a NEGATIVE int32 is sign-
         # extended to 64 bits before varint encoding by the reference
@@ -1881,6 +1944,17 @@ uint16_t encode(const ReplyEnvelope& in, uint8_t* buf, uint16_t cap);
 // smaller than the required output.
 uint16_t encode(const TelemetrySecondary& in, uint8_t* buf, uint16_t cap);
 
+// decode(Telemetry&, ...) -- 124-008 addition. Firmware production code
+// still never decodes its own outbound Telemetry frame (host owns that,
+// via real protobuf on its side of the wire) -- this overload exists
+// purely so a HOST_BUILD test can exercise decodeInto()'s (min)/(max)/
+// (abs_max) validateBounds() path against Telemetry's own bounded fields
+// (flags, the packed acks word, ...) through the SAME generated engine
+// production encode() uses, rather than a hand-rolled parallel decoder
+// that could silently drift from it. Same never-partial/malformed-input
+// contract as decode(CommandEnvelope&, ...) above.
+Result decode(Telemetry& out, const uint8_t* buf, uint16_t len);
+
 }  // namespace wire
 }  // namespace msg
 """
@@ -1928,8 +2002,9 @@ enum class FieldKind : uint8_t {
   kOneofMessage,    // nested-message member of a real oneof union
   kString,          // fixed-capacity char[N] (non-oneof, non-Opt)
   kBytes,           // fixed-capacity uint8_t[N] + count (Echo.payload)
-  kRepeatedScalar,  // T[N] + count, PACKED on the wire (unreached by this
-                     // sprint's schema -- kept for engine completeness)
+  kRepeatedScalar,  // T[N] + count, PACKED on the wire (124-008: Telemetry.acks
+                     // is this engine's first real use -- packed corr_id<<4|err
+                     // uint32 words, see telemetry.proto's own doc comment)
   kRepeatedMessage, // T[N] + count, each element separately tagged
                      // (WheelTargets.w -- the repeated field this sprint's
                      // schema actually reaches)
@@ -1940,6 +2015,11 @@ enum class ScalarType : uint8_t {
   kFloat,
   kDouble,
   kInt32,
+  kSint32,          // zigzag-encoded (124-008): WireRuntime::zigzagEncode32/
+                     // zigzagDecode32 -- a bounded signed field costs the
+                     // varint width of its zigzag magnitude regardless of
+                     // sign, unlike kInt32's sign-extended-to-64-bit path
+                     // (wire_runtime.h's own documented int32 gotcha).
   kInt64,
   kUint32,
   kUint64,
@@ -2016,6 +2096,13 @@ bool decodeScalarValue(ScalarType type, const uint8_t* buf, size_t len, size_t* 
       std::memcpy(dst, &sv, sizeof(sv));
       return true;
     }
+    case ScalarType::kSint32: {
+      uint64_t v;
+      if (!WireRuntime::decodeVarint(buf, len, pos, &v)) return false;
+      const int32_t sv = WireRuntime::zigzagDecode32(static_cast<uint32_t>(v));
+      std::memcpy(dst, &sv, sizeof(sv));
+      return true;
+    }
     case ScalarType::kUint32: {
       uint64_t v;
       if (!WireRuntime::decodeVarint(buf, len, pos, &v)) return false;
@@ -2060,9 +2147,15 @@ bool encodeScalarValue(ScalarType type, const void* src, uint8_t* buf, size_t ca
       int32_t v;
       std::memcpy(&v, src, sizeof(v));
       // protobuf's own int32 gotcha: a NEGATIVE int32 is sign-extended to
-      // 64 bits before varint encoding (unless the field is sint32, which
-      // this schema does not use) -- mirrored via the int64 cast.
+      // 64 bits before varint encoding (unless the field is sint32 --
+      // kSint32 below is exactly that escape hatch) -- mirrored via the
+      // int64 cast.
       return WireRuntime::encodeVarint(static_cast<uint64_t>(static_cast<int64_t>(v)), buf, cap, pos);
+    }
+    case ScalarType::kSint32: {
+      int32_t v;
+      std::memcpy(&v, src, sizeof(v));
+      return WireRuntime::encodeVarint(WireRuntime::zigzagEncode32(v), buf, cap, pos);
     }
     case ScalarType::kUint32: {
       uint32_t v;
@@ -2107,6 +2200,11 @@ bool scalarIsDefault(ScalarType type, const void* src) {
       std::memcpy(&v, src, sizeof(v));
       return v == 0;
     }
+    case ScalarType::kSint32: {
+      int32_t v;
+      std::memcpy(&v, src, sizeof(v));
+      return v == 0;
+    }
     case ScalarType::kUint32: {
       uint32_t v;
       std::memcpy(&v, src, sizeof(v));
@@ -2144,6 +2242,11 @@ double scalarAsDouble(ScalarType type, const void* src) {
     case ScalarType::kEnum:
       return static_cast<double>(*static_cast<const uint8_t*>(src));
     case ScalarType::kInt32: {
+      int32_t v;
+      std::memcpy(&v, src, sizeof(v));
+      return static_cast<double>(v);
+    }
+    case ScalarType::kSint32: {
       int32_t v;
       std::memcpy(&v, src, sizeof(v));
       return static_cast<double>(v);
@@ -2519,6 +2622,16 @@ uint16_t encode(const TelemetrySecondary& in, uint8_t* buf, uint16_t cap) {
   size_t pos = 0;
   if (!encodeInto(&in, kTable_TelemetrySecondary, buf, static_cast<size_t>(cap), &pos)) return 0;
   return static_cast<uint16_t>(pos);
+}
+
+Result decode(Telemetry& out, const uint8_t* buf, uint16_t len) {
+  // Same full-object memset rationale as decode(CommandEnvelope&, ...)
+  // above -- Telemetry is standard-layout/trivially-copyable (every
+  // reachable struct is, per layout_checks.h) but not trivial (default
+  // member initializers), so `= {}` alone would not zero every byte.
+  std::memset(static_cast<void*>(&out), 0, sizeof(out));
+  if (buf == nullptr && len != 0) return Result{false, 0, ErrCode::ERR_DECODE};
+  return decodeInto(&out, kTable_Telemetry, buf, static_cast<size_t>(len), 0);
 }
 
 }  // namespace wire

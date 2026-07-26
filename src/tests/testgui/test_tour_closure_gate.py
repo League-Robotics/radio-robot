@@ -406,31 +406,29 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
 
 
 def _wait_for_ack(loop, corr_id: int, timeout: float = 3.0, *, deterministic: bool = True):
-    """Poll for a fresh ack matching `corr_id`.
+    """Poll for an ack matching `corr_id` in the bounded ack ring.
 
-    BUGFIX (turn-prediction campaign): both branches used to read
-    `frame.acks` (plural) -- the pre-115-003 depth-3 ack ring, which
-    `TLMFrame` no longer has (`AttributeError`, discovered when this
-    function became load-bearing for this campaign's own EstimatorConfigPatch
-    push below -- previously the ONLY caller was the realistic-errors
-    branch's OTOS push, and every test reaching it is `xfail(strict=False)`,
-    which silently swallows ANY exception, not just AssertionError, masking
-    this outright). `TLMFrame` carries a SINGLE ack slot instead
-    (`frame.ack`, an `AckEntry | None`, populated only when `ack_fresh` was
-    set that frame) -- see `protocol.py`'s own `TLMFrame` doc comment.
+    124-008 (issue §B4) deleted the single "freshest ack" scalar slot
+    (`frame.ack`/`frame.ack_fresh`) this function used to scan -- `acks`
+    (the bounded ring, `TLMFrame.acks`, a `list[AckEntry]`) is the ONLY
+    ack source now; ring membership alone means "really acked," no
+    freshness gate needed -- see `protocol.py`'s own `TLMFrame` doc
+    comment.
     """
     if deterministic:
         for _ in range(400):  # 400 cycles * 50ms = 20s virtual time -- generously bounded
             loop.step(1)
             for frame in loop.drain_pending_tlm():
-                if frame.ack is not None and frame.ack.corr_id == corr_id:
-                    return frame.ack
+                for entry in frame.acks:
+                    if entry.corr_id == corr_id:
+                        return entry
         return None
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         for frame in loop.read_pending_binary_tlm_frames():
-            if frame.ack is not None and frame.ack.corr_id == corr_id:
-                return frame.ack
+            for entry in frame.acks:
+                if entry.corr_id == corr_id:
+                    return entry
         time.sleep(0.02)
     return None
 

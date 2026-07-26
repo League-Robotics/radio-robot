@@ -415,15 +415,12 @@ def _drain_and_poll(transport: "MoveTransport", move_id: int,
     "small reimplementation, not an import" call `io/sim_config.py`'s
     `SimConfigConn.poll_ack()` already made for the identical layering
     reason; see that method's own doc comment), so this is the TLMFrame-
-    layer counterpart of the same policy. Falls back to the single
-    "freshest ack" scalar slot (`frame.ack`, valid iff `frame.ack_fresh`)
-    ONLY when a frame's own ring carries no match -- a real wire frame that
-    sets `frame.ack` always pushes the SAME ack onto `frame.acks` in the
-    SAME cycle (`docs/protocol-v4.md` section 7.1's "purely additive"
-    wire change), so this fallback exists for test doubles that populate
-    only the scalar slot (e.g. `test_tour1_geometry.py`'s
-    `_FakeTwistTransport`), not for any real frame the ring itself would
-    miss.
+    layer counterpart of the same policy. 124-008 (issue §B4) deleted the
+    single "freshest ack" scalar slot (`frame.ack`/`frame.ack_fresh`) this
+    function used to additionally fall back to for test doubles that
+    populated only the scalar slot -- the ring is now the ONLY ack
+    mechanism, wire or test double alike (`test_tour1_geometry.py`'s
+    `_FakeTwistTransport` pushes directly onto `.acks` now).
 
     Root cause this replaces (planning-time finding, confirmed by
     reproduction -- see this module's own file header / the ticket): reading
@@ -452,8 +449,6 @@ def _drain_and_poll(transport: "MoveTransport", move_id: int,
             if entry.corr_id == move_id:
                 terminal = (frame, entry)
                 break
-        if terminal is None and frame.ack is not None and frame.ack.corr_id == move_id:
-            terminal = (frame, frame.ack)
     return terminal
 
 

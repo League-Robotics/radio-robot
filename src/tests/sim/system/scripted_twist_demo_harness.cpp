@@ -163,14 +163,19 @@ int countSecondary(const std::vector<DecodedLine>& lines) {
   return n;
 }
 
-// Matches against the single ack slot (Telemetry.ack_corr/ack_err, valid
-// iff flags bit 5/kFlagAckFresh) that replaced the pre-115 depth-3 AckEntry
-// ring (115-003 frame v2). Every existing caller wants an OK (ack_err==0)
+// Matches against the bounded ack ring (Telemetry.acks, 124-008: packed
+// uint32 corr_id<<4|err -- the single "freshest ack" scalar slot/
+// kFlagAckFresh this used to gate on is DELETED, issue §B4; ring membership
+// alone means "really acked"). Every existing caller wants an OK (err==0)
 // match.
 bool anyAckMatches(const std::vector<DecodedLine>& frames, uint32_t corrId) {
+  constexpr uint32_t kAckErrBits = 4;
+  constexpr uint32_t kAckErrMask = (1u << kAckErrBits) - 1;
   for (const auto& f : frames) {
-    if (!(f.telemetry.flags & App::kFlagAckFresh)) continue;
-    if (f.telemetry.ack_corr == corrId && f.telemetry.ack_err == 0) return true;
+    for (uint8_t i = 0; i < f.telemetry.acks_count; ++i) {
+      const uint32_t packed = f.telemetry.acks_[i];
+      if ((packed >> kAckErrBits) == corrId && (packed & kAckErrMask) == 0) return true;
+    }
   }
   return false;
 }
@@ -186,10 +191,14 @@ void printTraceHeader() {
 }
 
 void printTraceRow(int cycle, float cmdVx, float cmdOmega, const msg::Telemetry& t) {
+  // 124-008 (issue §B3): position is scale=1.0 (raw == real mm, safe as-is);
+  // velocity is a raw sint32 wire int at 0.1mm/s scale -- unpackVelocity()
+  // is the GENERATED conversion back to real mm/s for this diagnostic trace.
   std::printf("%6d  %8.1f %8.1f  %8.1f %8.1f  %8.1f %8.1f\n", cycle, static_cast<double>(cmdVx),
               static_cast<double>(cmdOmega), static_cast<double>(t.enc_left.position),
               static_cast<double>(t.enc_right.position),
-              static_cast<double>(t.enc_left.velocity), static_cast<double>(t.enc_right.velocity));
+              static_cast<double>(msg::EncoderReading::unpackVelocity(t.enc_left.velocity)),
+              static_cast<double>(msg::EncoderReading::unpackVelocity(t.enc_right.velocity)));
 }
 
 }  // namespace
@@ -280,13 +289,16 @@ int main() {
       // EncoderReading is unconditionally present every frame (115-005
       // frame v2 -- no has_vel/has_enc presence flag any more), so every
       // frame carries real data, not just a filtered subset.
+      // 124-008 (issue §B3): velocity is a raw sint32 wire int (0.1mm/s
+      // scale) -- unpackVelocity() is the GENERATED conversion; position is
+      // scale=1.0 (raw == real mm, safe as-is).
       if (!sawRampData) {
-        firstVelLeft = f.telemetry.enc_left.velocity;
+        firstVelLeft = msg::EncoderReading::unpackVelocity(f.telemetry.enc_left.velocity);
         firstEncLeft = f.telemetry.enc_left.position;
         sawRampData = true;
       }
-      peakVelLeft = f.telemetry.enc_left.velocity;
-      peakVelRight = f.telemetry.enc_right.velocity;
+      peakVelLeft = msg::EncoderReading::unpackVelocity(f.telemetry.enc_left.velocity);
+      peakVelRight = msg::EncoderReading::unpackVelocity(f.telemetry.enc_right.velocity);
       lastEncLeft = f.telemetry.enc_left.position;
       printTraceRow(sim.cycleCount(), kCmdVx, kCmdOmega, f.telemetry);
     }
@@ -338,8 +350,10 @@ int main() {
       if (f.telemetry.mode == msg::DriveMode::IDLE) sawIdleMode = true;
       // EncoderReading is unconditionally present every frame (115-005
       // frame v2) -- no has_vel presence flag to gate on any more.
-      lastVelLeft = f.telemetry.enc_left.velocity;
-      lastVelRight = f.telemetry.enc_right.velocity;
+      // 124-008 (issue §B3): velocity is a raw sint32 wire int (0.1mm/s
+      // scale) -- unpackVelocity() is the GENERATED conversion.
+      lastVelLeft = msg::EncoderReading::unpackVelocity(f.telemetry.enc_left.velocity);
+      lastVelRight = msg::EncoderReading::unpackVelocity(f.telemetry.enc_right.velocity);
       printTraceRow(sim.cycleCount(), 0.0f, 0.0f, f.telemetry);
     }
   }

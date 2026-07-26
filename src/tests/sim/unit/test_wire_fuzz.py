@@ -208,16 +208,23 @@ def test_fuzz_case(asan_harness, case_id, raw, kind, expected_corr_id, expected_
 _UINT32_MAX = 4294967295
 _FLOAT_EXTREMES = [3.4028235e38, -3.4028235e38, 1.1754944e-38, 0.0, float("nan"), float("inf"), float("-inf")]
 
+# 124-008 (issue §B3): every geometric/kinematic Telemetry field that used
+# to be `float` is now `sint32` (zigzag) -- Telemetry has NO float fields
+# left at all. The extreme-value fuzz coverage below now targets sint32's
+# OWN boundary (INT32_MIN/MAX, the widest zigzag magnitude) instead of an
+# IEEE-754 float extreme -- same spirit ("exercise every encodeScalarValue()
+# branch at its own type's boundary under ASan/UBSan"), new type.
+_INT32_EXTREMES = [-2147483648, 2147483647, -1, 0, 1]
 
-@pytest.mark.parametrize("value", _FLOAT_EXTREMES, ids=[f"f{i}" for i in range(len(_FLOAT_EXTREMES))])
-def test_fuzz_encode_telemetry_float_extremes(asan_harness, value):
+
+@pytest.mark.parametrize("value", _INT32_EXTREMES, ids=[f"i{i}" for i in range(len(_INT32_EXTREMES))])
+def test_fuzz_encode_telemetry_sint32_extremes(asan_harness, value):
     r = encode_telemetry(
         asan_harness, 1, now=_UINT32_MAX, mode=255, seq=_UINT32_MAX, flags=_UINT32_MAX,
-        ack_corr=_UINT32_MAX, ack_err=_UINT32_MAX,
-        enc_left_position=value, enc_left_velocity=value, enc_left_time=_UINT32_MAX,
-        enc_right_position=value, enc_right_velocity=value, enc_right_time=_UINT32_MAX,
+        enc_left_position=value, enc_left_velocity=value, enc_left_age=255, enc_left_position_epoch=255,
+        enc_right_position=value, enc_right_velocity=value, enc_right_age=255, enc_right_position_epoch=255,
         otos_x=value, otos_y=value, otos_heading=value, otos_v_x=value, otos_v_y=value, otos_omega=value,
-        otos_time=_UINT32_MAX,
+        otos_age=255,
         pose_x=value, pose_y=value, pose_h=value,
         twist_v_x=value, twist_v_y=value, twist_omega=value,
         line=_UINT32_MAX, color=_UINT32_MAX,
@@ -225,7 +232,12 @@ def test_fuzz_encode_telemetry_float_extremes(asan_harness, value):
     # No ASan/UBSan finding is the only bar here (encode_telemetry() itself
     # already asserts !crashed and a well-formed "B64 .../ZERO" line via
     # run_harness()'s own crashed-detection -- calling it at all under the
-    # ASan-built binary IS the test).
+    # ASan-built binary IS the test). zigzagEncode32(INT32_MIN) is the
+    # classic signed-overflow trap this exercises: -INT32_MIN doesn't fit
+    # in an int32_t, so the implementation MUST go through an unsigned
+    # intermediate (WireRuntime::zigzagEncode32's own contract) -- an
+    # incorrect signed-only implementation is exactly what UBSan would catch
+    # here.
     assert r is None or len(r) > 0
 
 

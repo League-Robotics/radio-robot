@@ -79,19 +79,23 @@ void checkFloatEq(float actual, float expected, const std::string& what, float t
   }
 }
 
-// Finds the single ack slot for `corrId` across every decoded telemetry
-// frame in `lines` -- the single Telemetry.ack_corr/ack_err slot (valid
-// iff flags bit 5, ack_fresh) that replaced the pre-115 depth-3 AckEntry
-// ring (115-003 frame v2). Returns true and fills *errCode if found
-// (0 == OK, nonzero == the msg::ErrCode value).
+// Finds `corrId`'s own entry in the bounded ack ring (Telemetry.acks,
+// 124-008: packed uint32, corr_id<<4|err -- the single "freshest ack"
+// scalar slot / kFlagAckFresh this function used to scan is DELETED, issue
+// §B4; ring membership alone means "really acked," no freshness gate
+// needed) across every decoded telemetry frame in `lines`. Returns true
+// and fills *errCode if found (0 == OK, nonzero == the msg::ErrCode value).
 bool findAck(const std::vector<TestSupport::DecodedLine>& lines, uint32_t corrId, uint32_t* errCode) {
-  constexpr uint32_t kAckFreshBit = 1u << 5;
+  constexpr uint32_t kAckErrBits = 4;
+  constexpr uint32_t kAckErrMask = (1u << kAckErrBits) - 1;
   for (const auto& line : lines) {
     if (line.kind != TestSupport::DecodedKind::kTelemetry) continue;
-    if ((line.telemetry.flags & kAckFreshBit) == 0) continue;
-    if (line.telemetry.ack_corr == corrId) {
-      *errCode = line.telemetry.ack_err;
-      return true;
+    for (uint8_t i = 0; i < line.telemetry.acks_count; ++i) {
+      const uint32_t packed = line.telemetry.acks_[i];
+      if ((packed >> kAckErrBits) == corrId) {
+        *errCode = packed & kAckErrMask;
+        return true;
+      }
     }
   }
   return false;

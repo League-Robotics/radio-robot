@@ -3,6 +3,8 @@
 // timing-schedule rationale.
 #include "app/robot_loop.h"
 
+#include <cmath>
+
 #include "motion/body_kinematics.h"
 #include "messages/envelope.h"
 
@@ -50,6 +52,17 @@ static_assert(kWindows <= RobotLoop::kCycle,
 constexpr uint32_t kPace = RobotLoop::kCycle - kWindows;  // [ms] final block's own gap, absorbing kWindows
 
 constexpr uint32_t kPreamblePace = 10;  // [ms] boot-loop probe pacing
+
+// Position-rebaseline policy (124-008, sprint 124 architecture Decision 6,
+// revised twice -- see sprint.md). kPositionWireBound MUST match
+// telemetry.proto's EncoderReading.position (abs_max) exactly. The 2000mm
+// margin dwarfs one cycle's worst-case travel (wheel speeds in the low
+// hundreds of mm/s at ~25Hz => tens of mm per cycle at most), so the
+// trigger is expected to fire long before the bound itself is ever
+// approached in normal operation -- see assembleFrame()'s own comment at
+// the call site for the full mechanism.
+constexpr float kPositionWireBound = 32000.0f;       // [mm] EncoderReading.position (abs_max)
+constexpr float kPositionRebaselineMargin = 30000.0f;  // [mm] trigger threshold -- 2000mm below the bound
 
 // --- 114-004 (SUC-003) persisted-tuning merge helpers -- pure struct
 // merges, no RobotLoop state needed, so these stay free functions rather
@@ -180,6 +193,14 @@ void RobotLoop::runAndWait(uint32_t gap, Body body) {  // [ms]
   sleepUntil(mark, gap);
 }
 
+// clampToPositionWireBound -- see robot_loop.h's own declaration comment
+// for why this is a public static (unit-testable in isolation from a live
+// Motor's rebaseline() behavior).
+float RobotLoop::clampToPositionWireBound(float pos, bool* clamped) {
+  *clamped = std::fabs(pos) > kPositionWireBound;
+  return *clamped ? std::copysign(kPositionWireBound, pos) : pos;
+}
+
 // assembleFrame -- see robot_loop.h's own declaration comment for the full
 // contract (123-007: single assembly point, sourced from primaries, called
 // once immediately before tlm_.emit()).
@@ -189,28 +210,72 @@ void RobotLoop::assembleFrame(uint32_t now, uint64_t cycleStartUs, uint64_t nowU
                                bool otosConnected, bool lineFresh, bool colorFresh) {
   frame_.mode = moveQueue_.active() ? msg::DriveMode::VELOCITY : msg::DriveMode::IDLE;
 
-  frame_.encLeft.position = motorL_.position();
-  frame_.encLeft.velocity = motorL_.velocity();
-  frame_.encLeft.time = now;
-  frame_.encRight.position = motorR_.position();
-  frame_.encRight.velocity = motorR_.velocity();
-  frame_.encRight.time = now;
+  // Position-rebaseline policy (124-008, sprint 124 architecture Decision
+  // 6, revised twice -- see sprint.md): EncoderReading.position accumulates
+  // monotonically for the entire session, but the wire's own sint32 field
+  // is bounded to (abs_max)=kPositionWireBound. Each cycle, after reading a
+  // wheel's raw position, rebaseline it in SOFTWARE
+  // (Devices::Motor::rebaseline() -- existing, unmodified, zero-bus-traffic
+  // -- NEVER Motor::resetPosition()/MotorArmor's staged dispatch, which can
+  // still choose a real bus-touching hard reset at standstill and is
+  // forbidden outright by the stakeholder ruling for this policy) once it
+  // is within kPositionRebaselineMargin of that bound, and increment this
+  // wheel's own positionEpoch counter -- owned and incremented HERE, never
+  // by the device layer. Defensive fallback only (the margin dwarfs one
+  // cycle's worst-case travel at any realistic wheel speed, so this should
+  // not be the expected path): if position is somehow still beyond the
+  // bound despite the margin, clamp it rather than let pack*() below wrap,
+  // and set an observable fault flag.
+  float posL = motorL_.position();
+  if (std::fabs(posL) >= kPositionRebaselineMargin) {
+    motorL_.rebaseline();
+    posL = motorL_.position();
+    positionEpochLeft_ = static_cast<uint8_t>(positionEpochLeft_ + 1);
+  }
+  bool clampedL = false;
+  posL = clampToPositionWireBound(posL, &clampedL);
 
-  frame_.twist.v_x = twistVx;
-  frame_.twist.omega = twistOmega;
+  float posR = motorR_.position();
+  if (std::fabs(posR) >= kPositionRebaselineMargin) {
+    motorR_.rebaseline();
+    posR = motorR_.position();
+    positionEpochRight_ = static_cast<uint8_t>(positionEpochRight_ + 1);
+  }
+  bool clampedR = false;
+  posR = clampToPositionWireBound(posR, &clampedR);
 
-  frame_.pose = {odom_.x(), odom_.y(), odom_.theta()};
+  tlm_.setFlag(kFlagFaultPositionClamped, clampedL || clampedR);
+
+  // 124-008: EncoderReading.position/velocity are now sint32+scale on the
+  // wire (issue §B3) -- pack*() is the GENERATED conversion (options.proto's
+  // (scale) doc comment), never a hand-transcribed divide. .age stays at
+  // its default (0) -- genuinely non-simultaneous per-sample ages are
+  // §B2's own remaining work (RobotState-projection restructure, ticket
+  // 009), explicitly out of this ticket's scope (see EncoderReading.age's
+  // own doc comment, telemetry.proto) even though the enabling
+  // Motor::sampleTime()/Otos::sampleTime() accessors already exist.
+  frame_.encLeft.position = msg::EncoderReading::packPosition(posL);
+  frame_.encLeft.velocity = msg::EncoderReading::packVelocity(motorL_.velocity());
+  frame_.encLeft.position_epoch = positionEpochLeft_;
+  frame_.encRight.position = msg::EncoderReading::packPosition(posR);
+  frame_.encRight.velocity = msg::EncoderReading::packVelocity(motorR_.velocity());
+  frame_.encRight.position_epoch = positionEpochRight_;
+
+  frame_.twist.v_x = msg::BodyTwist3::packVX(twistVx);
+  frame_.twist.omega = msg::BodyTwist3::packOmega(twistOmega);
+
+  frame_.pose = {msg::Pose2D::packX(odom_.x()), msg::Pose2D::packY(odom_.y()),
+                 msg::Pose2D::packH(odom_.theta())};
 
   frame_.otosPresent = otosPresent;
   frame_.otosConnected = otosConnected;
   if (frame_.otosPresent) {
-    frame_.otos.x = otosReading.x;
-    frame_.otos.y = otosReading.y;
-    frame_.otos.heading = otosReading.heading;
-    frame_.otos.v_x = otosReading.v_x;
-    frame_.otos.v_y = otosReading.v_y;
-    frame_.otos.omega = otosReading.omega;
-    frame_.otos.time = static_cast<uint32_t>(nowUs / 1000);  // [us] -> [ms]
+    frame_.otos.x = msg::OtosReading::packX(otosReading.x);
+    frame_.otos.y = msg::OtosReading::packY(otosReading.y);
+    frame_.otos.heading = msg::OtosReading::packHeading(otosReading.heading);
+    frame_.otos.v_x = msg::OtosReading::packVX(otosReading.v_x);
+    frame_.otos.v_y = msg::OtosReading::packVY(otosReading.v_y);
+    frame_.otos.omega = msg::OtosReading::packOmega(otosReading.omega);
   }
 
   // line/color: exactly one of {line_, color_} ticked THIS cycle (115-005

@@ -415,21 +415,24 @@ bool containsSubBytes(const std::string& haystack, const Buf& needle) {
   return haystack.find(std::string(reinterpret_cast<const char*>(needle.data), needle.len)) != std::string::npos;
 }
 
-// 115-005: the depth-3 AckEntry ring is gone -- Telemetry's single ack slot
-// rides directly as msg::Telemetry's own ack_corr (field 5)/ack_err (field
-// 6) scalars, adjacent in field-number order with nothing else able to
-// land between them (both are always-present, non-Opt<T> fields --
-// telemetry.proto's own field list), so their two encoded tag+varint pairs,
-// concatenated in that fixed order, are still a reliable, low-false-
-// positive fingerprint of "ack_corr/ack_err currently hold this exact
-// pair" wherever it appears in a raw decoded Telemetry frame -- the same
-// technique the old AckEntry-submessage fingerprint used, just against two
-// top-level scalars instead of one ring entry's three.
-Buf ackFingerprint(uint32_t corrId, uint32_t errCode) {
-  Buf b;
-  putVarintField(b, 5, corrId);   // Telemetry.ack_corr
-  putVarintField(b, 6, errCode);  // Telemetry.ack_err
-  return b;
+// 124-008 (issue §B4): the single "freshest ack" scalar slot (ack_corr/
+// ack_err, fields 5/6) is DELETED -- reserved, not reused. The bounded ack
+// ring (Telemetry.acks, field 14) is the ONLY ack mechanism now, packed
+// uint32 (corr_id<<4|err), decoded by TestSupport::decodeOutboundLine()
+// into msg::Telemetry's own acks_[]/acks_count. Scans a decoded frame's
+// ring for `corrId`'s own entry -- ring membership alone means "really
+// acked," no freshness bit to check.
+bool findAckInTelemetry(const msg::Telemetry& telemetry, uint32_t corrId, uint32_t* errCode) {
+  constexpr uint32_t kAckErrBits = 4;
+  constexpr uint32_t kAckErrMask = (1u << kAckErrBits) - 1;
+  for (uint8_t i = 0; i < telemetry.acks_count; ++i) {
+    const uint32_t packed = telemetry.acks_[i];
+    if ((packed >> kAckErrBits) == corrId) {
+      *errCode = packed & kAckErrMask;
+      return true;
+    }
+  }
+  return false;
 }
 
 // ===========================================================================
@@ -729,47 +732,44 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
                "right motor kp ALSO reflects the applied patch -- kp/ki/kff/iMax/kaw apply to BOTH bound motors");
   checkFloatEq(motorR.gains().ki, 0.01f, "right motor ki also reflects the applied patch");
 
-  // --- ack content. The motor patch's ack is a SUCCESS (err==0) ack --
-  // proto3 implicit presence means encodeInto() OMITS a scalar field
-  // holding its zero/default value entirely (findAck()'s own doc comment,
-  // below, explains this in full), so ackFingerprint()/containsSubBytes()'s
-  // raw-byte substring technique -- which synthesizes a literal "field
-  // 6 (ack_err) == 0" byte pair that can never appear on the wire for a
-  // genuine success ack -- is only valid for a NONZERO err (the drivetrain
-  // check just below). The motor check instead decodes via the real
-  // generated codec (TestSupport::decodeOutboundLine(), the same technique
-  // findAck() uses) and compares the reconstructed scalar fields directly.
+  // --- ack content. 124-008 (issue §B4): the single "freshest ack" scalar
+  // slot is deleted -- both the motor's success (err==0) ack and the
+  // drivetrain's ERR_UNIMPLEMENTED ack ride the bounded ack ring now,
+  // decoded via the real generated codec (TestSupport::decodeOutboundLine())
+  // and scanned via findAckInTelemetry() (this file's own mirror of
+  // config_gate_harness.cpp's findAck()). Unlike the old single-slot
+  // design, the ring is ADDITIVE, not overwriting -- both corr_ids coexist
+  // in the ring (only 2 of kAckRingDepth=4 slots used), so BOTH remain
+  // findable after the drivetrain dispatch, not just the latest.
   // ---
   checkTrue(!afterMotorLine.empty(), "a primary frame was captured after the motor dispatch");
   TestSupport::DecodedLine motorDecoded = TestSupport::decodeOutboundLine(afterMotorLine);
   checkTrue(motorDecoded.kind == TestSupport::DecodedKind::kTelemetry,
             "the captured frame after the motor dispatch decodes as a Telemetry frame");
-  checkUintEq(motorDecoded.telemetry.ack_corr, kMotorCorrId,
-              "CONFIG{motor} acks against the motor patch's own corr_id");
-  checkUintEq(motorDecoded.telemetry.ack_err, 0,
-              "CONFIG{motor} acks OK (ack_err == 0, omitted from the wire by proto3 implicit presence)");
+  {
+    uint32_t errCode = 0;
+    checkTrue(findAckInTelemetry(motorDecoded.telemetry, kMotorCorrId, &errCode),
+              "CONFIG{motor} acks against the motor patch's own corr_id, in the ring");
+    checkUintEq(errCode, 0, "CONFIG{motor} acks OK (err == 0)");
+  }
 
   checkTrue(!afterDrivetrainLine.empty(), "a primary frame was captured after the drivetrain dispatch");
-  std::string drivetrainFrame = rawBytesFromArmoredLine(afterDrivetrainLine);
-  checkTrue(!drivetrainFrame.empty(), "the captured frame de-armors to non-empty raw bytes");
-  checkTrue(containsSubBytes(drivetrainFrame, ackFingerprint(kDrivetrainCorrId, kErrUnimplemented)),
-            "CONFIG{drivetrain} still acks ERR_UNIMPLEMENTED");
-  // Single ack slot: the drivetrain dispatch's own ack() call OVERWRITES
-  // the shared corr/err pair outright (not just the freshness bit) -- so
-  // the motor's own corr_id must no longer be the frame's ack_corr. Decoded
-  // (not a byte-fingerprint absence check): a fingerprint search for the
-  // motor's OWN success pair would trivially "pass" regardless of overwrite
-  // state, since that exact byte pair never appears on the wire either way
-  // (same proto3 implicit-presence reason as the motor check above) -- it
-  // would not actually be testing the overwrite.
   TestSupport::DecodedLine drivetrainDecoded = TestSupport::decodeOutboundLine(afterDrivetrainLine);
   checkTrue(drivetrainDecoded.kind == TestSupport::DecodedKind::kTelemetry,
             "the captured frame after the drivetrain dispatch decodes as a Telemetry frame");
-  checkTrue(drivetrainDecoded.telemetry.ack_corr != kMotorCorrId,
-            "single ack slot: motor's own ack_corr no longer appears once drivetrain's dispatch overwrote "
-            "the slot");
-  checkUintEq(drivetrainDecoded.telemetry.ack_corr, kDrivetrainCorrId,
-              "the slot now holds the drivetrain patch's own corr_id");
+  {
+    uint32_t errCode = 0;
+    checkTrue(findAckInTelemetry(drivetrainDecoded.telemetry, kDrivetrainCorrId, &errCode),
+              "CONFIG{drivetrain} acks against its own corr_id, in the ring");
+    checkUintEq(errCode, kErrUnimplemented, "CONFIG{drivetrain} still acks ERR_UNIMPLEMENTED");
+    // Ack ring (124-008): ADDITIVE, not overwriting -- the motor's own
+    // earlier ack is STILL present in the ring alongside the drivetrain's,
+    // unlike the deleted single-slot design where a later ack overwrote an
+    // earlier one outright.
+    uint32_t motorErrCode = 0;
+    checkTrue(findAckInTelemetry(drivetrainDecoded.telemetry, kMotorCorrId, &motorErrCode),
+              "ack ring: the motor's own earlier ack is STILL present after the drivetrain's own push");
+  }
 }
 
 // ===========================================================================
@@ -1040,30 +1040,58 @@ std::string armorMotorConfigPatchCommand(float kp, uint32_t corrId) {
   return armorLine(motorEnv.data, motorEnv.len, "CONFIG");
 }
 
+// Identical shape to armorMotorConfigPatchCommand() above, but patches kff
+// (MotorConfigPatch field 5, config.proto) instead of kp -- 124-008's own
+// position-rebaseline scenario below needs a PURE feedforward gain (kp/ki
+// left at baseMotorConfig()'s all-zero default) so duty tracks the
+// commanded target directly (velocity_pid.cpp's compute(): `ff =
+// gains.kff * spAbs`), with no measured-velocity error term muddying the
+// derivation of how fast the wheel cruises.
+std::string armorMotorKffPatchCommand(float kff, uint32_t corrId) {
+  Buf motorPatch;
+  putVarintField(motorPatch, 1, 0);   // MotorConfigPatch.side = LEFT (0)
+  putFloatField(motorPatch, 5, kff);  // kff
+  Buf motorDelta;
+  putMessageField(motorDelta, 2, motorPatch);  // ConfigDelta.motor, field 2
+  Buf motorEnv;
+  putVarintField(motorEnv, 1, corrId);
+  putMessageField(motorEnv, 6, motorDelta);  // CommandEnvelope.config, field 6
+  return armorLine(motorEnv.data, motorEnv.len, "CONFIG");
+}
+
 // findAck -- mirrors config_gate_harness.cpp's own findAck() exactly:
 // decodes every captured outbound line via TestSupport::decodeOutboundLine()
-// (the REAL generated codec, not a hand-synthesized byte fingerprint) and
-// looks for a Telemetry frame whose ack_corr matches `corrId` with the
-// ack-fresh bit (flags bit 5) set. Deliberately NOT a raw-byte fingerprint
-// search (this file's own ackFingerprint()/containsSubBytes() helpers,
-// above, used only by the pre-existing CONFIG scenarios' OWN nonzero-err
-// checks): a genuine err==0 (success) ack has its ack_err field OMITTED
-// from the wire entirely (proto3 implicit presence -- wire.cpp's own
-// encodeInto() skips a plain scalar field holding its zero/default value),
-// so a synthesized ack_err==0 byte pair can never match real wire bytes --
-// only the real decoder correctly reconstructs "absent means 0".
+// (the REAL generated codec) and scans for `corrId`'s own entry in the
+// bounded ack ring (124-008, issue §B4: the single "freshest ack" scalar
+// slot / kFlagAckFresh this function used to gate on is DELETED -- ring
+// membership alone means "really acked," via findAckInTelemetry() above).
 bool findAck(const std::deque<std::string>& lines, uint32_t corrId, uint32_t* errCode) {
-  constexpr uint32_t kAckFreshBit = 1u << 5;  // App::kFlagAckFresh
   for (const auto& line : lines) {
     TestSupport::DecodedLine decoded = TestSupport::decodeOutboundLine(line);
     if (decoded.kind != TestSupport::DecodedKind::kTelemetry) continue;
-    if ((decoded.telemetry.flags & kAckFreshBit) == 0) continue;
-    if (decoded.telemetry.ack_corr == corrId) {
-      *errCode = decoded.telemetry.ack_err;
-      return true;
-    }
+    if (findAckInTelemetry(decoded.telemetry, corrId, errCode)) return true;
   }
   return false;
+}
+
+// newestTelemetryFrame -- decodes EVERY captured outbound line and returns
+// the LAST one that decodes as a primary Telemetry frame (kTelemetry),
+// via `*out`. Unlike findAck()'s ack-ring scan above (ring membership is
+// cumulative -- any entry anywhere in the deque proves the ack happened),
+// 124-008's own position-rebaseline scenario below needs the FRESHEST
+// enc_left.position_epoch/position snapshot specifically -- an earlier
+// frame in the same deque may still carry the pre-rebaseline epoch, so
+// only the newest one is meaningful here. Returns false (leaving `*out`
+// untouched) if `lines` contains no primary Telemetry frame at all.
+bool newestTelemetryFrame(const std::deque<std::string>& lines, msg::Telemetry* out) {
+  bool found = false;
+  for (const auto& line : lines) {
+    TestSupport::DecodedLine decoded = TestSupport::decodeOutboundLine(line);
+    if (decoded.kind != TestSupport::DecodedKind::kTelemetry) continue;
+    *out = decoded.telemetry;
+    found = true;
+  }
+  return found;
 }
 
 // Steps fx one cycle at a time, up to maxCycles, checking after EACH step
@@ -1947,6 +1975,415 @@ void scenarioPrimaryFrameCarriesExactLoopTimingFields() {
             "carrying an exact, distinguishable cycle_period");
 }
 
+// ===========================================================================
+// 124-008 (issue Sec B4, sprint 124 architecture Decision 6): the
+// position-rebaseline policy. When a wheel's position() reaches
+// App::RobotLoop's own kPositionRebaselineMargin (30000mm, 2000mm below
+// EncoderReading.position's wire (abs_max)=32000), assembleFrame() must
+// call Devices::Motor::rebaseline() (software-only, zero bus traffic) --
+// NEVER Motor::resetPosition()/MotorArmor's staged dispatch (a real,
+// bus-touching hard reset, forbidden outright by the stakeholder ruling) --
+// and increment a RobotLoop-owned positionEpoch counter, observable on the
+// wire via EncoderReading.position_epoch. A scripted (not live-physics)
+// motor position lets this scenario reach the margin in ONE cycle instead
+// of driving thousands of real ticks, and a bus-transaction-budget check
+// (ScriptedI2CHook's own errCount(), already used by every other scenario
+// in this file to prove no under/over-run) doubles as direct proof that
+// rebaseline() issued no I2C traffic at all: any unscripted transaction
+// would desync the shared read/write FIFO and immediately register as a
+// under-run on THIS cycle or misattribute onto the NEXT one.
+// ===========================================================================
+
+void scenarioPositionRebaselineTriggersAtMarginAndIncrementsEpoch() {
+  beginScenario("RobotLoop: position-rebaseline policy triggers Motor::rebaseline() (never "
+                "resetPosition()) at the margin, with zero bus traffic, and increments "
+                "positionEpoch on the wire");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  TestSim::SimClock clock;
+  TestSim::SimSleeper sleeper;
+
+  Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
+  Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
+  Devices::RealOtos otos(plant, Devices::OtosConfig{});
+  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
+  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+
+  TestSupport::FakeTransport serialFake;
+  TestSupport::FakeTransport radioFake;
+  App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
+  App::Telemetry tlm(comms, serialFake, radioFake);
+  App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
+  Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
+  Motion::StateEstimator stateEstimator;
+  Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
+  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+
+  clock.setMicros(0);
+  preamble.step();
+  clock.setMicros(50000);
+  scriptMotorBeginSuccess(bus);  // Left
+  scriptMotorBeginSuccess(bus);  // Right
+  scriptOtosBeginSuccess(bus);
+  scriptColorBeginSuccess(bus);
+  scriptLineBeginSuccess(bus);
+
+  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
+                            drive, odom, moveQueue, preamble, stateEstimator, clock, sleeper);
+  robotLoop.boot();
+  checkTrue(preamble.done(), "boot() completes against this scenario's own scripted fixture");
+
+  int cycleIndex = 0;
+  uint64_t nowUs = 50000;
+  auto runOneCycle = [&](float leftPositionMm, float rightPositionMm) -> std::string {
+    clock.setMicros(nowUs);
+    scriptMotorCycle(bus, leftPositionMm, /*extraDutyWrites=*/(cycleIndex == 0) ? 1 : 0);   // Left
+    scriptMotorCycle(bus, rightPositionMm, /*extraDutyWrites=*/(cycleIndex == 0) ? 1 : 0);  // Right
+    // Unlike scenarioBootThenAFewCyclesRunToCompletion (a FROZEN clock
+    // after boot -- OTOS's own kReadPeriod never elapses again), this
+    // scenario's nowUs advances by > kPrimaryPeriod every single cycle
+    // (needed so each cycle's own primaryDue() is true), which ALSO
+    // clears OTOS's kReadPeriod every cycle -- so, exactly like
+    // scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented's own
+    // runOneCycle(), OTOS needs a fresh scripted burst read every cycle,
+    // not just the first.
+    scriptOtosReadZeroPose(bus);
+    uint32_t beforePrimary = tlm.primaryEmitCount();
+    robotLoop.cycle();
+    nowUs += 41000;  // > kPrimaryPeriod -- guarantees the next cycle's primaryDue() is true
+    ++cycleIndex;
+    // Absorb 106-002's own occasional tie-break diversion to secondary
+    // (telemetry.h's own emit() comment) with a few bounded quiet retries,
+    // exactly like captureNextPrimaryLine() elsewhere in this file.
+    for (int attempt = 0; attempt < 5 && tlm.primaryEmitCount() == beforePrimary; ++attempt) {
+      clock.setMicros(nowUs);
+      scriptMotorCycle(bus, leftPositionMm, /*extraDutyWrites=*/0);
+      scriptMotorCycle(bus, rightPositionMm, /*extraDutyWrites=*/0);
+      scriptOtosReadZeroPose(bus);
+      robotLoop.cycle();
+      nowUs += 41000;
+      ++cycleIndex;
+    }
+    checkTrue(tlm.primaryEmitCount() > beforePrimary, "a primary frame was captured this cycle");
+    return serialFake.sent().back();
+  };
+
+  // Warm-up: both wheels quiet at 0mm (absorbs the one-time first duty
+  // write on cycle 0 -- scriptMotorCycle()'s own header comment).
+  runOneCycle(0.0f, 0.0f);
+
+  // Left wheel jumps to 31000mm (>= the 30000mm margin, still under the
+  // 32000mm wire bound); right wheel stays quiet at 0mm -- proves the
+  // trigger is PER-WHEEL, not both-or-neither. Devices::NezhaMotor's own
+  // PRE-EXISTING, unmodified position-step plausibility gate
+  // (nezha_motor.cpp: kMaxPlausibleStepSpeed) rejects a single-cycle jump
+  // this large as a corrupted read and holds the prior position for
+  // kGlitchStreakAccept-1 consecutive rejections before re-anchoring to a
+  // REPEATED identical "glitch" as a genuine discontinuity -- scripting
+  // the SAME big jump for a few cycles running reaches that re-anchor
+  // exactly like a real device-side encoder re-anchor would (this is the
+  // gate operating correctly, not a workaround for it), rather than
+  // hundreds of small, individually-plausible steps.
+  std::string afterFirstTrigger;
+  uint32_t epochAfterFirstTrigger = 0;
+  for (int attempt = 0; attempt < 8 && epochAfterFirstTrigger == 0; ++attempt) {
+    afterFirstTrigger = runOneCycle(31000.0f, 0.0f);
+    TestSupport::DecodedLine probe = TestSupport::decodeOutboundLine(afterFirstTrigger);
+    if (probe.kind == TestSupport::DecodedKind::kTelemetry) {
+      epochAfterFirstTrigger = probe.telemetry.enc_left.position_epoch;
+    }
+  }
+  checkUintEq(epochAfterFirstTrigger, 1,
+              "the rebaseline trigger fires within a bounded number of scripted "
+              "glitch-streak-then-reanchor cycles");
+
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0,
+              "no script under/over-run on the motor bus -- rebaseline() issued ZERO I2C "
+              "transactions (a real bus-touching resetPosition() call here would desync the "
+              "scripted FIFO and show up as an error on this exact assertion)");
+  checkUintEq(bus.errCount(Devices::kOtosDeviceAddr), 0, "no script under-run: otos");
+
+  TestSupport::DecodedLine decoded1 = TestSupport::decodeOutboundLine(afterFirstTrigger);
+  checkTrue(decoded1.kind == TestSupport::DecodedKind::kTelemetry,
+            "the captured frame after the first trigger decodes as a Telemetry frame");
+  checkUintEq(decoded1.telemetry.enc_left.position_epoch, 1,
+              "left wheel's positionEpoch increments to 1 on the first rebaseline trigger");
+  checkUintEq(decoded1.telemetry.enc_right.position_epoch, 0,
+              "right wheel's positionEpoch stays 0 -- it never crossed the margin");
+  checkTrue(decoded1.telemetry.enc_left.position == 0,
+            "left wheel's reported position resets to 0 -- Devices::Motor::rebaseline() folds "
+            "the pre-rebaseline position into its own internal offset and zeroes the cache "
+            "(nezha_motor.cpp's own softRebaseline()), so the WIRE value is not the raw "
+            "unrebaselined 31000mm");
+  checkTrue((decoded1.telemetry.flags & App::kFlagFaultPositionClamped) == 0,
+            "kFlagFaultPositionClamped stays clear -- 31000mm never reached the 32000mm wire "
+            "bound, so the defensive clamp path never engaged");
+  checkFloatEq(motorL.position(), 0.0f,
+               "Devices::Motor::rebaseline() itself (unmodified by this ticket) zeroes "
+               "position() immediately -- confirms RobotLoop drove the real method, not a stub");
+
+  // A SECOND trigger on the SAME wheel (post-reset position climbs back
+  // past the margin again) proves positionEpoch keeps incrementing across
+  // repeated rebaselines within one session, not just once.
+  //
+  // scriptMotorCycle()'s own `positionMm` parameter scripts the RAW WIRE
+  // REGISTER value (raw = positionMm * 10 ticks), which NezhaMotor's own
+  // collectEncoder() then converts via `raw - encOffset_` (nezha_motor.cpp)
+  // -- it is NOT the post-offset mm value RobotLoop's own position() will
+  // report. The first trigger's own accepted anchor (the "boot/reset
+  // anchor" branch skips the plausibility gate entirely, softRebaseline()
+  // having just cleared hasFreshSample_ two triggers ago is not the case
+  // here -- see the FIRST trigger's own comment above for why gating
+  // applied there) folded EXACTLY 31000mm-equivalent raw ticks into
+  // encOffset_ (calib=1.0/fwdSign=1 here, and the fold is an exact integer
+  // -- no float truncation loss). So reaching an intended POST-anchor
+  // position() of 30500mm this time requires scripting encOffset_'s own
+  // already-folded 31000mm on top of it (61500mm), not 30500mm directly --
+  // scripting 30500mm here would read back as (30500 - 31000) == -500mm,
+  // well under the margin, and never trigger at all.
+  // Mirrors the FIRST trigger's own bounded retry-until-observed loop
+  // above (this same scenario, a few lines up): the exact runOneCycle()
+  // call whose OWN collectEncoder() actually presents this second scripted
+  // jump to NezhaMotor's boot/reset-anchor path (cleared by the first
+  // rebaseline's own softRebaseline() call, per its doc comment) is not
+  // guaranteed to be the very first one -- runOneCycle()'s own internal
+  // primary/secondary tie-break catch-up retry can, and empirically does,
+  // shift which physical cycle actually lands the accept-and-rebaseline
+  // pair, so asserting against a single un-retried call is fragile (a
+  // single sensitivity to that catch-up count was enough to leave
+  // positionEpoch observed at 1, not yet 2, on some cycle-count
+  // alignments). A bounded retry-until-2 loop absorbs that exactly the
+  // way the first trigger's own loop already does, without risking an
+  // overshoot past 2: the loop condition is checked immediately after
+  // EVERY attempt, so it stops the instant epoch 2 is observed and never
+  // issues a further attempt that could push a THIRD rebaseline.
+  std::string afterSecondTrigger;
+  uint32_t epochAfterSecondTrigger = 1;
+  for (int attempt = 0; attempt < 8 && epochAfterSecondTrigger < 2; ++attempt) {
+    afterSecondTrigger = runOneCycle(31000.0f + 30500.0f, 0.0f);
+    TestSupport::DecodedLine probe = TestSupport::decodeOutboundLine(afterSecondTrigger);
+    if (probe.kind == TestSupport::DecodedKind::kTelemetry) {
+      epochAfterSecondTrigger = probe.telemetry.enc_left.position_epoch;
+    }
+  }
+  checkUintEq(epochAfterSecondTrigger, 2,
+              "the second rebaseline trigger fires within a bounded number of scripted "
+              "cycles, mirroring the first trigger's own bounded retry-until-observed loop");
+
+  TestSupport::DecodedLine decoded2 = TestSupport::decodeOutboundLine(afterSecondTrigger);
+  checkTrue(decoded2.kind == TestSupport::DecodedKind::kTelemetry,
+            "the captured frame after the second trigger decodes as a Telemetry frame");
+  checkUintEq(decoded2.telemetry.enc_left.position_epoch, 2,
+              "left wheel's positionEpoch increments again, to 2, on a second rebaseline "
+              "within the same session");
+}
+
+// ===========================================================================
+// 124-008 (issue Sec B4, sprint 124 architecture Decision 6): the SAME
+// position-rebaseline policy the scripted scenario above proves at the
+// mechanism level (one hand-injected jump straight to 31000mm), now proved
+// end-to-end against LiveFixture's LIVE (unscripted) SimPlant -- a single
+// long-running MOVE actually drives one wheel's own cumulative signed
+// travel up through kPositionRebaselineMargin (30000mm) via real
+// duty->velocity->position physics over an extended session (on the order
+// of a thousand real cycles at cruise speed), not a single scripted
+// injection. This is the acceptance criterion's own literal bar ("a sim
+// run driving one wheel's cumulative signed travel past 30,000 mm over an
+// extended session") -- proving the policy fires correctly when actually
+// REACHED by accumulation, not merely when handed a pre-cooked value.
+//
+// A pure feedforward gain (kff only, kp/ki left at baseMotorConfig()'s
+// zero default) is configured via CONFIG first: velocity_pid.cpp's own
+// compute() computes `ff = gains.kff * spAbs` with NO measured-velocity
+// term, so duty tracks the commanded 500mm/s target directly regardless of
+// the plant's own response -- WheelPlant's dutyVelMax=500mm/s
+// (wheel_plant.h) then puts this wheel's cruise velocity at ~500mm/s once
+// its own tau=0.13s duty->velocity lag settles (project memory:
+// "vel_kff=0.002 gives duty ~= target/500").
+//
+// One structural subtlety this scenario's own step loop is built around:
+// assembleFrame()'s own read-check-rebaseline-reread sequence (robot_loop.cpp)
+// is ATOMIC within a single cycle() call -- the exact cycle whose position()
+// first reaches the margin is the SAME cycle that rebaselines it back to
+// ~0, so no external observer (this test included) ever sees a raw
+// position() value actually AT or above the margin; only the highest
+// PRE-crossing read (necessarily within one cycle's worth of travel below
+// the margin) is ever externally visible. The loop below tracks that
+// approach peak and detects the rebaseline by its own signature -- a sharp
+// drop back toward 0 immediately after the peak nears the margin -- rather
+// than requiring a literal >=30000mm external reading, which this policy's
+// own atomicity makes structurally unobservable from outside RobotLoop.
+// ===========================================================================
+
+void scenarioPositionRebaselineFiresOverExtendedLiveRunPastCumulativeTravel() {
+  beginScenario("124-008: RobotLoop rebaselines a wheel's position via Motor::rebaseline() "
+                "after a LIVE extended run drives its cumulative travel past 30000mm; "
+                "positionEpoch increments observably, the wire position never clips");
+
+  LiveFixture fx;
+  fx.robotLoop.markConfigured();
+
+  // CONFIG{motor: kff=0.002} -- see this scenario's own header comment for
+  // the full feedforward derivation.
+  const uint32_t kKffCorrId = 951;
+  const float kKff = 0.002f;
+  fx.serialFake.enqueueInboundBinary(armorMotorKffPatchCommand(kKff, kKffCorrId));
+  checkTrue(stepUntilAckSeen(fx, kKffCorrId, 0, 10), "CONFIG{motor kff} acks ERR_NONE (0)");
+  checkFloatEq(fx.motorL.gains().kff, kKff, "left motor kff reflects the applied patch");
+
+  // One long-running MOVE -- v_x=500mm/s straight (omega=0, both wheels
+  // equally loaded), a TIME stop and timeout both far beyond anything this
+  // scenario's own bounded step loop below actually needs (that loop ends
+  // the run itself, on its own evidence, long before either could fire) --
+  // this scenario is testing RobotLoop's OWN rebaseline policy, not
+  // MoveQueue's completion path.
+  const uint32_t kMoveCorrId = 952;
+  const uint32_t kMoveId = 81;
+  fx.serialFake.enqueueInboundBinary(armorMoveTimeTwistCommand(
+      /*includeVelocity=*/true, /*v_x=*/500.0f, /*omega=*/0.0f, /*includeStop=*/true,
+      /*stopTimeMs=*/600000.0f, /*timeoutMs=*/600000.0f, /*replace=*/true, kMoveId, kMoveCorrId));
+  fx.step(1);
+  checkTrue(fx.moveQueue.active(), "the long-running MOVE activates immediately");
+
+  // Baseline, before the run has had any chance to approach the margin:
+  // positionEpoch starts at 0 on every frame captured so far.
+  msg::Telemetry beforeFrame;
+  checkTrue(newestTelemetryFrame(fx.serialFake.sent(), &beforeFrame),
+            "at least one Telemetry frame captured before the extended run starts");
+  checkUintEq(beforeFrame.enc_left.position_epoch, 0,
+              "enc_left.position_epoch starts at 0 -- no rebaseline has fired yet");
+
+  // kApproachTolerance -- generous versus this cruise speed's own per-cycle
+  // travel (~500mm/s * 40ms/cycle == ~20mm/cycle, robot_loop.h's own
+  // kCycle), and tiny versus the 2000mm margin-to-bound gap -- proves the
+  // run genuinely approached the trigger without requiring a literal
+  // external >=30000mm reading (structurally unobservable -- see this
+  // scenario's own header comment).
+  constexpr float kPositionRebaselineMarginMirror = 30000.0f;  // [mm] must mirror
+                                                                // robot_loop.cpp's own
+                                                                // kPositionRebaselineMargin
+  constexpr float kPositionWireBoundMirror = 32000.0f;  // [mm] must mirror robot_loop.cpp's
+                                                         // own kPositionWireBound
+  constexpr float kApproachTolerance = 200.0f;          // [mm]
+  constexpr int kMaxCycles = 20000;  // 20000 * 40ms == 800s of headroom -- comfortably past
+                                      // the ~60-70s an ~500mm/s cruise needs to cover 30000mm
+
+  float peakAbsPosition = 0.0f;
+  bool rebaselined = false;
+  for (int i = 0; i < kMaxCycles && !rebaselined; ++i) {
+    fx.step(1);
+
+    // The defensive clamp is NOT the path this scenario is exercising --
+    // the 2000mm margin dwarfs one cycle's worst-case travel at this
+    // cruise speed, so it must never fire across the WHOLE run. Checked
+    // every single cycle (not just at the end) so a transient one-cycle
+    // clamp can't hide behind a later cycle's clear.
+    checkTrue((fx.tlm.flags() & App::kFlagFaultPositionClamped) == 0,
+              "kFlagFaultPositionClamped never fires during the live run -- the margin means "
+              "the defensive clamp path is never actually exercised at this cruise speed");
+
+    float absPosition = std::fabs(fx.motorL.position());
+    if (absPosition > peakAbsPosition) {
+      peakAbsPosition = absPosition;
+    } else if (peakAbsPosition >= (kPositionRebaselineMarginMirror - kApproachTolerance) &&
+               absPosition < peakAbsPosition * 0.5f) {
+      // A sharp drop back toward 0 right after the running peak neared the
+      // margin -- this IS the software rebaseline's own signature (see this
+      // scenario's own header comment on why the raw crossing value itself
+      // is never externally observable).
+      rebaselined = true;
+    }
+
+    checkTrue(peakAbsPosition <= kPositionWireBoundMirror,
+              "left motor's raw position() never exceeds kPositionWireBound (32000mm) at any "
+              "point in the run");
+  }
+
+  checkTrue(peakAbsPosition >= (kPositionRebaselineMarginMirror - kApproachTolerance),
+            "the run actually drove the wheel's cumulative travel up to the rebaseline "
+            "margin -- a stalled/no-motion run must not pass this scenario vacuously");
+  checkTrue(rebaselined,
+            "position() visibly dropped back toward 0 immediately after approaching the "
+            "margin -- the software rebaseline actually fired during this live run");
+  checkTrue(std::fabs(fx.motorL.position()) < 100.0f,
+            "left motor position() is near zero immediately after the rebaseline fires -- "
+            "Motor::rebaseline() re-anchors in software with no bus traffic, so the very next "
+            "position() read already reflects the fresh baseline");
+
+  // Bounded follow-up: the exact cycle that rebaselines might have its own
+  // wire emission land on the secondary cadence's tie-break slot instead of
+  // primary (Telemetry::emit()'s own documented "at most one primary frame
+  // delayed by one cycle" alternation, exercised the same way elsewhere in
+  // this file, e.g. captureNextPrimaryLine()) -- step a FEW more cycles
+  // (well under kMaxCycles' own budget) until the newest captured PRIMARY
+  // frame actually reflects the post-rebaseline epoch, rather than assume
+  // the very next captured line is that frame. positionEpoch is a
+  // persisted counter (never resets on its own), so any later primary
+  // frame still carries the correct, post-rebaseline value.
+  msg::Telemetry afterFrame;
+  bool epochObserved = false;
+  for (int i = 0; i < 5 && !epochObserved; ++i) {
+    if (newestTelemetryFrame(fx.serialFake.sent(), &afterFrame) &&
+        afterFrame.enc_left.position_epoch == 1) {
+      epochObserved = true;
+      break;
+    }
+    fx.step(1);
+  }
+  checkTrue(epochObserved,
+            "the newest captured primary frame reflects enc_left.position_epoch == 1 -- "
+            "RobotLoop's own positionEpochLeft_ counter, owned and incremented in "
+            "assembleFrame(), never by the device layer -- within a few cycles of the "
+            "rebaseline firing");
+  float wireDecodedPosition = msg::EncoderReading::unpackPosition(afterFrame.enc_left.position);
+  checkTrue(std::fabs(wireDecodedPosition) <= kPositionWireBoundMirror,
+            "the wire-decoded enc_left.position (via the REAL generated unpackPosition(), not "
+            "a hand-derived divide) stays within +-kPositionWireBound (32000mm) -- never "
+            "silently clipped or wrapped by pack*()");
+}
+
+// ===========================================================================
+// 124-008: RobotLoop::clampToPositionWireBound()'s own defensive-fallback
+// math, tested directly and in isolation from a live Motor. Under the
+// CURRENT margin/bound relationship (kPositionRebaselineMargin strictly
+// below the wire bound) and Devices::Motor::rebaseline()'s own unconditional
+// zero-the-cache behavior (proved by the scenario above), assembleFrame()'s
+// own call site can never actually observe a clamp -- the margin always
+// fires first and rebaseline() always resets position() to 0 before the
+// clamp check runs. This is deliberate insurance against that invariant
+// changing later (robot_loop.h's own declaration comment), not the expected
+// path today -- so it is exercised here as a pure static method, bypassing
+// rebaseline() entirely, rather than forced through a contrived RobotLoop
+// scenario that cannot naturally reach it.
+// ===========================================================================
+
+void scenarioClampToPositionWireBoundClampsAndFlagsOutOfRangeValues() {
+  beginScenario("RobotLoop::clampToPositionWireBound(): clamps to +-32000mm and reports "
+                "*clamped, in isolation from rebaseline()");
+
+  bool clamped = false;
+
+  float overPositive = App::RobotLoop::clampToPositionWireBound(40000.0f, &clamped);
+  checkFloatEq(overPositive, 32000.0f, "a value past the positive bound clamps to exactly +32000mm");
+  checkTrue(clamped, "*clamped is set true for a positive out-of-bound value");
+
+  clamped = false;
+  float overNegative = App::RobotLoop::clampToPositionWireBound(-40000.0f, &clamped);
+  checkFloatEq(overNegative, -32000.0f, "a value past the negative bound clamps to exactly -32000mm");
+  checkTrue(clamped, "*clamped is set true for a negative out-of-bound value");
+
+  clamped = true;  // deliberately pre-set to true -- proves the false path also WRITES *clamped
+  float inBounds = App::RobotLoop::clampToPositionWireBound(15000.0f, &clamped);
+  checkFloatEq(inBounds, 15000.0f, "an in-bound value passes through unchanged");
+  checkTrue(!clamped, "*clamped is set false for an in-bound value");
+
+  clamped = false;
+  float atBound = App::RobotLoop::clampToPositionWireBound(32000.0f, &clamped);
+  checkFloatEq(atBound, 32000.0f, "exactly at the bound passes through unchanged (not '> bound')");
+  checkTrue(!clamped, "*clamped stays false exactly AT the bound -- the check is strictly greater-than");
+}
+
 }  // namespace
 
 int main() {
@@ -1968,6 +2405,10 @@ int main() {
   scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression();
 
   scenarioPrimaryFrameCarriesExactLoopTimingFields();
+
+  scenarioPositionRebaselineTriggersAtMarginAndIncrementsEpoch();
+  scenarioPositionRebaselineFiresOverExtendedLiveRunPastCumulativeTravel();
+  scenarioClampToPositionWireBoundClampsAndFlagsOutOfRangeValues();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::RobotLoop scenarios passed\n");

@@ -69,10 +69,12 @@ def _frame_with_ring(entries: list[tuple[int, int]]) -> "envelope_pb2.ReplyEnvel
     ack ring -- the same wire shape ``_handle_binary_reply()`` queues into
     ``_binary_tlm_queue``. ``entries`` is a list of ``(corr_id, err)`` pairs,
     in wire order (oldest-pushed first, matching ``Telemetry::ack()``'s own
-    push/evict order)."""
+    push/evict order). 124-008 (issue §B4): ``Telemetry.acks`` is now
+    ``repeated uint32``, packed ``corr_id<<4|err`` -- ``AckEntry`` (the wire
+    message) is deleted."""
     reply = envelope_pb2.ReplyEnvelope(corr_id=0)
     for corr_id, err in entries:
-        reply.tlm.acks.add(corr_id=corr_id, err=err)
+        reply.tlm.acks.append((corr_id << 4) | err)
     return reply
 
 
@@ -92,8 +94,8 @@ def test_match_ack_in_frames_exact_match():
     entry = _match_ack_in_frames(frames, 5)
 
     assert entry is not None
-    assert entry.corr_id == 5
-    assert entry.err == 0
+    assert (entry >> 4) == 5
+    assert (entry & 0xF) == 0
 
 
 def test_match_ack_in_frames_no_match_returns_none():
@@ -112,8 +114,8 @@ def test_match_ack_in_frames_matches_a_non_freshest_ring_entry():
     entry = _match_ack_in_frames(frames, 1)
 
     assert entry is not None
-    assert entry.corr_id == 1
-    assert entry.err == 0
+    assert (entry >> 4) == 1
+    assert (entry & 0xF) == 0
 
 
 def test_match_ack_in_frames_returns_first_matching_frame_in_list_order():
@@ -127,8 +129,8 @@ def test_match_ack_in_frames_returns_first_matching_frame_in_list_order():
 
     entry = _match_ack_in_frames(frames, 5)
 
-    assert entry.corr_id == 5
-    assert entry.err == envelope_pb2.ERR_BADARG
+    assert (entry >> 4) == 5
+    assert (entry & 0xF) == envelope_pb2.ERR_BADARG
 
 
 def test_match_ack_in_frames_scans_every_entry_within_one_frame():
@@ -139,8 +141,8 @@ def test_match_ack_in_frames_scans_every_entry_within_one_frame():
     entry = _match_ack_in_frames(frames, 12)
 
     assert entry is not None
-    assert entry.corr_id == 12
-    assert entry.err == envelope_pb2.ERR_FULL
+    assert (entry >> 4) == 12
+    assert (entry & 0xF) == envelope_pb2.ERR_FULL
 
 
 def test_match_ack_in_frames_ignores_non_tlm_frames():
@@ -152,7 +154,7 @@ def test_match_ack_in_frames_ignores_non_tlm_frames():
     entry = _match_ack_in_frames(frames, 5)
 
     assert entry is not None
-    assert entry.corr_id == 5
+    assert (entry >> 4) == 5
 
 
 def test_match_ack_in_frames_empty_ring_never_matches():
@@ -184,8 +186,8 @@ def test_wait_for_ack_matches_exact_corr_id_queued_directly():
     entry = conn.wait_for_ack(5, timeout=200)
 
     assert entry is not None
-    assert entry.corr_id == 5
-    assert entry.err == 0
+    assert (entry >> 4) == 5
+    assert (entry & 0xF) == 0
 
 
 def test_wait_for_ack_matches_exact_corr_id_err():
@@ -195,7 +197,7 @@ def test_wait_for_ack_matches_exact_corr_id_err():
 
     entry = conn.wait_for_ack(9, timeout=200)
 
-    assert entry.err == envelope_pb2.ERR_RANGE
+    assert (entry & 0xF) == envelope_pb2.ERR_RANGE
 
 
 def test_wait_for_ack_finds_a_rapid_fire_burst_all_in_one_frame():
@@ -210,7 +212,7 @@ def test_wait_for_ack_finds_a_rapid_fire_burst_all_in_one_frame():
         conn = _new_conn()
         conn._binary_tlm_queue.put_nowait(_frame_with_ring([(1, 0), (2, 0), (3, 0), (4, 0)]))
         entry = conn.wait_for_ack(corr_id, timeout=200)
-        assert entry is not None and entry.corr_id == corr_id
+        assert entry is not None and (entry >> 4) == corr_id
 
 
 def test_wait_for_ack_skips_non_matching_frames_then_matches_on_a_later_poll():
@@ -223,8 +225,8 @@ def test_wait_for_ack_skips_non_matching_frames_then_matches_on_a_later_poll():
 
     entry = conn.wait_for_ack(5, timeout=500)
 
-    assert entry.corr_id == 5
-    assert entry.err == envelope_pb2.ERR_BADARG
+    assert (entry >> 4) == 5
+    assert (entry & 0xF) == envelope_pb2.ERR_BADARG
 
 
 def _scripted_drain(batches: list[list["envelope_pb2.ReplyEnvelope"]]):
@@ -257,8 +259,8 @@ def test_wait_for_ack_tolerates_the_same_corr_id_present_in_multiple_frames():
     entry = conn.wait_for_ack(5, timeout=200)
 
     assert entry is not None
-    assert entry.corr_id == 5
-    assert entry.err == 0
+    assert (entry >> 4) == 5
+    assert (entry & 0xF) == 0
 
 
 # ---------------------------------------------------------------------------

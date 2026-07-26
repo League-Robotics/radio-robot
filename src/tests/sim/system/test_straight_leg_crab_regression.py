@@ -154,7 +154,9 @@ def test_straight_700mm_leg_at_150mms_ideal_chip_does_not_crab():
         for i in range(300):
             loop.step(1)
             for frame in loop.drain_pending_tlm():
-                if frame.ack is not None and frame.ack.corr_id == 7:
+                # 124-008 (issue §B4): the single "freshest ack" scalar
+                # slot (frame.ack) is deleted -- scan the bounded ack ring.
+                if any(ack.corr_id == 7 for ack in frame.acks):
                     move_done_cycle = i
 
             tp = loop.get_true_pose()

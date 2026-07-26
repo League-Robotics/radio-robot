@@ -134,6 +134,25 @@ class RobotLoop {
   // boot-bake alone").
   void reapplyPersistedTuning(const Config::TuningSnapshot& snapshot);
 
+  // clampToPositionWireBound -- pure helper for the position-rebaseline
+  // policy's defensive fallback (124-008, sprint 124 architecture
+  // Decision 6): given a wheel's current position (mm), returns it
+  // unchanged if within the wire's declared EncoderReading.position
+  // (abs_max) bound, or clamped to +-that bound with *clamped set true
+  // otherwise. Exposed as a static, side-effect-free method (rather than
+  // kept file-local in robot_loop.cpp) purely so it is unit-testable in
+  // isolation: under the CURRENT margin/bound relationship
+  // (kPositionRebaselineMargin, robot_loop.cpp, is strictly less than the
+  // bound, and Devices::Motor::rebaseline() unconditionally zeroes
+  // position() on return) assembleFrame()'s own call site can never
+  // actually reach the clamped branch through a live Motor -- this is
+  // insurance against that invariant changing later, not the expected
+  // path today. A direct test calls this method with an out-of-bound
+  // value, bypassing rebaseline() entirely, to prove the clamp itself is
+  // correct independent of whether production code can currently reach
+  // it.
+  static float clampToPositionWireBound(float pos, bool* clamped);
+
  private:
   uint32_t markTime() const;                    // [ms]
   void sleepUntil(uint32_t mark, uint32_t gap);  // [ms] [ms]
@@ -249,6 +268,15 @@ class RobotLoop {
   // motion is in progress, matching the deleted Deadman-era bool's own
   // set/clear call sites one-for-one (activate/flush/timeout-drain).
   Telemetry::Frame frame_;
+
+  // Position-rebaseline policy (124-008, sprint 124 architecture Decision
+  // 6): per-wheel software-rebaseline generation counters, owned and
+  // incremented HERE (never by Devices::Motor/NezhaMotor/MotorArmor, which
+  // this ticket leaves unmodified) -- an 8-bit wrap-around counter
+  // suffices (Decision 6's own sizing). See assembleFrame()'s own comment
+  // at the trigger call site.
+  uint8_t positionEpochLeft_ = 0;
+  uint8_t positionEpochRight_ = 0;
 
   // Line/color alternation cursor (115-005) -- true means the NEXT pass
   // ticks line_, false means it ticks color_. Owned by cycle()'s own
