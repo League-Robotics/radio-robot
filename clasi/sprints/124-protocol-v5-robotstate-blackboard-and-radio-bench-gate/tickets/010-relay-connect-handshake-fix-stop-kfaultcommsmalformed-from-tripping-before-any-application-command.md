@@ -2,8 +2,9 @@
 id: '010'
 title: 'Relay connect-handshake fix: stop kFaultCommsMalformed from tripping before
   any application command'
-status: open
-use-cases: [SUC-008]
+status: in-progress
+use-cases:
+- SUC-008
 depends-on: []
 github-issue: ''
 issue: relay-handshake-trips-comms-malformed.md
