@@ -1,7 +1,7 @@
 ---
 id: '124'
 title: Protocol v5, RobotState blackboard, and radio bench gate
-status: planning-docs
+status: closed
 branch: sprint/124-protocol-v5-robotstate-blackboard-and-radio-bench-gate
 worktree: false
 use-cases: []
