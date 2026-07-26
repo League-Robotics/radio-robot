@@ -1,12 +1,29 @@
 ---
-status: pending
+status: in-progress
 filed: 2026-07-24
 filed_by: team-lead (stakeholder restructuring directive)
 related:
 - extract-motion-library-to-src-motion.md
 - bench-move-commands-intermittently-never-reach-firmware.md
 - bench-accuracy-campaign-s3.md
-tickets: []
+tickets:
+- 125-001
+- 125-002
+- 125-003
+- 125-004
+- 125-005
+- 125-006
+- 125-007
+- 125-008
+- 125-009
+- 125-010
+- 125-011
+- 125-012
+- 125-013
+- 125-014
+- 125-015
+- 125-016
+- 125-017
 split_into:
 - firmware-base-hardening-characterization-gate-and-freeze.md
 sprint: '125'
