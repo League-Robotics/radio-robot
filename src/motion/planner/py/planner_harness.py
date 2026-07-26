@@ -127,13 +127,17 @@ class PlannerLimits(ctypes.Structure):
                 ("actuationDelay", ctypes.c_float),  # [ms]
                 ("velocityFilterWeight", ctypes.c_float),
                 ("otosStaleness", ctypes.c_uint32),  # [ms]
-                ("headingOtosWeight", ctypes.c_float)]
+                ("headingOtosWeight", ctypes.c_float),
+                ("requireSettle", ctypes.c_bool),
+                ("settleWindow", ctypes.c_float),    # [ms]
+                ("headingHoldGain", ctypes.c_float)]  # [1/s]
 
 
 class TickResult(ctypes.Structure):
     _fields_ = [("completed", ctypes.c_bool),
                 ("moveId", ctypes.c_uint32),
-                ("timedOut", ctypes.c_bool)]
+                ("timedOut", ctypes.c_bool),
+                ("settled", ctypes.c_bool)]
 
 
 # ---- library ----
@@ -185,6 +189,9 @@ def benchLimits() -> PlannerLimits:
     limits.velocityFilterWeight = 1.0
     limits.otosStaleness = 200
     limits.headingOtosWeight = 0.0
+    limits.requireSettle = False
+    limits.settleWindow = 0.0
+    limits.headingHoldGain = 0.0
     return limits
 
 
@@ -194,6 +201,11 @@ class PerfectPlant:
     def __init__(self) -> None:
         self.positionLeft = 0.0   # [mm]
         self.positionRight = 0.0  # [mm]
+
+    def disturbHeading(self, heading: float, trackWidth: float) -> None:  # [rad] [mm]
+        """Jump the heading without moving the body along its path."""
+        self.positionLeft -= 0.5 * heading * trackWidth
+        self.positionRight += 0.5 * heading * trackWidth
 
     def step(self, state: RobotState, dt: float, sampleTime: int) -> None:  # [s] [ms]
         self.positionLeft += state.wheelLeft.cmdVelocity * dt
@@ -286,10 +298,87 @@ def runTurnScenario(lib: ctypes.CDLL) -> None:
     lib.plannerDestroy(planner)
 
 
+def runSettleScenario(lib: ctypes.CDLL) -> None:
+    """Settle-confirm (M1) must cost nothing on a zero-error plant: it
+    completes on the same tick profile-completion would have, and reports
+    settled=True."""
+    ticks = {}
+    for requireSettle in (False, True):
+        limits = benchLimits()
+        limits.requireSettle = requireSettle
+        limits.settleWindow = 1000.0  # [ms]
+        planner = lib.plannerCreate(ctypes.byref(limits))
+        state, plant, result = RobotState(), PerfectPlant(), TickResult()
+        move = Move(id=3, kind=KIND_DISTANCE, threshold=500.0, timeout=60000.0,
+                    velocityKind=VELOCITY_TWIST, v_x=150.0)
+        assert lib.plannerMove(planner, ctypes.byref(move), False)
+
+        now, completedAt = 0, None
+        for tick in range(400):
+            state.time.cycleStart = now
+            lib.plannerTick(planner, ctypes.byref(state), ctypes.byref(result))
+            lib.plannerUpdate(planner, ctypes.byref(state))
+            now += 50
+            plant.step(state, 0.050, now)
+            if result.completed:
+                completedAt = tick
+                assert result.settled, "zero-error plant must confirm arrival"
+                assert not result.timedOut
+                break
+        assert completedAt is not None, "move never completed"
+        ticks[requireSettle] = completedAt
+        lib.plannerDestroy(planner)
+
+    assert ticks[False] == ticks[True], (
+        f"settle-confirm cost {ticks[True] - ticks[False]} ticks on a "
+        f"zero-error plant; it must cost none")
+    print(f"settle-confirm: profile-complete and settle-complete both on "
+          f"tick {ticks[True] + 1}")
+
+
+def runHeadingHoldScenario(lib: ctypes.CDLL) -> None:
+    """Heading hold (M3) drives a disturbance out on the angular axis while
+    leaving the distance accounting exactly where it was -- the correction
+    is differential, so the mean of the wheel pair is untouched."""
+    limits = benchLimits()
+    limits.headingHoldGain = 4.0  # [1/s]
+    planner = lib.plannerCreate(ctypes.byref(limits))
+    state, plant, result = RobotState(), PerfectPlant(), TickResult()
+    move = Move(id=4, kind=KIND_DISTANCE, threshold=500.0, timeout=60000.0,
+                velocityKind=VELOCITY_TWIST, v_x=150.0)
+    assert lib.plannerMove(planner, ctypes.byref(move), False)
+
+    now, done = 0, False
+    for tick in range(400):
+        state.time.cycleStart = now
+        lib.plannerTick(planner, ctypes.byref(state), ctypes.byref(result))
+        lib.plannerUpdate(planner, ctypes.byref(state))
+        now += 50
+        plant.step(state, 0.050, now)
+        if tick == 10:
+            plant.disturbHeading(0.20, limits.trackWidth)  # [rad]
+        if result.completed:
+            done = True
+        elif done:
+            break
+    assert done, "move never completed"
+
+    heading = (plant.positionRight - plant.positionLeft) / limits.trackWidth
+    path = 0.5 * (plant.positionLeft + plant.positionRight)
+    assert abs(heading) <= 0.01, f"heading not recovered: {heading:.5f} rad"
+    assert abs(path - 500.0) <= 1e-3, f"distance no longer exact: {path:.6f} mm"
+    print(f"heading hold: 0.200 rad kick -> residual "
+          f"{math.degrees(abs(heading)) * 60:.3f} arcmin, distance still "
+          f"exact ({abs(path - 500.0) * 1000:.3f} um error)")
+    lib.plannerDestroy(planner)
+
+
 def main() -> None:
     lib = loadLibrary()
     runDistanceScenario(lib)
     runTurnScenario(lib)
+    runSettleScenario(lib)
+    runHeadingHoldScenario(lib)
     print("planner_harness: all checks passed")
 
 

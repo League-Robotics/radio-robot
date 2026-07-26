@@ -1,0 +1,48 @@
+# Motion planner bench measurements
+
+Hardware characterization the host-only planner cannot derive for itself.
+
+## `encoder_refresh.py` — encoder refresh interval (issue §7 item 3)
+
+**Status: NOT YET RUN — no hardware attached.** As of 2026-07-25 this
+checkout sees no CMSIS-DAP probe (`pyocd list` → "No available debug
+probes are connected") and no robot serial device (`/dev/cu.usbmodem*`
+does not exist). The capture half of the script is therefore unverified
+against a real robot; the analysis half is exercised and correct (it was
+validated against a synthetic capture, and it correctly reports a flat
+p50 across speeds as the fixed-timer signature).
+
+Run it when the robot is back on the stand:
+
+```bash
+uv run python src/motion/planner/bench/encoder_refresh.py \
+    --port /dev/cu.usbmodem2121102
+```
+
+It drives 60 / 150 / 300 mm/s for 60 s each (wheels off the ground — see
+`.claude/rules/hardware-bench-testing.md`), writes `out/encoder_refresh.csv`
+and `out/encoder_refresh.md`, and prints the per-wheel, per-speed histogram.
+
+An existing `tlm_log.py` capture can be analyzed instead of taking a new
+one — the loader accepts either CSV shape:
+
+```bash
+uv run python src/motion/planner/bench/encoder_refresh.py \
+    --analyze src/tests/bench/out/tlm_log.csv
+```
+
+### Why it blocks things
+
+Two planner numbers are currently set from folklore ("~80 ms refresh vs
+the 50 ms loop") rather than measurement:
+
+* `PlannerLimits.velocityFilterWeight` — the EMA weight on fresh encoder
+  velocity. Too high and the noise passes through; too low and the filter
+  lags the motion.
+* the noise tier's `NoisyPlant::sampleDivisor` (currently 2, i.e. a fresh
+  sample every 100 ms) — the staleness the planner is *tested* against.
+
+The measured distribution sets both. Its **p99**, not its p50, is what
+`PlannerLimits.settleWindow` has to tolerate, since a Move confirms its
+arrival at low speed, which is exactly where a per-count encoder refreshes
+slowest.

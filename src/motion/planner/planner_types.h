@@ -40,6 +40,21 @@ struct PlannerLimits {
   float velocityFilterWeight = 1.0f;  // EMA weight on fresh encoder velocity; 1 = unfiltered
   uint32_t otosStaleness = 200;       // [ms] max OTOS age still eligible to blend
   float headingOtosWeight = 0.0f;     // [0..1] complementary blend, fail-closed default
+
+  // Settle-confirm completion: when on, a Distance/Angle Move that has
+  // reached profile-complete additionally waits until it has physically
+  // ARRIVED and come to rest before the completion is reported, up to
+  // settleWindow. Off by default -- profile-complete is already exact in a
+  // zero-error plant; settle-confirm buys robustness against a lagging or
+  // overshooting real plant at the cost of a few idle cycles.
+  bool requireSettle = false;
+  float settleWindow = 0.0f;  // [ms] max extra wait past profile-complete
+
+  // Heading hold on Distance Moves: P gain on the UNCOMMANDED angular
+  // axis, driving heading back to the Move's activation baseline. The
+  // correction is purely differential, so the profiled path length -- and
+  // therefore the distance exactness -- is untouched. 0 = off.
+  float headingHoldGain = 0.0f;  // [1/s] rad/s of correction per rad of error
 };
 
 // The per-tick completion event, returned by tick() (never written into
@@ -49,6 +64,13 @@ struct TickResult {
   bool completed = false;
   uint32_t moveId = 0;
   bool timedOut = false;
+  // True when the Move was, at the moment it completed, both within the
+  // arrival epsilon of its target and at rest. Always evaluated and
+  // reported truthfully, whether or not `requireSettle` deferred the
+  // completion to obtain it (a settleWindow expiry completes with
+  // settled = false and timedOut = false -- the window ran out, the Move
+  // did not).
+  bool settled = false;
 };
 
 }  // namespace Motion

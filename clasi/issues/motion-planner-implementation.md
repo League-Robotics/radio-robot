@@ -108,9 +108,15 @@ struct PlannerLimits {
   float velocityFilterWeight;  // EMA weight on fresh samples; 1 = unfiltered
   uint32_t otosStaleness;      // [ms]
   float headingOtosWeight;     // [0..1] fail-closed default 0
+  bool requireSettle;          // §7.2, added 2026-07-25
+  float settleWindow;          // [ms]
+  float headingHoldGain;       // [1/s] §7.4, fail-closed default 0
 };
 
-struct TickResult { bool completed; uint32_t moveId; bool timedOut; };
+struct TickResult {
+  bool completed; uint32_t moveId; bool timedOut;
+  bool settled;   // §7.2 — always evaluated, see §10
+};
 ```
 
 ## 4. The Planner interface — exact semantics
@@ -295,6 +301,12 @@ the zero-error harness).
 
 ## 7. Remaining work (sprint scope — each item self-contained)
 
+**Status as of 2026-07-25.** Items 1, 2 and 4 are DONE (see §10 below for
+what landed, including two estimation defects the noise tier exposed).
+Item 3's tooling is written but the measurement is UNRUN — no robot is
+attached to this checkout. Items 5 and 6 remain blocked on the joint
+checkpoint, item 7 remains deferred, and item 8 is still open.
+
 1. **Noise/lag scenario tier.** Extend the test plant to inject:
    (a) zig-zag/white velocity noise on published samples, (b) stale
    sample cadence — publish a FRESH sample only every N-th cycle
@@ -375,10 +387,175 @@ the zero-error harness).
 - `planner_tests` (ctest custom target) builds and runs everything,
   nonzero on failure.
 
-## 9. Ground rules recap
+## 9. Ground rules recap (see §10 for what landed)
 
 Parallel effort: this checkout, `motion-planner` branch, CLASI
 out-of-process (`clasi oop on`). Sprints 124-126 run in the main
 environment and own `src/firm/**` and the legacy `src/motion/*.{h,cpp}`
 modules — never edit those here. Boundary-header changes need sign-off
 from both efforts once 124 lands.
+
+## 10. What landed (2026-07-25)
+
+### Done
+
+**§7.1 — noise/lag scenario tier.** New suite
+`src/motion/planner/tests/planner_noise_test.cpp` (13 scenarios) over a new
+`TestPlanner::NoisyPlant` in `tests/test_support.h`, with each real-world
+defect independently switchable so a failure names its own cause:
+velocity-sample noise (alternating + deterministic pseudo-random), stale
+sample cadence (`sampleDivisor`, fresh sample every N-th cycle), one-cycle
+actuation latency, first-order velocity **tracking lag**, encoder
+**position quantisation**, and an unmodelled **creep** drive. Every
+scenario asserts the per-tick invariants throughout (never past `vMax`,
+never a step past the accel/decel ceiling — angular-aware — and a
+monotonically shrinking command envelope after the goal, i.e. no hunting).
+
+Measured on the standard dirty plant (40 mm/s zig-zag + 15 mm/s white
+noise, 100 ms sample cadence, 50 ms actuation latency, 0.5 mm encoder
+quantum, wheel closing 80% of a velocity step per interval), against the
+§7.1 gate of one cruise interval:
+
+| scenario | error | gate |
+|---|---|---|
+| distance 500 mm forward | 2.000 mm | 7.5 mm |
+| distance 300 mm backward | 1.500 mm | 7.5 mm |
+| 90° turn | 0.0265 rad | 0.100 rad |
+| chain 500 + 300 mm, total | 2.000 mm | 7.5 mm |
+
+**Where the residual error actually is** — `testTrackingLagSensitivity()`
+sweeps it and asserts it monotone: of every defect above, only the wheel
+failing to reach its commanded velocity is outside the planner's model,
+and it shows up as a pure *overshoot* (the coast after the last command,
+which a velocity sink cannot take back).
+
+| tracking lag | 1.0 | 0.9 | 0.8 | 0.7 | 0.6 | 0.5 |
+|---|---|---|---|---|---|---|
+| overshoot [mm] | +0.400 | +1.100 | +2.000 | +3.500 | +5.000 | +7.575 |
+
+At lag 1.0 the dirty plant still lands sub-millimetre — everything else is
+reconstructed or anchored away. Closing the rest needs the plant model
+that arrives with §7.6 (velocity PID inside the planner's output stage);
+until then it is characterised, not tuned away.
+
+**§7.2 — settle-confirm completion (M1).** `PlannerLimits::requireSettle`
++ `settleWindow`, and `TickResult::settled`. `settled` is **always**
+evaluated and reported truthfully; `requireSettle` only controls whether
+completion is *deferred* to obtain it. Deferral applies only to a
+Distance/Angle Twist Move landing at rest — never to a timeout (which
+aborts the motion) and never when the Move hands off at speed into a
+same-axis successor (there is nothing to settle at a carried boundary, and
+deferring would stall the chain; tested).
+
+The gates are the issue's suggested tolerances (1.0 mm / 0.005 rad
+arrival) with one change: the rest gate is `|velocity| <= max(floor, one
+decel step)`, floor 5 mm/s / 0.05 rad/s. A body within one decel step of
+zero is *provably* at rest by the end of the next interval, and the
+profiler's own terminal step is capped at exactly one decel step above the
+boundary — which is what makes settle-complete and profile-complete land
+on the **same tick** in a zero-error plant, as §7.2 requires (verified in
+both C++ and the ctypes harness: both complete on tick 76).
+
+The arrival residual is measured against the **anchored** (un-extrapolated)
+odometry, not the planned one — "have we actually arrived?" must not be
+asked of a prediction.
+
+On a dirty plant `settled` behaves as a real signal rather than a
+formality: a well-tracked wheel (0.5 mm overshoot) confirms; the standard
+plant (2.0 mm overshoot) refuses to claim arrival and completes at window
+expiry with `settled = false`, `timedOut = false` — a distinct fact from a
+timeout, and worth its own bit. Window expiry defers by exactly the window
+(6 ticks of a 300 ms window) and no longer.
+
+Note for hardware: the angular arrival epsilon (0.005 rad) is **finer than
+one encoder tick reads** on a 100 mm track with a 0.5 mm quantum
+(= 0.01 rad of heading). A coarse encoder alone can keep an otherwise
+perfect turn from confirming — which is a concrete reason §7.3's
+measurement matters before this gate is trusted on the robot.
+
+**§7.4 — heading hold on Distance Moves (M3).**
+`PlannerLimits::headingHoldGain` (`[1/s]`, fail-closed default 0). P on the
+uncommanded axis back to the Move's activation heading, applied as a
+differential on top of the profiled pair and clamped so the faster wheel
+never passes `vMax` — clamped symmetrically about the profiled velocity, so
+the *mean* of the pair (which is what the odometry integrates as `ds`) is
+untouched and **the distance stays exact**. A 0.20 rad kick mid-Move is
+driven out to < 1e-5 rad while the 500 mm lands to within 0.06 µm; with the
+gain at its default the same kick is carried to the end untouched (the
+control that proves the recovery is the P term). An absurd gain against a
+1.0 rad error stays inside `vMax`. Exercised from Python too.
+
+### Two estimation defects the noise tier exposed (both fixed)
+
+1. **The odometer ratcheted on noise.** The pose was integrated from
+   ZOH-*extrapolated* wheel positions, and `pathLength` accumulates `|ds|`
+   — which rectifies zero-mean jitter into one-way drift. A *standing*
+   robot's odometer climbed at roughly the velocity noise times the period,
+   every tick, forever. This also contradicted §6.1's own stated principle
+   ("traveled distance is ALWAYS anchored to measured positions"). The pose
+   is now integrated from the measured anchors, and the extrapolation is
+   applied as a non-accumulating additive term in `measure()`. Regression
+   test: `testStandingRobotDoesNotDrift()` — 400 idle ticks on the dirty
+   plant, 0.000000 mm of drift. This alone took the dirty-plant distance
+   error from 0.677 mm to 0.060 mm and the chain from 0.862 mm to 0.125 mm.
+
+2. **The anticipation terms extrapolated the future from a dirty
+   derivative.** The ZOH-predict and actuation-delay terms used the filtered
+   *measured* velocity. Under the velocity-tracking plant the profiler is
+   built on, the *commanded* velocity says the same thing and is exact —
+   and it matters most on the angular axis, where per-wheel noise does not
+   cancel the way it does in the mean. Both spans now use the command, each
+   attributed to the command actually driving it (the elapsed span to the
+   tick-before-last when there is staging latency, the future span to last
+   tick's), via a one-deep command history. This took the dirty-plant turn
+   error from 0.040 rad to 0.026 rad and, with settle-confirm, from
+   0.020 rad to 0.0003 rad. Measured-velocity anticipation was tried and
+   measured *worse* as well as noisier; the failure mode it might have
+   caught (a plant that does not track) is bounded by one sample interval
+   and fully corrected by the next anchor, because the pose is anchored.
+
+`update()` now stamps `estimate.body.basisTime` at the older of the two
+wheel anchors rather than at the tick, since that is when the pose is
+actually valid, and marks it invalid until both wheels have a sample.
+
+### Not done, and why
+
+**§7.3 — bench measurement of the encoder refresh interval: TOOLING
+WRITTEN, MEASUREMENT NOT RUN.** No robot is attached to this checkout —
+`pyocd list` reports "No available debug probes are connected" and no
+`/dev/cu.usbmodem*` device exists. `src/motion/planner/bench/
+encoder_refresh.py` drives 60/150/300 mm/s for 60 s each, captures
+telemetry, and histograms the per-wheel intervals between changes in both
+the sample stamp and the reported position (they answer different
+questions), emitting CSV + a markdown note. Its analysis half is exercised
+and correct — validated against a synthetic capture, where it correctly
+reads a flat p50 across speeds as the fixed-timer signature. Its capture
+half is unverified against real hardware. Run it, then set
+`velocityFilterWeight` and the noise tier's `sampleDivisor` from the result
+(and `settleWindow` from the p99, not the p50). See
+`src/motion/planner/bench/README.md`.
+
+**§7.5 (RobotState joint checkpoint)** and **§7.6 (duty-plane back end)**
+remain blocked: both wait on sprint 124 landing in the main environment,
+and §7.6 is explicitly "do NOT start" before both efforts sign off the
+boundary.
+
+**§7.7 (Wheels-Move stop conditions beyond Time)** remains deferred — no
+protocol demand has materialised.
+
+**§7.8 (open design decisions)** is untouched and still needs a decision:
+the final `Motion::Move` field shape (1:1 with wire `msg::Move` minus
+baggage vs. simplified), and whether `BodyTwist3` moves into `types/` or
+the kinematics array overloads are dropped. The first is a boundary
+question that §9 says needs sign-off from BOTH efforts once 124 lands, so
+it was deliberately not settled unilaterally here.
+
+### Verification
+
+`cmake --build src/motion/planner/build --target planner_tests` — 4/4 ctest
+suites pass (`profile_test`, `estimation_test`, `planner_scenarios_test`,
+`planner_noise_test`). `python3 src/motion/planner/py/planner_harness.py` —
+ctypes layout guard passes against the widened `PlannerLimits`/`TickResult`,
+and all four scenarios pass (500 mm to 0.011 µm; 90° to 0.014 arcsec; the
+settle and heading-hold scenarios added this round). Every pre-existing
+zero-error exactness gate is unchanged and still passing — no regression.

@@ -57,10 +57,40 @@ class Planner {
     float baselinePath = 0.0f;     // [mm] pathLength() at activation
     float baselineHeading = 0.0f;  // [rad] heading() at activation
     bool closingIssued = false;    // last command was the exact terminal step
+    // Settle-confirm (PlannerLimits::requireSettle): profile-complete has
+    // fired and we are holding the completion back until the body has
+    // arrived and stopped, or until settleWindow expires.
+    bool settling = false;
+    uint32_t settleStart = 0;  // [ms] when profile-complete fired
   };
 
   enum class Axis : uint8_t { None, Linear, Angular, Wheels };
   static Axis axisOf(const Move& m);
+
+  // The measured state the completion tests and the settle gate read,
+  // computed once per tick from the freshly integrated estimate.
+  struct Measurement {
+    float bodyVelocity = 0.0f;  // [mm/s] filtered, signed
+    float omega = 0.0f;         // [rad/s] filtered, signed
+    // Distance-to-go on the active Move's own axis, in its own units
+    // ([mm] Distance, [rad] Angle).
+    //   plannedRemaining  -- extrapolated forward by the ZOH predict and
+    //       the actuation delay: the residual at the instant this tick's
+    //       command takes EFFECT, which is what the profiler must plan
+    //       against and what profile-completion tests.
+    //   anchoredRemaining -- the residual against the last MEASURED wheel
+    //       positions, extrapolated by nothing. Noise-free by construction
+    //       (it only moves when a real sample lands), which is what "have
+    //       we actually ARRIVED?" has to ask.
+    float plannedRemaining = 0.0f;
+    float anchoredRemaining = 0.0f;
+  };
+  Measurement measure(uint32_t now) const;  // [ms]
+
+  // Has the active Move physically arrived and come to rest? (See
+  // PlannerLimits::requireSettle.) Evaluated on every completion so
+  // TickResult::settled is truthful even with settle-confirm off.
+  bool settleReached(const Measurement& measured, float dt) const;
 
   // Pop pending_[0] into active_, capturing baselines from the current
   // pose -- or from the completed predecessor's cumulative boundary
@@ -76,10 +106,19 @@ class Planner {
 
   // Compute the active Move's command for the next interval; stages
   // cmdLeft_/cmdRight_ and updates the profile carry state.
-  void planActive(uint32_t now, float dt);
+  void planActive(uint32_t now, float dt, const Measurement& measured);
+
+  // Add the heading-hold differential on top of an already-staged pair of
+  // wheel commands (Distance Moves only; no-op at zero gain). Clamped so
+  // the faster wheel never exceeds vMax, and differential by construction
+  // so the profiled path length is unchanged.
+  void applyHeadingHold();
 
   // No active Move: ramp the staged command down to zero within limits.
   void drainToZero(float dt);
+
+  // Age the staged command by one tick (see cmdLeftPrevious_).
+  void rollCommandHistory();
 
   PlannerLimits limits_;
   WheelChannel left_, right_;
@@ -92,8 +131,13 @@ class Planner {
   // Positive-frame previous command on the profiled axis (the carry the
   // next tick ramps from); per-wheel carries for Wheels Moves and drain.
   float profileVelocity_ = 0.0f;
-  float cmdLeft_ = 0.0f;   // [mm/s]
-  float cmdRight_ = 0.0f;  // [mm/s]
+  float cmdLeft_ = 0.0f;   // [mm/s] staged last tick
+  float cmdRight_ = 0.0f;  // [mm/s] staged last tick
+  // Staged the tick before last -- the command actually driving the wheels
+  // over the just-elapsed interval when there is one cycle of actuation
+  // latency. measure()'s anticipation needs it; nothing else does.
+  float cmdLeftPrevious_ = 0.0f;   // [mm/s]
+  float cmdRightPrevious_ = 0.0f;  // [mm/s]
   Axis lastAxis_ = Axis::None;
   float activeBoundary_ = 0.0f;  // last planned boundary velocity, positive frame
 
@@ -104,8 +148,7 @@ class Planner {
   float carryPath_ = 0.0f;     // [mm]
   float carryHeading_ = 0.0f;  // [rad]
 
-  uint32_t lastTickTime_ = 0;  // [ms] staged for update()'s estimate bases
-  bool ticked_ = false;
+  bool ticked_ = false;  // tick() has run at least once
 };
 
 }  // namespace Motion

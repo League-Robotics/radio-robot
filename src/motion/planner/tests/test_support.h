@@ -5,6 +5,7 @@
 // against. Test-only scaffolding, never part of the planner library.
 #pragma once
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
@@ -38,6 +39,13 @@ struct PerfectPlant {
   float positionLeft = 0.0f;   // [mm]
   float positionRight = 0.0f;  // [mm]
 
+  // Jump the heading by `heading` without moving the body along its path
+  // (equal and opposite wheel travel, so ds is exactly zero).
+  void disturbHeading(float heading, float trackWidth) {  // [rad] [mm]
+    positionLeft -= 0.5f * heading * trackWidth;
+    positionRight += 0.5f * heading * trackWidth;
+  }
+
   // Integrate the staged commands over one interval ending at `sampleTime`,
   // then publish fresh samples into the state.
   void step(RobotState& state, float dt, uint32_t sampleTime) {  // [s] [ms]
@@ -54,11 +62,103 @@ struct PerfectPlant {
   }
 };
 
+// Noisy/lagging plant (issue §7.1): the same perfect velocity tracking
+// wrapped in the three defects a real drivetrain has, each independently
+// switchable so a failure points at one cause.
+//
+//   noiseAmplitude / noiseWhite -- the PUBLISHED velocity sample is dirty;
+//       the position sample stays honest (a real encoder's integral is far
+//       cleaner than its derivative, which is the whole reason the planner
+//       anchors distance to positions).
+//   sampleDivisor -- a fresh sample lands only every N-th cycle; between
+//       them the previous triple (SAME sampleTime) is re-seen, which is
+//       what the WheelChannel's fresh-sample gate exists to survive.
+//   delayedActuation -- the interval is driven by the PREVIOUS tick's
+//       command, the one-cycle staging latency PlannerLimits::
+//       actuationDelay compensates for.
+//   trackingLag -- the wheel does not JUMP to the commanded velocity; it
+//       approaches it first-order. This is the defect that actually breaks
+//       exactness, because it is the one the planner's own plant model
+//       (perfect velocity tracking) does not contain. Everything above it
+//       the planner can, and does, reconstruct exactly.
+//   positionQuantum -- the encoder reports whole ticks, not real numbers.
+//   creepVelocity -- an unmodelled drive that never lets the body rest;
+//       used to drive the settle window to expiry.
+struct NoisyPlant {
+  float noiseAmplitude = 0.0f;    // [mm/s] +- alternating, per published sample
+  float noiseWhite = 0.0f;        // [mm/s] +- deterministic pseudo-random
+  int sampleDivisor = 1;          // publish a fresh sample every N-th cycle
+  bool delayedActuation = false;  // drive the interval with the previous command
+  float trackingLag = 1.0f;       // [0..1] velocity response per interval; 1 = instant
+  float positionQuantum = 0.0f;   // [mm] encoder resolution; 0 = continuous
+  float creepVelocity = 0.0f;     // [mm/s] added to both wheels, always
+
+  float positionLeft = 0.0f;   // [mm] ground truth
+  float positionRight = 0.0f;  // [mm] ground truth
+
+  // Jump the heading by `heading` without moving the body along its path
+  // (equal and opposite wheel travel, so ds is exactly zero).
+  void disturbHeading(float heading, float trackWidth) {  // [rad] [mm]
+    positionLeft -= 0.5f * heading * trackWidth;
+    positionRight += 0.5f * heading * trackWidth;
+  }
+
+  void step(RobotState& state, float dt, uint32_t sampleTime) {  // [s] [ms]
+    const float targetLeft =
+        (delayedActuation ? stagedLeft_ : state.wheelLeft.cmdVelocity) +
+        creepVelocity;
+    const float targetRight =
+        (delayedActuation ? stagedRight_ : state.wheelRight.cmdVelocity) +
+        creepVelocity;
+    stagedLeft_ = state.wheelLeft.cmdVelocity;
+    stagedRight_ = state.wheelRight.cmdVelocity;
+    actualLeft_ += trackingLag * (targetLeft - actualLeft_);
+    actualRight_ += trackingLag * (targetRight - actualRight_);
+    positionLeft += actualLeft_ * dt;
+    positionRight += actualRight_ * dt;
+
+    if (++cycles_ % sampleDivisor != 0) return;  // stale cycle: re-see the last
+    ++publishes_;
+    state.wheelLeft.position = quantize(positionLeft);
+    state.wheelLeft.velocity = actualLeft_ + noise();
+    state.wheelLeft.sampleTime = sampleTime;
+    state.wheelLeft.connected = true;
+    state.wheelRight.position = quantize(positionRight);
+    state.wheelRight.velocity = actualRight_ + noise();
+    state.wheelRight.sampleTime = sampleTime;
+    state.wheelRight.connected = true;
+  }
+
+ private:
+  float quantize(float position) const {  // [mm]
+    if (positionQuantum <= 0.0f) return position;
+    return std::floor(position / positionQuantum) * positionQuantum;
+  }
+
+  float noise() {  // [mm/s]
+    const float zigZag = (publishes_ % 2 == 0) ? noiseAmplitude
+                                               : -noiseAmplitude;
+    lcg_ = lcg_ * 1103515245u + 12345u;  // deterministic; tests must repeat
+    const float unit =
+        static_cast<float>((lcg_ >> 16) & 0xFFFFu) / 32767.5f - 1.0f;
+    return zigZag + unit * noiseWhite;
+  }
+
+  float stagedLeft_ = 0.0f;   // [mm/s] last command handed to the plant
+  float stagedRight_ = 0.0f;  // [mm/s]
+  float actualLeft_ = 0.0f;   // [mm/s] what the wheel is really doing
+  float actualRight_ = 0.0f;  // [mm/s]
+  int cycles_ = 0;
+  int publishes_ = 0;
+  uint32_t lcg_ = 1u;
+};
+
 // One closed-loop cycle: stamp time, tick (compute), update (save), then
 // let the plant integrate the staged command over the interval and publish
 // the samples the NEXT tick will see. Returns tick()'s completion event.
+template <typename Plant>
 inline Motion::TickResult cycle(Motion::Planner& planner, RobotState& state,
-                                PerfectPlant& plant, uint32_t& now,
+                                Plant& plant, uint32_t& now,
                                 float periodMs) {
   state.time.cycleStart = now;
   const Motion::TickResult result = planner.tick(state);
