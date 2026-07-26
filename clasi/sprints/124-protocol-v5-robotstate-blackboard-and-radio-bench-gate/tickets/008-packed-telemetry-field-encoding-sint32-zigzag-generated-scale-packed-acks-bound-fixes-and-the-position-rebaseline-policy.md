@@ -2,9 +2,13 @@
 id: 008
 title: 'Packed telemetry field encoding: sint32/zigzag, generated (scale), packed
   acks, bound fixes, and the position-rebaseline policy'
-status: open
-use-cases: [SUC-005, SUC-006]
-depends-on: ['001', '007']
+status: in-progress
+use-cases:
+- SUC-005
+- SUC-006
+depends-on:
+- '001'
+- '007'
 github-issue: ''
 issue: protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md
 completes_issue: true
