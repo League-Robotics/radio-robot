@@ -2,9 +2,13 @@
 id: 009
 title: 'RobotLoop/Telemetry restructure: one-assembly-point state->update->emit, TelemetrySecondary
   deletion'
-status: open
-use-cases: [SUC-004, SUC-005]
-depends-on: ['007', '008']
+status: in-progress
+use-cases:
+- SUC-004
+- SUC-005
+depends-on:
+- '007'
+- 008
 github-issue: ''
 issue: robot-state-blackboard-one-struct-for-all-shared-state-and-telemetry.md
 completes_issue: true
