@@ -374,12 +374,40 @@ checkpoint, item 7 remains deferred, and item 8 is still open.
    repo): delete `types/robot_state.h`, point the build at
    `src/firm/types/robot_state.h`, reconcile field names/offsets, rerun
    everything including the ctypes layout guard.
-6. **Duty-plane back end (M4, joint checkpoint).** The base's command
-   primitive becomes per-wheel DUTY; the velocity PID moves into the
-   planner's output stage (profile → wheel velocities → PID → duty),
-   with `appliedDuty` read back for anti-windup. Everything in §5/§6 is
-   unchanged. Do NOT start before the main repo's 124 lands and both
-   efforts sign off the boundary.
+6. **Duty-plane back end (M4). LIBRARY SIDE DONE 2026-07-26 — validated
+   co-located on a MEASURED plant.** The velocity PID now lives in the
+   planner's output stage (`wheel_pid.{h,cpp}`; `Planner::stageDuty()`
+   on every tick exit; `commandedDutyLeft/Right()` + `plannerDuty` capi;
+   gains `PlannerLimits.velKff/velKp/velKi/velIMax`, fail-closed zeros;
+   rest clamp: exact-zero target + wheel near rest → duty 0 + integral
+   reset, which killed a measured ~1° reverse-creep from post-settle
+   integral unwind). Real plant identified on the stand
+   (`bench/plant_id.py`, firmware PID reduced to kff, open-loop duty
+   steps): **gain ~1370 mm/s/duty (L 1420 / R 1320), tau ~230 ms**,
+   brick duty slew visible. `tests/duty_plant.h` encodes those numbers
+   (+0.07 mm encoder quantization + velocity noise) and
+   `planner_duty_scenarios_test.cpp` proves solid one-loop motion on it:
+   distance 500 → ±0.17 mm; 90° turn → +0.89°; 4-move chain →
+   748.97/750 mm with full-speed carry; stop-means-stopped; zero creep.
+
+   **Topology finding (HIL, hard-won):** closing this loop HOST-SIDE
+   over the serial transport is unstable (~6 cycles dead time +
+   integrator windup across it — runaway legs, sign reversals;
+   `hil_drive.py --duty` preserves the experiment). The loop MUST run
+   co-located with the samples — which the validated test topology is.
+
+   **What remains is FIRMWARE INTEGRATION (the 125 replan's scope):**
+   (a) link the planner into the ARM image (the root CMake currently
+   excludes `src/motion/planner/**`; the exclusion must narrow to
+   tests/capi/bench only), (b) RobotLoop's cycle calls
+   `planner.tick(state)`/`update(state)` after both collects and writes
+   the planner's DUTY to the motors — sense → plan → act in ONE cycle,
+   duty writes after the plan, (c) NezhaMotor sheds its PID (pure bus
+   adapter + raw duty primitive), (d) delete MoveQueue/VelocityShaper +
+   land-at-zero constants once the planner carries the load, (e) wire
+   Moves to the planner's queue. Remaining tuning frontier: the settle
+   rest gate admits up to alphaDecel·dt of residual omega, whose coast
+   (~omega·tau) is the turn's +0.9°.
 7. **Wheels-Move stop conditions beyond Time** — only if protocol demand
    materializes (v1 deliberately rejects them).
 8. **Open design decisions to settle:** final `Motion::Move` field shape
