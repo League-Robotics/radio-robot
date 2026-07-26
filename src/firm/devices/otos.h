@@ -118,6 +118,15 @@ class Otos {
   virtual bool poseFresh() const = 0;
   virtual bool connected() const = 0;
   virtual bool present() const = 0;
+
+  // The nowUs of the tick() call that produced the CURRENTLY-cached pose()
+  // reading — the last REAL bus-read attempt's own timestamp (RealOtos's
+  // lastReadUs_ is the reference implementation; see this file's
+  // "lastReadUs" doc comment below), never "now" at call time. Mirrors
+  // Devices::Motor::sampleTime() (motor.h) — see
+  // protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md §B2.
+  virtual uint64_t sampleTime() const = 0;  // [us]
+
   virtual void setLinearScalar(float scalar) = 0;
   virtual void setAngularScalar(float scalar) = 0;
   virtual void setOffset(float x, float y, float heading) = 0;     // [mm] [mm] [rad]
@@ -177,18 +186,20 @@ class RealOtos : public Otos {
   // on a floating/NAK'd bus, some other value for a wrong device.
   uint8_t lastProbeId() const { return lastProbeId_; }
 
-  // lastReadUs -- the timestamp (Devices::Clock's own [us] epoch) of the
-  // most recent REAL bus read this leaf performed -- 0 before the first one
-  // (matches hasRead_'s own default). A cheap accessor, no bus traffic.
-  // "age" is `now - lastReadUs()`, NOT "cycles since sample() last ran" (a
-  // caller that only gets scheduled every other cycle, or a rate-limited-
-  // skip tick(), must still see the REAL elapsed time since the chip's own
-  // reading was actually taken). App::HeadingSource -- 109-010's own
-  // measurement-age projection consumer this accessor was added for -- is
-  // DELETED (115-002, gut-to-minimal-firmware S1 motion-stack excision);
-  // no live App:: consumer remains, but the accessor stays (exercised by
-  // app_robot_loop_harness.cpp and useful for future bench diagnostics).
-  uint64_t lastReadUs() const { return lastReadUs_; }
+  // sampleTime() -- Otos::sampleTime() override. The timestamp
+  // (Devices::Clock's own [us] epoch) of the most recent REAL bus read this
+  // leaf performed -- 0 before the first one (matches hasRead_'s own
+  // default). A cheap accessor, no bus traffic. "age" is `now -
+  // sampleTime()`, NOT "cycles since sample() last ran" (a caller that only
+  // gets scheduled every other cycle, or a rate-limited-skip tick(), must
+  // still see the REAL elapsed time since the chip's own reading was
+  // actually taken). App::HeadingSource -- 109-010's own measurement-age
+  // projection consumer this accessor was added for -- is DELETED (115-002,
+  // gut-to-minimal-firmware S1 motion-stack excision); no live App::
+  // consumer remains, but the accessor stays (exercised by
+  // app_robot_loop_harness.cpp and useful for future bench diagnostics; the
+  // protocol-v5 age-based telemetry work re-adds a live consumer).
+  uint64_t sampleTime() const override { return lastReadUs_; }  // [us]
 
   // True if a real bus read is due: either no real read has ever happened
   // (hasRead_ false — before begin(), or on a chip begin() never detected,

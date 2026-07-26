@@ -20,9 +20,27 @@ enum class Neutral : uint8_t {
 
 // Pose2D
 struct Pose2D {
-    float x = 0.0f;
-    float y = 0.0f;
-    float h = 0.0f;
+    int32_t x = 0;
+    int32_t y = 0;
+    int32_t h = 0;
+
+    static constexpr float kXScale = 1.0f;  // real = raw * scale
+    static int32_t packX(float value) {
+        return static_cast<int32_t>(value >= 0.0f ? (value / kXScale + 0.5f) : (value / kXScale - 0.5f));
+    }
+    static float unpackX(int32_t raw) { return static_cast<float>(raw) * kXScale; }
+
+    static constexpr float kYScale = 1.0f;  // real = raw * scale
+    static int32_t packY(float value) {
+        return static_cast<int32_t>(value >= 0.0f ? (value / kYScale + 0.5f) : (value / kYScale - 0.5f));
+    }
+    static float unpackY(int32_t raw) { return static_cast<float>(raw) * kYScale; }
+
+    static constexpr float kHScale = 0.001f;  // real = raw * scale
+    static int32_t packH(float value) {
+        return static_cast<int32_t>(value >= 0.0f ? (value / kHScale + 0.5f) : (value / kHScale - 0.5f));
+    }
+    static float unpackH(int32_t raw) { return static_cast<float>(raw) * kHScale; }
 
     // --- array / optional-string accessors ---
 };
@@ -37,9 +55,27 @@ struct BodyTwist {
 
 // BodyTwist3
 struct BodyTwist3 {
-    float v_x = 0.0f;
-    float v_y = 0.0f;
-    float omega = 0.0f;
+    int32_t v_x = 0;
+    int32_t v_y = 0;
+    int32_t omega = 0;
+
+    static constexpr float kVXScale = 0.1f;  // real = raw * scale
+    static int32_t packVX(float value) {
+        return static_cast<int32_t>(value >= 0.0f ? (value / kVXScale + 0.5f) : (value / kVXScale - 0.5f));
+    }
+    static float unpackVX(int32_t raw) { return static_cast<float>(raw) * kVXScale; }
+
+    static constexpr float kVYScale = 0.1f;  // real = raw * scale
+    static int32_t packVY(float value) {
+        return static_cast<int32_t>(value >= 0.0f ? (value / kVYScale + 0.5f) : (value / kVYScale - 0.5f));
+    }
+    static float unpackVY(int32_t raw) { return static_cast<float>(raw) * kVYScale; }
+
+    static constexpr float kOmegaScale = 0.01f;  // real = raw * scale
+    static int32_t packOmega(float value) {
+        return static_cast<int32_t>(value >= 0.0f ? (value / kOmegaScale + 0.5f) : (value / kOmegaScale - 0.5f));
+    }
+    static float unpackOmega(int32_t raw) { return static_cast<float>(raw) * kOmegaScale; }
 
     // --- array / optional-string accessors ---
 };

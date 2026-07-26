@@ -62,6 +62,7 @@ class StubMotor : public Devices::Motor {
   float velocityTarget() const override { return velocity_; }  // [mm/s]
   float appliedDuty() const override { return 0.0f; }
   bool connected() const override { return true; }
+  uint64_t sampleTime() const override { return 0; }  // [us] unused by FakeOtos/Odometry — always the default
   void resetPosition() override { position_ = 0.0f; }
   void rebaseline() override {}
 
@@ -85,9 +86,12 @@ void scenarioAlwaysPresentFreshOnlyAfterTick() {
   checkTrue(fake.present(), "present() true before any tick (a fake is always there)");
   checkTrue(fake.connected(), "connected() true before any tick");
   checkTrue(!fake.poseFresh(), "poseFresh() false before the first tick()");
+  checkTrue(fake.sampleTime() == 0, "sampleTime() defaults to 0 before the first tick()");
 
   fake.tick(1000000);
   checkTrue(fake.poseFresh(), "poseFresh() true after the first tick()");
+  checkTrue(fake.sampleTime() == 1000000,
+            "sampleTime() reports the tick's own nowUs -- a fake resamples every tick, no rate limit");
 }
 
 // 2. A straight drive: both wheels advance equally. FakeOtos.pose() must
@@ -145,6 +149,7 @@ void scenarioSpinMirrorsOdometryAndTwist() {
   checkNear(r.v_x, expV, 1e-4f, "pose().v_x matches forward() v (~0 on a pure spin)");
   checkNear(r.omega, expOmega, 1e-4f, "pose().omega matches forward() omega (non-zero on a spin)");
   checkTrue(std::fabs(r.omega) > 1e-3f, "spin produces a non-zero omega");
+  checkTrue(fake.sampleTime() == 1020000, "sampleTime() tracks this tick's own nowUs");
 }
 
 }  // namespace

@@ -90,6 +90,14 @@ class Motor {
   virtual float appliedDuty() const = 0;     // [-1, 1] last successfully written
   virtual bool connected() const = 0;
 
+  // The nowUs of the tick() call that produced the CURRENTLY-cached
+  // position()/velocity() reading — the last ACCEPTED fresh sample's own
+  // timestamp, never "now" at call time (NezhaMotor's lastFreshUs_ is the
+  // reference implementation). Lets a caller compute a real per-sample age
+  // instead of stamping every reading with the same cycle's now — see
+  // protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md §B2.
+  virtual uint64_t sampleTime() const = 0;  // [us]
+
   // --- Resets ---
   // Bare motor: resetPosition() acts IMMEDIATELY (the caller owns any
   // at-rest discipline). MotorArmor overrides it with the staged,

@@ -70,6 +70,8 @@ def test_app_telemetry_harness_compiles_and_passes(tmp_path):
             "-I",
             str(_SOURCE_DIR),
             "-I",
+            str(_REPO_ROOT / "src"),
+            "-I",
             str(_TESTS_SIM_DIR),
             "-o",
             str(binary),

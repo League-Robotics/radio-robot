@@ -93,22 +93,22 @@ Motion::StateEstimator::Input makeFrame(float encLeftPos, float encLeftVel, uint
                                          float otosHeading = 0.0f, float otosOmega = 0.0f,
                                          uint32_t otosTime = 0) {
   Motion::StateEstimator::Input input;
-  input.encLeftPosition = encLeftPos;
-  input.encLeftVelocity = encLeftVel;
-  input.encLeftTime = encLeftTime;
-  input.encRightPosition = encRightPos;
-  input.encRightVelocity = encRightVel;
-  input.encRightTime = encRightTime;
-  input.poseX = poseX;
-  input.poseY = poseY;
-  input.poseHeading = poseH;
-  input.twistVX = twistVx;
-  input.twistVY = twistVy;
-  input.twistOmega = twistOmega;
-  input.otosPresent = otosPresent;
-  input.otosHeading = otosHeading;
-  input.otosOmega = otosOmega;
-  input.otosTime = otosTime;
+  input.wheelLeft.position = encLeftPos;
+  input.wheelLeft.velocity = encLeftVel;
+  input.wheelLeft.sampleTime = encLeftTime;
+  input.wheelRight.position = encRightPos;
+  input.wheelRight.velocity = encRightVel;
+  input.wheelRight.sampleTime = encRightTime;
+  input.pose.x = poseX;
+  input.pose.y = poseY;
+  input.pose.heading = poseH;
+  input.pose.v_x = twistVx;
+  input.pose.v_y = twistVy;
+  input.pose.omega = twistOmega;
+  input.otos.present = otosPresent;
+  input.otos.heading = otosHeading;
+  input.otos.omega = otosOmega;
+  input.otos.sampleTime = otosTime;
   return input;
 }
 

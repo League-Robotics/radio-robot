@@ -102,16 +102,25 @@ _FLAG_CONN_RIGHT = 1 << 4
 
 
 def test_from_pb2_matches_text_parse_for_every_shared_field():
+    # 124-008 (issue §B3): position/velocity/x/y/heading/v_x/v_y/omega/h are
+    # sint32+scale on the wire now -- pb2 fields carry the RAW wire int
+    # (real = raw * scale, options.proto's own (scale) doc comment); the
+    # REAL values below (matched against the hand-built text line) are
+    # position=100/-50mm, velocity=200/-199mm/s (scale 0.1 -> raw *10),
+    # pose.h=1.0rad/otos.heading=0.5rad (scale 0.001 -> raw *1000),
+    # twist.omega=0.3rad/s (scale 0.01 -> raw *100). `time` is RENAMED
+    # `age` (issue §B2) -- a small in-bound (0-255) test value, not
+    # otherwise compared against the text line.
     telemetry = telemetry_pb2.Telemetry(
         now=12345,
         mode=telemetry_pb2.DISTANCE,
         seq=7,
         flags=_FLAG_OTOS_PRESENT | _FLAG_OTOS_CONNECTED,
-        enc_left=telemetry_pb2.EncoderReading(position=100.0, velocity=200.0, time=12000),
-        enc_right=telemetry_pb2.EncoderReading(position=-50.0, velocity=-199.0, time=12000),
-        pose=common_pb2.Pose2D(x=350.0, y=-12.0, h=1.0),
-        otos=telemetry_pb2.OtosReading(x=1.0, y=2.0, heading=0.5, time=12000),
-        twist=common_pb2.BodyTwist3(v_x=150.0, v_y=0.0, omega=0.3),
+        enc_left=telemetry_pb2.EncoderReading(position=100, velocity=2000, age=20),
+        enc_right=telemetry_pb2.EncoderReading(position=-50, velocity=-1990, age=20),
+        pose=common_pb2.Pose2D(x=350, y=-12, h=1000),
+        otos=telemetry_pb2.OtosReading(x=1, y=2, heading=500, age=5),
+        twist=common_pb2.BodyTwist3(v_x=1500, v_y=0, omega=30),
     )
 
     from_pb2_frame = TLMFrame.from_pb2(telemetry)
@@ -144,10 +153,10 @@ def test_from_pb2_matches_text_parse_for_every_shared_field():
         assert getattr(from_pb2_frame, name) is None, name
 
     # otos_reading (new, richer than the legacy `otos` 3-tuple) carries the
-    # SAME burst, with its own time stamp.
+    # SAME burst, with its own age stamp (124-008: RENAMED from `time`).
     assert from_pb2_frame.otos_reading is not None
     assert from_pb2_frame.otos_reading.x == pytest.approx(1.0)
-    assert from_pb2_frame.otos_reading.time == 12000
+    assert from_pb2_frame.otos_reading.age == 5
     assert from_pb2_frame.otos_connected is True
 
 
@@ -302,25 +311,26 @@ class _ConfigLoopbackSerial:
 
     def write(self, data: bytes) -> int:
         self.raw_writes.append(data)
-        if data.endswith(b"\x00"):
-            raw = decode_frame(data[:-1])
-            if raw is not None:
-                cmd = envelope_pb2.CommandEnvelope.FromString(raw)
-                self.sent_envelopes.append(cmd)
+        if data.endswith(b"\n"):
+            command, sep, cobs_body = data[:-1].partition(b":")
+            if sep:
+                raw = decode_frame(cobs_body, command=command)
+                if raw is not None:
+                    cmd = envelope_pb2.CommandEnvelope.FromString(raw)
+                    self.sent_envelopes.append(cmd)
 
-                # Unsolicited tlm push carrying the ack -- corr_id=0 on the
-                # ENVELOPE itself (matches real firmware: primary frames
-                # always carry corr_id=0). wait_for_ack() (120: ring-based)
-                # actually matches on the `acks` ring entry; the scalar
-                # ack_corr/ack_err/flags bit 5 are populated too, mirroring
-                # how real firmware's Telemetry::ack() pushes both
-                # simultaneously, for any OTHER reader that still wants the
-                # single freshest-ack slot.
-                tlm = telemetry_pb2.Telemetry(
-                    flags=_ACK_FRESH_BIT, ack_corr=cmd.corr_id, ack_err=0)
-                tlm.acks.add(corr_id=cmd.corr_id, err=0)
-                reply = envelope_pb2.ReplyEnvelope(corr_id=0, tlm=tlm)
-                self._out += encode_frame(reply.SerializeToString()) + b"\x00"
+                    # Unsolicited tlm push carrying the ack -- corr_id=0 on the
+                    # ENVELOPE itself (matches real firmware: primary frames
+                    # always carry corr_id=0). wait_for_ack() (120: ring-based)
+                    # matches on the `acks` ring entry -- 124-008 (issue §B4)
+                    # deleted the single "freshest ack" scalar slot
+                    # (ack_corr/ack_err/kFlagAckFresh) this used to also
+                    # populate; the ring is the only ack source now, packed
+                    # uint32 (corr_id<<4|err).
+                    tlm = telemetry_pb2.Telemetry(flags=0)
+                    tlm.acks.append((cmd.corr_id << 4) | 0)
+                    reply = envelope_pb2.ReplyEnvelope(corr_id=0, tlm=tlm)
+                    self._out += b"TLM:" + encode_frame(reply.SerializeToString(), command=b"TLM") + b"\n"
         return len(data)
 
     def flush(self) -> None:

@@ -4,6 +4,9 @@
 // No cycle logic lives here. Design/rationale: DESIGN.md.
 #include "MicroBit.h"
 
+#include <cstdio>
+#include <cstring>
+
 #include "app/comms.h"
 #include "app/drive.h"
 #include "app/fake_otos.h"
@@ -26,6 +29,7 @@
 #include "motion/move_queue.h"
 #include "motion/odometry.h"
 #include "motion/state_estimator.h"
+#include "types/version_generated.h"
 
 static MicroBit uBit;
 
@@ -94,7 +98,7 @@ int main() {
   static char banner[64];
   formatBanner(banner, sizeof(banner));
   serial.sendReliable(banner);
-  radio.sendText(banner);
+  radio.send(reinterpret_cast<const uint8_t*>(banner), static_cast<uint16_t>(std::strlen(banner)));
 
 
   static Devices::MicroBitI2CBus bus(uBit.i2c);
@@ -133,10 +137,29 @@ int main() {
   static Devices::MicroBitClock clock;
   static Devices::MicroBitSleeper sleeper;
 
+  // ID:<drivetrain>:<profile>:<version> -- sprint 124 architecture
+  // Decision 4: configured-robot identity (drivetrain type +
+  // calibration-profile name/version), distinct from `banner`'s hardware
+  // identity. Both Config::kDrivetrainType and Config::kRobotProfileName
+  // are generated string constants (boot_config.h) baked from the robot
+  // JSON's own identity.drivetrain_type/filename stem -- NOT derived from
+  // any wire-level DrivetrainConfig field (defaultDrivetrainConfig()
+  // never bakes half_track; it stays at its wire default 0.0f for every
+  // profile, so it cannot answer this question -- see kDrivetrainType's
+  // own doc comment for why an earlier draft's half_track-based check was
+  // wrong). The version reuses VER:'s own generated build-version
+  // constant (zero new version-tracking infrastructure, same Decision 4).
+  static char idLine[96];
+  snprintf(idLine, sizeof(idLine), "ID:%s:%s:%s", Config::kDrivetrainType,
+           Config::kRobotProfileName, FIRMWARE_VERSION_STR);
+
   static App::SerialTransport serialLink(serial);
   static App::RadioTransport radioLink(radio);
-  static App::Comms comms(serialLink, radioLink, banner);
-  static App::Telemetry tlm(comms, serialLink, radioLink);
+  static App::Comms comms(serialLink, radioLink, banner, idLine);
+  // 124-009: Telemetry no longer holds direct Transport& references (those
+  // existed only for TelemetrySecondary's own independently-armored line,
+  // now deleted) -- comms already owns both transports internally.
+  static App::Telemetry tlm(comms);
   static App::Drive drive(motorL, motorR, drivetrainConfig.trackwidth);
   static Motion::Odometry odom(drivetrainConfig.trackwidth, motorL.position(), motorR.position());
 

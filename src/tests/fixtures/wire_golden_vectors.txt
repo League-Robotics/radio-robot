@@ -1,0 +1,73 @@
+# wire_golden_vectors.txt -- sprint 124 ticket 004 (SUC-002, REQUIRED,
+# non-negotiable): THE shared cross-language golden-vector fixture for the
+# protocol v5 COBS(delimiter=0x0A) + CRC-scope wire composition (issue
+# protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md, section 2
+# "COBS against 0x0A" / section 3 "CRC scope" / section 5 "Worked example").
+#
+# ONE file, read by BOTH:
+#   - src/tests/sim/unit/wire_golden_vector_harness.cpp (C++, via
+#     src/tests/sim/unit/test_wire_golden_vectors.py's compile+run wrapper)
+#   - src/tests/unit/test_wire_golden_vectors.py (pytest, direct read)
+#
+# DO NOT hand-copy these vectors, or new ones, into either language's own
+# test source. That is exactly the defect class this ticket exists to
+# close: sprint 123 shipped a 0x0A-in-binary-frame corruption (fixed
+# narrowly in 123-006) because firmware's and host's demuxers were two
+# independent guesses with no shared vector forcing them to agree. If you
+# need a new vector, add a row here and both suites pick it up automatically.
+#
+# --- Composition each row's expected_wire_hex encodes -----------------------
+#
+#   crc     = crc16_ccitt_false(command ? command + ":" + payload : payload)
+#   combined = payload || crc16_le(crc)          (crc appended, little-endian)
+#   expected_wire = cobsEncode(combined, delimiter)
+#
+# This is the primitive-level composition WireRuntime::cobsEncode()/
+# crcInit()+crcUpdate() (firmware) and cobs_encode()/crc16_init()+
+# crc16_update() (host, wire_codec.py) already implement -- see
+# comms.cpp's crcOverScope() / wire_codec.py's _crc_over_scope() for the
+# production functions this mirrors. NOTE: as of ticket 003, delimiter=0x0A
+# and the command CRC-scope are NOT yet wired into Comms::sendReply()/
+# encode_frame() themselves (both still default to delimiter=0x00, no
+# command scope) -- that cutover is ticket 124-005's "framing grammar"
+# scope. This fixture exercises the underlying WireRuntime/wire_codec
+# PRIMITIVES directly, at the exact composition ticket 005 will wire in,
+# so the codecs are proven to agree BEFORE that cutover lands.
+#
+# --- Provenance (source column) ---------------------------------------------
+#
+#   issue_section2_table         -- byte-for-byte from the issue's own
+#                                    hand-verified §2 adversarial-input table.
+#   issue_section5_worked_example -- byte-for-byte from the issue's own
+#                                    hand-verified §5 worked MOVE example.
+#   clean_room_reference          -- computed by a clean-room reference
+#                                    script (independent of BOTH
+#                                    wire_runtime.cpp and wire_codec.py --
+#                                    a fresh textbook COBS + CRC-16/CCITT-
+#                                    FALSE implementation) whose output was
+#                                    first cross-validated against every
+#                                    issue_section*-sourced row above before
+#                                    being trusted to generate these. See
+#                                    ticket 124-004's completion notes for
+#                                    the generation script.
+#
+# --- Columns (pipe-delimited; '#'-prefixed and blank lines ignored) --------
+#
+#   name | delimiter_hex | command | payload_hex | expected_wire_hex | source
+#
+# name           -- unique identifier, used as the test id on both sides.
+# delimiter_hex  -- the COBS delimiter byte, 2 hex chars (always "0a" today).
+# command        -- ASCII command name the CRC is scoped over, or empty for
+#                    no scope extension (crc16(payload) alone).
+# payload_hex    -- the payload bytes, hex-encoded (empty string = 0 bytes).
+# expected_wire_hex -- the full expected COBS-encoded wire bytes, hex-encoded.
+# source         -- provenance, see above.
+name|delimiter_hex|command|payload_hex|expected_wire_hex|source
+all_0x0a|0a||0a0a0a0a0a0a0a0a|0100000000000000004178|issue_section2_table
+all_0x00|0a||0000000000000000|0b0b0b0b0b0b0b0b09343b|issue_section2_table
+sweep_0x00_0x0f|0a||000102030405060708090a0b0c0d0e0f|0b180b08090e0f0c0d02030001060704053d31|issue_section2_table
+empty_payload|0a|||09f5f5|clean_room_reference
+sweep_0x00_0xff|0a||000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff|0bf50b08090e0f0c0d02030001060704051a1b18191e1f1c1d12131011161714152a2b28292e2f2c2d22232021262724253a3b38393e3f3c3d32333031363734354a4b48494e4f4c4d42434041464744455a5b58595e5f5c5d52535051565754556a6b68696e6f6c6d62636061666764657a7b78797e7f7c7d72737071767774758a8b88898e8f8c8d82838081868784859a9b98999e9f9c9d9293909196979495aaaba8a9aeafacada2a3a0a1a6a7a4a5babbb8b9bebfbcbdb2b3b0b1b6b7b4b5cacbc8c9cecfcccdc2c3c0c1c6c7c4c5dadbd8d9dedfdcddd2d3d0d1d6d7d4d5eaebe8e9eeefecede2e3e0e1e6e7e4e5fafbf8f9fefffcfdf2f3f0f1f6f7f40ef5b735|clean_room_reference
+crc_scope_move|0a|MOVE|08071a00220300410a|0e020d100928090f4b00d309|issue_section5_worked_example
+crc_scope_stop_same_payload|0a|STOP|08071a00220300410a|0e020d100928090f4b00dd0e|clean_room_reference
+payload_contains_colon_and_zero|0a||666f6f3a6261720062617a|026c656530686b780c686b70a0e9|clean_room_reference

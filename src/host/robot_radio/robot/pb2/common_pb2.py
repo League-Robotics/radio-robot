@@ -25,13 +25,25 @@ _sym_db = _symbol_database.Default()
 import options_pb2 as options__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0c\x63ommon.proto\x12\x05robot\x1a\roptions.proto\")\n\x06Pose2D\x12\t\n\x01x\x18\x01 \x01(\x02\x12\t\n\x01y\x18\x02 \x01(\x02\x12\t\n\x01h\x18\x03 \x01(\x02\"%\n\tBodyTwist\x12\t\n\x01v\x18\x01 \x01(\x02\x12\r\n\x05omega\x18\x02 \x01(\x02\"5\n\nBodyTwist3\x12\x0b\n\x03v_x\x18\x01 \x01(\x02\x12\x0b\n\x03v_y\x18\x02 \x01(\x02\x12\r\n\x05omega\x18\x03 \x01(\x02\"%\n\tBodyAccel\x12\x0b\n\x03\x61_x\x18\x01 \x01(\x02\x12\x0b\n\x03\x61_y\x18\x02 \x01(\x02\"8\n\x08ValueSet\x12\x0b\n\x03lag\x18\x01 \x01(\r\x12\x10\n\x08last_upd\x18\x02 \x01(\r\x12\r\n\x05valid\x18\x03 \x01(\x08\"m\n\x0cPoseEstimate\x12\x1b\n\x04pose\x18\x01 \x01(\x0b\x32\r.robot.Pose2D\x12 \n\x05twist\x18\x02 \x01(\x0b\x32\x11.robot.BodyTwist3\x12\x1e\n\x05stamp\x18\x03 \x01(\x0b\x32\x0f.robot.ValueSet\"O\n\x0bWheelTarget\x12\x12\n\x05speed\x18\x01 \x01(\x02H\x00\x88\x01\x01\x12\x15\n\x08position\x18\x02 \x01(\x02H\x01\x88\x01\x01\x42\x08\n\x06_speedB\x0b\n\t_position\"H\n\x05Gains\x12\n\n\x02kp\x18\x01 \x01(\x02\x12\n\n\x02ki\x18\x02 \x01(\x02\x12\x0b\n\x03kff\x18\x03 \x01(\x02\x12\r\n\x05i_max\x18\x04 \x01(\x02\x12\x0b\n\x03kaw\x18\x05 \x01(\x02\"Q\n\nOutCommand\x12\x0f\n\x07verb_id\x18\x01 \x01(\r\x12\x12\n\x04\x61rgs\x18\x02 \x03(\x02\x42\x04\x88\xb5\x18\x04\x12\x0c\n\x04\x61rgc\x18\x03 \x01(\r\x12\x10\n\x08priority\x18\x04 \x01(\x08\"D\n\x0c\x43ommandBatch\x12%\n\x04\x63mds\x18\x01 \x03(\x0b\x32\x11.robot.OutCommandB\x04\x88\xb5\x18\x08\x12\r\n\x05\x63ount\x18\x02 \x01(\r\"\x89\x01\n\x0c\x43\x61pabilities\x12\x1b\n\rcommand_modes\x18\x01 \x03(\rB\x04\x88\xb5\x18\x08\x12\x1a\n\x0cstate_fields\x18\x02 \x03(\rB\x04\x88\xb5\x18\x10\x12\x11\n\tholonomic\x18\x03 \x01(\x08\x12\x18\n\x10onboard_position\x18\x04 \x01(\x08\x12\x13\n\x0bwheel_count\x18\x05 \x01(\r*\x1f\n\x07Neutral\x12\t\n\x05\x42RAKE\x10\x00\x12\t\n\x05\x43OAST\x10\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0c\x63ommon.proto\x12\x05robot\x1a\roptions.proto\"q\n\x06Pose2D\x12!\n\x01x\x18\x01 \x01(\x11\x42\x16\xa1\xb5\x18\x00\x00\x00\x00\x00@\xdf@\xb9\xb5\x18\x00\x00\x00\x00\x00\x00\xf0?\x12!\n\x01y\x18\x02 \x01(\x11\x42\x16\xa1\xb5\x18\x00\x00\x00\x00\x00@\xdf@\xb9\xb5\x18\x00\x00\x00\x00\x00\x00\xf0?\x12!\n\x01h\x18\x03 \x01(\x11\x42\x16\xa1\xb5\x18\x00\x00\x00\x00\x00\x8c\xa8@\xb9\xb5\x18\xfc\xa9\xf1\xd2MbP?\"%\n\tBodyTwist\x12\t\n\x01v\x18\x01 \x01(\x02\x12\r\n\x05omega\x18\x02 \x01(\x02\"}\n\nBodyTwist3\x12#\n\x03v_x\x18\x01 \x01(\x11\x42\x16\xa1\xb5\x18\x00\x00\x00\x00\x00@\xaf@\xb9\xb5\x18\x9a\x99\x99\x99\x99\x99\xb9?\x12#\n\x03v_y\x18\x02 \x01(\x11\x42\x16\xa1\xb5\x18\x00\x00\x00\x00\x00@\xaf@\xb9\xb5\x18\x9a\x99\x99\x99\x99\x99\xb9?\x12%\n\x05omega\x18\x03 \x01(\x11\x42\x16\xa1\xb5\x18\x00\x00\x00\x00\x00@\x8f@\xb9\xb5\x18{\x14\xaeG\xe1z\x84?\"%\n\tBodyAccel\x12\x0b\n\x03\x61_x\x18\x01 \x01(\x02\x12\x0b\n\x03\x61_y\x18\x02 \x01(\x02\"8\n\x08ValueSet\x12\x0b\n\x03lag\x18\x01 \x01(\r\x12\x10\n\x08last_upd\x18\x02 \x01(\r\x12\r\n\x05valid\x18\x03 \x01(\x08\"m\n\x0cPoseEstimate\x12\x1b\n\x04pose\x18\x01 \x01(\x0b\x32\r.robot.Pose2D\x12 \n\x05twist\x18\x02 \x01(\x0b\x32\x11.robot.BodyTwist3\x12\x1e\n\x05stamp\x18\x03 \x01(\x0b\x32\x0f.robot.ValueSet\"O\n\x0bWheelTarget\x12\x12\n\x05speed\x18\x01 \x01(\x02H\x00\x88\x01\x01\x12\x15\n\x08position\x18\x02 \x01(\x02H\x01\x88\x01\x01\x42\x08\n\x06_speedB\x0b\n\t_position\"H\n\x05Gains\x12\n\n\x02kp\x18\x01 \x01(\x02\x12\n\n\x02ki\x18\x02 \x01(\x02\x12\x0b\n\x03kff\x18\x03 \x01(\x02\x12\r\n\x05i_max\x18\x04 \x01(\x02\x12\x0b\n\x03kaw\x18\x05 \x01(\x02\"Q\n\nOutCommand\x12\x0f\n\x07verb_id\x18\x01 \x01(\r\x12\x12\n\x04\x61rgs\x18\x02 \x03(\x02\x42\x04\x88\xb5\x18\x04\x12\x0c\n\x04\x61rgc\x18\x03 \x01(\r\x12\x10\n\x08priority\x18\x04 \x01(\x08\"D\n\x0c\x43ommandBatch\x12%\n\x04\x63mds\x18\x01 \x03(\x0b\x32\x11.robot.OutCommandB\x04\x88\xb5\x18\x08\x12\r\n\x05\x63ount\x18\x02 \x01(\r\"\x89\x01\n\x0c\x43\x61pabilities\x12\x1b\n\rcommand_modes\x18\x01 \x03(\rB\x04\x88\xb5\x18\x08\x12\x1a\n\x0cstate_fields\x18\x02 \x03(\rB\x04\x88\xb5\x18\x10\x12\x11\n\tholonomic\x18\x03 \x01(\x08\x12\x18\n\x10onboard_position\x18\x04 \x01(\x08\x12\x13\n\x0bwheel_count\x18\x05 \x01(\r*\x1f\n\x07Neutral\x12\t\n\x05\x42RAKE\x10\x00\x12\t\n\x05\x43OAST\x10\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'common_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
+  _globals['_POSE2D'].fields_by_name['x']._loaded_options = None
+  _globals['_POSE2D'].fields_by_name['x']._serialized_options = b'\241\265\030\000\000\000\000\000@\337@\271\265\030\000\000\000\000\000\000\360?'
+  _globals['_POSE2D'].fields_by_name['y']._loaded_options = None
+  _globals['_POSE2D'].fields_by_name['y']._serialized_options = b'\241\265\030\000\000\000\000\000@\337@\271\265\030\000\000\000\000\000\000\360?'
+  _globals['_POSE2D'].fields_by_name['h']._loaded_options = None
+  _globals['_POSE2D'].fields_by_name['h']._serialized_options = b'\241\265\030\000\000\000\000\000\214\250@\271\265\030\374\251\361\322MbP?'
+  _globals['_BODYTWIST3'].fields_by_name['v_x']._loaded_options = None
+  _globals['_BODYTWIST3'].fields_by_name['v_x']._serialized_options = b'\241\265\030\000\000\000\000\000@\257@\271\265\030\232\231\231\231\231\231\271?'
+  _globals['_BODYTWIST3'].fields_by_name['v_y']._loaded_options = None
+  _globals['_BODYTWIST3'].fields_by_name['v_y']._serialized_options = b'\241\265\030\000\000\000\000\000@\257@\271\265\030\232\231\231\231\231\231\271?'
+  _globals['_BODYTWIST3'].fields_by_name['omega']._loaded_options = None
+  _globals['_BODYTWIST3'].fields_by_name['omega']._serialized_options = b'\241\265\030\000\000\000\000\000@\217@\271\265\030{\024\256G\341z\204?'
   _globals['_OUTCOMMAND'].fields_by_name['args']._loaded_options = None
   _globals['_OUTCOMMAND'].fields_by_name['args']._serialized_options = b'\210\265\030\004'
   _globals['_COMMANDBATCH'].fields_by_name['cmds']._loaded_options = None
@@ -40,28 +52,28 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_CAPABILITIES'].fields_by_name['command_modes']._serialized_options = b'\210\265\030\010'
   _globals['_CAPABILITIES'].fields_by_name['state_fields']._loaded_options = None
   _globals['_CAPABILITIES'].fields_by_name['state_fields']._serialized_options = b'\210\265\030\020'
-  _globals['_NEUTRAL']._serialized_start=831
-  _globals['_NEUTRAL']._serialized_end=862
+  _globals['_NEUTRAL']._serialized_start=975
+  _globals['_NEUTRAL']._serialized_end=1006
   _globals['_POSE2D']._serialized_start=38
-  _globals['_POSE2D']._serialized_end=79
-  _globals['_BODYTWIST']._serialized_start=81
-  _globals['_BODYTWIST']._serialized_end=118
-  _globals['_BODYTWIST3']._serialized_start=120
-  _globals['_BODYTWIST3']._serialized_end=173
-  _globals['_BODYACCEL']._serialized_start=175
-  _globals['_BODYACCEL']._serialized_end=212
-  _globals['_VALUESET']._serialized_start=214
-  _globals['_VALUESET']._serialized_end=270
-  _globals['_POSEESTIMATE']._serialized_start=272
-  _globals['_POSEESTIMATE']._serialized_end=381
-  _globals['_WHEELTARGET']._serialized_start=383
-  _globals['_WHEELTARGET']._serialized_end=462
-  _globals['_GAINS']._serialized_start=464
-  _globals['_GAINS']._serialized_end=536
-  _globals['_OUTCOMMAND']._serialized_start=538
-  _globals['_OUTCOMMAND']._serialized_end=619
-  _globals['_COMMANDBATCH']._serialized_start=621
-  _globals['_COMMANDBATCH']._serialized_end=689
-  _globals['_CAPABILITIES']._serialized_start=692
-  _globals['_CAPABILITIES']._serialized_end=829
+  _globals['_POSE2D']._serialized_end=151
+  _globals['_BODYTWIST']._serialized_start=153
+  _globals['_BODYTWIST']._serialized_end=190
+  _globals['_BODYTWIST3']._serialized_start=192
+  _globals['_BODYTWIST3']._serialized_end=317
+  _globals['_BODYACCEL']._serialized_start=319
+  _globals['_BODYACCEL']._serialized_end=356
+  _globals['_VALUESET']._serialized_start=358
+  _globals['_VALUESET']._serialized_end=414
+  _globals['_POSEESTIMATE']._serialized_start=416
+  _globals['_POSEESTIMATE']._serialized_end=525
+  _globals['_WHEELTARGET']._serialized_start=527
+  _globals['_WHEELTARGET']._serialized_end=606
+  _globals['_GAINS']._serialized_start=608
+  _globals['_GAINS']._serialized_end=680
+  _globals['_OUTCOMMAND']._serialized_start=682
+  _globals['_OUTCOMMAND']._serialized_end=763
+  _globals['_COMMANDBATCH']._serialized_start=765
+  _globals['_COMMANDBATCH']._serialized_end=833
+  _globals['_CAPABILITIES']._serialized_start=836
+  _globals['_CAPABILITIES']._serialized_end=973
 # @@protoc_insertion_point(module_scope)

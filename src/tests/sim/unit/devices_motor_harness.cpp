@@ -138,6 +138,7 @@ class MockMotor : public Devices::Motor {
   float velocityTarget() const override { return lastVelocityCmd; }
   float appliedDuty() const override { return mockAppliedDuty_; }
   bool connected() const override { return true; }
+  uint64_t sampleTime() const override { return mockSampleTimeUs_; }  // [us]
   void resetPosition() override { ++resetPositionCalls; }   // bare = hard, immediate
   void rebaseline() override { ++rebaselineCalls; }
 
@@ -145,6 +146,7 @@ class MockMotor : public Devices::Motor {
   void setMockPosition(float position) { mockPosition_ = position; }
   void setMockVelocity(float velocity) { mockVelocity_ = velocity; }
   void setMockAppliedDuty(float duty) { mockAppliedDuty_ = duty; }
+  void setMockSampleTime(uint64_t sampleTimeUs) { mockSampleTimeUs_ = sampleTimeUs; }  // [us]
 
   // --- Call recording (scenarios assert on these directly) ---
   int resetPositionCalls = 0;
@@ -158,6 +160,7 @@ class MockMotor : public Devices::Motor {
   float mockPosition_ = 0.0f;
   float mockVelocity_ = 0.0f;
   float mockAppliedDuty_ = 0.0f;
+  uint64_t mockSampleTimeUs_ = 0;  // [us]
   Devices::Gains gains_{};
 };
 
@@ -1682,6 +1685,70 @@ void scenarioStaleEncoderRestSnapForcesVelocityToZeroWhenFreshSamplesStop() {
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the stale-rest sequence");
 }
 
+// sampleTime() (124-002, protocol-v5 §B2 prerequisite): reports the nowUs of
+// the last ACCEPTED fresh sample (lastFreshUs_), not this tick's own now --
+// reuses the exact stale/fresh brick-refresh cadence
+// scenarioFreshSampleGateSurvivesSlowBrickRefreshUnderFastFiberCycle()
+// exercises for velocity(), but asserts on sampleTime() instead: it must
+// stay FIXED across the stale (same-raw-count) cycles between refreshes and
+// only advance -- to that fresh cycle's own nowUs -- when the brick has
+// genuinely refreshed. This is the accessor the wire's `enc_left`/
+// `enc_right` age fields (ticket 008/009) will read instead of stamping
+// both wheels with the same cycle's `now`.
+void scenarioSampleTimeReflectsLastAcceptedFreshTickNotCurrentNow() {
+  beginScenario("sampleTime() reflects the last ACCEPTED fresh tick, not this tick's own now");
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::MotorConfig cfg = baseNezhaConfig();
+  Devices::NezhaMotor motor(plant, cfg);
+
+  const uint64_t kFiberCycleUs = 16000;   // [us] ~16ms fiber cycle
+  const int kStaleCyclesPerRefresh = 4;   // 4 stale + 1 fresh per ~80ms brick refresh
+  const float kStepPerRefresh = 40.0f;    // [mm]
+
+  // Prime (boot-anchor) cycle: the first-ever fresh sample anchors
+  // sampleTime() to nowUs==0 directly.
+  uint64_t nowUs = 0;
+  float position = 0.0f;
+  scriptEncoderRequestCollect(bus, wireAddr, position);
+  motor.requestSample();
+  motor.tick(nowUs);
+  checkTrue(motor.sampleTime() == nowUs, "boot anchor: sampleTime() == the anchoring tick's own nowUs");
+
+  for (int refresh = 0; refresh < 3; ++refresh) {
+    uint64_t lastFreshSampleTime = motor.sampleTime();
+
+    // Stale cycles: raw count unchanged -- sampleTime() must NOT advance,
+    // even though nowUs keeps moving forward every cycle.
+    for (int i = 0; i < kStaleCyclesPerRefresh; ++i) {
+      nowUs += kFiberCycleUs;
+      scriptEncoderRequestCollect(bus, wireAddr, position);   // unchanged raw
+      motor.requestSample();
+      motor.tick(nowUs);
+      checkTrue(motor.sampleTime() == lastFreshSampleTime,
+                "stale cycle: sampleTime() stays fixed at the last ACCEPTED fresh tick");
+      checkTrue(motor.sampleTime() != nowUs,
+                "stale cycle: sampleTime() is NOT this tick's own now -- a real skew, not a re-stamp "
+                "(this IS the enc_left/enc_right defect this accessor exists to let telemetry fix)");
+    }
+
+    // Fresh cycle: the brick has refreshed -- sampleTime() advances to
+    // exactly THIS tick's nowUs.
+    position += kStepPerRefresh;
+    nowUs += kFiberCycleUs;
+    scriptEncoderRequestCollect(bus, wireAddr, position);
+    motor.requestSample();
+    motor.tick(nowUs);
+    checkTrue(motor.sampleTime() == nowUs, "fresh cycle: sampleTime() advances to this tick's own nowUs");
+    checkTrue(motor.sampleTime() > lastFreshSampleTime,
+              "fresh cycle: sampleTime() strictly advances past the previous fresh sample's time");
+  }
+
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the run");
+}
+
 }  // namespace
 
 int main() {
@@ -1704,6 +1771,7 @@ int main() {
   scenarioExactZeroTargetStillBrakesWhileMeasuredIsLarge();
   scenarioRestGateResetsVelocityEstimatorPositionHolds();
   scenarioStaleEncoderRestSnapForcesVelocityToZeroWhenFreshSamplesStop();
+  scenarioSampleTimeReflectsLastAcceptedFreshTickNotCurrentNow();
 
   if (g_failureCount == 0) {
     std::printf("OK: all devices motor scenarios passed\n");

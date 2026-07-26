@@ -137,7 +137,6 @@ class SoakResult:
     new_fault_names: list        # decoded names of new_fault_bits
     event_bits_seen: int          # union of every event_bits value observed
     event_names_seen: list
-    secondary_samples: int         # TelemetrySecondary frames received
     pass_: bool = field(default=False)
     failures: list = field(default_factory=list)
 
@@ -151,8 +150,6 @@ def soak(port: str, mode: str | None, duration: float) -> SoakResult:  # [s]
     pending_acks: dict[int, float] = {}
     sent = 0
     stop_segments = 0
-    secondary_samples = 0
-
     baseline_fault_bits: int | None = None
     fault_bits_ever = 0
     event_bits_ever = 0
@@ -169,7 +166,7 @@ def soak(port: str, mode: str | None, duration: float) -> SoakResult:  # [s]
     last_print = t0
 
     def drain() -> None:
-        nonlocal last_enc, baseline_fault_bits, fault_bits_ever, event_bits_ever, secondary_samples
+        nonlocal last_enc, baseline_fault_bits, fault_bits_ever, event_bits_ever
         frames = rig.read_tlm()
         frames_all.extend(frames)
         for f in frames:
@@ -183,7 +180,8 @@ def soak(port: str, mode: str | None, duration: float) -> SoakResult:  # [s]
                 event_bits_ever |= _extract_local_bits(f.flags, _EVENT_FLAG_BIT_POSITIONS)
             if f.ack is not None:
                 pending_acks.pop(f.ack.corr_id, None)
-        secondary_samples += len(rig.read_secondary_tlm())
+        # secondary_samples/read_secondary_tlm() -- DELETED (124-009):
+        # TelemetrySecondary itself is gone (robot-state-blackboard-...md).
 
     try:
         drain()  # drop anything queued during Rig.open()'s own settle
@@ -258,7 +256,6 @@ def soak(port: str, mode: str | None, duration: float) -> SoakResult:  # [s]
         new_fault_names=_decode_bits(new_fault_bits, _FAULT_BIT_NAMES),
         event_bits_seen=event_bits_ever,
         event_names_seen=_decode_bits(event_bits_ever, _EVENT_BIT_NAMES),
-        secondary_samples=secondary_samples,
     )
 
     failures = []
@@ -277,8 +274,6 @@ def soak(port: str, mode: str | None, duration: float) -> SoakResult:  # [s]
         failures.append(
             f"encoder responsiveness {responsive_rate:.0%} below {MIN_RESPONSIVE_RATE:.0%} "
             f"({responsive_intervals}/{commanded_intervals} commanded intervals responded)")
-    if secondary_samples == 0:
-        failures.append("no TelemetrySecondary (diagnostic) frames received during the run")
 
     result.failures = failures
     result.pass_ = len(failures) == 0
@@ -298,7 +293,6 @@ def report(result: SoakResult) -> None:
           f"({result.responsive_rate:.0%})")
     print(f"  new fault bits        : {result.new_fault_names or 'none'}")
     print(f"  event bits seen       : {result.event_names_seen or 'none'}")
-    print(f"  secondary TLM samples : {result.secondary_samples}")
     print(f"  PASS: {result.pass_}")
     for f in result.failures:
         print(f"    FAIL: {f}")

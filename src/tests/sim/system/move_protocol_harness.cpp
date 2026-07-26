@@ -117,19 +117,26 @@ std::vector<DecodedLine> onlyTelemetry(const std::vector<DecodedLine>& lines) {
   return out;
 }
 
-// anyAckMatches -- "was `corrId` ever acked OK (fresh, err==0) anywhere in
+// anyAckMatches -- "was `corrId` ever acked OK (err==0) anywhere in
 // `frames`" -- mirrors sim_api_harness.cpp's own helper of the same name.
 // Used for enqueue/CONFIG acks, where only "it succeeded" matters, not
-// which exact frame carried it.
+// which exact frame carried it. 124-008 (issue §B4): scans the bounded ack
+// ring (packed uint32 corr_id<<4|err) -- the single "freshest ack" scalar
+// slot/kFlagAckFresh this used to gate on is DELETED; ring membership alone
+// means "really acked."
 bool anyAckMatches(const std::vector<DecodedLine>& frames, uint32_t corrId) {
+  constexpr uint32_t kAckErrBits = 4;
+  constexpr uint32_t kAckErrMask = (1u << kAckErrBits) - 1;
   for (const auto& f : frames) {
-    if (!(f.telemetry.flags & App::kFlagAckFresh)) continue;
-    if (f.telemetry.ack_corr == corrId && f.telemetry.ack_err == 0) return true;
+    for (uint8_t i = 0; i < f.telemetry.acks_count; ++i) {
+      const uint32_t packed = f.telemetry.acks_[i];
+      if ((packed >> kAckErrBits) == corrId && (packed & kAckErrMask) == 0) return true;
+    }
   }
   return false;
 }
 
-// findFreshAck -- the first fresh ack in `frames` whose ack_corr ==
+// findFreshAck -- the first ack ring entry in `frames` whose corr_id ==
 // `ackCorr`, regardless of err (unlike anyAckMatches() above). Every
 // scenario below gives each Move a corrId/id pair that is unique across
 // the WHOLE scenario, so a match against a Move's own `id` is
@@ -137,15 +144,22 @@ bool anyAckMatches(const std::vector<DecodedLine>& frames, uint32_t corrId) {
 // the envelope's `corrId`, never `id`, and no other Move in the same
 // scenario reuses that value) -- no need to disambiguate by any other
 // field. Returns false (frames unmodified... `errOut`/`flagsOut`
-// untouched) if no match exists.
+// untouched) if no match exists. 124-008 (issue §B4): scans the bounded
+// ack ring -- the single "freshest ack" scalar slot/kFlagAckFresh is
+// DELETED; `flagsOut`, if requested, still reports the MATCHING FRAME's
+// own `flags` (unrelated to ack freshness now).
 bool findFreshAck(const std::vector<DecodedLine>& frames, uint32_t ackCorr, uint32_t* errOut,
                    uint32_t* flagsOut) {
+  constexpr uint32_t kAckErrBits = 4;
+  constexpr uint32_t kAckErrMask = (1u << kAckErrBits) - 1;
   for (const auto& f : frames) {
-    if (!(f.telemetry.flags & App::kFlagAckFresh)) continue;
-    if (f.telemetry.ack_corr != ackCorr) continue;
-    if (errOut) *errOut = f.telemetry.ack_err;
-    if (flagsOut) *flagsOut = f.telemetry.flags;
-    return true;
+    for (uint8_t i = 0; i < f.telemetry.acks_count; ++i) {
+      const uint32_t packed = f.telemetry.acks_[i];
+      if ((packed >> kAckErrBits) != ackCorr) continue;
+      if (errOut) *errOut = packed & kAckErrMask;
+      if (flagsOut) *flagsOut = f.telemetry.flags;
+      return true;
+    }
   }
   return false;
 }
@@ -190,26 +204,40 @@ bool putMessageField(Buf& b, uint32_t number, const Buf& nested) {
   return true;
 }
 
-// armorLine() -- 123-002: CRC-then-COBS frame body (was "*B"+base64 line
-// pre-123), byte-for-byte the same composition as App::Comms::sendReply()/
-// TestSupport::armor() (wire_test_codec.cpp) -- a small, self-contained,
-// file-local copy for the same reason the hand-rolled encoder above is
-// (this file's own CONFIG envelope shape isn't in the shared codec). The
-// trailing 0x00 delimiter is a transport concern, not included here --
-// SimHarness::injectCommand() (this file's only caller, via
-// armorMotorConfigPatchCommand() below) recovers the length via strlen()
-// since COBS-encoded output is 0x00-free by construction.
-std::string armorLine(const uint8_t* raw, size_t rawLen) {
+// armorLine() -- 124-005 (protocol v5 Part A, "framing grammar cutover"):
+// builds the COMPLETE wire LINE, `<command>':'<COBS+CRC bytes>` (CRC-then-
+// COBS, delimiter 0x0A), byte-for-byte the same composition as
+// App::Comms::sendReply()/decodeBinaryFrame() / TestSupport::armor()
+// (wire_test_codec.cpp) -- a small, self-contained, file-local copy for the
+// same reason the hand-rolled encoder above is (this file's own CONFIG
+// envelope shape isn't in the shared codec). `command` is REQUIRED --
+// this file's only caller (armorMotorConfigPatchCommand() below) always
+// passes "CONFIG". The trailing '\n' terminator is a transport concern,
+// not included here -- SimHarness::injectCommand() (this file's only
+// caller) takes an EXPLICIT length, never strlen()-recovered: COBS is
+// keyed on 0x0A now, not 0x00, so the line may legitimately contain an
+// embedded 0x00 byte.
+std::string armorLine(const uint8_t* raw, size_t rawLen, const char* command) {
   uint8_t combined[256];
   if (rawLen > sizeof(combined) - 2) return std::string();
   std::memcpy(combined, raw, rawLen);
   size_t combinedLen = rawLen;
-  const uint16_t crc = WireRuntime::crcCompute(raw, rawLen);
+  const size_t commandLen = std::strlen(command);
+  uint16_t crc = WireRuntime::crcInit();
+  crc = WireRuntime::crcUpdate(crc, reinterpret_cast<const uint8_t*>(command), commandLen);
+  const uint8_t sep = ':';
+  crc = WireRuntime::crcUpdate(crc, &sep, 1);
+  crc = WireRuntime::crcUpdate(crc, raw, rawLen);
   if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) return std::string();
   uint8_t framed[300];
   size_t framedLen = 0;
-  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen)) return std::string();
-  return std::string(reinterpret_cast<const char*>(framed), framedLen);
+  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen, /*delimiter=*/0x0A)) {
+    return std::string();
+  }
+  std::string line(command, commandLen);
+  line += ':';
+  line.append(reinterpret_cast<const char*>(framed), framedLen);
+  return line;
 }
 
 // CommandEnvelope{corr_id, config: ConfigDelta{motor: MotorConfigPatch{
@@ -228,7 +256,7 @@ std::string armorMotorConfigPatchCommand(float kp, uint32_t corrId) {
   Buf env;
   putVarintField(env, 1, corrId);
   putMessageField(env, 6, motorDelta);  // CommandEnvelope.config, field 6
-  return armorLine(env.data, env.len);
+  return armorLine(env.data, env.len, "CONFIG");
 }
 
 }  // namespace
@@ -347,7 +375,10 @@ void scenarioAngleStopCompletesWithinTolerance() {
       // (negative), vR = +omega*b/2 (positive) -- confirms the differential
       // TWIST-with-omega path actually drives the two wheels in opposite
       // directions, not just "the Move completed".
-      if (f.telemetry.enc_left.velocity < -10.0f && f.telemetry.enc_right.velocity > 10.0f) {
+      // 124-008 (issue §B3): velocity is now a raw sint32 wire int
+      // (0.1mm/s scale) -- unpackVelocity() is the GENERATED conversion.
+      if (msg::EncoderReading::unpackVelocity(f.telemetry.enc_left.velocity) < -10.0f &&
+          msg::EncoderReading::unpackVelocity(f.telemetry.enc_right.velocity) > 10.0f) {
         sawOppositeWheelSigns = true;
       }
       frames.push_back(f);
@@ -363,7 +394,9 @@ void scenarioAngleStopCompletesWithinTolerance() {
   checkUintEq(err, 0, "the completion ack's err is OK");
   checkTrue((flags & App::kFlagFaultMoveTimeout) == 0, "kFlagFaultMoveTimeout is NOT set -- ended via ANGLE, not timeout");
 
-  float finalHeading = frames.back().telemetry.pose.h;
+  // 124-008 (issue §B3): pose.h is now a raw sint32 wire int (1mrad scale)
+  // -- unpackH() is the GENERATED conversion back to radians.
+  float finalHeading = msg::Pose2D::unpackH(frames.back().telemetry.pose.h);
   // Empirically ~0.21rad over the commanded 1.0rad -- the one-cycle ANGLE-
   // tick overshoot at 1.0rad/s PLUS the ramp-up lag's own extra rotation
   // before the plant reaches cruise angular rate. 0.25 keeps margin above
@@ -408,7 +441,10 @@ void scenarioWheelsVariantDrivesCorrectSigns() {
     sim.step(1);
     std::vector<DecodedLine> cycleFrames = onlyTelemetry(sim.drainTelemetry());
     for (const auto& f : cycleFrames) {
-      if (f.telemetry.enc_left.velocity > 100.0f && f.telemetry.enc_right.velocity < -100.0f) {
+      // 124-008 (issue §B3): velocity is now a raw sint32 wire int
+      // (0.1mm/s scale) -- unpackVelocity() is the GENERATED conversion.
+      if (msg::EncoderReading::unpackVelocity(f.telemetry.enc_left.velocity) > 100.0f &&
+          msg::EncoderReading::unpackVelocity(f.telemetry.enc_right.velocity) < -100.0f) {
         sawCorrectSigns = true;
       }
       frames.push_back(f);
@@ -548,10 +584,10 @@ void scenarioChainHandoffSeamlessNoZeroCycle() {
     std::vector<DecodedLine> cycleFrames = onlyTelemetry(sim.drainTelemetry());
     for (const auto& f : cycleFrames) {
       frames.push_back(f);
-      if (f.telemetry.flags & App::kFlagAckFresh) {
-        if (f.telemetry.ack_corr == kIdA && f.telemetry.ack_err == 0) completedA = true;
-        if (f.telemetry.ack_corr == kIdB && f.telemetry.ack_err == 0) completedB = true;
-      }
+      // 124-008 (issue §B4): scan the bounded ack ring -- the single
+      // "freshest ack" scalar slot/kFlagAckFresh is deleted.
+      if (anyAckMatches({f}, kIdA)) completedA = true;
+      if (anyAckMatches({f}, kIdB)) completedB = true;
     }
 
     float target = sim.driveTargetVelLeft();
@@ -626,7 +662,8 @@ void scenarioReplacePreemptsMidMotionSameCycle() {
     std::vector<DecodedLine> cycleFrames = onlyTelemetry(sim.drainTelemetry());
     for (const auto& f : cycleFrames) {
       frames.push_back(f);
-      if ((f.telemetry.flags & App::kFlagAckFresh) && f.telemetry.ack_corr == kIdC && f.telemetry.ack_err == 0) {
+      // 124-008 (issue §B4): scan the bounded ack ring.
+      if (anyAckMatches({f}, kIdC)) {
         completedC = true;
       }
     }
@@ -712,17 +749,33 @@ void scenarioFifthPendingRejectedErrFullQueueUnchanged() {
 
   // Let the chain run its course with NO further host traffic -- 5 * 40
   // cycles (2000ms/50ms) plus margin.
-  std::vector<int> completionOrder;  // index into kIds, in the order each completion ack was seen
+  //
+  // 124-008 (issue §B4): the single "freshest ack" scalar slot/
+  // kFlagAckFresh is deleted -- the bounded ack ring persists an entry
+  // across MULTIPLE consecutive frames until it is evicted (unlike the old
+  // one-shot-fresh scalar slot), so this scan must de-duplicate via
+  // `seen[]` -- otherwise the SAME completion would push into
+  // `completionOrder` once per frame it's still visible in, not once.
+  std::vector<int> completionOrder;  // index into kIds, in the order each completion ack was FIRST seen
   std::vector<DecodedLine> lateFrames;
+  bool seen[5] = {false, false, false, false, false};
   constexpr int kMaxCycles = 260;
   for (int i = 0; i < kMaxCycles && completionOrder.size() < 5; ++i) {
     sim.step(1);
     std::vector<DecodedLine> cycleFrames = onlyTelemetry(sim.drainTelemetry());
     for (const auto& f : cycleFrames) {
       lateFrames.push_back(f);
-      if (!(f.telemetry.flags & App::kFlagAckFresh) || f.telemetry.ack_err != 0) continue;
-      for (int n = 0; n < 5; ++n) {
-        if (f.telemetry.ack_corr == kIds[n]) completionOrder.push_back(n);
+      for (uint8_t e = 0; e < f.telemetry.acks_count; ++e) {
+        const uint32_t packed = f.telemetry.acks_[e];
+        const uint32_t corrId = packed >> 4;
+        const uint32_t err = packed & 0xF;
+        if (err != 0) continue;
+        for (int n = 0; n < 5; ++n) {
+          if (!seen[n] && corrId == kIds[n]) {
+            seen[n] = true;
+            completionOrder.push_back(n);
+          }
+        }
       }
     }
   }
@@ -847,7 +900,7 @@ void scenarioConfigMidMoveDoesNotChangeCompletionOutcome() {
   // this CONFIG line dispatches the cycle AFTER the Move itself activates
   // -- genuinely "mid-MOVE", well before its own 250ms/5-cycle stop
   // threshold.
-  interfered.injectCommand(armorMotorConfigPatchCommand(/*kp=*/0.02f, kConfigCorrId).c_str());
+  interfered.injectCommand(armorMotorConfigPatchCommand(/*kp=*/0.02f, kConfigCorrId));
 
   int interferedCyclesToEnd = 0;
   bool interferedCompleted = false;

@@ -1,50 +1,57 @@
-// telemetry.h -- App::Telemetry: the always-on outbound frame. Builds and
-// emits the primary msg::Telemetry frame (single ack slot + a unified
-// flags bit-string) at a fixed cadence, and the slower msg::TelemetrySecondary
-// diagnostic frame on other cycles, never both in the same emit() call.
+// telemetry.h -- App::Telemetry: the always-on outbound frame. Projects
+// Types::RobotState into the primary msg::Telemetry frame (single ack slot
+// + a unified flags bit-string) and emits it at a fixed cadence.
 //
-// Boundary: inside -- primary/secondary frame assembly, the single ack
-// slot, flags-bit encoding, cadence pacing; outside -- deciding WHEN a
-// fault/event/presence condition occurred (callers -- I2CBus's safety net,
-// Deadman's trip, RobotLoop's own updateTlm()/line-color polling -- set the
-// bit; Telemetry only carries it and folds in its own ack_fresh bit at
-// encode time).
+// 124-009 (issue §B1, "RobotState is not the wire frame"): Telemetry no
+// longer holds caller-staged `Frame`/`SecondaryFrame` snapshots filled by
+// ten scattered setFlag() calls plus a ten-argument assembleFrame(). One
+// method, update(const Types::RobotState&), reads the state ONCE and
+// stages the WHOLE next frame -- every field the old assembleFrame() used
+// to fill, and every flag the old scattered setFlag() calls used to set,
+// derived here instead. `TelemetrySecondary` -- the frame type, the wire
+// schema arm, and the tie-break/alternation cadence machinery that used to
+// pick between it and the primary frame -- is DELETED outright (issue's
+// own "Telemetry is a lean projection -- and TelemetrySecondary dies"):
+// it emitted nothing but `now` in production (no firmware caller ever
+// populated it), and `state ⊇ wire` means there is no wire-visibility
+// invariant obligating anything to fold into the primary frame that the
+// host does not genuinely consume (see this ticket's own commit message
+// for the survivor-field review -- nothing on TelemetrySecondary had a
+// live host consumer; `protocol.py`'s own `cmd_vel` field is documented
+// as "permanent gap, TelemetrySecondary only," i.e. never actually wired
+// off the wire).
 //
-// Two send paths: the PRIMARY frame rides a
+// Boundary: inside -- the RobotState-to-wire projection (scaled field
+// conversion, `age` timestamps, flag derivation), the bounded ack ring,
+// cadence pacing; outside -- RobotState's own construction (RobotLoop's
+// job), COBS/CRC framing (Comms::sendReply()'s job, via WireRuntime).
+//
+// Send path: the primary frame rides a
 // msg::ReplyEnvelope{corr_id=0, body_kind=TLM} through Comms::sendReply()
-// -- Telemetry holds a Comms& for this. TelemetrySecondary is NOT a
-// ReplyEnvelope oneof arm (envelope.proto's body oneof is fixed at
-// ok/err/tlm) -- it rides as its own, independently CRC-then-COBS-framed
-// binary frame (123-002 -- was an independently-armored "*B" line
-// pre-123), so Telemetry also holds the two Transport& references directly
-// and performs its own framing+broadcast for that one frame type, reusing
-// Comms's public kMaxCrcPayloadBytes/kFramedMaxBytes constants and
-// WireRuntime's COBS+CRC primitives (the same primitives Comms::sendReply()
-// itself is built on) rather than duplicating a private encode path.
+// -- Telemetry holds a Comms& for this and nothing else; it no longer
+// holds direct Transport& references (those existed only for
+// TelemetrySecondary's own independently-armored line, now deleted).
 //
 // Telemetry is a standalone, testable class: it never holds a pointer to a
 // leaf, I2CBus, or Deadman instance (that wiring is RobotLoop's job).
-// Callers stage the next frame's data via setFrame()/setSecondaryFrame()
-// and report status/fault/event conditions via setFlag() using the bit
-// constants below -- Telemetry only carries whatever the caller last told
-// it, plus its own internally-tracked ack_fresh bit. Design/rationale:
-// DESIGN.md.
+// Design/rationale: DESIGN.md.
 #pragma once
 
 #include <cstdint>
 
 #include "app/comms.h"
+#include "firm/types/robot_state.h"
 #include "messages/telemetry.h"
 
 namespace App {
 
 // --- flags bit layout (115-005, gut S1 -- telemetry-frame-tightening-
 // amendment-to-gut-s1.md) ------------------------------------------------
-// The single place a reader decodes a bit against. Callers pass the
-// current boolean state to setFlag(); Telemetry only carries it (see this
-// file's boundary comment above), except bit 5 (ack_fresh), which Telemetry
-// tracks itself from ack() call timing and ORs in at encode time -- a
-// caller never calls setFlag(kFlagAckFresh, ...) directly.
+// The single place a reader decodes a bit against. Every bit below is
+// derived INSIDE update() from a Types::RobotState field, except bits 15/16
+// (kFlagFaultMoveTimeout/kFlagFaultShapingDisabled), which setLiveFlag()
+// sets directly -- see that method's own doc comment for why those two
+// cannot fold into update().
 //
 //   bit 0  (kFlagOtosPresent)    -- OtosReading fresh THIS frame (chip
 //                                    detected AND this cycle's burst read
@@ -56,9 +63,10 @@ namespace App {
 //   bit 2  (kFlagActive)         -- motion in progress.
 //   bit 3  (kFlagConnLeft)       -- left motor bus connectivity.
 //   bit 4  (kFlagConnRight)      -- right motor bus connectivity.
-//   bit 5  (kFlagAckFresh)       -- ack_corr/ack_err are a NEW ack this
-//                                    frame (Telemetry-internal -- see
-//                                    above).
+//   bit 5  -- RESERVED (124-008: formerly kFlagAckFresh -- deleted with
+//                                    the single "freshest ack" scalar slot
+//                                    it gated; ring membership already
+//                                    means "really acked").
 //   bit 6  (kFlagFaultI2CSafetyNet) -- I2CBus `readyAt` clearance
 //                                    safety-net trip
 //                                    (Devices::I2CBus::
@@ -125,9 +133,9 @@ namespace App {
 //   bit 13 (kFlagLinePresent)       -- line word fresh THIS frame.
 //   bit 14 (kFlagColorPresent)      -- color word fresh THIS frame.
 //   bit 15 (kFlagFaultMoveTimeout)  -- MOVE timeout backstop fired.
-//                                    Declared now, wired by sprint 116's
-//                                    protocol-set-point issue -- S1 has no
-//                                    MOVE command to time out.
+//                                    Set via setLiveFlag(), not
+//                                    update() -- see that method's doc
+//                                    comment.
 //   bit 16 (kFlagFaultShapingDisabled) -- a MOVE is active AND BOTH
 //                                    ShaperLimits axes (linear, angular)
 //                                    are disabled (App::MoveQueue::
@@ -138,22 +146,31 @@ namespace App {
 //                                    shaping/anticipation config boundary
 //                                    (119 ticket 001,
 //                                    kill-the-silent-off-shaping-config-
-//                                    boundary.md): with no taper, the
-//                                    land-at-zero completion path can
-//                                    never fire and the threshold/timeout
-//                                    backstop is the ONLY completion path
-//                                    -- a ~20x turn-accuracy regression a
-//                                    reader should never have to infer
-//                                    silently. Clears the same cycle no
-//                                    MOVE is active, or shaping is
-//                                    re-enabled on at least one axis.
-//   bits 17-31 -- reserved for future use.
+//                                    boundary.md). Set via
+//                                    setLiveFlag(), not update() --
+//                                    see that method's doc comment.
+//   bit 17 (kFlagFaultPositionClamped) -- 124-008, position-rebaseline
+//                                    policy's defensive fallback (sprint
+//                                    124 architecture Decision 6): a
+//                                    wheel's position was clamped to
+//                                    EncoderReading.position's own
+//                                    (abs_max) at the encode step rather
+//                                    than allowed to wrap. Not the
+//                                    expected path -- RobotLoop's own
+//                                    per-cycle rebaseline trigger (a
+//                                    2000mm margin below the bound) should
+//                                    prevent this in normal operation;
+//                                    purely observable evidence the
+//                                    defensive fallback engaged. Derived
+//                                    from Types::RobotState::Health::
+//                                    positionClamped inside update() (124-009).
+//   bits 18-31 -- reserved for future use.
 constexpr uint32_t kFlagOtosPresent = 1u << 0;
 constexpr uint32_t kFlagOtosConnected = 1u << 1;
 constexpr uint32_t kFlagActive = 1u << 2;
 constexpr uint32_t kFlagConnLeft = 1u << 3;
 constexpr uint32_t kFlagConnRight = 1u << 4;
-constexpr uint32_t kFlagAckFresh = 1u << 5;  // Telemetry-internal -- see above
+// bit 5 -- RESERVED (124-008, formerly kFlagAckFresh) -- see above.
 constexpr uint32_t kFlagFaultI2CSafetyNet = 1u << 6;
 constexpr uint32_t kFlagFaultWedgeLatch = 1u << 7;
 constexpr uint32_t kFlagFaultI2CNak = 1u << 8;
@@ -165,6 +182,7 @@ constexpr uint32_t kFlagLinePresent = 1u << 13;
 constexpr uint32_t kFlagColorPresent = 1u << 14;
 constexpr uint32_t kFlagFaultMoveTimeout = 1u << 15;
 constexpr uint32_t kFlagFaultShapingDisabled = 1u << 16;
+constexpr uint32_t kFlagFaultPositionClamped = 1u << 17;
 
 // Primary cadence target: primary period == cycle period (115-005, closes
 // kcycle-kprimaryperiod-mismatch.md -- the frame is emitted every loop
@@ -174,12 +192,6 @@ constexpr uint32_t kFlagFaultShapingDisabled = 1u << 16;
 // so this constant follows it back to 40ms. Callers pace against this and
 // measure their own real number; emit() does not need to hit it exactly.
 constexpr uint32_t kPrimaryPeriod = 40;  // [ms] ~25 Hz, matches robot_loop.cpp's kCycle
-
-// Secondary cadence: 10x the primary period (~5 Hz) keeps the diagnostic
-// frame far enough from the primary's own deadline that the two
-// essentially never contend for the same emit() call, while still
-// refreshing at a useful bench-diagnostic rate.
-constexpr uint32_t kSecondaryPeriod = 200;  // [ms] ~5 Hz
 
 // Ack ring depth (120, ack-ring ticket -- bench-single-ack-slot-
 // observability-collapses-at-40ms.md). MUST match telemetry.proto's
@@ -195,11 +207,12 @@ constexpr uint8_t kAckRingDepth = 4;
 
 class Telemetry {
  public:
-  // Primary-frame snapshot -- staged by RobotLoop's updateTlm()/kPace block
-  // and consumed whole by emitPrimary() (envelope-independent: no
-  // acks/now/seq/flags here -- those are owned by the ack slot, emit()'s
-  // own `now` argument, an internal sequence counter, and setFlag()
-  // respectively).
+  // Wire-shaped staging area, filled WHOLE by update() every call -- no
+  // caller-visible setFrame()/setFlag() any more (124-009). Presence bools
+  // (otosPresent/linePresent/...) that used to live here purely to carry
+  // flag-derivation inputs from assembleFrame() into Telemetry are GONE --
+  // update() derives flags straight from the Types::RobotState argument it
+  // is handed, so this struct is now pure wire-shaped data.
   struct Frame {
     msg::DriveMode mode = msg::DriveMode::IDLE;
 
@@ -207,143 +220,133 @@ class Telemetry {
     msg::EncoderReading encRight{};
 
     msg::OtosReading otos{};
-    bool otosPresent = false;    // staging only (not wire) -- flags bit 0 source
-    bool otosConnected = false;  // staging only (not wire) -- flags bit 1 source
 
     msg::Pose2D pose{};
     msg::BodyTwist3 twist{};
 
     uint32_t line = 0;
-    bool linePresent = false;   // staging only (not wire) -- flags bit 13 source
     uint32_t color = 0;
-    bool colorPresent = false;  // staging only (not wire) -- flags bit 14 source
 
-    // cycleBusy/cyclePeriod (123-004, MIGRATED from SecondaryFrame below --
-    // telemetry-report-loop-cycle-duration.md): loop-timing diagnostics,
-    // now landing on THIS per-cycle primary frame every cycle instead of
-    // SecondaryFrame's ~5Hz sample (122-003's interim placement, forced by
-    // the pre-123 base64-armored envelope budget having no room left --
-    // see telemetry.proto's own Telemetry.cycle_busy/cycle_period doc
-    // comment for the full history). Staged by RobotLoop's own kPace
-    // block, same cycleStart/previousCycleStartUs_/everCycled_ bookkeeping
-    // as before -- only the destination frame moved.
     uint32_t cycleBusy = 0;    // [us] cycleStart -> frame-staging instant, THIS cycle
-    // this cycle's own cycleStart minus the PREVIOUS cycle() call's
-    // cycleStart -- 0 on the first-ever cycle() call (no previous cycle to
-    // subtract).
-    uint32_t cyclePeriod = 0;  // [us]
+    uint32_t cyclePeriod = 0;  // [us] this cycle's own cycleStart minus the previous cycle's
   };
 
-  // Secondary-frame snapshot -- mirrors msg::TelemetrySecondary's own
-  // has_*/value pairs (no `now` -- emit()'s own argument fills it).
-  // cycleBusy/cyclePeriod (122-003) lived here as an interim placement
-  // until 123-004 migrated them onto Frame above, once COBS+CRC (123-001/
-  // 123-002) restored primary-frame headroom -- see telemetry.proto's own
-  // TelemetrySecondary doc comment for the full history. Every other field
-  // below stays a permanent, not-yet-wired-from-RobotLoop gap (unrelated
-  // to this migration).
-  struct SecondaryFrame {
-    bool hasCmdVel = false;
-    float cmdVelLeft = 0.0f;   // [mm/s] signed
-    float cmdVelRight = 0.0f;  // [mm/s] signed
-    float accLeft = 0.0f;      // [mm/s^2] EMA-filtered
-    float accRight = 0.0f;     // [mm/s^2] EMA-filtered
-    uint32_t glitchLeft = 0;
-    uint32_t glitchRight = 0;
-    uint32_t tsLeft = 0;   // [ms]
-    uint32_t tsRight = 0;  // [ms]
-  };
+  // comms -- primary-frame send path (Comms::sendReply()). No Transport&
+  // references any more (124-009): those existed only for
+  // TelemetrySecondary's own independently-armored line, now deleted --
+  // Comms already owns both transports internally and Telemetry never
+  // needs to reach them directly.
+  explicit Telemetry(Comms& comms);
 
-  // comms -- primary-frame send path (Comms::sendReply(), ticket 004).
-  // serialLink/radioLink -- direct Transport access for TelemetrySecondary's
-  // own independently-armored line (see this file's own header comment).
-  Telemetry(Comms& comms, Transport& serialLink, Transport& radioLink);
+  // update -- THE one-line RobotState projection (124-009, issue §B1).
+  // Reads `state` ONCE and stages the WHOLE next frame: every field the old
+  // ten-argument assembleFrame() used to fill (scaled position/velocity/
+  // pose/twist/otos conversion, packed line/color words, loop-timing
+  // cycleBusy/cyclePeriod) AND every flag the old ten scattered setFlag()
+  // calls used to set (all derived from `state` here, not set alongside
+  // it). `age` fields (EncoderReading.age/OtosReading.age, issue §B2/
+  // SUC-006) are computed as `now - state.<section>.sampleTime`, clamped to
+  // 255 -- `now` here is `state.time.cycleStart + state.time.cycleBusy`
+  // (converted [us]->[ms]), NOT the bare wire `now` field's own value
+  // (`state.time.cycleStart` alone, unchanged, still what the caller's own
+  // emit(now) call passes): every sampleTime is captured DURING this
+  // cycle's body, strictly after the top-of-cycle cycleStart mark, so
+  // ageOf() against cycleStart alone would see sampleTime "in the future"
+  // and floor to 0 every time -- cycleBusy (measured to the frame-staging
+  // instant immediately before this call, RobotLoop's own doc comment)
+  // is the latest instant available on state, at or after every
+  // sampleTime this cycle published. See ageOf()'s own doc comment.
+  //
+  // Call EXACTLY ONCE per cycle, before emit() -- RobotLoop::cycle()'s own
+  // grep-enforceable contract (SUC-004). Does not itself send anything.
+  // Does NOT touch kFlagFaultMoveTimeout/kFlagFaultShapingDisabled, or any
+  // bit setLiveFlag() below owns -- update() only ever OR/AND-NOT's the
+  // bits it derives from `state`, so a bit it does not own survives an
+  // update() call untouched (see setLiveFlag()'s own doc comment for why
+  // that is exactly the behavior two of those bits need).
+  void update(const Types::RobotState& state);
 
-  // Stage the next frame's snapshot data. Persists across emit() calls
-  // that don't send that frame type -- emit() always encodes the LAST
-  // staged snapshot, not "only what changed since the last send".
-  void setFrame(const Frame& frame);
-  void setSecondaryFrame(const SecondaryFrame& frame);
+  // setLiveFlag -- the ONE narrow, deliberately-NOT-named-setFlag escape
+  // hatch from update()'s single-assembly-point contract (124-009), for
+  // the bits whose defining condition genuinely cannot be known at
+  // update() time:
+  //   - kFlagFaultMoveTimeout/kFlagFaultShapingDisabled -- both depend on
+  //     Motion::MoveQueue::tick()'s own per-cycle outcome, which is not
+  //     known yet at update()/emit() time: tick() must stay positioned
+  //     AFTER update()/emit() every cycle (protocol-v4 §7.2 -- a
+  //     completion ack staged by tick() must not be visible before the
+  //     NEXT cycle's own emit() call, and the same "rides the next frame"
+  //     timing applies to these two fault bits, bench-verified by
+  //     app_robot_loop_harness.cpp's SUC-054/119-001 scenarios: both bits
+  //     must already read live via flags() by the time cycle() returns on
+  //     the exact cycle tick() ends/toggles them, well before that value
+  //     would otherwise reach update()'s next call). RobotLoop::cycle()
+  //     calls this immediately after moveQueue_.tick(), the same position
+  //     the pre-124-009 code called tlm_.setFlag() from directly.
+  //   - kFlagEventBootReady -- boot()'s own one-shot transition (see that
+  //     method), fired once, outside cycle() entirely (update() is never
+  //     the only writer of every bit -- boot() has no RobotState worth
+  //     building yet at that instant beyond the per-device connectivity
+  //     bits it already folds into its own throwaway RobotState/update()
+  //     call).
+  // Mechanically identical to the private setFlag() update() uses
+  // internally (a level-set OR/AND-NOT bit mutation) -- only the name and
+  // caller differ, so `grep setFlag src/firm/app/robot_loop.cpp` (SUC-004's
+  // own acceptance check) finds nothing.
+  void setLiveFlag(uint32_t bit, bool active);
 
-  // Generic flags-bit set/clear -- `bit` is one of the kFlag* constants
-  // above EXCEPT kFlagAckFresh (Telemetry-internal, driven by ack() calls
-  // only -- see that constant's own comment). Level-set, not edge-latched:
-  // the caller mirrors whatever it currently observes (e.g.
-  // `setFlag(kFlagFaultI2CSafetyNet, i2cBus.clearanceSafetyNetCount() >
-  // 0)`), so a bit clears the cycle its condition clears -- Telemetry
-  // invents no sticky-latch semantics on top of what the real call site
-  // already reports.
-  void setFlag(uint32_t bit, bool active);
   uint32_t flags() const { return flags_; }
 
-  // ack -- pushes BOTH the single "freshest ack" slot (115-005's
-  // ack_corr_/ack_err_ pair, unchanged behavior -- errCode == 0 means OK;
-  // nonzero is the msg::ErrCode value; marks the ack "fresh" so the VERY
-  // NEXT emitPrimary() call sets flags bit 5 (kFlagAckFresh) and then
-  // clears the fresh marker, a one-shot pulse, not a level condition) AND
-  // the bounded ack ring (120, ADDITIVE -- see kAckRingDepth's own comment
-  // below and telemetry.proto's Telemetry.acks doc comment for the
-  // rationale). Every ack() call is one push to both.
+  // ack -- pushes to the bounded ack ring (120, ADDITIVE -- see
+  // kAckRingDepth's own comment below and telemetry.proto's Telemetry.acks
+  // doc comment for the rationale). errCode == 0 means OK; nonzero is the
+  // msg::ErrCode value. Acks stay OUT of Types::RobotState entirely
+  // (protocol bookkeeping, not robot state -- robot_state.h's own "What
+  // stays OUT" note) -- RobotLoop's handleMove()/handleConfig()/
+  // handleStop()/moveQueue completion call this directly, unaffected by
+  // the update()/setLiveFlag() split above.
   void ack(uint32_t corrId, uint32_t errCode);
 
   // Cadence-gated: call once per loop cycle with the current time [ms]
-  // (also the wire `now` field's value for whichever frame this call
-  // sends). Sends AT MOST ONE frame type per call. Bounded work: one frame
-  // build, one encode, one armor, up to two Transport sends -- never
-  // sleeps, never touches the I2C bus. ALWAYS ON from boot: the first
-  // call always sends the primary frame (no arming step, and a tie on
-  // that very first call always resolves to primary -- see the tie-break
-  // note below).
-  //
-  // Tie-break: at a real loop period at or above kPrimaryPeriod (40ms),
-  // primaryDue() can be true on EVERY call -- an unconditional "primary
-  // always wins a tie" rule then starves secondary to 0 Hz forever. The
-  // fix: when BOTH frames are genuinely due in the same call, ALTERNATE
-  // instead of always favoring primary -- `tieFavorsSecondary_` flips
-  // after every tie. "Genuinely due" for secondary's own
-  // pre-first-ever-emission window means real elapsed time
-  // (`now >= kSecondaryPeriod`), NOT secondaryDue()'s own
-  // "!everEmittedSecondary_ -> true" boot bypass -- otherwise a caller
-  // whose second-ever call already lands on/after kPrimaryPeriod (long
-  // before any real starvation) would spuriously tie-divert onto
-  // secondary. Because secondaryDue() only stays true once every
-  // kSecondaryPeriod (200 ms) until an actual secondary send resets it,
-  // this alternation costs at most ONE primary frame delayed by one loop
-  // cycle roughly once per kSecondaryPeriod (the very next call, no
-  // longer tied, sends the deferred primary immediately) -- primary's own
-  // steady-state cadence is otherwise untouched, and secondary is
-  // guaranteed a slot within roughly one kSecondaryPeriod instead of
-  // starving forever. A non-tied call (only one of the two genuinely due)
-  // is unaffected: that frame sends immediately.
+  // (also the wire `now` field's value). Sends the primary frame
+  // `update()` last staged when due; a no-op otherwise. Bounded work: one
+  // frame build, one encode, one armor, one Transport-pair send (via
+  // Comms::sendReply()) -- never sleeps, never touches the I2C bus.
+  // ALWAYS ON from boot: the first call always sends (no arming step).
+  // 124-009: TelemetrySecondary's tie-break/alternation cadence machinery
+  // is GONE with the message type itself -- there is only one frame type
+  // to pace any more, so this is a plain "due since last send" gate.
   void emit(uint32_t now);
 
   // Measurement/test seam -- lets a HOST_BUILD test report the realized
-  // cadence (this ticket's own acceptance criterion) without parsing a
-  // FakeTransport's send log.
+  // cadence without parsing a FakeTransport's send log.
   uint32_t primaryEmitCount() const { return primaryEmitCount_; }
-  uint32_t secondaryEmitCount() const { return secondaryEmitCount_; }
-  uint32_t lastPrimaryEmit() const { return lastPrimaryEmit_; }      // [ms]
-  uint32_t lastSecondaryEmit() const { return lastSecondaryEmit_; }  // [ms]
+  uint32_t lastPrimaryEmit() const { return lastPrimaryEmit_; }  // [ms]
 
  private:
   bool primaryDue(uint32_t now) const;
-  bool secondaryDue(uint32_t now) const;
   void emitPrimary(uint32_t now);
-  void emitSecondary(uint32_t now);
   void pushAckRing(uint32_t corrId, uint32_t errCode);
 
+  // setFlag -- private now (124-009): the only callers are update() (the
+  // ten state-derived bits) and setLiveFlag() (the two post-tick
+  // bits) -- RobotLoop never calls this directly any more, which is
+  // exactly SUC-004's acceptance bar.
+  void setFlag(uint32_t bit, bool active);
+
+  // ageOf -- state.<section>.sampleTime is already in the same [ms]
+  // cycle-domain `now` uses (RobotLoop converts each device's own [us]
+  // sampleTime() at the wheel/otos publish point) -- this is a plain
+  // clamped subtract, not a unit conversion. `now` here is update()'s own
+  // derived "at frame assembly" instant (cycleStart + cycleBusy), not the
+  // bare wire `now` field -- see update()'s own doc comment.
+  static uint32_t ageOf(uint32_t now, uint32_t sampleTime);  // [ms] [ms] -> [ms], clamped to 255
+
   Comms& comms_;
-  Transport& serialLink_;
-  Transport& radioLink_;
 
   Frame frame_;
-  SecondaryFrame secondaryFrame_;
 
-  uint32_t flags_ = 0;  // every bit EXCEPT kFlagAckFresh -- see setFlag()
-
-  uint32_t ackCorr_ = 0;
-  uint32_t ackErr_ = 0;
-  bool ackPending_ = false;  // true iff ack() was called since the last emitPrimary()
+  uint32_t flags_ = 0;  // every derived bit -- see setFlag()
 
   // Bounded ack ring (120) -- a plain circular buffer of the last
   // kAckRingDepth pushes, oldest-evicted-first, persisting across emit()
@@ -352,10 +355,11 @@ class Telemetry {
   // invariant, extended to this new field). ackRingHead_ indexes the
   // OLDEST valid entry; ackRingCount_ (0..kAckRingDepth) is how many of
   // ackRing_[]'s kAckRingDepth slots currently hold a real, pushed entry.
-  // Reused msg::AckEntry (the generated wire type) directly as storage --
-  // the same "stage the wire-shaped struct itself" pattern Frame already
-  // uses for encLeft/encRight/otos (msg::EncoderReading/msg::OtosReading).
-  msg::AckEntry ackRing_[kAckRingDepth]{};
+  //
+  // 124-008 (issue §B4): storage is a plain `uint32_t` packed word
+  // (`corr_id<<4 | err`), not msg::AckEntry (DELETED) -- pushAckRing() does
+  // the packing.
+  uint32_t ackRing_[kAckRingDepth]{};
   uint8_t ackRingHead_ = 0;
   uint8_t ackRingCount_ = 0;
 
@@ -364,17 +368,6 @@ class Telemetry {
   bool everEmittedPrimary_ = false;
   uint32_t lastPrimaryEmit_ = 0;  // [ms]
   uint32_t primaryEmitCount_ = 0;
-
-  bool everEmittedSecondary_ = false;
-  uint32_t lastSecondaryEmit_ = 0;  // [ms]
-  uint32_t secondaryEmitCount_ = 0;
-
-  // Tie-break state (see emit()'s own comment): false means the NEXT
-  // simultaneous-due tie favors primary, true means it favors secondary.
-  // Starts false so the very first-ever call (both "due" by construction)
-  // still sends primary, preserving the documented no-arming-step boot
-  // contract.
-  bool tieFavorsSecondary_ = false;
 };
 
 }  // namespace App

@@ -53,7 +53,7 @@ int main() {
     App::Cmd cmd;
     comms.pump(cmd, now);
 
-    // One real "OK pong t=<now>" reply per PING -- print it verbatim so the
+    // One real "PONG:t=<now>" reply per PING -- print it verbatim so the
     // Python side can feed it straight into ClockSync.ping_burst()'s own
     // send_fn contract (Callable[[str], str | None]) without touching or
     // re-deriving the reply text itself.

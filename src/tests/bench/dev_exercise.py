@@ -1,6 +1,28 @@
 #!/usr/bin/env python3
 """dev_exercise.py — scripted DEV-command bench validation (ticket 077-006).
 
+**STALE — DO NOT RUN AGAINST CURRENT FIRMWARE (flagged, not fixed, by
+sprint 124 ticket 014's documentation pass).** The entire `DEV M …` /
+`DEV DT …` / `DEV WD` / `DEV STATE` / `DEV STOP` command family this
+script drives (`docs/protocol-v2.md` §16, "Development Commands") has had
+NO firmware handler since the sprint 102-107 single-loop rebuild — it
+predates even protocol v4, let alone the current protocol v5
+(`docs/protocol-v5.md`). Every `dev_send()` call below will time out or
+report an unrecognized command; none of it exercises anything live.
+`src/tests/CLAUDE.md`'s own watchdog-widen/restore guidance, which this
+script follows, is equally stale for the same reason — see that file's
+own note. For the CURRENT bench-verification path (protocol v5, over the
+radio relay), see `.claude/rules/hardware-bench-testing.md` and
+`src/tests/bench/radio_bench_gate.py` (the standing acceptance gate) /
+`move_protocol_bench.py` (the fuller MOVE-protocol sweep) — every `Move`
+carries its own bounded `timeout` safety backstop now; there is no
+session-wide serial-silence watchdog to widen/restore any more (protocol
+v5 §5, "no deadman"). This file is kept, not deleted, for its scripted-
+bench-flow structure as reference material for a future rewrite against
+the `CONFIG`/`MOVE` binary surface — not itself runnable today.
+
+--- Original docstring below, describing the now-dead DEV verb family ---
+
 Exercises the `DEV M …` / `DEV DT …` / `DEV WD` / `DEV STATE` / `DEV STOP`
 command family (`docs/protocol-v2.md` §16, "Development Commands") end to
 end against a real robot on the bench, over `NezhaProtocol.send()`

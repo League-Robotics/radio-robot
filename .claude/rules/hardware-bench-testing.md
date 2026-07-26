@@ -34,10 +34,13 @@ mbdeploy deploy --build # build firmware and flash the robot
 ```
 
 Then open the serial port (or drive through the radio relay) and issue commands.
-The current command surface is **protocol v4** — see
-[docs/protocol-v4.md](../../docs/protocol-v4.md) (a two-verb text safety rump,
-`HELLO`/`PING`; a binary command plane with exactly three arms, `move`/
-`config`/`stop`; and an always-on binary telemetry push) — dispatched by
+The current command surface is **protocol v5** — see
+[docs/protocol-v5.md](../../docs/protocol-v5.md) (one uniform
+`<COMMAND>[':' <data>]'\n'` grammar, both directions, text or binary,
+generated from one command registry; four cleartext verbs — `HELLO`/
+`PING`/`ID`/`VER` — plus a binary command plane with exactly three arms,
+`move`/`config`/`stop`; and an always-on binary telemetry push) —
+dispatched by
 [src/firm/app/robot_loop.cpp](../../src/firm/app/robot_loop.cpp)'s
 `processMessage()`. There is no bare-command REPL shape any more: every
 motion is a bounded `Move` sent through `NezhaProtocol`
@@ -45,7 +48,27 @@ motion is a bounded `Move` sent through `NezhaProtocol`
 not a hand-typed wire line — use `rogo repl` or one of the bench scripts
 below rather than typing verbs directly at the serial port.
 
-### Quick smoke sequence (protocol v4 / MOVE-era)
+### Standing radio-relay bench gate (sprint 124's own acceptance gate)
+
+For a one-shot, self-scoring run of the full protocol v5 acceptance
+surface **over the radio relay** (banner-on-connect, `HELLO`/`PING`/`ID`/
+`VER`, `move_wheels` start/stop with climbing encoders, enqueue+completion
+acks via the ack ring, a `kFaultCommsMalformed`-stays-clear check, the
+0x0A-embedding-move hardware repro, and a wire-quality measurement against
+a stated loss budget), run:
+
+```bash
+uv run python src/tests/bench/radio_bench_gate.py --port /dev/cu.usbmodemRELAY123
+```
+
+`--port` is the RELAY's own serial port (the host's connection to the
+radio-relay dongle, NOT the robot's direct USB port — confirm with
+`mbdeploy list`'s ROLE column). Prints a PASS/FAIL line per check and
+exits nonzero on any failure — see the script's own docstring for the
+full flag set (a shorter `--wire-quality-duration` for iteration, an
+optional `--usb-port` comparison leg).
+
+### Quick smoke sequence (protocol v5 / MOVE-era)
 
 Drive this either interactively via `rogo repl` (the `rogo` console script,
 `src/host/robot_radio/io/cli.py`) or by running
@@ -58,11 +81,12 @@ uv run python src/tests/bench/twist_drive.py --port /dev/cu.usbmodem2121102
 
 | Step | Call (`NezhaProtocol`) | Expect |
 |---|---|---|
-| Identify | connect (sends `HELLO` on the text rump) | `DEVICE:NEZHA2:<name>:microbit:<serial>` banner |
-| Liveness | `PING` (text rump) | `OK pong t=<ms>` |
-| Config push | `config(**{"pid.kp": ...})` / `otos_config(...)` | ack rides the next `Telemetry` frame's ack slot (`ack_corr` == the enqueue `corr_id`, `ack_err == 0`) |
+| Identify | connect (sends `HELLO`) | `DEVICE:NEZHA2:<name>:microbit:<serial>` banner |
+| Liveness | `PING` | `PONG:t=<ms>` |
+| Identity | `ID` / `VER` | `ID:<drivetrain>:<profile>:<version>` / `VER:<version>` |
+| Config push | `config(**{"pid.kp": ...})` / `otos_config(...)` | ack observed in the next `Telemetry` frame's bounded `acks` ring (`corr_id` == the enqueue `corr_id`, `err == 0`) — the ring is the ONLY ack path (the older single scalar ack slot is deleted) |
 | Drive (on stand) | `move_twist(v_x=150, stop_time=..., timeout=...)` | enqueue ack, then telemetry frames with `enc_left`/`enc_right`/`pose` climbing while the `Move` runs |
-| Completion | *(no separate call — the same `Move` ends on its own)* | a later frame's ack slot carries `ack_corr == Move.id` (the completion ack, `ack_err` always 0 — timeout vs. stop-condition is `flags` bit 15, not `ack_err`) |
+| Completion | *(no separate call — the same `Move` ends on its own)* | a later frame's `acks` ring carries an entry with `corr_id == Move.id` (the completion ack, `err` always 0 — timeout vs. stop-condition is `flags` bit 15, not `err`) |
 | Stop | `stop()` | enqueue ack; `flags` bit 2 (`kFlagActive`) drops, encoders hold |
 | Odometry / OTOS | read `Telemetry.pose` / `Telemetry.otos` off any frame | `pose` always present; `otos` valid when `flags` bit 0 is set |
 | Line / color | read `Telemetry.line` / `Telemetry.color` off any frame | valid when `flags` bits 13/14 are set — 4 plausible channel values each |

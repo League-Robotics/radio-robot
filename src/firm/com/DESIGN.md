@@ -4,7 +4,7 @@ root: ../../../docs/design/design.md
 
 # Com (src/firm/com)
 
-**Owner:** Eric Busboom · **Last reviewed:** 2026-07-16 · **Status:** stable
+**Owner:** Eric Busboom · **Last reviewed:** 2026-07-25 · **Status:** stable
 
 ---
 
@@ -23,59 +23,93 @@ firmware-tree overview, `docs/design/design.md` §5, "HOST_BUILD purity").
 
 ## 2. Orientation
 
-**Both transports are binary-clean (sprint 123 — COBS+CRC framer
-integration), not line-buffered ASCII.** `SerialPort` wraps the CODAL
+**Both transports are binary-clean, uniformly `\n`-terminated (124-005,
+protocol v5 Part A, "framing grammar cutover" — supersedes sprint 123's
+own two-terminator demux described below).** `SerialPort` wraps the CODAL
 `NRF52Serial` ASYNC API into a non-blocking reader (`readLine()`) that
-accumulates bytes UNFILTERED (no longer stripping every `\r` on sight,
-since a binary frame may legitimately carry `0x0D` as content) until one
-of two terminators completes a frame: a `0x00` byte ends a BINARY frame
-(a COBS+CRC-encoded `CommandEnvelope`/`ReplyEnvelope` body), or `\n`
-(`\r` optionally preceding it) ends a TEXT-plane line (the HELLO/PING
-safety rump). `readLine()`'s return type, `FrameKind` (`kNone`/`kText`/
-`kBinary`), tells the caller which kind — its own plain enum, not a
-dependency on `app/` (see §1). Two senders keep their pre-123 drop
-policies but split by content kind: `send(const uint8_t* data, uint16_t
-len)` is ASYNC/drop-on-full and ALWAYS a binary COBS+CRC frame body (the
-transport appends the trailing `0x00` delimiter itself); `sendReliable
-(const char* msg)` is bounded-wait and ALWAYS a text-plane reply (the
-transport appends its own text terminator, unchanged from pre-123).
+accumulates bytes UNFILTERED (no `\r` stripping at this layer — under one
+uniform rule `\r` is legal binary content; a caller that has already
+classified a line as cleartext strips it, `App::Comms::dispatchLine()`)
+until a single, UNCONDITIONAL `\n` (0x0A) ends the line. `readLine()`
+returns `bool` — `true` with `buf`/`*outLen` holding the line content
+(delimiter consumed), `false` when nothing complete is ready yet. This is
+safe because COBS is now keyed on 0x0A (`wire_runtime.h` item 8, 124-003
+landed the parameterized primitive; 124-005 is the ticket that switched
+the LIVE wire delimiter to it): a binary line's own bytes never contain a
+literal 0x0A by construction, so `\n` is a genuine, unconditional
+terminator in both directions — there is no more text-vs-binary
+distinction for `readLine()`/`poll()` to make at this layer at all.
+`App::Comms` decides text vs. binary one layer up, by parsing the
+`<COMMAND>` prefix off the complete line and looking it up in the
+generated command registry (`messages/commands.h`'s `kVerbTable[]`) — see
+[../app/DESIGN.md](../app/DESIGN.md) §1/§4. Two senders keep their
+pre-124 drop policies, now unified on the SAME trailing delimiter rather
+than split by it: `send(const uint8_t* data, uint16_t len)` is ASYNC/
+drop-on-full (the transport appends the trailing `\n` itself); `sendReliable
+(const char* msg)` is bounded-wait (the transport appends a single
+trailing `\n`, not `"\r\n"` — the old text-plane terminator is retired
+along with the two-terminator split). Both sender methods now write the
+SAME terminator; what still distinguishes them is drop policy, not
+delimiter — see §3 below.
 
 `Radio` wraps `MicroBitRadio`'s datagram API into the RadioRelay RAW250
 fragment protocol: it reassembles inbound fragments in the datagram ISR
 (this reassembly was ALREADY binary-clean pre-123 — raw `memcpy`, no
 byte-level interpretation) and hands a completed message to the main
-loop via `poll()` (also returning `Radio::FrameKind`), demuxing on the
-reassembled message's OWN trailing byte — whichever the sender appended.
-`Radio` gained a second send method, mirroring `SerialPort`'s split:
-`send()` (binary, COBS+CRC frame body, appends a trailing `0x00`) and
-the NEW `sendText()` (text-plane HELLO/PING replies, appends a trailing
-`\n` — what `send()` alone did for everything pre-123). `radio_channel.h`
-is unrelated to either transport's byte path — it just persists which
-nRF frequency band the radio uses across reboots.
+loop via `poll()`, which (124-005) now returns `bool` the same way
+`SerialPort::readLine()` does — `poll()` simply strips the trailing `\n`
+off the reassembled message; there is no more `Radio::FrameKind` to
+return. `Radio::sendText()` (the sprint-123 second send method) is
+DELETED, not adapted: `send()` alone now fragments EVERY outbound line —
+text or binary — appending a trailing `\n` as the final payload byte,
+which is what `sendText()` alone used to do for everything pre-123; the
+convergence is the same one `SerialPort` made. `radio_channel.h` is
+unrelated to either transport's byte path — it just persists which nRF
+frequency band the radio uses across reboots.
 
 `app/comms.h`'s `SerialTransport`/`RadioTransport` are the only consumers:
-thin adapters that implement `App::Transport` by forwarding to a `SerialPort&`
-or `Radio&`, mapping this directory's own `FrameKind` onto `App::FrameKind`
-at the one seam allowed to know both. `com/` itself has no dependency on
-`app/`, `messages/`, or any wire-schema type — it moves one complete frame
-at a time in both directions, opaque raw bytes with an explicit length
-(binary) or a NUL-terminated C string (text-plane) — never interpreting
-either as a wire-schema message.
+thin adapters that implement `App::Transport` by forwarding to a
+`SerialPort&` or `Radio&`. Pre-124-005 these adapters also mapped this
+directory's own `FrameKind` onto `App::FrameKind` at the one seam allowed
+to know both; `App::FrameKind` no longer exists (both types collapsed
+to `bool` — see `app/comms.h`'s own `Transport::readLine()` doc comment),
+so the adapters now just forward the `bool` return value straight
+through. `com/` itself has no dependency on `app/`, `messages/`, or any
+wire-schema type — it moves one complete, `\n`-terminated line at a time
+in both directions, opaque raw bytes with an explicit length; it has no
+concept of a command name or a registry lookup, and never did.
+
+**Sprint 123 history (superseded above, kept for the record).** Through
+123-006, `readLine()`/`poll()` distinguished a `0x00`-delimited BINARY
+frame from a `\r`?`\n`-terminated TEXT-plane line via `FrameKind`
+(`kNone`/`kText`/`kBinary`) — `SerialPort` used an exact-match recognizer
+against the closed HELLO/PING verb set (`kTextCommands[]`/
+`isRecognizedTextCommand()`) to decide which terminator an accumulated
+`0x0A` byte actually was, since `0x00` alone could not delimit BOTH a
+binary frame's own trailing byte and a text line sharing the same stream.
+124-005 deleted this heuristic wholesale rather than porting it: once
+COBS is keyed on `0x0A`, `0x00` stops being reserved and `0x0A` becomes
+the one unconditional terminator, so the two-terminator recognizer's
+entire reason to exist no longer holds.
 
 ## 3. Constraints and Invariants
 
-- **`send()` vs `sendReliable()`/`sendText()` is a deliberate drop-policy
-  split by CONTENT KIND, not redundant API surface.** `send()` is ASYNC
-  and drop-on-full, and (sprint 123) ALWAYS a binary COBS+CRC frame body —
-  used for the telemetry flood and every reply, where a lost frame is
+- **`send()` vs `sendReliable()` is a deliberate drop-policy split by
+  CALL-SITE CADENCE, not by content kind any more (124-005 — pre-124 this
+  was ALSO a binary-vs-text split; see the sprint-123-history note in §2).**
+  `send()` is ASYNC and drop-on-full — used for the telemetry flood and
+  every binary reply (`App::Comms::sendReply()`), where a lost frame is
   harmless (the next cycle's frame supersedes it) and a stalled loop is
-  not. `sendReliable()`/`sendText()` bounded-wait (5 ms cap on serial) for
-  TX-buffer room before handing off, and are ALWAYS a text-plane reply —
-  used only for the HELLO/PING safety rump, where silently dropping the
-  one-off reply would defeat the rump's purpose. Routing a binary frame
-  through the text-plane senders (or vice versa) is a type error the
-  split's own naming prevents, not merely a policy choice to remember
-  (`docs/design/design.md` §5, "App modules are passive and bounded").
+  not. `sendReliable()` bounded-waits (5 ms cap on serial) for TX-buffer
+  room before handing off — used only for the HELLO/PING/ID/VER cleartext
+  replies (`App::Comms::dispatchCleartext()`, rare, one-off), where
+  silently dropping the reply would defeat the safety rump's purpose. Both
+  now append the SAME trailing `\n` delimiter (§2); the split that
+  survives is bounded-wait-vs-drop-on-full by how often and how critically
+  each call site fires, not a binary/text type distinction — `Radio` no
+  longer has a `sendText()` to route through by mistake (deleted, §2), so
+  this is enforced by there being only one binary-capable sender per
+  transport, not by two differently-typed methods.
 - **Neither transport ever blocks unboundedly or sleeps.** `readLine()`/
   `poll()` are non-blocking; `sendReliable()`'s wait is capped (5 ms serial,
   effectively bounded on radio by fragment count). A transport that blocks
@@ -108,18 +142,19 @@ either as a wire-schema message.
   must fit in a single line and must not be fired in a rapid burst; the
   firmware blocks or loses output when a burst outruns what 255 bytes can
   absorb. Do not "simplify" `begin()` by requesting a larger buffer size.
-- **Every send appends its own trailing delimiter byte, matching its own
-  content kind** (sprint 123 — pre-123, `Radio::send()`/`SerialPort::send()`
-  always appended `'\n'`/`"\r\n"` for EVERYTHING). `Radio::send()`/
-  `SerialPort::send()` (binary) append a trailing `0x00`; `Radio::sendText()`/
-  `SerialPort::sendReliable()` (text-plane) append a trailing `'\n'`/`"\r\n"`.
-  RAW250 START/END framing alone delimits a message on the wire, but after
-  the relay's `!GO` handshake it becomes a transparent byte pipe with no
-  per-message boundary of its own — without the embedded delimiter,
-  consecutive robot→host messages (TLM frames, OK/ID replies) concatenate
-  on the host side and its frame reader can't split them. Removing either
-  delimiter "since START/END already delimits it" is a trap that silently
-  reintroduces host-side message loss.
+- **Every send appends the SAME trailing `\n` delimiter, regardless of
+  content kind (124-005 — reconverges what sprint 123 had briefly split;
+  see §2's history note).** `Radio::send()`/`SerialPort::send()` (async,
+  binary or cleartext) and `SerialPort::sendReliable()` (bounded-wait,
+  always cleartext) all append a single trailing `0x0A` (`'\n'`) — not
+  `0x00` (123's binary terminator, retired) and not `"\r\n"` (pre-123's
+  text terminator, also retired). RAW250 START/END framing alone delimits
+  a message on the wire, but after the relay's `!GO` handshake it becomes
+  a transparent byte pipe with no per-message boundary of its own —
+  without the embedded delimiter, consecutive robot→host messages (TLM
+  frames, replies) concatenate on the host side and its line reader can't
+  split them. Removing the delimiter "since START/END already delimits
+  it" is a trap that silently reintroduces host-side message loss.
 - **`MICROBIT_RADIO_MAX_PACKET_SIZE` must be built as 250** (set in
   `codal.json`) to match the RadioRelay's on-air MAXLEN. A mismatch drops
   the relay's larger frames on receive rather than failing loudly.
@@ -162,29 +197,31 @@ hardware to catch up, not a scheduling primitive).
 ### Exposes
 
 - **`SerialPort` (USB CDC, 115200 baud default):** `begin()` once before use;
-  `readLine(buf, cap, outLen) -> FrameKind` non-blocking — `kBinary` when a
-  `0x00`-delimited COBS+CRC frame is ready (`buf`/`*outLen` hold the raw
-  frame body, delimiter consumed), `kText` when a `\n`-terminated line is
-  ready (trailing `\r` stripped, NUL-terminated, `*outLen == strlen(buf)`),
-  `kNone` when nothing complete is ready yet; `send(data, len)` async
-  drop-on-full, ALWAYS a binary COBS+CRC frame body (appends the trailing
-  `0x00` itself); `sendReliable(msg)` bounded-wait, ALWAYS a text-plane
-  reply, effectively lossless when a reader is present; `sendf(fmt, ...)`
-  formats into a 256-byte stack buffer and calls `sendReliable()`
-  (text-plane only); `setBaud(baud)` drains + settles before retuning — the
-  host must change its own baud to match without reopening the port
-  (reopening pulses DTR, which resets the board).
+  `readLine(buf, cap, outLen) -> bool` non-blocking (124-005, replacing the
+  sprint-123 `FrameKind` return — see §2) — `true` when an unconditional
+  `\n`-terminated line is ready (`buf`/`*outLen` hold the raw line content,
+  delimiter consumed, NUL-terminated as a convenience, no `\r` stripped at
+  this layer), `false` when nothing complete is ready yet; `send(data,
+  len)` async drop-on-full, appends a trailing `\n` itself (binary or
+  cleartext content alike); `sendReliable(msg)` bounded-wait, always a
+  cleartext reply, appends a single trailing `\n` (not `"\r\n"`),
+  effectively lossless when a reader is present; `sendf(fmt, ...)` formats
+  into a 256-byte stack buffer and calls `sendReliable()`; `setBaud(baud)`
+  drains + settles before retuning — the host must change its own baud to
+  match without reopening the port (reopening pulses DTR, which resets the
+  board).
 - **`Radio` (micro:bit radio, RadioRelay RAW250 framing):** `begin(channel)`
   once before use, enables the radio at group 10; `setChannel(channel)`
   re-tunes at runtime (send any pending reply first — see §3);
-  `channel()` reports the active band; `poll(buf, cap, outLen) -> FrameKind`
-  non-blocking, `kBinary`/`kText`/`kNone` with the same buffer/delimiter
-  contract as `SerialPort::readLine()` above (only one message buffered
-  between ISR and `poll()` — see §3); `send(data, len)` fragments a binary
-  COBS+CRC frame body across RAW250 frames, appending a trailing `0x00` as
-  the final payload byte; `sendText(msg)` (sprint 123, NEW) fragments a
-  text-plane reply the same way, appending a trailing `\n` instead — what
-  `send()` alone did for every message pre-123.
+  `channel()` reports the active band; `poll(buf, cap, outLen) -> bool`
+  non-blocking (124-005, replacing the sprint-123 `FrameKind` return —
+  see §2), same buffer/delimiter contract as `SerialPort::readLine()`
+  above (only one message buffered between ISR and `poll()` — see §3);
+  `send(data, len)` fragments ANY outbound line — binary or cleartext —
+  across RAW250 frames, appending a trailing `\n` as the final payload
+  byte. `sendText()` (the sprint-123 second send method) no longer
+  exists — `send()` alone now does what it and `sendText()` together used
+  to split by content kind.
 - **`radiochan::load(storage)` / `save(storage, channel)`:** read/persist the
   channel in the micro:bit's flash-backed key-value store; `load()` falls
   back to `kDefault` (0) when unset or out of range; `save()` clamps to

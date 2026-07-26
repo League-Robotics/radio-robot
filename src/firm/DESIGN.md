@@ -11,15 +11,16 @@ micro:bit V2 (nRF52833) that drives a PlanetX Nezha V2
 differential-drive robot. It reads wheel encoders and sensors over one
 shared I2C bus, closes per-wheel velocity loops, integrates odometry,
 and exchanges COBS+CRC-framed protobuf-style messages with a host over
-USB serial and the micro:bit radio (sprint 123 — replaces the base64
-line armor this file described prior to that sprint; see §4 below). NOTE:
-this file predates and was not updated for sprint 122's motion-library
-extraction (`docs/design/design.md` §2/§5) — its module list and
-dependency diagram below still describe the pre-122 shape (`App::
-MoveQueue`/`App::Odometry`/`App::StateEstimator`, `src/firm/kinematics/`,
-a small `src/firm/motion/`); `docs/design/design.md` is the current,
-reconciled source for that restructuring. Only this file's wire-framing
-content is updated here (sprint 123 ticket 005's own scope).
+USB serial and the micro:bit radio (sprint 123's COBS+CRC framing,
+further cut over by sprint 124's protocol v5 uniform packet grammar —
+see §4 below). NOTE: this file predates and was not updated for sprint
+122's motion-library extraction (`docs/design/design.md` §2/§5) — its
+module list and dependency diagram below still describe the pre-122 shape
+(`App::MoveQueue`/`App::Odometry`/`App::StateEstimator`,
+`src/firm/kinematics/`, a small `src/firm/motion/`); `docs/design/design.md`
+is the current, reconciled source for that restructuring. Only this
+file's wire-framing content (§4) is kept current — updated again for
+sprint 124 ticket 014's protocol v5 doc pass.
 
 It is the **plant** end of the host/robot split — the host side is
 [`src/host`](../host/DESIGN.md). The host plans motion (currently just
@@ -65,7 +66,7 @@ One row per one-level-down directory, each linking to its own co-located
 | [`kinematics/`](kinematics/DESIGN.md) | Stateless differential-drive math: inverse/forward twist↔wheel maps, curvature-preserving saturation. |
 | [`messages/`](messages/DESIGN.md) | The wire schema: generated message structs, the generated envelope codec, the hand-written byte-level wire runtime. |
 | [`motion/`](motion/DESIGN.md) | Pure, bounded-motion stop/timeout comparison logic (`Motion::StopCondition`) — a fresh, tiny directory (116), not a revival of the larger `motion/` tree sprint 115 deleted. |
-| [`types/`](types/DESIGN.md) | Vestigial protocol-v2 text-tag constants and the firmware-version generation seam (mostly dead code — see its own §6). |
+| [`types/`](types/DESIGN.md) | `Types::RobotState` (sprint 124) — the dependency-free per-cycle blackboard struct `src/firm` and `src/motion` both stand on, alongside `Motion::WheelSink`. Also holds vestigial protocol-v2 text-tag constants and the firmware-version generation seam (mostly dead code — see its own §6). |
 
 (`src/firm` has no README stub — this file *is* the tree overview. The
 former `src/firm/README-DESIGN.md` pointer, which existed only while a
@@ -83,9 +84,11 @@ subsystem/message-dispatch stack (deleted in sprints 102–107).
 Flow of one cycle, at orientation altitude:
 
 1. **Comms in** — `App::Comms` polls the two transports (serial, radio)
-   for one complete frame, demuxing a `0x00`-delimited COBS+CRC binary
-   frame from the HELLO/PING text rump on the same byte stream (123),
-   then decodes the binary frame into a `msg::CommandEnvelope`.
+   for one complete `\n`-terminated line, parses its `<COMMAND>` prefix
+   and dispatches by the generated registry's binary/cleartext flag
+   (sprint 124 protocol v5 — supersedes the pre-124 `0x00`-delimited
+   frame-vs-HELLO/PING-text-rump demux this step used to describe), then
+   decodes a binary command line into a `msg::CommandEnvelope`.
 2. **Dispatch** — the loop's own switch acts on the command: a `Move`
    enqueues onto `App::MoveQueue` (1 active + 4 pending; `replace=true`
    flushes pending and preempts the active `Move`, `replace=false`
@@ -93,7 +96,8 @@ Flow of one cycle, at orientation altitude:
    motion's velocity onto `App::Drive` and drives its own
    `Motion::StopCondition`; a `Stop` flushes the queue and halts `Drive`
    immediately; config/queries reply via the primary telemetry frame's
-   single ack slot (`ack_corr`/`ack_err`, valid iff `flags` bit 5).
+   bounded ack ring (sprint 124 ticket 008 deleted the older single
+   scalar ack slot — ring membership alone means "acked").
 3. **Motor service** — the loop runs each `Devices::NezhaMotor`'s
    split-phase encoder request → settle → collect → PID → duty-write
    sequence, with the settle/clearance gaps expressed as
@@ -102,10 +106,11 @@ Flow of one cycle, at orientation altitude:
    assembly).
 4. **State out** — `App::Odometry` integrates encoder deltas through
    `BodyKinematics::forward()`; `App::StateEstimator` (117) ingests the
-   same cycle's staged `Frame` and refreshes its wheel/body
-   zero-order-hold predict-to-now estimates; `App::Telemetry` emits the
-   primary TLM frame (or the slower secondary diagnostic frame) through
-   Comms.
+   same cycle's staged `Types::RobotState` and refreshes its wheel/body
+   zero-order-hold predict-to-now estimates; `App::Telemetry` projects
+   `RobotState` and emits the ONE primary TLM frame through Comms — there
+   is no second/secondary frame any more (`msg::TelemetrySecondary` is
+   deleted, sprint 124 ticket 009).
 5. **Pace** — a final `runAndWait` paces the cycle to `kCycle` = 20 ms
    (~50 Hz), matching `Telemetry::kPrimaryPeriod` so every cycle emits a
    primary frame.
@@ -144,26 +149,44 @@ why `devices/` stays free of wire-plane and config types (§5): the more
 of the graph that compiles host-side, the more of the robot the sim and
 the pytest suite can exercise without hardware.
 
-**Wire boundary.** The command/reply protocol is COBS+CRC-framed binary
-(sprint 123 — replaces the pre-123 `*B<base64>\r\n` line armor):
-`0x00`-delimited frames over USB serial (115200 CDC) and the micro:bit
-radio (group 10, channel 0–35 persisted in flash), demuxed on the same
-byte stream from the `\n`-terminated HELLO/PING text rump. Payloads are
-`msg::CommandEnvelope` in (a `move` / `config` / `stop` oneof — exactly
-three inbound commands), `msg::ReplyEnvelope` out (`ok` / `err` / `tlm`
-oneof), plus an independently-COBS+CRC-framed `msg::TelemetrySecondary`
-diagnostic frame. The schema source of truth is `src/protos/*.proto`
+**Wire boundary — protocol v5 (sprint 124, supersedes sprint 123's
+COBS+CRC framing described below).** Every packet, both directions, text
+or binary, is one `\n`-terminated line: `<COMMAND>[':' <data>]'\n'`. A
+binary command's `<data>` is CRC-then-COBS composed (CRC-16/CCITT-FALSE
+over `COMMAND ':' payload`, then COBS-encoded, keyed on `0x0A` — not
+`0x00`, so the trailing `\n` terminator is genuinely unconditional; sprint
+123's original COBS+CRC cutover keyed on `0x00`, see the sentence this one
+replaces). Which verb a line names, and whether its data is cleartext or
+binary, is looked up in a generated command registry
+(`src/protos/commands.proto` → `messages/commands.h`'s `kVerbTable[]`) —
+the sole text/binary discriminator, never a guess about the data's own
+bytes. Payloads are `msg::CommandEnvelope` in (`move`/`config`/`stop`
+oneof — three binary command verbs, `MOVE`/`CONFIG`/`STOP`), `msg::
+ReplyEnvelope` out (`tlm` oneof — the only arm with a live producer;
+`ok`/`err` remain declared-only), plus four cleartext verbs answered
+inline: `HELLO`→`DEVICE:...` (byte-frozen boot banner), `PING`→
+`PONG:t=<ms>`, `ID`→`ID:<drivetrain>:<profile>:<version>` (configured
+identity), `VER`→`VER:<version>` (build identity). `msg::
+TelemetrySecondary` — a second, independently-framed diagnostic frame —
+is DELETED outright (sprint 124 ticket 009); there is only ever one wire
+telemetry shape now. The schema source of truth is `src/protos/*.proto`
 ([`src/protos`](../protos/DESIGN.md)); the codec and byte-level runtime
-live in [`messages/`](messages/DESIGN.md). The boot banner
-`DEVICE:NEZHA2:robot:<name>:<serial>` is byte-frozen.
+live in [`messages/`](messages/DESIGN.md). See
+[`docs/protocol-v5.md`](../../docs/protocol-v5.md) for the full wire
+reference (supersedes `docs/protocol-v4.md`).
 
-**The firmware has no text-plane command parser.** Beyond a tiny 6-verb
-text rump (`HELP` / `HELLO` / `PING` / `ID` / `VER` / `STOP`), every
-motion/config/telemetry verb is binary-only; a bare text line such as
-`SET`/`OI`/`TN…` gets `ERR unknown`. By stakeholder decision, legacy
-text clients are served by a **host-side translator proxy**
+**The firmware has no free-form text-plane command parser.** Exactly four
+cleartext verbs (`HELLO`/`PING`/`ID`/`VER`) exist, all in the ONE
+generated command registry above, alongside the three binary verbs
+(`MOVE`/`CONFIG`/`STOP`) — there is no separate "text rump" mechanism any
+more (sprint 124 deleted the old two-heuristic text/binary demux along
+with the pre-v5 `HELP`/`STOP`-as-text surface this paragraph used to
+describe). A line naming an unrecognized command increments
+`Comms::malformedCount()` (surfaced as `kFlagFaultCommsMalformed`), no
+reply. By longstanding stakeholder decision, legacy (pre-v5) text clients
+are served by a **host-side translator proxy**
 (`src/host/robot_radio/testgui/binary_bridge.py`), never by reviving a
-firmware text parser — see [`src/host/robot_radio/DESIGN.md`](../host/robot_radio/DESIGN.md)
+larger firmware text parser — see [`src/host/robot_radio/DESIGN.md`](../host/robot_radio/DESIGN.md)
 §3 for the host end of that contract.
 
 ## 5. Cross-Cutting Constraints and Conventions

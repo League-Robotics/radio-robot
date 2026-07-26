@@ -162,6 +162,13 @@ class NezhaMotor : public Motor {
   uint32_t encGlitchCount() const { return encGlitchCount_; }   // cumulative rejected samples (never resets)
   bool pidEnabled() const { return pidEnabled_; }
 
+  // Motor::sampleTime() override -- the nowUs of the last ACCEPTED fresh
+  // encoder sample (lastFreshUs_'s own established role, see tick()'s
+  // "Fresh-sample tracking" comment below) -- NOT this tick's own nowUs.
+  // Unchanged between stale (same-raw-count) ticks; advances only when
+  // tick()'s freshness gate actually accepts a new sample.
+  uint64_t sampleTime() const override { return lastFreshUs_; }  // [us]
+
   // tick() — the leaf's 2-step contract (see nezha_motor.cpp; the old base-
   // armor steps 1/3/5 now live in the MotorArmor DECORATOR's own tick()):
   //   1. sample + cache this motor's own encoder (device-specific).

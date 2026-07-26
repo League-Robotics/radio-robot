@@ -1,0 +1,88 @@
+syntax = "proto3";
+
+package robot;
+
+import "options.proto";
+
+// ---------------------------------------------------------------------------
+// Command-name registry (124-001, sprint 124 architecture Decision 2).
+//
+// Today the closed v5 wire verb set — and which verbs carry binary vs.
+// cleartext data — lives independently in firmware dispatch, the host
+// codec, and the published protocol doc: three places that can drift.
+// This file is the ONE source all three are generated from or checked
+// against.
+//
+// Every <COMMAND> token protocol v5's uniform packet grammar
+// (`<COMMAND>[':' <data>]'\n'`, see sprint 124's
+// `protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md` §1)
+// can legitimately carry gets one row below, with the ONE piece of
+// metadata that discriminates how its <data> is read: `(binary)`. Under
+// v5 this is the SOLE discriminator — nothing about a verb's own data
+// bytes is ever inspected to decide text vs. binary, replacing the two
+// content-sniffing heuristics this sprint deletes elsewhere
+// (`kTextCommands[]`/`isRecognizedTextCommand()` in firmware,
+// `_looks_like_text()`/`_TEXT_SAFE_BYTES` on the host).
+//
+// Scope (deliberately narrow — see sprint.md Step 3's module table):
+// this registry declares ONLY a verb's name and its binary/cleartext
+// flag. It does NOT declare:
+//   - which direction(s) a verb travels (command-in vs. reply-out —
+//     that's `App::Comms`'s own dispatch table);
+//   - which handler runs it (`RobotLoop`'s job);
+//   - a binary verb's data SHAPE (the existing `CommandEnvelope`/
+//     `ReplyEnvelope` oneof arms in envelope.proto already own that).
+// `ID` and `VER` are each ONE row even though they are both a command
+// (host -> robot, no data) and a reply (robot -> host, cleartext data,
+// e.g. `ID:<fields>`) — the registry doesn't distinguish direction, so
+// a verb used both ways is not declared twice.
+//
+// gen_messages.py emits, from this one schema:
+//   - src/firm/messages/commands.h — the `Verb` enum + `kVerbTable[]`,
+//     the firmware-side constant set `App::Comms` dispatches against.
+//   - src/host/robot_radio/io/wire_commands.py — the host-consumable
+//     mirror (`VERBS`/`VERB_BY_NAME`/`BINARY_VERBS`/`CLEARTEXT_VERBS`).
+//
+// Adding a future verb means editing exactly this file (ticket 001's own
+// acceptance criterion) — no parallel edit in firmware, host, or docs is
+// needed to keep the verb set consistent.
+// ---------------------------------------------------------------------------
+
+// Verb — the closed v5 wire verb set. `VERB_UNSPECIFIED` is the required
+// proto3 zero value and is never a real wire verb — not dispatched, not
+// emitted, excluded from the generated `kVerbTable[]`/`VERBS` rows.
+enum Verb {
+  VERB_UNSPECIFIED = 0;
+
+  // --- Cleartext command verbs (host -> robot), no data, no ':' ---
+  HELLO = 1 [(binary) = false];
+  PING  = 2 [(binary) = false];
+  ID    = 3 [(binary) = false];
+  VER   = 4 [(binary) = false];
+
+  // --- Cleartext reply verbs (robot -> host) ---
+  // DEVICE:<fields> -- boot/HELLO-reply identity banner (byte-frozen,
+  // unchanged by the v5 grammar cutover).
+  DEVICE = 5 [(binary) = false];
+  // PONG:t=<ms> -- PING's reply (was "OK pong t=<ms>" pre-v5).
+  PONG   = 6 [(binary) = false];
+  // ID/VER also answer as reply verbs (ID -> "ID:<fields>", VER ->
+  // "VER:<version>"), echoing the command verb above -- not redeclared.
+
+  // --- Binary command verbs (host -> robot) -- CommandEnvelope.cmd's
+  // existing three oneof arms (envelope.proto), now also named on the
+  // wire per the uniform grammar (e.g. "MOVE:<COBS+CRC frame>\n"). ---
+  MOVE   = 7 [(binary) = true];
+  CONFIG = 8 [(binary) = true];
+  STOP   = 9 [(binary) = true];
+
+  // --- Binary reply verbs (robot -> host) -- ReplyEnvelope.body's
+  // existing three oneof arms (envelope.proto). TLM is the only one with
+  // a live producer today; OK/ERR are schema-declared with no current
+  // firmware call site (envelope.proto's own doc comment) -- registered
+  // here anyway, since the grammar requires every verb ever emitted to
+  // be a closed-set member, not just the ones currently exercised. ---
+  TLM = 10 [(binary) = true];
+  OK  = 11 [(binary) = true];
+  ERR = 12 [(binary) = true];
+}

@@ -13,9 +13,9 @@
 // header -- "No decode(ReplyEnvelope) codec exists (firmware only ever
 // ENCODES a ReplyEnvelope)") means the generated codec gives firmware code
 // exactly what IT needs (decode an inbound CommandEnvelope, encode an
-// outbound ReplyEnvelope/TelemetrySecondary) and nothing else -- there is no
+// outbound ReplyEnvelope) and nothing else -- there is no
 // encode(CommandEnvelope) (a HOST builds commands; production firmware code
-// never does) and no decode(ReplyEnvelope)/decode(TelemetrySecondary) (a
+// never does) and no decode(ReplyEnvelope) (a
 // HOST decodes telemetry; production firmware code never does). Every
 // existing HOST_BUILD harness that needed to inspect an outbound frame
 // worked around this by independently RE-ENCODING the expected value and
@@ -29,15 +29,14 @@
 //
 // Scope: exactly the message shapes actually exchanged over sim_api's own
 // two directions -- CommandEnvelope{corr_id, cmd=MOVE|STOP} outbound (host
-// -> firmware) and ReplyEnvelope{corr_id, body=TLM(Telemetry)} /
-// TelemetrySecondary inbound (firmware -> host, the only two shapes
-// App::Telemetry::emit() ever actually sends -- see telemetry.cpp's
-// emitPrimary()/emitSecondary(): the single ack slot rides inside the
-// Telemetry frame itself (ack_corr/ack_err, valid iff flags bit 5), never a
-// separate body_kind=OK/ERR ReplyEnvelope). NOT a general schema-walking
-// engine -- there is no FieldDesc/MessageTable machinery here, just a flat
-// tag-dispatch loop per message shape. A future ticket needing a third
-// shape decoded adds a third flat loop, not a generalization of these two.
+// -> firmware) and ReplyEnvelope{corr_id, body=TLM(Telemetry)} inbound
+// (firmware -> host, the only shape App::Telemetry::emit() ever actually
+// sends -- see telemetry.cpp's emitPrimary(); TelemetrySecondary, this
+// decoder's other former shape, is DELETED, 124-009). The bounded ack ring
+// rides inside the Telemetry frame itself (acks/acks_count, packed
+// corr_id<<4|err), never a separate body_kind=OK/ERR ReplyEnvelope. NOT a
+// general schema-walking engine -- there is no FieldDesc/MessageTable
+// machinery here, just a flat tag-dispatch loop per message shape.
 //
 // 115-006 (gut S1 sim lockstep): rewritten for telemetry.proto's FRAME v2
 // (115-003) -- decodeTelemetryMessage() now decodes the nested
@@ -70,26 +69,31 @@ namespace TestSupport {
 
 // --- Outbound decode (firmware -> host) -----------------------------------
 
-// The two shapes App::Telemetry ever actually emits (telemetry.cpp's
-// emitPrimary()/emitSecondary(): never both in the same emit() call) --
-// kUnknown covers anything else (malformed armor, unrecognized bytes, a
-// HELLO/PING plain-text reply this decoder is not meant to parse).
-enum class DecodedKind : uint8_t { kUnknown = 0, kTelemetry = 1, kSecondary = 2 };
+// The one shape App::Telemetry ever actually emits (124-009:
+// TelemetrySecondary is DELETED -- telemetry.cpp's emitPrimary() is the
+// only outbound frame builder left) -- kUnknown covers anything else
+// (malformed armor, unrecognized bytes, a HELLO/PING plain-text reply
+// this decoder is not meant to parse).
+enum class DecodedKind : uint8_t { kUnknown = 0, kTelemetry = 1 };
 
 struct DecodedLine {
   DecodedKind kind = DecodedKind::kUnknown;
   uint32_t corrId = 0;              // valid when kind == kTelemetry (ReplyEnvelope.corr_id)
   msg::Telemetry telemetry = {};    // valid when kind == kTelemetry
-  msg::TelemetrySecondary secondary = {};  // valid when kind == kSecondary
 };
 
-// Dearmors (COBS+CRC, 123-002 -- was "*B" + base64 pre-123) and decodes ONE
-// outbound frame -- exactly what a FakeTransport::sent() entry holds (a raw
-// frame body, NOT NUL-terminated text). Returns kind == kUnknown (all other
-// fields default-constructed) on anything that isn't a well-formed instance
-// of one of the two shapes above -- a malformed/truncated/CRC-mismatched
-// frame, or (since sentReliable()'s plain-text HELLO/PING replies are a
-// SEPARATE capture, never routed through this decoder) any other bytes.
+// Dearmors (COBS+CRC, delimiter 0x0A -- 124-005) and decodes ONE outbound
+// LINE -- exactly what a FakeTransport::sent() entry holds: the full
+// `<COMMAND>':'<COBS+CRC bytes>` content App::Comms::sendReply() builds
+// (the trailing '\n' terminator is a transport concern, never included).
+// Strips the `<COMMAND>':'` prefix (always "TLM" in practice --
+// App::Telemetry never emits OK/ERR) and verifies the CRC scoped over it,
+// mirroring Comms::decodeBinaryFrame()'s own composition. Returns kind ==
+// kUnknown (all other fields default-constructed) on anything that isn't a
+// well-formed Telemetry frame -- a malformed/truncated/CRC-mismatched
+// line, no ':' at all, or (since sentReliable()'s plain-text HELLO/PING/
+// ID/VER replies are a SEPARATE capture, never routed through this
+// decoder) any other bytes.
 DecodedLine decodeOutboundLine(const std::string& line);
 
 // --- Inbound encode (host -> firmware) --------------------------------

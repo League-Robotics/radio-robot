@@ -50,6 +50,17 @@
 // independent consumer existed; ticket 002 found one and kept the
 // primitive rather than force that collateral change.
 //
+// Sprint 124 ticket 003 (protocol v5 Part A, issue §2/§3) extended both
+// item 8 and item 9 again, in place, with no new primitive files: COBS is
+// now keyed on a caller-supplied delimiter byte (item 8) instead of a
+// hardcoded 0x00, and CRC-16/CCITT-FALSE gained an incremental
+// crcInit()/crcUpdate() pair (item 9) alongside the existing single-range
+// crcCompute() so a caller can hash a command-name prefix and a payload
+// together without concatenating them into one scratch buffer first. Both
+// changes default to the pre-124 behavior (delimiter 0x00, no prefix) so
+// every call site written against the 123 API keeps compiling and
+// computing byte-identical results unless it opts in.
+//
 // Decode-side contract: every `decode*` function takes a source `const
 // uint8_t* buf`/`size_t len` and a `size_t* pos` cursor; it returns `false`
 // and leaves `*pos` unchanged on ANY malformed or truncated input --
@@ -196,24 +207,60 @@ bool base64Decode(const char* in, size_t inLen, uint8_t* out, size_t cap, size_t
 
 // --- 8. COBS (Consistent Overhead Byte Stuffing) frame encode/decode ----
 //
-// Removes every 0x00 byte from an arbitrary payload so the encoded result
-// can be safely delimited on the wire by a single 0x00 byte -- the frame
-// delimiter itself. This primitive does NOT append that trailing
-// delimiter; deciding where the delimiter goes (and demuxing it from the
-// HELLO/PING text rump's `\r\n`-terminated lines on the same byte stream)
-// is `Comms`'s job (sprint 123 ticket 002), not this schema-agnostic
-// primitive's. `cobsEncode()`'s OUTPUT never contains a 0x00 byte of its
-// own -- that is the whole property that makes the trailing delimiter
-// unambiguous.
+// Removes every occurrence of a caller-chosen DELIMITER byte from an
+// arbitrary payload so the encoded result can be safely delimited on the
+// wire by a single instance of that same byte -- the frame delimiter
+// itself. This primitive does NOT append that trailing delimiter;
+// deciding where the delimiter goes (and demuxing it from any
+// differently-terminated content sharing the same byte stream) is
+// `Comms`'s job (sprint 123 ticket 002), not this schema-agnostic
+// primitive's. `cobsEncode()`'s OUTPUT never contains a byte equal to
+// `delimiter` -- that is the whole property that makes the trailing
+// delimiter unambiguous, for WHICHEVER byte value `delimiter` is.
 //
-// Standard COBS algorithm (Cheshire & Baker 1999): walks the input,
-// splitting it into blocks of at most `kCobsMaxBlockLength` (254) non-zero
-// bytes, each block prefixed by a 1-byte code -- the distance (in bytes,
-// inclusive of the code byte itself) to the next zero, or `0xFF` for a
-// full 254-byte block that hit the block-size cap before finding one.
+// `delimiter` defaults to `0x00` -- every call site written before sprint
+// 124 ticket 003 added this parameter keeps compiling unchanged and keeps
+// computing byte-identical output, because XOR-ing by `0x00` is the
+// identity operation (see the mechanism below). Sprint 124 ticket 003
+// (protocol v5 Part A, issue §2) needed `0x0A` instead: COBS guarantees
+// `0x00`-freedom but nothing about any other byte value, and a payload
+// containing a literal `0x0A` corrupted the wire once the frame delimiter
+// became `\n` (proven 0/10 on hardware, fixed narrowly in 123-006/febfb450
+// before this ticket fixed the general case).
+//
+// Mechanism: run the standard COBS algorithm (Cheshire & Baker 1999) below
+// EXACTLY as if `delimiter` were always `0x00` -- walk the input, split it
+// into blocks of at most `kCobsMaxBlockLength` (254) non-zero bytes, each
+// block prefixed by a 1-byte code (the distance, inclusive of the code
+// byte itself, to the next zero, or `0xFF` for a full 254-byte block that
+// hit the cap before finding one) -- but XOR every byte written to `out`
+// (both data bytes and code bytes) with `delimiter` at the moment it is
+// finalized. This is mathematically identical to computing the whole
+// `0x00`-keyed encoding first and XOR-ing every output byte by `delimiter`
+// afterward (XOR is position-wise and order-independent), just without a
+// second pass. Why it is sound: `cobsEncode()`'s pre-XOR output is
+// guaranteed `0x00`-free (code bytes are `>= 0x01`, block data bytes
+// non-zero by construction) -- for any byte `b`, `b ^ delimiter ==
+// delimiter` iff `b == 0`, which never occurs, so the XOR-ed stream can
+// never equal `delimiter`. Decode reverses this by XOR-ing every byte
+// AT THE POINT OF READING from `in` (rather than materializing a
+// de-XORed copy -- this file allocates nothing), which recovers the
+// original `0x00`-keyed bytes the standard algorithm below already knows
+// how to walk.
+//
+// The malformed-input checks below are expressed in terms of the
+// `0x00`-keyed algorithm and need no change for a non-zero delimiter --
+// they get SHARPER, not weaker: a literal `delimiter` byte arriving inside
+// an encoded frame (impossible from a correct encoder, by the property
+// above) reads back as a literal `0x00` after the read-time XOR, which
+// `cobsDecode()` already rejects as "literal 0x00 code byte" / "literal
+// 0x00 inside data block" -- unreachable except under corruption, exactly
+// the case it should reject.
+//
 // Overhead is exactly one code byte per <=254-byte block: at most
 // `cobsEncodedMaxLength(len)` bytes total, ~0.4% for the frame sizes this
-// wire actually carries (well under 256 B).
+// wire actually carries (well under 256 B) -- unaffected by `delimiter`,
+// which only changes byte VALUES, never how many bytes are written.
 //
 // `cobsEncodedMaxLength()` is a worst-case bound a caller must size its
 // destination buffer to before calling `cobsEncode()` -- exact only when
@@ -227,15 +274,15 @@ bool base64Decode(const char* in, size_t inLen, uint8_t* out, size_t cap, size_t
 // this file): `cobsEncode()`/`cobsDecode()` write nothing and return
 // `false`, leaving `*outLen` unset, on any capacity failure or malformed
 // input -- in particular `cobsDecode()` rejects a literal 0x00 byte found
-// INSIDE the encoded frame (an encoder never emits one; seeing one means
-// the frame is corrupt) and a code byte whose claimed block length runs
-// past the end of the input (truncation).
+// (post-XOR) INSIDE the encoded frame (an encoder never emits one; seeing
+// one means the frame is corrupt) and a code byte whose claimed block
+// length runs past the end of the input (truncation).
 constexpr size_t kCobsMaxBlockLength = 254;
 
 size_t cobsEncodedMaxLength(size_t rawLen);
 size_t cobsDecodedMaxLength(size_t encodedLen);
-bool cobsEncode(const uint8_t* data, size_t len, uint8_t* out, size_t cap, size_t* outLen);
-bool cobsDecode(const uint8_t* in, size_t inLen, uint8_t* out, size_t cap, size_t* outLen);
+bool cobsEncode(const uint8_t* data, size_t len, uint8_t* out, size_t cap, size_t* outLen, uint8_t delimiter = 0x00);
+bool cobsDecode(const uint8_t* in, size_t inLen, uint8_t* out, size_t cap, size_t* outLen, uint8_t delimiter = 0x00);
 
 // --- 9. CRC-16/CCITT-FALSE (wire integrity check) -----------------------
 //
@@ -272,5 +319,30 @@ uint16_t crcCompute(const uint8_t* data, size_t len);
 bool crcVerify(const uint8_t* data, size_t len, uint16_t expectedCrc);
 bool encodeCrc16(uint16_t crc, uint8_t* buf, size_t cap, size_t* pos);
 bool decodeCrc16(const uint8_t* buf, size_t len, size_t* pos, uint16_t* crc);
+
+// crcInit()/crcUpdate() -- the incremental form `crcCompute()` is built on
+// (`crcCompute(data, len) == crcUpdate(crcInit(), data, len)`, exactly,
+// same loop body). Sprint 124 ticket 003 (issue §3): the wire's CRC input
+// extends from "payload alone" to "COMMAND ':' payload" -- the command
+// name and the payload are two byte ranges that are NOT adjacent in
+// memory (one is a caller's literal/buffer, the other is a freshly
+// schema-encoded scratch buffer), so hashing them together needs either a
+// concatenation into a THIRD scratch buffer (extra copy, extra size
+// bookkeeping) or a way to feed the CRC register more than once. This is
+// the latter: `crcInit()` returns the starting register value,
+// `crcUpdate()` folds in one more byte range and returns the continued
+// register value -- CRC-16/CCITT-FALSE's `xorout = 0x0000`/`refout =
+// false` mean the running register IS the CRC value at every point, so
+// there is no separate "finalize" step. `Comms::sendReply()`/
+// `decodeBinaryFrame()` (comms.cpp) and `wire_codec.py`'s
+// `encode_frame()`/`decode_frame()` are the callers that compose
+// `crcUpdate(crcUpdate(crcInit(), command, commandLen), payload,
+// payloadLen)` (with a `':'` folded in between when a command name is
+// present) -- this file itself does not know that a command name or a
+// `':'` separator exist; that composition is protocol grammar, which is
+// `Comms`'s boundary, not `WireRuntime`'s (see messages/DESIGN.md's
+// three-layer split).
+uint16_t crcInit();
+uint16_t crcUpdate(uint16_t crc, const uint8_t* data, size_t len);
 
 }  // namespace WireRuntime

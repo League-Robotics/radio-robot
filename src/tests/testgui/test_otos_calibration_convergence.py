@@ -94,9 +94,12 @@ def _latest_otos_reading(loop) -> tuple[int, int, int] | None:
 
 
 def _find_ack(frames: list, corr_id: int):
+    # 124-008 (issue §B4): the single "freshest ack" scalar slot
+    # (frame.ack/frame.ack_fresh) is deleted -- scan the bounded ack ring.
     for frame in frames:
-        if frame.ack is not None and frame.ack.corr_id == corr_id:
-            return frame.ack
+        for entry in frame.acks:
+            if entry.corr_id == corr_id:
+                return entry
     return None
 
 

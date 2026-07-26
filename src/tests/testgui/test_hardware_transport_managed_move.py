@@ -35,13 +35,14 @@ from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
 from robot_radio.testgui import binary_bridge
 from robot_radio.testgui.transport import SerialTransport, _UNMANAGED_YAW_RATE
 
-# flags bit 5 (ack_fresh) -- telemetry.proto Telemetry.flags, 115-003 frame
-# v2. AckEntry.from_telemetry() does not itself gate on this bit (see that
-# method's own docstring) -- set here only for realism/parity with
-# test_binary_bridge.py's own _ACK_FRESH_BIT usage.
-_ACK_FRESH_BIT = 1 << 5
 # flags bit 15 (kFlagFaultMoveTimeout) -- docs/protocol-v4.md sec 7.3.
 _FAULT_MOVE_TIMEOUT_BIT = 1 << 15
+
+
+def _pack_ack(corr_id: int, err: int) -> int:
+    """Mirrors telemetry.cpp's own pushAckRing() packed-word format EXACTLY
+    (124-008, issue §B4): corr_id<<4 | err."""
+    return (corr_id << 4) | err
 
 
 class _FakeHardwareConn:
@@ -63,7 +64,12 @@ class _FakeHardwareConn:
         self.is_open = True
         self.sent: list["envelope_pb2.CommandEnvelope"] = []
         self._next_corr_id = 0
-        self.ack_result: "telemetry_pb2.AckEntry | None" = None
+        # 124-008 (issue Sec B4): SerialConnection.wait_for_ack() returns the
+        # matched ack ring entry as a raw packed int now (corr_id<<4 | err)
+        # -- NezhaProtocol.wait_for_ack() is the layer that wraps it into an
+        # AckEntry, so this fake (standing in for SerialConnection, not
+        # NezhaProtocol) must hand back a plain int, matching _pack_ack().
+        self.ack_result: "int | None" = None
         self.tlm_script: list[list[object]] = []
 
     def send_envelope_fast(self, envelope: "envelope_pb2.CommandEnvelope") -> int:
@@ -72,7 +78,7 @@ class _FakeHardwareConn:
         self.sent.append(envelope)
         return self._next_corr_id
 
-    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.AckEntry | None":
+    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "int | None":
         return self.ack_result
 
     def drain_binary_tlm(self) -> list:
@@ -105,7 +111,7 @@ def transport():
 
 
 def _ok_ack(conn: _FakeHardwareConn) -> None:
-    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=0)
+    conn.ack_result = _pack_ack(1, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +259,7 @@ def test_ack_timeout_returns_err_unknown_move_timeout(transport):
 
 
 def test_nak_ack_returns_err_nak_with_err_code(transport):
-    transport._conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=envelope_pb2.ERR_BADARG)
+    transport._conn.ack_result = _pack_ack(1, envelope_pb2.ERR_BADARG)
 
     reply = transport.command("RT 9000", read_timeout=500)
 
@@ -304,11 +310,14 @@ def _wait_for_log(transport, substr: str, timeout_s: float = 3.0) -> str:
 
 def _completion_tlm(move_id: int, *, left: float, right: float,
                     timeout_fault: bool = False) -> "telemetry_pb2.Telemetry":
-    flags = _ACK_FRESH_BIT | (_FAULT_MOVE_TIMEOUT_BIT if timeout_fault else 0)
+    # 124-008 (issue §B4): the single "freshest ack" scalar slot
+    # (ack_corr/ack_err/kFlagAckFresh) is deleted -- the completion ack
+    # rides the bounded ack ring now.
+    flags = _FAULT_MOVE_TIMEOUT_BIT if timeout_fault else 0
     return telemetry_pb2.Telemetry(
-        flags=flags, ack_corr=move_id, ack_err=0,
-        enc_left=telemetry_pb2.EncoderReading(position=left),
-        enc_right=telemetry_pb2.EncoderReading(position=right))
+        flags=flags, acks=[_pack_ack(move_id, 0)],
+        enc_left=telemetry_pb2.EncoderReading(position=int(left)),
+        enc_right=telemetry_pb2.EncoderReading(position=int(right)))
 
 
 def test_completion_poll_logs_done_line_with_encoder_delta(transport):

@@ -23,8 +23,7 @@ from robot_radio.robot.connection import (
     _parse_device_line,
 )
 from robot_radio.sensors.color import nezha_classifier
-from robot_radio.config.robot_config import get_robot_config, match_robot_by_id
-from robot_radio.calibration.helpers import scale_to_int8 as _scale_to_int8
+from robot_radio.config.robot_config import get_robot_config
 from robot_radio.nav.camera_goto import (
     crawl_drive_distance as _crawl_drive_distance_impl,
     spin_to_yaw_camera as _spin_to_yaw_camera_impl,
@@ -106,164 +105,31 @@ def _make_robot(args) -> tuple[QBotPro, SerialConnection, dict]:
     )
 
 
-def _push_calibration(conn: SerialConnection) -> None:
-    """Push every runtime-configurable calibration value to firmware using v2 verbs.
-
-    Uses blocking send() (waits for ACK before next send) so the radio queue
-    is drained — over the relay path, back-to-back fire-and-forget writes
-    overflow the radio and drop subsequent packets.
-
-    Sequence:
-      1. Send ``ID`` to identify the robot; call ``match_robot_by_id()`` to
-         load the matching per-robot config.  Falls back to ``get_robot_config()``
-         if the ID command fails or no config matches.
-      2. ``SET ml <float>``  ← cfg.calibration.mm_per_wheel_deg_left
-      3. ``SET mr <float>``  ← cfg.calibration.mm_per_wheel_deg_right
-      4. ``SET tw <int>``    ← cfg.geometry.trackwidth (integer mm)
-      5. ``OI``              ← OTOS init (must precede OL/OA scalar writes)
-      6. ``OL <int8>``       ← cfg.calibration.otos_linear_scale encoded as
-                               round((scale-1)/0.001), clamped to -128..127
-      7. ``OA <int8>``       ← cfg.calibration.otos_angular_scale (same encoding)
-      8. ``SET odomOffX/odomOffY/odomYaw`` — only when geometry offsets are
-         nonzero in the config (tovez offsets are all 0 → skipped).
-
-    Removed v1 verbs: KML, KMR, OO, OK — none recognized by v2 firmware.
-    Source of truth: data/robots/<robot>.json.
-    """
-    # ── Step 1: identify robot via v2 ID command ──────────────────────────
-    id_resp = conn.send("ID", read_timeout=500)
-    id_line: str | None = None
-    for raw in id_resp.get("responses", []):
-        stripped = raw.strip()
-        if stripped.startswith("ID ") or stripped == "ID":
-            id_line = stripped
-            break
-
-    if id_line:
-        _log(f"push calibration: robot ID response: {id_line!r}")
-        cfg = match_robot_by_id(id_line)
-    else:
-        _log("push calibration: no ID response — falling back to get_robot_config()")
-        cfg = get_robot_config()
-
-    if cfg is None:
-        import sys as _sys
-        print("Warning: no robot config — calibration push skipped.", file=_sys.stderr)
-        return
-
-    # ── Step 2–4: wheel encoder calibration and trackwidth (SET keys) ────
-    cal = getattr(cfg, "calibration", None)
-
-    # Derive mm/deg from per-wheel overrides, then from wheel_diameter_mm.
-    wd = getattr(getattr(cfg, "wheels", None), "wheel_diameter_mm", None)
-    default_wheel_travel_calib = (math.pi * wd / 360.0) if wd is not None else None  # [mm/deg]
-
-    wheel_travel_calib_left  = getattr(cal, "mm_per_wheel_deg_left",  None) if cal else None
-    wheel_travel_calib_right = getattr(cal, "mm_per_wheel_deg_right", None) if cal else None
-    wheel_travel_calib_left  = wheel_travel_calib_left  if wheel_travel_calib_left  is not None else default_wheel_travel_calib
-    wheel_travel_calib_right = wheel_travel_calib_right if wheel_travel_calib_right is not None else default_wheel_travel_calib
-
-    if wheel_travel_calib_left is not None:
-        _log(f"push calibration: SET ml {wheel_travel_calib_left:.6f}")
-        conn.send(f"SET ml={wheel_travel_calib_left:.6f}", read_timeout=200)
-    if wheel_travel_calib_right is not None:
-        _log(f"push calibration: SET mr {wheel_travel_calib_right:.6f}")
-        conn.send(f"SET mr={wheel_travel_calib_right:.6f}", read_timeout=200)
-
-    geom = getattr(cfg, "geometry", None)
-    tw = getattr(geom, "trackwidth", None) if geom else None
-    if tw is not None:
-        tw_int = int(round(float(tw)))
-        _log(f"push calibration: SET tw {tw_int}")
-        conn.send(f"SET tw={tw_int}", read_timeout=200)
-
-    # ── Step 5: OTOS init (must precede scalar writes) ────────────────────
-    _log("push calibration: OI (OTOS init)")
-    conn.send("OI", read_timeout=500)
-
-    # ── Steps 6–7: OTOS distance and heading scalars ──────────────────────
-    lin_int8 = _scale_to_int8(getattr(cfg, "otos_linear_scale", 1.0) or 1.0)
-    ang_int8 = _scale_to_int8(getattr(cfg, "otos_angular_scale", 1.0) or 1.0)
-    _log(f"push calibration: OL {lin_int8:+d} "
-         f"(linear_scale={1.0 + lin_int8 * 0.001:.4f})")
-    conn.send(f"OL {lin_int8}", read_timeout=200)
-    _log(f"push calibration: OA {ang_int8:+d} "
-         f"(angular_scale={1.0 + ang_int8 * 0.001:.4f})")
-    conn.send(f"OA {ang_int8}", read_timeout=200)
-
-    # ── Step 8: OTOS mounting offset via SET keys (skip if all zero) ──────
-    off = getattr(geom, "odometry_offset_mm", None) if geom else None
-    if off is not None:
-        ox = float(off.x)
-        oy = float(off.y)
-        oyaw = math.degrees(float(off.yaw_rad))  # [deg]
-        if ox != 0.0 or oy != 0.0 or oyaw != 0.0:
-            _log(f"push calibration: SET odomOffX={ox:.3f} odomOffY={oy:.3f} "
-                 f"odomYaw={oyaw:.3f}")
-            conn.send(f"SET odomOffX={ox:.3f}", read_timeout=200)
-            conn.send(f"SET odomOffY={oy:.3f}", read_timeout=200)
-            conn.send(f"SET odomYaw={oyaw:.3f}", read_timeout=200)
-        else:
-            _log("push calibration: odom offsets all zero — skipping SET odomOff*")
-
-    # ── Step 9: velocity-loop PID + cross-wheel coupling (SET keys) ───────
-    # PID/tuning params live in the robot config (control section), not
-    # hard-coded. Each non-None value is pushed; None keeps the firmware
-    # default. Persisted in firmware RAM until power-cycle, then re-pushed by
-    # the open-robot freshness check (same as the OTOS/encoder calibration).
-    ctrl = getattr(cfg, "control", None)
-    if ctrl is not None:
-        ctrl_sets = [
-            ("vel.kP",      getattr(ctrl, "vel_kp",        None)),
-            ("vel.kI",      getattr(ctrl, "vel_ki",        None)),
-            ("vel.kFF",     getattr(ctrl, "vel_kff",       None)),
-            ("vel.iMax",    getattr(ctrl, "vel_imax",      None)),
-            ("vel.kAw",     getattr(ctrl, "vel_kaw",       None)),
-            ("vel.filt",    getattr(ctrl, "vel_filt",      None)),
-            ("sync",        getattr(ctrl, "sync",          None)),
-            ("minWheelMms", getattr(ctrl, "min_wheel_mms", None)),
-        ]
-        for key, val in ctrl_sets:
-            if val is not None:
-                _log(f"push calibration: SET {key}={val:g}")
-                conn.send(f"SET {key}={val:g}", read_timeout=200)
-
-    # ── Step 10: schema-driven push of the remaining firmware-mapped values ──
-    # Bucket B fix: rotation calibration (rotGain*/rotOff*/rotSlip) and the turn
-    # gate live in the robot JSON + schema but were never pushed at runtime, so a
-    # running robot ignored JSON edits to them until reflash. Push every schema
-    # `firmware.set_key` not already sent above, straight from the loaded config.
-    _already_pushed = {
-        "ml", "mr", "tw", "vel.kP", "vel.kI", "vel.kFF", "vel.iMax",
-        "vel.kAw", "vel.filt", "sync", "minWheelMms",
-    }
-    try:
-        import json as _json
-        from pathlib import Path as _Path
-        _schema = _json.loads(
-            (_Path(__file__).resolve().parents[4] / "data" / "robots"
-             / "robot_config.schema.json").read_text()
-        )
-    except Exception as exc:
-        _log(f"push calibration: schema unreadable ({exc}); skipping schema-mapped SETs")
-        _schema = None
-    if _schema is not None:
-        for section, sec in (_schema.get("properties") or {}).items():
-            sec_obj = getattr(cfg, section, None)
-            if sec_obj is None:
-                continue
-            for prop, ps in (sec.get("properties") or {}).items():
-                fw = ps.get("firmware") if isinstance(ps, dict) else None
-                if not fw or "set_key" not in fw or fw["set_key"] in _already_pushed:
-                    continue
-                val = getattr(sec_obj, prop, None)
-                if val is None:
-                    continue
-                literal = (str(int(round(float(val))))
-                           if fw.get("kind") in ("int", "float_as_int")
-                           else f"{float(val):g}")
-                _log(f"push calibration: SET {fw['set_key']}={literal}")
-                conn.send(f"SET {fw['set_key']}={literal}", read_timeout=200)
+# _push_calibration() -- REMOVED (124-014). It sent an entire sequence of
+# protocol-v2-era text verbs (`ID`, `SET ml/mr/tw/vel.*/odomOff*`, `OI`,
+# `OL`, `OA`) that have had NO firmware handler since the sprint 102-107
+# single-loop rebuild -- none of `SET`/`OI`/`OL`/`OA` is a registered
+# protocol v5 verb (docs/protocol-v5.md §2.4's closed registry), so every
+# line this function sent was silently dropped as malformed
+# (`kFlagFaultCommsMalformed`), never applied. Its own leading `conn.send(
+# "ID", ...)` call was flagged as dead by sprint 124 ticket 013's own bench
+# work (`radio_bench_gate.py`'s "Design notes for a future reader": under
+# protocol v5, `SerialConnection.send()`'s `#<corr_id>`-suffixed line never
+# matches the `ID` registry entry and always times out) -- but fixing only
+# that one call would have left the rest of the sequence (SET/OI/OL/OA)
+# just as dead, silently no-op'ing while `cmd_sync_cal()` printed "pushed
+# successfully". The live calibration-push path is
+# `robot_radio.robot.protocol.NezhaProtocol.config()`/`.otos_config()`
+# (the binary `CONFIG` arm, docs/protocol-v5.md §6) -- see `cmd_sync_cal()`
+# below, which now points here instead of pretending to push anything.
+#
+# NOTE: `robot_radio.calibration.push.calibration_commands()` builds the
+# same dead v2 `SET`/`OI`/`OL`/`OA` sequence and has additional live
+# callers this ticket did NOT audit (`turn_shape.py`, `__main__.py`'s
+# manual robot-select, the TestGUI's reconnect-push path) -- a wider,
+# pre-existing defect than this one function, out of this documentation
+# ticket's scope; flagged for a follow-up `clasi/issues/` entry rather
+# than fixed here.
 
 
 def cmd_sync_pose(args):
@@ -355,89 +221,29 @@ def cmd_sync_pose(args):
 
 
 def cmd_sync_cal(args):
-    """Connect to the robot, push the full calibration set, and disconnect.
+    """REMOVED (124-014) — was built entirely on dead protocol-v2 text verbs.
 
-    This is a one-time setup step after power-up or after editing the robot
-    config.  Pushes per-robot calibration using v2 verbs: SET ml, SET mr,
-    SET tw, OI, OL, OA, and optionally SET odomOffX/odomOffY/odomYaw.
+    This command used to connect, send ``ID`` + a `SET`/`OI`/`OL`/`OA`
+    sequence, and print "calibration pushed successfully" — but none of
+    those verbs has had a firmware handler since the sprint 102-107
+    single-loop rebuild (see the removed ``_push_calibration()``'s own
+    doc comment, above, for the full history and sprint 124 ticket 013's
+    own discovery of this defect). Rather than keep printing a false
+    success message, ``rogo sync cal`` now fails loudly and points at the
+    live mechanism: ``NezhaProtocol.config()``/``.otos_config()`` (the
+    binary ``CONFIG`` arm, docs/protocol-v5.md §6), reachable via
+    ``rogo repl`` or a short script.
     """
-    port = _get_port(args)
-    on_send = (lambda cmd: _log(f"TX: {cmd}")) if _verbose else None
-    conn = SerialConnection(port, on_send=on_send)
-
-    _log(f"connecting to {port}...")
-    result = conn.connect()
-    if "error" in result:
-        print(f"Error: {result['error']}", file=sys.stderr)
-        sys.exit(1)
-
-    ann = result.get("announcement")
-    if not ann:
-        ann = _parse_device_line(result.get("lines", []))
-    if ann:
-        role = ann.get("role", "").upper()
-        if "RELAY" in role or "BRIDGE" in role:
-            conn._mode = "relay"
-        else:
-            conn._mode = "direct"
-    _log(f"connected (mode={conn.mode}); pushing calibration...")
-
-    # Gather the values we are about to push so we can print a summary.
-    cfg = get_robot_config()
-    if cfg is None:
-        print("Error: no robot config found — cannot push calibration.", file=sys.stderr)
-        conn.disconnect()
-        sys.exit(1)
-
-    _push_calibration(conn)
-
-    # Print a human-readable summary of what was pushed (v2 verbs).
-    # _push_calibration() resolved the config via ID+match_robot_by_id;
-    # fall back to get_robot_config() for the summary display.
-    cfg_display = get_robot_config()
-    if cfg_display is None:
-        print("sync cal: calibration pushed (no config for display summary)")
-        conn.disconnect()
-        return
-
-    wd = getattr(getattr(cfg_display, "wheels", None), "wheel_diameter_mm", None)
-    default_wheel_travel_calib = (math.pi * wd / 360.0) if wd is not None else None  # [mm/deg]
-    cal = getattr(cfg_display, "calibration", None)
-    wheel_travel_calib_left  = getattr(cal, "mm_per_wheel_deg_left",  None) if cal else None
-    wheel_travel_calib_right = getattr(cal, "mm_per_wheel_deg_right", None) if cal else None
-    wheel_travel_calib_left  = wheel_travel_calib_left  if wheel_travel_calib_left  is not None else default_wheel_travel_calib
-    wheel_travel_calib_right = wheel_travel_calib_right if wheel_travel_calib_right is not None else default_wheel_travel_calib
-
-    lin_int8 = _scale_to_int8(getattr(cfg_display, "otos_linear_scale", 1.0) or 1.0)
-    ang_int8 = _scale_to_int8(getattr(cfg_display, "otos_angular_scale", 1.0) or 1.0)
-    geom = getattr(cfg_display, "geometry", None)
-    tw = getattr(geom, "trackwidth", None) if geom else None
-    off = getattr(geom, "odometry_offset_mm", None) if geom else None
-
-    print("sync cal: calibration pushed successfully (v2 verbs)")
-    if wheel_travel_calib_left is not None:
-        print(f"  SET ml={wheel_travel_calib_left:.6f}  (mm/deg={wheel_travel_calib_left:.4f})")
-    if wheel_travel_calib_right is not None:
-        print(f"  SET mr={wheel_travel_calib_right:.6f}  (mm/deg={wheel_travel_calib_right:.4f})")
-    if tw is not None:
-        print(f"  SET tw={int(round(float(tw)))}  (trackwidth mm)")
-    print("  OI  (OTOS init)")
-    print(f"  OL  {lin_int8:+d}  "
-          f"(linear_scale={1.0 + lin_int8 * 0.001:.4f},"
-          f" source={'config' if getattr(cfg_display, 'otos_linear_scale', None) is not None else 'default'})")
-    print(f"  OA  {ang_int8:+d}  "
-          f"(angular_scale={1.0 + ang_int8 * 0.001:.4f},"
-          f" source={'config' if getattr(cfg_display, 'otos_angular_scale', None) is not None else 'default'})")
-    if off is not None:
-        ox = float(off.x)
-        oy = float(off.y)
-        oyaw = math.degrees(float(off.yaw_rad))  # [deg]
-        if ox != 0.0 or oy != 0.0 or oyaw != 0.0:
-            print(f"  SET odomOffX={ox:.3f} odomOffY={oy:.3f} odomYaw={oyaw:.3f}")
-        else:
-            print("  (odom offsets all zero — SET odomOff* skipped)")
-
-    conn.disconnect()
+    print(
+        "Error: 'rogo sync cal' is retired — it sent protocol-v2 text\n"
+        "verbs (SET/OI/OL/OA) that no current firmware build has ever\n"
+        "recognized; it silently pushed nothing while claiming success.\n"
+        "Use the live calibration path instead: NezhaProtocol.config()\n"
+        "and .otos_config() (the binary CONFIG command, docs/protocol-v5.md\n"
+        "§6) via 'rogo repl' or a short script.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 # ── Rotation model (mirror of test/rotation_calibrate/RotationModel) ──────
@@ -1685,10 +1491,10 @@ def main():
 
     sync_sub.add_parser(
         "cal",
-        help="Push full calibration to firmware using v2 verbs "
-             "(SET ml/mr/tw, OI, OL, OA, SET odomOff*). "
-             "Run once after power-up or after editing the robot config. "
-             "Robot must be stationary during the ~700 ms IMU bias window.",
+        help="RETIRED (124-014) — always errors. Used protocol-v2 text "
+             "verbs (SET/OI/OL/OA) with no firmware handler since the "
+             "102-107 rebuild. Use NezhaProtocol.config()/.otos_config() "
+             "(the binary CONFIG command, docs/protocol-v5.md §6) instead.",
     )
 
     sync_sub.add_parser(

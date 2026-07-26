@@ -1,11 +1,14 @@
 """src/tests/unit/test_rig_dev.py — 104-006 (bench script family rewritten onto
 the binary twist/config/stop plane).
 
-Unit coverage for the PURE (no I/O, no hardware) helpers in
-`src/tests/bench/rig_dev.py` — `waveform()` and `secondary_to_dict()` — plus the
-`Rig` class's own forwarding contract, exercised against fake `conn`/`proto`
-objects (never a real `SerialConnection`/serial port, matching the project's
-own `_FakeFastConn`-style precedent in `test_twist_stop_ack_matcher.py`).
+Unit coverage for the PURE (no I/O, no hardware) helper in
+`src/tests/bench/rig_dev.py` — `waveform()` — plus the `Rig` class's own
+forwarding contract, exercised against fake `conn`/`proto` objects (never a
+real `SerialConnection`/serial port, matching the project's own
+`_FakeFastConn`-style precedent in `test_twist_stop_ack_matcher.py`).
+`secondary_to_dict()`/`Rig.read_secondary_tlm()` coverage is DELETED
+(124-009, robot-state-blackboard-...md, issue's own "TelemetrySecondary
+dies") along with the functions themselves.
 
 `src/tests/bench/` is "HITL CLI tools, not pytest-collected" (`tests/CLAUDE.md`),
 so this test loads `rig_dev.py` directly by file path via `importlib`
@@ -21,7 +24,6 @@ import pathlib
 
 import pytest
 
-from robot_radio.robot.pb2 import telemetry_pb2
 from robot_radio.robot.protocol import AckEntry, TLMFrame
 
 _BENCH_SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "bench" / "rig_dev.py"
@@ -68,42 +70,8 @@ class TestWaveform:
         assert rig_dev.waveform("sine", 5.0, period=4.0, amp=150.0) == pytest.approx(150.0)
 
 
-# ---------------------------------------------------------------------------
-# secondary_to_dict()
-# ---------------------------------------------------------------------------
-
-class TestSecondaryToDict:
-    def test_adapts_every_field(self, rig_dev):
-        secondary = telemetry_pb2.TelemetrySecondary(
-            now=12345,
-            has_cmd_vel=True, cmd_vel_left=100.0, cmd_vel_right=-50.0,
-            acc_left=1.5, acc_right=-2.5,
-            glitch_left=3, glitch_right=4,
-            ts_left=1000, ts_right=1001,
-        )
-
-        d = rig_dev.secondary_to_dict(secondary)
-
-        assert d == {
-            "t": 12345,
-            "cmd_vel_left": 100.0,
-            "cmd_vel_right": -50.0,
-            "acc_left": 1.5,
-            "acc_right": -2.5,
-            "glitch_left": 3,
-            "glitch_right": 4,
-            "ts_left": 1000,
-            "ts_right": 1001,
-        }
-
-    def test_cmd_vel_none_when_has_cmd_vel_false(self, rig_dev):
-        secondary = telemetry_pb2.TelemetrySecondary(now=1, has_cmd_vel=False)
-
-        d = rig_dev.secondary_to_dict(secondary)
-
-        assert d["cmd_vel_left"] is None
-        assert d["cmd_vel_right"] is None
-
+# secondary_to_dict() coverage -- DELETED (124-009): the function itself is
+# gone, along with TelemetrySecondary (robot-state-blackboard-...md).
 
 # ---------------------------------------------------------------------------
 # Rig — forwarding contract against fake conn/proto (no serial port)
@@ -146,10 +114,6 @@ class _FakeProto:
 class _FakeConn:
     def __init__(self) -> None:
         self.disconnected = False
-        self.secondary_to_return: list = []
-
-    def drain_binary_secondary_tlm(self) -> list:
-        return self.secondary_to_return
 
     def disconnect(self) -> None:
         self.disconnected = True
@@ -200,19 +164,9 @@ class TestRigForwarding:
 
         assert rig.read_tlm() == [frame]
 
-    def test_read_secondary_tlm_adapts_every_frame(self, rig_dev):
-        proto = _FakeProto()
-        conn = _FakeConn()
-        conn.secondary_to_return = [
-            telemetry_pb2.TelemetrySecondary(now=1, glitch_left=1, glitch_right=2),
-            telemetry_pb2.TelemetrySecondary(now=2, glitch_left=3, glitch_right=4),
-        ]
-        rig = rig_dev.Rig(conn, proto)
-
-        rows = rig.read_secondary_tlm()
-
-        assert [r["t"] for r in rows] == [1, 2]
-        assert [r["glitch_left"] for r in rows] == [1, 3]
+    # test_read_secondary_tlm_adapts_every_frame -- DELETED (124-009):
+    # Rig.read_secondary_tlm() itself is gone, along with TelemetrySecondary
+    # (robot-state-blackboard-...md).
 
     def test_close_stops_and_disconnects_even_if_stop_raises(self, rig_dev):
         class _RaisingProto(_FakeProto):

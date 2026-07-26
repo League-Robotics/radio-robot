@@ -67,15 +67,22 @@ import pytest
 
 from robot_radio.io.wire_codec import encode_frame
 
-from robot_radio.robot.pb2 import config_pb2, envelope_pb2, telemetry_pb2
+from robot_radio.robot.pb2 import config_pb2, envelope_pb2
 from robot_radio.robot.protocol import NezhaProtocol
 from robot_radio.testgui import binary_bridge
 
-# _FakeConn.wait_for_ack() (below) returns a raw telemetry_pb2.AckEntry ring
-# entry directly (120: the bounded ack ring's own wire message -- NOT the
-# whole Telemetry frame it rode in on) -- NezhaProtocol.wait_for_ack()
-# adapts it via AckEntry.from_ring_entry(), which reads corr_id/err off it
-# with no freshness gate needed (see that method's own docstring).
+# _FakeConn.wait_for_ack() (below) returns a raw packed `int` ring entry
+# directly (124-008, issue §B4: `corr_id<<4|err` -- `telemetry_pb2.AckEntry`
+# is deleted, `Telemetry.acks` is `repeated uint32`) -- NOT the whole
+# Telemetry frame it rode in on -- NezhaProtocol.wait_for_ack() adapts it
+# via AckEntry.from_ring_entry(), which unpacks corr_id/err off it with no
+# freshness gate needed (see that method's own docstring).
+
+
+def _pack_ack(corr_id: int, err: int) -> int:
+    """Mirrors telemetry.cpp's own pushAckRing() packed-word format EXACTLY
+    (124-008, issue §B4): corr_id<<4 | err."""
+    return (corr_id << 4) | err
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +200,7 @@ def test_empty_line_returns_empty_string_no_wire_call(proto):
 
 def test_ol_sends_otos_config_patch_with_linear_scale(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=0)
+    conn.ack_result = _pack_ack(1, 0)
 
     reply = binary_bridge.translate_command(nezha, "OL 1.05")
 
@@ -207,7 +214,7 @@ def test_ol_sends_otos_config_patch_with_linear_scale(proto):
 
 def test_oa_sends_otos_config_patch_with_angular_scale(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=0)
+    conn.ack_result = _pack_ack(1, 0)
 
     reply = binary_bridge.translate_command(nezha, "OA -0.98")
 
@@ -218,7 +225,7 @@ def test_oa_sends_otos_config_patch_with_angular_scale(proto):
 
 def test_oi_sends_otos_config_patch_with_init_trigger(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=0)
+    conn.ack_result = _pack_ack(1, 0)
 
     reply = binary_bridge.translate_command(nezha, "OI")
 
@@ -266,7 +273,7 @@ def test_ol_ack_timeout_renders_err(proto):
 
 def test_ol_nak_ack_renders_err(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=envelope_pb2.ERR_UNIMPLEMENTED)
+    conn.ack_result = _pack_ack(1, envelope_pb2.ERR_UNIMPLEMENTED)
 
     reply = binary_bridge.translate_command(nezha, "OL 1.05")
 
@@ -308,7 +315,7 @@ def test_ov_op_or_still_render_unavailable_reply_unchanged(proto):
 
 def test_set_motor_pid_keys_send_one_left_side_motor_patch(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=0)
+    conn.ack_result = _pack_ack(1, 0)
 
     reply = binary_bridge.translate_command(nezha, "SET pid.kp=1.5 pid.kaw=20")
 
@@ -324,7 +331,7 @@ def test_set_motor_pid_keys_send_one_left_side_motor_patch(proto):
 
 def test_set_drivetrain_keys_send_drivetrain_patch(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=0)
+    conn.ack_result = _pack_ack(1, 0)
 
     reply = binary_bridge.translate_command(nezha, "SET tw=128 rotSlip=0.92")
 
@@ -338,7 +345,7 @@ def test_set_drivetrain_keys_send_drivetrain_patch(proto):
 
 def test_set_ml_mr_send_two_separate_motor_side_patches(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=0)
+    conn.ack_result = _pack_ack(1, 0)
 
     reply = binary_bridge.translate_command(nezha, "SET ml=0.523599 mr=0.523599")
 
@@ -386,7 +393,7 @@ def test_set_with_no_kv_pairs_is_badarg_no_wire_call(proto):
 
 def test_set_nak_ack_renders_set_failed(proto):
     nezha, conn = proto
-    conn.ack_result = telemetry_pb2.AckEntry(corr_id=1, err=envelope_pb2.ERR_BADARG)
+    conn.ack_result = _pack_ack(1, envelope_pb2.ERR_BADARG)
 
     reply = binary_bridge.translate_command(nezha, "SET tw=128")
 
@@ -433,18 +440,20 @@ def test_command_oneof_no_longer_has_drive_segment_replace():
 # ---------------------------------------------------------------------------
 
 
-def _armor(msg) -> bytes:
-    """COBS+CRC-frame a pb2 message (123-002/003; was ``*B`` + base64
-    pre-123) -- ``render_log_line()`` now dispatches by Python TYPE
-    (``bytes`` for a binary frame, ``str`` for a text-plane line), not by
-    string prefix."""
-    return encode_frame(msg.SerializeToString())
+def _armor(msg, command: bytes) -> bytes:
+    """Build the FULL `<COMMAND>':'<COBS+CRC bytes>` wire line (124-005;
+    was a bare COBS+CRC frame body 123-002/003, ``*B`` + base64 pre-123) --
+    ``render_log_line()`` now dispatches ``bytes`` input by splitting off
+    this SAME leading prefix itself (to scope ``decode_frame()``'s CRC
+    check correctly), then still by Python TYPE at the top level (``bytes``
+    for a binary line, ``str`` for a cleartext-plane line)."""
+    return command + b":" + encode_frame(msg.SerializeToString(), command=command)
 
 
 def test_tlm_reply_is_dropped_entirely():
     reply = envelope_pb2.ReplyEnvelope()
     reply.tlm.now = 12345
-    assert binary_bridge.render_log_line(_armor(reply), outbound=False) is None
+    assert binary_bridge.render_log_line(_armor(reply, b"TLM"), outbound=False) is None
 
 
 def test_err_reply_falls_back_to_text_format_rendering():
@@ -456,7 +465,7 @@ def test_err_reply_falls_back_to_text_format_rendering():
     reply = envelope_pb2.ReplyEnvelope()
     reply.corr_id = 4
     reply.err.code = envelope_pb2.ERR_BADARG
-    rendered = binary_bridge.render_log_line(_armor(reply), outbound=False)
+    rendered = binary_bridge.render_log_line(_armor(reply, b"ERR"), outbound=False)
     assert rendered is not None
     assert not rendered.startswith("*B")
     assert "ERR_BADARG" in rendered
@@ -467,7 +476,7 @@ def test_ok_reply_renders_readable_text_not_raw_armor():
     reply = envelope_pb2.ReplyEnvelope()
     reply.ok.q = 3
     reply.ok.rem = 45.0
-    rendered = binary_bridge.render_log_line(_armor(reply), outbound=False)
+    rendered = binary_bridge.render_log_line(_armor(reply, b"OK"), outbound=False)
     assert rendered is not None
     assert not rendered.startswith("*B")
     assert "3" in rendered
@@ -484,7 +493,7 @@ def test_outbound_command_renders_readable_text_not_raw_armor():
     cmd.corr_id = 9
     cmd.move.twist.v_x = 200
     cmd.move.twist.omega = -1.5
-    rendered = binary_bridge.render_log_line(_armor(cmd), outbound=True)
+    rendered = binary_bridge.render_log_line(_armor(cmd, b"MOVE"), outbound=True)
     assert rendered is not None
     assert not rendered.startswith("*B")
     assert "200" in rendered
@@ -510,50 +519,45 @@ def test_malformed_binary_frame_renders_marker_never_raises():
 
 
 # ---------------------------------------------------------------------------
-# render_log_line() — TelemetrySecondary disambiguation (emergency fix,
-# stakeholder report: Tour 1 froze/died and the message monitor flooded at
-# ~4 lines/s with bare "corr_id: N" lines). A bare TelemetrySecondary frame
-# (its own armored *B line, NOT ReplyEnvelope-wrapped — telemetry.proto,
-# 104-003) "successfully" parses as a ReplyEnvelope with an EMPTY body oneof:
-# TelemetrySecondary's first field (`now`, its millisecond timestamp) and
-# ReplyEnvelope's first field (`corr_id`) are both wire type 13 (uint32),
-# so the bytes decode without error into a ReplyEnvelope carrying only
-# corr_id set and no body arm. Fixed with the same structural
-# disambiguation io/serial_conn.py's _handle_binary_reply() already uses:
-# treat a ReplyEnvelope parse as real only when WhichOneof("body") is set;
-# otherwise retry as TelemetrySecondary and drop the line on success (same
-# policy as a primary `tlm` push frame).
+# render_log_line() — empty-body-oneof frames render as malformed, not a
+# bogus "corr_id: N" line (124-009: the ReplyEnvelope-vs-TelemetrySecondary
+# disambiguation this section used to test is DELETED along with
+# TelemetrySecondary itself, robot-state-blackboard-...md — there is no
+# second shape left to retry a body-less parse against, so it is simply
+# malformed now). Historical context (kept for why this bit of behavior
+# exists at all): a bare TelemetrySecondary frame used to "successfully"
+# parse as a ReplyEnvelope with an EMPTY body oneof (TelemetrySecondary's
+# first field, `now`, and ReplyEnvelope's first field, `corr_id`, are both
+# wire type 13/uint32), flooding the message monitor with bare "corr_id: N"
+# lines at the secondary frame's own ~4 lines/s -- the reason
+# render_log_line() checks WhichOneof("body") at all rather than trusting
+# a successful parse alone.
 # ---------------------------------------------------------------------------
 
 
-def test_bare_telemetry_secondary_frame_is_dropped_not_misrendered():
-    from robot_radio.robot.pb2 import telemetry_pb2
+def test_empty_body_oneof_frame_renders_as_malformed_not_a_bare_corr_id_line():
+    """A frame that parses as a ReplyEnvelope with no body oneof set (the
+    exact shape a stray corr_id-only frame produces) is malformed, not a
+    silently-rendered bare "corr_id: N" line -- see this section's own
+    historical-context comment for why that distinction matters."""
+    reply = envelope_pb2.ReplyEnvelope()
+    reply.corr_id = 123456
+    # Deliberately NOT setting ok/err/tlm -- WhichOneof("body") stays None.
 
-    secondary = telemetry_pb2.TelemetrySecondary()
-    secondary.now = 123456
-    secondary.has_cmd_vel = True
-    secondary.cmd_vel_left = 150.0
-    secondary.cmd_vel_right = 150.0
-    secondary.acc_left = 0.5
-    secondary.acc_right = 0.4
-    secondary.glitch_left = 0
-    secondary.glitch_right = 0
-    secondary.ts_left = 12
-    secondary.ts_right = 12
+    rendered = binary_bridge.render_log_line(_armor(reply, b"TLM"), outbound=False)
 
-    rendered = binary_bridge.render_log_line(_armor(secondary), outbound=False)
-
-    assert rendered is None
+    assert rendered is not None
+    assert "malformed" in rendered
 
 
 def test_reply_envelope_with_set_body_still_renders_not_dropped():
-    """Regression guard for the fix above: a REAL ReplyEnvelope (body oneof
-    actually set) must still render normally, not get swept into the new
-    TelemetrySecondary fallback."""
+    """Regression guard for the check above: a REAL ReplyEnvelope (body
+    oneof actually set) must still render normally, not get swept into the
+    malformed-marker path."""
     reply = envelope_pb2.ReplyEnvelope()
     reply.corr_id = 7
     reply.ok.q = 1
-    rendered = binary_bridge.render_log_line(_armor(reply), outbound=False)
+    rendered = binary_bridge.render_log_line(_armor(reply, b"OK"), outbound=False)
     assert rendered is not None
     assert not rendered.startswith("*B")
 

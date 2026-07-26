@@ -72,7 +72,11 @@ class SimHarness {
         color_(plant_, Devices::ColorConfig{}),
         line_(plant_, Devices::LineConfig{}),
         comms_(serialLink_, radioLink_, "DEVICE:NEZHA2:sim:sim_harness:1"),
-        tlm_(comms_, serialLink_, radioLink_),
+        // 124-009: Telemetry no longer holds direct Transport& references
+        // (those existed only for TelemetrySecondary's own
+        // independently-armored line, now deleted) -- comms_ already owns
+        // both transports internally.
+        tlm_(comms_),
         drive_(armorL_, armorR_, trackWidth),
         // 122-002: Motion::Odometry no longer holds a Devices::Motor& --
         // seed the delta baseline from each leaf's CURRENT position() (both
@@ -130,17 +134,18 @@ class SimHarness {
     }
   }
 
-  // Pushes one complete COBS+CRC-framed command frame (123-002 -- was
-  // armored "*B..." text pre-123) onto the inbound serial FakeTransport --
-  // App::Comms::pump() consumes at most one per cycle() call. `frame` is
-  // always a TestSupport::armorMoveCommand()/armorStopCommand()/-built
-  // frame body (0x00-free by COBS construction, per that helper's own doc
-  // comment), so recovering its length via strlen() here is safe --
-  // tagged App::FrameKind::kBinary (enqueueInboundBinary()), never
-  // enqueueInbound()'s kText (this is never a HELLO/PING text line).
-  void injectCommand(const char* frame) {
-    serialLink_.enqueueInboundBinary(reinterpret_cast<const uint8_t*>(frame), std::strlen(frame));
+  // Pushes one complete `<COMMAND>':'<COBS+CRC bytes>` wire LINE (124-005 --
+  // was a bare COBS+CRC frame body pre-124-005, itself was armored "*B..."
+  // text pre-123) onto the inbound serial FakeTransport -- App::Comms::
+  // pump() consumes at most one per cycle() call. `frame`/`len` is always a
+  // TestSupport::armorMoveCommand()/armorStopCommand()-built line -- an
+  // EXPLICIT length, never recovered via strlen(): COBS is now keyed on
+  // 0x0A (wire_runtime.h item 8), not 0x00, so the line may legitimately
+  // contain an embedded 0x00 byte that strlen() would truncate at.
+  void injectCommand(const char* frame, size_t len) {
+    serialLink_.enqueueInboundBinary(reinterpret_cast<const uint8_t*>(frame), len);
   }
+  void injectCommand(const std::string& frame) { injectCommand(frame.data(), frame.size()); }
 
   // Convenience wrappers over injectCommand() + TestSupport::armorMoveCommand()
   // -- the only way a caller injects a Move/Stop (there is no
@@ -153,18 +158,16 @@ class SimHarness {
                    float stopValue, float timeout, bool replace, uint32_t id,
                    uint32_t corrId = 0) {
     injectCommand(TestSupport::armorMoveCommand(v_x, v_y, omega, stopKind, stopValue, timeout,
-                                                 replace, id, corrId)
-                      .c_str());
+                                                 replace, id, corrId));
   }
   void injectMove(float v_left, float v_right, TestSupport::MoveStopKind stopKind,
                    float stopValue, float timeout, bool replace, uint32_t id,
                    uint32_t corrId = 0) {
     injectCommand(TestSupport::armorMoveCommand(v_left, v_right, stopKind, stopValue, timeout,
-                                                 replace, id, corrId)
-                      .c_str());
+                                                 replace, id, corrId));
   }
   void injectStop(uint32_t corrId = 0) {
-    injectCommand(TestSupport::armorStopCommand(corrId).c_str());
+    injectCommand(TestSupport::armorStopCommand(corrId));
   }
 
   // motorConfig -- test-only readback of the Devices::MotorConfig last

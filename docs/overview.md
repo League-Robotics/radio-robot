@@ -7,7 +7,7 @@
 > subsequent gut-to-minimal-firmware/MOVE-protocol sprints. For the
 > current architecture, see [`docs/design/design.md`](design/design.md);
 > for the current wire protocol, see
-> [`docs/protocol-v4.md`](protocol-v4.md). Kept as the historical record
+> [`docs/protocol-v5.md`](protocol-v5.md). Kept as the historical record
 > of the pre-rebuild design, not rewritten line-by-line.
 
 ## What It Is
@@ -46,7 +46,7 @@ The original TypeScript firmware was developed as a functional prototype. This p
 Process and conventions agents must follow — coding standards, naming, on-chip
 debugging workflow, hardware bench testing, git, CLASI — are **rules** and live in
 [.claude/rules/](../.claude/rules/). `docs/` holds project knowledge: the
-architecture, the protocol spec (`protocol-v4.md`, current — `protocol-v2.md`/
-`protocol-v3.md` are kept as the superseded historical record), design notes, decisions, and
+architecture, the protocol spec (`protocol-v5.md`, current — `protocol-v2.md`/
+`protocol-v3.md`/`protocol-v4.md` are kept as the superseded historical record), design notes, decisions, and
 post-mortems. Former docs pages that became rules (`coding-standards.md`,
 `debugging.md`, `hardware-bench-testing.md`) leave pointer stubs here.
