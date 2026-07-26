@@ -2,9 +2,12 @@
 id: '011'
 title: 'Move/config enqueue-ack observability: confirm the post-123-006 fix, or fix
   if not'
-status: open
-use-cases: [SUC-007]
-depends-on: ['005', '008']
+status: in-progress
+use-cases:
+- SUC-007
+depends-on:
+- '005'
+- 008
 github-issue: ''
 issue: telemetry-physical-layer-corruption-and-move-ack-observability.md
 completes_issue: true
