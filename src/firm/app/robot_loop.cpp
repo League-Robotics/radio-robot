@@ -349,36 +349,38 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
   tlm_.ack(env.corr_id, 0);
 }
 
-// applyMotorConfigPatch -- MODIFIED (125-003, sprint.md Decision 7's own
-// CONFIG-routing split -- fully wired here as an interim, since ticket 008
-// hasn't landed yet: kp/ki/kff/i_max/kaw route to App::Drive's own interim
-// Motion::WheelVelocityPid gains (drive.h's own header -- ticket 005/008
-// should retarget this at whatever MoveQueue-owned surface replaces it),
-// travel_calib stays with Devices::Motor::applyTravelCalib() (narrowed from
-// the pre-125-003 applyGains()). Merges each side's OWN current gains
+// applyMotorConfigPatch -- UNCHANGED extraction of what used to be
+// handleConfig()'s own inline MOTOR-branch logic (114-004's own Approach
+// step 4: reapplyPersistedTuning(), below, shares this exact applier
+// instead of duplicating it). Merges each motor's OWN current gains
 // against whatever wire fields are PRESENT (config.proto's Opt<T>-presence
-// convention) -- NOT a blanket mirror of one side's gains onto the other,
+// convention) -- NOT a blanket mirror of one motor's gains onto the other,
 // since the two leaves' calibration can legitimately differ. travel_calib
 // is side-selected (config.proto's own MotorConfigPatch.side comment) --
 // applies to exactly one leaf.
 void RobotLoop::applyMotorConfigPatch(const msg::MotorConfigPatch& patch) {
-  Motion::Gains gainsL = drive_.gainsLeft();
-  Motion::Gains gainsR = drive_.gainsRight();
+  Devices::Gains gainsL = motorL_.gains();
+  Devices::Gains gainsR = motorR_.gains();
   if (patch.kp.has) { gainsL.kp = patch.kp.val; gainsR.kp = patch.kp.val; }
   if (patch.ki.has) { gainsL.ki = patch.ki.val; gainsR.ki = patch.ki.val; }
   if (patch.kff.has) { gainsL.kff = patch.kff.val; gainsR.kff = patch.kff.val; }
   if (patch.i_max.has) { gainsL.iMax = patch.i_max.val; gainsR.iMax = patch.i_max.val; }
   if (patch.kaw.has) { gainsL.kaw = patch.kaw.val; gainsR.kaw = patch.kaw.val; }
-  drive_.applyGainsLeft(gainsL);
-  drive_.applyGainsRight(gainsR);
 
+  Devices::Opt<float> travelCalibL;
+  Devices::Opt<float> travelCalibR;
   if (patch.travel_calib.has) {
     if (patch.side == msg::BoundMotorSide::LEFT) {
-      motorL_.applyTravelCalib(patch.travel_calib.val);
+      travelCalibL.has = true;
+      travelCalibL.val = patch.travel_calib.val;
     } else {
-      motorR_.applyTravelCalib(patch.travel_calib.val);
+      travelCalibR.has = true;
+      travelCalibR.val = patch.travel_calib.val;
     }
   }
+
+  motorL_.applyGains(gainsL, travelCalibL);
+  motorR_.applyGains(gainsR, travelCalibR);
 }
 
 // applyOtosPatch -- UNCHANGED extraction of what used to be

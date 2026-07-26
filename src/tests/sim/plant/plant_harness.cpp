@@ -116,6 +116,7 @@ Devices::MotorConfig baseMotorConfig(uint32_t port) {
   cfg.port = port;
   cfg.fwdSign = 1;
   cfg.wheelTravelCalib = kWheelTravelCalib;
+  cfg.velFiltAlpha = 1.0f;
   return cfg;
 }
 
@@ -137,8 +138,7 @@ void scenarioVelocityStepShowsRampWithTauInRange() {
 
   Devices::MotorConfig cfg = baseMotorConfig(1);
   Devices::NezhaMotor motor(bus, cfg);
-  // 125-003: setDuty() is the ONLY mode NezhaMotor has left -- no more
-  // setPidEnabled(false) call needed to select raw-duty passthrough.
+  motor.setPidEnabled(false);
   const float duty = 0.6f;
   motor.setDuty(duty);
 
@@ -259,8 +259,8 @@ std::vector<CycleSample> runScenario(float dutyLeft, float dutyRight, int cycles
 
   Devices::NezhaMotor motorLeft(bus, baseMotorConfig(1));
   Devices::NezhaMotor motorRight(bus, baseMotorConfig(2));
-  // 125-003: setDuty() is the ONLY mode NezhaMotor has left -- no more
-  // setPidEnabled(false) calls needed to select raw-duty passthrough.
+  motorLeft.setPidEnabled(false);
+  motorRight.setPidEnabled(false);
   motorLeft.setDuty(dutyLeft);
   motorRight.setDuty(dutyRight);
 

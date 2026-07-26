@@ -182,33 +182,7 @@ MANAGED_ANGLE_REL_TOL = 0.10
 # specific band requires stakeholder sign-off (this IS the user-visible
 # quality bar this suite exists to hold the line on -- see
 # src/tests/DESIGN.md's own Constraints section).
-#
-# TEMPORARILY WIDENED 3.0 -> 6.5 (125-003, sprint 125, dated 2026-07-26;
-# revert to 3.0 once ticket 006 lands -- see below for why). Sprint 125
-# Decision 2 relocates the wheel velocity PID off Devices::NezhaMotor
-# entirely (to an interim App::Drive-owned instance, see drive.h's own
-# header) -- structurally, this adds exactly one extra loop cycle (~40ms)
-# of measured-velocity staleness to the closed loop: the pre-125-003 design
-# ran the PID INSIDE NezhaMotor::tick() itself, against the SAME cycle's
-# freshly collected sample (zero lag); the base's own tick() is monolithic
-# (collect+write in one call), so a caller outside it can only feed the
-# PID the PREVIOUS cycle's velocity() reading. Measured, reproducible,
-# deterministic effect on the ±90deg managed turn specifically (the
-# tightest-tolerance case in this file, and therefore the most exposed):
-# commanded ±90deg lands at a clean ±85.0deg (a ~5.0deg/5.6% undershoot,
-# both signs, both the button and `SEG 0` dispatch paths) -- every looser
-# band (180/270/360, the unmanaged path, the Tour closure gate) absorbs the
-# same underlying shift without tripping. This is NOT a silent regression:
-# a true zero-added-lag fix requires splitting NezhaMotor::tick() into
-# distinct collect/write phases so the interim PID can react to the SAME
-# cycle's own fresh sample -- exactly ticket 006/007's "Drive gets named
-# bus-phase methods" reshuffle (sprint.md Step 3, Decision 6), not
-# something ticket 003 (this shrink) can absorb without scope creep into
-# that later ticket. Flagged prominently for stakeholder/team-lead review
-# in ticket 125-003's own closing report -- this widening should be
-# reverted to 3.0 (and re-verified) once ticket 006 restores same-tick
-# feedback.
-MANAGED_ANGLE_90_ABS_MARGIN_DEG = 6.5  # [deg] flat bound, single magnitude
+MANAGED_ANGLE_90_ABS_MARGIN_DEG = 3.0  # [deg] flat bound, single magnitude
 MANAGED_ANGLE_90_REL_TOL = 0.0
 
 #: Managed (Move-queue) 90-degree magnitude selector -- ``_run_angle_preset()``

@@ -1,8 +1,8 @@
-#include "motion/wheel_velocity_pid.h"
+#include "devices/velocity_pid.h"
 
 #include <cmath>
 
-namespace Motion {
+namespace Devices {
 
 namespace {
 float clampf(float v, float lo, float hi) {
@@ -55,7 +55,7 @@ constexpr float kZeroTargetRestNoiseFloor = 15.0f;  // [mm/s]
 // Output domain: duty fraction [-1, 1] (matching the write path's
 // setDutyCycle-equivalent contract).
 // ---------------------------------------------------------------------------
-float WheelVelocityPid::compute(float target, float measured, float dt,
+float MotorVelocityPid::compute(float target, float measured, float dt,
                                  const Gains& gains, float velDeadband)
 {
     if (dt <= 0.0f) dt = kNominalDt;
@@ -63,8 +63,8 @@ float WheelVelocityPid::compute(float target, float measured, float dt,
     float spAbs = fabsf(target);
 
     // velDeadband is the integrator-freeze deadband threshold on |target|
-    // (wheel_velocity_pid.h's own file header covers why it is named this
-    // way, not `minDuty`). <= (not <) so an exact target==0.0f still counts as
+    // (device_config.h's field comment covers why it is named this way,
+    // not `minDuty`). <= (not <) so an exact target==0.0f still counts as
     // "in the deadband" even when velDeadband itself is 0.0 (unconfigured)
     // — the common case for a fresh boot config: a literal zero target
     // always means "come to a stop," independent of whether a stiction
@@ -166,4 +166,4 @@ float WheelVelocityPid::compute(float target, float measured, float dt,
     return output;
 }
 
-}  // namespace Motion
+}  // namespace Devices

@@ -38,10 +38,9 @@ e.g.:
         src/firm/app/robot_loop.cpp src/firm/app/comms.cpp src/firm/app/telemetry.cpp \\
         src/firm/app/deadman.cpp src/firm/app/drive.cpp src/firm/app/odometry.cpp \\
         src/firm/app/preamble.cpp src/sim/sim_clock.cpp \\
-        src/firm/devices/nezha_motor.cpp src/firm/devices/otos.cpp \\
+        src/firm/devices/velocity_pid.cpp src/firm/devices/nezha_motor.cpp src/firm/devices/otos.cpp \\
         src/firm/devices/color_sensor.cpp src/firm/devices/line_sensor.cpp \\
         src/firm/messages/wire.cpp src/firm/messages/wire_runtime.cpp src/motion/body_kinematics.cpp \\
-        src/motion/wheel_velocity_pid.cpp \\
     && /tmp/scripted_twist_demo
 """
 
@@ -89,12 +88,10 @@ _APP_SOURCES = [
 _MOTION_SOURCES = [
     _REPO_ROOT / "src" / "motion" / "stop_condition.cpp",
     _REPO_ROOT / "src" / "motion" / "velocity_shaper.cpp",
-    # 125-003: relocated from devices/velocity_pid.cpp -- App::Drive's
-    # interim Motion::WheelVelocityPid instances this sprint.
-    _REPO_ROOT / "src" / "motion" / "wheel_velocity_pid.cpp",
 ]
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
+    _SOURCE_DIR / "devices" / "velocity_pid.cpp",
     _SOURCE_DIR / "devices" / "nezha_motor.cpp",
     _SOURCE_DIR / "devices" / "otos.cpp",
     _SOURCE_DIR / "devices" / "color_sensor.cpp",

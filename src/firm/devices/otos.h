@@ -246,9 +246,9 @@ class RealOtos : public Otos {
 
   // --- Remaining primitive setters/getters — each a no-op (zero return
   // where applicable) if begin() never detected the chip, mirroring every
-  // primitive above. Unlike a motor's staged duty setter, these issue
-  // their write immediately (not staged) — this matches the OI/OR/OL/OA
-  // wire-command shape (wiring any of these to a live command is a
+  // primitive above. Unlike setVelocity()-style staged setters, these
+  // issue their write immediately (not staged) — this matches the OI/OR/
+  // OL/OA wire-command shape (wiring any of these to a live command is a
   // separate concern). ---
 
   void resetTracking();  // OR — reset Kalman tracking

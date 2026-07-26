@@ -11,11 +11,8 @@ odometry.cpp`` (116-003's ``pathLength()`` -- odometry.cpp also defines
 ``applyOtosSample()``, which pulls in ``src/firm/devices/otos.cpp`` even
 though this harness never calls it), ``src/sim/sim_plant.cpp`` + its
 ``src/tests/sim/plant/{wheel,otos}_plant.cpp`` physics dependencies,
-``src/motion/wheel_velocity_pid.cpp`` (125-003: relocated from
-``src/firm/devices/velocity_pid.cpp`` -- App::Drive's interim
-Motion::WheelVelocityPid instances this sprint), ``src/firm/devices/
-nezha_motor.cpp``, ``src/motion/body_kinematics.cpp``, and
-``src/sim/sim_clock.cpp``
+``src/firm/devices/velocity_pid.cpp``, ``src/firm/devices/nezha_motor.cpp``,
+``src/motion/body_kinematics.cpp``, and ``src/sim/sim_clock.cpp``
 -- with ``-DHOST_BUILD``, against the SAME headers every ARM build compiles.
 ``App::StateEstimator`` is NOT compiled into this binary (118 ticket 004:
 ``App::MoveQueue`` no longer holds a ``const StateEstimator&`` -- see
@@ -50,7 +47,7 @@ _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _SIM_CLOCK_SRC = _INFRA_SIM_DIR / "sim_clock.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
-_VELOCITY_PID_SRC = _REPO_ROOT / "src" / "motion" / "wheel_velocity_pid.cpp"
+_VELOCITY_PID_SRC = _SOURCE_DIR / "devices" / "velocity_pid.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "devices" / "nezha_motor.cpp"
 _OTOS_SRC = _SOURCE_DIR / "devices" / "otos.cpp"
 _BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"

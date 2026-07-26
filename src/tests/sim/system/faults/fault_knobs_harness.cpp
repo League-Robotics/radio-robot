@@ -197,23 +197,10 @@ void scenarioEncoderWedgeSetsFaultBitAndClearsOnRelease() {
 // 3. Encoder dropout (AC #3): SimPlant::setDropoutRate(1, ...) on the LEFT
 //    plant holds a moderate fraction (25%) of scripted encoder reads at the
 //    last value instead of a fresh one -- the exact stale-vs-fresh pattern
-//    devices_motor_harness.cpp used to prove NezhaMotor's own freshness gate
-//    survived in isolation, now driven through the full loop.
-//
-//    125-003 (sprint 125 Decision 2, "protection vs. control" -- see
-//    sprint.md): NezhaMotor's freshness gate is DELETED OUTRIGHT this
-//    ticket, not relocated -- velocity() is now a naive per-tick difference
-//    quotient (nezha_motor.cpp's own file header), pending ticket 004's
-//    App::WheelObserver, which restores a real predict-correct estimate
-//    that holds through a stale/held sample instead of computing a fresh
-//    zero-delta. Under THIS interim, a held/stale dropout read DOES
-//    genuinely starve velLeft toward 0 for that tick -- a disclosed,
-//    accepted regression (not a silent one), not the "never starved"
-//    guarantee this scenario asserted pre-125-003. What still must hold,
-//    and is asserted below: no false wedge latch, and velocity still
-//    reaches/holds a healthy value on the FRESH samples between dropouts
-//    (the observer's whole job, once ticket 004 lands, is to close this gap
-//    again -- this scenario's starvation assertion should be restored then).
+//    devices_motor_harness.cpp scenario 8 already proves NezhaMotor's own
+//    freshness gate survives in isolation, now driven through the full
+//    loop. Asserts telemetry stays sane throughout: no false wedge latch,
+//    velocity never starved to ~0 despite the held reads.
 // ===========================================================================
 
 void scenarioEncoderDropoutStaysSaneUnderModerateLoss() {
@@ -242,6 +229,7 @@ void scenarioEncoderDropoutStaysSaneUnderModerateLoss() {
   checkTrue(!frames.empty(), "telemetry decoded under sustained dropout");
 
   bool sawWedgeLatch = false;
+  bool sawStarvedVelocity = false;
   bool sawHealthyVelocity = false;
   for (const auto& f : frames) {
     if (f.telemetry.flags & App::kFlagFaultWedgeLatch) sawWedgeLatch = true;
@@ -251,14 +239,11 @@ void scenarioEncoderDropoutStaysSaneUnderModerateLoss() {
     // (issue §B3): velocity is a raw sint32 wire int (0.1mm/s scale) --
     // unpackVelocity() is the GENERATED conversion.
     const float velLeft = msg::EncoderReading::unpackVelocity(f.telemetry.enc_left.velocity);
+    if (std::fabs(velLeft) < 50.0f) sawStarvedVelocity = true;
     if (velLeft > 300.0f) sawHealthyVelocity = true;
   }
   checkTrue(!sawWedgeLatch, "no false kFlagFaultWedgeLatch across sustained moderate dropout");
-  // 125-003: the pre-125-003 "velLeft never starved to ~0" assertion is
-  // DELETED here, not weakened silently -- see this scenario's own updated
-  // header comment. It genuinely does starve toward 0 on a held/stale
-  // sample now that the freshness gate is gone; restoring this guarantee is
-  // ticket 004's own job (App::WheelObserver).
+  checkTrue(!sawStarvedVelocity, "velLeft never starved to ~0 by the held/stale reads");
   checkTrue(sawHealthyVelocity, "velLeft still reaches/holds a healthy value despite the dropout");
 }
 

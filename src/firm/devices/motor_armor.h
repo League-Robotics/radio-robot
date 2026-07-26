@@ -74,9 +74,14 @@ class MotorArmor : public Motor {
   // --- Motor: command/lifecycle forwarding ---
   void begin() override { inner_.begin(); }
   void requestSample() override { inner_.requestSample(); }
+  void setVelocity(float velocity) override { inner_.setVelocity(velocity); }
   void setDuty(float duty) override { inner_.setDuty(duty); }
   void setNeutral(Neutral mode) override { inner_.setNeutral(mode); }
-  void applyTravelCalib(float travelCalib) override { inner_.applyTravelCalib(travelCalib); }
+  void setPidEnabled(bool on) override { inner_.setPidEnabled(on); }
+  void applyGains(const Gains& gains, Opt<float> travelCalib = {}) override {
+    inner_.applyGains(gains, travelCalib);
+  }
+  const Gains& gains() const override { return inner_.gains(); }
 
   void tick(uint64_t nowUs) override {
     processResetIfPending();
@@ -88,6 +93,7 @@ class MotorArmor : public Motor {
   // --- Motor: getters ---
   float position() const override { return inner_.position(); }
   float velocity() const override { return inner_.velocity(); }
+  float velocityTarget() const override { return inner_.velocityTarget(); }
   float appliedDuty() const override { return inner_.appliedDuty(); }
   bool connected() const override { return inner_.connected(); }
   uint64_t sampleTime() const override { return inner_.sampleTime(); }  // [us] pure passthrough -- no armor-side state of its own

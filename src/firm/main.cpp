@@ -40,19 +40,17 @@ namespace {
 // because main.cpp is the one place both types are reachable -- the
 // devices/ isolation invariant (DESIGN.md) forbids devices/ from including
 // messages/ or config/.
-//
-// 125-003: vel_gains/vel_filt_alpha/min_duty are NO LONGER copied here --
-// Devices::MotorConfig dropped those fields (the velocity PID they fed
-// relocated to Motion::WheelVelocityPid, App::Drive's own interim instances
-// -- see toMotionGains() below and drive.h's own header). vel_filt_alpha
-// has no live consumer at all this sprint (the EMA estimator it fed was
-// deleted outright, pending ticket 004's App::WheelObserver) -- the wire
-// field itself is untouched (no protocol change), simply unread by
-// firmware for now.
 Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
   Devices::MotorConfig cfg;
   cfg.wheelTravelCalib = src.travel_calib;
   cfg.fwdSign = src.fwd_sign;
+  cfg.velGains.kp = src.vel_gains.kp;
+  cfg.velGains.ki = src.vel_gains.ki;
+  cfg.velGains.kff = src.vel_gains.kff;
+  cfg.velGains.iMax = src.vel_gains.i_max;
+  cfg.velGains.kaw = src.vel_gains.kaw;
+  cfg.velFiltAlpha = src.vel_filt_alpha;
+  cfg.velDeadband = src.min_duty;
   cfg.slewRate = src.slew_rate;
   cfg.port = src.port;
   // Devices::MotorConfig's reversalDwell/outputDeadband are plain required
@@ -65,22 +63,6 @@ Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
   cfg.outputDeadband = src.output_deadband.val;
   cfg.polled = src.polled;
   return cfg;
-}
-
-// toMotionGains -- 125-003: the vel_gains half of msg::MotorConfig now feeds
-// App::Drive's own interim Motion::WheelVelocityPid gains (drive.h's own
-// header) instead of Devices::MotorConfig -- same wire fields, different
-// application-side destination (sprint.md Decision 7's CONFIG-routing
-// split, wired here at boot ahead of ticket 008's live-CONFIG-patch half,
-// which RobotLoop::applyMotorConfigPatch() already does -- robot_loop.cpp).
-Motion::Gains toMotionGains(const msg::MotorConfig& src) {
-  Motion::Gains gains;
-  gains.kp = src.vel_gains.kp;
-  gains.ki = src.vel_gains.ki;
-  gains.kff = src.vel_gains.kff;
-  gains.iMax = src.vel_gains.i_max;
-  gains.kaw = src.vel_gains.kaw;
-  return gains;
 }
 
 
@@ -179,11 +161,6 @@ int main() {
   // now deleted) -- comms already owns both transports internally.
   static App::Telemetry tlm(comms);
   static App::Drive drive(motorL, motorR, drivetrainConfig.trackwidth);
-  // 125-003: seeds Drive's own interim Motion::WheelVelocityPid gains from
-  // the SAME boot-config vel_gains this leaf used to apply directly to
-  // Devices::MotorConfig -- see toMotionGains()'s own doc comment above.
-  drive.applyGainsLeft(toMotionGains(motorConfigs[drivetrainConfig.left_port - 1]));
-  drive.applyGainsRight(toMotionGains(motorConfigs[drivetrainConfig.right_port - 1]));
   static Motion::Odometry odom(drivetrainConfig.trackwidth, motorL.position(), motorR.position());
 
 

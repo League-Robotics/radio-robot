@@ -3,19 +3,13 @@
 Compiles ``devices_motor_harness.cpp`` together with ``TestSim::SimPlant``
 (``src/sim/sim_plant.cpp`` — ticket 108-002's real Devices::I2CBus
 implementation) plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
-physics dependencies, and ``devices/nezha_motor.cpp`` against the SAME
-``src/firm/devices/`` headers every ARM build compiles, with
-``-DHOST_BUILD`` so the HOST_BUILD fork is what gets exercised — no
-MicroBitI2C, no CODAL, no wall clock, no real sleeps. Mirrors
-``test_plant.py``'s/``test_devices_color_sensor_apds_probe.py``'s shape
-exactly: compile with the system C++ compiler, run the resulting binary,
-assert it exits 0.
-
-125-003: ``devices/velocity_pid.cpp`` is no longer compiled into this
-harness — ``Devices::NezhaMotor``'s embedded velocity PID was deleted
-outright (relocated to ``Motion::WheelVelocityPid``,
-``src/motion/wheel_velocity_pid.cpp`` — see ``app_drive_harness.cpp``'s own
-header for the harness that now exercises it).
+physics dependencies, ``devices/velocity_pid.cpp``, and
+``devices/nezha_motor.cpp`` against the SAME ``src/firm/devices/`` headers
+every ARM build compiles, with ``-DHOST_BUILD`` so the HOST_BUILD fork is
+what gets exercised — no MicroBitI2C, no CODAL, no wall clock, no real
+sleeps. Mirrors ``test_plant.py``'s/``test_devices_color_sensor_apds_probe.
+py``'s shape exactly: compile with the system C++ compiler, run the
+resulting binary, assert it exits 0.
 
 Migrated by sprint 108 ticket 009 off the deleted ``src/firm/devices/
 i2c_bus_host.cpp`` scripted-FIFO Devices::I2CBus fake — see
@@ -46,6 +40,7 @@ _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 _BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
+_VELOCITY_PID_SRC = _DEVICES_DIR / "velocity_pid.cpp"
 _NEZHA_MOTOR_SRC = _DEVICES_DIR / "nezha_motor.cpp"
 
 # messages/common.h documents its own target as "CODAL C++11" — build the
@@ -74,13 +69,14 @@ def _all_sources():
         _WHEEL_PLANT_SRC,
         _OTOS_PLANT_SRC,
         _BODY_KINEMATICS_SRC,
+        _VELOCITY_PID_SRC,
         _NEZHA_MOTOR_SRC,
     ]
 
 
 def test_devices_motor_harness_compiles_and_passes(tmp_path):
-    """Compile the Devices motor leaf + armor sources, SimPlant, and the
-    harness; assert every scenario passes."""
+    """Compile the Devices motor leaf + armor + PID sources, SimPlant, and
+    the harness; assert every scenario passes."""
     sources = _all_sources()
     for src in sources:
         assert src.is_file(), f"required source missing: {src}"

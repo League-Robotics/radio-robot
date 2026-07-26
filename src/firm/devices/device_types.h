@@ -67,10 +67,9 @@ struct PoseReading {
 
 // Neutral — coast vs brake. Devices-local counterpart to msg::Neutral
 // (messages/common.h), which the isolation invariant forbids including
-// directly. Distinct from commanding a motor's duty target to exact zero
-// (a genuine, wanted "stop" command that still passes through the write
-// path); Neutral means "stop driving the output entirely" regardless of
-// any staged target.
+// directly. Distinct from commanding a motor's velocity target to zero
+// (NezhaMotor::setVelocity(0) means "PID actively chases zero"; Neutral
+// means "stop driving the output entirely").
 enum class Neutral : uint8_t {
   Coast,
   Brake,

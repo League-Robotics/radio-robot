@@ -54,14 +54,10 @@ set(MOTION_DIR "${REPO_ROOT}/src/motion")
 #                                 commanded-speed shaping function MoveQueue
 #                                 calls every Continue tick. Also under
 #                                 MOTION_DIR now (122-001).
-#   devices/nezha_motor.cpp, devices/otos.cpp, devices/color_sensor.cpp,
-#   devices/line_sensor.cpp
+#   devices/velocity_pid.cpp, devices/nezha_motor.cpp, devices/otos.cpp,
+#   devices/color_sensor.cpp, devices/line_sensor.cpp
 #                              -- the device leaves SimPlant answers wire
 #                                 transactions for
-#   src/motion/wheel_velocity_pid.cpp -- Motion::WheelVelocityPid (125-003:
-#                                 relocated from devices/velocity_pid.cpp --
-#                                 App::Drive's interim closed loop this
-#                                 sprint). Under MOTION_DIR now.
 #   messages/wire.cpp, messages/wire_runtime.cpp
 #                              -- the generated + hand-written codec
 #                                 primitives
@@ -128,12 +124,9 @@ set(MOTION_SOURCES
     "${MOTION_DIR}/move_queue.cpp"
     "${MOTION_DIR}/odometry.cpp"
     "${MOTION_DIR}/state_estimator.cpp"
-    # 125-003: relocated from devices/velocity_pid.cpp
-    # (Devices::MotorVelocityPid -> Motion::WheelVelocityPid) -- App::Drive
-    # (APP_SOURCES, above) holds the interim instances this sprint.
-    "${MOTION_DIR}/wheel_velocity_pid.cpp"
 )
 set(DEVICE_SOURCES
+    "${SOURCE_DIR}/devices/velocity_pid.cpp"
     "${SOURCE_DIR}/devices/nezha_motor.cpp"
     "${SOURCE_DIR}/devices/otos.cpp"
     "${SOURCE_DIR}/devices/color_sensor.cpp"

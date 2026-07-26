@@ -890,9 +890,7 @@ void scenarioConfigMidMoveDoesNotChangeCompletionOutcome() {
   constexpr uint32_t kIdInterfered = 51;
   constexpr uint32_t kCorrInterfered = 151;
   constexpr uint32_t kConfigCorrId = 152;
-  // 125-003: kp routes to App::Drive's own interim gains now, not
-  // Devices::Motor::gains() (deleted -- sprint.md Decision 2/7).
-  checkFloatEq(interfered.drive().gainsLeft().kp, 0.002f, 0.0001f,
+  checkFloatEq(interfered.motorLeft().gains().kp, 0.002f, 0.0001f,
                "interfered: left motor starts at bench_test_config.h's own shipped kp");
 
   interfered.injectMove(/*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime,
@@ -917,7 +915,7 @@ void scenarioConfigMidMoveDoesNotChangeCompletionOutcome() {
   }
 
   checkTrue(configAcked, "interfered: the CONFIG patch was acked OK, mid-flight");
-  checkFloatEq(interfered.drive().gainsLeft().kp, 0.02f, 0.0001f,
+  checkFloatEq(interfered.motorLeft().gains().kp, 0.02f, 0.0001f,
                "interfered: the CONFIG patch's own kp landed live, unaffected by the concurrently-active Move");
   checkTrue(interferedCompleted, "interfered: the Move completes within a bounded number of cycles");
   checkUintEq(interferedErr, 0, "interfered: the completion ack's err is OK");

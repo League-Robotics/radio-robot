@@ -66,14 +66,6 @@ add_library(motion STATIC
     "${MOTION_DIR}/move_queue.cpp"
     "${MOTION_DIR}/odometry.cpp"
     "${MOTION_DIR}/state_estimator.cpp"
-    # 125-003: relocated from src/firm/devices/velocity_pid.{h,cpp}
-    # (Devices::MotorVelocityPid -> Motion::WheelVelocityPid) -- the
-    # closed-loop velocity control law, verbatim except its Gains
-    # parameter type (motion-local now, not Devices::Gains -- isolation
-    # invariant). App::Drive holds the interim instances this sprint;
-    # ticket 005 relocates ownership to Motion::MoveQueue per sprint.md
-    # Decision 1.
-    "${MOTION_DIR}/wheel_velocity_pid.cpp"
 )
 
 # "${REPO_ROOT}/src" resolves this tree's own qualified `#include

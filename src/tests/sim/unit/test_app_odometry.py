@@ -5,16 +5,12 @@ Compiles ``app_odometry_harness.cpp`` together with the HOST_BUILD
 implementations it needs (``src/firm/app/odometry.cpp``,
 ``src/sim/sim_plant.cpp`` -- ticket 108-002's real Devices::I2CBus
 implementation -- plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
-physics dependencies, ``src/firm/devices/nezha_motor.cpp``,
-``src/firm/devices/otos.cpp``, ``src/motion/body_kinematics.cpp``) with
-``-DHOST_BUILD``, against the SAME headers every ARM build compiles.
-Mirrors ``test_app_drive.py``'s exact shape: compile with the system C++
-compiler, run the resulting binary, assert it exits 0.
-
-125-003: ``devices/velocity_pid.cpp`` is no longer a NezhaMotor link
-dependency (its embedded PID was deleted outright, relocated to
-``Motion::WheelVelocityPid`` -- this harness doesn't touch App::Drive, so
-it needs neither).
+physics dependencies, ``src/firm/devices/velocity_pid.cpp``,
+``src/firm/devices/nezha_motor.cpp``, ``src/firm/devices/otos.cpp``,
+``src/motion/body_kinematics.cpp``) with ``-DHOST_BUILD``, against the
+SAME headers every ARM build compiles. Mirrors ``test_app_drive.py``'s exact
+shape: compile with the system C++ compiler, run the resulting binary,
+assert it exits 0.
 
 Migrated by sprint 108 ticket 009 off the deleted ``src/firm/devices/
 i2c_bus_host.cpp`` scripted-FIFO Devices::I2CBus fake — see
@@ -43,6 +39,7 @@ _ODOMETRY_SRC = _REPO_ROOT / "src" / "motion" / "odometry.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
+_VELOCITY_PID_SRC = _SOURCE_DIR / "devices" / "velocity_pid.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "devices" / "nezha_motor.cpp"
 _OTOS_SRC = _SOURCE_DIR / "devices" / "otos.cpp"
 _BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
@@ -72,6 +69,7 @@ def test_app_odometry_harness_compiles_and_passes(tmp_path):
         _SIM_PLANT_SRC,
         _WHEEL_PLANT_SRC,
         _OTOS_PLANT_SRC,
+        _VELOCITY_PID_SRC,
         _NEZHA_MOTOR_SRC,
         _OTOS_SRC,
         _BODY_KINEMATICS_SRC,

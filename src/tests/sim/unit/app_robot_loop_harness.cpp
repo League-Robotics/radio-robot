@@ -186,6 +186,7 @@ Devices::MotorConfig baseMotorConfig(uint32_t port) {
   cfg.port = port;
   cfg.fwdSign = 1;
   cfg.wheelTravelCalib = 1.0f;
+  cfg.velFiltAlpha = 1.0f;  // no smoothing -- velocity() reflects the raw difference-quotient exactly
   return cfg;
 }
 
@@ -248,7 +249,7 @@ void scriptLineBeginSuccess(TestSim::ScriptedI2CHook& bus) {
 // explained by RobotLoop::cycle()'s own real ordering. 119 ticket 005
 // (fixes 118-001's straight-leg-crab actuation skew -- see
 // clasi/issues/straight-leg-crab-118-001-actuation-and-telemetry-pairing-skew.md):
-// drive_.tick() (which calls both leaves' setDuty(), transitioning
+// drive_.tick() (which calls both leaves' setVelocity(), transitioning
 // mode_ from its pre-Drive-wiring default to Active) now runs at the VERY
 // TOP of cycle(), before EITHER motor's own select/collect (restores the
 // 112-005 hoist's one genuinely good half -- same-generation actuation
@@ -262,7 +263,7 @@ void scriptLineBeginSuccess(TestSim::ScriptedI2CHook& bus) {
 // sat between motorL_.tick() and motorR_.tick(), activating R immediately
 // but deferring L's own first write to cycle 1 -- the asymmetry that
 // produced the straight-leg-crab actuation skew). Both gains are zero
-// (App::Drive's own constructed default, 125-003), so duty is
+// (baseMotorConfig() leaves velGains defaulted), so duty is
 // deterministically 0 forever after each leaf's own first write --
 // write-on-change then skips every subsequent cycle for that leaf,
 // matching this scenario's own 4/2/2 write-count schedule below (both
@@ -626,11 +627,10 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
   robotLoop.boot();
   checkTrue(preamble.done(), "boot() completes against the FakeTransport-based fixture too");
 
-  // Confirmed pre-patch baseline: App::Drive's own interim gains (125-003:
-  // relocated from Devices::MotorConfig::velGains -- see drive.h's own
-  // header) default to Motion::Gains{}'s all-zero default.
-  checkFloatEq(drive.gainsLeft().kp, 0.0f, "left motor starts at the constructed (zero) kp");
-  checkFloatEq(drive.gainsRight().kp, 0.0f, "right motor starts at the constructed (zero) kp");
+  // Confirmed pre-patch baseline: baseMotorConfig() leaves velGains at
+  // Devices::Gains{}'s all-zero default.
+  checkFloatEq(motorL.gains().kp, 0.0f, "left motor starts at the constructed (zero) kp");
+  checkFloatEq(motorR.gains().kp, 0.0f, "right motor starts at the constructed (zero) kp");
 
   const uint32_t kMotorCorrId = 87654;
   const uint32_t kDrivetrainCorrId = 87655;
@@ -725,12 +725,12 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
   // --- "applies": both bound motors' PRESENT fields changed; ABSENT fields
   // (kff/iMax/kaw) stayed at their pre-patch value -- proves the merge, not
   // a blanket overwrite. ---
-  checkFloatEq(drive.gainsLeft().kp, 0.02f, "left motor kp reflects the applied patch");
-  checkFloatEq(drive.gainsLeft().ki, 0.01f, "left motor ki reflects the applied patch");
-  checkFloatEq(drive.gainsLeft().kff, 0.0f, "left motor kff (absent from the patch) stays at its prior value");
-  checkFloatEq(drive.gainsRight().kp, 0.02f,
+  checkFloatEq(motorL.gains().kp, 0.02f, "left motor kp reflects the applied patch");
+  checkFloatEq(motorL.gains().ki, 0.01f, "left motor ki reflects the applied patch");
+  checkFloatEq(motorL.gains().kff, 0.0f, "left motor kff (absent from the patch) stays at its prior value");
+  checkFloatEq(motorR.gains().kp, 0.02f,
                "right motor kp ALSO reflects the applied patch -- kp/ki/kff/iMax/kaw apply to BOTH bound motors");
-  checkFloatEq(drive.gainsRight().ki, 0.01f, "right motor ki also reflects the applied patch");
+  checkFloatEq(motorR.gains().ki, 0.01f, "right motor ki also reflects the applied patch");
 
   // --- ack content. 124-008 (issue §B4): the single "freshest ack" scalar
   // slot is deleted -- both the motor's success (err==0) ack and the
@@ -865,8 +865,8 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run: motor (persist-policy cycles)");
   checkUintEq(bus.errCount(Devices::kOtosDeviceAddr), 0, "no script under-run: otos (persist-policy cycles)");
 
-  checkFloatEq(drive.gainsLeft().kp, 0.02f, "left motor kp reflects the (twice-dispatched) patch");
-  checkFloatEq(drive.gainsLeft().ki, 0.01f, "left motor ki reflects the (twice-dispatched) patch");
+  checkFloatEq(motorL.gains().kp, 0.02f, "left motor kp reflects the (twice-dispatched) patch");
+  checkFloatEq(motorL.gains().ki, 0.01f, "left motor ki reflects the (twice-dispatched) patch");
   checkUintEq(static_cast<uint32_t>(mockStore.saveCount), 1,
               "persistTuningIfChanged() saves ONCE for the first patch, skips the byte-identical second one");
   checkUintEq(mockStore.lastVersion, Config::kConfigSchemaVersion,
@@ -892,11 +892,6 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
 // including moveQueue_ and tlm_ -- stays directly reachable by the
 // scenario, the same "own every collaborator, no wrapper" convention the
 // three ScriptedI2CHook scenarios above already use.
-//
-// 125-003: "velGains at Devices::Gains{}'s all-zero default" above now
-// means App::Drive's own interim gains (drive.h's own header) -- the SAME
-// property (commanded duty always 0 given a zero target AND zero gains)
-// holds unchanged, just relocated off Devices::MotorConfig.
 // ===========================================================================
 
 // driveLivePlantBootToDone -- mirrors sim_harness.h's own
@@ -1362,20 +1357,18 @@ void scenarioMoveEndDrainsWithNoFurtherHostTraffic() {
 
   // MoveQueue::tick() (this cycle's OWN trailing pace block, the 4th
   // runAndWait) calls Drive::stop(), which only STAGES a zero target on
-  // Drive itself -- Drive::tick() is the only method that ever forwards a
-  // duty to Devices::Motor::setDuty() (drive.h's own doc comment), and it
-  // runs at the TOP of cycle() (119 ticket 005 restores the 112-005 hoist's
-  // one genuinely good half here -- see robot_loop.cpp's own comment),
+  // Drive itself -- Drive::tick() is the only method that ever calls
+  // Devices::Motor::setVelocity() (drive.h's own doc comment), and it runs
+  // at the TOP of cycle() (119 ticket 005 restores the 112-005 hoist's one
+  // genuinely good half here -- see robot_loop.cpp's own comment),
   // BEFORE this same cycle's dispatch block, let alone the pace block that
   // stages the stop. So the actual zero duty write reaches the motor
   // leaves one cycle LATER -- exactly the same one-cycle lag the deleted
   // deadman-driven stop had, at this same schedule position; not a
-  // regression here. One more cycle before checking the staged target
-  // (125-003: Drive::vLeft()/vRight() -- Devices::Motor::velocityTarget()
-  // is deleted along with the motor-resident PID it fed).
+  // regression here. One more cycle before checking velocityTarget().
   fx.step(1);
-  checkFloatEq(fx.drive.vLeft(), 0.0f, "left target velocity is zero once the Move ends");
-  checkFloatEq(fx.drive.vRight(), 0.0f, "right target velocity is zero once the Move ends");
+  checkFloatEq(fx.motorL.velocityTarget(), 0.0f, "left target velocity is zero once the Move ends");
+  checkFloatEq(fx.motorR.velocityTarget(), 0.0f, "right target velocity is zero once the Move ends");
 
   // SUC-053's own rigor bar: zero FURTHER host traffic after the Move ends
   // -- no STOP, no new MOVE -- yet the motors stay at zero, cycle after
@@ -1383,9 +1376,9 @@ void scenarioMoveEndDrainsWithNoFurtherHostTraffic() {
   for (int i = 0; i < 20; ++i) {
     fx.step(1);
     checkTrue(!fx.moveQueue.active(), "MoveQueue stays inactive with no further host traffic");
-    checkFloatEq(fx.drive.vLeft(), 0.0f,
+    checkFloatEq(fx.motorL.velocityTarget(), 0.0f,
                  "left target velocity stays zero, no host traffic needed");
-    checkFloatEq(fx.drive.vRight(), 0.0f,
+    checkFloatEq(fx.motorR.velocityTarget(), 0.0f,
                  "right target velocity stays zero, no host traffic needed");
   }
 }
@@ -1403,8 +1396,8 @@ void scenarioMoveTimeoutSetsFaultFlagOnEndingCycle() {
   LiveFixture fx;
   fx.robotLoop.markConfigured();
 
-  // App::Drive's own interim gains (125-003) default to Motion::Gains{}'s
-  // all-zero default -- commanded duty is 0 regardless of target velocity, so the
+  // baseMotorConfig() leaves velGains at Devices::Gains{}'s all-zero
+  // default -- commanded duty is 0 regardless of target velocity, so the
   // plant's wheels never actually move and odom_.pathLength() stays 0
   // forever: a DISTANCE stop condition can never be satisfied on its own,
   // only the timeout backstop can end this Move.
@@ -1597,7 +1590,7 @@ void scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome() {
           );
   interfered.step(1);
   checkTrue(interfered.moveQueue.active(), "interfered: the Move activates immediately");
-  checkFloatEq(interfered.drive.gainsLeft().kp, 0.0f,
+  checkFloatEq(interfered.motorL.gains().kp, 0.0f,
                "interfered: left motor starts at the constructed (zero) kp");
 
   // Mid-flight (well before the stop threshold): a CONFIG{motor} patch --
@@ -1606,7 +1599,7 @@ void scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome() {
   // switch), so this must not perturb the Move's own timing at all.
   interfered.serialFake.enqueueInboundBinary(armorMotorConfigPatchCommand(/*kp=*/0.02f, /*corrId=*/954));
   interfered.step(1);
-  checkFloatEq(interfered.drive.gainsLeft().kp, 0.02f,
+  checkFloatEq(interfered.motorL.gains().kp, 0.02f,
                "interfered: the CONFIG patch's own kp landed live, unaffected by the concurrently-"
                "active Move");
 
@@ -1630,10 +1623,9 @@ void scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome() {
 // therefore odom_.pathLength()'s cycle-by-cycle growth -- are EXACTLY
 // known, letting this scenario place a DISTANCE stop threshold exactly on
 // the boundary a specific cycle's own odom_.integrate() call crosses.
-// Velocity gains stay at App::Drive's own constructed all-zero default
-// (125-003 -- relocated off Devices::MotorConfig; the same "duty stays
-// exactly 0 regardless of target" posture every other ScriptedI2CHook
-// scenario in this file relies on -- see
+// Velocity gains stay at baseMotorConfig()'s all-zero default (the same
+// "duty stays exactly 0 regardless of target" posture every other
+// ScriptedI2CHook scenario in this file relies on -- see
 // scriptMotorCycle()'s own header comment), so the Move's own commanded
 // v_x has zero effect on the scripted encoder schedule below; only the
 // DISTANCE stop condition's own pathLength() comparison is under test.
@@ -1717,8 +1709,8 @@ void scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles() {
   //   cycle 2: 10 -> 20  (pathLength 20)
   //   cycle 3: 20 -> 30  (pathLength 30 -- the 30mm threshold is crossed
   //                       EXACTLY by cycle 3's own odom_.integrate() call)
-  // Duty stays 0 every cycle regardless of the Move's own v_x (Drive's own
-  // gains all-zero, same posture as every other ScriptedI2CHook scenario in this
+  // Duty stays 0 every cycle regardless of the Move's own v_x (velGains
+  // all-zero, same posture as every other ScriptedI2CHook scenario in this
   // file) -- extraDutyWrites follows the SAME global-cycle-indexed
   // first-write schedule scriptMotorCycle()'s own header comment derives
   // (119 ticket 005: BOTH L and R at cycle 0), independent of the Move
@@ -1920,9 +1912,7 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
 
   // Real, nonzero gains -- see this scenario's own header comment for why
   // baseMotorConfig() (this file's own zero-gain default, used by every
-  // scenario above) will not do here. 125-003: benchTestMotorConfig() no
-  // longer carries gains at all (relocated to benchTestGains(), applied to
-  // App::Drive's own interim closed loop below, not Devices::MotorConfig).
+  // scenario above) will not do here.
   Devices::NezhaMotor motorL(plant, TestSupport::benchTestMotorConfig(1));
   Devices::NezhaMotor motorR(plant, TestSupport::benchTestMotorConfig(2));
   Devices::RealOtos otos(plant, Devices::OtosConfig{});
@@ -1934,8 +1924,6 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
   App::Telemetry tlm(comms);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
-  drive.applyGainsLeft(TestSupport::benchTestGains());
-  drive.applyGainsRight(TestSupport::benchTestGains());
   Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // Default weights -- sourcing from Config::defaultEstimatorConfig() is
   // main.cpp's/sim_harness.h's own job (AC #1), not this unit test's
@@ -2328,12 +2316,10 @@ void scenarioPositionRebaselineTriggersAtMarginAndIncrementsEpoch() {
 // extended session") -- proving the policy fires correctly when actually
 // REACHED by accumulation, not merely when handed a pre-cooked value.
 //
-// A pure feedforward gain (kff only, kp/ki left at App::Drive's own
-// zero default) is configured via CONFIG first: Motion::WheelVelocityPid's
-// own compute() (125-003: relocated from Devices::MotorVelocityPid,
-// invoked from App::Drive's interim closed loop, drive.h) computes
-// `ff = gains.kff * spAbs` with NO measured-velocity term, so duty tracks
-// the commanded 500mm/s target directly regardless of
+// A pure feedforward gain (kff only, kp/ki left at baseMotorConfig()'s
+// zero default) is configured via CONFIG first: velocity_pid.cpp's own
+// compute() computes `ff = gains.kff * spAbs` with NO measured-velocity
+// term, so duty tracks the commanded 500mm/s target directly regardless of
 // the plant's own response -- WheelPlant's dutyVelMax=500mm/s
 // (wheel_plant.h) then puts this wheel's cruise velocity at ~500mm/s once
 // its own tau=0.13s duty->velocity lag settles (project memory:
@@ -2367,7 +2353,7 @@ void scenarioPositionRebaselineFiresOverExtendedLiveRunPastCumulativeTravel() {
   const float kKff = 0.002f;
   fx.serialFake.enqueueInboundBinary(armorMotorKffPatchCommand(kKff, kKffCorrId));
   checkTrue(stepUntilAckSeen(fx, kKffCorrId, 0, 10), "CONFIG{motor kff} acks ERR_NONE (0)");
-  checkFloatEq(fx.drive.gainsLeft().kff, kKff, "left motor kff reflects the applied patch");
+  checkFloatEq(fx.motorL.gains().kff, kKff, "left motor kff reflects the applied patch");
 
   // One long-running MOVE -- v_x=500mm/s straight (omega=0, both wheels
   // equally loaded), a TIME stop and timeout both far beyond anything this
