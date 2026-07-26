@@ -44,7 +44,11 @@ void checkNear(float got, float want, float tol, const char* what) {
 class StubMotor : public Devices::Motor {
  public:
   void setPosition(float position) { position_ = position; }  // [mm]
-  void setVelocity(float velocity) override { velocity_ = velocity; }  // [mm/s]
+  // Test-only convenience setter (125-003: NOT an override -- Motor no
+  // longer declares setVelocity() at all, since the velocity PID it fed
+  // moved off the motor entirely). velocity() below just reports whatever
+  // this test last set.
+  void setVelocity(float velocity) { velocity_ = velocity; }  // [mm/s]
 
   float position() const override { return position_; }   // [mm]
   float velocity() const override { return velocity_; }   // [mm/s]
@@ -54,12 +58,9 @@ class StubMotor : public Devices::Motor {
   void requestSample() override {}
   void setDuty(float) override {}
   void setNeutral(Devices::Neutral) override {}
-  void setPidEnabled(bool) override {}
-  void applyGains(const Devices::Gains&, Devices::Opt<float> = {}) override {}
-  const Devices::Gains& gains() const override { return gains_; }
+  void applyTravelCalib(float) override {}
   bool reconfigure(const Devices::MotorConfig&) override { return true; }
   void tick(uint64_t) override {}
-  float velocityTarget() const override { return velocity_; }  // [mm/s]
   float appliedDuty() const override { return 0.0f; }
   bool connected() const override { return true; }
   uint64_t sampleTime() const override { return 0; }  // [us] unused by FakeOtos/Odometry — always the default
@@ -69,7 +70,6 @@ class StubMotor : public Devices::Motor {
  private:
   float position_ = 0.0f;   // [mm]
   float velocity_ = 0.0f;   // [mm/s]
-  Devices::Gains gains_{};
 };
 
 constexpr float kTrackWidth = 128.0f;  // [mm]

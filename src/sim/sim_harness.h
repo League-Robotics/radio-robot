@@ -207,11 +207,15 @@ class SimHarness {
     maybeMarkConfigured();
   }
 
-  // Test-only accessors exposing the STAGED PID-target velocity, NOT the
-  // measured/decoded telemetry velocity -- used to measure the
-  // post-completion "shelf" a stale nonzero COMMAND can leave.
-  float driveTargetVelLeft() const { return armorL_.velocityTarget(); }    // [mm/s] signed
-  float driveTargetVelRight() const { return armorR_.velocityTarget(); }  // [mm/s] signed
+  // Test-only accessors exposing the STAGED target velocity Drive last
+  // received via setDuty() (125-003: NOT a live Devices::Motor::
+  // velocityTarget() read -- that accessor is gone, since NezhaMotor no
+  // longer tracks a velocity target at all; Drive's own vLeft_/vRight_ is
+  // now the one place "what was commanded" lives), NOT the measured/decoded
+  // telemetry velocity -- used to measure the post-completion "shelf" a
+  // stale nonzero COMMAND can leave.
+  float driveTargetVelLeft() const { return drive_.vLeft(); }    // [mm/s] signed
+  float driveTargetVelRight() const { return drive_.vRight(); }  // [mm/s] signed
 
   // Decodes and returns every outbound line captured on the serial
   // FakeTransport since the last call (serial and radio receive an
@@ -271,6 +275,13 @@ class SimHarness {
 
   Devices::NezhaMotor& motorLeft() { return motorL_; }
   Devices::NezhaMotor& motorRight() { return motorR_; }
+
+  // drive -- 125-003: App::Drive now holds the interim closed-loop gains
+  // (drive.h's own header) a test needs to push directly
+  // (drive().applyGainsLeft()/applyGainsRight()) or read back
+  // (drive().gainsLeft()/gainsRight()) -- the CONFIG-patch routing split
+  // this sprint's own RobotLoop::applyMotorConfigPatch() implements.
+  App::Drive& drive() { return drive_; }
 
   // Exposes the owned Motion::StateEstimator; a test needing non-default
   // fusion weights calls stateEstimator().setWeights(...) directly.

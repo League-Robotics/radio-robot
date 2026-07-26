@@ -42,6 +42,7 @@
 #include <cstdint>
 
 #include "devices/device_config.h"
+#include "motion/wheel_velocity_pid.h"
 
 namespace TestSim {
 class SimHarness;
@@ -54,21 +55,36 @@ namespace TestSupport {
 // function's own former doc comment, preserved verbatim below): see
 // sim_api.cpp's own (now also relocated/superseded) makeMotorConfig() for the
 // byte-for-byte derivation of every field set here -- unchanged tuning, just
-// relocated. A large proportional gain (kp) plus a wide slew rate lets an
-// injected twist saturate the PID quickly and reach full duty in one write;
-// the harness's own SimPlant then integrates whatever duty actually lands on
-// the wire, live, so there is no predictor to keep in sync with this tuning
-// the way SimApi's DutyPredictor had to be. port: 1 = left, 2 = right (same
-// convention as every other port-keyed call in this codebase).
+// relocated. A wide slew rate lets an injected twist reach full duty
+// quickly; the harness's own SimPlant then integrates whatever duty
+// actually lands on the wire, live, so there is no predictor to keep in
+// sync with this tuning the way SimApi's DutyPredictor had to be. port: 1 =
+// left, 2 = right (same convention as every other port-keyed call in this
+// codebase).
+//
+// 125-003: velFiltAlpha/velGains are DELETED from Devices::MotorConfig (the
+// velocity PID they fed relocated off the motor entirely) -- see
+// benchTestGains() below for the SAME kp/kff tuning, now pushed onto
+// App::Drive's own interim Motion::WheelVelocityPid instead.
 Devices::MotorConfig benchTestMotorConfig(uint32_t port);
+
+// benchTestGains -- 125-003: the kp/kff half of the pre-125-003
+// benchTestMotorConfig()'s own velGains, relocated here as a
+// Motion::Gains (App::Drive's interim closed loop takes gains in this
+// shape, not Devices::Gains -- see drive.h's own header). SAME values,
+// SAME rationale (see bench_test_config.cpp's own comment at this
+// function's body) -- port-independent (both wheels share identical
+// tuning in every pre-125-003 caller of this file).
+Motion::Gains benchTestGains();
 
 // configureSimForBenchTest -- convenience wrapper: pushes
 // benchTestMotorConfig(1)/benchTestMotorConfig(2) via sim.configureMotor()
-// for both ports (115-006: the benchTestPlannerConfig()/configurePlanner()
-// half is gone -- see this file's own header). This is the ONE call every
-// pre-existing (and any new) src/tests/sim/** harness adds right after
-// constructing a bare TestSim::SimHarness and before its first
-// injectTwist()/step()/boot() call, to restore byte-for-byte the same
+// for both ports, PLUS (125-003) benchTestGains() onto sim.drive()'s own
+// interim gains for both sides (115-006: the benchTestPlannerConfig()/
+// configurePlanner() half is gone -- see this file's own header). This is
+// the ONE call every pre-existing (and any new) src/tests/sim/** harness
+// adds right after constructing a bare TestSim::SimHarness and before its
+// first injectTwist()/step()/boot() call, to restore byte-for-byte the same
 // "always already configured" behavior SimHarness's own constructor used to
 // provide unconditionally -- now explicit, test-tree-only, and opt-in.
 void configureSimForBenchTest(TestSim::SimHarness& sim);

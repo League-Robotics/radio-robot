@@ -5,7 +5,9 @@ Compiles ``app_drive_harness.cpp`` together with the HOST_BUILD
 implementations it needs (``src/firm/app/drive.cpp``,
 ``src/sim/sim_plant.cpp`` -- ticket 108-002's real Devices::I2CBus
 implementation -- plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
-physics dependencies, ``src/firm/devices/velocity_pid.cpp``,
+physics dependencies, ``src/motion/wheel_velocity_pid.cpp`` (125-003:
+relocated from ``src/firm/devices/velocity_pid.cpp`` -- App::Drive's own
+interim closed-loop instances this sprint, drive.h's own header),
 ``src/firm/devices/nezha_motor.cpp``, ``src/motion/body_kinematics.cpp``)
 with ``-DHOST_BUILD``, against the SAME headers every ARM build compiles.
 Mirrors ``test_devices_motor.py``/``test_app_telemetry.py``'s exact shape:
@@ -37,7 +39,7 @@ _DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
-_VELOCITY_PID_SRC = _SOURCE_DIR / "devices" / "velocity_pid.cpp"
+_VELOCITY_PID_SRC = _REPO_ROOT / "src" / "motion" / "wheel_velocity_pid.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "devices" / "nezha_motor.cpp"
 _BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
 

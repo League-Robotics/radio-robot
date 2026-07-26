@@ -47,8 +47,10 @@ CHECK_TRIVIAL(PoseReading);
 CHECK_TRIVIAL(Neutral);
 
 // --- Config types (device_config.h) ---
-CHECK_TRIVIAL(Opt<float>);
-CHECK_TRIVIAL(Gains);
+// 125-003: Opt<T>/Gains are DELETED (the velocity PID they fed for
+// Motor::applyGains() relocated to Motion::WheelVelocityPid/App::Drive,
+// which declares its own motion-local Gains -- see device_config.h's own
+// header).
 CHECK_TRIVIAL(MotorConfig);
 CHECK_TRIVIAL(OtosConfig);
 CHECK_TRIVIAL(ColorConfig);
