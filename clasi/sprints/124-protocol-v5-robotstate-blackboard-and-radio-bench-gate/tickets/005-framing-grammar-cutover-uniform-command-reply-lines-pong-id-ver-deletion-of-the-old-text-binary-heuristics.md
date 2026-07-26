@@ -2,9 +2,12 @@
 id: '005'
 title: 'Framing grammar cutover: uniform command/reply lines, PONG/ID/VER, deletion
   of the old text/binary heuristics'
-status: open
-use-cases: [SUC-001]
-depends-on: ['001', '003']
+status: in-progress
+use-cases:
+- SUC-001
+depends-on:
+- '001'
+- '003'
 github-issue: ''
 issue: protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md
 completes_issue: true
