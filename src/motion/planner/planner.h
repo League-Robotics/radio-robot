@@ -20,6 +20,7 @@
 #include "estimation.h"
 #include "planner_types.h"
 #include "types/robot_state.h"
+#include "wheel_pid.h"
 
 namespace Motion {
 
@@ -49,6 +50,12 @@ class Planner {
   float commandedLeft() const { return cmdLeft_; }    // [mm/s]
   float commandedRight() const { return cmdRight_; }  // [mm/s]
 
+  // M4 duty-plane outputs (planner_types.h velK* gains; 0 while the duty
+  // stage is unconfigured). Computed every tick from this tick's staged
+  // velocity targets vs the filtered measured wheel velocities.
+  float commandedDutyLeft() const { return dutyLeft_; }    // [-1, 1]
+  float commandedDutyRight() const { return dutyRight_; }  // [-1, 1]
+
  private:
   struct ActiveMove {
     bool occupied = false;
@@ -66,6 +73,9 @@ class Planner {
 
   enum class Axis : uint8_t { None, Linear, Angular, Wheels };
   static Axis axisOf(const Move& m);
+
+  // M4 duty output stage -- runs on every tick() exit path (planner.cpp).
+  void stageDuty(float dt);  // [s]
 
   // The measured state the completion tests and the settle gate read,
   // computed once per tick from the freshly integrated estimate.
@@ -123,6 +133,9 @@ class Planner {
   PlannerLimits limits_;
   WheelChannel left_, right_;
   PoseTracker pose_;
+  WheelPid pidLeft_, pidRight_;   // M4 duty stage (inert at zero gains)
+  float dutyLeft_ = 0.0f;   // [-1, 1] this tick's duty output
+  float dutyRight_ = 0.0f;  // [-1, 1]
 
   Move pending_[kQueueDepth]{};
   int pendingCount_ = 0;

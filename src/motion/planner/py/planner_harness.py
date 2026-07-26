@@ -147,7 +147,11 @@ class PlannerLimits(ctypes.Structure):
                 ("headingOtosWeight", ctypes.c_float),
                 ("requireSettle", ctypes.c_bool),
                 ("settleWindow", ctypes.c_float),    # [ms]
-                ("headingHoldGain", ctypes.c_float)]  # [1/s]
+                ("headingHoldGain", ctypes.c_float),  # [1/s]
+                ("velKff", ctypes.c_float),   # [duty/(mm/s)] M4 duty stage
+                ("velKp", ctypes.c_float),    # [duty/(mm/s)]
+                ("velKi", ctypes.c_float),    # [duty/(mm/s)/s]
+                ("velIMax", ctypes.c_float)]  # [duty]
 
 
 class TickResult(ctypes.Structure):
@@ -180,6 +184,8 @@ def loadLibrary() -> ctypes.CDLL:
                                 ctypes.POINTER(TickResult)]
     lib.plannerUpdate.argtypes = [ctypes.c_void_p, ctypes.POINTER(RobotState)]
     lib.plannerStructSizes.argtypes = [ctypes.POINTER(ctypes.c_uint32)] * 4
+    lib.plannerDuty.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float),
+                                ctypes.POINTER(ctypes.c_float)]
 
     # Layout guard: C++ sizeof must match the ctypes mirrors exactly.
     sizes = [ctypes.c_uint32() for _ in range(4)]
@@ -209,6 +215,10 @@ def benchLimits() -> PlannerLimits:
     limits.requireSettle = False
     limits.settleWindow = 0.0
     limits.headingHoldGain = 0.0
+    limits.velKff = 0.0
+    limits.velKp = 0.0
+    limits.velKi = 0.0
+    limits.velIMax = 0.0
     return limits
 
 

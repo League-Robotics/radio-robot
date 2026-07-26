@@ -17,7 +17,17 @@ Scenarios: a distance leg, a rotation, then a distance->rotation->distance
 chain. HITL: robot on the stand, wheels free.
 
     uv run python src/motion/planner/bench/hil_drive.py \
-        --port /dev/cu.usbmodem2121102
+        --port /dev/cu.usbmodem2121102 [--duty]
+
+--duty closes the wheel-velocity loop HOST-SIDE through the planner's M4
+PID (firmware PID reduced to pure kff via CONFIG). MEASURED 2026-07-26:
+this topology is UNSTABLE at bench gains and only marginal detuned -- the
+serial transport adds ~6 control cycles of dead time, and the integrator
+winds across it (runaway legs, sign reversals; see the motion-planner
+issue's HIL findings). Kept as an experiment/reference; the REAL duty
+plane co-locates the motion library with the firmware loop (post-125
+joint checkpoint). Default mode bridges velocity targets to the
+firmware's own PID -- the stable, known-good configuration.
 """
 
 import argparse
@@ -36,6 +46,9 @@ from robot_radio.io.serial_conn import SerialConnection  # noqa: E402
 from robot_radio.robot.protocol import NezhaProtocol  # noqa: E402
 
 PERIOD = 0.05          # [s] host control interval, mirrors the loop's own 50 ms
+FIRMWARE_KFF = 0.0008  # [duty/(mm/s)] tovez.json vel_kff -- the open-loop slope
+                       # left in the firmware while its feedback gains are
+                       # zeroed for duty-plane mode (duty -> v_equiv mapping)
 BRIDGE_HOLD = 300.0    # [ms] each reissued move_wheels' own stop_time backstop
 BRIDGE_TIMEOUT = 1000.0  # [ms] its timeout backstop
 
@@ -50,18 +63,26 @@ def hilLimits() -> PlannerLimits:
     limits.alphaDecel = 5.0      # [rad/s^2]
     limits.trackWidth = 128.0    # [mm] tovez.json drivetrain trackwidth
     limits.controlPeriod = 50.0  # [ms]
-    limits.actuationDelay = 450.0  # [ms] measured from run 1: overshoot ~= v * 0.5 s (stale telemetry + staging + PID plant lag)
+    limits.actuationDelay = 450.0  # [ms] velocity-mode value (run 2, known
+                                   # good): transport + firmware PID plant lag
     limits.velocityFilterWeight = 0.4  # real encoder velocity is noisy
     limits.otosStaleness = 200
     limits.headingOtosWeight = 0.0
     limits.requireSettle = True
     limits.settleWindow = 400.0  # [ms]
     limits.headingHoldGain = 1.2  # [1/s] straight legs crabbed ~-10 deg uncorrected (run 1)
+    # M4 duty stage: the velocity PID now lives in the planner. Gains from
+    # tovez.json (vel_kp/ki/kff/imax -- the bench-tuned 106-002 set).
+    limits.velKff = FIRMWARE_KFF
+    limits.velKp = 0.0004   # detuned: host loop adds ~6 cycles dead time
+    limits.velKi = 0.0015
+    limits.velIMax = 0.3
     return limits
 
 
 class HilSession:
-    def __init__(self, port: str):
+    def __init__(self, port: str, dutyPlane: bool = False):
+        self.dutyPlane = dutyPlane
         self.lib = loadLibrary()
         limits = hilLimits()
         self.planner = self.lib.plannerCreate(ctypes.byref(limits))
@@ -72,10 +93,23 @@ class HilSession:
         self.proto = NezhaProtocol(self.conn)
         self.state = RobotState()
         self.lastFrame = None
+        self.dutyLeft = ctypes.c_float()
+        self.dutyRight = ctypes.c_float()
+        if self.dutyPlane:
+            # Duty-plane mode: zero the FIRMWARE PID's feedback gains so its
+            # velocity input becomes a pure kff feedforward -- the wire then
+            # carries duty/FIRMWARE_KFF as an equivalent-velocity, and the
+            # planner's own PID closes the loop from up here.
+            self.proto.config(**{"pid.kp": 0.0, "pid.ki": 0.0})
+            time.sleep(0.3)
 
     def close(self):
         try:
             self.proto.stop()
+            if self.dutyPlane:
+                # Restore the firmware PID's bench-tuned feedback gains.
+                self.proto.config(**{"pid.kp": 0.0016, "pid.ki": 0.005})
+                time.sleep(0.3)
         finally:
             self.conn.disconnect()
             self.lib.plannerDestroy(self.planner)
@@ -135,11 +169,26 @@ class HilSession:
                 ticks += 1
                 vL = self.state.wheelLeft.cmdVelocity
                 vR = self.state.wheelRight.cmdVelocity
+                # Duty-plane bridge: the planner's PID computed per-wheel
+                # duty; with the firmware PID reduced to kff, sending
+                # duty/FIRMWARE_KFF as the wheel velocity applies exactly
+                # that duty at the H-bridge.
+                self.lib.plannerDuty(self.planner,
+                                     ctypes.byref(self.dutyLeft),
+                                     ctypes.byref(self.dutyRight))
                 if abs(vL) > 0.5 or abs(vR) > 0.5:
-                    self.proto.move_wheels(v_left=vL, v_right=vR,
-                                           stop_time=BRIDGE_HOLD,
-                                           timeout=BRIDGE_TIMEOUT,
-                                           replace=True)
+                    if self.dutyPlane:
+                        self.proto.move_wheels(
+                            v_left=self.dutyLeft.value / FIRMWARE_KFF,
+                            v_right=self.dutyRight.value / FIRMWARE_KFF,
+                            stop_time=BRIDGE_HOLD,
+                            timeout=BRIDGE_TIMEOUT,
+                            replace=True)
+                    else:
+                        self.proto.move_wheels(v_left=vL, v_right=vR,
+                                               stop_time=BRIDGE_HOLD,
+                                               timeout=BRIDGE_TIMEOUT,
+                                               replace=True)
                 elif stopAtEnd:
                     self.proto.stop()
                 if result.completed and completed is None:
@@ -192,9 +241,12 @@ def report(stats: dict, expectLeft: float, expectRight: float,
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", required=True)
+    parser.add_argument("--duty", action="store_true",
+                        help="EXPERIMENTAL: close the velocity loop host-side"
+                             " (unstable over serial -- see module docstring)")
     args = parser.parse_args()
 
-    session = HilSession(args.port)
+    session = HilSession(args.port, dutyPlane=args.duty)
     track = 128.0
     quarter = math.pi / 2
     try:

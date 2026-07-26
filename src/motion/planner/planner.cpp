@@ -53,6 +53,19 @@ Planner::Planner(const PlannerLimits& limits) : limits_(limits) {
   left_.configure(limits_.velocityFilterWeight);
   right_.configure(limits_.velocityFilterWeight);
   pose_.configure(limits_.trackWidth);
+  const PidGains gains{limits_.velKff, limits_.velKp, limits_.velKi,
+                       limits_.velIMax};
+  pidLeft_.configure(gains);
+  pidRight_.configure(gains);
+}
+
+// M4 duty output stage: this tick's staged velocity targets vs the
+// filtered measured wheel velocities -> per-wheel duty. Runs on every
+// tick() exit path so the duty outputs always mirror the velocity
+// outputs; inert (0) at the default all-zero gains.
+void Planner::stageDuty(float dt) {
+  dutyLeft_ = pidLeft_.compute(cmdLeft_, left_.velocity(), dt);
+  dutyRight_ = pidRight_.compute(cmdRight_, right_.velocity(), dt);
 }
 
 bool Planner::move(const Move& next, bool replace) {
@@ -93,6 +106,10 @@ void Planner::stop() {
   // The history too: after a stop there is no travel left to anticipate.
   cmdLeftPrevious_ = 0.0f;
   cmdRightPrevious_ = 0.0f;
+  pidLeft_.reset();
+  pidRight_.reset();
+  dutyLeft_ = 0.0f;
+  dutyRight_ = 0.0f;
 }
 
 // Age the staged command by one tick. Called from the two places that
@@ -134,6 +151,7 @@ TickResult Planner::tick(const Types::RobotState& state) {
   if (!active_.occupied) activateNext(now);
   if (!active_.occupied) {
     drainToZero(dt);
+    stageDuty(dt);
     return result;
   }
 
@@ -218,6 +236,7 @@ TickResult Planner::tick(const Types::RobotState& state) {
     activateNext(now);
     if (!active_.occupied) {
       drainToZero(dt);
+      stageDuty(dt);
       return result;
     }
   }
@@ -225,6 +244,7 @@ TickResult Planner::tick(const Types::RobotState& state) {
   // Re-measure: a same-tick hand-off above swapped the active Move, and
   // `remaining` is measured against ITS baseline and axis.
   planActive(now, dt, done ? measure(now) : measured);
+  stageDuty(dt);
   return result;
 }
 

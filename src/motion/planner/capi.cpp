@@ -32,6 +32,13 @@ void plannerUpdate(void* planner, Types::RobotState* state) {
   static_cast<const Motion::Planner*>(planner)->update(*state);
 }
 
+// M4 duty-plane outputs -- see Planner::commandedDutyLeft/Right().
+void plannerDuty(void* planner, float* left, float* right) {
+  const auto* p = static_cast<const Motion::Planner*>(planner);
+  *left = p->commandedDutyLeft();
+  *right = p->commandedDutyRight();
+}
+
 // Layout guard for the ctypes mirror: the harness compares these against
 // ctypes.sizeof() before doing anything else, so a struct drift fails
 // loudly instead of corrupting silently.

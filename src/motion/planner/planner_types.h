@@ -62,6 +62,15 @@ struct PlannerLimits {
   // correction is purely differential, so the profiled path length -- and
   // therefore the distance exactness -- is untouched. 0 = off.
   float headingHoldGain = 0.0f;  // [1/s] rad/s of correction per rad of error
+
+  // M4 duty-plane output stage (issue §7.6): the per-wheel velocity->duty
+  // PID relocated into the motion library. Fail-closed: all-zero gains
+  // (the default) leave the duty outputs at 0 and every velocity-plane
+  // consumer untouched. Gains mirror the robot-JSON vel_* vocabulary.
+  float velKff = 0.0f;   // [duty/(mm/s)] feedforward slope
+  float velKp = 0.0f;    // [duty/(mm/s)] proportional
+  float velKi = 0.0f;    // [duty/(mm/s)/s] integral rate
+  float velIMax = 0.0f;  // [duty] integrator clamp; 0 disables integration
 };
 
 // The per-tick completion event, returned by tick() (never written into
