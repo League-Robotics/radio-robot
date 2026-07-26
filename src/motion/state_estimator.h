@@ -62,19 +62,19 @@ namespace Motion {
 // depend on).
 enum class Wheel : uint8_t { Left, Right };
 
-// WheelEstimate -- one wheel's PEER basis reading (independently
+// WheelPeer -- one wheel's PEER basis reading (independently
 // valid/stale from the other wheel and from the body peer). `distance` is
 // the wheel's own traveled distance (matching EncoderReading::position, NOT
 // a world pose) at `basisTime`; `velocity` is held constant across a ZOH
 // extrapolation from that basis.
-struct WheelEstimate {
+struct WheelPeer {
   float distance = 0.0f;   // [mm]
   float velocity = 0.0f;   // [mm/s] signed
   uint32_t basisTime = 0;  // [ms]
   bool valid = false;      // false until the peer's first update() call
 };
 
-// BodyEstimate -- the body peer's PEER basis reading: a world pose
+// BodyPeer -- the body peer's PEER basis reading: a world pose
 // (x, y, heading) plus a body-frame twist (v_x, v_y, omega), all held
 // constant across a ZOH extrapolation from `basisTime`. x/y/v_x/v_y always
 // come straight from Motion::Odometry's own dead-reckoned pose/twist
@@ -82,7 +82,7 @@ struct WheelEstimate {
 // EstimatorConfigPatch has no weight_x_otos/weight_y_otos field, ticket
 // 003); heading/omega are the v1 complementary blend against a fresh
 // OTOS reading when present (see update()'s own doc comment).
-struct BodyEstimate {
+struct BodyPeer {
   float x = 0.0f;          // [mm]
   float y = 0.0f;          // [mm]
   float heading = 0.0f;    // [rad]
@@ -166,17 +166,17 @@ class StateEstimator {
   // HeadingSource::headingLead()'s equation, generalized to the full pose.
   // The returned estimate's own `basisTime` field is left as the ORIGINAL
   // basis reading's timestamp (what informed the extrapolation), not `t`.
-  WheelEstimate wheelAt(Wheel wheel, uint32_t t) const;  // [ms]
-  BodyEstimate bodyAt(uint32_t t) const;                 // [ms]
+  WheelPeer wheelAt(Wheel wheel, uint32_t t) const;  // [ms]
+  BodyPeer bodyAt(uint32_t t) const;                 // [ms]
 
   // whereAmI -- exactly bodyAt(now); a named convenience for the common
   // "predict to right now" query.
-  BodyEstimate whereAmI(uint32_t now) const;  // [ms]
+  BodyPeer whereAmI(uint32_t now) const;  // [ms]
 
   // wheelNow -- the wheel's raw basis reading, zero extrapolation (NOT
   // wheelAt(wheel, basis.basisTime) re-derived -- returns the stored peer
   // verbatim, though the two are numerically identical when t == basisTime).
-  WheelEstimate wheelNow(Wheel wheel) const;
+  WheelPeer wheelNow(Wheel wheel) const;
 
   // reset -- re-anchors ONLY the body peer's world pose (x, y, heading),
   // mirroring Motion::Odometry::reset()'s own teleport semantics (no `now`
@@ -203,9 +203,9 @@ class StateEstimator {
   FusionWeights weights() const { return weights_; }
 
  private:
-  WheelEstimate wheelLeft_;
-  WheelEstimate wheelRight_;
-  BodyEstimate body_;
+  WheelPeer wheelLeft_;
+  WheelPeer wheelRight_;
+  BodyPeer body_;
   FusionWeights weights_;
   Innovations innovations_;
 };

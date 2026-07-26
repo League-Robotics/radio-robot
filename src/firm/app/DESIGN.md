@@ -23,7 +23,11 @@ the BASE-side passive modules it owns:
   landed on the secondary frame as an interim placement at 122-003, see §4
   below),
 * `Drive` (122-002, NARROWED — the wheel-target sink only:
-  `setWheels()`/`stop()`/`tick()`, implementing `Motion::WheelSink`
+  `setDuty()`/`stop()`/`tick()` (125-002 renamed `setWheels()` ->
+  `setDuty()`, `Motion::WheelSink`'s own velocity-sink -> duty-sink retool
+  — a placeholder, unclamped pass-through until ticket 007's real duty
+  implementation lands; see `src/motion/wheel_sink.h`/`drive.h`'s own
+  doc comments), implementing `Motion::WheelSink`
   (`src/motion/wheel_sink.h`); it lost `setTwist()`/its `BodyKinematics`
   dependency to `Motion::MoveQueue`, see below), and
 * `Preamble` (boot-time device detection).
@@ -1102,13 +1106,13 @@ called with real elapsed time between calls).
   no "at most one of two frame types" choice left to make), bounded work,
   never sleeps, never touches the I2C bus. See §4's own "RobotState
   assembly + `Telemetry::update()`/`emit()`" paragraph above.
-- **`Drive::setWheels(v_left, v_right)`/`stop()`/`tick()`:** (122-002,
+- **`Drive::setDuty(left, right)`/`stop()`/`tick()`:** (122-002,
   NARROWED — `setTwist()` is GONE, moved to `Motion::MoveQueue`, which now
   calls `BodyKinematics::inverse()` itself and hands `Drive` an
   already-decomposed wheel-target pair through the `Motion::WheelSink`
   boundary `Drive` implements; see
-  [`src/motion/DESIGN.md`](../../motion/DESIGN.md).) `setWheels()` only
-  STAGES a target; `tick()` stages the last `setWheels()`/`stop()` target
+  [`src/motion/DESIGN.md`](../../motion/DESIGN.md).) `setDuty()` only
+  STAGES a target; `tick()` stages the last `setDuty()`/`stop()` target
   onto the two motor leaves via their own `setVelocity()` — it never calls
   a motor's own `tick()`, never touches the bus, never sleeps. `stop()`
   stages zero. `Drive` depends on nothing but `Devices::Motor` now — it
@@ -1119,7 +1123,11 @@ called with real elapsed time between calls).
   `BodyKinematics::inverse()` internally, and had already lost its
   acceleration-feedforward term at 115-005 — both `setTwist()` and that
   internal `BodyKinematics::inverse()` call moved to `Motion::MoveQueue`
-  at 122-002, not merely deleted.)
+  at 122-002, not merely deleted.) **125-002:** `Motion::WheelSink`'s own
+  boundary retooled from a velocity sink to a duty sink — `setWheels()`
+  renamed `setDuty()`, `[-1,1]` per the base contract's plausibility bound
+  (unenforced here yet — a placeholder, unclamped pass-through; ticket 007
+  adds the real `|duty|<=1`/NaN→0 clamp and `App::WheelObserver` wiring).
 - **`Motion::Odometry::integrate(leftPosition, rightPosition)`/
   `pathLength()`:** (122-002, MOVED to `src/motion/` — see
   [`src/motion/DESIGN.md`](../../motion/DESIGN.md) for the current,

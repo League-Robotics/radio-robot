@@ -144,9 +144,9 @@ PhaseStats runPhase(TestSim::SimHarness& sim, const std::string& name, int cycle
   stats.name = name;
 
   bool havePending = false;
-  Motion::WheelEstimate pendingLeft;
-  Motion::WheelEstimate pendingRight;
-  Motion::BodyEstimate pendingBody;
+  Motion::WheelPeer pendingLeft;
+  Motion::WheelPeer pendingRight;
+  Motion::BodyPeer pendingBody;
 
   constexpr uint32_t kHorizonMs = TestSim::SimHarness::kCycleDtUs / 1000;  // [ms] one full cycle ahead
 

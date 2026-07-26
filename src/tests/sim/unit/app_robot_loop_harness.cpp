@@ -1969,8 +1969,8 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
 
   uint32_t nowMs = static_cast<uint32_t>(clock.nowMicros() / 1000);
 
-  Motion::WheelEstimate wheelL = stateEstimator.wheelNow(Motion::Wheel::Left);
-  Motion::WheelEstimate wheelR = stateEstimator.wheelNow(Motion::Wheel::Right);
+  Motion::WheelPeer wheelL = stateEstimator.wheelNow(Motion::Wheel::Left);
+  Motion::WheelPeer wheelR = stateEstimator.wheelNow(Motion::Wheel::Right);
   checkTrue(wheelL.valid, "left wheel peer is valid after several cycles of motion");
   checkTrue(wheelR.valid, "right wheel peer is valid after several cycles of motion");
   checkTrue(wheelL.velocity > 100.0f,
@@ -1980,7 +1980,7 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
             "right wheel peer's own velocity tracks the commanded forward motion (positive, "
             "well above zero)");
 
-  Motion::BodyEstimate body = stateEstimator.whereAmI(nowMs);
+  Motion::BodyPeer body = stateEstimator.whereAmI(nowMs);
   checkTrue(body.valid, "body peer is valid after several cycles of motion");
   checkTrue(body.v_x > 100.0f,
             "body peer's own v_x tracks the commanded forward twist (positive, well above "

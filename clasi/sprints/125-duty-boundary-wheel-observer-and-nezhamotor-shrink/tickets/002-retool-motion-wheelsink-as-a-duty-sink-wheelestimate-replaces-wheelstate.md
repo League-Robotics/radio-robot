@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Retool Motion::WheelSink as a duty sink (WheelEstimate replaces WheelState)
-status: open
+status: done
 use-cases:
 - SUC-001
 depends-on: []
@@ -36,16 +36,16 @@ green mid-sprint, by design").
 
 ## Acceptance Criteria
 
-- [ ] `Motion::WheelSink::setWheels()` no longer exists; `setDuty(left,
+- [x] `Motion::WheelSink::setWheels()` no longer exists; `setDuty(left,
       right)`/`stop()` exist in its place, `[-1,1]` per the base
       contract's plausibility bound.
-- [ ] `WheelState` is removed; `WheelEstimate` exists with the fields
+- [x] `WheelState` is removed; `WheelEstimate` exists with the fields
       above, documented as the base→motion per-wheel reading shape.
-- [ ] `src/motion/DESIGN.md`'s own boundary description is NOT yet
+- [x] `src/motion/DESIGN.md`'s own boundary description is NOT yet
       updated in this ticket (that is ticket 017's job) — do not
       partially update it here and leave it inconsistent with tickets
       still in flight.
-- [ ] `motion_tests` still configures and builds (may have red tests
+- [x] `motion_tests` still configures and builds (may have red tests
       downstream until later core tickets land — not a regression in
       this ticket's own scope).
 
