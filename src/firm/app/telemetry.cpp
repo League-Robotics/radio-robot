@@ -1,12 +1,7 @@
 // telemetry.cpp -- App::Telemetry implementation. See telemetry.h's file
-// header for the module's boundary, its two send paths, and the flags-bit
+// header for the module's boundary, its send path, and the flags-bit
 // layout.
 #include "app/telemetry.h"
-
-#include <cstring>
-
-#include "messages/wire.h"
-#include "messages/wire_runtime.h"
 
 namespace App {
 
@@ -32,12 +27,24 @@ static_assert(sizeof(msg::Telemetry{}.acks_) == static_cast<size_t>(kAckRingDept
 constexpr uint32_t kAckErrBits = 4;
 constexpr uint32_t kAckErrMask = (1u << kAckErrBits) - 1;
 
-Telemetry::Telemetry(Comms& comms, Transport& serialLink, Transport& radioLink)
-    : comms_(comms), serialLink_(serialLink), radioLink_(radioLink) {}
+// kMaxAge -- EncoderReading.age/OtosReading.age's own wire (max) = 255
+// (telemetry.proto), issue §B2's own bound: "a pathological value obvious
+// rather than silently wrapping."
+constexpr uint32_t kMaxAge = 255;  // [ms]
 
-void Telemetry::setFrame(const Frame& frame) { frame_ = frame; }
+Telemetry::Telemetry(Comms& comms) : comms_(comms) {}
 
-void Telemetry::setSecondaryFrame(const SecondaryFrame& frame) { secondaryFrame_ = frame; }
+uint32_t Telemetry::ageOf(uint32_t now, uint32_t sampleTime) {
+  // Unsigned-subtract guard: sampleTime should never be ahead of `now` (both
+  // are in the same cycle-domain [ms] clock, and a sample is always
+  // collected before the cycle that reports it finishes), but a defensive
+  // guard costs nothing and avoids a huge wrapped age on any clock-domain
+  // surprise (e.g. state.time.cycleStart genuinely 0 before the first-ever
+  // publish).
+  if (now < sampleTime) return 0;
+  const uint32_t age = now - sampleTime;
+  return age > kMaxAge ? kMaxAge : age;
+}
 
 void Telemetry::setFlag(uint32_t bit, bool active) {
   if (active) {
@@ -45,6 +52,99 @@ void Telemetry::setFlag(uint32_t bit, bool active) {
   } else {
     flags_ &= ~bit;
   }
+}
+
+void Telemetry::setLiveFlag(uint32_t bit, bool active) {
+  setFlag(bit, active);
+}
+
+void Telemetry::update(const Types::RobotState& state) {
+  // now (for age ONLY -- NOT the wire `now` field, which stays
+  // state.time.cycleStart via the caller's own emit(cycleStart) call,
+  // unchanged from before this ticket): every sampleTime this method reads
+  // below (wheelLeft/wheelRight/otos) was captured DURING this cycle's own
+  // body, chronologically AFTER cycleStart (the top-of-cycle mark) -- an
+  // age computed against cycleStart itself would be negative (sampleTime
+  // in the "future" relative to it) and get silently floored to 0 by
+  // ageOf()'s own now<sampleTime guard, defeating the entire point of a
+  // real per-sample age. state.time.cycleBusy is measured from the SAME
+  // cycleStartUs instant to the frame-staging point immediately before
+  // this call (RobotLoop::cycle()'s own doc comment on that field) -- the
+  // latest instant available on state, guaranteed at or after every
+  // sampleTime this cycle published. cycleStart + cycleBusy therefore
+  // approximates the genuine "now, at frame assembly" the age computation
+  // needs, without adding a new RobotState field or changing what the wire
+  // `now` field itself reports.
+  const uint32_t now = state.time.cycleStart + (state.time.cycleBusy / 1000u);  // [ms] ([us]->[ms])
+
+  frame_.mode = static_cast<msg::DriveMode>(state.command.mode);
+
+  frame_.encLeft.position = msg::EncoderReading::packPosition(state.wheelLeft.position);
+  frame_.encLeft.velocity = msg::EncoderReading::packVelocity(state.wheelLeft.velocity);
+  frame_.encLeft.age = ageOf(now, state.wheelLeft.sampleTime);
+  frame_.encLeft.position_epoch = state.wheelLeft.positionEpoch;
+
+  frame_.encRight.position = msg::EncoderReading::packPosition(state.wheelRight.position);
+  frame_.encRight.velocity = msg::EncoderReading::packVelocity(state.wheelRight.velocity);
+  frame_.encRight.age = ageOf(now, state.wheelRight.sampleTime);
+  frame_.encRight.position_epoch = state.wheelRight.positionEpoch;
+
+  frame_.twist.v_x = msg::BodyTwist3::packVX(state.pose.v_x);
+  frame_.twist.omega = msg::BodyTwist3::packOmega(state.pose.omega);
+
+  frame_.pose = {msg::Pose2D::packX(state.pose.x), msg::Pose2D::packY(state.pose.y),
+                 msg::Pose2D::packH(state.pose.heading)};
+
+  // otos.* -- only refreshed when fresh THIS cycle (state.otos.present);
+  // otherwise frame_.otos keeps its last-staged snapshot, matching the
+  // pre-124-009 assembleFrame()'s own "only update when present" behavior
+  // (frame_ persists across update() calls exactly like it persisted
+  // across assembleFrame() calls).
+  if (state.otos.present) {
+    frame_.otos.x = msg::OtosReading::packX(state.otos.x);
+    frame_.otos.y = msg::OtosReading::packY(state.otos.y);
+    frame_.otos.heading = msg::OtosReading::packHeading(state.otos.heading);
+    frame_.otos.v_x = msg::OtosReading::packVX(state.otos.v_x);
+    frame_.otos.v_y = msg::OtosReading::packVY(state.otos.v_y);
+    frame_.otos.omega = msg::OtosReading::packOmega(state.otos.omega);
+    frame_.otos.age = ageOf(now, state.otos.sampleTime);
+  }
+
+  // line/color -- exactly one of {line, color} ticks a given cycle
+  // (115-005 alternation, RobotLoop's own kPace-block body); only the
+  // fresh one's word is refreshed here, the other's stays at its
+  // last-staged snapshot -- matching the wire spec's "fresh THIS frame"
+  // semantics.
+  if (state.perception.lineFresh) frame_.line = state.perception.line;
+  if (state.perception.colorFresh) frame_.color = state.perception.color;
+
+  frame_.cycleBusy = state.time.cycleBusy;
+  frame_.cyclePeriod = state.time.cyclePeriod;
+
+  // Flags -- the single assembly point (124-009, issue §B1): every bit
+  // that CAN be known at this point in the cycle, derived straight from
+  // `state`, replacing the ten scattered setFlag() calls the old
+  // assembleFrame() made. kFlagFaultMoveTimeout/kFlagFaultShapingDisabled
+  // (bits 15/16) are deliberately NOT touched here -- see
+  // setLiveFlag()'s own doc comment (telemetry.h) for why their
+  // defining condition does not exist yet at update() time, and why
+  // leaving them untouched here (rather than re-deriving them from a
+  // state.health field that itself is only fresh post-tick) is exactly
+  // what reproduces the pre-124-009 "flag rides the next frame" behavior:
+  // whatever setLiveFlag() last set survives across this update()
+  // call unchanged, precisely because this method never mutates those two
+  // bits itself.
+  setFlag(kFlagActive, state.command.moveActive);
+  setFlag(kFlagConnLeft, state.wheelLeft.connected);
+  setFlag(kFlagConnRight, state.wheelRight.connected);
+  setFlag(kFlagFaultI2CSafetyNet, state.health.i2cSafetyNetCount > 0);
+  setFlag(kFlagFaultWedgeLatch, state.health.wedgeLatch);
+  setFlag(kFlagFaultCommsMalformed, state.health.commsMalformedCount > 0);
+  setFlag(kFlagOtosPresent, state.otos.present);
+  setFlag(kFlagOtosConnected, state.otos.connected);
+  setFlag(kFlagLinePresent, state.perception.lineFresh);
+  setFlag(kFlagColorPresent, state.perception.colorFresh);
+  setFlag(kFlagFaultPositionClamped, state.health.positionClamped);
 }
 
 void Telemetry::ack(uint32_t corrId, uint32_t errCode) {
@@ -77,51 +177,9 @@ bool Telemetry::primaryDue(uint32_t now) const {
   return (now - lastPrimaryEmit_) >= kPrimaryPeriod;
 }
 
-bool Telemetry::secondaryDue(uint32_t now) const {
-  if (!everEmittedSecondary_) return true;
-  return (now - lastSecondaryEmit_) >= kSecondaryPeriod;
-}
-
 void Telemetry::emit(uint32_t now) {
-  bool pDue = primaryDue(now);
-  bool sDue = secondaryDue(now);
-
-  // Tie-detection uses a STRICTER "genuinely due" test for secondary's
-  // pre-first-ever-emission window: secondaryDue()'s own "!everEmitted
-  // Secondary_ -> true" boot bypass (unchanged, still governs the
-  // non-tied branch below exactly as before) makes secondary look "due"
-  // from t=0, long before a real kSecondaryPeriod has ever elapsed --
-  // harmless under a "primary always wins" tie rule (that bypass value is
-  // never reached whenever primary is also due), but WOULD spuriously
-  // tie-alternate a caller's SECOND-ever call (e.g. exactly
-  // kPrimaryPeriod after the first) onto secondary, well before any real
-  // starvation exists. Substituting a real elapsed-time check
-  // (`now >= kSecondaryPeriod`) for that ONE pre-first-emission window
-  // preserves every existing short-run caller's expectation that early
-  // calls are primary-only, while still guaranteeing secondary its first
-  // slot (via a tie, same as any later one) once genuine time has passed.
-  bool sDueForTie = everEmittedSecondary_ ? sDue : (now >= kSecondaryPeriod);
-
-  // Tie: both genuinely due in the same call -- alternate rather than
-  // always favoring primary (see telemetry.h's emit() comment: at a real
-  // loop period at/above kPrimaryPeriod, primary is due every call, so an
-  // unconditional primary-wins rule starves secondary to 0 Hz forever).
-  if (pDue && sDueForTie) {
-    if (tieFavorsSecondary_) {
-      emitSecondary(now);
-    } else {
-      emitPrimary(now);
-    }
-    tieFavorsSecondary_ = !tieFavorsSecondary_;
-    return;
-  }
-
-  if (pDue) {
+  if (primaryDue(now)) {
     emitPrimary(now);
-    return;
-  }
-  if (sDue) {
-    emitSecondary(now);
   }
 }
 
@@ -137,11 +195,9 @@ void Telemetry::emitPrimary(uint32_t now) {
   seq_ = (seq_ + 1) % 128u;
   tlm.mode = frame_.mode;
 
-  // flags -- the single assembly point: the caller-staged bits (every
-  // status/fault/event/presence bit RobotLoop already computed into
-  // flags_ via setFlag()). 124-008 (issue §B4) deleted the single
-  // "freshest ack" scalar slot and its own ack_fresh bit (bit 5) --
-  // Telemetry no longer ORs in an internally-tracked bit here.
+  // flags -- the caller-derived bits (update()'s own single assembly
+  // point) plus setLiveFlag()'s two late bits, whatever this
+  // call's flags_ currently holds.
   tlm.flags = flags_;
 
   // Ack ring (120, ADDITIVE) -- serialize the ring's CURRENT contents,
@@ -151,8 +207,8 @@ void Telemetry::emitPrimary(uint32_t now) {
   // A frame this call sends carries whatever the ring holds RIGHT NOW,
   // regardless of whether a new ack() landed since the last emit -- no
   // separate "is this new" bit applies (telemetry.proto's own
-  // Telemetry.acks doc comment). 124-008: each entry is now a packed
-  // uint32_t (corr_id<<4|err), not msg::AckEntry (deleted).
+  // Telemetry.acks doc comment). 124-008: each entry is a packed uint32_t
+  // (corr_id<<4|err), not msg::AckEntry (deleted).
   tlm.acks_count = ackRingCount_;
   for (uint8_t i = 0; i < ackRingCount_; ++i) {
     const uint8_t idx = static_cast<uint8_t>((ackRingHead_ + i) % kAckRingDepth);
@@ -167,9 +223,6 @@ void Telemetry::emitPrimary(uint32_t now) {
   tlm.line = frame_.line;
   tlm.color = frame_.color;
 
-  // 123-004 (migrated from TelemetrySecondary -- see Frame's own doc
-  // comment, telemetry.h): loop-timing diagnostics, now fresh every
-  // primary frame instead of a ~5Hz secondary-frame sample.
   tlm.cycle_busy = frame_.cycleBusy;
   tlm.cycle_period = frame_.cyclePeriod;
 
@@ -183,101 +236,6 @@ void Telemetry::emitPrimary(uint32_t now) {
   everEmittedPrimary_ = true;
   lastPrimaryEmit_ = now;
   ++primaryEmitCount_;
-}
-
-void Telemetry::emitSecondary(uint32_t now) {
-  msg::TelemetrySecondary sec;
-  sec.now = now;
-  sec.has_cmd_vel = secondaryFrame_.hasCmdVel;
-  sec.cmd_vel_left = secondaryFrame_.cmdVelLeft;
-  sec.cmd_vel_right = secondaryFrame_.cmdVelRight;
-  sec.acc_left = secondaryFrame_.accLeft;
-  sec.acc_right = secondaryFrame_.accRight;
-  sec.glitch_left = secondaryFrame_.glitchLeft;
-  sec.glitch_right = secondaryFrame_.glitchRight;
-  sec.ts_left = secondaryFrame_.tsLeft;
-  sec.ts_right = secondaryFrame_.tsRight;
-  // cycle_busy/cycle_period (122-003) formerly lived here as an interim
-  // placement -- MIGRATED to the primary frame (123-004, emitPrimary()
-  // above) now that COBS+CRC restored primary-frame headroom; see
-  // SecondaryFrame's own doc comment, telemetry.h.
-
-  // Own top-level framed LINE -- same CRC-then-COBS composition (123-002
-  // -- was "*B"+base64 pre-123), reused here via App::kMaxCrcPayloadBytes/
-  // kFramedMaxBytes/WireRuntime's COBS+CRC primitives rather than
-  // duplicated in a private helper, since Comms::sendReply() only accepts
-  // a ReplyEnvelope (TelemetrySecondary is not one of its oneof arms).
-  //
-  // 124-005: rides the SAME "TLM:" command prefix/CRC-scope emitPrimary()
-  // uses (Comms::sendReply() with body_kind=TLM) -- there is no separate
-  // registry verb for the secondary frame (messages/commands.h's closed
-  // set has exactly one telemetry-push verb), and the host already
-  // disambiguates the two shapes structurally (tries ReplyEnvelope first,
-  // falls back to TelemetrySecondary -- serial_conn.py's own
-  // _handle_binary_reply() docstring), independent of the ASCII framing
-  // layer. `kSecondaryCommand` is the SAME bytes for both the CRC-scope
-  // input and the wire prefix actually written below, so the two can
-  // never drift apart.
-  static constexpr uint8_t kSecondaryCommand[] = {'T', 'L', 'M'};
-  constexpr size_t kSecondaryCommandLen = sizeof(kSecondaryCommand);
-
-  uint8_t rawBuf[msg::wire::kTelemetrySecondaryMaxEncodedSize];
-  const uint16_t n = msg::wire::encode(sec, rawBuf, static_cast<uint16_t>(sizeof(rawBuf)));
-  if (n == 0) {
-    // Unreachable in practice -- rawBuf is sized from the same generated
-    // kTelemetrySecondaryMaxEncodedSize constant encode() itself is
-    // budgeted against (mirrors Comms::sendReply()'s own guard). Still
-    // count the cycle as "handled" so cadence pacing doesn't retry this
-    // frame every subsequent call.
-    everEmittedSecondary_ = true;
-    lastSecondaryEmit_ = now;
-    return;
-  }
-
-  uint8_t combined[kMaxCrcPayloadBytes];
-  std::memcpy(combined, rawBuf, n);
-  size_t combinedLen = n;
-  uint16_t crc = WireRuntime::crcInit();
-  crc = WireRuntime::crcUpdate(crc, kSecondaryCommand, kSecondaryCommandLen);
-  static constexpr uint8_t kCommandSeparator = ':';
-  crc = WireRuntime::crcUpdate(crc, &kCommandSeparator, 1);
-  crc = WireRuntime::crcUpdate(crc, rawBuf, n);
-  if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) {
-    everEmittedSecondary_ = true;
-    lastSecondaryEmit_ = now;
-    return;  // same unreachable-in-practice sizing argument as above
-  }
-
-  uint8_t cobsOut[kFramedMaxBytes];
-  size_t cobsLen = 0;
-  if (!WireRuntime::cobsEncode(combined, combinedLen, cobsOut, sizeof(cobsOut), &cobsLen, kCobsDelimiter)) {
-    everEmittedSecondary_ = true;
-    lastSecondaryEmit_ = now;
-    return;  // same unreachable-in-practice sizing argument as above
-  }
-
-  uint8_t line[kMaxLineBytes];
-  if (kSecondaryCommandLen + 1 + cobsLen > sizeof(line)) {
-    // Unreachable in practice -- kMaxLineBytes covers the worst case.
-    everEmittedSecondary_ = true;
-    lastSecondaryEmit_ = now;
-    return;
-  }
-  std::memcpy(line, kSecondaryCommand, kSecondaryCommandLen);
-  line[kSecondaryCommandLen] = ':';
-  std::memcpy(line + kSecondaryCommandLen + 1, cobsOut, cobsLen);
-  const uint16_t lineLen = static_cast<uint16_t>(kSecondaryCommandLen + 1 + cobsLen);
-
-  // Broadcast on both transports, async/drop-on-full -- same discipline as
-  // Comms::sendReply(): telemetry is always-on and must never stall the
-  // loop on backpressure. The concrete transport appends the trailing
-  // '\n' terminator itself.
-  serialLink_.send(line, lineLen);
-  radioLink_.send(line, lineLen);
-
-  everEmittedSecondary_ = true;
-  lastSecondaryEmit_ = now;
-  ++secondaryEmitCount_;
 }
 
 }  // namespace App

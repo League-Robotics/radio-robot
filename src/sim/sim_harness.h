@@ -72,7 +72,11 @@ class SimHarness {
         color_(plant_, Devices::ColorConfig{}),
         line_(plant_, Devices::LineConfig{}),
         comms_(serialLink_, radioLink_, "DEVICE:NEZHA2:sim:sim_harness:1"),
-        tlm_(comms_, serialLink_, radioLink_),
+        // 124-009: Telemetry no longer holds direct Transport& references
+        // (those existed only for TelemetrySecondary's own
+        // independently-armored line, now deleted) -- comms_ already owns
+        // both transports internally.
+        tlm_(comms_),
         drive_(armorL_, armorR_, trackWidth),
         // 122-002: Motion::Odometry no longer holds a Devices::Motor& --
         // seed the delta baseline from each leaf's CURRENT position() (both

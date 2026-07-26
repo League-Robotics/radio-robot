@@ -268,11 +268,13 @@ const char* sim_firmware_version() { return FIRMWARE_VERSION_STR; }
 int sim_cycle_dt_us() { return static_cast<int>(TestSim::SimHarness::kCycleDtUs); }
 
 // Commanded per-wheel velocity (the velocity-PID SETPOINT) read DIRECTLY from
-// the firmware's live NezhaMotor -- Path B (2026-07-17). cmd_vel is NOT on the
-// wire (adding it to the primary Telemetry frame overflows the 186-byte
-// envelope budget; it lives on the slower TelemetrySecondary). The sim can see
-// this normally-invisible inner-loop command at full rate, which is exactly
-// what TestGUI's "commanded vs actual" wheel-speed graph plots. Signed [mm/s].
+// the firmware's live NezhaMotor -- Path B (2026-07-17). cmd_vel is NOT on
+// the wire at all (it never made it off TelemetrySecondary before that
+// message was deleted outright, 124-009 -- see Types::RobotState::Wheel::
+// cmdVelocity's own doc comment for the current, unwired state). The sim can
+// see this normally-invisible inner-loop command at full rate, which is
+// exactly what TestGUI's "commanded vs actual" wheel-speed graph plots.
+// Signed [mm/s].
 float sim_cmd_vel_left(SimHandle h) { return asHarness(h)->motorLeft().velocityTarget(); }
 float sim_cmd_vel_right(SimHandle h) { return asHarness(h)->motorRight().velocityTarget(); }
 

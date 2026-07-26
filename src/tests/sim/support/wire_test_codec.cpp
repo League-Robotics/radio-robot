@@ -25,16 +25,8 @@ bool readVarintU32(const uint8_t* buf, size_t len, size_t* pos, uint32_t* out) {
   return true;
 }
 
-bool readBool(const uint8_t* buf, size_t len, size_t* pos, bool* out) {
-  uint64_t v = 0;
-  if (!WireRuntime::decodeVarint(buf, len, pos, &v)) return false;
-  *out = (v != 0);
-  return true;
-}
-
-bool readFloat(const uint8_t* buf, size_t len, size_t* pos, float* out) {
-  return WireRuntime::decodeFloat(buf, len, pos, out);
-}
+// readBool()/readFloat() -- DELETED (124-009): their only callers decoded
+// TelemetrySecondary (has_cmd_vel/cmd_vel_*/acc_*), now gone.
 
 // readSint32 -- 124-008: reads a zigzag-encoded varint (ScalarType::kSint32,
 // wire.cpp) into a raw int32_t. The GENERATED pack*()/unpack*() methods on
@@ -276,10 +268,10 @@ bool decodeTelemetryMessage(const uint8_t* buf, size_t len, msg::Telemetry* out)
 // mirror kFields_ReplyEnvelope. Any recognized field number arriving with a
 // wire type other than what the schema declares is treated as "this is not
 // a ReplyEnvelope after all" (returns false) rather than a hard error --
-// the caller (decodeOutboundLine()) uses that to fall back to trying
-// TelemetrySecondary instead, since the two shapes are otherwise
-// undiscriminated on the wire (no message-type tag of their own). Success
-// requires the tlm oneof arm (field 4) to have actually been seen --
+// the caller (decodeOutboundLine()) reports kUnknown when this fails
+// (124-009: there is no second shape to fall back to any more --
+// TelemetrySecondary is deleted). Success requires the tlm oneof arm
+// (field 4) to have actually been seen --
 // telemetry.cpp's emitPrimary() is the only production caller of this
 // shape and always sets body_kind=TLM (ACKs ride Telemetry.acks_[], never
 // a body_kind=OK/ERR reply -- see this file's own header) -- a ReplyEnvelope
@@ -319,59 +311,8 @@ bool decodeReplyEnvelopeTlm(const uint8_t* buf, size_t len, uint32_t* corrId, ms
   return sawTlm;
 }
 
-// Attempts a standalone TelemetrySecondary decode -- fields/wire types
-// mirror kFields_TelemetrySecondary. Same wire-type-mismatch-means-"not
-// this shape" policy as decodeReplyEnvelopeTlm() above.
-bool decodeTelemetrySecondaryMessage(const uint8_t* buf, size_t len, msg::TelemetrySecondary* out) {
-  size_t pos = 0;
-  while (pos < len) {
-    uint32_t fieldNumber = 0;
-    WireType wireType = WireType::kVarint;
-    if (!WireRuntime::decodeTag(buf, len, &pos, &fieldNumber, &wireType)) return false;
-
-    switch (fieldNumber) {
-      case 1:
-        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->now)) return false;
-        break;
-      case 2:
-        if (wireType != WireType::kVarint || !readBool(buf, len, &pos, &out->has_cmd_vel)) return false;
-        break;
-      case 3:
-        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->cmd_vel_left)) return false;
-        break;
-      case 4:
-        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->cmd_vel_right)) return false;
-        break;
-      case 5:
-        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->acc_left)) return false;
-        break;
-      case 6:
-        if (wireType != WireType::kFixed32 || !readFloat(buf, len, &pos, &out->acc_right)) return false;
-        break;
-      case 7:
-        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->glitch_left)) return false;
-        break;
-      case 8:
-        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->glitch_right)) return false;
-        break;
-      case 9:
-        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->ts_left)) return false;
-        break;
-      case 10:
-        if (wireType != WireType::kVarint || !readVarintU32(buf, len, &pos, &out->ts_right)) return false;
-        break;
-      // cycle_busy/cycle_period (formerly fields 11/12, 122-003 interim
-      // placement) -- MIGRATED to msg::Telemetry (123-004, see
-      // decodeTelemetryMessage()'s cases 15/16 above); fields 11/12 are
-      // `reserved` on the wire now (telemetry.proto), so any incoming
-      // instance of either falls through to skipField() below.
-      default:
-        if (!WireRuntime::skipField(buf, len, &pos, wireType)) return false;
-        break;
-    }
-  }
-  return true;
-}
+// decodeTelemetrySecondaryMessage() -- DELETED (124-009): TelemetrySecondary
+// itself is gone (robot-state-blackboard-...md).
 
 // --- Encode helpers (CommandEnvelope{MOVE|STOP}, host -> firmware) --------
 
@@ -564,14 +505,7 @@ DecodedLine decodeOutboundLine(const std::string& line) {
     return result;
   }
 
-  msg::TelemetrySecondary sec;
-  if (decodeTelemetrySecondaryMessage(combined, payloadLen, &sec)) {
-    result.kind = DecodedKind::kSecondary;
-    result.secondary = sec;
-    return result;
-  }
-
-  return result;  // kUnknown
+  return result;  // kUnknown -- 124-009: no TelemetrySecondary fallback any more
 }
 
 std::string armorMoveCommand(float v_x, float v_y, float omega, MoveStopKind stopKind, float stopValue,

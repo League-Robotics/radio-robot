@@ -111,21 +111,5 @@ struct Telemetry {
     uint8_t acks_count_val() const { return acks_count; }
 };
 
-// TelemetrySecondary
-struct TelemetrySecondary {
-    uint32_t now = 0;
-    bool has_cmd_vel = false;
-    float cmd_vel_left = 0.0f;
-    float cmd_vel_right = 0.0f;
-    float acc_left = 0.0f;
-    float acc_right = 0.0f;
-    uint32_t glitch_left = 0;
-    uint32_t glitch_right = 0;
-    uint32_t ts_left = 0;
-    uint32_t ts_right = 0;
-
-    // --- array / optional-string accessors ---
-};
-
 }  // namespace msg
 

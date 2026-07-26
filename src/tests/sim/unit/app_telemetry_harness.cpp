@@ -1,26 +1,26 @@
-// app_telemetry_harness.cpp -- off-hardware acceptance harness for ticket
-// 103-005 (SUC-005), App::Telemetry (src/firm/app/telemetry.{h,cpp}). Proves:
-// primary-frame assembly (all listed fields) via Comms::sendReply(), the
-// single ack slot's overwrite-on-collision behavior and one-shot ack_fresh
-// bit, the unified `flags` bit-string's status/fault/event bits (via
-// setFlag() -- see telemetry.h's own bit-layout comment), TelemetrySecondary's
-// own independently-armored line never coinciding with a primary send in
-// the same emit() call, and realized emission cadence for both frame types.
-// Also proves (originally ticket 104-004, scenario 8): a malformed inbound
-// frame pumped through App::Comms sets App::kFlagFaultCommsMalformed in the
-// telemetry frame that follows, once a caller mirrors
-// Comms::malformedCount() via setFlag() the way RobotLoop::updateTlm() does.
+// app_telemetry_harness.cpp -- off-hardware acceptance harness for
+// App::Telemetry (src/firm/app/telemetry.{h,cpp}). Proves: the
+// Types::RobotState -> wire msg::Telemetry projection via update()/emit()
+// (124-009, issue §B1 -- "one struct, filled once, consumed three times"),
+// the bounded ack ring's push/evict/persist behavior, flags derived from
+// state (not scattered setFlag() calls -- update() is the ONE place a bit
+// flips), setLiveFlag()'s narrow post-tick escape hatch, and realized
+// primary-frame emission cadence.
 //
-// 115-005 (gut S1) rewrite: the depth-3 ack ring became a single ack slot
-// (ack-depth-1 is a stakeholder-accepted tradeoff -- see telemetry.h's own
-// ack()/kFlagAckFresh doc comments); the separate fault_bits/event_bits
-// bitmasks and nine has_*/status bools folded into one `flags` word;
-// Frame's flat enc_left/vel_left/bare-Pose2D-otos fields became timestamped
-// EncoderReading/OtosReading objects; primary cadence changed from 40ms to
-// 20ms. Every scenario below is updated for the new shapes; the old ack-RING
-// scenario (push 4, evict oldest, newest-3-survive-a-dropped-frame) has no
-// equivalent under depth-1 and is replaced by a single-slot-overwrite +
-// one-shot-ack_fresh scenario.
+// 124-009 rewrite (robot-state-blackboard-...md): Telemetry's public API
+// changed shape entirely -- `Frame`/`SecondaryFrame`, `setFrame()`, the
+// public `setFlag()`, `setSecondaryFrame()`, and every secondary-cadence
+// accessor (`secondaryEmitCount()`/`lastSecondaryEmit()`) are GONE.
+// `update(const Types::RobotState&)` replaces setFrame()+ten scattered
+// setFlag() calls; `setLiveFlag()` replaces the two post-tick-only
+// setFlag() calls (kFlagFaultMoveTimeout/kFlagFaultShapingDisabled); the
+// constructor drops its Transport& parameters (those existed only for
+// TelemetrySecondary's own independently-armored line). Every scenario
+// below either follows RobotLoop's own new call shape (build a
+// Types::RobotState, call update(), then emit()) or -- for
+// TelemetrySecondary/ack-ring scenarios untouched by the state-object
+// change -- keeps its prior shape with only the constructor signature
+// updated.
 //
 // Mirrors app_comms_harness.cpp's exact shape: hand-rolled
 // beginScenario/fail/checkTrue/checkStrEq assertion plumbing, PASS/FAIL
@@ -31,11 +31,10 @@
 // No decode(ReplyEnvelope) codec exists (firmware only ever ENCODES a
 // ReplyEnvelope -- envelope.proto's own doc comment) -- exactly like
 // app_comms_harness.cpp's own sendReply() proof, frame CONTENTS are
-// verified by independently building the expected msg::Telemetry/
-// msg::TelemetrySecondary, encoding + armoring it via the SAME
-// msg::wire::encode()/WireRuntime::base64Encode() primitives Telemetry
-// itself is built on, and comparing the resulting line byte-for-byte
-// against what the FakeTransport actually received.
+// verified by independently building the expected msg::Telemetry, encoding
+// + armoring it via the SAME msg::wire::encode()/WireRuntime primitives
+// Telemetry itself is built on, and comparing the resulting line
+// byte-for-byte against what the FakeTransport actually received.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -43,6 +42,7 @@
 
 #include "app/comms.h"
 #include "app/telemetry.h"
+#include "firm/types/robot_state.h"
 #include "messages/envelope.h"
 #include "messages/wire.h"
 #include "messages/wire_runtime.h"
@@ -93,26 +93,13 @@ void checkStrEq(const std::string& actual, const std::string& expected, const st
   }
 }
 
-void checkInRange(uint64_t actual, uint64_t lo, uint64_t hi, const std::string& what) {
-  if (actual < lo || actual > hi) {
-    char buf[256];
-    std::snprintf(buf, sizeof(buf), "%s -- expected in [%llu, %llu], got %llu", what.c_str(),
-                  static_cast<unsigned long long>(lo), static_cast<unsigned long long>(hi),
-                  static_cast<unsigned long long>(actual));
-    fail(buf);
-  }
-}
-
 // --- armor() -- 124-005 (protocol v5 Part A, "framing grammar cutover"):
 // builds the COMPLETE wire LINE, `<command>':'<COBS+CRC bytes>` (CRC-then-
-// COBS, delimiter 0x0A) Comms::sendReply()/Telemetry::emitSecondary()
-// themselves build, used here only to construct scenario EXPECTATIONS
-// independently of Telemetry's own send path. `command` is REQUIRED and,
-// for every scenario in this file, "TLM" -- App::Telemetry never emits
-// OK/ERR (envelope.proto's own doc comment: no current firmware call site),
-// and emitSecondary() reuses the SAME "TLM:" prefix/CRC-scope emitPrimary()
-// uses (telemetry.cpp's own doc comment explains why: no separate registry
-// verb exists for the secondary frame). The trailing '\n' terminator is a
+// COBS, delimiter 0x0A) Comms::sendReply() itself builds, used here only to
+// construct scenario EXPECTATIONS independently of Telemetry's own send
+// path. `command` is REQUIRED and, for every scenario in this file, "TLM"
+// -- App::Telemetry never emits OK/ERR (envelope.proto's own doc comment:
+// no current firmware call site). The trailing '\n' terminator is a
 // transport concern, not included in this function's return value --
 // matches what a FakeTransport::sent() capture holds. ------
 
@@ -149,77 +136,78 @@ std::string armorReply(const msg::ReplyEnvelope& env) {
 // --- FakeTransport is TestSupport::FakeTransport
 // (src/tests/sim/support/fake_transport.h, ticket 105-002) -- the ONE canonical
 // scripted queue of inbound lines plus a log of every send()/sendReliable()
-// call. This harness previously carried its own ad hoc FakeTransport
-// (readLine() hardcoded to return false, since Telemetry never reads) AND a
-// second, separately-named QueueableFakeTransport variant (needed only by
-// scenario 8 below, which drives Comms::pump() to produce a real
-// App::Comms::malformedCount() > 0). Both collapse into this one shared
-// class: its readLine() already returns false whenever nothing was ever
-// enqueued (every scenario except #8), and #8 now calls enqueueInbound()
-// on the same type. ---------------------------------------------------
+// call. ---------------------------------------------------------------
 
 using TestSupport::FakeTransport;
 
 // ===========================================================================
-// 1. Primary frame assembly: emit() with a fully-populated Frame builds
-//    exactly the fields AC #1 lists and sends via Comms::sendReply() (both
-//    transports, matching Comms's own broadcast discipline). Also proves
-//    ack_fresh (flags bit 5) is set the SAME frame an ack() call precedes.
+// 1. RobotState -> wire projection (124-009, issue §B1): update(state) then
+//    emit() builds exactly the fields AC #1 lists and sends via
+//    Comms::sendReply() (both transports, matching Comms's own broadcast
+//    discipline). Also proves the ack ring rides alongside every other
+//    state-derived field, and that age (issue §B2/SUC-006) is computed as
+//    now - sampleTime for each independently-timestamped reading.
 // ===========================================================================
 
-void scenarioPrimaryFrameAssemblyMatchesIndependentEncode() {
-  beginScenario("emit(): primary frame carries every AC-listed field, sent via Comms::sendReply()");
+void scenarioUpdateProjectsWholeStateInOneCall() {
+  beginScenario("update(state)+emit(): every AC-listed field is derived from RobotState in one call");
 
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms, serialFake, radioFake);
+  App::Telemetry telemetry(comms);
 
-  App::Telemetry::Frame frame;
-  frame.mode = msg::DriveMode::VELOCITY;
-  // 124-008: EncoderReading/OtosReading/Pose2D/BodyTwist3 fields are now
-  // sint32+scale on the wire (issue §B3) -- pack*() is the GENERATED
-  // conversion (options.proto's (scale) doc comment). age/position_epoch
-  // are arbitrary in-bound test values, not physically meaningful here.
-  frame.encLeft = {msg::EncoderReading::packPosition(12.5f), msg::EncoderReading::packVelocity(100.0f),
-                    /*age=*/111, /*position_epoch=*/0};
-  frame.encRight = {msg::EncoderReading::packPosition(-3.25f), msg::EncoderReading::packVelocity(-50.0f),
-                     /*age=*/111, /*position_epoch=*/0};
-  frame.otos = {msg::OtosReading::packX(1.1f),   msg::OtosReading::packY(2.2f),
-                msg::OtosReading::packHeading(0.6f), msg::OtosReading::packVX(10.0f),
-                msg::OtosReading::packVY(-5.0f), msg::OtosReading::packOmega(0.2f),
-                /*age=*/120};
-  frame.otosPresent = true;
-  frame.otosConnected = true;
-  frame.pose = {msg::Pose2D::packX(1.0f), msg::Pose2D::packY(2.0f), msg::Pose2D::packH(0.5f)};
-  frame.twist = {msg::BodyTwist3::packVX(150.0f), msg::BodyTwist3::packVY(0.0f),
-                 msg::BodyTwist3::packOmega(0.75f)};
-  frame.line = 0x04030201u;
-  frame.linePresent = true;
-  frame.color = 0x0A090807u;
-  frame.colorPresent = true;
-  telemetry.setFrame(frame);
+  const uint32_t kNow = 1234;
 
-  // Frame.otosPresent/otosConnected/linePresent/colorPresent are STAGING
-  // fields only -- Telemetry never reads them itself to derive flags bits
-  // (see telemetry.h's own boundary comment: "callers... report
-  // status/fault/event conditions via setFlag()"). RobotLoop::updateTlm()/
-  // updateLineColor() are the real call sites that translate these into
-  // setFlag() calls; this scenario mirrors that translation explicitly.
-  telemetry.setFlag(App::kFlagOtosPresent, frame.otosPresent);
-  telemetry.setFlag(App::kFlagOtosConnected, frame.otosConnected);
-  telemetry.setFlag(App::kFlagLinePresent, frame.linePresent);
-  telemetry.setFlag(App::kFlagColorPresent, frame.colorPresent);
-  telemetry.setFlag(App::kFlagActive, true);
-  telemetry.setFlag(App::kFlagConnLeft, true);
-  telemetry.setFlag(App::kFlagConnRight, true);
+  Types::RobotState state;
+  state.time.cycleStart = kNow;
+  state.command.mode = Types::Mode::Velocity;
+  state.command.moveActive = true;
 
+  // Deliberately DIFFERENT sampleTime per reading (issue §B2/SUC-006: "two
+  // fields carrying one value is worse than one field") -- ages below
+  // (111/111/120) are chosen distinct from each other's SOURCE (left vs.
+  // right vs. otos) but happen to share a value between the two wheels
+  // here purely for arithmetic convenience; scenario 2 below (age
+  // differential) is where left != right is the actual point under test.
+  state.wheelLeft.position = 12.5f;
+  state.wheelLeft.velocity = 100.0f;
+  state.wheelLeft.sampleTime = kNow - 111;
+  state.wheelLeft.connected = true;
+
+  state.wheelRight.position = -3.25f;
+  state.wheelRight.velocity = -50.0f;
+  state.wheelRight.sampleTime = kNow - 111;
+  state.wheelRight.connected = true;
+
+  state.otos.present = true;
+  state.otos.connected = true;
+  state.otos.x = 1.1f;
+  state.otos.y = 2.2f;
+  state.otos.heading = 0.6f;
+  state.otos.v_x = 10.0f;
+  state.otos.v_y = -5.0f;
+  state.otos.omega = 0.2f;
+  state.otos.sampleTime = kNow - 120;
+
+  state.pose.x = 1.0f;
+  state.pose.y = 2.0f;
+  state.pose.heading = 0.5f;
+  state.pose.v_x = 150.0f;
+  state.pose.v_y = 0.0f;
+  state.pose.omega = 0.75f;
+
+  state.perception.line = 0x04030201u;
+  state.perception.lineFresh = true;
+  state.perception.color = 0x0A090807u;
+  state.perception.colorFresh = true;
+
+  telemetry.update(state);
   telemetry.ack(7, 0);
-
-  telemetry.emit(1234);  // first call -- always sends primary (boot, no arming)
+  telemetry.emit(kNow);  // first call -- always sends primary (boot, no arming)
   // (120) ack(7, 0) above ALSO pushed onto the bounded ack ring -- see
-  // this file's own scenario 2 below for the ring's push/evict/persist
+  // this file's own scenario 4 below for the ring's push/evict/persist
   // behavior in isolation; here it's just one entry riding alongside
   // every other AC-listed field.
 
@@ -228,12 +216,9 @@ void scenarioPrimaryFrameAssemblyMatchesIndependentEncode() {
   checkU64Eq(serialFake.sentReliable().size(), 0, "primary frame never uses sendReliable()");
 
   msg::Telemetry expected;
-  expected.now = 1234;
+  expected.now = kNow;
   expected.seq = 0;
   expected.mode = msg::DriveMode::VELOCITY;
-  // 124-008 (issue §B4): kFlagAckFresh (bit 5) is deleted with the single
-  // "freshest ack" scalar slot -- ring membership in acks_ below already
-  // means "really acked."
   expected.flags = App::kFlagOtosPresent | App::kFlagOtosConnected | App::kFlagActive |
                     App::kFlagConnLeft | App::kFlagConnRight |
                     App::kFlagLinePresent | App::kFlagColorPresent;
@@ -250,8 +235,6 @@ void scenarioPrimaryFrameAssemblyMatchesIndependentEncode() {
                      msg::BodyTwist3::packOmega(0.75f)};
   expected.line = 0x04030201u;
   expected.color = 0x0A090807u;
-  // 124-008 (issue §B4): acks_ is now packed uint32 (corr_id<<4|err), not
-  // msg::AckEntry (deleted).
   expected.acks_count = 1;
   expected.acks_[0] = packAck(7, 0);
 
@@ -271,12 +254,69 @@ void scenarioPrimaryFrameAssemblyMatchesIndependentEncode() {
 }
 
 // ===========================================================================
-// 2. Ack ring (124-008, issue §B4): the single "freshest ack" scalar slot
+// 2. Age differential (issue §B2/SUC-006): enc_left.age and enc_right.age
+//    are computed INDEPENDENTLY from each wheel's own sampleTime -- feeding
+//    genuinely different sampleTime values produces genuinely different
+//    ages, never silently collapsed to a shared value. The REAL per-cycle
+//    skew (driven by the actual kSettle+kClear-separated collect schedule)
+//    is app_robot_loop_harness.cpp's own end-to-end scenario; this is the
+//    Telemetry-layer unit proof that update()'s projection itself carries
+//    whatever skew RobotState hands it, rather than re-deriving a single
+//    shared age from `now` alone.
+// ===========================================================================
+
+void scenarioAgeIsComputedIndependentlyPerReading() {
+  beginScenario("update(): enc_left.age/enc_right.age/otos.age are independent -- different sampleTime -> "
+                "different age, never collapsed");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  App::Telemetry telemetry(comms);
+
+  const uint32_t kNow = 1000;
+
+  Types::RobotState state;
+  state.time.cycleStart = kNow;
+  state.wheelLeft.sampleTime = kNow - 8;    // age 8
+  state.wheelRight.sampleTime = kNow - 20;  // age 20 -- genuinely later collect, genuinely different
+  state.otos.present = true;
+  state.otos.sampleTime = kNow - 35;        // age 35 -- yet another distinct value
+
+  telemetry.update(state);
+  telemetry.emit(kNow);
+
+  msg::Telemetry expected;
+  expected.now = kNow;
+  expected.seq = 0;
+  expected.flags = App::kFlagOtosPresent;
+  expected.enc_left.age = 8;
+  expected.enc_right.age = 20;
+  expected.otos.age = 35;
+
+  msg::ReplyEnvelope env;
+  env.corr_id = 0;
+  env.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
+  env.body.tlm = expected;
+  std::string expectedLine = armorReply(env);
+  checkTrue(!expectedLine.empty(), "independent encode+armor of the expected frame succeeds");
+  if (!serialFake.sent().empty()) {
+    checkStrEq(serialFake.sent()[0], expectedLine,
+               "enc_left.age=8, enc_right.age=20, otos.age=35 -- three distinct, real values, "
+               "never equal to each other or to zero");
+  }
+}
+
+// ===========================================================================
+// 3. Ack ring (124-008, issue §B4): the single "freshest ack" scalar slot
 //    (ack_corr/ack_err, flags bit 5 kFlagAckFresh) is DELETED -- ring
 //    membership in `acks` already means "really acked," so two ack() calls
 //    before the next emit() land BOTH entries in the ring (oldest first),
 //    and the ring persists unchanged (no new push) across a later emit()
-//    that follows.
+//    that follows. Unaffected by the state-object change -- ack() never
+//    took a Frame/RobotState argument, before or after 124-009 -- update()
+//    is never even called here.
 // ===========================================================================
 
 void scenarioAckRingCarriesEveryPushAndPersistsAcrossEmits() {
@@ -287,7 +327,7 @@ void scenarioAckRingCarriesEveryPushAndPersistsAcrossEmits() {
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms, serialFake, radioFake);
+  App::Telemetry telemetry(comms);
 
   // Two acks land before the next emit() -- BOTH survive in the ring (no
   // single-slot overwrite any more, 124-008).
@@ -343,36 +383,44 @@ void scenarioAckRingCarriesEveryPushAndPersistsAcrossEmits() {
 }
 
 // ===========================================================================
-// 3. flags: a representative status/fault/event bit set flips when the
-//    value a real call site would produce is fed in via setFlag(), and
-//    clears again when the condition clears -- level-set, not a sticky
-//    latch.
+// 4. flags: derived FRESH from state on every update() call (124-009) --
+//    re-deriving from a state whose health fields have cleared produces a
+//    cleared flags() too, without any caller-side "un-set" call -- level-set
+//    by re-derivation, not a sticky latch update() ever has to reason about.
 // ===========================================================================
 
-void scenarioFlagsReflectRealCallSiteValues() {
-  beginScenario("setFlag(kFlagFaultI2CSafetyNet/kFlagEventDeadmanExpired, ...) flip the wire flags bits");
+void scenarioFlagsAreFreshlyDerivedFromStateEveryUpdate() {
+  beginScenario("update(state): flags() is freshly derived from state.health every call -- clears when the "
+                "state clears, no caller-side un-set needed");
 
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms, serialFake, radioFake);
+  App::Telemetry telemetry(comms);
 
-  // Simulates RobotLoop::updateTlm()'s own call site:
-  // tlm_.setFlag(App::kFlagFaultI2CSafetyNet, bus_.clearanceSafetyNetCount() > 0);
-  telemetry.setFlag(App::kFlagFaultI2CSafetyNet, true);
-  // Simulates RobotLoop::cycle()'s own deadman-expiry branch:
-  // tlm_.setFlag(App::kFlagEventDeadmanExpired, deadman_.expired());
-  telemetry.setFlag(App::kFlagEventDeadmanExpired, true);
-  checkU64Eq(telemetry.flags(), App::kFlagFaultI2CSafetyNet | App::kFlagEventDeadmanExpired,
-             "flags() reflects both bits set");
+  // Simulates the wheel/health-section publish point in RobotLoop::cycle()
+  // (state_.health.wedgeLatch = motorL_.wedged() || motorR_.wedged();
+  //  state_.health.i2cSafetyNetCount = bus_.clearanceSafetyNetCount();).
+  Types::RobotState state;
+  state.time.cycleStart = 0;
+  // Pin sampleTime to cycleStart on every update() below -- age = now -
+  // sampleTime would otherwise drift to a nonzero, scenario-irrelevant
+  // value as cycleStart advances (this scenario is about flags, not age).
+  state.wheelLeft.sampleTime = state.time.cycleStart;
+  state.wheelRight.sampleTime = state.time.cycleStart;
+  state.health.i2cSafetyNetCount = 1;
+  state.health.wedgeLatch = true;
+  telemetry.update(state);
+  checkU64Eq(telemetry.flags(), App::kFlagFaultI2CSafetyNet | App::kFlagFaultWedgeLatch,
+             "flags() reflects both bits set immediately after update()");
 
   telemetry.emit(0);
 
   msg::Telemetry expectedSet;
   expectedSet.now = 0;
   expectedSet.seq = 0;
-  expectedSet.flags = App::kFlagFaultI2CSafetyNet | App::kFlagEventDeadmanExpired;
+  expectedSet.flags = App::kFlagFaultI2CSafetyNet | App::kFlagFaultWedgeLatch;
   msg::ReplyEnvelope envSet;
   envSet.corr_id = 0;
   envSet.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
@@ -382,11 +430,16 @@ void scenarioFlagsReflectRealCallSiteValues() {
     checkStrEq(serialFake.sent()[0], expectedSetLine, "first frame carries both bits set");
   }
 
-  // Condition clears -- the caller mirrors that too, and the NEXT frame
-  // clears the bit (level-set, no sticky latch invented by Telemetry).
-  telemetry.setFlag(App::kFlagFaultI2CSafetyNet, false);
-  telemetry.setFlag(App::kFlagEventDeadmanExpired, false);
-  checkU64Eq(telemetry.flags(), 0, "flags() clears once the caller reports the condition cleared");
+  // Condition clears in state -- the NEXT update() call re-derives flags()
+  // to match, with no separate "un-set" call: update() OWNS these bits
+  // completely on every call, unlike setLiveFlag()'s two exceptions below.
+  state.time.cycleStart = 40;
+  state.wheelLeft.sampleTime = state.time.cycleStart;
+  state.wheelRight.sampleTime = state.time.cycleStart;
+  state.health.i2cSafetyNetCount = 0;
+  state.health.wedgeLatch = false;
+  telemetry.update(state);
+  checkU64Eq(telemetry.flags(), 0, "flags() clears once state reports the condition cleared, via re-derivation");
 
   telemetry.emit(40);
 
@@ -404,149 +457,84 @@ void scenarioFlagsReflectRealCallSiteValues() {
 }
 
 // ===========================================================================
-// 4. TelemetrySecondary: rides its own independently-armored line (NOT a
-//    ReplyEnvelope), never in the same emit() call as a primary send, and
-//    does not delay the primary frame's own cadence.
+// 5. setLiveFlag() (124-009): the narrow escape hatch for
+//    kFlagFaultMoveTimeout/kFlagFaultShapingDisabled, whose defining
+//    condition (Motion::MoveQueue::tick()'s own outcome) is not known yet
+//    at update()/emit() time -- see telemetry.h's own doc comment. Proves
+//    setLiveFlag() mutates flags() live WITHOUT requiring another update()
+//    call, and that a SUBSEQUENT update() call leaves a setLiveFlag()-owned
+//    bit untouched (update() never re-derives bits 15/16 itself).
 // ===========================================================================
 
-void scenarioSecondaryNeverCoincidesWithPrimaryAndDoesNotDelayIt() {
-  beginScenario("emit(): TelemetrySecondary rides its own line, never the same call as primary, never delays it");
+void scenarioSetLiveFlagMutatesLiveFlagsIndependentlyOfUpdate() {
+  beginScenario("setLiveFlag(): mutates flags() live without another update() call; a later update() call "
+                "leaves it untouched");
 
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms, serialFake, radioFake);
+  App::Telemetry telemetry(comms);
 
-  App::Telemetry::SecondaryFrame sec;
-  sec.hasCmdVel = true;
-  sec.cmdVelLeft = 90.0f;
-  sec.cmdVelRight = -90.0f;
-  sec.accLeft = 3.5f;
-  sec.accRight = -1.5f;
-  sec.glitchLeft = 2;
-  sec.glitchRight = 0;
-  sec.tsLeft = 100;
-  sec.tsRight = 100;
-  telemetry.setSecondaryFrame(sec);
+  Types::RobotState state;
+  state.time.cycleStart = 0;
+  state.wheelLeft.sampleTime = state.time.cycleStart;
+  state.wheelRight.sampleTime = state.time.cycleStart;
+  telemetry.update(state);
+  checkU64Eq(telemetry.flags(), 0, "flags() starts clear");
 
-  // Drive a fine-grained clock (7 ms/step, NOT a divisor of kPrimaryPeriod
-  // or kSecondaryPeriod -- realistic quantization jitter, not a suspiciously
-  // exact multiple) across several seconds, well above the loop's assumed
-  // per-cycle rate (this file's own telemetry.h scheduling note).
-  const uint32_t kStep = 7;
-  const uint32_t kEndTime = 3000;
-  uint32_t lastPrimarySeen = 0;
-  bool sawPrimary = false;
-  uint32_t maxPrimaryGap = 0;
+  // Simulates RobotLoop::cycle()'s own post-tick call site:
+  // tlm_.setLiveFlag(kFlagFaultMoveTimeout, state_.health.moveTimeout);
+  telemetry.setLiveFlag(App::kFlagFaultMoveTimeout, true);
+  checkU64Eq(telemetry.flags(), App::kFlagFaultMoveTimeout,
+             "setLiveFlag() sets the bit immediately, with no update()/emit() call in between");
 
-  for (uint32_t now = 0; now <= kEndTime; now += kStep) {
-    uint32_t beforePrimary = telemetry.primaryEmitCount();
-    uint32_t beforeSecondary = telemetry.secondaryEmitCount();
-    telemetry.emit(now);
-    uint32_t primarySent = telemetry.primaryEmitCount() - beforePrimary;
-    uint32_t secondarySent = telemetry.secondaryEmitCount() - beforeSecondary;
+  // A LATER update() call (the next cycle's own tlm_.update(state_)) must
+  // NOT clobber this bit -- update() only ever mutates the bits it derives
+  // from state (kFlagFaultMoveTimeout is not one of them).
+  Types::RobotState nextState;
+  nextState.time.cycleStart = 40;
+  // Pin sampleTime to cycleStart, same reasoning as scenario 4 above -- this
+  // scenario is about setLiveFlag(), not age.
+  nextState.wheelLeft.sampleTime = nextState.time.cycleStart;
+  nextState.wheelRight.sampleTime = nextState.time.cycleStart;
+  telemetry.update(nextState);
+  checkU64Eq(telemetry.flags(), App::kFlagFaultMoveTimeout,
+             "a later update() call leaves the setLiveFlag()-owned bit untouched");
 
-    checkTrue(!(primarySent > 0 && secondarySent > 0), "a single emit() call never sends both frame types");
-
-    if (primarySent > 0) {
-      if (sawPrimary) {
-        uint32_t gap = now - lastPrimarySeen;
-        if (gap > maxPrimaryGap) maxPrimaryGap = gap;
-      }
-      lastPrimarySeen = now;
-      sawPrimary = true;
-    }
+  telemetry.emit(40);
+  msg::Telemetry expected;
+  expected.now = 40;
+  expected.seq = 0;
+  expected.flags = App::kFlagFaultMoveTimeout;
+  msg::ReplyEnvelope env;
+  env.corr_id = 0;
+  env.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
+  env.body.tlm = expected;
+  std::string expectedLine = armorReply(env);
+  if (!serialFake.sent().empty()) {
+    checkStrEq(serialFake.sent()[0], expectedLine,
+               "the frame after the later update() call still carries the setLiveFlag()-set bit");
   }
 
-  checkTrue(telemetry.primaryEmitCount() > 0, "at least one primary frame was sent");
-  checkTrue(telemetry.secondaryEmitCount() > 0, "at least one secondary frame was sent -- it is not starved");
-
-  // Every send() call (both transports, both frame types) accounted for
-  // exactly -- no call produced an untracked extra line.
-  checkU64Eq(serialFake.sent().size(), telemetry.primaryEmitCount() + telemetry.secondaryEmitCount(),
-             "serial send() log size == primary + secondary emit counts (no untracked sends)");
-
-  // Primary cadence never stretched past kPrimaryPeriod by more than TWO
-  // scheduling steps: one step is the pre-existing sampling-granularity
-  // slack (emit() only observes time at kStep resolution -- the same
-  // quantizedPeriod() rationale below), the second is 106-002's own
-  // documented tie-break cost (telemetry.h's emit() comment: "at most ONE
-  // primary frame delayed by one loop cycle roughly once per
-  // kSecondaryPeriod") -- this scenario's own long run (3000 ms) crosses
-  // kSecondaryPeriod (200 ms) many times over, so it WILL observe that
-  // occasional extra-step delay at least once; a bound of kPrimaryPeriod +
-  // kStep (the pre-106-002 tolerance) is no longer correct, not because
-  // primary cadence regressed without limit, but because the fix
-  // deliberately trades one bounded step of primary jitter for
-  // guaranteeing secondary a slot at all.
-  checkTrue(maxPrimaryGap <= App::kPrimaryPeriod + 2 * kStep,
-            "no observed primary-to-primary gap exceeds kPrimaryPeriod by more than the sampling-granularity "
-            "step plus 106-002's own one-step tie-break cost");
-
-  // Expected counts, +/-1 for boundary quantization: primary roughly every
-  // kPrimaryPeriod, secondary roughly every kSecondaryPeriod.
-  // Quantized period: emit() only samples at kStep granularity, so the
-  // REALIZED period is rounded up to the next kStep multiple (e.g. 21 ms
-  // at a 7 ms step for a 20ms nominal period) -- expected counts are
-  // derived from that realized period, not the nominal constant, to avoid
-  // a false failure from the sampling granularity itself.
-  auto quantizedPeriod = [](uint32_t period) { return ((period + kStep - 1) / kStep) * kStep; };
-  uint64_t expectedPrimary = kEndTime / quantizedPeriod(App::kPrimaryPeriod);
-  uint64_t expectedSecondary = kEndTime / quantizedPeriod(App::kSecondaryPeriod);
-  checkInRange(telemetry.primaryEmitCount(), expectedPrimary - 2, expectedPrimary + 2,
-               "primary emit count is close to kEndTime/(quantized kPrimaryPeriod)");
-  checkInRange(telemetry.secondaryEmitCount(), expectedSecondary - 2, expectedSecondary + 2,
-               "secondary emit count is close to kEndTime/(quantized kSecondaryPeriod)");
-
-  // Confirm the FIRST secondary line sent is armored but is NOT a valid
-  // ReplyEnvelope-shaped line by construction -- it independently
-  // re-encodes to the exact bytes msg::wire::encode(TelemetrySecondary)
-  // would produce, proving it rode its own top-level payload, not a `tlm`
-  // oneof arm.
-  // Verify the LAST secondary send specifically, using lastSecondaryEmit()
-  // as its known timestamp -- exact enough to prove the encode path
-  // without needing to track every intermediate secondary `now`.
-  msg::TelemetrySecondary expectedSec;
-  expectedSec.now = telemetry.lastSecondaryEmit();
-  expectedSec.has_cmd_vel = true;
-  expectedSec.cmd_vel_left = 90.0f;
-  expectedSec.cmd_vel_right = -90.0f;
-  expectedSec.acc_left = 3.5f;
-  expectedSec.acc_right = -1.5f;
-  expectedSec.glitch_left = 2;
-  expectedSec.glitch_right = 0;
-  expectedSec.ts_left = 100;
-  expectedSec.ts_right = 100;
-
-  uint8_t rawBuf[msg::wire::kTelemetrySecondaryMaxEncodedSize];
-  uint16_t n = msg::wire::encode(expectedSec, rawBuf, sizeof(rawBuf));
-  checkTrue(n > 0, "independent encode(TelemetrySecondary) succeeds");
-  std::string expectedLine = armor(rawBuf, n, "TLM");
-  checkTrue(!expectedLine.empty(), "independent armor() of the secondary frame succeeds");
-
-  bool found = false;
-  for (const auto& line : serialFake.sent()) {
-    if (line == expectedLine) {
-      found = true;
-      break;
-    }
-  }
-  checkTrue(found, "the last secondary send's line matches an independent encode(TelemetrySecondary)+armor");
+  telemetry.setLiveFlag(App::kFlagFaultMoveTimeout, false);
+  checkU64Eq(telemetry.flags(), 0, "setLiveFlag() clears the bit live too, level-set not a sticky latch");
 }
 
 // ===========================================================================
-// 5. Frame-size: a primary frame populated at EVERY field's own declared
+// 6. Frame-size: a primary frame populated at EVERY field's own declared
 //    (max)/(abs_max) bound (124-008, issue §B5's size-accounting table)
-//    fits the regenerated worst case, kReplyEnvelopeMaxEncodedSize (<=130B,
-//    this ticket's own AC #8). Several bounds this ticket adds (now/seq/
-//    the packed acks word/ReplyEnvelope.corr_id) are SIZING bounds, not
-//    hard wire limits -- see telemetry.proto's/envelope.proto's own doc
-//    comments -- so this scenario, unlike a real robot's own output, uses
-//    the DECLARED bound itself (not an arbitrary large value) to prove the
-//    budget the generator computed is actually achievable, not merely
-//    asserted. line/color are genuinely unbounded (any byte per channel
-//    can be 0xFF) and use the full uint32 range.
+//    fits the regenerated worst case, kReplyEnvelopeMaxEncodedSize (<=130B).
+//    Several bounds this ticket adds (now/seq/the packed acks word/
+//    ReplyEnvelope.corr_id) are SIZING bounds, not hard wire limits -- see
+//    telemetry.proto's/envelope.proto's own doc comments -- so this
+//    scenario, unlike a real robot's own output, uses the DECLARED bound
+//    itself (not an arbitrary large value) to prove the budget the
+//    generator computed is actually achievable, not merely asserted.
+//    line/color are genuinely unbounded (any byte per channel can be 0xFF)
+//    and use the full uint32 range. Operates on msg::wire::encode()
+//    directly -- no App::Telemetry instance involved, unaffected by
+//    124-009's API change.
 // ===========================================================================
 
 void scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase() {
@@ -592,61 +580,66 @@ void scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase() {
   checkTrue(n <= msg::wire::kReplyEnvelopeMaxEncodedSize,
             "encoded size fits the rewritten frame's recorded worst case for ReplyEnvelope{tlm}");
   checkTrue(msg::wire::kReplyEnvelopeMaxEncodedSize <= 130,
-            "this ticket's own AC #8: kReplyEnvelopeMaxEncodedSize <= 130B");
+            "this ticket's own size gate: kReplyEnvelopeMaxEncodedSize <= 130B");
   std::printf("  measured: fully-populated primary frame encodes to %u bytes (worst case %u)\n",
               static_cast<unsigned>(n), static_cast<unsigned>(msg::wire::kReplyEnvelopeMaxEncodedSize));
 }
 
 // ===========================================================================
-// 6. Measured cadence report -- this ticket's own acceptance criterion:
-//    report the REAL realized cadence (not assumed) against the ~25 Hz/40 ms
-//    target (118: kPrimaryPeriod follows robot_loop.cpp's kCycle back to
-//    40ms/~25Hz, restored from the fictional 20ms/50Hz a zeroed
-//    kSettle/kClear had been faking -- see
-//    clasi/issues/restore-the-interleaved-request-settle-tick-loop-schedule.md).
+// 7. Measured cadence report -- report the REAL realized primary cadence
+//    (not assumed) against the ~25 Hz/40 ms target. 124-009: TelemetrySecondary
+//    and its tie-break/alternation cadence machinery are GONE -- emit() is
+//    now a plain "due since last send" gate with nothing to trade off
+//    against, so this scenario measures ONLY primary cadence (no secondary
+//    Hz, no tie-break-cost tolerance).
 // ===========================================================================
 
 void scenarioMeasuredCadenceReport() {
-  beginScenario("measured emission cadence (both frame types) vs. the ~25 Hz/40 ms target");
+  beginScenario("measured primary emission cadence vs. the ~25 Hz/40 ms target");
 
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms, serialFake, radioFake);
+  App::Telemetry telemetry(comms);
 
-  const uint32_t kStep = 3;  // [ms] fine-grained relative to kPrimaryPeriod=40/kSecondaryPeriod=200
+  const uint32_t kStep = 3;  // [ms] fine-grained relative to kPrimaryPeriod=40
   const uint32_t kEndTime = 10000;
   for (uint32_t now = 0; now <= kEndTime; now += kStep) {
     telemetry.emit(now);
   }
 
   double primaryHz = static_cast<double>(telemetry.primaryEmitCount()) / (static_cast<double>(kEndTime) / 1000.0);
-  double secondaryHz = static_cast<double>(telemetry.secondaryEmitCount()) / (static_cast<double>(kEndTime) / 1000.0);
-  std::printf("  measured: primary %.2f Hz (target ~25 Hz/40 ms), secondary %.2f Hz (target ~5 Hz/200 ms) over %u ms\n",
-              primaryHz, secondaryHz, static_cast<unsigned>(kEndTime));
+  std::printf("  measured: primary %.2f Hz (target ~25 Hz/40 ms) over %u ms\n", primaryHz,
+              static_cast<unsigned>(kEndTime));
 
   // Not required to HIT 25 Hz exactly (ticket's own acceptance criterion)
   // -- only sane and in the right neighborhood for a deterministic
-  // scripted-clock host test. Same proportional margin the pre-118 50 Hz
-  // target used (+/-40%), rescaled to the new 25 Hz target.
+  // scripted-clock host test.
   checkTrue(primaryHz > 15.0 && primaryHz < 35.0, "measured primary Hz is in a sane neighborhood of the 25 Hz target");
-  checkTrue(secondaryHz > 2.0 && secondaryHz < 8.0, "measured secondary Hz is in a sane neighborhood of the ~5 Hz target");
+
+  // Every send() call accounted for exactly -- no call produced an
+  // untracked extra line (124-009: only ONE frame type exists, so this is
+  // simply primaryEmitCount() now, not primary+secondary).
+  checkU64Eq(serialFake.sent().size(), telemetry.primaryEmitCount(),
+             "serial send() log size == primary emit count (no untracked sends, no second frame type)");
 }
 
 // ===========================================================================
-// 7. kFlagFaultCommsMalformed (originally 104-004, now flags bit 9): a
+// 8. kFlagFaultCommsMalformed (originally 104-004, now flags bit 9): a
 //    malformed/undecodable inbound frame pumped through the SAME App::Comms
 //    instance Telemetry's own Comms::sendReply() rides --
 //    App::Comms::malformedCount() rising above 0 -- sets
-//    App::kFlagFaultCommsMalformed in the NEXT telemetry frame, once a
-//    caller mirrors it via setFlag() exactly the way RobotLoop::updateTlm()
-//    does. Bit clears on a later frame if the caller stops reporting it --
-//    same level-set discipline as scenario 3.
+//    App::kFlagFaultCommsMalformed in the NEXT telemetry frame, once
+//    RobotLoop's own health-section publish mirrors it into
+//    state.health.commsMalformedCount and update() derives the bit from
+//    it. Bit clears on a later frame if the state clears -- same
+//    fresh-derivation discipline as scenario 4.
 // ===========================================================================
 
 void scenarioMalformedFrameSetsCommsMalformedFlagBit() {
-  beginScenario("malformed frame -> Comms::malformedCount() -> setFlag(kFlagFaultCommsMalformed) sets the wire bit");
+  beginScenario("malformed frame -> Comms::malformedCount() -> state.health.commsMalformedCount -> update() "
+                "sets the wire bit");
 
   FakeTransport serialFake;
   FakeTransport radioFake;
@@ -659,15 +652,21 @@ void scenarioMalformedFrameSetsCommsMalformedFlagBit() {
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms, serialFake, radioFake);
+  App::Telemetry telemetry(comms);
 
   App::Cmd cmd;
   comms.pump(cmd, /*now=*/0);
   checkU64Eq(comms.malformedCount(), 1, "malformedCount() incremented by the malformed line");
 
-  // Mirrors RobotLoop::updateTlm()'s own call site (src/firm/app/robot_loop.cpp):
-  // tlm_.setFlag(App::kFlagFaultCommsMalformed, comms_.malformedCount() > 0);
-  telemetry.setFlag(App::kFlagFaultCommsMalformed, comms.malformedCount() > 0);
+  // Mirrors RobotLoop::cycle()'s own pace-block publish point
+  // (src/firm/app/robot_loop.cpp):
+  // state_.health.commsMalformedCount = comms_.malformedCount();
+  Types::RobotState state;
+  state.time.cycleStart = 0;
+  state.wheelLeft.sampleTime = state.time.cycleStart;
+  state.wheelRight.sampleTime = state.time.cycleStart;
+  state.health.commsMalformedCount = comms.malformedCount();
+  telemetry.update(state);
   checkU64Eq(telemetry.flags(), App::kFlagFaultCommsMalformed, "flags() reflects kFlagFaultCommsMalformed");
 
   telemetry.emit(0);
@@ -686,13 +685,15 @@ void scenarioMalformedFrameSetsCommsMalformedFlagBit() {
     checkStrEq(serialFake.sent()[0], expectedSetLine, "the frame AFTER the malformed pump() carries the bit set");
   }
 
-  // No further malformed input arrives -- the caller mirrors that too
-  // (malformedCount() is monotonic and never clears on its own, so a real
-  // RobotLoop call site would keep this bit latched; this half of the
-  // scenario only proves Telemetry's own level-set discipline, matching
-  // scenario 3's flags-bit treatment).
-  telemetry.setFlag(App::kFlagFaultCommsMalformed, false);
-  checkU64Eq(telemetry.flags(), 0, "flags() clears once the caller reports the condition cleared");
+  // No further malformed input arrives -- a fresh state (commsMalformedCount
+  // reset to 0, as RobotLoop would report if malformedCount() itself could
+  // clear) re-derives the bit cleared, same discipline as scenario 4.
+  Types::RobotState clearState;
+  clearState.time.cycleStart = 40;
+  clearState.wheelLeft.sampleTime = clearState.time.cycleStart;
+  clearState.wheelRight.sampleTime = clearState.time.cycleStart;
+  telemetry.update(clearState);
+  checkU64Eq(telemetry.flags(), 0, "flags() clears once state reports the condition cleared");
 
   telemetry.emit(40);
 
@@ -707,71 +708,6 @@ void scenarioMalformedFrameSetsCommsMalformedFlagBit() {
   if (serialFake.sent().size() == 2) {
     checkStrEq(serialFake.sent()[1], expectedClearLine, "second frame carries the bit cleared");
   }
-}
-
-// ===========================================================================
-// 8. 106-002 fix (carried forward): secondary telemetry is NOT starved to 0
-//    Hz when the caller's own per-call period exceeds kPrimaryPeriod -- the
-//    ACTUAL bug (`clasi/issues/secondary-telemetry-starved-by-106-001-
-//    cadence-retarget.md`): a real loop period ABOVE kPrimaryPeriod makes
-//    primaryDue() true on EVERY call, and the pre-106-002 "primary always
-//    wins a same-call tie" rule left secondary starved forever. 118 restores
-//    kPrimaryPeriod to its genuine 40ms (was fictionally 20ms under the
-//    5f5a2ba7 regression -- see
-//    clasi/issues/restore-the-interleaved-request-settle-tick-loop-schedule.md)
-//    -- a 52ms call period is still above it, just by a narrower margin than
-//    the regressed 20ms case gave; the same regression shape still applies.
-// ===========================================================================
-
-void scenarioSecondaryNotStarvedWhenCallPeriodExceedsPrimaryPeriod() {
-  beginScenario("emit(): secondary is not starved to 0 Hz when called at a fixed period > kPrimaryPeriod "
-                "(52ms call period, above the 40ms primary target)");
-
-  FakeTransport serialFake;
-  FakeTransport radioFake;
-  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms, serialFake, radioFake);
-
-  // emit() called once per "cycle" at a fixed 52ms period (ABOVE
-  // kPrimaryPeriod=40ms), so primaryDue() is true on EVERY call -- exactly
-  // the condition that starved secondary to 0 Hz pre-106-002.
-  const uint32_t kCallPeriod = 52;  // [ms]
-  const int kCalls = 100;           // ~5.2s of simulated loop time
-  uint32_t now = 0;
-  uint32_t lastPrimarySeen = 0;
-  bool sawPrimary = false;
-  uint32_t maxPrimaryGap = 0;
-  for (int i = 0; i < kCalls; ++i) {
-    uint32_t beforePrimary = telemetry.primaryEmitCount();
-    telemetry.emit(now);
-    if (telemetry.primaryEmitCount() > beforePrimary) {
-      if (sawPrimary) {
-        uint32_t gap = now - lastPrimarySeen;
-        if (gap > maxPrimaryGap) maxPrimaryGap = gap;
-      }
-      lastPrimarySeen = now;
-      sawPrimary = true;
-    }
-    now += kCallPeriod;
-  }
-
-  checkTrue(telemetry.secondaryEmitCount() > 0,
-            "secondary is NOT starved to 0 Hz -- at least one secondary frame sent over ~5s at a 52ms call period");
-
-  double secondsElapsed = static_cast<double>(now) / 1000.0;
-  double secondaryHz = static_cast<double>(telemetry.secondaryEmitCount()) / secondsElapsed;
-  std::printf("  measured: secondary %.2f Hz (target ~5 Hz/200 ms) at a 52 ms emit() call period\n", secondaryHz);
-  checkTrue(secondaryHz > 2.0 && secondaryHz < 8.0,
-            "secondary rate is in a sane neighborhood of the ~5 Hz target even though the caller's own "
-            "period exceeds kPrimaryPeriod");
-
-  // The tie-break's own documented cost (telemetry.h's emit() comment): at
-  // most one primary frame delayed by one call period, roughly once per
-  // kSecondaryPeriod -- primary cadence stays well short of stalling.
-  checkTrue(maxPrimaryGap <= App::kSecondaryPeriod,
-            "no primary-to-primary gap approaches kSecondaryPeriod -- the tie-break costs at most an "
-            "occasional single-cycle delay, not a stall");
 }
 
 // ===========================================================================
@@ -792,7 +728,7 @@ void scenarioAckRingEvictsOldestPastDepthAndPreservesOrder() {
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms, serialFake, radioFake);
+  App::Telemetry telemetry(comms);
 
   checkU64Eq(App::kAckRingDepth, 4, "this scenario assumes the sprint's own chosen depth (4) -- update if it changes");
 
@@ -842,7 +778,7 @@ void scenarioAckRingPersistsAcrossEmitsBelowFullDepth() {
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms, serialFake, radioFake);
+  App::Telemetry telemetry(comms);
 
   telemetry.ack(10, 0);
   telemetry.ack(20, static_cast<uint32_t>(msg::ErrCode::ERR_FULL));
@@ -876,14 +812,14 @@ void scenarioAckRingPersistsAcrossEmitsBelowFullDepth() {
 }  // namespace
 
 int main() {
-  scenarioPrimaryFrameAssemblyMatchesIndependentEncode();
+  scenarioUpdateProjectsWholeStateInOneCall();
+  scenarioAgeIsComputedIndependentlyPerReading();
   scenarioAckRingCarriesEveryPushAndPersistsAcrossEmits();
-  scenarioFlagsReflectRealCallSiteValues();
-  scenarioSecondaryNeverCoincidesWithPrimaryAndDoesNotDelayIt();
+  scenarioFlagsAreFreshlyDerivedFromStateEveryUpdate();
+  scenarioSetLiveFlagMutatesLiveFlagsIndependentlyOfUpdate();
   scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase();
   scenarioMeasuredCadenceReport();
   scenarioMalformedFrameSetsCommsMalformedFlagBit();
-  scenarioSecondaryNotStarvedWhenCallPeriodExceedsPrimaryPeriod();
   scenarioAckRingEvictsOldestPastDepthAndPreservesOrder();
   scenarioAckRingPersistsAcrossEmitsBelowFullDepth();
 

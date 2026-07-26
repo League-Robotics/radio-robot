@@ -11,13 +11,14 @@
 // `move`, a fresh arm 21: `MoveTwist|MoveWheels` velocity oneof +
 // `time|distance|angle` stop oneof + `timeout`/`replace`/`id`);
 // ReplyEnvelope.body is exactly {ok, err, tlm}; Telemetry carries a single
-// `flags` bit-string (status+fault+event) plus a single `ack_corr`/
-// `ack_err` slot (the depth-3 ack ring is gone) and per-source timestamped
-// `EncoderReading`/`OtosReading` objects; ConfigDelta's `patch` oneof is
-// DRIVETRAIN/MOTOR/OTOS (PLANNER deleted wholesale, 115-003; WATCHDOG
-// deleted, 116-001 -- `ConfigTarget.CONFIG_WATCHDOG` stays declared-unused);
-// TelemetrySecondary is unchanged, a standalone top-level wire message (its
-// own `msg::wire::encode()` overload, not a ReplyEnvelope oneof arm).
+// `flags` bit-string (status+fault+event) and a bounded, PACKED ack ring
+// (`acks`/`acks_count` -- the single `ack_corr`/`ack_err` slot is deleted,
+// 124-008) plus per-source timestamped `EncoderReading`/`OtosReading`
+// objects; ConfigDelta's `patch` oneof is DRIVETRAIN/MOTOR/OTOS (PLANNER
+// deleted wholesale, 115-003; WATCHDOG deleted, 116-001 --
+// `ConfigTarget.CONFIG_WATCHDOG` stays declared-unused); TelemetrySecondary
+// is DELETED outright (124-009, robot-state-blackboard-...md) -- there is
+// no longer a second top-level wire message to drive through this harness.
 //
 // Unlike wire_runtime_harness.cpp/wire_codec_harness.cpp (fixed scenario
 // lists baked into the C++ binary itself), THIS harness is a thin one-shot
@@ -72,16 +73,8 @@
 //     into `t.acks_`/`t.acks_count`.
 //     -> "B64 <base64 bytes>" or "ZERO".
 //
-//   encode_telemetry_secondary <now> <has_cmd_vel> <cmd_vel_left>
-//     <cmd_vel_right> <acc_left> <acc_right> <glitch_left> <glitch_right>
-//     <ts_left> <ts_right>
-//     Builds a STANDALONE TelemetrySecondary (Decision 3 -- its own
-//     independently-armored line, not wrapped in ReplyEnvelope, so no
-//     corr_id argument). Unchanged by 115-003. cycle_busy/cycle_period
-//     (122-003, formerly fields 11/12 here) are MIGRATED to
-//     msg::Telemetry (123-004, see encode_telemetry above) -- no longer
-//     part of this verb's argv.
-//     -> "B64 <base64 bytes>" or "ZERO".
+//   encode_telemetry_secondary -- DELETED (124-009): TelemetrySecondary
+//     itself is gone.
 //
 // Float formatting: `%.9g` on both the encode-input parse (strtof) and the
 // decode-output print -- 9 significant decimal digits is the proven
@@ -425,34 +418,9 @@ int cmdEncodeTelemetry(int argc, char** argv) {
   return 0;
 }
 
-// encode_telemetry_secondary -- STANDALONE TelemetrySecondary (Decision 3 --
-// its own independently-armored line, no ReplyEnvelope wrapper, no corr_id).
-int cmdEncodeTelemetrySecondary(int argc, char** argv) {
-  if (argc < 12) {
-    std::printf("USAGE_ERROR\n");
-    return 1;
-  }
-  int i = 2;
-  msg::TelemetrySecondary sec;
-  sec.now = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-  sec.has_cmd_vel = std::strtoul(argv[i++], nullptr, 10) != 0;
-  sec.cmd_vel_left = std::strtof(argv[i++], nullptr);
-  sec.cmd_vel_right = std::strtof(argv[i++], nullptr);
-  sec.acc_left = std::strtof(argv[i++], nullptr);
-  sec.acc_right = std::strtof(argv[i++], nullptr);
-  sec.glitch_left = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-  sec.glitch_right = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-  sec.ts_left = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-  sec.ts_right = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-  // cycle_busy/cycle_period (formerly parsed here, 122-003) -- MIGRATED to
-  // msg::Telemetry (123-004, cmdEncodeTelemetry() above); no longer part
-  // of this verb's argv.
-
-  uint8_t buf[256] = {};
-  const uint16_t n = msg::wire::encode(sec, buf, sizeof(buf));
-  printEncodedOrZero(buf, n);
-  return 0;
-}
+// cmdEncodeTelemetrySecondary() -- DELETED (124-009): TelemetrySecondary
+// itself is gone (robot-state-blackboard-...md, issue's own
+// "TelemetrySecondary dies").
 
 }  // namespace
 
@@ -472,7 +440,6 @@ int main(int argc, char** argv) {
   if (op == "encode_ok") return cmdEncodeOk(argc, argv);
   if (op == "encode_err") return cmdEncodeErr(argc, argv);
   if (op == "encode_telemetry") return cmdEncodeTelemetry(argc, argv);
-  if (op == "encode_telemetry_secondary") return cmdEncodeTelemetrySecondary(argc, argv);
 
   std::printf("USAGE_ERROR\n");
   return 1;

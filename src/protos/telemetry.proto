@@ -120,6 +120,17 @@ import "common.proto";
 // value) purely to hit this ticket's own ≤130B `kReplyEnvelopeMaxEncodedSize`
 // gate once `position_epoch`'s real cost was accounted for. See wire.h's
 // own regenerated worst-case size comment for the current number.
+//
+// 124-009 (RobotState-projection restructure, robot-state-blackboard-
+// one-struct-for-all-shared-state-and-telemetry.md; issue §B1/B2): the
+// primary `Telemetry` message's fields are unchanged by this ticket (they
+// already represented what the host genuinely uses -- no further pruning
+// needed). `EncoderReading.age`/`OtosReading.age` now carry REAL per-sample
+// capture skew (`age = now - Devices::Motor::sampleTime()`/
+// `Devices::Otos::sampleTime()`, converted [us]->[ms]) instead of 124-008's
+// honest-zero placeholder. `TelemetrySecondary` is DELETED outright -- see
+// that message's own (now-historical) doc comment, below, for the
+// survivor-field review.
 // ---------------------------------------------------------------------------
 
 // Current drive mode -- relocated here from the deleted planner.proto
@@ -354,47 +365,18 @@ message Telemetry {
   uint32 cycle_period = 16 [(max) = 200000];  // [us] this cycle's cycleStart minus the previous cycle's
 }
 
-// TelemetrySecondary -- the slower diagnostic frame (unchanged by 115-003;
-// `telemetry-frame-tightening-amendment-to-gut-s1.md` explicitly leaves
-// this message untouched -- sprint.md Open Questions #3). Rides as a
-// second, independently-armored `*B`-armored line, own (slower) emission
-// cadence, own top-level `msg::wire::encode()` overload.
-//
-// NOTE: with EncoderReading.velocity now carrying velocity inside the
-// PRIMARY frame's per-wheel readings, this message's own ts_left/ts_right
-// sample-timestamp fields are redundant with EncoderReading.age (124-008:
-// RENAMED from `time`) -- candidates for pruning if this message is next
-// touched, per the amendment's own note. Not pruned here (out of this
-// ticket's scope).
-//
-// cycle_busy/cycle_period -- MOVED (123-004): these loop-timing fields
-// landed HERE as an interim placement (122-003, fields 11/12) because the
-// primary per-cycle `Telemetry` frame had no budget left under the old
-// base64-armored 186-byte envelope ceiling. Sprint 123's COBS+CRC framing
-// rework (tickets 001/002) removed that expansion and recomputed the
-// budget to 240B, restoring primary-frame headroom -- ticket 004 migrated
-// both fields onto `Telemetry` (fields 15/16, see that message's own doc
-// comment below) and REMOVED them from this message entirely (Open
-// Question 4: removing, not keeping on both, to avoid two frames at
-// different cadences silently diverging on the same values). Field
-// numbers 11/12 are `reserved`, not reused -- see this project's standing
-// "reserved, not reused" wire-stability discipline.
-message TelemetrySecondary {
-  reserved 11, 12;  // formerly cycle_busy/cycle_period -- migrated to Telemetry (123-004), see this message's own doc comment
-
-  uint32 now = 1;  // [ms] t= -- same clock as Telemetry.now, sampled at this frame's own
-                    // (slower) emission cadence
-
-  bool  has_cmd_vel   = 2;
-  float cmd_vel_left  = 3;  // [mm/s] signed -- velocity PID setpoint, left
-  float cmd_vel_right = 4;  // [mm/s] signed -- velocity PID setpoint, right
-
-  float acc_left  = 5;  // [mm/s^2] EMA-filtered
-  float acc_right = 6;  // [mm/s^2] EMA-filtered
-
-  uint32 glitch_left  = 7;  // encoder glitch count, left
-  uint32 glitch_right = 8;  // encoder glitch count, right
-
-  uint32 ts_left  = 9;   // [ms] last-sample timestamp, left
-  uint32 ts_right = 10;  // [ms] last-sample timestamp, right
-}
+// TelemetrySecondary -- DELETED (124-009, robot-state-blackboard-...md,
+// issue's own "Telemetry is a lean projection -- and TelemetrySecondary
+// dies"). It emitted nothing but `now` in production (no firmware caller
+// ever populated has_cmd_vel/acc_*/glitch_*/ts_* -- see this message's own
+// pre-deletion doc comment history for why: cmd_vel/acc/glitch were
+// declared-but-never-wired since 103-001, and ts_left/ts_right had been
+// redundant with EncoderReading.age since 124-008 anyway). `state ⊇ wire`
+// (the blackboard issue's own framing) means there is no wire-visibility
+// invariant obligating any of its fields to fold into the primary frame:
+// the host's own protocol.py documents its `cmd_vel` field as "permanent
+// gap, TelemetrySecondary only" -- i.e. never actually wired off the wire
+// even while this message existed. Nothing survives. Field numbers 1-10
+// were this message's own, not shared with any other message -- nothing
+// to reserve (the whole message is gone, not one field within a
+// surviving message).

@@ -67,7 +67,7 @@ import pytest
 
 from robot_radio.io.wire_codec import encode_frame
 
-from robot_radio.robot.pb2 import config_pb2, envelope_pb2, telemetry_pb2
+from robot_radio.robot.pb2 import config_pb2, envelope_pb2
 from robot_radio.robot.protocol import NezhaProtocol
 from robot_radio.testgui import binary_bridge
 
@@ -519,46 +519,41 @@ def test_malformed_binary_frame_renders_marker_never_raises():
 
 
 # ---------------------------------------------------------------------------
-# render_log_line() — TelemetrySecondary disambiguation (emergency fix,
-# stakeholder report: Tour 1 froze/died and the message monitor flooded at
-# ~4 lines/s with bare "corr_id: N" lines). A bare TelemetrySecondary frame
-# (its own armored *B line, NOT ReplyEnvelope-wrapped — telemetry.proto,
-# 104-003) "successfully" parses as a ReplyEnvelope with an EMPTY body oneof:
-# TelemetrySecondary's first field (`now`, its millisecond timestamp) and
-# ReplyEnvelope's first field (`corr_id`) are both wire type 13 (uint32),
-# so the bytes decode without error into a ReplyEnvelope carrying only
-# corr_id set and no body arm. Fixed with the same structural
-# disambiguation io/serial_conn.py's _handle_binary_reply() already uses:
-# treat a ReplyEnvelope parse as real only when WhichOneof("body") is set;
-# otherwise retry as TelemetrySecondary and drop the line on success (same
-# policy as a primary `tlm` push frame).
+# render_log_line() — empty-body-oneof frames render as malformed, not a
+# bogus "corr_id: N" line (124-009: the ReplyEnvelope-vs-TelemetrySecondary
+# disambiguation this section used to test is DELETED along with
+# TelemetrySecondary itself, robot-state-blackboard-...md — there is no
+# second shape left to retry a body-less parse against, so it is simply
+# malformed now). Historical context (kept for why this bit of behavior
+# exists at all): a bare TelemetrySecondary frame used to "successfully"
+# parse as a ReplyEnvelope with an EMPTY body oneof (TelemetrySecondary's
+# first field, `now`, and ReplyEnvelope's first field, `corr_id`, are both
+# wire type 13/uint32), flooding the message monitor with bare "corr_id: N"
+# lines at the secondary frame's own ~4 lines/s -- the reason
+# render_log_line() checks WhichOneof("body") at all rather than trusting
+# a successful parse alone.
 # ---------------------------------------------------------------------------
 
 
-def test_bare_telemetry_secondary_frame_is_dropped_not_misrendered():
-    from robot_radio.robot.pb2 import telemetry_pb2
+def test_empty_body_oneof_frame_renders_as_malformed_not_a_bare_corr_id_line():
+    """A frame that parses as a ReplyEnvelope with no body oneof set (the
+    exact shape a stray corr_id-only frame produces) is malformed, not a
+    silently-rendered bare "corr_id: N" line -- see this section's own
+    historical-context comment for why that distinction matters."""
+    reply = envelope_pb2.ReplyEnvelope()
+    reply.corr_id = 123456
+    # Deliberately NOT setting ok/err/tlm -- WhichOneof("body") stays None.
 
-    secondary = telemetry_pb2.TelemetrySecondary()
-    secondary.now = 123456
-    secondary.has_cmd_vel = True
-    secondary.cmd_vel_left = 150.0
-    secondary.cmd_vel_right = 150.0
-    secondary.acc_left = 0.5
-    secondary.acc_right = 0.4
-    secondary.glitch_left = 0
-    secondary.glitch_right = 0
-    secondary.ts_left = 12
-    secondary.ts_right = 12
+    rendered = binary_bridge.render_log_line(_armor(reply, b"TLM"), outbound=False)
 
-    rendered = binary_bridge.render_log_line(_armor(secondary, b"TLM"), outbound=False)
-
-    assert rendered is None
+    assert rendered is not None
+    assert "malformed" in rendered
 
 
 def test_reply_envelope_with_set_body_still_renders_not_dropped():
-    """Regression guard for the fix above: a REAL ReplyEnvelope (body oneof
-    actually set) must still render normally, not get swept into the new
-    TelemetrySecondary fallback."""
+    """Regression guard for the check above: a REAL ReplyEnvelope (body
+    oneof actually set) must still render normally, not get swept into the
+    malformed-marker path."""
     reply = envelope_pb2.ReplyEnvelope()
     reply.corr_id = 7
     reply.ok.q = 1

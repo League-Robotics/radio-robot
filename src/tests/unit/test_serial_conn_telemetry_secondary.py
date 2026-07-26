@@ -1,49 +1,26 @@
-"""src/tests/unit/test_serial_conn_telemetry_secondary.py — 104-003 (serial_conn
-ack-ring matcher hardening + TelemetrySecondary consumption).
+"""src/tests/unit/test_serial_conn_telemetry_secondary.py — 124-009
+(robot-state-blackboard-...md, issue's own "TelemetrySecondary dies")
+regression coverage.
 
-103-001 (``protos/telemetry.proto``, Decision 3) declared ``TelemetrySecondary``
--- the slower ~5 Hz diagnostic frame carrying ``acc``/``glitch``/``ts``/
-``cmd_vel`` fields pruned OUT of the always-on primary ``Telemetry`` message
--- and resolved its wire framing: a SECOND, independently-armored ``*B``
-line, NOT a ``ReplyEnvelope.body`` oneof arm (that oneof is fixed at
-``ok``/``err``/``tlm``, envelope.proto). ``src/firm/app/telemetry.cpp``'s
-``emitSecondary()`` (confirmed against the merged tree) frames and sends a
-BARE ``msg::TelemetrySecondary`` directly -- never wrapped in a
-``ReplyEnvelope`` -- under the exact same COBS+CRC framing (123-002/003;
-was the ``*B<base64>`` prefix pre-123) a ``ReplyEnvelope`` frame uses. No
-host consumer decoded this frame before ticket 104-003, even though the
-wire framing had been decided since 103-001.
+``TelemetrySecondary`` -- the slower ~5 Hz diagnostic frame this file used
+to cover end to end (103-001 Decision 3's independently-armored ``*B``
+line; 104-003's ``serial_conn.py`` decode path: the
+``_handle_binary_reply()`` fallback, ``_binary_secondary_queue``,
+``drain_binary_secondary_tlm()``/``read_binary_secondary_tlm()``) -- is
+DELETED OUTRIGHT, not deprecated: the message type, the wire schema arm,
+and every host-side consumer of it are gone. It emitted nothing but `now`
+in production (no firmware caller ever populated the rest of it).
 
-This file covers ``serial_conn.py``'s new decode path
-(``_handle_binary_reply()``'s ``TelemetrySecondary`` fallback,
-``_binary_secondary_queue``, ``drain_binary_secondary_tlm()``/
-``read_binary_secondary_tlm()``), no live hardware, no real serial port
-(rewritten for 123-002/003; mirrors ``test_serial_conn_binary_plane.py``'s
-own ``_wire_test_helpers.FakeSerial``/``_new_conn()`` pattern):
+This file's own job now is the regression proof `state ⊇ wire` this
+ticket calls for: TelemetrySecondary genuinely cannot come back
+unnoticed, on either side of the wire.
 
-1. A synthetic ``TelemetrySecondary``, framed exactly as
-   ``src/firm/app/telemetry.cpp`` frames it, round-trips through
-   ``_reader_loop()`` into ``_binary_secondary_queue`` with every field
-   (``acc``, ``glitch``, ``ts``, ``cmd_vel``) intact -- this ticket's own
-   required round-trip test.
-2. Disambiguation: an ordinary ``ReplyEnvelope`` (``ok``/``err``/``tlm``)
-   frame is routed exactly as before (never misrouted to the secondary
-   queue), and a ``TelemetrySecondary`` frame is never misrouted to
-   ``_reply_queues``/``_binary_tlm_queue`` -- proving the two message types
-   sharing one frame shape coexist correctly in the same reader-thread
-   session.
-3. ``drain_binary_secondary_tlm()`` / ``read_binary_secondary_tlm()`` --
-   the TelemetrySecondary counterparts of ``drain_binary_tlm()``/
-   ``read_binary_tlm()``, same non-blocking/blocking-poll and
-   drop-oldest-on-overflow contracts.
-
-Collected under ``src/tests/unit/`` — ``pyproject.toml``'s ``testpaths`` includes
-``tests/unit``, so ``uv run python -m pytest`` collects it by default.
+Collected under ``src/tests/unit/`` — ``pyproject.toml``'s ``testpaths``
+includes ``tests/unit``, so ``uv run python -m pytest`` collects it by
+default.
 """
 
 from __future__ import annotations
-
-import queue
 
 import pytest
 
@@ -53,93 +30,61 @@ from robot_radio.robot.pb2 import envelope_pb2, telemetry_pb2
 from _wire_test_helpers import FakeSerial, binary_frame
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _new_conn() -> SerialConnection:
     return SerialConnection()
 
 
-def _reply_command(envelope: "envelope_pb2.ReplyEnvelope") -> bytes:
-    """The ASCII wire-verb name for a populated ``pb2.ReplyEnvelope``
-    (124-005) -- see ``test_serial_conn_binary_plane.py``'s identically-named
-    helper. ``TelemetrySecondary`` reuses the SAME "TLM" verb as the primary
-    frame (telemetry.cpp's own doc comment: no separate registry verb exists
-    for it) -- callers below pass ``b"TLM"`` directly for that shape."""
-    which = envelope.WhichOneof("body")
-    assert which is not None, "test envelope must populate a body oneof arm"
-    return which.upper().encode("ascii")
+def test_telemetry_secondary_is_not_in_the_regenerated_pb2_module():
+    """The structural proof: `telemetry_pb2` -- regenerated from
+    `protos/telemetry.proto` by the SAME `gen_pb2.py`/`grpc_tools.protoc`
+    pipeline `build.py` always runs -- has no `TelemetrySecondary`
+    attribute at all. A future accidental re-introduction of the message
+    in the proto would make this assertion fail immediately, long before
+    any wire-level behavior could silently drift."""
+    assert not hasattr(telemetry_pb2, "TelemetrySecondary")
 
 
-def _synthetic_secondary(**kwargs) -> "telemetry_pb2.TelemetrySecondary":
-    defaults = dict(
-        now=12345,
-        has_cmd_vel=True,
-        cmd_vel_left=150.0,
-        cmd_vel_right=-150.0,
-        acc_left=12.5,
-        acc_right=-8.25,
-        glitch_left=3,
-        glitch_right=0,
-        ts_left=12300,
-        ts_right=12290,
-    )
-    defaults.update(kwargs)
-    return telemetry_pb2.TelemetrySecondary(**defaults)
-
-
-# ---------------------------------------------------------------------------
-# 1. Round-trip: every field (acc, glitch, ts, cmd_vel) decodes correctly
-# ---------------------------------------------------------------------------
-
-
-def test_telemetry_secondary_round_trips_every_field_through_reader_loop():
+def test_serial_connection_has_no_secondary_queue_or_accessors():
+    """The host-side decode path (`_binary_secondary_queue`,
+    `drain_binary_secondary_tlm()`, `read_binary_secondary_tlm()`) is
+    deleted along with the message type it existed to carry -- not left
+    behind as dead code that would raise `AttributeError` if ever
+    (re-)called."""
     conn = _new_conn()
-    secondary = _synthetic_secondary()
-
-    conn._ser = FakeSerial(binary_frame(secondary, b"TLM"))
-    conn._reader_loop()
-
-    decoded = conn._binary_secondary_queue.get_nowait()
-    assert isinstance(decoded, telemetry_pb2.TelemetrySecondary)
-    assert decoded.now == 12345
-    assert decoded.has_cmd_vel is True
-    assert decoded.cmd_vel_left == pytest.approx(150.0)
-    assert decoded.cmd_vel_right == pytest.approx(-150.0)
-    assert decoded.acc_left == pytest.approx(12.5)
-    assert decoded.acc_right == pytest.approx(-8.25)
-    assert decoded.glitch_left == 3
-    assert decoded.glitch_right == 0
-    assert decoded.ts_left == 12300
-    assert decoded.ts_right == 12290
+    assert not hasattr(conn, "_binary_secondary_queue")
+    assert not hasattr(conn, "drain_binary_secondary_tlm")
+    assert not hasattr(conn, "read_binary_secondary_tlm")
 
 
-def test_telemetry_secondary_has_cmd_vel_false_round_trips():
+def test_bare_corr_id_only_frame_counts_as_malformed_not_misrouted():
+    """124-009's own behavior change: a frame that decodes as a
+    `ReplyEnvelope` with `corr_id` set but no `body` oneof populated (the
+    exact shape a stray/corrupted frame -- or, historically, a bare
+    TelemetrySecondary frame's own field-number collision -- produces)
+    used to retry as `TelemetrySecondary`; now there is no second shape to
+    retry against, so it is simply malformed. Mirrors
+    `test_serial_conn_binary_plane.py`'s own malformed-frame coverage,
+    scoped to this specific "successfully parses, empty oneof" case."""
     conn = _new_conn()
-    secondary = _synthetic_secondary(has_cmd_vel=False, cmd_vel_left=0.0,
-                                      cmd_vel_right=0.0)
+    bare = envelope_pb2.ReplyEnvelope(corr_id=123456)
+    # Deliberately NOT setting ok/err/tlm -- WhichOneof("body") stays None.
 
-    conn._ser = FakeSerial(binary_frame(secondary, b"TLM"))
-    conn._reader_loop()
+    conn._ser = FakeSerial(binary_frame(bare, b"TLM"))
+    conn._reader_loop()  # must not raise
 
-    decoded = conn._binary_secondary_queue.get_nowait()
-    assert decoded.has_cmd_vel is False
-
-
-# ---------------------------------------------------------------------------
-# 2. Disambiguation: ReplyEnvelope and TelemetrySecondary share `*B` but
-#    coexist correctly.
-# ---------------------------------------------------------------------------
+    assert conn._binary_tlm_queue.empty()
+    assert conn._reply_queues == {}
+    assert conn.malformed_frame_count >= 1
 
 
-def test_reply_envelope_lines_still_route_normally_alongside_telemetry_secondary():
-    """A ReplyEnvelope (ok body) and a TelemetrySecondary, fed in the SAME
-    reader-thread session, each land in the correct queue -- the new
-    TelemetrySecondary fallback must not disturb existing ReplyEnvelope
-    routing (tlm push, corr-id'd ok/err), and vice versa."""
+def test_reply_envelope_routing_is_unaffected_by_the_deletion():
+    """Sanity check: ordinary `ReplyEnvelope` routing (corr-id'd `ok`, and
+    an unsolicited `tlm` push) is completely unaffected by
+    TelemetrySecondary's removal -- there was never a SECOND queue for
+    these to leak into."""
     conn = _new_conn()
+    import queue
+
     reply_q: queue.Queue = queue.Queue()
     conn._reply_queues["9"] = reply_q
 
@@ -151,11 +96,7 @@ def test_reply_envelope_lines_still_route_normally_alongside_telemetry_secondary
     push.tlm.now = 42
     push.tlm.seq = 8
 
-    secondary = _synthetic_secondary(now=999)
-
-    conn._ser = FakeSerial(
-        binary_frame(ack, _reply_command(ack)) + binary_frame(secondary, b"TLM")
-        + binary_frame(push, _reply_command(push)))
+    conn._ser = FakeSerial(binary_frame(ack, b"OK") + binary_frame(push, b"TLM"))
     conn._reader_loop()
 
     ack_reply = reply_q.get_nowait()
@@ -166,118 +107,6 @@ def test_reply_envelope_lines_still_route_normally_alongside_telemetry_secondary
     assert tlm_reply.corr_id == 0
     assert tlm_reply.WhichOneof("body") == "tlm"
     assert tlm_reply.tlm.now == 42
-
-    secondary = conn._binary_secondary_queue.get_nowait()
-    assert secondary.now == 999
-
-    # Neither line leaked into the other's queue.
-    assert conn._binary_tlm_queue.empty()
-    assert conn._binary_secondary_queue.empty()
-    assert reply_q.empty()
-
-
-def test_telemetry_secondary_never_registers_a_reply_queue_entry():
-    """TelemetrySecondary carries no corr_id at all -- confirms the fallback
-    path never touches _reply_queues (there is nothing to key a lookup by)."""
-    conn = _new_conn()
-
-    conn._ser = FakeSerial(binary_frame(_synthetic_secondary(), b"TLM"))
-    conn._reader_loop()
-
-    assert conn._reply_queues == {}
-    assert conn._binary_tlm_queue.empty()
-
-
-def test_malformed_binary_frame_still_dropped_not_misrouted_to_secondary_queue():
-    """A corrupted binary frame (neither a valid ReplyEnvelope NOR a valid
-    TelemetrySecondary) must still be dropped silently, not crash the
-    reader thread and not land in either queue."""
-    conn = _new_conn()
-
-    conn._ser = FakeSerial(b"TLM:not-a-valid-cobs-crc-frame-body" + b"\n")
-    conn._reader_loop()  # must not raise
-
-    assert conn._binary_tlm_queue.empty()
-    assert conn._binary_secondary_queue.empty()
-    assert conn._reply_queues == {}
-    assert conn.malformed_frame_count >= 1
-
-
-# ---------------------------------------------------------------------------
-# 3. drain_binary_secondary_tlm() / read_binary_secondary_tlm()
-# ---------------------------------------------------------------------------
-
-
-class _StaticOpenSerial:
-    """A fake `_ser` that only needs to answer `is_open` truthfully --
-    these accessors never touch `_ser.readline()`/`write()` (they poll
-    `_binary_secondary_queue`, which the reader thread fills independently
-    via _handle_binary_reply())."""
-
-    is_open = True
-
-
-def test_drain_binary_secondary_tlm_returns_all_queued_frames_and_empties_queue():
-    conn = _new_conn()
-    for now in (1, 2, 3):
-        conn._binary_secondary_queue.put_nowait(_synthetic_secondary(now=now))
-
-    frames = conn.drain_binary_secondary_tlm()
-
-    assert [f.now for f in frames] == [1, 2, 3]
-    assert conn._binary_secondary_queue.empty()
-
-
-def test_drain_binary_secondary_tlm_on_empty_queue_returns_empty_list():
-    conn = _new_conn()
-    assert conn.drain_binary_secondary_tlm() == []
-
-
-def test_read_binary_secondary_tlm_returns_frames_already_queued():
-    conn = _new_conn()
-    conn._ser = _StaticOpenSerial()
-    for now in (10, 20):
-        conn._binary_secondary_queue.put_nowait(_synthetic_secondary(now=now))
-
-    frames = conn.read_binary_secondary_tlm(duration=30)
-
-    assert [f.now for f in frames] == [10, 20]
-    assert conn._binary_secondary_queue.empty()
-
-
-def test_read_binary_secondary_tlm_not_connected_returns_empty_list_immediately():
-    conn = _new_conn()  # _ser stays None -- never connected
-    assert conn.read_binary_secondary_tlm(duration=500) == []
-
-
-def test_read_binary_secondary_tlm_times_out_with_empty_list_when_nothing_arrives():
-    conn = _new_conn()
-    conn._ser = _StaticOpenSerial()
-    assert conn.read_binary_secondary_tlm(duration=30) == []
-
-
-def test_binary_secondary_queue_drops_oldest_on_overflow():
-    """Matches _binary_tlm_queue's own documented drop-oldest-on-overflow
-    policy (test_binary_tlm_queue_drops_oldest_on_overflow in
-    test_serial_conn_binary_plane.py) -- same contract, TelemetrySecondary
-    counterpart. Uses a small monkey-patched queue depth (3) instead of the
-    real _TLM_QUEUE_DEPTH (256) so the test stays fast."""
-    conn = _new_conn()
-    conn._binary_secondary_queue = queue.Queue(maxsize=3)
-
-    for now in range(5):
-        # binary_frame() returns the FULL line ("TLM:<cobs bytes>\n") --
-        # strip the "TLM:" prefix and the trailing '\n' delimiter, since
-        # _handle_binary_reply() (124-005) takes the COBS body and the
-        # command bytes as two SEPARATE arguments.
-        line = binary_frame(_synthetic_secondary(now=now), b"TLM")
-        conn._handle_binary_reply(line[len(b"TLM:"):-1], b"TLM")
-
-    remaining = []
-    while not conn._binary_secondary_queue.empty():
-        remaining.append(conn._binary_secondary_queue.get_nowait())
-
-    assert [f.now for f in remaining] == [2, 3, 4]
 
 
 if __name__ == "__main__":

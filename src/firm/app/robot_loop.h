@@ -31,6 +31,7 @@
 #include "devices/line_sensor.h"
 #include "devices/motor.h"
 #include "devices/otos.h"
+#include "firm/types/robot_state.h"
 #include "motion/move_queue.h"
 #include "motion/odometry.h"
 #include "motion/state_estimator.h"
@@ -59,9 +60,9 @@ class RobotLoop {
   // body's own bus.clearanceSafetyNetCount() fault read. color/line
   // (115-005, gut S1) ARE referenced here directly -- Preamble still owns
   // detecting their PRESENCE at boot (called by name, never reached into),
-  // but this class's own kPace block now calls each leaf's own
+  // but this class's own kPace block calls each leaf's own
   // readDue()/tick()/reading() directly for rate-limited, alternating
-  // steady-state sampling (see updateLineColor()'s own doc comment below).
+  // steady-state sampling -- see cycle()'s own comment at that block.
   // stateEstimator (117) -- App::StateEstimator&, threaded through exactly
   // like MoveQueue&/Preamble& above (an already-constructed passive module
   // the cycle body touches by name; the composition root -- main.cpp on
@@ -69,9 +70,10 @@ class RobotLoop {
   // wiring order). handleConfig()'s own ESTIMATOR branch (ticket 003)
   // merges a live EstimatorConfigPatch's present fields onto
   // stateEstimator_.weights() and calls setWeights(); RobotLoop::cycle()'s
-  // trailing kPace block (ticket 004) calls stateEstimator_.update(frame_,
-  // nowUs) once per cycle, immediately after frame_.pose is staged -- see
-  // DESIGN.md's "Predict-to-now estimation" note.
+  // trailing kPace block calls stateEstimator_.update(state_, nowMs) once
+  // per cycle, immediately after state_.pose is published (124-009:
+  // state_ IS Motion::StateEstimator::Input now -- no separate hand-copy)
+  // -- see DESIGN.md's "Predict-to-now estimation" note.
   //
   // tuningStore (114-004, SUC-003) -- the persisted-live-tuning seam;
   // trailing and defaulted to nullptr so every EXISTING call site (main.cpp,
@@ -144,8 +146,8 @@ class RobotLoop {
   // isolation: under the CURRENT margin/bound relationship
   // (kPositionRebaselineMargin, robot_loop.cpp, is strictly less than the
   // bound, and Devices::Motor::rebaseline() unconditionally zeroes
-  // position() on return) assembleFrame()'s own call site can never
-  // actually reach the clamped branch through a live Motor -- this is
+  // position() on return) the wheel-section publish point in cycle() can
+  // never actually reach the clamped branch through a live Motor -- this is
   // insurance against that invariant changing later, not the expected
   // path today. A direct test calls this method with an out-of-bound
   // value, bypassing rebaseline() entirely, to prove the clamp itself is
@@ -159,55 +161,6 @@ class RobotLoop {
 
   template <typename Body>
   void runAndWait(uint32_t gap, Body body);  // [ms]
-
-  // assembleFrame -- 123-007's single telemetry-assembly point (Eric,
-  // 2026-07-25: "assemble it right before you emit it, and assemble it
-  // from primary sources, not by collecting stuff piecemeal ... one
-  // assembly and one update to set the flags, and then send it"). Called
-  // ONCE per cycle, from the kPace block, immediately before tlm_.emit() --
-  // replaces the old updateTlm()/updateLineColor()/applyOtosSample() trio
-  // (each of which used to write its own slice of frame_ from a different
-  // point in the cycle) plus the cycle body's own inline cycleBusy/
-  // cyclePeriod staging. Builds the WHOLE frame_ and sets every telemetry
-  // flag whose underlying condition is ALREADY knowable at this point in
-  // the cycle, reading bus_/motorL_/motorR_/otos_/odom_/moveQueue_/comms_/
-  // line_/color_ directly (primary sources) -- never reads a value back
-  // out of frame_ itself. `now` -- [ms], this cycle's own cycleStart mark
-  // (encoder collect-time stamp and tlm_.emit()'s own `now` argument, same
-  // time domain). `cycleStartUs`/`nowUs` -- [us], 123-004's own
-  // loop-timing instants (cycleBusy/cyclePeriod). `twistVx`/`twistOmega`
-  // and `otosReading`/`otosPresent`/`otosConnected` are handed in rather
-  // than re-read a second time -- the SAME primary-source values cycle()'s
-  // own StateEstimator::Input construction (immediately before this call)
-  // just computed via BodyKinematics::forward()/otos_.pose(); re-deriving
-  // them here would be a harmless-but-pointless second read of the same
-  // instant, not a correctness issue either way. `lineFresh`/`colorFresh`
-  // -- which ONE of {line_, color_} this cycle's own alternating tick
-  // (cycle()'s own kPace-block body, unchanged 115-005 cadence) actually
-  // ticked; the OTHER leaf's own flag/word is left untouched this cycle
-  // (matching the wire spec's "fresh THIS frame" semantics the old
-  // updateLineColor() already honored).
-  //
-  // NOT set here: kFlagFaultMoveTimeout/kFlagFaultShapingDisabled. Both
-  // read moveQueue_'s own state AFTER its per-cycle tick() call, which
-  // must stay positioned AFTER this method/tlm_.emit() every cycle (so a
-  // completion ack rides the NEXT frame, protocol-v4 §7.2 -- see cycle()'s
-  // own comment at the moveQueue_.tick() call site). The harness
-  // (app_robot_loop_harness.cpp's SUC-054/119-001 scenarios) queries
-  // tlm_.flags() directly (LIVE internal state, not decoded wire content)
-  // and requires both bits to already reflect THIS cycle's own tick()
-  // outcome by the time cycle() returns -- deferring them to the NEXT
-  // cycle's assembleFrame() call (as this ticket's first draft tried)
-  // makes the live flags lag tick() by a full extra cycle, which both
-  // scenarios catch. So these two are level-set via direct tlm_.setFlag()
-  // calls immediately after moveQueue_.tick(), the same position/logic as
-  // before this ticket -- the one place in this file a flag is still set
-  // outside assembleFrame(), and unavoidably so: their data does not EXIST
-  // yet at assembly time.
-  void assembleFrame(uint32_t now, uint64_t cycleStartUs, uint64_t nowUs,  // [ms] [us] [us]
-                      float twistVx, float twistOmega,                    // [mm/s] [rad/s]
-                      const Devices::PoseReading& otosReading, bool otosPresent,
-                      bool otosConnected, bool lineFresh, bool colorFresh);
 
   // Dispatches the <=1 decoded command in cmd to its own handler by
   // cmd_kind (NONE is a no-op). Each handler applies its command and acks
@@ -254,39 +207,42 @@ class RobotLoop {
   const Devices::Clock& clock_;
   Devices::Sleeper& sleeper_;
 
-  // Persists across cycle() calls. Each field is written by the part of
-  // the cycle that owns it (encoder/vel/conn after motorL_/motorR_'s own
-  // tick(); pose after odom_.integrate(); otos via applyOtosSample();
-  // line/color via updateLineColor()) and read back whole by the NEXT
-  // cycle's tlm_.setFrame()/emit() call -- Telemetry always carries the
-  // last staged snapshot, so a field updated late in one cycle is simply
-  // one cycle "stale" when it reaches the wire, never lost.
+  // The blackboard (124-009, robot-state-blackboard-one-struct-...md):
+  // persists across cycle() calls, exactly like frame_ used to. Each
+  // section is written by the part of the cycle that owns it, published
+  // at the earliest point it is internally coherent (wheels immediately
+  // after both L/R collects; otos/perception/pose/command/health in the
+  // trailing kPace block, in dependency order) -- see cycle()'s own
+  // comments at each publish point. tlm_.update(state_) is the ONE place
+  // this whole struct is read (SUC-004's single-assembly-point contract);
+  // no other consumer exists yet this sprint (Decision 1 defers the
+  // Drive/Sensors ownership reshuffle that would add one, to 125).
   //
   // No `driving_` hand-toggled bool (116, protocol-set-point issue):
-  // frame_.mode/kFlagActive derive from moveQueue_.active() directly
-  // (updateTlm()) -- MoveQueue is the single source of truth for whether
-  // motion is in progress, matching the deleted Deadman-era bool's own
-  // set/clear call sites one-for-one (activate/flush/timeout-drain).
-  Telemetry::Frame frame_;
+  // state_.command.moveActive derives from moveQueue_.active() directly --
+  // MoveQueue is the single source of truth for whether motion is in
+  // progress, matching the deleted Deadman-era bool's own set/clear call
+  // sites one-for-one (activate/flush/timeout-drain).
+  Types::RobotState state_;
 
   // Position-rebaseline policy (124-008, sprint 124 architecture Decision
   // 6): per-wheel software-rebaseline generation counters, owned and
   // incremented HERE (never by Devices::Motor/NezhaMotor/MotorArmor, which
   // this ticket leaves unmodified) -- an 8-bit wrap-around counter
-  // suffices (Decision 6's own sizing). See assembleFrame()'s own comment
-  // at the trigger call site.
+  // suffices (Decision 6's own sizing). See cycle()'s own comment at the
+  // wheel-section publish point (the trigger call site).
   uint8_t positionEpochLeft_ = 0;
   uint8_t positionEpochRight_ = 0;
 
   // Line/color alternation cursor (115-005) -- true means the NEXT pass
   // ticks line_, false means it ticks color_. Owned by cycle()'s own
-  // kPace-block body now (the tick itself is no longer a separate private
-  // method -- see assembleFrame()'s own doc comment); this cursor is the
-  // only piece of that cadence that must persist across cycle() calls.
+  // kPace-block body (the tick itself is a plain inline block, not a
+  // separate private method); this cursor is the only piece of that
+  // cadence that must persist across cycle() calls.
   bool lineTurnNext_ = true;
 
-  // --- Loop-timing telemetry (122-003, cycle_busy/cycle_period -- now
-  // staged onto the PRIMARY frame, 123-004 -- see telemetry.h's Frame doc
+  // --- Loop-timing telemetry (122-003, cycle_busy/cycle_period -- staged
+  // onto the PRIMARY frame since 123-004 -- see telemetry.h's Frame doc
   // comment for the full migration history). previousCycleStartUs_/
   // everCycled_ track cycle()'s OWN call history in [us] (independent of
   // markTime()'s [ms]-truncated cycleStart, which has too little
@@ -294,8 +250,7 @@ class RobotLoop {
   // stalls) -- NOT touched by boot(), which never calls cycle(), so the
   // first-ever cycle() call always reports cyclePeriod == 0 (no previous
   // cycle() call exists yet). Unchanged mechanism from 122-003 -- only the
-  // destination frame (frame_ instead of a local SecondaryFrame snapshot)
-  // moved.
+  // destination (state_.time.cycleBusy/cyclePeriod, 124-009) moved.
   uint64_t previousCycleStartUs_ = 0;  // [us]
   bool everCycled_ = false;
 

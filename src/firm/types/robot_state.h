@@ -110,10 +110,15 @@ struct RobotState {
   struct Wheel {
     float position = 0.0f;      // [mm] Devices::Motor::position()
     float velocity = 0.0f;      // [mm/s] signed, Devices::Motor::velocity()
-    uint32_t sampleTime = 0;    // [ms] cycle-domain capture time of this reading (matches
-                                 // the existing generated EncoderReading.time convention --
-                                 // the owning cycle's own cycleStart, NOT Devices::Motor's
-                                 // raw sampleTime() [us] device-clock accessor value directly)
+    uint32_t sampleTime = 0;    // [ms] this reading's own genuine collect time (ticket 009,
+                                 // issue §B2): Devices::Motor::sampleTime() [us], converted to
+                                 // the cycle-domain [ms] EncoderReading.age's projection needs --
+                                 // NOT the owning cycle's own cycleStart (that was ticket 008's
+                                 // interim stand-in, an honest-zero placeholder pending this
+                                 // wiring). Left and right genuinely differ (the brick holds one
+                                 // pending read, so the two collects are ~kSettle+kClear apart)
+                                 // -- this field is where that skew is preserved for
+                                 // App::Telemetry::update()'s age = now - sampleTime projection.
     bool connected = false;     // Devices::Motor::connected()
     uint8_t positionEpoch = 0;  // wraps; +1 each RobotLoop-triggered rebaseline() (Decision 6)
     float cmdVelocity = 0.0f;   // [mm/s] signed, App::Drive's last-staged target for this wheel
@@ -137,7 +142,9 @@ struct RobotState {
     float v_x = 0.0f;         // [mm/s] signed
     float v_y = 0.0f;         // [mm/s] signed
     float omega = 0.0f;       // [rad/s] signed
-    uint32_t sampleTime = 0;  // [ms] cycle-domain capture time of this reading
+    uint32_t sampleTime = 0;  // [ms] this reading's own genuine collect time (ticket 009,
+                               // issue §B2): Devices::Otos::sampleTime() [us], converted to
+                               // [ms] -- same rationale as Wheel::sampleTime above.
   } otos;
 
   // --- Perception --- writer: today RobotLoop's line/color alternation
@@ -226,6 +233,22 @@ struct RobotState {
     float v_x = 0.0f;         // [mm/s] signed, current commanded body-frame forward velocity
     float omega = 0.0f;       // [rad/s] signed, current commanded yaw rate
   } command;
+  // Ticket 009 note: mode/moveActive are published from RobotLoop::cycle()'s
+  // own pace block (a fresh moveQueue_.active() read immediately before
+  // tlm_.update(state_), matching where the pre-ticket-009 assembleFrame()
+  // call used to read it) rather than literally inside processMessage() --
+  // processMessage()'s own handlers (handleMove/handleConfig/handleStop)
+  // mutate moveQueue_ directly, not a `command` field, so there is nothing
+  // for this section's mid-cycle write to actually do at dispatch time
+  // itself; the doc comment above describes the target ownership, not (yet)
+  // the literal call site. v_x/omega stay at their default 0.0f -- unwired
+  // this ticket: Motion::MoveQueue exposes no accessor for its own
+  // currently-staged cruise twist target (move_queue.h's private
+  // active_.cruiseVX/cruiseOmega), and adding one is outside this ticket's
+  // touch points (robot_loop.{h,cpp}/telemetry.{h,cpp}/state_estimator.h) --
+  // no wire field ever read this value either (TelemetrySecondary included),
+  // so this is a real, harmless gap for a future ticket, not a silently
+  // wrong one.
 
   // --- Health --- writer: the owning module for each signal (I2CBus,
   // Comms, the two Motor leaves' wedge latch, MoveQueue). Per-cycle
@@ -246,6 +269,13 @@ struct RobotState {
     bool wedgeLatch = false;           // either bound motor's Devices::Motor::wedged()
     bool moveTimeout = false;          // MOVE timeout backstop fired THIS cycle
     bool shapingDisabled = false;      // active MOVE, both ShaperLimits axes disabled
+    // positionClamped (ticket 009, ADDITIVE -- genuinely live since 124-008
+    // but not yet carried on RobotState until this ticket wired the
+    // wheel-section publish point): either wheel's position hit the
+    // position-rebaseline policy's defensive clamp fallback this cycle
+    // (RobotLoop::clampToPositionWireBound(), Decision 6) -- see
+    // telemetry.h's own kFlagFaultPositionClamped doc comment.
+    bool positionClamped = false;
   } health;
 };
 

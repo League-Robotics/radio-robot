@@ -59,7 +59,6 @@ from _wire_diff_driver import (  # noqa: E402
     encode_err,
     encode_ok,
     encode_telemetry,
-    encode_telemetry_secondary,
     env_config_drivetrain,
     env_config_motor,
     env_config_otos,
@@ -190,10 +189,10 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
     bit-string, one ack slot, per-source timestamped `EncoderReading`/
     `OtosReading` objects) plus the config Patch types -- every number
     transcribed by hand into wire_differential_harness.cpp's
-    encode_telemetry/encode_telemetry_secondary/decode-CONFIG-case, cross-
-    checked here against the SAME protos/*.proto-generated pb2 descriptors.
-    `acks` (field 14, 120's ADDITIVE ack ring) extends this set without
-    renumbering anything above it."""
+    encode_telemetry/decode-CONFIG-case, cross-checked here against the
+    SAME protos/*.proto-generated pb2 descriptors. `acks` (field 14, 120's
+    ADDITIVE ack ring) extends this set without renumbering anything
+    above it."""
     # 124-008 (issue §B4): ack_corr/ack_err (fields 5/6) DELETED, reserved
     # not reused -- the single "freshest ack" scalar slot is gone, ring
     # membership already means "really acked."
@@ -222,15 +221,13 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
     actual_otos_reading_numbers = {f.name: f.number for f in pb_telemetry.OtosReading.DESCRIPTOR.fields}
     assert actual_otos_reading_numbers == expected_otos_reading_numbers
 
-    expected_telemetry_secondary_numbers = {
-        "now": 1, "has_cmd_vel": 2, "cmd_vel_left": 3, "cmd_vel_right": 4, "acc_left": 5, "acc_right": 6,
-        "glitch_left": 7, "glitch_right": 8, "ts_left": 9, "ts_right": 10,
-        # cycle_busy (11) / cycle_period (12), 122-003 -- MIGRATED to
-        # Telemetry (123-004, see expected_telemetry_numbers above) and
-        # `reserved` here now; no longer active fields on this message.
-    }
-    actual_telemetry_secondary_numbers = {f.name: f.number for f in pb_telemetry.TelemetrySecondary.DESCRIPTOR.fields}
-    assert actual_telemetry_secondary_numbers == expected_telemetry_secondary_numbers
+    # TelemetrySecondary -- DELETED outright (124-009,
+    # robot-state-blackboard-...md, issue's own "TelemetrySecondary dies").
+    # There is no descriptor left to pin -- the regression test is that the
+    # attribute is GONE, not that its field numbers match anything.
+    assert not hasattr(pb_telemetry, "TelemetrySecondary"), (
+        "TelemetrySecondary should be deleted outright (124-009)"
+    )
 
     expected_drivetrain_patch = {
         "trackwidth": 1, "rotational_slip": 2, "ekf_q_xy": 3, "ekf_q_theta": 4, "ekf_r_otos_xy": 5,
@@ -783,56 +780,13 @@ def test_direction_b_telemetry_reading_ages_independent_across_frames(harness):
 
 
 # ---------------------------------------------------------------------------
-# TelemetrySecondary (NEW this ticket, Decision 3) -- a STANDALONE top-level
-# wire message, never wrapped in ReplyEnvelope. Direction B only (firmware-
-# encode -> host-decode); there is no ReplyEnvelope corr_id to check.
+# TelemetrySecondary -- DELETED outright (124-009, robot-state-blackboard-
+# ...md, issue's own "TelemetrySecondary dies"). It emitted nothing but
+# `now` in production -- test_field_numbers_match_pb2_descriptors_telemetry()
+# above is this ticket's own regression check (asserts the pb2 attribute is
+# GONE); there is no encode_telemetry_secondary verb left in
+# wire_differential_harness.cpp to drive a direction-B round-trip through.
 # ---------------------------------------------------------------------------
-
-_TELEMETRY_SECONDARY_FULL_SHAPE = dict(
-    now=6000, has_cmd_vel=True, cmd_vel_left=120.0, cmd_vel_right=-120.0, acc_left=3.5, acc_right=-1.25,
-    glitch_left=2, glitch_right=4294967295, ts_left=7000, ts_right=7001,
-    # cycle_busy/cycle_period (122-003, formerly fields 11/12 here) --
-    # MIGRATED to Telemetry (123-004, see _TELEMETRY_FULL_SHAPE above).
-)
-
-
-def test_direction_b_telemetry_secondary_full_shape(harness):
-    raw = encode_telemetry_secondary(harness, **_TELEMETRY_SECONDARY_FULL_SHAPE)
-    assert raw is not None, "encode_telemetry_secondary returned ZERO for a well-under-budget frame"
-    sec = pb_telemetry.TelemetrySecondary.FromString(raw)
-    assert sec.now == _TELEMETRY_SECONDARY_FULL_SHAPE["now"]
-    assert sec.has_cmd_vel == _TELEMETRY_SECONDARY_FULL_SHAPE["has_cmd_vel"]
-    assert sec.cmd_vel_left == f32(_TELEMETRY_SECONDARY_FULL_SHAPE["cmd_vel_left"])
-    assert sec.cmd_vel_right == f32(_TELEMETRY_SECONDARY_FULL_SHAPE["cmd_vel_right"])
-    assert sec.acc_left == f32(_TELEMETRY_SECONDARY_FULL_SHAPE["acc_left"])
-    assert sec.acc_right == f32(_TELEMETRY_SECONDARY_FULL_SHAPE["acc_right"])
-    assert sec.glitch_left == _TELEMETRY_SECONDARY_FULL_SHAPE["glitch_left"]
-    assert sec.glitch_right == _TELEMETRY_SECONDARY_FULL_SHAPE["glitch_right"]
-    assert sec.ts_left == _TELEMETRY_SECONDARY_FULL_SHAPE["ts_left"]
-    assert sec.ts_right == _TELEMETRY_SECONDARY_FULL_SHAPE["ts_right"]
-
-
-def test_direction_b_telemetry_secondary_all_other_fields_zero_default(harness):
-    """Every field except `now` at its proto zero default still round-trips
-    to the SAME zero value. `now` is pinned nonzero deliberately: unlike
-    every ReplyEnvelope-wrapped message (always at least tag+len for the
-    selected oneof arm, even with an all-default payload), TelemetrySecondary
-    is encoded as a bare top-level message with NO oneof wrapper -- an
-    all-default TelemetrySecondary legitimately serializes to zero bytes
-    (matching real `google.protobuf`'s own `Message().SerializeToString() ==
-    b""`), which this harness's `encode_telemetry_secondary` verb cannot
-    distinguish from a genuine encode() failure over its "B64 .../ZERO"
-    text protocol -- the same overloaded-zero-return ambiguity wire.h's own
-    encode() has always had for a fully-blank envelope, not a new gap this
-    ticket introduces."""
-    raw = encode_telemetry_secondary(harness, now=1)
-    assert raw is not None, "encode_telemetry_secondary returned ZERO for a well-under-budget frame"
-    sec = pb_telemetry.TelemetrySecondary.FromString(raw)
-    assert sec.now == 1
-    assert sec.has_cmd_vel is False
-    assert sec.cmd_vel_left == 0.0
-    assert sec.glitch_left == 0
-    assert sec.ts_left == 0
 
 
 # ===========================================================================

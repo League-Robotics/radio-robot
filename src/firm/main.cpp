@@ -156,7 +156,10 @@ int main() {
   static App::SerialTransport serialLink(serial);
   static App::RadioTransport radioLink(radio);
   static App::Comms comms(serialLink, radioLink, banner, idLine);
-  static App::Telemetry tlm(comms, serialLink, radioLink);
+  // 124-009: Telemetry no longer holds direct Transport& references (those
+  // existed only for TelemetrySecondary's own independently-armored line,
+  // now deleted) -- comms already owns both transports internally.
+  static App::Telemetry tlm(comms);
   static App::Drive drive(motorL, motorR, drivetrainConfig.trackwidth);
   static Motion::Odometry odom(drivetrainConfig.trackwidth, motorL.position(), motorR.position());
 

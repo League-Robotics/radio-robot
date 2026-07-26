@@ -461,7 +461,7 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   NullTransport serialLink;
   NullTransport radioLink;
   App::Comms comms(serialLink, radioLink, "DEVICE:NEZHA2:robot:test:0");
-  App::Telemetry tlm(comms, serialLink, radioLink);
+  App::Telemetry tlm(comms);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
@@ -601,7 +601,7 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
-  App::Telemetry tlm(comms, serialFake, radioFake);
+  App::Telemetry tlm(comms);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
@@ -799,7 +799,7 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
-  App::Telemetry tlm(comms, serialFake, radioFake);
+  App::Telemetry tlm(comms);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
@@ -951,7 +951,7 @@ struct LiveFixture {
         color(plant, Devices::ColorConfig{}),
         line(plant, Devices::LineConfig{}),
         comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0"),
-        tlm(comms, serialFake, radioFake),
+        tlm(comms),
         drive(motorL, motorR, /*trackWidth=*/120.0f),
         odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position()),
         moveQueue(drive, odom, /*trackWidth=*/120.0f),
@@ -1538,7 +1538,7 @@ void scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles() {
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
-  App::Telemetry tlm(comms, serialFake, radioFake);
+  App::Telemetry tlm(comms);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // Default-constructed StateEstimator (0/0/200ms weights) -- quarantined,
@@ -1676,7 +1676,7 @@ void scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists() {
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
-  App::Telemetry tlm(comms, serialFake, radioFake);
+  App::Telemetry tlm(comms);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // Turn-prediction campaign: stateEstimator constructed before moveQueue
@@ -1799,7 +1799,7 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
-  App::Telemetry tlm(comms, serialFake, radioFake);
+  App::Telemetry tlm(comms);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // Default weights -- sourcing from Config::defaultEstimatorConfig() is
@@ -2013,7 +2013,7 @@ void scenarioPositionRebaselineTriggersAtMarginAndIncrementsEpoch() {
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
   App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
-  App::Telemetry tlm(comms, serialFake, radioFake);
+  App::Telemetry tlm(comms);
   App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
   Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   Motion::StateEstimator stateEstimator;
@@ -2384,6 +2384,120 @@ void scenarioClampToPositionWireBoundClampsAndFlagsOutOfRangeValues() {
   checkTrue(!clamped, "*clamped stays false exactly AT the bound -- the check is strictly greater-than");
 }
 
+// ===========================================================================
+// SUC-006 (issue §B2, "the real defect"): enc_left.age/enc_right.age are
+// computed INDEPENDENTLY from each wheel's own real sampleTime(), not
+// stamped with a shared `now` -- the fix for "two fields carrying one
+// value is worse than one field: it implies a measurement that was never
+// made." Needs a Sleeper that genuinely ADVANCES the paired clock on each
+// sleepMillis() call, unlike TestSim::SimSleeper (never advances anything
+// -- sim_clock.cpp's own doc comment: "the harness decides") or
+// LiveFixture::step()'s own one-jump-per-whole-cycle model (both of which
+// leave RobotLoop::cycle()'s own runAndWait(kSettle/kClear/...) calls
+// frozen in simulated time, unable to reproduce genuine sub-cycle skew) --
+// TickingSleeper below is this one scenario's own composition, needed
+// nowhere else in this file.
+// ===========================================================================
+
+// TickingSleeper -- advances a paired TestSim::SimClock by exactly the
+// requested sleepMillis() duration. Since runAndWait(gap, body)'s own
+// body() never itself sleeps (pure compute -- see robot_loop.cpp's own
+// "device calls are pure bus transactions and never sleep" invariant),
+// sleepUntil() always requests the FULL nominal gap here, so this
+// scenario's own per-cycle clock advance sums to EXACTLY kSettle+kClear+
+// kSettle+kPace == kCycle (robot_loop.cpp's own static_assert) -- the same
+// total LiveFixture::step()'s single clock.advanceMicros(kCycleDtUs) jump
+// applies, just spread across the cycle at the real sub-cycle points a
+// genuine wall clock would advance it, which is exactly the skew this
+// scenario needs to observe.
+class TickingSleeper : public Devices::Sleeper {
+ public:
+  explicit TickingSleeper(TestSim::SimClock& clock) : clock_(clock) {}
+  void sleepMillis(uint32_t duration) override {
+    clock_.advanceMicros(static_cast<uint64_t>(duration) * 1000);  // [ms] -> [us]
+  }
+  void yield() override {}
+
+ private:
+  TestSim::SimClock& clock_;
+};
+
+void scenarioEncoderAgesAreIndependentAndReflectRealCollectSkew() {
+  beginScenario("SUC-006: enc_left.age/enc_right.age are independently computed from real "
+                "per-wheel sampleTime() values -- never equal, never zero, under the virtual "
+                "clock's own genuinely-elapsing sub-cycle time");
+
+  TestSim::SimPlant plant;
+  TestSim::SimClock clock;
+  TickingSleeper sleeper(clock);
+
+  Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
+  Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
+  Devices::RealOtos otos(plant, Devices::OtosConfig{});
+  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
+  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+
+  TestSupport::FakeTransport serialFake;
+  TestSupport::FakeTransport radioFake;
+
+  App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
+  App::Telemetry tlm(comms);
+  App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
+  Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
+  Motion::StateEstimator stateEstimator;
+  Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
+  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm, drive, odom, moveQueue,
+                            preamble, stateEstimator, clock, sleeper);
+
+  clock.setMicros(50000);
+  for (int i = 0; i < 200 && !preamble.done(); ++i) {
+    preamble.step();
+    clock.advanceMicros(50000);
+  }
+  robotLoop.boot();
+
+  // A handful of cycles so both wheels' own sampleTime() settle into their
+  // steady-state per-cycle cadence.
+  for (int i = 0; i < 5; ++i) {
+    plant.tick(static_cast<float>(kCycleDtUs) / 1e6f);  // [s]
+    robotLoop.cycle();
+  }
+
+  checkTrue(!serialFake.sent().empty(), "at least one primary frame was captured");
+  TestSupport::DecodedLine decoded = TestSupport::decodeOutboundLine(serialFake.sent().back());
+  checkTrue(decoded.kind == TestSupport::DecodedKind::kTelemetry,
+            "the last captured line decodes as the primary Telemetry frame");
+
+  const uint32_t ageLeft = decoded.telemetry.enc_left.age;
+  const uint32_t ageRight = decoded.telemetry.enc_right.age;
+  // L is collected EARLIER in the cycle than R (motorL_.tick() runs a full
+  // kSettle+kClear before motorR_.tick() -- robot_loop.cpp's own
+  // interleaved request/settle/collect/clear/request/settle/collect
+  // schedule), so L's own sample is OLDER (relative to the SAME "now") by
+  // exactly that separation: ageLeft > ageRight, not the other way round.
+  std::printf("  measured: enc_left.age=%u enc_right.age=%u (differential=%d, expect ~kSettle+kClear=8ms)\n",
+              static_cast<unsigned>(ageLeft), static_cast<unsigned>(ageRight),
+              static_cast<int>(ageLeft) - static_cast<int>(ageRight));
+
+  checkTrue(ageLeft != 0, "enc_left.age is never zero -- a real, non-simultaneous collect time");
+  checkTrue(ageRight != 0, "enc_right.age is never zero -- a real, non-simultaneous collect time");
+  checkTrue(ageLeft != ageRight,
+            "enc_left.age and enc_right.age are NEVER equal -- two fields carrying one shared value "
+            "would imply a measurement that was never made (issue §B2); an assertion that they're "
+            "equal is the bug, not the spec");
+
+  // "Roughly" kSettle+kClear (4+4=8ms, robot_loop.cpp's own constants) --
+  // the exact figure this virtual-clock run measures (TickingSleeper
+  // advances by exactly the nominal gap on every runAndWait call, so this
+  // is deterministic, not a tolerance dodging a harder assertion).
+  const int diff = static_cast<int>(ageLeft) - static_cast<int>(ageRight);
+  checkTrue(diff == 8,
+            "the age differential is EXACTLY kSettle+kClear (8ms) -- the real, deterministic collect "
+            "skew between motorL_.tick()'s and motorR_.tick()'s own settle/clear windows "
+            "(robot_loop.cpp's own request/settle/collect/clear/request/settle/collect schedule)");
+}
+
 }  // namespace
 
 int main() {
@@ -2409,6 +2523,8 @@ int main() {
   scenarioPositionRebaselineTriggersAtMarginAndIncrementsEpoch();
   scenarioPositionRebaselineFiresOverExtendedLiveRunPastCumulativeTravel();
   scenarioClampToPositionWireBoundClampsAndFlagsOutOfRangeValues();
+
+  scenarioEncoderAgesAreIndependentAndReflectRealCollectSkew();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::RobotLoop scenarios passed\n");

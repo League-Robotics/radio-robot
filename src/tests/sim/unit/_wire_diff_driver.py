@@ -10,14 +10,15 @@ is now exactly ``{move, config, stop}`` (``twist``, arm 19, deleted/reserved,
 superseded by ``move``, a fresh arm 21: ``MoveTwist|MoveWheels`` velocity
 oneof + ``time|distance|angle`` stop oneof + ``timeout``/``replace``/``id``);
 ``ReplyEnvelope.body`` is still exactly ``{ok, err, tlm}``; ``Telemetry`` now
-carries a single ``flags`` bit-string (status+fault+event) plus a single
-``ack_corr``/``ack_err`` slot (the depth-3 ack ring is gone) and per-source
-timestamped ``EncoderReading``/``OtosReading`` objects; ``ConfigDelta.patch``
-is DRIVETRAIN/MOTOR/OTOS (PLANNER deleted wholesale alongside
-``Motion::Executor``/``App::Pilot``, 115-003; WATCHDOG deleted, 116-001 --
-``ConfigTarget.CONFIG_WATCHDOG`` stays declared-unused);
-``TelemetrySecondary`` is unchanged, a standalone top-level message with its
-own ``msg::wire::encode()`` overload.
+carries a single ``flags`` bit-string (status+fault+event) and a bounded,
+packed ``acks`` ring (the single ``ack_corr``/``ack_err`` slot is deleted,
+124-008) plus per-source timestamped ``EncoderReading``/``OtosReading``
+objects; ``ConfigDelta.patch`` is DRIVETRAIN/MOTOR/OTOS (PLANNER deleted
+wholesale alongside ``Motion::Executor``/``App::Pilot``, 115-003; WATCHDOG
+deleted, 116-001 -- ``ConfigTarget.CONFIG_WATCHDOG`` stays declared-unused);
+``TelemetrySecondary`` is DELETED outright (124-009,
+robot-state-blackboard-...md) -- there is no second top-level wire message
+any more.
 
 Compiles ``wire_differential_harness.cpp`` (src/firm/messages/wire.cpp +
 wire_runtime.cpp linked in) with the system C++ compiler and drives it
@@ -245,32 +246,10 @@ def encode_telemetry(binary: pathlib.Path, corr_id: int,
     return base64.b64decode(line[len("B64 "):])
 
 
-def encode_telemetry_secondary(binary: pathlib.Path, **fields) -> bytes | None:
-    """Builds a STANDALONE TelemetrySecondary (Decision 3 -- own
-    independently-armored line, no ReplyEnvelope wrapper, no corr_id) via
-    the `encode_telemetry_secondary` argv verb. `fields` keys are
-    TelemetrySecondary's own proto field names."""
-    order = (
-        "now", "has_cmd_vel", "cmd_vel_left", "cmd_vel_right", "acc_left", "acc_right",
-        "glitch_left", "glitch_right", "ts_left", "ts_right",
-        # cycle_busy/cycle_period (122-003, formerly fields 11/12 here) --
-        # MIGRATED to Telemetry (123-004, encode_telemetry's own order tuple
-        # above); no longer part of this message.
-    )
-    unknown = set(fields) - set(order)
-    assert not unknown, f"unknown TelemetrySecondary field(s): {unknown}"
-    args = []
-    for key in order:
-        value = fields.get(key, 0)
-        args.append(str(int(value)) if isinstance(value, bool) else str(value))
-    r = run_harness(binary, "encode_telemetry_secondary", *args)
-    assert not r.crashed, f"encode_telemetry_secondary crashed: {r.stdout}\n{r.stderr}"
-    line = r.stdout.strip()
-    if line == "ZERO":
-        return None
-    assert line.startswith("B64 "), f"unexpected encode_telemetry_secondary output: {line!r}"
-    return base64.b64decode(line[len("B64 "):])
-
+# encode_telemetry_secondary() -- DELETED (124-009): TelemetrySecondary
+# itself is gone (robot-state-blackboard-...md, issue's own
+# "TelemetrySecondary dies") -- wire_differential_harness.cpp no longer has
+# an `encode_telemetry_secondary` argv verb to drive.
 
 # ---------------------------------------------------------------------------
 # float32 canonicalization -- both sides of the differential (the harness's
@@ -406,7 +385,7 @@ def env_config_otos(corr_id: int, **fields) -> bytes:
 __all__ = [
     "pb_common", "pb_config", "pb_envelope", "pb_telemetry",
     "compile_harness", "run_harness", "decode", "parse_decode_line",
-    "encode_ok", "encode_err", "encode_telemetry", "encode_telemetry_secondary", "pack_ack", "f32", "float_eq",
+    "encode_ok", "encode_err", "encode_telemetry", "pack_ack", "f32", "float_eq",
     "unknown_varint_field",
     "env_move_twist", "env_move_wheels", "env_stop",
     "env_config_drivetrain", "env_config_motor", "env_config_otos",

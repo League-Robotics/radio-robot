@@ -4,10 +4,11 @@
 // protos/telemetry.proto -- 103-001, SUC-001, architecture-update.md (103)
 // Decisions 2/3). CommandEnvelope.cmd is exactly {move, config, stop} (116-001,
 // MOVE protocol cutover -- `twist`, arm 19, is deleted/reserved, superseded
-// by `move`, a fresh arm 21); ReplyEnvelope.body is exactly {ok, err, tlm}; TelemetrySecondary rides its
-// own independently-armored `*B` line (its own `msg::wire::encode()`
-// overload, not a ReplyEnvelope oneof arm -- Decision 3). Telemetry itself
-// is frame v2 (115-009, matching 115-003's `telemetry-frame-tightening-
+// by `move`, a fresh arm 21); ReplyEnvelope.body is exactly {ok, err, tlm};
+// TelemetrySecondary is DELETED outright (124-009,
+// robot-state-blackboard-...md) -- there is no second top-level wire
+// message any more. Telemetry itself is frame v2 (115-009, matching
+// 115-003's `telemetry-frame-tightening-
 // amendment-to-gut-s1.md` rewrite): one `flags` bit-string (status+fault+
 // event) replaces the pre-115 nine standalone bools/`fault_bits`/
 // `event_bits`; a single `ack_corr`/`ack_err` slot replaces the depth-3 ack
@@ -127,9 +128,9 @@ bool putMessageField(Buf& b, uint32_t number, const Buf& nested) {
 }
 
 // --- Generic top-level field scanner for the ENCODE-side scenarios below --
-// (no generic decode(ReplyEnvelope)/decode(Telemetry) exists this sprint --
-// decode() is CommandEnvelope-only, encode() is ReplyEnvelope/
-// TelemetrySecondary-only, per wire.h's own asymmetric API). Walks every
+// (no generic decode(ReplyEnvelope) exists this sprint -- decode() is
+// CommandEnvelope-only, encode() is ReplyEnvelope-only, per wire.h's own
+// asymmetric API). Walks every
 // top-level field of a length-delimited buffer into a flat list, tolerant
 // of field order (the generator's own FieldDesc table order matches proto
 // declaration order today, but this scanner does not assume that).
@@ -684,41 +685,25 @@ void scenarioEncodeOversizedBufferReturnsZero() {
   checkU64Eq(n0, 0, "encode returns 0 for cap==0");
 }
 
-void scenarioEncodeTelemetrySecondary() {
-  beginScenario("encode(): TelemetrySecondary -- own independently-armored codec (Decision 3), hand-parsed");
-  msg::TelemetrySecondary sec;
-  sec.now = 6000;
-  sec.has_cmd_vel = true;
-  sec.cmd_vel_left = 120.0f;
-  sec.cmd_vel_right = -120.0f;
-  sec.acc_left = 3.5f;
-  sec.acc_right = -1.25f;
-  sec.glitch_left = 2;
-  sec.glitch_right = 0;
-  sec.ts_left = 7000;
-  sec.ts_right = 7001;
+// scenarioEncodeTelemetrySecondary() -- DELETED (124-009): TelemetrySecondary
+// itself is gone (robot-state-blackboard-...md, issue's own
+// "TelemetrySecondary dies"). scenarioNoTelemetrySecondaryWireArm() below is
+// this ticket's own regression test in its place -- the "no secondary wire
+// arm is ever emitted" acceptance the ticket's Testing section calls for.
 
-  uint8_t buf[128] = {};
-  uint16_t n = msg::wire::encode(sec, buf, sizeof(buf));
-  checkTrue(n > 0, "encode succeeds");
-  checkTrue(n <= msg::wire::kTelemetrySecondaryMaxEncodedSize,
-            "encoded length stays within kTelemetrySecondaryMaxEncodedSize");
-
-  auto fields = parseFields(buf, n);
-  auto now = fieldsWithNumber(fields, 1);
-  checkU64Eq(now.size(), 1, "now (field 1) present");
-  if (!now.empty()) checkU64Eq(now[0].varintVal, 6000, "now round-trips");
-
-  auto cmdVelLeft = fieldsWithNumber(fields, 3);
-  checkU64Eq(cmdVelLeft.size(), 1, "cmd_vel_left (field 3) present");
-  if (!cmdVelLeft.empty()) checkFloatEq(cmdVelLeft[0].floatVal, 120.0f, "cmd_vel_left round-trips");
-
-  auto glitchRight = fieldsWithNumber(fields, 8);
-  checkTrue(glitchRight.empty(), "glitch_right (field 8, zero) omitted -- implicit presence");
-
-  auto tsRight = fieldsWithNumber(fields, 10);
-  checkU64Eq(tsRight.size(), 1, "ts_right (field 10) present");
-  if (!tsRight.empty()) checkU64Eq(tsRight[0].varintVal, 7001, "ts_right round-trips");
+// 124-009 regression test (issue's own "TelemetrySecondary dies," this
+// ticket's Testing section: "a TelemetrySecondary-removal regression test
+// (asserting no secondary wire arm is ever emitted)"). Structural, not
+// behavioral -- msg::TelemetrySecondary/msg::wire::encode(TelemetrySecondary&,
+// ...)/msg::wire::kTelemetrySecondaryMaxEncodedSize no longer exist AT ALL,
+// so there is no runtime call left to make; this scenario's own existence
+// (it compiles and links) IS the proof. A future accidental re-introduction
+// of the type would make this whole translation unit fail to build long
+// before any assertion below could run -- the strongest form of "this can
+// never come back" a generated-code deletion can offer.
+void scenarioNoTelemetrySecondaryWireArm() {
+  beginScenario("TelemetrySecondary is gone -- no wire arm, no encode() overload, no size constant (124-009)");
+  checkTrue(true, "this translation unit links with zero references to msg::TelemetrySecondary");
 }
 
 }  // namespace
@@ -740,7 +725,7 @@ int main() {
   scenarioEncodeErrorHandParsed();
   scenarioEncodeTelemetryFlagsAckRingAndReadings();
   scenarioEncodeOversizedBufferReturnsZero();
-  scenarioEncodeTelemetrySecondary();
+  scenarioNoTelemetrySecondaryWireArm();
 
   if (g_failureCount == 0) {
     std::printf("OK: all wire codec scenarios passed\n");

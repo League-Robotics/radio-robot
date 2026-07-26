@@ -46,7 +46,6 @@ from _wire_diff_driver import (  # noqa: E402
     compile_harness,
     decode,
     encode_telemetry,
-    encode_telemetry_secondary,
     env_config_drivetrain,
     env_move_twist,
     env_stop,
@@ -188,9 +187,10 @@ def test_fuzz_case(asan_harness, case_id, raw, kind, expected_corr_id, expected_
 
 
 # ---------------------------------------------------------------------------
-# ASan/UBSan encode-side check for Telemetry/TelemetrySecondary, this
-# schema's two REPLY-only (encode-only) messages. The categories above all
-# target decode() (adversarial raw BYTES); encode() instead takes a
+# ASan/UBSan encode-side check for Telemetry, this schema's REPLY-only
+# (encode-only) message (TelemetrySecondary, its former sibling, is DELETED
+# outright -- 124-009, robot-state-blackboard-...md). The categories above
+# all target decode() (adversarial raw BYTES); encode() instead takes a
 # fully-typed, harness-constructed C++ struct, so there is no "malformed
 # input" surface to fuzz the same way -- what CAN still go wrong is a
 # buffer-sizing bug in encodeInto()/encodeNestedMessage()'s fixed-size
@@ -206,7 +206,6 @@ def test_fuzz_case(asan_harness, case_id, raw, kind, expected_corr_id, expected_
 # ---------------------------------------------------------------------------
 
 _UINT32_MAX = 4294967295
-_FLOAT_EXTREMES = [3.4028235e38, -3.4028235e38, 1.1754944e-38, 0.0, float("nan"), float("inf"), float("-inf")]
 
 # 124-008 (issue §B3): every geometric/kinematic Telemetry field that used
 # to be `float` is now `sint32` (zigzag) -- Telemetry has NO float fields
@@ -241,13 +240,10 @@ def test_fuzz_encode_telemetry_sint32_extremes(asan_harness, value):
     assert r is None or len(r) > 0
 
 
-@pytest.mark.parametrize("value", _FLOAT_EXTREMES, ids=[f"f{i}" for i in range(len(_FLOAT_EXTREMES))])
-def test_fuzz_encode_telemetry_secondary_float_extremes(asan_harness, value):
-    r = encode_telemetry_secondary(asan_harness, now=_UINT32_MAX, has_cmd_vel=True, cmd_vel_left=value,
-                                    cmd_vel_right=value, acc_left=value, acc_right=value,
-                                    glitch_left=_UINT32_MAX, glitch_right=_UINT32_MAX, ts_left=_UINT32_MAX,
-                                    ts_right=_UINT32_MAX)
-    assert r is None or len(r) > 0
+# test_fuzz_encode_telemetry_secondary_float_extremes() -- DELETED
+# (124-009): TelemetrySecondary itself is gone (robot-state-blackboard-
+# ...md, issue's own "TelemetrySecondary dies") -- there is no
+# encode_telemetry_secondary verb left to fuzz.
 
 
 if __name__ == "__main__":

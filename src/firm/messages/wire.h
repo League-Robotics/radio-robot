@@ -66,16 +66,12 @@ struct Result {
 // this budget needed recomputing in the first place).
 //   CommandEnvelope: config=49B, stop=2B, move=38B (worst=config=49B) + non-oneof=6B => total=55B
 //   ReplyEnvelope: ok=19B, err=10B, tlm=126B (worst=tlm=126B) + non-oneof=4B => total=130B
-//   TelemetrySecondary: standalone worst case = 52B (own *B-armored line, not a ReplyEnvelope oneof arm -- Decision 3)
 constexpr uint16_t kCommandEnvelopeMaxEncodedSize = 55;
 constexpr uint16_t kReplyEnvelopeMaxEncodedSize = 130;
-constexpr uint16_t kTelemetrySecondaryMaxEncodedSize = 52;
 static_assert(kCommandEnvelopeMaxEncodedSize <= 240,
               "CommandEnvelope worst-case encoded size exceeds the 240-byte envelope budget");
 static_assert(kReplyEnvelopeMaxEncodedSize <= 240,
               "ReplyEnvelope worst-case encoded size exceeds the 240-byte envelope budget");
-static_assert(kTelemetrySecondaryMaxEncodedSize <= 240,
-              "TelemetrySecondary worst-case encoded size exceeds the 240-byte envelope budget");
 
 // decode(): walks CommandEnvelope's generated FieldDesc table per incoming
 // wire tag, validating (min)/(max)/(abs_max)/(req) inline during the same
@@ -95,14 +91,10 @@ Result decode(CommandEnvelope& out, const uint8_t* buf, uint16_t len);
 // is smaller than the required output.
 uint16_t encode(const ReplyEnvelope& in, uint8_t* buf, uint16_t cap);
 
-// encode(TelemetrySecondary): same encode-only treatment as ReplyEnvelope
-// above (103-001, architecture-update.md (103) Decision 3) -- the slow
-// diagnostic frame is firmware-emitted only, never host-decoded on the
-// robot side, and rides the wire as its own independently-armored line
-// rather than a ReplyEnvelope oneof arm (telemetry.proto's own doc
-// comment). Returns 0 (never a truncated/corrupt buffer) if `cap` is
-// smaller than the required output.
-uint16_t encode(const TelemetrySecondary& in, uint8_t* buf, uint16_t cap);
+// encode(TelemetrySecondary) -- DELETED (124-009): TelemetrySecondary
+// itself is gone (robot-state-blackboard-...md, issue's own
+// "TelemetrySecondary dies") -- it emitted nothing but `now` in
+// production. See telemetry.proto's own (now-historical) doc comment.
 
 // decode(Telemetry&, ...) -- 124-008 addition. Firmware production code
 // still never decodes its own outbound Telemetry frame (host owns that,

@@ -502,41 +502,68 @@ select L → collect L → select R → collect R, the schedule this section
 always claimed for the request/collect halves): request/settle(borrow:
 `Comms::pump`)/collect/PID for the left motor, a post-duty clearance window
 (119 ticket 005: no borrowed work left here — see below), request/
-settle(borrow: `processMessage`)/collect/PID for the right motor, then a
-trailing pace block that FIRST stages and emits telemetry (119 ticket 005 —
-see below), then integrates odometry (`Odometry::integrate`) and samples
-OTOS (`applyOtosSample()` — uniform across builds; the sensor behind it is
-a real chip or an `App::FakeOtos`, chosen at construction), refreshes
-`App::StateEstimator`'s predict-to-now estimates from that same
-cycle's staged `Frame` (117), evaluates the `MoveQueue`'s unconditional
-per-cycle stop decision (`moveQueue_.tick(now, odom_)` — 118: relocated
-here, AFTER odometry/estimator refresh, so the decision reads THIS
-cycle's data, not last cycle's), polls line/color at a rate-limited,
-alternating cadence (`updateLineColor()` — see below), and paces the
-whole cycle. `Drive`, `Odometry`, and `MoveQueue` are pure, bounded,
-non-bus-touching helpers that `RobotLoop` calls at specific points in its
-own schedule; `MoveQueue::tick()` is called unconditionally once per cycle
-and drains to `Drive::stop()` once its queue empties.
+settle(borrow: `processMessage`)/collect/PID for the right motor
+(immediately followed by the wheel section's own `state_` publish —
+124-009, see below), then a trailing pace block that integrates odometry
+(`Odometry::integrate`), samples OTOS inline (uniform across builds; the
+sensor behind it is a real chip or an `App::FakeOtos`, chosen at
+construction), polls line/color at a rate-limited, alternating cadence,
+refreshes `Motion::StateEstimator`'s predict-to-now estimates from that
+same cycle's published `state_` (117), and ONLY THEN calls
+`tlm_.update(state_)`/`tlm_.emit(now)` (124-009 — the one assembly point,
+LAST among the pace-block's own publishers so every section it projects
+is already coherent; superseding this paragraph's former "FIRST stages
+and emits telemetry" ordering, which predates the RobotState blackboard),
+evaluates the `MoveQueue`'s unconditional per-cycle stop decision
+(`moveQueue_.tick(now, odom_)` — 118: AFTER odometry/estimator refresh
+AND AFTER `tlm_.update()`/`emit()`, so the decision reads THIS cycle's
+data and a completion ack still rides the NEXT frame, protocol-v4 §7.2),
+and paces the whole cycle. `Drive`, `Odometry`, and `MoveQueue` are pure,
+bounded, non-bus-touching helpers that `RobotLoop` calls at specific
+points in its own schedule; `MoveQueue::tick()` is called unconditionally
+once per cycle and drains to `Drive::stop()` once its queue empties.
 See `robot_loop.cpp` for the exact call order — it is the schedule's single
 source of truth.
 
-**Telemetry stage+emit (`updateTlm()`/`Telemetry::emit()`, 119 ticket
-005).** Runs FIRST in the trailing pace block, immediately after
-`motorR_.tick()`'s own collect — both `frame_.encLeft` and
-`frame_.encRight` are therefore fresh THIS cycle (same generation).
-Previously (118) this ran in the post-L-duty-write clearance window,
-BETWEEN L's collect and R's — pairing THIS cycle's fresh L against LAST
-cycle's stale R in every frame, a defect fixed alongside the
-same-generation actuation staging above (both required together — see
-§1's own "119 ticket 005" note). `frame_.pose`/`otos`/`line`/`color` are
-unaffected by the move: they are still whatever the PREVIOUS cycle's own
-pace block last staged (unchanged one-cycle-staleness contract — §3's own
-"Frame fields written late in a cycle" invariant). `Telemetry::emit()`
-decides for itself whether to send the primary frame, the secondary
-diagnostic frame, or (on a tie) alternate between them.
+**RobotState assembly + `Telemetry::update()`/`emit()` (124-009,
+robot-state-blackboard-...md, superseding the `updateTlm()`/scattered-
+`setFlag()`/secondary-tie-break shape this paragraph used to describe).**
+`RobotLoop` now owns a persistent `Types::RobotState state_` member (the
+blackboard, `src/firm/types/robot_state.h`, ticket 007) instead of a bare
+`Telemetry::Frame frame_`. Each section publishes into `state_` at its own
+earliest point of coherence: the wheel section (`state_.wheelLeft/Right`
+— position/velocity/`sampleTime()`/connected/positionEpoch/cmdVelocity,
+plus the position-rebaseline clamp) publishes immediately after
+`motorR_.tick()`'s own collect (same-generation L/R, unchanged reasoning
+from the 119-005 paragraph above); otos/perception/pose/command/health
+publish in dependency order inside the trailing `kPace` block (sensors →
+odom → estimate, matching `Motion::StateEstimator::update(state_, now)`'s
+own input needs — `state_` IS `Motion::StateEstimator::Input` now, ticket
+007's alias, so there is no more hand-copied `estimatorInput` local
+either). `tlm_.update(state_)` is the ONE call that projects the whole
+blackboard into the wire frame AND derives every flag (replacing both the
+old `updateTlm()`-style field staging and the ten scattered
+`tlm_.setFlag()` calls with one method) — `RobotLoop::cycle()` itself
+never calls `tlm_.setFlag()` at all any more (grep-enforceable:
+`grep setFlag src/firm/app/robot_loop.cpp` returns nothing).
+`kFlagFaultMoveTimeout`/`kFlagFaultShapingDisabled` are the one documented
+exception (their defining condition, `MoveQueue::tick()`'s own outcome,
+isn't known until after `tlm_.update()`/`emit()` run) — `RobotLoop` sets
+those via `tlm_.setLiveFlag(bit, active)`, a narrow, deliberately
+NOT-named-`setFlag` escape hatch (telemetry.h's own doc comment).
+`Telemetry::emit(now)` sends the primary frame when its own cadence gate
+says it's due — there is no secondary frame or tie-break to arbitrate any
+more (`TelemetrySecondary` is deleted outright, not deprecated — see §5's
+own updated entry). `age` fields (`EncoderReading.age`/`OtosReading.age`,
+issue §B2/SUC-006) are computed inside `Telemetry::update()` as
+`(cycleStart + cycleBusy) - sampleTime`, genuinely independent per reading
+(`Devices::Motor::sampleTime()`/`Devices::Otos::sampleTime()`, ticket
+002) — not the shared, always-zero stand-in ticket 008 left in place.
 
-**Line/color polling (`RobotLoop::updateLineColor()`, 115-005).** Runs once
-per cycle from the trailing `kPace` block. Ticks EXACTLY ONE of
+**Line/color polling (a plain inline block in `RobotLoop::cycle()`'s own
+trailing `kPace` block, 115-005; 124-009 folded the former
+`updateLineColor()` method into that block directly — no separate method
+exists any more).** Runs once per cycle. Ticks EXACTLY ONE of
 `Devices::LineSensorLeaf`/`Devices::ColorSensorLeaf` per call — never both —
 alternating which one on the NEXT call, so at most one of the two is even
 OFFERED a chance to check its own `readDue()` in any given cycle (the
@@ -544,50 +571,59 @@ OFFERED a chance to check its own `readDue()` in any given cycle (the
 never disrupt the motor request/collect cadence). Each leaf's own
 `tick()`/`readDue()` rate-limits the actual bus transaction further (the
 same `Otos::readDue()` pattern `Devices::Otos` already uses). A fresh
-reading packs into `frame_.line`/`frame_.color` (4 raw grayscale bytes,
-ch1 low byte; RGBC scaled 16→8 bits, R low byte) and sets the corresponding
-`flags` bit (13/14) for THIS cycle only — the OTHER leaf's own bit is
-explicitly cleared the same cycle (it was not even touched), matching the
-wire spec's "line/color word fresh" (fresh THIS frame, not merely "known at
+reading packs into `state_.perception.line`/`.color` (4 raw grayscale
+bytes, ch1 low byte; RGBC scaled 16→8 bits, R low byte, via `packLine()`/
+`packColor()`, still file-local to `robot_loop.cpp`'s own anonymous
+namespace — `Types::RobotState` may only ever hold cstdint-level data, so
+the packing step cannot move into `Telemetry::update()`) and sets
+`state_.perception.lineFresh`/`.colorFresh` for THIS cycle only —
+`Telemetry::update()` derives the corresponding `flags` bit (13/14) from
+those, clearing the OTHER leaf's own bit the same cycle (it was not even
+touched), matching the wire spec's "line/color word fresh" (fresh THIS
+frame, not merely "known at
 some point") semantics.
 
 **Otos call site (uniform across builds; `FAKE_OTOS` chosen at
 construction).** Runs once per cycle from the trailing `kPace` block,
-immediately after `odom_.integrate()`/`frame_.pose` staging (this pair is
+immediately after `odom_.integrate()`/`state_.pose` staging (this pair is
 hoisted to run BEFORE the Otos call so an `App::FakeOtos` reports THIS
 cycle's fresh pose — a side-effect-free reorder for the real leaf, since
-`Odometry::integrate()` reads neither `otos_` nor any `frame_.otos*`
+`Odometry::integrate()` reads neither `otos_` nor any `state_.otos*`
 field and vice versa). There is **no `#ifdef` here** anymore: the loop
-holds a plain `Devices::Otos&` and always calls
-`applyOtosSample(otos_, nowUs, frame_)` (`app/odometry.*`), which
-`otos_.tick()`s the sensor then stages `frame_.otosConnected`/
-`frame_.otosPresent`/`frame_.otos` from
-`connected()`/`present()`/`poseFresh()`/`pose()`. Which implementation
-backs `otos_` — the real SparkFun leaf (`Devices::RealOtos`, a rate-limited
-I2C burst read) or the bench synthesizer (`App::FakeOtos`, which reports
-the dead-reckoned `Odometry` pose + `BodyKinematics`-fused wheel twist) —
-is chosen ONCE at the `main.cpp` composition root under `#ifdef FAKE_OTOS`,
-the only place that macro appears (otos-fake-seam refactor, superseding
-120-002's per-cycle branch + the deleted
-`Devices::Otos::feedSyntheticSample()`). See
+holds a plain `Devices::Otos&` and calls `otos_.tick(nowUs)` directly,
+publishing `state_.otos.present`/`connected`/`x`/`y`/`heading`/`v_x`/
+`v_y`/`omega`/`sampleTime` inline in `RobotLoop::cycle()` itself (124-009
+— the former `applyOtosSample()` free function, `app/odometry.*`,
+predates the RobotState blackboard and no longer exists; this call site
+is now the single place that translates `otos_`'s own
+`connected()`/`present()`/`poseFresh()`/`pose()`/`sampleTime()` into the
+blackboard). Which implementation backs `otos_` — the real SparkFun leaf
+(`Devices::RealOtos`, a rate-limited I2C burst read) or the bench
+synthesizer (`App::FakeOtos`, which reports the dead-reckoned `Odometry`
+pose + `BodyKinematics`-fused wheel twist) — is chosen ONCE at the
+`main.cpp` composition root under `#ifdef FAKE_OTOS`, the only place that
+macro appears (otos-fake-seam refactor, superseding 120-002's per-cycle
+branch + the deleted `Devices::Otos::feedSyntheticSample()`). See
 [`devices/DESIGN.md`](../devices/DESIGN.md) for the `Otos` interface /
 `RealOtos` split and [`app/fake_otos.h`](fake_otos.h) for the fake.
 
 **Predict-to-now estimation (`RobotLoop`'s `StateEstimator::update()`
-call, 117).** Runs once per cycle from the trailing `kPace` block,
-immediately after `frame_.pose` is staged and the Otos call site above has
-run (120 ticket 002 reordered which of the two stages first — see that
-paragraph above — `update()`'s own position in the schedule, relative to
-BOTH being done, is unchanged). `update(frame, now)` reads
-`frame.encLeft`/`frame.encRight` (position, velocity, their own collect
-`time`) to refresh each wheel's peer `WheelEstimate` basis, and
-`frame.pose`/`frame.twist` (already fused by `Odometry`/
-`BodyKinematics::forward()` earlier the same cycle) plus `frame.otos`/
-`frame.otosPresent` (when fresh) to refresh the body peer's
-`BodyEstimate` basis via the v1 complementary blend. Pure computation
-over already-staged data — no I2C access, no sleep, bounded work, same
-posture `Odometry::integrate()` and `applyOtosSample()` already keep in
-this same block.
+call, 117; 124-009 threads `state_` directly).** Runs once per cycle from
+the trailing `kPace` block, immediately after `state_.pose` is staged and
+the Otos call site above has run (120 ticket 002 reordered which of the
+two stages first — see that paragraph above — `update()`'s own position
+in the schedule, relative to both being done, is unchanged).
+`stateEstimator_.update(state_, now)` reads `state_.wheelLeft`/
+`state_.wheelRight` (position, velocity, their own `sampleTime`) to
+refresh each wheel's peer `WheelEstimate` basis, and `state_.pose`
+(already fused by `Odometry`/`BodyKinematics::forward()` earlier the same
+cycle) plus `state_.otos` (when `present`) to refresh the body peer's
+`BodyEstimate` basis via the v1 complementary blend. `Types::RobotState`
+IS `Motion::StateEstimator::Input` (ticket 007's alias) — no hand-copied
+intermediate struct exists any more. Pure computation over already-staged
+data — no I2C access, no sleep, bounded work, same posture
+`Odometry::integrate()` and the Otos call site above already keep in this
+same block.
 
 ## 3. Constraints and Invariants
 
@@ -595,9 +631,12 @@ this same block.
   `RobotLoop::cycle()`'s own call sequence. No app module ever initiates bus
   traffic from its own `tick()`/staging methods on its own timing — see the
   system doc's "single-loop bus ownership" invariant (`docs/design/design.md`
-  §5). `Odometry::integrate()`,
-  `applyOtosSample()`, and `updateLineColor()` are called only from the
-  loop's trailing block, never from inside a motor request→collect window.
+  §5). `Odometry::integrate()`, the `otos_.tick()` call site, and the
+  line/color alternation (124-009: both now plain inline blocks in
+  `RobotLoop::cycle()`'s own trailing pace block, not separate methods —
+  see §2's own "Otos call site"/"Line/color polling" paragraphs) are
+  called only from that block, never from inside a motor request→collect
+  window.
 - **The timing schedule is exactly `robot_loop.cpp`'s `runAndWait` calls:**
   `grep 'runAndWait\|sleepUntil' app/robot_loop.cpp` must remain the
   firmware's complete list of waits. A sleep hidden inside any other
@@ -923,11 +962,17 @@ backstop is the ONLY completion path; the loud off-state for a
 state).
 Declaring a
 bit before it is wired is deliberate — it reserves the bit number for a
-future caller without renumbering. `RobotLoop` assembles every bit EXCEPT
-`kFlagAckFresh` via `Telemetry::setFlag(bit, active)` at the point in the
-cycle each condition becomes known (mirrors the old `setFault()`/
-`setEvent()` call-site pattern, now unified onto one bit space); Telemetry
-itself ORs in `kFlagAckFresh` at `emitPrimary()` time.
+future caller without renumbering. As of 124-009, `RobotLoop` never calls
+a flag-setting method directly at all (grep-enforceable:
+`grep setFlag src/firm/app/robot_loop.cpp` returns nothing) — `Telemetry::
+update(state)` derives every bit it can know from `Types::RobotState` in
+one place (superseding the former "`RobotLoop` assembles every bit ...
+via `Telemetry::setFlag(bit, active)` at the point in the cycle each
+condition becomes known" call-site-scattered pattern this paragraph used
+to describe); `kFlagFaultMoveTimeout`/`kFlagFaultShapingDisabled` are the
+one exception, set via `Telemetry::setLiveFlag(bit, active)` after
+`MoveQueue::tick()` runs (their own defining condition isn't known at
+`update()` time — see `telemetry.h`'s own doc comment).
 
 **Boot contract.** `Preamble::step()` advances at most one not-yet-resolved
 device's own detection entry point per call, never sleeps, and never
@@ -970,11 +1015,16 @@ called with real elapsed time between calls).
   input and the wire line's own `<COMMAND>':'` prefix (123-002/124-003 —
   base64-armors before 123), and broadcasts on both transports via the
   async/drop-on-full send path — never blocks the loop on backpressure.
-- **`Telemetry::setFrame`/`setFlag`/`ack`/`emit(now)`:** staging calls are
-  cheap and can be called any number of times per cycle; `emit(now)` is
-  the one call that actually sends, at most one frame type, bounded work,
-  never sleeps, never touches the I2C bus. See §4's "Telemetry's ack slot"
-  and "The `flags` bit-string" notes above for the 115-005 shape.
+- **`Telemetry::update(state)`/`setLiveFlag`/`ack`/`emit(now)`** (124-009,
+  replacing `setFrame`/the public `setFlag`): `update(state)` is the ONE
+  assembly-point call — cheap, but called EXACTLY ONCE per cycle (unlike
+  the old `setFrame`/scattered-`setFlag` shape, which had no such bound);
+  `setLiveFlag`/`ack` remain cheap and callable any number of times per
+  cycle; `emit(now)` is the one call that actually sends — always the
+  single primary frame now (`TelemetrySecondary` is deleted, so there is
+  no "at most one of two frame types" choice left to make), bounded work,
+  never sleeps, never touches the I2C bus. See §4's own "RobotState
+  assembly + `Telemetry::update()`/`emit()`" paragraph above.
 - **`Drive::setWheels(v_left, v_right)`/`stop()`/`tick()`:** (122-002,
   NARROWED — `setTwist()` is GONE, moved to `Motion::MoveQueue`, which now
   calls `BodyKinematics::inverse()` itself and hands `Drive` an
@@ -1006,13 +1056,15 @@ called with real elapsed time between calls).
   accessor over a running total of `|distance|` that `integrate()`
   already computes internally each cycle — the DISTANCE stop-condition's
   source of truth.
-- **`applyOtosSample(otos, now, frame)`:** safe to call every cycle — a
-  too-soon call given OTOS's own internal rate limit is already a
-  documented no-bus-traffic no-op. Carries the FULL `OtosReading` (x, y,
-  heading, v_x, v_y, omega, burst-read time) into `frame.otos` (115-005 —
-  previously a bare `Pose2D`, velocities silently dropped). Must not be
-  called from inside a motor request→collect window (bus-discipline is the
-  loop's job, not this function's).
+- **`otos_.tick(nowUs)` + inline `state_.otos.*` publish (124-009,
+  replacing the deleted `applyOtosSample(otos, now, frame)` free
+  function):** safe to call every cycle — a too-soon call given OTOS's own
+  internal rate limit is already a documented no-bus-traffic no-op.
+  `RobotLoop::cycle()` itself now carries the FULL reading (x, y, heading,
+  v_x, v_y, omega, `sampleTime()`) into `state_.otos` inline, only when
+  `present` — see §2's own "Otos call site" paragraph. Must not be called
+  from inside a motor request→collect window (bus-discipline is the
+  loop's job).
 - **`RobotLoop::updateLineColor(nowUs)`:** private, called once per cycle
   from the `kPace` block — see §2's own doc comment for the full contract.
 - **`Motion::MoveQueue::enqueue(move, now)`/`tick(now, odom)`/`flush()`/
@@ -1072,18 +1124,21 @@ called with real elapsed time between calls).
   — moved to `src/motion/body_kinematics.{h,cpp}` at 122-001 (from
   `src/firm/kinematics/`); `Motion::MoveQueue` now calls `inverse()`
   directly (122-002 — the twist-decomposition call moved out of
-  `Drive::setTwist()`, see above), while `RobotLoop::updateTlm()` still
-  calls `forward()` directly here in `app/` to fuse the two leaves'
-  measured velocities for telemetry (`Drive::trackWidth()`'s own doc
-  comment). See [`src/motion/DESIGN.md`](../../motion/DESIGN.md) and
+  `Drive::setTwist()`, see above), while `RobotLoop::cycle()` still calls
+  `forward()` directly here in `app/` to fuse the two leaves' measured
+  velocities into `state_.pose.v_x/v_y/omega` (124-009 — formerly
+  `frame_.twist`/`updateTlm()`; `Drive::trackWidth()`'s own doc comment).
+  See [`src/motion/DESIGN.md`](../../motion/DESIGN.md) and
   [`src/firm/kinematics/DESIGN.md`](../kinematics/DESIGN.md) (retired,
   redirects to the current doc) for the full derivation.
-- **`msg::CommandEnvelope`/`ReplyEnvelope`/`Telemetry`/`TelemetrySecondary`,
+- **`msg::CommandEnvelope`/`ReplyEnvelope`/`Telemetry`,
   `msg::wire::encode`/`decode`, `WireRuntime::cobsEncode`/`Decode`,
   `crcCompute`/`Verify` (123 — the current framing primitives;
   `WireRuntime::base64Encode`/`Decode` is retained but no longer called by
   `app/`, see `messages/DESIGN.md` §3):** the wire schema and codec — see
-  [messages/DESIGN.md](../messages/DESIGN.md).
+  [messages/DESIGN.md](../messages/DESIGN.md). `msg::TelemetrySecondary`
+  is DELETED outright (124-009, robot-state-blackboard-...md) — there is
+  no second top-level wire message any more.
 - **`SerialPort`, `Radio` (ARM builds only):** the two real transports
   `SerialTransport`/`RadioTransport` adapt into `app::Transport` — see
   [com/DESIGN.md](../com/DESIGN.md).
@@ -1098,13 +1153,21 @@ called with real elapsed time between calls).
   in [`src/motion/DESIGN.md`](../../motion/DESIGN.md) §2, mirroring the
   original tiny `src/firm/motion/`'s own small-pure-comparison pattern at
   a new, sibling-tree location.
-- **`Telemetry::Frame`** (117): `Motion::StateEstimator::update()` is
-  handed the same fields `Telemetry::setFrame()` stages, copied by the
-  caller (`RobotLoop`) into a plain `Motion::StateEstimator::Input`
-  struct (122-002 — `StateEstimator` may not depend on `app/`'s
-  `Telemetry::Frame` type directly any more); it does not hold its own
-  leaf/bus references and does not read `Devices::Motor`/`Devices::Otos`
-  directly either way. Wire-plane `msg::EstimatorConfigPatch` stops
+- **`Types::RobotState`** (124-007/009, `src/firm/types/robot_state.h`,
+  superseding this entry's former `Telemetry::Frame`/hand-copied
+  `Motion::StateEstimator::Input` description): the dependency-free
+  blackboard `RobotLoop` publishes each cycle and both
+  `Motion::StateEstimator::update(state_, now)` and
+  `Telemetry::update(state_)` read directly — `Motion::StateEstimator::
+  Input` is now a plain alias onto `Types::RobotState` (ticket 007), so
+  there is no hand-copied intermediate struct left at all (122-002's own
+  "StateEstimator may not depend on `app/`'s `Telemetry::Frame` type"
+  constraint is satisfied differently now: `RobotState` lives in
+  `src/firm/types/`, a dependency-free header both `src/firm/app` and
+  `src/motion` may include, not an `app/`-owned type). `StateEstimator`
+  still does not hold its own leaf/bus references and does not read
+  `Devices::Motor`/`Devices::Otos` directly either way. Wire-plane
+  `msg::EstimatorConfigPatch` stops
   at `RobotLoop::handleConfig()` exactly like `msg::MotorConfigPatch`/
   `msg::OtosConfigPatch` already do (devices/app isolation invariant
   above, extended by analogy) — `StateEstimator`'s own `setWeights()`
