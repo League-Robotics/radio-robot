@@ -110,6 +110,7 @@ class Move(ctypes.Structure):
                 ("timeout", ctypes.c_float),     # [ms]
                 ("velocityKind", ctypes.c_uint8),
                 ("v_x", ctypes.c_float),         # [mm/s]
+                ("v_y", ctypes.c_float),         # [mm/s] ignored on differential
                 ("omega", ctypes.c_float),       # [rad/s]
                 ("vLeft", ctypes.c_float),       # [mm/s]
                 ("vRight", ctypes.c_float)]      # [mm/s]

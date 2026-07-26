@@ -22,6 +22,13 @@ struct Move {
   float timeout = 0.0f;    // [ms] safety backstop; 0 = none
   VelocityKind velocityKind = VelocityKind::Twist;
   float v_x = 0.0f;        // [mm/s] signed cruise, Twist
+  // Carried so a holonomic drivetrain needs no type change, and because a
+  // twist HAS three components (naming-and-style rule 2) -- but accepted
+  // and ignored on this differential build, exactly as the wire's own
+  // MoveTwist.v_y is. A Distance Move with v_x == 0 and v_y != 0 is a
+  // pure-sideways motion this drivetrain cannot make, and move() rejects
+  // it rather than silently driving nothing.
+  float v_y = 0.0f;        // [mm/s] signed cruise, Twist; ignored on differential
   float omega = 0.0f;      // [rad/s] signed cruise, Twist
   float vLeft = 0.0f;      // [mm/s] signed cruise, Wheels
   float vRight = 0.0f;     // [mm/s] signed cruise, Wheels

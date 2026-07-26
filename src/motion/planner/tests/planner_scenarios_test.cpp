@@ -264,6 +264,17 @@ void testInvalidMovesRejected() {
   Planner planner(benchLimits());
   Move noVelocity = distanceMove(80, 100.0f, 0.0f);
   CHECK(!planner.move(noVelocity, false));
+  // v_y is carried for a future holonomic drivetrain but not actuated
+  // here, so a Move whose only linear velocity is sideways is a motion
+  // this robot cannot make -- rejected, not silently driven as nothing.
+  Move sideways = distanceMove(82, 100.0f, 0.0f);
+  sideways.v_y = 150.0f;
+  CHECK(!planner.move(sideways, false));
+  // But v_y riding along on an otherwise valid Move is accepted and
+  // ignored, exactly as the wire's own MoveTwist.v_y is.
+  Move forwardWithStrafe = distanceMove(83, 100.0f, 150.0f);
+  forwardWithStrafe.v_y = 150.0f;
+  CHECK(planner.move(forwardWithStrafe, false));
   Move wheelsDistance;
   wheelsDistance.id = 81;
   wheelsDistance.kind = Move::Kind::Distance;

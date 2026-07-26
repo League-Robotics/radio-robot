@@ -94,10 +94,11 @@ struct Move {
   float threshold;  // [ms] Time / [mm] Distance / [rad] Angle; POSITIVE
   float timeout;    // [ms] safety backstop; 0 = none
   VelocityKind velocityKind;
-  float v_x, omega;       // [mm/s] [rad/s] signed cruise, Twist
+  float v_x, v_y, omega;  // [mm/s] [mm/s] [rad/s] signed cruise, Twist
   float vLeft, vRight;    // [mm/s] signed cruise, Wheels
 };
 // Direction comes from the velocity SIGN; thresholds are magnitudes.
+// v_y carried but ignored on differential (§11 Decision 1, 2026-07-26).
 
 struct PlannerLimits {
   float vMax, aMax, aDecel;            // [mm/s] [mm/s^2] [mm/s^2]
@@ -151,7 +152,8 @@ class Planner {
   live). `replace=true` drops pending AND active; the replacement
   activates next tick. Returns false (queue provably unchanged) when
   active+pending would exceed 5 — the caller acks ERR_FULL. Also returns
-  false for invalid shapes: Distance with `v_x == 0`, Angle with
+  false for invalid shapes: Distance with `v_x == 0` (including a
+  pure-sideways `v_y`-only Move — §11 Decision 1), Angle with
   `omega == 0`, negative threshold, or (v1) a Wheels Move whose kind is
   not Time.
 - **`stop()`**: flush everything, command zero immediately (safety
@@ -543,12 +545,8 @@ boundary.
 **§7.7 (Wheels-Move stop conditions beyond Time)** remains deferred — no
 protocol demand has materialised.
 
-**§7.8 (open design decisions)** is untouched and still needs a decision:
-the final `Motion::Move` field shape (1:1 with wire `msg::Move` minus
-baggage vs. simplified), and whether `BodyTwist3` moves into `types/` or
-the kinematics array overloads are dropped. The first is a boundary
-question that §9 says needs sign-off from BOTH efforts once 124 lands, so
-it was deliberately not settled unilaterally here.
+**§7.8 (open design decisions)** — SETTLED by the stakeholder 2026-07-26.
+See §11.
 
 ### Verification
 
@@ -559,3 +557,81 @@ ctypes layout guard passes against the widened `PlannerLimits`/`TickResult`,
 and all four scenarios pass (500 mm to 0.011 µm; 90° to 0.014 arcsec; the
 settle and heading-hold scenarios added this round). Every pre-existing
 zero-error exactness gate is unchanged and still passing — no regression.
+
+## 11. Design decisions (stakeholder, 2026-07-26)
+
+§7.8's two open questions are settled, plus a third this effort raised.
+Only the first is implementable before sprint 124 merges in from the other
+repo; the other two are staged and MUST NOT be started here until it does.
+
+### Decision 1 — `Motion::Move` stays flattened, but carries `v_y`. DONE.
+
+The wire's two `oneof`s (`envelope.proto`'s `Move`) stay flattened into
+enum-tagged fields, and `replace` stays a `move()` parameter rather than a
+field: the planner's types stay drivetrain- and wire-agnostic, and a
+protocol-v5 schema change touches one conversion function in the base's
+dispatch instead of the planner's internals.
+
+`v_y` is now carried (`planner_types.h`), for two reasons: a holonomic
+drivetrain then needs no type change, and `.claude/rules/
+naming-and-style.md` rule 2 says a twist HAS three components. It is
+accepted and ignored on this differential build, exactly as the wire's own
+`MoveTwist.v_y` is.
+
+One guard came with it: a Move whose ONLY commanded linear velocity is
+sideways (`v_x == 0`, `v_y != 0`) asks for a motion this drivetrain cannot
+make, and `move()` REJECTS it rather than accepting it and silently
+driving nothing. `v_y` riding along on an otherwise valid Move is accepted
+and ignored. Both tested in `testInvalidMovesRejected()`.
+
+### Decision 2 — drop the `msg::BodyTwist3` kinematics array overloads. BLOCKED.
+
+`src/motion/body_kinematics.h`'s array-form `inverse(msg::BodyTwist3, ...)`
+/ `forward(..., msg::BodyTwist3&)` overloads exist only to carry a wire
+message type, which is precisely the coupling the planner is designed to
+avoid. They go; the scalar forms (plain floats, no dependencies) stay as
+the shared API. No new `BodyTwist3` is added to `src/motion/planner/types/`.
+
+**Not actionable from this effort.** `src/motion/body_kinematics.*` is
+legacy-motion, which §9 forbids editing here, and sprint 124 is being
+finished against it in the other repo — editing it now guarantees a merge
+conflict. Do it AFTER the 124 merge lands, and at the same time consider
+re-pointing the planner's four lines of inlined diff-drive math
+(`planner.cpp`'s Distance/Angle/Time command mapping) at the surviving
+scalar forms, so `saturate()`'s curvature-preserving logic and the
+planner's heading-hold clamp stop being two takes on the same idea.
+
+### Decision 3 — reserve a protocol-v5 flags bit for `settled`. BLOCKED, TIME-SENSITIVE.
+
+`TickResult::settled` (the Move met its stop condition AND physically
+arrived at rest, vs. stopped near it — see §10) becomes host-visible: a new
+completion-ack flags bit alongside the existing timeout bit 15. `ack_err`
+stays 0 in both cases; these are outcome facts, not errors.
+
+**Not actionable from this effort** — it changes `src/protos/` and the
+completion-ack contract, which the main environment owns and which §9 says
+needs sign-off from both efforts. **Raise it with the 124/125 effort now**:
+while protocol v5 is still open this is a free bit reservation; once
+124/125 land it is a protocol change.
+
+Caveat to carry into that conversation: on the real robot `settled` may be
+unreliable on the ANGULAR axis until §7.3's bench measurement runs. The
+arrival epsilon is 0.005 rad, but one encoder tick reads as
+`quantum / trackWidth` of heading — 0.010 rad for a 0.5 mm quantum on a
+100 mm track — so a coarse encoder alone can stop an otherwise perfect turn
+from ever confirming. Reserving the bit is still right (it costs nothing
+and the window is now); trusting the bit on hardware waits on §7.3.
+
+### Sequencing
+
+1. **Now:** Decision 1 — done.
+2. **Waiting:** sprint 124 finishes its hardware tests in the other repo
+   and merges into `motion-planner`.
+3. **After the merge:** Decision 2, then §7.5 (the RobotState joint
+   checkpoint — delete `types/robot_state.h`, point the build at
+   `src/firm/types/robot_state.h`, rerun the ctypes layout guard).
+4. **In parallel, needs the robot on the stand:** §7.3's encoder-refresh
+   measurement, and a velocity step response to replace the noise tier's
+   guessed `trackingLag = 0.8` with a measured one (§10 shows tracking lag
+   is now the ENTIRE residual error).
+5. **Cross-effort, start the conversation now:** Decision 3.

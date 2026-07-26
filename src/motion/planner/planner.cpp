@@ -59,6 +59,12 @@ bool Planner::move(const Move& next, bool replace) {
   // Shape validation: direction comes from the velocity sign, so the
   // profiled axis must actually be commanded; Wheels Moves are Time-bounded
   // only at v1 (sketch §3).
+  //
+  // v_y is carried but not actuated on a differential drivetrain. A Move
+  // whose ONLY commanded linear velocity is sideways therefore asks for a
+  // motion this robot cannot make, and is rejected here rather than
+  // accepted and silently driven as nothing -- the Distance/Angle guards
+  // below test v_x/omega, which a pure-v_y Move leaves at zero.
   const bool valid =
       next.threshold >= 0.0f &&
       ((next.velocityKind == Move::VelocityKind::Twist &&
