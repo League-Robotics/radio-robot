@@ -67,6 +67,31 @@ uint16_t crcOverScope(const uint8_t* command, size_t commandLen, const uint8_t* 
   return WireRuntime::crcUpdate(crc, payload, payloadLen);
 }
 
+// isRelayControlPlaneLine() -- 124-010 (relay-handshake-trips-comms-
+// malformed.md): true if `line`'s first byte is one of the radio-relay
+// dongle's own control-plane sigils -- '#' (a status/comment reply, e.g.
+// "# entering data plane"), '!' (a dongle command, e.g. "!MODE RAW250"),
+// or '?' (the dongle's own config query). host/robot_radio/io/
+// serial_conn.py's `_relay_handshake()`/`_banner_classify()` are the only
+// callers that ever write bytes shaped like this, always addressed to the
+// RELAY's own control-plane parser, never intended for the robot. On a
+// fresh relay connect a fragment of that handshake traffic can reach the
+// robot's `radioLink_` before (or at the exact moment of) the dongle
+// committing to transparent RAW250 pass-through -- see the ticket's
+// closing notes for the root-cause analysis. No registered v5 verb name
+// (messages/commands.h's `kVerbTable[]`) starts with any of these three
+// bytes, so recognizing and dropping such a line here can never mask a
+// genuine unrecognized command; it only tolerates exactly the shape of
+// noise the relay's own control plane is known to emit. Mirrors the
+// tolerance `host/robot_radio/io/serial_conn.py`'s own
+// `_handle_wire_line()` already has for '#' lines -- this ticket extends
+// the same idea to the robot's own firmware side, which had none.
+bool isRelayControlPlaneLine(const char* line, uint16_t lineLen) {
+  if (lineLen == 0) return false;
+  const char first = line[0];
+  return first == '#' || first == '!' || first == '?';
+}
+
 // findVerb() -- registry lookup (124-001's messages/commands.h::
 // kVerbTable[]) by exact-length ASCII name match. The SOLE discriminator
 // for how a wire line's data is read (issue §1) -- returns nullptr for
@@ -131,6 +156,12 @@ bool Comms::pumpTransport(Transport& t, Cmd& out, uint32_t now) {
 }
 
 void Comms::dispatchLine(Transport& t, const char* line, uint16_t lineLen, Cmd& out, uint32_t now) {
+  // 124-010 (relay-handshake-trips-comms-malformed.md): drop a leaked
+  // relay control-plane line BEFORE the registry lookup, uncounted --
+  // see isRelayControlPlaneLine()'s own doc comment above for why this
+  // cannot mask a genuine malformed command.
+  if (isRelayControlPlaneLine(line, lineLen)) return;
+
   // Uniform packet grammar (124-005, issue §1): `<COMMAND>[':' <data>]` --
   // the FIRST ':' ends the command; every later byte (including further
   // ':' bytes) is data. Whether that data is cleartext or binary is a

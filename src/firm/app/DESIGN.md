@@ -452,6 +452,29 @@ new `dispatchCleartext()`. An unrecognized `<COMMAND>` increments
 `malformedCount_` exactly like a CRC/COBS failure already did — one
 fault-bit source, not two.
 
+**Relay control-plane sigil carve-out (124-010,
+relay-handshake-trips-comms-malformed.md).** `dispatchLine()` drops a
+line whose first byte is `#`/`!`/`?` — the radio-relay dongle's own
+control-plane sigils (a status/comment reply, a dongle command, or the
+dongle's config query, respectively) — BEFORE the registry lookup,
+uncounted (`isRelayControlPlaneLine()`, comms.cpp). This closes a
+one-shot-at-connect false trip of `kFaultCommsMalformed` over the radio
+relay path only (never direct USB, which never runs the dongle's
+`!ECHO OFF`/`!MODE RAW250`/`!GO` handshake at all): a fragment of that
+host↔dongle handshake traffic could reach the robot's `radioLink_`
+before/at the moment the dongle commits to transparent pass-through. No
+registered v5 verb starts with any of these three bytes, so the
+carve-out is narrow by construction and cannot mask a genuine malformed
+command — it mirrors a tolerance `host/robot_radio/io/serial_conn.py`'s
+own `_handle_wire_line()` already had for `#` lines, extended to the
+firmware side (which had none) and to the two other sigils the dongle's
+own handshake actually uses. The exact mechanism by which dongle
+control-plane bytes reach the robot's radio receiver is NOT confirmable
+further from this repository — the dongle ("gozop") is a separate,
+external firmware with no source in this tree; see the ticket's own
+completion notes for the full root-cause discussion and what a
+hardware-side wire capture would need to show to settle it definitively.
+
 `dispatchCleartext()` answers four verbs: `HELLO` → the existing
 `banner_` (`sendBanner()`'s own content, unchanged, issue §8 confirms
 `DEVICE:NEZHA2:...` already conforms to the grammar with no edit);

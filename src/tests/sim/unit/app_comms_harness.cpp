@@ -695,6 +695,120 @@ void scenarioDataContainingColonAndZeroRoundTripsCorrectly() {
   checkU64Eq(comms.malformedCount(), 0, "not counted malformed");
 }
 
+// ===========================================================================
+// 10. Relay connect-handshake regression (124-010, ticket 010,
+//     relay-handshake-trips-comms-malformed.md, SUC-008): reproduces the
+//     issue's own isolated-test sequence off-hardware -- fresh Comms
+//     ("clean-boot firmware"), a relay-shaped connect with ZERO
+//     application commands, inspect malformedCount() (the host-side
+//     observable is `fault_bits` bit 3 / kFaultCommsMalformed, which
+//     RobotLoop derives 1:1 from this counter, robot_loop.cpp) across
+//     several pump() drains (a "settle window") -- stays 0. Lines are
+//     injected on radioFake specifically: a real relay leak lands on
+//     the robot's OWN radio transport (radioLink_), never its silent,
+//     unconnected USB serial (serialLink_) -- see comms.h's own
+//     Comms::pump() doc comment ("serial + radio" transports) and
+//     src/firm/main.cpp's wiring (RadioTransport around com/radio.h).
+//     The exact relay-shaped lines below are the dongle's own
+//     control-plane vocabulary verbatim (host/robot_radio/io/
+//     serial_conn.py's `_banner_classify()`/`_relay_handshake()`):
+//     "?" (channel/group/mode query), "!ECHO OFF", "!MODE RAW250", "!GO"
+//     (the dongle commands proper), and "# entering data plane" (the
+//     dongle's own status reply) -- covering both '!'/'?' (what the HOST
+//     writes toward the dongle) and '#' (what the dongle writes back)
+//     sigils in one scenario, matching the issue's "Direction" section
+//     candidates.
+// ===========================================================================
+
+void scenarioRelayHandshakeChatterNeverCountsAsMalformed() {
+  beginScenario(
+      "pump(): leaked relay control-plane lines ('?'/'!.../'# entering data plane') on radioLink_ never "
+      "count as malformed -- 124-010 isolated-repro sequence, multiple trials");
+
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+
+  // Three independent "fresh clean-boot" trials (124-010 AC: "reproduced
+  // across multiple fresh-boot trials" -- a fresh Comms instance per
+  // trial mirrors mbdeploy re-flashing before each isolated test run).
+  for (int trial = 0; trial < 3; ++trial) {
+    FakeTransport serialFake;
+    FakeTransport radioFake;
+    // The exact relay dongle handshake vocabulary, in the exact order
+    // _banner_classify()/_relay_handshake() emit it -- zero application
+    // commands anywhere in this queue (SUC-008's own precondition).
+    radioFake.enqueueInbound("?channel:1 group:10 mode:RAW250");
+    radioFake.enqueueInbound("!ECHO OFF");
+    radioFake.enqueueInbound("!MODE RAW250");
+    radioFake.enqueueInbound("!GO");
+    radioFake.enqueueInbound("# entering data plane");
+
+    App::Comms comms(serialFake, radioFake, banner);
+
+    // Drain every queued line (the "~1 s settle window" the issue's own
+    // repro waits out before inspecting fault_bits) -- pump() consumes at
+    // most one transport's line per call, and serialFake is always empty
+    // here, so each call drains exactly one radioFake line.
+    for (int i = 0; i < 5; ++i) {
+      App::Cmd cmd;
+      comms.pump(cmd, /*now=*/static_cast<uint32_t>(i));
+      checkTrue(cmd.status == App::CmdStatus::kNone, "no relay chatter line ever decodes a Cmd");
+    }
+
+    checkU64Eq(radioFake.inboundSize(), 0, "every queued relay-chatter line was drained this trial");
+    checkU64Eq(comms.malformedCount(), 0,
+               "malformedCount stays 0 through a full relay-shaped connect handshake with zero application "
+               "commands (trial " + std::to_string(trial) + ")");
+  }
+}
+
+// ===========================================================================
+// 11. The carve-out is narrow, not a general amnesty: a genuinely
+//     unrecognized line that does NOT start with a relay sigil still
+//     counts as malformed (guards against the fix over-broadening), AND a
+//     real command dispatches normally immediately after relay chatter
+//     (guards against the carve-out leaving any residual demux state that
+//     would corrupt the FIRST real application command a host sends right
+//     after connect).
+// ===========================================================================
+
+void scenarioRelayCarveOutIsNarrowAndDoesNotAffectSubsequentRealCommand() {
+  beginScenario(
+      "pump(): relay-sigil carve-out is narrow (non-sigil garbage still malformed) and leaves no residual "
+      "state before the next real command");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  // A non-sigil-prefixed, still-unrecognized line -- must NOT be silently
+  // tolerated by the new carve-out (it is not shaped like relay chatter).
+  radioFake.enqueueInbound("GARBAGE");
+  // Relay chatter, exactly as a leaked handshake fragment would arrive.
+  radioFake.enqueueInbound("!MODE RAW250");
+  // A real, registered no-data verb -- must still dispatch normally
+  // right after the relay chatter, proving the carve-out (an early
+  // `return` in dispatchLine(), never touching any parser/decoder state)
+  // leaves nothing behind that could corrupt the next real line.
+  radioFake.enqueueInbound("PING");
+
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+
+  App::Cmd cmd1;
+  comms.pump(cmd1, /*now=*/0);
+  checkU64Eq(comms.malformedCount(), 1, "a non-sigil unrecognized line still counts as malformed");
+
+  App::Cmd cmd2;
+  comms.pump(cmd2, /*now=*/0);
+  checkU64Eq(comms.malformedCount(), 1, "relay chatter right after does NOT add a second malformed count");
+
+  App::Cmd cmd3;
+  comms.pump(cmd3, /*now=*/999);
+  checkU64Eq(comms.malformedCount(), 1, "malformedCount unchanged -- PING dispatches, not malformed");
+  checkU64Eq(radioFake.sentReliable().size(), 1, "PING replied normally right after relay chatter");
+  if (!radioFake.sentReliable().empty()) {
+    checkStrEq(radioFake.sentReliable()[0], "PONG:t=999", "PING's reply content is unaffected by prior chatter");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -714,6 +828,8 @@ int main() {
   scenarioStrayTrailingColonOnNoDataVerbHandledGracefully();
   scenarioTruncatedBinaryLineCountsMalformedNotCrash();
   scenarioDataContainingColonAndZeroRoundTripsCorrectly();
+  scenarioRelayHandshakeChatterNeverCountsAsMalformed();
+  scenarioRelayCarveOutIsNarrowAndDoesNotAffectSubsequentRealCommand();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Comms scenarios passed\n");

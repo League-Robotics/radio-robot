@@ -263,6 +263,14 @@ class Comms {
   // handler (e.g. a stray `DEVICE`/`PONG` sent host->robot) all increment
   // this. RobotLoop reads it as the App::kFaultCommsMalformed telemetry
   // fault-bit source.
+  //
+  // 124-010 (relay-handshake-trips-comms-malformed.md): a line whose
+  // first byte is '#'/'!'/'?' -- the radio-relay dongle's own
+  // control-plane sigils -- is dropped by dispatchLine() BEFORE reaching
+  // this counter (see isRelayControlPlaneLine(), comms.cpp). This is a
+  // narrow, symmetry-restoring exception, not a broadening of tolerance:
+  // no registered verb name starts with any of those three bytes, so it
+  // never hides a genuine malformed command.
   uint32_t malformedCount() const { return malformedCount_; }
 
  private:
@@ -275,7 +283,9 @@ class Comms {
   // Parses `<COMMAND>[':' <data>]` out of one already-`\n`-delimited wire
   // line (124-005, issue §1) and dispatches by the registry's `binary`
   // flag -- the SOLE discriminator; nothing about `data`'s own bytes is
-  // ever inspected. Unrecognized `<COMMAND>` -> malformedCount_++.
+  // ever inspected. Unrecognized `<COMMAND>` -> malformedCount_++, EXCEPT
+  // a leaked relay control-plane line ('#'/'!'/'?' first byte, 124-010) --
+  // dropped uncounted, before the registry lookup even runs.
   void dispatchLine(Transport& t, const char* line, uint16_t lineLen, Cmd& out, uint32_t now);  // [ms]
 
   // Cleartext command dispatch (HELLO/PING/ID/VER, the only inbound
