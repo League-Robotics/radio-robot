@@ -312,6 +312,8 @@ list(APPEND SOURCE_FILES ${CC_FILES})
 # root" override in codal.json, it is simply always there once populated.
 set(MOTION_SOURCE_DIR "src/motion")
 RECURSIVE_FIND_DIR(MOTION_INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/${MOTION_SOURCE_DIR}" "*.h")
+# (planner exclusion rationale: see the MOTION_SOURCE_FILES filter below)
+list(FILTER MOTION_INCLUDE_DIRS EXCLUDE REGEX "/planner")
 list(APPEND INCLUDE_DIRS ${MOTION_INCLUDE_DIRS})
 list(APPEND INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/${MOTION_SOURCE_DIR}")
 # The parent of BOTH src/firm and src/motion ("src/"), so a qualified
@@ -323,6 +325,13 @@ list(APPEND INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/${MOTION_SOURCE_DIR}")
 # (app/move_queue.h etc.) that already said `#include "motion/...h"`.
 list(APPEND INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/src")
 RECURSIVE_FIND_FILE(MOTION_SOURCE_FILES "${PROJECT_SOURCE_DIR}/${MOTION_SOURCE_DIR}" "*.cpp")
+# src/motion/planner is the HOST-ONLY standalone planner tree (its own CMake
+# project with test executables that each define main(), a ctypes shared-lib
+# capi, and its own build/ directory full of CMake-generated feature-test
+# sources). None of it may link into the firmware image -- without this
+# filter the glob above would pull in duplicate main() definitions and
+# host-only code the ARM toolchain cannot build.
+list(FILTER MOTION_SOURCE_FILES EXCLUDE REGEX "/planner/")
 list(APPEND SOURCE_FILES ${MOTION_SOURCE_FILES})
 
 # ---------------------------------------------------------------------------
