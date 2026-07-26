@@ -2,9 +2,10 @@
 id: '014'
 title: 'Documentation update: protocol-v5 doc, design.md/DESIGN.md, published protocol
   page'
-status: open
+status: in-progress
 use-cases: []
-depends-on: ['013']
+depends-on:
+- '013'
 github-issue: ''
 issue: protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md
 completes_issue: true
