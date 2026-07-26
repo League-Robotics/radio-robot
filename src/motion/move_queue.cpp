@@ -394,7 +394,7 @@ void MoveQueue::activate(const msg::Move& move, uint64_t now, float pathLength, 
       shaperVLeft_.syncTo(vLeft);
       shaperVRight_.syncTo(vRight);
     }
-    sink_.setWheels(vLeft, vRight);
+    sink_.setDuty(vLeft, vRight);
   } else {
     // TWIST (and the defensive NONE fallback -- see move_queue.h's own
     // header: a well-formed Move never reaches here with velocity_kind ==
@@ -419,7 +419,7 @@ void MoveQueue::activate(const msg::Move& move, uint64_t now, float pathLength, 
     }
     float vLeft = 0.0f, vRight = 0.0f;
     BodyKinematics::inverse(vx, omega, trackWidth_, vLeft, vRight);
-    sink_.setWheels(vLeft, vRight);
+    sink_.setDuty(vLeft, vRight);
   }
 
   Motion::StopCondition::Kind kind = Motion::StopCondition::Kind::Time;
@@ -512,7 +512,7 @@ void MoveQueue::shapeAndStage(uint64_t now, float pathLength, float theta) {
                                      shaperLimits_.aDecel, shaperLimits_.jMax);
     float vRight = shaperVRight_.next(active_.cruiseVRight, remainingLinear, dt, shaperLimits_.aMax,
                                        shaperLimits_.aDecel, shaperLimits_.jMax);
-    sink_.setWheels(vLeft, vRight);
+    sink_.setDuty(vLeft, vRight);
     return;
   }
 
@@ -529,7 +529,7 @@ void MoveQueue::shapeAndStage(uint64_t now, float pathLength, float theta) {
   }
   float vLeft = 0.0f, vRight = 0.0f;
   BodyKinematics::inverse(vx, omega, trackWidth_, vLeft, vRight);
-  sink_.setWheels(vLeft, vRight);
+  sink_.setDuty(vLeft, vRight);
 }
 
 // sameAxisCompatible -- thin forwarder onto the anonymous namespace's own

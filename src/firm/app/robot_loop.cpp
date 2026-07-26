@@ -444,6 +444,18 @@ void RobotLoop::handleStop(const msg::CommandEnvelope& env) {
   tlm_.ack(env.corr_id, 0);
 }
 
+// rejectDuringBoot -- see robot_loop.h's own doc comment. Mirrors
+// handleMove()'s configured_ gate (ERR_NOT_CONFIGURED, same error code) but
+// applies uniformly to any decoded command kind (MOVE/CONFIG/STOP) -- boot()
+// never dispatches into handleMove()/handleConfig()/handleStop() at all
+// (those touch moveQueue_/motorL_/motorR_/otos_, none of which are safe to
+// act on before Preamble::done()), so this is boot()'s own single ack path,
+// not a call into the cycle()-time handlers.
+void RobotLoop::rejectDuringBoot(const Cmd& cmd) {
+  if (cmd.status != CmdStatus::kDecoded) return;
+  tlm_.ack(cmd.env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
+}
+
 // Dispatches the <=1 decoded command in cmd to its own handler by
 // cmd_kind. `cmd` is a fresh, cycle-local variable (populated by at most
 // one comms_.pump() call this cycle), so reading it here bounds dispatch
@@ -479,12 +491,15 @@ void RobotLoop::processMessage(const Cmd& cmd) {
 // ---- Boot: resolve every device before entering the control loop.
 // Telemetry flows from power-on (frames report per-device status), and the
 // text rump stays live so HELLO/PING can classify a rebooting robot while
-// the preamble is still probing devices. Binary commands are ignored until
-// the main loop starts. ----
+// the preamble is still probing devices. A binary command decoded during
+// this window is never executed AND never silently dropped -- rejectDuringBoot()
+// (125-001) explicitly NACKs it (ERR_NOT_CONFIGURED) instead; the main loop
+// is what actually dispatches commands, starting once boot() returns. ----
 void RobotLoop::boot() {
   while (!preamble_.done()) {
     Cmd bootCmd;
     comms_.pump(bootCmd, markTime());
+    rejectDuringBoot(bootCmd);  // 125-001: explicit NACK, never a silent drop
 
     preamble_.step();  // one bounded probe action per pass
 

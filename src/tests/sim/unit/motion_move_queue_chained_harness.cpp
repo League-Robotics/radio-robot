@@ -1,17 +1,21 @@
 // motion_move_queue_chained_harness.cpp -- sprint 122 ticket 002's own
 // end-to-end SUC-001 scenario: enqueue two chained WHEELS Moves against the
 // model plant (TestSim::WheelPlant, src/tests/sim/plant/wheel_plant.{h,cpp})
-// and verify the completion/chain-advance sequence, proving the
-// velocity-sink boundary (motion/wheel_sink.h) is sufficient on its own --
-// NO TestSim::SimHarness, NO libfirmware_host, NO Python, NO Devices::/App::
+// and verify the completion/chain-advance sequence, proving the WheelSink
+// boundary (motion/wheel_sink.h) is sufficient on its own -- NO
+// TestSim::SimHarness, NO libfirmware_host, NO Python, NO Devices::/App::
 // anything, anywhere in this binary's own build or run path. Built and run
 // by src/motion/CMakeLists.txt's `motion_tests` target (Design Rationale
 // Decision 4) -- see that file for the plain-CMake build recipe.
 //
-// TestWheelSink below is deliberately NOT a real PID/motor-controller model
-// -- Motion::MoveQueue's own contract is a VELOCITY sink (Design Rationale
-// Decision 1; the real velocity PID stays in the base, Devices::NezhaMotor,
-// untouched this sprint). This test-only sink maps a commanded wheel
+// TestWheelSink below is deliberately NOT a real PID/motor-controller model.
+// 125-002 retooled Motion::WheelSink's own contract from a velocity sink to
+// a DUTY sink (setWheels() -> setDuty()) -- a mechanical rename only:
+// Motion::MoveQueue itself does not yet compute real [-1,1] duty (that is
+// ticket 006's job, converting the shaped velocity target via
+// Motion::WheelVelocityPid), so the values this method still receives are
+// the SAME raw commanded wheel velocities as before, just handed through
+// the renamed method. This test-only sink maps that commanded wheel
 // velocity onto TestSim::WheelPlant's own duty input via a simple linear
 // open-loop relation (duty = v / dutyVelMax, clamped to [-1,1]) -- close
 // enough that the plant's own first-order lag converges toward the
@@ -64,7 +68,7 @@ void checkUintEq(uint32_t actual, uint32_t expected, const std::string& what) {
 }
 
 // TestWheelSink -- see file header. Owns two model plants (left/right) and
-// steps both by dt every tick() call using whichever target setWheels()/
+// steps both by dt every tick() call using whichever target setDuty()/
 // stop() most recently staged -- mirrors App::Drive's own "stage now, apply
 // at tick()" shape (drive.h), just against the model plant instead of real
 // hardware.
@@ -73,7 +77,9 @@ class TestWheelSink : public Motion::WheelSink {
   TestWheelSink(float dutyVelMax, float tau)
       : dutyVelMax_(dutyVelMax), left_(dutyVelMax, tau), right_(dutyVelMax, tau) {}
 
-  void setWheels(float v_left, float v_right) override {
+  // Still named/typed as MoveQueue's own duty-sink call (setDuty()), but the
+  // arguments are still commanded velocities this ticket -- see file header.
+  void setDuty(float v_left, float v_right) override {
     vLeft_ = v_left;
     vRight_ = v_right;
   }

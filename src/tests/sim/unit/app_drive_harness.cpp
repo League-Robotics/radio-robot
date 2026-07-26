@@ -1,6 +1,6 @@
 // app_drive_harness.cpp -- off-hardware acceptance harness for ticket
 // 103-006 (SUC-006), App::Drive (src/firm/app/drive.{h,cpp}). Proves:
-// setWheels() stages the raw v_left/v_right values directly and tick()
+// setDuty() stages the raw left/right values directly and tick()
 // applies the last-staged target onto the two REAL Devices::NezhaMotor
 // leaves via setVelocity(), and stop() zeroes both targets within one cycle
 // of the next NezhaMotor::tick().
@@ -13,7 +13,7 @@
 // = kff*target -- velocity_pid.cpp's own compute()) against a KNOWN zero
 // measured velocity (every cycle here reports the SAME encoder position, so
 // filteredVelocity_ stays exactly 0). This isolates "did Drive stage the
-// value setWheels() was called with" from the PID's own convergence
+// value setDuty() was called with" from the PID's own convergence
 // behavior (already proved by devices_motor_harness.cpp's
 // scenarioPidOnChasesVelocityTarget).
 //
@@ -21,15 +21,22 @@
 // wheel-target sink -- setWheels()/stop()/tick() only, implementing
 // Motion::WheelSink. setTwist()/the BodyKinematics::inverse() staging this
 // harness used to test moved to Motion::MoveQueue (which now calls
-// BodyKinematics::inverse() itself and hands the result down through
-// setWheels()) -- that coverage is NOT lost, it moved WITH the code, and
-// now lives in app_move_queue_harness.cpp's own TWIST-Move scenarios (e.g.
-// scenario 1, "empty queue -- TWIST Move activates immediately via
-// inverse()"). The scenarios below that exercised setTwist() directly, or
-// last-wins between setTwist()/setWheels(), are deleted outright (the
-// method/ambiguity they tested no longer exists) rather than adapted --
-// Drive now has exactly ONE staging path, so there is nothing left to be
-// "last" against.
+// BodyKinematics::inverse() itself and hands the result down through the
+// sink) -- that coverage is NOT lost, it moved WITH the code, and now lives
+// in app_move_queue_harness.cpp's own TWIST-Move scenarios (e.g. scenario 1,
+// "empty queue -- TWIST Move activates immediately via inverse()"). The
+// scenarios below that exercised setTwist() directly, or last-wins between
+// setTwist()/setWheels(), are deleted outright (the method/ambiguity they
+// tested no longer exists) rather than adapted -- Drive now has exactly ONE
+// staging path, so there is nothing left to be "last" against.
+//
+// 125-002 (RETOOL, MECHANICAL RENAME ONLY): Motion::WheelSink's own contract
+// retooled from a velocity sink to a duty sink -- setWheels() -> setDuty(),
+// same unclamped pass-through body, same assertions below (Drive's real
+// duty semantics -- the |duty|<=1/NaN->0 clamp, WheelObserver wiring -- are
+// ticket 007's job, not this ticket's). "v_left"/"v_right" in the scenario
+// names/locals below still describe what these values ARE today (raw mm/s
+// velocities staged under the new duty-shaped name), not yet real duty.
 //
 // Mirrors devices_motor_harness.cpp's own NezhaMotor-scripting helpers
 // (scriptEncoderRequestCollect/baseNezhaConfig) -- duplicated here per this
@@ -155,12 +162,12 @@ void runOneCycleAtZeroPosition(Devices::NezhaMotor& motor, TestSim::ScriptedI2CH
 }
 
 // ===========================================================================
-// 1. setWheels() stages the raw v_left/v_right values directly (AC #1) --
+// 1. setDuty() stages the raw v_left/v_right values directly (AC #1) --
 //    the ONE staging path Drive has left post-122-002.
 // ===========================================================================
 
-void scenarioSetWheelsStagesRawValues() {
-  beginScenario("Drive::setWheels(): stages raw v_left/v_right, tick() applies them via setVelocity()");
+void scenarioSetDutyStagesRawValues() {
+  beginScenario("Drive::setDuty(): stages raw v_left/v_right, tick() applies them via setVelocity()");
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
@@ -176,7 +183,7 @@ void scenarioSetWheelsStagesRawValues() {
 
   const float vLeft = 90.0f;   // [mm/s]
   const float vRight = 30.0f;  // [mm/s]
-  drive.setWheels(vLeft, vRight);
+  drive.setDuty(vLeft, vRight);
   drive.tick();
 
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
@@ -211,7 +218,7 @@ void scenarioStopZeroesBothTargetsWithinOneCycle() {
   // Stage a nonzero target and actually execute it once, so appliedDuty() is
   // demonstrably nonzero before stop() -- proves the transition, not just
   // "duty was never nonzero to begin with."
-  drive.setWheels(60.0f, 45.0f);
+  drive.setDuty(60.0f, 45.0f);
   drive.tick();
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
   runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs);
@@ -231,7 +238,7 @@ void scenarioStopZeroesBothTargetsWithinOneCycle() {
 }  // namespace
 
 int main() {
-  scenarioSetWheelsStagesRawValues();
+  scenarioSetDutyStagesRawValues();
   scenarioStopZeroesBothTargetsWithinOneCycle();
 
   if (g_failureCount == 0) {

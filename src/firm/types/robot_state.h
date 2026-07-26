@@ -182,7 +182,12 @@ struct RobotState {
   // just this section (Motion::StateEstimator::wheelAt()/bodyAt() today;
   // a caller holding a COPIED RobotState gets the same extrapolation for
   // free, no live StateEstimator instance needed). Mirrors
-  // Motion::WheelEstimate/BodyEstimate/Innovations field-for-field --
+  // Motion::WheelPeer/BodyPeer/Innovations field-for-field (125-002:
+  // Motion::StateEstimator's own private peer-basis structs were renamed
+  // WheelEstimate -> WheelPeer / BodyEstimate -> BodyPeer to free the
+  // `WheelEstimate` name for Motion::WheelSink's own retooled boundary
+  // struct -- a base->motion actuation-observer crossing, a DIFFERENT
+  // concept from this ZOH peer-basis reading, that now owns the name) --
   // those become the CANONICAL shape once ticket 009 threads this section
   // through in place of StateEstimator's own private members; today they
   // remain two independently-valid copies (this ticket lands the type,

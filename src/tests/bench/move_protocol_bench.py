@@ -76,6 +76,36 @@ def _drain(proto: NezhaProtocol) -> list[TLMFrame]:
     return proto.read_pending_binary_tlm_frames()
 
 
+def _wait_for_boot_ready(proto: NezhaProtocol, timeout: float = 3.0) -> bool:  # [s]
+    """Poll telemetry until `kFlagEventBootReady` (flags bit 11) is observed,
+    or `timeout` elapses -- 125-001
+    (bench-move-commands-intermittently-never-reach-firmware.md).
+
+    Root cause: `SerialConnection.connect()`'s own HELLO-classify + PING
+    readiness poll can return (and, measured against real hardware, often
+    does -- device-probe retries push `RobotLoop::boot()` past 1s) well
+    BEFORE `Preamble::done()` actually fires -- HELLO/PING both answer
+    straight out of `boot()`'s own `comms_.pump()` loop, independent of
+    whether any device has resolved yet. A `Move` sent in that window now
+    gets an EXPLICIT `ERR_NOT_CONFIGURED` ack (125-001's own firmware fix,
+    `RobotLoop::rejectDuringBoot()` -- never a silent drop any more), but it
+    still does not EXECUTE: firmware deliberately does not act on a command
+    before every device is probed (executing early against a not-yet-
+    resolved motor/OTOS would be the genuinely unsafe alternative, not the
+    fix). This script's OWN first real command therefore needs the robot to
+    actually be ready, not merely reachable -- waits for the SAME signal
+    `move_soak.py`/`tlm_log.py` already read off `Telemetry.flags` bit 11.
+    Returns False (never raises) on timeout so a caller can report it as
+    positive evidence of a regression rather than an opaque hang."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for f in proto.read_pending_binary_tlm_frames():
+            if f.event_boot_ready:
+                return True
+        time.sleep(0.01)
+    return False
+
+
 def _watch(proto: NezhaProtocol, duration: float,  # [s]
            on_frame=None) -> list[TLMFrame]:
     """Drain telemetry for `duration` seconds, collecting every frame (and
@@ -531,6 +561,17 @@ def main() -> int:
         return 2
     proto = NezhaProtocol(conn)
     print(f"connected: port={args.port} mode={info.get('mode')}")
+
+    # 125-001: wait for the robot to actually be ready (kFlagEventBootReady)
+    # before sending the first real command -- connect() itself only proves
+    # the link answers HELLO/PING, not that RobotLoop::boot() has finished
+    # probing every device. See _wait_for_boot_ready()'s own doc comment.
+    if _wait_for_boot_ready(proto):
+        print("boot_ready observed -- robot is ready for the first MOVE")
+    else:
+        print("WARNING: kFlagEventBootReady not observed within timeout -- "
+              "proceeding anyway (scenario_distance_stop's own checks will "
+              "surface whatever the robot actually does)")
 
     result = Result()
     try:

@@ -24,7 +24,7 @@ void StateEstimator::update(const Input& input, uint32_t now) {  // [ms]
 
   // Body peer -- x/y/v_x/v_y always come straight from Motion::Odometry's
   // own dead-reckoned pose/twist (never OTOS-blended this sprint -- see
-  // BodyEstimate's own doc comment). heading/omega start from the SAME
+  // BodyPeer's own doc comment). heading/omega start from the SAME
   // encoder-derived values, then blend toward a fresh OTOS reading via the
   // v1 complementary weight.
   float heading = input.pose.heading;
@@ -66,10 +66,10 @@ void StateEstimator::update(const Input& input, uint32_t now) {  // [ms]
   body_.valid = true;
 }
 
-WheelEstimate StateEstimator::wheelAt(Wheel wheel, uint32_t t) const {  // [ms]
-  const WheelEstimate& basis = (wheel == Wheel::Left) ? wheelLeft_ : wheelRight_;
+WheelPeer StateEstimator::wheelAt(Wheel wheel, uint32_t t) const {  // [ms]
+  const WheelPeer& basis = (wheel == Wheel::Left) ? wheelLeft_ : wheelRight_;
 
-  WheelEstimate out = basis;
+  WheelPeer out = basis;
   if (!basis.valid) return out;
 
   // Age math: one integer subtract cast to seconds, no 64-bit divides per
@@ -85,8 +85,8 @@ WheelEstimate StateEstimator::wheelAt(Wheel wheel, uint32_t t) const {  // [ms]
   return out;
 }
 
-BodyEstimate StateEstimator::bodyAt(uint32_t t) const {  // [ms]
-  BodyEstimate out = body_;
+BodyPeer StateEstimator::bodyAt(uint32_t t) const {  // [ms]
+  BodyPeer out = body_;
   if (!body_.valid) return out;
 
   uint32_t ageMs = t - body_.basisTime;
@@ -107,9 +107,9 @@ BodyEstimate StateEstimator::bodyAt(uint32_t t) const {  // [ms]
   return out;
 }
 
-BodyEstimate StateEstimator::whereAmI(uint32_t now) const { return bodyAt(now); }  // [ms]
+BodyPeer StateEstimator::whereAmI(uint32_t now) const { return bodyAt(now); }  // [ms]
 
-WheelEstimate StateEstimator::wheelNow(Wheel wheel) const {
+WheelPeer StateEstimator::wheelNow(Wheel wheel) const {
   return (wheel == Wheel::Left) ? wheelLeft_ : wheelRight_;
 }
 

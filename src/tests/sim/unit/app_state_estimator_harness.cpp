@@ -130,23 +130,23 @@ void scenarioWheelZohExtrapolation() {
                                            /*otosPresent=*/false);
   estimator.update(frame, /*now=*/1000);
 
-  Motion::WheelEstimate leftNow = estimator.wheelNow(Motion::Wheel::Left);
+  Motion::WheelPeer leftNow = estimator.wheelNow(Motion::Wheel::Left);
   checkTrue(leftNow.valid, "wheelNow(Left) valid after update()");
   checkNear(leftNow.distance, 100.0f, 1e-6f, "wheelNow(Left) distance == basis position");
   checkNear(leftNow.velocity, 50.0f, 1e-6f, "wheelNow(Left) velocity == basis velocity");
   checkUintEq(leftNow.basisTime, 1000, "wheelNow(Left) basisTime == encLeft.time");
 
-  Motion::WheelEstimate leftAtBasis = estimator.wheelAt(Motion::Wheel::Left, 1000);
+  Motion::WheelPeer leftAtBasis = estimator.wheelAt(Motion::Wheel::Left, 1000);
   checkNear(leftAtBasis.distance, 100.0f, 1e-6f, "wheelAt(Left, basisTime) == wheelNow (age 0)");
 
-  Motion::WheelEstimate leftAt3000 = estimator.wheelAt(Motion::Wheel::Left, 3000);
+  Motion::WheelPeer leftAt3000 = estimator.wheelAt(Motion::Wheel::Left, 3000);
   checkNear(leftAt3000.distance, 200.0f, 1e-3f,
             "wheelAt(Left, +2000ms): 100 + 50mm/s * 2s == 200mm");
   checkNear(leftAt3000.velocity, 50.0f, 1e-6f, "wheelAt() holds velocity constant under ZOH");
   checkUintEq(leftAt3000.basisTime, 1000,
               "wheelAt()'s returned basisTime stays the ORIGINAL basis time, not the query time");
 
-  Motion::WheelEstimate rightAt1500 = estimator.wheelAt(Motion::Wheel::Right, 1500);
+  Motion::WheelPeer rightAt1500 = estimator.wheelAt(Motion::Wheel::Right, 1500);
   checkNear(rightAt1500.distance, -50.0f, 1e-3f,
             "wheelAt(Right, +500ms): -40 + (-20mm/s * 0.5s) == -50mm");
 }
@@ -165,12 +165,12 @@ void scenarioBodyZohStraightLine() {
                 /*otosPresent=*/false);
   estimator.update(frame, /*now=*/5000);
 
-  Motion::BodyEstimate atBasis = estimator.bodyAt(5000);
+  Motion::BodyPeer atBasis = estimator.bodyAt(5000);
   checkTrue(atBasis.valid, "bodyAt() valid after update()");
   checkNear(atBasis.x, 10.0f, 1e-6f, "bodyAt(basisTime) x == basis x (age 0)");
   checkNear(atBasis.y, 20.0f, 1e-6f, "bodyAt(basisTime) y == basis y (age 0)");
 
-  Motion::BodyEstimate at6000 = estimator.bodyAt(6000);
+  Motion::BodyPeer at6000 = estimator.bodyAt(6000);
   checkNear(at6000.x, 110.0f, 1e-3f, "bodyAt(+1000ms): 10 + 100mm/s * 1s == 110mm (heading 0)");
   checkNear(at6000.y, 20.0f, 1e-3f, "bodyAt(+1000ms): y unchanged -- zero heading, zero v_y");
   checkNear(at6000.heading, 0.0f, 1e-6f, "bodyAt(+1000ms): heading unchanged -- omega == 0");
@@ -195,7 +195,7 @@ void scenarioBodyZohRotating() {
                 /*otosPresent=*/false);
   estimator.update(frame, /*now=*/0);
 
-  Motion::BodyEstimate at1000 = estimator.bodyAt(1000);
+  Motion::BodyPeer at1000 = estimator.bodyAt(1000);
   // basis heading == pi/2: cos(pi/2)~=0, sin(pi/2)==1 -- the body-frame
   // forward velocity (50mm/s along +x_body) projects onto WORLD +y.
   checkNear(at1000.x, 0.0f, 1e-3f, "bodyAt(+1s) x: (50*cos(pi/2) - 0*sin(pi/2))*1s ~= 0");
@@ -218,14 +218,14 @@ void scenarioWhereAmIAndWheelNow() {
                 /*otosPresent=*/false);
   estimator.update(frame, /*now=*/2000);
 
-  Motion::BodyEstimate viaWhereAmI = estimator.whereAmI(9000);
-  Motion::BodyEstimate viaBodyAt = estimator.bodyAt(9000);
+  Motion::BodyPeer viaWhereAmI = estimator.whereAmI(9000);
+  Motion::BodyPeer viaBodyAt = estimator.bodyAt(9000);
   checkNear(viaWhereAmI.x, viaBodyAt.x, 1e-9f, "whereAmI(now).x == bodyAt(now).x exactly");
   checkNear(viaWhereAmI.y, viaBodyAt.y, 1e-9f, "whereAmI(now).y == bodyAt(now).y exactly");
   checkNear(viaWhereAmI.heading, viaBodyAt.heading, 1e-9f,
             "whereAmI(now).heading == bodyAt(now).heading exactly");
 
-  Motion::WheelEstimate viaWheelNow = estimator.wheelNow(Motion::Wheel::Left);
+  Motion::WheelPeer viaWheelNow = estimator.wheelNow(Motion::Wheel::Left);
   checkNear(viaWheelNow.distance, 30.0f, 1e-6f, "wheelNow() returns the raw basis, no extrapolation");
   checkUintEq(viaWheelNow.basisTime, 2000, "wheelNow() basisTime is the raw basis time");
 }
@@ -275,7 +275,7 @@ void scenarioResetReanchorsBodyOnlyWheelsUntouched() {
 
   estimator.reset(100.0f, 200.0f, 1.5f);
 
-  Motion::BodyEstimate atBasis = estimator.bodyAt(1000);  // age 0 -- pure re-anchored pose
+  Motion::BodyPeer atBasis = estimator.bodyAt(1000);  // age 0 -- pure re-anchored pose
   checkTrue(atBasis.valid, "reset() does not clear an already-true valid flag");
   checkNear(atBasis.x, 100.0f, 1e-6f, "reset() snaps x to the given pose");
   checkNear(atBasis.y, 200.0f, 1e-6f, "reset() snaps y to the given pose");
@@ -284,9 +284,9 @@ void scenarioResetReanchorsBodyOnlyWheelsUntouched() {
   checkNear(atBasis.v_x, 9.0f, 1e-6f, "reset() leaves v_x untouched");
   checkNear(atBasis.omega, 0.1f, 1e-6f, "reset() leaves omega untouched");
 
-  Motion::WheelEstimate leftAfterReset = estimator.wheelNow(Motion::Wheel::Left);
+  Motion::WheelPeer leftAfterReset = estimator.wheelNow(Motion::Wheel::Left);
   checkNear(leftAfterReset.distance, 77.0f, 1e-6f, "reset() leaves the LEFT wheel peer completely untouched");
-  Motion::WheelEstimate rightAfterReset = estimator.wheelNow(Motion::Wheel::Right);
+  Motion::WheelPeer rightAfterReset = estimator.wheelNow(Motion::Wheel::Right);
   checkNear(rightAfterReset.distance, -22.0f, 1e-6f, "reset() leaves the RIGHT wheel peer completely untouched");
 
   // reset() before ANY update() -- still writes the pose, but valid stays
@@ -321,7 +321,7 @@ void scenarioInnovationsComputedEvenAtWeightZero() {
 
   // Weight is 0.0 -- the residual is diagnostic ONLY, never fed back into
   // the body estimate itself.
-  Motion::BodyEstimate body = estimator.whereAmI(1000);
+  Motion::BodyPeer body = estimator.whereAmI(1000);
   checkNear(body.heading, 0.2f, 1e-6f, "weight=0.0 -- body heading stays PURE encoder-derived, unaffected by innovations()");
   checkNear(body.omega, 0.5f, 1e-6f, "weight=0.0 -- body omega stays PURE encoder-derived, unaffected by innovations()");
 }
@@ -343,21 +343,21 @@ void scenarioSetWeightsPureEncoderPureOtosAndBlend() {
 
   // weight == 0.0 -- pure encoder-derived heading/omega.
   estimator.update(frame, 1000);
-  Motion::BodyEstimate w0 = estimator.whereAmI(1000);
+  Motion::BodyPeer w0 = estimator.whereAmI(1000);
   checkNear(w0.heading, 0.2f, 1e-6f, "weight=0.0 -- heading == pure encoder frame.pose.h");
   checkNear(w0.omega, 0.5f, 1e-6f, "weight=0.0 -- omega == pure encoder frame.twist.omega");
 
   // weight == 1.0 -- pure OTOS heading/omega (fresh reading).
   estimator.setWeights(Motion::FusionWeights{/*headingOtos=*/1.0f, /*omegaOtos=*/1.0f, /*staleness=*/200});
   estimator.update(frame, 1000);
-  Motion::BodyEstimate w1 = estimator.whereAmI(1000);
+  Motion::BodyPeer w1 = estimator.whereAmI(1000);
   checkNear(w1.heading, 1.0f, 1e-6f, "weight=1.0 -- heading == pure otos.heading");
   checkNear(w1.omega, 2.0f, 1e-6f, "weight=1.0 -- omega == pure otos.omega");
 
   // Intermediate weight -- proportional blend: encoder + weight*(otos - encoder).
   estimator.setWeights(Motion::FusionWeights{/*headingOtos=*/0.25f, /*omegaOtos=*/0.75f, /*staleness=*/200});
   estimator.update(frame, 1000);
-  Motion::BodyEstimate wMid = estimator.whereAmI(1000);
+  Motion::BodyPeer wMid = estimator.whereAmI(1000);
   checkNear(wMid.heading, 0.2f + 0.25f * (1.0f - 0.2f), 1e-5f,
             "intermediate weight -- heading blends proportionally (0.25)");
   checkNear(wMid.omega, 0.5f + 0.75f * (2.0f - 0.5f), 1e-5f,

@@ -8,7 +8,7 @@
 // Motion::StopCondition per active Move, the land-at-zero predicate, AND
 // (122-002) the twist-decomposition call (BodyKinematics::inverse()) that
 // used to live in App::Drive::setTwist() -- MoveQueue computes vL/vR itself
-// and hands them down through the WheelSink boundary via setWheels(), never
+// and hands them down through the WheelSink boundary via setDuty(), never
 // calling a setTwist()-shaped method on the sink (the sink only ever
 // receives wheel-space targets; see wheel_sink.h). Outside -- validating a
 // Move's shape (App::RobotLoop::handleMove()), actually staging a wheel
@@ -19,13 +19,23 @@
 // baseline instead of a second, disagreeing read.
 //
 // 122-002: moved from src/firm/app/move_queue.* into src/motion/, behind the
-// velocity-sink boundary. MoveQueue no longer holds a concrete App::Drive& --
+// WheelSink boundary. MoveQueue no longer holds a concrete App::Drive& --
 // it holds the WheelSink& boundary interface instead (any composition root
 // may hand it a different concrete sink). It also no longer holds a
 // Devices::Clock& (src/motion may not depend on devices/) -- enqueue() now
 // takes `now` as an explicit parameter, read by the caller (App::RobotLoop)
 // at the exact point in the cycle this class used to read the clock itself,
 // so the value flowing in is identical, just handed in rather than pulled.
+//
+// 125-002 (RETOOL, MECHANICAL RENAME ONLY): WheelSink's boundary retooled
+// from a velocity sink to a duty sink -- every setWheels() call site below
+// is renamed setDuty(), byte-identical arguments (still the shaped v_left/
+// v_right this class always computed). The VALUES flowing through are still
+// raw mm/s velocities, not real [-1,1] duty, until ticket 006 adds the
+// Motion::WheelVelocityPid conversion this class's own shapeAndStage() will
+// call at the end of its pipeline -- a known, documented interim gap (the
+// sink's own concrete implementation, App::Drive, is itself an unclamped
+// placeholder pass-through until ticket 007), not a silent behavior change.
 #pragma once
 
 #include <cstdint>
@@ -120,8 +130,8 @@ class MoveQueue {
   // qualify; axis disabled (default) means this path never fires.
   //
   // Shaping: on Continue, also re-stages velocity via the WheelSink
-  // (twist path: BodyKinematics::inverse() then setWheels(); wheels path:
-  // setWheels() directly) through Motion::VelocityShaper (non-primary axes
+  // (twist path: BodyKinematics::inverse() then setDuty(); wheels path:
+  // setDuty() directly) through Motion::VelocityShaper (non-primary axes
   // UNSHAPED), a no-op per axis whenever ShaperLimits disables it.
   TickResult tick(uint64_t now, const Odometry& odom);  // [us]
 

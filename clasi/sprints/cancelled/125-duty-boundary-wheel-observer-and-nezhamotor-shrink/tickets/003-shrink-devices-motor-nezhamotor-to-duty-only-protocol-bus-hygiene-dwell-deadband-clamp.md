@@ -2,7 +2,7 @@
 id: '003'
 title: Shrink Devices::Motor/NezhaMotor to duty-only protocol + bus hygiene + dwell/deadband
   + clamp
-status: open
+status: in-progress
 use-cases:
 - SUC-003
 depends-on:
