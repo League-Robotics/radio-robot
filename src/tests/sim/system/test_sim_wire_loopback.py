@@ -109,10 +109,17 @@ pytestmark = pytest.mark.skipif(
 _TRACK_WIDTH = 128.0  # [mm] matches tovez_nocal.json's own geometry.trackwidth
 _MOTOR_DEADBAND = 15.0  # [mm/s] tovez_nocal.json's drive.motor_deadband -- stay comfortably above it
 
-# Bounded polling budgets -- generous over the sim's own 40ms cycle period
-# (never an unbounded/sleeping wait; every loop below is a fixed step count).
+# Bounded polling budgets -- generous over the sim's own 50ms cycle period
+# (sim_loop.py's own step() doc comment; never an unbounded/sleeping wait --
+# every loop below is a fixed step count).
 _ACK_POLL_CYCLES = 25
 _DRIVE_SETTLE_CYCLES = 30
+# 124-011: a MOVE completion ack needs its stop condition to actually fire --
+# generous margin over the commanded stop time, matching this tier's own
+# established precedent (move_protocol_harness.cpp's
+# scenarioTimeStopCompletesWithinTolerance(): kRunCycles=60 for a 400ms stop,
+# ~7.5x margin at 50ms/cycle).
+_COMPLETION_POLL_CYCLES = 80
 
 
 def _make_loop():
@@ -212,6 +219,32 @@ def _build_stop_frame(corr_id: int) -> "tuple[bytes, bytes, bytes]":
     raw_payload = envelope.SerializeToString()
     frame = encode_frame(raw_payload, command=b"STOP")
     wire_line = b"STOP:" + frame
+    return raw_payload, frame, wire_line
+
+
+def _build_config_frame(corr_id: int, *, kp: float) -> "tuple[bytes, bytes, bytes]":
+    """Same shape as ``_build_stop_frame()`` for
+    ``CommandEnvelope{config: ConfigDelta{motor: MotorConfigPatch{kp: ...}}}``
+    -- the third command arm (alongside move/stop), 124-011's own addition
+    to this file's ack-observability coverage (the issue's "historical
+    framing" section specifically named ``config`` enqueue acks as one of
+    the three arms that scored ``ack=None`` pre-123-006, alongside
+    ``move_wheels``/``move_twist``). Exercises
+    ``RobotLoop::handleConfig()``'s MOTOR branch (robot_loop.cpp:321-349),
+    which acks unconditionally at the end -- no configuration-completeness
+    gate guards CONFIG the way one guards MOVE (that gate is
+    ``handleMove()``-only, robot_loop.cpp:217)."""
+    from robot_radio.io.wire_codec import encode_frame
+    from robot_radio.robot.pb2 import config_pb2
+    from robot_radio.robot.pb2 import envelope_pb2 as pb2
+
+    envelope = pb2.CommandEnvelope(
+        corr_id=corr_id,
+        config=pb2.ConfigDelta(motor=config_pb2.MotorConfigPatch(kp=kp)),
+    )
+    raw_payload = envelope.SerializeToString()
+    frame = encode_frame(raw_payload, command=b"CONFIG")
+    wire_line = b"CONFIG:" + frame
     return raw_payload, frame, wire_line
 
 
@@ -330,6 +363,190 @@ def test_stop_command_round_trips_through_real_codec_without_configuration():
         ack = _drain_ack(loop, corr_id, _ACK_POLL_CYCLES)
         assert ack is not None, (
             f"no ack for corr_id={corr_id} observed within {_ACK_POLL_CYCLES} cycles"
+        )
+        assert ack.ok, f"STOP was rejected: err_code={ack.err_code}"
+    finally:
+        loop.disconnect()
+
+
+def test_config_enqueue_ack_round_trips_through_real_codec():
+    """124-011 (issue: telemetry-physical-layer-corruption-and-move-ack-
+    observability.md): the third named arm the issue's "historical framing"
+    section claimed scored ``ack=None`` pre-123-006 (alongside
+    ``move_wheels``/``move_twist``, covered by the two tests above) --
+    ``config``. Same shape as the STOP companion above: an UNCONFIGURED
+    SimHarness (CONFIG's MOTOR branch has no configuration-completeness
+    gate, robot_loop.cpp:217 gates handleMove() only), a real
+    CommandEnvelope{config: ConfigDelta{motor: MotorConfigPatch{kp}}}
+    through the real host encoder -> real firmware demux/decode/dispatch ->
+    real firmware ack-ring push -> real firmware encode -> real host
+    decode."""
+    corr_id = 40003
+    _, frame, wire_line = _build_config_frame(corr_id, kp=0.05)
+    assert 0x0A not in frame, "CONFIG frame unexpectedly contains a literal 0x0A byte"
+
+    loop = _make_loop()
+    try:
+        loop.inject_command(wire_line)
+
+        ack = _drain_ack(loop, corr_id, _ACK_POLL_CYCLES)
+        assert ack is not None, (
+            f"no ack for corr_id={corr_id} observed within {_ACK_POLL_CYCLES} cycles -- "
+            "CONFIG enqueue ack not observed"
+        )
+        assert ack.ok, f"CONFIG was rejected: err_code={ack.err_code}"
+    finally:
+        loop.disconnect()
+
+
+def test_move_completion_ack_arrives_on_a_later_frame_with_ack_corr_equal_to_move_id():
+    """124-011: the issue's "historical framing" section only ever tested
+    (and only ever localized the fix for) the ENQUEUE ack -- "also confirm
+    the move actually executes (motors spin) in the no-ack case -- ack_probe
+    did not verify motion" was the issue's own open item, and the
+    COMPLETION ack (a distinct, SECOND ack riding a later frame, with
+    ``ack_corr == Move.id`` rather than the enqueue's ``corr_id`` --
+    protocol-v4 §7.2, robot_loop.cpp:909-914) was never exercised by
+    ``test_move_wheels_with_embedded_0x0a_byte_round_trips_through_real_codec``
+    above (that test's Move runs past the polling window, never reaching its
+    own TIME stop condition). This test uses a short TIME stop condition so
+    the Move genuinely completes within the polling budget, and checks BOTH
+    acks -- the enqueue ack (``ack_corr == corr_id``) AND, distinctly, the
+    completion ack (``ack_corr == move_id``, ``ack_err == 0`` regardless of
+    outcome -- timeout-vs-stop-condition rides ``flags`` bit 15,
+    ``fault_move_timeout``, not ``ack_err``)."""
+    v = 150.0  # [mm/s] comfortably above tovez_nocal.json's 15 mm/s motor_deadband
+    corr_id, move_id = 40004, 50004
+    kStopTimeMs = 200.0  # [ms] short enough to complete well within the poll budget
+    kTimeoutMs = 5000.0  # [ms] generous backstop -- must never be what actually fires
+    _, frame, wire_line = _build_move_wheels_frame(
+        corr_id, move_id, v, v, stop_time_ms=kStopTimeMs, timeout_ms=kTimeoutMs)
+    assert 0x0A not in frame, "MOVE frame unexpectedly contains a literal 0x0A byte"
+
+    loop = _make_loop()
+    try:
+        _configure(loop)
+        loop.inject_command(wire_line)
+
+        enqueue_ack = _drain_ack(loop, corr_id, _ACK_POLL_CYCLES)
+        assert enqueue_ack is not None, (
+            f"no enqueue ack for corr_id={corr_id} observed within {_ACK_POLL_CYCLES} cycles"
+        )
+        assert enqueue_ack.ok, f"MOVE enqueue was rejected: err_code={enqueue_ack.err_code}"
+
+        completion_ack = None
+        last_frame = None
+        for _ in range(_COMPLETION_POLL_CYCLES):
+            loop.step(1)
+            for frame_out in loop.drain_pending_tlm():
+                last_frame = frame_out
+                for ack in frame_out.acks:
+                    if ack.corr_id == move_id:
+                        completion_ack = ack
+            if completion_ack is not None:
+                break
+
+        assert completion_ack is not None, (
+            f"no completion ack (ack_corr == move_id={move_id}) observed within "
+            f"{_COMPLETION_POLL_CYCLES} cycles -- the Move's stop condition never produced its "
+            "own second ack"
+        )
+        assert completion_ack.ok, (
+            f"completion ack err_code={completion_ack.err_code} -- protocol-v4 §7.2 says "
+            "ack_err is ALWAYS 0 on completion regardless of outcome (timeout vs. stop-condition "
+            "is flags bit 15, not ack_err)"
+        )
+        assert last_frame is not None and not last_frame.fault_move_timeout, (
+            "kFlagFaultMoveTimeout (flags bit 15) is set -- the Move ended via the 5000ms timeout "
+            "backstop, not its own 200ms TIME stop condition; the test's own margin is too tight"
+        )
+    finally:
+        loop.disconnect()
+
+
+def test_ack_ring_carries_a_four_command_burst_without_loss():
+    """124-011: 008's own encoding-layer test
+    (``scenarioAckRingEvictsOldestPastDepthAndPreservesOrder``,
+    app_telemetry_harness.cpp) already proves ``App::Telemetry``'s ring
+    itself evicts oldest-first past depth 4 -- this is the END-TO-END
+    counterpart the issue's Testing section asks for: four DISTINCT STOP
+    commands (depth-4, the ring's own declared capacity, telemetry.proto's
+    ``(max_count) = 4``) injected back-to-back, with NO host read between
+    injects, so all four are already queued on ``FakeTransport`` before the
+    first ``step()`` -- ``RobotLoop::processMessage()`` decodes and
+    dispatches at most one per cycle (its own doc comment), so this
+    genuinely spans several cycles' worth of ``ack()`` pushes landing close
+    together. The real firmware encode / real host decode chain is then
+    scanned to confirm every one of the four still reaches the host: none
+    silently lost to a same-cycle-adjacent burst the way the issue's
+    original (denied) claim alleged for enqueue acks specifically."""
+    corr_ids = [70001, 70002, 70003, 70004]
+    assert len(corr_ids) == 4, "matches App::kAckRingDepth (telemetry.h) -- update together if it changes"
+
+    loop = _make_loop()
+    try:
+        for corr_id in corr_ids:
+            _, frame, wire_line = _build_stop_frame(corr_id)
+            assert 0x0A not in frame
+            loop.inject_command(wire_line)
+
+        seen = {}
+        for _ in range(_ACK_POLL_CYCLES):
+            loop.step(1)
+            for frame_out in loop.drain_pending_tlm():
+                for ack in frame_out.acks:
+                    if ack.corr_id in corr_ids and ack.corr_id not in seen:
+                        seen[ack.corr_id] = ack
+            if len(seen) == len(corr_ids):
+                break
+
+        missing = [c for c in corr_ids if c not in seen]
+        assert not missing, (
+            f"acks for corr_ids {missing} were never observed within {_ACK_POLL_CYCLES} cycles -- "
+            "lost under a same-cycle 4-command burst"
+        )
+        for corr_id, ack in seen.items():
+            assert ack.ok, f"STOP corr_id={corr_id} unexpectedly rejected: err_code={ack.err_code}"
+    finally:
+        loop.disconnect()
+
+
+def test_ack_corr_id_near_28_bit_packed_ceiling_round_trips_without_truncation():
+    """124-011 (ticket's own "check for other corr_id sources that could
+    exceed 28 bits" instruction): ``App::Telemetry::pushAckRing()``
+    (telemetry.cpp) packs ``(corrId << kAckErrBits) | errCode`` into a bare
+    ``uint32_t`` -- ``kAckErrBits == 4``, so ``corrId`` genuinely has a
+    28-bit ceiling (``corrId < 2**28``) before the left-shift itself
+    silently drops the high bits, independent of telemetry.proto's own
+    documented-but-unenforced 16-bit CONVENTIONAL range for corr_id
+    (envelope.proto/telemetry.proto's own comments: "corr_id needs 16
+    bits" -- a size-accounting convention every REAL caller in this
+    codebase honors, not a wire-enforced bound; ``CommandEnvelope.corr_id``
+    itself carries no ``(max)`` annotation). This proves the true 28-bit
+    ceiling round-trips intact -- the exact class of bug 008 already found
+    and fixed once in testgui/transport.py's ``_MOVE_ID_BASE`` (was
+    ``1 << 30``, corrupted the first Move of every GUI session; fixed to
+    ``1 << 24``)."""
+    corr_id = (1 << 28) - 1  # 268435455 -- the packed word's true ceiling: (corr_id << 4) is the top bit of a uint32
+    assert corr_id.bit_length() == 28
+    assert (corr_id << 4).bit_length() <= 32, "test's own premise: this value must NOT overflow uint32 when shifted"
+
+    _, frame, wire_line = _build_stop_frame(corr_id)
+    assert 0x0A not in frame, "STOP frame unexpectedly contains a literal 0x0A byte"
+
+    loop = _make_loop()
+    try:
+        loop.inject_command(wire_line)
+
+        ack = _drain_ack(loop, corr_id, _ACK_POLL_CYCLES)
+        assert ack is not None, (
+            f"no ack for corr_id={corr_id} (near the packed ring's 28-bit ceiling) observed within "
+            f"{_ACK_POLL_CYCLES} cycles -- either lost, or truncated to a different corr_id the scan "
+            "never matched"
+        )
+        assert ack.corr_id == corr_id, (
+            f"ack.corr_id == {ack.corr_id}, expected the exact near-ceiling value {corr_id} -- "
+            "the packed corr_id<<4|err word truncated it in transit"
         )
         assert ack.ok, f"STOP was rejected: err_code={ack.err_code}"
     finally:
