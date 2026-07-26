@@ -34,10 +34,10 @@ verdict per item:
 | 1 | Split-phase 0x46 request/collect, hardReset median-of-3, encoder offset, failure-hold | Brick protocol truths | **KEEP** — how to talk to this chip; not velocity decisions |
 | 2 | fwdSign, clamp ±100%, integer-% quantization, write-on-change, NAK retry, write-rate throttle | Bus/write hygiene | **KEEP** — protocol, not policy |
 | 3 | Reversal dwell (100 ms) + output-deadband boost (`writeShapedDuty`) | Wedge protection: an instant H-bridge sign flip under way latches the 0x46 readback (documented hardware failure, 2026-07-04) | **KEEP but make visible** — physical protection; telemetry reports `dwelling` and the actually-written duty so it never surprises anyone again |
-| 4 | Velocity PID + kff open-loop mapping (`MotorVelocityPid`) | speed → duty tracking | **MOVE to motion** (stakeholder decision 2026-07-24): the PID cannot run faster than the loop anyway (encoder freshness ~80 ms bounds it), so there is no rate advantage to motor residency — and moving it up gives ONE velocity estimate (the observer's) feeding ONE controller, tunable in `motion_tests`. The base's command primitive becomes per-wheel DUTY; anti-windup reads `appliedDuty` back from the sample |
+| 4 | Velocity PID + kff open-loop mapping (`MotorVelocityPid`) | speed → duty tracking | **MOVE to motion** (stakeholder decision 2026-07-24): moving it up gives ONE velocity estimate (the observer's) feeding ONE controller, tunable in `motion_tests`. (The original "encoder freshness ~80 ms bounds the PID rate anyway" argument was measured false 2026-07-26 — `encoder-refresh-characterization.md`; see Resolved question 1's correction note.) The base's command primitive becomes per-wheel DUTY; anti-windup reads `appliedDuty` back from the sample |
 | 5 | Per-write duty slew cap (`slewRate`, default 25%/write) | Hidden actuator shaping | **DECIDE: characterize or delete.** It reshapes the response underneath the PID and would silently corrupt the observer's model. Either the bench shows the brick tolerates steps (delete), or it stays and the observer's characterized model includes it. Not both, not hidden |
 | 6 | Duty boxcar smoothing (`dutyAvgWindow`, bench knob, default off) | Cosmetic jitter filter | **DELETE** — a bench experiment that shipped; adds lag, answers nothing the observer won't |
-| 7 | Freshness gate (0x46 refreshes ~80 ms vs 40 ms loop; most samples stale) | Measurement conditioning | **FOLD INTO OBSERVER** — this is precisely why the observer exists: between fresh samples, the estimate rides the command model instead of starving |
+| 7 | Freshness gate (guards against repeated raw counts — measured 2026-07-26: NOT an ~80 ms register refresh, which is false; repeats come from interposed-traffic sample invalidation, `encoder-refresh-characterization.md`) | Measurement conditioning | **FOLD INTO OBSERVER** — between fresh samples (rare on a clean schedule), the estimate rides the command model instead of starving |
 | 8 | Glitch rejection (`kMaxPlausibleStepSpeed` 1200 mm/s, streak-of-3 re-accept) | Outlier heuristic | **FOLD INTO OBSERVER** — becomes an innovation bound: a sample wildly off prediction is rejected+counted; three ad-hoc mechanisms (7, 8, 9) become one principled one |
 | 9 | Velocity estimator A/B (EMA `velFiltAlpha` vs least-squares line-fit ring, live-switchable) | Two competing filters + a knob | **FOLD INTO OBSERVER** — the observer IS the velocity estimate; delete the A/B machinery |
 | 10 | `wheelTravelCalib` (ticks → mm per wheel) | Calibration | **KEEP** — applied once at sample ingest, reported |
@@ -143,8 +143,10 @@ is met differently: (a) the L→R collect gap can be squeezed toward its
 between them; (b) decisively, the OBSERVER owns time alignment — every
 `WheelSample` carries its own timestamp, and the observer projects BOTH
 wheels' estimates to a common epoch (the decide instant) before anything
-kinematic consumes them. That makes the 4–8 ms collect offset — and the
-much larger ~80 ms freshness skew no schedule can fix — a solved
+kinematic consumes them. That makes the 4–8 ms collect offset — and any
+residual freshness skew (measured 2026-07-26: the register is live at
+≤ 16 ms; see `encoder-refresh-characterization.md` — repeats come from
+schedule faults, not a refresh timer) — a solved
 mathematical problem instead of a scheduling constraint. Same-generation
 telemetry pairing (121-005) remains a base invariant at the FRAME level;
 common-epoch projection is the estimator-level guarantee on top.
@@ -161,9 +163,14 @@ struct MotionOutputs { DutyCommand duty; Pose pose; MotionEvents events; };     
 ## Resolved and open questions
 
 1. **PID placement — RESOLVED (stakeholder, 2026-07-24): in the motion
-   library.** Rationale: encoder freshness (~80 ms) bounds the PID's
-   effective rate at or below the loop rate wherever it lives, so motor
-   residency buys nothing; motion residency gives one velocity estimate
+   library.** Rationale AS DECIDED: encoder freshness (then believed
+   ~80 ms) bounds the PID's effective rate at or below the loop rate
+   wherever it lives, so motor residency buys nothing. [CORRECTION
+   2026-07-26: the freshness premise is false — the register is live at
+   ≤ 16 ms (`encoder-refresh-characterization.md`), so a motor-resident
+   PID COULD run faster than the loop. The decision's other grounds
+   below still apply; revisit only if a faster inner velocity loop is
+   ever wanted.] Motion residency gives one velocity estimate
    (observer → PID), unit-speed tuning in `motion_tests`, and a motor object
    that is a pure bus adapter (~200 lines). Consequences, accepted: the
    base's command primitive is per-wheel DUTY; the bounded WHEEL-SPEED move

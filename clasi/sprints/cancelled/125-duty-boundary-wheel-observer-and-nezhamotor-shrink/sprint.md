@@ -37,12 +37,15 @@ is closed.
 
 Today the base's command primitive is a bounded wheel-SPEED move
 (`MoveWheels` + stop conditions + timeout), with the velocity PID
-resident in `NezhaMotor`. The PID cannot update faster than the loop
-(encoder freshness ~80 ms bounds it) regardless of where it lives, so
-motor residency buys nothing — and it keeps `NezhaMotor` doing two jobs
-(hardware protocol AND velocity control) that change for different
-reasons. Separately, the base has no per-wheel command observer: encoder
-samples arrive slowly relative to the loop, and between samples the base
+resident in `NezhaMotor`. Motor residency keeps `NezhaMotor` doing two
+jobs (hardware protocol AND velocity control) that change for different
+reasons. [NOTE 2026-07-26: the original rate argument here — "the PID
+cannot update faster than the loop, encoder freshness ~80 ms bounds it"
+— was measured FALSE: the register is live at ≤ 16 ms
+(`docs/design/encoder-refresh-characterization.md`); the relocation
+stands on the separation-of-concerns and one-estimate-one-controller
+grounds.] Separately, the base has no per-wheel command observer: encoder
+samples can repeat relative to the loop, and between fresh samples the base
 has no principled estimate of what the wheel is actually doing — three
 prior open-loop predictors (stop_lead, margins, analytic coast) tried to
 patch this from outside and failed; a predict-correct observer inside

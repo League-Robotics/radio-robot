@@ -68,14 +68,15 @@ constexpr float kNominalDt = 0.024f;   // [s]
 // 12+ consecutive ticks after its own encoder position (and the other
 // wheel's already-zeroed velocity) had gone flat. This is the literal
 // "keeps its filtered tail when encoder deltas go to zero" case the
-// defect's own report named. kStaleRestTimeoutUs is set well above the
-// brick's own ~80ms 0x46 refresh cadence (see tick()'s own freshness-gate
-// comment) -- at ANY real commanded speed the encoder produces a fresh
-// sample well inside 80ms (quantization is 0.1mm; even a slow crawl clears
-// that within one refresh), so this many consecutive stale ticks with
+// defect's own report named. kStaleRestTimeoutUs is set well above any
+// plausible fresh-sample gap (measured 2026-07-26: the 0x46 register is
+// live at <=16ms -- docs/design/encoder-refresh-characterization.md) --
+// at ANY real commanded speed the encoder produces a fresh sample well
+// inside this window (quantization is 0.1mm; even a slow crawl clears
+// that within a couple of cycles), so this many consecutive stale ticks with
 // target==0.0f is unambiguous evidence of genuine rest, never a
 // still-in-flight deceleration (which keeps producing fresh samples every
-// refresh and so never reaches this timeout -- scenario 16's own active-
+// cycle and so never reaches this timeout -- scenario 16's own active-
 // braking-from-speed case is unaffected).
 constexpr uint64_t kStaleRestTimeoutUs = 150000;   // [us]
 
@@ -336,9 +337,12 @@ void NezhaMotor::tick(uint64_t nowUs)
 
     // Freshness gate (HARDWARE-CONFIRMED fix -- a raw DUTY command that
     // physically moved the wheel was previously reported as vel=0.000
-    // ALWAYS, with the glitch count climbing and a false wedge latch). The
-    // Nezha brick's 0x46 register refreshes only every ~80ms; the loop's
-    // own cycle runs every ~16ms.
+    // ALWAYS, with the glitch count climbing and a false wedge latch).
+    // Under the pre-118 schedule most cycles re-collected the same raw
+    // count. (Measured 2026-07-26: that staleness was interposed-traffic
+    // sample invalidation, NOT an ~80ms register refresh -- the register
+    // is live at <=16ms; docs/design/encoder-refresh-characterization.md.
+    // The gate stays: repeats still occur under schedule faults.)
     // Running the velocity/glitch computation on every TICK (as before)
     // meant most cycles re-collected an IDENTICAL raw count (step==0,
     // rawVel==0 -- decaying filteredVelocity_ toward 0 every stale cycle),
@@ -351,7 +355,7 @@ void NezhaMotor::tick(uint64_t nowUs)
     // (much shorter) elapsedTime. Compared at the raw wire-count level (not
     // the derived `pos`) -- collectEncoder() carries no brick-side sample
     // timestamp to key off, so an unchanged raw count is the direct,
-    // unambiguous signal that the brick has not refreshed yet.
+    // unambiguous signal that no new measurement has landed.
     bool freshSample = !hasFreshSample_ || (raw != lastFreshRawEnc_);
 
     if (freshSample && !hasFreshSample_) {
@@ -425,8 +429,8 @@ void NezhaMotor::tick(uint64_t nowUs)
         // time is measured from the last ACCEPTED anchor, not this
         // rejected one.
     }
-    // else (!freshSample && hasFreshSample_): repeated raw value -- the
-    // brick has not refreshed since the last fresh sample. Hold
+    // else (!freshSample && hasFreshSample_): repeated raw value -- no
+    // new measurement since the last fresh sample. Hold
     // lastPosition_/filteredVelocity_ unchanged this cycle -- running the
     // plausibility gate against a same-value, near-zero-elapsed step here
     // is exactly the false-glitch bug this fix removes.
@@ -462,9 +466,9 @@ void NezhaMotor::tick(uint64_t nowUs)
                     // because the REAL measured velocity was already within
                     // the rest-noise floor, or because the stale-encoder
                     // check just above substituted a synthetic 0.0f for it
-                    // (the encoder itself has gone quiet for well over one
-                    // brick-refresh interval with target held at exact
-                    // zero). Either way this is a genuine "settled at a
+                    // (the encoder itself has gone quiet for well over
+                    // any plausible fresh-sample gap with target held at
+                    // exact zero). Either way this is a genuine "settled at a
                     // stop" state, not a still-decelerating one (see that
                     // gate's own comment in velocity_pid.cpp). Physical
                     // motion has already stopped, but filteredVelocity_ is the

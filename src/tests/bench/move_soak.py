@@ -134,8 +134,10 @@ def soak(port: str, duration: float) -> SoakResult:  # [s]
         nonlocal baseline_flags, worst_flags, last_t, reboot_detected, reboot_evidence
         for f in proto.read_pending_binary_tlm_frames():
             frames_all.append(f)
-            if f.ack is not None:
-                pending_acks.pop(f.ack.corr_id, None)
+            # v5 (124): the single ack slot became the bounded ack ring
+            # (TLMFrame.acks) -- clear every pending corr_id the ring carries.
+            for entry in f.acks:
+                pending_acks.pop(entry.corr_id, None)
             if f.flags is not None:
                 if baseline_flags is None:
                     baseline_flags = f.flags
