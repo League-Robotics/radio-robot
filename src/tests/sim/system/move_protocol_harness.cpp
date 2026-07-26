@@ -190,26 +190,40 @@ bool putMessageField(Buf& b, uint32_t number, const Buf& nested) {
   return true;
 }
 
-// armorLine() -- 123-002: CRC-then-COBS frame body (was "*B"+base64 line
-// pre-123), byte-for-byte the same composition as App::Comms::sendReply()/
-// TestSupport::armor() (wire_test_codec.cpp) -- a small, self-contained,
-// file-local copy for the same reason the hand-rolled encoder above is
-// (this file's own CONFIG envelope shape isn't in the shared codec). The
-// trailing 0x00 delimiter is a transport concern, not included here --
-// SimHarness::injectCommand() (this file's only caller, via
-// armorMotorConfigPatchCommand() below) recovers the length via strlen()
-// since COBS-encoded output is 0x00-free by construction.
-std::string armorLine(const uint8_t* raw, size_t rawLen) {
+// armorLine() -- 124-005 (protocol v5 Part A, "framing grammar cutover"):
+// builds the COMPLETE wire LINE, `<command>':'<COBS+CRC bytes>` (CRC-then-
+// COBS, delimiter 0x0A), byte-for-byte the same composition as
+// App::Comms::sendReply()/decodeBinaryFrame() / TestSupport::armor()
+// (wire_test_codec.cpp) -- a small, self-contained, file-local copy for the
+// same reason the hand-rolled encoder above is (this file's own CONFIG
+// envelope shape isn't in the shared codec). `command` is REQUIRED --
+// this file's only caller (armorMotorConfigPatchCommand() below) always
+// passes "CONFIG". The trailing '\n' terminator is a transport concern,
+// not included here -- SimHarness::injectCommand() (this file's only
+// caller) takes an EXPLICIT length, never strlen()-recovered: COBS is
+// keyed on 0x0A now, not 0x00, so the line may legitimately contain an
+// embedded 0x00 byte.
+std::string armorLine(const uint8_t* raw, size_t rawLen, const char* command) {
   uint8_t combined[256];
   if (rawLen > sizeof(combined) - 2) return std::string();
   std::memcpy(combined, raw, rawLen);
   size_t combinedLen = rawLen;
-  const uint16_t crc = WireRuntime::crcCompute(raw, rawLen);
+  const size_t commandLen = std::strlen(command);
+  uint16_t crc = WireRuntime::crcInit();
+  crc = WireRuntime::crcUpdate(crc, reinterpret_cast<const uint8_t*>(command), commandLen);
+  const uint8_t sep = ':';
+  crc = WireRuntime::crcUpdate(crc, &sep, 1);
+  crc = WireRuntime::crcUpdate(crc, raw, rawLen);
   if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) return std::string();
   uint8_t framed[300];
   size_t framedLen = 0;
-  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen)) return std::string();
-  return std::string(reinterpret_cast<const char*>(framed), framedLen);
+  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen, /*delimiter=*/0x0A)) {
+    return std::string();
+  }
+  std::string line(command, commandLen);
+  line += ':';
+  line.append(reinterpret_cast<const char*>(framed), framedLen);
+  return line;
 }
 
 // CommandEnvelope{corr_id, config: ConfigDelta{motor: MotorConfigPatch{
@@ -228,7 +242,7 @@ std::string armorMotorConfigPatchCommand(float kp, uint32_t corrId) {
   Buf env;
   putVarintField(env, 1, corrId);
   putMessageField(env, 6, motorDelta);  // CommandEnvelope.config, field 6
-  return armorLine(env.data, env.len);
+  return armorLine(env.data, env.len, "CONFIG");
 }
 
 }  // namespace
@@ -847,7 +861,7 @@ void scenarioConfigMidMoveDoesNotChangeCompletionOutcome() {
   // this CONFIG line dispatches the cycle AFTER the Move itself activates
   // -- genuinely "mid-MOVE", well before its own 250ms/5-cycle stop
   // threshold.
-  interfered.injectCommand(armorMotorConfigPatchCommand(/*kp=*/0.02f, kConfigCorrId).c_str());
+  interfered.injectCommand(armorMotorConfigPatchCommand(/*kp=*/0.02f, kConfigCorrId));
 
   int interferedCyclesToEnd = 0;
   bool interferedCompleted = false;

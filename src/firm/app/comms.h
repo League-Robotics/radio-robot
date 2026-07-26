@@ -1,22 +1,37 @@
-// comms.h -- App::Comms: the COBS+CRC binary-frame armor/dearmor layer
-// between the two transports (serial + radio) and decoded
-// msg::CommandEnvelope / msg::ReplyEnvelope.
+// comms.h -- App::Comms: parses/emits protocol v5's uniform packet grammar
+// (`<COMMAND>[':' <data>]'\n'`) and, for binary commands, the COBS+CRC
+// binary-frame armor/dearmor layer between the two transports (serial +
+// radio) and decoded msg::CommandEnvelope / msg::ReplyEnvelope.
 //
-// 123-002 (COBS+CRC framer integration): replaces the old "*B"+base64+
-// "\r\n" line armor with a binary-clean, 0x00-delimited COBS+CRC frame,
-// demuxed from the HELLO/PING text-plane rump (still "\r\n"-terminated)
-// on the SAME byte stream. See wire_runtime.h's own file header (123-001)
-// for the COBS/CRC primitives this file is built on, and this ticket's
-// completion notes for the exact frame layout.
+// 124-005 (protocol v5 Part A, "framing grammar cutover" -- issue
+// protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md §1-§4):
+// replaces the old two-heuristic text/binary demux (a transport-level
+// guess about which of two incompatible framings a completed line was)
+// with ONE uniform grammar in both directions: every line, text or binary,
+// is `<COMMAND>[':' <data>]'\n'`. The transport delivers a bare,
+// `\n`-terminated line (COBS is now keyed on 0x0A -- see wire_runtime.h
+// item 8 -- so a binary frame's own bytes never contain a literal 0x0A,
+// making the terminator genuinely unconditional); Comms parses the
+// `<COMMAND>` prefix, looks it up in the generated command registry
+// (messages/commands.h's kVerbTable[]), and THAT lookup's `binary` flag --
+// not anything about the data's own bytes -- is the sole decision of how
+// `<data>` is read. Supersedes 123-002's "*B"+base64 armor and 123-006's
+// exact-match text-command recognizer alike; both are gone, not
+// deprecated. See wire_runtime.h's own file header (123-001/124-003) for
+// the COBS/CRC primitives this file is built on.
 //
-// Boundary: inside -- the COBS+CRC armor/dearmor sequence, msg::wire::
-// encode()/decode() calls; outside -- deciding what a decoded command DOES
-// (that is RobotLoop's own dispatch). Design/rationale: DESIGN.md.
+// Boundary: inside -- the grammar parse/emit, CRC-over-command-and-payload
+// composition, dispatch of text vs. binary by registry lookup, the
+// reply-plane grammar (DEVICE/PONG/ID/VER); outside -- deciding what a
+// decoded command DOES (that is RobotLoop's own dispatch), physical
+// transport framing (Com::SerialPort/Com::Radio's own job). Design/
+// rationale: DESIGN.md.
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
 
+#include "messages/commands.h"
 #include "messages/envelope.h"
 #include "messages/wire.h"
 
@@ -27,26 +42,12 @@ class Radio;
 
 namespace App {
 
-// FrameKind -- which of the two coexisting frame shapes a completed
-// Transport::readLine() call delivered. A binary frame is 0x00-free by
-// COBS construction, so 0x00 ALWAYS ends a binary frame. COBS does NOT
-// guarantee 0x0A-freedom, though, so 0x0A is NOT an unconditional
-// terminator: it ends a text-plane line ONLY when the bytes accumulated
-// before it are exactly a recognized text-rump command (HELLO/PING);
-// otherwise it is binary content and accumulation continues to the
-// eventual 0x00 delimiter. (123-006 bench-surfaced fix: a move_wheels
-// envelope embedding a literal 0x0A byte was being split and corrupted
-// under the old "whichever terminator comes first" rule -- proven 0/10 on
-// hardware.) See SerialPort::readLine() (com/serial_port.cpp) for this
-// direction's own recognizer (an EXACT match against the closed set of
-// text-rump commands this side ever legitimately receives, HELLO/PING).
-// The host's mirror, wire_codec.py's ByteStreamDemuxer.feed(), shares this
-// same 0x00-always-binary/0x0A-conditionally-text demux SKELETON but
-// necessarily uses a different recognizer for ITS direction (bytes
-// arriving FROM the firmware/relay are not a fixed literal set -- the
-// DEVICE:/OK-pong replies carry dynamic content and the RadioRelay's own
-// pre-!GO comment lines are free-form) -- see that class's own docstring.
-enum class FrameKind : uint8_t { kNone = 0, kText = 1, kBinary = 2 };
+// kCobsDelimiter -- protocol v5's wire delimiter (issue §2): COBS is now
+// keyed on 0x0A ('\n'), not 0x00. Every WireRuntime::cobsEncode()/
+// cobsDecode() call in this file passes this explicitly rather than
+// relying on that function's own 0x00 default (which stays 0x00 for the
+// pre-124 callers WireRuntime.h documents, e.g. wire_differential_harness).
+constexpr uint8_t kCobsDelimiter = 0x0A;
 
 // Transport -- the abstract non-blocking line-in/line-out seam Comms is
 // built on. Plain virtual base class (not an #ifdef HOST_BUILD fork) so
@@ -56,28 +57,33 @@ class Transport {
  public:
   virtual ~Transport() = default;
 
-  // Non-blocking. Demuxes a 0x00-delimited COBS+CRC binary frame from a
-  // '\r'?'\n'-terminated text line (HELLO/PING) on the SAME byte stream.
-  // Returns kNone when nothing complete is ready (buf/*outLen untouched).
-  // kText: buf holds a NUL-terminated ASCII line (trailing '\r'/'\n'
-  // stripped), *outLen == strlen(buf). kBinary: buf holds *outLen raw
-  // bytes -- the still-COBS+CRC-encoded frame body (the trailing 0x00
-  // delimiter itself is consumed by the transport, never included in
-  // buf/*outLen). Never partially delivers a frame.
-  virtual FrameKind readLine(char* buf, uint16_t cap, uint16_t* outLen) = 0;
+  // Non-blocking. Delivers ONE complete, unconditionally `\n`-terminated
+  // wire line (the delimiter itself consumed, never included in
+  // buf/*outLen) -- text or binary, Comms decides which by parsing the
+  // `<COMMAND>` prefix, not this call. Returns false when nothing complete
+  // is ready yet (buf/*outLen untouched); true with buf holding *outLen
+  // raw bytes otherwise. `\r` is NOT stripped here -- under one uniform
+  // rule `\r` is legal binary content, so an unconditional strip would be
+  // a bug; Comms strips a trailing `\r` only for a line it has already
+  // classified as cleartext (124-005, issue §7). Never partially delivers
+  // a line.
+  virtual bool readLine(char* buf, uint16_t cap, uint16_t* outLen) = 0;
 
-  // Async, drop-on-full send -- ALWAYS a binary COBS+CRC frame body
-  // (`data`/`len`, 0x00-free by construction); Comms::sendReply() (a
+  // Async, drop-on-full send -- `data`/`len` is the COMPLETE wire line
+  // content this call must emit, MINUS the trailing `\n` terminator (the
+  // concrete transport appends that itself, converged to a single `\n`
+  // for both text and binary payloads -- issue §7). For a binary reply
+  // this is `<COMMAND>':'<COBS+CRC bytes>`; Comms::sendReply() (a
   // high-cadence caller) uses this so a full serial buffer never stalls
-  // the loop. The concrete transport appends the trailing 0x00 delimiter
-  // itself -- callers never include it in `data`/`len`.
+  // the loop.
   virtual void send(const uint8_t* data, uint16_t len) = 0;
 
-  // Bounded-wait, must-not-drop send -- ALWAYS a text-plane reply
-  // (NUL-terminated ASCII); used for the HELLO/PING text-exception
-  // replies (rare, one-off). The concrete transport appends its own
-  // text-line terminator ("\r\n" serial / "\n" radio), unchanged from
-  // pre-123.
+  // Bounded-wait, must-not-drop send -- ALWAYS a cleartext reply line
+  // (NUL-terminated ASCII, e.g. `banner_`/`"PONG:t=<ms>"`); used for the
+  // HELLO/PING/ID/VER text-exception replies (rare, one-off). The
+  // concrete transport appends a single trailing `\n` (NOT `\r\n` --
+  // issue §7: `sendReliable()`'s old `"\r\n"` is retired along with the
+  // rest of the two-terminator split).
   virtual void sendReliable(const char* msg) = 0;
 };
 
@@ -93,7 +99,7 @@ class Transport {
 class SerialTransport : public Transport {
  public:
   explicit SerialTransport(SerialPort& serial);
-  FrameKind readLine(char* buf, uint16_t cap, uint16_t* outLen) override;
+  bool readLine(char* buf, uint16_t cap, uint16_t* outLen) override;
   void send(const uint8_t* data, uint16_t len) override;
   void sendReliable(const char* msg) override;
 
@@ -104,7 +110,7 @@ class SerialTransport : public Transport {
 class RadioTransport : public Transport {
  public:
   explicit RadioTransport(Radio& radio);
-  FrameKind readLine(char* buf, uint16_t cap, uint16_t* outLen) override;
+  bool readLine(char* buf, uint16_t cap, uint16_t* outLen) override;
   void send(const uint8_t* data, uint16_t len) override;
   void sendReliable(const char* msg) override;
 
@@ -130,7 +136,10 @@ constexpr uint16_t kMaxEnvelopeBytes =
 // kMaxCrcPayloadBytes -- kMaxEnvelopeBytes + 2 (the CRC-16 appended AFTER
 // the schema payload, per the CRC-then-COBS composition -- see comms.cpp's
 // sendReply()/decodeBinaryFrame() for the exact byte layout). This is the
-// buffer the COBS encode/decode step itself operates on.
+// buffer the COBS encode/decode step itself operates on. Unaffected by
+// 124-005's command prefix -- the prefix lives OUTSIDE the COBS region (see
+// crcOverScope()'s own doc comment, comms.cpp) -- so this is unchanged from
+// 123-004.
 constexpr uint16_t kMaxCrcPayloadBytes = kMaxEnvelopeBytes + 2;  // == 196
 
 // kFramedMaxBytes -- 123-002 recompute, replacing the old base64
@@ -139,24 +148,49 @@ constexpr uint16_t kMaxCrcPayloadBytes = kMaxEnvelopeBytes + 2;  // == 196
 // Worst-case COBS-encoded length of kMaxCrcPayloadBytes (196) zero-free
 // bytes: cobsEncodedMaxLength(196) = 196 + 196/254 + 1 = 197
 // (WireRuntime::cobsEncodedMaxLength()'s own documented formula, 123-001
-// completion notes). This is the size of the buffer Comms builds BEFORE
-// handing it to Transport::send() -- the transport appends the trailing
-// 0x00 delimiter itself (one more byte on the wire, not counted here).
-// Rounded up to 200 (3B headroom), the same rounding-up-for-headroom
-// convention the pre-123-004 constant (188 -> 192) and the old base64-era
-// kArmoredBufSize (251 -> 256) both used.
+// completion notes). This is the size of the COBS-encoded region ALONE --
+// still 200 (3B headroom) under 124-005, same as 123-004, because the
+// ASCII command prefix is not part of this region (see kMaxLineBytes
+// below for the buffer that DOES need to grow for the prefix). The stale
+// "kFramedMaxBytes (192)" comment at com/radio.cpp was wrong since
+// 123-004 (it is, and remains, 200) -- corrected there by this ticket.
 constexpr uint16_t kFramedMaxBytes = 200;
 static_assert(kFramedMaxBytes >= kMaxCrcPayloadBytes + kMaxCrcPayloadBytes / 254 + 1,
               "kFramedMaxBytes must cover cobsEncodedMaxLength(kMaxCrcPayloadBytes)");
 
-// kArmoredBufSize -- Comms's own inbound scratch-line buffer size, shared
-// by pumpTransport()'s single stack buffer for whichever frame kind (text
-// or binary) is next on either transport. Sized to the larger of
-// kFramedMaxBytes (the binary worst case) and a generous allowance for the
-// text-plane rump (HELLO/PING lines are a handful of bytes; the buffer
-// only needs to be at least as big as the longest recognized text-plane
-// line, which is smaller than kFramedMaxBytes by a wide margin).
-constexpr uint16_t kArmoredBufSize = kFramedMaxBytes;
+// maxVerbNameLength() -- compile-time max over messages/commands.h's
+// generated kVerbTable[] name lengths (124-001's registry). A constexpr
+// function (not a hand-picked literal) so a future verb longer than
+// "CONFIG"/"DEVICE" (6 bytes) is picked up automatically the next time
+// commands.proto is regenerated, per this sprint's own "re-derive, never
+// hand-edit" convention for size constants (issue §6).
+constexpr size_t maxVerbNameLength() {
+  size_t maxLen = 0;
+  for (uint8_t i = 0; i < msg::kVerbCount; ++i) {
+    size_t len = 0;
+    for (const char* p = msg::kVerbTable[i].name; *p != '\0'; ++p) ++len;
+    if (len > maxLen) maxLen = len;
+  }
+  return maxLen;
+}
+
+// kMaxCommandPrefixBytes -- the longest possible `<COMMAND>':'` prefix
+// (124-005, issue §6's "kFramedMaxBytes/kMaxCrcPayloadBytes need
+// re-derivation against the new worst case (longest command name +
+// separator)"): the prefix itself doesn't grow kFramedMaxBytes/
+// kMaxCrcPayloadBytes (it is outside the COBS region -- see those
+// constants' own comments above), but the WHOLE-LINE buffer below does
+// need room for it.
+constexpr uint16_t kMaxCommandPrefixBytes = static_cast<uint16_t>(maxVerbNameLength() + 1);  // name + ':'
+
+// kMaxLineBytes -- Comms's own inbound/outbound scratch LINE buffer size:
+// the longest possible `<COMMAND>':'<COBS+CRC bytes>` content a single
+// Transport::readLine()/Transport::send() call ever needs to hold (the
+// transport's own trailing `\n` is one further byte, appended by the
+// transport itself, not counted here -- matches kFramedMaxBytes's own
+// convention of excluding the delimiter). Replaces 123-002's
+// kArmoredBufSize now that a line is prefix+frame, not frame alone.
+constexpr uint16_t kMaxLineBytes = kFramedMaxBytes + kMaxCommandPrefixBytes;
 
 enum class CmdStatus : uint8_t { kNone = 0, kDecoded = 1 };
 
@@ -167,9 +201,20 @@ struct Cmd {
 
 class Comms {
  public:
-  // banner must outlive the Comms instance (caller-owned, e.g. main.cpp's
-  // static buffer) -- Comms does not format or own the banner text itself.
-  Comms(Transport& serialLink, Transport& radioLink, const char* banner);
+  // banner/idLine must outlive the Comms instance (caller-owned, e.g.
+  // main.cpp's own static buffers) -- Comms does not format or own either
+  // string itself, matching its own boundary ("outside: device state" --
+  // see this file's header comment). `idLine` is `ID:<fields>`'s full
+  // reply content (sprint 124 architecture Decision 4: configured-robot
+  // identity -- drivetrain type + calibration-profile name/version --
+  // distinct from `banner`'s hardware identity); defaults to a
+  // grammar-conformant placeholder so a caller that genuinely has no
+  // configured-identity string to report (most host-test fixtures) still
+  // gets a well-formed `ID:` reply rather than none at all. `VER:`'s
+  // content needs no constructor parameter -- see sendVer(), comms.cpp --
+  // it reads the existing generated build-version constant directly
+  // (architecture Decision 4: zero new version-tracking infrastructure).
+  Comms(Transport& serialLink, Transport& radioLink, const char* banner, const char* idLine = "ID:unknown");
 
   // Bounded: at most ONE Transport::readLine() call to serialLink_, and
   // (only if serial had nothing) at most one to radioLink_ -- never both
@@ -194,56 +239,66 @@ class Comms {
   // Telemetry calls. No return value: encode()==0 or a COBS/CRC framing
   // failure means silently send nothing.
   //
-  // command/commandLen -- the ASCII command-name bytes (no ':' separator)
-  // this reply's CRC input is scoped to extend over, per protocol v5's
-  // `crc = crc16(COMMAND ':' payload)` composition (124-003, issue §3): a
-  // SEPARATE argument, deliberately never concatenated with the encoded
-  // envelope bytes into one scratch buffer (see comms.cpp's crcOverScope()).
-  // Defaults to an empty scope -- `crc16(payload)` alone, byte-identical
-  // to protocol v4's CRC -- because every CURRENT call site (Telemetry)
-  // still has no ASCII verb prefix to pass: the reply-plane grammar itself
-  // (`PONG:`/`ID:`/`VER:`/a per-reply command name) is ticket 124-005's
-  // cutover, not this one's. This parameter exists so 005 has a
-  // scope-aware sendReply() to call into without a second CRC rework.
-  void sendReply(const msg::ReplyEnvelope& reply, const uint8_t* command = nullptr, size_t commandLen = 0);
+  // 124-005: the outbound ASCII command name (the CRC's scope-extension
+  // per protocol v5's `crc = crc16(COMMAND ':' payload)` composition,
+  // issue §3, AND the wire line's own leading `<COMMAND>':'` prefix) is
+  // derived INTERNALLY from `reply.body_kind` (TLM/OK/ERR map 1:1 onto
+  // messages/commands.h's Verb::TLM/OK/ERR) -- a caller never passes one:
+  // `body_kind` already says which verb this is, and passing a second,
+  // independently-spelled name string would just be a second place the
+  // two could drift apart.
+  void sendReply(const msg::ReplyEnvelope& reply);
 
-  // Push the banner unprompted on both transports, text plane. Emitted twice
-  // per boot -- main.cpp at power-on, RobotLoop::boot() when the preamble
-  // finishes -- byte-identical both times, so a banner parser needs no change.
+  // Push the banner unprompted on both transports, cleartext plane.
+  // Emitted twice per boot -- main.cpp at power-on, RobotLoop::boot() when
+  // the preamble finishes -- byte-identical both times, so a banner parser
+  // needs no change. `DEVICE:NEZHA2:robot:<name>:<serial>` already
+  // conforms to the v5 grammar unmodified (command `DEVICE`, cleartext
+  // data on the first ':') -- formatBanner() needs no edit (issue §8).
   void sendBanner();
 
   // Diagnostic counter -- malformed COBS frame, CRC mismatch, malformed
-  // protobuf decode, AND unrecognized text-plane lines (not "*", not
-  // HELLO, not PING) all increment this. RobotLoop reads it as the
-  // App::kFaultCommsMalformed telemetry fault-bit source.
+  // protobuf decode, an unrecognized `<COMMAND>` (not in messages/
+  // commands.h's kVerbTable[]), AND a cleartext command with no inbound
+  // handler (e.g. a stray `DEVICE`/`PONG` sent host->robot) all increment
+  // this. RobotLoop reads it as the App::kFaultCommsMalformed telemetry
+  // fault-bit source.
   uint32_t malformedCount() const { return malformedCount_; }
 
  private:
-  // true if a line was consumed (decoded, malformed, or text-plane) --
+  // true if a line was consumed (decoded, malformed, or cleartext) --
   // caller stops regardless (bounds pump() to at most one transport
   // acted on per call). now -- [ms], threaded straight from pump()'s own
   // argument -- see pump()'s doc comment above.
   bool pumpTransport(Transport& t, Cmd& out, uint32_t now);  // [ms]
 
+  // Parses `<COMMAND>[':' <data>]` out of one already-`\n`-delimited wire
+  // line (124-005, issue §1) and dispatches by the registry's `binary`
+  // flag -- the SOLE discriminator; nothing about `data`'s own bytes is
+  // ever inspected. Unrecognized `<COMMAND>` -> malformedCount_++.
+  void dispatchLine(Transport& t, const char* line, uint16_t lineLen, Cmd& out, uint32_t now);  // [ms]
+
+  // Cleartext command dispatch (HELLO/PING/ID/VER, the only inbound
+  // cleartext verbs -- issue §8). Any other cleartext verb arriving
+  // inbound (e.g. a stray DEVICE/PONG) -> malformedCount_++, matching a
+  // binary verb with no valid frame.
+  void dispatchCleartext(msg::Verb verb, Transport& t, uint32_t now);  // [ms]
+
   // NEVER replies -- acks ride Telemetry's ack ring, not per-command; see
-  // comms.cpp for the discipline note. `frame`/`frameLen` is the raw
-  // COBS+CRC-encoded frame body Transport::readLine() delivered (the
-  // trailing 0x00 delimiter already stripped by the transport).
+  // comms.cpp for the discipline note. `data`/`dataLen` is the still-COBS
+  // (kCobsDelimiter)+CRC-encoded frame body -- the wire line's content
+  // AFTER the `<COMMAND>':'` prefix dispatchLine() already parsed off.
   //
-  // command/commandLen -- same CRC-scope argument as sendReply() above,
-  // the OTHER direction: the ASCII command-name bytes the wire line's
-  // parsed prefix identified BEFORE this binary frame body was reached
-  // (124-005's grammar cutover owns that parse). Defaults to an empty
-  // scope, matching pumpTransport()'s current call site, which has no
-  // prefix to pass yet -- see sendReply()'s doc comment above for why an
-  // empty default is the correct placeholder rather than a functional
-  // change.
-  void decodeBinaryFrame(const uint8_t* frame, uint16_t frameLen, Cmd& out, const uint8_t* command = nullptr,
-                          size_t commandLen = 0);
+  // command/commandLen -- the ASCII command-name bytes dispatchLine()
+  // parsed BEFORE this binary frame body was reached -- the CRC's scope
+  // extension, mirroring sendReply()'s own composition in the opposite
+  // direction (comms.cpp's crcOverScope()).
+  void decodeBinaryFrame(const uint8_t* command, size_t commandLen, const uint8_t* data, uint16_t dataLen, Cmd& out);
 
   Transport& serialLink_;
   Transport& radioLink_;
   const char* banner_;
+  const char* idLine_;
   uint32_t malformedCount_ = 0;
 };
 

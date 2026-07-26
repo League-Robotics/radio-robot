@@ -4,7 +4,7 @@ root: ../../../docs/design/design.md
 
 # App — Loop and Passive App Modules
 
-**Owner:** Eric Busboom · **Last reviewed:** 2026-07-21 · **Status:** in-flux
+**Owner:** Eric Busboom · **Last reviewed:** 2026-07-25 · **Status:** in-flux
 
 ---
 
@@ -13,8 +13,11 @@ root: ../../../docs/design/design.md
 `app/` is the single cooperatively-timed control loop (`App::RobotLoop`) and
 the BASE-side passive modules it owns:
 
-* `Comms` (wire framing — COBS+CRC binary frames demuxed from the HELLO/PING
-  text rump, 123-002; base64 line-armor before that, see §4 below),
+* `Comms` (wire framing — protocol v5's uniform packet grammar,
+  `<COMMAND>[':' <data>]'\n'`, dispatched by generated command-registry
+  lookup, 124-005; COBS+CRC binary frames demuxed from the HELLO/PING
+  text rump by a transport-level heuristic, 123-002, before that; base64
+  line-armor before that, see §4 below),
 * `Telemetry` (outbound frames, including the `cycle_busy`/`cycle_period`
   loop-timing fields — now on the PRIMARY frame every cycle, 123-004;
   landed on the secondary frame as an interim placement at 122-003, see §4
@@ -421,6 +424,70 @@ schema change beyond that one field relocation and the two envelope-size
 constants — every `CommandEnvelope`/`ReplyEnvelope` field shape is
 otherwise untouched. See §4 below for the full technical detail and
 `docs/protocol-v4.md` §2/§8 for the wire-level reference.
+
+**124-005 (protocol v5 Part A, "framing grammar cutover") — landed.**
+123's own `App::FrameKind`-based transport-level demux (a heuristic
+guess, per completed line, about which of two incompatible framings it
+was — a `0x00`-delimited binary frame or a `\r`?`\n`-terminated cleartext
+line) is DELETED wholesale, not adapted — the same "supersedes, does not
+port" treatment 115-005 gave `Pilot`/`HeadingSource` and 116-005 gave
+`App::Deadman`. In its place: ONE uniform packet grammar in both
+directions, `<COMMAND>[':' <data>]'\n'` (issue
+`protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md` §1),
+made possible by 124-003's delimiter-parameterized COBS primitive now
+being called with `delimiter=0x0A` on the live wire (`App::
+kCobsDelimiter`, `comms.h`) — a COBS-encoded binary body can never
+contain a literal `0x0A` by construction, so `\n` is a genuine,
+unconditional line terminator for BOTH transports (see
+[com/DESIGN.md](../com/DESIGN.md) §2), and `Transport::readLine()`
+collapses from returning `FrameKind` to a plain `bool`. `Comms::
+dispatchLine()` parses the `<COMMAND>` prefix off the already-`\n`-
+delimited line the transport hands it, looks it up in the generated
+command registry (`messages/commands.h`'s `kVerbTable[]`, ticket
+124-001), and dispatches by that lookup's OWN `binary` flag — never by
+inspecting `<data>`'s own bytes — to either `decodeBinaryFrame()` (the
+existing COBS+CRC dearmor path, now handed the parsed command name as
+the CRC's scope-extension input, ticket 124-003's own primitive) or the
+new `dispatchCleartext()`. An unrecognized `<COMMAND>` increments
+`malformedCount_` exactly like a CRC/COBS failure already did — one
+fault-bit source, not two.
+
+`dispatchCleartext()` answers four verbs: `HELLO` → the existing
+`banner_` (`sendBanner()`'s own content, unchanged, issue §8 confirms
+`DEVICE:NEZHA2:...` already conforms to the grammar with no edit);
+`PING` → `PONG:t=<ms>` (replaces the pre-124-005 `"OK pong t=<ms>"`
+shape); `ID` → `idLine_`, a caller-owned string set once at construction
+(sprint 124 architecture Decision 4: CONFIGURED identity — drivetrain
+type + calibration-profile name — distinct from `banner_`'s hardware
+identity; `main.cpp` builds it from two new generated constants,
+`Config::kDrivetrainType`/`Config::kRobotProfileName`
+(`scripts/gen_boot_config.py`, baked from the robot JSON's own
+`identity.drivetrain_type`/filename stem — deliberately NOT derived from
+any wire-level `msg::DrivetrainConfig` field, since
+`defaultDrivetrainConfig()` never bakes `half_track`, which stays at its
+wire default `0.0f` for every profile); `VER` → `"VER:" +
+FIRMWARE_VERSION_STR`, reading the existing generated
+`version_generated.h` constant directly (Decision 4: zero new
+version-tracking infrastructure). All four reply via `sendReliable()`,
+matching the pre-124-005 HELLO/PING reply path's bounded-wait policy.
+
+`Comms::sendReply()`'s signature simplifies to take only the
+`ReplyEnvelope` — the outbound verb name (for both the wire line's own
+`<COMMAND>':'` prefix and the CRC's scope-extension input) is now derived
+INTERNALLY from `reply.body_kind` (`TLM`/`OK`/`ERR` map 1:1 onto
+`messages/commands.h`'s `Verb::TLM`/`OK`/`ERR`) rather than threaded in
+by the caller — see §5 below. `Telemetry::emitSecondary()` reuses the
+`TLM` verb/CRC-scope for `TelemetrySecondary` too (no registry entry
+exists for the secondary diagnostic frame, and the host already
+structurally disambiguates the two shapes by trial-decode) — a narrow,
+documented choice that does not touch tickets 007-009's own
+`RobotState`/`TelemetrySecondary` field-packing scope. `kFramedMaxBytes`/
+`kMaxCrcPayloadBytes` (`comms.h`) are unchanged by this ticket (the
+command prefix lives OUTSIDE the COBS-encoded region); a new
+`kMaxLineBytes = kFramedMaxBytes + kMaxCommandPrefixBytes` constant
+replaces 123-002's `kArmoredBufSize` as the whole-line scratch-buffer
+size, `kMaxCommandPrefixBytes` itself derived at compile time from
+`messages/commands.h`'s own longest verb name rather than hand-picked.
 
 ## 2. Orientation
 
@@ -886,13 +953,23 @@ called with real elapsed time between calls).
   separately so a host harness can step a bounded number of cycles and
   inspect state between them; `cycle()` assumes every device already
   resolved from a prior `boot()` (no readiness checks inside it).
-- **`Comms::pump(Cmd&)`:** non-blocking, decodes at most one frame per call
-  across both transports; resets `out.status` to `kNone` at entry so a
-  caller never sees stale decode state.
-- **`Comms::sendReply(const msg::ReplyEnvelope&)`:** encodes, COBS+CRC
-  frames (123-002 — base64-armors before that), and broadcasts on both
-  transports via the async/drop-on-full send path — never blocks the loop
-  on backpressure.
+- **`Comms::pump(Cmd& out, uint32_t now)`:** non-blocking, reads at most one
+  `\n`-terminated line per call across both transports (124-005 — a plain
+  `bool` from `Transport::readLine()`, no more `FrameKind`), parses its
+  `<COMMAND>` prefix and dispatches by the generated command registry's
+  `binary` flag to either a binary decode (into `out`) or a cleartext
+  reply (`HELLO`/`PING`/`ID`/`VER`, answered inline, never populating
+  `out`); resets `out.status` to `kNone` at entry so a caller never sees
+  stale decode state. `now` ([ms], the caller's own current clock reading)
+  stamps `PONG:t=<ms>`'s field — `Comms` holds no `Devices::Clock&` of its
+  own.
+- **`Comms::sendReply(const msg::ReplyEnvelope&)`:** derives the outbound
+  wire verb (`TLM`/`OK`/`ERR`) from `reply.body_kind` (124-005 — no
+  separate command parameter; see §1's own "124-005" note), encodes,
+  CRC-then-COBS frames with that verb as both the CRC's scope-extension
+  input and the wire line's own `<COMMAND>':'` prefix (123-002/124-003 —
+  base64-armors before 123), and broadcasts on both transports via the
+  async/drop-on-full send path — never blocks the loop on backpressure.
 - **`Telemetry::setFrame`/`setFlag`/`ack`/`emit(now)`:** staging calls are
   cheap and can be called any number of times per cycle; `emit(now)` is
   the one call that actually sends, at most one frame type, bounded work,

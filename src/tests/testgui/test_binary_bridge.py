@@ -433,18 +433,20 @@ def test_command_oneof_no_longer_has_drive_segment_replace():
 # ---------------------------------------------------------------------------
 
 
-def _armor(msg) -> bytes:
-    """COBS+CRC-frame a pb2 message (123-002/003; was ``*B`` + base64
-    pre-123) -- ``render_log_line()`` now dispatches by Python TYPE
-    (``bytes`` for a binary frame, ``str`` for a text-plane line), not by
-    string prefix."""
-    return encode_frame(msg.SerializeToString())
+def _armor(msg, command: bytes) -> bytes:
+    """Build the FULL `<COMMAND>':'<COBS+CRC bytes>` wire line (124-005;
+    was a bare COBS+CRC frame body 123-002/003, ``*B`` + base64 pre-123) --
+    ``render_log_line()`` now dispatches ``bytes`` input by splitting off
+    this SAME leading prefix itself (to scope ``decode_frame()``'s CRC
+    check correctly), then still by Python TYPE at the top level (``bytes``
+    for a binary line, ``str`` for a cleartext-plane line)."""
+    return command + b":" + encode_frame(msg.SerializeToString(), command=command)
 
 
 def test_tlm_reply_is_dropped_entirely():
     reply = envelope_pb2.ReplyEnvelope()
     reply.tlm.now = 12345
-    assert binary_bridge.render_log_line(_armor(reply), outbound=False) is None
+    assert binary_bridge.render_log_line(_armor(reply, b"TLM"), outbound=False) is None
 
 
 def test_err_reply_falls_back_to_text_format_rendering():
@@ -456,7 +458,7 @@ def test_err_reply_falls_back_to_text_format_rendering():
     reply = envelope_pb2.ReplyEnvelope()
     reply.corr_id = 4
     reply.err.code = envelope_pb2.ERR_BADARG
-    rendered = binary_bridge.render_log_line(_armor(reply), outbound=False)
+    rendered = binary_bridge.render_log_line(_armor(reply, b"ERR"), outbound=False)
     assert rendered is not None
     assert not rendered.startswith("*B")
     assert "ERR_BADARG" in rendered
@@ -467,7 +469,7 @@ def test_ok_reply_renders_readable_text_not_raw_armor():
     reply = envelope_pb2.ReplyEnvelope()
     reply.ok.q = 3
     reply.ok.rem = 45.0
-    rendered = binary_bridge.render_log_line(_armor(reply), outbound=False)
+    rendered = binary_bridge.render_log_line(_armor(reply, b"OK"), outbound=False)
     assert rendered is not None
     assert not rendered.startswith("*B")
     assert "3" in rendered
@@ -484,7 +486,7 @@ def test_outbound_command_renders_readable_text_not_raw_armor():
     cmd.corr_id = 9
     cmd.move.twist.v_x = 200
     cmd.move.twist.omega = -1.5
-    rendered = binary_bridge.render_log_line(_armor(cmd), outbound=True)
+    rendered = binary_bridge.render_log_line(_armor(cmd, b"MOVE"), outbound=True)
     assert rendered is not None
     assert not rendered.startswith("*B")
     assert "200" in rendered
@@ -541,7 +543,7 @@ def test_bare_telemetry_secondary_frame_is_dropped_not_misrendered():
     secondary.ts_left = 12
     secondary.ts_right = 12
 
-    rendered = binary_bridge.render_log_line(_armor(secondary), outbound=False)
+    rendered = binary_bridge.render_log_line(_armor(secondary, b"TLM"), outbound=False)
 
     assert rendered is None
 
@@ -553,7 +555,7 @@ def test_reply_envelope_with_set_body_still_renders_not_dropped():
     reply = envelope_pb2.ReplyEnvelope()
     reply.corr_id = 7
     reply.ok.q = 1
-    rendered = binary_bridge.render_log_line(_armor(reply), outbound=False)
+    rendered = binary_bridge.render_log_line(_armor(reply, b"OK"), outbound=False)
     assert rendered is not None
     assert not rendered.startswith("*B")
 

@@ -9,7 +9,7 @@ hand-written fixture string."
 
 ``src/tests/unit/test_clock_sync.py`` already covers ``ClockSync`` at the
 pure-Python unit level, but every reply line it feeds ``ping_burst()`` is
-hand-typed in Python (``f"OK pong t={t}"``). This test is different in
+hand-typed in Python (``f"PONG:t={t}"``, protocol v5). This test is different in
 kind, not degree: it compiles and runs ``clock_sync_activation_harness.cpp``
 (this directory), which links the REAL ``App::Comms::pumpTransport()``
 (``src/firm/app/comms.cpp``) -- the exact PING handler
@@ -66,7 +66,7 @@ def _find_cxx_compiler() -> str:
 
 def _run_harness(tmp_path: pathlib.Path) -> list[str]:
     """Compile clock_sync_activation_harness.cpp and return its stdout lines
-    (one real "OK pong t=<ms>" reply per line, from the actual compiled
+    (one real "PONG:t=<ms>" reply per line, from the actual compiled
     App::Comms code -- see this file's own module docstring)."""
     assert _HARNESS_SRC.is_file(), f"harness source missing: {_HARNESS_SRC}"
     assert _COMMS_SRC.is_file(), f"comms.cpp missing: {_COMMS_SRC}"
@@ -126,7 +126,7 @@ def test_clock_sync_activates_against_real_firmware_ping_reply(tmp_path):
     # if 001's own PING-handler change ever regressed, this fails LOUDLY
     # here rather than ping_burst() silently recording zero samples.
     for line in reply_lines:
-        assert line.startswith("OK pong t="), f"unexpected harness reply shape: {line!r}"
+        assert line.startswith("PONG:t="), f"unexpected harness reply shape: {line!r}"
         assert _parse_pong_t(line) is not None, f"_parse_pong_t() could not parse: {line!r}"
 
     replies = iter(reply_lines)

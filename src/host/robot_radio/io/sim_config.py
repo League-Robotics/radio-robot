@@ -29,6 +29,17 @@ if TYPE_CHECKING:
     from robot_radio.robot.pb2 import envelope_pb2
 
 
+def _envelope_command_name(envelope: "envelope_pb2.CommandEnvelope") -> bytes:
+    """The ASCII wire-verb name for a populated ``pb2.CommandEnvelope``
+    (124-005, issue §1/§3) -- its own oneof arm name upper-cased, matching
+    the registry (``robot_radio.io.wire_commands``). Mirrors
+    ``io/serial_conn.py``'s identically-named helper (a small, deliberate
+    duplication rather than a cross-module import -- this module and
+    ``serial_conn.py`` are peers, neither owns the other)."""
+    which = envelope.WhichOneof("cmd")
+    return (which or "config").upper().encode("ascii")
+
+
 class SimConfigConn:
     """Duck-typed ``SerialConnection`` substitute so ``NezhaProtocol.
     config()``/``NezhaProtocol.set_config()`` can be reused VERBATIM against
@@ -59,13 +70,13 @@ class SimConfigConn:
         self._loop = loop
 
     def send_envelope_fast(self, envelope: "envelope_pb2.CommandEnvelope") -> int:
-        """Assign a corr_id, frame (COBS+CRC), and inject via ``SimLoop.
-        inject_command()`` -- the exact framing (123-002/003)
-        ``SerialConnection.send_envelope_fast()`` writes to a real serial
-        port (see that method's own docstring), minus the trailing 0x00
-        delimiter a live serial stream needs and a direct
-        ``inject_command()`` call does not (``FakeTransport::
-        enqueueInboundBinary()`` takes one already-delimited frame per
+        """Assign a corr_id, frame (COBS+CRC, command-prefixed -- 124-005),
+        and inject via ``SimLoop.inject_command()`` -- the exact framing
+        (123-002/003/124-005) ``SerialConnection.send_envelope_fast()``
+        writes to a real serial port (see that method's own docstring),
+        minus the trailing ``'\\n'`` delimiter a live serial stream needs
+        and a direct ``inject_command()`` call does not (``FakeTransport::
+        enqueueInboundBinary()`` takes one already-delimited line per
         call).
 
         113-006 correction: corr_id comes from ``self._loop._next_corr_id()``
@@ -94,8 +105,9 @@ class SimConfigConn:
         constructed over its lifetime, closing the collision structurally."""
         corr_id = self._loop._next_corr_id()
         envelope.corr_id = corr_id
-        frame = encode_frame(envelope.SerializeToString())
-        self._loop.inject_command(frame)
+        command = _envelope_command_name(envelope)
+        frame = encode_frame(envelope.SerializeToString(), command=command)
+        self._loop.inject_command(command + b":" + frame)
         return corr_id
 
     def send_envelope(self, envelope: "envelope_pb2.CommandEnvelope",

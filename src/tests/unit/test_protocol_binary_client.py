@@ -302,25 +302,27 @@ class _ConfigLoopbackSerial:
 
     def write(self, data: bytes) -> int:
         self.raw_writes.append(data)
-        if data.endswith(b"\x00"):
-            raw = decode_frame(data[:-1])
-            if raw is not None:
-                cmd = envelope_pb2.CommandEnvelope.FromString(raw)
-                self.sent_envelopes.append(cmd)
+        if data.endswith(b"\n"):
+            command, sep, cobs_body = data[:-1].partition(b":")
+            if sep:
+                raw = decode_frame(cobs_body, command=command)
+                if raw is not None:
+                    cmd = envelope_pb2.CommandEnvelope.FromString(raw)
+                    self.sent_envelopes.append(cmd)
 
-                # Unsolicited tlm push carrying the ack -- corr_id=0 on the
-                # ENVELOPE itself (matches real firmware: primary frames
-                # always carry corr_id=0). wait_for_ack() (120: ring-based)
-                # actually matches on the `acks` ring entry; the scalar
-                # ack_corr/ack_err/flags bit 5 are populated too, mirroring
-                # how real firmware's Telemetry::ack() pushes both
-                # simultaneously, for any OTHER reader that still wants the
-                # single freshest-ack slot.
-                tlm = telemetry_pb2.Telemetry(
-                    flags=_ACK_FRESH_BIT, ack_corr=cmd.corr_id, ack_err=0)
-                tlm.acks.add(corr_id=cmd.corr_id, err=0)
-                reply = envelope_pb2.ReplyEnvelope(corr_id=0, tlm=tlm)
-                self._out += encode_frame(reply.SerializeToString()) + b"\x00"
+                    # Unsolicited tlm push carrying the ack -- corr_id=0 on the
+                    # ENVELOPE itself (matches real firmware: primary frames
+                    # always carry corr_id=0). wait_for_ack() (120: ring-based)
+                    # actually matches on the `acks` ring entry; the scalar
+                    # ack_corr/ack_err/flags bit 5 are populated too, mirroring
+                    # how real firmware's Telemetry::ack() pushes both
+                    # simultaneously, for any OTHER reader that still wants the
+                    # single freshest-ack slot.
+                    tlm = telemetry_pb2.Telemetry(
+                        flags=_ACK_FRESH_BIT, ack_corr=cmd.corr_id, ack_err=0)
+                    tlm.acks.add(corr_id=cmd.corr_id, err=0)
+                    reply = envelope_pb2.ReplyEnvelope(corr_id=0, tlm=tlm)
+                    self._out += b"TLM:" + encode_frame(reply.SerializeToString(), command=b"TLM") + b"\n"
         return len(data)
 
     def flush(self) -> None:

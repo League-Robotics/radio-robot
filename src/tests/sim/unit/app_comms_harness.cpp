@@ -118,53 +118,39 @@ bool putMessageField(Buf& b, uint32_t number, const Buf& nested) {
   return putBytesField(b, number, nested.data, nested.len);
 }
 
-// Armor a raw CommandEnvelope/ReplyEnvelope byte buffer into a CRC-then-COBS
-// frame body (123-002 -- was "*B<base64>" pre-123) -- the SAME composition
-// comms.cpp's own decodeBinaryFrame()/sendReply() perform, used here only to
-// construct scenario INPUT (pump()'s inbound side), independent of Comms's
-// own outbound path so the two directions are tested against each other,
-// not tautologically. The trailing 0x00 delimiter is a transport concern,
-// not included here -- push the result via FakeTransport::
-// enqueueInboundBinary(), not enqueueInbound() (that tags a frame kText).
-std::string armor(const uint8_t* raw, size_t rawLen) {
+// armor() -- 124-005 (protocol v5 Part A, "framing grammar cutover"): builds
+// the COMPLETE wire LINE, `<command>':'<COBS+CRC bytes>` (CRC-then-COBS,
+// delimiter 0x0A) -- the SAME composition comms.cpp's own
+// decodeBinaryFrame()/sendReply() perform, used here only to construct
+// scenario INPUT (pump()'s inbound side), independent of Comms's own
+// outbound path so the two directions are tested against each other, not
+// tautologically. `command` is REQUIRED -- protocol v5 has no unscoped
+// binary frame any more, every dispatched command needs a real registry
+// verb name (messages/commands.h). The trailing '\n' terminator is a
+// transport concern, not included here -- push the result via
+// FakeTransport::enqueueInboundBinary() (an alias of enqueueInbound()
+// since 124-005 -- see that class's own doc comment).
+std::string armor(const uint8_t* raw, size_t rawLen, const char* command) {
   uint8_t combined[256];
   if (rawLen > sizeof(combined) - 2) return std::string();
   std::memcpy(combined, raw, rawLen);
   size_t combinedLen = rawLen;
-  const uint16_t crc = WireRuntime::crcCompute(raw, rawLen);
-  if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) return std::string();
-  uint8_t framed[300];
-  size_t framedLen = 0;
-  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen)) return std::string();
-  return std::string(reinterpret_cast<const char*>(framed), framedLen);
-}
-
-// armorScoped() -- extends armor() with a CRC-scope command-name prefix
-// (124-003, issue §3): `crc16(command ':' raw)` instead of `crc16(raw)`
-// alone when `commandLen > 0`. An INDEPENDENT re-implementation of
-// comms.cpp's own crcOverScope() (a private helper, not reachable from
-// this translation unit), built the exact same way -- WireRuntime's
-// incremental crcInit()/crcUpdate(), command and raw bytes never
-// concatenated into one buffer -- so the two directions are tested
-// against each other, not tautologically (same discipline armor() itself
-// already follows for the unscoped case).
-std::string armorScoped(const uint8_t* raw, size_t rawLen, const uint8_t* command, size_t commandLen) {
-  uint8_t combined[256];
-  if (rawLen > sizeof(combined) - 2) return std::string();
-  std::memcpy(combined, raw, rawLen);
-  size_t combinedLen = rawLen;
+  const size_t commandLen = std::strlen(command);
   uint16_t crc = WireRuntime::crcInit();
-  if (commandLen > 0) {
-    crc = WireRuntime::crcUpdate(crc, command, commandLen);
-    const uint8_t sep = ':';
-    crc = WireRuntime::crcUpdate(crc, &sep, 1);
-  }
+  crc = WireRuntime::crcUpdate(crc, reinterpret_cast<const uint8_t*>(command), commandLen);
+  const uint8_t sep = ':';
+  crc = WireRuntime::crcUpdate(crc, &sep, 1);
   crc = WireRuntime::crcUpdate(crc, raw, rawLen);
   if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) return std::string();
   uint8_t framed[300];
   size_t framedLen = 0;
-  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen)) return std::string();
-  return std::string(reinterpret_cast<const char*>(framed), framedLen);
+  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen, /*delimiter=*/0x0A)) {
+    return std::string();
+  }
+  std::string line(command, commandLen);
+  line += ':';
+  line.append(reinterpret_cast<const char*>(framed), framedLen);
+  return line;
 }
 
 using TestSupport::FakeTransport;
@@ -193,7 +179,7 @@ void scenarioMoveRoundTrip() {
   putVarintField(env, 1, 7);       // corr_id
   putMessageField(env, 21, move);  // CommandEnvelope.cmd.move, field 21
 
-  std::string line = armor(env.data, env.len);
+  std::string line = armor(env.data, env.len, "MOVE");
   checkTrue(!line.empty(), "armor() produced a non-empty frame");
 
   FakeTransport serialFake;
@@ -252,12 +238,18 @@ void scenarioMalformedCobsFrameRejected() {
 
   // A code byte claiming a 10-byte block when only 2 bytes remain --
   // WireRuntime::cobsDecode()'s own "code claims more data bytes than
-  // remain" malformed-input case (wire_runtime.cpp).
-  const uint8_t badFrame[] = {0x0B, 0x01, 0x02};
+  // remain" malformed-input case (wire_runtime.cpp). 124-005: needs a
+  // REAL registered command prefix to reach decodeBinaryFrame() at all
+  // (an unprefixed/unrecognized line is now rejected one step earlier,
+  // at the registry lookup -- scenarioMalformedUnrecognizedTextLineRejected
+  // above already covers that path).
+  const uint8_t badCobsBody[] = {0x0B, 0x01, 0x02};
+  std::string badFrame = std::string("MOVE:") +
+                          std::string(reinterpret_cast<const char*>(badCobsBody), sizeof(badCobsBody));
 
   FakeTransport serialFake;
   FakeTransport radioFake;
-  serialFake.enqueueInboundBinary(badFrame, sizeof(badFrame));
+  serialFake.enqueueInboundBinary(badFrame);
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
@@ -284,7 +276,7 @@ void scenarioMalformedCrcMismatchRejected() {
   putVarintField(env, 1, 7);  // corr_id
   putVarintField(env, 13, 0);  // CommandEnvelope.stop (empty message, field 13)
 
-  std::string line = armor(env.data, env.len);
+  std::string line = armor(env.data, env.len, "STOP");
   checkTrue(!line.empty(), "armor() produced a non-empty frame");
   checkTrue(line.size() > 2, "frame has enough bytes to flip one safely");
   // Flip a bit in a byte comfortably inside the frame body (not the first
@@ -321,7 +313,7 @@ void scenarioMalformedCorruptProtobufRejected() {
   putVarintField(env, 1, 3);
   env.data[env.len++] = 0x80;
 
-  std::string line = armor(env.data, env.len);
+  std::string line = armor(env.data, env.len, "MOVE");
   checkTrue(!line.empty(), "armor() produced a non-empty frame for the corrupt payload");
 
   FakeTransport serialFake;
@@ -339,8 +331,10 @@ void scenarioMalformedCorruptProtobufRejected() {
 }
 
 // ===========================================================================
-// 3. Text plane -- HELLO -> banner via sendReliable(); PING -> "OK pong"
-//    via sendReliable(). Byte-identical to today's main.cpp stub.
+// 3. Cleartext plane -- HELLO -> banner via sendReliable(); PING ->
+//    "PONG:t=<ms>" via sendReliable() (124-005, issue §4 -- replaces
+//    pre-124 "OK pong t=<ms>", the one behavioural break the reply-plane
+//    grammar cutover makes).
 // ===========================================================================
 
 void scenarioHelloRepliesWithBannerViaSendReliable() {
@@ -366,7 +360,7 @@ void scenarioHelloRepliesWithBannerViaSendReliable() {
 }
 
 void scenarioPingRepliesOkPongViaSendReliable() {
-  beginScenario("pump(): PING replies \"OK pong t=<now>\" via sendReliable() (117, SUC-056)");
+  beginScenario("pump(): PING replies \"PONG:t=<now>\" via sendReliable() (117, SUC-056; 124-005, issue §4)");
 
   FakeTransport serialFake;
   FakeTransport radioFake;
@@ -384,8 +378,8 @@ void scenarioPingRepliesOkPongViaSendReliable() {
 
   checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
   if (!serialFake.sentReliable().empty()) {
-    checkStrEq(serialFake.sentReliable()[0], "OK pong t=123456",
-               "sendReliable() carried \"OK pong t=<now>\", now == pump()'s own argument");
+    checkStrEq(serialFake.sentReliable()[0], "PONG:t=123456",
+               "sendReliable() carried \"PONG:t=<now>\", now == pump()'s own argument");
   }
 }
 
@@ -413,8 +407,8 @@ void scenarioPumpBoundedToOneTransportPerCall() {
   checkU64Eq(serialFake.sentReliable().size(), 1, "serial received the PING reply");
   checkU64Eq(radioFake.sentReliable().size(), 0, "radio received no reply (never polled this call)");
   if (!serialFake.sentReliable().empty()) {
-    checkStrEq(serialFake.sentReliable()[0], "OK pong t=1000",
-               "serial transport's PING reply also carries t=<now> (117, SUC-056)");
+    checkStrEq(serialFake.sentReliable()[0], "PONG:t=1000",
+               "serial transport's PING reply also carries t=<now> (117, SUC-056; 124-005, issue §4)");
   }
 
   // A second pump() call now drains radio's queued line -- proves the SAME
@@ -426,8 +420,8 @@ void scenarioPumpBoundedToOneTransportPerCall() {
   checkU64Eq(radioFake.inboundSize(), 0, "radio's queued line is drained on the NEXT call");
   checkU64Eq(radioFake.sentReliable().size(), 1, "radio received the PING reply on the second call");
   if (!radioFake.sentReliable().empty()) {
-    checkStrEq(radioFake.sentReliable()[0], "OK pong t=2000",
-               "radio transport's PING reply also carries t=<now> (117, SUC-056)");
+    checkStrEq(radioFake.sentReliable()[0], "PONG:t=2000",
+               "radio transport's PING reply also carries t=<now> (117, SUC-056; 124-005, issue §4)");
   }
 }
 
@@ -465,13 +459,17 @@ void scenarioSendReplyBroadcastsIdenticalLineOnBothTransports() {
   }
 
   // Independent re-encode, without going through Comms::sendReply() at
-  // all -- proves the frame is exactly what encode()+CRC-then-COBS would
-  // produce (round-trip proof without needing a generic ReplyEnvelope
-  // decoder, per the ticket's own testing plan).
+  // all -- proves the LINE (command prefix + COBS+CRC bytes) is exactly
+  // what encode()+CRC-then-COBS-over-"OK:" would produce (round-trip proof
+  // without needing a generic ReplyEnvelope decoder, per the ticket's own
+  // testing plan). "OK" because reply.body_kind == BodyKind::OK -- 124-005:
+  // sendReply() derives the wire verb name from body_kind INTERNALLY, so
+  // the independent re-encode here must use the same mapping to compare
+  // like-for-like.
   uint8_t rawBuf[App::kMaxEnvelopeBytes];
   uint16_t n = msg::wire::encode(reply, rawBuf, sizeof(rawBuf));
   checkTrue(n > 0, "independent encode() succeeds");
-  std::string expected = armor(rawBuf, n);
+  std::string expected = armor(rawBuf, n, "OK");
   checkTrue(!expected.empty(), "independent armor() succeeds");
 
   if (!serialFake.sent().empty()) {
@@ -480,87 +478,78 @@ void scenarioSendReplyBroadcastsIdenticalLineOnBothTransports() {
 }
 
 // ===========================================================================
-// 6. CRC-scope extension (124-003, issue §3): the CRC's input now covers
-//    `COMMAND ':' payload`, not just `payload` -- sendReply()/
-//    decodeBinaryFrame() take the command bytes as a SEPARATE argument
-//    (default empty, byte-identical to protocol v4's CRC, since no CURRENT
-//    call site has a real ASCII command prefix to pass yet -- that grammar
-//    cutover is ticket 124-005).
+// 6. sendReply()'s command name is derived from body_kind (124-005): OK and
+//    ERR replies land on two DIFFERENT wire verbs ("OK:"/"ERR:"), hence two
+//    different CRC scopes -- this is the reply-plane half of what 124-003
+//    (issue §3) built and 124-005 wires live; the ID/VER/PONG half is
+//    covered by scenario 3's PING scenario and app_robot_loop_harness.cpp's
+//    own ID/VER scenarios.
 // ===========================================================================
 
-void scenarioSendReplyCrcScopeDiffersByCommand() {
+void scenarioSendReplyVerbNameTracksBodyKind() {
   beginScenario(
-      "sendReply(): identical reply payload under two different command names produces two different CRCs "
-      "(124-003, issue §3)");
+      "sendReply(): body_kind=OK and body_kind=ERR produce lines with two different wire-verb prefixes");
 
-  msg::ReplyEnvelope reply;
-  reply.corr_id = 9;
-  reply.body_kind = msg::ReplyEnvelope::BodyKind::OK;
-  reply.body.ok.q = 5;
-  reply.body.ok.rem = 12.5f;
-  reply.body.ok.t = 4242;
+  msg::ReplyEnvelope okReply;
+  okReply.corr_id = 9;
+  okReply.body_kind = msg::ReplyEnvelope::BodyKind::OK;
+  okReply.body.ok.q = 5;
+
+  msg::ReplyEnvelope errReply;
+  errReply.corr_id = 9;
+  errReply.body_kind = msg::ReplyEnvelope::BodyKind::ERR;
+  errReply.body.err.code = msg::ErrCode::ERR_BADARG;
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
 
-  const uint8_t commandA[] = {'M', 'O', 'V', 'E'};
-  const uint8_t commandB[] = {'S', 'T', 'O', 'P'};
+  FakeTransport serialFakeOk;
+  FakeTransport radioFakeOk;
+  App::Comms commsOk(serialFakeOk, radioFakeOk, banner);
+  commsOk.sendReply(okReply);
 
-  FakeTransport serialFakeA;
-  FakeTransport radioFakeA;
-  App::Comms commsA(serialFakeA, radioFakeA, banner);
-  commsA.sendReply(reply, commandA, sizeof(commandA));
+  FakeTransport serialFakeErr;
+  FakeTransport radioFakeErr;
+  App::Comms commsErr(serialFakeErr, radioFakeErr, banner);
+  commsErr.sendReply(errReply);
 
-  FakeTransport serialFakeB;
-  FakeTransport radioFakeB;
-  App::Comms commsB(serialFakeB, radioFakeB, banner);
-  commsB.sendReply(reply, commandB, sizeof(commandB));
+  checkU64Eq(serialFakeOk.sent().size(), 1, "OK reply produced exactly one line");
+  checkU64Eq(serialFakeErr.sent().size(), 1, "ERR reply produced exactly one line");
+  if (serialFakeOk.sent().empty() || serialFakeErr.sent().empty()) return;
 
-  checkU64Eq(serialFakeA.sent().size(), 1, "commandA send produced exactly one frame");
-  checkU64Eq(serialFakeB.sent().size(), 1, "commandB send produced exactly one frame");
-  if (serialFakeA.sent().empty() || serialFakeB.sent().empty()) return;
-
-  const std::string& frameA = serialFakeA.sent()[0];
-  const std::string& frameB = serialFakeB.sent()[0];
-  checkTrue(frameA != frameB, "two different command names produce two different frames (the CRC differs)");
-
-  // Decode both frames independently (plain COBS, delimiter 0x00 -- the
-  // wire LAYOUT is unaffected by 124-003, only the CRC's input range) and
-  // confirm the schema-encoded payload bytes are IDENTICAL between the two
-  // (same reply content, same encode()) while the trailing 2-byte CRC
-  // differs -- isolating the difference to the CRC exactly, not a
-  // coincidental side effect of framing.
-  uint8_t decodedA[300] = {};
-  size_t decodedALen = 0;
-  uint8_t decodedB[300] = {};
-  size_t decodedBLen = 0;
-  checkTrue(WireRuntime::cobsDecode(reinterpret_cast<const uint8_t*>(frameA.data()), frameA.size(), decodedA,
-                                     sizeof(decodedA), &decodedALen),
-            "frame A COBS-decodes cleanly");
-  checkTrue(WireRuntime::cobsDecode(reinterpret_cast<const uint8_t*>(frameB.data()), frameB.size(), decodedB,
-                                     sizeof(decodedB), &decodedBLen),
-            "frame B COBS-decodes cleanly");
-  checkTrue(decodedALen == decodedBLen && decodedALen >= 2, "both decode to the same combined length");
-  if (decodedALen == decodedBLen && decodedALen >= 2) {
-    const size_t payloadLen = decodedALen - 2;
-    checkTrue(std::memcmp(decodedA, decodedB, payloadLen) == 0,
-              "the schema-encoded payload bytes are identical between the two command names");
-    checkTrue(std::memcmp(decodedA + payloadLen, decodedB + payloadLen, 2) != 0,
-              "the trailing 2-byte CRC differs between the two command names");
-  }
+  const std::string& okLine = serialFakeOk.sent()[0];
+  const std::string& errLine = serialFakeErr.sent()[0];
+  checkTrue(okLine.rfind("OK:", 0) == 0, "OK reply's line starts with the \"OK:\" verb prefix");
+  checkTrue(errLine.rfind("ERR:", 0) == 0, "ERR reply's line starts with the \"ERR:\" verb prefix");
 }
+
+// ===========================================================================
+// 7. CRC-scope mismatch (124-003/124-005, issue §3/§5): a frame CRC-scoped
+//    under one command name fails verification when the wire line's own
+//    parsed prefix names a DIFFERENT (same-length) registered verb -- the
+//    "command byte mutated in transit" acceptance criterion, exercised via
+//    dispatchLine()'s real parse (not a hand-injected scope argument --
+//    that seam no longer exists on the public API, by design: the parsed
+//    prefix IS the scope now).
+// ===========================================================================
 
 void scenarioDecodeBinaryFrameRejectsMismatchedCommandScope() {
   beginScenario(
-      "pump(): frame CRC-scoped under a command name (124-003) fails verification when decoded under a "
-      "DIFFERENT scope -- never dispatches");
+      "pump(): a line armored under command MOVE fails CRC verification when its own wire prefix says STOP -- "
+      "never dispatches");
 
   Buf env;
   putVarintField(env, 1, 11);  // corr_id
   putVarintField(env, 13, 0);  // CommandEnvelope.stop (empty message, field 13)
 
-  const uint8_t command[] = {'M', 'O', 'V', 'E'};
-  std::string line = armorScoped(env.data, env.len, command, sizeof(command));
-  checkTrue(!line.empty(), "armorScoped() produced a non-empty frame");
+  std::string line = armor(env.data, env.len, "MOVE");
+  checkTrue(!line.empty(), "armor() produced a non-empty frame");
+  checkTrue(line.rfind("MOVE:", 0) == 0, "line starts with the MOVE: prefix");
+  // Mutate the wire's OWN command prefix in place -- "MOVE" and "STOP" are
+  // both real, same-length (4-byte) registered binary verbs (messages/
+  // commands.h), so this line still passes the registry lookup and reaches
+  // decodeBinaryFrame() -- but under a CRC that was computed over "MOVE:",
+  // not "STOP:".
+  line.replace(0, 4, "STOP");
 
   FakeTransport serialFake;
   FakeTransport radioFake;
@@ -569,20 +558,141 @@ void scenarioDecodeBinaryFrameRejectsMismatchedCommandScope() {
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
 
-  // pump()'s CURRENT call site (pumpTransport(), comms.cpp) decodes with
-  // decodeBinaryFrame()'s default EMPTY CRC scope -- the wire's own ASCII
-  // command prefix is not parsed and threaded through yet (that is ticket
-  // 124-005's grammar cutover; comms.h's decodeBinaryFrame() doc comment
-  // says so explicitly). So a frame whose CRC was computed under a REAL
-  // command scope must fail verification here -- a stand-in for "the
-  // command byte was mutated/lost in transit" the issue's own AC names,
-  // proven with the tooling this ticket actually lands rather than the
-  // full wire-line parse 005 owns.
   App::Cmd cmd;
   comms.pump(cmd, /*now=*/0);
 
   checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone -- scope-mismatched frame never decodes");
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once (CRC-scope mismatch detected)");
+}
+
+// ===========================================================================
+// 8. ID/VER cleartext replies (124-005, issue §8 / sprint 124 architecture
+//    Decision 4) -- new this ticket. HELLO/PING are covered above.
+// ===========================================================================
+
+void scenarioIdRepliesWithConfiguredIdentity() {
+  beginScenario("pump(): ID replies with the configured idLine_ via sendReliable()");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  serialFake.enqueueInbound("ID");
+
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  static char idLine[] = "ID:differential:tovez_nocal:0.20260724.2";
+  App::Comms comms(serialFake, radioFake, banner, idLine);
+
+  App::Cmd cmd;
+  comms.pump(cmd, /*now=*/0);
+
+  checkTrue(cmd.status == App::CmdStatus::kNone, "ID never decodes a Cmd");
+  checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
+  if (!serialFake.sentReliable().empty()) {
+    checkStrEq(serialFake.sentReliable()[0], idLine, "sendReliable() carried the configured idLine_ verbatim");
+  }
+  checkU64Eq(comms.malformedCount(), 0, "ID does not count as malformed");
+}
+
+void scenarioVerRepliesWithBuildVersion() {
+  beginScenario("pump(): VER replies \"VER:<FIRMWARE_VERSION_STR>\" via sendReliable()");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  serialFake.enqueueInbound("VER");
+
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+
+  App::Cmd cmd;
+  comms.pump(cmd, /*now=*/0);
+
+  checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
+  if (!serialFake.sentReliable().empty()) {
+    checkTrue(serialFake.sentReliable()[0].rfind("VER:", 0) == 0, "reply starts with the \"VER:\" verb prefix");
+  }
+  checkU64Eq(comms.malformedCount(), 0, "VER does not count as malformed");
+}
+
+// ===========================================================================
+// 9. Grammar edge cases (124-005, issue §1/§6): a no-data verb with a stray
+//    trailing ':' is handled gracefully (empty data, dispatched normally --
+//    NOT malformed), and a truncated binary line (a ':' with no COBS body
+//    at all) is counted malformed, not crashed.
+// ===========================================================================
+
+void scenarioStrayTrailingColonOnNoDataVerbHandledGracefully() {
+  beginScenario("pump(): \"PING:\" (stray trailing ':', empty data) still replies PONG -- not malformed");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  serialFake.enqueueInbound("PING:");
+
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+
+  App::Cmd cmd;
+  comms.pump(cmd, /*now=*/777);
+
+  checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
+  if (!serialFake.sentReliable().empty()) {
+    checkStrEq(serialFake.sentReliable()[0], "PONG:t=777",
+               "\"PING:\"'s empty data after the colon is dispatched exactly like bare \"PING\"");
+  }
+  checkU64Eq(comms.malformedCount(), 0, "a stray trailing ':' on a no-data verb does not count as malformed");
+}
+
+void scenarioTruncatedBinaryLineCountsMalformedNotCrash() {
+  beginScenario("pump(): \"MOVE:\" (colon, zero-length COBS body) counts malformed, does not crash");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  serialFake.enqueueInbound("MOVE:");
+
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+
+  App::Cmd cmd;
+  comms.pump(cmd, /*now=*/0);
+
+  checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone -- no crash, no partial decode");
+  checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once");
+}
+
+void scenarioDataContainingColonAndZeroRoundTripsCorrectly() {
+  beginScenario(
+      "pump(): a MOVE envelope carrying an unknown field whose bytes embed ':' and 0x00 still decodes -- the "
+      "grammar's first-colon-ends-command rule is unambiguous even though binary data contains 0x3A/0x00");
+
+  // An unknown field (99, length-delimited) whose payload is exactly the
+  // bytes {':', 0x00, 'A'} -- msg::wire::decode() skips unrecognized field
+  // numbers (forward-compat), so this proves the COLON and NUL bytes
+  // embedded in the COBS-encoded data never get mistaken for the outer
+  // grammar's own separator/terminator: only the FIRST ':' in the wire
+  // LINE (right after "MOVE") ends the command; everything COBS-encoded
+  // after it, including these bytes, is opaque data (issue §1).
+  const uint8_t needle[] = {':', 0x00, 'A'};
+  Buf move;
+  putBytesField(move, 99, needle, sizeof(needle));
+  Buf env;
+  putVarintField(env, 1, 55);      // corr_id
+  putMessageField(env, 21, move);  // CommandEnvelope.cmd.move, field 21
+
+  std::string line = armor(env.data, env.len, "MOVE");
+  checkTrue(!line.empty(), "armor() produced a non-empty frame");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  serialFake.enqueueInboundBinary(line);
+
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+
+  App::Cmd cmd;
+  comms.pump(cmd, /*now=*/0);
+
+  checkTrue(cmd.status == App::CmdStatus::kDecoded,
+            "decodes cleanly despite ':' and 0x00 embedded in the COBS-encoded data");
+  checkU64Eq(cmd.env.corr_id, 55, "corr_id round-trips despite the embedded ':'/0x00 in a sibling field");
+  checkU64Eq(comms.malformedCount(), 0, "not counted malformed");
 }
 
 }  // namespace
@@ -597,8 +707,13 @@ int main() {
   scenarioPingRepliesOkPongViaSendReliable();
   scenarioPumpBoundedToOneTransportPerCall();
   scenarioSendReplyBroadcastsIdenticalLineOnBothTransports();
-  scenarioSendReplyCrcScopeDiffersByCommand();
+  scenarioSendReplyVerbNameTracksBodyKind();
   scenarioDecodeBinaryFrameRejectsMismatchedCommandScope();
+  scenarioIdRepliesWithConfiguredIdentity();
+  scenarioVerRepliesWithBuildVersion();
+  scenarioStrayTrailingColonOnNoDataVerbHandledGracefully();
+  scenarioTruncatedBinaryLineCountsMalformedNotCrash();
+  scenarioDataContainingColonAndZeroRoundTripsCorrectly();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Comms scenarios passed\n");

@@ -64,6 +64,16 @@ from robot_radio.robot.pb2 import envelope_pb2
 
 from _wire_test_helpers import FakeSerial, binary_frame, text_line
 
+
+def _reply_command(envelope: "envelope_pb2.ReplyEnvelope") -> bytes:
+    """The ASCII wire-verb name for a populated ``pb2.ReplyEnvelope``
+    (124-005) -- its own oneof arm name (``ok``/``err``/``tlm``)
+    upper-cased, matching the registry. Every ``binary_frame()`` call below
+    needs this: protocol v5 has no unscoped binary frame any more."""
+    which = envelope.WhichOneof("body")
+    assert which is not None, "test envelope must populate a body oneof arm"
+    return which.upper().encode("ascii")
+
 # ---------------------------------------------------------------------------
 # 1. pb2 import smoke test
 # ---------------------------------------------------------------------------
@@ -128,7 +138,7 @@ def test_reader_loop_routes_binary_reply_by_corr_id():
     envelope.ok.q = 3
     envelope.ok.rem = 12.5
 
-    conn._ser = FakeSerial(binary_frame(envelope))
+    conn._ser = FakeSerial(binary_frame(envelope, _reply_command(envelope)))
     conn._reader_loop()
 
     reply = reply_q.get_nowait()
@@ -139,14 +149,21 @@ def test_reader_loop_routes_binary_reply_by_corr_id():
     assert reply.ok.rem == pytest.approx(12.5)
 
 
-def test_reader_loop_binary_branch_coexists_with_every_existing_branch():
-    """One pass through _reader_loop with TLM/EVT/OK/ERR/keepalive/`#`-comment
-    lines interleaved with a binary frame: every existing branch's routing is
-    unaffected by the binary demux's presence (behavioral proof to go with the
-    source-diff proof that no existing branch's CODE changed)."""
+def test_reader_loop_binary_branch_coexists_with_cleartext_lines_and_comments():
+    """One pass through _reader_loop with a relay `#`-comment line, cleartext
+    DEVICE:/PONG: replies, and an unrecognized text line interleaved with a
+    binary frame: the binary branch's own corr-id routing is unaffected by
+    any of them, and none of the cleartext lines are mistaken for binary
+    content or crash the loop.
+
+    124-005 (issue §4): supersedes the pre-v5 version of this test, which
+    asserted the OLD TLM/EVT text-branch routing and the OK/ERR
+    `#<corr-id>`-suffix routing (`_CORR_ID_RE`) -- both DELETED, not ported
+    (see `_handle_text_line()`'s own docstring): `TLM ...`/`EVT ...` were
+    pre-v4 vestiges with no firmware emitter (telemetry is binary now,
+    verb `TLM`, not a bare text line), and corr-id'd replies ride
+    `ReplyEnvelope`, a binary shape, never a `#<id>`-suffixed text line."""
     conn = _new_conn()
-    conn._reply_queues["5"] = queue.Queue()
-    conn._reply_queues["6"] = queue.Queue()
     conn._reply_queues["42"] = queue.Queue()
 
     envelope = envelope_pb2.ReplyEnvelope(corr_id=42)
@@ -154,30 +171,27 @@ def test_reader_loop_binary_branch_coexists_with_every_existing_branch():
 
     stream = b"".join([
         text_line("# relay comment line"),
-        text_line("TLM t=100 enc=0,0"),
-        text_line("OK keepalive"),
-        text_line("EVT done S"),
-        text_line("OK #5"),
-        binary_frame(envelope),
-        text_line("ERR badarg #6"),
+        text_line("DEVICE:NEZHA2:robot:test:1234"),
+        text_line("PONG:t=100"),
+        binary_frame(envelope, _reply_command(envelope)),
+        text_line("SOMETHING-UNRECOGNIZED"),
     ])
     conn._ser = FakeSerial(stream)
-    conn._reader_loop()
+    conn._reader_loop()  # must not raise
 
-    # Text-plane branches: unchanged behavior.
-    assert conn._tlm_queue.get_nowait() == "TLM t=100 enc=0,0"
-    assert conn._evt_queue.get_nowait() == "EVT done S"
-    assert conn._reply_queues["5"].get_nowait() == "OK #5"
-    assert conn._reply_queues["6"].get_nowait() == "ERR badarg #6"
-    assert conn._tlm_queue.empty()
-    assert conn._evt_queue.empty()
-
-    # Binary branch: routed by the envelope's own corr_id.
+    # Binary branch: routed by the envelope's own corr_id, unaffected by the
+    # cleartext lines/comment interleaved around it.
     reply = conn._reply_queues["42"].get_nowait()
     assert isinstance(reply, envelope_pb2.ReplyEnvelope)
     assert reply.corr_id == 42
     assert reply.WhichOneof("body") == "err"
     assert reply.err.code == envelope_pb2.ERR_RANGE
+
+    # Cleartext DEVICE:/PONG: lines have no live reader-thread consumer yet
+    # (see _handle_text_line()'s own docstring) -- dropped, not malformed.
+    # The relay comment is dropped before the registry lookup, also not
+    # malformed. Only the genuinely-unrecognized line counts.
+    assert conn.malformed_frame_count == 1
 
 
 def test_reader_loop_routes_binary_tlm_reply_to_binary_tlm_queue():
@@ -208,7 +222,7 @@ def test_reader_loop_routes_binary_tlm_reply_to_binary_tlm_queue():
     envelope.tlm.now = 12345
     envelope.tlm.seq = 3
 
-    conn._ser = FakeSerial(binary_frame(envelope))
+    conn._ser = FakeSerial(binary_frame(envelope, _reply_command(envelope)))
     conn._reader_loop()
 
     assert conn._reply_queues == {}  # never touched -- tlm skips corr-id routing
@@ -241,7 +255,7 @@ def test_reader_loop_routes_binary_tlm_corr_id_zero_to_binary_tlm_queue():
     envelope.tlm.now = 42
     envelope.tlm.seq = 1
 
-    conn._ser = FakeSerial(binary_frame(envelope))
+    conn._ser = FakeSerial(binary_frame(envelope, _reply_command(envelope)))
     conn._reader_loop()
 
     assert conn._reply_queues == {}
@@ -270,7 +284,7 @@ def test_reader_loop_binary_tlm_and_corr_id_reply_coexist_in_one_session():
     push.tlm.now = 42
     push.tlm.seq = 8
 
-    conn._ser = FakeSerial(binary_frame(push) + binary_frame(ack))
+    conn._ser = FakeSerial(binary_frame(push, _reply_command(push)) + binary_frame(ack, _reply_command(ack)))
     conn._reader_loop()
 
     ack_reply = reply_q.get_nowait()
@@ -294,18 +308,21 @@ def test_binary_tlm_queue_drops_oldest_on_overflow():
     conn = _new_conn()
     conn._binary_tlm_queue = queue.Queue(maxsize=3)
 
-    def _tlm_frame(seq: int) -> bytes:
+    def _tlm_cobs_body(seq: int) -> bytes:
         envelope = envelope_pb2.ReplyEnvelope(corr_id=0)
         envelope.tlm.seq = seq
-        return binary_frame(envelope)
+        # binary_frame() returns the FULL line ("TLM:<cobs bytes>\n") --
+        # strip the "TLM:" prefix and the trailing '\n' delimiter, since
+        # _handle_binary_reply() (124-005) takes the COBS body and the
+        # command bytes as two SEPARATE arguments (the prefix already
+        # parsed off by the real reader loop's own _handle_wire_line()).
+        line = binary_frame(envelope, b"TLM")
+        return line[len(b"TLM:"):-1]
 
     # Push 5 frames (seq 0..4) through a depth-3 queue directly via
     # _handle_binary_reply -- oldest (0, 1) must be dropped, leaving (2, 3, 4).
     for seq in range(5):
-        frame = _tlm_frame(seq)[:-1]  # strip the trailing 0x00 delimiter --
-        # _handle_binary_reply() takes the frame BODY (delimiter already
-        # consumed by the demuxer in the real reader loop).
-        conn._handle_binary_reply(frame)
+        conn._handle_binary_reply(_tlm_cobs_body(seq), b"TLM")
 
     remaining = []
     while not conn._binary_tlm_queue.empty():
@@ -322,7 +339,7 @@ def test_reader_loop_binary_reply_with_no_registered_queue_is_dropped():
     envelope = envelope_pb2.ReplyEnvelope(corr_id=999)
     envelope.ok.SetInParent()
 
-    conn._ser = FakeSerial(binary_frame(envelope))
+    conn._ser = FakeSerial(binary_frame(envelope, _reply_command(envelope)))
     conn._reader_loop()  # must not raise
 
     assert conn._reply_queues == {}
@@ -335,7 +352,14 @@ def test_reader_loop_malformed_binary_frame_is_dropped_not_raised():
     conn = _new_conn()
     conn._reply_queues["1"] = queue.Queue()
 
-    conn._ser = FakeSerial(b"not-a-valid-cobs-crc-frame-body" + b"\x00")
+    # A registered BINARY verb prefix ("TLM:") with garbage COBS bytes
+    # after it -- reaches _handle_binary_reply() (the intended failure
+    # surface: malformed COBS) rather than being rejected one step
+    # earlier at the registry lookup (an unrecognized-command line is a
+    # SEPARATE, already-covered malformed path -- see
+    # test_reader_loop_binary_branch_coexists_with_cleartext_lines_and_
+    # comments's own trailing "SOMETHING-UNRECOGNIZED" line).
+    conn._ser = FakeSerial(b"TLM:not-a-valid-cobs-crc-frame-body" + b"\n")
     conn._reader_loop()  # must not raise
 
     assert conn._reply_queues["1"].empty()
@@ -350,15 +374,15 @@ def test_reader_loop_crc_corrupted_binary_frame_is_dropped_not_raised():
 
     envelope = envelope_pb2.ReplyEnvelope(corr_id=1)
     envelope.ok.q = 3
-    good_frame = encode_frame(envelope.SerializeToString())
+    good_frame = encode_frame(envelope.SerializeToString(), command=b"OK")
     corrupt = bytearray(good_frame)
     for i in range(len(corrupt)):
         candidate = corrupt[i] ^ 0x01
-        if candidate != 0:  # keep the frame 0x00-free (still well-formed COBS)
+        if candidate != 0x0A:  # keep the frame 0x0A-free (still well-formed COBS)
             corrupt[i] = candidate
             break
 
-    conn._ser = FakeSerial(bytes(corrupt) + b"\x00")
+    conn._ser = FakeSerial(b"OK:" + bytes(corrupt) + b"\n")
     conn._reader_loop()  # must not raise
 
     assert conn._reply_queues["1"].empty()
@@ -373,10 +397,10 @@ def test_reader_loop_crc_corrupted_binary_frame_is_dropped_not_raised():
 class _LoopbackSerial:
     """Mock transport for send_envelope()'s round-trip test.
 
-    On write() of a binary-framed CommandEnvelope (COBS+CRC body + trailing
-    0x00 -- ``send_envelope()``'s own write shape, 123-002/003), synthesizes
-    an Ack ReplyEnvelope (echoing corr_id) and queues its own binary frame
-    for a later read() -- exercising send_envelope()'s full
+    On write() of a command-prefixed, COBS+CRC-framed line + trailing '\\n'
+    -- ``send_envelope()``'s own write shape, 123-002/003/124-005 --
+    synthesizes an Ack ReplyEnvelope (echoing corr_id) and queues its own
+    binary line for a later read() -- exercising send_envelope()'s full
     write -> reader-thread -> _handle_binary_reply -> queue -> blocking-read
     path with no real serial port. Never "exhausts" (read() returns b""
     when idle, like a live, open port) -- the test stops the reader thread
@@ -389,16 +413,18 @@ class _LoopbackSerial:
         self._out = bytearray()
 
     def write(self, data: bytes) -> int:
-        if data.endswith(b"\x00"):
+        if data.endswith(b"\n"):
             from robot_radio.io.wire_codec import decode_frame
 
-            payload = decode_frame(data[:-1])
-            if payload is not None:
-                cmd = envelope_pb2.CommandEnvelope.FromString(payload)
-                reply = envelope_pb2.ReplyEnvelope(corr_id=cmd.corr_id)
-                reply.ok.q = 1
-                reply.ok.rem = 0.0
-                self._out += encode_frame(reply.SerializeToString()) + b"\x00"
+            command, sep, cobs_body = data[:-1].partition(b":")
+            if sep:
+                payload = decode_frame(cobs_body, command=command)
+                if payload is not None:
+                    cmd = envelope_pb2.CommandEnvelope.FromString(payload)
+                    reply = envelope_pb2.ReplyEnvelope(corr_id=cmd.corr_id)
+                    reply.ok.q = 1
+                    reply.ok.rem = 0.0
+                    self._out += b"OK:" + encode_frame(reply.SerializeToString(), command=b"OK") + b"\n"
         return len(data)
 
     def flush(self) -> None:
@@ -482,10 +508,11 @@ def test_send_envelope_fast_writes_framed_envelope_and_returns_corr_id():
     assert corr_id == 1
     assert env.corr_id == 1  # envelope.corr_id assigned in place
     [written] = conn._ser.writes
-    assert written.endswith(b"\x00")
+    assert written.endswith(b"\n")
+    assert written.startswith(b"STOP:")  # 124-005: leading <COMMAND>':' prefix
     from robot_radio.io.wire_codec import decode_frame
 
-    payload = decode_frame(written[:-1])
+    payload = decode_frame(written[len(b"STOP:"):-1], command=b"STOP")
     assert payload is not None
     decoded = envelope_pb2.CommandEnvelope.FromString(payload)
     assert decoded.corr_id == 1

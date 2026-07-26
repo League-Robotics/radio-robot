@@ -227,13 +227,20 @@ def _get_envelope_pb2():
     return _envelope_pb2_module
 
 
-def _decode_reply_frame(frame: bytes, pb2_mod) -> "envelope_pb2.ReplyEnvelope | None":
-    """COBS+CRC-decode ``frame`` (123-002/003; was a ``*B<base64>`` armored
-    text line pre-123) and parse it as a ``pb2.ReplyEnvelope``. Returns
-    ``None`` on any malformed/corrupt input (bad COBS, CRC mismatch, bad
-    protobuf bytes), mirroring ``SerialConnection._handle_binary_reply()``'s
-    own tolerance for a single corrupted binary reply -- never raises."""
-    payload = decode_frame(frame)
+def _decode_reply_frame(line: bytes, pb2_mod) -> "envelope_pb2.ReplyEnvelope | None":
+    """Split ``line``'s own ``<COMMAND>':'`` prefix off, COBS+CRC-decode the
+    rest (124-005 -- 123-002/003 had no prefix to strip; before that, a
+    ``*B<base64>`` armored text line), and parse it as a
+    ``pb2.ReplyEnvelope``. Returns ``None`` on any malformed/corrupt input
+    (no ``':'`` at all, bad COBS, a CRC mismatch -- scoped over the parsed
+    command, matching how ``Comms::sendReply()``/``Telemetry::
+    emitSecondary()`` actually framed it -- or bad protobuf bytes),
+    mirroring ``SerialConnection._handle_binary_reply()``'s own tolerance
+    for a single corrupted binary reply -- never raises."""
+    command, sep, frame = line.partition(b":")
+    if not sep:
+        return None
+    payload = decode_frame(frame, command=command)
     if payload is None:
         return None
     try:
@@ -273,20 +280,29 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
     lib.sim_inject_stop.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
     lib.sim_inject_stop.restype = None
 
-    # `frame` is a COBS+CRC-framed command body (123-002/003; was a
-    # `*B<base64>` armored line pre-123) -- build it with
-    # `robot_radio.io.wire_codec.encode_frame()`. Safe as a NUL-terminated
-    # `c_char_p` because a COBS-encoded frame body is guaranteed 0x00-free.
-    lib.sim_inject_command.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    # `frame` is a `<COMMAND>':'<COBS+CRC bytes>` wire LINE (124-005; was a
+    # bare COBS+CRC command body 123-002-124-004, an already-armored
+    # `*B<base64>` line pre-123) -- build the COBS half with
+    # `robot_radio.io.wire_codec.encode_frame()`, PREFIXED with the ASCII
+    # command name and ':'. `len` is an EXPLICIT length, passed separately
+    # (`inject_command()` below) rather than relying on `c_char_p`'s own
+    # NUL-termination: COBS is keyed on 0x0A now, not 0x00 (wire_runtime.h
+    # item 8), so the line may legitimately contain an embedded 0x00 byte
+    # that a strlen()-based recovery would truncate at -- exactly the
+    # pre-124-005 assumption this signature replaces (see
+    # `SimHarness::injectCommand()`, src/sim/sim_harness.h, for the C++-side
+    # fix to the same trap).
+    lib.sim_inject_command.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
     lib.sim_inject_command.restype = None
 
-    # 123-002/003: `buf` now receives raw, memcpy'd bytes -- every captured
-    # outbound COBS+CRC frame this drain call, each followed by exactly one
-    # 0x00 delimiter (sim_ctypes.cpp's own doc comment) -- NOT a
+    # 123-002/003/124-005: `buf` now receives raw, memcpy'd bytes -- every
+    # captured outbound wire LINE this drain call, each followed by exactly
+    # one '\n' (0x0A) delimiter (sim_ctypes.cpp's own doc comment) -- NOT a
     # snprintf("%s")-style NUL-terminated string. Read exactly the returned
     # byte count (or `buflen`, whichever is smaller) via the buffer's `.raw`
     # attribute, never `.value` (which would stop at the FIRST embedded
-    # 0x00 -- i.e. after the first frame only).
+    # 0x00 -- i.e. after the first line only, and 124-005 lines may
+    # legitimately contain one).
     lib.sim_drain_tlm.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
     lib.sim_drain_tlm.restype = ctypes.c_int
 
@@ -810,8 +826,11 @@ class SimLoop:
             move=pb2_mod.Move(
                 timeout=timeout, replace=replace, id=move_id,
                 **velocity_kwargs, **stop_kwargs))
-        frame = encode_frame(envelope.SerializeToString())
-        self.inject_command(frame)
+        # "MOVE" unconditionally -- this method always builds a
+        # CommandEnvelope{move: ...} (124-005, issue §1/§3: the wire line's
+        # own leading prefix and the CRC's scope-extension argument).
+        frame = encode_frame(envelope.SerializeToString(), command=b"MOVE")
+        self.inject_command(b"MOVE:" + frame)
         return move_id
 
     def read_pending_binary_tlm_frames(self) -> "list[TLMFrame]":
@@ -847,14 +866,18 @@ class SimLoop:
     # ------------------------------------------------------------------
 
     def inject_command(self, frame: bytes) -> None:
-        """Push an already-COBS+CRC-framed command frame body (123-002/003;
-        was an already-armored ``*B...`` text line pre-123) straight onto the
+        """Push an already-`<COMMAND>':'<COBS+CRC bytes>`-framed wire LINE
+        (124-005; was a bare COBS+CRC command body 123-002-124-004, an
+        already-armored ``*B...`` text line pre-123) straight onto the
         inbound FakeTransport -- ``sim_inject_command()``'s own escape hatch
-        for a wire shape ``twist()``/``stop()`` don't cover. Build ``frame``
-        with ``robot_radio.io.wire_codec.encode_frame()``."""
+        for a wire shape ``twist()``/``stop()`` don't cover. Build the COBS
+        half with ``robot_radio.io.wire_codec.encode_frame()``, PREFIXED
+        with the ASCII command name and ``':'``. Passes ``len(frame)``
+        explicitly (never NUL-terminated recovery) -- see
+        ``_bind_ctypes()``'s own doc comment for why."""
         self._require_connected()
         self._run_or_enqueue(
-            lambda: self._lib.sim_inject_command(self._handle, frame))
+            lambda: self._lib.sim_inject_command(self._handle, frame, len(frame)))
 
     # ------------------------------------------------------------------
     # True pose
@@ -1342,17 +1365,19 @@ class SimLoop:
         docstring for how this drives the tick cadence."""
         from robot_radio.robot.protocol import TLMFrame
 
-        # 123-002/003: sim_drain_tlm() now fills `buf` with raw, memcpy'd
-        # bytes -- every captured outbound COBS+CRC frame, each followed by
-        # exactly one 0x00 delimiter (sim_ctypes.cpp's own doc comment) --
-        # NOT a NUL-terminated string. Read via `.raw[:n]` (never `.value`,
-        # which would stop at the FIRST embedded 0x00, i.e. after the first
-        # frame only) and split on the SAME 0x00 delimiter. This drain path
-        # only ever carries binary frames (drainRawTelemetry() reads
-        # FakeTransport::sent(), never sentReliable()'s text-plane
-        # HELLO/PING replies), so a plain b"\x00"-split is correct here --
-        # no text/binary demux ambiguity to resolve (contrast
-        # ByteStreamDemuxer, used where text and binary genuinely
+        # 123-002/003/124-005: sim_drain_tlm() now fills `buf` with raw,
+        # memcpy'd bytes -- every captured outbound wire LINE
+        # (`<COMMAND>':'<COBS bytes>`), each followed by exactly one '\n'
+        # (0x0A) delimiter (sim_ctypes.cpp's own doc comment) -- NOT a
+        # NUL-terminated string. Read via `.raw[:n]` (never `.value`, which
+        # would stop at the FIRST embedded 0x00 -- a 124-005 line may
+        # legitimately contain one, COBS being keyed on 0x0A now) and split
+        # on the SAME '\n' delimiter. This drain path only ever carries
+        # binary lines (drainRawTelemetry() reads FakeTransport::sent(),
+        # never sentReliable()'s cleartext-plane HELLO/PING/ID/VER
+        # replies), so a plain b"\n"-split is correct here -- no
+        # cleartext/binary demux ambiguity to resolve (contrast
+        # ByteStreamDemuxer, used where cleartext and binary genuinely
         # interleave on the same stream, e.g. a real serial connection).
         buf = ctypes.create_string_buffer(_TLM_DRAIN_BUFFER)
         needed = self._lib.sim_drain_tlm(self._handle, buf, _TLM_DRAIN_BUFFER)
@@ -1370,10 +1395,10 @@ class SimLoop:
 
         pb2_mod = _get_envelope_pb2()
         suspended = self._telemetry_suspended.is_set()
-        for frame_bytes in raw.split(b"\x00"):
-            if not frame_bytes:
+        for line_bytes in raw.split(b"\n"):
+            if not line_bytes:
                 continue
-            reply = _decode_reply_frame(frame_bytes, pb2_mod)
+            reply = _decode_reply_frame(line_bytes, pb2_mod)
             if reply is None or reply.WhichOneof("body") != "tlm":
                 continue
             frame = TLMFrame.from_pb2(reply.tlm)

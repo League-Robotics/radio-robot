@@ -94,31 +94,47 @@ void checkInRange(uint64_t actual, uint64_t lo, uint64_t hi, const std::string& 
   }
 }
 
-// --- armor() -- 123-002: same CRC-then-COBS frame-body composition
-// Comms::sendReply()/Telemetry::emitSecondary() themselves perform (was
-// "*B<base64>" pre-123), used here only to build scenario EXPECTATIONS
-// independently of Telemetry's own send path. The trailing 0x00 delimiter
-// is a transport concern, not included in this function's return value --
+// --- armor() -- 124-005 (protocol v5 Part A, "framing grammar cutover"):
+// builds the COMPLETE wire LINE, `<command>':'<COBS+CRC bytes>` (CRC-then-
+// COBS, delimiter 0x0A) Comms::sendReply()/Telemetry::emitSecondary()
+// themselves build, used here only to construct scenario EXPECTATIONS
+// independently of Telemetry's own send path. `command` is REQUIRED and,
+// for every scenario in this file, "TLM" -- App::Telemetry never emits
+// OK/ERR (envelope.proto's own doc comment: no current firmware call site),
+// and emitSecondary() reuses the SAME "TLM:" prefix/CRC-scope emitPrimary()
+// uses (telemetry.cpp's own doc comment explains why: no separate registry
+// verb exists for the secondary frame). The trailing '\n' terminator is a
+// transport concern, not included in this function's return value --
 // matches what a FakeTransport::sent() capture holds. ------
 
-std::string armor(const uint8_t* raw, size_t rawLen) {
+std::string armor(const uint8_t* raw, size_t rawLen, const char* command) {
   uint8_t combined[256];
   if (rawLen > sizeof(combined) - 2) return std::string();
   std::memcpy(combined, raw, rawLen);
   size_t combinedLen = rawLen;
-  const uint16_t crc = WireRuntime::crcCompute(raw, rawLen);
+  const size_t commandLen = std::strlen(command);
+  uint16_t crc = WireRuntime::crcInit();
+  crc = WireRuntime::crcUpdate(crc, reinterpret_cast<const uint8_t*>(command), commandLen);
+  const uint8_t sep = ':';
+  crc = WireRuntime::crcUpdate(crc, &sep, 1);
+  crc = WireRuntime::crcUpdate(crc, raw, rawLen);
   if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) return std::string();
   uint8_t framed[300];
   size_t framedLen = 0;
-  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen)) return std::string();
-  return std::string(reinterpret_cast<const char*>(framed), framedLen);
+  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen, /*delimiter=*/0x0A)) {
+    return std::string();
+  }
+  std::string line(command, commandLen);
+  line += ':';
+  line.append(reinterpret_cast<const char*>(framed), framedLen);
+  return line;
 }
 
 std::string armorReply(const msg::ReplyEnvelope& env) {
   uint8_t rawBuf[App::kMaxEnvelopeBytes];
   uint16_t n = msg::wire::encode(env, rawBuf, sizeof(rawBuf));
   if (n == 0) return std::string();
-  return armor(rawBuf, n);
+  return armor(rawBuf, n, "TLM");
 }
 
 // --- FakeTransport is TestSupport::FakeTransport
@@ -488,7 +504,7 @@ void scenarioSecondaryNeverCoincidesWithPrimaryAndDoesNotDelayIt() {
   uint8_t rawBuf[msg::wire::kTelemetrySecondaryMaxEncodedSize];
   uint16_t n = msg::wire::encode(expectedSec, rawBuf, sizeof(rawBuf));
   checkTrue(n > 0, "independent encode(TelemetrySecondary) succeeds");
-  std::string expectedLine = armor(rawBuf, n);
+  std::string expectedLine = armor(rawBuf, n, "TLM");
   checkTrue(!expectedLine.empty(), "independent armor() of the secondary frame succeeds");
 
   bool found = false;

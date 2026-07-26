@@ -422,30 +422,60 @@ size_t encodeMoveEnvelope(uint32_t velocityFieldNumber, const uint8_t* velocityP
   return pos;
 }
 
-// armor() -- 123-002 (COBS+CRC framer integration): builds the CRC-then-COBS
-// frame BODY (the trailing 0x00 delimiter itself is a transport-level
-// concern -- see comms.h's own Transport::send()/readLine() doc comments --
-// NOT included in this function's own return value, mirroring what a real
+// crcOverScope() -- independent re-implementation of comms.cpp's own
+// private helper of the same name (124-003/124-005, issue §3):
+// `crc16(COMMAND ':' payload)` when `command` is non-empty, `crc16(payload)`
+// alone when it is not. Built the same way (WireRuntime's incremental
+// crcInit()/crcUpdate(), never concatenating command+payload into one
+// buffer) so this test helper and the production code it exercises are
+// tested against each other, not tautologically.
+uint16_t crcOverScope(const uint8_t* command, size_t commandLen, const uint8_t* payload, size_t payloadLen) {
+  uint16_t crc = WireRuntime::crcInit();
+  if (commandLen > 0) {
+    crc = WireRuntime::crcUpdate(crc, command, commandLen);
+    static constexpr uint8_t kSep = ':';
+    crc = WireRuntime::crcUpdate(crc, &kSep, 1);
+  }
+  return WireRuntime::crcUpdate(crc, payload, payloadLen);
+}
+
+// armor() -- 124-005 (protocol v5 Part A, "framing grammar cutover"):
+// builds the COMPLETE wire LINE content, `<command>':'<COBS+CRC bytes>`
+// (the trailing '\n' terminator itself is a transport-level concern --
+// see comms.h's own Transport::send()/readLine() doc comments -- NOT
+// included in this function's own return value, mirroring what a real
 // Transport::readLine() delivers to Comms::pumpTransport() with the
 // delimiter already stripped). Byte-for-byte the same composition as
-// App::Comms::sendReply() (comms.cpp): append the 2-byte CRC-16/CCITT-FALSE
-// (little-endian) to the raw schema-encoded payload, THEN COBS-encode the
-// combined bytes. Callers push the result via
-// TestSupport::FakeTransport::enqueueInboundBinary() (NOT enqueueInbound(),
-// which tags a frame kText -- these are binary frames), matching how
-// App::Comms::decodeBinaryFrame() reverses this exact composition.
-std::string armor(const uint8_t* raw, size_t rawLen) {
+// App::Comms::sendReply()/decodeBinaryFrame() (comms.cpp): append the
+// 2-byte CRC-16/CCITT-FALSE (little-endian, scoped over `command` too)
+// to the raw schema-encoded payload, THEN COBS-encode (delimiter 0x0A)
+// the combined bytes, THEN prepend `command ':'`. `command` is REQUIRED
+// (no default) -- protocol v5 has no unscoped binary frame any more, every
+// dispatched command needs a real registry verb name. Callers push the
+// result via TestSupport::FakeTransport::enqueueInboundBinary() (an alias
+// of enqueueInbound() since 124-005 -- see that class's own doc comment),
+// matching how App::Comms::decodeBinaryFrame() reverses this exact
+// composition.
+std::string armor(const uint8_t* raw, size_t rawLen, const char* command) {
   uint8_t combined[256];
   if (rawLen > sizeof(combined) - 2) return std::string();
   std::memcpy(combined, raw, rawLen);
   size_t combinedLen = rawLen;
-  const uint16_t crc = WireRuntime::crcCompute(raw, rawLen);
+  const size_t commandLen = std::strlen(command);
+  const uint16_t crc =
+      crcOverScope(reinterpret_cast<const uint8_t*>(command), commandLen, raw, rawLen);
   if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) return std::string();
 
   uint8_t framed[300];
   size_t framedLen = 0;
-  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen)) return std::string();
-  return std::string(reinterpret_cast<const char*>(framed), framedLen);
+  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen,
+                                /*delimiter=*/0x0A)) {
+    return std::string();
+  }
+  std::string line(command, commandLen);
+  line += ':';
+  line.append(reinterpret_cast<const char*>(framed), framedLen);
+  return line;
 }
 
 }  // namespace
@@ -453,15 +483,21 @@ std::string armor(const uint8_t* raw, size_t rawLen) {
 DecodedLine decodeOutboundLine(const std::string& line) {
   DecodedLine result;
 
-  // Reverse of App::Comms::sendReply()'s CRC-then-COBS composition
-  // (comms.cpp) -- see this file's own armor() for the exact mirrored
-  // encode side. `line` is the raw frame body a TestSupport::FakeTransport
-  // capture holds (FakeTransport::sent(), 123-002) -- NOT NUL-terminated
+  // Reverse of App::Comms::sendReply()/Telemetry::emitSecondary()'s
+  // CRC-then-COBS composition (comms.cpp/telemetry.cpp) -- see this file's
+  // own armor() for the exact mirrored encode side. `line` is the raw
+  // `<COMMAND>':'<COBS bytes>` content a TestSupport::FakeTransport
+  // capture holds (FakeTransport::sent(), 124-005) -- NOT NUL-terminated
   // text, an explicit-length byte buffer that may contain any byte value.
+  const size_t colon = line.find(':');
+  if (colon == std::string::npos) return result;  // kUnknown -- no command prefix at all
+  const std::string command = line.substr(0, colon);
+  const std::string cobsPart = line.substr(colon + 1);
+
   uint8_t combined[256];
   size_t combinedLen = 0;
-  if (!WireRuntime::cobsDecode(reinterpret_cast<const uint8_t*>(line.data()), line.size(), combined,
-                                sizeof(combined), &combinedLen)) {
+  if (!WireRuntime::cobsDecode(reinterpret_cast<const uint8_t*>(cobsPart.data()), cobsPart.size(), combined,
+                                sizeof(combined), &combinedLen, /*delimiter=*/0x0A)) {
     return result;
   }
   if (combinedLen < 2) return result;
@@ -470,7 +506,9 @@ DecodedLine decodeOutboundLine(const std::string& line) {
   size_t crcPos = payloadLen;
   uint16_t receivedCrc = 0;
   if (!WireRuntime::decodeCrc16(combined, combinedLen, &crcPos, &receivedCrc)) return result;
-  if (!WireRuntime::crcVerify(combined, payloadLen, receivedCrc)) return result;
+  const uint16_t expectedCrc =
+      crcOverScope(reinterpret_cast<const uint8_t*>(command.data()), command.size(), combined, payloadLen);
+  if (expectedCrc != receivedCrc) return result;
 
   uint32_t corrId = 0;
   msg::Telemetry tlm;
@@ -503,7 +541,7 @@ std::string armorMoveCommand(float v_x, float v_y, float omega, MoveStopKind sto
   size_t n = encodeMoveEnvelope(/* velocity field = twist */ 1, velocityScratch, velocityLen, stopKind, stopValue,
                                  timeout, replace, id, corrId, rawBuf, sizeof(rawBuf));
   if (n == 0) return std::string();
-  return armor(rawBuf, n);
+  return armor(rawBuf, n, "MOVE");
 }
 
 std::string armorMoveCommand(float v_left, float v_right, MoveStopKind stopKind, float stopValue, float timeout,
@@ -517,14 +555,14 @@ std::string armorMoveCommand(float v_left, float v_right, MoveStopKind stopKind,
   size_t n = encodeMoveEnvelope(/* velocity field = wheels */ 2, velocityScratch, velocityLen, stopKind, stopValue,
                                  timeout, replace, id, corrId, rawBuf, sizeof(rawBuf));
   if (n == 0) return std::string();
-  return armor(rawBuf, n);
+  return armor(rawBuf, n, "MOVE");
 }
 
 std::string armorStopCommand(uint32_t corrId) {
   uint8_t rawBuf[32];
   size_t n = encodeStopEnvelope(corrId, rawBuf, sizeof(rawBuf));
   if (n == 0) return std::string();
-  return armor(rawBuf, n);
+  return armor(rawBuf, n, "STOP");
 }
 
 }  // namespace TestSupport

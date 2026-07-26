@@ -522,9 +522,13 @@ def render_log_line(raw_line: "str | bytes", *, outbound: bool) -> str | None:
     """Translate one raw wire log line/frame for display in the message
     monitor.
 
-    ``raw_line`` is a plain ``str`` for a text-plane line (HELLO/PING and
-    their replies -- returned unchanged) or raw ``bytes`` for a binary
-    COBS+CRC frame body: ``outbound=True`` means a sent ``CommandEnvelope``,
+    ``raw_line`` is a plain ``str`` for a cleartext-plane line (HELLO/PING/
+    ID/VER and their replies -- returned unchanged) or raw ``bytes`` for a
+    binary wire LINE (124-005: the FULL ``<COMMAND>':'<COBS+CRC bytes>``
+    content -- ``io/serial_conn.py``'s ``on_send``/``on_recv`` hooks pass
+    the whole line now, not the bare COBS body, precisely so this function
+    can recover the verb its own ``decode_frame()`` call needs to scope the
+    CRC correctly): ``outbound=True`` means a sent ``CommandEnvelope``,
     ``outbound=False`` means a received ``ReplyEnvelope`` (or, per the
     disambiguation below, a ``TelemetrySecondary``).
 
@@ -581,7 +585,17 @@ def render_log_line(raw_line: "str | bytes", *, outbound: bool) -> str | None:
     def _malformed_marker() -> str:
         return f"<binary: malformed, {len(raw_line)} bytes>"
 
-    raw_bytes = decode_frame(raw_line)
+    # 124-005: `raw_line` is the FULL wire line -- split off the leading
+    # `<COMMAND>':'` prefix (protocol v5's own grammar, issue §1) so
+    # decode_frame() can scope its CRC check over the real verb, matching
+    # how the line was actually encoded (Comms::sendReply()/
+    # Comms::decodeBinaryFrame(), comms.cpp). No ':' at all is itself
+    # malformed -- every binary verb line always carries one.
+    command, sep, cobs_body = raw_line.partition(b":")
+    if not sep:
+        return _malformed_marker()
+
+    raw_bytes = decode_frame(cobs_body, command=command)
     if raw_bytes is None:
         return _malformed_marker()
 

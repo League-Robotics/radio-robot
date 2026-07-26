@@ -456,6 +456,38 @@ def shaper_config_for_config(cfg: dict):
             float(j_max), float(yaw_jerk_max))
 
 
+def profile_name_for_source(source_path: str) -> str:
+    """The calibration-profile identifier `ID:` reports (sprint 124
+    architecture Decision 4): the active robot JSON's own filename stem
+    (e.g. "tovez_nocal" for "data/robots/tovez_nocal.json"), or
+    "unconfigured" for the "(firmware defaults)" no-JSON-found sentinel
+    `load_robot_config()` returns. See boot_config.h's own
+    `kRobotProfileName` doc comment."""
+    if source_path == "(firmware defaults)":
+        return "unconfigured"
+    return Path(source_path).stem
+
+
+def drivetrain_type_for_config(cfg: dict) -> str:
+    """The drivetrain-type identifier `ID:` reports (sprint 124
+    architecture Decision 4): ``identity.drivetrain_type``
+    (`data/robots/robot_config.schema.json`'s own enum, `["differential",
+    "mecanum"]`), defaulting to `"differential"` per that schema's own
+    documented default when the key is absent (e.g. `tovez_nocal.json`,
+    which never sets it) -- mirrors the schema's own default exactly, not
+    an independently-chosen one. This is the schema's own compile-time
+    drivetrain variant, NOT derived from any wire-level `DrivetrainConfig`
+    field (`half_track` in particular is never baked by
+    `defaultDrivetrainConfig()` -- it stays at its wire default-member-
+    initializer 0.0f for every profile, so it cannot distinguish
+    drivetrain kind; an earlier draft of this ticket's own `main.cpp`
+    change read `half_track` for this purpose, always got `differential`
+    regardless of the profile, and is corrected here to read the JSON
+    field the schema itself designates as authoritative for this
+    question). See boot_config.h's own `kDrivetrainType` doc comment."""
+    return str(_get(cfg, "identity", "drivetrain_type", default="differential"))
+
+
 def generate(cfg: dict, source_path: str) -> str:
     try:
         trackwidth   = trackwidth_for_config(cfg)
@@ -473,6 +505,9 @@ def generate(cfg: dict, source_path: str) -> str:
          shaper_j_max, shaper_yaw_jerk_max) = shaper_config_for_config(cfg)
     except MissingRobotConfigKeyError as e:
         raise e.with_source(source_path) from e
+
+    profile_name = profile_name_for_source(source_path)
+    drivetrain_type = drivetrain_type_for_config(cfg)
 
     calib_lines = "\n".join(
         f"    out[{i}].setTravelCalib({_f(v)});   // [mm/deg] port {i + 1}"
@@ -502,6 +537,17 @@ def generate(cfg: dict, source_path: str) -> str:
 #include "config/boot_config.h"
 
 namespace Config {{
+
+// kRobotProfileName — see boot_config.h's own doc comment (sprint 124
+// architecture Decision 4, `ID:`'s calibration-profile field). Baked from
+// this generator's own source robot JSON path, above.
+const char kRobotProfileName[] = "{profile_name}";
+
+// kDrivetrainType — see boot_config.h's own doc comment (sprint 124
+// architecture Decision 4, `ID:`'s drivetrain-type field). Baked from
+// identity.drivetrain_type (robot JSON), defaulting to "differential"
+// per the schema's own documented default.
+const char kDrivetrainType[] = "{drivetrain_type}";
 
 void defaultMotorConfigs(msg::MotorConfig* out) {{
     // Velocity PID gains — baked from the robot JSON's control.vel_* keys

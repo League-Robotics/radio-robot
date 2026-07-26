@@ -1,6 +1,7 @@
 """robot_radio.io.wire_codec -- host-side mirror of
 ``src/firm/messages/wire_runtime.h``'s COBS + CRC-16/CCITT-FALSE primitives
-(sprint 123 tickets 001/002/003, the atomic COBS+CRC wire cutover).
+(sprint 123 tickets 001/002/003, sprint 124 ticket 005's protocol v5 framing
+grammar cutover).
 
 This is the ONE place the host encodes/decodes the wire's binary framing --
 every producer/consumer of a binary frame (``io/serial_conn.py``,
@@ -12,22 +13,32 @@ byte-level codec at each call site -- mirrors ``wire_runtime.h``'s own
 firmware side (see that file's header comment for the analogous split
 between schema-agnostic bytes and schema-specific field tables).
 
-Replaces the pre-123 ``*B<base64>\\r\\n`` line armor: a binary frame is now
-CRC-then-COBS composed (append the little-endian CRC-16 to the schema
-payload, THEN COBS-encode the combined bytes) and delimited on the wire by a
-single ``0x00`` byte, demuxed from the HELLO/PING text-plane rump
-(``\\r\\n``-terminated lines) on the SAME byte stream -- see
-``comms.h``/``comms.cpp`` (firmware) for the byte-for-byte contract this
-module ports to Python.
+Protocol v5 (124-005, issue protocol-v5-one-line-packets-command-prefix-and-
+newline-cobs.md §1-§3): every wire packet, text or binary, in both
+directions, is exactly one line -- ``<COMMAND>[':' <data>]'\\n'``. A binary
+frame's ``<data>`` is CRC-then-COBS composed (append the little-endian
+CRC-16 to the schema payload, THEN COBS-encode the combined bytes), the CRC
+scoped over ``COMMAND ':' payload`` (not payload alone), and delimited on
+the wire by a single ``0x0A`` (``'\\n'``) byte -- COBS is keyed on 0x0A now,
+not 0x00 (see ``cobs_encode()``'s own docstring for why this makes the
+terminator genuinely unconditional). Which verb a line names, and whether
+its data is cleartext or binary, is looked up in the generated command
+registry (``robot_radio.io.wire_commands``) -- see ``comms.h``/``comms.cpp``
+(firmware) for the byte-for-byte contract this module ports to Python.
 
 Every primitive here is a pure function operating on ``bytes`` in, ``bytes``
 out (or ``None``/an exception on malformed input) -- no I/O, no threading, no
 protobuf-schema knowledge. ``ByteStreamDemuxer`` is the one stateful piece:
 it accumulates raw bytes from a byte-oriented transport (a real serial port,
-a loopback fake, ...) and yields complete text lines or complete binary frame
-bodies, mirroring ``App::Transport::readLine()``'s own demux contract
-(``comms.h``) so the host reads the exact two coexisting frame shapes the
-firmware writes.
+a loopback fake, ...) and yields complete ``'\\n'``-terminated lines,
+mirroring ``App::Transport::readLine()``'s own contract (``comms.h``).
+124-005: this is now a PLAIN split-on-``'\\n'`` -- there is no more text-vs-
+binary demux at this layer at all (that heuristic, ``_looks_like_text()``,
+is deleted, not adapted -- see that function's own former docstring for why
+it existed and why the uniform grammar makes it unnecessary). A real
+transport's own ``readline()`` (e.g. ``pyserial``'s) is safe against this
+wire again for the same reason: a binary line's COBS-encoded bytes never
+contain a literal ``0x0A``.
 
 CRC-16/CCITT-FALSE decision (pinned, ticket 001's completion notes, must
 match byte-for-byte -- there is no negotiation, no version byte):
@@ -39,22 +50,6 @@ match byte-for-byte -- there is no negotiation, no version byte):
 Known-answer vector (CRC RevEng catalogue): ``crc16_ccitt_false(b"123456789")
 == 0x29B1`` -- exercised as an exact-value test, not merely "some CRC
 changed" (see ``src/tests/unit/test_host_wire_codec.py``).
-
-Sprint 124 ticket 003 (protocol v5 Part A, issue §2/§3) extended this module
-again, mirroring ``wire_runtime.h``'s own byte-for-byte changes, with no new
-primitive functions beyond the two named below: ``cobs_encode()``/
-``cobs_decode()`` gained a ``delimiter`` parameter (default ``0x00``, so
-every pre-124 call site keeps computing byte-identical output -- XOR-ing by
-``0x00`` is the identity), and ``crc16_ccitt_false()`` is now built on a new
-incremental ``crc16_init()``/``crc16_update()`` pair so ``encode_frame()``/
-``decode_frame()`` can hash a command-name prefix and a payload together
-(``crc16(COMMAND ':' payload)``) without concatenating the two into one
-``bytes`` object first. Both gained a ``command: bytes = b""`` parameter
-for exactly that -- empty (the default) means "no scope extension",
-``crc16(payload)`` alone, byte-identical to protocol v4's CRC, which is
-what every CURRENT caller still gets: the reply-plane's ASCII verb prefix
-this scope is FOR does not exist on the wire yet (ticket 124-005's own
-grammar cutover), so no existing call site has a command name to pass.
 """
 
 from __future__ import annotations
@@ -74,48 +69,12 @@ __all__ = [
 ]
 
 # Frame delimiter -- the SAME single byte the firmware's transports append
-# after every COBS+CRC frame body (Transport::send()'s own doc comment,
-# comms.h) and the same byte HELLO/PING text lines never contain (0x00 is
-# exclusively the binary-frame delimiter; ASCII text never carries it).
-FRAME_DELIMITER = b"\x00"
-
-# ``_looks_like_text()``'s printable-ASCII alphabet -- see that function's
-# own docstring for the 123-006 rationale (this module's 0x0A-vs-0x00
-# discriminator, the host-side counterpart of serial_port.cpp's
-# kTextCommands EXACT-match discriminator -- see that file's own comment for
-# why the two sides use a DIFFERENT recognizer despite sharing the same
-# 0x00-always-ends-binary/0x0A-conditionally-ends-text demux skeleton).
-# Deliberately printable-ASCII ONLY (0x20-0x7E, space through tilde) -- NOT
-# also tab/other control bytes: every real text-plane line this host
-# receives (DEVICE:.../OK pong.../relay '#'-comment lines) is plain
-# space-separated ASCII with no control bytes, and a short, zero-free COBS
-# frame's own leading code byte is exactly "block length + 1" -- for a
-# short envelope that can easily land on 0x09 (tab) by pure coincidence of
-# length, so admitting tab here would silently readmit the same class of
-# misclassification 123-006 fixed. Keep this alphabet as narrow as the real
-# traffic requires, not broader.
-_TEXT_SAFE_BYTES = frozenset(range(0x20, 0x7F))  # printable ASCII only
-
-
-def _looks_like_text(data: bytes) -> bool:
-    """True if every byte in ``data`` is drawn from ``_TEXT_SAFE_BYTES`` --
-    the alphabet every real text-plane line this host ever receives is made
-    of: the ``DEVICE:...`` banner, the ``OK pong t=<ms>`` reply (both
-    dynamic-content replies to HELLO/PING -- NOT a fixed literal string, so
-    an exact-match check like firmware's own ``kTextCommands`` cannot work
-    here), and the RadioRelay's own ``#``-prefixed command-plane comment
-    lines (``_relay_handshake()``'s pre-``!GO`` traffic, which never
-    contains a single ``0x00`` byte at all).
-
-    A genuine binary COBS+CRC frame's bytes are effectively arbitrary
-    across the full ``0x01``-``0xFF`` range (COBS code bytes, the CRC-16
-    tail, raw protobuf field bytes) -- in practice always containing at
-    least one byte outside this printable range, which is exactly the
-    123-006 bench-surfaced discriminator ``ByteStreamDemuxer.feed()`` uses
-    to decide whether an accumulated ``0x0A`` ends a text line or is
-    ordinary binary content (wait for the frame's own ``0x00``
-    delimiter)."""
-    return all(b in _TEXT_SAFE_BYTES for b in data)
+# after every wire line (Transport::send()'s own doc comment, comms.h),
+# protocol v5 (124-005, issue §2/§7): '\n' (0x0A), not the pre-124 0x00 --
+# COBS is keyed on 0x0A now (see cobs_encode()'s own docstring), so a
+# binary line's own bytes never contain a literal 0x0A, making this
+# terminator genuinely unconditional in both directions.
+FRAME_DELIMITER = b"\n"
 
 # COBS block cap -- WireRuntime::kCobsMaxBlockLength (wire_runtime.h): a
 # block of up to this many non-zero bytes is prefixed by one code byte
@@ -293,36 +252,43 @@ def encode_frame(payload: bytes, command: bytes = b"") -> bytes:
     """Encode ``payload`` (a schema-encoded protobuf message's raw bytes)
     into a COBS+CRC frame body -- CRC-then-COBS composition, matching
     ``Comms::sendReply()``/ticket 001's completion notes EXACTLY (NOT
-    COBS-then-append-CRC, which would risk emitting a literal ``0x00`` if the
-    CRC bytes happen to contain one): append the little-endian CRC-16 to
-    ``payload``, THEN COBS-encode the combined bytes.
+    COBS-then-append-CRC, which would risk emitting a literal delimiter byte
+    if the CRC bytes happen to contain one): append the little-endian CRC-16
+    to ``payload``, THEN COBS-encode the combined bytes with delimiter
+    ``0x0A`` (124-005, issue §2).
 
     ``command`` -- the ASCII command-name bytes (no ``':'`` separator) the
-    CRC's input is scoped to extend over (124-003, issue §3); a SEPARATE
-    argument, never concatenated with ``payload`` before COBS-encoding (the
-    command is NOT part of the COBS input -- only its CRC scope). Defaults
-    to empty, which extends nothing: ``crc16(payload)`` alone, byte-identical
-    to protocol v4's CRC -- every CURRENT caller still passes no command
-    name because the reply/command-plane's ASCII verb prefix this scope is
-    FOR does not exist on the wire yet (ticket 124-005's own grammar
-    cutover).
+    CRC's input is scoped to extend over (124-003/124-005, issue §3); a
+    SEPARATE argument, never concatenated with ``payload`` before
+    COBS-encoding (the command is NOT part of the COBS input -- only its CRC
+    scope). Defaults to empty, which extends nothing: ``crc16(payload)``
+    alone. Every PRODUCTION caller now passes the real registry verb name
+    (e.g. ``b"MOVE"``) -- the wire's own leading ``<COMMAND>':'`` prefix is a
+    SEPARATE concern this function does not build (that's the caller's job,
+    e.g. ``serial_conn.py``'s send paths); this function only scopes the CRC
+    and COBS-encodes the data half.
 
-    Returns the COBS-encoded frame body -- 0x00-free by construction, NOT
-    including the trailing ``0x00`` wire delimiter (append ``FRAME_DELIMITER``
-    yourself when writing to a byte stream, matching
+    Returns the COBS-encoded frame body -- ``0x0A``-free by construction,
+    NOT including the trailing ``'\\n'`` wire delimiter (append
+    ``FRAME_DELIMITER`` yourself when writing to a byte stream, matching
     ``Transport::send()``'s own division of labor: the framer builds the
-    frame body, the concrete transport appends the delimiter)."""
+    frame body, the concrete transport appends the delimiter) and NOT
+    including the leading ``<COMMAND>':'`` prefix either."""
     crc = _crc_over_scope(command, payload)
     combined = payload + bytes((crc & 0xFF, (crc >> 8) & 0xFF))
-    return cobs_encode(combined)
+    return cobs_encode(combined, delimiter=0x0A)
 
 
 def decode_frame(frame: bytes, command: bytes = b"") -> bytes | None:
     """Reverse of ``encode_frame()`` -- byte-for-byte port of
-    ``Comms::decodeBinaryFrame()``: COBS-decode, split off the trailing
-    2-byte little-endian CRC, verify it (CRC-scoped over ``command`` too,
-    per 124-003 -- see ``encode_frame()``'s own doc comment) against the
-    leading payload bytes, and return the payload on success.
+    ``Comms::decodeBinaryFrame()``: COBS-decode (delimiter ``0x0A``,
+    124-005), split off the trailing 2-byte little-endian CRC, verify it
+    (CRC-scoped over ``command`` too, per 124-003/124-005 -- see
+    ``encode_frame()``'s own doc comment) against the leading payload
+    bytes, and return the payload on success. ``frame`` is the COBS body
+    ONLY -- the wire line's leading ``<COMMAND>':'`` prefix must already be
+    stripped off by the caller (that parse is grammar, not this function's
+    job -- see ``serial_conn.py``'s own dispatch).
 
     Returns ``None`` on ANY malformed/corrupt input (malformed COBS, a
     combined-bytes length under 2, or a CRC mismatch -- including a
@@ -334,7 +300,7 @@ def decode_frame(frame: bytes, command: bytes = b"") -> bytes | None:
     ``SerialConnection``'s ``malformed_frame_count`` for the host-side
     counterpart of firmware's ``malformedCount_``)."""
     try:
-        combined = cobs_decode(frame)
+        combined = cobs_decode(frame, delimiter=0x0A)
     except WireFrameError:
         return None
     if len(combined) < 2:
@@ -348,89 +314,48 @@ def decode_frame(frame: bytes, command: bytes = b"") -> bytes | None:
 
 class ByteStreamDemuxer:
     """Accumulates raw bytes from a byte-oriented transport and demuxes them
-    into complete text lines or complete binary COBS+CRC frame bodies --
-    same demux SKELETON as ``App::Transport::readLine()``'s contract
-    (``comms.h``) / ``SerialPort::readLine()``'s concrete implementation
-    (``serial_port.cpp``): ``0x00`` ALWAYS ends a binary frame (COBS
-    guarantees a frame body is 0x00-free by construction). ``0x0A`` ends a
-    TEXT line ONLY when the bytes accumulated before it (a single trailing
-    ``\\r`` stripped) are recognized as text (``_looks_like_text()``);
-    otherwise the ``0x0A`` is binary CONTENT, not a terminator, and
-    accumulation continues to the eventual ``0x00`` delimiter. 123-006
-    bench-surfaced fix: COBS only guarantees 0x00-freedom, never
-    0x0A-freedom -- a prior "whichever terminator comes first" rule split
-    and corrupted any binary frame (e.g. a move_wheels envelope) that
-    happened to embed a literal 0x0A byte, proven 0/10 on hardware.
+    into complete ``'\\n'``-terminated wire LINES -- matches
+    ``App::Transport::readLine()``'s own contract (``comms.h``) /
+    ``SerialPort::readLine()``'s concrete implementation
+    (``serial_port.cpp``): protocol v5's uniform grammar (124-005, issue
+    §1/§7) makes ``'\\n'`` (0x0A) an UNCONDITIONAL terminator in both
+    directions -- there is no more text-vs-binary demux at this layer at
+    all. This is safe because COBS is now keyed on 0x0A (item 8,
+    ``wire_runtime.h``): a binary line's own bytes never contain a literal
+    0x0A, so a plain split-on-``'\\n'`` can never misfire the way the
+    pre-124 0x00-vs-0x0A heuristic (``_looks_like_text()``, DELETED) could.
 
-    NOTE the recognizer itself is NOT a byte-for-byte mirror of firmware's
-    own ``kTextCommands`` exact-match check (``serial_port.cpp``): firmware
-    only ever receives two fixed literal commands inbound (``HELLO``,
-    ``PING`` -- protocol-v4's whole text-plane rump), so an exact-string
-    match is both correct and simplest there. This class instead demuxes
-    bytes arriving FROM the firmware/relay, which are NOT a fixed literal
-    set -- the ``DEVICE:...`` banner and ``OK pong t=<ms>`` reply both carry
-    dynamic content, and the RadioRelay's own pre-``!GO`` ``#``-comment
-    lines (``_relay_handshake()``, ``serial_conn.py``) are free-form too.
-    ``_looks_like_text()``'s printable-ASCII content check is the
-    discriminator that generalizes correctly across all of those shapes
-    while still recognizing genuine binary COBS+CRC content (which is
-    essentially never all-printable) as binary. See that function's own
-    docstring.
-
-    This is the piece that makes the host's serial reads safe against a
-    binary frame that happens to embed a literal ``\\n`` (0x0A) as legitimate
-    COBS+CRC content -- unlike the pre-123 base64 armor (whose alphabet
-    excludes 0x0A by construction), a raw ``pyserial.Serial.readline()`` call
-    is NOT safe to use directly against this wire any more; every raw read
-    must go through an instance of this class first.
+    Collapsed from the pre-124-005 two-terminator skeleton (0x00 always
+    ended a binary frame, 0x0A conditionally ended a text line depending on
+    printable-ASCII content) to this single rule specifically because
+    123-006 proved the OLD skeleton could misclassify: a ``move_wheels``
+    envelope embedding a literal 0x0A byte was split and corrupted 0/10 on
+    hardware. Under the new grammar that failure mode cannot recur -- the
+    terminator really is unconditional now, which is also why a real
+    transport's own ``readline()`` (e.g. ``pyserial``'s) is safe to use
+    directly against this wire again; this class is retained for the
+    non-blocking partial-chunk buffering ``_reader_loop()``'s own
+    ``ser.read(n)``-based polling still needs, not because a plain
+    ``readline()`` would be unsafe any more.
     """
 
     def __init__(self) -> None:
         self._buf = bytearray()
 
-    def feed(self, data: bytes) -> "list[tuple[str, bytes]]":
+    def feed(self, data: bytes) -> "list[bytes]":
         """Append ``data`` to the internal buffer; return every complete
-        frame now available, in wire order, as ``(kind, payload)`` tuples --
-        ``kind`` is ``"text"`` (payload is the line's bytes, a single
-        trailing ``\\r`` stripped, delimiting ``\\n`` consumed) or
-        ``"binary"`` (payload is the still-COBS+CRC-encoded frame body, the
-        delimiting ``0x00`` consumed -- decode it with ``decode_frame()``).
-        Never partially delivers a frame; leftover undelimited bytes stay
-        buffered for the next ``feed()`` call. See this class's own
-        docstring for the ``0x00``-vs-``0x0A`` discrimination rule."""
+        line now available, in wire order -- ``'\\n'`` consumed, NOT
+        included. Never partially delivers a line; leftover undelimited
+        bytes stay buffered for the next ``feed()`` call. A caller
+        classifies each returned line as cleartext or binary by parsing its
+        own ``<COMMAND>`` prefix and looking it up in the registry
+        (``robot_radio.io.wire_commands``) -- this class has no opinion."""
         self._buf.extend(data)
-        out: "list[tuple[str, bytes]]" = []
+        out: "list[bytes]" = []
         while True:
-            idx_bin = self._buf.find(0x00)
-            idx_text = self._buf.find(0x0A)
-            if idx_bin == -1 and idx_text == -1:
+            idx = self._buf.find(0x0A)
+            if idx == -1:
                 break
-            # A 0x00 is present: everything up to it is ONE binary frame,
-            # UNLESS a text line ends (at a 0x0A) strictly before it.
-            if idx_bin != -1:
-                if idx_text != -1 and idx_text < idx_bin:
-                    line = bytes(self._buf[:idx_text])
-                    if line.endswith(b"\r"):
-                        line = line[:-1]
-                    if _looks_like_text(line):
-                        del self._buf[:idx_text + 1]
-                        out.append(("text", line))
-                        continue
-                    # else: the 0x0A is binary content -- fall through to
-                    # the 0x00 split below.
-                frame = bytes(self._buf[:idx_bin])
-                del self._buf[:idx_bin + 1]
-                out.append(("binary", frame))
-                continue
-            # No 0x00 yet: only a 0x0A is present. It's a text line if it
-            # looks like text; otherwise this is an incomplete binary frame
-            # -- stop and wait for its 0x00 delimiter.
-            line = bytes(self._buf[:idx_text])
-            if line.endswith(b"\r"):
-                line = line[:-1]
-            if _looks_like_text(line):
-                del self._buf[:idx_text + 1]
-                out.append(("text", line))
-                continue
-            break
+            out.append(bytes(self._buf[:idx]))
+            del self._buf[:idx + 1]
         return out

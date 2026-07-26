@@ -10,7 +10,7 @@ Algorithm (NTP-style min-RTT filtering)
 For each PING exchange:
   - T0  = host monotonic time (ms) *before* sending PING
   - T1  = host monotonic time (ms) *after* receiving the reply
-  - t_r = robot clock (ms) parsed from "OK pong t=<t_r>"
+  - t_r = robot clock (ms) parsed from "PONG:t=<t_r>" (protocol v5, 124-005)
 
 Assuming a roughly symmetric link delay, the robot clock stamp `t_r`
 corresponds to host mid-time ``(T0+T1)/2``.  Therefore:
@@ -110,7 +110,7 @@ class ClockSync:
         Args:
             t0: Host monotonic time in ms *before* the PING was sent.
             t1: Host monotonic time in ms *after* the pong reply arrived.
-            t_robot: Robot clock stamp (ms) from ``OK pong t=<n>``.
+            t_robot: Robot clock stamp (ms) from ``PONG:t=<n>`` (protocol v5, 124-005).
         """
         sample = _PingSample(t0=t0, t1=t1, t_robot=t_robot)
         self._samples.append(sample)
@@ -171,7 +171,7 @@ class ClockSync:
         """Fire *n* PINGs and update the internal offset estimate.
 
         ``send_fn`` must accept a command string and return the raw reply
-        line (e.g. ``"OK pong t=12345"``), or ``None``/empty on timeout.
+        line (e.g. ``"PONG:t=12345"``, protocol v5), or ``None``/empty on timeout.
 
         Samples from this burst are *appended* to any prior samples so the
         skew regression can span multiple bursts.  If fewer than 1 sample
@@ -339,14 +339,23 @@ class ClockSync:
 # ---------------------------------------------------------------------------
 
 def _parse_pong_t(line: str) -> int | None:
-    """Extract ``t`` integer from an ``OK pong t=<n>`` reply line.
+    """Extract ``t`` integer from a ``PONG:t=<n>`` reply line (protocol v5,
+    124-005 -- replaces the pre-v5 ``"OK pong t=<n>"`` shape: the verb and
+    its data are colon-joined now, not space-joined, so ``t=<n>`` is no
+    longer its own whitespace token without help).
 
     Returns the robot timestamp (int ms) or None if parsing fails.
     Handles relay prefix stripping (leading ``< ``).
     """
     stripped = line.strip().lstrip("<# ").strip()
-    # Fast path: look for "t=" token.
-    for tok in stripped.split():
+    # Normalize the (optional) leading "VERB:" into a token boundary --
+    # replacing just the FIRST ':' with a space turns "PONG:t=123" into
+    # "PONG t=123" before tokenizing, so a colon-joined verb prefix and a
+    # bare, colon-less "t=123" both tokenize the same way below. Protocol
+    # v5's own grammar (issue §1) guarantees at most one meaningful ':' at
+    # this position (data itself never legitimately contains one here).
+    normalized = stripped.replace(":", " ", 1)
+    for tok in normalized.split():
         if tok.startswith("t="):
             val = tok[2:]
             try:

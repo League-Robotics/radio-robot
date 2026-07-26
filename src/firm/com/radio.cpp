@@ -33,8 +33,9 @@ int Radio::setChannel(int channel) {
 
 // Reassemble §5 fragments in place. Runs in the radio datagram ISR context.
 // Binary-clean by construction (raw memcpy, no byte-level interpretation) --
-// unchanged by 123-002; only the trailing-byte CONVENTION each sender
-// appends (0x00 binary / '\n' text) and poll()'s own demux of it changed.
+// unchanged since 123-002; 124-005 only changed the trailing-byte
+// CONVENTION (every sender now appends a single '\n', converged from the
+// old 0x00-binary/'\n'-text split) and poll()'s own demux of it.
 void Radio::onData(MicroBitEvent) {
     Radio* self = _instance;
     if (!self) return;
@@ -74,22 +75,17 @@ void Radio::onData(MicroBitEvent) {
     }
 }
 
-Radio::FrameKind Radio::poll(char* buf, uint16_t cap, uint16_t* outLen) {
-    if (!_msgReady) return FrameKind::kNone;
+bool Radio::poll(char* buf, uint16_t cap, uint16_t* outLen) {
+    if (!_msgReady) return false;
 
+    // 124-005: UNCONDITIONAL terminator -- every sender (send(), the sole
+    // outbound path now) appends exactly one trailing '\n'; strip it here.
+    // No '\r' stripping -- a binary line may legitimately carry 0x0D as
+    // content; App::Comms::dispatchLine() strips a trailing '\r' only once
+    // it has classified the line as cleartext (see this class's own file
+    // header).
     int contentLen = _msgLen;
-    FrameKind kind;
-    // Frame kind is determined by the trailing byte the SENDER appended --
-    // send() (binary) appends 0x00; sendText() (HELLO/PING replies)
-    // appends '\n' -- see this class's own file header.
-    if (contentLen > 0 && static_cast<uint8_t>(_msg[contentLen - 1]) == 0x00) {
-        kind = FrameKind::kBinary;
-        --contentLen;   // exclude the delimiter itself
-    } else {
-        kind = FrameKind::kText;
-        if (contentLen > 0 && _msg[contentLen - 1] == '\n') --contentLen;
-        if (contentLen > 0 && _msg[contentLen - 1] == '\r') --contentLen;
-    }
+    if (contentLen > 0 && _msg[contentLen - 1] == '\n') --contentLen;
 
     uint16_t out = static_cast<uint16_t>(contentLen);
     if (out >= cap) out = cap - 1;
@@ -97,13 +93,15 @@ Radio::FrameKind Radio::poll(char* buf, uint16_t cap, uint16_t* outLen) {
     buf[out] = '\0';
     if (outLen) *outLen = out;
     _msgReady = false;   // release the slot for the next message
-    return kind;
+    return true;
 }
 
 // Shared fragmentation body -- `payload[0..payloadLen)` already carries its
-// own trailing delimiter byte (0x00 or '\n', appended by send()/sendText()
-// respectively) as its LAST byte; this function only knows about RAW250
-// fragment framing, never about what the trailing byte means.
+// own trailing '\n' delimiter (124-005: the one terminator every outbound
+// line uses now, appended by send() itself -- the former sendText() this
+// comment used to also credit is deleted, see this file's own header) as
+// its LAST byte; this function only knows about RAW250 fragment framing,
+// never about what the trailing byte means.
 void Radio::sendFragmented(const uint8_t* payload, int payloadLen) {
     int off = 0;
     bool first = true;
@@ -130,27 +128,17 @@ void Radio::sendFragmented(const uint8_t* payload, int payloadLen) {
 }
 
 void Radio::send(const uint8_t* data, uint16_t len) {
-    // Binary COBS+CRC frame body + trailing 0x00 delimiter -- see this
-    // class's own file header. Payload buffer generously covers
-    // App::kFramedMaxBytes (192) + 1 delimiter with headroom; truncates
-    // (rather than overflows) on an over-length caller, mirroring
-    // SerialPort::send()'s own defensive truncation.
+    // `data`/`len` is the full wire LINE content (a command-prefixed COBS
+    // body, or a cleartext reply -- App::Comms builds either shape the
+    // same way before handing it here) + a single trailing '\n' delimiter
+    // -- the ONE terminator every outbound line uses now (124-005, issue
+    // §7 -- see this class's own file header). Payload buffer generously
+    // covers App::kMaxLineBytes (207) + 1 delimiter with headroom;
+    // truncates (rather than overflows) on an over-length caller,
+    // mirroring SerialPort::send()'s own defensive truncation.
     uint8_t payload[256];
     uint16_t n = (len < sizeof(payload) - 1) ? len : (uint16_t)(sizeof(payload) - 1);
     if (n > 0) memcpy(payload, data, n);
-    payload[n] = 0x00;
-    sendFragmented(payload, static_cast<int>(n) + 1);
-}
-
-void Radio::sendText(const char* msg) {
-    // Text-plane reply (HELLO banner / PING pong) + trailing '\n' -- the
-    // SAME terminator `send()` appended for everything pre-123 (see this
-    // class's own file header for why the embedded newline is required
-    // after `!GO`).
-    uint8_t payload[256];
-    size_t n = strlen(msg);
-    if (n > sizeof(payload) - 1) n = sizeof(payload) - 1;
-    if (n > 0) memcpy(payload, msg, n);
-    payload[n] = (uint8_t)'\n';
+    payload[n] = '\n';
     sendFragmented(payload, static_cast<int>(n) + 1);
 }

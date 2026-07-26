@@ -62,6 +62,17 @@ def _new_conn() -> SerialConnection:
     return SerialConnection()
 
 
+def _reply_command(envelope: "envelope_pb2.ReplyEnvelope") -> bytes:
+    """The ASCII wire-verb name for a populated ``pb2.ReplyEnvelope``
+    (124-005) -- see ``test_serial_conn_binary_plane.py``'s identically-named
+    helper. ``TelemetrySecondary`` reuses the SAME "TLM" verb as the primary
+    frame (telemetry.cpp's own doc comment: no separate registry verb exists
+    for it) -- callers below pass ``b"TLM"`` directly for that shape."""
+    which = envelope.WhichOneof("body")
+    assert which is not None, "test envelope must populate a body oneof arm"
+    return which.upper().encode("ascii")
+
+
 def _synthetic_secondary(**kwargs) -> "telemetry_pb2.TelemetrySecondary":
     defaults = dict(
         now=12345,
@@ -88,7 +99,7 @@ def test_telemetry_secondary_round_trips_every_field_through_reader_loop():
     conn = _new_conn()
     secondary = _synthetic_secondary()
 
-    conn._ser = FakeSerial(binary_frame(secondary))
+    conn._ser = FakeSerial(binary_frame(secondary, b"TLM"))
     conn._reader_loop()
 
     decoded = conn._binary_secondary_queue.get_nowait()
@@ -110,7 +121,7 @@ def test_telemetry_secondary_has_cmd_vel_false_round_trips():
     secondary = _synthetic_secondary(has_cmd_vel=False, cmd_vel_left=0.0,
                                       cmd_vel_right=0.0)
 
-    conn._ser = FakeSerial(binary_frame(secondary))
+    conn._ser = FakeSerial(binary_frame(secondary, b"TLM"))
     conn._reader_loop()
 
     decoded = conn._binary_secondary_queue.get_nowait()
@@ -143,7 +154,8 @@ def test_reply_envelope_lines_still_route_normally_alongside_telemetry_secondary
     secondary = _synthetic_secondary(now=999)
 
     conn._ser = FakeSerial(
-        binary_frame(ack) + binary_frame(secondary) + binary_frame(push))
+        binary_frame(ack, _reply_command(ack)) + binary_frame(secondary, b"TLM")
+        + binary_frame(push, _reply_command(push)))
     conn._reader_loop()
 
     ack_reply = reply_q.get_nowait()
@@ -169,7 +181,7 @@ def test_telemetry_secondary_never_registers_a_reply_queue_entry():
     path never touches _reply_queues (there is nothing to key a lookup by)."""
     conn = _new_conn()
 
-    conn._ser = FakeSerial(binary_frame(_synthetic_secondary()))
+    conn._ser = FakeSerial(binary_frame(_synthetic_secondary(), b"TLM"))
     conn._reader_loop()
 
     assert conn._reply_queues == {}
@@ -182,7 +194,7 @@ def test_malformed_binary_frame_still_dropped_not_misrouted_to_secondary_queue()
     reader thread and not land in either queue."""
     conn = _new_conn()
 
-    conn._ser = FakeSerial(b"not-a-valid-cobs-crc-frame-body" + b"\x00")
+    conn._ser = FakeSerial(b"TLM:not-a-valid-cobs-crc-frame-body" + b"\n")
     conn._reader_loop()  # must not raise
 
     assert conn._binary_tlm_queue.empty()
@@ -254,9 +266,12 @@ def test_binary_secondary_queue_drops_oldest_on_overflow():
     conn._binary_secondary_queue = queue.Queue(maxsize=3)
 
     for now in range(5):
-        # _handle_binary_reply() takes the frame BODY (trailing 0x00
-        # delimiter already stripped by the demuxer in the real reader loop).
-        conn._handle_binary_reply(binary_frame(_synthetic_secondary(now=now))[:-1])
+        # binary_frame() returns the FULL line ("TLM:<cobs bytes>\n") --
+        # strip the "TLM:" prefix and the trailing '\n' delimiter, since
+        # _handle_binary_reply() (124-005) takes the COBS body and the
+        # command bytes as two SEPARATE arguments.
+        line = binary_frame(_synthetic_secondary(now=now), b"TLM")
+        conn._handle_binary_reply(line[len(b"TLM:"):-1], b"TLM")
 
     remaining = []
     while not conn._binary_secondary_queue.empty():

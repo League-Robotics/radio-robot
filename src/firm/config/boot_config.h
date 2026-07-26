@@ -28,6 +28,31 @@ void defaultMotorConfigs(msg::MotorConfig* out);
 // and the drive-pair port binding.
 msg::DrivetrainConfig defaultDrivetrainConfig();
 
+// kRobotProfileName — the calibration-profile identifier baked in at
+// codegen time: the active robot JSON's own filename stem (e.g.
+// "tovez_nocal" for data/robots/tovez_nocal.json), or "unconfigured" when
+// no robot JSON was found (gen_boot_config.py's own "(firmware defaults)"
+// sentinel path). Sprint 124 architecture Decision 4: `ID:`'s reply
+// content (App::Comms, comms.cpp) reports this alongside kDrivetrainType
+// below — distinct from `DEVICE:`'s own hardware identity (formatBanner(),
+// com/banner.cpp). One new generated string constant, the same pattern
+// types/version_generated.h already established for FIRMWARE_VERSION_STR
+// — zero new generator machinery.
+extern const char kRobotProfileName[];
+
+// kDrivetrainType — "differential" or "mecanum" (the robot JSON's own
+// identity.drivetrain_type enum, robot_config.schema.json, defaulting to
+// "differential" per that schema's own documented default when the key
+// is absent). Sprint 124 architecture Decision 4: `ID:`'s other field,
+// alongside kRobotProfileName above. Deliberately NOT derived from any
+// wire-level msg::DrivetrainConfig field — defaultDrivetrainConfig()
+// never bakes DrivetrainConfig::half_track (it keeps its wire
+// default-member-initializer 0.0f for every profile), so that field
+// cannot answer this question; this string constant is baked directly
+// from the schema's own authoritative field instead (gen_boot_config.py's
+// drivetrain_type_for_config()).
+extern const char kDrivetrainType[];
+
 // The OTOS lever-arm mounting offset plus linear/angular scale multipliers,
 // baked from the active robot JSON's geometry.odometry_offset_mm
 // (x/y/yaw_rad) and calibration.otos_linear_scale/otos_angular_scale.

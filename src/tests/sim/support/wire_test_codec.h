@@ -83,13 +83,19 @@ struct DecodedLine {
   msg::TelemetrySecondary secondary = {};  // valid when kind == kSecondary
 };
 
-// Dearmors (COBS+CRC, 123-002 -- was "*B" + base64 pre-123) and decodes ONE
-// outbound frame -- exactly what a FakeTransport::sent() entry holds (a raw
-// frame body, NOT NUL-terminated text). Returns kind == kUnknown (all other
-// fields default-constructed) on anything that isn't a well-formed instance
-// of one of the two shapes above -- a malformed/truncated/CRC-mismatched
-// frame, or (since sentReliable()'s plain-text HELLO/PING replies are a
-// SEPARATE capture, never routed through this decoder) any other bytes.
+// Dearmors (COBS+CRC, delimiter 0x0A -- 124-005) and decodes ONE outbound
+// LINE -- exactly what a FakeTransport::sent() entry holds: the full
+// `<COMMAND>':'<COBS+CRC bytes>` content App::Comms::sendReply()/
+// Telemetry::emitSecondary() build (the trailing '\n' terminator is a
+// transport concern, never included). Strips the `<COMMAND>':'` prefix
+// (always "TLM" in practice -- App::Telemetry never emits OK/ERR) and
+// verifies the CRC scoped over it, mirroring Comms::decodeBinaryFrame()'s
+// own composition. Returns kind == kUnknown (all other fields
+// default-constructed) on anything that isn't a well-formed instance of
+// one of the two shapes above -- a malformed/truncated/CRC-mismatched
+// line, no ':' at all, or (since sentReliable()'s plain-text HELLO/PING/
+// ID/VER replies are a SEPARATE capture, never routed through this
+// decoder) any other bytes.
 DecodedLine decodeOutboundLine(const std::string& line);
 
 // --- Inbound encode (host -> firmware) --------------------------------

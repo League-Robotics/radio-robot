@@ -11,6 +11,17 @@
 
 namespace Config {
 
+// kRobotProfileName — see boot_config.h's own doc comment (sprint 124
+// architecture Decision 4, `ID:`'s calibration-profile field). Baked from
+// this generator's own source robot JSON path, above.
+const char kRobotProfileName[] = "tovez_nocal";
+
+// kDrivetrainType — see boot_config.h's own doc comment (sprint 124
+// architecture Decision 4, `ID:`'s drivetrain-type field). Baked from
+// identity.drivetrain_type (robot JSON), defaulting to "differential"
+// per the schema's own documented default.
+const char kDrivetrainType[] = "differential";
+
 void defaultMotorConfigs(msg::MotorConfig* out) {
     // Velocity PID gains — baked from the robot JSON's control.vel_* keys
     // (093: now in the NezhaMotor duty [-1,1] plant scale, see the JSON's
