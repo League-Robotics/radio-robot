@@ -1,9 +1,11 @@
 ---
 id: '007'
 title: 'RobotState struct: src/firm/types/robot_state.h, the dependency-free blackboard'
-status: open
-use-cases: [SUC-004]
-depends-on: ['002']
+status: in-progress
+use-cases:
+- SUC-004
+depends-on:
+- '002'
 github-issue: ''
 issue: robot-state-blackboard-one-struct-for-all-shared-state-and-telemetry.md
 completes_issue: true
