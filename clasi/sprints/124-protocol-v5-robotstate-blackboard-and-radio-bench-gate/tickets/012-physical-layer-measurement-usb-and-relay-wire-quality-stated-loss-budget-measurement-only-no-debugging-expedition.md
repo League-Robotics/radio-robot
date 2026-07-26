@@ -2,9 +2,12 @@
 id: '012'
 title: 'Physical-layer measurement: USB and relay wire quality, stated loss budget
   (measurement only, no debugging expedition)'
-status: open
-use-cases: [SUC-007]
-depends-on: ['005', '010']
+status: in-progress
+use-cases:
+- SUC-007
+depends-on:
+- '005'
+- '010'
 github-issue: ''
 issue: telemetry-physical-layer-corruption-and-move-ack-observability.md
 completes_issue: true
