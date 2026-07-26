@@ -2,7 +2,7 @@
 id: '005'
 title: 'Framing grammar cutover: uniform command/reply lines, PONG/ID/VER, deletion
   of the old text/binary heuristics'
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 depends-on:

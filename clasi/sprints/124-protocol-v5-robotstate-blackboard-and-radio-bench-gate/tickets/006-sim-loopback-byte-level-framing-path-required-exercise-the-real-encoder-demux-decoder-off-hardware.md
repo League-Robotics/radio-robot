@@ -2,9 +2,11 @@
 id: '006'
 title: 'Sim/loopback byte-level framing path (REQUIRED): exercise the real encoder/demux/decoder
   off-hardware'
-status: open
-use-cases: [SUC-003]
-depends-on: ['005']
+status: in-progress
+use-cases:
+- SUC-003
+depends-on:
+- '005'
 github-issue: ''
 issue:
 - telemetry-physical-layer-corruption-and-move-ack-observability.md
