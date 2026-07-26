@@ -2,9 +2,18 @@
 id: '013'
 title: 'Radio-relay standing bench gate: banner, HELLO/PING, move_wheels start/stop,
   encoder climb, acks, wire-quality vs budget'
-status: open
-use-cases: [SUC-007, SUC-008]
-depends-on: ['005', '006', '008', '009', '010', '011', '012']
+status: in-progress
+use-cases:
+- SUC-007
+- SUC-008
+depends-on:
+- '005'
+- '006'
+- 008
+- 009
+- '010'
+- '011'
+- '012'
 github-issue: ''
 issue:
 - protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md
