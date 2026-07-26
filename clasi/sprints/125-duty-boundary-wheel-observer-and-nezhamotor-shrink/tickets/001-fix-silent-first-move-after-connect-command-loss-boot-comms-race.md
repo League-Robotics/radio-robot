@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Fix silent first-MOVE-after-connect command loss (boot/comms race)
-status: open
+status: done
 use-cases:
 - SUC-009
 depends-on: []
@@ -51,29 +51,94 @@ other ticket in this sprint touches `robot_loop.cpp`.
 
 ## Acceptance Criteria
 
-- [ ] Root cause confirmed with evidence (verbose `on_send`/`on_recv`
+- [x] Root cause confirmed with evidence (verbose `on_send`/`on_recv`
       logging and/or `Comms::malformedCount()`/`kFlagFaultCommsMalformed`
       inspection around the drop) — state definitively whether the bytes
       never arrived, arrived but failed to decode, or decoded but were
       discarded by the configuration-completeness/queue-readiness gate.
-- [ ] Fix lands such that a `MOVE` arriving before the robot is fully
+      **Confirmed: decoded cleanly, then discarded.** `RobotLoop::boot()`
+      called `comms_.pump(bootCmd, ...)` every preamble-probe pass, but
+      `bootCmd` was a throwaway loop-local never handed to
+      `processMessage()`/any handler — a fully-decoded command was simply
+      dropped, no ack of any kind. A hardware timing probe
+      (`boot_race_probe.py`, sends the SAME first `MOVE`
+      `move_protocol_bench.py` sends, immediately after `connect()`
+      returns) proved the race is real and reliable: 4/5 timed runs showed
+      `connect()` returning in 25-120ms while `kFlagEventBootReady` did not
+      appear until ~1.2-1.3s later (device-probe retries), so the MOVE
+      landed squarely inside `boot()`'s own pump window. `TLMFrame.
+      fault_malformed_frame`/`Comms::malformedCount()` never fired in any
+      run, proving the bytes were NOT corrupt and DID decode — this is a
+      discard-after-decode, not a link/decode failure.
+- [x] Fix lands such that a `MOVE` arriving before the robot is fully
       ready is EITHER accepted and executed OR explicitly rejected with
       `ERR_NOT_CONFIGURED` (or an equivalent explicit error) — never
       silently dropped with no ack of any kind.
-- [ ] **[off-hardware]** A sim/`motion_tests` regression test constructs
+      **Landed: explicit rejection.** `RobotLoop::rejectDuringBoot()`
+      (`src/firm/app/robot_loop.{h,cpp}`) acks `ERR_NOT_CONFIGURED` for any
+      command `comms_.pump()` decodes during `boot()`'s own while loop,
+      mirroring `handleMove()`'s existing `configured_` gate but applied
+      uniformly to MOVE/CONFIG/STOP alike (boot() never dispatches into
+      `handleMove()`/`handleConfig()`/`handleStop()` — none of
+      `moveQueue_`/`motorL_`/`motorR_`/`otos_` are safe to act on before
+      `Preamble::done()`, so executing early was rejected as the chosen
+      branch, not just rejected-with-error as a fallback).
+- [x] **[off-hardware]** A sim/`motion_tests` regression test constructs
       the same race window (a `MOVE` arriving during `boot()`'s pump
       window, before `configured_` flips true) and asserts one of the two
       outcomes above, never a silent drop.
-- [ ] **[stand-required, USB]** `move_protocol_bench.py`'s
+      `scenarioMoveArrivingDuringBootIsExplicitlyRejectedNeverSilentlyDropped()`
+      in `src/tests/sim/unit/app_robot_loop_harness.cpp` (registered in
+      `main()`, run by `test_app_robot_loop.py` /
+      `uv run python -m pytest`): injects a MOVE via `FakeTransport`
+      BEFORE calling `robotLoop.boot()` at all, on a virtual clock (no
+      real-time flakiness), so `boot()`'s own FIRST `comms_.pump()` call
+      decodes it while `preamble_.done()` is provably still false (5
+      productive `step()` calls still needed). Asserts the ack is
+      observed (never absent) with `err == ERR_NOT_CONFIGURED`, and that
+      `MoveQueue` stays untouched. `markConfigured()` is called on the
+      fixture too, matching real firmware's own `main.cpp` ordering
+      (`markConfigured()` runs BEFORE `run()`), so the scenario proves the
+      fix against the same state real firmware boots into, not a fixture
+      where the `configured_` gate would coincidentally also refuse the
+      command for an unrelated reason.
+- [x] **[stand-required, USB]** `move_protocol_bench.py`'s
       `scenario_distance_stop` acks and executes on the first `MOVE`
       after a fresh connect, 5/5 runs — positive evidence: 5 observed
       acks + 5 observed nonzero encoder deltas.
-- [ ] **[stand-required, USB]** A full `move_protocol_bench.py` run shows
+      **5/5, all executed** (traveled 204.9mm / 206.2mm / 206.2mm /
+      206.2mm / 209.1mm — commanded 200mm, tolerance ±20%). This required
+      ONE additional change beyond the firmware fix: `move_protocol_bench.py`
+      itself sent its first `MOVE` immediately after `connect()` returned,
+      which (per the root-cause evidence above) can be well before the
+      robot is actually ready — an explicit `ERR_NOT_CONFIGURED` ack is
+      correct-and-observable but still does not EXECUTE the move. Added
+      `_wait_for_boot_ready()` (polls `Telemetry.flags` bit 11,
+      `kFlagEventBootReady`, before the first scenario runs) — the bench
+      script's own pre-existing premature-send gap, now closed at its
+      true origin (the host waiting for actual readiness) rather than
+      papered over by having firmware execute early against un-probed
+      devices.
+- [x] **[stand-required, USB]** A full `move_protocol_bench.py` run shows
       zero unexplained enqueue-ack losses across all scenarios (this
       session's own baseline: 34/43-39/43 across five runs) — state
       whether the fix closed the additional intermittent losses too, or
       whether they are a separate, still-open defect (do not claim closure
       of a mechanism not actually confirmed fixed).
+      **Not closed — confirmed separate and still open.** Post-fix tallies
+      across 5 runs: 41/43, 41/43, 38/43, 42/43, 38/43 (better than the
+      34-39/43 baseline, likely just noise/incidental — the boot race this
+      ticket targets is gone, corr_id=1's scenario_distance_stop is now
+      clean 5/5). Every remaining `[FAIL]` in these 5 runs is an
+      `ack=None` on a scenario AFTER `scenario_distance_stop`
+      (`scenario_angle_stop`, `scenario_chaining_seamless`,
+      `scenario_err_full`, `scenario_stop_mid_motion`) — i.e. mid-session
+      losses unrelated to the boot window this ticket fixes, matching
+      `bench-move-commands-intermittently-never-reach-firmware.md`'s own
+      prior finding that this is a pre-existing, separate bench-link gap
+      (its root-cause-isolation section already proved it predates and is
+      independent of the ack-ring). Left open for a future ticket/issue —
+      not claimed fixed here.
 
 ## Testing
 

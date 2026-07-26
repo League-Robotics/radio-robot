@@ -170,6 +170,25 @@ class RobotLoop {
   void handleConfig(const msg::CommandEnvelope& env);
   void handleStop(const msg::CommandEnvelope& env);
 
+  // rejectDuringBoot (125-001, bench-move-commands-intermittently-never-
+  // reach-firmware.md): boot()'s own comms_.pump() call decodes commands
+  // exactly like cycle()'s does, but boot() has no live moveQueue_/motorL_/
+  // motorR_/otos_ state ready to safely act on yet -- devices are still
+  // being probed. Before this ticket, boot() handed the decoded Cmd to a
+  // throwaway local and never acked it at all: a command arriving in the
+  // boot window (measured, real hardware: banner+HELLO/PING classify can
+  // return well before Preamble::done(), a multi-hundred-ms-to-~1.3s
+  // window depending on device-probe retries) was silently discarded --
+  // indistinguishable, from the host's own point of view, from bytes that
+  // never arrived at all. This is boot()'s own equivalent of handleMove()'s
+  // configured_ gate: any command decoded during boot() is explicitly
+  // rejected with ERR_NOT_CONFIGURED (never executed early, never silently
+  // dropped) -- a caller can observe the ack and retry once ready, exactly
+  // the DoD this ticket sets ("EITHER accepted and executed OR explicitly
+  // rejected ... never silently dropped with no ack of any kind"). A no-op
+  // when cmd.status != CmdStatus::kDecoded (nothing was decoded this pass).
+  void rejectDuringBoot(const Cmd& cmd);
+
   // --- CONFIG appliers (114-004) -- the merge-then-apply logic
   // handleConfig()'s own MOTOR/OTOS branches use, factored out so
   // reapplyPersistedTuning() (boot-triggered) and handleConfig()

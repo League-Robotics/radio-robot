@@ -1118,6 +1118,129 @@ bool stepUntilAckSeen(LiveFixture& fx, uint32_t corrId, uint32_t expectedErrCode
 }
 
 // ===========================================================================
+// 125-001 (bench-move-commands-intermittently-never-reach-firmware.md,
+// sprint 125's Decision 10): the first-MOVE-after-connect boot race.
+// boot()'s own comms_.pump() call decodes commands exactly like cycle()'s
+// does, but PRE-FIX, a command decoded during boot() was handed to a
+// throwaway boot-local Cmd and never acked at all -- a silent drop
+// indistinguishable, from the host's own point of view, from bytes that
+// never arrived (the measured hardware symptom: `move_protocol_bench.py`'s
+// scenario_distance_stop, corr_id=1, got ack=None AND zero encoder movement
+// before AND after, 5/5 runs). Root cause, confirmed against real hardware
+// (a diagnostic probe timing connect()'s own HELLO-classify/PING-poll
+// return against Preamble::done()): SerialConnection.connect() can return
+// (and did, 4/5 timed runs) BEFORE Preamble::done() -- HELLO/PING both
+// answer straight out of boot()'s own pump() loop, well before every device
+// probe finishes -- so a MOVE sent immediately after connect() lands
+// squarely in boot()'s pump window. `fault_malformed_frame`/
+// `Comms::malformedCount()` never fired in any of those hardware runs,
+// confirming the bytes decoded CLEANLY -- this is a discard-after-decode,
+// not link corruption or a decode failure.
+//
+// This scenario constructs the SAME race window deterministically, on a
+// virtual clock (no real-time flakiness, per this ticket's own Testing
+// section: "virtual clock -- do not rely on real timing flakiness to
+// reproduce it in CI"): injects a MOVE via FakeTransport BEFORE calling
+// robotLoop.boot() at all, so boot()'s own FIRST comms_.pump() call (ahead
+// of preamble_.step()'s first PRODUCTIVE call -- the power-settle no-op
+// already ran, exactly mirroring scenarioBootThenAFewCyclesRunToCompletion()
+// above's own derivation) decodes it while preamble_.done() is still
+// false -- 5 productive step() calls (motorL/motorR/otos/color/line) are
+// still needed before boot() returns. Asserts rejectDuringBoot()'s fix: an
+// EXPLICIT ERR_NOT_CONFIGURED ack (never a silent drop) and MoveQueue left
+// untouched (boot() never dispatches into handleMove() -- devices are not
+// yet probed, so executing early is not the other DoD-acceptable outcome
+// here; mirrors handleMove()'s own configured_ gate, applied uniformly to
+// every command kind during boot()).
+// ===========================================================================
+
+void scenarioMoveArrivingDuringBootIsExplicitlyRejectedNeverSilentlyDropped() {
+  beginScenario("MOVE arriving during boot()'s own pump window: explicit "
+                "ERR_NOT_CONFIGURED ack, never a silent drop (125-001)");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  TestSim::SimClock clock;
+  TestSim::SimSleeper sleeper;
+
+  Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
+  Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
+  Devices::RealOtos otos(plant, Devices::OtosConfig{});
+  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
+  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+
+  TestSupport::FakeTransport serialFake;
+  TestSupport::FakeTransport radioFake;
+  App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
+  App::Telemetry tlm(comms);
+  App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
+  Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
+  Motion::StateEstimator stateEstimator;
+  Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
+  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+
+  // Same power-settle sequencing as scenarioBootThenAFewCyclesRunToCompletion()
+  // above: one no-op step() at t=0 latches Preamble's own start time; jumping
+  // the clock to 50000 (>= kPowerSettle) BEFORE constructing RobotLoop/calling
+  // boot() lets every remaining slot resolve on ITS OWN first attempt, one
+  // device per boot()-loop iteration.
+  clock.setMicros(0);
+  preamble.step();
+  checkTrue(!preamble.done(), "setup: not done after the power-settle no-op call");
+  clock.setMicros(50000);
+  scriptMotorBeginSuccess(bus);  // Left
+  scriptMotorBeginSuccess(bus);  // Right
+  scriptOtosBeginSuccess(bus);
+  scriptColorBeginSuccess(bus);
+  scriptLineBeginSuccess(bus);
+
+  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
+                            drive, odom, moveQueue, preamble, stateEstimator, clock, sleeper);
+  // Real firmware calls markConfigured() BEFORE run() (main.cpp) --
+  // configured_ is already true by the time boot() runs in production.
+  // Mirrored here so this scenario proves the fix against the SAME state
+  // real firmware boots into, not a fixture where handleMove()'s own
+  // separate configured_ gate would coincidentally also refuse the command
+  // for an unrelated reason.
+  robotLoop.markConfigured();
+
+  // corr_id=1 matches move_protocol_bench.py's own scenario_distance_stop --
+  // the exact reproduction that surfaced this defect.
+  const uint32_t kCorrId = 1;
+  std::string moveLine = armorMoveTimeTwistCommand(
+      /*includeVelocity=*/true, /*v_x=*/150.0f, /*omega=*/0.0f,
+      /*includeStop=*/true, /*stopTimeMs=*/200.0f, /*timeoutMs=*/3000.0f,
+      /*replace=*/true, /*id=*/9001, kCorrId);
+  checkTrue(!moveLine.empty(), "armor() of the boot-window MOVE envelope succeeds");
+  // Injected BEFORE boot() runs at all -- boot()'s own FIRST comms_.pump()
+  // call is what reads this, reproducing the measured hardware race.
+  serialFake.enqueueInboundBinary(moveLine);
+
+  checkTrue(!preamble.done(), "setup: preamble is NOT done before boot() runs -- "
+                               "the race window this scenario constructs is real");
+
+  robotLoop.boot();
+
+  checkTrue(preamble.done(), "boot() still runs every device probe to completion");
+  checkTrue(!moveQueue.active(), "MoveQueue stays untouched -- boot() never dispatches "
+                                  "into handleMove()");
+
+  // The ack rides boot()'s OWN first emitted frame (rejectDuringBoot() runs
+  // before that same loop iteration's tlm_.update()/tlm_.emit() call) --
+  // findAck() (this file's own ring-scan helper, used by every MOVE/CONFIG
+  // scenario below) works unchanged here since boot() emits real Telemetry
+  // frames through the same tlm_/comms_ path cycle() does.
+  uint32_t ackErr = 0;
+  checkTrue(findAck(serialFake.sent(), kCorrId, &ackErr),
+            "the boot-window MOVE gets an EXPLICIT ack -- never a silent drop "
+            "(pre-fix: the decoded Cmd was handed to a throwaway boot-local and "
+            "no ack of any kind was ever sent)");
+  checkUintEq(ackErr, static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED),
+              "the boot-window MOVE acks ERR_NOT_CONFIGURED (robot not yet ready -- "
+              "neither silently dropped nor executed against un-probed devices)");
+}
+
+// ===========================================================================
 // MOVE dispatch: config-gate refusal, ERR_BADARG shape validation,
 // successful enqueue+ack (SUC-050).
 // ===========================================================================
@@ -2504,6 +2627,7 @@ int main() {
   scenarioBootThenAFewCyclesRunToCompletion();
   scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented();
   scenarioConfigPersistWritePolicySkipsRedundantSave();
+  scenarioMoveArrivingDuringBootIsExplicitlyRejectedNeverSilentlyDropped();
 
   scenarioMoveConfigGateRefusesWhenUnconfigured();
   scenarioMoveBadArgShapeValidation();
