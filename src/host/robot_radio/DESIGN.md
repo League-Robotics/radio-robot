@@ -159,12 +159,14 @@ changed: `MoveTransport.move()`'s kwargs became the current `Move` schema
 (`v_x`/`omega`/`stop_distance`/`stop_angle`/`timeout`/`replace`/`id`, not
 the deleted sprint-109 arc shape), and the old `AckStatus` taxonomy
 (`DONE`/`TRIVIAL`/`SUPERSEDED`/`FLUSHED`/`TIMEOUT`/`SOLVE_FAIL`) plus
-depth-3 ack ring were replaced by `Telemetry`'s single ack slot
-(`ack_corr`/`ack_err`) — since 120, additionally backed by a bounded
-ack RING (`acks`, depth 4; see §5's own `wait_for_ack()` note below) —
-which carries EITHER a command's enqueue ack OR a `Move`'s own completion
-ack (`docs/protocol-v4.md` §7.2), keyed on `Move.id`, never the enqueue
-envelope's `corr_id`.
+depth-3 ack ring were replaced by `Telemetry`'s bounded ack ring (`acks`,
+depth 4 — see §5's own `wait_for_ack()` note below), which carries
+EITHER a command's enqueue ack OR a `Move`'s own completion ack
+(`docs/protocol-v5.md` §7), keyed on `Move.id`, never the enqueue
+envelope's `corr_id`. (Sprint 120 originally added the ring ADDITIVELY
+alongside a single scalar "freshest ack" slot, `ack_corr`/`ack_err`;
+sprint 124 ticket 008 deleted that scalar slot outright — the ring is the
+sole ack path now, see §5's own updated note.)
 
 **121-002 (tour-1-final-leg-completes-only-on-stop.md): `tour.py`'s own
 completion poll scans the RING, resolving the slot-vs-ring conflation this
@@ -248,7 +250,8 @@ does — their gating and baseline semantics are unchanged.
   `drain_binary_tlm()` and scans each drained `ReplyEnvelope{tlm:
   Telemetry}` frame's bounded `acks` ring (`telemetry.proto`, depth 4) —
   not the single scalar `ack_corr`/`ack_err`/`flags`-bit-5 slot the pre-120
-  implementation scanned — via the module-private
+  implementation scanned, and which sprint 124 ticket 008 deleted outright
+  (see below) — via the module-private
   `_match_ack_in_frames()`. Matching policy (the one genuinely open
   question this sprint's Architecture Step 7 left to this ticket):
   returns on the FIRST `(frame, ring-entry)` pair whose `corr_id` matches,
@@ -268,15 +271,18 @@ does — their gating and baseline semantics are unchanged.
   scalar `ack_corr`/`ack_err` instead would be wrong whenever a different,
   later command's ack has since become that frame's own "freshest ack".
   `TLMFrame.acks` (`robot/protocol.py`) exposes the full decoded ring,
-  always populated (independent of `ack_fresh`), for a caller that wants
+  always populated, for a caller that wants
   to inspect it directly rather than go through `wait_for_ack()`'s own
   single-`corr_id` search — see `src/tests/bench/
   ack_ring_rapid_fire_bench.py` for the hardware-verified N=5 rapid-fire
-  proof this ticket's own acceptance criteria required. The scalar
-  `ack_corr`/`ack_err`/`flags` bit 5 and `TLMFrame.ack`/`ack_fresh` keep
-  their exact pre-120 meaning, read by `AckEntry.from_telemetry()`
-  (unchanged, still used by `TLMFrame.from_pb2()`) — this is an additive
-  capability, not a replacement.
+  proof this ticket's own acceptance criteria required.
+  **Superseded by sprint 124 ticket 008 (issue §B4):** the scalar
+  `ack_corr`/`ack_err`/`flags` bit 5 and `TLMFrame.ack`/`ack_fresh` this
+  paragraph originally described as "kept, additive, not a replacement"
+  are DELETED outright — `telemetry.proto`'s fields 5/6 are `reserved`,
+  not reused, and `flags` bit 5 is RESERVED (formerly `kFlagAckFresh`).
+  `TLMFrame.acks` (the ring) is the ONLY ack-observability field left;
+  ring membership alone means "really acked."
 
   **`estimator_config()`** (117
   ticket 003) is a new live-tuning surface, mirroring `otos_config()`'s own
@@ -334,33 +340,31 @@ does — their gating and baseline semantics are unchanged.
 
 ## 6. Open Questions / Known Limitations
 
-- **117 (SUC-056): `PING`'s reply now carries `t=<ms>`, closing the wire
+- **117 (SUC-056): `PING`'s reply carries `t=<ms>`, closing the wire
   side of `ClockSync`'s activation gap — but the host's own
   `SerialConnection.send()` has a SEPARATE, pre-existing gap that still
-  blocks a live round trip through it.** The firmware's text-plane
-  `PING` handler (`Comms::pumpTransport()`, `src/firm/app/comms.cpp`)
-  now replies `OK pong t=<ms>` — the robot's own clock at reply time —
-  closing `docs/protocol-v4.md` §2.4's former AS-BUILT divergence.
-  `robot/clock_sync.py`'s `ClockSync.ping_burst(send_fn)` already
-  tolerated and parsed this exact shape (`_parse_pong_t()`). It is
-  proven to activate against the firmware's actual (compiled, not
-  hand-typed) reply format at the sim/unit level
+  blocks a live round trip through it.** The firmware's `PING` handler
+  (`Comms::dispatchCleartext()`, `src/firm/app/comms.cpp`) replies
+  `PONG:t=<ms>` — the robot's own clock at reply time (protocol v5,
+  sprint 124 ticket 005; was `OK pong t=<ms>` pre-124 — see
+  `docs/protocol-v5.md` §2). `robot/clock_sync.py`'s
+  `ClockSync.ping_burst(send_fn)`'s `_parse_pong_t()` parses the current
+  `PONG:t=<ms>` shape (124-005, normalizing the first `':'` to a space
+  before tokenizing). It is proven to activate against the firmware's
+  actual (compiled, not hand-typed) reply format at the sim/unit level
   (`src/tests/sim/unit/test_clock_sync_activation.py`, 117 ticket 001).
   **Found while verifying this, flagged rather than silently worked
   around:** `io/serial_conn.py`'s `SerialConnection.send()` appends a
   `" #<corr_id>"` suffix to EVERY command it sends (`corr_suffix =
   f" #{corr_id}"`, `cmd = f"{message}{corr_suffix}\n"`) — so
   `NezhaProtocol.send("PING")` actually puts `"PING #7"` on the wire, not
-  `"PING"`. `Comms::pumpTransport()`'s text-plane check is an EXACT
-  `std::strcmp(line, "PING")` (no trimming beyond `SerialPort::
-  readLine()`'s own trailing-newline strip) — a corr-id-suffixed line
-  does not match either recognized verb and increments `malformedCount_`
-  directly, with **no reply at all** (not even a bare `OK pong`). (Sprint
-  123 update: the transport already classifies a line as text-plane vs.
-  binary by which terminator ends it — `0x00` vs. `\n` — before `Comms`
-  ever looks at its content, so there is no base64/`*B`-armor check for a
-  text-plane line to fall through to any more; the failure mode is
-  otherwise unchanged.) This is not new or caused by 117 — `send()`'s own
+  `"PING"`. Under protocol v5's uniform grammar, `Comms::dispatchLine()`
+  parses everything up to the first `':'` as the command name — `"PING
+  #7"` has no `':'`, so the WHOLE string `"PING #7"` is looked up in the
+  registry as one command name, which does not match the registered
+  `"PING"` entry; the line is dropped as unrecognized
+  (`malformedCount_`++), with **no reply at all** (not even `PONG:`).
+  This is not new or caused by 117 — `send()`'s own
   docstring already warned "a text line sent through it reaches no live
   firmware handler," and grepping the tree turns up no existing caller
   of `NezhaProtocol.send("PING", ...)`/`send("HELLO", ...)` against a

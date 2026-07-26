@@ -65,17 +65,13 @@ struct Result {
 // migration (194B largest, up from 185B pre-migration -- the whole reason
 // this budget needed recomputing in the first place).
 //   CommandEnvelope: config=49B, stop=2B, move=38B (worst=config=49B) + non-oneof=6B => total=55B
-//   ReplyEnvelope: ok=19B, err=10B, tlm=188B (worst=tlm=188B) + non-oneof=6B => total=194B
-//   TelemetrySecondary: standalone worst case = 52B (own *B-armored line, not a ReplyEnvelope oneof arm -- Decision 3)
+//   ReplyEnvelope: ok=19B, err=10B, tlm=126B (worst=tlm=126B) + non-oneof=4B => total=130B
 constexpr uint16_t kCommandEnvelopeMaxEncodedSize = 55;
-constexpr uint16_t kReplyEnvelopeMaxEncodedSize = 194;
-constexpr uint16_t kTelemetrySecondaryMaxEncodedSize = 52;
+constexpr uint16_t kReplyEnvelopeMaxEncodedSize = 130;
 static_assert(kCommandEnvelopeMaxEncodedSize <= 240,
               "CommandEnvelope worst-case encoded size exceeds the 240-byte envelope budget");
 static_assert(kReplyEnvelopeMaxEncodedSize <= 240,
               "ReplyEnvelope worst-case encoded size exceeds the 240-byte envelope budget");
-static_assert(kTelemetrySecondaryMaxEncodedSize <= 240,
-              "TelemetrySecondary worst-case encoded size exceeds the 240-byte envelope budget");
 
 // decode(): walks CommandEnvelope's generated FieldDesc table per incoming
 // wire tag, validating (min)/(max)/(abs_max)/(req) inline during the same
@@ -95,14 +91,21 @@ Result decode(CommandEnvelope& out, const uint8_t* buf, uint16_t len);
 // is smaller than the required output.
 uint16_t encode(const ReplyEnvelope& in, uint8_t* buf, uint16_t cap);
 
-// encode(TelemetrySecondary): same encode-only treatment as ReplyEnvelope
-// above (103-001, architecture-update.md (103) Decision 3) -- the slow
-// diagnostic frame is firmware-emitted only, never host-decoded on the
-// robot side, and rides the wire as its own independently-armored line
-// rather than a ReplyEnvelope oneof arm (telemetry.proto's own doc
-// comment). Returns 0 (never a truncated/corrupt buffer) if `cap` is
-// smaller than the required output.
-uint16_t encode(const TelemetrySecondary& in, uint8_t* buf, uint16_t cap);
+// encode(TelemetrySecondary) -- DELETED (124-009): TelemetrySecondary
+// itself is gone (robot-state-blackboard-...md, issue's own
+// "TelemetrySecondary dies") -- it emitted nothing but `now` in
+// production. See telemetry.proto's own (now-historical) doc comment.
+
+// decode(Telemetry&, ...) -- 124-008 addition. Firmware production code
+// still never decodes its own outbound Telemetry frame (host owns that,
+// via real protobuf on its side of the wire) -- this overload exists
+// purely so a HOST_BUILD test can exercise decodeInto()'s (min)/(max)/
+// (abs_max) validateBounds() path against Telemetry's own bounded fields
+// (flags, the packed acks word, ...) through the SAME generated engine
+// production encode() uses, rather than a hand-rolled parallel decoder
+// that could silently drift from it. Same never-partial/malformed-input
+// contract as decode(CommandEnvelope&, ...) above.
+Result decode(Telemetry& out, const uint8_t* buf, uint16_t len);
 
 }  // namespace wire
 }  // namespace msg

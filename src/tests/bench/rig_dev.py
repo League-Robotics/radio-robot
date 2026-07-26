@@ -32,11 +32,11 @@ Provides:
     the pre-103 `rig_dev.py`, unchanged in shape), reused by `rig_soak.py`
     to vary the commanded twist smoothly (no zero-dwell reversal — see
     `rig_soak.py`'s own module docstring for why that matters on this rig).
-  - `secondary_to_dict()` — pure adapter from a `telemetry_pb2.
-    TelemetrySecondary` frame to a plain dict: the binary-plane counterpart
-    of the diagnostics the DeviceBus-era STLM/`M <port> STATE` replies used
-    to carry (`glitch`/`acc`/`ts`/`cmd_vel`), now riding `TelemetrySecondary`
-    (103-001) instead.
+  - `secondary_to_dict()`/`Rig.read_secondary_tlm()` — DELETED (124-009,
+    robot-state-blackboard-...md, issue's own "TelemetrySecondary dies"):
+    `TelemetrySecondary` itself is gone, and with it
+    `SerialConnection.drain_binary_secondary_tlm()`, this adapter's only
+    data source.
 
 Run directly for a smoke-level bench verification (this ticket's own
 Acceptance Criterion 4 — a single connect/twist/config/stop pass, distinct
@@ -77,26 +77,9 @@ def waveform(kind: str, t: float, period: float, amp: float) -> float:  # [s] [s
     return amp * math.sin(2.0 * math.pi * phase)
 
 
-def secondary_to_dict(secondary: Any) -> dict[str, Any]:
-    """Adapt one `telemetry_pb2.TelemetrySecondary` frame to a plain dict —
-    the ~5 Hz diagnostic frame (`acc`/`glitch`/`ts`/`cmd_vel`, moved off the
-    primary `Telemetry` message by 103-001) that is the binary-plane
-    counterpart of the DeviceBus-era STLM/`M <port> STATE` diagnostics.
-    `secondary` is typed `Any` (not `telemetry_pb2.TelemetrySecondary`) so
-    this module never imports `robot_radio.robot.pb2` at module scope purely
-    for a type hint — the only real dependency is duck-typed field access,
-    matching `TLMFrame.from_pb2()`'s own adapter style."""
-    return {
-        "t": int(secondary.now),
-        "cmd_vel_left": float(secondary.cmd_vel_left) if secondary.has_cmd_vel else None,
-        "cmd_vel_right": float(secondary.cmd_vel_right) if secondary.has_cmd_vel else None,
-        "acc_left": float(secondary.acc_left),      # [mm/s^2]
-        "acc_right": float(secondary.acc_right),     # [mm/s^2]
-        "glitch_left": int(secondary.glitch_left),
-        "glitch_right": int(secondary.glitch_right),
-        "ts_left": int(secondary.ts_left),            # [ms]
-        "ts_right": int(secondary.ts_right),           # [ms]
-    }
+# secondary_to_dict() -- DELETED (124-009): TelemetrySecondary itself is
+# gone (robot-state-blackboard-...md, issue's own "TelemetrySecondary
+# dies").
 
 
 # ---------------------------------------------------------------------------
@@ -162,10 +145,8 @@ class Rig:
         """Non-blocking drain of every queued PRIMARY telemetry frame."""
         return self.proto.read_pending_binary_tlm_frames()
 
-    def read_secondary_tlm(self) -> list[dict[str, Any]]:
-        """Non-blocking drain of every queued SECONDARY (slow diagnostic)
-        telemetry frame, adapted via `secondary_to_dict()`."""
-        return [secondary_to_dict(s) for s in self.conn.drain_binary_secondary_tlm()]
+    # read_secondary_tlm() -- DELETED (124-009): TelemetrySecondary itself
+    # is gone (robot-state-blackboard-...md).
 
     def close(self) -> None:
         """Guaranteed stop + disconnect — motors must never be left
@@ -315,12 +296,9 @@ def main() -> int:
         result.record("config() round trip acked (ERR_UNIMPLEMENTED expected today)",
                        ack is not None, f"ack={ack}")
 
-        # --- secondary telemetry (glitch/acc/ts/cmd_vel diagnostics) -----
-        time.sleep(0.3)  # TelemetrySecondary rides its own ~5 Hz cadence
-        secondary = rig.read_secondary_tlm()
-        result.record("secondary telemetry (glitch/acc/ts diagnostics) received",
-                       len(secondary) > 0,
-                       f"{secondary[-1] if secondary else {}}")
+        # secondary telemetry (glitch/acc/ts/cmd_vel diagnostics) -- DELETED
+        # (124-009): TelemetrySecondary itself is gone
+        # (robot-state-blackboard-...md).
     finally:
         rig.close()
 

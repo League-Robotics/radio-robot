@@ -82,6 +82,19 @@ from robot_radio.robot.pb2 import config_pb2, envelope_pb2, telemetry_pb2
 # static_cast<int> applies -- see TLMFrame.from_pb2().
 _ANGLE_SCALE = 5729.5779513  # [cdeg/rad]
 
+# Fixed-point wire scales (124-008, issue §B3) -- mirror telemetry.proto's/
+# common.proto's own (scale) field option declarations EXACTLY (options.proto's
+# own doc comment: "generated conversion, not hand-transcribed" -- host-side,
+# the schema is the single source via the compiled descriptor; these
+# constants transcribe that same schema value once, here, rather than at
+# every call site). The host decodes these fields via REAL protobuf, which
+# already reverses zigzag automatically (sint32 is a native proto3 scalar
+# type) -- these constants are the remaining real = raw * scale step.
+_POSITION_SCALE = 1.0     # [mm] EncoderReading.position, OtosReading.x/y, common.proto Pose2D.x/y
+_VELOCITY_SCALE = 0.1     # [mm/s] EncoderReading.velocity, OtosReading.v_x/v_y, common.proto BodyTwist3.v_x/v_y
+_HEADING_SCALE = 0.001    # [rad] OtosReading.heading, common.proto Pose2D.h
+_OMEGA_SCALE = 0.01       # [rad/s] OtosReading.omega, common.proto BodyTwist3.omega
+
 # modeChar() mirror (source/telemetry/tlm_frame.cpp): maps msg::DriveMode
 # (telemetry.mode, telemetry.proto -- DriveMode relocated in from the deleted
 # planner.proto by 115-003, unchanged shape) to a single-character mode= wire
@@ -127,48 +140,31 @@ class AckEntry:
     ring/``AckStatus`` enum (OK/ERR/DONE/TRIVIAL/SUPERSEDED/FLUSHED/
     TIMEOUT/SOLVE_FAIL, the deleted executor's own completion taxonomy) in
     favor of one scalar slot. 120 (bench-single-ack-slot-observability-
-    collapses-at-40ms.md) brings a wire ``AckEntry`` message back — a
-    bounded, depth-4, corr_id+err ring, NOT a revival of the old
-    ``AckStatus`` taxonomy (still plain OK/ERR) or of "overwrite is a
-    tradeoff, not a bug" (the ring simply does not overwrite until it is
-    genuinely full and evicting the OLDEST entry, so a same-primary-period
-    collision that used to overwrite the single slot now survives in the
-    ring instead). ``ack_corr``/``ack_err``/``flags`` bit 5 keep their
-    EXACT prior meaning unchanged — this dataclass now has two possible
-    origins, not two possible meanings.
+    collapses-at-40ms.md) brought a wire ``AckEntry`` message back — a
+    bounded, depth-4, corr_id+err ring. 124-008 (issue §B4) DELETED both
+    the wire ``AckEntry`` message AND the single "freshest ack" scalar slot
+    (``ack_corr``/``ack_err``, ``flags`` bit 5) it duplicated — ring
+    membership already means "really acked." ``Telemetry.acks`` is now
+    ``repeated uint32``, PACKED, each element ``corr_id<<4 | err`` — the
+    ring is this dataclass's ONLY remaining origin.
     """
     corr_id: int
     ok: bool
     err_code: int  # raw ErrCode (envelope.proto) value when ok is False, else 0 (ERR_NONE)
 
     @classmethod
-    def from_telemetry(cls, telemetry: "telemetry_pb2.Telemetry") -> "AckEntry":
-        """Build an ``AckEntry`` from ``telemetry``'s single "freshest ack"
-        scalar slot (``ack_corr``/``ack_err``) — UNCHANGED by 120. Call only
-        when ``flags`` bit 5 (``ack_fresh``) is set — this method does not
-        itself check the bit (``TLMFrame.from_pb2()`` is the one remaining
-        call site, and it already gates on it)."""
-        return cls(
-            corr_id=int(telemetry.ack_corr),
-            ok=(telemetry.ack_err == 0),
-            err_code=int(telemetry.ack_err),
-        )
-
-    @classmethod
-    def from_ring_entry(cls, entry: "telemetry_pb2.AckEntry") -> "AckEntry":
-        """Build an ``AckEntry`` from one entry of the bounded ack ring
-        (``Telemetry.acks``, 120) — ``entry`` is a raw
-        ``telemetry_pb2.AckEntry`` (``corr_id``/``err``), not the whole
-        ``Telemetry`` frame it rode in on. Unlike ``from_telemetry()``
-        above, no freshness gate applies: a corr_id present in the ring was
-        genuinely pushed by ``App::Telemetry::ack()`` at some point — see
-        this class's own docstring and ``SerialConnection.wait_for_ack()``'s
-        docstring for why the ring needs no ``ack_fresh``-style bit."""
-        return cls(
-            corr_id=int(entry.corr_id),
-            ok=(entry.err == 0),
-            err_code=int(entry.err),
-        )
+    def from_ring_entry(cls, entry: int) -> "AckEntry":
+        """Build an ``AckEntry`` from one packed word of the bounded ack
+        ring (``Telemetry.acks``, 120, repacked 124-008) — ``entry`` is a
+        plain python ``int`` (the real protobuf decoder hands back a bare
+        int for a packed-scalar repeated field; there is no ``AckEntry``
+        wire message any more, issue §B4), not the whole ``Telemetry``
+        frame it rode in on. `corr_id`` is the upper bits, ``err`` the low
+        4 (mirrors ``App::Telemetry::pushAckRing()``'s own packing,
+        telemetry.cpp)."""
+        corr_id = entry >> 4
+        err = entry & 0xF
+        return cls(corr_id=corr_id, ok=(err == 0), err_code=err)
 
 
 # ---------------------------------------------------------------------------
@@ -183,39 +179,59 @@ class AckEntry:
 
 @dataclass(frozen=True)
 class EncoderReading:
-    """One wheel's encoder sample -- position AND velocity together, stamped
-    with the sample's own collect time (robot clock, same domain as
-    ``TLMFrame.t``). Adapts ``telemetry_pb2.EncoderReading``."""
+    """One wheel's encoder sample -- position AND velocity together.
+    Adapts ``telemetry_pb2.EncoderReading``.
+
+    124-008 (issue §B3/§B2): ``position``/``velocity`` are sint32+scale on
+    the wire now -- protobuf reverses zigzag automatically (sint32 is a
+    native proto3 type), ``from_pb2()`` applies the remaining
+    ``real = raw * scale`` step (``_POSITION_SCALE``/``_VELOCITY_SCALE``).
+    ``time`` is RENAMED ``age`` -- an absolute robot-clock value can't be
+    packed small; ``age`` is the delta this sample's own collect time is
+    BEHIND ``TLMFrame.t``, bounded to 255ms. Production firmware always
+    emits ``age=0`` as of this ticket (genuine per-sample skew is ticket
+    009's own work) -- the field decodes correctly regardless.
+    ``position_epoch`` (ADDITIVE) is the position-rebaseline policy's own
+    counter (sprint 124 architecture Decision 6): increments each time
+    firmware software-rebaselines this wheel's position."""
     position: float  # [mm] accumulated
     velocity: float  # [mm/s] signed, measured
-    time: int        # [ms] robot clock at sample collect
+    age: int         # [ms] delta behind TLMFrame.t at sample collect
+    position_epoch: int  # wraps; +1 each firmware-side rebaseline (Decision 6)
 
     @classmethod
     def from_pb2(cls, reading: "telemetry_pb2.EncoderReading") -> "EncoderReading":
-        return cls(position=float(reading.position), velocity=float(reading.velocity),
-                   time=int(reading.time))
+        return cls(position=float(reading.position) * _POSITION_SCALE,
+                    velocity=float(reading.velocity) * _VELOCITY_SCALE,
+                    age=int(reading.age), position_epoch=int(reading.position_epoch))
 
 
 @dataclass(frozen=True)
 class OtosReading:
     """Everything the OTOS supplies in one burst read: position, heading,
     AND the measured velocities (v_x/v_y/omega -- previously read by the
-    driver and dropped on the floor), stamped with the burst's own read
-    time. Adapts ``telemetry_pb2.OtosReading``. Valid iff ``TLMFrame.
-    otos_present`` (flags bit 0) -- see ``TLMFrame.otos_reading``."""
+    driver and dropped on the floor). Adapts ``telemetry_pb2.OtosReading``.
+    Valid iff ``TLMFrame.otos_present`` (flags bit 0) -- see
+    ``TLMFrame.otos_reading``.
+
+    124-008: x/y/heading/v_x/v_y/omega are sint32+scale on the wire now --
+    see ``EncoderReading``'s own docstring for the zigzag/scale split.
+    ``time`` is RENAMED ``age`` -- same rationale as ``EncoderReading.age``."""
     x: float        # [mm]
     y: float        # [mm]
     heading: float  # [rad]
     v_x: float      # [mm/s]
     v_y: float      # [mm/s]
     omega: float    # [rad/s]
-    time: int       # [ms] robot clock at burst read
+    age: int        # [ms] delta behind TLMFrame.t at burst read
 
     @classmethod
     def from_pb2(cls, reading: "telemetry_pb2.OtosReading") -> "OtosReading":
-        return cls(x=float(reading.x), y=float(reading.y), heading=float(reading.heading),
-                   v_x=float(reading.v_x), v_y=float(reading.v_y), omega=float(reading.omega),
-                   time=int(reading.time))
+        return cls(x=float(reading.x) * _POSITION_SCALE, y=float(reading.y) * _POSITION_SCALE,
+                    heading=float(reading.heading) * _HEADING_SCALE,
+                    v_x=float(reading.v_x) * _VELOCITY_SCALE, v_y=float(reading.v_y) * _VELOCITY_SCALE,
+                    omega=float(reading.omega) * _OMEGA_SCALE,
+                    age=int(reading.age))
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +245,8 @@ _FLAG_OTOS_CONNECTED = 1 << 1
 _FLAG_ACTIVE = 1 << 2
 _FLAG_CONN_LEFT = 1 << 3
 _FLAG_CONN_RIGHT = 1 << 4
-_FLAG_ACK_FRESH = 1 << 5
+# bit 5 -- RESERVED (124-008: formerly _FLAG_ACK_FRESH, deleted with the
+# single "freshest ack" scalar slot it gated).
 _FLAG_FAULT_I2C_SAFETY_NET = 1 << 6
 _FLAG_FAULT_WEDGE_LATCH = 1 << 7
 _FLAG_FAULT_I2C_NAK_TIMEOUT = 1 << 8
@@ -325,8 +342,9 @@ class TLMFrame:
         freshness/connectivity.
       - ``conn_left``/``conn_right`` (bits 3/4) — per-motor bus
         connectivity.
-      - ``ack_fresh`` (bit 5) — whether ``ack``/``ack_corr``/``ack_err``
-        (below) carry a NEW ack this frame (see ``ack``'s own note).
+      - bit 5 — RESERVED (124-008: formerly ``ack_fresh`` -- deleted with
+        the single "freshest ack" scalar slot it gated; ring membership
+        in ``acks`` below already means "really acked").
       - ``fault_i2c_safety_net``/``fault_wedge_latch``/
         ``fault_i2c_nak_timeout``/``fault_malformed_frame`` (bits 6-9) —
         the four fault bits.
@@ -350,11 +368,9 @@ class TLMFrame:
     every attribute name the pre-115 standalone bool/bitmask fields
     exposed before renaming or removing any of them.
 
-    ``ack_corr``/``ack_err`` are the wire's single "freshest ack" slot
-    (raw, always populated), valid iff ``ack_fresh``. ``ack`` is the SAME
-    slot pre-decoded into an ``AckEntry`` (``None`` unless ``ack_fresh``
-    was set on this frame) — the convenience shape most callers want.
-    UNCHANGED by 120 — every existing reader of these three keeps working.
+    ``ack_corr``/``ack_err``/``ack`` — DELETED (124-008, issue §B4): the
+    single "freshest ack" scalar slot they adapted is gone; ring membership
+    in ``acks`` below already means "really acked."
 
     ``acks`` (120, ADDITIVE) is the bounded ack ring
     (``telemetry.proto``'s ``Telemetry.acks``, depth 4) decoded as a plain
@@ -391,9 +407,8 @@ class TLMFrame:
     encpose: tuple[int, int, int] | None = None  # (x, y, heading) [mm, mm, cdeg] -- permanent binary-decode gap
     otos_health: tuple[int, bool] | None = None  # (raw STATUS byte, fusion_blocked) -- permanent binary-decode gap
     active: bool | None = None                   # bb.drivetrain.busy — motion in progress (flags bit 2)
-    ack_corr: int | None = None                  # raw ack_corr [uint32]; valid iff ack_fresh (the single "freshest ack" slot, UNCHANGED by 120)
-    ack_err: int | None = None                   # raw ack_err (envelope.proto ErrCode); valid iff ack_fresh
-    ack: "AckEntry | None" = None                 # ack_corr/ack_err pre-decoded, populated ONLY when ack_fresh is set
+    # ack_corr/ack_err/ack -- DELETED (124-008, issue §B4): the single
+    # "freshest ack" scalar slot is gone; use `acks` below.
     acks: "list[AckEntry]" = field(default_factory=list)  # bounded ack ring (120), oldest-first, ALWAYS populated (may be empty), no freshness gate
     enc_left: "EncoderReading | None" = None      # full per-wheel reading (position/velocity/time) -- always present on the wire
     enc_right: "EncoderReading | None" = None
@@ -423,10 +438,6 @@ class TLMFrame:
     @property
     def conn_right(self) -> bool:
         return self._flag(_FLAG_CONN_RIGHT)
-
-    @property
-    def ack_fresh(self) -> bool:
-        return self._flag(_FLAG_ACK_FRESH)
 
     @property
     def fault_i2c_safety_net(self) -> bool:
@@ -523,22 +534,26 @@ class TLMFrame:
         frame.enc = (int(frame.enc_left.position), int(frame.enc_right.position))
         frame.vel = (int(frame.enc_left.velocity), int(frame.enc_right.velocity))
 
+        # 124-008 (issue §B3): pose/twist/otos are sint32+scale on the wire
+        # now -- apply the wire scale FIRST (raw -> real mm/rad/s, matching
+        # EncoderReading/OtosReading.from_pb2()'s own convention), then this
+        # dataclass's own historical mm/cdeg/mrad-per-s int convention.
         frame.pose = (
-            int(telemetry.pose.x),
-            int(telemetry.pose.y),
-            int(telemetry.pose.h * _ANGLE_SCALE),
+            int(telemetry.pose.x * _POSITION_SCALE),
+            int(telemetry.pose.y * _POSITION_SCALE),
+            int(telemetry.pose.h * _HEADING_SCALE * _ANGLE_SCALE),
         )
         frame.twist = (
-            int(telemetry.twist.v_x),
-            int(telemetry.twist.omega * 1000.0),
+            int(telemetry.twist.v_x * _VELOCITY_SCALE),
+            int(telemetry.twist.omega * _OMEGA_SCALE * 1000.0),
         )
 
         if frame.otos_present:
             frame.otos_reading = OtosReading.from_pb2(telemetry.otos)
             frame.otos = (
-                int(telemetry.otos.x),
-                int(telemetry.otos.y),
-                int(telemetry.otos.heading * _ANGLE_SCALE),
+                int(telemetry.otos.x * _POSITION_SCALE),
+                int(telemetry.otos.y * _POSITION_SCALE),
+                int(telemetry.otos.heading * _HEADING_SCALE * _ANGLE_SCALE),
             )
 
         if frame.line_present:
@@ -551,15 +566,12 @@ class TLMFrame:
         frame.cycle_busy = int(telemetry.cycle_busy)
         frame.cycle_period = int(telemetry.cycle_period)
 
-        frame.ack_corr = int(telemetry.ack_corr)
-        frame.ack_err = int(telemetry.ack_err)
-        if frame.ack_fresh:
-            frame.ack = AckEntry.from_telemetry(telemetry)
-
         # Bounded ack ring (120, ADDITIVE) -- ALWAYS populated (may be
-        # empty), independent of ack_fresh; oldest-pushed first, matching
-        # the wire's own push/evict order (telemetry.cpp's ack() doc
-        # comment).
+        # empty), oldest-pushed first, matching the wire's own push/evict
+        # order (telemetry.cpp's ack() doc comment). 124-008 (issue §B4)
+        # deleted the single "freshest ack" scalar slot (ack_corr/ack_err)
+        # this used to also populate -- the ring is the only ack source
+        # now, and each element is a plain packed int (AckEntry deleted).
         frame.acks = [AckEntry.from_ring_entry(entry) for entry in telemetry.acks]
 
         return frame
@@ -1487,12 +1499,10 @@ class NezhaProtocol:
         — not just ``NezhaProtocol`` — gets the identical matching
         guarantee without a second copy of the algorithm. This method is a
         thin adapter: delegate to the shared implementation, then wrap the
-        matched raw ``telemetry_pb2.AckEntry`` ring entry in this module's
-        own ``AckEntry`` dataclass (``AckEntry.from_ring_entry()`` — NOT
-        ``from_telemetry()``, which reads the single scalar slot instead;
-        reading ``ack_corr``/``ack_err`` off the matched FRAME here would be
-        wrong whenever a DIFFERENT, later command's ack became that frame's
-        own "freshest ack" by the time it was read).
+        matched raw packed ``int`` ring entry (124-008: plain ``int``, not
+        ``telemetry_pb2.AckEntry`` — that wire message is deleted, issue
+        §B4) in this module's own ``AckEntry`` dataclass
+        (``AckEntry.from_ring_entry()``).
         """
         matched_entry = self._conn.wait_for_ack(corr_id, timeout=timeout)
         if matched_entry is None:

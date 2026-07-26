@@ -19,30 +19,71 @@ enum class DriveMode : uint8_t {
 
 // EncoderReading
 struct EncoderReading {
-    float position = 0.0f;
-    float velocity = 0.0f;
-    uint32_t time = 0;
+    int32_t position = 0;
+    int32_t velocity = 0;
+    uint32_t age = 0;
+    uint32_t position_epoch = 0;
+
+    static constexpr float kPositionScale = 1.0f;  // real = raw * scale
+    static int32_t packPosition(float value) {
+        return static_cast<int32_t>(value >= 0.0f ? (value / kPositionScale + 0.5f) : (value / kPositionScale - 0.5f));
+    }
+    static float unpackPosition(int32_t raw) { return static_cast<float>(raw) * kPositionScale; }
+
+    static constexpr float kVelocityScale = 0.1f;  // real = raw * scale
+    static int32_t packVelocity(float value) {
+        return static_cast<int32_t>(value >= 0.0f ? (value / kVelocityScale + 0.5f) : (value / kVelocityScale - 0.5f));
+    }
+    static float unpackVelocity(int32_t raw) { return static_cast<float>(raw) * kVelocityScale; }
 
     // --- array / optional-string accessors ---
 };
 
 // OtosReading
 struct OtosReading {
-    float x = 0.0f;
-    float y = 0.0f;
-    float heading = 0.0f;
-    float v_x = 0.0f;
-    float v_y = 0.0f;
-    float omega = 0.0f;
-    uint32_t time = 0;
+    int32_t x = 0;
+    int32_t y = 0;
+    int32_t heading = 0;
+    int32_t v_x = 0;
+    int32_t v_y = 0;
+    int32_t omega = 0;
+    uint32_t age = 0;
 
-    // --- array / optional-string accessors ---
-};
+    static constexpr float kXScale = 1.0f;  // real = raw * scale
+    static int32_t packX(float value) {
+        return static_cast<int32_t>(value >= 0.0f ? (value / kXScale + 0.5f) : (value / kXScale - 0.5f));
+    }
+    static float unpackX(int32_t raw) { return static_cast<float>(raw) * kXScale; }
 
-// AckEntry
-struct AckEntry {
-    uint32_t corr_id = 0;
-    uint32_t err = 0;
+    static constexpr float kYScale = 1.0f;  // real = raw * scale
+    static int32_t packY(float value) {
+        return static_cast<int32_t>(value >= 0.0f ? (value / kYScale + 0.5f) : (value / kYScale - 0.5f));
+    }
+    static float unpackY(int32_t raw) { return static_cast<float>(raw) * kYScale; }
+
+    static constexpr float kHeadingScale = 0.001f;  // real = raw * scale
+    static int32_t packHeading(float value) {
+        return static_cast<int32_t>(value >= 0.0f ? (value / kHeadingScale + 0.5f) : (value / kHeadingScale - 0.5f));
+    }
+    static float unpackHeading(int32_t raw) { return static_cast<float>(raw) * kHeadingScale; }
+
+    static constexpr float kVXScale = 0.1f;  // real = raw * scale
+    static int32_t packVX(float value) {
+        return static_cast<int32_t>(value >= 0.0f ? (value / kVXScale + 0.5f) : (value / kVXScale - 0.5f));
+    }
+    static float unpackVX(int32_t raw) { return static_cast<float>(raw) * kVXScale; }
+
+    static constexpr float kVYScale = 0.1f;  // real = raw * scale
+    static int32_t packVY(float value) {
+        return static_cast<int32_t>(value >= 0.0f ? (value / kVYScale + 0.5f) : (value / kVYScale - 0.5f));
+    }
+    static float unpackVY(int32_t raw) { return static_cast<float>(raw) * kVYScale; }
+
+    static constexpr float kOmegaScale = 0.01f;  // real = raw * scale
+    static int32_t packOmega(float value) {
+        return static_cast<int32_t>(value >= 0.0f ? (value / kOmegaScale + 0.5f) : (value / kOmegaScale - 0.5f));
+    }
+    static float unpackOmega(int32_t raw) { return static_cast<float>(raw) * kOmegaScale; }
 
     // --- array / optional-string accessors ---
 };
@@ -53,8 +94,6 @@ struct Telemetry {
     uint32_t seq = 0;
     DriveMode mode = static_cast<DriveMode>(0);
     uint32_t flags = 0;
-    uint32_t ack_corr = 0;
-    uint32_t ack_err = 0;
     EncoderReading enc_left = {};
     EncoderReading enc_right = {};
     OtosReading otos = {};
@@ -62,30 +101,14 @@ struct Telemetry {
     BodyTwist3 twist = {};
     uint32_t line = 0;
     uint32_t color = 0;
-    AckEntry acks_[4] = {};
+    uint32_t acks_[4] = {};
     uint8_t acks_count = 0;
     uint32_t cycle_busy = 0;
     uint32_t cycle_period = 0;
 
     // --- array / optional-string accessors ---
-    const AckEntry* acks() const { return acks_; }
+    const uint32_t* acks() const { return acks_; }
     uint8_t acks_count_val() const { return acks_count; }
-};
-
-// TelemetrySecondary
-struct TelemetrySecondary {
-    uint32_t now = 0;
-    bool has_cmd_vel = false;
-    float cmd_vel_left = 0.0f;
-    float cmd_vel_right = 0.0f;
-    float acc_left = 0.0f;
-    float acc_right = 0.0f;
-    uint32_t glitch_left = 0;
-    uint32_t glitch_right = 0;
-    uint32_t ts_left = 0;
-    uint32_t ts_right = 0;
-
-    // --- array / optional-string accessors ---
 };
 
 }  // namespace msg

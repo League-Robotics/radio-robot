@@ -20,7 +20,7 @@ root: ../../../docs/design/design.md
 > `DESIGN.md` to find here; it is kept, not deleted, because the
 > math/rationale below is unchanged and still authoritative, and several
 > other current docs
-> (`docs/design/design.md`, `src/firm/app/DESIGN.md`, `docs/protocol-v4.md`)
+> (`docs/design/design.md`, `src/firm/app/DESIGN.md`, `docs/protocol-v5.md`)
 > link to it by this path. **For current orientation, the module list,
 > the boundary contract, and the `motion_tests` build, see
 > [`src/motion/DESIGN.md`](../../motion/DESIGN.md)** — this file is the

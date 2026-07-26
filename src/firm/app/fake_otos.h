@@ -51,14 +51,17 @@ class FakeOtos : public Devices::Otos {
   void getOffset(float& x, float& y, float& heading) override;      // [mm] [mm] [rad]
 
   // Refresh the synthetic reading from this cycle's Odometry pose + fused
-  // wheel twist. No bus traffic; nowUs is accepted for interface parity but
-  // unused (a fake has no rate limit to gate).
+  // wheel twist. No bus traffic; nowUs also becomes sampleTime()'s return —
+  // a fake synthesizes a fresh reading every tick() call, so its sample
+  // time is always exactly the calling tick's own nowUs (no rate limit to
+  // gate, unlike RealOtos).
   void tick(uint64_t nowUs) override;  // [us]
 
   Devices::PoseReading pose() const override { return cachedPose_; }
   bool poseFresh() const override { return poseFresh_; }
   bool connected() const override { return true; }
   bool present() const override { return true; }
+  uint64_t sampleTime() const override { return sampleTimeUs_; }  // [us]
 
  private:
   const Motion::Odometry& odom_;
@@ -68,6 +71,7 @@ class FakeOtos : public Devices::Otos {
 
   Devices::PoseReading cachedPose_{};
   bool poseFresh_ = false;
+  uint64_t sampleTimeUs_ = 0;  // [us] sampleTime()'s backing field -- the last tick()'s own nowUs
 };
 
 }  // namespace App

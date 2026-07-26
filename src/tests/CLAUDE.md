@@ -99,8 +99,20 @@ uv run python src/tests/bench/dev_exercise.py --port /dev/cu.usbmodem2121102
 
 See `.claude/rules/` for project-wide coding conventions that apply here too
 — in particular `coding-standards.md` (units in `# [unit]` trailing comments,
-never in identifier names) and `naming-and-style.md`. Bench/playfield scripts
-must be resilient to the `DEV` serial-silence watchdog (default 1000 ms,
-`docs/protocol-v2.md` §16): widen it (`DEV WD 3000`) at session start, and
-always restore it (`DEV WD 1000`) plus send `DEV STOP` in a `finally` block —
-motors must never be left running on an exception or Ctrl-C.
+never in identifier names) and `naming-and-style.md`.
+
+**Stale — do not follow, kept for git-blame context only**: this section
+used to say bench/playfield scripts must widen the `DEV` serial-silence
+watchdog (`DEV WD 3000`) at session start and restore it (`DEV WD 1000`)
+in a `finally` block. The entire `DEV`/`SET`/`GET` command family
+(`docs/protocol-v2.md` §16) has had no firmware handler since the sprint
+102-107 single-loop rebuild — `dev_exercise.py` (which this guidance was
+written for) is itself flagged stale for the same reason, see that
+file's own header. **Current safety contract (protocol v5,
+`docs/protocol-v5.md` §5, "no deadman")**: there is no session-wide
+serial-silence watchdog to widen/restore at all — every `Move` carries
+its own bounded `timeout` safety backstop by construction. What a bench/
+playfield script must still do: call `stop()` (the binary `STOP` verb) in
+a `finally` block on every connection it opens, so motors are never left
+running on an exception or Ctrl-C — see `src/tests/bench/radio_bench_gate.py`
+for the current reference implementation of that pattern.

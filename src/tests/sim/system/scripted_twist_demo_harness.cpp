@@ -155,22 +155,23 @@ std::vector<DecodedLine> onlyTelemetry(const std::vector<DecodedLine>& lines) {
   return out;
 }
 
-int countSecondary(const std::vector<DecodedLine>& lines) {
-  int n = 0;
-  for (const auto& l : lines) {
-    if (l.kind == DecodedKind::kSecondary) ++n;
-  }
-  return n;
-}
+// countSecondary() -- DELETED (124-009): TelemetrySecondary itself is gone
+// (robot-state-blackboard-...md), so Phase 5's own starvation check below
+// (the whole reason this counter existed, 106-002) goes with it.
 
-// Matches against the single ack slot (Telemetry.ack_corr/ack_err, valid
-// iff flags bit 5/kFlagAckFresh) that replaced the pre-115 depth-3 AckEntry
-// ring (115-003 frame v2). Every existing caller wants an OK (ack_err==0)
+// Matches against the bounded ack ring (Telemetry.acks, 124-008: packed
+// uint32 corr_id<<4|err -- the single "freshest ack" scalar slot/
+// kFlagAckFresh this used to gate on is DELETED, issue §B4; ring membership
+// alone means "really acked"). Every existing caller wants an OK (err==0)
 // match.
 bool anyAckMatches(const std::vector<DecodedLine>& frames, uint32_t corrId) {
+  constexpr uint32_t kAckErrBits = 4;
+  constexpr uint32_t kAckErrMask = (1u << kAckErrBits) - 1;
   for (const auto& f : frames) {
-    if (!(f.telemetry.flags & App::kFlagAckFresh)) continue;
-    if (f.telemetry.ack_corr == corrId && f.telemetry.ack_err == 0) return true;
+    for (uint8_t i = 0; i < f.telemetry.acks_count; ++i) {
+      const uint32_t packed = f.telemetry.acks_[i];
+      if ((packed >> kAckErrBits) == corrId && (packed & kAckErrMask) == 0) return true;
+    }
   }
   return false;
 }
@@ -186,10 +187,14 @@ void printTraceHeader() {
 }
 
 void printTraceRow(int cycle, float cmdVx, float cmdOmega, const msg::Telemetry& t) {
+  // 124-008 (issue §B3): position is scale=1.0 (raw == real mm, safe as-is);
+  // velocity is a raw sint32 wire int at 0.1mm/s scale -- unpackVelocity()
+  // is the GENERATED conversion back to real mm/s for this diagnostic trace.
   std::printf("%6d  %8.1f %8.1f  %8.1f %8.1f  %8.1f %8.1f\n", cycle, static_cast<double>(cmdVx),
               static_cast<double>(cmdOmega), static_cast<double>(t.enc_left.position),
               static_cast<double>(t.enc_right.position),
-              static_cast<double>(t.enc_left.velocity), static_cast<double>(t.enc_right.velocity));
+              static_cast<double>(msg::EncoderReading::unpackVelocity(t.enc_left.velocity)),
+              static_cast<double>(msg::EncoderReading::unpackVelocity(t.enc_right.velocity)));
 }
 
 }  // namespace
@@ -203,13 +208,6 @@ int main() {
   TestSupport::configureSimForBenchTest(sim);
   bool anyWatchedFaultEver = false;
   bool connHealthyThroughout = true;
-  // 106-002 own "sim-assert both cadences" requirement (drive-by fix for
-  // `secondary-telemetry-starved-by-106-001-cadence-retarget.md`): tallied
-  // across the whole run below (boot settle + ramp + stop), alongside the
-  // primary-frame trace this demo already prints -- proves secondary is NOT
-  // stuck at 0 Hz under the real ~40ms/cycle schedule this sim drives
-  // RobotLoop against (the exact regime that starved it pre-106-002).
-  int secondaryFrameCount = 0;
 
   // ===========================================================================
   // Phase 1: BOOT -- drives the REAL App::RobotLoop::boot(), motors + OTOS
@@ -225,7 +223,6 @@ int main() {
   sim.step(3);  // settle: emits kFlagEventBootReady + both leaves' own activation writes land
   {
     std::vector<DecodedLine> bootLines = sim.drainTelemetry();
-    secondaryFrameCount += countSecondary(bootLines);
     std::vector<DecodedLine> bootFrames = onlyTelemetry(bootLines);
     checkTrue(!bootFrames.empty(), "telemetry decoded during boot settle");
     bool sawBootReady = false;
@@ -270,7 +267,6 @@ int main() {
   for (int i = 0; i < kRampCycles; ++i) {
     sim.step(1);
     std::vector<DecodedLine> rampLines = sim.drainTelemetry();
-    secondaryFrameCount += countSecondary(rampLines);
     std::vector<DecodedLine> frames = onlyTelemetry(rampLines);
     if (anyAckMatches(frames, kTwistCorrId)) twistAcked = true;
     for (const auto& f : frames) {
@@ -280,13 +276,16 @@ int main() {
       // EncoderReading is unconditionally present every frame (115-005
       // frame v2 -- no has_vel/has_enc presence flag any more), so every
       // frame carries real data, not just a filtered subset.
+      // 124-008 (issue §B3): velocity is a raw sint32 wire int (0.1mm/s
+      // scale) -- unpackVelocity() is the GENERATED conversion; position is
+      // scale=1.0 (raw == real mm, safe as-is).
       if (!sawRampData) {
-        firstVelLeft = f.telemetry.enc_left.velocity;
+        firstVelLeft = msg::EncoderReading::unpackVelocity(f.telemetry.enc_left.velocity);
         firstEncLeft = f.telemetry.enc_left.position;
         sawRampData = true;
       }
-      peakVelLeft = f.telemetry.enc_left.velocity;
-      peakVelRight = f.telemetry.enc_right.velocity;
+      peakVelLeft = msg::EncoderReading::unpackVelocity(f.telemetry.enc_left.velocity);
+      peakVelRight = msg::EncoderReading::unpackVelocity(f.telemetry.enc_right.velocity);
       lastEncLeft = f.telemetry.enc_left.position;
       printTraceRow(sim.cycleCount(), kCmdVx, kCmdOmega, f.telemetry);
     }
@@ -327,7 +326,6 @@ int main() {
   for (int i = 0; i < kStopCycles; ++i) {
     sim.step(1);
     std::vector<DecodedLine> stopLines = sim.drainTelemetry();
-    secondaryFrameCount += countSecondary(stopLines);
     std::vector<DecodedLine> frames = onlyTelemetry(stopLines);
     if (anyAckMatches(frames, kStopCorrId)) stopAcked = true;
     for (const auto& f : frames) {
@@ -338,8 +336,10 @@ int main() {
       if (f.telemetry.mode == msg::DriveMode::IDLE) sawIdleMode = true;
       // EncoderReading is unconditionally present every frame (115-005
       // frame v2) -- no has_vel presence flag to gate on any more.
-      lastVelLeft = f.telemetry.enc_left.velocity;
-      lastVelRight = f.telemetry.enc_right.velocity;
+      // 124-008 (issue §B3): velocity is a raw sint32 wire int (0.1mm/s
+      // scale) -- unpackVelocity() is the GENERATED conversion.
+      lastVelLeft = msg::EncoderReading::unpackVelocity(f.telemetry.enc_left.velocity);
+      lastVelRight = msg::EncoderReading::unpackVelocity(f.telemetry.enc_right.velocity);
       printTraceRow(sim.cycleCount(), 0.0f, 0.0f, f.telemetry);
     }
   }
@@ -374,21 +374,9 @@ int main() {
   checkTrue(connHealthyThroughout, "kFlagConnLeft/kFlagConnRight stayed set across the whole run");
   std::printf("  HEALTH OK: no new fault bit set, connections healthy throughout\n\n");
 
-  // ===========================================================================
-  // Phase 5 (106-002): secondary telemetry is NOT starved to 0 Hz over this
-  // run's real ~40ms/cycle schedule -- `secondary-telemetry-starved-by-106-
-  // 001-cadence-retarget.md`'s own regime, reproduced here for real by the
-  // REAL App::RobotLoop (via SimApi), not just the App::Telemetry unit
-  // harness. This run covers 1 (boot) + 3 (settle) + 20 (ramp) + 12 (stop,
-  // 106-003's widened window) = 36 real cycles at ~40ms each, ~1.4s of
-  // virtual time -- comfortably more than 5x kSecondaryPeriod (200ms), so a
-  // healthy fix should show several secondary frames, not zero.
-  // ===========================================================================
-  beginScenario("secondary telemetry: not starved to 0 Hz over the run's real schedule");
-  checkTrue(secondaryFrameCount > 0,
-            "at least one TelemetrySecondary frame decoded across the whole run "
-            "(0 would reproduce the pre-106-002 starvation bug)");
-  std::printf("  SECONDARY OK: %d TelemetrySecondary frame(s) decoded across the run\n\n", secondaryFrameCount);
+  // Phase 5 (106-002, secondary-telemetry starvation) -- DELETED (124-009):
+  // TelemetrySecondary itself is gone (robot-state-blackboard-...md), so
+  // there is no secondary cadence left to starve or assert on.
 
   if (g_failureCount == 0) {
     std::printf("OK: scripted-twist demo complete\n");

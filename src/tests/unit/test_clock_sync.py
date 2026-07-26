@@ -83,8 +83,10 @@ class FakeClock:
 
 
 def _make_pong(t_robot_ms: int) -> str:
-    """Return a pong reply line for the given robot timestamp."""
-    return f"OK pong t={t_robot_ms}"
+    """Return a pong reply line for the given robot timestamp -- protocol
+    v5's ``PONG:t=<ms>`` shape (124-005, issue §4; replaces the pre-v5
+    ``"OK pong t=<ms>"``)."""
+    return f"PONG:t={t_robot_ms}"
 
 
 def _make_cs(start_s: float = 1_000_000.0) -> tuple[ClockSync, FakeClock]:
@@ -102,28 +104,31 @@ class TestParsePongT:
     """Unit tests for the module-level _parse_pong_t helper."""
 
     def test_plain_pong(self) -> None:
-        assert _parse_pong_t("OK pong t=12345") == 12345
+        assert _parse_pong_t("PONG:t=12345") == 12345
 
     def test_relay_prefix(self) -> None:
-        assert _parse_pong_t("< OK pong t=99") == 99
+        assert _parse_pong_t("< PONG:t=99") == 99
 
     def test_with_corr_id(self) -> None:
-        assert _parse_pong_t("OK pong t=500 #7") == 500
+        # 124-005: corr-ids are a binary-plane concept now (a `#<id>` text
+        # suffix is a pre-v4 vestige) -- kept as a defensive-parsing case,
+        # not a realistic wire shape any PONG: reply actually carries.
+        assert _parse_pong_t("PONG:t=500 #7") == 500
 
     def test_zero(self) -> None:
-        assert _parse_pong_t("OK pong t=0") == 0
+        assert _parse_pong_t("PONG:t=0") == 0
 
     def test_large_value(self) -> None:
-        assert _parse_pong_t("OK pong t=3600000") == 3600000
+        assert _parse_pong_t("PONG:t=3600000") == 3600000
 
     def test_empty_string(self) -> None:
         assert _parse_pong_t("") is None
 
     def test_no_t_field(self) -> None:
-        assert _parse_pong_t("OK pong") is None
+        assert _parse_pong_t("PONG") is None
 
     def test_non_integer_t(self) -> None:
-        assert _parse_pong_t("OK pong t=abc") is None
+        assert _parse_pong_t("PONG:t=abc") is None
 
     def test_wrong_tag(self) -> None:
         # Even if the line has t=, but it's not a pong format, we still parse t=.

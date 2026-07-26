@@ -64,11 +64,13 @@ from robot_radio.robot.protocol import AckEntry, TLMFrame
 _FLAG_FAULT_MOVE_TIMEOUT = 1 << 15
 
 
-def _frame(*, ack: "AckEntry | None" = None, acks: "list[AckEntry] | None" = None,
-           flags: int = 0) -> TLMFrame:
+def _frame(*, acks: "list[AckEntry] | None" = None, flags: int = 0) -> TLMFrame:
     """A minimal hand-built ``TLMFrame`` -- only the fields
-    ``_drain_and_poll()``/``_outcome_for_terminal_frame()`` actually read."""
-    return TLMFrame(flags=flags, ack=ack, acks=acks or [])
+    ``_drain_and_poll()``/``_outcome_for_terminal_frame()`` actually read.
+    124-008 (issue §B4) deleted the single "freshest ack" scalar slot
+    (``TLMFrame.ack``) -- ``acks`` (the bounded ring) is the only ack
+    source now."""
+    return TLMFrame(flags=flags, acks=acks or [])
 
 
 class _StubTransport:
@@ -90,10 +92,11 @@ class _StubTransport:
 
 
 def test_drain_and_poll_matches_ring_when_scalar_slot_is_absent():
-    """The headline fix: a frame whose scalar slot was never fresh for
-    move_id (``frame.ack is None``) still matches via its ``acks`` ring --
-    the pre-121-002 code would have returned `None` here."""
-    frame = _frame(ack=None, acks=[AckEntry(corr_id=7, ok=True, err_code=0)])
+    """The headline fix (121-002): a frame matches via its ``acks`` ring --
+    the pre-121-002 code, reading only the (since-124-008-deleted, issue
+    §B4) single "freshest ack" scalar slot, would have returned `None`
+    here."""
+    frame = _frame(acks=[AckEntry(corr_id=7, ok=True, err_code=0)])
     transport = _StubTransport([frame])
     latest_frame = [None]
 
@@ -106,44 +109,8 @@ def test_drain_and_poll_matches_ring_when_scalar_slot_is_absent():
     assert latest_frame[0] is frame
 
 
-def test_drain_and_poll_falls_back_to_scalar_slot_when_ring_has_no_match():
-    """Backward compatibility: a frame with an EMPTY ring (e.g. a test
-    double, or firmware/build that never populated it) still matches via
-    the scalar "freshest ack" slot -- the ring is additive, not a
-    replacement (docs/protocol-v4.md section 7.1)."""
-    ack = AckEntry(corr_id=7, ok=True, err_code=0)
-    frame = _frame(ack=ack, acks=[])
-    transport = _StubTransport([frame])
-    latest_frame = [None]
-
-    terminal = _drain_and_poll(transport, 7, latest_frame)
-
-    assert terminal is not None
-    matched_frame, matched_ack = terminal
-    assert matched_frame is frame
-    assert matched_ack is ack
-
-
-def test_drain_and_poll_ring_match_wins_over_a_differing_scalar_slot_on_the_same_frame():
-    """Disambiguation: the SAME frame's own scalar slot can be fresh for a
-    DIFFERENT, later corr_id (some other command's ack) while its ring
-    still carries the awaited move_id -- the ring match must be found, not
-    shadowed by the unrelated scalar slot."""
-    unrelated = AckEntry(corr_id=99, ok=False, err_code=5)
-    frame = _frame(ack=unrelated, acks=[AckEntry(corr_id=7, ok=True, err_code=0)])
-    transport = _StubTransport([frame])
-    latest_frame = [None]
-
-    terminal = _drain_and_poll(transport, 7, latest_frame)
-
-    assert terminal is not None
-    matched_frame, matched_ack = terminal
-    assert matched_ack.corr_id == 7
-    assert matched_ack.ok is True
-
-
 def test_drain_and_poll_returns_none_when_no_frame_matches():
-    frame = _frame(ack=None, acks=[AckEntry(corr_id=1, ok=True, err_code=0)])
+    frame = _frame(acks=[AckEntry(corr_id=1, ok=True, err_code=0)])
     transport = _StubTransport([frame])
     latest_frame = [None]
 
@@ -216,17 +183,6 @@ def test_outcome_for_terminal_frame_fault_on_move_timeout_flag_even_with_ok_ack(
     ack = AckEntry(corr_id=7, ok=True, err_code=0)
 
     assert _outcome_for_terminal_frame(frame, ack) == RunOutcome.FAULT
-
-
-def test_outcome_for_terminal_frame_ignores_the_frames_own_unrelated_scalar_slot():
-    """The matched entry is OK, but the enclosing frame's own scalar
-    "freshest ack" slot belongs to a DIFFERENT, failed command -- the
-    outcome must follow the matched entry, not `frame.ack`."""
-    unrelated_failed_ack = AckEntry(corr_id=99, ok=False, err_code=5)
-    frame = _frame(flags=0, ack=unrelated_failed_ack)
-    matched = AckEntry(corr_id=7, ok=True, err_code=0)
-
-    assert _outcome_for_terminal_frame(frame, matched) == RunOutcome.COMPLETED
 
 
 # ---------------------------------------------------------------------------
@@ -316,10 +272,9 @@ class _RingOnlyFakeTransport:
     def _make_frame(self, acks: "list[AckEntry]") -> TLMFrame:
         enc_i = int(self._enc)
         pose = (int(self._x), int(self._y), int(round(math.degrees(self._heading) * 100.0)))
-        # ack/ack_corr/ack_err stay None -- see this class's own docstring:
-        # every completion this fake reports rides the ring ONLY.
-        return TLMFrame(enc=(enc_i, enc_i), pose=pose, otos=pose, flags=0,
-                        ack=None, ack_corr=None, ack_err=None, acks=acks)
+        # 124-008 (issue §B4): the single "freshest ack" scalar slot is
+        # deleted -- every completion this fake reports rides the ring ONLY.
+        return TLMFrame(enc=(enc_i, enc_i), pose=pose, otos=pose, flags=0, acks=acks)
 
 
 def _heading_for_test() -> HeadingCorrector:

@@ -17,7 +17,7 @@ void FakeOtos::getOffset(float& x, float& y, float& heading)
     heading = 0.0f;
 }
 
-void FakeOtos::tick(uint64_t /*nowUs*/)
+void FakeOtos::tick(uint64_t nowUs)
 {
     // Body twist from the wheel velocities -- the SAME BodyKinematics::forward()
     // fusion App::RobotLoop::updateTlm() uses to stage frame_.twist. v_y stays
@@ -33,6 +33,7 @@ void FakeOtos::tick(uint64_t /*nowUs*/)
     cachedPose_.v_y = 0.0f;
     cachedPose_.omega = omega;
     poseFresh_ = true;
+    sampleTimeUs_ = nowUs;
 }
 
 }  // namespace App

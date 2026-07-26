@@ -115,9 +115,21 @@ def test_encoder_trace_grows_with_forward_drive_via_dead_reckoning(
     assert protocol is not None
     protocol.twist(200.0, 0.0, 6000.0)
 
-    assert _wait_until(lambda: len(model.encoder) >= _MIN_TRACE_POINTS), (
-        f"encoder trace only reached {len(model.encoder)} points within "
-        f"{_WAIT_TIMEOUT_S}s"
+    # 124-008 (issue Sec B3): EncoderReading.position is now a wire sint32
+    # quantized to the nearest whole mm ((scale)=1.0, replacing a
+    # full-precision float32) -- during the very first few ticks of an
+    # accel-limited ramp-up, true sub-mm growth can round to the SAME
+    # integer mm across a couple of frames, so waiting on point COUNT alone
+    # (the old condition) can land on _MIN_TRACE_POINTS while the ramp has
+    # barely cleared the assertion's own 1cm margin below. Wait on count
+    # AND real forward growth together so the test collects one more real
+    # tick whenever quantization makes the early points cluster.
+    assert _wait_until(
+        lambda: len(model.encoder) >= _MIN_TRACE_POINTS
+        and model.encoder[-1][0] > model.encoder[0][0] + 1.0
+    ), (
+        f"encoder trace did not reach {_MIN_TRACE_POINTS} points with "
+        f">1cm of forward growth within {_WAIT_TIMEOUT_S}s: {model.encoder}"
     )
 
     first_x, first_y = model.encoder[0]

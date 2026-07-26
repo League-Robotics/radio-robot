@@ -1,0 +1,129 @@
+"""src/tests/unit/test_command_registry.py -- 124-001 command-name registry.
+
+Sprint 124 ticket 001 (`clasi/sprints/124-.../tickets/001-command-name-
+registry-generated-schema-for-the-closed-verb-set.md`) adds
+`src/protos/commands.proto`'s `Verb` enum + `(binary)` enum-value option as
+the ONE source firmware dispatch and the host codec are generated from --
+closing the three-way drift risk between firmware, host, and the published
+protocol doc (sprint 124 architecture Decision 2).
+
+This test invokes the generator itself in-process
+(`gen_messages.generate_command_registry()`), exactly the way
+`test_gen_messages_no_getters.py` invokes `generate_headers()` -- so a
+regression is caught the instant the generator template changes, not only
+when someone remembers to regenerate and commit. Two things are checked:
+
+1. **Differential** (the ticket's own Testing section): the generated
+   firmware table (`src/firm/messages/commands.h`'s `kVerbTable[]`) and the
+   generated host constants (`src/host/robot_radio/io/wire_commands.py`'s
+   `VERBS`) agree byte-for-byte on verb names and binary/cleartext flags.
+2. **Inventory**: the closed verb set matches the issue's own §4 table
+   (`protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md`) --
+   HELLO/PING/ID/VER cleartext on the command side, DEVICE/PONG/ID/VER
+   cleartext on the reply side, MOVE/CONFIG/STOP binary command verbs,
+   TLM/OK/ERR binary reply verbs. A differential test alone only proves the
+   two generated outputs agree with EACH OTHER -- both come from the same
+   `_verb_rows()` walk in gen_messages.py, so they could agree with each
+   other while still drifting from the actual protocol spec; this second
+   check pins the registry's actual content against that spec.
+"""
+
+import re
+import sys
+from pathlib import Path
+
+# src/tests/unit/test_command_registry.py -> unit -> tests -> src -> repo root
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_SCRIPTS_DIR = _REPO_ROOT / "src" / "scripts"
+
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+import gen_messages  # noqa: E402  (path must be set up before this import)
+
+# Matches one kVerbTable[] row: `{ Verb::NAME, "NAME", true/false },`
+_CPP_ROW_RE = re.compile(
+    r'\{\s*Verb::(\w+)\s*,\s*"(\w+)"\s*,\s*(true|false)\s*\}'
+)
+
+# The closed v5 verb inventory, per the issue's §4 table and the existing
+# CommandEnvelope/ReplyEnvelope oneof arms (envelope.proto) -- NOT derived
+# from the generator itself, so this is an independent check against the
+# spec, not a tautology.
+_EXPECTED_CLEARTEXT = {"HELLO", "PING", "ID", "VER", "DEVICE", "PONG"}
+_EXPECTED_BINARY = {"MOVE", "CONFIG", "STOP", "TLM", "OK", "ERR"}
+
+
+def _parse_cpp_verb_table(commands_h: str) -> list[tuple[str, bool]]:
+    """Extract [(name, binary), ...] from commands.h's kVerbTable[] rows, in
+    the order they appear in the generated text."""
+    rows = []
+    for enum_name, str_name, binary_lit in _CPP_ROW_RE.findall(commands_h):
+        assert enum_name == str_name, (
+            f"kVerbTable row's Verb::{enum_name} doesn't match its own "
+            f'string literal "{str_name}"'
+        )
+        rows.append((str_name, binary_lit == "true"))
+    return rows
+
+
+def _parse_host_verbs(wire_commands_py: str) -> list[tuple[str, bool]]:
+    """exec() the generated host module text and return its VERBS tuple as
+    [(name, binary), ...] -- proves the emitted text is valid, importable
+    Python, not just that a regex over it looks right."""
+    namespace: dict = {}
+    exec(compile(wire_commands_py, "<generated wire_commands.py>", "exec"), namespace)
+    return [(v.name, v.binary) for v in namespace["VERBS"]]
+
+
+def test_firmware_and_host_registries_agree():
+    """Differential test: the two generated outputs must agree byte-for-byte
+    on verb names and binary/cleartext flags (ticket 001's own Testing
+    section)."""
+    commands_h, wire_commands_py = gen_messages.generate_command_registry()
+
+    cpp_rows = _parse_cpp_verb_table(commands_h)
+    host_rows = _parse_host_verbs(wire_commands_py)
+
+    assert cpp_rows, "commands.h's kVerbTable[] parsed to zero rows -- regex or codegen broke"
+    assert cpp_rows == host_rows, (
+        "firmware kVerbTable[] and host VERBS disagree -- they must be "
+        "generated from the exact same commands.proto Verb enum:\n"
+        f"  firmware: {cpp_rows}\n"
+        f"  host:     {host_rows}"
+    )
+
+    # kVerbCount / len(VERBS) must match the row count on both sides too.
+    count_match = re.search(r"constexpr uint8_t kVerbCount = (\d+);", commands_h)
+    assert count_match, "commands.h missing kVerbCount"
+    assert int(count_match.group(1)) == len(cpp_rows) == len(host_rows)
+
+
+def test_verb_inventory_matches_the_issue_spec():
+    """The registry's actual content matches the v5 issue's own §4 table --
+    not merely internal self-consistency."""
+    commands_h, wire_commands_py = gen_messages.generate_command_registry()
+    cpp_rows = _parse_cpp_verb_table(commands_h)
+
+    names = {name for name, _binary in cpp_rows}
+    cleartext = {name for name, binary in cpp_rows if not binary}
+    binary = {name for name, binary in cpp_rows if binary}
+
+    assert names == _EXPECTED_CLEARTEXT | _EXPECTED_BINARY, (
+        f"verb set changed unexpectedly: {names}"
+    )
+    assert cleartext == _EXPECTED_CLEARTEXT, (
+        f"cleartext verb set mismatch: {cleartext}"
+    )
+    assert binary == _EXPECTED_BINARY, f"binary verb set mismatch: {binary}"
+
+    # VERB_UNSPECIFIED (the proto3 zero sentinel) must never appear as a row
+    # on either side -- it isn't a real wire verb.
+    assert "VERB_UNSPECIFIED" not in names
+    assert "VERB_UNSPECIFIED" not in wire_commands_py
+
+
+if __name__ == "__main__":
+    import pytest
+
+    sys.exit(pytest.main([__file__, "-v"]))

@@ -8,11 +8,14 @@ import "options.proto";
 // Shared geometric and kinematic value types
 // ---------------------------------------------------------------------------
 
-// 2-D pose: position in mm, heading in radians.
+// 2-D pose: position in mm, heading in radians. Packed fixed-point on the
+// wire (sprint 124 ticket 008, issue §B3): x/y at 1mm scale (±32m), h at
+// 1mrad scale (±pi) -- generated pack*()/unpack*() conversion methods live
+// on the generated struct (options.proto's (scale) doc comment).
 message Pose2D {
-  float x  = 1;
-  float y  = 2;
-  float h  = 3;
+  sint32 x  = 1 [(scale) = 1.0, (abs_max) = 32000];    // [mm]
+  sint32 y  = 2 [(scale) = 1.0, (abs_max) = 32000];    // [mm]
+  sint32 h  = 3 [(scale) = 0.001, (abs_max) = 3142];   // [rad]
 }
 
 // Body-frame twist for differential (non-holonomic) drivetrains.
@@ -21,11 +24,13 @@ message BodyTwist {
   float omega = 2; // angular rate, rad/s
 }
 
-// Body-frame twist for holonomic (3-DOF) drivetrains.
+// Body-frame twist for holonomic (3-DOF) drivetrains. Packed fixed-point on
+// the wire (124-008, issue §B3): v_x/v_y at 0.1mm/s scale (±400mm/s), omega
+// at 0.01rad/s scale (±10rad/s).
 message BodyTwist3 {
-  float v_x   = 1;
-  float v_y   = 2;
-  float omega = 3;
+  sint32 v_x   = 1 [(scale) = 0.1, (abs_max) = 4000];    // [mm/s]
+  sint32 v_y   = 2 [(scale) = 0.1, (abs_max) = 4000];    // [mm/s]
+  sint32 omega = 3 [(scale) = 0.01, (abs_max) = 1000];   // [rad/s]
 }
 
 // Body-frame acceleration (holonomic).

@@ -79,19 +79,23 @@ void checkFloatEq(float actual, float expected, const std::string& what, float t
   }
 }
 
-// Finds the single ack slot for `corrId` across every decoded telemetry
-// frame in `lines` -- the single Telemetry.ack_corr/ack_err slot (valid
-// iff flags bit 5, ack_fresh) that replaced the pre-115 depth-3 AckEntry
-// ring (115-003 frame v2). Returns true and fills *errCode if found
-// (0 == OK, nonzero == the msg::ErrCode value).
+// Finds `corrId`'s own entry in the bounded ack ring (Telemetry.acks,
+// 124-008: packed uint32, corr_id<<4|err -- the single "freshest ack"
+// scalar slot / kFlagAckFresh this function used to scan is DELETED, issue
+// §B4; ring membership alone means "really acked," no freshness gate
+// needed) across every decoded telemetry frame in `lines`. Returns true
+// and fills *errCode if found (0 == OK, nonzero == the msg::ErrCode value).
 bool findAck(const std::vector<TestSupport::DecodedLine>& lines, uint32_t corrId, uint32_t* errCode) {
-  constexpr uint32_t kAckFreshBit = 1u << 5;
+  constexpr uint32_t kAckErrBits = 4;
+  constexpr uint32_t kAckErrMask = (1u << kAckErrBits) - 1;
   for (const auto& line : lines) {
     if (line.kind != TestSupport::DecodedKind::kTelemetry) continue;
-    if ((line.telemetry.flags & kAckFreshBit) == 0) continue;
-    if (line.telemetry.ack_corr == corrId) {
-      *errCode = line.telemetry.ack_err;
-      return true;
+    for (uint8_t i = 0; i < line.telemetry.acks_count; ++i) {
+      const uint32_t packed = line.telemetry.acks_[i];
+      if ((packed >> kAckErrBits) == corrId) {
+        *errCode = packed & kAckErrMask;
+        return true;
+      }
     }
   }
   return false;
@@ -132,24 +136,39 @@ bool putMessageField(Buf& b, uint32_t number, const Buf& nested) {
   return putBytesField(b, number, nested.data, nested.len);
 }
 
-// armorLine() -- 123-002: CRC-then-COBS frame body (was "*B"+base64 line
-// pre-123), byte-for-byte the same composition as App::Comms::sendReply()/
-// TestSupport::armor() (wire_test_codec.cpp). The trailing 0x00 delimiter
-// is a transport concern, not included here -- SimHarness::injectCommand()
-// (this file's only caller, via armorMotorConfigCommand() below) recovers
-// the length via strlen() since COBS-encoded output is 0x00-free by
-// construction.
-std::string armorLine(const uint8_t* raw, size_t rawLen) {
+// armorLine() -- 124-005 (protocol v5 Part A, "framing grammar cutover"):
+// builds the COMPLETE wire LINE, `<command>':'<COBS+CRC bytes>` (CRC-then-
+// COBS, delimiter 0x0A), byte-for-byte the same composition as
+// App::Comms::sendReply()/decodeBinaryFrame() / TestSupport::armor()
+// (wire_test_codec.cpp). `command` is REQUIRED -- every dispatched binary
+// command needs a real registry verb name (messages/commands.h); this
+// file's only caller (armorMotorConfigCommand() below) always passes
+// "CONFIG". The trailing '\n' terminator is a transport concern, not
+// included here -- SimHarness::injectCommand() (this file's only caller)
+// takes an EXPLICIT length, never strlen()-recovered: COBS is keyed on
+// 0x0A now, not 0x00, so the line may legitimately contain an embedded
+// 0x00 byte.
+std::string armorLine(const uint8_t* raw, size_t rawLen, const char* command) {
   uint8_t combined[256];
   if (rawLen > sizeof(combined) - 2) return std::string();
   std::memcpy(combined, raw, rawLen);
   size_t combinedLen = rawLen;
-  const uint16_t crc = WireRuntime::crcCompute(raw, rawLen);
+  const size_t commandLen = std::strlen(command);
+  uint16_t crc = WireRuntime::crcInit();
+  crc = WireRuntime::crcUpdate(crc, reinterpret_cast<const uint8_t*>(command), commandLen);
+  const uint8_t sep = ':';
+  crc = WireRuntime::crcUpdate(crc, &sep, 1);
+  crc = WireRuntime::crcUpdate(crc, raw, rawLen);
   if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) return std::string();
   uint8_t framed[300];
   size_t framedLen = 0;
-  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen)) return std::string();
-  return std::string(reinterpret_cast<const char*>(framed), framedLen);
+  if (!WireRuntime::cobsEncode(combined, combinedLen, framed, sizeof(framed), &framedLen, /*delimiter=*/0x0A)) {
+    return std::string();
+  }
+  std::string line(command, commandLen);
+  line += ':';
+  line.append(reinterpret_cast<const char*>(framed), framedLen);
+  return line;
 }
 
 // Builds an armored CommandEnvelope{corr_id, config: ConfigDelta{motor:
@@ -167,7 +186,7 @@ std::string armorMotorConfigCommand(float kp, uint32_t corrId) {
   Buf env;
   putVarintField(env, 1, corrId);        // CommandEnvelope.corr_id
   putMessageField(env, 6, configDelta);  // CommandEnvelope.config, field 6
-  return armorLine(env.data, env.len);
+  return armorLine(env.data, env.len, "CONFIG");
 }
 
 }  // namespace
@@ -257,7 +276,7 @@ int main() {
     checkTrue(!sim.isConfigured(), "setup: still unconfigured before the config patch");
     std::string line = armorMotorConfigCommand(/*kp=*/0.05f, /*corrId=*/504);
     checkTrue(!line.empty(), "armor() of the CONFIG{motor} envelope succeeds");
-    sim.injectCommand(line.c_str());
+    sim.injectCommand(line);
     sim.step(3);
 
     std::vector<TestSupport::DecodedLine> lines = sim.drainTelemetry();

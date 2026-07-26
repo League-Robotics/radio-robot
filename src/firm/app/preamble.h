@@ -16,9 +16,10 @@
 //   }
 // Telemetry flows from power-on (frames report per-device status, via this
 // class's own accessors below); commands are not consumed until the main
-// loop starts. Wiring Preamble's accessors into Telemetry::setFrame()/
-// setEvent(kEventBootReady, ...) is main.cpp's construction job -- this
-// class only builds the driver and its read-only status surface.
+// loop starts. Wiring Preamble's accessors into a boot-time
+// Types::RobotState/Telemetry::update() call (124-009: RobotLoop::boot()'s
+// own job, robot_loop.cpp) is main.cpp's construction job -- this class
+// only builds the driver and its read-only status surface.
 //
 // --- step()'s contract: ONE bounded probe action per call, never sleeps ---
 // Each call to step() advances AT MOST ONE not-yet-resolved device's own
@@ -102,13 +103,14 @@ class Preamble {
   // kMaxPreamble's own comment.
   bool done() const;
 
-  // --- Per-device status accessors -- boot telemetry. RobotLoop wires
-  // these into App::Telemetry::setFrame()'s
-  // connLeft/connRight/otosConnected fields and
-  // setEvent(kEventBootReady, done()) on done()'s first-true transition
-  // (see telemetry.h's fault/event bit-layout comment for kEventBootReady).
-  // Each is a cheap forwarding accessor to the leaf's own existing status
-  // method -- Preamble holds no separate copy of this state. ---
+  // --- Per-device status accessors -- boot telemetry. RobotLoop::boot()
+  // (124-009) wires these into a throwaway Types::RobotState's
+  // wheelLeft/wheelRight/otos.connected fields (tlm_.update(bootState))
+  // and calls tlm_.setLiveFlag(kFlagEventBootReady, true) on done()'s
+  // first-true transition (see telemetry.h's fault/event bit-layout
+  // comment for kFlagEventBootReady). Each is a cheap forwarding accessor
+  // to the leaf's own existing status method -- Preamble holds no separate
+  // copy of this state. ---
   bool leftConnected() const { return left_.connected(); }
   bool rightConnected() const { return right_.connected(); }
   bool otosPresent() const { return otos_.present(); }

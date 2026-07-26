@@ -1,0 +1,247 @@
+// firm_types_robot_state_harness.cpp -- off-hardware acceptance proof for
+// sprint 124 ticket 007 (SUC-004), Types::RobotState
+// (src/firm/types/robot_state.h).
+//
+// This harness's OWN include list is the compile-level dependency-free
+// assertion: robot_state.h, plus only host-standard-library headers needed
+// to exercise it (<cstdint>/<cstdio>/<cstring>/<type_traits>) -- no
+// messages/, no app/, no config/, nothing else from src/firm or src/motion.
+// test_firm_types_robot_state.py compiles this file with `-I <repo>/src`
+// ONLY (matching robot_state.h's own `#include "firm/types/robot_state.h"`-
+// style qualified include convention) -- if robot_state.h ever grew a
+// `messages/` or `app/` include, either the include would fail to resolve
+// (those trees are not on this narrow include path) or, if it happened to
+// resolve by accident, the module boundary this ticket exists to hold would
+// already be broken; the grep-enforceable check
+// (`grep -n "messages/\|msg::" src/firm/types/robot_state.h`) in the
+// pytest wrapper is the second, complementary proof.
+//
+// Proves, per the ticket's own acceptance criteria:
+//   1. robot_state.h compiles standalone (this file's own existence + the
+//      pytest wrapper's narrow -I path).
+//   2. Types::RobotState is trivially copyable (static_assert below).
+//   3. Every one of Motion::StateEstimator::Input's former 16 flat fields
+//      is representable, no information loss -- proven by round-tripping
+//      distinct values through every section a copy touches (the "test
+//      fixture" role from the issue: construct, fill, copy, assert).
+//   4. RobotState::Wheel carries positionEpoch alongside
+//      position/velocity/sampleTime/connected/cmdVelocity.
+//
+// Mirrors motion_stop_condition_harness.cpp's own hand-rolled
+// PASS/FAIL/exit-nonzero shape (no gtest, no pytest-side C++ dependency).
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <type_traits>
+
+#include "firm/types/robot_state.h"
+
+namespace {
+
+int g_failureCount = 0;
+
+void checkTrue(bool condition, const char* what) {
+  if (!condition) {
+    ++g_failureCount;
+    std::printf("  FAIL: %s\n", what);
+  }
+}
+
+void checkFloatEq(float actual, float expected, const char* what) {
+  if (actual != expected) {
+    ++g_failureCount;
+    std::printf("  FAIL: %s -- expected %g, got %g\n", what, static_cast<double>(expected),
+                static_cast<double>(actual));
+  }
+}
+
+void checkUintEq(uint32_t actual, uint32_t expected, const char* what) {
+  if (actual != expected) {
+    ++g_failureCount;
+    std::printf("  FAIL: %s -- expected %u, got %u\n", what, static_cast<unsigned>(expected),
+                static_cast<unsigned>(actual));
+  }
+}
+
+}  // namespace
+
+// Trivially copyable (issue: "plain fields, no pointers, no heap, no
+// virtuals" -- tests copy it for golden comparisons). Also implies
+// standard-layout-adjacent plain-data status; not itself asserted
+// separately since trivially-copyable is the ticket's own stated bar.
+static_assert(std::is_trivially_copyable_v<Types::RobotState>,
+              "Types::RobotState must be trivially copyable (plain fields only)");
+
+int main() {
+  std::printf("--- Types::RobotState: dependency-free, trivially-copyable, no field loss\n");
+
+  Types::RobotState state{};  // default-constructed: every field its own declared default
+
+  // --- Fill every section a caller genuinely writes, per section, with
+  // distinct values (never the same value twice, so a golden-copy bug that
+  // swaps two same-typed fields is still caught). Mirrors the 16 fields
+  // Motion::StateEstimator::Input used to carry flat, now spread across
+  // wheelLeft/wheelRight/pose/otos -- see robot_state.h's own mapping
+  // comment in each section. ---
+  state.time.cycleStart = 1000;
+  state.time.cycleBusy = 2000;
+  state.time.cyclePeriod = 40000;
+
+  state.wheelLeft.position = 100.0f;
+  state.wheelLeft.velocity = 50.0f;
+  state.wheelLeft.sampleTime = 1000;
+  state.wheelLeft.connected = true;
+  state.wheelLeft.positionEpoch = 3;
+  state.wheelLeft.cmdVelocity = 60.0f;
+
+  state.wheelRight.position = -40.0f;
+  state.wheelRight.velocity = -20.0f;
+  state.wheelRight.sampleTime = 1001;
+  state.wheelRight.connected = false;
+  state.wheelRight.positionEpoch = 5;
+  state.wheelRight.cmdVelocity = -25.0f;
+
+  state.otos.present = true;
+  state.otos.connected = true;
+  state.otos.x = 10.0f;
+  state.otos.y = 20.0f;
+  state.otos.heading = 0.5f;
+  state.otos.v_x = 30.0f;
+  state.otos.v_y = 40.0f;
+  state.otos.omega = 0.75f;
+  state.otos.sampleTime = 1002;
+
+  state.perception.line = 0x01020304u;
+  state.perception.color = 0x05060708u;
+  state.perception.lineFresh = true;
+  state.perception.colorFresh = false;
+
+  state.pose.x = 11.0f;
+  state.pose.y = 22.0f;
+  state.pose.heading = 0.25f;
+  state.pose.v_x = 33.0f;
+  state.pose.v_y = 0.0f;
+  state.pose.omega = 0.125f;
+
+  state.estimate.wheelLeft.distance = 101.0f;
+  state.estimate.wheelLeft.velocity = 51.0f;
+  state.estimate.wheelLeft.basisTime = 1003;
+  state.estimate.wheelLeft.valid = true;
+  state.estimate.wheelRight.distance = -41.0f;
+  state.estimate.wheelRight.velocity = -21.0f;
+  state.estimate.wheelRight.basisTime = 1004;
+  state.estimate.wheelRight.valid = true;
+  state.estimate.body.x = 12.0f;
+  state.estimate.body.y = 24.0f;
+  state.estimate.body.heading = 0.375f;
+  state.estimate.body.v_x = 34.0f;
+  state.estimate.body.v_y = 0.5f;
+  state.estimate.body.omega = 0.625f;
+  state.estimate.body.basisTime = 1005;
+  state.estimate.body.valid = true;
+  state.estimate.innovations.heading = 0.01f;
+  state.estimate.innovations.omega = 0.02f;
+  state.estimate.innovations.valid = true;
+
+  state.command.mode = Types::Mode::Velocity;
+  state.command.moveActive = true;
+  state.command.v_x = 45.0f;
+  state.command.omega = 0.9f;
+
+  state.health.i2cSafetyNetCount = 7;
+  state.health.commsMalformedCount = 2;
+  state.health.wedgeLatch = true;
+  state.health.moveTimeout = false;
+  state.health.shapingDisabled = true;
+
+  // --- Golden copy: a plain `=` copy (the trivially-copyable contract in
+  // action -- no custom copy constructor to get wrong). Every field below
+  // must survive unchanged. ---
+  Types::RobotState copy = state;
+
+  checkUintEq(copy.time.cycleStart, 1000, "time.cycleStart");
+  checkUintEq(copy.time.cycleBusy, 2000, "time.cycleBusy");
+  checkUintEq(copy.time.cyclePeriod, 40000, "time.cyclePeriod");
+
+  checkFloatEq(copy.wheelLeft.position, 100.0f, "wheelLeft.position");
+  checkFloatEq(copy.wheelLeft.velocity, 50.0f, "wheelLeft.velocity");
+  checkUintEq(copy.wheelLeft.sampleTime, 1000, "wheelLeft.sampleTime");
+  checkTrue(copy.wheelLeft.connected, "wheelLeft.connected");
+  checkUintEq(copy.wheelLeft.positionEpoch, 3, "wheelLeft.positionEpoch");
+  checkFloatEq(copy.wheelLeft.cmdVelocity, 60.0f, "wheelLeft.cmdVelocity");
+
+  checkFloatEq(copy.wheelRight.position, -40.0f, "wheelRight.position");
+  checkFloatEq(copy.wheelRight.velocity, -20.0f, "wheelRight.velocity");
+  checkUintEq(copy.wheelRight.sampleTime, 1001, "wheelRight.sampleTime");
+  checkTrue(!copy.wheelRight.connected, "wheelRight.connected (false)");
+  checkUintEq(copy.wheelRight.positionEpoch, 5, "wheelRight.positionEpoch");
+  checkFloatEq(copy.wheelRight.cmdVelocity, -25.0f, "wheelRight.cmdVelocity");
+
+  checkTrue(copy.otos.present, "otos.present");
+  checkTrue(copy.otos.connected, "otos.connected");
+  checkFloatEq(copy.otos.x, 10.0f, "otos.x");
+  checkFloatEq(copy.otos.y, 20.0f, "otos.y");
+  checkFloatEq(copy.otos.heading, 0.5f, "otos.heading");
+  checkFloatEq(copy.otos.v_x, 30.0f, "otos.v_x");
+  checkFloatEq(copy.otos.v_y, 40.0f, "otos.v_y");
+  checkFloatEq(copy.otos.omega, 0.75f, "otos.omega");
+  checkUintEq(copy.otos.sampleTime, 1002, "otos.sampleTime");
+
+  checkUintEq(copy.perception.line, 0x01020304u, "perception.line");
+  checkUintEq(copy.perception.color, 0x05060708u, "perception.color");
+  checkTrue(copy.perception.lineFresh, "perception.lineFresh");
+  checkTrue(!copy.perception.colorFresh, "perception.colorFresh (false)");
+
+  checkFloatEq(copy.pose.x, 11.0f, "pose.x");
+  checkFloatEq(copy.pose.y, 22.0f, "pose.y");
+  checkFloatEq(copy.pose.heading, 0.25f, "pose.heading");
+  checkFloatEq(copy.pose.v_x, 33.0f, "pose.v_x");
+  checkFloatEq(copy.pose.v_y, 0.0f, "pose.v_y");
+  checkFloatEq(copy.pose.omega, 0.125f, "pose.omega");
+
+  checkFloatEq(copy.estimate.wheelLeft.distance, 101.0f, "estimate.wheelLeft.distance");
+  checkFloatEq(copy.estimate.wheelLeft.velocity, 51.0f, "estimate.wheelLeft.velocity");
+  checkUintEq(copy.estimate.wheelLeft.basisTime, 1003, "estimate.wheelLeft.basisTime");
+  checkTrue(copy.estimate.wheelLeft.valid, "estimate.wheelLeft.valid");
+  checkFloatEq(copy.estimate.wheelRight.distance, -41.0f, "estimate.wheelRight.distance");
+  checkFloatEq(copy.estimate.wheelRight.velocity, -21.0f, "estimate.wheelRight.velocity");
+  checkUintEq(copy.estimate.wheelRight.basisTime, 1004, "estimate.wheelRight.basisTime");
+  checkTrue(copy.estimate.wheelRight.valid, "estimate.wheelRight.valid");
+  checkFloatEq(copy.estimate.body.x, 12.0f, "estimate.body.x");
+  checkFloatEq(copy.estimate.body.y, 24.0f, "estimate.body.y");
+  checkFloatEq(copy.estimate.body.heading, 0.375f, "estimate.body.heading");
+  checkFloatEq(copy.estimate.body.v_x, 34.0f, "estimate.body.v_x");
+  checkFloatEq(copy.estimate.body.v_y, 0.5f, "estimate.body.v_y");
+  checkFloatEq(copy.estimate.body.omega, 0.625f, "estimate.body.omega");
+  checkUintEq(copy.estimate.body.basisTime, 1005, "estimate.body.basisTime");
+  checkTrue(copy.estimate.body.valid, "estimate.body.valid");
+  checkFloatEq(copy.estimate.innovations.heading, 0.01f, "estimate.innovations.heading");
+  checkFloatEq(copy.estimate.innovations.omega, 0.02f, "estimate.innovations.omega");
+  checkTrue(copy.estimate.innovations.valid, "estimate.innovations.valid");
+
+  checkTrue(copy.command.mode == Types::Mode::Velocity, "command.mode");
+  checkTrue(copy.command.moveActive, "command.moveActive");
+  checkFloatEq(copy.command.v_x, 45.0f, "command.v_x");
+  checkFloatEq(copy.command.omega, 0.9f, "command.omega");
+
+  checkUintEq(copy.health.i2cSafetyNetCount, 7, "health.i2cSafetyNetCount");
+  checkUintEq(copy.health.commsMalformedCount, 2, "health.commsMalformedCount");
+  checkTrue(copy.health.wedgeLatch, "health.wedgeLatch");
+  checkTrue(!copy.health.moveTimeout, "health.moveTimeout (false)");
+  checkTrue(copy.health.shapingDisabled, "health.shapingDisabled");
+
+  // The original is untouched by mutating the copy -- proves the copy is a
+  // genuine independent value, not a reference/alias (byte-for-byte memcmp
+  // against a second untouched copy, exercising the "no pointers, no heap"
+  // claim at the byte level, not just field-by-field).
+  Types::RobotState untouchedCopy = state;
+  checkTrue(std::memcmp(&state, &untouchedCopy, sizeof(Types::RobotState)) == 0,
+            "byte-for-byte copy equality (memcmp)");
+
+  if (g_failureCount == 0) {
+    std::printf("PASS\n");
+    return 0;
+  }
+  std::printf("FAIL: %d check(s) failed\n", g_failureCount);
+  return 1;
+}

@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 filed: 2026-07-25
 filed_by: team-lead (stakeholder directive, protocol design session 2026-07-25)
 related:

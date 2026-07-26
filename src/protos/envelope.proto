@@ -3,6 +3,7 @@ syntax = "proto3";
 package robot;
 
 import "config.proto";
+import "options.proto";
 import "telemetry.proto";
 
 // ---------------------------------------------------------------------------
@@ -242,7 +243,17 @@ message ReplyEnvelope {
   // fault/event notification now rides `Telemetry.fault_bits`/
   // `event_bits` (telemetry.proto) instead of a dedicated reply arm.
   reserved 5 to 11;
-  uint32 corr_id = 1;
+  // (max) (124-008, issue §B5's own size-accounting table -- needed to hit
+  // the Telemetry-carrying tlm arm's ≤130B gate): corr_id is a host-
+  // assigned correlation counter (same conceptual range as
+  // CommandEnvelope.corr_id/Move.id/the packed acks word's own corr_id
+  // sub-field, all bounded to 16 bits elsewhere in this schema) -- for the
+  // tlm arm specifically it is always 0 (proto3 implicit presence omits
+  // it from the wire entirely -- Telemetry rides as an unsolicited push,
+  // App::Telemetry::emitPrimary()'s own `env.corr_id = 0` comment), so
+  // this bound only narrows the WORST-CASE size estimate for the ok/err
+  // arms' real, small correlation ids.
+  uint32 corr_id = 1 [(max) = 65535];
   oneof body {
     Ack       ok   = 2;
     Error     err  = 3;

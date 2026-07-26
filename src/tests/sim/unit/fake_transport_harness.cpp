@@ -2,12 +2,14 @@
 // 105-002 (SUC-019), TestSupport::FakeTransport
 // (src/tests/sim/support/fake_transport.h). Proves the primitive ITSELF, in
 // isolation from App::Comms/App::Telemetry: readLine() is non-blocking and
-// returns App::FrameKind::kNone the instant the inbound FIFO is empty,
-// enqueueInbound()/enqueueInboundBinary() frames drain in FIFO order at
-// most one per readLine() call (each tagged with the FrameKind it was
-// enqueued as), arbitrary (including realistic COBS+CRC-framed, 123-002)
-// content survives the FIFO round trip byte-for-byte, and send()/
-// sendReliable() are two genuinely separate captures.
+// returns false the instant the inbound FIFO is empty, enqueueInbound()/
+// enqueueInboundBinary() lines drain in FIFO order at most one per
+// readLine() call -- 124-005: no more per-entry FrameKind tag, since
+// App::Transport itself no longer distinguishes text/binary at all (see
+// comms.h's own file header) -- arbitrary (including realistic COBS+CRC-
+// framed, 123-002/124-005) content survives the FIFO round trip
+// byte-for-byte, and send()/sendReliable() are two genuinely separate
+// captures.
 //
 // The Comms::pump()/Telemetry::emit() INTEGRATION proofs required by this
 // ticket's own SUC-019 acceptance criteria (a real COBS+CRC-framed MOVE
@@ -74,31 +76,33 @@ void checkStrEq(const std::string& actual, const std::string& expected, const st
 }
 
 // ===========================================================================
-// 1. readLine() on a never-populated FakeTransport returns App::FrameKind::
-//    kNone immediately -- never blocks, matches Transport::readLine()'s
+// 1. readLine() on a never-populated FakeTransport returns false
+//    immediately -- never blocks, matches Transport::readLine()'s
 //    documented non-blocking contract.
 // ===========================================================================
 
 void scenarioReadLineReturnsNoneWhenEmpty() {
-  beginScenario("readLine(): returns App::FrameKind::kNone when the inbound FIFO is empty");
+  beginScenario("readLine(): returns false when the inbound FIFO is empty");
 
   TestSupport::FakeTransport fake;
   char buf[64] = {};
   uint16_t outLen = 0;
-  App::FrameKind kind = fake.readLine(buf, sizeof(buf), &outLen);
+  bool got = fake.readLine(buf, sizeof(buf), &outLen);
 
-  checkTrue(kind == App::FrameKind::kNone, "readLine() on a never-populated FakeTransport");
+  checkFalse(got, "readLine() on a never-populated FakeTransport");
   checkU64Eq(fake.inboundSize(), 0, "inboundSize() stays 0");
 }
 
 // ===========================================================================
 // 2. enqueueInbound() lines drain in FIFO order, at most one per
-//    readLine() call, each tagged App::FrameKind::kText -- matches
-//    Comms::pump()'s own "at most one frame per call" contract.
+//    readLine() call -- matches Comms::pump()'s own "at most one line per
+//    call" contract. 124-005: no more per-entry kind tag (App::Transport
+//    itself no longer distinguishes text/binary -- see comms.h's own file
+//    header).
 // ===========================================================================
 
 void scenarioEnqueueInboundDrainsInFifoOrderOnePerCall() {
-  beginScenario("enqueueInbound(): lines drain in FIFO order, one per readLine() call, tagged kText");
+  beginScenario("enqueueInbound(): lines drain in FIFO order, one per readLine() call");
 
   TestSupport::FakeTransport fake;
   fake.enqueueInbound("first");
@@ -109,51 +113,53 @@ void scenarioEnqueueInboundDrainsInFifoOrderOnePerCall() {
   char buf[64] = {};
   uint16_t outLen = 0;
 
-  App::FrameKind kind = fake.readLine(buf, sizeof(buf), &outLen);
-  checkTrue(kind == App::FrameKind::kText, "first readLine() call succeeds, tagged kText");
+  bool got = fake.readLine(buf, sizeof(buf), &outLen);
+  checkTrue(got, "first readLine() call succeeds");
   checkStrEq(buf, "first", "first readLine() call returns the oldest queued line");
   checkU64Eq(fake.inboundSize(), 2, "inboundSize() drops to 2 after one drain");
 
-  kind = fake.readLine(buf, sizeof(buf), &outLen);
-  checkTrue(kind == App::FrameKind::kText, "second readLine() call succeeds, tagged kText");
+  got = fake.readLine(buf, sizeof(buf), &outLen);
+  checkTrue(got, "second readLine() call succeeds");
   checkStrEq(buf, "second", "second readLine() call returns the next-oldest queued line");
 
-  kind = fake.readLine(buf, sizeof(buf), &outLen);
-  checkTrue(kind == App::FrameKind::kText, "third readLine() call succeeds, tagged kText");
+  got = fake.readLine(buf, sizeof(buf), &outLen);
+  checkTrue(got, "third readLine() call succeeds");
   checkStrEq(buf, "third", "third readLine() call returns the last queued line");
   checkU64Eq(fake.inboundSize(), 0, "inboundSize() is 0 once every queued line is drained");
 
-  kind = fake.readLine(buf, sizeof(buf), &outLen);
-  checkTrue(kind == App::FrameKind::kNone, "a fourth readLine() call returns kNone -- queue exhausted");
+  got = fake.readLine(buf, sizeof(buf), &outLen);
+  checkFalse(got, "a fourth readLine() call returns false -- queue exhausted");
 }
 
 // ===========================================================================
-// 3. A realistic COBS+CRC-framed binary frame (123-002 -- was "*B..." base64
-//    text pre-123), INCLUDING arbitrary non-ASCII/non-printable byte
-//    values, survives the FIFO round trip byte-for-byte and is tagged
-//    App::FrameKind::kBinary -- FakeTransport never mutates or truncates
-//    the content a test enqueues (the ONLY thing later tickets, e.g. 004's
-//    sim_api, can rely on to script real framed input).
+// 3. A realistic COBS+CRC-framed binary line (123-002/124-005 -- was "*B..."
+//    base64 text pre-123), INCLUDING arbitrary non-ASCII/non-printable byte
+//    values (a literal 0x00 included -- 124-005: COBS is keyed on 0x0A now,
+//    not 0x00, so a real armored line may legitimately contain one),
+//    survives the FIFO round trip byte-for-byte -- FakeTransport never
+//    mutates or truncates the content a test enqueues (the ONLY thing later
+//    tickets, e.g. 004's sim_api, can rely on to script real framed input).
 // ===========================================================================
 
 void scenarioBinaryFrameSurvivesRoundTripByteForByte() {
-  beginScenario("enqueueInboundBinary()/readLine(): a binary frame round-trips byte-for-byte, tagged kBinary");
+  beginScenario("enqueueInboundBinary()/readLine(): a binary line round-trips byte-for-byte");
 
   TestSupport::FakeTransport fake;
-  // Deliberately includes bytes >= 0x80 and a mid-range control byte --
-  // proves the FIFO is a genuine byte-buffer round trip, not a text-line
+  // Deliberately includes bytes >= 0x80, a mid-range control byte, and a
+  // literal 0x00 -- proves the FIFO is a genuine byte-buffer round trip
+  // (explicit length, never strlen()-recovered), not a text-line
   // assumption in disguise.
-  const uint8_t frame[] = {0x01, 0xAB, 0xCD, 0x0D, 0xFF, 0x7F, 0x02};
+  const uint8_t frame[] = {0x01, 0xAB, 0xCD, 0x00, 0x0D, 0xFF, 0x7F, 0x02};
   fake.enqueueInboundBinary(frame, sizeof(frame));
-  checkU64Eq(fake.inboundSize(), 1, "inboundSize() reflects the one queued binary frame");
+  checkU64Eq(fake.inboundSize(), 1, "inboundSize() reflects the one queued binary line");
 
   char buf[64] = {};
   uint16_t outLen = 0;
-  App::FrameKind kind = fake.readLine(buf, sizeof(buf), &outLen);
-  checkTrue(kind == App::FrameKind::kBinary, "readLine() succeeds for the binary frame, tagged kBinary");
-  checkU64Eq(outLen, sizeof(frame), "outLen reports the exact byte count");
+  bool got = fake.readLine(buf, sizeof(buf), &outLen);
+  checkTrue(got, "readLine() succeeds for the binary line");
+  checkU64Eq(outLen, sizeof(frame), "outLen reports the exact byte count, including the embedded 0x00");
   if (outLen == sizeof(frame)) {
-    checkTrue(std::memcmp(buf, frame, sizeof(frame)) == 0, "the binary frame comes back byte-for-byte unchanged");
+    checkTrue(std::memcmp(buf, frame, sizeof(frame)) == 0, "the binary line comes back byte-for-byte unchanged");
   }
 }
 

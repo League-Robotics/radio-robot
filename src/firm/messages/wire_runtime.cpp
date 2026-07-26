@@ -372,7 +372,7 @@ size_t cobsEncodedMaxLength(size_t rawLen) { return rawLen + rawLen / kCobsMaxBl
 
 size_t cobsDecodedMaxLength(size_t encodedLen) { return encodedLen; }
 
-bool cobsEncode(const uint8_t* data, size_t len, uint8_t* out, size_t cap, size_t* outLen) {
+bool cobsEncode(const uint8_t* data, size_t len, uint8_t* out, size_t cap, size_t* outLen, uint8_t delimiter) {
   if ((data == nullptr && len != 0) || out == nullptr || outLen == nullptr) return false;
   if (cap < cobsEncodedMaxLength(len)) return false;  // caller must size the destination to the worst case
 
@@ -380,20 +380,24 @@ bool cobsEncode(const uint8_t* data, size_t len, uint8_t* out, size_t cap, size_
   size_t writePos = 0;
   size_t codePos = writePos;  // index of the current block's not-yet-known code byte
   if (writePos >= cap) return false;
-  out[writePos++] = 0;  // placeholder, overwritten with the real code once the block ends
+  out[writePos++] = 0;  // placeholder, overwritten (XOR-ed) with the real code once the block ends
   uint8_t code = 1;      // distance to the next zero (or block end), inclusive of the code byte itself
 
   while (readPos < len) {
     const uint8_t byte = data[readPos++];
     if (byte == 0) {
-      out[codePos] = code;
+      // XOR-ed in place, per delimiter (see wire_runtime.h item 8's doc
+      // comment for why this is equivalent to XOR-ing the whole 0x00-keyed
+      // output afterward): delimiter == 0x00 makes this the identity, the
+      // pre-124 behavior.
+      out[codePos] = static_cast<uint8_t>(code ^ delimiter);
       codePos = writePos;
       if (writePos >= cap) return false;
       out[writePos++] = 0;  // placeholder for the next block
       code = 1;
     } else {
       if (writePos >= cap) return false;
-      out[writePos++] = byte;
+      out[writePos++] = static_cast<uint8_t>(byte ^ delimiter);
       ++code;
       if (code == 0xFFu) {
         // Block hit the 254-non-zero-byte cap before finding a zero: flush
@@ -401,7 +405,7 @@ bool cobsEncode(const uint8_t* data, size_t len, uint8_t* out, size_t cap, size_
         // terminator") and start a fresh block, exactly as if a zero had
         // been seen -- this is the "block-size boundary (254 bytes)"
         // behavior the acceptance criteria calls out by name.
-        out[codePos] = code;
+        out[codePos] = static_cast<uint8_t>(code ^ delimiter);
         codePos = writePos;
         if (writePos >= cap) return false;
         out[writePos++] = 0;
@@ -409,12 +413,12 @@ bool cobsEncode(const uint8_t* data, size_t len, uint8_t* out, size_t cap, size_
       }
     }
   }
-  out[codePos] = code;
+  out[codePos] = static_cast<uint8_t>(code ^ delimiter);
   *outLen = writePos;
   return true;
 }
 
-bool cobsDecode(const uint8_t* in, size_t inLen, uint8_t* out, size_t cap, size_t* outLen) {
+bool cobsDecode(const uint8_t* in, size_t inLen, uint8_t* out, size_t cap, size_t* outLen, uint8_t delimiter) {
   if ((in == nullptr && inLen != 0) || out == nullptr || outLen == nullptr) return false;
   // Even the encoding of a zero-byte payload is exactly one code byte
   // (0x01) -- a truly zero-length input here has nothing to decode and is
@@ -424,14 +428,19 @@ bool cobsDecode(const uint8_t* in, size_t inLen, uint8_t* out, size_t cap, size_
   size_t readPos = 0;
   size_t writePos = 0;
   while (readPos < inLen) {
-    const uint8_t code = in[readPos];
+    // XOR-ed at the point of reading (never a materialized de-XORed copy --
+    // this file allocates nothing): delimiter == 0x00 makes this the
+    // identity, the pre-124 behavior, and recovers exactly the same
+    // 0x00-keyed bytes cobsEncode()'s standard algorithm produced before
+    // its own per-byte XOR.
+    const uint8_t code = static_cast<uint8_t>(in[readPos] ^ delimiter);
     if (code == 0) return false;  // a literal 0x00 code byte never appears in a valid COBS frame -- corrupt
     ++readPos;
     const size_t blockLen = static_cast<size_t>(code) - 1;
     if (blockLen > inLen - readPos) return false;  // code claims more data bytes than remain -- truncated frame
 
     for (size_t i = 0; i < blockLen; ++i) {
-      const uint8_t b = in[readPos + i];
+      const uint8_t b = static_cast<uint8_t>(in[readPos + i] ^ delimiter);
       if (b == 0) return false;  // a literal 0x00 inside a data block is corrupt (encode never emits one)
       if (writePos >= cap) return false;
       out[writePos++] = b;
@@ -454,9 +463,10 @@ bool cobsDecode(const uint8_t* in, size_t inLen, uint8_t* out, size_t cap, size_
 
 // --- 9. CRC-16/CCITT-FALSE --------------------------------------------------
 
-uint16_t crcCompute(const uint8_t* data, size_t len) {
+uint16_t crcInit() { return kCrc16CcittFalseInit; }
+
+uint16_t crcUpdate(uint16_t crc, const uint8_t* data, size_t len) {
   if (data == nullptr) len = 0;  // defensive: never dereference a null pointer, even with a nonzero len argument
-  uint16_t crc = kCrc16CcittFalseInit;
   for (size_t i = 0; i < len; ++i) {
     crc = static_cast<uint16_t>(crc ^ (static_cast<uint16_t>(data[i]) << 8));
     for (int bit = 0; bit < 8; ++bit) {
@@ -469,6 +479,8 @@ uint16_t crcCompute(const uint8_t* data, size_t len) {
   }
   return crc;
 }
+
+uint16_t crcCompute(const uint8_t* data, size_t len) { return crcUpdate(crcInit(), data, len); }
 
 bool crcVerify(const uint8_t* data, size_t len, uint16_t expectedCrc) { return crcCompute(data, len) == expectedCrc; }
 

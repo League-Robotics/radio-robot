@@ -522,11 +522,14 @@ def render_log_line(raw_line: "str | bytes", *, outbound: bool) -> str | None:
     """Translate one raw wire log line/frame for display in the message
     monitor.
 
-    ``raw_line`` is a plain ``str`` for a text-plane line (HELLO/PING and
-    their replies -- returned unchanged) or raw ``bytes`` for a binary
-    COBS+CRC frame body: ``outbound=True`` means a sent ``CommandEnvelope``,
-    ``outbound=False`` means a received ``ReplyEnvelope`` (or, per the
-    disambiguation below, a ``TelemetrySecondary``).
+    ``raw_line`` is a plain ``str`` for a cleartext-plane line (HELLO/PING/
+    ID/VER and their replies -- returned unchanged) or raw ``bytes`` for a
+    binary wire LINE (124-005: the FULL ``<COMMAND>':'<COBS+CRC bytes>``
+    content -- ``io/serial_conn.py``'s ``on_send``/``on_recv`` hooks pass
+    the whole line now, not the bare COBS body, precisely so this function
+    can recover the verb its own ``decode_frame()`` call needs to scope the
+    CRC correctly): ``outbound=True`` means a sent ``CommandEnvelope``,
+    ``outbound=False`` means a received ``ReplyEnvelope``.
 
     Returns:
       - ``None`` to mean "drop this line entirely" -- a ``ReplyEnvelope{tlm}``
@@ -551,24 +554,16 @@ def render_log_line(raw_line: "str | bytes", *, outbound: bool) -> str | None:
         ``legacy_render`` equivalent at all (that module renders replies,
         not requests) -- always rendered via ``text_format``.
 
-    Received (``outbound=False``) frames share their framing with TWO
-    distinct message shapes -- ``pb2.ReplyEnvelope`` and (104-003)
-    ``pb2.TelemetrySecondary``, the slower ~5Hz diagnostic frame emitted as
-    its own bare, independently-framed frame (never inside a
-    ``ReplyEnvelope`` -- see ``io/serial_conn.py``'s
-    ``_handle_binary_reply()`` docstring, which this function mirrors).
-    Before an earlier fix, a bare ``TelemetrySecondary`` frame
-    "successfully" parsed as a ``ReplyEnvelope`` with an EMPTY body oneof (a
-    field-number/wire-type collision -- ``TelemetrySecondary``'s first
-    field, its millisecond timestamp, happens to decode into
-    ``ReplyEnvelope.corr_id``), so every secondary frame rendered as a bare
-    ``corr_id: N`` line and flooded the log at the secondary frame's own
-    ~4 lines/s. Fixed the same way ``_handle_binary_reply()`` already
-    disambiguates: only treat the ``ReplyEnvelope`` parse as real when its
-    body oneof is actually set; otherwise retry as ``TelemetrySecondary``,
-    and on a successful secondary decode drop the line (return ``None``) --
-    same "no per-line operator value" policy already applied to primary
-    ``tlm`` push frames below.
+    Received (``outbound=False``) frames are exactly one message shape now
+    (124-009, robot-state-blackboard-...md, issue's own "TelemetrySecondary
+    dies"): ``pb2.ReplyEnvelope``. ``pb2.TelemetrySecondary`` -- its former
+    sibling, a slower ~5Hz diagnostic frame emitted as its own bare,
+    independently-framed frame -- is DELETED outright, along with the
+    ReplyEnvelope-vs-TelemetrySecondary disambiguation fallback this
+    function used to need (see ``io/serial_conn.py``'s
+    ``_handle_binary_reply()`` docstring for the historical rationale). A
+    ``ReplyEnvelope`` parse that raises, or succeeds with an EMPTY body
+    oneof, is now simply malformed -- there is no second shape to retry.
     """
     if isinstance(raw_line, str):
         return raw_line
@@ -581,7 +576,17 @@ def render_log_line(raw_line: "str | bytes", *, outbound: bool) -> str | None:
     def _malformed_marker() -> str:
         return f"<binary: malformed, {len(raw_line)} bytes>"
 
-    raw_bytes = decode_frame(raw_line)
+    # 124-005: `raw_line` is the FULL wire line -- split off the leading
+    # `<COMMAND>':'` prefix (protocol v5's own grammar, issue §1) so
+    # decode_frame() can scope its CRC check over the real verb, matching
+    # how the line was actually encoded (Comms::sendReply()/
+    # Comms::decodeBinaryFrame(), comms.cpp). No ':' at all is itself
+    # malformed -- every binary verb line always carries one.
+    command, sep, cobs_body = raw_line.partition(b":")
+    if not sep:
+        return _malformed_marker()
+
+    raw_bytes = decode_frame(cobs_body, command=command)
     if raw_bytes is None:
         return _malformed_marker()
 
@@ -599,18 +604,10 @@ def render_log_line(raw_line: "str | bytes", *, outbound: bool) -> str | None:
         reply = None
 
     if reply is None or reply.WhichOneof("body") is None:
-        # Not a (recognizable) ReplyEnvelope -- try TelemetrySecondary (same
-        # disambiguation as io/serial_conn.py's _handle_binary_reply(); see
-        # this function's own docstring). A successful secondary decode is
-        # dropped from the log, same policy as a primary `tlm` push frame
-        # below; any other failure falls back to the malformed marker.
-        from robot_radio.robot.pb2 import telemetry_pb2
-
-        try:
-            telemetry_pb2.TelemetrySecondary.FromString(raw_bytes)
-        except Exception:
-            return _malformed_marker()
-        return None
+        # Not a (recognizable) ReplyEnvelope -- 124-009: there is no second
+        # shape to retry any more (TelemetrySecondary is deleted outright,
+        # robot-state-blackboard-...md).
+        return _malformed_marker()
 
     which = reply.WhichOneof("body")
     corr_id = reply.corr_id or None

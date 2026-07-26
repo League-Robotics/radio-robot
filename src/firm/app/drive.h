@@ -67,6 +67,17 @@ class Drive : public Motion::WheelSink {
   // Drive's own "no live-reconfigure" contract.
   float trackWidth() const { return trackWidth_; }  // [mm]
 
+  // vLeft/vRight -- read-only accessors onto the last-staged setWheels()/
+  // stop() target (124-009): Types::RobotState::Wheel::cmdVelocity's own
+  // source (robot_state.h's own doc comment: "writer: App::Drive::tick()'s
+  // own staged target") -- RobotLoop::cycle() reads these immediately after
+  // both wheels' collects to publish the wheel section's commanded-velocity
+  // field, mirroring trackWidth()'s own read-only-accessor shape. No
+  // setter, same reasoning as trackWidth(): staging stays exclusively
+  // through setWheels()/stop().
+  float vLeft() const { return vLeft_; }    // [mm/s] signed
+  float vRight() const { return vRight_; }  // [mm/s] signed
+
  private:
   Devices::Motor& left_;
   Devices::Motor& right_;

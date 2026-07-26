@@ -96,6 +96,7 @@ class MotorArmor : public Motor {
   float velocityTarget() const override { return inner_.velocityTarget(); }
   float appliedDuty() const override { return inner_.appliedDuty(); }
   bool connected() const override { return inner_.connected(); }
+  uint64_t sampleTime() const override { return inner_.sampleTime(); }  // [us] pure passthrough -- no armor-side state of its own
 
   // --- Motor: resets — the armor's whole reason to intercept ---
   // Stages; the next tick() dispatches hard-at-rest / rebaseline-otherwise.

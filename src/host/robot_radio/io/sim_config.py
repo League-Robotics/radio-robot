@@ -29,6 +29,17 @@ if TYPE_CHECKING:
     from robot_radio.robot.pb2 import envelope_pb2
 
 
+def _envelope_command_name(envelope: "envelope_pb2.CommandEnvelope") -> bytes:
+    """The ASCII wire-verb name for a populated ``pb2.CommandEnvelope``
+    (124-005, issue §1/§3) -- its own oneof arm name upper-cased, matching
+    the registry (``robot_radio.io.wire_commands``). Mirrors
+    ``io/serial_conn.py``'s identically-named helper (a small, deliberate
+    duplication rather than a cross-module import -- this module and
+    ``serial_conn.py`` are peers, neither owns the other)."""
+    which = envelope.WhichOneof("cmd")
+    return (which or "config").upper().encode("ascii")
+
+
 class SimConfigConn:
     """Duck-typed ``SerialConnection`` substitute so ``NezhaProtocol.
     config()``/``NezhaProtocol.set_config()`` can be reused VERBATIM against
@@ -59,13 +70,13 @@ class SimConfigConn:
         self._loop = loop
 
     def send_envelope_fast(self, envelope: "envelope_pb2.CommandEnvelope") -> int:
-        """Assign a corr_id, frame (COBS+CRC), and inject via ``SimLoop.
-        inject_command()`` -- the exact framing (123-002/003)
-        ``SerialConnection.send_envelope_fast()`` writes to a real serial
-        port (see that method's own docstring), minus the trailing 0x00
-        delimiter a live serial stream needs and a direct
-        ``inject_command()`` call does not (``FakeTransport::
-        enqueueInboundBinary()`` takes one already-delimited frame per
+        """Assign a corr_id, frame (COBS+CRC, command-prefixed -- 124-005),
+        and inject via ``SimLoop.inject_command()`` -- the exact framing
+        (123-002/003/124-005) ``SerialConnection.send_envelope_fast()``
+        writes to a real serial port (see that method's own docstring),
+        minus the trailing ``'\\n'`` delimiter a live serial stream needs
+        and a direct ``inject_command()`` call does not (``FakeTransport::
+        enqueueInboundBinary()`` takes one already-delimited line per
         call).
 
         113-006 correction: corr_id comes from ``self._loop._next_corr_id()``
@@ -94,8 +105,9 @@ class SimConfigConn:
         constructed over its lifetime, closing the collision structurally."""
         corr_id = self._loop._next_corr_id()
         envelope.corr_id = corr_id
-        frame = encode_frame(envelope.SerializeToString())
-        self._loop.inject_command(frame)
+        command = _envelope_command_name(envelope)
+        frame = encode_frame(envelope.SerializeToString(), command=command)
+        self._loop.inject_command(command + b":" + frame)
         return corr_id
 
     def send_envelope(self, envelope: "envelope_pb2.CommandEnvelope",
@@ -125,23 +137,25 @@ class SimConfigConn:
 
     def poll_ack(self, corr_id: int, timeout: int = 500,  # [ms]
                 ) -> "protocol.AckEntry | None":
-        """Poll ``SimLoop.read_pending_binary_tlm_frames()``'s single ack
-        slot for ``corr_id``, mirroring ``SerialConnection.wait_for_ack()``'s
+        """Poll ``SimLoop.read_pending_binary_tlm_frames()``'s bounded ack
+        ring for ``corr_id``, mirroring ``SerialConnection.wait_for_ack()``'s
         own re-delivery-tolerant matching (returns on the FIRST frame
         carrying a match) -- a small, Sim-local reimplementation rather than
         an import of that method's private ``_match_ack_in_frames()``
         helper, since that helper matches against raw ``pb2.ReplyEnvelope``
-        objects (``reply.tlm.ack_corr``/``ack_err``, gated on ``flags`` bit 5
-        -- 115-003's frame-v2 rewrite replaced the pre-115 depth-3 ack ring
-        with this one slot) off ``drain_binary_tlm()``, not the already-
-        adapted ``TLMFrame``/``AckEntry`` dataclasses ``SimLoop.
-        read_pending_binary_tlm_frames()`` returns (``TLMFrame.ack`` -- non-
-        ``None`` only on the frame where ``ack_fresh`` was set)."""
+        objects (``reply.tlm.acks``, packed ``int`` entries -- 124-008,
+        issue §B4) off ``drain_binary_tlm()``, not the already-adapted
+        ``TLMFrame``/``AckEntry`` dataclasses ``SimLoop.
+        read_pending_binary_tlm_frames()`` returns (``TLMFrame.acks`` --
+        124-008 deleted the single "freshest ack" scalar slot/``TLMFrame.
+        ack`` this method used to scan; ring membership alone now means
+        "really acked")."""
         deadline = time.monotonic() + (timeout / 1000.0)
         while True:
             for frame in self._loop.read_pending_binary_tlm_frames():
-                if frame.ack is not None and frame.ack.corr_id == corr_id:
-                    return frame.ack
+                for entry in frame.acks:
+                    if entry.corr_id == corr_id:
+                        return entry
             if time.monotonic() >= deadline:
                 return None
             time.sleep(0.01)

@@ -1,6 +1,6 @@
 ---
 sprint: '124'
-status: in-progress
+status: done
 tickets:
 - 124-006
 - 124-011

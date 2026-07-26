@@ -11,13 +11,14 @@
 // `move`, a fresh arm 21: `MoveTwist|MoveWheels` velocity oneof +
 // `time|distance|angle` stop oneof + `timeout`/`replace`/`id`);
 // ReplyEnvelope.body is exactly {ok, err, tlm}; Telemetry carries a single
-// `flags` bit-string (status+fault+event) plus a single `ack_corr`/
-// `ack_err` slot (the depth-3 ack ring is gone) and per-source timestamped
-// `EncoderReading`/`OtosReading` objects; ConfigDelta's `patch` oneof is
-// DRIVETRAIN/MOTOR/OTOS (PLANNER deleted wholesale, 115-003; WATCHDOG
-// deleted, 116-001 -- `ConfigTarget.CONFIG_WATCHDOG` stays declared-unused);
-// TelemetrySecondary is unchanged, a standalone top-level wire message (its
-// own `msg::wire::encode()` overload, not a ReplyEnvelope oneof arm).
+// `flags` bit-string (status+fault+event) and a bounded, PACKED ack ring
+// (`acks`/`acks_count` -- the single `ack_corr`/`ack_err` slot is deleted,
+// 124-008) plus per-source timestamped `EncoderReading`/`OtosReading`
+// objects; ConfigDelta's `patch` oneof is DRIVETRAIN/MOTOR/OTOS (PLANNER
+// deleted wholesale, 115-003; WATCHDOG deleted, 116-001 --
+// `ConfigTarget.CONFIG_WATCHDOG` stays declared-unused); TelemetrySecondary
+// is DELETED outright (124-009, robot-state-blackboard-...md) -- there is
+// no longer a second top-level wire message to drive through this harness.
 //
 // Unlike wire_runtime_harness.cpp/wire_codec_harness.cpp (fixed scenario
 // lists baked into the C++ binary itself), THIS harness is a thin one-shot
@@ -48,36 +49,32 @@
 //     Builds ReplyEnvelope{err=Error{code,field}}.
 //     -> "B64 <base64 bytes>" or "ZERO".
 //
-//   encode_telemetry <corr_id> <now> <mode> <seq> <flags> <ack_corr>
-//     <ack_err> <enc_left_position> <enc_left_velocity> <enc_left_time>
-//     <enc_right_position> <enc_right_velocity> <enc_right_time> <otos_x>
-//     <otos_y> <otos_heading> <otos_v_x> <otos_v_y> <otos_omega>
-//     <otos_time> <pose_x> <pose_y> <pose_h> <twist_v_x> <twist_v_y>
-//     <twist_omega> <line> <color> <cycle_busy> <cycle_period> <acks_count>
-//     <acks_0_corr> <acks_0_err> <acks_1_corr> <acks_1_err> <acks_2_corr>
-//     <acks_2_err> <acks_3_corr> <acks_3_err>
-//     Builds ReplyEnvelope{tlm=Telemetry{...}} per the frame-v2 shape
-//     (telemetry.proto, 115-003) -- one `flags` bit-string, one ack slot,
-//     two EncoderReadings, one OtosReading, always-present pose/twist, the
-//     packed line/color words, and (123-004, ADDITIVE) the migrated
-//     cycle_busy/cycle_period loop-timing fields. The trailing 9 args (120,
-//     ADDITIVE) are the bounded ack ring: `acks_count`
-//     (0..App::kAckRingDepth=4) then exactly kAckRingDepth (corr_id, err)
-//     pairs -- slots at or past `acks_count` are still parsed (keeps this
-//     verb's own argv shape fixed) but never copied into
-//     `t.acks_`/`t.acks_count`.
+//   encode_telemetry <corr_id> <now> <mode> <seq> <flags>
+//     <enc_left_position> <enc_left_velocity> <enc_left_age>
+//     <enc_left_position_epoch> <enc_right_position> <enc_right_velocity>
+//     <enc_right_age> <enc_right_position_epoch> <otos_x> <otos_y>
+//     <otos_heading> <otos_v_x> <otos_v_y> <otos_omega> <otos_age>
+//     <pose_x> <pose_y> <pose_h> <twist_v_x> <twist_v_y> <twist_omega>
+//     <line> <color> <cycle_busy> <cycle_period> <acks_count> <acks_0>
+//     <acks_1> <acks_2> <acks_3>
+//     Builds ReplyEnvelope{tlm=Telemetry{...}} per the packed-telemetry
+//     shape (telemetry.proto, 124-008, issue §B3/B4/B6): one `flags`
+//     bit-string, two EncoderReadings, one OtosReading, always-present
+//     pose/twist (ALL sint32/zigzag raw wire ints now, not float --
+//     position/velocity/x/y/heading/v_x/v_y/omega/h), the packed
+//     line/color words, and (123-004, ADDITIVE) the migrated
+//     cycle_busy/cycle_period loop-timing fields. The single "freshest
+//     ack" slot (ack_corr/ack_err, fields 5/6) is DELETED -- ring
+//     membership already means "really acked." The trailing 5 args are
+//     the bounded ack ring: `acks_count` (0..App::kAckRingDepth=4) then
+//     exactly kAckRingDepth PACKED uint32 slots (`corr_id<<4|err`, not a
+//     (corr_id, err) pair) -- slots at or past `acks_count` are still
+//     parsed (keeps this verb's own argv shape fixed) but never copied
+//     into `t.acks_`/`t.acks_count`.
 //     -> "B64 <base64 bytes>" or "ZERO".
 //
-//   encode_telemetry_secondary <now> <has_cmd_vel> <cmd_vel_left>
-//     <cmd_vel_right> <acc_left> <acc_right> <glitch_left> <glitch_right>
-//     <ts_left> <ts_right>
-//     Builds a STANDALONE TelemetrySecondary (Decision 3 -- its own
-//     independently-armored line, not wrapped in ReplyEnvelope, so no
-//     corr_id argument). Unchanged by 115-003. cycle_busy/cycle_period
-//     (122-003, formerly fields 11/12 here) are MIGRATED to
-//     msg::Telemetry (123-004, see encode_telemetry above) -- no longer
-//     part of this verb's argv.
-//     -> "B64 <base64 bytes>" or "ZERO".
+//   encode_telemetry_secondary -- DELETED (124-009): TelemetrySecondary
+//     itself is gone.
 //
 // Float formatting: `%.9g` on both the encode-input parse (strtof) and the
 // decode-output print -- 9 significant decimal digits is the proven
@@ -346,7 +343,7 @@ int cmdEncodeErr(int argc, char** argv) {
 // 115-003; the ack ring's 9 trailing args added by 120 -- see this file's
 // header comment for the full argv list).
 int cmdEncodeTelemetry(int argc, char** argv) {
-  if (argc < 41) {
+  if (argc < 37) {
     std::printf("USAGE_ERROR\n");
     return 1;
   }
@@ -360,31 +357,34 @@ int cmdEncodeTelemetry(int argc, char** argv) {
   t.mode = static_cast<msg::DriveMode>(std::strtoul(argv[i++], nullptr, 10));
   t.seq = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
   t.flags = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-  t.ack_corr = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-  t.ack_err = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
 
-  t.enc_left.position = std::strtof(argv[i++], nullptr);
-  t.enc_left.velocity = std::strtof(argv[i++], nullptr);
-  t.enc_left.time = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-  t.enc_right.position = std::strtof(argv[i++], nullptr);
-  t.enc_right.velocity = std::strtof(argv[i++], nullptr);
-  t.enc_right.time = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  // 124-008 (issue §B3): position/velocity/x/y/heading/v_x/v_y/omega/h are
+  // now sint32 (raw wire ints, zigzag-encoded) -- strtol (signed), not
+  // strtof. ack_corr/ack_err (fields 5/6) are DELETED (issue §B4).
+  t.enc_left.position = static_cast<int32_t>(std::strtol(argv[i++], nullptr, 10));
+  t.enc_left.velocity = static_cast<int32_t>(std::strtol(argv[i++], nullptr, 10));
+  t.enc_left.age = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  t.enc_left.position_epoch = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  t.enc_right.position = static_cast<int32_t>(std::strtol(argv[i++], nullptr, 10));
+  t.enc_right.velocity = static_cast<int32_t>(std::strtol(argv[i++], nullptr, 10));
+  t.enc_right.age = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  t.enc_right.position_epoch = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
 
-  t.otos.x = std::strtof(argv[i++], nullptr);
-  t.otos.y = std::strtof(argv[i++], nullptr);
-  t.otos.heading = std::strtof(argv[i++], nullptr);
-  t.otos.v_x = std::strtof(argv[i++], nullptr);
-  t.otos.v_y = std::strtof(argv[i++], nullptr);
-  t.otos.omega = std::strtof(argv[i++], nullptr);
-  t.otos.time = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+  t.otos.x = static_cast<int32_t>(std::strtol(argv[i++], nullptr, 10));
+  t.otos.y = static_cast<int32_t>(std::strtol(argv[i++], nullptr, 10));
+  t.otos.heading = static_cast<int32_t>(std::strtol(argv[i++], nullptr, 10));
+  t.otos.v_x = static_cast<int32_t>(std::strtol(argv[i++], nullptr, 10));
+  t.otos.v_y = static_cast<int32_t>(std::strtol(argv[i++], nullptr, 10));
+  t.otos.omega = static_cast<int32_t>(std::strtol(argv[i++], nullptr, 10));
+  t.otos.age = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
 
-  t.pose.x = std::strtof(argv[i++], nullptr);
-  t.pose.y = std::strtof(argv[i++], nullptr);
-  t.pose.h = std::strtof(argv[i++], nullptr);
+  t.pose.x = static_cast<int32_t>(std::strtol(argv[i++], nullptr, 10));
+  t.pose.y = static_cast<int32_t>(std::strtol(argv[i++], nullptr, 10));
+  t.pose.h = static_cast<int32_t>(std::strtol(argv[i++], nullptr, 10));
 
-  t.twist.v_x = std::strtof(argv[i++], nullptr);
-  t.twist.v_y = std::strtof(argv[i++], nullptr);
-  t.twist.omega = std::strtof(argv[i++], nullptr);
+  t.twist.v_x = static_cast<int32_t>(std::strtol(argv[i++], nullptr, 10));
+  t.twist.v_y = static_cast<int32_t>(std::strtol(argv[i++], nullptr, 10));
+  t.twist.omega = static_cast<int32_t>(std::strtol(argv[i++], nullptr, 10));
 
   t.line = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
   t.color = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
@@ -399,18 +399,17 @@ int cmdEncodeTelemetry(int argc, char** argv) {
   // duplicated as a local literal rather than an #include of app/
   // telemetry.h, which would pull in app/comms.h's Transport interfaces
   // this standalone wire-only harness (wire.cpp + wire_runtime.cpp, no
-  // app/ linkage) has no other reason to need. Always exactly
-  // kRingDepth (corr_id, err) pairs on argv (unused slots past acksCount
-  // are still parsed, keeping this verb's own argv shape fixed, but never
-  // copied into t.acks_/t.acks_count).
+  // app/ linkage) has no other reason to need. 124-008 (issue §B4): each
+  // slot is now ONE packed uint32 (corr_id<<4|err), not a (corr_id, err)
+  // pair -- always exactly kRingDepth slots on argv (unused slots past
+  // acksCount are still parsed, keeping this verb's own argv shape fixed,
+  // but never copied into t.acks_/t.acks_count).
   constexpr uint8_t kRingDepth = 4;
   const uint32_t acksCount = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
   for (uint8_t e = 0; e < kRingDepth; ++e) {
-    const uint32_t corr = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-    const uint32_t err = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
+    const uint32_t packed = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
     if (e < acksCount) {
-      t.acks_[e].corr_id = corr;
-      t.acks_[e].err = err;
+      t.acks_[e] = packed;
     }
   }
   t.acks_count = static_cast<uint8_t>(acksCount < kRingDepth ? acksCount : kRingDepth);
@@ -419,34 +418,9 @@ int cmdEncodeTelemetry(int argc, char** argv) {
   return 0;
 }
 
-// encode_telemetry_secondary -- STANDALONE TelemetrySecondary (Decision 3 --
-// its own independently-armored line, no ReplyEnvelope wrapper, no corr_id).
-int cmdEncodeTelemetrySecondary(int argc, char** argv) {
-  if (argc < 12) {
-    std::printf("USAGE_ERROR\n");
-    return 1;
-  }
-  int i = 2;
-  msg::TelemetrySecondary sec;
-  sec.now = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-  sec.has_cmd_vel = std::strtoul(argv[i++], nullptr, 10) != 0;
-  sec.cmd_vel_left = std::strtof(argv[i++], nullptr);
-  sec.cmd_vel_right = std::strtof(argv[i++], nullptr);
-  sec.acc_left = std::strtof(argv[i++], nullptr);
-  sec.acc_right = std::strtof(argv[i++], nullptr);
-  sec.glitch_left = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-  sec.glitch_right = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-  sec.ts_left = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-  sec.ts_right = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
-  // cycle_busy/cycle_period (formerly parsed here, 122-003) -- MIGRATED to
-  // msg::Telemetry (123-004, cmdEncodeTelemetry() above); no longer part
-  // of this verb's argv.
-
-  uint8_t buf[256] = {};
-  const uint16_t n = msg::wire::encode(sec, buf, sizeof(buf));
-  printEncodedOrZero(buf, n);
-  return 0;
-}
+// cmdEncodeTelemetrySecondary() -- DELETED (124-009): TelemetrySecondary
+// itself is gone (robot-state-blackboard-...md, issue's own
+// "TelemetrySecondary dies").
 
 }  // namespace
 
@@ -466,7 +440,6 @@ int main(int argc, char** argv) {
   if (op == "encode_ok") return cmdEncodeOk(argc, argv);
   if (op == "encode_err") return cmdEncodeErr(argc, argv);
   if (op == "encode_telemetry") return cmdEncodeTelemetry(argc, argv);
-  if (op == "encode_telemetry_secondary") return cmdEncodeTelemetrySecondary(argc, argv);
 
   std::printf("USAGE_ERROR\n");
   return 1;

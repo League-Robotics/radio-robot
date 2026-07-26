@@ -73,12 +73,11 @@ Reader loop:
    Lines beginning with ``#`` are relay status/comment lines.  The reader loop
    drops them silently; they do not generate protocol errors.
 
-Ack matcher and TelemetrySecondary decode (104-003, promoted; ring-based
-matching since 120):
+Ack matcher (104-003, promoted; ring-based matching since 120):
 -----------------------------------------------------------
-Two pieces of P4 wire-protocol support live here, promoted/added by sprint
+One piece of P4 wire-protocol support lives here, promoted/added by sprint
 103 so every caller -- not just ``NezhaProtocol`` -- gets the same
-guarantee without duplicating either algorithm:
+guarantee without duplicating the algorithm:
 
 - ``wait_for_ack(corr_id, timeout)`` -- the ack-ring matcher.
   ``move``/``stop``/``config`` commands get no synchronous reply; their
@@ -95,33 +94,25 @@ guarantee without duplicating either algorithm:
   this matcher would time out. Previously this loop lived inline in
   ``robot_radio.robot.protocol.NezhaProtocol.wait_for_ack()``; that method
   now delegates here so the algorithm has exactly one implementation.
-- ``drain_binary_secondary_tlm()`` / ``read_binary_secondary_tlm()`` -- the
-  ``TelemetrySecondary`` counterparts of ``drain_binary_tlm()``/
-  ``read_binary_tlm()``. ``TelemetrySecondary`` (the slower ~5 Hz
-  acc/glitch/ts/cmd_vel diagnostic frame, telemetry.proto) rides its own
-  independently-armored ``*B`` line (103-001 Decision 3) -- NOT a
-  ``ReplyEnvelope.body`` oneof arm, since that oneof is fixed at
-  ``ok``/``err``/``tlm``. The wire has no discriminator byte distinguishing
-  a ``TelemetrySecondary`` line from a ``ReplyEnvelope`` line -- both share
-  the identical ``*B`` prefix. ``_handle_binary_reply()`` disambiguates
-  structurally: it tries ``ReplyEnvelope`` first (the common case), and
-  falls back to ``TelemetrySecondary`` only when that parse either raises or
-  succeeds with no oneof ``body`` populated (every real ``ReplyEnvelope``
-  this firmware ever sends -- unsolicited ``tlm`` pushes and corr-id'd
-  ``ok``/``err`` replies alike -- always sets one). See
-  ``_handle_binary_reply()``'s own docstring for the full disambiguation
-  rationale.
+
+``TelemetrySecondary`` (its own independently-armored ``*B`` line, the
+``drain_binary_secondary_tlm()``/``read_binary_secondary_tlm()`` accessors
+that used to expose it, and ``_handle_binary_reply()``'s own
+ReplyEnvelope-vs-TelemetrySecondary disambiguation fallback) is DELETED
+outright (124-009, robot-state-blackboard-...md, issue's own
+"TelemetrySecondary dies") -- there is exactly one binary reply shape now,
+``pb2.ReplyEnvelope``.
 """
 
 import glob
 import queue
-import re
 import threading
 import time
 from typing import Any, TYPE_CHECKING
 
 import serial
 
+from robot_radio.io import wire_commands
 from robot_radio.io.wire_codec import ByteStreamDemuxer, decode_frame, encode_frame
 
 if TYPE_CHECKING:
@@ -130,10 +121,11 @@ if TYPE_CHECKING:
     # __init__.py imports robot_radio.robot.protocol, which imports
     # SerialConnection from THIS module, so importing anything under
     # robot_radio.robot (pb2 included) from serial_conn.py's top level would
-    # re-enter this partially-initialized module. See _get_envelope_pb2()/
-    # _get_telemetry_pb2() below for the runtime (lazy, deferred-past-
-    # module-load) equivalent.
-    from robot_radio.robot.pb2 import envelope_pb2, telemetry_pb2
+    # re-enter this partially-initialized module. See _get_envelope_pb2()
+    # below for the runtime (lazy, deferred-past-module-load) equivalent.
+    # telemetry_pb2 -- no longer imported here (124-009): its only use was
+    # TelemetrySecondary's own type annotations, now deleted.
+    from robot_radio.robot.pb2 import envelope_pb2
 
 BAUD_RATE = 115200
 DEFAULT_PORT = "/dev/cu.usbmodem21431202"
@@ -183,8 +175,10 @@ _RELAY_CMD_TIMEOUT_S = 1.0
 # Bounded TLM queue depth: if the consumer is slow, oldest frames are dropped.
 _TLM_QUEUE_DEPTH = 256
 
-# Corr-id pattern: ``#<digits>`` at the end of a reply line.
-_CORR_ID_RE = re.compile(r"#(\d+)$")
+# _CORR_ID_RE (``#<digits>`` at the end of a reply line) -- DELETED (124-005,
+# issue §4): the corr-id-suffix routing it fed (`_handle_text_line()`'s old
+# OK/ERR/CFG/ID branch) is a pre-v4 vestige with no firmware emitter behind
+# it; corr-id'd replies ride `ReplyEnvelope`, a binary shape, not text.
 
 # Pre-123 binary-plane armor prefix (095-002, M7 Host Codec Mirror): a
 # `*B<base64>` line carried one base64-encoded, serialized pb2.ReplyEnvelope.
@@ -194,11 +188,10 @@ _CORR_ID_RE = re.compile(r"#(\d+)$")
 # no more `*B` byte sequence on the wire to check for. Kept only as a
 # historical note; no code references it any more.
 
-# Module-level cache for the lazily-imported envelope_pb2/telemetry_pb2
-# modules (see _get_envelope_pb2()'s docstring for why this cannot be a
-# top-level import).
+# Module-level cache for the lazily-imported envelope_pb2 module (see
+# _get_envelope_pb2()'s docstring for why this cannot be a top-level
+# import).
 _envelope_pb2_module = None
-_telemetry_pb2_module = None
 
 
 def _get_envelope_pb2():
@@ -220,20 +213,10 @@ def _get_envelope_pb2():
     return _envelope_pb2_module
 
 
-def _get_telemetry_pb2():
-    """Lazily import and cache robot_radio.robot.pb2.telemetry_pb2 (104-003).
-
-    Same circular-import hazard and same deferred-past-module-load fix as
-    ``_get_envelope_pb2()`` above -- see that function's docstring. Used by
-    ``_handle_binary_reply()`` to decode a ``TelemetrySecondary`` frame (see
-    that method's own docstring for why a SECOND pb2 message type is decoded
-    off the same ``*B`` armor prefix ``envelope_pb2.ReplyEnvelope`` uses).
-    """
-    global _telemetry_pb2_module
-    if _telemetry_pb2_module is None:
-        from robot_radio.robot.pb2 import telemetry_pb2 as _mod
-        _telemetry_pb2_module = _mod
-    return _telemetry_pb2_module
+# _get_telemetry_pb2() -- DELETED (124-009): its only caller decoded
+# TelemetrySecondary (robot-state-blackboard-...md, issue's own
+# "TelemetrySecondary dies") -- msg::Telemetry itself decodes as part of
+# ReplyEnvelope via _get_envelope_pb2(), no separate lazy import needed.
 
 
 def _disable_hupcl(ser) -> None:
@@ -254,20 +237,56 @@ def _disable_hupcl(ser) -> None:
         pass
 
 
+def _split_wire_line(line: bytes) -> tuple[str | None, bytes]:
+    """Parse one raw wire LINE into ``(verb, data)`` under protocol v5's
+    uniform grammar (124-005, issue §1: the FIRST ``':'`` ends the command;
+    everything after is data) -- the host-side mirror of
+    ``App::Comms::dispatchLine()`` (comms.cpp). ``verb`` is looked up
+    against the generated registry (``robot_radio.io.wire_commands`` --
+    messages/commands.h's mirror); returns ``(None, b"")`` if the command
+    bytes are not valid ASCII or are not a registered verb at all.
+
+    A colon-less line has its own trailing ``'\\r'`` stripped before the
+    lookup (a raw terminal/relay sending ``"\\r\\n"`` line endings) -- a
+    colon-less line can only ever be attempting a no-data cleartext verb
+    under this grammar, matching ``dispatchLine()``'s own reasoning."""
+    command_bytes, sep, data = line.partition(b":")
+    if not sep and command_bytes.endswith(b"\r"):
+        command_bytes = command_bytes[:-1]
+    try:
+        command = command_bytes.decode("ascii")
+    except UnicodeDecodeError:
+        return None, b""
+    if command not in wire_commands.VERB_BY_NAME:
+        return None, b""
+    return command, data
+
+
+def _is_binary_verb_line(line: bytes) -> bool:
+    """True if ``line``'s own parsed ``<COMMAND>`` prefix names a
+    registered BINARY verb (``wire_commands.BINARY_VERBS`` -- ``TLM``/
+    ``OK``/``ERR``/``MOVE``/``CONFIG``/``STOP``). The discriminator every
+    PRE-reader-thread raw-line helper below uses to skip telemetry lines
+    while still returning ``DEVICE:``/``PONG:``/``ID:``/``VER:`` replies
+    and the RadioRelay's own ``#``-prefixed comment lines (which are not
+    registry members at all, hence not "binary" either) as text."""
+    command, _ = _split_wire_line(line)
+    return command is not None and command in wire_commands.BINARY_VERBS
+
+
 def _read_text_line_raw(ser, demux: ByteStreamDemuxer, deadline: float) -> str:
-    """Read/demux raw bytes off ``ser`` until a complete TEXT line is
+    """Read/demux raw bytes off ``ser`` until a complete cleartext line is
     demuxed or ``deadline`` (a ``time.time()``-based timestamp) passes.
 
-    123-002/003: replaces a raw ``ser.readline()`` call for every PRE-reader-
-    thread helper (``_banner_classify``/``_relay_handshake``/
-    ``_poll_read_lines``/``probe_devices()``) -- a binary telemetry frame may
-    already be interleaved with the HELLO/PING text rump at this point (the
-    firmware emits telemetry every cycle regardless of whether HELLO has been
-    sent yet), and that frame's content may legitimately embed a literal
-    ``0x0A`` byte (only ``0x00`` is guaranteed absent) -- unsafe for a plain
-    ``readline()`` to split on. Binary frames demuxed during this window are
-    dropped (nothing consumes telemetry before the reader thread starts;
-    see ``SerialConnection``'s own module docstring for the pre-reader-thread
+    123-002/003/124-005: replaces a raw ``ser.readline()`` call for every
+    PRE-reader-thread helper (``_banner_classify``/``_relay_handshake``/
+    ``_poll_read_lines``/``probe_devices()``). A binary telemetry line may
+    already be interleaved with the HELLO/PING/ID/VER rump at this point
+    (the firmware emits telemetry every cycle regardless of whether HELLO
+    has been sent yet) -- demuxed lines whose own parsed verb is a
+    registered BINARY one (``_is_binary_verb_line()``) are dropped (nothing
+    consumes telemetry before the reader thread starts; see
+    ``SerialConnection``'s own module docstring for the pre-reader-thread
     access-point list). Returns ``""`` on timeout, mirroring pyserial's own
     ``readline()``-timeout return convention.
     """
@@ -279,14 +298,33 @@ def _read_text_line_raw(ser, demux: ByteStreamDemuxer, deadline: float) -> str:
             return ""
         if not chunk:
             continue
-        for kind, payload in demux.feed(chunk):
-            if kind == "text":
-                try:
-                    return payload.decode("utf-8", "ignore")
-                except Exception:
-                    continue
-            # kind == "binary": drop -- nothing consumes telemetry pre-reader.
+        for line in demux.feed(chunk):
+            if _is_binary_verb_line(line):
+                continue  # telemetry line -- nothing consumes it pre-reader
+            try:
+                return line.decode("utf-8", "ignore")
+            except Exception:
+                continue
     return ""
+
+
+def _envelope_command_name(envelope: "envelope_pb2.CommandEnvelope") -> bytes:
+    """The ASCII wire-verb name for a populated ``pb2.CommandEnvelope``
+    (124-005, issue §1/§3): its own oneof arm name
+    (``config``/``stop``/``move`` -- envelope.proto's ``CommandEnvelope.cmd``
+    oneof), upper-cased to match the registry (``robot_radio.io.
+    wire_commands`` -- messages/commands.h's mirror: ``CONFIG``/``STOP``/
+    ``MOVE``). ``send_envelope()``/``send_envelope_fast()`` use this both as
+    the wire line's own leading ``<COMMAND>':'`` prefix and as the CRC's
+    scope-extension argument (``encode_frame()``'s ``command=``).
+
+    Falls back to ``b"MOVE"`` if no oneof arm is set (``WhichOneof("cmd")``
+    is ``None``) -- unreachable in practice (every real caller populates
+    exactly one arm before sending), but a call must still produce SOME
+    registered verb name rather than an empty command that would fail the
+    registry lookup outright on the firmware side."""
+    which = envelope.WhichOneof("cmd")
+    return (which or "move").upper().encode("ascii")
 
 
 def _parse_device_banner(line: str) -> dict[str, Any] | None:
@@ -310,36 +348,30 @@ def _parse_device_banner(line: str) -> dict[str, Any] | None:
     }
 
 
-# flags bit 5 (ack_fresh) -- telemetry.proto Telemetry.flags. Mirrors
-# robot_radio.robot.protocol's own _FLAG_ACK_FRESH constant; duplicated
-# here (rather than imported) because importing robot_radio.robot.protocol
-# from this module's top level would be circular -- see this file's own
-# TYPE_CHECKING note above. Both share the SAME source of truth: the
-# telemetry.proto bit-table comment. Retained for any future reader that
-# still wants the single "freshest ack" slot -- _match_ack_in_frames()
-# below no longer uses it (120: ring-based matching needs no freshness
-# gate -- see that function's own docstring).
-_ACK_FRESH_BIT = 1 << 5
+# flags bit 5 -- RESERVED (124-008: formerly ack_fresh, deleted with the
+# single "freshest ack" scalar slot it gated -- issue §B4). The former
+# _ACK_FRESH_BIT constant here is gone; _match_ack_in_frames() below
+# needs no freshness gate at all (120: ring-based matching -- see that
+# function's own docstring).
 
 
 def _match_ack_in_frames(
     frames: "list[envelope_pb2.ReplyEnvelope]", corr_id: int
-) -> "telemetry_pb2.AckEntry | None":
+) -> "int | None":
     """Scan a batch of binary-plane ``tlm``-body ``ReplyEnvelope`` frames
     (as returned by ``drain_binary_tlm()``) for an ack-ring entry matching
     ``corr_id``.
 
     120 (bench-single-ack-slot-observability-collapses-at-40ms.md) replaces
     the single scalar ``ack_corr``/``ack_err`` slot (valid iff ``flags``
-    bit 5 / ``ack_fresh``) this function used to scan with a scan over each
-    frame's bounded ``acks`` ring (depth ``kAckRingDepth``=4,
-    telemetry.proto) -- a corr_id present ANYWHERE in the ring was
-    genuinely acked by ``App::Telemetry::ack()`` at some point. No
-    freshness bit is needed to disambiguate a ring entry from a stale
-    leftover value the way ``ack_fresh`` was needed for the single slot
-    (whose ``ack_corr``/``ack_err`` hold their LAST-WRITTEN value on every
-    ordinary frame, fresh or not) -- an entry is either genuinely in the
-    ring (real) or it is not there at all.
+    bit 5 / ``ack_fresh``, both DELETED 124-008 issue §B4) this function
+    used to scan with a scan over each frame's bounded ``acks`` ring (depth
+    ``kAckRingDepth``=4, telemetry.proto) -- a corr_id present ANYWHERE in
+    the ring was genuinely acked by ``App::Telemetry::ack()`` at some
+    point. No freshness bit is needed to disambiguate a ring entry from a
+    stale leftover value the way ``ack_fresh`` was needed for the single
+    slot -- an entry is either genuinely in the ring (real) or it is not
+    there at all.
 
     Matching policy (sprint 120 Architecture Step 7's open question,
     resolved here): return on the FIRST (frame, ring-entry) match, scanning
@@ -353,10 +385,12 @@ def _match_ack_in_frames(
     and acked at most once by the firmware); oldest-first is chosen for a
     deterministic, easy-to-reason-about contract regardless.
 
-    Returns the matching ``telemetry_pb2.AckEntry`` ring entry itself (the
-    caller reads ``corr_id``/``err`` off it -- NOT the frame's own scalar
-    ``ack_corr``/``ack_err``, which may belong to a DIFFERENT, later
-    command by the time this frame is read) --
+    Returns the matching packed ``int`` ring entry itself (124-008: the
+    real protobuf decoder hands back a bare int for a packed-scalar
+    repeated field -- ``Telemetry.acks`` is ``repeated uint32``, packed
+    ``corr_id<<4|err``; ``telemetry_pb2.AckEntry`` is deleted, issue §B4 --
+    the caller unpacks ``corr_id``/``err`` via
+    ``protocol.AckEntry.from_ring_entry()``) --
     ``SerialConnection.wait_for_ack()``'s own pure-function matching core,
     split out so it can be unit-tested directly against synthetic frame
     batches without a real queue/thread.
@@ -369,7 +403,7 @@ def _match_ack_in_frames(
         if reply.WhichOneof("body") != "tlm":
             continue
         for entry in reply.tlm.acks:
-            if entry.corr_id == corr_id:
+            if (entry >> 4) == corr_id:
                 return entry
     return None
 
@@ -387,9 +421,6 @@ class SerialConnection:
     - ``_binary_tlm_queue`` for binary-plane ``*B`` replies whose body is
       ``tlm`` (097-001) -- unsolicited push frames, always ``corr_id=0``,
       routed BEFORE the corr-id lookup above; see ``_handle_binary_reply()``.
-    - ``_binary_secondary_queue`` for binary-plane ``*B`` lines that decode
-      as a ``TelemetrySecondary`` rather than a ``ReplyEnvelope`` (104-003)
-      -- see ``_handle_binary_reply()``.
     - ``_evt_queue`` for ``EVT`` lines.
 
     ``send()`` appends ``#<corr_id>`` to every command and blocks on the
@@ -440,15 +471,8 @@ class SerialConnection:
         # read_binary_tlm()) -- see those methods below.
         self._binary_tlm_queue: queue.Queue = queue.Queue(maxsize=_TLM_QUEUE_DEPTH)
 
-        # Bounded TelemetrySecondary queue (104-003): the slower ~5 Hz
-        # diagnostic frame (acc/glitch/ts/cmd_vel -- telemetry.proto's own
-        # TelemetrySecondary message) rides its OWN independently-armored
-        # `*B` line (103-001 Decision 3), decoded by _handle_binary_reply()
-        # and queued here -- the TelemetrySecondary counterpart of
-        # _binary_tlm_queue above, same depth constant and same
-        # drop-oldest-on-overflow policy. See drain_binary_secondary_tlm()/
-        # read_binary_secondary_tlm() below.
-        self._binary_secondary_queue: queue.Queue = queue.Queue(maxsize=_TLM_QUEUE_DEPTH)
+        # _binary_secondary_queue -- DELETED (124-009): TelemetrySecondary
+        # itself is gone (robot-state-blackboard-...md).
 
         # EVT queue: unbounded — EVT lines must not be dropped.
         self._evt_queue: queue.Queue = queue.Queue()
@@ -470,10 +494,10 @@ class SerialConnection:
         self._handshake_demux = ByteStreamDemuxer()
 
         # 123-003: counted-fault surface for a binary frame that fails to
-        # decode (malformed COBS, CRC mismatch, or bytes that decode as
-        # neither a ReplyEnvelope nor a TelemetrySecondary) -- the host-side
-        # counterpart of firmware's own App::Comms::malformedCount_. Never
-        # raises; a caller that wants fault visibility reads this counter.
+        # decode (malformed COBS, CRC mismatch, or bytes that do not decode
+        # as a well-formed ReplyEnvelope) -- the host-side counterpart of
+        # firmware's own App::Comms::malformedCount_. Never raises; a
+        # caller that wants fault visibility reads this counter.
         self.malformed_frame_count: int = 0
 
     @property
@@ -692,11 +716,11 @@ class SerialConnection:
             if not chunk:
                 continue
 
-            for kind, payload in self._handshake_demux.feed(chunk):
-                if kind == "binary":
+            for line in self._handshake_demux.feed(chunk):
+                if _is_binary_verb_line(line):
                     continue
                 try:
-                    text = payload.decode("utf-8", "ignore").strip()
+                    text = line.decode("utf-8", "ignore").strip()
                 except Exception:
                     continue
                 if not text:
@@ -794,23 +818,20 @@ class SerialConnection:
     def _reader_loop(self) -> None:
         """Background reader: sole owner of raw reads off ``_ser``.
 
-        123-002/003 COBS+CRC cutover: reads raw bytes (``_ser.read()``, never
+        123-002/003/124-005: reads raw bytes (``_ser.read()``, never
         ``_ser.readline()``) and demuxes them through a ``ByteStreamDemuxer``
-        (``robot_radio.io.wire_codec``) into complete text lines or complete
-        binary COBS+CRC frame bodies -- mirroring firmware's own
-        ``App::Transport::readLine()`` demux exactly. A raw ``readline()``
-        call is unsafe here: a binary frame's content may legitimately embed
-        a literal ``0x0A`` (only ``0x00`` is guaranteed absent), which the
-        pre-123 base64 armor's ASCII alphabet could never produce.
+        (``robot_radio.io.wire_codec``) into complete wire LINES -- mirroring
+        firmware's own ``App::Transport::readLine()`` contract exactly. A raw
+        ``readline()`` call IS now safe against this wire (protocol v5's
+        uniform grammar makes ``'\\n'`` an unconditional terminator -- see
+        ``ByteStreamDemuxer``'s own docstring); this class keeps using the
+        demuxer for its non-blocking partial-chunk buffering, not because a
+        plain ``readline()`` would misparse.
 
-        Each demuxed unit is routed:
-
-        - ``kind == "text"`` → ``_handle_text_line()`` (TLM/EVT/OK/ERR/CFG/ID/
-          keepalive/`#`-comment classification, unchanged from pre-123).
-        - ``kind == "binary"`` → ``_handle_binary_reply()`` (COBS-decode,
-          CRC-verify, then parse as a ``ReplyEnvelope`` or, on failure of
-          that shape, a ``TelemetrySecondary`` -- see that method's own
-          docstring).
+        Each demuxed line is parsed under the uniform grammar
+        (``_split_wire_line()``) and routed by its own verb, mirroring
+        ``App::Comms::dispatchLine()``'s registry-driven dispatch (comms.cpp)
+        -- see ``_handle_wire_line()``.
         """
         demux = ByteStreamDemuxer()
         while not self._reader_stop.is_set():
@@ -825,127 +846,109 @@ class SerialConnection:
             if not chunk:
                 continue
 
-            for kind, payload in demux.feed(chunk):
-                if kind == "binary":
-                    # Verbose RX hook: raw bytes (not text) for a binary
-                    # frame -- see this class's own on_recv docstring.
-                    if self.on_recv:
-                        self.on_recv(payload)
-                    self._handle_binary_reply(payload)
-                else:
-                    self._handle_text_line(payload)
+            for line in demux.feed(chunk):
+                self._handle_wire_line(line)
 
-    def _handle_text_line(self, raw: bytes) -> None:
-        """Classify one demuxed text-plane line and route it to the
-        appropriate queue -- the text-plane half of ``_reader_loop()``'s own
-        demux, unchanged in behavior from pre-123 (only the byte source
-        changed -- see that method's docstring):
+    def _handle_wire_line(self, line: bytes) -> None:
+        """Parse one demuxed wire LINE under protocol v5's uniform grammar
+        (124-005, issue §1: ``<COMMAND>[':' <data>]``) and route it by verb
+        -- the reader-thread's own mirror of ``App::Comms::dispatchLine()``
+        (comms.cpp). The registry (``wire_commands.VERB_BY_NAME``) is the
+        SOLE discriminator for binary vs. cleartext data.
 
-        - ``TLM ...``  → ``_tlm_queue``  (drop oldest if full)
-        - ``EVT ...``  → ``_evt_queue``
-        - ``OK``/``ERR``/``CFG`` with ``#<id>`` suffix → ``_reply_queues[id]``
-        - ``OK``/``ERR``/``CFG`` with no corr-id → ``_reply_queues[""]``
-        - ``OK keepalive`` / lines containing ``keepalive`` → dropped silently
-        - Lines beginning with ``#`` → relay status/comment lines, dropped
-        - Anything else → dropped silently
+        - Lines beginning with ``#`` → relay status/comment lines (NOT part
+          of the v5 grammar at all -- checked BEFORE the registry lookup),
+          dropped silently, unchanged from pre-124.
+        - An unrecognized/non-ASCII ``<COMMAND>`` → counted in
+          ``malformed_frame_count`` (the host-side counterpart of
+          firmware's own ``App::Comms::malformedCount_``), dropped.
+        - A registered BINARY verb (``TLM``/``OK``/``ERR``) →
+          ``_handle_binary_reply()`` (COBS-decode, CRC-verify -- scoped over
+          the parsed verb -- then parse as a ``ReplyEnvelope``).
+        - A registered CLEARTEXT verb (``DEVICE``/``PONG``/``ID``/``VER``) →
+          ``_handle_text_line()``. None of these currently have a live
+          reader-thread consumer (the pre-reader-thread handshake path --
+          ``_banner_classify()``/``_poll_ready()`` -- already owns the
+          synchronous DEVICE:/PONG: round trips connect() needs); dropped
+          silently once classified, same "no listener registered" policy
+          the pre-124 ``OK``/``ERR``/``CFG`` corr-id routing already used.
         """
-        try:
-            text = raw.decode("utf-8", "ignore").strip()
-        except Exception:
+        if line.startswith(b"#"):
+            return  # relay status/comment line -- not v5 grammar, leave as-is
+
+        command, data = _split_wire_line(line)
+        if command is None:
+            self.malformed_frame_count += 1
             return
 
-        if not text:
-            return
+        entry = wire_commands.VERB_BY_NAME[command]
+        if entry.binary:
+            # Verbose RX hook: raw bytes (not text) for a binary line --
+            # the FULL line, command prefix included (124-005: a consumer
+            # like testgui/binary_bridge.py's render_log_line() needs the
+            # verb to correctly scope decode_frame()'s own CRC check) -- see
+            # this class's own on_recv docstring.
+            if self.on_recv:
+                self.on_recv(line)
+            self._handle_binary_reply(data, command.encode("ascii"))
+        else:
+            text = line.decode("utf-8", "ignore").strip()
+            # Verbose RX hook: report every decoded cleartext line (incl.
+            # keepalive-would-be/relay comment lines, though those return
+            # above) before the routing/drop filters below.
+            if self.on_recv:
+                self.on_recv(text)
+            self._handle_text_line(command, text)
 
-        # Verbose RX hook: report every decoded text line (incl. keepalive/
-        # relay comment lines) before the routing/drop filters below.
-        if self.on_recv:
-            self.on_recv(text)
+    def _handle_text_line(self, command: str, text: str) -> None:
+        """Route one cleartext reply already classified by
+        ``_handle_wire_line()`` (``command`` is a registered CLEARTEXT verb
+        -- ``DEVICE``/``PONG``/``ID``/``VER``; ``text`` is the FULL decoded
+        line, verb included).
 
-        # Drop keepalive acks.
-        if "keepalive" in text:
-            return
+        124-005 (issue §4): the pre-v5 ``TLM``/``EVT`` text-branch routing
+        and the ``OK``/``ERR``/``CFG``/``ID`` ``#<corr-id>``-suffix routing
+        (``_CORR_ID_RE``) are DELETED, not ported -- both were pre-v4
+        vestiges with no firmware emitter behind them (telemetry is binary
+        now; corr-id'd replies ride ``ReplyEnvelope``, a binary shape).
+        None of the four cleartext verbs currently have a live
+        reader-thread consumer (see ``_handle_wire_line()``'s own
+        docstring) -- dropped silently here, same policy as a pre-124
+        ``OK``/``ERR``/``CFG`` reply with no registered queue.
+        """
+        del command, text  # no live reader-thread consumer yet -- see docstring
 
-        # Drop relay comment/status lines (# channel:, # entering data
-        # plane, # echo:, # mode:, # DBG ..., etc.).  These are relay
-        # command-plane responses that should have been consumed during the
-        # pre-reader handshake; any that leak through post-!GO are benign.
-        if text.startswith("#"):
-            return
-
-        if text.startswith("TLM"):
-            # Bounded TLM queue: drop oldest on overflow.
-            if self._tlm_queue.full():
-                try:
-                    self._tlm_queue.get_nowait()
-                except queue.Empty:
-                    pass
-            try:
-                self._tlm_queue.put_nowait(text)
-            except queue.Full:
-                pass  # extremely unlikely race; drop
-            return
-
-        if text.startswith("EVT"):
-            self._evt_queue.put(text)
-            return
-
-        # Route OK/ERR/CFG/ID replies by corr-id.
-        # NOTE: ID replies carry a trailing corr-id (e.g. "ID model=... #7")
-        # and must be routed like OK/ERR/CFG — not dropped silently.
-        if text.startswith(("OK", "ERR", "CFG", "ID")):
-            m = _CORR_ID_RE.search(text)
-            if m:
-                corr_id = m.group(1)
-            else:
-                corr_id = ""
-            with self._reply_lock:
-                q = self._reply_queues.get(corr_id)
-            if q is not None:
-                q.put(text)
-            # If no queue is registered for this id, drop silently.
-            return
-
-        # All other lines: drop silently (diagnostics, unknown, etc.)
-
-    def _handle_binary_reply(self, frame: bytes) -> None:
+    def _handle_binary_reply(self, frame: bytes, command: bytes) -> None:
         """COBS-decode, CRC-verify, protobuf-decode, and route one binary
-        reply frame (123-002/003; was a ``*B<base64>`` armored text line
-        pre-123).
+        reply LINE's own data (123-002/003/124-005; was a ``*B<base64>``
+        armored text line pre-123).
 
-        Called only from ``_reader_loop`` (see its docstring). COBS-decodes
-        and CRC-verifies via ``wire_codec.decode_frame()``; a decode failure
-        here (malformed COBS or a CRC mismatch) increments
-        ``malformed_frame_count`` and the frame is dropped outright -- there
-        are no bytes to try a second interpretation against.
+        Called only from ``_handle_wire_line()`` (see its docstring), which
+        has already stripped the wire line's own ``<COMMAND>':'`` prefix --
+        ``frame`` is the COBS body alone, ``command`` the ASCII verb bytes
+        that prefix scoped the CRC over (124-003/124-005, issue §3),
+        threaded straight into ``wire_codec.decode_frame()``. A decode
+        failure here (malformed COBS or a CRC mismatch, including a
+        ``command`` that does not match what the line was actually encoded
+        with) increments ``malformed_frame_count`` and the frame is dropped
+        outright -- there are no bytes to try a second interpretation
+        against.
 
-        Two message types share this exact framing (103-001 Decision 3,
-        hardened 104-003, re-framed 123-002/003): ``pb2.ReplyEnvelope`` (the
-        common case -- corr-id'd ``ok``/``err`` replies and unsolicited
-        ``tlm`` pushes) and ``pb2.TelemetrySecondary`` (the slower ~5 Hz
-        acc/glitch/ts/cmd_vel diagnostic frame, telemetry.proto). The wire
-        carries NO discriminator byte between them -- ``TelemetrySecondary``
-        rides as its OWN independently-framed frame specifically because
-        ``ReplyEnvelope.body``'s oneof is fixed at ``ok``/``err``/``tlm``
-        (envelope.proto) and cannot grow a fourth arm for it
-        (``src/firm/app/telemetry.cpp``'s ``emitSecondary()`` encodes and
-        frames a bare ``TelemetrySecondary`` directly, never wrapping it in
-        a ``ReplyEnvelope``).
-
-        Disambiguation: try ``ReplyEnvelope`` FIRST. Every real
-        ``ReplyEnvelope`` this firmware ever sends populates the ``body``
-        oneof -- ``Comms::sendReply()`` (corr-id'd ``ok``/``err``) and
-        ``Telemetry::emitPrimary()`` (unsolicited ``tlm``, ``corr_id=0``)
-        both always set one of the three arms; nothing constructs an empty
-        one. So if the ``ReplyEnvelope`` parse either raises OR succeeds
-        with ``WhichOneof("body") is None``, the bytes were never a valid
-        ``ReplyEnvelope`` in the first place, and the line is retried as a
-        ``TelemetrySecondary``. (Protobuf's wire format is not
-        self-describing about message type -- a field-number/wire-type
-        collision between the two schemas could in principle parse
-        "successfully" into a ``ReplyEnvelope`` with an empty oneof, which is
-        exactly the case this fallback exists to catch, alongside an
-        outright parse failure.)
+        Exactly one message type rides this framing now (124-009,
+        robot-state-blackboard-...md): ``pb2.ReplyEnvelope`` -- corr-id'd
+        ``ok``/``err`` replies and unsolicited ``tlm`` pushes.
+        ``pb2.TelemetrySecondary``, its former sibling (103-001 Decision 3,
+        hardened 104-003), is DELETED outright, along with the
+        ReplyEnvelope-vs-TelemetrySecondary disambiguation fallback this
+        method used to need -- ``ReplyEnvelope.FromString()`` either
+        succeeds with a populated ``body`` oneof, or the bytes are
+        malformed, full stop. Every real ``ReplyEnvelope`` this firmware
+        ever sends populates the ``body`` oneof -- ``Comms::sendReply()``
+        (corr-id'd ``ok``/``err``) and ``Telemetry::emitPrimary()``
+        (unsolicited ``tlm``, ``corr_id=0``) both always set one of the
+        three arms; nothing constructs an empty one -- so a parse that
+        raises OR succeeds with ``WhichOneof("body") is None`` is treated
+        as malformed.
 
         097-001: a ``tlm`` body is checked FIRST, before the corr-id lookup,
         and routed unconditionally to the bounded, drop-oldest
@@ -966,22 +969,15 @@ class SerialConnection:
         reply is dropped silently (same "no listener" semantics as the text
         plane).
 
-        A successfully-decoded ``TelemetrySecondary`` (104-003) routes,
-        unconditionally, to the bounded, drop-oldest
-        ``_binary_secondary_queue`` -- there is no corr-id to route it by
-        (``TelemetrySecondary`` carries no ``corr_id`` field at all; it is a
-        pure unsolicited push, like primary ``tlm``).
-
-        Any decode/parse failure of EITHER shape (malformed COBS, a CRC
-        mismatch, malformed protobuf bytes, or bytes that are neither a
-        well-formed ``ReplyEnvelope`` nor a well-formed
-        ``TelemetrySecondary``) increments ``malformed_frame_count`` and the
-        frame is dropped -- a single corrupted binary reply must not crash
-        the reader thread, matching this loop's existing tolerance for
-        undecodable bytes elsewhere (e.g. the UTF-8-decode
-        ``except Exception: return`` in ``_handle_text_line()``).
+        Any decode/parse failure (malformed COBS, a CRC mismatch, malformed
+        protobuf bytes, or bytes that parse but leave ``WhichOneof("body")``
+        unset) increments ``malformed_frame_count`` and the frame is dropped
+        -- a single corrupted binary reply must not crash the reader
+        thread, matching this loop's existing tolerance for undecodable
+        bytes elsewhere (e.g. the UTF-8-decode ``except Exception: return``
+        in ``_handle_text_line()``).
         """
-        raw_bytes = decode_frame(frame)
+        raw_bytes = decode_frame(frame, command=command)
         if raw_bytes is None:
             self.malformed_frame_count += 1
             return
@@ -1016,26 +1012,12 @@ class SerialConnection:
             # If no queue is registered for this id, drop silently.
             return
 
-        # Not a (recognizable) ReplyEnvelope -- try TelemetrySecondary
-        # (104-003; see this method's own docstring for the disambiguation
-        # rationale).
-        try:
-            secondary = _get_telemetry_pb2().TelemetrySecondary.FromString(raw_bytes)
-        except Exception:
-            # Neither shape decoded -- drop, matching this loop's tolerance
-            # for undecodable bytes elsewhere.
-            self.malformed_frame_count += 1
-            return
-
-        if self._binary_secondary_queue.full():
-            try:
-                self._binary_secondary_queue.get_nowait()
-            except queue.Empty:
-                pass
-        try:
-            self._binary_secondary_queue.put_nowait(secondary)
-        except queue.Full:
-            pass  # extremely unlikely race; drop
+        # Not a (recognizable) ReplyEnvelope -- 124-009: there is no second
+        # shape to fall back to any more (TelemetrySecondary is deleted
+        # outright, robot-state-blackboard-...md, issue's own
+        # "TelemetrySecondary dies") -- drop, matching this loop's
+        # tolerance for undecodable bytes elsewhere.
+        self.malformed_frame_count += 1
 
     def _poll_ready(self, total_timeout_s: float = _POLL_TOTAL_NORMAL_S) -> list[str]:
         """Poll PING until the device responds or total_timeout_s is exceeded.
@@ -1055,7 +1037,7 @@ class SerialConnection:
             self._ser.reset_input_buffer()
             self._ser.write(cmd)
             self._ser.flush()
-            lines = self._poll_read_lines(_POLL_ATTEMPT_DURATION, stop_token="OK pong")
+            lines = self._poll_read_lines(_POLL_ATTEMPT_DURATION, stop_token="PONG:")
             if lines:
                 return lines
         return []
@@ -1244,13 +1226,16 @@ class SerialConnection:
         """Send a binary ``pb2.CommandEnvelope``, block for its reply envelope.
 
         The binary-plane counterpart of ``send()``: serializes ``envelope``,
-        COBS+CRC-frames it (123-002/003; was base64-armored as
-        ``*B<base64>\\n`` pre-123) and writes the frame body plus the
-        trailing 0x00 delimiter, then blocks on the corr-id-keyed reply
-        queue exactly like ``send()`` does today -- the
-        envelope's own ``corr_id`` field takes the place of ``send()``'s
-        ``#<corr_id>`` text suffix. ``envelope.corr_id`` is assigned here
-        (overwriting whatever the caller set) from the same
+        COBS+CRC-frames it (123-002/003; 124-005 prepends the ASCII verb
+        name -- ``"MOVE:"``/``"CONFIG:"``/``"STOP:"``, derived from
+        ``envelope``'s own populated oneof arm via
+        ``_envelope_command_name()`` -- and scopes the CRC over it too, per
+        protocol v5's uniform grammar) and writes the line plus its trailing
+        ``'\\n'`` delimiter (converged from the pre-124 0x00 -- issue §7),
+        then blocks on the corr-id-keyed reply queue exactly like ``send()``
+        does today -- the envelope's own ``corr_id`` field takes the place
+        of ``send()``'s ``#<corr_id>`` text suffix. ``envelope.corr_id`` is
+        assigned here (overwriting whatever the caller set) from the same
         ``_corr_counter`` sequence ``send()`` uses, so text and binary
         corr-ids never collide.
 
@@ -1287,14 +1272,16 @@ class SerialConnection:
             self._reply_queues[str(corr_id)] = reply_q
 
         envelope.corr_id = corr_id
-        frame = encode_frame(envelope.SerializeToString())
+        command = _envelope_command_name(envelope)
+        frame = encode_frame(envelope.SerializeToString(), command=command)
+        line = command + b":" + frame
 
         if self.on_send:
-            self.on_send(frame)
+            self.on_send(line)
 
         try:
             with self._write_lock:
-                self._ser.write(frame + b"\x00")
+                self._ser.write(line + b"\n")
                 self._ser.flush()
                 self._last_write_s = time.monotonic()  # defer the next "+"
         except Exception as exc:
@@ -1339,10 +1326,10 @@ class SerialConnection:
         This method skips that registration/wait entirely: it assigns
         ``envelope.corr_id`` from the SAME ``_corr_counter`` sequence
         ``send_envelope()`` uses (so binary corr-ids never collide whichever
-        send path issued them), writes the COBS+CRC-framed envelope
-        (123-002/003; was the ``*B<base64>`` armored line pre-123), and
-        returns the assigned corr_id for the caller to match against the ack
-        slot itself (see ``NezhaProtocol.wait_for_ack()``).
+        send path issued them), writes the command-prefixed, COBS+CRC-framed
+        line (123-002/003/124-005; was the ``*B<base64>`` armored line
+        pre-123), and returns the assigned corr_id for the caller to match
+        against the ack slot itself (see ``NezhaProtocol.wait_for_ack()``).
 
         Raises ``ConnectionError`` if not connected, mirroring
         ``send_fast()``'s own not-open handling (unlike ``send_envelope()``,
@@ -1358,13 +1345,15 @@ class SerialConnection:
             corr_id = self._corr_counter
 
         envelope.corr_id = corr_id
-        frame = encode_frame(envelope.SerializeToString())
+        command = _envelope_command_name(envelope)
+        frame = encode_frame(envelope.SerializeToString(), command=command)
+        line = command + b":" + frame
 
         if self.on_send:
-            self.on_send(frame)
+            self.on_send(line)
 
         with self._write_lock:
-            self._ser.write(frame + b"\x00")
+            self._ser.write(line + b"\n")
             self._ser.flush()
             self._last_write_s = time.monotonic()  # defer the next "+"
 
@@ -1512,66 +1501,20 @@ class SerialConnection:
 
         return frames
 
-    def drain_binary_secondary_tlm(self) -> list["telemetry_pb2.TelemetrySecondary"]:
-        """Non-blocking drain of ``_binary_secondary_queue`` (104-003).
+    # drain_binary_secondary_tlm()/read_binary_secondary_tlm() -- DELETED
+    # (124-009): TelemetrySecondary itself is gone
+    # (robot-state-blackboard-...md, issue's own "TelemetrySecondary
+    # dies") -- there is no second queue left to drain/poll.
 
-        The ``TelemetrySecondary`` counterpart of ``drain_binary_tlm()``:
-        returns every currently-queued ``TelemetrySecondary`` frame (raw
-        ``pb2.TelemetrySecondary`` objects -- see ``_handle_binary_reply()``)
-        without blocking. Exposes ``acc``/``glitch``/``ts``/``cmd_vel``
-        fields the same way primary telemetry fields are exposed: as plain
-        attributes on the decoded pb2 message (``.acc_left``,
-        ``.cmd_vel_right``, etc.) -- this module stays at the raw-decoded
-        layer, matching ``drain_binary_tlm()``'s own "raw message, caller
-        adapts" split.
-        """
-        frames: list = []
-        while True:
-            try:
-                frames.append(self._binary_secondary_queue.get_nowait())
-            except queue.Empty:
-                break
-        return frames
-
-    def read_binary_secondary_tlm(self, duration: int) -> list["telemetry_pb2.TelemetrySecondary"]:  # [ms]
-        """Block for up to ``duration`` ms, draining ``_binary_secondary_queue``
-        (104-003).
-
-        The ``TelemetrySecondary`` counterpart of ``read_binary_tlm()``: does
-        NOT call ``_ser.readline()`` -- the reader thread already feeds
-        ``_binary_secondary_queue`` independently via ``_handle_binary_reply()``,
-        this just polls it. Returns every ``pb2.TelemetrySecondary`` received
-        during the window, in arrival order; may be empty if none arrived.
-        """
-        if not self.is_open:
-            return []
-
-        frames: list = []
-        deadline = time.time() + (duration / 1000.0)
-        _sleep = 0.005  # 5 ms between drain attempts
-
-        while time.time() < deadline:
-            drained_this_pass = False
-            while True:
-                try:
-                    frames.append(self._binary_secondary_queue.get_nowait())
-                except queue.Empty:
-                    break
-                drained_this_pass = True
-
-            if not drained_this_pass:
-                time.sleep(_sleep)
-
-        return frames
-
-    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.AckEntry | None":  # [ms]
+    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "int | None":  # [ms]
         """Poll incoming binary ``Telemetry`` pushes' bounded ack ring for an
         entry matching ``corr_id``, for up to ``timeout`` ms. Returns the
-        matched raw ``pb2.AckEntry`` ring entry (the caller reads
-        ``corr_id``/``err`` off it -- NOT the enclosing frame's own scalar
-        ``ack_corr``/``ack_err``, which may belong to a different command by
-        the time the frame is read), or ``None`` if the deadline passes with
-        no match -- this wait is always bounded, never infinite.
+        matched raw packed ``int`` ring entry (124-008: a plain int,
+        ``corr_id<<4|err`` -- ``telemetry_pb2.AckEntry`` is deleted, issue
+        §B4; the caller unpacks via
+        ``robot_radio.robot.protocol.AckEntry.from_ring_entry()``), or
+        ``None`` if the deadline passes with no match -- this wait is
+        always bounded, never infinite.
 
         The ONE shared ack matcher (104-003, promoted out of
         ``robot_radio.robot.protocol.NezhaProtocol.wait_for_ack()``, which

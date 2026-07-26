@@ -2,8 +2,9 @@
 id: '003'
 title: COBS delimiter parameterization (0x0A) and CRC scope extension to the command
   name
-status: open
-use-cases: [SUC-001]
+status: done
+use-cases:
+- SUC-001
 depends-on: []
 github-issue: ''
 issue: protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md
@@ -33,18 +34,18 @@ comment, currently written entirely in `0x00` terms.
 
 ## Acceptance Criteria
 
-- [ ] `cobsEncode()`/`cobsDecode()` take a delimiter parameter; existing
+- [x] `cobsEncode()`/`cobsDecode()` take a delimiter parameter; existing
       `0x00` call sites are unaffected by the default.
-- [ ] `crcCompute("123456789") == 0x29B1` still passes — the CRC variant
+- [x] `crcCompute("123456789") == 0x29B1` still passes — the CRC variant
       itself is unchanged, only its input range extends.
-- [ ] CRC-scope vector: identical payload under two different command
+- [x] CRC-scope vector: identical payload under two different command
       names produces two different CRCs; a frame whose command byte is
       mutated in transit fails verification rather than dispatching.
-- [ ] Round-trip verified against the adversarial inputs the issue
+- [x] Round-trip verified against the adversarial inputs the issue
       already worked out (all-`0x0A`, all-`0x00`, `0x00..0xFF` sweep).
-- [ ] Host `wire_codec.py` mirrors both changes exactly (delimiter
+- [x] Host `wire_codec.py` mirrors both changes exactly (delimiter
       parameter, extended CRC input).
-- [ ] `encode_frame()`/`decode_frame()` (host) and `Comms::sendReply()`/
+- [x] `encode_frame()`/`decode_frame()` (host) and `Comms::sendReply()`/
       `decodeBinaryFrame()` (firmware) take the command bytes as a
       separate CRC-scope argument — not concatenated-and-sliced.
 

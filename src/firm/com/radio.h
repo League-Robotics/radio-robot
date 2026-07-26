@@ -17,23 +17,24 @@
  * Only one Radio instance may call begin(). _instance is a static singleton
  * pointer used by the static ISR callback.
  *
- * 123-002 (COBS+CRC framer integration): fragment reassembly (`onData`) was
- * ALREADY binary-clean (raw memcpy, no byte-level interpretation) -- what
- * changes here is the trailing byte convention and `poll()`'s demux.
- * `send()` (binary, COBS+CRC frame body) appends a trailing 0x00; the NEW
- * `sendText()` (text-plane HELLO/PING replies) appends a trailing '\n', the
- * same terminator `send()` used for everything pre-123. `poll()` looks at
- * the reassembled message's OWN trailing byte (whichever the sender
- * appended) to decide which of the two it just received -- no dependency
- * on `app/`, per this directory's own "com/ has no dependency on app/,
- * messages/, or any wire-schema type" invariant (com/DESIGN.md);
- * `app/comms.h`'s `RadioTransport` adapter maps `Radio::FrameKind` onto
- * `App::FrameKind` at the one seam that is allowed to know both.
+ * 124-005 (protocol v5 Part A, "framing grammar cutover"): fragment
+ * reassembly (`onData`) was ALREADY binary-clean (raw memcpy, no
+ * byte-level interpretation) and stays that way. What changes here is the
+ * trailing-byte convention: `send()` and the former `sendText()` (deleted
+ * -- see below) converge on ONE terminator, a trailing '\n' (0x0A), for
+ * EVERY outbound line, text or binary (issue §7). This is safe because
+ * COBS is now keyed on 0x0A (wire_runtime.h item 8, 124-003): a binary
+ * line's own bytes never contain a literal 0x0A, so '\n' is a genuine,
+ * unconditional terminator -- there is no more text-vs-binary distinction
+ * for `poll()` to make at this layer at all (App::Comms decides that from
+ * the parsed `<COMMAND>` prefix once it has a complete line -- see
+ * comms.h's own file header). `poll()` simply strips the trailing '\n' off
+ * the reassembled message. No dependency on `app/`, per this directory's
+ * own "com/ has no dependency on app/, messages/, or any wire-schema type"
+ * invariant (com/DESIGN.md).
  */
 class Radio {
 public:
-    enum class FrameKind : uint8_t { kNone = 0, kText = 1, kBinary = 2 };
-
     explicit Radio(MicroBitRadio& radio, MessageBus& bus);
 
     // enable(), setFrequencyBand(channel), setGroup(10), setTransmitPower(7),
@@ -50,30 +51,29 @@ public:
     // The channel (frequency band) currently in use.
     int channel() const { return _channel; }
 
-    // Non-blocking. Returns FrameKind::kNone until a complete reassembled
-    // message is ready. FrameKind::kBinary: buf holds *outLen raw bytes (the
-    // COBS+CRC frame body, trailing 0x00 delimiter consumed/not included).
-    // FrameKind::kText: buf holds a NUL-terminated ASCII line (trailing
-    // '\n'/'\r' stripped), *outLen == strlen(buf). Only one message is
+    // Non-blocking. Returns false until a complete reassembled message is
+    // ready. On success, buf holds *outLen raw bytes (the line content --
+    // text or binary, whichever App::Comms determines from its own parsed
+    // `<COMMAND>` prefix -- the trailing '\n' delimiter consumed, not
+    // included), NUL-terminated as a convenience. Only one message is
     // buffered — a second message completing before poll() drains the
     // first is dropped.
-    FrameKind poll(char* buf, uint16_t cap, uint16_t* outLen);
+    bool poll(char* buf, uint16_t cap, uint16_t* outLen);
 
-    // Fragment a COBS+CRC binary frame body into RAW250 frames and
-    // transmit each one, appending a trailing 0x00 delimiter as the FINAL
-    // payload byte (mirrors SerialPort::send()'s own delimiter-appending
-    // contract). `data`/`len` is 0x00-free by construction (App::Transport::
-    // send()'s own contract) so the 0x00 this appends is unambiguous.
+    // Fragment a wire line into RAW250 frames and transmit each one,
+    // appending a trailing '\n' (0x0A) delimiter as the FINAL payload byte
+    // -- the ONE terminator every outbound line uses, text or binary
+    // (124-005, issue §7: converges what were two separate methods,
+    // `send()` (trailing 0x00) and `sendText()` (trailing '\n'), pre-124).
+    // Safe for binary content because COBS is now keyed on 0x0A
+    // (wire_runtime.h item 8): `data`/`len` never contains a literal 0x0A
+    // by construction (App::Transport::send()'s own contract), so this
+    // appended '\n' is unambiguous. RadioRelay §5 framing alone delimits a
+    // message on the wire, but after `!GO` the link becomes a transparent
+    // byte pipe with no per-message boundary of its own; without the
+    // embedded terminator, consecutive host-bound replies concatenate and
+    // the host's line reader can't split them.
     void send(const uint8_t* data, uint16_t len);
-
-    // Fragment a text-plane reply (NUL-terminated ASCII -- HELLO/PING) into
-    // RAW250 frames, appending a trailing '\n' as the FINAL payload byte --
-    // this is what `send()` did for EVERYTHING pre-123 (RadioRelay §5
-    // framing alone delimits a message on the wire, but after `!GO` the
-    // link becomes a transparent byte pipe with no per-message boundary of
-    // its own; without the embedded newline, consecutive host-bound text
-    // replies concatenate and the host's line reader can't split them).
-    void sendText(const char* msg);
 
 private:
     MicroBitRadio& _radio;
@@ -107,10 +107,9 @@ private:
 
     uint8_t _txSeq;           // rolling §5 sequence number
 
-    // Shared fragmentation body for send()/sendText(): fragments
-    // `payload[0..payloadLen)` into RAW250 frames. Used by both public
-    // sends -- the only difference between them is the trailing delimiter
-    // byte the caller already appended into `payload`.
+    // Fragmentation body for send(): fragments `payload[0..payloadLen)`
+    // (the wire line content plus its already-appended trailing '\n')
+    // into RAW250 frames.
     void sendFragmented(const uint8_t* payload, int payloadLen);
 
     static void onData(MicroBitEvent);

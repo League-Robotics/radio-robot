@@ -36,11 +36,13 @@ none of which need live hardware or even a real `SerialConnection`:
    saturation, bounded timeout — all against synthetic frames, no
    `NezhaProtocol` involved). What remains here is
    `NezhaProtocol.wait_for_ack()`'s own thin adapter role: delegate to
-   `self._conn.wait_for_ack(corr_id, timeout)` (now returning a raw
-   `telemetry_pb2.AckEntry` ring entry, not a whole `Telemetry` frame) and
-   wrap it via this module's own `AckEntry.from_ring_entry()` (or pass
-   `None` through unchanged on a timeout) — exercised against a fake
-   connection that implements only `wait_for_ack()`.
+   `self._conn.wait_for_ack(corr_id, timeout)` (now returning a raw packed
+   `int` ring entry -- 124-008, issue §B4: `telemetry_pb2.AckEntry` is
+   deleted, `Telemetry.acks` is `repeated uint32` -- not a whole
+   `Telemetry` frame) and wrap it via this module's own
+   `AckEntry.from_ring_entry()` (or pass `None` through unchanged on a
+   timeout) — exercised against a fake connection that implements only
+   `wait_for_ack()`.
 
 Collected under `src/tests/unit/` — `pyproject.toml`'s `testpaths` includes
 `tests/unit`, so `uv run python -m pytest` collects it by default.
@@ -183,21 +185,25 @@ def test_move_and_stop_each_get_a_fresh_corr_id():
 # module-private _FLAG_* constants -- duplicated here since they are
 # private; see telemetry.proto's own bit-table comment for the
 # authoritative numbering).
-_FLAG_ACK_FRESH = 1 << 5
 _FLAG_FAULT_WEDGE_LATCH = 1 << 7
 _FLAG_EVENT_BOOT_READY = 1 << 11
 
 
-def test_from_pb2_exposes_ack_and_fault_and_event_flags():
+def _pack_ack(corr_id: int, err: int) -> int:
+    """Mirrors telemetry.cpp's own pushAckRing() packed-word format EXACTLY
+    (124-008, issue §B4): corr_id<<4 | err."""
+    return (corr_id << 4) | err
+
+
+def test_from_pb2_exposes_ack_ring_and_fault_and_event_flags():
     telemetry = telemetry_pb2.Telemetry(
-        now=100, flags=_FLAG_ACK_FRESH | _FLAG_FAULT_WEDGE_LATCH | _FLAG_EVENT_BOOT_READY,
-        ack_corr=7, ack_err=0,
+        now=100, flags=_FLAG_FAULT_WEDGE_LATCH | _FLAG_EVENT_BOOT_READY,
+        acks=[_pack_ack(7, 0)],
     )
 
     frame = TLMFrame.from_pb2(telemetry)
 
-    assert frame.ack == AckEntry(corr_id=7, ok=True, err_code=0)
-    assert frame.ack_fresh is True
+    assert frame.acks == [AckEntry(corr_id=7, ok=True, err_code=0)]
     assert frame.fault_wedge_latch is True
     assert frame.event_boot_ready is True
     # Bits not set stay False -- flags-derived properties never default-True.
@@ -205,23 +211,16 @@ def test_from_pb2_exposes_ack_and_fault_and_event_flags():
     assert frame.event_deadman_expired is False
 
 
-def test_from_pb2_ack_is_none_when_not_fresh():
-    """ack_corr/ack_err hold their last-written value on every ordinary
-    telemetry push (they are plain scalar fields, not gated by a
-    presence flag of their own) -- only `ack_fresh` (flags bit 5) says
-    whether THIS frame carries a genuinely new ack. When it is clear,
-    `TLMFrame.ack` stays None even though ack_corr/ack_err are non-zero on
-    the wire, so a caller never mistakes a stale value for a fresh one."""
-    telemetry = telemetry_pb2.Telemetry(now=1, ack_corr=7, ack_err=0)  # flags defaults to 0 (not fresh)
+def test_from_pb2_acks_is_empty_when_ring_is_empty():
+    """124-008 (issue §B4) deleted the single "freshest ack" scalar slot
+    (`ack_corr`/`ack_err`, valid iff `ack_fresh`) -- `acks` (the bounded
+    ring) is the ONLY ack source now, and it decodes to an empty list when
+    nothing was pushed, never a stale leftover value."""
+    telemetry = telemetry_pb2.Telemetry(now=1)  # no acks pushed
 
     frame = TLMFrame.from_pb2(telemetry)
 
-    assert frame.ack is None
-    assert frame.ack_fresh is False
-    # Raw ack_corr/ack_err are still populated unconditionally (mirrors the
-    # "always present, just check freshness yourself" contract).
-    assert frame.ack_corr == 7
-    assert frame.ack_err == 0
+    assert frame.acks == []
 
 
 def test_from_pb2_flags_defaults_to_zero_not_none():
@@ -233,17 +232,15 @@ def test_from_pb2_flags_defaults_to_zero_not_none():
     frame = TLMFrame.from_pb2(telemetry)
 
     assert frame.flags == 0
-    assert frame.ack_fresh is False
     assert frame.fault_wedge_latch is False
 
 
 def test_from_pb2_err_ack_carries_err_code():
-    telemetry = telemetry_pb2.Telemetry(
-        flags=_FLAG_ACK_FRESH, ack_corr=9, ack_err=envelope_pb2.ERR_RANGE)
+    telemetry = telemetry_pb2.Telemetry(acks=[_pack_ack(9, envelope_pb2.ERR_RANGE)])
 
     frame = TLMFrame.from_pb2(telemetry)
 
-    ack = frame.ack
+    ack = frame.acks[0]
     assert ack.corr_id == 9
     assert ack.ok is False
     assert ack.err_code == envelope_pb2.ERR_RANGE
@@ -256,24 +253,23 @@ def test_from_pb2_does_not_crash_on_a_full_primary_frame_and_cmd_vel_stays_none(
     TelemetrySecondary) -- AttributeError on every real frame. cmd_vel is a
     permanent gap for a frame built from the primary Telemetry stream (see
     from_pb2()'s own docstring); the rest of the frame must still decode
-    cleanly, including the frame-v2 (115-003) reading objects and single ack
-    slot."""
+    cleanly, including the packed-telemetry (124-008) reading objects and
+    ack ring."""
     from robot_radio.robot.pb2 import common_pb2
 
     telemetry = telemetry_pb2.Telemetry(
         now=5000, mode=telemetry_pb2.IDLE, seq=1,
-        flags=_FLAG_ACK_FRESH,
-        enc_left=telemetry_pb2.EncoderReading(position=10.0, velocity=1.0, time=5000),
-        enc_right=telemetry_pb2.EncoderReading(position=11.0, velocity=1.0, time=5000),
-        pose=common_pb2.Pose2D(x=0.0, y=0.0, h=0.0),
-        ack_corr=1, ack_err=0,
+        enc_left=telemetry_pb2.EncoderReading(position=10, velocity=10, age=200),
+        enc_right=telemetry_pb2.EncoderReading(position=11, velocity=10, age=200),
+        pose=common_pb2.Pose2D(x=0, y=0, h=0),
+        acks=[_pack_ack(1, 0)],
     )
 
     frame = TLMFrame.from_pb2(telemetry)
 
     assert frame.cmd_vel is None
     assert frame.enc == (10, 11)
-    assert frame.ack == AckEntry(corr_id=1, ok=True, err_code=0)
+    assert frame.acks == [AckEntry(corr_id=1, ok=True, err_code=0)]
 
 
 # ---------------------------------------------------------------------------
@@ -286,27 +282,26 @@ class _FakeConnWithAck:
     `NezhaProtocol.wait_for_ack()` (104-003, ring-based since 120) delegates
     the ENTIRE poll/match/timeout algorithm to
     `SerialConnection.wait_for_ack()`; this fake lets the delegation itself
-    be tested (call forwarded with the right args, the matched raw pb2
-    AckEntry RING ENTRY adapted to this module's AckEntry dataclass via
-    `AckEntry.from_ring_entry()` -- NOT `from_telemetry()`, which reads a
-    whole frame's scalar slot instead -- `None` passed through unchanged)
-    without a real queue/thread. The algorithm's own scenario coverage
-    (exact match, ring saturation, bounded timeout) lives in
+    be tested (call forwarded with the right args, the matched raw packed
+    `int` RING ENTRY -- 124-008: a plain int, not `telemetry_pb2.AckEntry`,
+    which is deleted, issue §B4 -- adapted to this module's AckEntry
+    dataclass via `AckEntry.from_ring_entry()`, `None` passed through
+    unchanged) without a real queue/thread. The algorithm's own scenario
+    coverage (exact match, ring saturation, bounded timeout) lives in
     `src/tests/unit/test_serial_conn_ack_ring.py`, against the real
     `SerialConnection.wait_for_ack()`."""
 
-    def __init__(self, result: "telemetry_pb2.AckEntry | None") -> None:
+    def __init__(self, result: "int | None") -> None:
         self.result = result
         self.calls: list[tuple[int, int]] = []
 
-    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "telemetry_pb2.AckEntry | None":
+    def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "int | None":
         self.calls.append((corr_id, timeout))
         return self.result
 
 
 def test_wait_for_ack_delegates_to_shared_matcher_and_adapts_ok_result():
-    raw_entry = telemetry_pb2.AckEntry(corr_id=5, err=0)
-    conn = _FakeConnWithAck(raw_entry)
+    conn = _FakeConnWithAck(_pack_ack(5, 0))
     proto = NezhaProtocol(conn)
 
     ack = proto.wait_for_ack(5, timeout=250)
@@ -316,8 +311,7 @@ def test_wait_for_ack_delegates_to_shared_matcher_and_adapts_ok_result():
 
 
 def test_wait_for_ack_delegates_to_shared_matcher_and_adapts_err_result():
-    raw_entry = telemetry_pb2.AckEntry(corr_id=9, err=envelope_pb2.ERR_BADARG)
-    conn = _FakeConnWithAck(raw_entry)
+    conn = _FakeConnWithAck(_pack_ack(9, envelope_pb2.ERR_BADARG))
     proto = NezhaProtocol(conn)
 
     ack = proto.wait_for_ack(9)

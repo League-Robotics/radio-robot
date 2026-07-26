@@ -123,12 +123,14 @@ def test_configure_from_robot_tier1_push_is_acked_by_firmware():
     try:
         loop.configure_from_robot(config)
 
+        # 124-008 (issue §B4): the single "freshest ack" scalar slot
+        # (frame.ack) is deleted -- acks ride the bounded ack ring
+        # (frame.acks) now.
         acks = []
         for _ in range(5):
             loop.step(1)
             for frame in loop.drain_pending_tlm():
-                if frame.ack is not None:
-                    acks.append(frame.ack)
+                acks.extend(frame.acks)
             if any(ack.ok for ack in acks):
                 break
 

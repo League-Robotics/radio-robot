@@ -27,6 +27,14 @@ PROTO_DIR  = REPO_ROOT / "src" / "protos"
 OUT_DIR    = REPO_ROOT / "src" / "firm" / "messages"
 INVENTORY_OUT = REPO_ROOT / "docs" / "design" / "message-inventory.md"
 
+# Command-name registry (124-001) — the host-consumable mirror of
+# src/firm/messages/commands.h, generated from the SAME commands.proto
+# schema. Not under OUT_DIR (firmware-only) — this is the one generated
+# artifact this script writes outside src/firm/messages/.
+HOST_COMMANDS_OUT = (
+    REPO_ROOT / "src" / "host" / "robot_radio" / "io" / "wire_commands.py"
+)
+
 # ---------------------------------------------------------------------------
 # Extension field numbers defined in options.proto
 # ---------------------------------------------------------------------------
@@ -37,6 +45,18 @@ _FIELD_OPT_MAX       = 50003
 _FIELD_OPT_ABS_MAX   = 50004
 _FIELD_OPT_REQ       = 50005
 _FIELD_OPT_STR_LEN   = 50006
+_FIELD_OPT_SCALE     = 50007
+
+# Extension field number for the (binary) ENUM-VALUE option (options.proto)
+# -- a separate number space from the _FIELD_OPT_* block above (FieldOptions
+# vs. EnumValueOptions are different extended message types). Used by
+# commands.proto's Verb enum (124-001, command-name registry).
+_ENUM_VALUE_OPT_BINARY = 50100
+
+# The required proto3 zero value for commands.proto's Verb enum -- never a
+# real wire verb, excluded from every generated registry row (firmware
+# kVerbTable[] and host VERBS/wire_commands.py alike).
+_VERB_UNSPECIFIED_NAME = "VERB_UNSPECIFIED"
 
 # Default fixed-array width for a `string` field with no `(str_len)`
 # override (095-005 Step 0b: minimal per-field string-width mechanism,
@@ -430,6 +450,7 @@ try:
     _TYPE_DOUBLE  = _dpb2.FieldDescriptorProto.TYPE_DOUBLE
     _TYPE_INT32   = _dpb2.FieldDescriptorProto.TYPE_INT32
     _TYPE_INT64   = _dpb2.FieldDescriptorProto.TYPE_INT64
+    _TYPE_SINT32  = _dpb2.FieldDescriptorProto.TYPE_SINT32
     _TYPE_UINT32  = _dpb2.FieldDescriptorProto.TYPE_UINT32
     _TYPE_UINT64  = _dpb2.FieldDescriptorProto.TYPE_UINT64
     _TYPE_BOOL    = _dpb2.FieldDescriptorProto.TYPE_BOOL
@@ -546,6 +567,62 @@ def _read_req(field) -> bool:
     return bool(opts.get(_FIELD_OPT_REQ, 0))
 
 
+def _read_scale(field) -> float | None:
+    """Return the (scale) option value for a field, or None (sprint 124
+    ticket 008, options.proto's (scale) doc comment -- GENERATED fixed-point
+    divisor, not informational-only like (units))."""
+    return _read_bound(field, _FIELD_OPT_SCALE)
+
+
+def _parse_enum_value_options(value) -> dict:
+    """Parse an EnumValueDescriptorProto's serialized EnumValueOptions
+    extension bytes into {field_number: raw_value}.
+
+    Mirrors `_parse_field_options()`'s own varint-walk exactly, but over
+    `value.options` (EnumValueOptions) rather than `field.options`
+    (FieldOptions) -- these are two different extended message types with
+    independent extension-number spaces (options.proto's own comment), so
+    the two parsers stay separate rather than sharing one that would need
+    to take the extended-message type as a parameter for no real reuse
+    benefit (each is a ~15-line self-contained walk).
+    """
+    import struct
+
+    raw = value.options.SerializeToString()
+    pos = 0
+    out: dict = {}
+    while pos < len(raw):
+        tag, pos = _read_varint(raw, pos)
+        field_num = tag >> 3
+        wire_type = tag & 7
+        if wire_type == 0:  # varint (bool options: binary)
+            val, pos = _read_varint(raw, pos)
+            out[field_num] = val
+        elif wire_type == 1:  # fixed64
+            (val,) = struct.unpack_from("<d", raw, pos)
+            pos += 8
+            out[field_num] = val
+        elif wire_type == 2:  # length-delimited
+            vlen, pos = _read_varint(raw, pos)
+            out[field_num] = raw[pos:pos + vlen]
+            pos += vlen
+        elif wire_type == 5:  # fixed32
+            (val,) = struct.unpack_from("<f", raw, pos)
+            pos += 4
+            out[field_num] = val
+        else:
+            break
+    return out
+
+
+def _read_verb_binary_flag(value) -> bool:
+    """Return whether a commands.proto Verb enum value's (binary) option is
+    set true (default false -- a verb with no (binary) option is
+    cleartext)."""
+    opts = _parse_enum_value_options(value)
+    return bool(opts.get(_ENUM_VALUE_OPT_BINARY, 0))
+
+
 # ---------------------------------------------------------------------------
 # Proto scalar → C++ type mapping
 # ---------------------------------------------------------------------------
@@ -555,6 +632,7 @@ def _scalar_cpp_type(field) -> str:
     if t == _TYPE_FLOAT:   return "float"
     if t == _TYPE_DOUBLE:  return "double"
     if t == _TYPE_INT32:   return "int32_t"
+    if t == _TYPE_SINT32:  return "int32_t"
     if t == _TYPE_INT64:   return "int64_t"
     if t == _TYPE_UINT32:  return "uint32_t"
     if t == _TYPE_UINT64:  return "uint64_t"
@@ -569,7 +647,7 @@ def _scalar_default(field) -> str:
     t = field.type
     if t == _TYPE_FLOAT:   return "0.0f"
     if t == _TYPE_DOUBLE:  return "0.0"
-    if t in (_TYPE_INT32, _TYPE_INT64, _TYPE_UINT32, _TYPE_UINT64): return "0"
+    if t in (_TYPE_INT32, _TYPE_SINT32, _TYPE_INT64, _TYPE_UINT32, _TYPE_UINT64): return "0"
     if t == _TYPE_BOOL:    return "false"
     return "0"
 
@@ -639,6 +717,115 @@ def _emit_enum(ed, lines: list[str]) -> None:
         lines.append(f"    {val.name} = {val.number},")
     lines.append("};")
     lines.append("")
+
+
+# ---------------------------------------------------------------------------
+# Command-name registry (124-001) — commands.proto's Verb enum gets its
+# usual `enum class Verb` emitted by `_emit_enum()` above like any other
+# proto enum; the two functions below emit the ADDITIONAL registry table
+# (name + binary/cleartext flag) that is this schema's whole point, one for
+# each language. Both walk the identical `ed.value` list (skipping the
+# proto3 sentinel `VERB_UNSPECIFIED`), so a verb added to commands.proto
+# lands in both outputs from one source, by construction.
+# ---------------------------------------------------------------------------
+def _verb_rows(ed):
+    """Return [(name, binary_bool), ...] for every real verb in a Verb enum
+    descriptor, in declaration order, excluding the proto3 zero sentinel."""
+    return [
+        (val.name, _read_verb_binary_flag(val))
+        for val in ed.value
+        if val.name != _VERB_UNSPECIFIED_NAME
+    ]
+
+
+def _emit_verb_registry_cpp(ed, lines: list[str]) -> None:
+    """Append the firmware-side VerbEntry table to `lines`, following the
+    `enum class Verb` _emit_enum() already appended.
+
+    `App::Comms` looks this table up by name (a linear scan over
+    `kVerbCount` rows -- the registry is small and firmware has no hash-map
+    primitive) to get a verb's `(binary)` flag; ticket 005 wires that
+    lookup in, not this ticket (see this file's own header comment)."""
+    rows = _verb_rows(ed)
+    lines.append(
+        "// VerbEntry -- one row of the closed v5 command-name registry "
+        "(124-001, sprint 124"
+    )
+    lines.append(
+        "// architecture Decision 2): the wire verb name and whether its "
+        "<data> is binary"
+    )
+    lines.append(
+        "// (COBS+CRC-framed) or cleartext. Generated from "
+        "protos/commands.proto's Verb"
+    )
+    lines.append(
+        "// enum + (binary) enum-value option -- the ONE source this table "
+        "and the host"
+    )
+    lines.append("// wire_commands.py mirror both come from.")
+    lines.append("struct VerbEntry {")
+    lines.append("    Verb verb;")
+    lines.append("    const char* name;")
+    lines.append("    bool binary;")
+    lines.append("};")
+    lines.append("")
+    lines.append(f"constexpr VerbEntry kVerbTable[{len(rows)}] = {{")
+    for name, binary in rows:
+        cpp_bool = "true" if binary else "false"
+        lines.append(f'    {{ Verb::{name}, "{name}", {cpp_bool} }},')
+    lines.append("};")
+    lines.append(f"constexpr uint8_t kVerbCount = {len(rows)};")
+    lines.append("")
+
+
+_HOST_COMMANDS_MODULE_BANNER = '''\
+"""wire_commands.py -- GENERATED command-name registry (124-001).
+
+AUTO-GENERATED by scripts/gen_messages.py -- do not edit by hand.
+Source: protos/commands.proto's Verb enum + (binary) enum-value option.
+
+The single source firmware dispatch (src/firm/messages/commands.h's
+kVerbTable[]) and this host module are generated from the SAME schema --
+see sprint 124 architecture Decision 2 (command-name registry, closing the
+firmware/host/doc 3-way drift risk). Adding a future verb means editing
+protos/commands.proto and regenerating -- never hand-editing this file.
+"""
+
+from __future__ import annotations
+
+from typing import NamedTuple
+
+
+class VerbEntry(NamedTuple):
+    name: str
+    binary: bool  # True: COBS+CRC-framed binary <data>; False: cleartext
+
+
+'''
+
+
+def _render_host_commands_module(ed) -> str:
+    """Render src/host/robot_radio/io/wire_commands.py's full content from
+    a Verb enum descriptor -- the host-side mirror of
+    _emit_verb_registry_cpp()'s firmware table, same source rows."""
+    rows = _verb_rows(ed)
+    lines: list[str] = [_HOST_COMMANDS_MODULE_BANNER.rstrip("\n"), ""]
+    lines.append("VERBS: tuple[VerbEntry, ...] = (")
+    for name, binary in rows:
+        lines.append(f'    VerbEntry("{name}", {binary}),')
+    lines.append(")")
+    lines.append("")
+    lines.append("VERB_BY_NAME: dict[str, VerbEntry] = {v.name: v for v in VERBS}")
+    lines.append("")
+    lines.append("BINARY_VERBS: frozenset[str] = frozenset(")
+    lines.append("    v.name for v in VERBS if v.binary")
+    lines.append(")")
+    lines.append("CLEARTEXT_VERBS: frozenset[str] = frozenset(")
+    lines.append("    v.name for v in VERBS if not v.binary")
+    lines.append(")")
+    lines.append("")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -768,6 +955,38 @@ def _emit_message(md, want_setters: bool, lines: list[str],
             default = _scalar_default(field)
             ft = _scalar_cpp_type(field)
             lines.append(f"    {ft} {fname} = {default};")
+
+    # --- Generated fixed-point conversion methods (sprint 124 ticket 008,
+    # options.proto's (scale) option, architecture Decision 3: "generated
+    # conversion, not hand-honoured documentation" -- the field itself
+    # stores the raw wire int (int32_t, the sint32 wire type's C++ storage);
+    # these are the ONE generated place a caller converts to/from the real
+    # float value (scale) describes, so a mismatch between what one side
+    # multiplies by and what the other divides by cannot arise from two
+    # independently hand-typed literals drifting apart. Scoped to plain
+    # (non-oneof, non-repeated, non-Opt) fields -- the only shape (scale)
+    # is meaningful on. ---
+    for field in md.field:
+        if field.HasField("oneof_index"):
+            continue
+        if field.label == _LABEL_REPEATED:
+            continue
+        scale = _read_scale(field)
+        if scale is None:
+            continue
+        if field.type != _TYPE_SINT32:
+            raise GenMessagesError(
+                f"wire.cpp codegen: {struct_name}.{field.name} has a (scale) "
+                f"option but is not a sint32 field -- (scale) is only "
+                f"meaningful on sint32 (options.proto's own doc comment)")
+        cap = _cap_camel(field.name)
+        lines.append("")
+        lines.append(f"    static constexpr float k{cap}Scale = {_float_literal(scale)};  // real = raw * scale")
+        lines.append(f"    static int32_t pack{cap}(float value) {{")
+        lines.append(f"        return static_cast<int32_t>(value >= 0.0f ? (value / k{cap}Scale + 0.5f)"
+                     f" : (value / k{cap}Scale - 0.5f));")
+        lines.append("    }")
+        lines.append(f"    static float unpack{cap}(int32_t raw) {{ return static_cast<float>(raw) * k{cap}Scale; }}")
 
     # --- Array / optional-string accessors ---
     # 080-001: every get_*-prefixed accessor (oneof-kind discriminator,
@@ -993,14 +1212,13 @@ def _cross_file_include_block(fd) -> str:
 # no field table, no offsetof call.
 # ---------------------------------------------------------------------------
 
-_LAYOUT_CHECK_ROOTS = ("CommandEnvelope", "ReplyEnvelope", "TelemetrySecondary")
+_LAYOUT_CHECK_ROOTS = ("CommandEnvelope", "ReplyEnvelope")
 
 
 def _compute_layout_check_structs(fds) -> list[str]:
     """Return every msg:: struct name transitively reachable (via
     message-typed fields, including oneof-union arms) from
-    CommandEnvelope/ReplyEnvelope/TelemetrySecondary, in stable BFS
-    (first-seen) order.
+    CommandEnvelope/ReplyEnvelope, in stable BFS (first-seen) order.
 
     This is the exact set a future offsetof-based FieldDesc table (ticket
     005) would need to walk for THIS sprint's implemented + declared-only
@@ -1009,13 +1227,10 @@ def _compute_layout_check_structs(fds) -> list[str]:
     motion.proto) rather than hand-enumerated, so it stays correct as the
     schema grows without this function needing an edit.
 
-    TelemetrySecondary joins CommandEnvelope/ReplyEnvelope as a root
-    (103-001, architecture-update.md (103) Decision 3): it rides the wire
-    as its OWN independently-armored `*B` line, not a ReplyEnvelope oneof
-    arm, so it needs the same offsetof-safety guarantee and the same
-    generated FieldDesc table / encode() entry point CommandEnvelope/
-    ReplyEnvelope already get -- see _emit_wire_files()'s own extension
-    for the matching kTelemetrySecondaryMaxEncodedSize/encode() addition.
+    TelemetrySecondary was a third root (103-001, architecture-update.md
+    (103) Decision 3: it rode the wire as its OWN independently-armored
+    `*B` line, not a ReplyEnvelope oneof arm) -- DELETED (124-009,
+    robot-state-blackboard-...md, issue's own "TelemetrySecondary dies").
     """
     msg_map: dict[str, object] = {}
     for fd in fds.file:
@@ -1046,8 +1261,7 @@ _LAYOUT_CHECKS_BANNER = """\
 // Regenerated by scripts/gen_messages.py before each firmware build.
 // Day-one decision gate (095-003, architecture-update.md SUC-002/Risk 2/
 // Open Question 5): one std::is_standard_layout static_assert per msg::
-// struct transitively reachable from CommandEnvelope/ReplyEnvelope/
-// TelemetrySecondary (the third root added 103-001, Decision 3 -- see
+// struct transitively reachable from CommandEnvelope/ReplyEnvelope (see
 // _compute_layout_check_structs()'s own doc comment) -- the exact set a
 // future offsetof-based FieldDesc table (ticket 005) would need to walk.
 // This header emits ONLY the check, no field table, no
@@ -1150,6 +1364,8 @@ def _scalar_type_literal(field) -> str:
         return "kDouble"
     if t == _TYPE_INT32:
         return "kInt32"
+    if t == _TYPE_SINT32:
+        return "kSint32"
     if t == _TYPE_INT64:
         return "kInt64"
     if t == _TYPE_UINT32:
@@ -1168,6 +1384,7 @@ _WIRE_TYPE_BY_SCALAR = {
     "kFloat": "kFixed32",
     "kDouble": "kFixed64",
     "kInt32": "kVarint",
+    "kSint32": "kVarint",
     "kInt64": "kVarint",
     "kUint32": "kVarint",
     "kUint64": "kVarint",
@@ -1179,7 +1396,7 @@ _WIRE_TYPE_BY_SCALAR = {
 # elemStride (unused by this sprint's reachable schema, see FieldKind's own
 # doc comment in wire.cpp, but computed correctly for engine completeness).
 _SCALAR_CPP_SIZE = {
-    "kFloat": 4, "kDouble": 8, "kInt32": 4, "kInt64": 8,
+    "kFloat": 4, "kDouble": 8, "kInt32": 4, "kSint32": 4, "kInt64": 8,
     "kUint32": 4, "kUint64": 8, "kBool": 1, "kEnum": 1,
 }
 
@@ -1217,7 +1434,7 @@ def _field_wire_type_bits(field, packed: bool = False) -> int:
         return 5
     if t == _TYPE_DOUBLE:
         return 1
-    if t in (_TYPE_INT32, _TYPE_INT64, _TYPE_UINT32, _TYPE_UINT64, _TYPE_BOOL, _TYPE_ENUM):
+    if t in (_TYPE_INT32, _TYPE_SINT32, _TYPE_INT64, _TYPE_UINT32, _TYPE_UINT64, _TYPE_BOOL, _TYPE_ENUM):
         return 0
     if t in (_TYPE_STRING, _TYPE_BYTES, _TYPE_MESSAGE):
         return 2
@@ -1277,6 +1494,24 @@ def _worst_case_scalar_size(field) -> int:
         if bound is not None and bound >= 0:
             return _varint_len(int(bound))
         return 5  # ceil(32/7)
+    if t == _TYPE_SINT32:
+        # sint32/zigzag (124-008, issue §B3): a bounded field's worst-case
+        # wire width is the varint length of its zigzag-mapped magnitude,
+        # NOT the sign-extended-to-64-bit width _TYPE_INT32 below uses --
+        # that is exactly the gotcha this scalar type exists to dodge (a
+        # negative int32 costs 10B; a negative sint32 at the SAME magnitude
+        # costs the same as the positive value, via zigzag). zigzag(n) for a
+        # symmetric (abs_max) bound has worst-case magnitude 2*abs_max - 1
+        # (e.g. -abs_max -> 2*abs_max - 1); 2*abs_max is a safe (never
+        # under-) approximation that never costs an extra varint byte in
+        # practice for this schema's bounds (all comfortably clear of a
+        # 7-bit boundary).
+        bound = _read_bound(field, _FIELD_OPT_ABS_MAX)
+        if bound is None:
+            bound = _read_bound(field, _FIELD_OPT_MAX)
+        if bound is not None:
+            return _varint_len(int(2 * abs(bound)))
+        return 5  # ceil(32/7) -- unbounded sint32 worst case
     if t == _TYPE_INT32:
         # protobuf's own well-known gotcha: a NEGATIVE int32 is sign-
         # extended to 64 bits before varint encoding by the reference
@@ -1695,14 +1930,21 @@ Result decode(CommandEnvelope& out, const uint8_t* buf, uint16_t len);
 // is smaller than the required output.
 uint16_t encode(const ReplyEnvelope& in, uint8_t* buf, uint16_t cap);
 
-// encode(TelemetrySecondary): same encode-only treatment as ReplyEnvelope
-// above (103-001, architecture-update.md (103) Decision 3) -- the slow
-// diagnostic frame is firmware-emitted only, never host-decoded on the
-// robot side, and rides the wire as its own independently-armored line
-// rather than a ReplyEnvelope oneof arm (telemetry.proto's own doc
-// comment). Returns 0 (never a truncated/corrupt buffer) if `cap` is
-// smaller than the required output.
-uint16_t encode(const TelemetrySecondary& in, uint8_t* buf, uint16_t cap);
+// encode(TelemetrySecondary) -- DELETED (124-009): TelemetrySecondary
+// itself is gone (robot-state-blackboard-...md, issue's own
+// "TelemetrySecondary dies") -- it emitted nothing but `now` in
+// production. See telemetry.proto's own (now-historical) doc comment.
+
+// decode(Telemetry&, ...) -- 124-008 addition. Firmware production code
+// still never decodes its own outbound Telemetry frame (host owns that,
+// via real protobuf on its side of the wire) -- this overload exists
+// purely so a HOST_BUILD test can exercise decodeInto()'s (min)/(max)/
+// (abs_max) validateBounds() path against Telemetry's own bounded fields
+// (flags, the packed acks word, ...) through the SAME generated engine
+// production encode() uses, rather than a hand-rolled parallel decoder
+// that could silently drift from it. Same never-partial/malformed-input
+// contract as decode(CommandEnvelope&, ...) above.
+Result decode(Telemetry& out, const uint8_t* buf, uint16_t len);
 
 }  // namespace wire
 }  // namespace msg
@@ -1751,8 +1993,9 @@ enum class FieldKind : uint8_t {
   kOneofMessage,    // nested-message member of a real oneof union
   kString,          // fixed-capacity char[N] (non-oneof, non-Opt)
   kBytes,           // fixed-capacity uint8_t[N] + count (Echo.payload)
-  kRepeatedScalar,  // T[N] + count, PACKED on the wire (unreached by this
-                     // sprint's schema -- kept for engine completeness)
+  kRepeatedScalar,  // T[N] + count, PACKED on the wire (124-008: Telemetry.acks
+                     // is this engine's first real use -- packed corr_id<<4|err
+                     // uint32 words, see telemetry.proto's own doc comment)
   kRepeatedMessage, // T[N] + count, each element separately tagged
                      // (WheelTargets.w -- the repeated field this sprint's
                      // schema actually reaches)
@@ -1763,6 +2006,11 @@ enum class ScalarType : uint8_t {
   kFloat,
   kDouble,
   kInt32,
+  kSint32,          // zigzag-encoded (124-008): WireRuntime::zigzagEncode32/
+                     // zigzagDecode32 -- a bounded signed field costs the
+                     // varint width of its zigzag magnitude regardless of
+                     // sign, unlike kInt32's sign-extended-to-64-bit path
+                     // (wire_runtime.h's own documented int32 gotcha).
   kInt64,
   kUint32,
   kUint64,
@@ -1839,6 +2087,13 @@ bool decodeScalarValue(ScalarType type, const uint8_t* buf, size_t len, size_t* 
       std::memcpy(dst, &sv, sizeof(sv));
       return true;
     }
+    case ScalarType::kSint32: {
+      uint64_t v;
+      if (!WireRuntime::decodeVarint(buf, len, pos, &v)) return false;
+      const int32_t sv = WireRuntime::zigzagDecode32(static_cast<uint32_t>(v));
+      std::memcpy(dst, &sv, sizeof(sv));
+      return true;
+    }
     case ScalarType::kUint32: {
       uint64_t v;
       if (!WireRuntime::decodeVarint(buf, len, pos, &v)) return false;
@@ -1883,9 +2138,15 @@ bool encodeScalarValue(ScalarType type, const void* src, uint8_t* buf, size_t ca
       int32_t v;
       std::memcpy(&v, src, sizeof(v));
       // protobuf's own int32 gotcha: a NEGATIVE int32 is sign-extended to
-      // 64 bits before varint encoding (unless the field is sint32, which
-      // this schema does not use) -- mirrored via the int64 cast.
+      // 64 bits before varint encoding (unless the field is sint32 --
+      // kSint32 below is exactly that escape hatch) -- mirrored via the
+      // int64 cast.
       return WireRuntime::encodeVarint(static_cast<uint64_t>(static_cast<int64_t>(v)), buf, cap, pos);
+    }
+    case ScalarType::kSint32: {
+      int32_t v;
+      std::memcpy(&v, src, sizeof(v));
+      return WireRuntime::encodeVarint(WireRuntime::zigzagEncode32(v), buf, cap, pos);
     }
     case ScalarType::kUint32: {
       uint32_t v;
@@ -1930,6 +2191,11 @@ bool scalarIsDefault(ScalarType type, const void* src) {
       std::memcpy(&v, src, sizeof(v));
       return v == 0;
     }
+    case ScalarType::kSint32: {
+      int32_t v;
+      std::memcpy(&v, src, sizeof(v));
+      return v == 0;
+    }
     case ScalarType::kUint32: {
       uint32_t v;
       std::memcpy(&v, src, sizeof(v));
@@ -1967,6 +2233,11 @@ double scalarAsDouble(ScalarType type, const void* src) {
     case ScalarType::kEnum:
       return static_cast<double>(*static_cast<const uint8_t*>(src));
     case ScalarType::kInt32: {
+      int32_t v;
+      std::memcpy(&v, src, sizeof(v));
+      return static_cast<double>(v);
+    }
+    case ScalarType::kSint32: {
       int32_t v;
       std::memcpy(&v, src, sizeof(v));
       return static_cast<double>(v);
@@ -2337,11 +2608,14 @@ uint16_t encode(const ReplyEnvelope& in, uint8_t* buf, uint16_t cap) {
   return static_cast<uint16_t>(pos);
 }
 
-uint16_t encode(const TelemetrySecondary& in, uint8_t* buf, uint16_t cap) {
-  if (buf == nullptr) return 0;
-  size_t pos = 0;
-  if (!encodeInto(&in, kTable_TelemetrySecondary, buf, static_cast<size_t>(cap), &pos)) return 0;
-  return static_cast<uint16_t>(pos);
+Result decode(Telemetry& out, const uint8_t* buf, uint16_t len) {
+  // Same full-object memset rationale as decode(CommandEnvelope&, ...)
+  // above -- Telemetry is standard-layout/trivially-copyable (every
+  // reachable struct is, per layout_checks.h) but not trivial (default
+  // member initializers), so `= {}` alone would not zero every byte.
+  std::memset(static_cast<void*>(&out), 0, sizeof(out));
+  if (buf == nullptr && len != 0) return Result{false, 0, ErrCode::ERR_DECODE};
+  return decodeInto(&out, kTable_Telemetry, buf, static_cast<size_t>(len), 0);
 }
 
 }  // namespace wire
@@ -2382,29 +2656,20 @@ def _emit_wire_files(fds):
 
     cmd_report = _envelope_worst_case_report("CommandEnvelope", "cmd", msg_map, memo)
     reply_report = _envelope_worst_case_report("ReplyEnvelope", "body", msg_map, memo)
-    # TelemetrySecondary (103-001, Decision 3): a standalone top-level wire
-    # message (its own `*B`-armored line, not a ReplyEnvelope oneof arm --
-    # see telemetry.proto's own doc comment), so its worst-case size is the
-    # plain whole-message computation (no oneof-arm MAX to take), unlike
-    # cmd_report/reply_report above.
-    secondary_size = _worst_case_message_size("TelemetrySecondary", msg_map, memo)
+    # TelemetrySecondary's own standalone worst-case-size computation
+    # (103-001, Decision 3) is DELETED along with the message itself
+    # (124-009, robot-state-blackboard-...md).
 
     wire_h = (_WIRE_H_BANNER
               + _render_arm_report(cmd_report) + "\n"
               + _render_arm_report(reply_report) + "\n"
-              + f"//   TelemetrySecondary: standalone worst case = {secondary_size}B "
-              + "(own *B-armored line, not a ReplyEnvelope oneof arm -- Decision 3)\n"
               + f"constexpr uint16_t kCommandEnvelopeMaxEncodedSize = {cmd_report['total']};\n"
               + f"constexpr uint16_t kReplyEnvelopeMaxEncodedSize = {reply_report['total']};\n"
-              + f"constexpr uint16_t kTelemetrySecondaryMaxEncodedSize = {secondary_size};\n"
               + f"static_assert(kCommandEnvelopeMaxEncodedSize <= {_ENVELOPE_BUDGET_BYTES},\n"
               + f'              "CommandEnvelope worst-case encoded size exceeds the '
               + f'{_ENVELOPE_BUDGET_BYTES}-byte envelope budget");\n'
               + f"static_assert(kReplyEnvelopeMaxEncodedSize <= {_ENVELOPE_BUDGET_BYTES},\n"
               + f'              "ReplyEnvelope worst-case encoded size exceeds the '
-              + f'{_ENVELOPE_BUDGET_BYTES}-byte envelope budget");\n'
-              + f"static_assert(kTelemetrySecondaryMaxEncodedSize <= {_ENVELOPE_BUDGET_BYTES},\n"
-              + f'              "TelemetrySecondary worst-case encoded size exceeds the '
               + f'{_ENVELOPE_BUDGET_BYTES}-byte envelope budget");\n'
               + _WIRE_H_FOOTER)
 
@@ -2437,6 +2702,7 @@ def _emit_file(fd, file_messages: dict, file_enums: dict,
     lines.append("")
 
     is_common = (proto_name == "common.proto")
+    is_commands = (proto_name == "commands.proto")
 
     if is_common:
         # <stdint.h> goes outside the namespace (it defines global typedefs).
@@ -2456,6 +2722,11 @@ def _emit_file(fd, file_messages: dict, file_enums: dict,
     # Emit top-level enums in this file
     for ed in fd.enum_type:
         _emit_enum(ed, lines)
+        # commands.proto (124-001): the Verb enum's registry table (name +
+        # (binary) flag) rides alongside its own enum, in the same header --
+        # see _emit_verb_registry_cpp()'s own doc comment.
+        if is_commands and ed.name == "Verb":
+            _emit_verb_registry_cpp(ed, lines)
 
     # Emit messages in this file
     for md in fd.message_type:
@@ -2537,9 +2808,14 @@ class GenMessagesError(RuntimeError):
 def _run_codegen_pipeline():
     """Run protoc over protos/*.proto and emit every header's content in-memory.
 
-    Returns (outputs, fds):
-      outputs: {header_name: content} for the proto-derived headers -- no
-        filesystem writes.
+    Returns (outputs, host_outputs, fds):
+      outputs: {header_name: content} for the proto-derived FIRMWARE headers
+        (written under OUT_DIR) -- no filesystem writes here.
+      host_outputs: {absolute_path: content} for generated HOST-side files
+        (124-001: just wire_commands.py today) -- a separate dict, not
+        merged into `outputs`, because these write to a different directory
+        tree (src/host/, not src/firm/messages/) than the loop that
+        consumes `outputs` assumes.
       fds: the parsed FileDescriptorSet (needed by --emit-inventory).
 
     Raises GenMessagesError on any pipeline failure (missing grpcio-tools,
@@ -2648,7 +2924,21 @@ def _run_codegen_pipeline():
     print(f"  {_render_arm_report(cmd_report)}", file=sys.stderr)
     print(f"  {_render_arm_report(reply_report)}", file=sys.stderr)
 
-    return outputs, fds
+    # ------------------------------------------------------------------
+    # 124-001: command-name registry host mirror (wire_commands.py) --
+    # generated from commands.proto's Verb enum, the SAME descriptor
+    # _emit_verb_registry_cpp() above already rendered into commands.h's
+    # kVerbTable[]. Both come from the same `ed.value` walk (_verb_rows()),
+    # so the two outputs cannot independently drift.
+    # ------------------------------------------------------------------
+    host_outputs: dict[str, str] = {}
+    commands_fd = file_map.get("commands.proto")
+    if commands_fd is not None:
+        verb_ed = next((ed for ed in commands_fd.enum_type if ed.name == "Verb"), None)
+        if verb_ed is not None:
+            host_outputs[str(HOST_COMMANDS_OUT)] = _render_host_commands_module(verb_ed)
+
+    return outputs, host_outputs, fds
 
 
 def generate_headers() -> dict:
@@ -2661,8 +2951,20 @@ def generate_headers() -> dict:
     the guard must run the same codegen path a real build runs, not a grep
     over the checked-in headers alone).
     """
-    outputs, _fds = _run_codegen_pipeline()
+    outputs, _host_outputs, _fds = _run_codegen_pipeline()
     return outputs
+
+
+def generate_command_registry() -> tuple[str, str]:
+    """Run the codegen pipeline and return (commands_h_text, wire_commands_py_text).
+
+    Public entry point for the 124-001 differential test
+    (tests/unit/test_command_registry.py): both texts come from this one
+    in-process run, so the test exercises the exact generator a real build
+    invokes, not a re-derivation of it.
+    """
+    outputs, host_outputs, _fds = _run_codegen_pipeline()
+    return outputs["commands.h"], host_outputs[str(HOST_COMMANDS_OUT)]
 
 
 # ---------------------------------------------------------------------------
@@ -2679,7 +2981,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        outputs, fds = _run_codegen_pipeline()
+        outputs, host_outputs, fds = _run_codegen_pipeline()
     except GenMessagesError as exc:
         print(f"gen_messages: {exc}", file=sys.stderr)
         return 1
@@ -2698,6 +3000,22 @@ def main(argv=None) -> int:
             for line in content.splitlines()[:5]:
                 print(f"    {line}")
         else:
+            out_path.write_text(content)
+            print(f"gen_messages: wrote {out_path.relative_to(REPO_ROOT)}",
+                  file=sys.stderr)
+
+    # ------------------------------------------------------------------
+    # 124-001: generated host-side files (outside OUT_DIR/src/firm/messages)
+    # ------------------------------------------------------------------
+    for out_path_str, content in sorted(host_outputs.items()):
+        out_path = Path(out_path_str)
+        if args.dry_run:
+            print(f"[dry-run] would write {out_path.relative_to(REPO_ROOT)}")
+            print("  first 5 lines:")
+            for line in content.splitlines()[:5]:
+                print(f"    {line}")
+        else:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(content)
             print(f"gen_messages: wrote {out_path.relative_to(REPO_ROOT)}",
                   file=sys.stderr)

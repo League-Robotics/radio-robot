@@ -2,9 +2,13 @@
 id: 009
 title: 'RobotLoop/Telemetry restructure: one-assembly-point state->update->emit, TelemetrySecondary
   deletion'
-status: open
-use-cases: [SUC-004, SUC-005]
-depends-on: ['007', '008']
+status: done
+use-cases:
+- SUC-004
+- SUC-005
+depends-on:
+- '007'
+- 008
 github-issue: ''
 issue: robot-state-blackboard-one-struct-for-all-shared-state-and-telemetry.md
 completes_issue: true
@@ -40,25 +44,25 @@ assembled and published, not WHO owns the devices producing it.
 
 ## Acceptance Criteria
 
-- [ ] `cycle()` contains exactly one `tlm_.update(state)` call and zero
+- [x] `cycle()` contains exactly one `tlm_.update(state)` call and zero
       `setFlag()` calls anywhere else (grep-enforceable: `grep -n
       "setFlag" src/firm/app/robot_loop.cpp` returns nothing outside
       `Telemetry::update()`'s own implementation).
-- [ ] `TelemetrySecondary`'s frame type, wire schema arm, and
+- [x] `TelemetrySecondary`'s frame type, wire schema arm, and
       tie-break/alternation machinery are removed from the diff, not
       merely unused.
-- [ ] `Motion::StateEstimator` consumes `RobotState` directly (ticket
+- [x] `Motion::StateEstimator` consumes `RobotState` directly (ticket
       007) — no private near-duplicate `Input` struct remains.
-- [ ] `enc_left.age`/`enc_right.age` (built on ticket 002's
+- [x] `enc_left.age`/`enc_right.age` (built on ticket 002's
       `sampleTime()`) differ by roughly the `kClear`+`kSettle`
       separation under the virtual clock, never equal, never zero — a
       sim test asserts this directly (a test asserting they're equal is
       the bug, not the spec).
-- [ ] Device ownership in `RobotLoop` is byte-for-byte unchanged from
+- [x] Device ownership in `RobotLoop` is byte-for-byte unchanged from
       before this ticket (no Drive/Sensors reshuffle) — verify via
       `git diff` showing no change to which references `RobotLoop`
       holds.
-- [ ] Regenerated `kReplyEnvelopeMaxEncodedSize` ≤ 130 B (co-verified
+- [x] Regenerated `kReplyEnvelopeMaxEncodedSize` ≤ 130 B (co-verified
       with ticket 008).
 
 ## Testing

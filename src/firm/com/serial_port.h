@@ -6,38 +6,33 @@
  * SerialPort — binary-clean 115200-baud serial over USB.
  * Design/rationale: DESIGN.md.
  *
- * 123-002 (COBS+CRC framer integration): readLine() demuxes a 0x00-
- * delimited COBS+CRC binary frame from a '\r'?'\n'-terminated text line
- * (HELLO/PING) on the SAME accumulated byte stream -- see readLine()'s own
- * doc comment for the exact contract. Bytes are accumulated UNFILTERED
- * (no longer dropping every '\r' on sight, since a binary frame may
- * legitimately carry 0x0D as content) until one of the two terminators
- * ends the frame.
+ * 124-005 (protocol v5 Part A, "framing grammar cutover"): readLine() reads
+ * to an UNCONDITIONAL '\n' terminator -- no heuristic, no recognizer, no
+ * text/binary distinction at this layer at all (App::Comms decides
+ * text-vs-binary from the parsed `<COMMAND>` prefix, once the transport
+ * hands it a complete line -- see comms.h's own file header). This is safe
+ * because COBS is now keyed on 0x0A (wire_runtime.h item 8, 124-003): a
+ * binary frame's own bytes never contain a literal 0x0A, so '\n' is a
+ * genuine, unconditional terminator in both directions. Bytes are
+ * accumulated UNFILTERED (no '\r' stripping here -- under one uniform rule
+ * '\r' is legal binary content; a caller that has already classified a
+ * line as cleartext strips it, App::Comms::dispatchLine()).
  *
- * 123-006 (bench-surfaced fix): a 0x0A byte does NOT always end the frame
- * -- COBS only guarantees a frame is 0x00-free, not 0x0A-free. A 0x0A only
- * terminates a TEXT line when the accumulated bytes before it are exactly
- * a recognized text-rump command (HELLO/PING -- the closed set this side
- * ever legitimately receives inbound); otherwise it is binary content and
- * accumulation continues to the eventual 0x00 delimiter. See readLine()'s
- * own doc comment. The host's mirror, wire_codec.py's
- * ByteStreamDemuxer.feed(), shares this same demux SKELETON but uses a
- * different recognizer for ITS (opposite) direction -- see that class's
- * own docstring for why an exact-match check cannot work there.
- * `SerialPort::FrameKind` is this class's OWN plain enum
- * (no dependency on `app/`, per this directory's own "com/ has no
- * dependency on app/, messages/, or any wire-schema type" invariant --
- * com/DESIGN.md) -- `app/comms.h`'s `SerialTransport` adapter maps this
- * onto `App::FrameKind` at the one seam that is allowed to know both.
+ * Supersedes 123-002/123-006's two-terminator demux (`kTextCommands[]`/
+ * `isRecognizedTextCommand()`, an exact-match recognizer against the
+ * closed HELLO/PING set that decided whether an accumulated 0x0A ended a
+ * text line or was binary content) -- DELETED, not adapted: the
+ * recognizer's entire reason to exist (0x0A was not an unconditional
+ * terminator) no longer holds. The host's mirror,
+ * wire_codec.py's `ByteStreamDemuxer`, collapses the same way (splits on
+ * '\n' alone).
  *
  * Non-blocking: readLine() drains the CODAL ASYNC receive buffer each call
- * and returns FrameKind::kNone until a complete frame is ready.
+ * and returns false until a complete line is ready.
  * Never calls uBit.sleep() or any blocking CODAL primitive.
  */
 class SerialPort {
 public:
-    enum class FrameKind : uint8_t { kNone = 0, kText = 1, kBinary = 2 };
-
     // Usable TX ring-buffer capacity assumed by both backpressure checks in
     // this class: send()'s whole-frame-fits gate and sendReliable()'s
     // bounded wait. begin() configures the underlying CODAL UART TX buffer
@@ -55,20 +50,15 @@ public:
     void begin();
 
     // Non-blocking. Accumulates bytes from ASYNC read (unfiltered -- see
-    // this class's own file header) until a terminator ends a complete
-    // frame: 0x00 ALWAYS ends a BINARY frame (FrameKind::kBinary, buf
-    // holds *outLen raw bytes, delimiter consumed/not included). A 0x0A
-    // ends a TEXT frame (FrameKind::kText, a trailing '\r' stripped, buf
-    // NUL-terminated, *outLen == strlen(buf)) ONLY when the bytes
-    // accumulated before it are exactly a recognized text-rump command
-    // (HELLO/PING) -- otherwise the 0x0A is binary content and
-    // accumulation continues toward the 0x00 delimiter (123-006: COBS
-    // guarantees 0x00-freedom, never 0x0A-freedom). Returns
-    // FrameKind::kNone (buf/*outLen untouched) when nothing complete is
-    // ready yet. `cap` bounds buf's capacity (including the NUL terminator
-    // this call always writes, even for a binary frame -- safe because
-    // COBS-encoded content is 0x00-free by construction).
-    FrameKind readLine(char* buf, uint16_t cap, uint16_t* outLen);
+    // this class's own file header) until an UNCONDITIONAL '\n' (0x0A)
+    // ends a complete line -- buf holds *outLen raw bytes (the delimiter
+    // itself consumed, not included), NUL-terminated as a convenience
+    // (safe: a binary line's COBS-encoded content is 0x00-free by
+    // construction, so this terminator can never collide with real
+    // content). Returns false (buf/*outLen untouched) when nothing
+    // complete is ready yet. `cap` bounds buf's capacity, including that
+    // trailing NUL.
+    bool readLine(char* buf, uint16_t cap, uint16_t* outLen);
 
     // ASYNC, WHOLE-FRAME drop-on-full — for telemetry. `data`/`len` is a
     // COBS+CRC frame body (0x00-free by construction, per

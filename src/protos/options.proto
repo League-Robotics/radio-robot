@@ -25,6 +25,24 @@ import "google/protobuf/descriptor.proto";
 //               envelope budget) rather than a general per-field-width
 //               scheme — do not extend this option's meaning beyond string
 //               capacity without revisiting its scope.
+// (scale)     — GENERATED fixed-point divisor for a `sint32` field (sprint
+//               124 ticket 008, issue protocol-v5-...md §B3/Decision 3).
+//               Unlike (units) above, this is NOT informational-only:
+//               gen_messages.py reads it and emits, on the generated C++
+//               struct, a `static constexpr float k<Field>Scale` constant
+//               plus `pack<Field>(float) -> int32_t` / `unpack<Field>
+//               (int32_t) -> float` conversion methods -- the schema is the
+//               ONE place the divisor is written; both firmware (these
+//               generated methods) and host (the same extension, readable
+//               off the compiled descriptor at runtime -- host uses real
+//               protobuf, sint32 zigzag decode is automatic) derive from
+//               it, so a mismatch between "what firmware encoded with" and
+//               "what a reader divides back out by" cannot arise from two
+//               independently hand-typed literals drifting apart. Real
+//               value = raw * scale (e.g. scale=0.001 for a field whose
+//               wire quantum is 1 mrad, stored in radians in memory).
+//               Meaningful only on a `sint32` field; gen_messages.py raises
+//               if found on any other field type.
 
 extend google.protobuf.FieldOptions {
   optional string units     = 50000;
@@ -34,4 +52,25 @@ extend google.protobuf.FieldOptions {
   optional double abs_max   = 50004;
   optional bool   req       = 50005;
   optional uint32 str_len   = 50006;
+  optional double scale     = 50007;
+}
+
+// Custom enum-VALUE option for the command-name registry (124-001, sprint
+// 124 architecture Decision 2 — commands.proto's `Verb` enum).
+//
+// (binary) — true: this verb's wire <data> is a binary, COBS+CRC-framed
+//            payload (decoded through the existing CommandEnvelope/
+//            ReplyEnvelope schema). false/absent (the proto3 default):
+//            this verb's <data> is cleartext ASCII, hand-parsed, or the
+//            verb carries no data at all. This is the SOLE text-vs-binary
+//            discriminator under protocol v5 — see commands.proto's own
+//            header comment.
+//
+// A separate extend block (not folded into the FieldOptions block above):
+// FieldOptions and EnumValueOptions are different extended message types,
+// so their extension field numbers occupy independent number spaces —
+// starting this block at 50100 (rather than continuing 50007) keeps that
+// distinction visible at a glance rather than implying a shared sequence.
+extend google.protobuf.EnumValueOptions {
+  optional bool binary = 50100;
 }

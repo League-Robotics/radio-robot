@@ -32,19 +32,9 @@ Transport (ABC)
             Called from the reader thread for every parsed TLM line.
             Callers that need Qt-thread safety must marshal via
             QMetaObject.invokeMethod or a thread-safe signal.
-        on_telemetry_secondary: Callable[["telemetry_pb2.TelemetrySecondary"], None] | None
-            122-003: called from the reader thread for every parsed
-            TelemetrySecondary line (the slower ~5 Hz diagnostic frame --
-            carries cmd_vel/acc_*/glitch_*/ts_* fields; cycle_busy/
-            cycle_period lived here as an interim placement until 123-004
-            migrated them onto the primary Telemetry frame -- see
-            telemetry.proto's own TelemetrySecondary doc comment). Hardware
-            backends only (``_HardwareTransport``, which already drains
-            ``SerialConnection.drain_binary_secondary_tlm()``);
-            ``SimTransport`` does not yet decode a secondary frame at all
-            (pre-existing gap, unrelated to this callback) so this stays
-            unset/never invoked there. Same Qt-thread-marshaling caveat as
-            ``on_telemetry`` above.
+        on_telemetry_secondary -- DELETED (124-009): TelemetrySecondary
+            itself is gone (robot-state-blackboard-...md, issue's own
+            "TelemetrySecondary dies").
         on_truth: Callable[[(float, float, float) | None], None] | None
             Called from the camera-truth poller with (x_cm, y_cm, yaw_rad),
             or None when the daemon is not available.
@@ -220,13 +210,21 @@ _MOVE_MIN_TIMEOUT = 2000.0    # [ms]
 # fire-and-poll on the ENQUEUE ack only, never reporting the Move's own
 # completion). docs/protocol-v4.md sec 7.2: the completion ack echoes
 # `Move.id`, NOT the envelope's own `corr_id` -- a SEPARATE key riding the
-# SAME single ack slot. `SerialConnection._corr_counter` (io/serial_conn.py)
+# SAME ack ring. `SerialConnection._corr_counter` (io/serial_conn.py)
 # assigns small sequential envelope corr_ids (starts at 0, +1 per envelope
 # sent this connection) -- picking Move.id values from a disjoint, far
-# higher range means a completion ack (`ack_corr == move_id`) can never be
-# confused with an unrelated enqueue ack that happens to share the same
-# small integer. No real session sends anywhere near 2**30 envelopes.
-_MOVE_ID_BASE = 1 << 30
+# higher range means a completion ack can never be confused with an
+# unrelated enqueue ack that happens to share the same small integer.
+#
+# 124-008 (issue Sec B4) packs every ring entry as a single wire uint32,
+# `(corr_id << 4) | err` -- corr_id/Move.id must fit in the top 28 bits
+# (0 .. 2**28-1 == 268,435,455) or the shift silently truncates high-order
+# bits on the wire, corrupting correlation. 2**30 (the old base) already
+# overflows that budget on the very first Move a GUI session sends. 2**24
+# keeps the same "disjoint from small corr_ids" property (still dwarfs any
+# realistic per-connection corr_id count) while leaving 4 clear bits of
+# headroom under the 28-bit packed field before wraparound.
+_MOVE_ID_BASE = 1 << 24
 _move_id_counter = _MOVE_ID_BASE
 _move_id_lock = threading.Lock()
 
@@ -518,12 +516,8 @@ class Transport(abc.ABC):
         from the robot.  Invoked from a background thread; GUI callers
         must marshal to the Qt main thread.
 
-    ``on_telemetry_secondary`` (122-003)
-        Called with a raw ``telemetry_pb2.TelemetrySecondary`` for each
-        parsed secondary line (~5 Hz). Hardware backends only -- see this
-        module's own file-header doc for the ``SimTransport`` gap.
-        Invoked from a background thread; GUI callers must marshal to the
-        Qt main thread, same as ``on_telemetry``.
+    ``on_telemetry_secondary`` -- DELETED (124-009): TelemetrySecondary
+        itself is gone (robot-state-blackboard-...md).
 
     ``on_truth``
         Called with ``(x_cm, y_cm, yaw_rad)`` when a camera-truth pose
@@ -536,7 +530,6 @@ class Transport(abc.ABC):
 
     def __init__(self) -> None:
         self.on_telemetry: TelemetryCB | None = None
-        self.on_telemetry_secondary: "Callable[[object], None] | None" = None
         self.on_truth: TruthCB | None = None
         self.on_log: LogCB | None = None
 
@@ -651,13 +644,8 @@ class Transport(abc.ABC):
             except Exception:
                 _log.exception("on_telemetry callback raised")
 
-    def _deliver_secondary(self, secondary: object) -> None:
-        """Invoke on_telemetry_secondary safely (122-003)."""
-        if self.on_telemetry_secondary:
-            try:
-                self.on_telemetry_secondary(secondary)
-            except Exception:
-                _log.exception("on_telemetry_secondary callback raised")
+    # _deliver_secondary() -- DELETED (124-009): TelemetrySecondary itself
+    # is gone (robot-state-blackboard-...md).
 
     def _deliver_truth(self, pose: TruthPose | None) -> None:
         """Invoke on_truth safely."""
@@ -943,7 +931,11 @@ class _HardwareTransport(Transport):
                         frame = TLMFrame.from_pb2(reply.tlm)
                         self._last_tlm = frame
                         self._deliver_tlm(frame)
-                        if frame.ack_fresh and frame.ack_corr == move_id:
+                        # 124-008 (issue §B4): the single "freshest ack"
+                        # scalar slot (ack_fresh/ack_corr) is deleted --
+                        # scan the bounded ack ring instead. Ring membership
+                        # alone means "really acked," no freshness gate.
+                        if any(entry.corr_id == move_id for entry in frame.acks):
                             matched = frame
                     if matched is not None:
                         elapsed = time.monotonic() - start
@@ -1240,15 +1232,8 @@ class _HardwareTransport(Transport):
         each frame via ``TLMFrame.from_pb2()``, forwarding results to
         on_telemetry.
 
-        122-003: ALSO drains ``_binary_secondary_queue`` (via
-        ``drain_binary_secondary_tlm()``, already maintained by
-        ``SerialConnection`` -- see that method's own docstring) and
-        delivers each raw ``telemetry_pb2.TelemetrySecondary`` to
-        ``on_telemetry_secondary``, same best-effort/never-raises posture
-        as the primary drain above. Not gated by ``_reader_suspended`` --
-        that flag only protects the shared PRIMARY queue a tour executor
-        needs exclusive access to (see the skip branch's own comment); the
-        secondary queue has no such competing consumer.
+        The former secondary-queue drain (122-003) is DELETED (124-009):
+        TelemetrySecondary itself is gone (robot-state-blackboard-...md).
         """
         while not self._stop_event.is_set():
             if self._conn is None or not self._conn.is_open:
@@ -1271,14 +1256,6 @@ class _HardwareTransport(Transport):
                 frame = TLMFrame.from_pb2(reply.tlm)
                 self._last_tlm = frame
                 self._deliver_tlm(frame)
-
-            try:
-                secondaries = self._conn.drain_binary_secondary_tlm()
-            except Exception:
-                secondaries = []
-
-            for secondary in secondaries:
-                self._deliver_secondary(secondary)
 
             # Wait a short interval before draining again.
             self._stop_event.wait(timeout=_TLM_DRAIN_INTERVAL_S)

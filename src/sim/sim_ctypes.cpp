@@ -39,59 +39,59 @@
 // ---- Command injection ----
 //   void sim_inject_twist(SimHandle h, float v_x, float omega, float duration, uint32_t corr);
 //   void sim_inject_stop(SimHandle h, uint32_t corr);
-//   void sim_inject_command(SimHandle h, const char* frame);
-//     Raw, non-actuation escape hatch -- pushes ANY already-COBS+CRC-framed
-//     command frame body (123-002; was an already-armored "*B..." line
-//     pre-123) straight onto the inbound FakeTransport, for tests that need a
-//     wire shape sim_inject_twist()/sim_inject_stop() don't cover. `frame` is
-//     NUL-terminated (`strlen()`-recovered on the C++ side,
-//     `SimHarness::injectCommand()`) -- safe because a COBS-encoded frame
-//     body is guaranteed 0x00-free by construction, so passing it as a plain
-//     C string never truncates it. Build `frame` with
-//     `robot_radio.io.wire_codec.encode_frame()` on the Python side (the SAME
-//     codec every other binary command producer uses) -- NOT the pre-123
-//     `*B<base64>` shape.
+//   void sim_inject_command(SimHandle h, const char* frame, int len);
+//     Raw, non-actuation escape hatch -- pushes ANY already-`<COMMAND>':'
+//     <COBS+CRC bytes>`-framed wire line (124-005; was a bare COBS+CRC frame
+//     body 123-002-124-004, an already-armored "*B..." line pre-123)
+//     straight onto the inbound FakeTransport, for tests that need a wire
+//     shape sim_inject_twist()/sim_inject_stop() don't cover. `frame`/`len`
+//     is an EXPLICIT length, NOT NUL-terminated: COBS is now keyed on 0x0A
+//     (wire_runtime.h item 8), not 0x00, so the line may legitimately
+//     contain an embedded 0x00 byte -- a `strlen()`-recovered length would
+//     silently truncate it (this is exactly the trap the pre-124-005 version
+//     of this ABI fell into when the delimiter changed; see
+//     `SimHarness::injectCommand()`, sim_harness.h). Build `frame` with
+//     `robot_radio.io.wire_codec.encode_frame()`, PREFIXED with the ASCII
+//     command name and ':' (the SAME codec every other binary command
+//     producer uses) -- NOT the pre-123 `*B<base64>` shape.
 //
 // ---- Telemetry drain ----
 //   int sim_drain_tlm(SimHandle h, uint8_t* buf, int buflen);
-//     123-002/003 BINARY-SAFE REDESIGN: drains every raw outbound COBS+CRC
-//     frame body captured since the LAST sim_drain_tlm() call on this handle
-//     (still-framed bytes, 0x00-free by COBS construction -- exactly what
-//     App::Transport::send() received per frame) and copies them into `buf`
-//     with EXACTLY one 0x00 byte appended after each frame -- the SAME
-//     trailing-delimiter convention the real wire itself uses
-//     (comms.h's Transport::send() doc comment), reproduced here explicitly
-//     because SimHarness::drainRawTelemetry()'s own capture does NOT include
-//     that trailing byte (it captures only the framed body Comms::sendReply()
-//     built, before a real transport would append its own delimiter). This
-//     makes the joined buffer byte-for-byte the same shape multiple
-//     back-to-back real wire frames would occupy on an actual serial/radio
-//     byte stream, so the Python side demuxes it with the EXACT SAME
-//     0x00-split + COBS-decode + CRC-verify logic
-//     (`robot_radio.io.wire_codec.ByteStreamDemuxer`/`decode_frame()`) it
-//     already needs for a real transport -- no separate "sim ABI framing"
-//     convention to maintain.
+//     124-005 (protocol v5 Part A, "framing grammar cutover"): drains every
+//     raw outbound LINE (`<COMMAND>':'<COBS+CRC bytes>`, e.g. "TLM:...")
+//     captured since the LAST sim_drain_tlm() call on this handle -- 0x0A-free
+//     by COBS construction (COBS is keyed on 0x0A now, wire_runtime.h item 8),
+//     exactly what App::Transport::send() received per line -- and copies
+//     them into `buf` with EXACTLY one '\n' (0x0A) byte appended after each
+//     line -- the SAME trailing-delimiter convention the real wire itself
+//     uses now (comms.h's Transport::send() doc comment), reproduced here
+//     explicitly because SimHarness::drainRawTelemetry()'s own capture does
+//     NOT include that trailing byte (it captures only the line
+//     Comms::sendReply()/Telemetry::emitSecondary() built, before a real
+//     transport would append its own delimiter). This makes the joined
+//     buffer byte-for-byte the same shape multiple back-to-back real wire
+//     lines would occupy on an actual serial/radio byte stream, so the
+//     Python side demuxes it with the EXACT SAME '\n'-split + COBS-decode +
+//     CRC-verify logic (`robot_radio.io.wire_codec.ByteStreamDemuxer`/
+//     `decode_frame()`) it already needs for a real transport -- no separate
+//     "sim ABI framing" convention to maintain. (123-002/003's own join byte
+//     was 0x00, safe back then because COBS was keyed on 0x00 and every
+//     captured frame was 0x00-free by construction; 124-005 re-keys BOTH the
+//     COBS delimiter and this join byte to 0x0A together, so the property
+//     still holds.)
 //
-//     Pre-123 this newline-joined RAW `*B<base64>` wire TEXT (base64's
-//     alphabet excludes both 0x00 and 0x0A, so a text join was safe); that
-//     joining is now WRONG for arbitrary binary frame content, which may
-//     legitimately embed a literal 0x0A (only 0x00 is guaranteed absent) --
-//     hence the switch to memcpy'd raw bytes + a 0x00 join, never a
-//     snprintf("%s")-style text copy that would stop at the first embedded
-//     0x00 inside what is now a MULTI-frame buffer.
-//
-//     Returns the TOTAL number of bytes across every captured frame (each
-//     frame's own length + 1 for its trailing 0x00 delimiter) -- mirroring
+//     Returns the TOTAL number of bytes across every captured line (each
+//     line's own length + 1 for its trailing '\n' delimiter) -- mirroring
 //     snprintf()'s own return-value convention so a caller can detect
-//     truncation (return value > buflen means only a PREFIX of whole frames
+//     truncation (return value > buflen means only a PREFIX of whole lines
 //     was copied), except this is a raw byte count, not a string length: the
 //     copy is a memcpy, never assumes or inserts a text NUL terminator of its
-//     own beyond what the frames' own trailing delimiters already provide.
-//     Never splits a frame across the buflen boundary -- if a frame would not
-//     fit whole, it (and every frame after it in this drain) is left
+//     own beyond what the lines' own trailing delimiters already provide.
+//     Never splits a line across the buflen boundary -- if a line would not
+//     fit whole, it (and every line after it in this drain) is left
 //     uncopied, though the drain has still CONSUMED it (same "drain always
 //     advances regardless of whether buf was big enough" contract as
-//     pre-123): pass a buffer sized generously (a handful of KB comfortably
+//     pre-124): pass a buffer sized generously (a handful of KB comfortably
 //     covers a burst of frames from one step() call) to avoid this in
 //     practice. buf may be NULL / buflen may be 0 to just drain-and-discard
 //     (only the total byte count is computed). The Python side decodes each
@@ -268,11 +268,13 @@ const char* sim_firmware_version() { return FIRMWARE_VERSION_STR; }
 int sim_cycle_dt_us() { return static_cast<int>(TestSim::SimHarness::kCycleDtUs); }
 
 // Commanded per-wheel velocity (the velocity-PID SETPOINT) read DIRECTLY from
-// the firmware's live NezhaMotor -- Path B (2026-07-17). cmd_vel is NOT on the
-// wire (adding it to the primary Telemetry frame overflows the 186-byte
-// envelope budget; it lives on the slower TelemetrySecondary). The sim can see
-// this normally-invisible inner-loop command at full rate, which is exactly
-// what TestGUI's "commanded vs actual" wheel-speed graph plots. Signed [mm/s].
+// the firmware's live NezhaMotor -- Path B (2026-07-17). cmd_vel is NOT on
+// the wire at all (it never made it off TelemetrySecondary before that
+// message was deleted outright, 124-009 -- see Types::RobotState::Wheel::
+// cmdVelocity's own doc comment for the current, unwired state). The sim can
+// see this normally-invisible inner-loop command at full rate, which is
+// exactly what TestGUI's "commanded vs actual" wheel-speed graph plots.
+// Signed [mm/s].
 float sim_cmd_vel_left(SimHandle h) { return asHarness(h)->motorLeft().velocityTarget(); }
 float sim_cmd_vel_right(SimHandle h) { return asHarness(h)->motorRight().velocityTarget(); }
 
@@ -319,8 +321,8 @@ void sim_inject_twist(SimHandle h, float v_x, float omega, float duration, uint3
 
 void sim_inject_stop(SimHandle h, uint32_t corr) { asHarness(h)->injectStop(corr); }
 
-void sim_inject_command(SimHandle h, const char* armoredLine) {
-  asHarness(h)->injectCommand(armoredLine);
+void sim_inject_command(SimHandle h, const char* armoredLine, int len) {
+  asHarness(h)->injectCommand(armoredLine, static_cast<size_t>(len));
 }
 
 // ---- Telemetry drain ----
@@ -329,7 +331,7 @@ int sim_drain_tlm(SimHandle h, uint8_t* buf, int buflen) {
   std::vector<std::string> frames = asHarness(h)->drainRawTelemetry();
 
   size_t total = 0;
-  for (const std::string& frame : frames) total += frame.size() + 1;  // +1 for the trailing 0x00
+  for (const std::string& frame : frames) total += frame.size() + 1;  // +1 for the trailing '\n'
 
   if (buf != nullptr && buflen > 0) {
     size_t copied = 0;
@@ -338,7 +340,7 @@ int sim_drain_tlm(SimHandle h, uint8_t* buf, int buflen) {
       const size_t frameTotal = frame.size() + 1;
       if (copied + frameTotal > cap) break;  // never split a frame across the buffer boundary
       std::memcpy(buf + copied, frame.data(), frame.size());
-      buf[copied + frame.size()] = 0x00;
+      buf[copied + frame.size()] = '\n';
       copied += frameTotal;
     }
   }

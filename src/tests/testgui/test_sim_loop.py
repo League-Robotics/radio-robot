@@ -197,7 +197,11 @@ def test_move_wheels_variant_builds_wheels_arm_not_twist(loop):
     loop.move(v_left=100.0, v_right=200.0, stop_distance=300.0, timeout=1000.0)
 
     assert len(captured) == 1
-    payload = decode_frame(captured[0])
+    # captured[0] is the FULL wire line ("MOVE:<cobs bytes>", 124-005) --
+    # strip the leading command prefix and pass it as decode_frame()'s own
+    # CRC-scope argument (SimLoop.move() always builds a MOVE envelope).
+    assert captured[0].startswith(b"MOVE:")
+    payload = decode_frame(captured[0][len(b"MOVE:"):], command=b"MOVE")
     assert payload is not None
     decoded = pb2_mod.CommandEnvelope.FromString(payload)
     assert decoded.move.WhichOneof("velocity") == "wheels"
@@ -255,7 +259,11 @@ def test_move_honors_an_explicit_id(loop):
     returned_id = loop.move(v_x=100.0, stop_distance=50.0, timeout=1000.0, id=42)
 
     assert returned_id == 42
-    payload = decode_frame(captured[0])
+    # captured[0] is the FULL wire line ("MOVE:<cobs bytes>", 124-005) --
+    # strip the leading command prefix and pass it as decode_frame()'s own
+    # CRC-scope argument (SimLoop.move() always builds a MOVE envelope).
+    assert captured[0].startswith(b"MOVE:")
+    payload = decode_frame(captured[0][len(b"MOVE:"):], command=b"MOVE")
     assert payload is not None
     decoded = pb2_mod.CommandEnvelope.FromString(payload)
     assert decoded.corr_id != 42, (
