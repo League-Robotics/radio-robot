@@ -6,11 +6,11 @@
 // sense-side estimation (estimation.h).
 //
 // The two-method contract, enforced by constness in both directions:
-//   tick(const RobotState&)  -- DO THE WORK; provably cannot touch the
+//   tick(const Types::RobotState&)  -- DO THE WORK; provably cannot touch the
 //                               blackboard. Returns the completion event.
-//   update(RobotState&) const -- SAVE tick()'s results into the state;
+//   update(Types::RobotState&) const -- SAVE tick()'s results into the state;
 //                               provably computes nothing new. The ONLY
-//                               Planner method that mutates RobotState.
+//                               Planner method that mutates Types::RobotState.
 // Moves are handed in as they arrive via move(); activation happens on the
 // next tick() (which is where current time/pose baselines live).
 #pragma once
@@ -39,8 +39,8 @@ class Planner {
   void stop();
 
   // See the file header. `state.time.cycleStart` is the clock.
-  TickResult tick(const RobotState& state);
-  void update(RobotState& state) const;
+  TickResult tick(const Types::RobotState& state);
+  void update(Types::RobotState& state) const;
 
   // Observability (tests / telemetry derivation).
   bool active() const { return active_.occupied; }

@@ -97,7 +97,7 @@ struct Outcome {
 template <typename Plant>
 Outcome drive(Planner& planner, Plant& plant, const PlannerLimits& limits,
               int maxTicks, int drainTicks, bool angular = false) {
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
   Outcome outcome;
   const float dt = limits.controlPeriod * 0.001f;  // [s]
@@ -204,7 +204,7 @@ void testChainUnderNoiseAndLag() {
   const PlannerLimits limits = noisyLimits();
   Planner planner(limits);
   NoisyPlant plant = dirtyPlant();
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
   CHECK(planner.move(distanceMove(10, 500.0f, kCruise), false));
   CHECK(planner.move(distanceMove(11, 300.0f, kCruise), false));
@@ -234,7 +234,7 @@ void testStandingRobotDoesNotDrift() {
   const PlannerLimits limits = noisyLimits();
   Planner planner(limits);
   NoisyPlant plant = dirtyPlant();
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
 
   // Park: no Move, wheels commanded to zero, but the encoder keeps
@@ -460,7 +460,7 @@ void testSettleDoesNotBreakTheCarryChain() {
   limits.settleWindow = 1000.0f;  // [ms]
   Planner planner(limits);
   PerfectPlant plant;
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
   CHECK(planner.move(distanceMove(30, 500.0f, kCruise), false));
   CHECK(planner.move(distanceMove(31, 300.0f, kCruise), false));
@@ -490,7 +490,7 @@ void testHeadingHoldRecoversDisturbance() {
   limits.headingHoldGain = 4.0f;  // [1/s]
   Planner planner(limits);
   PerfectPlant plant;
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
   CHECK(planner.move(distanceMove(40, 500.0f, kCruise), false));
 
@@ -530,7 +530,7 @@ void testHeadingHoldOffLeavesDisturbanceStanding() {
   CHECK(limits.headingHoldGain == 0.0f);
   Planner planner(limits);
   PerfectPlant plant;
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
   CHECK(planner.move(distanceMove(41, 500.0f, kCruise), false));
   bool completed = false;
@@ -552,7 +552,7 @@ void testHeadingHoldClampedToVelocityCeiling() {
   limits.headingHoldGain = 200.0f;  // [1/s] absurd on purpose
   Planner planner(limits);
   PerfectPlant plant;
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
   CHECK(planner.move(distanceMove(42, 2000.0f, 500.0f), false));
   for (int i = 0; i < 40; ++i) {
@@ -569,7 +569,7 @@ void testHeadingHoldUnderNoiseAndLag() {
   limits.headingHoldGain = 3.0f;  // [1/s]
   Planner planner(limits);
   NoisyPlant plant = dirtyPlant();
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
   CHECK(planner.move(distanceMove(43, 500.0f, kCruise), false));
   bool completed = false;

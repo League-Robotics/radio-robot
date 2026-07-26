@@ -46,7 +46,7 @@ Move angleMove(uint32_t id, float threshold, float omega) {
 // drain ticks. Returns the plant for final assertions.
 struct RunResult {
   PerfectPlant plant;
-  RobotState state;
+  Types::RobotState state;
   int ticks = 0;
   float minVelocityBetween = 1e9f;  // [mm/s] min body speed between completions
 };
@@ -54,7 +54,7 @@ struct RunResult {
 void testDistanceExact() {
   Planner planner(benchLimits());
   PerfectPlant plant;
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
   CHECK(planner.move(distanceMove(1, 500.0f, 150.0f), false));
   bool completed = false;
@@ -81,7 +81,7 @@ void testDistanceExact() {
 void testDistanceExactBackward() {
   Planner planner(benchLimits());
   PerfectPlant plant;
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
   CHECK(planner.move(distanceMove(2, 300.0f, -200.0f), false));
   bool completed = false;
@@ -96,7 +96,7 @@ void testDistanceExactBackward() {
 void testAngleExact() {
   Planner planner(benchLimits());
   PerfectPlant plant;
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
   const float quarterTurn = static_cast<float>(M_PI) * 0.5f;
   CHECK(planner.move(angleMove(3, quarterTurn, 2.0f), false));
@@ -118,7 +118,7 @@ void testSameAxisChainExactAndCarried() {
   // is crossed at speed (no land-at-zero dip between legs).
   Planner planner(benchLimits());
   PerfectPlant plant;
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
   CHECK(planner.move(distanceMove(10, 500.0f, 150.0f), false));
   CHECK(planner.move(distanceMove(11, 300.0f, 150.0f), false));
@@ -154,7 +154,7 @@ void testOrthogonalChainExact() {
   // not disturb the traveled distance (opposite wheels).
   Planner planner(benchLimits());
   PerfectPlant plant;
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
   const float quarterTurn = static_cast<float>(M_PI) * 0.5f;
   CHECK(planner.move(distanceMove(20, 400.0f, 150.0f), false));
@@ -176,7 +176,7 @@ void testTimeoutReported() {
   // A distance the cruise can never cover before the timeout.
   Planner planner(benchLimits());
   PerfectPlant plant;
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
   Move m = distanceMove(30, 100000.0f, 150.0f);
   m.timeout = 2000.0f;  // [ms]
@@ -195,7 +195,7 @@ void testTimeoutReported() {
 void testStopFlushes() {
   Planner planner(benchLimits());
   PerfectPlant plant;
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
   CHECK(planner.move(distanceMove(40, 5000.0f, 150.0f), false));
   CHECK(planner.move(distanceMove(41, 5000.0f, 150.0f), false));
@@ -211,7 +211,7 @@ void testStopFlushes() {
 void testReplacePreempts() {
   Planner planner(benchLimits());
   PerfectPlant plant;
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
   CHECK(planner.move(distanceMove(50, 5000.0f, 150.0f), false));
   CHECK(planner.move(distanceMove(51, 5000.0f, 150.0f), false));
@@ -240,7 +240,7 @@ void testReplacePreempts() {
 void testQueueFullRejected() {
   Planner planner(benchLimits());
   PerfectPlant plant;
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
   // Fill: 5 accepted while nothing is active yet (all pending).
   for (uint32_t i = 0; i < 5; ++i) {
@@ -288,7 +288,7 @@ void testInvalidMovesRejected() {
 void testTimeMoveRuns() {
   Planner planner(benchLimits());
   PerfectPlant plant;
-  RobotState state;
+  Types::RobotState state;
   uint32_t now = 0;
   Move m;
   m.id = 90;

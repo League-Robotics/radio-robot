@@ -48,7 +48,7 @@ struct PerfectPlant {
 
   // Integrate the staged commands over one interval ending at `sampleTime`,
   // then publish fresh samples into the state.
-  void step(RobotState& state, float dt, uint32_t sampleTime) {  // [s] [ms]
+  void step(Types::RobotState& state, float dt, uint32_t sampleTime) {  // [s] [ms]
     positionLeft += state.wheelLeft.cmdVelocity * dt;
     positionRight += state.wheelRight.cmdVelocity * dt;
     state.wheelLeft.position = positionLeft;
@@ -103,7 +103,7 @@ struct NoisyPlant {
     positionRight += 0.5f * heading * trackWidth;
   }
 
-  void step(RobotState& state, float dt, uint32_t sampleTime) {  // [s] [ms]
+  void step(Types::RobotState& state, float dt, uint32_t sampleTime) {  // [s] [ms]
     const float targetLeft =
         (delayedActuation ? stagedLeft_ : state.wheelLeft.cmdVelocity) +
         creepVelocity;
@@ -157,7 +157,7 @@ struct NoisyPlant {
 // let the plant integrate the staged command over the interval and publish
 // the samples the NEXT tick will see. Returns tick()'s completion event.
 template <typename Plant>
-inline Motion::TickResult cycle(Motion::Planner& planner, RobotState& state,
+inline Motion::TickResult cycle(Motion::Planner& planner, Types::RobotState& state,
                                 Plant& plant, uint32_t& now,
                                 float periodMs) {
   state.time.cycleStart = now;

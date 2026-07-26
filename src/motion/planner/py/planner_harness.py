@@ -21,10 +21,14 @@ from pathlib import Path
 
 # ---- struct mirrors (field-for-field with the C++ headers) ----
 
+# Mirrors src/firm/types/robot_state.h (Types::RobotState, the real 124
+# blackboard header -- the planner's own mirror was deleted at the joint
+# checkpoint, 2026-07-26). Field-for-field; the plannerStructSizes guard
+# below fails loudly on any drift.
 class Time(ctypes.Structure):
     _fields_ = [("cycleStart", ctypes.c_uint32),   # [ms]
-                ("cycleBusy", ctypes.c_uint32),    # [ms]
-                ("cyclePeriod", ctypes.c_uint32)]  # [ms]
+                ("cycleBusy", ctypes.c_uint32),    # [us]
+                ("cyclePeriod", ctypes.c_uint32)]  # [us]
 
 
 class Wheel(ctypes.Structure):
@@ -32,6 +36,7 @@ class Wheel(ctypes.Structure):
                 ("velocity", ctypes.c_float),      # [mm/s]
                 ("sampleTime", ctypes.c_uint32),   # [ms]
                 ("connected", ctypes.c_bool),
+                ("positionEpoch", ctypes.c_uint8),
                 ("cmdVelocity", ctypes.c_float)]   # [mm/s]
 
 
@@ -40,9 +45,9 @@ class Otos(ctypes.Structure):
                 ("connected", ctypes.c_bool),
                 ("x", ctypes.c_float), ("y", ctypes.c_float),      # [mm]
                 ("heading", ctypes.c_float),                       # [rad]
-                ("vx", ctypes.c_float), ("vy", ctypes.c_float),    # [mm/s]
+                ("v_x", ctypes.c_float), ("v_y", ctypes.c_float),  # [mm/s]
                 ("omega", ctypes.c_float),                         # [rad/s]
-                ("time", ctypes.c_uint32)]                         # [ms]
+                ("sampleTime", ctypes.c_uint32)]                   # [ms]
 
 
 class Perception(ctypes.Structure):
@@ -53,18 +58,18 @@ class Perception(ctypes.Structure):
 class Pose(ctypes.Structure):
     _fields_ = [("x", ctypes.c_float), ("y", ctypes.c_float),      # [mm]
                 ("heading", ctypes.c_float),                       # [rad]
-                ("vx", ctypes.c_float), ("vy", ctypes.c_float),    # [mm/s]
+                ("v_x", ctypes.c_float), ("v_y", ctypes.c_float),  # [mm/s]
                 ("omega", ctypes.c_float)]                         # [rad/s]
 
 
-class WheelBasis(ctypes.Structure):
+class WheelEstimate(ctypes.Structure):
     _fields_ = [("distance", ctypes.c_float),      # [mm]
                 ("velocity", ctypes.c_float),      # [mm/s]
                 ("basisTime", ctypes.c_uint32),    # [ms]
                 ("valid", ctypes.c_bool)]
 
 
-class BodyBasis(ctypes.Structure):
+class BodyEstimate(ctypes.Structure):
     _fields_ = [("x", ctypes.c_float), ("y", ctypes.c_float),      # [mm]
                 ("heading", ctypes.c_float),                       # [rad]
                 ("v_x", ctypes.c_float), ("v_y", ctypes.c_float),  # [mm/s]
@@ -73,22 +78,33 @@ class BodyBasis(ctypes.Structure):
                 ("valid", ctypes.c_bool)]
 
 
+class Innovations(ctypes.Structure):
+    _fields_ = [("heading", ctypes.c_float),  # [rad]
+                ("omega", ctypes.c_float),    # [rad/s]
+                ("valid", ctypes.c_bool)]
+
+
 class Estimate(ctypes.Structure):
-    _fields_ = [("body", BodyBasis),
-                ("wheelLeft", WheelBasis), ("wheelRight", WheelBasis),
-                ("innovationHeading", ctypes.c_float),   # [rad]
-                ("innovationOmega", ctypes.c_float),     # [rad/s]
-                ("innovationsValid", ctypes.c_bool)]
+    _fields_ = [("wheelLeft", WheelEstimate),
+                ("wheelRight", WheelEstimate),
+                ("body", BodyEstimate),
+                ("innovations", Innovations)]
 
 
 class Command(ctypes.Structure):
-    _fields_ = [("moveActive", ctypes.c_bool),
-                ("activeMoveId", ctypes.c_uint32)]
+    _fields_ = [("mode", ctypes.c_uint8),          # Types::Mode
+                ("moveActive", ctypes.c_bool),
+                ("v_x", ctypes.c_float),           # [mm/s]
+                ("omega", ctypes.c_float)]         # [rad/s]
 
 
 class Health(ctypes.Structure):
-    _fields_ = [("commsMalformedCount", ctypes.c_uint32),
-                ("deadmanExpired", ctypes.c_bool)]
+    _fields_ = [("i2cSafetyNetCount", ctypes.c_uint32),
+                ("commsMalformedCount", ctypes.c_uint32),
+                ("wedgeLatch", ctypes.c_bool),
+                ("moveTimeout", ctypes.c_bool),
+                ("shapingDisabled", ctypes.c_bool),
+                ("positionClamped", ctypes.c_bool)]
 
 
 class RobotState(ctypes.Structure):

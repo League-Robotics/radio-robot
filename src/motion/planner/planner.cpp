@@ -103,7 +103,7 @@ void Planner::rollCommandHistory() {
   cmdRightPrevious_ = cmdRight_;
 }
 
-TickResult Planner::tick(const RobotState& state) {
+TickResult Planner::tick(const Types::RobotState& state) {
   TickResult result{};
   const uint32_t now = state.time.cycleStart;
   const float dt = limits_.controlPeriod * 0.001f;  // [s]
@@ -127,7 +127,7 @@ TickResult Planner::tick(const RobotState& state) {
   // "traveled distance is ALWAYS anchored to measured positions").
   pose_.integrate(left_.basisPosition(), right_.basisPosition());
   if (state.otos.present && limits_.headingOtosWeight > 0.0f &&
-      now - state.otos.time <= limits_.otosStaleness) {
+      now - state.otos.sampleTime <= limits_.otosStaleness) {
     pose_.blendHeading(state.otos.heading, limits_.headingOtosWeight);
   }
 
@@ -489,11 +489,16 @@ void Planner::drainToZero(float dt) {
   profileVelocity_ = std::max(0.0f, profileVelocity_ - decelStep);
 }
 
-void Planner::update(RobotState& state) const {
+void Planner::update(Types::RobotState& state) const {
   state.wheelLeft.cmdVelocity = cmdLeft_;
   state.wheelRight.cmdVelocity = cmdRight_;
+  // The real (124) Command section carries mode + the commanded twist, not
+  // a move id -- completion/ack identity rides TickResult, never the state.
   state.command.moveActive = active_.occupied;
-  state.command.activeMoveId = active_.occupied ? active_.move.id : 0;
+  state.command.mode =
+      active_.occupied ? Types::Mode::Velocity : Types::Mode::Idle;
+  state.command.v_x = 0.5f * (cmdLeft_ + cmdRight_);
+  state.command.omega = (cmdRight_ - cmdLeft_) / limits_.trackWidth;
 
   const float bodyVelocity = 0.5f * (left_.velocity() + right_.velocity());
   const float omegaBody =
@@ -501,8 +506,8 @@ void Planner::update(RobotState& state) const {
   state.pose.x = pose_.x();
   state.pose.y = pose_.y();
   state.pose.heading = pose_.heading();
-  state.pose.vx = bodyVelocity;
-  state.pose.vy = 0.0f;
+  state.pose.v_x = bodyVelocity;
+  state.pose.v_y = 0.0f;
   state.pose.omega = omegaBody;
 
   state.estimate.wheelLeft = {left_.basisPosition(), left_.velocity(),

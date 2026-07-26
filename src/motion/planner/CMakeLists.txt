@@ -22,7 +22,14 @@ add_library(planner STATIC
   estimation.cpp
   planner.cpp
 )
-target_include_directories(planner PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# Two include roots: this tree, and src/firm for the ONE sanctioned shared
+# header -- "types/robot_state.h" resolves to src/firm/types/robot_state.h
+# (the 124 blackboard; the planner's own types/ mirror was deleted at the
+# joint checkpoint, 2026-07-26). firm/types is dependency-free by that
+# sprint's own contract, so this adds no firmware coupling.
+target_include_directories(planner PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../firm)
 
 add_library(motionplanner SHARED capi.cpp)
 target_link_libraries(motionplanner PRIVATE planner)
