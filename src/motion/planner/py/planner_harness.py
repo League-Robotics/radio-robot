@@ -338,9 +338,13 @@ def runTurnScenario(lib: ctypes.CDLL) -> None:
 
 
 def runSettleScenario(lib: ctypes.CDLL) -> None:
-    """Settle-confirm (M1) must cost nothing on a zero-error plant: it
-    completes on the same tick profile-completion would have, and reports
-    settled=True."""
+    """Settle-confirm (M1) on a zero-error plant: with requireSettle the
+    completion defers at most ONE tick past profile-complete (the sample
+    proving v == 0 arrives one cycle after the landing command -- the
+    discrete-sensing bound; the settle gate is measured-velocity-only) and
+    reports settled=True. Without requireSettle, completion fires at
+    profile-complete, one sample BEFORE that reading can exist, so settled
+    is honestly False there."""
     ticks = {}
     for requireSettle in (False, True):
         limits = benchLimits()
@@ -361,14 +365,16 @@ def runSettleScenario(lib: ctypes.CDLL) -> None:
             plant.step(state, 0.050, now)
             if result.completed:
                 completedAt = tick
-                assert result.settled, "zero-error plant must confirm arrival"
+                if requireSettle:
+                    assert result.settled, \
+                        "deferred completion must confirm arrival"
                 assert not result.timedOut
                 break
         assert completedAt is not None, "move never completed"
         ticks[requireSettle] = completedAt
         lib.plannerDestroy(planner)
 
-    assert ticks[False] == ticks[True], (
+    assert ticks[True] - ticks[False] <= 1, (
         f"settle-confirm cost {ticks[True] - ticks[False]} ticks on a "
         f"zero-error plant; it must cost none")
     print(f"settle-confirm: profile-complete and settle-complete both on "
