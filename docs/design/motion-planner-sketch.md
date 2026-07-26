@@ -190,28 +190,28 @@ carry over from `MoveQueue` unchanged in behavior.
 
 ## 4. Estimation — stale samples in, predict-to-now out
 
-The 20 Hz loop plus slow encoder refresh means `tick()` can never trust
-raw samples as "now." The refresh figure on record is **~80 ms**
-(the Nezha brick's 0x46 register vs. a ~16 ms collect cadence —
-`src/firm/devices/DESIGN.md`, `nezha_motor.cpp`), but note its
-provenance: bench-observed during the freshness-gate bug fix (~4 of 5
-collects returned the same raw count), never formally characterized —
-and the related flip-flop-cadence estimate was off 2× until measured
-(architecture-update-086). Nothing below depends on the exact value
-(freshness is detected per-sample, not assumed periodic), but it should
-be measured before tuning the filter — see §7. The estimation stage of
-`tick()` produces a coherent current-instant estimate:
+The 20 Hz loop means `tick()` works from samples up to one cycle old,
+and a sample can occasionally repeat, so raw samples are never trusted
+as "now." (MEASURED 2026-07-26: the encoder register itself is live at
+≤ 16 ms — the old "~80 ms refresh" theory is false; the historical
+staleness was interposed-traffic sample invalidation under the pre-118
+loop schedule. See
+[encoder-refresh-characterization.md](encoder-refresh-characterization.md).
+Nothing below depends on any refresh period — freshness is detected
+per-sample, not assumed periodic.) The estimation stage of `tick()`
+produces a coherent current-instant estimate:
 
 1. **Per-wheel velocity filtering.** Raw encoder velocities are very
    noisy (stakeholder, 2026-07-25); the base-loop sketch deletes the
    motor-side EMA/least-squares A/B machinery (inventory item 9) and
    assigns velocity conditioning to the estimation layer — i.e. here,
    where it is host-testable. v1 is an EMA per wheel with two rules:
-   - **Filter only on fresh samples.** The encoder refreshes far
-     slower than the loop (~80 ms on record — see the provenance note
-     above), so many cycles re-see the SAME sample. Feeding a repeated
-     stale sample back into the EMA silently re-weights old data; the
-     filter advances only when `sampleTime` changes.
+   - **Filter only on fresh samples.** A cycle can re-see the SAME
+     sample (measured: not because of any register refresh period —
+     see §4's note — but schedule hiccups and degraded modes still
+     produce repeats). Feeding a repeated stale sample back into the
+     EMA silently re-weights old data; the filter advances only when
+     `sampleTime` changes.
    - **Filtered velocity never enters the distance accounting.** The
      smoothed velocity is used for ZOH extrapolation (predict-to-now)
      and as the profiler's current-speed input; traveled distance is
@@ -281,15 +281,17 @@ contract of record says.
 
 ## 7. Testing — host-only, three tiers (plus one bench measurement)
 
-**Bench prerequisite (one-time, before filter tuning):** characterize
-the encoder refresh interval properly — robot on the stand, constant
-commanded velocity, log timestamped raw 0x46 collects, histogram the
-intervals between raw-count *changes* (per wheel, at 2-3 speeds). The
-~80 ms figure is bench-observed folklore, not a characterization (§4);
-the measured distribution sets the EMA weight, the expected staleness
-window, and the noise model the scenario tests inject. This is the only
-hardware touch in the whole plan and it produces a dataset, not a
-dependency — everything below stays host-only.
+**Bench prerequisite — DONE 2026-07-26:** the encoder refresh interval
+was characterized with a dedicated bench firmware
+(`src/tests/firmware/encoder_rate/`). Result: the register is live at
+≤ 16 ms — fresh on every poll under every condition tested; the old
+staleness observations were interposed-traffic sample invalidation
+under the pre-118 loop schedule. Full findings:
+[encoder-refresh-characterization.md](encoder-refresh-characterization.md).
+Consequence for this plan: expect fresh samples at the loop cadence;
+stale-cadence injection in the noise tier is a degraded-mode test, and
+the EMA weight is tuned against measured velocity noise, not an assumed
+refresh period. Everything below stays host-only.
 
 1. **C++ unit tests** (standalone `motion_tests` CMake, no Python in the
    loop): profiler policy (feasibility invariant, terminal-step

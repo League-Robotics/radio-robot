@@ -31,10 +31,19 @@ uv run python src/motion/planner/bench/encoder_refresh.py \
     --analyze src/tests/bench/out/tlm_log.csv
 ```
 
-### Why it blocks things
+### Why it (used to) block things — ANSWERED 2026-07-26
 
-Two planner numbers are currently set from folklore ("~80 ms refresh vs
-the 50 ms loop") rather than measurement:
+The underlying question is settled: a dedicated bench firmware
+(`src/tests/firmware/encoder_rate/`) measured the register LIVE at
+≤ 16 ms — the "~80 ms refresh" folklore is false; historical staleness
+was interposed-traffic sample invalidation under the pre-118 loop
+schedule. Authoritative write-up:
+`docs/design/encoder-refresh-characterization.md`. This script remains
+useful as a THROUGH-THE-LOOP confirmation (expect fresh samples every
+50 ms cycle on the current schedule).
+
+Two planner numbers were originally set from that folklore rather than
+measurement:
 
 * `PlannerLimits.velocityFilterWeight` — the EMA weight on fresh encoder
   velocity. Too high and the noise passes through; too low and the filter

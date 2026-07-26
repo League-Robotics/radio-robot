@@ -176,8 +176,12 @@ follows the same *shape* (constructor, `begin`/`beginStep`, `present`/
 
 **Split-phase encoder sequencing (`NezhaMotor`).** The Nezha V2 controller
 answers a `0x46` (read-angle) request with a value that is not ready
-until a settle window has elapsed, and its register refreshes only every
-~80ms against the loop's ~16ms cycle. `requestSample()`/`requestEncoder()`
+until a settle window has elapsed. (The former "register refreshes only
+every ~80ms" claim here was measured FALSE 2026-07-26 — the register is
+live at ≤16 ms; historical staleness was interposed-0x10-traffic sample
+invalidation under the pre-118 schedule. See
+`docs/design/encoder-refresh-characterization.md`.)
+`requestSample()`/`requestEncoder()`
 (phase 1, a write) and `collectEncoder()` (phase 2, a read) are therefore
 split across two loop slices — the loop requests a sample one slice,
 collects it a later slice — rather than blocking in place. `tick()`'s

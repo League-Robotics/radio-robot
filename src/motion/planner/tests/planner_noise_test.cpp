@@ -4,8 +4,11 @@
 // the three real-world defects show up:
 //
 //   * velocity samples are noisy (the encoder's derivative is dirty),
-//   * samples are STALE -- a fresh one lands only every other 50 ms cycle,
-//     the ~80-100 ms register refresh (see bench/encoder_refresh.md),
+//   * samples are STALE -- a fresh one lands only every other 50 ms cycle.
+//     (Degraded-mode emulation: measured 2026-07-26, the register is live
+//     at <=16 ms and fresh-every-cycle is the expected regime -- see
+//     docs/design/encoder-refresh-characterization.md; this tier proves
+//     the planner survives repeats anyway.)
 //   * the command takes effect one cycle late (actuationDelay = 50 ms).
 //
 // Plus the two features that exist for exactly this regime: settle-confirm

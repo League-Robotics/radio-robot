@@ -167,9 +167,10 @@ class NezhaMotor : public Motor {
   //   1. sample + cache this motor's own encoder (device-specific).
   //      Velocity/glitch computation is gated on a FRESHNESS check (the
   //      collected raw count differs from the last FRESH raw count) --
-  //      the Nezha brick's register refreshes far slower (~80ms) than the
-  //      fiber's own cycle (~16ms), so most cycles re-collect the same
-  //      value; see nezha_motor.cpp's tick() comment.
+  //      a cycle can re-collect the same value (measured 2026-07-26: NOT
+  //      an ~80ms register refresh, which is false -- see docs/design/
+  //      encoder-refresh-characterization.md); see nezha_motor.cpp's
+  //      tick() comment.
   //   2. mode dispatch — Mode::Active routes through writeShapedDuty() (PID
   //      or raw duty, per activeSource_/pidEnabled_); Mode::Neutral writes 0
   //      via writeShapedDuty(); Mode::None dispatches nothing.
@@ -211,9 +212,11 @@ class NezhaMotor : public Motor {
   bool connected_ = false;
 
   // ---- Fresh-sample tracking (tick() step 2's freshness gate) ----
-  // The Nezha brick's 0x46 register refreshes far slower (~80ms) than
-  // the loop's own cycle (~16ms): most cycles re-collect
-  // the SAME raw count. Velocity/glitch computation runs ONLY when
+  // A cycle can re-collect the SAME raw count (measured 2026-07-26: not
+  // a register refresh period -- docs/design/
+  // encoder-refresh-characterization.md -- but schedule faults and
+  // degraded modes still repeat samples). Velocity/glitch computation
+  // runs ONLY when
   // collectEncoder() returns a raw count different from the last FRESH raw
   // count, using the elapsed time SINCE THAT sample (lastFreshUs_) instead
   // of this tick's own (much shorter) dt — see nezha_motor.cpp's tick() for

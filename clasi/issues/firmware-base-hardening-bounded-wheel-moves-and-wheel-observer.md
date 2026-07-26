@@ -73,10 +73,14 @@ Bench halves of the gate ride the existing bench-session cadence
 
 ## REVISION (stakeholder decision, 2026-07-24): PID moves to motion; base primitive is DUTY
 
-The rate argument settles it: the PID cannot update faster than the loop
-(encoder freshness ~80 ms bounds it) wherever it lives, so motor residency
-buys nothing. Revised base contract, superseding an earlier
-bounded-wheel-speed-move primitive:
+The rate argument AS DECIDED: the PID cannot update faster than the loop
+(encoder freshness, then believed ~80 ms, bounds it) wherever it lives, so
+motor residency buys nothing. [CORRECTION 2026-07-26: that freshness
+premise was measured FALSE — the register is live at ≤ 16 ms
+(`docs/design/encoder-refresh-characterization.md`); the relocation
+stands on its other grounds (one estimate → one controller, motion_tests
+tunability, NezhaMotor doing one job).] Revised base contract,
+superseding an earlier bounded-wheel-speed-move primitive:
 
 - **Command primitive: per-wheel DUTY** (`[-1,1]`), one visible write per
   wheel per cycle. The velocity PID, the kff mapping, and therefore the

@@ -313,7 +313,9 @@ checkpoint, item 7 remains deferred, and item 8 is still open.
 1. **Noise/lag scenario tier.** Extend the test plant to inject:
    (a) zig-zag/white velocity noise on published samples, (b) stale
    sample cadence — publish a FRESH sample only every N-th cycle
-   (N = 2 to emulate ~80-100 ms refresh vs 50 ms loop), repeating the
+   (N = 2 — a degraded-mode repeated-sample stretch; measured
+   2026-07-26, the register is live at ≤ 16 ms and fresh-every-cycle is
+   the expected regime, see §7.3), repeating the
    previous sample (same `sampleTime`) between, (c) `actuationDelay =
    50 ms` — the plant applies the PREVIOUS tick's command. Assert:
    distance/angle scenarios complete with bounded error (gate: ≤ one
@@ -335,7 +337,7 @@ checkpoint, item 7 remains deferred, and item 8 is still open.
    (`src/tests/firmware/encoder_rate/` — own CODAL CMake project, raw
    0x46 protocol, no driver conditioning) tight-polled both encoders on
    the stand. Findings (full write-up:
-   `src/tests/firmware/encoder_rate/RESULTS.md`, raw captures alongside):
+   `docs/design/encoder-refresh-characterization.md`; firmware + raw captures in `src/tests/firmware/encoder_rate/`):
    - **The ~80 ms folklore is FALSE.** The register returned a fresh
      value on EVERY poll at 16/24/32 ms periods, single-port,
      alternating ports, with duty writes before the select, and at 8%
@@ -549,7 +551,7 @@ actually valid, and marks it invalid until both wheels have a sample.
 **§7.3 — bench measurement: RUN AND ANSWERED 2026-07-26** (the robot was
 attached to this checkout at the time), via a dedicated bench firmware
 rather than the telemetry path — see §7.3's own updated text and
-`src/tests/firmware/encoder_rate/RESULTS.md`. Headline: the register is
+`docs/design/encoder-refresh-characterization.md`. Headline: the register is
 live at ≤ 16 ms; the ~80 ms folklore was interposed-traffic sample
 invalidation under the pre-118 loop schedule. `src/motion/planner/bench/
 encoder_refresh.py`'s telemetry capture remains useful as a THROUGH-THE-

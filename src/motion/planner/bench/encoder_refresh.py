@@ -2,15 +2,16 @@
 """encoder_refresh.py -- characterize the REAL encoder refresh interval
 (motion-planner issue §7 item 3).
 
-The planner's whole sense side is built around one number nobody has ever
-measured: how often the motor controller's encoder register actually
-changes. The folklore figure is "~80 ms" against a 50 ms control loop,
-which is why `Motion::WheelChannel` gates its EMA on `sampleTime` changing
-(re-feeding the same sample would silently re-weight old data) and why the
-noise tier's plant publishes a fresh sample only every N-th cycle. If the
-real distribution is 40 ms, half that machinery is unnecessary; if it is
-120 ms with a long tail, the EMA weight and the actuation-delay
-compensation both need to be set from that tail, not from a guess.
+ANSWERED 2026-07-26 by a dedicated bench firmware
+(src/tests/firmware/encoder_rate/): the register is LIVE at <=16 ms --
+the "~80 ms" folklore was false (historical staleness was
+interposed-traffic sample invalidation under the pre-118 loop schedule).
+Authoritative write-up: docs/design/encoder-refresh-characterization.md.
+This script remains useful as a THROUGH-THE-LOOP confirmation: on the
+current interleaved schedule, expect a fresh sample every 50 ms cycle.
+`Motion::WheelChannel` still gates its EMA on `sampleTime` changing
+(re-feeding the same sample would silently re-weight old data), and the
+noise tier's every-N-th-cycle staleness is now a degraded-mode test.
 
 What it measures, per wheel: the distribution of intervals between
 CHANGES in the reported encoder sample -- both the robot-clock stamp

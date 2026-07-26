@@ -656,12 +656,14 @@ void scenarioPidOffRoutesRawDutyThroughArmorUnchanged() {
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the PID-off sequence");
 }
 
-// 8. Fresh-sample gate (HARDWARE-CONFIRMED DB-004 fix): the Nezha brick's
-//    encoder register refreshes far slower (~80ms) than the loop's own
-//    cycle (~16ms). Scripts the SAME raw encoder value for
-//    several consecutive request/collect cycles (simulating the brick not
-//    having refreshed yet), then a jump to a fresh value, repeated across
-//    several refresh windows -- while ALSO commanding a duty so
+// 8. Fresh-sample gate (HARDWARE-CONFIRMED DB-004 fix): a cycle can
+//    re-collect the SAME raw count (measured 2026-07-26: NOT an ~80ms
+//    register refresh, which is false -- repeats come from interposed-
+//    traffic sample invalidation and degraded modes; see docs/design/
+//    encoder-refresh-characterization.md). Scripts the SAME raw encoder
+//    value for several consecutive request/collect cycles (simulating a
+//    repeated-sample stretch), then a jump to a fresh value, repeated
+//    across several such windows -- while ALSO commanding a duty so
 //    appliedDuty() is nonzero throughout ("normal driving"). Proves
 //    velocity() computes the CORRECT speed (step / real elapsed time since
 //    the LAST FRESH sample, not this tick's own dt) on every fresh sample,
@@ -696,7 +698,7 @@ void scenarioFreshSampleGateSurvivesSlowBrickRefreshUnderFastFiberCycle() {
   motor.setDuty(0.4f);
 
   const uint64_t kFiberCycleUs = 16000;    // [us] ~16ms fiber cycle (DB-007/DB-008)
-  const int kStaleCyclesPerRefresh = 4;    // 4 stale + 1 fresh = 5 cycles per ~80ms brick refresh
+  const int kStaleCyclesPerRefresh = 4;    // 4 stale + 1 fresh per window -- a worst-case repeated-sample stretch, not a claimed brick refresh period
   const float kStepPerRefresh = 40.0f;     // [mm] realistic per-refresh position step (500mm/s-class motion)
 
   // Prime cycle: boot-anchor at position 0. Scripts an extra write slack

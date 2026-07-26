@@ -22,7 +22,8 @@ void testFreshSampleGating() {
   CHECK_NEAR(channel.velocity(), 100.0f, 1e-6);  // first sample seeds
 
   // Re-seeing the SAME sampleTime must not advance the filter, no matter
-  // what values ride along (the ~80 ms refresh vs 50 ms loop case).
+  // what values ride along (the repeated-sample case -- schedule faults /
+  // degraded modes; docs/design/encoder-refresh-characterization.md).
   channel.ingest(999.0f, 999.0f, 1000);
   CHECK_NEAR(channel.velocity(), 100.0f, 1e-6);
   CHECK_NEAR(channel.basisPosition(), 0.0f, 1e-6);
