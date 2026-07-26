@@ -687,3 +687,34 @@ and the window is now); trusting the bit on hardware waits on §7.3.
    a measured one (§10 shows tracking lag is now the ENTIRE residual
    error).
 5. **Cross-effort, start the conversation now:** Decision 3.
+
+
+## HANDOFF STATE (2026-07-26, end of parallel-checkout session)
+
+Branch `motion-planner` in the parallel checkout
+(`/Volumes/Proj/proj/RobotProjects/radio-robot-motion`), tip `28ceb6ab`,
+sitting ON TOP of sprint 124's closed state (merged from the main repo).
+Working tree clean. 6/6 test suites + ctypes harness green.
+
+**What the library now is:** the complete one-loop motion stack --
+discrete-exact profiler (jerk-limited S-curve accel side), estimation
+(fresh-gated EMA + filter-lag-compensated feedback, wrap-safe time math,
+telescoping signed Distance measure), M4 duty stage (WheelPid with accel
+feedforward, ramp-gated integral, rest clamp), M1 terminal settle
+(bidirectional rate-limited creep, per-robot rest floors), heading hold,
+cumulative chain baselines. Plant constants MEASURED on the robot
+(gain ~1370 mm/s/duty, tau ~230 ms; `bench/plant_id.py`).
+
+**Reference result** (`bench/square_tour_sim.py`, schedule-faithful sim,
+10% L/R gain mismatch): 8/8 moves settled, tour closes +0.96 mm /
++0.09 deg, peak +8.9% rounded (from +25% sharp).
+
+**For the 125 replan (firmware integration, §7.6):** link the planner
+into the ARM image (narrow the root-CMake planner exclusion to
+tests/capi/bench), RobotLoop calls tick/update after both collects and
+writes planner DUTY (sense->plan->act one cycle), NezhaMotor sheds its
+PID, delete MoveQueue/VelocityShaper + margin constants, route wire
+Moves to the planner queue. Named frontiers: deadbeat discrete
+feedforward (the residual +8.9% hump), settle-window tightening via
+better profile hand-off, `kMinWriteIntervalUs` must scale with kCycle,
+serial frame budget (protocol-v5 lean frame) before raising loop rate.
