@@ -56,6 +56,19 @@ class Planner {
   float commandedDutyLeft() const { return dutyLeft_; }    // [-1, 1]
   float commandedDutyRight() const { return dutyRight_; }  // [-1, 1]
 
+  // Live-tuning entry points (the CONFIG wire arm / persisted tuning):
+  // plain in-memory updates, never persisted here.
+  void applyVelGains(float kff, float kp, float ki, float iMax);
+  void applyShaperLimits(float aMax, float aDecel, float alphaMax,
+                         float alphaDecel, float jerkMax, float yawJerkMax);
+  const PlannerLimits& limits() const { return limits_; }
+
+  // True once applyShaperLimits() has ever landed real profile ceilings
+  // (boot config or a wire EstimatorConfigPatch). The loop publishes
+  // kFlagFaultShapingDisabled -- the loud off-state for the silent-off
+  // shaping config boundary (119-001) -- from this while a Move is active.
+  bool shaperConfigured() const { return shaperConfigured_; }
+
  private:
   struct ActiveMove {
     bool occupied = false;
@@ -152,6 +165,10 @@ class Planner {
   // latency. measure()'s anticipation needs it; nothing else does.
   float cmdLeftPrevious_ = 0.0f;   // [mm/s]
   float cmdRightPrevious_ = 0.0f;  // [mm/s]
+  // Last tick's filtered measurement -- the braking stage's actuation-lead
+  // compensation derives the measured accel from it (see stageDuty()).
+  float measuredLeftPrevious_ = 0.0f;   // [mm/s]
+  float measuredRightPrevious_ = 0.0f;  // [mm/s]
   Axis lastAxis_ = Axis::None;
   float activeBoundary_ = 0.0f;  // last planned boundary velocity, positive frame
 
@@ -163,6 +180,7 @@ class Planner {
   float carryHeading_ = 0.0f;  // [rad]
 
   bool ticked_ = false;  // tick() has run at least once
+  bool shaperConfigured_ = false;  // applyShaperLimits() ever landed
 };
 
 }  // namespace Motion

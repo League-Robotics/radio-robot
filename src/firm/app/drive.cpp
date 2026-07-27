@@ -15,6 +15,15 @@ void Drive::setDuty(float left, float right) {
 void Drive::stop() {
   vLeft_ = 0.0f;
   vRight_ = 0.0f;
+  rawMode_ = false;
+  rawDutyLeft_ = 0.0f;
+  rawDutyRight_ = 0.0f;
+}
+
+void Drive::setRawDuty(float dutyLeft, float dutyRight) {
+  rawMode_ = true;
+  rawDutyLeft_ = dutyLeft;
+  rawDutyRight_ = dutyRight;
 }
 
 // 125-003 INTERIM closed loop -- see drive.h's own file header for the
@@ -34,6 +43,29 @@ void Drive::stop() {
 // planner's duty stage uses (filter-lag comp, planner.cpp) -- removes the
 // phantom without a tuning knob. Exactly zero at steady state.
 void Drive::tick() {
+  if (rawMode_) {
+    // Planner-era path (2026-07-26 integration): the planner already
+    // closed the velocity loop and produced per-wheel duty; stage it
+    // verbatim (armor/shaping live in the leaf). The interim velocity
+    // PID below is bypassed entirely while raw mode is latched.
+    //
+    // Quiet at zero: while both the staged and last-written pairs are
+    // exactly zero there is nothing to say to the hardware -- and saying
+    // it anyway flips the motors into Mode::Active from the very first
+    // idle boot cycle, closing NezhaMotor::reconfigure()'s unconditional
+    // Mode::None window and making every boot-time config push race the
+    // at-rest gate against sensing transients (measured: a calibration
+    // push right after connect refused on a 5.3 mm/s decode blip).
+    const bool quiet = rawDutyLeft_ == 0.0f && rawDutyRight_ == 0.0f &&
+                       rawWrittenLeft_ == 0.0f && rawWrittenRight_ == 0.0f;
+    if (!quiet) {
+      left_.setDuty(rawDutyLeft_);
+      right_.setDuty(rawDutyRight_);
+      rawWrittenLeft_ = rawDutyLeft_;
+      rawWrittenRight_ = rawDutyRight_;
+    }
+    return;
+  }
   // The lead uses the PREVIOUS interval's commanded accel -- the change
   // the plant has been executing during the stale window and the sample
   // therefore missed. This tick's own new change is deliberately NOT led:

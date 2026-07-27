@@ -3,6 +3,12 @@
 // timing-schedule rationale.
 #include "app/robot_loop.h"
 
+// Still included for Motion::ShaperLimits alone -- the CONFIG shaper
+// patch's merge vocabulary (mergeShaperPatch) keeps that plain struct as
+// its wire-facing shape even though Motion::MoveQueue no longer drives
+// the loop (planner integration, 2026-07-26).
+#include "motion/move_queue.h"
+
 #include <cmath>
 
 #include "motion/body_kinematics.h"
@@ -149,7 +155,7 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
                       Devices::Motor& motorR, Devices::Otos& otos,
                       Devices::ColorSensorLeaf& color, Devices::LineSensorLeaf& line,
                       Comms& comms, Telemetry& tlm, Drive& drive,
-                      Motion::Odometry& odom, Motion::MoveQueue& moveQueue, Preamble& preamble,
+                      Motion::Odometry& odom, Motion::Planner& planner, Preamble& preamble,
                       Motion::StateEstimator& stateEstimator, const Devices::Clock& clock,
                       Devices::Sleeper& sleeper, Config::TuningStore* tuningStore)
     : bus_(bus),
@@ -162,7 +168,7 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
       tlm_(tlm),
       drive_(drive),
       odom_(odom),
-      moveQueue_(moveQueue),
+      planner_(planner),
       preamble_(preamble),
       stateEstimator_(stateEstimator),
       clock_(clock),
@@ -226,13 +232,53 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
     return;
   }
 
-  // now -- read HERE, at the exact point in the cycle App::MoveQueue's own
-  // pre-122-002 held Devices::Clock& used to read it internally (see
-  // move_queue.h's own file header) -- Motion::MoveQueue may not depend on
-  // devices/, so the caller (this class) now threads it through explicitly.
-  Motion::MoveQueue::EnqueueResult result =
-      moveQueue_.enqueue(move, env.corr_id, clock_.nowMicros());
-  tlm_.ack(result.corrId, static_cast<uint32_t>(result.err));
+  // Planner integration (2026-07-26): convert the wire Move into the
+  // planner's own plain Motion::Move and hand it to the on-robot planner.
+  // Activation happens on the planner's next tick() (its own contract);
+  // shape problems the planner would reject are pre-checked here so the
+  // ack distinguishes ERR_BADARG from a genuinely full queue.
+  Motion::Move m;
+  m.id = move.id;
+  m.timeout = move.timeout;
+  switch (move.stop_kind) {
+    case msg::Move::StopKind::TIME:
+      m.kind = Motion::Move::Kind::Time;
+      m.threshold = move.stop.time;
+      break;
+    case msg::Move::StopKind::DISTANCE:
+      m.kind = Motion::Move::Kind::Distance;
+      m.threshold = move.stop.distance;
+      break;
+    case msg::Move::StopKind::ANGLE:
+      m.kind = Motion::Move::Kind::Angle;
+      m.threshold = move.stop.angle;
+      break;
+    default:
+      break;  // unreachable: stop_kind validated above
+  }
+  if (move.velocity_kind == msg::Move::VelocityKind::TWIST) {
+    m.velocityKind = Motion::Move::VelocityKind::Twist;
+    m.v_x = move.velocity.twist.v_x;
+    m.v_y = move.velocity.twist.v_y;
+    m.omega = move.velocity.twist.omega;
+  } else {
+    m.velocityKind = Motion::Move::VelocityKind::Wheels;
+    m.vLeft = move.velocity.wheels.v_left;
+    m.vRight = move.velocity.wheels.v_right;
+  }
+  const bool badShape =
+      m.threshold < 0.0f ||
+      (m.velocityKind == Motion::Move::VelocityKind::Twist &&
+       ((m.kind == Motion::Move::Kind::Distance && m.v_x == 0.0f) ||
+        (m.kind == Motion::Move::Kind::Angle && m.omega == 0.0f))) ||
+      false;  // Wheels Moves accept every stop kind (planner parity, 2026-07-26)
+  if (badShape) {
+    tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_BADARG));
+    return;
+  }
+  const bool accepted = planner_.move(m, move.replace);
+  tlm_.ack(env.corr_id,
+           accepted ? 0 : static_cast<uint32_t>(msg::ErrCode::ERR_FULL));
 }
 
 // ConfigDelta runtime application: MotorConfigPatch and OtosConfigPatch
@@ -310,9 +356,19 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
     mergeEstimatorPatch(weights, patch);
     stateEstimator_.setWeights(weights);
 
-    Motion::ShaperLimits shaperLimits = moveQueue_.shaperLimits();
+    // Planner integration: the shaper wire keys retarget the planner's
+    // own live limits (same six-field vocabulary).
+    Motion::ShaperLimits shaperLimits{};
+    shaperLimits.aMax = planner_.limits().aMax;
+    shaperLimits.aDecel = planner_.limits().aDecel;
+    shaperLimits.alphaMax = planner_.limits().alphaMax;
+    shaperLimits.alphaDecel = planner_.limits().alphaDecel;
+    shaperLimits.jMax = planner_.limits().jerkMax;
+    shaperLimits.yawJerkMax = planner_.limits().yawJerkMax;
     mergeShaperPatch(shaperLimits, patch);
-    moveQueue_.setShaperLimits(shaperLimits);
+    planner_.applyShaperLimits(shaperLimits.aMax, shaperLimits.aDecel,
+                               shaperLimits.alphaMax, shaperLimits.alphaDecel,
+                               shaperLimits.jMax, shaperLimits.yawJerkMax);
 
     tlm_.ack(env.corr_id, 0);
     return;
@@ -362,15 +418,20 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
 // is side-selected (config.proto's own MotorConfigPatch.side comment) --
 // applies to exactly one leaf.
 void RobotLoop::applyMotorConfigPatch(const msg::MotorConfigPatch& patch) {
-  Motion::Gains gainsL = drive_.gainsLeft();
-  Motion::Gains gainsR = drive_.gainsRight();
-  if (patch.kp.has) { gainsL.kp = patch.kp.val; gainsR.kp = patch.kp.val; }
-  if (patch.ki.has) { gainsL.ki = patch.ki.val; gainsR.ki = patch.ki.val; }
-  if (patch.kff.has) { gainsL.kff = patch.kff.val; gainsR.kff = patch.kff.val; }
-  if (patch.i_max.has) { gainsL.iMax = patch.i_max.val; gainsR.iMax = patch.i_max.val; }
-  if (patch.kaw.has) { gainsL.kaw = patch.kaw.val; gainsR.kaw = patch.kaw.val; }
-  drive_.applyGainsLeft(gainsL);
-  drive_.applyGainsRight(gainsR);
+  // Planner integration: the pid.* wire keys retarget the planner's own
+  // duty-stage gains (one controller pair, one gain set -- the per-side
+  // split the interim Drive PID carried is gone with it). kaw has no
+  // planner equivalent (conditional integration replaced back-calculation
+  // anti-windup); accepted and ignored.
+  float kff = planner_.limits().velKff;
+  float kp = planner_.limits().velKp;
+  float ki = planner_.limits().velKi;
+  float iMax = planner_.limits().velIMax;
+  if (patch.kp.has) kp = patch.kp.val;
+  if (patch.ki.has) ki = patch.ki.val;
+  if (patch.kff.has) kff = patch.kff.val;
+  if (patch.i_max.has) iMax = patch.i_max.val;
+  planner_.applyVelGains(kff, kp, ki, iMax);
 
   if (patch.travel_calib.has) {
     if (patch.side == msg::BoundMotorSide::LEFT) {
@@ -438,7 +499,7 @@ void RobotLoop::reapplyPersistedTuning(const Config::TuningSnapshot& snapshot) {
 
 void RobotLoop::handleStop(const msg::CommandEnvelope& env) {
   drive_.stop();
-  moveQueue_.flush();
+  planner_.stop();
   tlm_.ack(env.corr_id, 0);
 }
 
@@ -576,7 +637,13 @@ void RobotLoop::cycle() {
   // L/R actuation skew during every ramp (measured +2.685deg cruise yaw on
   // a straight leg, exact match to the predicted v_cruise*kCycle/trackWidth
   // transient).
-  drive_.tick();  // twist -> wheel targets; L and R apply THIS cycle's stage symmetrically below
+  // Planner integration: the planner's LAST tick() (end of the previous
+  // cycle) produced this cycle's per-wheel duty -- stage it now, before
+  // either motor's own slice applies it. One cycle decision-to-actuation,
+  // the exact latency the planner's duty tier was validated against.
+  drive_.setRawDuty(planner_.commandedDutyLeft(),
+                    planner_.commandedDutyRight());
+  drive_.tick();  // raw-mode passthrough -> both leaves' staged duty
 
   // Request/collect MUST interleave per port (118 -- restores the
   // interleaved schedule this file's own DESIGN.md §2/§3 already claims:
@@ -694,14 +761,14 @@ void RobotLoop::cycle() {
   state_.wheelLeft.sampleTime = static_cast<uint32_t>(motorL_.sampleTime() / 1000);  // [us] -> [ms]
   state_.wheelLeft.connected = motorL_.connected();
   state_.wheelLeft.positionEpoch = positionEpochLeft_;
-  state_.wheelLeft.cmdVelocity = drive_.vLeft();
+  state_.wheelLeft.cmdVelocity = planner_.commandedLeft();
 
   state_.wheelRight.position = posR;
   state_.wheelRight.velocity = motorR_.velocity();
   state_.wheelRight.sampleTime = static_cast<uint32_t>(motorR_.sampleTime() / 1000);  // [us] -> [ms]
   state_.wheelRight.connected = motorR_.connected();
   state_.wheelRight.positionEpoch = positionEpochRight_;
-  state_.wheelRight.cmdVelocity = drive_.vRight();
+  state_.wheelRight.cmdVelocity = planner_.commandedRight();
 
   state_.health.wedgeLatch = motorL_.wedged() || motorR_.wedged();
   state_.health.positionClamped = clampedL || clampedR;
@@ -829,8 +896,8 @@ void RobotLoop::cycle() {
     // the pre-124-009 assembleFrame() read moveQueue_.active(), before
     // this cycle's own moveQueue_.tick() below runs). v_x/omega stay
     // unpopulated -- see robot_state.h's own Command doc comment for why.
-    state_.command.mode = moveQueue_.active() ? Types::Mode::Velocity : Types::Mode::Idle;
-    state_.command.moveActive = moveQueue_.active();
+    state_.command.mode = planner_.active() ? Types::Mode::Velocity : Types::Mode::Idle;
+    state_.command.moveActive = planner_.active();
 
     // Health section -- the two live counters/latches knowable at this
     // point in the cycle (moveTimeout/shapingDisabled are refreshed AFTER
@@ -894,7 +961,13 @@ void RobotLoop::cycle() {
     // cycle (unchanged from before 124-009): a completion ack staged here
     // is still not visible until the NEXT cycle's own emit() call -- "ack
     // rides the next frame," protocol-v4 §7.2, unaffected by this ticket.
-    Motion::MoveQueue::TickResult moveResult = moveQueue_.tick(nowUs, odom_);
+    // Planner integration: the WHOLE motion decision -- estimation,
+    // profiling, PID-to-duty -- is one co-located call now. update()
+    // saves the planner's pose/estimate/command sections and this
+    // cycle's wheel targets into state_; the duty pair is staged at the
+    // TOP of the next cycle (drive_.setRawDuty(), above).
+    const Motion::TickResult moveResult = planner_.tick(state_);
+    planner_.update(state_);
 
     // kFlagFaultMoveTimeout/kFlagFaultShapingDisabled -- refreshed HERE,
     // directly, immediately after tick() (see Telemetry::setLiveFlag()'s
@@ -908,13 +981,19 @@ void RobotLoop::cycle() {
     // those sections is your job"), a level-set every cycle: true only on
     // the exact cycle a timed-out completion/all-axes-disabled MOVE is
     // reported this call, false every other cycle (SUC-054).
-    state_.health.moveTimeout = moveResult.completed && moveResult.completion.timedOut;
+    state_.health.moveTimeout = moveResult.completed && moveResult.timedOut;
     // Loud off-state (119 ticket 001,
     // kill-the-silent-off-shaping-config-boundary.md): set whenever a MOVE
     // is active with BOTH angular and linear ShaperLimits disabled --
     // reads moveQueue_'s OWN current state (post-tick(), so a Move that
     // just ended/started THIS cycle is already reflected), not moveResult.
-    state_.health.shapingDisabled = moveQueue_.active() && moveQueue_.shapingDisabled();
+    // 119-001's loud off-state, planner-era: set while a Move is active
+    // with no shaper limits ever configured (boot block absent/zeroed AND
+    // no wire EstimatorConfigPatch landed) -- the planner would profile
+    // against its construction defaults, which is exactly the silent-off
+    // hazard the flag exists to shout about.
+    state_.health.shapingDisabled =
+        planner_.active() && !planner_.shaperConfigured();
 
     tlm_.setLiveFlag(kFlagFaultMoveTimeout, state_.health.moveTimeout);
     tlm_.setLiveFlag(kFlagFaultShapingDisabled, state_.health.shapingDisabled);
@@ -924,7 +1003,7 @@ void RobotLoop::cycle() {
       // a SECOND ack on the cycle the command ends -- ack_corr ==
       // Move.id, ack_err == 0 regardless of outcome; a timeout ending is
       // distinguished by kFlagFaultMoveTimeout just above, not by ack_err.
-      tlm_.ack(moveResult.completion.moveId, 0);
+      tlm_.ack(moveResult.moveId, 0);
     }
   });
 }

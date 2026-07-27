@@ -1957,15 +1957,21 @@ class SimTransport(Transport):
         self.set_true_pose(x_mm / 10.0, y_mm / 10.0, math.radians(h_cdeg / 100.0))
 
     def run_unmanaged(self, *, distance_mm: float = 0.0, angle_deg: float = 0.0) -> None:
-        """UNMANAGED (open-loop) primitive motion: turn the motors on at a
-        fixed velocity for exactly the time to cover `distance_mm` OR
-        `angle_deg`, then let the firmware deadman stop them. Goes straight
-        through `twist` -> `Drive::setTwist` -- NO Motion::Executor / Ruckig
-        (the un-managed counterpart to `_run_motion_async`'s D/RT path). A
-        single `twist(v, omega, duration_ms)` whose deadman lease IS the motion
-        duration: `RobotLoop::handleTwist` arms the deadman for `duration_ms`
-        (no max clamp), the motors run that long, then neutralize -- a true
-        "motors on for a time, then off" with no host-side timing loop.
+        """UNMANAGED primitive motion: one bounded body-frame twist ``Move``
+        at a fixed velocity for exactly ``distance_mm``/``angle_deg`` --
+        mirror of ``_HardwareTransport.run_unmanaged()`` (same
+        ``_UNMANAGED_SPEED``/``_UNMANAGED_YAW_RATE`` cruise values, same
+        stop-condition shapes, same "distance wins if both given" rule).
+
+        Ported off the legacy ``twist(v, omega, duration_ms)`` time lease
+        (planner integration, 2026-07-26): that shape dated from the
+        deadman era ("motors on for a time, then off") and silently became
+        a distance error once the firmware's onboard planner started
+        honoring the pushed accel/alpha shaper limits -- 150 mm/s
+        commanded for 667 ms covers ~74 mm once the ramp is real, where
+        the deadman-era instant-velocity sim covered ~100. A
+        ``stop_distance``/``stop_angle`` Move states the actual intent and
+        is exact under shaping, exactly like the hardware path.
 
         Exactly one of `distance_mm`/`angle_deg` is honored (distance wins if
         both are nonzero)."""
@@ -1974,22 +1980,24 @@ class SimTransport(Transport):
         if distance_mm != 0.0:
             v_x = math.copysign(_UNMANAGED_SPEED, distance_mm)
             omega = 0.0
-            duration_ms = abs(distance_mm) / _UNMANAGED_SPEED * 1000.0
+            timeout = _move_timeout_for(abs(distance_mm) / _UNMANAGED_SPEED)
+            kwargs: dict[str, Any] = dict(stop_distance=abs(distance_mm))
             label = f"unmanaged drive {distance_mm:+.0f}mm @ {_UNMANAGED_SPEED:.0f}mm/s"
         elif angle_deg != 0.0:
             v_x = 0.0
             omega = math.copysign(_UNMANAGED_YAW_RATE, angle_deg)
-            duration_ms = math.radians(abs(angle_deg)) / _UNMANAGED_YAW_RATE * 1000.0
+            timeout = _move_timeout_for(math.radians(abs(angle_deg)) / _UNMANAGED_YAW_RATE)
+            kwargs = dict(stop_angle=math.radians(abs(angle_deg)))
             label = f"unmanaged turn {angle_deg:+.0f}deg @ {_UNMANAGED_YAW_RATE:.1f}rad/s"
         else:
             return
         self._motion_stop_event.clear()
         try:
-            self._loop.twist(v_x, omega, duration_ms)
+            self._loop.move(v_x=v_x, omega=omega, timeout=timeout, replace=True, **kwargs)
         except Exception as exc:  # noqa: BLE001
             self._log(f"[ERROR] SimTransport: {label} failed: {exc}")
             return
-        self._log(f"[INFO] SimTransport: {label} (twist v_x={v_x:.0f} omega={omega:.2f}, deadman {duration_ms:.0f}ms)")
+        self._log(f"[INFO] SimTransport: {label} (move_twist, timeout {timeout:.0f}ms)")
 
     def _run_motion_async(self, wire_step: str) -> None:
         """Drive one D/RT leg (SEG's own ``SEG 0 <cdeg>`` pivot is

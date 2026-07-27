@@ -83,6 +83,14 @@ class Drive : public Motion::WheelSink {
   // no I2C traffic, no sleeps.
   void tick();
 
+  // Planner-era duty path (2026-07-26 integration): stage the planner's
+  // OWN per-wheel duty. While raw mode is latched (every call latches it),
+  // tick() passes these straight to the motors and the interim velocity
+  // PID above is bypassed entirely -- the planner IS the velocity
+  // controller now. setDuty()/stop() (the WheelSink velocity-target path,
+  // MoveQueue's) unlatches raw mode, so the two eras cannot fight.
+  void setRawDuty(float dutyLeft, float dutyRight);  // [-1, 1] each
+
   // trackWidth -- read-only accessor (109-009: RobotLoop::updateTlm() needs
   // it to fuse the two leaves' measured velocities into the primary frame's
   // `twist` field via BodyKinematics::forward() -- see that method's own
@@ -122,6 +130,8 @@ class Drive : public Motion::WheelSink {
   float vRight_ = 0.0f;  // [mm/s]
 
   // ---- 125-003 INTERIM closed loop (this file's own header) ----
+  // (Members above the interim PID pair -- see setDuty() below, the
+  // planner-era path that bypasses it.)
   Motion::WheelVelocityPid pidL_;
   Motion::WheelVelocityPid pidR_;
   // Last tick's staged targets -- the measurement-lead compensation's
@@ -130,6 +140,16 @@ class Drive : public Motion::WheelSink {
   float vRightPrevious_ = 0.0f;   // [mm/s]
   float vLeftPrevious2_ = 0.0f;   // [mm/s] two ticks back
   float vRightPrevious2_ = 0.0f;  // [mm/s]
+  bool rawMode_ = false;     // planner-era: tick() passes raw duty through
+  float rawDutyLeft_ = 0.0f;   // [-1, 1]
+  float rawDutyRight_ = 0.0f;  // [-1, 1]
+  // Last duty pair actually written to the leaves in raw mode -- tick()
+  // stays QUIET (no setDuty) while both the staged and last-written pairs
+  // are exactly zero, so an idle boot never flips the motors out of
+  // Mode::None (NezhaMotor::reconfigure() is unconditional in that state;
+  // once mode_ latches, a config push must find the motor at rest).
+  float rawWrittenLeft_ = 0.0f;   // [-1, 1]
+  float rawWrittenRight_ = 0.0f;  // [-1, 1]
   Motion::Gains gainsL_;
   Motion::Gains gainsR_;
 

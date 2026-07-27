@@ -230,8 +230,12 @@ void testStopMeansStopped() {
   for (int i = 0; i < 40; ++i) cycle(planner, state, plant, now);
   planner.stop();
   for (int i = 0; i < 30; ++i) cycle(planner, state, plant, now);
-  // Duty zeroed and the plant coasted to rest.
-  CHECK_NEAR(planner.commandedDutyLeft(), 0.0f, 1e-6);
+  // Rest damping, not a dead-duty clamp: the integral is reset/frozen at
+  // rest but the P term stays engaged (duty = -kp*measured, far below any
+  // motor deadband), so the residual duty tracks the plant's residual
+  // measured velocity instead of snapping to exactly zero. "Stopped" is
+  // proven by the parked-pose hold below, not by a zero duty word.
+  CHECK(std::fabs(planner.commandedDutyLeft()) < 0.02f);
   CHECK(std::fabs(plant.left.velocity) < 5.0f);
   const float parked = plant.truePath();
   for (int i = 0; i < 20; ++i) cycle(planner, state, plant, now);

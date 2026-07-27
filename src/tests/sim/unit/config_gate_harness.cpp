@@ -287,7 +287,9 @@ int main() {
     // 125-003: kp routes to App::Drive's own interim Motion::WheelVelocityPid
     // gains now, not Devices::Motor::gains() (deleted -- the velocity PID
     // moved off the motor entirely, sprint.md Decision 2/7).
-    checkFloatEq(sim.drive().gainsLeft().kp, 0.05f,
+    // Planner integration (2026-07-26): pid.* wire keys now retarget the
+    // on-robot planner's own duty-stage gains.
+    checkFloatEq(sim.planner().limits().velKp, 0.05f,
                  "the motor patch's kp actually landed live -- handleConfig() ran, unaffected by the gate");
   }
 

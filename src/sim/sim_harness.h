@@ -44,6 +44,49 @@
 #include "devices/otos.h"
 #include "fake_transport.h"
 #include "motion/move_queue.h"
+#include "motion/planner/planner.h"
+
+namespace TestSim {
+
+// Bench-plausible planner limits for the sim harness -- mirrors main.cpp's
+// boot assembly (shaper ceilings, vel gains, one-cycle actuation delay)
+// with the plant-agnostic defaults tests relied on pre-integration.
+inline Motion::PlannerLimits simPlannerLimits(float trackWidth) {  // [mm]
+  Motion::PlannerLimits limits;
+  limits.vMax = 600.0f;
+  // Effectively UNSHAPED (matching the pre-integration sim, which ran
+  // with ShaperLimits{} = shaping off): the profile commits cruise in one
+  // step and the exact terminal landing still holds -- scenario suites
+  // assert instant-commit staging semantics. Shaped-profile behavior has
+  // its own dedicated coverage in src/motion/planner/tests/.
+  limits.aMax = 1.0e6f;
+  limits.aDecel = 1.0e6f;
+  limits.omegaMax = 8.0f;
+  limits.alphaMax = 1.0e5f;
+  limits.alphaDecel = 1.0e5f;
+  limits.trackWidth = trackWidth;
+  limits.controlPeriod = 40.0f;   // [ms] RobotLoop::kCycle
+  limits.actuationDelay = 40.0f;  // [ms] one-cycle staging
+  limits.velocityFilterWeight = 1.0f;
+  limits.requireSettle = false;   // scenario tests assert profile-complete
+  // Rest floors are a per-robot NOISE property: the sim plant's encoder
+  // quantum (0.1 mm) over its ~19 ms sample interval reads +-5.3 mm/s of
+  // pure flicker at true rest, so the floor must sit ABOVE that or the
+  // planner's rest damping chases quantum noise forever (measured: idle
+  // duty twitching +-0.02, true pose jiggling, GUI settle never quiet).
+  limits.settleRestVelocity = 8.0f;  // [mm/s]
+  limits.settleRestOmega = 0.13f;    // [rad/s] 2*floor/trackWidth
+  limits.headingHoldGain = 0.0f;
+  limits.velKff = 0.002f;   // sim plant's own nominal inverse gain
+  limits.velKp = 0.0016f;
+  limits.velKi = 0.005f;
+  limits.velIMax = 0.3f;
+  limits.velKaff = 0.0f;
+  limits.velIAccelGate = 1.0e9f;
+  return limits;
+}
+
+}  // namespace TestSim
 #include "motion/odometry.h"
 #include "motion/state_estimator.h"
 #include "sim_clock.h"
@@ -94,13 +137,13 @@ class SimHarness {
         stateEstimator_(),
         // shaperLimits similarly left at its default (Motion::ShaperLimits{},
         // shaping OFF) for the same "not part of the sim graph" boundary --
-        // a test needing shaping calls moveQueue().setShaperLimits() directly.
+        // a test needing different limits calls planner().applyShaperLimits().
         // No Devices::Clock& argument (122-002): Motion::MoveQueue takes
         // `now` explicitly at each enqueue() call instead.
-        moveQueue_(drive_, odom_, trackWidth),
+        planner_(simPlannerLimits(trackWidth)),
         preamble_(armorL_, armorR_, otos_, color_, line_, clock_),
         robotLoop_(plant_, armorL_, armorR_, otos_, color_, line_, comms_, tlm_,
-                   drive_, odom_, moveQueue_, preamble_, stateEstimator_, clock_,
+                   drive_, odom_, planner_, preamble_, stateEstimator_, clock_,
                    sleeper_) {
     // No self-configuration -- motorL_/motorR_ stay at their default
     // Devices::MotorConfig{} (all-zero), matching a real, not-yet-booted
@@ -214,8 +257,10 @@ class SimHarness {
   // now the one place "what was commanded" lives), NOT the measured/decoded
   // telemetry velocity -- used to measure the post-completion "shelf" a
   // stale nonzero COMMAND can leave.
-  float driveTargetVelLeft() const { return drive_.vLeft(); }    // [mm/s] signed
-  float driveTargetVelRight() const { return drive_.vRight(); }  // [mm/s] signed
+  // Planner integration (2026-07-26): the staged wheel-velocity target
+  // lives on the planner now (Drive carries duty in raw mode).
+  float driveTargetVelLeft() const { return planner_.commandedLeft(); }    // [mm/s] signed
+  float driveTargetVelRight() const { return planner_.commandedRight(); }  // [mm/s] signed
 
   // Decodes and returns every outbound line captured on the serial
   // FakeTransport since the last call (serial and radio receive an
@@ -282,6 +327,7 @@ class SimHarness {
   // (drive().gainsLeft()/gainsRight()) -- the CONFIG-patch routing split
   // this sprint's own RobotLoop::applyMotorConfigPatch() implements.
   App::Drive& drive() { return drive_; }
+  Motion::Planner& planner() { return planner_; }
 
   // Exposes the owned Motion::StateEstimator; a test needing non-default
   // fusion weights calls stateEstimator().setWeights(...) directly.
@@ -353,8 +399,10 @@ class SimHarness {
   App::Drive drive_;
   Motion::Odometry odom_;
   Motion::StateEstimator stateEstimator_;  // default-constructed, see ctor initializer list's own comment above
-  // Declared AFTER drive_/odom_ (MoveQueue's constructor holds references to both -- drive_ through the Motion::WheelSink boundary).
-  Motion::MoveQueue moveQueue_;
+  // Planner integration (2026-07-26): the sim drives the REAL on-robot
+  // planner, constructed with bench-plausible limits (simPlannerLimits()).
+  // (public accessor: planner(), below with the other accessors)
+  Motion::Planner planner_;
   App::Preamble preamble_;
   App::RobotLoop robotLoop_;
 

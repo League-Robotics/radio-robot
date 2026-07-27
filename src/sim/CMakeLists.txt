@@ -132,6 +132,12 @@ set(MOTION_SOURCES
     # (Devices::MotorVelocityPid -> Motion::WheelVelocityPid) -- App::Drive
     # (APP_SOURCES, above) holds the interim instances this sprint.
     "${MOTION_DIR}/wheel_velocity_pid.cpp"
+    # Planner integration (2026-07-26): the planner library core drives the
+    # loop now -- same four files the firmware image links.
+    "${MOTION_DIR}/planner/profile.cpp"
+    "${MOTION_DIR}/planner/estimation.cpp"
+    "${MOTION_DIR}/planner/wheel_pid.cpp"
+    "${MOTION_DIR}/planner/planner.cpp"
 )
 set(DEVICE_SOURCES
     "${SOURCE_DIR}/devices/nezha_motor.cpp"

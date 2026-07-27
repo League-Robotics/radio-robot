@@ -27,6 +27,7 @@
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "motion/move_queue.h"
+#include "motion/planner/planner.h"
 #include "motion/odometry.h"
 #include "motion/state_estimator.h"
 #include "types/version_generated.h"
@@ -199,7 +200,65 @@ int main() {
 
   Motion::ShaperLimits shaperLimits = toShaperLimits(Config::defaultShaperConfig());
 
-  static Motion::MoveQueue moveQueue(drive, odom, drivetrainConfig.trackwidth, shaperLimits);
+  // Planner integration (2026-07-26): the on-robot Motion::Planner replaces
+  // Motion::MoveQueue as the loop's motion decider. Limits assembled from
+  // the SAME boot-config sources the old stack used: shaper keys ->
+  // profile ceilings, vel_gains -> the planner's own duty-stage PID,
+  // vel_filt_alpha -> the planner's velocity-filter weight. controlPeriod
+  // is the loop's own kCycle; actuationDelay is the one-cycle staging
+  // latency (duty staged at the NEXT cycle top -- the exact shape the
+  // planner's duty scenario tier validates).
+  Motion::PlannerLimits plannerLimits;
+  plannerLimits.vMax = 600.0f;  // [mm/s] plausibility ceiling (kMaxPlausibleSpeed)
+  plannerLimits.aMax = shaperLimits.aMax;
+  plannerLimits.aDecel = shaperLimits.aDecel;
+  plannerLimits.omegaMax = 8.0f;  // [rad/s]
+  plannerLimits.alphaMax = shaperLimits.alphaMax;
+  plannerLimits.alphaDecel = shaperLimits.alphaDecel;
+  plannerLimits.jerkMax = shaperLimits.jMax;
+  plannerLimits.yawJerkMax = shaperLimits.yawJerkMax;
+  plannerLimits.trackWidth = drivetrainConfig.trackwidth;
+  plannerLimits.controlPeriod = static_cast<float>(App::RobotLoop::kCycle);
+  plannerLimits.actuationDelay = static_cast<float>(App::RobotLoop::kCycle);
+  plannerLimits.velocityFilterWeight =
+      drivetrainConfig.vel_filt_alpha > 0.05f ? drivetrainConfig.vel_filt_alpha
+                                              : 1.0f;
+  plannerLimits.requireSettle = true;
+  // Rest floors sized to the measured hardware encoder-velocity noise
+  // (plant ID 2026-07-26: ~+-7 mm/s at rest) -- the rest-damping stage
+  // outputs exactly zero duty below the floor, so it must clear the
+  // noise band or the wheels twitch at rest forever.
+  plannerLimits.settleRestVelocity = 10.0f;  // [mm/s]
+  plannerLimits.settleRestOmega = 0.16f;     // [rad/s] 2*floor/trackWidth
+  plannerLimits.settleWindow = 2000.0f;  // [ms]
+  plannerLimits.headingHoldGain = 1.5f;  // [1/s] sim-validated
+  {
+    const Motion::Gains bootGains =
+        toMotionGains(motorConfigs[drivetrainConfig.left_port - 1]);
+    plannerLimits.velKff = bootGains.kff;
+    plannerLimits.velKp = bootGains.kp;
+    plannerLimits.velKi = bootGains.ki;
+    plannerLimits.velIMax = bootGains.iMax;
+    // Accel feedforward from the measured plant time constant (~230 ms,
+    // docs/design/encoder-refresh-characterization.md's sibling plant-ID
+    // measurement) -- a derived value, not a new tunable, until a config
+    // key exists for tau.
+    plannerLimits.velKaff = 0.23f * bootGains.kff;
+    plannerLimits.velIAccelGate = 50.0f;  // [mm/s^2]
+  }
+  static Motion::Planner planner(plannerLimits);
+  // Boot-config shaper block present (both axes' enable gate satisfied,
+  // the same zero-means-disabled sentinel the old ShaperLimits carried):
+  // land it through the SAME applyShaperLimits() entry the wire push uses,
+  // marking shaping CONFIGURED so kFlagFaultShapingDisabled (119-001)
+  // stays quiet. A zeroed/absent block leaves the flag armed -- the loud
+  // off-state, exactly as before the planner cutover.
+  if (shaperLimits.aMax > 0.0f && shaperLimits.aDecel > 0.0f &&
+      shaperLimits.alphaMax > 0.0f && shaperLimits.alphaDecel > 0.0f) {
+    planner.applyShaperLimits(shaperLimits.aMax, shaperLimits.aDecel,
+                              shaperLimits.alphaMax, shaperLimits.alphaDecel,
+                              shaperLimits.jMax, shaperLimits.yawJerkMax);
+  }
   static App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
 
@@ -207,7 +266,7 @@ int main() {
 
 
   static App::RobotLoop robotLoop(bus, motorL, motorR, otos, color, line,
-                                   comms, tlm, drive, odom, moveQueue, preamble,
+                                   comms, tlm, drive, odom, planner, preamble,
                                    stateEstimator, clock, sleeper, &tuningStore);
 
   uint32_t storedVersion = 0;

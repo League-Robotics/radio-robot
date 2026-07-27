@@ -53,6 +53,13 @@ _APP_SOURCES = [
     # 116-006 (MOVE protocol cutover): App::MoveQueue replaces the deleted
     # App::Deadman.
     _REPO_ROOT / "src" / "motion" / "move_queue.cpp",
+    # Planner integration (2026-07-26): the on-robot Motion::Planner now
+    # drives the loop -- its library core joins every RobotLoop-linking
+    # dependency graph.
+    _REPO_ROOT / "src" / "motion" / "planner" / "profile.cpp",
+    _REPO_ROOT / "src" / "motion" / "planner" / "estimation.cpp",
+    _REPO_ROOT / "src" / "motion" / "planner" / "wheel_pid.cpp",
+    _REPO_ROOT / "src" / "motion" / "planner" / "planner.cpp",
     _SOURCE_DIR / "app" / "drive.cpp",
     _REPO_ROOT / "src" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",

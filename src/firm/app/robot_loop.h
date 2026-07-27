@@ -32,7 +32,7 @@
 #include "devices/motor.h"
 #include "devices/otos.h"
 #include "firm/types/robot_state.h"
-#include "motion/move_queue.h"
+#include "motion/planner/planner.h"
 #include "motion/odometry.h"
 #include "motion/state_estimator.h"
 
@@ -89,7 +89,7 @@ class RobotLoop {
             Devices::Motor& motorR, Devices::Otos& otos,
             Devices::ColorSensorLeaf& color, Devices::LineSensorLeaf& line,
             Comms& comms, Telemetry& tlm, Drive& drive, Motion::Odometry& odom,
-            Motion::MoveQueue& moveQueue, Preamble& preamble,
+            Motion::Planner& planner, Preamble& preamble,
             Motion::StateEstimator& stateEstimator,
             const Devices::Clock& clock, Devices::Sleeper& sleeper,
             Config::TuningStore* tuningStore = nullptr);
@@ -220,7 +220,7 @@ class RobotLoop {
   Telemetry& tlm_;
   Drive& drive_;
   Motion::Odometry& odom_;
-  Motion::MoveQueue& moveQueue_;
+  Motion::Planner& planner_;
   Preamble& preamble_;
   Motion::StateEstimator& stateEstimator_;
   const Devices::Clock& clock_;
