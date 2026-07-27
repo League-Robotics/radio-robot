@@ -147,4 +147,23 @@ ShaperBootConfig defaultShaperConfig() {
     return cfg;
 }
 
+DriveBootConfig defaultDriveConfig() {
+    // command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
+    // §6 -- fail-closed baked from the robot JSON's
+    // control.duty_per_speed_left/duty_per_speed_right/crawl_pulse
+    // (data/robots/robot_config.schema.json). These were hard-coded in C++
+    // before that change (the duty pair as App::Drive member initializers,
+    // the crawl amplitude as a bare main.cpp setCrawlPulse() call); see
+    // gen_boot_config.py's drive_config_for_config() for why that was
+    // wrong. NOT a live SET/wire surface itself -- the `kff` CONFIG key
+    // still retargets the duty scale at runtime, but it sets BOTH wheels
+    // to one value, which is exactly why the per-wheel split has to be
+    // baked here rather than left to it.
+    DriveBootConfig cfg;
+    cfg.dutyPerSpeedLeft = 0.00178571f;    // [duty/(mm/s)]
+    cfg.dutyPerSpeedRight = 0.00196078f;  // [duty/(mm/s)]
+    cfg.crawlPulse = 0.0f;                  // [-1,1]; 0 = off
+    return cfg;
+}
+
 }  // namespace Config

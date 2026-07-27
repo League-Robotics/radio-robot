@@ -173,4 +173,48 @@ struct ShaperBootConfig {
 // gen_boot_config.py's shaper_config_for_config().
 ShaperBootConfig defaultShaperConfig();
 
+// DriveBootConfig (command-ingestion-ring-buffered-comms-subsystem-routing-
+// two-stops.md §6) -- App::Drive's per-robot wheel calibration, baked from
+// the robot JSON's `control.duty_per_speed_left`/`duty_per_speed_right`/
+// `crawl_pulse` (data/robots/robot_config.schema.json).
+//
+// Both of these used to be hard-coded C++: the duty-per-speed pair as
+// member initializers ON App::Drive itself, the crawl amplitude as a bare
+// `drive.setCrawlPulse()` call in main.cpp. That baked ONE robot's
+// gearboxes, on one battery, measured on one evening, into the class
+// definition -- every other robot silently inherited it, and changing it
+// meant editing C++ and reflashing. The `kff` CONFIG key is not an escape
+// hatch: it sets both wheels to a single value, flattening the measured
+// ~10% L/R asymmetry with no way to restore it short of a rebuild.
+//
+// dutyPerSpeed* is the INVERSE of the measured plant gain: duty =
+// speed * dutyPerSpeed. Per-wheel because the two gearboxes genuinely
+// differ (speed_sweep 2026-07-27: L ~560, R ~510 mm/s per duty).
+//
+// crawlPulse ships at 0 (OFF). The previously committed 0.20 was sized
+// against the duty sweep's apparent 0.10-0.19 "dead zone", which the
+// standalone duty_min prober (src/tests/firmware/duty_min/RESULTS.md)
+// later showed to be an artifact of that sweep's own criterion (all three
+// cold-start 500 ms repeats must move). True breakaway is 1-6% duty and
+// state-dependent, so at 0.20 the crawl/continuous boundary sat at
+// ~107 mm/s commanded and every speed below that ran pulsed -- ripple
+// across a wide band for a stiction problem that largely is not there.
+// Re-enable only if slow speeds genuinely stall, sized from the prober
+// data (~0.05), through this config key.
+//
+// REQUIRED, same fail-closed posture as every other struct here: a robot
+// JSON missing any of the three keys fails codegen loudly. App::Drive
+// itself carries NO calibration defaults (drive.h) -- an unconfigured
+// Drive refuses to drive rather than quietly using another robot's
+// numbers.
+struct DriveBootConfig {
+  float dutyPerSpeedLeft = 0.0f;   // [duty/(mm/s)] 1 / measured plant gain, left
+  float dutyPerSpeedRight = 0.0f;  // [duty/(mm/s)] 1 / measured plant gain, right
+  float crawlPulse = 0.0f;         // [-1, 1] sub-breakaway pulse amplitude; 0 = off
+};
+
+// The boot DriveBootConfig default -- see DriveBootConfig's own doc comment
+// above and gen_boot_config.py's drive_config_for_config().
+DriveBootConfig defaultDriveConfig();
+
 }  // namespace Config
