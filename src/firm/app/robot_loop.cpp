@@ -170,17 +170,12 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
   // there. TIME stop (or the timeout backstop) bounds it; completion is
   // acked at expiry with the Move's own id.
   if (move.velocity_kind == msg::Move::VelocityKind::WHEELS) {
-    planner_.stop();
-    wheelsVLeft_ = move.velocity.wheels.v_left;
-    wheelsVRight_ = move.velocity.wheels.v_right;
-    state_.wheelLeft.cmdVelocity = wheelsVLeft_;
-    state_.wheelRight.cmdVelocity = wheelsVRight_;
+    stopAll();  // the wheel command supersedes whatever was running
     const float bound =
         move.stop_kind == msg::Move::StopKind::TIME ? move.stop.time
                                                      : move.timeout;
-    wheelsDeadline_ = state_.time.cycleStart + static_cast<uint32_t>(bound);
-    wheelsMoveId_ = move.id;
-    wheelsActive_ = true;
+    drive_.command(move.velocity.wheels.v_left, move.velocity.wheels.v_right,
+                   bound, move.id, state_.time.cycleStart);
     tlm_.ack(env.corr_id, 0);
     return;
   }
@@ -197,7 +192,7 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
     tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_BADARG));
     return;
   }
-  wheelsActive_ = false;  // a planned move takes over the state targets
+  drive_.stop();  // a planned move takes over the targets
   const bool accepted = planner_.move(m, move.replace);
   tlm_.ack(env.corr_id,
            accepted ? 0 : static_cast<uint32_t>(msg::ErrCode::ERR_FULL));
@@ -269,10 +264,7 @@ void RobotLoop::applyMotorConfigPatch(const msg::MotorConfigPatch& patch) {
   // kff is the open-loop duty-per-speed scale (the same wire key the old
   // velocity PID's feedforward used, so sim/bench configs keep working);
   // the wire patch sets both wheels (per-wheel split is boot calibration).
-  if (patch.kff.has) {
-    dutyPerSpeedLeft_ = patch.kff.val;
-    dutyPerSpeedRight_ = patch.kff.val;
-  }
+  if (patch.kff.has) drive_.setDutyPerSpeed(patch.kff.val, patch.kff.val);
 
   // pid.* wire keys still retarget the (dormant) planner's gains.
   float kff = planner_.limits().velKff;
@@ -333,14 +325,15 @@ void RobotLoop::reapplyPersistedTuning(const Config::TuningSnapshot& snapshot) {
   lastPersistedBlob_ = Config::serializeSnapshot(persistedTuning_);
 }
 
-void RobotLoop::handleStop(const msg::CommandEnvelope& env) {
+// Stop everything that can command the wheels (shared by STOP and the
+// takeover paths -- no near-duplicates).
+void RobotLoop::stopAll() {
   drive_.stop();
   planner_.stop();
-  wheelsActive_ = false;
-  wheelsVLeft_ = 0.0f;
-  wheelsVRight_ = 0.0f;
-  state_.wheelLeft.cmdVelocity = 0.0f;
-  state_.wheelRight.cmdVelocity = 0.0f;
+}
+
+void RobotLoop::handleStop(const msg::CommandEnvelope& env) {
+  stopAll();
   tlm_.ack(env.corr_id, 0);
 }
 
@@ -430,6 +423,8 @@ void RobotLoop::publishWheels() {
   bool clampedR = false;
   publishWheel(motorL_, state_.wheelLeft, positionEpochLeft_, clampedL);
   publishWheel(motorR_, state_.wheelRight, positionEpochRight_, clampedR);
+  state_.wheelLeft.cmdVelocity = drive_.targetLeft();
+  state_.wheelRight.cmdVelocity = drive_.targetRight();
   state_.health.wedgeLatch = motorL_.wedged() || motorR_.wedged();
   state_.health.positionClamped = clampedL || clampedR;
 }
@@ -476,6 +471,12 @@ void RobotLoop::publishPose() {
   state_.pose.omega = twistOmega;
 }
 
+// Ack a wheel command that Drive expired this tick (bookkeeping).
+void RobotLoop::ackDriveCompletion() {
+  uint32_t moveId = 0;
+  if (drive_.takeCompletion(&moveId)) tlm_.ack(moveId, 0);
+}
+
 void RobotLoop::publishHealth() {
   state_.command.mode = planner_.active() ? Types::Mode::Velocity : Types::Mode::Idle;
   state_.command.moveActive = planner_.active();
@@ -515,25 +516,19 @@ void RobotLoop::cycle() {
 
   Cmd cmd;
 
-  // Wheels-command expiry: zero the targets and ack completion.
-  if (wheelsActive_ && static_cast<int32_t>(state_.time.cycleStart -
-                                            wheelsDeadline_) >= 0) {
-    wheelsActive_ = false;
-    wheelsVLeft_ = 0.0f;
-    wheelsVRight_ = 0.0f;
-    state_.wheelLeft.cmdVelocity = 0.0f;
-    state_.wheelRight.cmdVelocity = 0.0f;
-    tlm_.ack(wheelsMoveId_, 0);
-  }
-
-  // Drive the wheels from the state's commanded speeds, open loop -- one
-  // cycle command-to-actuation (Drive crawl-shapes sub-breakaway
-  // requests). Per-wheel calibration: measured plant gains differ ~10%.
-  drive_.tick(state_.wheelLeft.cmdVelocity * dutyPerSpeedLeft_,
-              state_.wheelRight.cmdVelocity * dutyPerSpeedRight_);
+  // The planner (when it owns motion) published its wheel targets into
+  // the state last cycle; hand them to Drive. A live wheel command owns
+  // the targets instead -- Drive ignores this while its own command runs.
+  drive_.setPlannerTargets(state_.wheelLeft.cmdVelocity,
+                           state_.wheelRight.cmdVelocity,
+                           planner_.active());
+  drive_.tick(state_.time.cycleStart);
+  ackDriveCompletion();
 
   motorL_.requestSample();  // brick latches ONE pending read per select
-  runAndWait(kSettle, [&] { comms_.pump(cmd, state_.time.cycleStart); });
+  runAndWait(kSettle, [&] { 
+    comms_.pump(cmd, state_.time.cycleStart); 
+  });
   motorL_.tick(clock_.nowMicros());  // collect L
 
   runAndWait(kClear, [&] {});  // brick's post-duty-write clearance
@@ -566,10 +561,6 @@ void RobotLoop::cycle() {
     // Planner tick AFTER emit: its completion ack rides the NEXT frame.
     const Motion::TickResult moveResult = planner_.tick(state_);
     planner_.update(state_);
-    if (wheelsActive_) {  // a live wheels command owns the state targets
-      state_.wheelLeft.cmdVelocity = wheelsVLeft_;
-      state_.wheelRight.cmdVelocity = wheelsVRight_;
-    }
     publishMoveResult(moveResult);
   });
 }

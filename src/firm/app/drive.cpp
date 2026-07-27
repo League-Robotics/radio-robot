@@ -10,13 +10,36 @@ Drive::Drive(Devices::Motor& left, Devices::Motor& right, float trackWidth)
 // 125-003 INTERIM: still a velocity mm/s target under the duty-shaped name
 // -- see drive.h's own file header for why and what replaces this.
 void Drive::setDuty(float left, float right) {
-  vLeft_ = left;
-  vRight_ = right;
+  targetLeft_ = left;
+  targetRight_ = right;
+}
+
+void Drive::setPlannerTargets(float vLeft, float vRight, bool plannerActive) {
+  if (commandActive_ || !plannerActive) return;
+  targetLeft_ = vLeft;
+  targetRight_ = vRight;
+}
+
+void Drive::command(float vLeft, float vRight, float durationMs,
+                    uint32_t moveId, uint32_t now) {
+  targetLeft_ = vLeft;
+  targetRight_ = vRight;
+  commandDeadline_ = now + static_cast<uint32_t>(durationMs);
+  commandMoveId_ = moveId;
+  commandActive_ = true;
 }
 
 void Drive::stop() {
-  vLeft_ = 0.0f;
-  vRight_ = 0.0f;
+  targetLeft_ = 0.0f;
+  targetRight_ = 0.0f;
+  commandActive_ = false;
+}
+
+bool Drive::takeCompletion(uint32_t* moveId) {
+  if (!completionPending_) return false;
+  completionPending_ = false;
+  *moveId = completedMoveId_;
+  return true;
 }
 
 // Crawl shaper: a request below the pulse amplitude becomes a train of
@@ -43,9 +66,19 @@ float Drive::crawlDuty(float duty, float& carry) const {
 // there is nothing to say to the hardware -- writing anyway would flip
 // the motors out of Mode::None from the first idle boot cycle and make
 // boot-time config pushes race the at-rest reconfigure gate.
-void Drive::tick(float dutyLeft, float dutyRight) {
-  dutyLeft = crawlDuty(dutyLeft, crawlCarryLeft_);
-  dutyRight = crawlDuty(dutyRight, crawlCarryRight_);
+void Drive::tick(uint32_t now) {
+  if (commandActive_ &&
+      static_cast<int32_t>(now - commandDeadline_) >= 0) {
+    commandActive_ = false;
+    targetLeft_ = 0.0f;
+    targetRight_ = 0.0f;
+    completionPending_ = true;
+    completedMoveId_ = commandMoveId_;
+  }
+
+  float dutyLeft = crawlDuty(targetLeft_ * dutyPerSpeedLeft_, crawlCarryLeft_);
+  float dutyRight =
+      crawlDuty(targetRight_ * dutyPerSpeedRight_, crawlCarryRight_);
   const bool quiet = dutyLeft == 0.0f && dutyRight == 0.0f &&
                      writtenLeft_ == 0.0f && writtenRight_ == 0.0f;
   if (quiet) return;

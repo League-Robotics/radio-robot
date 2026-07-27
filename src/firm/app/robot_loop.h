@@ -66,16 +66,6 @@ class RobotLoop {
   // Read-only view of the blackboard (sim/test observability).
   const Types::RobotState& state() const { return state_; }
 
-  // Open-loop duty-per-speed calibration, per wheel (also settable, both
-  // at once, via the wire kff key -- applyMotorConfigPatch()).
-  void setDutyPerSpeed(float left, float right) {
-    dutyPerSpeedLeft_ = left;
-    dutyPerSpeedRight_ = right;
-  }
-  void setDutyPerSpeed(float dutyPerSpeed) {
-    setDutyPerSpeed(dutyPerSpeed, dutyPerSpeed);
-  }
-
  private:
   uint32_t markTime() const;                    // [ms]
   void sleepUntil(uint32_t mark, uint32_t gap);  // [ms] [ms]
@@ -110,6 +100,8 @@ class RobotLoop {
   void publishLineColor(bool tickedLine);
   void publishPose();
   void publishHealth();
+  void ackDriveCompletion();
+  void stopAll();
   void publishTiming(uint64_t cycleStartUs);  // [us] cycleBusy/cyclePeriod
   // Move-fault flags + completion ack (rides next frame).
   void publishMoveResult(const Motion::TickResult& moveResult);
@@ -147,22 +139,6 @@ class RobotLoop {
   bool everCycled_ = false;
 
   bool configured_ = false;
-
-  // Open-loop duty per commanded wheel speed, per wheel. Boot defaults
-  // are the MEASURED plant gains (speed_sweep + full-duty ceiling probe,
-  // 2026-07-27: L ~560, R ~510 mm/s per duty, ceiling ~500 mm/s); the
-  // wire kff key recalibrates both (sim plants differ).
-  float dutyPerSpeedLeft_ = 1.0f / 560.0f;   // [duty/(mm/s)]
-  float dutyPerSpeedRight_ = 1.0f / 510.0f;  // [duty/(mm/s)]
-
-  // Direct wheel-speeds command (bypasses the planner): targets held here
-  // so a drained planner's update() cannot overwrite the state's
-  // commanded speeds; expiry acks wheelsMoveId_.
-  bool wheelsActive_ = false;
-  float wheelsVLeft_ = 0.0f;   // [mm/s]
-  float wheelsVRight_ = 0.0f;  // [mm/s]
-  uint32_t wheelsDeadline_ = 0;  // [ms]
-  uint32_t wheelsMoveId_ = 0;
 
   // Persisted live-tuning: cumulative merge of every tuned field, plus the
   // last blob actually written (change-detection baseline).

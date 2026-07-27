@@ -69,7 +69,7 @@ void configureSimForBenchTest(TestSim::SimHarness& sim) {
     sim.planner().applyVelGains(g.kff, g.kp, g.ki, g.iMax);
     // Open-loop wheel drive: kff IS the duty-per-speed scale for the sim
     // plant (1/kDefaultDutyVelMax).
-    sim.robotLoop().setDutyPerSpeed(g.kff);
+    sim.drive().setDutyPerSpeed(g.kff, g.kff);
   }
 }
 

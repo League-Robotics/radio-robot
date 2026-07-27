@@ -187,9 +187,11 @@ void scenarioSetDutyStagesRawValues() {
   const float trackWidth = 200.0f;  // [mm]
   App::Drive drive(left, right, trackWidth);
 
+  drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
   const float dutyLeft = 0.18f;
   const float dutyRight = 0.06f;
-  drive.tick(dutyLeft, dutyRight);
+  drive.setDuty(dutyLeft, dutyRight);
+  drive.tick(0);
 
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
   runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs);
@@ -219,15 +221,18 @@ void scenarioStopZeroesBothTargetsWithinOneCycle() {
   const float trackWidth = 200.0f;  // [mm]
   App::Drive drive(left, right, trackWidth);
 
+  drive.setDutyPerSpeed(1.0f, 1.0f);
   // Drive a nonzero pair first, so the zero write below is a real
   // transition, not "duty was never nonzero to begin with."
-  drive.tick(0.12f, 0.09f);
+  drive.setDuty(0.12f, 0.09f);
+  drive.tick(0);
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
   runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs);
   checkTrue(left.appliedDuty() != 0.0f, "setup: left duty is nonzero before the zero pair");
   checkTrue(right.appliedDuty() != 0.0f, "setup: right duty is nonzero before the zero pair");
 
-  drive.tick(0.0f, 0.0f);
+  drive.setDuty(0.0f, 0.0f);
+  drive.tick(0);
 
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs + 20000);
   runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs + 20000);

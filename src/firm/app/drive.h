@@ -1,46 +1,7 @@
-// drive.h -- App::Drive: the base's wheel-target sink. Stages a commanded
-// per-wheel target and applies it onto the two Devices::NezhaMotor leaves.
-// Implements Motion::WheelSink (motion/wheel_sink.h) so Motion::MoveQueue
-// can command it through that boundary interface rather than by concrete
-// type.
-//
-// Boundary: inside -- staging vL/vR onto the two NezhaMotor leaves; outside
-// -- the kinematics math (122-002: the twist decomposition --
-// BodyKinematics::inverse() -- moved to Motion::MoveQueue, which now calls
-// the sink's setDuty() directly with already-decomposed wheel targets;
-// Drive never sees a twist) and the deadman decision (the loop calls
-// Drive::stop(); Drive never polls Deadman).
-//
-// 125-003 (INTERIM closed loop -- see sprint.md Decision 1/2): callers still
-// hand setDuty() raw mm/s velocity targets under the duty-shaped name
-// (125-002's own placeholder contract, unchanged) -- `Motion::WheelSink`'s
-// real duty semantics land once `Motion::MoveQueue` itself owns the PID
-// (ticket 005/006, sprint.md Decision 1). Until then, SOMETHING has to
-// convert those mm/s targets into real, clamped [-1,1] duty before they
-// reach `Devices::Motor::setDuty()` -- ticket 003 (this shrink) deleted
-// `Devices::NezhaMotor`'s own embedded velocity PID outright (it is a
-// control DECISION, not hardware protection -- Decision 2's reframing), so
-// `Drive` holds two `Motion::WheelVelocityPid` instances here as a
-// documented INTERIM placeholder: this is NOT where Decision 1 says the PID
-// permanently lives (that's `Motion::MoveQueue`, fed by ticket 004's
-// `App::WheelObserver` `WheelEstimate`, not a raw `Devices::Motor::velocity()`
-// read) -- it exists here only so the tree keeps driving correctly (real,
-// proportional duty, not a `|value|>1` clamp-to-max-speed regression) across
-// the gap between this ticket and tickets 004-006. Ticket 005 should DELETE
-// pid_/gains_ from this class entirely once MoveQueue owns the real thing.
-//
-// Known degradation vs. the pre-125-003 embedded-PID behavior (disclosed,
-// not silent -- see nezha_motor.cpp's own header for the sibling
-// measurement-conditioning degradation): tick() runs at the TOP of
-// RobotLoop::cycle(), before either motor's own request/collect this same
-// cycle -- so the `measured` velocity fed to pid_ here is one full cycle
-// (~40ms) STALER than the pre-125-003 design (which ran the PID compute
-// INSIDE NezhaMotor::tick(), against the sample that same tick() call had
-// just collected). A fixed nominal dt (kNominalPeriod, matching
-// App::RobotLoop::kCycle) stands in for a true elapsed-time read, since
-// Drive has no Clock& of its own and the loop's own cycle period is fixed
-// by design -- true in both sim (kCycleDtUs, sim_harness.h) and on real
-// hardware (kPace's own derivation, robot_loop.cpp).
+// drive.h -- App::Drive: the wheel-drive subsystem. Owns the wheel
+// velocity targets, the bounded wheel command (deadline + completion),
+// the per-wheel duty calibration, crawl shaping, and the leaf writes.
+// No controller -- open-loop duty from calibrated targets.
 #pragma once
 
 #include "devices/motor.h"
@@ -62,22 +23,39 @@ class Drive : public Motion::WheelSink {
   // been constructed.
   Drive(Devices::Motor& left, Devices::Motor& right, float trackWidth);
 
-  // Stages left/right directly -- the ONE staging path left on Drive
-  // (122-002: the twist path, setTwist()/BodyKinematics::inverse(), moved to
-  // Motion::MoveQueue, which now calls this method with already-decomposed
-  // wheel targets instead). Does not itself reach into the leaves -- tick()
-  // is the only method that ever calls Motor::setDuty(). 125-003 INTERIM:
-  // still a velocity mm/s target under the duty-shaped name -- see this
-  // file's own header.
-  void setDuty(float left, float right) override;  // [mm/s] [mm/s] (INTERIM: not yet real duty)
+  // Stage wheel velocity targets (WheelSink; also the harness path). No
+  // deadline -- targets hold until changed or stop().
+  void setDuty(float left, float right) override;  // [mm/s] [mm/s] velocity targets
 
-  // Stages a zero target. The next tick() call stages exactly 0 onto both
-  // leaves.
+  // Adopt the planner's published wheel targets (state hand-off) when the
+  // planner owns motion and no wheel command is armed.
+  void setPlannerTargets(float vLeft, float vRight, bool plannerActive);
+
+  // Arm a bounded wheel command: targets + expiry deadline + the Move id
+  // acked on completion (takeCompletion()).
+  void command(float vLeft, float vRight, float durationMs, uint32_t moveId,
+               uint32_t now);  // [mm/s] [mm/s] [ms] -- now [ms]
+
+  // Clear targets and any armed command.
   void stop() override;
 
-  // Apply this cycle's duty pair to the two leaves, crawl-shaped and
-  // quiet at zero (see drive.cpp).
-  void tick(float dutyLeft, float dutyRight);  // [-1, 1] each
+  // One tick: expire an armed command whose deadline passed, convert the
+  // targets to duty (per-wheel calibration + crawl shaping + quiet at
+  // zero), and write the leaves.
+  void tick(uint32_t now);  // [ms]
+
+  // One-shot completion event for an expired command (the loop acks it).
+  bool takeCompletion(uint32_t* moveId);
+
+  // Last-staged velocity targets (state publish reads these).
+  float targetLeft() const { return targetLeft_; }    // [mm/s] signed
+  float targetRight() const { return targetRight_; }  // [mm/s] signed
+
+  // Per-wheel open-loop calibration ([duty/(mm/s)]).
+  void setDutyPerSpeed(float left, float right) {
+    dutyPerSpeedLeft_ = left;
+    dutyPerSpeedRight_ = right;
+  }
 
   // Crawl-mode pulse amplitude; 0 disables (per-robot breakaway property).
   void setCrawlPulse(float crawlPulse) { crawlPulse_ = crawlPulse; }
@@ -97,8 +75,8 @@ class Drive : public Motion::WheelSink {
   // field, mirroring trackWidth()'s own read-only-accessor shape. No
   // setter, same reasoning as trackWidth(): staging stays exclusively
   // through setDuty()/stop().
-  float vLeft() const { return vLeft_; }    // [mm/s] signed
-  float vRight() const { return vRight_; }  // [mm/s] signed
+  float vLeft() const { return targetLeft_; }    // [mm/s] signed (legacy alias)
+  float vRight() const { return targetRight_; }  // [mm/s] signed (legacy alias)
 
   // gainsLeft/gainsRight/applyGainsLeft/applyGainsRight -- 125-003 INTERIM
   // (this file's own header): RobotLoop::applyMotorConfigPatch() reads/
@@ -117,8 +95,20 @@ class Drive : public Motion::WheelSink {
   Devices::Motor& right_;
   float trackWidth_;  // [mm]
 
-  float vLeft_ = 0.0f;   // [mm/s]
-  float vRight_ = 0.0f;  // [mm/s]
+  float targetLeft_ = 0.0f;   // [mm/s]
+  float targetRight_ = 0.0f;  // [mm/s]
+
+  // Armed bounded command (command()/tick() expiry).
+  bool commandActive_ = false;
+  uint32_t commandDeadline_ = 0;  // [ms]
+  uint32_t commandMoveId_ = 0;
+  bool completionPending_ = false;
+  uint32_t completedMoveId_ = 0;
+
+  // Open-loop duty per commanded speed, per wheel (measured plant gains,
+  // speed_sweep 2026-07-27: L ~560, R ~510 mm/s per duty).
+  float dutyPerSpeedLeft_ = 1.0f / 560.0f;   // [duty/(mm/s)]
+  float dutyPerSpeedRight_ = 1.0f / 510.0f;  // [duty/(mm/s)]
 
   // ---- 125-003 INTERIM closed loop (this file's own header) ----
   // (Members above the interim PID pair -- see setDuty() below, the

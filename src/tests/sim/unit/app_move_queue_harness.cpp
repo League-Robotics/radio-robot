@@ -293,6 +293,7 @@ void scenarioEnqueueOnEmptyQueueActivatesTwistImmediately() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  drive.setDutyPerSpeed(kKff, kKff);
   applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
@@ -307,7 +308,7 @@ void scenarioEnqueueOnEmptyQueueActivatesTwistImmediately() {
   checkTrue(queue.active(), "queue is active immediately after enqueue() on an empty queue");
   checkUintEq(queue.activeMoveId(), 7, "activeMoveId() reflects the just-activated Move's id");
 
-  drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+  drive.tick(0);
   runOneCycleAtZeroPosition(left, bus, kWireAddr, kPastWriteThrottleUs);
   runOneCycleAtZeroPosition(right, bus, kWireAddr, kPastWriteThrottleUs);
 
@@ -338,6 +339,7 @@ void scenarioWheelsDistanceMoveUsesRealOdometryBaseline() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  drive.setDutyPerSpeed(kKff, kKff);
   applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
@@ -348,7 +350,7 @@ void scenarioWheelsDistanceMoveUsesRealOdometryBaseline() {
   Motion::MoveQueue::EnqueueResult enqRes = queue.enqueue(move, /*corrId=*/1, clock.nowMicros());
   checkTrue(enqRes.err == msg::ErrCode::ERR_NONE, "enqueue on empty queue is ERR_NONE");
 
-  drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+  drive.tick(0);
   runOneCycleAtZeroPosition(left, bus, kWireAddr, kPastWriteThrottleUs);
   runOneCycleAtZeroPosition(right, bus, kWireAddr, kPastWriteThrottleUs);
   checkFloatEq(left.appliedDuty(), kKff * 90.0f, "left duty reflects the RAW staged v_left -- no inverse() involved");
@@ -377,7 +379,7 @@ void scenarioWheelsDistanceMoveUsesRealOdometryBaseline() {
   checkFalse(queue.active(), "queue drains empty -- nothing was pending");
 
   // Empty-queue drain calls Drive::stop() -- verify both leaves reach 0.
-  drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+  drive.tick(0);
   driveToPosition(left, bus, kWireAddr, 90.0f, 320000);
   driveToPosition(right, bus, kWireAddr, 90.0f, 320000);
   checkFloatEq(left.appliedDuty(), 0.0f, "left duty reaches 0 -- empty-queue drain called Drive::stop()");
@@ -403,6 +405,7 @@ void scenarioAngleMoveUsesRealOdometryHeadingBaseline() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  drive.setDutyPerSpeed(kKff, kKff);
   applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
@@ -450,6 +453,7 @@ void scenarioTimeMoveContinuesThenCompletesAndDrainsEmptyToStop() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  drive.setDutyPerSpeed(kKff, kKff);
   applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
@@ -460,7 +464,7 @@ void scenarioTimeMoveContinuesThenCompletesAndDrainsEmptyToStop() {
                                   /*timeout=*/5000.0f, /*replace=*/false);
   queue.enqueue(move, /*corrId=*/3, clock.nowMicros());
 
-  drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+  drive.tick(0);
   runOneCycleAtZeroPosition(left, bus, kWireAddr, kPastWriteThrottleUs);
   runOneCycleAtZeroPosition(right, bus, kWireAddr, kPastWriteThrottleUs);
   checkTrue(left.appliedDuty() != 0.0f, "setup: left duty nonzero -- the Move is genuinely driving before completion");
@@ -477,7 +481,7 @@ void scenarioTimeMoveContinuesThenCompletesAndDrainsEmptyToStop() {
   checkFalse(tick2.completion.timedOut, "ended via the TIME condition, not the timeout backstop");
   checkFalse(queue.active(), "queue drains empty -- nothing was pending");
 
-  drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());  // flush the stop() staged by tick()'s empty-queue drain
+  drive.tick(0);  // flush the stop() staged by tick()'s empty-queue drain
   runOneCycleAtZeroPosition(left, bus, kWireAddr, kPastWriteThrottleUs + 200000);
   runOneCycleAtZeroPosition(right, bus, kWireAddr, kPastWriteThrottleUs + 200000);
   checkFloatEq(left.appliedDuty(), 0.0f, "left duty reaches 0 -- empty-queue drain called Drive::stop()");
@@ -501,6 +505,7 @@ void scenarioChainedMoveActivatesSameCycleNoInterveningStop() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  drive.setDutyPerSpeed(kKff, kKff);
   applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
@@ -526,7 +531,7 @@ void scenarioChainedMoveActivatesSameCycleNoInterveningStop() {
   // Drive is staged with B's (raw, unequal-sign) wheel targets, not A's and
   // not zero -- proves no intervening Drive::stop() ran between A ending
   // and B activating.
-  drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+  drive.tick(0);
   runOneCycleAtZeroPosition(left, bus, kWireAddr, kPastWriteThrottleUs);
   runOneCycleAtZeroPosition(right, bus, kWireAddr, kPastWriteThrottleUs);
   checkFloatEq(left.appliedDuty(), kKff * -40.0f, "left duty reflects B's staged v_left -- seamless hand-off, not A's or zero");
@@ -550,6 +555,7 @@ void scenarioReplaceTruePreemptsActiveAndFlushesPending() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  drive.setDutyPerSpeed(kKff, kKff);
   applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
@@ -568,7 +574,7 @@ void scenarioReplaceTruePreemptsActiveAndFlushesPending() {
   checkUintEq(queue.activeMoveId(), 33, "C preempted A -- C is now active");
   checkUintEq(static_cast<uint32_t>(queue.pendingCount()), 0, "B was flushed -- pending is empty");
 
-  drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+  drive.tick(0);
   runOneCycleAtZeroPosition(left, bus, kWireAddr, kPastWriteThrottleUs);
   runOneCycleAtZeroPosition(right, bus, kWireAddr, kPastWriteThrottleUs);
   checkFloatEq(left.appliedDuty(), kKff * -70.0f, "Drive is staged with C's targets, not A's");
@@ -599,6 +605,7 @@ void scenarioOverflowRejectedErrFullQueueByteForByteUnchanged() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  drive.setDutyPerSpeed(kKff, kKff);
   applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
@@ -646,6 +653,7 @@ void scenarioFlushDrainsAllPendingAndActiveWithNoCompletionAckAndStopsDrive() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  drive.setDutyPerSpeed(kKff, kKff);
   applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
@@ -659,7 +667,7 @@ void scenarioFlushDrainsAllPendingAndActiveWithNoCompletionAckAndStopsDrive() {
   checkTrue(queue.active(), "setup: A is active");
   checkUintEq(static_cast<uint32_t>(queue.pendingCount()), 2, "setup: B, C pending");
 
-  drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+  drive.tick(0);
   runOneCycleAtZeroPosition(left, bus, kWireAddr, kPastWriteThrottleUs);
   runOneCycleAtZeroPosition(right, bus, kWireAddr, kPastWriteThrottleUs);
   checkTrue(left.appliedDuty() != 0.0f, "setup: left duty nonzero -- A is genuinely driving before flush()");
@@ -669,7 +677,7 @@ void scenarioFlushDrainsAllPendingAndActiveWithNoCompletionAckAndStopsDrive() {
   checkFalse(queue.active(), "flush() ends the active Move -- queue is no longer active");
   checkUintEq(static_cast<uint32_t>(queue.pendingCount()), 0, "flush() drains every pending slot");
 
-  drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+  drive.tick(0);
   runOneCycleAtZeroPosition(left, bus, kWireAddr, kPastWriteThrottleUs + 200000);
   runOneCycleAtZeroPosition(right, bus, kWireAddr, kPastWriteThrottleUs + 200000);
   checkFloatEq(left.appliedDuty(), 0.0f, "flush() calls Drive::stop() -- left duty reaches 0");
@@ -701,6 +709,7 @@ void scenarioTimeoutEndsStalledDistanceMoveWithTimedOutTrue() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  drive.setDutyPerSpeed(kKff, kKff);
   applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());  // pathLength() stays 0 -- wheels never move in this scenario
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
@@ -736,6 +745,7 @@ void scenarioTickWithNoActiveMoveIsANoOp() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  drive.setDutyPerSpeed(kKff, kKff);
   applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);
@@ -790,6 +800,7 @@ void scenarioDistanceMoveShapesLinearSpeedRampUpThenTaperNearGoal() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  drive.setDutyPerSpeed(kKff, kKff);
   applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::ShaperLimits limits;
@@ -821,7 +832,7 @@ void scenarioDistanceMoveShapesLinearSpeedRampUpThenTaperNearGoal() {
   // Activation itself stages the CARRIED-OVER shaper state (0 -- a fresh
   // queue's own resting value), NOT the raw 300mm/s cruise target --
   // proves activate() doesn't jump straight to cruise when shaping is on.
-  drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+  drive.tick(0);
   runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
   runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
   checkFloatEq(left.appliedDuty(), 0.0f, "activation stages the carried-over shaper state (0), not raw cruise");
@@ -847,7 +858,7 @@ void scenarioDistanceMoveShapesLinearSpeedRampUpThenTaperNearGoal() {
     clock.setMicros(nowClockUs);
     Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
     checkFalse(tick.completed, "ramp-up phase -- still far from the 300mm threshold");
-    drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+    drive.tick(0);
     nowUs += 100000;
     runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
     runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
@@ -922,6 +933,7 @@ void scenarioAngleMoveShapesAngularSpeedRampUpThenTaperNearGoal() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  drive.setDutyPerSpeed(kKff, kKff);
   applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::ShaperLimits limits;
@@ -944,7 +956,7 @@ void scenarioAngleMoveShapesAngularSpeedRampUpThenTaperNearGoal() {
   queue.enqueue(move, /*corrId=*/2, clock.nowMicros());
 
   // Activation stages the carried-over shaper state (0), not raw omega.
-  drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+  drive.tick(0);
   runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
   runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
   checkFloatEq(left.appliedDuty(), 0.0f, "activation stages the carried-over shaper state (0), not raw omega");
@@ -975,7 +987,7 @@ void scenarioAngleMoveShapesAngularSpeedRampUpThenTaperNearGoal() {
     clock.setMicros(nowClockUs);
     Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
     checkFalse(tick.completed, "ramp-up phase -- still far from the 1.6rad threshold");
-    drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+    drive.tick(0);
     nowUs += 100000;
     runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
     runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
@@ -988,7 +1000,7 @@ void scenarioAngleMoveShapesAngularSpeedRampUpThenTaperNearGoal() {
     clock.setMicros(nowClockUs);
     Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
     checkFalse(tick.completed, "settling phase -- still far from the 1.6rad threshold");
-    drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+    drive.tick(0);
     nowUs += 100000;
     runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
     runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
@@ -1057,6 +1069,7 @@ void scenarioDistanceMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  drive.setDutyPerSpeed(kKff, kKff);
   applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::ShaperLimits limits;
@@ -1081,7 +1094,7 @@ void scenarioDistanceMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing() {
     clock.setMicros(nowClockUs);
     Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
     checkFalse(tick.completed, "ramp-up phase -- still far from the 300mm threshold");
-    drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+    drive.tick(0);
     nowUs += 100000;
     runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
     runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
@@ -1110,7 +1123,7 @@ void scenarioDistanceMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing() {
                  "far outside this loop's own <=4s virtual budget)");
       break;
     }
-    drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+    drive.tick(0);
     nowUs += 100000;
     runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
     runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
@@ -1139,6 +1152,7 @@ void scenarioAngleMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  drive.setDutyPerSpeed(kKff, kKff);
   applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::ShaperLimits limits;
@@ -1162,7 +1176,7 @@ void scenarioAngleMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing() {
     clock.setMicros(nowClockUs);
     Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
     checkFalse(tick.completed, "ramp-up phase -- still far from the 1.6rad threshold");
-    drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+    drive.tick(0);
     nowUs += 100000;
     runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
     runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
@@ -1191,7 +1205,7 @@ void scenarioAngleMoveCompletesViaLandAtZeroBeforeRawThresholdCrossing() {
                  "far outside this loop's own <=4s virtual budget)");
       break;
     }
-    drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+    drive.tick(0);
     nowUs += 100000;
     runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
     runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
@@ -1225,6 +1239,7 @@ void scenarioLandAtZeroNeverFiresWithShapingOff() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  drive.setDutyPerSpeed(kKff, kKff);
   applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::MoveQueue queue(drive, odom, kTrackWidth);  // ShaperLimits{} default -- shaping OFF
@@ -1299,6 +1314,7 @@ void scenarioOrthogonalBoundaryTurnToStraightUsesOrthogonalPredicate() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  drive.setDutyPerSpeed(kKff, kKff);
   applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::ShaperLimits limits;
@@ -1334,7 +1350,7 @@ void scenarioOrthogonalBoundaryTurnToStraightUsesOrthogonalPredicate() {
     clock.setMicros(nowClockUs);
     Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
     checkFalse(tick.completed, "ramp-up phase -- still far from the 1.6rad threshold");
-    drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+    drive.tick(0);
     nowUs += 100000;
     runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
     runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
@@ -1387,6 +1403,7 @@ void scenarioSameAxisBoundaryTurnToTurnKeepsChainPredicate() {
 
   TestSim::SimClock clock;
   App::Drive drive(left, right, kTrackWidth);
+  drive.setDutyPerSpeed(kKff, kKff);
   applyBaseGains(drive);
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   Motion::ShaperLimits limits;
@@ -1421,7 +1438,7 @@ void scenarioSameAxisBoundaryTurnToTurnKeepsChainPredicate() {
     clock.setMicros(nowClockUs);
     Motion::MoveQueue::TickResult tick = queue.tick(clock.nowMicros(), odom);
     checkFalse(tick.completed, "ramp-up phase -- still far from the 1.6rad threshold");
-    drive.tick(kKff * drive.vLeft(), kKff * drive.vRight());
+    drive.tick(0);
     nowUs += 100000;
     runOneCycleAtZeroPosition(left, bus, kWireAddr, nowUs);
     runOneCycleAtZeroPosition(right, bus, kWireAddr, nowUs);
