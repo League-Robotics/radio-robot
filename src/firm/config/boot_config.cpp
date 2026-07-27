@@ -160,8 +160,8 @@ DriveBootConfig defaultDriveConfig() {
     // to one value, which is exactly why the per-wheel split has to be
     // baked here rather than left to it.
     DriveBootConfig cfg;
-    cfg.dutyPerSpeedLeft = 0.00178571f;    // [duty/(mm/s)]
-    cfg.dutyPerSpeedRight = 0.00196078f;  // [duty/(mm/s)]
+    cfg.dutyPerSpeedLeft = 0.00187325f;    // [duty/(mm/s)]
+    cfg.dutyPerSpeedRight = 0.00187325f;  // [duty/(mm/s)]
     cfg.crawlPulse = 0.0f;                  // [-1,1]; 0 = off
     return cfg;
 }

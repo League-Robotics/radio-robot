@@ -90,8 +90,8 @@
     "v_body_max": 1000.0,
     "j_max": 5000.0,
     "yaw_jerk_max": 100.0,
-    "duty_per_speed_left": 0.00178571,
-    "duty_per_speed_right": 0.00196078,
+    "duty_per_speed_left": 0.00187325,
+    "duty_per_speed_right": 0.00187325,
     "crawl_pulse": 0.0,
     "_drive_calibration_note": "duty_per_speed_* [duty/(mm/s)]: open-loop wheel calibration, the inverse of the measured plant gain (speed_sweep 2026-07-27: L ~560, R ~510 mm/s per duty; ceiling ~500 mm/s). Per-wheel because the two gearboxes differ ~10%. crawl_pulse [-1,1]: fixed pulse amplitude for sub-breakaway wheel speeds, Bresenham-dithered in App::Drive; 0 disables. Measured breakaway is 1-6% duty and state-dependent (src/tests/firmware/duty_min/RESULTS.md) -- the earlier 0.20 was sized against a duty_sweep criterion that the standalone prober disproved, so crawl ships OFF pending a re-measure of the low end."
   },
