@@ -75,9 +75,12 @@ class Drive : public Motion::WheelSink {
   // leaves.
   void stop() override;
 
-  // Apply this cycle's duty pair to the two leaves (quiet at zero -- see
-  // drive.cpp).
+  // Apply this cycle's duty pair to the two leaves, crawl-shaped and
+  // quiet at zero (see drive.cpp).
   void tick(float dutyLeft, float dutyRight);  // [-1, 1] each
+
+  // Crawl-mode pulse amplitude; 0 disables (per-robot breakaway property).
+  void setCrawlPulse(float crawlPulse) { crawlPulse_ = crawlPulse; }
 
   // trackWidth -- read-only accessor (109-009: RobotLoop::updateTlm() needs
   // it to fuse the two leaves' measured velocities into the primary frame's
@@ -128,6 +131,12 @@ class Drive : public Motion::WheelSink {
   float vRightPrevious_ = 0.0f;   // [mm/s]
   float vLeftPrevious2_ = 0.0f;   // [mm/s] two ticks back
   float vRightPrevious2_ = 0.0f;  // [mm/s]
+  // Crawl shaper (drive.cpp crawlDuty()).
+  float crawlDuty(float duty, float& carry) const;
+  float crawlPulse_ = 0.0f;  // [-1, 1] pulse amplitude; 0 = off
+  float crawlCarryLeft_ = 0.0f;   // Bresenham accumulators
+  float crawlCarryRight_ = 0.0f;
+
   // Last duty pair actually written (quiet-at-zero baseline).
   float writtenLeft_ = 0.0f;   // [-1, 1]
   float writtenRight_ = 0.0f;  // [-1, 1]

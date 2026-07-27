@@ -315,7 +315,7 @@ int main() {
   // Crawl mode: sub-breakaway wheel-speed requests become 0.30-duty
   // pulses, Bresenham-dithered (measured breakaway 0.10-0.19 across
   // wheels/directions, duty_sweep 2026-07-27).
-  robotLoop.setCrawlPulse(0.30f);
+  drive.setCrawlPulse(0.30f);
 
   robotLoop.run();
 }

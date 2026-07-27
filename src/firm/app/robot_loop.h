@@ -70,9 +70,6 @@ class RobotLoop {
   // key -- applyMotorConfigPatch()).
   void setDutyPerSpeed(float dutyPerSpeed) { dutyPerSpeed_ = dutyPerSpeed; }
 
-  // Crawl-mode pulse amplitude; 0 disables (per-robot breakaway property).
-  void setCrawlPulse(float crawlPulse) { crawlPulse_ = crawlPulse; }
-
  private:
   uint32_t markTime() const;                    // [ms]
   void sleepUntil(uint32_t mark, uint32_t gap);  // [ms] [ms]
@@ -95,9 +92,6 @@ class RobotLoop {
 
   // Flash write policy: save only when the serialized snapshot changed.
   void persistTuningIfChanged();
-
-  // Crawl-mode pulse shaper (see robot_loop.cpp crawlDuty()).
-  float crawlDuty(float duty, float& carry);
 
   // --- cycle() steps, in schedule order ---
 
@@ -153,10 +147,6 @@ class RobotLoop {
   // 2026-07-26); the wire kff key recalibrates it (sim plants differ),
   // and the duty sweep will refine it per wheel.
   float dutyPerSpeed_ = 1.0f / 1370.0f;  // [duty/(mm/s)]
-  float crawlPulse_ = 0.0f;  // [-1,1] crawl pulse amplitude; 0 = off
-  // Crawl-mode Bresenham accumulators, one per wheel.
-  float crawlCarryLeft_ = 0.0f;
-  float crawlCarryRight_ = 0.0f;
 
   // Direct wheel-speeds command (bypasses the planner): targets held here
   // so a drained planner's update() cannot overwrite the state's

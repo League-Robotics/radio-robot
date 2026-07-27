@@ -126,24 +126,6 @@ void RobotLoop::runAndWait(uint32_t gap, Body body) {  // [ms]
   sleepUntil(mark, gap);
 }
 
-// Sub-breakaway requests become fixed-amplitude pulses whose fire ratio
-// preserves the requested average duty; at/above the pulse amplitude the
-// request passes through untouched. crawlPulse_ == 0 disables (sim
-// plants have no stiction; the amplitude is a per-robot property that
-// must clear the measured breakaway, main.cpp).
-float RobotLoop::crawlDuty(float duty, float& carry) {
-  const float magnitude = std::fabs(duty);
-  if (crawlPulse_ == 0.0f || magnitude >= crawlPulse_) return duty;
-  if (magnitude == 0.0f) {
-    carry = 0.0f;
-    return 0.0f;
-  }
-  carry += magnitude / crawlPulse_;
-  if (carry < 1.0f) return 0.0f;
-  carry -= 1.0f;
-  return std::copysign(crawlPulse_, duty);
-}
-
 float RobotLoop::clampToPositionWireBound(float pos, bool* clamped) {
   *clamped = std::fabs(pos) > kPositionWireBound;
   return *clamped ? std::copysign(kPositionWireBound, pos) : pos;
@@ -541,15 +523,10 @@ void RobotLoop::cycle() {
   }
 
   // Drive the wheels from the state's commanded speeds, open loop -- one
-  // cycle command-to-actuation, symmetric across L/R. Sub-breakaway
-  // targets crawl: fixed kCrawlPulse-amplitude pulses, whole-cycle
-  // Bresenham-dithered so the AVERAGE duty matches the request -- the
-  // wheel's ~230 ms inertia is the low-pass filter (crawl-mode
-  // experiment, 2026-07-27).
-  drive_.tick(crawlDuty(state_.wheelLeft.cmdVelocity * dutyPerSpeed_,
-                        crawlCarryLeft_),
-              crawlDuty(state_.wheelRight.cmdVelocity * dutyPerSpeed_,
-                        crawlCarryRight_));
+  // cycle command-to-actuation, symmetric across L/R (Drive crawl-shapes
+  // sub-breakaway requests).
+  drive_.tick(state_.wheelLeft.cmdVelocity * dutyPerSpeed_,
+              state_.wheelRight.cmdVelocity * dutyPerSpeed_);
 
   motorL_.requestSample();  // brick latches ONE pending read per select
   runAndWait(kSettle, [&] { comms_.pump(cmd, state_.time.cycleStart); });
