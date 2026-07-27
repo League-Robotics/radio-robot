@@ -4,6 +4,11 @@ status: pending
 
 # Rebuild the motion planner core: per-wheel distance profiling + velocity-domain PID
 
+> **Implementation status (2026-07-27, out of process).** Steps T1-T5 and T7
+> are DONE and verified; T0 and T6 are NOT done — see "What was built" at the
+> end of this file for what changed relative to the proposal below, the three
+> defects the work uncovered, and why the two cleanup steps were deferred.
+
 ## Description
 
 `Motion::Planner` has not caught up with two changes that landed around it: the
@@ -252,16 +257,51 @@ fail-closed at all-zero. `applyVelGains()` → `applyTrimGains()`.
 
 ### Constraints that override the naive reading of the requirement
 
-**Do NOT integrate measured velocity to get distance traveled.**
-`wheel.velocity` is a naive per-tick difference quotient with no filter in the
-firmware leaf ([nezha_motor.cpp:212](../../src/firm/devices/nezha_motor.cpp#L212),
-documented at [nezha_motor.h:140](../../src/firm/devices/nezha_motor.h#L140));
-integrating it accumulates rectified noise. This codebase already paid for that
+**The distance ledger is re-anchor plus bounded extrapolation, never
+accumulation.** Each tick, take the freshly measured encoder position as truth
+and extrapolate forward only across the known gap since that read; throw the
+extrapolation away and recompute it from scratch next tick. Its error is bounded
+by one gap and is corrected by the next anchor, so it never accumulates. This is
+already what `WheelChannel::positionAt()`
+([estimation.cpp:22-30](../../src/motion/planner/estimation.cpp#L22-L30)) and
+`Planner::measure()` do; the per-wheel rework must preserve it.
+
+What must NOT happen is the other operation: `distance += v·dt` accumulated
+across ticks. `wheel.velocity` is a naive per-tick difference quotient with no
+filter in the firmware leaf
+([nezha_motor.cpp:212](../../src/firm/devices/nezha_motor.cpp#L212), documented
+at [nezha_motor.h:140](../../src/firm/devices/nezha_motor.h#L140)), so
+accumulating it rectifies noise one-way. This codebase already paid for that
 lesson — [planner.cpp:571-577](../../src/motion/planner/planner.cpp#L571-L577)
-records `pathLength()` inflating by ~0.07 mm per jitter cycle and completing
-Moves measurably short. **Per-wheel travel must be `channel.basisPosition() -
-baseline_w`** — a telescoping difference of real cumulative encoder positions,
-drift-free by construction.
+records `pathLength()` inflating ~0.07 mm per jitter cycle and completing Moves
+measurably short. **Per-wheel travel is anchored on
+`channel.basisPosition() - baseline_w`** — a telescoping difference of real
+cumulative encoder positions — with the extrapolation added on top.
+
+Three details of the existing scheme the rework must carry forward:
+
+- **Two spans are extrapolated, not one.** `[anchorTime → now]` (already
+  elapsed, unobserved because the sample is older than the loop) *and*
+  `[now → now + actuationDelay]` (this tick's command does not reach the wheels
+  until the next cycle). At 47 ms and 400 mm/s the second span is ~19 mm. Each
+  is attributed to the command that actually drove it — `cmdPrevious_` for the
+  elapsed span, `cmd_` for the future one
+  ([planner.cpp:552-563](../../src/motion/planner/planner.cpp#L552-L563)).
+- **The extrapolation uses the COMMANDED velocity, not the measured one**
+  ([planner.cpp:544-548](../../src/motion/planner/planner.cpp#L544-L548)): the
+  command is exact where the encoder derivative is very noisy, and this term is
+  *differenced* for the angular axis, where per-wheel noise does not cancel the
+  way it does in the mean. Keep commanded — the velocity trim's job is to make
+  the plant track, so commanded only gets more trustworthy as this work lands.
+  **Open call, settle from the sim CSV:** measured is the honest alternative if
+  tracking proves poor; it is a one-line switch and the per-tick capture carries
+  both.
+- **Chained moves do not re-baseline on the fresh encoder read.**
+  `activateNext()` baselines a successor on the predecessor's cumulative
+  boundary (`baseline + threshold`), so a leg's sub-tick overshoot is debited to
+  the next leg and a four-leg square leaks zero total error. Re-baselining on
+  the live encoder at each move start would silently forgive each leg's
+  overshoot and let it accumulate around the tour.
 
 **Do NOT store a decel-start point.** `profileStep()` stores no such point and
 asks per-tick "is the max reachable velocity still feasible?" — the same
@@ -409,6 +449,102 @@ with Drive's feedforward inversion — the real hardware path.
 
 Acceptance: square closure error and final heading error, trim on vs off, on the
 asymmetric plant.
+
+## What was built
+
+Delivered on `pid-removal`, out of process, 2026-07-27. Every planner test
+suite green (9 binaries), `just build-sim` and `just build` clean.
+
+**Done as proposed:** T1 (`profile.h` `StepPhase` + `aDecelPlan`), T2
+(`shape.{h,cpp}` + `shape_test`), T3 (per-wheel phase machine + ratio lock in
+`Planner::planWheels()`), T4 (`boundaryLambda()` shape-space lookahead), T5
+(`WheelTrim` in `wheel_trim.{h,cpp}`, hold-only integrator), T7 (the sim tour,
+`bench/square_tour_velocity.py`).
+
+**Changed during implementation:**
+
+- **The axis-unit bridge.** Rather than converting the whole planner to wheel
+  units, `ActiveMove::axisPerLambda` bridges only inside `planWheels()`.
+  Everything outside it -- the completion tests, `activeBoundary_`,
+  `profileVelocity_`, the settle creep -- keeps its existing units, which is
+  why `planner_scenarios_test` and `planner_noise_test` passed unmodified.
+- **`Wheels` Moves keep ramp-and-hold.** Per-wheel distance profiling applies
+  to Twist `Distance`/`Angle` Moves. The `Wheels` early-return path is
+  deliberately untouched (the scenario tests lock that semantic in).
+- **`WheelTrim` is a NEW type**, not a modified `WheelPid`; the duty stage is
+  untouched and still passes its own tests.
+- **`decelPlanFraction` added to `PlannerLimits`** as the user-facing leeway
+  knob feeding `aDecelPlan`, with a per-Move feasibility floor in
+  `shapeLimits()`.
+- **Heading hold stays ON** (`headingHoldGain = 2.0` in the tour). The
+  proposal suggested retiring it once the trim proved out; measurement says
+  otherwise. The trim's integrator is gated to the hold phase, and ~31% of a
+  tour is spent in ramps where proportional action alone leaves a few percent
+  of gain error. That residual integrates into ANGLE, which no wheel-RATE
+  loop can retire. Inner rate loop + outer angle loop is the right pair; the
+  ratio lock is not a third corrector (it never reads a measurement).
+
+**Three defects the new tests found, all fixed:**
+
+1. **The drain broke the commanded ratio.** `drainToZero()` and the planned
+   stop subtracted the same ABSOLUTE step from each wheel, so a robot
+   stopping out of an arc straightened as it slowed. Now proportional
+   (`rampCommandsToZero()`); identical arithmetic for 1:1 and -1:1 shapes.
+2. **The drain used the wrong decel ceiling.** It ramped at the body-frame
+   `aDecel` while the profile landed under shape-space limits, so the
+   terminal step did not fit in one drain step and leaked ~18 um per landing
+   on a tight arc. Now `drainDecel()` uses the shape's own ceiling.
+3. **`PlannerLimits` ctypes mirror scrambled.** The trim fields were added
+   mid-struct in C++ and appended in `py/planner_harness.py`; both sizes
+   matched, so the size-only `plannerStructSizes` guard passed while every
+   field after the insertion read a different member. It presented as a
+   wildly mistuned controller. Fixed by appending in both, and
+   `plannerLimitsOffsets()` now checks per-field OFFSETS. **New rule: append
+   `PlannerLimits` fields at the END, never mid-struct.**
+
+**NOT done, deliberately:**
+
+- **T6 (park the duty stage behind a build flag).** Deferred: `stageDuty()`
+  is called unconditionally and its `velK*` fields are set by
+  `sim_harness.h`, so making it conditional is invasive, and the payoff (~90
+  lines out of the image) is modest against the risk.
+- **T0 (delete the dead legacy stack).** Deferred: the proposal assumed pure
+  subtraction, but a reference sweep found ~40 non-archive files touching
+  `move_queue`/`velocity_shaper`/`stop_condition`, including live host Python
+  (`sim_loop.py`, `transport.py`, `planner/tour.py`, `protocol.py`) and many
+  sim system tests. Most are the PROTOCOL sense of "stop condition"
+  (`stop_distance`/`stop_angle`), not the C++ class, so the cut needs a
+  careful triage pass rather than a bulk delete. `src/sim/sim_harness.h` also
+  still constructs a `Motion::MoveQueue`. Worth doing; needs its own session.
+
+**A fourth build source list exists.** Beyond `src/motion/planner/CMakeLists.txt`
+and `src/sim/CMakeLists.txt`, eight `src/tests/sim/**/test_*.py` files each
+carry their OWN hand-maintained `_APP_SOURCES` list and compile their harness
+with a bare `c++` invocation. A new planner `.cpp` must be added to all three
+places or those tests fail at LINK time, not compile time. Patched here for
+`shape.cpp` and `wheel_trim.cpp`.
+
+**Test baseline.** After the source-list fix the suite is 9 failed / 598
+passed under `src/tests/testgui`. Those 9 (`test_tour_closure_gate`,
+`test_gui_button_acceptance` turns/tours, `test_sim_transport_tour1`,
+`test_error_divergence`) are **PRE-EXISTING**: a worktree built at `5065775a`
+fails the identical 9 with byte-identical numbers (turn error
+-10.469468549668306). They are Tour-1/Tour-2 90-degree turns landing ~7-10
+deg short in the TestGUI sim -- unrelated to this work and still open.
+
+**Bench result** (`bench/square_tour_velocity.py`, asymmetric plant, wheels
++-4.8% apart in true gain after a shared-constant calibration):
+
+| | closure | worst leg | worst turn |
+|---|---|---|---|
+| trim OFF | 177.1 mm (8.85%) | 129.8 mm | 21.6 deg |
+| trim ON | 16.0 mm (0.80%) | 1.9 mm | 1.6 deg |
+
+Two tuning facts worth keeping: `trimKaff` at the FULL plant tau is unstable
+(closure 696 mm); half tau is the working value. And the sim's Drive mirror
+must model `NezhaMotor::writeShapedDuty()`'s output deadband -- without it a
+gently-landing profile stalls dead below breakaway, which looked like a
+planner collapse but was a modeling omission.
 
 ## Related
 

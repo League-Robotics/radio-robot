@@ -120,6 +120,60 @@ struct PlannerLimits {
   // the arrival epsilons. Defaults match the previous built-in constants.
   float settleRestVelocity = 5.0f;  // [mm/s]
   float settleRestOmega = 0.02f;    // [rad/s]
+
+  // Velocity-domain trim (wheel_trim.h) -- the closed loop that actually
+  // reaches the wheels, since the loop's one actuation contract is a wheel
+  // VELOCITY and App::Drive owns the calibrated velocity->duty map. The
+  // planner stages `profiledTarget + trim`. Fail-closed at all-zero: the
+  // trim is exactly 0 and the staged command is bit-for-bit the profile.
+  //
+  // Deliberately NO trimKff -- see wheel_trim.h for why a feedforward term
+  // in this domain would double-count a target that is already there.
+  //
+  // APPEND NEW FIELDS HERE, AT THE END. py/planner_harness.py mirrors this
+  // struct field-for-field over ctypes; inserting mid-struct silently
+  // scrambles every field after the insertion point on the Python side,
+  // and a same-size insertion passes a size-only guard. plannerStructSizes
+  // now checks per-field OFFSETS too, which is what catches it.
+  float trimKp = 0.0f;    // [1] dimensionless: mm/s of trim per mm/s of error
+  float trimKi = 0.0f;    // [1/s]
+  float trimIMax = 0.0f;  // [mm/s] integrator clamp; 0 disables integration
+  float trimKaff = 0.0f;  // [s] accel feedforward ~= plant time constant
+  float trimMax = 0.0f;   // [mm/s] total trim authority; 0 = unclamped
+
+  // Decel LEEWAY: the fraction of the decel ceiling the profile plans its
+  // brake-START against (profile.h AxisLimits::aDecelPlan). 0 or 1 means
+  // "plan at full authority", the pre-existing behavior.
+  //
+  // Below 1 the profile commits to braking sooner and rides a gentler
+  // ramp, holding the rest of the authority in reserve. That matters on a
+  // plant with a real time constant: braking at the full ceiling, the
+  // wheel cannot follow the command down, so the command reaches zero
+  // while the wheel is still moving and the body COASTS ~v*tau past the
+  // target (measured here as +6.5 deg of overshoot past the last turn of
+  // a square tour). A gentler planned ramp is one the plant can actually
+  // track, so it arrives at the boundary already slow.
+  //
+  // This is decel-AUTHORITY headroom, not command-authority headroom: the
+  // profile still commands all the way down to the boundary, and the
+  // terminal step and the per-step floor still use the FULL ceiling, so
+  // the landing stays discrete-exact and an infeasible state still brakes
+  // as hard as it can.
+  float decelPlanFraction = 0.0f;  // [1] 0 or 1 = full authority
+};
+
+// Which regime the ACTIVE Move is in, folded from both wheels' StepPhase
+// (profile.h) and latched so it can never run backwards: a Move
+// accelerates, holds, then decelerates, and never accelerates again once
+// it has begun braking. The velocity trim gates its integrator on this --
+// integrating during a ramp winds up work that belongs to the
+// feedforward, and releases it as an overshoot at cruise entry.
+enum class MovePhase : uint8_t {
+  Idle,     // no active Move, or the queue is draining
+  Accel,    // climbing toward cruise
+  Hold,     // at cruise, command unchanged -- the only phase that integrates
+  Decel,    // braking toward the landing boundary
+  Settle,   // profile complete; the closed-loop terminal creep is running
 };
 
 // The per-tick completion event, returned by tick() (never written into

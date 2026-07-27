@@ -84,6 +84,14 @@ struct PerfectPlant {
 //   positionQuantum -- the encoder reports whole ticks, not real numbers.
 //   creepVelocity -- an unmodelled drive that never lets the body rest;
 //       used to drive the settle window to expiry.
+//   gainLeft / gainRight -- per-wheel scale between the COMMANDED velocity
+//       and the velocity the wheel actually reaches. This is the one
+//       defect a purely feedforward stack cannot correct and the velocity
+//       trim exists for: the measured speed->duty study found the two
+//       wheels ~2% apart in true gain, and any residual after calibration
+//       lands here. Asymmetric values make the two wheels' remaining
+//       distances genuinely diverge, which is what the ratio lock and the
+//       trim are each tested against.
 struct NoisyPlant {
   float noiseAmplitude = 0.0f;    // [mm/s] +- alternating, per published sample
   float noiseWhite = 0.0f;        // [mm/s] +- deterministic pseudo-random
@@ -92,6 +100,8 @@ struct NoisyPlant {
   float trackingLag = 1.0f;       // [0..1] velocity response per interval; 1 = instant
   float positionQuantum = 0.0f;   // [mm] encoder resolution; 0 = continuous
   float creepVelocity = 0.0f;     // [mm/s] added to both wheels, always
+  float gainLeft = 1.0f;          // [1] achieved / commanded, left wheel
+  float gainRight = 1.0f;         // [1] achieved / commanded, right wheel
 
   float positionLeft = 0.0f;   // [mm] ground truth
   float positionRight = 0.0f;  // [mm] ground truth
@@ -112,8 +122,8 @@ struct NoisyPlant {
         creepVelocity;
     stagedLeft_ = state.wheelLeft.cmdVelocity;
     stagedRight_ = state.wheelRight.cmdVelocity;
-    actualLeft_ += trackingLag * (targetLeft - actualLeft_);
-    actualRight_ += trackingLag * (targetRight - actualRight_);
+    actualLeft_ += trackingLag * (targetLeft * gainLeft - actualLeft_);
+    actualRight_ += trackingLag * (targetRight * gainRight - actualRight_);
     positionLeft += actualLeft_ * dt;
     positionRight += actualRight_ * dt;
 

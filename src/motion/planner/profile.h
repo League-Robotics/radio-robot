@@ -11,6 +11,8 @@
 // this is what replaces the swept land-at-zero margin constants.
 #pragma once
 
+#include <cstdint>
+
 namespace Motion {
 
 // One axis's ceilings, positive frame. Units are [mm/s]/[mm/s^2] for the
@@ -27,12 +29,43 @@ struct AxisLimits {
   // authority: the discrete feasibility/braking accounting stays exact
   // and the landing guarantee is untouched.
   float jMax = 0.0f;
+  // Decel used for the brake-START decision only -- the feasibility
+  // accounting that answers "may we hold this velocity one more interval?".
+  // 0 means "same as aDecel", so every pre-existing brace-init behaves
+  // exactly as before; a value above aDecel is clamped down to it, so the
+  // plan can never promise more than the authority.
+  //
+  // Setting it BELOW aDecel is the leeway: the profile commits to braking
+  // sooner and rides a gentler ramp, holding (aDecel - aDecelPlan) in
+  // reserve for the plant to fall behind into. The terminal closing step
+  // and the per-step floor still use the FULL aDecel, so the landing stays
+  // discrete-exact and a state that HAS gone infeasible still brakes at
+  // full authority. This is decel-AUTHORITY headroom, never
+  // command-authority headroom: the profile always commands the wheel all
+  // the way down to the boundary and never stops commanding early to let
+  // friction finish -- plant tau ~230 ms, so coasting overshoots.
+  float aDecelPlan = 0.0f;
+};
+
+// Which regime produced a step. The planner folds both wheels' phases into
+// the Move's own MovePhase; the velocity trim gates its integrator on it.
+enum class StepPhase : uint8_t {
+  Accel,    // commanded velocity is climbing toward cruise
+  Hold,     // sitting at the cruise ceiling, unchanged
+  Decel,    // braking -- either to land, or down toward a lower cruise
+  Closing,  // the exact terminal step; lands remaining at zero
 };
 
 struct ProfileResult {
   float velocity = 0.0f;  // positive-frame command for the next interval
   bool closing = false;   // true: this command lands remaining exactly at zero
+  StepPhase phase = StepPhase::Accel;
 };
+
+// The decel the brake-START decision plans against: aDecelPlan when set,
+// else aDecel, never more than aDecel. Exposed because the lookahead has to
+// ask the same feasibility question profileStep() asks internally.
+float planDecel(const AxisLimits& limits);
 
 // Minimum distance consumed by the max-decel staircase that takes the
 // commanded velocity from `velocity` down to within one decel step of
