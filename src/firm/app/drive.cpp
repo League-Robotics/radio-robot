@@ -72,6 +72,32 @@ void Drive::update(Types::RobotState& state, uint32_t now) {
 // pulsing. At/above the amplitude the request passes through untouched.
 // crawlPulse_ == 0 disables (sim plants have no stiction; the amplitude
 // is a per-robot property that must clear the measured breakaway).
+void Drive::setWheelCorrection(float gLA, float iLA, float gLD, float iLD,
+                               float gRA, float iRA, float gRD, float iRD) {
+  corrGain_[0][0] = gLA;  corrIntercept_[0][0] = iLA;
+  corrGain_[0][1] = gLD;  corrIntercept_[0][1] = iLD;
+  corrGain_[1][0] = gRA;  corrIntercept_[1][0] = iRA;
+  corrGain_[1][1] = gRD;  corrIntercept_[1][1] = iRD;
+}
+
+// The characterization measured `actual = gain*commanded + intercept` per
+// wheel per direction of approach; inverting it gives the command whose
+// ACTUAL result is the speed asked for -- the feedforward's first guess.
+// The fit was taken on positive speeds, so a reverse command is corrected
+// on its magnitude and the sign restored.
+float Drive::correctedCommand(float desired, float previous,
+                              bool leftWheel) const {
+  if (desired == 0.0f) return 0.0f;  // stop is stop; never offset it
+  const int w = leftWheel ? 0 : 1;
+  // "Accelerating" is about |speed| rising, not about which way the wheel
+  // turns: a pivot runs one wheel negative and both must classify sanely.
+  const int d = (std::fabs(desired) > std::fabs(previous)) ? 0 : 1;
+  const float magnitude =
+      (std::fabs(desired) - corrIntercept_[w][d]) / corrGain_[w][d];
+  if (magnitude <= 0.0f) return 0.0f;  // below the intercept: unreachable
+  return std::copysign(magnitude, desired);
+}
+
 float Drive::crawlDuty(float duty, float& carry) const {
   const float magnitude = std::fabs(duty);
   if (crawlPulse_ == 0.0f || magnitude >= crawlPulse_) return duty;
@@ -99,10 +125,16 @@ void Drive::tick(float speedLeft, float speedRight) {
   // standing still is the right answer to that.
   if (!calibrated_) return;
 
+  const float commandLeft = correctedCommand(speedLeft, lastSpeedLeft_, true);
+  const float commandRight =
+      correctedCommand(speedRight, lastSpeedRight_, false);
+  lastSpeedLeft_ = speedLeft;
+  lastSpeedRight_ = speedRight;
+
   const float dutyLeft =
-      crawlDuty(speedLeft * dutyPerSpeedLeft_, crawlCarryLeft_);
+      crawlDuty(commandLeft * dutyPerSpeedLeft_, crawlCarryLeft_);
   const float dutyRight =
-      crawlDuty(speedRight * dutyPerSpeedRight_, crawlCarryRight_);
+      crawlDuty(commandRight * dutyPerSpeedRight_, crawlCarryRight_);
   const bool quiet = dutyLeft == 0.0f && dutyRight == 0.0f &&
                      writtenLeft_ == 0.0f && writtenRight_ == 0.0f;
   if (quiet) return;

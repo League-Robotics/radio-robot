@@ -581,6 +581,45 @@
           "minimum": 0,
           "maximum": 1,
           "description": "[-1,1] crawl pulse amplitude for sub-breakaway speeds; 0 disables."
+        },
+        "wheel_gain_left_accel": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "measured/commanded slope for this wheel and direction of approach"
+        },
+        "wheel_intercept_left_accel": {
+          "type": "number",
+          "description": "[mm/s] measured/commanded intercept for this wheel and direction"
+        },
+        "wheel_gain_left_decel": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "measured/commanded slope for this wheel and direction of approach"
+        },
+        "wheel_intercept_left_decel": {
+          "type": "number",
+          "description": "[mm/s] measured/commanded intercept for this wheel and direction"
+        },
+        "wheel_gain_right_accel": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "measured/commanded slope for this wheel and direction of approach"
+        },
+        "wheel_intercept_right_accel": {
+          "type": "number",
+          "description": "[mm/s] measured/commanded intercept for this wheel and direction"
+        },
+        "wheel_gain_right_decel": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "measured/commanded slope for this wheel and direction of approach"
+        },
+        "wheel_intercept_right_decel": {
+          "type": "number",
+          "description": "[mm/s] measured/commanded intercept for this wheel and direction"
+        },
+        "_wheel_correction_note": {
+          "type": "string"
         }
       }
     },

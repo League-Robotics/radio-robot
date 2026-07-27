@@ -213,7 +213,7 @@ struct Cmd {
 // but be unobservable. The two depths are therefore kept EQUAL
 // (telemetry.h's kAckRingDepth carries the matching note) -- that
 // constraint picks 12, it is not a free choice.
-constexpr uint8_t kCmdRingDepth = 12;
+constexpr uint8_t kCmdRingDepth = 6;
 
 // kPumpMaxLines -- hard bound on how many wire lines ONE pump() call
 // consumes. pump() runs inside the loop's existing settle/clear/pace

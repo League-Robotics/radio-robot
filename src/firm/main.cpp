@@ -179,6 +179,11 @@ int main() {
   {
     const Config::DriveBootConfig driveConfig = Config::defaultDriveConfig();
     drive.setDutyPerSpeed(driveConfig.dutyPerSpeedLeft, driveConfig.dutyPerSpeedRight);
+    drive.setWheelCorrection(
+        driveConfig.gainLeftAccel, driveConfig.interceptLeftAccel,
+        driveConfig.gainLeftDecel, driveConfig.interceptLeftDecel,
+        driveConfig.gainRightAccel, driveConfig.interceptRightAccel,
+        driveConfig.gainRightDecel, driveConfig.interceptRightDecel);
     drive.setCrawlPulse(driveConfig.crawlPulse);
   }
   static Motion::Odometry odom(drivetrainConfig.trackwidth, motorL.position(), motorR.position());

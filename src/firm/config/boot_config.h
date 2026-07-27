@@ -211,6 +211,19 @@ struct DriveBootConfig {
   float dutyPerSpeedLeft = 0.0f;   // [duty/(mm/s)] 1 / measured plant gain, left
   float dutyPerSpeedRight = 0.0f;  // [duty/(mm/s)] 1 / measured plant gain, right
   float crawlPulse = 0.0f;         // [-1, 1] sub-breakaway pulse amplitude; 0 = off
+
+  // Commanded->actual correction, per wheel per direction of approach:
+  // measured = gain*commanded + intercept (docs/design/
+  // wheel-speed-command-mapping.md). Drive inverts it for the feedforward.
+  // gain 1 / intercept 0 == no correction (an uncalibrated robot).
+  float gainLeftAccel = 1.0f;        // measured/commanded slope, left wheel, accel
+  float interceptLeftAccel = 0.0f;   // [mm/s] its intercept
+  float gainLeftDecel = 1.0f;        // measured/commanded slope, left wheel, decel
+  float interceptLeftDecel = 0.0f;   // [mm/s] its intercept
+  float gainRightAccel = 1.0f;        // measured/commanded slope, right wheel, accel
+  float interceptRightAccel = 0.0f;   // [mm/s] its intercept
+  float gainRightDecel = 1.0f;        // measured/commanded slope, right wheel, decel
+  float interceptRightDecel = 0.0f;   // [mm/s] its intercept
 };
 
 // The boot DriveBootConfig default -- see DriveBootConfig's own doc comment

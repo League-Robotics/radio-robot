@@ -60,6 +60,14 @@ class Drive : public Motion::WheelSink {
     calibrated_ = left != 0.0f && right != 0.0f;
   }
 
+  // Commanded->actual correction, per wheel per direction of approach
+  // (docs/design/wheel-speed-command-mapping.md). Drive inverts the measured
+  // line to seed the feedforward. gain 1 / intercept 0 = no correction.
+  void setWheelCorrection(float gainLeftAccel, float interceptLeftAccel,
+                          float gainLeftDecel, float interceptLeftDecel,
+                          float gainRightAccel, float interceptRightAccel,
+                          float gainRightDecel, float interceptRightDecel);
+
   // Crawl-mode pulse amplitude; 0 disables (per-robot breakaway property,
   // and the shipped default -- see Config::DriveBootConfig's own doc
   // comment for why 0.20 was wrong).
@@ -134,6 +142,17 @@ class Drive : public Motion::WheelSink {
   float trackWidth() const { return trackWidth_; }  // [mm]
 
  private:
+  // Invert the measured line for one wheel: the command whose ACTUAL
+  // result is `desired`. `previous` picks the accel/decel branch.
+  float correctedCommand(float desired, float previous, bool leftWheel) const;
+
+  // Correction table [wheel][direction]: 0 = left/right, 0 = accel/decel.
+  float corrGain_[2][2] = {{1.0f, 1.0f}, {1.0f, 1.0f}};
+  float corrIntercept_[2][2] = {{0.0f, 0.0f}, {0.0f, 0.0f}};
+  // Speed last converted per wheel -- the accel/decel discriminator.
+  float lastSpeedLeft_ = 0.0f;   // [mm/s]
+  float lastSpeedRight_ = 0.0f;  // [mm/s]
+
   // Crawl shaper (drive.cpp).
   float crawlDuty(float duty, float& carry) const;
 
