@@ -80,6 +80,22 @@ struct PlannerLimits {
   // releasing. 0 = off.
   float velKaff = 0.0f;  // [duty/(mm/s^2)]
   float velIAccelGate = 1.0e9f;  // [mm/s^2] integral ramp gate (wheel_pid.h)
+  // Motor write-suppression deadband ([-1,1] duty): the leaf's armored
+  // write forces any |duty| below this to zero before it reaches the bus,
+  // so a NONZERO commanded velocity whose PID duty computes below it is a
+  // command the hardware silently ignores -- measured on the robot as the
+  // settle creep stalling dead for ~1 s (then walking back on one wheel
+  // only) while ~0.02-duty commands evaporated. The duty stage floors the
+  // staged duty here whenever the commanded velocity is nonzero. 0 = off.
+  float dutyFloor = 0.0f;
+  // Settle-confirm arrival tolerances -- "close enough to the target" for
+  // THIS robot's fine-positioning resolution. On an ideal plant the
+  // defaults are easily reachable; on a stiction plant whose minimum
+  // creep step is one dutyFloor pulse per control period, an epsilon
+  // finer than that step is unreachable and every settling Move burns
+  // the whole settleWindow before completing at expiry.
+  float settleEpsilonLinear = 1.0f;     // [mm]
+  float settleEpsilonAngular = 0.005f;  // [rad]
 
   // Jerk ceilings (S-curve shaping): bound how fast the PROFILE's own
   // acceleration may change, and taper acceleration to zero exactly at

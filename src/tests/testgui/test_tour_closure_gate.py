@@ -205,7 +205,21 @@ _BOUNDARY_MIN_FRACTION = 0.9          # matches boundary_velocity_harness.cpp's 
 # This gate is re-measured against the land-at-zero regime with NO lead
 # constant pushed at all -- see this file's own git history for the full
 # multi-retune chronology of the deleted constant if it is ever needed.
-_TURN_TOLERANCE_SHAPED_DEG = 2.5
+# Planner cumulative-ledger era (2026-07-27): a chained turn anchors from
+# the CUMULATIVE heading baseline, so a single turn's achieved delta
+# legitimately includes a correction for residual the chain accumulated
+# before it -- including straight-leg heading drift an encoder-only
+# controller cannot even see under this file's realistic error profile.
+# A turn commanded +90 achieving +93 is the ledger doing its job, and the
+# correction magnitude scales with tour length/drift, so a tight per-turn
+# band no longer measures turn quality. The per-turn assertion is kept as
+# a GROSS-FAILURE sanity bound (a busted turn misses by tens of degrees);
+# the accuracy contract the ledger exists to protect is tour CLOSURE,
+# asserted separately below with its own unchanged tolerances -- and
+# closure is what the ledger measurably tightened (bench square tour:
+# +17.3 deg heading error with same-kind-only carry, +2.6 deg with the
+# full ledger, 2026-07-27).
+_TURN_TOLERANCE_SHAPED_DEG = 8.0
 
 # decel-into-the-goal campaign: Motion::VelocityShaper's own accel/decel/
 # jerk ceilings -- the SAME values baked into data/robots/tovez.json's own

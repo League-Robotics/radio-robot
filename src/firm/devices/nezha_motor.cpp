@@ -342,7 +342,9 @@ void NezhaMotor::writeRawDuty(float duty)
     // microbit timer jitter, without doubling to a second cycle's worth of
     // headroom (Devices cannot reference App::RobotLoop::kCycle directly --
     // App -> Devices is the one allowed layering direction -- so the two
-    // constants are coupled only by this comment).
+    // constants are coupled only by this comment; an interval longer than
+    // the real cycle silently skips every other duty write -- the loop-rate
+    // plan's documented trap if kCycle ever shrinks).
     static constexpr uint64_t kMinWriteIntervalUs = 35000;   // [us] kCycle(40ms) - 5ms jitter margin
     bool stopping = (pct == 0);
     uint64_t now = lastTickUs_;   // [us] this tick's timestamp (see file-header note)

@@ -198,7 +198,6 @@ int main() {
   Config::EstimatorBootConfig estimatorBootConfig = Config::defaultEstimatorConfig();
   static Motion::StateEstimator stateEstimator(toFusionWeights(estimatorBootConfig));
 
-  Motion::ShaperLimits shaperLimits = toShaperLimits(Config::defaultShaperConfig());
 
   // Planner integration (2026-07-26): the on-robot Motion::Planner replaces
   // Motion::MoveQueue as the loop's motion decider. Limits assembled from
@@ -208,18 +207,36 @@ int main() {
   // is the loop's own kCycle; actuationDelay is the one-cycle staging
   // latency (duty staged at the NEXT cycle top -- the exact shape the
   // planner's duty scenario tier validates).
+  // Planner tuning: the PLANT-VALIDATED set from the measured-constants
+  // reference tour (motion checkout, square_tour_sim.py tourLimits() --
+  // plant ID 2026-07-26: gain ~1370 mm/s per duty, tau ~230 ms), NOT the
+  // boot JSON's vel_gains/shaper block: those numbers were bench-tuned
+  // for the DELETED NezhaMotor MotorVelocityPid (the JSON's own
+  // _vel_gains_domain note) and are wrong for this loop -- deployed as-is
+  // (kp 0.0016, aMax 800, jMax 5000) they limit-cycled the real wheels at
+  // ~2-3 Hz across the whole first on-robot tour (2026-07-27 plot). A
+  // planner-domain config surface can supersede these constants later;
+  // until then the JSON's old-loop gains must not reach this controller.
   Motion::PlannerLimits plannerLimits;
-  plannerLimits.vMax = 600.0f;  // [mm/s] plausibility ceiling (kMaxPlausibleSpeed)
-  plannerLimits.aMax = shaperLimits.aMax;
-  plannerLimits.aDecel = shaperLimits.aDecel;
-  plannerLimits.omegaMax = 8.0f;  // [rad/s]
-  plannerLimits.alphaMax = shaperLimits.alphaMax;
-  plannerLimits.alphaDecel = shaperLimits.alphaDecel;
-  plannerLimits.jerkMax = shaperLimits.jMax;
-  plannerLimits.yawJerkMax = shaperLimits.yawJerkMax;
+  plannerLimits.vMax = 400.0f;   // [mm/s]
+  plannerLimits.aMax = 300.0f;   // [mm/s^2]
+  plannerLimits.aDecel = 250.0f; // [mm/s^2]
+  plannerLimits.omegaMax = 3.0f;     // [rad/s]
+  plannerLimits.alphaMax = 6.0f;     // [rad/s^2]
+  plannerLimits.alphaDecel = 5.0f;   // [rad/s^2]
+  plannerLimits.jerkMax = 1500.0f;   // [mm/s^3] aMax reached in ~0.2 s
+  plannerLimits.yawJerkMax = 30.0f;  // [rad/s^3] alphaMax reached in ~0.2 s
   plannerLimits.trackWidth = drivetrainConfig.trackwidth;
-  plannerLimits.controlPeriod = static_cast<float>(App::RobotLoop::kCycle);
-  plannerLimits.actuationDelay = static_cast<float>(App::RobotLoop::kCycle);
+  // MEASURED loop period, not the kCycle nominal: the schedule's real
+  // delivered cycle is 46-48 ms on the bench (tlm cycle-delta capture,
+  // 2026-07-27, after the 1 ms scheduler tick + overrun-yield fixes) --
+  // the vendor bus clearances outside the paced windows add ~7 ms the
+  // nominal does not include. The planner's discrete math (accel steps,
+  // braking sums, ramp tick counts) must use the period the loop actually
+  // delivers; telemetry cycle_period re-measures this on every frame if
+  // the schedule ever changes.
+  plannerLimits.controlPeriod = 47.0f;   // [ms]
+  plannerLimits.actuationDelay = 47.0f;  // [ms]
   plannerLimits.velocityFilterWeight =
       drivetrainConfig.vel_filt_alpha > 0.05f ? drivetrainConfig.vel_filt_alpha
                                               : 1.0f;
@@ -230,35 +247,44 @@ int main() {
   // noise band or the wheels twitch at rest forever.
   plannerLimits.settleRestVelocity = 10.0f;  // [mm/s]
   plannerLimits.settleRestOmega = 0.16f;     // [rad/s] 2*floor/trackWidth
-  plannerLimits.settleWindow = 2000.0f;  // [ms]
-  plannerLimits.headingHoldGain = 1.5f;  // [1/s] sim-validated
+  plannerLimits.settleWindow = 2500.0f;  // [ms]
+  plannerLimits.headingHoldGain = 2.0f;  // [1/s] sim-validated
   {
-    const Motion::Gains bootGains =
-        toMotionGains(motorConfigs[drivetrainConfig.left_port - 1]);
-    plannerLimits.velKff = bootGains.kff;
-    plannerLimits.velKp = bootGains.kp;
-    plannerLimits.velKi = bootGains.ki;
-    plannerLimits.velIMax = bootGains.iMax;
-    // Accel feedforward from the measured plant time constant (~230 ms,
-    // docs/design/encoder-refresh-characterization.md's sibling plant-ID
-    // measurement) -- a derived value, not a new tunable, until a config
-    // key exists for tau.
-    plannerLimits.velKaff = 0.23f * bootGains.kff;
+    // Measured-plant duty-stage gains (square_tour_sim.py tourLimits()):
+    // kff = 1/gain, kaff = tau/gain -- physics-derived, per-robot only
+    // through the plant measurement, not the JSON's old-loop vel_gains.
+    constexpr float kPlantGain = 1370.0f;  // [mm/s per duty]
+    constexpr float kPlantTau = 0.23f;     // [s]
+    plannerLimits.velKff = 1.0f / kPlantGain;
+    plannerLimits.velKp = 0.0009f;
+    plannerLimits.velKi = 0.004f;
+    plannerLimits.velIMax = 0.25f;
+    plannerLimits.velKaff = kPlantTau / kPlantGain;
     plannerLimits.velIAccelGate = 50.0f;  // [mm/s^2]
+    // Stiction floor: must clear the gearbox BREAKAWAY duty, not merely
+    // MotorArmor's write-suppression threshold (output_deadband 0.03 --
+    // a whine gate, not a friction model). 0.05 is estimated from the
+    // measured integral wind-up time to first motion during the stalled
+    // settle creep (2026-07-27 single-turn trace); replace with a proper
+    // plant-ID breakaway measurement when one exists.
+    plannerLimits.dutyFloor = 0.18f;
+    // Arrival tolerances sized to the stiction-limited creep resolution
+    // (one dutyFloor pulse per period ~= 2-4 deg of heading): tighter is
+    // unreachable and just burns the settle window at every landing.
+    plannerLimits.settleEpsilonLinear = 4.0f;      // [mm]
+    plannerLimits.settleEpsilonAngular = 0.035f;   // [rad] ~2 deg --
+    // the demonstrated one-sided-creep resolution (single-turn probe
+    // 2026-07-27 landed +1.76 deg; the right wheel does not reverse
+    // under the breakaway kick, so fine correction rides the left wheel)
   }
   static Motion::Planner planner(plannerLimits);
-  // Boot-config shaper block present (both axes' enable gate satisfied,
-  // the same zero-means-disabled sentinel the old ShaperLimits carried):
-  // land it through the SAME applyShaperLimits() entry the wire push uses,
-  // marking shaping CONFIGURED so kFlagFaultShapingDisabled (119-001)
-  // stays quiet. A zeroed/absent block leaves the flag armed -- the loud
-  // off-state, exactly as before the planner cutover.
-  if (shaperLimits.aMax > 0.0f && shaperLimits.aDecel > 0.0f &&
-      shaperLimits.alphaMax > 0.0f && shaperLimits.alphaDecel > 0.0f) {
-    planner.applyShaperLimits(shaperLimits.aMax, shaperLimits.aDecel,
-                              shaperLimits.alphaMax, shaperLimits.alphaDecel,
-                              shaperLimits.jMax, shaperLimits.yawJerkMax);
-  }
+  // Mark shaping CONFIGURED through the same applyShaperLimits() entry the
+  // wire push uses, with the validated ceilings above (NOT the boot JSON's
+  // old-shaper block -- see the tuning comment) so
+  // kFlagFaultShapingDisabled (119-001) stays quiet.
+  planner.applyShaperLimits(plannerLimits.aMax, plannerLimits.aDecel,
+                            plannerLimits.alphaMax, plannerLimits.alphaDecel,
+                            plannerLimits.jerkMax, plannerLimits.yawJerkMax);
   static App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
 

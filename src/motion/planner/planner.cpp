@@ -18,8 +18,9 @@ constexpr float kDoneEpsilonAngular = 1e-5f;  // [rad]
 // Settle-confirm gates (PlannerLimits::requireSettle). Unlike the done
 // epsilons above these ARE physical tolerances -- "close enough to the
 // target, and stopped" for a real, lagging plant.
-constexpr float kSettleEpsilonLinear = 1.0f;      // [mm]
-constexpr float kSettleEpsilonAngular = 0.005f;   // [rad]
+// (Settle-confirm arrival tolerances moved to PlannerLimits::
+// settleEpsilonLinear/settleEpsilonAngular -- reachability depends on the
+// robot's stiction-limited minimum creep step, a per-robot property.)
 // Rest floors -- the settle gate's ONLY velocity criterion. (An earlier
 // revision widened the gate to max(floor, one decel step), reasoning a
 // commanded plant one step from zero is at rest next interval -- but a
@@ -175,6 +176,25 @@ void Planner::stageDuty(float dt) {
     duty = pid.compute(cmd, targetAccel,
                        measurementBasis + targetAccel * filterLag, dt,
                        brakingToRest);
+    // Stiction breakaway kick -- STUCK WHEELS ONLY: the settle creep
+    // commands velocities whose PID duty computes below the gearbox
+    // breakaway, so a wheel AT REST silently ignores them (measured: the
+    // creep stalling dead while ~0.02-duty commands evaporated). When the
+    // wheel is effectively at rest during settling and the creep wants
+    // motion, kick at the breakaway duty IN THE COMMANDED DIRECTION for
+    // this tick; the plant's ~230 ms time constant makes one 40 ms kick
+    // reach only ~0.5 mm, so the step stays inside the arrival epsilons.
+    // Deliberately NOT applied while the wheel is still moving: kinetic
+    // friction is below breakaway and the plain PID handles a rolling
+    // wheel -- flooring every near-zero duty instead bang-banged the
+    // whole landing at +-floor as the raw duty's sign flickered
+    // (measured: a second full-speed push past the boundary and paired
+    // opposite-sign pulses, walking the turn to +10 deg residual).
+    if (active_.settling && cmd != 0.0f &&
+        std::fabs(measured) <= limits_.settleRestVelocity &&
+        std::fabs(duty) < limits_.dutyFloor) {
+      duty = std::copysign(limits_.dutyFloor, cmd);
+    }
   };
   stage(pidLeft_, cmdLeft_, cmdLeftPrevious_, left_.velocity(),
         measuredLeftPrevious_, dutyLeft_);
@@ -372,16 +392,31 @@ TickResult Planner::tick(const Types::RobotState& state) {
     result.timedOut = timedOut;
     result.settled = settled;
     // Cumulative-baseline carry (chain-exact accounting): a normally
-    // completed Distance/Angle Move hands the next Move a baseline of
-    // "where the boundary IS" (baseline + threshold), not "where we
-    // happened to be when completion fired" -- sub-tick residual is
-    // debited to the next Move so a chain leaks zero total error. A
-    // timeout aborts the motion: no carry, next baselines re-anchor.
-    carryValid_ = !timedOut;
-    carryKind_ = m.kind;
-    carryPath_ = active_.baselinePath + linearDirection(m) * m.threshold;
-    carryHeading_ =
-        active_.baselineHeading + angularDirection(m) * m.threshold;
+    // completed Twist Distance/Angle Move hands the next Move BOTH
+    // cumulative baselines -- "where the boundary IS" on its own axis
+    // (baseline + threshold) and its own UNCHANGED baseline on the other
+    // axis (a straight leg intends zero heading change; a pivot intends
+    // zero path change). Carrying the full ledger across KINDS is what
+    // closes a mixed leg/turn tour: each turn targets the cumulative
+    // n*90deg and each leg's heading-hold pulls back to the carried
+    // square heading, so per-landing residuals cancel instead of
+    // accumulating (measured on the bench tour: +17 deg over 8 moves
+    // with same-kind-only carry, every leg/turn boundary re-anchoring
+    // to wherever the pose drifted). A timeout aborts the motion, and a
+    // Time/Wheels Move has no single-axis intent -- no carry, next
+    // baselines re-anchor to the pose.
+    carryValid_ = !timedOut &&
+                  m.velocityKind == Move::VelocityKind::Twist &&
+                  (m.kind == Move::Kind::Distance ||
+                   m.kind == Move::Kind::Angle);
+    if (m.kind == Move::Kind::Distance) {
+      carryPath_ = active_.baselinePath + linearDirection(m) * m.threshold;
+      carryHeading_ = active_.baselineHeading;
+    } else {
+      carryPath_ = active_.baselinePath;
+      carryHeading_ =
+          active_.baselineHeading + angularDirection(m) * m.threshold;
+    }
     active_.occupied = false;
     activateNext(now);
     if (!active_.occupied) {
@@ -416,14 +451,12 @@ void Planner::activateNext(uint32_t now) {
   active_.baselinePath =
       0.5f * (left_.basisPosition() + right_.basisPosition());
   active_.baselineHeading = pose_.heading();
-  if (carryValid_) {
-    if (carryKind_ == Move::Kind::Distance &&
-        next.kind == Move::Kind::Distance) {
-      active_.baselinePath = carryPath_;
-    } else if (carryKind_ == Move::Kind::Angle &&
-               next.kind == Move::Kind::Angle) {
-      active_.baselineHeading = carryHeading_;
-    }
+  if (carryValid_ && next.velocityKind == Move::VelocityKind::Twist &&
+      (next.kind == Move::Kind::Distance || next.kind == Move::Kind::Angle)) {
+    // Full-ledger adoption (see the completion-side comment): both axes'
+    // cumulative baselines, regardless of the predecessor's kind.
+    active_.baselinePath = carryPath_;
+    active_.baselineHeading = carryHeading_;
   }
   carryValid_ = false;
 
@@ -516,10 +549,12 @@ bool Planner::settleReached(const Measurement& measured, float dt) const {
     case Move::Kind::Time:
       return false;  // nothing physical to confirm
     case Move::Kind::Distance:
-      return std::fabs(measured.anchoredRemaining) <= kSettleEpsilonLinear &&
+      return std::fabs(measured.anchoredRemaining) <=
+                 limits_.settleEpsilonLinear &&
              std::fabs(measured.bodyVelocity) <= limits_.settleRestVelocity;
     case Move::Kind::Angle:
-      return std::fabs(measured.anchoredRemaining) <= kSettleEpsilonAngular &&
+      return std::fabs(measured.anchoredRemaining) <=
+                 limits_.settleEpsilonAngular &&
              std::fabs(measured.omega) <= limits_.settleRestOmega;
   }
   return false;

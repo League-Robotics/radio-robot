@@ -76,6 +76,10 @@ inline Motion::PlannerLimits simPlannerLimits(float trackWidth) {  // [mm]
   // duty twitching +-0.02, true pose jiggling, GUI settle never quiet).
   limits.settleRestVelocity = 8.0f;  // [mm/s]
   limits.settleRestOmega = 0.13f;    // [rad/s] 2*floor/trackWidth
+  // Mirror MotorArmor's default write-suppression deadband so the sim's
+  // duty plane exercises the same stiction floor the hardware needs
+  // (PlannerLimits::dutyFloor).
+  limits.dutyFloor = 0.03f;
   limits.headingHoldGain = 0.0f;
   limits.velKff = 0.002f;   // sim plant's own nominal inverse gain
   limits.velKp = 0.0016f;

@@ -175,7 +175,6 @@ class Planner {
   // Cumulative-baseline carry staged between a completion and the next
   // activation (see activateNext()).
   bool carryValid_ = false;
-  Move::Kind carryKind_ = Move::Kind::Time;
   float carryPath_ = 0.0f;     // [mm]
   float carryHeading_ = 0.0f;  // [rad]
 

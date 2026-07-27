@@ -189,7 +189,16 @@ uint32_t RobotLoop::markTime() const {
 void RobotLoop::sleepUntil(uint32_t mark, uint32_t gap) {  // [ms] [ms]
   uint32_t elapsed = markTime() - mark;
   uint32_t remaining = (elapsed < gap) ? (gap - elapsed) : 0;
-  sleeper_.sleepMillis(remaining > 0 ? remaining : 1);
+  // Overrun means the block's body already consumed its gap: hand the
+  // processor over for one scheduling round (comms fibers still run) but
+  // do NOT sleep -- under the fiber scheduler's tick quantization a "1 ms"
+  // sleep costs up to a whole tick period, which taxed every overrunning
+  // block an extra tick per cycle (loop-rate-19hz analysis, item 1c).
+  if (remaining > 0) {
+    sleeper_.sleepMillis(remaining);
+  } else {
+    sleeper_.yield();
+  }
 }
 
 template <typename Body>
@@ -645,6 +654,7 @@ void RobotLoop::cycle() {
                     planner_.commandedDutyRight());
   drive_.tick();  // raw-mode passthrough -> both leaves' staged duty
 
+
   // Request/collect MUST interleave per port (118 -- restores the
   // interleaved schedule this file's own DESIGN.md §2/§3 already claims:
   // select L -> settle(borrow) -> collect L -> clear(borrow) -> select R
@@ -871,6 +881,7 @@ void RobotLoop::cycle() {
     state_.perception.colorFresh = colorFresh;
     if (lineFresh) state_.perception.line = packLine(line_.reading());
     if (colorFresh) state_.perception.color = packColor(color_.reading());
+
 
     // Fused body-frame velocity (109-009 fix, carried forward): the two
     // leaves' current velocities through BodyKinematics::forward() yield

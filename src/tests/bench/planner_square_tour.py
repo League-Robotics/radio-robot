@@ -135,6 +135,11 @@ def main() -> int:
         proto.read_pending_binary_tlm_frames()
         conn.disconnect()
 
+    if pending_enqueues:
+        print(f"WARNING: enqueue acks never seen for: {sorted(pending_enqueues.values())}")
+    missing = {m['move_id'] for m in moves} - {mid for _, mid in completions}
+    if missing:
+        print(f"WARNING: never completed: {sorted(missing)}")
     ok = len(completions) == len(moves)
     if not log["t"]:
         print("FAIL: no telemetry captured")
