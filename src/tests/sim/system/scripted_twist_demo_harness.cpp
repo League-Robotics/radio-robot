@@ -313,7 +313,12 @@ int main() {
   // ===========================================================================
   constexpr uint32_t kStopCorrId = 2;
   constexpr int kStopCycles = 12;
-  constexpr float kConvergedVelocity = 5.0f;  // [mm/s] "approximately zero" -- see header comment
+  // Open-loop era (stakeholder 2026-07-27, no wheel PID): STOP cuts duty
+  // to zero and the plant COASTS on its own time constant -- there is no
+  // controller actively braking to a small residual any more. The bound
+  // is what a ~0.23 s plant genuinely decays to across this window from
+  // the ramp's peak, not a controller-quality figure.
+  constexpr float kConvergedVelocity = 30.0f;  // [mm/s]
 
   beginScenario("stop: STOP acks OK, active clears, velocity converges to (approximately) zero");
   std::printf("  STOP commanded (corrId=%u)\n", kStopCorrId);

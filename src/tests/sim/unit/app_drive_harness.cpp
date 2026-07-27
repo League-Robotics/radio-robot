@@ -173,7 +173,7 @@ void runOneCycleAtZeroPosition(Devices::NezhaMotor& motor, TestSim::ScriptedI2CH
 // ===========================================================================
 
 void scenarioSetDutyStagesRawValues() {
-  beginScenario("Drive::setDuty(): stages raw v_left/v_right, tick() applies them via the interim PID");
+  beginScenario("Drive::tick(dutyL, dutyR): applies the duty pair to both leaves");
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
@@ -186,20 +186,16 @@ void scenarioSetDutyStagesRawValues() {
 
   const float trackWidth = 200.0f;  // [mm]
   App::Drive drive(left, right, trackWidth);
-  drive.applyGainsLeft(ffOnlyGains());
-  drive.applyGainsRight(ffOnlyGains());
 
-  const float vLeft = 90.0f;   // [mm/s]
-  const float vRight = 30.0f;  // [mm/s]
-  drive.setDuty(vLeft, vRight);
-  drive.tick();
+  const float dutyLeft = 0.18f;
+  const float dutyRight = 0.06f;
+  drive.tick(dutyLeft, dutyRight);
 
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
   runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs);
 
-  const float kff = 0.002f;
-  checkFloatEq(left.appliedDuty(), kff * vLeft, "left appliedDuty() reflects the RAW staged v_left");
-  checkFloatEq(right.appliedDuty(), kff * vRight, "right appliedDuty() reflects the RAW staged v_right");
+  checkFloatEq(left.appliedDuty(), dutyLeft, "left appliedDuty() reflects the commanded duty");
+  checkFloatEq(right.appliedDuty(), dutyRight, "right appliedDuty() reflects the commanded duty");
 }
 
 // ===========================================================================
@@ -209,7 +205,7 @@ void scenarioSetDutyStagesRawValues() {
 // ===========================================================================
 
 void scenarioStopZeroesBothTargetsWithinOneCycle() {
-  beginScenario("Drive::stop(): both wheel targets reach 0 within one cycle of the next tick()");
+  beginScenario("Drive::tick(0, 0): both wheels reach 0 duty after a nonzero pair");
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
@@ -222,21 +218,16 @@ void scenarioStopZeroesBothTargetsWithinOneCycle() {
 
   const float trackWidth = 200.0f;  // [mm]
   App::Drive drive(left, right, trackWidth);
-  drive.applyGainsLeft(ffOnlyGains());
-  drive.applyGainsRight(ffOnlyGains());
 
-  // Stage a nonzero target and actually execute it once, so appliedDuty() is
-  // demonstrably nonzero before stop() -- proves the transition, not just
-  // "duty was never nonzero to begin with."
-  drive.setDuty(60.0f, 45.0f);
-  drive.tick();
+  // Drive a nonzero pair first, so the zero write below is a real
+  // transition, not "duty was never nonzero to begin with."
+  drive.tick(0.12f, 0.09f);
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
   runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs);
-  checkTrue(left.appliedDuty() != 0.0f, "setup: left duty is nonzero before stop()");
-  checkTrue(right.appliedDuty() != 0.0f, "setup: right duty is nonzero before stop()");
+  checkTrue(left.appliedDuty() != 0.0f, "setup: left duty is nonzero before the zero pair");
+  checkTrue(right.appliedDuty() != 0.0f, "setup: right duty is nonzero before the zero pair");
 
-  drive.stop();
-  drive.tick();
+  drive.tick(0.0f, 0.0f);
 
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs + 20000);
   runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs + 20000);

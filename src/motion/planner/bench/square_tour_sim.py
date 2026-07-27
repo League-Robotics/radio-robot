@@ -40,7 +40,7 @@ from planner_harness import (  # noqa: E402
     KIND_ANGLE, KIND_DISTANCE, VELOCITY_TWIST, Move, PlannerLimits,
     RobotState, TickResult, loadLibrary)
 
-CYCLE = 50           # [ms] loop period
+CYCLE = 47           # [ms] loop period -- MEASURED on the bench 2026-07-27
 SUBSTEP = 0.001      # [s] plant integration substep
 TRACK = 128.0        # [mm]
 TAU = 0.23           # [s] measured plant time constant
@@ -61,19 +61,28 @@ T_WRITE_L = 14
 T_WRITE_R = 18
 
 LEG = 500.0          # [mm]
-CRUISE = 200.0       # [mm/s]
+CRUISE = 150.0       # [mm/s] matches the hardware tour
 TURN = math.pi / 2   # [rad]
-OMEGA = 1.5          # [rad/s]
+OMEGA = 1.2          # [rad/s] matches the hardware tour
+
+
+BREAKAWAY = 0.18     # [duty] static-friction floor (measured on the robot
+                     # 2026-07-27: below this a STOPPED gearbox does not move)
+STICK_VEL = 12.0     # [mm/s] below this the wheel can re-stick
 
 
 class SimWheel:
-    """Continuous first-order plant; duty changes land at write events."""
+    """Continuous first-order plant with STICTION; duty changes land at
+    write events. Stiction (hardware-measured): a wheel at rest ignores
+    |duty| < BREAKAWAY entirely; once rolling, the linear model applies
+    until it slows back under STICK_VEL with sub-breakaway duty."""
 
     def __init__(self, gain: float):
         self.gain = gain      # [mm/s per duty]
         self.applied = 0.0    # [duty] after per-write slew
         self.velocity = 0.0   # [mm/s] true
         self.position = 0.0   # [mm] true
+        self.stuck = True
 
     def write(self, dutyCommand: float) -> None:
         delta = dutyCommand - self.applied
@@ -85,6 +94,19 @@ class SimWheel:
             self.applied = dutyCommand
 
     def substep(self, dt: float) -> None:
+        if self.stuck:
+            if abs(self.applied) >= BREAKAWAY:
+                self.stuck = False
+            else:
+                # Static friction holds; any residual speed bleeds off fast.
+                self.velocity *= max(0.0, 1.0 - dt / 0.05)
+                self.position += self.velocity * dt
+                return
+        elif (abs(self.velocity) < STICK_VEL and
+              abs(self.applied) < BREAKAWAY):
+            self.stuck = True
+            self.velocity = 0.0
+            return
         self.velocity += (self.applied * self.gain - self.velocity) * (dt / TAU)
         self.position += self.velocity * dt
 
@@ -99,11 +121,16 @@ def tourLimits() -> PlannerLimits:
     limits.alphaDecel = 5.0
     limits.trackWidth = TRACK
     limits.controlPeriod = float(CYCLE)
-    limits.actuationDelay = 40.0  # [ms] sample age (~t+8 avg) to actuation midpoint
+    limits.actuationDelay = float(CYCLE)  # [ms] duty staged at next cycle
     limits.velocityFilterWeight = 0.35
     limits.otosStaleness = 200
     limits.headingOtosWeight = 0.0
-    limits.requireSettle = True
+    limits.requireSettle = False  # settle machinery OFF (stakeholder
+    # 2026-07-27: the creep/kick landing pulses were unacceptable); the
+    # cumulative ledger absorbs landing residual in the NEXT move.
+    limits.settleRestVelocity = 10.0
+    limits.settleRestOmega = 0.16
+    limits.dutyFloor = BREAKAWAY
     limits.settleWindow = 2500.0
     limits.headingHoldGain = 2.0
     limits.velKff = 1.0 / GAIN_NOMINAL
@@ -149,10 +176,13 @@ def main() -> None:
     nextMove = 0
     completions = []  # (t_s, moveId)
 
-    log = dict(t=[], velLeft=[], velRight=[], dutyLeft=[], dutyRight=[])
+    log = dict(t=[], velLeft=[], velRight=[], dutyLeft=[], dutyRight=[],
+               cmdLeft=[], cmdRight=[])
     sampleParity = 0
     pendingDutyL = 0.0
     pendingDutyR = 0.0
+    cmdL = 0.0
+    cmdR = 0.0
     tourDoneAtCycle = None
 
     def takeSample(wheel, plant, sampleTime: int, parity: int) -> None:
@@ -196,6 +226,8 @@ def main() -> None:
                                 ctypes.byref(dutyRight))
                 pendingDutyL = dutyLeft.value
                 pendingDutyR = dutyRight.value
+                cmdL = state.wheelLeft.cmdVelocity
+                cmdR = state.wheelRight.cmdVelocity
                 if result.completed:
                     completions.append((tMs / 1000.0, result.moveId))
             elif offset == T_WRITE_L:
@@ -210,6 +242,8 @@ def main() -> None:
             log["velRight"].append(right.velocity)
             log["dutyLeft"].append(pendingDutyL)
             log["dutyRight"].append(pendingDutyR)
+            log["cmdLeft"].append(cmdL)
+            log["cmdRight"].append(cmdR)
 
         if len(completions) == len(moves) and tourDoneAtCycle is None:
             tourDoneAtCycle = cycle + 30  # drain tail for the plot
@@ -237,6 +271,10 @@ def main() -> None:
     fig, axSpeed = plt.subplots(figsize=(14, 6))
     axDuty = axSpeed.twinx()
 
+    axSpeed.plot(log["t"], log["cmdLeft"], color="#1f77b4", lw=1.0,
+                 ls=":", alpha=0.9, label="left COMMANDED [mm/s]")
+    axSpeed.plot(log["t"], log["cmdRight"], color="#2ca02c", lw=1.0,
+                 ls=":", alpha=0.9, label="right COMMANDED [mm/s]")
     axSpeed.plot(log["t"], log["velLeft"], color="#1f77b4", lw=1.4,
                  label="left wheel speed [mm/s] (gain +10%)")
     axSpeed.plot(log["t"], log["velRight"], color="#2ca02c", lw=1.4,

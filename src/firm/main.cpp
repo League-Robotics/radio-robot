@@ -240,7 +240,14 @@ int main() {
   plannerLimits.velocityFilterWeight =
       drivetrainConfig.vel_filt_alpha > 0.05f ? drivetrainConfig.vel_filt_alpha
                                               : 1.0f;
-  plannerLimits.requireSettle = true;
+  // Settle-confirm OFF (stakeholder 2026-07-27): the creep/breakaway-kick
+  // landing machinery pulsed the wheels at ~0.18 duty against gearbox
+  // stiction after every move -- functional but unacceptable sawtooth.
+  // Landing residual (small at the measured 47 ms period) is instead
+  // absorbed by the NEXT chained move via the cumulative baseline ledger,
+  // at full speed where the plant is linear and no stiction compensation
+  // is needed. The last move of a chain keeps its own small residual.
+  plannerLimits.requireSettle = false;
   // Rest floors sized to the measured hardware encoder-velocity noise
   // (plant ID 2026-07-26: ~+-7 mm/s at rest) -- the rest-damping stage
   // outputs exactly zero duty below the floor, so it must clear the

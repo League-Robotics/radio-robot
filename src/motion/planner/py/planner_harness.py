@@ -154,6 +154,9 @@ class PlannerLimits(ctypes.Structure):
                 ("velIMax", ctypes.c_float),  # [duty]
                 ("velKaff", ctypes.c_float),  # [duty/(mm/s^2)] accel feedforward
                 ("velIAccelGate", ctypes.c_float),  # [mm/s^2] integral ramp gate
+                ("dutyFloor", ctypes.c_float),   # [-1,1] stiction breakaway kick
+                ("settleEpsilonLinear", ctypes.c_float),   # [mm]
+                ("settleEpsilonAngular", ctypes.c_float),  # [rad]
                 ("jerkMax", ctypes.c_float),     # [mm/s^3] S-curve
                 ("yawJerkMax", ctypes.c_float),  # [rad/s^3]
                 ("settleRestVelocity", ctypes.c_float),  # [mm/s]

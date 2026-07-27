@@ -263,8 +263,10 @@ class SimHarness {
   // stale nonzero COMMAND can leave.
   // Planner integration (2026-07-26): the staged wheel-velocity target
   // lives on the planner now (Drive carries duty in raw mode).
-  float driveTargetVelLeft() const { return planner_.commandedLeft(); }    // [mm/s] signed
-  float driveTargetVelRight() const { return planner_.commandedRight(); }  // [mm/s] signed
+  App::RobotLoop& robotLoop() { return robotLoop_; }
+
+  float driveTargetVelLeft() const { return robotLoop_.state().wheelLeft.cmdVelocity; }    // [mm/s] signed
+  float driveTargetVelRight() const { return robotLoop_.state().wheelRight.cmdVelocity; }  // [mm/s] signed
 
   // Decodes and returns every outbound line captured on the serial
   // FakeTransport since the last call (serial and radio receive an

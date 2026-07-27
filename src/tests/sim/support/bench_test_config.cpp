@@ -64,11 +64,12 @@ void configureSimForBenchTest(TestSim::SimHarness& sim) {
   sim.configureMotor(2, benchTestMotorConfig(2));
   sim.drive().applyGainsLeft(benchTestGains());
   sim.drive().applyGainsRight(benchTestGains());
-  // Planner integration (2026-07-26): the planner's own duty-stage gains
-  // are the LIVE controller now -- push the same bench-tuned set there.
   {
     const Motion::Gains g = benchTestGains();
     sim.planner().applyVelGains(g.kff, g.kp, g.ki, g.iMax);
+    // Open-loop wheel drive: kff IS the duty-per-speed scale for the sim
+    // plant (1/kDefaultDutyVelMax).
+    sim.robotLoop().setDutyPerSpeed(g.kff);
   }
 }
 

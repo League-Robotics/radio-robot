@@ -75,21 +75,9 @@ class Drive : public Motion::WheelSink {
   // leaves.
   void stop() override;
 
-  // Stages the last setDuty()/stop() target onto the two leaves. 125-003:
-  // runs the INTERIM closed loop (this file's own header) -- reads each
-  // leaf's own velocity()/appliedDuty() as PID feedback, then calls
-  // Motor::setDuty() with the resulting clamped [-1,1] duty. Bounded: two
-  // Motion::WheelVelocityPid::compute() calls, two Motor::setDuty() calls,
-  // no I2C traffic, no sleeps.
-  void tick();
-
-  // Planner-era duty path (2026-07-26 integration): stage the planner's
-  // OWN per-wheel duty. While raw mode is latched (every call latches it),
-  // tick() passes these straight to the motors and the interim velocity
-  // PID above is bypassed entirely -- the planner IS the velocity
-  // controller now. setDuty()/stop() (the WheelSink velocity-target path,
-  // MoveQueue's) unlatches raw mode, so the two eras cannot fight.
-  void setRawDuty(float dutyLeft, float dutyRight);  // [-1, 1] each
+  // Apply this cycle's duty pair to the two leaves (quiet at zero -- see
+  // drive.cpp).
+  void tick(float dutyLeft, float dutyRight);  // [-1, 1] each
 
   // trackWidth -- read-only accessor (109-009: RobotLoop::updateTlm() needs
   // it to fuse the two leaves' measured velocities into the primary frame's
@@ -140,16 +128,9 @@ class Drive : public Motion::WheelSink {
   float vRightPrevious_ = 0.0f;   // [mm/s]
   float vLeftPrevious2_ = 0.0f;   // [mm/s] two ticks back
   float vRightPrevious2_ = 0.0f;  // [mm/s]
-  bool rawMode_ = false;     // planner-era: tick() passes raw duty through
-  float rawDutyLeft_ = 0.0f;   // [-1, 1]
-  float rawDutyRight_ = 0.0f;  // [-1, 1]
-  // Last duty pair actually written to the leaves in raw mode -- tick()
-  // stays QUIET (no setDuty) while both the staged and last-written pairs
-  // are exactly zero, so an idle boot never flips the motors out of
-  // Mode::None (NezhaMotor::reconfigure() is unconditional in that state;
-  // once mode_ latches, a config push must find the motor at rest).
-  float rawWrittenLeft_ = 0.0f;   // [-1, 1]
-  float rawWrittenRight_ = 0.0f;  // [-1, 1]
+  // Last duty pair actually written (quiet-at-zero baseline).
+  float writtenLeft_ = 0.0f;   // [-1, 1]
+  float writtenRight_ = 0.0f;  // [-1, 1]
   Motion::Gains gainsL_;
   Motion::Gains gainsR_;
 
