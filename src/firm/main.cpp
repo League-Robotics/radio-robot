@@ -43,9 +43,8 @@ namespace {
 // messages/ or config/.
 //
 // 125-003: vel_gains/vel_filt_alpha/min_duty are NO LONGER copied here --
-// Devices::MotorConfig dropped those fields (the velocity PID they fed
-// relocated to Motion::WheelVelocityPid, App::Drive's own interim instances
-// -- see toMotionGains() below and drive.h's own header). vel_filt_alpha
+// Devices::MotorConfig dropped those fields (the velocity PID they fed has
+// since been deleted outright -- see drive.h's own header). vel_filt_alpha
 // has no live consumer at all this sprint (the EMA estimator it fed was
 // deleted outright, pending ticket 004's App::WheelObserver) -- the wire
 // field itself is untouched (no protocol change), simply unread by
@@ -68,21 +67,12 @@ Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
   return cfg;
 }
 
-// toMotionGains -- 125-003: the vel_gains half of msg::MotorConfig now feeds
-// App::Drive's own interim Motion::WheelVelocityPid gains (drive.h's own
-// header) instead of Devices::MotorConfig -- same wire fields, different
-// application-side destination (sprint.md Decision 7's CONFIG-routing
-// split, wired here at boot ahead of ticket 008's live-CONFIG-patch half,
-// which RobotLoop::applyMotorConfigPatch() already does -- robot_loop.cpp).
-Motion::Gains toMotionGains(const msg::MotorConfig& src) {
-  Motion::Gains gains;
-  gains.kp = src.vel_gains.kp;
-  gains.ki = src.vel_gains.ki;
-  gains.kff = src.vel_gains.kff;
-  gains.iMax = src.vel_gains.i_max;
-  gains.kaw = src.vel_gains.kaw;
-  return gains;
-}
+// toMotionGains -- DELETED (command-ingestion-...-two-stops.md §4). It fed
+// App::Drive's interim Motion::WheelVelocityPid pair, which is gone: Drive
+// is open-loop duty from calibrated speed and holds no controller at all
+// (drive.h's own file header). The boot JSON's vel_gains reach the one
+// controller that still exists -- Motion::Planner's duty stage -- through
+// App::Configurator's pid.* wire keys, not through this seeding path.
 
 
 Motion::FusionWeights toFusionWeights(const Config::EstimatorBootConfig& src) {
@@ -180,11 +170,17 @@ int main() {
   // now deleted) -- comms already owns both transports internally.
   static App::Telemetry tlm(comms);
   static App::Drive drive(motorL, motorR, drivetrainConfig.trackwidth);
-  // 125-003: seeds Drive's own interim Motion::WheelVelocityPid gains from
-  // the SAME boot-config vel_gains this leaf used to apply directly to
-  // Devices::MotorConfig -- see toMotionGains()'s own doc comment above.
-  drive.applyGainsLeft(toMotionGains(motorConfigs[drivetrainConfig.left_port - 1]));
-  drive.applyGainsRight(toMotionGains(motorConfigs[drivetrainConfig.right_port - 1]));
+  // Wheel calibration comes from the ROBOT JSON, never from C++
+  // (command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
+  // §6): App::Drive carries no calibration defaults, and without this
+  // install it refuses to drive. gen_boot_config.py fails the build outright
+  // if the active robot's JSON is missing any of the three keys, so
+  // reaching here means they are real, measured, per-robot numbers.
+  {
+    const Config::DriveBootConfig driveConfig = Config::defaultDriveConfig();
+    drive.setDutyPerSpeed(driveConfig.dutyPerSpeedLeft, driveConfig.dutyPerSpeedRight);
+    drive.setCrawlPulse(driveConfig.crawlPulse);
+  }
   static Motion::Odometry odom(drivetrainConfig.trackwidth, motorL.position(), motorR.position());
 
 
@@ -298,26 +294,27 @@ int main() {
   static Config::MicroBitTuningStore tuningStore(uBit.storage);
 
 
+  // App::Configurator owns the CONFIG lifecycle and the persisted-tuning
+  // store (command-ingestion-...-two-stops.md §6); RobotLoop routes to it.
+  static App::Configurator configurator(drive, motorL, motorR, otos, planner,
+                                        stateEstimator, &tuningStore);
+
   static App::RobotLoop robotLoop(bus, motorL, motorR, otos, color, line,
-                                   comms, tlm, drive, odom, planner, preamble,
-                                   stateEstimator, clock, sleeper, &tuningStore);
+                                   comms, tlm, drive, configurator, odom,
+                                   planner, preamble, stateEstimator, clock,
+                                   sleeper);
 
   uint32_t storedVersion = 0;
   Config::Blob storedBlob{};
   bool storeHadData = tuningStore.load(&storedVersion, &storedBlob);
   if (storeHadData && !Config::shouldWipe(storedVersion, Config::kConfigSchemaVersion)) {
-    robotLoop.reapplyPersistedTuning(Config::deserializeSnapshot(storedBlob));
+    configurator.reapplyPersistedTuning(Config::deserializeSnapshot(storedBlob));
   } else if (storeHadData) {
     tuningStore.wipe();
   }
 
   robotLoop.markConfigured();
-  // Crawl mode: sub-breakaway wheel-speed requests become 0.20-duty
-  // pulses, Bresenham-dithered. 0.20 clears every measured breakaway
-  // (0.07-0.16 fresh battery, 0.19 worst drained -- duty_sweep
-  // 2026-07-27) while keeping the crawl/continuous boundary low
-  // (~0.20 * 535 ~= 107 mm/s commanded): normal cruise runs continuous.
-  drive.setCrawlPulse(0.20f);
+
 
   robotLoop.run();
 }

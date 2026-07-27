@@ -1195,24 +1195,90 @@ class NezhaProtocol:
             v_x, v_y, omega, stop_time=stop_time, stop_distance=stop_distance,
             stop_angle=stop_angle, timeout=timeout, replace=replace, move_id=move_id)
 
-    def stop(self) -> int:
-        """Panic-stop the drivetrain (``CommandEnvelope{stop: Stop{}}``) — a
-        zero-field oneof arm that "cannot be malformed" (envelope.proto
-        Decision 3).
+    def wheels(self, v_left: float, v_right: float, duration: float,  # [mm/s] [mm/s] [ms]
+               *, move_id: int = 0) -> int:
+        """Drive the two wheels at fixed velocities for ``duration`` ms —
+        the dumb teleop primitive (``CommandEnvelope{wheels: Wheels{v_left,
+        v_right, duration, id}}``, envelope.proto arm 22, wire verb
+        ``WHEELS``; command-ingestion-ring-buffered-comms-subsystem-routing-
+        two-stops.md §2).
 
-        Fire-and-poll, the SAME shape as ``move_twist()``/``move_wheels()``
-        (103-009, see their docstrings for why): the P4 firmware reports
-        ``stop``'s outcome via the ack ring (``wait_for_ack()``), not a
-        synchronous reply, so this call writes the STOP bytes and returns
-        immediately rather than blocking on a reply that will not come.
+        Routed firmware-side straight to ``App::Drive``, bypassing the
+        planner entirely and superseding whatever it was doing. No profile,
+        no shaping, no odometry stop condition — just a wheel pair held for
+        a bounded window, then zero. This is the RIGHT call for teleop and
+        for open-loop characterization; use ``move_wheels()`` instead when
+        you want the planner's queue, ramps, and distance/angle stops.
 
-        Returns the corr_id assigned to this command — pass it to
-        ``wait_for_ack()`` to confirm the firmware accepted it. Raises
-        ``ConnectionError`` if not connected. Every existing caller in this
-        tree calls ``stop()`` as a bare statement and ignores the return
-        value.
+        ``duration`` is REQUIRED and must be positive (validated host-side
+        to save a wire round trip for a command the firmware would reject
+        with ``ERR_BADARG``): a wheel command is always time-bounded, so a
+        dead host can never mean a runaway. There is no separate
+        ``timeout`` — the duration IS the backstop.
+
+        ``move_id`` is echoed in this command's COMPLETION ack, which lands
+        when the duration expires; the ENQUEUE ack echoes the returned
+        corr_id, as always. Fire-and-poll, the same shape as every other
+        command here: this call writes the bytes and returns immediately.
+
+        Returns the corr_id assigned to this command. Raises
+        ``ConnectionError`` if not connected; ``ValueError`` for a
+        non-positive ``duration``.
         """
-        envelope = envelope_pb2.CommandEnvelope(stop=envelope_pb2.Stop())
+        if duration <= 0:
+            raise ValueError(f"wheels(): duration must be > 0, got {duration!r}")
+        envelope = envelope_pb2.CommandEnvelope(
+            wheels=envelope_pb2.Wheels(v_left=v_left, v_right=v_right,
+                                       duration=duration, id=move_id))
+        return self._conn.send_envelope_fast(envelope)
+
+    def estop(self) -> int:
+        """Halt everything NOW (``CommandEnvelope{estop: Estop{}}``, wire
+        verb ``ESTOP``) — a zero-field oneof arm that "cannot be malformed."
+
+        Zeroes ``App::Drive``'s targets AND clears ``Motion::Planner``'s
+        active + pending queue in the same cycle. The discarded queue
+        entries get NO completion acks: you asked for a halt, not for a
+        report that the things you cancelled finished.
+
+        **This is what ``stop()`` used to be.** ``stop()`` still exists but
+        now means a PLANNED stop that enters the planner's queue and
+        executes in sequence (command-ingestion-...-two-stops.md §2) — any
+        caller that meant "halt now" belongs here.
+
+        Fire-and-poll: writes the bytes and returns immediately; the
+        outcome rides the ack ring (``wait_for_ack()``). Returns the
+        corr_id assigned to this command. Raises ``ConnectionError`` if not
+        connected.
+        """
+        envelope = envelope_pb2.CommandEnvelope(estop=envelope_pb2.Estop())
+        return self._conn.send_envelope_fast(envelope)
+
+    def stop(self, *, move_id: int = 0) -> int:
+        """Enqueue a PLANNED stop (``CommandEnvelope{stop: Stop{id}}``, wire
+        verb ``STOP``): "come to a stop when you reach THIS point in the
+        queued sequence."
+
+        **MEANING CHANGED** (command-ingestion-ring-buffered-comms-
+        subsystem-routing-two-stops.md §2). This used to be the panic stop.
+        It is now an ordinary planner queue entry: it waits behind whatever
+        is already queued, then ramps the wheels down at the decel ceiling
+        and completes once the robot is actually at rest. For "halt
+        everything now" call ``estop()`` instead.
+
+        Two acks, two keys, exactly like ``move_twist()``: the ENQUEUE ack
+        echoes the returned corr_id (or ``ERR_FULL`` if the planner's 5-deep
+        queue is full), and the COMPLETION ack — the one that means the
+        robot has actually stopped — echoes ``move_id``. Pass a distinct
+        ``move_id`` when you want to wait for the stop to happen; the
+        default ``0`` is fine when you only care that it was queued.
+
+        Fire-and-poll: writes the bytes and returns immediately. Returns the
+        corr_id assigned to this command. Raises ``ConnectionError`` if not
+        connected.
+        """
+        envelope = envelope_pb2.CommandEnvelope(
+            stop=envelope_pb2.Stop(id=move_id))
         return self._conn.send_envelope_fast(envelope)
 
     def config(self, **deltas: Any) -> int:
@@ -1486,11 +1552,20 @@ class NezhaProtocol:
         command's ack the instant a LATER command's ack landed within the
         same primary period, before the host's next read — bench-measured
         as 12/43 lost transient acks at the real 40ms cycle / ~15Hz host
-        read rate. The ring survives up to ``kAckRingDepth`` (4) OTHER
-        acks landing before this one is read; only a burst of MORE than 4
-        unread acks for corr_ids other than this one would still time this
-        out (unchanged bounded-wait contract; retry covers even that rare
-        case).
+        read rate. The ring survives up to ``kAckRingDepth`` (12) OTHER
+        acks landing before this one is read; only a burst of MORE than
+        that many unread acks for corr_ids other than this one would still
+        time this out (unchanged bounded-wait contract; retry covers even
+        that rare case).
+
+        DEPTH 4 -> 12 (command-ingestion-ring-buffered-comms-subsystem-
+        routing-two-stops.md §1): the firmware now buffers inbound commands
+        in a ring (``App::kCmdRingDepth``) and drains the WHOLE ring in one
+        control cycle, so a burst of N commands produces N acks inside a
+        single frame. The ack ring was raised to match the command ring for
+        exactly that reason -- at the old depth 4 a 5-command burst would
+        have executed correctly but lost an ack, hanging a host that chains
+        on completion acks.
 
         104-003: the actual poll/match/timeout loop is no longer inline
         here — it lives in ``SerialConnection.wait_for_ack()`` (see that

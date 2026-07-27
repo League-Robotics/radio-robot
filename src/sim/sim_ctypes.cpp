@@ -38,7 +38,9 @@
 //
 // ---- Command injection ----
 //   void sim_inject_twist(SimHandle h, float v_x, float omega, float duration, uint32_t corr);
-//   void sim_inject_stop(SimHandle h, uint32_t corr);
+//   void sim_inject_stop(SimHandle h, uint32_t corr);   // sends ESTOP -- see below
+//   void sim_inject_wheels(SimHandle h, float vLeft, float vRight,
+//                          float duration, uint32_t corr);
 //   void sim_inject_command(SimHandle h, const char* frame, int len);
 //     Raw, non-actuation escape hatch -- pushes ANY already-`<COMMAND>':'
 //     <COBS+CRC bytes>`-framed wire line (124-005; was a bare COBS+CRC frame
@@ -320,7 +322,23 @@ void sim_inject_twist(SimHandle h, float v_x, float omega, float duration, uint3
                             /*id=*/corr, corr);
 }
 
-void sim_inject_stop(SimHandle h, uint32_t corr) { asHarness(h)->injectStop(corr); }
+// sim_inject_stop -- retargeted at ESTOP (command-ingestion-ring-buffered-
+// comms-subsystem-routing-two-stops.md §2). The export's NAME and SIGNATURE
+// are unchanged, so sim_loop.py's own ctypes binding and every caller of
+// SimLoop.stop() keep working, but the WIRE COMMAND it sends is now ESTOP,
+// not STOP. That is the behavior-preserving choice, not a change of intent:
+// every existing caller of this entry point means "halt the drivetrain
+// now," which is exactly what ESTOP still does and what STOP no longer
+// does (STOP is now a planned, queued stop). A caller that genuinely wants
+// the planned stop builds it through sim_inject_command().
+void sim_inject_stop(SimHandle h, uint32_t corr) { asHarness(h)->injectEstop(corr); }
+
+// sim_inject_wheels -- the dumb teleop primitive (§2), straight to
+// App::Drive. `corr` doubles as the envelope corr_id and the command's own
+// completion id, matching sim_inject_twist()'s established convention here.
+void sim_inject_wheels(SimHandle h, float vLeft, float vRight, float duration, uint32_t corr) {
+  asHarness(h)->injectWheels(vLeft, vRight, duration, /*id=*/corr, corr);
+}
 
 void sim_inject_command(SimHandle h, const char* armoredLine, int len) {
   asHarness(h)->injectCommand(armoredLine, static_cast<size_t>(len));

@@ -41,6 +41,23 @@ struct Error {
 
 // Stop
 struct Stop {
+    uint32_t id = 0;
+
+    // --- array / optional-string accessors ---
+};
+
+// Estop
+struct Estop {
+
+    // --- array / optional-string accessors ---
+};
+
+// Wheels
+struct Wheels {
+    float v_left = 0.0f;
+    float v_right = 0.0f;
+    float duration = 0.0f;
+    uint32_t id = 0;
 
     // --- array / optional-string accessors ---
 };
@@ -123,12 +140,16 @@ struct CommandEnvelope {
         CONFIG = 1,
         STOP = 2,
         MOVE = 3,
+        WHEELS = 4,
+        ESTOP = 5,
     };
     CmdKind cmd_kind = CmdKind::NONE;
     union {
         ConfigDelta config;
         Stop stop;
         Move move;
+        Wheels wheels;
+        Estop estop;
     } cmd = {};
 
     uint32_t corr_id = 0;

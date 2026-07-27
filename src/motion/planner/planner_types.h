@@ -13,7 +13,16 @@ namespace Motion {
 // One bounded motion. Direction comes from the velocity sign; thresholds
 // are positive magnitudes (protocol-v4 Move semantics, minus wire baggage).
 struct Move {
-  enum class Kind : uint8_t { Time, Distance, Angle };
+  // Kind -- what ENDS this Move. Time/Distance/Angle are stop CONDITIONS
+  // measured against the clock or odometry. `Stop` is the odd one out and
+  // deliberately so: it is the PLANNED STOP queue entry
+  // (command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
+  // §5, the wire's `STOP` verb) -- "come to a stop when you reach THIS
+  // point in the queued sequence." It gets its own enumerator rather than a
+  // bool on the side because "a Move that is a stop" and "a Move that stops
+  // when X" are different in kind, and a bool would leave every switch here
+  // silently doing the wrong thing for it.
+  enum class Kind : uint8_t { Time, Distance, Angle, Stop };
   enum class VelocityKind : uint8_t { Twist, Wheels };
 
   uint32_t id = 0;

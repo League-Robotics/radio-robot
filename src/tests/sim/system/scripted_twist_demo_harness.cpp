@@ -322,7 +322,11 @@ int main() {
 
   beginScenario("stop: STOP acks OK, active clears, velocity converges to (approximately) zero");
   std::printf("  STOP commanded (corrId=%u)\n", kStopCorrId);
-  sim.injectStop(kStopCorrId);
+  // injectEstop(), not injectStop() -- "halt now, active clears" is the
+  // ESTOP contract since the command-ingestion rework (command-ingestion-
+  // ring-buffered-comms-subsystem-routing-two-stops.md §2); STOP is now a
+  // queued, planned stop.
+  sim.injectEstop(kStopCorrId);
 
   bool stopAcked = false;
   bool sawInactive = false;

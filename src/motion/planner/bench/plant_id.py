@@ -40,7 +40,7 @@ def captureStep(proto: NezhaProtocol, duty: float,
             series.append((time.monotonic() - t0,
                            f.enc_left.velocity, f.enc_right.velocity))
         time.sleep(0.01)
-    proto.stop()
+    proto.estop()
     return series
 
 
@@ -99,7 +99,7 @@ def main() -> None:
                   f"{statistics.median(deads) * 1000:.0f} ms over "
                   f"{len(results)} fits")
     finally:
-        proto.stop()
+        proto.estop()
         proto.config(**{"pid.kp": 0.0016, "pid.ki": 0.005})
         time.sleep(0.3)
         conn.disconnect()

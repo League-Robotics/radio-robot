@@ -101,7 +101,7 @@ struct Telemetry {
     BodyTwist3 twist = {};
     uint32_t line = 0;
     uint32_t color = 0;
-    uint32_t acks_[4] = {};
+    uint32_t acks_[12] = {};
     uint8_t acks_count = 0;
     uint32_t cycle_busy = 0;
     uint32_t cycle_period = 0;

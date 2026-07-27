@@ -1,13 +1,11 @@
 // robot_loop.cpp -- App::RobotLoop implementation. See robot_loop.h and
-// DESIGN.md for the schedule rationale.
+// DESIGN.md for the schedule and routing rationale.
 #include "app/robot_loop.h"
-
-#include "motion/move_queue.h"  // Motion::ShaperLimits only
 
 #include <cmath>
 
-#include "motion/body_kinematics.h"
 #include "messages/envelope.h"
+#include "motion/body_kinematics.h"
 
 namespace App {
 
@@ -25,46 +23,9 @@ constexpr uint32_t kPace = RobotLoop::kCycle - kWindows;  // [ms]
 
 constexpr uint32_t kPreamblePace = 10;  // [ms] boot-loop probe pacing
 
-
-
 // kPositionWireBound must match telemetry.proto EncoderReading.position abs_max.
 constexpr float kPositionWireBound = 32000.0f;       // [mm]
 constexpr float kPositionRebaselineMargin = 30000.0f;  // [mm]
-
-// Present-field merges for persisted tuning. Gains mirror onto both sides;
-// travel_calib is side-selected and merged by handleConfig() itself.
-void mergeMotorGainsPatch(msg::MotorConfigPatch& slot, const msg::MotorConfigPatch& incoming) {
-  if (incoming.kp.has) slot.kp = incoming.kp;
-  if (incoming.ki.has) slot.ki = incoming.ki;
-  if (incoming.kff.has) slot.kff = incoming.kff;
-  if (incoming.i_max.has) slot.i_max = incoming.i_max;
-  if (incoming.kaw.has) slot.kaw = incoming.kaw;
-}
-
-// `init` is a one-shot trigger, never persisted.
-void mergeOtosPatch(msg::OtosConfigPatch& slot, const msg::OtosConfigPatch& incoming) {
-  if (incoming.linear_scale.has) slot.linear_scale = incoming.linear_scale;
-  if (incoming.angular_scale.has) slot.angular_scale = incoming.angular_scale;
-  if (incoming.offset_x.has) slot.offset_x = incoming.offset_x;
-  if (incoming.offset_y.has) slot.offset_y = incoming.offset_y;
-  if (incoming.offset_yaw.has) slot.offset_yaw = incoming.offset_yaw;
-}
-
-// Estimator patches are never persisted; reboot reverts to baked defaults.
-void mergeEstimatorPatch(Motion::FusionWeights& weights, const msg::EstimatorConfigPatch& patch) {
-  if (patch.weight_heading_otos.has) weights.headingOtos = patch.weight_heading_otos.val;
-  if (patch.weight_omega_otos.has) weights.omegaOtos = patch.weight_omega_otos.val;
-  if (patch.staleness_ms.has) weights.staleness = static_cast<uint32_t>(patch.staleness_ms.val);
-}
-
-void mergeShaperPatch(Motion::ShaperLimits& limits, const msg::EstimatorConfigPatch& patch) {
-  if (patch.a_max.has) limits.aMax = patch.a_max.val;
-  if (patch.a_decel.has) limits.aDecel = patch.a_decel.val;
-  if (patch.alpha_max.has) limits.alphaMax = patch.alpha_max.val;
-  if (patch.alpha_decel.has) limits.alphaDecel = patch.alpha_decel.val;
-  if (patch.j_max.has) limits.jMax = patch.j_max.val;
-  if (patch.yaw_jerk_max.has) limits.yawJerkMax = patch.yaw_jerk_max.val;
-}
 
 // 4 grayscale channels into one uint32, ch1 low byte (telemetry.proto `line`).
 uint32_t packLine(const Devices::LineReading& reading) {
@@ -84,9 +45,10 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
                       Devices::Motor& motorR, Devices::Otos& otos,
                       Devices::ColorSensorLeaf& color, Devices::LineSensorLeaf& line,
                       Comms& comms, Telemetry& tlm, Drive& drive,
-                      Motion::Odometry& odom, Motion::Planner& planner, Preamble& preamble,
+                      Configurator& configurator, Motion::Odometry& odom,
+                      Motion::Planner& planner, Preamble& preamble,
                       Motion::StateEstimator& stateEstimator, const Devices::Clock& clock,
-                      Devices::Sleeper& sleeper, Config::TuningStore* tuningStore)
+                      Devices::Sleeper& sleeper)
     : bus_(bus),
       motorL_(motorL),
       motorR_(motorR),
@@ -96,13 +58,13 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
       comms_(comms),
       tlm_(tlm),
       drive_(drive),
+      configurator_(configurator),
       odom_(odom),
       planner_(planner),
       preamble_(preamble),
       stateEstimator_(stateEstimator),
       clock_(clock),
-      sleeper_(sleeper),
-      tuningStore_(tuningStore) {}
+      sleeper_(sleeper) {}
 
 uint32_t RobotLoop::markTime() const {
   return static_cast<uint32_t>(clock_.nowMicros() / 1000);  // [us] -> [ms]
@@ -131,6 +93,40 @@ float RobotLoop::clampToPositionWireBound(float pos, bool* clamped) {
   return *clamped ? std::copysign(kPositionWireBound, pos) : pos;
 }
 
+// --- Routing ------------------------------------------------------------
+
+void RobotLoop::routeCommand(const Cmd& cmd) {
+  if (cmd.status != CmdStatus::kDecoded) return;
+
+  switch (cmd.env.cmd_kind) {
+    case msg::CommandEnvelope::CmdKind::MOVE:
+      handleMove(cmd.env);
+      break;
+    case msg::CommandEnvelope::CmdKind::WHEELS:
+      handleWheels(cmd.env);
+      break;
+    case msg::CommandEnvelope::CmdKind::STOP:
+      handleStop(cmd.env);
+      break;
+    case msg::CommandEnvelope::CmdKind::ESTOP:
+      handleEstop(cmd.env);
+      break;
+    case msg::CommandEnvelope::CmdKind::CONFIG:
+      // The Configurator owns everything a CONFIG means (configurator.h);
+      // RobotLoop's whole job here is the ack.
+      tlm_.ack(cmd.env.corr_id, configurator_.apply(cmd.env));
+      break;
+    case msg::CommandEnvelope::CmdKind::NONE:
+    default:
+      break;
+  }
+}
+
+// Every MOVE goes to the planner, twist or wheels-velocity, whatever its
+// stop condition. Before this change a wheels-velocity MOVE was diverted
+// into Drive, which has no odometry and therefore ran a DISTANCE-stopped
+// wheels move (what the TestGUI's `D <l> <r> <mm>` path sends) all the way
+// to its timeout backstop instead of stopping on the odometer.
 void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
   if (!configured_) {
     tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
@@ -165,175 +161,75 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
     default:
       break;  // unreachable: stop_kind validated above
   }
-  // A wheel-speeds command never touches the planner: the speeds go
-  // straight into the robot state and the cycle drives the wheels from
-  // there. TIME stop (or the timeout backstop) bounds it; completion is
-  // acked at expiry with the Move's own id.
+
   if (move.velocity_kind == msg::Move::VelocityKind::WHEELS) {
-    stopAll();  // the wheel command supersedes whatever was running
-    const float bound =
-        move.stop_kind == msg::Move::StopKind::TIME ? move.stop.time
-                                                     : move.timeout;
-    drive_.command(move.velocity.wheels.v_left, move.velocity.wheels.v_right,
-                   bound, move.id, state_.time.cycleStart);
-    tlm_.ack(env.corr_id, 0);
-    return;
+    m.velocityKind = Motion::Move::VelocityKind::Wheels;
+    m.vLeft = move.velocity.wheels.v_left;
+    m.vRight = move.velocity.wheels.v_right;
+  } else {
+    m.velocityKind = Motion::Move::VelocityKind::Twist;
+    m.v_x = move.velocity.twist.v_x;
+    m.v_y = move.velocity.twist.v_y;
+    m.omega = move.velocity.twist.omega;
+    const bool badShape =
+        m.threshold < 0.0f ||
+        (m.kind == Motion::Move::Kind::Distance && m.v_x == 0.0f) ||
+        (m.kind == Motion::Move::Kind::Angle && m.omega == 0.0f);
+    if (badShape) {
+      tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_BADARG));
+      return;
+    }
   }
 
-  m.velocityKind = Motion::Move::VelocityKind::Twist;
-  m.v_x = move.velocity.twist.v_x;
-  m.v_y = move.velocity.twist.v_y;
-  m.omega = move.velocity.twist.omega;
-  const bool badShape =
-      m.threshold < 0.0f ||
-      (m.kind == Motion::Move::Kind::Distance && m.v_x == 0.0f) ||
-      (m.kind == Motion::Move::Kind::Angle && m.omega == 0.0f);
-  if (badShape) {
-    tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_BADARG));
-    return;
-  }
-  drive_.stop();  // a planned move takes over the targets
+  drive_.estop();  // the planner takes over motion (one owner at a time)
   const bool accepted = planner_.move(m, move.replace);
   tlm_.ack(env.corr_id,
            accepted ? 0 : static_cast<uint32_t>(msg::ErrCode::ERR_FULL));
 }
 
-void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
-  if (env.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::OTOS) {
-    const msg::OtosConfigPatch& patch = env.cmd.config.patch.otos;
-
-    applyOtosPatch(patch);
-    mergeOtosPatch(persistedTuning_.otos, patch);
-    persistTuningIfChanged();
-
-    tlm_.ack(env.corr_id, 0);
+// WHEELS: the dumb teleop primitive. Straight to Drive, superseding the
+// planner -- no queue, no stop condition, just a wheel pair held for a
+// bounded window.
+void RobotLoop::handleWheels(const msg::CommandEnvelope& env) {
+  if (!configured_) {
+    tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
     return;
   }
 
-  if (env.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::ESTIMATOR) {
-    const msg::EstimatorConfigPatch& patch = env.cmd.config.patch.estimator;
-
-    Motion::FusionWeights weights = stateEstimator_.weights();
-    mergeEstimatorPatch(weights, patch);
-    stateEstimator_.setWeights(weights);
-
-    // Shaper wire keys retarget the planner's live limits.
-    Motion::ShaperLimits shaperLimits{};
-    shaperLimits.aMax = planner_.limits().aMax;
-    shaperLimits.aDecel = planner_.limits().aDecel;
-    shaperLimits.alphaMax = planner_.limits().alphaMax;
-    shaperLimits.alphaDecel = planner_.limits().alphaDecel;
-    shaperLimits.jMax = planner_.limits().jerkMax;
-    shaperLimits.yawJerkMax = planner_.limits().yawJerkMax;
-    mergeShaperPatch(shaperLimits, patch);
-    planner_.applyShaperLimits(shaperLimits.aMax, shaperLimits.aDecel,
-                               shaperLimits.alphaMax, shaperLimits.alphaDecel,
-                               shaperLimits.jMax, shaperLimits.yawJerkMax);
-
-    tlm_.ack(env.corr_id, 0);
+  const msg::Wheels& wheels = env.cmd.wheels;
+  if (wheels.duration <= 0.0f) {
+    // A wheel command with no positive duration is unbounded, which is the
+    // one thing this verb exists to make impossible.
+    tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_BADARG));
     return;
   }
 
-  if (env.cmd.config.patch_kind != msg::ConfigDelta::PatchKind::MOTOR) {
-    tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_UNIMPLEMENTED));
-    return;
-  }
-
-  const msg::MotorConfigPatch& patch = env.cmd.config.patch.motor;
-
-  // Gains mirror onto both sides; travel_calib only to the addressed side.
-  mergeMotorGainsPatch(persistedTuning_.motorL, patch);
-  mergeMotorGainsPatch(persistedTuning_.motorR, patch);
-  if (patch.travel_calib.has) {
-    msg::MotorConfigPatch& target = (patch.side == msg::BoundMotorSide::LEFT)
-                                         ? persistedTuning_.motorL
-                                         : persistedTuning_.motorR;
-    target.travel_calib = patch.travel_calib;
-  }
-  persistedTuning_.motorL.side = msg::BoundMotorSide::LEFT;
-  persistedTuning_.motorR.side = msg::BoundMotorSide::RIGHT;
-
-  applyMotorConfigPatch(persistedTuning_.motorL);
-  applyMotorConfigPatch(persistedTuning_.motorR);
-  persistTuningIfChanged();
-
+  planner_.estop();  // Drive takes over motion (one owner at a time)
+  drive_.command(wheels.v_left, wheels.v_right, wheels.duration, wheels.id,
+                 state_.time.cycleStart);
   tlm_.ack(env.corr_id, 0);
 }
 
-void RobotLoop::applyMotorConfigPatch(const msg::MotorConfigPatch& patch) {
-  // kff is the open-loop duty-per-speed scale (the same wire key the old
-  // velocity PID's feedforward used, so sim/bench configs keep working);
-  // the wire patch sets both wheels (per-wheel split is boot calibration).
-  if (patch.kff.has) drive_.setDutyPerSpeed(patch.kff.val, patch.kff.val);
-
-  // pid.* wire keys still retarget the (dormant) planner's gains.
-  float kff = planner_.limits().velKff;
-  float kp = planner_.limits().velKp;
-  float ki = planner_.limits().velKi;
-  float iMax = planner_.limits().velIMax;
-  if (patch.kp.has) kp = patch.kp.val;
-  if (patch.ki.has) ki = patch.ki.val;
-  if (patch.kff.has) kff = patch.kff.val;
-  if (patch.i_max.has) iMax = patch.i_max.val;
-  planner_.applyVelGains(kff, kp, ki, iMax);
-
-  if (patch.travel_calib.has) {
-    if (patch.side == msg::BoundMotorSide::LEFT) {
-      motorL_.applyTravelCalib(patch.travel_calib.val);
-    } else {
-      motorR_.applyTravelCalib(patch.travel_calib.val);
-    }
-  }
-}
-
-void RobotLoop::applyOtosPatch(const msg::OtosConfigPatch& patch) {
-  if (patch.linear_scale.has) otos_.setLinearScalar(patch.linear_scale.val);
-  if (patch.angular_scale.has) otos_.setAngularScalar(patch.angular_scale.val);
-
-  // setOffset writes x/y/heading together: read-merge-write so absent
-  // fields keep the chip's current values.
-  if (patch.offset_x.has || patch.offset_y.has || patch.offset_yaw.has) {
-    float x = 0.0f, y = 0.0f, heading = 0.0f;
-    otos_.getOffset(x, y, heading);
-    if (patch.offset_x.has) x = patch.offset_x.val;
-    if (patch.offset_y.has) y = patch.offset_y.val;
-    if (patch.offset_yaw.has) heading = patch.offset_yaw.val;
-    otos_.setOffset(x, y, heading);
-  }
-
-  if (patch.init) otos_.init();
-}
-
-// Change-detection debounce: only write flash when the serialized snapshot
-// actually differs from the last one written.
-void RobotLoop::persistTuningIfChanged() {
-  if (tuningStore_ == nullptr) return;
-
-  Config::Blob blob = Config::serializeSnapshot(persistedTuning_);
-  if (blob == lastPersistedBlob_) return;
-
-  tuningStore_->save(Config::kConfigSchemaVersion, blob);
-  lastPersistedBlob_ = blob;
-}
-
-void RobotLoop::reapplyPersistedTuning(const Config::TuningSnapshot& snapshot) {
-  applyMotorConfigPatch(snapshot.motorL);
-  applyMotorConfigPatch(snapshot.motorR);
-  applyOtosPatch(snapshot.otos);
-
-  persistedTuning_ = snapshot;
-  lastPersistedBlob_ = Config::serializeSnapshot(persistedTuning_);
-}
-
-// Stop everything that can command the wheels (shared by STOP and the
-// takeover paths -- no near-duplicates).
-void RobotLoop::stopAll() {
-  drive_.stop();
-  planner_.stop();
-}
-
+// STOP: the PLANNED stop -- a queue entry, executed in sequence. The ack
+// here is the ENQUEUE ack (corr_id); the completion ack (Stop::id) rides
+// the planner's own TickResult when the robot actually comes to rest.
 void RobotLoop::handleStop(const msg::CommandEnvelope& env) {
-  stopAll();
+  const bool accepted = planner_.plannedStop(env.cmd.stop.id);
+  tlm_.ack(env.corr_id,
+           accepted ? 0 : static_cast<uint32_t>(msg::ErrCode::ERR_FULL));
+}
+
+// ESTOP: halt now, both subsystems, no completion acks for what was
+// discarded.
+void RobotLoop::handleEstop(const msg::CommandEnvelope& env) {
+  drive_.estop();
+  planner_.estop();
+  // Zero the blackboard's own commanded speeds too. Both subsystems'
+  // update() calls would land the same zeros at the end of this cycle
+  // anyway, but an emergency stop should not depend on the rest of the
+  // schedule running to completion to take effect.
+  state_.wheelLeft.cmdVelocity = 0.0f;
+  state_.wheelRight.cmdVelocity = 0.0f;
   tlm_.ack(env.corr_id, 0);
 }
 
@@ -341,27 +237,6 @@ void RobotLoop::handleStop(const msg::CommandEnvelope& env) {
 void RobotLoop::rejectDuringBoot(const Cmd& cmd) {
   if (cmd.status != CmdStatus::kDecoded) return;
   tlm_.ack(cmd.env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
-}
-
-void RobotLoop::processMessage(const Cmd& cmd) {
-  msg::CommandEnvelope::CmdKind kind = (cmd.status == CmdStatus::kDecoded)
-      ? cmd.env.cmd_kind
-      : msg::CommandEnvelope::CmdKind::NONE;
-      
-  switch (kind) {
-    case msg::CommandEnvelope::CmdKind::MOVE:
-      handleMove(cmd.env);
-      break;
-    case msg::CommandEnvelope::CmdKind::CONFIG:
-      handleConfig(cmd.env);
-      break;
-    case msg::CommandEnvelope::CmdKind::STOP:
-      handleStop(cmd.env);
-      break;
-    case msg::CommandEnvelope::CmdKind::NONE:
-    default:
-      break;
-  }
 }
 
 [[noreturn]] void RobotLoop::run() {
@@ -375,9 +250,9 @@ void RobotLoop::processMessage(const Cmd& cmd) {
 // and NACKing any command that arrives early.
 void RobotLoop::boot() {
   while (!preamble_.done()) {
+    comms_.pump(markTime());
     Cmd bootCmd;
-    comms_.pump(bootCmd, markTime());
-    rejectDuringBoot(bootCmd);
+    while (comms_.takeCommand(bootCmd)) rejectDuringBoot(bootCmd);
 
     preamble_.step();  // one bounded probe action per pass
 
@@ -418,13 +293,17 @@ void RobotLoop::publishWheel(Devices::Motor& motor,
   wheel.positionEpoch = positionEpoch;
 }
 
+// Deliberately does NOT touch wheel.cmdVelocity: that field has exactly one
+// writer per cycle -- whichever of Motion::Planner::update()/App::Drive::
+// update() currently owns motion, both of which run later in the pace
+// block. Publishing it from here as well would overwrite the owner's
+// staged command with the value being actuated THIS cycle, one generation
+// stale.
 void RobotLoop::publishWheels() {
   bool clampedL = false;
   bool clampedR = false;
   publishWheel(motorL_, state_.wheelLeft, positionEpochLeft_, clampedL);
   publishWheel(motorR_, state_.wheelRight, positionEpochRight_, clampedR);
-  state_.wheelLeft.cmdVelocity = drive_.targetLeft();
-  state_.wheelRight.cmdVelocity = drive_.targetRight();
   state_.health.wedgeLatch = motorL_.wedged() || motorR_.wedged();
   state_.health.positionClamped = clampedL || clampedR;
 }
@@ -471,17 +350,24 @@ void RobotLoop::publishPose() {
   state_.pose.omega = twistOmega;
 }
 
-// Ack a wheel command that Drive expired this tick (bookkeeping).
+// Ack a wheel command that Drive expired this cycle (bookkeeping). Called
+// straight after Drive::update() latches it, so it rides the NEXT frame --
+// the same visibility contract publishMoveResult() gives the planner's own
+// completions.
 void RobotLoop::ackDriveCompletion() {
   uint32_t moveId = 0;
   if (drive_.takeCompletion(&moveId)) tlm_.ack(moveId, 0);
 }
 
 void RobotLoop::publishHealth() {
-  state_.command.mode = planner_.active() ? Types::Mode::Velocity : Types::Mode::Idle;
-  state_.command.moveActive = planner_.active();
+  // "Motion in progress" is true when EITHER decider owns motion -- a live
+  // WHEELS command is motion, and a host watching flags bit 2 must see it.
+  const bool moving = planner_.active() || drive_.owns();
+  state_.command.mode = moving ? Types::Mode::Velocity : Types::Mode::Idle;
+  state_.command.moveActive = moving;
   state_.health.i2cSafetyNetCount = bus_.clearanceSafetyNetCount();
   state_.health.commsMalformedCount = comms_.malformedCount();
+  state_.health.commandsDroppedCount = comms_.commandsDroppedCount();
 }
 
 void RobotLoop::publishTiming(uint64_t cycleStartUs) {
@@ -510,38 +396,49 @@ void RobotLoop::publishMoveResult(const Motion::TickResult& moveResult) {
 // settle invalidates the pending sample, so the windows' bodies never
 // touch the bus. The trailing kPace block does touch the bus (OTOS + one
 // of line/color), outside any select->collect window.
+//
+// comms_.pump() runs in ALL FOUR blocks -- it is pure CPU/buffer work, no
+// bus traffic, so it is legal inside a settle window, and putting it there
+// is what frees the transports several times per cycle instead of once.
+// The four blocks stay exactly four: the schedule's own shape is asserted
+// by src/tests/sim/system/sim_api_harness.cpp (exactly four sleepMillis()
+// calls per cycle), so pump() is folded into the EXISTING bodies rather
+// than given a block of its own.
 void RobotLoop::cycle() {
   state_.time.cycleStart = markTime();  // [ms] pace anchor + wire `now`
   const uint64_t cycleStartUs = clock_.nowMicros();  // [us]
 
-  Cmd cmd;
-
-  // The planner (when it owns motion) published its wheel targets into
-  // the state last cycle; hand them to Drive. A live wheel command owns
-  // the targets instead -- Drive ignores this while its own command runs.
-  drive_.setPlannerTargets(state_.wheelLeft.cmdVelocity,
-                           state_.wheelRight.cmdVelocity,
-                           planner_.active());
-  drive_.tick(state_.time.cycleStart);
-  ackDriveCompletion();
+  // Actuate the speeds the owning subsystem staged onto the blackboard last
+  // cycle -- one actuation path regardless of which decider produced them
+  // (one cycle of command-to-wheels latency, the same the planner's own
+  // actuationDelay compensates for).
+  drive_.tick(state_.wheelLeft.cmdVelocity, state_.wheelRight.cmdVelocity);
 
   motorL_.requestSample();  // brick latches ONE pending read per select
   runAndWait(kSettle, [&] { 
-    comms_.pump(cmd, state_.time.cycleStart); 
+    comms_.pump(state_.time.cycleStart); 
   });
   motorL_.tick(clock_.nowMicros());  // collect L
 
-  runAndWait(kClear, [&] {});  // brick's post-duty-write clearance
+  runAndWait(kClear, [&] {  // brick's post-duty-write clearance
+    comms_.pump(state_.time.cycleStart);
+  });
 
   motorR_.requestSample();
-  runAndWait(kSettle, [&] { 
-    processMessage(cmd); 
+  runAndWait(kSettle, [&] {
+    comms_.pump(state_.time.cycleStart);
+    // Drain the WHOLE ring, once per cycle. Every command ingested since
+    // the last drain is routed here, in arrival order.
+    Cmd cmd;
+    while (comms_.takeCommand(cmd)) routeCommand(cmd);
   });
   motorR_.tick(clock_.nowMicros());  // collect R
 
   publishWheels();  // at the point of same-generation L/R coherence
 
   runAndWait(kPace, [&] {
+    comms_.pump(state_.time.cycleStart);
+
     uint64_t nowUs = clock_.nowMicros();
 
     odom_.integrate(motorL_.position(), motorR_.position());  // before OTOS: FakeOtos reads it
@@ -558,9 +455,15 @@ void RobotLoop::cycle() {
     tlm_.update(state_);
     tlm_.emit(state_.time.cycleStart);
 
-    // Planner tick AFTER emit: its completion ack rides the NEXT frame.
+    // Both deciders tick AFTER emit: their completion acks ride the NEXT
+    // frame. Drive::update() runs LAST so that, while Drive owns motion,
+    // its targets are the ones left on the blackboard -- the planner's
+    // update() is unconditional and would otherwise overwrite them with a
+    // drained-to-zero command.
     const Motion::TickResult moveResult = planner_.tick(state_);
     planner_.update(state_);
+    drive_.update(state_, state_.time.cycleStart);
+    ackDriveCompletion();
     publishMoveResult(moveResult);
   });
 }

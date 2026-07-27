@@ -101,6 +101,7 @@ set(MOTION_DIR "${REPO_ROOT}/src/motion")
 # ---------------------------------------------------------------------------
 set(APP_SOURCES
     "${SOURCE_DIR}/app/comms.cpp"
+    "${SOURCE_DIR}/app/configurator.cpp"
     "${SOURCE_DIR}/app/drive.cpp"
     "${SOURCE_DIR}/app/preamble.cpp"
     "${SOURCE_DIR}/app/robot_loop.cpp"

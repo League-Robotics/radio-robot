@@ -195,7 +195,8 @@ def test_outcome_for_terminal_frame_fault_on_move_timeout_flag_even_with_ok_ack(
 # ---------------------------------------------------------------------------
 
 
-_RING_SURVIVAL_PUSHES = 4  # mirrors kAckRingDepth (telemetry.proto) -- see the class docstring
+_RING_SURVIVAL_PUSHES = 12  # mirrors kAckRingDepth (telemetry.proto), raised 4 -> 12 by
+                            # command-ingestion-...-two-stops.md §1 -- see the class docstring
 # below: a real ring entry survives across roughly this many SUBSEQUENT telemetry pushes
 # (evicted only once genuinely full), not just the one push it was first created on.
 

@@ -82,7 +82,7 @@ def main() -> int:
                           else end.enc_right.position)
                     ev = (end.enc_left.velocity if wheel == "left"
                           else end.enc_right.velocity)
-                    proto.stop()
+                    proto.estop()
                     time.sleep(REST)
                     proto.read_pending_binary_tlm_frames()
                     results.append((wheel, direction, duty, rep, s1 - s0, ev))

@@ -190,8 +190,11 @@ void scenarioSetDutyStagesRawValues() {
   drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
   const float dutyLeft = 0.18f;
   const float dutyRight = 0.06f;
-  drive.setDuty(dutyLeft, dutyRight);
-  drive.tick(0);
+  // tick() takes the commanded SPEEDS directly now (command-ingestion-ring-
+  // buffered-comms-subsystem-routing-two-stops.md §4): the loop hands it
+  // whichever subsystem's targets the blackboard carries, so there is one
+  // actuation path regardless of who decided the motion.
+  drive.tick(dutyLeft, dutyRight);
 
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
   runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs);
@@ -224,15 +227,13 @@ void scenarioStopZeroesBothTargetsWithinOneCycle() {
   drive.setDutyPerSpeed(1.0f, 1.0f);
   // Drive a nonzero pair first, so the zero write below is a real
   // transition, not "duty was never nonzero to begin with."
-  drive.setDuty(0.12f, 0.09f);
-  drive.tick(0);
+  drive.tick(0.12f, 0.09f);
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
   runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs);
   checkTrue(left.appliedDuty() != 0.0f, "setup: left duty is nonzero before the zero pair");
   checkTrue(right.appliedDuty() != 0.0f, "setup: right duty is nonzero before the zero pair");
 
-  drive.setDuty(0.0f, 0.0f);
-  drive.tick(0);
+  drive.tick(0.0f, 0.0f);
 
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs + 20000);
   runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs + 20000);

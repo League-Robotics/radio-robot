@@ -241,6 +241,18 @@ class ControlConfig(BaseModel):
     j_max:        Optional[float] = None  # [mm/s^3] control.j_max
     yaw_jerk_max: Optional[float] = None  # [rad/s^3] control.yaw_jerk_max
 
+    # command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
+    # §6: App::Drive's per-robot wheel calibration, moved out of hard-coded
+    # C++ (Drive member initializers / a bare main.cpp setCrawlPulse() call)
+    # into the robot JSON. REQUIRED by gen_boot_config.py's
+    # drive_config_for_config(), so -- exactly like every other field in
+    # this block -- they need a model field here or pydantic silently DROPS
+    # them at parse time and the Tier-2 mapping diverges from the
+    # generator's own output.
+    duty_per_speed_left:  Optional[float] = None  # [duty/(mm/s)] 1 / measured plant gain, left
+    duty_per_speed_right: Optional[float] = None  # [duty/(mm/s)] 1 / measured plant gain, right
+    crawl_pulse:          Optional[float] = None  # [-1,1] sub-breakaway pulse amplitude; 0 = off
+
 
 class EstimatorConfig(BaseModel):
     """``App::StateEstimator``'s fusion weights -- mirrors the robot JSON's

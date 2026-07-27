@@ -86,7 +86,7 @@ def main() -> None:
                                               timeout=BRIDGE_TIMEOUT,
                                               replace=True)
                 else:
-                    session.proto.stop()
+                    session.proto.estop()
                 tNow = time.monotonic() - t0
                 log["t"].append(tNow)
                 log["velLeft"].append(session.state.wheelLeft.velocity)
@@ -102,7 +102,7 @@ def main() -> None:
             elapsed = time.monotonic() - loopStart
             time.sleep(max(0.0, PERIOD - elapsed))
     finally:
-        session.proto.stop()
+        session.proto.estop()
         time.sleep(0.4)
         session.ingestTelemetry()
         encEnd = (session.state.wheelLeft.position,

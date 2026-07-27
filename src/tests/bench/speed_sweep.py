@@ -73,7 +73,7 @@ def main() -> int:
                         velsL.append(f.enc_left.velocity)
                         velsR.append(f.enc_right.velocity)
                 time.sleep(0.02)
-            proto.stop()
+            proto.estop()
             time.sleep(REST)
             proto.read_pending_binary_tlm_frames()
 

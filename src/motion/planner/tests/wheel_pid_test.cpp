@@ -112,7 +112,7 @@ void testPlannerDutyStage() {
     }
   }
   CHECK(sawDuty);
-  planner.stop();
+  planner.estop();
   CHECK_NEAR(planner.commandedDutyLeft(), 0.0f, 1e-9);
   CHECK_NEAR(planner.commandedDutyRight(), 0.0f, 1e-9);
 }

@@ -19,8 +19,18 @@ bool plannerMove(void* planner, const Motion::Move* next, bool replace) {
   return static_cast<Motion::Planner*>(planner)->move(*next, replace);
 }
 
-void plannerStop(void* planner) {
-  static_cast<Motion::Planner*>(planner)->stop();
+// The PANIC stop (command-ingestion-...-two-stops.md §5) -- renamed from
+// plannerStop() alongside Planner::stop() -> Planner::estop(), so the C ABI
+// cannot leave the two stop meanings ambiguous either.
+void plannerEstop(void* planner) {
+  static_cast<Motion::Planner*>(planner)->estop();
+}
+
+// The PLANNED stop: enqueues a Move::Kind::Stop entry that executes in
+// sequence and acks `moveId` on arrival. Returns false when the queue is
+// full, mirroring plannerMove().
+bool plannerPlannedStop(void* planner, uint32_t moveId) {
+  return static_cast<Motion::Planner*>(planner)->plannedStop(moveId);
 }
 
 void plannerTick(void* planner, const Types::RobotState* state,

@@ -284,7 +284,22 @@ message Telemetry {
   //             rebaseline trigger, at a 2000mm margin below the bound,
   //             should prevent this in normal operation) -- purely
   //             observable evidence the defensive fallback engaged.
-  //   bits 18-31 reserved
+  //   bit 18 -- fault: an inbound command was dropped because App::Comms's
+  //             command ring was full (App::Comms::commandsDroppedCount()
+  //             > 0 -- command-ingestion-...-two-stops.md §1). Distinct in
+  //             KIND from bit 9: bit 9 is a wire/link problem (a line
+  //             arrived corrupt), this is firmware backpressure (a
+  //             well-formed command arrived faster than one cycle's drain
+  //             could route it). Latching, like every other fault count
+  //             bit here -- it says "this has happened since boot," not
+  //             "this is happening now."
+  //   bits 19-31 reserved
+  //
+  // (max)=524287 ((1<<19)-1) -- widened by command-ingestion-...-two-stops.md
+  // to cover bit 18 above, the same way 124-008 widened it for bits 16/17
+  // (see that note below). Same discipline: the bound tracks the highest
+  // LIVE bit, and validateBounds() runs on decode only, so an unwidened
+  // bound is a silent decode-side rejection waiting to happen.
   //
   // (max)=262143 ((1<<18)-1) -- 124-008 (issue §B6): this bound was
   // 65535 (16 bits) while kFlagFaultShapingDisabled (bit 16, added a prior
@@ -292,7 +307,7 @@ message Telemetry {
   // silent because validateBounds() runs on decode only, never encode (see
   // wire.cpp's own decodeInto()/encodeInto() split). Widened to cover both
   // bit 16 and this ticket's own new bit 17.
-  uint32 flags = 4 [(max) = 262143];
+  uint32 flags = 4 [(max) = 524287];
 
   // ack_corr/ack_err -- DELETED (124-008, issue §B4): the single "freshest
   // ack" scalar slot duplicated the ack ring's (acks, below) newest entry;
@@ -347,7 +362,17 @@ message Telemetry {
   // individually bounds-checked by decodeInto()'s kRepeatedScalar case,
   // same as every other repeated field in this schema), purely a size-
   // accounting fact the generator can prove from the schema.
-  repeated uint32 acks = 14 [(max_count) = 4, (max) = 1048575];
+  // DEPTH 4 -> 12 (command-ingestion-ring-buffered-comms-subsystem-routing-
+  // two-stops.md §1): with App::Comms's command ring, RobotLoop drains the
+  // WHOLE ring in one cycle, so N commands ingested across a cycle push N
+  // acks into this ring within a single frame. At depth 4 a 5-command
+  // burst -- well inside the ring's own depth -- would execute correctly
+  // but lose an ack, and a host chaining on completion acks would hang on
+  // a command that really did run. The two depths are kept EQUAL to
+  // App::kCmdRingDepth (comms.h) for exactly that reason; see also
+  // src/host/robot_radio/robot/protocol.py's own ring-survival note, which
+  // documented the old depth-4 margin.
+  repeated uint32 acks = 14 [(max_count) = 12, (max) = 1048575];
 
   // 123-004 (MIGRATED from TelemetrySecondary's fields 11/12, ADDITIVE here
   // -- next free numbers after 120's acks=14; nothing above is renumbered):

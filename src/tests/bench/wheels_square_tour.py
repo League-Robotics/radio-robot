@@ -2,7 +2,7 @@
 """wheels_square_tour.py -- the square tour driven ENTIRELY by plain
 wheel-speed commands (no planner, no shaping, no PID): 4 x 500 mm legs at
 +150/+150 mm/s, 4 x 90 deg pivots at -120/+120 mm/s, each segment a single
-time-bounded move_wheels command, chained on completion acks. Every
+time-bounded WHEELS command straight to App::Drive. Every
 command is ack-verified with retry (DAPLink inbound loss workaround).
 
 Output: a two-panel chart -- the XY path integrated from the encoders
@@ -74,9 +74,8 @@ def segments() -> list[tuple[float, float, float, int]]:
 
 def sendVerified(proto, vL, vR, durationMs, moveId):
     for _ in range(4):
-        corr = proto.move_wheels(v_left=vL, v_right=vR, stop_time=durationMs,
-                                 timeout=durationMs + 3000.0, replace=True,
-                                 move_id=moveId)
+        corr = proto.wheels(v_left=vL, v_right=vR, duration=durationMs,
+                            move_id=moveId)
         ack = proto.wait_for_ack(corr, timeout=400)
         if ack is not None and ack.ok:
             return True
@@ -188,7 +187,7 @@ def main() -> int:
                 log["cmdL"].append(0.0)
                 log["cmdR"].append(0.0)
         time.sleep(0.01)
-    proto.stop()
+    proto.estop()
     conn.disconnect()
 
     # Odometry from encoder positions (host-side integration for the chart).

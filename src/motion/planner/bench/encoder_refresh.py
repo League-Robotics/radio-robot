@@ -222,11 +222,11 @@ def capture(port: str, speeds: "tuple[float, ...]", dwell: float,
                 for frame in proto.read_pending_binary_tlm_frames():
                     rows.append(_frameRow(frame, speed))
                 time.sleep(0.005)
-            proto.wait_for_ack(proto.stop(), timeout=ACK_TIMEOUT)
+            proto.wait_for_ack(proto.estop(), timeout=ACK_TIMEOUT)
             time.sleep(0.3)  # let the wheels come to rest before the next leg
     finally:
         try:
-            proto.stop()
+            proto.estop()
         finally:
             conn.close()
 

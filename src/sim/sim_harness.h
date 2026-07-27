@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "app/comms.h"
+#include "app/configurator.h"
 #include "app/drive.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
@@ -146,9 +147,13 @@ class SimHarness {
         // `now` explicitly at each enqueue() call instead.
         planner_(simPlannerLimits(trackWidth)),
         preamble_(armorL_, armorR_, otos_, color_, line_, clock_),
+        // App::Configurator owns the CONFIG lifecycle (configurator.h).
+        // No TuningStore: persistence is disabled in the sim, exactly as
+        // the pre-Configurator RobotLoop's own null tuningStore was.
+        configurator_(drive_, armorL_, armorR_, otos_, planner_, stateEstimator_),
         robotLoop_(plant_, armorL_, armorR_, otos_, color_, line_, comms_, tlm_,
-                   drive_, odom_, planner_, preamble_, stateEstimator_, clock_,
-                   sleeper_) {
+                   drive_, configurator_, odom_, planner_, preamble_,
+                   stateEstimator_, clock_, sleeper_) {
     // No self-configuration -- motorL_/motorR_ stay at their default
     // Devices::MotorConfig{} (all-zero), matching a real, not-yet-booted
     // composition root. A caller MUST call configureMotor() for BOTH ports
@@ -183,8 +188,11 @@ class SimHarness {
 
   // Pushes one complete `<COMMAND>':'<COBS+CRC bytes>` wire LINE (124-005 --
   // was a bare COBS+CRC frame body pre-124-005, itself was armored "*B..."
-  // text pre-123) onto the inbound serial FakeTransport -- App::Comms::
-  // pump() consumes at most one per cycle() call. `frame`/`len` is always a
+  // text pre-123) onto the inbound serial FakeTransport. App::Comms::pump()
+  // now DRAINS both transports (command-ingestion-ring-buffered-comms-
+  // subsystem-routing-two-stops.md §1) and RobotLoop routes the whole ring
+  // once per cycle, so N lines injected before one step() are all consumed
+  // by that step -- NOT one per cycle() as this comment used to say. `frame`/`len` is always a
   // TestSupport::armorMoveCommand()/armorStopCommand()-built line -- an
   // EXPLICIT length, never recovered via strlen(): COBS is now keyed on
   // 0x0A (wire_runtime.h item 8), not 0x00, so the line may legitimately
@@ -213,8 +221,25 @@ class SimHarness {
     injectCommand(TestSupport::armorMoveCommand(v_left, v_right, stopKind, stopValue, timeout,
                                                  replace, id, corrId));
   }
-  void injectStop(uint32_t corrId = 0) {
-    injectCommand(TestSupport::armorStopCommand(corrId));
+  // injectStop() -- the PLANNED stop (command-ingestion-ring-buffered-
+  // comms-subsystem-routing-two-stops.md §2): a planner queue entry that
+  // executes in sequence, NOT a panic stop. `id` is its completion-ack key.
+  void injectStop(uint32_t corrId = 0, uint32_t id = 0) {
+    injectCommand(TestSupport::armorStopCommand(corrId, id));
+  }
+
+  // injectEstop() -- "halt now, everywhere" (§2/§3). THIS is what
+  // injectStop() meant before the command-ingestion rework; a caller that
+  // wanted the drivetrain zeroed immediately belongs here.
+  void injectEstop(uint32_t corrId = 0) {
+    injectCommand(TestSupport::armorEstopCommand(corrId));
+  }
+
+  // injectWheels() -- the dumb teleop primitive (§2): straight to
+  // App::Drive, superseding the planner, held for `duration` ms.
+  void injectWheels(float vLeft, float vRight, float duration,  // [mm/s] [mm/s] [ms]
+                    uint32_t id = 0, uint32_t corrId = 0) {
+    injectCommand(TestSupport::armorWheelsCommand(vLeft, vRight, duration, id, corrId));
   }
 
   // motorConfig -- test-only readback of the Devices::MotorConfig last
@@ -410,6 +435,7 @@ class SimHarness {
   // (public accessor: planner(), below with the other accessors)
   Motion::Planner planner_;
   App::Preamble preamble_;
+  App::Configurator configurator_;
   App::RobotLoop robotLoop_;
 
   bool booted_ = false;

@@ -125,8 +125,13 @@ class Rig:
         return self.proto.twist(v_x=v_x, omega=omega, duration=duration)
 
     def stop(self) -> int:
-        """Fire-and-poll panic-stop — see `NezhaProtocol.stop()`."""
-        return self.proto.stop()
+        """Fire-and-poll panic-stop — see `NezhaProtocol.estop()`.
+
+        ESTOP, not STOP: since command-ingestion-ring-buffered-comms-
+        subsystem-routing-two-stops.md §2, `stop()` is a QUEUED, planned
+        stop and `estop()` is the "halt everything now" this method means.
+        """
+        return self.proto.estop()
 
     def config(self, **deltas: Any) -> int:
         """Fire-and-poll `ConfigDelta` — see `NezhaProtocol.config()`. Today
@@ -152,7 +157,7 @@ class Rig:
         """Guaranteed stop + disconnect — motors must never be left
         running (`.claude/rules/hardware-bench-testing.md`)."""
         try:
-            self.proto.stop()
+            self.proto.estop()
         except Exception:
             pass
         try:

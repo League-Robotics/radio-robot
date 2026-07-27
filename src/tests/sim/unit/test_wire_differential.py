@@ -117,7 +117,15 @@ def test_field_numbers_match_pb2_descriptors():
     # `move` (116-001) is a FRESH arm at 21, a different shape from the
     # deleted 109-003 arc-command `Move` (see envelope.proto's own
     # CommandEnvelope header comment).
-    expected_cmd_numbers = {"config": 6, "stop": 13, "move": 21}
+    # `wheels` (22) / `estop` (23) are the command-ingestion rework's own
+    # fresh arms (command-ingestion-ring-buffered-comms-subsystem-routing-
+    # two-stops.md §2), never one of the reserved numbers. Their arm NAMES
+    # are load-bearing: both host senders derive the wire prefix -- and
+    # therefore the CRC scope -- from `WhichOneof("cmd").upper()`, so
+    # `wheels`/`estop` must spell commands.proto's WHEELS/ESTOP verbs
+    # exactly. This assertion pins the names as well as the numbers.
+    expected_cmd_numbers = {"config": 6, "stop": 13, "move": 21,
+                            "wheels": 22, "estop": 23}
     actual_cmd_numbers = {
         f.name: f.number for f in pb_envelope.CommandEnvelope.DESCRIPTOR.oneofs_by_name["cmd"].fields
     }

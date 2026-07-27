@@ -36,8 +36,24 @@ class Planner {
   // full (caller acks ERR_FULL; queue provably unchanged).
   bool move(const Move& next, bool replace);
 
-  // Flush everything and command zero.
-  void stop();
+  // Enqueue a PLANNED stop (command-ingestion-...-two-stops.md §5, the
+  // wire's `STOP` verb): an ordinary queue entry (Move::Kind::Stop) that
+  // executes IN SEQUENCE behind whatever is already queued. On activation
+  // it ramps the staged command down to zero at the decel ceiling and
+  // completes once the body is at rest, acking `moveId` through the usual
+  // TickResult path -- so a host can say "finish the two legs you already
+  // have, then stop" and learn when that stop actually happened.
+  //
+  // NOT the panic stop: that is estop() below. Returns false when the queue
+  // is full, exactly like move().
+  bool plannedStop(uint32_t moveId);
+
+  // Panic stop (§5): clear the active Move AND every pending entry
+  // immediately and command zero. The discarded entries get NO completion
+  // acks -- the host asked for a halt, not for a report that the things it
+  // cancelled finished. Replaces the previous stop(), which had this
+  // behavior under a name that now means the planned stop above.
+  void estop();
 
   // See the file header. `state.time.cycleStart` is the clock.
   TickResult tick(const Types::RobotState& state);
@@ -139,6 +155,13 @@ class Planner {
 
   // No active Move: ramp the staged command down to zero within limits.
   void drainToZero(float dt);
+
+  // Bounded backstop for a Kind::Stop entry: the longest it may take to
+  // reach rest before completing anyway. Derived, not a magic number --
+  // the worst-case decel ramp from vMax plus one settle allowance -- so a
+  // planned stop can never wedge the queue on a plant whose measured
+  // velocity never quiets below the rest floors.
+  float plannedStopWindow() const;  // [ms]
 
   // Age the staged command by one tick (see cmdLeftPrevious_).
   void rollCommandHistory();

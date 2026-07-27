@@ -95,7 +95,11 @@ class _FakeProto:
         self.twist_calls.append((v_x, omega, duration))
         return self._next_id()
 
-    def stop(self) -> int:
+    def estop(self) -> int:
+        # estop(), not stop(): Rig.stop() forwards to NezhaProtocol.estop()
+        # since command-ingestion-ring-buffered-comms-subsystem-routing-two-
+        # stops.md §2 made `stop()` a QUEUED, planned stop -- "halt now" is
+        # what Rig means and what this double must therefore expose.
         self.stop_calls += 1
         return self._next_id()
 
@@ -170,7 +174,7 @@ class TestRigForwarding:
 
     def test_close_stops_and_disconnects_even_if_stop_raises(self, rig_dev):
         class _RaisingProto(_FakeProto):
-            def stop(self) -> int:
+            def estop(self) -> int:
                 raise ConnectionError("port gone")
 
         proto = _RaisingProto()

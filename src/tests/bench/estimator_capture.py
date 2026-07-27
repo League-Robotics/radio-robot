@@ -295,7 +295,7 @@ def _run_hardware(args: argparse.Namespace) -> int:
         row_count, schedule = capture_with_pattern(proto, args.csv)
     finally:
         try:
-            proto.stop()
+            proto.estop()
         except Exception:
             pass
         conn.disconnect()

@@ -159,7 +159,43 @@ and `drive_.update(state_, state_.time.cycleStart);` in the pace block.
 - `estop()` — clear active and pending immediately, command zero, no
   completion acks for discarded entries. Replaces the existing `stop()`.
 
-### 6. `App::Configurator`
+### 6. Move the wheel-layer constants into robot config
+
+Two per-robot measured properties are currently hard-coded rather than
+configured, and must move into the robot JSON (`data/robots/*.json`,
+`control.*` block) alongside `output_deadband` / `reversal_dwell_ms`, flowing
+through `src/scripts/gen_boot_config.py` -> boot config -> the config path:
+
+- **`drive.setCrawlPulse()`** — a bare call in `src/firm/main.cpp`.
+- **Per-wheel `dutyPerSpeed`** (L 1/560, R 1/510) — hard-coded as member
+  initializers in `drive.h`. This is one robot's gearboxes on one battery,
+  measured on one evening, compiled into the class definition: every other
+  robot silently inherits it, and changing it means editing C++ and
+  reflashing. The `kff` wire key is not an escape hatch — it sets both wheels
+  to one value, so a single config push flattens the ~10% L/R asymmetry with
+  no way to restore it short of a rebuild.
+
+  Requirement: `App::Drive` carries **no calibration defaults at all**. The
+  values come from the robot JSON via boot config and are handed in at
+  construction; an unconfigured Drive refuses to drive rather than quietly
+  using another robot's numbers (the same fail-closed posture
+  `RobotLoop`'s `configured_` gate already takes for motion commands).
+
+**The committed crawl value is also wrong.** `0.20` was sized against the
+duty sweep's 0.10-0.19 "dead zone", which the standalone `duty_min` prober
+(`src/tests/firmware/duty_min/RESULTS.md`) later showed to be an artifact of
+that sweep's criterion (all three cold-start 500 ms repeats must move). True
+breakaway is **1-6% duty, state-dependent** — consistent with a vendor-blocks
+rig driving the same motors at 1%. At 0.20 the crawl/continuous boundary sits
+at ~107 mm/s commanded, so every speed below that runs pulsed, adding ripple
+across a wide band for a stiction problem that largely does not exist there.
+
+Action: default crawl **off**, re-measure the low end of
+`src/tests/bench/speed_sweep.py` with it disabled, and enable it only if slow
+speeds genuinely stall — sized from the prober data (~0.05), set through
+config.
+
+### 7. `App::Configurator`
 
 New `src/firm/app/configurator.{h,cpp}` — named to avoid colliding with the
 existing `Config::` namespace (`src/firm/config/persisted_tuning.h`). Owns
@@ -169,7 +205,7 @@ values into the owning subsystems (motor/calibration → Drive, estimator and
 shaper → Planner, OTOS → the sensor leaf). `reapplyPersistedTuning()` moves
 with it; `RobotLoop` keeps only `configurator_.apply(env)` plus the ack.
 
-### 7. Host and bench
+### 8. Host and bench
 
 `src/host/robot_radio/robot/protocol.py` gains `wheels(v_left, v_right,
 duration)` and `estop()`; `move_wheels()` stays (now a planned wheels move

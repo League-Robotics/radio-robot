@@ -237,12 +237,17 @@ bool Planner::move(const Move& next, bool replace) {
   // motion this robot cannot make, and is rejected here rather than
   // accepted and silently driven as nothing -- the Distance/Angle guards
   // below test v_x/omega, which a pure-v_y Move leaves at zero.
+  //
+  // A Kind::Stop entry commands nothing and measures nothing, so none of
+  // the shape guards apply to it -- it is valid by construction (see
+  // plannedStop() below, the only thing that builds one).
   const bool valid =
-      next.threshold >= 0.0f &&
-      ((next.velocityKind == Move::VelocityKind::Twist &&
-        (next.kind != Move::Kind::Distance || next.v_x != 0.0f) &&
-        (next.kind != Move::Kind::Angle || next.omega != 0.0f)) ||
-       (next.velocityKind == Move::VelocityKind::Wheels));
+      next.kind == Move::Kind::Stop ||
+      (next.threshold >= 0.0f &&
+       ((next.velocityKind == Move::VelocityKind::Twist &&
+         (next.kind != Move::Kind::Distance || next.v_x != 0.0f) &&
+         (next.kind != Move::Kind::Angle || next.omega != 0.0f)) ||
+        (next.velocityKind == Move::VelocityKind::Wheels)));
   if (!valid) return false;
 
   if (replace) {
@@ -255,7 +260,30 @@ bool Planner::move(const Move& next, bool replace) {
   return true;
 }
 
-void Planner::stop() {
+bool Planner::plannedStop(uint32_t moveId) {
+  Move entry;
+  entry.id = moveId;
+  entry.kind = Move::Kind::Stop;
+  // No velocity, no threshold, no timeout: a planned stop's own bounded
+  // backstop is plannedStopWindow(), not the shared timeout path -- landing
+  // slowly is not a fault, and the timeout path raises one.
+  return move(entry, /*replace=*/false);
+}
+
+float Planner::plannedStopWindow() const {
+  const float drain = limits_.aDecel > 0.0f
+                          ? 1000.0f * limits_.vMax / limits_.aDecel  // [ms]
+                          : 0.0f;
+  // settleWindow when the robot has one configured (it is the same
+  // "how long may arrival take" allowance), else a fixed floor so an
+  // unconfigured planner still converges.
+  constexpr float kDefaultSettleAllowance = 500.0f;  // [ms]
+  const float settle =
+      limits_.settleWindow > 0.0f ? limits_.settleWindow : kDefaultSettleAllowance;
+  return drain + settle;
+}
+
+void Planner::estop() {
   pendingCount_ = 0;
   active_.occupied = false;
   profileVelocity_ = 0.0f;
@@ -357,6 +385,16 @@ TickResult Planner::tick(const Types::RobotState& state) {
                 measured.plannedRemaining <=
                     profileVelocity_ * dt + kDoneEpsilonAngular);
         break;
+      case Move::Kind::Stop:
+        // A planned stop ends when the command has drained to zero AND the
+        // body has actually come to rest -- "completes at rest" is the
+        // whole point of asking for a stop rather than just letting the
+        // queue run dry. plannedStopWindow() is the bounded backstop so a
+        // noisy plant cannot wedge the queue here (see that method).
+        done = (cmdLeft_ == 0.0f && cmdRight_ == 0.0f &&
+                settleReached(measured, dt)) ||
+               static_cast<float>(elapsed) >= plannedStopWindow();
+        break;
     }
   }
 
@@ -405,17 +443,26 @@ TickResult Planner::tick(const Types::RobotState& state) {
     // to wherever the pose drifted). A timeout aborts the motion, and a
     // Time/Wheels Move has no single-axis intent -- no carry, next
     // baselines re-anchor to the pose.
-    carryValid_ = !timedOut &&
-                  m.velocityKind == Move::VelocityKind::Twist &&
-                  (m.kind == Move::Kind::Distance ||
-                   m.kind == Move::Kind::Angle);
-    if (m.kind == Move::Kind::Distance) {
-      carryPath_ = active_.baselinePath + linearDirection(m) * m.threshold;
-      carryHeading_ = active_.baselineHeading;
-    } else {
-      carryPath_ = active_.baselinePath;
-      carryHeading_ =
-          active_.baselineHeading + angularDirection(m) * m.threshold;
+    //
+    // A Kind::Stop entry is the one exception: it declares no axis intent
+    // at all (it neither travels a planned distance nor turns a planned
+    // angle), so it leaves the ledger exactly as its predecessor left it
+    // rather than re-anchoring. "leg, planned stop, leg" then accounts
+    // identically to "leg, leg" -- the stop is a pause in the sequence,
+    // not a new origin.
+    if (m.kind != Move::Kind::Stop) {
+      carryValid_ = !timedOut &&
+                    m.velocityKind == Move::VelocityKind::Twist &&
+                    (m.kind == Move::Kind::Distance ||
+                     m.kind == Move::Kind::Angle);
+      if (m.kind == Move::Kind::Distance) {
+        carryPath_ = active_.baselinePath + linearDirection(m) * m.threshold;
+        carryHeading_ = active_.baselineHeading;
+      } else {
+        carryPath_ = active_.baselinePath;
+        carryHeading_ =
+            active_.baselineHeading + angularDirection(m) * m.threshold;
+      }
     }
     active_.occupied = false;
     activateNext(now);
@@ -451,14 +498,20 @@ void Planner::activateNext(uint32_t now) {
   active_.baselinePath =
       0.5f * (left_.basisPosition() + right_.basisPosition());
   active_.baselineHeading = pose_.heading();
-  if (carryValid_ && next.velocityKind == Move::VelocityKind::Twist &&
-      (next.kind == Move::Kind::Distance || next.kind == Move::Kind::Angle)) {
-    // Full-ledger adoption (see the completion-side comment): both axes'
-    // cumulative baselines, regardless of the predecessor's kind.
-    active_.baselinePath = carryPath_;
-    active_.baselineHeading = carryHeading_;
+  // A Kind::Stop entry passes the cumulative ledger THROUGH untouched --
+  // see the completion-side comment in tick(). It has no baselines of its
+  // own to adopt, and clearing the carry here would make an intervening
+  // planned stop silently re-anchor the tour that follows it.
+  if (next.kind != Move::Kind::Stop) {
+    if (carryValid_ && next.velocityKind == Move::VelocityKind::Twist &&
+        (next.kind == Move::Kind::Distance || next.kind == Move::Kind::Angle)) {
+      // Full-ledger adoption (see the completion-side comment): both axes'
+      // cumulative baselines, regardless of the predecessor's kind.
+      active_.baselinePath = carryPath_;
+      active_.baselineHeading = carryHeading_;
+    }
+    carryValid_ = false;
   }
-  carryValid_ = false;
 
   // Same-axis carry keeps the profile's ramp continuity; an axis change
   // starts the new axis's profile from rest (we landed at ~0 there).
@@ -513,6 +566,8 @@ Planner::Measurement Planner::measure(uint32_t now) const {
   switch (m.kind) {
     case Move::Kind::Time:
       break;  // a Time Move's residual is the clock, not a distance
+    case Move::Kind::Stop:
+      break;  // a planned stop's residual is the body's own speed, below
     case Move::Kind::Distance: {
       // Traveled distance is the SIGNED mean-wheel displacement along the
       // Move's direction -- a telescoping measure (final minus baseline
@@ -544,8 +599,18 @@ bool Planner::settleReached(const Measurement& measured, float dt) const {
 
 
   const Move& m = active_.move;
+  // A planned stop is tested BEFORE the Twist gate: it has no velocity
+  // variant at all, and "did the body stop?" is the whole of its
+  // completion test. Both axes must be quiet -- a stop that left the robot
+  // spinning is not a stop.
+  if (m.kind == Move::Kind::Stop) {
+    return std::fabs(measured.bodyVelocity) <= limits_.settleRestVelocity &&
+           std::fabs(measured.omega) <= limits_.settleRestOmega;
+  }
   if (m.velocityKind != Move::VelocityKind::Twist) return false;
   switch (m.kind) {
+    case Move::Kind::Stop:
+      return false;  // unreachable: handled above
     case Move::Kind::Time:
       return false;  // nothing physical to confirm
     case Move::Kind::Distance:
@@ -561,6 +626,10 @@ bool Planner::settleReached(const Measurement& measured, float dt) const {
 }
 
 Planner::Axis Planner::axisOf(const Move& m) {
+  // A planned stop profiles no axis -- Axis::None also makes whatever
+  // follows it start its profile from rest, which is exactly right: we
+  // just came to a stop.
+  if (m.kind == Move::Kind::Stop) return Axis::None;
   if (m.velocityKind == Move::VelocityKind::Wheels) return Axis::Wheels;
   if (m.kind == Move::Kind::Angle) return Axis::Angular;
   return Axis::Linear;
@@ -677,6 +746,26 @@ void Planner::planActive(uint32_t now, float dt, const Measurement& measured) {
   }
 
   switch (m.kind) {
+    case Move::Kind::Stop: {
+      // Planned stop: per-wheel ramp to zero at the decel ceiling -- the
+      // same law drainToZero() applies to an empty queue, run here as a
+      // real queue entry so its arrival is sequenced, observable, and
+      // acked. A zero/absent decel ceiling snaps straight to zero rather
+      // than never converging (an unconfigured shaper must still stop).
+      const float decelStep = limits_.aDecel * dt;
+      auto toward = [decelStep](float v) {
+        if (decelStep <= 0.0f) return 0.0f;
+        if (v > decelStep) return v - decelStep;
+        if (v < -decelStep) return v + decelStep;
+        return 0.0f;
+      };
+      cmdLeft_ = toward(cmdLeft_);
+      cmdRight_ = toward(cmdRight_);
+      profileVelocity_ = std::max(0.0f, profileVelocity_ - decelStep);
+      profileAccel_ = 0.0f;
+      activeBoundary_ = 0.0f;
+      break;
+    }
     case Move::Kind::Distance: {
       const float dir = sign(m.v_x);
       const AxisLimits lin{limits_.vMax, limits_.aMax, limits_.aDecel,

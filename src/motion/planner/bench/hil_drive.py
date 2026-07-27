@@ -105,7 +105,7 @@ class HilSession:
 
     def close(self):
         try:
-            self.proto.stop()
+            self.proto.estop()
             if self.dutyPlane:
                 # Restore the firmware PID's bench-tuned feedback gains.
                 self.proto.config(**{"pid.kp": 0.0016, "pid.ki": 0.005})
@@ -190,7 +190,7 @@ class HilSession:
                                                timeout=BRIDGE_TIMEOUT,
                                                replace=True)
                 elif stopAtEnd:
-                    self.proto.stop()
+                    self.proto.estop()
                 if result.completed and completed is None:
                     completed = dict(moveId=result.moveId,
                                      timedOut=result.timedOut,
@@ -203,7 +203,7 @@ class HilSession:
             elapsed = time.monotonic() - loopStart
             time.sleep(max(0.0, PERIOD - elapsed))
         if stopAtEnd:
-            self.proto.stop()
+            self.proto.estop()
             time.sleep(0.3)
             self.ingestTelemetry()
         encEnd = (self.state.wheelLeft.position,

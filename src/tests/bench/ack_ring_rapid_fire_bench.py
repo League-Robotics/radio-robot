@@ -120,7 +120,7 @@ def scenario_rapid_fire_n_enqueue(proto: NezhaProtocol, result: Result, n: int) 
                   all_ok, f"n={n} send_window={send_elapsed_ms:.1f}ms")
 
     # Clean up -- STOP flushes the active Move and every pending slot.
-    stop_corr = proto.stop()
+    stop_corr = proto.estop()
     stop_ack = proto.wait_for_ack(stop_corr, timeout=500)
     result.record("rapid-fire: STOP cleanup ack ok", stop_ack is not None and stop_ack.ok,
                   f"ack={stop_ack}")
@@ -148,7 +148,7 @@ def main() -> int:
         scenario_rapid_fire_n_enqueue(proto, result, args.n)
     finally:
         try:
-            proto.stop()
+            proto.estop()
         except Exception:
             pass
         conn.disconnect()

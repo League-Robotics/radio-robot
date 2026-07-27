@@ -62,8 +62,11 @@ Motion::Gains benchTestGains() {
 void configureSimForBenchTest(TestSim::SimHarness& sim) {
   sim.configureMotor(1, benchTestMotorConfig(1));
   sim.configureMotor(2, benchTestMotorConfig(2));
-  sim.drive().applyGainsLeft(benchTestGains());
-  sim.drive().applyGainsRight(benchTestGains());
+  // App::Drive's interim per-wheel velocity PID is GONE (command-ingestion-
+  // ring-buffered-comms-subsystem-routing-two-stops.md §4: Drive is open
+  // loop from calibrated speed and holds no controller). benchTestGains()
+  // now reaches the one controller that still exists -- Motion::Planner's
+  // own duty stage -- below.
   {
     const Motion::Gains g = benchTestGains();
     sim.planner().applyVelGains(g.kff, g.kp, g.ki, g.iMax);

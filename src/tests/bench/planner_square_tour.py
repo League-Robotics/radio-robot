@@ -130,7 +130,7 @@ def main() -> int:
                 break
             time.sleep(0.02)
     finally:
-        proto.stop()
+        proto.estop()
         time.sleep(0.5)
         proto.read_pending_binary_tlm_frames()
         conn.disconnect()

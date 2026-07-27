@@ -140,18 +140,50 @@ msg::Verb bodyKindToVerb(msg::ReplyEnvelope::BodyKind kind) {
 Comms::Comms(Transport& serialLink, Transport& radioLink, const char* banner, const char* idLine)
     : serialLink_(serialLink), radioLink_(radioLink), banner_(banner), idLine_(idLine) {}
 
-void Comms::pump(Cmd& out, uint32_t now) {
-  out.status = CmdStatus::kNone;
-  if (pumpTransport(serialLink_, out, now)) return;
-  pumpTransport(radioLink_, out, now);
+void Comms::pump(uint32_t now) {
+  // Serial first, radio only when serial has nothing -- the same priority
+  // the pre-ring pump() had; what changed is that having read one line is
+  // no longer a reason to stop. Bounded by kPumpMaxLines so a flooding
+  // host cannot hold the cycle (see that constant's own comment, comms.h).
+  for (uint8_t consumed = 0; consumed < kPumpMaxLines; ++consumed) {
+    if (pumpTransport(serialLink_, now)) continue;
+    if (pumpTransport(radioLink_, now)) continue;
+    return;  // both transports dry
+  }
 }
 
-bool Comms::pumpTransport(Transport& t, Cmd& out, uint32_t now) {
+bool Comms::pumpTransport(Transport& t, uint32_t now) {
   char line[kMaxLineBytes];
   uint16_t lineLen = 0;
   if (!t.readLine(line, sizeof(line), &lineLen)) return false;
 
-  dispatchLine(t, line, lineLen, out, now);
+  // A LOCAL Cmd per line, pushed onto the ring only on decode success --
+  // the same "never publish partial state" discipline decodeBinaryFrame()
+  // already had against the old caller-supplied `out` (see comms.h).
+  // Cleartext verbs and malformed lines leave status == kNone and push
+  // nothing, while still counting as a consumed line so pump() keeps
+  // draining past them.
+  Cmd decoded;
+  dispatchLine(t, line, lineLen, decoded, now);
+  if (decoded.status == CmdStatus::kDecoded) pushCommand(decoded);
+  return true;
+}
+
+void Comms::pushCommand(const Cmd& cmd) {
+  if (cmdCount_ >= kCmdRingDepth) {
+    ++commandsDroppedCount_;
+    return;
+  }
+  const uint8_t slot = static_cast<uint8_t>((cmdHead_ + cmdCount_) % kCmdRingDepth);
+  cmdRing_[slot] = cmd;
+  ++cmdCount_;
+}
+
+bool Comms::takeCommand(Cmd& out) {
+  if (cmdCount_ == 0) return false;
+  out = cmdRing_[cmdHead_];
+  cmdHead_ = static_cast<uint8_t>((cmdHead_ + 1) % kCmdRingDepth);
+  --cmdCount_;
   return true;
 }
 

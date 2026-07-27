@@ -178,7 +178,7 @@ def soak(port: str, duration: float) -> SoakResult:  # [s]
             drain()
 
             if now >= next_stop:
-                corr = proto.stop()
+                corr = proto.estop()
                 pending_acks[corr] = now
                 sent += 1
                 stop_segments += 1
@@ -209,7 +209,7 @@ def soak(port: str, duration: float) -> SoakResult:  # [s]
     finally:
         drain()  # final catch-up
         try:
-            proto.stop()
+            proto.estop()
         except Exception:
             pass
 
@@ -231,7 +231,7 @@ def soak(port: str, duration: float) -> SoakResult:  # [s]
         responsive_detail = f"exception: {exc}"
     finally:
         try:
-            proto.stop()
+            proto.estop()
         except Exception:
             pass
         conn.disconnect()

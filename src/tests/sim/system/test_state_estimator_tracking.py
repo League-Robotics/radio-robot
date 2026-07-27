@@ -45,6 +45,11 @@ _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 _APP_SOURCES = [
     _SOURCE_DIR / "app" / "robot_loop.cpp",
     _SOURCE_DIR / "app" / "comms.cpp",
+    # configurator.cpp -- App::Configurator (command-ingestion-ring-buffered-
+    # comms-subsystem-routing-two-stops.md §6): the CONFIG lifecycle moved
+    # out of RobotLoop into its own module, which RobotLoop now holds a
+    # reference to -- so this graph must link it.
+    _SOURCE_DIR / "app" / "configurator.cpp",
     _SOURCE_DIR / "app" / "telemetry.cpp",
     _REPO_ROOT / "src" / "motion" / "move_queue.cpp",
     # Planner integration (2026-07-26): the on-robot Motion::Planner now

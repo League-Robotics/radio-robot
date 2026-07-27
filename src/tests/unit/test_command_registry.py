@@ -50,8 +50,13 @@ _CPP_ROW_RE = re.compile(
 # CommandEnvelope/ReplyEnvelope oneof arms (envelope.proto) -- NOT derived
 # from the generator itself, so this is an independent check against the
 # spec, not a tautology.
+# WHEELS/ESTOP added by the command-ingestion rework (command-ingestion-
+# ring-buffered-comms-subsystem-routing-two-stops.md §2): WHEELS is the
+# dumb, time-bounded teleop primitive routed straight to App::Drive, ESTOP
+# is "halt everything now" -- the meaning STOP used to carry before it
+# became a planned, queued stop.
 _EXPECTED_CLEARTEXT = {"HELLO", "PING", "ID", "VER", "DEVICE", "PONG"}
-_EXPECTED_BINARY = {"MOVE", "CONFIG", "STOP", "TLM", "OK", "ERR"}
+_EXPECTED_BINARY = {"MOVE", "CONFIG", "STOP", "WHEELS", "ESTOP", "TLM", "OK", "ERR"}
 
 
 def _parse_cpp_verb_table(commands_h: str) -> list[tuple[str, bool]]:

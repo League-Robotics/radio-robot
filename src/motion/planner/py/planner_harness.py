@@ -101,6 +101,7 @@ class Command(ctypes.Structure):
 class Health(ctypes.Structure):
     _fields_ = [("i2cSafetyNetCount", ctypes.c_uint32),
                 ("commsMalformedCount", ctypes.c_uint32),
+                ("commandsDroppedCount", ctypes.c_uint32),
                 ("wedgeLatch", ctypes.c_bool),
                 ("moveTimeout", ctypes.c_bool),
                 ("shapingDisabled", ctypes.c_bool),
@@ -115,7 +116,10 @@ class RobotState(ctypes.Structure):
                 ("command", Command), ("health", Health)]
 
 
-KIND_TIME, KIND_DISTANCE, KIND_ANGLE = 0, 1, 2
+# KIND_STOP -- the planned-stop queue entry (Move::Kind::Stop,
+# command-ingestion-...-two-stops.md §5); build one via
+# lib.plannerPlannedStop(), not by hand-filling a Move.
+KIND_TIME, KIND_DISTANCE, KIND_ANGLE, KIND_STOP = 0, 1, 2, 3
 VELOCITY_TWIST, VELOCITY_WHEELS = 0, 1
 
 
@@ -188,7 +192,9 @@ def loadLibrary() -> ctypes.CDLL:
     lib.plannerMove.restype = ctypes.c_bool
     lib.plannerMove.argtypes = [ctypes.c_void_p, ctypes.POINTER(Move),
                                 ctypes.c_bool]
-    lib.plannerStop.argtypes = [ctypes.c_void_p]
+    lib.plannerEstop.argtypes = [ctypes.c_void_p]
+    lib.plannerPlannedStop.restype = ctypes.c_bool
+    lib.plannerPlannedStop.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
     lib.plannerTick.argtypes = [ctypes.c_void_p, ctypes.POINTER(RobotState),
                                 ctypes.POINTER(TickResult)]
     lib.plannerUpdate.argtypes = [ctypes.c_void_p, ctypes.POINTER(RobotState)]

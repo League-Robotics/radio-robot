@@ -228,7 +228,7 @@ void testStopMeansStopped() {
   plant.step(state, 0.0f, 0.0f, 0.05f, now);
   CHECK(planner.move(distanceMove(20, 5000.0f, 250.0f), false));
   for (int i = 0; i < 40; ++i) cycle(planner, state, plant, now);
-  planner.stop();
+  planner.estop();
   for (int i = 0; i < 30; ++i) cycle(planner, state, plant, now);
   // Rest damping, not a dead-duty clamp: the integral is reset/frozen at
   // rest but the P term stays engaged (duty = -kp*measured, far below any

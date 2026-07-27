@@ -30,6 +30,19 @@
 #include "app/comms.h"
 #include "support/fake_transport.h"
 
+// pumpOne() -- the pre-ring `Comms::pump(Cmd&, now)` shape, rebuilt on the
+// ring API (command-ingestion-ring-buffered-comms-subsystem-routing-two-
+// stops.md §1: pump() now DRAINS both transports into a ring and
+// takeCommand() pops from it). These scenarios each feed exactly one line
+// and want the one command it produced, so "pump then take" is the honest
+// local equivalent -- not a claim that pump() still stops after one line.
+App::Cmd pumpOne(App::Comms& comms, uint32_t now) {  // [ms]
+  App::Cmd cmd;
+  comms.pump(now);
+  comms.takeCommand(cmd);  // leaves cmd at status kNone when nothing decoded
+  return cmd;
+}
+
 using TestSupport::FakeTransport;
 
 namespace {
@@ -51,7 +64,7 @@ int main() {
     serialFake.enqueueInbound("PING");
 
     App::Cmd cmd;
-    comms.pump(cmd, now);
+    cmd = pumpOne(comms, now);
 
     // One real "PONG:t=<now>" reply per PING -- print it verbatim so the
     // Python side can feed it straight into ClockSync.ping_burst()'s own

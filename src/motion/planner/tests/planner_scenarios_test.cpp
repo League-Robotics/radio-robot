@@ -201,7 +201,7 @@ void testStopFlushes() {
   CHECK(planner.move(distanceMove(41, 5000.0f, 150.0f), false));
   for (int i = 0; i < 20; ++i) cycle(planner, state, plant, now, kPeriod);
   CHECK(planner.active());
-  planner.stop();
+  planner.estop();
   CHECK(!planner.active());
   CHECK(planner.pendingCount() == 0);
   cycle(planner, state, plant, now, kPeriod);
