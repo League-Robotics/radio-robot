@@ -66,9 +66,15 @@ class RobotLoop {
   // Read-only view of the blackboard (sim/test observability).
   const Types::RobotState& state() const { return state_; }
 
-  // Open-loop duty-per-speed calibration (also settable via the wire kff
-  // key -- applyMotorConfigPatch()).
-  void setDutyPerSpeed(float dutyPerSpeed) { dutyPerSpeed_ = dutyPerSpeed; }
+  // Open-loop duty-per-speed calibration, per wheel (also settable, both
+  // at once, via the wire kff key -- applyMotorConfigPatch()).
+  void setDutyPerSpeed(float left, float right) {
+    dutyPerSpeedLeft_ = left;
+    dutyPerSpeedRight_ = right;
+  }
+  void setDutyPerSpeed(float dutyPerSpeed) {
+    setDutyPerSpeed(dutyPerSpeed, dutyPerSpeed);
+  }
 
  private:
   uint32_t markTime() const;                    // [ms]
@@ -142,11 +148,12 @@ class RobotLoop {
 
   bool configured_ = false;
 
-  // Open-loop duty per commanded wheel speed. Boot default is the
-  // measured hardware plant gain (~1370 mm/s per duty, plant_id
-  // 2026-07-26); the wire kff key recalibrates it (sim plants differ),
-  // and the duty sweep will refine it per wheel.
-  float dutyPerSpeed_ = 1.0f / 1370.0f;  // [duty/(mm/s)]
+  // Open-loop duty per commanded wheel speed, per wheel. Boot defaults
+  // are the MEASURED plant gains (speed_sweep + full-duty ceiling probe,
+  // 2026-07-27: L ~560, R ~510 mm/s per duty, ceiling ~500 mm/s); the
+  // wire kff key recalibrates both (sim plants differ).
+  float dutyPerSpeedLeft_ = 1.0f / 560.0f;   // [duty/(mm/s)]
+  float dutyPerSpeedRight_ = 1.0f / 510.0f;  // [duty/(mm/s)]
 
   // Direct wheel-speeds command (bypasses the planner): targets held here
   // so a drained planner's update() cannot overwrite the state's

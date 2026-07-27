@@ -312,10 +312,12 @@ int main() {
   }
 
   robotLoop.markConfigured();
-  // Crawl mode: sub-breakaway wheel-speed requests become 0.30-duty
-  // pulses, Bresenham-dithered (measured breakaway 0.10-0.19 across
-  // wheels/directions, duty_sweep 2026-07-27).
-  drive.setCrawlPulse(0.30f);
+  // Crawl mode: sub-breakaway wheel-speed requests become 0.20-duty
+  // pulses, Bresenham-dithered. 0.20 clears every measured breakaway
+  // (0.07-0.16 fresh battery, 0.19 worst drained -- duty_sweep
+  // 2026-07-27) while keeping the crawl/continuous boundary low
+  // (~0.20 * 535 ~= 107 mm/s commanded): normal cruise runs continuous.
+  drive.setCrawlPulse(0.20f);
 
   robotLoop.run();
 }

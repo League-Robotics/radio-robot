@@ -17,12 +17,12 @@ from robot_radio.io.serial_conn import SerialConnection
 from robot_radio.robot.protocol import NezhaProtocol
 
 DEFAULT_PORT = "/dev/cu.usbmodem2121102"
-GAIN = 1370.0       # [mm/s per duty] firmware's open-loop scale (duty = cmd/GAIN)
-CRAWL_PULSE = 0.30  # [-] firmware crawl amplitude -> crawl below GAIN*0.30 = 411 mm/s
+GAIN = 535.0        # [mm/s per duty] mean measured gain (calibrated firmware)
+CRAWL_PULSE = 0.20  # [-] firmware crawl amplitude -> crawl below ~107 mm/s commanded
 HOLD = 2.0          # [s]
 REST = 0.6          # [s]
-LEVELS = list(range(10, 101, 10)) + list(range(120, 411, 30)) + \
-         list(range(440, 801, 60))  # [mm/s] commanded
+LEVELS = list(range(10, 101, 10)) + list(range(120, 401, 20)) + \
+         [430, 460, 490, 520, 550]  # [mm/s] commanded (ceiling ~500)
 
 
 def main() -> int:

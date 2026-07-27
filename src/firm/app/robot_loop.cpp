@@ -267,8 +267,12 @@ void RobotLoop::handleConfig(const msg::CommandEnvelope& env) {
 
 void RobotLoop::applyMotorConfigPatch(const msg::MotorConfigPatch& patch) {
   // kff is the open-loop duty-per-speed scale (the same wire key the old
-  // velocity PID's feedforward used, so sim/bench configs keep working).
-  if (patch.kff.has) dutyPerSpeed_ = patch.kff.val;
+  // velocity PID's feedforward used, so sim/bench configs keep working);
+  // the wire patch sets both wheels (per-wheel split is boot calibration).
+  if (patch.kff.has) {
+    dutyPerSpeedLeft_ = patch.kff.val;
+    dutyPerSpeedRight_ = patch.kff.val;
+  }
 
   // pid.* wire keys still retarget the (dormant) planner's gains.
   float kff = planner_.limits().velKff;
@@ -523,10 +527,10 @@ void RobotLoop::cycle() {
   }
 
   // Drive the wheels from the state's commanded speeds, open loop -- one
-  // cycle command-to-actuation, symmetric across L/R (Drive crawl-shapes
-  // sub-breakaway requests).
-  drive_.tick(state_.wheelLeft.cmdVelocity * dutyPerSpeed_,
-              state_.wheelRight.cmdVelocity * dutyPerSpeed_);
+  // cycle command-to-actuation (Drive crawl-shapes sub-breakaway
+  // requests). Per-wheel calibration: measured plant gains differ ~10%.
+  drive_.tick(state_.wheelLeft.cmdVelocity * dutyPerSpeedLeft_,
+              state_.wheelRight.cmdVelocity * dutyPerSpeedRight_);
 
   motorL_.requestSample();  // brick latches ONE pending read per select
   runAndWait(kSettle, [&] { comms_.pump(cmd, state_.time.cycleStart); });
