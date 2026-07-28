@@ -107,44 +107,47 @@ perturbs static RAM: a new member, a resized buffer, a compiler change.
 
 ## Leads, ranked
 
-**1. The MSP stack region is 2 KB with NO guard, and the heap ends flush
-against it.** Strongest lead. (An earlier revision of this document claimed
-a "6 KB heap/stack overlap" from misreading the size output's phantom
-`.stack` section, size `0x2000` at address 0 — that section is unplaced and
-means nothing. The real numbers, from the map's own symbols:)
+**Layout facts for reference — NOT a lead in themselves.** (Two earlier
+revisions of this document got this wrong, first as a fictitious "6 KB
+heap/stack overlap" from misreading the phantom unplaced `.stack` section,
+then by presenting the 2 KB MSP region as the headline suspect. Stakeholder
+correction, on the record: this layout — heap sized to fill all remaining
+RAM up to `__StackTop - 0x800`, `__StackLimit = 0`, ~2 KB free — is
+**standard CODAL, identical in every working build for six months**. A
+constant cannot explain the difference between a build that boots and one
+that faults. Do not conclude "out of memory" or "grow the stack.")
+
+The numbers, kept only because they are useful for placing watchpoints:
 
 ```
 __end__          0x20005558        end of static data
 .heap            0x20005558  size 0x1a2a8  -> ends 0x2001F800
-__StackTop       0x20020000        MSP initial value
-__StackLimit     0x00000000        <- NO limit placed. No guard. Nothing.
-gap StackTop - heap end = 0x800 = 2048 bytes
+__StackTop       0x20020000        MSP initial value; region above heap = 0x800
+observed fault SPs: 0x2001fb70, 0x2001f988   (inside the MSP region, as normal)
 ```
 
-So everything that runs on MSP — all of `main()` before the scheduler
-starts, plus **every interrupt at any time after** — must fit in 2048
-bytes, and the byte below `0x2001F800` is the heap's topmost block. There
-is no MPU region, no canary, no `__StackLimit` to even compare against. Any
-excursion past 2 KB silently chews the top of the heap (or, from the other
-side, the heap block adjacent to the stack gets stomped by a deep
-IRQ-within-IRQ moment).
+The one legitimate use of the layout in this hunt: shrinking `.bss` by
+~1.1 KB moves the heap's start, which shuffles which allocation lands where
+— that is HOW one constant changes the corruption's victim, not WHY the
+corruption exists.
 
-This fits every observation: the fault is interrupt-time (nondeterministic
-bytes-before-death), the mechanism is a corrupted object pointer (`blx r3`
-to garbage), and **both recorded fault SPs (`0x2001fb70`, `0x2001f988`) are
-already 1.0-1.6 KB deep** — a few hundred bytes from the boundary at the
-moment the corpse was found, without counting whatever the fault entry
-itself pushed. It also explains the layout sensitivity without either depth
-being "correct": the heap's END is pinned at `StackTop - 0x800` regardless
-of `kCmdRingDepth`, but shrinking `.bss` moves the heap's START, which
-shuffles which allocation ends up living flush against the stack. At depth
-12 the sacrificial block is harmless; at 6 it is something with a vptr.
+**1. The actual lead: find the stray writer.** The bisect brackets it —
+something in (or first *expressed* by) `5065775a`'s delta, or latent
+earlier and merely re-aimed by the layout shuffle. In order:
 
-Cheap ways to convict it: (a) fill the 2 KB region with a pattern at boot
-and dump the low-water mark after the banner; (b) measure worst-case IRQ
-stack depth (serial DMA + radio + timer nesting); (c) a watchpoint at
-`0x2001F800`. Note the RAM base is `0x20002040` (bottom ~8 KB reserved for
-the SoftDevice region) — worth confirming that reservation while in there.
+- **Make it deterministic by padding.** `static volatile uint8_t pad[N];`
+  in comms.h next to the ring; sweep `N` over 0..~1200 in steps. The fault
+  should come and go with `N`, and the sweep brackets the victim's address
+  range at each failing layout.
+- **Then catch the writer in the act.** With a victim address from the
+  sweep, set a data watchpoint over `pyocd gdbserver`
+  (`watch *(uint32_t*)0x...`) and let the store trap. That names the bug in
+  one shot — no theorizing required.
+- While in there, audit `5065775a`'s own delta for the writer directly:
+  `Drive::setWheelCorrection`/`correctedCommand` and the regenerated
+  `boot_config.cpp` (the arrays themselves are `[2][2]` indexed 0/1 and look
+  clean, but the regenerated file and its callers have not been audited as
+  hard as the planner code has).
 
 **2. Make it deterministic by padding.** Add `static volatile uint8_t
 pad[N];` and sweep `N` over a few hundred bytes. If the fault appears and
