@@ -213,7 +213,23 @@ struct Cmd {
 // but be unobservable. The two depths are therefore kept EQUAL
 // (telemetry.h's kAckRingDepth carries the matching note) -- that
 // constraint picks 12, it is not a free choice.
-constexpr uint8_t kCmdRingDepth = 6;
+// DO NOT LOWER THIS WITHOUT READING THE NOTE BELOW.
+//
+// 12 -> 6 (commit 5065775a) made the firmware HARD FAULT during boot, before
+// the banner finished clocking out: the robot emitted the first ~13 bytes of
+// "DEVICE:NEZHA2:robot:..." and died. Bisected on hardware 2026-07-27 --
+// 3238bdaf boots and streams telemetry, 5065775a does not, and restoring
+// this single constant to 12 makes 5065775a boot and stream again.
+//
+// Note what that means: SHRINKING a buffer by ~1 KB is what broke it. Both
+// rings are internally consistent (each is indexed only modulo its own
+// depth), so this is not an out-of-bounds index -- it is latent memory
+// corruption elsewhere whose victim depends on the RAM layout, and this
+// constant happens to move the layout. 12 is therefore a value that is
+// known to survive, NOT a value that is known to be correct: the underlying
+// defect is still in the tree and will resurface the next time anything
+// perturbs static RAM. See clasi/issues/ for the follow-up.
+constexpr uint8_t kCmdRingDepth = 12;
 
 // kPumpMaxLines -- hard bound on how many wire lines ONE pump() call
 // consumes. pump() runs inside the loop's existing settle/clear/pace
