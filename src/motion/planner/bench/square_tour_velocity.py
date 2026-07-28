@@ -212,7 +212,8 @@ def runTour(trim: bool, symmetric: bool, leeway: float = DECEL_LEEWAY,
     stopQueued = [False]
     completions = []  # (t_s, moveId)
 
-    log = dict(t=[], velLeft=[], velRight=[], cmdLeft=[], cmdRight=[],
+    log = dict(t=[], velLeft=[], velRight=[],
+               measLeft=[], measRight=[], cmdLeft=[], cmdRight=[],
                profLeft=[], profRight=[], trimLeft=[], trimRight=[],
                phase=[], x=[], y=[], heading=[])
 
@@ -305,6 +306,11 @@ def runTour(trim: bool, symmetric: bool, leeway: float = DECEL_LEEWAY,
             log["t"].append(tMs / 1000.0)
             log["velLeft"].append(left.velocity)
             log["velRight"].append(right.velocity)
+            # What the CONTROLLER sees: the last encoder sample published
+            # into the blackboard (noisy, held between collects) -- distinct
+            # from the plant's true velocity above.
+            log["measLeft"].append(state.wheelLeft.velocity)
+            log["measRight"].append(state.wheelRight.velocity)
             log["cmdLeft"].append(cmdL)
             log["cmdRight"].append(cmdR)
             log["profLeft"].append(profiledLeft.value)
@@ -384,14 +390,18 @@ def writeChart(run: dict, stats: dict, out: Path) -> None:
                            color=phaseColors[current], zorder=0, lw=0)
             if not atEnd:
                 start, current = i, log["phase"][i]
+    ax.plot(log["t"], log["measLeft"], color="#9ecae9", lw=0.8,
+            label="left measured (encoder)", zorder=2)
+    ax.plot(log["t"], log["measRight"], color="#f2b8b5", lw=0.8,
+            label="right measured (encoder)", zorder=2)
     ax.plot(log["t"], log["cmdLeft"], color="#1f77b4", ls="--", lw=1.1,
             label="left commanded", zorder=3)
     ax.plot(log["t"], log["velLeft"], color="#1f77b4", lw=1.7,
-            label="left actual", zorder=4)
+            label="left true (plant)", zorder=4)
     ax.plot(log["t"], log["cmdRight"], color="#d62728", ls="--", lw=1.1,
             label="right commanded", zorder=3)
     ax.plot(log["t"], log["velRight"], color="#d62728", lw=1.7,
-            label="right actual", zorder=4)
+            label="right true (plant)", zorder=4)
     for entry in run["completions"]:
         tSec, moveId = entry["t"], entry["moveId"]
         ax.axvline(tSec, color="#999999", lw=0.7, ls=":", zorder=1)
@@ -402,7 +412,7 @@ def writeChart(run: dict, stats: dict, out: Path) -> None:
     ax.axhline(0.0, color="#cccccc", lw=0.6, zorder=1)
     ax.set_ylabel("wheel speed  [mm/s]")
     ax.set_xlabel("time  [s]")
-    ax.legend(loc="upper right", fontsize=8, ncol=2)
+    ax.legend(loc="upper right", fontsize=8, ncol=3)
     ax.grid(alpha=0.25)
     ax.set_title("Wheel speed: commanded vs actual   "
                  "(shading: blue = accel, green = hold, orange = decel)",
@@ -473,8 +483,8 @@ def writeChart(run: dict, stats: dict, out: Path) -> None:
 def writeCsv(run: dict, out: Path) -> None:
     log = run["log"]
     columns = ["t", "phase", "profLeft", "profRight", "trimLeft", "trimRight",
-               "cmdLeft", "cmdRight", "velLeft", "velRight", "x", "y",
-               "heading"]
+               "cmdLeft", "cmdRight", "measLeft", "measRight",
+               "velLeft", "velRight", "x", "y", "heading"]
     with out.open("w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(columns)
