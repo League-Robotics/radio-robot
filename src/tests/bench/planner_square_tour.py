@@ -65,11 +65,18 @@ def tour() -> list[dict]:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--port", default=DEFAULT_PORT)
+    p.add_argument("--relay", action="store_true",
+                   help="the port is the RADIO RELAY dongle: force the relay "
+                        "!GO data-plane handshake instead of banner "
+                        "auto-detect (which misclassifies when the relay is "
+                        "already forwarding telemetry -- commands then die "
+                        "in the relay's control plane)")
     p.add_argument("--out", default=None,
                    help="plot path (default: alongside this script)")
     args = p.parse_args()
 
-    conn = SerialConnection(port=args.port)  # mode=None -> auto-detect direct vs relay
+    conn = SerialConnection(port=args.port,
+                            mode="relay" if args.relay else None)
     conn.connect()
     proto = NezhaProtocol(conn)
     print(f"connected on {args.port}; waiting {BOOT_WAIT:.0f}s for boot preamble")
@@ -79,7 +86,19 @@ def main() -> int:
     moves = tour()
     next_enqueue = 0
     inflight = 0
-    pending_enqueues: dict[int, int] = {}  # corr_id -> move_id awaiting enqueue ack
+    # corr_id -> (move_id, send_time, retries). Over the RADIO RELAY ~20%
+    # of inbound lines are dropped (DAPLink bridge, radio_bench_gate.py's
+    # own documented budget), and a lost enqueue would otherwise pin
+    # `inflight` forever: unacked sends are RETRIED with a fresh corr_id.
+    # A retry after a lost *ack* (rather than a lost command) would
+    # double-enqueue that move -- accepted as rare-by-construction: the ack
+    # ring rides EVERY telemetry frame, so an ack only vanishes if all
+    # frames carrying it drop, while a command is one single line.
+    pending_enqueues: dict[int, tuple[int, float, int]] = {}
+    ENQUEUE_RETRY_S = 1.2
+    ENQUEUE_RETRIES_MAX = 6
+    ENQUEUE_SPACING_S = 0.15  # never burst the relay's single-line buffer
+    last_send = 0.0
     completions: list[tuple[float, int]] = []  # (t, move_id)
     log = dict(t=[], velLeft=[], velRight=[], posLeft=[], posRight=[],
                heading=[], cmdLeft=[], cmdRight=[], x=[], y=[])
@@ -93,11 +112,30 @@ def main() -> int:
             # acks are matched off the SAME single telemetry drain below --
             # never wait_for_ack(), whose internal drain would eat the
             # velocity samples and completion acks this loop logs.
-            while next_enqueue < len(moves) and inflight < QUEUE_DEPTH - 1:
+            now = time.monotonic()
+            if (next_enqueue < len(moves) and inflight < QUEUE_DEPTH - 1
+                    and now - last_send >= ENQUEUE_SPACING_S):
                 corr = proto.move_twist(**moves[next_enqueue])
-                pending_enqueues[corr] = moves[next_enqueue]["move_id"]
+                pending_enqueues[corr] = (
+                    moves[next_enqueue]["move_id"], now, 0)
                 next_enqueue += 1
                 inflight += 1
+                last_send = now
+            # Retry any enqueue whose ack never came back (radio drop).
+            for corr in list(pending_enqueues):
+                move_id, sent, tries = pending_enqueues[corr]
+                if time.monotonic() - sent < ENQUEUE_RETRY_S:
+                    continue
+                del pending_enqueues[corr]
+                if tries + 1 > ENQUEUE_RETRIES_MAX:
+                    print(f"FAIL: move {move_id} unacked after "
+                          f"{ENQUEUE_RETRIES_MAX} retries")
+                    return 1
+                spec = next(m for m in moves if m["move_id"] == move_id)
+                corr2 = proto.move_twist(**spec)
+                pending_enqueues[corr2] = (move_id, time.monotonic(), tries + 1)
+                last_send = time.monotonic()
+                print(f"  (retry {tries + 1} for move {move_id})")
 
             for f in proto.read_pending_binary_tlm_frames():
                 t = time.monotonic() - t0
@@ -128,9 +166,9 @@ def main() -> int:
                         log["cmdRight"].append(float("nan"))
                 for entry in f.acks:
                     if entry.corr_id in pending_enqueues:
+                        move_id, _, _ = pending_enqueues[entry.corr_id]
                         if not entry.ok:
-                            print(f"FAIL enqueue move "
-                                  f"{pending_enqueues[entry.corr_id]}: "
+                            print(f"FAIL enqueue move {move_id}: "
                                   f"err={entry.err_code}")
                             return 1
                         del pending_enqueues[entry.corr_id]
@@ -151,7 +189,8 @@ def main() -> int:
         conn.disconnect()
 
     if pending_enqueues:
-        print(f"WARNING: enqueue acks never seen for: {sorted(pending_enqueues.values())}")
+        print("WARNING: enqueue acks never seen for: "
+              f"{sorted(v[0] for v in pending_enqueues.values())}")
     missing = {m['move_id'] for m in moves} - {mid for _, mid in completions}
     if missing:
         print(f"WARNING: never completed: {sorted(missing)}")
