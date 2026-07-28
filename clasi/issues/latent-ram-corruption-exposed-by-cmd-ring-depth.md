@@ -107,27 +107,44 @@ perturbs static RAM: a new member, a resized buffer, a compiler change.
 
 ## Leads, ranked
 
-**1. `.heap` and `.stack` overlap in the linker map.** Strongest lead.
+**1. The MSP stack region is 2 KB with NO guard, and the heap ends flush
+against it.** Strongest lead. (An earlier revision of this document claimed
+a "6 KB heap/stack overlap" from misreading the size output's phantom
+`.stack` section, size `0x2000` at address 0 — that section is unplaced and
+means nothing. The real numbers, from the map's own symbols:)
 
 ```
-RAM region:  0x20002040, length 0x1dfc0        (122816 B)
-.data        0x20002040  size 0x114
-.bss         0x20002200  size 0x3358
-.heap        0x20005558  size 0x1a2a8   -> ends 0x2001F800
-.stack                   size 0x2000    -> grows down from 0x20020000, i.e. from 0x2001E000
+__end__          0x20005558        end of static data
+.heap            0x20005558  size 0x1a2a8  -> ends 0x2001F800
+__StackTop       0x20020000        MSP initial value
+__StackLimit     0x00000000        <- NO limit placed. No guard. Nothing.
+gap StackTop - heap end = 0x800 = 2048 bytes
 ```
 
-`.heap` ends at `0x2001F800`; the stack's 8 KB region begins at
-`0x2001E000`. That is **~6 KB of overlap**, and both observed fault SPs sit
-inside that window. If CODAL's allocator can hand out blocks in the overlap
-while the stack is using them, everything above follows: a heap allocation
-stomps a live stack frame, a vtable pointer or `this` in that frame becomes
-garbage, and the next virtual call is `blx` into nowhere. Check this against
-the CODAL linker script and `CODAL_STACK_SIZE` first.
+So everything that runs on MSP — all of `main()` before the scheduler
+starts, plus **every interrupt at any time after** — must fit in 2048
+bytes, and the byte below `0x2001F800` is the heap's topmost block. There
+is no MPU region, no canary, no `__StackLimit` to even compare against. Any
+excursion past 2 KB silently chews the top of the heap (or, from the other
+side, the heap block adjacent to the stack gets stomped by a deep
+IRQ-within-IRQ moment).
 
-Note the RAM base is `0x20002040`, not `0x20000000` — the bottom 8 KB is
-reserved (SoftDevice region). Worth confirming that reservation is right,
-since a wrong base would shift everything.
+This fits every observation: the fault is interrupt-time (nondeterministic
+bytes-before-death), the mechanism is a corrupted object pointer (`blx r3`
+to garbage), and **both recorded fault SPs (`0x2001fb70`, `0x2001f988`) are
+already 1.0-1.6 KB deep** — a few hundred bytes from the boundary at the
+moment the corpse was found, without counting whatever the fault entry
+itself pushed. It also explains the layout sensitivity without either depth
+being "correct": the heap's END is pinned at `StackTop - 0x800` regardless
+of `kCmdRingDepth`, but shrinking `.bss` moves the heap's START, which
+shuffles which allocation ends up living flush against the stack. At depth
+12 the sacrificial block is harmless; at 6 it is something with a vptr.
+
+Cheap ways to convict it: (a) fill the 2 KB region with a pattern at boot
+and dump the low-water mark after the banner; (b) measure worst-case IRQ
+stack depth (serial DMA + radio + timer nesting); (c) a watchpoint at
+`0x2001F800`. Note the RAM base is `0x20002040` (bottom ~8 KB reserved for
+the SoftDevice region) — worth confirming that reservation while in there.
 
 **2. Make it deterministic by padding.** Add `static volatile uint8_t
 pad[N];` and sweep `N` over a few hundred bytes. If the fault appears and
@@ -175,13 +192,34 @@ enable an MPU guard region at the stack limit, and let it trap the store.
 
 With `kCmdRingDepth` at 12 the robot boots, streams the banner and ~2 `TLM:`
 frames, and then goes silent again. **That is a separate, already-documented
-condition**, not this bug. Discriminate by halting and reading PC:
+condition**, not this bug — and, importantly, the bisect captures show it
+was present at EVERY commit tested (even the "boots" rows produced only 2
+frames across a 24 s capture, when a healthy loop at ~21 Hz would produce
+hundreds). The two failures were stacked, which is what made this session
+so confusing.
 
-- `PC` in **flash**, in `HardFault_Handler` → **this** bug.
-- `PC` in **RAM** (e.g. `0x2000205a`) → a CODAL busy-wait, i.e. the I2C
-  wedge described in `.clasi/knowledge/silent-robot-dead-external-i2c-bus`
-  (`system_timer_wait_cycles` ← `NRF52I2C::waitForStop` ← the first motor
-  probe, with IRQs masked). Current state of the board is this one.
+Confirmed by read-only backtrace on the live board, frame-for-frame the
+signature in `.clasi/knowledge/silent-robot-dead-external-i2c-bus`:
+
+```
+#0 codal::system_timer_wait_cycles            <- spinning forever
+#2 codal::NRF52I2C::waitForStop               (NRF52I2C.cpp:241)
+#3 Devices::MicroBitI2CBus::read
+#4 Devices::NezhaMotor::readEncoderAtomicRaw
+#5 Devices::NezhaMotor::hardReset
+#6 App::Preamble::probeSlot -> RobotLoop::boot -> main
+```
+
+Per that knowledge note, the previous occurrence of this exact signature
+was the motor brick's battery being dead — no power on the external I2C
+bus's pull-ups, so the first motor probe spins forever with IRQs masked
+(total silence, not a fault flag). The bus demonstrably worked earlier the
+same day (the 600-trial speed calibration ran over it), so the brick lost
+power somewhere between that session and this one. **Check the brick's
+power switch / battery before any further software debugging of the
+silence.** Discriminate the two failures in one command: halt and read PC —
+in **flash** at `HardFault_Handler` → this bug; in **RAM** (a CODAL
+busy-wait) → the dead bus.
 
 ## Disclosure about the board's state
 
