@@ -213,22 +213,27 @@ struct Cmd {
 // but be unobservable. The two depths are therefore kept EQUAL
 // (telemetry.h's kAckRingDepth carries the matching note) -- that
 // constraint picks 12, it is not a free choice.
-// DO NOT LOWER THIS WITHOUT READING THE NOTE BELOW.
+// CHANGING THIS CONSTANT REQUIRES A CLEAN BUILD (`just build-clean`).
 //
-// 12 -> 6 (commit 5065775a) made the firmware HARD FAULT during boot, before
-// the banner finished clocking out: the robot emitted the first ~13 bytes of
-// "DEVICE:NEZHA2:robot:..." and died. Bisected on hardware 2026-07-27 --
-// 3238bdaf boots and streams telemetry, 5065775a does not, and restoring
-// this single constant to 12 makes 5065775a boot and stream again.
+// Post-mortem of a lost day (2026-07-27): commit 5065775a changed 12 -> 6,
+// and every incremental build afterwards produced firmware that HARD
+// FAULTED at boot with what looked exactly like memory corruption (garbage
+// vtable dispatch, truncated banner). The code was fine. The build was
+// not: comms.o did not rebuild when this header changed, so its
+// compiler-emitted constructor still memset a 12-deep cmdRing_ (0x420
+// bytes) over an object every OTHER translation unit -- and the linker --
+// sized for 6 (0x210), zeroing the neighboring statics (caught by hardware
+// watchpoint: the sweep walked through main::motorL.inner_ mid-boot). A
+// clean build of the same commit at depth 6 boots and streams normally.
+// Known infra hazard on this checkout: stale incremental builds on
+// /Volumes (.clasi knowledge + the memory note of the same name); an ODR
+// split across TUs is what it looks like when it lands on a header
+// constant like this one.
 //
-// Note what that means: SHRINKING a buffer by ~1 KB is what broke it. Both
-// rings are internally consistent (each is indexed only modulo its own
-// depth), so this is not an out-of-bounds index -- it is latent memory
-// corruption elsewhere whose victim depends on the RAM layout, and this
-// constant happens to move the layout. 12 is therefore a value that is
-// known to survive, NOT a value that is known to be correct: the underlying
-// defect is still in the tree and will resurface the next time anything
-// perturbs static RAM. See clasi/issues/ for the follow-up.
+// Depth kept at 12, the sprint-124 sizing (see the paragraph above:
+// kept EQUAL to kAckRingDepth so a burst that fits the command ring is
+// fully ack-observable). 6 is functionally safe if deliberately chosen --
+// but rebuild clean, and change telemetry.h's note in the same commit.
 constexpr uint8_t kCmdRingDepth = 12;
 
 // kPumpMaxLines -- hard bound on how many wire lines ONE pump() call
