@@ -94,10 +94,60 @@ Motion::ShaperLimits toShaperLimits(const Config::ShaperBootConfig& src) {
   return limits;
 }
 
+// The last digit of FIRMWARE_VERSION_STR ("0.20260726.1" -> '1'). Scans to
+// the end rather than indexing a fixed offset, so it survives any version
+// format gen_version.py might emit; '?' if the string somehow has no digit.
+char versionLastDigit() {
+  char last = '?';
+  for (const char* p = FIRMWARE_VERSION_STR; *p != '\0'; ++p) {
+    if (*p >= '0' && *p <= '9') last = *p;
+  }
+  return last;
+}
+
+// Boot identity on the LED matrix: heart, the last digit of the firmware
+// version, then the heart again -- and the heart STAYS LIT.
+//
+// This is the only way to tell WHICH build is actually on the board without
+// opening a serial session, and "did that flash land?" is a question that
+// has cost real debugging time. The trailing heart is the resting state: a
+// lit display through boot means "powered, flashed, and running"; a dark
+// one means it never got here.
+//
+// It is not left on forever. main() disables the display the instant boot
+// completes and before the first control cycle: the LED matrix driver
+// refreshes continuously off its own timer, and the loop runs to a measured
+// ~47 ms budget whose motion tuning assumes those cycles are not being
+// spent elsewhere. Boot is the one window where the cost is free.
+void showBootIdentity() {
+  static const uint8_t kHeart[] = {
+      0, 1, 0, 1, 0,
+      1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1,
+      0, 1, 1, 1, 0,
+      0, 0, 1, 0, 0,
+  };
+  constexpr int kHeartHold = 500;  // [ms]
+  constexpr int kDigitHold = 900;  // [ms] longer -- it is the payload
+
+  uBit.display.enable();
+  MicroBitImage heart(5, 5, kHeart);
+  uBit.display.print(heart);
+  uBit.sleep(kHeartHold);
+  uBit.display.clear();
+  uBit.display.printChar(versionLastDigit());
+  uBit.sleep(kDigitHold);
+  uBit.display.clear();
+  uBit.display.print(heart);  // resting state -- left lit through boot
+}
+
 }  // namespace
 
 int main() {
   uBit.init();
+
+  // Before anything touches the buses: say which build this is.
+  showBootIdentity();
 
   static SerialPort serial(uBit.serial);
   serial.begin();
@@ -284,6 +334,32 @@ int main() {
     // the demonstrated one-sided-creep resolution (single-turn probe
     // 2026-07-27 landed +1.76 deg; the right wheel does not reverse
     // under the breakaway kick, so fine correction rides the left wheel)
+
+    // VELOCITY-DOMAIN TRIM (wheel_trim.h) -- the closed loop that actually
+    // reaches the wheels. The loop's one actuation contract is a wheel
+    // VELOCITY (RobotState::Wheel::cmdVelocity), which App::Drive converts
+    // through its measured per-wheel per-direction map; the duty-stage
+    // gains above are computed every tick and DISCARDED.
+    //
+    // COMMISSIONING VALUES, to be raised on the stand rather than trusted:
+    //   trimKp is DIMENSIONLESS (mm/s of trim per mm/s of error). The sim
+    //     tour ran 0.25 against a +-4.8% wheel mismatch; this robot's
+    //     residual after the 2026-07-27 calibration is ~2%, and measured
+    //     wheel velocity is a raw per-tick difference quotient, so start
+    //     at 0.15. An over-gained loop on THIS hardware limit-cycled at
+    //     2-3 Hz (see the tuning note above) -- the failure to watch for.
+    //   trimKaff is the plant time constant [s]. FULL tau measured
+    //     UNSTABLE in sim (closure 696 mm vs 16 mm at half) -- half it is.
+    plannerLimits.trimKp = 0.15f;            // [1]
+    plannerLimits.trimKi = 0.4f;             // [1/s]
+    plannerLimits.trimIMax = 40.0f;          // [mm/s]
+    plannerLimits.trimKaff = kPlantTau / 2;  // [s]
+    plannerLimits.trimMax = 80.0f;           // [mm/s]
+    // Plan the brake START at 40% of the decel ceiling, keeping the rest
+    // in reserve so the plant can TRACK the ramp down and arrives at each
+    // boundary already slow instead of coasting past (tau ~230 ms).
+    // Swept 0.0-0.6 in sim: 0.4 gave the best closure (16.0 vs 23.3 mm).
+    plannerLimits.decelPlanFraction = 0.4f;  // [1]
   }
   static Motion::Planner planner(plannerLimits);
   // Mark shaping CONFIGURED through the same applyShaperLimits() entry the
@@ -320,6 +396,20 @@ int main() {
 
   robotLoop.markConfigured();
 
+  // RobotLoop::run() is boot() followed by cycle() forever; it is spelled
+  // out here instead so the display can be turned off in between. Both
+  // methods are already public and this changes neither -- the loop's own
+  // behavior is byte-identical to run().
+  robotLoop.boot();
 
-  robotLoop.run();
+  // Boot is done and the first control cycle is next: give the LED matrix's
+  // refresh timer back to the loop. Everything from here runs to a measured
+  // ~47 ms budget (see PlannerLimits::controlPeriod), and the motion tuning
+  // assumes those cycles are the loop's.
+  uBit.display.clear();
+  uBit.display.disable();
+
+  for (;;) {
+    robotLoop.cycle();
+  }
 }
